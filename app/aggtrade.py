@@ -56,6 +56,19 @@ def trade_to_tick(agg: dict) -> TickArgs:
     )
 
 
+def candle_open(t_ms: int, tf_secs: int) -> int:
+    """Candle-open epoch SECOND for a trade at ``t_ms`` (epoch ms) on a ``tf_secs`` grid.
+
+    Pure INTEGER arithmetic, so it is byte-identical to the kline footprint key
+    (``int(k["t"]/1000)``) for the same candle — no float division, so a trade landing
+    within 1 ms of a boundary can never be keyed to a different node than its kline
+    (sub-step 19.3, clock coherence). For a candle whose open is ``B`` ms (a multiple
+    of ``tf_secs*1000``), every trade with ``B <= t_ms < B + tf_secs*1000`` maps to
+    ``B // 1000``.
+    """
+    return (int(t_ms) // (tf_secs * 1000)) * tf_secs
+
+
 # ---------------------------------------------------------------------------
 # 19.2 — global OI pending-balance attributor
 # ---------------------------------------------------------------------------

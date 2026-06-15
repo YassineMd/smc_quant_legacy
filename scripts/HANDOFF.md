@@ -138,18 +138,21 @@ re-deriving anything. **Phase 1 is complete; the next work is Phase 5 (aggTrade)
 ## 6. Regression suite (`scripts/`) — how to run
 
 All synthetic tests are history-independent and deterministic; **exit 0 = pass**.
-**All five pass as of `258ed1c`** — note test_step2 had been silently red since
-Step 3 (it asserted the superseded 4-component law) until that commit migrated it
-to the 5-component law; this is exactly why §4 now mandates the full-suite run.
+Run the FULL suite at every commit (§4): a later step has TWICE broken an earlier
+step's test — Step 3 silently changed test_step2's conservation law (caught + fixed
+at `258ed1c`), and 19.3 deleted the kline tick-birth path test_step2 drove.
+**test_step2 is RETIRED as of 19.3** — its feeds-boundary Step-2 clamp was relocated
+into the per-trade path; the invariant is now covered by 19.1 (taker in {0,vol}) +
+19.2 (|delta_oi| <= vol) + 19.3 (conservation / no overflow on real buckets).
 Run from the project root:
 ```
 python scripts/test_step1_velocity_clock.py   # event-time clock, degenerate-duration guards
-python scripts/test_step2_oi_clamp.py          # delta-OI/taker conservation clamp (boundary-spy + taker counterfactual)
 python scripts/test_step3_churn_decomp.py      # opL+opS+clL+clS+churn==curr_vol; schema round-trip + guard
 python scripts/test_step4_effort_result.py     # dispersion E/R: absorption vs run, wick-robust
 python scripts/test_step5_exhaustion.py        # z-score exhaustion: scale-invariance, degenerate-safe
 python scripts/test_step19_1_trade_mapper.py   # 19.1 aggTrade->args: exact m->side + T/1000 clock (tape replay)
 python scripts/test_step19_2_oi_attributor.py  # 19.2 OI pending-balance: identity, K*Vw cap-and-hold, lag<=K, dead-vol floor
+python scripts/test_step19_3_wiring.py         # 19.3 aggTrade wired into feeds: clock coherence, oi_open framing, steady-latency flat, invariants
 ```
 - `test_step5` imports `app.terminal` (pulls in Qt); it sets `QT_QPA_PLATFORM=offscreen`
   itself, so it runs standalone.

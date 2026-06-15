@@ -116,6 +116,7 @@ REST_DEPTH = f"https://fapi.binance.com/fapi/v1/depth?symbol={SYMBOL}&limit=1000
 WS_KLINE = "wss://fstream.binance.com/market/stream?streams=solusdt@kline_{tf}"
 WS_DEPTH = "wss://fstream.binance.com/ws/solusdt@depth"
 WS_LIQUIDATIONS = "wss://fstream.binance.com/market/ws/!forceOrder@arr"
+WS_AGGTRADE = "wss://fstream.binance.com/market/ws/solusdt@aggTrade"   # Step 19.3 — order-by-order tape
 DEPTH_HIST_URL = (
     "https://data.binance.vision/data/futures/um/daily/klines/"
     "SOLUSDT/{tf}/SOLUSDT-{tf}-{date}.zip"

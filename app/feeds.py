@@ -31,6 +31,7 @@ from urllib3.util.retry import Retry
 from . import config
 from .protocol import (CatchupEndPacket, CatchupPacket, CatchupStartPacket,
                        LiquidationPacket, ObPacket, PulsePacket, TickPacket)
+from .aggtrade import OiAttributor, candle_open, median_target_vol, trade_to_tick
 from .quant_engine import QuantEngine, build_engine_registry, calc_quant_obs, rank_obs
 
 # Recent observed candles shipped in a CATCHUP footprint payload (bounds frame size).
@@ -67,6 +68,10 @@ class MarketDataCore:
             "local_ob": {"bids": {}, "asks": {}, "lastUpdateId": 0},
             "oi": 0.0,
         }
+        # 19.3: global OI pending-balance attributor. fetch_oi_loop drives on_poll
+        # once per OI poll; aggtrade_stream drives on_trade per trade + on_reconnect
+        # on a stream gap.
+        self.oi_attr = OiAttributor()
 
     # ------------------------------------------------------------------
     # CATCHUP builder (per subscribing client's timeframe)
@@ -134,10 +139,21 @@ class MarketDataCore:
             try:
                 res = self.session.get(config.REST_OPEN_INTEREST, timeout=3)
                 if res.status_code == 200:
-                    self.pulse_state["oi"] = float(res.json().get("openInterest", 0))
+                    self._apply_oi(float(res.json().get("openInterest", 0)))
             except Exception:
                 pass
             await asyncio.sleep(config.OI_POLL_SECS)
+
+    def _apply_oi(self, new_oi: float) -> None:
+        """Publish a fresh OI reading + drive the attributor's poll (Step 19.3).
+
+        Factored out of ``fetch_oi_loop`` so the 19.3 gate exercises the REAL poll
+        wiring (``pulse_state`` update + exactly one ``on_poll`` with the symmetric
+        global floor reference = the MEDIAN engine ``target_vol``), not a copy.
+        """
+        self.pulse_state["oi"] = new_oi
+        ref = median_target_vol([e.target_vol for e in self.engines.values()])
+        self.oi_attr.on_poll(new_oi, ref)
 
     # ------------------------------------------------------------------
     # Stream: liquidations (main.py:631) — attach to every tf's forming candle
@@ -213,84 +229,83 @@ class MarketDataCore:
                     except Exception:
                         pass
 
-    def _process_kline(self, k: dict, tf_key: str, event_ms: float | None = None) -> None:
-        """Footprint accumulation + quant tick + broadcast (main.py:733)."""
-        uTime = str(int(pd.to_datetime(k["t"], unit="ms").timestamp()))
-        self.latest_utime[tf_key] = uTime
+    # ------------------------------------------------------------------
+    # Stream: aggTrade (order-by-order tape) -> tick + order blocks (Step 19.3)
+    # ------------------------------------------------------------------
+    async def aggtrade_stream(self) -> None:
+        """Dedicated ``@aggTrade`` websocket -> per-trade routing (Step 19.3).
 
+        Single raw stream (``config.WS_AGGTRADE``). On a RE-connect, resync the OI
+        attributor to the current OI: the gap's trades are unreconstructable, so the
+        gap's OI delta must not be dumped onto resumed trades (on_reconnect).
+        """
+        connected_once = False
+        while True:
+            ws = None
+            try:
+                ws = await websockets.connect(config.WS_AGGTRADE)
+                if connected_once:
+                    self.oi_attr.on_reconnect(self.pulse_state.get("oi", 0.0))
+                connected_once = True
+                while True:
+                    res = await asyncio.wait_for(ws.recv(), timeout=30.0)
+                    d = json.loads(res)
+                    d = d.get("data", d)   # tolerate combined-wrapper; /ws/ is raw
+                    if d.get("e") == "aggTrade":
+                        self._process_aggtrade(d)
+            except Exception:
+                await asyncio.sleep(2)
+            finally:
+                if ws:
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
+
+    def _ensure_fp_node(self, tf_key: str, uTime: str) -> dict:
+        """Return the footprint node for (tf, uTime), creating it if absent.
+
+        DIVERGES FROM LEGACY (Step 19.3): the SINGLE node-creation point for BOTH the
+        kline (framing) and aggTrade (levels) paths, so whichever event for a candle
+        arrives first creates it — and ``oi_open`` is always seeded from the live
+        ``pulse_state["oi"]`` here, so an aggTrade-first node can never read a
+        default/zero opening OI (clock-coherent OI framing, #1).
+        """
         db = self.footprints_db
         if tf_key not in db:
             db[tf_key] = {}
         if uTime not in db[tf_key]:
+            oi = self.pulse_state.get("oi", 0.0)
             db[tf_key][uTime] = {
                 "lastVol": 0.0,
                 "lastTakerBuy": 0.0,
                 "levels": {},
-                "oi_open": self.pulse_state.get("oi", 0.0),
-                "oi_close": self.pulse_state.get("oi", 0.0),
+                "oi_open": oi,
+                "oi_close": oi,
                 "liquidations": [],
             }
-        fp = db[tf_key][uTime]
+        return db[tf_key][uTime]
+
+    def _process_kline(self, k: dict, tf_key: str, event_ms: float | None = None) -> None:
+        """Candle FRAMING only (Step 19.3): OHLC + oi_close stamp + 1/s heartbeat.
+
+        DIVERGES FROM LEGACY (Step 19.3): klines no longer birth ticks. The
+        deltaVol/deltaBuy tick-birth block is gone — ``aggtrade_stream`` ->
+        :meth:`_process_aggtrade` now owns level accumulation and ``process_tick`` at
+        true trade prices. Klines are retained for OHLC candle framing, the per-candle
+        ``oi_close`` timestamp, the candle key/``latest_utime``, and the 1/s live-edge
+        ``TickPacket`` heartbeat. ``lastVol``/``lastTakerBuy`` become a kline-volume
+        reconciliation record (schema untouched — 19.5 owns any change).
+        """
+        uTime = str(int(pd.to_datetime(k["t"], unit="ms").timestamp()))
+        self.latest_utime[tf_key] = uTime
+        fp = self._ensure_fp_node(tf_key, uTime)
 
         curr_vol = float(k["v"])
         curr_taker_buy = float(k.get("V", 0.0))
-        deltaVol = curr_vol - fp.get("lastVol", 0.0)
-        deltaBuy = curr_taker_buy - fp.get("lastTakerBuy", 0.0)
-        deltaSell = deltaVol - deltaBuy
-
         close_price = float(k["c"])
-        pStr = f"{close_price:.2f}"
 
-        current_oi = self.pulse_state.get("oi", 0.0)
-        delta_oi = current_oi - fp.get("oi_close", current_oi)
-
-        if deltaVol > 0:
-            if pStr not in fp["levels"]:
-                fp["levels"][pStr] = {"b": 0.0, "s": 0.0}
-            fp["levels"][pStr]["b"] += max(0.0, deltaBuy)
-            fp["levels"][pStr]["s"] += max(0.0, deltaSell)
-
-            engine = self.engines[tf_key]
-            last_bucket_count = len(engine.closed_buckets)
-
-            # DIVERGES FROM LEGACY (Step 2): clamp the ΔOI / taker-buy sampling
-            # artifacts at the feeds boundary (engine math stays untouched).
-            #   * OI is polled every 5s while klines push ~1/s, so one push can
-            #     absorb several seconds of OI change against a single push's
-            #     volume -> |delta_oi| > deltaVol -> the 4-vector ratios exceed 1
-            #     and opL+opS+clL+clS > curr_vol. An OI change cannot physically
-            #     exceed the volume that produced it; clamp to [-deltaVol, deltaVol].
-            #   * clamp taker_buy into [0, deltaVol] so b_ratio = taker_buy/vol and
-            #     s_ratio stay in [0,1] even on a non-monotonic frame (deltaBuy >
-            #     deltaVol); the legacy max(0.0, .) only guarded the lower bound.
-            clamped_oi = max(-deltaVol, min(deltaVol, delta_oi))
-            clamped_taker = max(0.0, min(deltaVol, deltaBuy))
-
-            engine.process_tick(
-                price=close_price,
-                vol=deltaVol,
-                taker_buy=clamped_taker,
-                delta_oi=clamped_oi,
-                footprints_dict=db.get(tf_key, {}),
-                # DIVERGES FROM LEGACY: event-time clock (payload["E"]/1000) instead
-                # of int(uTime) (candle open). uTime still keys the footprint DB above.
-                tick_time=(event_ms / 1000.0) if event_ms is not None else time.time(),
-            )
-
-            # Lightning trigger: one or more buckets just closed -> recompute OBs
-            # and piggyback every newly-closed bucket's full vectors (Option A) so
-            # the terminal's scanner history grows without a separate frame type.
-            if len(engine.closed_buckets) > last_bucket_count:
-                fresh_obs = rank_obs(calc_quant_obs(engine, tf_key))
-                new_buckets = [b.full_snapshot()
-                               for b in engine.closed_buckets[last_bucket_count:]]
-                self.broadcast_tf(
-                    tf_key,
-                    ObPacket(tf=tf_key, order_blocks=fresh_obs,
-                             new_buckets=new_buckets, vpin=engine.vpin).to_line(),
-                )
-
-        fp["lastVol"] = curr_vol
+        fp["lastVol"] = curr_vol            # kline-volume reconciliation (no longer a tick source)
         fp["lastTakerBuy"] = curr_taker_buy
         fp["oi_close"] = self.pulse_state.get("oi", 0.0)
         self.latest_live_price = close_price
@@ -313,6 +328,54 @@ class MarketDataCore:
             is_closed=bool(k["x"]),
         )
         self.broadcast_tf(tf_key, tick.to_line())
+
+    def _process_aggtrade(self, d: dict) -> None:
+        """Route ONE aggTrade into all five engines + footprint levels (Step 19.3).
+
+        The aggTrade is the tick now: true price/qty + EXACT aggressor side (19.1),
+        with its OI share from the global pending-balance attributor (19.2). Per
+        timeframe: key the node by the integer ``candle_open`` (byte-identical to the
+        kline key — #2), add the trade to that node's levels at its TRUE price, and
+        feed ``process_tick`` (which also accumulates the bucket's own levels). On a
+        bucket close, fire the lightning ``ObPacket`` (moved here from the old kline
+        path). NO per-trade broadcast — the live edge stays on the 1/s kline heartbeat
+        (the 150 ms refresh is 19.3b).
+        """
+        targs = trade_to_tick(d)
+        if targs.vol <= 0.0:
+            return
+        share = self.oi_attr.on_trade(targs.vol)         # per-trade delta_oi (Step-2 clamp)
+        pStr = f"{targs.price:.2f}"
+        side = "b" if targs.taker_buy > 0.0 else "s"     # exact: buy -> b, sell -> s
+        t_ms = int(d["T"])
+        for tf_key in config.TIMEFRAMES:
+            uTime = str(candle_open(t_ms, config.TF_SECONDS[tf_key]))
+            self.latest_utime[tf_key] = uTime
+            fp = self._ensure_fp_node(tf_key, uTime)
+            level = fp["levels"].get(pStr)
+            if level is None:
+                level = fp["levels"][pStr] = {"b": 0.0, "s": 0.0}
+            level[side] += targs.vol
+
+            engine = self.engines[tf_key]
+            last_bucket_count = len(engine.closed_buckets)
+            engine.process_tick(
+                price=targs.price,
+                vol=targs.vol,
+                taker_buy=targs.taker_buy,
+                delta_oi=share,
+                footprints_dict=self.footprints_db.get(tf_key, {}),
+                tick_time=targs.tick_time,
+            )
+            if len(engine.closed_buckets) > last_bucket_count:
+                fresh_obs = rank_obs(calc_quant_obs(engine, tf_key))
+                new_buckets = [b.full_snapshot()
+                               for b in engine.closed_buckets[last_bucket_count:]]
+                self.broadcast_tf(
+                    tf_key,
+                    ObPacket(tf=tf_key, order_blocks=fresh_obs,
+                             new_buckets=new_buckets, vpin=engine.vpin).to_line(),
+                )
 
     # ------------------------------------------------------------------
     # Stream: order book depth maintenance (main.py:832)
@@ -382,6 +445,7 @@ class MarketDataCore:
             asyncio.create_task(self.fetch_oi_loop()),
             asyncio.create_task(self.liquidations_stream()),
             asyncio.create_task(self.dynamic_stream()),
+            asyncio.create_task(self.aggtrade_stream()),
             asyncio.create_task(self.public_stream()),
             asyncio.create_task(self.pulse_broadcast_loop()),
         ]
