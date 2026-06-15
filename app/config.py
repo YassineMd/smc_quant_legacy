@@ -41,6 +41,19 @@ VPIN_WINDOW = 50                # N=50 normalized micro-buckets (spec §3.4.1)
 VPIN_ALERT_BASELINE = 0.85      # 85% institutional alert line (spec §10.2.3)
 
 # ---------------------------------------------------------------------------
+# Phase 5 — OI pending-balance attributor (aggTrade; app.aggtrade.OiAttributor)
+# ---------------------------------------------------------------------------
+# OI is a 5s REST poll while aggTrades are sub-second, so a polled OI delta is bled
+# across the trades that follow it under ONE global signed balance, clamped per-trade
+# to +/-q (the Step-2 clamp). A scale-free cap K*Vw (Vw = EWMA volume-per-poll-
+# interval) bounds that balance via cap-and-hold, hence bounds the attribution lag.
+# All three are easy-to-tune knobs (revisit K once watching live).
+OI_CAP_K = 3                    # cap = K * Vw  ->  attribution lag bounded to <= K OI-poll intervals
+OI_VW_EWMA_N = 12               # EWMA memory (in poll-intervals) for the Vw volume baseline
+OI_VW_FLOOR_FRAC = 0.1          # floor Vw at this fraction of the MEDIAN engine target_vol (scale-free,
+                                # rule 0.6/1) so a dead-volume patch can't collapse the cap to 0
+
+# ---------------------------------------------------------------------------
 # Timeframes (spec §7.2.1 — exactly five)
 # ---------------------------------------------------------------------------
 TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h"]
