@@ -1,0 +1,36 @@
+========================================================================
+PIPELINE-INTEGRITY BASELINE  (Phase 0 / Step 0b)  -- READ-ONLY
+========================================================================
+timeframe          : 1m
+captured (UTC)     : 2026-06-15 11:47:26
+daemon target_vol  : 28870.5778
+closed buckets (n) : 53
+active bucket fill : 22745.48 / 28870.58  (78.8%)
+
+[1] DURATION = end_time - start_time   (seconds)
+  duration                     n=53 buckets
+        min   -97784.8028   p25       60.0000   p50       60.0000
+        p75      300.0000   p95    16548.0000   max    60480.0000
+
+[2] VOL_MULT  (per-bucket velocity ratio vs rolling avg)
+  vol_mult                     n=53 buckets
+        min    6.4284e-05   p25        0.0096   p50        0.0614
+        p75        0.3381   p95        4.3523   max        9.2269
+
+[3] CONSERVATION RESIDUAL = ((opL+opS+clL+clS) - curr_vol) / curr_vol
+    (4-vector only; the 'churn' field does not exist yet. 0 == exact conservation;
+     >0 == 4 vectors sum to MORE than curr_vol.)
+  residual                     n=53 buckets
+        min   -2.5202e-16   p25        0.0000   p50        0.0000
+        p75    1.2601e-16   p95        0.1328   max        0.2884
+
+[4] BUCKETS WHERE ANY OF opL/opS/clL/clS INDIVIDUALLY EXCEEDS curr_vol
+  count               0 / 53
+  fraction            0.000000  (0.0000%)
+
+[5] VPIN  (engine scalar  vs  recompute over trailing 50 CLOSED buckets)
+  engine vpin (snap)  0.267155
+  recomputed vpin     0.304847   [sum|buy-sell|=385645.96 / sum(curr_vol)=1265048.99 over n=50]
+  difference          -0.037692   (engine - recomputed)
+
+========================================================================
