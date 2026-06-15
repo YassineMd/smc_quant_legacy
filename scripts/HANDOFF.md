@@ -35,16 +35,41 @@ re-deriving anything. **Phase 1 is complete; the next work is Phase 5 (aggTrade)
   step references it. It is committed (`7895eb1`, updated `95a4503`).
 - **Phase 1 (Steps 1–5) is DONE.** The corrected scalars every scanner mode reads
   are now accurate/honest.
-- **NEXT = Phase 5, Step 19 (kline → aggTrade) — BUILDS DONE (19.0–19.4 + 19.3b);
-  AT THE 19.5 SCHEMA CUTOVER.** It was **PROMOTED** right after Phase 1 (operator's
-  call: they read the chart as a live *pulse* and need sub-second order-by-order
-  flow; 1s kline is the fidelity ceiling). The live data path is now aggTrade
-  end-to-end (19.3), recalibrate/OB are off the per-close hot path (19.4 = old
-  Step 15), and a 150 ms live edge pulses the forming bucket (19.3b). **What
-  remains: 19.5** (bump `BUCKET_SCHEMA_VERSION` 2→3 + wipe the working `history.db`,
-  a deliberate fidelity cutover) and **19.6** (kline-vs-aggTrade side-by-side
-  sign-off). Full design + staging is **§8 below**. Step 15 → 19.4, so Phase 4 is
-  now Steps 16–18; Phases 2/3/4 come AFTER aggTrade.
+- **Phase 5 (Step 19, kline → aggTrade) is DONE — the terminal is aggTrade-native
+  and LIVE.** All sub-steps committed (19.0–19.6), the working `history.db` cut over
+  to v3 (kline buckets retired, aggTrade history accumulating), suite 9/9. The data
+  path is now true order-by-order: event-time sub-second clock, exact per-trade taker
+  split, OI pending-balance attribution, recalibrate/OB off the close hot path,
+  150 ms live edge, true-price footprint levels. 19.6 confirmed the gain by eye
+  (aggTrade relocates the POC to the real volume peak on travel; converges with kline
+  when quiet). Full Phase-5 record + commit list = **§8**.
+- **NEXT — operator picks the phase (the original goal is the Mode-10 selection
+  tool, after the pipeline is fully solid):**
+  - **Phase 2 — OB fidelity (Steps 6–8):** band over-extension fix (6), Otsu A/B
+    (7, optional/skippable), proportional OB mitigation not binary death (8). Makes
+    Mode-10 ORDER BLOCKS trustworthy.
+  - **Phase 3 — visual layer (Steps 9–14):** stacked-imbalance flush (9), iceberg
+    wick-mitigation (10) + adaptive detection (11), DOM per-side normalization (12),
+    footprint text-cap newest-first (13), imbalance progressive vertical fill (14) —
+    PLUS the diagnosed-not-fixed **Off-mode candle bug** (§5: `scanner_bars` wants
+    `ignoreBounds=True`).
+  - **Phase 4 — perf (Steps 16–18):** cluster DOM once/frame (16), cache zones on
+    bucket-close (17), OB loop efficiency (18). (Step 15 already shipped as 19.4.)
+  - **Then the Mode-10 selection tool** vs the corrected scalars (MASTER_FIX_PLAN
+    "After the pipeline is solid").
+- **Where trustworthiness landed (post Phase-1 + aggTrade):**
+  - **HIGH-CONFIDENCE now:** Modes 1/2 (open/close pos), 3 (exhaustion), 4 (kinetic),
+    5 (volume), 6 (VPIN), 7/8 (bucket pos), 9 (effort/result) — honest Phase-1
+    scalars now flowing from true order-by-order aggTrade; footprint LEVELS (POC,
+    dispersion E/R) are true-price. (Mode 4 carries the vol_mult watch-item.)
+  - **PENDING Phase 2:** Mode-10 ORDER BLOCKS — band width (6) + mitigation (8) are
+    still legacy; the OB *inputs* are true-price now, but the band/lifecycle math is
+    unfixed.
+  - **PENDING Phase 3:** footprint-LAYER renderings (imbalances, icebergs, DOM walls,
+    footprint text, imbalance gaps) — fed true-price input by aggTrade, but the layer
+    logic (9–14) + the Off-mode candle bug are unfixed.
+- **WATCH-ITEM carried forward:** vol_mult burst tail (possible cap for OB
+  `power_score` / neon intensity) — §8. Watch live before deciding.
 
 ## 3. Standing rules that govern EVERY step (from MASTER_FIX_PLAN §0)
 
@@ -196,15 +221,19 @@ python scripts/test_step19_3b_live_edge.py     # 19.3b 150ms live-edge: timer-dr
 
 ## 8. Phase 5 (aggTrade) — APPROVED DESIGN + STAGING (operator-signed 2026-06-15)
 
-**STATUS (2026-06-15): BUILDS DONE — 19.0–19.4 + 19.3b committed (through `1c39fab`),
-suite 9/9. 19.5 (schema cutover) DONE + EXECUTED — `BUCKET_SCHEMA_VERSION` bumped
-2→3 + guard test extended (footprints-survive proven), committed `a00cf7e`; the
-cutover was then run on the REAL working db: the v3 guard wiped 2954 kline-built
-buckets, footprints survived (186→197), and fresh aggTrade buckets re-accumulated +
-persisted at v3 (durations positive/varied, 0 vector overflow, VPIN exact);
-`history.db.before-fixes` stayed byte-identical throughout. **AT 19.6** — the last
-Phase-5 step: kline-vs-aggTrade side-by-side fidelity sign-off (visual, operator-
-judged).**
+**STATUS: PHASE 5 DONE (2026-06-16) — aggTrade-native + live, suite 9/9, working db
+cut over to v3.** Commit list:
+`d89253e` 19.0 capture harness + frozen tape · `6c52ba7` 19.1 trade→args mapper ·
+`eefdd11` 19.2 OI pending-balance attributor · `918199c` 19.3 wire aggTrade (retire
+the kline tick-source + the subsumed step-2 test) · `40dd6e3` 19.4 recalibrate/OB
+off the close hot path (= old Step 15) · `1c39fab` 19.3b 150 ms live edge · `a00cf7e`
+19.5 schema v3 cutover · `1a610f9` 19.6 footprint fidelity sign-off. (Plus `e95f4c1`
+test-harden, `94d2704` active companion tape, `4b0585a`/`6fe3e3f`/this docs.) The v3
+cutover was EXECUTED on the real working db (guard wiped 2954 kline buckets,
+footprints survived, aggTrade buckets persisted at v3; `history.db.before-fixes`
+byte-identical throughout). 19.6 signed off by eye: aggTrade relocates the POC to
+the true volume peak on travel (4-tick correction), converges with kline when quiet
+(1 tick) — it corrects exactly where price travels.
 
 **OPEN downstream-tuning item (from the 19.5 dry-run; NOT a cutover blocker):** with
 aggTrade, sub-second BURST buckets (~5000 vol in ~6 ms) give a `vol_mult` (velocity
