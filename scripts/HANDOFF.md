@@ -148,6 +148,7 @@ python scripts/test_step2_oi_clamp.py          # delta-OI/taker conservation cla
 python scripts/test_step3_churn_decomp.py      # opL+opS+clL+clS+churn==curr_vol; schema round-trip + guard
 python scripts/test_step4_effort_result.py     # dispersion E/R: absorption vs run, wick-robust
 python scripts/test_step5_exhaustion.py        # z-score exhaustion: scale-invariance, degenerate-safe
+python scripts/test_step19_1_trade_mapper.py   # 19.1 aggTrade->args: exact m->side + T/1000 clock (tape replay)
 ```
 - `test_step5` imports `app.terminal` (pulls in Qt); it sets `QT_QPA_PLATFORM=offscreen`
   itself, so it runs standalone.
