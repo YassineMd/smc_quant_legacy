@@ -72,6 +72,9 @@ class MarketDataCore:
         # once per OI poll; aggtrade_stream drives on_trade per trade + on_reconnect
         # on a stream gap.
         self.oi_attr = OiAttributor()
+        # 19.3b: last kline candle per tf, cached so live_edge_loop can re-emit the
+        # forming edge at ~150ms (between the 1/s kline heartbeats) without trades.
+        self.last_candle: Dict[str, dict] = {}
 
     # ------------------------------------------------------------------
     # CATCHUP builder (per subscribing client's timeframe)
@@ -310,18 +313,20 @@ class MarketDataCore:
         fp["oi_close"] = self.pulse_state.get("oi", 0.0)
         self.latest_live_price = close_price
 
+        candle = {
+            "time": int(uTime),
+            "open": float(k["o"]),
+            "high": float(k["h"]),
+            "low": float(k["l"]),
+            "close": close_price,
+            "volume": curr_vol,
+            "taker_buy": curr_taker_buy,
+        }
+        self.last_candle[tf_key] = candle   # 19.3b: cache for the 150ms live-edge refresh
         tick = TickPacket(
             tf=tf_key,
             price=close_price,
-            candle={
-                "time": int(uTime),
-                "open": float(k["o"]),
-                "high": float(k["h"]),
-                "low": float(k["l"]),
-                "close": close_price,
-                "volume": curr_vol,
-                "taker_buy": curr_taker_buy,
-            },
+            candle=candle,
             active_bucket=self.engines[tf_key].active_bucket.live_snapshot(
                 time.time(), self.engines[tf_key].avg_velocity),
             footprint=fp,
@@ -484,6 +489,41 @@ class MarketDataCore:
                 await asyncio.sleep(0)   # yield between engines — don't starve the drain
 
     # ------------------------------------------------------------------
+    # Live-edge refresh — sub-second forming bucket, decoupled from trades (19.3b)
+    # ------------------------------------------------------------------
+    def _broadcast_live_edge(self) -> None:
+        """Re-emit each tf's forming edge (cached candle + FRESH active bucket) — 19.3b.
+
+        Reads current state only — NEVER fires per trade. Reuses TickPacket (no wire
+        change): the cached last candle stands in for OHLC between the 1/s klines while
+        the active bucket + forming footprint pulse sub-second. Bounded rate
+        (1/LIVE_EDGE_SECS per tf), fully decoupled from the aggTrade message rate.
+        """
+        now = time.time()
+        for tf_key, candle in self.last_candle.items():
+            engine = self.engines[tf_key]
+            fp = self.footprints_db.get(tf_key, {}).get(self.latest_utime.get(tf_key, ""), {})
+            tick = TickPacket(
+                tf=tf_key,
+                price=(self.latest_live_price if self.latest_live_price is not None
+                       else candle.get("close", 0.0)),
+                candle=candle,
+                active_bucket=engine.active_bucket.live_snapshot(now, engine.avg_velocity),
+                footprint=fp,
+                is_closed=False,
+            )
+            self.broadcast_tf(tf_key, tick.to_line())
+
+    async def live_edge_loop(self) -> None:
+        """Broadcast the forming edge every LIVE_EDGE_SECS, decoupled from trade rate (19.3b)."""
+        while True:
+            await asyncio.sleep(config.LIVE_EDGE_SECS)
+            try:
+                self._broadcast_live_edge()
+            except Exception as e:
+                print(f"LIVE EDGE ERROR: {e}")
+
+    # ------------------------------------------------------------------
     def start_tasks(self) -> list[asyncio.Task]:
         return [
             asyncio.create_task(self.fetch_oi_loop()),
@@ -493,4 +533,5 @@ class MarketDataCore:
             asyncio.create_task(self.public_stream()),
             asyncio.create_task(self.pulse_broadcast_loop()),
             asyncio.create_task(self.recompute_loop()),
+            asyncio.create_task(self.live_edge_loop()),
         ]

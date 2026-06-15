@@ -124,6 +124,7 @@ DEPTH_HIST_URL = (
 )
 OI_POLL_SECS = 5                # main.py:629
 PULSE_BROADCAST_SECS = 0.4      # main.py:877 — DOM/OI pulse cadence
+LIVE_EDGE_SECS = 0.15           # 19.3b — sub-second forming-bucket live-edge refresh (decoupled from trade rate)
 DOM_LEVELS = 200                # main.py:881 — sorted depth levels per side
 
 # ---------------------------------------------------------------------------

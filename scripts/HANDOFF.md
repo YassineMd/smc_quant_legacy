@@ -154,6 +154,7 @@ python scripts/test_step19_1_trade_mapper.py   # 19.1 aggTrade->args: exact m->s
 python scripts/test_step19_2_oi_attributor.py  # 19.2 OI pending-balance: identity, K*Vw cap-and-hold, lag<=K, dead-vol floor
 python scripts/test_step19_3_wiring.py         # 19.3 aggTrade wired into feeds: clock coherence, oi_open framing, steady-latency flat, invariants
 python scripts/test_step19_4_recompute.py      # 19.4 recalibrate/OB off the close hot path: per-engine close flat, target_vol still adapts
+python scripts/test_step19_3b_live_edge.py     # 19.3b 150ms live-edge: timer-driven (not per-trade), carries the forming bucket
 ```
 - `test_step5` imports `app.terminal` (pulls in Qt); it sets `QT_QPA_PLATFORM=offscreen`
   itself, so it runs standalone.
