@@ -35,14 +35,15 @@ re-deriving anything. **Phase 1 is complete; the next work is Phase 5 (aggTrade)
   step references it. It is committed (`7895eb1`, updated `95a4503`).
 - **Phase 1 (Steps 1–5) is DONE.** The corrected scalars every scanner mode reads
   are now accurate/honest.
-- **NEXT = Phase 5, Step 19 (kline → aggTrade).** It was **PROMOTED** to come
-  **right after Phase 1**, before Phases 2/3/4. Read the bold "PROMOTED" note above
-  Step 19 and Step 19 itself. Rationale (operator's call): they read the chart as a
-  live *pulse* and need sub-second order-by-order flow; 1s kline is the fidelity
-  ceiling. Sequencing: do it AFTER Steps 1–4 (done) so the source-swap doesn't
-  confound the math verification — it's now a clean swap into already-trusted math.
-  **Phases 2 (OB fidelity: Steps 6–8), 3 (visual: 9–14), 4 (perf: 15–18) come AFTER
-  aggTrade.** Step 19 is "its own mini-project with its own before/after validation."
+- **NEXT = Phase 5, Step 19 (kline → aggTrade) — DESIGN APPROVED, IN PROGRESS at
+  sub-step 19.0.** It was **PROMOTED** to come **right after Phase 1**, before
+  Phases 2/3/4. Rationale (operator's call): they read the chart as a live *pulse*
+  and need sub-second order-by-order flow; 1s kline is the fidelity ceiling.
+  Sequencing: do it AFTER Steps 1–4 (done) so the source-swap doesn't confound the
+  math verification — it's now a clean swap into already-trusted math. The full
+  approved design + sub-step staging is **§8 below** (read it). **Step 15 was pulled
+  out of Phase 4 into Phase 5 as sub-step 19.4**, so Phase 4 is now Steps 16–18.
+  **Phases 2 (Steps 6–8), 3 (9–14), 4 (16–18) come AFTER aggTrade.**
 
 ## 3. Standing rules that govern EVERY step (from MASTER_FIX_PLAN §0)
 
@@ -185,8 +186,78 @@ python scripts/test_step5_exhaustion.py        # z-score exhaustion: scale-invar
    *dynamics* (its drop) as information, not merely as the leftover after the
    OI-confirmed split.
 
+## 8. Phase 5 (aggTrade) — APPROVED DESIGN + STAGING (operator-signed 2026-06-15)
+
+Architecture approved. Core insight: **aggTrade is a better source for the same
+five `process_tick` args** (price, vol, taker_buy, delta_oi, tick_time) — Steps 1–4
+already made all five correct, so this is a source-swap into trusted math, not new
+math. The taker split becomes EXACT per-trade (the `m` buyer-maker flag), so the
+Step-2 taker clamp can no longer fire (kept as a zero-cost guard). A "tick" becomes
+ONE real aggTrade (true price/qty/side), not a 1s batched delta.
+
+**The 5 settled decisions:**
+1. **OI = pending-balance bleed** (OI stays a 5s REST poll; NOT per-trade-exact).
+   ONE global signed `pending_oi`; on each poll `pending_oi += (oi - last_oi)`; on
+   each trade of size q, `share = clamp(pending_oi, -q, +q)`, feed `delta_oi=share`
+   to ALL 5 engines, then `pending_oi -= share`. The Step-2 clamp is now literally
+   per-trade — its most important home. Strictly MORE honest than today's kline path
+   (which clamps the OI overflow AWAY and loses it; the balance carries the residual
+   forward until volume absorbs it).
+2. **OI cap/decay is MANDATORY, scale-free (§0.6).** Bound `|pending_oi| <= C = K·Vw`
+   where `Vw` = EWMA of trade volume per OI-poll interval (recent volume — adaptive,
+   market-set; NOT a fixed constant), K≈3. **Cap-and-hold** (clamp to ±C, DROP the
+   excess + count it in a diagnostic) — NOT decay: the excess is OI that no volume
+   could carry, so dropping it is honest; decay would bleed stale OI onto unrelated
+   later trades. This provably **bounds the attribution lag to ≤ K poll-intervals**
+   (pending ≤ K·Vw, drained at the volume rate ⇒ ≤ K windows). **On `@aggTrade`
+   (re)connect: resync `last_oi = current_oi`, `pending_oi = 0`** — the missed-gap
+   trades can't be reconstructed, so don't dump the gap's OI onto resumed trades.
+   This is the trend/desync robustness the operator demanded as non-optional.
+3. **Live-edge refresh = dedicated ~150 ms throttle**, decoupled from trade rate. Do
+   NOT overload the 0.4s pulse loop — keep concerns separate. NEVER broadcast per
+   trade. Bucket-close `ObPacket`s stay event-driven (volume-paced = the true pulse);
+   only the forming-bucket refresh is throttled.
+4. **Dedicated `aggtrade_stream` asyncio task** (isolates backpressure), parallel to
+   `dynamic_stream`/`liquidations_stream` in `feeds.start_tasks`.
+5. **Schema bump `BUCKET_SCHEMA_VERSION` 2→3 + `history.db` wipe at cutover.** NO
+   bucket FIELD changes (both serializers untouched); the bump is a DELIBERATE
+   fidelity reset so kline-smeared and aggTrade-true `levels` never share a rolling
+   window. Footprint node shape unchanged (survives the wipe by design). Note it in
+   the README like the Phase-1 wipe.
+
+**Hot-path fact (reassuring):** bucket closes are VOLUME-paced, not message-paced —
+aggTrade delivers the same volume in more messages, so closes/sec and the expensive
+per-close work (POC / E-R / VPIN / recalibrate) do NOT scale up. Only the per-message
+path scales (5 `process_tick` calls/trade). 19.3's gate MEASURES per-message latency
+on a real-tape burst replay — prove no stall, don't assume it.
+
+**Staging (each = one branch-commit, minimal diff, FULL suite green at every commit):**
+| Sub-step | Scope | Gate |
+|---|---|---|
+| 19.0 | throwaway `@aggTrade`+5 klines+OI capture recorder → real raw-tick JSONL tape. NO app code. | tape parses; trade/kline/OI counts; peak trades/s; buy/sell + price-level variety. |
+| 19.1 | pure trade→`(price,vol,taker_buy,tick_time)` mapper, exact `m`→side. No wiring. | DETERMINISTIC REPLAY of the 19.0 tape: known trades → exact args; side correct; `tick_time=T/1000`. |
+| 19.2 | pure OI pending-balance attributor (decisions 1+2). No wiring. | tape replay (normal): Σshares=ΔOI, nothing lost, neutral when flat. + SYNTHETIC OI-expansion burst: `pending_oi` stays ≤ C AND lag ≤ K windows. |
+| 19.3 | wire `aggtrade_stream`; route trade→5 engines+levels; DELETE kline tick-birth; klines=framing; 150 ms throttle. | isolated empty-DB daemon: invariants green (`baseline_diag`) AND MEASURED per-message latency flat under a dense tape-replay burst (p50/p99/max, no backlog growth). |
+| 19.4 | **= Step 15**: recalibrate/OB off `_close_active_bucket` → periodic/executor. | synthetic burst of rapid closes → per-tick latency flat; `target_vol` still adapts. |
+| 19.5 | bump schema 2→3; guard wipes `history.db`; re-accumulate; README note. | version bump triggers the clear path (extend `test_step3`'s guard test). |
+| 19.6 | kline-built vs aggTrade-built footprint over the SAME tape window, side by side. | NOT pass/fail — operator VISUAL sign-off (like Step 3): aggTrade POC at true price, sharper dispersion-E/R. |
+
+**Tape-as-fixture:** the 19.0 tape is the project's FIRST real raw-tick fixture, so
+19.1 / 19.2-normal / 19.3 / 19.6 are deterministic replays of it (not hand-built
+sequences). 19.2's runaway/cap assertions still need a SYNTHETIC burst (real tape
+won't reliably contain a desync). So capture LONG/VARIED enough: target several
+minutes, a few k trades, OI both rising+falling, a high-trades/sec burst for 19.3.
+
+**Discipline reminders (still in force, §7):** propose-then-approve before code in any
+sub-step that warrants it (§7.1); side-by-side before/after for the fidelity claim
+(§7.2 = 19.6); churn's DROP is a signal, not just removed noise (§7.3).
+
+**Tools:** `scripts/capture_aggtrade.py` is the 19.0 recorder (standalone; reads only
+public market data, writes one JSONL tape under `data/`; imports `app.config` for
+URLs/constants only — touches no app state).
+
 ---
-**Start here:** read `MASTER_FIX_PLAN.md` (esp. §0 and the Phase 5 PROMOTED note +
-Step 19), confirm the suite above is green, then design Phase 5 (aggTrade) as its
-own mini-project. Do not move past a step until its synthetic gate is green and the
-operator has eyeballed it.
+**Start here:** read `MASTER_FIX_PLAN.md` (esp. §0 + the Phase 5 PROMOTED note),
+confirm the suite (§6) is green, then read **§8** for the approved Phase-5 design +
+staging. Phase 5 is IN PROGRESS at sub-step 19.0. Do not move past a sub-step until
+its gate is green and the operator has eyeballed it.
