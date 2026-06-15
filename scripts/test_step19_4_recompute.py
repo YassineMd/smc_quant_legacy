@@ -45,7 +45,8 @@ _FIX = os.path.join(_ROOT, "scripts", "fixtures", "aggtrade_tape.jsonl")
 _K = 5
 _RECOMPUTE_AT = 2
 _DEFAULT = config.DEFAULT_TARGET_VOL
-_PER_ENGINE_CLOSE_BUDGET_S = 0.0005    # 500 us/engine sanity bound: serialize-only, no recalibrate
+_PER_ENGINE_CLOSE_P50_BUDGET_S = 0.0003   # 300us MEDIAN: serialize-only (recalibrate would be 100s us-ms);
+                                          # robust to load, unlike a p99-of-85 which is a single worst sample
 _FAILS: list[str] = []
 
 
@@ -80,7 +81,7 @@ def main() -> int:
     trade_T = [int(r["data"]["T"]) for _, r in events if r["type"] == "aggTrade"]
     span_ms = (max(trade_T) - min(trade_T)) + 1000
 
-    print(f"\nconstants: RECOMPUTE_SECS={config.RECOMPUTE_SECS}  per-engine-close budget={_PER_ENGINE_CLOSE_BUDGET_S*1e6:.0f}us")
+    print(f"\nconstants: RECOMPUTE_SECS={config.RECOMPUTE_SECS}  per-engine-close p50 budget={_PER_ENGINE_CLOSE_P50_BUDGET_S*1e6:.0f}us")
     check("_recompute_engine is SYNCHRONOUS (no await) -> atomic w.r.t. closes (consistency basis)",
           not inspect.iscoroutinefunction(MarketDataCore._recompute_engine))
 
@@ -124,8 +125,11 @@ def main() -> int:
     print(f"    flat as history grows: 1st-half p50={c_first*1e6:.1f}us  2nd-half p50={c_second*1e6:.1f}us")
     check("per-engine close is FLAT as history grows (no O(history) work on the close path)",
           c_second <= c_first * 1.6 + 3e-5, f"1st={c_first*1e6:.1f}us 2nd={c_second*1e6:.1f}us")
-    check("per-engine close p99 bounded (serialize-only, no recalibrate/OB)",
-          c_p99 < _PER_ENGINE_CLOSE_BUDGET_S, f"p99={c_p99*1e6:.1f}us budget={_PER_ENGINE_CLOSE_BUDGET_S*1e6:.0f}us")
+    check("per-engine close MEDIAN is serialize-only (no recalibrate/OB) -- robust to load",
+          c_p50 < _PER_ENGINE_CLOSE_P50_BUDGET_S,
+          f"p50={c_p50*1e6:.1f}us budget={_PER_ENGINE_CLOSE_P50_BUDGET_S*1e6:.0f}us")
+    check("per-engine close p99 has no multi-ms stall (loose sanity; p99-of-85 is a single noisy sample)",
+          c_p99 < 0.0015, f"p99={c_p99*1e6:.1f}us")
 
     # ---- AVOIDED: what 19.4 moved to recompute_loop (was per close in 19.3) ----
     tf_big = max(config.TIMEFRAMES, key=lambda t: len(core.engines[t].closed_buckets))
