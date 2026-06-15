@@ -197,13 +197,14 @@ python scripts/test_step19_3b_live_edge.py     # 19.3b 150ms live-edge: timer-dr
 ## 8. Phase 5 (aggTrade) — APPROVED DESIGN + STAGING (operator-signed 2026-06-15)
 
 **STATUS (2026-06-15): BUILDS DONE — 19.0–19.4 + 19.3b committed (through `1c39fab`),
-suite 9/9. AT 19.5 (schema cutover): `BUCKET_SCHEMA_VERSION` bumped 2→3 in code + the
-guard test extended (footprints-survive proven); a dry-run on a COPY of the working
-db confirmed the guard fires (clears buckets/OB/engine, KEEPS footprints, cold-starts)
-and re-accumulates HEALTHY aggTrade buckets (durations positive/varied, 0 vector
-overflow, VPIN exact). The real `history.db` is wiped only on the next REAL daemon
-boot after the 19.5 commit — that boot is the irreversible cutover. 19.6 (kline-vs-
-aggTrade side-by-side sign-off) remains.**
+suite 9/9. 19.5 (schema cutover) DONE + EXECUTED — `BUCKET_SCHEMA_VERSION` bumped
+2→3 + guard test extended (footprints-survive proven), committed `a00cf7e`; the
+cutover was then run on the REAL working db: the v3 guard wiped 2954 kline-built
+buckets, footprints survived (186→197), and fresh aggTrade buckets re-accumulated +
+persisted at v3 (durations positive/varied, 0 vector overflow, VPIN exact);
+`history.db.before-fixes` stayed byte-identical throughout. **AT 19.6** — the last
+Phase-5 step: kline-vs-aggTrade side-by-side fidelity sign-off (visual, operator-
+judged).**
 
 **OPEN downstream-tuning item (from the 19.5 dry-run; NOT a cutover blocker):** with
 aggTrade, sub-second BURST buckets (~5000 vol in ~6 ms) give a `vol_mult` (velocity
