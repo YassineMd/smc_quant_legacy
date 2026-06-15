@@ -17,6 +17,7 @@ rate (Section 11).
 from __future__ import annotations
 
 import bisect
+import math
 import os
 import shutil
 import socket
@@ -43,6 +44,65 @@ from .pipe_client import PipeClientWorker
 from .stats_overlay import StatsOverlay, compute_stats
 
 _OPEN_WINDOWS: List["MinimalTerminalWindow"] = []
+
+
+# ---------------------------------------------------------------------------
+# Step 5 — adaptive exhaustion (Mode 3): scale-free, no rigid E/R tiers.
+# Exhaustion intensity scales with how anomalous a bucket's E/R is vs its OWN
+# rolling window (a z-score), not against absolute cutoffs. exp(K*tanh(z/Zs)) is
+# monotonic in z, centred at 1.0 (z=0 -> neutral) and BOUNDED to [exp(-K),exp(K)],
+# so a degenerate/flat window can never explode it. The params below are
+# statistical-hygiene knobs (window sizes, a CoV floor), not market thresholds.
+# ---------------------------------------------------------------------------
+EXH_WINDOW = 30           # rolling E/R baseline window (buckets)
+EXH_MIN_WINDOW = 10       # 0.6/2 warm-up: below this the E/R multiplier is neutral (1.0)
+EXH_CV_FLOOR = 0.10       # 0.6/1 coefficient-of-variation floor on the z denominator
+EXH_K = math.log(2.0)     # E/R multiplier range exp(+/-K * tanh) = [0.5, 2.0]
+EXH_Z_SCALE = 2.0         # z-score (sigma) scale of the smooth tanh ramp
+EXH_OI_K = math.log(1.5)  # OI-direction term range [0.667, 1.5]
+EXH_OI_SCALE = 0.5        # scale of the (delta_oi / curr_vol) tanh ramp
+
+
+def _exh_z_mult(window_vals: list, val: float) -> float:
+    """Smooth, bounded exhaustion multiplier from the z-score of ``val`` vs a
+    rolling ``window_vals`` of recent same-side E/R (DIVERGES FROM LEGACY, Step 5).
+
+    * Cold start (rule 0.6/2): a window shorter than ``EXH_MIN_WINDOW`` returns the
+      NEUTRAL multiplier 1.0 — no z-score against an under-filled window.
+    * Degenerate denominator (rule 0.6/1): std is floored at a coefficient-of-
+      variation fraction of the mean (``EXH_CV_FLOOR*|mean|`` — scale-free, NOT a
+      fixed absolute), and an all-zero window falls back to neutral, not div-by-0.
+    * ``tanh`` bounds the exponent, so a noisy/flat window can never spike the
+      multiplier beyond ``exp(EXH_K)``.
+    """
+    if len(window_vals) < EXH_MIN_WINDOW:
+        return 1.0
+    mean = sum(window_vals) / len(window_vals)
+    var = sum((v - mean) ** 2 for v in window_vals) / len(window_vals)
+    denom = max(var ** 0.5, EXH_CV_FLOOR * abs(mean))
+    if denom <= 0:
+        return 1.0
+    z = (val - mean) / denom
+    return math.exp(EXH_K * math.tanh(z / EXH_Z_SCALE))
+
+
+def _exhaustion_mults(buckets: list, i: int) -> "tuple[float, float, float]":
+    """(buyer_er_mult, seller_er_mult, oi_mult) for bucket ``i`` (Step 5).
+
+    The two E/R multipliers are the z-score smooth multiplier of each side's E/R
+    against the PRECEDING rolling window. The OI-direction term is a smooth,
+    bounded function of the Step-3 net ``delta_oi`` ( = (opL+opS) - (clL+clS) )
+    normalised by volume: exhaustion is AMPLIFIED when OI is contracting (positions
+    closing, delta_oi < 0) and DAMPENED when expanding, neutral at delta_oi = 0.
+    """
+    b = buckets[i]
+    win = buckets[max(0, i - EXH_WINDOW):i]
+    b_mult = _exh_z_mult([w.get("buyer_er", 0.0) for w in win], b.get("buyer_er", 0.0))
+    s_mult = _exh_z_mult([w.get("seller_er", 0.0) for w in win], b.get("seller_er", 0.0))
+    delta_oi = (b.get("opL", 0.0) + b.get("opS", 0.0)) - (b.get("clL", 0.0) + b.get("clS", 0.0))
+    r_oi = delta_oi / max(1.0, b.get("curr_vol", 0.0))
+    oi_mult = math.exp(-EXH_OI_K * math.tanh(r_oi / EXH_OI_SCALE))
+    return b_mult, s_mult, oi_mult
 
 
 class MinimalTerminalWindow(QtWidgets.QMainWindow):
@@ -440,14 +500,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             span_v = max(0.001, mx - mn)
             b_base = (mx - cvd) / span_v * 100.0
             s_base = (cvd - mn) / span_v * 100.0
-            doi = (b.get("opL", 0) + b.get("opS", 0)) - (b.get("clL", 0) + b.get("clS", 0))
-            oi_mult = 1.5 if doi < 0 else 0.7
-            ber, ser = b.get("buyer_er", 0.0), b.get("seller_er", 0.0)
-            bm = 1.8 if ber > 300 else (1.3 if ber > 150 else 0.8)
-            sm = 1.8 if ser > 300 else (1.3 if ser > 150 else 0.8)
+            # DIVERGES FROM LEGACY (Step 5): the same smooth z-score E/R + delta_oi
+            # multipliers the chart uses, so hover and chart can't disagree.
+            bm, sm, oi_mult = _exhaustion_mults(buckets, idx)
             return [f"Exh Base {span(f'B:{b_base:.0f}%', bl)} {span(f'S:{s_base:.0f}%', r)}",
-                    f"OI-Shock {span(f'{oi_mult}x', gold)} | "
-                    f"ER-Mult {span(f'B {bm}x', g)}/{span(f'S {sm}x', r)}"]
+                    f"OI {span(f'{oi_mult:.2f}x', gold)} | "
+                    f"ER-z {span(f'B {bm:.2f}x', g)}/{span(f'S {sm:.2f}x', r)}"]
         if mode in ("kinetic", "bucket_canvas"):
             dur = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))
             v_bull = b.get("buy_vol", 0.0) / dur
@@ -1059,12 +1117,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             f"churn {self._fmt_k(churn_arr[-1])}", xr, "mid")
 
     def _scan_exhaustion(self, buckets: list, x: list) -> None:
-        """Mode 3 — CVD-extreme exhaustion with OI + E/R shock multipliers, clamped 0..100."""
+        """Mode 3 — CVD-extreme exhaustion x smooth z-score E/R + delta_oi
+        multipliers (Step 5), clamped 0..100."""
         cvd = 0.0
         max_cvd = 0.0
         min_cvd = 0.0
         bExh_arr, sExh_arr = [], []
-        for b in buckets:
+        for i, b in enumerate(buckets):
             cvd += b.get("buy_vol", 0.0) - b.get("sell_vol", 0.0)
             max_cvd = max(max_cvd, cvd)
             min_cvd = min(min_cvd, cvd)
@@ -1072,14 +1131,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             b_base = (max_cvd - cvd) / cvd_span * 100.0
             s_base = (cvd - min_cvd) / cvd_span * 100.0
 
-            delta_oi = (b.get("opL", 0.0) + b.get("opS", 0.0)) - \
-                       (b.get("clL", 0.0) + b.get("clS", 0.0))
-            oi_mult = 1.5 if delta_oi < 0 else 0.7
-
-            b_er = b.get("buyer_er", 0.0)
-            s_er = b.get("seller_er", 0.0)
-            b_mult = 1.8 if b_er > 300 else (1.3 if b_er > 150 else 0.8)
-            s_mult = 1.8 if s_er > 300 else (1.3 if s_er > 150 else 0.8)
+            # DIVERGES FROM LEGACY (Step 5): smooth, scale-free z-score E/R
+            # multipliers + a delta_oi-direction term replace the rigid absolute
+            # er>150/300 tiers and the 1.8/1.3/0.8 / 1.5/0.7 ladders.
+            b_mult, s_mult, oi_mult = _exhaustion_mults(buckets, i)
 
             bExh_arr.append(max(0.0, min(100.0, b_base * oi_mult * b_mult)))
             sExh_arr.append(max(0.0, min(100.0, s_base * oi_mult * s_mult)))
