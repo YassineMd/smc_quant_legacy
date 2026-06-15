@@ -132,6 +132,12 @@ def _seed_db(store: HistoryStore, churn_val: float, version: int) -> None:
                json.dumps(_bucket_to_dict(QuantBucket(5000.0, 1000.0))), 0))
     c.execute("INSERT INTO closed_buckets(tf,start_time,end_time,data) VALUES(?,?,?,?)",
               ("1m", b.start_time, b.end_time, json.dumps(_bucket_to_dict(b))))
+    # an order_block row + a footprint row, so the guard test can prove the OB/engine
+    # rows are cleared while the FOOTPRINT (the separately-keyed rebuild source) survives.
+    c.execute("INSERT INTO order_blocks(tf,ob_id,data) VALUES(?,?,?)",
+              ("1m", "ob_seed", json.dumps({"ob_id": "ob_seed", "type": "bullish"})))
+    c.execute("INSERT INTO footprints(tf,utime,node) VALUES(?,?,?)",
+              ("1m", 1700000000, json.dumps({"lastVol": 0.0, "levels": {"150.00": {"b": 1.0, "s": 2.0}}})))
     c.execute("INSERT INTO meta(key,value) VALUES('bucket_schema_version',?) "
               "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(version),))
     c.commit()
@@ -148,7 +154,14 @@ def part3_schema_guard() -> None:
         engines = {tf: QuantEngine() for tf in config.TIMEFRAMES}
         s_old.rehydrate_engines(engines, {})
         n_rows = s_old._conn.execute("SELECT COUNT(*) FROM closed_buckets").fetchone()[0]
+        ob_rows = s_old._conn.execute("SELECT COUNT(*) FROM order_blocks").fetchone()[0]
+        eng_rows = s_old._conn.execute("SELECT COUNT(*) FROM engine_state").fetchone()[0]
+        fp_rows = s_old._conn.execute("SELECT COUNT(*) FROM footprints").fetchone()[0]
         check("older schema: stale closed_buckets cleared", n_rows == 0, f"rows={n_rows}")
+        check("older schema: stale order_blocks cleared", ob_rows == 0, f"rows={ob_rows}")
+        check("older schema: stale engine_state cleared", eng_rows == 0, f"rows={eng_rows}")
+        check("19.5 cutover: FOOTPRINTS SURVIVE the wipe (separately-keyed rebuild source kept)",
+              fp_rows == 1, f"rows={fp_rows}")
         check("older schema: engines cold-start (no buckets loaded)",
               all(len(e.closed_buckets) == 0 for e in engines.values()))
         s_old.close()

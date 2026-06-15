@@ -35,15 +35,16 @@ re-deriving anything. **Phase 1 is complete; the next work is Phase 5 (aggTrade)
   step references it. It is committed (`7895eb1`, updated `95a4503`).
 - **Phase 1 (Steps 1–5) is DONE.** The corrected scalars every scanner mode reads
   are now accurate/honest.
-- **NEXT = Phase 5, Step 19 (kline → aggTrade) — DESIGN APPROVED, IN PROGRESS at
-  sub-step 19.0.** It was **PROMOTED** to come **right after Phase 1**, before
-  Phases 2/3/4. Rationale (operator's call): they read the chart as a live *pulse*
-  and need sub-second order-by-order flow; 1s kline is the fidelity ceiling.
-  Sequencing: do it AFTER Steps 1–4 (done) so the source-swap doesn't confound the
-  math verification — it's now a clean swap into already-trusted math. The full
-  approved design + sub-step staging is **§8 below** (read it). **Step 15 was pulled
-  out of Phase 4 into Phase 5 as sub-step 19.4**, so Phase 4 is now Steps 16–18.
-  **Phases 2 (Steps 6–8), 3 (9–14), 4 (16–18) come AFTER aggTrade.**
+- **NEXT = Phase 5, Step 19 (kline → aggTrade) — BUILDS DONE (19.0–19.4 + 19.3b);
+  AT THE 19.5 SCHEMA CUTOVER.** It was **PROMOTED** right after Phase 1 (operator's
+  call: they read the chart as a live *pulse* and need sub-second order-by-order
+  flow; 1s kline is the fidelity ceiling). The live data path is now aggTrade
+  end-to-end (19.3), recalibrate/OB are off the per-close hot path (19.4 = old
+  Step 15), and a 150 ms live edge pulses the forming bucket (19.3b). **What
+  remains: 19.5** (bump `BUCKET_SCHEMA_VERSION` 2→3 + wipe the working `history.db`,
+  a deliberate fidelity cutover) and **19.6** (kline-vs-aggTrade side-by-side
+  sign-off). Full design + staging is **§8 below**. Step 15 → 19.4, so Phase 4 is
+  now Steps 16–18; Phases 2/3/4 come AFTER aggTrade.
 
 ## 3. Standing rules that govern EVERY step (from MASTER_FIX_PLAN §0)
 
@@ -194,6 +195,25 @@ python scripts/test_step19_3b_live_edge.py     # 19.3b 150ms live-edge: timer-dr
    OI-confirmed split.
 
 ## 8. Phase 5 (aggTrade) — APPROVED DESIGN + STAGING (operator-signed 2026-06-15)
+
+**STATUS (2026-06-15): BUILDS DONE — 19.0–19.4 + 19.3b committed (through `1c39fab`),
+suite 9/9. AT 19.5 (schema cutover): `BUCKET_SCHEMA_VERSION` bumped 2→3 in code + the
+guard test extended (footprints-survive proven); a dry-run on a COPY of the working
+db confirmed the guard fires (clears buckets/OB/engine, KEEPS footprints, cold-starts)
+and re-accumulates HEALTHY aggTrade buckets (durations positive/varied, 0 vector
+overflow, VPIN exact). The real `history.db` is wiped only on the next REAL daemon
+boot after the 19.5 commit — that boot is the irreversible cutover. 19.6 (kline-vs-
+aggTrade side-by-side sign-off) remains.**
+
+**OPEN downstream-tuning item (from the 19.5 dry-run; NOT a cutover blocker):** with
+aggTrade, sub-second BURST buckets (~5000 vol in ~6 ms) give a `vol_mult` (velocity
+ratio) tail into the thousands (observed max ~3414) — aggTrade revealing real bursts
+that kline's 1 s floor hid. The Step-1 MEDIAN `avg_velocity` correctly resists
+baseline warp (normal buckets stay ~1.0, so the velocity gate still discriminates) —
+nothing is corrupted. BUT downstream consumers see extreme values on bursts: OB
+`power_score` (multiplies by `vel_ratio`) and the neon-velocity intensity. Operator
+wants to SEE it live before deciding signal vs noise; candidate fix = a `vol_mult`
+cap for `power_score`/neon. Do NOT fix pre-emptively — watch live first.
 
 Architecture approved. Core insight: **aggTrade is a better source for the same
 five `process_tick` args** (price, vol, taker_buy, delta_oi, tick_time) — Steps 1–4

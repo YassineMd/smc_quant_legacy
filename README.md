@@ -45,6 +45,19 @@ python -m app.terminal     # GUI window — Ctrl+N spawns more
 Each terminal window picks its own timeframe from the hamburger; they do not
 contend.
 
+## Data & schema migrations
+
+The daemon keeps finalized state in `data/history.db`. On a **schema-version bump**
+it prints `SCHEMA MIGRATION: db bucket schema vN != code vM; cleared … (footprints
+kept)` and re-accumulates from a cold start. **This is intentional, not a crash:** a
+bump means a bucket's *meaning* changed, so old finalized buckets / order-blocks /
+engine-state are cleared to avoid mixing old- and new-meaning rows in one rolling
+window; footprints are keyed separately and kept as the rebuild source. The current
+bump is **v3 (Phase 5): the data source moved from 1-second klines to order-by-order
+aggTrade**, so every bucket's price levels changed meaning (smeared-onto-close →
+true per-trade price) — a deliberate fidelity cutover, not a regression. The frozen
+pre-fix reference `data/history.db.before-fixes` is never touched by this.
+
 ## Build standalone executables
 
 ```bash

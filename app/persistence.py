@@ -51,9 +51,13 @@ _NEG_INF = float("-inf")
 # Bucket-vector schema version (rule 0.3). Bumped whenever the meaning or set of
 # per-bucket fields changes, so a populated db from an older schema is never
 # silently rehydrated under the new semantics (the silent mixed-meaning trap).
-# v2 = Step 3 (OI-confirmed vectors + explicit `churn`); anything older — incl.
-# an unversioned legacy db, read as 0 — is cleared and re-accumulated on boot.
-BUCKET_SCHEMA_VERSION = 2
+# v2 = Step 3 (OI-confirmed vectors + explicit `churn`). v3 = Step 19.5: NO field
+# change, but the *meaning* of every bucket's levels changed (kline-smeared-onto-
+# close -> aggTrade true-price), a DELIBERATE FIDELITY CUTOVER — the bump wipes the
+# working db so kline-built and aggTrade-built buckets never share a rolling window
+# (footprints survive: they are keyed separately and are the rebuild source).
+# Anything older — incl. an unversioned legacy db, read as 0 — is cleared on boot.
+BUCKET_SCHEMA_VERSION = 3
 
 
 # ---------------------------------------------------------------------------
