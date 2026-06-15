@@ -253,11 +253,24 @@ class MarketDataCore:
             engine = self.engines[tf_key]
             last_bucket_count = len(engine.closed_buckets)
 
+            # DIVERGES FROM LEGACY (Step 2): clamp the ΔOI / taker-buy sampling
+            # artifacts at the feeds boundary (engine math stays untouched).
+            #   * OI is polled every 5s while klines push ~1/s, so one push can
+            #     absorb several seconds of OI change against a single push's
+            #     volume -> |delta_oi| > deltaVol -> the 4-vector ratios exceed 1
+            #     and opL+opS+clL+clS > curr_vol. An OI change cannot physically
+            #     exceed the volume that produced it; clamp to [-deltaVol, deltaVol].
+            #   * clamp taker_buy into [0, deltaVol] so b_ratio = taker_buy/vol and
+            #     s_ratio stay in [0,1] even on a non-monotonic frame (deltaBuy >
+            #     deltaVol); the legacy max(0.0, .) only guarded the lower bound.
+            clamped_oi = max(-deltaVol, min(deltaVol, delta_oi))
+            clamped_taker = max(0.0, min(deltaVol, deltaBuy))
+
             engine.process_tick(
                 price=close_price,
                 vol=deltaVol,
-                taker_buy=max(0.0, deltaBuy),
-                delta_oi=delta_oi,
+                taker_buy=clamped_taker,
+                delta_oi=clamped_oi,
                 footprints_dict=db.get(tf_key, {}),
                 # DIVERGES FROM LEGACY: event-time clock (payload["E"]/1000) instead
                 # of int(uTime) (candle open). uTime still keys the footprint DB above.
