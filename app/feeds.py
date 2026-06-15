@@ -201,7 +201,9 @@ class MarketDataCore:
                     k = payload["k"]
                     tf_key = k.get("i")
                     if tf_key in self.engines:
-                        self._process_kline(k, tf_key)
+                        # Step 1: hand the event time (payload["E"], epoch ms) to the
+                        # quant clock; uTime (candle open) stays the footprint/DB key.
+                        self._process_kline(k, tf_key, payload.get("E"))
             except Exception:
                 await asyncio.sleep(2)
             finally:
@@ -211,7 +213,7 @@ class MarketDataCore:
                     except Exception:
                         pass
 
-    def _process_kline(self, k: dict, tf_key: str) -> None:
+    def _process_kline(self, k: dict, tf_key: str, event_ms: float | None = None) -> None:
         """Footprint accumulation + quant tick + broadcast (main.py:733)."""
         uTime = str(int(pd.to_datetime(k["t"], unit="ms").timestamp()))
         self.latest_utime[tf_key] = uTime
@@ -257,7 +259,9 @@ class MarketDataCore:
                 taker_buy=max(0.0, deltaBuy),
                 delta_oi=delta_oi,
                 footprints_dict=db.get(tf_key, {}),
-                tick_time=int(uTime),
+                # DIVERGES FROM LEGACY: event-time clock (payload["E"]/1000) instead
+                # of int(uTime) (candle open). uTime still keys the footprint DB above.
+                tick_time=(event_ms / 1000.0) if event_ms is not None else time.time(),
             )
 
             # Lightning trigger: one or more buckets just closed -> recompute OBs

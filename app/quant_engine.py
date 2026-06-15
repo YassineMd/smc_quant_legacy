@@ -23,6 +23,7 @@ PRESERVE-VERBATIM anchors (spec §10.2.1):
 
 from __future__ import annotations
 
+import statistics
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -30,6 +31,13 @@ from typing import Dict, List
 
 from . import config
 from .protocol import BucketSnapshot
+
+# DIVERGES FROM LEGACY (Step 1, rule 0.6/2): velocity warm-up gate. vel_ratio
+# stays neutral (1.0) until the rolling window holds at least this many real
+# samples, so a cold or under-filled deque cannot emit a misleading ratio. Tied
+# to VELOCITY_LOOKBACK so it scales with the window instead of being a separate
+# magic number.
+_VEL_WARMUP_MIN = max(2, config.VELOCITY_LOOKBACK // 4)
 
 # ---------------------------------------------------------------------------
 # Stdlib timestamp helpers (replace pandas clean_ts; numerically identical, UTC)
@@ -54,8 +62,10 @@ def parse_ts(ts: str) -> float:
 # QuantBucket  (verbatim — main.py:21)
 # ---------------------------------------------------------------------------
 class QuantBucket:
-    def __init__(self, target_vol, start_time):
+    def __init__(self, target_vol, start_time=None):
         self.target_vol = target_vol
+        # DIVERGES FROM LEGACY: start_time may be None until the first tick seeds it
+        # from event-time (QuantEngine.process_tick) — no wall-clock seed at build.
         self.start_time = start_time
         self.end_time = None
 
@@ -90,9 +100,14 @@ class QuantBucket:
         """
         hi = self.high if self.high != -float("inf") else self.close_price
         lo = self.low if self.low != float("inf") else self.close_price
+        # DIVERGES FROM LEGACY: start_time can be None before the first tick seeds
+        # it; fall back to end_time so a pre-tick live snapshot stays JSON-safe.
+        st = self.start_time
+        if st is None:
+            st = end_time if end_time is not None else 0.0
         return {
-            "start_time": float(self.start_time),
-            "end_time": float(end_time if end_time is not None else self.start_time),
+            "start_time": float(st),
+            "end_time": float(end_time if end_time is not None else st),
             "open": float(self.open_price),
             "high": float(hi),
             "low": float(lo),
@@ -135,7 +150,10 @@ class QuantBucket:
         buyer_er = self.buy_vol / ticks
         seller_er = self.sell_vol / ticks
 
-        duration = max(1.0, now - self.start_time)
+        # DIVERGES FROM LEGACY: start_time may be unset until the first tick; proxy
+        # to `now` so the live edge reads a floored duration instead of crashing.
+        start = self.start_time if self.start_time is not None else now
+        duration = max(1.0, now - start)
         vel = self.curr_vol / duration
         vol_mult = (vel / avg_velocity) if avg_velocity > 0 else 1.0
         return self._assemble(now, poc_price, buyer_er, seller_er, vol_mult)
@@ -147,7 +165,9 @@ class QuantBucket:
 class QuantEngine:
     def __init__(self, target_vol=config.DEFAULT_TARGET_VOL):
         self.target_vol = target_vol
-        self.active_bucket = QuantBucket(target_vol, time.time())
+        # DIVERGES FROM LEGACY: do not seed start_time from wall-clock; leave it None
+        # so the first event-time tick seeds it (coherent event-time bucket clock).
+        self.active_bucket = QuantBucket(target_vol, None)
         self.closed_buckets = []
         self.rolling_velocity = deque(maxlen=config.VELOCITY_LOOKBACK)
         self.avg_velocity = 1.0
@@ -163,6 +183,12 @@ class QuantEngine:
 
         if vol <= 0:
             return
+
+        # DIVERGES FROM LEGACY: lazily seed the active bucket's start from event-time
+        # on its first tick (was wall-clock at construction) so start_time/end_time
+        # share one clock — kills the mixed-clock negative/quantized durations.
+        if self.active_bucket.start_time is None:
+            self.active_bucket.start_time = tick_time
 
         b_ratio = taker_buy / vol
         s_ratio = (vol - taker_buy) / vol
@@ -223,11 +249,29 @@ class QuantEngine:
         b.end_time = current_time
 
         # 1. Velocity (Toxicity indicator)
-        duration = max(1.0, b.end_time - b.start_time)
-        vel = self.target_vol / duration
-        self.rolling_velocity.append(vel)
-        self.avg_velocity = sum(self.rolling_velocity) / len(self.rolling_velocity)
-        b.vel_ratio = vel / self.avg_velocity if self.avg_velocity > 0 else 1.0
+        # DIVERGES FROM LEGACY: the rigid `max(1.0, end-start)` floor (a) inverted
+        # reality on fast fills (instant fill -> LOW velocity) and (b) masked the
+        # degenerate buckets the Phase-0 baseline exposed. New contract:
+        #   * end <= start (or unset start) is NOT a real fill — incl. the ws
+        #     reconnect case where a push's event time lands behind the previous —
+        #     so skip it: no rolling_velocity sample, neutral vel_ratio. A negative
+        #     or epsilon-exploded velocity can never enter the baseline (rule 0.6/3).
+        #   * genuine sub-second fills floor at the event-clock resolution (1 ms),
+        #     a physical bound, so a burst reads high-but-finite, not low.
+        #   * avg_velocity is the MEDIAN of the window (outlier-resistant, 0.6/3);
+        #     vel_ratio stays neutral until the window warms up (0.6/2).
+        delta = (b.end_time - b.start_time) if b.start_time is not None else -1.0
+        if delta <= 0:
+            b.vel_ratio = 1.0
+        else:
+            duration = max(0.001, delta)
+            vel = self.target_vol / duration
+            self.rolling_velocity.append(vel)
+            self.avg_velocity = statistics.median(self.rolling_velocity)
+            if len(self.rolling_velocity) >= _VEL_WARMUP_MIN and self.avg_velocity > 0:
+                b.vel_ratio = vel / self.avg_velocity
+            else:
+                b.vel_ratio = 1.0
 
         # 2. Extract POC (Sniper Target)
         max_v = 0
