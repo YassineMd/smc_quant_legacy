@@ -1,0 +1,16 @@
+# OrderFlowDaemon — headless cloud runtime dependencies ONLY.
+#
+# The daemon never imports the GUI stack (PySide6 / pyqtgraph) or PyInstaller, so
+# a headless VM must NOT install them — they're ~100MB+, need display/GL libs, and
+# are pure dead weight on the cloud core. Pins mirror requirements.txt.
+#
+#   pip install -r requirements-daemon.txt
+#
+# --- numerics (quant engine; pandas pulls numpy) ---
+numpy==1.26.4
+pandas==2.2.0
+
+# --- networking (live Binance feeds + REST baseline) ---
+websockets==16.0
+requests==2.31.0
+urllib3==2.2.0

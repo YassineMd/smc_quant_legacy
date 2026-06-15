@@ -1,0 +1,192 @@
+"""Tier-0 shared constants.
+
+Single source of truth imported by BOTH the daemon and the terminal. Nothing
+here imports asyncio, PySide6, or pandas — it must stay cheap so every module
+can pull from it without dragging in heavy dependencies.
+
+All numeric parameters are transcribed directly from the legacy `main.py` and
+the master specification (draft_instructions.md). Where the spec and the legacy
+code disagree, the divergence is noted inline.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+# ---------------------------------------------------------------------------
+# Instrument / contract
+# ---------------------------------------------------------------------------
+SYMBOL = "SOLUSDT"
+TICK_SIZE = 0.01          # spec §3.1.2 — fixed SOLUSDT tick
+PRICE_DECIMALS = 2        # f"{price:.2f}" footprint keys (spec §10.2.2) + HUD (§6.2.1)
+
+# ---------------------------------------------------------------------------
+# Quant engine parameters (legacy main.py + spec §3)
+# ---------------------------------------------------------------------------
+DEFAULT_TARGET_VOL = 5000.0     # V_target default (main.py:42, spec §3.1.1)
+CLOSED_BUCKETS_CAP = 10000      # cloud retention cap — buckets/tf kept in RAM + DB + catch-up
+RECALIB_WINDOW_SECS = 7200      # main.py:132 — 2-hour sliding recalibration frame
+VELOCITY_LOOKBACK = 20          # main.py:46 — rolling_velocity deque maxlen
+ER_LOOKBACK = 20                # main.py:502 — effort/result baseline window
+OB_MIN_BUCKETS = 20             # main.py:493 — calc_quant_obs needs >=20 buckets
+
+# Otsu + calculus expansion (calculate_dynamic_band, main.py:392)
+OTSU_ITERATIONS = 50            # 50-step between-class variance maximization
+EXPANSION_MAX_TICKS = 100       # hard spatial expansion limit per direction
+
+# VPIN — spec §3.4 mandates this; legacy main.py ships vel_ratio instead.
+# DECISION: keep vel_ratio (OB engine depends on it) AND add VPIN alongside.
+VPIN_WINDOW = 50                # N=50 normalized micro-buckets (spec §3.4.1)
+VPIN_ALERT_BASELINE = 0.85      # 85% institutional alert line (spec §10.2.3)
+
+# ---------------------------------------------------------------------------
+# Timeframes (spec §7.2.1 — exactly five)
+# ---------------------------------------------------------------------------
+TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h"]
+DEFAULT_TF = "1m"
+
+TF_SECONDS = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3600,
+    "4h": 14400,
+}
+
+# pandas date_range freq aliases (main.py:388)
+TF_PANDAS_FREQ = {
+    "1m": "1min",
+    "5m": "5min",
+    "15m": "15min",
+    "1h": "1h",
+    "4h": "4h",
+}
+
+# ---------------------------------------------------------------------------
+# IPC — raw TCP loopback (spec §1.3)
+# ---------------------------------------------------------------------------
+IPC_HOST = "127.0.0.1"
+IPC_PORT = 9999
+RECONNECT_SECS = 2              # client retry cadence (spec §1.3.1)
+SOCKET_QUEUE_MAX = 256          # per-client outbound backlog before frame-drop
+
+# ---------------------------------------------------------------------------
+# Data / persistence (spec §9.1, §10.2.2)
+# ---------------------------------------------------------------------------
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+# When frozen by PyInstaller, persist user data next to the executable rather
+# than inside the temporary extraction dir (which is wiped on exit).
+if getattr(sys, "frozen", False):
+    PROJECT_DIR = os.path.dirname(sys.executable)
+else:
+    PROJECT_DIR = os.path.dirname(ROOT_DIR)
+DATA_DIR = os.path.join(PROJECT_DIR, "data")
+FOOTPRINTS_FILE = os.path.join(DATA_DIR, "server_footprints.json")  # legacy JSON (migration source)
+HISTORY_DB = os.path.join(DATA_DIR, "history.db")  # SQLite state store (instant rehydration)
+
+FOOTPRINT_CAP = 10000           # main.py:291 — retention threshold per timeframe (on disk)
+FOOTPRINT_MEM_CAP = 300         # per-tf footprint nodes kept in RAM (>=2h for recalibrate)
+REHYDRATE_LIMIT = 1440          # main.py:248 — last 24h of entries per tf (legacy replay)
+SAVE_INTERVAL_SECS = 15         # main.py:286 — periodic footprint flush (legacy JSON)
+SYNC_INTERVAL_SECS = 10         # async SQLite upsert cadence (replaces JSON flush)
+CATCHUP_CHUNK_SIZE = 1000       # closed buckets per CATCHUP_CHUNK frame
+BASELINE_CANDLES = 100          # spec §9.1.3 — REST baseline pull
+TS_FORMAT = "%Y-%m-%d %H:%M:00"  # spec §10.2.2 — temporal slicing key
+
+# ---------------------------------------------------------------------------
+# Binance endpoints (daemon-only)
+# ---------------------------------------------------------------------------
+REST_KLINES = "https://fapi.binance.com/fapi/v1/klines"
+REST_OPEN_INTEREST = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={SYMBOL}"
+REST_DEPTH = f"https://fapi.binance.com/fapi/v1/depth?symbol={SYMBOL}&limit=1000"
+WS_KLINE = "wss://fstream.binance.com/market/stream?streams=solusdt@kline_{tf}"
+WS_DEPTH = "wss://fstream.binance.com/ws/solusdt@depth"
+WS_LIQUIDATIONS = "wss://fstream.binance.com/market/ws/!forceOrder@arr"
+DEPTH_HIST_URL = (
+    "https://data.binance.vision/data/futures/um/daily/klines/"
+    "SOLUSDT/{tf}/SOLUSDT-{tf}-{date}.zip"
+)
+OI_POLL_SECS = 5                # main.py:629
+PULSE_BROADCAST_SECS = 0.4      # main.py:877 — DOM/OI pulse cadence
+DOM_LEVELS = 200                # main.py:881 — sorted depth levels per side
+
+# ---------------------------------------------------------------------------
+# GUI timing (spec §1.4.2, §9.2.3)
+# ---------------------------------------------------------------------------
+GUI_TIMER_MS = 50               # 20Hz master redraw loop
+CHART_CACHE_CAP = 10000         # max candles per viewport (spec §1.1.2)
+
+# ---------------------------------------------------------------------------
+# Hamburger control ranges (spec §7)
+# ---------------------------------------------------------------------------
+MULT_FILTER_MIN = 0.0
+MULT_FILTER_MAX = 10.0
+MULT_FILTER_STEP = 0.1          # spec §7.2.3
+CHART_FILTER_MIN = 100
+CHART_FILTER_MAX = 25000
+CHART_FILTER_STEP = 100         # spec §7.3.3 / §8.2
+DOM_BIN_STEP = 0.01             # spec §8.1 — depth aggregation bin
+
+# Analytics thresholds (spec §4)
+FOOTPRINT_UNPACK_PX = 35        # vertical grid spacing to unpack side-by-side rows (§4.1.1)
+IMBALANCE_RATIO = 2.0           # diagonal imbalance multiplier (§4.1.1)
+IMBALANCE_OPACITY = (0.35, 0.95)  # min/max highlight opacity (§4.1.1)
+STACKED_IMBALANCE_MIN = 3       # consecutive rows to form a channel (§4.1.2)
+ICEBERG_VOL_SHARE = 0.04        # 4% candle volume (§4.2.1)
+ICEBERG_SKEW = 0.65             # 65% absorption skew (§4.2.1)
+VELOCITY_NEON_RATIO = 2.5       # HFT neon overload trigger (index.html:945, spec §10.2.3)
+VELOCITY_TIER_HIGHLIGHT = 1.2   # OB ignition velocity gate (main.py:508)
+
+# ---------------------------------------------------------------------------
+# Color palette — pure light mode (spec §5.1)
+# ---------------------------------------------------------------------------
+COLOR_CANVAS = "#ffffff"
+COLOR_GRID = "#eeeeee"
+COLOR_AXIS_TEXT = "#000000"
+COLOR_CROSSHAIR = "#000000"
+
+# B&W candlesticks (§5.1.2)
+COLOR_BULL_BODY = "#ffffff"
+COLOR_BEAR_BODY = "#000000"
+COLOR_CANDLE_BORDER = "#000000"
+
+# Imbalances (§4.1.1)
+COLOR_IMB_BUY = (57, 255, 20)    # neon green
+COLOR_IMB_SELL = (255, 7, 58)    # neon red
+RGBA_CHANNEL_BUY = (57, 255, 20, 0.15)
+RGBA_CHANNEL_SELL = (255, 7, 58, 0.15)
+
+# Icebergs (§4.2.2)
+COLOR_ICEBERG_BUY = "#00ffff"    # cyan — absorbing sellers
+COLOR_ICEBERG_SELL = "#ff00ff"   # magenta — absorbing buyers
+
+# COB depth (§8.1 / §10.2.3)
+RGBA_COB_ASK = (248, 81, 73, 0.4)
+RGBA_COB_BID = (46, 160, 67, 0.4)
+
+# Liquidation marks (§7.3 line "Liquidation Marks")
+COLOR_LIQ_SHORT = "#00ffff"      # cyan — shorts liquidated (forced buys)
+COLOR_LIQ_LONG = "#ff00ff"       # magenta — longs liquidated (forced sells)
+
+# Alert ledger feeds (§8.4)
+COLOR_ALERT_BULL_OB = "#27ae60"
+COLOR_ALERT_BEAR_OB = "#e74c3c"
+COLOR_ALERT_SHORT_LIQ = "#00ffff"
+COLOR_ALERT_LONG_LIQ = "#ff00ff"
+COLOR_BADGE = "#e74c3c"
+
+# Bucket velocity visuals (getBucketVisuals, index.html:933)
+RGB_GREEN_STD = (46, 204, 113)
+RGB_GREEN_NEON = (0, 255, 255)
+RGB_RED_STD = (231, 76, 60)
+RGB_RED_NEON = (255, 0, 255)
+RGB_BLUE_STD = (52, 152, 219)
+RGB_PURPLE_STD = (155, 89, 182)
+BUCKET_ALPHA_FLOOR = 0.15        # minimum opacity so it never vanishes
+
+
+def ensure_data_dir() -> str:
+    """Create the data directory if missing and return its path."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    return DATA_DIR

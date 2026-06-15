@@ -1,0 +1,17 @@
+# --- Runtime / user state (never versioned) ---
+# The whole data dir is generated/user state: SQLite history (history.db +
+# -wal/-shm), legacy footprints, saved drawings, and the preserved pre-fix
+# dataset (history.db.before-fixes). Keep the dir present via .gitkeep.
+data/*
+!data/.gitkeep
+
+# --- Python bytecode caches ---
+__pycache__/
+*.pyc
+
+# --- PyInstaller build artifacts ---
+build/
+dist/
+
+# --- Claude Code local settings (user-specific permissions) ---
+.claude/settings.local.json

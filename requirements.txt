@@ -1,0 +1,21 @@
+# Decoupled Order Flow Terminal — locked runtime dependencies
+# Python 3.10+ (developed/verified on 3.10.10; 3.11+ also supported)
+
+# --- GUI / charting (terminal.py) ---
+PySide6==6.11.1
+pyqtgraph==0.14.0
+
+# --- numerics / data (engine + client) ---
+numpy==1.26.4
+pandas==2.2.0
+
+# --- networking (daemon live feeds + REST baseline) ---
+websockets==16.0
+requests==2.31.0
+urllib3==2.2.0
+
+# Note: host-local axis localization (spec §2) uses the stdlib datetime
+# (datetime.fromtimestamp resolves the OS-local zone) — no tzlocal/zoneinfo dep.
+
+# --- packaging (build.py only; not needed at runtime) ---
+pyinstaller==6.21.0
