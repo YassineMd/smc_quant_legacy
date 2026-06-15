@@ -58,6 +58,41 @@ def parse_ts(ts: str) -> float:
     ).timestamp()
 
 
+def _effort_ticks(levels: dict) -> float:
+    """DIVERGES FROM LEGACY (Step 4): the effort/result denominator.
+
+    Volume-weighted price dispersion (the std dev of trade price weighted by each
+    level's volume) divided by TICK_SIZE, floored at 1.0 physical tick. Replaces
+    the legacy ``|high-low| / TICK_SIZE`` range, which a single wick inflated.
+
+    * Wick-robust: a lone far level carries near-zero weight, so it perturbs the
+      dispersion by its tiny volume, not by the full price range.
+    * Degenerate-safe (rule 0.6/1): a single-price / zero-dispersion bucket floors
+      to 1.0 tick -> er = vol (large but BOUNDED), never the ~1e7 explosion an
+      epsilon floor would give. Identical to legacy on that single-price case.
+    """
+    total = 0.0
+    wsum = 0.0
+    for p_str, v in levels.items():
+        vol = v["b"] + v["s"]
+        if vol <= 0:
+            continue
+        total += vol
+        wsum += vol * float(p_str)
+    if total <= 0:
+        return 1.0
+    vwap = wsum / total
+    var = 0.0
+    for p_str, v in levels.items():
+        vol = v["b"] + v["s"]
+        if vol <= 0:
+            continue
+        d = float(p_str) - vwap
+        var += vol * d * d
+    dispersion = (var / total) ** 0.5
+    return max(1.0, dispersion / config.TICK_SIZE)
+
+
 # ---------------------------------------------------------------------------
 # QuantBucket  (verbatim — main.py:21)
 # ---------------------------------------------------------------------------
@@ -148,9 +183,10 @@ class QuantBucket:
             if tot > poc_v:
                 poc_v, poc_price = tot, float(p_str)
 
-        hi = self.high if self.high != -float("inf") else self.close_price
-        lo = self.low if self.low != float("inf") else self.close_price
-        ticks = max(1.0, abs(hi - lo) / config.TICK_SIZE)
+        # DIVERGES FROM LEGACY (Step 4): same volume-weighted dispersion effort
+        # denominator (1.0-tick floor) as _close_active_bucket, so the live edge
+        # and closed buckets read on one scale.
+        ticks = _effort_ticks(self.levels)
         buyer_er = self.buy_vol / ticks
         seller_er = self.sell_vol / ticks
 
@@ -295,7 +331,9 @@ class QuantEngine:
                 b.poc_price = float(p_str)
 
         # 3. Absorption Math
-        ticks = max(1.0, abs(b.high - b.low) / config.TICK_SIZE)
+        # DIVERGES FROM LEGACY (Step 4): effort denominator is volume-weighted price
+        # dispersion (wick-robust), not the |high-low| range; floored at 1.0 tick.
+        ticks = _effort_ticks(b.levels)
         b.buyer_er = b.buy_vol / ticks
         b.seller_er = b.sell_vol / ticks
 
