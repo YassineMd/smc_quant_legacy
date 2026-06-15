@@ -2,7 +2,9 @@
 
 You are continuing a multi-step data-integrity rework of a native order-flow
 trading terminal for **SOLUSDT perps**. This note orients a fresh session without
-re-deriving anything. **Phase 1 is complete; the next work is Phase 5 (aggTrade).**
+re-deriving anything. **Phases 1 and 5 are COMPLETE — the terminal is aggTrade-native
+and LIVE on the real v3 `history.db`. Next is the operator's choice of Phase 2 / 3 / 4,
+then the Mode-10 selection tool (see §2).**
 
 ---
 
@@ -25,9 +27,16 @@ re-deriving anything. **Phase 1 is complete; the next work is Phase 5 (aggTrade)
   93286a0  step-5: adaptive exhaustion via E/R z-score + smooth multipliers (mode 3)
   ```
 - **`data/history.db.before-fixes` is the FROZEN pre-fix baseline. NEVER write to it.**
-  It is the immutable "before" reference for re-running the Phase-0 baseline. It is
-  gitignored (the whole `data/` dir is). The live `data/history.db` is now new-math
-  (the Step-3 schema guard wiped the old buckets on first Step-3 boot — expected).
+  It is the immutable "before" reference; gitignored (the whole `data/` dir is).
+- **The working `data/history.db` is now LIVE at schema v3 (aggTrade-built).** The 19.5
+  cutover wiped the old kline buckets (footprints kept); the daemon re-accumulates
+  aggTrade history. **The build-time "test on an ISOLATED empty DB" caution (§4) is
+  LIFTED** — it existed only to protect the working db BEFORE the cutover, which is
+  done; run/test against the real db now. (`before-fixes` stays frozen regardless.)
+- **Run it live (how to test):** `python -m app.daemon` (headless core, binds
+  `127.0.0.1:9999`) then `python -m app.terminal` (GUI; `Ctrl+N` spawns more windows).
+  The daemon now boots clean on the v3 db (no re-wipe — v3 == v3). A running daemon is
+  read by `scripts/baseline_diag.py <tf>` for the 5 invariant distributions.
 
 ## 2. Source of truth + what's next
 
@@ -78,8 +87,8 @@ re-deriving anything. **Phase 1 is complete; the next work is Phase 5 (aggTrade)
   `QuantBucket._assemble`/`live_snapshot`) and (b) the **persistence** schema
   (`persistence._bucket_to_dict`/`_bucket_from_dict`). They are SEPARATE, hand-kept
   serializers. Any field add/meaning-change must update **both**, every `terminal.py`
-  consumer, **and bump `persistence.BUCKET_SCHEMA_VERSION`** (currently **2**), in
-  ONE commit. The boot-time schema guard in `persistence.rehydrate_engines` clears
+  consumer, **and bump `persistence.BUCKET_SCHEMA_VERSION`** (currently **3** — v3 =
+  the 19.5 aggTrade fidelity cutover), in ONE commit. The boot-time schema guard in `persistence.rehydrate_engines` clears
   stale-version bucket/OB/engine tables (footprints kept) so old-meaning rows never
   silently rehydrate. `_bucket_from_dict` uses `d.get(...)` with no per-field guard,
   so a half-applied schema change corrupts history without raising.
@@ -110,7 +119,9 @@ re-deriving anything. **Phase 1 is complete; the next work is Phase 5 (aggTrade)
   step can silently break an earlier step's assertion — Step 3's 4→5-component
   conservation change broke the Step-2 test and it went unnoticed until all five
   were re-run together.
-- **Live checks use an ISOLATED empty-DB daemon**, not the working db: a throwaway
+- **Live checks use an ISOLATED empty-DB daemon** *(build-time pattern; post-19.5
+  cutover the working db is LIVE v3 — isolated DB is now only for a guaranteed-clean
+  cold-start test, not a protection requirement)*: a throwaway
   launcher in the OS temp dir that monkeypatches `config.DATA_DIR`/`HISTORY_DB`/
   `FOOTPRINTS_FILE` to an empty temp path, so the daemon cold-starts and produces
   ONLY new-math buckets (no rehydrate of old-math, no legacy-json migration). Pattern:
@@ -192,6 +203,10 @@ python scripts/test_step19_3b_live_edge.py     # 19.3b 150ms live-edge: timer-dr
   and `scripts/compare_step3_from_history.py {scan|<tf> [s] [e]}` (reads a COPY of
   `history.db.before-fixes`) reconstruct OLD-50/50 vs NEW-confirmed for visual
   before/after. Re-prove Step 3 with these if needed.
+- **19.6 fidelity tool:** `scripts/compare_19_6_footprint.py` (read-only) renders the
+  kline-vs-aggTrade footprint side-by-side (POC-displacement headline) from the frozen
+  tapes `scripts/fixtures/aggtrade_tape.jsonl` (quiet) + `aggtrade_tape_active.jsonl`
+  (moving). Output PNGs are gitignored (regenerable).
 
 ## 7. Phase 5 (aggTrade) discipline + churn-as-signal (operator-established)
 
@@ -314,7 +329,10 @@ public market data, writes one JSONL tape under `data/`; imports `app.config` fo
 URLs/constants only — touches no app state).
 
 ---
-**Start here:** read `MASTER_FIX_PLAN.md` (esp. §0 + the Phase 5 PROMOTED note),
-confirm the suite (§6) is green, then read **§8** for the approved Phase-5 design +
-staging. Phase 5 is IN PROGRESS at sub-step 19.0. Do not move past a sub-step until
-its gate is green and the operator has eyeballed it.
+**Start here:** Phases 1 + 5 are DONE — the terminal is aggTrade-native and live on
+the real v3 `history.db`. Read **§2** (current state · what's next · trustworthiness
+map), confirm the suite (§6) is green (9 tests, all `exit 0`), then pick the next
+phase WITH the operator (Phase 2 → 3 → 4 → Mode-10 tool). §7/§8 are the Phase-5
+record; the standing rules (§3) + the verification pattern (§4 — esp. FULL-suite-at-
+every-commit, propose-then-approve, one-step-one-commit, hold-before-commit) govern
+every future step.
