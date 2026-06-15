@@ -152,6 +152,32 @@ python scripts/test_step5_exhaustion.py        # z-score exhaustion: scale-invar
   `history.db.before-fixes`) reconstruct OLD-50/50 vs NEW-confirmed for visual
   before/after. Re-prove Step 3 with these if needed.
 
+## 7. Phase 5 (aggTrade) discipline + churn-as-signal (operator-established)
+
+1. **aggTrade MUST be proposed-then-approved BEFORE any code.** Do NOT start the
+   source-swap cold. First DESIGN and PRESENT the approach, then wait for the
+   operator's explicit approval — same discipline as the Step-3 comparison
+   (propose → operator approves → build). The proposal must cover:
+   - how each aggTrade (true price + qty + buyer-maker flag) routes into the
+     footprint **levels** and into `process_tick`;
+   - what the **klines are retained for** (OHLC/candle framing + OI alignment only);
+   - the **message-volume / hot-path concern** — aggTrade is orders of magnitude
+     more messages than 1s kline, so the per-tick path must stay allocation-light.
+
+2. **aggTrade validation needs a side-by-side before/after (like Step 3 had):** an
+   aggTrade-built footprint vs the kline-built one over the SAME window, so the
+   operator can judge the fidelity gain by eye. Build that comparison artifact —
+   don't just assert the improvement.
+
+3. **CHURN IS A SIGNAL, not just removed noise (operator's trading insight —
+   record and honor it).** Churn collapsing toward the baseline while the
+   opens/closes pulse bars spike = rotation converting into real positioning, the
+   market "starting to breathe." That regime-change moment is **central to how the
+   operator reads the pulse view** (Modes 7/8 with the secondary-axis churn line)
+   and must inform the future **Mode-10 selection-tool** design. Treat churn's
+   *dynamics* (its drop) as information, not merely as the leftover after the
+   OI-confirmed split.
+
 ---
 **Start here:** read `MASTER_FIX_PLAN.md` (esp. §0 and the Phase 5 PROMOTED note +
 Step 19), confirm the suite above is green, then design Phase 5 (aggTrade) as its
