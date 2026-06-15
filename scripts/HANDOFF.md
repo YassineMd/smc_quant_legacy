@@ -79,6 +79,10 @@ re-deriving anything. **Phase 1 is complete; the next work is Phase 5 (aggTrade)
   comment (the legacy "verbatim port" guardrail is retired — see §0.2).
 - **Synthetic test FIRST**, in `scripts/test_stepN_*.py`, asserting the EXACT
   discriminating property (not just "runs"). This is the regression suite.
+- **Run the FULL suite at every commit, not just the new step's test.** A later
+  step can silently break an earlier step's assertion — Step 3's 4→5-component
+  conservation change broke the Step-2 test and it went unnoticed until all five
+  were re-run together.
 - **Live checks use an ISOLATED empty-DB daemon**, not the working db: a throwaway
   launcher in the OS temp dir that monkeypatches `config.DATA_DIR`/`HISTORY_DB`/
   `FOOTPRINTS_FILE` to an empty temp path, so the daemon cold-starts and produces

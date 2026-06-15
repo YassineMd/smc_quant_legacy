@@ -2,10 +2,11 @@
 
 History-independent, deterministic. Drives the REAL clamp in
 `MarketDataCore._process_kline` (not a reimplementation) with crafted kline
-frames + OI state, and asserts the engine's resulting 4-vectors. Each clamped
-case is paired with a raw-`QuantEngine` counterfactual fed the UNCLAMPED values,
-to prove the clamp is what restores conservation (the counterfactual is the
-pre-fix bug).
+frames + OI state. CASE 1 (|dOI|>vol) proves the FEEDS-BOUNDARY clamp directly by
+spying on the delta_oi handed to `process_tick`, then asserts the post-Step-3
+5-component law opL+opS+clL+clS+churn == curr_vol. CASE 2 (taker>vol) keeps a
+raw-`QuantEngine` counterfactual fed the UNCLAMPED values to exhibit the pre-fix
+bug (negative sell volume).
 
 Run:
     python scripts/test_step2_oi_clamp.py
@@ -49,47 +50,62 @@ def _core() -> MarketDataCore:
     return MarketDataCore({}, lambda tf, line: None, lambda line: None)
 
 
-def _vec_sum(b) -> float:
-    return b.opL + b.opS + b.clL + b.clS
-
-
 def main() -> int:
     tf = "1m"
 
     # ===================================================================
-    # CASE 1 — |delta_oi| > deltaVol must clamp -> exact conservation.
+    # CASE 1 — |delta_oi| > deltaVol must clamp at the FEEDS BOUNDARY.
     # Frame 1 establishes lastVol/oi_close; then OI jumps +100 (a 5s poll)
     # against a deltaVol of only 5, the exact sampling artifact Step 2 targets.
+    # Post-Step-3 the conservation law is the 5-component
+    # opL+opS+clL+clS+churn == curr_vol: the OI-confirmed vectors carry only the
+    # *clamped* delta_oi (split by taker ratio); the OI-neutral remainder is churn.
     # ===================================================================
     core = _core()
     core.pulse_state["oi"] = 1000.0
     core._process_kline(_kline(10.0, 6.0), tf, event_ms=_OPEN_MS + 1000)   # deltaVol 10, dOI 0
     core.pulse_state["oi"] = 1100.0                                        # +100 OI jump
-    core._process_kline(_kline(15.0, 9.0), tf, event_ms=_OPEN_MS + 2000)   # deltaVol 5, raw dOI 100
 
-    b = core.engines[tf].active_bucket
-    residual = (_vec_sum(b) - b.curr_vol) / b.curr_vol
+    # Spy on the engine's process_tick to capture the delta_oi it ACTUALLY
+    # receives — the only direct proof the Step-2 *boundary* clamp ran. The
+    # engine's own oi_mag=min(|dOI|,vol) floor would yield identical vectors with
+    # or without the boundary clamp, so the resulting vectors can't distinguish
+    # them; only the argument handed across the boundary can.
+    eng = core.engines[tf]
+    seen: dict[str, float] = {}
+    _orig_pt = eng.process_tick
+
+    def _spy(*args, **kwargs):
+        seen["delta_oi"] = kwargs.get("delta_oi", args[3] if len(args) > 3 else None)
+        return _orig_pt(*args, **kwargs)
+
+    eng.process_tick = _spy
+    core._process_kline(_kline(15.0, 9.0), tf, event_ms=_OPEN_MS + 2000)   # deltaVol 5, raw dOI 100
+    eng.process_tick = _orig_pt   # restore
+
+    raw_doi, delta_vol_f2 = 100.0, 5.0     # OI jumped 1000->1100; frame-2 deltaVol = 15-10
+    saw = seen.get("delta_oi")
+    b = eng.active_bucket
+    residual = (b.opL + b.opS + b.clL + b.clS + b.churn - b.curr_vol) / b.curr_vol
     print(f"\nCASE 1 (clamped):  curr_vol={b.curr_vol}  "
-          f"opL/opS/clL/clS={b.opL:.3f}/{b.opS:.3f}/{b.clL:.3f}/{b.clS:.3f}  "
+          f"opL/opS/clL/clS/churn={b.opL:.3f}/{b.opS:.3f}/{b.clL:.3f}/{b.clS:.3f}/{b.churn:.3f}  "
           f"residual={residual:.2e}")
-    check("|dOI|>vol: post-clamp 4-vector sum == curr_vol (residual ~0)",
+    print(f"CASE 1 (boundary): raw dOI={raw_doi} deltaVol={delta_vol_f2} -> "
+          f"process_tick saw delta_oi={saw}")
+
+    # The boundary clamp is what Step 2 OWNS: process_tick must never see the raw
+    # +100; it is reduced to <= deltaVol BEFORE the engine ever runs.
+    check("|dOI|>vol: boundary clamp ran -> process_tick saw delta_oi <= deltaVol",
+          saw is not None and saw <= delta_vol_f2 + 1e-9,
+          f"saw delta_oi={saw} (raw was {raw_doi}, deltaVol={delta_vol_f2})")
+    check("|dOI|>vol: boundary clamp reduced raw dOI down to deltaVol (100 -> 5)",
+          saw is not None and approx(saw, delta_vol_f2), f"saw {saw}")
+    # Post-Step-3 conservation is the 5-component law (churn carries the remainder).
+    check("|dOI|>vol: 5-component conservation opL+opS+clL+clS+churn == curr_vol (residual ~0)",
           abs(residual) < 1e-9, f"residual={residual:.2e}")
     check("|dOI|>vol: no single vector exceeds curr_vol",
           all(v <= b.curr_vol + 1e-9 for v in (b.opL, b.opS, b.clL, b.clS)),
           f"max vec={max(b.opL, b.opS, b.clL, b.clS):.3f} vs curr_vol={b.curr_vol}")
-
-    # Counterfactual: same raw numbers WITHOUT the clamp (delta_oi=100, vol=5).
-    cf = QuantEngine()
-    cf.process_tick(price=150.0, vol=5.0, taker_buy=3.0, delta_oi=100.0,
-                    footprints_dict={}, tick_time=float(_OPEN_MS) / 1000.0)
-    cfb = cf.active_bucket
-    cf_res = (_vec_sum(cfb) - cfb.curr_vol) / cfb.curr_vol
-    print(f"CASE 1 (UNCLAMPED counterfactual): residual={cf_res:.2f}  "
-          f"max vec={max(cfb.opL, cfb.opS, cfb.clL, cfb.clS):.1f} vs curr_vol={cfb.curr_vol}")
-    check("counterfactual proves the bug: unclamped residual >> 0",
-          cf_res > 1.0, f"residual={cf_res:.2f}")
-    check("counterfactual proves the bug: unclamped vector exceeds curr_vol",
-          max(cfb.opL, cfb.opS, cfb.clL, cfb.clS) > cfb.curr_vol)
 
     # ===================================================================
     # CASE 2 — taker_buy > deltaVol (non-monotonic frame) must clamp into
