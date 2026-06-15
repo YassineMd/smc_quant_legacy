@@ -264,14 +264,20 @@ class PipeClientWorker(threading.Thread):
             elif isinstance(pkt, protocol.ObPacket):
                 if pkt.tf != self.tf:
                     return
-                self.order_blocks = pkt.order_blocks
-                self._ob_ver += 1
-                # grow the closed-bucket history with the piggybacked new buckets
+                # Step 19.4: two ObPacket roles, distinguished by new_buckets.
+                #  * CLOSE piggyback (new_buckets present, order_blocks=[]): grow the
+                #    scanner history promptly; the OB matrix is NOT re-shipped per close,
+                #    so leave it untouched (no torn/cleared matrix on every close).
+                #  * OB-MATRIX REFRESH from recompute_loop (no new_buckets): authoritative
+                #    for order_blocks, including clearing to [] when all OBs are gone.
                 if pkt.new_buckets:
                     self.closed_buckets.extend(pkt.new_buckets)
                     if len(self.closed_buckets) > config.CLOSED_BUCKETS_CAP:
                         self.closed_buckets = self.closed_buckets[-config.CLOSED_BUCKETS_CAP:]
                     self._cb_ver += 1
+                else:
+                    self.order_blocks = pkt.order_blocks
+                    self._ob_ver += 1
                 self.vpin = pkt.vpin
             elif isinstance(pkt, protocol.LiquidationPacket):
                 self.liquidations.append(

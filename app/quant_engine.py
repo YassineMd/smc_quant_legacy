@@ -211,6 +211,7 @@ class QuantEngine:
         self.closed_buckets = []
         self.rolling_velocity = deque(maxlen=config.VELOCITY_LOOKBACK)
         self.avg_velocity = 1.0
+        self.last_tick_time = 0.0   # DIVERGES FROM LEGACY (Step 19.4): event-time for periodic recalibrate
 
         # --- ADDITION: VPIN toxicity queue (spec §3.4), parallel to vel_ratio ---
         self.vpin_queue = deque(maxlen=config.VPIN_WINDOW)
@@ -223,6 +224,10 @@ class QuantEngine:
 
         if vol <= 0:
             return
+
+        # DIVERGES FROM LEGACY (Step 19.4): remember the latest event time so the
+        # periodic recompute_loop windows recalibrate at event-time, not wall-clock.
+        self.last_tick_time = tick_time
 
         # DIVERGES FROM LEGACY: lazily seed the active bucket's start from event-time
         # on its first tick (was wall-clock at construction) so start_time/end_time
@@ -348,10 +353,12 @@ class QuantEngine:
         denom = n * self.target_vol
         self.vpin = (sum(self.vpin_queue) / denom) if denom > 0 else 0.0
 
-        # CONTINUOUS RECALIBRATION: Slide the 2-hour window and optimize
-        self.recalibrate(current_time, footprints_dict)
-
-        # Spawn new bucket with newly optimized target_vol
+        # DIVERGES FROM LEGACY (Step 19.4): recalibrate (the 20-step optimizer over the
+        # 2h footprint window) moved OFF this per-close hot path to the daemon's
+        # periodic recompute_loop. It ran synchronously on EVERY close (~1.8ms close-
+        # class p99 in the 19.3 gate vs ~19us steady); a volume burst clusters closes
+        # and stalls the socket drain. target_vol still adapts on the periodic cadence;
+        # the new bucket spawns with its latest value. (footprints_dict unused here now.)
         self.active_bucket = QuantBucket(self.target_vol, current_time)
 
     def recalibrate(self, current_time, footprints_dict):

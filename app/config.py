@@ -27,6 +27,7 @@ PRICE_DECIMALS = 2        # f"{price:.2f}" footprint keys (spec §10.2.2) + HUD 
 DEFAULT_TARGET_VOL = 5000.0     # V_target default (main.py:42, spec §3.1.1)
 CLOSED_BUCKETS_CAP = 10000      # cloud retention cap — buckets/tf kept in RAM + DB + catch-up
 RECALIB_WINDOW_SECS = 7200      # main.py:132 — 2-hour sliding recalibration frame
+RECOMPUTE_SECS = 5              # 19.4 — periodic recalibrate + OB rescan cadence (off the per-close hot path)
 VELOCITY_LOOKBACK = 20          # main.py:46 — rolling_velocity deque maxlen
 ER_LOOKBACK = 20                # main.py:502 — effort/result baseline window
 OB_MIN_BUCKETS = 20             # main.py:493 — calc_quant_obs needs >=20 buckets

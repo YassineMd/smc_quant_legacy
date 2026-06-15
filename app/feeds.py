@@ -368,12 +368,17 @@ class MarketDataCore:
                 tick_time=targs.tick_time,
             )
             if len(engine.closed_buckets) > last_bucket_count:
-                fresh_obs = rank_obs(calc_quant_obs(engine, tf_key))
+                # DIVERGES FROM LEGACY (Step 19.4): the per-close path neither RECOMPUTES
+                # nor RE-SERIALIZES the OB matrix (both moved to recompute_loop). It only
+                # ships the newly closed buckets — order_blocks=[] marks a CLOSE piggyback
+                # so the client grows scanner history but leaves its OB matrix untouched.
+                # The close path is now O(levels), independent of OB/bucket count -> flat,
+                # no stall as history grows.
                 new_buckets = [b.full_snapshot()
                                for b in engine.closed_buckets[last_bucket_count:]]
                 self.broadcast_tf(
                     tf_key,
-                    ObPacket(tf=tf_key, order_blocks=fresh_obs,
+                    ObPacket(tf=tf_key, order_blocks=[],
                              new_buckets=new_buckets, vpin=engine.vpin).to_line(),
                 )
 
@@ -440,6 +445,45 @@ class MarketDataCore:
             )
 
     # ------------------------------------------------------------------
+    # Periodic recalibrate + OB rescan — OFF the per-close hot path (Step 19.4)
+    # ------------------------------------------------------------------
+    def _recompute_engine(self, tf_key: str) -> list:
+        """Recalibrate ``target_vol`` + rescan order blocks for one engine (Step 19.4).
+
+        The expensive O(2h-window) optimizer + O(history) OB rescan that USED to run
+        synchronously on every bucket close. SYNCHRONOUS (no await) so it is atomic
+        w.r.t. that engine's closes on the single asyncio loop — no torn read is
+        possible. The only write back into shared state is one atomic assignment,
+        ``engine.target_vol`` (a float, inside ``recalibrate``). Returns the fresh OB
+        set for ``recompute_loop`` to broadcast (the per-close path never ships it).
+        """
+        engine = self.engines[tf_key]
+        engine.recalibrate(engine.last_tick_time, self.footprints_db.get(tf_key, {}))
+        return rank_obs(calc_quant_obs(engine, tf_key))
+
+    async def recompute_loop(self) -> None:
+        """Periodic recalibrate + OB rescan, DECOUPLED from per-close (Step 19.4).
+
+        Each engine's :meth:`_recompute_engine` runs as a single synchronous block, so
+        no consumer can observe a half-updated ``target_vol`` or a torn OB set. Yields
+        between engines so the full sweep never starves the socket drain, and
+        broadcasts the refreshed OB matrix for each timeframe.
+        """
+        while True:
+            await asyncio.sleep(config.RECOMPUTE_SECS)
+            for tf_key in config.TIMEFRAMES:
+                try:
+                    obs = self._recompute_engine(tf_key)
+                    self.broadcast_tf(
+                        tf_key,
+                        ObPacket(tf=tf_key, order_blocks=obs, new_buckets=[],
+                                 vpin=self.engines[tf_key].vpin).to_line(),
+                    )
+                except Exception as e:
+                    print(f"RECOMPUTE ERROR ({tf_key}): {e}")
+                await asyncio.sleep(0)   # yield between engines — don't starve the drain
+
+    # ------------------------------------------------------------------
     def start_tasks(self) -> list[asyncio.Task]:
         return [
             asyncio.create_task(self.fetch_oi_loop()),
@@ -448,4 +492,5 @@ class MarketDataCore:
             asyncio.create_task(self.aggtrade_stream()),
             asyncio.create_task(self.public_stream()),
             asyncio.create_task(self.pulse_broadcast_loop()),
+            asyncio.create_task(self.recompute_loop()),
         ]
