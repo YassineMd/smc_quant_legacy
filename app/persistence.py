@@ -48,6 +48,13 @@ from .quant_engine import QuantBucket, QuantEngine, calc_quant_obs, rank_obs
 _INF = float("inf")
 _NEG_INF = float("-inf")
 
+# Bucket-vector schema version (rule 0.3). Bumped whenever the meaning or set of
+# per-bucket fields changes, so a populated db from an older schema is never
+# silently rehydrated under the new semantics (the silent mixed-meaning trap).
+# v2 = Step 3 (OI-confirmed vectors + explicit `churn`); anything older — incl.
+# an unversioned legacy db, read as 0 — is cleared and re-accumulated on boot.
+BUCKET_SCHEMA_VERSION = 2
+
 
 # ---------------------------------------------------------------------------
 # QuantBucket <-> dict  (serialization lives HERE, not in the pure math core)
@@ -65,6 +72,7 @@ def _bucket_to_dict(b: QuantBucket) -> dict:
         "buy_vol": b.buy_vol,
         "sell_vol": b.sell_vol,
         "opL": b.opL, "opS": b.opS, "clL": b.clL, "clS": b.clS,
+        "churn": b.churn,
         "high": None if b.high == _NEG_INF else b.high,
         "low": None if b.low == _INF else b.low,
         "open_price": b.open_price,
@@ -87,6 +95,7 @@ def _bucket_from_dict(d: dict) -> QuantBucket:
     b.sell_vol = d.get("sell_vol", 0.0)
     b.opL = d.get("opL", 0.0); b.opS = d.get("opS", 0.0)
     b.clL = d.get("clL", 0.0); b.clS = d.get("clS", 0.0)
+    b.churn = d.get("churn", 0.0)
     b.high = _NEG_INF if d.get("high") is None else d["high"]
     b.low = _INF if d.get("low") is None else d["low"]
     b.open_price = d.get("open_price", 0.0)
@@ -201,6 +210,17 @@ class HistoryStore:
             cur = self._conn.execute("SELECT COUNT(*) FROM engine_state")
             return cur.fetchone()[0] > 0
 
+    def _read_schema_version(self) -> int:
+        """Stored bucket schema version (0 = unversioned / legacy db)."""
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT value FROM meta WHERE key='bucket_schema_version'")
+            row = cur.fetchone()
+        try:
+            return int(row[0]) if row else 0
+        except (TypeError, ValueError):
+            return 0
+
     # -- boot ---------------------------------------------------------------
     def bootstrap(self) -> Dict[str, dict]:
         """Return the in-memory ``footprints_db`` for boot.
@@ -237,6 +257,24 @@ class HistoryStore:
         legacy nodes, else a clean cold start. Either way the append cursor is
         primed so the first sync persists the current closed history.
         """
+        # 0.3 schema guard: a populated db whose stored bucket vectors predate the
+        # current schema would silently mix old/new semantics on rehydrate. Clear
+        # the vector-bearing tables (footprints are schema-stable and kept) and
+        # cold-start; new buckets re-accumulate under the current schema.
+        db_ver = self._read_schema_version()
+        if self._has_engine_state() and db_ver != BUCKET_SCHEMA_VERSION:
+            with self._lock:
+                self._conn.execute("DELETE FROM closed_buckets")
+                self._conn.execute("DELETE FROM order_blocks")
+                self._conn.execute("DELETE FROM engine_state")
+                self._conn.commit()
+            print(f"SCHEMA MIGRATION: db bucket schema v{db_ver} != code "
+                  f"v{BUCKET_SCHEMA_VERSION}; cleared stale bucket/OB/engine state "
+                  f"(footprints kept). Engines cold-start; history re-accumulates.")
+            for tf in engines:
+                self._cursor[tf] = None
+            return
+
         if not self._has_engine_state():
             if footprints_db and any(footprints_db.values()):
                 rehydrate_engines_legacy(footprints_db, engines)
@@ -379,6 +417,10 @@ class HistoryStore:
                             "DELETE FROM footprints WHERE tf=? AND utime NOT IN "
                             "(SELECT utime FROM footprints WHERE tf=? ORDER BY utime DESC LIMIT ?)",
                             (tf, tf, config.FOOTPRINT_CAP))
+                cur.execute(
+                    "INSERT INTO meta(key,value) VALUES('bucket_schema_version',?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (str(BUCKET_SCHEMA_VERSION),))
                 self._conn.commit()
                 return True
             except Exception as e:

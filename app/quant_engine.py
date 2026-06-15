@@ -73,6 +73,9 @@ class QuantBucket:
         self.buy_vol = 0.0
         self.sell_vol = 0.0
         self.opL, self.opS, self.clL, self.clS = 0.0, 0.0, 0.0, 0.0
+        # DIVERGES FROM LEGACY (Step 3): OI-neutral "unattributed transfer" volume.
+        # Conservation law: opL + opS + clL + clS + churn == curr_vol.
+        self.churn = 0.0
 
         self.high = -float("inf")
         self.low = float("inf")
@@ -120,6 +123,7 @@ class QuantBucket:
             "opS": float(self.opS),
             "clL": float(self.clL),
             "clS": float(self.clS),
+            "churn": float(self.churn),
             "buyer_er": float(buyer_er),
             "seller_er": float(seller_er),
             "vol_mult": float(vol_mult),
@@ -192,12 +196,20 @@ class QuantEngine:
 
         b_ratio = taker_buy / vol
         s_ratio = (vol - taker_buy) / vol
-        churn = max(0, vol - abs(delta_oi))
+        # DIVERGES FROM LEGACY (Step 3): the 4 position vectors carry ONLY the
+        # OI-confirmed portion. There is no L1 info to attribute OI-neutral volume
+        # to opening vs closing, so the legacy churn/2 invention is removed; the
+        # unattributed remainder is tracked as `churn`. OI-confirmed volume cannot
+        # exceed the tick's volume (Step 2 clamps the live feed; min() also guards
+        # replay/tests). Conservation: opL + opS + clL + clS + churn == curr_vol.
+        oi_mag = min(abs(delta_oi), vol)
+        churn = vol - oi_mag
 
-        opL_r = ((delta_oi * b_ratio if delta_oi > 0 else 0) + (churn / 2) * b_ratio) / vol
-        opS_r = ((delta_oi * s_ratio if delta_oi > 0 else 0) + (churn / 2) * s_ratio) / vol
-        clL_r = ((abs(delta_oi) * s_ratio if delta_oi < 0 else 0) + (churn / 2) * s_ratio) / vol
-        clS_r = ((abs(delta_oi) * b_ratio if delta_oi < 0 else 0) + (churn / 2) * b_ratio) / vol
+        opL_r = (oi_mag * b_ratio / vol) if delta_oi > 0 else 0.0
+        opS_r = (oi_mag * s_ratio / vol) if delta_oi > 0 else 0.0
+        clL_r = (oi_mag * s_ratio / vol) if delta_oi < 0 else 0.0
+        clS_r = (oi_mag * b_ratio / vol) if delta_oi < 0 else 0.0
+        churn_r = churn / vol
 
         remaining_vol = vol
 
@@ -205,16 +217,16 @@ class QuantEngine:
             space_left = self.target_vol - self.active_bucket.curr_vol
             if remaining_vol <= space_left:
                 self._add_to_bucket(price, remaining_vol, b_ratio, s_ratio,
-                                    opL_r, opS_r, clL_r, clS_r, liquidations)
+                                    opL_r, opS_r, clL_r, clS_r, churn_r, liquidations)
                 remaining_vol = 0
             else:
                 self._add_to_bucket(price, space_left, b_ratio, s_ratio,
-                                    opL_r, opS_r, clL_r, clS_r, liquidations)
+                                    opL_r, opS_r, clL_r, clS_r, churn_r, liquidations)
                 # Uses the historical timestamp instead of live server time
                 self._close_active_bucket(tick_time, footprints_dict)
                 remaining_vol -= space_left
 
-    def _add_to_bucket(self, price, chunk_vol, b_r, s_r, opL_r, opS_r, clL_r, clS_r, liqs):
+    def _add_to_bucket(self, price, chunk_vol, b_r, s_r, opL_r, opS_r, clL_r, clS_r, churn_r, liqs):
         b = self.active_bucket
         # Constant-volume OHLC: first tick sets the open, every tick updates close.
         # SOL price is always > 0, so 0.0 reliably marks an untouched bucket.
@@ -229,6 +241,7 @@ class QuantEngine:
         b.opS += chunk_vol * opS_r
         b.clL += chunk_vol * clL_r
         b.clS += chunk_vol * clS_r
+        b.churn += chunk_vol * churn_r
 
         if price > b.high:
             b.high = price

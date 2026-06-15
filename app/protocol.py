@@ -64,6 +64,7 @@ class BucketSnapshot(TypedDict):
     opS: float           # open shorts
     clL: float           # close longs
     clS: float           # close shorts
+    churn: float         # OI-neutral / unattributed transfer volume (Step 3)
     buyer_er: float      # buyer effort/result (volume / ticks)
     seller_er: float     # seller effort/result
     vol_mult: float      # velocity ratio vs the rolling average (vel_ratio)

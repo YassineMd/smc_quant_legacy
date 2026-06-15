@@ -32,14 +32,17 @@ def _node_metrics(node: dict, ohlc: list, tf_secs: int) -> dict:
     buyer_er = buy / ticks
     seller_er = sell / ticks
 
-    # 4-vector decomposition at candle granularity (same formulas as the engine)
+    # 4-vector decomposition at candle granularity (same formula as the engine,
+    # Step 3): OI-confirmed flow only, no 50/50 churn invention. `churn` is the
+    # OI-neutral remainder; conservation opL+opS+clL+clS+churn == vol.
     b_ratio = buy / vol if vol else 0.0
     s_ratio = sell / vol if vol else 0.0
-    churn = max(0.0, vol - abs(delta_oi))
-    opL = (delta_oi * b_ratio if delta_oi > 0 else 0) + (churn / 2) * b_ratio
-    opS = (delta_oi * s_ratio if delta_oi > 0 else 0) + (churn / 2) * s_ratio
-    clL = (abs(delta_oi) * s_ratio if delta_oi < 0 else 0) + (churn / 2) * s_ratio
-    clS = (abs(delta_oi) * b_ratio if delta_oi < 0 else 0) + (churn / 2) * b_ratio
+    oi_mag = min(abs(delta_oi), vol)
+    churn = vol - oi_mag
+    opL = oi_mag * b_ratio if delta_oi > 0 else 0.0
+    opS = oi_mag * s_ratio if delta_oi > 0 else 0.0
+    clL = oi_mag * s_ratio if delta_oi < 0 else 0.0
+    clS = oi_mag * b_ratio if delta_oi < 0 else 0.0
 
     # POC + its position within the bar
     poc, poc_v = c, 0.0
@@ -56,6 +59,7 @@ def _node_metrics(node: dict, ohlc: list, tf_secs: int) -> dict:
     return {
         "vol": vol, "buy": buy, "sell": sell, "delta": buy - sell,
         "delta_oi": delta_oi, "opL": opL, "opS": opS, "clL": clL, "clS": clS,
+        "churn": churn,
         "buyer_er": buyer_er, "seller_er": seller_er,
         "vel": vol / max(1, tf_secs), "poc_pos": poc_pos,
         "liq_long": liq_long, "liq_short": liq_short,
