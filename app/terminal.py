@@ -148,6 +148,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # torn down here). Pre-declared so teardown checks are always safe.
         self.axis_bottom = self.plot.getAxis("bottom")
         self.vb_kinetic_price = None   # Mode 4 secondary linked price ViewBox
+        self.vb_pulse_churn = None     # Modes 7/8 secondary churn-scale ViewBox
         self.lower_plot = None         # Mode 10 lower VPIN sub-pane
         self.splitter_v = None         # Mode 10 vertical splitter (upper/lower panes)
         # Mode 10 order-block layer (index-space). Persistent object; added to the
@@ -641,6 +642,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 pass
             self.vb_kinetic_price = None
 
+        # 2b. Modes 7/8 teardown — destroy the secondary churn ViewBox so it never
+        #     orphans/leaks between modes (same pattern as the Mode-4 vb above).
+        if self.vb_pulse_churn is not None:
+            try:
+                self.vb_pulse_churn.setXLink(None)
+                self.plot.scene().removeItem(self.vb_pulse_churn)
+                try:
+                    self.plot.getViewBox().sigResized.disconnect(self._sync_pulse_churn_vb)
+                except (TypeError, RuntimeError):
+                    pass
+            except Exception:
+                pass
+            self.vb_pulse_churn = None
+
         # 3. Mode 10 teardown — unlink, restore the primary plot to its native row
         #    in the horizontal splitter, then destroy the vertical splitter + pane.
         if self.lower_plot is not None:
@@ -679,6 +694,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.vb_kinetic_price.setGeometry(self.plot.getViewBox().sceneBoundingRect())
             self.vb_kinetic_price.linkedViewChanged(self.plot.getViewBox(),
                                                     self.vb_kinetic_price.XAxis)
+
+    def _ensure_pulse_churn_vb(self) -> None:
+        """Lazily build the Modes 7/8 secondary, X-linked ViewBox that carries the
+        per-bucket churn line on its OWN y-scale, so churn (~= full bucket volume)
+        can never crush the heartbeat bars. Standard pyqtgraph second-ViewBox
+        pattern (mirrors the Mode-4 ``vb_kinetic_price``); torn down on every
+        mode-switch by ``clear_scanner_canvas`` so it can't orphan/leak."""
+        if self.vb_pulse_churn is not None:
+            return
+        self.vb_pulse_churn = pg.ViewBox()
+        self.plot.scene().addItem(self.vb_pulse_churn)
+        self.vb_pulse_churn.setXLink(self.plot.getViewBox())   # share the bucket X-axis
+        self.vb_pulse_churn.setMenuEnabled(False)
+        self.vb_pulse_churn.setMouseEnabled(x=False, y=False)
+        self.vb_pulse_churn.disableAutoRange()                 # Y is set explicitly per render
+        self.plot.getViewBox().sigResized.connect(self._sync_pulse_churn_vb)
+        self._sync_pulse_churn_vb()
+
+    def _sync_pulse_churn_vb(self) -> None:
+        """Keep the Modes 7/8 secondary churn ViewBox glued to the main viewport."""
+        if self.vb_pulse_churn is not None:
+            self.vb_pulse_churn.setGeometry(self.plot.getViewBox().sceneBoundingRect())
+            self.vb_pulse_churn.linkedViewChanged(self.plot.getViewBox(),
+                                                  self.vb_pulse_churn.XAxis)
 
     def _build_scanner_buckets(self) -> "tuple[list[dict], list[int], int]":
         """Single source of truth for every scanner mode (signature-gated).
@@ -951,23 +990,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # ==================================================================
     def _scan_open_pos(self, buckets: list, x: list) -> None:
         """Mode 1 — cumulative Open Longs (green) / Open Shorts (red)."""
-        cum_opL = cum_opS = 0.0
-        opL_arr, opS_arr = [], []
+        cum_opL = cum_opS = cum_churn = 0.0
+        opL_arr, opS_arr, churn_arr = [], [], []
         for b in buckets:
             cum_opL += b.get("opL", 0.0)
             cum_opS += b.get("opS", 0.0)
+            cum_churn += b.get("churn", 0.0)             # Step 3: unattributed transfer
             opL_arr.append(cum_opL)
             opS_arr.append(cum_opS)
+            churn_arr.append(cum_churn)
 
         if "opL" not in self._scan_handles:
             self._scan_handles["opL"] = self._add_scanner_item(
                 pg.PlotCurveItem(pen=pg.mkPen("#2ecc71", width=2.0)))
             self._scan_handles["opS"] = self._add_scanner_item(
                 pg.PlotCurveItem(pen=pg.mkPen("#e74c3c", width=2.0)))
+            # Step 3: cumulative churn (unattributed transfer) as neutral context
+            self._scan_handles["op_churn"] = self._add_scanner_item(
+                pg.PlotCurveItem(pen=pg.mkPen("#9aa0aa", width=1.5, style=QtCore.Qt.DashLine)))
         self._scan_handles["opL"].setData(x, opL_arr)
         self._scan_handles["opS"].setData(x, opS_arr)
+        self._scan_handles["op_churn"].setData(x, churn_arr)
 
-        vals = [0.0] + opL_arr + opS_arr
+        vals = [0.0] + opL_arr + opS_arr + churn_arr
         self._fit_scanner_y(len(x), min(vals), max(vals))
         xr = x[-1]
         tot = max(0.1, opL_arr[-1] + opS_arr[-1])
@@ -975,26 +1020,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             f"opL {self._fmt_k(opL_arr[-1])}<br>({opL_arr[-1] / tot * 100:.0f}%)", xr, "up")
         self._scanner_tracker("t_opS", opS_arr[-1], "#e74c3c",
             f"opS {self._fmt_k(opS_arr[-1])}<br>({opS_arr[-1] / tot * 100:.0f}%)", xr, "down")
+        self._scanner_tracker("t_op_churn", churn_arr[-1], "#9aa0aa",
+            f"churn {self._fmt_k(churn_arr[-1])}", xr, "mid")
 
     def _scan_close_pos(self, buckets: list, x: list) -> None:
         """Mode 2 — cumulative Close Shorts (blue) / Close Longs (purple)."""
-        cum_clS = cum_clL = 0.0
-        clS_arr, clL_arr = [], []
+        cum_clS = cum_clL = cum_churn = 0.0
+        clS_arr, clL_arr, churn_arr = [], [], []
         for b in buckets:
             cum_clS += b.get("clS", 0.0)
             cum_clL += b.get("clL", 0.0)
+            cum_churn += b.get("churn", 0.0)             # Step 3: unattributed transfer
             clS_arr.append(cum_clS)
             clL_arr.append(cum_clL)
+            churn_arr.append(cum_churn)
 
         if "clS" not in self._scan_handles:
             self._scan_handles["clS"] = self._add_scanner_item(
                 pg.PlotCurveItem(pen=pg.mkPen("#3498db", width=2.0)))
             self._scan_handles["clL"] = self._add_scanner_item(
                 pg.PlotCurveItem(pen=pg.mkPen("#9b59b6", width=2.0)))
+            # Step 3: cumulative churn (unattributed transfer) as neutral context
+            self._scan_handles["cl_churn"] = self._add_scanner_item(
+                pg.PlotCurveItem(pen=pg.mkPen("#9aa0aa", width=1.5, style=QtCore.Qt.DashLine)))
         self._scan_handles["clS"].setData(x, clS_arr)
         self._scan_handles["clL"].setData(x, clL_arr)
+        self._scan_handles["cl_churn"].setData(x, churn_arr)
 
-        vals = [0.0] + clS_arr + clL_arr
+        vals = [0.0] + clS_arr + clL_arr + churn_arr
         self._fit_scanner_y(len(x), min(vals), max(vals))
         xr = x[-1]
         tot = max(0.1, clS_arr[-1] + clL_arr[-1])
@@ -1002,6 +1055,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             f"clS {self._fmt_k(clS_arr[-1])}<br>({clS_arr[-1] / tot * 100:.0f}%)", xr, "up")
         self._scanner_tracker("t_clL", clL_arr[-1], "#9b59b6",
             f"clL {self._fmt_k(clL_arr[-1])}<br>({clL_arr[-1] / tot * 100:.0f}%)", xr, "down")
+        self._scanner_tracker("t_cl_churn", churn_arr[-1], "#9aa0aa",
+            f"churn {self._fmt_k(churn_arr[-1])}", xr, "mid")
 
     def _scan_exhaustion(self, buckets: list, x: list) -> None:
         """Mode 3 — CVD-extreme exhaustion with OI + E/R shock multipliers, clamped 0..100."""
@@ -1193,8 +1248,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _scan_bucket_open_pos(self, buckets: list, x: list) -> None:
         """Mode 7 — mirrored open intents: opL up (green/cyan), opS down (red/magenta)."""
+        self._ensure_pulse_churn_vb()
         ratios = self._bucket_vel_ratios(buckets)
-        opL_arr, neg_opS_arr = [], []
+        opL_arr, neg_opS_arr, churn_arr = [], [], []
         opL_brushes, opS_brushes = [], []
         for i, b in enumerate(buckets):
             opL = b.get("opL", 0.0)
@@ -1202,6 +1258,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             vr = ratios[i]
             opL_arr.append(opL)
             neg_opS_arr.append(-opS)                       # mirror downward
+            churn_arr.append(b.get("churn", 0.0))          # Step 3: per-bucket unattributed
             opL_brushes.append(self._neon_brush(opL, opS, "green", vr))
             opS_brushes.append(self._neon_brush(opS, opL, "red", vr))
 
@@ -1210,14 +1267,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 pg.BarGraphItem(x=x, height=opL_arr, width=0.8, brushes=opL_brushes, pen=None))
             self._scan_handles["b_opS"] = self._add_scanner_item(
                 pg.BarGraphItem(x=x, height=neg_opS_arr, width=0.8, brushes=opS_brushes, pen=None))
+            # Step 3: per-bucket churn lives on the SECONDARY vb (own scale) so it
+            # can never crush the heartbeat bars; dies with that vb on teardown.
+            churn_line = pg.PlotCurveItem(
+                pen=pg.mkPen("#9aa0aa", width=1.5, style=QtCore.Qt.DashLine))
+            self.vb_pulse_churn.addItem(churn_line)
+            self._scan_handles["b_op_churn"] = churn_line
         else:
             self._scan_handles["b_opL"].setOpts(x=x, height=opL_arr, width=0.8,
                                                 brushes=opL_brushes, pen=None)
             self._scan_handles["b_opS"].setOpts(x=x, height=neg_opS_arr, width=0.8,
                                                 brushes=opS_brushes, pen=None)
+        self._scan_handles["b_op_churn"].setData(x, churn_arr)
 
-        vals = [0.0] + opL_arr + neg_opS_arr
-        self._fit_scanner_y(len(x), min(vals), max(vals))
+        # bars fit to THEIR own (symmetric) scale; churn excluded so it can't
+        # dominate. churn then rides the secondary vb with 0 aligned to the
+        # baseline, so it visibly collapses toward the bars when real flow ignites.
+        bar_vals = opL_arr + neg_opS_arr
+        m = max(0.1, abs(min(bar_vals)), abs(max(bar_vals)))
+        self._fit_scanner_y(len(x), clamp=(-m, m))
+        cmax = max(1.0, max(churn_arr) if churn_arr else 1.0)
+        self.vb_pulse_churn.setYRange(-cmax * 1.08, cmax * 1.08, padding=0)
+        self._sync_pulse_churn_vb()
+
         xr = x[-1]
         opL_last, opS_last = opL_arr[-1], -neg_opS_arr[-1]
         tot = max(0.1, opL_last + opS_last)
@@ -1225,11 +1297,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             f"opL {self._fmt_k(opL_last)}<br>({opL_last / tot * 100:.0f}%)", xr, "up")
         self._scanner_tracker("t_opS", neg_opS_arr[-1], "#e74c3c",
             f"opS {self._fmt_k(opS_last)}<br>({opS_last / tot * 100:.0f}%)", xr, "down")
+        self._scanner_tracker("t_b_op_churn", churn_arr[-1], "#9aa0aa",
+            f"churn {self._fmt_k(churn_arr[-1])}", xr, "mid",
+            target_vb=self.vb_pulse_churn, line=False)
 
     def _scan_bucket_close_pos(self, buckets: list, x: list) -> None:
         """Mode 8 — mirrored close intents: clS up (blue/cyan), clL down (purple/magenta)."""
+        self._ensure_pulse_churn_vb()
         ratios = self._bucket_vel_ratios(buckets)
-        clS_arr, neg_clL_arr = [], []
+        clS_arr, neg_clL_arr, churn_arr = [], [], []
         clS_brushes, clL_brushes = [], []
         for i, b in enumerate(buckets):
             clS = b.get("clS", 0.0)
@@ -1237,6 +1313,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             vr = ratios[i]
             clS_arr.append(clS)
             neg_clL_arr.append(-clL)                       # mirror downward
+            churn_arr.append(b.get("churn", 0.0))          # Step 3: per-bucket unattributed
             clS_brushes.append(self._neon_brush(clS, clL, "blue", vr))
             clL_brushes.append(self._neon_brush(clL, clS, "purple", vr))
 
@@ -1245,14 +1322,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 pg.BarGraphItem(x=x, height=clS_arr, width=0.8, brushes=clS_brushes, pen=None))
             self._scan_handles["b_clL"] = self._add_scanner_item(
                 pg.BarGraphItem(x=x, height=neg_clL_arr, width=0.8, brushes=clL_brushes, pen=None))
+            # Step 3: per-bucket churn lives on the SECONDARY vb (own scale) so it
+            # can never crush the heartbeat bars; dies with that vb on teardown.
+            churn_line = pg.PlotCurveItem(
+                pen=pg.mkPen("#9aa0aa", width=1.5, style=QtCore.Qt.DashLine))
+            self.vb_pulse_churn.addItem(churn_line)
+            self._scan_handles["b_cl_churn"] = churn_line
         else:
             self._scan_handles["b_clS"].setOpts(x=x, height=clS_arr, width=0.8,
                                                 brushes=clS_brushes, pen=None)
             self._scan_handles["b_clL"].setOpts(x=x, height=neg_clL_arr, width=0.8,
                                                 brushes=clL_brushes, pen=None)
+        self._scan_handles["b_cl_churn"].setData(x, churn_arr)
 
-        vals = [0.0] + clS_arr + neg_clL_arr
-        self._fit_scanner_y(len(x), min(vals), max(vals))
+        # bars fit to THEIR own (symmetric) scale; churn excluded so it can't
+        # dominate. churn then rides the secondary vb with 0 aligned to the
+        # baseline, so it visibly collapses toward the bars when real flow ignites.
+        bar_vals = clS_arr + neg_clL_arr
+        m = max(0.1, abs(min(bar_vals)), abs(max(bar_vals)))
+        self._fit_scanner_y(len(x), clamp=(-m, m))
+        cmax = max(1.0, max(churn_arr) if churn_arr else 1.0)
+        self.vb_pulse_churn.setYRange(-cmax * 1.08, cmax * 1.08, padding=0)
+        self._sync_pulse_churn_vb()
+
         xr = x[-1]
         clS_last, clL_last = clS_arr[-1], -neg_clL_arr[-1]
         tot = max(0.1, clS_last + clL_last)
@@ -1260,6 +1352,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             f"clS {self._fmt_k(clS_last)}<br>({clS_last / tot * 100:.0f}%)", xr, "up")
         self._scanner_tracker("t_clL", neg_clL_arr[-1], "#9b59b6",
             f"clL {self._fmt_k(clL_last)}<br>({clL_last / tot * 100:.0f}%)", xr, "down")
+        self._scanner_tracker("t_b_cl_churn", churn_arr[-1], "#9aa0aa",
+            f"churn {self._fmt_k(churn_arr[-1])}", xr, "mid",
+            target_vb=self.vb_pulse_churn, line=False)
 
     # ==================================================================
     # Phase 5: Mode 4 — Kinetic Strength & Price Forecast (dual-axis)
