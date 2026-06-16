@@ -425,7 +425,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             h = self._scan_handles.get("bc_poc")
             if h is not None:
                 h.setVisible(on)
-        # m10_footprint / m10_obs / m10_stats / m10_liq land in A4 steps 2-4.
+        elif key == "m10_footprint":
+            # Sub-pool teardown: bc_fp's bubble QPicture hides via setVisible, but its
+            # number TextPools are NOT in active_scanner_items — clear them explicitly
+            # (same call clear_scanner_canvas uses) or they orphan as floating numbers.
+            if "bc_fp" in self._scan_handles:
+                self.bc_fp.setVisible(on)
+                if not on:
+                    self.bc_fp.clear_text(self.plot)
+        elif key == "m10_obs":
+            # Same trap: zone bands hide via setVisible, but the tier_pool labels are
+            # not tracked — clear them so no tier artifacts are left behind.
+            if "bc_obs" in self._scan_handles:
+                self.bc_obs.setVisible(on)
+                if not on:
+                    self.bc_obs.tier_pool.clear(self.plot)
+        # m10_stats / m10_liq land in A4 steps 3-4.
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -1835,28 +1850,39 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
         px_per_x = self.vb.width() / max(1e-9, vx1 - vx0)
         px_per_y = self.vb.height() / max(1e-9, vy1 - vy0)
-        levels_list = [b.get("levels", {}) for b in buckets]
-        if "bc_fp" not in self._scan_handles:
-            self.bc_fp.setZValue(5)            # ladder above candles (z0), below the POC dot (z6)
-            self._add_scanner_item(self.bc_fp)
-            self._scan_handles["bc_fp"] = self.bc_fp
-        self.bc_fp.update_data(x, levels_list, vx0, vx1, 0.8, px_per_x, px_per_y)  # vx0/vx1: viewport cull
+        # A4 draw-gate: footprint (bubbles/numbers) gated by m10_footprint. Toggle-off
+        # teardown is in _set_scanner_overlay (setVisible + clear_text for the TextPools,
+        # which are not in active_scanner_items). px_per_* are computed above regardless
+        # (cheap, footprint-only) so nothing downstream can break when this is off.
+        if self.menu.layer_state("m10_footprint"):
+            levels_list = [b.get("levels", {}) for b in buckets]
+            if "bc_fp" not in self._scan_handles:
+                self.bc_fp.setZValue(5)            # ladder above candles (z0), below the POC dot (z6)
+                self._add_scanner_item(self.bc_fp)
+                self._scan_handles["bc_fp"] = self.bc_fp
+            self.bc_fp.setVisible(True)
+            self.bc_fp.update_data(x, levels_list, vx0, vx1, 0.8, px_per_x, px_per_y)  # vx0/vx1: viewport cull
 
         # --- order blocks mapped onto the integer bucket grid (§6.1) ---
-        if "bc_obs" not in self._scan_handles:
-            self.bc_obs.setZValue(-5)          # zones render behind the candles
-            self._add_scanner_item(self.bc_obs)
-            self._scan_handles["bc_obs"] = self.bc_obs
-        start_times = [b.get("start_time", 0.0) for b in buckets]
+        # A4 draw-gate: OB zones gated by m10_obs. Toggle-off teardown is in
+        # _set_scanner_overlay (setVisible + tier_pool.clear for the tier labels, which
+        # are not in active_scanner_items).
+        if self.menu.layer_state("m10_obs"):
+            if "bc_obs" not in self._scan_handles:
+                self.bc_obs.setZValue(-5)          # zones render behind the candles
+                self._add_scanner_item(self.bc_obs)
+                self._scan_handles["bc_obs"] = self.bc_obs
+            start_times = [b.get("start_time", 0.0) for b in buckets]
 
-        def _ts_to_idx(ts: float) -> int:
-            # nearest bucket ordinal active at `ts`; -1 if before the first bucket
-            i = bisect.bisect_right(start_times, ts) - 1
-            return -1 if i < 0 else min(i, len(start_times) - 1)
+            def _ts_to_idx(ts: float) -> int:
+                # nearest bucket ordinal active at `ts`; -1 if before the first bucket
+                i = bisect.bisect_right(start_times, ts) - 1
+                return -1 if i < 0 else min(i, len(start_times) - 1)
 
-        self.bc_obs.visible_filter = self.ob_item.visible_filter   # honor the Min-Mult slider
-        self.bc_obs.update_data_indexed(
-            self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx)
+            self.bc_obs.setVisible(True)
+            self.bc_obs.visible_filter = self.ob_item.visible_filter   # honor the Min-Mult slider
+            self.bc_obs.update_data_indexed(
+                self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx)
 
         # --- lower pane: VPIN heatmap + 0.85 risk line (live on lower_plot) ---
         if "bc_vpin" not in self._scan_handles:
