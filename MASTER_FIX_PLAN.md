@@ -102,6 +102,14 @@ phases.**
       state run-length, the regime-shift signal — belongs with the **Mode 10 selection tool**
       (it reads across a span of buckets; that's the natural home), **NOT a separate v2 of the
       hover engine.** See "After the pipeline is solid → the selection tool" below.
+    - **State engine live calibration + OHLC-usage audit — DEFERRED until the terminal is
+      complete.** Engine is built + synthetically proven (`scripts/test_a3b_state_engine.py`),
+      constants ready to tune (see `scripts/STATE_ENGINE_TUNING.md`). Calibrating means opening
+      every mode, marking positions on TradingView, and feeling the market over days — that needs
+      the finished tool, and doing it now means redoing it later. **When done:** a math /
+      data-distribution + degenerate-input pass on real buckets; an **OHLC-usage audit per state**
+      (esp. close-position / wick handling in STRONG); then the operator calibrates verdicts over
+      days. **Top priority: any confident / starred verdict that's wrong.**
 - **Remove the redundant gold POC ring/box** (the Stage-1 ladder highlight) — keep ONLY
   the gold POC dot (Stage 0).
 - **Cursor shows the Y-axis value (price)** in all modes.
