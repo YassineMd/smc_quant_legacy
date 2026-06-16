@@ -253,6 +253,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.price_tag.hide()
         self._proxy = pg.SignalProxy(self.plot.scene().sigMouseMoved,
                                      rateLimit=60, slot=self._on_mouse_move)
+        # last cursor scene pos while inside the plot — drives the A3a live-breathe
+        # re-fire so a hovered forming bucket updates each frame, not just on motion.
+        self._last_hover_pos = None
 
         # --- floating overlays (top-level children) ---
         self.hud = PriceHud(self)
@@ -463,7 +466,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.plot.sceneBoundingRect().contains(pos):
             self.stats.hide()
             self.price_tag.hide()
+            self._last_hover_pos = None      # left the plot -> stop the live-breathe
             return
+        self._last_hover_pos = pos           # park here for the live-breathe re-fire
         pt = self.vb.mapSceneToView(pos)
         self.vline.setPos(pt.x()); self.hline.setPos(pt.y())
         # A2: right-axis price tag tracks the cursor Y (all modes); PRICE_DECIMALS
@@ -508,6 +513,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         wp = self.mapFromGlobal(gp)
         self.stats.show_stats(lines, clock, wp.x(), wp.y())
 
+    def _refresh_parked_hover(self) -> None:
+        """A3a live-breathe — re-run the scanner hover for the parked cursor each
+        redraw frame so a hovered FORMING bucket updates tick-by-tick, not only on
+        cursor motion. No-op once the cursor leaves the plot (_last_hover_pos is
+        cleared). Cheap: _build_scanner_buckets is signature-gated on the live edge's
+        volume, so a frame with no new trade just re-emits the cached readout."""
+        pos = self._last_hover_pos
+        if pos is None:
+            return
+        pt = self.vb.mapSceneToView(pos)
+        self._hover_scanner(pt.x(), pos)
+
     def _hover_context(self, mode: str, buckets: list, idx: int) -> "list[str]":
         """Color-coded, mode-specific HUD lines for the hovered bucket (§4)."""
         b = buckets[idx]
@@ -541,7 +558,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return [f"Exh Base {span(f'B:{b_base:.0f}%', bl)} {span(f'S:{s_base:.0f}%', r)}",
                     f"OI {span(f'{oi_mult:.2f}x', gold)} | "
                     f"ER-z {span(f'B {bm:.2f}x', g)}/{span(f'S {sm:.2f}x', r)}"]
-        if mode in ("kinetic", "bucket_canvas"):
+        if mode == "kinetic":
             dur = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))
             v_bull = b.get("buy_vol", 0.0) / dur
             v_bear = b.get("sell_vol", 0.0) / dur
@@ -562,6 +579,60 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return [f"{span(f'vBull {v_bull:.1f}/s', teal)} | {span(f'vBear {v_bear:.1f}/s', r)}",
                     f"Fcast {span(f'+{baseline + bull_st:.2f}', g)} / "
                     f"{span(f'-{baseline - bear_st:.2f}', r)}"]
+        if mode == "bucket_canvas":
+            # A3a — full order-flow readout from the bucket scalars, grouped into four
+            # sections (Flow / Positioning / Effort / Read). STATE is a placeholder until
+            # A3b. Anomaly % = the EXACT Step-5/Mode-3 multiplier (read-only call to
+            # _exhaustion_mults), shown as % off 1.0 so it reconciles with the future
+            # STATE verdict; the 30-bucket rolling E/R uses the SAME window (EXH_WINDOW)
+            # the anomaly is measured against.
+            PD = config.PRICE_DECIMALS
+            def pf(v): return f"{v:.{PD}f}"                         # price -> axis precision
+            def sk(v): return ("+" if v >= 0 else "-") + K(abs(v))  # signed K (e.g. +1.2k)
+            def sep(t):   # subtle section header: dim, small, letter-spaced; recedes below data
+                return f"<span style='color:#5a6170;font-size:9px;letter-spacing:2px'>{t}</span>"
+            o, h, l, c = (b.get("open", 0.0), b.get("high", 0.0),
+                          b.get("low", 0.0), b.get("close", 0.0))
+            poc = b.get("poc_price", 0.0)
+            cv, bv, sv = b.get("curr_vol", 0.0), b.get("buy_vol", 0.0), b.get("sell_vol", 0.0)
+            opL, opS = b.get("opL", 0.0), b.get("opS", 0.0)
+            clL, clS = b.get("clL", 0.0), b.get("clS", 0.0)
+            ber, ser = b.get("buyer_er", 0.0), b.get("seller_er", 0.0)
+            delta = bv - sv
+            dpct = (delta / cv * 100.0) if cv > 0 else 0.0
+            oi_d = (opL + opS) - (clL + clS)
+            dur = b.get("end_time", 0.0) - b.get("start_time", 0.0)
+            vel = b.get("vol_mult", 1.0)
+            bm, sm, _om = _exhaustion_mults(buckets, idx)
+            win = buckets[max(0, idx - EXH_WINDOW):idx]
+            b30 = (sum(w.get("buyer_er", 0.0) for w in win) / len(win)) if win else 0.0
+            s30 = (sum(w.get("seller_er", 0.0) for w in win) / len(win)) if win else 0.0
+            # color ONLY the two dominant 4-vectors (the ones that drove the move); the
+            # other two render dim. A zero vector never lights up even if it lands "top 2".
+            vmag = {"opL": opL, "opS": opS, "clS": clS, "clL": clL}
+            vclr = {"opL": g, "opS": r, "clS": bl, "clL": pu}
+            top2 = set(sorted(vmag, key=lambda k: vmag[k], reverse=True)[:2])
+            def vc(name): return vclr[name] if (name in top2 and vmag[name] > 0) else gray
+            return [
+                f"O {pf(o)}  H {pf(h)}  L {pf(l)}  {span('C '+pf(c), g if c >= o else r)}",
+                f"Elapsed {dur:.1f}s   {span('POC '+pf(poc), gold)}",
+                sep("FLOW"),
+                f"Volume {K(cv)}",
+                f"{span('Sell '+K(sv), r)} | {span('Buy '+K(bv), g)}",
+                f"Delta {span(sk(delta)+f' ({dpct:+.0f}%)', g if delta >= 0 else r)}",
+                f"OI Δ {span(sk(oi_d), g if oi_d >= 0 else r)}",
+                sep("POSITIONING"),
+                f"{span('OpL '+K(opL), vc('opL'))} | {span('OpS '+K(opS), vc('opS'))}",
+                f"{span('ClS '+K(clS), vc('clS'))} | {span('ClL '+K(clL), vc('clL'))}",
+                sep("EFFORT"),
+                span(f"Buyer E/R {ber:.1f} [{(bm - 1.0) * 100:+.0f}%]", g),
+                span(f"Seller E/R {ser:.1f} [{(sm - 1.0) * 100:+.0f}%]", r),
+                span(f"30b Buyer E/R {b30:.1f}", g),
+                span(f"30b Seller E/R {s30:.1f}", r),
+                sep("READ"),
+                f"VEL {span(f'{vel:.2f}x', gold)}",
+                f"STATE {span('—', gray)}",
+            ]
         if mode == "vpin":
             window = buckets[max(0, idx - 49): idx + 1]
             ti = sum(abs(x.get("buy_vol", 0.0) - x.get("sell_vol", 0.0)) for x in window)
@@ -610,6 +681,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self.scanner_mode != "Off":
             self._draw_scanner()
             self._redock_trackers()   # keep badges pinned to the axis under pan/zoom
+            self._refresh_parked_hover()   # A3a: breathe the hovered bucket each frame
             return
 
         times = snap["times"]
@@ -707,6 +779,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         active mode is now "Off", revert to the standard time chart.
         """
         self.price_tag.hide()   # A2: drop the cursor price tag on any mode switch (no orphan)
+        self.stats.hide()       # A3a: drop the hover readout too (no orphan across modes)
         # 1. sweep every tracked scanner item off the plot
         for item in self.active_scanner_items:
             try:
