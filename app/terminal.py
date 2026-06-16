@@ -29,7 +29,7 @@ from typing import List, Optional
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import config
+from . import bucket_state, config
 from .alerts import AlertsLedger
 from .chart_widgets import (
     BucketCandleItem, CandlestickItem, LiquidationLayer, LocalTimeAxis,
@@ -613,6 +613,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             vclr = {"opL": g, "opS": r, "clS": bl, "clL": pu}
             top2 = set(sorted(vmag, key=lambda k: vmag[k], reverse=True)[:2])
             def vc(name): return vclr[name] if (name in top2 and vmag[name] > 0) else gray
+            # A3b — the one interpretive line: best-scoring state + calibrated confidence.
+            state, conf = bucket_state.classify_bucket(buckets, idx, bm, sm)
             return [
                 f"O {pf(o)}  H {pf(h)}  L {pf(l)}  {span('C '+pf(c), g if c >= o else r)}",
                 f"Elapsed {dur:.1f}s   {span('POC '+pf(poc), gold)}",
@@ -631,7 +633,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 span(f"30b Seller E/R {s30:.1f}", r),
                 sep("READ"),
                 f"VEL {span(f'{vel:.2f}x', gold)}",
-                f"STATE {span('—', gray)}",
+                f"STATE {bucket_state.render_state_line(state, conf)}",
             ]
         if mode == "vpin":
             window = buckets[max(0, idx - 49): idx + 1]

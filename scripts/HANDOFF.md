@@ -228,6 +228,7 @@ python scripts/test_step19_2_oi_attributor.py  # 19.2 OI pending-balance: identi
 python scripts/test_step19_3_wiring.py         # 19.3 aggTrade wired into feeds: clock coherence, oi_open framing, steady-latency flat, invariants
 python scripts/test_step19_4_recompute.py      # 19.4 recalibrate/OB off the close hot path: per-engine close flat, target_vol still adapts
 python scripts/test_step19_3b_live_edge.py     # 19.3b 150ms live-edge: timer-driven (not per-trade), carries the forming bucket
+python scripts/test_a3b_state_engine.py        # A3b Mode 10 state engine: 13 synthetic verdicts + gradient-preserving squeeze floor
 ```
 - `test_step5` imports `app.terminal` (pulls in Qt); it sets `QT_QPA_PLATFORM=offscreen`
   itself, so it runs standalone.
@@ -372,7 +373,7 @@ URLs/constants only — touches no app state).
 ---
 **Start here:** Phases 1 + 5 are DONE — the terminal is aggTrade-native and live on
 the real v3 `history.db`. Read **§0** (the Mode-10 capstone reframing) + **§2** (current state · what's next · trustworthiness
-map), confirm the suite (§6) is green (9 tests, all `exit 0`), then pick the next
+map), confirm the suite (§6) is green (10 tests, all `exit 0`), then pick the next
 phase WITH the operator (Phase 2 → 3 → 4 → Mode-10 tool). §7/§8 are the Phase-5
 record; the standing rules (§3) + the verification pattern (§4 — esp. FULL-suite-at-
 every-commit, propose-then-approve, one-step-one-commit, hold-before-commit) govern
