@@ -68,6 +68,7 @@ class BucketSnapshot(TypedDict):
     buyer_er: float      # buyer effort/result (volume / ticks)
     seller_er: float     # seller effort/result
     vol_mult: float      # velocity ratio vs the rolling average (vel_ratio)
+    levels: Dict[str, dict]  # Stage 1: per-price {price_str: {"b","s"}} footprint ladder (wire-additive; default {} pre-upgrade)
 
 
 # ---------------------------------------------------------------------------

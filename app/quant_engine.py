@@ -162,6 +162,12 @@ class QuantBucket:
             "buyer_er": float(buyer_er),
             "seller_er": float(seller_er),
             "vol_mult": float(vol_mult),
+            # Stage 1 (Option A): carry the per-bucket footprint distribution on the
+            # wire so Mode 10 can draw the ladder + true POC. WIRE-ADDITIVE — persistence
+            # already inlines levels (_bucket_to_dict), so NO BUCKET_SCHEMA_VERSION bump
+            # and NO history.db wipe. dict() snapshots the outer map; the inner {b,s} are
+            # serialized to JSON immediately on the daemon's single loop (no tear).
+            "levels": dict(self.levels),
         }
 
     def full_snapshot(self) -> BucketSnapshot:

@@ -37,7 +37,8 @@ from .chart_widgets import (
 )
 from .cob_panel import CobPanel
 from .drawing_tools import DrawingController, DrawingToolbar
-from .footprint_layers import DepthWallLayer, FootprintLayer, IcebergLayer, ImbalanceLayer
+from .footprint_layers import (BucketFootprintItem, DepthWallLayer, FootprintLayer,
+                               IcebergLayer, ImbalanceLayer)
 from .hamburger import FloatingOverlayMenu, HamburgerButton
 from .hud_overlay import PriceHud
 from .pipe_client import PipeClientWorker
@@ -214,6 +215,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Mode 10 order-block layer (index-space). Persistent object; added to the
         # plot lazily in _scan_bucket_canvas and swept on teardown. Tiers forced on.
         self.bc_obs = OrderBlockLayer(self.plot, show_tiers=True)
+        # Mode 10 per-bucket footprint ladder (Stage 1; index-space twin of
+        # FootprintLayer). Persistent object; added to the plot lazily in
+        # _scan_bucket_canvas, swept on teardown; its TextPools are attached here and
+        # cleared in clear_scanner_canvas (leak guard — pool items aren't tracked).
+        self.bc_fp = BucketFootprintItem()
+        self.bc_fp.attach_text(self.plot)
 
         # --- crosshair (patch §13): light-gray dashed ---
         pen = pg.mkPen(color="#aaaaaa", style=QtCore.Qt.DashLine, width=1)
@@ -721,6 +728,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 # leak guard: the OB layer's tier labels are pool-managed (not in
                 # active_scanner_items), so sweep them explicitly off the plot (§6.1)
                 self.bc_obs.tier_pool.clear(self.plot)
+                self.bc_fp.clear_text(self.plot)   # leak guard: footprint TextPools (not in active_scanner_items)
                 # §6.2 — index-space drawings are session-only; wipe them on exit
                 self.drawer.flush_index_drawings()
                 self.lower_plot.getViewBox().setXLink(None)
@@ -1688,6 +1696,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 brush=pg.mkBrush("#f1c40f")))
             self._scan_handles["bc_poc"].setZValue(6)   # POC dots ride above the candles
         self._scan_handles["bc_poc"].setData(poc_x, poc_y)
+
+        # --- STAGE 1: per-bucket footprint ladder from b["levels"] (wire-additive) ---
+        # levels now ride on the BucketSnapshot (quant_engine._assemble), so the
+        # footprint is a property of the BUCKET, drawn in its ordinal column. Ordinal
+        # twin of the time-chart FootprintLayer; the POC row is gold-ringed (same gold
+        # as the Stage-0 dot, which sits inside it). px_per_* drive the bubble/number
+        # switch + pixel-round bubble radii; recomputed each bucket-change frame.
+        (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
+        px_per_x = self.vb.width() / max(1e-9, vx1 - vx0)
+        px_per_y = self.vb.height() / max(1e-9, vy1 - vy0)
+        levels_list = [b.get("levels", {}) for b in buckets]
+        if "bc_fp" not in self._scan_handles:
+            self.bc_fp.setZValue(5)            # ladder above candles (z0), below the POC dot (z6)
+            self._add_scanner_item(self.bc_fp)
+            self._scan_handles["bc_fp"] = self.bc_fp
+        self.bc_fp.update_data(x, levels_list, 0.8, px_per_x, px_per_y)
 
         # --- order blocks mapped onto the integer bucket grid (§6.1) ---
         if "bc_obs" not in self._scan_handles:
