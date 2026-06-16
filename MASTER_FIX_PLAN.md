@@ -47,10 +47,10 @@ What remains to a trustworthy daily-driver Mode 10, in order. **A4 (overlay togg
 (`732d892 → 08a1ef3`); the Group A/B/C/D buckets and the Phases still hold their content — this
 orders what's left and why.
 
-1. **VIEW-FOLLOW** *(NEXT — propose-first design)*. The view must track the live edge. Decide the
-   follow semantics (auto-follow / hold-with-snap-back / hybrid); fold in the candle-framing /
-   forecast-cloud Y-exclusion (the old A0 goal). Replaces the one-shot `_fit_scanner_y`.
-2. **A5 — Mode 10 first + default-on-open.** Reorder the scanner list + open into Mode 10. The
+1. **VIEW-FOLLOW** — ✅ **DONE (2026-06-17)**, per-axis lock model (`12a0d1e` + `b2e1735`); A0
+   candle-framing folded in, `_fit_scanner_y` replaced by the per-frame roll for Mode 10. See
+   "Mode 10 view-follow" below.
+2. **A5 — Mode 10 first + default-on-open** *(NEXT)*. Reorder the scanner list + open into Mode 10. The
    **time chart is DEMOTED, not deleted** — stays in the list as a fallback. *Why after view-follow:*
    A5 makes Mode 10 the surface you're dropped onto every launch; a frozen fit whose live edge walks
    off-screen is tolerable for a mode you switch INTO, hostile for your permanent home. Quality gate.
@@ -148,8 +148,20 @@ phases.**
   the gold POC dot (Stage 0).
 - **Cursor shows the Y-axis value (price)** in all modes.
 
-### Mode 10 view-follow — DELIBERATE DESIGN STEP (was Group A "open-zoom"; reclassified 2026-06-16)
-**Not a quick polish item — its own deliberate step, done later, NOT now.** A0 tried to fix
+### Mode 10 view-follow — ✅ DONE (2026-06-17) — per-axis lock model (was Group A "open-zoom")
+**SHIPPED** — `12a0d1e` (auto-follow roll + candle-framing) + `b2e1735` (per-axis lock model). The
+TradingView per-axis lock: opens following (both axes locked, live edge tracked); a manual pan/zoom
+unlocks the axis that actually MOVED (compare-to-previous-range — pyqtgraph's `sigRangeChangedManually`
+can't be trusted for the axis: its payload carries the axis for wheel-zoom only, nothing for the three
+drag gestures); re-lock is a double-click (X axis → lock X, Y axis → lock Y, plot body → lock both).
+**A0 candle-framing folded in + DONE:** the Y fit uses candle lows/highs with the forecast cloud
+EXCLUDED, so candles aren't squished and extreme post-fit buckets no longer overflow full-height. The
+frozen one-shot `_fit_scanner_y` is replaced by a per-frame roll **for Mode 10 only** (the 9 other
+scanner modes keep `_fit_scanner_y`). **End-key / on-canvas-button snap was DROPPED** — the double-click
+subsumes it. Tunable constants: `FOLLOW_WINDOW/MARGIN/PAD_FRAC/AXIS_TOL_FRAC` + `FOLLOW_X/Y_PER_TICK`
+(refit cadence). The original design analysis is kept below as the record.
+
+**Original analysis (the reverted A0 + the root cause that motivated the real fix):** A0 tried to fix
 "candles open zoomed-out" with a one-line Y-fit change (exclude the forecast cloud so the
 candles aren't blown tiny) plus a footprint-scale reorder. It was **reverted** — it traded a
 minor annoyance for a real regression: live buckets fell off the frozen view and their
