@@ -237,6 +237,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.vline.setZValue(15); self.hline.setZValue(15)
         self.plot.addItem(self.vline, ignoreBounds=True)
         self.plot.addItem(self.hline, ignoreBounds=True)
+        # --- A2: cursor Y-axis price tag — a right-axis badge tracking the hline's Y,
+        # shown in ALL modes. Reads the cursor price via mapSceneToView and formats with
+        # config.PRICE_DECIMALS so it matches PriceAxis exactly. On a full cursor-leave it
+        # LINGERS at the last price (like the crosshair — Qt emits no sigMouseMoved once the
+        # cursor is off the viewport, so the _on_mouse_move hide can't fire). The real
+        # orphan-guard is the mode-switch hide in clear_scanner_canvas, which drops it so a
+        # stale position never carries across modes.
+        self.price_tag = pg.TextItem(anchor=(1, 0.5), color="#141414",
+                                     fill=pg.mkBrush("#dcdcdc"))
+        _ptf = QtGui.QFont("Consolas", 9); _ptf.setBold(True)
+        self.price_tag.textItem.setFont(_ptf)
+        self.price_tag.setZValue(16)            # above the crosshair (z=15)
+        self.plot.addItem(self.price_tag, ignoreBounds=True)
+        self.price_tag.hide()
         self._proxy = pg.SignalProxy(self.plot.scene().sigMouseMoved,
                                      rateLimit=60, slot=self._on_mouse_move)
 
@@ -448,9 +462,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         pos = evt[0]
         if not self.plot.sceneBoundingRect().contains(pos):
             self.stats.hide()
+            self.price_tag.hide()
             return
         pt = self.vb.mapSceneToView(pos)
         self.vline.setPos(pt.x()); self.hline.setPos(pt.y())
+        # A2: right-axis price tag tracks the cursor Y (all modes); PRICE_DECIMALS
+        # matches PriceAxis so the badge value lines up with the axis ticks.
+        self.price_tag.setText(f"{pt.y():.{config.PRICE_DECIMALS}f}")
+        self.price_tag.setPos(self.vb.viewRange()[0][1], pt.y())
+        self.price_tag.show()
 
         # §7.4 — yellow follow-spot tracks the cursor only while a drawing tool is
         # armed (anything other than the cursor/select pointer); hidden otherwise.
@@ -686,6 +706,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         secondary ViewBox teardown; (3) Mode 10 lower-pane teardown; (4) if the
         active mode is now "Off", revert to the standard time chart.
         """
+        self.price_tag.hide()   # A2: drop the cursor price tag on any mode switch (no orphan)
         # 1. sweep every tracked scanner item off the plot
         for item in self.active_scanner_items:
             try:
