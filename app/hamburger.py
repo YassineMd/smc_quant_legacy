@@ -71,10 +71,10 @@ _LAYERS = [
 # shown so the full control panel is visible, but non-clickable until their logic lands.
 _M10_LAYERS = [
     ("m10_poc", "POC Dot", True, True),
-    ("m10_footprint", "Footprint Ladder", True, True),
-    ("m10_obs", "Order Blocks", True, True),
-    ("m10_liq", "Liquidation Marks", True, True),
-    ("m10_stats", "Stats Box", True, True),
+    ("m10_footprint", "Footprint Ladder", False, True),   # INITIAL default OFF — open to a
+    ("m10_obs", "Order Blocks", False, True),             # clean fast canvas; add depth on
+    ("m10_liq", "Liquidation Marks", False, True),        # demand. In-session toggles persist
+    ("m10_stats", "Stats Box", True, True),               # (checkbox state); only a restart resets.
     ("m10_icebergs", "Icebergs (Phase 3)", False, False),
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
 ]
