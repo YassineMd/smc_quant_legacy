@@ -41,6 +41,50 @@ and the **rule** that no overlay is consolidated onto Mode 10 before its logic i
 
 ---
 
+## Mode 10 primary-surface punch list (operator, from live canvas use — 2026-06-16)
+
+Observed by the operator trading off the live Mode 10 canvas (after the Stage-0 true-POC
+marker and the Stage-1 per-bucket footprint ladder landed). Bucketed by **WHEN**, so the
+sequencing stays deliberate and nothing is lost. **Execution order: Group C first (it
+degrades every mode), then Group A (the next coherent build); B and D fold into their
+phases.**
+
+### Group C — all-modes cursor redraw bug (DO FIRST, before Group A)
+- **Cursor leaves trails/smears** when moved and clears slowly on zoom — a redraw/
+  clearing defect that degrades *every* mode, not just Mode 10. Fix before building more
+  onto the surface. *(Operator-greenlit as the first execution item.)*
+
+### Group A — "Mode 10 as the primary surface" (the next build — ONE coherent step)
+- **Make Mode 10 first** in the scanner-mode list **AND the default chart** on terminal
+  open (today it opens on the time chart / "Off").
+- **Open-zoom frames the CANDLES, not the full kinetic-forecast extent.** Candles render
+  tiny because the bull/bear forecast lines blow out the one-shot Y-fit — fit to the
+  candle (OHLC) range and let the forecast cloud clip.
+- **Per-overlay ON/OFF toggles, each independent:** POC, footprint ladder, icebergs,
+  buy/sell imbalance gaps, liquidation marks, order blocks.
+- **Upgrade the Mode 10 stats/hover box** to match the time-chart's richness, PLUS
+  bucket-relevant fields: **bucket elapsed time, bucket size in volume.**
+- **Remove the redundant gold POC ring/box** (the Stage-1 ladder highlight) — keep ONLY
+  the gold POC dot (Stage 0).
+- **Cursor shows the Y-axis value (price)** in all modes.
+
+### Group B — order-book DOM on the canvas (its OWN Phase-3 step — bigger, own plumbing)
+- Order-book **DOM ladder** + green/red **depth-wall horizontal lines**; default depth
+  **50%** (not the current 20%); **hovering a wall line shows its volume.**
+
+### Group D — defer into existing phases (do NOT pull forward)
+- **Gray OB band renders ugly:** correctly diagnosed as a mitigated order block, so it
+  STAYS — but "properly design it" is an OB rendering-quality task → **fold into Phase 2
+  (OB fidelity).**
+- **Y-axis price-fill / base labels** on the dashed live-price line sit *centered* on the
+  line; they should sit **ABOVE** it (small render tweak) → **Phase 3.**
+- **Drawing-tools polish pass:** the measurement tool shows price **% change** (item 11);
+  the long/short position tool drops the redundant on-position value labels (the
+  Entry/SL/TP dashed lines already show them), adds price **% change**, keeps **RR**
+  (item 12) → drawing-tools polish.
+
+---
+
 ## 0. Read this first — the rules that govern every step
 
 ### 0.1 The constant rule (so we don't over-correct)
