@@ -139,6 +139,11 @@ footprints went blank.
   with live price) · hold-with-snap-back (stay put; snap to the live edge on a key/button) ·
   hybrid (follow unless the user has manually panned). **Fold the forecast-cloud exclusion in
   at that point** so candle-framing and live-follow land *together*, not separately.
+- **Full-height overflow consequence (record 2026-06-16):** the frozen one-shot fit also lets an
+  EXTREME post-fit bucket (a fast one-sided rip whose range exceeds the frozen `[lo,hi]`) **overflow
+  the pane as a full-height candle** — read at first as mysterious "gray columns" (actually the gray
+  `#888888` candle border of a faint churn body running off both edges, [chart_widgets.py:459](app/chart_widgets.py:459)).
+  The view-follow fix should **bound / roll the Y range** so these don't render as full-height artifacts.
 
 ### Mode 10 footprint ladder rendering — ✅ DONE (2026-06-16) — DO NOT RE-OPEN
 Closed a four-round saga (footprint apparently "vanishing" / blank on new buckets / a numbers-vs-
@@ -292,7 +297,8 @@ The Phase-0 baseline exposed a methodology trap: **re-reading rehydrated buckets
 **Mandatory: this must be INCREMENTAL, not recomputed from scratch (per 0.6 spirit + Phase-4 concern).** Do **not** rescan all historical buckets × their `levels` for every OB on every recompute — that is O(obs × buckets × levels) on the daemon's event loop and will stall the feed during exactly the volatility you care about (note: this runs on the *daemon*, not the UI thread — the symptom is stale charts across all 3 screens, not a frozen window). Instead, keep `remaining_volume` as **persistent per-OB state keyed by `ob_id`** (a `{ob_id: remaining_volume}` map on the engine): when a single new bucket closes, update only the active OBs whose `[bottom, top]` it overlaps, using only that one bucket's in-range volume — O(active_obs) per close. On rehydrate, backfill the map once from history (a one-time O(history) cost at boot is fine). Persist the map or recompute it on boot — your call, but the per-close path touches only the newest bucket.
 **Verify:** A retest that wicks into a zone and bounces leaves the OB alive with reduced strength; only a clean break-through kills it. Confirm on a real retest sequence.
 
-### Step 9 — OB-calc trace findings (recorded 2026-06-16)
+### OB detection fidelity — trace findings (2026-06-16) — extends Steps 6 & 8
+*(Not numbered — Step 9 belongs to Phase 3; these are detection-side findings for this phase.)*
 A read-only trace of `calc_quant_obs` / `calculate_dynamic_band` surfaced the fix agenda
 below. Cross-referenced to Steps 6 & 8 so nothing is built twice:
 - **Mitigation is too crude — binary first-touch.** `b.low <= ob["top"]` (bullish) flips
@@ -310,6 +316,17 @@ below. Cross-referenced to Steps 6 & 8 so nothing is built twice:
   aggTrade / 4-vector world it now runs in — it *reads* `opL/opS`/`vel_ratio` but the detection
   logic predates them. **Phase 2 decision (don't leave it undecided):** redesign detection
   4-vector-native, or confirm the ported logic is fine as-is.
+- **OB conviction gap — the bullish gate is `opL > opS` ONLY** ([quant_engine.py:555](app/quant_engine.py:555)
+  / [579](app/quant_engine.py:579)), never `opL` vs `clS`/`clL`. So a bucket whose DOMINANT flow is
+  CLOSING (clS short-covering / clL long-puking) can fire an OB on a minority opening sliver — an
+  **unwinding-driven OB, not new conviction**. (A purely-closing bucket with `opL=opS=0` fails the
+  gate; a closing-*dominant* one with a small buy-skewed opening slice passes.) Invisible today —
+  neither the color (encodes velocity) nor `power_score` distinguishes it. **FIX = mark + rank, NOT
+  a silent filter** (operator's call, 2026-06-16): tag `ignition_type` (opening-conviction vs
+  closing-unwinding); render closing-ignition OBs distinctly (dimmer / dashed / marked); **down-rank
+  them in `power_score`** so the Min-Mult slider drops the weak ones first. Conviction OBs stay bright
+  + rank high. Rationale: show everything, communicate **quality** (like the state engine's
+  confidence), never a hidden include/exclude.
 - **Band geometry is `b0`-only** — `calculate_dynamic_band` shapes the zone purely from the
   absorption bucket `b0`'s Otsu-thresholded volume wall; the ignition bucket `b1` only *gates*
   detection, never shapes the band. **Flagged for review** (may be correct — the zone *is* the
@@ -353,6 +370,28 @@ below. Cross-referenced to Steps 6 & 8 so nothing is built twice:
 - **Full fill** (penetration reaches the far edge) → the live remainder vanishes; freeze the consumed outline at the fill candle's timestamp so history is reviewable (fixes distortion 1).
 **Note:** this is a *vertical* consumption model (price eats the void), deliberately distinct from Step 8's *volume* fade for OBs (liquidity consumed) — each matches its structure's meaning. Precision here is still bounded by the kline-derived level data (Phase 5).
 **Verify:** A retrace that fills the top half of a buy gap and bounces leaves only the lower unfilled half drawn as live support; the swept half is no longer painted; fully-filled gaps freeze in history rather than vanishing.
+
+### Mode 10 color/churn fidelity — trace findings (2026-06-16)
+Surfaced tracing `_neon_v2_brush` + the OB renderer. Visual-layer items for this phase:
+- **Zero-vector bucket renders a CONVICTION color (correctness bug, not just aesthetics).**
+  `_neon_v2_brush` ([terminal.py:1726](app/terminal.py:1726)) does `max(vectors, key=...)`; when all
+  four vectors are 0 (pure churn / no net OI), `max` returns the **first dict key = `opL`** (an
+  arbitrary insertion-order tiebreak), which the palette maps to **green** — and if the bucket was fast
+  (`vel_ratio ≥ 2.5`) the neon override paints it **bright neon green at full alpha**. Observed: a bucket
+  with Sell 2.6K / Buy 0, closed RED, all vectors 0 → shown bright green (a 100%-sell red bar lying as
+  bullish). The brush has **no churn branch** — it always picks a vector. Same root as the "gray column"
+  finding: a no-net-positioning bucket renders **faint-green-looks-gray** (non-neon) or **bright-green-lie**
+  (neon) — neither correct.
+- **Color naming + collision.** `RGB_GREEN_NEON` / `RGB_RED_NEON` are **misnamed** — their values are
+  pure **cyan `(0,255,255)`** / **magenta `(255,0,255)`** ([config.py:197](app/config.py:197)), so a fast
+  bullish OB renders cyan and a fast bearish OB magenta. Worse, OB-cyan **collides** with candle-cyan
+  (clS short-covering, [terminal.py:1738](app/terminal.py:1738)) — two different meanings sharing a color.
+  Rename the constants to their true colors AND resolve so no two meanings share one.
+- **Churn bucket visual identity (design, after view-follow).** Churn buckets (one-sided volume,
+  dominance ≈ 0) need a **deliberate, legible, beautiful** identity — muted-but-intentional color /
+  pattern / hollow treatment, distinct from conviction green/red, attractive on the dark canvas. This is
+  the single correct answer to "how to color a no-net-positioning bucket" that replaces BOTH the
+  gray-column and the bright-green-lie behaviors above.
 
 ---
 
