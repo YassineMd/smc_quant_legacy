@@ -291,6 +291,11 @@ nothing is corrupted. BUT downstream consumers see extreme values on bursts: OB
 `power_score` (multiplies by `vel_ratio`) and the neon-velocity intensity. Operator
 wants to SEE it live before deciding signal vs noise; candidate fix = a `vol_mult`
 cap for `power_score`/neon. Do NOT fix pre-emptively — watch live first.
+**Visual tell (Mode-10 trace, 2026-06-16):** the burst tail manifests on the Mode 10
+neon brush as **cyan-saturation** — `clS`-dominant buckets at the forming edge trip the
+`vel_ratio >= 2.5` neon override (`_neon_v2_brush`); the day EVERY fast bucket goes cyan
+and neon stops discriminating is the live signal the `vol_mult` cap for neon intensity
+has earned its place.
 
 Architecture approved. Core insight: **aggTrade is a better source for the same
 five `process_tick` args** (price, vol, taker_buy, delta_oi, tick_time) — Steps 1–4
