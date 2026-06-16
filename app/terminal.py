@@ -1603,7 +1603,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ensure_canvas_panes()
         ratios = self._bucket_vel_ratios(buckets)
 
-        opens, highs, lows, closes, brushes = [], [], [], [], []
+        opens, highs, lows, closes, brushes, pocs = [], [], [], [], [], []
         baseline_arr, bull_fc_arr, bear_fc_arr = [], [], []
         baseline = 0.0
         bull_stretch = 0.0
@@ -1614,6 +1614,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             highs.append(b.get("high", 0.0))
             lows.append(b.get("low", 0.0))
             closes.append(b.get("close", 0.0))
+            pocs.append(b.get("poc_price", 0.0))   # STAGE 0: true per-bucket POC (render-only)
             brushes.append(self._neon_v2_brush(
                 b.get("opL", 0.0), b.get("opS", 0.0), b.get("clL", 0.0),
                 b.get("clS", 0.0), ratios[i]))
@@ -1669,6 +1670,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scan_handles["bc_baseline"].setData(x, baseline_arr)
         self._scan_handles["bc_bull"].setData(x, bull_fc_arr)
         self._scan_handles["bc_bear"].setData(x, bear_fc_arr)
+
+        # --- STAGE 0: true per-bucket POC marker (render-only, zero data change) ---
+        # poc_price is already finalized in every BucketSnapshot (and computed on the
+        # fly for the live edge in live_snapshot), so this draws what the engine already
+        # ships. Gold matches the time-chart footprint POC ring (footprint_layers.py).
+        # Guarded to within the bucket's [low, high] so a degenerate/cold poc_price=0
+        # can't drop a dot at y=0 and skew the eye (or the one-shot Y-fit).
+        poc_x, poc_y = [], []
+        for i in range(len(buckets)):
+            pv = pocs[i]
+            if pv > 0.0 and lows[i] <= pv <= highs[i]:
+                poc_x.append(x[i]); poc_y.append(pv)
+        if "bc_poc" not in self._scan_handles:
+            self._scan_handles["bc_poc"] = self._add_scanner_item(pg.ScatterPlotItem(
+                size=7, symbol="o", pen=pg.mkPen("#141414", width=0.5),
+                brush=pg.mkBrush("#f1c40f")))
+            self._scan_handles["bc_poc"].setZValue(6)   # POC dots ride above the candles
+        self._scan_handles["bc_poc"].setData(poc_x, poc_y)
 
         # --- order blocks mapped onto the integer bucket grid (§6.1) ---
         if "bc_obs" not in self._scan_handles:
