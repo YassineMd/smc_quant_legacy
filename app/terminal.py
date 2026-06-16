@@ -440,7 +440,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self.bc_obs.setVisible(on)
                 if not on:
                     self.bc_obs.tier_pool.clear(self.plot)
-        # m10_stats / m10_liq land in A4 steps 3-4.
+        elif key == "m10_stats":
+            # The stats box is a floating QLabel, not a scene item: hide it now on OFF.
+            # ON is handled by the gate in _hover_scanner (the next hover / live-breathe
+            # re-fire re-shows it), so there is nothing to re-add to the scene here.
+            if not on:
+                self.stats.hide()
+        # m10_liq lands in A4 step 4.
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -530,6 +536,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _hover_scanner(self, x: float, scene_pos) -> None:
         """Rich, mode-specific HUD readout for the hovered volume bucket (§4)."""
+        if not self.menu.layer_state("m10_stats"):   # A4 step 3: stats-box toggle
+            self.stats.hide()                         # gates mouse-move AND live-breathe paths
+            return
         filtered, _x, _a = self._build_scanner_buckets()
         idx = int(round(x))
         if not (0 <= idx < len(filtered)):
