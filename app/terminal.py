@@ -446,7 +446,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # re-fire re-shows it), so there is nothing to re-add to the scene here.
             if not on:
                 self.stats.hide()
-        # m10_liq lands in A4 step 4.
+        elif key == "m10_liq":
+            h = self._scan_handles.get("bc_liq")   # scatter, no sub-pools -> plain setVisible
+            if h is not None:
+                h.setVisible(on)
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -1892,6 +1895,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_obs.visible_filter = self.ob_item.visible_filter   # honor the Min-Mult slider
             self.bc_obs.update_data_indexed(
                 self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx)
+
+        # --- liquidation marks (A4 step 4) — per-bucket forced volume from A3b-pre.
+        # liq_short = shorts liquidated (forced buys) -> mark at the bucket HIGH (price
+        # ran up into stops); liq_long = longs liquidated (forced sells) -> at the LOW.
+        # Distinct triangles so the cyan/magenta don't read as candles/OB zones (that
+        # color collision is a recorded Phase-3 cleanup). Gated by m10_liq; teardown is
+        # a plain setVisible in _set_scanner_overlay (scatter, no sub-pools).
+        if self.menu.layer_state("m10_liq"):
+            def _lsz(v): return max(9.0, min(30.0, 7.0 + v ** 0.5))   # px ~ sqrt(forced vol)
+            spots = []
+            for i, b in enumerate(buckets):
+                ls, ll = b.get("liq_short", 0.0), b.get("liq_long", 0.0)
+                if ls > 0.0:
+                    spots.append({"pos": (x[i], highs[i]), "symbol": "t1", "pen": None,
+                                  "brush": pg.mkBrush(config.COLOR_LIQ_SHORT), "size": _lsz(ls)})
+                if ll > 0.0:
+                    spots.append({"pos": (x[i], lows[i]), "symbol": "t", "pen": None,
+                                  "brush": pg.mkBrush(config.COLOR_LIQ_LONG), "size": _lsz(ll)})
+            if "bc_liq" not in self._scan_handles:
+                self._scan_handles["bc_liq"] = self._add_scanner_item(pg.ScatterPlotItem())
+                self._scan_handles["bc_liq"].setZValue(7)   # above the POC dots (z6)
+            self._scan_handles["bc_liq"].setVisible(True)
+            self._scan_handles["bc_liq"].setData(spots)
 
         # --- lower pane: VPIN heatmap + 0.85 risk line (live on lower_plot) ---
         if "bc_vpin" not in self._scan_handles:
