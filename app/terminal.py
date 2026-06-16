@@ -63,6 +63,16 @@ EXH_Z_SCALE = 2.0         # z-score (sigma) scale of the smooth tanh ramp
 EXH_OI_K = math.log(1.5)  # OI-direction term range [0.667, 1.5]
 EXH_OI_SCALE = 0.5        # scale of the (delta_oi / curr_vol) tanh ramp
 
+# View-follow (Mode 10) — the live-edge tracking that replaces the one-shot fit.
+# All tunable by eye. The FOLLOW_*_PER_TICK pair picks the refit cadence: both True =
+# per-tick (truest follow), both False = per-close, X-True/Y-False = track-X / stable-Y.
+FOLLOW_WINDOW = 100       # buckets shown in the live window
+FOLLOW_MARGIN = 8         # buckets of right padding so the live edge isn't flush to the axis
+FOLLOW_PAD_FRAC = 0.08    # Y padding as a fraction of the visible candle range
+FOLLOW_RESUME_EPS = 2     # auto-resume when the view's right edge is within this many buckets of the live edge
+FOLLOW_X_PER_TICK = True  # roll X every draw (vs only on a bucket close)
+FOLLOW_Y_PER_TICK = True  # refit Y every draw (vs only on a bucket close) — flip False if price-whip jitters
+
 
 def _exh_z_mult(window_vals: list, val: float) -> float:
     """Smooth, bounded exhaustion multiplier from the z-score of ``val`` vs a
@@ -212,6 +222,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig: Optional[tuple] = None   # render-skip gate (Phase 7 perf)
         self._cob_prev_visible: bool = False             # COB state across scanner toggles
         self._scanner_needs_autofit: bool = True         # one-shot Y/X fit (frees manual zoom)
+        # View-follow (Mode 10): track the live edge; disengage on manual pan, resume at
+        # the edge. _follow_last_n drives the per-tick/per-close refit cadence.
+        self._scanner_following: bool = True
+        self._follow_last_n: int = -1
         self._depth_needs_calibration: bool = True       # one-shot depth-slider 20% baseline (§1)
         # Handles for the heavy modes' extra scene objects (built in Phase 5/6,
         # torn down here). Pre-declared so teardown checks are always safe.
@@ -1050,6 +1064,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pad = (hi - lo) * 0.08
             self.vb.setYRange(lo - pad, hi + pad, padding=0)
         self._scanner_needs_autofit = False
+
+    def _roll_to_live_edge(self, n: int, lows: list, highs: list) -> None:
+        """View-follow (Mode 10): slide the X window to the live edge + candle-frame Y
+        over the visible window. The forecast cloud (bull_fc/bear_fc) is DELIBERATELY
+        excluded from the Y fit (the old A0 goal) so candles aren't squished; re-fitting
+        the visible window every draw also means an extreme in-window bucket can't
+        overflow. Cadence per FOLLOW_*_PER_TICK (per-tick vs only on a bucket close)."""
+        if n <= 0:
+            return
+        new_bucket = (n != self._follow_last_n)
+        if FOLLOW_X_PER_TICK or new_bucket:
+            self.vb.setXRange(max(-0.5, n - FOLLOW_WINDOW - 0.5),
+                              (n - 1) + FOLLOW_MARGIN + 0.5, padding=0)
+        if FOLLOW_Y_PER_TICK or new_bucket:
+            w0 = max(0, n - FOLLOW_WINDOW)
+            lo, hi = min(lows[w0:n]), max(highs[w0:n])
+            if not (hi > lo):
+                hi = lo + 1.0
+            pad = (hi - lo) * FOLLOW_PAD_FRAC
+            self.vb.setYRange(lo - pad, hi + pad, padding=0)
+        self._follow_last_n = n
 
     # ------------------------------------------------------------------
     # Polish-pass shared helpers (theme, value trackers, formatting)
@@ -1932,10 +1967,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._scan_handles["bc_vpin"].setOpts(x=x, height=vpin_arr, width=0.8,
                                                   brushes=vbrushes, pen=None)
 
-        # --- rigid dual scaling ---
-        lo = min(lows + bear_fc_arr)
-        hi = max(highs + bull_fc_arr)
-        self._fit_scanner_y(len(x), lo, hi)
+        # --- view-follow (replaces the one-shot fit) — Step 1: auto-follow. A mode/tf/
+        # Zero-Point re-arm (_scanner_needs_autofit) re-engages follow + drops us on the
+        # live edge, consuming that flag exactly as _fit_scanner_y used to. The Y fit uses
+        # candles only (lows/highs) — bull_fc/bear_fc EXCLUDED so they can't squish the
+        # candles (the A0 fold-in). The disengage/resume state machine is the next step;
+        # for now `following` stays True (pure auto-follow). ---
+        if self._scanner_needs_autofit:
+            self._scanner_following = True
+            self._scanner_needs_autofit = False
+        if self._scanner_following:
+            self._roll_to_live_edge(len(x), lows, highs)
         self.lower_plot.getViewBox().setYRange(0.0, 1.05, padding=0)
 
         # §5 right-edge spot price + active-bucket fill badge, plus forecast tags
