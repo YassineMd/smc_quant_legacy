@@ -82,9 +82,13 @@ rule: **no overlay onto Mode 10 before its logic is corrected.**
   when quiet). Full Phase-5 record + commit list = **§8**.
 - **NEXT — operator picks the phase (the CAPSTONE is Mode 10 itself — see §0; the
   Mode-10 selection tool is its final step, after the pipeline is fully solid):**
-  - **Cheap validation NOW (pre-Phase, low-cost / high-info):** confirm the footprint +
-    true POC render correctly on the Mode 10 bucket canvas — prove the capstone surface
-    before investing overlays in it.
+  - **Cheap validation — ✅ DONE:** footprint ladder + true POC render correctly on the
+    Mode 10 bucket canvas (Stage-0 POC dot `6ec3578`, Stage-1 levels-on-wire `8fca531`,
+    footprint viewport-cull/newest-first-cap/bubble-fallback fix `4dcf3ee`). Capstone
+    surface proven. Root-cause record (the four-round saga: no viewport cull → 600-label
+    budget spent on off-screen oldest buckets → live edge starved) = MASTER_FIX_PLAN
+    "Mode 10 footprint ladder rendering — DONE". *(Distinct from time-chart Step 13, which
+    is the same oldest-first cap bug in `FootprintLayer` and is still pending.)*
   - **Phase 2 — OB fidelity (Steps 6–8):** band over-extension fix (6), Otsu A/B
     (7, optional/skippable), proportional OB mitigation not binary death (8). Makes
     Mode-10 ORDER BLOCKS trustworthy.

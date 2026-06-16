@@ -89,6 +89,19 @@ footprints went blank.
   hybrid (follow unless the user has manually panned). **Fold the forecast-cloud exclusion in
   at that point** so candle-framing and live-follow land *together*, not separately.
 
+### Mode 10 footprint ladder rendering — ✅ DONE (2026-06-16) — DO NOT RE-OPEN
+Closed a four-round saga (footprint apparently "vanishing" / blank on new buckets / a numbers-vs-
+bubbles split across the chart). **Root cause (confirmed by a live-instrumented zoom log):**
+`BucketFootprintItem` did **NO viewport culling** (unlike `FootprintLayer`), so the 600-label
+budget (`_FP_TEXT_CAP`) was spent on the **OLDEST off-screen buckets → the live edge was starved
+of numbers**, and any level beyond the cap drew **nothing → blank.** It was never a clearing/scale/
+A0 bug — those were symptoms. **Fix (commit `4dcf3ee`):** (1) cull to the visible X window using
+the `x0/x1` pattern FootprintLayer already used; (2) fill the label budget **newest-first**; (3)
+**bubble fallback** for any beyond-cap/short-row level so no visible bucket is ever blank. The 12px
+legibility gate was **correct, not mistuned** — the missing piece was culling. A per-frame re-bake
+throttle is deferred (culling makes each bake cheap; revisit only if it feels heavy). *(Distinct
+from the A0 candle-framing/view-follow step above, which stays deferred.)*
+
 ### Group B — order-book DOM on the canvas (its OWN Phase-3 step — bigger, own plumbing)
 - Order-book **DOM ladder** + green/red **depth-wall horizontal lines**; default depth
   **50%** (not the current 20%); **hovering a wall line shows its volume.**
