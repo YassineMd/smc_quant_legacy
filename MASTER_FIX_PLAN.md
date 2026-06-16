@@ -292,6 +292,29 @@ The Phase-0 baseline exposed a methodology trap: **re-reading rehydrated buckets
 **Mandatory: this must be INCREMENTAL, not recomputed from scratch (per 0.6 spirit + Phase-4 concern).** Do **not** rescan all historical buckets × their `levels` for every OB on every recompute — that is O(obs × buckets × levels) on the daemon's event loop and will stall the feed during exactly the volatility you care about (note: this runs on the *daemon*, not the UI thread — the symptom is stale charts across all 3 screens, not a frozen window). Instead, keep `remaining_volume` as **persistent per-OB state keyed by `ob_id`** (a `{ob_id: remaining_volume}` map on the engine): when a single new bucket closes, update only the active OBs whose `[bottom, top]` it overlaps, using only that one bucket's in-range volume — O(active_obs) per close. On rehydrate, backfill the map once from history (a one-time O(history) cost at boot is fine). Persist the map or recompute it on boot — your call, but the per-close path touches only the newest bucket.
 **Verify:** A retest that wicks into a zone and bounces leaves the OB alive with reduced strength; only a clean break-through kills it. Confirm on a real retest sequence.
 
+### Step 9 — OB-calc trace findings (recorded 2026-06-16)
+A read-only trace of `calc_quant_obs` / `calculate_dynamic_band` surfaced the fix agenda
+below. Cross-referenced to Steps 6 & 8 so nothing is built twice:
+- **Mitigation is too crude — binary first-touch.** `b.low <= ob["top"]` (bullish) flips
+  the zone fully dead on the first graze: no buffer, no body-close, no partial-fill, so a
+  one-tick wick marks a live zone gray ([quant_engine.py:601](app/quant_engine.py:601)).
+  **Step 8 already** replaces binary death with a proportional volume-consumption score
+  (alive-with-reduced-strength vs broken) — that's the weak-vs-strong continuum. **Add to
+  Step 8:** also gate the *touch test itself* with a **buffer or body-close confirmation**
+  (a 1-tick wick into the edge ≠ a close-through entry) so a zone isn't marked spent on a graze.
+- **The two `× 1.5` absorption thresholds are HARDCODED magic numbers**
+  ([quant_engine.py:554](app/quant_engine.py:554) / [578](app/quant_engine.py:578)). Promote
+  both to **named, tunable constants** in config — live-calibratable, like the state-engine
+  constants in `scripts/STATE_ENGINE_TUNING.md`.
+- **`calc_quant_obs` is a VERBATIM LEGACY PORT** (`main.py:490`), never redesigned for the
+  aggTrade / 4-vector world it now runs in — it *reads* `opL/opS`/`vel_ratio` but the detection
+  logic predates them. **Phase 2 decision (don't leave it undecided):** redesign detection
+  4-vector-native, or confirm the ported logic is fine as-is.
+- **Band geometry is `b0`-only** — `calculate_dynamic_band` shapes the zone purely from the
+  absorption bucket `b0`'s Otsu-thresholded volume wall; the ignition bucket `b1` only *gates*
+  detection, never shapes the band. **Flagged for review** (may be correct — the zone *is* the
+  absorption wall — but confirm alongside Step 6).
+
 ---
 
 ## PHASE 3 — Visual-layer correctness (so all 11 screens are honest)
