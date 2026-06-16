@@ -1710,9 +1710,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # --- STAGE 1: per-bucket footprint ladder from b["levels"] (wire-additive) ---
         # levels now ride on the BucketSnapshot (quant_engine._assemble), so the
         # footprint is a property of the BUCKET, drawn in its ordinal column. Ordinal
-        # twin of the time-chart FootprintLayer; the POC row is gold-ringed (same gold
-        # as the Stage-0 dot, which sits inside it). px_per_* drive the bubble/number
-        # switch + pixel-round bubble radii; recomputed each bucket-change frame.
+        # twin of the time-chart FootprintLayer; the POC is marked by the separate gold
+        # dot (bc_poc above), so the ladder draws only the volume distribution. px_per_*
+        # drive the bubble/number switch + pixel-round bubble radii; recomputed each
+        # bucket-change frame.
         (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
         px_per_x = self.vb.width() / max(1e-9, vx1 - vx0)
         px_per_y = self.vb.height() / max(1e-9, vy1 - vy0)

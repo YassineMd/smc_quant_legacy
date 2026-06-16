@@ -145,8 +145,9 @@ class BucketFootprintItem(pg.GraphicsObject):
     difference is the X mapping — ``x`` is the integer bucket ordinal (not the
     candle uTime) and the levels arrive per-bucket from ``b["levels"]`` (Stage 1:
     now carried on the ``BucketSnapshot`` wire). Pixel-round bubbles when zoomed
-    out, side-by-side buy/sell numbers when a tick row is tall enough, and the POC
-    row gold-ringed (same ``#f1c40f`` gold as the Stage-0 dot, which sits inside it).
+    out, side-by-side buy/sell numbers when a tick row is tall enough. The POC is
+    marked by the separate gold dot (``bc_poc``), so this layer draws only the
+    volume distribution (A1 dropped the redundant in-ladder POC ring).
     """
 
     def __init__(self):
@@ -172,7 +173,6 @@ class BucketFootprintItem(pg.GraphicsObject):
         p = QtGui.QPainter(self.picture)
         px_per_x = max(1e-9, px_per_x); px_per_y = max(1e-9, px_per_y)
         detailed = (px_per_y * config.TICK_SIZE) >= DETAIL_PX_PER_TICK
-        ts = config.TICK_SIZE
         half = width / 2.0
         buy_specs, sell_specs = [], []
 
@@ -188,12 +188,6 @@ class BucketFootprintItem(pg.GraphicsObject):
             if not levels:
                 continue
             xi = float(xi)
-            poc_price, poc_v = None, 0.0
-            for ps, v in levels.items():
-                t = v.get("b", 0.0) + v.get("s", 0.0)
-                if t > poc_v:
-                    poc_v, poc_price = t, float(ps)
-
             for ps, v in levels.items():
                 price = float(ps); buy = v.get("b", 0.0); sell = v.get("s", 0.0)
                 tot = buy + sell
@@ -212,14 +206,6 @@ class BucketFootprintItem(pg.GraphicsObject):
                     col = QtGui.QColor(*rgb); col.setAlphaF(0.30 + 0.55 * frac)
                     p.setBrush(QtGui.QBrush(col)); p.setPen(QtCore.Qt.NoPen)
                     p.drawEllipse(QtCore.QPointF(xi, price), r_px / px_per_x, r_px / px_per_y)
-
-                if price == poc_price:
-                    pen = QtGui.QPen(QtGui.QColor("#f1c40f")); pen.setCosmetic(True); pen.setWidth(2)
-                    p.setPen(pen); p.setBrush(QtCore.Qt.NoBrush)
-                    if detailed:
-                        p.drawRect(QtCore.QRectF(xi - half, price - ts / 2, width, ts))
-                    else:
-                        p.drawEllipse(QtCore.QPointF(xi, price), 7.0 / px_per_x, 7.0 / px_per_y)
         p.end()
         self.buy_pool.update(buy_specs); self.sell_pool.update(sell_specs)
         if lo_all is None:
