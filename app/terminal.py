@@ -69,7 +69,8 @@ EXH_OI_SCALE = 0.5        # scale of the (delta_oi / curr_vol) tanh ramp
 FOLLOW_WINDOW = 100       # buckets shown in the live window
 FOLLOW_MARGIN = 8         # buckets of right padding so the live edge isn't flush to the axis
 FOLLOW_PAD_FRAC = 0.08    # Y padding as a fraction of the visible candle range
-FOLLOW_RESUME_EPS = 2     # auto-resume when the view's right edge is within this many buckets of the live edge
+FOLLOW_AXIS_TOL_FRAC = 0.01  # per-axis "did it move?" threshold as a fraction of that axis's span —
+                             # absorbs float noise + off-axis drift on a wobbly horizontal drag (tunable)
 FOLLOW_X_PER_TICK = True  # roll X every draw (vs only on a bucket close)
 FOLLOW_Y_PER_TICK = True  # refit Y every draw (vs only on a bucket close) — flip False if price-whip jitters
 
@@ -222,10 +223,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig: Optional[tuple] = None   # render-skip gate (Phase 7 perf)
         self._cob_prev_visible: bool = False             # COB state across scanner toggles
         self._scanner_needs_autofit: bool = True         # one-shot Y/X fit (frees manual zoom)
-        # View-follow (Mode 10): track the live edge; disengage on manual pan, resume at
-        # the edge. _follow_last_n drives the per-tick/per-close refit cadence.
-        self._scanner_following: bool = True
+        # View-follow (Mode 10), per-axis lock model. follow_x / follow_y track each axis to
+        # the live edge independently; _follow_last_n drives the per-tick/per-close cadence.
+        # A manual pan/zoom unlocks the axis that actually MOVED (diffed vs _follow_prev_range)
+        # — pyqtgraph's manual signal can't be trusted for the axis: its payload carries the
+        # axis for wheel-zoom but not for the three drag gestures. Re-lock is an axis
+        # double-click (_on_scene_click). The code-driven roll emits only the generic
+        # sigRangeChanged, so it never self-trips the manual handler.
+        self._follow_x: bool = True
+        self._follow_y: bool = True
         self._follow_last_n: int = -1
+        self._follow_prev_range = None
+        self.vb.sigRangeChangedManually.connect(self._on_scanner_manual_range)
         self._depth_needs_calibration: bool = True       # one-shot depth-slider 20% baseline (§1)
         # Handles for the heavy modes' extra scene objects (built in Phase 5/6,
         # torn down here). Pre-declared so teardown checks are always safe.
@@ -477,13 +486,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.alerts.audio.set_armed(on)
 
     def _on_scene_click(self, ev) -> None:
-        """Double-click resets + auto-fits the view (fix #10, TradingView parity)."""
-        if ev.double():
-            self._autoranged = False
-            self.plot.enableAutoRange()
-            self.plot.autoRange()
-            self.plot.disableAutoRange()
-            self._autoranged = True
+        """Double-click handling. Mode 10: per-axis follow LOCK — double-clicking the X axis
+        locks X, the Y axis locks Y, the plot body locks both (snap to full follow). The
+        bottom/right axis strips are distinct scene rects, so the hit-test is unambiguous.
+        Every other mode keeps the reset + auto-fit (fix #10, TradingView parity)."""
+        if not ev.double():
+            return
+        if self.scanner_mode == "bucket_canvas":
+            sp = ev.scenePos()
+            if self.plot.getAxis("bottom").sceneBoundingRect().contains(sp):
+                self._follow_x = True                  # X axis -> lock horizontal follow
+            elif self.plot.getAxis("right").sceneBoundingRect().contains(sp):
+                self._follow_y = True                  # Y axis -> lock price auto-fit
+            else:
+                self._follow_x = self._follow_y = True  # plot body -> snap to full follow
+            self._last_scanner_sig = None              # force an immediate roll so the lock takes effect
+            return
+        self._autoranged = False
+        self.plot.enableAutoRange()
+        self.plot.autoRange()
+        self.plot.disableAutoRange()
+        self._autoranged = True
 
     # ------------------------------------------------------------------
     def _sync_cob(self) -> None:
@@ -1074,10 +1097,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if n <= 0:
             return
         new_bucket = (n != self._follow_last_n)
-        if FOLLOW_X_PER_TICK or new_bucket:
+        if self._follow_x and (FOLLOW_X_PER_TICK or new_bucket):
             self.vb.setXRange(max(-0.5, n - FOLLOW_WINDOW - 0.5),
                               (n - 1) + FOLLOW_MARGIN + 0.5, padding=0)
-        if FOLLOW_Y_PER_TICK or new_bucket:
+        if self._follow_y and (FOLLOW_Y_PER_TICK or new_bucket):
             w0 = max(0, n - FOLLOW_WINDOW)
             lo, hi = min(lows[w0:n]), max(highs[w0:n])
             if not (hi > lo):
@@ -1085,6 +1108,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pad = (hi - lo) * FOLLOW_PAD_FRAC
             self.vb.setYRange(lo - pad, hi + pad, padding=0)
         self._follow_last_n = n
+
+    def _on_scanner_manual_range(self, *args) -> None:
+        """View-follow PER-AXIS unlock (Mode 10 only). Fires only on mouse-driven range
+        changes; the code-driven roll emits the generic sigRangeChanged, so it never trips
+        this. The manual payload can't be trusted for the axis (inconsistent across
+        gestures), so we diff the new range vs the last displayed one and unlock whichever
+        axis ACTUALLY moved, beyond a tolerance that absorbs float noise + off-axis drift on
+        a wobbly drag. Scroll-zoom moves both -> unlocks both; a horizontal drag moves X
+        only; a Y-axis wheel moves Y only. Re-lock is a double-click (_on_scene_click)."""
+        if self.scanner_mode != "bucket_canvas" or self._follow_prev_range is None:
+            return
+        (nx0, nx1), (ny0, ny1) = self.vb.viewRange()
+        (px0, px1), (py0, py1) = self._follow_prev_range
+        tol_x = FOLLOW_AXIS_TOL_FRAC * max(1e-9, px1 - px0)
+        tol_y = FOLLOW_AXIS_TOL_FRAC * max(1e-9, py1 - py0)
+        if abs(nx0 - px0) > tol_x or abs(nx1 - px1) > tol_x:
+            self._follow_x = False                           # horizontal pan/zoom -> unlock X
+        if abs(ny0 - py0) > tol_y or abs(ny1 - py1) > tol_y:
+            self._follow_y = False                           # price pan/zoom -> unlock Y
+        self._follow_prev_range = ((nx0, nx1), (ny0, ny1))
 
     # ------------------------------------------------------------------
     # Polish-pass shared helpers (theme, value trackers, formatting)
@@ -1967,18 +2010,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._scan_handles["bc_vpin"].setOpts(x=x, height=vpin_arr, width=0.8,
                                                   brushes=vbrushes, pen=None)
 
-        # --- view-follow (replaces the one-shot fit) — Step 1: auto-follow. A mode/tf/
-        # Zero-Point re-arm (_scanner_needs_autofit) re-engages follow + drops us on the
-        # live edge, consuming that flag exactly as _fit_scanner_y used to. The Y fit uses
-        # candles only (lows/highs) — bull_fc/bear_fc EXCLUDED so they can't squish the
-        # candles (the A0 fold-in). The disengage/resume state machine is the next step;
-        # for now `following` stays True (pure auto-follow). ---
+        # --- view-follow (replaces the one-shot fit). A mode/tf/Zero-Point re-arm
+        # (_scanner_needs_autofit) re-locks BOTH axes + drops us on the live edge, consuming
+        # that flag exactly as _fit_scanner_y used to. The Y fit uses candles only
+        # (lows/highs) — bull_fc/bear_fc EXCLUDED so they can't squish the candles (A0). The
+        # roll runs whenever either axis is locked (each axis gated inside). After the draw
+        # we snapshot the displayed range so the per-axis unlock can diff against it. ---
         if self._scanner_needs_autofit:
-            self._scanner_following = True
+            self._follow_x = self._follow_y = True
             self._scanner_needs_autofit = False
-        if self._scanner_following:
+        if self._follow_x or self._follow_y:
             self._roll_to_live_edge(len(x), lows, highs)
         self.lower_plot.getViewBox().setYRange(0.0, 1.05, padding=0)
+        self._follow_prev_range = self.vb.viewRange()
 
         # §5 right-edge spot price + active-bucket fill badge, plus forecast tags
         # (all on the upper price pane; stacked + left-padded to avoid clipping).
