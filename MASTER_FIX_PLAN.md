@@ -6,6 +6,41 @@
 
 ---
 
+## The capstone this plan serves — Mode 10 is the map, not "scanner #10"
+
+**Reframing (operator's core realization, 2026-06-16).** Mode 10 — the volume-bucket
+canvas — is **not** the tenth scanner. It is the **primary mapping surface** and the
+**capstone** this entire project is building toward. Every other piece — the 11
+scanners, the time-candle, all of Phases 1–4 — is **infrastructure whose only job is to
+make Mode 10 trustworthy.** The data-integrity work in this plan is the foundation under
+the map, not an end in itself.
+
+- **The time-candle becomes VESTIGIAL once Mode 10 carries the map.** A time candle
+  misrepresents the auction: a 50-volume minute and a 50,000-volume minute draw the
+  **same width**, so equal screen space encodes wildly unequal participation. The
+  **volume bucket is the native, truthful unit** — width *is* activity. This is the
+  realization driving the project; the time-chart is scaffolding we keep only until the
+  bucket canvas carries everything.
+- **TradingView STAYS — it is the operator's deliberate external decision/drawing
+  surface.** We do **not** rebuild a drawing/execution tool. Division of labor is
+  explicit: **scanners = sensing**, **Mode 10 = the level map** (the artifact that exists
+  *nowhere else on the market*), **TradingView = marking & execution.** Do not
+  scope-creep Mode 10 toward a charting package.
+- **Sequencing to the capstone (overlays migrate onto Mode 10 ONLY AFTER their logic is
+  fixed — never before):**
+  1. **Cheap validation NOW:** confirm the footprint + true POC render correctly on the
+     Mode 10 bucket canvas — low-cost, high-information; prove the surface before we
+     invest overlays in it.
+  2. **Make every overlay CORRECT:** Phase 2 (OB fidelity, Steps 6–8) + Phase 3 (visual
+     layer, Steps 9–14). No overlay is allowed onto the map until its math is honest.
+  3. **Capstone:** consolidate all finished overlays onto Mode 10 and build the selection
+     tool against the corrected scalars (see "After the pipeline is solid", below).
+
+This reframing changes no step's *math* — it sets the **destination** every step serves
+and the **rule** that no overlay is consolidated onto Mode 10 before its logic is fixed.
+
+---
+
 ## 0. Read this first — the rules that govern every step
 
 ### 0.1 The constant rule (so we don't over-correct)
@@ -235,6 +270,7 @@ The Phase-0 baseline exposed a methodology trap: **re-reading rehydrated buckets
 ---
 
 ## After the pipeline is solid → the selection tool
+**This section IS the capstone's final step (see "Mode 10 is the map", top of this plan): overlays consolidate onto Mode 10 ONLY after Phases 2–3 make each one correct — never before — then we build the tool.**
 Once Phases 1–4 are green, we design the Mode 10 selection tool against the corrected scalars:
 - It reads bucket **scalars only** (`BucketSnapshot`), never per-level `levels` (those aren't in the snapshot). Its absorption/iceberg-style states must lean on `buyer_er/seller_er` (now the robust dispersion-based version) — if that proves too blunt for an area classifier, we add a derived scalar to the bucket (e.g. a POC concentration ratio) rather than shipping `levels` to the client.
 - Its VPIN aggregation uses the correct `Σ|b−s| / Σ vol` formula over the selection.

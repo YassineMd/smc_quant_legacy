@@ -8,6 +8,34 @@ then the Mode-10 selection tool (see §2).**
 
 ---
 
+## 0. What this project is building — Mode 10 is the capstone (read first)
+
+**Reframing (operator's core realization, 2026-06-16) — the destination behind every
+phase.** Mode 10, the volume-bucket canvas, is **NOT** scanner mode #10. It is the
+**PRIMARY MAPPING SURFACE** and the **CAPSTONE** the whole project builds toward.
+Everything else — the scanners, the time-candle, Phases 1–4 — is **infrastructure that
+exists to make Mode 10 trustworthy.**
+
+- **Time-candle → VESTIGIAL once Mode 10 carries the map.** Time candles misrepresent
+  the auction: a 50-vol minute and a 50,000-vol minute draw the **same width**. The
+  **volume bucket is the native, truthful unit** (width = activity). The time-chart is
+  scaffolding kept only until the bucket canvas carries everything.
+- **TradingView STAYS — deliberate external decision/drawing surface.** We do NOT
+  rebuild a drawing/execution tool. Division of labor: **scanners = sensing · Mode 10 =
+  the level map** (exists nowhere else on the market) **· TradingView = marking +
+  execution.** Don't scope-creep Mode 10 into a charting package.
+- **Sequencing to the capstone (overlays migrate onto Mode 10 ONLY AFTER their logic is
+  fixed, never before):** (1) **cheap validation NOW** — footprint + true POC render
+  correctly on the Mode 10 bucket canvas; (2) **Phase 2 (OB fidelity) + Phase 3 (visual
+  layer)** make every overlay CORRECT; (3) **capstone** — consolidate all finished
+  overlays onto Mode 10 + build the selection tool (MASTER_FIX_PLAN "After the pipeline
+  is solid").
+
+Changes no step's math — it sets the destination (§2 "what's next" feeds it) and the
+rule: **no overlay onto Mode 10 before its logic is corrected.**
+
+---
+
 ## 1. Where things stand
 
 - **Branch:** `pipeline-integrity` (off `main`/`master` baseline `6ddfc5e`). All work lands here.
@@ -52,8 +80,11 @@ then the Mode-10 selection tool (see §2).**
   150 ms live edge, true-price footprint levels. 19.6 confirmed the gain by eye
   (aggTrade relocates the POC to the real volume peak on travel; converges with kline
   when quiet). Full Phase-5 record + commit list = **§8**.
-- **NEXT — operator picks the phase (the original goal is the Mode-10 selection
-  tool, after the pipeline is fully solid):**
+- **NEXT — operator picks the phase (the CAPSTONE is Mode 10 itself — see §0; the
+  Mode-10 selection tool is its final step, after the pipeline is fully solid):**
+  - **Cheap validation NOW (pre-Phase, low-cost / high-info):** confirm the footprint +
+    true POC render correctly on the Mode 10 bucket canvas — prove the capstone surface
+    before investing overlays in it.
   - **Phase 2 — OB fidelity (Steps 6–8):** band over-extension fix (6), Otsu A/B
     (7, optional/skippable), proportional OB mitigation not binary death (8). Makes
     Mode-10 ORDER BLOCKS trustworthy.
@@ -64,8 +95,9 @@ then the Mode-10 selection tool (see §2).**
     `ignoreBounds=True`).
   - **Phase 4 — perf (Steps 16–18):** cluster DOM once/frame (16), cache zones on
     bucket-close (17), OB loop efficiency (18). (Step 15 already shipped as 19.4.)
-  - **Then the Mode-10 selection tool** vs the corrected scalars (MASTER_FIX_PLAN
-    "After the pipeline is solid").
+  - **Then the capstone** — consolidate every finished overlay onto Mode 10 (ONLY after
+    Phases 2–3 make each correct) + the Mode-10 selection tool vs the corrected scalars
+    (MASTER_FIX_PLAN "After the pipeline is solid").
 - **Where trustworthiness landed (post Phase-1 + aggTrade):**
   - **HIGH-CONFIDENCE now:** Modes 1/2 (open/close pos), 3 (exhaustion), 4 (kinetic),
     5 (volume), 6 (VPIN), 7/8 (bucket pos), 9 (effort/result) — honest Phase-1
@@ -330,7 +362,7 @@ URLs/constants only — touches no app state).
 
 ---
 **Start here:** Phases 1 + 5 are DONE — the terminal is aggTrade-native and live on
-the real v3 `history.db`. Read **§2** (current state · what's next · trustworthiness
+the real v3 `history.db`. Read **§0** (the Mode-10 capstone reframing) + **§2** (current state · what's next · trustworthiness
 map), confirm the suite (§6) is green (9 tests, all `exit 0`), then pick the next
 phase WITH the operator (Phase 2 → 3 → 4 → Mode-10 tool). §7/§8 are the Phase-5
 record; the standing rules (§3) + the verification pattern (§4 — esp. FULL-suite-at-
