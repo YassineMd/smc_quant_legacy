@@ -66,6 +66,13 @@ phases.**
   buy/sell imbalance gaps, liquidation marks, order blocks, **the stats/hover box
   itself.** *(The whole readout is one more independently-toggleable element — added
   2026-06-16. Do NOT build a one-off toggle; fold it into this A4 framework.)*
+  - **A4 uses distinct `m10_` menu keys** (not the shared time-chart layer keys) — so
+    greying a Phase-3 overlay on Mode 10 never greys its working time-chart twin, and
+    Mode 10's toggle system has **zero dependency on time-chart code**. Forward note
+    (2026-06-16): **when the time chart is removed (A5+), its "Technical Layers" menu
+    section becomes dead UI — toggles for a chart that no longer exists. Remove that
+    menu section as part of the time-chart removal step.** Mode 10's `m10_` toggles are
+    unaffected by that removal — the distinct keys make it clean decoupling.
 - **Upgrade the Mode 10 stats/hover box** to match the time-chart's richness, PLUS
   bucket-relevant fields: **bucket elapsed time, bucket size in volume.**
   - **A3a — readout — ✅ DONE (2026-06-16, commit `0fc31d5`):** 12-line order-flow box
