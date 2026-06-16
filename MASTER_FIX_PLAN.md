@@ -63,9 +63,34 @@ phases.**
   *not* a simple Y-fit — it exposed a latent frozen-view bug. Root cause + the real fix
   are in "Mode 10 view-follow" below.
 - **Per-overlay ON/OFF toggles, each independent:** POC, footprint ladder, icebergs,
-  buy/sell imbalance gaps, liquidation marks, order blocks.
+  buy/sell imbalance gaps, liquidation marks, order blocks, **the stats/hover box
+  itself.** *(The whole readout is one more independently-toggleable element — added
+  2026-06-16. Do NOT build a one-off toggle; fold it into this A4 framework.)*
 - **Upgrade the Mode 10 stats/hover box** to match the time-chart's richness, PLUS
   bucket-relevant fields: **bucket elapsed time, bucket size in volume.**
+  - **A3a — readout — ✅ DONE (2026-06-16, commit `0fc31d5`):** 12-line order-flow box
+    (Volume · Sell|Buy · Delta · OI Δ · OpL|OpS · ClS|ClL · Buyer/Seller E/R + anomaly% ·
+    30-bucket rolling E/R · VEL · STATE) in four separated sections (Flow / Positioning /
+    Effort / Read). **Live-breathe:** re-pulls the forming bucket every redraw frame while
+    the cursor is parked, signature-gated on the live-edge volume so idle frames are free.
+    Anomaly% = the exact Step-5/Mode-3 `_exhaustion_mults` multiplier as % off 1.0.
+    **Dominant-vector coloring:** only the two largest of opL/opS/clS/clL light up (a zero
+    never lights), so the box shows *why* the candle is its color. STATE is a `—`
+    placeholder pending A3b.
+  - **A3b — STATE ENGINE — PROPOSE FIRST, do NOT build yet** (operator reviews the proposal
+    before any code). Baseline = the working `_verdict(...)` in `app/stats_overlay.py`
+    (SHORT/LONG SQUEEZE, BULL/BEAR TRAP, LIQUIDITY COIL, STRONG BULL/BEAR, EXHAUSTION, CHOP).
+    Open items the proposal must resolve: bull/bear-trap direction is **backwards** there;
+    **tie EXHAUSTION to the Step-5 z**, not a raw E/R ratio; **add ROTATION / CHURN**; define
+    **precedence** between states; confirm **per-bucket liquidation volume** and a
+    **prev-bucket high/low sweep test** are available on the BucketSnapshot.
+    - **STATE CONFIDENCE — core to the verdict, NOT cosmetic (2026-06-16):** the engine must
+      output **`(state, confidence)`**, never a bare label. Line 12 renders the state **with a
+      confidence level 1–100%**; the state's **background-color opacity scales to confidence**;
+      **a star (★) marks 80%+.** Confidence is computed from how cleanly the state's conditions
+      are met (margin over threshold) and is a first-class return of the verdict function.
+      **Rationale — a wrong verdict is worse than no verdict:** a calibrated "SHORT SQUEEZE 35%"
+      tells the operator to distrust a marginal read, where a misleadingly binary label does not.
 - **Remove the redundant gold POC ring/box** (the Stage-1 ladder highlight) — keep ONLY
   the gold POC dot (Stage 0).
 - **Cursor shows the Y-axis value (price)** in all modes.
