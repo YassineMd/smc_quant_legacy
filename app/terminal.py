@@ -410,6 +410,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif key == "velocity_tiers":
             self.ob_item.show_tiers = on
             self._sig_obs = None  # force OB redraw
+        elif key.startswith("m10_"):
+            self._set_scanner_overlay(key, on)
+
+    def _set_scanner_overlay(self, key: str, on: bool) -> None:
+        """A4 — toggle one Mode 10 overlay. IMMEDIATE teardown here (the signature-gated
+        ``_draw_scanner`` may skip the next redraw, so we can't wait for it to hide an
+        item), then invalidate the scanner sig so the next tick repaints a toggled-ON
+        overlay with fresh data. The toggle STATE lives in the menu checkbox and is
+        re-read by the draw-gate every draw, so it survives redraws AND mode-switches;
+        this only syncs the live scene. No-op when the item isn't on the canvas (not in
+        Mode 10, or never created while toggled off — the draw-gate will make it)."""
+        if key == "m10_poc":
+            h = self._scan_handles.get("bc_poc")
+            if h is not None:
+                h.setVisible(on)
+        # m10_footprint / m10_obs / m10_stats / m10_liq land in A4 steps 2-4.
+        self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
         if key == "drawing":
@@ -1791,17 +1808,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # ships. Gold matches the time-chart footprint POC ring (footprint_layers.py).
         # Guarded to within the bucket's [low, high] so a degenerate/cold poc_price=0
         # can't drop a dot at y=0 and skew the eye (or the one-shot Y-fit).
-        poc_x, poc_y = [], []
-        for i in range(len(buckets)):
-            pv = pocs[i]
-            if pv > 0.0 and lows[i] <= pv <= highs[i]:
-                poc_x.append(x[i]); poc_y.append(pv)
-        if "bc_poc" not in self._scan_handles:
-            self._scan_handles["bc_poc"] = self._add_scanner_item(pg.ScatterPlotItem(
-                size=7, symbol="o", pen=pg.mkPen("#141414", width=0.5),
-                brush=pg.mkBrush("#f1c40f")))
-            self._scan_handles["bc_poc"].setZValue(6)   # POC dots ride above the candles
-        self._scan_handles["bc_poc"].setData(poc_x, poc_y)
+        # A4 draw-gate: skip create+update entirely when m10_poc is off; when on, ensure
+        # the dot exists, is visible, and carries fresh data (the toggle handler does the
+        # immediate hide on off + forces this repaint on).
+        if self.menu.layer_state("m10_poc"):
+            poc_x, poc_y = [], []
+            for i in range(len(buckets)):
+                pv = pocs[i]
+                if pv > 0.0 and lows[i] <= pv <= highs[i]:
+                    poc_x.append(x[i]); poc_y.append(pv)
+            if "bc_poc" not in self._scan_handles:
+                self._scan_handles["bc_poc"] = self._add_scanner_item(pg.ScatterPlotItem(
+                    size=7, symbol="o", pen=pg.mkPen("#141414", width=0.5),
+                    brush=pg.mkBrush("#f1c40f")))
+                self._scan_handles["bc_poc"].setZValue(6)   # POC dots ride above the candles
+            self._scan_handles["bc_poc"].setVisible(True)
+            self._scan_handles["bc_poc"].setData(poc_x, poc_y)
 
         # --- STAGE 1: per-bucket footprint ladder from b["levels"] (wire-additive) ---
         # levels now ride on the BucketSnapshot (quant_engine._assemble), so the

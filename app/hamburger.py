@@ -64,6 +64,21 @@ _LAYERS = [
     ("velocity_tiers", "Velocity Tier Rankings", False),
 ]
 
+# Mode 10 (bucket canvas) overlay toggles (A4). DISTINCT ``m10_`` keys — never the
+# shared time-chart keys above — so greying a Phase-3 overlay here cannot grey its
+# working time-chart twin, and Mode 10's toggles carry zero time-chart dependency.
+# Tuple: (key, label, default_on, enabled). Disabled rows are Phase-3 placeholders:
+# shown so the full control panel is visible, but non-clickable until their logic lands.
+_M10_LAYERS = [
+    ("m10_poc", "POC Dot", True, True),
+    ("m10_footprint", "Footprint Ladder", True, True),
+    ("m10_obs", "Order Blocks", True, True),
+    ("m10_liq", "Liquidation Marks", True, True),
+    ("m10_stats", "Stats Box", True, True),
+    ("m10_icebergs", "Icebergs (Phase 3)", False, False),
+    ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
+]
+
 # Order-flow scanner — the authoritative 10-mode bucket architecture (+ Off).
 # The combo displays the human label but emits the KEY (via currentData).
 SCANNER_MODES = [
@@ -258,6 +273,19 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             self.layer_checks[key] = cb
             self.layer_section.addWidget(cb)
         root.addWidget(self.layer_section)
+
+        # --- Mode 10 overlay toggles accordion (A4) — same layer_state framework,
+        # distinct m10_ keys. setChecked runs BEFORE connect (matching the loop above)
+        # so the build-time toggled signal never reaches the not-yet-wired window slot.
+        self.m10_section = CollapsibleSection("Mode 10 Overlays", expanded=True)
+        for key, label, default, enabled in _M10_LAYERS:
+            cb = QtWidgets.QCheckBox(label)
+            cb.setChecked(default)
+            cb.setEnabled(enabled)   # Phase-3 placeholders: visible but non-clickable
+            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
+            self.layer_checks[key] = cb
+            self.m10_section.addWidget(cb)
+        root.addWidget(self.m10_section)
 
         root.addStretch(1)
 
