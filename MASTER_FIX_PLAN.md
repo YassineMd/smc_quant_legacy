@@ -77,13 +77,19 @@ phases.**
     **Dominant-vector coloring:** only the two largest of opL/opS/clS/clL light up (a zero
     never lights), so the box shows *why* the candle is its color. STATE is a `—`
     placeholder pending A3b.
-  - **A3b — STATE ENGINE — PROPOSE FIRST, do NOT build yet** (operator reviews the proposal
-    before any code). Baseline = the working `_verdict(...)` in `app/stats_overlay.py`
-    (SHORT/LONG SQUEEZE, BULL/BEAR TRAP, LIQUIDITY COIL, STRONG BULL/BEAR, EXHAUSTION, CHOP).
-    Open items the proposal must resolve: bull/bear-trap direction is **backwards** there;
-    **tie EXHAUSTION to the Step-5 z**, not a raw E/R ratio; **add ROTATION / CHURN**; define
-    **precedence** between states; confirm **per-bucket liquidation volume** and a
-    **prev-bucket high/low sweep test** are available on the BucketSnapshot.
+  - **A3b — STATE ENGINE — ✅ DONE (2026-06-16, commit `892382f`)** — new pure module
+    `app/bucket_state.py`, wired to Mode 10 line 12; synthetic test `scripts/test_a3b_state_engine.py`
+    (13 verdicts + squeeze-floor gradient) folded into the suite. Geomean scoring → `(state,
+    confidence)`, verdict = highest-scoring state, confidence = winning score. Liq prerequisite
+    shipped first as **A3b-pre** (commit `7014d31`, activated the dormant liq feed +
+    `liq_short`/`liq_long` on the wire — no schema bump, no wipe). All the proposal's open items
+    were resolved: trap = **aggression × failed-result × swept-level + POC-position soft factor**,
+    with `result`-against-the-aggressor the hard gate (the corrected "effort absorbed, not
+    strength"); EXHAUSTION tied to the Step-5 z (`_exhaustion_mults`); **ROTATION/CHURN + CHOP +
+    NEUTRAL floor** added; rigid precedence replaced by **best-score-wins** + a
+    **gradient-preserving squeeze floor** (≥0.80, rising with liq intensity); per-bucket liq
+    volume + the rolling sweep test both confirmed available. Every threshold is a named constant
+    at the top of the module (tuned live).
     - **STATE CONFIDENCE — core to the verdict, NOT cosmetic (2026-06-16):** the engine must
       output **`(state, confidence)`**, never a bare label. Line 12 renders the state **with a
       confidence level 1–100%**; the state's **background-color opacity scales to confidence**;
@@ -91,6 +97,11 @@ phases.**
       are met (margin over threshold) and is a first-class return of the verdict function.
       **Rationale — a wrong verdict is worse than no verdict:** a calibrated "SHORT SQUEEZE 35%"
       tells the operator to distrust a marginal read, where a misleadingly binary label does not.
+    - **Context-aware / sequence states — DEFERRED to the selection-tool build (2026-06-16):**
+      the hover engine stays **per-bucket**. Cross-bucket logic — churn-collapse over N buckets,
+      state run-length, the regime-shift signal — belongs with the **Mode 10 selection tool**
+      (it reads across a span of buckets; that's the natural home), **NOT a separate v2 of the
+      hover engine.** See "After the pipeline is solid → the selection tool" below.
 - **Remove the redundant gold POC ring/box** (the Stage-1 ladder highlight) — keep ONLY
   the gold POC dot (Stage 0).
 - **Cursor shows the Y-axis value (price)** in all modes.
