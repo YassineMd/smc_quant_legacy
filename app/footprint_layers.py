@@ -144,10 +144,15 @@ class BucketFootprintItem(pg.GraphicsObject):
     Identical bubble/number/POC logic to :class:`FootprintLayer`; the ONLY
     difference is the X mapping — ``x`` is the integer bucket ordinal (not the
     candle uTime) and the levels arrive per-bucket from ``b["levels"]`` (Stage 1:
-    now carried on the ``BucketSnapshot`` wire). Pixel-round bubbles when zoomed
-    out, side-by-side buy/sell numbers when a tick row is tall enough. The POC is
-    marked by the separate gold dot (``bc_poc``), so this layer draws only the
-    volume distribution (A1 dropped the redundant in-ladder POC ring).
+    now carried on the ``BucketSnapshot`` wire). Culls to the visible X viewport
+    (``x0``/``x1``, the same pattern FootprintLayer already uses) so the bubble scale
+    and the 600-label budget serve ONLY the on-screen buckets -- which is what lets
+    the live edge get numbers instead of being starved by the oldest off-screen
+    buckets eating the cap. Per visible level: a side-by-side buy/sell NUMBER when the
+    tick row is tall enough (``>= DETAIL_PX_PER_TICK``, the 12px legibility gate) and
+    the newest-first ``_FP_TEXT_CAP`` budget isn't spent; otherwise a pixel-round
+    volume BUBBLE -- so no visible bucket is ever blank. The POC is the separate gold
+    dot (``bc_poc``).
     """
 
     def __init__(self):
@@ -167,27 +172,33 @@ class BucketFootprintItem(pg.GraphicsObject):
         super().setVisible(v)
         self.buy_pool.set_enabled(v); self.sell_pool.set_enabled(v)
 
-    def update_data(self, x: list, levels_list: list, width: float,
-                    px_per_x: float, px_per_y: float) -> None:
+    def update_data(self, x: list, levels_list: list, x0: float, x1: float,
+                    width: float, px_per_x: float, px_per_y: float) -> None:
         self.picture = QtGui.QPicture()
         p = QtGui.QPainter(self.picture)
         px_per_x = max(1e-9, px_per_x); px_per_y = max(1e-9, px_per_y)
-        detailed = (px_per_y * config.TICK_SIZE) >= DETAIL_PX_PER_TICK
+        detailed = (px_per_y * config.TICK_SIZE) >= DETAIL_PX_PER_TICK   # kept: 12px legibility gate
         half = width / 2.0
         buy_specs, sell_specs = [], []
 
-        # bubble scale = max single-row volume across the visible buckets (same as
-        # FootprintLayer, but over per-bucket levels rather than per-candle nodes)
+        # FIX 1 -- cull to the visible X viewport (the same x0/x1 pattern FootprintLayer
+        # already uses) so the bubble scale AND the 600-label budget serve only the
+        # ON-SCREEN buckets. Root fix: the live edge stops being starved by the oldest
+        # off-screen buckets eating the cap.
+        visible = [(float(xi), levels) for xi, levels in zip(x, levels_list)
+                   if levels and x0 - width <= float(xi) <= x1 + width]
+
         max_vol = 1.0
-        for levels in levels_list:
-            for v in (levels or {}).values():
+        for _xi, levels in visible:
+            for v in levels.values():
                 max_vol = max(max_vol, v.get("b", 0.0) + v.get("s", 0.0))
 
+        # FIX 3 -- in numbers mode fill the label budget NEWEST-first (reverse the
+        # visible order) so the live edge is labeled before the cap is spent.
+        # FIX 2 -- any level that can't get a number (rows too short = bubble mode, OR
+        # the cap is spent) falls back to a BUBBLE, so no visible bucket is ever blank.
         lo_all = hi_all = None
-        for xi, levels in zip(x, levels_list):
-            if not levels:
-                continue
-            xi = float(xi)
+        for xi, levels in (reversed(visible) if detailed else visible):
             for ps, v in levels.items():
                 price = float(ps); buy = v.get("b", 0.0); sell = v.get("s", 0.0)
                 tot = buy + sell
@@ -195,10 +206,9 @@ class BucketFootprintItem(pg.GraphicsObject):
                     continue
                 lo_all = price if lo_all is None else min(lo_all, price)
                 hi_all = price if hi_all is None else max(hi_all, price)
-                if detailed:
-                    if len(buy_specs) < _FP_TEXT_CAP:
-                        buy_specs.append((xi + width * 0.10, price, f"{buy:.0f}", QtGui.QColor(20, 110, 50)))
-                        sell_specs.append((xi - width * 0.10, price, f"{sell:.0f}", QtGui.QColor(150, 30, 25)))
+                if detailed and len(buy_specs) < _FP_TEXT_CAP:
+                    buy_specs.append((xi + width * 0.10, price, f"{buy:.0f}", QtGui.QColor(20, 110, 50)))
+                    sell_specs.append((xi - width * 0.10, price, f"{sell:.0f}", QtGui.QColor(150, 30, 25)))
                 else:
                     frac = tot / max_vol
                     r_px = 2.5 + 11.0 * frac
@@ -210,11 +220,12 @@ class BucketFootprintItem(pg.GraphicsObject):
         self.buy_pool.update(buy_specs); self.sell_pool.update(sell_specs)
         if lo_all is None:
             lo_all, hi_all = 0.0, 1.0
-        x0 = (float(x[0]) - half) if x else 0.0
-        x1 = (float(x[-1]) + half) if x else 1.0
-        # bounds are the real level range (within candle [low,high]) so the item never
-        # extends the one-shot Mode-10 Y-fit beyond the candles.
-        self._rect = QtCore.QRectF(x0, lo_all, max(1.0, x1 - x0), max(1e-6, hi_all - lo_all))
+        bx0 = (float(x[0]) - half) if x else 0.0
+        bx1 = (float(x[-1]) + half) if x else 1.0
+        # X bounds = full bucket extent (generous, no pan-cull flicker); Y bounds = the
+        # visible level range (within candle [low,high], so the item never extends the
+        # one-shot Mode-10 Y-fit beyond the candles).
+        self._rect = QtCore.QRectF(bx0, lo_all, max(1.0, bx1 - bx0), max(1e-6, hi_all - lo_all))
         self.prepareGeometryChange(); self.update()
 
     def paint(self, p, *a): p.drawPicture(0, 0, self.picture)

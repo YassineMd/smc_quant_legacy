@@ -1722,7 +1722,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_fp.setZValue(5)            # ladder above candles (z0), below the POC dot (z6)
             self._add_scanner_item(self.bc_fp)
             self._scan_handles["bc_fp"] = self.bc_fp
-        self.bc_fp.update_data(x, levels_list, 0.8, px_per_x, px_per_y)
+        self.bc_fp.update_data(x, levels_list, vx0, vx1, 0.8, px_per_x, px_per_y)  # vx0/vx1: viewport cull
 
         # --- order blocks mapped onto the integer bucket grid (§6.1) ---
         if "bc_obs" not in self._scan_handles:
