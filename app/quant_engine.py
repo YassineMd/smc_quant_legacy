@@ -162,6 +162,15 @@ class QuantBucket:
             "buyer_er": float(buyer_er),
             "seller_er": float(seller_er),
             "vol_mult": float(vol_mult),
+            # A3b-pre: per-bucket forced-liquidation volume by side. SHORTS liquidated =
+            # side "BUY" (forced buys) -> liq_short; LONGS liquidated = side "SELL" ->
+            # liq_long. WIRE-ADDITIVE, same rationale as `levels` below: _bucket_to_dict
+            # already persists b.liquidations, so NO BUCKET_SCHEMA_VERSION bump and NO
+            # history.db wipe. (b.liquidations is fed from the live liq stream in feeds.py.)
+            "liq_short": float(sum(q.get("qty", 0.0) for q in self.liquidations
+                                   if q.get("side") == "BUY")),
+            "liq_long": float(sum(q.get("qty", 0.0) for q in self.liquidations
+                                  if q.get("side") == "SELL")),
             # Stage 1 (Option A): carry the per-bucket footprint distribution on the
             # wire so Mode 10 can draw the ladder + true POC. WIRE-ADDITIVE — persistence
             # already inlines levels (_bucket_to_dict), so NO BUCKET_SCHEMA_VERSION bump

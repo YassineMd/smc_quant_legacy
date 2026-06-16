@@ -188,6 +188,15 @@ class MarketDataCore:
                             node.setdefault("liquidations", []).append(
                                 {"side": side, "price": price, "qty": qty}
                             )
+                        # A3b-pre: also attribute the forced order to that tf's live
+                        # volume bucket (the previously-dormant b.liquidations list) so
+                        # Mode 10's state engine can read per-bucket liq volume. Same
+                        # daemon event loop as _process_aggtrade -> race-free.
+                        eng = self.engines.get(tf)
+                        if eng is not None and eng.active_bucket is not None:
+                            eng.active_bucket.liquidations.append(
+                                {"side": side, "price": price, "qty": qty}
+                            )
 
                     self.broadcast_all(
                         LiquidationPacket(side=side, price=price, qty=qty, time=ts_sec).to_line()

@@ -68,6 +68,8 @@ class BucketSnapshot(TypedDict):
     buyer_er: float      # buyer effort/result (volume / ticks)
     seller_er: float     # seller effort/result
     vol_mult: float      # velocity ratio vs the rolling average (vel_ratio)
+    liq_short: float     # A3b-pre: forced-buy volume in this bucket (SHORTS liquidated); wire-additive, default 0.0
+    liq_long: float      # A3b-pre: forced-sell volume in this bucket (LONGS liquidated); wire-additive, default 0.0
     levels: Dict[str, dict]  # Stage 1: per-price {price_str: {"b","s"}} footprint ladder (wire-additive; default {} pre-upgrade)
 
 
