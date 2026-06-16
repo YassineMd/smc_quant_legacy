@@ -125,6 +125,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.plot.showAxis("right"); self.plot.hideAxis("left")
         self.plot.showGrid(x=True, y=True, alpha=0.12)
         self.plot.setMenuEnabled(False)
+        # Group C fix: the crosshair (60Hz, full-span, antialiased InfiniteLine) trails
+        # under the PlotWidget's default MinimalViewportUpdate + CacheBackground — the
+        # vacated column isn't invalidated, so old pixels smear until a pan/zoom forces a
+        # full repaint. BoundingRectViewportUpdate repaints the bounding rect of ALL
+        # changes (which includes the crosshair's old+new band), clearing the trail; it
+        # stays a BAND, not a full-viewport repaint, so the busy-canvas cost stays bounded.
+        self.plot.setViewportUpdateMode(
+            QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
         self.vb = self.plot.getViewBox()
         self.vb.setMouseMode(pg.ViewBox.PanMode)
         self.vb.setLimits(xMin=None, xMax=None, yMin=None, yMax=None)
@@ -1559,6 +1567,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.lower_plot.getAxis(_ax).setTextPen(pg.mkPen("#dcdcdc"))
         self.lower_plot.showGrid(x=True, y=True, alpha=0.12)
         self.lower_plot.setMenuEnabled(False)
+        self.lower_plot.setViewportUpdateMode(   # Group C: same anti-trail policy as the main pane
+            QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
         self.lower_plot.getAxis("bottom").set_scanner_active(True)
         self.lower_plot.getViewBox().setMouseEnabled(x=True, y=False)
         # autorange OFF so the X-link (not the VPIN bars' own bounds) drives X,
