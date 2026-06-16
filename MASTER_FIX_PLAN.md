@@ -41,6 +41,33 @@ and the **rule** that no overlay is consolidated onto Mode 10 before its logic i
 
 ---
 
+## Committed endgame order (locked 2026-06-16)
+
+What remains to a trustworthy daily-driver Mode 10, in order. **A4 (overlay toggles) is DONE**
+(`732d892 → 08a1ef3`); the Group A/B/C/D buckets and the Phases still hold their content — this
+orders what's left and why.
+
+1. **VIEW-FOLLOW** *(NEXT — propose-first design)*. The view must track the live edge. Decide the
+   follow semantics (auto-follow / hold-with-snap-back / hybrid); fold in the candle-framing /
+   forecast-cloud Y-exclusion (the old A0 goal). Replaces the one-shot `_fit_scanner_y`.
+2. **A5 — Mode 10 first + default-on-open.** Reorder the scanner list + open into Mode 10. The
+   **time chart is DEMOTED, not deleted** — stays in the list as a fallback. *Why after view-follow:*
+   A5 makes Mode 10 the surface you're dropped onto every launch; a frozen fit whose live edge walks
+   off-screen is tolerable for a mode you switch INTO, hostile for your permanent home. Quality gate.
+3. **Churn-color CORRECTNESS sliver.** Minimal honest treatment: a no-conviction / zero-vector bucket
+   must **not** render as a conviction color — just stop the lie (the `_neon_v2_brush` zero-vector→green
+   bug). Beauty (the deliberate churn identity) waits for Phase 3. *Why before calibration:* calibration
+   is sensory — you cross-check verdicts against candle colors, so a churn bucket painted bright-green
+   pollutes the exact signal you're tuning against.
+4. **State-engine live calibration** *(days of real market)*. Tune `app/bucket_state.py` constants
+   against live verdicts; top priority = any confident/starred verdict that's wrong. See
+   `scripts/STATE_ENGINE_TUNING.md`.
+5. **LATER (only after living on Mode 10 as default + trusting it):** time-chart full removal (+ the
+   dead Technical-Layers-menu cleanup) · Phase 2 OB fidelity · Phase 3 visual (churn beauty + the
+   cyan/magenta color cleanup).
+
+---
+
 ## Mode 10 primary-surface punch list (operator, from live canvas use — 2026-06-16)
 
 Observed by the operator trading off the live Mode 10 canvas (after the Stage-0 true-POC
