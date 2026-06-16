@@ -57,9 +57,11 @@ phases.**
 ### Group A — "Mode 10 as the primary surface" (the next build — ONE coherent step)
 - **Make Mode 10 first** in the scanner-mode list **AND the default chart** on terminal
   open (today it opens on the time chart / "Off").
-- **Open-zoom frames the CANDLES, not the full kinetic-forecast extent.** Candles render
-  tiny because the bull/bear forecast lines blow out the one-shot Y-fit — fit to the
-  candle (OHLC) range and let the forecast cloud clip.
+- ~~**Open-zoom frames the candles.**~~ **REMOVED from Group A — reclassified as a
+  deliberate VIEW-FOLLOW design step (below).** Attempted as A0 (exclude the forecast
+  cloud from the Y-fit + a footprint-scale reorder) and **REVERTED 2026-06-16**: it is
+  *not* a simple Y-fit — it exposed a latent frozen-view bug. Root cause + the real fix
+  are in "Mode 10 view-follow" below.
 - **Per-overlay ON/OFF toggles, each independent:** POC, footprint ladder, icebergs,
   buy/sell imbalance gaps, liquidation marks, order blocks.
 - **Upgrade the Mode 10 stats/hover box** to match the time-chart's richness, PLUS
@@ -67,6 +69,25 @@ phases.**
 - **Remove the redundant gold POC ring/box** (the Stage-1 ladder highlight) — keep ONLY
   the gold POC dot (Stage 0).
 - **Cursor shows the Y-axis value (price)** in all modes.
+
+### Mode 10 view-follow — DELIBERATE DESIGN STEP (was Group A "open-zoom"; reclassified 2026-06-16)
+**Not a quick polish item — its own deliberate step, done later, NOT now.** A0 tried to fix
+"candles open zoomed-out" with a one-line Y-fit change (exclude the forecast cloud so the
+candles aren't blown tiny) plus a footprint-scale reorder. It was **reverted** — it traded a
+minor annoyance for a real regression: live buckets fell off the frozen view and their
+footprints went blank.
+- **Diagnosed root cause:** the Mode 10 view does a **ONE-SHOT frozen fit** (`_fit_scanner_y`
+  runs only on mode / tf / Zero-Point change — *never* as new buckets form). The oversized
+  **forecast-cloud Y-range was accidentally the cushion** that kept new buckets on-screen.
+  Tightening the fit to the candles (A0) removed that cushion and **exposed the latent
+  frozen-view bug**: new buckets form at X ordinals past the frozen right edge (and Y prices
+  past the now-tight range) and render off-screen — baked correctly but blank. (The footprint
+  bake is fine; this is a view-*follow* problem, not a scale problem.)
+- **The REAL fix = a "view follows the live edge" feature**, of which candle-framing is only
+  one part. **Decide the follow semantics first:** auto-follow (track the right edge + roll Y
+  with live price) · hold-with-snap-back (stay put; snap to the live edge on a key/button) ·
+  hybrid (follow unless the user has manually panned). **Fold the forecast-cloud exclusion in
+  at that point** so candle-framing and live-follow land *together*, not separately.
 
 ### Group B — order-book DOM on the canvas (its OWN Phase-3 step — bigger, own plumbing)
 - Order-book **DOM ladder** + green/red **depth-wall horizontal lines**; default depth
