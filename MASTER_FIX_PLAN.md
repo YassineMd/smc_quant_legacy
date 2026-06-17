@@ -74,9 +74,101 @@ still hold their content — this orders what's left and why.
    single price (POC dot at center), no body/fill. Ranged dojis (open==close, high≠low) keep their sliver +
    wicks. Closes the gray-column **correctness** half; the tall 45%-transparent *ranged* churn bucket stays
    the Phase-3 churn-opacity beauty item.
-4. **State-engine live calibration** *(NEXT — days of real market)*. Tune `app/bucket_state.py` constants
-   against live verdicts; top priority = any confident/starred verdict that's wrong. See
-   `scripts/STATE_ENGINE_TUNING.md`.
+4. **State-engine live calibration** *(IN PROGRESS — days of real market)*. Tune `app/bucket_state.py`
+   constants against live verdicts; top priority = any confident/starred verdict that's wrong. See
+   `scripts/STATE_ENGINE_TUNING.md`. Live findings:
+   - ✅ **PREREQUISITE — engine integrity: the space_left guard (2026-06-17, `424438f`, VERIFIED live).**
+     Calibration was blocked by impossible NEGATIVE vectors: `process_tick` subtracted a negative chunk whenever
+     `target_vol` recalibrated BELOW the active bucket's curr_vol (`space_left < 0`), driving opS/sell_vol negative
+     (conservation held; non-negativity broke). Guard: `space_left <= 0` → close the over-full bucket (grandfathered)
+     and restart, never add a negative chunk. Shared bucketing logic, so it poisoned BOTH old history and new buckets
+     (the stale 06-14 `dist\` daemon exe + the removed kline-delta path were red herrings — the real cause was this).
+     `scripts/test_space_left_guard.py` reproduces→resolves; live proof = 2,983 post-wipe buckets, 0 negatives,
+     0 conservation failures, 142 recalibrate-down events all grandfathered clean.
+   - ✅ **COMMIT A — NEUTRAL-STATES DIRECTIONAL GUARD (the `notCommitted` factor) — BUILT + live-verified, 2026-06-17.**
+     The neutral states (CHOP, ROTATION) confidently claimed buckets where something clearly DID happen — they read
+     only velocity/delta/liq fractions and were blind to EFFORT, OI BUILDING, and PRICE MOVEMENT. THREE live instances
+     of one structural gap:
+       • **592 — absorption:** 8.7K vol, +85%/+50% E/R → ★ CHOP 82. Effort was being ABSORBED, not "nothing happening."
+       • **327 — building:** ★ CHOP 96% on `opL ~17%` + OI building = accumulation (STRONG zeroed by `delta −17%`).
+       • **608 — movement:** ★ CHOP 94% on a decisive churn-driven MARKDOWN (`|result|=0.85`, 83% churn, no fresh OI).
+     FIX = CHOP gains ONE core factor `notCommitted = 1 − max(absorption, building, moved)` — "nothing happened" means
+     NONE of the ways something could happen fired: `absorption = ramp(max(b_mult,s_mult); ABSORB 1.20/2.00)`,
+     `building = ramp(doi_frac>0; BUILD 0.08/0.18)` (signed — a balanced unwind isn't commitment),
+     `moved = ramp(|result|; MOVED 0.55/0.80)`. ROTATION gets the same coverage with NO new factors: `oiNeutral`
+     tightened (`OI_NEUTRAL_HI 0.35→0.22`) for building + `moved` folded into `calm` (`1 − max(delta-aggr, moved)`) for
+     movement. **WHY one max()-factor, not three parallel (hard-won):** the geomean's n-th root means each EXTRA ~1.0
+     factor RAISES the score (dilution) — a separate `notBuilding=1.0` on the absorbed 592 flipped it back to ★CHOP 64;
+     only checking BOTH 327 AND 592 caught it (prove-don't-assume). So every guard collapses into one max() per state.
+     RESULT (live-verified): 592 → BULL EXHAUSTION 60 (CHOP 57), 327 → ROTATION 55 (CHOP 41, honest low-confidence
+     "leaning rotation"), 608 → NEUTRAL 20 (honest "moved but fits no pattern"). Suite 11/11 (synthetic: oi-building →
+     NEUTRAL, decisive-move → NEUTRAL, genuine CHOP/ROTATION green). SUBSUMES the earlier separately-held `notAbsorbed`
+     (now the absorption arm) AND resolves the ROTATION `oiNeutral` leniency watch-item (now tightened to 0.22).
+     `MOVED_LO>0.50` on purpose: 327 is a half-trend-bar (`|result|=0.50`) and STAYS ROTATION; only a one-way bar
+     (>0.55) demotes. Endpoints are starting guesses; live-tune. Further-tune trigger: if buckets with `opL >20–25%`
+     still read ROTATION not STRONG, tighten `OI_NEUTRAL_HI`/`OPEN_OI` more. One bucket isn't calibration; do NOT tune
+     against outcomes (rotation coils before breakouts — not a target).
+   - **DEFERRED — absorption arm for ROTATION.** ROTATION now has building (`oiNeutral`) + movement (`calm`) coverage,
+     but still reads no `b_mult`/E-R — so a high-energy ABSORBED churny bucket can still misread ROTATION. Lower
+     priority than CHOP was. Fold an absorption arm into a ROTATION factor (via max(), NOT a parallel factor) eventually.
+   - **DEFERRED CANDIDATE (don't build; watch first) — a DIRECTIONAL "CHURN MARKDOWN / DISTRIBUTION" new state.**
+     A real phenomenon the engine has NO positive verdict for: price moves DECISIVELY via position TRANSFER (high
+     churn), with low fresh-OI and no/mild absorption — fitting no directional state (STRONG needs fresh OI;
+     EXHAUSTION needs absorption; these buckets have neither, so both correctly gate to 0). TWO instances logged:
+       • **608 — NEUTRAL markdown** (no delta lean): O 72.22→C 71.89, `|result|=0.85`, 83% churn, ~0 fresh OI,
+         delta ~0. The `moved` arm fully fires (0.85 > HI) → CHOP 94→0 → **NEUTRAL 20**. Honest, label fits.
+       • **611 — BEARISH markdown** (heavy delta lean): O 71.83→C 71.72, `|result|=0.69`, 76% churn, opS 14%
+         fresh, **delta −43%** (Δaggr 0.72), seller E/R +10% (mild friction, BELOW the 1.20 absorb floor). STRONG
+         BEAR scores 45 — the engine SEES the bearish character — but is gated by `freshOI=0.10` (only 14% fresh
+         shorts = distribution, not initiation). `moved` only PARTIALLY fires (0.69 < HI → 0.55) so CHOP lands at
+         **59**. The 59/45/44 near-tie is honestly "nothing cleanly fits", but the CHOP *label* undersells a
+         decisive red bar. (Irony: the MORE-bearish 611 reads CHOP 59 while the less-bearish 608 reads NEUTRAL 20 —
+         purely because 611's `|result|` is lower, partially vs fully firing `moved`. Not the bearish character.)
+     THE REFINEMENT (from 611): the candidate must be **DIRECTIONAL** — lean bull/bear from the delta sign, not a
+     flat NEUTRAL. 611 should read "DISTRIBUTION (bearish) ~55-60", capturing the lean NEUTRAL can't.
+     SIGNATURE: high churn + decisive `|result|` + DIRECTIONAL delta (bull/bear) + low fresh-OI + no/mild absorption.
+     THE TRAP (do NOT take it): loosening `freshOI` or tightening `MOVED_HI` would flip 611 into STRONG BEAR — but
+     that mislabels transfer-driven distribution as "fresh conviction", re-breaking the initiation/transfer line
+     `freshOI` exists to draw. The honest home is THIS state, not a weak STRONG BEAR. Open question is FREQUENCY
+     (2 instances: 608 neutral, 611 bearish) — keep COUNTING before deciding to build; a new state needs its own
+     signature test + validation. DECIDE AFTER MORE LIVE WATCHING — do not build pre-emptively.
+   - **DEFERRED CANDIDATE — "ABSORPTION / STALL" in the DIRECTIONAL states (HIGHER PRIORITY than the churn-markdown
+     candidate above — wrong-way risk, not just understatement; watch first).** The MIRROR of churn-markdown: there
+     price MOVED via churn (neutral states were blind to HIGH `|result|`); here price does NOT move despite heavy
+     directional effort (directional states blind to LOW `|result|` = absorption). Result-awareness is HALF-WIRED —
+     the `moved` guard (Commit A) fixed the neutral half; the directional half (effort-without-movement = absorption
+     ≠ strong) is UNBUILT.
+       • **682 — instance #1 (bearish absorption).** O 71.75→C 71.73 (`|result|=0.33`, only 2 ticks on a 6-tick
+         range), Sell 13.5K / Buy 4.3K (delta −52%, Δaggr 0.93), opS 18% fresh shorts, **Seller E/R +40%**
+         (`s_mult=1.40` = heavy absorption), OI **building** (+2.5K) → reads **STRONG BEAR 54**. THE DAMNING FACT:
+         the absorption barely registered — it only dropped `translate` to 0.86 (the 1.30/2.00 ramp is too lenient)
+         — and STRONG has NO `|result|` check, so the ONLY thing capping 682 is modest fresh OI (`freshOI=0.20`
+         binds). A SAME-absorbed bucket with ~40% fresh shorts would read STRONG BEAR **~76% (near-★)** despite full
+         absorption. EXHAUSTION can't catch it either: its `absorb` arm fired (0.25) but the `drain/cover` GATE is 0
+         (OI building + opening flow → EXHAUSTION = absorption of CLOSING/draining flow; 682 = absorption of OPENING
+         flow, no route).
+     WRONG-WAY RISK (why higher priority): 611's CHOP merely UNDERSOLD a real bearish move (right direction); 682's
+     "STRONG BEAR" can point the OPPOSITE way — absorbed fresh shorts often precede a SQUEEZE (bounce), so a
+     continuation read leans into reversal-risk. An INVERTED signal, not just understated.
+     TWO FRAMINGS (decide which after watching):
+       (a) RESULT FLOOR (a GUARD, the symmetric mirror of `moved`): STRONG BULL/BEAR demote when `|result|` is LOW
+           and E/R is HIGH — effort that didn't translate to price isn't "strong". Fixes the lie by demoting (→
+           NEUTRAL / low-confidence), same shape as the neutral-states `moved` guard.
+       (b) ABSORPTION / STALL (a new STATE): fresh directional effort + high E/R + low `|result|` + OI building → a
+           positive "bears/bulls being absorbed" verdict — and as a bonus flags the squeeze-risk DIRECTLY.
+     SIGNATURE: directional delta + fresh OI + high E/R (`s_mult`/`b_mult` ≥ ~1.30) + low `|result|` + OI building.
+     Watch-first: COUNT how often absorbed-stall buckets appear (1 instance: 682). DECIDE AFTER MORE WATCHING — do
+     not build pre-emptively.
+   - **DEFERRED (only if needed) — tighten CHOP velocity.** If busy-but-NOT-absorbed buckets (high `vol_mult`,
+     normal E/R) still misfire as CHOP after the E/R guard, promote the soft `quiet` to a CORE factor with a
+     tighter `CHOP_VEL_HI` (~1.40 vs today's lenient 2.20). Second step only — NOT stacked with the E/R guard.
+   - **LATENT WATCH-ITEM — two velocity sources can disagree on neon.** The candle brush (`_bucket_vel_ratios`,
+     terminal.py:1507) uses `(buy+sell)/duration` over a **mean** of the last-20 buckets; the stats VEL line + the
+     state engine's `vel_ratio` use `(target_vol/duration)/median(rolling_velocity)` (quant_engine.py:337) — different
+     numerator AND different baseline stat (mean vs median) over noisy 1m durations. On bucket 327 they agreed "slow"
+     (brush 0.59 vs engine 0.95), but a future bucket could cross the neon `2.5` threshold on the brush while the
+     engine reads slow → candle neon while VEL says slow (a real candle-vs-stats inconsistency). Eventually unify onto
+     one velocity source (likely the engine's `vel_ratio`, so the candle matches the states/stats). Not now.
 5. **LATER (only after living on Mode 10 as default + trusting it):** time-chart full removal (+ the
    dead Technical-Layers-menu cleanup) · Phase 2 OB fidelity · Phase 3 visual (churn beauty + the
    cyan/magenta color cleanup).

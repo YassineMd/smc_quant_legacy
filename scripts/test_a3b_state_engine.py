@@ -90,6 +90,20 @@ s, c = run(mk(open=100, high=102, low=98, close=100, buy_vol=510, sell_vol=490,
               churn=950, opL=20, opS=20, clL=5, clS=5, vol_mult=1.1))
 check("rotation", s, c, "ROTATION", 70, 100)
 
+# Directional-opening guard: a clearly OI-BUILDING bucket (opL 30% of vol, slow, inside-bar,
+# low delta) must NOT read CHOP or ROTATION — both neutral states are killed by the building
+# guards (CHOP notCommitted's building arm, ROTATION tightened oiNeutral) -> falls to NEUTRAL.
+s, c = run(mk(open=100, high=100.3, low=99.9, close=100.1, curr_vol=10000.0,
+              buy_vol=5200.0, sell_vol=4800.0, opL=3000.0, churn=7000.0, vol_mult=0.8))
+check("oi-building", s, c, "NEUTRAL", 1, 40)
+
+# Movement guard (the 3rd notCommitted arm): a DECISIVE directional close (|result|~0.87, a churn-driven
+# markdown) with NO fresh OI and NO absorption must NOT read CHOP or ROTATION — both neutral states are
+# blind to |result| without this guard. inside-bar + quiet + mild sell-lean, but it MOVED -> NEUTRAL.
+s, c = run(mk(open=100.8, high=100.9, low=99.3, close=99.4, buy_vol=420, sell_vol=580,
+              opL=50, opS=60, clL=30, clS=30, churn=830, vol_mult=0.8))
+check("decisive-move", s, c, "NEUTRAL", 1, 40)
+
 s, c = run(mk(open=100, high=100.4, low=99.7, close=100.0, buy_vol=500, sell_vol=500,
               churn=500, clL=250, clS=250, vol_mult=0.8))
 check("chop", s, c, "CHOP", 70, 100)

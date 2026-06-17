@@ -52,7 +52,11 @@ RECLAIM_LO, RECLAIM_HI = 0.00, 0.30      # (close past the swept level)/range �
 LIQ_LO, LIQ_HI = 0.03, 0.20              # liq_side/vol — forced flow
 LIQ_COIL_LO, LIQ_COIL_HI = 0.03, 0.15    # liq_total/vol — liqs absorbed inside the coil
 CHURN_LO, CHURN_HI = 0.55, 0.90          # churn/vol — OI-neutral transfer
-OI_NEUTRAL_LO, OI_NEUTRAL_HI = 0.05, 0.35  # |ΔOI|/vol — low = rotation
+OI_NEUTRAL_LO, OI_NEUTRAL_HI = 0.05, 0.22  # |ΔOI|/vol — low = rotation (tightened 0.35→0.22: a 17%+ net-OI lean isn't rotation)
+BUILD_LO, BUILD_HI = 0.08, 0.18          # doi_frac>0 (net OI BUILDING) — CHOP's notBuilding guard (accumulation != chop)
+MOVED_LO, MOVED_HI = 0.55, 0.80          # |result|=|c-o|/range (trend-bar fraction) — a decisive directional close
+#   (CHOP/ROTATION's notMoved guard: a churn-driven markdown that MOVED price isn't "nothing happened". LO>0.50 on
+#    purpose — a half-trend-bar like the 327 building-bucket stays ROTATION; only a clearly one-way bar demotes.)
 RANGE_COMPRESS_LO, RANGE_COMPRESS_HI = 0.60, 1.20  # range/atr — inside-bar compression
 
 # ── squeeze floor (gradient-preserving) ────────────────────────────────────
@@ -130,6 +134,7 @@ def _score_and_factors(buckets: list, idx: int, b_mult: float, s_mult: float):
     churn_frac = churn / vol
     poc_pos = (poc - lo) / rng
     result = (c - o) / rng                 # signed follow-through (>0 green, <0 red)
+    moved = _ramp(abs(result), MOVED_LO, MOVED_HI)  # decisive trend-bar close → the neutral-state "did something happen" guard
     green = c >= o
     liqS_frac = liq_short / vol
     liqL_frac = liq_long / vol
@@ -233,19 +238,32 @@ def _score_and_factors(buckets: list, idx: int, b_mult: float, s_mult: float):
             "calm": 1.0 - _ramp(abs(delta_frac), DELTA_LO, DELTA_HI),
         }
 
-    # ── ROTATION / CHURN: OI-neutral breathing — high churn, low net OI + direction ──
+    # ── ROTATION / CHURN: OI-neutral breathing — high churn, low net OI, no direction, NO decisive move.
+    #    'calm' folds the |result| movement guard into the delta-aggression ramp via max() (NOT a separate
+    #    4th factor — that would dilute a real rotation): a decisive trend-bar close isn't breathing. ──
     F["ROTATION"] = {
         "churn": _ramp(churn_frac, CHURN_LO, CHURN_HI),
         "oiNeutral": 1.0 - _ramp(abs(doi_frac), OI_NEUTRAL_LO, OI_NEUTRAL_HI),
-        "calm": 1.0 - _ramp(abs(delta_frac), DELTA_LO, DELTA_HI),
+        "calm": 1.0 - max(_ramp(abs(delta_frac), DELTA_LO, DELTA_HI), moved),  # still = no aggression AND no decisive move
     }
 
-    # ── CHOP: inside-bar + quiet + no direction (and no forced flow -> that's a COIL) ──
+    # ── CHOP: inside-bar + quiet + no direction + no forced flow (liqs -> COIL) + NOTHING HAPPENED.
+    #    CHOP means "nothing happened," so ONE factor — notCommitted — MAXes together every way something
+    #    COULD have happened and subtracts it: notCommitted = 1 - max(absorption, building, moved):
+    #      • absorption: effort neutralized (b/s_mult z firing)
+    #      • building:   net OI accumulating (doi_frac>0, signed — a balanced unwind isn't commitment)
+    #      • moved:      a decisive directional close (|result| trend-bar — a churn-driven markdown MOVED price)
+    #    MAX'd into ONE factor, not three, ON PURPOSE: the geomean's n-th root means each EXTRA factor
+    #    dilutes the others (a separate notBuilding=1.0 on an absorbed bucket softened notAbsorbed's
+    #    demotion and flipped 592 back to CHOP), so all three guards collapse into a single max(). ──
     if inside_bar:
         F["CHOP"] = {
             "quiet": 1.0 - _ramp(vel, VEL_LO, VEL_HI),
             "calm": 1.0 - _ramp(abs(delta_frac), DELTA_LO, DELTA_HI),
             "noLiq": 1.0 - _ramp(liq_total_frac, LIQ_COIL_LO, LIQ_COIL_HI),
+            "notCommitted": 1.0 - max(_ramp(max(b_mult, s_mult), ABSORB_LO, ABSORB_HI),
+                                      _ramp(doi_frac, BUILD_LO, BUILD_HI),
+                                      moved),
         }
 
     # score = geomean of each state's factors (identical to the prior per-state _geo calls)
