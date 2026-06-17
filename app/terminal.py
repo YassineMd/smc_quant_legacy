@@ -489,6 +489,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             h = self._scan_handles.get("bc_liq")   # scatter, no sub-pools -> plain setVisible
             if h is not None:
                 h.setVisible(on)
+        elif key == "m10_statedebug":
+            # Calibration instrument: extra stats-box lines produced at hover time
+            # (_hover_context reads layer_state). No scene item to manage here; the
+            # live-breathe / next hover re-renders the box with or without the block.
+            pass
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -712,7 +717,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             def vc(name): return vclr[name] if (name in top2 and vmag[name] > 0) else gray
             # A3b — the one interpretive line: best-scoring state + calibrated confidence.
             state, conf = bucket_state.classify_bucket(buckets, idx, bm, sm)
-            return [
+            lines = [
                 f"O {pf(o)}  H {pf(h)}  L {pf(l)}  {span('C '+pf(c), g if c >= o else r)}",
                 f"Elapsed {dur:.1f}s   {span('POC '+pf(poc), gold)}",
                 sep("FLOW"),
@@ -732,6 +737,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 f"VEL {span(f'{vel:.2f}x', gold)}",
                 f"STATE {bucket_state.render_state_line(state, conf)}",
             ]
+            if self.menu.layer_state("m10_statedebug"):   # calibration: top-3 states + winner factors
+                lines += bucket_state.render_debug_lines(buckets, idx, bm, sm)
+            return lines
         if mode == "vpin":
             window = buckets[max(0, idx - 49): idx + 1]
             ti = sum(abs(x.get("buy_vol", 0.0) - x.get("sell_vol", 0.0)) for x in window)

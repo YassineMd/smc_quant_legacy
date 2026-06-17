@@ -75,6 +75,7 @@ _M10_LAYERS = [
     ("m10_obs", "Order Blocks", False, True),             # clean fast canvas; add depth on
     ("m10_liq", "Liquidation Marks", False, True),        # demand. In-session toggles persist
     ("m10_stats", "Stats Box", True, True),               # (checkbox state); only a restart resets.
+    ("m10_statedebug", "State Debug (calib)", False, True),  # top-3 states + winner factors in the box
     ("m10_icebergs", "Icebergs (Phase 3)", False, False),
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
 ]

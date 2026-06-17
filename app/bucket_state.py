@@ -102,12 +102,15 @@ def _geo(*vals: float) -> float:
     return prod ** (1.0 / len(vals)) if vals else 0.0
 
 
-def state_scores(buckets: list, idx: int, b_mult: float, s_mult: float) -> "dict[str, float]":
-    """Every state's raw score for bucket ``idx`` (exposed for tests/debug)."""
+def _score_and_factors(buckets: list, idx: int, b_mult: float, s_mult: float):
+    """Core scorer → ``(scores, factors, floored)``. ``factors`` is ``{state: {name: value}}``
+    — the geomean inputs and the SINGLE SOURCE for both the score (``_geo(*values)``) and the
+    debug breakdown, so the two can never drift. ``floored`` = squeeze states the gradient
+    floor lifted over their geomean."""
     b = buckets[idx]
     vol = b.get("curr_vol", 0.0)
     if vol <= 0.0:
-        return {"NEUTRAL": NEUTRAL_SCORE}
+        return {"NEUTRAL": NEUTRAL_SCORE}, {}, set()
     eps = config.TICK_SIZE
 
     o = b.get("open", 0.0); h = b.get("high", 0.0)
@@ -151,107 +154,122 @@ def state_scores(buckets: list, idx: int, b_mult: float, s_mult: float) -> "dict
     trans_b = 1.0 - _ramp(b_mult, TRANSLATE_LO, TRANSLATE_HI)   # effort translating (strong)
     trans_s = 1.0 - _ramp(s_mult, TRANSLATE_LO, TRANSLATE_HI)
 
-    S: "dict[str, float]" = {}
+    # Named factors per state — the SINGLE SOURCE for both the score (geomean of the
+    # values, below) and the debug breakdown, so the two can never drift apart.
+    F: "dict[str, dict[str, float]]" = {}
 
     # ── STRONG: clean conviction — fresh OI, price follows, effort TRANSLATES ──
     if green:
-        S["STRONG BULL"] = _geo(
-            _ramp(delta_frac, DELTA_LO, DELTA_HI),
-            _ramp(opL / vol, OPEN_OI_LO, OPEN_OI_HI),
-            trans_b,
-            _soft(vel, VEL_LO, VEL_HI),
-        )
+        F["STRONG BULL"] = {
+            "Δaggr": _ramp(delta_frac, DELTA_LO, DELTA_HI),
+            "freshOI": _ramp(opL / vol, OPEN_OI_LO, OPEN_OI_HI),
+            "translate": trans_b,
+            "vel": _soft(vel, VEL_LO, VEL_HI),
+        }
     else:
-        S["STRONG BEAR"] = _geo(
-            _ramp(-delta_frac, DELTA_LO, DELTA_HI),
-            _ramp(opS / vol, OPEN_OI_LO, OPEN_OI_HI),
-            trans_s,
-            _soft(vel, VEL_LO, VEL_HI),
-        )
+        F["STRONG BEAR"] = {
+            "Δaggr": _ramp(-delta_frac, DELTA_LO, DELTA_HI),
+            "freshOI": _ramp(opS / vol, OPEN_OI_LO, OPEN_OI_HI),
+            "translate": trans_s,
+            "vel": _soft(vel, VEL_LO, VEL_HI),
+        }
 
     # ── EXHAUSTION: Step-5 z firing + OI draining / closing-flow powered ──
     if green:
-        S["BULL EXHAUSTION"] = _geo(
-            absb,
-            max(_ramp(-doi_frac, DRAIN_OI_LO, DRAIN_OI_HI), _ramp(clS / vol, CLOSE_FLOW_LO, CLOSE_FLOW_HI)),
-            _soft(delta_frac, DELTA_LO, DELTA_HI),
-        )
+        F["BULL EXHAUSTION"] = {
+            "absorb": absb,
+            "drain/cover": max(_ramp(-doi_frac, DRAIN_OI_LO, DRAIN_OI_HI),
+                               _ramp(clS / vol, CLOSE_FLOW_LO, CLOSE_FLOW_HI)),
+            "Δsoft": _soft(delta_frac, DELTA_LO, DELTA_HI),
+        }
     else:
-        S["BEAR EXHAUSTION"] = _geo(
-            abss,
-            max(_ramp(-doi_frac, DRAIN_OI_LO, DRAIN_OI_HI), _ramp(clL / vol, CLOSE_FLOW_LO, CLOSE_FLOW_HI)),
-            _soft(-delta_frac, DELTA_LO, DELTA_HI),
-        )
+        F["BEAR EXHAUSTION"] = {
+            "absorb": abss,
+            "drain/cover": max(_ramp(-doi_frac, DRAIN_OI_LO, DRAIN_OI_HI),
+                               _ramp(clL / vol, CLOSE_FLOW_LO, CLOSE_FLOW_HI)),
+            "Δsoft": _soft(-delta_frac, DELTA_LO, DELTA_HI),
+        }
 
     # ── TRAP: effort ABSORBED → reversal. Hard gate = result against the aggressor.
     #    Core = aggression × failure depth; soft = swept level, POC placement, absorption.
     if result < 0.0:    # closed RED despite buying = BULL trap
-        S["BULL TRAP"] = _geo(
-            _ramp(delta_frac, DELTA_LO, DELTA_HI),       # buyers were the aggressor
-            _ramp(-result, FAIL_LO, FAIL_HI),            # the failure (red depth)
-            _soft(swept_above, SWEEP_LO, SWEEP_HI),      # poked the high (bait)
-            _soft(poc_pos, POC_LO, POC_HI),              # POC stacked HIGH (overhead reload)
-            _soft(b_mult, ABSORB_LO, ABSORB_HI),         # absorption confirm
-        )
+        F["BULL TRAP"] = {
+            "Δaggr": _ramp(delta_frac, DELTA_LO, DELTA_HI),       # buyers were the aggressor
+            "fail": _ramp(-result, FAIL_LO, FAIL_HI),            # the failure (red depth)
+            "swept": _soft(swept_above, SWEEP_LO, SWEEP_HI),     # poked the high (bait)
+            "pocHigh": _soft(poc_pos, POC_LO, POC_HI),           # POC stacked HIGH (reload)
+            "absorb": _soft(b_mult, ABSORB_LO, ABSORB_HI),       # absorption confirm
+        }
     if result > 0.0:    # closed GREEN despite selling = BEAR trap
-        S["BEAR TRAP"] = _geo(
-            _ramp(-delta_frac, DELTA_LO, DELTA_HI),
-            _ramp(result, FAIL_LO, FAIL_HI),
-            _soft(swept_below, SWEEP_LO, SWEEP_HI),
-            _soft(1.0 - poc_pos, POC_LO, POC_HI),        # POC stacked LOW
-            _soft(s_mult, ABSORB_LO, ABSORB_HI),
-        )
+        F["BEAR TRAP"] = {
+            "Δaggr": _ramp(-delta_frac, DELTA_LO, DELTA_HI),
+            "fail": _ramp(result, FAIL_LO, FAIL_HI),
+            "swept": _soft(swept_below, SWEEP_LO, SWEEP_HI),
+            "pocLow": _soft(1.0 - poc_pos, POC_LO, POC_HI),      # POC stacked LOW
+            "absorb": _soft(s_mult, ABSORB_LO, ABSORB_HI),
+        }
 
-    # ── SQUEEZE: forced covering (gated on liqs) + gradient-preserving floor ──
+    # ── SQUEEZE: forced covering (gated on liqs); gradient floor applied after the geomean ──
     if green and liq_short > 0.0:
-        raw = _geo(
-            _ramp(liqS_frac, LIQ_LO, LIQ_HI),
-            _ramp(-doi_frac, DRAIN_OI_LO, DRAIN_OI_HI),   # OI draining = forced CLOSING
-            _ramp(vel, VEL_SQUEEZE_LO, VEL_SQUEEZE_HI),
-            _soft(reclaim_up, RECLAIM_LO, RECLAIM_HI),
-        )
-        if liqS_frac >= SQUEEZE_FLOOR_LIQ:
-            raw = max(raw, SQUEEZE_FLOOR + (1.0 - SQUEEZE_FLOOR)
-                      * _ramp(liqS_frac, SQUEEZE_FLOOR_LIQ, SQUEEZE_FLOOR_SAT))
-        S["SHORT SQUEEZE"] = raw
+        F["SHORT SQUEEZE"] = {
+            "liq": _ramp(liqS_frac, LIQ_LO, LIQ_HI),
+            "drainOI": _ramp(-doi_frac, DRAIN_OI_LO, DRAIN_OI_HI),   # OI draining = forced CLOSING
+            "vel": _ramp(vel, VEL_SQUEEZE_LO, VEL_SQUEEZE_HI),
+            "reclaim": _soft(reclaim_up, RECLAIM_LO, RECLAIM_HI),
+        }
     if (not green) and liq_long > 0.0:
-        raw = _geo(
-            _ramp(liqL_frac, LIQ_LO, LIQ_HI),
-            _ramp(-doi_frac, DRAIN_OI_LO, DRAIN_OI_HI),
-            _ramp(vel, VEL_SQUEEZE_LO, VEL_SQUEEZE_HI),
-            _soft(reclaim_dn, RECLAIM_LO, RECLAIM_HI),
-        )
-        if liqL_frac >= SQUEEZE_FLOOR_LIQ:
-            raw = max(raw, SQUEEZE_FLOOR + (1.0 - SQUEEZE_FLOOR)
-                      * _ramp(liqL_frac, SQUEEZE_FLOOR_LIQ, SQUEEZE_FLOOR_SAT))
-        S["LONG SQUEEZE"] = raw
+        F["LONG SQUEEZE"] = {
+            "liq": _ramp(liqL_frac, LIQ_LO, LIQ_HI),
+            "drainOI": _ramp(-doi_frac, DRAIN_OI_LO, DRAIN_OI_HI),
+            "vel": _ramp(vel, VEL_SQUEEZE_LO, VEL_SQUEEZE_HI),
+            "reclaim": _soft(reclaim_dn, RECLAIM_LO, RECLAIM_HI),
+        }
 
     # ── LIQUIDITY COIL: inside-bar compression absorbing forced flow (gated) ──
     if inside_bar and (liq_short + liq_long) > 0.0:
-        S["LIQUIDITY COIL"] = _geo(
-            1.0 - _ramp(rng / atr, RANGE_COMPRESS_LO, RANGE_COMPRESS_HI),
-            _ramp(liq_total_frac, LIQ_COIL_LO, LIQ_COIL_HI),
-            1.0 - _ramp(abs(delta_frac), DELTA_LO, DELTA_HI),
-        )
+        F["LIQUIDITY COIL"] = {
+            "compress": 1.0 - _ramp(rng / atr, RANGE_COMPRESS_LO, RANGE_COMPRESS_HI),
+            "liqAbs": _ramp(liq_total_frac, LIQ_COIL_LO, LIQ_COIL_HI),
+            "calm": 1.0 - _ramp(abs(delta_frac), DELTA_LO, DELTA_HI),
+        }
 
     # ── ROTATION / CHURN: OI-neutral breathing — high churn, low net OI + direction ──
-    S["ROTATION"] = _geo(
-        _ramp(churn_frac, CHURN_LO, CHURN_HI),
-        1.0 - _ramp(abs(doi_frac), OI_NEUTRAL_LO, OI_NEUTRAL_HI),
-        1.0 - _ramp(abs(delta_frac), DELTA_LO, DELTA_HI),
-    )
+    F["ROTATION"] = {
+        "churn": _ramp(churn_frac, CHURN_LO, CHURN_HI),
+        "oiNeutral": 1.0 - _ramp(abs(doi_frac), OI_NEUTRAL_LO, OI_NEUTRAL_HI),
+        "calm": 1.0 - _ramp(abs(delta_frac), DELTA_LO, DELTA_HI),
+    }
 
     # ── CHOP: inside-bar + quiet + no direction (and no forced flow -> that's a COIL) ──
     if inside_bar:
-        S["CHOP"] = _geo(
-            1.0 - _ramp(vel, VEL_LO, VEL_HI),
-            1.0 - _ramp(abs(delta_frac), DELTA_LO, DELTA_HI),
-            1.0 - _ramp(liq_total_frac, LIQ_COIL_LO, LIQ_COIL_HI),
-        )
+        F["CHOP"] = {
+            "quiet": 1.0 - _ramp(vel, VEL_LO, VEL_HI),
+            "calm": 1.0 - _ramp(abs(delta_frac), DELTA_LO, DELTA_HI),
+            "noLiq": 1.0 - _ramp(liq_total_frac, LIQ_COIL_LO, LIQ_COIL_HI),
+        }
+
+    # score = geomean of each state's factors (identical to the prior per-state _geo calls)
+    S: "dict[str, float]" = {k: _geo(*v.values()) for k, v in F.items()}
+    floored: "set[str]" = set()
+
+    # gradient-preserving squeeze floor — overrides the geomean when liqs are decisive
+    if "SHORT SQUEEZE" in S and liqS_frac >= SQUEEZE_FLOOR_LIQ:
+        fl = SQUEEZE_FLOOR + (1.0 - SQUEEZE_FLOOR) * _ramp(liqS_frac, SQUEEZE_FLOOR_LIQ, SQUEEZE_FLOOR_SAT)
+        if fl > S["SHORT SQUEEZE"]:
+            S["SHORT SQUEEZE"] = fl; floored.add("SHORT SQUEEZE")
+    if "LONG SQUEEZE" in S and liqL_frac >= SQUEEZE_FLOOR_LIQ:
+        fl = SQUEEZE_FLOOR + (1.0 - SQUEEZE_FLOOR) * _ramp(liqL_frac, SQUEEZE_FLOOR_LIQ, SQUEEZE_FLOOR_SAT)
+        if fl > S["LONG SQUEEZE"]:
+            S["LONG SQUEEZE"] = fl; floored.add("LONG SQUEEZE")
 
     # ── NEUTRAL floor: always a verdict ──
     S["NEUTRAL"] = NEUTRAL_SCORE
-    return S
+    return S, F, floored
+
+
+def state_scores(buckets: list, idx: int, b_mult: float, s_mult: float) -> "dict[str, float]":
+    """Every state's raw score for bucket ``idx`` (exposed for tests/debug)."""
+    return _score_and_factors(buckets, idx, b_mult, s_mult)[0]
 
 
 def classify_bucket(buckets: list, idx: int, b_mult: float, s_mult: float) -> "tuple[str, int]":
@@ -287,3 +305,35 @@ def render_state_line(state: str, confidence: int) -> str:
     star = "★ " if score >= STAR_THRESHOLD else ""
     return (f"<span style='background-color:{bg};color:#f5f5f5'>"
             f"&nbsp;{star}{state} {confidence}%&nbsp;</span>")
+
+
+def render_debug_lines(buckets: list, idx: int, b_mult: float, s_mult: float) -> "list[str]":
+    """Calibration instrument (Mode 10 ``State Debug`` toggle) — two HTML lines for the stats
+    box. Line 1: the TOP-3 states + scores (winner bold). Line 2: the WINNER's factor breakdown
+    (the geomean inputs), with the BINDING (lowest) factor bold — that's the knob to raise to make
+    the verdict pickier; a ``⌊floor⌋`` tag marks a squeeze whose gradient floor overrode the
+    geomean. Reads the same ``_score_and_factors`` the verdict comes from, so it never lies about why."""
+    scores, factors, floored = _score_and_factors(buckets, idx, b_mult, s_mult)
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    winner = ranked[0][0]
+
+    chips = []
+    for rank, (st, sc) in enumerate(ranked[:3]):
+        pct = max(1, min(100, round(sc * 100.0)))
+        col = STATE_COLORS.get(st, STATE_COLORS["NEUTRAL"])
+        body = f"{st} {pct}"
+        chips.append(f"<span style='color:{col}'>{'<b>' + body + '</b>' if rank == 0 else body}</span>")
+    line1 = "<span style='color:#7f8c8d'>DBG </span>" + " · ".join(chips)
+
+    wf = factors.get(winner)
+    if wf:
+        bind = min(wf, key=wf.get)   # lowest factor = binding constraint = the tuning lever
+        segs = []
+        for name, val in wf.items():
+            seg = f"{name}&nbsp;{val:.2f}"
+            segs.append(f"<b>{seg}</b>" if name == bind else seg)
+        tag = " <span style='color:#e67e22'>⌊floor⌋</span>" if winner in floored else ""
+        line2 = "<span style='color:#7f8c8d'>why </span>" + " · ".join(segs) + tag
+    else:
+        line2 = "<span style='color:#7f8c8d'>why </span><i>NEUTRAL floor — no state cleared the bar</i>"
+    return [line1, line2]
