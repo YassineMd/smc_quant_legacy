@@ -178,6 +178,8 @@ class CandlestickItem(pg.GraphicsObject):
         self._border.setCosmetic(True)
         self._bull = QtGui.QBrush(QtGui.QColor(config.COLOR_BULL_BODY))
         self._bear = QtGui.QBrush(QtGui.QColor(config.COLOR_BEAR_BODY))
+        self._flat_pen = QtGui.QPen(QtGui.QColor("#888888"))  # zero-range doji -> flat neutral line
+        self._flat_pen.setCosmetic(True); self._flat_pen.setWidth(2)
 
     def update_data(self, times: np.ndarray, ohlcv: np.ndarray, width: float) -> None:
         self.picture = QtGui.QPicture()
@@ -195,6 +197,14 @@ class CandlestickItem(pg.GraphicsObject):
         for i in range(len(times)):
             x = float(times[i])
             o, h, l, c, _ = ohlcv[i]
+            # Zero-range bucket (high==low): flat NEUTRAL line at the one price — no forced
+            # TICK/2 body (would imply a range that didn't exist). Mirror of BucketCandleItem
+            # (Mode 10); §0.6 degenerate-input contract. DIVERGES FROM the ranged doji below.
+            if abs(h - l) < config.TICK_SIZE / 2.0:
+                p.setPen(self._flat_pen)
+                p.drawLine(QtCore.QPointF(x - half, l), QtCore.QPointF(x + half, l))
+                p.setPen(self._border)   # restore for subsequent wicks/bodies
+                continue
             # wick
             p.drawLine(QtCore.QPointF(x, l), QtCore.QPointF(x, h))
             # body
@@ -202,7 +212,7 @@ class CandlestickItem(pg.GraphicsObject):
             top = max(o, c)
             bot = min(o, c)
             if top == bot:
-                top += config.TICK_SIZE / 2.0  # doji — keep a visible sliver
+                top += config.TICK_SIZE / 2.0  # ranged doji (open==close): sliver shows the level
             p.drawRect(QtCore.QRectF(x - half, bot, width, top - bot))
         p.end()
 
@@ -458,6 +468,8 @@ class BucketCandleItem(pg.GraphicsObject):
         self._rect = QtCore.QRectF()
         self._pen = QtGui.QPen(QtGui.QColor("#888888"))   # uniform neutral wick/border
         self._pen.setCosmetic(True)
+        self._flat_pen = QtGui.QPen(QtGui.QColor("#888888"))  # zero-range doji -> flat neutral line
+        self._flat_pen.setCosmetic(True); self._flat_pen.setWidth(2)
 
     def update_data(self, x: list, opens: list, highs: list, lows: list,
                     closes: list, brushes: list, width: float = 0.8) -> None:
@@ -472,13 +484,22 @@ class BucketCandleItem(pg.GraphicsObject):
         for i in range(len(x)):
             xi = float(x[i])
             o, h, l, c = opens[i], highs[i], lows[i], closes[i]
+            # Zero-range bucket (high==low -> O=H=L=C): ALL volume traded at one tick. The
+            # honest mark is a flat NEUTRAL line at that price — the forced TICK/2 body would
+            # imply a range that never existed (the §0.6 degenerate sibling of the zero-vector
+            # churn lie). Vector/flow reads from the stats box + footprint; the POC dot
+            # (separate, z6) sits at center. DIVERGES FROM the ranged doji below.
+            if abs(h - l) < config.TICK_SIZE / 2.0:
+                p.setPen(self._flat_pen)
+                p.drawLine(QtCore.QPointF(xi - half, l), QtCore.QPointF(xi + half, l))
+                continue
             p.setPen(self._pen)
             # wick (neutral)
             p.drawLine(QtCore.QPointF(xi, l), QtCore.QPointF(xi, h))
             # body (per-candle dominance brush, neutral border)
             top, bot = max(o, c), min(o, c)
             if top == bot:
-                top += config.TICK_SIZE / 2.0   # doji sliver stays visible
+                top += config.TICK_SIZE / 2.0   # ranged doji (open==close): sliver shows the level
             p.setBrush(brushes[i] if i < len(brushes) else QtCore.Qt.NoBrush)
             p.drawRect(QtCore.QRectF(xi - half, bot, width, top - bot))
         p.end()
