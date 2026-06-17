@@ -74,6 +74,17 @@ FOLLOW_AXIS_TOL_FRAC = 0.01  # per-axis "did it move?" threshold as a fraction o
 FOLLOW_X_PER_TICK = True  # roll X every draw (vs only on a bucket close)
 FOLLOW_Y_PER_TICK = True  # refit Y every draw (vs only on a bucket close) — flip False if price-whip jitters
 
+# Churn / no-conviction candle treatment (correctness — a bucket with no dominant 4-vector
+# must NOT borrow a conviction color). Both tunable; the BEAUTIFUL churn identity is Phase 3.
+# NOTE: CHURN_VOL_FRAC is a FIXED threshold in a relative world — a known limitation (same class
+# of mistake as a fixed px_per_y). It kills the egregious lie (a rounding-error vector is churn
+# under ANY threshold) and unblocks calibration; whether it should become ADAPTIVE (net-fraction
+# vs a rolling baseline, like the Step-5 exhaustion z) is a deferred post-calibration refinement
+# — see MASTER_FIX_PLAN.md.
+CHURN_VOL_FRAC = 0.05              # net positioning (main-opp) as a fraction of VOLUME, below
+                                   # which a candle reads "no conviction" / churn -> muted neutral
+CHURN_RGBA = (110, 112, 120, 115)  # deliberate muted slate (~45% alpha) — neutral, legible, not a lie
+
 
 def _exh_z_mult(window_vals: list, val: float) -> float:
     """Smooth, bounded exhaustion multiplier from the z-score of ``val`` vs a
@@ -1813,7 +1824,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # under offscreen/deferred-paint conditions. The explicit mirror is exact.
 
     def _neon_v2_brush(self, opL: float, opS: float, clL: float, clS: float,
-                       vel_ratio: float) -> "pg.QtGui.QBrush":
+                       curr_vol: float, vel_ratio: float) -> "pg.QtGui.QBrush":
         """Candle-body brush from the dominant 4-vector + dominance opacity, with
         the HFT (vel_ratio >= 2.5) neon override (Neon Engine V2)."""
         vectors = {"opL": opL, "opS": opS, "clL": clL, "clS": clS}
@@ -1822,7 +1833,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         main_val = vectors[main_key]
         opp_val = vectors[pair[main_key]]
         total = main_val + opp_val
-        dom = (main_val - opp_val) / total if total > 0 else 0.0
+        dom = (main_val - opp_val) / total if total > 0 else 0.0   # conviction OPACITY (unchanged)
+        # CHURN / no-conviction gate. Measure NET positioning (main-opp) as a fraction of VOLUME,
+        # NOT of the pair sum: dividing by `total` inflates a rounding-error vector to dom~1.0
+        # (clS=6.4 on 2.9K vol -> dom=1.0, yet that's 0.2% of volume = a lie). (main-opp)/curr_vol
+        # is the honest "did a meaningful fraction of the bucket take a side" — it also catches the
+        # balanced bucket (opL~opS -> net~0). Below the floor a candle must NOT borrow a conviction
+        # color (the max() tiebreak defaults to opL/green) nor escalate to neon: return the muted
+        # neutral BEFORE the palette + the vel>=2.5 override. Conviction candles are untouched —
+        # their opacity still rides `dom`.
+        conv = (main_val - opp_val) / curr_vol if curr_vol > 0 else 0.0
+        if conv < CHURN_VOL_FRAC:
+            return pg.mkBrush(CHURN_RGBA)
         alpha = int((0.15 + max(0.0, dom) * 0.85) * 255)
         neon = vel_ratio >= 2.5
         if neon:
@@ -1858,7 +1880,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pocs.append(b.get("poc_price", 0.0))   # STAGE 0: true per-bucket POC (render-only)
             brushes.append(self._neon_v2_brush(
                 b.get("opL", 0.0), b.get("opS", 0.0), b.get("clL", 0.0),
-                b.get("clS", 0.0), ratios[i]))
+                b.get("clS", 0.0), b.get("curr_vol", 0.0), ratios[i]))
 
             # kinetic forecast (identical EMA matrix to Mode 4)
             duration = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))

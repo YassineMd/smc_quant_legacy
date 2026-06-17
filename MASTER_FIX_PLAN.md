@@ -51,12 +51,15 @@ still hold their content — this orders what's left and why.
    surface + default-on-open, the time-candle demoted to a fallback. Shipped: view-follow (per-axis lock
    model `b2e1735` + A0 candle-framing) and A5 (`3426713`, list reorder + open-on-Mode-10). Full arc
    below ("Group A — ✅ COMPLETE").
-2. **Churn-color CORRECTNESS sliver** *(NEXT)*. Minimal honest treatment: a no-conviction / zero-vector bucket
-   must **not** render as a conviction color — just stop the lie (the `_neon_v2_brush` zero-vector→green
-   bug). Beauty (the deliberate churn identity) waits for Phase 3. *Why before calibration:* calibration
-   is sensory — you cross-check verdicts against candle colors, so a churn bucket painted bright-green
-   pollutes the exact signal you're tuning against.
-3. **State-engine live calibration** *(days of real market)*. Tune `app/bucket_state.py` constants
+2. ✅ **Churn-color CORRECTNESS sliver DONE (2026-06-17).** `_neon_v2_brush` gates churn on NET positioning
+   `(main-opp)/curr_vol < CHURN_VOL_FRAC` (0.05) → muted slate `CHURN_RGBA`, returned BEFORE the palette +
+   neon override; conviction opacity still rides the old `dom` (real conviction candles unchanged). The
+   VOLUME denominator (not the pair sum) kills the rounding-error lie — clS=6.4 on 2.9K vol = 0.2% → churn,
+   where the old dom inflated it to ~1.0 → cyan; NET (not max) also catches the balanced bucket
+   (opL≈opS → net 0). Mode-10 only. Two deferrals (adaptive threshold; parallel-mode same-lie) recorded
+   under the "Mode 10 color/churn fidelity" trace section below. Beauty (the deliberate churn identity)
+   waits for Phase 3.
+3. **State-engine live calibration** *(NEXT — days of real market)*. Tune `app/bucket_state.py` constants
    against live verdicts; top priority = any confident/starred verdict that's wrong. See
    `scripts/STATE_ENGINE_TUNING.md`.
 4. **LATER (only after living on Mode 10 as default + trusting it):** time-chart full removal (+ the
@@ -414,8 +417,10 @@ below. Cross-referenced to Steps 6 & 8 so nothing is built twice:
 
 ### Mode 10 color/churn fidelity — trace findings (2026-06-16)
 Surfaced tracing `_neon_v2_brush` + the OB renderer. Visual-layer items for this phase:
-- **Zero-vector bucket renders a CONVICTION color (correctness bug, not just aesthetics).**
-  `_neon_v2_brush` ([terminal.py:1726](app/terminal.py:1726)) does `max(vectors, key=...)`; when all
+- **✅ FIXED (2026-06-17) — Zero/rounding-error-vector bucket rendered a CONVICTION color.** Now gated:
+  `_neon_v2_brush` returns muted `CHURN_RGBA` when NET `(main-opp)/curr_vol < CHURN_VOL_FRAC` (0.05),
+  before the palette + neon override; conviction opacity unchanged (still `dom`). Original trace, kept
+  for context: `_neon_v2_brush` ([terminal.py:1726](app/terminal.py:1726)) does `max(vectors, key=...)`; when all
   four vectors are 0 (pure churn / no net OI), `max` returns the **first dict key = `opL`** (an
   arbitrary insertion-order tiebreak), which the palette maps to **green** — and if the bucket was fast
   (`vel_ratio ≥ 2.5`) the neon override paints it **bright neon green at full alpha**. Observed: a bucket
@@ -433,6 +438,19 @@ Surfaced tracing `_neon_v2_brush` + the OB renderer. Visual-layer items for this
   pattern / hollow treatment, distinct from conviction green/red, attractive on the dark canvas. This is
   the single correct answer to "how to color a no-net-positioning bucket" that replaces BOTH the
   gray-column and the bright-green-lie behaviors above.
+- **DEFERRED (post-calibration) — the churn threshold may need to be ADAPTIVE.** `CHURN_VOL_FRAC = 0.05`
+  is a FIXED net-fraction in a relative world (same class of mistake as a fixed `px_per_y`): in a churny
+  stretch 5% net positioning may be notable; in a trend it's noise. The honest version gates conviction on
+  net-fraction **relative to the recent buckets' distribution** — the same rolling-baseline / z-score
+  machinery as the Step-5 exhaustion (`_exhaustion_mults`) — not a magic number. Decide after watching real
+  buckets across regimes whether the constant holds or becomes adaptive (constant-only if it stays; logic
+  change if it goes adaptive). The fixed constant was shipped deliberately to stop the egregious lie and
+  unblock calibration — a rounding-error vector is churn under *any* threshold.
+- **DEFERRED — the parallel "Micro Bucket Open/Close Intent" modes carry the SAME lie.**
+  `_scan_bucket_open_pos` / `_scan_bucket_close_pos` ([terminal.py:1548](app/terminal.py:1548) /
+  [1603](app/terminal.py:1603)) color with their OWN logic — they do **not** call `_neon_v2_brush`, so the
+  net/volume gate does NOT reach them; a rounding-error vector still prints cyan there. The same fix
+  (net-positioning / volume gate) is needed when those modes get attention. Deferred — Mode 10 is primary.
 
 ---
 
