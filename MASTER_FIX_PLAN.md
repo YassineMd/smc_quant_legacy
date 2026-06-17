@@ -47,6 +47,15 @@ What remains to a trustworthy daily-driver Mode 10, in order. **GROUP A is DONE*
 3426713` — Mode 10 is the primary surface + default-on-open); the Group B/C/D buckets and the Phases
 still hold their content — this orders what's left and why.
 
+> **CURRENT STATE (2026-06-17) — the terminal is functionally complete + HONEST.** Group A is done (Mode 10
+> is home: default-on-open, view-follow, overlay toggles, 12-line stats + the A3b state engine). The canvas
+> no longer lies — the **churn gate** kills false-conviction colors (no rounding-error vector paints
+> green/cyan), the **doji flat-line** kills phantom ranges (zero-range buckets render a flat neutral line,
+> not a forced colored body), POC is true per-bucket, the footprint ladder is correct. What remains is
+> **state-engine calibration** (feeling the engine against live market — the big next thing) plus deferred
+> beauty/cleanup (Phase 3 churn opacity, parallel-mode color lie, adaptive churn threshold, time-chart
+> removal, Phase 2 OB fidelity, Phase 3 visual). **Nothing left is a correctness lie.**
+
 1. ✅ **GROUP A COMPLETE (2026-06-17) — Mode 10 is home.** The move-in is done: Mode 10 is the primary
    surface + default-on-open, the time-candle demoted to a fallback. Shipped: view-follow (per-axis lock
    model `b2e1735` + A0 candle-framing) and A5 (`3426713`, list reorder + open-on-Mode-10). Full arc
@@ -59,10 +68,16 @@ still hold their content — this orders what's left and why.
    (opL≈opS → net 0). Mode-10 only. Two deferrals (adaptive threshold; parallel-mode same-lie) recorded
    under the "Mode 10 color/churn fidelity" trace section below. Beauty (the deliberate churn identity)
    waits for Phase 3.
-3. **State-engine live calibration** *(NEXT — days of real market)*. Tune `app/bucket_state.py` constants
+3. ✅ **Doji / zero-range CORRECTNESS DONE (2026-06-17, `7fbe58c`).** A bucket where all volume traded at
+   one tick (`high==low`) rendered a forced `TICK/2` colored body — a phantom range. Both candle renderers
+   (`BucketCandleItem` Mode 10 + `CandlestickItem` time chart) now draw a flat neutral `#888888` line at the
+   single price (POC dot at center), no body/fill. Ranged dojis (open==close, high≠low) keep their sliver +
+   wicks. Closes the gray-column **correctness** half; the tall 45%-transparent *ranged* churn bucket stays
+   the Phase-3 churn-opacity beauty item.
+4. **State-engine live calibration** *(NEXT — days of real market)*. Tune `app/bucket_state.py` constants
    against live verdicts; top priority = any confident/starred verdict that's wrong. See
    `scripts/STATE_ENGINE_TUNING.md`.
-4. **LATER (only after living on Mode 10 as default + trusting it):** time-chart full removal (+ the
+5. **LATER (only after living on Mode 10 as default + trusting it):** time-chart full removal (+ the
    dead Technical-Layers-menu cleanup) · Phase 2 OB fidelity · Phase 3 visual (churn beauty + the
    cyan/magenta color cleanup).
 
@@ -428,6 +443,12 @@ Surfaced tracing `_neon_v2_brush` + the OB renderer. Visual-layer items for this
   bullish). The brush has **no churn branch** — it always picks a vector. Same root as the "gray column"
   finding: a no-net-positioning bucket renders **faint-green-looks-gray** (non-neon) or **bright-green-lie**
   (neon) — neither correct.
+- **✅ FIXED (2026-06-17, `7fbe58c`) — Zero-range (high==low) bucket drew a phantom colored body.** Both
+  candle renderers (`BucketCandleItem` Mode 10 + `CandlestickItem` time chart) now draw a flat neutral
+  `#888888` line at the single price (no forced `TICK/2` body); ranged dojis keep their sliver + wicks. The
+  honest §0.6 degenerate rendering — all volume at one tick is a flat line, not a range. Closes the
+  **correctness** half of the "gray column"; the tall transparent *ranged* churn bucket is the separate
+  Phase-3 churn-opacity (beauty) item below.
 - **Color naming + collision.** `RGB_GREEN_NEON` / `RGB_RED_NEON` are **misnamed** — their values are
   pure **cyan `(0,255,255)`** / **magenta `(255,0,255)`** ([config.py:197](app/config.py:197)), so a fast
   bullish OB renders cyan and a fast bearish OB magenta. Worse, OB-cyan **collides** with candle-cyan
