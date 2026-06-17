@@ -43,26 +43,23 @@ and the **rule** that no overlay is consolidated onto Mode 10 before its logic i
 
 ## Committed endgame order (locked 2026-06-16)
 
-What remains to a trustworthy daily-driver Mode 10, in order. **A4 (overlay toggles) is DONE**
-(`732d892 → 08a1ef3`); the Group A/B/C/D buckets and the Phases still hold their content — this
-orders what's left and why.
+What remains to a trustworthy daily-driver Mode 10, in order. **GROUP A is DONE** (`0fc31d5 →
+3426713` — Mode 10 is the primary surface + default-on-open); the Group B/C/D buckets and the Phases
+still hold their content — this orders what's left and why.
 
-1. **VIEW-FOLLOW** — ✅ **DONE (2026-06-17)**, per-axis lock model (`12a0d1e` + `b2e1735`); A0
-   candle-framing folded in, `_fit_scanner_y` replaced by the per-frame roll for Mode 10. See
-   "Mode 10 view-follow" below.
-2. **A5 — Mode 10 first + default-on-open** *(NEXT)*. Reorder the scanner list + open into Mode 10. The
-   **time chart is DEMOTED, not deleted** — stays in the list as a fallback. *Why after view-follow:*
-   A5 makes Mode 10 the surface you're dropped onto every launch; a frozen fit whose live edge walks
-   off-screen is tolerable for a mode you switch INTO, hostile for your permanent home. Quality gate.
-3. **Churn-color CORRECTNESS sliver.** Minimal honest treatment: a no-conviction / zero-vector bucket
+1. ✅ **GROUP A COMPLETE (2026-06-17) — Mode 10 is home.** The move-in is done: Mode 10 is the primary
+   surface + default-on-open, the time-candle demoted to a fallback. Shipped: view-follow (per-axis lock
+   model `b2e1735` + A0 candle-framing) and A5 (`3426713`, list reorder + open-on-Mode-10). Full arc
+   below ("Group A — ✅ COMPLETE").
+2. **Churn-color CORRECTNESS sliver** *(NEXT)*. Minimal honest treatment: a no-conviction / zero-vector bucket
    must **not** render as a conviction color — just stop the lie (the `_neon_v2_brush` zero-vector→green
    bug). Beauty (the deliberate churn identity) waits for Phase 3. *Why before calibration:* calibration
    is sensory — you cross-check verdicts against candle colors, so a churn bucket painted bright-green
    pollutes the exact signal you're tuning against.
-4. **State-engine live calibration** *(days of real market)*. Tune `app/bucket_state.py` constants
+3. **State-engine live calibration** *(days of real market)*. Tune `app/bucket_state.py` constants
    against live verdicts; top priority = any confident/starred verdict that's wrong. See
    `scripts/STATE_ENGINE_TUNING.md`.
-5. **LATER (only after living on Mode 10 as default + trusting it):** time-chart full removal (+ the
+4. **LATER (only after living on Mode 10 as default + trusting it):** time-chart full removal (+ the
    dead Technical-Layers-menu cleanup) · Phase 2 OB fidelity · Phase 3 visual (churn beauty + the
    cyan/magenta color cleanup).
 
@@ -81,7 +78,12 @@ phases.**
   clearing defect that degrades *every* mode, not just Mode 10. Fix before building more
   onto the surface. *(Operator-greenlit as the first execution item.)*
 
-### Group A — "Mode 10 as the primary surface" (the next build — ONE coherent step)
+### Group A — "Mode 10 as the primary surface" — ✅ COMPLETE (2026-06-17)
+**THE MOVE-IN IS DONE — Mode 10 is home.** The time-candle is demoted to a fallback; the volume-bucket
+canvas is the primary surface + default-on-open. The arc: **A1** (POC box → dot) · **A2** (cursor price)
+· **A3** (12-line readout + state engine) · **A4** (overlay toggles) · **view-follow** (per-axis lock
+model + A0 candle-framing) · **A5** (move-in: first-in-list + default-on-open). Commits `0fc31d5 →
+3426713`. The original punch-list items below are all addressed.
 - **Make Mode 10 first** in the scanner-mode list **AND the default chart** on terminal
   open (today it opens on the time chart / "Off").
 - ~~**Open-zoom frames the candles.**~~ **REMOVED from Group A — reclassified as a
