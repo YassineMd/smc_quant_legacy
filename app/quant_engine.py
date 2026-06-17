@@ -271,6 +271,16 @@ class QuantEngine:
 
         while remaining_vol > 0:
             space_left = self.target_vol - self.active_bucket.curr_vol
+            # GUARD (§0.6 degenerate-input): if target_vol recalibrated BELOW the active
+            # bucket's curr_vol, space_left <= 0. Close the (over-full) bucket and restart —
+            # NEVER add a negative chunk. A negative space_left into _add_to_bucket subtracts
+            # from every vector (opL/opS/clL/clS/churn + buy/sell), driving them negative
+            # (conservation still holds, but non-negativity breaks). The over-full bucket
+            # grandfathers at its accumulated curr_vol; the trade flows into the fresh one.
+            # target_vol is always > 0, so the next iteration has space_left > 0 (no spin).
+            if space_left <= 0:
+                self._close_active_bucket(tick_time, footprints_dict)
+                continue
             if remaining_vol <= space_left:
                 self._add_to_bucket(price, remaining_vol, b_ratio, s_ratio,
                                     opL_r, opS_r, clL_r, clS_r, churn_r, liquidations)
