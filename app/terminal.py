@@ -324,6 +324,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.timer.timeout.connect(self._on_timer)
         self.timer.start(config.GUI_TIMER_MS)
 
+        # A5 — open straight onto Mode 10 (the primary surface), never the time chart. Same
+        # path the combo uses: hides time components, applies the dark scanner theme, and
+        # _on_timer paints Mode 10 directly. The reordered combo already shows it at index 0.
+        self._set_scanner("bucket_canvas")
+
     # ------------------------------------------------------------------
     def _wire_menu(self) -> None:
         self.menu.tfChanged.connect(self._change_tf)
