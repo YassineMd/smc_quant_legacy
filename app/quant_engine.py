@@ -657,6 +657,116 @@ def calc_quant_obs(engine: QuantEngine, timeframe: str) -> List[dict]:
     return obs
 
 
+# ---------------------------------------------------------------------------
+# Whale-absorption marks (validated on 24h history — see the calibration saga):
+# κ=0.75 detection floor; T1/T2/T3 by PEAK window-absorbed $; 0.10% close-through
+# buffer (DEATH only); adjacent-tick clustering; standing-level form/persist/die.
+# Honest label "absorption" (trade-only); the depth-refill "iceberg-like" confirm
+# is a separate live-only layer.
+# ---------------------------------------------------------------------------
+def _absorption_clusters(window, kappa, nmin, rho, sigma, beta):
+    """One W-window's firing levels -> adjacent-tick clusters ``[(plo, phi, side, absorbed_sol)]``.
+
+    A level fires when its dominant-side aggression is HEAVY (>= kappa * median candle vol),
+    SUSTAINED (>= nmin candles, no single candle > rho of it), ONE-SIDED (>= sigma) and HELD
+    (vol beyond it <= beta). Buy-aggression that holds -> SELL mark; sell-aggression -> BUY.
+    """
+    vols = sorted(c[2] for c in window); n = len(vols)
+    vbar = ((vols[n // 2] if n % 2 else (vols[n // 2 - 1] + vols[n // 2]) / 2.0) if n else 1.0)
+    vtot = sum(c[2] for c in window) or 1.0
+    B, S, hits, mb, ms, va = {}, {}, {}, {}, {}, {}
+    for (_u, lv, _v) in window:
+        for p, (b, s) in lv.items():
+            B[p] = B.get(p, 0.0) + b; S[p] = S.get(p, 0.0) + s; va[p] = va.get(p, 0.0) + b + s
+            if b + s > 1e-9: hits[p] = hits.get(p, 0) + 1
+            if b > mb.get(p, 0.0): mb[p] = b
+            if s > ms.get(p, 0.0): ms[p] = s
+    pr = sorted(va); cab, r = {}, 0.0
+    for p in reversed(pr): cab[p] = r; r += va[p]                 # vol strictly above p
+    cbe, r = {}, 0.0
+    for p in pr: cbe[p] = r; r += va[p]                           # vol strictly below p
+    fired = []
+    for p in B:
+        t = B[p] + S[p]
+        if t <= 0:
+            continue
+        if (B[p] >= kappa * vbar and hits.get(p, 0) >= nmin and mb.get(p, 0.0) / B[p] <= rho
+                and B[p] / t >= sigma and cab[p] / vtot <= beta):
+            fired.append((p, "SELL", B[p]))
+        if (S[p] >= kappa * vbar and hits.get(p, 0) >= nmin and ms.get(p, 0.0) / S[p] <= rho
+                and S[p] / t >= sigma and cbe[p] / vtot <= beta):
+            fired.append((p, "BUY", S[p]))
+    by = {}
+    for (p, side, a) in fired:
+        by.setdefault(side, []).append((p, a))
+    out = []
+    for side, lvls in by.items():
+        lvls.sort()
+        cur = [lvls[0]]
+        for (p, a) in lvls[1:]:
+            if p - cur[-1][0] <= 0.021:
+                cur.append((p, a))
+            else:
+                out.append((cur[0][0], cur[-1][0], side, sum(x[1] for x in cur))); cur = [(p, a)]
+        out.append((cur[0][0], cur[-1][0], side, sum(x[1] for x in cur)))
+    return out
+
+
+def calc_absorption(footprints_tf: dict, kappa: float = 0.75, W: int = 20, nmin: int = 4,
+                    rho: float = 0.6, sigma: float = 0.75, beta: float = 0.15,
+                    buf_pct: float = 0.001, t2_usd: float = 500_000.0,
+                    t3_usd: float = 1_000_000.0) -> List[dict]:
+    """Whale-absorption standing levels from the time-candle footprints. STATELESS — replays the
+    full lifecycle from the footprint history each call (like :func:`calc_quant_obs`):
+
+      • DETECT/CLUSTER — :func:`_absorption_clusters` per sliding W-candle window.
+      • PERSIST        — each cluster becomes a STANDING mark; its $ / tier track the PEAK
+        window-absorbed over its life (a growing defense upgrades T1->T2->T3, never down).
+      • DIE            — only when a candle CLOSE clears the level by ``buf_pct`` (a DECISIVE
+        break, never a 1-tick wick): SELL on close > phi*(1+buf), BUY on close < plo*(1-buf).
+
+    Each footprint node must carry ``levels`` and (for invalidation) ``close``. Returns marks:
+    ``{id, plo, phi, side, absorbed_usd, tier, birth, end, active}``.
+    """
+    items = sorted((int(u), n) for u, n in footprints_tf.items())
+    if len(items) < W:
+        return []
+    cand = []
+    for u, n in items:
+        lv = {round(float(p), 2): (float(v.get("b", 0.0)), float(v.get("s", 0.0)))
+              for p, v in n.get("levels", {}).items()}
+        vol = float(n.get("lastVol") or sum(b + s for b, s in lv.values()))
+        cand.append((u, lv, vol, n.get("close")))
+
+    def _tier(usd):
+        return 3 if usd >= t3_usd else (2 if usd >= t2_usd else 1)
+
+    active, done, seen = [], [], []
+    for (u, lv, vol, close) in cand:
+        if close is not None:                                    # decisive close-through (DEATH only)
+            cl = float(close)
+            for m in active[:]:
+                if ((m["side"] == "SELL" and cl > m["phi"] * (1 + buf_pct))
+                        or (m["side"] == "BUY" and cl < m["plo"] * (1 - buf_pct))):
+                    m["end"] = u; m["active"] = False
+                    done.append(m); active.remove(m)
+        seen.append((u, lv, vol))
+        if len(seen) >= W:
+            for (plo, phi, side, absorbed) in _absorption_clusters(seen[-W:], kappa, nmin, rho, sigma, beta):
+                usd = absorbed * ((plo + phi) / 2.0)
+                hit = next((m for m in active if m["side"] == side
+                            and not (phi < m["plo"] - 0.021 or plo > m["phi"] + 0.021)), None)
+                if hit is not None:                              # standing mark -> lift PEAK (tier may upgrade)
+                    if usd > hit["absorbed_usd"]:
+                        hit["absorbed_usd"] = usd; hit["tier"] = _tier(usd)
+                    hit["plo"] = min(hit["plo"], plo); hit["phi"] = max(hit["phi"], phi)
+                else:                                            # birth a new standing level
+                    active.append({"id": f"abs_{side}_{plo:.2f}_{u}", "plo": plo, "phi": phi,
+                                   "side": side, "absorbed_usd": usd, "tier": _tier(usd),
+                                   "birth": u, "end": None, "active": True})
+    return done + active
+
+
 def rank_obs(obs: List[dict]) -> List[dict]:
     """Power-score ranking with the legacy 10%-cluster tiering (main.py:600).
 
