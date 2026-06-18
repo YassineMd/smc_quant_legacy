@@ -313,17 +313,21 @@ class OrderBlockLayer(pg.GraphicsObject):
         self.prepareGeometryChange()
         self.update()
 
-    def update_data_indexed(self, obs: list, x_right: float, ts_to_idx, x_view) -> None:
+    def update_data_indexed(self, obs: list, x_right: float, ts_to_idx, x_view,
+                            show_dead: bool = True) -> None:
         """Index-space twin of :meth:`update_data` for the Mode-10 volume canvas.
 
-        Identical color grading / neon / opacity-fade / tier logic; only the X mapping
-        differs. Each block is anchored to its EXACT forming bucket via the epoch baked into
-        ``ob_id`` (``qob_{type}_{int(b0.start)}_{poc}``) — NOT the minute-floored ``confirm``
-        string, which with sub-minute buckets bisects to the minute-boundary bucket and strands
-        the block off its candle. The drawn span ``[b0, end-or-live]`` is clamped to the visible
-        view ``x_view = (vx0, vx1)``. A block whose forming bucket is pre-anchor (filtered out of
-        the scanner window, ``ts_to_idx`` → −1) or whose span is entirely off the window is SKIPPED
-        here — Step 2 renders those as price-level bands.
+        Every block is a BOX showing its lifespan, both edges mapped by EXACT bucket epochs
+        embedded by the daemon (no minute-floor resolution loss, no sub-second +epsilon drift):
+        formation from ``start_epoch`` (the confirming bucket's start), consumption from
+        ``end_epoch`` (the candle that body-engulfed it).
+          • ALIVE — solid box ``[formation -> live edge]`` (still active).
+          • DEAD  — faded box ``[formation -> mitigation+1]`` (drawn THROUGH the consuming candle),
+            shown only when ``show_dead`` is on (the m10_dead_obs toggle, default ON).
+        A block whose FORMATION precedes the anchor (``confirm_idx == -1``) is out of scope and
+        skipped — no bands, no floating. The drawn span is clamped to ``x_view = (vx0, vx1)``.
+        Falls back to the old ``ob_id`` int-epoch (+1.0) / minute-floored ``end`` only for OBs
+        missing the exact epochs (malformed / pre-upgrade).
         """
         vx0, vx1 = x_view                      # visible view X-range -> clamp OB spans into it
         self.picture = QtGui.QPicture()
@@ -339,34 +343,46 @@ class OrderBlockLayer(pg.GraphicsObject):
         for ob in obs:
             if ob.get("vol_mult", 0.0) < self.visible_filter:
                 continue
-            # Map by the EXACT forming-bucket epoch baked into ob_id (qob_{type}_{int(b0.start)}_{poc}),
-            # NOT the minute-floored `confirm`: buckets are sub-minute, so a floored confirm bisects to the
-            # minute-boundary bucket and strands the block off its candle. b0's POC IS the band, so anchoring
-            # to b0 makes X and price agree. +1.0 lands the bisect inside b0's span past the int() truncation.
-            _parts = str(ob.get("ob_id", "")).split("_")
-            _id_start = float(_parts[2]) if len(_parts) >= 4 and _parts[2].isdigit() else None
-            try:
-                confirm_idx = (ts_to_idx(_id_start + 1.0) if _id_start is not None
-                               else ts_to_idx(parse_ts(ob["confirm"])))   # fallback: malformed id
-            except (ValueError, KeyError):
-                continue
+            # Formation edge from the EXACT confirming-bucket epoch (start_epoch, a full-float
+            # bucket start) — no epsilon, so sub-second buckets can't drift the map. Fall back to
+            # the int-truncated ob_id epoch (needs +1.0 to clear the truncation) only for OBs that
+            # predate start_epoch; final fallback is the minute-floored `confirm`.
+            _se = ob.get("start_epoch")
+            if _se is not None:
+                confirm_idx = ts_to_idx(_se)
+            else:
+                _parts = str(ob.get("ob_id", "")).split("_")
+                _id_start = float(_parts[2]) if len(_parts) >= 4 and _parts[2].isdigit() else None
+                try:
+                    confirm_idx = (ts_to_idx(_id_start + 1.0) if _id_start is not None
+                                   else ts_to_idx(parse_ts(ob["confirm"])))   # fallback: malformed id
+                except (ValueError, KeyError):
+                    continue
             if confirm_idx == -1:
-                continue   # forming bucket is pre-anchor (filtered out of the scanner window) -> no valid
-                           # X; skip until Step 2 renders it as a price-level band (else it piles at index 0)
+                continue   # formation precedes the anchor -> out of scope (anchor-forward only)
+            active = ob.get("active", True)
+            if not active and not show_dead:
+                continue   # m10_dead_obs OFF -> hide dead boxes
 
-            end_str = ob.get("end")
-            end_idx = ts_to_idx(parse_ts(end_str)) if end_str else None
-
-            # clamp the drawn span [b0, end-or-live] to the visible view so a block confirmed before the
-            # window projects from the LEFT EDGE (vx0); skip blocks whose span is entirely off the window.
+            # Box span: formation -> live edge if alive, else the EXACT consuming bucket + 1
+            # (end_epoch is a full-float bucket start; +1 draws THROUGH the candle so the kill
+            # shows — no +1.0 epsilon, which would overshoot a sub-second consuming bucket).
             confirm_x = float(confirm_idx)
-            end_x = x_right if end_idx is None else float(end_idx)
+            if active:
+                end_x = x_right
+            else:
+                _ee = ob.get("end_epoch")
+                if _ee is not None:
+                    end_x = float(ts_to_idx(_ee) + 1)
+                else:                              # fallback: pre-end_epoch data -> minute-floored end
+                    _es = ob.get("end")
+                    end_x = float(ts_to_idx(parse_ts(_es))) if _es else x_right
             if end_x <= vx0 or confirm_x >= vx1:
-                continue
+                continue                           # span entirely off the visible view
             x0 = max(confirm_x, vx0)
             x1 = min(end_x, vx1)
             if x1 <= x0:
-                x1 = x0 + 1.0                  # keep a visible minimum width
+                x1 = x0 + 1.0                      # keep a visible minimum width
 
             top = float(ob["top"])
             bottom = float(ob["bottom"])
@@ -377,21 +393,17 @@ class OrderBlockLayer(pg.GraphicsObject):
                 rgb = config.RGB_GREEN_NEON if neon else config.RGB_GREEN_STD
             else:
                 rgb = config.RGB_RED_NEON if neon else config.RGB_RED_STD
+            col = QtGui.QColor(rgb[0], rgb[1], rgb[2])
             alpha = _bucket_alpha(vel)
-            if not ob.get("active", True):
-                alpha *= 0.4                   # fade mitigated blocks
-
-            fill = QtGui.QColor(rgb[0], rgb[1], rgb[2])
-            fill.setAlphaF(alpha)
-            pen = QtGui.QPen(QtGui.QColor(rgb[0], rgb[1], rgb[2]))
-            pen.setCosmetic(True)
+            if not active:
+                alpha *= 0.4                       # fade mitigated blocks
+            fill = QtGui.QColor(col); fill.setAlphaF(alpha)
+            pen = QtGui.QPen(col); pen.setCosmetic(True)
             p.setPen(pen)
             p.setBrush(fill)
             p.drawRect(QtCore.QRectF(x0, bottom, max(1.0, x1 - x0), top - bottom))
-
             if self.show_tiers:
-                tier_specs.append((x0, top, f"x{vel:.1f}", QtGui.QColor(rgb[0], rgb[1], rgb[2])))
-
+                tier_specs.append((x0, top, f"x{vel:.1f}", col))
             xs += [x0, x1]
             ys += [top, bottom]
         p.end()

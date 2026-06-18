@@ -494,6 +494,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # (_hover_context reads layer_state). No scene item to manage here; the
             # live-breathe / next hover re-renders the box with or without the block.
             pass
+        elif key == "m10_dead_obs":
+            # Sub-filter of m10_obs, read by update_data_indexed at draw time (show_dead).
+            # No scene item to manage; the forced redraw below repaints with/without dead boxes.
+            pass
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -2012,7 +2016,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_obs.visible_filter = self.ob_item.visible_filter   # honor the Min-Mult slider
             vx0, vx1 = self.vb.viewRange()[0]   # clamp OB spans to the visible window (no corner-float)
             self.bc_obs.update_data_indexed(
-                self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx, (vx0, vx1))
+                self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx, (vx0, vx1),
+                self.menu.layer_state("m10_dead_obs"))   # show mitigated OBs as faded lifespan boxes (toggle)
 
         # --- liquidation marks (A4 step 4) — per-bucket forced volume from A3b-pre.
         # liq_short = shorts liquidated (forced buys) -> mark at the bucket HIGH (price
