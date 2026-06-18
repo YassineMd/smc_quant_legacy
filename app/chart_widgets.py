@@ -313,16 +313,19 @@ class OrderBlockLayer(pg.GraphicsObject):
         self.prepareGeometryChange()
         self.update()
 
-    def update_data_indexed(self, obs: list, x_right: float, ts_to_idx) -> None:
+    def update_data_indexed(self, obs: list, x_right: float, ts_to_idx, x_view) -> None:
         """Index-space twin of :meth:`update_data` for the Mode-10 volume canvas.
 
-        Identical color grading / neon / opacity-fade / tier logic; only the X
-        mapping differs — ``ts_to_idx(unix_ts)`` returns the integer bucket ordinal
-        (or ``-1`` if the timestamp precedes the first visible bucket). Clipping
-        (spec §6.1): a block whose end is before the window is dead history and is
-        skipped; a block confirmed before the window but still alive is clamped to
-        ``x0 = 0`` (left edge); active blocks project to ``x_right`` (live edge).
+        Identical color grading / neon / opacity-fade / tier logic; only the X mapping
+        differs. Each block is anchored to its EXACT forming bucket via the epoch baked into
+        ``ob_id`` (``qob_{type}_{int(b0.start)}_{poc}``) — NOT the minute-floored ``confirm``
+        string, which with sub-minute buckets bisects to the minute-boundary bucket and strands
+        the block off its candle. The drawn span ``[b0, end-or-live]`` is clamped to the visible
+        view ``x_view = (vx0, vx1)``. A block whose forming bucket is pre-anchor (filtered out of
+        the scanner window, ``ts_to_idx`` → −1) or whose span is entirely off the window is SKIPPED
+        here — Step 2 renders those as price-level bands.
         """
+        vx0, vx1 = x_view                      # visible view X-range -> clamp OB spans into it
         self.picture = QtGui.QPicture()
         if not obs:
             self.tier_pool.update([])
@@ -336,19 +339,32 @@ class OrderBlockLayer(pg.GraphicsObject):
         for ob in obs:
             if ob.get("vol_mult", 0.0) < self.visible_filter:
                 continue
+            # Map by the EXACT forming-bucket epoch baked into ob_id (qob_{type}_{int(b0.start)}_{poc}),
+            # NOT the minute-floored `confirm`: buckets are sub-minute, so a floored confirm bisects to the
+            # minute-boundary bucket and strands the block off its candle. b0's POC IS the band, so anchoring
+            # to b0 makes X and price agree. +1.0 lands the bisect inside b0's span past the int() truncation.
+            _parts = str(ob.get("ob_id", "")).split("_")
+            _id_start = float(_parts[2]) if len(_parts) >= 4 and _parts[2].isdigit() else None
             try:
-                confirm_idx = ts_to_idx(parse_ts(ob["confirm"]))
+                confirm_idx = (ts_to_idx(_id_start + 1.0) if _id_start is not None
+                               else ts_to_idx(parse_ts(ob["confirm"])))   # fallback: malformed id
             except (ValueError, KeyError):
                 continue
+            if confirm_idx == -1:
+                continue   # forming bucket is pre-anchor (filtered out of the scanner window) -> no valid
+                           # X; skip until Step 2 renders it as a price-level band (else it piles at index 0)
 
             end_str = ob.get("end")
             end_idx = ts_to_idx(parse_ts(end_str)) if end_str else None
 
-            # §6.1 clipping
-            if end_str and end_idx == -1:
-                continue                       # fully dead history -> skip
-            x0 = 0.0 if confirm_idx == -1 else float(confirm_idx)
-            x1 = x_right if end_idx is None else float(end_idx)
+            # clamp the drawn span [b0, end-or-live] to the visible view so a block confirmed before the
+            # window projects from the LEFT EDGE (vx0); skip blocks whose span is entirely off the window.
+            confirm_x = float(confirm_idx)
+            end_x = x_right if end_idx is None else float(end_idx)
+            if end_x <= vx0 or confirm_x >= vx1:
+                continue
+            x0 = max(confirm_x, vx0)
+            x1 = min(end_x, vx1)
             if x1 <= x0:
                 x1 = x0 + 1.0                  # keep a visible minimum width
 

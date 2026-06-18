@@ -1082,9 +1082,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if callable(renderer):
             renderer(filtered, x_indices)
 
-    def _add_scanner_item(self, item: object) -> object:
-        """Add a plot item and track it for teardown. All modes route through here."""
-        self.plot.addItem(item)
+    def _add_scanner_item(self, item: object, ignore_bounds: bool = False) -> object:
+        """Add a plot item and track it for teardown. All modes route through here.
+
+        ``ignore_bounds=True`` keeps the item OUT of the viewbox autoRange — for derived
+        overlays (e.g. OB zones) whose stale/clamped X must never drag the X fit back to 0
+        and float them into the corner under view-follow."""
+        self.plot.addItem(item, ignoreBounds=ignore_bounds)
         self.active_scanner_items.append(item)
         return item
 
@@ -1995,7 +1999,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self.menu.layer_state("m10_obs"):
             if "bc_obs" not in self._scan_handles:
                 self.bc_obs.setZValue(-5)          # zones render behind the candles
-                self._add_scanner_item(self.bc_obs)
+                self._add_scanner_item(self.bc_obs, ignore_bounds=True)  # derived overlay: never drive the X/Y fit
                 self._scan_handles["bc_obs"] = self.bc_obs
             start_times = [b.get("start_time", 0.0) for b in buckets]
 
@@ -2006,8 +2010,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
             self.bc_obs.setVisible(True)
             self.bc_obs.visible_filter = self.ob_item.visible_filter   # honor the Min-Mult slider
+            vx0, vx1 = self.vb.viewRange()[0]   # clamp OB spans to the visible window (no corner-float)
             self.bc_obs.update_data_indexed(
-                self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx)
+                self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx, (vx0, vx1))
 
         # --- liquidation marks (A4 step 4) — per-bucket forced volume from A3b-pre.
         # liq_short = shorts liquidated (forced buys) -> mark at the bucket HIGH (price
