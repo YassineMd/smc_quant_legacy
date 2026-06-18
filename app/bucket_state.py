@@ -48,6 +48,9 @@ VEL_SQUEEZE_LO, VEL_SQUEEZE_HI = 1.30, 3.00  # vol_mult — violence (squeeze)
 SWEEP_LO, SWEEP_HI = 0.03, 0.50          # (sweep depth)/range — liquidity grab
 FAIL_LO, FAIL_HI = 0.05, 0.50            # |failed result|/range — the reversal depth
 POC_LO, POC_HI = 0.50, 0.85              # poc_pos for a bull trap (POC stacked high)
+TRAP_OPEN_LO, TRAP_OPEN_HI = 0.05, 0.30  # opL(bull)/opS(bear) /vol — the trapped side must have OPENED
+#   (a trap needs a victim who opened in the failed-break direction; 0.05 floor = the churn gate's
+#    "negligible/rounding-error opening", 0.30 = a clear trapped cohort. Looser than OPEN_OI on purpose.)
 RECLAIM_LO, RECLAIM_HI = 0.00, 0.30      # (close past the swept level)/range — squeeze reclaim
 LIQ_LO, LIQ_HI = 0.03, 0.20              # liq_side/vol — forced flow
 LIQ_COIL_LO, LIQ_COIL_HI = 0.03, 0.15    # liq_total/vol — liqs absorbed inside the coil
@@ -195,11 +198,14 @@ def _score_and_factors(buckets: list, idx: int, b_mult: float, s_mult: float):
             "Δsoft": _soft(-delta_frac, DELTA_LO, DELTA_HI),
         }
 
-    # ── TRAP: effort ABSORBED → reversal. Hard gate = result against the aggressor.
-    #    Core = aggression × failure depth; soft = swept level, POC placement, absorption.
+    # ── TRAP: effort ABSORBED → reversal. Hard gates = result against the aggressor AND the trapped
+    #    side actually OPENED (opL for a bull trap, opS for a bear — a trap needs a victim who opened in
+    #    the failed-break direction; pure closing flow, e.g. clL puking, is NOT a trap). Core = aggression
+    #    × trapped-open × failure depth; soft = swept level, POC placement, absorption.
     if result < 0.0:    # closed RED despite buying = BULL trap
         F["BULL TRAP"] = {
             "Δaggr": _ramp(delta_frac, DELTA_LO, DELTA_HI),       # buyers were the aggressor
+            "trappedOpen": _ramp(opL / vol, TRAP_OPEN_LO, TRAP_OPEN_HI),  # CORE: longs OPENED = the victims
             "fail": _ramp(-result, FAIL_LO, FAIL_HI),            # the failure (red depth)
             "swept": _soft(swept_above, SWEEP_LO, SWEEP_HI),     # poked the high (bait)
             "pocHigh": _soft(poc_pos, POC_LO, POC_HI),           # POC stacked HIGH (reload)
@@ -208,6 +214,7 @@ def _score_and_factors(buckets: list, idx: int, b_mult: float, s_mult: float):
     if result > 0.0:    # closed GREEN despite selling = BEAR trap
         F["BEAR TRAP"] = {
             "Δaggr": _ramp(-delta_frac, DELTA_LO, DELTA_HI),
+            "trappedOpen": _ramp(opS / vol, TRAP_OPEN_LO, TRAP_OPEN_HI),  # CORE: shorts OPENED = the victims
             "fail": _ramp(result, FAIL_LO, FAIL_HI),
             "swept": _soft(swept_below, SWEEP_LO, SWEEP_HI),
             "pocLow": _soft(1.0 - poc_pos, POC_LO, POC_HI),      # POC stacked LOW
