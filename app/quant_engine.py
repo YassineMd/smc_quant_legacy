@@ -608,16 +608,17 @@ def calc_quant_obs(engine: QuantEngine, timeframe: str) -> List[dict]:
                         "vol_percent": float(b1.vel_ratio * 100),
                     })
 
-    # MITIGATION ENGINE (invalidation): dynamic width means a pierce kills it.
+    # MITIGATION ENGINE (invalidation): a block dies only when a single candle's BODY engulfs
+    # the whole zone — max(open,close) >= top AND min(open,close) <= bottom. The WICK (high/low)
+    # is NEVER used: a wick poke/pierce is the block doing its job (tested and held), not death.
+    # Symmetric across bullish/bearish — a body covering both extremes invalidates either type.
     for ob in obs:
         confirm_time = parse_ts(ob["confirm"])
         for b in buckets:
             if b.end_time is not None and b.end_time > confirm_time:
-                if ob["type"] == "bullish" and b.low <= ob["top"]:
-                    ob["active"] = False
-                    ob["end"] = clean_ts(b.end_time)
-                    break
-                elif ob["type"] == "bearish" and b.high >= ob["bottom"]:
+                body_top = max(b.open_price, b.close_price)
+                body_bottom = min(b.open_price, b.close_price)
+                if body_top >= ob["top"] and body_bottom <= ob["bottom"]:
                     ob["active"] = False
                     ob["end"] = clean_ts(b.end_time)
                     break
