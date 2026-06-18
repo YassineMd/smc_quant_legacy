@@ -32,7 +32,8 @@ from . import config
 from .protocol import (CatchupEndPacket, CatchupPacket, CatchupStartPacket,
                        LiquidationPacket, ObPacket, PulsePacket, TickPacket)
 from .aggtrade import OiAttributor, candle_open, median_target_vol, trade_to_tick
-from .quant_engine import QuantEngine, build_engine_registry, calc_quant_obs, rank_obs
+from .quant_engine import (QuantEngine, build_engine_registry, calc_absorption,
+                           calc_quant_obs, rank_obs)
 
 # Recent observed candles shipped in a CATCHUP footprint payload (bounds frame size).
 CATCHUP_FOOTPRINT_LIMIT = 200
@@ -98,6 +99,7 @@ class MarketDataCore:
             closed_buckets=closed,
             active_bucket=active,
             order_blocks=order_blocks,
+            absorptions=self._absorption_marks(tf),
             footprints=footprints,
             vpin=engine.vpin,
         )
@@ -117,6 +119,7 @@ class MarketDataCore:
         footprints = {k: tf_db[k] for k in recent_keys}
         return CatchupStartPacket(
             tf=tf, target_vol=engine.target_vol, order_blocks=order_blocks,
+            absorptions=self._absorption_marks(tf),
             footprints=footprints, total_buckets=len(engine.closed_buckets))
 
     def catchup_buckets(self, tf: str) -> list:
@@ -320,6 +323,7 @@ class MarketDataCore:
         fp["lastVol"] = curr_vol            # kline-volume reconciliation (no longer a tick source)
         fp["lastTakerBuy"] = curr_taker_buy
         fp["oi_close"] = self.pulse_state.get("oi", 0.0)
+        fp["close"] = close_price           # candle close -> absorption close-through invalidation
         self.latest_live_price = close_price
 
         candle = {
@@ -475,6 +479,16 @@ class MarketDataCore:
         engine.recalibrate(engine.last_tick_time, self.footprints_db.get(tf_key, {}))
         return rank_obs(calc_quant_obs(engine, tf_key))
 
+    def _absorption_marks(self, tf_key: str) -> list:
+        """Whale-absorption standing levels for one tf — replayed over the last 12h of
+        footprints (~3x the max real lifespan, comfortably cheap; stateless like the OB matrix)."""
+        tf_db = self.footprints_db.get(tf_key, {})
+        if not tf_db:
+            return []
+        cutoff = max(int(k) for k in tf_db) - 12 * 3600
+        recent = {k: v for k, v in tf_db.items() if int(k) >= cutoff}
+        return calc_absorption(recent)
+
     async def recompute_loop(self) -> None:
         """Periodic recalibrate + OB rescan, DECOUPLED from per-close (Step 19.4).
 
@@ -490,7 +504,9 @@ class MarketDataCore:
                     obs = self._recompute_engine(tf_key)
                     self.broadcast_tf(
                         tf_key,
-                        ObPacket(tf=tf_key, order_blocks=obs, new_buckets=[],
+                        ObPacket(tf=tf_key, order_blocks=obs,
+                                 absorptions=self._absorption_marks(tf_key),
+                                 new_buckets=[],
                                  vpin=self.engines[tf_key].vpin).to_line(),
                     )
                 except Exception as e:

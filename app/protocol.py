@@ -112,6 +112,7 @@ class CatchupPacket:
     closed_buckets: List["BucketSnapshot"] = field(default_factory=list)
     active_bucket: "BucketSnapshot" = field(default_factory=dict)
     order_blocks: List[Dict[str, Any]] = field(default_factory=list)
+    absorptions: List[Dict[str, Any]] = field(default_factory=list)
     footprints: Dict[str, Any] = field(default_factory=dict)
     vpin: float = 0.0
     type: str = TYPE_CATCHUP
@@ -134,6 +135,7 @@ class CatchupStartPacket:
     tf: str
     target_vol: float
     order_blocks: List[Dict[str, Any]] = field(default_factory=list)
+    absorptions: List[Dict[str, Any]] = field(default_factory=list)
     footprints: Dict[str, Any] = field(default_factory=dict)
     total_buckets: int = 0
     type: str = TYPE_CATCHUP_START
@@ -186,6 +188,7 @@ class ObPacket:
 
     tf: str
     order_blocks: List[Dict[str, Any]] = field(default_factory=list)
+    absorptions: List[Dict[str, Any]] = field(default_factory=list)
     new_buckets: List["BucketSnapshot"] = field(default_factory=list)
     vpin: float = 0.0
     type: str = TYPE_OB
@@ -235,11 +238,13 @@ _PARSERS = {
         closed_buckets=d.get("closed_buckets", []),
         active_bucket=d.get("active_bucket", {}),
         order_blocks=d.get("order_blocks", []),
+        absorptions=d.get("absorptions", []),
         footprints=d.get("footprints", {}), vpin=d.get("vpin", 0.0),
     ),
     TYPE_CATCHUP_START: lambda d: CatchupStartPacket(
         tf=d["tf"], target_vol=d.get("target_vol", 0.0),
         order_blocks=d.get("order_blocks", []),
+        absorptions=d.get("absorptions", []),
         footprints=d.get("footprints", {}),
         total_buckets=d.get("total_buckets", 0),
     ),
@@ -253,6 +258,7 @@ _PARSERS = {
     ),
     TYPE_OB: lambda d: ObPacket(
         tf=d["tf"], order_blocks=d.get("order_blocks", []),
+        absorptions=d.get("absorptions", []),
         new_buckets=d.get("new_buckets", []), vpin=d.get("vpin", 0.0),
     ),
     TYPE_LIQ: lambda d: LiquidationPacket(
