@@ -573,7 +573,10 @@ def calc_quant_obs(engine: QuantEngine, timeframe: str) -> List[dict]:
                         "bottom": dyn_bot,
                         "start": clean_ts(b0.start_time),
                         "confirm": clean_ts(b1.end_time),
+                        "start_epoch": b0.start_time,     # exact absorption-candle start = the zone -> box anchors here (NOT b1)
+                        "confirm_epoch": b1.start_time,   # exact ignition-candle start = the mitigation scan floor (after confirm)
                         "end": None,
+                        "end_epoch": None,
                         "active": True,
                         "power_score": float(power_score),
                         "vol_mult": float(b1.vel_ratio),
@@ -597,7 +600,10 @@ def calc_quant_obs(engine: QuantEngine, timeframe: str) -> List[dict]:
                         "bottom": dyn_bot,
                         "start": clean_ts(b0.start_time),
                         "confirm": clean_ts(b1.end_time),
+                        "start_epoch": b0.start_time,     # exact absorption-candle start = the zone -> box anchors here (NOT b1)
+                        "confirm_epoch": b1.start_time,   # exact ignition-candle start = the mitigation scan floor (after confirm)
                         "end": None,
+                        "end_epoch": None,
                         "active": True,
                         "power_score": float(power_score),
                         "vol_mult": float(b1.vel_ratio),
@@ -608,20 +614,45 @@ def calc_quant_obs(engine: QuantEngine, timeframe: str) -> List[dict]:
                         "vol_percent": float(b1.vel_ratio * 100),
                     })
 
-    # MITIGATION ENGINE (invalidation): a block dies only when a single candle's BODY engulfs
-    # the whole zone — max(open,close) >= top AND min(open,close) <= bottom. The WICK (high/low)
-    # is NEVER used: a wick poke/pierce is the block doing its job (tested and held), not death.
-    # Symmetric across bullish/bearish — a body covering both extremes invalidates either type.
+    # MITIGATION ENGINE (progressive body EROSION, CLOSE-based death): the block ERODES as candle
+    # BODIES penetrate it — its NEAR edge moves permanently inward — and DIES only when a candle
+    # CLOSE clears the FAR edge. The WICK (high/low) is NEVER used: a wick poke/pierce is the block
+    # doing its job (tested and held), not erosion or death. A body that dips past the far edge but
+    # CLOSES back survives-and-erodes (price recovered = the block lives, shrunk).
+    #   bullish (demand): near=top, far=bottom — close <= bottom kills; else min(open,close) erodes top down.
+    #   bearish (supply): near=bottom, far=top — close >= top    kills; else max(open,close) erodes bottom up.
+    # The max(bottom,…)/min(top,…) clamp floors erosion AT the far edge: a fully-eaten survivor collapses
+    # to a zero-height sliver, never inverts to a negative-height box (degenerate-input guard).
+    # Scans STRICTLY AFTER the confirming bucket (its exact confirm_epoch = b1.start), NOT the
+    # minute-floored `confirm` string — else a bucket inside the block's own formation minute could
+    # erode/kill it before it confirmed (the minute-resolution class, killed via the exact epoch).
+    # NOTE confirm_epoch (b1) is the scan floor; start_epoch (b0, the absorption candle) is the box
+    # left edge — different buckets. top/bottom are mutated here (the eroded zone) and broadcast
+    # as-is; only the render reads them (the shrunk box). The id embeds the ORIGINAL poc.
     for ob in obs:
-        confirm_time = parse_ts(ob["confirm"])
+        floor = ob.get("confirm_epoch")
+        if floor is None:
+            floor = parse_ts(ob["confirm"])          # fallback: pre-confirm_epoch OB
+        bullish = ob["type"] == "bullish"
         for b in buckets:
-            if b.end_time is not None and b.end_time > confirm_time:
-                body_top = max(b.open_price, b.close_price)
-                body_bottom = min(b.open_price, b.close_price)
-                if body_top >= ob["top"] and body_bottom <= ob["bottom"]:
+            if b.start_time <= floor:
+                continue
+            if bullish:
+                if b.close_price <= ob["bottom"]:                       # CLOSE cleared far edge -> dead
                     ob["active"] = False
                     ob["end"] = clean_ts(b.end_time)
+                    ob["end_epoch"] = b.start_time
                     break
+                elif min(b.open_price, b.close_price) < ob["top"]:      # body ate near edge -> erode (clamped)
+                    ob["top"] = max(ob["bottom"], min(ob["top"], min(b.open_price, b.close_price)))
+            else:
+                if b.close_price >= ob["top"]:                          # CLOSE cleared far edge -> dead
+                    ob["active"] = False
+                    ob["end"] = clean_ts(b.end_time)
+                    ob["end_epoch"] = b.start_time
+                    break
+                elif max(b.open_price, b.close_price) > ob["bottom"]:   # body ate near edge -> erode (clamped)
+                    ob["bottom"] = min(ob["top"], max(ob["bottom"], max(b.open_price, b.close_price)))
 
     return obs
 
