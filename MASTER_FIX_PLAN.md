@@ -265,7 +265,11 @@ whale-absorption detector. The arc:
   `8da2412`. The hover readout (cursor-anchored, a specific bucket) is unchanged. (4) **Candle midline
   removed** — the wick is drawn OUTSIDE the body (upper + lower segments) instead of one line through
   it, clearing the center line that showed through the semi-transparent body fill; wicks unchanged,
-  `710e742`.
+  `710e742`. (5) **Wick + body-border flow-coloring** — the candle border + wick are colored by
+  buy/sell dominance: green when buy leads, red when sell leads, gray when even; a >50% lead (1.5x)
+  goes NEON green/red and slightly thicker (0.7 vs 0.3 px). DIVERGENCE overrides at width 1: buy-led
+  but closed DOWN → neon orange (255,128,0); sell-led but closed UP → neon blue (0,153,255). Body fill
+  (neon-engine 4-vector brush) unchanged; pen cached in the #3 compute path. `4c8fc2b`.
 - **DOM book-mid line (idea from the Phase-A DOM port) — DEFERRED, NOT Phase A.** The Mode-10 spot line
   is the last TRADE (`closes[-1]`); on a depth ladder the book MID (between best-bid/best-ask) is often
   the more useful reference. Idea: keep the last-trade line, ADD a thin mid line (or best-bid/ask markers)
