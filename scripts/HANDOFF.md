@@ -66,6 +66,145 @@ rule: **no overlay onto Mode 10 before its logic is corrected.**
   The daemon now boots clean on the v3 db (no re-wipe — v3 == v3). A running daemon is
   read by `scripts/baseline_diag.py <tf>` for the 5 invariant distributions.
 
+## 1.5 — CURRENT DEEP-DIVE (2026-06-19): Mode-10 overlay layers (OB ✅ · TRAP ✅ · ABSORPTION ✅)
+
+Since the Phase-1 commits above, all work has been the **Mode-10 overlay layers**. **START HERE.**
+
+### ✅ ABSORPTION / "iceberg" layer — COMMITTED (the just-finished deep-dive)
+
+**WHAT IT IS:** a whale-absorption detector. Heavy, sustained, one-sided aggression at a price level
+that **HOLDS** (price fails to break it) = a hidden iceberg defending the level. Replaced the old
+over-firing per-bucket iceberg heuristic ("sea of icebergs").
+
+**THE DEFINITION (validated on real data):** trigger = C1 ∧ C2 ∧ C3 ∧ C4 —
+- C1 HEAVY: dominant-side absorbed ≥ `κ × median bucket vol`.
+- C2 SUSTAINED: ≥ 4 hits (`nmin`), no single bucket > 60% (`rho`) of the absorbed.
+- C3 ONE-SIDED: dominant side ≥ 75% (`sigma`).
+- C4 HELD: vol beyond the level ≤ 15% (`beta`).
+Buy-aggression that holds → a SELL mark (a sell wall absorbed buyers); sell-aggression → a BUY mark.
+
+**BUCKET-NATIVE (THE KEY ARCHITECTURE — the root fix):** `calc_absorption(buckets, …)` computes on
+`engine.closed_buckets` (NOT 1m footprints), anchors marks on `bucket.start_time`, dies on the bucket
+`close_price` close-through (close-rule + 0.10% buffer). WHY: the original ran on 1m TIME candles while
+Mode 10 renders VOLUME buckets — the time-vs-bucket axis mismatch (`ts_to_idx` slippage, same class as
+the OB floaters) caused floating marks, wrong-place/wick-looking deaths, and missing early-bucket
+coverage. Bucket-native fixed all of it: ONE shared axis; closed buckets always carry a close (no
+forward-only-close gap); full early coverage (levels on every bucket).
+
+**THE FLOOR (LOCKED, dollar-anchored):** **κ=0.80 + a hard $250k filter** (`t1_usd`). The κ number
+changed meaning across units (1m median 14,648 → bucket median ~9,900 SOL), so the floor is set in
+DOLLARS: κ=0.80 reproduces the 1m unit's ~$270k all-whales floor (min $272k, zero sub-$250k); the hard
+$250k holds the line regardless of market drift. Validated: 107 marks, 26.7/8h, min $272k.
+
+**LIFECYCLE (stateless replay, like `calc_quant_obs`):** marks are STANDING LEVELS, born at a bucket,
+die on a **decisive close-through** (a bucket close past the level by the 0.10% buffer — NOT a wick).
+`$ = PEAK window absorbed`, paired with κ (both taken at the peak-$ window — do NOT switch to cumulative).
+
+**RENDER — LINES not boxes** (an iceberg IS a price level, not a zone). `AbsorptionLayer` in
+`chart_widgets.py`: a horizontal line at the cluster **POC** (`price` field = heaviest-absorbed level),
+color = side (blue buy `(41,121,255)` / orange sell `(255,145,0)`), **thickness = κ continuous**
+(`_absorb_thickness`: κ0.80→1px … κ4.6→6px), label = `$X (κN.N)`. **Cell-boundary span: `x0 = birth−0.5,
+x1 = death+0.5`** (the half-bucket fix — candles are centered at index i with half-width 0.5; the old
+`x0=birth / x1=death+1` caused the offset + the overshoot). Merging = **Option A** (sequential same-price
+= separate defenses; concurrent already merges via the detector `hit` logic; $ = peak).
+
+**KEY FILES/FUNCTIONS:**
+- `quant_engine.py` — `calc_absorption(buckets, kappa=0.80, …, t1_usd=250_000.0)` → marks
+  `{id, plo, phi, price, side, absorbed_usd, tier, kappa, birth, end, active}`; `_absorption_clusters`
+  returns `(plo, phi, side, absorbed, kappa, poc)`.
+- `feeds.py` — `_absorption_marks(tf)` passes `engine.closed_buckets`; `absorptions=` on the
+  recompute_loop ObPacket, CatchupStart, CatchupPacket.
+- `chart_widgets.py` — `AbsorptionLayer.update_data_indexed` (lines render); `_absorb_thickness`,
+  `RGB_ABSORB_*`, `_ABSORB_CAP_H`.
+- `pipe_client.py` — `self.absorptions` mirrored on the ObPacket **ELSE branch only** (full-recompute;
+  NOT the close-piggyback `if pkt.new_buckets:` — that ships `absorptions=[]` and would wipe them) +
+  `snapshot()["absorptions"]`.
+- `terminal.py` — `self.bc_absorption`; the `m10_icebergs` draw block (gated, zValue −6) calling
+  `bc_absorption.update_data_indexed(snap["absorptions"], x[-1], _ts_to_idx, view)`; redraw-gate
+  `abs_sig = (id, active, end, round(kappa,2), price)` in `_draw_scanner` (so a death/thickness/POC change
+  repaints — without it, a death didn't repaint in a quiet market).
+- `hamburger.py` — `m10_icebergs` toggle "Absorption", default ON.
+
+**COMMITTED — the absorption layer is DONE.** Shipped across `d284e62` (original 1m detector), `b03b2f7`
+(broadcast on ObPacket), then the **bucket-native completion (2026-06-19)** in two commits after a docs
+commit:
+- **DETECTOR (daemon):** `quant_engine.py` — bucket-native `calc_absorption` (reads `engine.closed_buckets`)
+  + the POC in `_absorption_clusters` + the **κ=0.80 / $250k (`t1_usd`) floor**; `feeds.py` —
+  `_absorption_marks` → `engine.closed_buckets` (was the 1m `footprints_db`).
+- **RENDER+CONSUMER (terminal):** `chart_widgets.py` — the **LINES render** (`AbsorptionLayer`) + the
+  cell-boundary span (x0=birth−0.5, x1=death+0.5) + the `_absorb_thickness` κ→px map + **the Bug-1 cap
+  removal**; `pipe_client.py` — consumer cache (`self.absorptions` + `snapshot()`, ELSE-branch store);
+  `terminal.py` — wiring (`bc_absorption` + the m10_icebergs draw block) + the redraw-gate `abs_sig`;
+  `hamburger.py` — the `m10_icebergs` **"Absorption" toggle** (default ON).
+
+**RESOLVED BUGS (the deep-dive's closing work — diagnosed READ-ONLY, then confirmed LIVE):**
+- (a) **Stray vertical end-cap — FIXED (removed).** On a LINE the ending itself IS the death signal, so the
+  inherited box-era cap block (`drawLine(QLineF(x1_death, price±_ABSORB_CAP_H …))`) was deleted from
+  `AbsorptionLayer.update_data_indexed` (the `_ABSORB_CAP_H` constant stays — still boundingRect y-padding).
+- (b) **2 "floating" line-starts — DISPROVEN (no bug, no code change). The clearest case yet for the
+  prove-it-LIVE discipline.** TWO independent analyses (this session AND the architect) convergently
+  diagnosed a **bisect-tie** from code: `_ts_to_idx`'s `bisect_right(start_times, birth)−1` resolves a
+  non-unique `start_time` to the RIGHTMOST tied bucket, so a mark born into a tie-cluster would overshoot
+  its true birth cell. Clean, convincing, and **WRONG.** Read-only LIVE instrumentation
+  (`data/absorption_live.log`: per-mark birth→idx + a TIE flag + a CLAMPED flag) showed **`TIE=False` on
+  every mark, every frame.** The real cause was the **viewport CLAMP** `x0c = max(x0, vx0)`: a mark born
+  off the LEFT edge correctly starts at the screen edge (which lands mid-cell when the pan/zoom leaves the
+  edge off a half-integer). The 2 floaters were exactly the 2 `CLAMPED=True` marks — one an ACTIVE whale
+  still defending its level off-screen, so clamping (not hiding) is correct, and it matches the OB boxes'
+  `max(confirm_x, vx0)`. **DECISION: leave as-is — the anchoring was never broken.** Had we "fixed" the
+  convergent hypothesis we'd have changed the SHARED `_ts_to_idx` (risking OB regression) for a bug that
+  does not exist on screen. Instrumenting instead of fixing is what caught it.
+- **⚠️ LATENT HAZARD (real, not yet triggered) — the bisect-tie itself.** Non-unique `start_time`
+  (`terminal.py:~1033` already flags it) means `_ts_to_idx` WOULD mis-anchor a mark born into a genuine
+  sub-second tie-cluster — it just didn't fire in this session's data (buckets 60–70s apart). In a
+  fast/bursty market it will. Known issue for future hardening of the SHARED mapper (disambiguate ties —
+  resolve to the FIRST tied bucket, or carry a stable bucket ordinal); affects OB too, so verify no OB
+  regression when fixed. Do NOT lose this finding.
+
+### ✅ OB LAYER — COMPLETE (committed)
+Exact-epoch lifespan boxes (`start_epoch`/`confirm_epoch`/`end_epoch`), b0 anchor (`start_epoch =
+b0.start_time`), close-based progressive erosion mitigation. Commits `d2a99a8`, `73b01c5`, `0c455a5`,
+`3728952`. Subsumes Phase 2 (OB fidelity) + the Group-D gray-OB item.
+
+### ✅ TRAP (B) — COMMITTED
+TRAP states gate on the trapped side OPENING (`trappedOpen` factor). Commit `3333226`. Live-verify during
+state calibration.
+
+### DEFERRED QUEUE (reordered 2026-06-19)
+1. **Time-chart removal — PROMOTED.** The time-candle entanglement caused the absorption-on-1m mismatch
+   this whole dive fixed — cut it at the source (+ remove the dead Technical-Layers menu section).
+2. **OB polish (A)** — min-render-height + duplicate-timestamp handling.
+3. **Mode-10 selection tool (D)** — the capstone (see §2 / the plan's "After the pipeline is solid").
+- **State-engine calibration — DEFERRED to LIVE trading** (feel it over days; see the plan's item-4 arc).
+
+### THE WORKING DISCIPLINE (critical — preserve it)
+- **⚠️ THE #1 TRAP — YOU WILL HIT IT ON THE 2 RENDER BUGS: when a HEADLESS test passes but the LIVE
+  SCREEN still shows the bug, TRUST THE SCREEN. Instrument the LIVE running process — do NOT re-prove
+  headless.** This recurred MANY times in the absorption dive: the **geometry raster** test, the
+  **`PipeClientWorker` store** test, AND the **redraw-gate-sig** test ALL passed headless while the
+  operator's screen stayed broken — each time the real bug was a level deeper that ONLY live
+  instrumentation found (the pipe_client field-drop, the gate skipping a repaint, the time-vs-bucket axis
+  mismatch). **For the 2 open render bugs (stray end-cap, floating starts): instrument the LIVE
+  `AbsorptionLayer.update_data_indexed` / the live render — log what each mark RECEIVES (active/end/birth/
+  price) AND how it actually DRAWS (x0/x1/skip/cap), exactly like the `data/absorption_live.log`
+  instrumentation used during the dive. Do NOT spin up another headless harness and call it proven.** The
+  operator's "look at the screenshot, it's still wrong" caught EVERY foundational bug — defer to the screen.
+- **One step, one commit. Propose before build. HOLD for live sign-off before committing.**
+- **The volume bucket is the honest unit; time candles are "a big lie"** (equal width ≠ equal activity) —
+  why bucket-native won and why the time-chart removal is promoted.
+
+### IMMEDIATE NEXT STEPS (a fresh session starts exactly here)
+1. **Absorption layer — DONE & COMMITTED (2026-06-19), 3 commits: docs, detector, render.** Bug-1 fixed,
+   Bug-2 disproven (see RESOLVED BUGS above), live-verified on screen before commit.
+2. **NEXT — time-chart removal (PROMOTED).** The time-candle entanglement is what caused the whole
+   absorption-on-1m mismatch this dive fixed. It is NOT just "delete the time-chart code" — it's "what
+   SHOULD the pure-bucket surface be once the dishonest time-unit is gone?" Start with a FIRST-PRINCIPLES
+   analysis (what the time-chart provides, what depends on it, what unifies once it's gone, the ideal
+   bucket-native architecture) + a proposed removal plan with risk areas. PROPOSE before building. (Also
+   remove the dead Technical-Layers menu section.)
+
+---
+
 ## 2. Source of truth + what's next
 
 - **`MASTER_FIX_PLAN.md`** (project root) is the authoritative plan. Read it. Every

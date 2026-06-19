@@ -175,6 +175,93 @@ still hold their content — this orders what's left and why.
 
 ---
 
+## CURRENT STATE (2026-06-19) — Mode-10 overlay layers: OB ✅ · TRAP ✅ · ABSORPTION 🔧
+
+The long arc since the 2026-06-17 state above: the Mode-10 **overlay layers** got built/reworked.
+Committed vs in-progress vs deferred, so the map stays clean after a long iceberg dive.
+
+### ✅ OB layer rework — COMPLETE (committed)
+The order-block overlay is done end-to-end on the bucket canvas — it subsumes Phase 2 (OB fidelity),
+the Group D gray-OB item, and the OB-detection trace findings (Steps 6 & 8).
+- **Lifespan BOXES on exact bucket epochs:** every OB renders as a lifespan box (formation→live-edge if
+  alive, formation→consumption if dead), on `start_epoch`/`confirm_epoch`/`end_epoch` — killed the
+  minute-resolution mapping class.
+- **b0 anchor fix:** `start_epoch = b0.start_time` (the absorption candle where the zone is, NOT b1) —
+  fixed the floating/detached OB.
+- **Progressive CLOSE-based erosion** replaced binary first-touch death (Step 8) — erodes on a decisive
+  close-through, not a 1-tick wick graze.
+- Toggle defaults (m10_obs ON, m10_dead_obs ON "Dead OBs").
+- Commits: `d2a99a8`, `73b01c5`, `0c455a5`, `3728952`.
+
+### ✅ TRAP states (B) — COMMITTED
+TRAP states gate on the **trapped side OPENING** (`trappedOpen` core factor) — the corrected
+"effort-trapped, not strength". Commit `3333226`.
+
+### ✅ ABSORPTION / "iceberg" layer — COMPLETE (committed 2026-06-19)
+Replaced the old over-firing per-bucket iceberg heuristic (Step 11's "sea of icebergs") with an honest
+whale-absorption detector. The arc:
+1. **Rigorous C1–C4 definition** (HEAVY κ·median-vol · SUSTAINED · ONE-SIDED · HELD) + empirical
+   firing-rate validation BEFORE building — "a handful of whales per session, not a forest."
+2. **Lifecycle** (stateless replay, like `calc_quant_obs`): form → persist (peak-$ tier) → die on a
+   decisive close-through (0.10% buffer, never a wick).
+3. **Broadcast + consumer** wired (`absorptions` on ObPacket/Catchup, no schema bump): committed
+   `b03b2f7`, `d284e62`; then plumbed through **pipe_client** (the field was parsed but dropped before
+   the render read it → bands didn't appear until pipe_client mirrored it into the snapshot) + a redraw-
+   gate fix (the sig didn't track absorption state, so a death didn't repaint).
+4. **BUCKET-NATIVE PORT (the root fix):** the detector ran on 1m TIME candles while Mode 10 renders VOLUME
+   buckets — the time-vs-bucket axis mismatch (`ts_to_idx` slippage, same class as the OB floaters)
+   caused floating marks, wrong-place/wick-looking caps, and missing early-bucket coverage.
+   `calc_absorption` now reads `engine.closed_buckets` (anchors on `bucket.start_time`, dies on the bucket
+   `close_price`), so detection + display share ONE volume-bucket axis. Closed buckets always carry a
+   close → the forward-only-close gap is gone; full early-bucket coverage.
+5. **LINES redesign:** an iceberg is a price LEVEL, not a zone → a horizontal line at the cluster **POC**
+   (heaviest-absorbed level), **thickness = κ** (continuous — replaces the discrete $-tiers), color =
+   side, label = `$peak (κ)`. **Cell-boundary span** `[birth−0.5 → death+0.5 | live-edge]` fixes the
+   half-bucket offset and the `+1` death overshoot (candles are centered at index i, half-width 0.5).
+   Same-price merging = **Option A** (sequential defenses stay separate; concurrent already merges; $ =
+   peak).
+6. **κ FLOOR — DOLLAR-ANCHORED, LOCKED (2026-06-19):** the κ number changed meaning across units (1m
+   median 14,648 → bucket median ~9,900 SOL), so the floor is set in DOLLARS. **κ=0.80 on buckets** =
+   the 1m unit's ~$270k all-whales floor (min $272k, zero sub-$250k), PLUS a hard **$250k** filter so the
+   whale line holds regardless of market drift. ~26/8h, kept readable by thickness-triage (weak = thin).
+- **RESOLVED render bugs (2026-06-19, diagnosed READ-ONLY → confirmed LIVE):** (a) **stray vertical
+  end-cap — FIXED** (removed; on a LINE the ending IS the death, no cap). (b) **2 "floating" line-starts
+  — DISPROVEN, no code change.** Two independent code analyses (this session + the architect)
+  convergently fingered a **bisect-tie** in the SHARED `_ts_to_idx` (`bisect_right(start_times, birth)−1`
+  resolving a non-unique `start_time` to the RIGHTMOST tied bucket). Read-only LIVE instrumentation
+  (`data/absorption_live.log` — per-mark birth→idx with TIE + CLAMPED flags) showed **`TIE=False` on
+  every mark, every frame.** The real cause was the **viewport clamp** `max(x0, vx0)` on births off the
+  LEFT edge (correct — one floater was an ACTIVE whale still defending off-screen, so clamping beats
+  hiding; it also matches the OB boxes' `max(confirm_x, vx0)`). **DECISION: leave as-is — anchoring was
+  never broken.** The prove-it-LIVE discipline prevented a wrong change to the SHARED mapper (OB-
+  regression risk) for a bug that does not exist on screen.
+- **⚠️ LATENT HAZARD (real, not yet triggered):** the bisect-tie itself. Non-unique `start_time`
+  (`terminal.py` already flags it) means `_ts_to_idx` WOULD mis-anchor a mark born into a genuine
+  sub-second tie-cluster — it just didn't fire here (this session's buckets were 60–70s apart). In a
+  fast/bursty market it will. Known issue for future hardening of the SHARED mapper (disambiguate ties —
+  resolve to the FIRST tied bucket, or carry a stable bucket ordinal); affects OB too, so verify no OB
+  regression when fixed. Do NOT lose this finding.
+- **COMMITTED (2026-06-19)** — the bucket-native port + LINES + κ-floor + the Bug-1 cap removal shipped
+  in two commits (DETECTOR: `quant_engine.py` · `feeds.py`; RENDER+CONSUMER: `chart_widgets.py` ·
+  `pipe_client.py` · `terminal.py` · `hamburger.py`), preceded by this docs commit. The layer is DONE.
+
+### Deferred queue — current order (operator's call, 2026-06-19)
+1. **Time-chart removal — PROMOTED (was the Group-C "LATER" item).** The operator elevated this: the
+   time-candle entanglement is exactly what caused the absorption-on-1m mismatch this whole dive fixed.
+   Mode 10 is the native unit; the time chart is vestigial scaffolding. Removing it (+ the dead
+   Technical-Layers menu section) cuts the bug class at the source. **NOW the active next item — the
+   absorption layer is committed (2026-06-19); start with a first-principles analysis + removal plan
+   (what the time-chart provides, what depends on it, what unifies once it's gone, the ideal bucket-
+   native surface), propose before building.**
+2. **OB polish (A)** — min-render-height + duplicate-timestamp handling (small refinements paused during
+   the absorption dive).
+3. **Mode-10 selection tool (D)** — the capstone, built against the corrected scalars once the overlays
+   are all clean (see "After the pipeline is solid", below).
+- **State-engine calibration — still DEFERRED to LIVE trading** (operator's call): feel the engine against
+  the real market over days; the item-4 "State-engine live calibration" arc above still holds.
+
+---
+
 ## Mode 10 primary-surface punch list (operator, from live canvas use — 2026-06-16)
 
 Observed by the operator trading off the live Mode 10 canvas (after the Stage-0 true-POC
