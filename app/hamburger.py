@@ -187,11 +187,17 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(12, 40, 12, 12); root.setSpacing(6)
 
-        # --- timeframe (spec §7.2.1) ---
-        root.addWidget(self._header("Timeframe"))
+        # --- bucket scale (formerly "Timeframe") — selects which order-flow window sizes the
+        # volume buckets. NO number here: the buckets drawn on the chart ARE the honest scale
+        # display (a menu number would restate the chart, abstract the distribution, or risk
+        # showing poisoned persisted state). The tf is the stable, honest INPUT (the flow window). ---
+        root.addWidget(self._header("Bucket Scale"))
         self.tf_combo = QtWidgets.QComboBox()
         self.tf_combo.addItems(config.TIMEFRAMES)
         self.tf_combo.setCurrentText(config.DEFAULT_TF)
+        self.tf_combo.setToolTip(
+            "Selects which order-flow window sizes the volume buckets — the buckets drawn on the "
+            "chart show the actual scale. (Bucket scales, not time candles.)")
         self.tf_combo.currentTextChanged.connect(self.tfChanged.emit)
         root.addWidget(self.tf_combo)
 
