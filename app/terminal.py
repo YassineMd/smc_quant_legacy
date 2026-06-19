@@ -501,10 +501,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _on_mouse_move(self, evt) -> None:
         pos = evt[0]
         if not self.plot.sceneBoundingRect().contains(pos):
-            self.stats.hide()
             self.price_tag.hide()
             self.dom_tooltip.hide()
-            self._last_hover_pos = None      # left the plot -> stop the live-breathe
+            self._last_hover_pos = None      # left the plot -> stop the hover re-fire
+            if self.scanner_mode == "bucket_canvas":
+                self._show_forming_stats()   # keep the live candle's readout on by default
+            else:
+                self.stats.hide()            # metric modes are hover-only
             return
         self._last_hover_pos = pos           # park here for the live-breathe re-fire
         pt = self.vb.mapSceneToView(pos)
@@ -536,7 +539,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         filtered, _x, _a = self._build_scanner_buckets()
         idx = int(round(x))
         if not (0 <= idx < len(filtered)):
-            self.stats.hide()
+            self._show_forming_stats()   # cursor over empty space -> fall back to the live-candle readout
             return
         end_time = filtered[idx].get("end_time", 0.0)
         try:
@@ -548,14 +551,38 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         wp = self.mapFromGlobal(gp)
         self.stats.show_stats(lines, clock, wp.x(), wp.y())
 
+    def _show_forming_stats(self) -> None:
+        """Always-on readout for the FORMING (live, present, not-yet-closed) candle -- the right-most
+        bucket. Shown by default whenever the Stats Box is on and you're NOT hovering a specific
+        bucket, pinned to that candle's LOW point (data -> screen) like a hover readout but automatic.
+        Mode 10 only; the hover readout (cursor-anchored, a specific bucket) is left untouched."""
+        if self.scanner_mode != "bucket_canvas" or not self.menu.layer_state("m10_stats"):
+            return
+        filtered, _x, _a = self._build_scanner_buckets()
+        if not filtered:
+            return
+        idx = len(filtered) - 1
+        b = filtered[idx]
+        end_time = b.get("end_time", 0.0)
+        try:
+            clock = datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S")
+        except (OSError, ValueError, OverflowError):
+            clock = "--"
+        lines = [f"<b>Idx: {idx}</b>"] + self._hover_context(self.scanner_mode, filtered, idx)
+        anchor = self.vb.mapViewToScene(QtCore.QPointF(float(idx), float(b.get("low", 0.0))))
+        gp = self.plot.mapToGlobal(self.plot.mapFromScene(anchor))
+        wp = self.mapFromGlobal(gp)
+        self.stats.show_stats(lines, clock, wp.x(), wp.y())
+
     def _refresh_parked_hover(self) -> None:
-        """A3a live-breathe — re-run the scanner hover for the parked cursor each
-        redraw frame so a hovered FORMING bucket updates tick-by-tick, not only on
-        cursor motion. No-op once the cursor leaves the plot (_last_hover_pos is
-        cleared). Cheap: _build_scanner_buckets is signature-gated on the live edge's
-        volume, so a frame with no new trade just re-emits the cached readout."""
+        """A3a live-breathe — re-run the readout each redraw frame. With a parked cursor it
+        re-renders the hovered bucket tick-by-tick; with NO hover it falls back to the always-on
+        FORMING-candle readout (Mode 10), so the live candle's stats stay visible without hovering.
+        Cheap: _build_scanner_buckets is signature-gated on the live edge volume, so a static frame
+        just re-emits the cached readout."""
         pos = self._last_hover_pos
         if pos is None:
+            self._show_forming_stats()   # not hovering -> the live candle's readout stays on by default
             return
         pt = self.vb.mapSceneToView(pos)
         self._hover_scanner(pt.x(), pos)
