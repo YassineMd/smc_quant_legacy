@@ -5,14 +5,12 @@ Native GPU-accelerated chart primitives drawn on the nude white canvas
 
     * LocalTimeAxis    — Unix-second -> host-local clock string (spec §2.3.1)
     * PriceAxis        — bold monospace price labels (spec §5.1.1)
-    * CandlestickItem  — B&W candles; built once, refreshed via update_data
-                         (spec §1.4.3 — never re-instantiated)
-    * OrderBlockLayer  — Otsu-calculus bands with mitigation + velocity tint
-    * SessionLayer     — localized 00:00 / 08:00 UTC dividers (spec §2.3.2)
-    * LiquidationLayer — cyan/magenta forced-order marks (spec §7.3)
+    * OrderBlockLayer  — Otsu-calculus OB bands (Mode-10 index render via update_data_indexed)
+    * AbsorptionLayer  — Mode-10 whale-absorption LINES
+    * BucketCandleItem — Mode-10 volume-bucket candles (Neon Engine V2)
 
-Footprint bubbles, delta imbalances, the COB depth panel and the vector drawing
-toolbar are deferred to the next batch and slot in as sibling layers.
+(The time-chart render items CandlestickItem / SessionLayer / LiquidationLayer were removed with
+the time chart — Mode 10 is the only candle surface now.)
 """
 
 from __future__ import annotations
@@ -159,79 +157,6 @@ class PriceAxis(pg.AxisItem):
 
 
 # ---------------------------------------------------------------------------
-# Candlesticks (spec §5.1.2) — built once, refreshed with update_data
-# ---------------------------------------------------------------------------
-class CandlestickItem(pg.GraphicsObject):
-    """High-contrast B&W candles rendered into a cached QPicture.
-
-    Per spec §1.4.3 this object is instantiated exactly once per window; live
-    updates call :meth:`update_data` which only rebuilds the internal picture —
-    the item is never removed from or re-added to the scene, eliminating the C++
-    layout resets that drop plot items mid-stream.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.picture = QtGui.QPicture()
-        self._rect = QtCore.QRectF()
-        self._border = QtGui.QPen(QtGui.QColor(config.COLOR_CANDLE_BORDER))
-        self._border.setCosmetic(True)
-        self._bull = QtGui.QBrush(QtGui.QColor(config.COLOR_BULL_BODY))
-        self._bear = QtGui.QBrush(QtGui.QColor(config.COLOR_BEAR_BODY))
-        self._flat_pen = QtGui.QPen(QtGui.QColor("#888888"))  # zero-range doji -> flat neutral line
-        self._flat_pen.setCosmetic(True); self._flat_pen.setWidth(2)
-
-    def update_data(self, times: np.ndarray, ohlcv: np.ndarray, width: float) -> None:
-        self.picture = QtGui.QPicture()
-        if len(times) == 0:
-            self.prepareGeometryChange()
-            self.update()
-            return
-
-        p = QtGui.QPainter(self.picture)
-        p.setPen(self._border)
-        half = width / 2.0
-        lo_all = float(np.min(ohlcv[:, 2]))
-        hi_all = float(np.max(ohlcv[:, 1]))
-
-        for i in range(len(times)):
-            x = float(times[i])
-            o, h, l, c, _ = ohlcv[i]
-            # Zero-range bucket (high==low): flat NEUTRAL line at the one price — no forced
-            # TICK/2 body (would imply a range that didn't exist). Mirror of BucketCandleItem
-            # (Mode 10); §0.6 degenerate-input contract. DIVERGES FROM the ranged doji below.
-            if abs(h - l) < config.TICK_SIZE / 2.0:
-                p.setPen(self._flat_pen)
-                p.drawLine(QtCore.QPointF(x - half, l), QtCore.QPointF(x + half, l))
-                p.setPen(self._border)   # restore for subsequent wicks/bodies
-                continue
-            # wick
-            p.drawLine(QtCore.QPointF(x, l), QtCore.QPointF(x, h))
-            # body
-            p.setBrush(self._bull if c >= o else self._bear)
-            top = max(o, c)
-            bot = min(o, c)
-            if top == bot:
-                top += config.TICK_SIZE / 2.0  # ranged doji (open==close): sliver shows the level
-            p.drawRect(QtCore.QRectF(x - half, bot, width, top - bot))
-        p.end()
-
-        self._rect = QtCore.QRectF(
-            float(times[0]) - half, lo_all,
-            float(times[-1]) - float(times[0]) + width, hi_all - lo_all,
-        )
-        self.prepareGeometryChange()
-        self.informViewBoundsChanged()
-        self.update()
-
-    def paint(self, p, *args):
-        p.drawPicture(0, 0, self.picture)
-
-    def boundingRect(self):
-        return self._rect
-
-
-# ---------------------------------------------------------------------------
 # Order blocks (spec §3.3) — bands with mitigation + velocity tint
 # ---------------------------------------------------------------------------
 def _bucket_alpha(vol_mult: float) -> float:
@@ -258,60 +183,6 @@ class OrderBlockLayer(pg.GraphicsObject):
     def setVisible(self, v: bool) -> None:   # noqa: N802 (Qt override)
         super().setVisible(v)
         self.tier_pool.set_enabled(v)
-
-    def update_data(self, obs: list, x_right: float) -> None:
-        self.picture = QtGui.QPicture()
-        if not obs:
-            self.tier_pool.update([])
-            self.prepareGeometryChange()
-            self.update()
-            return
-
-        p = QtGui.QPainter(self.picture)
-        xs, ys = [], []
-        tier_specs = []
-        for ob in obs:
-            if ob.get("vol_mult", 0.0) < self.visible_filter:
-                continue
-            top = float(ob["top"])
-            bottom = float(ob["bottom"])
-            try:
-                x0 = parse_ts(ob["confirm"])
-            except (ValueError, KeyError):
-                continue
-            x1 = parse_ts(ob["end"]) if ob.get("end") else x_right
-
-            bullish = ob["type"] == "bullish"
-            vel = ob.get("vol_mult", 1.0)
-            neon = vel >= config.VELOCITY_NEON_RATIO
-            if bullish:
-                rgb = config.RGB_GREEN_NEON if neon else config.RGB_GREEN_STD
-            else:
-                rgb = config.RGB_RED_NEON if neon else config.RGB_RED_STD
-            alpha = _bucket_alpha(vel)
-            if not ob.get("active", True):
-                alpha *= 0.4  # fade mitigated blocks
-
-            fill = QtGui.QColor(rgb[0], rgb[1], rgb[2])
-            fill.setAlphaF(alpha)
-            pen = QtGui.QPen(QtGui.QColor(rgb[0], rgb[1], rgb[2]))
-            pen.setCosmetic(True)
-            p.setPen(pen)
-            p.setBrush(fill)
-            p.drawRect(QtCore.QRectF(x0, bottom, max(1.0, x1 - x0), top - bottom))
-
-            if self.show_tiers:
-                tier_specs.append((x0, top, f"x{vel:.1f}", QtGui.QColor(rgb[0], rgb[1], rgb[2])))
-
-            xs += [x0, x1]
-            ys += [top, bottom]
-        p.end()
-        self.tier_pool.update(tier_specs)
-
-        if xs:
-            self._rect = QtCore.QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
-        self.prepareGeometryChange()
-        self.update()
 
     def update_data_indexed(self, obs: list, x_right: float, ts_to_idx, x_view,
                             show_dead: bool = True) -> None:
@@ -529,70 +400,6 @@ class AbsorptionLayer(pg.GraphicsObject):
             ylo, yhi = min(ys) - _ABSORB_CAP_H, max(ys) + _ABSORB_CAP_H
             self._rect = QtCore.QRectF(min(xs), ylo, max(xs) - min(xs), max(0.02, yhi - ylo))
         self.prepareGeometryChange(); self.update()
-
-
-# ---------------------------------------------------------------------------
-# Session dividers (spec §2.3.2) — localized 00:00 / 08:00 UTC boundaries
-# ---------------------------------------------------------------------------
-class SessionLayer(pg.GraphicsObject):
-    def __init__(self):
-        super().__init__()
-        self.picture = QtGui.QPicture()
-        self._rect = QtCore.QRectF()
-
-    def update_data(self, t_start: float, t_end: float, y0: float, y1: float) -> None:
-        self.picture = QtGui.QPicture()
-        if t_end <= t_start:
-            self.prepareGeometryChange(); self.update(); return
-
-        pen = QtGui.QPen(QtGui.QColor(180, 180, 180))
-        pen.setCosmetic(True)
-        pen.setStyle(QtCore.Qt.DashLine)
-        p = QtGui.QPainter(self.picture)
-        p.setPen(pen)
-
-        # Walk each UTC day in range; mark its 00:00 and 08:00 UTC instants.
-        day = 86400
-        first = int(t_start // day) * day
-        t = first
-        while t <= t_end + day:
-            for utc_hour in (0, 8):
-                mark = t + utc_hour * 3600
-                if t_start <= mark <= t_end:
-                    p.drawLine(QtCore.QPointF(mark, y0), QtCore.QPointF(mark, y1))
-            t += day
-        p.end()
-        self._rect = QtCore.QRectF(t_start, y0, t_end - t_start, y1 - y0)
-        self.prepareGeometryChange(); self.update()
-
-    def paint(self, p, *args):
-        p.drawPicture(0, 0, self.picture)
-
-    def boundingRect(self):
-        return self._rect
-
-
-# ---------------------------------------------------------------------------
-# Liquidation marks (spec §7.3) — cyan shorts / magenta longs
-# ---------------------------------------------------------------------------
-class LiquidationLayer(pg.ScatterPlotItem):
-    def __init__(self):
-        super().__init__(size=9, pxMode=True)
-
-    def update_data(self, liqs: list) -> None:
-        spots = []
-        for lq in liqs[-200:]:
-            # SELL side = long liquidated (magenta); BUY side = short liquidated (cyan)
-            is_long_liq = lq["side"] == "SELL"
-            color = config.COLOR_LIQ_LONG if is_long_liq else config.COLOR_LIQ_SHORT
-            spots.append({
-                "pos": (lq["time"], lq["price"]),
-                "brush": pg.mkBrush(color),
-                "pen": pg.mkPen(color),
-                "symbol": "t" if is_long_liq else "t1",
-                "size": 8 + min(14, lq["qty"] / 200.0),
-            })
-        self.setData(spots)
 
 
 # ---------------------------------------------------------------------------

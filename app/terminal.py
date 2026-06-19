@@ -213,8 +213,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Mode 10 whale-absorption bands (phase c; index-space). Persistent; added lazily in
         # _scan_bucket_canvas, swept on teardown; its $-label pool attached here, cleared there.
         self.bc_absorption = AbsorptionLayer(self.plot)
-        # Mode 10 per-bucket footprint ladder (Stage 1; index-space twin of
-        # FootprintLayer). Persistent object; added to the plot lazily in
+        # Mode 10 per-bucket footprint ladder (Stage 1; index-space, per-bucket levels).
+        # Persistent object; added to the plot lazily in
         # _scan_bucket_canvas, swept on teardown; its TextPools are attached here and
         # cleared in clear_scanner_canvas (leak guard — pool items aren't tracked).
         self.bc_fp = BucketFootprintItem()
@@ -1885,8 +1885,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         # --- STAGE 1: per-bucket footprint ladder from b["levels"] (wire-additive) ---
         # levels now ride on the BucketSnapshot (quant_engine._assemble), so the
-        # footprint is a property of the BUCKET, drawn in its ordinal column. Ordinal
-        # twin of the time-chart FootprintLayer; the POC is marked by the separate gold
+        # footprint is a property of the BUCKET, drawn in its ordinal column. The POC is
+        # marked by the separate gold
         # dot (bc_poc above), so the ladder draws only the volume distribution. px_per_*
         # drive the bubble/number switch + pixel-round bubble radii; recomputed each
         # bucket-change frame.
