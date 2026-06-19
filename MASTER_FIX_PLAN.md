@@ -248,12 +248,15 @@ whale-absorption detector. The arc:
 ### Deferred queue — current order (operator's call, 2026-06-19)
 1. ✅ **Time-chart removal — DONE (all phases: A/B/menu/relabel/C/D).** Completed after the absorption
    dive — Mode 10 (`BucketCandleItem`) is the sole candle surface. Full record in the "⚠️ TIME-CHART
-   REMOVAL" block below. **Active queue head is now item 2 (OB polish — the OB toggle bug is DONE).**
-2. **OB polish (A)** — min-render-height + duplicate-timestamp handling (small refinements paused during
-   the absorption dive). *(The OB toggle bug here is RESOLVED, `55fb663`: rather than the originally-
-   planned independent `show_live`/`show_dead` flags, the "Order Blocks" + "Dead OBs" toggles were
-   MERGED into a single "Order Blocks" — alive + dead show/hide together. See the Mode-10 UI
-   refinements record below.)*
+   REMOVAL" block below. **Active queue head is now the `target_vol` clamp / item 3 selection tool —
+   item 2 (OB polish) is DONE.**
+2. ✅ **OB polish (A) — DONE.** (a) OB toggle bug — RESOLVED by MERGING the two toggles into one
+   "Order Blocks" (`55fb663`), not the originally-planned independent `show_live`/`show_dead` flags.
+   (b) Min-render-height — SHIPPED (`4435c1d`): thin OB zones floor to a 7px DRAWN band at wide zoom
+   (see the Mode-10 UI refinements record below). (c) Duplicate-timestamp / bisect-tie — assessed and
+   deliberately SKIPPED: rare exact-ms collision, ≤1-bucket error, data-ambiguous (the OB carries only
+   the timestamp) — not worth a fix; `bisect_left` determinism is the only available tweak and adds no
+   correctness.
 3. **Mode-10 selection tool (D)** — the capstone, built against the corrected scalars once the overlays
    are all clean (see "After the pipeline is solid", below).
 - **✅ Mode-10 UI refinements — DONE (2026-06-19).** Operator-driven stats-box / toggle cleanup:
@@ -269,7 +272,10 @@ whale-absorption detector. The arc:
   buy/sell dominance: green when buy leads, red when sell leads, gray when even; a >50% lead (1.5x)
   goes NEON green/red and slightly thicker (0.7 vs 0.3 px). DIVERGENCE overrides at width 1: buy-led
   but closed DOWN → neon orange (255,128,0); sell-led but closed UP → neon blue (0,153,255). Body fill
-  (neon-engine 4-vector brush) unchanged; pen cached in the #3 compute path. `4c8fc2b`.
+  (neon-engine 4-vector brush) unchanged; pen cached in the #3 compute path. `4c8fc2b`. (6) **OB
+  min-render-height** — thin order-block zones (a few ticks around the POC) floor to a 7px DRAWN band
+  at wide zoom (expanded symmetrically around the zone center; true top/bottom unchanged), so they no
+  longer collapse to a sub-pixel sliver, `4435c1d`.
 - **DOM book-mid line (idea from the Phase-A DOM port) — DEFERRED, NOT Phase A.** The Mode-10 spot line
   is the last TRADE (`closes[-1]`); on a depth ladder the book MID (between best-bid/best-ask) is often
   the more useful reference. Idea: keep the last-trade line, ADD a thin mid line (or best-bid/ask markers)

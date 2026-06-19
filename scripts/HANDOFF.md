@@ -6,7 +6,7 @@ re-deriving anything. **Phases 1 and 5 are COMPLETE — the terminal is aggTrade
 real v3 `history.db`. Phases 2–4 are now done/subsumed (the OB-layer rework subsumed Phase 2; the
 absorption layer replaced the Phase-3 iceberg steps and the rest of Phase 3's layers were deleted with
 the time chart; the perf work covered Phase 4), and the time-chart removal is COMPLETE. Next is the
-deferred queue (§1.5): OB polish (the OB toggle bug is done) → target_vol clamp → the Mode-10 selection tool.**
+deferred queue (§1.5): target_vol clamp → the Mode-10 selection tool (OB polish is done).**
 
 ---
 
@@ -175,11 +175,13 @@ state calibration.
 ### DEFERRED QUEUE (reordered 2026-06-19)
 1. ✅ **Time-chart removal — DONE (all phases A/B/menu/relabel/C/D).** Completed after the absorption
    dive; Mode 10 (`BucketCandleItem`) is the sole candle surface (full record in the "⚠️ TIME-CHART
-   REMOVAL" block below). **Active queue head is now item 2 (OB polish — the OB toggle bug is DONE).**
-2. **OB polish (A)** — min-render-height + duplicate-timestamp handling. *(The OB toggle bug here is
-   RESOLVED, `55fb663`: rather than the originally-planned independent `show_live`/`show_dead` flags,
-   the "Order Blocks" + "Dead OBs" toggles were MERGED into one "Order Blocks" — alive + dead show/hide
-   together. See the Mode-10 UI refinements record below.)*
+   REMOVAL" block below). **Active queue head is now the `target_vol` clamp / item 3 selection tool —
+   item 2 (OB polish) is DONE.**
+2. ✅ **OB polish (A) — DONE.** (a) toggle bug RESOLVED by MERGING the two toggles into one "Order
+   Blocks" (`55fb663`), not the originally-planned independent `show_live`/`show_dead`. (b) min-render-
+   height SHIPPED (`4435c1d`: thin OB zones floor to a 7px band at wide zoom, see refinements record).
+   (c) duplicate-timestamp/bisect-tie assessed + deliberately SKIPPED (rare exact-ms collision,
+   ≤1-bucket, data-ambiguous — not worth it; `bisect_left` is the only tweak and adds no correctness).
 3. **Mode-10 selection tool (D)** — the capstone (see §2 / the plan's "After the pipeline is solid").
 - **✅ Mode-10 UI refinements — DONE (2026-06-19).** Operator-driven stats-box / toggle cleanup:
   (1) **OB toggle bug fixed** — "Order Blocks" + "Dead OBs" MERGED into one "Order Blocks" toggle
@@ -194,7 +196,9 @@ state calibration.
   buy/sell dominance: green when buy leads, red when sell leads, gray when even; a >50% lead (1.5x)
   goes NEON green/red and slightly thicker (0.7 vs 0.3 px). DIVERGENCE overrides at width 1: buy-led
   but closed DOWN → neon orange (255,128,0); sell-led but closed UP → neon blue (0,153,255). Body fill
-  (neon-engine 4-vector brush) unchanged; pen cached in the #3 compute path. `4c8fc2b`.
+  (neon-engine 4-vector brush) unchanged; pen cached in the #3 compute path. `4c8fc2b`. (6) **OB
+  min-render-height** — thin order-block zones floor to a 7px DRAWN band at wide zoom (expanded
+  symmetrically around the zone center; true top/bottom unchanged), no more sub-pixel slivers, `4435c1d`.
 - **DOM book-mid line (idea, surfaced during the Phase-A DOM port) — DEFERRED, not Phase A.** The
   Mode-10 spot line is the last TRADE (`closes[-1]`); on a depth ladder the more useful reference is
   often the book MID (between best-bid/best-ask), so the reference sits in the spread between the COB
@@ -279,7 +283,7 @@ state calibration.
 1. **Absorption layer — DONE & COMMITTED (2026-06-19), 3 commits: docs, detector, render.** Bug-1 fixed,
    Bug-2 disproven (see RESOLVED BUGS above), live-verified on screen before commit.
 2. ✅ **Time-chart removal — DONE** (all phases; see the "⚠️ TIME-CHART REMOVAL" record in §1.5).
-   **Active next item:** OB polish (the OB toggle bug is done), then target_vol clamp, then
+   **Active next item:** the target_vol clamp, then
    the Mode-10 selection capstone.
 
 ---
