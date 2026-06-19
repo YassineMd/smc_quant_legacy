@@ -53,20 +53,11 @@ QPushButton#section {
 QPushButton#section:hover { background:#2d313c; }
 """
 
-_LAYERS = [
-    ("order_blocks", "Order Blocks (OBs)", True),
-    ("footprints", "Footprint Bubbles", False),
-    ("imbalances", "Delta Imbalances (Delta FP)", False),
-    ("icebergs", "Institutional Icebergs", False),
-    ("stats", "3D Statistical Overlays (Stats)", True),
-    ("liquidations", "Liquidation Marks (Liqs)", True),
-    ("sessions", "Session Markers", True),
-    ("velocity_tiers", "Velocity Tier Rankings", False),
-]
+# (The time-chart "Technical Layers" toggles (_LAYERS) were removed with the time chart —
+# Phase B / hamburger cleanup. Mode 10's overlay toggles live in _M10_LAYERS below.)
 
-# Mode 10 (bucket canvas) overlay toggles (A4). DISTINCT ``m10_`` keys — never the
-# shared time-chart keys above — so greying a Phase-3 overlay here cannot grey its
-# working time-chart twin, and Mode 10's toggles carry zero time-chart dependency.
+# Mode 10 (bucket canvas) overlay toggles (A4) — the only layer toggles now (time chart removed).
+# ``m10_`` keys, read via layer_state() by the Mode-10 draw path.
 # Tuple: (key, label, default_on, enabled). Disabled rows are Phase-3 placeholders:
 # shown so the full control panel is visible, but non-clickable until their logic lands.
 _M10_LAYERS = [
@@ -169,7 +160,6 @@ class HamburgerButton(QtWidgets.QPushButton):
 
 class FloatingOverlayMenu(QtWidgets.QFrame):
     tfChanged = QtCore.Signal(str)
-    obTfsChanged = QtCore.Signal(list)
     multiplierChanged = QtCore.Signal(float)
     chartFilterChanged = QtCore.Signal(int)
     layerToggled = QtCore.Signal(str, bool)
@@ -224,17 +214,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.scan_time_edit.dateTimeChanged.connect(lambda _dt: self.scan_time_changed.emit())
         root.addWidget(self.scan_time_edit)
 
-        # --- multi-TF OB overlay checklist (spec §7.2.2) ---
-        root.addWidget(self._header("OB Overlay Timeframes"))
-        self.ob_tf_checks: dict[str, QtWidgets.QCheckBox] = {}
-        row = QtWidgets.QHBoxLayout()
-        for tf in config.TIMEFRAMES:
-            cb = QtWidgets.QCheckBox(tf)
-            cb.toggled.connect(self._emit_ob_tfs)
-            self.ob_tf_checks[tf] = cb
-            row.addWidget(cb)
-        root.addLayout(row)
-
         # --- min multiplier filter (spec §7.2.3) ---
         self.mult_label = QtWidgets.QLabel("Min Multiplier: x0.0")
         root.addWidget(self.mult_label)
@@ -265,16 +244,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             self.sub_section.addWidget(cb)
         root.addWidget(self.sub_section)
 
-        # --- technical layers accordion (patch §14) ---
-        self.layer_section = CollapsibleSection("Technical Layers", expanded=True)
-        for key, label, default in _LAYERS:
-            cb = QtWidgets.QCheckBox(label)
-            cb.setChecked(default)
-            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
-            self.layer_checks[key] = cb
-            self.layer_section.addWidget(cb)
-        root.addWidget(self.layer_section)
-
         # --- Mode 10 overlay toggles accordion (A4) — same layer_state framework,
         # distinct m10_ keys. setChecked runs BEFORE connect (matching the loop above)
         # so the build-time toggled signal never reaches the not-yet-wired window slot.
@@ -291,9 +260,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         root.addStretch(1)
 
     # ------------------------------------------------------------------
-    def _emit_ob_tfs(self) -> None:
-        self.obTfsChanged.emit([tf for tf, cb in self.ob_tf_checks.items() if cb.isChecked()])
-
     def _emit_multiplier(self, raw: int) -> None:
         val = raw * config.MULT_FILTER_STEP
         self.mult_label.setText(f"Min Multiplier: x{val:.1f}")

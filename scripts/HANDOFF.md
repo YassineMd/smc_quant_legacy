@@ -193,6 +193,25 @@ state calibration.
   Move it to a standalone home (a terminal attr or onto `bc_obs`), re-wire the slider + bc_obs, verify
   Min-Mult still filters Mode-10 OBs, THEN delete `ob_item`. Also delete the now-dead `_hover_stats`/
   `_stats_enabled` in C/D.**
+- **🔴 HIGH-PRIORITY (not urgent) — `optimize_bucket_size` produces absurd/unstable `target_vol` for
+  higher tfs. DEFERRED to its own focused turn (do NOT interrupt the time-chart removal).** Root cause:
+  `optimize_bucket_size` (quant_engine.py) sets `max_test_v = avg_node_vol*15` and assigns the
+  variance-max `best_v` UNCLAMPED → higher-tf footprint nodes (whole-candle volume) balloon `target_vol`
+  to 648K/1.47M SOL (15m/1h), while 4h sits stuck at the 5K default. NOT PC-off corruption (SQLite WAL
+  is crash-safe; it's a legitimately-computed bad value). It PERSISTS across restarts because rehydrate
+  trusts `engine_state.target_vol` verbatim (no clamp, no replay). **FIX = the CLAMP, not rebuild:**
+  (a) §0.6 sanity-clamp inside `optimize_bucket_size` (bound `target_vol` to a scale-free range — a sane
+  multiple of `DEFAULT_TARGET_VOL` or the cross-tf median, outlier-resistant); (b) validate/clamp
+  `target_vol` on rehydrate (reject absurd persisted values). Rebuild-from-footprints is NOT the fix —
+  it re-runs the same unclamped logic. **1m is UNAFFECTED** (stable ~4,419, 14% spread) — and 1m is the
+  live-trading default — so this is high-priority but does NOT block the current workflow.
+- **💡 FEATURE (potential, worth revisiting) — MULTI-TIMEFRAME OB CONFLUENCE.** Showing order blocks
+  from several timeframes at once (was spec §7.2.2; the old web app's STRONGEST original idea —
+  cross-tf OB confluence scoring). The native rewrite DROPPED it (the daemon went single-tf-per-client
+  via `set_tf`). The dead "OB Overlay Timeframes" checklist (REMOVED in the hamburger cleanup — it was a
+  no-op stub: `obTfsChanged` had zero subscribers) was its last UI trace. To revisit: needs real daemon
+  work (per-client multi-tf streaming OR a merged cross-tf OB feed), THEN re-add the checklist (trivial
+  next to the daemon work). The cross-tf OB confluence was genuinely valuable — don't lose the idea.
 - **State-engine calibration — DEFERRED to LIVE trading** (feel it over days; see the plan's item-4 arc).
 
 ### THE WORKING DISCIPLINE (critical — preserve it)

@@ -270,6 +270,20 @@ whale-absorption detector. The arc:
   `ob_item.visible_filter` OFF `ob_item` BEFORE deleting it — the Min-Mult slider writes it and Mode-10
   `bc_obs` reads it (deleting ob_item without moving it silently breaks Mode 10's Min-Mult filter). Move
   it to a terminal attr or onto `bc_obs`, verify Min-Mult still filters Mode-10 OBs, THEN delete ob_item.**
+- **🔴 HIGH-PRIORITY (not urgent) — `optimize_bucket_size` balloons `target_vol` for higher tfs.
+  DEFERRED to its own turn (don't interrupt the time-chart removal).** Root cause: `max_test_v =
+  avg_node_vol*15` + UNCLAMPED `best_v` (quant_engine.py:403) → higher-tf footprint nodes (whole-candle
+  volume) push `target_vol` to 648K/1.47M SOL (15m/1h); 4h stuck at the 5K default. NOT PC-off
+  corruption (WAL crash-safe — it's a legit-computed bad value); it persists because rehydrate trusts
+  `engine_state.target_vol` verbatim. FIX = CLAMP (not rebuild — rebuild re-runs the same logic):
+  (a) §0.6 scale-free sanity-clamp in `optimize_bucket_size`; (b) validate/clamp on rehydrate. **1m
+  UNAFFECTED** (stable ~4,419) and 1m is the live default → high-priority but not workflow-blocking.
+- **💡 FEATURE (potential) — MULTI-TIMEFRAME OB CONFLUENCE.** OBs from several timeframes at once (spec
+  §7.2.2; the old web app's strongest original idea — cross-tf OB confluence scoring). The native rewrite
+  dropped it (daemon is single-tf-per-client). The dead "OB Overlay Timeframes" checklist (REMOVED in the
+  hamburger cleanup — `obTfsChanged` had zero subscribers) was its last UI trace. To revisit: needs daemon
+  work (per-client multi-tf streaming OR a merged cross-tf OB feed), THEN re-add the checklist. Genuinely
+  valuable — don't lose the idea.
 - **State-engine calibration — still DEFERRED to LIVE trading** (operator's call): feel the engine against
   the real market over days; the item-4 "State-engine live calibration" arc above still holds.
 

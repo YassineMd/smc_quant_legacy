@@ -414,27 +414,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.worker.request_timeframe(tf)
 
     def _toggle_layer(self, key: str, on: bool) -> None:
-        if key == "order_blocks":
-            self.ob_item.setVisible(on)
-        elif key == "footprints":
-            self.footprint_item.setVisible(on)
-        elif key == "icebergs":
-            self.iceberg_item.setVisible(on)
-            self._sig_fp = None  # force iceberg rebuild on next frame
-        elif key == "imbalances":
-            self.imbalance_item.setVisible(on)
-        elif key == "stats":
-            self._stats_enabled = on
-            if not on:
-                self.stats.hide()
-        elif key == "liquidations":
-            self.liq_item.setVisible(on)
-        elif key == "sessions":
-            self.session_item.setVisible(on)
-        elif key == "velocity_tiers":
-            self.ob_item.show_tiers = on
-            self._sig_obs = None  # force OB redraw
-        elif key.startswith("m10_"):
+        # Only Mode-10 overlays carry toggles now — the time-chart "Technical Layers" section was
+        # removed with the time chart, so every layer key is an m10_ key -> the overlay dispatch.
+        if key.startswith("m10_"):
             self._set_scanner_overlay(key, on)
 
     def _set_scanner_overlay(self, key: str, on: bool) -> None:
