@@ -187,7 +187,10 @@ state calibration.
   box by default** — "State Debug (calib)" toggle dropped; the STATE readout always shows the
   top-3-states + winner-factors block, `71131ad`. (3) **Forming-candle stats always on** — the live
   (right-most, not-yet-closed) candle's readout shows by default (no hover), pinned to its low,
-  `8da2412`. The hover readout (cursor-anchored, a specific bucket) is unchanged.
+  `8da2412`. The hover readout (cursor-anchored, a specific bucket) is unchanged. (4) **Candle midline
+  removed** — the wick is drawn OUTSIDE the body (upper + lower segments) instead of one line through
+  it, clearing the center line that showed through the semi-transparent body fill; wicks unchanged,
+  `710e742`.
 - **DOM book-mid line (idea, surfaced during the Phase-A DOM port) — DEFERRED, not Phase A.** The
   Mode-10 spot line is the last TRADE (`closes[-1]`); on a depth ladder the more useful reference is
   often the book MID (between best-bid/best-ask), so the reference sits in the spread between the COB
