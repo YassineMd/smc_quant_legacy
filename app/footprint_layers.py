@@ -184,13 +184,12 @@ class DepthWallLayer(pg.GraphicsObject):
         self._rect = QtCore.QRectF()
         self.threshold = 1000.0
         self._walls = []   # drawn (>= threshold SOL) walls as (price, qty, side) for hover hit-test
+        self._sig = None   # #2 gate: last (viewport, threshold, drawn-walls) fingerprint
 
     def update_data(self, depth: dict, x0: float, x1: float) -> None:
-        self.picture = QtGui.QPicture()
-        p = QtGui.QPainter(self.picture)
-        # Draw each resting level >= threshold SOL at its LITERAL book price (NO clustering) — so
-        # the walls align price-for-price with the COB, and each wall = one real level (its hover
-        # value = that level's true SOL qty, not a cluster sum). Mirrors the old version's render.
+        # Build the drawable rows (levels >= threshold) FIRST — also the gate fingerprint. Each wall
+        # is one real level at its LITERAL book price (NO clustering) so the walls align price-for-
+        # price with the COB and the hover value = that level's true SOL qty.
         rows = []
         for side, base in (("bids", (46, 160, 67)), ("asks", (248, 81, 73))):
             for lvl in depth.get(side, []):
@@ -200,6 +199,20 @@ class DepthWallLayer(pg.GraphicsObject):
                     continue
                 if qty >= self.threshold:
                     rows.append((price, qty, side, base))
+        # #2 gate: the 20Hz DOM loop calls this every frame, but the book pulses ~2.5Hz and a quiet
+        # view is static. Rebuild + repaint ONLY when the DRAWN walls, the viewport, or the threshold
+        # changed — so a static book/view stops dirtying the scene every frame (removes the ~62ms idle
+        # floor). self._walls is preserved on skip, so the hover hit-test still resolves. A purely
+        # sub-threshold change doesn't enter `rows` -> correctly skips; a threshold CROSSING changes
+        # the `rows` set -> correctly redraws.
+        sig = (round(x0, 4), round(x1, 4), self.threshold,
+               tuple((r[0], r[1], r[2]) for r in rows))
+        if sig == self._sig:
+            return
+        self._sig = sig
+
+        self.picture = QtGui.QPicture()
+        p = QtGui.QPainter(self.picture)
         max_q = max((q for _, q, _, _ in rows), default=1.0)
         walls = []
         for price, qty, side, base in rows:
