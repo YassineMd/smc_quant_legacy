@@ -179,6 +179,9 @@ def _bucket_alpha(vol_mult: float) -> float:
     return min(0.55, a)
 
 
+MIN_OB_PX = 7.0   # min DRAWN height (px) for an OB zone — thin bands stay visible at any zoom
+
+
 class OrderBlockLayer(pg.GraphicsObject):
     """Draws active/mitigated order-block rectangles projected to the right edge."""
 
@@ -199,7 +202,7 @@ class OrderBlockLayer(pg.GraphicsObject):
         super().setVisible(v)
         self.tier_pool.set_enabled(v)
 
-    def update_data_indexed(self, obs: list, x_right: float, ts_to_idx, x_view) -> None:
+    def update_data_indexed(self, obs: list, x_right: float, ts_to_idx, x_view, px_per_y: float) -> None:
         """Index-space twin of :meth:`update_data` for the Mode-10 volume canvas.
 
         Every block is a BOX showing its lifespan, both edges mapped by EXACT bucket epochs
@@ -284,11 +287,17 @@ class OrderBlockLayer(pg.GraphicsObject):
             pen = QtGui.QPen(col); pen.setCosmetic(True)
             p.setPen(pen)
             p.setBrush(fill)
-            p.drawRect(QtCore.QRectF(x0, bottom, max(1.0, x1 - x0), top - bottom))
+            # min-render-height: a thin zone is sub-pixel at wide zoom -> floor the DRAWN height to
+            # MIN_OB_PX, expanding symmetrically around the zone center (true top/bottom unchanged).
+            dt, db = top, bottom
+            if px_per_y > 0 and (top - bottom) * px_per_y < MIN_OB_PX:
+                mid = (top + bottom) / 2.0; half = (MIN_OB_PX / px_per_y) / 2.0
+                dt, db = mid + half, mid - half
+            p.drawRect(QtCore.QRectF(x0, db, max(1.0, x1 - x0), dt - db))
             if self.show_tiers:
-                tier_specs.append((x0, top, f"x{vel:.1f}", col))
+                tier_specs.append((x0, dt, f"x{vel:.1f}", col))
             xs += [x0, x1]
-            ys += [top, bottom]
+            ys += [dt, db]
         p.end()
         self.tier_pool.update(tier_specs)
 

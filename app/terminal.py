@@ -2041,7 +2041,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # time-chart ob_item, Phase C step 1); bc_obs.update_data_indexed reads it.
             vx0, vx1 = self.vb.viewRange()[0]   # clamp OB spans to the visible window (no corner-float)
             self.bc_obs.update_data_indexed(
-                self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx, (vx0, vx1))
+                self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx, (vx0, vx1), px_per_y)
 
         # Mode 10 whale-absorption bands (phase c) — gated by m10_icebergs (relabeled "Absorption").
         if self.menu.layer_state("m10_icebergs"):
