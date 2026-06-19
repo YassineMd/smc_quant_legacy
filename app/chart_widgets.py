@@ -415,46 +415,77 @@ class BucketCandleItem(pg.GraphicsObject):
         self._pen.setCosmetic(True)
         self._flat_pen = QtGui.QPen(QtGui.QColor("#888888"))  # zero-range doji -> flat neutral line
         self._flat_pen.setCosmetic(True); self._flat_pen.setWidth(2)
+        # Cached series for the cheap viewport re-cull (set_view) on manual pan/zoom:
+        # rebuild ONLY the visible candles' QPicture from these without recomputing data.
+        self._x, self._o, self._h, self._l, self._c, self._brushes = [], [], [], [], [], []
+        self._width = 0.8
+        self._vx0, self._vx1 = float("-inf"), float("inf")
 
     def update_data(self, x: list, opens: list, highs: list, lows: list,
-                    closes: list, brushes: list, width: float = 0.8) -> None:
-        self.picture = QtGui.QPicture()
+                    closes: list, brushes: list, width: float = 0.8,
+                    x0: float = None, x1: float = None) -> None:
+        # Cache the series so set_view() can re-cull on pan/zoom without a recompute.
+        self._x, self._o, self._h, self._l, self._c = x, opens, highs, lows, closes
+        self._brushes, self._width = brushes, width
         if not x:
+            self.picture = QtGui.QPicture(); self._rect = QtCore.QRectF()
             self.prepareGeometryChange(); self.update(); return
-
-        p = QtGui.QPainter(self.picture)
+        # Bounds = FULL data extent (UNCHANGED behavior): Y-fit / autorange / follow see
+        # every bucket exactly as before — ONLY the painted picture is culled (in _build_picture).
         half = width / 2.0
-        lo_all = min(lows)
-        hi_all = max(highs)
+        lo_all, hi_all = min(lows), max(highs)
+        span = (hi_all - lo_all) if hi_all > lo_all else 1.0
+        self._rect = QtCore.QRectF(float(x[0]) - half, lo_all,
+                                   float(x[-1]) - float(x[0]) + width, span)
+        self._vx0 = float("-inf") if x0 is None else float(x0)
+        self._vx1 = float("inf")  if x1 is None else float(x1)
+        self._build_picture()
+        self.prepareGeometryChange()
+        self.informViewBoundsChanged()
+        self.update()
+
+    def set_view(self, x0: float, x1: float) -> None:
+        """Cheap viewport re-cull (manual pan/zoom): rebuild ONLY the visible-range QPicture
+        from the cached series — O(visible), no data recompute. The data bounds are unchanged,
+        so we must NOT prepareGeometryChange / informViewBoundsChanged here (that would
+        re-trigger autorange and fight the manual pan)."""
+        if not self._x:
+            return
+        self._vx0, self._vx1 = float(x0), float(x1)
+        self._build_picture()
+        self.update()
+
+    def _build_picture(self) -> None:
+        x, o, h, l, c = self._x, self._o, self._h, self._l, self._c
+        brushes, width = self._brushes, self._width
+        half = width / 2.0
+        x0, x1 = self._vx0, self._vx1
+        self.picture = QtGui.QPicture()
+        p = QtGui.QPainter(self.picture)
         for i in range(len(x)):
             xi = float(x[i])
-            o, h, l, c = opens[i], highs[i], lows[i], closes[i]
+            if xi < x0 - width or xi > x1 + width:   # CULL to the visible X viewport (+1 width margin)
+                continue
+            oo, hh, ll, cc = o[i], h[i], l[i], c[i]
             # Zero-range bucket (high==low -> O=H=L=C): ALL volume traded at one tick. The
             # honest mark is a flat NEUTRAL line at that price — the forced TICK/2 body would
             # imply a range that never existed (the §0.6 degenerate sibling of the zero-vector
             # churn lie). Vector/flow reads from the stats box + footprint; the POC dot
             # (separate, z6) sits at center. DIVERGES FROM the ranged doji below.
-            if abs(h - l) < config.TICK_SIZE / 2.0:
+            if abs(hh - ll) < config.TICK_SIZE / 2.0:
                 p.setPen(self._flat_pen)
-                p.drawLine(QtCore.QPointF(xi - half, l), QtCore.QPointF(xi + half, l))
+                p.drawLine(QtCore.QPointF(xi - half, ll), QtCore.QPointF(xi + half, ll))
                 continue
             p.setPen(self._pen)
             # wick (neutral)
-            p.drawLine(QtCore.QPointF(xi, l), QtCore.QPointF(xi, h))
+            p.drawLine(QtCore.QPointF(xi, ll), QtCore.QPointF(xi, hh))
             # body (per-candle dominance brush, neutral border)
-            top, bot = max(o, c), min(o, c)
+            top, bot = max(oo, cc), min(oo, cc)
             if top == bot:
                 top += config.TICK_SIZE / 2.0   # ranged doji (open==close): sliver shows the level
             p.setBrush(brushes[i] if i < len(brushes) else QtCore.Qt.NoBrush)
             p.drawRect(QtCore.QRectF(xi - half, bot, width, top - bot))
         p.end()
-
-        span = (hi_all - lo_all) if hi_all > lo_all else 1.0
-        self._rect = QtCore.QRectF(float(x[0]) - half, lo_all,
-                                   float(x[-1]) - float(x[0]) + width, span)
-        self.prepareGeometryChange()
-        self.informViewBoundsChanged()
-        self.update()
 
     def paint(self, p, *args):
         p.drawPicture(0, 0, self.picture)

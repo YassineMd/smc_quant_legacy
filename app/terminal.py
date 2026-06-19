@@ -1029,6 +1029,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if abs(ny0 - py0) > tol_y or abs(ny1 - py1) > tol_y:
             self._follow_y = False                           # price pan/zoom -> unlock Y
         self._follow_prev_range = ((nx0, nx1), (ny0, ny1))
+        # Candle viewport re-cull: redraw ONLY the new visible range from the cached series
+        # (O(visible), not O(N)) so a manual pan/zoom refreshes the on-screen candles instantly
+        # instead of waiting for the next live tick to fire update_data. Fires on both pan
+        # (drag) and zoom (wheel/axis-drag) — sigRangeChangedManually covers both.
+        bc = self._scan_handles.get("bc_candles")
+        if bc is not None:
+            bc.set_view(nx0, nx1)
 
     # ------------------------------------------------------------------
     # Polish-pass shared helpers (theme, value trackers, formatting)
@@ -1845,6 +1852,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             else:
                 vbrushes.append(pg.mkBrush("#555555"))
 
+        # Viewport (hoisted): drives the candle viewport cull (Edit below) AND the footprint
+        # cull + bubble/number px_per_* (used further down). One viewRange() call serves both.
+        (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
+        px_per_x = self.vb.width() / max(1e-9, vx1 - vx0)
+        px_per_y = self.vb.height() / max(1e-9, vy1 - vy0)
+
         # --- upper pane: candles + forecast cloud (create-once / update-after) ---
         if "bc_candles" not in self._scan_handles:
             self._scan_handles["bc_candles"] = self._add_scanner_item(BucketCandleItem())
@@ -1855,7 +1868,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 pg.PlotCurveItem(pen=pg.mkPen("#2ecc71", width=2.5)))
             self._scan_handles["bc_bear"] = self._add_scanner_item(
                 pg.PlotCurveItem(pen=pg.mkPen("#e74c3c", width=2.5)))
-        self._scan_handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, 0.8)
+        # vx0/vx1: viewport cull — paint ONLY the visible candles (O(visible), not O(N)).
+        self._scan_handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, 0.8, vx0, vx1)
         self._scan_handles["bc_baseline"].setData(x, baseline_arr)
         self._scan_handles["bc_bull"].setData(x, bull_fc_arr)
         self._scan_handles["bc_bear"].setData(x, bear_fc_arr)
@@ -1890,9 +1904,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # dot (bc_poc above), so the ladder draws only the volume distribution. px_per_*
         # drive the bubble/number switch + pixel-round bubble radii; recomputed each
         # bucket-change frame.
-        (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
-        px_per_x = self.vb.width() / max(1e-9, vx1 - vx0)
-        px_per_y = self.vb.height() / max(1e-9, vy1 - vy0)
+        # (vx0/vx1/px_per_* hoisted above — single viewRange() call shared with the candle cull.)
         # A4 draw-gate: footprint (bubbles/numbers) gated by m10_footprint. Toggle-off
         # teardown is in _set_scanner_overlay (setVisible + clear_text for the TextPools,
         # which are not in active_scanner_items). px_per_* are computed above regardless
