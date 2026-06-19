@@ -288,13 +288,34 @@ whale-absorption detector. The arc:
   hamburger cleanup — `obTfsChanged` had zero subscribers) was its last UI trace. To revisit: needs daemon
   work (per-client multi-tf streaming OR a merged cross-tf OB feed), THEN re-add the checklist. Genuinely
   valuable — don't lose the idea.
-- **🔴 HIGH-PRIORITY — TERMINAL PERFORMANCE (slow; affects daily use). PROFILE FIRST, don't guess.**
-  Find WHERE the frame time goes — render (20Hz paint loop) vs data processing vs scanner redraw — by
-  profiling the LIVE terminal. Suspects: is the redraw sig-gate actually skipping when nothing changed;
-  QGraphicsItem count (buckets + overlays + the un-clustered literal depth walls); absorption/OB recompute
-  cadence; cacheable per-frame work. CONNECTION: Phases C/D delete dormant scene items (still instantiated)
-  → may already cut overhead, so RE-MEASURE after C/D. Finish the removal first, then profile + optimize
-  the real bottleneck (build-and-check-the-real-thing).
+- **✅ TERMINAL PERFORMANCE — DONE (2026-06-19).** Profile-first with a live per-frame probe (TEMP,
+  since removed). Before: **~2 FPS lurching** — `period` spiked to **525ms / p95 1.6s** loading history
+  then panning at N≈2800. After all four fixes: **steady ~16 FPS (~63ms), NO spikes**, even with footprint
+  + OBs + icebergs + COB on and during pan, across 4–6 windows on the i7-8565U. The probe overturned THREE
+  wrong guesses (DOM-compute, candles-as-the-only-cost, walls-as-the-floor) and pinpointed each real fix —
+  *trust the re-measure, not the instinct* (the footprint redirect: instinct said "compute", it measured as
+  text/paint).
+  - **#1 candle viewport-cull (`cbb1a55`)** — `BucketCandleItem` paints only the visible candles (was all N,
+    no cull); `set_view` re-culls on pan/zoom. Isolated pan: paint **408ms → ~90ms (~78%)**.
+  - **#3 static closed-bucket compute cache (`ff131a7`)** — VPIN(O50N)/vel-ratios(O20N)/OHLC/EMA computed
+    ONCE on close, only the live edge recomputed (trailing-window-final proof). Equivalence-tested. draw ~1ms.
+  - **footprint fix (`551cb36`)** — TextPool skip-unchanged + numbers gated to ≤40 buckets, else top-3 bubbles
+    (≤200), else none; per-bucket POC rides the same detail gate. items +340 / paint +230ms → negligible.
+  - **#2 wall gate (`9462c63`)** — `DepthWallLayer.update_data` gated on (drawn-walls, viewport, threshold)
+    signature; quiet view skips. `dirty_main` ~120 → 14–16 idle.
+  - **THE FLOOR IS THE OS TIMER, not our code:** ~63ms = Windows 15.6ms granularity rounding the 50ms
+    `GUI_TIMER_MS` up to ~62.5ms. 16 FPS is the deliberate target for a low-power multi-window laptop — the
+    fixes removed the *work that stretched the period under load* (the spikes), not the floor.
+  - **Deferred perf follow-ups (all LOW priority — recorded, not needed now):**
+    1. **COB gate** — the COB panel, when open, has the SAME ungated-every-frame pattern the walls had
+       (`dirty_cob` ~100–150/frame + `dom` ~6–7ms). Not period-critical (fits the window). Cheap fix: gate
+       `cob.update_depth` on the same depth signature as the walls (`DepthWallLayer._sig` pattern).
+    2. **OB/iceberg re-loop** — `OrderBlockLayer`/`AbsorptionLayer` already viewport-CULL the draw, but still
+       LOOP all obs/marks each frame (the bisect). Negligible now (measured ~baseline); only matters if counts
+       grow into the thousands. Cheap fix then: skip off-screen IN the loop, not just the draw.
+    3. **Higher-FPS lever (optional, machine-dependent)** — per-frame work is now cheap enough to run faster:
+       `timeBeginPeriod(1)` (Windows timer res) + lower `GUI_TIMER_MS` → 30–60 FPS. NOT wanted on the current
+       laptop/4–6-window setup (would multiply CPU 4–6×); recorded for a stronger machine / fewer windows.
 - **State-engine calibration — still DEFERRED to LIVE trading** (operator's call): feel the engine against
   the real market over days; the item-4 "State-engine live calibration" arc above still holds.
 
