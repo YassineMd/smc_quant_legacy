@@ -402,11 +402,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             h = self._scan_handles.get("bc_liq")   # scatter, no sub-pools -> plain setVisible
             if h is not None:
                 h.setVisible(on)
-        elif key == "m10_statedebug":
-            # Calibration instrument: extra stats-box lines produced at hover time
-            # (_hover_context reads layer_state). No scene item to manage here; the
-            # live-breathe / next hover re-renders the box with or without the block.
-            pass
         elif key == "m10_icebergs":
             # Whale-absorption bands: setVisible toggles the zones; the $-labels are pool-managed
             # (not in active_scanner_items) -> clear them on OFF so no label artifacts linger.
@@ -699,8 +694,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 f"VEL {span(f'{vel:.2f}x', gold)}",
                 f"STATE {bucket_state.render_state_line(state, conf)}",
             ]
-            if self.menu.layer_state("m10_statedebug"):   # calibration: top-3 states + winner factors
-                lines += bucket_state.render_debug_lines(buckets, idx, bm, sm)
+            # calibration: top-3 states + winner factors — always shown in the STATE readout now
+            lines += bucket_state.render_debug_lines(buckets, idx, bm, sm)
             return lines
         if mode == "vpin":
             window = buckets[max(0, idx - 49): idx + 1]

@@ -66,7 +66,6 @@ _M10_LAYERS = [
     ("m10_obs", "Order Blocks", True, True),              # default ON — shows alive (solid) + dead (faded) together
     ("m10_liq", "Liquidation Marks", False, True),        # default OFF. In-session toggles persist as
     ("m10_stats", "Stats Box", True, True),               # checkbox state; only a restart resets to these.
-    ("m10_statedebug", "State Debug (calib)", False, True),  # top-3 states + winner factors in the box
     ("m10_icebergs", "Absorption", True, True),             # whale-defense bands (calc_absorption, default ON)
     ("m10_dom", "Depth / DOM Walls", True, True),           # live order-book walls on the bucket canvas (Phase A)
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
