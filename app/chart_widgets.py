@@ -430,15 +430,16 @@ class BucketCandleItem(pg.GraphicsObject):
         # Cached series for the cheap viewport re-cull (set_view) on manual pan/zoom:
         # rebuild ONLY the visible candles' QPicture from these without recomputing data.
         self._x, self._o, self._h, self._l, self._c, self._brushes = [], [], [], [], [], []
+        self._pens = []          # per-candle flow-colored wick/border pens
         self._width = 0.8
         self._vx0, self._vx1 = float("-inf"), float("inf")
 
     def update_data(self, x: list, opens: list, highs: list, lows: list,
-                    closes: list, brushes: list, width: float = 0.8,
+                    closes: list, brushes: list, pens: list, width: float = 0.8,
                     x0: float = None, x1: float = None) -> None:
         # Cache the series so set_view() can re-cull on pan/zoom without a recompute.
         self._x, self._o, self._h, self._l, self._c = x, opens, highs, lows, closes
-        self._brushes, self._width = brushes, width
+        self._brushes, self._pens, self._width = brushes, pens, width
         if not x:
             self.picture = QtGui.QPicture(); self._rect = QtCore.QRectF()
             self.prepareGeometryChange(); self.update(); return
@@ -492,7 +493,7 @@ class BucketCandleItem(pg.GraphicsObject):
             top, bot = max(oo, cc), min(oo, cc)
             if top == bot:
                 top += config.TICK_SIZE / 2.0   # ranged doji (open==close): sliver shows the level
-            p.setPen(self._pen)
+            p.setPen(self._pens[i] if i < len(self._pens) else self._pen)   # flow-colored wick + border
             # wicks ONLY outside the body — upper (body top -> high) + lower (low -> body bottom).
             # The old single low->high wick crossed the body and showed through the semi-transparent
             # fill as an ugly center midline; splitting it keeps the wicks but clears the body.

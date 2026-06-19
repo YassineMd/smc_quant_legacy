@@ -1855,14 +1855,38 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         vbrush = (pg.mkBrush("#ff073a") if vpin >= 0.85
                   else pg.mkBrush("#f1c40f") if vpin >= 0.50
                   else pg.mkBrush("#555555"))
+        # wick + body-border pen — colored by FLOW dominance (buy_vol vs sell_vol): green when buy
+        # leads, red when sell leads, gray when even; >50% lead (1.5x) -> NEON (green 0,255,127 /
+        # red 255,7,58) + a touch thicker (0.7 vs 0.3). DIVERGENCE override (absorbed flow, the
+        # strongest tell -> width 1): buy-led but closed DOWN -> neon ORANGE; sell-led but closed
+        # UP -> neon BLUE. Cosmetic so width is px, not data units.
+        bv, sv = b.get("buy_vol", 0.0), b.get("sell_vol", 0.0)
+        op, cl = b.get("open", 0.0), b.get("close", 0.0)
+        if bv > sv:
+            if cl < op:                                  # buy-led but closed DOWN -> absorbed buying
+                _wc, _w = (255, 128, 0), 1.0             # neon ORANGE
+            else:
+                _neon = bv > 1.5 * sv
+                _wc = (0, 255, 127) if _neon else config.RGB_GREEN_STD
+                _w = 0.7 if _neon else 0.3
+        elif sv > bv:
+            if cl > op:                                  # sell-led but closed UP -> absorbed selling
+                _wc, _w = (0, 153, 255), 1.0             # neon BLUE
+            else:
+                _neon = sv > 1.5 * bv
+                _wc = (255, 7, 58) if _neon else config.RGB_RED_STD
+                _w = 0.7 if _neon else 0.3
+        else:
+            _wc, _w = (136, 136, 136), 0.3
+        wick_pen = pg.mkPen(_wc, width=_w); wick_pen.setCosmetic(True)
         row = (b.get("open", 0.0), b.get("high", 0.0), b.get("low", 0.0),
                b.get("close", 0.0), poc, brush,
-               baseline, baseline + bull_s, baseline - bear_s, vpin, vbrush)
+               baseline, baseline + bull_s, baseline - bear_s, vpin, vbrush, wick_pen)
         return row, (baseline, bull_s, bear_s)
 
     # The 11 parallel render arrays, in row-tuple order (see _bucket_row).
     _M10_ARR_KEYS = ("opens", "highs", "lows", "closes", "pocs", "brushes",
-                     "baseline", "bull_fc", "bear_fc", "vpin", "vbrush")
+                     "baseline", "bull_fc", "bear_fc", "vpin", "vbrush", "pens")
 
     def _compute_bucket_arrays(self, buckets: list, anchor_unix: float) -> dict:
         """Static closed-bucket compute cache (#3): return the 11 per-bucket render
@@ -1922,6 +1946,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         pocs, brushes = arr["pocs"], arr["brushes"]
         baseline_arr, bull_fc_arr, bear_fc_arr = arr["baseline"], arr["bull_fc"], arr["bear_fc"]
         vpin_arr, vbrushes = arr["vpin"], arr["vbrush"]
+        wick_pens = arr["pens"]   # per-candle flow-colored wick/border pens
 
         # Viewport (hoisted): drives the candle viewport cull (Edit below) AND the footprint
         # cull + bubble/number px_per_* (used further down). One viewRange() call serves both.
@@ -1940,7 +1965,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._scan_handles["bc_bear"] = self._add_scanner_item(
                 pg.PlotCurveItem(pen=pg.mkPen("#e74c3c", width=2.5)))
         # vx0/vx1: viewport cull — paint ONLY the visible candles (O(visible), not O(N)).
-        self._scan_handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, 0.8, vx0, vx1)
+        self._scan_handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
         self._scan_handles["bc_baseline"].setData(x, baseline_arr)
         self._scan_handles["bc_bull"].setData(x, bull_fc_arr)
         self._scan_handles["bc_bear"].setData(x, bear_fc_arr)
