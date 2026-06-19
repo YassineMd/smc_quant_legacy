@@ -257,6 +257,11 @@ whale-absorption detector. The arc:
    the absorption dive).
 3. **Mode-10 selection tool (D)** — the capstone, built against the corrected scalars once the overlays
    are all clean (see "After the pipeline is solid", below).
+- **DOM book-mid line (idea from the Phase-A DOM port) — DEFERRED, NOT Phase A.** The Mode-10 spot line
+  is the last TRADE (`closes[-1]`); on a depth ladder the book MID (between best-bid/best-ask) is often
+  the more useful reference. Idea: keep the last-trade line, ADD a thin mid line (or best-bid/ask markers)
+  so the spread + the last-trade-vs-book position are visible. NOT a bug (the COB is correctly aligned —
+  diagnosed read-only); an enhancement, consider after the time-chart removal.
 - **State-engine calibration — still DEFERRED to LIVE trading** (operator's call): feel the engine against
   the real market over days; the item-4 "State-engine live calibration" arc above still holds.
 

@@ -246,7 +246,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._follow_last_n: int = -1
         self._follow_prev_range = None
         self.vb.sigRangeChangedManually.connect(self._on_scanner_manual_range)
-        self._depth_needs_calibration: bool = True       # one-shot depth-slider 20% baseline (§1)
+        self._depth_needs_calibration: bool = True       # one-shot depth-slider 50%-of-max baseline (§1)
         # Handles for the heavy modes' extra scene objects (built in Phase 5/6,
         # torn down here). Pre-declared so teardown checks are always safe.
         self.axis_bottom = self.plot.getAxis("bottom")
@@ -254,6 +254,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.vb_pulse_churn = None     # Modes 7/8 secondary churn-scale ViewBox
         self.lower_plot = None         # Mode 10 lower VPIN sub-pane
         self.splitter_v = None         # Mode 10 vertical splitter (upper/lower panes)
+        self.cob_col = None            # Mode 10 COB column (cob + spacer), height-matched to the price pane
+        self._cob_want = False         # user's COB-toggle intent (drives cob_col visibility in Mode 10)
+        self._syncing_split = False    # reentrancy guard for the linked splitter-divider sync
         # Mode 10 order-block layer (index-space). Persistent object; added to the
         # plot lazily in _scan_bucket_canvas and swept on teardown. Tiers forced on.
         self.bc_obs = OrderBlockLayer(self.plot, show_tiers=True)
@@ -288,6 +291,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.price_tag.setZValue(16)            # above the crosshair (z=15)
         self.plot.addItem(self.price_tag, ignoreBounds=True)
         self.price_tag.hide()
+        # Mode-10 DOM hover-volume tooltip: the color-matched size of the depth wall
+        # nearest the cursor (green=bid / red=ask). Driven by _hover_dom_wall. Anchor
+        # (0, 1.0) = bottom-left at the point, so the text sits ABOVE the wall line it
+        # labels (never straddling it).
+        self.dom_tooltip = pg.TextItem(anchor=(0, 1.0))
+        self.dom_tooltip.setZValue(60)
+        self.plot.addItem(self.dom_tooltip, ignoreBounds=True)
+        self.dom_tooltip.hide()
         self._proxy = pg.SignalProxy(self.plot.scene().sigMouseMoved,
                                      rateLimit=60, slot=self._on_mouse_move)
         # last cursor scene pos while inside the plot — drives the A3a live-breathe
@@ -382,11 +393,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._scanner_needs_autofit = True       # one-shot fit for the new mode
             self._scanner_bucket_sig = None
             self._last_scanner_sig = None
-            self._hide_time_components()
-            self._apply_scanner_theme(dark=True)     # enhancement §3
-            self._scanner_needs_autofit = True       # one-shot fit for the new mode
-            self._scanner_bucket_sig = None
-            self._last_scanner_sig = None
+            # (Mode 10 COB lives in cob_col, built + shown by _ensure_canvas_panes from
+            # _cob_want; nothing to restore here.)
             self._on_timer()   # immediate first draw from the current Zero Point
 
     def _hide_time_components(self) -> None:
@@ -508,6 +516,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self.bc_absorption.setVisible(on)
                 if not on:
                     self.bc_absorption.label_pool.clear(self.plot)
+        elif key == "m10_dom":
+            # DOM depth walls (Phase A): persistent plot item (not in _scan_handles), so toggle
+            # it directly now; _update_m10_dom re-shows + refreshes it every frame while ON.
+            self.depthwall_item.setVisible(on)
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -516,7 +528,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if not on:
                 self.drawer.cancel()
         elif key == "cob":
-            self.cob.setVisible(on)
+            # Remember the intent; in Mode 10 toggle the whole COB column so OFF reclaims its
+            # width (the spacer goes too). _cob_prev_visible kept in sync for the Off-mode path.
+            self._cob_want = self._cob_prev_visible = on
+            (self.cob_col if self.cob_col is not None else self.cob).setVisible(on)
         elif key == "audio":
             self.alerts.audio.set_armed(on)
 
@@ -549,14 +564,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             (_, _), (y0, y1) = self.vb.viewRange()
             self.cob.sync_y(y0, y1)
 
-    def _calibrate_depth_slider(self, depth: dict) -> None:
-        """§1 — one-shot: default the depth-wall slider to 20% of the largest
-        resting order on the first valid book payload after connect / tf-change.
+    def _update_m10_dom(self, snap: dict) -> None:
+        """Mode-10 DOM (Phase A): live order-book depth on the bucket canvas, refreshed EVERY
+        frame (ungated). Depth pulses independently of bucket closes, so this sits OUTSIDE the
+        signature-gated _draw_scanner — gating it would freeze the book in a quiet market.
+        bucket_canvas-only (the metric modes have a non-price Y where price walls are meaningless).
+        On-plot walls follow the m10_dom toggle; the COB side ladder follows its own 'cob' toggle;
+        both read snap['depth']. depthwall_item is ignoreBounds, so it never drives the price fit."""
+        depth = snap.get("depth") or {}
+        self._calibrate_depth_slider(depth)        # one-shot 50%-of-max default (no-op after first book)
+        walls_on = self.menu.layer_state("m10_dom")
+        self.depthwall_item.setVisible(walls_on)
+        if walls_on:
+            vx0, vx1 = self.vb.viewRange()[0]
+            self.depthwall_item.update_data(depth, vx0, vx1)
+        if self.cob.isVisible():
+            self.cob.update_depth(depth)
+            self._sync_cob()
 
-        ``setValue`` propagates through ``valueChanged -> _emit_chart_filter ->
-        chartFilterChanged`` and updates the wall threshold for free. The flag
-        flips off afterward so manual slider drags are never overridden.
-        """
+    def _calibrate_depth_slider(self, depth: dict) -> None:
+        """§1 — one-shot: default the depth-wall slider to an absolute-SOL value = 50% of the
+        largest resting order, on the first valid book payload after connect / tf-change. So only
+        walls >= half the biggest current wall show by default (the significant ones), while the
+        slider itself stays absolute-SOL and draggable — a manual drag overrides this and the flag
+        keeps it from being re-imposed. Filters WHICH literal-price walls draw; never re-clusters."""
         if not self._depth_needs_calibration:
             return
         qtys = []
@@ -568,7 +599,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     continue
         if not qtys:
             return   # no order-book payload yet — keep waiting (flag stays True)
-        target_default = int(max(qtys) * 0.20)
+        target_default = int(max(qtys) * 0.50)   # default: only walls >= 50% of the largest
         target_default = max(config.CHART_FILTER_MIN,
                              min(config.CHART_FILTER_MAX, target_default))
         self.menu.chart_slider.setValue(target_default)
@@ -579,6 +610,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.plot.sceneBoundingRect().contains(pos):
             self.stats.hide()
             self.price_tag.hide()
+            self.dom_tooltip.hide()
             self._last_hover_pos = None      # left the plot -> stop the live-breathe
             return
         self._last_hover_pos = pos           # park here for the live-breathe re-fire
@@ -602,6 +634,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # real end_time and surface it in the HUD overlay (Phase 2 §4).
         if self.scanner_mode != "Off":
             self._hover_scanner(pt.x(), pos)
+            self._hover_dom_wall(pt.x(), pt.y())   # DOM wall hover-volume (bucket_canvas + m10_dom)
             return
 
         if self._stats_enabled and len(self._last_snap.get("times", [])):
@@ -640,6 +673,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         pt = self.vb.mapSceneToView(pos)
         self._hover_scanner(pt.x(), pos)
+        self._hover_dom_wall(pt.x(), pt.y())   # live-update the hovered wall's volume as the book pulses
+
+    def _hover_dom_wall(self, cursor_x: float, price: float) -> None:
+        """Mode-10 DOM hover: show the nearest depth wall's volume as color-matched text
+        (green=bid / red=ask). Only on bucket_canvas with m10_dom on (the walls aren't drawn
+        elsewhere); hidden otherwise. Tolerance scales with zoom (~1% of the visible price range,
+        floored at a tick) so the cursor needn't land pixel-perfect on the line."""
+        if self.scanner_mode != "bucket_canvas" or not self.menu.layer_state("m10_dom"):
+            self.dom_tooltip.hide()
+            return
+        y0, y1 = self.vb.viewRange()[1]
+        tol = max(config.TICK_SIZE, (y1 - y0) * 0.01)
+        w = self.depthwall_item.nearest_wall(price, tol)
+        if w is None:
+            self.dom_tooltip.hide()
+            return
+        wp, qty, side = w
+        color = "#2ea043" if side == "bid" else "#f85149"
+        vol = f"{qty / 1000:.1f}K" if qty >= 1000 else f"{qty:.0f}"
+        self.dom_tooltip.setHtml(
+            f"<span style='color:{color}; font-family:Consolas; font-weight:bold; "
+            f"font-size:14px'>{vol}</span>")
+        self.dom_tooltip.setPos(cursor_x, wp)
+        self.dom_tooltip.show()
 
     def _hover_context(self, mode: str, buckets: list, idx: int) -> "list[str]":
         """Color-coded, mode-specific HUD lines for the hovered bucket (§4)."""
@@ -801,6 +858,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # depth/session/liq/HUD updates) runs while a scanner mode owns the canvas.
         if self.scanner_mode != "Off":
             self._draw_scanner()
+            if self.scanner_mode == "bucket_canvas":
+                # DOM (Phase A): UNGATED depth refresh every frame, bucket_canvas-only.
+                # _draw_scanner is signature-gated (skips in a quiet market) but the order
+                # book pulses independently — gating it would freeze the walls between
+                # bucket closes. Metric modes have a non-price Y, so depth is excluded.
+                self._update_m10_dom(snap)
             self._redock_trackers()   # keep badges pinned to the axis under pan/zoom
             self._refresh_parked_hover()   # A3a: breathe the hovered bucket each frame
             return
@@ -865,7 +928,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self.iceberg_item.update_data(fps, candles_by_t, x0, x1, proj_x, show_icons)
 
         # depth walls + COB (depth changes each pulse)
-        self._calibrate_depth_slider(snap["depth"])   # §1: one-shot 20% baseline
         self.depthwall_item.update_data(snap["depth"], x0, x1)
         if self.cob.isVisible():
             self.cob.update_depth(snap["depth"]); self._sync_cob()
@@ -956,10 +1018,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 # §6.2 — index-space drawings are session-only; wipe them on exit
                 self.drawer.flush_index_drawings()
                 self.lower_plot.getViewBox().setXLink(None)
-                # reparent self.plot back to the horizontal splitter at index 0,
-                # i.e. restore [self.plot, self.cob]
+                # reparent self.plot back to the horizontal splitter at index 0, then restore the
+                # COB beside it (out of cob_col) and drop the COB column — i.e. restore [plot, cob]
                 self.splitter.insertWidget(0, self.plot)
                 self.splitter.setStretchFactor(0, 1)
+                self.cob.setParent(None)
+                self.splitter.insertWidget(1, self.cob)
+                self.cob.setVisible(self._cob_want)   # restore intent (it was force-shown inside cob_col)
+                if self.cob_col is not None:
+                    self.cob_col.setParent(None)
+                    self.cob_col.deleteLater()   # also deletes the spacer child
                 self.lower_plot.setParent(None)
                 if self.splitter_v is not None:
                     self.splitter_v.setParent(None)
@@ -969,6 +1037,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 pass
             self.lower_plot = None
             self.splitter_v = None
+            self.cob_col = None
 
         # 4. reversion: if we've landed on "Off", restore the time chart
         if self.scanner_mode == "Off":
@@ -1817,6 +1886,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # ==================================================================
     # Phase 6: Mode 10 — Bucket Candlestick & Unified Flow Canvas (dual pane)
     # ==================================================================
+    def _sync_pane_split(self, *args) -> None:
+        """Keep the COB/spacer divider in lock-step with the price/VPIN divider so the COB's
+        bottom always coincides with the price-pane bottom (B-fix). Mirrors sizes from whichever
+        splitter the user dragged onto the other; guarded so the programmatic setSizes can't
+        recurse (setSizes does not re-emit splitterMoved, but the guard is cheap insurance)."""
+        if self._syncing_split or self.splitter_v is None or self.cob_col is None:
+            return
+        self._syncing_split = True
+        try:
+            if self.sender() is self.cob_col:
+                self.splitter_v.setSizes(self.cob_col.sizes())
+            else:
+                self.cob_col.setSizes(self.splitter_v.sizes())
+        finally:
+            self._syncing_split = False
+
     def _ensure_canvas_panes(self) -> None:
         """Build the stacked dual-pane workspace: reparent the main plot into a
         vertical splitter and add the lower VPIN sub-pane, X-linked to the chart."""
@@ -1850,6 +1935,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # re-inject the vertical splitter into the horizontal splitter at index 0
         self.splitter.insertWidget(0, self.splitter_v)
         self.splitter.setStretchFactor(0, 1)
+
+        # COB column (B-fix): the COB must occupy ONLY the price-pane height so sync_y aligns it
+        # with the chart pixel-for-pixel BY CONSTRUCTION. Put it as the TOP child of a 3:1 vertical
+        # splitter (same ratio as splitter_v) with a dark spacer beneath (beside the VPIN pane) —
+        # the spacer is the cost of keeping VPIN the same WIDTH as the price pane (X-aligned
+        # candles/heatmap; a full-width VPIN would re-break that in X). Reparent the COB in here.
+        self.cob_col = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self.cob_col.setMinimumWidth(self.cob.minimumWidth())   # track the COB's own width bounds
+        self.cob_col.setMaximumWidth(self.cob.maximumWidth())
+        self.cob.setParent(None)
+        self.cob_col.addWidget(self.cob)
+        spacer = QtWidgets.QWidget()                             # dead strip beside the VPIN pane
+        spacer.setAutoFillBackground(True)
+        _sp_pal = spacer.palette(); _sp_pal.setColor(QtGui.QPalette.Window, QtGui.QColor("#141414"))
+        spacer.setPalette(_sp_pal)
+        self.cob_col.addWidget(spacer)
+        self.cob_col.setStretchFactor(0, 3)   # COB matches the price pane's 75%
+        self.cob_col.setStretchFactor(1, 1)   # spacer matches the VPIN pane's 25%
+        self.splitter.insertWidget(1, self.cob_col)
+        self.cob.setVisible(True)                       # gated by cob_col's visibility below
+        self.cob_col.setVisible(self._cob_want)         # honor the user's COB toggle
+        # Linked dividers: dragging either the price/VPIN handle or the COB/spacer handle moves the
+        # other in lock-step, so the COB bottom always coincides with the price-pane bottom.
+        self.splitter_v.splitterMoved.connect(self._sync_pane_split)
+        self.cob_col.splitterMoved.connect(self._sync_pane_split)
 
         # Horizontal lock is enforced deterministically every frame in
         # _scan_bucket_canvas (mirror main X -> lower X). We deliberately do NOT
@@ -2105,14 +2215,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         x_edge = x[-1]
         fill = self._active_fill_pct()
         spot = closes[-1]
-        # §5.2 — spot price and EMA baseline both sit near the POC, so two
-        # separate "mid"-anchored badges overlapped whenever close ≈ baseline.
-        # Fold the baseline readout into the spot badge (one element can't self-
-        # overlap); the gray dashed baseline curve still shows its position.
+        # §5.2 — spot price and EMA baseline both sit near the POC, so two separate
+        # badges overlapped whenever close ≈ baseline. Fold the baseline readout into
+        # the spot badge (one element can't self-overlap); the gray dashed baseline
+        # curve still shows its position. Anchor the block "up" (bottom edge at spot)
+        # so all three rows stack ABOVE the spanning price line — "mid" centered them
+        # on it, striking the price line straight through the "% Fill" row.
         self._scanner_tracker("t_spot", spot, "#dcdcdc",
             f"Price ${spot:.2f}<br>({fill:.0f}% Fill)<br>"
             f"<span style='color:#b4b4b4'>Base ${baseline_arr[-1]:.2f}</span>",
-            x_edge, "mid", span=True)
+            x_edge, "up", span=True)
         self._scanner_tracker("t_bc_bull", bull_fc_arr[-1], "#2ecc71",
             f"Bull ${bull_fc_arr[-1]:.2f}", x_edge, "up", line=False)
         self._scanner_tracker("t_bc_bear", bear_fc_arr[-1], "#e74c3c",

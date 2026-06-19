@@ -175,6 +175,12 @@ state calibration.
    this whole dive fixed — cut it at the source (+ remove the dead Technical-Layers menu section).
 2. **OB polish (A)** — min-render-height + duplicate-timestamp handling.
 3. **Mode-10 selection tool (D)** — the capstone (see §2 / the plan's "After the pipeline is solid").
+- **DOM book-mid line (idea, surfaced during the Phase-A DOM port) — DEFERRED, not Phase A.** The
+  Mode-10 spot line is the last TRADE (`closes[-1]`); on a depth ladder the more useful reference is
+  often the book MID (between best-bid/best-ask), so the reference sits in the spread between the COB
+  bands. Idea: KEEP the last-trade line (honest "last print") and ADD a thin mid line (or best-bid/
+  best-ask markers) so the spread + where the last trade sits vs the live book are both visible. NOT a
+  bug (the COB is correctly aligned; this is an enhancement). Consider after the time-chart removal.
 - **State-engine calibration — DEFERRED to LIVE trading** (feel it over days; see the plan's item-4 arc).
 
 ### THE WORKING DISCIPLINE (critical — preserve it)

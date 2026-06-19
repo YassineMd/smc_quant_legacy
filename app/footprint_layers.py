@@ -392,58 +392,54 @@ class IcebergLayer(pg.GraphicsObject):
 
 
 # ---------------------------------------------------------------------------
-# Depth-map walls (spec §8.2) — clustered + intensity-scaled
+# Depth-map walls (spec §8.2) — literal book price + size-intensity (no clustering)
 # ---------------------------------------------------------------------------
 class DepthWallLayer(pg.GraphicsObject):
-    CLUSTER_TICKS = 2
-
     def __init__(self):
         super().__init__()
         self.picture = QtGui.QPicture()
         self._rect = QtCore.QRectF()
         self.threshold = 1000.0
-
-    def _cluster(self, levels: list) -> list:
-        rows = []
-        for lvl in levels:
-            try:
-                price, qty = float(lvl[0]), float(lvl[1])
-            except (ValueError, IndexError):
-                continue
-            if qty >= self.threshold:
-                rows.append((price, qty))
-        if not rows:
-            return []
-        rows.sort()
-        gap = self.CLUSTER_TICKS * config.TICK_SIZE
-        merged = []
-        cur_p, cur_q, n = rows[0][0], rows[0][1], 1
-        for price, qty in rows[1:]:
-            if price - cur_p <= gap:
-                cur_p = (cur_p * n + price) / (n + 1); cur_q += qty; n += 1
-            else:
-                merged.append((cur_p, cur_q)); cur_p, cur_q, n = price, qty, 1
-        merged.append((cur_p, cur_q))
-        return merged
+        self._walls = []   # drawn (>= threshold SOL) walls as (price, qty, side) for hover hit-test
 
     def update_data(self, depth: dict, x0: float, x1: float) -> None:
         self.picture = QtGui.QPicture()
         p = QtGui.QPainter(self.picture)
-        all_q = []
-        for side in ("bids", "asks"):
-            all_q += [q for _, q in self._cluster(depth.get(side, []))]
-        max_q = max(all_q) if all_q else 1.0
-
+        # Draw each resting level >= threshold SOL at its LITERAL book price (NO clustering) — so
+        # the walls align price-for-price with the COB, and each wall = one real level (its hover
+        # value = that level's true SOL qty, not a cluster sum). Mirrors the old version's render.
+        rows = []
         for side, base in (("bids", (46, 160, 67)), ("asks", (248, 81, 73))):
-            for price, qty in self._cluster(depth.get(side, [])):
-                frac = min(1.0, qty / max_q)
-                col = QtGui.QColor(*base); col.setAlphaF(0.35 + 0.55 * frac)
-                pen = QtGui.QPen(col); pen.setCosmetic(True); pen.setWidthF(1.0 + 3.0 * frac)
-                p.setPen(pen)
-                p.drawLine(QtCore.QPointF(x0, price), QtCore.QPointF(x1, price))
+            for lvl in depth.get(side, []):
+                try:
+                    price, qty = float(lvl[0]), float(lvl[1])
+                except (ValueError, IndexError):
+                    continue
+                if qty >= self.threshold:
+                    rows.append((price, qty, side, base))
+        max_q = max((q for _, q, _, _ in rows), default=1.0)
+        walls = []
+        for price, qty, side, base in rows:
+            frac = min(1.0, qty / max_q)                       # size -> alpha + line width
+            col = QtGui.QColor(*base); col.setAlphaF(0.35 + 0.55 * frac)
+            pen = QtGui.QPen(col); pen.setCosmetic(True); pen.setWidthF(1.0 + 3.0 * frac)
+            p.setPen(pen)
+            p.drawLine(QtCore.QPointF(x0, price), QtCore.QPointF(x1, price))
+            walls.append((price, qty, "bid" if side == "bids" else "ask"))
         p.end()
+        self._walls = walls
         self._rect = QtCore.QRectF(x0, -1e6, max(1.0, x1 - x0), 2e6)
         self.prepareGeometryChange(); self.update()
+
+    def nearest_wall(self, price: float, tol: float):
+        """Nearest DRAWN wall (>= threshold SOL, literal price) to ``price`` within ``tol`` price
+        units. Returns (price, qty, side) or None — for the Mode-10 hover-volume tooltip."""
+        best = None
+        for wp, qty, side in self._walls:
+            d = abs(wp - price)
+            if d <= tol and (best is None or d < best[0]):
+                best = (d, wp, qty, side)
+        return (best[1], best[2], best[3]) if best else None
 
     def paint(self, p, *a): p.drawPicture(0, 0, self.picture)
     def boundingRect(self): return self._rect
