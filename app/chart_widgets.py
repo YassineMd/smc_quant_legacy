@@ -488,13 +488,19 @@ class BucketCandleItem(pg.GraphicsObject):
                 p.setPen(self._flat_pen)
                 p.drawLine(QtCore.QPointF(xi - half, ll), QtCore.QPointF(xi + half, ll))
                 continue
-            p.setPen(self._pen)
-            # wick (neutral)
-            p.drawLine(QtCore.QPointF(xi, ll), QtCore.QPointF(xi, hh))
-            # body (per-candle dominance brush, neutral border)
+            # body bounds first, so the wicks stop AT the body (no line through the fill).
             top, bot = max(oo, cc), min(oo, cc)
             if top == bot:
                 top += config.TICK_SIZE / 2.0   # ranged doji (open==close): sliver shows the level
+            p.setPen(self._pen)
+            # wicks ONLY outside the body — upper (body top -> high) + lower (low -> body bottom).
+            # The old single low->high wick crossed the body and showed through the semi-transparent
+            # fill as an ugly center midline; splitting it keeps the wicks but clears the body.
+            if hh > top:
+                p.drawLine(QtCore.QPointF(xi, top), QtCore.QPointF(xi, hh))
+            if bot > ll:
+                p.drawLine(QtCore.QPointF(xi, ll), QtCore.QPointF(xi, bot))
+            # body (per-candle dominance brush, neutral border)
             p.setBrush(brushes[i] if i < len(brushes) else QtCore.Qt.NoBrush)
             p.drawRect(QtCore.QRectF(xi - half, bot, width, top - bot))
         p.end()
