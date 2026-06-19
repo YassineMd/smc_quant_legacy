@@ -212,6 +212,17 @@ state calibration.
   no-op stub: `obTfsChanged` had zero subscribers) was its last UI trace. To revisit: needs real daemon
   work (per-client multi-tf streaming OR a merged cross-tf OB feed), THEN re-add the checklist (trivial
   next to the daemon work). The cross-tf OB confluence was genuinely valuable — don't lose the idea.
+- **🔴 HIGH-PRIORITY — TERMINAL PERFORMANCE (the terminal is slow; affects daily use). PROFILE FIRST,
+  don't optimize blind.** When addressed: (1) find WHERE the time goes — render (20Hz paint loop), data
+  processing (per-frame snapshot handling), or the scanner redraw — by profiling the LIVE running
+  terminal, not guessing. (2) Likely suspects to check: is the redraw sig-gate actually SKIPPING when
+  nothing changed (or repainting every frame?); the QGraphicsItem count (buckets + overlays + the now
+  un-clustered literal-price depth walls — is item count the bottleneck?); the absorption/OB recompute
+  cadence; any per-frame work that could be cached. (3) CONNECTION TO THIS REMOVAL: Phases C/D delete
+  dormant scene items (candle_item, footprint_item, … still INSTANTIATED even if not drawn), which may
+  ALREADY cut overhead — so RE-MEASURE after C/D to see how much more is needed. (4) Discipline: profile
+  the real running process → find the real bottleneck → optimize THAT (same build-and-check-the-real-
+  thing rule). Finish the removal first (may itself help), then profile + optimize as a focused effort.
 - **State-engine calibration — DEFERRED to LIVE trading** (feel it over days; see the plan's item-4 arc).
 
 ### THE WORKING DISCIPLINE (critical — preserve it)

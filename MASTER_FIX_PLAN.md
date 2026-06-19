@@ -284,6 +284,13 @@ whale-absorption detector. The arc:
   hamburger cleanup — `obTfsChanged` had zero subscribers) was its last UI trace. To revisit: needs daemon
   work (per-client multi-tf streaming OR a merged cross-tf OB feed), THEN re-add the checklist. Genuinely
   valuable — don't lose the idea.
+- **🔴 HIGH-PRIORITY — TERMINAL PERFORMANCE (slow; affects daily use). PROFILE FIRST, don't guess.**
+  Find WHERE the frame time goes — render (20Hz paint loop) vs data processing vs scanner redraw — by
+  profiling the LIVE terminal. Suspects: is the redraw sig-gate actually skipping when nothing changed;
+  QGraphicsItem count (buckets + overlays + the un-clustered literal depth walls); absorption/OB recompute
+  cadence; cacheable per-frame work. CONNECTION: Phases C/D delete dormant scene items (still instantiated)
+  → may already cut overhead, so RE-MEASURE after C/D. Finish the removal first, then profile + optimize
+  the real bottleneck (build-and-check-the-real-thing).
 - **State-engine calibration — still DEFERRED to LIVE trading** (operator's call): feel the engine against
   the real market over days; the item-4 "State-engine live calibration" arc above still holds.
 
