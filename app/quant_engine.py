@@ -665,7 +665,12 @@ def calc_quant_obs(engine: QuantEngine, timeframe: str) -> List[dict]:
 # is a separate live-only layer.
 # ---------------------------------------------------------------------------
 def _absorption_clusters(window, kappa, nmin, rho, sigma, beta):
-    """One W-window's firing levels -> adjacent-tick clusters ``[(plo, phi, side, absorbed_sol)]``.
+    """One W-window's firing levels -> adjacent-tick clusters ``[(plo, phi, side, absorbed_sol, kappa, poc)]``.
+
+    ``kappa`` = the cluster's absorbed volume / median bucket vol (``vbar``) — the heavy-volume
+    multiple (how many median buckets of one-sided aggression the wall absorbed; >= the C1 floor).
+    ``poc`` = the single heaviest-absorbed level in the cluster (the LINE's price — where the
+    whale concentrated its defense, not the arbitrary plo/phi midpoint).
 
     A level fires when its dominant-side aggression is HEAVY (>= kappa * median candle vol),
     SUSTAINED (>= nmin candles, no single candle > rho of it), ONE-SIDED (>= sigma) and HELD
@@ -699,6 +704,11 @@ def _absorption_clusters(window, kappa, nmin, rho, sigma, beta):
     by = {}
     for (p, side, a) in fired:
         by.setdefault(side, []).append((p, a))
+
+    def _emit(cur, side):                                # cluster -> (plo, phi, side, absorbed, kappa, poc)
+        ab = sum(x[1] for x in cur)
+        poc = max(cur, key=lambda x: x[1])[0]            # heaviest-absorbed level = the LINE's price
+        return (cur[0][0], cur[-1][0], side, ab, ab / vbar if vbar > 1e-9 else 0.0, poc)
     out = []
     for side, lvls in by.items():
         lvls.sort()
@@ -707,43 +717,54 @@ def _absorption_clusters(window, kappa, nmin, rho, sigma, beta):
             if p - cur[-1][0] <= 0.021:
                 cur.append((p, a))
             else:
-                out.append((cur[0][0], cur[-1][0], side, sum(x[1] for x in cur))); cur = [(p, a)]
-        out.append((cur[0][0], cur[-1][0], side, sum(x[1] for x in cur)))
+                out.append(_emit(cur, side)); cur = [(p, a)]
+        out.append(_emit(cur, side))
     return out
 
 
-def calc_absorption(footprints_tf: dict, kappa: float = 0.75, W: int = 20, nmin: int = 4,
+def calc_absorption(buckets: list, kappa: float = 0.80, W: int = 20, nmin: int = 4,
                     rho: float = 0.6, sigma: float = 0.75, beta: float = 0.15,
-                    buf_pct: float = 0.001, t2_usd: float = 500_000.0,
-                    t3_usd: float = 1_000_000.0) -> List[dict]:
-    """Whale-absorption standing levels from the time-candle footprints. STATELESS — replays the
-    full lifecycle from the footprint history each call (like :func:`calc_quant_obs`):
+                    buf_pct: float = 0.001, t1_usd: float = 250_000.0,
+                    t2_usd: float = 500_000.0, t3_usd: float = 1_000_000.0) -> List[dict]:
+    """Whale-absorption standing levels from the VOLUME BUCKETS (BUCKET-NATIVE; same axis as
+    :func:`calc_quant_obs`). Each bucket carries its ``{price:{b,s}}`` level ladder, its close,
+    and its start_time, so marks anchor on bucket start_times and die on bucket close-throughs —
+    detection and display share ONE volume-bucket axis (no 1m-time-vs-bucket mismatch). STATELESS
+    — replays the full lifecycle from the bucket history each call:
 
-      • DETECT/CLUSTER — :func:`_absorption_clusters` per sliding W-candle window.
+      • DETECT/CLUSTER — :func:`_absorption_clusters` per sliding W-BUCKET window.
       • PERSIST        — each cluster becomes a STANDING mark; its $ / tier track the PEAK
         window-absorbed over its life (a growing defense upgrades T1->T2->T3, never down).
-      • DIE            — only when a candle CLOSE clears the level by ``buf_pct`` (a DECISIVE
-        break, never a 1-tick wick): SELL on close > phi*(1+buf), BUY on close < plo*(1-buf).
+      • DIE            — only when a BUCKET CLOSE clears the level by ``buf_pct`` (a DECISIVE
+        break, never a wick): SELL on close > phi*(1+buf), BUY on close < plo*(1-buf). Closed
+        buckets always carry a close, so there is no forward-only-close gap (unlike 1m candles).
 
-    Each footprint node must carry ``levels`` and (for invalidation) ``close``. Returns marks:
-    ``{id, plo, phi, side, absorbed_usd, tier, birth, end, active}``.
+    ``buckets`` is a chronological list of ``QuantBucket`` objects OR ``BucketSnapshot`` dicts
+    (both expose levels / close / start_time / curr_vol). Returns marks:
+    ``{id, plo, phi, price, side, absorbed_usd, tier, kappa, birth, end, active}`` — ``price`` is
+    the POC (heaviest-absorbed level = the render line's price), ``kappa`` the heavy-volume
+    multiple (absorbed / median BUCKET vol), both taken at the peak-$ window. The floor is
+    DOLLAR-anchored: ``kappa=0.80`` (the bucket κ that reproduces the 1m unit's ~$270k all-whales
+    floor) PLUS a hard ``t1_usd`` filter so the whale line stays at $250k+ regardless of unit/market.
     """
-    items = sorted((int(u), n) for u, n in footprints_tf.items())
-    if len(items) < W:
+    def _bf(b, attr, key, default):     # accept QuantBucket (attrs) or BucketSnapshot (dict keys)
+        return b.get(key, default) if isinstance(b, dict) else getattr(b, attr, default)
+    if len(buckets) < W:
         return []
     cand = []
-    for u, n in items:
+    for b in buckets:
         lv = {round(float(p), 2): (float(v.get("b", 0.0)), float(v.get("s", 0.0)))
-              for p, v in n.get("levels", {}).items()}
-        vol = float(n.get("lastVol") or sum(b + s for b, s in lv.values()))
-        cand.append((u, lv, vol, n.get("close")))
+              for p, v in (_bf(b, "levels", "levels", {}) or {}).items()}
+        vol = float(_bf(b, "curr_vol", "curr_vol", 0.0)) or sum(bb + ss for bb, ss in lv.values())
+        cand.append((float(_bf(b, "start_time", "start_time", 0.0)), lv, vol,
+                     _bf(b, "close_price", "close", None)))
 
     def _tier(usd):
         return 3 if usd >= t3_usd else (2 if usd >= t2_usd else 1)
 
     active, done, seen = [], [], []
     for (u, lv, vol, close) in cand:
-        if close is not None:                                    # decisive close-through (DEATH only)
+        if close is not None:                                    # decisive BUCKET close-through (DEATH only)
             cl = float(close)
             for m in active[:]:
                 if ((m["side"] == "SELL" and cl > m["phi"] * (1 + buf_pct))
@@ -752,19 +773,19 @@ def calc_absorption(footprints_tf: dict, kappa: float = 0.75, W: int = 20, nmin:
                     done.append(m); active.remove(m)
         seen.append((u, lv, vol))
         if len(seen) >= W:
-            for (plo, phi, side, absorbed) in _absorption_clusters(seen[-W:], kappa, nmin, rho, sigma, beta):
+            for (plo, phi, side, absorbed, kap, poc) in _absorption_clusters(seen[-W:], kappa, nmin, rho, sigma, beta):
                 usd = absorbed * ((plo + phi) / 2.0)
                 hit = next((m for m in active if m["side"] == side
                             and not (phi < m["plo"] - 0.021 or plo > m["phi"] + 0.021)), None)
-                if hit is not None:                              # standing mark -> lift PEAK (tier may upgrade)
-                    if usd > hit["absorbed_usd"]:
-                        hit["absorbed_usd"] = usd; hit["tier"] = _tier(usd)
+                if hit is not None:                              # standing mark -> lift PEAK (concurrent merge)
+                    if usd > hit["absorbed_usd"]:                # peak $, its kappa AND its POC move together
+                        hit["absorbed_usd"] = usd; hit["tier"] = _tier(usd); hit["kappa"] = kap; hit["price"] = poc
                     hit["plo"] = min(hit["plo"], plo); hit["phi"] = max(hit["phi"], phi)
                 else:                                            # birth a new standing level
-                    active.append({"id": f"abs_{side}_{plo:.2f}_{u}", "plo": plo, "phi": phi,
-                                   "side": side, "absorbed_usd": usd, "tier": _tier(usd),
-                                   "birth": u, "end": None, "active": True})
-    return done + active
+                    active.append({"id": f"abs_{side}_{plo:.2f}_{int(u)}", "plo": plo, "phi": phi,
+                                   "price": poc, "side": side, "absorbed_usd": usd, "tier": _tier(usd),
+                                   "kappa": kap, "birth": u, "end": None, "active": True})
+    return [m for m in (done + active) if m["absorbed_usd"] >= t1_usd]   # DOLLAR floor (all-whales)
 
 
 def rank_obs(obs: List[dict]) -> List[dict]:

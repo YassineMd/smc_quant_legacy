@@ -480,14 +480,14 @@ class MarketDataCore:
         return rank_obs(calc_quant_obs(engine, tf_key))
 
     def _absorption_marks(self, tf_key: str) -> list:
-        """Whale-absorption standing levels for one tf — replayed over the last 12h of
-        footprints (~3x the max real lifespan, comfortably cheap; stateless like the OB matrix)."""
-        tf_db = self.footprints_db.get(tf_key, {})
-        if not tf_db:
+        """Whale-absorption standing levels for one tf — BUCKET-NATIVE: replayed over the engine's
+        closed VOLUME BUCKETS (the same axis as the OB matrix), so detection and display share one
+        volume-bucket axis. Stateless like the OB matrix; marks anchor on bucket start_times and
+        die on bucket close-throughs."""
+        eng = self.engines.get(tf_key)
+        if eng is None or not eng.closed_buckets:
             return []
-        cutoff = max(int(k) for k in tf_db) - 12 * 3600
-        recent = {k: v for k, v in tf_db.items() if int(k) >= cutoff}
-        return calc_absorption(recent)
+        return calc_absorption(eng.closed_buckets)
 
     async def recompute_loop(self) -> None:
         """Periodic recalibrate + OB rescan, DECOUPLED from per-close (Step 19.4).
