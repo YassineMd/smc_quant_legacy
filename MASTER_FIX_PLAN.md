@@ -262,6 +262,14 @@ whale-absorption detector. The arc:
   the more useful reference. Idea: keep the last-trade line, ADD a thin mid line (or best-bid/ask markers)
   so the spread + the last-trade-vs-book position are visible. NOT a bug (the COB is correctly aligned —
   diagnosed read-only); an enhancement, consider after the time-chart removal.
+- **Alerts re-wire (surfaced during Phase B) — DEFERRED.** `alerts.feed` (OB/liq notifications) fired
+  ONLY in the old Off-branch that Phase B severed — so alerts already didn't fire in Mode 10 (the default)
+  and now never do. Re-wire `alerts.feed` into the scanner / Mode-10 path as a later follow-up. Not lost.
+- **⚠️ TIME-CHART REMOVAL — phases A (DOM port) + B (sever "Off") committed; NEXT: hamburger cleanup →
+  Phase C (scene-item deletion) → Phase D (class deletion). PHASE C STEP 1 (CRITICAL): relocate
+  `ob_item.visible_filter` OFF `ob_item` BEFORE deleting it — the Min-Mult slider writes it and Mode-10
+  `bc_obs` reads it (deleting ob_item without moving it silently breaks Mode 10's Min-Mult filter). Move
+  it to a terminal attr or onto `bc_obs`, verify Min-Mult still filters Mode-10 OBs, THEN delete ob_item.**
 - **State-engine calibration — still DEFERRED to LIVE trading** (operator's call): feel the engine against
   the real market over days; the item-4 "State-engine live calibration" arc above still holds.
 

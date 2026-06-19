@@ -82,11 +82,10 @@ _M10_LAYERS = [
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
 ]
 
-# Order-flow scanner — the authoritative 10-mode bucket architecture (+ Off).
+# Order-flow scanner — the authoritative 10-mode bucket architecture (time chart removed, Phase B).
 # The combo displays the human label but emits the KEY (via currentData).
 SCANNER_MODES = [
-    "bucket_canvas",   # Mode 10 — primary mapping surface: first in the list + default-on-open (A5)
-    "Off",             # time chart — DEMOTED to fallback (second), NOT removed
+    "bucket_canvas",   # Mode 10 — the only candle surface + default on open (A5)
     "open_pos",
     "close_pos",
     "exhaustion",
@@ -98,7 +97,6 @@ SCANNER_MODES = [
     "effort_result",
 ]
 SCANNER_LABELS = {
-    "Off": "Off — Time Chart",
     "open_pos": "Cumulative Open Positions",
     "close_pos": "Cumulative Close Positions",
     "exhaustion": "Bull & Bear Exhaustion",

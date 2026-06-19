@@ -181,6 +181,18 @@ state calibration.
   bands. Idea: KEEP the last-trade line (honest "last print") and ADD a thin mid line (or best-bid/
   best-ask markers) so the spread + where the last trade sits vs the live book are both visible. NOT a
   bug (the COB is correctly aligned; this is an enhancement). Consider after the time-chart removal.
+- **Alerts re-wire (surfaced during Phase B) — DEFERRED.** `alerts.feed` (OB/liq notifications) fired
+  ONLY in the old Off-branch, which Phase B severed — so alerts already didn't fire in Mode 10 (the
+  default) and now never do. Re-wire `alerts.feed` into the scanner / Mode-10 path as a later
+  follow-up (after the structural removal work). Not lost.
+- **⚠️ TIME-CHART REMOVAL — phases A (DOM port) ✅ + B (sever the "Off" control flow) ✅ committed.
+  NEXT: hamburger Technical-Layers cleanup → Phase C (delete the dormant time scene items) → Phase D
+  (delete the dead classes). PHASE C STEP 1 (CRITICAL — do NOT skip): relocate `ob_item.visible_filter`
+  OFF `ob_item` BEFORE deleting it. The Min-Mult slider WRITES `ob_item.visible_filter` and Mode-10
+  `bc_obs` READS it, so deleting `ob_item` without moving it silently breaks Mode 10's Min-Mult filter.
+  Move it to a standalone home (a terminal attr or onto `bc_obs`), re-wire the slider + bc_obs, verify
+  Min-Mult still filters Mode-10 OBs, THEN delete `ob_item`. Also delete the now-dead `_hover_stats`/
+  `_stats_enabled` in C/D.**
 - **State-engine calibration — DEFERRED to LIVE trading** (feel it over days; see the plan's item-4 arc).
 
 ### THE WORKING DISCIPLINE (critical — preserve it)

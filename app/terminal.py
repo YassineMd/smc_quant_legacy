@@ -221,7 +221,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.scanner_baseline.setZValue(5)
         self.plot.addItem(self.scanner_baseline, ignoreBounds=True)
         self.scanner_baseline.hide()
-        self.scanner_mode = "Off"
+        self.scanner_mode = "bucket_canvas"   # opens on Mode 10; never the (removed) time chart
         self._scanner_fitted = False
         # Phase 1: bucket pipeline state. active_scanner_items is the GC list the
         # Phase 2 teardown will sweep; the sig/cache make _build_scanner_buckets
@@ -365,37 +365,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.scan_time_changed.connect(self._on_scan_time_changed)
 
     def _set_scanner(self, mode: str) -> None:
-        """Scanner state machine: route between time space and the 10 bucket modes.
-
-        Invariant order on every transition: set mode -> teardown (clears items and,
-        on Off, reverts time components) -> if scanning, hide time components and
-        flip the axis to bucket-index. Per-mode geometry is drawn by the 50ms loop
-        via :meth:`_draw_scanner` (populated in Phases 3-6).
+        """Route between the bucket-native modes (Mode 10 canvas + the 9 metric scanners). Order:
+        set mode -> teardown -> hide the (dormant) time-scene items + flip the axis to bucket-index.
+        Per-mode geometry is drawn by the 50ms loop via :meth:`_draw_scanner`. (Time chart removed
+        in Phase B — every mode is a scanner mode now.)
         """
         self.scanner_mode = mode
-        scanning = mode != "Off"
+        self.clear_scanner_canvas()   # teardown first
 
-        # Teardown first — clear_scanner_canvas reads self.scanner_mode and, when
-        # it is "Off", re-shows the time-based components for us.
-        self.clear_scanner_canvas()
-
-        self.axis_bottom.set_scanner_active(scanning)
-        # §6.2 — drawing is LOCKED on every scanner mode EXCEPT bucket_canvas, where
-        # it's re-enabled in index space (session-only via DrawingController.index_mode).
+        self.axis_bottom.set_scanner_active(True)
+        # §6.2 — drawing is LOCKED on every scanner mode EXCEPT bucket_canvas, where it's
+        # re-enabled in index space (session-only via DrawingController.index_mode).
         is_canvas = mode == "bucket_canvas"
-        self.drawer.locked = scanning and not is_canvas
+        self.drawer.locked = not is_canvas
         self.drawer.index_mode = is_canvas
-        if scanning:
-            if not is_canvas:
-                self.drawer.cancel()   # drop any armed tool + hide its edit panel
-            self._hide_time_components()
-            self._apply_scanner_theme(dark=True)     # enhancement §3
-            self._scanner_needs_autofit = True       # one-shot fit for the new mode
-            self._scanner_bucket_sig = None
-            self._last_scanner_sig = None
-            # (Mode 10 COB lives in cob_col, built + shown by _ensure_canvas_panes from
-            # _cob_want; nothing to restore here.)
-            self._on_timer()   # immediate first draw from the current Zero Point
+        if not is_canvas:
+            self.drawer.cancel()   # drop any armed tool + hide its edit panel
+        self._hide_time_components()
+        self._apply_scanner_theme(dark=True)     # enhancement §3
+        self._scanner_needs_autofit = True       # one-shot fit for the new mode
+        self._scanner_bucket_sig = None
+        self._last_scanner_sig = None
+        # (Mode 10 COB lives in cob_col, built + shown by _ensure_canvas_panes from _cob_want.)
+        self._on_timer()   # immediate first draw from the current Zero Point
 
     def _hide_time_components(self) -> None:
         """Hide every time-based layer/overlay so the bucket canvas is clean."""
@@ -411,24 +403,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # legacy persistent scanner items are unused by the bucket modes
         self.scanner_bars.hide()
         self.scanner_baseline.hide()
-
-    def _show_time_components(self) -> None:
-        """Restore the standard time chart, honoring each layer's toggle state."""
-        self._apply_scanner_theme(dark=False)   # back to the light candlestick theme
-        self.candle_item.setVisible(True)
-        self.price_line.setVisible(True)
-        self.depthwall_item.setVisible(True)
-        self.hud.show()
-        self.cob.setVisible(self._cob_prev_visible)
-        self.ob_item.setVisible(self.menu.layer_state("order_blocks"))
-        self.footprint_item.setVisible(self.menu.layer_state("footprints"))
-        self.imbalance_item.setVisible(self.menu.layer_state("imbalances"))
-        self.iceberg_item.setVisible(self.menu.layer_state("icebergs"))
-        self.liq_item.setVisible(self.menu.layer_state("liquidations"))
-        self.session_item.setVisible(self.menu.layer_state("sessions"))
-        # hand the vertical viewport back to the time-candle bounds
-        self._autoranged = False
-        self._sig_candles = self._sig_obs = self._sig_fp = None
 
     def _change_tf(self, tf: str) -> None:
         self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {tf}")
@@ -630,17 +604,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             self.cursor_spot.hide()
 
-        # Scanner active: translate the cursor's integer index -> that bucket's
-        # real end_time and surface it in the HUD overlay (Phase 2 §4).
-        if self.scanner_mode != "Off":
-            self._hover_scanner(pt.x(), pos)
-            self._hover_dom_wall(pt.x(), pt.y())   # DOM wall hover-volume (bucket_canvas + m10_dom)
-            return
-
-        if self._stats_enabled and len(self._last_snap.get("times", [])):
-            self._hover_stats(pt.x(), pos)
-        else:
-            self.stats.hide()
+        # Every mode is bucket-native now: surface the hovered bucket's readout + (Mode 10) the DOM
+        # wall volume. (The time-chart _hover_stats path went with the Off mode in Phase B.)
+        self._hover_scanner(pt.x(), pos)
+        self._hover_dom_wall(pt.x(), pt.y())   # DOM wall hover-volume (bucket_canvas + m10_dom)
 
     def _hover_scanner(self, x: float, scene_pos) -> None:
         """Rich, mode-specific HUD readout for the hovered volume bucket (§4)."""
@@ -853,95 +820,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         snap = self.worker.snapshot()
         self._last_snap = snap
 
-        # --- SCANNER MODE: bucket-based metric replaces the time candle view ---
-        # Branch first so NO time-based work (bracket labels, candle/OB/footprint/
-        # depth/session/liq/HUD updates) runs while a scanner mode owns the canvas.
-        if self.scanner_mode != "Off":
-            self._draw_scanner()
-            if self.scanner_mode == "bucket_canvas":
-                # DOM (Phase A): UNGATED depth refresh every frame, bucket_canvas-only.
-                # _draw_scanner is signature-gated (skips in a quiet market) but the order
-                # book pulses independently — gating it would freeze the walls between
-                # bucket closes. Metric modes have a non-price Y, so depth is excluded.
-                self._update_m10_dom(snap)
-            self._redock_trackers()   # keep badges pinned to the axis under pan/zoom
-            self._refresh_parked_hover()   # A3a: breathe the hovered bucket each frame
-            return
-
-        times = snap["times"]
-        if len(times) < 1:
-            return
-
-        tf = snap["tf"]
-        tf_secs = config.TF_SECONDS.get(tf, 60)
-        width = tf_secs * 0.7
-        ohlcv = snap["ohlcv"]
-        (x0, x1), (y0, y1) = self.vb.viewRange()
-        x_right = float(times[-1]) + tf_secs * 8
-
-        # right-align position-bracket data labels to the live view edge (§17)
-        self.drawer.update_view(x_right)
-
-        # candles (signature-gated)
-        sig = (len(times), float(times[-1]), float(ohlcv[-1, 1]),
-               float(ohlcv[-1, 2]), float(ohlcv[-1, 3]))
-        if sig != self._sig_candles:
-            self.candle_item.update_data(times, ohlcv, width)
-            self._sig_candles = sig
-            if not self._autoranged:
-                self.plot.enableAutoRange(); self.plot.autoRange()
-                self.plot.disableAutoRange(); self._autoranged = True
-
-        # live price dashed line (patch §1)
-        if snap["latest_price"]:
-            self.price_line.setPos(snap["latest_price"])
-
-        # order blocks (signature-gated)
-        obs = snap["order_blocks"]
-        ob_sig = (len(obs), tuple(o.get("ob_id") for o in obs[:8]),
-                  tuple(o.get("active") for o in obs[:8]), self.ob_item.show_tiers)
-        if ob_sig != self._sig_obs:
-            self.ob_item.update_data(obs, x_right)
-            self._sig_obs = ob_sig
-
-        # footprint-derived layers (signature-gated; only if visible)
-        fps = snap["footprints"]
-        forming = fps.get(str(snap.get("forming_time")), {})
-        fp_vol = sum(v.get("b", 0) + v.get("s", 0) for v in forming.get("levels", {}).values())
-        fp_sig = (len(fps), round(fp_vol, 1), round(x0), round(x1))
-        if fp_sig != self._sig_fp:
-            self._sig_fp = fp_sig
-            yr = max(1e-9, y1 - y0)
-            xr = max(1e-9, x1 - x0)
-            px_per_x = self.vb.width() / xr
-            px_per_y = self.vb.height() / yr
-            px_per_candle = px_per_x * tf_secs
-            candles_by_t = {int(times[i]): list(ohlcv[i]) for i in range(len(times))}
-            proj_x = max(x_right, x1)   # project to the live right edge (fix #9)
-            if self.footprint_item.isVisible():
-                self.footprint_item.update_data(fps, x0, x1, width, px_per_x, px_per_y)
-            if self.imbalance_item.isVisible():
-                self.imbalance_item.update_data(fps, candles_by_t, x0, x1, proj_x)
-            if self.iceberg_item.isVisible():
-                # fix #13: hide 🧊 icons when candles get too narrow (zoomed out)
-                show_icons = px_per_candle >= 22.0
-                self.iceberg_item.update_data(fps, candles_by_t, x0, x1, proj_x, show_icons)
-
-        # depth walls + COB (depth changes each pulse)
-        self.depthwall_item.update_data(snap["depth"], x0, x1)
-        if self.cob.isVisible():
-            self.cob.update_depth(snap["depth"]); self._sync_cob()
-
-        # sessions + liquidations
-        if self.session_item.isVisible():
-            self.session_item.update_data(x0, x1, y0, y1)
-        if self.liq_item.isVisible():
-            self.liq_item.update_data(snap["liquidations"])
-
-        # alerts + HUD
-        self.alerts.feed(snap)
-        self.hud.update_values(snap["latest_price"], snap["forming_time"], tf)
-        self._reposition_hud(snap["latest_price"])
+        # Every mode is bucket-native now (time chart removed, Phase B): draw the scanner, refresh
+        # Mode-10 DOM (ungated, bucket_canvas-only — depth pulses independently of the sig-gated
+        # _draw_scanner), re-dock the axis badges, breathe the hovered bucket.
+        self._draw_scanner()
+        if self.scanner_mode == "bucket_canvas":
+            self._update_m10_dom(snap)
+        self._redock_trackers()
+        self._refresh_parked_hover()
 
     # ------------------------------------------------------------------
     # Phase 1: bucket pipeline + Zero-Point anchor
@@ -951,15 +837,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.clear_scanner_canvas()
         self._scanner_bucket_sig = None       # force a fresh bucket rebuild
         self._scanner_needs_autofit = True    # re-fit once to the new window
-        if self.scanner_mode != "Off":
-            self._on_timer()                  # immediate manual redraw
+        self._on_timer()                      # immediate manual redraw
 
     def clear_scanner_canvas(self) -> None:
         """Aggressive teardown of all scanner geometry + heavy-mode scene objects.
 
         Safe to call in any state. Steps: (1) sweep tracked items; (2) Mode 4
-        secondary ViewBox teardown; (3) Mode 10 lower-pane teardown; (4) if the
-        active mode is now "Off", revert to the standard time chart.
+        secondary ViewBox teardown; (3) Mode 10 lower-pane + COB-column teardown.
         """
         self.price_tag.hide()   # A2: drop the cursor price tag on any mode switch (no orphan)
         self.stats.hide()       # A3a: drop the hover readout too (no orphan across modes)
@@ -1038,10 +922,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.lower_plot = None
             self.splitter_v = None
             self.cob_col = None
-
-        # 4. reversion: if we've landed on "Off", restore the time chart
-        if self.scanner_mode == "Off":
-            self._show_time_components()
 
     def _sync_kinetic_vb(self) -> None:
         """Keep the Mode 4 secondary price ViewBox glued to the main viewport.
