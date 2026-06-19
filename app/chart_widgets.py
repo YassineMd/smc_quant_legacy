@@ -422,6 +422,116 @@ class OrderBlockLayer(pg.GraphicsObject):
 
 
 # ---------------------------------------------------------------------------
+# Whale-absorption LINES (bucket-native) — one horizontal line at the POC price per standing
+# mark from calc_absorption: color = side (blue buy / orange sell), LINE THICKNESS = kappa
+# (relative strength, continuous — replaces the old discrete $-tiers), label = $peak (kappa).
+# The line spans bucket CELLS [birth-0.5 -> death+0.5 | live-edge] (candles are centered at index
+# i with half-width 0.5); active runs OPEN to the live edge, dead stops (slightly dimmer) at its
+# death bucket's right cell-edge — the line ENDING is the death signal, no vertical end-cap.
+# An iceberg is a price LEVEL, not a zone — a line at the POC is the honest
+# "this is the price the whale defended".
+# ---------------------------------------------------------------------------
+RGB_ABSORB_BUY = (41, 121, 255)     # blue — buyers absorbed (a buy wall held)
+RGB_ABSORB_SELL = (255, 145, 0)     # orange — sellers absorbed (a sell wall held)
+_ABSORB_CAP_H = 0.03                # dead end-cap half-height (price) — a small "died here" tick
+
+
+def _absorb_thickness(kappa: float) -> float:
+    """kappa (relative strength) -> line width in px. Floor kappa=0.80 -> 1px (thin/weak);
+    kappa~4.6 -> 6px (bold/strong). Continuous — replaces the old discrete $-tier opacity.
+    (Thin-end can be bumped to ~1.5 if 1px reads too faint on screen.)"""
+    return max(1.0, min(6.0, 1.0 + (kappa - 0.80) * 1.3))
+
+
+class AbsorptionLayer(pg.GraphicsObject):
+    """Mode-10 whale-absorption LINES. Each standing mark from ``calc_absorption`` draws a
+    horizontal line at its POC ``price`` spanning the bucket CELLS ``[birth-0.5 -> death+0.5 |
+    live-edge]`` (candles are centered at index i, half-width 0.5). Color = side; LINE THICKNESS
+    = ``kappa`` (relative strength, continuous); label = ``$peak (kappa)``. Active -> runs OPEN
+    to the live edge; dead -> stops (slightly dimmer) at its death bucket's right cell-edge —
+    the line ENDING is the death signal (no vertical end-cap).
+    """
+
+    def __init__(self, plot=None):
+        super().__init__()
+        self.picture = QtGui.QPicture()
+        self._rect = QtCore.QRectF()
+        self.label_pool = TextPool(anchor=(0, 1), font_size=8, z=27)
+        if plot is not None:
+            self.label_pool.attach(plot)
+
+    def attach_text(self, plot) -> None:
+        self.label_pool.attach(plot)
+
+    def setVisible(self, v: bool) -> None:   # noqa: N802 (Qt override)
+        super().setVisible(v)
+        self.label_pool.set_enabled(v)
+
+    def paint(self, p, *args):
+        p.drawPicture(0, 0, self.picture)
+
+    def boundingRect(self):
+        return self._rect
+
+    def update_data_indexed(self, marks: list, x_right: float, ts_to_idx, x_view) -> None:
+        """Index-space LINE render — one horizontal level line per mark; see the class docstring."""
+        vx0, vx1 = x_view
+        self.picture = QtGui.QPicture()
+        if not marks:
+            self.label_pool.update([])
+            self.prepareGeometryChange(); self.update()
+            return
+        p = QtGui.QPainter(self.picture)
+        xs, ys, labels = [], [], []
+        for m in marks:
+            try:
+                bi = ts_to_idx(float(m["birth"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+            if bi == -1:
+                continue   # formed before the anchor -> out of scope
+            active = m.get("active", True)
+            end = m.get("end")
+            # Bucket-CELL span: candles are centered at index i (half-width 0.5), so the line runs
+            # from the birth bucket's LEFT cell-edge to the death bucket's RIGHT cell-edge — no
+            # half-bucket float, no +1 overshoot. Active -> open to the live edge.
+            x0 = float(bi) - 0.5
+            if active or end is None:
+                x1 = x_right + 0.5
+            else:
+                x1 = float(ts_to_idx(float(end))) + 0.5    # death bucket RIGHT cell-edge (stops AT death)
+            if x1 <= vx0 or x0 >= vx1:
+                continue
+            x0c = max(x0, vx0); x1c = min(x1, vx1)
+            if x1c <= x0c:
+                x1c = x0c + 0.5
+            price = float(m.get("price", m.get("plo", 0.0)))   # POC (fallback to plo for pre-redesign marks)
+            rgb = RGB_ABSORB_BUY if m.get("side") == "BUY" else RGB_ABSORB_SELL
+            col = QtGui.QColor(rgb[0], rgb[1], rgb[2])
+            kap = float(m.get("kappa", 1.0))
+            th = _absorb_thickness(kap)                        # LINE THICKNESS = relative strength
+            line_col = QtGui.QColor(col)
+            if not active:
+                line_col.setAlphaF(0.85)                       # dead slightly dimmer; the line ENDING is the death
+            pen = QtGui.QPen(line_col); pen.setCosmetic(True); pen.setWidthF(th)
+            p.setPen(pen)
+            p.drawLine(QtCore.QLineF(x0c, price, x1c, price))  # the iceberg = a horizontal LEVEL line at its POC
+            # (Bug-1 fix) NO vertical "died here" end-cap — on a LINE the ending itself IS the death
+            # signal; the line simply stops at the death bucket's right cell-edge.
+            usd = float(m.get("absorbed_usd", 0.0))
+            dollar = f"${usd / 1e6:.1f}M" if usd >= 1e6 else f"${usd / 1e3:.0f}k"
+            txt = f"{dollar} (κ{kap:.1f})" if kap > 0 else dollar
+            labels.append((x0c, price, txt, col))
+            xs += [x0c, x1c]; ys += [price]
+        p.end()
+        self.label_pool.update(labels)
+        if xs:
+            ylo, yhi = min(ys) - _ABSORB_CAP_H, max(ys) + _ABSORB_CAP_H
+            self._rect = QtCore.QRectF(min(xs), ylo, max(xs) - min(xs), max(0.02, yhi - ylo))
+        self.prepareGeometryChange(); self.update()
+
+
+# ---------------------------------------------------------------------------
 # Session dividers (spec §2.3.2) — localized 00:00 / 08:00 UTC boundaries
 # ---------------------------------------------------------------------------
 class SessionLayer(pg.GraphicsObject):

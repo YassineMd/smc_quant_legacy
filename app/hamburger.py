@@ -77,7 +77,7 @@ _M10_LAYERS = [
     ("m10_liq", "Liquidation Marks", False, True),        # default OFF. In-session toggles persist as
     ("m10_stats", "Stats Box", True, True),               # checkbox state; only a restart resets to these.
     ("m10_statedebug", "State Debug (calib)", False, True),  # top-3 states + winner factors in the box
-    ("m10_icebergs", "Icebergs (Phase 3)", False, False),
+    ("m10_icebergs", "Absorption", True, True),             # whale-defense bands (calc_absorption, default ON)
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
 ]
 

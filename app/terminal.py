@@ -32,7 +32,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from . import bucket_state, config
 from .alerts import AlertsLedger
 from .chart_widgets import (
-    BucketCandleItem, CandlestickItem, LiquidationLayer, LocalTimeAxis,
+    AbsorptionLayer, BucketCandleItem, CandlestickItem, LiquidationLayer, LocalTimeAxis,
     OrderBlockLayer, PriceAxis, SessionLayer,
 )
 from .cob_panel import CobPanel
@@ -257,6 +257,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Mode 10 order-block layer (index-space). Persistent object; added to the
         # plot lazily in _scan_bucket_canvas and swept on teardown. Tiers forced on.
         self.bc_obs = OrderBlockLayer(self.plot, show_tiers=True)
+        # Mode 10 whale-absorption bands (phase c; index-space). Persistent; added lazily in
+        # _scan_bucket_canvas, swept on teardown; its $-label pool attached here, cleared there.
+        self.bc_absorption = AbsorptionLayer(self.plot)
         # Mode 10 per-bucket footprint ladder (Stage 1; index-space twin of
         # FootprintLayer). Persistent object; added to the plot lazily in
         # _scan_bucket_canvas, swept on teardown; its TextPools are attached here and
@@ -498,6 +501,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # Sub-filter of m10_obs, read by update_data_indexed at draw time (show_dead).
             # No scene item to manage; the forced redraw below repaints with/without dead boxes.
             pass
+        elif key == "m10_icebergs":
+            # Whale-absorption bands: setVisible toggles the zones; the $-labels are pool-managed
+            # (not in active_scanner_items) -> clear them on OFF so no label artifacts linger.
+            if "bc_absorption" in self._scan_handles:
+                self.bc_absorption.setVisible(on)
+                if not on:
+                    self.bc_absorption.label_pool.clear(self.plot)
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -941,6 +951,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 # leak guard: the OB layer's tier labels are pool-managed (not in
                 # active_scanner_items), so sweep them explicitly off the plot (§6.1)
                 self.bc_obs.tier_pool.clear(self.plot)
+                self.bc_absorption.label_pool.clear(self.plot)   # leak guard: absorption $-labels
                 self.bc_fp.clear_text(self.plot)   # leak guard: footprint TextPools (not in active_scanner_items)
                 # §6.2 — index-space drawings are session-only; wipe them on exit
                 self.drawer.flush_index_drawings()
@@ -1072,8 +1083,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         snap = self._last_snap or self.worker.snapshot()
         closed = snap.get("closed_buckets", []) or []
         active = snap.get("active_bucket") or {}
+        # Mode-10 absorption marks must repaint on a lifecycle/geometry change even when the bucket
+        # set and live-edge volume are static (a QUIET market): without this, an active->dead flip
+        # leaves (len, curr_vol, scan_start, mode) identical, the redraw is skipped, and the dead
+        # band stays drawn OPEN to the live edge. (Path 1 will also align deaths to bucket closes.)
+        abs_sig = tuple((m.get("id"), m.get("active"), m.get("end"),
+                         round(float(m.get("kappa", 0.0)), 2), m.get("price"))
+                        for m in sorted(snap.get("absorptions", []), key=lambda m: m.get("id", "")))
         current_sig = (len(closed), active.get("curr_vol", 0.0),
-                       self.menu.scan_start_unix(), self.scanner_mode)
+                       self.menu.scan_start_unix(), self.scanner_mode, abs_sig)
         if current_sig == self._last_scanner_sig:
             return   # nothing changed — skip the heavy recompute
         self._last_scanner_sig = current_sig
@@ -2000,24 +2018,37 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # A4 draw-gate: OB zones gated by m10_obs. Toggle-off teardown is in
         # _set_scanner_overlay (setVisible + tier_pool.clear for the tier labels, which
         # are not in active_scanner_items).
+        # Shared index mapper for the OB + absorption overlays (both map an exact epoch -> the
+        # bucket ordinal active at that time). Hoisted out of the m10_obs gate so the absorption
+        # overlay can reuse it even when OB zones are toggled off.
+        _scan_start_times = [b.get("start_time", 0.0) for b in buckets]
+
+        def _ts_to_idx(ts: float) -> int:
+            i = bisect.bisect_right(_scan_start_times, ts) - 1
+            return -1 if i < 0 else min(i, len(_scan_start_times) - 1)
+
         if self.menu.layer_state("m10_obs"):
             if "bc_obs" not in self._scan_handles:
                 self.bc_obs.setZValue(-5)          # zones render behind the candles
                 self._add_scanner_item(self.bc_obs, ignore_bounds=True)  # derived overlay: never drive the X/Y fit
                 self._scan_handles["bc_obs"] = self.bc_obs
-            start_times = [b.get("start_time", 0.0) for b in buckets]
-
-            def _ts_to_idx(ts: float) -> int:
-                # nearest bucket ordinal active at `ts`; -1 if before the first bucket
-                i = bisect.bisect_right(start_times, ts) - 1
-                return -1 if i < 0 else min(i, len(start_times) - 1)
-
             self.bc_obs.setVisible(True)
             self.bc_obs.visible_filter = self.ob_item.visible_filter   # honor the Min-Mult slider
             vx0, vx1 = self.vb.viewRange()[0]   # clamp OB spans to the visible window (no corner-float)
             self.bc_obs.update_data_indexed(
                 self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx, (vx0, vx1),
                 self.menu.layer_state("m10_dead_obs"))   # show mitigated OBs as faded lifespan boxes (toggle)
+
+        # Mode 10 whale-absorption bands (phase c) — gated by m10_icebergs (relabeled "Absorption").
+        if self.menu.layer_state("m10_icebergs"):
+            if "bc_absorption" not in self._scan_handles:
+                self.bc_absorption.setZValue(-6)   # behind the OB zones + candles
+                self._add_scanner_item(self.bc_absorption, ignore_bounds=True)
+                self._scan_handles["bc_absorption"] = self.bc_absorption
+            self.bc_absorption.setVisible(True)
+            vx0, vx1 = self.vb.viewRange()[0]
+            self.bc_absorption.update_data_indexed(
+                self._last_snap.get("absorptions", []), float(x[-1]), _ts_to_idx, (vx0, vx1))
 
         # --- liquidation marks (A4 step 4) — per-bucket forced volume from A3b-pre.
         # liq_short = shorts liquidated (forced buys) -> mark at the bucket HIGH (price

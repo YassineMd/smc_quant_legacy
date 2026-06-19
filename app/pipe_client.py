@@ -73,6 +73,7 @@ class PipeClientWorker(threading.Thread):
         self.latest_price: float = 0.0
         self.forming_time: Optional[int] = None  # open-time of the live forming candle
         self.order_blocks: List[dict] = []
+        self.absorptions: List[dict] = []        # whale-absorption marks (new wire field; liquidations-style plain copy, no OB COW)
         self.liquidations: List[dict] = []       # {side, price, qty, time}
         self.depth: Dict[str, list] = {"bids": [], "asks": []}
         self.oi: float = 0.0
@@ -118,6 +119,7 @@ class PipeClientWorker(threading.Thread):
             self.candles = OrderedDict()
             self.footprints = OrderedDict()
             self.order_blocks = []
+            self.absorptions = []
             self.liquidations = []
             self.closed_buckets = []
             self.active_bucket = {}
@@ -196,12 +198,14 @@ class PipeClientWorker(threading.Thread):
                 return
             new_fp = OrderedDict(sorted(pkt.footprints.items(), key=lambda x: int(x[0])))
             new_obs = list(pkt.order_blocks)
+            new_abs = list(pkt.absorptions)
             tgt = pkt.target_vol
             with self.data_lock:
                 if pkt.tf != self.tf:
                     return
                 self.target_vol = tgt
                 self.order_blocks = new_obs
+                self.absorptions = new_abs   # paint whale bands on boot, before the first recompute
                 self.footprints = new_fp
                 self.closed_buckets = []
                 self._cb_ver += 1
@@ -255,6 +259,7 @@ class PipeClientWorker(threading.Thread):
                     return
                 self.target_vol = pkt.target_vol
                 self.order_blocks = pkt.order_blocks
+                self.absorptions = list(pkt.absorptions)   # back-compat monolithic catch-up
                 self.footprints = OrderedDict(sorted(pkt.footprints.items(), key=lambda x: int(x[0])))
                 self.closed_buckets = list(pkt.closed_buckets)   # seed scanner history
                 self.active_bucket = dict(pkt.active_bucket)
@@ -277,6 +282,10 @@ class PipeClientWorker(threading.Thread):
                     self._cb_ver += 1
                 else:
                     self.order_blocks = pkt.order_blocks
+                    # Full-recompute broadcast ONLY: feeds attaches absorptions here (recompute_loop),
+                    # never on the close-piggyback above (which ships absorptions=[]). Storing it in
+                    # the if-branch would WIPE every mark on each bucket close -> flicker/vanish.
+                    self.absorptions = pkt.absorptions
                     self._ob_ver += 1
                 self.vpin = pkt.vpin
             elif isinstance(pkt, protocol.LiquidationPacket):
@@ -328,6 +337,7 @@ class PipeClientWorker(threading.Thread):
                 "latest_price": self.latest_price,
                 "forming_time": self.forming_time,
                 "order_blocks": self._ob_exp,
+                "absorptions": list(self.absorptions),
                 "liquidations": list(self.liquidations),
                 "depth": {"bids": list(self.depth["bids"]), "asks": list(self.depth["asks"])},
                 "oi": self.oi,
