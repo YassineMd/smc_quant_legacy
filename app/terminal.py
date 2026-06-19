@@ -136,6 +136,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sig_fp = None
         self._autoranged = False
         self._last_snap: dict = {}
+        self._m10_cc = None   # #3 static closed-bucket compute cache (must exist before the first
+                              # render — the scanner-entry path calls _on_timer() immediately)
 
         # --- chart + COB split (the splitter handle is the COB resizer) ---
         self.plot = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"),
@@ -353,6 +355,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._autoranged = False
         self._scanner_needs_autofit = True    # new tf -> refit the scanner once
         self._scanner_bucket_sig = self._last_scanner_sig = None
+        self._m10_cc = None   # #3 static closed-bucket compute cache (see _compute_bucket_arrays)
         self._depth_needs_calibration = True  # new tf -> re-baseline the depth slider (§1)
         self.worker.request_timeframe(tf)
 
@@ -1793,64 +1796,114 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return pg.mkBrush((neon_col[0], neon_col[1], neon_col[2], 255))
         return pg.mkBrush((std[0], std[1], std[2], alpha))
 
+    def _bucket_row(self, buckets: list, i: int, vels: list, fold_prev):
+        """Compute ONE bucket's Mode-10 render row at index ``i`` (#3 compute cache).
+
+        ``vels`` must be populated for 0..i (``vels[i]`` = this bucket's velocity);
+        ``fold_prev`` = the kinetic-forecast EMA state ``(baseline, bull_stretch,
+        bear_stretch)`` after index i-1, or ``None`` for i == 0. Returns
+        ``(row, new_fold)``. A pure function of immutable per-bucket fields + the
+        TRAILING windows (vel-20, VPIN-50) + the prior fold — so a closed bucket's row
+        is final the instant it closes (the live edge is never in a closed window)."""
+        b = buckets[i]
+        # trailing-20 velocity ratio -> neon dominance brush
+        win = vels[max(0, i - 19): i + 1]
+        base_vel = (sum(win) / len(win)) if win else 1.0
+        ratio = vels[i] / max(0.1, base_vel)
+        brush = self._neon_v2_brush(b.get("opL", 0.0), b.get("opS", 0.0),
+                                    b.get("clL", 0.0), b.get("clS", 0.0),
+                                    b.get("curr_vol", 0.0), ratio)
+        # kinetic-forecast EMA (identical matrix to the old inline loop / Mode 4)
+        duration = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))
+        v_bull = b.get("buy_vol", 0.0) / duration
+        v_bear = b.get("sell_vol", 0.0) / duration
+        denom = max(1.0, v_bull + v_bear)
+        bull_raw = (v_bull * (b.get("buyer_er", 0.0) / 100.0) / denom) * 0.5
+        bear_raw = (v_bear * (b.get("seller_er", 0.0) / 100.0) / denom) * 0.5
+        poc = b.get("poc_price", 0.0)
+        if fold_prev is None:                  # i == 0: seed the EMA
+            baseline, bull_s, bear_s = poc, bull_raw, bear_raw
+        else:
+            pb, pbull, pbear = fold_prev
+            baseline = poc * 0.05 + pb * 0.95
+            bull_s = bull_raw * 0.1 + pbull * 0.9
+            bear_s = bear_raw * 0.1 + pbear * 0.9
+        # trailing-50 VPIN -> heatmap brush
+        ti = tv = 0.0
+        for bb in buckets[max(0, i - 49): i + 1]:
+            ti += abs(bb.get("buy_vol", 0.0) - bb.get("sell_vol", 0.0))
+            tv += bb.get("curr_vol", 0.0)
+        vpin = ti / tv if tv > 0 else 0.0
+        vbrush = (pg.mkBrush("#ff073a") if vpin >= 0.85
+                  else pg.mkBrush("#f1c40f") if vpin >= 0.50
+                  else pg.mkBrush("#555555"))
+        row = (b.get("open", 0.0), b.get("high", 0.0), b.get("low", 0.0),
+               b.get("close", 0.0), poc, brush,
+               baseline, baseline + bull_s, baseline - bear_s, vpin, vbrush)
+        return row, (baseline, bull_s, bear_s)
+
+    # The 11 parallel render arrays, in row-tuple order (see _bucket_row).
+    _M10_ARR_KEYS = ("opens", "highs", "lows", "closes", "pocs", "brushes",
+                     "baseline", "bull_fc", "bear_fc", "vpin", "vbrush")
+
+    def _compute_bucket_arrays(self, buckets: list, anchor_unix: float) -> dict:
+        """Static closed-bucket compute cache (#3): return the 11 per-bucket render
+        arrays, recomputing ONLY the live edge (``buckets[-1]``) + any newly-closed
+        buckets — closed buckets are immutable so their rows are cached and reused.
+
+        Correctness (provable, not merely careful): ``buckets[-1]`` is the live edge
+        (always recomputed, NEVER cached). For a closed bucket ``i <= L-2`` the trailing
+        windows span ``[i-W+1 .. i]`` whose MAX index ``i < L-1`` — so the live edge is
+        never inside any closed bucket's window, and a closed row is FINAL the instant
+        the bucket closes. The cache grows ONLY at the closed end; any front change
+        (history load / Zero-Point move / tf switch -> ``filtered[0]`` or the anchor
+        changes) forces a clean full rebuild via the ``front_id`` fingerprint, never a
+        stale reuse."""
+        L = len(buckets)
+        n_closed = max(0, L - 1)               # 0..L-2 closed; L-1 is the live edge
+        front_id = ((buckets[0].get("start_time", 0.0),
+                     buckets[0].get("curr_vol", 0.0)) if buckets else None)
+        cc = self._m10_cc
+        reuse = (cc is not None and cc["front_id"] == front_id
+                 and cc["anchor"] == anchor_unix and cc["n"] <= n_closed)
+        if not reuse:                          # full rebuild (front/anchor change or first run)
+            cc = {k: [] for k in self._M10_ARR_KEYS}
+            cc.update(vels=[], fold=None, n=0, front_id=front_id, anchor=anchor_unix)
+
+        # extend velocities (per-bucket, immutable) + finalize newly-closed rows ONCE each
+        for i in range(cc["n"], n_closed):
+            b = buckets[i]
+            dur = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))
+            cc["vels"].append((b.get("buy_vol", 0.0) + b.get("sell_vol", 0.0)) / dur)
+            row, cc["fold"] = self._bucket_row(buckets, i, cc["vels"], cc["fold"])
+            for k, v in zip(self._M10_ARR_KEYS, row):
+                cc[k].append(v)
+        cc["n"] = n_closed
+        self._m10_cc = cc                      # cache holds exactly the closed prefix
+
+        # full arrays = cached closed prefix (O(N) pointer copy) + the FRESH live edge
+        out = {k: list(cc[k]) for k in self._M10_ARR_KEYS}
+        if L >= 1:
+            b = buckets[L - 1]
+            dur = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))
+            live_vel = (b.get("buy_vol", 0.0) + b.get("sell_vol", 0.0)) / dur
+            row, _ = self._bucket_row(buckets, L - 1, cc["vels"] + [live_vel], cc["fold"])
+            for k, v in zip(self._M10_ARR_KEYS, row):
+                out[k].append(v)
+        return out
+
     def _scan_bucket_canvas(self, buckets: list, x: list) -> None:
         """Mode 10 — neon-graded bucket candles + kinetic forecast (upper pane)
         synchronized with a rolling-50 VPIN toxicity heatmap (lower pane)."""
         self._ensure_canvas_panes()
-        ratios = self._bucket_vel_ratios(buckets)
-
-        opens, highs, lows, closes, brushes, pocs = [], [], [], [], [], []
-        baseline_arr, bull_fc_arr, bear_fc_arr = [], [], []
-        baseline = 0.0
-        bull_stretch = 0.0
-        bear_stretch = 0.0
-
-        for i, b in enumerate(buckets):
-            opens.append(b.get("open", 0.0))
-            highs.append(b.get("high", 0.0))
-            lows.append(b.get("low", 0.0))
-            closes.append(b.get("close", 0.0))
-            pocs.append(b.get("poc_price", 0.0))   # STAGE 0: true per-bucket POC (render-only)
-            brushes.append(self._neon_v2_brush(
-                b.get("opL", 0.0), b.get("opS", 0.0), b.get("clL", 0.0),
-                b.get("clS", 0.0), b.get("curr_vol", 0.0), ratios[i]))
-
-            # kinetic forecast (identical EMA matrix to Mode 4)
-            duration = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))
-            v_bull = b.get("buy_vol", 0.0) / duration
-            v_bear = b.get("sell_vol", 0.0) / duration
-            bull_kinetic = v_bull * (b.get("buyer_er", 0.0) / 100.0)
-            bear_kinetic = v_bear * (b.get("seller_er", 0.0) / 100.0)
-            denom = max(1.0, v_bull + v_bear)
-            bull_stretch_raw = (bull_kinetic / denom) * 0.5
-            bear_stretch_raw = (bear_kinetic / denom) * 0.5
-            if i == 0:
-                baseline = b.get("poc_price", 0.0)
-                bull_stretch = bull_stretch_raw
-                bear_stretch = bear_stretch_raw
-            else:
-                baseline = (b.get("poc_price", 0.0) * 0.05) + (baseline * 0.95)
-                bull_stretch = (bull_stretch_raw * 0.1) + (bull_stretch * 0.9)
-                bear_stretch = (bear_stretch_raw * 0.1) + (bear_stretch * 0.9)
-            baseline_arr.append(baseline)
-            bull_fc_arr.append(baseline + bull_stretch)
-            bear_fc_arr.append(baseline - bear_stretch)
-
-        # rolling N=50 VPIN for the lower pane
-        vpin_arr = []
-        for i in range(len(buckets)):
-            window = buckets[max(0, i - 49): i + 1]
-            ti = sum(abs(bb.get("buy_vol", 0.0) - bb.get("sell_vol", 0.0)) for bb in window)
-            tv = sum(bb.get("curr_vol", 0.0) for bb in window)
-            vpin_arr.append(ti / tv if tv > 0 else 0.0)
-        vbrushes = []
-        for v in vpin_arr:
-            if v >= 0.85:
-                vbrushes.append(pg.mkBrush("#ff073a"))
-            elif v >= 0.50:
-                vbrushes.append(pg.mkBrush("#f1c40f"))
-            else:
-                vbrushes.append(pg.mkBrush("#555555"))
+        # #3 static closed-bucket compute cache: closed buckets are immutable, so their
+        # OHLC/poc/brush + kinetic-forecast EMA + rolling-50 VPIN rows are computed ONCE
+        # (on close) and reused; only the live edge (buckets[-1]) is recomputed each frame.
+        arr = self._compute_bucket_arrays(buckets, self.menu.scan_start_unix())
+        opens, highs, lows, closes = arr["opens"], arr["highs"], arr["lows"], arr["closes"]
+        pocs, brushes = arr["pocs"], arr["brushes"]
+        baseline_arr, bull_fc_arr, bear_fc_arr = arr["baseline"], arr["bull_fc"], arr["bear_fc"]
+        vpin_arr, vbrushes = arr["vpin"], arr["vbrush"]
 
         # Viewport (hoisted): drives the candle viewport cull (Edit below) AND the footprint
         # cull + bubble/number px_per_* (used further down). One viewRange() call serves both.
