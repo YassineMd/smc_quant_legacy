@@ -2,9 +2,11 @@
 
 You are continuing a multi-step data-integrity rework of a native order-flow
 trading terminal for **SOLUSDT perps**. This note orients a fresh session without
-re-deriving anything. **Phases 1 and 5 are COMPLETE — the terminal is aggTrade-native
-and LIVE on the real v3 `history.db`. Next is the operator's choice of Phase 2 / 3 / 4,
-then the Mode-10 selection tool (see §2).**
+re-deriving anything. **Phases 1 and 5 are COMPLETE — the terminal is aggTrade-native and LIVE on the
+real v3 `history.db`. Phases 2–4 are now done/subsumed (the OB-layer rework subsumed Phase 2; the
+absorption layer replaced the Phase-3 iceberg steps and the rest of Phase 3's layers were deleted with
+the time chart; the perf work covered Phase 4), and the time-chart removal is COMPLETE. Next is the
+deferred queue (§1.5): OB polish + OB toggle bug → target_vol clamp → the Mode-10 selection tool.**
 
 ---
 
@@ -171,8 +173,9 @@ TRAP states gate on the trapped side OPENING (`trappedOpen` factor). Commit `333
 state calibration.
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
-1. **Time-chart removal — PROMOTED.** The time-candle entanglement caused the absorption-on-1m mismatch
-   this whole dive fixed — cut it at the source (+ remove the dead Technical-Layers menu section).
+1. ✅ **Time-chart removal — DONE (all phases A/B/menu/relabel/C/D).** Completed after the absorption
+   dive; Mode 10 (`BucketCandleItem`) is the sole candle surface (full record in the "⚠️ TIME-CHART
+   REMOVAL" block below). **Active queue head is now item 2 (OB polish + OB toggle bug).**
 2. **OB polish (A)** — min-render-height + duplicate-timestamp handling. PLUS the **OB toggle bug**:
    the `m10_obs` ("Order Blocks") and `m10_dead_obs` ("Dead OBs") toggles are NOT independent —
    `m10_obs` is a MASTER `bc_obs.setVisible()` over the whole layer (live + dead together), and
@@ -191,14 +194,16 @@ state calibration.
   ONLY in the old Off-branch, which Phase B severed — so alerts already didn't fire in Mode 10 (the
   default) and now never do. Re-wire `alerts.feed` into the scanner / Mode-10 path as a later
   follow-up (after the structural removal work). Not lost.
-- **⚠️ TIME-CHART REMOVAL — phases A (DOM port) ✅ + B (sever the "Off" control flow) ✅ committed.
-  NEXT: hamburger Technical-Layers cleanup → Phase C (delete the dormant time scene items) → Phase D
-  (delete the dead classes). PHASE C STEP 1 (CRITICAL — do NOT skip): relocate `ob_item.visible_filter`
-  OFF `ob_item` BEFORE deleting it. The Min-Mult slider WRITES `ob_item.visible_filter` and Mode-10
-  `bc_obs` READS it, so deleting `ob_item` without moving it silently breaks Mode 10's Min-Mult filter.
-  Move it to a standalone home (a terminal attr or onto `bc_obs`), re-wire the slider + bc_obs, verify
-  Min-Mult still filters Mode-10 OBs, THEN delete `ob_item`. Also delete the now-dead `_hover_stats`/
-  `_stats_enabled` in C/D.**
+- **✅ TIME-CHART REMOVAL — COMPLETE (all phases).** A (DOM port) + B (sever "Off") + menu cleanup
+  (Technical-Layers section removed) + relabel (timeframe selector → "Bucket Scale") + C (time-chart
+  scene items deleted) + D (orphaned classes deleted: `CandlestickItem`/`SessionLayer`/`LiquidationLayer`
+  in `chart_widgets.py`; `FootprintLayer`/`ImbalanceLayer`/`IcebergLayer` in `footprint_layers.py`). The
+  CRITICAL Phase-C-step-1 was handled correctly: `visible_filter` was relocated OFF the now-deleted
+  `ob_item` onto `bc_obs` (defined in `chart_widgets.py`, wired in `terminal.py` via
+  `multiplierChanged → setattr(bc_obs, "visible_filter")`); `bc_obs.update_data_indexed` reads it, so
+  Min-Mult still filters Mode-10 OBs. `_hover_stats`/`_stats_enabled` deleted. Mode 10
+  (`BucketCandleItem`) is the sole candle surface. [Commits: A 332b8bf · B babba79 · menu 954dc80 ·
+  relabel 3ff0404 · C 2bb2c71 · D 753a08d]
 - **🔴 HIGH-PRIORITY (not urgent) — `optimize_bucket_size` produces absurd/unstable `target_vol` for
   higher tfs. DEFERRED to its own focused turn (do NOT interrupt the time-chart removal).** Root cause:
   `optimize_bucket_size` (quant_engine.py) sets `max_test_v = avg_node_vol*15` and assigns the
@@ -262,12 +267,9 @@ state calibration.
 ### IMMEDIATE NEXT STEPS (a fresh session starts exactly here)
 1. **Absorption layer — DONE & COMMITTED (2026-06-19), 3 commits: docs, detector, render.** Bug-1 fixed,
    Bug-2 disproven (see RESOLVED BUGS above), live-verified on screen before commit.
-2. **NEXT — time-chart removal (PROMOTED).** The time-candle entanglement is what caused the whole
-   absorption-on-1m mismatch this dive fixed. It is NOT just "delete the time-chart code" — it's "what
-   SHOULD the pure-bucket surface be once the dishonest time-unit is gone?" Start with a FIRST-PRINCIPLES
-   analysis (what the time-chart provides, what depends on it, what unifies once it's gone, the ideal
-   bucket-native architecture) + a proposed removal plan with risk areas. PROPOSE before building. (Also
-   remove the dead Technical-Layers menu section.)
+2. ✅ **Time-chart removal — DONE** (all phases; see the "⚠️ TIME-CHART REMOVAL" record in §1.5).
+   **Active next item:** OB polish + OB toggle bug (deferred-queue head), then target_vol clamp, then
+   the Mode-10 selection capstone.
 
 ---
 
@@ -285,28 +287,22 @@ state calibration.
   150 ms live edge, true-price footprint levels. 19.6 confirmed the gain by eye
   (aggTrade relocates the POC to the real volume peak on travel; converges with kline
   when quiet). Full Phase-5 record + commit list = **§8**.
-- **NEXT — operator picks the phase (the CAPSTONE is Mode 10 itself — see §0; the
-  Mode-10 selection tool is its final step, after the pipeline is fully solid):**
-  - **Cheap validation — ✅ DONE:** footprint ladder + true POC render correctly on the
-    Mode 10 bucket canvas (Stage-0 POC dot `6ec3578`, Stage-1 levels-on-wire `8fca531`,
-    footprint viewport-cull/newest-first-cap/bubble-fallback fix `4dcf3ee`). Capstone
-    surface proven. Root-cause record (the four-round saga: no viewport cull → 600-label
-    budget spent on off-screen oldest buckets → live edge starved) = MASTER_FIX_PLAN
-    "Mode 10 footprint ladder rendering — DONE". *(Distinct from time-chart Step 13, which
-    is the same oldest-first cap bug in `FootprintLayer` and is still pending.)*
-  - **Phase 2 — OB fidelity (Steps 6–8):** band over-extension fix (6), Otsu A/B
-    (7, optional/skippable), proportional OB mitigation not binary death (8). Makes
-    Mode-10 ORDER BLOCKS trustworthy.
-  - **Phase 3 — visual layer (Steps 9–14):** stacked-imbalance flush (9), iceberg
-    wick-mitigation (10) + adaptive detection (11), DOM per-side normalization (12),
-    footprint text-cap newest-first (13), imbalance progressive vertical fill (14) —
-    PLUS the diagnosed-not-fixed **Off-mode candle bug** (§5: `scanner_bars` wants
-    `ignoreBounds=True`).
-  - **Phase 4 — perf (Steps 16–18):** cluster DOM once/frame (16), cache zones on
-    bucket-close (17), OB loop efficiency (18). (Step 15 already shipped as 19.4.)
-  - **Then the capstone** — consolidate every finished overlay onto Mode 10 (ONLY after
-    Phases 2–3 make each correct) + the Mode-10 selection tool vs the corrected scalars
-    (MASTER_FIX_PLAN "After the pipeline is solid").
+- **NEXT — the deferred queue (§1.5), not a phase pick.** The Phase 2/3/4 structure is SUBSUMED —
+  kept here for the dependency map only:
+  - **Cheap validation — ✅ DONE:** footprint ladder + true POC render correctly on Mode 10.
+  - **Phase 2 — OB fidelity (Steps 6–8) — ✅ DONE/subsumed** by the OB-layer rework (Step 8 =
+    progressive close-based erosion; the band fix folded in). Step 7 (Otsu) was always an optional
+    experiment.
+  - **Phase 3 — visual layer (Steps 9–14) — MOSTLY OBSOLETE:** Steps 9/14 (`ImbalanceLayer`), 10/11
+    (`IcebergLayer`), and 13 (time-chart `FootprintLayer`) targeted classes DELETED with the time
+    chart; the absorption layer replaced the iceberg heuristic; the Mode-10 footprint text-cap was
+    handled in the perf work; the Off-mode candle bug is moot (Off mode is gone). Only **Step 12**
+    (DOM per-side normalization — `DepthWallLayer` survives) remains, as an OPTIONAL "your-call"
+    tradeoff.
+  - **Phase 4 — perf (Steps 15–18) — ✅ DONE:** Step 15 shipped as 19.4; 16/17/18 = the four perf
+    commits; residual = the LOW perf follow-ups recorded in §1.5.
+  - **Then the capstone** — the Mode-10 selection tool, built against the corrected scalars on the
+    now-clean overlays (MASTER_FIX_PLAN "After the pipeline is solid").
 - **Where trustworthiness landed (post Phase-1 + aggTrade):**
   - **HIGH-CONFIDENCE now:** Modes 1/2 (open/close pos), 3 (exhaustion), 4 (kinetic),
     5 (volume), 6 (VPIN), 7/8 (bucket pos), 9 (effort/result) — honest Phase-1

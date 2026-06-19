@@ -175,7 +175,7 @@ still hold their content — this orders what's left and why.
 
 ---
 
-## CURRENT STATE (2026-06-19) — Mode-10 overlay layers: OB ✅ · TRAP ✅ · ABSORPTION 🔧
+## CURRENT STATE (2026-06-19) — Mode-10 overlay layers: OB ✅ · TRAP ✅ · ABSORPTION ✅
 
 The long arc since the 2026-06-17 state above: the Mode-10 **overlay layers** got built/reworked.
 Committed vs in-progress vs deferred, so the map stays clean after a long iceberg dive.
@@ -246,13 +246,9 @@ whale-absorption detector. The arc:
   `pipe_client.py` · `terminal.py` · `hamburger.py`), preceded by this docs commit. The layer is DONE.
 
 ### Deferred queue — current order (operator's call, 2026-06-19)
-1. **Time-chart removal — PROMOTED (was the Group-C "LATER" item).** The operator elevated this: the
-   time-candle entanglement is exactly what caused the absorption-on-1m mismatch this whole dive fixed.
-   Mode 10 is the native unit; the time chart is vestigial scaffolding. Removing it (+ the dead
-   Technical-Layers menu section) cuts the bug class at the source. **NOW the active next item — the
-   absorption layer is committed (2026-06-19); start with a first-principles analysis + removal plan
-   (what the time-chart provides, what depends on it, what unifies once it's gone, the ideal bucket-
-   native surface), propose before building.**
+1. ✅ **Time-chart removal — DONE (all phases: A/B/menu/relabel/C/D).** Completed after the absorption
+   dive — Mode 10 (`BucketCandleItem`) is the sole candle surface. Full record in the "⚠️ TIME-CHART
+   REMOVAL" block below. **Active queue head is now item 2 (OB polish + OB toggle bug).**
 2. **OB polish (A)** — min-render-height + duplicate-timestamp handling (small refinements paused during
    the absorption dive). PLUS the **OB toggle bug**: `m10_obs`/`m10_dead_obs` aren't independent —
    `m10_obs` is a MASTER `bc_obs.setVisible()` (live + dead together), `m10_dead_obs` only a `show_dead`
@@ -269,11 +265,16 @@ whale-absorption detector. The arc:
 - **Alerts re-wire (surfaced during Phase B) — DEFERRED.** `alerts.feed` (OB/liq notifications) fired
   ONLY in the old Off-branch that Phase B severed — so alerts already didn't fire in Mode 10 (the default)
   and now never do. Re-wire `alerts.feed` into the scanner / Mode-10 path as a later follow-up. Not lost.
-- **⚠️ TIME-CHART REMOVAL — phases A (DOM port) + B (sever "Off") committed; NEXT: hamburger cleanup →
-  Phase C (scene-item deletion) → Phase D (class deletion). PHASE C STEP 1 (CRITICAL): relocate
-  `ob_item.visible_filter` OFF `ob_item` BEFORE deleting it — the Min-Mult slider writes it and Mode-10
-  `bc_obs` reads it (deleting ob_item without moving it silently breaks Mode 10's Min-Mult filter). Move
-  it to a terminal attr or onto `bc_obs`, verify Min-Mult still filters Mode-10 OBs, THEN delete ob_item.**
+- **✅ TIME-CHART REMOVAL — COMPLETE (all phases).** A (DOM port) + B (sever "Off") + menu cleanup
+  (Technical-Layers section removed) + relabel (timeframe selector → "Bucket Scale") + C (time-chart
+  scene items deleted) + D (orphaned classes deleted: `CandlestickItem`/`SessionLayer`/`LiquidationLayer`
+  in `chart_widgets.py`; `FootprintLayer`/`ImbalanceLayer`/`IcebergLayer` in `footprint_layers.py`). The
+  CRITICAL Phase-C-step-1 was handled correctly: `visible_filter` was relocated OFF the now-deleted
+  `ob_item` onto `bc_obs` (defined in `chart_widgets.py`, wired in `terminal.py` via
+  `multiplierChanged → setattr(bc_obs, "visible_filter")`); `bc_obs.update_data_indexed` reads it, so
+  Min-Mult still filters Mode-10 OBs. `_hover_stats`/`_stats_enabled` deleted. Mode 10
+  (`BucketCandleItem`) is the sole candle surface. [Commits: A 332b8bf · B babba79 · menu 954dc80 ·
+  relabel 3ff0404 · C 2bb2c71 · D 753a08d]
 - **🔴 HIGH-PRIORITY (not urgent) — `optimize_bucket_size` balloons `target_vol` for higher tfs.
   DEFERRED to its own turn (don't interrupt the time-chart removal).** Root cause: `max_test_v =
   avg_node_vol*15` + UNCLAMPED `best_v` (quant_engine.py:403) → higher-tf footprint nodes (whole-candle
