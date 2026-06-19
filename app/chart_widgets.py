@@ -52,6 +52,7 @@ class TextPool:
         self.font.setBold(bold)
         self.z = z
         self.items: list[pg.TextItem] = []
+        self._last: list = []   # last applied (x,y,text,color) per slot — skip-unchanged guard
         self._plot = None
         self._enabled = True
 
@@ -61,6 +62,7 @@ class TextPool:
     def hide_all(self) -> None:
         for it in self.items:
             it.hide()
+        self._last = [None] * len(self.items)   # force a full re-apply (re-show) on the next update
 
     def clear(self, plot) -> None:
         """Permanently remove every pooled TextItem from ``plot`` and empty the
@@ -73,6 +75,7 @@ class TextPool:
             except Exception:
                 pass
         self.items = []
+        self._last = []
 
     def set_enabled(self, on: bool) -> None:
         self._enabled = on
@@ -80,7 +83,14 @@ class TextPool:
             self.hide_all()
 
     def update(self, specs: list) -> None:
-        """specs: list of (x, y, text, color)."""
+        """specs: list of (x, y, text, color).
+
+        Skip-unchanged: each pooled label caches its last applied ``(x, y, text, color)``;
+        a slot whose spec is identical is left untouched — no ``setText`` (HTML/font re-layout)
+        and no ``setPos`` — so it is neither re-laid-out NOR dirtied, and Qt doesn't repaint it.
+        On a stationary tick only the live edge's labels change; the immutable closed labels are
+        skipped. (Visual is identical — a skipped slot keeps the exact text/pos it displays.)
+        """
         if self._plot is None or not self._enabled:
             return
         while len(self.items) < len(specs):
@@ -89,14 +99,19 @@ class TextPool:
             ti.setZValue(self.z)
             self._plot.addItem(ti, ignoreBounds=True)
             self.items.append(ti)
+            self._last.append(None)
         for i, it in enumerate(self.items):
             if i < len(specs):
-                x, y, text, color = specs[i]
-                it.setText(text, color=color)
-                it.setPos(x, y)
-                it.show()
-            else:
+                spec = specs[i]
+                if spec != self._last[i]:        # only re-layout/reposition on an actual change
+                    x, y, text, color = spec
+                    it.setText(text, color=color)
+                    it.setPos(x, y)
+                    it.show()
+                    self._last[i] = spec
+            elif self._last[i] is not None:      # surplus slot that was showing -> hide once
                 it.hide()
+                self._last[i] = None
 
 
 # ---------------------------------------------------------------------------

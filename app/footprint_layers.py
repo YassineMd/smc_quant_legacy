@@ -22,11 +22,39 @@ from .chart_widgets import TextPool
 
 _FP_TEXT_CAP = 600              # bound detailed footprint labels
 DETAIL_PX_PER_TICK = 12.0      # show side-by-side rows once a tick row is this tall
+MAX_DETAIL_BUCKETS = 40        # NUMBERS (full per-level ladder) only in a tight study view
+MAX_BUBBLE_BUCKETS = 200       # TOP-3 bubbles up to here (3 x buckets <= 600 ellipses); wider -> none
 ICON_MIN_PX_PER_CANDLE = 22.0  # hide iceberg icons when candles get this narrow
 
 
 def _node_levels(node: dict) -> Dict[str, dict]:
     return node.get("levels", {}) if isinstance(node, dict) else {}
+
+
+def numbers_visible(n_vis: float, px_per_y: float) -> bool:
+    """NUMBERS-regime gate (full per-level side-by-side numbers): a TIGHT view
+    (<= MAX_DETAIL_BUCKETS visible buckets) with rows tall enough to read (>= DETAIL_PX_PER_TICK).
+    Wider/shorter -> bubbles instead (see detail_visible)."""
+    return n_vis <= MAX_DETAIL_BUCKETS and (px_per_y * config.TICK_SIZE) >= DETAIL_PX_PER_TICK
+
+
+def detail_visible(n_vis: float) -> bool:
+    """Is ANY per-level footprint detail shown (numbers OR bubbles)? -> a view up to
+    MAX_BUBBLE_BUCKETS wide. The per-bucket POC dots ride THIS whole detail regime (single source
+    of truth) -- so they stay with the bubbles and vanish only when you zoom out past them. Row
+    height only decides numbers-vs-bubbles (not detail-vs-none), so it is NOT part of this gate."""
+    return n_vis <= MAX_BUBBLE_BUCKETS
+
+
+def _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y):
+    """Pixel-round volume bubble at (xi, price); radius ~ volume fraction, color = buy/sell
+    dominance. Shared by the numbers-overflow fallback and the top-3 bubble regime."""
+    frac = tot / max_vol
+    r_px = 2.5 + 11.0 * frac
+    rgb = config.RGB_GREEN_STD if buy >= sell else config.RGB_RED_STD
+    col = QtGui.QColor(*rgb); col.setAlphaF(0.30 + 0.55 * frac)
+    p.setBrush(QtGui.QBrush(col)); p.setPen(QtCore.Qt.NoPen)
+    p.drawEllipse(QtCore.QPointF(xi, price), r_px / px_per_x, r_px / px_per_y)
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +99,6 @@ class BucketFootprintItem(pg.GraphicsObject):
         self.picture = QtGui.QPicture()
         p = QtGui.QPainter(self.picture)
         px_per_x = max(1e-9, px_per_x); px_per_y = max(1e-9, px_per_y)
-        detailed = (px_per_y * config.TICK_SIZE) >= DETAIL_PX_PER_TICK   # kept: 12px legibility gate
         half = width / 2.0
         buy_specs, sell_specs = [], []
 
@@ -81,34 +108,56 @@ class BucketFootprintItem(pg.GraphicsObject):
         visible = [(float(xi), levels) for xi, levels in zip(x, levels_list)
                    if levels and x0 - width <= float(xi) <= x1 + width]
 
-        max_vol = 1.0
-        for _xi, levels in visible:
-            for v in levels.values():
-                max_vol = max(max_vol, v.get("b", 0.0) + v.get("s", 0.0))
+        # Part B -- a legibility+cost gradient driven by how many buckets are on screen:
+        #   NUMBERS   (<= MAX_DETAIL_BUCKETS AND rows >= DETAIL_PX_PER_TICK): ALL levels as
+        #             side-by-side numbers, newest-first, 600-cap -- the zoomed-in STUDY view.
+        #   BUBBLES   (otherwise, <= MAX_BUBBLE_BUCKETS): the TOP-3 levels by total volume per
+        #             bucket -- the significant nodes, no micro-noise. Bounded at 3 x buckets
+        #             (<= 600 ellipses) BY CONSTRUCTION, so it stays cheap at wide zoom (vs the
+        #             old uncapped one-ellipse-per-level).
+        #   NONE      (> MAX_BUBBLE_BUCKETS): a sub-pixel blur anyway -- candles + POC carry it.
+        n_vis = len(visible)
+        show_numbers = numbers_visible(n_vis, px_per_y)
+        show_bubbles = (not show_numbers) and detail_visible(n_vis)  # detail_visible also drives the POC
 
-        # FIX 3 -- in numbers mode fill the label budget NEWEST-first (reverse the
-        # visible order) so the live edge is labeled before the cap is spent.
-        # FIX 2 -- any level that can't get a number (rows too short = bubble mode, OR
-        # the cap is spent) falls back to a BUBBLE, so no visible bucket is ever blank.
         lo_all = hi_all = None
-        for xi, levels in (reversed(visible) if detailed else visible):
-            for ps, v in levels.items():
-                price = float(ps); buy = v.get("b", 0.0); sell = v.get("s", 0.0)
-                tot = buy + sell
-                if tot <= 0:
-                    continue
-                lo_all = price if lo_all is None else min(lo_all, price)
-                hi_all = price if hi_all is None else max(hi_all, price)
-                if detailed and len(buy_specs) < _FP_TEXT_CAP:
-                    buy_specs.append((xi + width * 0.10, price, f"{buy:.0f}", QtGui.QColor(20, 110, 50)))
-                    sell_specs.append((xi - width * 0.10, price, f"{sell:.0f}", QtGui.QColor(150, 30, 25)))
-                else:
-                    frac = tot / max_vol
-                    r_px = 2.5 + 11.0 * frac
-                    rgb = config.RGB_GREEN_STD if buy >= sell else config.RGB_RED_STD
-                    col = QtGui.QColor(*rgb); col.setAlphaF(0.30 + 0.55 * frac)
-                    p.setBrush(QtGui.QBrush(col)); p.setPen(QtCore.Qt.NoPen)
-                    p.drawEllipse(QtCore.QPointF(xi, price), r_px / px_per_x, r_px / px_per_y)
+        if show_numbers or show_bubbles:
+            max_vol = 1.0
+            for _xi, levels in visible:
+                for v in levels.values():
+                    max_vol = max(max_vol, v.get("b", 0.0) + v.get("s", 0.0))
+
+        if show_numbers:
+            # FIX 3 -- fill the label budget NEWEST-first so the live edge is labeled before the
+            # 600-cap is spent. FIX 2 -- cap-overflow / zero-total levels fall back to a BUBBLE so
+            # no visible bucket is ever blank.
+            for xi, levels in reversed(visible):
+                for ps, v in levels.items():
+                    price = float(ps); buy = v.get("b", 0.0); sell = v.get("s", 0.0)
+                    tot = buy + sell
+                    if tot <= 0:
+                        continue
+                    lo_all = price if lo_all is None else min(lo_all, price)
+                    hi_all = price if hi_all is None else max(hi_all, price)
+                    if len(buy_specs) < _FP_TEXT_CAP:
+                        buy_specs.append((xi + width * 0.10, price, f"{buy:.0f}", QtGui.QColor(20, 110, 50)))
+                        sell_specs.append((xi - width * 0.10, price, f"{sell:.0f}", QtGui.QColor(150, 30, 25)))
+                    else:
+                        _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y)
+        elif show_bubbles:
+            # TOP-3 levels by TOTAL volume (buy+sell) per bucket -- the significant nodes only.
+            for xi, levels in visible:
+                top3 = sorted(levels.items(),
+                              key=lambda kv: kv[1].get("b", 0.0) + kv[1].get("s", 0.0),
+                              reverse=True)[:3]
+                for ps, v in top3:
+                    price = float(ps); buy = v.get("b", 0.0); sell = v.get("s", 0.0)
+                    tot = buy + sell
+                    if tot <= 0:
+                        continue
+                    lo_all = price if lo_all is None else min(lo_all, price)
+                    hi_all = price if hi_all is None else max(hi_all, price)
+                    _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y)
         p.end()
         self.buy_pool.update(buy_specs); self.sell_pool.update(sell_specs)
         if lo_all is None:

@@ -36,7 +36,7 @@ from .chart_widgets import (
 )
 from .cob_panel import CobPanel
 from .drawing_tools import DrawingController, DrawingToolbar
-from .footprint_layers import BucketFootprintItem, DepthWallLayer
+from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visible
 from .hamburger import FloatingOverlayMenu, HamburgerButton
 from .pipe_client import PipeClientWorker
 from .stats_overlay import StatsOverlay
@@ -1927,28 +1927,32 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scan_handles["bc_bull"].setData(x, bull_fc_arr)
         self._scan_handles["bc_bear"].setData(x, bear_fc_arr)
 
-        # --- STAGE 0: true per-bucket POC marker (render-only, zero data change) ---
-        # poc_price is already finalized in every BucketSnapshot (and computed on the
-        # fly for the live edge in live_snapshot), so this draws what the engine already
-        # ships. Gold matches the time-chart footprint POC ring (footprint_layers.py).
-        # Guarded to within the bucket's [low, high] so a degenerate/cold poc_price=0
-        # can't drop a dot at y=0 and skew the eye (or the one-shot Y-fit).
-        # A4 draw-gate: skip create+update entirely when m10_poc is off; when on, ensure
-        # the dot exists, is visible, and carries fresh data (the toggle handler does the
-        # immediate hide on off + forces this repaint on).
-        if self.menu.layer_state("m10_poc"):
+        # --- STAGE 0: true per-bucket POC marker (gold dot) — rides the whole DETAIL regime ---
+        # poc_price is already finalized in every BucketSnapshot (and computed on the fly for the
+        # live edge), so this draws what the engine ships, guarded to within [low, high] so a
+        # cold poc=0 can't drop a dot at y=0. Visibility is the SHARED detail gate (detail_visible:
+        # <= MAX_BUBBLE_BUCKETS visible) AND the m10_poc toggle — so the POC stays with ANY footprint
+        # detail (numbers AND bubbles) and vanishes only when you zoom out past the bubbles (>200).
+        # NO row-height check: rows only decide numbers-vs-bubbles, and the POC rides both. The
+        # scatter is cheap, so we gate VISIBILITY rather than cull the dot set (culling without a
+        # pan re-cull hook would drop leading-edge dots on a drag).
+        poc_show = (self.menu.layer_state("m10_poc")
+                    and detail_visible(vx1 - vx0))
+        if "bc_poc" not in self._scan_handles:
+            self._scan_handles["bc_poc"] = self._add_scanner_item(pg.ScatterPlotItem(
+                size=7, symbol="o", pen=pg.mkPen("#141414", width=0.5),
+                brush=pg.mkBrush("#f1c40f")))
+            self._scan_handles["bc_poc"].setZValue(6)   # POC dots ride above the candles
+        if poc_show:
             poc_x, poc_y = [], []
             for i in range(len(buckets)):
                 pv = pocs[i]
                 if pv > 0.0 and lows[i] <= pv <= highs[i]:
                     poc_x.append(x[i]); poc_y.append(pv)
-            if "bc_poc" not in self._scan_handles:
-                self._scan_handles["bc_poc"] = self._add_scanner_item(pg.ScatterPlotItem(
-                    size=7, symbol="o", pen=pg.mkPen("#141414", width=0.5),
-                    brush=pg.mkBrush("#f1c40f")))
-                self._scan_handles["bc_poc"].setZValue(6)   # POC dots ride above the candles
             self._scan_handles["bc_poc"].setVisible(True)
             self._scan_handles["bc_poc"].setData(poc_x, poc_y)
+        else:
+            self._scan_handles["bc_poc"].setVisible(False)
 
         # --- STAGE 1: per-bucket footprint ladder from b["levels"] (wire-additive) ---
         # levels now ride on the BucketSnapshot (quant_engine._assemble), so the
