@@ -32,17 +32,14 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from . import bucket_state, config
 from .alerts import AlertsLedger
 from .chart_widgets import (
-    AbsorptionLayer, BucketCandleItem, CandlestickItem, LiquidationLayer, LocalTimeAxis,
-    OrderBlockLayer, PriceAxis, SessionLayer,
+    AbsorptionLayer, BucketCandleItem, LocalTimeAxis, OrderBlockLayer, PriceAxis,
 )
 from .cob_panel import CobPanel
 from .drawing_tools import DrawingController, DrawingToolbar
-from .footprint_layers import (BucketFootprintItem, DepthWallLayer, FootprintLayer,
-                               IcebergLayer, ImbalanceLayer)
+from .footprint_layers import BucketFootprintItem, DepthWallLayer
 from .hamburger import FloatingOverlayMenu, HamburgerButton
-from .hud_overlay import PriceHud
 from .pipe_client import PipeClientWorker
-from .stats_overlay import StatsOverlay, compute_stats
+from .stats_overlay import StatsOverlay
 
 _OPEN_WINDOWS: List["MinimalTerminalWindow"] = []
 
@@ -138,7 +135,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sig_obs = None
         self._sig_fp = None
         self._autoranged = False
-        self._stats_enabled = True
         self._last_snap: dict = {}
 
         # --- chart + COB split (the splitter handle is the COB resizer) ---
@@ -169,58 +165,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.splitter)
         self.vb.sigYRangeChanged.connect(self._sync_cob)
 
-        # --- render layers (only candles drive auto-range) ---
-        self.session_item = SessionLayer()
+        # --- DOM depth walls — the only price-axis overlay ITEM surviving the time-chart removal
+        # (the COB ladder lives in cob_col; all other time-chart scene items deleted in Phase C).
+        # Mode 10 drives it per-frame via _update_m10_dom. ---
         self.depthwall_item = DepthWallLayer()
-        self.imbalance_item = ImbalanceLayer()
-        self.footprint_item = FootprintLayer()
-        self.iceberg_item = IcebergLayer()
-        self.ob_item = OrderBlockLayer()
-        self.candle_item = CandlestickItem()
-        self.liq_item = LiquidationLayer()
-        for it in (self.session_item, self.depthwall_item, self.imbalance_item,
-                   self.footprint_item, self.iceberg_item, self.ob_item, self.liq_item):
-            self.plot.addItem(it, ignoreBounds=True)
-        self.plot.addItem(self.candle_item)   # the only bounds-affecting item
-        self.footprint_item.hide(); self.imbalance_item.hide(); self.iceberg_item.hide()
+        self.plot.addItem(self.depthwall_item, ignoreBounds=True)
+        self.depthwall_item.setZValue(9)
 
-        # Z-ORDER (patch §3): analytics layers must render ABOVE the candles/grid.
-        #   depth walls + OB zones sit behind candles; footprints/imbalances/
-        #   icebergs/sessions/liqs sit on top so they are never hidden.
-        self.ob_item.setZValue(3)
-        self.candle_item.setZValue(5)
-        self.depthwall_item.setZValue(9)   # fix #11: walls above candles, were hidden behind
-        self.session_item.setZValue(10)
-        self.imbalance_item.setZValue(11)
-        self.footprint_item.setZValue(12)
-        self.iceberg_item.setZValue(13)
-        self.liq_item.setZValue(14)
-
-        # Attach pooled TextItems for in-chart labels (footprint rows, OB
-        # multipliers, iceberg marks, imbalance tags) — fixes flipped text.
-        self.ob_item.attach_text(self.plot)
-        self.footprint_item.attach_text(self.plot)
-        self.imbalance_item.attach_text(self.plot)
-        self.iceberg_item.attach_text(self.plot)
-
-        # --- live price dashed line (patch §1) ---
-        self.price_line = pg.InfiniteLine(
-            angle=0, movable=False,
-            pen=pg.mkPen(color="#000000", style=QtCore.Qt.DashLine, width=1))
-        self.price_line.setZValue(6)
-        self.plot.addItem(self.price_line, ignoreBounds=True)
-
-        # --- scanner overlay (patch §12) — hidden until a mode is picked ---
-        self.scanner_bars = pg.BarGraphItem(x=[], height=[], width=0.6)
-        self.scanner_bars.setZValue(4)
-        self.plot.addItem(self.scanner_bars)   # NOT ignoreBounds — must drive Y fit (fix #14)
-        self.scanner_bars.hide()
-        # VPIN 0.85 institutional alert baseline (HTML #ff073a dashed)
-        self.scanner_baseline = pg.InfiniteLine(
-            angle=0, movable=False, pen=pg.mkPen("#ff073a", style=QtCore.Qt.DashLine, width=2))
-        self.scanner_baseline.setZValue(5)
-        self.plot.addItem(self.scanner_baseline, ignoreBounds=True)
-        self.scanner_baseline.hide()
         self.scanner_mode = "bucket_canvas"   # opens on Mode 10; never the (removed) time chart
         self._scanner_fitted = False
         # Phase 1: bucket pipeline state. active_scanner_items is the GC list the
@@ -232,7 +183,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scanner_bucket_sig: Optional[tuple] = None
         self._scanner_bucket_cache: tuple = ([], [], 0)
         self._last_scanner_sig: Optional[tuple] = None   # render-skip gate (Phase 7 perf)
-        self._cob_prev_visible: bool = False             # COB state across scanner toggles
         self._scanner_needs_autofit: bool = True         # one-shot Y/X fit (frees manual zoom)
         # View-follow (Mode 10), per-axis lock model. follow_x / follow_y track each axis to
         # the live edge independently; _follow_last_n drives the per-tick/per-close cadence.
@@ -306,7 +256,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_hover_pos = None
 
         # --- floating overlays (top-level children) ---
-        self.hud = PriceHud(self)
         self.stats = StatsOverlay(self)
         self.alerts = AlertsLedger(self)
         self.drawbar = DrawingToolbar(self)
@@ -357,7 +306,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     def _wire_menu(self) -> None:
         self.menu.tfChanged.connect(self._change_tf)
-        self.menu.multiplierChanged.connect(lambda v: setattr(self.ob_item, "visible_filter", v))
+        self.menu.multiplierChanged.connect(lambda v: setattr(self.bc_obs, "visible_filter", v))
         self.menu.chartFilterChanged.connect(lambda v: setattr(self.depthwall_item, "threshold", float(v)))
         self.menu.layerToggled.connect(self._toggle_layer)
         self.menu.subWidgetToggled.connect(self._toggle_subwidget)
@@ -381,7 +330,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.drawer.index_mode = is_canvas
         if not is_canvas:
             self.drawer.cancel()   # drop any armed tool + hide its edit panel
-        self._hide_time_components()
+        self._hide_price_overlays()
         self._apply_scanner_theme(dark=True)     # enhancement §3
         self._scanner_needs_autofit = True       # one-shot fit for the new mode
         self._scanner_bucket_sig = None
@@ -389,20 +338,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # (Mode 10 COB lives in cob_col, built + shown by _ensure_canvas_panes from _cob_want.)
         self._on_timer()   # immediate first draw from the current Zero Point
 
-    def _hide_time_components(self) -> None:
-        """Hide every time-based layer/overlay so the bucket canvas is clean."""
-        for it in (self.candle_item, self.price_line, self.ob_item, self.footprint_item,
-                   self.imbalance_item, self.iceberg_item, self.liq_item,
-                   self.depthwall_item, self.session_item):
-            it.setVisible(False)
-        self.hud.hide()          # price/countdown HUD is meaningless on an index axis
+    def _hide_price_overlays(self) -> None:
+        """Reset the price-axis overlays on scanner entry: hide the DOM walls + COB ladder + the
+        hover readout. bucket_canvas re-shows the DOM (_update_m10_dom / cob_col); the metric modes
+        (non-price Y) leave them hidden. (Formerly _hide_time_components — the time-chart scene
+        items it also hid were deleted in Phase C.)"""
+        self.depthwall_item.setVisible(False)
         self.stats.hide()
-        # COB ladder is price-axis-bound; remember its state and hide it
-        self._cob_prev_visible = self.cob.isVisible()
         self.cob.hide()
-        # legacy persistent scanner items are unused by the bucket modes
-        self.scanner_bars.hide()
-        self.scanner_baseline.hide()
 
     def _change_tf(self, tf: str) -> None:
         self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {tf}")
@@ -484,9 +427,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if not on:
                 self.drawer.cancel()
         elif key == "cob":
-            # Remember the intent; in Mode 10 toggle the whole COB column so OFF reclaims its
-            # width (the spacer goes too). _cob_prev_visible kept in sync for the Off-mode path.
-            self._cob_want = self._cob_prev_visible = on
+            # Remember the intent; in Mode 10 toggle the whole COB column so OFF reclaims its width
+            # (the spacer goes too).
+            self._cob_want = on
             (self.cob_col if self.cob_col is not None else self.cob).setVisible(on)
         elif key == "audio":
             self.alerts.audio.set_armed(on)
@@ -778,25 +721,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     span("friction = vol / ticks traveled", gray)]
         return []
 
-    def _hover_stats(self, x: float, scene_pos) -> None:
-        times = self._last_snap["times"]
-        tf_secs = config.TF_SECONDS.get(self._last_snap["tf"], 60)
-        # nearest candle within half a bar
-        best_t, best_d = None, tf_secs
-        for t in times:
-            d = abs(t - x)
-            if d < best_d:
-                best_d, best_t = d, int(t)
-        if best_t is None:
-            self.stats.hide(); return
-        result = compute_stats(self._last_snap, best_t)
-        if result is None:
-            self.stats.hide(); return
-        lines, verdict = result
-        gp = self.plot.mapToGlobal(self.plot.mapFromScene(scene_pos))
-        wp = self.mapFromGlobal(gp)
-        self.stats.show_stats(lines, verdict, wp.x(), wp.y())
-
     # ------------------------------------------------------------------
     def _on_timer(self) -> None:
         snap = self.worker.snapshot()
@@ -838,10 +762,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.active_scanner_items.clear()
         self._scan_handles = {}   # stale after removeItem — modes recreate on next draw
         self._scan_trackers = {}  # drop redock records (their items were just swept)
-        try:
-            self.scanner_bars.setOpts(x=[], height=[])
-        except Exception:
-            pass
         self._scanner_bucket_sig = None
         self._last_scanner_sig = None   # force a fresh render after any teardown
 
@@ -2005,7 +1925,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._add_scanner_item(self.bc_obs, ignore_bounds=True)  # derived overlay: never drive the X/Y fit
                 self._scan_handles["bc_obs"] = self.bc_obs
             self.bc_obs.setVisible(True)
-            self.bc_obs.visible_filter = self.ob_item.visible_filter   # honor the Min-Mult slider
+            # Min-Mult slider writes bc_obs.visible_filter directly now (relocated off the dormant
+            # time-chart ob_item, Phase C step 1); bc_obs.update_data_indexed reads it.
             vx0, vx1 = self.vb.viewRange()[0]   # clamp OB spans to the visible window (no corner-float)
             self.bc_obs.update_data_indexed(
                 self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx, (vx0, vx1),
@@ -2097,16 +2018,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         main_xr = self.plot.getViewBox().viewRange()[0]
         self.lower_plot.getViewBox().setXRange(main_xr[0], main_xr[1], padding=0)
 
-    def _reposition_hud(self, price: float) -> None:
-        if not price:
-            return
-        scene_pt = self.vb.mapViewToScene(QtCore.QPointF(0.0, price))
-        view_pt = self.plot.mapFromScene(scene_pt)
-        gp = self.plot.mapToGlobal(view_pt)
-        wp = self.mapFromGlobal(gp)
-        y = max(10, min(self.height() - 45, wp.y() - self.hud.height() // 2))
-        x = self.plot.x() + self.plot.width() - self.hud.width() - 5
-        self.hud.move(x, y)
 
     # ------------------------------------------------------------------
     def resizeEvent(self, event) -> None:

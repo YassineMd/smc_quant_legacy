@@ -173,7 +173,13 @@ state calibration.
 ### DEFERRED QUEUE (reordered 2026-06-19)
 1. **Time-chart removal — PROMOTED.** The time-candle entanglement caused the absorption-on-1m mismatch
    this whole dive fixed — cut it at the source (+ remove the dead Technical-Layers menu section).
-2. **OB polish (A)** — min-render-height + duplicate-timestamp handling.
+2. **OB polish (A)** — min-render-height + duplicate-timestamp handling. PLUS the **OB toggle bug**:
+   the `m10_obs` ("Order Blocks") and `m10_dead_obs` ("Dead OBs") toggles are NOT independent —
+   `m10_obs` is a MASTER `bc_obs.setVisible()` over the whole layer (live + dead together), and
+   `m10_dead_obs` is only a `show_dead` sub-filter read at draw time (so it only acts when the master
+   is on; you can't show dead-only). FIX (OB polish): give `bc_obs.update_data_indexed` independent
+   `show_live` + `show_dead` flags (layer always visible, filter live/dead internally) so each toggle
+   is independent. Confirmed PRE-EXISTING (Phase C only relocated `visible_filter`, orthogonal).
 3. **Mode-10 selection tool (D)** — the capstone (see §2 / the plan's "After the pipeline is solid").
 - **DOM book-mid line (idea, surfaced during the Phase-A DOM port) — DEFERRED, not Phase A.** The
   Mode-10 spot line is the last TRADE (`closes[-1]`); on a depth ladder the more useful reference is

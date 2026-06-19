@@ -254,7 +254,11 @@ whale-absorption detector. The arc:
    (what the time-chart provides, what depends on it, what unifies once it's gone, the ideal bucket-
    native surface), propose before building.**
 2. **OB polish (A)** — min-render-height + duplicate-timestamp handling (small refinements paused during
-   the absorption dive).
+   the absorption dive). PLUS the **OB toggle bug**: `m10_obs`/`m10_dead_obs` aren't independent —
+   `m10_obs` is a MASTER `bc_obs.setVisible()` (live + dead together), `m10_dead_obs` only a `show_dead`
+   sub-filter at draw time (acts only when the master is on). Fix: independent `show_live`/`show_dead`
+   flags in `bc_obs.update_data_indexed` (layer always visible, filter internally). PRE-EXISTING (Phase C
+   only relocated `visible_filter`, orthogonal — not introduced by it).
 3. **Mode-10 selection tool (D)** — the capstone, built against the corrected scalars once the overlays
    are all clean (see "After the pipeline is solid", below).
 - **DOM book-mid line (idea from the Phase-A DOM port) — DEFERRED, NOT Phase A.** The Mode-10 spot line
