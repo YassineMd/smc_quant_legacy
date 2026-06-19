@@ -248,15 +248,21 @@ whale-absorption detector. The arc:
 ### Deferred queue — current order (operator's call, 2026-06-19)
 1. ✅ **Time-chart removal — DONE (all phases: A/B/menu/relabel/C/D).** Completed after the absorption
    dive — Mode 10 (`BucketCandleItem`) is the sole candle surface. Full record in the "⚠️ TIME-CHART
-   REMOVAL" block below. **Active queue head is now item 2 (OB polish + OB toggle bug).**
+   REMOVAL" block below. **Active queue head is now item 2 (OB polish — the OB toggle bug is DONE).**
 2. **OB polish (A)** — min-render-height + duplicate-timestamp handling (small refinements paused during
-   the absorption dive). PLUS the **OB toggle bug**: `m10_obs`/`m10_dead_obs` aren't independent —
-   `m10_obs` is a MASTER `bc_obs.setVisible()` (live + dead together), `m10_dead_obs` only a `show_dead`
-   sub-filter at draw time (acts only when the master is on). Fix: independent `show_live`/`show_dead`
-   flags in `bc_obs.update_data_indexed` (layer always visible, filter internally). PRE-EXISTING (Phase C
-   only relocated `visible_filter`, orthogonal — not introduced by it).
+   the absorption dive). *(The OB toggle bug here is RESOLVED, `55fb663`: rather than the originally-
+   planned independent `show_live`/`show_dead` flags, the "Order Blocks" + "Dead OBs" toggles were
+   MERGED into a single "Order Blocks" — alive + dead show/hide together. See the Mode-10 UI
+   refinements record below.)*
 3. **Mode-10 selection tool (D)** — the capstone, built against the corrected scalars once the overlays
    are all clean (see "After the pipeline is solid", below).
+- **✅ Mode-10 UI refinements — DONE (2026-06-19).** Operator-driven stats-box / toggle cleanup:
+  (1) **OB toggle bug fixed** — "Order Blocks" + "Dead OBs" MERGED into one "Order Blocks" toggle
+  (alive solid + dead faded together; OFF hides both), `55fb663`. (2) **State-debug calib in the stats
+  box by default** — the "State Debug (calib)" toggle dropped; the STATE readout always shows the
+  top-3-states + winner-factors block, `71131ad`. (3) **Forming-candle stats always on** — the live
+  (right-most, not-yet-closed) candle's readout shows by default (no hover), pinned to its low,
+  `8da2412`. The hover readout (cursor-anchored, a specific bucket) is unchanged.
 - **DOM book-mid line (idea from the Phase-A DOM port) — DEFERRED, NOT Phase A.** The Mode-10 spot line
   is the last TRADE (`closes[-1]`); on a depth ladder the book MID (between best-bid/best-ask) is often
   the more useful reference. Idea: keep the last-trade line, ADD a thin mid line (or best-bid/ask markers)

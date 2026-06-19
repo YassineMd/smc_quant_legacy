@@ -6,7 +6,7 @@ re-deriving anything. **Phases 1 and 5 are COMPLETE — the terminal is aggTrade
 real v3 `history.db`. Phases 2–4 are now done/subsumed (the OB-layer rework subsumed Phase 2; the
 absorption layer replaced the Phase-3 iceberg steps and the rest of Phase 3's layers were deleted with
 the time chart; the perf work covered Phase 4), and the time-chart removal is COMPLETE. Next is the
-deferred queue (§1.5): OB polish + OB toggle bug → target_vol clamp → the Mode-10 selection tool.**
+deferred queue (§1.5): OB polish (the OB toggle bug is done) → target_vol clamp → the Mode-10 selection tool.**
 
 ---
 
@@ -175,15 +175,19 @@ state calibration.
 ### DEFERRED QUEUE (reordered 2026-06-19)
 1. ✅ **Time-chart removal — DONE (all phases A/B/menu/relabel/C/D).** Completed after the absorption
    dive; Mode 10 (`BucketCandleItem`) is the sole candle surface (full record in the "⚠️ TIME-CHART
-   REMOVAL" block below). **Active queue head is now item 2 (OB polish + OB toggle bug).**
-2. **OB polish (A)** — min-render-height + duplicate-timestamp handling. PLUS the **OB toggle bug**:
-   the `m10_obs` ("Order Blocks") and `m10_dead_obs` ("Dead OBs") toggles are NOT independent —
-   `m10_obs` is a MASTER `bc_obs.setVisible()` over the whole layer (live + dead together), and
-   `m10_dead_obs` is only a `show_dead` sub-filter read at draw time (so it only acts when the master
-   is on; you can't show dead-only). FIX (OB polish): give `bc_obs.update_data_indexed` independent
-   `show_live` + `show_dead` flags (layer always visible, filter live/dead internally) so each toggle
-   is independent. Confirmed PRE-EXISTING (Phase C only relocated `visible_filter`, orthogonal).
+   REMOVAL" block below). **Active queue head is now item 2 (OB polish — the OB toggle bug is DONE).**
+2. **OB polish (A)** — min-render-height + duplicate-timestamp handling. *(The OB toggle bug here is
+   RESOLVED, `55fb663`: rather than the originally-planned independent `show_live`/`show_dead` flags,
+   the "Order Blocks" + "Dead OBs" toggles were MERGED into one "Order Blocks" — alive + dead show/hide
+   together. See the Mode-10 UI refinements record below.)*
 3. **Mode-10 selection tool (D)** — the capstone (see §2 / the plan's "After the pipeline is solid").
+- **✅ Mode-10 UI refinements — DONE (2026-06-19).** Operator-driven stats-box / toggle cleanup:
+  (1) **OB toggle bug fixed** — "Order Blocks" + "Dead OBs" MERGED into one "Order Blocks" toggle
+  (alive solid + dead faded together; OFF hides both), `55fb663`. (2) **State-debug calib in the stats
+  box by default** — "State Debug (calib)" toggle dropped; the STATE readout always shows the
+  top-3-states + winner-factors block, `71131ad`. (3) **Forming-candle stats always on** — the live
+  (right-most, not-yet-closed) candle's readout shows by default (no hover), pinned to its low,
+  `8da2412`. The hover readout (cursor-anchored, a specific bucket) is unchanged.
 - **DOM book-mid line (idea, surfaced during the Phase-A DOM port) — DEFERRED, not Phase A.** The
   Mode-10 spot line is the last TRADE (`closes[-1]`); on a depth ladder the more useful reference is
   often the book MID (between best-bid/best-ask), so the reference sits in the spread between the COB
@@ -268,7 +272,7 @@ state calibration.
 1. **Absorption layer — DONE & COMMITTED (2026-06-19), 3 commits: docs, detector, render.** Bug-1 fixed,
    Bug-2 disproven (see RESOLVED BUGS above), live-verified on screen before commit.
 2. ✅ **Time-chart removal — DONE** (all phases; see the "⚠️ TIME-CHART REMOVAL" record in §1.5).
-   **Active next item:** OB polish + OB toggle bug (deferred-queue head), then target_vol clamp, then
+   **Active next item:** OB polish (the OB toggle bug is done), then target_vol clamp, then
    the Mode-10 selection capstone.
 
 ---
