@@ -63,8 +63,7 @@ QPushButton#section:hover { background:#2d313c; }
 _M10_LAYERS = [
     ("m10_poc", "POC Dot", True, True),
     ("m10_footprint", "Footprint Ladder", False, True),   # default OFF — heavy overlay, opt-in
-    ("m10_obs", "Order Blocks", True, True),              # default ON — OB zones show on a fresh terminal
-    ("m10_dead_obs", "Dead OBs", True, True),             # default ON — mitigated OBs as faded lifespan boxes
+    ("m10_obs", "Order Blocks", True, True),              # default ON — shows alive (solid) + dead (faded) together
     ("m10_liq", "Liquidation Marks", False, True),        # default OFF. In-session toggles persist as
     ("m10_stats", "Stats Box", True, True),               # checkbox state; only a restart resets to these.
     ("m10_statedebug", "State Debug (calib)", False, True),  # top-3 states + winner factors in the box

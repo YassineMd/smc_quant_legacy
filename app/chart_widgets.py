@@ -199,8 +199,7 @@ class OrderBlockLayer(pg.GraphicsObject):
         super().setVisible(v)
         self.tier_pool.set_enabled(v)
 
-    def update_data_indexed(self, obs: list, x_right: float, ts_to_idx, x_view,
-                            show_dead: bool = True) -> None:
+    def update_data_indexed(self, obs: list, x_right: float, ts_to_idx, x_view) -> None:
         """Index-space twin of :meth:`update_data` for the Mode-10 volume canvas.
 
         Every block is a BOX showing its lifespan, both edges mapped by EXACT bucket epochs
@@ -209,7 +208,7 @@ class OrderBlockLayer(pg.GraphicsObject):
         ``end_epoch`` (the candle that body-engulfed it).
           • ALIVE — solid box ``[formation -> live edge]`` (still active).
           • DEAD  — faded box ``[formation -> mitigation+1]`` (drawn THROUGH the consuming candle),
-            shown only when ``show_dead`` is on (the m10_dead_obs toggle, default ON).
+            ALWAYS shown (mitigated OBs stay faded; the single "Order Blocks" toggle hides alive + dead together).
         A block whose FORMATION precedes the anchor (``confirm_idx == -1``) is out of scope and
         skipped — no bands, no floating. The drawn span is clamped to ``x_view = (vx0, vx1)``.
         Falls back to the old ``ob_id`` int-epoch (+1.0) / minute-floored ``end`` only for OBs
@@ -246,9 +245,7 @@ class OrderBlockLayer(pg.GraphicsObject):
                     continue
             if confirm_idx == -1:
                 continue   # formation precedes the anchor -> out of scope (anchor-forward only)
-            active = ob.get("active", True)
-            if not active and not show_dead:
-                continue   # m10_dead_obs OFF -> hide dead boxes
+            active = ob.get("active", True)   # dead boxes always draw (faded); gated only by m10_obs visibility
 
             # Box span: formation -> live edge if alive, else the EXACT consuming bucket + 1
             # (end_epoch is a full-float bucket start; +1 draws THROUGH the candle so the kill

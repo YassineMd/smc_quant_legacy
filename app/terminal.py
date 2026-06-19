@@ -407,10 +407,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # (_hover_context reads layer_state). No scene item to manage here; the
             # live-breathe / next hover re-renders the box with or without the block.
             pass
-        elif key == "m10_dead_obs":
-            # Sub-filter of m10_obs, read by update_data_indexed at draw time (show_dead).
-            # No scene item to manage; the forced redraw below repaints with/without dead boxes.
-            pass
         elif key == "m10_icebergs":
             # Whale-absorption bands: setVisible toggles the zones; the $-labels are pool-managed
             # (not in active_scanner_items) -> clear them on OFF so no label artifacts linger.
@@ -1998,8 +1994,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # time-chart ob_item, Phase C step 1); bc_obs.update_data_indexed reads it.
             vx0, vx1 = self.vb.viewRange()[0]   # clamp OB spans to the visible window (no corner-float)
             self.bc_obs.update_data_indexed(
-                self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx, (vx0, vx1),
-                self.menu.layer_state("m10_dead_obs"))   # show mitigated OBs as faded lifespan boxes (toggle)
+                self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx, (vx0, vx1))
 
         # Mode 10 whale-absorption bands (phase c) — gated by m10_icebergs (relabeled "Absorption").
         if self.menu.layer_state("m10_icebergs"):
