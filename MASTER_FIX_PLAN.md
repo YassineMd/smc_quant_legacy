@@ -271,6 +271,11 @@ magnet-by-strength refinement.*
   same-level buy-vs-sell imbalance ≥ `config.FOOTPRINT_IMBALANCE_RATIO` (3.0). `TextPool` gained an
   optional per-cell background brush (5th spec element → `TextItem.fill`).
 - `d30ce3b` **Scan Start** default anchor 2h → **24h** before the host clock.
+- `1404290` **voice alerts (Audio Feed)** — the Audio Feed sub-widget (default OFF) now arms
+  `QtTextToSpeech` in `AudioEngine.speak()`; the terminal diffs each snapshot for new OB `ob_id`s /
+  iceberg `id`s (seeds silently on first data + tf-change so the history backlog is never read out) and
+  speaks live events only: iceberg → "{scale} {Buy|Sell} Iceberg", OB → "{scale} {Long|Short} Order
+  Block". `a` toggles it. Did NOT re-enable the alerts ledger/chime (separate severed feature).
 
 **Standalone exe.** `python build.py --terminal-only` → `dist/OrderFlowTerminal.exe` (onefile ~88 MB),
 PROVEN to render + spawn the gcloud tunnel (window + `cmd→gcloud compute ssh→putty` confirmed). 2nd
