@@ -285,6 +285,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         activated=lambda: self.menu.layer_checks["m10_stats"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("D"), self,
                         activated=lambda: self.menu.sub_checks["drawing"].toggle())
+        QtGui.QShortcut(QtGui.QKeySequence("P"), self,
+                        activated=lambda: self.menu.layer_checks["m10_poc"].toggle())
+        QtGui.QShortcut(QtGui.QKeySequence("L"), self,
+                        activated=lambda: self.menu.layer_checks["m10_liq"].toggle())
+        QtGui.QShortcut(QtGui.QKeySequence("F"), self,
+                        activated=lambda: self.menu.layer_checks["m10_footprint"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
         # §7.4 — yellow follow-spot shown on the cursor while a draw tool is armed
