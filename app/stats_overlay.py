@@ -207,6 +207,9 @@ class StatsOverlay(QtWidgets.QLabel):
         self.setStyleSheet(_QSS)
         self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
         self.setTextFormat(QtCore.Qt.RichText)   # HTML color coding (patch #2)
+        # A sibling widget (the hamburger menu) this overlay must stay BELOW: show_stats
+        # raises every frame, which would otherwise cover an open menu panel.
+        self.keep_under: Optional[QtWidgets.QWidget] = None
         self.hide()
 
     def show_stats(self, lines: List[str], verdict: str, x: int, y: int) -> None:
@@ -220,3 +223,5 @@ class StatsOverlay(QtWidgets.QLabel):
         self.move(x + 16, y + 16)
         self.show()
         self.raise_()
+        if self.keep_under is not None and self.keep_under.isVisible():
+            self.stackUnder(self.keep_under)   # stay below the open hamburger menu

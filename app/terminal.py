@@ -262,6 +262,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.alerts = AlertsLedger(self)
         self.drawbar = DrawingToolbar(self)
         self.menu = FloatingOverlayMenu(self)
+        self.stats.keep_under = self.menu   # stats overlay stays below an open menu (z-order)
         self.menu_btn = HamburgerButton(self)
         self.menu_btn.clicked.connect(self.menu.toggle_panel)
 
