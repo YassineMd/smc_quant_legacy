@@ -271,6 +271,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bell_btn.setText("🔔")
         self.bell_btn.clicked.connect(self.alerts.toggle)
 
+        # Audio Feed — speak NEW icebergs/OBs aloud (via self.alerts.audio, gated by the
+        # "Audio Feed" sub-widget; default OFF). The announce seeds silently on first data /
+        # tf-change so the history backlog is never read out — only live events after.
+        self._tf = config.DEFAULT_TF
+        self._announced_obs: set = set()
+        self._announced_icebergs: set = set()
+        self._audio_seeded = False
+
         # fix #10: double-click anywhere on the chart resets/auto-fits the view
         self.plot.scene().sigMouseClicked.connect(self._on_scene_click)
 
@@ -291,6 +299,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         activated=lambda: self.menu.layer_checks["m10_liq"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("F"), self,
                         activated=lambda: self.menu.layer_checks["m10_footprint"].toggle())
+        QtGui.QShortcut(QtGui.QKeySequence("A"), self,
+                        activated=lambda: self.menu.sub_checks["audio"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
         # §7.4 — yellow follow-spot shown on the cursor while a draw tool is armed
@@ -363,6 +373,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.cob.hide()
 
     def _change_tf(self, tf: str) -> None:
+        self._tf = tf
+        self._audio_seeded = False        # new tf -> re-seed; don't read out its backlog
+        self._announced_obs = set(); self._announced_icebergs = set()
         self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {tf}")
         self._sig_candles = self._sig_obs = self._sig_fp = None
         self._autoranged = False
@@ -759,6 +772,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _on_timer(self) -> None:
         snap = self.worker.snapshot()
         self._last_snap = snap
+        self._audio_announce(snap)
 
         # Every mode is bucket-native now (time chart removed, Phase B): draw the scanner, refresh
         # Mode-10 DOM (ungated, bucket_canvas-only — depth pulses independently of the sig-gated
@@ -768,6 +782,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._update_m10_dom(snap)
         self._redock_trackers()
         self._refresh_parked_hover()
+
+    _TF_SPOKEN = {"1m": "1 minute", "5m": "5 minute", "15m": "15 minute",
+                  "1h": "1 hour", "4h": "4 hour"}
+
+    def _audio_announce(self, snap) -> None:
+        """Speak NEW icebergs/OBs aloud (gated by the armed Audio Feed). Seeds silently on
+        first data / tf-change so the history backlog is never read out — only live events."""
+        obs = snap.get("order_blocks", []) if snap else []
+        ice = snap.get("absorptions", []) if snap else []
+        if not self._audio_seeded:
+            if obs or ice:                # first real data -> seed silently
+                self._announced_obs = {o.get("ob_id") for o in obs}
+                self._announced_icebergs = {m.get("id") for m in ice}
+                self._audio_seeded = True
+            return
+        scale = self._TF_SPOKEN.get(self._tf, self._tf)
+        for o in obs:
+            oid = o.get("ob_id")
+            if oid and oid not in self._announced_obs:
+                self._announced_obs.add(oid)
+                side = "Long" if o.get("type") == "bullish" else "Short"
+                self.alerts.audio.speak(f"{scale} {side} Order Block")
+        for m in ice:
+            mid = m.get("id")
+            if mid and mid not in self._announced_icebergs:
+                self._announced_icebergs.add(mid)
+                side = "Buy" if m.get("side") == "BUY" else "Sell"
+                self.alerts.audio.speak(f"{scale} {side} Iceberg")
 
     # ------------------------------------------------------------------
     # Phase 1: bucket pipeline + Zero-Point anchor

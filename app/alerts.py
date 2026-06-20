@@ -40,6 +40,13 @@ class AudioEngine:
                 self._effect = QSoundEffect()
                 self._effect.setSource(QtCore.QUrl.fromLocalFile(path))
                 self._effect.setVolume(0.6)
+        # Text-to-speech for spoken alerts (QtTextToSpeech; native SAPI/WinRT on Windows).
+        self._tts = None
+        try:
+            from PySide6.QtTextToSpeech import QTextToSpeech
+            self._tts = QTextToSpeech()
+        except Exception:
+            self._tts = None
 
     def set_armed(self, armed: bool) -> None:
         self.armed = armed
@@ -47,6 +54,11 @@ class AudioEngine:
     def play(self) -> None:
         if self.armed and self._effect is not None:
             self._effect.play()
+
+    def speak(self, text: str) -> None:
+        """Speak ``text`` aloud when armed (the Audio Feed toggle)."""
+        if self.armed and self._tts is not None:
+            self._tts.say(text)
 
 
 _QSS = """
