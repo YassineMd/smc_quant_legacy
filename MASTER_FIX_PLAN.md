@@ -281,6 +281,13 @@ magnet-by-strength refinement.*
   panel / on the `[☰]` button / while a combo/calendar popup is up); (2) all controls live in a
   transparent `QScrollArea` so a short window SCROLLS them instead of cramming them unclickable (the
   panel is pinned to the full window height).
+- `0e41f9a` **🔄 refresh button** (left of the bell) — un-freezes a stalled feed without restarting the
+  window. `PipeClientWorker.refresh()` force-drops the live socket (`shutdown()` to unblock a stuck
+  `recv`) and reconnects with NO 2s backoff, re-requesting the catch-up — fixes a half-open socket a
+  net blip left behind that TCP never reported dead (the dominant freeze). `_refresh()` also relaunches
+  the gcloud tunnel if its port died (safe no-op if live; `_TUNNEL` module global set in `main()`) and
+  invalidates the render sigs so whichever scanner mode is active repaints from the fresh data
+  (mode-agnostic — operates at the data layer all modes draw from).
 
 **Standalone exe.** `python build.py --terminal-only` → `dist/OrderFlowTerminal.exe` (onefile ~88 MB),
 PROVEN to render + spawn the gcloud tunnel (window + `cmd→gcloud compute ssh→putty` confirmed). 2nd
