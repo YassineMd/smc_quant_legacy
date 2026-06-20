@@ -265,6 +265,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.stats.keep_under = self.menu   # stats overlay stays below an open menu (z-order)
         self.menu_btn = HamburgerButton(self)
         self.menu_btn.clicked.connect(self.menu.toggle_panel)
+        self.menu.toggle_button = self.menu_btn   # so the menu's outside-click filter ignores this btn
 
         # fix #8: dedicated floating 🔔 button next to the hamburger
         self.bell_btn = HamburgerButton(self)

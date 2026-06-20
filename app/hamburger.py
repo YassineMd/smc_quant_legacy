@@ -51,6 +51,12 @@ QPushButton#section {
   padding:5px 8px; font-family:Consolas; font-size:11px; font-weight:bold;
 }
 QPushButton#section:hover { background:#2d313c; }
+/* Thin scrollbar for the panel when a short window makes the controls overflow. */
+QScrollBar:vertical { background:transparent; width:9px; margin:2px 0; }
+QScrollBar::handle:vertical { background:#3a3f4b; border-radius:4px; min-height:24px; }
+QScrollBar::handle:vertical:hover { background:#4a5160; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background:transparent; }
 """
 
 # (The time-chart "Technical Layers" toggles (_LAYERS) were removed with the time chart —
@@ -175,6 +181,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.hide()
         self.layer_checks: dict[str, QtWidgets.QCheckBox] = {}
         self.sub_checks: dict[str, QtWidgets.QCheckBox] = {}
+        self.toggle_button: QtWidgets.QWidget | None = None   # set by the window: the [☰] that opens us
         self._build()
 
     # ------------------------------------------------------------------
@@ -183,7 +190,24 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         return lbl
 
     def _build(self) -> None:
-        root = QtWidgets.QVBoxLayout(self)
+        # The panel is sized to the full window height (window resizeEvent); on a short window a
+        # plain layout compresses every control into an unclickable jumble. Host them in a scroll
+        # area instead so they keep their natural size and the panel scrolls vertically.
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+        scroll = QtWidgets.QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll.setStyleSheet(                       # keep the dark panel bg showing through
+            "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"
+            "QScrollArea { border: none; }")
+        outer.addWidget(scroll)
+        content = QtWidgets.QWidget()
+        scroll.setWidget(content)
+
+        root = QtWidgets.QVBoxLayout(content)
         root.setContentsMargins(12, 40, 12, 12); root.setSpacing(6)
 
         # --- bucket scale (formerly "Timeframe") — selects which order-flow window sizes the
@@ -294,11 +318,29 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         else:
             self.show(); self.raise_()
 
-    def leaveEvent(self, event) -> None:
-        # Don't retract while a dropdown popup is open — the popup steals the
-        # cursor and would otherwise instantly close the whole menu (patch §4).
-        for combo in (self.tf_combo, self.scanner_combo):
-            if combo.view().isVisible():
-                return
-        self.hide()
-        super().leaveEvent(event)
+    def showEvent(self, event) -> None:
+        # Close only on an outside CLICK (not on cursor-leave): watch app-wide mouse presses while
+        # open; the filter is removed again on hide.
+        super().showEvent(event)
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    def hideEvent(self, event) -> None:
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+        super().hideEvent(event)
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QtCore.QEvent.Type.MouseButtonPress and self.isVisible():
+            # A combo/calendar dropdown is open: the press dismisses that popup, not the menu.
+            if QtWidgets.QApplication.activePopupWidget() is not None:
+                return False
+            gp = event.globalPosition().toPoint()
+            inside_menu = self.rect().contains(self.mapFromGlobal(gp))
+            btn = self.toggle_button
+            on_button = btn is not None and btn.rect().contains(btn.mapFromGlobal(gp))
+            if not inside_menu and not on_button:
+                self.hide()                          # click landed outside -> close
+        return False
