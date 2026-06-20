@@ -22,7 +22,7 @@ from .chart_widgets import TextPool
 
 _FP_TEXT_CAP = 600              # bound detailed footprint labels
 DETAIL_PX_PER_TICK = 12.0      # show side-by-side rows once a tick row is this tall
-MAX_DETAIL_BUCKETS = 40        # NUMBERS (full per-level ladder) only in a tight study view
+MAX_DETAIL_BUCKETS = 20        # NUMBERS (full per-level ladder) only in a tight study view
 MAX_BUBBLE_BUCKETS = 200       # TOP-3 bubbles up to here (3 x buckets <= 600 ellipses); wider -> none
 ICON_MIN_PX_PER_CANDLE = 22.0  # hide iceberg icons when candles get this narrow
 
@@ -81,8 +81,8 @@ class BucketFootprintItem(pg.GraphicsObject):
         super().__init__()
         self.picture = QtGui.QPicture()
         self._rect = QtCore.QRectF()
-        self.buy_pool = TextPool(anchor=(0, 0.5), font_size=9, bold=True, z=22)
-        self.sell_pool = TextPool(anchor=(1, 0.5), font_size=9, bold=True, z=22)
+        self.buy_pool = TextPool(anchor=(0, 0.5), font_size=11, bold=True, z=22)
+        self.sell_pool = TextPool(anchor=(1, 0.5), font_size=11, bold=True, z=22)
 
     def attach_text(self, plot) -> None:
         self.buy_pool.attach(plot); self.sell_pool.attach(plot)
@@ -140,8 +140,8 @@ class BucketFootprintItem(pg.GraphicsObject):
                     lo_all = price if lo_all is None else min(lo_all, price)
                     hi_all = price if hi_all is None else max(hi_all, price)
                     if len(buy_specs) < _FP_TEXT_CAP:
-                        buy_specs.append((xi + width * 0.10, price, f"{buy:.0f}", QtGui.QColor(20, 110, 50)))
-                        sell_specs.append((xi - width * 0.10, price, f"{sell:.0f}", QtGui.QColor(150, 30, 25)))
+                        buy_specs.append((xi + width * 0.10, price, f"{buy:.0f}", QtGui.QColor(0, 255, 127)))
+                        sell_specs.append((xi - width * 0.10, price, f"{sell:.0f}", QtGui.QColor(255, 7, 58)))
                     else:
                         _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y)
         elif show_bubbles:
