@@ -183,6 +183,15 @@ class PositionBracket(QtCore.QObject):
         self.label.setZValue(70)
         plot.addItem(self.label, ignoreBounds=True)
 
+        # Right-anchored per-line value labels (bold value; SL/TP also show % vs entry).
+        # Replaces the InfiniteLine built-in left-side labels.
+        self._val_labels = {}
+        for nm in ("SL", "Entry", "TP"):
+            t = pg.TextItem(anchor=(0.5, 0.5), fill=pg.mkBrush(255, 255, 255))
+            t.setZValue(70)
+            plot.addItem(t, ignoreBounds=True)
+            self._val_labels[nm] = t
+
         for ln in (self.entry_line, self.stop_line, self.target_line):
             ln.sigPositionChanged.connect(self._recalc)
         for vln in (self.left_line, self.right_line):
@@ -213,9 +222,7 @@ class PositionBracket(QtCore.QObject):
         hover = QtGui.QPen(QtGui.QColor(color)); hover.setWidth(2); hover.setCosmetic(True)
         ln = pg.InfiniteLine(
             pos=price, angle=0, movable=True, pen=pen, hoverPen=hover,
-            label=f"{name} {{value:0.2f}}",
-            labelOpts={"color": color, "position": 0.04, "movable": False},
-        )
+        )  # value labels are right-anchored TextItems (see _recalc), not the line's own label
         ln.setZValue(72)
         ln.setCursor(QtCore.Qt.PointingHandCursor)  # hand cursor on the handle (patch §18)
         self.plot.addItem(ln, ignoreBounds=True)
@@ -235,8 +242,21 @@ class PositionBracket(QtCore.QObject):
         rr = reward / risk if risk > 1e-9 else 0.0
         self.fill.update_levels(e, s, t)
         col = _rr_color(rr)
-        self.label.setText(f"E {e:.2f}  T {t:.2f}  S {s:.2f}\n1 : {rr:.2f}", color=col)
+        # top label: the R:R ratio only (E/T/S values now live in the right-side labels)
+        self.label.setText(f"1 : {rr:.2f}", color=col)
         self.label.setPos(self.label_x, max(e, s, t))
+        # centered value labels — black bold text on a white bg; SL always shows a
+        # negative % and TP a positive % (risk vs reward), regardless of long/short
+        xc = (self.x0 + self.x1) / 2.0
+        sl_pct = abs(s - e) / e * 100.0 if e else 0.0
+        tp_pct = abs(t - e) / e * 100.0 if e else 0.0
+        _st = "color:#000000;font-size:14px"
+        self._val_labels["SL"].setHtml(f"<span style='{_st}'><b>{s:.2f}</b> (-{sl_pct:.2f}%)</span>")
+        self._val_labels["Entry"].setHtml(f"<span style='{_st}'><b>{e:.2f}</b></span>")
+        self._val_labels["TP"].setHtml(f"<span style='{_st}'><b>{t:.2f}</b> (+{tp_pct:.2f}%)</span>")
+        self._val_labels["SL"].setPos(xc, s)
+        self._val_labels["Entry"].setPos(xc, e)
+        self._val_labels["TP"].setPos(xc, t)
         self.changed.emit()
 
     @property
@@ -257,7 +277,8 @@ class PositionBracket(QtCore.QObject):
 
     def remove(self) -> None:
         for it in (self.fill, self.entry_line, self.stop_line, self.target_line,
-                   self.left_line, self.right_line, self.label):
+                   self.left_line, self.right_line, self.label,
+                   *self._val_labels.values()):
             self.plot.removeItem(it)
 
 
