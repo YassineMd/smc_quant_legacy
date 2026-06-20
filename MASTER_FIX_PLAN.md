@@ -276,6 +276,11 @@ magnet-by-strength refinement.*
   iceberg `id`s (seeds silently on first data + tf-change so the history backlog is never read out) and
   speaks live events only: iceberg → "{scale} {Buy|Sell} Iceberg", OB → "{scale} {Long|Short} Order
   Block". `a` toggles it. Did NOT re-enable the alerts ledger/chime (separate severed feature).
+- `ba1dfed` **hamburger menu UX** — (1) closes only on an OUTSIDE click now (deleted the cursor-leave
+  `leaveEvent`; an app-wide mouse-press filter, installed only while open, ignores presses inside the
+  panel / on the `[☰]` button / while a combo/calendar popup is up); (2) all controls live in a
+  transparent `QScrollArea` so a short window SCROLLS them instead of cramming them unclickable (the
+  panel is pinned to the full window height).
 
 **Standalone exe.** `python build.py --terminal-only` → `dist/OrderFlowTerminal.exe` (onefile ~88 MB),
 PROVEN to render + spawn the gcloud tunnel (window + `cmd→gcloud compute ssh→putty` confirmed). 2nd
