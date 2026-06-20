@@ -174,6 +174,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.setFixedWidth(self.PANEL_WIDTH)
         self.hide()
         self.layer_checks: dict[str, QtWidgets.QCheckBox] = {}
+        self.sub_checks: dict[str, QtWidgets.QCheckBox] = {}
         self._build()
 
     # ------------------------------------------------------------------
@@ -245,6 +246,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("audio", "Audio Feed")]:
             cb = QtWidgets.QCheckBox(label)
             cb.toggled.connect(lambda on, k=key: self.subWidgetToggled.emit(k, on))
+            self.sub_checks[key] = cb
             self.sub_section.addWidget(cb)
         root.addWidget(self.sub_section)
 

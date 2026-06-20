@@ -279,6 +279,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.drawer.toolbar = self.drawbar         # §7.3 — enables auto-revert
         self.drawbar.toolSelected.connect(self.drawer.set_tool)
         QtGui.QShortcut(QtGui.QKeySequence("V"), self, activated=self.drawer.cancel)
+        # quick toggles: 's' = Stats Box overlay, 'd' = Vector Drawing toolbar. Flip the menu
+        # checkbox so the menu stays in sync and the existing show/hide + teardown logic runs.
+        QtGui.QShortcut(QtGui.QKeySequence("S"), self,
+                        activated=lambda: self.menu.layer_checks["m10_stats"].toggle())
+        QtGui.QShortcut(QtGui.QKeySequence("D"), self,
+                        activated=lambda: self.menu.sub_checks["drawing"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
         # §7.4 — yellow follow-spot shown on the cursor while a draw tool is armed
