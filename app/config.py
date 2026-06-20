@@ -147,6 +147,8 @@ DOM_BIN_STEP = 0.01             # spec §8.1 — depth aggregation bin
 # Analytics thresholds (spec §4)
 FOOTPRINT_UNPACK_PX = 35        # vertical grid spacing to unpack side-by-side rows (§4.1.1)
 IMBALANCE_RATIO = 2.0           # diagonal imbalance multiplier (§4.1.1)
+FOOTPRINT_IMBALANCE_RATIO = 3.0  # Mode-10 footprint: flag a level's number when its same-level
+                                 # buy-vs-sell imbalance is >= this (300%)
 IMBALANCE_OPACITY = (0.35, 0.95)  # min/max highlight opacity (§4.1.1)
 STACKED_IMBALANCE_MIN = 3       # consecutive rows to form a channel (§4.1.2)
 ICEBERG_VOL_SHARE = 0.04        # 4% candle volume (§4.2.1)

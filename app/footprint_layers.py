@@ -24,6 +24,13 @@ _FP_TEXT_CAP = 600              # bound detailed footprint labels
 DETAIL_PX_PER_TICK = 12.0      # show side-by-side rows once a tick row is this tall
 MAX_DETAIL_BUCKETS = 20        # NUMBERS (full per-level ladder) only in a tight study view
 MAX_BUBBLE_BUCKETS = 200       # TOP-3 bubbles up to here (3 x buckets <= 600 ellipses); wider -> none
+
+# Footprint NUMBER colors: neon green (buy) / neon red (sell). A diagonally-imbalanced level inverts
+# to BLACK text on a neon background (carried as the optional 5th TextPool spec element).
+_FP_NEON_BUY = QtGui.QColor(0, 255, 127)
+_FP_NEON_SELL = QtGui.QColor(255, 7, 58)
+_FP_BLACK = QtGui.QColor(0, 0, 0)
+_EMPTY: dict = {}
 ICON_MIN_PX_PER_CANDLE = 22.0  # hide iceberg icons when candles get this narrow
 
 
@@ -140,8 +147,17 @@ class BucketFootprintItem(pg.GraphicsObject):
                     lo_all = price if lo_all is None else min(lo_all, price)
                     hi_all = price if hi_all is None else max(hi_all, price)
                     if len(buy_specs) < _FP_TEXT_CAP:
-                        buy_specs.append((xi + width * 0.10, price, f"{buy:.0f}", QtGui.QColor(0, 255, 127)))
-                        sell_specs.append((xi - width * 0.10, price, f"{sell:.0f}", QtGui.QColor(255, 7, 58)))
+                        # SAME-LEVEL imbalance: buy vs sell at this price. >= FOOTPRINT_IMBALANCE_RATIO
+                        # -> the dominant side inverts to black text on a neon bg.
+                        r_ = config.FOOTPRINT_IMBALANCE_RATIO
+                        buy_imb = buy >= r_ * sell
+                        sell_imb = sell >= r_ * buy
+                        buy_specs.append((xi + width * 0.10, price, f"{buy:.0f}",
+                                          _FP_BLACK if buy_imb else _FP_NEON_BUY,
+                                          _FP_NEON_BUY if buy_imb else None))
+                        sell_specs.append((xi - width * 0.10, price, f"{sell:.0f}",
+                                           _FP_BLACK if sell_imb else _FP_NEON_SELL,
+                                           _FP_NEON_SELL if sell_imb else None))
                     else:
                         _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y)
         elif show_bubbles:

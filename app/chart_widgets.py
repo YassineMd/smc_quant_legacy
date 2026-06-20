@@ -104,9 +104,12 @@ class TextPool:
             if i < len(specs):
                 spec = specs[i]
                 if spec != self._last[i]:        # only re-layout/reposition on an actual change
-                    x, y, text, color = spec
+                    x, y, text, color = spec[0], spec[1], spec[2], spec[3]
+                    bg = spec[4] if len(spec) > 4 else None   # optional per-cell background brush
                     it.setText(text, color=color)
+                    it.fill = pg.mkBrush(bg) if bg is not None else pg.mkBrush(None)
                     it.setPos(x, y)
+                    it.update()
                     it.show()
                     self._last[i] = spec
             elif self._last[i] is not None:      # surplus slot that was showing -> hide once
