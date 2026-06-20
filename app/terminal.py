@@ -1012,8 +1012,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _roll_to_live_edge(self, n: int, lows: list, highs: list) -> None:
         """View-follow (Mode 10): slide the X window to the live edge + candle-frame Y
-        over the visible window. The forecast cloud (bull_fc/bear_fc) is DELIBERATELY
-        excluded from the Y fit (the old A0 goal) so candles aren't squished; re-fitting
+        over the visible window. The Y fit uses the candles (lows/highs); re-fitting
         the visible window every draw also means an extreme in-window bucket can't
         overflow. Cadence per FOLLOW_*_PER_TICK (per-tick vs only on a bucket close)."""
         if n <= 0:
@@ -1831,21 +1830,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         brush = self._neon_v2_brush(b.get("opL", 0.0), b.get("opS", 0.0),
                                     b.get("clL", 0.0), b.get("clS", 0.0),
                                     b.get("curr_vol", 0.0), ratio)
-        # kinetic-forecast EMA (identical matrix to the old inline loop / Mode 4)
-        duration = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))
-        v_bull = b.get("buy_vol", 0.0) / duration
-        v_bear = b.get("sell_vol", 0.0) / duration
-        denom = max(1.0, v_bull + v_bear)
-        bull_raw = (v_bull * (b.get("buyer_er", 0.0) / 100.0) / denom) * 0.5
-        bear_raw = (v_bear * (b.get("seller_er", 0.0) / 100.0) / denom) * 0.5
+        # baseline EMA — the smoothed POC center line (slow 5%/95% EMA of the bucket POC).
+        # ``fold_prev`` is the prior bucket's baseline scalar (None for i == 0 = seed).
         poc = b.get("poc_price", 0.0)
-        if fold_prev is None:                  # i == 0: seed the EMA
-            baseline, bull_s, bear_s = poc, bull_raw, bear_raw
-        else:
-            pb, pbull, pbear = fold_prev
-            baseline = poc * 0.05 + pb * 0.95
-            bull_s = bull_raw * 0.1 + pbull * 0.9
-            bear_s = bear_raw * 0.1 + pbear * 0.9
+        baseline = poc if fold_prev is None else (poc * 0.05 + fold_prev * 0.95)
         # trailing-50 VPIN -> heatmap brush
         ti = tv = 0.0
         for bb in buckets[max(0, i - 49): i + 1]:
@@ -1881,15 +1869,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         wick_pen = pg.mkPen(_wc, width=_w); wick_pen.setCosmetic(True)
         row = (b.get("open", 0.0), b.get("high", 0.0), b.get("low", 0.0),
                b.get("close", 0.0), poc, brush,
-               baseline, baseline + bull_s, baseline - bear_s, vpin, vbrush, wick_pen)
-        return row, (baseline, bull_s, bear_s)
+               baseline, vpin, vbrush, wick_pen)
+        return row, baseline
 
-    # The 11 parallel render arrays, in row-tuple order (see _bucket_row).
+    # The 10 parallel render arrays, in row-tuple order (see _bucket_row).
     _M10_ARR_KEYS = ("opens", "highs", "lows", "closes", "pocs", "brushes",
-                     "baseline", "bull_fc", "bear_fc", "vpin", "vbrush", "pens")
+                     "baseline", "vpin", "vbrush", "pens")
 
     def _compute_bucket_arrays(self, buckets: list, anchor_unix: float) -> dict:
-        """Static closed-bucket compute cache (#3): return the 11 per-bucket render
+        """Static closed-bucket compute cache (#3): return the 10 per-bucket render
         arrays, recomputing ONLY the live edge (``buckets[-1]``) + any newly-closed
         buckets — closed buckets are immutable so their rows are cached and reused.
 
@@ -1935,16 +1923,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return out
 
     def _scan_bucket_canvas(self, buckets: list, x: list) -> None:
-        """Mode 10 — neon-graded bucket candles + kinetic forecast (upper pane)
+        """Mode 10 — neon-graded bucket candles + gray baseline (upper pane)
         synchronized with a rolling-50 VPIN toxicity heatmap (lower pane)."""
         self._ensure_canvas_panes()
         # #3 static closed-bucket compute cache: closed buckets are immutable, so their
-        # OHLC/poc/brush + kinetic-forecast EMA + rolling-50 VPIN rows are computed ONCE
+        # OHLC/poc/brush + baseline EMA + rolling-50 VPIN rows are computed ONCE
         # (on close) and reused; only the live edge (buckets[-1]) is recomputed each frame.
         arr = self._compute_bucket_arrays(buckets, self.menu.scan_start_unix())
         opens, highs, lows, closes = arr["opens"], arr["highs"], arr["lows"], arr["closes"]
         pocs, brushes = arr["pocs"], arr["brushes"]
-        baseline_arr, bull_fc_arr, bear_fc_arr = arr["baseline"], arr["bull_fc"], arr["bear_fc"]
+        baseline_arr = arr["baseline"]
         vpin_arr, vbrushes = arr["vpin"], arr["vbrush"]
         wick_pens = arr["pens"]   # per-candle flow-colored wick/border pens
 
@@ -1954,21 +1942,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         px_per_x = self.vb.width() / max(1e-9, vx1 - vx0)
         px_per_y = self.vb.height() / max(1e-9, vy1 - vy0)
 
-        # --- upper pane: candles + forecast cloud (create-once / update-after) ---
+        # --- upper pane: candles + the gray baseline (create-once / update-after) ---
         if "bc_candles" not in self._scan_handles:
             self._scan_handles["bc_candles"] = self._add_scanner_item(BucketCandleItem())
             self._scan_handles["bc_baseline"] = self._add_scanner_item(
                 pg.PlotCurveItem(pen=pg.mkPen((180, 180, 180, 150), width=1.5,
                                               style=QtCore.Qt.DashLine)))
-            self._scan_handles["bc_bull"] = self._add_scanner_item(
-                pg.PlotCurveItem(pen=pg.mkPen("#2ecc71", width=2.5)))
-            self._scan_handles["bc_bear"] = self._add_scanner_item(
-                pg.PlotCurveItem(pen=pg.mkPen("#e74c3c", width=2.5)))
         # vx0/vx1: viewport cull — paint ONLY the visible candles (O(visible), not O(N)).
         self._scan_handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
         self._scan_handles["bc_baseline"].setData(x, baseline_arr)
-        self._scan_handles["bc_bull"].setData(x, bull_fc_arr)
-        self._scan_handles["bc_bear"].setData(x, bear_fc_arr)
 
         # --- STAGE 0: true per-bucket POC marker (gold dot) — rides the whole DETAIL regime ---
         # poc_price is already finalized in every BucketSnapshot (and computed on the fly for the
@@ -2093,7 +2075,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # --- view-follow (replaces the one-shot fit). A mode/tf/Zero-Point re-arm
         # (_scanner_needs_autofit) re-locks BOTH axes + drops us on the live edge, consuming
         # that flag exactly as _fit_scanner_y used to. The Y fit uses candles only
-        # (lows/highs) — bull_fc/bear_fc EXCLUDED so they can't squish the candles (A0). The
+        # (lows/highs) — re-fit every draw so an extreme in-window bucket can't squish them. The
         # roll runs whenever either axis is locked (each axis gated inside). After the draw
         # we snapshot the displayed range so the per-axis unlock can diff against it. ---
         if self._scanner_needs_autofit:
@@ -2104,7 +2086,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.lower_plot.getViewBox().setYRange(0.0, 1.05, padding=0)
         self._follow_prev_range = self.vb.viewRange()
 
-        # §5 right-edge spot price + active-bucket fill badge, plus forecast tags
+        # §5 right-edge spot price + active-bucket fill badge, plus the baseline readout
         # (all on the upper price pane; stacked + left-padded to avoid clipping).
         x_edge = x[-1]
         fill = self._active_fill_pct()
@@ -2119,10 +2101,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             f"Price ${spot:.2f}<br>({fill:.0f}% Fill)<br>"
             f"<span style='color:#b4b4b4'>Base ${baseline_arr[-1]:.2f}</span>",
             x_edge, "up", span=True)
-        self._scanner_tracker("t_bc_bull", bull_fc_arr[-1], "#2ecc71",
-            f"Bull ${bull_fc_arr[-1]:.2f}", x_edge, "up", line=False)
-        self._scanner_tracker("t_bc_bear", bear_fc_arr[-1], "#e74c3c",
-            f"Bear ${bear_fc_arr[-1]:.2f}", x_edge, "down", line=False)
 
         # Deterministic horizontal lock: mirror the main X range onto the lower
         # pane every frame so the dual panes stay in pixel-perfect lock-step.
