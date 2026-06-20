@@ -42,6 +42,7 @@ from .pipe_client import PipeClientWorker
 from .stats_overlay import StatsOverlay
 
 _OPEN_WINDOWS: List["MinimalTerminalWindow"] = []
+_TUNNEL: "Optional[SSHTunnelManager]" = None   # set in main(); the refresh button relaunches a dead tunnel
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +273,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bell_btn.setText("🔔")
         self.bell_btn.clicked.connect(self.alerts.toggle)
 
+        # Refresh button — re-establish a frozen feed (net blip / stale socket / dead tunnel)
+        # WITHOUT restarting the window. Sits just left of the bell.
+        self.refresh_btn = HamburgerButton(self)
+        self.refresh_btn.setText("🔄")
+        self.refresh_btn.setToolTip("Refresh — reconnect the data feed if the chart froze")
+        self.refresh_btn.clicked.connect(self._refresh)
+
         # Audio Feed — speak NEW icebergs/OBs aloud (via self.alerts.audio, gated by the
         # "Audio Feed" sub-widget; default OFF). The announce seeds silently on first data /
         # tf-change so the history backlog is never read out — only live events after.
@@ -385,6 +393,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._m10_cc = None   # #3 static closed-bucket compute cache (see _compute_bucket_arrays)
         self._depth_needs_calibration = True  # new tf -> re-baseline the depth slider (§1)
         self.worker.request_timeframe(tf)
+
+    def _refresh(self) -> None:
+        """Manual chart refresh — re-establish the data feed after a freeze (net blip / stale
+        socket / dead tunnel) WITHOUT restarting the window. Mode-agnostic: it reconnects the
+        data layer + re-pulls the catch-up that EVERY scanner mode draws from, then invalidates
+        the render signatures so whichever mode is active repaints from the fresh data."""
+        if _TUNNEL is not None:
+            try:
+                _TUNNEL.ensure()        # relaunch the gcloud tunnel only if its port died (no-op if live)
+            except Exception:
+                pass
+        self.worker.refresh()           # drop a stale socket -> reconnect -> re-request catch-up
+        # force a clean repaint in whatever mode is active + don't read out the re-pulled backlog
+        self._sig_candles = self._sig_obs = self._sig_fp = None
+        self._scanner_bucket_sig = self._last_scanner_sig = None
+        self._audio_seeded = False
+        self._announced_obs = set(); self._announced_icebergs = set()
 
     def _toggle_layer(self, key: str, on: bool) -> None:
         # Only Mode-10 overlays carry toggles now — the time-chart "Technical Layers" section was
@@ -2170,6 +2195,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu_btn.move(self.width() - self.menu_btn.width() - 8, 8)
         # bell sits just left of the hamburger (fix #8)
         self.bell_btn.move(self.width() - self.menu_btn.width() - self.bell_btn.width() - 14, 8)
+        # refresh sits just left of the bell
+        self.refresh_btn.move(
+            self.width() - self.menu_btn.width() - self.bell_btn.width() - self.refresh_btn.width() - 20, 8)
         self.menu.setGeometry(self.width() - self.menu.PANEL_WIDTH, 0,
                               self.menu.PANEL_WIDTH, self.height())
         self.drawbar.move((self.width() - self.drawbar.width()) // 2, 8)
@@ -2300,6 +2328,8 @@ def main() -> None:
     # a tunnel. aboutToQuit fires on a normal close; the finally is the backstop if
     # app.exec() never runs (e.g. a window build raises).
     tunnel = SSHTunnelManager()
+    global _TUNNEL
+    _TUNNEL = tunnel        # expose to windows' refresh button (relaunches a dead tunnel)
     tunnel.ensure()
     app.aboutToQuit.connect(tunnel.stop)
 

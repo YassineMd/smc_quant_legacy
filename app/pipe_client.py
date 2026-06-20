@@ -86,6 +86,8 @@ class PipeClientWorker(threading.Thread):
         self.active_bucket: dict = {}
         self.connected: bool = False
         self._catchup_loading: bool = False   # True while a chunked catch-up streams
+        self._force_reconnect = threading.Event()   # manual refresh: drop the socket + reconnect now
+        self._sock: Optional[socket.socket] = None  # active socket, exposed for refresh()'s force-drop
         # copy-on-write export caches: bump the version on every write to the heavy,
         # infrequently-changing lists; snapshot() re-copies only when it moved, so a
         # 10k-bucket history costs one copy per change, not one O(N) copy per frame.
@@ -133,6 +135,23 @@ class PipeClientWorker(threading.Thread):
     def stop(self) -> None:
         self._stop.set()
 
+    def refresh(self) -> None:
+        """Force-drop the current socket and reconnect immediately (manual chart refresh).
+
+        A net blip can leave a half-open socket the OS never reports as dead, so the worker
+        blocks in recv() forever with no data — the chart freezes. Shutting the socket down
+        unblocks that recv; run() then reconnects and re-requests the catch-up without the
+        usual backoff. Safe if already mid-reconnect (no live socket to drop).
+        """
+        self._force_reconnect.set()
+        with self.data_lock:
+            s = self._sock
+        if s is not None:
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
     # ------------------------------------------------------------------
     # Thread body
     # ------------------------------------------------------------------
@@ -144,6 +163,8 @@ class PipeClientWorker(threading.Thread):
                 sock.settimeout(1.0)
                 with self.data_lock:
                     self.connected = True
+                    self._sock = sock              # expose for refresh()'s force-drop
+                self._force_reconnect.clear()      # fresh connection -> arm a future refresh
                 # announce our timeframe to the daemon on connect
                 self.request_timeframe(self.tf)
 
@@ -153,6 +174,8 @@ class PipeClientWorker(threading.Thread):
                     try:
                         data = sock.recv(65536)
                     except socket.timeout:
+                        if self._force_reconnect.is_set():
+                            break                  # manual refresh -> drop + reconnect (fallback path)
                         continue
                     if not data:
                         break  # daemon closed
@@ -167,12 +190,14 @@ class PipeClientWorker(threading.Thread):
             finally:
                 with self.data_lock:
                     self.connected = False
+                    self._sock = None
                 if sock is not None:
                     try:
                         sock.close()
                     except OSError:
                         pass
-            if not self._stop.is_set():
+            # Reconnect immediately on a manual refresh; otherwise back off.
+            if not self._stop.is_set() and not self._force_reconnect.is_set():
                 time.sleep(config.RECONNECT_SECS)
 
     def _flush_outgoing(self, sock: socket.socket) -> None:
