@@ -245,6 +245,40 @@ whale-absorption detector. The arc:
   in two commits (DETECTOR: `quant_engine.py` · `feeds.py`; RENDER+CONSUMER: `chart_widgets.py` ·
   `pipe_client.py` · `terminal.py` · `hamburger.py`), preceded by this docs commit. The layer is DONE.
 
+### SESSION 2026-06-20 — forecast tool DROPPED + Mode-10 / drawing-tools UI batch + standalone exe
+
+**Forecast price-target tool — EXPLORED then DROPPED (reverted).** Built (read-only) a Phase-A backtest
+harness + the collection prerequisites (book-desync re-seed fix, L2 book-snapshot collection, 1m
+`target_vol` pin, `COLLECTION_LOCK` schema guard) toward a "where could price reach + how confident"
+Mode-10 overlay. **Phase-A verdict: Layer 1 (volatility → reachability) VALIDATED; Layers 2–3
+(structure/strength targeting) GATED behind weeks of multi-regime data + an L2 book stream.** The
+operator then **dropped the tool entirely** — all 7 forecast commits reverted via `git reset --hard
+5f07b7b` (harness + collection code are GONE; recoverable from reflog for weeks). *If revisited: the
+reachability layer was the proven piece; targeting needs the multi-regime collection + the
+magnet-by-strength refinement.*
+
+**Mode-10 / drawing-tools UI batch — SHIPPED (on `pipeline-integrity`, atop `5f07b7b`):**
+- `ba6531a` removed the Mode-10 **kinetic forecast cloud** (green/red `bull_fc`/`bear_fc`); KEPT the gray
+  baseline (smoothed-POC EMA). Mode 4 untouched.
+- `ed493ac` **stats overlay z-order** — stays BELOW an open hamburger menu (`StatsOverlay.keep_under`).
+- `2707557` + `09c7449` **keyboard toggles** (flip the menu checkboxes via `QShortcut`): `s` Stats ·
+  `d` Drawing toolbar · `p` POC dot · `l` Liquidations · `f` Footprint.
+- `458fda7` **position-bracket labels** — centered in the box, black bold value on a white bg, SL always
+  −% / TP always +% (risk vs reward), top label = the R:R ratio only.
+- `f465f65` **footprint numbers** — gate tightened (≤40 → ≤20 visible buckets), text bigger (9 → 11px) +
+  neon green/red `(0,255,127)`/`(255,7,58)`.
+- `977f980` **footprint 300% imbalance** — a level's number flips to BLACK text on a neon bg when its
+  same-level buy-vs-sell imbalance ≥ `config.FOOTPRINT_IMBALANCE_RATIO` (3.0). `TextPool` gained an
+  optional per-cell background brush (5th spec element → `TextItem.fill`).
+- `d30ce3b` **Scan Start** default anchor 2h → **24h** before the host clock.
+
+**Standalone exe.** `python build.py --terminal-only` → `dist/OrderFlowTerminal.exe` (onefile ~88 MB),
+PROVEN to render + spawn the gcloud tunnel (window + `cmd→gcloud compute ssh→putty` confirmed). 2nd
+machine = install gcloud + `gcloud auth login` + accept the VM host key once, then double-click.
+**Rebuild after a UI batch** to refresh it (the current exe predates this batch).
+
+---
+
 ### Deferred queue — current order (operator's call, 2026-06-19)
 1. ✅ **Time-chart removal — DONE (all phases: A/B/menu/relabel/C/D).** Completed after the absorption
    dive — Mode 10 (`BucketCandleItem`) is the sole candle surface. Full record in the "⚠️ TIME-CHART
