@@ -214,8 +214,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.scan_time_edit = QtWidgets.QDateTimeEdit()
         self.scan_time_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
         self.scan_time_edit.setCalendarPopup(True)
-        # default the anchor to exactly 2 hours before the host clock
-        self.scan_time_edit.setDateTime(QtCore.QDateTime.currentDateTime().addSecs(-7200))
+        # default the anchor to exactly 24 hours before the host clock
+        self.scan_time_edit.setDateTime(QtCore.QDateTime.currentDateTime().addSecs(-86400))
         self.scan_time_edit.dateTimeChanged.connect(lambda _dt: self.scan_time_changed.emit())
         root.addWidget(self.scan_time_edit)
 
