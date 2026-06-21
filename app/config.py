@@ -25,6 +25,11 @@ PRICE_DECIMALS = 2        # f"{price:.2f}" footprint keys (spec §10.2.2) + HUD 
 # Quant engine parameters (legacy main.py + spec §3)
 # ---------------------------------------------------------------------------
 DEFAULT_TARGET_VOL = 5000.0     # V_target default (main.py:42, spec §3.1.1)
+BUCKET_MEDIAN_CANDLES = 1.0     # bucket-sizing knob: target_vol[1m] = this many MEDIAN 1m-candle
+                                # volumes; higher tfs scale by candle-duration ratio. Median is
+                                # burst-immune (1m vol is ~2x right-skewed, so the old mean-based
+                                # optimizer chased bursts). 1.0 = "one bucket ~ one median 1m candle"
+                                # (matches the old level -> no disruption); raise=coarser, lower=finer.
 CLOSED_BUCKETS_CAP = 10000      # cloud retention cap — buckets/tf kept in RAM + DB + catch-up
 RECALIB_WINDOW_SECS = 7200      # main.py:132 — 2-hour sliding recalibration frame
 RECOMPUTE_SECS = 5              # 19.4 — periodic recalibrate + OB rescan cadence (off the per-close hot path)

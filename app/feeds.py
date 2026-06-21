@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import statistics
 import time
 from typing import Callable, Dict
 
@@ -465,19 +466,45 @@ class MarketDataCore:
     # ------------------------------------------------------------------
     # Periodic recalibrate + OB rescan — OFF the per-close hot path (Step 19.4)
     # ------------------------------------------------------------------
-    def _recompute_engine(self, tf_key: str) -> list:
-        """Recalibrate ``target_vol`` + rescan order blocks for one engine (Step 19.4).
+    def _resize_engines(self) -> None:
+        """Median-anchored bucket sizing for ALL timeframes — one mechanism, applied atomically
+        each recompute sweep. Replaces the old variance optimizer, which on real data hit its
+        ``0.5 * avg_vol`` search floor ~85% of the time and lurched 50–77% chasing volume bursts.
 
-        The expensive O(2h-window) optimizer + O(history) OB rescan that USED to run
-        synchronously on every bucket close. SYNCHRONOUS (no await) so it is atomic
-        w.r.t. that engine's closes on the single asyncio loop — no torn read is
-        possible. The only write back into shared state is one atomic assignment,
-        ``engine.target_vol`` (a float, inside ``recalibrate``). Returns the fresh OB
-        set for ``recompute_loop`` to broadcast (the per-close path never ships it).
+        The 1m engine is the sole anchor::
+
+            target_vol[1m] = BUCKET_MEDIAN_CANDLES * median(per-1m-candle volume)
+            target_vol[tf] = target_vol[1m] * (tf_seconds / 60)
+
+        Median over the *in-RAM* 1m footprints (``footprints_db['1m']``, already capped at
+        ``FOOTPRINT_MEM_CAP``) is immune to the ~2x right-skew that the old mean chased, and it
+        can NEVER read pruned data — it only ever sees what is retained, so the window IS the
+        retention knob, not a new magic constant. Every other tf is a deterministic multiple of
+        the one robust anchor, so all five are co-stable and the sparse-high-tf-candle problem
+        (4h can never gather 10 candles in any sane window) is sidestepped entirely.
         """
-        engine = self.engines[tf_key]
-        engine.recalibrate(engine.last_tick_time, self.footprints_db.get(tf_key, {}))
-        return rank_obs(calc_quant_obs(engine, tf_key))
+        vols = []
+        for node in self.footprints_db.get("1m", {}).values():
+            v = sum(c.get("b", 0.0) + c.get("s", 0.0) for c in node.get("levels", {}).values())
+            if v > 0:
+                vols.append(v)
+        if len(vols) < 10:                      # cold boot / too few candles -> leave sizes untouched
+            return
+        anchor = config.BUCKET_MEDIAN_CANDLES * statistics.median(vols)
+        if anchor <= 0:
+            return
+        for tf_key, engine in self.engines.items():
+            sec = config.TF_SECONDS.get(tf_key)
+            if sec:
+                engine.target_vol = anchor * (sec / 60.0)   # atomic float write (single asyncio loop)
+
+    def _recompute_engine(self, tf_key: str) -> list:
+        """Rescan order blocks for one engine (Step 19.4). Bucket sizing is hoisted out to
+        :meth:`_resize_engines` — one median anchor sizes all tfs — so this is OB-rescan only.
+        SYNCHRONOUS (no await) so it stays atomic w.r.t. that engine's closes on the single
+        asyncio loop. Returns the fresh OB set for ``recompute_loop`` to broadcast.
+        """
+        return rank_obs(calc_quant_obs(self.engines[tf_key], tf_key))
 
     def _absorption_marks(self, tf_key: str) -> list:
         """Whale-absorption standing levels for one tf — BUCKET-NATIVE: replayed over the engine's
@@ -499,6 +526,7 @@ class MarketDataCore:
         """
         while True:
             await asyncio.sleep(config.RECOMPUTE_SECS)
+            self._resize_engines()                 # median-anchored sizing for all tfs (one mechanism)
             for tf_key in config.TIMEFRAMES:
                 try:
                     obs = self._recompute_engine(tf_key)

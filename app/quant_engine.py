@@ -378,75 +378,13 @@ class QuantEngine:
         denom = n * self.target_vol
         self.vpin = (sum(self.vpin_queue) / denom) if denom > 0 else 0.0
 
-        # DIVERGES FROM LEGACY (Step 19.4): recalibrate (the 20-step optimizer over the
-        # 2h footprint window) moved OFF this per-close hot path to the daemon's
-        # periodic recompute_loop. It ran synchronously on EVERY close (~1.8ms close-
-        # class p99 in the 19.3 gate vs ~19us steady); a volume burst clusters closes
-        # and stalls the socket drain. target_vol still adapts on the periodic cadence;
-        # the new bucket spawns with its latest value. (footprints_dict unused here now.)
+        # DIVERGES FROM LEGACY (Step 19.4): bucket sizing moved OFF this per-close hot path to
+        # the daemon's periodic recompute_loop (now MarketDataCore._resize_engines: a burst-immune
+        # 1m MEDIAN anchor scaled by candle-duration ratio). The old per-close variance optimizer
+        # ran synchronously on EVERY close (~1.8ms close-class p99 in the 19.3 gate vs ~19us
+        # steady); a volume burst clusters closes and stalls the socket drain. target_vol still
+        # adapts on the periodic cadence; the new bucket spawns with its latest value.
         self.active_bucket = QuantBucket(self.target_vol, current_time)
-
-    def recalibrate(self, current_time, footprints_dict):
-        threshold_time = current_time - config.RECALIB_WINDOW_SECS
-        historical_flow = []
-        for utime_str in sorted(footprints_dict.keys()):
-            if int(utime_str) >= threshold_time:
-                fp = footprints_dict[utime_str]
-                c_buy = sum(v["b"] for v in fp.get("levels", {}).values())
-                c_sell = sum(v["s"] for v in fp.get("levels", {}).values())
-                if (c_buy + c_sell) > 0:
-                    historical_flow.append({"vol": c_buy + c_sell, "b": c_buy, "s": c_sell})
-
-        if len(historical_flow) >= 10:
-            self.optimize_bucket_size(historical_flow)
-
-    def optimize_bucket_size(self, historical_flow_data):
-        total_vol = sum(f["vol"] for f in historical_flow_data)
-        if total_vol < 1000:
-            return
-
-        avg_node_vol = total_vol / len(historical_flow_data)
-        min_test_v = max(100.0, avg_node_vol * 0.5)
-        max_test_v = max(1000.0, avg_node_vol * 15.0)
-        step = (max_test_v - min_test_v) / 20.0
-
-        best_v = self.target_vol
-        max_variance = -1.0
-
-        test_v = min_test_v
-        while test_v <= max_test_v + 0.0001:
-            imbalances = []
-            curr_vol, curr_b, curr_s = 0.0, 0.0, 0.0
-
-            for f in historical_flow_data:
-                remaining = f["vol"]
-                b_ratio = f["b"] / f["vol"]
-                s_ratio = f["s"] / f["vol"]
-
-                while remaining > 0:
-                    space = test_v - curr_vol
-                    if remaining <= space:
-                        curr_vol += remaining
-                        curr_b += remaining * b_ratio
-                        curr_s += remaining * s_ratio
-                        remaining = 0
-                    else:
-                        curr_vol += space
-                        curr_b += space * b_ratio
-                        curr_s += space * s_ratio
-                        imbalances.append(abs(curr_b - curr_s) / test_v)
-                        curr_vol, curr_b, curr_s = 0.0, 0.0, 0.0
-                        remaining -= space
-
-            if len(imbalances) > 5:
-                mean = sum(imbalances) / len(imbalances)
-                variance = sum((x - mean) ** 2 for x in imbalances) / len(imbalances)
-                if variance > max_variance:
-                    max_variance = variance
-                    best_v = test_v
-            test_v += step
-
-        self.target_vol = best_v
 
 
 # ---------------------------------------------------------------------------
