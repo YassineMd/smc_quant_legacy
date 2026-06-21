@@ -458,14 +458,26 @@ VPIN with one rule.
   risk line at p90=**0.52** inside [0.12, 0.57]. This is the **prerequisite** for the Phase-2 VPIN-using
   states (Whale Wars "low VPIN", any HFT-churn state) to mean "low/high *for the current regime*".
 
-**EXE STALE** — terminal changed across `02f41fa` (STATE line) + `e272b71` (adaptive VPIN); rebuild batched
-AFTER Phase-2 state extensions so we don't rebuild twice.
+**EXE REBUILT at `e272b71`** (through adaptive VPIN) — `dist/OrderFlowTerminal.exe` (88 MB), smoke-tested
+(launches clean; bundles Magic Selection + STATE line + E/R fix + adaptive VPIN). Clean refresh point since
+Phase-2 building is on hold.
 
-**Phase 2 — the 4 state extensions (next, on the verified aggregation + adaptive VPIN):** Hidden Bullish
-Accumulation (CVD deeply −, price flat/up, opL dominant), Hidden Bearish Distribution (mirror), Whale Wars /
-Strategic Locking (big opL AND opS + ~0 net price + LOW VPIN-for-regime), Passive Floor/Ceiling Iceberg
-(**only if** it reuses the existing iceberg/absorption marks — drop if it doesn't connect cleanly). Extend
-the ONE classifier (12 + these), thresholds grounded in observed numbers.
+**Phase 2 — the 4 state extensions: DEFERRED behind a candidate accumulator (NOT abandoned).** Scoped +
+instrumented on real SOL data; ALL FOUR fail the grounding-with-discrimination gate *now*:
+- *#4 Passive Floor/Ceiling Iceberg*: marks ARE reachable (`snap["absorptions"]`: price-band + time + tier,
+  time→index mapper at `terminal.py:2442`) but it's a snapshot **OVERLAY**, not a per-bucket scalar → a
+  context badge, not an argmax state. **No-go as a state.**
+- *#1 Hidden Bullish Accumulation, #2 Hidden Bearish Distribution, #3 Whale Wars*: REAL patterns (genuine
+  instances are legit) but structurally RARE on SOL (~74% churn median → OI-directional signal is only ~26%
+  of volume) — only **~1–2 distinct events in 3600 buckets**, and they **vanish at selection sizes ≥40**. Too
+  few to ground without confirmation bias. Tight-vs-loose tradeoff is inherent (tight=faithful=rare,
+  loose=steals from the 12). **No-destabilization confirmed**: tight defs fire only on windows the 12 call
+  ROTATION/NEUTRAL — never STRONG/traps; single buckets untouched → n=1=hover holds.
+- *Path*: a **passive candidate accumulator** (VM cron, read-only on `history.db`; logs loose-pattern windows
+  + factor vector + the `state_12` overlap signal to `data/pattern_candidates.jsonl`; needs a small pure
+  `app/region_state.py` refactor extracting `_synth_bucket`/`_exhaustion_mults` from the GUI module).
+  **PROPOSED, not built** — gathers instances 24/7; revisit at ~20–50 distinct events/pattern to ground +
+  prove discrimination, then build only the winners.
 
 ---
 
