@@ -200,7 +200,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._follow_last_n: int = -1
         self._follow_prev_range = None
         self.vb.sigRangeChangedManually.connect(self._on_scanner_manual_range)
-        self._depth_needs_calibration: bool = True       # one-shot depth-slider 50%-of-max baseline (§1)
+        self._depth_needs_calibration: bool = True       # one-shot depth-slider 90%-of-max baseline (§1)
         # Handles for the heavy modes' extra scene objects (built in Phase 5/6,
         # torn down here). Pre-declared so teardown checks are always safe.
         self.axis_bottom = self.plot.getAxis("bottom")
@@ -546,9 +546,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._sync_cob()
 
     def _calibrate_depth_slider(self, depth: dict) -> None:
-        """§1 — one-shot: default the depth-wall slider to an absolute-SOL value = 50% of the
+        """§1 — one-shot: default the depth-wall slider to an absolute-SOL value = 90% of the
         largest resting order, on the first valid book payload after connect / tf-change. So only
-        walls >= half the biggest current wall show by default (the significant ones), while the
+        walls >= 90% of the biggest current wall show by default (just the dominant ones), while the
         slider itself stays absolute-SOL and draggable — a manual drag overrides this and the flag
         keeps it from being re-imposed. Filters WHICH literal-price walls draw; never re-clusters."""
         if not self._depth_needs_calibration:
@@ -562,7 +562,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     continue
         if not qtys:
             return   # no order-book payload yet — keep waiting (flag stays True)
-        target_default = int(max(qtys) * 0.50)   # default: only walls >= 50% of the largest
+        target_default = int(max(qtys) * 0.90)   # default: only walls >= 90% of the largest
         target_default = max(config.CHART_FILTER_MIN,
                              min(config.CHART_FILTER_MAX, target_default))
         self.menu.chart_slider.setValue(target_default)
