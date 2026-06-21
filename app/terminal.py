@@ -363,8 +363,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         Per-mode geometry is drawn by the 50ms loop via :meth:`_draw_scanner`. (Time chart removed
         in Phase B — every mode is a scanner mode now.)
         """
+        prev_mode = self.scanner_mode
         self.scanner_mode = mode
         self.clear_scanner_canvas()   # teardown first
+        # §6.2 — index-space drawings are session-only + index-anchored. Keep them in memory for the
+        # whole session: SHOW on Mode 10, HIDE on the metric scanners (where a price-anchored shape is
+        # off-axis), restore on return — so drawings survive every mode switch AND scan-time change.
+        if mode == "bucket_canvas":
+            self.drawer.set_index_visible(True)
+        elif prev_mode == "bucket_canvas":
+            self.drawer.set_index_visible(False)
 
         self.axis_bottom.set_scanner_active(True)
         # §6.2 — drawing is LOCKED on every scanner mode EXCEPT bucket_canvas, where it's
@@ -971,8 +979,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self.bc_obs.tier_pool.clear(self.plot)
                 self.bc_absorption.label_pool.clear(self.plot)   # leak guard: absorption $-labels
                 self.bc_fp.clear_text(self.plot)   # leak guard: footprint TextPools (not in active_scanner_items)
-                # §6.2 — index-space drawings are session-only; wipe them on exit
-                self.drawer.flush_index_drawings()
+                # NOTE: index-space drawings are NOT flushed here. clear_scanner_canvas also runs on a
+                # scan-time change (while STAYING in Mode 10), so flushing here wiped every drawing on
+                # each time change. The flush now lives in _set_scanner, gated to actually LEAVING Mode 10.
                 self.lower_plot.getViewBox().setXLink(None)
                 # reparent self.plot back to the horizontal splitter at index 0, then restore the
                 # COB beside it (out of cob_col) and drop the COB column — i.e. restore [plot, cob]

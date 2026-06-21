@@ -289,6 +289,12 @@ class PositionBracket(QtCore.QObject):
         return any(abs(ln.value() - y) <= tol_y
                    for ln in (self.entry_line, self.stop_line, self.target_line))
 
+    def set_visible(self, on: bool) -> None:
+        for it in (self.fill, self.entry_line, self.stop_line, self.target_line,
+                   self.left_line, self.right_line, self.label,
+                   *self._val_labels.values()):
+            it.setVisible(on)
+
     def remove(self) -> None:
         for it in (self.fill, self.entry_line, self.stop_line, self.target_line,
                    self.left_line, self.right_line, self.label,
@@ -816,6 +822,17 @@ class DrawingController(QtCore.QObject):
         self.handles.clear()
         self._cancel_live()
         self._save()
+
+    def set_index_visible(self, on: bool) -> None:
+        """Show/hide the session-only index-space (Mode 10) drawings WITHOUT destroying them, so they
+        survive mode switches: shown on Mode 10, hidden on the metric scanners (where a price-anchored
+        shape is off-axis), restored on return. Edit handles drop when hidden."""
+        for s in self._idx_shapes:
+            s.setVisible(on)
+        for br in self._idx_brackets:
+            br.set_visible(on)
+        if not on:
+            self.handles.clear()
 
     def flush_index_drawings(self) -> None:
         """Wipe the session-only index-space drawings (Mode 10 teardown, §6.2).
