@@ -732,9 +732,80 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             "high": max(highs) if highs else 0.0, "low": min(lows) if lows else 0.0,
             "price_range": (max(highs) - min(lows)) if (highs and lows) else 0.0,
             "displacement": float(sel[-1].get("close", 0.0)) - float(sel[0].get("open", 0.0)),
+            "_lo_i": lo_i, "_hi_i": hi_i,   # span indices for the STATE adapter (priors live before lo_i)
         }
 
-    def _selection_stat_lines(self, d: dict) -> "list[str]":
+    @staticmethod
+    def _synth_bucket(sel: list) -> dict:
+        """Collapse the selected buckets into ONE synthetic 'aggregate bucket' shaped exactly like a
+        real bucket dict, so the SAME 12-state classifier can read it. Every key is a span aggregate
+        that reduces to the real bucket's own value when the selection is a single bucket: extensive
+        scalars (volumes, 4-vector, churn, liqs) SUM; OHLC takes first-open / max-high / min-low /
+        last-close; POC is the argmax of the MERGED price ladder.
+
+        Intensive per-bucket RATES — ``vol_mult`` and ``buyer_er`` / ``seller_er`` — are the
+        VOLUME-WEIGHTED MEAN of the selected buckets' own values, NOT recomputed from span totals.
+        This is deliberate: ``buyer_er = Σbuy / dispersion`` recomputed over the merged ladder grows
+        ~linearly with the bucket count (Σbuy sums; merged-ladder dispersion grows sub-linearly), so
+        the synthetic E/R lands ~n× the single-bucket scale and SATURATES the exhaustion z-mults
+        (``b_mult``/``s_mult``) — which then gates STRONG via its ``translate`` factor and collapses
+        trending regions to NEUTRAL/ROTATION. The volume-weighted mean keeps E/R on single-bucket
+        scale (so the z vs single-bucket priors stays meaningful), preserves the buy/sell asymmetry,
+        and still reduces to the bucket's own E/R at n==1. STATE is a SPAN concept (positioning has no
+        per-price split) — the price band only refines the FLOW readout, not the classification."""
+        def S(k): return sum(float(b.get(k, 0.0)) for b in sel)
+        cv = S("curr_vol")
+
+        def W(k, default=0.0):
+            """Volume-weighted mean of an intensive per-bucket rate (stays single-bucket scale)."""
+            if cv > 0:
+                return sum(float(b.get(k, default)) * float(b.get("curr_vol", 0.0)) for b in sel) / cv
+            return sum(float(b.get(k, default)) for b in sel) / len(sel)
+
+        merged: dict = {}
+        for b in sel:
+            for ps, lv in (b.get("levels", {}) or {}).items():
+                m = merged.setdefault(ps, {"b": 0.0, "s": 0.0})
+                m["b"] += float(lv.get("b", 0.0))
+                m["s"] += float(lv.get("s", 0.0))
+        poc_price = (float(max(merged, key=lambda p: merged[p]["b"] + merged[p]["s"]))
+                     if merged else float(sel[-1].get("close", 0.0)))
+        highs = [float(b.get("high", 0.0)) for b in sel if b.get("high")]
+        lows = [float(b.get("low", 0.0)) for b in sel if b.get("low")]
+        return {
+            "curr_vol": cv, "buy_vol": S("buy_vol"), "sell_vol": S("sell_vol"),
+            "opL": S("opL"), "opS": S("opS"), "clL": S("clL"), "clS": S("clS"),
+            "churn": S("churn"),
+            "open": float(sel[0].get("open", 0.0)), "close": float(sel[-1].get("close", 0.0)),
+            "high": max(highs) if highs else 0.0, "low": min(lows) if lows else 0.0,
+            "poc_price": poc_price, "vol_mult": W("vol_mult", 1.0),
+            "liq_short": S("liq_short"), "liq_long": S("liq_long"),
+            "buyer_er": W("buyer_er"), "seller_er": W("seller_er"),
+        }
+
+    def _selection_state(self, filtered: list, lo_i: int, hi_i: int):
+        """Run the existing 12-state classifier on the selected region. The synthetic aggregate bucket
+        sits right after the REAL buckets immediately preceding the selection, so the classifier's
+        rolling windows (sweep 10, exhaustion 30) read the true pre-selection context — and a
+        one-bucket selection reduces to ``bucket_state.classify_bucket`` on that bucket EXACTLY (same
+        synthetic, same priors, same b/s-mults), i.e. it matches the per-bucket hover STATE. No state
+        logic is duplicated — this is purely an adapter. Returns ``(state, conf)`` or ``(None, None)``."""
+        sel = filtered[lo_i:hi_i + 1]
+        if not sel:
+            return None, None, []
+        syn = self._synth_bucket(sel)
+        pw = max(bucket_state.SWEEP_WINDOW, EXH_WINDOW)   # widest window the classifier needs
+        priors = filtered[max(0, lo_i - pw):lo_i]
+        seq = priors + [syn]
+        idx = len(priors)
+        bm, sm, _om = _exhaustion_mults(seq, idx)
+        state, conf = bucket_state.classify_bucket(seq, idx, bm, sm)
+        # same calibration breakdown the per-bucket box shows (top-3 states + winner factors),
+        # read from the SAME synthetic sequence so it can't drift from the STATE line.
+        dbg = bucket_state.render_debug_lines(seq, idx, bm, sm)
+        return state, conf, dbg
+
+    def _selection_stat_lines(self, d: dict, state=None, conf=None, dbg=None) -> "list[str]":
         """Format the aggregate into the StatsOverlay box, mirroring the forming-bucket readout's
         structure (O H L C header + FLOW / POSITIONING / EFFORT / READ sections, same line formats
         and colours). Section tags note the honesty split: FLOW = price-filtered (in the box);
@@ -760,7 +831,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         vclr = {"opL": g, "opS": r, "clS": blu, "clL": pu}
         top2 = set(sorted(vmag, key=lambda k: vmag[k], reverse=True)[:2])
         def vc(name): return vclr[name] if (name in top2 and vmag[name] > 0) else gray
-        return [
+        lines = [
             f"O {pf(o)}  H {pf(h)}  L {pf(l)}  {span('C ' + pf(c), cc)}",
             f"{nb}   {span('POC ' + poc, gold)}",
             f"Band {span(pf(d['band_lo']) + '–' + pf(d['band_hi']), gold)}",
@@ -780,6 +851,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             sep("READ · SPAN"),
             f"VEL {span(vel, gold)}   VPIN {span(vpin, gold)}",
         ]
+        # STATE — the same 12-state classifier the per-bucket hover box uses, run on the region,
+        # followed by the same calibration debug lines (top-3 states + winner factor breakdown).
+        if state is not None:
+            lines.append(f"STATE {bucket_state.render_state_line(state, conf)}")
+        if dbg:
+            lines += dbg
+        return lines
 
     def _refresh_selection_stats(self) -> None:
         """Live Magic-Selection readout: aggregate the buckets inside the box + show the stats box.
@@ -798,9 +876,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not agg:
             self.sel_stats.hide()
             return
-        # size the box first, then place it at whichever selection corner has room (so it never
-        # gets hidden off-screen as you pan/zoom).
-        self.sel_stats.set_content(self._selection_stat_lines(agg), "")
+        # classify the region with the SAME 12-state engine the per-bucket box uses, then size the
+        # box and place it at whichever selection corner has room (so it never hides off-screen).
+        state, conf, dbg = self._selection_state(filtered, agg["_lo_i"], agg["_hi_i"])
+        self.sel_stats.set_content(self._selection_stat_lines(agg, state, conf, dbg), "")
 
         def to_self(dx, dy):
             sc = self.vb.mapViewToScene(QtCore.QPointF(float(dx), float(dy)))
