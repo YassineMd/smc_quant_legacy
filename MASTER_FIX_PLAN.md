@@ -406,6 +406,35 @@ updates as buckets form.
   kinetic-line trap: observe values first, don't guess). Phase-2 step 1 = use the live selection to
   observe real aggregates across many selections.
 
+**Magic Selection STATE line — region read by the 12-state engine (`02f41fa`).** The selection box now shows
+a **STATE** line (+ the `DBG`/`why` calibration lines) in its READ section, classifying the selected REGION
+with the **SAME `bucket_state` engine the per-bucket hover box uses** — no forked state logic, just an
+adapter. `_synth_bucket` collapses the selected buckets into one synthetic *aggregate bucket* shaped like a
+real bucket dict; `_selection_state` drops it after the **real pre-selection buckets** and calls
+`bucket_state.classify_bucket`, so the classifier's rolling windows (sweep 10, exhaustion 30) read the true
+pre-selection context. A **ONE-bucket selection reduces to the per-bucket classifier EXACTLY** (proven 60/60
+on state + confidence + debug lines) → selection STATE matches hover STATE.
+- *Aggregation honesty*: extensive scalars (volumes, 4-vector, churn, liqs) **SUM**; OHLC = first-open /
+  max-high / min-low / last-close; POC = argmax of the merged ladder. **INTENSIVE per-bucket rates**
+  (`vol_mult`, `buyer_er`/`seller_er`) are the **VOLUME-WEIGHTED MEAN** of the buckets' own values, NOT
+  recomputed from span totals.
+- *The E/R-aggregation fix* (found by **instrumenting real VM data**, not guessed): the first cut recomputed
+  `buyer_er = Σbuy / dispersion(merged_levels)`, which grows **~n× the single-bucket scale** (Σbuy sums;
+  merged dispersion grows sub-linearly) → **saturated the exhaustion z-mults** → collapsed STRONG's
+  `translate` factor to ~0 → trending regions fell to NEUTRAL/ROTATION. (vol_mult was NOT the cause — it
+  aggregated fine.) Volume-weighted-mean E/R keeps it on single-bucket scale, preserves buy/sell asymmetry,
+  reduces to the bucket at n=1. **Proof (real SOL 1m):** clean STRONG BULL **6/6**, clean STRONG BEAR
+  **12/13** now read STRONG (was collapsing); `s_mult` on a saturated region **1.94 → 1.08**.
+- *Semantics*: STATE is a **SPAN** concept (positioning has no per-price split) — the price band refines only
+  FLOW. Genuinely **MIXED spans** (e.g. a bull→bear reversal whose per-bucket deltas flip sign) **correctly**
+  read ROTATION/NEUTRAL — net aggression over a reversing span really is ~0. Clean → STRONG, mixed → ROTATION
+  is honest. *(Optional future tuning: shift the STRONG↔ROTATION boundary for spans — **DEFERRED** until the
+  fixed version is used in anger.)*
+- *Next*: **Problem 2 — adaptive VPIN.** The fixed `0.8/0.85` VPIN threshold (per-bucket + selection) is a
+  magic constant; live engine VPIN reads ~0.28, so it may rarely trigger. Replace with a self-calibrating
+  measure (percentile-in-rolling-window / z-score / median-band) grounded in SOL's real VPIN distribution —
+  same discipline as the bucket-sizing fix. *(Investigate + propose; then the Phase-2 state detectors.)*
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)
