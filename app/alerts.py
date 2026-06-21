@@ -31,7 +31,7 @@ class AudioEngine:
     """Wraps QSoundEffect; silently no-ops if audio is unavailable (spec §7.4.1)."""
 
     def __init__(self):
-        self.armed = False
+        self.armed = True          # Audio Feed ON by default (the menu toggle starts checked to match)
         self._effect = None
         if _HAS_AUDIO:
             import os

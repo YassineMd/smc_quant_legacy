@@ -298,6 +298,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("cob", "Order Book DOM Ladder"),
                            ("audio", "Audio Feed")]:
             cb = QtWidgets.QCheckBox(label)
+            cb.setChecked(key == "audio")    # Audio Feed ON by default (set before connect: no build-time emit)
             cb.toggled.connect(lambda on, k=key: self.subWidgetToggled.emit(k, on))
             self.sub_checks[key] = cb
             self.sub_section.addWidget(cb)
