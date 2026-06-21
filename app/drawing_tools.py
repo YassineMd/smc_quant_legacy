@@ -87,8 +87,12 @@ class DrawnShape(pg.GraphicsObject):
         if len(self.pts) < need:
             self._rect = QtCore.QRectF(); self.prepareGeometryChange(); self.update(); return
         p = QtGui.QPainter(self.picture)
-        pen = QtGui.QPen(QtGui.QColor(self.color)); pen.setCosmetic(True); pen.setWidth(self.width)
-        p.setPen(pen); p.setFont(QtGui.QFont("Consolas", 8))
+        if self.width <= 0:                              # width 0 = NO border (e.g. a filled rect/ellipse)
+            p.setPen(QtCore.Qt.NoPen)
+        else:
+            pen = QtGui.QPen(QtGui.QColor(self.color)); pen.setCosmetic(True); pen.setWidth(self.width)
+            p.setPen(pen)
+        p.setFont(QtGui.QFont("Consolas", 8))
         # interior fill for closed shapes (rect/ellipse); outline-only when opacity is 0
         if self.kind in ("rect", "ellipse") and self.fill_opacity > 0:
             fc = QtGui.QColor(self.fill_color); fc.setAlphaF(self.fill_opacity)
@@ -147,8 +151,8 @@ class _PositionFill(pg.GraphicsObject):
         self.entry, self.stop, self.target = entry, stop, target
         self.picture = QtGui.QPicture()
         p = QtGui.QPainter(self.picture)
-        green = QtGui.QColor(46, 204, 113, 70)
-        red = QtGui.QColor(231, 76, 60, 70)
+        green = QtGui.QColor(46, 204, 113, 26)   # ~10% opacity
+        red = QtGui.QColor(231, 76, 60, 26)      # ~10% opacity
         w = self.x1 - self.x0
         for y_a, y_b, col in ((entry, target, green), (entry, stop, red)):
             top, bot = max(y_a, y_b), min(y_a, y_b)
@@ -364,7 +368,7 @@ class ShapeEditPanel(QtWidgets.QFrame):
         more.clicked.connect(self._pick_color)
         lay.addWidget(more)
         lay.addWidget(QtWidgets.QLabel("W"))
-        self.spin = QtWidgets.QSpinBox(); self.spin.setRange(1, 8)
+        self.spin = QtWidgets.QSpinBox(); self.spin.setRange(0, 8)
         self.spin.valueChanged.connect(self._set_width)
         lay.addWidget(self.spin)
 
@@ -398,10 +402,11 @@ class ShapeEditPanel(QtWidgets.QFrame):
 
     def bind(self, shape: "DrawnShape") -> None:
         self.target = shape
+        fillable = shape.kind in ("rect", "ellipse")     # fill + 0-border only for closed shapes
         self.spin.blockSignals(True)
+        self.spin.setMinimum(0 if fillable else 1)        # rect/ellipse may have NO border (width 0)
         self.spin.setValue(shape.width)
         self.spin.blockSignals(False)
-        fillable = shape.kind in ("rect", "ellipse")     # fill only meaningful for closed shapes
         for w in self.fill_widgets:
             w.setVisible(fillable)
         if fillable:
@@ -692,6 +697,15 @@ class DrawingController(QtCore.QObject):
             except Exception:
                 pass
 
+    def _new_two_point(self, kind: str, pts: list) -> "DrawnShape":
+        """Build a two-point shape with kind-specific defaults. The rectangle tool defaults to a
+        borderless white 10%-opacity fill (a faint highlight box); other shapes use the plain
+        DrawnShape defaults (white border, no fill)."""
+        if kind == "rect":
+            return DrawnShape(kind, pts, color="#ffffff", width=0,
+                              fill_color="#ffffff", fill_opacity=0.1)
+        return DrawnShape(kind, pts)
+
     def _begin_draw(self, x: float, y: float) -> None:
         self._cancel_live()
         self._drag_start = [x, y]
@@ -700,7 +714,7 @@ class DrawingController(QtCore.QObject):
             # translucent rubber-band rect; the real bracket is built on release
             self._live = DrawnShape("rect", [[x, y], [x, y]], color="#888888", width=1)
         elif tool in _SHAPE_TWO_POINT:
-            self._live = DrawnShape(tool, [[x, y], [x, y]])
+            self._live = self._new_two_point(tool, [[x, y], [x, y]])
         else:  # hline / vline
             self._live = DrawnShape(tool, [[x, y]])
         self.plot.addItem(self._live)
@@ -724,7 +738,7 @@ class DrawingController(QtCore.QObject):
         elif tool in ("hline", "vline"):
             self._commit_shape(DrawnShape(tool, [[x0, y0]]))
         else:
-            self._commit_shape(DrawnShape(tool, [[x0, y0], [x1, y1]]))
+            self._commit_shape(self._new_two_point(tool, [[x0, y0], [x1, y1]]))
         self._drag_start = None
         # §7.3 — auto-revert to the cursor tool (programmatic check, no signal loop)
         self.set_tool("select")
