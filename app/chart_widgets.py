@@ -329,6 +329,9 @@ class OrderBlockLayer(pg.GraphicsObject):
 RGB_ABSORB_BUY = (41, 121, 255)     # blue — buyers absorbed (a buy wall held)
 RGB_ABSORB_SELL = (255, 145, 0)     # orange — sellers absorbed (a sell wall held)
 _ABSORB_CAP_H = 0.03                # dead end-cap half-height (price) — a small "died here" tick
+_ABSORB_BAND_ALPHA = 0.08          # faint plo->phi break-range band BEHIND the POC line; additive
+                                    # (overlaps darken ONLY where price-bands cluster = the signal).
+                                    # One-line tune: drop to ~0.05 if 6× fully-overlapping reads muddy.
 
 
 def _absorb_thickness(kappa: float) -> float:
@@ -369,7 +372,9 @@ class AbsorptionLayer(pg.GraphicsObject):
         return self._rect
 
     def update_data_indexed(self, marks: list, x_right: float, ts_to_idx, x_view) -> None:
-        """Index-space LINE render — one horizontal level line per mark; see the class docstring."""
+        """Index-space render — a faint filled break-range band (plo->phi) BEHIND a full-strength
+        POC level line per mark. Two-pass: ALL bands first, then ALL lines, so every line stays
+        crisp no matter how many bands stack behind it. See the class docstring."""
         vx0, vx1 = x_view
         self.picture = QtGui.QPicture()
         if not marks:
@@ -377,7 +382,7 @@ class AbsorptionLayer(pg.GraphicsObject):
             self.prepareGeometryChange(); self.update()
             return
         p = QtGui.QPainter(self.picture)
-        xs, ys, labels = [], [], []
+        xs, ys, labels, line_draws = [], [], [], []
         for m in marks:
             try:
                 bi = ts_to_idx(float(m["birth"]))
@@ -401,6 +406,7 @@ class AbsorptionLayer(pg.GraphicsObject):
             if x1c <= x0c:
                 x1c = x0c + 0.5
             price = float(m.get("price", m.get("plo", 0.0)))   # POC (fallback to plo for pre-redesign marks)
+            plo = float(m.get("plo", price)); phi = float(m.get("phi", price))
             rgb = RGB_ABSORB_BUY if m.get("side") == "BUY" else RGB_ABSORB_SELL
             col = QtGui.QColor(rgb[0], rgb[1], rgb[2])
             kap = float(m.get("kappa", 1.0))
@@ -409,15 +415,24 @@ class AbsorptionLayer(pg.GraphicsObject):
             if not active:
                 line_col.setAlphaF(0.85)                       # dead slightly dimmer; the line ENDING is the death
             pen = QtGui.QPen(line_col); pen.setCosmetic(True); pen.setWidthF(th)
-            p.setPen(pen)
-            p.drawLine(QtCore.QLineF(x0c, price, x1c, price))  # the iceberg = a horizontal LEVEL line at its POC
-            # (Bug-1 fix) NO vertical "died here" end-cap — on a LINE the ending itself IS the death
-            # signal; the line simply stops at the death bucket's right cell-edge.
+            # PASS 1: faint filled break-range band (plo->phi) drawn NOW, BEHIND every line. Additive
+            # (semi-transparent fills blend) -> overlaps darken ONLY where price-bands actually
+            # overlap = the absorption-clustering cue. Skip a zero-range (single-tick) cluster:
+            # point detection draws as just the line, no band.
+            if phi > plo:
+                band = QtGui.QColor(rgb[0], rgb[1], rgb[2])
+                band.setAlphaF(_ABSORB_BAND_ALPHA)
+                p.fillRect(QtCore.QRectF(x0c, plo, x1c - x0c, phi - plo), band)
+            line_draws.append((x0c, x1c, price, pen))          # POC line deferred to PASS 2 (on top)
             usd = float(m.get("absorbed_usd", 0.0))
             dollar = f"${usd / 1e6:.1f}M" if usd >= 1e6 else f"${usd / 1e3:.0f}k"
             txt = f"{dollar} (κ{kap:.1f})" if kap > 0 else dollar
             labels.append((x0c, price, txt, col))
-            xs += [x0c, x1c]; ys += [price]
+            xs += [x0c, x1c]; ys += [price, plo, phi]
+        # PASS 2: every POC line ON TOP of every band, full strength (render unchanged).
+        for (lx0, lx1, lpy, lpen) in line_draws:
+            p.setPen(lpen)
+            p.drawLine(QtCore.QLineF(lx0, lpy, lx1, lpy))       # the iceberg = a horizontal LEVEL line at its POC
         p.end()
         self.label_pool.update(labels)
         if xs:
