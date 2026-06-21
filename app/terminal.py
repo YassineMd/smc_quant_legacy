@@ -348,8 +348,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.scannerChanged.connect(self._set_scanner)
         self.menu.scan_time_changed.connect(self._on_scan_time_changed)
 
-        # Ctrl + mouse-wheel over the chart nudges the Scan Start (Zero Point) anchor ±1 min.
-        # Debounced: rapid notches scrub the title live but coalesce into one chart redraw.
+        # Modifier mouse-wheel over the chart: Ctrl nudges the Scan Start (Zero Point) anchor ±1 min
+        # (debounced — title scrubs live, one coalesced redraw); Shift zooms the X axis only.
         self._orig_vb_wheel = self.vb.wheelEvent
         self.vb.wheelEvent = self._vb_wheel
         self._scan_nudge_timer = QtCore.QTimer(self)
@@ -883,13 +883,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._on_timer()                      # immediate manual redraw
 
     def _vb_wheel(self, ev, axis=None):
-        """Ctrl + wheel -> nudge the Scan Start anchor ±1 min (consumed, no zoom); otherwise hand
-        back to the native zoom. Wrapped so a fault can never break chart zoom."""
+        """Modifier wheel over the chart: Ctrl -> nudge the Scan Start anchor ±1 min (consumed, no
+        zoom); Shift -> zoom the X axis only; otherwise the native zoom. Wrapped so a fault can
+        never break chart zoom."""
         try:
-            if ev.modifiers() & QtCore.Qt.ControlModifier:
+            mods = ev.modifiers()
+            if mods & QtCore.Qt.ControlModifier:
                 self._nudge_scan_start(1 if ev.delta() > 0 else -1)
                 ev.accept()
                 return
+            if mods & QtCore.Qt.ShiftModifier:
+                return self._orig_vb_wheel(ev, axis=0)   # X-axis-only zoom
         except Exception:
             pass
         return self._orig_vb_wheel(ev, axis)
