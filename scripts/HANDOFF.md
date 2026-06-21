@@ -282,6 +282,13 @@ h/v-line = 1; drag live, persist on release, cleared on deselect / tool-switch /
 (4) Rectangle **Expand ◀/▶** buttons — each click grows that side by ~half its width (view-independent),
 handles re-sync. Rendering/UI only, no engine change.
 
+**Title scan-time + Ctrl-wheel anchor nudge — SHIPPED (`7b7d702`).** The window title now appends the
+**Scan Start (Zero Point)** date/time (`· Scan yyyy-MM-dd HH:mm`), rebuilt flicker-free each tick so it
+scrubs live. **Ctrl + mouse-wheel** over the chart nudges that anchor **±1 min** (up=+1, down=−1),
+consumed so it doesn't also zoom (plain wheel still zooms); the menu's Scan Start picker tracks it.
+Debounced (`_scan_nudge_timer`, 90 ms): rapid notches scrub the title live but coalesce into ONE chart
+redraw, so spinning never thrashes the heavy `_on_scan_time_changed` teardown+redraw per notch.
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
