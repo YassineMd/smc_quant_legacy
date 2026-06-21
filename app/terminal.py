@@ -348,6 +348,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.scannerChanged.connect(self._set_scanner)
         self.menu.scan_time_changed.connect(self._on_scan_time_changed)
 
+        # Ctrl + mouse-wheel over the chart nudges the Scan Start (Zero Point) anchor ±1 min.
+        # Debounced: rapid notches scrub the title live but coalesce into one chart redraw.
+        self._orig_vb_wheel = self.vb.wheelEvent
+        self.vb.wheelEvent = self._vb_wheel
+        self._scan_nudge_timer = QtCore.QTimer(self)
+        self._scan_nudge_timer.setSingleShot(True)
+        self._scan_nudge_timer.setInterval(90)
+        self._scan_nudge_timer.timeout.connect(self._on_scan_time_changed)
+
     def _set_scanner(self, mode: str) -> None:
         """Route between the bucket-native modes (Mode 10 canvas + the 9 metric scanners). Order:
         set mode -> teardown -> hide the (dormant) time-scene items + flip the axis to bucket-index.
@@ -847,15 +856,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         Flicker-free: the menu + title re-render only when a rounded label changes."""
         tv = snap.get("target_vol") if snap else None
         cur_sec = config.TF_SECONDS.get(self._tf, 60)
-        if not tv or tv <= 0 or cur_sec <= 0:
-            return                                    # stale (mid tf-switch) -> keep last labels
-        per_min = tv / (cur_sec / 60.0)               # the tf-invariant 1-minute anchor
-        vols = {tf: per_min * (config.TF_SECONDS[tf] / 60.0) for tf in config.TIMEFRAMES}
-        self.menu.update_scale_volumes(vols)
-        label = scale_label(self._tf, vols.get(self._tf, 0.0))
-        if label != self._title_scale:
-            self._title_scale = label
-            self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {label}")
+        if tv and tv > 0 and cur_sec > 0:
+            per_min = tv / (cur_sec / 60.0)           # the tf-invariant 1-minute anchor
+            vols = {tf: per_min * (config.TF_SECONDS[tf] / 60.0) for tf in config.TIMEFRAMES}
+            self.menu.update_scale_volumes(vols)
+            label = scale_label(self._tf, vols.get(self._tf, 0.0))
+        else:
+            label = scale_label(self._tf, 0.0)        # "N× (~--)" until the first data arrives
+        # Title carries the Bucket Scale + the live Scan Start (Zero Point) anchor date/time;
+        # rebuilt only when the combined string changes (flicker-free). Reading the edit each tick
+        # makes the title scrub live as Ctrl+wheel nudges the anchor.
+        scan_dt = self.menu.scan_time_edit.dateTime().toString("yyyy-MM-dd HH:mm")
+        title = f"Order Flow Terminal — {config.SYMBOL} {label} · Scan {scan_dt}"
+        if title != self._title_scale:
+            self._title_scale = title
+            self.setWindowTitle(title)
 
     # ------------------------------------------------------------------
     # Phase 1: bucket pipeline + Zero-Point anchor
@@ -866,6 +881,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scanner_bucket_sig = None       # force a fresh bucket rebuild
         self._scanner_needs_autofit = True    # re-fit once to the new window
         self._on_timer()                      # immediate manual redraw
+
+    def _vb_wheel(self, ev, axis=None):
+        """Ctrl + wheel -> nudge the Scan Start anchor ±1 min (consumed, no zoom); otherwise hand
+        back to the native zoom. Wrapped so a fault can never break chart zoom."""
+        try:
+            if ev.modifiers() & QtCore.Qt.ControlModifier:
+                self._nudge_scan_start(1 if ev.delta() > 0 else -1)
+                ev.accept()
+                return
+        except Exception:
+            pass
+        return self._orig_vb_wheel(ev, axis)
+
+    def _nudge_scan_start(self, minutes: int) -> None:
+        """Shift the Scan Start (Zero Point) by N minutes. The menu's datetime edit is updated with
+        its signal blocked (so the title scrubs live each tick without a synchronous redraw per
+        notch), then one full redraw is debounced for once the wheel burst settles."""
+        edit = self.menu.scan_time_edit
+        edit.blockSignals(True)
+        edit.setDateTime(edit.dateTime().addSecs(minutes * 60))
+        edit.blockSignals(False)
+        self._scan_nudge_timer.start()
 
     def clear_scanner_canvas(self) -> None:
         """Aggressive teardown of all scanner geometry + heavy-mode scene objects.
