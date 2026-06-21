@@ -362,6 +362,38 @@ on state + confidence + debug lines) → selection STATE matches hover STATE.
   measure (percentile-in-rolling-window / z-score / median-band) grounded in SOL's real VPIN distribution —
   same discipline as the bucket-sizing fix. *(Investigate + propose; then the Phase-2 state detectors.)*
 
+**Adaptive VPIN tiering — self-calibrating toxic/warn (`e272b71`).** The fixed **0.85** 'toxic' VPIN line
+was **100% dead** on SOL: instrumented on 800 live 1m buckets, the rolling-50 VPIN **never exceeds ~0.57**
+(p90=0.49), so the crimson tier NEVER fired and the gold 0.50 fired only ~8%. Replaced the magic constant
+with a **rolling-window PERCENTILE** (`app/vpin_adaptive.py`): toxic = VPIN in the top decile of the recent
+distribution, warn = top quartile — toxicity judged **relative to recent conditions**, self-calibrating to
+whatever range SOL's VPIN occupies. **Percentile** chosen (not z-score / median-band) because it's
+shape-agnostic: fits both the tight near-symmetric rolling-50 VPIN and the right-skewed per-bucket/selection
+VPIN with one rule.
+- *ONE shared helper, all FOUR display sites* (so 'toxic' means the same everywhere): Mode-6 VPIN view
+  (bars + tracker + risk line), bucket-canvas VPIN heatmap (brush + risk line), hover readout (HFT-Trap /
+  Accumulation / Normal labels), selection box VPIN (**was ungated → now coloured**). The 3 rolling-50 sites
+  share **identical** cutpoints (same series → byte-identical tiers, verified max abs diff **0.0**); the
+  selection ranks against **same-length windows** (apples-to-apples regardless of size) via the same helper.
+- The static `0.85` `InfiniteLine`s became **LIVE lines at the current toxic cutpoint** (self-adjusting,
+  inside the data range). The heatmap brush is **no longer cached** per closed bucket (render-time now, since
+  cutpoints shift as buckets arrive) — `vbrush` dropped from the `_bucket_row` cache.
+- *Config knobs*: `VPIN_ADAPT_WINDOW=240`, `VPIN_WARN_PCTL=75`, `VPIN_TOXIC_PCTL=90`, `VPIN_ADAPT_MIN=30`
+  (warm-up: < MIN samples → NORMAL, no false toxic). Dead `VPIN_ALERT_BASELINE` removed.
+- **DISPLAY-ONLY**: VPIN does NOT feed the state classifier (`bucket_state.py` has zero `vpin` refs), so this
+  is risk-free for the states. **Verified (real SOL 1m):** toxic now fires **~10%** by construction (was 0%);
+  risk line at p90=**0.52** inside [0.12, 0.57]. This is the **prerequisite** for the Phase-2 VPIN-using
+  states (Whale Wars "low VPIN", any HFT-churn state) to mean "low/high *for the current regime*".
+
+**EXE STALE** — terminal changed across `02f41fa` (STATE line) + `e272b71` (adaptive VPIN); rebuild batched
+AFTER Phase-2 state extensions so we don't rebuild twice.
+
+**Phase 2 — the 4 state extensions (next, on the verified aggregation + adaptive VPIN):** Hidden Bullish
+Accumulation (CVD deeply −, price flat/up, opL dominant), Hidden Bearish Distribution (mirror), Whale Wars /
+Strategic Locking (big opL AND opS + ~0 net price + LOW VPIN-for-regime), Passive Floor/Ceiling Iceberg
+(**only if** it reuses the existing iceberg/absorption marks — drop if it doesn't connect cleanly). Extend
+the ONE classifier (12 + these), thresholds grounded in observed numbers.
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
