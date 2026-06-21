@@ -296,6 +296,47 @@ machine = install gcloud + `gcloud auth login` + accept the VM host key once, th
 
 ---
 
+### SESSION 2026-06-21 — bucket-sizing overhaul + honest scale labels + storage audit
+
+**Median-anchored bucket sizing — SHIPPED + DEPLOYED (`83651f3`).** Proved on real VM data that the old
+variance-maximizing optimizer was DEGENERATE — it hit its `0.5 × avg-vol` search floor ~85% of the time
+(18/19 windows on 1m) and lurched 50–77% chasing volume bursts, while 15m/1h/4h stayed pinned at 5000
+(a flat 2h window never catches ≥10 high-tf candles, ever). Replaced with ONE mechanism anchored on the
+data-rich 1m engine: `target_vol[1m] = BUCKET_MEDIAN_CANDLES × median(in-RAM 1m candle volume)`;
+`target_vol[tf] = target_vol[1m] × (tf_seconds/60)`. Median is burst-immune (1m vol is ~2.04× right-
+skewed — the exact distortion the old mean chased). The window IS `FOOTPRINT_MEM_CAP` (reads only the
+in-RAM footprints dict → can never read pruned data; no new magic constant). All 5 tfs sized atomically
+off one anchor each recompute sweep (`MarketDataCore._resize_engines`, hoisted out of the per-engine
+path); removed `recalibrate` + `optimize_bucket_size` (single call site). `BUCKET_MEDIAN_CANDLES = 1.0`
+knob ("one bucket ≈ one median 1m candle"). Validated within 1–5% of the optimizer where it was
+reliable; **uniform ~2.2 buckets per candle-period on every tf** (vs the old ~852 per 4h period).
+**Deployed live to the VM** — rehydrated 9628 buckets (NO wipe; schema version untouched), 15m/1h/4h off
+the 5k floor with exact ratio integrity off the ~7.7K anchor; eyeballed on the live chart (fat buckets
+at the live edge, by-design seam against the frozen old-size history).
+
+**Honest bucket-scale labels — SHIPPED (`3376ba4`).** The Bucket Scale selector + window title now show
+`N× (~vol)` instead of the dishonest `1m/5m/15m/1h/4h` time labels: `N×` = exact structural multiple
+(`1×/5×/15×/60×/240×`), `~vol` = live per-bucket target at **1 significant figure** (`~8K/~40K/~100K/
+~500K/~2M`) — honest precision matching the drifting median, not false digits. Display-only via the
+`scanner_combo` pattern (`addItem(label, tf_key)` + `currentData()`) → daemon still gets `"1m"`/`"5m"`/…;
+`TIMEFRAMES`/`TF_SECONDS`/`request_timeframe` untouched. All 5 ~vols derive client-side from the one
+anchor the terminal holds (`target_vol[tf] = anchor × tf_seconds/60`), refreshed each tick, flicker-free
+(re-render only on a rounded-value change); `request_timeframe` zeroes `target_vol` so labels skip the
+mid-switch stale value. No daemon change. Verified live (ladder shows, switching loads, title updates,
+no flicker, `×` renders clean).
+
+**Storage-safety audit — NO LANDMINE, nothing to build.** Proved from the code + the live DB that ALL
+daemon tables are bounded: `closed_buckets` IS pruned to `CLOSED_BUCKETS_CAP=10000`/tf every sync
+(persistence `DELETE … id NOT IN (… ORDER BY id DESC LIMIT 10000)`), `footprints` to `FOOTPRINT_CAP=
+10000`/tf, `order_blocks` rewritten each sync, `engine_state` 5 rows, `meta` 1 row; WAL auto-checkpoints
+(default ~4 MB). No separate liquidations/CVD table (embedded in bucket/footprint JSON). Measured
+bytes/row (720 B bucket, 866 B footprint) → **steady-state ceiling ~100–110 MB** (~2% of the 5.3 GB
+free), reached over months then flat forever (`1mo ~60 MB, 6mo ~80 MB`). No reactive disk-full monitor,
+but not needed (caps prevent fill); a write failure is caught + retried (`HISTORY FLUSH ERROR`), never a
+crash. Opposite of the desync: suspected a landmine, the caps were already there.
+
+---
+
 ### Deferred queue — current order (operator's call, 2026-06-19)
 1. ✅ **Time-chart removal — DONE (all phases: A/B/menu/relabel/C/D).** Completed after the absorption
    dive — Mode 10 (`BucketCandleItem`) is the sole candle surface. Full record in the "⚠️ TIME-CHART
