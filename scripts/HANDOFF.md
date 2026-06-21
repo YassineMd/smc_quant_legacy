@@ -311,6 +311,28 @@ the metric scanners (price-anchored shapes are off-axis there) / restores on ret
 `PositionBracket.set_visible` + `DrawingController.set_index_visible`. Drawings now survive scan-time
 changes, Ctrl-wheel nudges, and mode switches.
 
+**Magic Selection tool — Mode-10 region stats, PHASE 1 (`f36ba1a`).** The Mode-10 capstone (phase 1 of
+2). A 🪄 drawing-bar tool: drag a **1px white dashed** rect (no fill) on the bucket canvas → aggregated
+order-flow stats for what's inside. **4-corner resize** (reuses `ShapeHandles`, corners-only); transient
+(not saved); one at a time; cleared on leaving Mode 10; deletable via the **eraser** (click inside) or
+**trash**. **Live**: `_refresh_selection_stats` runs each frame, so a selection reaching the forming edge
+updates as buckets form.
+- *Aggregation* (`_aggregate_selection`): **FLOW** stats are **price-band-filtered from each bucket's
+  `levels` ladder** (truly "in the box": Volume / Sell|Buy / Delta / OI-Δ / CVD / POC-of-selection);
+  **POSITIONING / EFFORT / READ** are **span-level whole-bucket** aggregates (4-vector, liqs, buyer/seller
+  E/R, VEL, VPIN — no per-price data exists for these). **VERIFIED**: the levels invariant
+  (`Σlevels.b == buy_vol`, `Σ(b+s) == curr_vol`, levels-POC == `poc_price`) was proven on real VM buckets
+  FIRST, so a single-bucket full-band selection reproduces that bucket's own scalars to the decimal;
+  two-bucket = per-key sums; the price-band filter is precise.
+- *Stats box*: mirrors the forming-bucket hover box — same `O H L C` header, FLOW/POSITIONING/EFFORT/READ
+  sections, same colours (4-vector **top-2 dominance**, VEL **gold**). Own `StatsOverlay` instance with
+  smart **8-candidate placement** (beside / above / below, corner-aligned) so it stays on-screen + never
+  covers the selection.
+- *Phase 2 (next)*: the **state detectors** — a filtered honest subset (~13 of 35) into the READ section
+  (where STATE goes), thresholds GROUNDED in the real aggregated numbers this tool now surfaces (avoid the
+  kinetic-line trap: observe values first, don't guess). Phase-2 step 1 = use the live selection to
+  observe real aggregates across many selections.
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
