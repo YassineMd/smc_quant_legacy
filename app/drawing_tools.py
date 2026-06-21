@@ -26,15 +26,17 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import config
 
-TOOLS = ["select", "trend", "ray", "hline", "vline", "rect", "ellipse",
+TOOLS = ["select", "magic_select", "trend", "ray", "hline", "vline", "rect", "ellipse",
          "measure", "long", "short", "eraser", "delete_all"]
 _LABELS = {
-    "select": "↖️", "trend": "📏", "ray": "↗️", "hline": "➖", "vline": "｜",
+    "select": "↖️", "magic_select": "🪄", "trend": "📏", "ray": "↗️", "hline": "➖", "vline": "｜",
     "rect": "🔲", "ellipse": "⭕", "measure": "📐", "long": "📈", "short": "📉",
     "eraser": "🧽", "delete_all": "🗑️",
 }
 _TOOLTIPS = {
-    "select": "Select / Edit", "trend": "Trend Line", "ray": "Extended Ray",
+    "select": "Select / Edit",
+    "magic_select": "Magic Selection — box a Mode-10 region for aggregated stats",
+    "trend": "Trend Line", "ray": "Extended Ray",
     "hline": "Horizontal Line", "vline": "Vertical Line", "rect": "Rectangle",
     "ellipse": "Ellipse", "measure": "Measure %", "long": "Long Position",
     "short": "Short Position", "eraser": "Eraser", "delete_all": "Delete All",
@@ -58,7 +60,7 @@ def _rr_color(rr: float) -> str:
 # ---------------------------------------------------------------------------
 class DrawnShape(pg.GraphicsObject):
     def __init__(self, kind: str, pts: List[list], color: str = "#ffffff", width: int = 2,
-                 fill_color: str = "#3498db", fill_opacity: float = 0.0):
+                 fill_color: str = "#3498db", fill_opacity: float = 0.0, dashed: bool = False):
         super().__init__()
         self.kind = kind
         self.pts = [list(p) for p in pts]
@@ -66,6 +68,7 @@ class DrawnShape(pg.GraphicsObject):
         self.width = width
         self.fill_color = fill_color          # rect/ellipse interior fill colour
         self.fill_opacity = fill_opacity      # 0.0 = outline-only (default)
+        self.dashed = dashed                  # dashed border (the Magic-Selection rectangle)
         self.picture = QtGui.QPicture()
         self._rect = QtCore.QRectF()
         self.setAcceptHoverEvents(True)   # pointing-hand cursor on hover (patch §18)
@@ -91,6 +94,8 @@ class DrawnShape(pg.GraphicsObject):
             p.setPen(QtCore.Qt.NoPen)
         else:
             pen = QtGui.QPen(QtGui.QColor(self.color)); pen.setCosmetic(True); pen.setWidth(self.width)
+            if self.dashed:
+                pen.setStyle(QtCore.Qt.DashLine)
             p.setPen(pen)
         p.setFont(QtGui.QFont("Consolas", 8))
         # interior fill for closed shapes (rect/ellipse); outline-only when opacity is 0
@@ -501,9 +506,11 @@ class ShapeHandles(QtCore.QObject):
         self.vb = plot.getViewBox()
         self.shape: Optional[DrawnShape] = None
         self.handles: list = []      # [{"item": TargetItem, "role": str}]
+        self.corners_only = False    # the Magic-Selection rect uses 4 corners only
 
-    def attach(self, shape: "DrawnShape") -> None:
+    def attach(self, shape: "DrawnShape", corners_only: bool = False) -> None:
         self.clear()
+        self.corners_only = corners_only
         self.shape = shape
         for (x, y, role) in self._specs(shape):
             h = pg.TargetItem(pos=(x, y), size=11, symbol="s",
@@ -542,9 +549,11 @@ class ShapeHandles(QtCore.QObject):
         if k == "ellipse":
             return [((x0 + x1) / 2.0, (y0 + y1) / 2.0, "center"), (x1, y1, "corner")]
         if k == "rect":
+            corners = [(x0, y0, "c_tl"), (x1, y0, "c_tr"), (x0, y1, "c_bl"), (x1, y1, "c_br")]
+            if self.corners_only:
+                return corners
             mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
-            return [(x0, y0, "c_tl"), (x1, y0, "c_tr"), (x0, y1, "c_bl"), (x1, y1, "c_br"),
-                    (mx, y0, "e_t"), (mx, y1, "e_b"), (x0, my, "e_l"), (x1, my, "e_r")]
+            return corners + [(mx, y0, "e_t"), (mx, y1, "e_b"), (x0, my, "e_l"), (x1, my, "e_r")]
         return []
 
     def _on_drag(self, item, role: str) -> None:
@@ -604,6 +613,8 @@ class ShapeHandles(QtCore.QObject):
 # Controller
 # ---------------------------------------------------------------------------
 class DrawingController(QtCore.QObject):
+    selectionChanged = QtCore.Signal()   # Magic-Selection rect created / resized / cleared
+
     def __init__(self, plot: pg.PlotWidget):
         super().__init__()
         self.plot = plot
@@ -629,6 +640,10 @@ class DrawingController(QtCore.QObject):
         self.handles = ShapeHandles(plot)   # draggable edit dots on the selected shape
         self.handles.changed.connect(self._save)
         self.edit_panel.changed.connect(self.handles.reposition)  # panel geometry edits re-sync the dots
+        # Magic Selection — a transient dashed rect (NOT in shapes/idx_shapes) with 4 corner handles.
+        self._selection: Optional[DrawnShape] = None
+        self.sel_handles = ShapeHandles(plot)
+        self.sel_handles.changed.connect(self.selectionChanged.emit)   # corner-resize -> recompute stats
 
         # §7.1 — press-drag-release: override the ViewBox drag handler while a tool
         # is armed; the captured original still drives native pan/zoom otherwise.
@@ -716,7 +731,10 @@ class DrawingController(QtCore.QObject):
         self._cancel_live()
         self._drag_start = [x, y]
         tool = self.active_tool
-        if tool in _POSITION_TOOLS:
+        if tool == "magic_select":
+            self.clear_selection()   # a new drag replaces any prior selection
+            self._live = DrawnShape("rect", [[x, y], [x, y]], color="#ffffff", width=1, dashed=True)
+        elif tool in _POSITION_TOOLS:
             # translucent rubber-band rect; the real bracket is built on release
             self._live = DrawnShape("rect", [[x, y], [x, y]], color="#888888", width=1)
         elif tool in _SHAPE_TWO_POINT:
@@ -739,6 +757,13 @@ class DrawingController(QtCore.QObject):
     def _finish_draw(self, x0: float, y0: float, x1: float, y1: float) -> None:
         tool = self.active_tool
         self._cancel_live()   # remove the rubber-band preview
+        if tool == "magic_select":
+            self._set_selection([x0, y0], [x1, y1])
+            self._drag_start = None
+            self.set_tool("select")
+            if self.toolbar is not None:
+                self.toolbar.select_tool("select")
+            return
         if tool in _POSITION_TOOLS:
             self._make_bracket(tool, [x0, y0], [x1, y1])
         elif tool in ("hline", "vline"):
@@ -750,6 +775,34 @@ class DrawingController(QtCore.QObject):
         self.set_tool("select")
         if self.toolbar is not None:
             self.toolbar.select_tool("select")
+
+    # ------------------------------------------------------------------
+    # Magic Selection (Mode 10) — a transient dashed rect for region stats
+    # ------------------------------------------------------------------
+    def _set_selection(self, a: list, b: list) -> None:
+        self.clear_selection()
+        if abs(b[0] - a[0]) < 1e-9 or abs(b[1] - a[1]) < 1e-9:
+            return   # zero-area drag -> ignore
+        self._selection = DrawnShape("rect", [a, b], color="#ffffff", width=1, dashed=True)
+        self._selection.setZValue(85)
+        self.plot.addItem(self._selection)
+        self.sel_handles.attach(self._selection, corners_only=True)
+        self.selectionChanged.emit()
+
+    def clear_selection(self) -> None:
+        self.sel_handles.clear()
+        if self._selection is not None:
+            self.plot.removeItem(self._selection)
+            self._selection = None
+            self.selectionChanged.emit()
+
+    def selection_rect(self) -> "Optional[tuple]":
+        """(x0, y0, x1, y1) of the active Magic Selection in DATA coords (x = bucket index, y =
+        price), normalized so x0<=x1 and y0<=y1; None if no selection is active."""
+        if self._selection is None or len(self._selection.pts) < 2:
+            return None
+        (ax, ay), (bx, by) = self._selection.pts[0], self._selection.pts[1]
+        return (min(ax, bx), min(ay, by), max(ax, bx), max(ay, by))
 
     # ------------------------------------------------------------------
     def _make_bracket(self, kind, a, b, entry=None, stop=None, target=None) -> PositionBracket:
@@ -798,6 +851,9 @@ class DrawingController(QtCore.QObject):
         self.handles.clear()
 
     def _erase_at(self, x, y) -> None:
+        sr = self.selection_rect()   # eraser inside the Magic Selection box -> remove it
+        if sr is not None and sr[0] <= x <= sr[2] and sr[1] <= y <= sr[3]:
+            self.clear_selection()
         (x0, x1), (y0, y1) = self.vb.viewRange()
         tol_x = (x1 - x0) * 0.01
         tol_y = (y1 - y0) * 0.01
@@ -820,6 +876,7 @@ class DrawingController(QtCore.QObject):
         self.shapes.clear(); self.brackets.clear()
         self._idx_shapes.clear(); self._idx_brackets.clear()
         self.handles.clear()
+        self.clear_selection()   # the trash tool wipes the Magic Selection too
         self._cancel_live()
         self._save()
 

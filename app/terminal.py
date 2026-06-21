@@ -261,10 +261,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         # --- floating overlays (top-level children) ---
         self.stats = StatsOverlay(self)
+        self.sel_stats = StatsOverlay(self)   # Magic-Selection aggregated-stats box (its own instance)
         self.alerts = AlertsLedger(self)
         self.drawbar = DrawingToolbar(self)
         self.menu = FloatingOverlayMenu(self)
         self.stats.keep_under = self.menu   # stats overlay stays below an open menu (z-order)
+        self.sel_stats.keep_under = self.menu
         self.menu_btn = HamburgerButton(self)
         self.menu_btn.clicked.connect(self.menu.toggle_panel)
         self.menu.toggle_button = self.menu_btn   # so the menu's outside-click filter ignores this btn
@@ -296,6 +298,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.drawer = DrawingController(self.plot)
         self.drawer.toolbar = self.drawbar         # §7.3 — enables auto-revert
         self.drawbar.toolSelected.connect(self.drawer.set_tool)
+        self.drawer.selectionChanged.connect(self._refresh_selection_stats)   # Magic Selection -> stats
         QtGui.QShortcut(QtGui.QKeySequence("V"), self, activated=self.drawer.cancel)
         # quick toggles: 's' = Stats Box overlay, 'd' = Vector Drawing toolbar. Flip the menu
         # checkbox so the menu stays in sync and the existing show/hide + teardown logic runs.
@@ -373,6 +376,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.drawer.set_index_visible(True)
         elif prev_mode == "bucket_canvas":
             self.drawer.set_index_visible(False)
+            self.drawer.clear_selection()   # the transient Magic Selection is Mode-10-only
 
         self.axis_bottom.set_scanner_active(True)
         # §6.2 — drawing is LOCKED on every scanner mode EXCEPT bucket_canvas, where it's
@@ -666,6 +670,172 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._hover_scanner(pt.x(), pos)
         self._hover_dom_wall(pt.x(), pt.y())   # live-update the hovered wall's volume as the book pulses
 
+    # ------------------------------------------------------------------
+    # Magic Selection (Mode 10) — aggregate the buckets inside the box
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _aggregate_selection(filtered: list, x0: float, y0: float, x1: float, y1: float,
+                             target_vol: float) -> dict:
+        """Aggregate every selection stat from the buckets inside the box. FLOW stats are
+        price-band-filtered from each bucket's ``levels`` (truly 'in the box'); positioning / liq /
+        flow-rate stats are SPAN-level (bucket scalars have no per-price split, so they aggregate the
+        whole buckets in the x-span). Buckets selected by centre index in [x0, x1]. {} if empty."""
+        n_all = len(filtered)
+        lo_i = max(0, int(math.ceil(x0)))
+        hi_i = min(n_all - 1, int(math.floor(x1)))
+        if hi_i < lo_i:
+            return {}
+        sel = filtered[lo_i:hi_i + 1]
+        band_lo, band_hi = (y0, y1) if y0 <= y1 else (y1, y0)
+
+        # FLOW — price-band-filtered from each bucket's levels ladder
+        buy = sell = 0.0
+        poc_map: dict = {}
+        for b in sel:
+            for ps, lv in (b.get("levels", {}) or {}).items():
+                try:
+                    p = float(ps)
+                except (ValueError, TypeError):
+                    continue
+                if band_lo <= p <= band_hi:
+                    bb = float(lv.get("b", 0.0)); ss = float(lv.get("s", 0.0))
+                    buy += bb; sell += ss
+                    poc_map[p] = poc_map.get(p, 0.0) + bb + ss
+        vol = buy + sell
+        delta = buy - sell
+        poc = max(poc_map, key=poc_map.get) if poc_map else None
+
+        # SPAN — whole buckets in the x-span (no per-price data for these scalars)
+        def S(k): return sum(float(b.get(k, 0.0)) for b in sel)
+        opL, opS, clL, clS = S("opL"), S("opS"), S("clL"), S("clS")
+        full_buy, full_sell, full_vol = S("buy_vol"), S("sell_vol"), S("curr_vol")
+        dur = sum(max(0.0, float(b.get("end_time", 0.0)) - float(b.get("start_time", 0.0))) for b in sel)
+        imb = sum(abs(float(b.get("buy_vol", 0.0)) - float(b.get("sell_vol", 0.0))) for b in sel)
+        ticks = sum(max(1.0, abs(float(b.get("high", 0.0)) - float(b.get("low", 0.0))) / config.TICK_SIZE)
+                    for b in sel)
+        highs = [float(b.get("high", 0.0)) for b in sel if b.get("high")]
+        lows = [float(b.get("low", 0.0)) for b in sel if b.get("low")]
+        return {
+            "vol": vol, "buy": buy, "sell": sell, "delta": delta,
+            "delta_pct": (delta / vol * 100.0) if vol else 0.0, "poc": poc,
+            "opL": opL, "opS": opS, "clL": clL, "clS": clS, "oi_delta": (opL + opS) - (clL + clS),
+            "liq_short": S("liq_short"), "liq_long": S("liq_long"),
+            "cvd": full_buy - full_sell,
+            "vel": (full_vol / dur) if dur > 0 else 0.0,
+            "vpin": (imb / (len(sel) * target_vol)) if (target_vol and sel) else 0.0,
+            "buyer_er": (full_buy / ticks) if ticks else 0.0,
+            "seller_er": (full_sell / ticks) if ticks else 0.0,
+            "n": len(sel),
+            "t_span": max(0.0, float(sel[-1].get("end_time", 0.0)) - float(sel[0].get("start_time", 0.0))),
+            "band_lo": band_lo, "band_hi": band_hi,
+            "open": float(sel[0].get("open", 0.0)), "close": float(sel[-1].get("close", 0.0)),
+            "high": max(highs) if highs else 0.0, "low": min(lows) if lows else 0.0,
+            "price_range": (max(highs) - min(lows)) if (highs and lows) else 0.0,
+            "displacement": float(sel[-1].get("close", 0.0)) - float(sel[0].get("open", 0.0)),
+        }
+
+    def _selection_stat_lines(self, d: dict) -> "list[str]":
+        """Format the aggregate into the StatsOverlay box, mirroring the forming-bucket readout's
+        structure (O H L C header + FLOW / POSITIONING / EFFORT / READ sections, same line formats
+        and colours). Section tags note the honesty split: FLOW = price-filtered (in the box);
+        POSITIONING / EFFORT / READ = whole buckets in the x-span."""
+        K = self._fmt_k
+        PD = config.PRICE_DECIMALS
+        g, r, gold, blu, pu, gray = "#2ecc71", "#e74c3c", "#f1c40f", "#3498db", "#9b59b6", "#9aa0aa"
+        cyan, mag = "#00e5ff", "#ff4dff"
+        def span(t, c): return f"<span style='color:{c}'>{t}</span>"
+        def sep(t): return f"<span style='color:#5a6170;font-size:9px;letter-spacing:2px'>{t}</span>"
+        def pf(v): return f"{v:.{PD}f}"
+        def sk(v): return ("+" if v >= 0 else "-") + K(abs(v))
+        o, h, l, c = d["open"], d["high"], d["low"], d["close"]
+        poc = pf(d["poc"]) if d.get("poc") is not None else "--"
+        dl = sk(d["delta"]) + f" ({d['delta_pct']:+.0f}%)"
+        vel, vpin = f"{d['vel']:.0f}/s", f"{d['vpin']:.2f}"
+        ber, ser = f"{d['buyer_er']:.1f}", f"{d['seller_er']:.1f}"
+        nb = f"{d['n']} buckets · {d['t_span']:.0f}s"
+        cc = g if c >= o else r
+        # 4-vector: colour ONLY the two dominant vectors (the ones that drove the span); the other
+        # two render dim; a zero vector never lights up — exactly as the forming-bucket box does.
+        vmag = {"opL": d["opL"], "opS": d["opS"], "clS": d["clS"], "clL": d["clL"]}
+        vclr = {"opL": g, "opS": r, "clS": blu, "clL": pu}
+        top2 = set(sorted(vmag, key=lambda k: vmag[k], reverse=True)[:2])
+        def vc(name): return vclr[name] if (name in top2 and vmag[name] > 0) else gray
+        return [
+            f"O {pf(o)}  H {pf(h)}  L {pf(l)}  {span('C ' + pf(c), cc)}",
+            f"{nb}   {span('POC ' + poc, gold)}",
+            f"Band {span(pf(d['band_lo']) + '–' + pf(d['band_hi']), gold)}",
+            sep("FLOW · IN BOX"),
+            f"Volume {K(d['vol'])}",
+            f"{span('Sell ' + K(d['sell']), r)} | {span('Buy ' + K(d['buy']), g)}",
+            f"Delta {span(dl, g if d['delta'] >= 0 else r)}",
+            f"OI Δ {span(sk(d['oi_delta']), g if d['oi_delta'] >= 0 else r)}",
+            f"CVD {span(sk(d['cvd']), g if d['cvd'] >= 0 else r)}",
+            sep("POSITIONING · SPAN"),
+            f"{span('OpL ' + K(d['opL']), vc('opL'))} | {span('OpS ' + K(d['opS']), vc('opS'))}",
+            f"{span('ClS ' + K(d['clS']), vc('clS'))} | {span('ClL ' + K(d['clL']), vc('clL'))}",
+            f"{span('LiqSh ' + K(d['liq_short']), cyan)} | {span('LiqLn ' + K(d['liq_long']), mag)}",
+            sep("EFFORT · SPAN"),
+            span("Buyer E/R " + ber, g),
+            span("Seller E/R " + ser, r),
+            sep("READ · SPAN"),
+            f"VEL {span(vel, gold)}   VPIN {span(vpin, gold)}",
+        ]
+
+    def _refresh_selection_stats(self) -> None:
+        """Live Magic-Selection readout: aggregate the buckets inside the box + show the stats box.
+        Runs each frame, so a selection reaching the live edge updates as buckets form."""
+        rect = self.drawer.selection_rect()
+        if rect is None or self.scanner_mode != "bucket_canvas":
+            self.sel_stats.hide()
+            return
+        filtered, _x, _a = self._build_scanner_buckets()
+        if not filtered:
+            self.sel_stats.hide()
+            return
+        x0, y0, x1, y1 = rect
+        tv = (self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL
+        agg = self._aggregate_selection(filtered, x0, y0, x1, y1, tv)
+        if not agg:
+            self.sel_stats.hide()
+            return
+        # size the box first, then place it at whichever selection corner has room (so it never
+        # gets hidden off-screen as you pan/zoom).
+        self.sel_stats.set_content(self._selection_stat_lines(agg), "")
+
+        def to_self(dx, dy):
+            sc = self.vb.mapViewToScene(QtCore.QPointF(float(dx), float(dy)))
+            return self.mapFromGlobal(self.plot.mapToGlobal(self.plot.mapFromScene(sc)))
+        p1, p2 = to_self(x0, y1), to_self(x1, y0)   # the selection's screen-space rect
+        sx0, sx1 = min(p1.x(), p2.x()), max(p1.x(), p2.x())
+        sy0, sy1 = min(p1.y(), p2.y()), max(p1.y(), p2.y())
+        bx, by = self._best_box_pos(sx0, sy0, sx1, sy1,
+                                    self.sel_stats.width(), self.sel_stats.height())
+        self.sel_stats.move(bx, by)
+        self.sel_stats.show_raise()
+
+    def _best_box_pos(self, sx0: float, sy0: float, sx1: float, sy1: float, bw: int, bh: int):
+        """Place the stats box on whichever side of the selection has room, so it stays visible as
+        the chart moves. Candidates sit just OUTSIDE the box: beside it (right/left, corner-aligned)
+        OR above/below it (top/bottom, corner-aligned) — 8 options around all four corners. First
+        that fully fits the window wins; if none fits, clamp the first candidate into view."""
+        m = 8
+        W, H = self.width(), self.height()
+        cands = [
+            (sx1 + m, sy0),            # right, top-aligned
+            (sx0 - bw - m, sy0),       # left, top-aligned
+            (sx1 + m, sy1 - bh),       # right, bottom-aligned
+            (sx0 - bw - m, sy1 - bh),  # left, bottom-aligned
+            (sx0, sy1 + m),            # below, left-aligned
+            (sx1 - bw, sy1 + m),       # below, right-aligned
+            (sx0, sy0 - bh - m),       # above, left-aligned
+            (sx1 - bw, sy0 - bh - m),  # above, right-aligned
+        ]
+        for bx, by in cands:
+            if bx >= 0 and by >= 0 and bx + bw <= W and by + bh <= H:
+                return int(bx), int(by)
+        bx, by = cands[0]
+        return int(max(0, min(bx, W - bw))), int(max(0, min(by, H - bh)))
+
     def _hover_dom_wall(self, cursor_x: float, price: float) -> None:
         """Mode-10 DOM hover: show the nearest depth wall's volume as color-matched text
         (green=bid / red=ask). Only on bucket_canvas with m10_dom on (the walls aren't drawn
@@ -835,6 +1005,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._update_m10_dom(snap)
         self._redock_trackers()
         self._refresh_parked_hover()
+        self._refresh_selection_stats()   # live Magic-Selection aggregate
 
     _TF_SPOKEN = {"1m": "1 minute", "5m": "5 minute", "15m": "15 minute",
                   "1h": "1 hour", "4h": "4 hour"}

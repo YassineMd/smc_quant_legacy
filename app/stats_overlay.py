@@ -212,16 +212,26 @@ class StatsOverlay(QtWidgets.QLabel):
         self.keep_under: Optional[QtWidgets.QWidget] = None
         self.hide()
 
-    def show_stats(self, lines: List[str], verdict: str, x: int, y: int) -> None:
+    def set_content(self, lines: List[str], verdict: str) -> None:
+        """Render the lines (+ optional verdict) and size the box; the caller positions it."""
         body = "<br>".join(lines)
-        vcol = _verdict_color(verdict)
-        html = (f"<div style='font-family:Consolas;font-size:11px'>{body}"
-                f"<hr style='border:0;border-top:1px solid #2a2e39'>"
-                f"<b style='color:{vcol}'>{verdict}</b></div>")
+        if verdict:
+            vcol = _verdict_color(verdict)
+            html = (f"<div style='font-family:Consolas;font-size:11px'>{body}"
+                    f"<hr style='border:0;border-top:1px solid #2a2e39'>"
+                    f"<b style='color:{vcol}'>{verdict}</b></div>")
+        else:
+            html = f"<div style='font-family:Consolas;font-size:11px'>{body}</div>"
         self.setText(html)
         self.adjustSize()
-        self.move(x + 16, y + 16)
+
+    def show_raise(self) -> None:
         self.show()
         self.raise_()
         if self.keep_under is not None and self.keep_under.isVisible():
             self.stackUnder(self.keep_under)   # stay below the open hamburger menu
+
+    def show_stats(self, lines: List[str], verdict: str, x: int, y: int) -> None:
+        self.set_content(lines, verdict)
+        self.move(x + 16, y + 16)
+        self.show_raise()
