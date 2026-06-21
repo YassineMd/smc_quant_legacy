@@ -361,6 +361,8 @@ scrubs live. **Ctrl + mouse-wheel** over the chart nudges that anchor **±1 min*
 consumed so it doesn't also zoom (plain wheel still zooms); the menu's Scan Start picker tracks it.
 Debounced (`_scan_nudge_timer`, 90 ms): rapid notches scrub the title live but coalesce into ONE chart
 redraw, so spinning never thrashes the heavy `_on_scan_time_changed` teardown+redraw per notch.
+**Shift + wheel zooms the X axis only** (`2fda524`) — `_vb_wheel` routes Shift to the native
+`wheelEvent(axis=0)`; plain wheel still zooms both axes.
 
 ---
 
