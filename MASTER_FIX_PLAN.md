@@ -372,6 +372,10 @@ arms + the menu toggle starts checked (set before its connect); the silent-seed 
 startup backlog flood. (`b6e39ee`) **Per-mode Scan Start window** — `_set_scanner` anchors **Mode 10 at
 24h** and every **metric scanner at 1h** (signal-blocked so the switch redraw uses the new anchor).
 
+**Depth Wall Min default 50% → 90% (`ccff906`).** `_calibrate_depth_slider`'s one-shot default now
+shows only walls ≥ **90%** of the largest current resting wall (just the dominant ones). Slider stays
+absolute-SOL + draggable; a manual drag still overrides.
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)
