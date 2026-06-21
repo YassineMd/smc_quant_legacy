@@ -262,6 +262,15 @@ free), reached over months then flat forever (`1mo ~60 MB, 6mo ~80 MB`). No reac
 but not needed (caps prevent fill); a write failure is caught + retried (`HISTORY FLUSH ERROR`), never a
 crash. Opposite of the desync: suspected a landmine, the caps were already there.
 
+**Iceberg break-range band — SHIPPED (`ee9711c`).** The absorption POC line now has a faint filled
+`plo→phi` band behind it (the break boundary the engine already tracks for death-by-close-through),
+side-colored at **additive 8% alpha** (`_ABSORB_BAND_ALPHA`). Two-pass render (ALL bands first, then ALL
+POC lines on top → lines stay crisp however many bands stack); overlaps darken ONLY where price-bands
+cluster (the "whales stacking here" cue, self-limited to real overlap, not global mush). Single-tick
+clusters (`phi <= plo`) skip the band → line only (pinpoint vs zone defense — a free signal).
+Rendering-only — `plo/phi` already ride every mark through the protocol, no engine change. Eyeballed
+clean with multiple stacked icebergs.
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
