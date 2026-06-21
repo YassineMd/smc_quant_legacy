@@ -364,6 +364,14 @@ redraw, so spinning never thrashes the heavy `_on_scan_time_changed` teardown+re
 **Shift + wheel zooms the X axis only** (`2fda524`) — `_vb_wheel` routes Shift to the native
 `wheelEvent(axis=0)`; plain wheel still zooms both axes.
 
+**Drawing polish + audio default + per-mode scan window — SHIPPED.** (`626a300`) drawing tools: **W=0**
+gives rect/ellipse NO border (`rebuild` uses `Qt.NoPen`; Qt's width-0 draws a 1px hairline — lines stay
+min 1); the **rectangle tool defaults** to a borderless white **10% fill**; the Long/Short risk/reward
+zones drop to **~10% opacity** (alpha 70→26). (`24acc25`) **Audio Feed ON by default** — `AudioEngine`
+arms + the menu toggle starts checked (set before its connect); the silent-seed still prevents a
+startup backlog flood. (`b6e39ee`) **Per-mode Scan Start window** — `_set_scanner` anchors **Mode 10 at
+24h** and every **metric scanner at 1h** (signal-blocked so the switch redraw uses the new anchor).
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)
