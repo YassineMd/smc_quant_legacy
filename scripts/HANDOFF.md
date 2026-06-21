@@ -406,6 +406,25 @@ instrumented on real SOL data; ALL FOUR fail the grounding-with-discrimination g
   **PROPOSED, not built** — gathers instances 24/7; revisit at ~20–50 distinct events/pattern to ground +
   prove discrimination, then build only the winners.
 
+**CHOP/ROTATION/NEUTRAL audit — catch-alls are CORRECT; states are DESCRIPTIVE, not PREDICTIVE (no code change).**
+Read-only instrumentation on 3600 real VM 1m buckets, BOTH per-bucket and selection. Verdict: the classifier is
+sound as a flow descriptor — **do NOT loosen the catch-alls** (don't re-litigate without new evidence).
+- *Catch-all rate*: 72% per-bucket (NEUTRAL 33.7% / CHOP 20.7% / ROTATION 17.6%), STRONG 16%. High but correct —
+  OI-confirmed conviction is genuinely rare.
+- *The "misses"*: 31% of catch-all buckets (799) had a decisive directional bar (body≥.5 & |delta|≥.10 &
+  range≥.8 ATR) called no-edge. Gated **83.7% by `freshOI`** (no OI confirmation): per-bucket OI is structurally
+  sparse — 32% of buckets have ~zero 4-vector, 56% below the `opL/vol ≥ 0.10` floor (median oi_build STRONG 0.288
+  vs catch-all 0.047). **NOT a bug**: the selection E/R-saturation fix's `translate` factor gates only **0.1%**
+  per-bucket; `freshOI` is correctly scaled.
+- *DECISIVE test — forward returns*: the 799 "missed" moves continue **~50%** (K=1/3/5 = 47/50/49%), IDENTICAL to
+  STRONG (49/52/49%); selection L=12 agrees (STRONG 51% / catch-all+move 52%). So the misses are **not tradeable**
+  — loosening `freshOI` would add 799 coin-flip signals (the worse "cry-trade-on-noise" failure).
+- *KEY FINDING*: the states are **descriptive of current flow, not predictive of the next move** on 1m SOL — even
+  STRONG forward-wins only 49–54% (coin flip). Read labels as "what's happening now," not "what happens next."
+- *Two parked caveats*: (1) this is ONE ~few-day regime — re-run on a trending stretch could differ; (2)
+  **BEAR TRAP** showed 70% forward win at K=5 (n=60) — the one possibly-predictive thread, parked for later.
+- **Classifier UNCHANGED** — confirmed working as a flow descriptor.
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
