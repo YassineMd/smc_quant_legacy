@@ -29,7 +29,7 @@ from typing import List, Optional
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import bucket_state, config
+from . import bucket_state, config, vpin_adaptive
 from .alerts import AlertsLedger
 from .chart_widgets import (
     AbsorptionLayer, BucketCandleItem, LocalTimeAxis, OrderBlockLayer, PriceAxis,
@@ -124,6 +124,13 @@ def _exhaustion_mults(buckets: list, i: int) -> "tuple[float, float, float]":
     r_oi = delta_oi / max(1.0, b.get("curr_vol", 0.0))
     oi_mult = math.exp(-EXH_OI_K * math.tanh(r_oi / EXH_OI_SCALE))
     return b_mult, s_mult, oi_mult
+
+
+# Adaptive-VPIN tier -> display colour. Shared by EVERY VPIN site (Mode 6 bars, bucket-canvas
+# heatmap, hover label, selection box) so 'toxic'/'warn' read identically everywhere. Bars/heatmap
+# use the charcoal 'normal'; text surfaces (hover/selection) swap in a lighter gray below.
+_VPIN_TIER_HEX = {vpin_adaptive.TOXIC: "#ff073a", vpin_adaptive.WARN: "#f1c40f",
+                  vpin_adaptive.NORMAL: "#555555"}
 
 
 class MinimalTerminalWindow(QtWidgets.QMainWindow):
@@ -805,7 +812,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         dbg = bucket_state.render_debug_lines(seq, idx, bm, sm)
         return state, conf, dbg
 
-    def _selection_stat_lines(self, d: dict, state=None, conf=None, dbg=None) -> "list[str]":
+    def _selection_stat_lines(self, d: dict, state=None, conf=None, dbg=None,
+                              vpin_tier_=None) -> "list[str]":
         """Format the aggregate into the StatsOverlay box, mirroring the forming-bucket readout's
         structure (O H L C header + FLOW / POSITIONING / EFFORT / READ sections, same line formats
         and colours). Section tags note the honesty split: FLOW = price-filtered (in the box);
@@ -849,7 +857,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             span("Buyer E/R " + ber, g),
             span("Seller E/R " + ser, r),
             sep("READ · SPAN"),
-            f"VEL {span(vel, gold)}   VPIN {span(vpin, gold)}",
+            # VPIN coloured by the ADAPTIVE tier (same percentile mechanism as the other VPIN
+            # sites, ranked vs same-length windows): toxic=crimson, warn=gold, normal=gray.
+            f"VEL {span(vel, gold)}   "
+            f"VPIN {span(vpin, {vpin_adaptive.TOXIC: r, vpin_adaptive.WARN: gold}.get(vpin_tier_, gray))}",
         ]
         # STATE — the same 12-state classifier the per-bucket hover box uses, run on the region,
         # followed by the same calibration debug lines (top-3 states + winner factor breakdown).
@@ -879,7 +890,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # classify the region with the SAME 12-state engine the per-bucket box uses, then size the
         # box and place it at whichever selection corner has room (so it never hides off-screen).
         state, conf, dbg = self._selection_state(filtered, agg["_lo_i"], agg["_hi_i"])
-        self.sel_stats.set_content(self._selection_stat_lines(agg, state, conf, dbg), "")
+        # adaptive VPIN tier for the selection — ranked against same-length windows over the recent
+        # baseline (apples-to-apples regardless of selection size), via the shared percentile helper.
+        n_sel = agg["_hi_i"] - agg["_lo_i"] + 1
+        v_warn, v_toxic = vpin_adaptive.vpin_cutpoints(
+            vpin_adaptive.window_vpin_samples(filtered[-config.VPIN_ADAPT_WINDOW:], n_sel, tv))
+        vtier = vpin_adaptive.vpin_tier(agg["vpin"], v_warn, v_toxic)
+        self.sel_stats.set_content(
+            self._selection_stat_lines(agg, state, conf, dbg, vtier), "")
 
         def to_self(dx, dy):
             sc = self.vb.mapViewToScene(QtCore.QPointF(float(dx), float(dy)))
@@ -1056,12 +1074,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             ti = sum(abs(x.get("buy_vol", 0.0) - x.get("sell_vol", 0.0)) for x in window)
             tv = sum(x.get("curr_vol", 0.0) for x in window)
             v = ti / tv if tv > 0 else 0.0
-            if v >= 0.85:
-                cls, col = "HFT Liquidity Trap", r
-            elif v >= 0.50:
-                cls, col = "Institutional Accumulation", gold
-            else:
-                cls, col = "Normal Balancing", gray
+            # adaptive tiers — SAME percentile mechanism + same rolling-50 series as Mode 6, so
+            # the hovered bucket's label agrees with the bar/heatmap colour at that bucket.
+            warn_cut, toxic_cut = vpin_adaptive.vpin_cutpoints(
+                vpin_adaptive.rolling_vpin(buckets)[-config.VPIN_ADAPT_WINDOW:])
+            cls, col = {
+                vpin_adaptive.TOXIC: ("HFT Liquidity Trap", r),
+                vpin_adaptive.WARN: ("Institutional Accumulation", gold),
+                vpin_adaptive.NORMAL: ("Normal Balancing", gray),
+            }[vpin_adaptive.vpin_tier(v, warn_cut, toxic_cut)]
             return [f"Imbalance {K(ti)} | VPIN {v:.2f}", span(cls, col)]
         if mode == "effort_result":
             ber, ser = b.get("buyer_er", 0.0), b.get("seller_er", 0.0)
@@ -1753,39 +1774,41 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             f"Sell {self._fmt_k(sVol_arr[-1])}<br>({sVol_arr[-1] / tot * 100:.0f}%)", xr, "down")
 
     def _scan_vpin(self, buckets: list, x: list) -> None:
-        """Mode 6 — true rolling N=50 VPIN, color-shifting bars + 0.85 risk line."""
-        vpin_arr = []
-        n = len(buckets)
-        for i in range(n):
-            window = buckets[max(0, i - 49): i + 1]
-            total_imbalance = sum(abs(b.get("buy_vol", 0.0) - b.get("sell_vol", 0.0))
-                                  for b in window)
-            total_volume = sum(b.get("curr_vol", 0.0) for b in window)
-            vpin_arr.append(total_imbalance / total_volume if total_volume > 0 else 0.0)
-
-        brushes = []
-        for v in vpin_arr:
-            if v >= 0.85:
-                brushes.append(pg.mkBrush("#ff073a"))    # toxic crimson
-            elif v >= 0.50:
-                brushes.append(pg.mkBrush("#f1c40f"))    # warning gold
-            else:
-                brushes.append(pg.mkBrush("#555555"))    # muted charcoal
+        """Mode 6 — true rolling N=50 VPIN, bars + risk line keyed to the ADAPTIVE percentile
+        tiers (the dead fixed 0.85 line is gone; the line now sits at the live toxic cutpoint)."""
+        vpin_arr = vpin_adaptive.rolling_vpin(buckets)
+        warn_cut, toxic_cut = vpin_adaptive.vpin_cutpoints(vpin_arr[-config.VPIN_ADAPT_WINDOW:])
+        _br = {t: pg.mkBrush(h) for t, h in _VPIN_TIER_HEX.items()}
+        brushes = [_br[vpin_adaptive.vpin_tier(v, warn_cut, toxic_cut)] for v in vpin_arr]
 
         if "vpin" not in self._scan_handles:
             self._scan_handles["vpin"] = self._add_scanner_item(
                 pg.BarGraphItem(x=x, height=vpin_arr, width=0.8, brushes=brushes, pen=None))
             self._scan_handles["vpin_line"] = self._add_scanner_item(
-                pg.InfiniteLine(pos=0.85, angle=0,
+                pg.InfiniteLine(pos=0.0, angle=0,
                                 pen=pg.mkPen("#ff073a", style=QtCore.Qt.DashLine, width=2)))
         else:
             self._scan_handles["vpin"].setOpts(x=x, height=vpin_arr, width=0.8,
                                                brushes=brushes, pen=None)
+        self._set_vpin_line("vpin_line", toxic_cut)
         self._fit_scanner_y(len(x), clamp=(0.0, 1.05))
         v = vpin_arr[-1]
-        col = "#ff073a" if v >= 0.85 else ("#f1c40f" if v >= 0.50 else "#999999")
+        tier = vpin_adaptive.vpin_tier(v, warn_cut, toxic_cut)
+        col = {vpin_adaptive.TOXIC: "#ff073a", vpin_adaptive.WARN: "#f1c40f"}.get(tier, "#999999")
         self._scanner_tracker("t_vpin", v, col, f"VPIN {v:.2f}<br>({v * 100:.0f}%)",
                               x[-1], "mid")
+
+    def _set_vpin_line(self, handle_key: str, toxic_cut) -> None:
+        """Position the adaptive VPIN risk line at the live toxic cutpoint (or hide it during
+        warm-up when there aren't enough samples for a percentile)."""
+        line = self._scan_handles.get(handle_key)
+        if line is None:
+            return
+        if toxic_cut is None:
+            line.setVisible(False)
+        else:
+            line.setPos(toxic_cut)
+            line.setVisible(True)
 
     def _scan_effort_result(self, buckets: list, x: list) -> None:
         """Mode 9 — mirrored friction: buyer E/R up (green), seller E/R down (red)."""
@@ -2242,15 +2265,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # ``fold_prev`` is the prior bucket's baseline scalar (None for i == 0 = seed).
         poc = b.get("poc_price", 0.0)
         baseline = poc if fold_prev is None else (poc * 0.05 + fold_prev * 0.95)
-        # trailing-50 VPIN -> heatmap brush
+        # trailing-50 VPIN VALUE only — the heatmap brush is assigned at RENDER time from the
+        # adaptive percentile cutpoints (which shift as buckets arrive), so it must NOT be cached
+        # here per closed bucket or it would go stale.
         ti = tv = 0.0
         for bb in buckets[max(0, i - 49): i + 1]:
             ti += abs(bb.get("buy_vol", 0.0) - bb.get("sell_vol", 0.0))
             tv += bb.get("curr_vol", 0.0)
         vpin = ti / tv if tv > 0 else 0.0
-        vbrush = (pg.mkBrush("#ff073a") if vpin >= 0.85
-                  else pg.mkBrush("#f1c40f") if vpin >= 0.50
-                  else pg.mkBrush("#555555"))
         # wick + body-border pen — colored by FLOW dominance (buy_vol vs sell_vol): green when buy
         # leads, red when sell leads, gray when even; >50% lead (1.5x) -> NEON (green 0,255,127 /
         # red 255,7,58) + a touch thicker (0.7 vs 0.3). DIVERGENCE override (absorbed flow, the
@@ -2277,12 +2299,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         wick_pen = pg.mkPen(_wc, width=_w); wick_pen.setCosmetic(True)
         row = (b.get("open", 0.0), b.get("high", 0.0), b.get("low", 0.0),
                b.get("close", 0.0), poc, brush,
-               baseline, vpin, vbrush, wick_pen)
+               baseline, vpin, wick_pen)
         return row, baseline
 
-    # The 10 parallel render arrays, in row-tuple order (see _bucket_row).
+    # The parallel render arrays, in row-tuple order (see _bucket_row). vbrush is NOT here:
+    # the VPIN heatmap brush is render-time (adaptive percentile), recomputed each frame.
     _M10_ARR_KEYS = ("opens", "highs", "lows", "closes", "pocs", "brushes",
-                     "baseline", "vpin", "vbrush", "pens")
+                     "baseline", "vpin", "pens")
 
     def _compute_bucket_arrays(self, buckets: list, anchor_unix: float) -> dict:
         """Static closed-bucket compute cache (#3): return the 10 per-bucket render
@@ -2341,7 +2364,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         opens, highs, lows, closes = arr["opens"], arr["highs"], arr["lows"], arr["closes"]
         pocs, brushes = arr["pocs"], arr["brushes"]
         baseline_arr = arr["baseline"]
-        vpin_arr, vbrushes = arr["vpin"], arr["vbrush"]
+        vpin_arr = arr["vpin"]
+        # adaptive VPIN heatmap brushes (same percentile mechanism as Mode 6 / hover / selection)
+        v_warn, v_toxic = vpin_adaptive.vpin_cutpoints(vpin_arr[-config.VPIN_ADAPT_WINDOW:])
+        _vbr = {t: pg.mkBrush(h) for t, h in _VPIN_TIER_HEX.items()}
+        vbrushes = [_vbr[vpin_adaptive.vpin_tier(v, v_warn, v_toxic)] for v in vpin_arr]
         wick_pens = arr["pens"]   # per-candle flow-colored wick/border pens
 
         # Viewport (hoisted): drives the candle viewport cull (Edit below) AND the footprint
@@ -2467,18 +2494,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._scan_handles["bc_liq"].setVisible(True)
             self._scan_handles["bc_liq"].setData(spots)
 
-        # --- lower pane: VPIN heatmap + 0.85 risk line (live on lower_plot) ---
+        # --- lower pane: VPIN heatmap + ADAPTIVE risk line (live toxic cutpoint) on lower_plot ---
         if "bc_vpin" not in self._scan_handles:
             self._scan_handles["bc_vpin"] = pg.BarGraphItem(
                 x=x, height=vpin_arr, width=0.8, brushes=vbrushes, pen=None)
             self.lower_plot.addItem(self._scan_handles["bc_vpin"])
-            line = pg.InfiniteLine(pos=0.85, angle=0,
+            line = pg.InfiniteLine(pos=0.0, angle=0,
                                    pen=pg.mkPen("#ff073a", style=QtCore.Qt.DashLine, width=2))
             self.lower_plot.addItem(line)
             self._scan_handles["bc_vpin_line"] = line
         else:
             self._scan_handles["bc_vpin"].setOpts(x=x, height=vpin_arr, width=0.8,
                                                   brushes=vbrushes, pen=None)
+        self._set_vpin_line("bc_vpin_line", v_toxic)
 
         # --- view-follow (replaces the one-shot fit). A mode/tf/Zero-Point re-arm
         # (_scanner_needs_autofit) re-locks BOTH axes + drops us on the live edge, consuming

@@ -44,7 +44,14 @@ EXPANSION_MAX_TICKS = 100       # hard spatial expansion limit per direction
 # VPIN — spec §3.4 mandates this; legacy main.py ships vel_ratio instead.
 # DECISION: keep vel_ratio (OB engine depends on it) AND add VPIN alongside.
 VPIN_WINDOW = 50                # N=50 normalized micro-buckets (spec §3.4.1)
-VPIN_ALERT_BASELINE = 0.85      # 85% institutional alert line (spec §10.2.3)
+# Adaptive VPIN tiering (app.vpin_adaptive) — replaces the dead fixed 0.85 'toxic' line.
+# 'toxic'/'warn' are PERCENTILES of the recent VPIN distribution, so they self-calibrate to
+# SOL's real range (the rolling-50 VPIN never exceeds ~0.57 live, so a fixed 0.85 never fired).
+# Shared by every VPIN display site so 'toxic' means the same thing everywhere.
+VPIN_ADAPT_WINDOW = 240         # rolling baseline: percentiles taken over the last N buckets
+VPIN_WARN_PCTL = 75             # VPIN >= this pct of the recent window -> WARN (gold)
+VPIN_TOXIC_PCTL = 90            # VPIN >= this pct -> TOXIC (crimson); ~top-decile by construction
+VPIN_ADAPT_MIN = 30             # need >= this many samples before adaptive tiers engage (else NORMAL)
 
 # ---------------------------------------------------------------------------
 # Phase 5 — OI pending-balance attributor (aggTrade; app.aggtrade.OiAttributor)
