@@ -344,6 +344,17 @@ clusters (`phi <= plo`) skip the band → line only (pinpoint vs zone defense �
 Rendering-only — `plo/phi` already ride every mark through the protocol, no engine change. Eyeballed
 clean with multiple stacked icebergs.
 
+**Drawing tools — fill + white default + edit handles + rect expand — SHIPPED (`330924d`).** (1) Rect/
+ellipse interior FILL (`fill_color` + `fill_opacity` on `DrawnShape`, brush when opacity>0; Fill presets
++ opacity slider in the edit panel, rect/ellipse only; default 0 = outline-only). (2) Default border
+colour → **white `#ffffff`** — visible on the dark `#141414` canvas (the old `#000000` was near-invisible);
+saved shapes keep their stored colour, `PositionBracket` untouched. (3) Selection **HANDLES**
+(`ShapeHandles`, `pg.TargetItem` dots): click a shape with the select tool to resize/move — rect = 4
+corners + 4 edge-mids, ellipse = center (move) + corner (resize), trend/ray/measure = 2 endpoints,
+h/v-line = 1; drag live, persist on release, cleared on deselect / tool-switch / erase / teardown.
+(4) Rectangle **Expand ◀/▶** buttons — each click grows that side by ~half its width (view-independent),
+handles re-sync. Rendering/UI only, no engine change.
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)
