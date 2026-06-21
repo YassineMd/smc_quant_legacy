@@ -376,6 +376,14 @@ startup backlog flood. (`b6e39ee`) **Per-mode Scan Start window** — `_set_scan
 shows only walls ≥ **90%** of the largest current resting wall (just the dominant ones). Slider stays
 absolute-SOL + draggable; a manual drag still overrides.
 
+**Mode-10 drawings persist across scan-time changes + mode switches (`da25329`).** `flush_index_drawings`
+lived in `clear_scanner_canvas` (runs on EVERY scan-time change AND mode switch), so changing the time or
+switching scanners wiped all Mode-10 drawings. Now they're kept in memory for the whole session: the
+flush is removed from `clear_scanner_canvas`; `_set_scanner` **shows** them on Mode 10 / **hides** them on
+the metric scanners (price-anchored shapes are off-axis there) / restores on return. New helpers
+`PositionBracket.set_visible` + `DrawingController.set_index_visible`. Drawings now survive scan-time
+changes, Ctrl-wheel nudges, and mode switches.
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)
