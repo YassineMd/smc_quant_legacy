@@ -125,6 +125,7 @@ class PipeClientWorker(threading.Thread):
             self.liquidations = []
             self.closed_buckets = []
             self.active_bucket = {}
+            self.target_vol = 0.0   # stale until the new tf's catch-up arrives (scale labels skip till then)
             self._cb_ver += 1   # invalidate COW caches on the tf-switch clear
             self._ob_ver += 1
         with self._send_lock:

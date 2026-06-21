@@ -37,7 +37,7 @@ from .chart_widgets import (
 from .cob_panel import CobPanel
 from .drawing_tools import DrawingController, DrawingToolbar
 from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visible
-from .hamburger import FloatingOverlayMenu, HamburgerButton
+from .hamburger import FloatingOverlayMenu, HamburgerButton, scale_label
 from .pipe_client import PipeClientWorker
 from .stats_overlay import StatsOverlay
 
@@ -129,7 +129,8 @@ def _exhaustion_mults(buckets: list, i: int) -> "tuple[float, float, float]":
 class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def __init__(self, tf: str = config.DEFAULT_TF):
         super().__init__()
-        self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {tf}")
+        self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {config.TF_SECONDS.get(tf, 60) // 60}×")
+        self._title_scale = None   # last-rendered title scale portion (flicker-free updates)
         self.resize(1280, 760)
 
         self._sig_candles = None
@@ -385,7 +386,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._tf = tf
         self._audio_seeded = False        # new tf -> re-seed; don't read out its backlog
         self._announced_obs = set(); self._announced_icebergs = set()
-        self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {tf}")
+        self._title_scale = None   # force the title to re-render with this tf's ~vol next tick
+        self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {config.TF_SECONDS.get(tf, 60) // 60}×")
         self._sig_candles = self._sig_obs = self._sig_fp = None
         self._autoranged = False
         self._scanner_needs_autofit = True    # new tf -> refit the scanner once
@@ -799,6 +801,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         snap = self.worker.snapshot()
         self._last_snap = snap
         self._audio_announce(snap)
+        self._refresh_scale_labels(snap)
 
         # Every mode is bucket-native now (time chart removed, Phase B): draw the scanner, refresh
         # Mode-10 DOM (ungated, bucket_canvas-only — depth pulses independently of the sig-gated
@@ -836,6 +839,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._announced_icebergs.add(mid)
                 side = "Buy" if m.get("side") == "BUY" else "Sell"
                 self.alerts.audio.speak(f"{scale} {side} Iceberg")
+
+    def _refresh_scale_labels(self, snap) -> None:
+        """Push live per-tf bucket ~volumes into the Bucket Scale selector + window title. All
+        five derive from the single anchor the terminal holds (the current tf's target_vol, since
+        target_vol[tf] = anchor * tf_seconds/60), so one number sizes the whole honest ladder.
+        Flicker-free: the menu + title re-render only when a rounded label changes."""
+        tv = snap.get("target_vol") if snap else None
+        cur_sec = config.TF_SECONDS.get(self._tf, 60)
+        if not tv or tv <= 0 or cur_sec <= 0:
+            return                                    # stale (mid tf-switch) -> keep last labels
+        per_min = tv / (cur_sec / 60.0)               # the tf-invariant 1-minute anchor
+        vols = {tf: per_min * (config.TF_SECONDS[tf] / 60.0) for tf in config.TIMEFRAMES}
+        self.menu.update_scale_volumes(vols)
+        label = scale_label(self._tf, vols.get(self._tf, 0.0))
+        if label != self._title_scale:
+            self._title_scale = label
+            self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {label}")
 
     # ------------------------------------------------------------------
     # Phase 1: bucket pipeline + Zero-Point anchor

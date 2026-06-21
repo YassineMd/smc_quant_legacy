@@ -10,9 +10,32 @@ no Quant Sniper panel, no "Copy AI Data" export.
 
 from __future__ import annotations
 
+import math
+
 from PySide6 import QtCore, QtWidgets
 
 from . import config
+
+
+def _fmt_vol_1sig(v: float) -> str:
+    """Volume at 1 significant figure with a K/M suffix — honest precision for the drifting
+    median anchor (e.g. 8030 -> '~8K', 1_927_291 -> '~2M'). '~--' before data arrives."""
+    if not v or v <= 0:
+        return "~--"
+    mag = math.floor(math.log10(v))
+    r = round(v / 10 ** mag) * 10 ** mag
+    if r >= 1e6:
+        return f"~{r / 1e6:g}M"
+    if r >= 1e3:
+        return f"~{r / 1e3:g}K"
+    return f"~{int(r)}"
+
+
+def scale_label(tf: str, vol: float) -> str:
+    """Bucket-scale display label 'N× (~vol)': N× is the exact structural multiple
+    (tf_seconds / 60), ~vol the live 1-sig-fig magnitude the sizing produces."""
+    nx = config.TF_SECONDS.get(tf, 60) // 60
+    return f"{nx}× ({_fmt_vol_1sig(vol)})"
 
 _BTN_QSS = """
 QPushButton {
@@ -182,6 +205,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.layer_checks: dict[str, QtWidgets.QCheckBox] = {}
         self.sub_checks: dict[str, QtWidgets.QCheckBox] = {}
         self.toggle_button: QtWidgets.QWidget | None = None   # set by the window: the [☰] that opens us
+        self._scale_labels: dict[str, str] = {}   # last-rendered "N× (~vol)" per tf (flicker-free)
         self._build()
 
     # ------------------------------------------------------------------
@@ -216,12 +240,17 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         # showing poisoned persisted state). The tf is the stable, honest INPUT (the flow window). ---
         root.addWidget(self._header("Bucket Scale"))
         self.tf_combo = QtWidgets.QComboBox()
-        self.tf_combo.addItems(config.TIMEFRAMES)
-        self.tf_combo.setCurrentText(config.DEFAULT_TF)
+        # Honest scale ladder: DISPLAY "N× (~vol)" (the volume multiple the sizing produces), but
+        # keep the tf string as the item KEY (userData) and emit currentData() — so the daemon
+        # still receives "1m"/"5m"/... unchanged. Mirrors the scanner_combo pattern below.
+        for tf in config.TIMEFRAMES:
+            self.tf_combo.addItem(scale_label(tf, 0.0), tf)
+        self.tf_combo.setCurrentIndex(0)   # 1m = the 1× base scale
         self.tf_combo.setToolTip(
-            "Selects which order-flow window sizes the volume buckets — the buckets drawn on the "
-            "chart show the actual scale. (Bucket scales, not time candles.)")
-        self.tf_combo.currentTextChanged.connect(self.tfChanged.emit)
+            "Volume-bucket scale. N× is the structural multiple of the 1× (1-minute) base; the "
+            "~volume is the live target per bucket. (Bucket scales, not time candles.)")
+        self.tf_combo.currentIndexChanged.connect(
+            lambda _i: self.tfChanged.emit(self.tf_combo.currentData()))
         root.addWidget(self.tf_combo)
 
         # --- order-flow scanner mode (patch §12) ---
@@ -298,6 +327,17 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     def _emit_chart_filter(self, val: int) -> None:
         self.chart_label.setText(f"Depth Wall Min: {val}")
         self.chartFilterChanged.emit(val)
+
+    def update_scale_volumes(self, vols: dict) -> None:
+        """Refresh the Bucket Scale ~volumes from the live sizing. Flicker-free: re-render an
+        item only when its rounded 'N× (~vol)' string actually changes (the 1-sig-fig median
+        shifts a handful of times a day). Display-only — never touches the item key (userData)."""
+        for i in range(self.tf_combo.count()):
+            tf = self.tf_combo.itemData(i)
+            new = scale_label(tf, vols.get(tf, 0.0))
+            if self._scale_labels.get(tf) != new:
+                self._scale_labels[tf] = new
+                self.tf_combo.setItemText(i, new)
 
     # ------------------------------------------------------------------
     def layer_state(self, key: str) -> bool:
