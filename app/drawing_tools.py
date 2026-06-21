@@ -41,7 +41,7 @@ _TOOLTIPS = {
 }
 _SHAPE_TWO_POINT = {"trend", "ray", "rect", "ellipse", "measure"}
 _POSITION_TOOLS = {"long", "short"}
-_PRESET_COLORS = ["#000000", "#2962ff", "#e74c3c", "#1abc9c", "#f1c40f", "#9b59b6", "#ff7f0e"]
+_PRESET_COLORS = ["#ffffff", "#000000", "#2962ff", "#e74c3c", "#1abc9c", "#f1c40f", "#9b59b6", "#ff7f0e"]
 _DRAW_FILE = os.path.join(config.DATA_DIR, "drawings.json")
 
 
@@ -57,12 +57,15 @@ def _rr_color(rr: float) -> str:
 # Static vector shapes (QPicture-backed)
 # ---------------------------------------------------------------------------
 class DrawnShape(pg.GraphicsObject):
-    def __init__(self, kind: str, pts: List[list], color: str = "#000000", width: int = 2):
+    def __init__(self, kind: str, pts: List[list], color: str = "#ffffff", width: int = 2,
+                 fill_color: str = "#3498db", fill_opacity: float = 0.0):
         super().__init__()
         self.kind = kind
         self.pts = [list(p) for p in pts]
         self.color = color
         self.width = width
+        self.fill_color = fill_color          # rect/ellipse interior fill colour
+        self.fill_opacity = fill_opacity      # 0.0 = outline-only (default)
         self.picture = QtGui.QPicture()
         self._rect = QtCore.QRectF()
         self.setAcceptHoverEvents(True)   # pointing-hand cursor on hover (patch §18)
@@ -75,7 +78,8 @@ class DrawnShape(pg.GraphicsObject):
         self.unsetCursor()
 
     def to_dict(self) -> dict:
-        return {"kind": self.kind, "pts": self.pts, "color": self.color, "width": self.width}
+        return {"kind": self.kind, "pts": self.pts, "color": self.color, "width": self.width,
+                "fill_color": self.fill_color, "fill_opacity": self.fill_opacity}
 
     def rebuild(self) -> None:
         self.picture = QtGui.QPicture()
@@ -85,6 +89,12 @@ class DrawnShape(pg.GraphicsObject):
         p = QtGui.QPainter(self.picture)
         pen = QtGui.QPen(QtGui.QColor(self.color)); pen.setCosmetic(True); pen.setWidth(self.width)
         p.setPen(pen); p.setFont(QtGui.QFont("Consolas", 8))
+        # interior fill for closed shapes (rect/ellipse); outline-only when opacity is 0
+        if self.kind in ("rect", "ellipse") and self.fill_opacity > 0:
+            fc = QtGui.QColor(self.fill_color); fc.setAlphaF(self.fill_opacity)
+            p.setBrush(fc)
+        else:
+            p.setBrush(QtCore.Qt.NoBrush)
         x0, y0 = self.pts[0]
         if self.kind == "hline":
             p.drawLine(QtCore.QPointF(x0 - 1e7, y0), QtCore.QPointF(x0 + 1e7, y0))
@@ -357,6 +367,33 @@ class ShapeEditPanel(QtWidgets.QFrame):
         self.spin = QtWidgets.QSpinBox(); self.spin.setRange(1, 8)
         self.spin.valueChanged.connect(self._set_width)
         lay.addWidget(self.spin)
+
+        # Fill controls — shown ONLY for rect/ellipse (see bind()): colour presets + opacity slider.
+        self.fill_widgets: list = []
+        fl = QtWidgets.QLabel("Fill"); lay.addWidget(fl); self.fill_widgets.append(fl)
+        for hexc in _PRESET_COLORS:
+            sw = QtWidgets.QPushButton(); sw.setFixedSize(16, 16)
+            sw.setStyleSheet(f"background:{hexc};border:1px solid #888;")
+            sw.setCursor(QtCore.Qt.PointingHandCursor)
+            sw.clicked.connect(lambda _=False, c=hexc: self._set_fill_color(c))
+            lay.addWidget(sw); self.fill_widgets.append(sw)
+        fm = QtWidgets.QPushButton("…"); fm.setCursor(QtCore.Qt.PointingHandCursor)
+        fm.clicked.connect(self._pick_fill_color); lay.addWidget(fm); self.fill_widgets.append(fm)
+        ol = QtWidgets.QLabel("Op"); lay.addWidget(ol); self.fill_widgets.append(ol)
+        self.op_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.op_slider.setRange(0, 100); self.op_slider.setFixedWidth(64)
+        self.op_slider.valueChanged.connect(self._set_fill_opacity)
+        lay.addWidget(self.op_slider); self.fill_widgets.append(self.op_slider)
+
+        # Rectangle-only: step-wider buttons (each click grows that side by ~half the width).
+        self.rect_widgets: list = []
+        xl = QtWidgets.QLabel("Exp"); lay.addWidget(xl); self.rect_widgets.append(xl)
+        exl = QtWidgets.QPushButton("◀"); exl.setToolTip("Expand left (wider by half)")
+        exl.setCursor(QtCore.Qt.PointingHandCursor); exl.clicked.connect(lambda: self._expand("left"))
+        lay.addWidget(exl); self.rect_widgets.append(exl)
+        exr = QtWidgets.QPushButton("▶"); exr.setToolTip("Expand right (wider by half)")
+        exr.setCursor(QtCore.Qt.PointingHandCursor); exr.clicked.connect(lambda: self._expand("right"))
+        lay.addWidget(exr); self.rect_widgets.append(exr)
         self.adjustSize()
 
     def bind(self, shape: "DrawnShape") -> None:
@@ -364,6 +401,16 @@ class ShapeEditPanel(QtWidgets.QFrame):
         self.spin.blockSignals(True)
         self.spin.setValue(shape.width)
         self.spin.blockSignals(False)
+        fillable = shape.kind in ("rect", "ellipse")     # fill only meaningful for closed shapes
+        for w in self.fill_widgets:
+            w.setVisible(fillable)
+        if fillable:
+            self.op_slider.blockSignals(True)
+            self.op_slider.setValue(int(shape.fill_opacity * 100))
+            self.op_slider.blockSignals(False)
+        for w in self.rect_widgets:
+            w.setVisible(shape.kind == "rect")
+        self.adjustSize()
         self.show(); self.raise_()
 
     def _set_color(self, hexc: str) -> None:
@@ -384,6 +431,162 @@ class ShapeEditPanel(QtWidgets.QFrame):
             self.target.width = w
             self.target.rebuild()
             self.changed.emit()
+
+    def _set_fill_color(self, hexc: str) -> None:
+        if self.target is not None:
+            self.target.fill_color = hexc
+            if self.target.fill_opacity <= 0:        # picking a fill at 0 opacity -> nudge to visible
+                self.target.fill_opacity = 0.2
+                self.op_slider.blockSignals(True); self.op_slider.setValue(20); self.op_slider.blockSignals(False)
+            self.target.rebuild()
+            self.changed.emit()
+
+    def _pick_fill_color(self) -> None:
+        if self.target is None:
+            return
+        col = QtWidgets.QColorDialog.getColor(QtGui.QColor(self.target.fill_color), self)
+        if col.isValid():
+            self._set_fill_color(col.name())
+
+    def _set_fill_opacity(self, v: int) -> None:
+        if self.target is not None:
+            self.target.fill_opacity = v / 100.0
+            self.target.rebuild()
+            self.changed.emit()
+
+    def _expand(self, direction: str) -> None:
+        """Grow the selected rectangle by ~half its current width on one side (view-independent)."""
+        s = self.target
+        if s is None or s.kind != "rect" or len(s.pts) < 2:
+            return
+        x0, x1 = s.pts[0][0], s.pts[1][0]
+        step = abs(x1 - x0) * 0.5
+        if step <= 0:
+            return
+        if direction == "right":                 # push the larger-x edge further right
+            if x1 >= x0: s.pts[1][0] = x1 + step
+            else:        s.pts[0][0] = x0 + step
+        else:                                     # "left": push the smaller-x edge further left
+            if x0 <= x1: s.pts[0][0] = x0 - step
+            else:        s.pts[1][0] = x1 - step
+        s.rebuild()
+        self.changed.emit()
+
+
+# ---------------------------------------------------------------------------
+# Edit handles — draggable dots that resize/move the selected shape
+# ---------------------------------------------------------------------------
+class ShapeHandles(QtCore.QObject):
+    """Draggable dot handles for the selected :class:`DrawnShape`. Per kind:
+    rect -> 4 corners + 4 edge-midpoints (corners = diagonal resize, edges = one side);
+    ellipse -> center (move) + corner (resize); trend/ray/measure -> 2 endpoints;
+    h/v-line -> 1 position handle. Drag updates the shape live; persists on release."""
+
+    changed = QtCore.Signal()   # emitted on drag-release -> controller persists
+
+    def __init__(self, plot: pg.PlotWidget):
+        super().__init__()
+        self.plot = plot
+        self.vb = plot.getViewBox()
+        self.shape: Optional[DrawnShape] = None
+        self.handles: list = []      # [{"item": TargetItem, "role": str}]
+
+    def attach(self, shape: "DrawnShape") -> None:
+        self.clear()
+        self.shape = shape
+        for (x, y, role) in self._specs(shape):
+            h = pg.TargetItem(pos=(x, y), size=11, symbol="s",
+                              pen=pg.mkPen("#ffffff", width=1.0),
+                              brush=pg.mkBrush("#3498db"), movable=True)
+            h.setZValue(90)
+            h.sigPositionChanged.connect(lambda _h=h, r=role: self._on_drag(_h, r))
+            h.sigPositionChangeFinished.connect(self._on_finish)
+            self.plot.addItem(h)
+            self.handles.append({"item": h, "role": role})
+
+    def clear(self) -> None:
+        for hd in self.handles:
+            try:
+                self.plot.removeItem(hd["item"])
+            except Exception:
+                pass
+        self.handles = []
+        self.shape = None
+
+    # ------------------------------------------------------------------
+    def _specs(self, s: "DrawnShape") -> list:
+        """[(x, y, role), ...] — the shape's key edit points in data coords."""
+        k = s.kind
+        if k == "hline":
+            (vx0, vx1), _ = self.vb.viewRange()
+            return [((vx0 + vx1) / 2.0, s.pts[0][1], "hline")]
+        if k == "vline":
+            _, (vy0, vy1) = self.vb.viewRange()
+            return [(s.pts[0][0], (vy0 + vy1) / 2.0, "vline")]
+        if len(s.pts) < 2:
+            return []
+        (x0, y0), (x1, y1) = s.pts[0], s.pts[1]
+        if k in ("trend", "ray", "measure"):
+            return [(x0, y0, "p0"), (x1, y1, "p1")]
+        if k == "ellipse":
+            return [((x0 + x1) / 2.0, (y0 + y1) / 2.0, "center"), (x1, y1, "corner")]
+        if k == "rect":
+            mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+            return [(x0, y0, "c_tl"), (x1, y0, "c_tr"), (x0, y1, "c_bl"), (x1, y1, "c_br"),
+                    (mx, y0, "e_t"), (mx, y1, "e_b"), (x0, my, "e_l"), (x1, my, "e_r")]
+        return []
+
+    def _on_drag(self, item, role: str) -> None:
+        s = self.shape
+        if s is None:
+            return
+        nx, ny = item.pos().x(), item.pos().y()
+        if role == "hline":
+            s.pts[0][1] = ny
+        elif role == "vline":
+            s.pts[0][0] = nx
+        elif role == "p0":
+            s.pts[0] = [nx, ny]
+        elif role == "p1":
+            s.pts[1] = [nx, ny]
+        elif role == "corner":                       # ellipse resize (bottom-right)
+            s.pts[1] = [nx, ny]
+        elif role == "center":                       # ellipse move = translate both points
+            ox = (s.pts[0][0] + s.pts[1][0]) / 2.0; oy = (s.pts[0][1] + s.pts[1][1]) / 2.0
+            dx, dy = nx - ox, ny - oy
+            s.pts[0][0] += dx; s.pts[0][1] += dy; s.pts[1][0] += dx; s.pts[1][1] += dy
+        elif role == "c_tl": s.pts[0][0] = nx; s.pts[0][1] = ny
+        elif role == "c_tr": s.pts[1][0] = nx; s.pts[0][1] = ny
+        elif role == "c_bl": s.pts[0][0] = nx; s.pts[1][1] = ny
+        elif role == "c_br": s.pts[1][0] = nx; s.pts[1][1] = ny
+        elif role == "e_t": s.pts[0][1] = ny         # top edge
+        elif role == "e_b": s.pts[1][1] = ny         # bottom edge
+        elif role == "e_l": s.pts[0][0] = nx         # left edge
+        elif role == "e_r": s.pts[1][0] = nx         # right edge
+        s.rebuild()
+        self._reposition(exclude=item)               # keep the OTHER handles glued to the new geometry
+
+    def _on_finish(self, *args) -> None:
+        self._reposition(exclude=None)               # snap the dragged (edge) handle back onto the shape
+        self.changed.emit()                          # -> controller _save (persist on release)
+
+    def _reposition(self, exclude) -> None:
+        if self.shape is None:
+            return
+        by_role = {role: (x, y) for (x, y, role) in self._specs(self.shape)}
+        for hd in self.handles:
+            if hd["item"] is exclude:
+                continue
+            pos = by_role.get(hd["role"])
+            if pos is not None:
+                hd["item"].blockSignals(True)
+                hd["item"].setPos(QtCore.QPointF(pos[0], pos[1]))
+                hd["item"].blockSignals(False)
+
+    def reposition(self) -> None:
+        """Re-sync every handle to the shape's current geometry (after a panel-driven edit
+        like Expand changes the rect without going through a handle drag)."""
+        self._reposition(exclude=None)
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +615,9 @@ class DrawingController(QtCore.QObject):
 
         self.edit_panel = ShapeEditPanel(plot.window())
         self.edit_panel.changed.connect(self._save)
+        self.handles = ShapeHandles(plot)   # draggable edit dots on the selected shape
+        self.handles.changed.connect(self._save)
+        self.edit_panel.changed.connect(self.handles.reposition)  # panel geometry edits re-sync the dots
 
         # §7.1 — press-drag-release: override the ViewBox drag handler while a tool
         # is armed; the captured original still drives native pan/zoom otherwise.
@@ -433,6 +639,9 @@ class DrawingController(QtCore.QObject):
             self.clear_all(); return
         self.active_tool = tool
         self._cancel_live()
+        self.handles.clear()              # changing tool -> drop any edit handles
+        if tool != "select":
+            self.edit_panel.hide()
         # No setMouseEnabled toggling: _vb_drag gates by active_tool and delegates
         # to the native handler (pan/zoom) for None / select / eraser.
 
@@ -440,6 +649,7 @@ class DrawingController(QtCore.QObject):
         self.set_tool(None)
         self._cancel_live()
         self.edit_panel.hide()
+        self.handles.clear()
 
     # ------------------------------------------------------------------
     def _on_click(self, ev) -> None:
@@ -562,8 +772,10 @@ class DrawingController(QtCore.QObject):
         for s in reversed(self.shapes + self._idx_shapes):   # topmost first
             if s.near(x, y, tol_x, tol_y):
                 self.edit_panel.bind(s)
+                self.handles.attach(s)        # show draggable edit handles on the picked shape
                 return
         self.edit_panel.hide()   # clicked empty space
+        self.handles.clear()
 
     def _erase_at(self, x, y) -> None:
         (x0, x1), (y0, y1) = self.vb.viewRange()
@@ -577,6 +789,7 @@ class DrawingController(QtCore.QObject):
             for br in list(store):
                 if br.near(x, y, tol_x, tol_y):
                     br.remove(); store.remove(br)
+        self.handles.clear()   # a selected shape may have been erased -> drop its handles
         self._save()
 
     def clear_all(self) -> None:
@@ -586,6 +799,7 @@ class DrawingController(QtCore.QObject):
             br.remove()
         self.shapes.clear(); self.brackets.clear()
         self._idx_shapes.clear(); self._idx_brackets.clear()
+        self.handles.clear()
         self._cancel_live()
         self._save()
 
@@ -601,6 +815,7 @@ class DrawingController(QtCore.QObject):
             br.remove()
         self._idx_shapes.clear()
         self._idx_brackets.clear()
+        self.handles.clear()   # a selected Mode-10 index shape may be going away
         self._cancel_live()
 
     # ------------------------------------------------------------------
@@ -629,7 +844,8 @@ class DrawingController(QtCore.QObject):
         entry = data.get(config.SYMBOL, {})
         shapes = entry.get("shapes", entry) if isinstance(entry, dict) else entry  # back-compat
         for d in (shapes or []):
-            shape = DrawnShape(d["kind"], d["pts"], d.get("color", "#000000"), d.get("width", 2))
+            shape = DrawnShape(d["kind"], d["pts"], d.get("color", "#ffffff"), d.get("width", 2),
+                               d.get("fill_color", "#3498db"), d.get("fill_opacity", 0.0))
             self.shapes.append(shape)
             self.plot.addItem(shape)
         for d in (entry.get("brackets", []) if isinstance(entry, dict) else []):
