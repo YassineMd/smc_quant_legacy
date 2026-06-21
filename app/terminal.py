@@ -379,6 +379,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scanner_needs_autofit = True       # one-shot fit for the new mode
         self._scanner_bucket_sig = None
         self._last_scanner_sig = None
+        # Mode-appropriate Scan Start window: Mode 10 (candle canvas) keeps the 24h anchor; the metric
+        # scanners default to a tighter 1h window. Signal blocked so the _on_timer below redraws from
+        # the new anchor without firing an extra _on_scan_time_changed teardown.
+        _anchor_secs = -86400 if is_canvas else -3600
+        self.menu.scan_time_edit.blockSignals(True)
+        self.menu.scan_time_edit.setDateTime(QtCore.QDateTime.currentDateTime().addSecs(_anchor_secs))
+        self.menu.scan_time_edit.blockSignals(False)
         # (Mode 10 COB lives in cob_col, built + shown by _ensure_canvas_panes from _cob_want.)
         self._on_timer()   # immediate first draw from the current Zero Point
 
