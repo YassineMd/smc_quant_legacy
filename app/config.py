@@ -80,6 +80,14 @@ FLIP_MIN_REMAINDER = 4             # need >= this many buckets on EACH side of a
 FLIP_MESSY_CLARITY = 0.40          # crossing cleanness (min 1/N, local-persistence, separation) below
                                    # this -> '·messy' texture tag (choppy settle, e.g. absorption)
 
+# ── Abnormal-velocity visual flag (descriptive — buckets far above their recent velocity baseline) ──
+VEL_ABN_WINDOW = 30                # trailing buckets for the velocity baseline — MATCHES the stats-box
+                                   # 30b BER/SER window (EXH_WINDOW): mean of vel over buckets[i-30:i]
+VEL_ABN_RATIO = 5.0                # flag a bucket when velocity >= this x its trailing-30-mean (vel =
+                                   # curr_vol/duration); operator-picked (~6% of buckets fire). NOT a signal
+VEL_ABN_CAP = 10.0                 # ratio at which the marker hits FULL intensity; the fat tail (up to
+                                   # ~76x) just maxes out (z=cutoff faint -> >=cap bright)
+
 # ---------------------------------------------------------------------------
 # Phase 5 — OI pending-balance attributor (aggTrade; app.aggtrade.OiAttributor)
 # ---------------------------------------------------------------------------

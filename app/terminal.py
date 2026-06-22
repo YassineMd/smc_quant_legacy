@@ -213,6 +213,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # re-fire so a hovered forming bucket updates each frame, not just on motion.
         self._last_hover_pos = None
         self.show_state = False   # STATE verdict + debug lines hidden until 'y' (both stats boxes)
+        self.show_vel_abn = True  # abnormal-velocity DIAMONDS ON by default ('v' toggles; 2px border always on)
         self._flip_line = None    # Mode-10 balance-flip overlay (dashed yellow vline + sustain% label)
         self._flip_label = None
         self._forming_line = None   # tentative "forming" overlay (dim dotted amber + 'unconfirmed' label)
@@ -258,7 +259,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.drawer.toolbar = self.drawbar         # §7.3 — enables auto-revert
         self.drawbar.toolSelected.connect(self.drawer.set_tool)
         self.drawer.selectionChanged.connect(self._refresh_selection_stats)   # Magic Selection -> stats
-        QtGui.QShortcut(QtGui.QKeySequence("V"), self, activated=self.drawer.cancel)
+        QtGui.QShortcut(QtGui.QKeySequence("Escape"), self, activated=self.drawer.cancel)
         # quick toggles: 's' = Stats Box overlay, 'd' = Vector Drawing toolbar. Flip the menu
         # checkbox so the menu stays in sync and the existing show/hide + teardown logic runs.
         QtGui.QShortcut(QtGui.QKeySequence("S"), self,
@@ -275,6 +276,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         activated=lambda: self.menu.sub_checks["audio"].toggle())
         # 'y' = show/hide the STATE verdict + debug lines in BOTH stats boxes (hidden by default)
         QtGui.QShortcut(QtGui.QKeySequence("Y"), self, activated=self._toggle_states)
+        # 'v' = abnormal-velocity DIAMONDS (the 2px border is always on); drawing-cancel moved to Escape
+        QtGui.QShortcut(QtGui.QKeySequence("V"), self, activated=self._toggle_vel_abn)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
         # §7.4 — yellow follow-spot shown on the cursor while a draw tool is armed
@@ -637,6 +640,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_state = not self.show_state
         self._refresh_parked_hover()       # per-bucket / forming-candle readout
         self._refresh_selection_stats()    # Mode-10 selection readout
+
+    def _toggle_vel_abn(self) -> None:
+        """'v' — flip the abnormal-velocity DIAMONDS (white, or gold on divergence) above buckets whose
+        velocity is >= VEL_ABN_RATIO x its trailing-30 mean. The 2px candle border is ALWAYS on, so this
+        toggles only the diamonds. DESCRIPTIVE study flag, not a signal. Flip the layer's visibility
+        immediately for snappy response; spots refresh each scanner frame."""
+        self.show_vel_abn = not self.show_vel_abn
+        h = self._scan_handles.get("bc_vel_abn")
+        if h is not None:
+            h.setVisible(self.show_vel_abn)
 
     # ------------------------------------------------------------------
     # Magic Selection (Mode 10) — aggregate the buckets inside the box
@@ -1133,6 +1146,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             win = buckets[max(0, idx - EXH_WINDOW):idx]
             b30 = (sum(w.get("buyer_er", 0.0) for w in win) / len(win)) if win else 0.0
             s30 = (sum(w.get("seller_er", 0.0) for w in win) / len(win)) if win else 0.0
+            # 30b velocity ratio — current velocity vs the trailing-30 MEAN velocity (same 30b basis as
+            # 30b BER/SER above). Matches the abnormal-velocity chart flag; >= VEL_ABN_RATIO == flagged.
+            def _bvel(bb):
+                return ((bb.get("buy_vol", 0.0) + bb.get("sell_vol", 0.0)) /
+                        max(1.0, bb.get("end_time", 0.0) - bb.get("start_time", 0.0)))
+            v30 = (sum(_bvel(w) for w in win) / len(win)) if win else 0.0
+            vabn = (_bvel(b) / v30) if v30 > 0 else 0.0
             # color ONLY the two dominant 4-vectors (the ones that drove the move); the
             # other two render dim. A zero vector never lights up even if it lands "top 2".
             vmag = {"opL": opL, "opS": opS, "clS": clS, "clL": clL}
@@ -1160,6 +1180,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 span(f"30b Seller E/R {s30:.1f}", r if s30 > b30 else gray),
                 sep("READ"),
                 f"VEL {span(f'{vel:.2f}x', gold)}",
+                f"30b VEL {span(f'{vabn:.1f}×', gold if vabn >= config.VEL_ABN_RATIO else gray)}",
             ]
             # A3b — STATE verdict + its calibration debug lines (top-3 states + winner factors).
             # Hidden by default; 'y' toggles (self.show_state).
@@ -2470,6 +2491,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         vbrushes = [_vbr[vpin_adaptive.vpin_tier(v, v_warn, v_toxic)] for v in vpin_arr]
         wick_pens = arr["pens"]   # per-candle flow-colored wick/border pens
 
+        # Abnormal-velocity flag — a bucket whose velocity (curr_vol/dur) is >= VEL_ABN_RATIO x its
+        # trailing-VEL_ABN_WINDOW MEAN (the SAME 30b basis as the stats box's 30b BER/SER). Computed ONCE
+        # here for BOTH cues on a flagged candle: a 2px wick/border (vs the 0.3-1.0 flow width, KEEPING
+        # the flow colour) — ALWAYS ON — plus a diamond above it ('v' toggles; neon green=buyer /
+        # red=seller dominated, GOLD on divergence). DESCRIPTIVE study marker, not a signal.
+        _bvel = [(b.get("buy_vol", 0.0) + b.get("sell_vol", 0.0)) /
+                 max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0)) for b in buckets]
+        vel_abn = []
+        for i in range(len(buckets)):
+            w = _bvel[max(0, i - config.VEL_ABN_WINDOW):i]
+            base = (sum(w) / len(w)) if w else 0.0
+            vel_abn.append((_bvel[i] / base) if base > 0 else 0.0)
+        wick_pens = list(wick_pens)            # copy before swapping entries (never mutate the #3 cache)
+        for i, r in enumerate(vel_abn):
+            if r >= config.VEL_ABN_RATIO:
+                tp = pg.mkPen(wick_pens[i].color(), width=2.0)   # 2px border, flow colour kept (always on)
+                tp.setCosmetic(True)
+                wick_pens[i] = tp
+
         # Viewport (hoisted): drives the candle viewport cull (Edit below) AND the footprint
         # cull + bubble/number px_per_* (used further down). One viewRange() call serves both.
         (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
@@ -2592,6 +2632,42 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._scan_handles["bc_liq"].setZValue(7)   # above the POC dots (z6)
             self._scan_handles["bc_liq"].setVisible(True)
             self._scan_handles["bc_liq"].setData(spots)
+
+        # Abnormal-velocity flag (descriptive, NON-directional study marker — not a signal). A bucket is
+        # flagged when its velocity (curr_vol/duration) is >= VEL_ABN_RATIO x the MEAN velocity over the
+        # trailing VEL_ABN_WINDOW buckets — the SAME trailing-30-mean basis as the stats box's 30b
+        # BER/SER. White diamond above the bar; alpha+size scale with the ratio, capped at VEL_ABN_CAP so
+        # the fat tail (up to ~76x) just maxes out. Shift+V toggles. z8 = above the liq scatter.
+        if "bc_vel_abn" not in self._scan_handles:
+            self._scan_handles["bc_vel_abn"] = self._add_scanner_item(pg.ScatterPlotItem())
+            self._scan_handles["bc_vel_abn"].setZValue(8)
+        vabn_item = self._scan_handles["bc_vel_abn"]
+        if self.show_vel_abn:
+            Rv, capv = config.VEL_ABN_RATIO, config.VEL_ABN_CAP
+            vspots = []
+            for i, ratio in enumerate(vel_abn):    # ratios computed once with the candle pens, above
+                if ratio >= Rv:
+                    t = min(1.0, (ratio - Rv) / max(1e-9, capv - Rv))   # cutoff->faint, >=cap->full
+                    a = int(255 * (0.40 + 0.60 * t))
+                    b = buckets[i]
+                    bv, sv = b.get("buy_vol", 0.0), b.get("sell_vol", 0.0)
+                    op, cl = b.get("open", 0.0), b.get("close", 0.0)
+                    # Diamond colour: neon GREEN = buyer-dominated, neon RED = seller-dominated; GOLD
+                    # overrides on DIVERGENCE (absorbed flow: buy-led closed DOWN, or sell-led closed UP).
+                    if (bv > sv and cl < op) or (sv > bv and cl > op):
+                        col = (241, 196, 15)            # gold — divergence
+                    elif bv > sv:
+                        col = (0, 255, 127)             # neon green — buyer dominated
+                    elif sv > bv:
+                        col = (255, 7, 58)              # neon red — seller dominated
+                    else:
+                        col = (255, 255, 255)           # white — even (rare)
+                    vspots.append({"pos": (x[i], highs[i]), "symbol": "d", "pen": None,
+                                   "brush": pg.mkBrush(col[0], col[1], col[2], a), "size": 9.0 + 9.0 * t})
+            vabn_item.setData(vspots)
+            vabn_item.setVisible(True)
+        else:
+            vabn_item.setVisible(False)
 
         # --- lower pane: VPIN heatmap + ADAPTIVE risk line (live toxic cutpoint) on lower_plot ---
         if "bc_vpin" not in self._scan_handles:
