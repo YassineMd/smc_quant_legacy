@@ -265,6 +265,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # last cursor scene pos while inside the plot — drives the A3a live-breathe
         # re-fire so a hovered forming bucket updates each frame, not just on motion.
         self._last_hover_pos = None
+        self.show_state = False   # STATE verdict + debug lines hidden until 'y' (both stats boxes)
 
         # --- floating overlays (top-level children) ---
         self.stats = StatsOverlay(self)
@@ -321,6 +322,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         activated=lambda: self.menu.layer_checks["m10_footprint"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("A"), self,
                         activated=lambda: self.menu.sub_checks["audio"].toggle())
+        # 'y' = show/hide the STATE verdict + debug lines in BOTH stats boxes (hidden by default)
+        QtGui.QShortcut(QtGui.QKeySequence("Y"), self, activated=self._toggle_states)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
         # §7.4 — yellow follow-spot shown on the cursor while a draw tool is armed
@@ -677,6 +680,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._hover_scanner(pt.x(), pos)
         self._hover_dom_wall(pt.x(), pt.y())   # live-update the hovered wall's volume as the book pulses
 
+    def _toggle_states(self) -> None:
+        """'y' — flip STATE-verdict + debug-line visibility in BOTH the per-bucket stats box and the
+        Mode-10 selection box (hidden by default), and re-render both immediately."""
+        self.show_state = not self.show_state
+        self._refresh_parked_hover()       # per-bucket / forming-candle readout
+        self._refresh_selection_stats()    # Mode-10 selection readout
+
     # ------------------------------------------------------------------
     # Magic Selection (Mode 10) — aggregate the buckets inside the box
     # ------------------------------------------------------------------
@@ -845,7 +855,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             f"Band {span(pf(d['band_lo']) + '–' + pf(d['band_hi']), gold)}",
             sep("FLOW · IN BOX"),
             f"Volume {K(d['vol'])}",
-            f"{span('Sell ' + K(d['sell']), r)} | {span('Buy ' + K(d['buy']), g)}",
+            f"{span('Sell ' + K(d['sell']), r if d['sell'] > d['buy'] else gray)} | "
+            f"{span('Buy ' + K(d['buy']), g if d['buy'] > d['sell'] else gray)}",
             f"Delta {span(dl, g if d['delta'] >= 0 else r)}",
             f"OI Δ {span(sk(d['oi_delta']), g if d['oi_delta'] >= 0 else r)}",
             f"CVD {span(sk(d['cvd']), g if d['cvd'] >= 0 else r)}",
@@ -887,9 +898,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not agg:
             self.sel_stats.hide()
             return
-        # classify the region with the SAME 12-state engine the per-bucket box uses, then size the
-        # box and place it at whichever selection corner has room (so it never hides off-screen).
-        state, conf, dbg = self._selection_state(filtered, agg["_lo_i"], agg["_hi_i"])
+        # classify the region with the SAME 12-state engine the per-bucket box uses (only when the
+        # STATE lines are visible — 'y' toggles; hidden by default), then size the box and place it
+        # at whichever selection corner has room (so it never hides off-screen).
+        if self.show_state:
+            state, conf, dbg = self._selection_state(filtered, agg["_lo_i"], agg["_hi_i"])
+        else:
+            state, conf, dbg = None, None, []
         # adaptive VPIN tier for the selection — ranked against same-length windows over the recent
         # baseline (apples-to-apples regardless of selection size), via the shared percentile helper.
         n_sel = agg["_hi_i"] - agg["_lo_i"] + 1
@@ -1044,14 +1059,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             vclr = {"opL": g, "opS": r, "clS": bl, "clL": pu}
             top2 = set(sorted(vmag, key=lambda k: vmag[k], reverse=True)[:2])
             def vc(name): return vclr[name] if (name in top2 and vmag[name] > 0) else gray
-            # A3b — the one interpretive line: best-scoring state + calibrated confidence.
-            state, conf = bucket_state.classify_bucket(buckets, idx, bm, sm)
             lines = [
                 f"O {pf(o)}  H {pf(h)}  L {pf(l)}  {span('C '+pf(c), g if c >= o else r)}",
                 f"Elapsed {dur:.1f}s   {span('POC '+pf(poc), gold)}",
                 sep("FLOW"),
                 f"Volume {K(cv)}",
-                f"{span('Sell '+K(sv), r)} | {span('Buy '+K(bv), g)}",
+                # colour ONLY the dominant side (sell>buy -> sell red, buy>sell -> buy green); the
+                # lesser side renders dim.
+                f"{span('Sell '+K(sv), r if sv > bv else gray)} | "
+                f"{span('Buy '+K(bv), g if bv > sv else gray)}",
                 f"Delta {span(sk(delta)+f' ({dpct:+.0f}%)', g if delta >= 0 else r)}",
                 f"OI Δ {span(sk(oi_d), g if oi_d >= 0 else r)}",
                 sep("POSITIONING"),
@@ -1064,10 +1080,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 span(f"30b Seller E/R {s30:.1f}", r),
                 sep("READ"),
                 f"VEL {span(f'{vel:.2f}x', gold)}",
-                f"STATE {bucket_state.render_state_line(state, conf)}",
             ]
-            # calibration: top-3 states + winner factors — always shown in the STATE readout now
-            lines += bucket_state.render_debug_lines(buckets, idx, bm, sm)
+            # A3b — STATE verdict + its calibration debug lines (top-3 states + winner factors).
+            # Hidden by default; 'y' toggles (self.show_state).
+            if self.show_state:
+                state, conf = bucket_state.classify_bucket(buckets, idx, bm, sm)
+                lines.append(f"STATE {bucket_state.render_state_line(state, conf)}")
+                lines += bucket_state.render_debug_lines(buckets, idx, bm, sm)
             return lines
         if mode == "vpin":
             window = buckets[max(0, idx - 49): idx + 1]
