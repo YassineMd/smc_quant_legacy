@@ -53,6 +53,19 @@ VPIN_WARN_PCTL = 75             # VPIN >= this pct of the recent window -> WARN 
 VPIN_TOXIC_PCTL = 90            # VPIN >= this pct -> TOXIC (crimson); ~top-decile by construction
 VPIN_ADAPT_MIN = 30             # need >= this many samples before adaptive tiers engage (else NORMAL)
 
+# ── Pattern accumulator (scripts/pattern_accumulator.py) — passive candidate logger ──
+# Read-only periodic scan of history.db that BANKS candidate events (OB breaks + rare-pattern
+# windows) with their characteristics + forward outcomes, so a real setup can be tested at honest
+# sample size later (n>=200) instead of curve-fitting the handful of events in the current data.
+ACCUM_TFS = ("1m", "5m")           # scales scanned (1x / 5x)
+ACCUM_LIMIT = 6000                 # most-recent closed buckets/tf to scan per run
+ACCUM_FWD_KS = (1, 3, 5)           # forward-return horizons (buckets) for OB-break outcomes
+ACCUM_PATTERN_WINDOWS = (12, 20)   # selection sizes for the rare-pattern candidate scan
+# loose rare-pattern cutoffs — GENEROUS recall (tightened at grounding time; over-logging is cheap)
+ACCUM_HBA_CVD = -0.10              # HiddenBullAccum: cvd <= this, disp >= 0, opL = argmax
+ACCUM_HBD_CVD = 0.10               # HiddenBearDist:  cvd >= this, disp <= 0, opS = argmax
+ACCUM_WW_BOTH = 0.15               # WhaleWars: min(opL,opS)/vec >= this, |disp| <= 0.20, churn < 0.65
+
 # ---------------------------------------------------------------------------
 # Phase 5 — OI pending-balance attributor (aggTrade; app.aggtrade.OiAttributor)
 # ---------------------------------------------------------------------------
