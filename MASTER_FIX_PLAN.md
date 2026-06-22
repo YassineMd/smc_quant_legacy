@@ -637,6 +637,26 @@ cause:**
   Fully consistent with **descriptive-not-predictive**: 1m SOL flow *describes*, it does not hand you clean
   attributable causes. Closed at every scale. Not re-litigated.
 
+**Abnormal-velocity bucket flag — BUILT (`59e01af`).** A descriptive VISUAL STUDY marker (operator-built
+to watch *where* abnormally fast buckets cluster — NOT a signal, NOT a prediction). Velocity =
+`curr_vol/duration` (the existing per-bucket `vels`); a bucket is flagged when velocity ≥ `VEL_ABN_RATIO`
+× the **trailing-30-bucket MEAN** velocity — the SAME `buckets[idx-30:idx]` arithmetic-mean basis as the
+stats box's `30b BER/SER` (operator wanted it consistent with the 30b stat they already read, NOT a
+parallel z-score). Self-calibrating to the regime.
+- *Calibrated on 5610 real 1m buckets* (velocity fat-tailed: median 363 vol/s, p90 6349, max 25871):
+  operator picked **`VEL_ABN_RATIO=5.0×`** (~6% fire, ~11 per 200-bucket screen). N=40 z-score rejected
+  in favour of the matched 30b-ratio basis.
+- *Two cues on a flagged candle* (Mode 10): **2px wick/border** (vs the 0.3–1.0 flow width, KEEPING the
+  flow colour) — **always on** (per-frame pen list COPIED before swapping so the #3 closed-bucket cache is
+  never mutated); plus a **diamond** above the bar (**`v`** toggles): neon **green**=buyer-dominated /
+  **red**=seller-dominated / **gold** on DIVERGENCE (buy-led closed down / sell-led closed up), alpha+size
+  scaled by the ratio, capped at `VEL_ABN_CAP=10×` (the ~76× tail just maxes out).
+- *Hover:* a `30b VEL n.n×` line in the per-bucket stats box (under VEL), gold ≥ cutoff — same 30b basis
+  as the `30b BER/SER` lines above it. Keys: `v` toggles diamonds (border always on); drawing-cancel moved
+  `V`→`Escape`. Knobs `VEL_ABN_WINDOW=30` / `VEL_ABN_RATIO=5.0` / `VEL_ABN_CAP=10.0`.
+- **EXE STALL** — this + the forming marker are NOT in `dist/OrderFlowTerminal.exe` (last built `ab2da2b`);
+  operator rebuilds next batch.
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)

@@ -540,6 +540,17 @@ flips on 1m SOL mostly have NO clean detectable cause:**
   trigger isn't in anything we instrument. Consistent with **descriptive-not-predictive**. Closed at every
   scale. Not re-litigated.
 
+**Abnormal-velocity bucket flag — BUILT (`59e01af`).** Descriptive VISUAL STUDY marker (watch where fast
+buckets cluster; NOT a signal). Velocity = `curr_vol/duration`; flag when ≥ `VEL_ABN_RATIO` × the
+**trailing-30-MEAN** velocity — SAME `buckets[idx-30:idx]` basis as the stats box's `30b BER/SER` (operator
+wanted consistency, not a parallel z-score). Calibrated on 5610 real buckets (fat tail: median 363, max
+25871); operator picked **`5.0×`** (~6% fire). Cues on a flagged Mode-10 candle: **2px border** (flow
+colour kept) **always on** (per-frame pen list copied — #3 cache never mutated); **diamond** above (`v`
+toggles): neon green=buyer / red=seller / **gold on divergence** (buy-led closed down / sell-led closed up),
+alpha+size by ratio capped at `VEL_ABN_CAP=10×`. Hover: `30b VEL n.n×` line under VEL (gold ≥ cutoff). Keys:
+`v` toggles diamonds (border always on); drawing-cancel moved `V`→`Escape`. Knobs `VEL_ABN_WINDOW=30` /
+`VEL_ABN_RATIO=5.0` / `VEL_ABN_CAP=10.0`. **EXE STALL**: this + forming not in the exe (last `ab2da2b`).
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
