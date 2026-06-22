@@ -526,6 +526,26 @@ bucket whose CLOSE clears the far edge — bullish/demand `close≤bottom`=down,
   `scp data/ob_breaks.jsonl` down periodically. **Revisit at n≥200** to test the OB-break **fade** edge
   rigorously (where a real edge separates from coin-flip and a chance pattern doesn't survive).
 
+**Per-price 4-vector / positioning — DEFINITIVELY CLOSED, NO WIPE EVER (investigation, no change).** Checked
+whether wiping the DB to capture per-price-resolved positioning (4-vector/OI/E-R by price level) is feasible
++ worth it. **Feasibility:** OI is ONE market-wide number, ~5s REST poll (`feeds.py:149` `openInterest`); the
+4-vector is an ATTRIBUTION — the `OiAttributor` bleeds each global OI delta across trades by arrival timing
+(`aggtrade.py`: "OI cannot be made per-trade exact"), and `process_tick` builds opL/opS/clL/clS from (trade
+side, bled share), NOT price. So a captured per-price 4-vector is a TIMING ARTIFACT, not a measurement — the
+source can't answer "where did OI open." **Free check (read-only) instead:** the approximated per-price split
+is volume-proportional by construction (`opL_P = opL·buy_P/Σbuy`), so per-price positioning *concentration ≡
+the volume ladder's shape*. Tested whether level concentration discriminates forward returns:
+- *Test A* (n≈1800/side): CONCENTRATED vs SPREAD forward continuation = 44/47/48% vs 48/50/50% at K=1/3/5 —
+  both **coin-flip**, and concentration leans toward **REVERSAL**, not continuation (opposite of the
+  "strong level → follow-through" hypothesis).
+- *Test B* (the OB-break-at-band case, n=49): break-dir volume concentrated AT the OB band continues **less**
+  (44% vs 54% K3) — same reverse lean, noise at this n but directionally consistent with A.
+- **Closure:** per-price positioning discriminates NOTHING, and the captured version (global-OI-sprayed-by-
+  timing) could only add noise on top — **it cannot beat this clean approximation**, so no wipe is ever
+  warranted. Per-price granularity is NOT what's missing; the forward-return ceiling is a market-efficiency
+  property of 1m SOL. The one faint signal that persists across ALL probes (states, OB breaks, concentration)
+  is the same **mean-reversion / OB-break fade** lean the accumulator is already banking to test at honest n.
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)
