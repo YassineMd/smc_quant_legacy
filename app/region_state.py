@@ -118,6 +118,80 @@ def synth_bucket(sel: list) -> dict:
     }
 
 
+def balance_flip(series: list, net_dir: int) -> "dict | None":
+    """DIRECTION-AWARE balance-of-power flip, scored by SUSTAIN — did the move's dominant side actually
+    LOSE CONTROL and STAY lost (a regime change), not just briefly graze. DESCRIPTIVE (where the balance
+    switched and how strongly it held), NOT a reversal probability (1m SOL flow is descriptive-not-
+    predictive). A noisy early crossing that reverts is NOT a flip; a sustained one IS — even if the path
+    to it was choppy (real absorption). Validated on real VM data: this kills ~78% of the brief-graze
+    noise that the local-crossing definition mislabelled, and keeps genuine sustained switches.
+
+    A real switch must be a TWO-SIDED turn: (i) in the move's RELEVANT direction — ``net_dir`` < 0 DOWN ->
+    sellers lose control (S→B = E/R neg->pos), > 0 UP -> buyers lose (B→S), == 0 AMBIGUOUS -> any crossing,
+    flagged ``ambig``; (ii) flanked by >= ``FLIP_MIN_REMAINDER`` buckets on BOTH sides (a start- or
+    end-of-selection graze can't be confirmed); (iii) the OLD side HELD >= ``FLIP_SUSTAIN_MIN`` of the
+    buckets BEFORE the cross AND the NEW side HOLDS >= ``FLIP_SUSTAIN_MIN`` of those after — held-then-lost,
+    not a graze. The PRE-run requirement rejects edge crossings with no established prior control (the
+    '@+1' noise: a flip one bucket in has no real pre-run). Confluence with the positioning vectors was
+    investigated and REJECTED — OpL/OpS crosses every ~3.6 buckets so it 'agrees' with noise flips (64%)
+    as much as real turns (66%), adding fake confidence; this two-sided test uses the aggression signal's
+    OWN structure instead. The EARLIEST crossing meeting all is "where it switched"; its ``sustain``
+    (fraction of the remainder the new side held) is the HEADLINE. No qualifying crossing -> ``no_flip``.
+    Clean-vs-choppy texture (old clarity = min 1/N, local-persistence, separation) is a ``messy`` flag,
+    NOT the headline (absorption is inherently choppy). Returns ``{idx, sustain, no_flip, dir, ambig,
+    messy}`` (``dir`` = 'S→B' / 'B→S' / '—') or None."""
+    n = len(series)
+    M = max((abs(x) for x in series), default=0.0)
+    if n < 2 or M == 0.0:
+        return None
+    cr = [k for k in range(1, n) if series[k - 1] != 0 and series[k] != 0
+          and (series[k - 1] < 0) != (series[k] < 0)]
+    N = len(cr)
+    if net_dir < 0:
+        rel, want = [k for k in cr if series[k - 1] < 0 < series[k]], "S→B"
+    elif net_dir > 0:
+        rel, want = [k for k in cr if series[k - 1] > 0 > series[k]], "B→S"
+    else:
+        rel, want = cr, "—"
+
+    def post_sustain(k):
+        after = series[k:]
+        new_neg = series[k] < 0
+        return sum(1 for x in after if (x < 0) == new_neg) / len(after)
+
+    def pre_sustain(k):
+        before = series[:k]
+        old_neg = series[k - 1] < 0
+        return (sum(1 for x in before if (x < 0) == old_neg) / len(before)) if before else 0.0
+
+    # TWO-SIDED gate: old side HELD before (>= REM buckets, >= SUSTAIN_MIN) AND new side HOLDS after.
+    # The pre-run rejects edge-of-selection flips with no established prior control (the @+1 noise).
+    elig = [k for k in rel
+            if k >= config.FLIP_MIN_REMAINDER and (n - k) >= config.FLIP_MIN_REMAINDER
+            and pre_sustain(k) >= config.FLIP_SUSTAIN_MIN
+            and post_sustain(k) >= config.FLIP_SUSTAIN_MIN]
+    if not elig:
+        return {"idx": min(range(n), key=lambda i: abs(series[i])), "sustain": 0.0,
+                "no_flip": True, "dir": want, "ambig": net_dir == 0, "messy": False}
+
+    k = min(elig)   # EARLIEST two-sided turn = where the dominant side first lost control after holding
+    before, after = series[:k], series[k:]
+    old_neg, new_neg = series[k - 1] < 0, series[k] < 0
+    rb = ra = 0
+    i = k - 1
+    while i >= 0 and series[i] != 0 and (series[i] < 0) == old_neg:
+        rb += 1; i -= 1
+    i = k
+    while i < n and series[i] != 0 and (series[i] < 0) == new_neg:
+        ra += 1; i += 1
+    local_persist = ((rb / len(before)) * (ra / len(after))) ** 0.5
+    separation = ((abs(sum(before) / len(before)) / M) * (abs(sum(after) / len(after)) / M)) ** 0.5
+    clarity = min(1.0 / N, local_persist, separation)   # crossing cleanness -> '·messy' texture only
+    return {"idx": k, "sustain": post_sustain(k), "no_flip": False,
+            "dir": "S→B" if series[k - 1] < 0 else "B→S",
+            "ambig": net_dir == 0, "messy": clarity < config.FLIP_MESSY_CLARITY}
+
+
 def selection_state(filtered: list, lo_i: int, hi_i: int):
     """Run the existing 12-state classifier on the selected region. The synthetic aggregate bucket
     sits right after the REAL buckets immediately preceding the selection, so the classifier's

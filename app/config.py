@@ -66,6 +66,20 @@ ACCUM_HBA_CVD = -0.10              # HiddenBullAccum: cvd <= this, disp >= 0, op
 ACCUM_HBD_CVD = 0.10               # HiddenBearDist:  cvd >= this, disp <= 0, opS = argmax
 ACCUM_WW_BOTH = 0.15               # WhaleWars: min(opL,opS)/vec >= this, |disp| <= 0.20, churn < 0.65
 
+# ── Mode-10 selection E/R trajectory sparkline (descriptive — where buyer/seller E/R balance shifts) ──
+SPARK_MIN = 5                      # min selected buckets to show the sparkline (fewer = noise, omit)
+SPARK_WIDTH = 40                   # max chars; longer selections downsample to this many vol-weighted bins
+SPARK_ZERO_BAND = 0.12             # |scaled balance| below this -> flat gray ▄ baseline (visible zero band)
+FLIP_AMBIG_BAND = 0.33             # |net move| / range below this -> selection isn't cleanly directional
+                                   # (balance-flip detector falls back to best crossing + ·AMBIG flag)
+FLIP_SUSTAIN_MIN = 0.60            # TWO-SIDED: old side must have HELD >= this fraction BEFORE the cross
+                                   # AND new side HOLD >= this AFTER, for a real 'held-then-lost' switch
+                                   # (post-only let an edge graze with no prior control through = @+1 noise)
+FLIP_MIN_REMAINDER = 4             # need >= this many buckets on EACH side of a crossing to confirm it
+                                   # (a start- or end-of-selection graze can't be confirmed sustained)
+FLIP_MESSY_CLARITY = 0.40          # crossing cleanness (min 1/N, local-persistence, separation) below
+                                   # this -> '·messy' texture tag (choppy settle, e.g. absorption)
+
 # ---------------------------------------------------------------------------
 # Phase 5 — OI pending-balance attributor (aggTrade; app.aggtrade.OiAttributor)
 # ---------------------------------------------------------------------------

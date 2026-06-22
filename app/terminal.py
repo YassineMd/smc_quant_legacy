@@ -213,6 +213,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # re-fire so a hovered forming bucket updates each frame, not just on motion.
         self._last_hover_pos = None
         self.show_state = False   # STATE verdict + debug lines hidden until 'y' (both stats boxes)
+        self._flip_line = None    # Mode-10 balance-flip overlay (dashed yellow vline + clarity% label)
+        self._flip_label = None
 
         # --- floating overlays (top-level children) ---
         self.stats = StatsOverlay(self)
@@ -704,8 +706,67 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (shared with the headless accumulator). Returns ``(state, conf, dbg)``."""
         return region_state.selection_state(filtered, lo_i, hi_i)
 
-    def _selection_stat_lines(self, d: dict, state=None, conf=None, dbg=None,
-                              vpin_tier_=None) -> "list[str]":
+    def _vec_sparkline(self, filtered, lo_i, hi_i, val_fn, pos_color, neg_color) -> "str | None":
+        """General per-bucket BALANCE trajectory sparkline across the selection, left-to-right.
+        DESCRIPTIVE — shows WHERE balance shifted, not a forecast (1m flow is descriptive-not-predictive).
+
+        Per-bucket value is the RAW signed difference ``val_fn(b)`` (buyer_er-seller_er, opL-opS, or
+        clL-clS) — NOT normalized: normalizing E/R cancels the ticks and collapses to the delta fraction
+        (already shown as Delta), and keeping it raw preserves the magnitude nuance (effort-vs-result for
+        E/R — sellers pushing HARD while price stalls reads as a deep block; how lopsided opening/closing
+        is for the vectors). Heights AUTO-SCALE to the selection's own range with zero PINNED to a fixed
+        midline — positives scale to the max positive, negatives to the max |negative| (full height both
+        sides; one spiky bucket can't compress the other side) — so the ``pos_color``→``neg_color`` flip
+        always sits at TRUE zero, never at the selection's mean. ``pos_color`` when val>0, ``neg_color``
+        <0, gray =0. < SPARK_MIN buckets → None; > SPARK_WIDTH → vol-weighted downsample to that many bins.
+
+        HONEST: the positioning vectors (opL/opS, clL/clS) are NOISIER than E/R — the 4-vector is built
+        from a 5s OI poll sprayed across trades by timing (not exact per-trade), so those trajectories may
+        be choppier. Shown honestly, NOT smoothed."""
+        sel = filtered[lo_i:hi_i + 1]
+        if len(sel) < config.SPARK_MIN:
+            return None
+
+        pts = [(val_fn(b), float(b.get("curr_vol", 0.0))) for b in sel]
+        W = config.SPARK_WIDTH
+        if len(pts) > W:                                   # vol-weighted downsample of the RAW diff
+            n = len(pts)
+            vals = []
+            for w in range(W):
+                grp = pts[w * n // W:(w + 1) * n // W] or [pts[min(w * n // W, n - 1)]]
+                vsum = sum(v for _, v in grp)
+                vals.append(sum(x * v for x, v in grp) / vsum if vsum > 0
+                            else sum(x for x, _ in grp) / len(grp))
+        else:
+            vals = [x for x, _ in pts]
+
+        # auto-scale each side to its own extreme (full height both sides), zero pinned to the midline.
+        pos_max = max((v for v in vals if v > 0), default=0.0)
+        neg_max = max((-v for v in vals if v < 0), default=0.0)
+        blocks = "▁▂▃▄▅▆▇█"
+        gray = "#9aa0aa"
+        out = []
+        for v in vals:
+            if v > 0:
+                scaled = (v / pos_max) if pos_max > 0 else 0.0   # (0, +1]  -> upper half (pos_color)
+            elif v < 0:
+                scaled = (v / neg_max) if neg_max > 0 else 0.0   # [-1, 0)  -> lower half (neg_color)
+                col = neg_color
+            else:
+                scaled = 0.0
+            # near-balanced -> a flat gray ▄ baseline so the zero band is VISIBLE. Block chars rise from
+            # the bottom and can't draw a true horizontal midline, so this gray baseline + the colour
+            # flip ARE the crossover indicator (an honest approximation, not a faked line).
+            if abs(scaled) < config.SPARK_ZERO_BAND:
+                out.append(f"<span style='color:{gray}'>▄</span>")
+                continue
+            col = pos_color if v > 0 else neg_color
+            lvl = max(0, min(7, round((scaled + 1) / 2 * 7)))    # -max -> ▁ … +max -> █
+            out.append(f"<span style='color:{col}'>{blocks[lvl]}</span>")
+        return "".join(out)
+
+    def _selection_stat_lines(self, d: dict, state=None, conf=None, dbg=None, vpin_tier_=None,
+                              spark_er=None, spark_op=None, spark_cl=None, flip=None) -> "list[str]":
         """Format the aggregate into the StatsOverlay box, mirroring the forming-bucket readout's
         structure (O H L C header + FLOW / POSITIONING / EFFORT / READ sections, same line formats
         and colours). Section tags note the honesty split: FLOW = price-filtered (in the box);
@@ -747,8 +808,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             f"{span('ClS ' + K(d['clS']), vc('clS'))} | {span('ClL ' + K(d['clL']), vc('clL'))}",
             f"{span('LiqSh ' + K(d['liq_short']), cyan)} | {span('LiqLn ' + K(d['liq_long']), mag)}",
             sep("EFFORT · SPAN"),
-            span("Buyer E/R " + ber, g),
-            span("Seller E/R " + ser, r),
+            span("Buyer E/R " + ber, g if d['buyer_er'] > d['seller_er'] else gray),
+            span("Seller E/R " + ser, r if d['seller_er'] > d['buyer_er'] else gray),
             sep("READ · SPAN"),
             # VPIN coloured by the ADAPTIVE tier (same percentile mechanism as the other VPIN
             # sites, ranked vs same-length windows): toxic=crimson, warn=gold, normal=gray.
@@ -761,6 +822,39 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             lines.append(f"STATE {bucket_state.render_state_line(state, conf)}")
         if dbg:
             lines += dbg
+        # all three per-bucket trajectories grouped in their OWN section at the very bottom. DESCRIPTIVE
+        # (where balance shifted, not a forecast). Crossover = colour flip at true zero; near-balanced
+        # buckets render as a gray ▄ baseline (block chars can't draw a real midline). Op/Cl are noisier
+        # than E/R (5s-OI attribution), shown unsmoothed. Labels nbsp-padded so the 3 columns align.
+        nbsp = " "
+        def traj(lbl, sp):
+            return f"{span(lbl.ljust(6).replace(' ', nbsp) + nbsp + '→' + nbsp, gray)}{sp}"
+        # E/R LAST; a thin spacer line between sparklines so they breathe (the gray ▄ baseline reads
+        # clearer with rows separated).
+        spacer = "<span style='font-size:6px'>&nbsp;</span>"
+        traj_lines = []
+        for lbl, sp in (("Op L/S", spark_op), ("Cl L/S", spark_cl), ("E/R", spark_er)):
+            if not sp:
+                continue
+            if traj_lines:
+                traj_lines.append(spacer)
+            traj_lines.append(traj(lbl, sp))
+        if traj_lines or flip is not None:
+            lines.append(sep("FLOW TRAJECTORY →"))
+            lines += traj_lines
+            # direction-aware balance-flip, headline = SUSTAIN ('held X% of the remainder'), matching the
+            # dashed yellow vline. Descriptive, not a forecast. no-flip shows the direction it looked for;
+            # ·messy = choppy settle (absorption); ·AMBIG = net move wasn't cleanly directional.
+            if flip is not None:
+                if flip["no_flip"]:
+                    fv = f"no flip {flip['dir']}"
+                else:
+                    fv = f"{flip['dir']} {round(flip['sustain'] * 100)}% held @+{flip['idx']}"
+                    if flip["messy"]:
+                        fv += " ·messy"
+                if flip["ambig"]:
+                    fv += " ·AMBIG"
+                lines.append(f"{span('Flip →', gray)} {span(fv, '#f1c40f')}")
         return lines
 
     def _refresh_selection_stats(self) -> None:
@@ -769,16 +863,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         rect = self.drawer.selection_rect()
         if rect is None or self.scanner_mode != "bucket_canvas":
             self.sel_stats.hide()
+            self._hide_flip()
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
             self.sel_stats.hide()
+            self._hide_flip()
             return
         x0, y0, x1, y1 = rect
         tv = (self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL
         agg = self._aggregate_selection(filtered, x0, y0, x1, y1, tv)
         if not agg:
             self.sel_stats.hide()
+            self._hide_flip()
             return
         # classify the region with the SAME 12-state engine the per-bucket box uses (only when the
         # STATE lines are visible — 'y' toggles; hidden by default), then size the box and place it
@@ -793,8 +890,33 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         v_warn, v_toxic = vpin_adaptive.vpin_cutpoints(
             vpin_adaptive.window_vpin_samples(filtered[-config.VPIN_ADAPT_WINDOW:], n_sel, tv))
         vtier = vpin_adaptive.vpin_tier(agg["vpin"], v_warn, v_toxic)
+        # three per-bucket trajectory sparklines (raw signed diff, auto-scaled, zero-pinned midline):
+        # E/R (buyer-seller effort, green/red), Op L/S (opL-opS init, green/red), Cl L/S (clL-clS exit,
+        # purple/blue — distinct palette). Box colours reused: opL=green/opS=red, clL=purple/clS=blue.
+        lo, hi = agg["_lo_i"], agg["_hi_i"]
+        spark_er = self._vec_sparkline(filtered, lo, hi,
+                                       lambda b: b.get("buyer_er", 0.0) - b.get("seller_er", 0.0),
+                                       "#2ecc71", "#e74c3c")
+        spark_op = self._vec_sparkline(filtered, lo, hi,
+                                       lambda b: b.get("opL", 0.0) - b.get("opS", 0.0),
+                                       "#2ecc71", "#e74c3c")
+        spark_cl = self._vec_sparkline(filtered, lo, hi,
+                                       lambda b: b.get("clL", 0.0) - b.get("clS", 0.0),
+                                       "#9b59b6", "#3498db")
+        # DIRECTION-AWARE balance-flip detector: net move (last_close - first_open, normalised by range)
+        # picks the relevant crossing — DOWN move -> sellers-lose-control S→B, UP -> buyers-lose B→S,
+        # ambiguous (|disp_frac| < band) -> best crossing + ·AMBIG. CLARITY score, NOT a reversal forecast.
+        er_seq = [filtered[i].get("buyer_er", 0.0) - filtered[i].get("seller_er", 0.0)
+                  for i in range(lo, hi + 1)]
+        rng = agg.get("price_range", 0.0)
+        disp_frac = (agg["displacement"] / rng) if rng > 0 else 0.0
+        net_dir = 0 if abs(disp_frac) < config.FLIP_AMBIG_BAND else (1 if disp_frac > 0 else -1)
+        flip = (region_state.balance_flip(er_seq, net_dir)
+                if (hi - lo + 1) >= config.SPARK_MIN else None)
+        self._update_flip_line(flip, lo, rect)
         self.sel_stats.set_content(
-            self._selection_stat_lines(agg, state, conf, dbg, vtier), "")
+            self._selection_stat_lines(agg, state, conf, dbg, vtier,
+                                       spark_er, spark_op, spark_cl, flip), "")
 
         def to_self(dx, dy):
             sc = self.vb.mapViewToScene(QtCore.QPointF(float(dx), float(dy)))
@@ -806,6 +928,43 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                     self.sel_stats.width(), self.sel_stats.height())
         self.sel_stats.move(bx, by)
         self.sel_stats.show_raise()
+
+    def _update_flip_line(self, flip, lo_i: int, rect) -> None:
+        """Draw/refresh the dashed YELLOW balance-flip vline at the flip bucket, spanning the selection's
+        y-band, tagged 'FLIP nn% clarity' at its top. The % is flip CLARITY (sharp/clean), NOT a reversal
+        probability. Data coords (x = bucket index) like the selection rect; ignoreBounds so it never
+        perturbs auto-range. Hidden when there's no flip data."""
+        # SUPPRESS the chart line when nothing flipped — a yellow line is a visual claim "something
+        # flipped here"; drawing one (even 0%) when the dominant side held would assert a flip that
+        # didn't happen. Its absence honestly says "nothing flipped"; the box still shows "no flip".
+        if flip is None or flip["no_flip"]:
+            self._hide_flip()
+            return
+        x = lo_i + flip["idx"]
+        ylo, yhi = (rect[1], rect[3]) if rect[1] <= rect[3] else (rect[3], rect[1])
+        pct = round(flip["sustain"] * 100)
+        if self._flip_line is None:
+            self._flip_line = pg.PlotCurveItem(
+                pen=pg.mkPen("#f1c40f", width=1.5, style=QtCore.Qt.DashLine))
+            self._flip_line.setZValue(86)
+            self.plot.addItem(self._flip_line, ignoreBounds=True)
+            self._flip_label = pg.TextItem(color="#f1c40f", anchor=(0.5, 1.0))
+            self._flip_label.setZValue(87)
+            self.plot.addItem(self._flip_label, ignoreBounds=True)
+        self._flip_line.setData([x, x], [ylo, yhi])
+        self._flip_line.setVisible(True)
+        # headline = SUSTAIN ('held X% of the remainder' — did the balance switch and STAY), not clarity;
+        # '·messy' = the settle was choppy (e.g. absorption); '·AMBIG' = net move wasn't cleanly directional.
+        tag = (f"FLIP {flip['dir']} {pct}% held"
+               + (" ·messy" if flip["messy"] else "") + (" ·AMBIG" if flip["ambig"] else ""))
+        self._flip_label.setText(tag)
+        self._flip_label.setPos(x, yhi)
+        self._flip_label.setVisible(True)
+
+    def _hide_flip(self) -> None:
+        if self._flip_line is not None:
+            self._flip_line.setVisible(False)
+            self._flip_label.setVisible(False)
 
     def _best_box_pos(self, sx0: float, sy0: float, sx1: float, sy1: float, bw: int, bh: int):
         """Place the stats box on whichever side of the selection has room, so it stays visible as
@@ -956,10 +1115,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 f"{span('OpL '+K(opL), vc('opL'))} | {span('OpS '+K(opS), vc('opS'))}",
                 f"{span('ClS '+K(clS), vc('clS'))} | {span('ClL '+K(clL), vc('clL'))}",
                 sep("EFFORT"),
-                span(f"Buyer E/R {ber:.1f} [{(bm - 1.0) * 100:+.0f}%]", g),
-                span(f"Seller E/R {ser:.1f} [{(sm - 1.0) * 100:+.0f}%]", r),
-                span(f"30b Buyer E/R {b30:.1f}", g),
-                span(f"30b Seller E/R {s30:.1f}", r),
+                span(f"Buyer E/R {ber:.1f} [{(bm - 1.0) * 100:+.0f}%]", g if ber > ser else gray),
+                span(f"Seller E/R {ser:.1f} [{(sm - 1.0) * 100:+.0f}%]", r if ser > ber else gray),
+                span(f"30b Buyer E/R {b30:.1f}", g if b30 > s30 else gray),
+                span(f"30b Seller E/R {s30:.1f}", r if s30 > b30 else gray),
                 sep("READ"),
                 f"VEL {span(f'{vel:.2f}x', gold)}",
             ]
