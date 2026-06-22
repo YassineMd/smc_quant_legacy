@@ -403,7 +403,7 @@ instrumented on real SOL data; ALL FOUR fail the grounding-with-discrimination g
 - *Path*: a **passive candidate accumulator** (VM cron, read-only on `history.db`; logs loose-pattern windows
   + factor vector + the `state_12` overlap signal to `data/pattern_candidates.jsonl`; needs a small pure
   `app/region_state.py` refactor extracting `_synth_bucket`/`_exhaustion_mults` from the GUI module).
-  **PROPOSED, not built** — gathers instances 24/7; revisit at ~20–50 distinct events/pattern to ground +
+  **BUILT** (`6c03ce8` + `427f1ab`) — gathers instances 24/7; revisit at ~20–50 distinct events/pattern to ground +
   prove discrimination, then build only the winners.
 
 **CHOP/ROTATION/NEUTRAL audit — catch-alls are CORRECT; states are DESCRIPTIVE, not PREDICTIVE (no code change).**
@@ -433,6 +433,25 @@ per-bucket stats box (hover + live forming candle, via `_hover_context`) and the
 - The FLOW `Sell | Buy` line colours **only the dominant side** (sell>buy → Sell red, buy>sell → Buy green;
   lesser side gray), matching the 4-vector top-2 dominance style.
 - *Exe rebuilt at `cda7af6`* (supersedes the `e272b71` build) — `dist/OrderFlowTerminal.exe`, smoke-tested.
+
+**OB-break study + candidate accumulator BUILT (`6c03ce8` refactor + `427f1ab`).** Studied which bucket-candle
+characteristics predict follow-through when price breaks an order block (break = the OB engine's own death: a
+bucket whose CLOSE clears the far edge — bullish/demand `close≤bottom`=down, bearish/supply `close≥top`=up).
+- *Feasibility*: 1x = **49 breaks**, 5x = **15** (too few to split). *Finding — NO edge on current data*: 1m
+  breaks continue **~45–49%** (coin flip, slight **reversal** lean by K=5, med −0.28 ATR); NO characteristic
+  (OI-in-dir / body / aggression / velocity / penetration / VPIN / 12-state) discriminates continuation from
+  fakeout at n≈24 (splits within noise, inconsistent across K; the OI split runs *backwards* — hinting breaks
+  are **exhaustion, not ignition**). Did NOT fish 49 events for a setup (multiple-comparisons trap).
+- *Refactor* (`6c03ce8`): extracted pure `app/region_state.py` (exhaustion mults + synth-bucket + selection-
+  state) from the Qt-coupled terminal so the headless job shares the EXACT classifier math; n=1=hover 270/270.
+- *Accumulator* (`427f1ab`, `scripts/pattern_accumulator.py`): read-only periodic scan of `history.db` that
+  banks every OB break (candle characteristics + forward K=1/3/5 in ATRs) + loose rare-pattern windows (factors
+  + `state_12`) to `data/*.jsonl`. Passive, idempotent (dedup by `ob_id` / `tf+L+epoch`), logs only breaks with
+  a COMPLETE forward window. Verified on real data: 49(1m)+13(5m) breaks banked; re-run adds 0.
+- *Deploy — PENDING (operator runs it; NOT auto-deployed)*: push `app/region_state.py`, `app/config.py`,
+  `scripts/pattern_accumulator.py` to the VM + a ~hourly cron running the script from the project root; then
+  `scp data/ob_breaks.jsonl` down periodically. **Revisit at n≥200** to test the OB-break **fade** edge
+  rigorously (where a real edge separates from coin-flip and a chance pattern doesn't survive).
 
 ---
 
