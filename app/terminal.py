@@ -213,8 +213,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # re-fire so a hovered forming bucket updates each frame, not just on motion.
         self._last_hover_pos = None
         self.show_state = False   # STATE verdict + debug lines hidden until 'y' (both stats boxes)
-        self._flip_line = None    # Mode-10 balance-flip overlay (dashed yellow vline + clarity% label)
+        self._flip_line = None    # Mode-10 balance-flip overlay (dashed yellow vline + sustain% label)
         self._flip_label = None
+        self._forming_line = None   # tentative "forming" overlay (dim dotted amber + 'unconfirmed' label)
+        self._forming_label = None
 
         # --- floating overlays (top-level children) ---
         self.stats = StatsOverlay(self)
@@ -847,14 +849,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # ·messy = choppy settle (absorption); ·AMBIG = net move wasn't cleanly directional.
             if flip is not None:
                 if flip["no_flip"]:
-                    fv = f"no flip {flip['dir']}"
+                    fv, flbl, fcol = f"no flip {flip['dir']}", "Flip →", gold
+                elif flip["forming"]:
+                    # TENTATIVE: held-so-far % + maturity (p/N) + explicit 'unconfirmed'. dim amber to
+                    # match the dotted chart marker — a WATCH heads-up, never a confirmed signal.
+                    fv = (f"{flip['dir']} {round(flip['sustain'] * 100)}% · "
+                          f"{flip['post_n']}/{flip['need']} · unconfirmed")
+                    flbl, fcol = "Forming →", "#b8932f"
                 else:
                     fv = f"{flip['dir']} {round(flip['sustain'] * 100)}% held @+{flip['idx']}"
                     if flip["messy"]:
                         fv += " ·messy"
+                    flbl, fcol = "Flip →", gold
                 if flip["ambig"]:
                     fv += " ·AMBIG"
-                lines.append(f"{span('Flip →', gray)} {span(fv, '#f1c40f')}")
+                lines.append(f"{span(flbl, gray)} {span(fv, fcol)}")
         return lines
 
     def _refresh_selection_stats(self) -> None:
@@ -930,19 +939,46 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.sel_stats.show_raise()
 
     def _update_flip_line(self, flip, lo_i: int, rect) -> None:
-        """Draw/refresh the dashed YELLOW balance-flip vline at the flip bucket, spanning the selection's
-        y-band, tagged 'FLIP nn% clarity' at its top. The % is flip CLARITY (sharp/clean), NOT a reversal
-        probability. Data coords (x = bucket index) like the selection rect; ignoreBounds so it never
-        perturbs auto-range. Hidden when there's no flip data."""
-        # SUPPRESS the chart line when nothing flipped — a yellow line is a visual claim "something
-        # flipped here"; drawing one (even 0%) when the dominant side held would assert a flip that
-        # didn't happen. Its absence honestly says "nothing flipped"; the box still shows "no flip".
+        """Draw/refresh the balance-flip vline at the flip bucket, spanning the selection's y-band. TWO
+        mutually-exclusive treatments at the SAME x (one event, two maturities): CONFIRMED = solid DASHED
+        bright yellow, tag 'FLIP dir nn% held' (the new side held >=60% over >=4 — a switch that STAYED);
+        FORMING = dim DOTTED amber, thinner, tag '⋯ FORMING dir nn% · p/N · unconfirmed' (pre-run held but
+        the post-run is too short to judge — a tentative WATCH heads-up, NOT a signal/forecast; it
+        solidifies into the confirmed line if it holds, or vanishes if it reverts). Neither % is a reversal
+        probability. Data coords (x = bucket index); ignoreBounds so it never perturbs auto-range."""
+        # SUPPRESS both lines when nothing qualified — a line here is a visual claim "the balance
+        # switched/is switching"; drawing one when the dominant side held would assert a turn that didn't
+        # happen. Absence honestly says "nothing"; the box still shows "no flip".
         if flip is None or flip["no_flip"]:
             self._hide_flip()
             return
         x = lo_i + flip["idx"]
         ylo, yhi = (rect[1], rect[3]) if rect[1] <= rect[3] else (rect[3], rect[1])
         pct = round(flip["sustain"] * 100)
+        if flip["forming"]:
+            # TENTATIVE: dim dotted amber, thin, 'unconfirmed' — shows the crossing forming with honest
+            # partial progress (held-so-far % + maturity p/N). z BELOW the confirmed pair.
+            if self._forming_line is None:
+                self._forming_line = pg.PlotCurveItem(
+                    pen=pg.mkPen((241, 196, 15, 110), width=1.0, style=QtCore.Qt.DotLine))
+                self._forming_line.setZValue(84)
+                self.plot.addItem(self._forming_line, ignoreBounds=True)
+                self._forming_label = pg.TextItem(anchor=(0.5, 1.0))
+                self._forming_label.setZValue(85)
+                self.plot.addItem(self._forming_label, ignoreBounds=True)
+            self._forming_line.setData([x, x], [ylo, yhi])
+            self._forming_line.setVisible(True)
+            tag = (f"⋯ FORMING {flip['dir']} {pct}% · {flip['post_n']}/{flip['need']} · unconfirmed"
+                   + (" ·AMBIG" if flip["ambig"] else ""))
+            self._forming_label.setHtml(f"<span style='color:#b8932f;font-style:italic'>{tag}</span>")
+            self._forming_label.setPos(x, yhi)
+            self._forming_label.setVisible(True)
+            if self._flip_line is not None:        # confirmed pair off (mutually exclusive)
+                self._flip_line.setVisible(False)
+                self._flip_label.setVisible(False)
+            return
+        # CONFIRMED: solid dashed bright yellow. headline = SUSTAIN ('held X% of the remainder'); '·messy'
+        # = choppy settle (e.g. absorption); '·AMBIG' = net move wasn't cleanly directional.
         if self._flip_line is None:
             self._flip_line = pg.PlotCurveItem(
                 pen=pg.mkPen("#f1c40f", width=1.5, style=QtCore.Qt.DashLine))
@@ -953,18 +989,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.plot.addItem(self._flip_label, ignoreBounds=True)
         self._flip_line.setData([x, x], [ylo, yhi])
         self._flip_line.setVisible(True)
-        # headline = SUSTAIN ('held X% of the remainder' — did the balance switch and STAY), not clarity;
-        # '·messy' = the settle was choppy (e.g. absorption); '·AMBIG' = net move wasn't cleanly directional.
         tag = (f"FLIP {flip['dir']} {pct}% held"
                + (" ·messy" if flip["messy"] else "") + (" ·AMBIG" if flip["ambig"] else ""))
         self._flip_label.setText(tag)
         self._flip_label.setPos(x, yhi)
         self._flip_label.setVisible(True)
+        if self._forming_line is not None:         # forming pair off (mutually exclusive)
+            self._forming_line.setVisible(False)
+            self._forming_label.setVisible(False)
 
     def _hide_flip(self) -> None:
-        if self._flip_line is not None:
-            self._flip_line.setVisible(False)
-            self._flip_label.setVisible(False)
+        for ln, lb in ((self._flip_line, self._flip_label),
+                       (self._forming_line, self._forming_label)):
+            if ln is not None:
+                ln.setVisible(False)
+                lb.setVisible(False)
 
     def _best_box_pos(self, sx0: float, sy0: float, sx1: float, sy1: float, bw: int, bh: int):
         """Place the stats box on whichever side of the selection has room, so it stays visible as

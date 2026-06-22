@@ -136,10 +136,22 @@ def balance_flip(series: list, net_dir: int) -> "dict | None":
     investigated and REJECTED — OpL/OpS crosses every ~3.6 buckets so it 'agrees' with noise flips (64%)
     as much as real turns (66%), adding fake confidence; this two-sided test uses the aggression signal's
     OWN structure instead. The EARLIEST crossing meeting all is "where it switched"; its ``sustain``
-    (fraction of the remainder the new side held) is the HEADLINE. No qualifying crossing -> ``no_flip``.
-    Clean-vs-choppy texture (old clarity = min 1/N, local-persistence, separation) is a ``messy`` flag,
-    NOT the headline (absorption is inherently choppy). Returns ``{idx, sustain, no_flip, dir, ambig,
-    messy}`` (``dir`` = 'S→B' / 'B→S' / '—') or None."""
+    (fraction of the remainder the new side held) is the HEADLINE. Clean-vs-choppy texture (old clarity
+    = min 1/N, local-persistence, separation) is a ``messy`` flag, NOT the headline (absorption is
+    inherently choppy).
+
+    FORMING (the SAME event at an EARLIER maturity — a WATCH heads-up, NEVER a signal/forecast): a
+    candidate that passed the PRE half of the gate (relevant dir, >= REM buckets in, old side held
+    >= SUSTAIN_MIN) but whose POST-run is still too SHORT to judge (``n - k`` < REM). ``forming`` True,
+    ``sustain`` = held-SO-FAR (post over the buckets available), ``post_n``/``need`` = maturity (e.g.
+    2/4). The MOST RECENT such candidate ("might be flipping right now") is returned. It SOLIDIFIES into
+    the confirmed flip if the new side still holds once REM buckets accrue, or VANISHES (a crossing with
+    the pre-run but ``n - k`` >= REM and post < SUSTAIN_MIN falls into NEITHER list -> no marker) if it
+    reverts. Most forming markers vanish — most early crossings ARE the noise the confirmed gate filters;
+    that is shown honestly, not hidden. No candidate at all -> ``no_flip``. Forming is keyed to the same
+    ``net_dir`` as confirmed, so it catches the selection's MAIN turn earlier; a second OPPOSITE turn
+    brewing after an already-confirmed flip is out of scope (v2). Returns ``{idx, sustain, no_flip,
+    forming, post_n, need, dir, ambig, messy}`` (``dir`` = 'S→B' / 'B→S' / '—') or None."""
     n = len(series)
     M = max((abs(x) for x in series), default=0.0)
     if n < 2 or M == 0.0:
@@ -164,32 +176,47 @@ def balance_flip(series: list, net_dir: int) -> "dict | None":
         old_neg = series[k - 1] < 0
         return (sum(1 for x in before if (x < 0) == old_neg) / len(before)) if before else 0.0
 
-    # TWO-SIDED gate: old side HELD before (>= REM buckets, >= SUSTAIN_MIN) AND new side HOLDS after.
-    # The pre-run rejects edge-of-selection flips with no established prior control (the @+1 noise).
-    elig = [k for k in rel
-            if k >= config.FLIP_MIN_REMAINDER and (n - k) >= config.FLIP_MIN_REMAINDER
-            and pre_sustain(k) >= config.FLIP_SUSTAIN_MIN
-            and post_sustain(k) >= config.FLIP_SUSTAIN_MIN]
-    if not elig:
-        return {"idx": min(range(n), key=lambda i: abs(series[i])), "sustain": 0.0,
-                "no_flip": True, "dir": want, "ambig": net_dir == 0, "messy": False}
+    REM = config.FLIP_MIN_REMAINDER
+    # PRE half of the two-sided gate: candidate turns where the OLD side genuinely HELD before the cross
+    # (>= REM buckets in, pre-run >= SUSTAIN_MIN). This rejects edge-of-selection grazes with no
+    # established prior control (the @+1 noise) — for BOTH the confirmed and the forming verdict.
+    pre_ok = [k for k in rel
+              if k >= REM and pre_sustain(k) >= config.FLIP_SUSTAIN_MIN]
+    # CONFIRMED = pre_ok AND the new side has had >= REM buckets to prove itself AND held >= SUSTAIN_MIN
+    # of them (the POST half). Identical to the previous gate; the EARLIEST such crossing is the flip.
+    confirmed = [k for k in pre_ok
+                 if (n - k) >= REM and post_sustain(k) >= config.FLIP_SUSTAIN_MIN]
+    if confirmed:
+        k = min(confirmed)   # EARLIEST two-sided turn = where the dominant side first lost control
+        before, after = series[:k], series[k:]
+        old_neg, new_neg = series[k - 1] < 0, series[k] < 0
+        rb = ra = 0
+        i = k - 1
+        while i >= 0 and series[i] != 0 and (series[i] < 0) == old_neg:
+            rb += 1; i -= 1
+        i = k
+        while i < n and series[i] != 0 and (series[i] < 0) == new_neg:
+            ra += 1; i += 1
+        local_persist = ((rb / len(before)) * (ra / len(after))) ** 0.5
+        separation = ((abs(sum(before) / len(before)) / M) * (abs(sum(after) / len(after)) / M)) ** 0.5
+        clarity = min(1.0 / N, local_persist, separation)   # crossing cleanness -> '·messy' texture only
+        return {"idx": k, "sustain": post_sustain(k), "no_flip": False, "forming": False,
+                "post_n": n - k, "need": REM, "dir": "S→B" if series[k - 1] < 0 else "B→S",
+                "ambig": net_dir == 0, "messy": clarity < config.FLIP_MESSY_CLARITY}
 
-    k = min(elig)   # EARLIEST two-sided turn = where the dominant side first lost control after holding
-    before, after = series[:k], series[k:]
-    old_neg, new_neg = series[k - 1] < 0, series[k] < 0
-    rb = ra = 0
-    i = k - 1
-    while i >= 0 and series[i] != 0 and (series[i] < 0) == old_neg:
-        rb += 1; i -= 1
-    i = k
-    while i < n and series[i] != 0 and (series[i] < 0) == new_neg:
-        ra += 1; i += 1
-    local_persist = ((rb / len(before)) * (ra / len(after))) ** 0.5
-    separation = ((abs(sum(before) / len(before)) / M) * (abs(sum(after) / len(after)) / M)) ** 0.5
-    clarity = min(1.0 / N, local_persist, separation)   # crossing cleanness -> '·messy' texture only
-    return {"idx": k, "sustain": post_sustain(k), "no_flip": False,
-            "dir": "S→B" if series[k - 1] < 0 else "B→S",
-            "ambig": net_dir == 0, "messy": clarity < config.FLIP_MESSY_CLARITY}
+    # FORMING = pre_ok but the POST-run is still too SHORT to judge (n - k < REM). Same event, shown
+    # BEFORE it matures — tentative WATCH only. A pre_ok crossing with n - k >= REM but post < SUSTAIN_MIN
+    # is in NEITHER list -> no marker (it had its chance and reverted = VANISHES). Most forming vanish.
+    forming = [k for k in pre_ok if (n - k) < REM]
+    if forming:
+        k = max(forming)   # MOST RECENT candidate = "the balance might be flipping right now"
+        return {"idx": k, "sustain": post_sustain(k), "no_flip": False, "forming": True,
+                "post_n": n - k, "need": REM, "dir": "S→B" if series[k - 1] < 0 else "B→S",
+                "ambig": net_dir == 0, "messy": False}
+
+    return {"idx": min(range(n), key=lambda i: abs(series[i])), "sustain": 0.0, "no_flip": True,
+            "forming": False, "post_n": 0, "need": REM, "dir": want,
+            "ambig": net_dir == 0, "messy": False}
 
 
 def selection_state(filtered: list, lo_i: int, hi_i: int):
