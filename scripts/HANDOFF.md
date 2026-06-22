@@ -493,8 +493,28 @@ One concern on the Mode-10 selection box (+ hover box where noted). All DESCRIPT
   one-way/end-edge→no flip; net-up→lands on the peak.
 - **HONEST WALL** (operator-confirmed): the flip is a **HINDSIGHT locator** — confirms only after the new side
   sustains (lags the turn) and does NOT predict price. Where the balance switched + held, not a real-time top.
-  *Open (not built — investigate first)*: a "forming/tentative" early marker — lever 1 shorter confirm window,
-  lever 2 two-tier forming→confirmed.
+  The **FORMING marker** below is the honest response to "can it fire earlier?".
+
+**FORMING balance-flip marker — tentative WATCH heads-up, one event / two maturities (`e9e0ada`).** Shows the SAME
+crossing EARLIER, before it confirms, flagged `unconfirmed` — never a signal/forecast (walls hold). `balance_flip`
+returns ONE of three off the SAME pre-gate (`pre_ok` = relevant-dir crossing where the OLD side held: `k≥REM`,
+pre-run `≥SUSTAIN_MIN`):
+- **CONFIRMED** = `pre_ok` + post matured (`n−k≥REM`) + new side held; `min()`. Byte-identical to the old gate (582/582, 0 mismatches).
+- **FORMING** = `pre_ok` but post too short to judge (`n−k<REM`); `max()` = most recent. `sustain`=held-SO-FAR,
+  `post_n`/`need`=maturity (`2/4`). The `p/N` + `unconfirmed` are the honesty guard (`100% · 1/4` = preliminary).
+- **VANISH** automatic: `pre_ok` with `n−k≥REM` but `post<SUSTAIN_MIN` → NEITHER list → no marker (reverted). Most
+  forming markers vanish — most early crossings ARE the noise the confirmed gate filters; shown, flagged, not hidden.
+- *Render* (`terminal.py`): one mutually-exclusive treatment at the same `x` — CONFIRMED solid dashed bright yellow
+  (z86/87) / FORMING dim dotted amber `(241,196,15,110)` thin (z84/85) + italic `#b8932f` `⋯ FORMING dir nn% · p/N
+  · unconfirmed`. Separate `_forming_line/_label`; `_hide_flip` clears both; box mirrors (`Forming → …`). Solidifies
+  into the confirmed line if it holds once REM accrue, or vanishes. **ZERO new thresholds** — reuses
+  `FLIP_MIN_REMAINDER`/`FLIP_SUSTAIN_MIN`; the forming↔confirmed boundary IS `FLIP_MIN_REMAINDER`.
+- *Validated on REAL 1m VM data* (5000 buckets, truncated to simulate the selection growing to the live edge):
+  forms→SOLIDIFIES (`1/4→2/4→3/4`→CONFIRMED `4/4`); forms→VANISHES (post reverts → gone); never-forms `@+1` BY
+  CONSTRUCTION (5288 forming + 4020 confirmed, 0 pre-gate violations); confirmed UNCHANGED (582/582). Eyeball-confirmed.
+- **v1 LIMITATION** (accepted): keyed to the selection's `net_dir` → catches the MAIN turn earlier; will NOT catch a
+  SECOND opposite turn near the edge after an already-confirmed flip — **v2**.
+- **EXE NOW STALE**: forming is NOT in `dist/OrderFlowTerminal.exe` (last built `ab2da2b`); operator rebuilds next batch.
 
 ---
 

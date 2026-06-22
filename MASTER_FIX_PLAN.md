@@ -572,8 +572,36 @@ One concern shipped on the Mode-10 selection box (and the per-bucket hover box w
   peak. Knobs: `SPARK_MIN/WIDTH/ZERO_BAND`, `FLIP_AMBIG_BAND/SUSTAIN_MIN/MIN_REMAINDER/MESSY_CLARITY`.
 - **HONEST WALL** (operator-confirmed): the flip is a **HINDSIGHT locator** — it confirms only after the new side
   sustains (lags the turn by the post-run window) and does NOT predict price. It marks where the balance switched
-  and held, not a real-time top. *Open exploration on top of this*: a "forming/tentative" early marker
-  (lever 1 = shorter confirm window, lever 2 = two-tier forming→confirmed) — NOT yet built; investigate first.
+  and held, not a real-time top. The **FORMING marker** below is the honest response to "can it fire earlier?".
+
+**FORMING balance-flip marker — tentative WATCH heads-up, one event / two maturities (`e9e0ada`).** The honest
+answer to the lag: show the SAME crossing EARLIER, before it confirms, flagged `unconfirmed` — never a signal,
+never a forecast (walls hold). `region_state.balance_flip` now returns ONE of three verdicts off the SAME pre-gate
+(`pre_ok` = relevant-dir crossing where the OLD side genuinely held: `k≥REM`, pre-run `≥SUSTAIN_MIN`):
+- **CONFIRMED** = `pre_ok` AND post matured (`n−k≥REM`) AND new side held (`post≥SUSTAIN_MIN`); `min()` = the flip.
+  **Byte-identical to the previous gate** (proven: 1661 windows, 582 confirmed, 0 mismatches).
+- **FORMING** = `pre_ok` but post too SHORT to judge (`n−k<REM`); `max()` = most recent ("might be flipping now").
+  `sustain` = held-SO-FAR, `post_n`/`need` = maturity (e.g. `2/4`). The `p/N` + explicit `unconfirmed` are the
+  honesty guard (`100% · 1/4` reads preliminary, never stronger than a confirmed %).
+- **VANISH** is automatic: a `pre_ok` crossing with `n−k≥REM` but `post<SUSTAIN_MIN` falls into NEITHER list → no
+  marker (had its chance, reverted). **Most forming markers vanish — most early crossings ARE the noise the
+  confirmed gate filters; shown honestly, flagged `unconfirmed`, not hidden.** A WATCH heads-up, NEVER an entry.
+- *Render* (`terminal.py`): `_update_flip_line` draws exactly ONE mutually-exclusive treatment at the same `x` —
+  CONFIRMED = solid DASHED bright yellow (`#f1c40f`, z86/87); FORMING = dim DOTTED amber (`(241,196,15,110)`, thin,
+  z84/85) + italic `#b8932f` label `⋯ FORMING dir nn% · p/N · unconfirmed`. Separate `_forming_line/_label`;
+  `_hide_flip` clears both. Box mirrors it (`Forming → … · p/N · unconfirmed`). It SOLIDIFIES into the confirmed
+  line if the new side holds once REM buckets accrue, or VANISHES if it reverts (the dim dotted amber at the same x
+  brightens/fills into the solid yellow). **ZERO new config thresholds** — reuses `FLIP_MIN_REMAINDER`/
+  `FLIP_SUSTAIN_MIN`; the forming↔confirmed boundary IS `FLIP_MIN_REMAINDER`.
+- *Validated on REAL 1m VM data* (5000 buckets; windows truncated to simulate the selection growing toward the
+  live edge): **forms→SOLIDIFIES** (`1/4→2/4→3/4` forming, then CONFIRMED at `4/4`); **forms→VANISHES** (forming,
+  post reverts → no marker); **never-forms `@+1` BY CONSTRUCTION** (5288 forming + 4020 confirmed markers across 7
+  window sizes, **0 pre-gate violations**); **confirmed UNCHANGED** (582/582). Eyeball-confirmed live by operator.
+- **v1 LIMITATION** (accepted): forming is keyed to the selection's `net_dir`, so it catches the selection's MAIN
+  turn earlier. It does NOT detect a SECOND, opposite turn brewing near the edge after an already-confirmed flip
+  (the relevant direction would have to flip mid-selection) — **that's v2**.
+- **EXE NOW STALE** — the forming marker is NOT in `dist/OrderFlowTerminal.exe` (last built at `ab2da2b`, 18:09).
+  Operator rebuilds it next batch with other changes; clean close to the flip work.
 
 ---
 
