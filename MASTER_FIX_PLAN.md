@@ -603,6 +603,27 @@ never a forecast (walls hold). `region_state.balance_flip` now returns ONE of th
 - **EXE NOW STALE** — the forming marker is NOT in `dist/OrderFlowTerminal.exe` (last built at `ab2da2b`, 18:09).
   Operator rebuilds it next batch with other changes; clean close to the flip work.
 
+**"Explain the flip" synthesis — INVESTIGATED + DROPPED (read-only, no code).** Idea: at a flip (confirmed
+OR forming), draw which existing mechanisms were PRESENT — absorption (`calc_absorption`), liquidation
+(`liq_short/long`), exhaustion (`exhaustion_mults`), volume/velocity (`vol_mult`) — as the "why". Tested
+base-rate guarded on real VM 1m data (140 robust confirmed flips vs 500 random non-flip buckets; mechanism
+checked in a `[flip−3, flip+1]` cause window). **DROPPED — flips on 1m SOL mostly have no clean detectable
+cause:**
+- **3 of 4 mechanisms are AMBIENT** — present at random buckets as much as at flips: exhaustion 86% @flip
+  vs **96% baseline** (lift **1.02×**), vol/velocity 67% vs 64% (**1.05×**), absorption 34% vs 32% (**1.07×**).
+  Showing them as "the cause" would fabricate explanations from always-on signals.
+- **Only LIQUIDATION shows real lift** — 52% @flip vs 36% baseline = **1.46×** — but it's WEAK (present at a
+  THIRD of random buckets too), so labelling it a flip "cause" makes a weak correlation look causal.
+- **No COMBINATION rescues it** (tested base-rate guarded, untuned, pre-specified — no fishing): under
+  honest/untuned defs NO combo is elevated (≥2: 1.08×, ≥3: 1.30×; best pair = LIQ&EXHAUST **1.46×** = liq
+  alone; ABSORB&EXHAUST without liq = **1.01×** pure ambient). **No synergy — the whole is not more than the
+  parts**; every combo with any lift just carries liquidation.
+- **The strict-definition "lift" was the curve-fit trap** — 2–3.5× appeared ONLY after tuning the
+  definitions (fresh-birth absorption, at-bucket exhaustion, higher bars), on 2–9% of flips, base rates of
+  ~5–10 buckets = tiny-N noise. Fitting, not finding (it failed the no-tuning guard).
+- **Verdict:** the synthesis is dead single AND combined. Consistent with **descriptive-not-predictive** —
+  1m SOL flow *describes* what's happening; it does not hand you clean attributable causes. Not re-litigated.
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)

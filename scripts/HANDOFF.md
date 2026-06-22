@@ -516,6 +516,21 @@ pre-run `≥SUSTAIN_MIN`):
   SECOND opposite turn near the edge after an already-confirmed flip — **v2**.
 - **EXE NOW STALE**: forming is NOT in `dist/OrderFlowTerminal.exe` (last built `ab2da2b`); operator rebuilds next batch.
 
+**"Explain the flip" synthesis — INVESTIGATED + DROPPED (read-only, no code).** Idea: at a flip, draw which
+existing mechanisms were PRESENT (absorption / liquidation / exhaustion / vol-velocity) as the "why". Tested
+base-rate guarded on real 1m data (140 flips vs 500 random buckets, `[flip−3,flip+1]` window). **DROPPED —
+flips on 1m SOL mostly have NO clean detectable cause:**
+- **3 of 4 mechanisms AMBIENT** (present at random buckets as much as flips): exhaustion 86% vs **96%** base
+  (**1.02×**), vol/vel 67% vs 64% (**1.05×**), absorption 34% vs 32% (**1.07×**). Showing them = fabricated causes.
+- **Only LIQUIDATION elevated** — 52% vs 36% = **1.46×** — but WEAK (a third of random buckets too); calling it
+  a "cause" makes a weak correlation look causal.
+- **No COMBINATION rescues it** (untuned, pre-specified, no fishing): ≥2 mech 1.08×, ≥3 1.30×; best pair
+  LIQ&EXHAUST **1.46×** = liq alone; ABSORB&EXHAUST **1.01×** ambient. **No synergy.** The strict-def 2–3.5×
+  lift was the **curve-fit trap** — appeared only after tuning, on 2–9% of flips, tiny-N (~5–10 buckets). Failed
+  the no-tuning guard.
+- **Verdict:** dead single AND combined. Consistent with **descriptive-not-predictive** — flow describes, it
+  doesn't hand you clean causes. Not re-litigated.
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
