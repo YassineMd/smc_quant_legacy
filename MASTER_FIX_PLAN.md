@@ -546,6 +546,35 @@ the volume ladder's shape*. Tested whether level concentration discriminates for
   property of 1m SOL. The one faint signal that persists across ALL probes (states, OB breaks, concentration)
   is the same **mean-reversion / OB-break fade** lean the accumulator is already banking to test at honest n.
 
+**Selection-box flow readouts — E/R colouring + trajectory sparklines + balance-flip detector (`ab2da2b`).**
+One concern shipped on the Mode-10 selection box (and the per-bucket hover box where noted). All DESCRIPTIVE
+— no predictive dressing, consistent with the "states are descriptive, not predictive on 1m SOL" finding above.
+- **Buyer/Seller E/R dominant-colouring** (hover box + selection box): only the stronger side is coloured
+  (green buyer / red seller), the weaker greys out — same dominance rule as the `Sell | Buy` line.
+- **Three per-bucket TRAJECTORY sparklines** (unicode block chars in the QLabel RichText) in a dedicated bottom
+  `FLOW TRAJECTORY →` section: **E/R** (`buyer_er−seller_er`, green/red), **Op L/S** (`opL−opS` initiation,
+  green/red), **Cl L/S** (`clL−clS` exit, purple/blue). RAW signed diff — NOT normalised: normalising E/R
+  cancels the ticks and collapses to the delta fraction already shown elsewhere (operator caught this). Heights
+  auto-scale per side with zero pinned to a gray baseline block (block chars can't draw a real midline, so the
+  colour-flip + baseline ARE the crossover); `n≥SPARK_MIN`, vol-weighted downsample to `SPARK_WIDTH`. Op/Cl
+  shown unsmoothed (honest about the 5s-OI attribution noise).
+- **Direction-aware, TWO-SIDED sustained BALANCE-FLIP detector** (`region_state.balance_flip`): on the E/R
+  series, marks where the move's dominant side LOST CONTROL and STAYED lost. Net move (`last_close−first_open`
+  / range) picks direction (down→S→B, up→B→S, ambiguous→any + `·AMBIG`). A real switch requires the OLD side to
+  have HELD `≥FLIP_SUSTAIN_MIN` over `≥FLIP_MIN_REMAINDER` buckets BEFORE the cross **AND** the NEW side to HOLD
+  after — the pre-run rejects edge-of-selection noise (the `@+1` single-bucket graze that a post-only gate let
+  through). Headline = **SUSTAIN** (`held X%` of the remainder); `·messy` tags a choppy settle (e.g. absorption).
+  Dashed yellow vline at the flip bucket + label, suppressed on `no_flip`. **Confluence with the positioning
+  vectors was investigated and REJECTED** — OpL/OpS crosses ~every 3.6 buckets, agreeing with noise as much as
+  real turns (op 64% vs 66%; ClL/ClS = chance 53/53) = fake confidence; killed by the discrimination test.
+- *Validated on real VM 1m data*: `@+1` noise → no flip; A-noise → no flip; real absorption → kept at true
+  sustain (`S→B 73% ·messy`); clean two-sided → 100% held; one-way / end-edge → no flip; net-up → lands on the
+  peak. Knobs: `SPARK_MIN/WIDTH/ZERO_BAND`, `FLIP_AMBIG_BAND/SUSTAIN_MIN/MIN_REMAINDER/MESSY_CLARITY`.
+- **HONEST WALL** (operator-confirmed): the flip is a **HINDSIGHT locator** — it confirms only after the new side
+  sustains (lags the turn by the post-run window) and does NOT predict price. It marks where the balance switched
+  and held, not a real-time top. *Open exploration on top of this*: a "forming/tentative" early marker
+  (lever 1 = shorter confirm window, lever 2 = two-tier forming→confirmed) — NOT yet built; investigate first.
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)

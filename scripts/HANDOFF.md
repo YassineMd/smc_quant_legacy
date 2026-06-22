@@ -473,6 +473,29 @@ the volume ladder's shape*. Tested whether level concentration discriminates for
   property of 1m SOL. The one faint signal that persists across ALL probes (states, OB breaks, concentration)
   is the same **mean-reversion / OB-break fade** lean the accumulator is already banking to test at honest n.
 
+**Selection-box flow readouts — E/R colouring + trajectory sparklines + balance-flip detector (`ab2da2b`).**
+One concern on the Mode-10 selection box (+ hover box where noted). All DESCRIPTIVE (no predictive dressing).
+- **Buyer/Seller E/R dominant-colouring** (hover + selection): only the stronger side coloured (green buyer /
+  red seller), weaker greys out — same rule as `Sell | Buy`.
+- **Three TRAJECTORY sparklines** (unicode block chars in the QLabel) in a bottom `FLOW TRAJECTORY →` section:
+  **E/R** (`buyer_er−seller_er`, green/red), **Op L/S** (`opL−opS`, green/red), **Cl L/S** (`clL−clS`,
+  purple/blue). RAW signed diff — NOT normalised (normalising E/R collapses to the delta fraction already shown;
+  operator caught it). Per-side auto-scale, zero pinned to a gray baseline block (colour-flip + baseline ARE the
+  crossover); `n≥SPARK_MIN`, vol-weighted downsample to `SPARK_WIDTH`. Op/Cl unsmoothed (5s-OI noise, shown honestly).
+- **Direction-aware TWO-SIDED sustained BALANCE-FLIP** (`region_state.balance_flip`): on the E/R series, marks
+  where the move's dominant side LOST CONTROL and STAYED lost. Net (`last_close−first_open`/range) sets direction
+  (down→S→B, up→B→S, flat→any +`·AMBIG`). A real switch needs the OLD side to have HELD `≥FLIP_SUSTAIN_MIN` over
+  `≥FLIP_MIN_REMAINDER` buckets BEFORE the cross AND the NEW side to HOLD after — the pre-run kills the `@+1`
+  edge-graze a post-only gate let through. Headline = **SUSTAIN** (`held X%`); `·messy` = choppy settle
+  (absorption). Dashed yellow vline + label, suppressed on `no_flip`. **Confluence REJECTED** by the discrimination
+  test (OpL/OpS agrees with noise 64% vs real 66%; ClL/ClS = chance) = fake confidence.
+- *Validated on real VM 1m*: `@+1`→no flip; A-noise→no flip; absorption→kept (`S→B 73% ·messy`); clean→100% held;
+  one-way/end-edge→no flip; net-up→lands on the peak.
+- **HONEST WALL** (operator-confirmed): the flip is a **HINDSIGHT locator** — confirms only after the new side
+  sustains (lags the turn) and does NOT predict price. Where the balance switched + held, not a real-time top.
+  *Open (not built — investigate first)*: a "forming/tentative" early marker — lever 1 shorter confirm window,
+  lever 2 two-tier forming→confirmed.
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
