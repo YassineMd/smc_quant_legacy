@@ -425,6 +425,15 @@ sound as a flow descriptor — **do NOT loosen the catch-alls** (don't re-litiga
   **BEAR TRAP** showed 70% forward win at K=5 (n=60) — the one possibly-predictive thread, parked for later.
 - **Classifier UNCHANGED** — confirmed working as a flow descriptor.
 
+**Stats boxes — `y` toggles STATE/debug (hidden default) + dominant Sell|Buy colour (`cda7af6`).** Both the
+per-bucket stats box (hover + live forming candle, via `_hover_context`) and the Mode-10 selection box:
+- STATE verdict + its `DBG`/`why` calibration lines are **HIDDEN by default**; **`y`** toggles them, re-rendering
+  both boxes immediately (`_toggle_states` → `_refresh_parked_hover` + `_refresh_selection_stats`); the classifier
+  is skipped entirely while hidden.
+- The FLOW `Sell | Buy` line colours **only the dominant side** (sell>buy → Sell red, buy>sell → Buy green;
+  lesser side gray), matching the 4-vector top-2 dominance style.
+- *Exe rebuilt at `cda7af6`* (supersedes the `e272b71` build) — `dist/OrderFlowTerminal.exe`, smoke-tested.
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
