@@ -621,8 +621,21 @@ cause:**
 - **The strict-definition "lift" was the curve-fit trap** — 2–3.5× appeared ONLY after tuning the
   definitions (fresh-birth absorption, at-bucket exhaustion, higher bars), on 2–9% of flips, base rates of
   ~5–10 buckets = tiny-N noise. Fitting, not finding (it failed the no-tuning guard).
-- **Verdict:** the synthesis is dead single AND combined. Consistent with **descriptive-not-predictive** —
-  1m SOL flow *describes* what's happening; it does not hand you clean attributable causes. Not re-litigated.
+- **TIGHT-FOOTPRINT test — "maybe the loose window drowned a localized force": TESTED + FALSE.** Re-ran
+  base-rate guarded on the flip's OWN tight footprint (the `[f, f+REM]` maturation buckets + their high-low
+  band, span median **0.150** = random-box span median 0.150, so no span confound) vs 500 random same-size
+  5-bucket boxes, untuned — INCLUDING the never-before-tested POSITIONING vectors. **Ambient even up close:**
+  positioning init **0.60×** (LESS one-sided than random), positioning close flat (mean imbalance flip 0.305
+  vs random 0.314), absorption 0.95×, exhaustion 1.02×, churn 0.89×. **Sharpest finding: liquidation's 1.46×
+  loose-window lift COLLAPSES to 1.02× at the tight footprint** — so even that weak signal was the broad turny
+  *vicinity*, not a force in the flip's own ticks. There is no localized force to drown; the flip's footprint
+  looks like any random same-size box.
+- **Verdict:** the synthesis is dead at EVERY window scale — loose window (ambient, only liq 1.46×),
+  combinations (no synergy; 2–3.5× only under tuning = curve-fit), AND the tight footprint + positioning
+  (ambient up close, liq → 1.02×, positioning ≤ random). The detectable mechanisms do NOT distinguish a flip
+  from a random bucket at any scale, single or combined — **the trigger isn't in anything we instrument.**
+  Fully consistent with **descriptive-not-predictive**: 1m SOL flow *describes*, it does not hand you clean
+  attributable causes. Closed at every scale. Not re-litigated.
 
 ---
 

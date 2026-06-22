@@ -528,8 +528,17 @@ flips on 1m SOL mostly have NO clean detectable cause:**
   LIQ&EXHAUST **1.46×** = liq alone; ABSORB&EXHAUST **1.01×** ambient. **No synergy.** The strict-def 2–3.5×
   lift was the **curve-fit trap** — appeared only after tuning, on 2–9% of flips, tiny-N (~5–10 buckets). Failed
   the no-tuning guard.
-- **Verdict:** dead single AND combined. Consistent with **descriptive-not-predictive** — flow describes, it
-  doesn't hand you clean causes. Not re-litigated.
+- **TIGHT-FOOTPRINT test — "maybe the loose window drowned a localized force": TESTED + FALSE.** Base-rate
+  guarded on the flip's OWN footprint (`[f,f+REM]` maturation buckets + their high-low band; span median 0.150
+  = random 0.150, no confound) vs 500 random same-size boxes, untuned, incl. the never-tested POSITIONING
+  vectors. Ambient up close: pos-init **0.60×** (less than random), pos-close flat (0.305 vs 0.314), absorb
+  0.95×, exhaust 1.02×, churn 0.89×. Sharpest: **liquidation's 1.46× loose lift COLLAPSES to 1.02×** at the
+  tight footprint — the weak signal was the broad turny vicinity, not the flip's own ticks. No localized force
+  to drown; the footprint looks like a random box.
+- **Verdict:** dead at EVERY scale — loose window (only liq 1.46×), combinations (no synergy; 2–3.5× only
+  under tuning = curve-fit), tight footprint + positioning (ambient, liq→1.02×, positioning ≤ random). The
+  trigger isn't in anything we instrument. Consistent with **descriptive-not-predictive**. Closed at every
+  scale. Not re-litigated.
 
 ---
 
