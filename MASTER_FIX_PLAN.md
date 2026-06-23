@@ -654,8 +654,21 @@ parallel z-score). Self-calibrating to the regime.
 - *Hover:* a `30b VEL n.n×` line in the per-bucket stats box (under VEL), gold ≥ cutoff — same 30b basis
   as the `30b BER/SER` lines above it. Keys: `v` toggles diamonds (border always on); drawing-cancel moved
   `V`→`Escape`. Knobs `VEL_ABN_WINDOW=30` / `VEL_ABN_RATIO=5.0` / `VEL_ABN_CAP=10.0`.
-- **EXE STALL** — this + the forming marker are NOT in `dist/OrderFlowTerminal.exe` (last built `ab2da2b`);
-  operator rebuilds next batch.
+- **EXE REBUILT** (2026-06-23 00:36, onefile, ~88 MB) through `9a1fa6a` — bundles the forming marker + the
+  abnormal-velocity flag; smoke-tested (Qt window up, live data). Copied to the operator's other machine
+  (needs gcloud installed + authed to `yass-chart` for the SSH tunnel / live feed).
+
+**UI: `h` toggles the Mode-10 selection stats box.** `h` flips `show_sel_stats` —
+shows/hides ONLY the Magic-Selection floating box; the selection's chart overlays (flip line, absorption,
+velocity markers) keep rendering. Built AFTER the 00:36 exe rebuild, so it is not yet in the exe.
+
+**Drawing persistence on Mode 10 — CONSIDERED + DROPPED (operator's call).** Time-space drawings already
+persist (`drawings.json`, auto-loaded). Mode-10 drawings are INDEX-space (bucket-ordinal X) and the Zero
+Point defaults to `now − 24h` EVERY launch (`hamburger.py:271`), so ordinals shift across sessions — saving
+them as-is would restore them at the wrong place. The honest fix is epoch-anchoring (store `start_time` +
+price, re-map `ts → ordinal` each render so a drawing sticks to its time+price like a TradingView object,
+hidden while outside the loaded ~24h window). Operator decided it's **not worth the complexity** — dropped,
+not built. Revisit only if drawing-persistence becomes a real need.
 
 ---
 

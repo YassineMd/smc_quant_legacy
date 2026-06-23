@@ -214,6 +214,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_hover_pos = None
         self.show_state = False   # STATE verdict + debug lines hidden until 'y' (both stats boxes)
         self.show_vel_abn = True  # abnormal-velocity DIAMONDS ON by default ('v' toggles; 2px border always on)
+        self.show_sel_stats = True  # Mode-10 selection stats box shown by default ('h' toggles)
         self._flip_line = None    # Mode-10 balance-flip overlay (dashed yellow vline + sustain% label)
         self._flip_label = None
         self._forming_line = None   # tentative "forming" overlay (dim dotted amber + 'unconfirmed' label)
@@ -278,6 +279,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("Y"), self, activated=self._toggle_states)
         # 'v' = abnormal-velocity DIAMONDS (the 2px border is always on); drawing-cancel moved to Escape
         QtGui.QShortcut(QtGui.QKeySequence("V"), self, activated=self._toggle_vel_abn)
+        # 'h' = show/hide the Mode-10 Magic-Selection stats box (chart overlays like the flip line stay)
+        QtGui.QShortcut(QtGui.QKeySequence("H"), self, activated=self._toggle_sel_stats)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
         # §7.4 — yellow follow-spot shown on the cursor while a draw tool is armed
@@ -651,6 +654,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if h is not None:
             h.setVisible(self.show_vel_abn)
 
+    def _toggle_sel_stats(self) -> None:
+        """'h' — show/hide the Mode-10 Magic-Selection stats box ONLY. The selection's chart overlays
+        (flip line, absorption boxes, velocity markers) keep rendering; just the floating box is gated."""
+        self.show_sel_stats = not self.show_sel_stats
+        if self.show_sel_stats:
+            self._refresh_selection_stats()    # re-place + re-show if a selection is active
+        else:
+            self.sel_stats.hide()
+
     # ------------------------------------------------------------------
     # Magic Selection (Mode 10) — aggregate the buckets inside the box
     # ------------------------------------------------------------------
@@ -946,10 +958,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         p1, p2 = to_self(x0, y1), to_self(x1, y0)   # the selection's screen-space rect
         sx0, sx1 = min(p1.x(), p2.x()), max(p1.x(), p2.x())
         sy0, sy1 = min(p1.y(), p2.y()), max(p1.y(), p2.y())
-        bx, by = self._best_box_pos(sx0, sy0, sx1, sy1,
-                                    self.sel_stats.width(), self.sel_stats.height())
-        self.sel_stats.move(bx, by)
-        self.sel_stats.show_raise()
+        if self.show_sel_stats:                # 'h' toggles ONLY the box; overlays above already drawn
+            bx, by = self._best_box_pos(sx0, sy0, sx1, sy1,
+                                        self.sel_stats.width(), self.sel_stats.height())
+            self.sel_stats.move(bx, by)
+            self.sel_stats.show_raise()
+        else:
+            self.sel_stats.hide()
 
     def _update_flip_line(self, flip, lo_i: int, rect) -> None:
         """Draw/refresh the balance-flip vline at the flip bucket, spanning the selection's y-band. TWO

@@ -549,7 +549,17 @@ colour kept) **always on** (per-frame pen list copied — #3 cache never mutated
 toggles): neon green=buyer / red=seller / **gold on divergence** (buy-led closed down / sell-led closed up),
 alpha+size by ratio capped at `VEL_ABN_CAP=10×`. Hover: `30b VEL n.n×` line under VEL (gold ≥ cutoff). Keys:
 `v` toggles diamonds (border always on); drawing-cancel moved `V`→`Escape`. Knobs `VEL_ABN_WINDOW=30` /
-`VEL_ABN_RATIO=5.0` / `VEL_ABN_CAP=10.0`. **EXE STALL**: this + forming not in the exe (last `ab2da2b`).
+`VEL_ABN_RATIO=5.0` / `VEL_ABN_CAP=10.0`. **EXE REBUILT** 2026-06-23 00:36 through `9a1fa6a` (forming +
+velocity flag, smoke-tested, copied to the operator's other machine — needs gcloud authed to `yass-chart`).
+
+**UI: `h` toggles the Mode-10 selection stats box** (`show_sel_stats`; box only — flip line / absorption /
+velocity overlays keep rendering). Built after the 00:36 exe rebuild (not yet in the exe).
+
+**Drawing persistence on Mode 10 — CONSIDERED + DROPPED.** Time-space drawings already persist
+(`drawings.json`); Mode-10 drawings are INDEX-space and the Zero Point resets to `now−24h` every launch
+(`hamburger.py:271`) so ordinals shift — saving as-is restores them wrong. Honest fix = epoch-anchoring
+(store `start_time`+price, re-map `ts→ordinal` each render). Operator decided not worth the complexity —
+dropped, not built.
 
 ---
 
