@@ -90,7 +90,7 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background:transp
 # Tuple: (key, label, default_on, enabled). Disabled rows are Phase-3 placeholders:
 # shown so the full control panel is visible, but non-clickable until their logic lands.
 _M10_LAYERS = [
-    ("m10_poc", "POC Dot", True, True),
+    ("m10_poc", "POC Dot", False, True),               # default OFF (operator preference)
     ("m10_footprint", "Footprint Ladder", False, True),   # default OFF — heavy overlay, opt-in
     ("m10_obs", "Order Blocks", True, True),              # default ON — shows alive (solid) + dead (faded) together
     ("m10_liq", "Liquidation Marks", False, True),        # default OFF. In-session toggles persist as
@@ -298,7 +298,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("cob", "Order Book DOM Ladder"),
                            ("audio", "Audio Feed")]:
             cb = QtWidgets.QCheckBox(label)
-            cb.setChecked(key == "audio")    # Audio Feed ON by default (set before connect: no build-time emit)
+            cb.setChecked(key in ("audio", "drawing"))   # Audio + Vector Drawing ON by default (before connect)
             cb.toggled.connect(lambda on, k=key: self.subWidgetToggled.emit(k, on))
             self.sub_checks[key] = cb
             self.sub_section.addWidget(cb)

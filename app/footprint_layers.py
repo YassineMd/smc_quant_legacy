@@ -25,11 +25,15 @@ DETAIL_PX_PER_TICK = 12.0      # show side-by-side rows once a tick row is this 
 MAX_DETAIL_BUCKETS = 20        # NUMBERS (full per-level ladder) only in a tight study view
 MAX_BUBBLE_BUCKETS = 200       # TOP-3 bubbles up to here (3 x buckets <= 600 ellipses); wider -> none
 
-# Footprint NUMBER colors: neon green (buy) / neon red (sell). A diagonally-imbalanced level inverts
-# to BLACK text on a neon background (carried as the optional 5th TextPool spec element).
+# Footprint NUMBER colors: neon green (buy) / neon red (sell). An IMBALANCED level (a side's volume
+# >= FOOTPRINT_IMB_ER_MULT x the bucket's 30b E/R) inverts to BLACK text on a neon background (carried as
+# the optional 5th TextPool spec element).
 _FP_NEON_BUY = QtGui.QColor(0, 255, 127)
 _FP_NEON_SELL = QtGui.QColor(255, 7, 58)
 _FP_BLACK = QtGui.QColor(0, 0, 0)
+# Imbalance line colours (the horizontal under-number line): neon BLUE = buyer / neon ORANGE = seller.
+_FP_IMB_BUY = QtGui.QColor(0, 153, 255)
+_FP_IMB_SELL = QtGui.QColor(255, 128, 0)
 _EMPTY: dict = {}
 ICON_MIN_PX_PER_CANDLE = 22.0  # hide iceberg icons when candles get this narrow
 
@@ -101,8 +105,8 @@ class BucketFootprintItem(pg.GraphicsObject):
         super().setVisible(v)
         self.buy_pool.set_enabled(v); self.sell_pool.set_enabled(v)
 
-    def update_data(self, x: list, levels_list: list, x0: float, x1: float,
-                    width: float, px_per_x: float, px_per_y: float) -> None:
+    def update_data(self, x: list, levels_list: list, ber30s: list, ser30s: list,
+                    x0: float, x1: float, width: float, px_per_x: float, px_per_y: float) -> None:
         self.picture = QtGui.QPicture()
         p = QtGui.QPainter(self.picture)
         px_per_x = max(1e-9, px_per_x); px_per_y = max(1e-9, px_per_y)
@@ -112,7 +116,7 @@ class BucketFootprintItem(pg.GraphicsObject):
         # FIX 1 -- cull to the visible X viewport (the x0/x1 pattern) so the bubble scale
         # AND the 600-label budget serve only the ON-SCREEN buckets. Root fix: the live edge
         # stops being starved by the oldest off-screen buckets eating the cap.
-        visible = [(float(xi), levels) for xi, levels in zip(x, levels_list)
+        visible = [(i, float(xi), levels) for i, (xi, levels) in enumerate(zip(x, levels_list))
                    if levels and x0 - width <= float(xi) <= x1 + width]
 
         # Part B -- a legibility+cost gradient driven by how many buckets are on screen:
@@ -130,7 +134,7 @@ class BucketFootprintItem(pg.GraphicsObject):
         lo_all = hi_all = None
         if show_numbers or show_bubbles:
             max_vol = 1.0
-            for _xi, levels in visible:
+            for _i, _xi, levels in visible:
                 for v in levels.values():
                     max_vol = max(max_vol, v.get("b", 0.0) + v.get("s", 0.0))
 
@@ -138,7 +142,10 @@ class BucketFootprintItem(pg.GraphicsObject):
             # FIX 3 -- fill the label budget NEWEST-first so the live edge is labeled before the
             # 600-cap is spent. FIX 2 -- cap-overflow / zero-total levels fall back to a BUBBLE so
             # no visible bucket is ever blank.
-            for xi, levels in reversed(visible):
+            for i, xi, levels in reversed(visible):
+                ber, ser = ber30s[i], ser30s[i]
+                buy_thr = config.FOOTPRINT_IMB_ER_MULT * ber if ber > 0 else None
+                sell_thr = config.FOOTPRINT_IMB_ER_MULT * ser if ser > 0 else None
                 for ps, v in levels.items():
                     price = float(ps); buy = v.get("b", 0.0); sell = v.get("s", 0.0)
                     tot = buy + sell
@@ -147,11 +154,10 @@ class BucketFootprintItem(pg.GraphicsObject):
                     lo_all = price if lo_all is None else min(lo_all, price)
                     hi_all = price if hi_all is None else max(hi_all, price)
                     if len(buy_specs) < _FP_TEXT_CAP:
-                        # SAME-LEVEL imbalance: buy vs sell at this price. >= FOOTPRINT_IMBALANCE_RATIO
-                        # -> the dominant side inverts to black text on a neon bg.
-                        r_ = config.FOOTPRINT_IMBALANCE_RATIO
-                        buy_imb = buy >= r_ * sell
-                        sell_imb = sell >= r_ * buy
+                        # IMBALANCE: a side's volume >= FOOTPRINT_IMB_ER_MULT x the bucket's 30b E/R ->
+                        # that number inverts to BLACK on a neon bg (green buy / red sell).
+                        buy_imb = buy_thr is not None and buy >= buy_thr
+                        sell_imb = sell_thr is not None and sell >= sell_thr
                         buy_specs.append((xi + width * 0.10, price, f"{buy:.0f}",
                                           _FP_BLACK if buy_imb else _FP_NEON_BUY,
                                           _FP_NEON_BUY if buy_imb else None))
@@ -162,7 +168,7 @@ class BucketFootprintItem(pg.GraphicsObject):
                         _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y)
         elif show_bubbles:
             # TOP-3 levels by TOTAL volume (buy+sell) per bucket -- the significant nodes only.
-            for xi, levels in visible:
+            for _i, xi, levels in visible:
                 top3 = sorted(levels.items(),
                               key=lambda kv: kv[1].get("b", 0.0) + kv[1].get("s", 0.0),
                               reverse=True)[:3]
@@ -174,6 +180,8 @@ class BucketFootprintItem(pg.GraphicsObject):
                     lo_all = price if lo_all is None else min(lo_all, price)
                     hi_all = price if hi_all is None else max(hi_all, price)
                     _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y)
+        # (Imbalance lines are drawn by a SEPARATE always-on layer in the terminal — independent of the
+        # footprint toggle — so only the black-on-neon number highlight lives here.)
         p.end()
         self.buy_pool.update(buy_specs); self.sell_pool.update(sell_specs)
         if lo_all is None:

@@ -88,6 +88,11 @@ VEL_ABN_RATIO = 5.0                # flag a bucket when velocity >= this x its t
 VEL_ABN_CAP = 10.0                 # ratio at which the marker hits FULL intensity; the fat tail (up to
                                    # ~76x) just maxes out (z=cutoff faint -> >=cap bright)
 
+# ── E/R exhaustion candle border (descriptive) — neon 2px border when a side's E/R is strongly elevated ──
+ER_BORDER_EXH_PCT = 50             # a side's E/R exhaustion-% (the stats-box [+N%] bracket = (mult-1)*100,
+                                   # E/R z vs the trailing-30 window) >= this -> neon 2px border (green =
+                                   # buyer elevated / red = seller). ~25% of candles at 50. NOT a signal.
+
 # ---------------------------------------------------------------------------
 # Phase 5 — OI pending-balance attributor (aggTrade; app.aggtrade.OiAttributor)
 # ---------------------------------------------------------------------------
@@ -194,8 +199,11 @@ DOM_BIN_STEP = 0.01             # spec §8.1 — depth aggregation bin
 # Analytics thresholds (spec §4)
 FOOTPRINT_UNPACK_PX = 35        # vertical grid spacing to unpack side-by-side rows (§4.1.1)
 IMBALANCE_RATIO = 2.0           # diagonal imbalance multiplier (§4.1.1)
-FOOTPRINT_IMBALANCE_RATIO = 3.0  # Mode-10 footprint: flag a level's number when its same-level
-                                 # buy-vs-sell imbalance is >= this (300%)
+FOOTPRINT_IMB_ER_MULT = 1.0      # Mode-10 footprint imbalance: a price level's buy (or sell) volume
+                                 # >= this x the bucket's 30b buyer (or seller) E/R baseline (trailing-30
+                                 # mean) -> imbalance. Cues: the footprint NUMBER inverts to black-on-neon
+                                 # (green buy / red sell) + a candle-WIDTH horizontal line just below the
+                                 # number (wick-thin; neon blue = buyer / neon orange = seller). NOT a signal.
 IMBALANCE_OPACITY = (0.35, 0.95)  # min/max highlight opacity (§4.1.1)
 STACKED_IMBALANCE_MIN = 3       # consecutive rows to form a channel (§4.1.2)
 ICEBERG_VOL_SHARE = 0.04        # 4% candle volume (§4.2.1)

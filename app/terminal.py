@@ -1305,8 +1305,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _vb_wheel(self, ev, axis=None):
         """Modifier wheel over the chart: Ctrl -> nudge the Scan Start anchor ±1 min (consumed, no
-        zoom); Shift -> zoom the X axis only; otherwise the native zoom. Wrapped so a fault can
-        never break chart zoom."""
+        zoom); Shift -> zoom the X axis only; Alt -> zoom the Y axis only; otherwise the native zoom.
+        Wrapped so a fault can never break chart zoom."""
         try:
             mods = ev.modifiers()
             if mods & QtCore.Qt.ControlModifier:
@@ -1315,6 +1315,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 return
             if mods & QtCore.Qt.ShiftModifier:
                 return self._orig_vb_wheel(ev, axis=0)   # X-axis-only zoom
+            if mods & QtCore.Qt.AltModifier:
+                return self._orig_vb_wheel(ev, axis=1)   # Y-axis-only zoom
         except Exception:
             pass
         return self._orig_vb_wheel(ev, axis)
@@ -2431,6 +2433,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _w = 0.7 if _neon else 0.3
         else:
             _wc, _w = (136, 136, 136), 0.3
+        # E/R EXHAUSTION border (descriptive): when a side's E/R exhaustion-% — the stats-box [+N%]
+        # bracket = (mult-1)*100, i.e. the E/R z vs the trailing-30 window — is >= ER_BORDER_EXH_PCT,
+        # override the border (takes precedence over the volume-flow colour). WIDTH: 3px if BOTH sides
+        # elevated, else 2px. COLOUR: neon ORANGE (buy-led closed down) / BLUE (sell-led closed up) on a
+        # DIVERGENT close (absorbed flow), otherwise neon GREEN (buyer effort) / RED (seller effort) by
+        # the dominant E/R side.
+        _bm, _sm, _ = _exhaustion_mults(buckets, i)
+        _erthr = 1.0 + config.ER_BORDER_EXH_PCT / 100.0
+        _div_orange = bv > sv and cl < op    # buy-led but closed DOWN
+        _div_blue = sv > bv and cl > op      # sell-led but closed UP
+        if _bm >= _erthr or _sm >= _erthr:
+            _w = 3.0 if (_bm >= _erthr and _sm >= _erthr) else 2.0
+            if _div_orange:
+                _wc = (255, 128, 0)
+            elif _div_blue:
+                _wc = (0, 153, 255)
+            else:
+                _wc = (0, 255, 127) if _bm >= _sm else (255, 7, 58)
         wick_pen = pg.mkPen(_wc, width=_w); wick_pen.setCosmetic(True)
         row = (b.get("open", 0.0), b.get("high", 0.0), b.get("low", 0.0),
                b.get("close", 0.0), poc, brush,
@@ -2521,7 +2541,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         wick_pens = list(wick_pens)            # copy before swapping entries (never mutate the #3 cache)
         for i, r in enumerate(vel_abn):
             if r >= config.VEL_ABN_RATIO:
-                tp = pg.mkPen(wick_pens[i].color(), width=2.0)   # 2px border, flow colour kept (always on)
+                # at-least-2px, never REDUCE (so the E/R both-sides white 3px border survives a coincident
+                # velocity flag); keep whatever colour the candle already carries.
+                tp = pg.mkPen(wick_pens[i].color(), width=max(wick_pens[i].widthF(), 2.0))
                 tp.setCosmetic(True)
                 wick_pens[i] = tp
 
@@ -2580,14 +2602,70 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # teardown is in _set_scanner_overlay (setVisible + clear_text for the TextPools,
         # which are not in active_scanner_items). px_per_* are computed above regardless
         # (cheap, footprint-only) so nothing downstream can break when this is off.
+        # per-bucket 30b BER/SER baseline (trailing-30 mean of buyer_er/seller_er — the SAME window as the
+        # stats-box 30b BER/SER). Used by BOTH the footprint number highlight (gated) AND the imbalance
+        # lines (always-on), so compute it once here regardless of the footprint toggle.
+        levels_list = [b.get("levels", {}) for b in buckets]
+        ber30s, ser30s = [], []
+        for i in range(len(buckets)):
+            w = buckets[max(0, i - EXH_WINDOW):i]
+            if w:
+                ber30s.append(sum(bb.get("buyer_er", 0.0) for bb in w) / len(w))
+                ser30s.append(sum(bb.get("seller_er", 0.0) for bb in w) / len(w))
+            else:
+                ber30s.append(0.0); ser30s.append(0.0)
+
+        # IMBALANCE LINES — ALWAYS drawn (independent of the footprint toggle): a horizontal neon line the
+        # candle's width AT an imbalanced level's EXACT price (buy >= 30b BER -> neon BLUE; sell >= 30b SER
+        # -> neon ORANGE; both at a level -> split). Price-anchored, so it scales with the candles/grid on
+        # zoom and never drifts. Two PlotCurveItems (connect='pairs'), one per side. NOT a signal.
+        if "bc_imb_sell" not in self._scan_handles:
+            _ps = pg.mkPen((255, 128, 0), width=2.0); _ps.setCosmetic(True)
+            _pb = pg.mkPen((0, 153, 255), width=2.0); _pb.setCosmetic(True)
+            self._scan_handles["bc_imb_sell"] = self._add_scanner_item(pg.PlotCurveItem(pen=_ps))
+            self._scan_handles["bc_imb_sell"].setZValue(6)
+            self._scan_handles["bc_imb_buy"] = self._add_scanner_item(pg.PlotCurveItem(pen=_pb))
+            self._scan_handles["bc_imb_buy"].setZValue(6)
+        mult = config.FOOTPRINT_IMB_ER_MULT
+        hw = 0.8 / 2.0
+        sxs, sys_, bxs, bys = [], [], [], []
+        for i, b in enumerate(buckets):
+            xi = x[i]
+            if xi < vx0 - 1.0 or xi > vx1 + 1.0:
+                continue
+            lv = b.get("levels") or {}
+            if not lv:
+                continue
+            buy_thr = mult * ber30s[i] if ber30s[i] > 0 else None
+            sell_thr = mult * ser30s[i] if ser30s[i] > 0 else None
+            if buy_thr is None and sell_thr is None:
+                continue
+            for ps2, v in lv.items():
+                buy_imb = buy_thr is not None and v.get("b", 0.0) >= buy_thr
+                sell_imb = sell_thr is not None and v.get("s", 0.0) >= sell_thr
+                if not (buy_imb or sell_imb):
+                    continue
+                yy = float(ps2)            # EXACTLY at the level's price -> zoom-stable (no pixel offset)
+                if buy_imb and sell_imb:   # split: sell (orange) left half, buy (blue) right half
+                    sxs += [xi - hw, xi]; sys_ += [yy, yy]
+                    bxs += [xi, xi + hw]; bys += [yy, yy]
+                elif sell_imb:
+                    sxs += [xi - hw, xi + hw]; sys_ += [yy, yy]
+                else:
+                    bxs += [xi - hw, xi + hw]; bys += [yy, yy]
+        self._scan_handles["bc_imb_sell"].setData(sxs, sys_, connect="pairs")
+        self._scan_handles["bc_imb_buy"].setData(bxs, bys, connect="pairs")
+        self._scan_handles["bc_imb_sell"].setVisible(True)
+        self._scan_handles["bc_imb_buy"].setVisible(True)
+
         if self.menu.layer_state("m10_footprint"):
-            levels_list = [b.get("levels", {}) for b in buckets]
             if "bc_fp" not in self._scan_handles:
                 self.bc_fp.setZValue(5)            # ladder above candles (z0), below the POC dot (z6)
                 self._add_scanner_item(self.bc_fp)
                 self._scan_handles["bc_fp"] = self.bc_fp
             self.bc_fp.setVisible(True)
-            self.bc_fp.update_data(x, levels_list, vx0, vx1, 0.8, px_per_x, px_per_y)  # vx0/vx1: viewport cull
+            self.bc_fp.update_data(x, levels_list, ber30s, ser30s,
+                                   vx0, vx1, 0.8, px_per_x, px_per_y)   # vx0/vx1: viewport cull
 
         # --- order blocks mapped onto the integer bucket grid (§6.1) ---
         # A4 draw-gate: OB zones gated by m10_obs. Toggle-off teardown is in
