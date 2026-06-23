@@ -670,6 +670,29 @@ price, re-map `ts → ordinal` each render so a drawing sticks to its time+price
 hidden while outside the loaded ~24h window). Operator decided it's **not worth the complexity** — dropped,
 not built. Revisit only if drawing-persistence becomes a real need.
 
+**E/R-exhaustion candle border + footprint imbalance vs 30b E/R + Mode-10 UI defaults (`79c1ace`).** A
+Mode-10 visual+controls batch, all DESCRIPTIVE (effort/flow readouts, never signals); borders/lines key off
+the SAME trailing-30 E/R baseline (`EXH_WINDOW=30`) the stats box shows as `30b BER/SER`.
+- **E/R-EXHAUSTION CANDLE BORDER** (`_bucket_row`, `config.ER_BORDER_EXH_PCT=50`): when a side's E/R
+  exhaustion-% (the stats-box `[+N%]` bracket = `(mult−1)×100`, the E/R z vs the trailing-30 window) ≥ the
+  cutoff, override the wick/border. **Width** 3px if BOTH sides elevated, else 2px. **Colour** neon ORANGE
+  (buy-led closed down) / BLUE (sell-led closed up) on a DIVERGENT close, else neon GREEN (buyer) / RED
+  (seller) by the dominant E/R side. Precedence over the volume-flow colour. (~25% of candles at 50%;
+  tunable.) The abnormal-velocity flag is now **at-least-2px** (never reduces, so a 3px E/R border survives
+  a coincident velocity flag). Full border priority recorded in the commit body.
+- **FOOTPRINT IMBALANCE** — replaced the old same-level buy-vs-sell ratio (`FOOTPRINT_IMBALANCE_RATIO`
+  removed) with: a price level whose buy (or sell) volume ≥ `FOOTPRINT_IMB_ER_MULT` (=1.0) × the bucket's
+  30b buyer (or seller) E/R → imbalance. **Two cues**: (1) the footprint NUMBER inverts to black-on-neon
+  (green buy / red sell) — gated by the footprint toggle; (2) a horizontal neon line the candle's width AT
+  the level's EXACT price (price-anchored → scales with the candles on zoom, **no drift**), blue=buyer /
+  orange=seller, both-at-a-level → split. The **LINE is ALWAYS drawn** (two `PlotCurveItem`s, `connect=
+  'pairs'`), independent of the footprint toggle. (Earlier iterations — 1.5× mult, a full-candle band, a
+  pixel-offset line that drifted on zoom — were rejected in favour of this.)
+- **UI:** POC Dot now **OFF** by default; Vector Drawing toolbar now **ON** by default (`hamburger.py`).
+  **Alt + wheel = Y-axis-only zoom** (`_vb_wheel`; Shift+wheel = X-only already existed).
+- **EXE: deliberately NOT rebuilt** — `dist/OrderFlowTerminal.exe` (last built 2026-06-23 00:36 through
+  `9a1fa6a`) is now stale by everything since (h-toggle + this batch); operator rebuilds next batch.
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)

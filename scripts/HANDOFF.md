@@ -561,6 +561,22 @@ velocity overlays keep rendering). Built after the 00:36 exe rebuild (not yet in
 (store `start_time`+price, re-map `ts→ordinal` each render). Operator decided not worth the complexity —
 dropped, not built.
 
+**E/R-exhaustion candle border + footprint imbalance vs 30b E/R + Mode-10 UI defaults (`79c1ace`).**
+DESCRIPTIVE Mode-10 visual+controls batch; keyed off the trailing-30 E/R baseline (`EXH_WINDOW=30` = the
+stats box's `30b BER/SER`).
+- **E/R border** (`_bucket_row`, `ER_BORDER_EXH_PCT=50`): a side's E/R exhaustion-% (`(mult−1)×100`, the
+  `[+N%]` bracket) ≥ cutoff overrides the wick/border — **3px** if both sides elevated else **2px**; colour
+  = neon ORANGE (buy-led closed down) / BLUE (sell-led closed up) on a divergent close, else neon GREEN
+  (buyer) / RED (seller) by dominant E/R side. Velocity flag now at-least-2px (won't shrink a 3px border).
+- **Footprint imbalance** — replaced same-level ratio (`FOOTPRINT_IMBALANCE_RATIO` gone) with: level buy/
+  sell ≥ `FOOTPRINT_IMB_ER_MULT` (=1.0) × the bucket's 30b BER/SER. Cues: NUMBER black-on-neon (gated by
+  footprint toggle) + a candle-width horizontal neon line AT the level's exact price (price-anchored, no
+  zoom drift; blue=buyer/orange=seller; both→split) — the LINE is ALWAYS on (two `PlotCurveItem`s,
+  independent of the footprint toggle).
+- **UI**: POC Dot OFF by default; Vector Drawing toolbar ON by default. **Alt+wheel = Y-zoom**
+  (Shift+wheel = X-zoom already).
+- **EXE NOT rebuilt** (operator's call) — stale by h-toggle + this batch since the 00:36/`9a1fa6a` build.
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
