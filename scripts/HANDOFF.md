@@ -629,6 +629,28 @@ untuned, stable W=6/8/10.
   a tautology. Joins iceberg-presence 1.07× + the 4 explain-the-flip mechanisms. Measure still describes a
   single bucket's defense (why zones ship); just no flip relationship. No build.
 
+**EFFECTIVE-AGGRESSION zones — the validated MIRROR of absorption, BUILT (`51bd635`).** Absorption = heavy
+volume that FAILED to move price (`V*s`); eff-agg = the dominant aggressor's volume that MOVED price ITS way
+(`V*(1-s)`), gated on direction; reuses the EXACT same s. Eyeballed. DESCRIPTIVE.
+- **Measure** (`region_state.effective_aggression`): `eff_agg_bull = buy_vol*(1-s)` if buy-dom & close>open;
+  `eff_agg_bear = sell_vol*(1-s)` if sell-dom & close<open. Proven: in-dir bucket `absorption+eff_agg == V`
+  (split the dominant volume by s; corr −0.45, top-decile overlap 0.5% — near-disjoint mirror). Distinct from
+  light drift (volume weight = force gate) and absorption (the s split).
+- **Zones** (`eff_agg_series`/`eff_agg_default_f`/`eff_zones_from_series`): ≥3 same-side forceful runs →
+  **NEON green (0,255,128) / red (255,0,96)** bands (distinct from absorption's muted green/red), projection +
+  vol label. OWN slider (`EffAggZoneSlider`, neon accent, stacked under the absorption slider) riding force
+  `f = eff_agg/vol_norm` (vol_norm = trailing-50 mean curr_vol; self-calibrated relative force ~[0,1]).
+  Auto-default = selection's median nonzero-f, re-seeded per selection.
+- **The dot (the one honest difference):** eff-agg has NO validated-strength cliff (it's common, ~55%; ~75% of
+  directional buckets are ordinary directional volume). Dot GROUNDED at `EFF_AGG_ZONE_DOT_F=0.75` = ~p75 of
+  directional force on real 1m: above = top-quartile distinctively forceful, below = ordinary directional
+  volume. (f=1.0 rejected — 98th pct, ~0 runs.) A force gradient, not real/fake.
+- *Validated*: forceful selection auto-default (f=0.88) drew a genuine forceful zone; the dot kept 2 forceful
+  zones while below-dot surfaced ordinary runs; an ordinary light-directional region (51 dir buckets, median-f
+  0.52) drew NOTHING at the dot (force gate works). Parity: hover `Bull/Bear Eff` + box `EFF-AGG · VOL`.
+  Slider refactored to a shared `_ZoneThresholdSlider` base (absorption behaviour unchanged); `AbsorptionZone
+  Layer` parametrised with colours. **EXE still stale.**
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)

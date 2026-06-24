@@ -758,6 +758,34 @@ config `FLIP_SUSTAIN_MIN`/`FLIP_MIN_REMAINDER`; untuned, stable across W=6/8/10)
   explain-the-flip mechanisms, now this). The measure still DESCRIBES a single bucket's defense well — which
   is why the zones are worth showing — it just doesn't relate to flips. No build (as instructed).
 
+**EFFECTIVE-AGGRESSION zones — the validated MIRROR of absorption, BUILT (`51bd635`).** Where absorption marks
+heavy volume that FAILED to move price (`V*s`), effective aggression marks the dominant aggressor's volume
+that MOVED price ITS way (`V*(1-s)`), gated on direction. Reuses the EXACT same `s`. DESCRIPTIVE; eyeballed.
+- **MEASURE** (`region_state.effective_aggression`, reuses `absorption_vol`'s s): `eff_agg_bull = buy_vol*
+  (1-s)` if buy-dominant AND `close>open`; `eff_agg_bear = sell_vol*(1-s)` if sell-dominant AND `close<open`.
+  PROVEN property: for an in-direction bucket `absorption + eff_agg == V` (= max(buy,sell)) — they SPLIT the
+  dominant volume by suppression, near-disjoint (corr −0.45; top-decile overlap 0.5%). Distinct from light
+  drift (force gate = the volume weight: light movers score low) AND from absorption (the `s` split).
+- **ZONES** (`eff_agg_series`/`eff_agg_default_f`/`eff_zones_from_series`): runs of ≥`EFF_AGG_ZONE_MIN_RUN`(3)
+  same-side forceful buckets → **NEON green** (0,255,128) / **NEON red** (255,0,96) bands (distinct from the
+  absorption muted green/red), rightward projection + BULL/BEAR vol label. OWN separate slider
+  (`EffAggZoneSlider`, neon-green accent, stacked under the absorption slider) riding **force `f = eff_agg /
+  vol_norm`** (vol_norm = trailing-50 mean curr_vol — a self-calibrated RELATIVE force ratio, ~[0,1], median
+  ~0.60). Auto-default = the selection's **median nonzero-f** (forceful → high, ordinary → low), re-seeded per
+  selection (mirror of absorption's median-s).
+- **THE DOT — the one honest difference from absorption (handled per the operator's instruction).** Absorption's
+  dot (s=0.60) was a permutation-VALIDATED-strength boundary. Eff-agg has NO such cliff — it's COMMON (~55% of
+  volume) and ~75% of directional buckets are ~ordinary directional volume; the novel part is the forceful
+  minority. So the dot is GROUNDED at **`EFF_AGG_ZONE_DOT_F=0.75`** = the ~p75 of directional force on real 1m
+  data: **above = top-quartile distinctively forceful (heavy vol that worked); below = ordinary directional
+  volume (~what volume bars show)**. (f=1.0 was REJECTED in the probe — 98th pct, ~0 runs; 0.75 gives feasible,
+  non-carpeting ~0.15 zones/selection.) Honest framing kept: not a real/fake cliff, a force gradient.
+- *Validated on live 1m VM data*: a forceful selection's auto-default (f=0.88) drew a genuine forceful zone; the
+  dot kept 2 forceful zones while loosening below surfaced the ordinary runs; an ORDINARY light-directional
+  region (51 directional buckets, median-f 0.52) drew **NOTHING at the dot** — the force gate works (ordinary
+  directional drift makes no forceful zone). Parity extras: hover box `Bull/Bear Eff`, selection box `EFF-AGG ·
+  VOL`. **EXE still stale.**
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)
