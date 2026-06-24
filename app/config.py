@@ -232,6 +232,27 @@ EFF_AGG_ZONE_DOT_F = 0.75        # 'forceful' dot on the eff-agg slider = ~p75 o
                                  # worked), below = ordinary directional volume (~what volume bars show).
                                  # Grounded, NOT a validated-strength cliff — eff-agg is common (the honest
                                  # difference from absorption's dot); forceful zones at the dot are rare.
+
+# ── Mode-10 EXHAUSTION STRIP (SELECTION-scoped: bull/bear gated exhaustion, two lines in a bottom PANEL) ──
+EXH_RELEASE = 0.60               # envelope decay for the SYMMETRIC smoother (max of a forward + a backward
+                                 # envelope) that turns the spiky gated score into two readable lines.
+                                 # Symmetric (non-causal) so they CROSS at the true balance shift, not at a
+                                 # point dragged right by a causal decay-tail. Fine — a selection is a
+                                 # descriptive look at a KNOWN region.
+EXH_MEASURE = "gated"            # which measure feeds the lines: "gated" (TRUE worn-out: effort hot AND OI
+                                 # draining; sparse/honest) or "raw" (effort-z normalized; smooth weave but
+                                 # mislabels a winning side as exhausted). The operator accepted GATED.
+EXH_SEL_MIN_WINDOW = 2           # FRESH-from-selection baseline: a bucket needs >= this many PRIOR selected
+                                 # buckets to compute its z (else neutral). 2 = compute from the 2nd bucket
+                                 # on (thin/noisy early, accepted); the baseline is the selection ONLY (no
+                                 # reach-back before it), expanding as you go right.
+EXH_STRIP_FRAC = 0.25            # panel height as a fraction of the selection's price range (y1 - y0).
+EXH_STRIP_GAP = 0.05             # the panel's 100% line sits this fraction of the selection height BELOW the
+                                 # box bottom — the panel is OUTSIDE the selection (under it), so it never
+                                 # covers the candles. Raise to drop it further below; needs room beneath the
+                                 # selection (draw the box with space below, or it falls off the bottom).
+EXH_CROSS_PERSIST = 2            # mark a crossover (gold diamond) only if the new dominant side holds >= this
+                                 # many buckets (so a choppy selection doesn't litter diamonds).
 ICEBERG_VOL_SHARE = 0.04        # 4% candle volume (§4.2.1)
 ICEBERG_SKEW = 0.65             # 65% absorption skew (§4.2.1)
 VELOCITY_NEON_RATIO = 2.5       # HFT neon overload trigger (index.html:945, spec §10.2.3)

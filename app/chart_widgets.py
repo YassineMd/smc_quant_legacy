@@ -517,6 +517,76 @@ class AbsorptionZoneLayer(pg.GraphicsObject):
 
 
 # ---------------------------------------------------------------------------
+# EXHAUSTION STRIP (Mode 10, SELECTION-scoped) — TWO smoothed lines (BLUE bull / RED bear gated exhaustion)
+# in a PANEL at the bottom of the selection, on a fixed 0/50/100% scale, with GOLD diamonds where the lines
+# CROSS (the exhausted side swaps). DESCRIPTIVE — where exhaustion sits and shifts within the selection,
+# NOT a forecast. The cursor tooltip gives the raw per-bucket %.
+# ---------------------------------------------------------------------------
+_RGB_EXH_BULL = (41, 160, 255)     # blue  — bull exhaustion (buyers worn out)
+_RGB_EXH_BEAR = (244, 67, 54)      # red   — bear exhaustion (sellers worn out)
+_RGB_EXH_CROSS = (241, 196, 15)    # gold  — crossover marker (exhausted party changes)
+
+
+class ExhaustionStripLayer(pg.GraphicsObject):
+    """Selection-scoped exhaustion panel. ``update_data`` takes the bucket x-positions and the already-mapped
+    y of each line (price coords inside the panel), the panel's x/y bounds, and the crossover points; it
+    paints a translucent backing, faint 0/50/100% guides, the blue + red lines, and gold crossover diamonds.
+    All geometry is pre-computed by the caller (selection-scoped, bounded) — the layer only draws."""
+
+    def __init__(self, plot=None):
+        super().__init__()
+        self.picture = QtGui.QPicture()
+        self._rect = QtCore.QRectF()
+
+    def paint(self, p, *args):
+        p.drawPicture(0, 0, self.picture)
+
+    def boundingRect(self):
+        return self._rect
+
+    def clear(self):
+        self.picture = QtGui.QPicture()
+        self._rect = QtCore.QRectF()
+        self.prepareGeometryChange(); self.update()
+
+    def update_data(self, xs, bull_y, bear_y, x0, x1, y_bot, y_top, crosses):
+        """xs: bucket-index x's; bull_y/bear_y: per-bucket panel-y (price); [x0,x1]x[y_bot,y_top]: panel
+        bounds (y_bot=0%, y_top=100%); crosses: list of (x, y) gold crossover points."""
+        self.picture = QtGui.QPicture()
+        if not xs:
+            self._rect = QtCore.QRectF(); self.prepareGeometryChange(); self.update(); return
+        p = QtGui.QPainter(self.picture)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        guide = QtGui.QPen(QtGui.QColor(120, 128, 140, 120)); guide.setCosmetic(True)
+        guide.setStyle(QtCore.Qt.DotLine)
+        for fr in (0.0, 0.5, 1.0):
+            yy = y_bot + fr * (y_top - y_bot)
+            p.setPen(guide); p.drawLine(QtCore.QPointF(x0, yy), QtCore.QPointF(x1, yy))
+
+        def polyline(ys, rgb):
+            pen = QtGui.QPen(QtGui.QColor(*rgb)); pen.setCosmetic(True); pen.setWidthF(1.8)
+            p.setPen(pen); p.setBrush(QtCore.Qt.NoBrush)
+            path = QtGui.QPainterPath()
+            path.moveTo(QtCore.QPointF(float(xs[0]), ys[0]))
+            for k in range(1, len(xs)):
+                path.lineTo(QtCore.QPointF(float(xs[k]), ys[k]))
+            p.drawPath(path)
+        polyline(bull_y, _RGB_EXH_BULL)
+        polyline(bear_y, _RGB_EXH_BEAR)
+        dh = 0.11 * (y_top - y_bot); dw = 0.38
+        gold = QtGui.QColor(*_RGB_EXH_CROSS)
+        tick = QtGui.QPen(gold); tick.setCosmetic(True); tick.setWidthF(1.0); tick.setStyle(QtCore.Qt.DashLine)
+        for cx, cy in crosses:
+            p.setPen(tick); p.drawLine(QtCore.QPointF(cx, y_bot), QtCore.QPointF(cx, cy))
+            dia = QtGui.QPolygonF([QtCore.QPointF(cx, cy + dh), QtCore.QPointF(cx + dw, cy),
+                                   QtCore.QPointF(cx, cy - dh), QtCore.QPointF(cx - dw, cy)])
+            p.setPen(QtCore.Qt.NoPen); p.setBrush(gold); p.drawPolygon(dia)
+        p.end()
+        self._rect = QtCore.QRectF(x0, y_bot, max(1.0, x1 - x0), max(1e-6, y_top - y_bot))
+        self.prepareGeometryChange(); self.update()
+
+
+# ---------------------------------------------------------------------------
 # Bucket candlesticks (Mode 10) — constant-volume candles at integer X,
 # per-candle body brush (Neon Engine V2); wicks/borders use a neutral pen.
 # ---------------------------------------------------------------------------

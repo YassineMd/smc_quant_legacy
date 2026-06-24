@@ -33,8 +33,8 @@ from . import bucket_state, config, region_state, vpin_adaptive
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
 from .chart_widgets import (
-    AbsorptionLayer, AbsorptionZoneLayer, BucketCandleItem, LocalTimeAxis, OrderBlockLayer, PriceAxis,
-    _RGB_EFF_BEAR, _RGB_EFF_BULL,
+    AbsorptionLayer, AbsorptionZoneLayer, BucketCandleItem, ExhaustionStripLayer, LocalTimeAxis,
+    OrderBlockLayer, PriceAxis, _RGB_EFF_BEAR, _RGB_EFF_BULL, _RGB_EXH_BEAR, _RGB_EXH_BULL,
 )
 from .cob_panel import CobPanel
 from .drawing_tools import DrawingController, DrawingToolbar
@@ -204,6 +204,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.eff_slider.changed.connect(self._on_eff_f_changed)
         self.eff_slider.hide()
         self._eff_sel_id = None        # identity of the live selection; on change -> re-seed adaptive default
+        # SELECTION-SCOPED EXHAUSTION STRIP — two smoothed lines (blue bull / red bear gated exhaustion)
+        # across the selected buckets, in a panel hanging below the selection; gold diamonds mark crossovers
+        # (the exhausted side swaps). Persistent plot item; hidden when no selection. zValue 2 like the zones.
+        self.bc_exh_strip = ExhaustionStripLayer(self.plot)
+        self.bc_exh_strip.setZValue(2)
+        self.plot.addItem(self.bc_exh_strip, ignoreBounds=True)
+        self.bc_exh_strip.setVisible(False)
 
         # --- crosshair (patch §13): light-gray dashed ---
         pen = pg.mkPen(color="#aaaaaa", style=QtCore.Qt.DashLine, width=1)
@@ -234,6 +241,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.dom_tooltip.setZValue(60)
         self.plot.addItem(self.dom_tooltip, ignoreBounds=True)
         self.dom_tooltip.hide()
+        # Exhaustion-lines hover: a cursor label showing the hovered bucket's RAW (un-smoothed) bull/bear
+        # gated exhaustion %. Shown only when the selection lines are up; independent of the per-bucket box.
+        self.exh_tooltip = pg.TextItem(anchor=(0.5, 1.0))
+        _etf = QtGui.QFont("Consolas", 12); _etf.setBold(True)
+        self.exh_tooltip.textItem.setFont(_etf)
+        self.exh_tooltip.setZValue(61)
+        self.plot.addItem(self.exh_tooltip, ignoreBounds=True)
+        self.exh_tooltip.hide()
+        self._exh_hover = None   # (lo, raw_bull[], raw_bear[]) for the current selection, or None
         self._proxy = pg.SignalProxy(self.plot.scene().sigMouseMoved,
                                      rateLimit=60, slot=self._on_mouse_move)
         # last cursor scene pos while inside the plot — drives the A3a live-breathe
@@ -242,6 +258,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_state = False   # STATE verdict + debug lines hidden until 'y' (both stats boxes)
         self.show_vel_abn = True  # abnormal-velocity DIAMONDS ON by default ('v' toggles; 2px border always on)
         self.show_sel_stats = True  # Mode-10 selection stats box shown by default ('h' toggles)
+        self.show_exh_strip = True  # Mode-10 selection exhaustion panel shown by default ('1' toggles)
         self._flip_line = None    # Mode-10 balance-flip overlay (dashed yellow vline + sustain% label)
         self._flip_label = None
         self._forming_line = None   # tentative "forming" overlay (dim dotted amber + 'unconfirmed' label)
@@ -308,6 +325,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("V"), self, activated=self._toggle_vel_abn)
         # 'h' = show/hide the Mode-10 Magic-Selection stats box (chart overlays like the flip line stay)
         QtGui.QShortcut(QtGui.QKeySequence("H"), self, activated=self._toggle_sel_stats)
+        # '1' = show/hide the Mode-10 selection exhaustion panel (the bull/bear lines below the box)
+        QtGui.QShortcut(QtGui.QKeySequence("1"), self, activated=self._toggle_exh_strip)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
         # §7.4 — yellow follow-spot shown on the cursor while a draw tool is armed
@@ -579,6 +598,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.plot.sceneBoundingRect().contains(pos):
             self.price_tag.hide()
             self.dom_tooltip.hide()
+            self.exh_tooltip.hide()
             self._last_hover_pos = None      # left the plot -> stop the hover re-fire
             if self.scanner_mode == "bucket_canvas":
                 self._show_forming_stats()   # keep the live candle's readout on by default
@@ -606,6 +626,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # wall volume. (The time-chart _hover_stats path went with the Off mode in Phase B.)
         self._hover_scanner(pt.x(), pos)
         self._hover_dom_wall(pt.x(), pt.y())   # DOM wall hover-volume (bucket_canvas + m10_dom)
+        self._hover_exhaustion(pt.x(), pt.y())  # cursor label: RAW bull/bear exhaustion % (lines shown)
+
+    def _hover_exhaustion(self, x: float, y: float) -> None:
+        """Cursor label of the hovered bucket's RAW (un-smoothed) gated exhaustion % — shown only while the
+        selection exhaustion lines are up. Independent of the per-bucket stats box, so 'hover the lines ->
+        see the %' always works."""
+        hv = self._exh_hover
+        if hv is None or self.scanner_mode != "bucket_canvas":
+            self.exh_tooltip.hide()
+            return
+        lo, raw_b, raw_s = hv
+        k = int(round(x)) - lo
+        if not (0 <= k < len(raw_b)):
+            self.exh_tooltip.hide()
+            return
+        eb, er = raw_b[k] * 100, raw_s[k] * 100
+        self.exh_tooltip.setHtml(
+            f"<span style='color:rgb{_RGB_EXH_BULL}; font-weight:bold'>BULL {eb:.0f}%</span>"
+            f"<span style='color:#888'> · </span>"
+            f"<span style='color:rgb{_RGB_EXH_BEAR}; font-weight:bold'>BEAR {er:.0f}%</span>")
+        self.exh_tooltip.setPos(x, y)
+        self.exh_tooltip.show()
 
     def _hover_scanner(self, x: float, scene_pos) -> None:
         """Rich, mode-specific HUD readout for the hovered volume bucket (§4)."""
@@ -680,6 +722,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         h = self._scan_handles.get("bc_vel_abn")
         if h is not None:
             h.setVisible(self.show_vel_abn)
+
+    def _toggle_exh_strip(self) -> None:
+        """'1' — show/hide the Mode-10 selection exhaustion panel (bull/bear lines below the box). Flips the
+        layer immediately; it repopulates on the next selection refresh."""
+        self.show_exh_strip = not self.show_exh_strip
+        if not self.show_exh_strip:
+            self.bc_exh_strip.setVisible(False)
+            self.exh_tooltip.hide()
+        self._refresh_selection_stats()
 
     def _toggle_sel_stats(self) -> None:
         """'h' — show/hide the Mode-10 Magic-Selection stats box ONLY. The selection's chart overlays
@@ -965,6 +1016,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
+            self.bc_exh_strip.setVisible(False)
+            self._exh_hover = None
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -974,6 +1027,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
+            self.bc_exh_strip.setVisible(False)
+            self._exh_hover = None
             return
         x0, y0, x1, y1 = rect
         tv = (self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL
@@ -985,6 +1040,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
+            self.bc_exh_strip.setVisible(False)
+            self._exh_hover = None
             return
         # classify the region with the SAME 12-state engine the per-bucket box uses (only when the
         # STATE lines are visible — 'y' toggles; hidden by default), then size the box and place it
@@ -1067,6 +1124,43 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                       f_thr, config.EFF_AGG_ZONE_MIN_RUN)]
         self.bc_eff_zones.update_zones(especs)
         self.bc_eff_zones.setVisible(bool(especs))
+        # SELECTION EXHAUSTION STRIP — bull/bear gated exhaustion as two SYMMETRICALLY-smoothed lines in a
+        # PANEL at the bottom of the selection (0/50/100% scale); gold diamonds mark crossovers (the exhausted
+        # side swaps). Selection-scoped (bounded), recomputed each frame like the sparklines/zones above.
+        if self.show_exh_strip and (hi - lo + 1) >= 3:    # '1' toggles the panel
+            # FRESH-from-selection-start: z-baseline = ONLY the prior buckets WITHIN the selection (expanding
+            # window); the chosen measure (gated/raw) per config.EXH_MEASURE. Recomputed per selection.
+            sel_exh = region_state.selection_exhaustion(
+                filtered[lo:hi + 1], config.EXH_MEASURE, config.EXH_SEL_MIN_WINDOW)
+            ex_bull = [e[0] for e in sel_exh]; ex_bear = [e[1] for e in sel_exh]
+            sb = region_state.envelope_symmetric(ex_bull, config.EXH_RELEASE)
+            sr = region_state.envelope_symmetric(ex_bear, config.EXH_RELEASE)
+            sel_h = max(y1 - y0, config.TICK_SIZE)
+            strip_h = config.EXH_STRIP_FRAC * sel_h
+            y_top = y0 - config.EXH_STRIP_GAP * sel_h       # 100% line: just BELOW the box bottom (OUTSIDE)
+            y_bot = y_top - strip_h                          # 0% line, further below — off the candles
+
+            def _ey(v):
+                return y_bot + v * strip_h                  # map exhaustion 0..1 -> panel price-y
+            xs = list(range(lo, hi + 1))
+            bull_y = [_ey(v) for v in sb]; bear_y = [_ey(v) for v in sr]
+            # crossovers: sign change of (bull - bear), kept only if the NEW side holds >= EXH_CROSS_PERSIST
+            d = [sb[k] - sr[k] for k in range(len(sb))]
+            crosses, P = [], config.EXH_CROSS_PERSIST
+            for k in range(1, len(d)):
+                if d[k - 1] == 0 or d[k] == 0 or (d[k - 1] < 0) == (d[k] < 0):
+                    continue
+                newneg = d[k] < 0
+                if all((d[j] < 0) == newneg for j in range(k, min(len(d), k + P))):
+                    frac = d[k - 1] / (d[k - 1] - d[k])     # zero-crossing between k-1 and k
+                    cval = sb[k - 1] + frac * (sb[k] - sb[k - 1])
+                    crosses.append(((lo + k - 1) + frac, _ey(cval)))
+            self.bc_exh_strip.update_data(xs, bull_y, bear_y, lo - 0.5, hi + 0.5, y_bot, y_top, crosses)
+            self.bc_exh_strip.setVisible(True)
+            self._exh_hover = (lo, ex_bull, ex_bear)   # RAW per-bucket %, for the cursor tooltip
+        else:
+            self.bc_exh_strip.setVisible(False)
+            self._exh_hover = None
         self.sel_stats.set_content(
             self._selection_stat_lines(agg, state, conf, dbg, vtier,
                                        spark_er, spark_op, spark_cl, flip,
@@ -1484,6 +1578,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """
         self.price_tag.hide()   # A2: drop the cursor price tag on any mode switch (no orphan)
         self.stats.hide()       # A3a: drop the hover readout too (no orphan across modes)
+        self.exh_tooltip.hide()  # exhaustion-lines hover label
         # 1. sweep every tracked scanner item off the plot
         for item in self.active_scanner_items:
             try:

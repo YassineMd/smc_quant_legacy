@@ -29,19 +29,21 @@ EXH_OI_K = math.log(1.5)  # OI-direction term range [0.667, 1.5]
 EXH_OI_SCALE = 0.5        # scale of the (delta_oi / curr_vol) tanh ramp
 
 
-def _exh_z_mult(window_vals: list, val: float) -> float:
+def _exh_z_mult(window_vals: list, val: float, min_window: int = EXH_MIN_WINDOW) -> float:
     """Smooth, bounded exhaustion multiplier from the z-score of ``val`` vs a rolling
     ``window_vals`` of recent same-side E/R (DIVERGES FROM LEGACY, Step 5).
 
-    * Cold start (rule 0.6/2): a window shorter than ``EXH_MIN_WINDOW`` returns the NEUTRAL
-      multiplier 1.0 — no z-score against an under-filled window.
+    * Cold start (rule 0.6/2): a window shorter than ``min_window`` returns the NEUTRAL
+      multiplier 1.0 — no z-score against an under-filled window. (``min_window`` defaults to the
+      Step-5 EXH_MIN_WINDOW=10; the selection-scoped expanding baseline passes a smaller floor so the
+      early intra-selection buckets still compute, accepting their thin/noisy baseline.)
     * Degenerate denominator (rule 0.6/1): std is floored at a coefficient-of-variation fraction
       of the mean (``EXH_CV_FLOOR*|mean|`` — scale-free, NOT a fixed absolute), and an all-zero
       window falls back to neutral, not div-by-0.
     * ``tanh`` bounds the exponent, so a noisy/flat window can never spike the multiplier beyond
       ``exp(EXH_K)``.
     """
-    if len(window_vals) < EXH_MIN_WINDOW:
+    if len(window_vals) < min_window:
         return 1.0
     mean = sum(window_vals) / len(window_vals)
     var = sum((v - mean) ** 2 for v in window_vals) / len(window_vals)
@@ -397,3 +399,76 @@ def eff_zones_from_series(eff_bull: list, eff_bear: list, fval: list, lo_i: int,
                 zones.append({"side": side, "start": a, "end": b, "vol": sum(vals[st:k]),
                               "plo": min(lows), "phi": max(highs)})
     return zones
+
+
+# ---------------------------------------------------------------------------
+# GATED EXHAUSTION (the TRUE worn-out signal) — for the smoothed Mode-10 exhaustion cloud. The state
+# engine's BULL/BEAR EXHAUSTION score = geomean(absorb, drain/cover, Δsoft): effort-z hot AND OI
+# draining/closing-flow powered. This is what SEPARATES true exhaustion (worn out) from strong
+# continuation (effort hot but fresh OI opening) — a 36x separation on real data, vs the raw b/s_mult
+# which conflates the two. DESCRIPTIVE ("this side is worn out here"), NOT a reversal forecast.
+# ---------------------------------------------------------------------------
+def gated_exhaustion(buckets: list, i: int) -> "tuple[float, float]":
+    """Per-bucket TRUE (gated) exhaustion score, in [0,1], for the bucket's MATCHING close side: BULL on a
+    green bucket, BEAR on a red one (the state engine only scores the close-direction side; the other is 0).
+    Returns ``(bull_exh, bear_exh)``."""
+    bm, sm, _ = exhaustion_mults(buckets, i)
+    scores = bucket_state.state_scores(buckets, i, bm, sm)
+    return scores.get("BULL EXHAUSTION", 0.0), scores.get("BEAR EXHAUSTION", 0.0)
+
+
+def selection_exhaustion(sel: list, measure: str, sel_min_window: int) -> "list[tuple[float, float]]":
+    """Per-bucket ``(bull_exh, bear_exh)`` over a SELECTION, z-scored FRESH FROM THE SELECTION START: each
+    bucket's E/R z-baseline is ONLY the PRIOR buckets WITHIN the selection (an EXPANDING window), never the
+    buckets before the selection. Bucket 0 has no baseline (neutral); the early buckets have a thin, noisy
+    baseline (accepted, drawn normal). Below ``sel_min_window`` prior buckets the z-mult is neutral (1.0).
+
+    ``measure``:
+      * ``'raw'``   — the effort-z itself, normalized: ``clamp((mult-0.5)/1.5, 0, 1)``. Continuous,
+        both-sided (a smooth weave) — but it's 'effort running hot', NOT true worn-out (a winning side
+        reads hot).
+      * ``'gated'`` — the true worn-out score (effort hot AND OI draining/closing-flow), via the state
+        engine fed the EXPANDING-window mults. Sparse; only fires when a side is genuinely exhausted.
+    Recompute per selection (the baseline IS the selection), so the same bucket reads differently depending
+    on where the selection is drawn — selection-relative by design."""
+    ber = [float(b.get("buyer_er", 0.0)) for b in sel]
+    ser = [float(b.get("seller_er", 0.0)) for b in sel]
+    out = []
+    for k in range(len(sel)):
+        bm = _exh_z_mult(ber[:k], ber[k], sel_min_window)     # baseline = prior selected buckets only
+        sm = _exh_z_mult(ser[:k], ser[k], sel_min_window)
+        if measure == "raw":
+            eb = max(0.0, min(1.0, (bm - 0.5) / 1.5))
+            es = max(0.0, min(1.0, (sm - 0.5) / 1.5))
+        else:   # 'gated' — the worn-out score with the expanding-window mults
+            sc = bucket_state.state_scores(sel, k, bm, sm)
+            eb = sc.get("BULL EXHAUSTION", 0.0)
+            es = sc.get("BEAR EXHAUSTION", 0.0)
+        out.append((eb, es))
+    return out
+
+
+def envelope_series(x: list, release: float) -> list:
+    """Causal ATTACK-RELEASE envelope: instant rise to the true value, exponential fade. Each value swells
+    to its own level then decays by ``release`` per bucket (``out[i] = max(x[i], out[i-1]*release)``). Used
+    to turn the sparse, spiky gated-exhaustion signal into a readable swell-and-decay cloud WITHOUT
+    understating the true magnitude (a plain EMA would damp a 1-bucket 0.95 spike to ~0.47). Causal so the
+    live forming edge is honest (no lookahead)."""
+    out = []
+    prev = 0.0
+    for v in x:
+        cur = v if v > prev * release else prev * release
+        out.append(cur)
+        prev = cur
+    return out
+
+
+def envelope_symmetric(x: list, release: float) -> list:
+    """ZERO-PHASE (symmetric) envelope: the per-bucket MAX of a forward and a backward attack-release
+    envelope. Each spike gets a symmetric tent (rises into it from the left AND decays after it to the
+    right), peak preserved, no causal lag — so two such smoothed series CROSS at the true balance shift,
+    not at a point dragged right by a one-sided decay tail. Non-causal (uses both neighbours), which is
+    fine for a SELECTION (a descriptive look at a fully-known region)."""
+    fwd = envelope_series(x, release)
+    bwd = envelope_series(list(reversed(x)), release)[::-1]
+    return [max(a, b) for a, b in zip(fwd, bwd)]
