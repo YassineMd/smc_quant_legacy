@@ -577,6 +577,37 @@ stats box's `30b BER/SER`).
   (Shift+wheel = X-zoom already).
 - **EXE NOT rebuilt** (operator's call) — stale by h-toggle + this batch since the 00:36/`9a1fa6a` build.
 
+**BULL/BEAR absorption stack — per-bucket measure + selection aggregation + adaptive zones (`c5c219d`).**
+One concern, bottom-up: per-bucket primitive → selection aggregation → drawn zones. All DESCRIPTIVE.
+Eyeballed on a defended selection + a trend.
+- **Per-bucket** (`region_state.absorption_vol`, `ABSORP_VOL_WINDOW=50`): BULL/BEAR absorption in VOLUME =
+  aggressive volume on the side that FAILED to move price, scaled by suppression `s = clamp(1 −
+  (|disp|/curr_vol)/k, 0, 1)` vs the trailing-50 norm `k = Σ|close−open|/Σcurr_vol`. **GROSS + directional**
+  — only the heavier failed aggressor gets credit (`bull = sell_vol·s` if sellers dominated, else 0; mirror
+  for bear). Shown in the hover box (`Bull/Bear Absorp`) + summed over the Mode-10 box with the bull:bear
+  lean. Validated: held-despite-selling → high bull/0 bear; selling-worked → 0; clean move → 0 both;
+  discriminates at equal sell volume.
+- **Adaptive zones** (`zones_from_series`, `ABSORP_ZONE_MIN_RUN=3`, `ABSORP_ZONE_FLOOR_S=0.60`): a zone = a
+  run of **≥3 consecutive same-side** buckets that are directional AND `s ≥ threshold` → green/red price×time
+  band, labelled with absorbed volume. **Floorless slider** on `s`; **auto-default = the selection's MEDIAN
+  nonzero-s** (defended→high, quiet→low; re-seeds each fresh selection, a drag pins it until the selection
+  id changes — `id(drawer._selection)`). **Yellow dot at s=0.60 = the validated-strength boundary, a
+  GRADIENT not a real/fake cliff** (suppression rises gradually). **Rightward projection**: real run solid
+  (15%), projection lighter (6%) + dashed mid-line to the selection's right edge. Shared one-pass helpers
+  `absorption_series`/`absorption_default_s`/`zones_from_series` (over the validated `absorption_vol`);
+  `AbsorptionZoneSlider`+`_FloorSlider` (stats_overlay), `AbsorptionZoneLayer.update_zones` (chart_widgets);
+  wired in `_refresh_selection_stats` (slider under the box, hidden on every early-return / `h`-hide).
+- *Validated on live 1m VM data*: auto-default (s=0.56) drew a genuine 71.00-floor zone (88.8k vol); the
+  slider loosened below the dot (`0.90/0.60`→1 strong, `0.40`→+1 weaker, `0.00`→7 fragments); a CLEAN TREND
+  (+1.39/60 buckets) drew **nothing even at s=0.00** (no sustained same-side run — floorless can't
+  manufacture on a trend). **Fixed top-quartile N=3 version was built then REJECTED for this adaptive one.**
+
+**E/R border colour → by CLOSE direction (`dbfaaf1`, SEPARATE commit).** Non-divergent border now neon GREEN
+if `cl ≥ op` else RED (was `_bm ≥ _sm`, dominant E/R side); divergence ORANGE/BLUE unchanged + still take
+precedence. Split out per one-concern-per-commit (unrelated tweak in the same file as the absorption stack).
+
+**EXE still stale** — neither `c5c219d` nor `dbfaaf1` is in the 00:36/`9a1fa6a` build; rebuild next batch.
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)

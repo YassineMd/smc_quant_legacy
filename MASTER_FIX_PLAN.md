@@ -693,6 +693,44 @@ the SAME trailing-30 E/R baseline (`EXH_WINDOW=30`) the stats box shows as `30b 
 - **EXE: deliberately NOT rebuilt** — `dist/OrderFlowTerminal.exe` (last built 2026-06-23 00:36 through
   `9a1fa6a`) is now stale by everything since (h-toggle + this batch); operator rebuilds next batch.
 
+**BULL/BEAR absorption stack — per-bucket measure + selection aggregation + adaptive zones (`c5c219d`).**
+One coherent concern built bottom-up: a per-bucket primitive → selection aggregation → drawn zones. All
+DESCRIPTIVE (1m SOL flow describes, doesn't predict). Eyeballed on a real defended selection + a trend.
+- **PER-BUCKET (`region_state.absorption_vol`, `config.ABSORP_VOL_WINDOW=50`):** BULL/BEAR absorption in
+  VOLUME = aggressive volume on the side that FAILED to move price its way, scaled by suppression
+  `s = clamp(1 − (|disp|/curr_vol)/k, 0, 1)` against the trailing-50 vol→displacement norm
+  `k = Σ|close−open|/Σcurr_vol`. **GROSS + directional** — only the heavier aggressor that failed gets
+  credit (`bull = sell_vol·s` when sellers dominated, `bear = buy_vol·s` when buyers did; the defender = 0).
+  Validated: held-despite-selling → high bull / 0 bear (s=1 at disp=0); selling-that-worked → 0 (s=0); clean
+  move → 0 both; discriminated at EQUAL sell volume (held −0.01 vs dropped −0.05). Shown in the per-bucket
+  hover box (`Bull/Bear Absorp`) and summed over the Mode-10 selection box with the **bull:bear lean**.
+- **ADAPTIVE ZONES (`zones_from_series`, `ABSORP_ZONE_MIN_RUN=3`, `ABSORP_ZONE_FLOOR_S=0.60`):** a zone = a
+  run of **≥3 consecutive same-side** buckets that are directional AND `s ≥ threshold` → green/red price×time
+  band at the run's price range, labelled with absorbed volume. **Floorless slider** rides `s`;
+  **auto-default = the selection's MEDIAN nonzero-s** (defended → high, quiet → low; self-calibrating like
+  adaptive VPIN; re-seeds on a fresh selection, a manual drag pins it until the selection changes). The
+  **yellow dot at s=0.60** marks the **validated-strength boundary** — at/above = validated-strength, below =
+  weaker; it's a **GRADIENT, NOT a real/fake cliff** (suppression rises gradually, no sharp break).
+  **Rightward projection**: the real run draws solid (15%); a lighter (6%) band + dashed mid-price line carry
+  the defended level to the selection's right edge, visually distinct from the run. (`absorption_series` /
+  `absorption_default_s` / `zones_from_series` share one pass over the validated `absorption_vol` primitive;
+  `AbsorptionZoneSlider`+`_FloorSlider` in `stats_overlay`, `AbsorptionZoneLayer.update_zones` in
+  `chart_widgets`.) Clustering was permutation-baseline-checked first (defended adjacency 1.00 vs chance 0.42).
+- *Validated on live 1m VM data*: auto-default (s=0.56) drew a genuine 71.00-floor zone (88.8k vol, tight
+  `71.00–71.03` band); the slider loosened into weaker/more zones below the dot (`0.90/0.60` → 1 strong zone,
+  `0.40` → +1 weaker, `0.00` → 7 fragments); a CLEAN TREND (+1.39 over 60 buckets) drew **nothing even at the
+  floorless bottom** (no sustained same-side absorbing run — floorless can't manufacture on a trend).
+- **The fixed top-quartile N=3 version was BUILT then REJECTED** in favour of this adaptive one; do not revert.
+
+**E/R-exhaustion border colour → by CLOSE direction, not E/R dominance (`dbfaaf1`, separate commit).** The
+non-divergent border colour now keys off the close: neon GREEN if `cl ≥ op` (closed up), RED if `cl < op`
+(closed down) — was `_bm ≥ _sm` (dominant E/R side). The divergence cases (ORANGE buy-led-closed-down / BLUE
+sell-led-closed-up) are unchanged and still take precedence. Committed SEPARATELY from the absorption stack
+(one-concern-per-commit — it was an unrelated tweak sitting in the same file).
+
+**EXE still stale** — neither `c5c219d` nor `dbfaaf1` is in `dist/OrderFlowTerminal.exe` (last built
+2026-06-23 00:36 through `9a1fa6a`); rebuild next batch.
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)
