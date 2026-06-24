@@ -442,6 +442,77 @@ class AbsorptionLayer(pg.GraphicsObject):
 
 
 # ---------------------------------------------------------------------------
+# Mode-10 ABSORPTION ZONES — within a Magic Selection, a sustained consecutive run of heavy-bull (or
+# heavy-bear) absorption buckets draws a filled price x time band: GREEN = bulls defended (soaked up
+# selling), RED = bears defended; 15% opacity, no border. Label = side + absorbed volume. DESCRIPTIVE
+# (where a side absorbed over a sustained run), NOT a prediction the level holds.
+# ---------------------------------------------------------------------------
+_RGB_ZONE_BULL = (46, 204, 113)    # green
+_RGB_ZONE_BEAR = (231, 76, 60)     # red
+_ZONE_ALPHA = 0.15
+
+
+class AbsorptionZoneLayer(pg.GraphicsObject):
+    """Filled absorption-zone bands for the active selection. ``update_zones`` takes pre-computed bands
+    ``(x0, x1, plo, phi, side, label)`` (run-detection done in region_state) and paints each as a 15%
+    rect, no border, green (bull) / red (bear), labelled with the absorbed volume at its top-left."""
+
+    def __init__(self, plot=None):
+        super().__init__()
+        self.picture = QtGui.QPicture()
+        self._rect = QtCore.QRectF()
+        self.label_pool = TextPool(anchor=(0, 1), font_size=8, z=72)
+        if plot is not None:
+            self.label_pool.attach(plot)
+
+    def attach_text(self, plot) -> None:
+        self.label_pool.attach(plot)
+
+    def setVisible(self, v: bool) -> None:   # noqa: N802 (Qt override)
+        super().setVisible(v)
+        self.label_pool.set_enabled(v)
+
+    def paint(self, p, *args):
+        p.drawPicture(0, 0, self.picture)
+
+    def boundingRect(self):
+        return self._rect
+
+    def update_zones(self, zones: list) -> None:
+        """zones: list of ``(x0, x1, x_right, plo, phi, side, label)`` in bucket-canvas coords. The REAL
+        run [x0,x1] is a solid 15% fill; the PROJECTION [x1, x_right] (to the selection's right edge) is a
+        lighter 6% fill + a dashed mid-price line — a visual projection of the defended level, NOT a claim
+        the absorption happened at the right edge."""
+        self.picture = QtGui.QPicture()
+        if not zones:
+            self.label_pool.update([])
+            self._rect = QtCore.QRectF()
+            self.prepareGeometryChange(); self.update()
+            return
+        p = QtGui.QPainter(self.picture)
+        xs, ys, labels = [], [], []
+        for (x0, x1, xr, plo, phi, side, label) in zones:
+            rgb = _RGB_ZONE_BULL if side == "bull" else _RGB_ZONE_BEAR
+            h = max(phi - plo, 0.012)
+            fill = QtGui.QColor(rgb[0], rgb[1], rgb[2]); fill.setAlphaF(_ZONE_ALPHA)
+            p.fillRect(QtCore.QRectF(x0, plo, x1 - x0, h), fill)            # real run — solid, NO border
+            if xr > x1 + 1e-6:                                             # rightward projection
+                proj = QtGui.QColor(rgb[0], rgb[1], rgb[2]); proj.setAlphaF(_ZONE_ALPHA * 0.4)
+                p.fillRect(QtCore.QRectF(x1, plo, xr - x1, h), proj)       # lighter band
+                pen = QtGui.QPen(QtGui.QColor(rgb[0], rgb[1], rgb[2]))
+                pen.setStyle(QtCore.Qt.DashLine); pen.setCosmetic(True); pen.setWidthF(1.0)
+                p.setPen(pen)
+                ymid = (plo + phi) / 2.0
+                p.drawLine(QtCore.QPointF(x1, ymid), QtCore.QPointF(xr, ymid))   # dashed projected level
+            labels.append((x0, phi, label, QtGui.QColor(rgb[0], rgb[1], rgb[2])))
+            xs += [x0, xr]; ys += [plo, phi]
+        p.end()
+        self.label_pool.update(labels)
+        self._rect = QtCore.QRectF(min(xs), min(ys), max(xs) - min(xs), max(0.02, max(ys) - min(ys)))
+        self.prepareGeometryChange(); self.update()
+
+
+# ---------------------------------------------------------------------------
 # Bucket candlesticks (Mode 10) — constant-volume candles at integer X,
 # per-candle body brush (Neon Engine V2); wicks/borders use a neutral pen.
 # ---------------------------------------------------------------------------

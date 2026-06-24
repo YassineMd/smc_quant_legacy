@@ -206,6 +206,20 @@ FOOTPRINT_IMB_ER_MULT = 1.0      # Mode-10 footprint imbalance: a price level's 
                                  # number (wick-thin; neon blue = buyer / neon orange = seller). NOT a signal.
 IMBALANCE_OPACITY = (0.35, 0.95)  # min/max highlight opacity (§4.1.1)
 STACKED_IMBALANCE_MIN = 3       # consecutive rows to form a channel (§4.1.2)
+
+# ── Per-bucket BULL/BEAR absorption (VOLUME, descriptive — aggressive volume that didn't move price) ──
+ABSORP_VOL_WINDOW = 50           # trailing buckets for the volume->displacement norm k = Σ|close-open| /
+                                 # Σ curr_vol; suppression s = clamp(1 - (|disp|/vol)/k, 0, 1); GROSS,
+                                 # directional: bull = sell_vol*s if sell-dominant, bear = buy_vol*s if
+                                 # buy-dominant. NOT a signal — read the bull:bear ratio over a selection.
+ABSORP_ZONE_MIN_RUN = 3          # absorption-zone band: a zone = >= this many CONSECUTIVE absorbing buckets
+                                 # (directional AND suppression s >= the slider) on one side, at ANY slider
+                                 # position. 90% of heavy buckets are isolated singles; N=3 keeps only
+                                 # sustained runs (no single-bucket zones even at the loosest slider).
+ABSORP_ZONE_FLOOR_S = 0.60       # yellow-dot 'validated-strength' floor on the zone slider: the validated
+                                 # top-quartile-volume zones live at s >= ~0.6 (their p10). At/above = the
+                                 # validated-strength regime; below = weaker-but-still-suppressed (a
+                                 # gradient, not a real/fake cliff). A clean trend stays empty regardless.
 ICEBERG_VOL_SHARE = 0.04        # 4% candle volume (§4.2.1)
 ICEBERG_SKEW = 0.65             # 65% absorption skew (§4.2.1)
 VELOCITY_NEON_RATIO = 2.5       # HFT neon overload trigger (index.html:945, spec §10.2.3)

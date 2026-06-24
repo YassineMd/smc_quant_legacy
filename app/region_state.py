@@ -240,3 +240,80 @@ def selection_state(filtered: list, lo_i: int, hi_i: int):
     # read from the SAME synthetic sequence so it can't drift from the STATE line.
     dbg = bucket_state.render_debug_lines(seq, idx, bm, sm)
     return state, conf, dbg
+
+
+def absorption_vol(buckets: list, i: int, window: int) -> "tuple[float, float, float]":
+    """Per-bucket BULL / BEAR absorption in VOLUME — aggressive volume on a side that FAILED to move price
+    its way, scaled by how SUPPRESSED the move was RELATIVE to the region's own volume->displacement norm
+    (self-calibrating, no absolute impact model). DESCRIPTIVE, not a prediction.
+
+    norm ``k`` = Σ|close-open| / Σ curr_vol over the trailing ``window`` buckets (price moved per unit
+    volume, recently). suppression ``s`` = clamp(1 - (|disp|/curr_vol)/k, 0, 1) — 1 when this bucket's
+    volume moved price far LESS than the norm (absorbed), 0 when it moved efficiently or more. GROSS +
+    DIRECTIONAL: the absorption is credited only to the heavier AGGRESSOR that failed —
+    ``bull = sell_vol*s`` when sellers dominated (their selling didn't drop price = buyers soaked it up),
+    ``bear = buy_vol*s`` when buyers dominated; the other (defending) side is 0. Read the bull:bear ratio
+    over a selection for the directional lean. Returns ``(bull, bear, s)`` in volume units."""
+    b = buckets[i]
+    o, c = float(b.get("open", 0.0)), float(b.get("close", 0.0))
+    bv, sv = float(b.get("buy_vol", 0.0)), float(b.get("sell_vol", 0.0))
+    cv = float(b.get("curr_vol", 0.0)) or (bv + sv)
+    win = buckets[max(0, i - window):i]
+    sd = sum(abs(float(w.get("close", 0.0)) - float(w.get("open", 0.0))) for w in win)
+    scv = sum((float(w.get("curr_vol", 0.0)) or (float(w.get("buy_vol", 0.0)) + float(w.get("sell_vol", 0.0))))
+              for w in win)
+    k = (sd / scv) if scv > 0 else 0.0
+    eff = (abs(c - o) / cv) if cv > 0 else 0.0
+    s = max(0.0, min(1.0, 1.0 - eff / k)) if k > 0 else 0.0
+    bull = sv * s if sv > bv else 0.0
+    bear = bv * s if bv > sv else 0.0
+    return bull, bear, s
+
+
+def absorption_series(buckets: list, lo_i: int, hi_i: int, window: int) -> "tuple[list, list, list]":
+    """Per-bucket ``(bull, bear, s)`` arrays over a selection [lo_i, hi_i] (index 0 = bucket lo_i), in ONE
+    pass via :func:`absorption_vol` — so the adaptive default, the zones, and the box totals all share it.
+    Returns ``(bull, bear, sval)`` lists (empty if hi_i < lo_i)."""
+    bull, bear, sval = [], [], []
+    for i in range(lo_i, hi_i + 1):
+        bu, be, sv = absorption_vol(buckets, i, window)
+        bull.append(bu); bear.append(be); sval.append(sv)
+    return bull, bear, sval
+
+
+def absorption_default_s(bull: list, bear: list, sval: list) -> float:
+    """Adaptive default zone threshold = the selection's MEDIAN nonzero suppression over its DIRECTIONAL
+    absorbing buckets (defended selection -> high default, quiet -> low; self-calibrating, like adaptive
+    VPIN). 1.0 (draws nothing) when the selection has no absorption."""
+    nz = sorted(sval[k] for k in range(len(sval)) if (bull[k] > 0 or bear[k] > 0) and sval[k] > 0)
+    return nz[len(nz) // 2] if nz else 1.0
+
+
+def zones_from_series(bull: list, bear: list, sval: list, lo_i: int, buckets: list,
+                      s_threshold: float, min_run: int) -> "list[dict]":
+    """Absorption ZONES from precomputed per-bucket bull/bear/s arrays. A bucket ABSORBS if it is
+    directional (bull or bear > 0) AND its suppression ``s >= s_threshold`` (the slider); a zone = a run
+    of >= ``min_run`` consecutive absorbing buckets on the SAME side. FLOORLESS: a lower threshold ->
+    more/weaker zones, but always SUSTAINED runs (no single-bucket zones); a clean trend stays empty since
+    its buckets have s~0. Each zone: ``{side ('bull'|'bear'), start, end (abs idx), vol (absorbed volume
+    over the run), plo, phi (price range = min low / max high)}``. DESCRIPTIVE — above the slider's
+    yellow-dot floor = validated-strength, below = weaker (a gradient); not a prediction the level holds.
+    Underlying primitive = the validated :func:`absorption_vol`, unchanged."""
+    zones = []
+    for side, vals in (("bull", bull), ("bear", bear)):
+        ab = [vals[k] > 0 and sval[k] >= s_threshold for k in range(len(vals))]
+        k, m = 0, len(vals)
+        while k < m:
+            if not ab[k]:
+                k += 1
+                continue
+            st = k
+            while k < m and ab[k]:
+                k += 1
+            if (k - st) >= min_run:
+                a, b = lo_i + st, lo_i + k - 1
+                lows = [float(buckets[j].get("low", 0.0)) for j in range(a, b + 1)]
+                highs = [float(buckets[j].get("high", 0.0)) for j in range(a, b + 1)]
+                zones.append({"side": side, "start": a, "end": b, "vol": sum(vals[st:k]),
+                              "plo": min(lows), "phi": max(highs)})
+    return zones

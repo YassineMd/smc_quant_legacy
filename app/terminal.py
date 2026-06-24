@@ -33,14 +33,14 @@ from . import bucket_state, config, region_state, vpin_adaptive
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
 from .chart_widgets import (
-    AbsorptionLayer, BucketCandleItem, LocalTimeAxis, OrderBlockLayer, PriceAxis,
+    AbsorptionLayer, AbsorptionZoneLayer, BucketCandleItem, LocalTimeAxis, OrderBlockLayer, PriceAxis,
 )
 from .cob_panel import CobPanel
 from .drawing_tools import DrawingController, DrawingToolbar
 from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visible
 from .hamburger import FloatingOverlayMenu, HamburgerButton, scale_label
 from .pipe_client import PipeClientWorker
-from .stats_overlay import StatsOverlay
+from .stats_overlay import AbsorptionZoneSlider, StatsOverlay
 
 _OPEN_WINDOWS: List["MinimalTerminalWindow"] = []
 _TUNNEL: "Optional[SSHTunnelManager]" = None   # set in main(); the refresh button relaunches a dead tunnel
@@ -177,6 +177,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # cleared in clear_scanner_canvas (leak guard — pool items aren't tracked).
         self.bc_fp = BucketFootprintItem()
         self.bc_fp.attach_text(self.plot)
+        # Mode-10 absorption-zone bands (within a selection): sustained heavy-bull/bear runs -> green/red
+        # price x time bands. Above candles (z2), below the flip overlays; shown only when a selection has
+        # a qualifying run. Persistent item on the plot; hidden when no selection.
+        self.bc_absorp_zones = AbsorptionZoneLayer(self.plot)
+        self.bc_absorp_zones.setZValue(2)
+        self.plot.addItem(self.bc_absorp_zones, ignoreBounds=True)
+        self.bc_absorp_zones.attach_text(self.plot)
+        self.bc_absorp_zones.setVisible(False)
+        # Floorless s-threshold slider for those bands (rides the suppression score). Auto-defaults to the
+        # selection's median nonzero-s each time the selection changes; a manual drag pins an OVERRIDE that
+        # holds until the selection identity changes. Yellow dot on the track = validated-strength floor.
+        self.zone_slider = AbsorptionZoneSlider(self, config.ABSORP_ZONE_FLOOR_S)
+        self.zone_slider.changed.connect(self._on_zone_s_changed)
+        self.zone_slider.hide()
+        self._zone_sel_id = None       # identity of the live selection; on change -> re-seed adaptive default
 
         # --- crosshair (patch §13): light-gray dashed ---
         pen = pg.mkPen(color="#aaaaaa", style=QtCore.Qt.DashLine, width=1)
@@ -662,6 +677,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._refresh_selection_stats()    # re-place + re-show if a selection is active
         else:
             self.sel_stats.hide()
+            self.zone_slider.hide()
+
+    def _on_zone_s_changed(self, _s: float) -> None:
+        """User dragged the absorption-zone slider — recompute the bands live at the new threshold."""
+        self._refresh_selection_stats()
 
     # ------------------------------------------------------------------
     # Magic Selection (Mode 10) — aggregate the buckets inside the box
@@ -793,7 +813,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return "".join(out)
 
     def _selection_stat_lines(self, d: dict, state=None, conf=None, dbg=None, vpin_tier_=None,
-                              spark_er=None, spark_op=None, spark_cl=None, flip=None) -> "list[str]":
+                              spark_er=None, spark_op=None, spark_cl=None, flip=None,
+                              absorp=None) -> "list[str]":
         """Format the aggregate into the StatsOverlay box, mirroring the forming-bucket readout's
         structure (O H L C header + FLOW / POSITIONING / EFFORT / READ sections, same line formats
         and colours). Section tags note the honesty split: FLOW = price-filtered (in the box);
@@ -843,6 +864,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             f"VEL {span(vel, gold)}   "
             f"VPIN {span(vpin, {vpin_adaptive.TOXIC: r, vpin_adaptive.WARN: gold}.get(vpin_tier_, gray))}",
         ]
+        # BULL/BEAR absorption summed over the selection (volume). Read the bull:bear RATIO for the
+        # directional lean — the raw totals scale with how many buckets are selected. DESCRIPTIVE.
+        if absorp:
+            abu, abe = absorp
+            if abu > 0 or abe > 0:
+                if abu >= abe:
+                    lean = f"{abu / abe:.0f}× bull" if abe > 0 else "bull-only"
+                else:
+                    lean = f"{abe / abu:.0f}× bear" if abu > 0 else "bear-only"
+                lines.append(sep("ABSORPTION · VOL"))
+                lines.append(f"{span('Bull ' + K(abu), g)} · {span('Bear ' + K(abe), r)} · "
+                             f"{span(lean, gold)}")
         # STATE — the same 12-state classifier the per-bucket hover box uses, run on the region,
         # followed by the same calibration debug lines (top-3 states + winner factor breakdown).
         if state is not None:
@@ -897,19 +930,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         rect = self.drawer.selection_rect()
         if rect is None or self.scanner_mode != "bucket_canvas":
             self.sel_stats.hide()
+            self.zone_slider.hide()
             self._hide_flip()
+            self.bc_absorp_zones.setVisible(False)
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
             self.sel_stats.hide()
+            self.zone_slider.hide()
             self._hide_flip()
+            self.bc_absorp_zones.setVisible(False)
             return
         x0, y0, x1, y1 = rect
         tv = (self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL
         agg = self._aggregate_selection(filtered, x0, y0, x1, y1, tv)
         if not agg:
             self.sel_stats.hide()
+            self.zone_slider.hide()
             self._hide_flip()
+            self.bc_absorp_zones.setVisible(False)
             return
         # classify the region with the SAME 12-state engine the per-bucket box uses (only when the
         # STATE lines are visible — 'y' toggles; hidden by default), then size the box and place it
@@ -948,9 +987,36 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         flip = (region_state.balance_flip(er_seq, net_dir)
                 if (hi - lo + 1) >= config.SPARK_MIN else None)
         self._update_flip_line(flip, lo, rect)
+        # BULL/BEAR absorption over the selected buckets (volume) + the absorbing ZONES, all from ONE shared
+        # per-bucket pass (bull, bear, s arrays). Totals = the bull:bear regional lean (scale with length).
+        abs_bull_arr, abs_bear_arr, abs_sval = region_state.absorption_series(
+            filtered, lo, hi, config.ABSORP_VOL_WINDOW)
+        abs_bull, abs_bear = sum(abs_bull_arr), sum(abs_bear_arr)
+        # ADAPTIVE zone threshold: on a FRESH selection re-seed the slider to the median nonzero-s
+        # (defended -> high, quiet -> low); a manual drag then pins it until the selection changes. The
+        # slider's current value IS the live threshold; a clean trend stays empty even at the bottom.
+        sel = getattr(self.drawer, "_selection", None)
+        sel_id = id(sel) if sel is not None else None
+        if sel_id != self._zone_sel_id:
+            self._zone_sel_id = sel_id
+            self.zone_slider.set_value(region_state.absorption_default_s(
+                abs_bull_arr, abs_bear_arr, abs_sval))
+        s_thr = self.zone_slider.value_s()
+        # ABSORPTION ZONES — sustained consecutive heavy-bull/bear runs (>= ABSORP_ZONE_MIN_RUN, s >= slider)
+        # -> green/red price x time bands at the run's price range, labelled with absorbed volume, projected
+        # (dashed) to the selection's right edge. DESCRIPTIVE; rare (no band = no sustained defense there).
+        x_right = hi + 0.5
+        zspecs = [(z["start"] - 0.5, z["end"] + 0.5, x_right, z["plo"], z["phi"], z["side"],
+                   f"{z['side'].upper()} {self._fmt_k(z['vol'])}")
+                  for z in region_state.zones_from_series(
+                      abs_bull_arr, abs_bear_arr, abs_sval, lo, filtered,
+                      s_thr, config.ABSORP_ZONE_MIN_RUN)]
+        self.bc_absorp_zones.update_zones(zspecs)
+        self.bc_absorp_zones.setVisible(bool(zspecs))
         self.sel_stats.set_content(
             self._selection_stat_lines(agg, state, conf, dbg, vtier,
-                                       spark_er, spark_op, spark_cl, flip), "")
+                                       spark_er, spark_op, spark_cl, flip,
+                                       (abs_bull, abs_bear)), "")
 
         def to_self(dx, dy):
             sc = self.vb.mapViewToScene(QtCore.QPointF(float(dx), float(dy)))
@@ -963,8 +1029,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                         self.sel_stats.width(), self.sel_stats.height())
             self.sel_stats.move(bx, by)
             self.sel_stats.show_raise()
+            # the zone-threshold slider rides just under the box (kept on-screen if the box sits low)
+            sld_y = by + self.sel_stats.height() + 3
+            if sld_y + self.zone_slider.height() > self.height():
+                sld_y = by - self.zone_slider.height() - 3
+            self.zone_slider.move(bx, sld_y)
+            self.zone_slider.show(); self.zone_slider.raise_()
         else:
             self.sel_stats.hide()
+            self.zone_slider.hide()
 
     def _update_flip_line(self, flip, lo_i: int, rect) -> None:
         """Draw/refresh the balance-flip vline at the flip bucket, spanning the selection's y-band. TWO
@@ -1168,6 +1241,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         max(1.0, bb.get("end_time", 0.0) - bb.get("start_time", 0.0)))
             v30 = (sum(_bvel(w) for w in win) / len(win)) if win else 0.0
             vabn = (_bvel(b) / v30) if v30 > 0 else 0.0
+            # BULL/BEAR absorption (volume) — aggressive volume that FAILED to move price, vs the region's
+            # trailing-norm. Directional: only the heavier aggressor that failed gets credit.
+            bull_abs, bear_abs, _sabs = region_state.absorption_vol(buckets, idx, config.ABSORP_VOL_WINDOW)
             # color ONLY the two dominant 4-vectors (the ones that drove the move); the
             # other two render dim. A zero vector never lights up even if it lands "top 2".
             vmag = {"opL": opL, "opS": opS, "clS": clS, "clL": clL}
@@ -1193,6 +1269,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 span(f"Seller E/R {ser:.1f} [{(sm - 1.0) * 100:+.0f}%]", r if ser > ber else gray),
                 span(f"30b Buyer E/R {b30:.1f}", g if b30 > s30 else gray),
                 span(f"30b Seller E/R {s30:.1f}", r if s30 > b30 else gray),
+                sep("ABSORPTION · VOL"),
+                span(f"Bull Absorp {K(bull_abs)}", g if bull_abs > 0 else gray),
+                span(f"Bear Absorp {K(bear_abs)}", r if bear_abs > 0 else gray),
                 sep("READ"),
                 f"VEL {span(f'{vel:.2f}x', gold)}",
                 f"30b VEL {span(f'{vabn:.1f}×', gold if vabn >= config.VEL_ABN_RATIO else gray)}",

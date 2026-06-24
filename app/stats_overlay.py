@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import config
 
@@ -235,3 +235,78 @@ class StatsOverlay(QtWidgets.QLabel):
         self.set_content(lines, verdict)
         self.move(x + 16, y + 16)
         self.show_raise()
+
+
+class _FloorSlider(QtWidgets.QSlider):
+    """Horizontal slider that paints a YELLOW DOT on its groove at the validated-strength floor."""
+
+    def __init__(self, floor: float):
+        super().__init__(QtCore.Qt.Horizontal)
+        self._floor = floor
+
+    def paintEvent(self, ev):   # noqa: N802 (Qt override)
+        super().paintEvent(ev)
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        m = 7   # ~half a handle width of inset so the dot lines up with the handle travel
+        x = m + int(self._floor * max(1, self.width() - 2 * m))
+        y = self.height() // 2
+        p.setPen(QtCore.Qt.NoPen)
+        p.setBrush(QtGui.QColor(241, 196, 15))     # yellow = validated-strength floor
+        p.drawEllipse(QtCore.QPointF(x, y), 4.0, 4.0)
+        p.end()
+
+
+class AbsorptionZoneSlider(QtWidgets.QWidget):
+    """Floorless s-threshold control for the Mode-10 absorption zones. Rides the suppression score s
+    (0.00-1.00); a YELLOW DOT on the track marks the validated-strength floor (``floor``): at/above =
+    validated-strength absorption, below = weaker (a gradient, not real/fake). Emits ``changed(s)`` only
+    on a USER drag (programmatic ``set_value`` is silent)."""
+    changed = QtCore.Signal(float)
+
+    def __init__(self, parent, floor: float = 0.60):
+        super().__init__(parent)
+        self._floor = floor
+        self._silent = False
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(8, 5, 8, 6); lay.setSpacing(2)
+        self.lbl = QtWidgets.QLabel()
+        self.lbl.setTextFormat(QtCore.Qt.RichText)
+        self.lbl.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:11px;")
+        lay.addWidget(self.lbl)
+        self.slider = _FloorSlider(floor)
+        self.slider.setRange(0, 100)
+        self.slider.setFixedHeight(16)
+        self.slider.valueChanged.connect(self._on_change)
+        lay.addWidget(self.slider)
+        self.setFixedWidth(210)
+        self.setAttribute(QtCore.Qt.WA_StyledBackground, True)   # so the stylesheet bg actually paints
+        self.setStyleSheet("AbsorptionZoneSlider{background:rgba(17,19,26,235);"
+                           "border:1px solid #2a2e39; border-radius:5px;}")
+        self._render(0.0)
+
+    def set_value(self, s: float) -> None:
+        """Set the slider WITHOUT emitting (used to apply the adaptive default each selection)."""
+        v = int(round(max(0.0, min(1.0, s)) * 100))
+        if v != self.slider.value():
+            self._silent = True
+            self.slider.setValue(v)
+            self._silent = False
+        self._render(self.value_s())
+
+    def value_s(self) -> float:
+        return self.slider.value() / 100.0
+
+    def _on_change(self, _v: int) -> None:
+        s = self.value_s()
+        self._render(s)
+        if not self._silent:
+            self.changed.emit(s)
+
+    def _render(self, s: float) -> None:
+        if s >= self._floor:
+            tag, col = "validated-strength", "#2ecc71"
+        else:
+            tag, col = "weaker · sub-floor", "#f1c40f"
+        self.lbl.setText(f"Zone s&nbsp;<b>{s:.2f}</b>&nbsp; "
+                         f"<span style='color:{col}'>● {tag}</span>")
