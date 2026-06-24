@@ -731,6 +731,33 @@ sell-led-closed-up) are unchanged and still take precedence. Committed SEPARATEL
 **EXE still stale** — neither `c5c219d` nor `dbfaaf1` is in `dist/OrderFlowTerminal.exe` (last built
 2026-06-23 00:36 through `9a1fa6a`); rebuild next batch.
 
+**Direction-matched absorption at flips — INVESTIGATED + AMBIENT (read-only, no code). 5th cause-test to die.**
+The directional angle the "explain the flip" presence-test never checked: does the SIDE absorbing match the
+flip that follows — BULL absorption (buyers soaking selling) before an S→B up-flip, BEAR before a B→S
+down-flip? Tested on real VM 1m data (453 sustained two-sided flips: 218 up, 235 down; run-up = the W
+buckets before the cross; absorbing = the shipped validated-strength `s ≥ 0.60` floor; flip gate from
+config `FLIP_SUSTAIN_MIN`/`FLIP_MIN_REMAINDER`; untuned, stable across W=6/8/10).
+- **UNCONDITIONAL looked like a real find** — bull-before-up 0.858 present (**1.39×** vs all-random),
+  bear-before-down 0.830 (**1.49×**), opposite side suppressed to ~0.5× (bear-before-up 0.61×,
+  bull-before-down 0.52×): a clean ~2.5× matched-vs-opposite split, every surface feature of a directional
+  signal — and a sharper split than the presence-test's flat 1.07×.
+- **CONDITIONED on the SAME dominant side it COLLAPSES to ~1.0×** — up-bull **1.05×**, down-bear **1.02×**
+  (W6/8/10: 0.97/1.05/1.00 and 1.06/1.02/0.96). The reason is a DEFINITIONAL TAUTOLOGY: an up-flip's run-up
+  is seller-dominant BY DEFINITION (E/R neg before the S→B cross), and `bull = sell_vol·s` fires *whenever*
+  sellers dominate volume — so "bull absorption before up-flips" is mechanically built in. `P(bull | random
+  seller-dominant window) = 0.818` vs `P(bull | up-flip run-up) = 0.858` — identical. The opposite-side
+  "suppression" is the same artifact inverted (seller-dominant windows rarely credit bear absorption).
+- **METHODOLOGICAL LESSON (reusable, the sharpest catch of the session):** when a directional signal shows a
+  clean matched-vs-opposite split, test it against a **SAME-DOMINANT-SIDE base rate, not just all-random** —
+  or a mechanical coupling (the signal shares a DEFINITIONAL INGREDIENT with the event) reads as a discovery.
+  Here the unconditional 1.4× would have been a FALSE FIND; the conditioned ~1.0× is the truth. The all-random
+  base rate is the wrong null whenever the event's precondition (here: old-side-dominant run-up) is itself
+  correlated with the signal's ingredient (here: dominant-side volume).
+- **CLOSES the question** "does the new bull/bear absorption measure give a flip edge": descriptively AMBIENT,
+  directionality is a tautology not a relationship. Joins the dead cause-tests (iceberg-presence 1.07×, the 4
+  explain-the-flip mechanisms, now this). The measure still DESCRIBES a single bucket's defense well — which
+  is why the zones are worth showing — it just doesn't relate to flips. No build (as instructed).
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)

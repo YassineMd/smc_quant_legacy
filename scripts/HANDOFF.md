@@ -608,6 +608,27 @@ precedence. Split out per one-concern-per-commit (unrelated tweak in the same fi
 
 **EXE still stale** — neither `c5c219d` nor `dbfaaf1` is in the 00:36/`9a1fa6a` build; rebuild next batch.
 
+**Direction-matched absorption at flips — INVESTIGATED + AMBIENT (read-only). 5th cause-test to die.** Does
+the SIDE absorbing match the flip — BULL absorption before an S→B up-flip, BEAR before a B→S down-flip (the
+directional angle the presence-test never checked)? Real VM 1m data, 453 sustained flips (218 up / 235
+down), run-up = W buckets before the cross, absorbing = shipped `s ≥ 0.60` floor, flip gate from config,
+untuned, stable W=6/8/10.
+- **Unconditional looked like a find:** bull-before-up 0.858 (**1.39×** vs all-random), bear-before-down
+  0.830 (**1.49×**), opposite side suppressed ~0.5× → clean ~2.5× matched/opposite split (sharper than the
+  presence-test's 1.07×).
+- **Conditioned on the SAME dominant side → collapses to ~1.0×** (up-bull **1.05×**, down-bear **1.02×**).
+  TAUTOLOGY: an up-flip run-up is seller-dominant BY DEFINITION and `bull = sell_vol·s` fires whenever
+  sellers dominate volume, so bull-before-up is mechanically built in. `P(bull | random seller-dom window)
+  = 0.818` ≈ `P(bull | up-flip run-up) = 0.858`. Opposite-side "suppression" = the same artifact inverted.
+- **METHOD LESSON (reusable):** a clean matched-vs-opposite directional split must be tested against a
+  **SAME-DOMINANT-SIDE base rate, not all-random** — else a mechanical coupling (signal shares a DEFINITIONAL
+  ingredient with the event's precondition) reads as a discovery. Unconditional 1.4× = false find; conditioned
+  ~1.0× = truth. All-random is the wrong null when the event's precondition correlates with the signal's
+  ingredient.
+- **CLOSES** "does the bull/bear absorption measure give a flip edge": descriptively AMBIENT, directionality
+  a tautology. Joins iceberg-presence 1.07× + the 4 explain-the-flip mechanisms. Measure still describes a
+  single bucket's defense (why zones ship); just no flip relationship. No build.
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
