@@ -836,6 +836,38 @@ swaps). `'1'` toggles; hover gives the RAW per-bucket %.
   shows **2 decimals** (`:.2f`, e.g. `1.40× bear` / `1.41× bull`) — was `:.0f` ("1×"), which hid the
   magnitude. The bull-only / bear-only (one side zero) cases unchanged.
 
+**Mode-10 selection panels (eff-agg + E/R) + panel-aware hover + UX defaults — BUILT (`5fc6221`).**
+- **EFF-AGG EVOLUTION panel (`'2'`):** per-bucket bull/bear effective aggression as two NEON green/red lines,
+  stacked BELOW the exhaustion strip. Reuses the `eff_bull_arr/eff_bear_arr` already built for the eff-agg
+  ZONES → `envelope_symmetric(EFF_STRIP_RELEASE)` → **shared-max** normalization (one max over both sides, so
+  bull-vs-bear forcing magnitudes compare). One-sided per bucket (bull XOR bear), so the bands show WHERE bull
+  forcing dominates and where it hands to bear. No crossover diamonds. Validated on real buckets (the auto-found
+  handoff window read +116K bull 1st-half → −104K bear 2nd-half).
+- **EFFORT/RESULT panel (`'3'`):** buyer/seller E/R as two green/red lines (`#2ecc71`/`#e74c3c` = the old E/R
+  sparkline colours). E/R is TWO-sided (both nonzero every bucket) → genuinely continuous curves. **Promoted out
+  of the FLOW TRAJECTORY sparkline** — the `E/R` row + `spark_er` are GONE (Op L/S + Cl L/S remain; the
+  balance-flip detector keeps its own independent `er_seq`). E/R outliers are moderate (max/median ~4×), so the
+  typical bucket sits ~25% up the panel — shared-max, consistent with eff-agg. (p90-normalization is the fallback
+  if it reads too bottom-heavy.)
+- **Reuse:** both panels use the SAME `ExhaustionStripLayer`, now parametrised with `rgb_bull/rgb_bear/rgb_cross`
+  (exactly as `AbsorptionZoneLayer` serves both absorption + eff-agg zones). Knobs: `EFF_STRIP_*`, `ER_STRIP_*`
+  mirror `EXH_STRIP_*`.
+- **PANEL-AWARE HOVER (the fix):** the old `_hover_exhaustion` showed the exhaustion % whenever the lines were up
+  — ANYWHERE on the chart (it never checked cursor Y). Now `_hover_panels` builds a per-refresh list of the
+  VISIBLE panels (each registers its y-band + label + RAW per-bucket values + colours) and shows ONE labelled
+  tooltip for ONLY the panel whose y-band the cursor is inside: `EXHAUSTION x% · y%` / `EFF-AGG K · K` /
+  `E/R BUY K · SELL K`. Over the candles / box / gaps → nothing. `exh_tooltip`→`panel_tooltip`,
+  `_exh_hover`→`_panel_hovers`.
+- **GAP-COLLAPSE STACKING:** the three panels were FIXED slots (hiding one left a blank gap). Now only VISIBLE
+  panels take a slot — each sits directly under the previous SHOWN panel, so hiding `'1'`/`'2'`/`'3'` slides the
+  ones below it UP. (Proven by simulation across every hide combo.)
+- **Mode-10 UX defaults:** Order Blocks + Absorption/Iceberg overlays now **default OFF** (`m10_obs` /
+  `m10_icebergs` in hamburger `_M10_LAYERS`); **`'o'`** toggles BOTH together (`_toggle_ob_iceberg`, flips both
+  menu checkboxes, OB as master). **VPIN toxicity sub-pane collapsed by default** (`_collapse_vpin_pane` →
+  `setSizes([10_000, 0])` on both linked vertical splitters, deferred via `singleShot(0)`; drag the handle up to
+  reveal it). **Vector drawing toolbar shown on launch** (it `hide()`s itself in its ctor and the default-checked
+  menu signal isn't wired at build → explicit `self.drawbar.show()`). **EXE still stale.**
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)

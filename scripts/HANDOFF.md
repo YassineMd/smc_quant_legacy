@@ -685,6 +685,27 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
 - **Follow-up (`4b52c91`):** selection-box ABSORPTION·VOL / EFF-AGG·VOL lean ratio → **2 decimals** (`:.2f`,
   e.g. `1.40× bear`) instead of `:.0f` ("1×"). bull-only/bear-only cases unchanged.
 
+**Mode-10 selection panels (eff-agg + E/R) + panel-aware hover + UX defaults — BUILT (`5fc6221`).**
+- **EFF-AGG EVOLUTION panel (`'2'`):** per-bucket bull/bear eff-agg as two NEON green/red lines stacked below the
+  exhaustion strip. Reuses the eff-agg-ZONES arrays → `envelope_symmetric(EFF_STRIP_RELEASE)` → **shared-max**
+  (bull-vs-bear magnitudes compare). One-sided per bucket → shows the bull→bear handoff. No diamonds. Validated.
+- **EFFORT/RESULT panel (`'3'`):** buyer/seller E/R as two green/red lines; TWO-sided → continuous curves.
+  **Promoted out of FLOW TRAJECTORY** — `E/R` sparkline row + `spark_er` REMOVED (Op/Cl L/S stay; flip detector
+  keeps its own `er_seq`). Outliers moderate (max/median ~4×); shared-max, p90-norm is the fallback.
+- **Reuse:** both panels share the parametrised `ExhaustionStripLayer` (now takes `rgb_bull/rgb_bear/rgb_cross`,
+  like `AbsorptionZoneLayer` serves both zone kinds). Knobs `EFF_STRIP_*` / `ER_STRIP_*` mirror `EXH_STRIP_*`.
+- **PANEL-AWARE HOVER (fix):** old `_hover_exhaustion` showed the exhaustion % anywhere (never checked cursor Y).
+  Now `_hover_panels` registers each VISIBLE panel's y-band + label + RAW values per refresh and shows ONE
+  labelled tooltip for ONLY the panel under the cursor (`EXHAUSTION %` / `EFF-AGG K` / `E/R BUY·SELL K`); candles/
+  box/gaps → nothing. `exh_tooltip`→`panel_tooltip`, `_exh_hover`→`_panel_hovers`.
+- **GAP-COLLAPSE STACKING:** panels were fixed slots (hiding one left a gap); now only VISIBLE panels take a slot
+  → hiding `'1'`/`'2'`/`'3'` slides the lower ones UP (simulated across all combos).
+- **UX defaults:** OB + Absorption/Iceberg **default OFF** (`m10_obs`/`m10_icebergs`); **`'o'`** toggles both
+  (`_toggle_ob_iceberg`). **VPIN sub-pane collapsed by default** (`_collapse_vpin_pane`, `setSizes([10_000,0])`
+  on both linked splitters via `singleShot(0)`; drag up to reveal). **Drawing toolbar shown on launch**
+  (`self.drawbar.show()` — it self-`hide()`s in its ctor and the default-checked menu signal isn't wired at
+  build). **EXE still stale.**
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
