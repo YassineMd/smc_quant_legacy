@@ -2516,8 +2516,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # bracket = (mult-1)*100, i.e. the E/R z vs the trailing-30 window — is >= ER_BORDER_EXH_PCT,
         # override the border (takes precedence over the volume-flow colour). WIDTH: 3px if BOTH sides
         # elevated, else 2px. COLOUR: neon ORANGE (buy-led closed down) / BLUE (sell-led closed up) on a
-        # DIVERGENT close (absorbed flow), otherwise neon GREEN (buyer effort) / RED (seller effort) by
-        # the dominant E/R side.
+        # DIVERGENT close (absorbed flow), otherwise neon GREEN (closed up) / RED (closed down) by the
+        # CLOSE direction.
         _bm, _sm, _ = _exhaustion_mults(buckets, i)
         _erthr = 1.0 + config.ER_BORDER_EXH_PCT / 100.0
         _div_orange = bv > sv and cl < op    # buy-led but closed DOWN
@@ -2529,7 +2529,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             elif _div_blue:
                 _wc = (0, 153, 255)
             else:
-                _wc = (0, 255, 127) if _bm >= _sm else (255, 7, 58)
+                _wc = (0, 255, 127) if cl >= op else (255, 7, 58)   # green = closed up, red = closed down
         wick_pen = pg.mkPen(_wc, width=_w); wick_pen.setCosmetic(True)
         row = (b.get("open", 0.0), b.get("high", 0.0), b.get("low", 0.0),
                b.get("close", 0.0), poc, brush,
