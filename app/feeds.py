@@ -377,7 +377,7 @@ class MarketDataCore:
             level[side] += targs.vol
 
             engine = self.engines[tf_key]
-            last_bucket_count = len(engine.closed_buckets)
+            last_total = engine.total_closed
             engine.process_tick(
                 price=targs.price,
                 vol=targs.vol,
@@ -386,15 +386,22 @@ class MarketDataCore:
                 footprints_dict=self.footprints_db.get(tf_key, {}),
                 tick_time=targs.tick_time,
             )
-            if len(engine.closed_buckets) > last_bucket_count:
+            # Detect closes by the MONOTONIC total_closed delta, NOT by len(closed_buckets) growth:
+            # closed_buckets is capped (append+pop), so its length stops growing at CLOSED_BUCKETS_CAP and
+            # the old `len() > last` check silently stopped firing once the cap was reached — freezing the
+            # client's scanner history (closes never broadcast until a fresh catch-up on reconnect).
+            delta = engine.total_closed - last_total
+            if delta > 0:
                 # DIVERGES FROM LEGACY (Step 19.4): the per-close path neither RECOMPUTES
                 # nor RE-SERIALIZES the OB matrix (both moved to recompute_loop). It only
                 # ships the newly closed buckets — order_blocks=[] marks a CLOSE piggyback
                 # so the client grows scanner history but leaves its OB matrix untouched.
                 # The close path is now O(levels), independent of OB/bucket count -> flat,
-                # no stall as history grows.
+                # no stall as history grows. The LAST `delta` entries are exactly the buckets
+                # that just closed (append puts them at the tail; the cap-trim pops the FRONT),
+                # correct for a single OR multi-bucket close in one tick.
                 new_buckets = [b.full_snapshot()
-                               for b in engine.closed_buckets[last_bucket_count:]]
+                               for b in engine.closed_buckets[-delta:]]
                 self.broadcast_tf(
                     tf_key,
                     ObPacket(tf=tf_key, order_blocks=[],

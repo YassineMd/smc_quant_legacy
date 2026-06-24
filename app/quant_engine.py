@@ -224,6 +224,10 @@ class QuantEngine:
         # so the first event-time tick seeds it (coherent event-time bucket clock).
         self.active_bucket = QuantBucket(target_vol, None)
         self.closed_buckets = []
+        # MONOTONIC count of buckets ever closed (NEVER trimmed). closed_buckets is capped at
+        # CLOSED_BUCKETS_CAP (append+pop), so its length stops growing at the cap; total_closed keeps
+        # counting, so a close-detector can compare it across ticks without the cap masking closes.
+        self.total_closed = 0
         self.rolling_velocity = deque(maxlen=config.VELOCITY_LOOKBACK)
         self.avg_velocity = 1.0
         self.last_tick_time = 0.0   # DIVERGES FROM LEGACY (Step 19.4): event-time for periodic recalibrate
@@ -368,7 +372,8 @@ class QuantEngine:
         b.seller_er = b.sell_vol / ticks
 
         self.closed_buckets.append(b)
-        if len(self.closed_buckets) > config.CLOSED_BUCKETS_CAP:
+        self.total_closed += 1          # count the close HERE, at the append (the real close site), so it
+        if len(self.closed_buckets) > config.CLOSED_BUCKETS_CAP:   # can't drift from the cap-trim below
             self.closed_buckets.pop(0)
 
         # --- ADDITION: roll the VPIN queue (spec §3.4.1) ------------------
