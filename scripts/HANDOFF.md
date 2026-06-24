@@ -651,6 +651,38 @@ volume that FAILED to move price (`V*s`); eff-agg = the dominant aggressor's vol
   Slider refactored to a shared `_ZoneThresholdSlider` base (absorption behaviour unchanged); `AbsorptionZone
   Layer` parametrised with colours. **EXE still stale.**
 
+**DAEMON FIX — closes weren't broadcasting at the cap (`3384a6b`, DEPLOYED).** Bug: `feeds.py` fired the
+per-close `ObPacket` only `if len(engine.closed_buckets) > last_count`, but the engine caps that list at
+`CLOSED_BUCKETS_CAP`(10k) (append+pop(0)) → at the cap the length never grows → closes stopped broadcasting →
+client scanner history froze (restart = fresh catch-up, "fixed" then re-froze). Symptom: "live candles leave
+a gap, only restart fixes it." FIX: monotonic `engine.total_closed` (at the append); `feeds.py` ships
+`closed_buckets[-delta:]` when the counter advances. Byte-identical below the cap. PROVEN live: 8 closes in
+160s, tail advanced. SOLE instance of the length-growth pattern (grep-checked). Found by revert-and-check +
+a live-edge monitor; two earlier wrong guesses (cloud, cloud-perf) corrected by empirical proof. Deployed via
+`deploy.ps1` + `systemctl restart orderflow` (10-day history preserved).
+
+**Mode-10 SELECTION EXHAUSTION lines — gated, fresh-from-selection (`fe0a714`).** Two smoothed lines (blue=bull/
+red=bear) of each side's exhaustion across the selected buckets, in a PANEL BELOW the box (outside it, off the
+candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = RAW per-bucket %.
+- **Audits first:** raw effort-z (`b_mult`/`s_mult`) is NOT saturated (centered ~0.94; the 96%-at-flips was a
+  loose binary). GATED (`geomean(absorb, drain/cover, Δsoft)` = effort hot AND OI draining) is the TRUE worn-out
+  signal, separating worn-out from strong-continuation by **36×** but sparse (~6-11%). Chart-wide Keltner cloud
+  of it was built then SCRAPPED (operator wanted selection-scoped).
+- **MEASURE = GATED** (`config.EXH_MEASURE="gated"|"raw"`, gated default; `region_state.selection_exhaustion`).
+  Shown side-by-side on real data: raw = smooth weave but mislabels a WINNING side as exhausted (sellers
+  driving down read "95% exhausted"); gated stays 0% there (OI building) — honest.
+- **BASELINE = FRESH FROM SELECTION START:** z vs ONLY the prior buckets in the selection (expanding,
+  `EXH_SEL_MIN_WINDOW`=2; bucket 0 neutral; `_exh_z_mult` got a `min_window` param). Selection-relative; a
+  uniform trend self-normalizes to ~0 (fires on a bucket abnormal vs its neighbors, not "the move went down").
+- **INTERP (told to operator):** bull = buyers worn out pushing UP (tops); bear = sellers at bottoms. Down-move:
+  BULL 0% correct (buyers not the pushing side; bull only scores on up-close). Both 0% = "trend has fuel, no
+  reversal warning." Bull-spike + bear-0 in a downtrend = "bounce out of buyers, sellers fresh → trend resumes"
+  (NOT a bottom; bottom = mirror: bear spiking, bull fresh).
+- **DISPLAY:** raw → SYMMETRIC envelope (`envelope_symmetric` = max forward+backward, crossover at the true
+  shift) → panel-mapped. Panel `EXH_STRIP_GAP` below the box, height `EXH_STRIP_FRAC` of the selection range, NO
+  backing. Crossovers gated by `EXH_CROSS_PERSIST`. `ExhaustionStripLayer` (chart_widgets). The candle-relative
+  mapping (lines off each close ±MAX_DIST×ATR) was tried + REJECTED for the panel. **EXE still stale.**
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
