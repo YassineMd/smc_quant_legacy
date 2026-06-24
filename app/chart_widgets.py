@@ -447,8 +447,10 @@ class AbsorptionLayer(pg.GraphicsObject):
 # selling), RED = bears defended; 15% opacity, no border. Label = side + absorbed volume. DESCRIPTIVE
 # (where a side absorbed over a sustained run), NOT a prediction the level holds.
 # ---------------------------------------------------------------------------
-_RGB_ZONE_BULL = (46, 204, 113)    # green
-_RGB_ZONE_BEAR = (231, 76, 60)     # red
+_RGB_ZONE_BULL = (46, 204, 113)    # absorption green (muted)
+_RGB_ZONE_BEAR = (231, 76, 60)     # absorption red (muted)
+_RGB_EFF_BULL = (0, 255, 128)      # effective-aggression NEON green (buyers forced up) — distinct from above
+_RGB_EFF_BEAR = (255, 0, 96)       # effective-aggression NEON red (sellers forced down)
 _ZONE_ALPHA = 0.15
 
 
@@ -457,10 +459,12 @@ class AbsorptionZoneLayer(pg.GraphicsObject):
     ``(x0, x1, plo, phi, side, label)`` (run-detection done in region_state) and paints each as a 15%
     rect, no border, green (bull) / red (bear), labelled with the absorbed volume at its top-left."""
 
-    def __init__(self, plot=None):
+    def __init__(self, plot=None, rgb_bull=_RGB_ZONE_BULL, rgb_bear=_RGB_ZONE_BEAR):
         super().__init__()
         self.picture = QtGui.QPicture()
         self._rect = QtCore.QRectF()
+        self._rgb_bull = rgb_bull     # parametrised so a parallel layer (e.g. effective-aggression) can
+        self._rgb_bear = rgb_bear     # paint NEON green/red, visually distinct from the absorption bands
         self.label_pool = TextPool(anchor=(0, 1), font_size=8, z=72)
         if plot is not None:
             self.label_pool.attach(plot)
@@ -492,7 +496,7 @@ class AbsorptionZoneLayer(pg.GraphicsObject):
         p = QtGui.QPainter(self.picture)
         xs, ys, labels = [], [], []
         for (x0, x1, xr, plo, phi, side, label) in zones:
-            rgb = _RGB_ZONE_BULL if side == "bull" else _RGB_ZONE_BEAR
+            rgb = self._rgb_bull if side == "bull" else self._rgb_bear
             h = max(phi - plo, 0.012)
             fill = QtGui.QColor(rgb[0], rgb[1], rgb[2]); fill.setAlphaF(_ZONE_ALPHA)
             p.fillRect(QtCore.QRectF(x0, plo, x1 - x0, h), fill)            # real run — solid, NO border

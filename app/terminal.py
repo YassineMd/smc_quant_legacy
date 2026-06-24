@@ -34,13 +34,14 @@ from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
 from .chart_widgets import (
     AbsorptionLayer, AbsorptionZoneLayer, BucketCandleItem, LocalTimeAxis, OrderBlockLayer, PriceAxis,
+    _RGB_EFF_BEAR, _RGB_EFF_BULL,
 )
 from .cob_panel import CobPanel
 from .drawing_tools import DrawingController, DrawingToolbar
 from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visible
 from .hamburger import FloatingOverlayMenu, HamburgerButton, scale_label
 from .pipe_client import PipeClientWorker
-from .stats_overlay import AbsorptionZoneSlider, StatsOverlay
+from .stats_overlay import AbsorptionZoneSlider, EffAggZoneSlider, StatsOverlay
 
 _OPEN_WINDOWS: List["MinimalTerminalWindow"] = []
 _TUNNEL: "Optional[SSHTunnelManager]" = None   # set in main(); the refresh button relaunches a dead tunnel
@@ -192,6 +193,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.zone_slider.changed.connect(self._on_zone_s_changed)
         self.zone_slider.hide()
         self._zone_sel_id = None       # identity of the live selection; on change -> re-seed adaptive default
+        # EFFECTIVE-AGGRESSION zones — the validated mirror (heavy volume that MOVED price), NEON green/red,
+        # its OWN slider riding force f = eff_agg/vol_norm. Same layer machinery, distinct colours.
+        self.bc_eff_zones = AbsorptionZoneLayer(self.plot, rgb_bull=_RGB_EFF_BULL, rgb_bear=_RGB_EFF_BEAR)
+        self.bc_eff_zones.setZValue(2)
+        self.plot.addItem(self.bc_eff_zones, ignoreBounds=True)
+        self.bc_eff_zones.attach_text(self.plot)
+        self.bc_eff_zones.setVisible(False)
+        self.eff_slider = EffAggZoneSlider(self, config.EFF_AGG_ZONE_DOT_F)
+        self.eff_slider.changed.connect(self._on_eff_f_changed)
+        self.eff_slider.hide()
+        self._eff_sel_id = None        # identity of the live selection; on change -> re-seed adaptive default
 
         # --- crosshair (patch §13): light-gray dashed ---
         pen = pg.mkPen(color="#aaaaaa", style=QtCore.Qt.DashLine, width=1)
@@ -678,9 +690,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             self.sel_stats.hide()
             self.zone_slider.hide()
+            self.eff_slider.hide()
 
     def _on_zone_s_changed(self, _s: float) -> None:
         """User dragged the absorption-zone slider — recompute the bands live at the new threshold."""
+        self._refresh_selection_stats()
+
+    def _on_eff_f_changed(self, _f: float) -> None:
+        """User dragged the effective-aggression slider — recompute the neon bands live."""
         self._refresh_selection_stats()
 
     # ------------------------------------------------------------------
@@ -814,7 +831,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _selection_stat_lines(self, d: dict, state=None, conf=None, dbg=None, vpin_tier_=None,
                               spark_er=None, spark_op=None, spark_cl=None, flip=None,
-                              absorp=None) -> "list[str]":
+                              absorp=None, eff_agg=None) -> "list[str]":
         """Format the aggregate into the StatsOverlay box, mirroring the forming-bucket readout's
         structure (O H L C header + FLOW / POSITIONING / EFFORT / READ sections, same line formats
         and colours). Section tags note the honesty split: FLOW = price-filtered (in the box);
@@ -876,6 +893,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 lines.append(sep("ABSORPTION · VOL"))
                 lines.append(f"{span('Bull ' + K(abu), g)} · {span('Bear ' + K(abe), r)} · "
                              f"{span(lean, gold)}")
+        # EFFECTIVE AGGRESSION summed over the selection (the mirror: heavy volume that MOVED price). NEON
+        # green/red to match its zones. Read the bull:bear lean; totals scale with selection length.
+        if eff_agg:
+            ebu, ebe = eff_agg
+            if ebu > 0 or ebe > 0:
+                neon_g, neon_r = "#00ff80", "#ff2d6b"
+                if ebu >= ebe:
+                    elean = f"{ebu / ebe:.0f}× bull" if ebe > 0 else "bull-only"
+                else:
+                    elean = f"{ebe / ebu:.0f}× bear" if ebu > 0 else "bear-only"
+                lines.append(sep("EFF-AGG · VOL"))
+                lines.append(f"{span('Bull ' + K(ebu), neon_g)} · {span('Bear ' + K(ebe), neon_r)} · "
+                             f"{span(elean, gold)}")
         # STATE — the same 12-state classifier the per-bucket hover box uses, run on the region,
         # followed by the same calibration debug lines (top-3 states + winner factor breakdown).
         if state is not None:
@@ -931,15 +961,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if rect is None or self.scanner_mode != "bucket_canvas":
             self.sel_stats.hide()
             self.zone_slider.hide()
+            self.eff_slider.hide()
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
+            self.bc_eff_zones.setVisible(False)
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
             self.sel_stats.hide()
             self.zone_slider.hide()
+            self.eff_slider.hide()
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
+            self.bc_eff_zones.setVisible(False)
             return
         x0, y0, x1, y1 = rect
         tv = (self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL
@@ -947,8 +981,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not agg:
             self.sel_stats.hide()
             self.zone_slider.hide()
+            self.eff_slider.hide()
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
+            self.bc_eff_zones.setVisible(False)
             return
         # classify the region with the SAME 12-state engine the per-bucket box uses (only when the
         # STATE lines are visible — 'y' toggles; hidden by default), then size the box and place it
@@ -1013,10 +1049,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                       s_thr, config.ABSORP_ZONE_MIN_RUN)]
         self.bc_absorp_zones.update_zones(zspecs)
         self.bc_absorp_zones.setVisible(bool(zspecs))
+        # EFFECTIVE-AGGRESSION zones — the MIRROR (heavy volume that MOVED price its way): eff_bull/bear =
+        # V*(1-s) directional; NEON green/red bands. Own slider rides force f = eff_agg/vol_norm, re-seeded
+        # per selection to the median nonzero-f (forceful -> high, ordinary -> low). Dot = forceful boundary.
+        eff_bull_arr, eff_bear_arr, eff_fval = region_state.eff_agg_series(
+            filtered, lo, hi, config.ABSORP_VOL_WINDOW, config.EFF_AGG_FORCE_WINDOW)
+        eff_bull, eff_bear = sum(eff_bull_arr), sum(eff_bear_arr)
+        if sel_id != self._eff_sel_id:
+            self._eff_sel_id = sel_id
+            self.eff_slider.set_value(region_state.eff_agg_default_f(
+                eff_bull_arr, eff_bear_arr, eff_fval))
+        f_thr = self.eff_slider.value_s()
+        especs = [(z["start"] - 0.5, z["end"] + 0.5, x_right, z["plo"], z["phi"], z["side"],
+                   f"{z['side'].upper()} {self._fmt_k(z['vol'])}")
+                  for z in region_state.eff_zones_from_series(
+                      eff_bull_arr, eff_bear_arr, eff_fval, lo, filtered,
+                      f_thr, config.EFF_AGG_ZONE_MIN_RUN)]
+        self.bc_eff_zones.update_zones(especs)
+        self.bc_eff_zones.setVisible(bool(especs))
         self.sel_stats.set_content(
             self._selection_stat_lines(agg, state, conf, dbg, vtier,
                                        spark_er, spark_op, spark_cl, flip,
-                                       (abs_bull, abs_bear)), "")
+                                       (abs_bull, abs_bear), (eff_bull, eff_bear)), "")
 
         def to_self(dx, dy):
             sc = self.vb.mapViewToScene(QtCore.QPointF(float(dx), float(dy)))
@@ -1029,15 +1083,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                         self.sel_stats.width(), self.sel_stats.height())
             self.sel_stats.move(bx, by)
             self.sel_stats.show_raise()
-            # the zone-threshold slider rides just under the box (kept on-screen if the box sits low)
-            sld_y = by + self.sel_stats.height() + 3
-            if sld_y + self.zone_slider.height() > self.height():
-                sld_y = by - self.zone_slider.height() - 3
-            self.zone_slider.move(bx, sld_y)
+            # the two zone-threshold sliders ride STACKED (absorption above eff-agg) just under the box;
+            # if the pair would run off the bottom, stack them ABOVE the box instead (same order).
+            gap, sh = 3, self.zone_slider.height()
+            below_zone = by + self.sel_stats.height() + gap
+            if below_zone + 2 * sh + gap <= self.height():
+                zone_y = below_zone
+            else:
+                zone_y = max(0, by - gap - sh - (sh + gap))   # pair above the box, zone on top
+            self.zone_slider.move(bx, zone_y)
             self.zone_slider.show(); self.zone_slider.raise_()
+            self.eff_slider.move(bx, zone_y + sh + gap)
+            self.eff_slider.show(); self.eff_slider.raise_()
         else:
             self.sel_stats.hide()
             self.zone_slider.hide()
+            self.eff_slider.hide()
 
     def _update_flip_line(self, flip, lo_i: int, rect) -> None:
         """Draw/refresh the balance-flip vline at the flip bucket, spanning the selection's y-band. TWO
@@ -1244,6 +1305,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # BULL/BEAR absorption (volume) — aggressive volume that FAILED to move price, vs the region's
             # trailing-norm. Directional: only the heavier aggressor that failed gets credit.
             bull_abs, bear_abs, _sabs = region_state.absorption_vol(buckets, idx, config.ABSORP_VOL_WINDOW)
+            # EFFECTIVE AGGRESSION (the mirror): heavy directional volume that MOVED price its way = V*(1-s).
+            eff_bull_b, eff_bear_b, _se = region_state.effective_aggression(buckets, idx, config.ABSORP_VOL_WINDOW)
             # color ONLY the two dominant 4-vectors (the ones that drove the move); the
             # other two render dim. A zero vector never lights up even if it lands "top 2".
             vmag = {"opL": opL, "opS": opS, "clS": clS, "clL": clL}
@@ -1272,6 +1335,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 sep("ABSORPTION · VOL"),
                 span(f"Bull Absorp {K(bull_abs)}", g if bull_abs > 0 else gray),
                 span(f"Bear Absorp {K(bear_abs)}", r if bear_abs > 0 else gray),
+                sep("EFF-AGG · VOL"),
+                span(f"Bull Eff {K(eff_bull_b)}", "#00ff80" if eff_bull_b > 0 else gray),
+                span(f"Bear Eff {K(eff_bear_b)}", "#ff2d6b" if eff_bear_b > 0 else gray),
                 sep("READ"),
                 f"VEL {span(f'{vel:.2f}x', gold)}",
                 f"30b VEL {span(f'{vabn:.1f}×', gold if vabn >= config.VEL_ABN_RATIO else gray)}",

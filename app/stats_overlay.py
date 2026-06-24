@@ -238,11 +238,13 @@ class StatsOverlay(QtWidgets.QLabel):
 
 
 class _FloorSlider(QtWidgets.QSlider):
-    """Horizontal slider that paints a YELLOW DOT on its groove at the validated-strength floor."""
+    """Horizontal slider that paints a DOT on its groove at the boundary ``floor`` (absorption =
+    validated-strength; eff-agg = forceful). Dot colour is parametrised."""
 
-    def __init__(self, floor: float):
+    def __init__(self, floor: float, dot_rgb=(241, 196, 15)):
         super().__init__(QtCore.Qt.Horizontal)
         self._floor = floor
+        self._dot = dot_rgb
 
     def paintEvent(self, ev):   # noqa: N802 (Qt override)
         super().paintEvent(ev)
@@ -252,21 +254,25 @@ class _FloorSlider(QtWidgets.QSlider):
         x = m + int(self._floor * max(1, self.width() - 2 * m))
         y = self.height() // 2
         p.setPen(QtCore.Qt.NoPen)
-        p.setBrush(QtGui.QColor(241, 196, 15))     # yellow = validated-strength floor
+        p.setBrush(QtGui.QColor(*self._dot))
         p.drawEllipse(QtCore.QPointF(x, y), 4.0, 4.0)
         p.end()
 
 
-class AbsorptionZoneSlider(QtWidgets.QWidget):
-    """Floorless s-threshold control for the Mode-10 absorption zones. Rides the suppression score s
-    (0.00-1.00); a YELLOW DOT on the track marks the validated-strength floor (``floor``): at/above =
-    validated-strength absorption, below = weaker (a gradient, not real/fake). Emits ``changed(s)`` only
-    on a USER drag (programmatic ``set_value`` is silent)."""
+class _ZoneThresholdSlider(QtWidgets.QWidget):
+    """Floorless 0.00-1.00 threshold control for a Mode-10 zone layer. A DOT on the track marks a grounded
+    boundary (``floor``): at/above = the distinctive regime, below = the ordinary/weaker one (a gradient).
+    Emits ``changed(v)`` only on a USER drag (programmatic ``set_value`` is silent). Subclassed per measure
+    (absorption rides s; effective-aggression rides force f) — the axis label / tags / accent differ."""
     changed = QtCore.Signal(float)
 
-    def __init__(self, parent, floor: float = 0.60):
+    def __init__(self, parent, floor, axis_label, above_tag, below_tag,
+                 above_col, below_col, border_col="#2a2e39", dot_rgb=(241, 196, 15)):
         super().__init__(parent)
         self._floor = floor
+        self._axis = axis_label
+        self._above = (above_tag, above_col)
+        self._below = (below_tag, below_col)
         self._silent = False
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(8, 5, 8, 6); lay.setSpacing(2)
@@ -274,23 +280,23 @@ class AbsorptionZoneSlider(QtWidgets.QWidget):
         self.lbl.setTextFormat(QtCore.Qt.RichText)
         self.lbl.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:11px;")
         lay.addWidget(self.lbl)
-        self.slider = _FloorSlider(floor)
+        self.slider = _FloorSlider(floor, dot_rgb)
         self.slider.setRange(0, 100)
         self.slider.setFixedHeight(16)
         self.slider.valueChanged.connect(self._on_change)
         lay.addWidget(self.slider)
         self.setFixedWidth(210)
         self.setAttribute(QtCore.Qt.WA_StyledBackground, True)   # so the stylesheet bg actually paints
-        self.setStyleSheet("AbsorptionZoneSlider{background:rgba(17,19,26,235);"
-                           "border:1px solid #2a2e39; border-radius:5px;}")
+        self.setStyleSheet(f"{type(self).__name__}{{background:rgba(17,19,26,235);"
+                           f"border:1px solid {border_col}; border-radius:5px;}}")
         self._render(0.0)
 
-    def set_value(self, s: float) -> None:
+    def set_value(self, v: float) -> None:
         """Set the slider WITHOUT emitting (used to apply the adaptive default each selection)."""
-        v = int(round(max(0.0, min(1.0, s)) * 100))
-        if v != self.slider.value():
+        iv = int(round(max(0.0, min(1.0, v)) * 100))
+        if iv != self.slider.value():
             self._silent = True
-            self.slider.setValue(v)
+            self.slider.setValue(iv)
             self._silent = False
         self._render(self.value_s())
 
@@ -298,15 +304,29 @@ class AbsorptionZoneSlider(QtWidgets.QWidget):
         return self.slider.value() / 100.0
 
     def _on_change(self, _v: int) -> None:
-        s = self.value_s()
-        self._render(s)
+        v = self.value_s()
+        self._render(v)
         if not self._silent:
-            self.changed.emit(s)
+            self.changed.emit(v)
 
-    def _render(self, s: float) -> None:
-        if s >= self._floor:
-            tag, col = "validated-strength", "#2ecc71"
-        else:
-            tag, col = "weaker · sub-floor", "#f1c40f"
-        self.lbl.setText(f"Zone s&nbsp;<b>{s:.2f}</b>&nbsp; "
+    def _render(self, v: float) -> None:
+        tag, col = self._above if v >= self._floor else self._below
+        self.lbl.setText(f"{self._axis}&nbsp;<b>{v:.2f}</b>&nbsp; "
                          f"<span style='color:{col}'>● {tag}</span>")
+
+
+class AbsorptionZoneSlider(_ZoneThresholdSlider):
+    """Rides suppression s; yellow dot = validated-strength floor (s≈0.60)."""
+
+    def __init__(self, parent, floor: float = 0.60):
+        super().__init__(parent, floor, "Zone s", "validated-strength", "weaker · sub-floor",
+                         "#2ecc71", "#f1c40f")
+
+
+class EffAggZoneSlider(_ZoneThresholdSlider):
+    """Rides force f = eff_agg/vol_norm; NEON-green-accented; dot = forceful boundary (f≈0.75 = top-quartile
+    force). Above = distinctively forceful, below = ordinary directional volume."""
+
+    def __init__(self, parent, floor: float = 0.75):
+        super().__init__(parent, floor, "Force f", "forceful", "ordinary vol",
+                         "#00ff80", "#8a929e", border_col="#1f6b46", dot_rgb=(0, 255, 128))

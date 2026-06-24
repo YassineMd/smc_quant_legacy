@@ -220,6 +220,18 @@ ABSORP_ZONE_FLOOR_S = 0.60       # yellow-dot 'validated-strength' floor on the 
                                  # top-quartile-volume zones live at s >= ~0.6 (their p10). At/above = the
                                  # validated-strength regime; below = weaker-but-still-suppressed (a
                                  # gradient, not a real/fake cliff). A clean trend stays empty regardless.
+
+# ── EFFECTIVE AGGRESSION (the validated MIRROR of absorption: heavy volume that DID move price its way) ──
+EFF_AGG_FORCE_WINDOW = 50        # trailing buckets for the FORCE norm vol_norm = mean curr_vol; the slider
+                                 # rides f = eff_agg / vol_norm — a self-calibrated RELATIVE force ratio
+                                 # (~[0,1]; median ~0.60 on 1m). eff_agg reuses the SAME s as absorption.
+EFF_AGG_ZONE_MIN_RUN = 3         # eff-agg zone = >= this many CONSECUTIVE forceful same-side buckets (mirror
+                                 # of ABSORP_ZONE_MIN_RUN; no single-bucket zones at any slider position).
+EFF_AGG_ZONE_DOT_F = 0.75        # 'forceful' dot on the eff-agg slider = ~p75 of directional force on real
+                                 # 1m data: above = top-quartile DISTINCTIVELY forceful (heavy vol that
+                                 # worked), below = ordinary directional volume (~what volume bars show).
+                                 # Grounded, NOT a validated-strength cliff — eff-agg is common (the honest
+                                 # difference from absorption's dot); forceful zones at the dot are rare.
 ICEBERG_VOL_SHARE = 0.04        # 4% candle volume (§4.2.1)
 ICEBERG_SKEW = 0.65             # 65% absorption skew (§4.2.1)
 VELOCITY_NEON_RATIO = 2.5       # HFT neon overload trigger (index.html:945, spec §10.2.3)

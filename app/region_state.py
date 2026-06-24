@@ -317,3 +317,83 @@ def zones_from_series(bull: list, bear: list, sval: list, lo_i: int, buckets: li
                 zones.append({"side": side, "start": a, "end": b, "vol": sum(vals[st:k]),
                               "plo": min(lows), "phi": max(highs)})
     return zones
+
+
+# ---------------------------------------------------------------------------
+# EFFECTIVE AGGRESSION — the validated MIRROR of absorption. Absorption = dominant aggressor's volume that
+# FAILED to move price its way (V*s, high s). Effective aggression = dominant aggressor's volume that MOVED
+# price ITS way (V*(1-s)), gated on direction. Reuses the EXACT s from absorption_vol; for an in-direction
+# bucket absorption + eff_agg == V (they SPLIT the dominant volume by suppression — proven on real data).
+# DESCRIPTIVE: "this side FORCEFULLY moved price (heavy volume that worked)", not a prediction.
+# ---------------------------------------------------------------------------
+def effective_aggression(buckets: list, i: int, window: int) -> "tuple[float, float, float]":
+    """Per-bucket (eff_agg_bull, eff_agg_bear, s) — the mirror of :func:`absorption_vol`, reusing its
+    suppression ``s`` exactly. ``eff_agg_bull = buy_vol*(1-s)`` when buyers dominate volume AND price closed
+    UP (buyers forced it up); ``eff_agg_bear = sell_vol*(1-s)`` when sellers dominate AND price closed DOWN.
+    Zero on the other side / on a divergent close. Volume units, like absorption."""
+    b = buckets[i]
+    o, c = float(b.get("open", 0.0)), float(b.get("close", 0.0))
+    bv, sv = float(b.get("buy_vol", 0.0)), float(b.get("sell_vol", 0.0))
+    _bu, _be, s = absorption_vol(buckets, i, window)   # reuse the VALIDATED s (and its trailing norm k)
+    eff_bull = bv * (1.0 - s) if (bv > sv and c > o) else 0.0
+    eff_bear = sv * (1.0 - s) if (sv > bv and c < o) else 0.0
+    return eff_bull, eff_bear, s
+
+
+def _vol_norm(buckets: list, i: int, force_window: int) -> float:
+    """Trailing-mean curr_vol over ``force_window`` (the self-calibrated FORCE reference, mirroring k's
+    window). Floors at 1.0 so the force ratio never divides by zero on a cold/flat window."""
+    win = buckets[max(0, i - force_window):i] or [buckets[i]]
+    tot = sum((float(w.get("curr_vol", 0.0)) or (float(w.get("buy_vol", 0.0)) + float(w.get("sell_vol", 0.0))))
+              for w in win)
+    vn = tot / len(win)
+    return vn if vn > 0 else 1.0
+
+
+def eff_agg_series(buckets: list, lo_i: int, hi_i: int, window: int,
+                   force_window: int) -> "tuple[list, list, list]":
+    """Per-bucket ``(eff_bull, eff_bear, fval)`` over a selection, in ONE pass. ``fval`` = the directional
+    eff-agg in VOLUME / the trailing FORCE norm (``_vol_norm``) — a self-calibrated RELATIVE force ratio
+    (~[0,1]; the slider rides it). 0 on non-eff-agg buckets. Mirrors :func:`absorption_series`."""
+    eff_bull, eff_bear, fval = [], [], []
+    for i in range(lo_i, hi_i + 1):
+        eb, es, _s = effective_aggression(buckets, i, window)
+        e = eb if eb > 0 else es
+        f = (e / _vol_norm(buckets, i, force_window)) if e > 0 else 0.0
+        eff_bull.append(eb); eff_bear.append(es); fval.append(f)
+    return eff_bull, eff_bear, fval
+
+
+def eff_agg_default_f(eff_bull: list, eff_bear: list, fval: list) -> float:
+    """Adaptive default eff-agg zone threshold = the selection's MEDIAN nonzero FORCE over its directional
+    eff-agg buckets (forceful selection -> high default, ordinary -> low; self-calibrating). Sits BELOW the
+    forceful dot for an ordinary selection (exactly like absorption's median-s vs its dot). 1.0 when none."""
+    nz = sorted(fval[k] for k in range(len(fval)) if (eff_bull[k] > 0 or eff_bear[k] > 0) and fval[k] > 0)
+    return nz[len(nz) // 2] if nz else 1.0
+
+
+def eff_zones_from_series(eff_bull: list, eff_bear: list, fval: list, lo_i: int, buckets: list,
+                          f_threshold: float, min_run: int) -> "list[dict]":
+    """Effective-aggression ZONES (mirror of :func:`zones_from_series`). A bucket is FORCEFUL if it is
+    directional eff-agg (bull or bear > 0) AND its force ``f >= f_threshold`` (the slider); a zone = a run
+    of >= ``min_run`` consecutive forceful buckets on the SAME side. FLOORLESS. Above the slider's dot
+    (force ~0.75 = top-quartile) = distinctively forceful; below = ordinary directional volume. Each zone:
+    ``{side, start, end, vol (summed eff-agg over the run), plo, phi}``."""
+    zones = []
+    for side, vals in (("bull", eff_bull), ("bear", eff_bear)):
+        ag = [vals[k] > 0 and fval[k] >= f_threshold for k in range(len(vals))]
+        k, m = 0, len(vals)
+        while k < m:
+            if not ag[k]:
+                k += 1
+                continue
+            st = k
+            while k < m and ag[k]:
+                k += 1
+            if (k - st) >= min_run:
+                a, b = lo_i + st, lo_i + k - 1
+                lows = [float(buckets[j].get("low", 0.0)) for j in range(a, b + 1)]
+                highs = [float(buckets[j].get("high", 0.0)) for j in range(a, b + 1)]
+                zones.append({"side": side, "start": a, "end": b, "vol": sum(vals[st:k]),
+                              "plo": min(lows), "phi": max(highs)})
+    return zones
