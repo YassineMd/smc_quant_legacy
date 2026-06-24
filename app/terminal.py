@@ -938,9 +938,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             abu, abe = absorp
             if abu > 0 or abe > 0:
                 if abu >= abe:
-                    lean = f"{abu / abe:.0f}× bull" if abe > 0 else "bull-only"
+                    lean = f"{abu / abe:.2f}× bull" if abe > 0 else "bull-only"
                 else:
-                    lean = f"{abe / abu:.0f}× bear" if abu > 0 else "bear-only"
+                    lean = f"{abe / abu:.2f}× bear" if abu > 0 else "bear-only"
                 lines.append(sep("ABSORPTION · VOL"))
                 lines.append(f"{span('Bull ' + K(abu), g)} · {span('Bear ' + K(abe), r)} · "
                              f"{span(lean, gold)}")
@@ -951,9 +951,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if ebu > 0 or ebe > 0:
                 neon_g, neon_r = "#00ff80", "#ff2d6b"
                 if ebu >= ebe:
-                    elean = f"{ebu / ebe:.0f}× bull" if ebe > 0 else "bull-only"
+                    elean = f"{ebu / ebe:.2f}× bull" if ebe > 0 else "bull-only"
                 else:
-                    elean = f"{ebe / ebu:.0f}× bear" if ebu > 0 else "bear-only"
+                    elean = f"{ebe / ebu:.2f}× bear" if ebu > 0 else "bear-only"
                 lines.append(sep("EFF-AGG · VOL"))
                 lines.append(f"{span('Bull ' + K(ebu), neon_g)} · {span('Bear ' + K(ebe), neon_r)} · "
                              f"{span(elean, gold)}")
