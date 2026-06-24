@@ -253,6 +253,23 @@ EXH_STRIP_GAP = 0.05             # the panel's 100% line sits this fraction of t
                                  # selection (draw the box with space below, or it falls off the bottom).
 EXH_CROSS_PERSIST = 2            # mark a crossover (gold diamond) only if the new dominant side holds >= this
                                  # many buckets (so a choppy selection doesn't litter diamonds).
+
+# ── Mode-10 EFF-AGG EVOLUTION STRIP (SELECTION-scoped: per-bucket eff-agg, NEON green bull / red bear, two
+#    lines in a SECOND panel STACKED below the exhaustion strip; '2' toggles) ──
+EFF_STRIP_FRAC = 0.25            # panel height as a fraction of the selection's price range (y1 - y0).
+EFF_STRIP_GAP = 0.05             # this panel's 100% line sits this fraction of the selection height BELOW the
+                                 # exhaustion strip's 0% line — the two panels stack, each in a fixed slot, so
+                                 # toggling one ('1'/'2') never moves the other. Sits further off the candles.
+EFF_STRIP_RELEASE = 0.60         # envelope decay for the SYMMETRIC smoother that lifts the one-sided per-bucket
+                                 # eff-agg spikes into two readable bands (matches the exhaustion strip's look).
+
+# ── Mode-10 EFFORT/RESULT EVOLUTION STRIP (SELECTION-scoped: buyer vs seller E/R, green/red, two lines in a
+#    THIRD panel STACKED below the eff-agg strip; '3' toggles. Promoted out of the FLOW TRAJECTORY sparkline) ──
+ER_STRIP_FRAC = 0.25            # panel height as a fraction of the selection's price range (y1 - y0).
+ER_STRIP_GAP = 0.05             # this panel's 100% line sits this fraction of the selection height BELOW the
+                                 # eff-agg strip's 0% line — the three panels stack, each in a fixed slot.
+ER_STRIP_RELEASE = 0.60         # envelope decay for the SYMMETRIC smoother (E/R is two-sided, so it's already
+                                 # smoother than eff-agg; this matches the other two panels' look).
 ICEBERG_VOL_SHARE = 0.04        # 4% candle volume (§4.2.1)
 ICEBERG_SKEW = 0.65             # 65% absorption skew (§4.2.1)
 VELOCITY_NEON_RATIO = 2.5       # HFT neon overload trigger (index.html:945, spec §10.2.3)

@@ -525,16 +525,23 @@ class AbsorptionZoneLayer(pg.GraphicsObject):
 _RGB_EXH_BULL = (41, 160, 255)     # blue  — bull exhaustion (buyers worn out)
 _RGB_EXH_BEAR = (244, 67, 54)      # red   — bear exhaustion (sellers worn out)
 _RGB_EXH_CROSS = (241, 196, 15)    # gold  — crossover marker (exhausted party changes)
+_RGB_ER_BULL = (46, 204, 113)      # green — buyer effort/result  (effort-strip panel, was the E/R sparkline)
+_RGB_ER_BEAR = (231, 76, 60)       # red   — seller effort/result
 
 
 class ExhaustionStripLayer(pg.GraphicsObject):
-    """Selection-scoped exhaustion panel. ``update_data`` takes the bucket x-positions and the already-mapped
-    y of each line (price coords inside the panel), the panel's x/y bounds, and the crossover points; it
-    paints a translucent backing, faint 0/50/100% guides, the blue + red lines, and gold crossover diamonds.
-    All geometry is pre-computed by the caller (selection-scoped, bounded) — the layer only draws."""
+    """Selection-scoped two-line panel hanging below the box. ``update_data`` takes the bucket x-positions and
+    the already-mapped y of each line (price coords inside the panel), the panel's x/y bounds, and the
+    crossover points; it paints faint 0/50/100% guides, the bull + bear lines, and crossover diamonds. All
+    geometry is pre-computed by the caller (selection-scoped, bounded) — the layer only draws. Colours are
+    parametrised so the SAME layer serves the exhaustion panel (blue/red) and the eff-agg evolution panel
+    (NEON green/red), exactly as :class:`AbsorptionZoneLayer` serves both the absorption and eff-agg zones."""
 
-    def __init__(self, plot=None):
+    def __init__(self, plot=None, rgb_bull=_RGB_EXH_BULL, rgb_bear=_RGB_EXH_BEAR, rgb_cross=_RGB_EXH_CROSS):
         super().__init__()
+        self._rgb_bull = rgb_bull
+        self._rgb_bear = rgb_bear
+        self._rgb_cross = rgb_cross
         self.picture = QtGui.QPicture()
         self._rect = QtCore.QRectF()
 
@@ -571,10 +578,10 @@ class ExhaustionStripLayer(pg.GraphicsObject):
             for k in range(1, len(xs)):
                 path.lineTo(QtCore.QPointF(float(xs[k]), ys[k]))
             p.drawPath(path)
-        polyline(bull_y, _RGB_EXH_BULL)
-        polyline(bear_y, _RGB_EXH_BEAR)
+        polyline(bull_y, self._rgb_bull)
+        polyline(bear_y, self._rgb_bear)
         dh = 0.11 * (y_top - y_bot); dw = 0.38
-        gold = QtGui.QColor(*_RGB_EXH_CROSS)
+        gold = QtGui.QColor(*self._rgb_cross)
         tick = QtGui.QPen(gold); tick.setCosmetic(True); tick.setWidthF(1.0); tick.setStyle(QtCore.Qt.DashLine)
         for cx, cy in crosses:
             p.setPen(tick); p.drawLine(QtCore.QPointF(cx, y_bot), QtCore.QPointF(cx, cy))
