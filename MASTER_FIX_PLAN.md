@@ -832,6 +832,9 @@ swaps). `'1'` toggles; hover gives the RAW per-bucket %.
   dark). Crossovers gated by `EXH_CROSS_PERSIST`. `ExhaustionStripLayer` (chart_widgets); `envelope_symmetric`
   (region_state). The candle-relative mapping (lines riding off each close ±MAX_DIST×ATR) was tried and
   REJECTED in favour of the panel. **EXE still stale.**
+- **Follow-up (`4b52c91`):** the selection box's ABSORPTION·VOL / EFF-AGG·VOL bull:bear **lean ratio** now
+  shows **2 decimals** (`:.2f`, e.g. `1.40× bear` / `1.41× bull`) — was `:.0f` ("1×"), which hid the
+  magnitude. The bull-only / bear-only (one side zero) cases unchanged.
 
 ---
 

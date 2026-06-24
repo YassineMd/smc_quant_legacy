@@ -682,6 +682,8 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
   shift) → panel-mapped. Panel `EXH_STRIP_GAP` below the box, height `EXH_STRIP_FRAC` of the selection range, NO
   backing. Crossovers gated by `EXH_CROSS_PERSIST`. `ExhaustionStripLayer` (chart_widgets). The candle-relative
   mapping (lines off each close ±MAX_DIST×ATR) was tried + REJECTED for the panel. **EXE still stale.**
+- **Follow-up (`4b52c91`):** selection-box ABSORPTION·VOL / EFF-AGG·VOL lean ratio → **2 decimals** (`:.2f`,
+  e.g. `1.40× bear`) instead of `:.0f` ("1×"). bull-only/bear-only cases unchanged.
 
 ---
 
