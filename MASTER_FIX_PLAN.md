@@ -868,6 +868,36 @@ swaps). `'1'` toggles; hover gives the RAW per-bucket %.
   reveal it). **Vector drawing toolbar shown on launch** (it `hide()`s itself in its ctor and the default-checked
   menu signal isn't wired at build → explicit `self.drawbar.show()`). **EXE still stale.**
 
+**Mode-10 LEAN panels — absorption panel + share lines + separators + E/R zoom — BUILT (`a2efc72`).**
+- **NEW ABSORPTION panel + key/stack reshuffle.** Top→bottom is now **1 ABSORPTION, 2 EFF-AGG, 3 E/R,
+  4 EXHAUSTION** (exhaustion moved off `'1'`). Absorption recoloured **NEON green (bull) / NEON purple (bear)**
+  (`_RGB_ABS_*`); reuses the parametrised `ExhaustionStripLayer`. Stack is gap-collapsing as before.
+- **LEAN as SHARE lines (the big change).** absorption / eff-agg / E/R no longer plot raw volume — each plots
+  the two sides' **SHARE of the pair** (two lines summing to 100%, crossing at the **50% even midline**). The
+  share is **ROLLING** over a CENTERED window (`region_state.rolling_share`, `config.LEAN_WINDOW_FRAC=0.25` /
+  `LEAN_WINDOW_MIN=5`) so the lines track the **LOCAL lean and shift** across the selection. **Cumulative was
+  tried first and rejected** — it converges/flattens toward the right edge (the right edge *did* equal the box
+  lean, but the panel went flat). One-sided-per-bucket (absorption, eff-agg) is WHY a per-bucket ratio is
+  undefined and a window/accumulation is needed; E/R is two-sided.
+- **SELECTION-PURITY (operator asked, proven).** absorption + eff-agg panels are now **selection-pure** —
+  recomputed on the SLICE `filtered[lo:hi+1]` so the trailing suppression/force norm can't reach before the box
+  (proven: panel == sliced-only; was 21/60 & 12/60 leading buckets peeking). The **ZONES keep the full-history
+  norm** (panel ≠ zones, by request). E/R + exhaustion were already pure.
+- **E/R ZOOM.** E/R hugs 50% (two-sided), so its panel multiplies the deviation from the midline by
+  `config.ER_LEAN_GAIN=3.0` (display only; clamps at the edge; the hover shows the TRUE share). 52.9%→58.7%.
+- **MINIMALIST SEPARATORS + clean panels.** Hairline dividers in each gap between visible panels
+  (`PanelSeparatorLayer`, centre-fading via **solid constant-alpha segments** — a gradient *cosmetic pen*
+  renders nothing in Qt, the original bug). **Removed the dotted 0/50/100% internal guide lines** from every
+  panel (operator: "don't like / don't use") — "even" now reads from where the two share lines cross.
+- **Stats Box default OFF** (`m10_stats` → `False`; `'s'` toggles), recorded with this batch.
+- **EXE REBUILT this batch** (one-file, see below).
+
+**`OrderFlowTerminal.spec` → single-file .exe (`0073b48`).** Converted the PyInstaller spec from one-folder
+(`COLLECT`) to **one-file**: `a.binaries` + `a.datas` bundled into `EXE`, `runtime_tmpdir=None`, no `COLLECT` —
+so `pyinstaller OrderFlowTerminal.spec` produces a single portable `dist/OrderFlowTerminal.exe` (for the
+operator's other computer). **EXE rebuilt** here through `a2efc72` — first fresh build since `9a1fa6a` (06-23);
+all of this session's panel work is now in the exe.
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)

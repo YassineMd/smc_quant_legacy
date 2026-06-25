@@ -706,6 +706,25 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
   (`self.drawbar.show()` — it self-`hide()`s in its ctor and the default-checked menu signal isn't wired at
   build). **EXE still stale.**
 
+**Mode-10 LEAN panels — absorption panel + share lines + separators + E/R zoom — BUILT (`a2efc72`).**
+- **NEW ABSORPTION panel + reshuffle:** top→bottom `1` ABSORPTION, `2` EFF-AGG, `3` E/R, `4` EXHAUSTION
+  (exhaustion off `'1'`). Absorption = **NEON green / NEON purple** (`_RGB_ABS_*`).
+- **LEAN as SHARE lines:** absorption/eff-agg/E/R now plot each side's **share of the pair** (two lines → 100%,
+  cross at the **50% even midline**), not raw vol. **ROLLING** centered window (`region_state.rolling_share`,
+  `config.LEAN_WINDOW_FRAC=0.25`/`LEAN_WINDOW_MIN=5`) → tracks the LOCAL lean + shifts. Cumulative tried first,
+  REJECTED (flattens to the right edge). One-sided-per-bucket (abs/eff) ⇒ needs the window; E/R two-sided.
+- **SELECTION-PURE:** abs + eff panels recomputed on the SLICE (proven panel==sliced; was 21/60 & 12/60 peeking).
+  ZONES keep the full-history norm (panel ≠ zones, by request). E/R + exhaustion already pure.
+- **E/R ZOOM:** `config.ER_LEAN_GAIN=3.0` multiplies E/R's deviation from 50% (display only, clamps; hover = true
+  share) — E/R hugs the midline otherwise (two-sided).
+- **SEPARATORS + clean panels:** hairline dividers per inter-panel gap (`PanelSeparatorLayer`, centre-fading via
+  SOLID constant-alpha SEGMENTS — a gradient *cosmetic pen* renders nothing, the bug). **Removed the dotted
+  0/50/100% internal guides** from every panel (operator pref); "even" reads from the share-line crossing.
+- **Stats Box default OFF** (`m10_stats=False`, `'s'` toggles).
+- **`OrderFlowTerminal.spec` → ONE-FILE exe** (binaries+datas in `EXE`, `runtime_tmpdir=None`, no `COLLECT`) →
+  single portable `dist/OrderFlowTerminal.exe` for the operator's other PC. **EXE REBUILT this batch** through
+  `a2efc72` — first fresh build since `9a1fa6a` (06-23); all the session's panel work is now in the exe.
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
