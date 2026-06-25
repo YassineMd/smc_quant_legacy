@@ -733,6 +733,20 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
   spreads)` over `config.PHASE_STATS` (mean/std from R=30% moves), normalized, leading phase highlighted, live.
   `_phase_table_html` + `phase_tbl` TextItem. **EXE now stale again** (not in the `a2efc72` build).
 
+**Phase PANELS + START/DURING merge + EMA-confidence opacity, selection-WARMED (`2766668`).**
+- **3 phase panels** (`'5'` BEFORE / `'6'` START/DURING / `'7'` END), two lines each (UP green / DOWN red) =
+  that phase's smoothed confidence; mirror the table rows, gap-collapse under panels 1-4. `bc_phase` dict.
+- **Start+During MERGED** into one `START/DURING` (table + panels): summed at the posterior level (`_phase_post`
+  returns `[p0, p1+p2, p3]`), `self._PHASES=("BEFORE","START/DURING","END")`; `PHASE_STATS` stays the 4-way
+  classifier — only the *display* is 3.
+- **Opacity = the live posterior smoothed by an EMA** (`op = λ·op + (1-λ)·posterior%`, `PHASE_EMA_LAMBDA=0.8`),
+  replacing the old +1%-per-fire accumulation. `_phase_opacity_traj`→`_phase_conf_traj`. Conserved at 100, rows sum 100.
+- **Selection scope (operator-chosen after 3 tries):** (a) EMA, (b) pure posterior no-EMA, (c) EMA strictly
+  inside the selection — operator kept the EMA **WARMED through the `_lw` (~15) buckets just before `lo`** so the
+  left edge is settled, not cold-starting. Only that pre-roll reaches outside `[lo,hi]`; the displayed trajectory/
+  table/panels are the `[lo,hi]` slice, inputs otherwise selection-pure (PROVEN: slice==isolated-copy; differs
+  from the leaky full-list on the early buckets). **EXE still stale** (none of this is in the `a2efc72` build).
+
 **⚠️ VERDICT — the balance-of-power SCORE/strategy is DESCRIPTIVE, not predictive (settled; don't rebuild as a
 signal).** Hypothesis "move begins when absorption low + eff-agg/E-R high" tested exhaustively, all CAUSAL +
 base-rate-guarded: direction not predictable (eff-agg only *describes* the move ≈ tautology; abs/E-R ~chance;

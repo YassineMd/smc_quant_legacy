@@ -908,6 +908,21 @@ all of this session's panel work is now in the exe.
   mean/std profiled over R=30% retracement moves), leading phase highlighted, shifts as price moves. **EXE now
   stale again** (these two features aren't in the `a2efc72` exe).
 
+**Phase PANELS + START/DURING merge + EMA-confidence opacity (selection-warmed) (`2766668`).**
+- **3 phase panels** (`'5'` BEFORE / `'6'` START/DURING / `'7'` END), two lines each (UP green / DOWN red) = that
+  phase's smoothed confidence, mirroring the table rows; they gap-collapse below panels 1-4.
+- **Start + During MERGED** into one `START/DURING` (table AND panels) — summed at the posterior level
+  (`_phase_post` returns `[p0, p1+p2, p3]`), so `PHASE_STATS` stays the 4-way classifier and only the *display* is 3.
+- **Row opacity = the live posterior smoothed by an EMA** (`op = λ·op + (1-λ)·posterior%`, `PHASE_EMA_LAMBDA=0.8`),
+  replacing the old +1%-per-fire accumulation (`_phase_opacity_traj` → `_phase_conf_traj`). Conserved at 100%;
+  every row sums to 100.
+- **Selection scope — operator iterated through 3 options:** (a) EMA, (b) no-EMA pure posterior, (c) EMA strictly
+  inside the selection. Operator preferred the EMA **WARMED through the `_lw` (~15) buckets just before the
+  selection** (pre-roll) so the left edge is settled rather than cold-starting. **Only the warm-up reaches outside
+  `[lo,hi]`** — the displayed trajectory, table, and panels are all the `[lo,hi]` portion, and the inputs are
+  otherwise selection-pure (PROVEN: slice computation == isolated-copy, and differs from the leaky full-list
+  version on the early buckets). **EXE stale again** (not in the `a2efc72` exe).
+
 **⚠️ INVESTIGATION VERDICT (the balance-of-power "score" / strategy — settled, do NOT rebuild as a predictor).**
 The operator's hypothesis ("a move begins when absorption is low + eff-agg & E/R high") was stress-tested
 exhaustively, all CAUSAL / out-of-sample / base-rate-guarded:
