@@ -527,6 +527,8 @@ _RGB_EXH_BEAR = (244, 67, 54)      # red   — bear exhaustion (sellers worn out
 _RGB_EXH_CROSS = (241, 196, 15)    # gold  — crossover marker (exhausted party changes)
 _RGB_ER_BULL = (46, 204, 113)      # green — buyer effort/result  (effort-strip panel, was the E/R sparkline)
 _RGB_ER_BEAR = (231, 76, 60)       # red   — seller effort/result
+_RGB_ABS_BULL = (57, 255, 20)      # NEON green  — bull absorption (buyers soaking up sells)
+_RGB_ABS_BEAR = (191, 0, 255)      # NEON purple — bear absorption (sellers soaking up buys)
 
 
 class ExhaustionStripLayer(pg.GraphicsObject):
@@ -564,11 +566,6 @@ class ExhaustionStripLayer(pg.GraphicsObject):
             self._rect = QtCore.QRectF(); self.prepareGeometryChange(); self.update(); return
         p = QtGui.QPainter(self.picture)
         p.setRenderHint(QtGui.QPainter.Antialiasing)
-        guide = QtGui.QPen(QtGui.QColor(120, 128, 140, 120)); guide.setCosmetic(True)
-        guide.setStyle(QtCore.Qt.DotLine)
-        for fr in (0.0, 0.5, 1.0):
-            yy = y_bot + fr * (y_top - y_bot)
-            p.setPen(guide); p.drawLine(QtCore.QPointF(x0, yy), QtCore.QPointF(x1, yy))
 
         def polyline(ys, rgb):
             pen = QtGui.QPen(QtGui.QColor(*rgb)); pen.setCosmetic(True); pen.setWidthF(1.8)
@@ -590,6 +587,45 @@ class ExhaustionStripLayer(pg.GraphicsObject):
             p.setPen(QtCore.Qt.NoPen); p.setBrush(gold); p.drawPolygon(dia)
         p.end()
         self._rect = QtCore.QRectF(x0, y_bot, max(1.0, x1 - x0), max(1e-6, y_top - y_bot))
+        self.prepareGeometryChange(); self.update()
+
+
+class PanelSeparatorLayer(pg.GraphicsObject):
+    """Minimalist dividers between the stacked selection panels: one thin hairline per gap, FADING to
+    transparent at both ends (centre-weighted) so it reads as a clean separator on the dark canvas and stays
+    visually distinct from the panels' dotted internal guides. The caller passes the gap-midline y's."""
+
+    def __init__(self, plot=None):
+        super().__init__()
+        self.picture = QtGui.QPicture()
+        self._rect = QtCore.QRectF()
+
+    def paint(self, p, *args):
+        p.drawPicture(0, 0, self.picture)
+
+    def boundingRect(self):
+        return self._rect
+
+    def update_data(self, x0: float, x1: float, ys: list) -> None:
+        self.picture = QtGui.QPicture()
+        if not ys:
+            self._rect = QtCore.QRectF(); self.prepareGeometryChange(); self.update(); return
+        p = QtGui.QPainter(self.picture)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, False)   # crisp horizontal hairline; no AA-seam between segs
+        # Draw each divider as N solid segments whose alpha fades edge->centre->edge (a cosmetic pen with a
+        # gradient BRUSH renders unreliably in Qt, so we approximate the fade with constant-alpha segments).
+        SEG = 64
+        span = x1 - x0
+        for y in ys:
+            for s in range(SEG):
+                tm = (s + 0.5) / SEG
+                a = int(round(45 + 165 * (1.0 - abs(2.0 * tm - 1.0))))   # edge ~45 -> centre ~210
+                pen = QtGui.QPen(QtGui.QColor(176, 184, 199, a)); pen.setCosmetic(True); pen.setWidthF(1.0)
+                p.setPen(pen)
+                xa = x0 + (s / SEG) * span; xb = x0 + ((s + 1) / SEG) * span
+                p.drawLine(QtCore.QPointF(xa, y), QtCore.QPointF(xb, y))
+        p.end()
+        self._rect = QtCore.QRectF(x0, min(ys), max(1.0, span), max(1e-6, max(ys) - min(ys)))
         self.prepareGeometryChange(); self.update()
 
 

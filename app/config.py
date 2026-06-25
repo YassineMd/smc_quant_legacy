@@ -257,9 +257,8 @@ EXH_CROSS_PERSIST = 2            # mark a crossover (gold diamond) only if the n
 # ── Mode-10 EFF-AGG EVOLUTION STRIP (SELECTION-scoped: per-bucket eff-agg, NEON green bull / red bear, two
 #    lines in a SECOND panel STACKED below the exhaustion strip; '2' toggles) ──
 EFF_STRIP_FRAC = 0.25            # panel height as a fraction of the selection's price range (y1 - y0).
-EFF_STRIP_GAP = 0.05             # this panel's 100% line sits this fraction of the selection height BELOW the
-                                 # exhaustion strip's 0% line — the two panels stack, each in a fixed slot, so
-                                 # toggling one ('1'/'2') never moves the other. Sits further off the candles.
+EFF_STRIP_GAP = 0.05             # gap below the previous SHOWN panel's 0% line — only VISIBLE panels take a
+                                 # slot, so hiding one ('1'-'4') slides the ones below it up (no blank gap).
 EFF_STRIP_RELEASE = 0.60         # envelope decay for the SYMMETRIC smoother that lifts the one-sided per-bucket
                                  # eff-agg spikes into two readable bands (matches the exhaustion strip's look).
 
@@ -270,6 +269,21 @@ ER_STRIP_GAP = 0.05             # this panel's 100% line sits this fraction of t
                                  # eff-agg strip's 0% line — the three panels stack, each in a fixed slot.
 ER_STRIP_RELEASE = 0.60         # envelope decay for the SYMMETRIC smoother (E/R is two-sided, so it's already
                                  # smoother than eff-agg; this matches the other two panels' look).
+
+# ── Mode-10 ABSORPTION STRIP (SELECTION-scoped: per-bucket bull/bear absorption — volume that FAILED to move
+#    price — green/red, two lines in the FIRST/TOP panel; '1' toggles) ──
+ABS_STRIP_FRAC = 0.25           # panel height as a fraction of the selection's price range (y1 - y0).
+ABS_STRIP_GAP = 0.05            # this panel's 100% line sits this fraction of the selection height BELOW the
+                                 # box bottom — it's the top of the stack (1 abs, 2 eff, 3 er, 4 exh).
+ABS_STRIP_RELEASE = 0.60        # envelope decay for the SYMMETRIC smoother (matches the other panels' look).
+
+# ── Lean panels (absorption '1' / eff-agg '2' / E/R '3') — the two lines are each side's SHARE of the pair,
+#    crossing at the 50% midline. ROLLING (not cumulative): the share is taken over a CENTERED window so the
+#    lines track the LOCAL lean and shift across the selection (cumulative would converge to a flat line) ──
+LEAN_WINDOW_FRAC = 0.25         # rolling-share window = this fraction of the selection's bucket count …
+LEAN_WINDOW_MIN = 5            # … floored at this many buckets (centered; small = responsive, large = smooth).
+ER_LEAN_GAIN = 3.0             # E/R hugs 50% (two-sided), so its panel ZOOMS the deviation from the midline by
+                                 # this factor (display only — the hover still shows the true share). 1.0 = none.
 ICEBERG_VOL_SHARE = 0.04        # 4% candle volume (§4.2.1)
 ICEBERG_SKEW = 0.65             # 65% absorption skew (§4.2.1)
 VELOCITY_NEON_RATIO = 2.5       # HFT neon overload trigger (index.html:945, spec §10.2.3)

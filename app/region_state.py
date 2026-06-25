@@ -472,3 +472,20 @@ def envelope_symmetric(x: list, release: float) -> list:
     fwd = envelope_series(x, release)
     bwd = envelope_series(list(reversed(x)), release)[::-1]
     return [max(a, b) for a, b in zip(fwd, bwd)]
+
+
+def rolling_share(bull: list, bear: list, window: int) -> list:
+    """Per-bucket bull SHARE — ``Σbull / Σ(bull+bear)`` — over a CENTERED rolling window of ``window`` buckets
+    (clamped at the edges). Non-cumulative: tracks the LOCAL lean and SHIFTS across the region, instead of a
+    cumulative share that converges to a flat line. 0.5 (even) where the window holds no bull/bear at all. The
+    bear share is just ``1 - this``. Works for the one-sided measures (absorption/eff-agg) because a window is
+    wide enough to contain both sides; an all-one-side window correctly reads ~1.0 (locally only that side)."""
+    n = len(bull)
+    h = max(1, window) // 2
+    out = []
+    for i in range(n):
+        a, b = max(0, i - h), min(n, i + h + 1)
+        sb = sum(bull[a:b]); sr = sum(bear[a:b])
+        tot = sb + sr
+        out.append((sb / tot) if tot > 0 else 0.5)
+    return out

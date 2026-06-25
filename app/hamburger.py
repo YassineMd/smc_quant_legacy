@@ -94,7 +94,7 @@ _M10_LAYERS = [
     ("m10_footprint", "Footprint Ladder", False, True),   # default OFF — heavy overlay, opt-in
     ("m10_obs", "Order Blocks", False, True),             # default OFF — toggle with Order Blocks + Iceberg via 'o'
     ("m10_liq", "Liquidation Marks", False, True),        # default OFF. In-session toggles persist as
-    ("m10_stats", "Stats Box", True, True),               # checkbox state; only a restart resets to these.
+    ("m10_stats", "Stats Box", False, True),              # default OFF ('s' toggles); checkbox state, restart resets.
     ("m10_icebergs", "Absorption", False, True),            # whale-defense bands (calc_absorption); default OFF, 'o' toggles
     ("m10_dom", "Depth / DOM Walls", True, True),           # live order-book walls on the bucket canvas (Phase A)
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),

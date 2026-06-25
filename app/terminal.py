@@ -34,8 +34,8 @@ from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
 from .chart_widgets import (
     AbsorptionLayer, AbsorptionZoneLayer, BucketCandleItem, ExhaustionStripLayer, LocalTimeAxis,
-    OrderBlockLayer, PriceAxis, _RGB_EFF_BEAR, _RGB_EFF_BULL, _RGB_ER_BEAR, _RGB_ER_BULL,
-    _RGB_EXH_BEAR, _RGB_EXH_BULL,
+    OrderBlockLayer, PanelSeparatorLayer, PriceAxis, _RGB_ABS_BEAR, _RGB_ABS_BULL, _RGB_EFF_BEAR,
+    _RGB_EFF_BULL, _RGB_ER_BEAR, _RGB_ER_BULL, _RGB_EXH_BEAR, _RGB_EXH_BULL,
 )
 from .cob_panel import CobPanel
 from .drawing_tools import DrawingController, DrawingToolbar
@@ -227,6 +227,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_er_strip.setZValue(2)
         self.plot.addItem(self.bc_er_strip, ignoreBounds=True)
         self.bc_er_strip.setVisible(False)
+        # SELECTION-SCOPED ABSORPTION STRIP — bull% vs bear% LEAN (each side's cumulative share of absorption),
+        # NEON green (bull) / NEON purple (bear), crossing at the 50% midline. FIRST/top panel ('1' toggles).
+        # Computed SELECTION-PURE (sliced) — unlike the zones, it never reaches before the box.
+        self.bc_abs_strip = ExhaustionStripLayer(self.plot, rgb_bull=_RGB_ABS_BULL, rgb_bear=_RGB_ABS_BEAR)
+        self.bc_abs_strip.setZValue(2)
+        self.plot.addItem(self.bc_abs_strip, ignoreBounds=True)
+        self.bc_abs_strip.setVisible(False)
+        # Minimalist hairline dividers between the stacked panels (centre-fading, dark-friendly).
+        self.bc_panel_sep = PanelSeparatorLayer(self.plot)
+        self.bc_panel_sep.setZValue(3)            # just above the panels
+        self.plot.addItem(self.bc_panel_sep, ignoreBounds=True)
+        self.bc_panel_sep.setVisible(False)
 
         # --- crosshair (patch §13): light-gray dashed ---
         pen = pg.mkPen(color="#aaaaaa", style=QtCore.Qt.DashLine, width=1)
@@ -275,9 +287,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_state = False   # STATE verdict + debug lines hidden until 'y' (both stats boxes)
         self.show_vel_abn = True  # abnormal-velocity DIAMONDS ON by default ('v' toggles; 2px border always on)
         self.show_sel_stats = True  # Mode-10 selection stats box shown by default ('h' toggles)
-        self.show_exh_strip = True  # Mode-10 selection exhaustion panel shown by default ('1' toggles)
+        self.show_abs_strip = True  # Mode-10 selection ABSORPTION panel shown by default ('1' toggles) — slot 1
         self.show_eff_strip = True  # Mode-10 selection eff-agg evolution panel shown by default ('2' toggles)
         self.show_er_strip = True   # Mode-10 selection effort/result panel shown by default ('3' toggles)
+        self.show_exh_strip = True  # Mode-10 selection exhaustion panel shown by default ('4' toggles) — slot 4
         self._flip_line = None    # Mode-10 balance-flip overlay (dashed yellow vline + sustain% label)
         self._flip_label = None
         self._forming_line = None   # tentative "forming" overlay (dim dotted amber + 'unconfirmed' label)
@@ -349,10 +362,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("V"), self, activated=self._toggle_vel_abn)
         # 'h' = show/hide the Mode-10 Magic-Selection stats box (chart overlays like the flip line stay)
         QtGui.QShortcut(QtGui.QKeySequence("H"), self, activated=self._toggle_sel_stats)
-        # '1' = show/hide the Mode-10 selection exhaustion panel (the bull/bear lines below the box)
-        QtGui.QShortcut(QtGui.QKeySequence("1"), self, activated=self._toggle_exh_strip)
+        # Mode-10 selection panels, STACKED below the box in this order: 1 ABSORPTION, 2 EFF-AGG, 3 E/R, 4 EXHAUSTION
+        QtGui.QShortcut(QtGui.QKeySequence("1"), self, activated=self._toggle_abs_strip)
         QtGui.QShortcut(QtGui.QKeySequence("2"), self, activated=self._toggle_eff_strip)
         QtGui.QShortcut(QtGui.QKeySequence("3"), self, activated=self._toggle_er_strip)
+        QtGui.QShortcut(QtGui.QKeySequence("4"), self, activated=self._toggle_exh_strip)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
         # §7.4 — yellow follow-spot shown on the cursor while a draw tool is armed
@@ -758,8 +772,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if h is not None:
             h.setVisible(self.show_vel_abn)
 
+    def _toggle_abs_strip(self) -> None:
+        """'1' — show/hide the Mode-10 selection ABSORPTION panel (green bull / red bear absorption lines, the
+        TOP panel). Flips the layer immediately; it repopulates on the next selection refresh."""
+        self.show_abs_strip = not self.show_abs_strip
+        if not self.show_abs_strip:
+            self.bc_abs_strip.setVisible(False)
+            self.panel_tooltip.hide()
+        self._refresh_selection_stats()
+
     def _toggle_exh_strip(self) -> None:
-        """'1' — show/hide the Mode-10 selection exhaustion panel (bull/bear lines below the box). Flips the
+        """'4' — show/hide the Mode-10 selection exhaustion panel (bull/bear lines, the BOTTOM panel). Flips the
         layer immediately; it repopulates on the next selection refresh."""
         self.show_exh_strip = not self.show_exh_strip
         if not self.show_exh_strip:
@@ -1080,9 +1103,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
+            self.bc_abs_strip.setVisible(False)
             self.bc_exh_strip.setVisible(False)
             self.bc_eff_strip.setVisible(False)
             self.bc_er_strip.setVisible(False)
+            self.bc_panel_sep.setVisible(False)
             self._panel_hovers = []
             return
         filtered, _x, _a = self._build_scanner_buckets()
@@ -1093,9 +1118,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
+            self.bc_abs_strip.setVisible(False)
             self.bc_exh_strip.setVisible(False)
             self.bc_eff_strip.setVisible(False)
             self.bc_er_strip.setVisible(False)
+            self.bc_panel_sep.setVisible(False)
             self._panel_hovers = []
             return
         x0, y0, x1, y1 = rect
@@ -1108,9 +1135,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
+            self.bc_abs_strip.setVisible(False)
             self.bc_exh_strip.setVisible(False)
             self.bc_eff_strip.setVisible(False)
             self.bc_er_strip.setVisible(False)
+            self.bc_panel_sep.setVisible(False)
             self._panel_hovers = []
             return
         # classify the region with the SAME 12-state engine the per-bucket box uses (only when the
@@ -1196,24 +1225,61 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # one ('1'/'2'/'3') slides the ones below it UP into the gap (no blank space).
         sel_h = max(y1 - y0, config.TICK_SIZE)
         _drawable = (hi - lo + 1) >= 3
-        exh_on = self.show_exh_strip and _drawable
+        _lw = max(config.LEAN_WINDOW_MIN, round((hi - lo + 1) * config.LEAN_WINDOW_FRAC))  # rolling-share window
+        abs_on = self.show_abs_strip and _drawable        # slot order top->bottom: 1 abs, 2 eff, 3 er, 4 exh
         eff_on = self.show_eff_strip and _drawable
         er_on = self.show_er_strip and _drawable
+        exh_on = self.show_exh_strip and _drawable
         _cur = y0                                           # running bottom edge of the last placed panel
-        if exh_on:
-            exh_top = _cur - config.EXH_STRIP_GAP * sel_h; exh_bot = exh_top - config.EXH_STRIP_FRAC * sel_h
-            _cur = exh_bot
+        if abs_on:
+            abs_top = _cur - config.ABS_STRIP_GAP * sel_h; abs_bot = abs_top - config.ABS_STRIP_FRAC * sel_h
+            _cur = abs_bot
         if eff_on:
             eff_top = _cur - config.EFF_STRIP_GAP * sel_h; eff_bot = eff_top - config.EFF_STRIP_FRAC * sel_h
             _cur = eff_bot
         if er_on:
             er_top = _cur - config.ER_STRIP_GAP * sel_h; er_bot = er_top - config.ER_STRIP_FRAC * sel_h
             _cur = er_bot
+        if exh_on:
+            exh_top = _cur - config.EXH_STRIP_GAP * sel_h; exh_bot = exh_top - config.EXH_STRIP_FRAC * sel_h
+            _cur = exh_bot
+        # minimalist hairline divider in each gap BETWEEN consecutive visible panels (stack order)
+        _bands = []
+        if abs_on: _bands.append((abs_top, abs_bot))
+        if eff_on: _bands.append((eff_top, eff_bot))
+        if er_on: _bands.append((er_top, er_bot))
+        if exh_on: _bands.append((exh_top, exh_bot))
+        _sep_ys = [(_bands[i][1] + _bands[i + 1][0]) / 2.0 for i in range(len(_bands) - 1)]
+        self.bc_panel_sep.update_data(lo - 0.5, hi + 0.5, _sep_ys)
+        self.bc_panel_sep.setVisible(bool(_sep_ys))
         self._panel_hovers = []   # rebuilt each refresh; each visible panel registers its y-band + raw values
-        # SELECTION EXHAUSTION STRIP — bull/bear gated exhaustion as two SYMMETRICALLY-smoothed lines in a
-        # PANEL at the bottom of the selection (0/50/100% scale); gold diamonds mark crossovers (the exhausted
-        # side swaps). Selection-scoped (bounded), recomputed each frame like the sparklines/zones above.
-        if exh_on:                                        # '1' toggles the panel
+        # SELECTION ABSORPTION STRIP ('1', TOP) — bull% vs bear% LEAN, NEON green (bull) / NEON purple (bear).
+        # Absorption is one-sided per bucket, so there's no instantaneous ratio; we plot each side's ROLLING
+        # share over a centered window (config.LEAN_WINDOW_*) — the two shares sum to 1, cross at the 50% midline
+        # (even), and track the LOCAL lean as it SHIFTS across the selection (non-cumulative). SELECTION-PURE
+        # (sliced; the zones keep the full-history norm). No envelope, no crossover diamonds.
+        if abs_on:                                        # '1' toggles the panel
+            absb, absr, _asv = region_state.absorption_series(
+                filtered[lo:hi + 1], 0, hi - lo, config.ABSORP_VOL_WINDOW)
+            bull_sh = region_state.rolling_share(absb, absr, _lw)
+            bear_sh = [1.0 - s for s in bull_sh]
+
+            def _ay(v):
+                return abs_bot + v * (abs_top - abs_bot)  # share 0..1 -> panel y (0% bottom, 50% mid, 100% top)
+            xs_a = list(range(lo, hi + 1))
+            self.bc_abs_strip.update_data(xs_a, [_ay(v) for v in bull_sh], [_ay(v) for v in bear_sh],
+                                          lo - 0.5, hi + 0.5, abs_bot, abs_top, [])
+            self.bc_abs_strip.setVisible(True)
+            self._panel_hovers.append({                # hover -> running bull/bear share %, labelled
+                "label": "ABSORPTION", "lo": lo, "yb": abs_bot, "yt": abs_top,
+                "bull": bull_sh, "bear": bear_sh, "bcol": _RGB_ABS_BULL, "rcol": _RGB_ABS_BEAR,
+                "blbl": "BULL", "rlbl": "BEAR", "fmt": "pct"})
+        else:
+            self.bc_abs_strip.setVisible(False)
+        # SELECTION EXHAUSTION STRIP ('4', BOTTOM) — bull/bear gated exhaustion as two SYMMETRICALLY-smoothed
+        # lines (0/50/100% scale); gold diamonds mark crossovers (the exhausted side swaps). Selection-scoped
+        # (bounded), recomputed each frame like the sparklines/zones above.
+        if exh_on:                                        # '4' toggles the panel
             # FRESH-from-selection-start: z-baseline = ONLY the prior buckets WITHIN the selection (expanding
             # window); the chosen measure (gated/raw) per config.EXH_MEASURE. Recomputed per selection.
             sel_exh = region_state.selection_exhaustion(
@@ -1245,51 +1311,50 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "blbl": "BULL", "rlbl": "BEAR", "fmt": "pct"})
         else:
             self.bc_exh_strip.setVisible(False)
-        # SELECTION EFF-AGG EVOLUTION STRIP — per-bucket bull/bear effective aggression as two NEON lines in a
-        # SECOND panel STACKED below the exhaustion strip ('2' toggles). Reuses eff_bull_arr/eff_bear_arr from
-        # the zones; the SAME symmetric envelope lifts the one-sided per-bucket spikes into readable bands.
-        # SHARED scale (one max over both sides) so bull/bear forcing magnitudes are directly comparable — you
-        # see WHERE bull forcing dominates and where it hands to bear. No crossover diamonds (it's a forcing-
-        # magnitude evolution, not an exhaustion-side swap).
+        # SELECTION EFF-AGG STRIP ('2') — bull% vs bear% LEAN (each side's ROLLING share of effective
+        # aggression over a centered window), NEON green / NEON red, crossing at the 50% midline; tracks the
+        # LOCAL forcing lean as it shifts. One-sided per bucket (like absorption). SELECTION-PURE (sliced; zones
+        # keep the full-history norm). No envelope, no crossover diamonds.
         if eff_on:                                        # '2' toggles the panel
-            fb = region_state.envelope_symmetric(eff_bull_arr, config.EFF_STRIP_RELEASE)
-            fr = region_state.envelope_symmetric(eff_bear_arr, config.EFF_STRIP_RELEASE)
-            fmx = max(max(fb, default=0.0), max(fr, default=0.0)) or 1.0
+            effb, effr, _efv = region_state.eff_agg_series(
+                filtered[lo:hi + 1], 0, hi - lo, config.ABSORP_VOL_WINDOW, config.EFF_AGG_FORCE_WINDOW)
+            bull_sh = region_state.rolling_share(effb, effr, _lw)
+            bear_sh = [1.0 - s for s in bull_sh]
 
             def _fy(v):
-                return eff_bot + (v / fmx) * (eff_top - eff_bot)   # eff-agg vol (shared max) -> panel price-y
+                return eff_bot + v * (eff_top - eff_bot)   # share 0..1 -> panel y (0% bottom, 50% mid, 100% top)
             xs_e = list(range(lo, hi + 1))
-            self.bc_eff_strip.update_data(xs_e, [_fy(v) for v in fb], [_fy(v) for v in fr],
+            self.bc_eff_strip.update_data(xs_e, [_fy(v) for v in bull_sh], [_fy(v) for v in bear_sh],
                                           lo - 0.5, hi + 0.5, eff_bot, eff_top, [])
             self.bc_eff_strip.setVisible(True)
-            self._panel_hovers.append({                # hover -> RAW per-bucket eff-agg volume, labelled
+            self._panel_hovers.append({                # hover -> running bull/bear share %, labelled
                 "label": "EFF-AGG", "lo": lo, "yb": eff_bot, "yt": eff_top,
-                "bull": eff_bull_arr, "bear": eff_bear_arr, "bcol": _RGB_EFF_BULL, "rcol": _RGB_EFF_BEAR,
-                "blbl": "BULL", "rlbl": "BEAR", "fmt": "k"})
+                "bull": bull_sh, "bear": bear_sh, "bcol": _RGB_EFF_BULL, "rcol": _RGB_EFF_BEAR,
+                "blbl": "BULL", "rlbl": "BEAR", "fmt": "pct"})
         else:
             self.bc_eff_strip.setVisible(False)
-        # SELECTION EFFORT/RESULT STRIP — buyer vs seller effort-to-result as two SYMMETRICALLY-smoothed lines
-        # (green buyer / red seller) in a THIRD panel STACKED below the eff-agg strip ('3' toggles). E/R is
-        # TWO-SIDED (both nonzero every bucket) so these are genuinely continuous curves; SHARED scale so the
-        # buyer/seller effort magnitudes compare. Promoted out of the FLOW TRAJECTORY sparkline into its own
-        # panel. No crossover diamonds — the balance-flip detector already marks the E/R effort shift.
+        # SELECTION EFFORT/RESULT STRIP ('3') — buy% vs sell% LEAN (each side's ROLLING share of E/R effort over
+        # a centered window), green buyer / red seller, crossing at the 50% midline. E/R is two-sided (both
+        # nonzero every bucket), so the rolling share reads the LOCAL effort balance as it shifts. Selection-only
+        # (intrinsic per-bucket scalars). No envelope, no crossover diamonds.
         if er_on:                                         # '3' toggles the panel
             ber = [filtered[i].get("buyer_er", 0.0) for i in range(lo, hi + 1)]
             ser = [filtered[i].get("seller_er", 0.0) for i in range(lo, hi + 1)]
-            gb = region_state.envelope_symmetric(ber, config.ER_STRIP_RELEASE)
-            gr = region_state.envelope_symmetric(ser, config.ER_STRIP_RELEASE)
-            gmx = max(max(gb, default=0.0), max(gr, default=0.0)) or 1.0
+            buy_sh = region_state.rolling_share(ber, ser, _lw)
+            sell_sh = [1.0 - s for s in buy_sh]
 
             def _ry(v):
-                return er_bot + (v / gmx) * (er_top - er_bot)     # E/R (shared max) -> panel price-y
+                z = 0.5 + (v - 0.5) * config.ER_LEAN_GAIN  # ZOOM the deviation from 50% (E/R hugs the midline)
+                z = 0.0 if z < 0.0 else 1.0 if z > 1.0 else z
+                return er_bot + z * (er_top - er_bot)      # zoomed share -> panel y (50% = even midline)
             xs_r = list(range(lo, hi + 1))
-            self.bc_er_strip.update_data(xs_r, [_ry(v) for v in gb], [_ry(v) for v in gr],
+            self.bc_er_strip.update_data(xs_r, [_ry(v) for v in buy_sh], [_ry(v) for v in sell_sh],
                                          lo - 0.5, hi + 0.5, er_bot, er_top, [])
             self.bc_er_strip.setVisible(True)
-            self._panel_hovers.append({                # hover -> RAW per-bucket buyer/seller E/R, labelled
+            self._panel_hovers.append({                # hover -> running buy/sell share %, labelled
                 "label": "E/R", "lo": lo, "yb": er_bot, "yt": er_top,
-                "bull": ber, "bear": ser, "bcol": _RGB_ER_BULL, "rcol": _RGB_ER_BEAR,
-                "blbl": "BUY", "rlbl": "SELL", "fmt": "k"})
+                "bull": buy_sh, "bear": sell_sh, "bcol": _RGB_ER_BULL, "rcol": _RGB_ER_BEAR,
+                "blbl": "BUY", "rlbl": "SELL", "fmt": "pct"})
         else:
             self.bc_er_strip.setVisible(False)
         self.sel_stats.set_content(
