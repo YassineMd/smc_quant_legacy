@@ -898,6 +898,34 @@ so `pyinstaller OrderFlowTerminal.spec` produces a single portable `dist/OrderFl
 operator's other computer). **EXE rebuilt** here through `a2efc72` — first fresh build since `9a1fa6a` (06-23);
 all of this session's panel work is now in the exe.
 
+**Spread badges + live PHASE tables (`a987dc3`).**
+- **SPREAD BADGES:** each lean panel (`'1'` abs / `'2'` eff / `'3'` E/R) shows a badge at its right edge — the
+  dominant side's lead (`|bull%-bear%|` of the share lines), black value on **NEON green** (bull/buy strongest)
+  / **NEON red** (bear/sell strongest). Strongest rule: absorption = LOWEST share, eff-agg/E/R = highest.
+- **LIVE PHASE TABLES:** **UP (green) + DOWN (red) side by side**, right of the panels, classifying the current
+  selection as before/start/during/end of a move. Confidence per phase = a **LIVE naive-Bayes posterior**
+  `P(phase | selection's aggregate with-move spreads)`, normalized across the 4 phases (`config.PHASE_STATS` =
+  mean/std profiled over R=30% retracement moves), leading phase highlighted, shifts as price moves. **EXE now
+  stale again** (these two features aren't in the `a2efc72` exe).
+
+**⚠️ INVESTIGATION VERDICT (the balance-of-power "score" / strategy — settled, do NOT rebuild as a predictor).**
+The operator's hypothesis ("a move begins when absorption is low + eff-agg & E/R high") was stress-tested
+exhaustively, all CAUSAL / out-of-sample / base-rate-guarded:
+- **Direction:** not predictable — eff-agg only *describes* the move (≈ tautology: eff-agg = efficient
+  directional volume = the move); absorption & E/R ≈ coin-flip. A combined score / strict alignment / every
+  coefficient weighting topped out ~52% (chance). Optimum weighting collapses to **eff-agg alone, absorption ≈ 0**.
+- **Moves were defined by RETRACEMENT** (ZigZag, R≈30%; a leg is a MOVE once price retraces ≥R% of it) — variable
+  window, not a fixed W. The score over a move predicts the NEXT (alternating) move at ~24% = `1 − descriptive`
+  (zero forward info).
+- **Size:** E/R weakly associates (+0.22, momentum-tinged). **Reversal:** the retrospective phase profile shows
+  against-move absorption rising into the end (46%→65%), BUT the **causal forward test killed it** — a high
+  against-absorption reading does NOT warn of reversal (mildly the opposite; first-half buckets 13.7% vs 16.7%
+  base). The "rise" was the end-at-extreme artifact.
+- **Net:** these three panels are a strong **real-time DESCRIPTIVE read** (eff-agg labels the move, absorption
+  shows soak-up after the fact), **not** a predictor of direction / reversal / phase. The phase table is built
+  honest-descriptive (low posteriors shown, never faking certainty). Don't re-attempt a predictive score on
+  this without NEW data / another symbol.
+
 ---
 
 ### Deferred queue — current order (operator's call, 2026-06-19)

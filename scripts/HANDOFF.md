@@ -725,6 +725,24 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
   single portable `dist/OrderFlowTerminal.exe` for the operator's other PC. **EXE REBUILT this batch** through
   `a2efc72` — first fresh build since `9a1fa6a` (06-23); all the session's panel work is now in the exe.
 
+**Spread badges + live PHASE tables (`a987dc3`).**
+- **Spread badges:** per lean panel, the dominant side's lead (`|bull%-bear%|`), black on NEON green (bull/buy
+  strongest) / NEON red (bear/sell). absorption strongest = LOWEST share, eff/E-R = highest.
+- **Phase tables:** **UP (green) + DOWN (red) side by side**, right of the panels; classify the selection as
+  before/start/during/end. Confidence = **live naive-Bayes posterior** `P(phase | selection's with-move
+  spreads)` over `config.PHASE_STATS` (mean/std from R=30% moves), normalized, leading phase highlighted, live.
+  `_phase_table_html` + `phase_tbl` TextItem. **EXE now stale again** (not in the `a2efc72` build).
+
+**⚠️ VERDICT — the balance-of-power SCORE/strategy is DESCRIPTIVE, not predictive (settled; don't rebuild as a
+signal).** Hypothesis "move begins when absorption low + eff-agg/E-R high" tested exhaustively, all CAUSAL +
+base-rate-guarded: direction not predictable (eff-agg only *describes* the move ≈ tautology; abs/E-R ~chance;
+combined score / alignment / every coefficient ≈52% = chance; optimum collapses to eff-agg, absorption ≈ 0).
+MOVES defined by RETRACEMENT (ZigZag, R≈30% — a leg is a MOVE once it retraces ≥R%); score over move K → move
+K+1 dir = ~24% = `1−descriptive` (no forward info). E/R weakly ~ move SIZE (+0.22). Absorption-rises-into-end
+(46%→65%) is real RETROSPECTIVELY but the **causal forward test killed it** (high against-absorption does NOT
+warn of reversal — mildly opposite). So: great real-time DESCRIPTIVE read, not a forecaster. Phase table is
+honest-descriptive (low posteriors shown). Don't re-attempt a predictive score without NEW data/symbol.
+
 ---
 
 ### DEFERRED QUEUE (reordered 2026-06-19)
