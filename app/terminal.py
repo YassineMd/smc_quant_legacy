@@ -279,6 +279,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.plot.addItem(self.panel_tooltip, ignoreBounds=True)
         self.panel_tooltip.hide()
         self._panel_hovers = []   # per-refresh list of visible panels: {label, lo, yb, yt, bull, bear, ...}
+        # Per-panel SPREAD badge (one per lean panel): the dominant side's current lead at the right edge —
+        # black value on a NEON green (bull strongest) / NEON red (bear strongest) fill.
+        self._spread_badges = {}
+        for _k in ("ABSORPTION", "EFF-AGG", "E/R"):
+            _bd = pg.TextItem(anchor=(0, 0.5), color=(0, 0, 0))
+            _bf = QtGui.QFont("Consolas", 11); _bf.setBold(True)
+            _bd.textItem.setFont(_bf)
+            _bd.setZValue(62)
+            self.plot.addItem(_bd, ignoreBounds=True)
+            _bd.hide()
+            self._spread_badges[_k] = _bd
+        # Live PHASE TABLE — beside the panels. Classifies the selection as before/start/during/end of a move
+        # (lights the matching phase row + confidence), driven by the selection's aggregate spreads vs config
+        # PHASE_BOXES. HTML rendered in a screen-fixed TextItem, top-left anchored just right of the panels.
+        self.phase_tbl = pg.TextItem(anchor=(0, 0), color=(220, 224, 230))
+        self.phase_tbl.setZValue(62)
+        self.plot.addItem(self.phase_tbl, ignoreBounds=True)
+        self.phase_tbl.hide()
         self._proxy = pg.SignalProxy(self.plot.scene().sigMouseMoved,
                                      rateLimit=60, slot=self._on_mouse_move)
         # last cursor scene pos while inside the plot — drives the A3a live-breathe
@@ -772,6 +790,50 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if h is not None:
             h.setVisible(self.show_vel_abn)
 
+    def _phase_table_html(self, asp: float, esp: float, fsp: float) -> str:
+        """Live phase tables — UP (green) and DOWN (red) SIDE BY SIDE, always (no matter the move). Each shows
+        a LIVE confidence per phase = naive-Bayes posterior P(phase | the selection's current spreads),
+        normalized across its 4 phases, leading phase highlighted. Inputs are bull-oriented spreads; the DOWN
+        table negates them (its stats are stored with-down). DESCRIPTIVE — confidences spread when ambiguous;
+        eff-agg's tight std drives them, absorption's wide std barely matters."""
+        import math
+
+        def _post(key, vals):
+            rows = config.PHASE_STATS[key]; ll = []
+            for _n, *g in rows:
+                s = 0.0
+                for x, (m, sd) in zip(vals, g):
+                    sd = max(8.0, sd); s += -0.5 * ((x - m) / sd) ** 2 - math.log(sd)
+                ll.append(s)
+            mx = max(ll); ex = [math.exp(l - mx) for l in ll]; t = sum(ex) or 1.0
+            return [e / t for e in ex]
+
+        def _one(key, vals, accent, dirhdr):
+            rows = config.PHASE_STATS[key]; p = _post(key, vals); top = p.index(max(p))
+            out = ["<table cellspacing='0' cellpadding='5' style='font-family:Consolas; font-size:12px'>",
+                   f"<tr><td colspan='2' style='background-color:{accent}; color:#000; font-weight:bold'>{dirhdr}</td></tr>"]
+            for k, (name, *_g) in enumerate(rows):
+                lit = (k == top)
+                bg, fg, w, tk = (accent, "#000", "bold", "&#9679; ") if lit else ("#1b1e23", "#7b8290", "normal", "&nbsp;&nbsp; ")
+                out.append(f"<tr><td style='background-color:{bg}; color:{fg}; font-weight:{w}'>{tk}{name}</td>"
+                           f"<td style='background-color:{bg}; color:{fg}; font-weight:{w}; text-align:right'>{p[k] * 100:.0f}%</td></tr>")
+            out.append("</table>"); return "".join(out)
+        up_html = _one("up", (asp, esp, fsp), "#2ecc71", "&#9650; UP")
+        dn_html = _one("down", (-asp, -esp, -fsp), "#e74c3c", "&#9660; DOWN")
+        return (f"<table cellspacing='0'><tr><td valign='top'>{up_html}</td>"
+                f"<td>&nbsp;&nbsp;</td><td valign='top'>{dn_html}</td></tr></table>")
+
+    def _set_spread_badge(self, key: str, bull_last: float, bear_last: float,
+                          strong_is_bull: bool, x: float, y: float) -> None:
+        """Place a panel's SPREAD badge: the dominant side's lead (|bull-bear| of the share lines, in points),
+        black text on a NEON green (bull strongest) / NEON red (bear strongest) fill, at the panel's right."""
+        bd = self._spread_badges[key]
+        spread = abs(bull_last - bear_last) * 100.0
+        bd.fill = pg.mkBrush(40, 230, 90) if strong_is_bull else pg.mkBrush(255, 45, 70)
+        bd.setText(f" {spread:.0f}% ")
+        bd.setPos(x, y)
+        bd.show()
+
     def _toggle_abs_strip(self) -> None:
         """'1' — show/hide the Mode-10 selection ABSORPTION panel (green bull / red bear absorption lines, the
         TOP panel). Flips the layer immediately; it repopulates on the next selection refresh."""
@@ -1108,6 +1170,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_eff_strip.setVisible(False)
             self.bc_er_strip.setVisible(False)
             self.bc_panel_sep.setVisible(False)
+            for _b in self._spread_badges.values():
+                _b.hide()
+            self.phase_tbl.hide()
             self._panel_hovers = []
             return
         filtered, _x, _a = self._build_scanner_buckets()
@@ -1123,6 +1188,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_eff_strip.setVisible(False)
             self.bc_er_strip.setVisible(False)
             self.bc_panel_sep.setVisible(False)
+            for _b in self._spread_badges.values():
+                _b.hide()
+            self.phase_tbl.hide()
             self._panel_hovers = []
             return
         x0, y0, x1, y1 = rect
@@ -1140,6 +1208,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_eff_strip.setVisible(False)
             self.bc_er_strip.setVisible(False)
             self.bc_panel_sep.setVisible(False)
+            for _b in self._spread_badges.values():
+                _b.hide()
+            self.phase_tbl.hide()
             self._panel_hovers = []
             return
         # classify the region with the SAME 12-state engine the per-bucket box uses (only when the
@@ -1226,6 +1297,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         sel_h = max(y1 - y0, config.TICK_SIZE)
         _drawable = (hi - lo + 1) >= 3
         _lw = max(config.LEAN_WINDOW_MIN, round((hi - lo + 1) * config.LEAN_WINDOW_FRAC))  # rolling-share window
+        _badge_x = hi + 0.5 + max(1.0, (hi - lo + 1) * 0.05)   # spread-badge x: just past the panels' right edge
         abs_on = self.show_abs_strip and _drawable        # slot order top->bottom: 1 abs, 2 eff, 3 er, 4 exh
         eff_on = self.show_eff_strip and _drawable
         er_on = self.show_er_strip and _drawable
@@ -1274,8 +1346,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "label": "ABSORPTION", "lo": lo, "yb": abs_bot, "yt": abs_top,
                 "bull": bull_sh, "bear": bear_sh, "bcol": _RGB_ABS_BULL, "rcol": _RGB_ABS_BEAR,
                 "blbl": "BULL", "rlbl": "BEAR", "fmt": "pct"})
+            # absorption: strongest = the LOWER share (per operator) -> bull strong when its share is lower
+            self._set_spread_badge("ABSORPTION", bull_sh[-1], bear_sh[-1], bull_sh[-1] < bear_sh[-1],
+                                   _badge_x, (abs_top + abs_bot) / 2.0)
         else:
             self.bc_abs_strip.setVisible(False)
+            self._spread_badges["ABSORPTION"].hide()
         # SELECTION EXHAUSTION STRIP ('4', BOTTOM) — bull/bear gated exhaustion as two SYMMETRICALLY-smoothed
         # lines (0/50/100% scale); gold diamonds mark crossovers (the exhausted side swaps). Selection-scoped
         # (bounded), recomputed each frame like the sparklines/zones above.
@@ -1331,8 +1407,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "label": "EFF-AGG", "lo": lo, "yb": eff_bot, "yt": eff_top,
                 "bull": bull_sh, "bear": bear_sh, "bcol": _RGB_EFF_BULL, "rcol": _RGB_EFF_BEAR,
                 "blbl": "BULL", "rlbl": "BEAR", "fmt": "pct"})
+            # eff-agg: strongest = the HIGHER share -> bull strong when its share is higher
+            self._set_spread_badge("EFF-AGG", bull_sh[-1], bear_sh[-1], bull_sh[-1] > bear_sh[-1],
+                                   _badge_x, (eff_top + eff_bot) / 2.0)
         else:
             self.bc_eff_strip.setVisible(False)
+            self._spread_badges["EFF-AGG"].hide()
         # SELECTION EFFORT/RESULT STRIP ('3') — buy% vs sell% LEAN (each side's ROLLING share of E/R effort over
         # a centered window), green buyer / red seller, crossing at the 50% midline. E/R is two-sided (both
         # nonzero every bucket), so the rolling share reads the LOCAL effort balance as it shifts. Selection-only
@@ -1355,8 +1435,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "label": "E/R", "lo": lo, "yb": er_bot, "yt": er_top,
                 "bull": buy_sh, "bear": sell_sh, "bcol": _RGB_ER_BULL, "rcol": _RGB_ER_BEAR,
                 "blbl": "BUY", "rlbl": "SELL", "fmt": "pct"})
+            # E/R: strongest = the HIGHER share (spread on the TRUE shares, not the zoomed display)
+            self._set_spread_badge("E/R", buy_sh[-1], sell_sh[-1], buy_sh[-1] > sell_sh[-1],
+                                   _badge_x, (er_top + er_bot) / 2.0)
         else:
             self.bc_er_strip.setVisible(False)
+            self._spread_badges["E/R"].hide()
+        # LIVE PHASE TABLE beside the panels — classify the WHOLE selection (aggregate spreads) vs PHASE_BOXES,
+        # oriented to the selection's net price direction; light the matching phase row(s) + show confidence.
+        if (hi - lo + 1) >= 3:
+            def _agg_sp(bl, br):                          # bull-oriented signed spread (% pts) of an aggregate pair
+                s = (bl / (bl + br)) if (bl + br) > 0 else 0.5
+                return (s - 0.5) * 200.0
+            ber_sum = sum(filtered[i].get("buyer_er", 0.0) for i in range(lo, hi + 1))
+            ser_sum = sum(filtered[i].get("seller_er", 0.0) for i in range(lo, hi + 1))
+            self.phase_tbl.setHtml(self._phase_table_html(
+                _agg_sp(abs_bull, abs_bear), _agg_sp(ber_sum, ser_sum), _agg_sp(eff_bull, eff_bear)))
+            # sit WELL right of the spread badges (which extend rightward from ~+0.05·span) so they aren't hidden
+            self.phase_tbl.setPos(hi + 0.5 + max(11.0, (hi - lo + 1) * 0.28), y0)
+            self.phase_tbl.show()
+        else:
+            self.phase_tbl.hide()
         self.sel_stats.set_content(
             self._selection_stat_lines(agg, state, conf, dbg, vtier,
                                        spark_op, spark_cl, flip,

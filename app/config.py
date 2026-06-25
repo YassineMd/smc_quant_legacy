@@ -284,6 +284,27 @@ LEAN_WINDOW_FRAC = 0.25         # rolling-share window = this fraction of the se
 LEAN_WINDOW_MIN = 5            # … floored at this many buckets (centered; small = responsive, large = smooth).
 ER_LEAN_GAIN = 3.0             # E/R hugs 50% (two-sided), so its panel ZOOMS the deviation from the midline by
                                  # this factor (display only — the hover still shows the true share). 1.0 = none.
+
+# ── Mode-10 PHASE TABLE (live, beside the panels): classify the selection as before/start/during/end of a
+#    move. Per phase, the MEAN and STD of the signed with-move spread (% pts, + favors the move) for
+#    absorption / E/R / eff-agg, profiled over R=30% retracement moves. The table's CONFIDENCE is computed
+#    LIVE — a naive-Bayes posterior P(phase | the selection's CURRENT spreads), normalized across the 4
+#    phases — so it shifts as price moves. (eff-agg's tight std dominates; absorption's wide std makes it
+#    near-irrelevant — by design.) DESCRIPTIVE. Row: (NAME, (abs_mean,abs_std), (er_mean,er_std), (eff_mean,eff_std)).
+PHASE_STATS = {
+    'up': [
+        ('BEFORE', (12.3, 76.2), (-7.5, 29.6), (-24.6, 61.7)),
+        ('START',  (11.8, 75.6), (4.2, 26.2),  (22.8, 52.3)),
+        ('DURING', (-33.4, 66.6), (20.7, 30.5), (57.8, 48.0)),
+        ('END',    (-18.2, 71.0), (27.3, 29.1), (71.9, 36.0)),
+    ],
+    'down': [
+        ('BEFORE', (19.0, 75.7), (-16.1, 29.8), (-35.8, 55.4)),
+        ('START',  (-2.3, 74.0), (8.2, 31.3),  (21.8, 59.4)),
+        ('DURING', (-45.6, 71.9), (30.5, 30.8), (68.4, 46.1)),
+        ('END',    (-44.2, 60.2), (27.8, 27.4), (75.2, 33.4)),
+    ],
+}
 ICEBERG_VOL_SHARE = 0.04        # 4% candle volume (§4.2.1)
 ICEBERG_SKEW = 0.65             # 65% absorption skew (§4.2.1)
 VELOCITY_NEON_RATIO = 2.5       # HFT neon overload trigger (index.html:945, spec §10.2.3)
