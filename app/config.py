@@ -305,6 +305,17 @@ PHASE_STATS = {
         ('END',    (-44.2, 60.2), (27.8, 27.4), (75.2, 33.4)),
     ],
 }
+# Phase-table/panel OPACITY = the live CONFIDENCE (posterior%, sums to 100) smoothed by an EMA:
+# op = λ·op + (1-λ)·(posterior% of that phase). The EMA is WARMED through the _lw (~15) buckets just before the
+# selection (terminal._refresh_selection_stats pre-roll) so the left edge is settled instead of cold-starting;
+# only that warm-up reaches outside [lo,hi] — the displayed trajectory/table/panels are all the [lo,hi] portion.
+# λ = responsiveness: low → snaps to the current lean, high → smoother memory; ~0.8 ≈ a ~5-bucket glide.
+# Stays conserved at 100% (convex blend of vectors that each sum to 100).
+PHASE_EMA_LAMBDA = 0.8
+# Mode-10 PHASE PANELS ('5' BEFORE / '6' START/DURING / '7' END) — one per merged phase, two lines = that
+# phase's live confidence for UP (green) / DOWN (red) across the selection (the table's rows as lines).
+PHASE_PANEL_FRAC = 0.25        # panel height as a fraction of the selection's price range (same as the others).
+PHASE_PANEL_GAP = 0.05         # gap below the previous shown panel (they stack under 1-4).
 ICEBERG_VOL_SHARE = 0.04        # 4% candle volume (§4.2.1)
 ICEBERG_SKEW = 0.65             # 65% absorption skew (§4.2.1)
 VELOCITY_NEON_RATIO = 2.5       # HFT neon overload trigger (index.html:945, spec §10.2.3)

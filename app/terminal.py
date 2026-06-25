@@ -297,6 +297,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.phase_tbl.setZValue(62)
         self.plot.addItem(self.phase_tbl, ignoreBounds=True)
         self.phase_tbl.hide()
+        # PHASE PANELS ('5'-'7') — one per merged phase (BEFORE / START/DURING / END); two lines = that phase's
+        # running opacity, UP (green) / DOWN (red). They mirror the phase table's rows as lines. Stack under 1-4.
+        self._PHASES = ("BEFORE", "START/DURING", "END")   # START+DURING merged into one (posteriors summed)
+        self.bc_phase = {}
+        self.show_phase = {}
+        for _ph in self._PHASES:
+            _ly = ExhaustionStripLayer(self.plot, rgb_bull=_RGB_ER_BULL, rgb_bear=_RGB_ER_BEAR)
+            _ly.setZValue(2)
+            self.plot.addItem(_ly, ignoreBounds=True)
+            _ly.setVisible(False)
+            self.bc_phase[_ph] = _ly
+            self.show_phase[_ph] = True
         self._proxy = pg.SignalProxy(self.plot.scene().sigMouseMoved,
                                      rateLimit=60, slot=self._on_mouse_move)
         # last cursor scene pos while inside the plot — drives the A3a live-breathe
@@ -385,6 +397,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("2"), self, activated=self._toggle_eff_strip)
         QtGui.QShortcut(QtGui.QKeySequence("3"), self, activated=self._toggle_er_strip)
         QtGui.QShortcut(QtGui.QKeySequence("4"), self, activated=self._toggle_exh_strip)
+        # '5'-'7' = the per-phase panels (BEFORE / START/DURING / END), UP green / DOWN red running opacity
+        for _key, _ph in (("5", "BEFORE"), ("6", "START/DURING"), ("7", "END")):
+            QtGui.QShortcut(QtGui.QKeySequence(_key), self,
+                            activated=lambda p=_ph: self._toggle_phase(p))
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
         # §7.4 — yellow follow-spot shown on the cursor while a draw tool is armed
@@ -790,36 +806,61 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if h is not None:
             h.setVisible(self.show_vel_abn)
 
-    def _phase_table_html(self, asp: float, esp: float, fsp: float) -> str:
-        """Live phase tables — UP (green) and DOWN (red) SIDE BY SIDE, always (no matter the move). Each shows
-        a LIVE confidence per phase = naive-Bayes posterior P(phase | the selection's current spreads),
-        normalized across its 4 phases, leading phase highlighted. Inputs are bull-oriented spreads; the DOWN
-        table negates them (its stats are stored with-down). DESCRIPTIVE — confidences spread when ambiguous;
-        eff-agg's tight std drives them, absorption's wide std barely matters."""
+    def _phase_post(self, key: str, vals) -> list:
+        """Naive-Bayes posterior over the MERGED phases [BEFORE, START/DURING, END] for a direction. vals =
+        (abs, er, eff) signed with-move spreads; gauss per (4-way) phase from config.PHASE_STATS. The raw
+        START and DURING posteriors are SUMMED into one merged phase (the operator's Start/During merge)."""
         import math
+        ll = []
+        for _n, *g in config.PHASE_STATS[key]:             # 4-way classification: BEFORE/START/DURING/END
+            s = 0.0
+            for x, (m, sd) in zip(vals, g):
+                sd = max(8.0, sd); s += -0.5 * ((x - m) / sd) ** 2 - math.log(sd)
+            ll.append(s)
+        mx = max(ll); ex = [math.exp(l - mx) for l in ll]; t = sum(ex) or 1.0
+        p = [e / t for e in ex]
+        return [p[0], p[1] + p[2], p[3]]                   # -> [BEFORE, START/DURING, END]
 
-        def _post(key, vals):
-            rows = config.PHASE_STATS[key]; ll = []
-            for _n, *g in rows:
-                s = 0.0
-                for x, (m, sd) in zip(vals, g):
-                    sd = max(8.0, sd); s += -0.5 * ((x - m) / sd) ** 2 - math.log(sd)
-                ll.append(s)
-            mx = max(ll); ex = [math.exp(l - mx) for l in ll]; t = sum(ex) or 1.0
-            return [e / t for e in ex]
+    def _phase_conf_traj(self, key: str, abs_sh: list, eff_sh: list, er_sh: list) -> list:
+        """Per-bucket TRAJECTORY of SMOOTHED phase confidence: a list of [BEFORE, START/DURING, END] 3-vectors.
+        Each bucket's raw posterior% (from the rolling-window lean spreads) is glided by an EMA
+        op = λ·op + (1-λ)·posterior%, λ = config.PHASE_EMA_LAMBDA. The EMA is SEEDED at the selection's first
+        bucket (op := conf[0]) and replayed ONLY across the selection, so it carries no state from outside [lo,hi]
+        and resets for every selection. Sums to 100 (a convex blend of vectors that each sum to 100). The phase
+        TABLE uses the last vector; the phase PANELS plot the full trajectory (UP green / DOWN red per phase)."""
+        sgn = 1.0 if key == "up" else -1.0
+        lam = config.PHASE_EMA_LAMBDA
+        op = None; traj = []
+        for k in range(len(abs_sh)):
+            vals = (sgn * (abs_sh[k] - 0.5) * 200.0,   # (abs, er, eff) — match PHASE_STATS order
+                    sgn * (er_sh[k] - 0.5) * 200.0,
+                    sgn * (eff_sh[k] - 0.5) * 200.0)
+            conf = [x * 100.0 for x in self._phase_post(key, vals)]   # merged posterior %, sums to 100
+            op = conf[:] if op is None else [lam * op[j] + (1 - lam) * conf[j] for j in range(len(conf))]
+            traj.append(op[:])
+        return traj
 
-        def _one(key, vals, accent, dirhdr):
-            rows = config.PHASE_STATS[key]; p = _post(key, vals); top = p.index(max(p))
-            out = ["<table cellspacing='0' cellpadding='5' style='font-family:Consolas; font-size:12px'>",
-                   f"<tr><td colspan='2' style='background-color:{accent}; color:#000; font-weight:bold'>{dirhdr}</td></tr>"]
-            for k, (name, *_g) in enumerate(rows):
-                lit = (k == top)
-                bg, fg, w, tk = (accent, "#000", "bold", "&#9679; ") if lit else ("#1b1e23", "#7b8290", "normal", "&nbsp;&nbsp; ")
-                out.append(f"<tr><td style='background-color:{bg}; color:{fg}; font-weight:{w}'>{tk}{name}</td>"
-                           f"<td style='background-color:{bg}; color:{fg}; font-weight:{w}; text-align:right'>{p[k] * 100:.0f}%</td></tr>")
+    def _phase_table_html(self, op_up: list, op_dn: list) -> str:
+        """UP (green) + DOWN (red) phase tables side by side. Each row's background OPACITY = that phase's
+        live CONFIDENCE (posterior%, 0..100, sums to 100), blended over the dark canvas; the % is shown and the
+        brightest (most-likely) phase is bold. DESCRIPTIVE — the glow traces which phase the lean now resembles."""
+        names = list(self._PHASES)                         # merged: BEFORE / START/DURING / END
+
+        def _blend(rgb, a, base=(20, 22, 26)):
+            a = max(0.0, min(1.0, a))
+            return "#%02x%02x%02x" % tuple(int(rgb[i] * a + base[i] * (1 - a)) for i in range(3))
+
+        def _one(ops, rgb, dirhdr):
+            top = ops.index(max(ops)) if max(ops) > 0 else -1
+            out = ["<table cellspacing='0' cellpadding='5' style='font-family:Consolas; font-size:12px; color:#eef1f5'>",
+                   f"<tr><td colspan='2' style='background-color:#%02x%02x%02x; color:#000; font-weight:bold'>{dirhdr}</td></tr>" % rgb]
+            for k, nm in enumerate(names):
+                bg = _blend(rgb, ops[k] / 100.0); w = "bold" if k == top else "normal"
+                out.append(f"<tr><td style='background-color:{bg}; font-weight:{w}'>{nm}</td>"
+                           f"<td style='background-color:{bg}; font-weight:{w}; text-align:right'>{ops[k]:.0f}%</td></tr>")
             out.append("</table>"); return "".join(out)
-        up_html = _one("up", (asp, esp, fsp), "#2ecc71", "&#9650; UP")
-        dn_html = _one("down", (-asp, -esp, -fsp), "#e74c3c", "&#9660; DOWN")
+        up_html = _one(op_up, (46, 204, 113), "&#9650; UP")
+        dn_html = _one(op_dn, (231, 76, 60), "&#9660; DOWN")
         return (f"<table cellspacing='0'><tr><td valign='top'>{up_html}</td>"
                 f"<td>&nbsp;&nbsp;</td><td valign='top'>{dn_html}</td></tr></table>")
 
@@ -868,6 +909,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.show_er_strip:
             self.bc_er_strip.setVisible(False)
             self.panel_tooltip.hide()
+        self._refresh_selection_stats()
+
+    def _toggle_phase(self, ph: str) -> None:
+        """'5'-'7' — show/hide a per-phase panel (BEFORE / START/DURING / END): UP green / DOWN red running opacity."""
+        self.show_phase[ph] = not self.show_phase[ph]
+        if not self.show_phase[ph]:
+            self.bc_phase[ph].setVisible(False)
         self._refresh_selection_stats()
 
     def _toggle_ob_iceberg(self) -> None:
@@ -1173,6 +1221,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
+            for _ly in self.bc_phase.values():
+                _ly.setVisible(False)
             self._panel_hovers = []
             return
         filtered, _x, _a = self._build_scanner_buckets()
@@ -1191,6 +1241,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
+            for _ly in self.bc_phase.values():
+                _ly.setVisible(False)
             self._panel_hovers = []
             return
         x0, y0, x1, y1 = rect
@@ -1211,6 +1263,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
+            for _ly in self.bc_phase.values():
+                _ly.setVisible(False)
             self._panel_hovers = []
             return
         # classify the region with the SAME 12-state engine the per-bucket box uses (only when the
@@ -1298,10 +1352,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _drawable = (hi - lo + 1) >= 3
         _lw = max(config.LEAN_WINDOW_MIN, round((hi - lo + 1) * config.LEAN_WINDOW_FRAC))  # rolling-share window
         _badge_x = hi + 0.5 + max(1.0, (hi - lo + 1) * 0.05)   # spread-badge x: just past the panels' right edge
-        abs_on = self.show_abs_strip and _drawable        # slot order top->bottom: 1 abs, 2 eff, 3 er, 4 exh
-        eff_on = self.show_eff_strip and _drawable
+        abs_on = self.show_abs_strip and _drawable        # slot order top->bottom: 1 abs, 2 eff, 3 er, 4 exh,
+        eff_on = self.show_eff_strip and _drawable         # then 5 BEFORE, 6 START/DURING, 7 END (phase panels)
         er_on = self.show_er_strip and _drawable
         exh_on = self.show_exh_strip and _drawable
+        ph_on = {p: self.show_phase[p] and _drawable for p in self._PHASES}
+        ph_geom = {}
         _cur = y0                                           # running bottom edge of the last placed panel
         if abs_on:
             abs_top = _cur - config.ABS_STRIP_GAP * sel_h; abs_bot = abs_top - config.ABS_STRIP_FRAC * sel_h
@@ -1315,12 +1371,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if exh_on:
             exh_top = _cur - config.EXH_STRIP_GAP * sel_h; exh_bot = exh_top - config.EXH_STRIP_FRAC * sel_h
             _cur = exh_bot
+        for _p in self._PHASES:                             # 5-8 phase panels, stacked under 1-4
+            if ph_on[_p]:
+                _t = _cur - config.PHASE_PANEL_GAP * sel_h; _b = _t - config.PHASE_PANEL_FRAC * sel_h
+                ph_geom[_p] = (_t, _b); _cur = _b
         # minimalist hairline divider in each gap BETWEEN consecutive visible panels (stack order)
         _bands = []
         if abs_on: _bands.append((abs_top, abs_bot))
         if eff_on: _bands.append((eff_top, eff_bot))
         if er_on: _bands.append((er_top, er_bot))
         if exh_on: _bands.append((exh_top, exh_bot))
+        for _p in self._PHASES:
+            if _p in ph_geom: _bands.append(ph_geom[_p])
         _sep_ys = [(_bands[i][1] + _bands[i + 1][0]) / 2.0 for i in range(len(_bands) - 1)]
         self.bc_panel_sep.update_data(lo - 0.5, hi + 0.5, _sep_ys)
         self.bc_panel_sep.setVisible(bool(_sep_ys))
@@ -1441,21 +1503,49 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             self.bc_er_strip.setVisible(False)
             self._spread_badges["E/R"].hide()
-        # LIVE PHASE TABLE beside the panels — classify the WHOLE selection (aggregate spreads) vs PHASE_BOXES,
-        # oriented to the selection's net price direction; light the matching phase row(s) + show confidence.
+        # LIVE PHASE TABLES beside the panels — UP + DOWN side by side. Each phase's row OPACITY = the live
+        # CONFIDENCE (posterior% from the ROLLING trailing-_lw lean spreads), smoothed by the selection's EMA.
+        # The rolling window + EMA are WARMED through the _lw (~15) buckets just BEFORE the selection, so the
+        # left edge is already settled instead of cold-starting. Only that warm-up pre-roll reaches outside
+        # [lo,hi]; everything displayed (the trajectory, table, panels) is the [lo,hi] portion.
         if (hi - lo + 1) >= 3:
-            def _agg_sp(bl, br):                          # bull-oriented signed spread (% pts) of an aggregate pair
-                s = (bl / (bl + br)) if (bl + br) > 0 else 0.5
-                return (s - 0.5) * 200.0
-            ber_sum = sum(filtered[i].get("buyer_er", 0.0) for i in range(lo, hi + 1))
-            ser_sum = sum(filtered[i].get("seller_er", 0.0) for i in range(lo, hi + 1))
-            self.phase_tbl.setHtml(self._phase_table_html(
-                _agg_sp(abs_bull, abs_bear), _agg_sp(ber_sum, ser_sum), _agg_sp(eff_bull, eff_bear)))
+            _pre = min(lo, _lw)                                # warm-up pre-roll: up to _lw buckets before lo
+            ext = filtered[lo - _pre:hi + 1]; _em = len(ext) - 1
+            _absb, _absr, _av = region_state.absorption_series(ext, 0, _em, config.ABSORP_VOL_WINDOW)
+            _effb, _effr, _ev = region_state.eff_agg_series(
+                ext, 0, _em, config.ABSORP_VOL_WINDOW, config.EFF_AGG_FORCE_WINDOW)
+            _ber = [ext[i].get("buyer_er", 0.0) for i in range(len(ext))]
+            _ser = [ext[i].get("seller_er", 0.0) for i in range(len(ext))]
+            abs_sh = region_state.rolling_share(_absb, _absr, _lw)      # per-bucket rolling bull shares (warmed)
+            eff_sh = region_state.rolling_share(_effb, _effr, _lw)
+            er_sh = region_state.rolling_share(_ber, _ser, _lw)
+            # EMA replays over the warm-up too, then we DROP the pre-roll and keep only the [lo,hi] trajectory
+            up_traj = self._phase_conf_traj("up", abs_sh, eff_sh, er_sh)[_pre:]   # [BEFORE, START/DURING, END]
+            dn_traj = self._phase_conf_traj("down", abs_sh, eff_sh, er_sh)[_pre:]
+            self.phase_tbl.setHtml(self._phase_table_html(up_traj[-1], dn_traj[-1]))   # table = the LAST confidence
             # sit WELL right of the spread badges (which extend rightward from ~+0.05·span) so they aren't hidden
             self.phase_tbl.setPos(hi + 0.5 + max(11.0, (hi - lo + 1) * 0.28), y0)
             self.phase_tbl.show()
+            # PHASE PANELS ('5'-'7') — each merged phase's live confidence as two lines, UP (green) / DOWN (red)
+            xs_p = list(range(lo, hi + 1))
+            for _pi, _p in enumerate(self._PHASES):
+                if _p in ph_geom:
+                    _t, _b = ph_geom[_p]
+                    up_line = [t[_pi] for t in up_traj]; dn_line = [t[_pi] for t in dn_traj]
+                    up_y = [_b + (v / 100.0) * (_t - _b) for v in up_line]
+                    dn_y = [_b + (v / 100.0) * (_t - _b) for v in dn_line]
+                    self.bc_phase[_p].update_data(xs_p, up_y, dn_y, lo - 0.5, hi + 0.5, _b, _t, [])
+                    self.bc_phase[_p].setVisible(True)
+                    self._panel_hovers.append({            # hover -> running UP/DOWN opacity %, labelled
+                        "label": _p, "lo": lo, "yb": _b, "yt": _t,
+                        "bull": [v / 100.0 for v in up_line], "bear": [v / 100.0 for v in dn_line],
+                        "bcol": _RGB_ER_BULL, "rcol": _RGB_ER_BEAR, "blbl": "UP", "rlbl": "DOWN", "fmt": "pct"})
+                else:
+                    self.bc_phase[_p].setVisible(False)
         else:
             self.phase_tbl.hide()
+            for _ly in self.bc_phase.values():
+                _ly.setVisible(False)
         self.sel_stats.set_content(
             self._selection_stat_lines(agg, state, conf, dbg, vtier,
                                        spark_op, spark_cl, flip,
