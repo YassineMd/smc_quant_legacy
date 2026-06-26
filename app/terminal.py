@@ -1592,7 +1592,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # The rolling window + EMA are WARMED through the _lw (~15) buckets just BEFORE the selection, so the
         # left edge is already settled instead of cold-starting. Only that warm-up pre-roll reaches outside
         # [lo,hi]; everything displayed (the trajectory, table, panels) is the [lo,hi] portion.
-        if (hi - lo + 1) >= 3:
+        # Fix 2: the WHOLE phase block (series + rolling_share + EMA + table) is gated on at least one phase
+        # panel being shown — so turning the phase panels (5/6/7) off does ZERO phase work, not "compute the
+        # table anyway". The phase table is the panels' readout, so it follows them (no separate toggle).
+        if any(self.show_phase.values()) and (hi - lo + 1) >= 3:
             _pre = min(lo, _lw)                                # warm-up pre-roll: up to _lw buckets before lo
             ext = filtered[lo - _pre:hi + 1]; _em = len(ext) - 1
             _absb, _absr, _av = region_state.absorption_series(ext, 0, _em, config.ABSORP_VOL_WINDOW)
