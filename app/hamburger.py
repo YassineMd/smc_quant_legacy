@@ -104,6 +104,7 @@ _M10_LAYERS = [
 # The combo displays the human label but emits the KEY (via currentData).
 SCANNER_MODES = [
     "bucket_canvas",   # Mode 10 — the only candle surface + default on open (A5)
+    "depth_heatmap",   # Phase 2b — Bookmap-style resting-liquidity heatmap (own canvas, scanner-gated); 2nd in the list
     "open_pos",
     "close_pos",
     "exhaustion",
@@ -113,7 +114,6 @@ SCANNER_MODES = [
     "bucket_open_pos",
     "bucket_close_pos",
     "effort_result",
-    "depth_heatmap",   # Phase 2b — Bookmap-style resting-liquidity heatmap (own canvas, scanner-gated)
 ]
 SCANNER_LABELS = {
     "open_pos": "Cumulative Open Positions",
@@ -126,7 +126,7 @@ SCANNER_LABELS = {
     "bucket_close_pos": "Micro-Bucket Close Intents",
     "effort_result": "Effort vs Result",
     "bucket_canvas": "Bucket Candlestick Canvas",
-    "depth_heatmap": "Liquidity Heatmap (Bookmap)",
+    "depth_heatmap": "Heatmap",
 }
 
 

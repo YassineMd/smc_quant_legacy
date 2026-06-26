@@ -36,6 +36,8 @@ TYPE_LIQ = "LIQUIDATION"      # forced order event (main.py:661)
 TYPE_PULSE = "PULSE"          # DOM depth + open interest pulse (main.py:887)
 TYPE_DEPTH_WINDOW = "DEPTH_WINDOW"   # Phase 2a: heatmap window (W×H resting-size grid + per-col BBO)
 TYPE_DEPTH_COL = "DEPTH_COL"         # Phase 2a: one live heatmap column (right-edge update)
+TYPE_TRADES_WINDOW = "TRADES_WINDOW"  # Phase 3: executed-trade bubbles window (raw trades in [t0,t1]×[ylo,yhi])
+TYPE_TRADE_BATCH = "TRADE_BATCH"      # Phase 3: live executed trades since the last batch (pulse cadence)
 
 NEWLINE = "\n"
 
@@ -270,6 +272,42 @@ class DepthColumnPacket:
         return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
 
 
+@dataclass
+class TradesWindowPacket:
+    """Phase 3: the RAW executed trades in [t0,t1]×[ylo,yhi] — answer to a ``trades_window`` request. Four
+    base64 PARALLEL arrays of length n (the terminal aggregates per-cell for rendering; the wire is LOSSLESS
+    — every trade, no sampling, bit-identical to trade_tape): ``ts_b64`` = int64 LE ms, ``price_b64`` =
+    float64 LE, ``qty_b64`` = float64 LE, ``side_b64`` = uint8 (1 = taker buy, 0 = taker sell)."""
+
+    t0: int
+    t1: int
+    n: int
+    ts_b64: str = ""
+    price_b64: str = ""
+    qty_b64: str = ""
+    side_b64: str = ""
+    type: str = TYPE_TRADES_WINDOW
+
+    def to_line(self) -> str:
+        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+
+
+@dataclass
+class TradeBatchPacket:
+    """Phase 3: the live executed trades since the last batch, pushed to heatmap subscribers at the pulse
+    cadence. Same four base64 arrays as TradesWindowPacket (``ts_b64`` int64 LE absolute ms)."""
+
+    n: int
+    ts_b64: str = ""
+    price_b64: str = ""
+    qty_b64: str = ""
+    side_b64: str = ""
+    type: str = TYPE_TRADE_BATCH
+
+    def to_line(self) -> str:
+        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+
+
 # ---------------------------------------------------------------------------
 # Decode
 # ---------------------------------------------------------------------------
@@ -320,6 +358,14 @@ _PARSERS = {
     TYPE_DEPTH_COL: lambda d: DepthColumnPacket(
         ts=d["ts"], ylo=d["ylo"], yhi=d["yhi"], ybins=d["ybins"],
         col_b64=d.get("col_b64", ""), bid=d.get("bid", 0.0), ask=d.get("ask", 0.0),
+    ),
+    TYPE_TRADES_WINDOW: lambda d: TradesWindowPacket(
+        t0=d["t0"], t1=d["t1"], n=d["n"], ts_b64=d.get("ts_b64", ""), price_b64=d.get("price_b64", ""),
+        qty_b64=d.get("qty_b64", ""), side_b64=d.get("side_b64", ""),
+    ),
+    TYPE_TRADE_BATCH: lambda d: TradeBatchPacket(
+        n=d["n"], ts_b64=d.get("ts_b64", ""), price_b64=d.get("price_b64", ""),
+        qty_b64=d.get("qty_b64", ""), side_b64=d.get("side_b64", ""),
     ),
 }
 

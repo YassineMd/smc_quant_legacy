@@ -141,6 +141,10 @@ class HeatmapCache:
     def __init__(self, max_span_ms: int = 6 * 3600 * 1000):
         self.max_span_ms = max_span_ms
         self.cols: "deque[tuple]" = deque()   # (ts_ms, col float32[ybins], bid, ask), strictly ascending ts
+        # FINE per-pulse BBO trace (ts_ms, bid, ask) for the best-bid/ask LINES — kept separate from the binned
+        # grid columns above. The grid is binned to step_ms (one image pixel per bin); collapsing the BBO to that
+        # coarse step made the lines lag the per-trade bubbles on a fast move, so the lines read from here instead.
+        self.bbo: "deque[tuple]" = deque()
         self.ybins = 0
         self.step_ms: Optional[float] = None
         self.ylo = self.yhi = 0.0
@@ -152,13 +156,14 @@ class HeatmapCache:
     # -- (re)load a full window (cold-open / zoom / new band) ---------------
     def reset(self, grid: np.ndarray, t0: int, t1: int, bbo_bid, bbo_ask, ylo: float, yhi: float) -> None:
         cols, ybins = grid.shape
-        self.cols.clear()
+        self.cols.clear(); self.bbo.clear()
         self.ybins = ybins; self.ylo = ylo; self.yhi = yhi
         self.step_ms = (t1 - t0) / cols if cols else (t1 - t0)
         slog = _sign_by_side(np.log10(grid + 1.0), bbo_bid, bbo_ask, ylo, yhi, ybins)  # log + side-sign once
         for i in range(cols):
             ts = t0 + (i + 1) * self.step_ms          # column END time (build_window convention)
             self.cols.append((ts, grid[i], float(bbo_bid[i]), float(bbo_ask[i]), slog[i]))
+            self.bbo.append((ts, float(bbo_bid[i]), float(bbo_ask[i])))   # history BBO = per-column (coarse)
         self._trim()
 
     # -- one live column, BINNED to the display step (Bookmap: the rightmost pixel = the live book) ---------
@@ -180,6 +185,10 @@ class HeatmapCache:
             self._trim()
         else:                                          # same pixel-bin -> overwrite with the latest book
             self.cols[-1] = (last_ts, col, float(bid), float(ask), slogc)
+        # FINE BBO: one point PER PULSE at its true time (never binned), so the lines follow the live price at
+        # pulse cadence even when the grid step is coarse. Guard against out-of-order / duplicate timestamps.
+        if not self.bbo or ts > self.bbo[-1][0]:
+            self.bbo.append((float(ts), float(bid), float(ask)))
         return True
 
     # -- prepend an OLDER lazily-loaded window to the LEFT (contiguous) ------
@@ -195,12 +204,16 @@ class HeatmapCache:
         oldest = self.cols[0][0]
         step = (t1 - t0) / cols if cols else (t1 - t0)
         slog = _sign_by_side(np.log10(grid + 1.0), bbo_bid, bbo_ask, self.ylo, self.yhi, self.ybins)
-        new = []
+        new = []; newb = []
+        bbo_oldest = self.bbo[0][0] if self.bbo else oldest
         for i in range(cols):
             ts = t0 + (i + 1) * step
             if ts < oldest:                           # strict: drop any overlap with what we already have
                 new.append((ts, grid[i], float(bbo_bid[i]), float(bbo_ask[i]), slog[i]))
+            if ts < bbo_oldest:
+                newb.append((float(ts), float(bbo_bid[i]), float(bbo_ask[i])))
         self.cols.extendleft(reversed(new))           # extendleft reverses; reverse(new) restores ascending
+        self.bbo.extendleft(reversed(newb))
         return len(new)
 
     # -- visible slice for the ImageItem (free on a pan inside the range) ----
@@ -219,10 +232,146 @@ class HeatmapCache:
     def span(self):
         return (self.cols[0][0], self.cols[-1][0]) if self.cols else (None, None)
 
+    def visible_bbo(self, t_lo: int, t_hi: int):
+        """FINE per-pulse (ts (n,), bid (n,), ask (n,)) for the BBO lines over [t_lo, t_hi], or None. Pulse
+        resolution in the live region (vs the coarse binned grid), so the lines track the live price."""
+        sel = [b for b in self.bbo if t_lo <= b[0] <= t_hi]
+        if not sel:
+            return None
+        ts = np.fromiter((b[0] for b in sel), dtype=np.float64, count=len(sel))
+        bid = np.fromiter((b[1] for b in sel), dtype=np.float64, count=len(sel))
+        ask = np.fromiter((b[2] for b in sel), dtype=np.float64, count=len(sel))
+        return ts, bid, ask
+
+    def raw_at(self, ts_ms: float, price: float, radius_bins: int = 3):
+        """RAW resting size at the column nearest ``ts_ms`` and the price-bin at ``price`` — searching OUTWARD up
+        to ``radius_bins`` for the nearest non-empty bin, so a shift+hover near (not dead-on) a wall / BBO line
+        still reads its size. Returns ``(size, 'bid'|'ask')`` or None when out of band / no liquidity nearby. The
+        column step is ~uniform, so the nearest column is an index from the span (O(idx) deque access, hover-only)."""
+        if not self.cols or self.step_ms is None or not (self.ylo <= price <= self.yhi):
+            return None
+        idx = int(round((ts_ms - self.cols[0][0]) / self.step_ms))
+        idx = min(max(idx, 0), len(self.cols) - 1)
+        ts, raw_col, bid, ask, _ = self.cols[idx]
+        span = (self.yhi - self.ylo) or 1.0
+        b0 = int(min(max((price - self.ylo) / span * self.ybins, 0), self.ybins - 1))
+        hit = None
+        for d in range(0, max(0, radius_bins) + 1):                  # 0,1,2,... outward -> nearest non-empty wins
+            for b in ((b0,) if d == 0 else (b0 - d, b0 + d)):
+                if 0 <= b < self.ybins and raw_col[b] > 0.0:
+                    hit = b; break
+            if hit is not None:
+                break
+        if hit is None:
+            return None
+        size = float(raw_col[hit])
+        price_at = self.ylo + (hit + 0.5) * span / self.ybins        # the matched bin's price drives the side
+        mid = 0.5 * (bid + ask) if (bid > 0 and ask > 0) else (bid if bid > 0 else ask)
+        side = "bid" if (mid and price_at < mid) else "ask"
+        return size, side
+
     def _trim(self) -> None:
-        """Cap memory by TIME span: drop columns older than (newest - max_span)."""
+        """Cap memory by TIME span: drop columns (and fine BBO points) older than (newest - max_span)."""
         if not self.cols:
             return
         cutoff = self.cols[-1][0] - self.max_span_ms
         while len(self.cols) > 1 and self.cols[0][0] < cutoff:
             self.cols.popleft()
+        while len(self.bbo) > 1 and self.bbo[0][0] < cutoff:
+            self.bbo.popleft()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — executed-trade bubbles: decode + aggregating cache
+# ---------------------------------------------------------------------------
+def decode_trades(ts_b64: str, price_b64: str, qty_b64: str, side_b64: str):
+    """Decode the 4 base64 parallel arrays → (ts_ms float64, price float64, qty float64, side uint8), all the
+    same length n (defensively truncated to the shortest on a garbled frame)."""
+    ts = np.frombuffer(base64.b64decode(ts_b64 or ""), dtype="<i8")
+    pr = np.frombuffer(base64.b64decode(price_b64 or ""), dtype="<f8")
+    qt = np.frombuffer(base64.b64decode(qty_b64 or ""), dtype="<f8")
+    sd = np.frombuffer(base64.b64decode(side_b64 or ""), dtype="u1")
+    n = min(len(ts), len(pr), len(qt), len(sd))
+    return (ts[:n].astype(np.float64), pr[:n].astype(np.float64),
+            qt[:n].astype(np.float64), sd[:n].copy())
+
+
+class TradeBubbleCache:
+    """Holds executed trades (ts_ms, price, qty, side) as parallel numpy arrays, time-ordered. Live-append a
+    batch (O(n) concat), prepend an older window (contiguous, no overlap), reset on a new window/band, trim by
+    time-span. :meth:`visible_cells` aggregates the visible trades into (time-bin × price-bin) cells for the
+    bubble scatter — size by TOTAL qty, color by NET side (buy-sell)."""
+
+    def __init__(self, max_span_ms: int = 6 * 3600 * 1000):
+        self.max_span_ms = max_span_ms
+        self.ts = np.empty(0); self.price = np.empty(0)
+        self.qty = np.empty(0); self.side = np.empty(0, dtype=np.uint8)
+
+    def reset(self, ts, price, qty, side) -> None:
+        order = np.argsort(ts, kind="stable") if len(ts) else np.empty(0, dtype=int)
+        self.ts, self.price, self.qty, self.side = ts[order], price[order], qty[order], side[order]
+        self._trim()
+
+    def append_batch(self, ts, price, qty, side) -> bool:
+        if len(ts) == 0:
+            return False
+        self.ts = np.concatenate([self.ts, ts]); self.price = np.concatenate([self.price, price])
+        self.qty = np.concatenate([self.qty, qty]); self.side = np.concatenate([self.side, side])
+        self._trim()
+        return True
+
+    def prepend_older(self, ts, price, qty, side) -> int:
+        """Stitch an OLDER window to the left — keep only trades strictly older than the current oldest (no
+        overlap), preserving time order."""
+        if len(ts) == 0 or len(self.ts) == 0:
+            if len(ts) and len(self.ts) == 0:
+                self.reset(ts, price, qty, side); return len(ts)
+            return 0
+        keep = ts < self.ts[0]
+        if not keep.any():
+            return 0
+        self.ts = np.concatenate([ts[keep], self.ts]); self.price = np.concatenate([price[keep], self.price])
+        self.qty = np.concatenate([qty[keep], self.qty]); self.side = np.concatenate([side[keep], self.side])
+        return int(keep.sum())
+
+    def span(self):
+        return (self.ts[0], self.ts[-1]) if len(self.ts) else (None, None)
+
+    def _trim(self) -> None:
+        if len(self.ts) == 0:
+            return
+        cutoff = self.ts[-1] - self.max_span_ms
+        if self.ts[0] < cutoff:
+            m = self.ts >= cutoff
+            self.ts, self.price, self.qty, self.side = self.ts[m], self.price[m], self.qty[m], self.side[m]
+
+    def visible_cells(self, t_lo_ms: float, t_hi_ms: float, ylo: float, yhi: float,
+                      cols: int, ybins: int, min_qty: float = 0.0):
+        """Aggregate trades in [t_lo,t_hi]×[ylo,yhi] into (col,bin) cells. Returns (x_s, y, total, net) numpy
+        arrays per non-empty cell with total≥min_qty: x_s = cell-center time (SECONDS), y = cell-center price,
+        total = buy+sell (bubble size), net = buy-sell (color sign). None if no trades in view."""
+        if len(self.ts) == 0 or cols <= 0 or ybins <= 0:
+            return None
+        m = (self.ts >= t_lo_ms) & (self.ts <= t_hi_ms) & (self.price >= ylo) & (self.price <= yhi)
+        if not m.any():
+            return None
+        ts = self.ts[m]; pr = self.price[m]; qt = self.qty[m]; sd = self.side[m]
+        tspan = max(1.0, t_hi_ms - t_lo_ms); yspan = max(1e-9, yhi - ylo)
+        ci = np.clip(((ts - t_lo_ms) / tspan * cols).astype(int), 0, cols - 1)
+        bi = np.clip(((pr - ylo) / yspan * ybins).astype(int), 0, ybins - 1)
+        cell = ci * ybins + bi
+        buy = qt * (sd == 1); sell = qt * (sd == 0)
+        order = np.argsort(cell, kind="stable")
+        cell_s = cell[order]
+        uniq, starts = np.unique(cell_s, return_index=True)
+        tot_buy = np.add.reduceat(buy[order], starts)
+        tot_sell = np.add.reduceat(sell[order], starts)
+        total = tot_buy + tot_sell; net = tot_buy - tot_sell
+        keep = total >= float(min_qty)
+        uniq = uniq[keep]; total = total[keep]; net = net[keep]
+        if uniq.size == 0:
+            return None
+        cc = uniq // ybins; bb = uniq % ybins
+        x_s = (t_lo_ms + (cc + 0.5) * tspan / cols) / 1000.0
+        y = ylo + (bb + 0.5) * yspan / ybins
+        return x_s, y, total, net

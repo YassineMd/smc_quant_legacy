@@ -211,6 +211,29 @@ class DepthStore:
                 asks.pop(t, None) if q == 0.0 else asks.__setitem__(t, q)
         return bids, asks
 
+    # -- Phase 3: executed-trade bubbles window (read-only, off-loop) -------
+    def trades_window(self, t0: int, t1: int, ylo: float, yhi: float):
+        """RAW executed trades in [t0,t1]×[ylo,yhi], LOSSLESS (no sampling). Returns
+        ``(n, ts_blob int64 LE ms, price_blob f32 LE, qty_blob f32 LE, side_blob u8)`` ready for base64.
+        Its OWN ``mode=ro`` connection + the ts_ms index → runs in an executor with zero lock contention vs
+        the live writer; never blocks the event loop (mirrors build_window)."""
+        c = sqlite3.connect("file:%s?mode=ro" % self.db_path, uri=True)
+        try:
+            rows = c.execute(
+                "SELECT ts_ms, price, qty, side FROM trade_tape "
+                "WHERE ts_ms>=? AND ts_ms<=? AND price>=? AND price<=? ORDER BY ts_ms",
+                (int(t0), int(t1), float(ylo), float(yhi))).fetchall()
+        finally:
+            c.close()
+        n = len(rows)
+        if n == 0:
+            return 0, b"", b"", b"", b""
+        ts = struct.pack("<%dq" % n, *(int(r[0]) for r in rows))
+        pr = struct.pack("<%dd" % n, *(float(r[1]) for r in rows))   # float64 = bit-identical to trade_tape
+        qt = struct.pack("<%dd" % n, *(float(r[2]) for r in rows))
+        sd = struct.pack("<%dB" % n, *(1 if r[3] else 0 for r in rows))
+        return n, ts, pr, qt, sd
+
     # -- Phase 2a: heatmap window builder (read-only, off-loop) -------------
     def build_window(self, t0: int, t1: int, cols: int, ylo: float, yhi: float, ybins: int):
         """Build a Bookmap heatmap window in ONE forward pass — O(deltas in [t0,t1]), not W reconstructs.

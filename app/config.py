@@ -169,6 +169,9 @@ HEATMAP_RENORM_SECS = 60        # re-sample the loaded grid's contrast this ofte
 HEATMAP_LO_PCT = 98.9           # lower cutoff percentile: default VERY HIGH so only the strongest liquidity
 #                                 shows first (a clean view); drag the slider down to reveal more.
 HEATMAP_HI_PCT = 99.4           # upper cutoff percentile (sizes >= this -> max color; caps the $60-wall washout)
+HEATMAP_BUBBLE_MIN_QTY = 0.0    # Phase 3: min aggregated-cell qty (SOL) to draw a trade bubble (0 = show all)
+HEATMAP_BUBBLE_MIN_PX = 4       # smallest bubble diameter (px)
+HEATMAP_BUBBLE_MAX_PX = 34      # largest bubble diameter (px)
 
 FOOTPRINT_CAP = 10000           # main.py:291 — retention threshold per timeframe (on disk)
 FOOTPRINT_MEM_CAP = 300         # per-tf footprint nodes kept in RAM (>=2h for recalibrate)

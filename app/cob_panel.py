@@ -134,6 +134,16 @@ class CobPanel(pg.PlotWidget):
         self._tooltip.setPos(0.0, center)
         self._tooltip.show()
 
+    def autoscale_x(self, ylo: float, yhi: float) -> None:
+        """Scale the bar-length axis to the MAX cell qty WITHIN [ylo,yhi] so the in-view distribution fills the
+        panel width. Otherwise a far wall sets max_vol and the zoomed-in bars collapse to a flat sliver."""
+        mx = 1.0
+        for side in ("bid", "ask"):
+            for center, q in self.bars.agg.get(side, {}).items():
+                if ylo <= center <= yhi and q > mx:
+                    mx = q
+        self.setXRange(0, mx, padding=0.02)
+
     def sync_y(self, y0: float, y1: float) -> None:
         self.setYRange(y0, y1, padding=0)
 

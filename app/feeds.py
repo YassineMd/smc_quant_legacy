@@ -123,6 +123,7 @@ class MarketDataCore:
         # snapshot anchors so reconstruction can replay deltas with u > anchor.u.
         self._depth_delta_buf: deque = deque(maxlen=config.DEPTH_BUFFER_CAP)
         self._trade_buf: deque = deque(maxlen=config.DEPTH_BUFFER_CAP)
+        self._trades_live_buf: deque = deque(maxlen=20000)   # Phase 3: live trade bubbles (drained per pulse)
         self._depth_snap_buf: deque = deque(maxlen=1000)
         self._last_depth_u: int = 0
         self._last_depth_ts: int = 0
@@ -508,11 +509,17 @@ class MarketDataCore:
     def _capture_trade(self, d: dict) -> None:
         """Tee one aggTrade into the trade-tape buffer — called in aggtrade_stream AROUND (never inside)
         _process_aggtrade. side: 1 = taker buy, 0 = taker sell (Binance 'm' = buyer-maker flag)."""
-        self._trade_buf.append((
-            int(d.get("a", 0)), int(d.get("T", 0)),
-            float(d.get("p", 0.0)), float(d.get("q", 0.0)),
-            0 if d.get("m") else 1,
-        ))
+        ts = int(d.get("T", 0)); price = float(d.get("p", 0.0))
+        qty = float(d.get("q", 0.0)); side = 0 if d.get("m") else 1
+        self._trade_buf.append((int(d.get("a", 0)), ts, price, qty, side))
+        self._trades_live_buf.append((ts, price, qty, side))   # Phase 3: live bubble batch (drained per pulse)
+
+    def drain_trades_live(self) -> list:
+        """Drain the live-trades buffer ON the loop (O(n) ref-copy + clear; n ≈ trades/pulse, ~tens). Feeds the
+        Phase 3 live TradeBatch push."""
+        buf = list(self._trades_live_buf)
+        self._trades_live_buf.clear()
+        return buf
 
     async def depth_snapshot_loop(self) -> None:
         """Buffer a full-book anchor every DEPTH_SNAPSHOT_SECS (reconnect anchors are added in

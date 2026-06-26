@@ -23,13 +23,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import struct
 from dataclasses import dataclass
 from typing import Optional
 
 from . import config, persistence
 from .depth_store import DepthStore, bin_live_book
 from .feeds import MarketDataCore
-from .protocol import CatchupChunkPacket, DepthColumnPacket, DepthWindowPacket
+from .protocol import (CatchupChunkPacket, DepthColumnPacket, DepthWindowPacket,
+                       TradeBatchPacket, TradesWindowPacket)
 
 
 @dataclass
@@ -143,6 +145,14 @@ class DaemonServer:
                 return
             client.heatmap = (ylo, yhi, ybins)
             asyncio.create_task(self._send_depth_window(client, params))
+        elif action == "trades_window" and self.depth_store is not None:
+            # Phase 3: serve the executed-trade window (read OFF-loop). Live batches ride the same
+            # client.heatmap subscription (set by depth_window), so no extra subscribe here.
+            try:
+                params = (int(cmd["t0"]), int(cmd["t1"]), float(cmd["ylo"]), float(cmd["yhi"]))
+            except (KeyError, ValueError, TypeError):
+                return
+            asyncio.create_task(self._send_trades_window(client, params))
         elif action == "depth_window_stop":
             client.heatmap = None   # leave the heatmap mode -> stop live-column pushes
 
@@ -206,6 +216,45 @@ class DaemonServer:
                     col_b64=base64.b64encode(col).decode("ascii"), bid=bid, ask=ask).to_line())
 
     # ------------------------------------------------------------------
+    # Phase 3: executed-trade bubbles — window (off-loop read) + live batch
+    # ------------------------------------------------------------------
+    async def _send_trades_window(self, client: _Client, params: tuple) -> None:
+        """Read the executed-trade window in an executor (its own read-only mode=ro conn + the ts_ms index)
+        so the event loop is NEVER blocked, then enqueue one frame. LOSSLESS (raw trades; terminal aggregates)."""
+        loop = asyncio.get_event_loop()
+        try:
+            n, ts, pr, qt, sd = await loop.run_in_executor(None, self.depth_store.trades_window, *params)
+        except Exception as e:
+            print(f"TRADES WINDOW BUILD ERROR: {e}")
+            return
+        t0, t1, _ylo, _yhi = params
+        self._enqueue(client, TradesWindowPacket(
+            t0=t0, t1=t1, n=n,
+            ts_b64=base64.b64encode(ts).decode("ascii"), price_b64=base64.b64encode(pr).decode("ascii"),
+            qty_b64=base64.b64encode(qt).decode("ascii"), side_b64=base64.b64encode(sd).decode("ascii")).to_line())
+
+    async def trades_live_loop(self) -> None:
+        """Push the executed trades since the last pulse to each heatmap-subscribed client as ONE batch.
+        Drains the in-RAM live buffer (O(n) ref-copy + clear) and packs ~tens of trades — cheap, like the
+        depth live-column; never touches depth.db or the bucket/close path."""
+        while True:
+            await asyncio.sleep(config.PULSE_BROADCAST_SECS)
+            batch = self.core.drain_trades_live()   # ALWAYS drain (keeps the buffer bounded), send only if subs
+            if not batch:
+                continue
+            subs = [c for c in self.clients.values() if c.heatmap is not None]
+            if not subs:
+                continue
+            n = len(batch)
+            tb = base64.b64encode(struct.pack("<%dq" % n, *(b[0] for b in batch))).decode("ascii")
+            pb = base64.b64encode(struct.pack("<%dd" % n, *(b[1] for b in batch))).decode("ascii")
+            qb = base64.b64encode(struct.pack("<%dd" % n, *(b[2] for b in batch))).decode("ascii")
+            sb = base64.b64encode(struct.pack("<%dB" % n, *(b[3] for b in batch))).decode("ascii")
+            line = TradeBatchPacket(n=n, ts_b64=tb, price_b64=pb, qty_b64=qb, side_b64=sb).to_line()
+            for client in subs:
+                self._enqueue(client, line)
+
+    # ------------------------------------------------------------------
     async def serve(self) -> None:
         self.store.rehydrate_engines(self.core.engines, self.footprints_db)
 
@@ -220,6 +269,7 @@ class DaemonServer:
         if self.depth_store is not None:   # Phase 1: depth/trade rolling-window writer, its own loop + db
             asyncio.create_task(self.depth_store.sync_loop(self.core))
             asyncio.create_task(self.depth_live_loop())   # Phase 2a: live heatmap columns to subscribers
+            asyncio.create_task(self.trades_live_loop())  # Phase 3: live trade-bubble batches to subscribers
 
         async with server:
             await server.serve_forever()

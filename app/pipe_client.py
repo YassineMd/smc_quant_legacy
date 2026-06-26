@@ -103,6 +103,11 @@ class PipeClientWorker(threading.Thread):
         self._hm_window = None                 # last DepthWindowPacket (consumed once by the heatmap mode)
         self._hm_cols: deque = deque(maxlen=512)   # pending live DepthColumnPackets (drained each access)
         self._hm_ver = 0                       # bumps on any heatmap frame -> lets the mode self-gate
+        # Phase 3 bubbles delivery buffer (guarded by data_lock) — same isolation: the trade arrays live HERE,
+        # handed to the heatmap mode only via trades_state(), NEVER on the 20Hz snapshot().
+        self._tb_window = None                 # last TradesWindowPacket (consumed once)
+        self._tb_batches: deque = deque(maxlen=512)   # pending live TradeBatchPackets (drained each access)
+        self._tb_ver = 0
 
     # ------------------------------------------------------------------
     # Boot baseline (called from GUI thread before the window shows)
@@ -148,6 +153,14 @@ class PipeClientWorker(threading.Thread):
                 "action": "depth_window", "t0": int(t0), "t1": int(t1), "cols": int(cols),
                 "ylo": float(ylo), "yhi": float(yhi), "ybins": int(ybins)}) + "\n")
 
+    def request_trades_window(self, t0: int, t1: int, ylo: float, yhi: float) -> None:
+        """Queue a trades_window request (Phase 3 bubbles — heatmap enter / pan / zoom). Live batches ride the
+        existing depth_window subscription (client.heatmap)."""
+        with self._send_lock:
+            self._outgoing.append(protocol.json.dumps({
+                "action": "trades_window", "t0": int(t0), "t1": int(t1),
+                "ylo": float(ylo), "yhi": float(yhi)}) + "\n")
+
     def stop_depth_window(self) -> None:
         """Queue a depth_window_stop (heatmap mode-exit) so the daemon stops pushing live columns."""
         with self._send_lock:
@@ -155,6 +168,8 @@ class PipeClientWorker(threading.Thread):
         with self.data_lock:
             self._hm_window = None
             self._hm_cols.clear()
+            self._tb_window = None
+            self._tb_batches.clear()
 
     def depth_heatmap_state(self):
         """Heatmap-ONLY accessor (called by _scan_depth_heatmap when that mode is active). Returns
@@ -166,6 +181,17 @@ class PipeClientWorker(threading.Thread):
             cols = list(self._hm_cols)
             self._hm_cols.clear()
             return self._hm_ver, w, cols
+
+    def trades_state(self):
+        """Phase 3 bubbles accessor (heatmap mode only, consume-once): ``(version, window_or_None,
+        [live_batches])``; clears the delivered window + drains the live batches. The trade arrays stay HERE,
+        never on snapshot()."""
+        with self.data_lock:
+            w = self._tb_window
+            self._tb_window = None
+            batches = list(self._tb_batches)
+            self._tb_batches.clear()
+            return self._tb_ver, w, batches
 
     def stop(self) -> None:
         self._stop.set()
@@ -363,6 +389,12 @@ class PipeClientWorker(threading.Thread):
             elif isinstance(pkt, protocol.DepthColumnPacket):
                 self._hm_cols.append(pkt)
                 self._hm_ver += 1
+            elif isinstance(pkt, protocol.TradesWindowPacket):
+                self._tb_window = pkt          # raw trade arrays stay in the delivery buffer (NOT snapshot())
+                self._tb_ver += 1
+            elif isinstance(pkt, protocol.TradeBatchPacket):
+                self._tb_batches.append(pkt)
+                self._tb_ver += 1
 
     def _enforce_cap(self) -> None:
         """Trim the candle cache to the viewport limit (spec §1.1.2)."""

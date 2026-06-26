@@ -676,6 +676,10 @@ class DrawingController(QtCore.QObject):
         self._cancel_live()
         self.edit_panel.hide()
         self.handles.clear()
+        # Auto toggle the toolbar back to the cursor so a cancelled tool (mode switch, Escape, lock) never
+        # lingers visually highlighted as if still armed.
+        if self.toolbar is not None:
+            self.toolbar.select_tool("select")
 
     # ------------------------------------------------------------------
     def _on_click(self, ev) -> None:

@@ -31,8 +31,8 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from .heatmap import (HeatmapCache, decode_col, decode_grid,
-                      neon_diverging_lut, percentile_levels)
+from .heatmap import (HeatmapCache, TradeBubbleCache, decode_col, decode_grid,
+                      decode_trades, neon_diverging_lut, percentile_levels)
 
 from . import bucket_state, config, region_state, vpin_adaptive
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
@@ -65,6 +65,8 @@ FOLLOW_MARGIN = 8         # buckets of right padding so the live edge isn't flus
 FOLLOW_PAD_FRAC = 0.08    # Y padding as a fraction of the visible candle range
 FOLLOW_AXIS_TOL_FRAC = 0.01  # per-axis "did it move?" threshold as a fraction of that axis's span —
                              # absorbs float noise + off-axis drift on a wobbly horizontal drag (tunable)
+HM_FOLLOW_LEAD_FRAC = 0.15   # heatmap follow: keep this fraction of the view BLANK to the right of 'now', so the
+                             # live edge sits at ~85% across (lines + bubbles fill the left 85%, not jammed on the axis)
 FOLLOW_X_PER_TICK = True  # roll X every draw (vs only on a bucket close)
 FOLLOW_Y_PER_TICK = True  # refit Y every draw (vs only on a bucket close) — flip False if price-whip jitters
 
@@ -264,6 +266,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.price_tag = pg.TextItem(anchor=(1, 0.5), color="#141414",
                                      fill=pg.mkBrush("#dcdcdc"))
         _ptf = QtGui.QFont("Consolas", 9); _ptf.setBold(True)
+        _HM_GREEN = (0, 255, 110); _HM_PURPLE = (190, 70, 255)   # neon by side (bids green / asks purple)
         self.price_tag.textItem.setFont(_ptf)
         self.price_tag.setZValue(16)            # above the crosshair (z=15)
         self.plot.addItem(self.price_tag, ignoreBounds=True)
@@ -275,6 +278,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.time_tag.setZValue(16)
         self.plot.addItem(self.time_tag, ignoreBounds=True)
         self.time_tag.hide()
+        # Heatmap RESTING-liquidity readout: SHIFT+hover a heatmap cell -> its raw resting size, BLACK text on a
+        # neon green (bid) / purple (ask) pill, anchored at the cursor. Only fires with Shift held (so a plain
+        # hover stays clean). Driven by _on_mouse_move; reads the cache's raw column at the nearest cell.
+        self.hm_vol_tip = pg.TextItem(color="#000000", anchor=(0.5, 1.4), fill=pg.mkBrush(*_HM_GREEN, 235))
+        self.hm_vol_tip.textItem.setFont(_ptf); self.hm_vol_tip.setZValue(23)
+        self.plot.addItem(self.hm_vol_tip, ignoreBounds=True); self.hm_vol_tip.hide()
         # Mode-10 DOM hover-volume tooltip: the color-matched size of the depth wall
         # nearest the cursor (green=bid / red=ask). Driven by _hover_dom_wall. Anchor
         # (0, 1.0) = bottom-left at the point, so the text sits ABOVE the wall line it
@@ -344,8 +353,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.hm_img.setZValue(1); self.hm_img.setVisible(False)
         self.plot.addItem(self.hm_img, ignoreBounds=True)
         # BBO trace colors MATCH the liquidity palette: best-bid = neon GREEN (buy side), best-ask = neon
-        # PURPLE (sell side).
-        _HM_GREEN = (0, 255, 110); _HM_PURPLE = (190, 70, 255)
+        # PURPLE (sell side). (_HM_GREEN / _HM_PURPLE defined above, with the price-tag setup.)
         self.hm_bid_line = pg.PlotDataItem(pen=pg.mkPen(_HM_GREEN, width=2))   # best-bid @ its price (y)
         self.hm_ask_line = pg.PlotDataItem(pen=pg.mkPen(_HM_PURPLE, width=2))  # best-ask @ its price (y)
         for _l in (self.hm_bid_line, self.hm_ask_line):
@@ -363,6 +371,39 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _t.textItem.setFont(_ptf); _t.setZValue(21); self.plot.addItem(_t, ignoreBounds=True); _t.hide()
         self._hm_lut = None; self._hm_lut_key = None; self.hm_grey = False   # diverging LUT, (re)built on contrast
         self.hm_cache = HeatmapCache()
+        # Phase 3: executed-trade bubbles overlay — buy (green) / sell (red) ScatterPlotItems, size by total
+        # cell qty, sat by net side. Own cache + delivery buffer (never on snapshot()); pxMode so bubbles are a
+        # fixed px size regardless of zoom.
+        _HM_BLUE = (0, 180, 255); _HM_ORANGE = (255, 145, 0)    # ICEBERG bubbles: buy=ELECTRIC blue, sell=orange
+        # tip=None disables pyqtgraph's built-in "x/y/data" hover box; our own sigHovered pill replaces it.
+        self.hm_bubbles_buy = pg.ScatterPlotItem(pxMode=True, pen=None, tip=None,
+                                                 brush=pg.mkBrush(*_HM_GREEN, 170), hoverable=True)
+        self.hm_bubbles_sell = pg.ScatterPlotItem(pxMode=True, pen=None, tip=None,
+                                                  brush=pg.mkBrush(*_HM_PURPLE, 170), hoverable=True)
+        # Iceberg bubbles: a cell sitting on an active absorption/iceberg level is recolored (its qty rode a
+        # refilling wall) — ELECTRIC BLUE for a BUY iceberg (bid wall), ORANGE for a SELL iceberg (ask wall).
+        self.hm_bubbles_ice_buy = pg.ScatterPlotItem(pxMode=True, pen=None, tip=None,
+                                                     brush=pg.mkBrush(*_HM_BLUE, 210), hoverable=True)
+        self.hm_bubbles_ice_sell = pg.ScatterPlotItem(pxMode=True, pen=None, tip=None,
+                                                      brush=pg.mkBrush(*_HM_ORANGE, 210), hoverable=True)
+        for _b in (self.hm_bubbles_buy, self.hm_bubbles_sell,
+                   self.hm_bubbles_ice_buy, self.hm_bubbles_ice_sell):
+            _b.setZValue(18); _b.setVisible(False); self.plot.addItem(_b, ignoreBounds=True)
+            _b.sigHovered.connect(self._on_bubble_hover)
+        self.hm_bubbles_ice_buy.setZValue(19); self.hm_bubbles_ice_sell.setZValue(19)   # icebergs ride on top
+        # per-scatter hover-pill color (BLACK text on the matching neon fill)
+        self._hm_bubble_pill = {
+            self.hm_bubbles_buy: (0, 255, 110), self.hm_bubbles_sell: (190, 70, 255),
+            self.hm_bubbles_ice_buy: (0, 180, 255), self.hm_bubbles_ice_sell: (255, 145, 0)}
+        # hover readout: the cell's total volume, BLACK text on the scatter's neon pill (set per-hover)
+        self.hm_bubble_tip = pg.TextItem(color="#000000", anchor=(0.5, 1.4), fill=pg.mkBrush(*_HM_GREEN, 235))
+        self.hm_bubble_tip.textItem.setFont(_ptf); self.hm_bubble_tip.setZValue(22)
+        self.plot.addItem(self.hm_bubble_tip, ignoreBounds=True); self.hm_bubble_tip.hide()
+        self._hm_tip_plot = None                      # which scatter currently owns the tip
+        self.hm_tb_cache = TradeBubbleCache()
+        self.hm_bubbles_on = True                    # default ON ('b' toggles)
+        self.hm_bubble_min = config.HEATMAP_BUBBLE_MIN_QTY   # min cell qty to draw a bubble (declutter)
+        self.hm_pending_tb: "Optional[str]" = None   # role of the next trades_window response: 'reset'|'prepend'
         self.hm_levels: "Optional[tuple]" = None   # (lo,hi) raw-size cutoffs (auto p20/p99 + 60s renorm)
         self._hm_sizes = None                       # sorted nonzero sizes of the loaded grid (pctile->size map)
         self.hm_manual = False                     # True once the user drags a cutoff slider (auto-renorm pauses)
@@ -376,6 +417,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.hm_pending: "Optional[str]" = None     # role of the next depth_window response: 'reset'|'prepend'
         self.hm_last_view: "Optional[tuple]" = None
         self.hm_follow = True                       # track the live edge (smooth view-follow); off on manual pan
+        self._hm_prev_w = None                       # last view WIDTH (pan vs zoom discriminator for follow-detach)
         self._hm_debounce = QtCore.QTimer(self); self._hm_debounce.setSingleShot(True)
         self._hm_debounce.setInterval(130); self._hm_debounce.timeout.connect(self._hm_request_visible)
         self._flip_line = None    # Mode-10 balance-flip overlay (dashed yellow vline + sustain% label)
@@ -449,6 +491,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("V"), self, activated=self._toggle_vel_abn)
         # 'g' = greyscale toggle for the Liquidity Heatmap (depth_heatmap mode only)
         QtGui.QShortcut(QtGui.QKeySequence("G"), self, activated=self._toggle_heatmap_grey)
+        # 'b' = trade-bubbles overlay toggle (Phase 3; depth_heatmap mode only)
+        QtGui.QShortcut(QtGui.QKeySequence("B"), self, activated=self._toggle_heatmap_bubbles)
         # 'h' = show/hide the Mode-10 Magic-Selection stats box (chart overlays like the flip line stay)
         QtGui.QShortcut(QtGui.QKeySequence("H"), self, activated=self._toggle_sel_stats)
         # Mode-10 selection panels, STACKED below the box in this order: 1 ABSORPTION, 2 EFF-AGG, 3 E/R, 4 EXHAUSTION
@@ -673,6 +717,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         Every other mode keeps the reset + auto-fit (fix #10, TradingView parity)."""
         if not ev.double():
             return
+        if self.scanner_mode == "depth_heatmap":
+            self.hm_follow = True              # double-click anywhere -> re-lock onto the live edge (the next
+            return                             # frame snaps X to [now-w, now]; the cache already holds it)
         if self.scanner_mode == "bucket_canvas":
             sp = ev.scenePos()
             if self.plot.getAxis("bottom").sceneBoundingRect().contains(sp):
@@ -741,6 +788,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.plot.sceneBoundingRect().contains(pos):
             self.price_tag.hide()
             self.time_tag.hide()
+            self.hm_vol_tip.hide()
             self.dom_tooltip.hide()
             self.panel_tooltip.hide()
             self._last_hover_pos = None      # left the plot -> stop the hover re-fire
@@ -768,8 +816,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.time_tag.show()
             if self.cob.isVisible():
                 self.cob.mark_price(pt.y())     # mirror the crosshair price into the DOM ladder (size readout)
+            # SHIFT+hover -> resting-liquidity readout at the hovered cell (a plain hover stays clean). Black
+            # text on a neon green (bid) / purple (ask) pill, mirroring the bubble tip.
+            if QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ShiftModifier:
+                hit = self.hm_cache.raw_at(pt.x() * 1000.0, pt.y())
+                if hit is not None:
+                    size, side = hit
+                    self.hm_vol_tip.fill = pg.mkBrush(0, 255, 110, 235) if side == "bid" \
+                        else pg.mkBrush(190, 70, 255, 235)
+                    self.hm_vol_tip.setText(f"{size/1000:.1f}K" if size >= 1000 else f"{size:.0f}")
+                    self.hm_vol_tip.setPos(pt.x(), pt.y())
+                    self.hm_vol_tip.show()
+                else:
+                    self.hm_vol_tip.hide()
+            else:
+                self.hm_vol_tip.hide()
         else:
             self.time_tag.hide()
+            self.hm_vol_tip.hide()
 
         # §7.4 — yellow follow-spot tracks the cursor only while a drawing tool is
         # armed (anything other than the cursor/select pointer); hidden otherwise.
@@ -2002,11 +2066,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self.scanner_mode == "bucket_canvas":
             self._update_m10_dom(snap)
         elif self.scanner_mode == "depth_heatmap" and self.cob.isVisible():
-            if self.hm_band and self.hm_cache.ybins:          # aggregate the ladder at the heatmap's row height
-                self.cob.bars.bin_h = max(config.DOM_BIN_STEP,
-                                          (self.hm_band[1] - self.hm_band[0]) / self.hm_cache.ybins)
+            # Aggregate the ladder to the CURRENT view zoom (~one bar per 2px of the panel), NOT the loaded
+            # grid's ybins — so it coarsens as you zoom out / refines toward 1 tick as you zoom in, EVERY
+            # frame (the old loaded-band/ybins only changed on a re-request, so it never tracked a zoom).
+            (_, _), (vy0, vy1) = self.vb.viewRange()
+            bars = max(20, int(self.cob.height()) // 2)
+            self.cob.bars.bin_h = max(config.DOM_BIN_STEP, (vy1 - vy0) / bars)
             self.cob.update_depth(snap.get("depth") or {})   # DOM ladder = live book snapshot, price-aligned
-            self._sync_cob()                                  # to the heatmap's Y band
+            self.cob.autoscale_x(vy0, vy1)                    # bar length scales to the IN-VIEW max wall, so a far
+            self._sync_cob()                                  # wall can't flatten the zoomed-in ladder; Y -> band
         self._redock_trackers()
         self._refresh_parked_hover()
         self._refresh_selection_stats()   # live Magic-Selection aggregate
@@ -2330,12 +2398,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _hm_enter(self) -> None:
         """Enter heatmap mode: chronological x-axis, show items, request the RECENT window (fast cold-open)."""
+        self.drawer.cancel()                              # opening the heatmap auto-toggles OFF any armed draw tool
         self.axis_bottom.set_scanner_active(False)        # time labels, not bucket ordinals
         self.hm_cache = HeatmapCache(); self.hm_levels = None; self.hm_pending = "reset"; self.hm_last_view = None
-        self._hm_sizes = None; self.hm_manual = False; self.hm_follow = True
+        self._hm_sizes = None; self.hm_manual = False; self.hm_follow = True; self._hm_prev_w = None
         self.hm_contrast.set_values(config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
         self.hm_contrast.adjustSize()                     # size to its full content (floating child) before placing
-        self.hm_contrast.move(14, 92); self.hm_contrast.show(); self.hm_contrast.raise_()   # the "filter" panel
+        self.hm_contrast.move(10, 10); self.hm_contrast.show(); self.hm_contrast.raise_()   # extreme top-left, small pad
         snap = self._last_snap or self.worker.snapshot()
         mid = snap.get("latest_price") or 0.0
         if mid <= 0:
@@ -2350,6 +2419,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         px = max(200, min(config.HEATMAP_MAX_COLS, int(self.plot.width()) or 1000))
         self.hm_band = (ylo, yhi)
         self.worker.request_depth_window(t0, t1, px, ylo, yhi, self._hm_ybins(ylo, yhi))
+        self.hm_tb_cache = TradeBubbleCache(); self.hm_pending_tb = "reset"   # Phase 3 bubbles, same window
+        self.worker.request_trades_window(t0, t1, ylo, yhi)
         self.vb.setXRange(t0 / 1000.0, t1 / 1000.0, padding=0.0)
         self.vb.setYRange(ylo, yhi, padding=0.0)
 
@@ -2358,8 +2429,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.worker.stop_depth_window()
         self.hm_img.setVisible(False); self.hm_img.clear()
         for it in (self.hm_bid_line, self.hm_ask_line, self.hm_bid_dash, self.hm_ask_dash,
-                   self.hm_bid_axtag, self.hm_ask_axtag):
+                   self.hm_bid_axtag, self.hm_ask_axtag, self.hm_bubbles_buy, self.hm_bubbles_sell,
+                   self.hm_bubbles_ice_buy, self.hm_bubbles_ice_sell, self.hm_bubble_tip, self.hm_vol_tip):
             it.setVisible(False)
+        self.hm_tb_cache = TradeBubbleCache(); self.hm_pending_tb = None
         self.hm_contrast.hide()
         self.cob.set_palette(config.RGBA_COB_BID, config.RGBA_COB_ASK)   # restore default ladder colors for other modes
         self.cob.bars.bin_h = config.DOM_BIN_STEP
@@ -2388,6 +2461,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for cp in livecols:
             if self.hm_cache.append_live(decode_col(cp.col_b64, cp.ybins), cp.ts, cp.bid, cp.ask):
                 changed = True
+        # Phase 3 bubbles: drain the trades delivery buffer (consume-once, never on snapshot()) -> bubble cache
+        if self.hm_bubbles_on:
+            _tv, tw, tbatches = self.worker.trades_state()
+            if tw is not None:
+                tt = decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64)
+                if self.hm_pending_tb == "prepend" and len(self.hm_tb_cache.ts):
+                    self.hm_tb_cache.prepend_older(*tt)
+                else:
+                    self.hm_tb_cache.reset(*tt)
+                self.hm_pending_tb = None; changed = True
+            for tbp in tbatches:
+                if self.hm_tb_cache.append_batch(*decode_trades(tbp.ts_b64, tbp.price_b64, tbp.qty_b64, tbp.side_b64)):
+                    changed = True
         if not self.hm_cache.cols:
             return
         now = time.time()
@@ -2401,7 +2487,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             (vx0, vx1), _ = self.vb.viewRange()
             w = vx1 - vx0
             now_s = time.time()
-            self.vb.setXRange(now_s - w, now_s, padding=0.0)
+            lead = w * HM_FOLLOW_LEAD_FRAC               # blank gutter to the RIGHT of 'now' (live edge at ~85%)
+            self.vb.setXRange(now_s - w + lead, now_s + lead, padding=0.0)
+            self._hm_prev_w = w                          # so the next manual gesture diffs against the live width
         view = self.vb.viewRange()
         vkey = (tuple(view[0]), tuple(view[1]))
         view_moved = vkey != self.hm_last_view
@@ -2429,11 +2517,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for it in items:
                 it.setVisible(False)
             return
-        live_x = self.hm_cache.cols[-1][0] / 1000.0                    # where the formed (solid) trace ends
+        # Anchor the forward projection to the FINE BBO trace's end (where the solid line now stops), not the
+        # coarse grid column — so the dash joins the line seamlessly at the live price instead of behind it.
+        tail = self.hm_cache.bbo[-1] if self.hm_cache.bbo else None
+        if tail is None:
+            for it in items:
+                it.setVisible(False)
+            return
+        live_x = tail[0] / 1000.0                                      # where the formed (solid) trace ends
         step_s = (self.hm_cache.step_ms or 0) / 1000.0
         show = vx1 >= live_x - step_s                                  # the live edge is at / left of the view's right
         x0 = max(live_x, vx0)                                          # project from the live edge (or the left edge)
-        cb = self.hm_cache.cols[-1][2]; ca = self.hm_cache.cols[-1][3]
+        cb = tail[1]; ca = tail[2]
         for dash, tag, val in ((self.hm_bid_dash, self.hm_bid_axtag, cb),
                                (self.hm_ask_dash, self.hm_ask_axtag, ca)):
             if show and val and val > 0:
@@ -2466,11 +2561,93 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.hm_img.setLevels([-M, M])
         self.hm_img.setVisible(True)
         show_bbo = (vy1 - vy0) <= (yhi - ylo) * 1.5       # auto-hide BBO when zoomed out past the band
-        xs = ts / 1000.0
-        fb = bid > 0; fa = ask > 0                          # plot only in-book columns (skip empty edges)
-        self.hm_bid_line.setData(xs[fb], bid[fb])
-        self.hm_ask_line.setData(xs[fa], ask[fa])
+        # BBO lines come from the FINE per-pulse trace (not the binned grid columns), so they follow the live
+        # price at pulse cadence and stay glued to the bubbles on a fast move (the binned grid collapses
+        # intra-bin moves to one point per step_ms, which made the lines visibly lag the per-trade bubbles).
+        fine = self.hm_cache.visible_bbo(int(vx0 * 1000), int(vx1 * 1000))
+        if fine is not None:
+            bts, bbid, bask = fine
+            bxs = bts / 1000.0
+            fb = bbid > 0; fa = bask > 0                     # plot only in-book points (skip empty edges)
+            self.hm_bid_line.setData(bxs[fb], bbid[fb])
+            self.hm_ask_line.setData(bxs[fa], bask[fa])
+        else:
+            self.hm_bid_line.setData([], []); self.hm_ask_line.setData([], [])
         self.hm_bid_line.setVisible(show_bbo); self.hm_ask_line.setVisible(show_bbo)
+        self._hm_render_bubbles(vx0, vx1)
+
+    def _hm_render_bubbles(self, vx0: float, vx1: float) -> None:
+        """Phase 3: aggregate the visible trades into the heatmap's cells and paint the bubbles — diameter
+        ∝ √(total cell qty), scaled so the biggest visible cell ≈ MAX_PX (clamped). Cells sitting on an active
+        absorption/iceberg level are recolored (blue buy / orange sell); the rest split green (net buy) /
+        purple (net sell). pxMode keeps bubbles a fixed size through zoom."""
+        scatters = (self.hm_bubbles_buy, self.hm_bubbles_sell,
+                    self.hm_bubbles_ice_buy, self.hm_bubbles_ice_sell)
+        if not self.hm_bubbles_on or self.hm_band is None or not len(self.hm_tb_cache.ts):
+            for s in scatters:
+                s.setVisible(False)
+            return
+        ylo, yhi = self.hm_band
+        cols = max(50, min(config.HEATMAP_MAX_COLS, int(self.plot.width()) or 1000))
+        cells = self.hm_tb_cache.visible_cells(int(vx0 * 1000), int(vx1 * 1000), ylo, yhi,
+                                               cols, self._hm_ybins(ylo, yhi), self.hm_bubble_min)
+        if cells is None:
+            for s in scatters:
+                s.setVisible(False)
+            return
+        x, y, total, net = cells
+        mx = float(total.max()) or 1.0
+        lo, hi = config.HEATMAP_BUBBLE_MIN_PX, config.HEATMAP_BUBBLE_MAX_PX
+        size = lo + (hi - lo) * np.sqrt(np.clip(total / mx, 0.0, 1.0))   # diameter px, area ~ qty
+        ice = self._hm_iceberg_side(y)                                    # 0=none, 1=BUY iceberg, 2=SELL iceberg
+        ice_buy = ice == 1; ice_sell = ice == 2
+        plain = ice == 0
+        buy = plain & (net > 0); sell = plain & ~(net > 0)               # net==0 -> drawn as sell (rare)
+        for scat, m in ((self.hm_bubbles_buy, buy), (self.hm_bubbles_sell, sell),
+                        (self.hm_bubbles_ice_buy, ice_buy), (self.hm_bubbles_ice_sell, ice_sell)):
+            scat.setData(x=x[m], y=y[m], size=size[m], data=total[m])
+            scat.setVisible(True)
+
+    def _hm_iceberg_side(self, y: np.ndarray) -> np.ndarray:
+        """Per-cell iceberg classification from the live absorption marks: 0 = none, 1 = BUY iceberg (a bid
+        wall held), 2 = SELL iceberg (an ask wall held). A cell is an iceberg if its price falls in a mark's
+        [plo, phi] break-range (± a tick of slop). Marks are the SAME standing levels the bucket chart draws."""
+        out = np.zeros(len(y), dtype=np.uint8)
+        marks = (self._last_snap or {}).get("absorptions") or []
+        if not marks or not len(y):
+            return out
+        tol = config.TICK_SIZE
+        for m in marks:
+            try:
+                plo = float(m.get("plo", m.get("price", 0.0))); phi = float(m.get("phi", plo))
+            except (TypeError, ValueError):
+                continue
+            if phi < plo:
+                plo, phi = phi, plo
+            hitmask = (y >= plo - tol) & (y <= phi + tol)
+            if hitmask.any():
+                out[hitmask] = 1 if m.get("side") == "BUY" else 2
+        return out
+
+    def _on_bubble_hover(self, plot, points) -> None:
+        """Hover a bubble -> show its cell's total volume: BLACK text on a neon pill (green = buy, purple =
+        sell). Both scatters emit sigHovered, so the OTHER one fires empty when you hover a bubble — only the
+        owning scatter is allowed to clear the tip (else the purple tip is killed by the buy scatter's empty
+        hover, which is why the purple value never showed)."""
+        if not self.hm_bubbles_on or self.scanner_mode != "depth_heatmap":
+            self.hm_bubble_tip.hide(); self._hm_tip_plot = None; return
+        if not len(points):
+            if plot is self._hm_tip_plot:                # only the owner clears it
+                self.hm_bubble_tip.hide(); self._hm_tip_plot = None
+            return
+        vol = points[0].data()
+        if vol is None:
+            return
+        pill = self._hm_bubble_pill.get(plot, (0, 255, 110))
+        self.hm_bubble_tip.fill = pg.mkBrush(*pill, 235)
+        self.hm_bubble_tip.setText(f"{vol/1000:.1f}K" if vol >= 1000 else f"{vol:.0f}")
+        self.hm_bubble_tip.setPos(points[0].pos().x(), points[0].pos().y())
+        self.hm_bubble_tip.show(); self._hm_tip_plot = plot
 
     def _hm_request_visible(self) -> None:
         """Debounced lazy-load: free re-slice when the view is inside the loaded range at a compatible
@@ -2504,16 +2681,40 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.hm_pending = "prepend"                          # same band -> reuse the cache's bin count
             self.worker.request_depth_window(t_lo, int(c_lo), ocols, self.hm_band[0], self.hm_band[1],
                                              self.hm_cache.ybins or self._hm_ybins(self.hm_band[0], self.hm_band[1]))
+            self.hm_pending_tb = "prepend"                       # Phase 3 bubbles: same older range
+            self.worker.request_trades_window(t_lo, int(c_lo), self.hm_band[0], self.hm_band[1])
             return
         cols_req = max(50, int((data_hi - t_lo) / need_step))   # cols scaled to the DATA span at the visible step
         self.hm_pending = "reset"; self.hm_band = (vy0, vy1)
         self.worker.request_depth_window(t_lo, data_hi, cols_req, vy0, vy1, self._hm_ybins(vy0, vy1))
+        self.hm_pending_tb = "reset"                             # Phase 3 bubbles: same window
+        self.worker.request_trades_window(t_lo, data_hi, vy0, vy1)
 
     def _toggle_heatmap_grey(self) -> None:
         """'g' — swap the Bookmap LUT for greyscale (heatmap mode only); instant re-color, no re-request."""
         if self.scanner_mode != "depth_heatmap":
             return
         self.hm_grey = not self.hm_grey
+        self._hm_render()
+
+    def _toggle_heatmap_bubbles(self) -> None:
+        """'b' — toggle the Phase 3 trade-bubbles overlay (heatmap mode only). OFF hides them; ON re-requests
+        the trades for the current view so they reappear without leaving the mode."""
+        if self.scanner_mode != "depth_heatmap":
+            return
+        self.hm_bubbles_on = not self.hm_bubbles_on
+        if not self.hm_bubbles_on:
+            for s in (self.hm_bubbles_buy, self.hm_bubbles_sell,
+                      self.hm_bubbles_ice_buy, self.hm_bubbles_ice_sell):
+                s.setVisible(False)
+            self.hm_bubble_tip.hide()
+        else:
+            (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
+            t_lo = max(int(vx0 * 1000), self.hm_floor_ms)
+            data_hi = min(int(vx1 * 1000), int(time.time() * 1000))
+            if data_hi - t_lo >= 1000:
+                self.hm_tb_cache = TradeBubbleCache(); self.hm_pending_tb = "reset"
+                self.worker.request_trades_window(t_lo, data_hi, vy0, vy1)
         self._hm_render()
 
     def _hm_resample(self) -> None:
@@ -2617,14 +2818,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         a wobbly drag. Scroll-zoom moves both -> unlocks both; a horizontal drag moves X
         only; a Y-axis wheel moves Y only. Re-lock is a double-click (_on_scene_click)."""
         if self.scanner_mode == "depth_heatmap":
-            # Keep SMOOTH-following the live edge through a ZOOM (right edge stays AT 'now') so deep zooms
-            # scroll at 20Hz instead of jumping per 0.4s pulse. DETACH the moment the right edge is dragged
-            # AWAY from 'now' — into history (pan left) OR out past 'now' (pan right to leave blank space to
-            # watch the edge develop) — so neither direction ever force-snaps you back.
             (vx0, vx1), _ = self.vb.viewRange()
             w = max(1e-6, vx1 - vx0)
-            dt = time.time() - vx1          # >0: right edge in the past; <0: dragged out past 'now'
-            self.hm_follow = (-0.5 <= dt < max(1.5, w * 0.08))
+            prev_w = self._hm_prev_w
+            self._hm_prev_w = w
+            if prev_w is not None and abs(w - prev_w) < prev_w * 0.005:
+                # WIDTH ~unchanged => the user grabbed and DRAGGED (a pan to move around) => detach NOW, so the
+                # view stays exactly where they put it and never snaps back to the live edge mid-gesture.
+                self.hm_follow = False
+            else:
+                # WIDTH changed => a ZOOM. Keep SMOOTH-following only if still glued near the live edge (the lead
+                # gutter puts the right edge at now+lead, so dt ~= -lead; +0.5s tol). Zoom into history => detach.
+                dt = time.time() - vx1
+                self.hm_follow = (-(w * HM_FOLLOW_LEAD_FRAC + 0.5) <= dt < max(1.5, w * 0.08))
             self._hm_debounce.start()   # Phase 2b: debounced lazy-load (re-slice / prepend / re-request)
             return
         if self.scanner_mode != "bucket_canvas" or self._follow_prev_range is None:
