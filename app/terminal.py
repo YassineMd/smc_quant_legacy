@@ -317,10 +317,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_state = False   # STATE verdict + debug lines hidden until 'y' (both stats boxes)
         self.show_vel_abn = True  # abnormal-velocity DIAMONDS ON by default ('v' toggles; 2px border always on)
         self.show_sel_stats = True  # Mode-10 selection stats box shown by default ('h' toggles)
-        self.show_abs_strip = True  # Mode-10 selection ABSORPTION panel shown by default ('1' toggles) — slot 1
-        self.show_eff_strip = True  # Mode-10 selection eff-agg evolution panel shown by default ('2' toggles)
-        self.show_er_strip = True   # Mode-10 selection effort/result panel shown by default ('3' toggles)
-        self.show_exh_strip = True  # Mode-10 selection exhaustion panel shown by default ('4' toggles) — slot 4
+        self.show_abs_strip = False  # Mode-10 selection ABSORPTION panel HIDDEN by default ('1' toggles) — slot 1
+        self.show_eff_strip = False  # Mode-10 selection eff-agg evolution panel HIDDEN by default ('2' toggles)
+        self.show_er_strip = False   # Mode-10 selection effort/result panel HIDDEN by default ('3' toggles)
+        self.show_exh_strip = False  # Mode-10 selection exhaustion panel HIDDEN by default ('4' toggles) — slot 4
+        # NOTE: the 3 PHASE panels (5/6/7) stay ON by default (show_phase[...] = True above); the 4 MEASURE
+        # panels above default OFF — so the default session computes only the always-on zones + the phase path.
         self._flip_line = None    # Mode-10 balance-flip overlay (dashed yellow vline + sustain% label)
         self._flip_label = None
         self._forming_line = None   # tentative "forming" overlay (dim dotted amber + 'unconfirmed' label)
