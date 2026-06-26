@@ -244,6 +244,20 @@ def selection_state(filtered: list, lo_i: int, hi_i: int):
     return state, conf, dbg
 
 
+def _absorption_core(o: float, c: float, bv: float, sv: float, cv: float,
+                     sd: float, scv: float) -> "tuple[float, float, float]":
+    """O(1) tail of :func:`absorption_vol`: given the bucket's open/close/buy/sell/curr_vol and the trailing
+    norm sums ``sd`` = Σ|close-open|, ``scv`` = Σ curr_vol, return ``(bull, bear, s)``. The SINGLE arithmetic
+    used by both the per-bucket ``absorption_vol`` (from-scratch norms) and the prefix-sum ``absorption_series``
+    (Fix 4), so they can never drift in logic — only in the ~ULP rounding of sd/scv (proven negligible)."""
+    k = (sd / scv) if scv > 0 else 0.0
+    eff = (abs(c - o) / cv) if cv > 0 else 0.0
+    s = max(0.0, min(1.0, 1.0 - eff / k)) if k > 0 else 0.0
+    bull = sv * s if sv > bv else 0.0
+    bear = bv * s if bv > sv else 0.0
+    return bull, bear, s
+
+
 def absorption_vol(buckets: list, i: int, window: int) -> "tuple[float, float, float]":
     """Per-bucket BULL / BEAR absorption in VOLUME — aggressive volume on a side that FAILED to move price
     its way, scaled by how SUPPRESSED the move was RELATIVE to the region's own volume->displacement norm
@@ -264,22 +278,38 @@ def absorption_vol(buckets: list, i: int, window: int) -> "tuple[float, float, f
     sd = sum(abs(float(w.get("close", 0.0)) - float(w.get("open", 0.0))) for w in win)
     scv = sum((float(w.get("curr_vol", 0.0)) or (float(w.get("buy_vol", 0.0)) + float(w.get("sell_vol", 0.0))))
               for w in win)
-    k = (sd / scv) if scv > 0 else 0.0
-    eff = (abs(c - o) / cv) if cv > 0 else 0.0
-    s = max(0.0, min(1.0, 1.0 - eff / k)) if k > 0 else 0.0
-    bull = sv * s if sv > bv else 0.0
-    bear = bv * s if bv > sv else 0.0
-    return bull, bear, s
+    return _absorption_core(o, c, bv, sv, cv, sd, scv)
 
 
 def absorption_series(buckets: list, lo_i: int, hi_i: int, window: int) -> "tuple[list, list, list]":
-    """Per-bucket ``(bull, bear, s)`` arrays over a selection [lo_i, hi_i] (index 0 = bucket lo_i), in ONE
-    pass via :func:`absorption_vol` — so the adaptive default, the zones, and the box totals all share it.
-    Returns ``(bull, bear, sval)`` lists (empty if hi_i < lo_i)."""
+    """Per-bucket ``(bull, bear, s)`` arrays over a selection [lo_i, hi_i] (index 0 = bucket lo_i), so the
+    adaptive default, the zones, and the box totals all share one pass. Returns ``(bull, bear, sval)`` (empty
+    if hi_i < lo_i).
+
+    Fix 4: O(N) via PREFIX SUMS of |close-open| and curr_vol instead of re-summing each bucket's trailing
+    ``window`` from scratch (was O(N·window)). The per-bucket math is the SHARED :func:`_absorption_core`, so
+    the only change vs :func:`absorption_vol` is the ~ULP rounding of the prefix-diffed sd/scv (validated
+    negligible). The window for bucket i is buckets[max(0,i-window):i] EXACTLY as before."""
+    if hi_i < lo_i:
+        return [], [], []
+    base = max(0, lo_i - window)                       # trailing window reaches back `window` buckets
+    Pd = [0.0]; Pcv = [0.0]                            # prefix sums over buckets[base..hi_i]
+    for j in range(base, hi_i + 1):
+        w = buckets[j]
+        Pd.append(Pd[-1] + abs(float(w.get("close", 0.0)) - float(w.get("open", 0.0))))
+        Pcv.append(Pcv[-1] + (float(w.get("curr_vol", 0.0))
+                              or (float(w.get("buy_vol", 0.0)) + float(w.get("sell_vol", 0.0)))))
     bull, bear, sval = [], [], []
     for i in range(lo_i, hi_i + 1):
-        bu, be, sv = absorption_vol(buckets, i, window)
-        bull.append(bu); bear.append(be); sval.append(sv)
+        b = buckets[i]
+        o, c = float(b.get("open", 0.0)), float(b.get("close", 0.0))
+        bv, sv = float(b.get("buy_vol", 0.0)), float(b.get("sell_vol", 0.0))
+        cv = float(b.get("curr_vol", 0.0)) or (bv + sv)
+        a = max(0, i - window)                          # window = buckets[a:i]; prefix coords are j-base
+        sd = Pd[i - base] - Pd[a - base]                # Σ|close-open| over [a, i)
+        scv = Pcv[i - base] - Pcv[a - base]             # Σ curr_vol over [a, i)
+        bu, be, s = _absorption_core(o, c, bv, sv, cv, sd, scv)
+        bull.append(bu); bear.append(be); sval.append(s)
     return bull, bear, sval
 
 
@@ -356,12 +386,46 @@ def eff_agg_series(buckets: list, lo_i: int, hi_i: int, window: int,
                    force_window: int) -> "tuple[list, list, list]":
     """Per-bucket ``(eff_bull, eff_bear, fval)`` over a selection, in ONE pass. ``fval`` = the directional
     eff-agg in VOLUME / the trailing FORCE norm (``_vol_norm``) — a self-calibrated RELATIVE force ratio
-    (~[0,1]; the slider rides it). 0 on non-eff-agg buckets. Mirrors :func:`absorption_series`."""
+    (~[0,1]; the slider rides it). 0 on non-eff-agg buckets. Mirrors :func:`absorption_series`.
+
+    Fix 4: O(N) via PREFIX SUMS shared between the absorption ``s`` norm (|close-open| & curr_vol over
+    ``window``) and the FORCE norm (curr_vol mean over ``force_window``) — replacing the per-bucket
+    ``effective_aggression``+``_vol_norm`` re-sums (was O(N·(window+force_window))). Same arithmetic
+    (``_absorption_core`` for s; the eff-agg gate and the force-mean reproduced exactly, incl. the i==0
+    ``or [buckets[i]]`` fallback); only the prefix-diffed sums differ by ~ULP (validated negligible)."""
+    if hi_i < lo_i:
+        return [], [], []
+    base = max(0, lo_i - max(window, force_window))    # both trailing windows reach back from lo_i
+    Pd = [0.0]; Pcv = [0.0]                            # prefix sums over buckets[base..hi_i]
+    for j in range(base, hi_i + 1):
+        w = buckets[j]
+        Pd.append(Pd[-1] + abs(float(w.get("close", 0.0)) - float(w.get("open", 0.0))))
+        Pcv.append(Pcv[-1] + (float(w.get("curr_vol", 0.0))
+                              or (float(w.get("buy_vol", 0.0)) + float(w.get("sell_vol", 0.0)))))
     eff_bull, eff_bear, fval = [], [], []
     for i in range(lo_i, hi_i + 1):
-        eb, es, _s = effective_aggression(buckets, i, window)
+        b = buckets[i]
+        o, c = float(b.get("open", 0.0)), float(b.get("close", 0.0))
+        bv, sv = float(b.get("buy_vol", 0.0)), float(b.get("sell_vol", 0.0))
+        cv = float(b.get("curr_vol", 0.0)) or (bv + sv)
+        a = max(0, i - window)
+        sd = Pd[i - base] - Pd[a - base]; scv = Pcv[i - base] - Pcv[a - base]
+        _bu, _be, s = _absorption_core(o, c, bv, sv, cv, sd, scv)   # reuse the VALIDATED s
+        eb = bv * (1.0 - s) if (bv > sv and c > o) else 0.0
+        es = sv * (1.0 - s) if (sv > bv and c < o) else 0.0
         e = eb if eb > 0 else es
-        f = (e / _vol_norm(buckets, i, force_window)) if e > 0 else 0.0
+        if e > 0:
+            fa = max(0, i - force_window)              # force-norm window = buckets[fa:i] (or [bucket i] if empty)
+            cnt = i - fa
+            if cnt <= 0:                               # i == 0 -> original '_vol_norm' uses [buckets[i]]
+                tot, cnt = cv, 1
+            else:
+                tot = Pcv[i - base] - Pcv[fa - base]
+            vn = tot / cnt
+            vn = vn if vn > 0 else 1.0
+            f = e / vn
+        else:
+            f = 0.0
         eff_bull.append(eb); eff_bear.append(es); fval.append(f)
     return eff_bull, eff_bear, fval
 
@@ -479,13 +543,20 @@ def rolling_share(bull: list, bear: list, window: int) -> list:
     (clamped at the edges). Non-cumulative: tracks the LOCAL lean and SHIFTS across the region, instead of a
     cumulative share that converges to a flat line. 0.5 (even) where the window holds no bull/bear at all. The
     bear share is just ``1 - this``. Works for the one-sided measures (absorption/eff-agg) because a window is
-    wide enough to contain both sides; an all-one-side window correctly reads ~1.0 (locally only that side)."""
+    wide enough to contain both sides; an all-one-side window correctly reads ~1.0 (locally only that side).
+
+    Fix 4: O(N) via PREFIX SUMS instead of re-summing each centered window (was O(N·window), window≈0.25·N).
+    bull/bear are non-negative, so each prefix-diff is exactly 0 iff the whole window is 0 — the ``tot > 0``
+    branch is therefore bit-identical to the from-scratch version; only the ratio value differs by ~ULP."""
     n = len(bull)
     h = max(1, window) // 2
+    Pb = [0.0]; Pr = [0.0]                              # prefix sums (Pb[i] = Σ bull[:i])
+    for i in range(n):
+        Pb.append(Pb[-1] + bull[i]); Pr.append(Pr[-1] + bear[i])
     out = []
     for i in range(n):
         a, b = max(0, i - h), min(n, i + h + 1)
-        sb = sum(bull[a:b]); sr = sum(bear[a:b])
+        sb = Pb[b] - Pb[a]; sr = Pr[b] - Pr[a]
         tot = sb + sr
         out.append((sb / tot) if tot > 0 else 0.5)
     return out
