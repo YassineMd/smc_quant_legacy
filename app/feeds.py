@@ -21,6 +21,7 @@ import asyncio
 import json
 import statistics
 import time
+from collections import deque
 from typing import Callable, Dict
 
 import pandas as pd
@@ -77,6 +78,15 @@ class MarketDataCore:
         # 19.3b: last kline candle per tf, cached so live_edge_loop can re-emit the
         # forming edge at ~150ms (between the 1/s kline heartbeats) without trades.
         self.last_candle: Dict[str, dict] = {}
+        # Phase 1: bounded (drop-oldest) capture buffers for the depth/trade store. Filled by O(1) tees on
+        # the loop (public_stream / aggtrade_stream); drained off-loop by DepthStore.sync_loop. Fully
+        # independent of the bucket/close path. _last_depth_u/_ts = the last applied diff, stamped onto
+        # snapshot anchors so reconstruction can replay deltas with u > anchor.u.
+        self._depth_delta_buf: deque = deque(maxlen=config.DEPTH_BUFFER_CAP)
+        self._trade_buf: deque = deque(maxlen=config.DEPTH_BUFFER_CAP)
+        self._depth_snap_buf: deque = deque(maxlen=1000)
+        self._last_depth_u: int = 0
+        self._last_depth_ts: int = 0
 
     # ------------------------------------------------------------------
     # CATCHUP builder (per subscribing client's timeframe)
@@ -268,6 +278,8 @@ class MarketDataCore:
                     d = json.loads(res)
                     d = d.get("data", d)   # tolerate combined-wrapper; /ws/ is raw
                     if d.get("e") == "aggTrade":
+                        if config.DEPTH_CAPTURE_ENABLED:
+                            self._capture_trade(d)        # Phase 1 tape tee — AROUND, not inside, the bucket path
                         self._process_aggtrade(d)
             except Exception:
                 await asyncio.sleep(2)
@@ -409,6 +421,67 @@ class MarketDataCore:
                 )
 
     # ------------------------------------------------------------------
+    # Phase 1: depth/trade capture tees (O(1), on-loop; bucket path untouched)
+    # ------------------------------------------------------------------
+    def _capture_depth_diff(self, msg: dict, ob: dict) -> None:
+        """Tee a depth diff into the buffer — called AFTER public_stream applies it to local_ob. Whole book
+        by default (DEPTH_BAND_PCT<=0); else ±band% of the live mid. qty==0 (a removal) is KEPT — it's a
+        real change. Updates _last_depth_u/_ts (the anchor reference). Pure append; never touches buckets."""
+        u = int(msg.get("u", 0)); ts = int(msg.get("E", 0))
+        self._last_depth_u = u; self._last_depth_ts = ts
+        band = config.DEPTH_BAND_PCT
+        if band > 0:
+            bids, asks = ob["bids"], ob["asks"]
+            mid = ((max(bids) + min(asks)) / 2.0) if (bids and asks) else 0.0
+            lim = mid * band / 100.0
+            keep = (lambda p: abs(p - mid) <= lim) if mid > 0 else (lambda p: True)
+            bc = [(float(x[0]), float(x[1])) for x in msg.get("b", []) if keep(float(x[0]))]
+            ac = [(float(x[0]), float(x[1])) for x in msg.get("a", []) if keep(float(x[0]))]
+        else:
+            bc = [(float(x[0]), float(x[1])) for x in msg.get("b", [])]
+            ac = [(float(x[0]), float(x[1])) for x in msg.get("a", [])]
+        if bc or ac:
+            self._depth_delta_buf.append((ts, u, bc, ac))
+
+    def _capture_depth_snapshot(self, ob: dict) -> None:
+        """Buffer a full (or banded) book ANCHOR — a read of local_ob on the loop, stamped with the last
+        applied diff's u so reconstruction replays deltas with u > anchor.u. Called every
+        DEPTH_SNAPSHOT_SECS and once per diff-stream (re)connect (so the chain never has an un-anchored gap)."""
+        bids, asks = ob["bids"], ob["asks"]
+        if not bids or not asks:
+            return
+        mid = (max(bids) + min(asks)) / 2.0
+        band = config.DEPTH_BAND_PCT
+        if band > 0:
+            lim = mid * band / 100.0
+            b = {p: q for p, q in bids.items() if abs(p - mid) <= lim}
+            a = {p: q for p, q in asks.items() if abs(p - mid) <= lim}
+        else:
+            b = dict(bids); a = dict(asks)
+        self._depth_snap_buf.append((int(time.time() * 1000), self._last_depth_u, mid, b, a))
+
+    def _capture_trade(self, d: dict) -> None:
+        """Tee one aggTrade into the trade-tape buffer — called in aggtrade_stream AROUND (never inside)
+        _process_aggtrade. side: 1 = taker buy, 0 = taker sell (Binance 'm' = buyer-maker flag)."""
+        self._trade_buf.append((
+            int(d.get("a", 0)), int(d.get("T", 0)),
+            float(d.get("p", 0.0)), float(d.get("q", 0.0)),
+            0 if d.get("m") else 1,
+        ))
+
+    async def depth_snapshot_loop(self) -> None:
+        """Buffer a full-book anchor every DEPTH_SNAPSHOT_SECS (reconnect anchors are added in
+        public_stream). Read-only of local_ob; gated by the master switch."""
+        while True:
+            await asyncio.sleep(config.DEPTH_SNAPSHOT_SECS)
+            if not config.DEPTH_CAPTURE_ENABLED:
+                continue
+            try:
+                self._capture_depth_snapshot(self.pulse_state["local_ob"])
+            except Exception as e:
+                print(f"DEPTH SNAPSHOT ERROR: {e}")
+
+    # ------------------------------------------------------------------
     # Stream: order book depth maintenance (main.py:832)
     # ------------------------------------------------------------------
     async def public_stream(self) -> None:
@@ -423,11 +496,14 @@ class MarketDataCore:
         ob["lastUpdateId"] = data.get("lastUpdateId", 0)
         ob["bids"] = {float(b[0]): float(b[1]) for b in data.get("bids", [])}
         ob["asks"] = {float(a[0]): float(a[1]) for a in data.get("asks", [])}
+        self._last_depth_u = ob["lastUpdateId"]   # Phase 1: anchor reference for the first snapshot
 
         while True:
             ws = None
             try:
                 ws = await websockets.connect(config.WS_DEPTH)
+                if config.DEPTH_CAPTURE_ENABLED:
+                    self._capture_depth_snapshot(ob)   # anchor on every (re)connect — no un-anchored gap
                 while True:
                     msg = json.loads(await ws.recv())
                     if msg.get("u", 0) < ob["lastUpdateId"]:
@@ -444,6 +520,8 @@ class MarketDataCore:
                             ob["asks"].pop(p, None)
                         else:
                             ob["asks"][p] = q
+                    if config.DEPTH_CAPTURE_ENABLED:
+                        self._capture_depth_diff(msg, ob)   # tee AFTER applying — lossless per-diff record
             except Exception:
                 await asyncio.sleep(2)
             finally:
@@ -585,7 +663,7 @@ class MarketDataCore:
 
     # ------------------------------------------------------------------
     def start_tasks(self) -> list[asyncio.Task]:
-        return [
+        tasks = [
             asyncio.create_task(self.fetch_oi_loop()),
             asyncio.create_task(self.liquidations_stream()),
             asyncio.create_task(self.dynamic_stream()),
@@ -595,3 +673,6 @@ class MarketDataCore:
             asyncio.create_task(self.recompute_loop()),
             asyncio.create_task(self.live_edge_loop()),
         ]
+        if config.DEPTH_CAPTURE_ENABLED:   # Phase 1: full-book anchor cadence (the DepthStore sync loop is
+            tasks.append(asyncio.create_task(self.depth_snapshot_loop()))   # wired in daemon.serve())
+        return tasks

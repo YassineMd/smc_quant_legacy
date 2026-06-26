@@ -151,6 +151,16 @@ DATA_DIR = os.path.join(PROJECT_DIR, "data")
 FOOTPRINTS_FILE = os.path.join(DATA_DIR, "server_footprints.json")  # legacy JSON (migration source)
 HISTORY_DB = os.path.join(DATA_DIR, "history.db")  # SQLite state store (instant rehydration)
 
+# --- Bookmap-style depth/trade capture (Phase 1) — a SEPARATE, ephemeral 6h rolling store -------------
+# Lives in its own depth.db (own connection/sync/prune), fully decoupled from the durable bucket history.
+DEPTH_DB = os.path.join(DATA_DIR, "depth.db")
+DEPTH_CAPTURE_ENABLED = True    # master off-switch for the whole depth/trade capture subsystem
+DEPTH_BAND_PCT = 0.0            # capture band as ±% of mid; <=0 = WHOLE BOOK (no truncation, real fidelity)
+DEPTH_SNAPSHOT_SECS = 30        # full-book anchor cadence (+ one on every diff-stream reconnect)
+DEPTH_SYNC_SECS = 10            # off-loop executor write cadence (drain buffers -> depth.db)
+DEPTH_RETENTION_HOURS = 6       # HARD time-based prune: nothing older than this survives a sync
+DEPTH_BUFFER_CAP = 200000       # max buffered records per stream (drop-oldest) so a stalled write can't grow RAM
+
 FOOTPRINT_CAP = 10000           # main.py:291 — retention threshold per timeframe (on disk)
 FOOTPRINT_MEM_CAP = 300         # per-tf footprint nodes kept in RAM (>=2h for recalibrate)
 REHYDRATE_LIMIT = 1440          # main.py:248 — last 24h of entries per tf (legacy replay)

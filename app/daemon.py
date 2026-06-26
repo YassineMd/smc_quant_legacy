@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from . import config, persistence
+from .depth_store import DepthStore
 from .feeds import MarketDataCore
 from .protocol import CatchupChunkPacket
 
@@ -43,6 +44,8 @@ class DaemonServer:
         self.store = persistence.HistoryStore()
         self.footprints_db = self.store.bootstrap()
         self.core = MarketDataCore(self.footprints_db, self.broadcast_tf, self.broadcast_all)
+        # Phase 1: SEPARATE depth.db store — own connection/sync/prune, decoupled from the bucket history.
+        self.depth_store = DepthStore() if config.DEPTH_CAPTURE_ENABLED else None
 
     # ------------------------------------------------------------------
     # Broadcast fan-out (fire-and-forget)
@@ -156,6 +159,8 @@ class DaemonServer:
 
         self.core.start_tasks()
         asyncio.create_task(self.store.sync_loop(self.core))
+        if self.depth_store is not None:   # Phase 1: depth/trade rolling-window writer, its own loop + db
+            asyncio.create_task(self.depth_store.sync_loop(self.core))
 
         async with server:
             await server.serve_forever()
@@ -170,6 +175,8 @@ def main() -> None:
         print("\nDAEMON SHUTDOWN")
     finally:
         server.store.close(server.core)
+        if server.depth_store is not None:
+            server.depth_store.close()
         print("HISTORY DB FLUSHED + CLOSED.")
 
 
