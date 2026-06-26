@@ -19,9 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import multiprocessing
 import statistics
 import time
 from collections import deque
+from concurrent.futures import ProcessPoolExecutor
+from types import SimpleNamespace
 from typing import Callable, Dict, Optional
 
 import pandas as pd
@@ -53,6 +56,32 @@ def _combined_kline_url() -> str:
     return f"wss://fstream.binance.com/market/stream?streams={streams}"
 
 
+# ---------------------------------------------------------------------------
+# Step A — process-pool offload of the OB rescan. calc_quant_obs is O(obs×buckets)
+# (~3s on a 10k-bucket engine, the mitigation loop) and PURE: moving it off the
+# single asyncio loop onto a worker PROCESS (spawn, 2nd core) keeps the broadcast
+# loop from EVER blocking, regardless of timeframe (4h) or market speed. Fallback:
+# on ANY pool failure -> on-loop compute (the pre-offload freeze), permanently
+# after repeated failures — a broken pool degrades to today's behavior, never
+# "daemon down" and never thrash-recreating.
+# ---------------------------------------------------------------------------
+_OB_POOL_MAX_FAILS = 3   # after this many failures, latch permanently to on-loop (stable, no thrash)
+
+
+def _recompute_ob_line(buckets: list, tf_key: str, vpin: float) -> str:
+    """PURE (no shared state): OB rescan + absorption marks + ObPacket serialization over an IMMUTABLE bucket
+    snapshot. Runs ON the worker process (or on-loop as the fallback); the result is byte-IDENTICAL either way
+    (calc_quant_obs / calc_absorption only read the buckets). Proof: scripts/validate_ob_pool.py."""
+    obs = rank_obs(calc_quant_obs(SimpleNamespace(closed_buckets=buckets), tf_key))
+    return ObPacket(tf=tf_key, order_blocks=obs, absorptions=calc_absorption(buckets),
+                    new_buckets=[], vpin=vpin).to_line()
+
+
+def _ob_pool_warmup() -> bool:
+    """Trivial task to force the spawn worker to start at daemon boot (off the critical path)."""
+    return True
+
+
 class MarketDataCore:
     """Single point of contact for all external exchange data (spec §1.2.1)."""
 
@@ -67,6 +96,11 @@ class MarketDataCore:
         # is actually subscribed to. Without this the loop recomputes + serializes ALL 5 tfs every cycle —
         # the 1h/4h forming footprints are huge — starving the broadcast loop for seconds (the live-price lag).
         self._tf_subbed: Callable[[str], bool] = tf_has_subscribers or (lambda _tf: True)
+        # Step A: lazy spawn process pool for the OB rescan. _ob_pool_disabled latches True after
+        # _OB_POOL_MAX_FAILS failures -> permanent, stable on-loop fallback (no thrash, no worker leak).
+        self._ob_pool: Optional[ProcessPoolExecutor] = None
+        self._ob_pool_disabled = False
+        self._ob_pool_fails = 0
         self.engines: Dict[str, QuantEngine] = build_engine_registry()
         self.session = _make_session()
 
@@ -607,41 +641,86 @@ class MarketDataCore:
             return []
         return calc_absorption(eng.closed_buckets)
 
-    async def recompute_loop(self) -> None:
-        """Periodic recalibrate + OB rescan, DECOUPLED from per-close (Step 19.4).
+    # -- Step A: OB-rescan process pool (off-loop) + stable on-loop fallback ----
+    def _ensure_ob_pool(self) -> Optional[ProcessPoolExecutor]:
+        """A live spawn pool, or None to signal on-loop. Permanently None after _OB_POOL_MAX_FAILS failures."""
+        if self._ob_pool_disabled:
+            return None
+        if self._ob_pool is None:
+            try:
+                self._ob_pool = ProcessPoolExecutor(
+                    max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+            except Exception as e:
+                self._note_ob_pool_fail(f"create {type(e).__name__}: {e}")
+                return None
+        return self._ob_pool
 
-        Each engine's :meth:`_recompute_engine` runs as a single synchronous block, so
-        no consumer can observe a half-updated ``target_vol`` or a torn OB set. Yields
-        between engines so the full sweep never starves the socket drain, and
-        broadcasts the refreshed OB matrix for each timeframe.
+    def _note_ob_pool_fail(self, why: str) -> None:
+        """Tear down the broken pool (reaps the worker -> no process leak), count it, and PERMANENTLY degrade
+        to on-loop after _OB_POOL_MAX_FAILS — STABLE: it never thrash-recreates a doomed pool forever."""
+        pool, self._ob_pool = self._ob_pool, None
+        if pool is not None:
+            try:
+                pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+        self._ob_pool_fails += 1
+        if self._ob_pool_fails >= _OB_POOL_MAX_FAILS:
+            self._ob_pool_disabled = True
+            print(f"OB POOL permanently DISABLED after {self._ob_pool_fails} failures — recompute is now stable "
+                  f"on-loop (= pre-offload behavior; daemon stays up, no thrash). last: {why}")
+        else:
+            print(f"OB POOL failure {self._ob_pool_fails}/{_OB_POOL_MAX_FAILS} ({why}) — on-loop this cycle, retry next.")
+
+    async def _recompute_ob_line_async(self, loop, buckets: list, tf_key: str, vpin: float) -> str:
+        """Off-loop via the spawn pool when healthy; degrade to ON-LOOP (the pre-offload freeze) on ANY pool
+        failure — the daemon never goes down, worst case is exactly today's behavior."""
+        pool = self._ensure_ob_pool()
+        if pool is not None:
+            try:
+                return await loop.run_in_executor(pool, _recompute_ob_line, buckets, tf_key, vpin)
+            except Exception as e:
+                self._note_ob_pool_fail(f"{type(e).__name__}: {e}")
+        return _recompute_ob_line(buckets, tf_key, vpin)   # on-loop fallback
+
+    async def warm_ob_pool(self) -> None:
+        """Spawn the worker at daemon boot (off the critical path) so the first OB refresh isn't delayed."""
+        try:
+            loop = asyncio.get_event_loop()
+            pool = self._ensure_ob_pool()
+            if pool is not None:
+                await loop.run_in_executor(pool, _ob_pool_warmup)
+                print("OB POOL warm — worker process up (2nd core).")
+        except Exception as e:
+            self._note_ob_pool_fail(f"warm {type(e).__name__}: {e}")
+
+    async def recompute_loop(self) -> None:
+        """Periodic OB rescan, DECOUPLED from per-close (19.4) and run OFF the event loop (Step A).
+
+        The rescan is a PURE function of the closed buckets, so it runs on a worker PROCESS (the spawn pool,
+        2nd core) and NEVER blocks the broadcast loop — regardless of timeframe (4h) or market speed.
+        Subscription-gating + skip-if-unchanged in front (the pool is hit only on a real close); on ANY pool
+        failure it degrades to on-loop (the pre-offload behavior), permanently after repeated failures.
         """
+        loop = asyncio.get_event_loop()
         last_closed: Dict[str, int] = {}   # tf -> engine.total_closed at its last rescan
         while True:
             await asyncio.sleep(config.RECOMPUTE_SECS)
-            self._resize_engines()                 # median-anchored sizing for all tfs (one mechanism)
+            self._resize_engines()                 # median-anchored sizing for all tfs (light, on-loop)
             for tf_key in config.TIMEFRAMES:
                 if not self._tf_subbed(tf_key):    # nobody watching this tf -> skip the heavy rescan+serialize
                     continue
                 eng = self.engines[tf_key]
-                # The OB set + mitigation are a pure function of the CLOSED buckets, which only change when a
-                # bucket closes. The rescan is O(obs×buckets) (~3s on a 10k-bucket engine) and was re-running
-                # every cycle even though 1m closes only ~once/45s — 4 of 5 runs produced a byte-identical
-                # result while freezing the broadcast loop. Skip when nothing closed since the last rescan.
-                if last_closed.get(tf_key) == eng.total_closed:
+                if last_closed.get(tf_key) == eng.total_closed:   # nothing closed -> OB set unchanged, skip
                     continue
                 last_closed[tf_key] = eng.total_closed
                 try:
-                    obs = self._recompute_engine(tf_key)
-                    self.broadcast_tf(
-                        tf_key,
-                        ObPacket(tf=tf_key, order_blocks=obs,
-                                 absorptions=self._absorption_marks(tf_key),
-                                 new_buckets=[],
-                                 vpin=eng.vpin).to_line(),
-                    )
+                    buckets = list(eng.closed_buckets)   # IMMUTABLE snapshot ON the loop (cheap ref-copy)
+                    line = await self._recompute_ob_line_async(loop, buckets, tf_key, eng.vpin)
+                    self.broadcast_tf(tf_key, line)
                 except Exception as e:
                     print(f"RECOMPUTE ERROR ({tf_key}): {e}")
-                await asyncio.sleep(0)   # yield between engines — don't starve the drain
+                await asyncio.sleep(0)   # yield between engines (covers the on-loop fallback path)
 
     # ------------------------------------------------------------------
     # Live-edge refresh — sub-second forming bucket, decoupled from trades (19.3b)
@@ -691,6 +770,7 @@ class MarketDataCore:
             asyncio.create_task(self.pulse_broadcast_loop()),
             asyncio.create_task(self.recompute_loop()),
             asyncio.create_task(self.live_edge_loop()),
+            asyncio.create_task(self.warm_ob_pool()),   # Step A: spawn the OB worker at boot (off critical path)
         ]
         if config.DEPTH_CAPTURE_ENABLED:   # Phase 1: full-book anchor cadence (the DepthStore sync loop is
             tasks.append(asyncio.create_task(self.depth_snapshot_loop()))   # wired in daemon.serve())
