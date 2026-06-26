@@ -205,6 +205,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.eff_slider.changed.connect(self._on_eff_f_changed)
         self.eff_slider.hide()
         self._eff_sel_id = None        # identity of the live selection; on change -> re-seed adaptive default
+        self._sel_sig = None           # Fix 1: change-detection signature of the last selection refresh (skip
+                                       # the heavy recompute when nothing that affects the output changed)
         # SELECTION-SCOPED EXHAUSTION STRIP — two smoothed lines (blue bull / red bear gated exhaustion)
         # across the selected buckets, in a panel hanging below the selection; gold diamonds mark crossovers
         # (the exhausted side swaps). Persistent plot item; hidden when no selection. zValue 2 like the zones.
@@ -1204,6 +1206,66 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 lines.append(f"{span(flbl, gray)} {span(fv, fcol)}")
         return lines
 
+    @staticmethod
+    def _selection_signature(rect, filtered: list, lo_i: int, hi_i: int,
+                             toggles: tuple, sliders: tuple, tv: float, vpin_window: int) -> tuple:
+        """Fix 1 change-detection key: everything the selection readout's OUTPUT depends on. Two frames with
+        an equal signature produce bit-for-bit identical overlays, so the heavy recompute can be skipped.
+
+        The closed buckets in [lo_i, hi_i] are immutable, so only the LIVE EDGE can change them — and it only
+        affects this selection's output when (a) the selection TOUCHES the live edge, or (b) the adaptive-VPIN
+        baseline is active (``window_vpin_samples`` non-empty, i.e. n_sel <= min(vpin_window, n_all)), since
+        that baseline's last sample is the live edge. When neither holds, the live edge is irrelevant and is
+        dropped from the key — so a static selection that doesn't touch the live edge gets a STABLE key across
+        ticks and is skipped (provably exact: identical inputs -> identical output). ``rect`` values are kept
+        EXACT (no rounding) so a real geometry change can never collide with a skip."""
+        n_all = len(filtered)
+        n_sel = hi_i - lo_i + 1
+        touches_live = hi_i >= n_all - 1
+        vpin_active = (min(vpin_window, n_all) >= n_sel) and (tv > 0)
+        if touches_live or vpin_active:
+            lb = filtered[-1]                              # the live edge (last bucket); its mutable scalars
+            live_fp = (lb.get("curr_vol", 0.0), lb.get("buy_vol", 0.0), lb.get("sell_vol", 0.0),
+                       lb.get("opL", 0.0), lb.get("opS", 0.0), lb.get("clL", 0.0), lb.get("clS", 0.0),
+                       lb.get("open", 0.0), lb.get("close", 0.0), lb.get("high", 0.0), lb.get("low", 0.0))
+        else:
+            live_fp = None
+        return (tuple(rect), n_all, lo_i, hi_i, touches_live, live_fp, toggles, sliders, tv)
+
+    def _reposition_sel_box(self, rect) -> None:
+        """Place the screen-space stats box + the two zone sliders at a free selection corner. View-dependent
+        and CHEAP, so it runs every frame (even when the heavy compute is skipped) — keeps the box glued to the
+        selection while the chart pans / follows the live edge."""
+        x0, y0, x1, y1 = rect
+
+        def to_self(dx, dy):
+            sc = self.vb.mapViewToScene(QtCore.QPointF(float(dx), float(dy)))
+            return self.mapFromGlobal(self.plot.mapToGlobal(self.plot.mapFromScene(sc)))
+        p1, p2 = to_self(x0, y1), to_self(x1, y0)   # the selection's screen-space rect
+        sx0, sx1 = min(p1.x(), p2.x()), max(p1.x(), p2.x())
+        sy0, sy1 = min(p1.y(), p2.y()), max(p1.y(), p2.y())
+        if self.show_sel_stats:                # 'h' toggles ONLY the box; overlays above already drawn
+            bx, by = self._best_box_pos(sx0, sy0, sx1, sy1,
+                                        self.sel_stats.width(), self.sel_stats.height())
+            self.sel_stats.move(bx, by)
+            self.sel_stats.show_raise()
+            # the two zone-threshold sliders ride STACKED (absorption above eff-agg) just under the box;
+            # if the pair would run off the bottom, stack them ABOVE the box instead (same order).
+            gap, sh = 3, self.zone_slider.height()
+            below_zone = by + self.sel_stats.height() + gap
+            if below_zone + 2 * sh + gap <= self.height():
+                zone_y = below_zone
+            else:
+                zone_y = max(0, by - gap - sh - (sh + gap))   # pair above the box, zone on top
+            self.zone_slider.move(bx, zone_y)
+            self.zone_slider.show(); self.zone_slider.raise_()
+            self.eff_slider.move(bx, zone_y + sh + gap)
+            self.eff_slider.show(); self.eff_slider.raise_()
+        else:
+            self.sel_stats.hide()
+            self.zone_slider.hide()
+            self.eff_slider.hide()
+
     def _refresh_selection_stats(self) -> None:
         """Live Magic-Selection readout: aggregate the buckets inside the box + show the stats box.
         Runs each frame, so a selection reaching the live edge updates as buckets form."""
@@ -1226,6 +1288,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _ly in self.bc_phase.values():
                 _ly.setVisible(False)
             self._panel_hovers = []
+            self._sel_sig = None        # Fix 1: hidden -> force a full recompute when a selection returns
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -1246,9 +1309,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _ly in self.bc_phase.values():
                 _ly.setVisible(False)
             self._panel_hovers = []
+            self._sel_sig = None        # Fix 1: hidden -> force a full recompute when a selection returns
             return
         x0, y0, x1, y1 = rect
         tv = (self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL
+        # Fix 1 — change-detection: skip the entire heavy recompute when nothing that affects the output
+        # changed since last frame (only the cheap view-follow box reposition still runs). lo_i/hi_i match
+        # _aggregate_selection's exactly, so the signature is computed before the aggregate's O(N) work too.
+        n_all = len(filtered)
+        lo_i = max(0, int(math.ceil(x0))); hi_i = min(n_all - 1, int(math.floor(x1)))
+        if hi_i >= lo_i:
+            sig = self._selection_signature(
+                rect, filtered, lo_i, hi_i,
+                (self.show_abs_strip, self.show_eff_strip, self.show_er_strip, self.show_exh_strip,
+                 tuple(self.show_phase[p] for p in self._PHASES), self.show_state, self.show_sel_stats),
+                (self.zone_slider.value_s(), self.eff_slider.value_s()), tv, config.VPIN_ADAPT_WINDOW)
+            if sig == self._sel_sig:
+                self._reposition_sel_box(rect)   # reuse last frame's overlays; just keep the box glued
+                return
+            self._sel_sig = sig
+        else:
+            self._sel_sig = None
         agg = self._aggregate_selection(filtered, x0, y0, x1, y1, tv)
         if not agg:
             self.sel_stats.hide()
@@ -1268,6 +1349,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _ly in self.bc_phase.values():
                 _ly.setVisible(False)
             self._panel_hovers = []
+            self._sel_sig = None        # Fix 1: hidden -> force a full recompute when a selection returns
             return
         # classify the region with the SAME 12-state engine the per-bucket box uses (only when the
         # STATE lines are visible — 'y' toggles; hidden by default), then size the box and place it
@@ -1552,34 +1634,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._selection_stat_lines(agg, state, conf, dbg, vtier,
                                        spark_op, spark_cl, flip,
                                        (abs_bull, abs_bear), (eff_bull, eff_bear)), "")
-
-        def to_self(dx, dy):
-            sc = self.vb.mapViewToScene(QtCore.QPointF(float(dx), float(dy)))
-            return self.mapFromGlobal(self.plot.mapToGlobal(self.plot.mapFromScene(sc)))
-        p1, p2 = to_self(x0, y1), to_self(x1, y0)   # the selection's screen-space rect
-        sx0, sx1 = min(p1.x(), p2.x()), max(p1.x(), p2.x())
-        sy0, sy1 = min(p1.y(), p2.y()), max(p1.y(), p2.y())
-        if self.show_sel_stats:                # 'h' toggles ONLY the box; overlays above already drawn
-            bx, by = self._best_box_pos(sx0, sy0, sx1, sy1,
-                                        self.sel_stats.width(), self.sel_stats.height())
-            self.sel_stats.move(bx, by)
-            self.sel_stats.show_raise()
-            # the two zone-threshold sliders ride STACKED (absorption above eff-agg) just under the box;
-            # if the pair would run off the bottom, stack them ABOVE the box instead (same order).
-            gap, sh = 3, self.zone_slider.height()
-            below_zone = by + self.sel_stats.height() + gap
-            if below_zone + 2 * sh + gap <= self.height():
-                zone_y = below_zone
-            else:
-                zone_y = max(0, by - gap - sh - (sh + gap))   # pair above the box, zone on top
-            self.zone_slider.move(bx, zone_y)
-            self.zone_slider.show(); self.zone_slider.raise_()
-            self.eff_slider.move(bx, zone_y + sh + gap)
-            self.eff_slider.show(); self.eff_slider.raise_()
-        else:
-            self.sel_stats.hide()
-            self.zone_slider.hide()
-            self.eff_slider.hide()
+        self._reposition_sel_box(rect)   # place the screen-space box + sliders (also runs on the skip path)
 
     def _update_flip_line(self, flip, lo_i: int, rect) -> None:
         """Draw/refresh the balance-flip vline at the flip bucket, spanning the selection's y-band. TWO
