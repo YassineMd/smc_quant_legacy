@@ -885,7 +885,17 @@ runs on a SPAWN worker PROCESS (2nd core) — the broadcast loop NEVER blocks du
 - **Verified LIVE:** 1m max gap 0.68s (depth-flush only — recompute freezes GONE); **4h test** — a fresh 4h
   subscriber's 50831B rescan ran with NO loop gap (where Fix 1+2 froze seconds); worker on 2nd core ~7% CPU;
   daemon main-loop CPU **~70% → ~14%**.
-- **Next: Step A.2** (depth-flush pack-at-capture), then **Step B = Phase 3 trade bubbles**.
+- **✅ Step A.2 DONE (`572a7a5`, deployed+verified):** the ~0.8s/10s residual was NOT the depth-flush packing
+  (measured 4ms — red herring, caught by MEASURING). REAL cause: the HISTORY sync's `prepare()` ran
+  `calc_quant_obs` ×5 ON the loop every `SYNC_INTERVAL_SECS=10` to populate the **write-only** `order_blocks`
+  table (never SELECTed; rehydrate recomputes via catchup). Fix: `obs=[]`. Proven write-only + rehydrate
+  byte-identical (`scripts/validate_rehydrate_no_obs.py`); verified live: 0.8s/10s gap GONE, max loop gap now
+  **~0.35s**. Recompute fully off-loop in BOTH places (recompute_loop pool + history-sync dropped).
+- **Residual levers (small):** (1) **OI poll** = sync `requests.get` ON the loop every `OI_POLL_SECS=5` (~0.28s)
+  → the ~0.28s/5s hitch; fix = executor. (2) **OB-pool graceful shutdown** — Step A's spawn pool isn't closed on
+  SIGTERM → benign multiprocessing semaphore double-unlink warnings on restart (no leak/data-loss); fix =
+  `pool.shutdown()` in daemon shutdown.
+- **Next: Step B = Phase 3 trade bubbles** (optionally polish the two residuals first).
 
 **⚠️ VERDICT — the balance-of-power SCORE/strategy is DESCRIPTIVE, not predictive (settled; don't rebuild as a
 signal).** Hypothesis "move begins when absorption low + eff-agg/E-R high" tested exhaustively, all CAUSAL +

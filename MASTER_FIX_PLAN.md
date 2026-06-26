@@ -1049,7 +1049,19 @@ NEVER blocks during recompute, any timeframe, any market speed.
 - **Verified LIVE:** 1m max loop gap 0.68s (depth-flush only — recompute freezes GONE); the **4h test** (the
   structural proof where Fix 1+2 would have failed) — a fresh 4h subscriber's heavy rescan (50831B OB matrix)
   ran with NO pulse/tick gap around it; worker on the 2nd core (~7% CPU); daemon main-loop CPU **~70% → ~14%**.
-- **Next: Step A.2** = kill the ~0.68s/10s depth-flush hitch (pack deltas at capture time), then **Step B = Phase 3 bubbles**.
+- **✅ Step A.2 DONE (`572a7a5`, deployed+verified):** the ~0.8s/10s residual was NOT the depth-flush packing
+  (measured **4ms** — a red herring caught by MEASURING; pack-at-capture would've been a no-op). REAL cause: the
+  HISTORY-store sync's `prepare()` ran `calc_quant_obs` ×5 ON the loop every `SYNC_INTERVAL_SECS=10` to populate
+  the **write-only** `order_blocks` table (never SELECTed in production; rehydrate recomputes via catchup). Fix:
+  `obs=[]` (drop the rescan + the dead write). Proven write-only (whole-repo grep) + rehydrate byte-identical
+  (`scripts/validate_rehydrate_no_obs.py`). Verified live: 0.8s/10s gap **GONE, max loop gap now ~0.35s**.
+  Recompute is now fully off-loop in BOTH places (recompute_loop pool + history sync dropped).
+- **Residual latency levers (small):** (1) **OI poll** — `fetch_oi_loop` does a SYNC `requests.get` ON the loop
+  every `OI_POLL_SECS=5` (~0.28s) → the ~0.28s/5s hitch; fix = run it in an executor. (2) **OB-pool graceful
+  shutdown** — Step A's spawn pool isn't closed on SIGTERM → benign multiprocessing semaphore double-unlink
+  warnings on restart (no leak / no data loss; new daemon rehydrates fine); fix = `pool.shutdown()` in the
+  daemon shutdown path.
+- **Next: Step B = Phase 3 bubbles** (optionally polish the two small residuals first).
 
 **⚠️ INVESTIGATION VERDICT (the balance-of-power "score" / strategy — settled, do NOT rebuild as a predictor).**
 The operator's hypothesis ("a move begins when absorption is low + eff-agg & E/R high") was stress-tested
