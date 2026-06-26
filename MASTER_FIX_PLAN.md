@@ -923,6 +923,28 @@ all of this session's panel work is now in the exe.
   otherwise selection-pure (PROVEN: slice computation == isolated-copy, and differs from the leaky full-list
   version on the early buckets). **EXE stale again** (not in the `a2efc72` exe).
 
+**Mode-10 selection PERF pass — 5 correctness-preserving fixes (`3b176e6`→`a89a2fd`).** Goal: faster by removing
+REDUNDANT work, never by approximating — values bit-for-bit identical (proven-negligible epsilon only for Fix 4).
+Profiled FIRST on real data; the theorized ranking was revised — `rolling_share`'s O(N²) is real but small (~12%
+of the phase block); the bigger costs are the trailing-50 norm re-sums and the per-bucket exp/log posteriors
+(`conf_traj`, ~26ms@N=800, NOT optimised); the worst single fn (gated `selection_exhaustion`, 127ms@800) is a
+MEASURE panel so Fix 0 removes it from the default session.
+- **Fix 0 (`3b176e6`)** — 4 MEASURE panels default OFF, 3 phase panels stay ON. No value change.
+- **Fix 1 (`b626526`)** — change-detection gate (`_selection_signature`). Skips the heavy recompute when nothing
+  affecting the output changed; only the box reposition still runs each frame (view-follow). The live edge is in
+  the key ONLY when the selection touches it OR the adaptive-VPIN baseline is active, so a static selection away
+  from the edge skips EXACTLY (validated: outputs bit-identical across a live tick). Static big selection: was
+  117ms×20Hz, now ~0.
+- **Fix 4 (`a9c2669`)** — O(N) PREFIX SUMS for the trailing-50 norm + `rolling_share`. `_absorption_core` shares
+  the O(1) tail so `absorption_vol` stays bit-exact (hover path). NUMERICAL PROOF: max abs diff 2.4e-10 (~1 ULP
+  on volumes), share diff 2.7e-15, zero/branch preserved, displayed share % 0/4278 mismatches. 4.5×/4.7×/3×.
+- **Fix 3 (`a814a4a`)** — `eff_agg_from_absorption` reuses absorption's `s` (the 3 absorption passes use DIFFERENT
+  norms — full/pure/ext — so they don't merge; s-reuse is the safe de-dup). BIT-IDENTICAL (0.0).
+- **Fix 2 (`a89a2fd`)** — phase block gated on `any(show_phase)`; phase panels off → zero phase work (table
+  follows the panels). Default session byte-identical (block body unchanged).
+- **Result:** static selection ~0; per-recompute ~1.7–1.9× (27→16 / 49→29 / 117→61ms @ N=200/400/800). Largest
+  residual = `conf_traj` exp/log posteriors (O(N)). Suite 9/9 (2 fails pre-exist at HEAD, unrelated). **EXE stale.**
+
 **⚠️ INVESTIGATION VERDICT (the balance-of-power "score" / strategy — settled, do NOT rebuild as a predictor).**
 The operator's hypothesis ("a move begins when absorption is low + eff-agg & E/R high") was stress-tested
 exhaustively, all CAUSAL / out-of-sample / base-rate-guarded:

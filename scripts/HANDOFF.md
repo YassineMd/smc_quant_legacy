@@ -747,6 +747,31 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
   table/panels are the `[lo,hi]` slice, inputs otherwise selection-pure (PROVEN: slice==isolated-copy; differs
   from the leaky full-list on the early buckets). **EXE still stale** (none of this is in the `a2efc72` build).
 
+**Mode-10 selection PERF pass — 5 correctness-preserving fixes (`3b176e6`→`a89a2fd`).** Profiled first on real
+data (N=200/400/800); the theory was REVISED: `rolling_share`'s O(N²) is real but small (~12% of the phase
+block); the bigger costs are the trailing-50 norm re-sums and the per-bucket exp/log posteriors (`conf_traj`,
+~26ms@800, UNoptimised); the single worst fn (gated `selection_exhaustion`, 127ms@800) is a MEASURE panel.
+- **Fix 0 (`3b176e6`):** the 4 MEASURE panels default OFF (phase panels stay ON) — removes the exhaustion
+  classifier from the default session. No value change.
+- **Fix 1 (`b626526`):** change-detection gate on `_refresh_selection_stats` (`_selection_signature`, a pure
+  staticmethod). Skips the heavy recompute when nothing affecting the output changed; only the cheap box
+  reposition still runs. Live edge is in the key ONLY when the selection touches it OR the adaptive-VPIN
+  baseline is active — so a static selection away from the edge is skipped EXACTLY (proven: outputs bit-
+  identical across a live tick). **Static big selection: 117ms×20Hz → ~0.**
+- **Fix 4 (`a9c2669`):** O(N) PREFIX SUMS for the trailing-50 norm (`absorption_series`/`eff_agg_series`) and
+  `rolling_share` (was O(N·50)/O(N²)). `_absorption_core` is the shared O(1) tail (so `absorption_vol` stays
+  bit-exact for the hover path). PROVEN negligible epsilon: max abs diff 2.4e-10 on volumes (~1 ULP), share
+  diff 2.7e-15, zero/branch preserved, **displayed share % 0/4278 mismatches** (pixel-identical). 4.5×/4.7×/3×.
+- **Fix 3 (`a814a4a`):** `eff_agg_from_absorption` reuses the absorption `s` instead of re-deriving it (the 3
+  absorption passes have DIFFERENT norms — full/pure/ext — so they can't merge; the s-reuse is the safe win).
+  BIT-IDENTICAL (max diff 0.0).
+- **Fix 2 (`a89a2fd`):** the phase block is gated on `any(show_phase)` — turning the phase panels off now does
+  ZERO phase work (the table follows the panels). Block body unchanged → default session byte-identical.
+- **Result:** static selection ~0; per-recompute (live-edge/drag) ~1.7–1.9× (27→16 / 49→29 / 117→61ms). The
+  `conf_traj` exp/log posteriors are the largest remaining residual (O(N), not quadratic). **EXE still stale.**
+  Suite 9/9 (2 pre-existing fails: stale `_exh_z_mult` import in test_step5, removed `recalibrate` API in
+  test_step19_4 — both fail at HEAD, unrelated).
+
 **⚠️ VERDICT — the balance-of-power SCORE/strategy is DESCRIPTIVE, not predictive (settled; don't rebuild as a
 signal).** Hypothesis "move begins when absorption low + eff-agg/E-R high" tested exhaustively, all CAUSAL +
 base-rate-guarded: direction not predictable (eff-agg only *describes* the move ≈ tautology; abs/E-R ~chance;
