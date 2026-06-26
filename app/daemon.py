@@ -233,6 +233,10 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nDAEMON SHUTDOWN")
     finally:
+        try:
+            server.core.shutdown_ob_pool()   # tear the spawn pool down cleanly (no semaphore warnings); bounded
+        except Exception as e:
+            print(f"OB POOL SHUTDOWN ERROR: {e}")
         server.store.close(server.core)
         if server.depth_store is not None:
             server.depth_store.close()

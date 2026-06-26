@@ -699,6 +699,21 @@ class MarketDataCore:
         except Exception as e:
             self._note_ob_pool_fail(f"warm {type(e).__name__}: {e}")
 
+    def shutdown_ob_pool(self, timeout: float = 5.0) -> None:
+        """Tear the OB process pool down cleanly on daemon shutdown so multiprocessing doesn't double-unlink
+        its named semaphores (the FileNotFoundError / 'leaked semaphore' warnings on restart). BOUNDED by a
+        timeout in a daemon thread, so a worker stuck mid-recompute can NEVER block SIGTERM handling — if it
+        exceeds the bound we leave the OS to reap and let the restart proceed."""
+        pool, self._ob_pool = self._ob_pool, None
+        self._ob_pool_disabled = True   # don't let anything recreate it during shutdown
+        if pool is None:
+            return
+        import threading
+        t = threading.Thread(target=lambda: pool.shutdown(wait=True), daemon=True)
+        t.start(); t.join(timeout)
+        print("OB POOL shut down cleanly." if not t.is_alive()
+              else f"OB POOL shutdown exceeded {timeout}s — leaving to OS reap (restart not blocked).")
+
     async def recompute_loop(self) -> None:
         """Periodic OB rescan, DECOUPLED from per-close (19.4) and run OFF the event loop (Step A).
 
