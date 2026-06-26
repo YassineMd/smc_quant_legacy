@@ -970,7 +970,7 @@ loop / transactions / prune — deletable without touching the durable bucket `h
   still firing post-deploy (`closed_buckets` grew, `engine_state` fresh ~10s); no regression. **The 6h
   depth+trade rolling window is now LIVE — the foundation for Phase 2.**
 
-**🟢 HEATMAP Phase 2a — `depth_window` daemon endpoint (`1b339ab`, built+validated; deploy next).** The terminal
+**🟢 HEATMAP Phase 2a — `depth_window` daemon endpoint (`1b339ab`, ✅ DEPLOYED + VERIFIED on `smc-quant-eu`).** The terminal
 can't read the VM's depth.db directly (tunnel = IPC frames only), so the daemon serves heatmap windows.
 `protocol`: `depth_window` request → `DepthWindowPacket` (W×H base64 float32 grid of RAW resting size + per-col
 BBO) + `DepthColumnPacket` live column. `depth_store.build_window` = one forward pass O(deltas), `mode=ro`,
@@ -985,8 +985,12 @@ routes off-loop + `depth_live_loop` pushes live columns to subscribers.
 - **PERF (accepted, Option 1):** O(deltas), ~357ms/35min, ~3.6s/6h — OFF-LOOP so no daemon lag; 2b lazy-loads a
   recent window + fetches older on scroll, so the 6h cold build is never paid up front. Not C-optimized (no VM
   build dep for a one-time cold open). Read-only, suite 9/9.
-- **Next: deploy 2a + verify on VM, then 2b** (terminal render: scanner-mode-gated, defaults recent + lazy-loads
-  older, log+LUT+cutoff contrast, BBO lines, greyscale), **Phase 3 bubbles.**
+- **✅ DEPLOYED + VERIFIED (2026-06-26):** the DEPLOYED build_window is BIT-FAITHFUL on the VM's live depth.db
+  (== independent reconstruct, **max rel 0.0, BBO exact** — snapshot-reanchor holds in production), read-only
+  confirmed, capture/closes still flowing (engine_state ~4s fresh), no regression. VM perf ~1085ms/0.95h, ~7s/6h
+  cold (e2-standard-2) — off-loop + 2b lazy-loads, so rarely paid.
+- **Next: 2b** (terminal render: scanner-mode-gated, defaults recent + lazy-loads older, log+LUT+cutoff contrast,
+  BBO lines, greyscale), **Phase 3 bubbles.**
 
 **⚠️ INVESTIGATION VERDICT (the balance-of-power "score" / strategy — settled, do NOT rebuild as a predictor).**
 The operator's hypothesis ("a move begins when absorption is low + eff-agg & E/R high") was stress-tested

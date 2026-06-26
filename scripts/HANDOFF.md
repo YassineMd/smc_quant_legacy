@@ -823,9 +823,15 @@ routes it off-loop + `depth_live_loop` pushes live columns to `client.heatmap` s
   daemon; 2b LAZY-LOADS a recent window (~0.35-0.7s) + fetches older columns on scroll, so the 6h cold build is
   never paid up front. Live column 0.22ms. NOT made faster via C (won't add a VM build dep for a one-time cold
   open). Isolation: read-only (db mtime unchanged), suite 9/9.
-- **Next: deploy 2a to the VM + verify (correctness spot-check on live depth.db, capture/closes flow, no
-  regression), then Phase 2b** = the terminal heatmap render (scanner-mode-gated, defaults to a recent window +
-  lazy-loads older, log+LUT+cutoff contrast, BBO lines, greyscale toggle); **Phase 3 = trade-bubbles overlay.**
+- **✅ DEPLOYED + VERIFIED LIVE on `smc-quant-eu` (2026-06-26).** Clean restart (REHYDRATE 22116 → LISTENING).
+  The DEPLOYED `build_window` is BIT-FAITHFUL on the VM's real depth.db: == independent reconstruct, **max rel
+  diff 0.0, BBO exact** every column — the snapshot-reanchor holds in production. Read-only confirmed (db mtime
+  unchanged by a build); capture/closes still flowing (`engine_state` written ~4s ago, depth deltas growing,
+  last delta ~5s ago); no regression. The `depth_window` endpoint is LIVE serving correct windows. **VM perf:
+  ~1085ms/0.95h, ~7s for a 6h cold build (e2-standard-2 ~2× my local) — OFF-LOOP + 2b lazy-loads a recent
+  window, so the 6h cold build is rarely paid.**
+- **Next: Phase 2b** = the terminal heatmap render (scanner-mode-gated, defaults to a recent window + lazy-loads
+  older on scroll, log+LUT+cutoff contrast, BBO lines, greyscale toggle); **Phase 3 = trade-bubbles overlay.**
 
 **⚠️ VERDICT — the balance-of-power SCORE/strategy is DESCRIPTIVE, not predictive (settled; don't rebuild as a
 signal).** Hypothesis "move begins when absorption low + eff-agg/E-R high" tested exhaustively, all CAUSAL +
