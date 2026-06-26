@@ -160,6 +160,15 @@ DEPTH_SNAPSHOT_SECS = 30        # full-book anchor cadence (+ one on every diff-
 DEPTH_SYNC_SECS = 10            # off-loop executor write cadence (drain buffers -> depth.db)
 DEPTH_RETENTION_HOURS = 6       # HARD time-based prune: nothing older than this survives a sync
 DEPTH_BUFFER_CAP = 200000       # max buffered records per stream (drop-oldest) so a stalled write can't grow RAM
+# Phase 2b — terminal heatmap render (the daemon serves raw sizes; these shape the request + local contrast)
+HEATMAP_YBINS = 400             # price bins (Y resolution) requested per window
+HEATMAP_BAND_PCT = 2.0          # price band shown = +- this % of mid (the visible Y range)
+HEATMAP_RECENT_MINS = 45        # cold-open window = the last N minutes (fast first paint, ~0.4-0.7s)
+HEATMAP_MAX_COLS = 1400         # cap on requested time-columns (≈ viewport pixel width)
+HEATMAP_RENORM_SECS = 60        # re-sample the loaded grid's contrast this often (stable -> no flicker)
+HEATMAP_LO_PCT = 98.9           # lower cutoff percentile: default VERY HIGH so only the strongest liquidity
+#                                 shows first (a clean view); drag the slider down to reveal more.
+HEATMAP_HI_PCT = 99.4           # upper cutoff percentile (sizes >= this -> max color; caps the $60-wall washout)
 
 FOOTPRINT_CAP = 10000           # main.py:291 — retention threshold per timeframe (on disk)
 FOOTPRINT_MEM_CAP = 300         # per-tf footprint nodes kept in RAM (>=2h for recalibrate)

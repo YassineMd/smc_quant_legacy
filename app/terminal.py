@@ -23,11 +23,16 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from datetime import datetime
 from typing import List, Optional
 
+import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
+
+from .heatmap import (HeatmapCache, decode_col, decode_grid,
+                      neon_diverging_lut, percentile_levels)
 
 from . import bucket_state, config, region_state, vpin_adaptive
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
@@ -42,7 +47,7 @@ from .drawing_tools import DrawingController, DrawingToolbar
 from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visible
 from .hamburger import FloatingOverlayMenu, HamburgerButton, scale_label
 from .pipe_client import PipeClientWorker
-from .stats_overlay import AbsorptionZoneSlider, EffAggZoneSlider, StatsOverlay
+from .stats_overlay import AbsorptionZoneSlider, EffAggZoneSlider, HeatmapContrastBar, StatsOverlay
 
 _OPEN_WINDOWS: List["MinimalTerminalWindow"] = []
 _TUNNEL: "Optional[SSHTunnelManager]" = None   # set in main(); the refresh button relaunches a dead tunnel
@@ -263,6 +268,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.price_tag.setZValue(16)            # above the crosshair (z=15)
         self.plot.addItem(self.price_tag, ignoreBounds=True)
         self.price_tag.hide()
+        # X-axis TIME tag at the crosshair — heatmap mode only (x = epoch seconds -> HH:MM:SS, matching the
+        # LocalTimeAxis). Anchored bottom-centre so it sits just above the time axis at the cursor's X.
+        self.time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self.time_tag.textItem.setFont(_ptf)
+        self.time_tag.setZValue(16)
+        self.plot.addItem(self.time_tag, ignoreBounds=True)
+        self.time_tag.hide()
         # Mode-10 DOM hover-volume tooltip: the color-matched size of the depth wall
         # nearest the cursor (green=bid / red=ask). Driven by _hover_dom_wall. Anchor
         # (0, 1.0) = bottom-left at the point, so the text sits ABOVE the wall line it
@@ -325,6 +337,47 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_exh_strip = False  # Mode-10 selection exhaustion panel HIDDEN by default ('4' toggles) — slot 4
         # NOTE: the 3 PHASE panels (5/6/7) stay ON by default (show_phase[...] = True above); the 4 MEASURE
         # panels above default OFF — so the default session computes only the always-on zones + the phase path.
+        # ── Phase 2b: depth/liquidity HEATMAP (scanner mode "depth_heatmap"). The ImageItem + BBO lines live on
+        # the main plot but are HIDDEN/empty in every other mode (zero cost), and the ~MB grid is pulled only via
+        # worker.depth_heatmap_state() while this mode is active — it NEVER enters the 20Hz snapshot(). ──
+        self.hm_img = pg.ImageItem(axisOrder="col-major")   # array[col=time][bin=price] -> x=time, y=price
+        self.hm_img.setZValue(1); self.hm_img.setVisible(False)
+        self.plot.addItem(self.hm_img, ignoreBounds=True)
+        # BBO trace colors MATCH the liquidity palette: best-bid = neon GREEN (buy side), best-ask = neon
+        # PURPLE (sell side).
+        _HM_GREEN = (0, 255, 110); _HM_PURPLE = (190, 70, 255)
+        self.hm_bid_line = pg.PlotDataItem(pen=pg.mkPen(_HM_GREEN, width=2))   # best-bid @ its price (y)
+        self.hm_ask_line = pg.PlotDataItem(pen=pg.mkPen(_HM_PURPLE, width=2))  # best-ask @ its price (y)
+        for _l in (self.hm_bid_line, self.hm_ask_line):
+            _l.setZValue(20); _l.setVisible(False); self.plot.addItem(_l, ignoreBounds=True)   # above the image
+        # CURRENT bid/ask: DASHED segments projecting FORWARD from the live edge to the right (the un-formed
+        # future), so past 'now' you see only these dashed lines; they connect to where the solid (formed)
+        # trace ends. Plus Y-axis price tags (Bookmap LLT-style).
+        self.hm_bid_dash = pg.PlotDataItem(pen=pg.mkPen(_HM_GREEN, width=1, style=QtCore.Qt.DashLine))
+        self.hm_ask_dash = pg.PlotDataItem(pen=pg.mkPen(_HM_PURPLE, width=1, style=QtCore.Qt.DashLine))
+        for _l in (self.hm_bid_dash, self.hm_ask_dash):
+            _l.setZValue(19); _l.setVisible(False); self.plot.addItem(_l, ignoreBounds=True)
+        self.hm_bid_axtag = pg.TextItem(anchor=(1, 0.5), color="#03200b", fill=pg.mkBrush(*_HM_GREEN))
+        self.hm_ask_axtag = pg.TextItem(anchor=(1, 0.5), color="#1a0330", fill=pg.mkBrush(*_HM_PURPLE))
+        for _t in (self.hm_bid_axtag, self.hm_ask_axtag):
+            _t.textItem.setFont(_ptf); _t.setZValue(21); self.plot.addItem(_t, ignoreBounds=True); _t.hide()
+        self._hm_lut = None; self._hm_lut_key = None; self.hm_grey = False   # diverging LUT, (re)built on contrast
+        self.hm_cache = HeatmapCache()
+        self.hm_levels: "Optional[tuple]" = None   # (lo,hi) raw-size cutoffs (auto p20/p99 + 60s renorm)
+        self._hm_sizes = None                       # sorted nonzero sizes of the loaded grid (pctile->size map)
+        self.hm_manual = False                     # True once the user drags a cutoff slider (auto-renorm pauses)
+        self.hm_contrast = HeatmapContrastBar(self, config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
+        self.hm_contrast.changed.connect(self._hm_contrast_changed)
+        self.hm_contrast.reset_clicked.connect(self._hm_contrast_reset)
+        self.hm_contrast.hide()
+        self.hm_renorm_t = 0.0
+        self.hm_band: "Optional[tuple]" = None      # (ylo,yhi) currently loaded price band
+        self.hm_floor_ms = 0                         # hard left-time boundary (Scan Start) — no data before it
+        self.hm_pending: "Optional[str]" = None     # role of the next depth_window response: 'reset'|'prepend'
+        self.hm_last_view: "Optional[tuple]" = None
+        self.hm_follow = True                       # track the live edge (smooth view-follow); off on manual pan
+        self._hm_debounce = QtCore.QTimer(self); self._hm_debounce.setSingleShot(True)
+        self._hm_debounce.setInterval(130); self._hm_debounce.timeout.connect(self._hm_request_visible)
         self._flip_line = None    # Mode-10 balance-flip overlay (dashed yellow vline + sustain% label)
         self._flip_label = None
         self._forming_line = None   # tentative "forming" overlay (dim dotted amber + 'unconfirmed' label)
@@ -394,6 +447,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("Y"), self, activated=self._toggle_states)
         # 'v' = abnormal-velocity DIAMONDS (the 2px border is always on); drawing-cancel moved to Escape
         QtGui.QShortcut(QtGui.QKeySequence("V"), self, activated=self._toggle_vel_abn)
+        # 'g' = greyscale toggle for the Liquidity Heatmap (depth_heatmap mode only)
+        QtGui.QShortcut(QtGui.QKeySequence("G"), self, activated=self._toggle_heatmap_grey)
         # 'h' = show/hide the Mode-10 Magic-Selection stats box (chart overlays like the flip line stay)
         QtGui.QShortcut(QtGui.QKeySequence("H"), self, activated=self._toggle_sel_stats)
         # Mode-10 selection panels, STACKED below the box in this order: 1 ABSORPTION, 2 EFF-AGG, 3 E/R, 4 EXHAUSTION
@@ -460,6 +515,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         prev_mode = self.scanner_mode
         self.scanner_mode = mode
         self.clear_scanner_canvas()   # teardown first
+        if prev_mode == "depth_heatmap":
+            self._hm_exit()           # Phase 2b: tear down the heatmap (unsubscribe live push, free grid)
         # §6.2 — index-space drawings are session-only + index-anchored. Keep them in memory for the
         # whole session: SHOW on Mode 10, HIDE on the metric scanners (where a price-anchored shape is
         # off-axis), restore on return — so drawings survive every mode switch AND scan-time change.
@@ -490,6 +547,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.scan_time_edit.setDateTime(QtCore.QDateTime.currentDateTime().addSecs(_anchor_secs))
         self.menu.scan_time_edit.blockSignals(False)
         # (Mode 10 COB lives in cob_col, built + shown by _ensure_canvas_panes from _cob_want.)
+        if mode == "depth_heatmap":
+            self._hm_enter()   # Phase 2b: time axis + request the recent window (after the generic setup)
+            self.cob.set_palette((0, 255, 110, 0.6), (190, 70, 255, 0.6))   # neon green bids / purple asks
+            self._cob_want = True                      # DOM ladder default ON in heatmap mode
+            self.cob.setVisible(True)                  # force-show (overrides the _hide_price_overlays above)
+            cob_cb = self.menu.sub_checks.get("cob")   # keep the menu checkbox in sync (no re-emit)
+            if cob_cb is not None and not cob_cb.isChecked():
+                cob_cb.blockSignals(True); cob_cb.setChecked(True); cob_cb.blockSignals(False)
         self._on_timer()   # immediate first draw from the current Zero Point
 
     def _hide_price_overlays(self) -> None:
@@ -675,6 +740,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         pos = evt[0]
         if not self.plot.sceneBoundingRect().contains(pos):
             self.price_tag.hide()
+            self.time_tag.hide()
             self.dom_tooltip.hide()
             self.panel_tooltip.hide()
             self._last_hover_pos = None      # left the plot -> stop the hover re-fire
@@ -691,6 +757,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.price_tag.setText(f"{pt.y():.{config.PRICE_DECIMALS}f}")
         self.price_tag.setPos(self.vb.viewRange()[0][1], pt.y())
         self.price_tag.show()
+        # X-axis time readout at the crosshair (heatmap mode only; x = epoch seconds)
+        if self.scanner_mode == "depth_heatmap":
+            try:
+                lbl = datetime.fromtimestamp(pt.x()).strftime("%H:%M:%S")
+            except (ValueError, OSError, OverflowError):
+                lbl = ""
+            self.time_tag.setText(lbl)
+            self.time_tag.setPos(pt.x(), self.vb.viewRange()[1][0])   # bottom edge of the view, at cursor X
+            self.time_tag.show()
+            if self.cob.isVisible():
+                self.cob.mark_price(pt.y())     # mirror the crosshair price into the DOM ladder (size readout)
+        else:
+            self.time_tag.hide()
 
         # §7.4 — yellow follow-spot tracks the cursor only while a drawing tool is
         # armed (anything other than the cursor/select pointer); hidden otherwise.
@@ -1922,6 +2001,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._draw_scanner()
         if self.scanner_mode == "bucket_canvas":
             self._update_m10_dom(snap)
+        elif self.scanner_mode == "depth_heatmap" and self.cob.isVisible():
+            if self.hm_band and self.hm_cache.ybins:          # aggregate the ladder at the heatmap's row height
+                self.cob.bars.bin_h = max(config.DOM_BIN_STEP,
+                                          (self.hm_band[1] - self.hm_band[0]) / self.hm_cache.ybins)
+            self.cob.update_depth(snap.get("depth") or {})   # DOM ladder = live book snapshot, price-aligned
+            self._sync_cob()                                  # to the heatmap's Y band
         self._redock_trackers()
         self._refresh_parked_hover()
         self._refresh_selection_stats()   # live Magic-Selection aggregate
@@ -1985,6 +2070,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.clear_scanner_canvas()
         self._scanner_bucket_sig = None       # force a fresh bucket rebuild
         self._scanner_needs_autofit = True    # re-fit once to the new window
+        if self.scanner_mode == "depth_heatmap":
+            self._hm_enter()                  # re-request the heatmap from the new Scan Start Time
         self._on_timer()                      # immediate manual redraw
 
     def _vb_wheel(self, ev, axis=None):
@@ -2022,6 +2109,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         secondary ViewBox teardown; (3) Mode 10 lower-pane + COB-column teardown.
         """
         self.price_tag.hide()   # A2: drop the cursor price tag on any mode switch (no orphan)
+        self.time_tag.hide()    # heatmap crosshair time tag — drop on any mode switch
         self.stats.hide()       # A3a: drop the hover readout too (no orphan across modes)
         self.panel_tooltip.hide()  # exhaustion-lines hover label
         # 1. sweep every tracked scanner item off the plot
@@ -2203,6 +2291,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         curr_vol is unchanged, the sig matches, and we skip the entire render loop
         — idle CPU overhead drops to zero while depth/OI pulses keep flowing.
         """
+        if self.scanner_mode == "depth_heatmap":
+            self._scan_depth_heatmap()   # time-driven, its own canvas — bypass the bucket pipeline entirely
+            return
         snap = self._last_snap or self.worker.snapshot()
         closed = snap.get("closed_buckets", []) or []
         active = snap.get("active_bucket") or {}
@@ -2226,6 +2317,242 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         renderer = getattr(self, f"_scan_{self.scanner_mode}", None)
         if callable(renderer):
             renderer(filtered, x_indices)
+
+    # ------------------------------------------------------------------
+    # Phase 2b — depth/liquidity heatmap (scanner-mode-gated, own canvas)
+    # ------------------------------------------------------------------
+    def _hm_ybins(self, ylo: float, yhi: float) -> int:
+        """Y-resolution = ONE bin per tick, so each price level fills its full tick cell (not a hairline when
+        you zoom in). Capped at HEATMAP_YBINS so a wide band doesn't explode the grid (bins coarsen to
+        multi-tick only when zoomed far out, where individual ticks aren't visible anyway)."""
+        n = int(round((yhi - ylo) / config.TICK_SIZE))
+        return max(1, min(config.HEATMAP_YBINS, n))
+
+    def _hm_enter(self) -> None:
+        """Enter heatmap mode: chronological x-axis, show items, request the RECENT window (fast cold-open)."""
+        self.axis_bottom.set_scanner_active(False)        # time labels, not bucket ordinals
+        self.hm_cache = HeatmapCache(); self.hm_levels = None; self.hm_pending = "reset"; self.hm_last_view = None
+        self._hm_sizes = None; self.hm_manual = False; self.hm_follow = True
+        self.hm_contrast.set_values(config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
+        self.hm_contrast.adjustSize()                     # size to its full content (floating child) before placing
+        self.hm_contrast.move(14, 92); self.hm_contrast.show(); self.hm_contrast.raise_()   # the "filter" panel
+        snap = self._last_snap or self.worker.snapshot()
+        mid = snap.get("latest_price") or 0.0
+        if mid <= 0:
+            return
+        ylo = mid * (1 - config.HEATMAP_BAND_PCT / 100.0); yhi = mid * (1 + config.HEATMAP_BAND_PCT / 100.0)
+        t1 = int(time.time() * 1000)
+        # Window start = the hamburger's Scan Start Time (defaults to now-1h for scanner modes), capped at the
+        # 6h depth retention (no older data is captured). So: 1h by default, follows a user-chosen Scan Start.
+        retention_ms = int(config.DEPTH_RETENTION_HOURS * 3600 * 1000)
+        t0 = max(int(self.menu.scan_start_unix() * 1000), t1 - retention_ms)
+        self.hm_floor_ms = t0          # HARD left boundary: never request/back-fill data before the Scan Start
+        px = max(200, min(config.HEATMAP_MAX_COLS, int(self.plot.width()) or 1000))
+        self.hm_band = (ylo, yhi)
+        self.worker.request_depth_window(t0, t1, px, ylo, yhi, self._hm_ybins(ylo, yhi))
+        self.vb.setXRange(t0 / 1000.0, t1 / 1000.0, padding=0.0)
+        self.vb.setYRange(ylo, yhi, padding=0.0)
+
+    def _hm_exit(self) -> None:
+        """Leave heatmap mode: unsubscribe the live push, hide + free everything (full teardown)."""
+        self.worker.stop_depth_window()
+        self.hm_img.setVisible(False); self.hm_img.clear()
+        for it in (self.hm_bid_line, self.hm_ask_line, self.hm_bid_dash, self.hm_ask_dash,
+                   self.hm_bid_axtag, self.hm_ask_axtag):
+            it.setVisible(False)
+        self.hm_contrast.hide()
+        self.cob.set_palette(config.RGBA_COB_BID, config.RGBA_COB_ASK)   # restore default ladder colors for other modes
+        self.cob.bars.bin_h = config.DOM_BIN_STEP
+        self.hm_cache = HeatmapCache(); self.hm_levels = None; self.hm_band = None; self.hm_pending = None
+        self._hm_sizes = None
+
+    def _scan_depth_heatmap(self) -> None:
+        """Per-frame heatmap update — ONLY dispatched while this mode is active. Drains the delivery buffer
+        (the ~MB grid, never via snapshot()), updates the cache, renorms contrast, re-renders on change/view."""
+        _ver, window, livecols = self.worker.depth_heatmap_state()
+        changed = False
+        if window is not None:
+            grid = decode_grid(window.grid_b64, window.cols, window.ybins)
+            reset_now = not (self.hm_pending == "prepend" and self.hm_cache.cols)
+            if reset_now:
+                self.hm_cache.reset(grid, window.t0, window.t1, window.bbo_bid, window.bbo_ask,
+                                    window.ylo, window.yhi)
+                self.hm_band = (window.ylo, window.yhi)
+            else:
+                self.hm_cache.prepend_older(grid, window.t0, window.t1, window.bbo_bid, window.bbo_ask)
+            self.hm_pending = None; changed = True
+            self._hm_resample()                            # rebuild the pctile->size map for the new data
+            if not self.hm_manual:
+                self.hm_levels = self._hm_levels_from_pct(config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
+            self.hm_renorm_t = time.time()
+        for cp in livecols:
+            if self.hm_cache.append_live(decode_col(cp.col_b64, cp.ybins), cp.ts, cp.bid, cp.ask):
+                changed = True
+        if not self.hm_cache.cols:
+            return
+        now = time.time()
+        if self.hm_levels is None or (not self.hm_manual and now - self.hm_renorm_t > config.HEATMAP_RENORM_SECS):
+            self._hm_resample()
+            self.hm_levels = self._hm_levels_from_pct(config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
+            self.hm_renorm_t = now; changed = True
+        # SMOOTH SCROLL: advance the view to track 'now' EVERY frame (cheap GPU pan of the existing image —
+        # no setImage). This is decoupled from the image rebuild below, which fires only on a data change.
+        if self.hm_follow:
+            (vx0, vx1), _ = self.vb.viewRange()
+            w = vx1 - vx0
+            now_s = time.time()
+            self.vb.setXRange(now_s - w, now_s, padding=0.0)
+        view = self.vb.viewRange()
+        vkey = (tuple(view[0]), tuple(view[1]))
+        view_moved = vkey != self.hm_last_view
+        # Rebuild the image ONLY on a data change (new column / window) — or on a MANUAL pan (re-slice the
+        # loaded range). While following, our own setXRange advance is NOT a manual move, so we don't rebuild
+        # per frame; the pan above shows the existing image translating. (Profile: avoids 20Hz×6.6ms churn.)
+        if changed or (view_moved and not self.hm_follow):
+            self._hm_render()
+        self.hm_last_view = vkey
+        self._hm_update_bbo_markers()                      # cheap per-frame: pin current bid/ask + axis tags
+
+    def _hm_update_bbo_markers(self) -> None:
+        """CURRENT bid/ask, Bookmap-LLT style: a DASHED segment projecting FORWARD from the live edge (where
+        the solid formed trace ends) to the right edge of the view — so panning past 'now' shows only these
+        dashed lines, connecting to the formed trace — plus a Y-axis price tag at the current value. Cheap
+        (setData/setPos only) so it runs every frame. Hidden when zoomed out past the band, or when viewing
+        pure history (the live edge is off-screen to the right)."""
+        items = (self.hm_bid_dash, self.hm_ask_dash, self.hm_bid_axtag, self.hm_ask_axtag)
+        if not self.hm_cache.cols or self.hm_band is None:
+            for it in items:
+                it.setVisible(False)
+            return
+        (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
+        if (vy1 - vy0) > (self.hm_band[1] - self.hm_band[0]) * 1.5:   # zoomed out -> hide (matches the trace)
+            for it in items:
+                it.setVisible(False)
+            return
+        live_x = self.hm_cache.cols[-1][0] / 1000.0                    # where the formed (solid) trace ends
+        step_s = (self.hm_cache.step_ms or 0) / 1000.0
+        show = vx1 >= live_x - step_s                                  # the live edge is at / left of the view's right
+        x0 = max(live_x, vx0)                                          # project from the live edge (or the left edge)
+        cb = self.hm_cache.cols[-1][2]; ca = self.hm_cache.cols[-1][3]
+        for dash, tag, val in ((self.hm_bid_dash, self.hm_bid_axtag, cb),
+                               (self.hm_ask_dash, self.hm_ask_axtag, ca)):
+            if show and val and val > 0:
+                dash.setData([x0, vx1], [val, val]); dash.setVisible(vx1 > x0)   # 0-length while glued to 'now'
+                tag.setText(f"{val:.{config.PRICE_DECIMALS}f}"); tag.setPos(vx1, val); tag.setVisible(True)
+            else:
+                dash.setVisible(False); tag.setVisible(False)
+
+    def _hm_render(self) -> None:
+        """Re-slice the cache to the visible time-range and paint the ImageItem + BBO lines (log+LUT+levels)."""
+        if not self.hm_cache.cols or self.hm_levels is None or self.hm_band is None:
+            return
+        (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
+        vis = self.hm_cache.visible(int(vx0 * 1000), int(vx1 * 1000))
+        if vis is None:
+            self.hm_img.setVisible(False); return
+        grid, ts, bid, ask, tf, tl = vis                  # grid is SIGNED pre-log (±log10(size+1), by side)
+        self.hm_img.setImage(grid, autoLevels=False)
+        ylo, yhi = self.hm_band
+        self.hm_img.setRect(QtCore.QRectF(tf / 1000.0, ylo, max(1e-6, (tl - tf) / 1000.0), yhi - ylo))
+        # Symmetric levels [-M, M] center the empty (0) bins; the lower cutoff becomes the LUT's transparent
+        # center band (fraction lo_frac), so the diverging green/purple LUT is rebuilt only when it changes.
+        lo, hi = self.hm_levels
+        M = math.log10(hi + 1.0)
+        lo_frac = (math.log10(lo + 1.0) / M) if M > 1e-9 else 0.0
+        key = (round(lo_frac, 3), self.hm_grey)
+        if key != self._hm_lut_key:
+            self._hm_lut = neon_diverging_lut(lo_frac, grey=self.hm_grey); self._hm_lut_key = key
+        self.hm_img.setLookupTable(self._hm_lut)
+        self.hm_img.setLevels([-M, M])
+        self.hm_img.setVisible(True)
+        show_bbo = (vy1 - vy0) <= (yhi - ylo) * 1.5       # auto-hide BBO when zoomed out past the band
+        xs = ts / 1000.0
+        fb = bid > 0; fa = ask > 0                          # plot only in-book columns (skip empty edges)
+        self.hm_bid_line.setData(xs[fb], bid[fb])
+        self.hm_ask_line.setData(xs[fa], ask[fa])
+        self.hm_bid_line.setVisible(show_bbo); self.hm_ask_line.setVisible(show_bbo)
+
+    def _hm_request_visible(self) -> None:
+        """Debounced lazy-load: free re-slice when the view is inside the loaded range at a compatible
+        resolution; contiguous OLDER prepend on a same-band scroll-back; else request + reset (zoom / band /
+        jump). Worst case = a redundant fetch, never wrong data."""
+        if self.scanner_mode != "depth_heatmap":
+            return
+        (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
+        t_lo, t_hi = int(vx0 * 1000), int(vx1 * 1000)      # NOTE: no auto snap-back to live — once you pan
+        #                                                     (incl. past 'now') you stay free; re-select the
+        #                                                     mode to go live again.
+        t_lo = max(t_lo, self.hm_floor_ms)                 # never load/back-fill before the Scan Start floor
+        # The DATA window NEVER extends past 'now'. The view MAY show blank space to the right (so you can pan
+        # ahead and watch the live edge develop into it) — but requesting future columns makes the daemon carry
+        # the last book forward as flat lines to the extreme right and pushes live development off-screen.
+        now_ms = int(time.time() * 1000)
+        data_hi = min(t_hi, now_ms)
+        if data_hi - t_lo < 1000:                          # visible range is essentially all-future -> nothing to load
+            return
+        px = max(200, min(config.HEATMAP_MAX_COLS, int(self.plot.width()) or 1000))
+        need_step = (t_hi - t_lo) / px                     # step matches the VISIBLE pixel density (incl. blank)
+        bspan = (self.hm_band[1] - self.hm_band[0]) if self.hm_band else 1.0
+        band_ok = (self.hm_band is not None and abs(vy0 - self.hm_band[0]) < bspan * 0.05
+                   and abs(vy1 - self.hm_band[1]) < bspan * 0.05)
+        c_lo, c_hi = self.hm_cache.span()
+        step_ok = (self.hm_cache.step_ms is not None and abs(self.hm_cache.step_ms - need_step) < need_step * 0.25)
+        if band_ok and step_ok and c_lo is not None and c_lo <= t_lo and data_hi <= c_hi:
+            return                                        # all in-view DATA loaded (future is just blank) -> free re-slice
+        if band_ok and step_ok and c_lo is not None and t_lo < c_lo and data_hi <= c_hi:
+            ocols = max(50, int((c_lo - t_lo) / need_step))
+            self.hm_pending = "prepend"                          # same band -> reuse the cache's bin count
+            self.worker.request_depth_window(t_lo, int(c_lo), ocols, self.hm_band[0], self.hm_band[1],
+                                             self.hm_cache.ybins or self._hm_ybins(self.hm_band[0], self.hm_band[1]))
+            return
+        cols_req = max(50, int((data_hi - t_lo) / need_step))   # cols scaled to the DATA span at the visible step
+        self.hm_pending = "reset"; self.hm_band = (vy0, vy1)
+        self.worker.request_depth_window(t_lo, data_hi, cols_req, vy0, vy1, self._hm_ybins(vy0, vy1))
+
+    def _toggle_heatmap_grey(self) -> None:
+        """'g' — swap the Bookmap LUT for greyscale (heatmap mode only); instant re-color, no re-request."""
+        if self.scanner_mode != "depth_heatmap":
+            return
+        self.hm_grey = not self.hm_grey
+        self._hm_render()
+
+    def _hm_resample(self) -> None:
+        """Rebuild the sorted nonzero-size array of the loaded grid (the percentile->size map). Done on a
+        window reset + every renorm, NOT per slider-drag — so dragging the cutoffs is an O(1) index lookup."""
+        if not self.hm_cache.cols:
+            self._hm_sizes = None; return
+        allv = np.concatenate([c[1] for c in self.hm_cache.cols])
+        nz = allv[allv > 0]
+        self._hm_sizes = np.sort(nz) if nz.size else None
+
+    def _hm_levels_from_pct(self, lo_pct: float, hi_pct: float) -> tuple:
+        """(lo_size, hi_size) raw cutoffs from the loaded grid's sorted sizes at the given percentiles."""
+        s = self._hm_sizes
+        if s is None or s.size == 0:
+            return (1.0, 10.0)
+        n = s.size
+        lo = float(s[min(n - 1, max(0, int(lo_pct / 100.0 * (n - 1))))])
+        hi = float(s[min(n - 1, max(0, int(hi_pct / 100.0 * (n - 1))))])
+        if hi <= lo:
+            hi = lo * 10.0 + 1.0
+        return (lo, hi)
+
+    def _hm_contrast_changed(self, lo_pct: float, hi_pct: float) -> None:
+        """User dragged a cutoff slider: percentiles -> size cutoffs, pause auto-renorm, re-color instantly."""
+        if self.scanner_mode != "depth_heatmap":
+            return
+        self.hm_manual = True
+        self.hm_levels = self._hm_levels_from_pct(lo_pct, hi_pct)
+        self._hm_render()
+
+    def _hm_contrast_reset(self) -> None:
+        """'Reset → auto': drop the manual override, snap the sliders to p20/p99, re-enable the 60s renorm."""
+        self.hm_manual = False
+        self.hm_contrast.set_values(config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
+        self._hm_resample()
+        self.hm_levels = self._hm_levels_from_pct(config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
+        self.hm_renorm_t = time.time()
+        self._hm_render()
 
     def _add_scanner_item(self, item: object, ignore_bounds: bool = False) -> object:
         """Add a plot item and track it for teardown. All modes route through here.
@@ -2289,6 +2616,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         axis ACTUALLY moved, beyond a tolerance that absorbs float noise + off-axis drift on
         a wobbly drag. Scroll-zoom moves both -> unlocks both; a horizontal drag moves X
         only; a Y-axis wheel moves Y only. Re-lock is a double-click (_on_scene_click)."""
+        if self.scanner_mode == "depth_heatmap":
+            # Keep SMOOTH-following the live edge through a ZOOM (right edge stays AT 'now') so deep zooms
+            # scroll at 20Hz instead of jumping per 0.4s pulse. DETACH the moment the right edge is dragged
+            # AWAY from 'now' — into history (pan left) OR out past 'now' (pan right to leave blank space to
+            # watch the edge develop) — so neither direction ever force-snaps you back.
+            (vx0, vx1), _ = self.vb.viewRange()
+            w = max(1e-6, vx1 - vx0)
+            dt = time.time() - vx1          # >0: right edge in the past; <0: dragged out past 'now'
+            self.hm_follow = (-0.5 <= dt < max(1.5, w * 0.08))
+            self._hm_debounce.start()   # Phase 2b: debounced lazy-load (re-slice / prepend / re-request)
+            return
         if self.scanner_mode != "bucket_canvas" or self._follow_prev_range is None:
             return
         (nx0, nx1), (ny0, ny1) = self.vb.viewRange()

@@ -25,38 +25,48 @@ class _CobBars(pg.GraphicsObject):
         self.picture = QtGui.QPicture()
         self._rect = QtCore.QRectF()
         self.max_vol = 1.0
+        self.bin_h = config.DOM_BIN_STEP                 # price aggregation bin (set to the heatmap's row height)
+        self.bid_rgba = config.RGBA_COB_BID
+        self.ask_rgba = config.RGBA_COB_ASK
+        self.agg = {"bid": {}, "ask": {}}                # {bucket_center: summed_qty} per side (for mark_price)
 
     def update_data(self, bids: list, asks: list) -> None:
         self.picture = QtGui.QPicture()
         p = QtGui.QPainter(self.picture)
         p.setFont(QtGui.QFont("Consolas", 7))
-        rows = []
-        for side, rgba in (("bid", config.RGBA_COB_BID), ("ask", config.RGBA_COB_ASK)):
-            for lvl in (bids if side == "bid" else asks):
+        bin_h = max(config.DOM_BIN_STEP, float(self.bin_h))
+        # AGGREGATE raw tick levels into bin_h buckets (so the ladder matches the heatmap's row resolution and
+        # coarsens as you zoom out): bucket center = round(price/bin_h)*bin_h, qty summed per side.
+        agg = {"bid": {}, "ask": {}}
+        for side, src in (("bid", bids), ("ask", asks)):
+            d = agg[side]
+            for lvl in src:
                 try:
                     price, qty = float(lvl[0]), float(lvl[1])
                 except (ValueError, IndexError):
                     continue
-                rows.append((price, qty, rgba))
-        if not rows:
+                c = round(price / bin_h) * bin_h
+                d[c] = d.get(c, 0.0) + qty
+        self.agg = agg
+        cells = [(c, q, side) for side in ("bid", "ask") for c, q in agg[side].items()]
+        if not cells:
             p.end(); self.prepareGeometryChange(); self.update(); return
-
-        self.max_vol = max(q for _, q, _ in rows)
-        bin_h = config.DOM_BIN_STEP
-        prices = [pr for pr, _, _ in rows]
-        for price, qty, rgba in rows:
+        self.max_vol = max(q for _, q, _ in cells)
+        p.setPen(QtCore.Qt.NoPen)
+        for center, qty, side in cells:
+            rgba = self.bid_rgba if side == "bid" else self.ask_rgba
             col = QtGui.QColor(int(rgba[0]), int(rgba[1]), int(rgba[2])); col.setAlphaF(rgba[3])
             p.setBrush(QtGui.QBrush(col)); p.setPen(QtCore.Qt.NoPen)
-            p.drawRect(QtCore.QRectF(0, price - bin_h / 2, qty, bin_h))
+            p.drawRect(QtCore.QRectF(0, center - bin_h / 2, qty, bin_h))
             if qty >= self.max_vol * 0.5:  # significant zone marker
                 p.setPen(QtGui.QPen(QtGui.QColor("#cccccc")))
-                p.drawText(QtCore.QPointF(qty * 0.4, price), _kfmt(qty))
+                p.drawText(QtCore.QPointF(qty * 0.4, center), _kfmt(qty))
                 p.setPen(QtCore.Qt.NoPen)
         p.end()
-        # fix #12: boundingRect must span the FULL price range of the bars, else
-        # PyQtGraph culls the QPicture the moment the zoomed view exceeds a tiny
-        # rect and the histograms vanish.
-        lo, hi = min(prices), max(prices)
+        # fix #12: boundingRect must span the FULL price range of the bars, else PyQtGraph culls the QPicture
+        # the moment the zoomed view exceeds a tiny rect and the histograms vanish.
+        centers = [c for c, _, _ in cells]
+        lo, hi = min(centers), max(centers)
         self._rect = QtCore.QRectF(0, lo - bin_h, self.max_vol, (hi - lo) + 2 * bin_h)
         self.prepareGeometryChange(); self.update()
 
@@ -92,6 +102,37 @@ class CobPanel(pg.PlotWidget):
         self._depth = depth
         self.bars.update_data(depth.get("bids", []), depth.get("asks", []))
         self.setXRange(0, max(1.0, self.bars.max_vol), padding=0.02)
+
+    def set_bin(self, bin_h: float) -> None:
+        """Set the price-aggregation bin (= the heatmap's current row height) so the ladder aggregates as you
+        zoom out and refines as you zoom in. Re-renders from the last depth (no new fetch)."""
+        bin_h = max(config.DOM_BIN_STEP, float(bin_h))
+        if abs(bin_h - self.bars.bin_h) > 1e-9:
+            self.bars.bin_h = bin_h
+            if self._depth:
+                self.update_depth(self._depth)
+
+    def set_palette(self, bid_rgba, ask_rgba) -> None:
+        """Override the bar colors (heatmap mode: neon green bids / neon purple asks); re-renders."""
+        self.bars.bid_rgba = bid_rgba; self.bars.ask_rgba = ask_rgba
+        if self._depth:
+            self.update_depth(self._depth)
+
+    def mark_price(self, price: float) -> None:
+        """Highlight the ladder bucket at ``price`` (driven by the heatmap crosshair): show its side + summed
+        size as the tooltip, anchored at that price. Hidden when there's no liquidity near the cursor."""
+        bin_h = max(config.DOM_BIN_STEP, float(self.bars.bin_h))
+        best = None
+        for side in ("bid", "ask"):
+            for center, qty in self.bars.agg.get(side, {}).items():
+                if abs(center - price) <= bin_h and (best is None or abs(center - price) < abs(best[0] - price)):
+                    best = (center, qty, "Bid" if side == "bid" else "Ask")
+        if best is None:
+            self._tooltip.hide(); return
+        center, qty, lbl = best
+        self._tooltip.setText(f"{lbl} {center:.2f}\n{_kfmt(qty)}")
+        self._tooltip.setPos(0.0, center)
+        self._tooltip.show()
 
     def sync_y(self, y0: float, y1: float) -> None:
         self.setYRange(y0, y1, padding=0)

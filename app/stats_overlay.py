@@ -330,3 +330,75 @@ class EffAggZoneSlider(_ZoneThresholdSlider):
     def __init__(self, parent, floor: float = 0.75):
         super().__init__(parent, floor, "Force f", "forceful", "ordinary vol",
                          "#00ff80", "#8a929e", border_col="#1f6b46", dot_rgb=(0, 255, 128))
+
+
+class HeatmapContrastBar(QtWidgets.QWidget):
+    """The Liquidity-Heatmap 'filter': lower/upper CUTOFF sliders in PERCENTILE of the loaded window's
+    nonzero sizes (lower -> min color, upper -> max color), plus a Reset to the auto p20/p99. A user drag
+    emits ``changed(lo_pct, hi_pct)`` (the terminal maps the percentiles to size cutoffs and calls
+    setLevels -> instant re-color, no re-request) and pauses the auto-renorm; Reset emits ``reset_clicked``
+    to return to auto. Shown only in heatmap mode (same show/hide-on-mode pattern as the zone sliders)."""
+    changed = QtCore.Signal(float, float)
+    reset_clicked = QtCore.Signal()
+
+    _LBL_CSS = "color:#c8cdd6;background:transparent;font-family:Consolas;font-size:11px;"
+    _SLD_CSS = ("QSlider{background:transparent;}"
+                "QSlider::groove:horizontal{height:5px;background:#33384a;border-radius:2px;}"
+                "QSlider::sub-page:horizontal{height:5px;background:#5a6680;border-radius:2px;}"
+                "QSlider::handle:horizontal{width:11px;height:13px;background:#d7dbe2;"
+                "border:1px solid #20232c;border-radius:3px;margin:-5px 0;}")
+
+    def __init__(self, parent, lo_pct: float = 20.0, hi_pct: float = 99.0):
+        super().__init__(parent)
+        self._silent = False
+        self._defaults = (lo_pct, hi_pct)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(11, 9, 11, 10); lay.setSpacing(5)
+        title = QtWidgets.QLabel("LIQUIDITY CONTRAST")
+        title.setStyleSheet("color:#8a929e;background:transparent;font-family:Consolas;font-size:10px;font-weight:bold;")
+        lay.addWidget(title)
+        # 0-1000 = percentile×10 (0.1% steps) so the UPPER cutoff can be dragged from ~p99 all the way to
+        # p100 (max) with fine resolution — that high-end spread differentiates a 12k wall from an 80k wall.
+        self.lo_lbl = QtWidgets.QLabel(); self.lo_lbl.setStyleSheet(self._LBL_CSS); lay.addWidget(self.lo_lbl)
+        self.lo = QtWidgets.QSlider(QtCore.Qt.Horizontal); self.lo.setRange(0, 1000)
+        self.lo.setStyleSheet(self._SLD_CSS); self.lo.setFixedHeight(18); lay.addWidget(self.lo)
+        self.hi_lbl = QtWidgets.QLabel(); self.hi_lbl.setStyleSheet(self._LBL_CSS); lay.addWidget(self.hi_lbl)
+        self.hi = QtWidgets.QSlider(QtCore.Qt.Horizontal); self.hi.setRange(0, 1000)
+        self.hi.setStyleSheet(self._SLD_CSS); self.hi.setFixedHeight(18); lay.addWidget(self.hi)
+        self.lo.valueChanged.connect(self._on_change); self.hi.valueChanged.connect(self._on_change)
+        self.reset_btn = QtWidgets.QPushButton(f"Reset → auto (p{lo_pct:.1f} / p{hi_pct:.1f})")
+        self.reset_btn.setStyleSheet(
+            "QPushButton{color:#c8cdd6;background:#2a2e39;border:1px solid #3a3f4b;border-radius:3px;"
+            "font-family:Consolas;font-size:10px;padding:4px;} QPushButton:hover{background:#3a3f4b;}")
+        self.reset_btn.clicked.connect(lambda: self.reset_clicked.emit())
+        lay.addSpacing(2); lay.addWidget(self.reset_btn)
+        self.setFixedWidth(252)
+        self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
+        self.setStyleSheet("HeatmapContrastBar{background:rgba(17,19,26,238);"
+                           "border:1px solid #2a2e39;border-radius:6px;}")
+        self.set_values(lo_pct, hi_pct)
+        self.adjustSize()
+
+    def set_values(self, lo_pct: float, hi_pct: float) -> None:
+        """Apply percentiles WITHOUT emitting (used for the auto p20/p99 default + Reset). Set hi FIRST so the
+        lo<hi clamp in _on_change never sees a stale hi and drags lo down. (slider units = percentile×10.)"""
+        self._silent = True
+        self.hi.setValue(int(round(hi_pct * 10))); self.lo.setValue(int(round(lo_pct * 10)))
+        self._silent = False
+        self._render()
+
+    def _on_change(self, _v: int) -> None:
+        if self.lo.value() >= self.hi.value():            # keep lower strictly below upper
+            self._silent = True
+            if self.sender() is self.lo:
+                self.lo.setValue(max(0, self.hi.value() - 1))
+            else:
+                self.hi.setValue(min(1000, self.lo.value() + 1))
+            self._silent = False
+        self._render()
+        if not self._silent:
+            self.changed.emit(self.lo.value() / 10.0, self.hi.value() / 10.0)
+
+    def _render(self) -> None:
+        self.lo_lbl.setText(f"Lower cutoff  ·  p{self.lo.value()/10:.1f}")
+        self.hi_lbl.setText(f"Upper cutoff  ·  p{self.hi.value()/10:.1f}")

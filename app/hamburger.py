@@ -113,6 +113,7 @@ SCANNER_MODES = [
     "bucket_open_pos",
     "bucket_close_pos",
     "effort_result",
+    "depth_heatmap",   # Phase 2b — Bookmap-style resting-liquidity heatmap (own canvas, scanner-gated)
 ]
 SCANNER_LABELS = {
     "open_pos": "Cumulative Open Positions",
@@ -125,6 +126,7 @@ SCANNER_LABELS = {
     "bucket_close_pos": "Micro-Bucket Close Intents",
     "effort_result": "Effort vs Result",
     "bucket_canvas": "Bucket Candlestick Canvas",
+    "depth_heatmap": "Liquidity Heatmap (Bookmap)",
 }
 
 

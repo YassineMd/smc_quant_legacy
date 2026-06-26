@@ -97,6 +97,12 @@ class PipeClientWorker(threading.Thread):
         self._ob_ver = 0
         self._ob_exp: List[dict] = []
         self._ob_exp_ver = -1
+        # Phase 2b heatmap DELIVERY buffer (guarded by data_lock). The ~MB depth grid lives HERE and is
+        # handed to the heatmap mode ONLY via depth_heatmap_state() — it NEVER rides the 20Hz snapshot(),
+        # so it costs nothing when the heatmap mode isn't open (the isolation guarantee).
+        self._hm_window = None                 # last DepthWindowPacket (consumed once by the heatmap mode)
+        self._hm_cols: deque = deque(maxlen=512)   # pending live DepthColumnPackets (drained each access)
+        self._hm_ver = 0                       # bumps on any heatmap frame -> lets the mode self-gate
 
     # ------------------------------------------------------------------
     # Boot baseline (called from GUI thread before the window shows)
@@ -132,6 +138,34 @@ class PipeClientWorker(threading.Thread):
             self._outgoing.append(protocol.json.dumps({"action": "set_tf", "tf": tf}) + "\n")
         # Repopulate baseline synchronously so the chart never blanks for long
         self.load_baseline(tf)
+
+    def request_depth_window(self, t0: int, t1: int, cols: int,
+                             ylo: float, yhi: float, ybins: int) -> None:
+        """Queue a depth_window request (heatmap mode-select / pan / zoom). Also subscribes this client to
+        the daemon's live-column pushes for the given band."""
+        with self._send_lock:
+            self._outgoing.append(protocol.json.dumps({
+                "action": "depth_window", "t0": int(t0), "t1": int(t1), "cols": int(cols),
+                "ylo": float(ylo), "yhi": float(yhi), "ybins": int(ybins)}) + "\n")
+
+    def stop_depth_window(self) -> None:
+        """Queue a depth_window_stop (heatmap mode-exit) so the daemon stops pushing live columns."""
+        with self._send_lock:
+            self._outgoing.append(protocol.json.dumps({"action": "depth_window_stop"}) + "\n")
+        with self.data_lock:
+            self._hm_window = None
+            self._hm_cols.clear()
+
+    def depth_heatmap_state(self):
+        """Heatmap-ONLY accessor (called by _scan_depth_heatmap when that mode is active). Returns
+        ``(version, window_or_None, [live_columns])`` and CLEARS the delivered window + drains the live
+        columns so each is consumed once. The grid is here, never on snapshot()."""
+        with self.data_lock:
+            w = self._hm_window
+            self._hm_window = None
+            cols = list(self._hm_cols)
+            self._hm_cols.clear()
+            return self._hm_ver, w, cols
 
     def stop(self) -> None:
         self._stop.set()
@@ -323,6 +357,12 @@ class PipeClientWorker(threading.Thread):
             elif isinstance(pkt, protocol.PulsePacket):
                 self.depth = {"bids": pkt.bids, "asks": pkt.asks}
                 self.oi = pkt.oi
+            elif isinstance(pkt, protocol.DepthWindowPacket):
+                self._hm_window = pkt          # ~MB grid stays in the delivery buffer (NOT snapshot())
+                self._hm_ver += 1
+            elif isinstance(pkt, protocol.DepthColumnPacket):
+                self._hm_cols.append(pkt)
+                self._hm_ver += 1
 
     def _enforce_cap(self) -> None:
         """Trim the candle cache to the viewport limit (spec §1.1.2)."""
