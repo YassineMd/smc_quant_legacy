@@ -22,7 +22,7 @@ import json
 import statistics
 import time
 from collections import deque
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
 
 import pandas as pd
 import requests
@@ -58,10 +58,15 @@ class MarketDataCore:
 
     def __init__(self, footprints_db: Dict[str, dict],
                  broadcast_tf: Callable[[str, str], None],
-                 broadcast_all: Callable[[str], None]):
+                 broadcast_all: Callable[[str], None],
+                 tf_has_subscribers: Optional[Callable[[str], bool]] = None):
         self.footprints_db = footprints_db
         self.broadcast_tf = broadcast_tf
         self.broadcast_all = broadcast_all
+        # Only DO per-tf work (OB rescan + serialize the forming footprint/OB matrix) for timeframes a client
+        # is actually subscribed to. Without this the loop recomputes + serializes ALL 5 tfs every cycle —
+        # the 1h/4h forming footprints are huge — starving the broadcast loop for seconds (the live-price lag).
+        self._tf_subbed: Callable[[str], bool] = tf_has_subscribers or (lambda _tf: True)
         self.engines: Dict[str, QuantEngine] = build_engine_registry()
         self.session = _make_session()
 
@@ -349,16 +354,17 @@ class MarketDataCore:
             "taker_buy": curr_taker_buy,
         }
         self.last_candle[tf_key] = candle   # 19.3b: cache for the 150ms live-edge refresh
-        tick = TickPacket(
-            tf=tf_key,
-            price=close_price,
-            candle=candle,
-            active_bucket=self.engines[tf_key].active_bucket.live_snapshot(
-                time.time(), self.engines[tf_key].avg_velocity),
-            footprint=fp,
-            is_closed=bool(k["x"]),
-        )
-        self.broadcast_tf(tf_key, tick.to_line())
+        if self._tf_subbed(tf_key):         # only build+serialize the heartbeat for a watched tf
+            tick = TickPacket(
+                tf=tf_key,
+                price=close_price,
+                candle=candle,
+                active_bucket=self.engines[tf_key].active_bucket.live_snapshot(
+                    time.time(), self.engines[tf_key].avg_velocity),
+                footprint=fp,
+                is_closed=bool(k["x"]),
+            )
+            self.broadcast_tf(tf_key, tick.to_line())
 
     def _process_aggtrade(self, d: dict) -> None:
         """Route ONE aggTrade into all five engines + footprint levels (Step 19.3).
@@ -403,7 +409,7 @@ class MarketDataCore:
             # the old `len() > last` check silently stopped firing once the cap was reached — freezing the
             # client's scanner history (closes never broadcast until a fresh catch-up on reconnect).
             delta = engine.total_closed - last_total
-            if delta > 0:
+            if delta > 0 and self._tf_subbed(tf_key):
                 # DIVERGES FROM LEGACY (Step 19.4): the per-close path neither RECOMPUTES
                 # nor RE-SERIALIZES the OB matrix (both moved to recompute_loop). It only
                 # ships the newly closed buckets — order_blocks=[] marks a CLOSE piggyback
@@ -609,10 +615,21 @@ class MarketDataCore:
         between engines so the full sweep never starves the socket drain, and
         broadcasts the refreshed OB matrix for each timeframe.
         """
+        last_closed: Dict[str, int] = {}   # tf -> engine.total_closed at its last rescan
         while True:
             await asyncio.sleep(config.RECOMPUTE_SECS)
             self._resize_engines()                 # median-anchored sizing for all tfs (one mechanism)
             for tf_key in config.TIMEFRAMES:
+                if not self._tf_subbed(tf_key):    # nobody watching this tf -> skip the heavy rescan+serialize
+                    continue
+                eng = self.engines[tf_key]
+                # The OB set + mitigation are a pure function of the CLOSED buckets, which only change when a
+                # bucket closes. The rescan is O(obs×buckets) (~3s on a 10k-bucket engine) and was re-running
+                # every cycle even though 1m closes only ~once/45s — 4 of 5 runs produced a byte-identical
+                # result while freezing the broadcast loop. Skip when nothing closed since the last rescan.
+                if last_closed.get(tf_key) == eng.total_closed:
+                    continue
+                last_closed[tf_key] = eng.total_closed
                 try:
                     obs = self._recompute_engine(tf_key)
                     self.broadcast_tf(
@@ -620,7 +637,7 @@ class MarketDataCore:
                         ObPacket(tf=tf_key, order_blocks=obs,
                                  absorptions=self._absorption_marks(tf_key),
                                  new_buckets=[],
-                                 vpin=self.engines[tf_key].vpin).to_line(),
+                                 vpin=eng.vpin).to_line(),
                     )
                 except Exception as e:
                     print(f"RECOMPUTE ERROR ({tf_key}): {e}")
@@ -639,6 +656,8 @@ class MarketDataCore:
         """
         now = time.time()
         for tf_key, candle in self.last_candle.items():
+            if not self._tf_subbed(tf_key):    # skip serializing the forming footprint (huge on 1h/4h) nobody wants
+                continue
             engine = self.engines[tf_key]
             fp = self.footprints_db.get(tf_key, {}).get(self.latest_utime.get(tf_key, ""), {})
             tick = TickPacket(

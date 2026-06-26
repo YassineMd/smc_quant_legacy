@@ -45,7 +45,8 @@ class DaemonServer:
         self.clients: dict[asyncio.StreamWriter, _Client] = {}
         self.store = persistence.HistoryStore()
         self.footprints_db = self.store.bootstrap()
-        self.core = MarketDataCore(self.footprints_db, self.broadcast_tf, self.broadcast_all)
+        self.core = MarketDataCore(self.footprints_db, self.broadcast_tf, self.broadcast_all,
+                                   self.tf_has_subscribers)
         # Phase 1: SEPARATE depth.db store — own connection/sync/prune, decoupled from the bucket history.
         self.depth_store = DepthStore() if config.DEPTH_CAPTURE_ENABLED else None
 
@@ -72,6 +73,11 @@ class DaemonServer:
         """Deliver a timeframe-agnostic frame to every client."""
         for client in list(self.clients.values()):
             self._enqueue(client, line)
+
+    def tf_has_subscribers(self, tf: str) -> bool:
+        """True if any connected client is subscribed to ``tf`` — lets the core skip the heavy per-tf
+        recompute/serialize for timeframes nobody is watching (the live-price-lag fix)."""
+        return any(client.tf == tf for client in self.clients.values())
 
     # ------------------------------------------------------------------
     # Per-client lifecycle
