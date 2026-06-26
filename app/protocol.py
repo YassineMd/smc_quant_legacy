@@ -34,6 +34,8 @@ TYPE_TICK = "TICK"            # high-frequency candle/bucket update (§1.3.2 #2)
 TYPE_OB = "NEW_QUANT_OB"      # fresh order-block matrix on bucket close (main.py:804)
 TYPE_LIQ = "LIQUIDATION"      # forced order event (main.py:661)
 TYPE_PULSE = "PULSE"          # DOM depth + open interest pulse (main.py:887)
+TYPE_DEPTH_WINDOW = "DEPTH_WINDOW"   # Phase 2a: heatmap window (W×H resting-size grid + per-col BBO)
+TYPE_DEPTH_COL = "DEPTH_COL"         # Phase 2a: one live heatmap column (right-edge update)
 
 NEWLINE = "\n"
 
@@ -224,6 +226,50 @@ class PulsePacket:
         return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
 
 
+@dataclass
+class DepthWindowPacket:
+    """Phase 2a: a Bookmap heatmap window — answer to a ``depth_window`` request.
+
+    ``grid_b64`` = base64 of ``cols*ybins`` little-endian float32, row-major ``[col][bin]``, holding the RAW
+    resting size summed per price-bin per time-column (NOT log-scaled — the terminal applies log+LUT+cutoffs
+    locally, so the contrast sliders never hit the daemon). Bins span ``[ylo, yhi]`` bottom→top. ``bbo_bid`` /
+    ``bbo_ask`` are the per-column best bid / ask prices (0.0 where empty). Column ``i`` is the book as of
+    ``t0 + (i+1)*(t1-t0)/cols``."""
+
+    t0: int
+    t1: int
+    cols: int
+    ylo: float
+    yhi: float
+    ybins: int
+    grid_b64: str = ""
+    bbo_bid: List[float] = field(default_factory=list)
+    bbo_ask: List[float] = field(default_factory=list)
+    type: str = TYPE_DEPTH_WINDOW
+
+    def to_line(self) -> str:
+        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+
+
+@dataclass
+class DepthColumnPacket:
+    """Phase 2a: one live heatmap column (the right edge), pushed at the pulse cadence. ``col_b64`` = base64
+    of ``ybins`` float32 (raw resting size per bin) for the SAME ``[ylo,yhi,ybins]`` the client subscribed
+    with; ``bid``/``ask`` = current BBO; ``ts`` = ms."""
+
+    ts: int
+    ylo: float
+    yhi: float
+    ybins: int
+    col_b64: str = ""
+    bid: float = 0.0
+    ask: float = 0.0
+    type: str = TYPE_DEPTH_COL
+
+    def to_line(self) -> str:
+        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+
+
 # ---------------------------------------------------------------------------
 # Decode
 # ---------------------------------------------------------------------------
@@ -266,6 +312,14 @@ _PARSERS = {
     ),
     TYPE_PULSE: lambda d: PulsePacket(
         bids=d.get("bids", []), asks=d.get("asks", []), oi=d.get("oi", 0.0),
+    ),
+    TYPE_DEPTH_WINDOW: lambda d: DepthWindowPacket(
+        t0=d["t0"], t1=d["t1"], cols=d["cols"], ylo=d["ylo"], yhi=d["yhi"], ybins=d["ybins"],
+        grid_b64=d.get("grid_b64", ""), bbo_bid=d.get("bbo_bid", []), bbo_ask=d.get("bbo_ask", []),
+    ),
+    TYPE_DEPTH_COL: lambda d: DepthColumnPacket(
+        ts=d["ts"], ylo=d["ylo"], yhi=d["yhi"], ybins=d["ybins"],
+        col_b64=d.get("col_b64", ""), bid=d.get("bid", 0.0), ask=d.get("ask", 0.0),
     ),
 }
 

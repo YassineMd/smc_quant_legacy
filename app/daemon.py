@@ -21,14 +21,15 @@ Concurrency model (spec §1.3.1, §1.4.1)
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from dataclasses import dataclass
 from typing import Optional
 
 from . import config, persistence
-from .depth_store import DepthStore
+from .depth_store import DepthStore, bin_live_book
 from .feeds import MarketDataCore
-from .protocol import CatchupChunkPacket
+from .protocol import CatchupChunkPacket, DepthColumnPacket, DepthWindowPacket
 
 
 @dataclass
@@ -36,6 +37,7 @@ class _Client:
     queue: asyncio.Queue
     writer: asyncio.StreamWriter
     tf: Optional[str] = None   # no subscription until the client sends set_tf
+    heatmap: Optional[tuple] = None   # Phase 2a: (ylo, yhi, ybins) while the heatmap mode is open, else None
 
 
 class DaemonServer:
@@ -118,13 +120,25 @@ class DaemonServer:
             cmd = json.loads(raw.decode("utf-8").strip())
         except (json.JSONDecodeError, UnicodeDecodeError):
             return
-        if cmd.get("action") == "set_tf":
+        action = cmd.get("action")
+        if action == "set_tf":
             tf = cmd.get("tf")
             if tf in config.TIMEFRAMES:
                 client.tf = tf
                 # Stream a fresh chunked CATCHUP for the newly subscribed timeframe
                 asyncio.create_task(self._send_catchup(client, tf))
                 print(f"CLIENT {client.writer.get_extra_info('peername')} -> {tf}")
+        elif action == "depth_window" and self.depth_store is not None:
+            # Phase 2a: serve a heatmap window (built OFF-loop) + subscribe this client to live columns.
+            try:
+                ylo = float(cmd["ylo"]); yhi = float(cmd["yhi"]); ybins = int(cmd["ybins"])
+                params = (int(cmd["t0"]), int(cmd["t1"]), int(cmd["cols"]), ylo, yhi, ybins)
+            except (KeyError, ValueError, TypeError):
+                return
+            client.heatmap = (ylo, yhi, ybins)
+            asyncio.create_task(self._send_depth_window(client, params))
+        elif action == "depth_window_stop":
+            client.heatmap = None   # leave the heatmap mode -> stop live-column pushes
 
     # ------------------------------------------------------------------
     async def _send_catchup(self, client: _Client, tf: str) -> None:
@@ -148,6 +162,44 @@ class DaemonServer:
             print(f"CATCHUP SEND ERROR ({tf}): {e}")
 
     # ------------------------------------------------------------------
+    # Phase 2a: heatmap window (off-loop build) + live-column push
+    # ------------------------------------------------------------------
+    async def _send_depth_window(self, client: _Client, params: tuple) -> None:
+        """Build the heatmap window in an executor (the forward-walk is O(deltas), can be ~100s of ms on a
+        big window) so the event loop / feeds / broadcast are NEVER blocked, then enqueue one frame."""
+        loop = asyncio.get_event_loop()
+        try:
+            grid, bbo_bid, bbo_ask = await loop.run_in_executor(
+                None, self.depth_store.build_window, *params)
+        except Exception as e:
+            print(f"DEPTH WINDOW BUILD ERROR: {e}")
+            return
+        t0, t1, cols, ylo, yhi, ybins = params
+        self._enqueue(client, DepthWindowPacket(
+            t0=t0, t1=t1, cols=cols, ylo=ylo, yhi=yhi, ybins=ybins,
+            grid_b64=base64.b64encode(grid).decode("ascii"),
+            bbo_bid=bbo_bid, bbo_ask=bbo_ask).to_line())
+
+    async def depth_live_loop(self) -> None:
+        """Push ONE live heatmap column per pulse to each heatmap-subscribed client — binned from the in-RAM
+        local_ob (no depth.db). Read-only; fully separate from the bucket/close path and the capture writer."""
+        while True:
+            await asyncio.sleep(config.PULSE_BROADCAST_SECS)
+            subs = [c for c in self.clients.values() if c.heatmap is not None]
+            if not subs:
+                continue
+            ob = self.core.pulse_state["local_ob"]
+            bids = ob.get("bids", {}); asks = ob.get("asks", {})
+            import time as _t
+            ts = int(_t.time() * 1000)
+            for client in subs:
+                ylo, yhi, ybins = client.heatmap
+                col, bid, ask = bin_live_book(bids, asks, ylo, yhi, ybins)
+                self._enqueue(client, DepthColumnPacket(
+                    ts=ts, ylo=ylo, yhi=yhi, ybins=ybins,
+                    col_b64=base64.b64encode(col).decode("ascii"), bid=bid, ask=ask).to_line())
+
+    # ------------------------------------------------------------------
     async def serve(self) -> None:
         self.store.rehydrate_engines(self.core.engines, self.footprints_db)
 
@@ -161,6 +213,7 @@ class DaemonServer:
         asyncio.create_task(self.store.sync_loop(self.core))
         if self.depth_store is not None:   # Phase 1: depth/trade rolling-window writer, its own loop + db
             asyncio.create_task(self.depth_store.sync_loop(self.core))
+            asyncio.create_task(self.depth_live_loop())   # Phase 2a: live heatmap columns to subscribers
 
         async with server:
             await server.serve_forever()

@@ -21,6 +21,7 @@ is idempotent and reconstruction is exact.
 
 from __future__ import annotations
 
+import array
 import asyncio
 import sqlite3
 import struct
@@ -72,12 +73,8 @@ def _pack_levels(d: Dict[float, float]) -> bytes:
 def _unpack_levels(blob: bytes) -> Dict[int, float]:
     """-> {tick: qty} (tick-keyed for exact compares; ×TICK_SIZE at the boundary)."""
     (n,) = struct.unpack_from("<I", blob, 0)
-    out: Dict[int, float] = {}
-    off = 4
-    for _ in range(n):
-        t, q = struct.unpack_from("<if", blob, off); off += 8
-        out[t] = q
-    return out
+    vals = struct.unpack_from("<" + "if" * n, blob, 4)   # one call (interleaved tick,qty)
+    return dict(zip(vals[0::2], vals[1::2]))
 
 
 def _pack_changes(bid_changes: list, ask_changes: list) -> bytes:
@@ -97,12 +94,26 @@ def _unpack_changes(blob: bytes) -> Tuple[list, list]:
     off = 0
     for _ in range(2):
         (n,) = struct.unpack_from("<I", blob, off); off += 4
-        arr = []
-        for _ in range(n):
-            t, q = struct.unpack_from("<if", blob, off); off += 8
-            arr.append((t, q))
-        res.append(arr)
+        vals = struct.unpack_from("<" + "if" * n, blob, off); off += 8 * n   # one call per side
+        res.append(list(zip(vals[0::2], vals[1::2])))
     return res[0], res[1]
+
+
+def bin_live_book(bids: Dict[float, float], asks: Dict[float, float],
+                  ylo: float, yhi: float, ybins: int):
+    """Phase 2a live edge: bin a PRICE-keyed book ({price: qty}, e.g. pulse_state['local_ob']) into ``ybins``
+    over [ylo, yhi]. Returns ``(col_bytes, best_bid, best_ask)`` — col_bytes = ybins little-endian float32 of
+    RAW resting size per bin. No depth.db; pure read of the in-RAM book."""
+    bins = [0.0] * ybins
+    span = (yhi - ylo) or 1.0
+    for d in (bids, asks):
+        for price, q in d.items():
+            if ylo <= price < yhi and q > 0.0:
+                b = int((price - ylo) / span * ybins)
+                bins[b if b < ybins else ybins - 1] += q
+    bb = max((p for p, q in bids.items() if q > 0.0), default=0.0)
+    ba = min((p for p, q in asks.items() if q > 0.0), default=0.0)
+    return struct.pack("<%df" % ybins, *bins), bb, ba
 
 
 class DepthStore:
@@ -199,6 +210,103 @@ class DepthStore:
             for t, q in ac:
                 asks.pop(t, None) if q == 0.0 else asks.__setitem__(t, q)
         return bids, asks
+
+    # -- Phase 2a: heatmap window builder (read-only, off-loop) -------------
+    def build_window(self, t0: int, t1: int, cols: int, ylo: float, yhi: float, ybins: int):
+        """Build a Bookmap heatmap window in ONE forward pass — O(deltas in [t0,t1]), not W reconstructs.
+
+        Anchor the book at t0 (nearest snapshot + replay), seed the in-band bins, then walk the deltas
+        (t0,t1] once, updating the running book AND the affected price-bin incrementally; snapshot the
+        binned column at each pixel-time boundary. Returns ``(grid_bytes, bbo_bid, bbo_ask)`` where
+        grid_bytes is ``cols*ybins`` little-endian float32 row-major [col][bin] of RAW resting size.
+
+        READ-ONLY: opens its OWN ``mode=ro`` connection, so it runs in an executor with zero lock
+        contention against the live writer (capture / sync). Touches nothing but depth.db reads."""
+        c = sqlite3.connect("file:%s?mode=ro" % self.db_path, uri=True)
+        try:
+            tlo = int(round(ylo / _TICK)); thi = int(round(yhi / _TICK)); span = max(1, thi - tlo)
+            def binof(tk):
+                if tk < tlo or tk >= thi:
+                    return -1
+                b = (tk - tlo) * ybins // span
+                return b if b < ybins else ybins - 1
+            # Anchor: latest snapshot at/before t0 (fallback: earliest snapshot). ONE consistent forward pass
+            # from the anchor, ordered by (ts_ms, u): the event time is NOT strictly monotonic in u, so gating
+            # purely by u would mis-bucket a delated-ts delta — (ts_ms, u) makes the per-column ts gate monotonic
+            # (no skip) and ties break by sequence id. The (sts, t0] deltas are applied inside the first column's
+            # while-loop (col_end_0 = t0+step >= t0), so there is no separate anchor-replay seam.
+            snap = c.execute("SELECT ts_ms,bids,asks FROM depth_snapshots WHERE ts_ms<=? "
+                             "ORDER BY ts_ms DESC LIMIT 1", (t0,)).fetchone()
+            if snap is None:
+                snap = c.execute("SELECT ts_ms,bids,asks FROM depth_snapshots "
+                                 "ORDER BY ts_ms ASC LIMIT 1").fetchone()
+            if snap is None:
+                return b"", [0.0] * cols, [0.0] * cols   # no data captured yet
+            sts, bb, ab = snap
+            bids = _unpack_levels(bb); asks = _unpack_levels(ab)
+            bins = [0.0] * ybins
+            for tk, q in bids.items():
+                b = binof(tk)
+                if b >= 0: bins[b] += q
+            for tk, q in asks.items():
+                b = binof(tk)
+                if b >= 0: bins[b] += q
+            # HYBRID merge-walk: snapshots (ground truth) + deltas (fill between), in ts order. At each
+            # intermediate snapshot RE-ANCHOR the book — this corrects any delta-chain drift (a Binance
+            # @depth gap with no gap-recovery), which is precisely what the periodic snapshots are for.
+            # Walking deltas alone from one anchor would accumulate that drift across the window.
+            snaps = c.execute("SELECT ts_ms, bids, asks FROM depth_snapshots WHERE ts_ms>? AND ts_ms<=? "
+                              "ORDER BY ts_ms", (sts, t1)).fetchall()
+            deltas = c.execute("SELECT ts_ms, changes FROM depth_deltas WHERE ts_ms>? AND ts_ms<=? "
+                               "ORDER BY ts_ms, u", (sts, t1)).fetchall()
+            step = (t1 - t0) / cols if cols > 0 else (t1 - t0)
+            grid = array.array("f"); bbo_bid = []; bbo_ask = []   # 'f' = little-endian float32 on x86
+            si, di, ns, nd = 0, 0, len(snaps), len(deltas)
+            _INF = float("inf")
+
+            ybm1 = ybins - 1
+            zeros = [0.0] * ybins
+
+            def _reseed():
+                bins[:] = zeros                          # reset
+                for _tk, _q in bids.items():
+                    if tlo <= _tk < thi:
+                        _bn = (_tk - tlo) * ybins // span
+                        bins[_bn if _bn < ybins else ybm1] += _q
+                for _tk, _q in asks.items():
+                    if tlo <= _tk < thi:
+                        _bn = (_tk - tlo) * ybins // span
+                        bins[_bn if _bn < ybins else ybm1] += _q
+
+            for ci in range(cols):
+                col_end = t1 if ci == cols - 1 else t0 + (ci + 1) * step   # exact final boundary
+                while True:
+                    s_ts = snaps[si][0] if si < ns else _INF
+                    d_ts = deltas[di][0] if di < nd else _INF
+                    if s_ts > col_end and d_ts > col_end:
+                        break
+                    if s_ts <= d_ts:                       # RE-ANCHOR to the snapshot (corrects drift)
+                        bids = _unpack_levels(snaps[si][1]); asks = _unpack_levels(snaps[si][2])
+                        _reseed(); si += 1
+                    else:                                  # apply one diff incrementally (binof inlined — hot)
+                        bc, ac = _unpack_changes(deltas[di][1])
+                        for tk, q in bc:
+                            if tlo <= tk < thi:
+                                _bn = (tk - tlo) * ybins // span
+                                bins[_bn if _bn < ybins else ybm1] += q - bids.get(tk, 0.0)
+                            bids.pop(tk, None) if q == 0.0 else bids.__setitem__(tk, q)
+                        for tk, q in ac:
+                            if tlo <= tk < thi:
+                                _bn = (tk - tlo) * ybins // span
+                                bins[_bn if _bn < ybins else ybm1] += q - asks.get(tk, 0.0)
+                            asks.pop(tk, None) if q == 0.0 else asks.__setitem__(tk, q)
+                        di += 1
+                grid.extend(bins)
+                bbo_bid.append((max(bids) if bids else 0) * _TICK)
+                bbo_ask.append((min(asks) if asks else 0) * _TICK)
+        finally:
+            c.close()
+        return grid.tobytes(), bbo_bid, bbo_ask
 
     def stats(self) -> dict:
         """Row counts + time spans (for the validation report)."""
