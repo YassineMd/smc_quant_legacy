@@ -803,8 +803,29 @@ now EXISTS for the Phase-2 heatmap.** The daemon already maintained the full res
   restart — `stop-sigterm` timed out — so its clean-shutdown flush was skipped; the 10s periodic sync + SQLite
   WAL recovery meant zero consequential loss. Graceful restart = a future systemd `KillSignal`/`TimeoutStopSec`
   look, NOT a Phase-1 issue.)
-- **Phase 2 = the heatmap display** (scanner-mode-gated, reads depth.db via `reconstruct_at_u`, does nothing
-  until selected); **Phase 3 = the trade-bubbles overlay.** Let depth.db accumulate a few hours first.
+**🟢 HEATMAP Phase 2a — the `depth_window` daemon endpoint (`1b339ab`).** The terminal can't read the VM's
+depth.db directly (the tunnel carries only IPC frames), so the heatmap needs the daemon to SERVE depth
+windows. `protocol.py`: request `{"action":"depth_window", t0,t1, cols:W, ylo,yhi, ybins:H}` (+ `depth_window_stop`)
+→ `DepthWindowPacket` (W×H base64 float32 grid of RAW resting size [terminal applies log+LUT+cutoffs locally,
+sliders never hit the daemon] + per-col BBO); `DepthColumnPacket` = one live column at the pulse cadence.
+`depth_store.build_window` = ONE forward pass O(deltas), `mode=ro`, run in an executor (OFF-LOOP — never blocks
+feeds/capture/close-broadcast); `bin_live_book` bins the in-RAM `local_ob` for the live edge. `daemon._handle_control`
+routes it off-loop + `depth_live_loop` pushes live columns to `client.heatmap` subscribers.
+- **⚠️ CORRECTNESS LESSON (record — relevant to ANYTHING that replays the depth deltas): the delta chain DRIFTS
+  from the snapshots.** Binance `@depth` drops messages and the daemon has NO gap-recovery, so walking deltas
+  alone from a single anchor produces a progressively-WRONG book (validation caught it: mid-window columns
+  200/500/999 mismatched + BBO off by a tick). The periodic snapshots are the GROUND-TRUTH RESETS they were
+  designed to be — so `build_window` is a true HYBRID that RE-ANCHORS at every intermediate snapshot (merge-walk
+  snapshots+deltas by (ts_ms,u)). After the fix: build_window == independent reconstruct, **max rel 4.2e-08
+  (float32 grid), BBO EXACT** every column. NOTE: `reconstruct_at_u` (Phase 1, single u-prefix) does NOT
+  re-anchor — fine for the live edge / one point, but a multi-point/window replay MUST re-anchor at snapshots.
+- **PERF (accepted):** O(deltas), pure-Python floor ~357ms/35min, ~3.6s/6h. OFF-LOOP so it never lags the
+  daemon; 2b LAZY-LOADS a recent window (~0.35-0.7s) + fetches older columns on scroll, so the 6h cold build is
+  never paid up front. Live column 0.22ms. NOT made faster via C (won't add a VM build dep for a one-time cold
+  open). Isolation: read-only (db mtime unchanged), suite 9/9.
+- **Next: deploy 2a to the VM + verify (correctness spot-check on live depth.db, capture/closes flow, no
+  regression), then Phase 2b** = the terminal heatmap render (scanner-mode-gated, defaults to a recent window +
+  lazy-loads older, log+LUT+cutoff contrast, BBO lines, greyscale toggle); **Phase 3 = trade-bubbles overlay.**
 
 **⚠️ VERDICT — the balance-of-power SCORE/strategy is DESCRIPTIVE, not predictive (settled; don't rebuild as a
 signal).** Hypothesis "move begins when absorption low + eff-agg/E-R high" tested exhaustively, all CAUSAL +

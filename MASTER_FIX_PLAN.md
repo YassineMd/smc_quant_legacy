@@ -968,9 +968,25 @@ loop / transactions / prune — deletable without touching the durable bucket `h
   depth.db accumulating (deltas ~3.84/s, trades ~3.95/s, snapshots ~30s, 42 changes/diff); TRUE compacted size
   **~44-53MB/6h** (124-178MB raw = un-checkpointed WAL, confirmed by PASSIVE checkpoint), under budget; closes
   still firing post-deploy (`closed_buckets` grew, `engine_state` fresh ~10s); no regression. **The 6h
-  depth+trade rolling window is now LIVE — the foundation for Phase 2.** **Next: Phase 2 heatmap display
-  (scanner-mode-gated, reads depth.db via reconstruct_at_u, does nothing until selected), Phase 3 bubbles —
-  let depth.db accumulate a few hours first.**
+  depth+trade rolling window is now LIVE — the foundation for Phase 2.**
+
+**🟢 HEATMAP Phase 2a — `depth_window` daemon endpoint (`1b339ab`, built+validated; deploy next).** The terminal
+can't read the VM's depth.db directly (tunnel = IPC frames only), so the daemon serves heatmap windows.
+`protocol`: `depth_window` request → `DepthWindowPacket` (W×H base64 float32 grid of RAW resting size + per-col
+BBO) + `DepthColumnPacket` live column. `depth_store.build_window` = one forward pass O(deltas), `mode=ro`,
+OFF-LOOP executor (never blocks feeds/capture/close-broadcast); `bin_live_book` for the live edge; `daemon`
+routes off-loop + `depth_live_loop` pushes live columns to subscribers.
+- **⚠️ CORRECTNESS LESSON (record — applies to ANY depth-delta replay): the delta chain DRIFTS from the
+  snapshots.** Binance `@depth` drops messages, no gap-recovery → walking deltas alone from one anchor gives a
+  progressively-WRONG book (validation caught mid-window column mismatches + BBO off a tick). The snapshots are
+  GROUND-TRUTH RESETS — `build_window` is a true HYBRID that RE-ANCHORS at every intermediate snapshot. After the
+  fix: == independent reconstruct, **max rel 4.2e-08, BBO EXACT** every column. (`reconstruct_at_u` does NOT
+  re-anchor; fine for one point, but window/multi-point replay MUST.)
+- **PERF (accepted, Option 1):** O(deltas), ~357ms/35min, ~3.6s/6h — OFF-LOOP so no daemon lag; 2b lazy-loads a
+  recent window + fetches older on scroll, so the 6h cold build is never paid up front. Not C-optimized (no VM
+  build dep for a one-time cold open). Read-only, suite 9/9.
+- **Next: deploy 2a + verify on VM, then 2b** (terminal render: scanner-mode-gated, defaults recent + lazy-loads
+  older, log+LUT+cutoff contrast, BBO lines, greyscale), **Phase 3 bubbles.**
 
 **⚠️ INVESTIGATION VERDICT (the balance-of-power "score" / strategy — settled, do NOT rebuild as a predictor).**
 The operator's hypothesis ("a move begins when absorption is low + eff-agg & E/R high") was stress-tested
