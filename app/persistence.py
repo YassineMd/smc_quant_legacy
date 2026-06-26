@@ -43,7 +43,7 @@ from collections import deque
 from typing import Dict, List, Optional, Tuple
 
 from . import config
-from .quant_engine import QuantBucket, QuantEngine, calc_quant_obs, rank_obs
+from .quant_engine import QuantBucket, QuantEngine   # Step A.2: calc_quant_obs/rank_obs no longer needed here
 
 _INF = float("inf")
 _NEG_INF = float("-inf")
@@ -354,7 +354,11 @@ class HistoryStore:
             mode, new_buckets, new_cursor = self._new_closed(tf, engine.closed_buckets)
             new_cursors[tf] = new_cursor
 
-            obs = rank_obs(calc_quant_obs(engine, tf))   # pure read of engine state
+            # Step A.2: the order_blocks TABLE is WRITE-ONLY — never SELECTed in production (rehydrate
+            # recomputes OBs fresh via catchup_start; the lone SELECT is a schema-guard test using its own
+            # inserted row). So this O(obs×buckets) rescan ×5 ON the event loop every SYNC_INTERVAL_SECS=10
+            # was pure waste — the residual live-price hitch (~0.8s, 3s+ in busy markets). Dropped.
+            obs: list = []
 
             tfd = footprints_db.get(tf, {})
             self._trim_mem(tfd)                          # mutate in-memory dict on the loop
