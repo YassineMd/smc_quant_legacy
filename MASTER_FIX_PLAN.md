@@ -1056,12 +1056,25 @@ NEVER blocks during recompute, any timeframe, any market speed.
   `obs=[]` (drop the rescan + the dead write). Proven write-only (whole-repo grep) + rehydrate byte-identical
   (`scripts/validate_rehydrate_no_obs.py`). Verified live: 0.8s/10s gap **GONE, max loop gap now ~0.35s**.
   Recompute is now fully off-loop in BOTH places (recompute_loop pool + history sync dropped).
-- **Residual latency levers (small):** (1) **OI poll** — `fetch_oi_loop` does a SYNC `requests.get` ON the loop
-  every `OI_POLL_SECS=5` (~0.28s) → the ~0.28s/5s hitch; fix = run it in an executor. (2) **OB-pool graceful
-  shutdown** — Step A's spawn pool isn't closed on SIGTERM → benign multiprocessing semaphore double-unlink
-  warnings on restart (no leak / no data loss; new daemon rehydrates fine); fix = `pool.shutdown()` in the
-  daemon shutdown path.
-- **Next: Step B = Phase 3 bubbles** (optionally polish the two small residuals first).
+- **✅ OI poll off-loop (`5cba32d`, deployed+verified):** `fetch_oi_loop` now does the `requests.get` via
+  `run_in_executor` (network I/O releases the GIL) → the ~0.28s/5s hitch GONE.
+- **✅ OB-pool graceful shutdown (`cea7b79`, deployed+verified):** `shutdown_ob_pool()` (bounded daemon thread —
+  can't block SIGTERM) cleanly reaps the worker on exit — `OB POOL shut down cleanly` prints (clean join vs the
+  old abrupt death).
+- **✅ LATENCY DONE — real-time.** Full path: **3-4s/5s → Step A (pool) → A.2 (history-sync rescan dropped) → OI
+  off-loop → ~0.37s max, real-time; structurally solved (4h-proven), recompute off the loop in BOTH places.**
+- **TWO consciously-ACCEPTED benign residuals (deliberate decisions, NOT gaps — risk/value logic):**
+  1. **~0.2s/10s footprint re-serialize** — the history sync `json.dumps`-es ~1500 footprint nodes (×5 tfs)
+     every 10s, mostly static. NOT fixed: the skip-unchanged lever has a RACE caveat (footprints mutate live;
+     dirty-tracking adds a concurrency question) — unlike every other fix (pure fns / write-only waste). A real
+     race risk for 0.2s of imperceptible gain on a 24/7 daemon = bad trade.
+  2. **resource-tracker shutdown noise** — the spawn `ProcessPoolExecutor` emits benign multiprocessing
+     `leaked semaphore` / `sem_unlink` `FileNotFoundError` lines at interpreter exit. PROVEN benign: the
+     FileNotFoundError = the semaphore was ALREADY unlinked (cleaned); the "leaked" count is stale tracker
+     bookkeeping; every restart rehydrates fine (ZERO leak / ZERO data loss). NOT chased: an inherent CPython
+     spawn-pool shutdown artifact (3 standalone repros — incl. the worker importing app.feeds — could NOT
+     reproduce it; only testable via VM deploys). Cosmetic log noise, no functional cost = bad trade.
+- **Next: Step B = Phase 3 trade bubbles** on the clean daemon.
 
 **⚠️ INVESTIGATION VERDICT (the balance-of-power "score" / strategy — settled, do NOT rebuild as a predictor).**
 The operator's hypothesis ("a move begins when absorption is low + eff-agg & E/R high") was stress-tested

@@ -891,11 +891,22 @@ runs on a SPAWN worker PROCESS (2nd core) — the broadcast loop NEVER blocks du
   table (never SELECTed; rehydrate recomputes via catchup). Fix: `obs=[]`. Proven write-only + rehydrate
   byte-identical (`scripts/validate_rehydrate_no_obs.py`); verified live: 0.8s/10s gap GONE, max loop gap now
   **~0.35s**. Recompute fully off-loop in BOTH places (recompute_loop pool + history-sync dropped).
-- **Residual levers (small):** (1) **OI poll** = sync `requests.get` ON the loop every `OI_POLL_SECS=5` (~0.28s)
-  → the ~0.28s/5s hitch; fix = executor. (2) **OB-pool graceful shutdown** — Step A's spawn pool isn't closed on
-  SIGTERM → benign multiprocessing semaphore double-unlink warnings on restart (no leak/data-loss); fix =
-  `pool.shutdown()` in daemon shutdown.
-- **Next: Step B = Phase 3 trade bubbles** (optionally polish the two residuals first).
+- **✅ OI poll off-loop (`5cba32d`):** `fetch_oi_loop` does the `requests.get` via `run_in_executor` (network I/O
+  releases the GIL) → the ~0.28s/5s hitch GONE.
+- **✅ OB-pool graceful shutdown (`cea7b79`):** `shutdown_ob_pool()` (bounded daemon thread, can't block SIGTERM)
+  cleanly reaps the worker — `OB POOL shut down cleanly` prints (clean join vs the old abrupt death).
+- **✅ LATENCY DONE — real-time.** 3-4s/5s → Step A (pool) → A.2 (history rescan dropped) → OI off-loop →
+  **~0.37s max, real-time; structurally solved (4h-proven), recompute off-loop in BOTH places.**
+- **TWO consciously-ACCEPTED benign residuals (decisions, NOT gaps):**
+  1. **~0.2s/10s footprint re-serialize** (history sync `json.dumps` ~1500 nodes ×5 tfs, mostly static). NOT
+     fixed — the skip-unchanged lever has a RACE caveat (footprints mutate live); a real race risk for 0.2s of
+     imperceptible gain on a 24/7 daemon = bad trade.
+  2. **resource-tracker shutdown noise** — spawn `ProcessPoolExecutor` emits benign `leaked semaphore` /
+     `sem_unlink FileNotFoundError` at interpreter exit. PROVEN benign (FileNotFoundError = already-unlinked;
+     "leaked" = stale bookkeeping; every restart rehydrates fine — ZERO leak/data-loss). NOT chased — inherent
+     CPython spawn-pool artifact (3 standalone repros, incl. worker importing app.feeds, could NOT reproduce;
+     only VM-testable). Cosmetic, no functional cost = bad trade.
+- **Next: Step B = Phase 3 trade bubbles** on the clean daemon.
 
 **⚠️ VERDICT — the balance-of-power SCORE/strategy is DESCRIPTIVE, not predictive (settled; don't rebuild as a
 signal).** Hypothesis "move begins when absorption low + eff-agg/E-R high" tested exhaustively, all CAUSAL +
