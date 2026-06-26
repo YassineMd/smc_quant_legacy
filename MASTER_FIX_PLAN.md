@@ -962,8 +962,15 @@ loop / transactions / prune — deletable without touching the durable bucket `h
   `DEPTH_CAPTURE_ENABLED`.
 - **VALIDATED live:** lossless reconstruction (reconstructed == live book, 1013=1013 / 1006=1006, 0 mismatch);
   ~40-45MB/6h at 30s snapshots (193MB mid-run was WAL transient), under the 500MB budget; prune holds; 25 closes
-  broadcast during capture; suite 9/9. **Deploy is additive-only** (gated, fresh depth.db on the VM, existing
-  feeds/buckets/close-broadcast untouched). **Next: Phase 2 heatmap display (scanner-mode-gated), Phase 3 bubbles.**
+  broadcast during capture; suite 9/9. Deploy was additive-only (gated, fresh depth.db, existing
+  feeds/buckets/close-broadcast untouched).
+- **✅ DEPLOYED + VERIFIED LIVE on `smc-quant-eu` (2026-06-26).** Clean restart (REHYDRATE 22078 → LISTENING);
+  depth.db accumulating (deltas ~3.84/s, trades ~3.95/s, snapshots ~30s, 42 changes/diff); TRUE compacted size
+  **~44-53MB/6h** (124-178MB raw = un-checkpointed WAL, confirmed by PASSIVE checkpoint), under budget; closes
+  still firing post-deploy (`closed_buckets` grew, `engine_state` fresh ~10s); no regression. **The 6h
+  depth+trade rolling window is now LIVE — the foundation for Phase 2.** **Next: Phase 2 heatmap display
+  (scanner-mode-gated, reads depth.db via reconstruct_at_u, does nothing until selected), Phase 3 bubbles —
+  let depth.db accumulate a few hours first.**
 
 **⚠️ INVESTIGATION VERDICT (the balance-of-power "score" / strategy — settled, do NOT rebuild as a predictor).**
 The operator's hypothesis ("a move begins when absorption is low + eff-agg & E/R high") was stress-tested

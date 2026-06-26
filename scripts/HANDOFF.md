@@ -792,9 +792,19 @@ now EXISTS for the Phase-2 heatmap.** The daemon already maintained the full res
 - **VALIDATED live (175s):** lossless reconstruction = reconstructed book == live book at update-id u
   (1013=1013 bids / 1006=1006 asks, 0 missing/extra/qty-mismatch); size TRUE 0.479MB/173s → **~40-45MB/6h** at
   30s snapshots (the 193MB mid-run was un-checkpointed WAL transient), well under the 500MB budget; prune holds;
-  25 close-broadcasts fired DURING capture; suite 9/9. **DEPLOY = additive-only daemon change** (gated, separate
-  db created fresh on the VM); the existing feeds/buckets/close-broadcast are untouched. **Phase 2 = the heatmap
-  display (scanner-mode-gated, does nothing until selected); Phase 3 = the trade bubbles overlay.**
+  25 close-broadcasts fired DURING capture; suite 9/9. Deploy was additive-only (gated, separate db created
+  fresh on the VM; existing feeds/buckets/close-broadcast untouched).
+- **✅ DEPLOYED + VERIFIED LIVE on `smc-quant-eu` (2026-06-26).** Restart clean (REHYDRATE 22078 buckets →
+  LISTENING). depth.db accumulating: deltas ~3.84/s, trades ~3.95/s, snapshots every ~30s, 42 changes/diff;
+  TRUE compacted size projects **~44-53MB/6h** (the 124-178MB raw was un-checkpointed WAL — confirmed via a
+  PASSIVE checkpoint), well under the 500MB budget. Closes still firing post-deploy (`closed_buckets` grew,
+  `engine_state` written ~10s ago); no errors/regression. **The 6h depth+trade window is now LIVE and
+  accumulating — the foundation for Phase 2.** (Pre-existing note: the OLD process took a hard SIGKILL on
+  restart — `stop-sigterm` timed out — so its clean-shutdown flush was skipped; the 10s periodic sync + SQLite
+  WAL recovery meant zero consequential loss. Graceful restart = a future systemd `KillSignal`/`TimeoutStopSec`
+  look, NOT a Phase-1 issue.)
+- **Phase 2 = the heatmap display** (scanner-mode-gated, reads depth.db via `reconstruct_at_u`, does nothing
+  until selected); **Phase 3 = the trade-bubbles overlay.** Let depth.db accumulate a few hours first.
 
 **⚠️ VERDICT — the balance-of-power SCORE/strategy is DESCRIPTIVE, not predictive (settled; don't rebuild as a
 signal).** Hypothesis "move begins when absorption low + eff-agg/E-R high" tested exhaustively, all CAUSAL +
