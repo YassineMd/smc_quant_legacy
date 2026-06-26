@@ -865,11 +865,27 @@ is O(obs×buckets) (~3s on a ~10k-bucket 1m engine, the mitigation loop).
   function of the closed buckets (change only on a close, ~once/45s for 1m), so 4/5 rescans were identical.
   LOSSLESS; `catchup_start` still recomputes on connect.
 - **Verified after deploy:** 3-4s/~5s → **~0.68s/~10s**.
-- **⚠️ PARTIAL — mitigated, NOT structurally solved.** Recompute still runs synchronously ON the single loop,
-  just ~5× less often → it WILL still hitch on heavy tfs (4h) or fast markets (frequent 1m closes). STRUCTURAL
-  fix = process-pool offload of `calc_quant_obs` to the VM's 2nd core (verified feasible: spawn-safe entry guard,
-  picklable buckets, pure function of the bucket snapshot) — NOT done. Residual ~0.68s/10s = the depth.db flush
-  PACKING (GIL, `DEPTH_SYNC_SECS=10`) — pack at capture time to spread it. Next levers when 4h/fast-market hitch.
+- **⚠️→✅ Was PARTIAL here; STRUCTURALLY SOLVED by Step A (`5495a51`, below).** ad4d467 left the heavy
+  recompute on the single loop (just ~5× less often) → would still hitch on 4h / fast markets. Step A moved it
+  OFF the loop. Lone residual now = the ~0.68s/10s depth-flush PACKING hitch (`DEPTH_SYNC_SECS=10`) — Step A.2.
+
+**🟢 LATENCY STRUCTURALLY SOLVED — process-pool offload of the OB recompute (Step A, `5495a51`, ✅ DEPLOYED +
+VERIFIED on `smc-quant-eu` 2026-06-26).** `calc_quant_obs` is a PURE function of the closed buckets, so it now
+runs on a SPAWN worker PROCESS (2nd core) — the broadcast loop NEVER blocks during recompute, any tf, any speed.
+- **Design:** lazy `ProcessPoolExecutor(max_workers=1, spawn)`; `recompute_loop` snapshots `list(closed_buckets)`
+  on-loop (immutable) then `await run_in_executor(pool, _recompute_ob_line, …)`; skip-if-unchanged in front;
+  warm-up at boot.
+- **FALLBACK (tested, non-negotiable):** any pool failure → tear down (reaps worker, no leak) → on-loop this
+  cycle → recreate next → permanently latch on-loop after 3. Degrades to EXACTLY the pre-offload freeze, stable —
+  never down, never thrash. Proven vs SUSTAINED failure (correct every cycle, latched, ≤3 pools, all shut down;
+  real worker spawned+reaped).
+- **BIT-IDENTICAL (pre-deploy):** on-loop == pool byte-for-byte on REAL engines (VM rehydrate, all 5 tfs, 22293
+  buckets: 1m 145757B / 5m 32011B / 15m 55640B / 1h 51268B / 4h 50815B). Moves WHERE, not WHAT.
+  `scripts/validate_ob_pool.py` (+ `_fallback.py`); run with `OB_VALIDATE_DB=<.backup snapshot>` on the VM.
+- **Verified LIVE:** 1m max gap 0.68s (depth-flush only — recompute freezes GONE); **4h test** — a fresh 4h
+  subscriber's 50831B rescan ran with NO loop gap (where Fix 1+2 froze seconds); worker on 2nd core ~7% CPU;
+  daemon main-loop CPU **~70% → ~14%**.
+- **Next: Step A.2** (depth-flush pack-at-capture), then **Step B = Phase 3 trade bubbles**.
 
 **⚠️ VERDICT — the balance-of-power SCORE/strategy is DESCRIPTIVE, not predictive (settled; don't rebuild as a
 signal).** Hypothesis "move begins when absorption low + eff-agg/E-R high" tested exhaustively, all CAUSAL +

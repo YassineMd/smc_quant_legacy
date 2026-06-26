@@ -1026,13 +1026,30 @@ mitigation loop).
   is a pure function of the CLOSED buckets (change only on a close, ~once/45s for 1m), so 4 of 5 rescans were
   byte-identical. LOSSLESS; `catchup_start` still recomputes fresh OBs on connect.
 - **Verified live after deploy:** 3-4s every ~5s → **~0.68s every ~10s**.
-- **⚠️ PARTIAL — MITIGATED, NOT structurally solved.** The heavy synchronous recompute still runs ON the single
-  event loop; it just runs ~5× less often. It WILL still hitch on heavy tfs (4h) or fast markets (frequent 1m
-  closes). The STRUCTURAL fix = **process-pool offload of `calc_quant_obs` to the VM's 2nd core** — verified
-  FEASIBLE (spawn-safe `run_daemon.py` entry guard, picklable buckets, pure function of the bucket snapshot) but
-  **NOT done**. The residual ~0.68s/10s is the **depth.db flush packing** (GIL-bound in the executor;
-  `DEPTH_SYNC_SECS=10`) — pack each delta AT CAPTURE time to spread it. These are the next latency levers if/when
-  the 4h or fast-market hitches matter.
+- **⚠️→✅ Was PARTIAL at this commit; now STRUCTURALLY SOLVED by Step A (`5495a51`, below).** ad4d467 left the
+  heavy synchronous recompute ON the single event loop (just ~5× less often) — it would still hitch on heavy
+  tfs (4h) or fast markets. Step A moved it OFF the loop (process pool, 2nd core). Lone residual now = the
+  ~0.68s/10s **depth.db flush packing** hitch (GIL-bound; `DEPTH_SYNC_SECS=10`) — **Step A.2** (pack at capture).
+
+**🟢 LATENCY STRUCTURALLY SOLVED — process-pool offload of the OB recompute (Step A, `5495a51`, ✅ DEPLOYED +
+VERIFIED on `smc-quant-eu` 2026-06-26).** `calc_quant_obs` (O(obs×buckets), ~3s on a 10k-bucket engine) is a
+PURE function of the closed buckets, so it now runs on a SPAWN worker PROCESS (2nd core) — the broadcast loop
+NEVER blocks during recompute, any timeframe, any market speed.
+- **Design:** lazy `ProcessPoolExecutor(max_workers=1, spawn)`; `recompute_loop` snapshots `list(closed_buckets)`
+  ON the loop (immutable closed buckets) then `await run_in_executor(pool, _recompute_ob_line, …)`;
+  skip-if-unchanged still in front; a warm-up task spawns the worker at boot.
+- **FALLBACK (non-negotiable, tested):** any pool failure → tear the broken pool down (reaps the worker, no
+  leak) → on-loop THIS cycle → recreate next → permanently latch on-loop after 3 failures. Degrades to EXACTLY
+  the pre-offload behavior (the freeze), STABLE — never "daemon down", never thrash. Proven against SUSTAINED
+  failure (correct line every cycle, latched on-loop, ≤3 pools created, every one shut down; real worker
+  spawned + fully reaped).
+- **BIT-IDENTICAL proof (before deploy):** on-loop line == pool line byte-for-byte on REAL production engines
+  (VM rehydrate, all 5 tfs, 22293 buckets — 1m 145757B / 5m 32011B / 15m 55640B / 1h 51268B / 4h 50815B).
+  Moves WHERE it runs, not WHAT it computes. (`scripts/validate_ob_pool.py` + `…_fallback.py`.)
+- **Verified LIVE:** 1m max loop gap 0.68s (depth-flush only — recompute freezes GONE); the **4h test** (the
+  structural proof where Fix 1+2 would have failed) — a fresh 4h subscriber's heavy rescan (50831B OB matrix)
+  ran with NO pulse/tick gap around it; worker on the 2nd core (~7% CPU); daemon main-loop CPU **~70% → ~14%**.
+- **Next: Step A.2** = kill the ~0.68s/10s depth-flush hitch (pack deltas at capture time), then **Step B = Phase 3 bubbles**.
 
 **⚠️ INVESTIGATION VERDICT (the balance-of-power "score" / strategy — settled, do NOT rebuild as a predictor).**
 The operator's hypothesis ("a move begins when absorption is low + eff-agg & E/R high") was stress-tested
