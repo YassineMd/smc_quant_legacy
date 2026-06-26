@@ -989,8 +989,50 @@ routes off-loop + `depth_live_loop` pushes live columns to subscribers.
   (== independent reconstruct, **max rel 0.0, BBO exact** — snapshot-reanchor holds in production), read-only
   confirmed, capture/closes still flowing (engine_state ~4s fresh), no regression. VM perf ~1085ms/0.95h, ~7s/6h
   cold (e2-standard-2) — off-loop + 2b lazy-loads, so rarely paid.
-- **Next: 2b** (terminal render: scanner-mode-gated, defaults recent + lazy-loads older, log+LUT+cutoff contrast,
-  BBO lines, greyscale), **Phase 3 bubbles.**
+- **2b is BUILT + the live-price latency bug it surfaced is DEPLOYED — see the two entries below. Next: Phase 3 bubbles.**
+
+**🟢 HEATMAP Phase 2b — terminal render (`69a376c`, BUILT + EYEBALLED on SOLUSDT).** Scanner-mode-gated
+("Liquidity Heatmap (Bookmap)"); the ~MB grid rides a SEPARATE `pipe_client` delivery buffer
+(`depth_heatmap_state`) and NEVER the 20Hz `snapshot()` — zero cost when the mode is closed.
+- **`app/heatmap.py`** (NEW, pure / no-Qt, headlessly tested): base64 float32 decode; `HeatmapCache` (contiguous
+  time-ordered columns — O(1) live append, lazy CONTIGUOUS prepend on scroll-back, FREE re-slice on a pan inside
+  the loaded range, time-span trim); percentile contrast; the neon diverging LUT + side-sign.
+- **Render:** `ImageItem(col-major)` over a SIGNED pre-log grid (±log10(size+1), signed by side); adaptive
+  contrast (percentile cutoffs + 60s renorm) via the `HeatmapContrastBar` sliders (default **p98.9 / p99.4** —
+  strongest liquidity first). Smooth 20Hz view-follow DECOUPLED from the data-change rebuild.
+- **NEON palette by SIDE (Deepdom):** bids/buy-limits = green, asks/sell-limits = purple, intensity by size,
+  TRANSPARENT below the cutoff (the dark canvas shows, no blue wash). Greyscale 'g'.
+- **BBO:** solid FORMED trace ending at the live edge + DASHED current bid/ask projecting forward into the
+  un-formed future (Bookmap LLT) + Y-axis price tags; crosshair shows time + price.
+- **Scan-Start HARD floor** (never request/back-fill before the chosen start); the DATA window never extends
+  past 'now' (blank to the right = empty view — no carry-forward flat lines, no force-back on pan). **Tick-
+  aligned ybins** (one bin/tick → a level fills its cell, not a hairline).
+- **DOM ladder (`cob_panel`):** default-ON in heatmap mode, neon-recolored, price-bucket AGGREGATION tracking
+  the heatmap row height (coarsens zoomed out, refines to 1 tick zoomed in), crosshair-driven price/size readout.
+- **Validated:** compile/import/suite 9/9 + headless (decode/axis-order, cache stitch/ring/contiguity, LUT,
+  signed-cache, cob aggregation/mark). **Next: Phase 3 = executed-trade bubbles** (green=buy / red=sell, size=qty).
+
+**🟢 LIVE-PRICE LATENCY FIX — recompute was starving the broadcast loop (`ad4d467`, ✅ DEPLOYED + VERIFIED on
+`smc-quant-eu` 2026-06-26).** Surfaced during the 2b eyeball: live price "a few seconds behind, catches up in
+bursts" in BOTH heatmap AND bucket modes. PROVEN on the VM (probe of the daemon's own output, not guessed): a
+fresh 1m subscriber got 1 frame in 10s while the daemon burned ~70% of a core; the single asyncio loop blocked
+3-4s every ~5s (=`RECOMPUTE_SECS`). Root cause: `recompute_loop` + the 19.3b live-edge refresh rescanned OBs AND
+serialized the forming footprint / OB matrix for ALL 5 tfs every cycle (`to_line()` runs BEFORE `broadcast_tf`
+filters by subscription), and `calc_quant_obs` is O(obs×buckets) (~3s on a ~10k-bucket 1m engine — the
+mitigation loop).
+- **Fix (two levers):** (1) **subscription-gating** — only compute/serialize/broadcast per-tf work for tfs a
+  client subscribes to (`daemon.tf_has_subscribers` → `core._tf_subbed`); one terminal on 1m does 1m work, not
+  5×. (2) **skip-if-unchanged** — recompute only when `engine.total_closed` moved since its last run; the OB set
+  is a pure function of the CLOSED buckets (change only on a close, ~once/45s for 1m), so 4 of 5 rescans were
+  byte-identical. LOSSLESS; `catchup_start` still recomputes fresh OBs on connect.
+- **Verified live after deploy:** 3-4s every ~5s → **~0.68s every ~10s**.
+- **⚠️ PARTIAL — MITIGATED, NOT structurally solved.** The heavy synchronous recompute still runs ON the single
+  event loop; it just runs ~5× less often. It WILL still hitch on heavy tfs (4h) or fast markets (frequent 1m
+  closes). The STRUCTURAL fix = **process-pool offload of `calc_quant_obs` to the VM's 2nd core** — verified
+  FEASIBLE (spawn-safe `run_daemon.py` entry guard, picklable buckets, pure function of the bucket snapshot) but
+  **NOT done**. The residual ~0.68s/10s is the **depth.db flush packing** (GIL-bound in the executor;
+  `DEPTH_SYNC_SECS=10`) — pack each delta AT CAPTURE time to spread it. These are the next latency levers if/when
+  the 4h or fast-market hitches matter.
 
 **⚠️ INVESTIGATION VERDICT (the balance-of-power "score" / strategy — settled, do NOT rebuild as a predictor).**
 The operator's hypothesis ("a move begins when absorption is low + eff-agg & E/R high") was stress-tested
