@@ -191,9 +191,14 @@ class MarketDataCore:
     # Stream: open interest poll (main.py:621)
     # ------------------------------------------------------------------
     async def fetch_oi_loop(self) -> None:
+        loop = asyncio.get_event_loop()
         while True:
             try:
-                res = self.session.get(config.REST_OPEN_INTEREST, timeout=3)
+                # The synchronous requests.get (~0.28s) used to run ON the event loop every OI_POLL_SECS,
+                # hitching the broadcast (the residual ~0.28s/5s gap). Network I/O releases the GIL, so a
+                # thread executor truly parallelizes — fetch OFF the loop, apply the result ON the loop.
+                res = await loop.run_in_executor(
+                    None, lambda: self.session.get(config.REST_OPEN_INTEREST, timeout=3))
                 if res.status_code == 200:
                     self._apply_oi(float(res.json().get("openInterest", 0)))
             except Exception:
