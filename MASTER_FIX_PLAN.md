@@ -945,6 +945,26 @@ MEASURE panel so Fix 0 removes it from the default session.
 - **Result:** static selection ~0; per-recompute ~1.7–1.9× (27→16 / 49→29 / 117→61ms @ N=200/400/800). Largest
   residual = `conf_traj` exp/log posteriors (O(N)). Suite 9/9 (2 fails pre-exist at HEAD, unrelated). **EXE stale.**
 
+**🟢 BOOKMAP HEATMAP — Phase 1: whole-book depth capture + trade tape (`9d048c4`). FOUNDATION.** The storage audit
+found the daemon receives the full resting book live (`pulse_state.local_ob`, 1000+/side, ~4Hz) but DISCARDED it,
+and `levels{}` is TRADED volume (not depth). Phase 1 persists depth+trades as a bounded 6h rolling window so
+**depth-over-time now exists for the Phase-2 heatmap**, in a **SEPARATE `data/depth.db`** (own connection / sync
+loop / transactions / prune — deletable without touching the durable bucket `history.db`).
+- **`app/depth_store.py`** (new) `DepthStore`, 3 tables — `depth_snapshots` (whole-book anchors every 30s + one
+  per diff-stream reconnect), `depth_deltas` (LOSSLESS per-diff changes, nothing sampled), `trade_tape` (every
+  aggTrade). Packed `(int32 tick, float32 qty)`, side-implicit sub-arrays, qty==0 kept; Binance diffs are
+  absolute → idempotent → exact replay. `reconstruct_at_u()` = nearest anchor + replay deltas.
+- **HYBRID snapshots+deltas, whole book** (`DEPTH_BAND_PCT=0.0`; knob retained). **6h HARD prune** keeps the one
+  anchor at/just-before the cutoff (oldest delta always anchored); row counts hard-bounded to ~6h.
+- **ISOLATION:** O(1) tees only — depth diff teed AFTER `public_stream` applies it, trade teed in
+  `aggtrade_stream` AROUND (never inside) `_process_aggtrade`; bounded buffers drained OFF-LOOP by
+  `DepthStore.sync_loop`. `_process_aggtrade` + the close/`ObPacket` path are BYTE-UNCHANGED. Gated by
+  `DEPTH_CAPTURE_ENABLED`.
+- **VALIDATED live:** lossless reconstruction (reconstructed == live book, 1013=1013 / 1006=1006, 0 mismatch);
+  ~40-45MB/6h at 30s snapshots (193MB mid-run was WAL transient), under the 500MB budget; prune holds; 25 closes
+  broadcast during capture; suite 9/9. **Deploy is additive-only** (gated, fresh depth.db on the VM, existing
+  feeds/buckets/close-broadcast untouched). **Next: Phase 2 heatmap display (scanner-mode-gated), Phase 3 bubbles.**
+
 **⚠️ INVESTIGATION VERDICT (the balance-of-power "score" / strategy — settled, do NOT rebuild as a predictor).**
 The operator's hypothesis ("a move begins when absorption is low + eff-agg & E/R high") was stress-tested
 exhaustively, all CAUSAL / out-of-sample / base-rate-guarded:

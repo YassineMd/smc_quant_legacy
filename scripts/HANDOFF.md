@@ -772,6 +772,30 @@ block); the bigger costs are the trailing-50 norm re-sums and the per-bucket exp
   Suite 9/9 (2 pre-existing fails: stale `_exh_z_mult` import in test_step5, removed `recalibrate` API in
   test_step19_4 — both fail at HEAD, unrelated).
 
+**🟢 BOOKMAP HEATMAP — Phase 1: whole-book depth capture + trade tape (`9d048c4`). FOUNDATION — depth-over-time
+now EXISTS for the Phase-2 heatmap.** The daemon already maintained the full resting book live
+(`pulse_state.local_ob`, ~4Hz) but DISCARDED it; Phase 1 persists it as a bounded 6h rolling window in a
+**SEPARATE `data/depth.db`** (own connection/sync/prune — deletable without touching `history.db`).
+- **`app/depth_store.py`** (new) — `DepthStore`, 3 tables: `depth_snapshots` (full-book anchors every
+  `DEPTH_SNAPSHOT_SECS=30` + one per diff-stream reconnect, so the delta chain never has an un-anchored gap),
+  `depth_deltas` (LOSSLESS per-diff level changes — nothing sampled), `trade_tape` (every aggTrade for real
+  bubbles). Packed binary `(int32 price-ticks, float32 qty)`, bids/asks side-implicit sub-arrays, qty==0 kept.
+  Binance diffs are ABSOLUTE quantities → idempotent → exact replay. `reconstruct_at_u()` = nearest anchor +
+  replay deltas (Phase 2 render + the proof).
+- **HYBRID (snapshots + deltas)** + whole-book (`DEPTH_BAND_PCT=0.0` = no truncation; knob kept for banding).
+- **6h HARD prune** every sync (`DEPTH_RETENTION_HOURS=6`): drop deltas/trades < cutoff; keep the ONE anchor
+  at/just-before cutoff so the oldest retained delta still has a snapshot. Row counts hard-bounded to ~6h.
+- **ISOLATION (critical — the close-broadcast fix stays safe):** O(1) capture tees only — `_capture_depth_diff`
+  AFTER `public_stream` applies the diff; `_capture_trade` in `aggtrade_stream` AROUND (never inside)
+  `_process_aggtrade`; bounded drop-oldest buffers drained OFF-LOOP by `DepthStore.sync_loop` (own depth.db
+  txn). `_process_aggtrade` + the close/`ObPacket` path are BYTE-UNCHANGED. All gated by `DEPTH_CAPTURE_ENABLED`.
+- **VALIDATED live (175s):** lossless reconstruction = reconstructed book == live book at update-id u
+  (1013=1013 bids / 1006=1006 asks, 0 missing/extra/qty-mismatch); size TRUE 0.479MB/173s → **~40-45MB/6h** at
+  30s snapshots (the 193MB mid-run was un-checkpointed WAL transient), well under the 500MB budget; prune holds;
+  25 close-broadcasts fired DURING capture; suite 9/9. **DEPLOY = additive-only daemon change** (gated, separate
+  db created fresh on the VM); the existing feeds/buckets/close-broadcast are untouched. **Phase 2 = the heatmap
+  display (scanner-mode-gated, does nothing until selected); Phase 3 = the trade bubbles overlay.**
+
 **⚠️ VERDICT — the balance-of-power SCORE/strategy is DESCRIPTIVE, not predictive (settled; don't rebuild as a
 signal).** Hypothesis "move begins when absorption low + eff-agg/E-R high" tested exhaustively, all CAUSAL +
 base-rate-guarded: direction not predictable (eff-agg only *describes* the move ≈ tautology; abs/E-R ~chance;
