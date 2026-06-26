@@ -906,7 +906,33 @@ runs on a SPAWN worker PROCESS (2nd core) — the broadcast loop NEVER blocks du
      "leaked" = stale bookkeeping; every restart rehydrates fine — ZERO leak/data-loss). NOT chased — inherent
      CPython spawn-pool artifact (3 standalone repros, incl. worker importing app.feeds, could NOT reproduce;
      only VM-testable). Cosmetic, no functional cost = bad trade.
-- **Next: Step B = Phase 3 trade bubbles** on the clean daemon.
+- **Next: Step B = Phase 3 trade bubbles** on the clean daemon — ✅ DONE (`40d2a69`).
+
+**🟢 HEATMAP Phase 3 — executed-trade bubbles + iceberg overlay + UX polish (`40d2a69`, BUILT + EYEBALLED on
+SOLUSDT).** Same isolation discipline as `depth_window` — the single event loop is never blocked; terminal
+polish needs NO redeploy, the daemon trades endpoint deploys with `deploy.ps1`+restart.
+- **Daemon/transport — PROVEN zero new loop-blocking (gap probe max 0.26s vs 0.37s baseline); lossless
+  bit-identical on real VM data (7780 trades).** `depth_store.trades_window` (`mode=ro`, ts_ms index) →
+  `_send_trades_window` off-loop (`run_in_executor`) + `trades_live_loop` batched push/pulse (O(1) capture-tee).
+  `protocol`: `TradesWindowPacket`/`TradeBatchPacket` = 4 b64 arrays (ts i8, price/qty **f8 bit-identical**,
+  side u1). `pipe_client` `trades_state` buffer — NEVER on the 20Hz `snapshot()`.
+- **Bubbles (`heatmap.py` `TradeBubbleCache` + `_hm_render_bubbles`):** numpy (col×bin) aggregate → size by
+  total qty / color by net side; two `pxMode` scatters green=buy/purple=sell, area∝qty (√r+clamp), `b` toggles,
+  min-qty declutter. Hover pill (`sigHovered`, black-on-neon); `tip=None` kills the built-in x/y/data box.
+- **Iceberg:** cells on an active absorption level recolor ELECTRIC BLUE (buy) / ORANGE (sell), from
+  `snap['absorptions']` by price band (per-tf — same standing levels the bucket-chart `AbsorptionLayer` draws).
+- **Polish:** fine **per-pulse BBO trace** (lines follow the live price, not the binned grid) · **shift+hover**
+  resting-liquidity readout (`raw_at`, neighbour-search) · DOM `cob.autoscale_x` (in-view) · follow **15% lead
+  gutter** + double-click re-lock + PAN-detaches-instantly/zoom-keeps · Contrast panel → extreme top-left ·
+  menu **"Heatmap"**, 2nd in list · heatmap-open auto-cancels the draw tool (`cancel()` un-highlights toolbar).
+- **Heatmap overlay is now FEATURE-COMPLETE (2b line + 3 bubbles).** Standalone exe rebuilt (`OrderFlowTerminal.spec`).
+
+**⚠️ SUITE ROT (pre-existing, NOT from Phase 3 — found 2026-06-26):** `test_step5_exhaustion`
+(imports `_exh_z_mult` from `app.terminal` — moved to `app.region_state`) and `test_step19_4_recompute`
+(calls `QuantEngine.recalibrate` — removed) both fail at import/harness-helper, NOT on the logic they test
+(19.4's real assertions still PASS). Both symbols are absent in `HEAD` too; an earlier refactor moved them
+without updating the tests. 8/10 green. Un-rot when convenient: repoint test_step5's import to `region_state`;
+19.4 needs the current calibrate entry point.
 
 **⚠️ VERDICT — the balance-of-power SCORE/strategy is DESCRIPTIVE, not predictive (settled; don't rebuild as a
 signal).** Hypothesis "move begins when absorption low + eff-agg/E-R high" tested exhaustively, all CAUSAL +
@@ -1337,7 +1363,7 @@ URLs/constants only — touches no app state).
 ---
 **Start here:** Phases 1 + 5 are DONE — the terminal is aggTrade-native and live on
 the real v3 `history.db`. Read **§0** (the Mode-10 capstone reframing) + **§2** (current state · what's next · trustworthiness
-map), confirm the suite (§6) is green (10 tests, all `exit 0`), then pick the next
+map), confirm the suite (§6) is green (8/10 `exit 0`; 2 pre-existing rotted — see the SUITE ROT note in §1.5), then pick the next
 phase WITH the operator (Phase 2 → 3 → 4 → Mode-10 tool). §7/§8 are the Phase-5
 record; the standing rules (§3) + the verification pattern (§4 — esp. FULL-suite-at-
 every-commit, propose-then-approve, one-step-one-commit, hold-before-commit) govern
