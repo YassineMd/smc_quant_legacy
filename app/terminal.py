@@ -1414,8 +1414,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # EFFECTIVE-AGGRESSION zones — the MIRROR (heavy volume that MOVED price its way): eff_bull/bear =
         # V*(1-s) directional; NEON green/red bands. Own slider rides force f = eff_agg/vol_norm, re-seeded
         # per selection to the median nonzero-f (forceful -> high, ordinary -> low). Dot = forceful boundary.
-        eff_bull_arr, eff_bear_arr, eff_fval = region_state.eff_agg_series(
-            filtered, lo, hi, config.ABSORP_VOL_WINDOW, config.EFF_AGG_FORCE_WINDOW)
+        eff_bull_arr, eff_bear_arr, eff_fval = region_state.eff_agg_from_absorption(  # Fix 3: reuse abs_sval
+            filtered, lo, hi, config.EFF_AGG_FORCE_WINDOW, abs_sval)
         eff_bull, eff_bear = sum(eff_bull_arr), sum(eff_bear_arr)
         if sel_id != self._eff_sel_id:
             self._eff_sel_id = sel_id
@@ -1596,8 +1596,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _pre = min(lo, _lw)                                # warm-up pre-roll: up to _lw buckets before lo
             ext = filtered[lo - _pre:hi + 1]; _em = len(ext) - 1
             _absb, _absr, _av = region_state.absorption_series(ext, 0, _em, config.ABSORP_VOL_WINDOW)
-            _effb, _effr, _ev = region_state.eff_agg_series(
-                ext, 0, _em, config.ABSORP_VOL_WINDOW, config.EFF_AGG_FORCE_WINDOW)
+            _effb, _effr, _ev = region_state.eff_agg_from_absorption(  # Fix 3: reuse _av (the absorption s)
+                ext, 0, _em, config.EFF_AGG_FORCE_WINDOW, _av)
             _ber = [ext[i].get("buyer_er", 0.0) for i in range(len(ext))]
             _ser = [ext[i].get("seller_er", 0.0) for i in range(len(ext))]
             abs_sh = region_state.rolling_share(_absb, _absr, _lw)      # per-bucket rolling bull shares (warmed)

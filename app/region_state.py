@@ -430,6 +430,47 @@ def eff_agg_series(buckets: list, lo_i: int, hi_i: int, window: int,
     return eff_bull, eff_bear, fval
 
 
+def eff_agg_from_absorption(buckets: list, lo_i: int, hi_i: int, force_window: int,
+                            sval: list) -> "tuple[list, list, list]":
+    """Fix 3: ``eff_agg_series`` REUSING a precomputed absorption ``sval`` (from :func:`absorption_series` over
+    the SAME ``(buckets, lo_i, hi_i)`` and matching window) instead of re-deriving ``s``. Only the eff-agg
+    direction gate and the FORCE norm are computed here, so a frame that needs BOTH absorption and eff-agg over
+    a range pays ONE absorption pass, not two. Bit-identical to ``eff_agg_series`` whenever the absorption
+    window == force_window (the configured case: both ABSORP_VOL_WINDOW) — same s, same force-norm prefix."""
+    if hi_i < lo_i:
+        return [], [], []
+    base = max(0, lo_i - force_window)
+    Pcv = [0.0]
+    for j in range(base, hi_i + 1):
+        w = buckets[j]
+        Pcv.append(Pcv[-1] + (float(w.get("curr_vol", 0.0))
+                              or (float(w.get("buy_vol", 0.0)) + float(w.get("sell_vol", 0.0)))))
+    eff_bull, eff_bear, fval = [], [], []
+    for idx, i in enumerate(range(lo_i, hi_i + 1)):
+        b = buckets[i]
+        o, c = float(b.get("open", 0.0)), float(b.get("close", 0.0))
+        bv, sv = float(b.get("buy_vol", 0.0)), float(b.get("sell_vol", 0.0))
+        cv = float(b.get("curr_vol", 0.0)) or (bv + sv)
+        s = sval[idx]                                  # <- reused, not recomputed
+        eb = bv * (1.0 - s) if (bv > sv and c > o) else 0.0
+        es = sv * (1.0 - s) if (sv > bv and c < o) else 0.0
+        e = eb if eb > 0 else es
+        if e > 0:
+            fa = max(0, i - force_window)
+            cnt = i - fa
+            if cnt <= 0:
+                tot, cnt = cv, 1
+            else:
+                tot = Pcv[i - base] - Pcv[fa - base]
+            vn = tot / cnt
+            vn = vn if vn > 0 else 1.0
+            f = e / vn
+        else:
+            f = 0.0
+        eff_bull.append(eb); eff_bear.append(es); fval.append(f)
+    return eff_bull, eff_bear, fval
+
+
 def eff_agg_default_f(eff_bull: list, eff_bear: list, fval: list) -> float:
     """Adaptive default eff-agg zone threshold = the selection's MEDIAN nonzero FORCE over its directional
     eff-agg buckets (forceful selection -> high default, ordinary -> low; self-calibrating). Sits BELOW the
