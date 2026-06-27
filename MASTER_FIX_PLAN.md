@@ -1100,6 +1100,11 @@ exhaustively, all CAUSAL / out-of-sample / base-rate-guarded:
   shows soak-up after the fact), **not** a predictor of direction / reversal / phase. The phase table is built
   honest-descriptive (low posteriors shown, never faking certainty). Don't re-attempt a predictive score on
   this without NEW data / another symbol.
+- **UPDATE (2026-06-27) — re-tested WITH Panel 9 (exhaustion), still negative.** A reversal entry "down-move →
+  P9 seller-exhaustion spike (≥ f·max|ΔZ|) → P1 absorption green → P2/P3 ignition → long" (buyer-exh veto,
+  0.3% SL / 1:1.5 TP, causal, last-5-days SOL 5m) was backtested both sides, both ΔZ metrics (raw and the
+  velocity-weighted Panel-9 line): **long 0–18%, short 20–33% — both below the 40% breakeven.** Adding the P9
+  exhaustion gate did NOT add forward edge; the confluence is descriptive. (Detail in `scripts/HANDOFF.md`.)
 
 ---
 

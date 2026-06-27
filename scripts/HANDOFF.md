@@ -747,6 +747,34 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
   table/panels are the `[lo,hi]` slice, inputs otherwise selection-pure (PROVEN: slice==isolated-copy; differs
   from the leaky full-list on the early buckets). **EXE still stale** (none of this is in the `a2efc72` build).
 
+**Mode-10 selection panels 8 & 9 + default reshuffle (`6bbd79a`, 2026-06-27).**
+- **Panel 8 — Net Flow / OI-Δ (slot 8):** per-bucket Net Position Flow `(opL+clS)-(opS+clL)` emerald>0/crimson<0
+  about a dashed zero baseline + Net OI Δ `(opL+opS)-(clL+clS)` yellow-dashed on the SAME band scale (Flow/OI
+  divergence at a glance). `'8'` toggles; hover FLOW/OIΔ. `_selection_flow_curves` (L12-separated: raw
+  opL/opS/clL/clS never reach the widget). [Iterated through a 9-state verdict engine that was BUILT then
+  REMOVED on operator call — net result is just the two lines.]
+- **Panel 9 — Thermal Divergence Oscillator (slot 9, BOTTOM):** `(Z_buyer-Z_seller)·vol_mult` from the RAW Step-5
+  adaptive z's (`selection_exhaustion('raw')`, independent of Panel-4's GATED measure so they complement). ONE
+  sign-split line, NEON CYAN (buyer-exh into a ceiling) / HOT MAGENTA (seller-exh into a floor) about a zero
+  baseline; **SIGNED-LOG compressed** before band-mapping so a single velocity BURST can't flatten the rest of
+  the line. `'9'` toggles. [Went line→cumulative-delta→bar-histogram→line over the session.]
+- Both: slot/stack with the lean panels (slide up as others hide), Rule-0.6 empty guard + full clear on every
+  redraw, items reused via `setData` (no per-frame alloc / no ghost), wired into `_selection_signature` + the
+  3 teardown branches. **EXE stale** (not rebuilt this batch).
+- **Default reshuffle (operator):** panels **1-4 ON**, phases **5-7 OFF**, **stats box HIDDEN** (`'h'`). REVERSES
+  Fix-0's perf default (1-4 off). Panel 4 (gated `selection_exhaustion`, the 127ms@800 fn) is ON by default again
+  — but it's signature-gated (Fix 1) so it recomputes only on a selection change, not per frame.
+- **⚠️ STRATEGY VERDICT — P9 reversal is DESCRIPTIVE, not a predictor (settled; both sides, both metrics).** The
+  operator's "down-move (≥20 buckets, 30% retrace) → P9 seller-exhaustion SPIKE → P1 absorption green → P2/P3
+  ignition → market-buy" — with a RELATIVE threshold (spike ≥ f·max|ΔZ| of the move), a buyer-exhaustion VETO,
+  0.3% SL / 1:1.5 TP, last-5-days SOL 5m — was backtested CAUSALLY. **Long 0–18%, Short 20–33% win-rate — both
+  WELL below the 40% breakeven**, on BOTH raw ΔZ AND the velocity-weighted Panel-9 line. Maximal-confluence
+  entries (P1/P2 ±100%) lost as often as marginal ones → no "optimum spread." The ignition confirmation enters
+  LATE (top of the bounce) and the stop is tighter than the target → structural stop-outs. Extends the prior
+  INVESTIGATION VERDICT to include P9. Data note: raw `ΔZ·vol_mult` carries ±1000s outliers (`vel_ratio` blows
+  up when `avg_velocity`→0) — hence Panel 9's signed-log display; a faithful re-test would threshold on the
+  log-compressed line. Only 21 (full)/16 (5-day) qualifying down-moves exist anyway — too few to fit thresholds.
+
 **Mode-10 selection PERF pass — 5 correctness-preserving fixes (`3b176e6`→`a89a2fd`).** Profiled first on real
 data (N=200/400/800); the theory was REVISED: `rolling_share`'s O(N²) is real but small (~12% of the phase
 block); the bigger costs are the trailing-50 norm re-sums and the per-bucket exp/log posteriors (`conf_traj`,
