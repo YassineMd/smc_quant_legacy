@@ -775,6 +775,33 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
   up when `avg_velocity`→0) — hence Panel 9's signed-log display; a faithful re-test would threshold on the
   log-compressed line. Only 21 (full)/16 (5-day) qualifying down-moves exist anyway — too few to fit thresholds.
 
+**Mode-10 rework: liq-wave panel 8 + FIXED-WINDOW lean panels; panels 8/9 DROPPED (`9111fa1`, 2026-06-28).**
+- **DROPPED panels 8 (Net Flow/OI-Δ) + 9 (Thermal):** operator doesn't use them. All `bc_flow_*`/`bc_exh9_*`
+  items, `show_flow_panel`/`show_exh9`, `_toggle_*`/`_clear_*`, `_selection_flow_curves`, the `'8'`/`'9'` keys, and
+  the signature + 3 teardown branches removed (grep-clean).
+- **NEW panel 8 — Liquidation Pressure WAVE (key `'8'`, default ON):** fixed `LIQ_WAVE_WINDOW=10` trailing rolling
+  **SUM** of net forced flow `liq_short - liq_long` per bucket, **signed-log** compressed, ONE sign-split line —
+  **CYAN up** (forced BUYS = shorts liquidated = squeeze) / **MAGENTA down** (forced SELLS = longs liquidated =
+  flush) about a zero baseline. Read: line **steepening** = cascade building (surf it), **curling back to the
+  baseline** = wave exhausting. Validated on the real `buckets_5m_liq` tape — the biggest cascade (a long flush)
+  shows the wave deepening −33k→−44k→−60k then leveling (−60021→−59459 = fading). Per the bt11/bt12 verdict it's a
+  **descriptive / confirmation** read (liquidations = weak continuation but cost-fragile, +0.08% < ~0.1% fee), NOT
+  a standalone trigger.
+- **FIXED-WINDOW lean panels (`LIVE_PANEL_WINDOW=15`) — root-cause fix for "values change when I move the
+  selection START."** Panels 1/2/3 share + panel-4 exhaustion baseline now read a FIXED trailing window anchored
+  at each bucket, NOT a selection-relative window (`LEAN_WINDOW_FRAC`, now legacy) / expanding-from-start
+  z-baseline. New `region_state.trailing_exhaustion` (fixed-window twin of `selection_exhaustion`; z-baseline =
+  `buckets[max(0,k-window):k]`). Pre-roll `_pre0 = min(lo, LIVE_PANEL_WINDOW+ABSORP_VOL_WINDOW)` so the left edge
+  reaches real history; compute over `_extp`, slice `[_pre0:]`. PROVEN: live-edge P1 share = **0.5736 identical**
+  across selection starts 1900/1850/1700/1500 (OLD swung 0.25–0.45) → a stable live read, not a moving ruler.
+- **Panel 4:** gold dashed **50% midline** (`bc_exh_mid`, `#ffd700`), hidden wherever `bc_exh_strip` hides.
+- **`'T'` shows the phase table WITHOUT a phase panel (5/6/7) on** (`show_phase_table`; the phase-block gate is
+  `any(show_phase) or show_phase_table`, hides the `phase_tbl` only when both are off).
+- **Key fix:** liq wave is `'8'` **not `'l'` — `'L'`/`'l'` is the Liquidity-HEATMAP layer**; a duplicate `'L'`
+  `QShortcut` was an *ambiguous shortcut overload* that silently disabled BOTH (caught on operator eyeball, then
+  re-keyed to `'8'` per operator). Keys now stack: `1`-`4` lean, `5`-`7` phase, `8` liq-wave, `T` table.
+- **EXE stale** (not rebuilt this batch).
+
 **Mode-10 selection PERF pass — 5 correctness-preserving fixes (`3b176e6`→`a89a2fd`).** Profiled first on real
 data (N=200/400/800); the theory was REVISED: `rolling_share`'s O(N²) is real but small (~12% of the phase
 block); the bigger costs are the trailing-50 norm re-sums and the per-bucket exp/log posteriors (`conf_traj`,

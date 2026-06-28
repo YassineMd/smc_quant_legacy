@@ -1105,6 +1105,14 @@ exhaustively, all CAUSAL / out-of-sample / base-rate-guarded:
   0.3% SL / 1:1.5 TP, causal, last-5-days SOL 5m) was backtested both sides, both ΔZ metrics (raw and the
   velocity-weighted Panel-9 line): **long 0–18%, short 20–33% — both below the 40% breakeven.** Adding the P9
   exhaustion gate did NOT add forward edge; the confluence is descriptive. (Detail in `scripts/HANDOFF.md`.)
+- **BUILD (2026-06-28, `9111fa1`) — panels 8/9 DROPPED; rework toward live-flow-following.** Operator doesn't use
+  the flow/thermal panels. **New panel 8 (`'8'`) = Liquidation Pressure WAVE** — fixed `LIQ_WAVE_WINDOW=10`
+  trailing rolling sum of net forced flow (`liq_short-liq_long`), signed-log, CYAN-up (squeeze) / MAGENTA-down
+  (flush) about zero; steepening = cascade building, curling to baseline = exhausting. A confirmation read, not a
+  trigger (liquidations = weak, cost-fragile). **Fixed-window lean panels (`LIVE_PANEL_WINDOW=15`)** make panels
+  1/2/3 + panel-4 baseline selection-INDEPENDENT (`region_state.trailing_exhaustion` + pre-roll) — fixes "values
+  change when I move the selection start" (proven: P1 share 0.5736 identical across starts vs OLD 0.25–0.45).
+  Panel-4 gold 50% line; **`'T'`** shows the phase table without a phase panel on. (Detail in `scripts/HANDOFF.md`.)
 
 ---
 
