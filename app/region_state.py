@@ -553,6 +553,29 @@ def selection_exhaustion(sel: list, measure: str, sel_min_window: int) -> "list[
     return out
 
 
+def trailing_exhaustion(buckets: list, lo_i: int, hi_i: int, window: int, measure: str,
+                        min_window: int) -> "list[tuple[float, float]]":
+    """FIXED-WINDOW twin of :func:`selection_exhaustion`: each bucket's E/R z-baseline is the **trailing
+    ``window`` buckets** (anchored to that bucket), NOT an expanding-from-selection-start window. So the value at
+    a bucket is the same regardless of where a selection begins — a stable live read. ``buckets`` should carry a
+    pre-roll before ``lo_i`` so the trailing window reaches real history at the left edge. Same ``measure`` /
+    output shape as :func:`selection_exhaustion`."""
+    ber = [float(b.get("buyer_er", 0.0)) for b in buckets]
+    ser = [float(b.get("seller_er", 0.0)) for b in buckets]
+    out = []
+    for k in range(lo_i, hi_i + 1):
+        a = max(0, k - window)                                  # trailing window, not [:k]
+        bm = _exh_z_mult(ber[a:k], ber[k], min_window)
+        sm = _exh_z_mult(ser[a:k], ser[k], min_window)
+        if measure == "raw":
+            eb = max(0.0, min(1.0, (bm - 0.5) / 1.5)); es = max(0.0, min(1.0, (sm - 0.5) / 1.5))
+        else:
+            sc = bucket_state.state_scores(buckets, k, bm, sm)
+            eb = sc.get("BULL EXHAUSTION", 0.0); es = sc.get("BEAR EXHAUSTION", 0.0)
+        out.append((eb, es))
+    return out
+
+
 def envelope_series(x: list, release: float) -> list:
     """Causal ATTACK-RELEASE envelope: instant rise to the true value, exponential fade. Each value swells
     to its own level then decays by ``release`` per bucket (``out[i] = max(x[i], out[i-1]*release)``). Used

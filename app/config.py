@@ -302,8 +302,13 @@ ABS_STRIP_RELEASE = 0.60        # envelope decay for the SYMMETRIC smoother (mat
 # ── Lean panels (absorption '1' / eff-agg '2' / E/R '3') — the two lines are each side's SHARE of the pair,
 #    crossing at the 50% midline. ROLLING (not cumulative): the share is taken over a CENTERED window so the
 #    lines track the LOCAL lean and shift across the selection (cumulative would converge to a flat line) ──
-LEAN_WINDOW_FRAC = 0.25         # rolling-share window = this fraction of the selection's bucket count …
-LEAN_WINDOW_MIN = 5            # … floored at this many buckets (centered; small = responsive, large = smooth).
+LEAN_WINDOW_FRAC = 0.25         # (legacy selection-relative mode) rolling-share window = this fraction of …
+LEAN_WINDOW_MIN = 5            # … the selection's bucket count, floored here. Replaced by LIVE_PANEL_WINDOW.
+LIVE_PANEL_WINDOW = 15         # FIXED trailing window for the lean panels (1/2/3 share + 4 exhaustion baseline)
+                              # — selection-INDEPENDENT: every bar reads the same no matter where you draw the
+                              # selection start (panels become a stable live read, not a moving ruler). Tunable.
+LIQ_WAVE_WINDOW = 10          # fixed trailing window for the Liquidation Pressure panel's net-liq rolling sum
+                              # (the "wave"): 10 = responsive (surf a building cascade), larger = smoother.
 ER_LEAN_GAIN = 3.0             # E/R hugs 50% (two-sided), so its panel ZOOMS the deviation from the midline by
                                  # this factor (display only — the hover still shows the true share). 1.0 = none.
 

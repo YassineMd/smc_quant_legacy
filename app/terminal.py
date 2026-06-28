@@ -242,6 +242,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_exh_strip.setZValue(2)
         self.plot.addItem(self.bc_exh_strip, ignoreBounds=True)
         self.bc_exh_strip.setVisible(False)
+        # dashed GOLD 50% reference line for the exhaustion panel (the band midline = 50% exhaustion)
+        self.bc_exh_mid = pg.PlotDataItem(pen=pg.mkPen("#ffd700", width=1, style=QtCore.Qt.DashLine))
+        self.bc_exh_mid.setZValue(3); self.bc_exh_mid.setVisible(False)
+        self.plot.addItem(self.bc_exh_mid, ignoreBounds=True)
         # SELECTION-SCOPED EFF-AGG EVOLUTION STRIP — bull/bear per-bucket effective aggression as two
         # SYMMETRICALLY-smoothed NEON green/red lines, in a SECOND panel STACKED just below the exhaustion
         # strip ('2' toggles). Reuses the same parametrised layer + the eff_bull/bear arrays built for the
@@ -353,6 +357,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _ly.setVisible(False)
             self.bc_phase[_ph] = _ly
             self.show_phase[_ph] = False   # phase panels 5/6/7 HIDDEN by default ('5'-'7' toggle)
+        self.show_phase_table = False      # phase TABLE shown on its own via 't' (no panel needed)
         self._proxy = pg.SignalProxy(self.plot.scene().sigMouseMoved,
                                      rateLimit=60, slot=self._on_mouse_move)
         # last cursor scene pos while inside the plot — drives the A3a live-breathe
@@ -449,26 +454,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # --- floating overlays (top-level children) ---
         self.stats = StatsOverlay(self)
         self.sel_stats = StatsOverlay(self)   # Magic-Selection aggregated-stats box (its own instance)
-        # 8th SELECTION PANEL — the Net Flow / OI-Δ "lie detector", drawn IN-CHART as an 8th stacked strip below
-        # the others (slot 8). Four plot items mapped into its y-band: a zero baseline (its midline), Net Position
-        # Flow split EMERALD>0 / CRIMSON<0, and Net OI Δ as a yellow dashed line on the SAME band scale. Default
-        # ON ('8' toggles); fed + slotted + cleared by _refresh_selection_stats like the other panels.
-        self.show_flow_panel = True
-        self.bc_flow_zero = pg.PlotDataItem(pen=pg.mkPen("#555555", width=1, style=QtCore.Qt.DashLine))
-        self.bc_flow_pos = pg.PlotDataItem(pen=pg.mkPen("#2ecc71", width=2.5), connect="finite")
-        self.bc_flow_neg = pg.PlotDataItem(pen=pg.mkPen("#e74c3c", width=2.5), connect="finite")
-        self.bc_flow_oi = pg.PlotDataItem(pen=pg.mkPen("#f1c40f", width=1.5, style=QtCore.Qt.DashLine))
-        for _it in (self.bc_flow_zero, self.bc_flow_oi, self.bc_flow_neg, self.bc_flow_pos):
-            _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
-        # 9th SELECTION PANEL — THERMAL DIVERGENCE OSCILLATOR (slot 9, bottom). Zero-centred, velocity-weighted
-        # netted-exhaustion LINE, strictly selection-pure: per bucket Panel9 = (Z_buyer − Z_seller)·vol_mult (raw
-        # Step-5 adaptive exhaustion z's). The line is sign-split about the baseline — ABOVE (buyer exhaustion into
-        # a ceiling) = NEON CYAN; BELOW (seller exhaustion into a floor) = HOT MAGENTA. Churn -> 0; flush -> spikes.
-        self.show_exh9 = True
-        self.bc_exh9_zero = pg.PlotDataItem(pen=pg.mkPen("#555555", width=1, style=QtCore.Qt.DashLine))
-        self.bc_exh9_pos = pg.PlotDataItem(pen=pg.mkPen("#00f3ff", width=2.2), connect="finite")   # buyer-exh (>0)
-        self.bc_exh9_neg = pg.PlotDataItem(pen=pg.mkPen("#ff00a2", width=2.2), connect="finite")   # seller-exh (<0)
-        for _it in (self.bc_exh9_zero, self.bc_exh9_neg, self.bc_exh9_pos):
+        # LIQUIDATION PRESSURE panel ('l') — the cascade "wave" (BOTTOM selection strip). A fixed-window rolling
+        # sum of NET liquidation flow = (liq_short − liq_long) per bucket: forced BUYS (shorts liquidated) push
+        # the wave UP (NEON CYAN), forced SELLS (longs liquidated) push it DOWN (HOT MAGENTA), about a dashed zero
+        # baseline. Signed-log compressed (liquidations are spiky). Watch it RISE to surf a building cascade;
+        # watch it HOLD/FADE for "is my wave still going?". Default ON.
+        self.show_liq = True
+        self.bc_liq_zero = pg.PlotDataItem(pen=pg.mkPen("#555555", width=1, style=QtCore.Qt.DashLine))
+        self.bc_liq_pos = pg.PlotDataItem(pen=pg.mkPen("#00f3ff", width=2.4), connect="finite")   # forced BUYS (up)
+        self.bc_liq_neg = pg.PlotDataItem(pen=pg.mkPen("#ff00a2", width=2.4), connect="finite")   # forced SELLS (down)
+        for _it in (self.bc_liq_zero, self.bc_liq_neg, self.bc_liq_pos):
             _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
         self.alerts = AlertsLedger(self)
         self.drawbar = DrawingToolbar(self)
@@ -546,8 +541,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _key, _ph in (("5", "BEFORE"), ("6", "START/DURING"), ("7", "END")):
             QtGui.QShortcut(QtGui.QKeySequence(_key), self,
                             activated=lambda p=_ph: self._toggle_phase(p))
-        QtGui.QShortcut(QtGui.QKeySequence("8"), self, activated=self._toggle_flow_panel)
-        QtGui.QShortcut(QtGui.QKeySequence("9"), self, activated=self._toggle_exh9)
+        QtGui.QShortcut(QtGui.QKeySequence("8"), self, activated=self._toggle_liq)       # panel 8: liquidation WAVE
+        QtGui.QShortcut(QtGui.QKeySequence("T"), self, activated=self._toggle_phase_table)  # phase table (no panel needed)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
         # §7.4 — yellow follow-spot shown on the cursor while a draw tool is armed
@@ -1080,7 +1075,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         layer immediately; it repopulates on the next selection refresh."""
         self.show_exh_strip = not self.show_exh_strip
         if not self.show_exh_strip:
-            self.bc_exh_strip.setVisible(False)
+            self.bc_exh_strip.setVisible(False); self.bc_exh_mid.setVisible(False)
             self.panel_tooltip.hide()
         self._refresh_selection_stats()
 
@@ -1109,33 +1104,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_phase[ph].setVisible(False)
         self._refresh_selection_stats()
 
-    def _toggle_flow_panel(self) -> None:
-        """'8' — show/hide the Net Flow / OI-Δ lie-detector strip (the 8th selection panel). OFF clears + hides
-        it; ON repopulates on the next selection refresh."""
-        self.show_flow_panel = not self.show_flow_panel
-        if not self.show_flow_panel:
-            self._clear_flow_panel()
+    def _toggle_liq(self) -> None:
+        """'l' — show/hide the Liquidation Pressure wave panel. OFF clears + hides it; ON repopulates next refresh."""
+        self.show_liq = not self.show_liq
+        if not self.show_liq:
+            self._clear_liq_panel()
         self._refresh_selection_stats()
 
-    def _clear_flow_panel(self) -> None:
-        """8th-panel tear-down (spec §4): wipe + hide all four flow items so a new/empty/hidden selection leaves
-        zero ghost data behind (items are reused via setData -> no leak)."""
-        for _it in (self.bc_flow_zero, self.bc_flow_pos, self.bc_flow_neg, self.bc_flow_oi):
+    def _clear_liq_panel(self) -> None:
+        """Liquidation-panel tear-down: wipe + hide the line halves + baseline (items reused via setData -> no leak)."""
+        for _it in (self.bc_liq_zero, self.bc_liq_pos, self.bc_liq_neg):
             _it.setData([], []); _it.setVisible(False)
 
-    def _toggle_exh9(self) -> None:
-        """'9' — show/hide the cumulative-exhaustion strip (the 9th selection panel). OFF clears + hides it; ON
-        repopulates on the next selection refresh."""
-        self.show_exh9 = not self.show_exh9
-        if not self.show_exh9:
-            self._clear_exh9_panel()
+    def _toggle_phase_table(self) -> None:
+        """'t' — show/hide the live PHASE TABLE on its own (no need to turn on a phase panel 5/6/7)."""
+        self.show_phase_table = not self.show_phase_table
+        if not self.show_phase_table and not any(self.show_phase.values()):
+            self.phase_tbl.hide()
         self._refresh_selection_stats()
-
-    def _clear_exh9_panel(self) -> None:
-        """9th-panel tear-down (Rule 0.6 hygiene): wipe + hide the line halves + baseline, so a redrawn/empty
-        selection leaves zero ghost data (items reused via setData -> no per-frame allocation, no leak)."""
-        for _it in (self.bc_exh9_zero, self.bc_exh9_pos, self.bc_exh9_neg):
-            _it.setData([], []); _it.setVisible(False)
 
     def _toggle_ob_iceberg(self) -> None:
         """'o' — toggle the Order Blocks + Absorption/Iceberg overlays TOGETHER (both hidden by default).
@@ -1481,25 +1467,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.zone_slider.hide()
             self.eff_slider.hide()
 
-    @staticmethod
-    def _selection_flow_curves(buckets: list):
-        """8th-panel data processor (L12 separation, spec §1/§2). From the selected aggTrade-native bucket
-        snapshots derive ONLY the two net curves the panel needs — the raw opL/opS/clL/clS arrays never leave
-        this method:
-          Line 1  Net Position Flow = (opL + clS) - (opS + clL)   # net institutional execution power
-          Line 2  Net OI Delta      = (opL + opS) - (clL + clS)   # capital expansion (+) vs destruction (-)
-        Returns ``(x_idx, flow, oi)`` float arrays, or three empties for an empty selection (Rule 0.6)."""
-        n = len(buckets)
-        if n == 0:
-            return np.empty(0), np.empty(0), np.empty(0)
-        opL = np.fromiter((float(b.get("opL", 0.0)) for b in buckets), dtype=float, count=n)
-        opS = np.fromiter((float(b.get("opS", 0.0)) for b in buckets), dtype=float, count=n)
-        clL = np.fromiter((float(b.get("clL", 0.0)) for b in buckets), dtype=float, count=n)
-        clS = np.fromiter((float(b.get("clS", 0.0)) for b in buckets), dtype=float, count=n)
-        flow = (opL + clS) - (opS + clL)
-        oi = (opL + opS) - (clL + clS)
-        return np.arange(n, dtype=float), flow, oi
-
     def _refresh_selection_stats(self) -> None:
         """Live Magic-Selection readout: aggregate the buckets inside the box + show the stats box.
         Runs each frame, so a selection reaching the live edge updates as buckets form."""
@@ -1512,11 +1479,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
             self.bc_abs_strip.setVisible(False)
-            self.bc_exh_strip.setVisible(False)
+            self.bc_exh_strip.setVisible(False); self.bc_exh_mid.setVisible(False)
             self.bc_eff_strip.setVisible(False)
             self.bc_er_strip.setVisible(False)
             self.bc_panel_sep.setVisible(False)
-            self._clear_flow_panel(); self._clear_exh9_panel()                # 8th + 9th panels: clear on teardown
+            self._clear_liq_panel()                                           # liquidation panel: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -1534,11 +1501,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
             self.bc_abs_strip.setVisible(False)
-            self.bc_exh_strip.setVisible(False)
+            self.bc_exh_strip.setVisible(False); self.bc_exh_mid.setVisible(False)
             self.bc_eff_strip.setVisible(False)
             self.bc_er_strip.setVisible(False)
             self.bc_panel_sep.setVisible(False)
-            self._clear_flow_panel(); self._clear_exh9_panel()                # 8th + 9th panels: clear on teardown
+            self._clear_liq_panel()                                           # liquidation panel: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -1559,7 +1526,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 rect, filtered, lo_i, hi_i,
                 (self.show_abs_strip, self.show_eff_strip, self.show_er_strip, self.show_exh_strip,
                  tuple(self.show_phase[p] for p in self._PHASES), self.show_state, self.show_sel_stats,
-                 self.show_flow_panel, self.show_exh9),
+                 self.show_liq, self.show_phase_table),
                 (self.zone_slider.value_s(), self.eff_slider.value_s()), tv, config.VPIN_ADAPT_WINDOW)
             if sig == self._sel_sig:
                 self._reposition_sel_box(rect)   # reuse last frame's overlays; just keep the box glued
@@ -1576,11 +1543,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
             self.bc_abs_strip.setVisible(False)
-            self.bc_exh_strip.setVisible(False)
+            self.bc_exh_strip.setVisible(False); self.bc_exh_mid.setVisible(False)
             self.bc_eff_strip.setVisible(False)
             self.bc_er_strip.setVisible(False)
             self.bc_panel_sep.setVisible(False)
-            self._clear_flow_panel(); self._clear_exh9_panel()                # 8th + 9th panels: clear on teardown
+            self._clear_liq_panel()                                           # liquidation panel: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -1672,15 +1639,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # one ('1'/'2'/'3') slides the ones below it UP into the gap (no blank space).
         sel_h = max(y1 - y0, config.TICK_SIZE)
         _drawable = (hi - lo + 1) >= 3
-        _lw = max(config.LEAN_WINDOW_MIN, round((hi - lo + 1) * config.LEAN_WINDOW_FRAC))  # rolling-share window
+        # LIVE / FIXED-WINDOW lean panels: a fixed rolling-share window + a PRE-ROLL into real history before the
+        # selection start, so panels 1-4 read the SAME at every bar regardless of where the selection begins (no
+        # more values shifting when you drag the start). The selection is just the viewport.
+        _lw = config.LIVE_PANEL_WINDOW                        # FIXED smoothing window (not selection-length-scaled)
+        _pre0 = min(lo, config.LIVE_PANEL_WINDOW + config.ABSORP_VOL_WINDOW)   # pre-roll: enough for the trailing
+        _extp = filtered[lo - _pre0:hi + 1]; _Lp = len(_extp)                  # norm (50) + the fixed window (15)
         _badge_x = hi + 0.5 + max(1.0, (hi - lo + 1) * 0.05)   # spread-badge x: just past the panels' right edge
         abs_on = self.show_abs_strip and _drawable        # slot order top->bottom: 1 abs, 2 eff, 3 er, 4 exh,
         eff_on = self.show_eff_strip and _drawable         # then 5 BEFORE, 6 START/DURING, 7 END (phase panels),
-        er_on = self.show_er_strip and _drawable           # then 8 NET FLOW / OI-Δ, then 9 CUMULATIVE EXHAUSTION
+        er_on = self.show_er_strip and _drawable           # then 5-7 phase panels, then the LIQUIDATION wave (BOTTOM)
         exh_on = self.show_exh_strip and _drawable
         ph_on = {p: self.show_phase[p] and _drawable for p in self._PHASES}
-        flow_on = self.show_flow_panel and _drawable
-        exh9_on = self.show_exh9 and _drawable
+        liq_on = self.show_liq and _drawable
         ph_geom = {}
         _cur = y0                                           # running bottom edge of the last placed panel
         if abs_on:
@@ -1699,12 +1670,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if ph_on[_p]:
                 _t = _cur - config.PHASE_PANEL_GAP * sel_h; _b = _t - config.PHASE_PANEL_FRAC * sel_h
                 ph_geom[_p] = (_t, _b); _cur = _b
-        if flow_on:                                         # slot 8 — the NET FLOW / OI-Δ strip
-            flow_top = _cur - config.EXH_STRIP_GAP * sel_h; flow_bot = flow_top - config.EXH_STRIP_FRAC * sel_h
-            _cur = flow_bot
-        if exh9_on:                                         # slot 9 — the THERMAL DIVERGENCE histogram (BOTTOM)
-            exh9_top = _cur - config.EXH_STRIP_GAP * sel_h; exh9_bot = exh9_top - config.EXH_STRIP_FRAC * sel_h
-            _cur = exh9_bot
+        if liq_on:                                          # LIQUIDATION wave panel (BOTTOM)
+            liq_top = _cur - config.EXH_STRIP_GAP * sel_h; liq_bot = liq_top - config.EXH_STRIP_FRAC * sel_h
+            _cur = liq_bot
         # minimalist hairline divider in each gap BETWEEN consecutive visible panels (stack order)
         _bands = []
         if abs_on: _bands.append((abs_top, abs_bot))
@@ -1713,8 +1681,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if exh_on: _bands.append((exh_top, exh_bot))
         for _p in self._PHASES:
             if _p in ph_geom: _bands.append(ph_geom[_p])
-        if flow_on: _bands.append((flow_top, flow_bot))
-        if exh9_on: _bands.append((exh9_top, exh9_bot))
+        if liq_on: _bands.append((liq_top, liq_bot))
         _sep_ys = [(_bands[i][1] + _bands[i + 1][0]) / 2.0 for i in range(len(_bands) - 1)]
         self.bc_panel_sep.update_data(lo - 0.5, hi + 0.5, _sep_ys)
         self.bc_panel_sep.setVisible(bool(_sep_ys))
@@ -1726,8 +1693,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # (sliced; the zones keep the full-history norm). No envelope, no crossover diamonds.
         if abs_on:                                        # '1' toggles the panel
             absb, absr, _asv = region_state.absorption_series(
-                filtered[lo:hi + 1], 0, hi - lo, config.ABSORP_VOL_WINDOW)
-            bull_sh = region_state.rolling_share(absb, absr, _lw)
+                _extp, 0, _Lp - 1, config.ABSORP_VOL_WINDOW)   # fixed trailing norm over real history (pre-rolled)
+            bull_sh = region_state.rolling_share(absb, absr, _lw)[_pre0:]   # drop the pre-roll -> the [lo,hi] view
             bear_sh = [1.0 - s for s in bull_sh]
 
             def _ay(v):
@@ -1750,10 +1717,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # lines (0/50/100% scale); gold diamonds mark crossovers (the exhausted side swaps). Selection-scoped
         # (bounded), recomputed each frame like the sparklines/zones above.
         if exh_on:                                        # '4' toggles the panel
-            # FRESH-from-selection-start: z-baseline = ONLY the prior buckets WITHIN the selection (expanding
-            # window); the chosen measure (gated/raw) per config.EXH_MEASURE. Recomputed per selection.
-            sel_exh = region_state.selection_exhaustion(
-                filtered[lo:hi + 1], config.EXH_MEASURE, config.EXH_SEL_MIN_WINDOW)
+            # FIXED trailing baseline (LIVE_PANEL_WINDOW), pre-rolled into real history — z-baseline anchored to
+            # each bar, NOT expanding-from-selection-start, so the exhaustion read is selection-independent.
+            sel_exh = region_state.trailing_exhaustion(
+                _extp, _pre0, _Lp - 1, _lw, config.EXH_MEASURE, config.EXH_SEL_MIN_WINDOW)
             ex_bull = [e[0] for e in sel_exh]; ex_bear = [e[1] for e in sel_exh]
             sb = region_state.envelope_symmetric(ex_bull, config.EXH_RELEASE)
             sr = region_state.envelope_symmetric(ex_bear, config.EXH_RELEASE)
@@ -1775,20 +1742,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     crosses.append(((lo + k - 1) + frac, _ey(cval)))
             self.bc_exh_strip.update_data(xs, bull_y, bear_y, lo - 0.5, hi + 0.5, exh_bot, exh_top, crosses)
             self.bc_exh_strip.setVisible(True)
+            self.bc_exh_mid.setData([lo - 0.5, hi + 0.5], [_ey(0.5), _ey(0.5)])   # dashed gold 50% reference
+            self.bc_exh_mid.setVisible(True)
             self._panel_hovers.append({                # hover -> RAW per-bucket exhaustion %, labelled
                 "label": "EXHAUSTION", "lo": lo, "yb": exh_bot, "yt": exh_top,
                 "bull": ex_bull, "bear": ex_bear, "bcol": _RGB_EXH_BULL, "rcol": _RGB_EXH_BEAR,
                 "blbl": "BULL", "rlbl": "BEAR", "fmt": "pct"})
         else:
-            self.bc_exh_strip.setVisible(False)
+            self.bc_exh_strip.setVisible(False); self.bc_exh_mid.setVisible(False)
         # SELECTION EFF-AGG STRIP ('2') — bull% vs bear% LEAN (each side's ROLLING share of effective
         # aggression over a centered window), NEON green / NEON red, crossing at the 50% midline; tracks the
         # LOCAL forcing lean as it shifts. One-sided per bucket (like absorption). SELECTION-PURE (sliced; zones
         # keep the full-history norm). No envelope, no crossover diamonds.
         if eff_on:                                        # '2' toggles the panel
             effb, effr, _efv = region_state.eff_agg_series(
-                filtered[lo:hi + 1], 0, hi - lo, config.ABSORP_VOL_WINDOW, config.EFF_AGG_FORCE_WINDOW)
-            bull_sh = region_state.rolling_share(effb, effr, _lw)
+                _extp, 0, _Lp - 1, config.ABSORP_VOL_WINDOW, config.EFF_AGG_FORCE_WINDOW)
+            bull_sh = region_state.rolling_share(effb, effr, _lw)[_pre0:]   # drop the pre-roll -> the [lo,hi] view
             bear_sh = [1.0 - s for s in bull_sh]
 
             def _fy(v):
@@ -1812,9 +1781,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # nonzero every bucket), so the rolling share reads the LOCAL effort balance as it shifts. Selection-only
         # (intrinsic per-bucket scalars). No envelope, no crossover diamonds.
         if er_on:                                         # '3' toggles the panel
-            ber = [filtered[i].get("buyer_er", 0.0) for i in range(lo, hi + 1)]
-            ser = [filtered[i].get("seller_er", 0.0) for i in range(lo, hi + 1)]
-            buy_sh = region_state.rolling_share(ber, ser, _lw)
+            ber = [b.get("buyer_er", 0.0) for b in _extp]   # pre-rolled so the fixed window reaches real history
+            ser = [b.get("seller_er", 0.0) for b in _extp]
+            buy_sh = region_state.rolling_share(ber, ser, _lw)[_pre0:]   # drop the pre-roll -> the [lo,hi] view
             sell_sh = [1.0 - s for s in buy_sh]
 
             def _ry(v):
@@ -1841,9 +1810,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # left edge is already settled instead of cold-starting. Only that warm-up pre-roll reaches outside
         # [lo,hi]; everything displayed (the trajectory, table, panels) is the [lo,hi] portion.
         # Fix 2: the WHOLE phase block (series + rolling_share + EMA + table) is gated on at least one phase
-        # panel being shown — so turning the phase panels (5/6/7) off does ZERO phase work, not "compute the
-        # table anyway". The phase table is the panels' readout, so it follows them (no separate toggle).
-        if any(self.show_phase.values()) and (hi - lo + 1) >= 3:
+        # panel being shown — OR the 't' phase-table toggle — so when all are off it does ZERO phase work.
+        if (any(self.show_phase.values()) or self.show_phase_table) and (hi - lo + 1) >= 3:
             _pre = min(lo, _lw)                                # warm-up pre-roll: up to _lw buckets before lo
             ext = filtered[lo - _pre:hi + 1]; _em = len(ext) - 1
             _absb, _absr, _av = region_state.absorption_series(ext, 0, _em, config.ABSORP_VOL_WINDOW)
@@ -1881,71 +1849,37 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.phase_tbl.hide()
             for _ly in self.bc_phase.values():
                 _ly.setVisible(False)
-        # SELECTION NET-FLOW / OI-Δ STRIP ('8', BOTTOM) — the lie detector. L12 separation: derive the two net
-        # curves from the selected aggTrade-native buckets (raw opL/opS/clL/clS stay inside the processor) and map
-        # them into this slot's y-band on ONE shared scale, so a divergence (Flow ripping up while OI plummets)
-        # reads instantly. Net Position Flow is EMERALD>0 / CRIMSON<0 about the band's zero midline; Net OI Δ is a
-        # yellow dashed line. Drawn in place (setData) -> no per-selection allocation / no ghost data.
-        if flow_on:
-            _fxi, fflow, foi = self._selection_flow_curves(filtered[lo:hi + 1])
-            if fflow.size:
-                fx = np.arange(lo, hi + 1, dtype=float)
-                fmid = (flow_top + flow_bot) / 2.0
-                fhalf = (flow_top - flow_bot) / 2.0 * 0.88        # 12% top/bottom margin inside the band
-                fscale = max(float(np.max(np.abs(fflow))), float(np.max(np.abs(foi))), 1e-9)  # shared vertical axis
-
-                def _fy(v):
-                    return fmid + (np.asarray(v, dtype=float) / fscale) * fhalf
-                sx, ypos, yneg = _split_curve_by_sign(fx, fflow)  # green/red halves meet ON the zero midline
-                self.bc_flow_zero.setData([lo - 0.5, hi + 0.5], [fmid, fmid])
-                self.bc_flow_pos.setData(sx, _fy(ypos)); self.bc_flow_neg.setData(sx, _fy(yneg))
-                self.bc_flow_oi.setData(fx, _fy(foi))
-                for _it in (self.bc_flow_zero, self.bc_flow_oi, self.bc_flow_neg, self.bc_flow_pos):
-                    _it.setVisible(True)
-                self._panel_hovers.append({                       # hover -> raw FLOW / OI-Δ (signed, K-formatted)
-                    "label": "NET FLOW", "lo": lo, "yb": flow_bot, "yt": flow_top,
-                    "bull": list(fflow), "bear": list(foi), "bcol": (46, 204, 113), "rcol": (241, 196, 15),
-                    "blbl": "FLOW", "rlbl": "OIΔ", "fmt": "vol"})
-            else:
-                self._clear_flow_panel()
-        else:
-            self._clear_flow_panel()
-        # SELECTION THERMAL-DIVERGENCE OSCILLATOR ('9', BOTTOM). Strictly selection-pure, PER-BUCKET (no cumsum):
-        # Panel9 = (Z_buyer − Z_seller)·vol_mult, the velocity-weighted netted-exhaustion differential from the RAW
-        # Step-5 adaptive z's. A zero-centred LINE about the band midline, sign-split ABOVE = buyer exhaustion into
-        # a ceiling (NEON CYAN) / BELOW = seller exhaustion into a floor (HOT MAGENTA). Churn -> compresses to 0; a
-        # high-velocity flush -> spikes. Scaled to its own |max| so it fills the band. Drawn in place.
-        if exh9_on:
-            sel_exh = region_state.selection_exhaustion(
-                filtered[lo:hi + 1], "raw", config.EXH_SEL_MIN_WINDOW)         # raw adaptive z's (dense, both-sided)
-            if sel_exh:
-                dz = np.array([e[0] - e[1] for e in sel_exh], dtype=float)     # Delta_Z = Z_buyer − Z_seller
-                vm = np.array([float(filtered[i].get("vol_mult", 1.0)) for i in range(lo, hi + 1)], dtype=float)
-                val = dz * vm                                                  # velocity-weighted differential (raw)
-                # COMPRESS the heavy tail before mapping: a single velocity BURST would otherwise set vscale=max
-                # and flatten the rest of the line onto the midline. Signed-log keeps the sign + zero-crossings,
-                # keeps the burst the tallest, but lets the normal regime breathe (matches the heatmap's log scale).
-                comp = np.sign(val) * np.log1p(np.abs(val))
+        # LIQUIDATION PRESSURE WAVE ('l', BOTTOM). Net forced flow = liq_short − liq_long per bucket (forced BUYS
+        # minus forced SELLS); a FIXED-window rolling SUM (LIQ_WAVE_WINDOW, pre-rolled into real history) = the
+        # "wave": CYAN up = forced buying (short squeeze building), MAGENTA down = forced selling (long flush),
+        # about a dashed zero baseline. Signed-log scaled (liqs are spiky). RISING = a cascade building (surf it);
+        # HOLD/FADE = is the wave still going. Drawn in place (setData) -> no ghost data.
+        if liq_on:
+            net = np.array([float(b.get("liq_short", 0.0)) - float(b.get("liq_long", 0.0)) for b in _extp], float)
+            _w = config.LIQ_WAVE_WINDOW
+            _cs = np.concatenate([[0.0], np.cumsum(net)])
+            wave = np.array([_cs[k + 1] - _cs[max(0, k + 1 - _w)] for k in range(len(net))])[_pre0:]  # trailing sum
+            if wave.size:
+                comp = np.sign(wave) * np.log1p(np.abs(wave))                  # tame the spiky liquidation tail
                 ex = np.arange(lo, hi + 1, dtype=float)
-                emid = (exh9_top + exh9_bot) / 2.0
-                ehalf = (exh9_top - exh9_bot) / 2.0 * 0.88
-                vscale = max(float(np.max(np.abs(comp))), 1e-9)
+                lmid = (liq_top + liq_bot) / 2.0; lhalf = (liq_top - liq_bot) / 2.0 * 0.88
+                lscale = max(float(np.max(np.abs(comp))), 1e-9)
 
-                def _ey(v):
-                    return emid + (np.asarray(v, dtype=float) / vscale) * ehalf
+                def _lqy(v):
+                    return lmid + (np.asarray(v, dtype=float) / lscale) * lhalf
                 sxn, vpos, vneg = _split_curve_by_sign(ex, comp)              # cyan/magenta halves meet ON the midline
-                self.bc_exh9_zero.setData([lo - 0.5, hi + 0.5], [emid, emid])
-                self.bc_exh9_pos.setData(sxn, _ey(vpos)); self.bc_exh9_neg.setData(sxn, _ey(vneg))
-                for _it in (self.bc_exh9_zero, self.bc_exh9_neg, self.bc_exh9_pos):
+                self.bc_liq_zero.setData([lo - 0.5, hi + 0.5], [lmid, lmid])
+                self.bc_liq_pos.setData(sxn, _lqy(vpos)); self.bc_liq_neg.setData(sxn, _lqy(vneg))
+                for _it in (self.bc_liq_zero, self.bc_liq_neg, self.bc_liq_pos):
                     _it.setVisible(True)
-                self._panel_hovers.append({                                   # hover -> weighted value + raw ΔZ
-                    "label": "EXH ΔZ·vel", "lo": lo, "yb": exh9_bot, "yt": exh9_top,
-                    "bull": list(val), "bear": list(dz), "bcol": (0, 243, 255), "rcol": (255, 0, 162),
-                    "blbl": "ΔZ·V", "rlbl": "ΔZ", "fmt": "vol"})
+                self._panel_hovers.append({                                   # hover -> wave value + this bucket's net
+                    "label": "LIQ WAVE", "lo": lo, "yb": liq_bot, "yt": liq_top,
+                    "bull": list(wave), "bear": list(net[_pre0:]), "bcol": (0, 243, 255), "rcol": (255, 0, 162),
+                    "blbl": "WAVE", "rlbl": "net", "fmt": "vol"})
             else:
-                self._clear_exh9_panel()
+                self._clear_liq_panel()
         else:
-            self._clear_exh9_panel()
+            self._clear_liq_panel()
         self.sel_stats.set_content(
             self._selection_stat_lines(agg, state, conf, dbg, vtier,
                                        spark_op, spark_cl, flip,
