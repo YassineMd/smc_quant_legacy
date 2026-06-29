@@ -153,6 +153,7 @@ class MarketDataCore:
             absorptions=self._absorption_marks(tf),
             footprints=footprints,
             vpin=engine.vpin,
+            total_closed=engine.total_closed,
         )
 
     # ------------------------------------------------------------------
@@ -171,7 +172,8 @@ class MarketDataCore:
         return CatchupStartPacket(
             tf=tf, target_vol=engine.target_vol, order_blocks=order_blocks,
             absorptions=self._absorption_marks(tf),
-            footprints=footprints, total_buckets=len(engine.closed_buckets))
+            footprints=footprints, total_buckets=len(engine.closed_buckets),
+            total_closed=engine.total_closed)
 
     def catchup_buckets(self, tf: str) -> list:
         """The full closed-bucket snapshot list; the daemon slices it into
@@ -463,7 +465,8 @@ class MarketDataCore:
                 self.broadcast_tf(
                     tf_key,
                     ObPacket(tf=tf_key, order_blocks=[],
-                             new_buckets=new_buckets, vpin=engine.vpin).to_line(),
+                             new_buckets=new_buckets, vpin=engine.vpin,
+                             total_closed=engine.total_closed).to_line(),
                 )
 
     # ------------------------------------------------------------------

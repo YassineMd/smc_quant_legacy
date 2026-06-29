@@ -308,6 +308,17 @@ class HistoryStore:
                 rows = self._conn.execute(
                     "SELECT data FROM closed_buckets WHERE tf=? ORDER BY id ASC", (tf,)).fetchall()
                 engine.closed_buckets = [_bucket_from_dict(json.loads(r[0])) for r in rows]
+                # ABSOLUTE bucket index: a PER-TF monotonic close counter (the stable bucket idx the client
+                # shows). RESTORE it from meta so it survives restarts; bootstrap ONCE (first run after this
+                # change) from the retained row count. NOT derived from the DB autoincrement id — that id is
+                # shared across all 5 timeframes, so it is gapped per tf and would drift the idx on every
+                # restart. (Inlined meta read: _lock is held here and is not re-entrant.)
+                mrow = self._conn.execute(
+                    "SELECT value FROM meta WHERE key=?", (f"total_closed_{tf}",)).fetchone()
+                try:
+                    engine.total_closed = int(mrow[0]) if mrow and mrow[0] is not None else len(rows)
+                except (TypeError, ValueError):
+                    engine.total_closed = len(rows)
                 self._cursor[tf] = engine.closed_buckets[-1] if engine.closed_buckets else None
                 total += len(engine.closed_buckets)
         print(f"SQLITE REHYDRATE COMPLETE — {total} closed buckets armed across "
@@ -366,6 +377,7 @@ class HistoryStore:
 
             payload["per_tf"].append({
                 "tf": tf,
+                "total_closed": engine.total_closed,   # persist the per-tf bucket-index counter (stable idx)
                 "engine_state": (
                     tf, engine.target_vol, engine.avg_velocity, engine.vpin,
                     json.dumps(list(engine.rolling_velocity)),
@@ -389,6 +401,10 @@ class HistoryStore:
                 cur.execute("BEGIN")
                 for t in payload["per_tf"]:
                     tf = t["tf"]
+                    cur.execute(                              # persist the per-tf bucket-index counter
+                        "INSERT INTO meta(key,value) VALUES(?,?) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        (f"total_closed_{tf}", str(t["total_closed"])))
                     cur.execute(
                         "INSERT INTO engine_state(tf,target_vol,avg_velocity,vpin,"
                         "rolling_velocity,vpin_queue,active_bucket,updated_at) "

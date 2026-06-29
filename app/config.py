@@ -309,8 +309,13 @@ LIVE_PANEL_WINDOW = 15         # FIXED trailing window for the lean panels (1/2/
                               # selection start (panels become a stable live read, not a moving ruler). Tunable.
 LIQ_WAVE_WINDOW = 10          # fixed trailing window for the Liquidation Pressure panel's net-liq rolling sum
                               # (the "wave"): 10 = responsive (surf a building cascade), larger = smoother.
+PANEL9_SCALE = 100            # Panel-9 bull/bear lines: value (in points) mapped to the band edge; the gold
+                              # dashed reference lines sit at +/-50 on this scale (0 = center).
 ER_LEAN_GAIN = 3.0             # E/R hugs 50% (two-sided), so its panel ZOOMS the deviation from the midline by
                                  # this factor (display only — the hover still shows the true share). 1.0 = none.
+# Keltner Channel overlay on the bucket-candle chart: EMA(close, LENGTH) basis ± ATR_MULT · ATR(LENGTH).
+KELTNER_LENGTH = 20            # EMA basis + ATR period (in buckets)
+KELTNER_ATR_MULT = 2.25       # band half-width = this × ATR
 
 # ── Mode-10 PHASE TABLE (live, beside the panels): classify the selection as before/start/during/end of a
 #    move. Per phase, the MEAN and STD of the signed with-move spread (% pts, + favors the move) for

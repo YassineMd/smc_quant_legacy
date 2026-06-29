@@ -83,6 +83,7 @@ class PipeClientWorker(threading.Thread):
         # grown by ObPacket.new_buckets) + the live pulsing active bucket. Both use
         # the protocol.BucketSnapshot schema.
         self.closed_buckets: List[dict] = []
+        self._total_closed: int = 0   # absolute DB-id of closed_buckets[-1] (stable all-time bucket index)
         self.active_bucket: dict = {}
         self.connected: bool = False
         self._catchup_loading: bool = False   # True while a chunked catch-up streams
@@ -294,6 +295,7 @@ class PipeClientWorker(threading.Thread):
                 self.absorptions = new_abs   # paint whale bands on boot, before the first recompute
                 self.footprints = new_fp
                 self.closed_buckets = []
+                self._total_closed = pkt.total_closed   # DB-id of the window's last bucket (chunks fill behind)
                 self._cb_ver += 1
                 self._ob_ver += 1
                 self._catchup_loading = True
@@ -348,6 +350,7 @@ class PipeClientWorker(threading.Thread):
                 self.absorptions = list(pkt.absorptions)   # back-compat monolithic catch-up
                 self.footprints = OrderedDict(sorted(pkt.footprints.items(), key=lambda x: int(x[0])))
                 self.closed_buckets = list(pkt.closed_buckets)   # seed scanner history
+                self._total_closed = pkt.total_closed
                 self.active_bucket = dict(pkt.active_bucket)
                 self.vpin = pkt.vpin
                 self._cb_ver += 1
@@ -365,6 +368,7 @@ class PipeClientWorker(threading.Thread):
                     self.closed_buckets.extend(pkt.new_buckets)
                     if len(self.closed_buckets) > config.CLOSED_BUCKETS_CAP:
                         self.closed_buckets = self.closed_buckets[-config.CLOSED_BUCKETS_CAP:]
+                    self._total_closed = pkt.total_closed   # keep the absolute index aligned per close
                     self._cb_ver += 1
                 else:
                     self.order_blocks = pkt.order_blocks
@@ -442,6 +446,7 @@ class PipeClientWorker(threading.Thread):
                 "vpin": self.vpin,
                 "target_vol": self.target_vol,
                 "closed_buckets": self._cb_exp,
+                "total_closed": self._total_closed,
                 "active_bucket": dict(self.active_bucket),
                 "connected": self.connected,
                 "catchup_loading": self._catchup_loading,

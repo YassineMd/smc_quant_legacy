@@ -170,6 +170,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scan_trackers: dict = {}  # tracker key -> redock record (line/text/x/vb)
         self._scanner_bucket_sig: Optional[tuple] = None
         self._scanner_bucket_cache: tuple = ([], [], 0)
+        # ABSOLUTE bucket index: add this to a filtered-local idx to get the bucket's permanent history.db id
+        # (stable all-time index; first bucket ever saved = 1). 0 = legacy local idx (daemon hasn't shipped
+        # total_closed yet). Recomputed in _build_scanner_buckets.
+        self._global_idx_offset: int = 0
         self._last_scanner_sig: Optional[tuple] = None   # render-skip gate (Phase 7 perf)
         self._scanner_needs_autofit: bool = True         # one-shot Y/X fit (frees manual zoom)
         # View-follow (Mode 10), per-axis lock model. follow_x / follow_y track each axis to
@@ -330,7 +334,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Per-panel SPREAD badge (one per lean panel): the dominant side's current lead at the right edge —
         # black value on a NEON green (bull strongest) / NEON red (bear strongest) fill.
         self._spread_badges = {}
-        for _k in ("ABSORPTION", "EFF-AGG", "E/R"):
+        for _k in ("ABSORPTION", "EFF-AGG", "E/R", "PANEL9_BULL", "PANEL9_BEAR", "PANEL9_SUM"):
             _bd = pg.TextItem(anchor=(0, 0.5), color=(0, 0, 0))
             _bf = QtGui.QFont("Consolas", 11); _bf.setBold(True)
             _bd.textItem.setFont(_bf)
@@ -465,6 +469,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_liq_neg = pg.PlotDataItem(pen=pg.mkPen("#ff00a2", width=2.4), connect="finite")   # forced SELLS (down)
         for _it in (self.bc_liq_zero, self.bc_liq_neg, self.bc_liq_pos):
             _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
+        # PANEL 9 — COMPOSITE LEAN ('9', very bottom): ONE line = per-bucket AVERAGE of the four panels' signed
+        # spreads. GREEN above the zero baseline (net bullish lean), RED below (net bearish) — same sign-split
+        # treatment as the liquidation wave.
+        self.show_panel9 = True
+        _GREY9 = (140, 140, 140)
+        self.bc_p9_zero = pg.PlotDataItem(pen=pg.mkPen("#555555", width=1, style=QtCore.Qt.DashLine))
+        # thin gold dashed +/-50% refs with WIDER dash spacing (custom pattern, cosmetic = crisp at any zoom)
+        _gp_hi = pg.mkPen("#ffd700", width=0.8); _gp_hi.setCosmetic(True); _gp_hi.setDashPattern([5.0, 10.0])
+        _gp_lo = pg.mkPen("#ffd700", width=0.8); _gp_lo.setCosmetic(True); _gp_lo.setDashPattern([5.0, 10.0])
+        self.bc_p9_gold_hi = pg.PlotDataItem(pen=_gp_hi)  # +50%
+        self.bc_p9_gold_lo = pg.PlotDataItem(pen=_gp_lo)  # -50%
+        # BULL-trend line: green when >0, muted grey when <0
+        self.bc_p9_bull_g = pg.PlotDataItem(pen=pg.mkPen("#28e65a", width=2.4), connect="finite")
+        self.bc_p9_bull_x = pg.PlotDataItem(pen=pg.mkPen(_GREY9, width=2.0), connect="finite")
+        # BEAR-trend line: red when <0, muted grey when >0
+        self.bc_p9_bear_r = pg.PlotDataItem(pen=pg.mkPen("#ff2d46", width=2.4), connect="finite")
+        self.bc_p9_bear_x = pg.PlotDataItem(pen=pg.mkPen(_GREY9, width=2.0), connect="finite")
+        self.bc_p9_sum = pg.PlotDataItem(pen=pg.mkPen("#2d9cff", width=1.3))                  # NEON-BLUE sum (bull+bear)
+        # add refs + grey halves FIRST, colored/sum lines LAST so they paint on top (same zValue)
+        self._bc_p9_items = (self.bc_p9_zero, self.bc_p9_gold_hi, self.bc_p9_gold_lo,
+                             self.bc_p9_bull_x, self.bc_p9_bear_x, self.bc_p9_bull_g, self.bc_p9_bear_r,
+                             self.bc_p9_sum)
+        for _it in self._bc_p9_items:
+            _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
         self.alerts = AlertsLedger(self)
         self.drawbar = DrawingToolbar(self)
         self.menu = FloatingOverlayMenu(self)
@@ -542,6 +570,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             QtGui.QShortcut(QtGui.QKeySequence(_key), self,
                             activated=lambda p=_ph: self._toggle_phase(p))
         QtGui.QShortcut(QtGui.QKeySequence("8"), self, activated=self._toggle_liq)       # panel 8: liquidation WAVE
+        QtGui.QShortcut(QtGui.QKeySequence("9"), self, activated=self._toggle_panel9)    # panel 9: COMPOSITE lean
         QtGui.QShortcut(QtGui.QKeySequence("T"), self, activated=self._toggle_phase_table)  # phase table (no panel needed)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
@@ -907,16 +936,39 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 bs, rs = f"{bv * 100:.0f}%", f"{rv * 100:.0f}%"
             else:                                   # volume / effort -> compact K formatting
                 bs, rs = self._fmt_k(bv), self._fmt_k(rv)
-            self.panel_tooltip.setHtml(
+            _html = (
                 f"<span style='color:#9aa0aa; font-weight:bold'>{ph['label']}</span>"
                 f"<span style='color:#888'> &nbsp; </span>"
                 f"<span style='color:rgb{ph['bcol']}; font-weight:bold'>{ph['blbl']} {bs}</span>"
                 f"<span style='color:#888'> · </span>"
                 f"<span style='color:rgb{ph['rcol']}; font-weight:bold'>{ph['rlbl']} {rs}</span>")
+            _ex = ph.get("extra")                   # optional THIRD value (e.g. Panel-9 SUM line)
+            if _ex is not None and 0 <= k < len(_ex):
+                ev = _ex[k]
+                es = f"{ev * 100:.0f}%" if ph["fmt"] == "pct" else self._fmt_k(ev)
+                _html += (f"<span style='color:#888'> · </span>"
+                          f"<span style='color:rgb{ph['ecol']}; font-weight:bold'>{ph['elbl']} {es}</span>")
+            self.panel_tooltip.setHtml(_html)
             self.panel_tooltip.setPos(x, y)
             self.panel_tooltip.show()
             return
         self.panel_tooltip.hide()
+
+    @staticmethod
+    def _fmt_idx(n: int) -> str:
+        """Format a bucket index with a DOT thousands separator (20000 -> '20.000', 250493 -> '250.493')."""
+        return f"{n:,}".replace(",", ".")
+
+    @staticmethod
+    def _fmt_elapsed(seconds: float) -> str:
+        """Bucket elapsed time: < 60s keeps sub-second precision ('45.3s'); >= 1min -> '1m15s'
+        (minute+second); >= 1h -> '1h35' (hour+minute, no seconds)."""
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        s = int(round(seconds))
+        if s < 3600:
+            return f"{s // 60}m{s % 60:02d}s"
+        return f"{s // 3600}h{(s % 3600) // 60:02d}"
 
     def _hover_scanner(self, x: float, scene_pos) -> None:
         """Rich, mode-specific HUD readout for the hovered volume bucket (§4)."""
@@ -933,7 +985,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             clock = datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S")
         except (OSError, ValueError, OverflowError):
             clock = "--"
-        lines = [f"<b>Idx: {idx}</b>"] + self._hover_context(self.scanner_mode, filtered, idx)
+        lines = [f"<b>Idx: {self._fmt_idx(self._global_idx_offset + idx)}</b>"] + self._hover_context(self.scanner_mode, filtered, idx)
         gp = self.plot.mapToGlobal(self.plot.mapFromScene(scene_pos))
         wp = self.mapFromGlobal(gp)
         self.stats.show_stats(lines, clock, wp.x(), wp.y())
@@ -955,7 +1007,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             clock = datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S")
         except (OSError, ValueError, OverflowError):
             clock = "--"
-        lines = [f"<b>Idx: {idx}</b>"] + self._hover_context(self.scanner_mode, filtered, idx)
+        lines = [f"<b>Idx: {self._fmt_idx(self._global_idx_offset + idx)}</b>"] + self._hover_context(self.scanner_mode, filtered, idx)
         anchor = self.vb.mapViewToScene(QtCore.QPointF(float(idx), float(b.get("low", 0.0))))
         gp = self.plot.mapToGlobal(self.plot.mapFromScene(anchor))
         wp = self.mapFromGlobal(gp)
@@ -1115,6 +1167,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Liquidation-panel tear-down: wipe + hide the line halves + baseline (items reused via setData -> no leak)."""
         for _it in (self.bc_liq_zero, self.bc_liq_pos, self.bc_liq_neg):
             _it.setData([], []); _it.setVisible(False)
+
+    def _toggle_panel9(self) -> None:
+        """'9' — show/hide the bull/bear-trend lean panel (lean +/- own-side exhaustion). OFF clears + hides it."""
+        self.show_panel9 = not self.show_panel9
+        if not self.show_panel9:
+            self._clear_panel9()
+        self._refresh_selection_stats()
+
+    def _clear_panel9(self) -> None:
+        """Panel-9 tear-down: wipe + hide both lines (colored + grey halves) + refs + both badges (setData -> no leak)."""
+        for _it in self._bc_p9_items:
+            _it.setData([], []); _it.setVisible(False)
+        self._spread_badges["PANEL9_BULL"].hide()
+        self._spread_badges["PANEL9_BEAR"].hide()
+        self._spread_badges["PANEL9_SUM"].hide()
 
     def _toggle_phase_table(self) -> None:
         """'t' — show/hide the live PHASE TABLE on its own (no need to turn on a phase panel 5/6/7)."""
@@ -1484,6 +1551,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_er_strip.setVisible(False)
             self.bc_panel_sep.setVisible(False)
             self._clear_liq_panel()                                           # liquidation panel: clear on teardown
+            self._clear_panel9()                                              # composite panel: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -1506,6 +1574,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_er_strip.setVisible(False)
             self.bc_panel_sep.setVisible(False)
             self._clear_liq_panel()                                           # liquidation panel: clear on teardown
+            self._clear_panel9()                                              # composite panel: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -1526,7 +1595,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 rect, filtered, lo_i, hi_i,
                 (self.show_abs_strip, self.show_eff_strip, self.show_er_strip, self.show_exh_strip,
                  tuple(self.show_phase[p] for p in self._PHASES), self.show_state, self.show_sel_stats,
-                 self.show_liq, self.show_phase_table),
+                 self.show_liq, self.show_phase_table, self.show_panel9),
                 (self.zone_slider.value_s(), self.eff_slider.value_s()), tv, config.VPIN_ADAPT_WINDOW)
             if sig == self._sel_sig:
                 self._reposition_sel_box(rect)   # reuse last frame's overlays; just keep the box glued
@@ -1548,6 +1617,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_er_strip.setVisible(False)
             self.bc_panel_sep.setVisible(False)
             self._clear_liq_panel()                                           # liquidation panel: clear on teardown
+            self._clear_panel9()                                              # composite panel: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -1648,10 +1718,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _badge_x = hi + 0.5 + max(1.0, (hi - lo + 1) * 0.05)   # spread-badge x: just past the panels' right edge
         abs_on = self.show_abs_strip and _drawable        # slot order top->bottom: 1 abs, 2 eff, 3 er, 4 exh,
         eff_on = self.show_eff_strip and _drawable         # then 5 BEFORE, 6 START/DURING, 7 END (phase panels),
-        er_on = self.show_er_strip and _drawable           # then 5-7 phase panels, then the LIQUIDATION wave (BOTTOM)
+        er_on = self.show_er_strip and _drawable           # then 5-7 phase panels, 8 LIQUIDATION wave, 9 COMPOSITE (BOTTOM)
         exh_on = self.show_exh_strip and _drawable
         ph_on = {p: self.show_phase[p] and _drawable for p in self._PHASES}
         liq_on = self.show_liq and _drawable
+        p9_on = self.show_panel9 and _drawable
         ph_geom = {}
         _cur = y0                                           # running bottom edge of the last placed panel
         if abs_on:
@@ -1670,9 +1741,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if ph_on[_p]:
                 _t = _cur - config.PHASE_PANEL_GAP * sel_h; _b = _t - config.PHASE_PANEL_FRAC * sel_h
                 ph_geom[_p] = (_t, _b); _cur = _b
-        if liq_on:                                          # LIQUIDATION wave panel (BOTTOM)
+        if liq_on:                                          # LIQUIDATION wave panel
             liq_top = _cur - config.EXH_STRIP_GAP * sel_h; liq_bot = liq_top - config.EXH_STRIP_FRAC * sel_h
             _cur = liq_bot
+        if p9_on:                                           # COMPOSITE lean panel (very BOTTOM)
+            p9_top = _cur - config.EXH_STRIP_GAP * sel_h; p9_bot = p9_top - config.EXH_STRIP_FRAC * sel_h
+            _cur = p9_bot
         # minimalist hairline divider in each gap BETWEEN consecutive visible panels (stack order)
         _bands = []
         if abs_on: _bands.append((abs_top, abs_bot))
@@ -1682,6 +1756,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _p in self._PHASES:
             if _p in ph_geom: _bands.append(ph_geom[_p])
         if liq_on: _bands.append((liq_top, liq_bot))
+        if p9_on: _bands.append((p9_top, p9_bot))
         _sep_ys = [(_bands[i][1] + _bands[i + 1][0]) / 2.0 for i in range(len(_bands) - 1)]
         self.bc_panel_sep.update_data(lo - 0.5, hi + 0.5, _sep_ys)
         self.bc_panel_sep.setVisible(bool(_sep_ys))
@@ -1880,6 +1955,81 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._clear_liq_panel()
         else:
             self._clear_liq_panel()
+        # PANEL 9 — COMPOSITE LEAN ('9', very BOTTOM). ONE line = the per-bucket AVERAGE of the FOUR panels'
+        # SIGNED spreads (in points). Each spread carries that panel's own badge sign — GREEN(strong-bull)=+,
+        # RED(strong-bear)=−: absorption's strong side is the LOWER share -> (bear-bull); eff-agg & E/R's strong
+        # side is the HIGHER share -> (bull-bear)/(buy-sell). Panel 4 (exhaustion, GATED so 0 most buckets)
+        # contributes +bear% / −bull% and CARRIES FORWARD its last non-zero reading. avg/4, then the SAME sign-
+        # split treatment as the liquidation wave: GREEN above the zero line, RED below + a green/red % badge.
+        # Recomputed from the same pre-rolled _extp the lean panels use, so it's selection-independent (panels 1-4).
+        if p9_on:
+            _ab, _ar, _ = region_state.absorption_series(_extp, 0, _Lp - 1, config.ABSORP_VOL_WINDOW)
+            _a_sh = np.array(region_state.rolling_share(_ab, _ar, _lw)[_pre0:], float)
+            s_abs = (1.0 - 2.0 * _a_sh) * 100.0                                       # (bear-bull): lower share strong
+            _eb, _erv, _ = region_state.eff_agg_series(_extp, 0, _Lp - 1, config.ABSORP_VOL_WINDOW,
+                                                       config.EFF_AGG_FORCE_WINDOW)
+            _e_sh = np.array(region_state.rolling_share(_eb, _erv, _lw)[_pre0:], float)
+            s_eff = (2.0 * _e_sh - 1.0) * 100.0                                       # (bull-bear): higher share strong
+            _rb = [b.get("buyer_er", 0.0) for b in _extp]; _rs = [b.get("seller_er", 0.0) for b in _extp]
+            _r_sh = np.array(region_state.rolling_share(_rb, _rs, _lw)[_pre0:], float)
+            s_er = (2.0 * _r_sh - 1.0) * 100.0                                        # (buy-sell): higher share strong
+            lean = s_abs + s_eff + s_er                                              # SHARED lean (positive = bullish)
+            # exhaustion: ONE signed term E = (seller-exh − buyer-exh)·100, carry-forward the last non-zero EVENT
+            # (whichever side last fired). The bull line ADDS E, the bear line SUBTRACTS it — so a BUYER (bull)
+            # exhaustion (E<0) drags the bull line down AND lifts the bear line; a seller exhaustion does the reverse.
+            _ex9 = region_state.trailing_exhaustion(_extp, 0, _Lp - 1, _lw, config.EXH_MEASURE,
+                                                    config.EXH_SEL_MIN_WINDOW)
+            s_p4 = np.empty(len(_ex9), float); _hold = 0.0
+            for _k, (_eb4, _es4) in enumerate(_ex9):
+                _inst = (_es4 - _eb4) * 100.0                                         # +seller(bear) / −buyer(bull)
+                if abs(_inst) > 1e-9:
+                    _hold = _inst
+                s_p4[_k] = _hold
+            s_p4 = s_p4[_pre0:]
+            bull_line = (lean + s_p4) / 4.0                                          # + seller-exh / − buyer-exh
+            bear_line = (lean - s_p4) / 4.0                                          # mirror of the exhaustion term
+            if bull_line.size:
+                ex9 = np.arange(lo, hi + 1, dtype=float)
+                p9mid = (p9_top + p9_bot) / 2.0; p9half = (p9_top - p9_bot) / 2.0 * 0.92
+                _R = float(config.PANEL9_SCALE)
+
+                def _p9y(v):
+                    return p9mid + np.clip(np.asarray(v, dtype=float) / _R, -1.0, 1.0) * p9half
+                # reference lines: dashed zero baseline + gold dashed +/-50%
+                self.bc_p9_zero.setData([lo - 0.5, hi + 0.5], [p9mid, p9mid])
+                self.bc_p9_gold_hi.setData([lo - 0.5, hi + 0.5], [float(_p9y(50.0))] * 2)
+                self.bc_p9_gold_lo.setData([lo - 0.5, hi + 0.5], [float(_p9y(-50.0))] * 2)
+                bx, b_pos, b_neg = _split_curve_by_sign(ex9, bull_line)               # bull: >=0 green, <0 grey
+                self.bc_p9_bull_g.setData(bx, _p9y(b_pos)); self.bc_p9_bull_x.setData(bx, _p9y(b_neg))
+                rx, r_pos, r_neg = _split_curve_by_sign(ex9, bear_line)               # bear: <=0 red, >0 grey
+                self.bc_p9_bear_r.setData(rx, _p9y(r_neg)); self.bc_p9_bear_x.setData(rx, _p9y(r_pos))
+                sum_line = bull_line + bear_line                                      # NEON-BLUE: bull+bear (E cancels = pure lean)
+                self.bc_p9_sum.setData(ex9, _p9y(sum_line))
+                for _it in self._bc_p9_items:
+                    _it.setVisible(True)
+                # three badges: bull (green/grey) + bear (red/grey) stacked at the right edge; the neon-blue SUM
+                # sits CENTERED between them, shifted further right so it never collides with the other two.
+                _vb = float(bull_line[-1]); _vr = float(bear_line[-1])
+                _bdb = self._spread_badges["PANEL9_BULL"]
+                _bdb.fill = pg.mkBrush(40, 230, 90) if _vb >= 0 else pg.mkBrush(140, 140, 140)
+                _bdb.setText(f" {_vb:+.1f}% "); _bdb.setPos(_badge_x, p9mid + p9half * 0.45); _bdb.show()
+                _bdr = self._spread_badges["PANEL9_BEAR"]
+                _bdr.fill = pg.mkBrush(255, 45, 70) if _vr <= 0 else pg.mkBrush(140, 140, 140)
+                _bdr.setText(f" {_vr:+.1f}% "); _bdr.setPos(_badge_x, p9mid - p9half * 0.45); _bdr.show()
+                _vs = float(sum_line[-1])
+                _bds = self._spread_badges["PANEL9_SUM"]
+                _bds.fill = pg.mkBrush(40, 230, 90) if _vs >= 0 else pg.mkBrush(255, 45, 70)   # badge green/red by sign (line stays blue)
+                _bds.setText(f" {_vs:+.1f}% ")
+                _bds.setPos(hi + 0.5 + max(6.0, (hi - lo + 1) * 0.18), p9mid); _bds.show()      # WELL right of the two (where the dot is)
+                self._panel_hovers.append({                                          # hover -> bull / bear / SUM values
+                    "label": "P9", "lo": lo, "yb": p9_bot, "yt": p9_top,
+                    "bull": [v / 100.0 for v in bull_line], "bear": [v / 100.0 for v in bear_line],
+                    "extra": [v / 100.0 for v in sum_line], "ecol": (45, 156, 255), "elbl": "SUM",
+                    "bcol": (40, 230, 90), "rcol": (255, 45, 70), "blbl": "BULL", "rlbl": "BEAR", "fmt": "pct"})
+            else:
+                self._clear_panel9()
+        else:
+            self._clear_panel9()
         self.sel_stats.set_content(
             self._selection_stat_lines(agg, state, conf, dbg, vtier,
                                        spark_op, spark_cl, flip,
@@ -2101,7 +2251,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             def vc(name): return vclr[name] if (name in top2 and vmag[name] > 0) else gray
             lines = [
                 f"O {pf(o)}  H {pf(h)}  L {pf(l)}  {span('C '+pf(c), g if c >= o else r)}",
-                f"Elapsed {dur:.1f}s   {span('POC '+pf(poc), gold)}",
+                f"Elapsed {self._fmt_elapsed(dur)}   {span('POC '+pf(poc), gold)}",
                 sep("FLOW"),
                 f"Volume {K(cv)}",
                 # colour ONLY the dominant side (sell>buy -> sell red, buy>sell -> buy green); the
@@ -2428,10 +2578,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 combined.append(active)
 
         anchor_unix = self.menu.scan_start_unix()
+        total_closed = int(snap.get("total_closed", 0) or 0)   # DB-id of closed_list[-1] (0 = pre-redeploy daemon)
 
-        # signature gate: rebuild only when the bucket set, the live edge volume,
-        # or the anchor actually changes.
-        sig = (len(combined), round(active.get("curr_vol", 0.0), 1), anchor_unix)
+        # signature gate: rebuild only when the bucket set, the live edge volume, the anchor, or the absolute
+        # index base (total_closed — which moves at the 10k cap even when len(combined) doesn't) changes.
+        sig = (len(combined), round(active.get("curr_vol", 0.0), 1), anchor_unix, total_closed)
         if sig == self._scanner_bucket_sig:
             return self._scanner_bucket_cache
 
@@ -2444,6 +2595,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 filtered.append(b)
         if anchor_idx is None:
             anchor_idx = len(combined)
+
+        # ABSOLUTE index base: a filtered-local idx maps to history.db id = offset + idx. Since combined =
+        # closed_list (+ live active), db_id(closed_list[-1]) = total_closed, so db_id(combined[j]) =
+        # total_closed - len(closed_list) + 1 + j, and j = anchor_idx + local_idx. (0 -> legacy local idx.)
+        self._global_idx_offset = (total_closed - len(closed_list) + 1 + anchor_idx) if total_closed > 0 else 0
 
         x_indices: list[int] = list(range(len(filtered)))
         result = (filtered, x_indices, anchor_idx)
@@ -2998,7 +3154,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _scanner_tracker(self, key: str, value: float, color: str, text: str,
                          x_data: float, direction: str = "mid",
                          target_vb=None, line: bool = True,
-                         span: bool = False) -> None:
+                         span: bool = False, fill_bg=None) -> None:
         """Right-docked, TradingView-style axis tracker: a bold color-coded
         ``pg.TextItem`` badge pinned to the **right Y-axis edge** plus, optionally,
         a **finite** dashed rule that bridges only the gap from the live data point
@@ -3035,7 +3191,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if span:
                     rule = pg.InfiniteLine(
                         angle=0, movable=False, pos=value,
-                        pen=pg.mkPen(color, width=1.5, style=QtCore.Qt.DashLine))
+                        pen=pg.mkPen(color, width=0.8, style=QtCore.Qt.DashLine))
                 else:
                     rule = pg.PlotCurveItem(x=[x_data, x_max], y=[value, value],
                                             pen=_rule_pen())
@@ -3045,7 +3201,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 else:
                     self._add_scanner_item(rule)
                 self._scan_handles[ln_key] = rule
-            tag = pg.TextItem(anchor=anchor)
+            tag = pg.TextItem(anchor=anchor, fill=pg.mkBrush(fill_bg)) if fill_bg \
+                else pg.TextItem(anchor=anchor)
             tag.setHtml(html)
             tag.setZValue(60)
             if target_vb is not None:
@@ -3058,7 +3215,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if line and rule is not None:
                 if span:
                     rule.setPos(value)
-                    rule.setPen(pg.mkPen(color, width=1.5, style=QtCore.Qt.DashLine))
+                    rule.setPen(pg.mkPen(color, width=0.8, style=QtCore.Qt.DashLine))
                 else:
                     rule.setData(x=[x_data, x_max], y=[value, value])
                     rule.setPen(_rule_pen())
@@ -3857,6 +4014,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 out[k].append(v)
         return out
 
+    @staticmethod
+    def _keltner_bands(highs, lows, closes, length: int, mult: float):
+        """Keltner Channel: EMA(close, length) basis ± mult·ATR(length). ATR = Wilder's RMA of the True
+        Range. Returns (upper, mid, lower) aligned to the inputs (the left edge warms up like any MA)."""
+        n = len(closes)
+        if n == 0:
+            return [], [], []
+        k = 2.0 / (length + 1)
+        mid = [0.0] * n
+        atr = [0.0] * n
+        e = float(closes[0]); a = float(highs[0]) - float(lows[0])
+        mid[0] = e; atr[0] = a
+        for i in range(1, n):
+            e = float(closes[i]) * k + e * (1.0 - k)                       # EMA basis
+            tr = max(float(highs[i]) - float(lows[i]),
+                     abs(float(highs[i]) - float(closes[i - 1])),
+                     abs(float(lows[i]) - float(closes[i - 1])))           # True Range
+            a = (a * (length - 1) + tr) / length                          # Wilder RMA → ATR
+            mid[i] = e; atr[i] = a
+        upper = [mid[i] + mult * atr[i] for i in range(n)]
+        lower = [mid[i] - mult * atr[i] for i in range(n)]
+        return upper, mid, lower
+
     def _scan_bucket_canvas(self, buckets: list, x: list) -> None:
         """Mode 10 — neon-graded bucket candles + gray baseline (upper pane)
         synchronized with a rolling-50 VPIN toxicity heatmap (lower pane)."""
@@ -3910,7 +4090,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                               style=QtCore.Qt.DashLine)))
         # vx0/vx1: viewport cull — paint ONLY the visible candles (O(visible), not O(N)).
         self._scan_handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
-        self._scan_handles["bc_baseline"].setData(x, baseline_arr)
+        self._scan_handles["bc_baseline"].setData(x, baseline_arr)   # gray dashed POC-center baseline (KEPT)
+
+        # --- Keltner Channel: EMA(close) basis ± ATR band. LIGHT GRAY upper/lower (match the POC baseline);
+        #     the EMA MIDDLE line is HIDDEN (operator pref — the POC baseline is the center reference). ---
+        if "kc_mid" not in self._scan_handles:
+            _kc_pen = pg.mkPen((180, 180, 180, 170), width=1.0)
+            self._scan_handles["kc_upper"] = self._add_scanner_item(pg.PlotCurveItem(pen=_kc_pen))
+            self._scan_handles["kc_lower"] = self._add_scanner_item(pg.PlotCurveItem(pen=_kc_pen))
+            self._scan_handles["kc_mid"] = self._add_scanner_item(pg.PlotCurveItem(
+                pen=pg.mkPen((180, 180, 180, 120), width=1.0, style=QtCore.Qt.DashLine)))
+            self._scan_handles["kc_mid"].setVisible(False)   # hide the EMA basis line
+        _kc_up, _, _kc_lo = self._keltner_bands(
+            highs, lows, closes, config.KELTNER_LENGTH, config.KELTNER_ATR_MULT)
+        self._scan_handles["kc_upper"].setData(x, _kc_up)
+        self._scan_handles["kc_lower"].setData(x, _kc_lo)
 
         # --- STAGE 0: true per-bucket POC marker (gold dot) — rides the whole DETAIL regime ---
         # poc_price is already finalized in every BucketSnapshot (and computed on the fly for the
@@ -4144,16 +4338,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         x_edge = x[-1]
         fill = self._active_fill_pct()
         spot = closes[-1]
-        # §5.2 — spot price and EMA baseline both sit near the POC, so two separate
-        # badges overlapped whenever close ≈ baseline. Fold the baseline readout into
-        # the spot badge (one element can't self-overlap); the gray dashed baseline
-        # curve still shows its position. Anchor the block "up" (bottom edge at spot)
-        # so all three rows stack ABOVE the spanning price line — "mid" centered them
-        # on it, striking the price line straight through the "% Fill" row.
-        self._scanner_tracker("t_spot", spot, "#dcdcdc",
-            f"Price ${spot:.2f}<br>({fill:.0f}% Fill)<br>"
-            f"<span style='color:#b4b4b4'>Base ${baseline_arr[-1]:.2f}</span>",
-            x_edge, "up", span=True)
+        # §5.2 — minimalist spot badge: a WHITE pill with the bare price (bold) over the
+        # active bucket's fill% (not bold), both black. No "Price"/"$"/"Fill"/"Base" labels;
+        # the gray dashed baseline curve still shows the EMA baseline's position separately.
+        # Anchored "up" (bottom edge at spot) so the block stacks ABOVE the spanning price line.
+        self._scanner_tracker("t_spot", spot, "#999999",
+            f"<div style='text-align:center'>"
+            f"<span style='color:#000'>{spot:.2f}</span><br>"
+            f"<span style='color:#000; font-weight:normal'>{fill:.0f}%</span></div>",
+            x_edge, "up", span=True, fill_bg="#ffffff")
 
         # Deterministic horizontal lock: mirror the main X range onto the lower
         # pane every frame so the dual panes stay in pixel-perfect lock-step.

@@ -119,6 +119,7 @@ class CatchupPacket:
     absorptions: List[Dict[str, Any]] = field(default_factory=list)
     footprints: Dict[str, Any] = field(default_factory=dict)
     vpin: float = 0.0
+    total_closed: int = 0          # absolute DB-id of closed_buckets[-1] (stable all-time bucket index)
     type: str = TYPE_CATCHUP
 
     def to_line(self) -> str:
@@ -142,6 +143,7 @@ class CatchupStartPacket:
     absorptions: List[Dict[str, Any]] = field(default_factory=list)
     footprints: Dict[str, Any] = field(default_factory=dict)
     total_buckets: int = 0
+    total_closed: int = 0          # absolute DB-id of closed_buckets[-1] (stable all-time bucket index)
     type: str = TYPE_CATCHUP_START
 
     def to_line(self) -> str:
@@ -195,6 +197,7 @@ class ObPacket:
     absorptions: List[Dict[str, Any]] = field(default_factory=list)
     new_buckets: List["BucketSnapshot"] = field(default_factory=list)
     vpin: float = 0.0
+    total_closed: int = 0          # absolute DB-id of closed_buckets[-1] after these closes (stable bucket index)
     type: str = TYPE_OB
 
     def to_line(self) -> str:
@@ -324,6 +327,7 @@ _PARSERS = {
         order_blocks=d.get("order_blocks", []),
         absorptions=d.get("absorptions", []),
         footprints=d.get("footprints", {}), vpin=d.get("vpin", 0.0),
+        total_closed=d.get("total_closed", 0),
     ),
     TYPE_CATCHUP_START: lambda d: CatchupStartPacket(
         tf=d["tf"], target_vol=d.get("target_vol", 0.0),
@@ -331,6 +335,7 @@ _PARSERS = {
         absorptions=d.get("absorptions", []),
         footprints=d.get("footprints", {}),
         total_buckets=d.get("total_buckets", 0),
+        total_closed=d.get("total_closed", 0),
     ),
     TYPE_CATCHUP_CHUNK: lambda d: CatchupChunkPacket(
         tf=d["tf"], seq=d.get("seq", 0),
@@ -344,6 +349,7 @@ _PARSERS = {
         tf=d["tf"], order_blocks=d.get("order_blocks", []),
         absorptions=d.get("absorptions", []),
         new_buckets=d.get("new_buckets", []), vpin=d.get("vpin", 0.0),
+        total_closed=d.get("total_closed", 0),
     ),
     TYPE_LIQ: lambda d: LiquidationPacket(
         side=d["side"], price=d["price"], qty=d["qty"], time=d["time"],
