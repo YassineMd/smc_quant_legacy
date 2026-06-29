@@ -1113,6 +1113,15 @@ exhaustively, all CAUSAL / out-of-sample / base-rate-guarded:
   1/2/3 + panel-4 baseline selection-INDEPENDENT (`region_state.trailing_exhaustion` + pre-roll) — fixes "values
   change when I move the selection start" (proven: P1 share 0.5736 identical across starts vs OLD 0.25–0.45).
   Panel-4 gold 50% line; **`'T'`** shows the phase table without a phase panel on. (Detail in `scripts/HANDOFF.md`.)
+- **BUILD (2026-06-29, `8e8ddd2`, daemon REDEPLOYED) — Panel-9 bull/bear/sum + absolute bucket index + chart UI.**
+  **Panel 9** is now TWO lines + a sum (flip-free): `bull=(lean+seller-exh)/4` green>0/grey<0, `bear=(lean−buyer-exh)/4`
+  red<0/grey>0 (lean = abs+eff+E/R signed, shared; each line carries its own side's exhaustion); a **neon-blue sum**
+  (= pure lean/2, exhaustion cancels); gold ±50% refs; three boxes (sum box centred-right, green/red by sign);
+  hover shows BULL/BEAR/SUM. **Absolute `Idx`** — the bucket index is now the DB-anchored per-tf counter
+  `engine.total_closed`, persisted in `meta` + restored on rehydrate (NOT the gapped shared `closed_buckets.id`),
+  shipped to the terminal and dot-formatted; **to resolve a cited idx range see memory `bucket-index-resolution`.**
+  **Chart UI:** minimalist white spot pill (price/fill only), Keltner Channel (EMA20 ± 2.25·ATR, grey bands, EMA
+  mid hidden, POC baseline kept), `Elapsed` formatted `1m15s`/`1h35`. (Detail in `scripts/HANDOFF.md`.)
 
 ---
 

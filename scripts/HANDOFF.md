@@ -802,6 +802,31 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
   re-keyed to `'8'` per operator). Keys now stack: `1`-`4` lean, `5`-`7` phase, `8` liq-wave, `T` table.
 - **EXE stale** (not rebuilt this batch).
 
+**Panel-9 bull/bear/sum study + ABSOLUTE bucket index + bucket-chart UI (`8e8ddd2`, 2026-06-29). DAEMON REDEPLOYED.**
+- **Panel 9 reworked — single composite → TWO trend lines + a sum (no flip dependence).** `bull = (lean +
+  seller-exh)/4`, `bear = (lean − buyer-exh)/4`, where `lean = absorption + eff-agg + E/R` signed spreads
+  (positive=bullish, SHARED). Each line carries ITS OWN side's gated exhaustion forward independently (`trailing_exhaustion`).
+  Why two lines: the lean is symmetric (one line); only exhaustion is two-sided, so each trend's line diverges
+  by its own capitulation signal. **BULL** green >0 / muted-grey <0; **BEAR** red <0 / muted-grey >0 (`_split_curve_by_sign`).
+  **NEON-BLUE sum** = bull+bear → the exhaustion cancels = `lean/2` (pure lean confluence); thin 1.3.
+  Gold dashed **±50%** refs (`PANEL9_SCALE=100`, custom dash pattern), dim zero baseline. THREE right-edge boxes:
+  bull(green/grey) over bear(red/grey) stacked at `_badge_x`; the **sum box centred well right** (where the
+  operator pointed), bg green/red **by sign** (line stays blue). Hover (`_panel_hovers` gained an optional 3rd
+  `extra` slot) → BULL/BEAR/SUM. Items: `bc_p9_{zero,gold_hi,gold_lo,bull_g,bull_x,bear_r,bear_x,sum}` (`self._bc_p9_items`).
+- **ABSOLUTE per-tf bucket index — on-screen `Idx` is now DB-anchored + stable.** `engine.total_closed` is a
+  per-tf monotonic close counter, **persisted in the `meta` table (`total_closed_<tf>`) and RESTORED on rehydrate**
+  (bootstrap = retained row count), so it survives restarts + 10k pruning and never drifts. It is **NOT**
+  `closed_buckets.id` — that autoincrement is shared across all 5 tfs, so per-tf it's gapped (×8 for 5m, verified
+  on the VM). Shipped via `total_closed` on CatchupStart/Ob/Catchup packets → `pipe_client` → terminal
+  `_global_idx_offset = total_closed − len(window) + 1 + anchor_idx`; `Idx = offset + local_idx`, dot-formatted
+  (`_fmt_idx`: `20.000`). **Resolution recipe (read it before fetching a cited range) → memory `bucket-index-resolution`.**
+  Verified live on `smc-quant-eu`: meta carries `total_closed_{1m..4h}`, 1m=10001>cap(10000) (monotonic ✓).
+- **Bucket-chart UI:** minimalist spot pill (white bg, centred bold price over fill%, no Price/$/Fill/Base; price
+  line thinner 0.8 + light-grey); **Keltner Channel** overlay (`_keltner_bands`, EMA(close,`KELTNER_LENGTH=20`)
+  ± `KELTNER_ATR_MULT=2.25`·Wilder-ATR) light-grey bands, **EMA mid HIDDEN, the POC-center baseline KEPT** (operator
+  corrected an initial swap); `Elapsed` formats by magnitude (`_fmt_elapsed`: `45.0s`→`1m15s`→`1h35`).
+- **EXE stale.** Daemon side (persistence/feeds/protocol/pipe_client) was **deployed + `orderflow` restarted** by the operator.
+
 **Mode-10 selection PERF pass — 5 correctness-preserving fixes (`3b176e6`→`a89a2fd`).** Profiled first on real
 data (N=200/400/800); the theory was REVISED: `rolling_share`'s O(N²) is real but small (~12% of the phase
 block); the bigger costs are the trailing-50 norm re-sums and the per-bucket exp/log posteriors (`conf_traj`,
