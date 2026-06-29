@@ -808,6 +808,30 @@ class DrawingController(QtCore.QObject):
         (ax, ay), (bx, by) = self._selection.pts[0], self._selection.pts[1]
         return (min(ax, bx), min(ay, by), max(ax, bx), max(ay, by))
 
+    def extend_selection(self, edge: str, dx: float) -> None:
+        """Move ONE x-edge of the active Magic Selection by ``dx`` buckets; the OTHER edge stays put. The
+        terminal binds BOTH arrows to the RIGHT edge — Right = +1 (extend), Left = -1 (pull back) — so the
+        selection grows/shrinks from its right side only. Clamped to keep >= 1 bucket of width (the moved
+        edge can't cross the fixed one). Y unchanged; rect + handles move in place; one ``selectionChanged``.
+        No-op without a selection (or when the clamp leaves it unmoved)."""
+        s = self._selection
+        if s is None or len(s.pts) < 2:
+            return
+        i_right = 0 if s.pts[0][0] >= s.pts[1][0] else 1   # stored point that is the RIGHT (max-x) edge
+        i = i_right if edge == "right" else 1 - i_right    # "left" -> the MIN-x point
+        j = 1 - i                                          # the FIXED (opposite) edge
+        new_x = s.pts[i][0] + dx
+        if i == i_right:                                   # right edge must stay >= left + 1 bucket
+            new_x = max(new_x, s.pts[j][0] + 1.0)
+        else:                                              # left edge must stay <= right - 1 bucket
+            new_x = min(new_x, s.pts[j][0] - 1.0)
+        if abs(new_x - s.pts[i][0]) < 1e-9:
+            return                                         # clamped to the same spot -> no-op
+        s.pts[i][0] = new_x
+        s.rebuild()
+        self.sel_handles.attach(s, corners_only=True)      # re-glue the corner handles to the new geometry
+        self.selectionChanged.emit()
+
     # ------------------------------------------------------------------
     def _make_bracket(self, kind, a, b, entry=None, stop=None, target=None) -> PositionBracket:
         x0, x1 = sorted((a[0], b[0]))

@@ -17,6 +17,7 @@ rate (Section 11).
 from __future__ import annotations
 
 import bisect
+import json
 import math
 import os
 import shutil
@@ -247,9 +248,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.plot.addItem(self.bc_exh_strip, ignoreBounds=True)
         self.bc_exh_strip.setVisible(False)
         # dashed GOLD 50% reference line for the exhaustion panel (the band midline = 50% exhaustion)
-        self.bc_exh_mid = pg.PlotDataItem(pen=pg.mkPen("#ffd700", width=1, style=QtCore.Qt.DashLine))
-        self.bc_exh_mid.setZValue(3); self.bc_exh_mid.setVisible(False)
-        self.plot.addItem(self.bc_exh_mid, ignoreBounds=True)
+        # 50% MIDLINES for panels 1-4 (orange dashed) — the even/balance reference line (panel 9's +/-50% are orange too).
+        _ORANGE = "#ff9800"
+        self.bc_exh_mid = pg.PlotDataItem(pen=pg.mkPen(_ORANGE, width=1, style=QtCore.Qt.DashLine))   # panel 4
+        self.bc_abs_mid = pg.PlotDataItem(pen=pg.mkPen(_ORANGE, width=1, style=QtCore.Qt.DashLine))   # panel 1
+        self.bc_eff_mid = pg.PlotDataItem(pen=pg.mkPen(_ORANGE, width=1, style=QtCore.Qt.DashLine))   # panel 2
+        self.bc_er_mid = pg.PlotDataItem(pen=pg.mkPen(_ORANGE, width=1, style=QtCore.Qt.DashLine))    # panel 3
+        for _m in (self.bc_exh_mid, self.bc_abs_mid, self.bc_eff_mid, self.bc_er_mid):
+            _m.setZValue(3); _m.setVisible(False); self.plot.addItem(_m, ignoreBounds=True)
         # SELECTION-SCOPED EFF-AGG EVOLUTION STRIP — bull/bear per-bucket effective aggression as two
         # SYMMETRICALLY-smoothed NEON green/red lines, in a SECOND panel STACKED just below the exhaustion
         # strip ('2' toggles). Reuses the same parametrised layer + the eff_bull/bear arrays built for the
@@ -334,7 +340,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Per-panel SPREAD badge (one per lean panel): the dominant side's current lead at the right edge —
         # black value on a NEON green (bull strongest) / NEON red (bear strongest) fill.
         self._spread_badges = {}
-        for _k in ("ABSORPTION", "EFF-AGG", "E/R", "PANEL9_BULL", "PANEL9_BEAR", "PANEL9_SUM"):
+        for _k in ("ABSORPTION", "EFF-AGG", "E/R", "EXHAUSTION", "PANEL9_BULL", "PANEL9_BEAR", "PANEL9_SUM",
+                   "PANEL0_BULL", "PANEL0_BEAR", "PANEL0_SUM"):
             _bd = pg.TextItem(anchor=(0, 0.5), color=(0, 0, 0))
             _bf = QtGui.QFont("Consolas", 11); _bf.setBold(True)
             _bd.textItem.setFont(_bf)
@@ -370,10 +377,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_state = False   # STATE verdict + debug lines hidden until 'y' (both stats boxes)
         self.show_vel_abn = True  # abnormal-velocity DIAMONDS ON by default ('v' toggles; 2px border always on)
         self.show_sel_stats = False  # Mode-10 selection stats box HIDDEN by default ('h' toggles)
-        self.show_abs_strip = True   # Mode-10 selection ABSORPTION panel ON by default ('1' toggles) — slot 1
+        self.show_abs_strip = False  # Mode-10 selection ABSORPTION panel — HIDDEN by default ('1' toggles) — slot 1
         self.show_eff_strip = True   # Mode-10 selection eff-agg evolution panel ON by default ('2' toggles)
-        self.show_er_strip = True    # Mode-10 selection effort/result panel ON by default ('3' toggles)
-        self.show_exh_strip = True   # Mode-10 selection exhaustion panel ON by default ('4' toggles) — slot 4
+        self.show_er_strip = False   # Mode-10 selection effort/result panel — HIDDEN by default ('3' toggles)
+        self.show_exh_strip = False  # Mode-10 selection exhaustion panel — HIDDEN by default ('4' toggles) — slot 4
         # NOTE: the 3 PHASE panels (5/6/7) stay ON by default (show_phase[...] = True above); the 4 MEASURE
         # panels above default OFF — so the default session computes only the always-on zones + the phase path.
         # ── Phase 2b: depth/liquidity HEATMAP (scanner mode "depth_heatmap"). The ImageItem + BBO lines live on
@@ -463,7 +470,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # the wave UP (NEON CYAN), forced SELLS (longs liquidated) push it DOWN (HOT MAGENTA), about a dashed zero
         # baseline. Signed-log compressed (liquidations are spiky). Watch it RISE to surf a building cascade;
         # watch it HOLD/FADE for "is my wave still going?". Default ON.
-        self.show_liq = True
+        self.show_liq = False        # Mode-10 Liquidation Pressure wave (panel 8) — HIDDEN by default ('8' toggles)
         self.bc_liq_zero = pg.PlotDataItem(pen=pg.mkPen("#555555", width=1, style=QtCore.Qt.DashLine))
         self.bc_liq_pos = pg.PlotDataItem(pen=pg.mkPen("#00f3ff", width=2.4), connect="finite")   # forced BUYS (up)
         self.bc_liq_neg = pg.PlotDataItem(pen=pg.mkPen("#ff00a2", width=2.4), connect="finite")   # forced SELLS (down)
@@ -476,8 +483,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _GREY9 = (140, 140, 140)
         self.bc_p9_zero = pg.PlotDataItem(pen=pg.mkPen("#555555", width=1, style=QtCore.Qt.DashLine))
         # thin gold dashed +/-50% refs with WIDER dash spacing (custom pattern, cosmetic = crisp at any zoom)
-        _gp_hi = pg.mkPen("#ffd700", width=0.8); _gp_hi.setCosmetic(True); _gp_hi.setDashPattern([5.0, 10.0])
-        _gp_lo = pg.mkPen("#ffd700", width=0.8); _gp_lo.setCosmetic(True); _gp_lo.setDashPattern([5.0, 10.0])
+        _gp_hi = pg.mkPen("#ff9800", width=0.8); _gp_hi.setCosmetic(True); _gp_hi.setDashPattern([5.0, 10.0])
+        _gp_lo = pg.mkPen("#ff9800", width=0.8); _gp_lo.setCosmetic(True); _gp_lo.setDashPattern([5.0, 10.0])
         self.bc_p9_gold_hi = pg.PlotDataItem(pen=_gp_hi)  # +50%
         self.bc_p9_gold_lo = pg.PlotDataItem(pen=_gp_lo)  # -50%
         # BULL-trend line: green when >0, muted grey when <0
@@ -487,12 +494,45 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_p9_bear_r = pg.PlotDataItem(pen=pg.mkPen("#ff2d46", width=2.4), connect="finite")
         self.bc_p9_bear_x = pg.PlotDataItem(pen=pg.mkPen(_GREY9, width=2.0), connect="finite")
         self.bc_p9_sum = pg.PlotDataItem(pen=pg.mkPen("#2d9cff", width=1.3))                  # NEON-BLUE sum (bull+bear)
+        self.bc_p9_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))  # LOCK-IN divider (vertical)
         # add refs + grey halves FIRST, colored/sum lines LAST so they paint on top (same zValue)
-        self._bc_p9_items = (self.bc_p9_zero, self.bc_p9_gold_hi, self.bc_p9_gold_lo,
+        self._bc_p9_items = (self.bc_p9_zero, self.bc_p9_gold_hi, self.bc_p9_gold_lo, self.bc_p9_lock,
                              self.bc_p9_bull_x, self.bc_p9_bear_x, self.bc_p9_bull_g, self.bc_p9_bear_r,
                              self.bc_p9_sum)
         for _it in self._bc_p9_items:
             _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
+        # PANEL 0 ('0') — a SMOOTHED twin of Panel 9: each line = (current + locked)/2. Identical items/colors.
+        self.show_panel0 = True
+        _gp0_hi = pg.mkPen("#ff9800", width=0.8); _gp0_hi.setCosmetic(True); _gp0_hi.setDashPattern([5.0, 10.0])
+        _gp0_lo = pg.mkPen("#ff9800", width=0.8); _gp0_lo.setCosmetic(True); _gp0_lo.setDashPattern([5.0, 10.0])
+        self.bc_p0_zero = pg.PlotDataItem(pen=pg.mkPen("#555555", width=1, style=QtCore.Qt.DashLine))
+        self.bc_p0_gold_hi = pg.PlotDataItem(pen=_gp0_hi)
+        self.bc_p0_gold_lo = pg.PlotDataItem(pen=_gp0_lo)
+        self.bc_p0_bull_g = pg.PlotDataItem(pen=pg.mkPen("#28e65a", width=2.4), connect="finite")
+        self.bc_p0_bull_x = pg.PlotDataItem(pen=pg.mkPen(_GREY9, width=2.0), connect="finite")
+        self.bc_p0_bear_r = pg.PlotDataItem(pen=pg.mkPen("#ff2d46", width=2.4), connect="finite")
+        self.bc_p0_bear_x = pg.PlotDataItem(pen=pg.mkPen(_GREY9, width=2.0), connect="finite")
+        self.bc_p0_sum = pg.PlotDataItem(pen=pg.mkPen("#2d9cff", width=1.3))
+        self.bc_p0_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
+        self._bc_p0_items = (self.bc_p0_zero, self.bc_p0_gold_hi, self.bc_p0_gold_lo, self.bc_p0_lock,
+                             self.bc_p0_bull_x, self.bc_p0_bear_x, self.bc_p0_bull_g, self.bc_p0_bear_r,
+                             self.bc_p0_sum)
+        for _it in self._bc_p0_items:
+            _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
+        # PANEL 0 non-locked TAIL: light-grey dashed continuation of the blue line over the settling buckets
+        self.bc_p0_sum_tail = pg.PlotDataItem(
+            pen=pg.mkPen((150, 150, 150), width=1.3, style=QtCore.Qt.DashLine), connect="finite")
+        self.bc_p0_sum_tail.setZValue(3); self.bc_p0_sum_tail.setVisible(False)
+        self.plot.addItem(self.bc_p0_sum_tail, ignoreBounds=True)
+        # per-panel LOCK-IN dividers (vertical light-gray dashed) for panels 1-4: LEFT of the line = fully
+        # formed (locked), right = still settling. 1/2/3 = centered-window forward half; 4 = envelope tail.
+        self.bc_abs_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
+        self.bc_eff_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
+        self.bc_er_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
+        self.bc_exh_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
+        for _it in (self.bc_abs_lock, self.bc_eff_lock, self.bc_er_lock, self.bc_exh_lock):
+            _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
+        self._load_ui_state()   # restore the panel toggles saved by a prior session (overrides the defaults above)
         self.alerts = AlertsLedger(self)
         self.drawbar = DrawingToolbar(self)
         self.menu = FloatingOverlayMenu(self)
@@ -534,6 +574,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                # positions it top-centre once the window lays out).
         self.drawer.selectionChanged.connect(self._refresh_selection_stats)   # Magic Selection -> stats
         QtGui.QShortcut(QtGui.QKeySequence("Escape"), self, activated=self.drawer.cancel)
+        # Both arrows move the Magic Selection's RIGHT edge only: Right = +1 bucket (extend), Left = -1
+        # (pull back). Left edge stays; clamped to >= 1 bucket of width. No-op without a selection.
+        QtGui.QShortcut(QtGui.QKeySequence("Right"), self, activated=lambda: self.drawer.extend_selection("right", 1.0))
+        QtGui.QShortcut(QtGui.QKeySequence("Left"), self, activated=lambda: self.drawer.extend_selection("right", -1.0))
         # quick toggles: 's' = Stats Box overlay, 'd' = Vector Drawing toolbar. Flip the menu
         # checkbox so the menu stays in sync and the existing show/hide + teardown logic runs.
         QtGui.QShortcut(QtGui.QKeySequence("S"), self,
@@ -571,6 +615,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             activated=lambda p=_ph: self._toggle_phase(p))
         QtGui.QShortcut(QtGui.QKeySequence("8"), self, activated=self._toggle_liq)       # panel 8: liquidation WAVE
         QtGui.QShortcut(QtGui.QKeySequence("9"), self, activated=self._toggle_panel9)    # panel 9: COMPOSITE lean
+        QtGui.QShortcut(QtGui.QKeySequence("0"), self, activated=self._toggle_panel0)    # panel 0: smoothed P9
         QtGui.QShortcut(QtGui.QKeySequence("T"), self, activated=self._toggle_phase_table)  # phase table (no panel needed)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
@@ -1104,8 +1149,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _set_spread_badge(self, key: str, bull_last: float, bear_last: float,
                           strong_is_bull: bool, x: float, y: float) -> None:
-        """Place a panel's SPREAD badge: the dominant side's lead (|bull-bear| of the share lines, in points),
-        black text on a NEON green (bull strongest) / NEON red (bear strongest) fill, at the panel's right."""
+        """Place a panel's SPREAD badge: the dominant side's lead (|bull-bear|, in points), black text on a
+        NEON green (bull strongest) / NEON red (bear strongest) fill, at the panel's right."""
         bd = self._spread_badges[key]
         spread = abs(bull_last - bear_last) * 100.0
         bd.fill = pg.mkBrush(40, 230, 90) if strong_is_bull else pg.mkBrush(255, 45, 70)
@@ -1120,6 +1165,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.show_abs_strip:
             self.bc_abs_strip.setVisible(False)
             self.panel_tooltip.hide()
+        self._save_ui_state()
         self._refresh_selection_stats()
 
     def _toggle_exh_strip(self) -> None:
@@ -1129,6 +1175,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.show_exh_strip:
             self.bc_exh_strip.setVisible(False); self.bc_exh_mid.setVisible(False)
             self.panel_tooltip.hide()
+        self._save_ui_state()
         self._refresh_selection_stats()
 
     def _toggle_eff_strip(self) -> None:
@@ -1138,6 +1185,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.show_eff_strip:
             self.bc_eff_strip.setVisible(False)
             self.panel_tooltip.hide()
+        self._save_ui_state()
         self._refresh_selection_stats()
 
     def _toggle_er_strip(self) -> None:
@@ -1147,6 +1195,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.show_er_strip:
             self.bc_er_strip.setVisible(False)
             self.panel_tooltip.hide()
+        self._save_ui_state()
         self._refresh_selection_stats()
 
     def _toggle_phase(self, ph: str) -> None:
@@ -1154,13 +1203,94 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_phase[ph] = not self.show_phase[ph]
         if not self.show_phase[ph]:
             self.bc_phase[ph].setVisible(False)
+        self._save_ui_state()
         self._refresh_selection_stats()
+
+    def _draw_panel_lock(self, item, lock_dist: int, lo: int, hi: int, ybot: float, ytop: float) -> None:
+        """Vertical light-gray dashed LOCK-IN divider at ``lock_dist`` buckets left of the panel's right edge:
+        left of it the value is fully formed (locked), right of it still settling. Hidden when no locked
+        region exists (selection narrower than the lock distance)."""
+        x = hi - lock_dist + 0.5
+        if x > lo - 0.5:
+            item.setData([x, x], [ybot, ytop]); item.setVisible(True)
+        else:
+            item.setData([], []); item.setVisible(False)
+
+    def _draw_lean_lines(self, bull, bear, items, bkeys, lo, hi, ytop, ybot,
+                         hover_label, badge_x, sum_badge_x, show_lock=True, sum_only=False,
+                         clip_lock=False, tail_item=None) -> None:
+        """Render a Panel-9-style set into the band [ybot,ytop]: green/grey BULL + red/grey BEAR sign-split
+        lines, a neon-blue SUM (bull+bear), dashed zero + orange +/-50% refs, the lock-in divider, three
+        curr-(locked) badges and the hover. ``items`` = the panel's _bc_*_items tuple (Panel-9 field order);
+        ``bkeys`` = (bull_badge, bear_badge, sum_badge) keys into ``self._spread_badges``. Used by panels 9 + 0."""
+        zero, gold_hi, gold_lo, lock, bull_x, bear_x, bull_g, bear_r, ssum = items
+        bk, rk, sk = bkeys
+        sum_line = bull + bear
+        ex = np.arange(lo, hi + 1, dtype=float)
+        mid = (ytop + ybot) / 2.0; half = (ytop - ybot) / 2.0 * 0.92
+        _R = float(config.PANEL9_SCALE)
+
+        def _y(v):
+            return mid + np.clip(np.asarray(v, dtype=float) / _R, -1.0, 1.0) * half
+        zero.setData([lo - 0.5, hi + 0.5], [mid, mid])
+        gold_hi.setData([lo - 0.5, hi + 0.5], [float(_y(50.0))] * 2)
+        gold_lo.setData([lo - 0.5, hi + 0.5], [float(_y(-50.0))] * 2)
+        if show_lock:
+            _lx = hi - (config.LIVE_PANEL_WINDOW // 2) + 0.5
+            lock.setData([_lx, _lx], [ybot, ytop]) if _lx > lo - 0.5 else lock.setData([], [])
+        else:
+            lock.setData([], [])
+        if not sum_only:                                                     # bull/bear sign-split lines
+            bx, b_pos, b_neg = _split_curve_by_sign(ex, bull)
+            bull_g.setData(bx, _y(b_pos)); bull_x.setData(bx, _y(b_neg))
+            rx, r_pos, r_neg = _split_curve_by_sign(ex, bear)
+            bear_r.setData(rx, _y(r_neg)); bear_x.setData(rx, _y(r_pos))
+        _lk = config.LIVE_PANEL_WINDOW // 2
+        if clip_lock and len(sum_line) > _lk:        # PANEL 0: LOCKED region solid; settling tail as a grey dash
+            _sd = np.array(sum_line, dtype=float); _sd[-_lk:] = np.nan
+            ssum.setData(ex, _y(_sd))
+            if tail_item is not None:                # grey dashed continuation over the last lk+1 buckets (overlaps the join)
+                tail_item.setData(ex[-(_lk + 1):], _y(sum_line[-(_lk + 1):])); tail_item.setVisible(True)
+        else:
+            ssum.setData(ex, _y(sum_line))
+            if tail_item is not None:
+                tail_item.setData([], []); tail_item.setVisible(False)
+        for _it in items:
+            _it.setVisible(True)
+        if not show_lock:
+            lock.setVisible(False)
+        if sum_only:                                                         # PANEL 0: keep ONLY the blue sum line
+            for _it in (bull_g, bull_x, bear_r, bear_x):
+                _it.setVisible(False)
+        _vs = float(sum_line[-(_lk + 1)]) if (clip_lock and len(sum_line) > _lk) else float(sum_line[-1])
+        if not sum_only:
+            _vb, _vr = float(bull[-1]), float(bear[-1])
+            _bdb = self._spread_badges[bk]
+            _bdb.fill = pg.mkBrush(40, 230, 90) if _vb >= 0 else pg.mkBrush(140, 140, 140)
+            _bdb.setText(f" {_vb:+.1f}% ")
+            _bdb.setPos(badge_x, mid + half * 0.45); _bdb.show()
+            _bdr = self._spread_badges[rk]
+            _bdr.fill = pg.mkBrush(255, 45, 70) if _vr <= 0 else pg.mkBrush(140, 140, 140)
+            _bdr.setText(f" {_vr:+.1f}% ")
+            _bdr.setPos(badge_x, mid - half * 0.45); _bdr.show()
+        else:
+            self._spread_badges[bk].hide(); self._spread_badges[rk].hide()
+        _bds = self._spread_badges[sk]
+        _bds.fill = pg.mkBrush(40, 230, 90) if _vs >= 0 else pg.mkBrush(255, 45, 70)   # green/red by sign (line stays blue)
+        _bds.setText(f" {_vs:+.1f}% ")
+        _bds.setPos(badge_x if sum_only else sum_badge_x, mid); _bds.show()
+        self._panel_hovers.append({
+            "label": hover_label, "lo": lo, "yb": ybot, "yt": ytop,
+            "bull": [v / 100.0 for v in bull], "bear": [v / 100.0 for v in bear],
+            "extra": [v / 100.0 for v in sum_line], "ecol": (45, 156, 255), "elbl": "SUM",
+            "bcol": (40, 230, 90), "rcol": (255, 45, 70), "blbl": "BULL", "rlbl": "BEAR", "fmt": "pct"})
 
     def _toggle_liq(self) -> None:
         """'l' — show/hide the Liquidation Pressure wave panel. OFF clears + hides it; ON repopulates next refresh."""
         self.show_liq = not self.show_liq
         if not self.show_liq:
             self._clear_liq_panel()
+        self._save_ui_state()
         self._refresh_selection_stats()
 
     def _clear_liq_panel(self) -> None:
@@ -1173,6 +1303,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_panel9 = not self.show_panel9
         if not self.show_panel9:
             self._clear_panel9()
+        self._save_ui_state()
         self._refresh_selection_stats()
 
     def _clear_panel9(self) -> None:
@@ -1183,12 +1314,70 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._spread_badges["PANEL9_BEAR"].hide()
         self._spread_badges["PANEL9_SUM"].hide()
 
+    def _toggle_panel0(self) -> None:
+        """'0' — show/hide Panel 0 (the smoothed twin of Panel 9: each line = (current+locked)/2). OFF clears it."""
+        self.show_panel0 = not self.show_panel0
+        if not self.show_panel0:
+            self._clear_panel0()
+        self._save_ui_state()
+        self._refresh_selection_stats()
+
+    def _clear_panel0(self) -> None:
+        """Panel-0 tear-down: wipe + hide all lines/refs + the grey tail + the three badges (setData -> no leak)."""
+        for _it in self._bc_p0_items:
+            _it.setData([], []); _it.setVisible(False)
+        self.bc_p0_sum_tail.setData([], []); self.bc_p0_sum_tail.setVisible(False)
+        self._spread_badges["PANEL0_BULL"].hide()
+        self._spread_badges["PANEL0_BEAR"].hide()
+        self._spread_badges["PANEL0_SUM"].hide()
+
     def _toggle_phase_table(self) -> None:
         """'t' — show/hide the live PHASE TABLE on its own (no need to turn on a phase panel 5/6/7)."""
         self.show_phase_table = not self.show_phase_table
         if not self.show_phase_table and not any(self.show_phase.values()):
             self.phase_tbl.hide()
+        self._save_ui_state()
         self._refresh_selection_stats()
+
+    def _save_ui_state(self) -> None:
+        """Persist the Mode-10 panel toggle states so a reopened session restores the same layout — the user
+        sets panels on/off once and it sticks across sessions. Best-effort; a write failure is ignored."""
+        try:
+            config.ensure_data_dir()
+            state = {
+                "abs": self.show_abs_strip, "eff": self.show_eff_strip,
+                "er": self.show_er_strip, "exh": self.show_exh_strip,
+                "liq": self.show_liq, "panel9": self.show_panel9, "panel0": self.show_panel0,
+                "phase_table": self.show_phase_table,
+                "phase": {k: bool(v) for k, v in self.show_phase.items()},
+            }
+            with open(os.path.join(config.DATA_DIR, "terminal_ui.json"), "w") as f:
+                json.dump(state, f)
+        except OSError:
+            pass
+
+    def _load_ui_state(self) -> None:
+        """Restore the panel toggles a prior session saved. Missing keys keep the code default, so a panel
+        added later still gets its built-in default until the user toggles it. Best-effort."""
+        path = os.path.join(config.DATA_DIR, "terminal_ui.json")
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path) as f:
+                s = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+        self.show_abs_strip = bool(s.get("abs", self.show_abs_strip))
+        self.show_eff_strip = bool(s.get("eff", self.show_eff_strip))
+        self.show_er_strip = bool(s.get("er", self.show_er_strip))
+        self.show_exh_strip = bool(s.get("exh", self.show_exh_strip))
+        self.show_liq = bool(s.get("liq", self.show_liq))
+        self.show_panel9 = bool(s.get("panel9", self.show_panel9))
+        self.show_panel0 = bool(s.get("panel0", self.show_panel0))
+        self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
+        for _k, _v in (s.get("phase") or {}).items():
+            if _k in self.show_phase:
+                self.show_phase[_k] = bool(_v)
 
     def _toggle_ob_iceberg(self) -> None:
         """'o' — toggle the Order Blocks + Absorption/Iceberg overlays TOGETHER (both hidden by default).
@@ -1369,7 +1558,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         dl = sk(d["delta"]) + f" ({d['delta_pct']:+.0f}%)"
         vel, vpin = f"{d['vel']:.0f}/s", f"{d['vpin']:.2f}"
         ber, ser = f"{d['buyer_er']:.1f}", f"{d['seller_er']:.1f}"
-        nb = f"{d['n']} buckets · {d['t_span']:.0f}s"
+        nb = f"{d['n']} buckets · {self._fmt_elapsed(d['t_span'])}"
         cc = g if c >= o else r
         # 4-vector: colour ONLY the two dominant vectors (the ones that drove the span); the other
         # two render dim; a zero vector never lights up — exactly as the forming-bucket box does.
@@ -1411,8 +1600,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 else:
                     lean = f"{abe / abu:.2f}× bear" if abu > 0 else "bear-only"
                 lines.append(sep("ABSORPTION · VOL"))
-                lines.append(f"{span('Bull ' + K(abu), g)} · {span('Bear ' + K(abe), r)} · "
-                             f"{span(lean, gold)}")
+                lines.append(f"{span('Bull ' + K(abu), g if abu >= abe else gray)} · "
+                             f"{span('Bear ' + K(abe), r if abe > abu else gray)} · "
+                             f"{span(lean, gold)}")   # colour only the dominant side; mute the other
         # EFFECTIVE AGGRESSION summed over the selection (the mirror: heavy volume that MOVED price). NEON
         # green/red to match its zones. Read the bull:bear lean; totals scale with selection length.
         if eff_agg:
@@ -1424,8 +1614,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 else:
                     elean = f"{ebe / ebu:.2f}× bear" if ebu > 0 else "bear-only"
                 lines.append(sep("EFF-AGG · VOL"))
-                lines.append(f"{span('Bull ' + K(ebu), neon_g)} · {span('Bear ' + K(ebe), neon_r)} · "
-                             f"{span(elean, gold)}")
+                lines.append(f"{span('Bull ' + K(ebu), neon_g if ebu >= ebe else gray)} · "
+                             f"{span('Bear ' + K(ebe), neon_r if ebe > ebu else gray)} · "
+                             f"{span(elean, gold)}")   # colour only the dominant side; mute the other
         # STATE — the same 12-state classifier the per-bucket hover box uses, run on the region,
         # followed by the same calibration debug lines (top-3 states + winner factor breakdown).
         if state is not None:
@@ -1549,9 +1740,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_exh_strip.setVisible(False); self.bc_exh_mid.setVisible(False)
             self.bc_eff_strip.setVisible(False)
             self.bc_er_strip.setVisible(False)
+            for _lk in (self.bc_abs_lock, self.bc_eff_lock, self.bc_er_lock, self.bc_exh_lock,
+                        self.bc_abs_mid, self.bc_eff_mid, self.bc_er_mid):
+                _lk.setVisible(False)
             self.bc_panel_sep.setVisible(False)
             self._clear_liq_panel()                                           # liquidation panel: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
+            self._clear_panel0()                                              # smoothed twin: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -1572,9 +1767,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_exh_strip.setVisible(False); self.bc_exh_mid.setVisible(False)
             self.bc_eff_strip.setVisible(False)
             self.bc_er_strip.setVisible(False)
+            for _lk in (self.bc_abs_lock, self.bc_eff_lock, self.bc_er_lock, self.bc_exh_lock,
+                        self.bc_abs_mid, self.bc_eff_mid, self.bc_er_mid):
+                _lk.setVisible(False)
             self.bc_panel_sep.setVisible(False)
             self._clear_liq_panel()                                           # liquidation panel: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
+            self._clear_panel0()                                              # smoothed twin: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -1595,7 +1794,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 rect, filtered, lo_i, hi_i,
                 (self.show_abs_strip, self.show_eff_strip, self.show_er_strip, self.show_exh_strip,
                  tuple(self.show_phase[p] for p in self._PHASES), self.show_state, self.show_sel_stats,
-                 self.show_liq, self.show_phase_table, self.show_panel9),
+                 self.show_liq, self.show_phase_table, self.show_panel9, self.show_panel0),
                 (self.zone_slider.value_s(), self.eff_slider.value_s()), tv, config.VPIN_ADAPT_WINDOW)
             if sig == self._sel_sig:
                 self._reposition_sel_box(rect)   # reuse last frame's overlays; just keep the box glued
@@ -1615,9 +1814,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_exh_strip.setVisible(False); self.bc_exh_mid.setVisible(False)
             self.bc_eff_strip.setVisible(False)
             self.bc_er_strip.setVisible(False)
+            for _lk in (self.bc_abs_lock, self.bc_eff_lock, self.bc_er_lock, self.bc_exh_lock,
+                        self.bc_abs_mid, self.bc_eff_mid, self.bc_er_mid):
+                _lk.setVisible(False)
             self.bc_panel_sep.setVisible(False)
             self._clear_liq_panel()                                           # liquidation panel: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
+            self._clear_panel0()                                              # smoothed twin: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -1723,6 +1926,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         ph_on = {p: self.show_phase[p] and _drawable for p in self._PHASES}
         liq_on = self.show_liq and _drawable
         p9_on = self.show_panel9 and _drawable
+        p0_on = self.show_panel0 and _drawable
         ph_geom = {}
         _cur = y0                                           # running bottom edge of the last placed panel
         if abs_on:
@@ -1744,9 +1948,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if liq_on:                                          # LIQUIDATION wave panel
             liq_top = _cur - config.EXH_STRIP_GAP * sel_h; liq_bot = liq_top - config.EXH_STRIP_FRAC * sel_h
             _cur = liq_bot
-        if p9_on:                                           # COMPOSITE lean panel (very BOTTOM)
+        if p9_on:                                           # COMPOSITE lean panel
             p9_top = _cur - config.EXH_STRIP_GAP * sel_h; p9_bot = p9_top - config.EXH_STRIP_FRAC * sel_h
             _cur = p9_bot
+        if p0_on:                                           # SMOOTHED twin of panel 9 (very BOTTOM)
+            p0_top = _cur - config.EXH_STRIP_GAP * sel_h; p0_bot = p0_top - config.EXH_STRIP_FRAC * sel_h
+            _cur = p0_bot
         # minimalist hairline divider in each gap BETWEEN consecutive visible panels (stack order)
         _bands = []
         if abs_on: _bands.append((abs_top, abs_bot))
@@ -1757,6 +1964,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if _p in ph_geom: _bands.append(ph_geom[_p])
         if liq_on: _bands.append((liq_top, liq_bot))
         if p9_on: _bands.append((p9_top, p9_bot))
+        if p0_on: _bands.append((p0_top, p0_bot))
         _sep_ys = [(_bands[i][1] + _bands[i + 1][0]) / 2.0 for i in range(len(_bands) - 1)]
         self.bc_panel_sep.update_data(lo - 0.5, hi + 0.5, _sep_ys)
         self.bc_panel_sep.setVisible(bool(_sep_ys))
@@ -1778,6 +1986,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_abs_strip.update_data(xs_a, [_ay(v) for v in bull_sh], [_ay(v) for v in bear_sh],
                                           lo - 0.5, hi + 0.5, abs_bot, abs_top, [])
             self.bc_abs_strip.setVisible(True)
+            self.bc_abs_mid.setData([lo - 0.5, hi + 0.5], [_ay(0.5), _ay(0.5)]); self.bc_abs_mid.setVisible(True)
+            self._draw_panel_lock(self.bc_abs_lock, config.LIVE_PANEL_WINDOW // 2, lo, hi, abs_bot, abs_top)
             self._panel_hovers.append({                # hover -> running bull/bear share %, labelled
                 "label": "ABSORPTION", "lo": lo, "yb": abs_bot, "yt": abs_top,
                 "bull": bull_sh, "bear": bear_sh, "bcol": _RGB_ABS_BULL, "rcol": _RGB_ABS_BEAR,
@@ -1787,6 +1997,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                    _badge_x, (abs_top + abs_bot) / 2.0)
         else:
             self.bc_abs_strip.setVisible(False)
+            self.bc_abs_lock.setVisible(False); self.bc_abs_mid.setVisible(False)
             self._spread_badges["ABSORPTION"].hide()
         # SELECTION EXHAUSTION STRIP ('4', BOTTOM) — bull/bear gated exhaustion as two SYMMETRICALLY-smoothed
         # lines (0/50/100% scale); gold diamonds mark crossovers (the exhausted side swaps). Selection-scoped
@@ -1817,14 +2028,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     crosses.append(((lo + k - 1) + frac, _ey(cval)))
             self.bc_exh_strip.update_data(xs, bull_y, bear_y, lo - 0.5, hi + 0.5, exh_bot, exh_top, crosses)
             self.bc_exh_strip.setVisible(True)
-            self.bc_exh_mid.setData([lo - 0.5, hi + 0.5], [_ey(0.5), _ey(0.5)])   # dashed gold 50% reference
+            self.bc_exh_mid.setData([lo - 0.5, hi + 0.5], [_ey(0.5), _ey(0.5)])   # dashed orange 50% reference
             self.bc_exh_mid.setVisible(True)
+            # panel-4 lock-in lag = the symmetric-envelope tail (buckets for a future spike's back-decay to fade)
+            _exh_lock = max(1, math.ceil(math.log(0.10) / math.log(config.EXH_RELEASE)))
+            self._draw_panel_lock(self.bc_exh_lock, _exh_lock, lo, hi, exh_bot, exh_top)
+            # panel-4 badge: dominant exhaustion lead, colored by side (blue bull-exh / red bear-exh)
+            _e1, _e2 = sb[-1], sr[-1]
+            _bd4 = self._spread_badges["EXHAUSTION"]
+            _bd4.fill = pg.mkBrush(*_RGB_EXH_BULL) if _e1 > _e2 else pg.mkBrush(*_RGB_EXH_BEAR)
+            _bd4.setText(f" {abs(_e1 - _e2) * 100:.0f}% ")
+            _bd4.setPos(_badge_x, (exh_top + exh_bot) / 2.0); _bd4.show()
             self._panel_hovers.append({                # hover -> RAW per-bucket exhaustion %, labelled
                 "label": "EXHAUSTION", "lo": lo, "yb": exh_bot, "yt": exh_top,
                 "bull": ex_bull, "bear": ex_bear, "bcol": _RGB_EXH_BULL, "rcol": _RGB_EXH_BEAR,
                 "blbl": "BULL", "rlbl": "BEAR", "fmt": "pct"})
         else:
-            self.bc_exh_strip.setVisible(False); self.bc_exh_mid.setVisible(False)
+            self.bc_exh_strip.setVisible(False); self.bc_exh_mid.setVisible(False); self.bc_exh_lock.setVisible(False)
+            self._spread_badges["EXHAUSTION"].hide()
         # SELECTION EFF-AGG STRIP ('2') — bull% vs bear% LEAN (each side's ROLLING share of effective
         # aggression over a centered window), NEON green / NEON red, crossing at the 50% midline; tracks the
         # LOCAL forcing lean as it shifts. One-sided per bucket (like absorption). SELECTION-PURE (sliced; zones
@@ -1841,6 +2062,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_eff_strip.update_data(xs_e, [_fy(v) for v in bull_sh], [_fy(v) for v in bear_sh],
                                           lo - 0.5, hi + 0.5, eff_bot, eff_top, [])
             self.bc_eff_strip.setVisible(True)
+            self.bc_eff_mid.setData([lo - 0.5, hi + 0.5], [_fy(0.5), _fy(0.5)]); self.bc_eff_mid.setVisible(True)
+            self._draw_panel_lock(self.bc_eff_lock, config.LIVE_PANEL_WINDOW // 2, lo, hi, eff_bot, eff_top)
             self._panel_hovers.append({                # hover -> running bull/bear share %, labelled
                 "label": "EFF-AGG", "lo": lo, "yb": eff_bot, "yt": eff_top,
                 "bull": bull_sh, "bear": bear_sh, "bcol": _RGB_EFF_BULL, "rcol": _RGB_EFF_BEAR,
@@ -1850,6 +2073,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                    _badge_x, (eff_top + eff_bot) / 2.0)
         else:
             self.bc_eff_strip.setVisible(False)
+            self.bc_eff_lock.setVisible(False); self.bc_eff_mid.setVisible(False)
             self._spread_badges["EFF-AGG"].hide()
         # SELECTION EFFORT/RESULT STRIP ('3') — buy% vs sell% LEAN (each side's ROLLING share of E/R effort over
         # a centered window), green buyer / red seller, crossing at the 50% midline. E/R is two-sided (both
@@ -1869,6 +2093,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_er_strip.update_data(xs_r, [_ry(v) for v in buy_sh], [_ry(v) for v in sell_sh],
                                          lo - 0.5, hi + 0.5, er_bot, er_top, [])
             self.bc_er_strip.setVisible(True)
+            self.bc_er_mid.setData([lo - 0.5, hi + 0.5], [_ry(0.5), _ry(0.5)]); self.bc_er_mid.setVisible(True)
+            self._draw_panel_lock(self.bc_er_lock, config.LIVE_PANEL_WINDOW // 2, lo, hi, er_bot, er_top)
             self._panel_hovers.append({                # hover -> running buy/sell share %, labelled
                 "label": "E/R", "lo": lo, "yb": er_bot, "yt": er_top,
                 "bull": buy_sh, "bear": sell_sh, "bcol": _RGB_ER_BULL, "rcol": _RGB_ER_BEAR,
@@ -1878,6 +2104,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                    _badge_x, (er_top + er_bot) / 2.0)
         else:
             self.bc_er_strip.setVisible(False)
+            self.bc_er_lock.setVisible(False); self.bc_er_mid.setVisible(False)
             self._spread_badges["E/R"].hide()
         # LIVE PHASE TABLES beside the panels — UP + DOWN side by side. Each phase's row OPACITY = the live
         # CONFIDENCE (posterior% from the ROLLING trailing-_lw lean spreads), smoothed by the selection's EMA.
@@ -1962,7 +2189,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # contributes +bear% / −bull% and CARRIES FORWARD its last non-zero reading. avg/4, then the SAME sign-
         # split treatment as the liquidation wave: GREEN above the zero line, RED below + a green/red % badge.
         # Recomputed from the same pre-rolled _extp the lean panels use, so it's selection-independent (panels 1-4).
-        if p9_on:
+        if p9_on or p0_on:
             _ab, _ar, _ = region_state.absorption_series(_extp, 0, _Lp - 1, config.ABSORP_VOL_WINDOW)
             _a_sh = np.array(region_state.rolling_share(_ab, _ar, _lw)[_pre0:], float)
             s_abs = (1.0 - 2.0 * _a_sh) * 100.0                                       # (bear-bull): lower share strong
@@ -1988,48 +2215,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             s_p4 = s_p4[_pre0:]
             bull_line = (lean + s_p4) / 4.0                                          # + seller-exh / − buyer-exh
             bear_line = (lean - s_p4) / 4.0                                          # mirror of the exhaustion term
+            _sumx = hi + 0.5 + max(6.0, (hi - lo + 1) * 0.18)   # sum-badge x (well right of the pair; shared by 9 + 0)
             if bull_line.size:
-                ex9 = np.arange(lo, hi + 1, dtype=float)
-                p9mid = (p9_top + p9_bot) / 2.0; p9half = (p9_top - p9_bot) / 2.0 * 0.92
-                _R = float(config.PANEL9_SCALE)
-
-                def _p9y(v):
-                    return p9mid + np.clip(np.asarray(v, dtype=float) / _R, -1.0, 1.0) * p9half
-                # reference lines: dashed zero baseline + gold dashed +/-50%
-                self.bc_p9_zero.setData([lo - 0.5, hi + 0.5], [p9mid, p9mid])
-                self.bc_p9_gold_hi.setData([lo - 0.5, hi + 0.5], [float(_p9y(50.0))] * 2)
-                self.bc_p9_gold_lo.setData([lo - 0.5, hi + 0.5], [float(_p9y(-50.0))] * 2)
-                bx, b_pos, b_neg = _split_curve_by_sign(ex9, bull_line)               # bull: >=0 green, <0 grey
-                self.bc_p9_bull_g.setData(bx, _p9y(b_pos)); self.bc_p9_bull_x.setData(bx, _p9y(b_neg))
-                rx, r_pos, r_neg = _split_curve_by_sign(ex9, bear_line)               # bear: <=0 red, >0 grey
-                self.bc_p9_bear_r.setData(rx, _p9y(r_neg)); self.bc_p9_bear_x.setData(rx, _p9y(r_pos))
-                sum_line = bull_line + bear_line                                      # NEON-BLUE: bull+bear (E cancels = pure lean)
-                self.bc_p9_sum.setData(ex9, _p9y(sum_line))
-                for _it in self._bc_p9_items:
-                    _it.setVisible(True)
-                # three badges: bull (green/grey) + bear (red/grey) stacked at the right edge; the neon-blue SUM
-                # sits CENTERED between them, shifted further right so it never collides with the other two.
-                _vb = float(bull_line[-1]); _vr = float(bear_line[-1])
-                _bdb = self._spread_badges["PANEL9_BULL"]
-                _bdb.fill = pg.mkBrush(40, 230, 90) if _vb >= 0 else pg.mkBrush(140, 140, 140)
-                _bdb.setText(f" {_vb:+.1f}% "); _bdb.setPos(_badge_x, p9mid + p9half * 0.45); _bdb.show()
-                _bdr = self._spread_badges["PANEL9_BEAR"]
-                _bdr.fill = pg.mkBrush(255, 45, 70) if _vr <= 0 else pg.mkBrush(140, 140, 140)
-                _bdr.setText(f" {_vr:+.1f}% "); _bdr.setPos(_badge_x, p9mid - p9half * 0.45); _bdr.show()
-                _vs = float(sum_line[-1])
-                _bds = self._spread_badges["PANEL9_SUM"]
-                _bds.fill = pg.mkBrush(40, 230, 90) if _vs >= 0 else pg.mkBrush(255, 45, 70)   # badge green/red by sign (line stays blue)
-                _bds.setText(f" {_vs:+.1f}% ")
-                _bds.setPos(hi + 0.5 + max(6.0, (hi - lo + 1) * 0.18), p9mid); _bds.show()      # WELL right of the two (where the dot is)
-                self._panel_hovers.append({                                          # hover -> bull / bear / SUM values
-                    "label": "P9", "lo": lo, "yb": p9_bot, "yt": p9_top,
-                    "bull": [v / 100.0 for v in bull_line], "bear": [v / 100.0 for v in bear_line],
-                    "extra": [v / 100.0 for v in sum_line], "ecol": (45, 156, 255), "elbl": "SUM",
-                    "bcol": (40, 230, 90), "rcol": (255, 45, 70), "blbl": "BULL", "rlbl": "BEAR", "fmt": "pct"})
+                if p9_on:
+                    self._draw_lean_lines(bull_line, bear_line, self._bc_p9_items,
+                                          ("PANEL9_BULL", "PANEL9_BEAR", "PANEL9_SUM"),
+                                          lo, hi, p9_top, p9_bot, "P9", _badge_x, _sumx)
+                else:
+                    self._clear_panel9()
+                if p0_on:
+                    # PANEL 0 = each Panel-9 line AVERAGED with its LOCKED (lk-back) value -> a smoothed P9.
+                    _lk0 = config.LIVE_PANEL_WINDOW // 2
+                    _ix0 = np.maximum(np.arange(len(bull_line)) - _lk0, 0)            # each bucket's locked index (clamped)
+                    bull0 = (bull_line + bull_line[_ix0]) / 2.0
+                    bear0 = (bear_line + bear_line[_ix0]) / 2.0
+                    self._draw_lean_lines(bull0, bear0, self._bc_p0_items,
+                                          ("PANEL0_BULL", "PANEL0_BEAR", "PANEL0_SUM"),
+                                          lo, hi, p0_top, p0_bot, "P0", _badge_x, _sumx,
+                                          sum_only=True, clip_lock=True, tail_item=self.bc_p0_sum_tail)
+                else:
+                    self._clear_panel0()
             else:
-                self._clear_panel9()
+                self._clear_panel9(); self._clear_panel0()
         else:
-            self._clear_panel9()
+            self._clear_panel9(); self._clear_panel0()
         self.sel_stats.set_content(
             self._selection_stat_lines(agg, state, conf, dbg, vtier,
                                        spark_op, spark_cl, flip,
