@@ -827,6 +827,28 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
   corrected an initial swap); `Elapsed` formats by magnitude (`_fmt_elapsed`: `45.0s`→`1m15s`→`1h35`).
 - **EXE stale.** Daemon side (persistence/feeds/protocol/pipe_client) was **deployed + `orderflow` restarted** by the operator.
 
+**Panel 0 + per-panel lock dividers + orange midlines + panel-state PERSISTENCE + UI polish (`3b23333`, 2026-06-29). Terminal-only.**
+- **Shared helper `_draw_lean_lines`** — Panel 9's bull/bear/sum draw (refs, lock divider, sign-split, sum, badges,
+  hover) was factored out so panels 9 + 0 stay in lock-step. Params: `show_lock`, `sum_only`, `clip_lock`, `tail_item`.
+- **PANEL 0 (`'0'`, smoothed twin of P9, default on, very bottom):** each line = `(current + locked-7-back)/2`
+  (`bull_line[max(0,k-7)]` avg). Shows ONLY the neon-blue SUM (`sum_only`): the LOCKED region (≤ hi-7) solid blue,
+  the non-locked settling tail (`clip_lock`) drawn on a separate light-grey dashed `bc_p0_sum_tail` (overlaps the
+  join); bull/bear lines + badges hidden; lock divider kept; badge = the last locked value. Full P9-clone item set
+  `bc_p0_*` + badges `PANEL0_{BULL,BEAR,SUM}`.
+- **LOCK-IN dividers (vertical light-gray dashed)** on panels 1/2/3/4 + 9: mark where each value is fully formed
+  (left = locked). 1/2/3/9 = `LIVE_PANEL_WINDOW//2`=7; panel 4 = symmetric-envelope tail `ceil(log .1/log EXH_RELEASE)`≈5.
+  `_draw_panel_lock` (1-4) and inline (9/0).
+- **ORANGE 50% midlines:** panels 1/2/3 gain a 50% even midline (`bc_{abs,eff,er}_mid`); panel-4 `bc_exh_mid` + panel-9
+  `±50%` recoloured gold → orange `#ff9800`.
+- **PANEL-STATE PERSISTENCE:** toggles (1-9 + T) `_save_ui_state()` on every flip → `data/terminal_ui.json`, restored
+  by `_load_ui_state()` in `__init__` (overrides code defaults; missing keys keep default = forward-compatible). So a
+  reopened session keeps the layout — no more "toggle X by default" requests. **Default-hide panels 1/3/4/8** (keep 2/9/0).
+- **Selection arrows:** Right/Left move the Magic-Selection RIGHT edge only (+1/-1 bucket), left edge fixed, clamped
+  to ≥1 bucket (`drawing_tools.extend_selection`).
+- **Stats box:** `Elapsed` formats by magnitude (`_fmt_elapsed`); Absorption + Eff-agg colour ONLY the dominant side
+  (mute the other); Panel 4 gained a dominant-exhaustion badge. (A curr-(locked) badge format was added then removed.)
+- **EXE stale.** No daemon change — terminal-only; just relaunch.
+
 **Mode-10 selection PERF pass — 5 correctness-preserving fixes (`3b176e6`→`a89a2fd`).** Profiled first on real
 data (N=200/400/800); the theory was REVISED: `rolling_share`'s O(N²) is real but small (~12% of the phase
 block); the bigger costs are the trailing-50 norm re-sums and the per-bucket exp/log posteriors (`conf_traj`,

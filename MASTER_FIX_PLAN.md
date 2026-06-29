@@ -1122,6 +1122,14 @@ exhaustively, all CAUSAL / out-of-sample / base-rate-guarded:
   shipped to the terminal and dot-formatted; **to resolve a cited idx range see memory `bucket-index-resolution`.**
   **Chart UI:** minimalist white spot pill (price/fill only), Keltner Channel (EMA20 ± 2.25·ATR, grey bands, EMA
   mid hidden, POC baseline kept), `Elapsed` formatted `1m15s`/`1h35`. (Detail in `scripts/HANDOFF.md`.)
+- **BUILD (2026-06-29, `3b23333`, terminal-only) — Panel 0 + lock dividers + orange midlines + panel persistence.**
+  **Panel 0 (`'0'`)** = a smoothed twin of P9 (each line = (current+locked-7-back)/2), showing ONLY the neon-blue
+  sum: locked region solid blue, non-locked tail light-grey dashed. **Lock-in dividers** (light-grey dashed
+  verticals) on panels 1/2/3/4/9 mark where each value is fully formed (1/2/3/9 at 7 buckets, 4 at ~5). **Orange
+  50% midlines** on 1/2/3 (+ panel-4 50% & panel-9 ±50% recoloured gold→orange). **Panel toggles now PERSIST**
+  (`data/terminal_ui.json`, saved per toggle, restored on launch) — set the layout once and it sticks; default-hide
+  1/3/4/8. Selection **arrows** move the right edge only (±1 bucket). Stats box: `Elapsed` magnitude-formatted +
+  Absorption/Eff-agg colour only the dominant side. (Detail in `scripts/HANDOFF.md`.)
 
 ---
 
