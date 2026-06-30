@@ -558,23 +558,33 @@ class ExhaustionStripLayer(pg.GraphicsObject):
         self._rect = QtCore.QRectF()
         self.prepareGeometryChange(); self.update()
 
-    def update_data(self, xs, bull_y, bear_y, x0, x1, y_bot, y_top, crosses):
+    def update_data(self, xs, bull_y, bear_y, x0, x1, y_bot, y_top, crosses, lock_idx=None):
         """xs: bucket-index x's; bull_y/bear_y: per-bucket panel-y (price); [x0,x1]x[y_bot,y_top]: panel
-        bounds (y_bot=0%, y_top=100%); crosses: list of (x, y) gold crossover points."""
+        bounds (y_bot=0%, y_top=100%); crosses: list of (x, y) gold crossover points. ``lock_idx`` (optional):
+        index of the last fully-locked bucket — the line is SOLID up to it and DASHED + lower-opacity after
+        (the still-settling tail); None = all solid."""
         self.picture = QtGui.QPicture()
         if not xs:
             self._rect = QtCore.QRectF(); self.prepareGeometryChange(); self.update(); return
         p = QtGui.QPainter(self.picture)
         p.setRenderHint(QtGui.QPainter.Antialiasing)
 
+        def _path(ys, a, b):
+            path = QtGui.QPainterPath()
+            path.moveTo(QtCore.QPointF(float(xs[a]), ys[a]))
+            for k in range(a + 1, b + 1):
+                path.lineTo(QtCore.QPointF(float(xs[k]), ys[k]))
+            return path
+
         def polyline(ys, rgb):
+            li = (len(xs) - 1) if (lock_idx is None or lock_idx >= len(xs) - 1) else max(0, lock_idx)
             pen = QtGui.QPen(QtGui.QColor(*rgb)); pen.setCosmetic(True); pen.setWidthF(1.8)
             p.setPen(pen); p.setBrush(QtCore.Qt.NoBrush)
-            path = QtGui.QPainterPath()
-            path.moveTo(QtCore.QPointF(float(xs[0]), ys[0]))
-            for k in range(1, len(xs)):
-                path.lineTo(QtCore.QPointF(float(xs[k]), ys[k]))
-            p.drawPath(path)
+            p.drawPath(_path(ys, 0, li))                          # solid LOCKED part
+            if li < len(xs) - 1:                                 # non-locked tail: dashed + lower opacity
+                tpen = QtGui.QPen(QtGui.QColor(rgb[0], rgb[1], rgb[2], 110))
+                tpen.setCosmetic(True); tpen.setWidthF(1.8); tpen.setStyle(QtCore.Qt.DashLine)
+                p.setPen(tpen); p.drawPath(_path(ys, li, len(xs) - 1))
         polyline(bull_y, self._rgb_bull)
         polyline(bear_y, self._rgb_bear)
         dh = 0.11 * (y_top - y_bot); dw = 0.38
