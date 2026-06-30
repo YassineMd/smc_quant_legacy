@@ -849,6 +849,26 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
   (mute the other); Panel 4 gained a dominant-exhaustion badge. (A curr-(locked) badge format was added then removed.)
 - **EXE stale.** No daemon change — terminal-only; just relaunch.
 
+**Panel-0 level crosses + locked/non-locked line split + 25/50/75 refs + slider persistence (`e066771`, 2026-06-30). EXE REBUILT.**
+- **PANEL 0 level crosses:** thin bright `x` at the LAST CONFIRMED cross of each ref level on the blue line — `+50/-50`
+  up-cross GREEN / down-cross RED, the `0` line WHITE. Confirmed = detected on the LOCKED region only and the line holds
+  the new side ≥ 2 buckets; ONLY the most recent cross per level is kept (`_draw_level_crosses`, `bc_p0_cross` ScatterPlot,
+  per-spot colour, `cross_item` param on `_draw_lean_lines`).
+- **LOCKED / NON-LOCKED line split (panels 1/2/3 + 5/6/7):** the settling tail (last 7 buckets) of each line is DASHED +
+  lower-opacity (alpha 110), the locked region solid. Done INSIDE `ExhaustionStripLayer.update_data` via an optional
+  `lock_idx` (solid `[0,li]`, dashed-faded `[li,end]`). Their % spread badges now read the **LOCKED** value (`hi-7`), not
+  the live edge. Phase panels 5/6/7 also gained the vertical lock-in divider (`bc_phase_lock`) they previously lacked.
+- **Panels 1/2/3 reference lines:** 50% midline → LIGHT GRAY (`bc_{abs,eff,er}_mid`); NEW 25%/75% ORANGE lines
+  (`bc_{abs,eff,er}_q`, two segments via a NaN gap). At BAND HEIGHT (so they read right on the zoomed E/R panel). All
+  use panel-0's dash spacing (cosmetic `[5,10]`). `_draw_panel_refs`.
+- **Phase table (`'t'`):** shows the LOCKED row (`up_traj[hi-7]`), not the settling edge; non-leading (non-bold) rows get
+  dimmed text (`#80868f`).
+- **SLIDER PERSISTENCE:** dragging the Zone (filter) or Force slider pins a PERSISTED override (`_zone_user_s`/`_eff_user_f`
+  → `terminal_ui.json`) that sticks across selections + sessions and SUPPRESSES the per-selection adaptive seed; untouched
+  sliders still auto-seed adaptively. (Trade-off: once dragged it never re-seeds; drag again to change.)
+- **`'v'` (abnormal-velocity diamonds) defaults OFF** (`show_vel_abn=False`); the always-on 2px velocity border is unchanged.
+- **EXE REBUILT** (`OrderFlowTerminal.spec`, one-file). Terminal-only, no daemon change.
+
 **Mode-10 selection PERF pass — 5 correctness-preserving fixes (`3b176e6`→`a89a2fd`).** Profiled first on real
 data (N=200/400/800); the theory was REVISED: `rolling_share`'s O(N²) is real but small (~12% of the phase
 block); the bigger costs are the trailing-50 norm re-sums and the per-bucket exp/log posteriors (`conf_traj`,

@@ -1130,6 +1130,13 @@ exhaustively, all CAUSAL / out-of-sample / base-rate-guarded:
   (`data/terminal_ui.json`, saved per toggle, restored on launch) — set the layout once and it sticks; default-hide
   1/3/4/8. Selection **arrows** move the right edge only (±1 bucket). Stats box: `Elapsed` magnitude-formatted +
   Absorption/Eff-agg colour only the dominant side. (Detail in `scripts/HANDOFF.md`.)
+- **BUILD (2026-06-30, `e066771`, terminal-only, EXE REBUILT) — Panel-0 level crosses + locked/non-locked split +
+  25/50/75 refs + slider persistence.** Panel 0 marks the **last confirmed cross** of +50/0/-50 with a thin `x`
+  (up=green/down=red, 0=white; one per level). Panels 1/2/3 + 5/6/7: the settling **tail (last 7) is dashed +
+  faded**, locked region solid; their % badges read the **locked** value; 5/6/7 gained a lock divider. Panels
+  1/2/3 ref lines: **50% light-gray + 25%/75% orange** (panel-0 dash spacing). Phase table (`'t'`) shows the
+  **locked row** + dims non-bold rows. **Slider filter/force settings now PERSIST** (drag = pinned override across
+  sessions, suppresses the adaptive seed). **`'v'` diamonds default off.** (Detail in `scripts/HANDOFF.md`.)
 
 ---
 
