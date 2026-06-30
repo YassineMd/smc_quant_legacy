@@ -120,6 +120,14 @@ class QuantBucket:
         self.close_price = 0.0
         self.levels = {}
         self.liquidations = []
+        # LARGE/SMALL market-order size histograms — per-side count + volume over the FIXED
+        # config.SIZE_HIST_EDGES bins. STORE-RAW: the terminal thresholds these live (retroactive slider),
+        # so the cutoff is NEVER baked in here. count is fractional (a trade split across a close boundary
+        # contributes chunk_vol/full_vol to each bucket it touches, so counts conserve to 1 per trade).
+        self.sz_cb = [0.0] * config.SIZE_HIST_NBINS   # count, taker BUY
+        self.sz_cs = [0.0] * config.SIZE_HIST_NBINS   # count, taker SELL
+        self.sz_vb = [0.0] * config.SIZE_HIST_NBINS   # volume (contracts), taker BUY
+        self.sz_vs = [0.0] * config.SIZE_HIST_NBINS   # volume (contracts), taker SELL
         self.vel_ratio = 1.0
         self.poc_price = 0.0
         self.buyer_er = 1.0
@@ -177,6 +185,13 @@ class QuantBucket:
             # and NO history.db wipe. dict() snapshots the outer map; the inner {b,s} are
             # serialized to JSON immediately on the daemon's single loop (no tear).
             "levels": dict(self.levels),
+            # LARGE/SMALL market-order size histograms (per-side count + volume over config.SIZE_HIST_EDGES).
+            # WIRE-ADDITIVE, same free path as liq_short/levels: _bucket_to_dict persists them and
+            # _dict_to_bucket reads them with a zero-filled default, so NO BUCKET_SCHEMA_VERSION bump.
+            "sz_cb": list(self.sz_cb),
+            "sz_cs": list(self.sz_cs),
+            "sz_vb": list(self.sz_vb),
+            "sz_vs": list(self.sz_vs),
         }
 
     def full_snapshot(self) -> BucketSnapshot:
@@ -237,7 +252,7 @@ class QuantEngine:
         self.vpin = 0.0
 
     def process_tick(self, price, vol, taker_buy, delta_oi, footprints_dict,
-                     liquidations=None, tick_time=None):
+                     liquidations=None, tick_time=None, size_bin=None):
         if tick_time is None:
             tick_time = time.time()
 
@@ -287,16 +302,19 @@ class QuantEngine:
                 continue
             if remaining_vol <= space_left:
                 self._add_to_bucket(price, remaining_vol, b_ratio, s_ratio,
-                                    opL_r, opS_r, clL_r, clS_r, churn_r, liquidations)
+                                    opL_r, opS_r, clL_r, clS_r, churn_r, liquidations,
+                                    size_bin, vol)
                 remaining_vol = 0
             else:
                 self._add_to_bucket(price, space_left, b_ratio, s_ratio,
-                                    opL_r, opS_r, clL_r, clS_r, churn_r, liquidations)
+                                    opL_r, opS_r, clL_r, clS_r, churn_r, liquidations,
+                                    size_bin, vol)
                 # Uses the historical timestamp instead of live server time
                 self._close_active_bucket(tick_time, footprints_dict)
                 remaining_vol -= space_left
 
-    def _add_to_bucket(self, price, chunk_vol, b_r, s_r, opL_r, opS_r, clL_r, clS_r, churn_r, liqs):
+    def _add_to_bucket(self, price, chunk_vol, b_r, s_r, opL_r, opS_r, clL_r, clS_r, churn_r, liqs,
+                       size_bin=None, full_vol=None):
         b = self.active_bucket
         # Constant-volume OHLC: first tick sets the open, every tick updates close.
         # SOL price is always > 0, so 0.0 reliably marks an untouched bucket.
@@ -323,6 +341,18 @@ class QuantEngine:
             b.levels[p_str] = {"b": 0.0, "s": 0.0}
         b.levels[p_str]["b"] += chunk_vol * b_r
         b.levels[p_str]["s"] += chunk_vol * s_r
+
+        # LARGE/SMALL size histogram: route this chunk's vol (and its fractional trade-count) into the
+        # trade's full-qty bin, by taker side. full_vol is the WHOLE trade's qty (its size class); chunk_vol
+        # is the portion landing in THIS bucket — so a trade split across a close boundary conserves
+        # (vol bin sums to full_vol, count to ~1 across the buckets it spans). b_r/s_r are 0/1 for a
+        # single-sided aggTrade, so each trade hits only its buy OR sell bin.
+        if size_bin is not None and full_vol:
+            cfrac = chunk_vol / full_vol
+            b.sz_vb[size_bin] += chunk_vol * b_r
+            b.sz_vs[size_bin] += chunk_vol * s_r
+            b.sz_cb[size_bin] += cfrac * b_r
+            b.sz_cs[size_bin] += cfrac * s_r
 
         if liqs:
             b.liquidations.extend(liqs)

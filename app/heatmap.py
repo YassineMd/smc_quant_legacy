@@ -347,9 +347,11 @@ class TradeBubbleCache:
 
     def visible_cells(self, t_lo_ms: float, t_hi_ms: float, ylo: float, yhi: float,
                       cols: int, ybins: int, min_qty: float = 0.0):
-        """Aggregate trades in [t_lo,t_hi]×[ylo,yhi] into (col,bin) cells. Returns (x_s, y, total, net) numpy
-        arrays per non-empty cell with total≥min_qty: x_s = cell-center time (SECONDS), y = cell-center price,
-        total = buy+sell (bubble size), net = buy-sell (color sign). None if no trades in view."""
+        """Aggregate trades in [t_lo,t_hi]×[ylo,yhi] into (col,bin) cells. Returns (x_s, y, total, net, max_buy,
+        max_sell) numpy arrays per non-empty cell with total≥min_qty: x_s = cell-center time (SECONDS), y =
+        cell-center price, total = buy+sell (bubble size), net = buy-sell (color sign), max_buy/max_sell =
+        the LARGEST single taker-buy / taker-sell trade qty in the cell (for LARGE-order recolor). None if no
+        trades in view."""
         if len(self.ts) == 0 or cols <= 0 or ybins <= 0:
             return None
         m = (self.ts >= t_lo_ms) & (self.ts <= t_hi_ms) & (self.price >= ylo) & (self.price <= yhi)
@@ -366,12 +368,15 @@ class TradeBubbleCache:
         uniq, starts = np.unique(cell_s, return_index=True)
         tot_buy = np.add.reduceat(buy[order], starts)
         tot_sell = np.add.reduceat(sell[order], starts)
+        max_buy = np.maximum.reduceat(buy[order], starts)    # largest single buy-trade qty per cell (sells -> 0)
+        max_sell = np.maximum.reduceat(sell[order], starts)
         total = tot_buy + tot_sell; net = tot_buy - tot_sell
         keep = total >= float(min_qty)
         uniq = uniq[keep]; total = total[keep]; net = net[keep]
+        max_buy = max_buy[keep]; max_sell = max_sell[keep]
         if uniq.size == 0:
             return None
         cc = uniq // ybins; bb = uniq % ybins
         x_s = (t_lo_ms + (cc + 0.5) * tspan / cols) / 1000.0
         y = ylo + (bb + 0.5) * yspan / ybins
-        return x_s, y, total, net
+        return x_s, y, total, net, max_buy, max_sell

@@ -111,6 +111,46 @@ def _split_curve_by_sign(x: np.ndarray, y: np.ndarray):
     return xs, y_pos, y_neg
 
 
+class StackedBarLayer(pg.GraphicsObject):
+    """Per-bucket dominance bars (LARGE/SMALL panels). Each bucket = one upward bar from the panel floor: the
+    LOSER side (smaller volume) at the bottom in a MUTED tint, the WINNER (larger) stacked on top in FULL
+    colour — so bar height = total large activity and the TOP colour shows who dominated (and by how much).
+    The caller passes per-bucket geometry already mapped into panel y-coords."""
+
+    def __init__(self):
+        super().__init__()
+        self.picture = QtGui.QPicture()
+        self._rect = QtCore.QRectF()
+
+    def paint(self, p, *args):
+        p.drawPicture(0, 0, self.picture)
+
+    def boundingRect(self):
+        return self._rect
+
+    def update_bars(self, x0s, x1s, floor, lo_h, hi_h, lo_rgba, hi_rgba, vx0, vx1, yb, yt):
+        """x0s/x1s: per-bar left/right x edges (a MERGED run spans several buckets); floor: panel-bottom y
+        (bars rise from here); lo_h/hi_h: muted (loser) and full (winner) segment heights in panel-y units;
+        lo_rgba/hi_rgba: per-bar (r,g,b,a) for each segment; [vx0,vx1]x[yb,yt]: panel bounds."""
+        self.picture = QtGui.QPicture()
+        if not len(x0s):
+            self._rect = QtCore.QRectF(); self.prepareGeometryChange(); self.update(); return
+        p = QtGui.QPainter(self.picture)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, False)   # crisp bar edges
+        p.setPen(QtCore.Qt.NoPen)
+        for i in range(len(x0s)):
+            w = x1s[i] - x0s[i]
+            if lo_h[i] > 0:                                    # loser (gray) at the bottom
+                p.setBrush(QtGui.QColor(*lo_rgba[i]))
+                p.drawRect(QtCore.QRectF(x0s[i], floor, w, lo_h[i]))
+            if hi_h[i] > 0:                                    # winner (full colour) stacked on top
+                p.setBrush(QtGui.QColor(*hi_rgba[i]))
+                p.drawRect(QtCore.QRectF(x0s[i], floor + lo_h[i], w, hi_h[i]))
+        p.end()
+        self._rect = QtCore.QRectF(vx0, yb, max(1.0, vx1 - vx0), max(1e-6, yt - yb))
+        self.prepareGeometryChange(); self.update()
+
+
 class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def __init__(self, tf: str = config.DEFAULT_TF):
         super().__init__()
@@ -242,6 +282,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # slider, that value sticks across selections AND sessions (saved to terminal_ui.json).
         self._zone_user_s = None
         self._eff_user_f = None
+        # LARGE / SMALL market-order cutoffs are FULLY AUTOMATIC: large = the daemon's rolling p95, small = p50
+        # (size_thr on the pulse), auto-updating every recompute. No manual slider, nothing to pin or reset —
+        # the broad daemon distribution drives them (see _largesmall_thresholds).
         self._sel_sig = None           # Fix 1: change-detection signature of the last selection refresh (skip
                                        # the heavy recompute when nothing that affects the output changed)
         # SELECTION-SCOPED EXHAUSTION STRIP — two smoothed lines (blue bull / red bear gated exhaustion)
@@ -262,11 +305,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_abs_mid = pg.PlotDataItem(pen=_dpen((150, 150, 150)))   # panel 1 (50%, light gray)
         self.bc_eff_mid = pg.PlotDataItem(pen=_dpen((150, 150, 150)))   # panel 2 (50%)
         self.bc_er_mid = pg.PlotDataItem(pen=_dpen((150, 150, 150)))    # panel 3 (50%)
+        self.bc_lg_mid = pg.PlotDataItem(pen=_dpen((150, 150, 150)))   # panel 8a LARGE (50%)
+        self.bc_sm_mid = pg.PlotDataItem(pen=_dpen((150, 150, 150)))   # panel 8b SMALL (50%)
         self.bc_abs_q = pg.PlotDataItem(pen=_dpen(_ORANGE), connect="finite")   # panel 1 (25%/75%, orange)
         self.bc_eff_q = pg.PlotDataItem(pen=_dpen(_ORANGE), connect="finite")   # panel 2 (25%/75%)
         self.bc_er_q = pg.PlotDataItem(pen=_dpen(_ORANGE), connect="finite")    # panel 3 (25%/75%)
+        self.bc_lg_q = pg.PlotDataItem(pen=_dpen((255, 255, 255, 90), 0.5), connect="finite")   # panel 8a (25%/75%, faint white)
+        self.bc_sm_q = pg.PlotDataItem(pen=_dpen((255, 255, 255, 90), 0.5), connect="finite")   # panel 8b (25%/75%, faint white)
         for _m in (self.bc_exh_mid, self.bc_abs_mid, self.bc_eff_mid, self.bc_er_mid,
-                   self.bc_abs_q, self.bc_eff_q, self.bc_er_q):
+                   self.bc_lg_mid, self.bc_sm_mid,
+                   self.bc_abs_q, self.bc_eff_q, self.bc_er_q, self.bc_lg_q, self.bc_sm_q):
             _m.setZValue(3); _m.setVisible(False); self.plot.addItem(_m, ignoreBounds=True)
         # SELECTION-SCOPED EFF-AGG EVOLUTION STRIP — bull/bear per-bucket effective aggression as two
         # SYMMETRICALLY-smoothed NEON green/red lines, in a SECOND panel STACKED just below the exhaustion
@@ -290,6 +338,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_abs_strip.setZValue(2)
         self.plot.addItem(self.bc_abs_strip, ignoreBounds=True)
         self.bc_abs_strip.setVisible(False)
+        # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
+        # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
+        # heatmap large-order bubbles); SMALL = small-BUY vs small-SELL trade-COUNT share (green / red). Each
+        # bucket's size histogram (sz_*) is thresholded LIVE at the slider qty -> retroactive cutoff.
+        _RGB_LG_BULL = (0, 180, 255); _RGB_LG_BEAR = (255, 145, 0)     # large: electric blue buy / orange sell
+        _RGB_SM_BULL = (0, 230, 118); _RGB_SM_BEAR = (255, 82, 82)     # small: green buy / red sell
+        self.bc_lg_strip = ExhaustionStripLayer(self.plot, rgb_bull=_RGB_LG_BULL, rgb_bear=_RGB_LG_BEAR)
+        self.bc_sm_strip = ExhaustionStripLayer(self.plot, rgb_bull=_RGB_SM_BULL, rgb_bear=_RGB_SM_BEAR)
+        for _st in (self.bc_lg_strip, self.bc_sm_strip):
+            _st.setZValue(2); self.plot.addItem(_st, ignoreBounds=True); _st.setVisible(False)
+        self._RGB_LG = (_RGB_LG_BULL, _RGB_LG_BEAR); self._RGB_SM = (_RGB_SM_BULL, _RGB_SM_BEAR)
+        # net BUY−SELL signed-log "wave" lines (liquidation-wave style): up half = net buying (buy colour),
+        # down half = net selling (sell colour), meeting on the dashed zero midline (bc_lg_mid/bc_sm_mid).
+        self.bc_lg_pos = pg.PlotDataItem(pen=pg.mkPen(_RGB_LG_BULL, width=2.4), connect="finite")
+        self.bc_lg_neg = pg.PlotDataItem(pen=pg.mkPen(_RGB_LG_BEAR, width=2.4), connect="finite")
+        self.bc_sm_pos = pg.PlotDataItem(pen=pg.mkPen(_RGB_SM_BULL, width=2.4), connect="finite")
+        self.bc_sm_neg = pg.PlotDataItem(pen=pg.mkPen(_RGB_SM_BEAR, width=2.4), connect="finite")
+        for _it in (self.bc_lg_pos, self.bc_lg_neg, self.bc_sm_pos, self.bc_sm_neg):
+            _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
+        # per-bucket DOMINANCE HISTOGRAM bars (the current LARGE/SMALL render): winner colour on top, loser
+        # muted underneath, height = total large activity.
+        self.bc_lg_bars = StackedBarLayer(); self.bc_sm_bars = StackedBarLayer()
+        for _it in (self.bc_lg_bars, self.bc_sm_bars):
+            _it.setZValue(2); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
         # Minimalist hairline dividers between the stacked panels (centre-fading, dark-friendly).
         self.bc_panel_sep = PanelSeparatorLayer(self.plot)
         self.bc_panel_sep.setZValue(3)            # just above the panels
@@ -352,7 +424,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Per-panel SPREAD badge (one per lean panel): the dominant side's current lead at the right edge —
         # black value on a NEON green (bull strongest) / NEON red (bear strongest) fill.
         self._spread_badges = {}
-        for _k in ("ABSORPTION", "EFF-AGG", "E/R", "EXHAUSTION", "PANEL9_BULL", "PANEL9_BEAR", "PANEL9_SUM",
+        for _k in ("ABSORPTION", "EFF-AGG", "E/R", "EXHAUSTION", "LARGE MKT", "SMALL MKT",
+                   "PANEL9_BULL", "PANEL9_BEAR", "PANEL9_SUM",
                    "PANEL0_BULL", "PANEL0_BEAR", "PANEL0_SUM"):
             _bd = pg.TextItem(anchor=(0, 0.5), color=(0, 0, 0))
             _bf = QtGui.QFont("Consolas", 11); _bf.setBold(True)
@@ -397,6 +470,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_eff_strip = True   # Mode-10 selection eff-agg evolution panel ON by default ('2' toggles)
         self.show_er_strip = False   # Mode-10 selection effort/result panel — HIDDEN by default ('3' toggles)
         self.show_exh_strip = False  # Mode-10 selection exhaustion panel — HIDDEN by default ('4' toggles) — slot 4
+        self.show_largesmall = False  # Mode-10 LARGE+SMALL market-order panels — HIDDEN by default ('8' toggles) — slot 8
         # NOTE: the 3 PHASE panels (5/6/7) stay ON by default (show_phase[...] = True above); the 4 MEASURE
         # panels above default OFF — so the default session computes only the always-on zones + the phase path.
         # ── Phase 2b: depth/liquidity HEATMAP (scanner mode "depth_heatmap"). The ImageItem + BBO lines live on
@@ -481,20 +555,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # --- floating overlays (top-level children) ---
         self.stats = StatsOverlay(self)
         self.sel_stats = StatsOverlay(self)   # Magic-Selection aggregated-stats box (its own instance)
-        # LIQUIDATION PRESSURE panel ('l') — the cascade "wave" (BOTTOM selection strip). A fixed-window rolling
-        # sum of NET liquidation flow = (liq_short − liq_long) per bucket: forced BUYS (shorts liquidated) push
-        # the wave UP (NEON CYAN), forced SELLS (longs liquidated) push it DOWN (HOT MAGENTA), about a dashed zero
-        # baseline. Signed-log compressed (liquidations are spiky). Watch it RISE to surf a building cascade;
-        # watch it HOLD/FADE for "is my wave still going?". Default ON.
-        self.show_liq = False        # Mode-10 Liquidation Pressure wave (panel 8) — HIDDEN by default ('8' toggles)
-        self.bc_liq_zero = pg.PlotDataItem(pen=pg.mkPen("#555555", width=1, style=QtCore.Qt.DashLine))
-        self.bc_liq_pos = pg.PlotDataItem(pen=pg.mkPen("#00f3ff", width=2.4), connect="finite")   # forced BUYS (up)
-        self.bc_liq_neg = pg.PlotDataItem(pen=pg.mkPen("#ff00a2", width=2.4), connect="finite")   # forced SELLS (down)
-        for _it in (self.bc_liq_zero, self.bc_liq_neg, self.bc_liq_pos):
-            _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
+        # NOTE: slot 8 was the Liquidation Pressure WAVE; it was REPLACED by the LARGE/SMALL market-order panels
+        # (bc_lg_strip/bc_sm_strip, created above). The liquidation DATA path is untouched — liq_short/liq_long
+        # still feed the 12-state classifier, the 'L' Liquidation Marks, the stats box, and alerts.
         # PANEL 9 — COMPOSITE LEAN ('9', very bottom): ONE line = per-bucket AVERAGE of the four panels' signed
         # spreads. GREEN above the zero baseline (net bullish lean), RED below (net bearish) — same sign-split
-        # treatment as the liquidation wave.
+        # treatment as the other lean panels.
         self.show_panel9 = True
         _GREY9 = (140, 140, 140)
         self.bc_p9_zero = pg.PlotDataItem(pen=pg.mkPen("#555555", width=1, style=QtCore.Qt.DashLine))
@@ -550,7 +616,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_eff_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
         self.bc_er_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
         self.bc_exh_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
-        for _it in (self.bc_abs_lock, self.bc_eff_lock, self.bc_er_lock, self.bc_exh_lock):
+        self.bc_lg_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
+        self.bc_sm_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
+        for _it in (self.bc_abs_lock, self.bc_eff_lock, self.bc_er_lock, self.bc_exh_lock,
+                    self.bc_lg_lock, self.bc_sm_lock):
             _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
         self._load_ui_state()   # restore the panel toggles saved by a prior session (overrides the defaults above)
         self.alerts = AlertsLedger(self)
@@ -633,7 +702,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _key, _ph in (("5", "BEFORE"), ("6", "START/DURING"), ("7", "END")):
             QtGui.QShortcut(QtGui.QKeySequence(_key), self,
                             activated=lambda p=_ph: self._toggle_phase(p))
-        QtGui.QShortcut(QtGui.QKeySequence("8"), self, activated=self._toggle_liq)       # panel 8: liquidation WAVE
+        QtGui.QShortcut(QtGui.QKeySequence("8"), self, activated=self._toggle_largesmall)  # panel 8: LARGE+SMALL mkt orders
         QtGui.QShortcut(QtGui.QKeySequence("9"), self, activated=self._toggle_panel9)    # panel 9: COMPOSITE lean
         QtGui.QShortcut(QtGui.QKeySequence("0"), self, activated=self._toggle_panel0)    # panel 0: smoothed P9
         QtGui.QShortcut(QtGui.QKeySequence("T"), self, activated=self._toggle_phase_table)  # phase table (no panel needed)
@@ -1344,18 +1413,103 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                               "brush": pg.mkBrush(0, 0, 0, 0), "symbol": "x", "size": 11})
         item.setData(spots=spots); item.setVisible(bool(spots))
 
-    def _toggle_liq(self) -> None:
-        """'l' — show/hide the Liquidation Pressure wave panel. OFF clears + hides it; ON repopulates next refresh."""
-        self.show_liq = not self.show_liq
-        if not self.show_liq:
-            self._clear_liq_panel()
+    def _toggle_largesmall(self) -> None:
+        """'8' — show/hide the LARGE + SMALL market-order panels together. OFF hides + clears them; ON
+        repopulates on the next selection refresh."""
+        self.show_largesmall = not self.show_largesmall
+        if not self.show_largesmall:
+            self._clear_largesmall_panels()
+            self.panel_tooltip.hide()
         self._save_ui_state()
         self._refresh_selection_stats()
 
-    def _clear_liq_panel(self) -> None:
-        """Liquidation-panel tear-down: wipe + hide the line halves + baseline (items reused via setData -> no leak)."""
-        for _it in (self.bc_liq_zero, self.bc_liq_pos, self.bc_liq_neg):
-            _it.setData([], []); _it.setVisible(False)
+    def _clear_largesmall_panels(self) -> None:
+        """LARGE/SMALL tear-down: hide both strips + their refs/locks/badges (items reused via setData -> no leak)."""
+        for _it in (self.bc_lg_strip, self.bc_sm_strip, self.bc_lg_mid, self.bc_sm_mid,
+                    self.bc_lg_q, self.bc_sm_q, self.bc_lg_lock, self.bc_sm_lock,
+                    self.bc_lg_pos, self.bc_lg_neg, self.bc_sm_pos, self.bc_sm_neg,
+                    self.bc_lg_bars, self.bc_sm_bars):
+            _it.setVisible(False)
+        self._spread_badges["LARGE MKT"].hide(); self._spread_badges["SMALL MKT"].hide()
+
+    def _largesmall_thr_sig(self):
+        """Change-detection component so the LARGE/SMALL panels recompute as the daemon's adaptive size_thr
+        drifts — but ONLY while they're visible (otherwise None, so they add no per-frame churn)."""
+        if not self.show_largesmall:
+            return None
+        st = (self._last_snap or {}).get("size_thr") or []
+        return (round(st[0], 2), round(st[2], 2)) if len(st) > 2 else "cold"
+
+    def _largesmall_thresholds(self):
+        """The active LARGE / SMALL cutoffs (contracts), FULLY AUTOMATIC from the daemon's rolling percentile:
+        large = p95, small = p50 (the broad 60-min distribution, not selection-local). Falls back to the
+        cold-start config defaults only until size_thr warms."""
+        st = (self._last_snap or {}).get("size_thr") or []
+        large_thr = st[2] if len(st) > 2 else config.SIZE_DEFAULT_LARGE
+        small_thr = st[0] if len(st) > 0 else config.SIZE_DEFAULT_SMALL
+        return large_thr, small_thr
+
+    def _draw_hist_panel(self, bars, hide_items, buy_series, sell_series, lo, hi, ybot, ytop,
+                         label, rgb_pair, pre0, badge_x) -> None:
+        """Per-bucket DOMINANCE HISTOGRAM into [ybot,ytop]: one bar per bucket, total height = (buy+sell) large
+        activity (LARGE = contracts, SMALL = trade count), auto-scaled to the selection's busiest bucket. The
+        LOSER side is the bottom segment in a MUTED tint; the WINNER (larger) is stacked on top in FULL colour
+        — so the TOP colour tells you who dominated and the full-vs-muted split shows by how much. FACTUAL per
+        bucket (no window, no lock line). Hover -> BUY / SELL / NET; badge -> the live-edge winner."""
+        buy_v = list(buy_series[pre0:]); sell_v = list(sell_series[pre0:])
+        H = (ytop - ybot) * 0.92                                # headroom so the tallest bar doesn't touch the top
+        buy_rgb, sell_rgb = rgb_pair[0], rgb_pair[1]
+        _GRAY = (140, 140, 140, 205)                            # muted loser segment (gray, not a side tint)
+        # MERGE consecutive buckets that share the same dominant side into ONE wider bar (sustained runs read
+        # as a single block). A balanced/empty bucket (buy == sell, incl. no large trades) is a neutral gap:
+        # it draws nothing and breaks the run.
+        n = len(buy_v)
+        runs = []                                              # (start_i, end_i, dom +1 buy / -1 sell, win_vol, lose_vol)
+        i = 0
+        while i < n:
+            d = 1 if buy_v[i] > sell_v[i] else (-1 if sell_v[i] > buy_v[i] else 0)
+            if d == 0:
+                i += 1; continue
+            j = i; wv = lv = 0.0
+            while j < n:
+                b, s = buy_v[j], sell_v[j]
+                dj = 1 if b > s else (-1 if s > b else 0)
+                if dj != d:
+                    break
+                wv += (b if d == 1 else s); lv += (s if d == 1 else b)
+                j += 1
+            runs.append((i, j - 1, d, wv, lv)); i = j
+        scale = max(max((wv + lv for (_a, _z, _d, wv, lv) in runs), default=0.0), 1e-9)
+        x0s, x1s, lo_h, hi_h, lo_rgba, hi_rgba = [], [], [], [], [], []
+        for (a, z, d, wv, lv) in runs:
+            x0s.append((lo + a) - 0.4); x1s.append((lo + z) + 0.4)   # span the merged buckets, 0.1 gap to neighbours
+            lo_h.append((lv / scale) * H); hi_h.append((wv / scale) * H)
+            hi_rgba.append((*buy_rgb, 240) if d == 1 else (*sell_rgb, 240)); lo_rgba.append(_GRAY)
+        bars.update_bars(x0s, x1s, ybot, lo_h, hi_h, lo_rgba, hi_rgba, lo - 0.5, hi + 0.5, ybot, ytop)
+        bars.setVisible(True)
+        for _it in hide_items:                                  # retire the line/strip render of these panels
+            _it.setVisible(False)
+        # Hover shows the MERGED bar's SUM: every bucket in a run carries that run's summed buy/sell, so
+        # hovering anywhere on a merged bar reads the whole block's totals (a single-bucket bar = its own
+        # value). Neutral gap buckets keep their own (balanced) value.
+        hov_buy = list(buy_v); hov_sell = list(sell_v)
+        for (a, z, d, wv, lv) in runs:
+            bsum = wv if d == 1 else lv; ssum = lv if d == 1 else wv
+            for k in range(a, z + 1):
+                hov_buy[k] = bsum; hov_sell[k] = ssum
+        self._panel_hovers.append({                            # hover -> the bar's BUY / SELL / NET (run sum)
+            "label": label, "lo": lo, "yb": ybot, "yt": ytop,
+            "bull": hov_buy, "bear": hov_sell, "bcol": buy_rgb, "rcol": sell_rgb,
+            "blbl": "BUY", "rlbl": "SELL", "fmt": "vol",
+            "extra": [b - s for b, s in zip(hov_buy, hov_sell)], "ecol": (200, 200, 200), "elbl": "NET"})
+        bd = self._spread_badges[label]                        # badge = the latest bar's (run's) winner total
+        if runs:
+            _d, _wv = runs[-1][2], runs[-1][3]
+            bd.fill = pg.mkBrush(*buy_rgb) if _d == 1 else pg.mkBrush(*sell_rgb)
+            bd.setText(f" {self._fmt_k(_wv)} ")
+            bd.setPos(badge_x, (ytop + ybot) / 2.0); bd.show()
+        else:
+            bd.hide()
 
     def _toggle_panel9(self) -> None:
         """'9' — show/hide the bull/bear-trend lean panel (lean +/- own-side exhaustion). OFF clears + hides it."""
@@ -1407,7 +1561,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             state = {
                 "abs": self.show_abs_strip, "eff": self.show_eff_strip,
                 "er": self.show_er_strip, "exh": self.show_exh_strip,
-                "liq": self.show_liq, "panel9": self.show_panel9, "panel0": self.show_panel0,
+                "largesmall": self.show_largesmall, "panel9": self.show_panel9, "panel0": self.show_panel0,
                 "phase_table": self.show_phase_table,
                 "phase": {k: bool(v) for k, v in self.show_phase.items()},
                 "zone_s": self._zone_user_s, "eff_f": self._eff_user_f,   # persisted slider overrides (None = adaptive)
@@ -1432,7 +1586,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_eff_strip = bool(s.get("eff", self.show_eff_strip))
         self.show_er_strip = bool(s.get("er", self.show_er_strip))
         self.show_exh_strip = bool(s.get("exh", self.show_exh_strip))
-        self.show_liq = bool(s.get("liq", self.show_liq))
+        self.show_largesmall = bool(s.get("largesmall", self.show_largesmall))
         self.show_panel9 = bool(s.get("panel9", self.show_panel9))
         self.show_panel0 = bool(s.get("panel0", self.show_panel0))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
@@ -1477,6 +1631,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._eff_user_f = _f
         self._save_ui_state()
         self._refresh_selection_stats()
+
+
+    @staticmethod
+    def _hist_side(arr, thr: float, above: bool) -> float:
+        """Sum one side of a per-bucket size histogram ``arr`` (over config.SIZE_HIST_EDGES bins) about the qty
+        ``thr``, with LOG-LINEAR within-bin interpolation on the straddling bin (the cutoff is RETROACTIVE —
+        any slider qty re-sums instantly). above=True -> trades >= thr (LARGE); above=False -> trades < thr
+        (SMALL). Empty/missing arr (pre-feature bucket) -> 0.0."""
+        if not arr:
+            return 0.0
+        edges = config.SIZE_HIST_EDGES
+        b = config.size_bin(thr)              # straddling bin index (0..len(edges))
+        n = len(edges)
+        tot = sum(arr[b + 1:]) if above else sum(arr[:b])
+        if 0 < b < n:                         # interior bin [edges[b-1], edges[b]) is finite -> interpolate
+            lo_e, hi_e = edges[b - 1], edges[b]
+            if hi_e > lo_e > 0.0 and hi_e > thr > 0.0:
+                frac_above = min(1.0, max(0.0, math.log(hi_e / thr) / math.log(hi_e / lo_e)))
+                tot += (frac_above if above else (1.0 - frac_above)) * arr[b]
+        return tot
 
     # ------------------------------------------------------------------
     # Magic Selection (Mode 10) — aggregate the buckets inside the box
@@ -1777,8 +1951,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                         self.sel_stats.width(), self.sel_stats.height())
             self.sel_stats.move(bx, by)
             self.sel_stats.show_raise()
-            # the two zone-threshold sliders ride STACKED (absorption above eff-agg) just under the box;
-            # if the pair would run off the bottom, stack them ABOVE the box instead (same order).
+            # the two zone-threshold sliders ride STACKED (absorption above eff-agg) just under the box; if the
+            # pair would run off the bottom, stack them ABOVE the box instead (same order).
             gap, sh = 3, self.zone_slider.height()
             below_zone = by + self.sel_stats.height() + gap
             if below_zone + 2 * sh + gap <= self.height():
@@ -1814,7 +1988,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         self.bc_abs_q, self.bc_eff_q, self.bc_er_q):
                 _lk.setVisible(False)
             self.bc_panel_sep.setVisible(False)
-            self._clear_liq_panel()                                           # liquidation panel: clear on teardown
+            self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
             self._clear_panel0()                                              # smoothed twin: clear on teardown
             for _b in self._spread_badges.values():
@@ -1844,7 +2018,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         self.bc_abs_q, self.bc_eff_q, self.bc_er_q):
                 _lk.setVisible(False)
             self.bc_panel_sep.setVisible(False)
-            self._clear_liq_panel()                                           # liquidation panel: clear on teardown
+            self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
             self._clear_panel0()                                              # smoothed twin: clear on teardown
             for _b in self._spread_badges.values():
@@ -1869,8 +2043,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 rect, filtered, lo_i, hi_i,
                 (self.show_abs_strip, self.show_eff_strip, self.show_er_strip, self.show_exh_strip,
                  tuple(self.show_phase[p] for p in self._PHASES), self.show_state, self.show_sel_stats,
-                 self.show_liq, self.show_phase_table, self.show_panel9, self.show_panel0),
-                (self.zone_slider.value_s(), self.eff_slider.value_s()), tv, config.VPIN_ADAPT_WINDOW)
+                 self.show_largesmall, self.show_phase_table, self.show_panel9, self.show_panel0),
+                (self.zone_slider.value_s(), self.eff_slider.value_s(),
+                 self._largesmall_thr_sig()), tv, config.VPIN_ADAPT_WINDOW)
             if sig == self._sel_sig:
                 self._reposition_sel_box(rect)   # reuse last frame's overlays; just keep the box glued
                 return
@@ -1894,7 +2069,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         self.bc_abs_q, self.bc_eff_q, self.bc_er_q):
                 _lk.setVisible(False)
             self.bc_panel_sep.setVisible(False)
-            self._clear_liq_panel()                                           # liquidation panel: clear on teardown
+            self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
             self._clear_panel0()                                              # smoothed twin: clear on teardown
             for _b in self._spread_badges.values():
@@ -1999,10 +2174,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _badge_x = hi + 0.5 + max(1.0, (hi - lo + 1) * 0.05)   # spread-badge x: just past the panels' right edge
         abs_on = self.show_abs_strip and _drawable        # slot order top->bottom: 1 abs, 2 eff, 3 er, 4 exh,
         eff_on = self.show_eff_strip and _drawable         # then 5 BEFORE, 6 START/DURING, 7 END (phase panels),
-        er_on = self.show_er_strip and _drawable           # then 5-7 phase panels, 8 LIQUIDATION wave, 9 COMPOSITE (BOTTOM)
+        er_on = self.show_er_strip and _drawable           # then 5-7 phase panels, 8 LARGE+SMALL mkt, 9 COMPOSITE (BOTTOM)
         exh_on = self.show_exh_strip and _drawable
         ph_on = {p: self.show_phase[p] and _drawable for p in self._PHASES}
-        liq_on = self.show_liq and _drawable
+        ls_on = self.show_largesmall and _drawable          # slot 8: LARGE (top) + SMALL (below) market-order panels
         p9_on = self.show_panel9 and _drawable
         p0_on = self.show_panel0 and _drawable
         ph_geom = {}
@@ -2023,9 +2198,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if ph_on[_p]:
                 _t = _cur - config.PHASE_PANEL_GAP * sel_h; _b = _t - config.PHASE_PANEL_FRAC * sel_h
                 ph_geom[_p] = (_t, _b); _cur = _b
-        if liq_on:                                          # LIQUIDATION wave panel
-            liq_top = _cur - config.EXH_STRIP_GAP * sel_h; liq_bot = liq_top - config.EXH_STRIP_FRAC * sel_h
-            _cur = liq_bot
+        if ls_on:                                           # LARGE market-order panel (slot 8a)
+            lg_top = _cur - config.EXH_STRIP_GAP * sel_h; lg_bot = lg_top - config.EXH_STRIP_FRAC * sel_h
+            _cur = lg_bot
+            sm_top = _cur - config.EXH_STRIP_GAP * sel_h; sm_bot = sm_top - config.EXH_STRIP_FRAC * sel_h   # SMALL (8b)
+            _cur = sm_bot
         if p9_on:                                           # COMPOSITE lean panel
             p9_top = _cur - config.EXH_STRIP_GAP * sel_h; p9_bot = p9_top - config.EXH_STRIP_FRAC * sel_h
             _cur = p9_bot
@@ -2040,7 +2217,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if exh_on: _bands.append((exh_top, exh_bot))
         for _p in self._PHASES:
             if _p in ph_geom: _bands.append(ph_geom[_p])
-        if liq_on: _bands.append((liq_top, liq_bot))
+        if ls_on: _bands.append((lg_top, lg_bot)); _bands.append((sm_top, sm_bot))
         if p9_on: _bands.append((p9_top, p9_bot))
         if p0_on: _bands.append((p0_top, p0_bot))
         _sep_ys = [(_bands[i][1] + _bands[i + 1][0]) / 2.0 for i in range(len(_bands) - 1)]
@@ -2247,37 +2424,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _ly.setVisible(False)
             for _plk in self.bc_phase_lock.values():
                 _plk.setVisible(False)
-        # LIQUIDATION PRESSURE WAVE ('l', BOTTOM). Net forced flow = liq_short − liq_long per bucket (forced BUYS
-        # minus forced SELLS); a FIXED-window rolling SUM (LIQ_WAVE_WINDOW, pre-rolled into real history) = the
-        # "wave": CYAN up = forced buying (short squeeze building), MAGENTA down = forced selling (long flush),
-        # about a dashed zero baseline. Signed-log scaled (liqs are spiky). RISING = a cascade building (surf it);
-        # HOLD/FADE = is the wave still going. Drawn in place (setData) -> no ghost data.
-        if liq_on:
-            net = np.array([float(b.get("liq_short", 0.0)) - float(b.get("liq_long", 0.0)) for b in _extp], float)
-            _w = config.LIQ_WAVE_WINDOW
-            _cs = np.concatenate([[0.0], np.cumsum(net)])
-            wave = np.array([_cs[k + 1] - _cs[max(0, k + 1 - _w)] for k in range(len(net))])[_pre0:]  # trailing sum
-            if wave.size:
-                comp = np.sign(wave) * np.log1p(np.abs(wave))                  # tame the spiky liquidation tail
-                ex = np.arange(lo, hi + 1, dtype=float)
-                lmid = (liq_top + liq_bot) / 2.0; lhalf = (liq_top - liq_bot) / 2.0 * 0.88
-                lscale = max(float(np.max(np.abs(comp))), 1e-9)
-
-                def _lqy(v):
-                    return lmid + (np.asarray(v, dtype=float) / lscale) * lhalf
-                sxn, vpos, vneg = _split_curve_by_sign(ex, comp)              # cyan/magenta halves meet ON the midline
-                self.bc_liq_zero.setData([lo - 0.5, hi + 0.5], [lmid, lmid])
-                self.bc_liq_pos.setData(sxn, _lqy(vpos)); self.bc_liq_neg.setData(sxn, _lqy(vneg))
-                for _it in (self.bc_liq_zero, self.bc_liq_neg, self.bc_liq_pos):
-                    _it.setVisible(True)
-                self._panel_hovers.append({                                   # hover -> wave value + this bucket's net
-                    "label": "LIQ WAVE", "lo": lo, "yb": liq_bot, "yt": liq_top,
-                    "bull": list(wave), "bear": list(net[_pre0:]), "bcol": (0, 243, 255), "rcol": (255, 0, 162),
-                    "blbl": "WAVE", "rlbl": "net", "fmt": "vol"})
-            else:
-                self._clear_liq_panel()
+        # LARGE / SMALL MARKET-ORDER PANELS ('8'). Each bucket's size histogram (sz_vb/sz_vs = per-side VOLUME,
+        # sz_cb/sz_cs = per-side COUNT, over config.SIZE_HIST_EDGES) is thresholded LIVE at the slider cutoff
+        # (default = the daemon's broad 60-min percentile, NOT selection-local) with log-linear within-bin
+        # interpolation, then drawn as a share-style buy/sell strip. LARGE = large-BUY vs large-SELL VOLUME
+        # (where the size is: blue buy / orange sell, matching the heatmap bubbles); SMALL = small-BUY vs
+        # small-SELL trade COUNT (retail breadth; green/red). Cutoffs are FULLY AUTOMATIC (daemon p95 / p50).
+        if ls_on:
+            large_thr, small_thr = self._largesmall_thresholds()   # FULLY AUTOMATIC: daemon p95 / p50
+            lg_buy = [self._hist_side(b.get("sz_vb"), large_thr, True) for b in _extp]
+            lg_sell = [self._hist_side(b.get("sz_vs"), large_thr, True) for b in _extp]
+            sm_buy = [self._hist_side(b.get("sz_cb"), small_thr, False) for b in _extp]
+            sm_sell = [self._hist_side(b.get("sz_cs"), small_thr, False) for b in _extp]
+            self._draw_hist_panel(self.bc_lg_bars,
+                                  (self.bc_lg_strip, self.bc_lg_mid, self.bc_lg_q, self.bc_lg_lock,
+                                   self.bc_lg_pos, self.bc_lg_neg),
+                                  lg_buy, lg_sell, lo, hi, lg_bot, lg_top, "LARGE MKT", self._RGB_LG,
+                                  _pre0, _badge_x)
+            self._draw_hist_panel(self.bc_sm_bars,
+                                  (self.bc_sm_strip, self.bc_sm_mid, self.bc_sm_q, self.bc_sm_lock,
+                                   self.bc_sm_pos, self.bc_sm_neg),
+                                  sm_buy, sm_sell, lo, hi, sm_bot, sm_top, "SMALL MKT", self._RGB_SM,
+                                  _pre0, _badge_x)
         else:
-            self._clear_liq_panel()
+            self._clear_largesmall_panels()
         # PANEL 9 — COMPOSITE LEAN ('9', very BOTTOM). ONE line = the per-bucket AVERAGE of the FOUR panels'
         # SIGNED spreads (in points). Each spread carries that panel's own badge sign — GREEN(strong-bull)=+,
         # RED(strong-bear)=−: absorption's strong side is the LOWER share -> (bear-bull); eff-agg & E/R's strong
@@ -3144,9 +3314,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _hm_render_bubbles(self, vx0: float, vx1: float) -> None:
         """Phase 3: aggregate the visible trades into the heatmap's cells and paint the bubbles — diameter
-        ∝ √(total cell qty), scaled so the biggest visible cell ≈ MAX_PX (clamped). Cells sitting on an active
-        absorption/iceberg level are recolored (blue buy / orange sell); the rest split green (net buy) /
-        purple (net sell). pxMode keeps bubbles a fixed size through zoom."""
+        ∝ √(total cell qty), scaled so the biggest visible cell ≈ MAX_PX (clamped). Cells holding a LARGE
+        market order (a single taker trade >= the live large cutoff) are recolored (electric blue large BUY /
+        orange large SELL); the rest split green (net buy) / purple (net sell). pxMode keeps bubbles a fixed
+        size through zoom."""
         scatters = (self.hm_bubbles_buy, self.hm_bubbles_sell,
                     self.hm_bubbles_ice_buy, self.hm_bubbles_ice_sell)
         if not self.hm_bubbles_on or self.hm_band is None or not len(self.hm_tb_cache.ts):
@@ -3161,38 +3332,37 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for s in scatters:
                 s.setVisible(False)
             return
-        x, y, total, net = cells
+        x, y, total, net, max_buy, max_sell = cells
         mx = float(total.max()) or 1.0
         lo, hi = config.HEATMAP_BUBBLE_MIN_PX, config.HEATMAP_BUBBLE_MAX_PX
         size = lo + (hi - lo) * np.sqrt(np.clip(total / mx, 0.0, 1.0))   # diameter px, area ~ qty
-        ice = self._hm_iceberg_side(y)                                    # 0=none, 1=BUY iceberg, 2=SELL iceberg
-        ice_buy = ice == 1; ice_sell = ice == 2
-        plain = ice == 0
+        large = self._hm_largeorder_side(max_buy, max_sell)              # 0=none, 1=large BUY, 2=large SELL
+        lg_buy = large == 1; lg_sell = large == 2
+        plain = large == 0
         buy = plain & (net > 0); sell = plain & ~(net > 0)               # net==0 -> drawn as sell (rare)
         for scat, m in ((self.hm_bubbles_buy, buy), (self.hm_bubbles_sell, sell),
-                        (self.hm_bubbles_ice_buy, ice_buy), (self.hm_bubbles_ice_sell, ice_sell)):
+                        (self.hm_bubbles_ice_buy, lg_buy), (self.hm_bubbles_ice_sell, lg_sell)):
             scat.setData(x=x[m], y=y[m], size=size[m], data=total[m])
             scat.setVisible(True)
 
-    def _hm_iceberg_side(self, y: np.ndarray) -> np.ndarray:
-        """Per-cell iceberg classification from the live absorption marks: 0 = none, 1 = BUY iceberg (a bid
-        wall held), 2 = SELL iceberg (an ask wall held). A cell is an iceberg if its price falls in a mark's
-        [plo, phi] break-range (± a tick of slop). Marks are the SAME standing levels the bucket chart draws."""
-        out = np.zeros(len(y), dtype=np.uint8)
-        marks = (self._last_snap or {}).get("absorptions") or []
-        if not marks or not len(y):
+    def _hm_largeorder_side(self, max_buy: np.ndarray, max_sell: np.ndarray) -> np.ndarray:
+        """Per-cell LARGE market-order classification: 0 = none, 1 = a large BUY (the cell holds a single
+        taker-buy >= the live large cutoff), 2 = a large SELL. The cutoff is the SAME ``large_thr`` the LARGE
+        panel uses (slider override, else the daemon's broad p95) — so the bubbles + the panel agree, and a
+        drag recolors both instantly. A cell with BOTH a large buy and a large sell goes to the bigger trade.
+        Replaced the old absorption-band iceberg classifier; the four scatters + colours are unchanged."""
+        n = len(max_buy)
+        out = np.zeros(n, dtype=np.uint8)
+        if not n:
             return out
-        tol = config.TICK_SIZE
-        for m in marks:
-            try:
-                plo = float(m.get("plo", m.get("price", 0.0))); phi = float(m.get("phi", plo))
-            except (TypeError, ValueError):
-                continue
-            if phi < plo:
-                plo, phi = phi, plo
-            hitmask = (y >= plo - tol) & (y <= phi + tol)
-            if hitmask.any():
-                out[hitmask] = 1 if m.get("side") == "BUY" else 2
+        large_thr, _ = self._largesmall_thresholds()
+        big_b = max_buy >= large_thr
+        big_s = max_sell >= large_thr
+        out[big_b] = 1
+        out[big_s] = 2                                  # sell wins over buy here; the tie-break below corrects
+        both = big_b & big_s
+        if both.any():
+            out[both] = np.where(max_buy[both] >= max_sell[both], 1, 2)
         return out
 
     def _on_bubble_hover(self, plot, points) -> None:

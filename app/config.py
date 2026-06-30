@@ -11,6 +11,7 @@ code disagree, the divergence is noted inline.
 
 from __future__ import annotations
 
+import bisect
 import os
 import sys
 
@@ -352,6 +353,44 @@ ICEBERG_VOL_SHARE = 0.04        # 4% candle volume (§4.2.1)
 ICEBERG_SKEW = 0.65             # 65% absorption skew (§4.2.1)
 VELOCITY_NEON_RATIO = 2.5       # HFT neon overload trigger (index.html:945, spec §10.2.3)
 VELOCITY_TIER_HIGHLIGHT = 1.2   # OB ignition velocity gate (main.py:508)
+
+# ---------------------------------------------------------------------------
+# Trade-size classification (LARGE / SMALL market orders)
+# ---------------------------------------------------------------------------
+# FIXED log-spaced trade-size bins (CONTRACTS), ~4 per decade, spanning dust -> whale. Grounded in the
+# measured 60-min SOL aggTrade qty distribution (median ~1.9, p90 ~90, p95 ~273, p99 ~896, p99.5 ~1400,
+# max ~5000): the slider's meaningful range p40(0.75)->p99.5(1400) sits in the well-resolved middle, every
+# default rung falls mid-spread. STORE-RAW: each closed bucket carries its per-side count+vol histogram over
+# these bins (sz_cb/sz_cs/sz_vb/sz_vs); the terminal thresholds them LIVE (slider) with log-linear within-bin
+# interpolation, so the cutoff is retroactive + instant — never baked into stored counts. Edges are static
+# (never shipped per-bucket); both daemon (binning) and terminal (thresholding) import them. Implicit open
+# underflow [0, edges[0]) = bin 0 and overflow [edges[-1], inf) = bin len(edges).
+SIZE_HIST_EDGES = (
+    0.1, 0.178, 0.316, 0.562, 1.0, 1.78, 3.16, 5.62, 10.0, 17.8,
+    31.6, 56.2, 100.0, 178.0, 316.0, 562.0, 1000.0, 1780.0, 3160.0, 5620.0,
+)
+SIZE_HIST_NBINS = len(SIZE_HIST_EDGES) + 1     # 21 bins (19 interior + underflow + overflow)
+
+# Daemon rolling 60-min trade-size percentile (the AUTO-DEFAULT slider position; shipped on the pulse as
+# PulsePacket.size_thr = [p50,p90,p95,p99,p99.5] in contracts). Cheap: prune + sort ~7k floats every few
+# seconds on the pulse loop (sub-ms). Cold-start guard: ship [] until the window has enough samples (~4 min
+# at SOL's ~2 trades/s) so the terminal never thresholds against a half-warm distribution.
+SIZE_PCTILE_WINDOW_MS = 3_600_000   # 60-min rolling window
+SIZE_THR_MIN_SAMPLES = 500          # cold-start: below this, ship size_thr=[] (not warm yet)
+SIZE_THR_RECOMPUTE_SECS = 3.0       # recompute cadence (distribution drifts slowly; pulse is 0.4s)
+# Terminal cold-start fallbacks for the LARGE/SMALL panel + bubble cutoffs, used only until the daemon's
+# size_thr warms (the measured 60-min p95 / p50 in contracts). Once size_thr arrives it supersedes these.
+SIZE_DEFAULT_LARGE = 273.0          # large cutoff (contracts) ~ p95
+SIZE_DEFAULT_SMALL = 1.9            # small cutoff (contracts) ~ p50
+
+
+def size_bin(qty: float) -> int:
+    """Index 0..len(SIZE_HIST_EDGES) of the log-spaced size bin holding ``qty`` (contracts).
+
+    ``bisect_right`` so a qty exactly on an edge lands in the upper bin; qty < edges[0] -> 0 (underflow),
+    qty >= edges[-1] -> len(edges) (overflow). O(log NBINS), called once per aggTrade on the daemon.
+    """
+    return bisect.bisect_right(SIZE_HIST_EDGES, qty)
 
 # ---------------------------------------------------------------------------
 # Color palette — pure light mode (spec §5.1)

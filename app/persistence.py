@@ -87,6 +87,9 @@ def _bucket_to_dict(b: QuantBucket) -> dict:
         "poc_price": b.poc_price,
         "buyer_er": b.buyer_er,
         "seller_er": b.seller_er,
+        # LARGE/SMALL size histograms — additive (_bucket_from_dict reads with a zero-filled default, so
+        # NO BUCKET_SCHEMA_VERSION bump; pre-feature rows reload as zeros).
+        "sz_cb": b.sz_cb, "sz_cs": b.sz_cs, "sz_vb": b.sz_vb, "sz_vs": b.sz_vs,
     }
 
 
@@ -110,6 +113,13 @@ def _bucket_from_dict(d: dict) -> QuantBucket:
     b.poc_price = d.get("poc_price", 0.0)
     b.buyer_er = d.get("buyer_er", 1.0)
     b.seller_er = d.get("seller_er", 1.0)
+    # LARGE/SMALL size histograms: override the __init__ zero arrays only when present AND the right length
+    # (fixed edges => stable length; the guard keeps a stale/short row from corrupting the bucket).
+    _nb = config.SIZE_HIST_NBINS
+    for _k in ("sz_cb", "sz_cs", "sz_vb", "sz_vs"):
+        _v = d.get(_k)
+        if isinstance(_v, list) and len(_v) == _nb:
+            setattr(b, _k, [float(x) for x in _v])
     return b
 
 

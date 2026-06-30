@@ -75,6 +75,10 @@ class BucketSnapshot(TypedDict):
     liq_short: float     # A3b-pre: forced-buy volume in this bucket (SHORTS liquidated); wire-additive, default 0.0
     liq_long: float      # A3b-pre: forced-sell volume in this bucket (LONGS liquidated); wire-additive, default 0.0
     levels: Dict[str, dict]  # Stage 1: per-price {price_str: {"b","s"}} footprint ladder (wire-additive; default {} pre-upgrade)
+    sz_cb: List[float]   # LARGE/SMALL: per-side trade COUNT over config.SIZE_HIST_EDGES bins, taker BUY (wire-additive; [] pre-upgrade)
+    sz_cs: List[float]   # ... taker SELL count
+    sz_vb: List[float]   # ... taker BUY volume (contracts)
+    sz_vs: List[float]   # ... taker SELL volume (contracts)
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +229,7 @@ class PulsePacket:
     bids: List[List[str]] = field(default_factory=list)  # [[price, qty], ...]
     asks: List[List[str]] = field(default_factory=list)
     oi: float = 0.0
+    size_thr: List[float] = field(default_factory=list)  # rolling 60-min size pctiles [p50,p90,p95,p99,p99.5] (contracts)
     type: str = TYPE_PULSE
 
     def to_line(self) -> str:
@@ -356,6 +361,7 @@ _PARSERS = {
     ),
     TYPE_PULSE: lambda d: PulsePacket(
         bids=d.get("bids", []), asks=d.get("asks", []), oi=d.get("oi", 0.0),
+        size_thr=d.get("size_thr", []),
     ),
     TYPE_DEPTH_WINDOW: lambda d: DepthWindowPacket(
         t0=d["t0"], t1=d["t1"], cols=d["cols"], ylo=d["ylo"], yhi=d["yhi"], ybins=d["ybins"],

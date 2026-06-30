@@ -77,6 +77,7 @@ class PipeClientWorker(threading.Thread):
         self.liquidations: List[dict] = []       # {side, price, qty, time}
         self.depth: Dict[str, list] = {"bids": [], "asks": []}
         self.oi: float = 0.0
+        self.size_thr: List[float] = []   # rolling 60-min trade-size pctiles [p50,p90,p95,p99,p99.5] (contracts); [] = not warm
         self.vpin: float = 0.0
         self.target_vol: float = config.DEFAULT_TARGET_VOL
         # Phase 0 bucket pipeline: full closed-bucket history (seeded by CATCHUP,
@@ -387,6 +388,7 @@ class PipeClientWorker(threading.Thread):
             elif isinstance(pkt, protocol.PulsePacket):
                 self.depth = {"bids": pkt.bids, "asks": pkt.asks}
                 self.oi = pkt.oi
+                self.size_thr = pkt.size_thr
             elif isinstance(pkt, protocol.DepthWindowPacket):
                 self._hm_window = pkt          # ~MB grid stays in the delivery buffer (NOT snapshot())
                 self._hm_ver += 1
@@ -443,6 +445,7 @@ class PipeClientWorker(threading.Thread):
                 "liquidations": list(self.liquidations),
                 "depth": {"bids": list(self.depth["bids"]), "asks": list(self.depth["asks"])},
                 "oi": self.oi,
+                "size_thr": list(self.size_thr),
                 "vpin": self.vpin,
                 "target_vol": self.target_vol,
                 "closed_buckets": self._cb_exp,

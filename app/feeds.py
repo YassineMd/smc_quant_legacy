@@ -27,6 +27,7 @@ from concurrent.futures import ProcessPoolExecutor
 from types import SimpleNamespace
 from typing import Callable, Dict, Optional
 
+import numpy as np
 import pandas as pd
 import requests
 import websockets
@@ -127,6 +128,12 @@ class MarketDataCore:
         self._depth_snap_buf: deque = deque(maxlen=1000)
         self._last_depth_u: int = 0
         self._last_depth_ts: int = 0
+        # LARGE/SMALL: rolling 60-min (ts_ms, qty) window for the size-percentile baseline. Fed O(1) per
+        # aggTrade; pruned + percentiled every SIZE_THR_RECOMPUTE_SECS on the pulse loop. self._size_thr is
+        # the shipped [p50,p90,p95,p99,p99.5] (contracts); [] = not warm yet (cold-start guard).
+        self._size_win: deque = deque()
+        self._size_thr: list = []
+        self._size_thr_t: float = 0.0    # last recompute (ms; throttle)
 
     # ------------------------------------------------------------------
     # CATCHUP builder (per subscribing client's timeframe)
@@ -427,6 +434,8 @@ class MarketDataCore:
         pStr = f"{targs.price:.2f}"
         side = "b" if targs.taker_buy > 0.0 else "s"     # exact: buy -> b, sell -> s
         t_ms = int(d["T"])
+        _sb = config.size_bin(targs.vol)                 # LARGE/SMALL size bin (same for all tfs)
+        self._size_win.append((t_ms, targs.vol))         # feed the rolling 60-min size-percentile window
         for tf_key in config.TIMEFRAMES:
             uTime = str(candle_open(t_ms, config.TF_SECONDS[tf_key]))
             self.latest_utime[tf_key] = uTime
@@ -445,6 +454,7 @@ class MarketDataCore:
                 delta_oi=share,
                 footprints_dict=self.footprints_db.get(tf_key, {}),
                 tick_time=targs.tick_time,
+                size_bin=_sb,
             )
             # Detect closes by the MONOTONIC total_closed delta, NOT by len(closed_buckets) growth:
             # closed_buckets is capped (append+pop), so its length stops growing at CLOSED_BUCKETS_CAP and
@@ -589,10 +599,30 @@ class MarketDataCore:
     # ------------------------------------------------------------------
     # Stream: depth + OI pulse broadcast (main.py:875)
     # ------------------------------------------------------------------
+    def _recompute_size_thr(self, now_ms: int) -> None:
+        """Prune the rolling window to 60 min and recompute the size percentiles [p50,p90,p95,p99,p99.5]
+        (contracts). np.percentile (method='linear') on ~7k floats is sub-ms on the pulse loop and touches
+        NO per-close path. Cold-start: ship [] until SIZE_THR_MIN_SAMPLES so the terminal never thresholds a
+        half-warm distribution."""
+        win = self._size_win
+        cutoff = now_ms - config.SIZE_PCTILE_WINDOW_MS
+        while win and win[0][0] < cutoff:
+            win.popleft()
+        n = len(win)
+        if n < config.SIZE_THR_MIN_SAMPLES:
+            self._size_thr = []
+            return
+        qs = np.fromiter((q for _, q in win), dtype=float, count=n)
+        self._size_thr = [float(v) for v in np.percentile(qs, (50.0, 90.0, 95.0, 99.0, 99.5))]
+
     async def pulse_broadcast_loop(self) -> None:
         ob = self.pulse_state["local_ob"]
         while True:
             await asyncio.sleep(config.PULSE_BROADCAST_SECS)
+            now_ms = int(time.time() * 1000)
+            if now_ms - self._size_thr_t >= config.SIZE_THR_RECOMPUTE_SECS * 1000.0:
+                self._recompute_size_thr(now_ms)
+                self._size_thr_t = now_ms
             sorted_bids = sorted(ob["bids"].items(), key=lambda x: x[0], reverse=True)[:config.DOM_LEVELS]
             sorted_asks = sorted(ob["asks"].items(), key=lambda x: x[0])[:config.DOM_LEVELS]
             self.broadcast_all(
@@ -600,6 +630,7 @@ class MarketDataCore:
                     bids=[[str(k_), str(v_)] for k_, v_ in sorted_bids],
                     asks=[[str(k_), str(v_)] for k_, v_ in sorted_asks],
                     oi=self.pulse_state.get("oi", 0.0),
+                    size_thr=list(self._size_thr),
                 ).to_line()
             )
 
