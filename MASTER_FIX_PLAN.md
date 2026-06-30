@@ -1137,6 +1137,16 @@ exhaustively, all CAUSAL / out-of-sample / base-rate-guarded:
   1/2/3 ref lines: **50% light-gray + 25%/75% orange** (panel-0 dash spacing). Phase table (`'t'`) shows the
   **locked row** + dims non-bold rows. **Slider filter/force settings now PERSIST** (drag = pinned override across
   sessions, suppresses the adaptive seed). **`'v'` diamonds default off.** (Detail in `scripts/HANDOFF.md`.)
+- **BUILD (2026-06-30, `59b26a7`, DAEMON REDEPLOYED, exe NOT yet rebuilt) — large/small market-order
+  classification: dominance histograms (`'8'`) + heatmap bubble recolor.** The daemon classifies every aggTrade
+  into a per-bucket per-side **size histogram** (`sz_*`, over fixed log-spaced bins) and ships a rolling 60-min
+  **percentile** (`size_thr`, p50–p99.5) on the pulse — wire-additive, no schema bump. `'8'` now draws two
+  **dominance histograms** (replacing the liquidation WAVE display): per bucket the winner side is full colour on
+  top, loser **gray** underneath, height = total large activity; **consecutive same-dominant buckets merge** into
+  one bar and **hover shows the run's summed BUY/SELL/NET**. LARGE = contracts (p95 cutoff), SMALL = trade count
+  (p50) — **cutoffs fully automatic** from the daemon, no slider. Heatmap bubbles recolor blue=large buy /
+  orange=large sell (`_hm_largeorder_side`). Liquidation **data** kept intact (state engine unchanged —
+  `test_a3b_state_engine` green); only the `'8'` wave DISPLAY was removed. (Detail in `scripts/HANDOFF.md`.)
 
 ---
 

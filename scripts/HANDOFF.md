@@ -869,6 +869,36 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
 - **`'v'` (abnormal-velocity diamonds) defaults OFF** (`show_vel_abn=False`); the always-on 2px velocity border is unchanged.
 - **EXE REBUILT** (`OrderFlowTerminal.spec`, one-file). Terminal-only, no daemon change.
 
+**Large/small market-order classification — daemon rolling percentile + dominance histograms (`'8'`) + bubble recolor (`59b26a7`, 2026-06-30). DAEMON REDEPLOYED; terminal exe NOT yet rebuilt (run from source to eyeball).**
+- **DAEMON (wire-additive, no `BUCKET_SCHEMA_VERSION` bump):** `config.SIZE_HIST_EDGES` = 21 fixed log-spaced trade-size
+  bins (0.1–5620 contracts, 4/decade) + `size_bin()`, grounded in the measured SOL aggTrade qty distribution
+  (median ~1.9, p95 ~273, p99 ~896 contracts; price ~flat so qty-shape == notional-shape). Each bucket now carries a
+  per-side size histogram (`sz_cb`/`sz_cs` COUNT, `sz_vb`/`sz_vs` VOLUME) — classified ONCE per aggTrade in
+  `_process_aggtrade`, accumulated chunk-weighted + fractional-count inside `_add_to_bucket` (conserves exactly across
+  a close boundary), emitted in `_assemble`. A rolling 60-min `(ts,qty)` window → `np.percentile [p50,p90,p95,p99,p99.5]`
+  recomputed sub-ms (~0.9ms) in `pulse_broadcast_loop` (cold-start guard ≥500 samples), shipped as `PulsePacket.size_thr`.
+  `BucketSnapshot.sz_*` + persistence additive (`.get` zero-fill; pre-feature buckets read 0).
+- **`'8'` = LARGE / SMALL market-order panels** (REPLACED the liquidation WAVE display). Per-bucket DOMINANCE HISTOGRAM
+  (`StackedBarLayer`): winner side FULL colour on top, loser GRAY underneath, height = total large activity;
+  **consecutive same-dominant buckets MERGE** into one wider bar (a balanced/empty bucket = neutral gap that draws
+  nothing + breaks the run); **hover shows the merged run's summed BUY/SELL/NET**; right-edge badge = the latest bar's
+  winner total. LARGE = contracts (electric-blue buy / orange sell, matching the bubbles); SMALL = trade COUNT
+  (green/red, since small VOLUME is ~0.3%).
+- **Cutoffs FULLY AUTOMATIC** from the daemon — LARGE = live p95, SMALL = live p50 (`_largesmall_thresholds`),
+  auto-updating every daemon recompute (tracked in the selection change-detection signature via `_largesmall_thr_sig`).
+  NO slider (the earlier per-cutoff sliders + `_SizeThresholdSlider` were removed). `_hist_side` thresholds each
+  bucket's histogram with log-linear within-bin interpolation.
+- **Heatmap bubbles recolor by LARGE ORDER:** `_hm_iceberg_side` → `_hm_largeorder_side` (electric-blue = a cell with a
+  buy ≥ the live `large_thr`, orange = a sell ≥ it; the bigger trade wins ties). `visible_cells` now also returns
+  per-cell max buy/sell qty. The 4 `ScatterPlotItem`s + the render loop are UNCHANGED.
+- **REMOVED: the `'8'` liquidation WAVE display ONLY.** Liquidation DATA (`liq_short`/`liq_long`, `LiquidationPacket`,
+  the `!forceOrder` stream) is INTACT — still feeds the 12-state classifier, the `'L'` Liquidation Marks, the stats
+  box, and alerts. State engine proven unchanged (`test_a3b_state_engine` PASSES).
+- **Validated:** per-bucket histogram conservation exact across close boundaries; rolling percentile == `np.percentile`
+  (diff 0.0); `_hist_side` exact on a bin edge / 0.57% mid-bin; daemon engine suite green (the 2 failures are
+  pre-existing stale tests for relocated symbols `_exh_z_mult` / `recalibrate`). Daemon redeployed + verified LISTENING,
+  trade_tape live. **Terminal exe NOT yet rebuilt** this round.
+
 **Mode-10 selection PERF pass — 5 correctness-preserving fixes (`3b176e6`→`a89a2fd`).** Profiled first on real
 data (N=200/400/800); the theory was REVISED: `rolling_share`'s O(N²) is real but small (~12% of the phase
 block); the bigger costs are the trailing-50 norm re-sums and the per-bucket exp/log posteriors (`conf_traj`,
