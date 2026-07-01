@@ -331,7 +331,7 @@ def propose_zones(direction: str, anchor: Anchor, cohort_mode: str = "knn",
 
     entry, ctx = _build_entry(buckets, anchor, cohort, direction, H)
     stop = _build_stop(buckets, anchor, cohort, ctx, direction, H)             # commit 5
-    tps = _build_tps(buckets, anchor, cohort, ctx, direction, H)               # commit 6
+    tps = _build_tps(buckets, anchor, cohort, ctx, stop, direction, H)         # commit 6
     scale_out, gross = _optimise_scaleout(buckets, ctx, stop, tps, direction, H)   # commit 7
 
     warns = list(ctx.get("warns", []))
@@ -447,14 +447,61 @@ def _build_stop(buckets, anchor, cohort, ctx, direction, H):
                              clears_winner_heat=heat_cleared, stop_exec=config.STOP_EXEC))
 
 
-def _build_tps(buckets, anchor, cohort, ctx, direction, H):    # commit 6 replaces
+def _build_tps(buckets, anchor, cohort, ctx, stop, direction, H):
+    """§7 nested TP boxes. Levels = f +/- q{50,75,90}(favourable excursion | filled); band thickness =
+    local quantile width around each q_k. Each level SNAPS to the nearest opposing magnet within SNAP_TOL
+    (bearish OB near-edge -> SELL absorption -> liquidation cluster; A4: no HVN) — real resistance beats a
+    bare quantile. prob = P(reach level_k before stop) from first-passage (monotone-decreasing in k);
+    median_buckets_to_touch from the passage offsets. exp_r filled by the commit-7 optimiser."""
     long = direction == "long"
-    f = ctx["f"]
-    fav = [ctx["Uf"][j] for j in ctx["filled"]] or [0.0]
-    lvl = _tick(f + (_q(fav, config.TP_QUANTILES[0]) or 0.0) * (1 if long else -1))
-    return [ZoneBox(kind="tp", lo=lvl, hi=lvl, start_epoch=float(anchor.anchor_epoch),
-                    end_epoch=float(anchor.anchor_epoch), span_buckets=H, line=lvl, prob=0.0, exp_r=0.0,
-                    fidelity="envelope", confidence=1.0, meta=dict(provisional=True))]
+    f = ctx["f"]; filled = ctx["filled"]; Uf = ctx["Uf"]
+    fav = [Uf[j] for j in filled] or [0.0]
+    magnets = _tp_magnets(ctx["obs"], ctx["marks"], buckets, anchor.anchor_idx, long)
+    snap_tol = config.SNAP_TOL_TICKS * TICK
+    dq = config.TP_BW_DQ
+
+    levels = []; boxes_meta = []
+    prev = f
+    for k, qk in enumerate(config.TP_QUANTILES):
+        off = _q(fav, qk) or 0.0
+        lvl = (f + off) if long else (f - off)
+        # local band width = half the favourable-excursion spread across [qk-dq, qk+dq]
+        wlo = _q(fav, max(0.0, qk - dq)) or 0.0
+        whi = _q(fav, min(1.0, qk + dq)) or 0.0
+        thick = max(0.5 * abs(whi - wlo), TICK)
+        # snap to the highest-ranked opposing magnet within SNAP_TOL of the quantile level
+        snapped = None
+        near = sorted((m for m in magnets if abs(m[1] - lvl) <= snap_tol), key=lambda m: (m[0], abs(m[1] - lvl)))
+        if near:
+            lvl = near[0][1]; snapped = near[0][2]
+        # keep strictly nested away from f (a snap can reorder)
+        lvl = _tick(lvl)
+        if long:
+            lvl = max(lvl, _tick(prev + TICK))
+        else:
+            lvl = min(lvl, _tick(prev - TICK))
+        prev = lvl
+        levels.append(lvl); boxes_meta.append((thick, snapped, qk))
+
+    # probabilities + median-to-touch from ONE first-passage over the nested ladder (touch)
+    ps = [excursion.first_passage_member(buckets, j, f, stop.line, levels, direction, H, config.STOP_EXEC)
+          for j in filled]
+    m = max(1, len(ps))
+    tps = []
+    for k in range(len(levels)):
+        prob = sum(1 for p in ps if k in p.reached_lo) / m               # clean point (bracket hairline on 1m)
+        offs = sorted(p.touch_off[k] for p in ps if k in (p.touch_off or {}))
+        med = offs[len(offs) // 2] if offs else None
+        thick, snapped, qk = boxes_meta[k]
+        lvl = levels[k]
+        lo, hi = _tick(lvl - 0.5 * thick), _tick(lvl + 0.5 * thick)
+        tps.append(ZoneBox(kind="tp", lo=lo, hi=hi, start_epoch=float(anchor.anchor_epoch),
+                           end_epoch=float(buckets[min(anchor.anchor_idx + H, len(buckets) - 1)].start_time),
+                           span_buckets=H, line=lvl, prob=prob, exp_r=0.0, snapped_to=snapped,
+                           median_buckets_to_touch=med, fidelity="envelope",
+                           confidence=(1.0 if snapped else config.STAT_ONLY_CONF),
+                           meta=dict(quantile=qk, thickness=thick, R=abs(lvl - f) / max(TICK, abs(f - stop.line)))))
+    return tps
 
 
 def _optimise_scaleout(buckets, ctx, stop, tps, direction, H):  # commit 7 replaces

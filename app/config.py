@@ -419,6 +419,8 @@ TP_QUANTILES = (0.50, 0.75, 0.90)  # TP1/2/3 levels = f +/- q(favourable excursi
 WICK_BUFFER_Q = 0.75              # wide edge buffer = q75(overshoot | cohort members that HELD) — touch-honest (§6, §13)
 STOP_WIDE_Q = 0.95               # statistical wide-edge fallback (no structural invalidation) = q95(winner MAE)
 STOP_GRID_N = 13                 # stop-search resolution over [wide, tight] for the argmax-E[R] recommended line (§6/§9)
+# commit 6 — TP boxes
+TP_BW_DQ = 0.05                  # TP box thickness = local favourable-excursion width across [q-DQ, q+DQ] (§7)
 
 
 def size_bin(qty: float) -> int:

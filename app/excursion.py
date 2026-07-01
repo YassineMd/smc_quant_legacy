@@ -322,6 +322,8 @@ class Passage:
     stopped: bool
     timeout: bool
     mtm_px: Optional[float]
+    touch_off: dict = None          # {k: bucket-offset (>=1) where TP_k was first reached} — median-to-touch (commit 6)
+    stop_off: Optional[int] = None  # bucket-offset where the stop hit, else None
 
 
 def first_passage_member(buckets: list, j: int, f: float, stop: float, tps: Sequence[float],
@@ -331,9 +333,11 @@ def first_passage_member(buckets: list, j: int, f: float, stop: float, tps: Sequ
     reached: list = []
     coll: list = []
     clean = True; stopped = False; timeout = True; mtm_px = None
+    touch_off: dict = {}; stop_off = None
     end = min(j + H, n - 1)
     for i in range(j + 1, end + 1):
         b = buckets[i]
+        off = i - j                                # bucket-offset ahead of the signal (>=1)
         if long:
             stop_hit = (b.low <= stop) if stop_exec == "touch" else (b.close_price <= stop)
             new = [k for k in range(K) if k not in reached and b.high >= tps[k]]
@@ -341,10 +345,15 @@ def first_passage_member(buckets: list, j: int, f: float, stop: float, tps: Sequ
             stop_hit = (b.high >= stop) if stop_exec == "touch" else (b.close_price >= stop)
             new = [k for k in range(K) if k not in reached and b.low <= tps[k]]
         if stop_hit and new:                       # collision -> ambiguous, bracket it
-            clean = False; coll = sorted(new); stopped = True; timeout = False; break
+            clean = False; coll = sorted(new); stopped = True; timeout = False; stop_off = off
+            for k in coll:
+                touch_off.setdefault(k, off)       # target-first timing (reached_hi assignment)
+            break
         if stop_hit:
-            stopped = True; timeout = False; break
+            stopped = True; timeout = False; stop_off = off; break
         if new:
+            for k in sorted(new):
+                touch_off[k] = off
             reached.extend(sorted(new))
             if len(reached) == K:                  # all TPs cleared before any stop -> full winner
                 timeout = False; break
@@ -352,7 +361,7 @@ def first_passage_member(buckets: list, j: int, f: float, stop: float, tps: Sequ
         mtm_px = float(buckets[end].close_price)
     return Passage(idx=j, clean=clean, reached_lo=tuple(reached),
                    reached_hi=tuple(sorted(reached + coll)), stopped=stopped,
-                   timeout=timeout, mtm_px=mtm_px)
+                   timeout=timeout, mtm_px=mtm_px, touch_off=touch_off, stop_off=stop_off)
 
 
 def first_passage(buckets: list, members: Sequence[int], f: float, stop: float, tps: Sequence[float],
