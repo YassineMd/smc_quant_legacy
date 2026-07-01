@@ -1114,6 +1114,25 @@ runs on a SPAWN worker PROCESS (2nd core) — the broadcast loop NEVER blocks du
   cleanly reaps the worker — `OB POOL shut down cleanly` prints (clean join vs the old abrupt death).
 - **✅ LATENCY DONE — real-time.** 3-4s/5s → Step A (pool) → A.2 (history rescan dropped) → OI off-loop →
   **~0.37s max, real-time; structurally solved (4h-proven), recompute off-loop in BOTH places.**
+- **✅ MACHINE RIGHT-SIZED e2-standard-2 → e2-medium (2026-07-01).** The June-19 upsize to e2-standard-2
+  (2 DEDICATED vCPU / 8 GB) was CRISIS SCAFFOLDING during the latency war; those freezes were then solved in
+  SOFTWARE (recompute offload/gating + OI off-loop, above — 70%→~14% CPU on the SAME box), so the doubled
+  machine was dead cost. Reverted to **e2-medium** (2 shared vCPU / 4 GB) for cost right-sizing (~$50→~$25/mo).
+  Yassine ran the resize; this session did before/after verification (read-only).
+  - **Maintenance gaps (accepted, documented — DECISIONS, not capture bugs):** gap#1 REHEARSAL bounce
+    **22:20:21–22:22:48 UTC** (VM stop/start; first attempt skipped `set-machine-type` → NO machine change);
+    gap#2 RESIZE **T1 22:25:02 → T2 22:26:37 UTC**. Captured normally between (22:22:48–22:25:02).
+  - **Phase-A (e2-standard-2) vs Phase-B (e2-medium)** — same-day/same-market depth-cadence probe
+    (`depth_deltas` inter-arrival, the 0.26/0.37 gap-probe basis): **p99 0.296→0.290s · max 0.356→0.344s ·
+    avg 0.260→0.257s** — NO regression on the shared core (marginally better). ProcessPoolExecutor worker
+    present on the 2nd core (2 logical CPUs); OB recompute still off-loop.
+  - **Phase-B verification — ALL PASS:** (1) service active, NRestarts=0, 0 errors, 5 engines rehydrated,
+    feeds up (OI-liveness 4/6 recent 1m buckets); (2) closes incrementing 1m/5m/15m; (3) gap probe = EXACTLY
+    the two maintenance gaps, clean before/between/after (probe boundaries ~15-20s off the noted times =
+    Binance event-time vs command-time basis, not anomalies); (4) depth reconstruction **39/39** post-T2
+    intervals bit-faithful (re-anchor-at-every-snapshot intact); (5) **loop-latency go/no-go PASS**
+    (p99 0.290 ≤ 0.36, max 0.344 < 0.6); (6) memory **706 MB warmed / 2.8 GB free** on 4 GB (still refilling
+    the 6h depth window — watch it plateau). Rollback if ever needed = 5-min `set-machine-type` back to standard-2.
 - **TWO consciously-ACCEPTED benign residuals (decisions, NOT gaps):**
   1. **~0.2s/10s footprint re-serialize** (history sync `json.dumps` ~1500 nodes ×5 tfs, mostly static). NOT
      fixed — the skip-unchanged lever has a RACE caveat (footprints mutate live); a real race risk for 0.2s of
