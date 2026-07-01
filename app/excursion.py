@@ -290,3 +290,100 @@ def build_cohort(buckets: list, anchor_idx: int, direction: str,
         raise InsufficientSample("effN %d < MIN_EFF_N %d" % (en, config.MIN_EFF_N), en)
     return Cohort(members=members, mode=mode, eff_n=en, n_used=n_used,
                   radius=radius, verdict=verdict, censored_fraction=cens)
+
+
+# --------------------------------------------------------------------------- #
+# First-passage evaluator (commit 3) — competing risks, ENVELOPE + A2 bracket.
+#
+# Per member, walk the forward window buckets[j+1 .. j+H] and find which barrier is touched FIRST
+# for a fixed geometry (fill ``f``, ``stop``, nested ``tps`` ordered nearest->farthest). ENVELOPE
+# only (bucket OHLC) — no tick order (tape-exact rides a later increment, addendum A3).
+#
+# SAME-BUCKET AMBIGUITY (addendum A2, supersedes the spec's conservative-stop-first default): a bucket
+# that holds BOTH the stop AND an as-yet-unreached TP has UNKNOWN intrabar order -> ``clean=False``.
+# We do NOT assume; we BRACKET: reached_lo assigns the collision stop-first (TPs NOT counted),
+# reached_hi assigns it target-first (TPs counted). Clean members have reached_lo == reached_hi.
+#
+# EXECUTION (spec §6/§7): TP touch reads HIGH/LOW (a wick tags a resting limit); the stop executes on
+# TOUCH by default (``STOP_EXEC='touch'``; the stop LEVEL is close-anchored in commit 5). NOTE a
+# §6-vs-§7 tension (stop touch vs close in the evaluator) is surfaced at the commit-3 checkpoint; the
+# ``stop_exec`` arg lets the Architect pick. SHORT mirrors LONG by reflection (low<->high, <=<->>=).
+# --------------------------------------------------------------------------- #
+@dataclass
+class Passage:
+    """One member's first-passage resolution for a fixed geometry. ``reached_lo`` / ``reached_hi`` =
+    TP indices reached BEFORE the stop under the A2 stop-first / target-first assignment of same-bucket
+    collisions (equal when ``clean``). ``mtm_px`` = horizon-close price when ``timeout`` (mark-to-market,
+    -> R in the optimiser where the stop is known), else None."""
+    idx: int
+    clean: bool
+    reached_lo: tuple
+    reached_hi: tuple
+    stopped: bool
+    timeout: bool
+    mtm_px: Optional[float]
+
+
+def first_passage_member(buckets: list, j: int, f: float, stop: float, tps: Sequence[float],
+                         direction: str, H: int = H_DEFAULT, stop_exec: str = "touch") -> Passage:
+    n = len(buckets); K = len(tps)
+    long = direction == "long"
+    reached: list = []
+    coll: list = []
+    clean = True; stopped = False; timeout = True; mtm_px = None
+    end = min(j + H, n - 1)
+    for i in range(j + 1, end + 1):
+        b = buckets[i]
+        if long:
+            stop_hit = (b.low <= stop) if stop_exec == "touch" else (b.close_price <= stop)
+            new = [k for k in range(K) if k not in reached and b.high >= tps[k]]
+        else:
+            stop_hit = (b.high >= stop) if stop_exec == "touch" else (b.close_price >= stop)
+            new = [k for k in range(K) if k not in reached and b.low <= tps[k]]
+        if stop_hit and new:                       # collision -> ambiguous, bracket it
+            clean = False; coll = sorted(new); stopped = True; timeout = False; break
+        if stop_hit:
+            stopped = True; timeout = False; break
+        if new:
+            reached.extend(sorted(new))
+            if len(reached) == K:                  # all TPs cleared before any stop -> full winner
+                timeout = False; break
+    if timeout:
+        mtm_px = float(buckets[end].close_price)
+    return Passage(idx=j, clean=clean, reached_lo=tuple(reached),
+                   reached_hi=tuple(sorted(reached + coll)), stopped=stopped,
+                   timeout=timeout, mtm_px=mtm_px)
+
+
+def first_passage(buckets: list, members: Sequence[int], f: float, stop: float, tps: Sequence[float],
+                  direction: str, H: int = H_DEFAULT, stop_exec: str = "touch") -> dict:
+    """A2 bracket over ``members`` for a fixed geometry. Returns per-TP ``P_up[k] = (lo, clean, hi)``
+    (touch TP_k before stop), ``P_dn = (lo, clean, hi)`` (stop before ANY tp), ``P_timeout`` (clean,
+    unambiguous), ``amb_frac``, and the per-member ``passages`` (for the scale-out replay, commit 7).
+    ``clean`` = rate over the unambiguous members only (order already determined). lo/hi = ALL members
+    with same-bucket mass assigned pessimistically / optimistically for that quantity."""
+    K = len(tps)
+    ps = [first_passage_member(buckets, j, f, stop, tps, direction, H, stop_exec) for j in members]
+    N = len(ps)
+    clean_ps = [p for p in ps if p.clean]
+
+    def _rate(pred, pool):
+        m = len(pool)
+        return (sum(1 for p in pool if pred(p)) / m) if m else 0.0
+
+    P_up = {}
+    for k in range(K):
+        lo = _rate(lambda p, k=k: k in p.reached_lo, ps)     # stop-first assignment -> fewer TPs counted
+        hi = _rate(lambda p, k=k: k in p.reached_hi, ps)     # target-first -> more
+        cl = _rate(lambda p, k=k: k in p.reached_lo, clean_ps)   # clean: lo == hi
+        P_up[k] = (lo, cl, hi)
+    # stop before ANY tp: "reached empty AND stopped". Ambiguous collisions push this UP under
+    # target-first-empty (reached_hi) vs stop-first; bracket = [target-first, stop-first].
+    dn_hi = _rate(lambda p: p.stopped and not p.reached_hi, ps)   # target-first -> fewest pure-stops
+    dn_lo = _rate(lambda p: p.stopped and not p.reached_lo, ps)   # stop-first  -> most pure-stops
+    dn_cl = _rate(lambda p: p.stopped and not p.reached_lo, clean_ps)
+    P_dn = (min(dn_hi, dn_lo), dn_cl, max(dn_hi, dn_lo))
+    P_timeout = _rate(lambda p: p.timeout, ps)                   # unambiguous (a collision -> stopped)
+    return dict(P_up=P_up, P_dn=P_dn, P_timeout=P_timeout,
+                amb_frac=(1.0 - len(clean_ps) / N) if N else 0.0,
+                n=N, n_clean=len(clean_ps), passages=ps)

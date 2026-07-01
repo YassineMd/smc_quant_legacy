@@ -394,6 +394,9 @@ MATCH_RADIUS_MULT = 2.0             # cohort = seed members within this × the a
 MATCH_RADIUS_FLOOR = 0.25           # z-units — floors the adaptive radius so identical pools never -> 0/NaN
 COHORT_MIN_NONZERO = 5              # need >= this many NONZERO seed distances, else InsufficientSample
 MIN_EFF_N = 8                       # gate: below this effN, propose_zones -> InsufficientSample (draw only a note)
+# commit 3 — first-passage evaluator
+STOP_EXEC = "touch"                 # stop order executes on TOUCH (default; level is close-anchored in commit 5). {touch, close}
+AMB_WARN = 0.70                     # same-bucket ambiguous fraction above this -> warn + drop confidence (addendum A2)
 
 
 def size_bin(qty: float) -> int:
