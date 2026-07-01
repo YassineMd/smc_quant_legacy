@@ -123,6 +123,35 @@ def _bucket_from_dict(d: dict) -> QuantBucket:
     return b
 
 
+def bucket_from_snapshot(s: dict) -> QuantBucket:
+    """Rebuild a QuantBucket from a BROADCAST :class:`BucketSnapshot` dict (the pipe form the TERMINAL
+    holds — keys ``open``/``close``/``vol_mult``/``liq_short``/``liq_long``), distinct from
+    :func:`_bucket_from_dict` (the on-disk ``_bucket_to_dict`` form — ``open_price``/``close_price``/
+    ``vel_ratio``/``liquidations``). Lets the terminal run the excursion core on LIVE snapshot data with no
+    local history.db (it talks to the remote daemon). ``target_vol`` isn't in the snapshot -> DEFAULT (only
+    the VPIN denominator, whose fallback already handles it); ``liq_short``/``liq_long`` are re-expressed as
+    a 2-entry liquidations list so a downstream ``full_snapshot()`` re-derives them faithfully (BUY=short-
+    liq, SELL=long-liq, per QuantBucket._assemble)."""
+    liq = []
+    if s.get("liq_short", 0.0):
+        liq.append({"side": "BUY", "qty": float(s["liq_short"])})
+    if s.get("liq_long", 0.0):
+        liq.append({"side": "SELL", "qty": float(s["liq_long"])})
+    return _bucket_from_dict({
+        "target_vol": config.DEFAULT_TARGET_VOL,
+        "start_time": s.get("start_time", 0.0), "end_time": s.get("end_time", 0.0),
+        "curr_vol": s.get("curr_vol", 0.0), "buy_vol": s.get("buy_vol", 0.0), "sell_vol": s.get("sell_vol", 0.0),
+        "opL": s.get("opL", 0.0), "opS": s.get("opS", 0.0), "clL": s.get("clL", 0.0), "clS": s.get("clS", 0.0),
+        "churn": s.get("churn", 0.0), "high": s.get("high"), "low": s.get("low"),
+        "open_price": s.get("open", 0.0), "close_price": s.get("close", 0.0),
+        "levels": s.get("levels") or {}, "liquidations": liq,
+        "vel_ratio": s.get("vol_mult", 1.0), "poc_price": s.get("poc_price", 0.0),
+        "buyer_er": s.get("buyer_er", 1.0), "seller_er": s.get("seller_er", 1.0),
+        "sz_cb": s.get("sz_cb", []), "sz_cs": s.get("sz_cs", []),
+        "sz_vb": s.get("sz_vb", []), "sz_vs": s.get("sz_vs", []),
+    })
+
+
 # ---------------------------------------------------------------------------
 # Legacy JSON path — kept ONLY for one-time migration into SQLite
 # ---------------------------------------------------------------------------

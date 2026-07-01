@@ -482,14 +482,22 @@ def format_excursion_lines(d: dict, horizons=(20, 10, 5)) -> list:
         lines.append("⚠ THIN — %d independent obs, tails unstable" % M)
     lines.append("HISTORICAL DISTRIBUTION — %d similar buckets, ~%d independent (eff_n) — not a forecast"
                  % (d["cohort_n"], M))
-    lines.append("context: %s (%s bucket) · typical bar dispersion = %.0ft · (N) = x a random-walk move (disp·√h)"
-                 % (d["verdict"], d["direction"], eff))
+    lines.append("context: %s (%s bucket) · typical bar dispersion = %.0ft" % (d["verdict"], d["direction"], eff))
+    lines.append("  (N) = x a diffusive move (disp·√h) — comparable across anchors; read DEPARTURES (a band at 8 where"
+                 " others read ~5), NOT the absolute — ~5 at p90 is the cross-anchor norm, not an anomaly")
 
     def hdr(h):
         w = d["horizons"][h]["wall_secs"]
         return "h=%d (~%dm)" % (h, round(w / 60.0))
 
-    def diff(v, h):                                              # excursion in units of a diffusive move
+    def diff(v, h):
+        # excursion in units of a diffusive (random-walk) move: |ticks| / (typ_disp * sqrt(h)). Makes the
+        # figure horizon-invariant + comparable across anchors (the raw tick / effort_ticks buried a ~sqrt(h)
+        # geometry factor). CAVEAT one level down (NOT a v1 fix): sqrt(h) assumes CONSTANT volatility over the
+        # horizon, but volume-bucket vol CLUSTERS — a bar opening a volatile stretch genuinely exceeds sqrt(h),
+        # one opening a calm stretch falls short, from real vol-autocorrelation, not regime signal. So a
+        # persistent >~5 / <~5 reading is only SUGGESTIVE of regime, not conclusive: it can be the clock-speed
+        # ghost one layer deeper. Honest about magnitude; merely suggestive about regime.
         return abs(v) / (eff * math.sqrt(h))
     lines.append("             " + "".join("%-14s" % hdr(h) for h in horizons) + " [h = VOLUME buckets]")
     for p in bands:
