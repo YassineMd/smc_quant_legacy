@@ -911,6 +911,14 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
   branches; the 3 no-selection teardowns already hide every registered badge, so they're covered.
 - Terminal-only, no daemon change.
 
+**⛔ ZONE PLANNER / EXCURSION LINE — DROPPED / CLOSED (2026-07-01, operator decision).** The whole line is
+closed: prescriptive planner shelved on the 11a NO-GO (no 1m forward edge; curated ≈ random; 5m = drift beta
+within SE), and the descriptive excursion readout that replaced it was ALSO dropped by decision before wiring.
+**Nothing was ever wired into the terminal or daemon** — `excursion.py` / `zone_planner.py` imported by nothing
+live (grep-verified); `persistence.bucket_from_snapshot` called by nothing. Committed code (c1–c7, R1,
+descriptive readout `3ab1b5d`/`2f6411a`) RETAINED as inert validated reference — do NOT resume, wire, or deploy
+without a FRESH MANDATE. Daemon + deployed config untouched. The record below is CLOSED history, kept for reference.
+
 **ZONE PLANNER — `propose_zones(direction, anchor)`, commits 1–7 GREEN (2026-07-01). Terminal-side, envelope-only, NOT yet UI-wired.**
 NEW modules `app/excursion.py` + `app/zone_planner.py` — pure / no-Qt / no-daemon, built to `ZONE_PLANNER_SPEC` +
 addendum v1.1 (the spec lives in the session transcript, not a repo file). Emits a `ZonePlan` (blue entry / red stop /

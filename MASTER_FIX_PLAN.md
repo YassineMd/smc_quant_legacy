@@ -1157,6 +1157,16 @@ exhaustively, all CAUSAL / out-of-sample / base-rate-guarded:
 
 ### ZONE PLANNER (`propose_zones`) — statistical zone-outcome model, commits 1–7 GREEN (2026-07-01)
 
+> ⛔ **LINE DROPPED / CLOSED — 2026-07-01 (operator decision).** The ENTIRE excursion / zone-planner line
+> is closed: the prescriptive planner was shelved on the **11a NO-GO** (no forward edge on 1m; curated ≈
+> random; the 5m "signal" is market-drift beta within SE), and the **descriptive readout** that replaced it
+> was ALSO dropped by decision before it was wired. **Nothing was ever wired into the terminal or the daemon**
+> — `excursion.py` / `zone_planner.py` are imported by NOTHING in the live app (grep-verified), and
+> `persistence.bucket_from_snapshot` is called by nothing. The committed code (c1–c7 `669bec4`→`d10900f`,
+> R1 `03d5194`, descriptive readout `3ab1b5d`/`2f6411a`) is **RETAINED as inert, validated, documented
+> reference** — NOT to be resumed, wired, or deployed without a **fresh mandate**. Daemon + deployed config
+> untouched. The record below is preserved for that reference; treat it as CLOSED history, not a live plan.
+
 **What it is.** `zone_planner.propose_zones(direction, anchor) -> ZonePlan`: an entry/stop/TP plan for a
 structural anchor, reconciled with a **statistical anchor** (cohort forward-excursion quantiles + first-
 passage). NEW modules `app/excursion.py` + `app/zone_planner.py` — **pure, terminal-side, envelope-only,
