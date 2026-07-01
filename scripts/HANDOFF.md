@@ -946,6 +946,16 @@ confidence; 10 drawing_tools; 11 verify-on-screen).
 are pure — no numpy); **monkeypatch the zone-planner config consts in each test script** (deployed `config.py` predates the
 block — never overwrite it). history.db is LIVE (10000 buckets/tf, sliding) so anchor indices drift run-to-run; that's fine.
 
+**ZONE PLANNER — 11a NO-GO, PRESCRIPTIVE LAYER SHELVED (2026-07-01).** The R2 headless edge study returned NO-GO: curated
+structural anchors (absorption births / OB confirms / 12-state verdicts, at zone FORMATION) are indistinguishable from random
+on 1m (net med −1.10 vs −1.04; 1% clear cost). A market-entry symmetric-barrier control pinned it to **~0 directional forward
+edge** (P(fav)≈P(adv), curated ≤ random); the 5m "edge" is pure market-drift beta within SE. Expected null for an arbitraged
+perp. **Commits 8/9/10 SHELVED — don't gather the unblocks or re-attempt the probability layer; daemon untouched. Commits
+1-7 + R1 RETAINED** as validated measurement machinery. The **recovered deliverable** is a DESCRIPTIVE excursion instrument
+(survival / excursion-vs-horizon / first-passage as a labeled historical-distribution readout — the original Mode-10 MAE/MFE
+ask) on the retained machinery, no cost/daemon/gate. NO-GO scope is FORMATION-conditioned only; the RETEST-conditioned form
+(excursion from a touch of a still-live zone) is untested + open. See MEMORY `zone-planner-nogo-descriptive-pivot`.
+
 **Mode-10 selection PERF pass — 5 correctness-preserving fixes (`3b176e6`→`a89a2fd`).** Profiled first on real
 data (N=200/400/800); the theory was REVISED: `rolling_share`'s O(N²) is real but small (~12% of the phase
 block); the bigger costs are the trailing-50 norm re-sums and the per-bucket exp/log posteriors (`conf_traj`,

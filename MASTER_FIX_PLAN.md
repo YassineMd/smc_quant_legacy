@@ -1199,8 +1199,21 @@ re-base, effN not raw N, censoring, measured widths).
   Phase-2A symmetric envelope + limit-fill adverse selection); +EV at CURATED structural anchors is the
   commit-11 verify-on-screen test, not a random-anchor sweep.
 
-**GATED next:** c8 cost model (fee tier + size-field + depth_window servable), c9 confidence assembly
-(continuous ambiguity haircut, not binary AMB_WARN), c10 drawing_tools, c11 verify-on-screen.
+**11a EDGE STUDY — NO-GO (2026-07-01). PRESCRIPTIVE LAYER SHELVED.** Ruling R2's headless go/no-go
+(curated structural anchors vs random, commit-7 machinery + inline placeholder cost) returned NO-GO:
+curated ≈ random on 1m (net med −1.10 vs −1.04; 1% clear cost). A market-entry symmetric-barrier control
+attributed it to **~0 directional forward edge** (P(fav)≈P(adv), curated ≤ random); the 5m "signal" is
+pure market-drift beta within SE. Expected null for a top-liquidity arbitraged perp.
+- **Commits 8 (cost) / 9 (confidence) / 10 (prescriptive drawing_tools) SHELVED** — do NOT gather the
+  commit-8 unblocks, do NOT re-attempt the probability-zone layer. Daemon untouched throughout.
+- **Commits 1-7 + R1 RETAINED** as validated measurement machinery (they produced the NO-GO honestly).
+- **Scope:** the NO-GO kills the FORMATION-conditioned predictor; the RETEST-conditioned form (excursion
+  forward from a touch of a still-live zone) was never tested and remains open (drift-matched baselines).
+- **Recovered deliverable:** a DESCRIPTIVE excursion instrument (survival / excursion-vs-horizon / first-
+  passage as a historical-distribution overlay, labeled NOT optimal-zone advice) — the original Mode-10
+  MAE/MFE ask, on the retained machinery, no cost/daemon/gate. Ranked path: (1) ship the descriptive
+  readout [no-regret]; (2) drift-matched 5m/15m directional control [loop-closer]; (3) retest-conditioned
+  predictor [optional bet].
 
 ---
 
