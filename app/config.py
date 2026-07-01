@@ -397,6 +397,24 @@ MIN_EFF_N = 8                       # gate: below this effN, propose_zones -> In
 # commit 3 — first-passage evaluator
 STOP_EXEC = "touch"                 # stop order executes on TOUCH (default; level is close-anchored in commit 5). {touch, close}
 AMB_WARN = 0.70                     # same-bucket ambiguous fraction above this -> warn + drop confidence (addendum A2)
+# commit 4 — zone_planner + ENTRY box (NEW params: set once by first-principle, FROZEN, never tuned vs a label)
+DEFAULT_SIZE = 1.0                  # position size (contracts) — slippage's sole consumer (commit 8); v1 placeholder (A5.2)
+ENTRY_PULLBACK_LOOKBACK = 5         # buckets — pullback-depth window for the statistical fill band (§5, §13 ~5)
+ENTRY_DEPTH_Q_LO = 0.40            # fill-band SHALLOW edge = P0 -/+ q40(pullback depth) (§5)
+ENTRY_DEPTH_Q_HI = 0.60            # fill-band DEEP    edge = P0 -/+ q60(pullback depth) (§5)
+SNAP_TOL_TICKS = 15                # ticks ($0.15 SOL) — magnet-snap / struct∩stat reconcile tolerance (§5, §7, §13)
+THICK_DISP_MULT = 1.0             # thickness floor stat term = THICK_DISP_MULT * effort_ticks*TICK (=1 std of intrabar price) (§5)
+WINNER_SHIFT_TOL = 0.05           # two-pass converges when |Δ winner set| / |winners| < this (§4)
+MAX_REFINE = 6                     # winners->stop refinement cap. §4 estimated 2, but on 1m the map is a
+                                   # CONTRACTING fixed point (winner selection tightens q85(D|winners)
+                                   # incrementally) that settles in 3-5, not 2 — measured, monotone, no
+                                   # limit cycle. 6 = observed-max(5) + headroom; loop also breaks on cycle.
+STAT_ONLY_CONF = 0.6             # box confidence x this when it has NO structural anchor (§5 "no structural entry anchor")
+G_AGREE_LAMBDA = 1.0             # g_agree = exp(-|struct-stat| / (LAMBDA * bandwidth)) — struct∩stat disagreement haircut (§10)
+N0_EFFN = 30                       # eff_n confidence half-saturation: g_effn = eff_n/(eff_n+N0_EFFN) (§10)
+# quantile levels — used by the commit-4 two-pass (provisional stop/TP1); STOP box (5) + TP boxes (6) reuse them
+STOP_HEAT_Q = 0.85                # tight stop edge = f -/+ q85(winner MAE) — clears 85% of winner heat (§6, §13)
+TP_QUANTILES = (0.50, 0.75, 0.90)  # TP1/2/3 levels = f +/- q(favourable excursion | filled) (§7, §13, A5.4)
 
 
 def size_bin(qty: float) -> int:
