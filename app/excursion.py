@@ -152,10 +152,27 @@ def survival(values, levels):
 
 
 def eff_n(n_used: int, H: int) -> int:
-    """``effN = ceil(N_used / H)`` — overlapping H-bucket forward windows share a volume clock, so
-    the real independent count is ~ the stride-``H`` non-overlap count (spec §10). Every
-    quantile/probability downstream is quoted on ``eff_n``, never raw N."""
+    """``ceil(N_used / H)`` — the CONTIGUOUS-selection floor (spec §10). Retired as the eff_n
+    DEFINITION by ruling R1 (it assumes maximal overlap a scattered cohort doesn't have); kept only as
+    a conservative-floor annotation next to :func:`eff_n_packed`."""
     return int(math.ceil(n_used / H)) if H > 0 else int(n_used)
+
+
+def eff_n_packed(member_indices, H: int) -> int:
+    """``eff_n`` (ruling R1) = size of the maximum set of members with pairwise-DISJOINT H-forward
+    windows. Greedy packing over global-time-sorted members: keep a member iff its window starts
+    ``>= H`` buckets after the last kept member's (windows ``[j+1, j+H]`` are disjoint iff the start
+    indices differ by ``>= H``). Reduces to ``ceil(n/H)`` for a contiguous run, to the isolated-group
+    count when scattered, and is correct in the mixed case — one source of truth for BOTH the ``g_effn``
+    haircut and the E[R] band (the greedy-segment bootstrap resamples the very same units)."""
+    ms = sorted(member_indices)
+    if not ms:
+        return 0
+    kept = 1; last = ms[0]
+    for m in ms[1:]:
+        if m - last >= H:
+            kept += 1; last = m
+    return kept
 
 
 # --------------------------------------------------------------------------- #
@@ -191,11 +208,12 @@ class InsufficientSample(Exception):
 class Cohort:
     members: list                     # cohort bucket indices (all have a full H-future)
     mode: str
-    eff_n: int
+    eff_n: int                        # R1: greedy non-overlapping window count (drives haircut + band)
     n_used: int
     radius: Optional[float]           # adaptive radius (knn) or None (state)
     verdict: Optional[str]            # anchor 12-state verdict (state mode) or None
     censored_fraction: float          # of the same-context set, fraction lost to the H-horizon
+    eff_n_floor: int = 0              # ceil(n/H) conservative-floor annotation (divergence flag, R1)
 
 
 def _bucket_vpin(buckets: list) -> list:
@@ -285,11 +303,12 @@ def build_cohort(buckets: list, anchor_idx: int, direction: str,
         verdict = None
 
     n_used = len(members)
-    en = eff_n(n_used, H)
+    en = eff_n_packed(members, H)                 # R1: greedy disjoint-window count (not ceil(n/H))
+    en_floor = eff_n(n_used, H)                    # conservative-floor annotation
     if en < config.MIN_EFF_N:
         raise InsufficientSample("effN %d < MIN_EFF_N %d" % (en, config.MIN_EFF_N), en)
     return Cohort(members=members, mode=mode, eff_n=en, n_used=n_used,
-                  radius=radius, verdict=verdict, censored_fraction=cens)
+                  radius=radius, verdict=verdict, censored_fraction=cens, eff_n_floor=en_floor)
 
 
 # --------------------------------------------------------------------------- #

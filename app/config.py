@@ -411,7 +411,8 @@ MAX_REFINE = 6                     # winners->stop refinement cap. §4 estimated
                                    # limit cycle. 6 = observed-max(5) + headroom; loop also breaks on cycle.
 STAT_ONLY_CONF = 0.6             # box confidence x this when it has NO structural anchor (§5 "no structural entry anchor")
 G_AGREE_LAMBDA = 1.0             # g_agree = exp(-|struct-stat| / (LAMBDA * bandwidth)) — struct∩stat disagreement haircut (§10)
-N0_EFFN = 30                       # eff_n confidence half-saturation: g_effn = eff_n/(eff_n+N0_EFFN) (§10)
+N0_EFFN = 40                       # g_effn = eff_n/(eff_n+N0_EFFN); eff_n = greedy disjoint count (R1). Conservatism
+                                   # lives HERE, not in deflating the count. Calibrate against the 11b coverage pass.
 # quantile levels — used by the commit-4 two-pass (provisional stop/TP1); STOP box (5) + TP boxes (6) reuse them
 STOP_HEAT_Q = 0.85                # tight stop edge = f -/+ q85(winner MAE) — clears 85% of winner heat (§6, §13)
 TP_QUANTILES = (0.50, 0.75, 0.90)  # TP1/2/3 levels = f +/- q(favourable excursion | filled) (§7, §13, A5.4)

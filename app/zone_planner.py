@@ -77,8 +77,10 @@ class ZonePlan:
     fidelity: str
     confidence: float
     warnings: List[str] = field(default_factory=list)
-    gross_ci: Optional[dict] = None    # block-bootstrap band over eff_n on gross E[R] — the LOAD-BEARING 1m
+    gross_ci: Optional[dict] = None    # greedy-segment bootstrap band over eff_n on gross E[R] — LOAD-BEARING 1m
     er_bracket: Optional[tuple] = None  # uncertainty (commit 7); er_bracket = A2 [lo, hi] (hairline on 1m)
+    cohort_eff_n: int = 0              # R1: greedy eff_n over ALL cohort members (the MIN_EFF_N adequacy gate)
+    eff_n_floor: int = 0              # R1: ceil(n/H) conservative-floor annotation (divergence flag)
 
 
 # --------------------------------------------------------------------------- #
@@ -339,12 +341,17 @@ def propose_zones(direction: str, anchor: Anchor, cohort_mode: str = "knn",
     warns = list(ctx.get("warns", []))
     if ctx.get("amb_frac", 0.0) > config.AMB_WARN:
         warns.append("amb_frac %.2f > AMB_WARN — same-bucket order uncertain" % ctx["amb_frac"])
+    # R1: g_effn uses the PLAN eff_n = greedy disjoint count over the E[R] members (== the band's n_seg),
+    # ONE source of truth for the haircut and the band. cohort.eff_n (over all members) is the MIN_EFF_N
+    # adequacy gate. Two axes stay separate: g_effn (sample sufficiency) vs the E[R] CI (signal uncertainty).
+    plan_eff_n = gross_ci["n_seg"] if gross_ci else cohort.eff_n
     conf = min(entry.confidence, stop.confidence, *(t.confidence for t in tps)) if tps else entry.confidence
-    conf *= cohort.eff_n / (cohort.eff_n + config.N0_EFFN)                      # g_effn (§10)
+    conf *= plan_eff_n / (plan_eff_n + config.N0_EFFN)                          # g_effn (§10, R1)
     return ZonePlan(direction=direction, entry=entry, stop=stop, tps=tps,
                     scale_out=scale_out, gross_exp_r=gross, net_exp_r=gross,    # net==gross until cost (commit 8)
-                    cohort_n=cohort.n_used, eff_n=cohort.eff_n, fidelity="envelope",
-                    confidence=conf, gross_ci=gross_ci, er_bracket=er_bracket,
+                    cohort_n=cohort.n_used, eff_n=plan_eff_n, fidelity="envelope",
+                    confidence=conf, gross_ci=gross_ci, er_bracket=er_bracket, cohort_eff_n=cohort.eff_n,
+                    eff_n_floor=cohort.eff_n_floor,
                     warnings=warns + ["gross E[R] — cost model pending (commit 8)"])
 
 
@@ -567,29 +574,32 @@ def _best_weights(passages, levels, f, stop, direction):
     return best_w, best_er
 
 
-def _cluster_bootstrap(rvals, idxs, H, n_boot):
-    """CLUSTER bootstrap of E[R] — the correct dependence-aware CI for a cohort whose members are
-    temporally CLUSTERED-but-spread (a kNN cohort: feature-nearest buckets form dense local runs with big
-    gaps between, NOT a contiguous slide nor iid). Two members' forward windows overlap iff |Δidx| < H, so
-    a maximal within-H run is ONE independent unit; resample those clusters with replacement. The number of
-    clusters is the EMPIRICAL independent count — it sits ABOVE the ceil(n/H) floor (which assumes one all-
-    overlapping run) and BELOW raw n. This band, not the near-zero A2 bracket, is the load-bearing 1m CI."""
+def _greedy_bootstrap(rvals, idxs, H, n_boot):
+    """GREEDY-SEGMENT bootstrap of E[R] — resamples the SAME non-overlapping units that define eff_n
+    (ruling R1), so the band and the g_effn haircut share ONE source of truth. Members sorted by index
+    are cut into a new segment whenever a member starts a window disjoint from the current segment's start
+    (idx - seg_start >= H); the number of segments == excursion.eff_n_packed. Resample segments with
+    replacement (preserving within-segment dependence). Correct for contiguous (-> ceil(n/H) segments),
+    scattered (-> isolated-group count), and mixed cohorts alike."""
     import random
     n = len(rvals)
     if n < 2:
         return None
     order = sorted(range(n), key=lambda i: idxs[i])
     r = [rvals[i] for i in order]; ix = [idxs[i] for i in order]
-    clusters = [[r[0]]]
+    segs = [[r[0]]]; seg_start = ix[0]
     for k in range(1, n):
-        (clusters.append([r[k]]) if ix[k] - ix[k - 1] >= H else clusters[-1].append(r[k]))
-    nc = len(clusters)
+        if ix[k] - seg_start >= H:
+            segs.append([r[k]]); seg_start = ix[k]                # new disjoint window == a kept eff_n unit
+        else:
+            segs[-1].append(r[k])
+    ns = len(segs)
     rng = random.Random(0xC0FFEE)
     means = []
     for _ in range(n_boot):
         samp = []
-        while len(samp) < n:                                 # resample whole clusters (preserve within-cluster dep)
-            samp.extend(clusters[rng.randint(0, nc - 1)])
+        while len(samp) < n:
+            samp.extend(segs[rng.randint(0, ns - 1)])
         samp = samp[:n]
         means.append(sum(samp) / len(samp))
     means.sort()
@@ -597,7 +607,7 @@ def _cluster_bootstrap(rvals, idxs, H, n_boot):
     def pct(p):
         return means[min(n_boot - 1, max(0, int(p * n_boot)))]
     return dict(p16=pct(0.16), p84=pct(0.84), p2_5=pct(0.025), p97_5=pct(0.975),
-                n_clusters=nc, n_boot=n_boot)
+                n_seg=ns, n_boot=n_boot)
 
 
 def _optimise_scaleout(buckets, ctx, stop, tps, direction, H):
@@ -643,7 +653,7 @@ def _optimise_scaleout(buckets, ctx, stop, tps, direction, H):
             elif p.timeout and p.mtm_px is not None:
                 rj += remaining * (((p.mtm_px - f) if long else (f - p.mtm_px)) / max(TICK, risk))
         rvals.append(rj); idxs.append(p.idx)
-    ci = _cluster_bootstrap(rvals, idxs, H, config.BOOTSTRAP_N)
+    ci = _greedy_bootstrap(rvals, idxs, H, config.BOOTSTRAP_N)
 
     # ---- write the chosen geometry back into the boxes ----
     m = max(1, len(ps_all))
