@@ -77,6 +77,8 @@ class ZonePlan:
     fidelity: str
     confidence: float
     warnings: List[str] = field(default_factory=list)
+    gross_ci: Optional[dict] = None    # block-bootstrap band over eff_n on gross E[R] — the LOAD-BEARING 1m
+    er_bracket: Optional[tuple] = None  # uncertainty (commit 7); er_bracket = A2 [lo, hi] (hairline on 1m)
 
 
 # --------------------------------------------------------------------------- #
@@ -332,15 +334,18 @@ def propose_zones(direction: str, anchor: Anchor, cohort_mode: str = "knn",
     entry, ctx = _build_entry(buckets, anchor, cohort, direction, H)
     stop = _build_stop(buckets, anchor, cohort, ctx, direction, H)             # commit 5
     tps = _build_tps(buckets, anchor, cohort, ctx, stop, direction, H)         # commit 6
-    scale_out, gross = _optimise_scaleout(buckets, ctx, stop, tps, direction, H)   # commit 7
+    scale_out, gross, gross_ci, er_bracket = _optimise_scaleout(buckets, ctx, stop, tps, direction, H)  # commit 7
 
     warns = list(ctx.get("warns", []))
+    if ctx.get("amb_frac", 0.0) > config.AMB_WARN:
+        warns.append("amb_frac %.2f > AMB_WARN — same-bucket order uncertain" % ctx["amb_frac"])
     conf = min(entry.confidence, stop.confidence, *(t.confidence for t in tps)) if tps else entry.confidence
     conf *= cohort.eff_n / (cohort.eff_n + config.N0_EFFN)                      # g_effn (§10)
     return ZonePlan(direction=direction, entry=entry, stop=stop, tps=tps,
                     scale_out=scale_out, gross_exp_r=gross, net_exp_r=gross,    # net==gross until cost (commit 8)
                     cohort_n=cohort.n_used, eff_n=cohort.eff_n, fidelity="envelope",
-                    confidence=conf, warnings=warns + ["gross E[R] — cost model pending (commit 8)"])
+                    confidence=conf, gross_ci=gross_ci, er_bracket=er_bracket,
+                    warnings=warns + ["gross E[R] — cost model pending (commit 8)"])
 
 
 # --------------------------------------------------------------------------- #
@@ -504,5 +509,153 @@ def _build_tps(buckets, anchor, cohort, ctx, stop, direction, H):
     return tps
 
 
-def _optimise_scaleout(buckets, ctx, stop, tps, direction, H):  # commit 7 replaces
-    return [1.0 for _ in tps], 0.0
+def _er_replay(passages, levels, f, stop, direction, w, assign="lo"):
+    """§9 per-member ladder replay -> E[R]. ``assign`` picks which A2 collision assignment to read
+    (reached_lo = stop-first / reached_hi = target-first). Scale out w_k at each nested TP reached before
+    the stop; the un-taken remainder exits at -1R (stopped) or mark-to-market (timeout)."""
+    long = direction == "long"
+    risk = abs(f - stop)
+    if risk <= 0:
+        return -1e18
+    K = len(levels); tot = 0.0
+    for p in passages:
+        reached = set(p.reached_lo if assign == "lo" else p.reached_hi)
+        remaining = 1.0; rj = 0.0
+        for k in range(K):
+            if k in reached:
+                rk = ((levels[k] - f) if long else (f - levels[k])) / risk
+                rj += w[k] * rk; remaining -= w[k]
+            else:
+                break
+        if remaining > 1e-12:
+            if p.stopped:
+                rj += remaining * (-1.0)
+            elif p.timeout and p.mtm_px is not None:
+                rj += remaining * (((p.mtm_px - f) if long else (f - p.mtm_px)) / risk)
+        tot += rj
+    return tot / max(1, len(passages))
+
+
+def _weight_grid(K):
+    """Coarse simplex grid: w_k >= W_MIN, sum == 1 (K<=3 -> <=2 free weights)."""
+    step = config.WEIGHT_STEP; wmin = config.W_MIN
+    out = []
+    if K == 1:
+        return [(1.0,)]
+    n = int(round((1.0 - K * wmin) / step))
+    if K == 2:
+        for i in range(n + 1):
+            w0 = wmin + i * step
+            out.append((round(w0, 4), round(1.0 - w0, 4)))
+    else:  # K == 3
+        for i in range(n + 1):
+            w0 = wmin + i * step
+            for j in range(n - i + 1):
+                w1 = wmin + j * step
+                w2 = 1.0 - w0 - w1
+                if w2 >= wmin - 1e-9:
+                    out.append((round(w0, 4), round(w1, 4), round(w2, 4)))
+    return out or [tuple(1.0 / K for _ in range(K))]
+
+
+def _best_weights(passages, levels, f, stop, direction):
+    best_w, best_er = None, -1e18
+    for w in _weight_grid(len(levels)):
+        er = _er_replay(passages, levels, f, stop, direction, w, "lo")
+        if er > best_er:
+            best_er, best_w = er, w
+    return best_w, best_er
+
+
+def _cluster_bootstrap(rvals, idxs, H, n_boot):
+    """CLUSTER bootstrap of E[R] — the correct dependence-aware CI for a cohort whose members are
+    temporally CLUSTERED-but-spread (a kNN cohort: feature-nearest buckets form dense local runs with big
+    gaps between, NOT a contiguous slide nor iid). Two members' forward windows overlap iff |Δidx| < H, so
+    a maximal within-H run is ONE independent unit; resample those clusters with replacement. The number of
+    clusters is the EMPIRICAL independent count — it sits ABOVE the ceil(n/H) floor (which assumes one all-
+    overlapping run) and BELOW raw n. This band, not the near-zero A2 bracket, is the load-bearing 1m CI."""
+    import random
+    n = len(rvals)
+    if n < 2:
+        return None
+    order = sorted(range(n), key=lambda i: idxs[i])
+    r = [rvals[i] for i in order]; ix = [idxs[i] for i in order]
+    clusters = [[r[0]]]
+    for k in range(1, n):
+        (clusters.append([r[k]]) if ix[k] - ix[k - 1] >= H else clusters[-1].append(r[k]))
+    nc = len(clusters)
+    rng = random.Random(0xC0FFEE)
+    means = []
+    for _ in range(n_boot):
+        samp = []
+        while len(samp) < n:                                 # resample whole clusters (preserve within-cluster dep)
+            samp.extend(clusters[rng.randint(0, nc - 1)])
+        samp = samp[:n]
+        means.append(sum(samp) / len(samp))
+    means.sort()
+
+    def pct(p):
+        return means[min(n_boot - 1, max(0, int(p * n_boot)))]
+    return dict(p16=pct(0.16), p84=pct(0.84), p2_5=pct(0.025), p97_5=pct(0.975),
+                n_clusters=nc, n_boot=n_boot)
+
+
+def _optimise_scaleout(buckets, ctx, stop, tps, direction, H):
+    """§9 — jointly search the stop over [wide, tight] and the scale-out weights over the simplex to
+    maximise the CLEAN-point E[R] (A2). Mutates ``stop`` and ``tps`` in place (line/prob/exp_r), returns
+    (scale_out, gross_ER, gross_ci, er_bracket). Bootstrap band is the load-bearing 1m uncertainty."""
+    long = direction == "long"
+    f = ctx["f"]; filled = ctx["filled"]
+    levels = [t.line for t in tps]; K = len(levels)
+    lo, hi = stop.lo, stop.hi
+    N = config.STOP_GRID_N
+    cands = [_tick(lo + (hi - lo) * k / (N - 1)) for k in range(N)] if (N > 1 and hi > lo) else [stop.line]
+
+    best = None  # (stop, w, er_clean, passages_all)
+    for st in cands:
+        ps_all = [excursion.first_passage_member(buckets, j, f, st, levels, direction, H, config.STOP_EXEC)
+                  for j in filled]
+        clean = [p for p in ps_all if p.clean] or ps_all
+        w, er = _best_weights(clean, levels, f, st, direction)
+        if best is None or er > best[2]:
+            best = (st, w, er, ps_all)
+    best_stop, best_w, gross, ps_all = best
+    clean = [p for p in ps_all if p.clean] or ps_all
+
+    # A2 bracket on gross E[R] (hairline on 1m): lo=stop-first over all, hi=target-first over all
+    er_lo = _er_replay(ps_all, levels, f, best_stop, direction, best_w, "lo")
+    er_hi = _er_replay(ps_all, levels, f, best_stop, direction, best_w, "hi")
+
+    # block-bootstrap band over the clean per-member R at the chosen geometry
+    risk = abs(f - best_stop)
+    rvals, idxs = [], []
+    for p in clean:
+        reached = set(p.reached_lo); remaining = 1.0; rj = 0.0
+        for k in range(K):
+            if k in reached:
+                rk = ((levels[k] - f) if long else (f - levels[k])) / max(TICK, risk)
+                rj += best_w[k] * rk; remaining -= best_w[k]
+            else:
+                break
+        if remaining > 1e-12:
+            if p.stopped:
+                rj += remaining * (-1.0)
+            elif p.timeout and p.mtm_px is not None:
+                rj += remaining * (((p.mtm_px - f) if long else (f - p.mtm_px)) / max(TICK, risk))
+        rvals.append(rj); idxs.append(p.idx)
+    ci = _cluster_bootstrap(rvals, idxs, H, config.BOOTSTRAP_N)
+
+    # ---- write the chosen geometry back into the boxes ----
+    m = max(1, len(ps_all))
+    stop.line = best_stop
+    stop.prob = sum(1 for p in ps_all if p.stopped and not p.reached_lo) / m       # P_dn at the chosen line
+    stop.meta["risk_ticks"] = round(risk / TICK, 1); stop.meta["risk_pct"] = round(100 * risk / f, 3)
+    tp_leg_sum = 0.0
+    for k, t in enumerate(tps):
+        pr = sum(1 for p in ps_all if k in p.reached_lo) / m
+        rk = ((levels[k] - f) if long else (f - levels[k])) / max(TICK, risk)
+        t.prob = pr; t.line = levels[k]
+        t.exp_r = best_w[k] * rk * pr                                              # TP leg contribution
+        t.meta["R"] = rk; tp_leg_sum += t.exp_r
+    stop.exp_r = gross - tp_leg_sum                                                # stop + timeout legs
+    return list(best_w), gross, ci, (round(er_lo, 4), round(er_hi, 4))

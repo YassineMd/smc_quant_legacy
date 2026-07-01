@@ -421,6 +421,11 @@ STOP_WIDE_Q = 0.95               # statistical wide-edge fallback (no structural
 STOP_GRID_N = 13                 # stop-search resolution over [wide, tight] for the argmax-E[R] recommended line (§6/§9)
 # commit 6 — TP boxes
 TP_BW_DQ = 0.05                  # TP box thickness = local favourable-excursion width across [q-DQ, q+DQ] (§7)
+# commit 7 — scale-out optimiser
+W_MIN = 0.20                    # min scale-out weight per TP so a scalp always de-risks at TP1 (§9, §13)
+WEIGHT_STEP = 0.05              # coarse simplex grid step for weight optimisation (K<=3 -> <=2 free weights) (§9)
+BOOTSTRAP_N = 1000             # block-bootstrap resamples for the E[R] CI (block length ~ H buckets) — the
+                                # LOAD-BEARING 1m uncertainty band (statistical, not path-ordering; addendum)
 
 
 def size_bin(qty: float) -> int:
