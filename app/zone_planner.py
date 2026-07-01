@@ -347,15 +347,104 @@ def propose_zones(direction: str, anchor: Anchor, cohort_mode: str = "knn",
 # PROVISIONAL stubs — replaced by commits 5 / 6 / 7. Kept minimal + coherent so commit 4 returns a
 # valid, testable ZonePlan. Each derives from the two-pass provisional levels already in ctx.
 # --------------------------------------------------------------------------- #
-def _build_stop(buckets, anchor, cohort, ctx, direction, H):   # commit 5 replaces
+def _wick_buffer(buckets, members, delta, direction, H):
+    """Measured wick buffer w = q75(overshoot) over cohort members that HELD (close never broke the
+    member-frame invalidation). ``delta`` = invalidation distance below (long) / above (short) each
+    member's signal. overshoot = how far the WICK poked beyond the level while the CLOSE held — this is
+    exactly what a touch-executed stop must sit beyond so a poke-that-held doesn't phantom-stop you (§6)."""
     long = direction == "long"
-    f = ctx["f"]
-    adv = [ctx["Df"][j] for j in ctx["winners"] if j in ctx["Df"]] or [ctx["Df"][j] for j in ctx["filled"]] or [0.0]
-    heat = _q(adv, config.STOP_HEAT_Q) or 0.0
-    line = _tick(f - heat if long else f + heat)
-    return ZoneBox(kind="stop", lo=line, hi=line, start_epoch=float(anchor.anchor_epoch),
-                   end_epoch=float(anchor.anchor_epoch), span_buckets=H, line=line, prob=0.0, exp_r=0.0,
-                   fidelity="envelope", confidence=1.0, meta=dict(provisional=True))
+    over = []
+    n = len(buckets)
+    for j in members:
+        s_j = float(buckets[j].close_price)
+        inv_j = (s_j - delta) if long else (s_j + delta)
+        end = min(j + H, n - 1)
+        rng = range(j + 1, end + 1)
+        if not rng:
+            continue
+        if long:
+            ml = min(float(buckets[i].low) for i in rng)
+            held = all(float(buckets[i].close_price) > inv_j for i in rng)
+            if held and ml < inv_j:                              # held AND the WICK poked the level
+                over.append(inv_j - ml)
+        else:
+            mh = max(float(buckets[i].high) for i in rng)
+            held = all(float(buckets[i].close_price) < inv_j for i in rng)
+            if held and mh > inv_j:
+                over.append(mh - inv_j)
+    # condition on poke-and-hold: a held member that never reached the level says nothing about the wick
+    # buffer, so it must NOT be averaged in as a 0 (that zeroed q75). Empty set -> 0 (level too deep to poke).
+    return _q(over, config.WICK_BUFFER_Q) or 0.0
+
+
+def _single_tp_er(buckets, members, f, stop, tp1, direction, H):
+    """Provisional single-TP E[R] + P_dn at a candidate stop, first-passage (touch). Commit 7 replaces
+    this with the full-ladder replay; here it only ranks the stop band (§6 'argmax stop in [wide,tight]')."""
+    long = direction == "long"
+    risk = abs(f - stop)
+    if risk <= 0:
+        return -1e9, 1.0
+    er = 0.0; pdn = 0
+    for j in members:
+        p = excursion.first_passage_member(buckets, j, f, stop, [tp1], direction, H, config.STOP_EXEC)
+        if 0 in p.reached_lo:
+            er += ((tp1 - f) if long else (f - tp1)) / risk
+        elif p.stopped:
+            er += -1.0; pdn += 1
+        elif p.timeout and p.mtm_px is not None:
+            er += ((p.mtm_px - f) if long else (f - p.mtm_px)) / risk
+    m = max(1, len(members))
+    return er / m, pdn / m
+
+
+def _build_stop(buckets, anchor, cohort, ctx, direction, H):
+    """§6 STOP box. Tight edge = q85(winner MAE). Wide edge = close-based structural invalidation
+    (OB far edge / absorption plo·0.999) MINUS the measured wick buffer (touch-honest; buffer disabled
+    under STOP_EXEC='close' so it's never double-counted). Recommended line = argmax single-TP E[R] over
+    [wide, tight] — the EXACT price the evaluator tests under touch (draw-what-you-measure). Commit 7
+    re-searches this band jointly with the scale-out weights."""
+    long = direction == "long"
+    f = ctx["f"]; filled = ctx["filled"]; Df = ctx["Df"]; winners = ctx["winners"]; tp1 = ctx["tp1"]
+    p0 = float(anchor.p0)
+    Dwin = [Df[j] for j in winners if j in Df] or [Df[j] for j in filled] or [0.0]
+    t = _q(Dwin, config.STOP_HEAT_Q) or 0.0
+    stop_tight = (f - t) if long else (f + t)
+
+    struct = _entry_struct(ctx["obs"], ctx["marks"], p0, long)
+    warns = []; snapped = None; wick = 0.0; inval = None
+    if struct is not None:
+        inval = (struct["lo"] if long else struct["hi"]) if struct["rank"] == 1 \
+            else (struct["lo"] * 0.999 if long else struct["hi"] * 1.001)   # OB far edge / absorption death
+        delta = (p0 - inval) if long else (inval - p0)
+        wick = _wick_buffer(buckets, filled, delta, direction, H) if config.STOP_EXEC == "touch" else 0.0
+        stop_wide = (inval - wick) if long else (inval + wick)
+        snapped = struct["id"]
+    else:                                                                   # no structural invalidation (A4 common)
+        wq = _q(Dwin, config.STOP_WIDE_Q) or t
+        stop_wide = (f - wq) if long else (f + wq)
+        warns.append("no structural stop anchor")
+
+    lo, hi = sorted((_tick(stop_wide), _tick(stop_tight)))
+    # argmax single-TP E[R] over the band (touch); the recommended line == what P_dn is measured against
+    N = config.STOP_GRID_N
+    cands = [_tick(lo + (hi - lo) * k / (N - 1)) for k in range(N)] if (N > 1 and hi > lo) else [_tick(0.5 * (lo + hi))]
+    best_line, best_er, best_pdn = cands[0], -1e18, 1.0
+    for stop in cands:
+        er, pdn = _single_tp_er(buckets, filled, f, stop, tp1, direction, H)
+        if er > best_er:
+            best_line, best_er, best_pdn = stop, er, pdn
+    line = best_line
+    heat_cleared = (sum(1 for dwin in Dwin if dwin < abs(f - line)) / len(Dwin)) if Dwin else 0.0
+    conf = 1.0 if struct is not None else config.STAT_ONLY_CONF
+    ctx.setdefault("warns", []).extend(warns)
+    return ZoneBox(kind="stop", lo=lo, hi=hi, start_epoch=float(anchor.anchor_epoch),
+                   end_epoch=float(buckets[min(anchor.anchor_idx + H, len(buckets) - 1)].start_time),
+                   span_buckets=H, line=line, prob=best_pdn, exp_r=0.0, snapped_to=snapped,
+                   fidelity="envelope", confidence=conf,
+                   meta=dict(stop_wide=_tick(stop_wide), stop_tight=_tick(stop_tight), wick_buffer=wick,
+                             invalidation=(_tick(inval) if inval is not None else None),
+                             risk_ticks=round(abs(f - line) / TICK, 1), risk_pct=round(100 * abs(f - line) / f, 3),
+                             clears_winner_heat=heat_cleared, stop_exec=config.STOP_EXEC))
 
 
 def _build_tps(buckets, anchor, cohort, ctx, direction, H):    # commit 6 replaces

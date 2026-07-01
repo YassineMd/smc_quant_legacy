@@ -415,6 +415,10 @@ N0_EFFN = 30                       # eff_n confidence half-saturation: g_effn = 
 # quantile levels — used by the commit-4 two-pass (provisional stop/TP1); STOP box (5) + TP boxes (6) reuse them
 STOP_HEAT_Q = 0.85                # tight stop edge = f -/+ q85(winner MAE) — clears 85% of winner heat (§6, §13)
 TP_QUANTILES = (0.50, 0.75, 0.90)  # TP1/2/3 levels = f +/- q(favourable excursion | filled) (§7, §13, A5.4)
+# commit 5 — STOP box
+WICK_BUFFER_Q = 0.75              # wide edge buffer = q75(overshoot | cohort members that HELD) — touch-honest (§6, §13)
+STOP_WIDE_Q = 0.95               # statistical wide-edge fallback (no structural invalidation) = q95(winner MAE)
+STOP_GRID_N = 13                 # stop-search resolution over [wide, tight] for the argmax-E[R] recommended line (§6/§9)
 
 
 def size_bin(qty: float) -> int:
