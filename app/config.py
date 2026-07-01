@@ -383,6 +383,12 @@ SIZE_THR_RECOMPUTE_SECS = 3.0       # recompute cadence (distribution drifts slo
 SIZE_DEFAULT_LARGE = 273.0          # large cutoff (contracts) ~ p95
 SIZE_DEFAULT_SMALL = 1.9            # small cutoff (contracts) ~ p50
 
+# ---------------------------------------------------------------------------
+# Zone planner (ZONE_PLANNER_SPEC) — forward-excursion / first-passage engine.
+# Constants are added per commit as each concern lands; commit 1 needs only the horizon.
+# ---------------------------------------------------------------------------
+H_DEFAULT = 20                      # forward horizon in BUCKETS (a volume clock, NOT seconds) — spec §S1/§13
+
 
 def size_bin(qty: float) -> int:
     """Index 0..len(SIZE_HIST_EDGES) of the log-spaced size bin holding ``qty`` (contracts).
