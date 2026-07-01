@@ -899,6 +899,18 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
   pre-existing stale tests for relocated symbols `_exh_z_mult` / `recalibrate`). Daemon redeployed + verified LISTENING,
   trade_tape live. **Terminal exe NOT yet rebuilt** this round.
 
+**LARGE/SMALL panel polish — selection-total B/S label + `'8'` 3-state cycle + phase-panel spread badges (`523f914`, 2026-07-01). Terminal-only, exe NOT yet rebuilt.**
+- **Selection-total `B: x | S: y`** label under each LARGE/SMALL badge (`bc_lg_tot`/`bc_sm_tot`): the sum over the
+  WHOLE selection, dominant side **bold** with its colour as the fill (LARGE = contracts, SMALL = trade count). The
+  top badge stays the latest bar's winner; the new line is the whole-selection breakdown.
+- **`'8'` now CYCLES** hidden → LARGE only → LARGE+SMALL → hidden (`self._ls_mode` 0/1/2, persisted as `ls_mode`;
+  the old `largesmall` boolean migrates → 2). Band allocation, separators, draw, and per-panel clears all derive
+  from `lg_on = mode≥1` / `sm_on = mode≥2` — SMALL only ever shows alongside LARGE.
+- **Phase panels 5/6/7 gained the `%` spread badge** like 1/2/3 (`_set_spread_badge` under the phase-name keys):
+  the LOCKED UP-vs-DOWN lead, green if UP strongest / red if DOWN. Hidden in the per-phase-off and phase-section-off
+  branches; the 3 no-selection teardowns already hide every registered badge, so they're covered.
+- Terminal-only, no daemon change.
+
 **Mode-10 selection PERF pass — 5 correctness-preserving fixes (`3b176e6`→`a89a2fd`).** Profiled first on real
 data (N=200/400/800); the theory was REVISED: `rolling_share`'s O(N²) is real but small (~12% of the phase
 block); the bigger costs are the trailing-50 norm re-sums and the per-bucket exp/log posteriors (`conf_traj`,

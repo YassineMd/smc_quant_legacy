@@ -1147,6 +1147,11 @@ exhaustively, all CAUSAL / out-of-sample / base-rate-guarded:
   (p50) — **cutoffs fully automatic** from the daemon, no slider. Heatmap bubbles recolor blue=large buy /
   orange=large sell (`_hm_largeorder_side`). Liquidation **data** kept intact (state engine unchanged —
   `test_a3b_state_engine` green); only the `'8'` wave DISPLAY was removed. (Detail in `scripts/HANDOFF.md`.)
+- **BUILD (2026-07-01, `523f914`, terminal-only, exe NOT yet rebuilt) — LARGE/SMALL panel polish.** Added a
+  selection-total **`B: x | S: y`** line under each LARGE/SMALL badge (dominant side bold + its colour). `'8'`
+  now **cycles** hidden → LARGE only → LARGE+SMALL → hidden (`_ls_mode`, persisted; old boolean migrates → 2).
+  Phase panels **5/6/7 gained the `%` spread badge** like 1/2/3 (locked UP-vs-DOWN lead, green/red by dominant).
+  (Detail in `scripts/HANDOFF.md`.)
 
 ---
 
