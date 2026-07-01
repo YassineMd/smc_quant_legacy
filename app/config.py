@@ -388,6 +388,12 @@ SIZE_DEFAULT_SMALL = 1.9            # small cutoff (contracts) ~ p50
 # Constants are added per commit as each concern lands; commit 1 needs only the horizon.
 # ---------------------------------------------------------------------------
 H_DEFAULT = 20                      # forward horizon in BUCKETS (a volume clock, NOT seconds) — spec §S1/§13
+# commit 2 — cohort matcher (NEW-detector params: set once by definition, FROZEN, never tuned vs a label)
+KNN_K = 200                         # kNN cohort seed size (nearest by scaled-L2 over the feature vector)
+MATCH_RADIUS_MULT = 2.0             # cohort = seed members within this × the adaptive radius (prunes far tail)
+MATCH_RADIUS_FLOOR = 0.25           # z-units — floors the adaptive radius so identical pools never -> 0/NaN
+COHORT_MIN_NONZERO = 5              # need >= this many NONZERO seed distances, else InsufficientSample
+MIN_EFF_N = 8                       # gate: below this effN, propose_zones -> InsufficientSample (draw only a note)
 
 
 def size_bin(qty: float) -> int:

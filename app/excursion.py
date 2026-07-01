@@ -156,3 +156,137 @@ def eff_n(n_used: int, H: int) -> int:
     the real independent count is ~ the stride-``H`` non-overlap count (spec §10). Every
     quantile/probability downstream is quoted on ``eff_n``, never raw N."""
     return int(math.ceil(n_used / H)) if H > 0 else int(n_used)
+
+
+# --------------------------------------------------------------------------- #
+# Cohort matcher (commit 2) — member selection by 12-state verdict or scaled-L2 kNN.
+#
+# REPRESENTATION NOTE (verify-against-code catch): classify_bucket / region_state consume
+# BucketSnapshot ``.get()`` DICTS (keys open/close/vol_mult/liq_short/liq_long), NOT the QuantBucket
+# objects the loader returns nor the DB's _bucket_to_dict form. So the cohort layer runs on
+# ``b.full_snapshot()`` dicts (quant_engine._assemble). VPIN's target_vol isn't in the snapshot →
+# taken from the QuantBucket object.
+# --------------------------------------------------------------------------- #
+import statistics
+from dataclasses import dataclass
+
+from . import bucket_state, region_state
+
+# feature order (all per-bucket, from full_snapshot except VPIN which needs target_vol from the object):
+_FEATS = ("delta_frac", "opL_frac", "opS_frac", "vel_ratio",
+          "buyer_er", "seller_er", "vpin", "liq_short_frac", "liq_long_frac")
+
+
+class InsufficientSample(Exception):
+    """Cohort can't clear the guards (degenerate radius, or effN < MIN_EFF_N). propose_zones catches
+    this and draws only the 'insufficient sample' note (spec §2; addendum A5 nudge)."""
+
+    def __init__(self, reason: str, eff_n_: int = 0):
+        super().__init__(reason)
+        self.reason = reason
+        self.eff_n = eff_n_
+
+
+@dataclass
+class Cohort:
+    members: list                     # cohort bucket indices (all have a full H-future)
+    mode: str
+    eff_n: int
+    n_used: int
+    radius: Optional[float]           # adaptive radius (knn) or None (state)
+    verdict: Optional[str]            # anchor 12-state verdict (state mode) or None
+    censored_fraction: float          # of the same-context set, fraction lost to the H-horizon
+
+
+def _bucket_vpin(buckets: list) -> list:
+    """Per-bucket VPIN = Σ|buy−sell| over the trailing VPIN_WINDOW / (n·target_vol) — the
+    quant_engine.py:410 formula, recomputed per bucket (closed_buckets carry no per-bucket vpin).
+    target_vol from the QuantBucket object (not in full_snapshot)."""
+    n = len(buckets); W = config.VPIN_WINDOW
+    absd = [abs(float(b.buy_vol) - float(b.sell_vol)) for b in buckets]
+    out = [0.0] * n; run = 0.0; dq: deque = deque()
+    for i in range(n):
+        dq.append(absd[i]); run += absd[i]
+        if len(dq) > W:
+            run -= dq.popleft()
+        tv = float(getattr(buckets[i], "target_vol", 0.0)) or config.DEFAULT_TARGET_VOL
+        out[i] = (run / (len(dq) * tv)) if (dq and tv > 0) else 0.0
+    return out
+
+
+def _feat_raw(snap: dict, vpin: float) -> list:
+    cv = float(snap.get("curr_vol", 0.0)) or (float(snap.get("buy_vol", 0.0)) + float(snap.get("sell_vol", 0.0)))
+    cv = cv if cv > 0 else 1e-9
+    return [(float(snap.get("buy_vol", 0.0)) - float(snap.get("sell_vol", 0.0))) / cv,
+            float(snap.get("opL", 0.0)) / cv, float(snap.get("opS", 0.0)) / cv,
+            float(snap.get("vol_mult", 1.0)),
+            float(snap.get("buyer_er", 0.0)), float(snap.get("seller_er", 0.0)), vpin,
+            float(snap.get("liq_short", 0.0)) / cv, float(snap.get("liq_long", 0.0)) / cv]
+
+
+def _zscale(rows: list):
+    """z-score each feature column across ``rows``; std floored to 1e-9. Returns scaled rows."""
+    m = len(_FEATS); n = len(rows)
+    means = [sum(r[k] for r in rows) / n for k in range(m)]
+    stds = [max((sum((r[k] - means[k]) ** 2 for r in rows) / n) ** 0.5, 1e-9) for k in range(m)]
+    return [[(r[k] - means[k]) / stds[k] for k in range(m)] for r in rows]
+
+
+def _l2(a: list, b: list) -> float:
+    return math.sqrt(sum((a[k] - b[k]) ** 2 for k in range(len(a))))
+
+
+def _verdict(snaps: list, j: int) -> str:
+    """12-state verdict for bucket j — exhaustion_mults computed PER MEMBER (addendum A5 nudge),
+    fed to classify_bucket (both consume the snapshot dicts)."""
+    bm, sm, _ = region_state.exhaustion_mults(snaps, j)
+    return bucket_state.classify_bucket(snaps, j, bm, sm)[0]
+
+
+def build_cohort(buckets: list, anchor_idx: int, direction: str,
+                 mode: str = "knn", H: int = H_DEFAULT) -> Cohort:
+    """Cohort of historical buckets matching the anchor's context, in ``direction`` (long/short).
+    ``buckets`` = QuantBucket objects (from load_closed_buckets). Raises InsufficientSample on a
+    degenerate radius or effN < MIN_EFF_N. Only full-H-future buckets are eligible (censoring)."""
+    n = len(buckets)
+    snaps = [b.full_snapshot() for b in buckets]                 # BucketSnapshot dicts for state/features
+    last_full = n - 1 - H
+    eligible = [j for j in range(n) if j <= last_full and j != anchor_idx]
+    if not eligible:
+        raise InsufficientSample("no full-H-future buckets", 0)
+    a = buckets[anchor_idx]
+    a_sign = 1 if a.close_price >= a.open_price else -1
+
+    if mode == "state":
+        av = _verdict(snaps, anchor_idx)
+        # same context = same verdict AND same directional sign as the anchor (spec §S0 "and direction")
+        ctx_all = [j for j in range(n)
+                   if _verdict(snaps, j) == av
+                   and (1 if buckets[j].close_price >= buckets[j].open_price else -1) == a_sign
+                   and j != anchor_idx]
+        members = [j for j in ctx_all if j <= last_full]
+        cens = 1.0 - (len(members) / len(ctx_all)) if ctx_all else 1.0
+        radius = None; verdict = av
+    else:  # knn
+        vpins = _bucket_vpin(buckets)
+        scaled = _zscale([_feat_raw(snaps[j], vpins[j]) for j in range(n)])
+        x0 = scaled[anchor_idx]
+        d_all = sorted(((j, _l2(scaled[j], x0)) for j in range(n) if j != anchor_idx), key=lambda t: t[1])
+        seed = [(j, d) for (j, d) in d_all if j <= last_full][:config.KNN_K]     # k-nearest ELIGIBLE
+        # near-identical distances (z-space) count as ZERO: 1e-6 >> float-sum rounding (~1e-7 on an
+        # identical pool) yet << any real inter-bucket distance (~O(1) z-scored) -> the explicit guard fires.
+        nz = [d for _, d in seed if d > 1e-6]
+        if len(nz) < config.COHORT_MIN_NONZERO:
+            raise InsufficientSample("degenerate cohort — radius ~0 (identical/too-few pool)", 0)
+        radius = max(statistics.median(nz), config.MATCH_RADIUS_FLOOR)
+        members = [j for (j, d) in seed if d <= config.MATCH_RADIUS_MULT * radius]
+        knn_all = d_all[:config.KNN_K]                                            # incl. censored, for cens_frac
+        cens = sum(1 for (j, _) in knn_all if j > last_full) / len(knn_all) if knn_all else 0.0
+        verdict = None
+
+    n_used = len(members)
+    en = eff_n(n_used, H)
+    if en < config.MIN_EFF_N:
+        raise InsufficientSample("effN %d < MIN_EFF_N %d" % (en, config.MIN_EFF_N), en)
+    return Cohort(members=members, mode=mode, eff_n=en, n_used=n_used,
+                  radius=radius, verdict=verdict, censored_fraction=cens)
