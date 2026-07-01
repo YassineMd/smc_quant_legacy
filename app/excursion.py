@@ -415,3 +415,88 @@ def first_passage(buckets: list, members: Sequence[int], f: float, stop: float, 
     return dict(P_up=P_up, P_dn=P_dn, P_timeout=P_timeout,
                 amb_frac=(1.0 - len(clean_ps) / N) if N else 0.0,
                 n=N, n_clean=len(clean_ps), passages=ps)
+
+
+# --------------------------------------------------------------------------- #
+# DESCRIPTIVE readout (the recovered deliverable — 11a NO-GO shelved the prescriptive planner). Pure
+# historical distribution of forward excursion for the cohort of buckets LIKE the anchor; NOT a forecast,
+# NOT fill-conditioned, no barriers/optimisation. Every cohort member contributes to U/D, so the honest
+# independent count is cohort_eff_n (greedy over the WHOLE cohort, R1) — NOT the prescriptive plan's n_seg.
+# Leads with the TAIL: on a distribution this wide the p90 asymmetry is what a human reads, the median is
+# the least useful number. Magnitude in TICKS (the standing study-display rule).
+# --------------------------------------------------------------------------- #
+def describe_excursion(buckets: list, anchor_idx: int, cohort_mode: str = "state",
+                       H: int = H_DEFAULT, horizons=(5, 10, 20), quantiles=(0.5, 0.75, 0.9, 0.95)) -> dict:
+    """For the cohort of buckets sharing the anchor's 12-state verdict + directional sign, the forward
+    UP (``U``) and DOWN (``D``) excursion distributions at each horizon ``h`` (in VOLUME buckets), in TICKS
+    AND in the anchor bar's own dispersion units (``effort_ticks``) so a move that's big only because the
+    tape was fast reads as ordinary. Per horizon/side: the requested quantiles + ``asym_pQ = U_pQ - D_pQ``
+    per band (the honest per-band lean, never collapsed). ``M = cohort_eff_n`` (greedy, R1) is the honest
+    independent count (every member contributes — no fill filter). ``wall_secs`` = median wall-clock span of
+    the h forward buckets, so 'next h buckets' isn't silently comparing different amounts of time. Raises
+    InsufficientSample when too little similar history exists (caller shows the note)."""
+    from . import quant_engine
+    tick = config.TICK_SIZE
+    a = buckets[anchor_idx]
+    direction = "long" if a.close_price >= a.open_price else "short"
+    cohort = build_cohort(buckets, anchor_idx, direction, mode=cohort_mode, H=H)
+    members = cohort.members
+    effort_anchor = quant_engine._effort_ticks(getattr(a, "levels", {}) or {})   # the clicked bar's dispersion (noisy, 1 sample)
+    # normalise by the REGIME-TYPICAL dispersion (median over the cohort) — stable, so the x-dispersion
+    # column removes clock-speed instead of injecting one bucket's noise (1t vs 2t would double the ratio).
+    eff_members = [quant_engine._effort_ticks(getattr(buckets[j], "levels", {}) or {}) for j in members]
+    effort_typ = quantile(eff_members, 0.5) or effort_anchor or 1.0
+    out = dict(anchor_idx=anchor_idx, direction=direction, verdict=cohort.verdict,
+               cohort_n=cohort.n_used, cohort_eff_n=cohort.eff_n, cohort_eff_n_floor=cohort.eff_n_floor,
+               censored_fraction=cohort.censored_fraction, fidelity="envelope",
+               effort_ticks=effort_typ, effort_anchor=effort_anchor, quantiles=tuple(quantiles), horizons={})
+    n = len(buckets)
+    for h in horizons:
+        fmax, fmin = forward_extremes(buckets, h)
+        U = [(fmax[j] - float(buckets[j].close_price)) / tick for j in members if fmax[j] is not None]
+        D = [(float(buckets[j].close_price) - fmin[j]) / tick for j in members if fmin[j] is not None]
+        spans = [float(buckets[min(j + h, n - 1)].end_time) - float(buckets[j].end_time) for j in members]
+        row = dict(n=len(U), wall_secs=(quantile(spans, 0.5) or 0.0))
+        for q in quantiles:
+            uq = quantile(U, q) or 0.0
+            dq = quantile(D, q) or 0.0
+            pk = int(round(q * 100))
+            row["U_p%d" % pk] = uq
+            row["D_p%d" % pk] = dq
+            row["asym_p%d" % pk] = uq - dq
+        out["horizons"][h] = row
+    return out
+
+
+def format_excursion_lines(d: dict, horizons=(20, 10, 5)) -> list:
+    """Render :func:`describe_excursion` to display lines (shared by the headless demo AND the Mode-10
+    stats box, so both show exactly the same thing). Band-grouped + TAIL-FIRST (p95..p50) with UP / DOWN /
+    lean ADJACENT per band, each tail cell showing ticks and (x sigma = ticks / bar dispersion). A THIN
+    caption fires below EXC_THIN_EFFN; p95 is SUPPRESSED below EXC_P95_MIN_EFFN (1-2 points = cohort max)."""
+    M = d["cohort_eff_n"]; eff = d["effort_ticks"] or 1.0
+    thin = M < config.EXC_THIN_EFFN
+    bands = [p for p in (95, 90, 75, 50) if ("U_p%d" % p) in d["horizons"][horizons[0]]
+             and not (p == 95 and M < config.EXC_P95_MIN_EFFN)]
+    lines = []
+    if thin:
+        lines.append("⚠ THIN — %d independent obs, tails unstable" % M)
+    lines.append("HISTORICAL DISTRIBUTION — %d similar buckets, ~%d independent (eff_n) — not a forecast"
+                 % (d["cohort_n"], M))
+    lines.append("context: %s (%s bucket) · typical bar dispersion = %.0ft · (N) = x a random-walk move (disp·√h)"
+                 % (d["verdict"], d["direction"], eff))
+
+    def hdr(h):
+        w = d["horizons"][h]["wall_secs"]
+        return "h=%d (~%dm)" % (h, round(w / 60.0))
+
+    def diff(v, h):                                              # excursion in units of a diffusive move
+        return abs(v) / (eff * math.sqrt(h))
+    lines.append("             " + "".join("%-14s" % hdr(h) for h in horizons) + " [h = VOLUME buckets]")
+    for p in bands:
+        hz = d["horizons"]
+        lines.append("  p%-2d UP     " % p + "".join("%+6.0ft(%.1f) " % (hz[h]["U_p%d" % p], diff(hz[h]["U_p%d" % p], h)) for h in horizons))
+        lines.append("      DN     " + "".join("%+6.0ft(%.1f) " % (-hz[h]["D_p%d" % p], diff(hz[h]["D_p%d" % p], h)) for h in horizons))
+        lines.append("      lean   " + "".join("%+6.0ft       " % hz[h]["asym_p%d" % p] for h in horizons)
+                     + ("  (UP-DN per band; + = leaned up)" if p == bands[0] else ""))
+    lines.append("  censored %.0f%% to horizon" % (100 * d["censored_fraction"]))
+    return lines

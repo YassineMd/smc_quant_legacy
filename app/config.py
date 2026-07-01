@@ -427,6 +427,9 @@ W_MIN = 0.20                    # min scale-out weight per TP so a scalp always 
 WEIGHT_STEP = 0.05              # coarse simplex grid step for weight optimisation (K<=3 -> <=2 free weights) (§9)
 BOOTSTRAP_N = 1000             # block-bootstrap resamples for the E[R] CI (block length ~ H buckets) — the
                                 # LOAD-BEARING 1m uncertainty band (statistical, not path-ordering; addendum)
+# descriptive excursion readout (recovered deliverable, NOT the shelved prescriptive layer)
+EXC_THIN_EFFN = 30             # eff_n below this -> "THIN — tails unstable" caption (render but distrust the tails)
+EXC_P95_MIN_EFFN = 20         # eff_n below this -> SUPPRESS p95 (it's 1-2 points = just the cohort max, misleads)
 
 
 def size_bin(qty: float) -> int:
