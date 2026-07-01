@@ -911,6 +911,41 @@ candles), 0/50/100% scale, gold diamonds at crossovers. `'1'` toggles; hover = R
   branches; the 3 no-selection teardowns already hide every registered badge, so they're covered.
 - Terminal-only, no daemon change.
 
+**ZONE PLANNER — `propose_zones(direction, anchor)`, commits 1–7 GREEN (2026-07-01). Terminal-side, envelope-only, NOT yet UI-wired.**
+NEW modules `app/excursion.py` + `app/zone_planner.py` — pure / no-Qt / no-daemon, built to `ZONE_PLANNER_SPEC` +
+addendum v1.1 (the spec lives in the session transcript, not a repo file). Emits a `ZonePlan` (blue entry / red stop /
+1–3 green TP boxes) for a structural anchor reconciled with a cohort statistical anchor (forward-excursion quantiles +
+first-passage). Reuses detectors `calc_absorption`/`calc_quant_obs`/`_effort_ticks` only; the whole excursion +
+probability layer is NEW (addendum A0). Every config const is set once by first-principle and FROZEN (zone-planner
+block in `config.py`). **Commits 8–11 are NOT built** (8 gated on fee tier + size field + servable depth window; 9
+confidence; 10 drawing_tools; 11 verify-on-screen).
+- **c1 `669bec4`** excursion core: read-only bucket loader, O(N) forward max/min (deque), U/D + censoring, `eff_n=ceil(n/H)`.
+- **c2 `719a052`** cohort matcher: state-verdict OR scaled-L2 kNN (adaptive floored radius); `InsufficientSample` guard.
+- **c3 `e26cc53`** first-passage + A2 bracket. **Architect tape-oracle checkpoint PASSED:** clean==tape 735/736 (1 = a
+  trailing-edge same-ms aggTrade boundary artifact in the ORACLE, not the envelope); **amb_frac=0 is correct on 1m** —
+  the max 1m bucket range is 0.417%, too small to straddle any tradeable 2-sided barrier; the detector fires the instant
+  straddles are physical (swept 0→2→8→25 as barriers tighten). Tape increment deferred to higher-tf only.
+- **c4 `92bc561`** ENTRY + two-pass. Entry band + fill `f` fixed once from the net-favourable seed; only the target-first
+  winner set iterates. **Finding:** that map is a CONTRACTING fixed point needing 3–5 iters (not the spec's ≤2) →
+  `MAX_REFINE` 2→6; rare discrete-quantile jitter/2-cycle resolved deterministically by median stop, flagged `stabilized`.
+  Validated: fill-conditional sign check (U|f>U|P0, D|f<D|P0) + P(fill)=filled/eligible.
+- **c5 `65b32a2`** STOP box: tight=q85(winner MAE), wide=structural close-invalidation − measured wick buffer (touch-honest;
+  buffer OFF under `STOP_EXEC=close`, never double-counted); line=argmax single-TP E[R] = the exact price tested (draw-what-
+  you-measure). Wick-buffer fix: condition on POKE-AND-HOLD (held-non-pokers were zeroing q75). Buffer ~0 on live 1m
+  because the picked structural invalidations are DEEP (57–205t); nonzero where absorption/OB sits shallow.
+- **c6 `fd74aef`** TP boxes: f±q{50,75,90}(U|filled), snap to opposing magnet (bearish OB→SELL absorption; A4 no HVN) then
+  force-nested; monotone-decreasing touch probs; median-to-touch via new `Passage.touch_off` (additive to c3).
+- **c7 `d10900f`** scale-out optimiser: joint stop×weight search (w≥`W_MIN`, Σ=1) maximising the clean-point E[R]; per-member
+  ladder replay; **CLUSTER bootstrap** CI. Synthetic 3-member oracle E[R] exact to the bit; weights valid. **Two findings
+  for the architect:** (i) the kNN cohort is temporally CLUSTERED-but-spread (44–63% of members overlap) → the honest CI is
+  a cluster bootstrap (7–119 independent clusters, ABOVE the `ceil(n/H)=10` floor, below raw n); `eff_n=ceil(n/H)` kept
+  spec-faithful, `n_clusters` exposed for a ruling. (ii) gross E[R] is NEGATIVE at ARBITRARY test anchors — expected (no
+  forward edge at a random bucket; matches Phase-2A). +EV at CURATED structural anchors is the c11 verify-on-screen test.
+
+**Validation pattern (zone planner):** `scp app/{excursion,zone_planner}.py` to the VM, run with system `python3` (modules
+are pure — no numpy); **monkeypatch the zone-planner config consts in each test script** (deployed `config.py` predates the
+block — never overwrite it). history.db is LIVE (10000 buckets/tf, sliding) so anchor indices drift run-to-run; that's fine.
+
 **Mode-10 selection PERF pass — 5 correctness-preserving fixes (`3b176e6`→`a89a2fd`).** Profiled first on real
 data (N=200/400/800); the theory was REVISED: `rolling_share`'s O(N²) is real but small (~12% of the phase
 block); the bigger costs are the trailing-50 norm re-sums and the per-bucket exp/log posteriors (`conf_traj`,

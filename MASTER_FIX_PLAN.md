@@ -1155,6 +1155,55 @@ exhaustively, all CAUSAL / out-of-sample / base-rate-guarded:
 
 ---
 
+### ZONE PLANNER (`propose_zones`) — statistical zone-outcome model, commits 1–7 GREEN (2026-07-01)
+
+**What it is.** `zone_planner.propose_zones(direction, anchor) -> ZonePlan`: an entry/stop/TP plan for a
+structural anchor, reconciled with a **statistical anchor** (cohort forward-excursion quantiles + first-
+passage). NEW modules `app/excursion.py` + `app/zone_planner.py` — **pure, terminal-side, envelope-only,
+stateless, zero daemon dependency** (addendum A3). Built to `ZONE_PLANNER_SPEC` + addendum v1.1. NOT yet
+wired to the UI (commit 8 gated, 9–11 pending). Detector reuse: `calc_absorption` / `calc_quant_obs` /
+`_effort_ticks`. Honesty rails enforced in code (horizon in buckets, signal bar excluded, fill-conditional
+re-base, effN not raw N, censoring, measured widths).
+
+- **c1 `669bec4` excursion core** — read-only closed-bucket loader (`_bucket_from_dict`); O(N) forward
+  running max-high/min-low (monotonic deque); U/D labelling + censoring + marginal survival; `eff_n=ceil(n/H)`.
+  *Validated:* brute-force parity, censoring = last H, signal-bar exclusion at n-1-H.
+- **c2 `719a052` cohort matcher** — `build_cohort`: state-verdict (`classify_bucket`, exhaustion_mults per
+  member) or scaled-L2 kNN with adaptive floored radius; `InsufficientSample` on degenerate/too-small.
+- **c3 `e26cc53` first-passage evaluator** — `first_passage_member`/`first_passage`: competing risks, ENVELOPE
+  + A2 bracket (same-bucket straddle → [lo,clean,hi], amb_frac). *Tape-oracle checkpoint (architect-gated):*
+  clean==tape 735/736 (1 = trailing-edge same-ms boundary artifact, root-caused); **amb_frac=0 is CORRECT** on
+  1m (max bucket range 0.417% < any tradeable 2-sided straddle) — detector fires monotonically once straddles
+  are physical (swept 0→2→8→25). **Deferred tape increment re-scoped to higher-tf only** (buys nothing on 1m).
+- **c4 `92bc561` ENTRY box + two-pass** — entry band + fill `f` built ONCE from the net-favourable seed then
+  FIXED; only the target-first winner set iterates. Structural support (OB near-edge → BUY-absorption edge;
+  A4 no HVN) ∩ pullback-depth band [P0−q60,P0−q40]; thickness floor from `_effort_ticks`; fill-conditional U/D
+  re-based to `f`. *Validated:* sign check (mean U|f > U|P0, D|f < D|P0) + P(fill)=filled/eligible, both dirs.
+  **Finding:** the winners→stop map is a CONTRACTING fixed point that settles in 3-5 iters, not the spec's ≤2
+  (MAX_REFINE 2→6); rare discrete-quantile jitter/2-cycle → deterministic median-stop resolution, flagged.
+- **c5 `65b32a2` STOP box** — tight = q85(winner MAE); wide = structural close-invalidation − measured wick
+  buffer (touch-honest, disabled under STOP_EXEC=close, never double-counted); line = argmax single-TP E[R]
+  over [wide,tight], = the exact price the evaluator tests (draw-what-you-measure). *Validated:* draw==measure
+  identity, band ordering, touch↔buffer toggle, wick-buffer mechanism sweep (fires shallow, 0 deep). **Fix:**
+  wick buffer must condition on POKE-AND-HOLD members (held-non-pokers were zeroing q75).
+- **c6 `fd74aef` TP boxes + snap** — levels f±q{50,75,90}(U|filled); local-width thickness; snap to opposing
+  magnet within SNAP_TOL (bearish OB → SELL absorption; A4 no HVN) then force-nested; prob = P(reach k before
+  stop), monotone-decreasing; median-to-touch from new `Passage.touch_off`. *Validated:* nesting, monotone
+  prob, snap correctness, R ordering, Passage extension consistent.
+- **c7 `d10900f` scale-out optimiser** — joint stop×weight search (w_k≥W_MIN, Σ=1) maximising the clean-point
+  E[R]; per-member ladder replay; CLUSTER-bootstrap CI. *Validated:* synthetic 3-member oracle E[R] exact to
+  the bit, weights valid; A2 bracket hairline. **Two findings:** (i) kNN cohort is temporally CLUSTERED-but-
+  spread → **cluster bootstrap** (7-119 independent clusters, between ceil(n/H)=10 floor and raw n) replaces
+  the moving-block; `eff_n=ceil(n/H)` kept spec-faithful, `n_clusters` exposed for an architect ruling. (ii)
+  gross E[R] is NEGATIVE at ARBITRARY test anchors (expected — no forward edge at a random bucket; matches
+  Phase-2A symmetric envelope + limit-fill adverse selection); +EV at CURATED structural anchors is the
+  commit-11 verify-on-screen test, not a random-anchor sweep.
+
+**GATED next:** c8 cost model (fee tier + size-field + depth_window servable), c9 confidence assembly
+(continuous ambiguity haircut, not binary AMB_WARN), c10 drawing_tools, c11 verify-on-screen.
+
+---
+
 ### Deferred queue — current order (operator's call, 2026-06-19)
 1. ✅ **Time-chart removal — DONE (all phases: A/B/menu/relabel/C/D).** Completed after the absorption
    dive — Mode 10 (`BucketCandleItem`) is the sole candle surface. Full record in the "⚠️ TIME-CHART
