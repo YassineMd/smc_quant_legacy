@@ -206,6 +206,8 @@ DOM_LEVELS = 200                # main.py:881 — sorted depth levels per side
 # GUI timing (spec §1.4.2, §9.2.3)
 # ---------------------------------------------------------------------------
 GUI_TIMER_MS = 50               # 20Hz master redraw loop
+SESSION_PERF = True             # terminal-side session profiler: ~10s CSV row to data/session_perf.log
+SESSION_PERF_SECS = 10.0        # profiler flush cadence (progressive-lag instrumentation; negligible overhead)
 CHART_CACHE_CAP = 10000         # max candles per viewport (spec §1.1.2)
 
 # ---------------------------------------------------------------------------

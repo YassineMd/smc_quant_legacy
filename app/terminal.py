@@ -48,6 +48,7 @@ from .drawing_tools import DrawingController, DrawingToolbar
 from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visible
 from .hamburger import FloatingOverlayMenu, HamburgerButton, scale_label
 from .pipe_client import PipeClientWorker
+from .session_perf import SessionProfiler, rss_mb
 from .stats_overlay import AbsorptionZoneSlider, EffAggZoneSlider, HeatmapContrastBar, StatsOverlay
 
 _OPEN_WINDOWS: List["MinimalTerminalWindow"] = []
@@ -737,6 +738,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self._on_timer)
         self.timer.start(config.GUI_TIMER_MS)
+
+        # --- session profiler (default-on, client-side lag hunt; negligible overhead, read-only) ---
+        self._perf = None
+        if getattr(config, "SESSION_PERF", False):
+            try:
+                self._perf = SessionProfiler(os.path.join(config.DATA_DIR, "session_perf.log"))
+                self._perf_timer = QtCore.QTimer(self)
+                self._perf_timer.timeout.connect(self._perf_flush)
+                self._perf_timer.start(int(getattr(config, "SESSION_PERF_SECS", 10.0) * 1000))
+            except Exception:
+                self._perf = None
 
         # A5 — open straight onto Mode 10 (the primary surface), never the time chart. Same
         # path the combo uses: hides time components, applies the dark scanner theme, and
@@ -2827,18 +2839,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     # ------------------------------------------------------------------
     def _on_timer(self) -> None:
+        _pc = time.perf_counter; _t0 = _pc()                 # session profiler: frame total (negligible)
         snap = self.worker.snapshot()
         self._last_snap = snap
-        self._audio_announce(snap)
-        self._refresh_scale_labels(snap)
+        _s = _pc(); self._audio_announce(snap); self._refresh_scale_labels(snap); self._perf_note("audio_scale", _s)
 
         # Every mode is bucket-native now (time chart removed, Phase B): draw the scanner, refresh
         # Mode-10 DOM (ungated, bucket_canvas-only — depth pulses independently of the sig-gated
         # _draw_scanner), re-dock the axis badges, breathe the hovered bucket.
-        self._draw_scanner()
+        _s = _pc(); self._draw_scanner(); self._perf_note("draw_scanner", _s)
         if self.scanner_mode == "bucket_canvas":
-            self._update_m10_dom(snap)
+            _s = _pc(); self._update_m10_dom(snap); self._perf_note("m10_dom", _s)
         elif self.scanner_mode == "depth_heatmap" and self.cob.isVisible():
+            _s = _pc()
             # Aggregate the ladder to the CURRENT view zoom (~one bar per 2px of the panel), NOT the loaded
             # grid's ybins — so it coarsens as you zoom out / refines toward 1 tick as you zoom in, EVERY
             # frame (the old loaded-band/ybins only changed on a re-request, so it never tracked a zoom).
@@ -2848,9 +2861,64 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.cob.update_depth(snap.get("depth") or {})   # DOM ladder = live book snapshot, price-aligned
             self.cob.autoscale_x(vy0, vy1)                    # bar length scales to the IN-VIEW max wall, so a far
             self._sync_cob()                                  # wall can't flatten the zoomed-in ladder; Y -> band
-        self._redock_trackers()
-        self._refresh_parked_hover()
-        self._refresh_selection_stats()   # live Magic-Selection aggregate
+            self._perf_note("heatmap_cob", _s)
+        _s = _pc(); self._redock_trackers(); self._perf_note("redock", _s)
+        _s = _pc(); self._refresh_parked_hover(); self._perf_note("parked_hover", _s)
+        _s = _pc(); self._refresh_selection_stats(); self._perf_note("selection_stats", _s)   # live Magic-Selection aggregate
+        if self._perf is not None:
+            self._perf.note_frame((_pc() - _t0) * 1000.0)
+
+    # -- session profiler helpers (client-side lag hunt; all guarded, never crash the UI) ----------
+    def _perf_note(self, name: str, start: float) -> None:
+        p = self._perf
+        if p is not None:
+            p.note_section(name, (time.perf_counter() - start) * 1000.0)
+
+    def _perf_flush(self) -> None:
+        if self._perf is None:
+            return
+        try:
+            self._perf.flush(self._perf_sample())
+        except Exception:
+            pass
+
+    def _perf_sample(self) -> dict:
+        """Snapshot the session-living accumulators the lag could be hiding in (all best-effort)."""
+        s = {"mode": getattr(self, "scanner_mode", "")}
+        try:
+            s["rss_mb"] = rss_mb()
+        except Exception:
+            pass
+        try:
+            s["scene_items"] = len(self.plot.scene().items())      # PRIME suspect: unbounded item growth
+        except Exception:
+            pass
+        try:
+            cols = self.hm_cache.cols; yb = int(getattr(self.hm_cache, "ybins", 0) or 0)
+            s["hm_cols"] = len(cols); s["hm_cols_kb"] = int(len(cols) * yb * 4 * 2 / 1024)   # col + slog float32
+        except Exception:
+            pass
+        try:
+            n = int(len(self.hm_tb_cache.ts)); s["hm_bubbles"] = n; s["hm_bubbles_kb"] = int(n * 25 / 1024)
+        except Exception:
+            pass
+        try:
+            s["closed_buckets"] = len((self._last_snap or {}).get("closed_buckets", []))
+        except Exception:
+            pass
+        try:
+            d = self.drawer
+            s["draw_items"] = len(getattr(d, "shapes", []) or []) + len(getattr(d, "brackets", []) or [])
+        except Exception:
+            pass
+        try:
+            s["extra"] = "handles=%d trackers=%d hovers=%d" % (
+                len(getattr(self, "_scan_handles", {}) or {}),
+                len(getattr(self, "_scan_trackers", {}) or {}),
+                len(getattr(self, "_panel_hovers", []) or []))
+        except Exception:
+            pass
+        return s
 
     _TF_SPOKEN = {"1m": "1 minute", "5m": "5 minute", "15m": "15 minute",
                   "1h": "1 hour", "4h": "4 hour"}
