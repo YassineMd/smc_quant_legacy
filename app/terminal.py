@@ -425,6 +425,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # black value on a NEON green (bull strongest) / NEON red (bear strongest) fill.
         self._spread_badges = {}
         for _k in ("ABSORPTION", "EFF-AGG", "E/R", "EXHAUSTION", "LARGE MKT", "SMALL MKT",
+                   "BEFORE", "START/DURING", "END",        # phase panels 5/6/7 — UP/DOWN spread badge
                    "PANEL9_BULL", "PANEL9_BEAR", "PANEL9_SUM",
                    "PANEL0_BULL", "PANEL0_BEAR", "PANEL0_SUM"):
             _bd = pg.TextItem(anchor=(0, 0.5), color=(0, 0, 0))
@@ -434,6 +435,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.plot.addItem(_bd, ignoreBounds=True)
             _bd.hide()
             self._spread_badges[_k] = _bd
+        # LARGE/SMALL panels get a SECOND label UNDER the winner badge: the selection-total B/S split
+        # (B: buy | S: sell), dominant side bolded + the fill in the dominant side's colour. Own non-bold
+        # items (HTML controls the per-side weight); black text like the badges.
+        self.bc_lg_tot = pg.TextItem(anchor=(0, 0.5), color=(0, 0, 0))
+        self.bc_sm_tot = pg.TextItem(anchor=(0, 0.5), color=(0, 0, 0))
+        _totf = QtGui.QFont("Consolas", 10)
+        for _t in (self.bc_lg_tot, self.bc_sm_tot):
+            _t.textItem.setFont(_totf); _t.setZValue(62)
+            self.plot.addItem(_t, ignoreBounds=True); _t.hide()
         # Live PHASE TABLE — beside the panels. Classifies the selection as before/start/during/end of a move
         # (lights the matching phase row + confidence), driven by the selection's aggregate spreads vs config
         # PHASE_BOXES. HTML rendered in a screen-fixed TextItem, top-left anchored just right of the panels.
@@ -470,7 +480,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_eff_strip = True   # Mode-10 selection eff-agg evolution panel ON by default ('2' toggles)
         self.show_er_strip = False   # Mode-10 selection effort/result panel — HIDDEN by default ('3' toggles)
         self.show_exh_strip = False  # Mode-10 selection exhaustion panel — HIDDEN by default ('4' toggles) — slot 4
-        self.show_largesmall = False  # Mode-10 LARGE+SMALL market-order panels — HIDDEN by default ('8' toggles) — slot 8
+        self._ls_mode = 0  # Mode-10 market-order panels (slot 8), '8' cycles: 0 hidden / 1 LARGE only / 2 LARGE+SMALL
         # NOTE: the 3 PHASE panels (5/6/7) stay ON by default (show_phase[...] = True above); the 4 MEASURE
         # panels above default OFF — so the default session computes only the always-on zones + the phase path.
         # ── Phase 2b: depth/liquidity HEATMAP (scanner mode "depth_heatmap"). The ImageItem + BBO lines live on
@@ -1414,28 +1424,36 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         item.setData(spots=spots); item.setVisible(bool(spots))
 
     def _toggle_largesmall(self) -> None:
-        """'8' — show/hide the LARGE + SMALL market-order panels together. OFF hides + clears them; ON
-        repopulates on the next selection refresh."""
-        self.show_largesmall = not self.show_largesmall
-        if not self.show_largesmall:
-            self._clear_largesmall_panels()
+        """'8' — CYCLE the market-order panels: hidden (0) -> LARGE only (1) -> LARGE + SMALL (2) -> hidden ->
+        ... The next selection refresh shows/clears each panel from the derived lg_on/sm_on."""
+        self._ls_mode = (self._ls_mode + 1) % 3
+        if self._ls_mode == 0:
             self.panel_tooltip.hide()
         self._save_ui_state()
         self._refresh_selection_stats()
 
-    def _clear_largesmall_panels(self) -> None:
-        """LARGE/SMALL tear-down: hide both strips + their refs/locks/badges (items reused via setData -> no leak)."""
-        for _it in (self.bc_lg_strip, self.bc_sm_strip, self.bc_lg_mid, self.bc_sm_mid,
-                    self.bc_lg_q, self.bc_sm_q, self.bc_lg_lock, self.bc_sm_lock,
-                    self.bc_lg_pos, self.bc_lg_neg, self.bc_sm_pos, self.bc_sm_neg,
-                    self.bc_lg_bars, self.bc_sm_bars):
+    def _clear_lg_panel(self) -> None:
+        """LARGE panel tear-down: hide its items + badges (reused via setData -> no leak)."""
+        for _it in (self.bc_lg_strip, self.bc_lg_mid, self.bc_lg_q, self.bc_lg_lock,
+                    self.bc_lg_pos, self.bc_lg_neg, self.bc_lg_bars, self.bc_lg_tot):
             _it.setVisible(False)
-        self._spread_badges["LARGE MKT"].hide(); self._spread_badges["SMALL MKT"].hide()
+        self._spread_badges["LARGE MKT"].hide()
+
+    def _clear_sm_panel(self) -> None:
+        """SMALL panel tear-down."""
+        for _it in (self.bc_sm_strip, self.bc_sm_mid, self.bc_sm_q, self.bc_sm_lock,
+                    self.bc_sm_pos, self.bc_sm_neg, self.bc_sm_bars, self.bc_sm_tot):
+            _it.setVisible(False)
+        self._spread_badges["SMALL MKT"].hide()
+
+    def _clear_largesmall_panels(self) -> None:
+        """Hide BOTH market-order panels (slot 8)."""
+        self._clear_lg_panel(); self._clear_sm_panel()
 
     def _largesmall_thr_sig(self):
-        """Change-detection component so the LARGE/SMALL panels recompute as the daemon's adaptive size_thr
-        drifts — but ONLY while they're visible (otherwise None, so they add no per-frame churn)."""
-        if not self.show_largesmall:
+        """Change-detection component so the panels recompute as the daemon's adaptive size_thr drifts — but
+        ONLY while at least one is visible (otherwise None, so they add no per-frame churn)."""
+        if self._ls_mode == 0:
             return None
         st = (self._last_snap or {}).get("size_thr") or []
         return (round(st[0], 2), round(st[2], 2)) if len(st) > 2 else "cold"
@@ -1449,7 +1467,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         small_thr = st[0] if len(st) > 0 else config.SIZE_DEFAULT_SMALL
         return large_thr, small_thr
 
-    def _draw_hist_panel(self, bars, hide_items, buy_series, sell_series, lo, hi, ybot, ytop,
+    def _draw_hist_panel(self, bars, tot_item, hide_items, buy_series, sell_series, lo, hi, ybot, ytop,
                          label, rgb_pair, pre0, badge_x) -> None:
         """Per-bucket DOMINANCE HISTOGRAM into [ybot,ytop]: one bar per bucket, total height = (buy+sell) large
         activity (LARGE = contracts, SMALL = trade count), auto-scaled to the selection's busiest bucket. The
@@ -1502,14 +1520,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             "bull": hov_buy, "bear": hov_sell, "bcol": buy_rgb, "rcol": sell_rgb,
             "blbl": "BUY", "rlbl": "SELL", "fmt": "vol",
             "extra": [b - s for b, s in zip(hov_buy, hov_sell)], "ecol": (200, 200, 200), "elbl": "NET"})
-        bd = self._spread_badges[label]                        # badge = the latest bar's (run's) winner total
+        _cy = (ytop + ybot) / 2.0
+        bd = self._spread_badges[label]                        # top badge = the latest bar's (run's) winner total
         if runs:
             _d, _wv = runs[-1][2], runs[-1][3]
             bd.fill = pg.mkBrush(*buy_rgb) if _d == 1 else pg.mkBrush(*sell_rgb)
             bd.setText(f" {self._fmt_k(_wv)} ")
-            bd.setPos(badge_x, (ytop + ybot) / 2.0); bd.show()
+            bd.setPos(badge_x, _cy); bd.show()
         else:
             bd.hide()
+        # SECOND label below it — SELECTION TOTAL buy vs sell (sum over the whole selection): dominant side
+        # bolded, fill = the dominant side's colour. (LARGE = contracts, SMALL = trade count.)
+        _bt = sum(buy_v); _st = sum(sell_v); _buy_dom = _bt >= _st
+        _bp = f"<b>{self._fmt_k(_bt)}</b>" if _buy_dom else self._fmt_k(_bt)
+        _sp = self._fmt_k(_st) if _buy_dom else f"<b>{self._fmt_k(_st)}</b>"
+        tot_item.fill = pg.mkBrush(*(buy_rgb if _buy_dom else sell_rgb))
+        tot_item.setHtml(f"<span style='color:#000000'>&nbsp;B: {_bp} | S: {_sp}&nbsp;</span>")
+        tot_item.setPos(badge_x, _cy - (ytop - ybot) * 0.32); tot_item.show()
 
     def _toggle_panel9(self) -> None:
         """'9' — show/hide the bull/bear-trend lean panel (lean +/- own-side exhaustion). OFF clears + hides it."""
@@ -1561,7 +1588,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             state = {
                 "abs": self.show_abs_strip, "eff": self.show_eff_strip,
                 "er": self.show_er_strip, "exh": self.show_exh_strip,
-                "largesmall": self.show_largesmall, "panel9": self.show_panel9, "panel0": self.show_panel0,
+                "ls_mode": self._ls_mode, "panel9": self.show_panel9, "panel0": self.show_panel0,
                 "phase_table": self.show_phase_table,
                 "phase": {k: bool(v) for k, v in self.show_phase.items()},
                 "zone_s": self._zone_user_s, "eff_f": self._eff_user_f,   # persisted slider overrides (None = adaptive)
@@ -1586,7 +1613,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_eff_strip = bool(s.get("eff", self.show_eff_strip))
         self.show_er_strip = bool(s.get("er", self.show_er_strip))
         self.show_exh_strip = bool(s.get("exh", self.show_exh_strip))
-        self.show_largesmall = bool(s.get("largesmall", self.show_largesmall))
+        _lm = s.get("ls_mode")
+        if _lm is None:                                       # migrate the old boolean: True (both) -> 2, else 0
+            _lm = 2 if s.get("largesmall") else 0
+        self._ls_mode = _lm if _lm in (0, 1, 2) else 0
         self.show_panel9 = bool(s.get("panel9", self.show_panel9))
         self.show_panel0 = bool(s.get("panel0", self.show_panel0))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
@@ -2043,7 +2073,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 rect, filtered, lo_i, hi_i,
                 (self.show_abs_strip, self.show_eff_strip, self.show_er_strip, self.show_exh_strip,
                  tuple(self.show_phase[p] for p in self._PHASES), self.show_state, self.show_sel_stats,
-                 self.show_largesmall, self.show_phase_table, self.show_panel9, self.show_panel0),
+                 self._ls_mode, self.show_phase_table, self.show_panel9, self.show_panel0),
                 (self.zone_slider.value_s(), self.eff_slider.value_s(),
                  self._largesmall_thr_sig()), tv, config.VPIN_ADAPT_WINDOW)
             if sig == self._sel_sig:
@@ -2177,7 +2207,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         er_on = self.show_er_strip and _drawable           # then 5-7 phase panels, 8 LARGE+SMALL mkt, 9 COMPOSITE (BOTTOM)
         exh_on = self.show_exh_strip and _drawable
         ph_on = {p: self.show_phase[p] and _drawable for p in self._PHASES}
-        ls_on = self.show_largesmall and _drawable          # slot 8: LARGE (top) + SMALL (below) market-order panels
+        lg_on = self._ls_mode >= 1 and _drawable            # slot 8: '8' cycles 0 hidden / 1 LARGE / 2 LARGE+SMALL
+        sm_on = self._ls_mode >= 2 and _drawable            # SMALL only ever shows alongside LARGE
         p9_on = self.show_panel9 and _drawable
         p0_on = self.show_panel0 and _drawable
         ph_geom = {}
@@ -2198,10 +2229,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if ph_on[_p]:
                 _t = _cur - config.PHASE_PANEL_GAP * sel_h; _b = _t - config.PHASE_PANEL_FRAC * sel_h
                 ph_geom[_p] = (_t, _b); _cur = _b
-        if ls_on:                                           # LARGE market-order panel (slot 8a)
+        if lg_on:                                           # LARGE market-order panel (slot 8a)
             lg_top = _cur - config.EXH_STRIP_GAP * sel_h; lg_bot = lg_top - config.EXH_STRIP_FRAC * sel_h
             _cur = lg_bot
-            sm_top = _cur - config.EXH_STRIP_GAP * sel_h; sm_bot = sm_top - config.EXH_STRIP_FRAC * sel_h   # SMALL (8b)
+        if sm_on:                                           # SMALL market-order panel (slot 8b, under LARGE)
+            sm_top = _cur - config.EXH_STRIP_GAP * sel_h; sm_bot = sm_top - config.EXH_STRIP_FRAC * sel_h
             _cur = sm_bot
         if p9_on:                                           # COMPOSITE lean panel
             p9_top = _cur - config.EXH_STRIP_GAP * sel_h; p9_bot = p9_top - config.EXH_STRIP_FRAC * sel_h
@@ -2217,7 +2249,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if exh_on: _bands.append((exh_top, exh_bot))
         for _p in self._PHASES:
             if _p in ph_geom: _bands.append(ph_geom[_p])
-        if ls_on: _bands.append((lg_top, lg_bot)); _bands.append((sm_top, sm_bot))
+        if lg_on: _bands.append((lg_top, lg_bot))
+        if sm_on: _bands.append((sm_top, sm_bot))
         if p9_on: _bands.append((p9_top, p9_bot))
         if p0_on: _bands.append((p0_top, p0_bot))
         _sep_ys = [(_bands[i][1] + _bands[i + 1][0]) / 2.0 for i in range(len(_bands) - 1)]
@@ -2415,37 +2448,47 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         "label": _p, "lo": lo, "yb": _b, "yt": _t,
                         "bull": [v / 100.0 for v in up_line], "bear": [v / 100.0 for v in dn_line],
                         "bcol": _RGB_ER_BULL, "rcol": _RGB_ER_BEAR, "blbl": "UP", "rlbl": "DOWN", "fmt": "pct"})
+                    # % spread badge (like 1/2/3): the LOCKED UP-vs-DOWN lead, green if UP strongest / red if DOWN
+                    _pbi = _pli if _pli >= 0 else len(up_line) - 1
+                    self._set_spread_badge(_p, up_line[_pbi] / 100.0, dn_line[_pbi] / 100.0,
+                                           up_line[_pbi] >= dn_line[_pbi], _badge_x, (_t + _b) / 2.0)
                 else:
                     self.bc_phase[_p].setVisible(False)
                     self.bc_phase_lock[_p].setVisible(False)
+                    self._spread_badges[_p].hide()
         else:
             self.phase_tbl.hide()
             for _ly in self.bc_phase.values():
                 _ly.setVisible(False)
             for _plk in self.bc_phase_lock.values():
                 _plk.setVisible(False)
-        # LARGE / SMALL MARKET-ORDER PANELS ('8'). Each bucket's size histogram (sz_vb/sz_vs = per-side VOLUME,
-        # sz_cb/sz_cs = per-side COUNT, over config.SIZE_HIST_EDGES) is thresholded LIVE at the slider cutoff
-        # (default = the daemon's broad 60-min percentile, NOT selection-local) with log-linear within-bin
-        # interpolation, then drawn as a share-style buy/sell strip. LARGE = large-BUY vs large-SELL VOLUME
-        # (where the size is: blue buy / orange sell, matching the heatmap bubbles); SMALL = small-BUY vs
+            for _p in self._PHASES:
+                self._spread_badges[_p].hide()
+        # LARGE / SMALL MARKET-ORDER PANELS ('8' cycles: hidden / LARGE only / LARGE+SMALL). Each bucket's size
+        # histogram (sz_vb/sz_vs = per-side VOLUME, sz_cb/sz_cs = per-side COUNT, over config.SIZE_HIST_EDGES) is
+        # thresholded at the daemon's broad 60-min percentile (large=p95, small=p50, NOT selection-local) with
+        # log-linear within-bin interpolation, then drawn as a per-bucket DOMINANCE HISTOGRAM. LARGE = large-BUY
+        # vs large-SELL VOLUME (blue buy / orange sell, matching the heatmap bubbles); SMALL = small-BUY vs
         # small-SELL trade COUNT (retail breadth; green/red). Cutoffs are FULLY AUTOMATIC (daemon p95 / p50).
-        if ls_on:
+        if lg_on:
             large_thr, small_thr = self._largesmall_thresholds()   # FULLY AUTOMATIC: daemon p95 / p50
             lg_buy = [self._hist_side(b.get("sz_vb"), large_thr, True) for b in _extp]
             lg_sell = [self._hist_side(b.get("sz_vs"), large_thr, True) for b in _extp]
-            sm_buy = [self._hist_side(b.get("sz_cb"), small_thr, False) for b in _extp]
-            sm_sell = [self._hist_side(b.get("sz_cs"), small_thr, False) for b in _extp]
-            self._draw_hist_panel(self.bc_lg_bars,
+            self._draw_hist_panel(self.bc_lg_bars, self.bc_lg_tot,
                                   (self.bc_lg_strip, self.bc_lg_mid, self.bc_lg_q, self.bc_lg_lock,
                                    self.bc_lg_pos, self.bc_lg_neg),
                                   lg_buy, lg_sell, lo, hi, lg_bot, lg_top, "LARGE MKT", self._RGB_LG,
                                   _pre0, _badge_x)
-            self._draw_hist_panel(self.bc_sm_bars,
-                                  (self.bc_sm_strip, self.bc_sm_mid, self.bc_sm_q, self.bc_sm_lock,
-                                   self.bc_sm_pos, self.bc_sm_neg),
-                                  sm_buy, sm_sell, lo, hi, sm_bot, sm_top, "SMALL MKT", self._RGB_SM,
-                                  _pre0, _badge_x)
+            if sm_on:
+                sm_buy = [self._hist_side(b.get("sz_cb"), small_thr, False) for b in _extp]
+                sm_sell = [self._hist_side(b.get("sz_cs"), small_thr, False) for b in _extp]
+                self._draw_hist_panel(self.bc_sm_bars, self.bc_sm_tot,
+                                      (self.bc_sm_strip, self.bc_sm_mid, self.bc_sm_q, self.bc_sm_lock,
+                                       self.bc_sm_pos, self.bc_sm_neg),
+                                      sm_buy, sm_sell, lo, hi, sm_bot, sm_top, "SMALL MKT", self._RGB_SM,
+                                      _pre0, _badge_x)
+            else:
+                self._clear_sm_panel()
         else:
             self._clear_largesmall_panels()
         # PANEL 9 — COMPOSITE LEAN ('9', very BOTTOM). ONE line = the per-bucket AVERAGE of the FOUR panels'
