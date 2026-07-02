@@ -1,0 +1,1282 @@
+code	legality	section	field	text
+E01.01	ENTRY-LEGAL	A. Identity & Geometry	start_time	UTC hour-of-day (0-23)
+E01.02	ENTRY-LEGAL	A. Identity & Geometry	start_time	Trading session tag: Asia / London / NY / overlap
+E01.03	ENTRY-LEGAL	A. Identity & Geometry	start_time	Session-OPEN proximity flag: within 30m of London or NY open (Y/N)
+E01.04	ENTRY-LEGAL	A. Identity & Geometry	start_time	Session-CLOSE proximity flag (Y/N)
+E01.05	ENTRY-LEGAL	A. Identity & Geometry	start_time	Binance funding-window proximity: 00/08/16 UTC (Y/N + minutes)
+E01.06	ENTRY-LEGAL	A. Identity & Geometry	start_time	Day-of-week / weekend flag
+E01.07	ENTRY-LEGAL	A. Identity & Geometry	start_time	Top-of-hour or half-hour flag (algo-clock effects)
+E01.08	ENTRY-LEGAL	A. Identity & Geometry	start_time	Minutes since UTC midnight (day position)
+E01.09	ENTRY-LEGAL	A. Identity & Geometry	start_time	US data-hour flag (12:30 / 14:00 UTC class times)
+E01.10	ENTRY-LEGAL	A. Identity & Geometry	start_time	Minutes since prior session's close
+E01.11	ENTRY-LEGAL	A. Identity & Geometry	start_time	Same-hour historical norm join key
+E01.12	ENTRY-LEGAL	A. Identity & Geometry	start_time	Month / quarter position (calendar seasonality key)
+E02.01	ENTRY-LEGAL	A. Identity & Geometry	end_time	UTC hour-of-day at close
+E02.02	ENTRY-LEGAL	A. Identity & Geometry	end_time	Session tag at close
+E02.03	ENTRY-LEGAL	A. Identity & Geometry	end_time	Session-STRADDLE flag: opened in one session, closed in another (Y/N)
+E02.04	ENTRY-LEGAL	A. Identity & Geometry	end_time	Funding-timestamp straddle flag (crossed 00/08/16 UTC) (Y/N)
+E02.05	ENTRY-LEGAL	A. Identity & Geometry	end_time	Round-hour close proximity (Y/N)
+E02.06	ENTRY-LEGAL	A. Identity & Geometry	end_time	Day-of-week at close / weekend flag
+E02.07	ENTRY-LEGAL	A. Identity & Geometry	end_time	Gap to NEXT bucket's start (tape idle time)
+E02.08	ENTRY-LEGAL	A. Identity & Geometry	end_time	Elapsed fraction of the current session
+E02.09	ENTRY-LEGAL	A. Identity & Geometry	end_time	Proximity to daily (00:00 UTC) candle close
+E02.10	ENTRY-LEGAL	A. Identity & Geometry	end_time	Close inside a scheduled-news window flag
+E03.01	ENTRY-LEGAL	A. Identity & Geometry	duration	Raw seconds / log-duration
+E03.02	ENTRY-LEGAL	A. Identity & Geometry	duration	Duration percentile vs trailing 30 and 240 buckets
+E03.03	ENTRY-LEGAL	A. Identity & Geometry	duration	Duration z-score vs trailing window
+E03.04	ENTRY-LEGAL	A. Identity & Geometry	duration	FAST-fill flag: bottom decile (Y/N)
+E03.05	ENTRY-LEGAL	A. Identity & Geometry	duration	SLOW-fill flag: top decile (Y/N)
+E03.06	ENTRY-LEGAL	A. Identity & Geometry	duration	Duration vs same-UTC-hour historical norm
+E03.07	ENTRY-LEGAL	A. Identity & Geometry	duration	Fast/slow STREAK length (consecutive buckets same class)
+E03.08	ENTRY-LEGAL	A. Identity & Geometry	duration	Duration acceleration: ratio vs prior bucket
+E03.09	ENTRY-LEGAL	A. Identity & Geometry	duration	Implied tape-pace regime tag (quiet/normal/hot)
+E03.10	ENTRY-LEGAL	A. Identity & Geometry	duration	Duration share of the trailing-10 total (burstiness)
+E04.01	ENTRY-LEGAL	A. Identity & Geometry	open / high / low / close	Gap vs prior close: size, sign, gap-in-ticks
+E04.02	ENTRY-LEGAL	A. Identity & Geometry	open / high / low / close	Round-number proximity of each price (xx00 / xx50)
+E04.03	ENTRY-LEGAL	A. Identity & Geometry	open / high / low / close	New N-bucket HIGH flag / new N-bucket LOW flag
+E04.04	ENTRY-LEGAL	A. Identity & Geometry	open / high / low / close	Relation to prior bucket: inside / engulfing / breakout tag
+E04.05	ENTRY-LEGAL	A. Identity & Geometry	open / high / low / close	Close>open sign (up/down bucket)
+E04.06	ENTRY-LEGAL	A. Identity & Geometry	open / high / low / close	Close position within range, 0..1
+E04.07	ENTRY-LEGAL	A. Identity & Geometry	open / high / low / close	Equal-highs / equal-lows vs recent extremes (resting-liquidity pools)
+E04.08	ENTRY-LEGAL	A. Identity & Geometry	open / high / low / close	True range (gap-adjusted) vs raw range
+E04.09	ENTRY-LEGAL	A. Identity & Geometry	open / high / low / close	Log return open->close
+E04.10	ENTRY-LEGAL	A. Identity & Geometry	open / high / low / close	Close vs POC side (above/below the control price)
+E04.11	ENTRY-LEGAL	A. Identity & Geometry	open / high / low / close	Distance of close to nearest round number in ticks
+E05.01	ENTRY-LEGAL	A. Identity & Geometry	range	Absolute range / range in ticks
+E05.02	ENTRY-LEGAL	A. Identity & Geometry	range	Range percentile vs trailing 30/240
+E05.03	ENTRY-LEGAL	A. Identity & Geometry	range	Range z-score
+E05.04	ENTRY-LEGAL	A. Identity & Geometry	range	Range vs ATR ratio (the compression/expansion read)
+E05.05	ENTRY-LEGAL	A. Identity & Geometry	range	COMPRESSION flag: range < 0.60 x ATR (Y/N)
+E05.06	ENTRY-LEGAL	A. Identity & Geometry	range	EXPANSION flag: range > 1.20 x ATR (Y/N)
+E05.07	ENTRY-LEGAL	A. Identity & Geometry	range	Expanding/contracting range STREAK
+E05.08	ENTRY-LEGAL	A. Identity & Geometry	range	Range per second (volatility pace)
+E05.09	ENTRY-LEGAL	A. Identity & Geometry	range	Share of the day's range contributed so far
+E05.10	ENTRY-LEGAL	A. Identity & Geometry	range	Range rank within the session
+E06.01	ENTRY-LEGAL	A. Identity & Geometry	result (body)	Sign (direction) and magnitude
+E06.02	ENTRY-LEGAL	A. Identity & Geometry	result (body)	Log return of the body
+E06.03	ENTRY-LEGAL	A. Identity & Geometry	result (body)	Body percentile / z-score vs window
+E06.04	ENTRY-LEGAL	A. Identity & Geometry	result (body)	Same-direction streak length
+E06.05	ENTRY-LEGAL	A. Identity & Geometry	result (body)	Reversal flag vs prior bucket direction (Y/N)
+E06.06	ENTRY-LEGAL	A. Identity & Geometry	result (body)	Body ratio vs prior body (momentum of result)
+E06.07	ENTRY-LEGAL	A. Identity & Geometry	result (body)	Net progress over trailing N buckets (drift context)
+E06.08	ENTRY-LEGAL	A. Identity & Geometry	result (body)	Marubozu-ness: body ~ range (Y/N)
+E06.09	ENTRY-LEGAL	A. Identity & Geometry	result (body)	Body-in-ticks vs fee+spread hurdle (economically meaningful move?)
+E06.10	ENTRY-LEGAL	A. Identity & Geometry	result (body)	Contribution sign to trailing bucket-CVD of price
+E07.01	ENTRY-LEGAL	A. Identity & Geometry	body fraction	Raw fraction 0..1
+E07.02	ENTRY-LEGAL	A. Identity & Geometry	body fraction	TREND-BAR flag: fraction > 0.80 (Y/N)
+E07.03	ENTRY-LEGAL	A. Identity & Geometry	body fraction	DOJI flag: fraction < 0.10 (Y/N)
+E07.04	ENTRY-LEGAL	A. Identity & Geometry	body fraction	Percentile / z vs trailing window
+E07.05	ENTRY-LEGAL	A. Identity & Geometry	body fraction	Trend-bar streak length
+E07.06	ENTRY-LEGAL	A. Identity & Geometry	body fraction	Two-sided rejection flag (small body, both wicks large)
+E07.07	ENTRY-LEGAL	A. Identity & Geometry	body fraction	Conviction class: low / mid / high
+E07.08	ENTRY-LEGAL	A. Identity & Geometry	body fraction	Fraction x volume interaction (decisive AND heavy?)
+E07.09	ENTRY-LEGAL	A. Identity & Geometry	body fraction	Rolling-mean fraction (regime trendiness)
+E07.10	ENTRY-LEGAL	A. Identity & Geometry	body fraction	State-engine MOVED ramp value (0.55-0.80)
+E08.01	ENTRY-LEGAL	A. Identity & Geometry	upper / lower wick	Upper wick size / lower wick size (ticks)
+E08.02	ENTRY-LEGAL	A. Identity & Geometry	upper / lower wick	Upper/range and lower/range fractions
+E08.03	ENTRY-LEGAL	A. Identity & Geometry	upper / lower wick	Wick asymmetry: (upper-lower)/range
+E08.04	ENTRY-LEGAL	A. Identity & Geometry	upper / lower wick	PIN-BAR flag: one wick > 60% of range (Y/N)
+E08.05	ENTRY-LEGAL	A. Identity & Geometry	upper / lower wick	BOTH-WICKS flag: whipsaw shape (Y/N)
+E08.06	ENTRY-LEGAL	A. Identity & Geometry	upper / lower wick	Wick-to-body ratio per side
+E08.07	ENTRY-LEGAL	A. Identity & Geometry	upper / lower wick	Rejected side inference (which extreme got refused)
+E08.08	ENTRY-LEGAL	A. Identity & Geometry	upper / lower wick	Wick percentile vs trailing window
+E08.09	ENTRY-LEGAL	A. Identity & Geometry	upper / lower wick	Wick at NEW extreme flag (swept then rejected)
+E08.10	ENTRY-LEGAL	A. Identity & Geometry	upper / lower wick	Wick into round-number / OB zone flag
+E09.01	ENTRY-LEGAL	A. Identity & Geometry	poc_price	POC round-number proximity
+E09.02	ENTRY-LEGAL	A. Identity & Geometry	poc_price	POC shift vs prior bucket's POC (migration size + direction)
+E09.03	ENTRY-LEGAL	A. Identity & Geometry	poc_price	POC gap vs current close (ticks)
+E09.04	ENTRY-LEGAL	A. Identity & Geometry	poc_price	POC at bucket extreme flag (top/bottom 15% of range)
+E09.05	ENTRY-LEGAL	A. Identity & Geometry	poc_price	POC inside prior bucket's range flag (acceptance)
+E09.06	ENTRY-LEGAL	A. Identity & Geometry	poc_price	Distance from POC to nearest order block
+E09.07	ENTRY-LEGAL	A. Identity & Geometry	poc_price	Naked/untested prior POCs above and below (count, nearest)
+E09.08	ENTRY-LEGAL	A. Identity & Geometry	poc_price	POC retest count over trailing window
+E09.09	ENTRY-LEGAL	A. Identity & Geometry	poc_price	POC percentile within the day's range
+E09.10	ENTRY-LEGAL	A. Identity & Geometry	poc_price	POC coincides with a heatmap wall price (6h) (Y/N)
+E10.01	ENTRY-LEGAL	A. Identity & Geometry	poc_pos	Raw 0..1 position
+E10.02	ENTRY-LEGAL	A. Identity & Geometry	poc_pos	HIGH-POC flag (>0.70) / LOW-POC flag (<0.30)
+E10.03	ENTRY-LEGAL	A. Identity & Geometry	poc_pos	CENTER-POC flag (0.40-0.60, balanced auction)
+E10.04	ENTRY-LEGAL	A. Identity & Geometry	poc_pos	Percentile vs trailing window
+E10.05	ENTRY-LEGAL	A. Identity & Geometry	poc_pos	POC-pos vs close-pos divergence (control vs settle)
+E10.06	ENTRY-LEGAL	A. Identity & Geometry	poc_pos	Trap-geometry ramp value (0.50-0.85)
+E10.07	ENTRY-LEGAL	A. Identity & Geometry	poc_pos	Persistently-high/low POC streak
+E10.08	ENTRY-LEGAL	A. Identity & Geometry	poc_pos	POC-pos flip vs prior bucket (rotation of control)
+E10.09	ENTRY-LEGAL	A. Identity & Geometry	poc_pos	Profile shape inference: p / b / D-shaped
+E10.10	ENTRY-LEGAL	A. Identity & Geometry	poc_pos	POC-pos x direction interaction (control against the move?)
+E11.01	ENTRY-LEGAL	B. Volume & Aggression Flow	curr_vol	Overshoot ratio: curr_vol / target_vol (last-print spillover)
+E11.02	ENTRY-LEGAL	B. Volume & Aggression Flow	curr_vol	Volume percentile / z vs trailing window
+E11.03	ENTRY-LEGAL	B. Volume & Aggression Flow	curr_vol	Log volume
+E11.04	ENTRY-LEGAL	B. Volume & Aggression Flow	curr_vol	Share of trailing-N total volume (activity concentration)
+E11.05	ENTRY-LEGAL	B. Volume & Aggression Flow	curr_vol	Above/below-mean volume streak
+E11.06	ENTRY-LEGAL	B. Volume & Aggression Flow	curr_vol	Volume per tick of range (grind density)
+E11.07	ENTRY-LEGAL	B. Volume & Aggression Flow	curr_vol	Same-UTC-hour normalized volume (session-relative heat)
+E11.08	ENTRY-LEGAL	B. Volume & Aggression Flow	curr_vol	Cumulative session volume position
+E11.09	ENTRY-LEGAL	B. Volume & Aggression Flow	curr_vol	Day-rank of the bucket's volume
+E11.10	ENTRY-LEGAL	B. Volume & Aggression Flow	curr_vol	Volume regime tag (quiet / normal / heavy)
+E12.01	ENTRY-LEGAL	B. Volume & Aggression Flow	buy_vol	Buy share: buy_vol / curr_vol
+E12.02	ENTRY-LEGAL	B. Volume & Aggression Flow	buy_vol	Buy z-score / percentile vs trailing window
+E12.03	ENTRY-LEGAL	B. Volume & Aggression Flow	buy_vol	Buy-dominance streak (share > 0.5)
+E12.04	ENTRY-LEGAL	B. Volume & Aggression Flow	buy_vol	Change in buy share vs prior bucket
+E12.05	ENTRY-LEGAL	B. Volume & Aggression Flow	buy_vol	Buy volume per second (buy pace)
+E12.06	ENTRY-LEGAL	B. Volume & Aggression Flow	buy_vol	Day-rank of buy volume
+E12.07	ENTRY-LEGAL	B. Volume & Aggression Flow	buy_vol	Extreme-buy flag: top decile (Y/N)
+E12.08	ENTRY-LEGAL	B. Volume & Aggression Flow	buy_vol	Log buy volume
+E12.09	ENTRY-LEGAL	B. Volume & Aggression Flow	buy_vol	Buy share vs same-hour norm
+E12.10	ENTRY-LEGAL	B. Volume & Aggression Flow	buy_vol	Buy-share slope over trailing 5 buckets
+E13.01	ENTRY-LEGAL	B. Volume & Aggression Flow	sell_vol	Sell share: sell_vol / curr_vol
+E13.02	ENTRY-LEGAL	B. Volume & Aggression Flow	sell_vol	Sell z-score / percentile
+E13.03	ENTRY-LEGAL	B. Volume & Aggression Flow	sell_vol	Sell-dominance streak
+E13.04	ENTRY-LEGAL	B. Volume & Aggression Flow	sell_vol	Change in sell share vs prior bucket
+E13.05	ENTRY-LEGAL	B. Volume & Aggression Flow	sell_vol	Sell volume per second
+E13.06	ENTRY-LEGAL	B. Volume & Aggression Flow	sell_vol	Day-rank of sell volume
+E13.07	ENTRY-LEGAL	B. Volume & Aggression Flow	sell_vol	Extreme-sell flag: top decile (Y/N)
+E13.08	ENTRY-LEGAL	B. Volume & Aggression Flow	sell_vol	Log sell volume
+E13.09	ENTRY-LEGAL	B. Volume & Aggression Flow	sell_vol	Sell share vs same-hour norm
+E13.10	ENTRY-LEGAL	B. Volume & Aggression Flow	sell_vol	Sell-share slope over trailing 5 buckets
+E14.01	ENTRY-LEGAL	B. Volume & Aggression Flow	delta	Sign and magnitude
+E14.02	ENTRY-LEGAL	B. Volume & Aggression Flow	delta	Delta as % of volume
+E14.03	ENTRY-LEGAL	B. Volume & Aggression Flow	delta	Delta z-score / percentile
+E14.04	ENTRY-LEGAL	B. Volume & Aggression Flow	delta	Same-sign delta streak (pressure persistence)
+E14.05	ENTRY-LEGAL	B. Volume & Aggression Flow	delta	Delta FLIP flag vs prior bucket (Y/N)
+E14.06	ENTRY-LEGAL	B. Volume & Aggression Flow	delta	Delta acceleration (this vs prior magnitude)
+E14.07	ENTRY-LEGAL	B. Volume & Aggression Flow	delta	Trailing-N cumulative delta (bucket CVD)
+E14.08	ENTRY-LEGAL	B. Volume & Aggression Flow	delta	Delta vs price divergence flag (delta up, close down / inverse)
+E14.09	ENTRY-LEGAL	B. Volume & Aggression Flow	delta	Day-rank of abs(delta)
+E14.10	ENTRY-LEGAL	B. Volume & Aggression Flow	delta	Intrabucket delta path min/max (6h tape)
+E15.01	ENTRY-LEGAL	B. Volume & Aggression Flow	delta fraction	Raw fraction
+E15.02	ENTRY-LEGAL	B. Volume & Aggression Flow	delta fraction	ONE-SIDED flag: > 0.55 (Y/N)
+E15.03	ENTRY-LEGAL	B. Volume & Aggression Flow	delta fraction	BALANCED flag: < 0.10 (Y/N)
+E15.04	ENTRY-LEGAL	B. Volume & Aggression Flow	delta fraction	Percentile / z vs window
+E15.05	ENTRY-LEGAL	B. Volume & Aggression Flow	delta fraction	One-sidedness streak
+E15.06	ENTRY-LEGAL	B. Volume & Aggression Flow	delta fraction	Alignment with body fraction (initiative translated?)
+E15.07	ENTRY-LEGAL	B. Volume & Aggression Flow	delta fraction	Fraction regime mean (trailing)
+E15.08	ENTRY-LEGAL	B. Volume & Aggression Flow	delta fraction	Session rank of one-sidedness
+E15.09	ENTRY-LEGAL	B. Volume & Aggression Flow	delta fraction	Fraction x volume interaction (one-sided AND heavy)
+E15.10	ENTRY-LEGAL	B. Volume & Aggression Flow	delta fraction	DELTA ramp value fed to the state engine
+E16.01	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opL	opL / vol fraction
+E16.02	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opL	z-score / percentile vs window
+E16.03	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opL	FRESH-LONG-WAVE flag: fraction > 0.30 (Y/N)
+E16.04	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opL	opL streak (persistent long initiative)
+E16.05	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opL	opL vs opS dominance ratio
+E16.06	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opL	Day-rank of opL
+E16.07	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opL	opL into highs vs into lows (location context)
+E16.08	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opL	opL acceleration vs prior bucket
+E16.09	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opL	Share of total opens (opL/(opL+opS))
+E16.10	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opL	TRAP-FUEL candidate: heavy opL into a failed upside break
+E17.01	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opS	opS / vol fraction
+E17.02	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opS	z-score / percentile
+E17.03	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opS	FRESH-SHORT-WAVE flag: fraction > 0.30 (Y/N)
+E17.04	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opS	opS streak
+E17.05	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opS	opS vs opL dominance ratio
+E17.06	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opS	Day-rank of opS
+E17.07	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opS	opS into lows vs into highs (location context)
+E17.08	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opS	opS acceleration
+E17.09	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opS	Share of total opens
+E17.10	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	opS	TRAP-FUEL candidate: heavy opS into a failed downside break
+E18.01	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clL	clL / vol fraction
+E18.02	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clL	z / percentile
+E18.03	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clL	LONG-CAPITULATION flag: heavy clL into lows (Y/N)
+E18.04	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clL	clL streak (sustained unwind)
+E18.05	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clL	Long-cohort net: opL - clL (cohort building or leaving)
+E18.06	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clL	Share of total closes (clL/(clL+clS))
+E18.07	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clL	clL acceleration
+E18.08	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clL	Day-rank of clL
+E18.09	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clL	clL at NEW low flag (puke print)
+E18.10	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clL	Closing-flow ramp contribution (CLOSE_FLOW 0.15-0.50)
+E19.01	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clS	clS / vol fraction
+E19.02	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clS	z / percentile
+E19.03	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clS	SHORT-COVER-POP flag: heavy clS into highs (Y/N)
+E19.04	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clS	clS streak
+E19.05	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clS	Short-cohort net: opS - clS
+E19.06	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clS	Share of total closes
+E19.07	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clS	clS acceleration
+E19.08	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clS	Day-rank of clS
+E19.09	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clS	clS at NEW high flag (forced-out print)
+E19.10	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	clS	Closing-flow ramp contribution
+E20.01	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	churn	churn / vol fraction
+E20.02	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	churn	ROTATION flag: fraction > 0.55 (CHURN ramp) (Y/N)
+E20.03	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	churn	z / percentile
+E20.04	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	churn	High-churn streak
+E20.05	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	churn	Churn regime mean (trailing)
+E20.06	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	churn	Churn x moved interaction: transfer that MOVED price (markdown/markup hand-off)
+E20.07	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	churn	Day-rank of churn
+E20.08	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	churn	Churn acceleration
+E20.09	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	churn	OI-neutrality corroboration (|dOI| small while churn high)
+E20.10	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	churn	Hand-off inference tag: distribution vs accumulation candidate
+E21.01	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	delta_oi	Sign: BUILD vs DRAIN
+E21.02	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	delta_oi	Magnitude / vol fraction
+E21.03	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	delta_oi	z / percentile
+E21.04	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	delta_oi	BUILD streak / DRAIN streak lengths
+E21.05	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	delta_oi	dOI x delta quadrant: new-money push / covering push / distribution / unwind-drop
+E21.06	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	delta_oi	OI-NEUTRAL flag: |dOI|/vol < 0.22 (Y/N)
+E21.07	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	delta_oi	BUILD ramp value (0.08-0.18)
+E21.08	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	delta_oi	dOI acceleration
+E21.09	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	delta_oi	Trailing-N cumulative dOI (positioning trend)
+E21.10	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	delta_oi	Day-rank of |dOI|
+E22.01	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	open/close/churn fractions	OPEN_OI ramp value (0.10-0.50)
+E22.02	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	open/close/churn fractions	DRAIN_OI ramp value (0.05-0.45)
+E22.03	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	open/close/churn fractions	CLOSE_FLOW ramp value (0.15-0.50)
+E22.04	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	open/close/churn fractions	CHURN ramp value (0.55-0.90)
+E22.05	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	open/close/churn fractions	OI_NEUTRAL ramp value (0.05-0.22)
+E22.06	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	open/close/churn fractions	BUILD ramp value (0.08-0.18)
+E22.07	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	open/close/churn fractions	Dominant-component label (which fraction leads)
+E22.08	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	open/close/churn fractions	Component ENTROPY (how mixed the bucket's OI story is)
+E22.09	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	open/close/churn fractions	Open:close ratio
+E22.10	ENTRY-LEGAL	C. Open-Interest Attribution (Step 19)	open/close/churn fractions	Long-side vs short-side initiative index
+E23.01	ENTRY-LEGAL	D. Effort / Result (Step 4)	buyer_er	Raw value / log value
+E23.02	ENTRY-LEGAL	D. Effort / Result (Step 4)	buyer_er	z vs trailing-30 (the baseline convention)
+E23.03	ENTRY-LEGAL	D. Effort / Result (Step 4)	buyer_er	Multiple vs trailing mean (stats-box x-figure)
+E23.04	ENTRY-LEGAL	D. Effort / Result (Step 4)	buyer_er	Percentile vs window
+E23.05	ENTRY-LEGAL	D. Effort / Result (Step 4)	buyer_er	HOT flag: >= 1.5x baseline (Y/N)
+E23.06	ENTRY-LEGAL	D. Effort / Result (Step 4)	buyer_er	Hot streak length
+E23.07	ENTRY-LEGAL	D. Effort / Result (Step 4)	buyer_er	buyer_er / seller_er ratio (effort dominance)
+E23.08	ENTRY-LEGAL	D. Effort / Result (Step 4)	buyer_er	Effort acceleration vs prior
+E23.09	ENTRY-LEGAL	D. Effort / Result (Step 4)	buyer_er	Day-rank of buyer effort
+E23.10	ENTRY-LEGAL	D. Effort / Result (Step 4)	buyer_er	Effort-hot leg value for exhaustion gating
+E24.01	ENTRY-LEGAL	D. Effort / Result (Step 4)	seller_er	Raw value / log value
+E24.02	ENTRY-LEGAL	D. Effort / Result (Step 4)	seller_er	z vs trailing-30
+E24.03	ENTRY-LEGAL	D. Effort / Result (Step 4)	seller_er	Multiple vs trailing mean
+E24.04	ENTRY-LEGAL	D. Effort / Result (Step 4)	seller_er	Percentile
+E24.05	ENTRY-LEGAL	D. Effort / Result (Step 4)	seller_er	HOT flag: >= 1.5x (Y/N)
+E24.06	ENTRY-LEGAL	D. Effort / Result (Step 4)	seller_er	Hot streak
+E24.07	ENTRY-LEGAL	D. Effort / Result (Step 4)	seller_er	seller_er / buyer_er ratio
+E24.08	ENTRY-LEGAL	D. Effort / Result (Step 4)	seller_er	Effort acceleration
+E24.09	ENTRY-LEGAL	D. Effort / Result (Step 4)	seller_er	Day-rank
+E24.10	ENTRY-LEGAL	D. Effort / Result (Step 4)	seller_er	Effort-hot leg value for exhaustion gating
+E25.01	ENTRY-LEGAL	D. Effort / Result (Step 4)	effort_ticks	Raw dispersion (ticks)
+E25.02	ENTRY-LEGAL	D. Effort / Result (Step 4)	effort_ticks	Percentile / z vs window
+E25.03	ENTRY-LEGAL	D. Effort / Result (Step 4)	effort_ticks	NARROW-auction flag (bottom quintile)
+E25.04	ENTRY-LEGAL	D. Effort / Result (Step 4)	effort_ticks	WIDE-auction flag (top quintile)
+E25.05	ENTRY-LEGAL	D. Effort / Result (Step 4)	effort_ticks	Dispersion vs range ratio (profile fatness)
+E25.06	ENTRY-LEGAL	D. Effort / Result (Step 4)	effort_ticks	Narrow/wide streak
+E25.07	ENTRY-LEGAL	D. Effort / Result (Step 4)	effort_ticks	Dispersion per unit volume
+E25.08	ENTRY-LEGAL	D. Effort / Result (Step 4)	effort_ticks	Regime mean of dispersion
+E25.09	ENTRY-LEGAL	D. Effort / Result (Step 4)	effort_ticks	Auction-type inference: compressed grind vs sweep
+E25.10	ENTRY-LEGAL	D. Effort / Result (Step 4)	effort_ticks	Floor-hit flag (dispersion at the 1-tick floor)
+E26.01	ENTRY-LEGAL	D. Effort / Result (Step 4)	B-E/R, S-E/R anomaly	Buyer multiple / seller multiple values
+E26.02	ENTRY-LEGAL	D. Effort / Result (Step 4)	B-E/R, S-E/R anomaly	Hotter side label
+E26.03	ENTRY-LEGAL	D. Effort / Result (Step 4)	B-E/R, S-E/R anomaly	BOTH-HOT flag (Y/N)
+E26.04	ENTRY-LEGAL	D. Effort / Result (Step 4)	B-E/R, S-E/R anomaly	Multiple percentile vs day
+E26.05	ENTRY-LEGAL	D. Effort / Result (Step 4)	B-E/R, S-E/R anomaly	Hot-side streak
+E26.06	ENTRY-LEGAL	D. Effort / Result (Step 4)	B-E/R, S-E/R anomaly	First-hot-after-quiet flag (regime break)
+E26.07	ENTRY-LEGAL	D. Effort / Result (Step 4)	B-E/R, S-E/R anomaly	Multiple slope over last 5 buckets
+E26.08	ENTRY-LEGAL	D. Effort / Result (Step 4)	B-E/R, S-E/R anomaly	Side-switch of hotness flag
+E26.09	ENTRY-LEGAL	D. Effort / Result (Step 4)	B-E/R, S-E/R anomaly	Effort-hot x no-result divergence candidate (pair with body)
+E26.10	ENTRY-LEGAL	D. Effort / Result (Step 4)	B-E/R, S-E/R anomaly	Anomaly co-fire with velocity flag (Y/N)
+E27.01	ENTRY-LEGAL	D. Effort / Result (Step 4)	E/R neon border flag	Fired (Y/N) + side
+E27.02	ENTRY-LEGAL	D. Effort / Result (Step 4)	E/R neon border flag	z magnitude behind the fire
+E27.03	ENTRY-LEGAL	D. Effort / Result (Step 4)	E/R neon border flag	Count of fires in trailing window (density)
+E27.04	ENTRY-LEGAL	D. Effort / Result (Step 4)	E/R neon border flag	First-fire-in-N flag
+E27.05	ENTRY-LEGAL	D. Effort / Result (Step 4)	E/R neon border flag	Fired AT a new extreme flag
+E27.06	ENTRY-LEGAL	D. Effort / Result (Step 4)	E/R neon border flag	With-trend vs counter-trend fire
+E27.07	ENTRY-LEGAL	D. Effort / Result (Step 4)	E/R neon border flag	Consecutive-fire streak
+E27.08	ENTRY-LEGAL	D. Effort / Result (Step 4)	E/R neon border flag	Co-fire with abnormal-velocity flag
+E27.09	ENTRY-LEGAL	D. Effort / Result (Step 4)	E/R neon border flag	Co-fire with liquidation presence
+E27.10	ENTRY-LEGAL	D. Effort / Result (Step 4)	E/R neon border flag	Fire followed by direction flip (study join)
+E28.01	ENTRY-LEGAL	E. Pace & Velocity	vol_mult	Raw multiple
+E28.02	ENTRY-LEGAL	E. Pace & Velocity	vol_mult	STRONG flag: >= 1.2 (stats-box highlight)
+E28.03	ENTRY-LEGAL	E. Pace & Velocity	vol_mult	Squeeze-violence ramp value (1.30-3.00)
+E28.04	ENTRY-LEGAL	E. Pace & Velocity	vol_mult	Mild-pace ramp value (1.00-2.20)
+E28.05	ENTRY-LEGAL	E. Pace & Velocity	vol_mult	Percentile / z vs window
+E28.06	ENTRY-LEGAL	E. Pace & Velocity	vol_mult	Speed streak (consecutive > 1x)
+E28.07	ENTRY-LEGAL	E. Pace & Velocity	vol_mult	Speed acceleration vs prior
+E28.08	ENTRY-LEGAL	E. Pace & Velocity	vol_mult	QUIET flag: < 1.0 (Y/N)
+E28.09	ENTRY-LEGAL	E. Pace & Velocity	vol_mult	Day-rank of speed
+E28.10	ENTRY-LEGAL	E. Pace & Velocity	vol_mult	Speed x direction interaction (fast up vs fast down)
+E29.01	ENTRY-LEGAL	E. Pace & Velocity	vel	Raw units/s / log pace
+E29.02	ENTRY-LEGAL	E. Pace & Velocity	vel	Percentile / z vs trailing window
+E29.03	ENTRY-LEGAL	E. Pace & Velocity	vel	Same-UTC-hour normalized pace
+E29.04	ENTRY-LEGAL	E. Pace & Velocity	vel	Pace streak
+E29.05	ENTRY-LEGAL	E. Pace & Velocity	vel	Pace acceleration
+E29.06	ENTRY-LEGAL	E. Pace & Velocity	vel	Day-max pace flag (Y/N)
+E29.07	ENTRY-LEGAL	E. Pace & Velocity	vel	Pace regime class (quiet/normal/hot)
+E29.08	ENTRY-LEGAL	E. Pace & Velocity	vel	Pace vs range coupling (fast AND wide?)
+E29.09	ENTRY-LEGAL	E. Pace & Velocity	vel	Pace vs spread regime (6h BBO join)
+E29.10	ENTRY-LEGAL	E. Pace & Velocity	vel	Trailing-30 mean pace (the flag's denominator)
+E30.01	ENTRY-LEGAL	E. Pace & Velocity	abnormal-velocity flag	Fired (Y/N)
+E30.02	ENTRY-LEGAL	E. Pace & Velocity	abnormal-velocity flag	Ratio value (5x..10x+)
+E30.03	ENTRY-LEGAL	E. Pace & Velocity	abnormal-velocity flag	CAPPED flag (>= 10x)
+E30.04	ENTRY-LEGAL	E. Pace & Velocity	abnormal-velocity flag	Fires count in trailing window (cluster density)
+E30.05	ENTRY-LEGAL	E. Pace & Velocity	abnormal-velocity flag	First-after-quiet flag
+E30.06	ENTRY-LEGAL	E. Pace & Velocity	abnormal-velocity flag	Fire direction (bucket up/down)
+E30.07	ENTRY-LEGAL	E. Pace & Velocity	abnormal-velocity flag	Fired AT a sweep flag
+E30.08	ENTRY-LEGAL	E. Pace & Velocity	abnormal-velocity flag	Co-fire with liquidation flag
+E30.09	ENTRY-LEGAL	E. Pace & Velocity	abnormal-velocity flag	Co-fire with E/R neon flag
+E30.10	ENTRY-LEGAL	E. Pace & Velocity	abnormal-velocity flag	Cluster id / time since previous fire
+E31.01	ENTRY-LEGAL	E. Pace & Velocity	avg_velocity	Current level
+E31.02	ENTRY-LEGAL	E. Pace & Velocity	avg_velocity	Slope over trailing window (regime drift)
+E31.03	ENTRY-LEGAL	E. Pace & Velocity	avg_velocity	Stability (variance) of the baseline
+E31.04	ENTRY-LEGAL	E. Pace & Velocity	avg_velocity	Percentile vs the day
+E31.05	ENTRY-LEGAL	E. Pace & Velocity	avg_velocity	Jump flag (recent step-change)
+E31.06	ENTRY-LEGAL	E. Pace & Velocity	avg_velocity	Time since last regime change
+E31.07	ENTRY-LEGAL	E. Pace & Velocity	avg_velocity	Ratio to day mean
+E31.08	ENTRY-LEGAL	E. Pace & Velocity	avg_velocity	Session-profile position (hour curve)
+E31.09	ENTRY-LEGAL	E. Pace & Velocity	avg_velocity	Baseline freshness (window fill)
+E31.10	ENTRY-LEGAL	E. Pace & Velocity	avg_velocity	Cross-check: implied buckets/hour
+E32.01	ENTRY-LEGAL	E. Pace & Velocity	target_vol	Current size
+E32.02	ENTRY-LEGAL	E. Pace & Velocity	target_vol	Recalibration delta (latest change)
+E32.03	ENTRY-LEGAL	E. Pace & Velocity	target_vol	Slope of target over the day
+E32.04	ENTRY-LEGAL	E. Pace & Velocity	target_vol	Ratio to day-mean target
+E32.05	ENTRY-LEGAL	E. Pace & Velocity	target_vol	Stability (variance)
+E32.06	ENTRY-LEGAL	E. Pace & Velocity	target_vol	Implied buckets/hour at current pace
+E32.07	ENTRY-LEGAL	E. Pace & Velocity	target_vol	Percentile vs history
+E32.08	ENTRY-LEGAL	E. Pace & Velocity	target_vol	Jump flag (regime resize)
+E32.09	ENTRY-LEGAL	E. Pace & Velocity	target_vol	Timeframe-relative scale (1m vs 5m ladder)
+E32.10	ENTRY-LEGAL	E. Pace & Velocity	target_vol	Time since last recalibration
+E33.01	ENTRY-LEGAL	F. Exhaustion (Step 5)	b_mult / s_mult	Buyer multiplier / seller multiplier values
+E33.02	ENTRY-LEGAL	F. Exhaustion (Step 5)	b_mult / s_mult	Dominant side label
+E33.03	ENTRY-LEGAL	F. Exhaustion (Step 5)	b_mult / s_mult	ABSORB-fire read: >= 1.20 ramp (1.20-2.00)
+E33.04	ENTRY-LEGAL	F. Exhaustion (Step 5)	b_mult / s_mult	TRANSLATE read ramp (1.30-2.00)
+E33.05	ENTRY-LEGAL	F. Exhaustion (Step 5)	b_mult / s_mult	Percentile of each vs day
+E33.06	ENTRY-LEGAL	F. Exhaustion (Step 5)	b_mult / s_mult	Slope over the selection window
+E33.07	ENTRY-LEGAL	F. Exhaustion (Step 5)	b_mult / s_mult	Both-elevated flag (Y/N)
+E33.08	ENTRY-LEGAL	F. Exhaustion (Step 5)	b_mult / s_mult	Crossover proximity (bull vs bear lines)
+E33.09	ENTRY-LEGAL	F. Exhaustion (Step 5)	b_mult / s_mult	Stability of the z-baseline (window health)
+E33.10	ENTRY-LEGAL	F. Exhaustion (Step 5)	b_mult / s_mult	Multiplier at bucket extremes vs mid
+E34.01	ENTRY-LEGAL	F. Exhaustion (Step 5)	gated true-exhaustion	Score 0..1 + side
+E34.02	ENTRY-LEGAL	F. Exhaustion (Step 5)	gated true-exhaustion	FIRED flag above threshold (Y/N)
+E34.03	ENTRY-LEGAL	F. Exhaustion (Step 5)	gated true-exhaustion	Weakest-leg name (what limited the score)
+E34.04	ENTRY-LEGAL	F. Exhaustion (Step 5)	gated true-exhaustion	Per-leg values (3 features)
+E34.05	ENTRY-LEGAL	F. Exhaustion (Step 5)	gated true-exhaustion	Percentile of score vs window
+E34.06	ENTRY-LEGAL	F. Exhaustion (Step 5)	gated true-exhaustion	Fired streak / decay since last fire
+E34.07	ENTRY-LEGAL	F. Exhaustion (Step 5)	gated true-exhaustion	First-fire-in-N flag
+E34.08	ENTRY-LEGAL	F. Exhaustion (Step 5)	gated true-exhaustion	Fired AT new extreme flag
+E34.09	ENTRY-LEGAL	F. Exhaustion (Step 5)	gated true-exhaustion	Co-fire with reclaim (squeeze-completion candidate)
+E34.10	ENTRY-LEGAL	F. Exhaustion (Step 5)	gated true-exhaustion	Score slope across the last 5 buckets
+E35.01	ENTRY-LEGAL	F. Exhaustion (Step 5)	exhaustion lines + crossover	Crossover occurred in selection (Y/N) + direction
+E35.02	ENTRY-LEGAL	F. Exhaustion (Step 5)	exhaustion lines + crossover	Diamond count in the selection
+E35.03	ENTRY-LEGAL	F. Exhaustion (Step 5)	exhaustion lines + crossover	Bull-line slope / bear-line slope
+E35.04	ENTRY-LEGAL	F. Exhaustion (Step 5)	exhaustion lines + crossover	Spread between the two lines (dominance margin)
+E35.05	ENTRY-LEGAL	F. Exhaustion (Step 5)	exhaustion lines + crossover	Buckets since last cross
+E35.06	ENTRY-LEGAL	F. Exhaustion (Step 5)	exhaustion lines + crossover	Confirmed vs forming state of latest cross
+E35.07	ENTRY-LEGAL	F. Exhaustion (Step 5)	exhaustion lines + crossover	Cross at a price extreme flag
+E35.08	ENTRY-LEGAL	F. Exhaustion (Step 5)	exhaustion lines + crossover	Double-cross whipsaw flag
+E35.09	ENTRY-LEGAL	F. Exhaustion (Step 5)	exhaustion lines + crossover	Line values at the selected bucket
+E35.10	ENTRY-LEGAL	F. Exhaustion (Step 5)	exhaustion lines + crossover	Alignment with the state verdict (Y/N)
+E36.01	ENTRY-LEGAL	G. Absorption & Effective Aggression	suppression score s	Raw s
+E36.02	ENTRY-LEGAL	G. Absorption & Effective Aggression	suppression score s	VALIDATED flag: s >= 0.60 (Y/N)
+E36.03	ENTRY-LEGAL	G. Absorption & Effective Aggression	suppression score s	Percentile / z vs window
+E36.04	ENTRY-LEGAL	G. Absorption & Effective Aggression	suppression score s	High-s streak
+E36.05	ENTRY-LEGAL	G. Absorption & Effective Aggression	suppression score s	s slope over last 5 buckets
+E36.06	ENTRY-LEGAL	G. Absorption & Effective Aggression	suppression score s	s x delta-fraction interaction (one-sided AND absorbed = wall)
+E36.07	ENTRY-LEGAL	G. Absorption & Effective Aggression	suppression score s	Absorbed-side inference (with delta sign)
+E36.08	ENTRY-LEGAL	G. Absorption & Effective Aggression	suppression score s	s regime mean
+E36.09	ENTRY-LEGAL	G. Absorption & Effective Aggression	suppression score s	s at price extreme flag (absorption at highs/lows)
+E36.10	ENTRY-LEGAL	G. Absorption & Effective Aggression	suppression score s	Rank of s within the day
+E37.01	ENTRY-LEGAL	G. Absorption & Effective Aggression	bull/bear absorption (V*s)	Absolute absorbed volume + side
+E37.02	ENTRY-LEGAL	G. Absorption & Effective Aggression	bull/bear absorption (V*s)	Percentile / z vs window
+E37.03	ENTRY-LEGAL	G. Absorption & Effective Aggression	bull/bear absorption (V*s)	Day-rank of absorbed volume
+E37.04	ENTRY-LEGAL	G. Absorption & Effective Aggression	bull/bear absorption (V*s)	Absorbed share of trailing-N volume
+E37.05	ENTRY-LEGAL	G. Absorption & Effective Aggression	bull/bear absorption (V*s)	Absorption streak per side
+E37.06	ENTRY-LEGAL	G. Absorption & Effective Aggression	bull/bear absorption (V*s)	Absorption acceleration
+E37.07	ENTRY-LEGAL	G. Absorption & Effective Aggression	bull/bear absorption (V*s)	Adaptive-zone crossing flag (display zones)
+E37.08	ENTRY-LEGAL	G. Absorption & Effective Aggression	bull/bear absorption (V*s)	Validated-strength dot present (Y/N)
+E37.09	ENTRY-LEGAL	G. Absorption & Effective Aggression	bull/bear absorption (V*s)	Absorption at extreme location flag
+E37.10	ENTRY-LEGAL	G. Absorption & Effective Aggression	bull/bear absorption (V*s)	Bull-vs-bear absorption dominance ratio
+E38.01	ENTRY-LEGAL	G. Absorption & Effective Aggression	effective aggression V*(1-s)	Absolute eff-agg + side
+E38.02	ENTRY-LEGAL	G. Absorption & Effective Aggression	effective aggression V*(1-s)	Percentile / z
+E38.03	ENTRY-LEGAL	G. Absorption & Effective Aggression	effective aggression V*(1-s)	Day-rank
+E38.04	ENTRY-LEGAL	G. Absorption & Effective Aggression	effective aggression V*(1-s)	Eff-agg share of trailing-N volume
+E38.05	ENTRY-LEGAL	G. Absorption & Effective Aggression	effective aggression V*(1-s)	Dominance ratio vs absorption
+E38.06	ENTRY-LEGAL	G. Absorption & Effective Aggression	effective aggression V*(1-s)	Eff-agg streak per side
+E38.07	ENTRY-LEGAL	G. Absorption & Effective Aggression	effective aggression V*(1-s)	Acceleration
+E38.08	ENTRY-LEGAL	G. Absorption & Effective Aggression	effective aggression V*(1-s)	Zone-crossing flag
+E38.09	ENTRY-LEGAL	G. Absorption & Effective Aggression	effective aggression V*(1-s)	Partition sanity: V*s + V*(1-s) == V (audit feature)
+E38.10	ENTRY-LEGAL	G. Absorption & Effective Aggression	effective aggression V*(1-s)	Eff-agg per tick moved (thrust efficiency)
+E39.01	ENTRY-LEGAL	G. Absorption & Effective Aggression	validated-strength dot	Present (Y/N) + side
+E39.02	ENTRY-LEGAL	G. Absorption & Effective Aggression	validated-strength dot	Count in trailing window
+E39.03	ENTRY-LEGAL	G. Absorption & Effective Aggression	validated-strength dot	First-in-N flag
+E39.04	ENTRY-LEGAL	G. Absorption & Effective Aggression	validated-strength dot	Consecutive-dot streak
+E39.05	ENTRY-LEGAL	G. Absorption & Effective Aggression	validated-strength dot	Dot at new high/low flag
+E39.06	ENTRY-LEGAL	G. Absorption & Effective Aggression	validated-strength dot	Co-fire with exhaustion fire
+E39.07	ENTRY-LEGAL	G. Absorption & Effective Aggression	validated-strength dot	Co-fire with liquidation presence
+E39.08	ENTRY-LEGAL	G. Absorption & Effective Aggression	validated-strength dot	Dot preceded direction flip (study join)
+E39.09	ENTRY-LEGAL	G. Absorption & Effective Aggression	validated-strength dot	Dot density regime (dots per 100 buckets)
+E39.10	ENTRY-LEGAL	G. Absorption & Effective Aggression	validated-strength dot	Side-switch of dots flag
+E40.01	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption/eff-agg zones	In-zone (Y/N) per zone
+E40.02	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption/eff-agg zones	Zone width (current adaptive setting)
+E40.03	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption/eff-agg zones	Distance to nearest zone edge
+E40.04	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption/eff-agg zones	Dwell time in zone (buckets)
+E40.05	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption/eff-agg zones	Zone entries count in selection
+E40.06	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption/eff-agg zones	Breach direction of last exit
+E40.07	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption/eff-agg zones	Zone percentile setting (slider state)
+E40.08	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption/eff-agg zones	Dwell streak
+E40.09	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption/eff-agg zones	Zone vs validated-dot agreement
+E40.10	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption/eff-agg zones	Zone regime (tight/wide adaptive state)
+E41.01	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption marks	Marks count in bucket
+E41.02	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption marks	Side split of marks
+E41.03	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption marks	Largest mark size
+E41.04	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption marks	Marks at bucket extremes flag
+E41.05	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption marks	Mark price-band width
+E41.06	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption marks	Marks clustering (bursts vs spread)
+E41.07	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption marks	Mark-to-close displacement (did price leave the mark?)
+E41.08	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption marks	Marks per minute
+E41.09	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption marks	Mark co-location with a heatmap wall
+E41.10	ENTRY-LEGAL	G. Absorption & Effective Aggression	absorption marks	Iceberg-side classification share (buy vs sell)
+E42.01	ENTRY-LEGAL	H. The Footprint Ladder (levels)	levels {price:{b,s}}	Traded-level count
+E42.02	ENTRY-LEGAL	H. The Footprint Ladder (levels)	levels {price:{b,s}}	Top-3 level concentration share
+E42.03	ENTRY-LEGAL	H. The Footprint Ladder (levels)	levels {price:{b,s}}	Volume-weighted mean price vs close (settle skew)
+E42.04	ENTRY-LEGAL	H. The Footprint Ladder (levels)	levels {price:{b,s}}	Profile skewness (volume tilt)
+E42.05	ENTRY-LEGAL	H. The Footprint Ladder (levels)	levels {price:{b,s}}	Profile kurtosis (fat middle vs barbell)
+E42.06	ENTRY-LEGAL	H. The Footprint Ladder (levels)	levels {price:{b,s}}	Max single-level side imbalance (b:s odds)
+E42.07	ENTRY-LEGAL	H. The Footprint Ladder (levels)	levels {price:{b,s}}	Single-print level count (thin spots)
+E42.08	ENTRY-LEGAL	H. The Footprint Ladder (levels)	levels {price:{b,s}}	Profile shape class: P / b / D
+E42.09	ENTRY-LEGAL	H. The Footprint Ladder (levels)	levels {price:{b,s}}	Low-volume-node presence + nearest LVN distance
+E42.10	ENTRY-LEGAL	H. The Footprint Ladder (levels)	levels {price:{b,s}}	High-volume-node distance to close
+E42.11	ENTRY-LEGAL	H. The Footprint Ladder (levels)	levels {price:{b,s}}	Buy-vs-sell tilt by range third (top/mid/bottom loading)
+E43.01	ENTRY-LEGAL	H. The Footprint Ladder (levels)	POC volume / share	POC share of curr_vol
+E43.02	ENTRY-LEGAL	H. The Footprint Ladder (levels)	POC volume / share	Percentile / z of the share
+E43.03	ENTRY-LEGAL	H. The Footprint Ladder (levels)	POC volume / share	DOMINANT-POC flag (share > threshold)
+E43.04	ENTRY-LEGAL	H. The Footprint Ladder (levels)	POC volume / share	POC vs 2nd-node ratio (peakedness)
+E43.05	ENTRY-LEGAL	H. The Footprint Ladder (levels)	POC volume / share	Dominant-POC streak
+E43.06	ENTRY-LEGAL	H. The Footprint Ladder (levels)	POC volume / share	THIN-POC flag (weak control)
+E43.07	ENTRY-LEGAL	H. The Footprint Ladder (levels)	POC volume / share	Buy:sell split AT the POC
+E43.08	ENTRY-LEGAL	H. The Footprint Ladder (levels)	POC volume / share	POC-share regime mean
+E43.09	ENTRY-LEGAL	H. The Footprint Ladder (levels)	POC volume / share	POC share x poc_pos interaction (strong control at extreme)
+E43.10	ENTRY-LEGAL	H. The Footprint Ladder (levels)	POC volume / share	Day-rank of POC share
+E44.01	ENTRY-LEGAL	H. The Footprint Ladder (levels)	per-level imbalance flag	Flagged-level count + side split
+E44.02	ENTRY-LEGAL	H. The Footprint Ladder (levels)	per-level imbalance flag	Max imbalance multiple on the ladder
+E44.03	ENTRY-LEGAL	H. The Footprint Ladder (levels)	per-level imbalance flag	STACKED flag: consecutive flagged levels (Y/N + depth)
+E44.04	ENTRY-LEGAL	H. The Footprint Ladder (levels)	per-level imbalance flag	Stack side (buyer wall vs seller wall)
+E44.05	ENTRY-LEGAL	H. The Footprint Ladder (levels)	per-level imbalance flag	Stack at bucket extreme flag
+E44.06	ENTRY-LEGAL	H. The Footprint Ladder (levels)	per-level imbalance flag	Flag density percentile vs window
+E44.07	ENTRY-LEGAL	H. The Footprint Ladder (levels)	per-level imbalance flag	First-stack-in-N flag
+E44.08	ENTRY-LEGAL	H. The Footprint Ladder (levels)	per-level imbalance flag	Stack vs close side (did price respect the stack?)
+E44.09	ENTRY-LEGAL	H. The Footprint Ladder (levels)	per-level imbalance flag	Neon count per side
+E44.10	ENTRY-LEGAL	H. The Footprint Ladder (levels)	per-level imbalance flag	Diagonal-imbalance read across adjacent levels
+E45.01	ENTRY-LEGAL	H. The Footprint Ladder (levels)	ladder depth / dispersion	Level count / dispersion in ticks
+E45.02	ENTRY-LEGAL	H. The Footprint Ladder (levels)	ladder depth / dispersion	Dispersion percentile vs window
+E45.03	ENTRY-LEGAL	H. The Footprint Ladder (levels)	ladder depth / dispersion	FAT profile flag / THIN profile flag
+E45.04	ENTRY-LEGAL	H. The Footprint Ladder (levels)	ladder depth / dispersion	Dispersion vs range ratio
+E45.05	ENTRY-LEGAL	H. The Footprint Ladder (levels)	ladder depth / dispersion	z-score of dispersion
+E45.06	ENTRY-LEGAL	H. The Footprint Ladder (levels)	ladder depth / dispersion	Fat/thin streak
+E45.07	ENTRY-LEGAL	H. The Footprint Ladder (levels)	ladder depth / dispersion	Dispersion regime mean
+E45.08	ENTRY-LEGAL	H. The Footprint Ladder (levels)	ladder depth / dispersion	Auction-type tag: grind vs sweep
+E45.09	ENTRY-LEGAL	H. The Footprint Ladder (levels)	ladder depth / dispersion	Single-print tail flag (unfinished business at an extreme)
+E45.10	ENTRY-LEGAL	H. The Footprint Ladder (levels)	ladder depth / dispersion	Dispersion per unit volume
+E46.01	ENTRY-LEGAL	H. The Footprint Ladder (levels)	further derivables	Value-area (70%) width + position vs close
+E46.02	ENTRY-LEGAL	H. The Footprint Ladder (levels)	further derivables	VA overlap vs prior bucket (acceptance/rejection)
+E46.03	ENTRY-LEGAL	H. The Footprint Ladder (levels)	further derivables	Top-vs-bottom loading index
+E46.04	ENTRY-LEGAL	H. The Footprint Ladder (levels)	further derivables	Unfinished-auction flag at high / at low
+E46.05	ENTRY-LEGAL	H. The Footprint Ladder (levels)	further derivables	LVN / HVN map (counts + nearest distances)
+E46.06	ENTRY-LEGAL	H. The Footprint Ladder (levels)	further derivables	Profile entropy (auction dispersion)
+E46.07	ENTRY-LEGAL	H. The Footprint Ladder (levels)	further derivables	Delta-by-level tilt (where the net aggression sat)
+E46.08	ENTRY-LEGAL	H. The Footprint Ladder (levels)	further derivables	Mid-range acceptance share
+E46.09	ENTRY-LEGAL	H. The Footprint Ladder (levels)	further derivables	Poor-high / poor-low flags
+E46.10	ENTRY-LEGAL	H. The Footprint Ladder (levels)	further derivables	Composite profile tag for pattern joins
+E47.01	ENTRY-LEGAL	I. Forced Liquidations	liq_short	Absolute + /vol fraction
+E47.02	ENTRY-LEGAL	I. Forced Liquidations	liq_short	z / percentile vs window
+E47.03	ENTRY-LEGAL	I. Forced Liquidations	liq_short	FIRED flag: fraction >= 0.03 (LIQ ramp floor)
+E47.04	ENTRY-LEGAL	I. Forced Liquidations	liq_short	VIOLENT flag: fraction >= 0.20
+E47.05	ENTRY-LEGAL	I. Forced Liquidations	liq_short	Liq-short streak
+E47.06	ENTRY-LEGAL	I. Forced Liquidations	liq_short	Day-rank
+E47.07	ENTRY-LEGAL	I. Forced Liquidations	liq_short	Co-fire with up-move (squeeze corroboration)
+E47.08	ENTRY-LEGAL	I. Forced Liquidations	liq_short	First-after-quiet flag
+E47.09	ENTRY-LEGAL	I. Forced Liquidations	liq_short	Share of window's total liq-short
+E47.10	ENTRY-LEGAL	I. Forced Liquidations	liq_short	Acceleration vs prior bucket
+E48.01	ENTRY-LEGAL	I. Forced Liquidations	liq_long	Absolute + /vol fraction
+E48.02	ENTRY-LEGAL	I. Forced Liquidations	liq_long	z / percentile
+E48.03	ENTRY-LEGAL	I. Forced Liquidations	liq_long	FIRED flag (>= 0.03)
+E48.04	ENTRY-LEGAL	I. Forced Liquidations	liq_long	VIOLENT flag (>= 0.20)
+E48.05	ENTRY-LEGAL	I. Forced Liquidations	liq_long	Liq-long streak
+E48.06	ENTRY-LEGAL	I. Forced Liquidations	liq_long	Day-rank
+E48.07	ENTRY-LEGAL	I. Forced Liquidations	liq_long	Co-fire with down-move (long-squeeze corroboration)
+E48.08	ENTRY-LEGAL	I. Forced Liquidations	liq_long	First-after-quiet flag
+E48.09	ENTRY-LEGAL	I. Forced Liquidations	liq_long	Share of window's total liq-long
+E48.10	ENTRY-LEGAL	I. Forced Liquidations	liq_long	Acceleration
+E49.01	ENTRY-LEGAL	I. Forced Liquidations	liq fractions	Total-liq fraction
+E49.02	ENTRY-LEGAL	I. Forced Liquidations	liq fractions	Side-dominance of forced flow
+E49.03	ENTRY-LEGAL	I. Forced Liquidations	liq fractions	COIL-band flag: absorbed liqs inside compression (0.03-0.15)
+E49.04	ENTRY-LEGAL	I. Forced Liquidations	liq fractions	BOTH-SIDES liq flag
+E49.05	ENTRY-LEGAL	I. Forced Liquidations	liq fractions	Percentile of total fraction
+E49.06	ENTRY-LEGAL	I. Forced Liquidations	liq fractions	Cluster count in trailing window
+E49.07	ENTRY-LEGAL	I. Forced Liquidations	liq fractions	Buckets since last liq event
+E49.08	ENTRY-LEGAL	I. Forced Liquidations	liq fractions	Liq vs delta alignment (forced flow with or against)
+E49.09	ENTRY-LEGAL	I. Forced Liquidations	liq fractions	Liq at price extremes flag
+E49.10	ENTRY-LEGAL	I. Forced Liquidations	liq fractions	Cascade shape: rising liq sequence across buckets
+E50.01	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_cb / sz_cs	Counts per bin (vector feature)
+E50.02	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_cb / sz_cs	Large-count share (bins >= p95 anchor)
+E50.03	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_cb / sz_cs	Small-count share (bins <= ~p50)
+E50.04	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_cb / sz_cs	Count entropy across bins
+E50.05	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_cb / sz_cs	Highest occupied bin (largest print class)
+E50.06	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_cb / sz_cs	WHALE-print count (bins >= p99)
+E50.07	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_cb / sz_cs	ZERO-LARGE flag (no large prints at all)
+E50.08	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_cb / sz_cs	Large-count percentile vs window
+E50.09	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_cb / sz_cs	Large-count streak
+E50.10	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_cb / sz_cs	Buy-vs-sell count skew per size class
+E51.01	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_vb / sz_vs	Volume per bin (vector feature)
+E51.02	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_vb / sz_vs	LARGE-volume share of bucket
+E51.03	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_vb / sz_vs	WHALE-volume share
+E51.04	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_vb / sz_vs	SMALL-volume share
+E51.05	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_vb / sz_vs	Side split of large volume
+E51.06	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_vb / sz_vs	Max-bin volume + its bin index
+E51.07	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_vb / sz_vs	z / percentile of large share
+E51.08	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_vb / sz_vs	Large-share streak
+E51.09	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_vb / sz_vs	Dominance flip of large volume side
+E51.10	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	sz_vb / sz_vs	Volume entropy across bins
+E52.01	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	LARGE/SMALL/WHALE slices	Large net side: large-buy minus large-sell
+E52.02	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	LARGE/SMALL/WHALE slices	Large delta as % of bucket delta
+E52.03	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	LARGE/SMALL/WHALE slices	Small net side
+E52.04	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	LARGE/SMALL/WHALE slices	LARGE-vs-SMALL divergence flag (opposed)
+E52.05	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	LARGE/SMALL/WHALE slices	Large-participation trend over trailing N
+E52.06	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	LARGE/SMALL/WHALE slices	Whale present (Y/N)
+E52.07	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	LARGE/SMALL/WHALE slices	Large share of total delta
+E52.08	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	LARGE/SMALL/WHALE slices	Small-crowd one-sidedness
+E52.09	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	LARGE/SMALL/WHALE slices	Threshold-sweep stability: does the read hold p90->p97?
+E52.10	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	LARGE/SMALL/WHALE slices	Day-rank of large participation
+E53.01	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	size_thr	Current p50/p95/p99 values
+E53.02	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	size_thr	Anchor slope (sizing regime drift)
+E53.03	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	size_thr	p99/p50 ratio (live tail width)
+E53.04	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	size_thr	Anchor jump flag
+E53.05	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	size_thr	Percentile of anchors vs the day
+E53.06	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	size_thr	Time since last material shift
+E53.07	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	size_thr	Window fill n (cold-start health)
+E53.08	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	size_thr	Bucket max print vs anchors (class of the biggest print)
+E53.09	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	size_thr	Anchor stability (variance)
+E53.10	ENTRY-LEGAL	J. Trade-Size Classification (since 2026-06-30)	size_thr	Cross-check vs stored histograms (audit)
+E54.01	ENTRY-LEGAL	K. VPIN & Flow Toxicity	vpin	Current value
+E54.02	ENTRY-LEGAL	K. VPIN & Flow Toxicity	vpin	Tier: calm / warn / toxic (adaptive percentiles)
+E54.03	ENTRY-LEGAL	K. VPIN & Flow Toxicity	vpin	z / percentile vs trailing 240
+E54.04	ENTRY-LEGAL	K. VPIN & Flow Toxicity	vpin	Slope over last N buckets
+E54.05	ENTRY-LEGAL	K. VPIN & Flow Toxicity	vpin	Tier-dwell streak
+E54.06	ENTRY-LEGAL	K. VPIN & Flow Toxicity	vpin	TOXIC-entry flag (crossed up into toxic)
+E54.07	ENTRY-LEGAL	K. VPIN & Flow Toxicity	vpin	VPIN vs delta alignment (toxic AND one-sided)
+E54.08	ENTRY-LEGAL	K. VPIN & Flow Toxicity	vpin	Regime mean
+E54.09	ENTRY-LEGAL	K. VPIN & Flow Toxicity	vpin	Buckets since last toxic episode
+E54.10	ENTRY-LEGAL	K. VPIN & Flow Toxicity	vpin	VPIN x speed co-elevation flag
+E55.01	ENTRY-LEGAL	K. VPIN & Flow Toxicity	adaptive toxic/warn tiers	Current warn / toxic threshold values
+E55.02	ENTRY-LEGAL	K. VPIN & Flow Toxicity	adaptive toxic/warn tiers	Distance of vpin to toxic line
+E55.03	ENTRY-LEGAL	K. VPIN & Flow Toxicity	adaptive toxic/warn tiers	Tier transitions count in window
+E55.04	ENTRY-LEGAL	K. VPIN & Flow Toxicity	adaptive toxic/warn tiers	Dwell time per tier
+E55.05	ENTRY-LEGAL	K. VPIN & Flow Toxicity	adaptive toxic/warn tiers	Crossing direction of last transition
+E55.06	ENTRY-LEGAL	K. VPIN & Flow Toxicity	adaptive toxic/warn tiers	Tier at bucket close
+E55.07	ENTRY-LEGAL	K. VPIN & Flow Toxicity	adaptive toxic/warn tiers	Threshold drift (window freshness)
+E55.08	ENTRY-LEGAL	K. VPIN & Flow Toxicity	adaptive toxic/warn tiers	Tier stability score
+E55.09	ENTRY-LEGAL	K. VPIN & Flow Toxicity	adaptive toxic/warn tiers	Percentile-window fill health
+E55.10	ENTRY-LEGAL	K. VPIN & Flow Toxicity	adaptive toxic/warn tiers	Tier co-fire with liq/velocity flags
+E56.01	ENTRY-LEGAL	L. Windowed Structure Context	ATR / range compression	ATR value
+E56.02	ENTRY-LEGAL	L. Windowed Structure Context	ATR / range compression	range/ATR ratio
+E56.03	ENTRY-LEGAL	L. Windowed Structure Context	ATR / range compression	COMPRESSION flag (< 0.60)
+E56.04	ENTRY-LEGAL	L. Windowed Structure Context	ATR / range compression	EXPANSION flag (> 1.20)
+E56.05	ENTRY-LEGAL	L. Windowed Structure Context	ATR / range compression	ATR slope (vol regime drift)
+E56.06	ENTRY-LEGAL	L. Windowed Structure Context	ATR / range compression	ATR percentile vs day
+E56.07	ENTRY-LEGAL	L. Windowed Structure Context	ATR / range compression	Squeeze duration: consecutive compressed buckets
+E56.08	ENTRY-LEGAL	L. Windowed Structure Context	ATR / range compression	Post-compression break direction (study join)
+E56.09	ENTRY-LEGAL	L. Windowed Structure Context	ATR / range compression	ATR regime tag
+E56.10	ENTRY-LEGAL	L. Windowed Structure Context	ATR / range compression	ATR x duration coupling (slow AND tight = coil)
+E57.01	ENTRY-LEGAL	L. Windowed Structure Context	sweep depth	Swept prior HIGH (Y/N) / swept prior LOW (Y/N)
+E57.02	ENTRY-LEGAL	L. Windowed Structure Context	sweep depth	Sweep depth / range value
+E57.03	ENTRY-LEGAL	L. Windowed Structure Context	sweep depth	Depth percentile vs window
+E57.04	ENTRY-LEGAL	L. Windowed Structure Context	sweep depth	BOTH-SIDES sweep flag
+E57.05	ENTRY-LEGAL	L. Windowed Structure Context	sweep depth	Sweep magnitude z
+E57.06	ENTRY-LEGAL	L. Windowed Structure Context	sweep depth	Sweep at session extreme flag
+E57.07	ENTRY-LEGAL	L. Windowed Structure Context	sweep depth	Sweeps count in trailing window
+E57.08	ENTRY-LEGAL	L. Windowed Structure Context	sweep depth	Distance to nearest untouched equal-highs/lows pool
+E57.09	ENTRY-LEGAL	L. Windowed Structure Context	sweep depth	Sweep-then-reclaim same-bucket flag
+E57.10	ENTRY-LEGAL	L. Windowed Structure Context	sweep depth	Sweep direction vs close direction (grab-and-go?)
+E58.01	ENTRY-LEGAL	L. Windowed Structure Context	fail / reclaim depth	Fail depth /range value (0.05-0.50 ramp)
+E58.02	ENTRY-LEGAL	L. Windowed Structure Context	fail / reclaim depth	Fail direction (upside/downside break failed)
+E58.03	ENTRY-LEGAL	L. Windowed Structure Context	fail / reclaim depth	Reclaim depth /range (0.00-0.30 ramp)
+E58.04	ENTRY-LEGAL	L. Windowed Structure Context	fail / reclaim depth	Reclaim in SAME bucket flag (speed of reclaim)
+E58.05	ENTRY-LEGAL	L. Windowed Structure Context	fail / reclaim depth	Trap-geometry composite (fail x POC-pos x trapped-opens)
+E58.06	ENTRY-LEGAL	L. Windowed Structure Context	fail / reclaim depth	Fail percentile vs window
+E58.07	ENTRY-LEGAL	L. Windowed Structure Context	fail / reclaim depth	Reclaim strength z
+E58.08	ENTRY-LEGAL	L. Windowed Structure Context	fail / reclaim depth	Consecutive-fail streak
+E58.09	ENTRY-LEGAL	L. Windowed Structure Context	fail / reclaim depth	Close position after reclaim (conviction)
+E58.10	ENTRY-LEGAL	L. Windowed Structure Context	fail / reclaim depth	Squeeze-floor trigger proximity (liq >= 0.10)
+E59.01	ENTRY-LEGAL	L. Windowed Structure Context	trailing-30 baselines	Each baseline level (BER, SER, vel-mean, exh-z mean/sd)
+E59.02	ENTRY-LEGAL	L. Windowed Structure Context	trailing-30 baselines	Baseline slopes (regime drift per metric)
+E59.03	ENTRY-LEGAL	L. Windowed Structure Context	trailing-30 baselines	Baseline variance (stability)
+E59.04	ENTRY-LEGAL	L. Windowed Structure Context	trailing-30 baselines	Window fill / freshness n
+E59.05	ENTRY-LEGAL	L. Windowed Structure Context	trailing-30 baselines	Regime tags per metric
+E59.06	ENTRY-LEGAL	L. Windowed Structure Context	trailing-30 baselines	Cross-metric coherence (all hot vs mixed)
+E59.07	ENTRY-LEGAL	L. Windowed Structure Context	trailing-30 baselines	Baseline jump flags
+E59.08	ENTRY-LEGAL	L. Windowed Structure Context	trailing-30 baselines	Position of window extremes (how long ago the max)
+E59.09	ENTRY-LEGAL	L. Windowed Structure Context	trailing-30 baselines	Baseline percentile vs the day
+E59.10	ENTRY-LEGAL	L. Windowed Structure Context	trailing-30 baselines	Normalization health audit (zeros / floors hit)
+E60.01	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	state + confidence	State label (categorical) + one-hot vector
+E60.02	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	state + confidence	Confidence value
+E60.03	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	state + confidence	STARRED flag (>= 0.80)
+E60.04	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	state + confidence	Confidence percentile vs window
+E60.05	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	state + confidence	Same-state streak length
+E60.06	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	state + confidence	Transition pair tag: prior state -> this state
+E60.07	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	state + confidence	Directional class mapping: bullish / bearish / neutral
+E60.08	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	state + confidence	State entropy over trailing window (regime clarity)
+E60.09	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	state + confidence	Confidence slope over last N
+E60.10	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	state + confidence	Verdict at price extreme flag
+E61.01	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	factor breakdown	Weakest-factor name (what limited the verdict)
+E61.02	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	factor breakdown	Weakest-factor value (gating margin)
+E61.03	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	factor breakdown	Runner-up state + score gap (fragility)
+E61.04	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	factor breakdown	Floored soft-factor count
+E61.05	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	factor breakdown	Squeeze-floor engaged (Y/N)
+E61.06	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	factor breakdown	Full factor vector as features
+E61.07	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	factor breakdown	Core-vs-soft balance index
+E61.08	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	factor breakdown	Factor coherence (variance across inputs)
+E61.09	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	factor breakdown	Hard-gate near-miss flags (core just above 0)
+E61.10	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	factor breakdown	Factor deltas vs prior bucket
+E62.01	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	the 12 states	Historical frequency of each state
+E62.02	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	the 12 states	Mean same-state run length
+E62.03	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	the 12 states	Transition-matrix row for current state
+E62.04	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	the 12 states	Per-state confidence distribution
+E62.05	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	the 12 states	Session-hour distribution per state
+E62.06	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	the 12 states	State co-occurrence with flags (liq / velocity / dots)
+E62.07	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	the 12 states	Rarity flag (bottom-decile frequency state)
+E62.08	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	the 12 states	State cluster tag (trend / reversal / neutral families)
+E62.09	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	the 12 states	Per-state next-bucket outcome stats (study join)
+E62.10	ENTRY-LEGAL	M. The 12-State Verdict (classify_bucket)	the 12 states	Regime dependence (state mix drift over days)
+E63.01	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	OB zones per tf	Active-OB count per tf
+E63.02	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	OB zones per tf	Nearest OB distance (ticks / ATRs)
+E63.03	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	OB zones per tf	Nearest OB side: support vs resistance
+E63.04	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	OB zones per tf	Nearest OB age (buckets since formed)
+E63.05	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	OB zones per tf	Nearest OB strength score
+E63.06	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	OB zones per tf	Freshly-formed OB flag (this session)
+E63.07	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	OB zones per tf	Mitigated fraction of nearest OB
+E63.08	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	OB zones per tf	Nearest OB width
+E63.09	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	OB zones per tf	Stacked-OB count within N ticks
+E63.10	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	OB zones per tf	OB density above vs below price
+E64.01	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	distance-to-OB / inside-OB	Signed distance in ticks
+E64.02	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	distance-to-OB / inside-OB	Distance in ATR units
+E64.03	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	distance-to-OB / inside-OB	INSIDE-OB flag (Y/N) + which tf
+E64.04	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	distance-to-OB / inside-OB	Approach velocity (distance change per bucket)
+E64.05	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	distance-to-OB / inside-OB	FIRST-TOUCH flag of this OB
+E64.06	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	distance-to-OB / inside-OB	Touch count of this OB so far
+E64.07	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	distance-to-OB / inside-OB	Rejection-at-OB flag (wick into, close out)
+E64.08	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	distance-to-OB / inside-OB	Close inside vs wick-only penetration
+E64.09	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	distance-to-OB / inside-OB	Buckets since last touch
+E64.10	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	distance-to-OB / inside-OB	BREAK-THROUGH flag (closed beyond the zone)
+E65.01	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	cross-tf confluence	Confluence score at current price
+E65.02	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	cross-tf confluence	Count of tfs overlapping here
+E65.03	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	cross-tf confluence	Highest timeframe involved
+E65.04	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	cross-tf confluence	Distance to nearest confluence cluster
+E65.05	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	cross-tf confluence	INSIDE-confluence flag
+E65.06	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	cross-tf confluence	Score percentile vs the day
+E65.07	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	cross-tf confluence	Cluster freshness (age of youngest member)
+E65.08	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	cross-tf confluence	Score slope as price approaches
+E65.09	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	cross-tf confluence	Confluence co-location with heatmap wall (6h)
+E65.10	ENTRY-LEGAL	N. Market-Structure Context (order_blocks)	cross-tf confluence	Top-confluence-of-day flag
+E66.01	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	heatmap columns	Nearest wall ABOVE: distance + size
+E66.02	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	heatmap columns	Nearest wall BELOW: distance + size
+E66.03	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	heatmap columns	Wall asymmetry (above vs below mass)
+E66.04	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	heatmap columns	Wall persistence age
+E66.05	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	heatmap columns	Wall-eaten fraction during the bucket
+E66.06	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	heatmap columns	SPOOF-PULL flag: wall vanished untouched
+E66.07	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	heatmap columns	Approach outcome: held / broke / faded
+E66.08	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	heatmap columns	Wall count within +/- N ticks
+E66.09	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	heatmap columns	Book imbalance around price (resting, not taker)
+E66.10	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	heatmap columns	New-wall appearance during bucket flag
+E67.01	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	BBO series	Mean spread / max spread in bucket
+E67.02	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	BBO series	Spread z vs 6h norm
+E67.03	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	BBO series	Microprice drift vs close
+E67.04	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	BBO series	BBO flip rate (quote instability)
+E67.05	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	BBO series	Spread at bucket close
+E67.06	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	BBO series	Quote-fade events count
+E67.07	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	BBO series	Spread regime tag
+E67.08	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	BBO series	Spread x volume coupling (wide AND heavy = stress)
+E67.09	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	BBO series	Locked/crossed anomalies count
+E67.10	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	BBO series	Spread percentile of the bucket
+E68.01	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	DOM / COB snapshot	Top-N depth per side
+E68.02	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	DOM / COB snapshot	Depth imbalance ratio
+E68.03	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	DOM / COB snapshot	Depth slope by level (front-loaded vs deep)
+E68.04	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	DOM / COB snapshot	Refresh/replenish rate at touch
+E68.05	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	DOM / COB snapshot	Large resting order present (Y/N + size)
+E68.06	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	DOM / COB snapshot	Near-touch depth (1-3 ticks)
+E68.07	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	DOM / COB snapshot	Pull/stack event counts
+E68.08	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	DOM / COB snapshot	Depth percentile vs 6h
+E68.09	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	DOM / COB snapshot	Ladder skew (bid-heavy vs ask-heavy shape)
+E68.10	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	DOM / COB snapshot	DOM coherence with heatmap wall read
+E69.01	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	executed trade tape	Intrabucket delta path shape: front / mid / back-loaded
+E69.02	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	executed trade tape	Largest single print size + its position in the bucket
+E69.03	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	executed trade tape	Burst count (trades per 100ms clusters)
+E69.04	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	executed trade tape	Inter-trade gap stats (mean / max idle)
+E69.05	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	executed trade tape	Longest same-side print run
+E69.06	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	executed trade tape	Bucket VWAP vs close (who paid up)
+E69.07	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	executed trade tape	First-third vs last-third delta split
+E69.08	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	executed trade tape	Print-size autocorrelation (iceberg smell)
+E69.09	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	executed trade tape	Aggressive-cluster timestamps (sequencing joins)
+E69.10	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	executed trade tape	Tape-order audit for OHLC-ambiguous barrier hits
+E70.01	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	trade bubbles / aggregates	Net side per cell
+E70.02	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	trade bubbles / aggregates	Total qty per cell
+E70.03	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	trade bubbles / aggregates	Max bubble size in bucket
+E70.04	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	trade bubbles / aggregates	Bubble density (prints per cell)
+E70.05	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	trade bubbles / aggregates	Large-bubble count over threshold
+E70.06	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	trade bubbles / aggregates	Spatial same-side streaks (sweep tracks)
+E70.07	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	trade bubbles / aggregates	Bubble-at-wall co-location count
+E70.08	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	trade bubbles / aggregates	Aggregate color flips along price
+E70.09	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	trade bubbles / aggregates	Min-size-filtered bubble count
+E70.10	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	trade bubbles / aggregates	Bubble asymmetry above vs below POC
+E71.01	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	iceberg side classification	Iceberg cell count + side split
+E71.02	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	iceberg side classification	Iceberg at bucket extreme flag
+E71.03	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	iceberg side classification	Iceberg persistence (recurring at same price)
+E71.04	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	iceberg side classification	Iceberg size proxy (qty at flagged cells)
+E71.05	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	iceberg side classification	Coherence with suppression score s
+E71.06	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	iceberg side classification	First-iceberg-in-window flag
+E71.07	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	iceberg side classification	Iceberg-wall co-location flag
+E71.08	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	iceberg side classification	Post-iceberg drift (study join)
+E71.09	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	iceberg side classification	Iceberg density regime
+E71.10	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	iceberg side classification	Side-switch of icebergs across the bucket
+E72.01	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	per-cell max buy/sell qty	Max buy print / max sell print in bucket
+E72.02	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	per-cell max buy/sell qty	Max print class vs size_thr anchors (large / whale)
+E72.03	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	per-cell max buy/sell qty	Cells >= large threshold count
+E72.04	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	per-cell max buy/sell qty	Location of max print within the range
+E72.05	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	per-cell max buy/sell qty	Max-print side
+E72.06	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	per-cell max buy/sell qty	Top-cell clustering (adjacent large prints)
+E72.07	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	per-cell max buy/sell qty	Max print share of bucket volume
+E72.08	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	per-cell max buy/sell qty	NEW-max-of-window flag
+E72.09	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	per-cell max buy/sell qty	Side flip of the max print vs prior bucket
+E72.10	ENTRY-LEGAL	O. The Six-Hour Stores (depth.db + trade tape)	per-cell max buy/sell qty	Max print at wall / at OB co-location
+G01.1	ENTRY-LEGAL	G01 -- Elapsed time & clock straddles	G01 -- Elapsed time & clock straddles	Duration (the canonical example: elapsed seconds)
+G01.2	ENTRY-LEGAL	G01 -- Elapsed time & clock straddles	G01 -- Elapsed time & clock straddles	Session-straddle flag (opened and closed in different sessions)
+G01.3	ENTRY-LEGAL	G01 -- Elapsed time & clock straddles	G01 -- Elapsed time & clock straddles	Funding-timestamp straddle flag (crossed 00/08/16 UTC)
+G01.4	ENTRY-LEGAL	G01 -- Elapsed time & clock straddles	G01 -- Elapsed time & clock straddles	Bucket's session-transition position (pre/post-open bucket index)
+G01.5	ENTRY-LEGAL	G01 -- Elapsed time & clock straddles	G01 -- Elapsed time & clock straddles	Idle gap to the next bucket (tape silence after close)
+G02.1	ENTRY-LEGAL	G02 -- Candle geometry set	G02 -- Candle geometry set	Range, body, wicks, close-position -- the full geometry family
+G02.2	ENTRY-LEGAL	G02 -- Candle geometry set	G02 -- Candle geometry set	Gap vs prior close + true range
+G02.3	ENTRY-LEGAL	G02 -- Candle geometry set	G02 -- Candle geometry set	Inside / engulfing / breakout relation to prior bucket
+G02.4	ENTRY-LEGAL	G02 -- Candle geometry set	G02 -- Candle geometry set	Marubozu / doji / pin-bar shape tags
+G02.5	ENTRY-LEGAL	G02 -- Candle geometry set	G02 -- Candle geometry set	Equal-highs / equal-lows liquidity-pool distances
+G02.6	ENTRY-LEGAL	G02 -- Candle geometry set	G02 -- Candle geometry set	Two-bucket sweep-and-reclaim pattern flags
+G03.1	ENTRY-LEGAL	G03 -- Net initiative	G03 -- Net initiative	delta and delta fraction (the canonical pair)
+G03.2	ENTRY-LEGAL	G03 -- Net initiative	G03 -- Net initiative	Dominance ratio and log-odds of buy vs sell
+G03.3	ENTRY-LEGAL	G03 -- Net initiative	G03 -- Net initiative	Side-flip flag vs prior bucket
+G03.4	ENTRY-LEGAL	G03 -- Net initiative	G03 -- Net initiative	Trailing bucket-CVD (cumulative delta)
+G03.5	ENTRY-LEGAL	G03 -- Net initiative	G03 -- Net initiative	Buy/sell share slopes (pressure drift)
+G04.1	ENTRY-LEGAL	G04 -- Thrust efficiency	G04 -- Thrust efficiency	Price moved per net contract (efficiency of aggression)
+G04.2	ENTRY-LEGAL	G04 -- Thrust efficiency	G04 -- Thrust efficiency	STALL index: heavy delta, no body (absorption smell)
+G04.3	ENTRY-LEGAL	G04 -- Thrust efficiency	G04 -- Thrust efficiency	OVERDRIVE flag: small delta, big body (vacuum move)
+G04.4	ENTRY-LEGAL	G04 -- Thrust efficiency	G04 -- Thrust efficiency	Efficiency percentile vs window
+G04.5	ENTRY-LEGAL	G04 -- Thrust efficiency	G04 -- Thrust efficiency	Efficiency regime tag
+G05.1	ENTRY-LEGAL	G05 -- Initiative quadrants	G05 -- Initiative quadrants	Quadrant: +delta +dOI = new-money push (fresh longs driving)
+G05.2	ENTRY-LEGAL	G05 -- Initiative quadrants	G05 -- Initiative quadrants	Quadrant: +delta -dOI = covering push (shorts forced out)
+G05.3	ENTRY-LEGAL	G05 -- Initiative quadrants	G05 -- Initiative quadrants	Quadrant: -delta +dOI = distribution push (fresh shorts driving)
+G05.4	ENTRY-LEGAL	G05 -- Initiative quadrants	G05 -- Initiative quadrants	Quadrant: -delta -dOI = unwind drop (longs leaving)
+G05.5	ENTRY-LEGAL	G05 -- Initiative quadrants	G05 -- Initiative quadrants	Quadrant streaks and transitions (positioning narrative)
+G06.1	ENTRY-LEGAL	G06 -- Cohort accounting	G06 -- Cohort accounting	Net OI change + open:close ratio
+G06.2	ENTRY-LEGAL	G06 -- Cohort accounting	G06 -- Cohort accounting	Long-cohort net (opL-clL) and short-cohort net (opS-clS)
+G06.3	ENTRY-LEGAL	G06 -- Cohort accounting	G06 -- Cohort accounting	Side initiative index (who is opening harder)
+G06.4	ENTRY-LEGAL	G06 -- Cohort accounting	G06 -- Cohort accounting	Trapped-cohort fuel: opens into a failed break direction
+G06.5	ENTRY-LEGAL	G06 -- Cohort accounting	G06 -- Cohort accounting	Rotation completeness: churn share of total transfer
+G06.6	ENTRY-LEGAL	G06 -- Cohort accounting	G06 -- Cohort accounting	OI-story entropy (mixed vs clean narrative)
+G07.1	ENTRY-LEGAL	G07 -- Effort vs result verdict	G07 -- Effort vs result verdict	ABSORPTION verdict: hot effort, no result
+G07.2	ENTRY-LEGAL	G07 -- Effort vs result verdict	G07 -- Effort vs result verdict	TRANSLATION verdict: hot effort, full result
+G07.3	ENTRY-LEGAL	G07 -- Effort vs result verdict	G07 -- Effort vs result verdict	One-sided-effort divergence (hot side lost the bucket)
+G07.4	ENTRY-LEGAL	G07 -- Effort vs result verdict	G07 -- Effort vs result verdict	Effort-result efficiency ratio per side
+G07.5	ENTRY-LEGAL	G07 -- Effort vs result verdict	G07 -- Effort vs result verdict	Verdict streaks (persistent absorption at a level)
+G08.1	ENTRY-LEGAL	G08 -- Urgency	G08 -- Urgency	vel = volume/second and Speed multiple (canonical)
+G08.2	ENTRY-LEGAL	G08 -- Urgency	G08 -- Urgency	Urgency class: heavy AND fast vs heavy-slow grind
+G08.3	ENTRY-LEGAL	G08 -- Urgency	G08 -- Urgency	Pace-adjusted volume anomaly (residual vs both norms)
+G08.4	ENTRY-LEGAL	G08 -- Urgency	G08 -- Urgency	Urgency streak across buckets
+G08.5	ENTRY-LEGAL	G08 -- Urgency	G08 -- Urgency	Urgency at extremes (fast into highs/lows)
+G09.1	ENTRY-LEGAL	G09 -- Squeeze fingerprint	G09 -- Squeeze fingerprint	Forced-flow share of the move's aggression
+G09.2	ENTRY-LEGAL	G09 -- Squeeze fingerprint	G09 -- Squeeze fingerprint	Squeeze corroboration: liq side aligned with direction
+G09.3	ENTRY-LEGAL	G09 -- Squeeze fingerprint	G09 -- Squeeze fingerprint	Cascade quality: liq rising across consecutive buckets
+G09.4	ENTRY-LEGAL	G09 -- Squeeze fingerprint	G09 -- Squeeze fingerprint	Post-liq continuation vs fade (study join)
+G09.5	ENTRY-LEGAL	G09 -- Squeeze fingerprint	G09 -- Squeeze fingerprint	Coil read: liqs absorbed with no body (LIQ_COIL)
+G10.1	ENTRY-LEGAL	G10 -- Profile placement	G10 -- Profile placement	poc_pos and close-vs-VA position (acceptance/rejection)
+G10.2	ENTRY-LEGAL	G10 -- Profile placement	G10 -- Profile placement	Top-vs-bottom loading vs close direction
+G10.3	ENTRY-LEGAL	G10 -- Profile placement	G10 -- Profile placement	Unfinished-auction extreme vs next-bucket revisit
+G10.4	ENTRY-LEGAL	G10 -- Profile placement	G10 -- Profile placement	LVN-cross flag: body traversed a low-volume node
+G10.5	ENTRY-LEGAL	G10 -- Profile placement	G10 -- Profile placement	Profile-shape x direction interaction tags
+G11.1	ENTRY-LEGAL	G11 -- Large-trader read	G11 -- Large-trader read	Large-net vs small-net side split of the bucket's delta
+G11.2	ENTRY-LEGAL	G11 -- Large-trader read	G11 -- Large-trader read	DIVERGENCE flag: large one way, small the other
+G11.3	ENTRY-LEGAL	G11 -- Large-trader read	G11 -- Large-trader read	Whale-with-move vs whale-against-move tags
+G11.4	ENTRY-LEGAL	G11 -- Large-trader read	G11 -- Large-trader read	Large share of the winning side's volume
+G11.5	ENTRY-LEGAL	G11 -- Large-trader read	G11 -- Large-trader read	Threshold-sweep robustness of the large read (p90->p97)
+G12.1	ENTRY-LEGAL	G12 -- Large-order placement	G12 -- Large-order placement	Large-print price placement: at extremes vs mid-range
+G12.2	ENTRY-LEGAL	G12 -- Large-order placement	G12 -- Large-order placement	Large-at-POC concentration
+G12.3	ENTRY-LEGAL	G12 -- Large-order placement	G12 -- Large-order placement	Large prints into the wick (rejection of size)
+G12.4	ENTRY-LEGAL	G12 -- Large-order placement	G12 -- Large-order placement	Exact large-print sequencing within the bucket (6h tape)
+G12.5	ENTRY-LEGAL	G12 -- Large-order placement	G12 -- Large-order placement	Large-print co-location with imbalance stacks
+G13.1	ENTRY-LEGAL	G13 -- Who absorbed whom	G13 -- Who absorbed whom	Absorbed-side attribution: aggressors who failed
+G13.2	ENTRY-LEGAL	G13 -- Who absorbed whom	G13 -- Who absorbed whom	Absorbing-level location (where the wall stood)
+G13.3	ENTRY-LEGAL	G13 -- Who absorbed whom	G13 -- Who absorbed whom	Validated absorption against the trend flag
+G13.4	ENTRY-LEGAL	G13 -- Who absorbed whom	G13 -- Who absorbed whom	Absorption-then-flip candidate sequence (study join)
+G13.5	ENTRY-LEGAL	G13 -- Who absorbed whom	G13 -- Who absorbed whom	s x stacked-imbalance coherence check
+G14.1	ENTRY-LEGAL	G14 -- Toxic push composite	G14 -- Toxic push composite	Toxic AND one-sided AND fast composite score
+G14.2	ENTRY-LEGAL	G14 -- Toxic push composite	G14 -- Toxic push composite	Informed-flow candidate flag (all three elevated)
+G14.3	ENTRY-LEGAL	G14 -- Toxic push composite	G14 -- Toxic push composite	Composite percentile vs window
+G14.4	ENTRY-LEGAL	G14 -- Toxic push composite	G14 -- Toxic push composite	Composite streak (sustained informed pressure)
+G14.5	ENTRY-LEGAL	G14 -- Toxic push composite	G14 -- Toxic push composite	Composite at structure (at OB / at wall) join
+G15.1	ENTRY-LEGAL	G15 -- State sequencing	G15 -- State sequencing	Transition-pair features (e.g. COIL -> SQUEEZE)
+G15.2	ENTRY-LEGAL	G15 -- State sequencing	G15 -- State sequencing	State run-length at current bucket
+G15.3	ENTRY-LEGAL	G15 -- State sequencing	G15 -- State sequencing	Verdict-flip density (regime instability)
+G15.4	ENTRY-LEGAL	G15 -- State sequencing	G15 -- State sequencing	Confidence-weighted transition score
+G15.5	ENTRY-LEGAL	G15 -- State sequencing	G15 -- State sequencing	Per-transition outcome stats vs the barrier labels (study join)
+G16.1	ENTRY-LEGAL	G16 -- Window normalization family	G16 -- Window normalization family	z-score version of every raw metric
+G16.2	ENTRY-LEGAL	G16 -- Window normalization family	G16 -- Window normalization family	Percentile version of every raw metric
+G16.3	ENTRY-LEGAL	G16 -- Window normalization family	G16 -- Window normalization family	Streak length above/below own baseline
+G16.4	ENTRY-LEGAL	G16 -- Window normalization family	G16 -- Window normalization family	Slope of every metric over last N buckets
+G16.5	ENTRY-LEGAL	G16 -- Window normalization family	G16 -- Window normalization family	Regime tag per metric (calm/normal/hot)
+G17.1	ENTRY-LEGAL	G17 -- Structure-conditioned bundle	G17 -- Structure-conditioned bundle	At-OB behavior: touch / reject / break with all flow features
+G17.2	ENTRY-LEGAL	G17 -- Structure-conditioned bundle	G17 -- Structure-conditioned bundle	Distance-decay features (flow x proximity to OB)
+G17.3	ENTRY-LEGAL	G17 -- Structure-conditioned bundle	G17 -- Structure-conditioned bundle	Confluence-weighted position score
+G17.4	ENTRY-LEGAL	G17 -- Structure-conditioned bundle	G17 -- Structure-conditioned bundle	First-touch vs n-th-touch interaction with absorption
+G17.5	ENTRY-LEGAL	G17 -- Structure-conditioned bundle	G17 -- Structure-conditioned bundle	OB-break with large-order participation flag
+G18.1	ENTRY-LEGAL	G18 -- Wall interaction bundle	G18 -- Wall interaction bundle	Approach-outcome label: wall held / broke / pulled
+G18.2	ENTRY-LEGAL	G18 -- Wall interaction bundle	G18 -- Wall interaction bundle	Wall-eaten rate vs taker aggression (who is winning)
+G18.3	ENTRY-LEGAL	G18 -- Wall interaction bundle	G18 -- Wall interaction bundle	Absorption s AT a visible wall (the flagged study)
+G18.4	ENTRY-LEGAL	G18 -- Wall interaction bundle	G18 -- Wall interaction bundle	Spoof-pull preceding the move flag
+G18.5	ENTRY-LEGAL	G18 -- Wall interaction bundle	G18 -- Wall interaction bundle	Wall distance as a barrier-odds conditioning feature
+G19.1	ENTRY-LEGAL	G19 -- Sequencing bundle	G19 -- Sequencing bundle	Front-loaded vs back-loaded aggression shape
+G19.2	ENTRY-LEGAL	G19 -- Sequencing bundle	G19 -- Sequencing bundle	Largest-print timing vs bucket outcome
+G19.3	ENTRY-LEGAL	G19 -- Sequencing bundle	G19 -- Sequencing bundle	Burst-timing pattern (early bursts vs late bursts)
+G19.4	ENTRY-LEGAL	G19 -- Sequencing bundle	G19 -- Sequencing bundle	Same-side run lengths inside the bucket
+G19.5	ENTRY-LEGAL	G19 -- Sequencing bundle	G19 -- Sequencing bundle	Exact barrier-hit ORDER for OHLC-ambiguous buckets (labeler upgrade)
+G20.1	ENTRY-LEGAL	G20 -- Cross-timeframe join	G20 -- Cross-timeframe join	Position of the 1m bucket inside the forming higher-tf bucket
+G20.2	ENTRY-LEGAL	G20 -- Cross-timeframe join	G20 -- Cross-timeframe join	Higher-tf state verdict at the moment
+G20.3	ENTRY-LEGAL	G20 -- Cross-timeframe join	G20 -- Cross-timeframe join	Higher-tf delta/dOI alignment flag
+G20.4	ENTRY-LEGAL	G20 -- Cross-timeframe join	G20 -- Cross-timeframe join	Multi-tf agreement score (how many tfs point the same way)
+G20.5	ENTRY-LEGAL	G20 -- Cross-timeframe join	G20 -- Cross-timeframe join	Higher-tf OB/confluence proximity at the 1m close
+G21.1	ENTRY-LEGAL	G21 -- Trap / squeeze composite	G21 -- Trap / squeeze composite	The state-engine trap recipe exposed as one composite feature
+G21.2	ENTRY-LEGAL	G21 -- Trap / squeeze composite	G21 -- Trap / squeeze composite	Sweep-fail-reclaim three-beat pattern flag
+G21.3	ENTRY-LEGAL	G21 -- Trap / squeeze composite	G21 -- Trap / squeeze composite	Trapped-cohort size behind the failed break
+G21.4	ENTRY-LEGAL	G21 -- Trap / squeeze composite	G21 -- Trap / squeeze composite	Squeeze-completion score (reclaim + forced flow + speed)
+G21.5	ENTRY-LEGAL	G21 -- Trap / squeeze composite	G21 -- Trap / squeeze composite	Composite vs the labeled outcome (study join)
+G22.1	ENTRY-LEGAL	G22 -- Effort triangle	G22 -- Effort triangle	Volatility per unit volume (fragility of the tape)
+G22.2	ENTRY-LEGAL	G22 -- Effort triangle	G22 -- Effort triangle	Time-price-volume consistency residual (anomaly detector)
+G22.3	ENTRY-LEGAL	G22 -- Effort triangle	G22 -- Effort triangle	Slow-wide flag (thin tape, big moves)
+G22.4	ENTRY-LEGAL	G22 -- Effort triangle	G22 -- Effort triangle	Fast-narrow flag (heavy grind, no travel)
+G22.5	ENTRY-LEGAL	G22 -- Effort triangle	G22 -- Effort triangle	Triangle regime tag joining pace and volatility
+B-P1.01	ENTRY-LEGAL	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Bull absorption percentage (badge)
+J-P1.01	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Bull absorption percentage (badge)
+X-P1.01	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Bull absorption percentage (badge)
+B-P1.02	ENTRY-LEGAL	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Bear absorption percentage (badge)
+J-P1.02	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Bear absorption percentage (badge)
+X-P1.02	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Bear absorption percentage (badge)
+B-P1.03	ENTRY-LEGAL	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Spread: bull% - bear%
+J-P1.03	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Spread: bull% - bear%
+X-P1.03	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Spread: bull% - bear%
+B-P1.04	ENTRY-LEGAL	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Dominant side label
+J-P1.04	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Dominant side label
+X-P1.04	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Dominant side label
+B-P1.05	ENTRY-LEGAL	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Absolute bull V*s over the selection
+J-P1.05	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Absolute bull V*s over the selection
+X-P1.05	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Absolute bull V*s over the selection
+B-P1.06	ENTRY-LEGAL	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Absolute bear V*s over the selection
+J-P1.06	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Absolute bear V*s over the selection
+X-P1.06	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Absolute bear V*s over the selection
+B-P1.07	ENTRY-LEGAL	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Sum: absorbed share of selection volume
+J-P1.07	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Sum: absorbed share of selection volume
+X-P1.07	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Sum: absorbed share of selection volume
+B-P1.08	ENTRY-LEGAL	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Trajectory slope across the selection
+J-P1.08	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Trajectory slope across the selection
+X-P1.08	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Trajectory slope across the selection
+B-P1.09	ENTRY-LEGAL	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Peak-absorption bucket position (0..15)
+J-P1.09	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Peak-absorption bucket position (0..15)
+X-P1.09	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Peak-absorption bucket position (0..15)
+B-P1.10	ENTRY-LEGAL	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Validated-dot (s>=0.60) count in selection
+J-P1.10	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Validated-dot (s>=0.60) count in selection
+X-P1.10	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Validated-dot (s>=0.60) count in selection
+B-P1.11	ENTRY-LEGAL	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Entry-bucket raw (un-smoothed) hover value
+J-P1.11	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Entry-bucket raw (un-smoothed) hover value
+X-P1.11	POST-HOC	P1 -- ABSORPTION panel	P1 -- ABSORPTION panel	Entry-bucket raw (un-smoothed) hover value
+B-P2.01	ENTRY-LEGAL	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Bull eff-agg percentage (badge)
+J-P2.01	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Bull eff-agg percentage (badge)
+X-P2.01	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Bull eff-agg percentage (badge)
+B-P2.02	ENTRY-LEGAL	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Bear eff-agg percentage (badge)
+J-P2.02	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Bear eff-agg percentage (badge)
+X-P2.02	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Bear eff-agg percentage (badge)
+B-P2.03	ENTRY-LEGAL	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Spread: bull% - bear%
+J-P2.03	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Spread: bull% - bear%
+X-P2.03	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Spread: bull% - bear%
+B-P2.04	ENTRY-LEGAL	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Dominant side label
+J-P2.04	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Dominant side label
+X-P2.04	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Dominant side label
+B-P2.05	ENTRY-LEGAL	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Absolute bull V*(1-s) over the selection
+J-P2.05	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Absolute bull V*(1-s) over the selection
+X-P2.05	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Absolute bull V*(1-s) over the selection
+B-P2.06	ENTRY-LEGAL	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Absolute bear V*(1-s) over the selection
+J-P2.06	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Absolute bear V*(1-s) over the selection
+X-P2.06	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Absolute bear V*(1-s) over the selection
+B-P2.07	ENTRY-LEGAL	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Sum: eff-agg share of selection volume
+J-P2.07	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Sum: eff-agg share of selection volume
+X-P2.07	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Sum: eff-agg share of selection volume
+B-P2.08	ENTRY-LEGAL	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Trajectory slope across the selection
+J-P2.08	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Trajectory slope across the selection
+X-P2.08	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Trajectory slope across the selection
+B-P2.09	ENTRY-LEGAL	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Peak eff-agg bucket position
+J-P2.09	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Peak eff-agg bucket position
+X-P2.09	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Peak eff-agg bucket position
+B-P2.10	ENTRY-LEGAL	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Dominance-flip count across the selection
+J-P2.10	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Dominance-flip count across the selection
+X-P2.10	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Dominance-flip count across the selection
+B-P2.11	ENTRY-LEGAL	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Entry-bucket raw value
+J-P2.11	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Entry-bucket raw value
+X-P2.11	POST-HOC	P2 -- EFF-AGG panel	P2 -- EFF-AGG panel	Entry-bucket raw value
+B-P3.01	ENTRY-LEGAL	P3 -- E/R panel	P3 -- E/R panel	Buyer-side percentage (badge)
+J-P3.01	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Buyer-side percentage (badge)
+X-P3.01	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Buyer-side percentage (badge)
+B-P3.02	ENTRY-LEGAL	P3 -- E/R panel	P3 -- E/R panel	Seller-side percentage (badge)
+J-P3.02	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Seller-side percentage (badge)
+X-P3.02	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Seller-side percentage (badge)
+B-P3.03	ENTRY-LEGAL	P3 -- E/R panel	P3 -- E/R panel	Spread: buyer% - seller%
+J-P3.03	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Spread: buyer% - seller%
+X-P3.03	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Spread: buyer% - seller%
+B-P3.04	ENTRY-LEGAL	P3 -- E/R panel	P3 -- E/R panel	Dominant side label
+J-P3.04	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Dominant side label
+X-P3.04	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Dominant side label
+B-P3.05	ENTRY-LEGAL	P3 -- E/R panel	P3 -- E/R panel	Aggregate buyer multiple vs trailing baseline
+J-P3.05	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Aggregate buyer multiple vs trailing baseline
+X-P3.05	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Aggregate buyer multiple vs trailing baseline
+B-P3.06	ENTRY-LEGAL	P3 -- E/R panel	P3 -- E/R panel	Aggregate seller multiple vs baseline
+J-P3.06	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Aggregate seller multiple vs baseline
+X-P3.06	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Aggregate seller multiple vs baseline
+B-P3.07	ENTRY-LEGAL	P3 -- E/R panel	P3 -- E/R panel	Hot-bucket count (>=1.5x) in selection
+J-P3.07	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Hot-bucket count (>=1.5x) in selection
+X-P3.07	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Hot-bucket count (>=1.5x) in selection
+B-P3.08	ENTRY-LEGAL	P3 -- E/R panel	P3 -- E/R panel	Both-hot bucket count
+J-P3.08	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Both-hot bucket count
+X-P3.08	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Both-hot bucket count
+B-P3.09	ENTRY-LEGAL	P3 -- E/R panel	P3 -- E/R panel	Peak-E/R bucket position
+J-P3.09	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Peak-E/R bucket position
+X-P3.09	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Peak-E/R bucket position
+B-P3.10	ENTRY-LEGAL	P3 -- E/R panel	P3 -- E/R panel	Entry-bucket raw value
+J-P3.10	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Entry-bucket raw value
+X-P3.10	POST-HOC	P3 -- E/R panel	P3 -- E/R panel	Entry-bucket raw value
+B-P4.01	ENTRY-LEGAL	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Current exhaustion value (badge)
+J-P4.01	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Current exhaustion value (badge)
+X-P4.01	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Current exhaustion value (badge)
+B-P4.02	ENTRY-LEGAL	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	LAST EXHAUSTED SIDE (bull / bear)
+J-P4.02	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	LAST EXHAUSTED SIDE (bull / bear)
+X-P4.02	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	LAST EXHAUSTED SIDE (bull / bear)
+B-P4.03	ENTRY-LEGAL	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Last-exhausted side's percentage
+J-P4.03	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Last-exhausted side's percentage
+X-P4.03	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Last-exhausted side's percentage
+B-P4.04	ENTRY-LEGAL	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Opposite side's percentage
+J-P4.04	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Opposite side's percentage
+X-P4.04	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Opposite side's percentage
+B-P4.05	ENTRY-LEGAL	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Spread between the two sides
+J-P4.05	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Spread between the two sides
+X-P4.05	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Spread between the two sides
+B-P4.06	ENTRY-LEGAL	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Bull-fire count inside the selection
+J-P4.06	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Bull-fire count inside the selection
+X-P4.06	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Bull-fire count inside the selection
+B-P4.07	ENTRY-LEGAL	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Bear-fire count inside the selection
+J-P4.07	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Bear-fire count inside the selection
+X-P4.07	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Bear-fire count inside the selection
+B-P4.08	ENTRY-LEGAL	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Buckets since the last fire
+J-P4.08	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Buckets since the last fire
+X-P4.08	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Buckets since the last fire
+B-P4.09	ENTRY-LEGAL	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Peak gated score + its bucket position
+J-P4.09	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Peak gated score + its bucket position
+X-P4.09	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Peak gated score + its bucket position
+B-P4.10	ENTRY-LEGAL	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Crossover-diamond count in the selection
+J-P4.10	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Crossover-diamond count in the selection
+X-P4.10	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Crossover-diamond count in the selection
+B-P4.11	ENTRY-LEGAL	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Weakest gating leg at the entry bucket
+J-P4.11	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Weakest gating leg at the entry bucket
+X-P4.11	POST-HOC	P4 -- EXHAUSTION panel	P4 -- EXHAUSTION panel	Weakest gating leg at the entry bucket
+B-P5.01	ENTRY-LEGAL	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase bull percentage
+J-P5.01	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase bull percentage
+X-P5.01	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase bull percentage
+B-P5.02	ENTRY-LEGAL	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase bear percentage
+J-P5.02	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase bear percentage
+X-P5.02	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase bear percentage
+B-P5.03	ENTRY-LEGAL	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Spread: bull% - bear%
+J-P5.03	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Spread: bull% - bear%
+X-P5.03	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Spread: bull% - bear%
+B-P5.04	ENTRY-LEGAL	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase winner (UP green / DOWN red)
+J-P5.04	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase winner (UP green / DOWN red)
+X-P5.04	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase winner (UP green / DOWN red)
+B-P5.05	ENTRY-LEGAL	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase share of selection volume
+J-P5.05	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase share of selection volume
+X-P5.05	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase share of selection volume
+B-P5.06	ENTRY-LEGAL	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase length in buckets
+J-P5.06	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase length in buckets
+X-P5.06	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase length in buckets
+B-P5.07	ENTRY-LEGAL	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase trajectory slope
+J-P5.07	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase trajectory slope
+X-P5.07	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase trajectory slope
+B-P5.08	ENTRY-LEGAL	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase net delta
+J-P5.08	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase net delta
+X-P5.08	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase net delta
+B-P5.09	ENTRY-LEGAL	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase intensity vs selection average
+J-P5.09	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase intensity vs selection average
+X-P5.09	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Phase intensity vs selection average
+B-P5.10	ENTRY-LEGAL	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Entry-membership flag (entry inside this phase)
+J-P5.10	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Entry-membership flag (entry inside this phase)
+X-P5.10	POST-HOC	P5 -- Phase panel: BEFORE	P5 -- Phase panel: BEFORE	Entry-membership flag (entry inside this phase)
+B-P6.01	ENTRY-LEGAL	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase bull percentage
+J-P6.01	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase bull percentage
+X-P6.01	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase bull percentage
+B-P6.02	ENTRY-LEGAL	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase bear percentage
+J-P6.02	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase bear percentage
+X-P6.02	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase bear percentage
+B-P6.03	ENTRY-LEGAL	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Spread
+J-P6.03	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Spread
+X-P6.03	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Spread
+B-P6.04	ENTRY-LEGAL	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase winner
+J-P6.04	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase winner
+X-P6.04	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase winner
+B-P6.05	ENTRY-LEGAL	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase share of selection volume
+J-P6.05	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase share of selection volume
+X-P6.05	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase share of selection volume
+B-P6.06	ENTRY-LEGAL	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase length in buckets
+J-P6.06	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase length in buckets
+X-P6.06	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase length in buckets
+B-P6.07	ENTRY-LEGAL	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase trajectory slope
+J-P6.07	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase trajectory slope
+X-P6.07	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase trajectory slope
+B-P6.08	ENTRY-LEGAL	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase net delta
+J-P6.08	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase net delta
+X-P6.08	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase net delta
+B-P6.09	ENTRY-LEGAL	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	DURING-minus-BEFORE shift (phase transition)
+J-P6.09	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	DURING-minus-BEFORE shift (phase transition)
+X-P6.09	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	DURING-minus-BEFORE shift (phase transition)
+B-P6.10	ENTRY-LEGAL	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase peak bucket position
+J-P6.10	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase peak bucket position
+X-P6.10	POST-HOC	P6 -- Phase panel: DURING	P6 -- Phase panel: DURING	Phase peak bucket position
+B-P7.01	ENTRY-LEGAL	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase bull percentage
+J-P7.01	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase bull percentage
+X-P7.01	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase bull percentage
+B-P7.02	ENTRY-LEGAL	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase bear percentage
+J-P7.02	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase bear percentage
+X-P7.02	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase bear percentage
+B-P7.03	ENTRY-LEGAL	P7 -- Phase panel: END	P7 -- Phase panel: END	Spread
+J-P7.03	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Spread
+X-P7.03	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Spread
+B-P7.04	ENTRY-LEGAL	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase winner
+J-P7.04	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase winner
+X-P7.04	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase winner
+B-P7.05	ENTRY-LEGAL	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase share of selection volume
+J-P7.05	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase share of selection volume
+X-P7.05	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase share of selection volume
+B-P7.06	ENTRY-LEGAL	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase length in buckets
+J-P7.06	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase length in buckets
+X-P7.06	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase length in buckets
+B-P7.07	ENTRY-LEGAL	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase trajectory slope
+J-P7.07	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase trajectory slope
+X-P7.07	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase trajectory slope
+B-P7.08	ENTRY-LEGAL	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase net delta
+J-P7.08	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase net delta
+X-P7.08	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	Phase net delta
+B-P7.09	ENTRY-LEGAL	P7 -- Phase panel: END	P7 -- Phase panel: END	END-minus-DURING shift (late acceleration)
+J-P7.09	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	END-minus-DURING shift (late acceleration)
+X-P7.09	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	END-minus-DURING shift (late acceleration)
+B-P7.10	ENTRY-LEGAL	P7 -- Phase panel: END	P7 -- Phase panel: END	END-winner alignment with entry-bucket direction
+J-P7.10	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	END-winner alignment with entry-bucket direction
+X-P7.10	POST-HOC	P7 -- Phase panel: END	P7 -- Phase panel: END	END-winner alignment with entry-bucket direction
+B-P8L.01	ENTRY-LEGAL	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large BUY volume in selection
+J-P8L.01	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large BUY volume in selection
+X-P8L.01	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large BUY volume in selection
+B-P8L.02	ENTRY-LEGAL	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large SELL volume in selection
+J-P8L.02	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large SELL volume in selection
+X-P8L.02	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large SELL volume in selection
+B-P8L.03	ENTRY-LEGAL	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Sum: total large volume
+J-P8L.03	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Sum: total large volume
+X-P8L.03	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Sum: total large volume
+B-P8L.04	ENTRY-LEGAL	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large delta (buy - sell)
+J-P8L.04	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large delta (buy - sell)
+X-P8L.04	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large delta (buy - sell)
+B-P8L.05	ENTRY-LEGAL	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large share of selection volume
+J-P8L.05	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large share of selection volume
+X-P8L.05	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large share of selection volume
+B-P8L.06	ENTRY-LEGAL	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large trade count
+J-P8L.06	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large trade count
+X-P8L.06	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large trade count
+B-P8L.07	ENTRY-LEGAL	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Largest print class vs size_thr anchors
+J-P8L.07	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Largest print class vs size_thr anchors
+X-P8L.07	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Largest print class vs size_thr anchors
+B-P8L.08	ENTRY-LEGAL	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large-activity slope across selection
+J-P8L.08	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large-activity slope across selection
+X-P8L.08	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large-activity slope across selection
+B-P8L.09	ENTRY-LEGAL	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Run-winner badge total (latest bar)
+J-P8L.09	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Run-winner badge total (latest bar)
+X-P8L.09	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Run-winner badge total (latest bar)
+B-P8L.10	ENTRY-LEGAL	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Threshold in force (slider or p95 auto)
+J-P8L.10	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Threshold in force (slider or p95 auto)
+X-P8L.10	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Threshold in force (slider or p95 auto)
+B-P8L.11	ENTRY-LEGAL	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large bull/bear split at the entry bucket
+J-P8L.11	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large bull/bear split at the entry bucket
+X-P8L.11	POST-HOC	P8L -- LARGE MKT panel	P8L -- LARGE MKT panel	Large bull/bear split at the entry bucket
+B-P8S.01	ENTRY-LEGAL	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small BUY volume in selection
+J-P8S.01	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small BUY volume in selection
+X-P8S.01	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small BUY volume in selection
+B-P8S.02	ENTRY-LEGAL	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small SELL volume in selection
+J-P8S.02	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small SELL volume in selection
+X-P8S.02	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small SELL volume in selection
+B-P8S.03	ENTRY-LEGAL	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Sum: total small volume
+J-P8S.03	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Sum: total small volume
+X-P8S.03	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Sum: total small volume
+B-P8S.04	ENTRY-LEGAL	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small delta (buy - sell)
+J-P8S.04	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small delta (buy - sell)
+X-P8S.04	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small delta (buy - sell)
+B-P8S.05	ENTRY-LEGAL	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small share of selection volume
+J-P8S.05	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small share of selection volume
+X-P8S.05	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small share of selection volume
+B-P8S.06	ENTRY-LEGAL	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small trade count
+J-P8S.06	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small trade count
+X-P8S.06	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small trade count
+B-P8S.07	ENTRY-LEGAL	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small-activity slope across selection
+J-P8S.07	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small-activity slope across selection
+X-P8S.07	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small-activity slope across selection
+B-P8S.08	ENTRY-LEGAL	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small-crowd dominant side
+J-P8S.08	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small-crowd dominant side
+X-P8S.08	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small-crowd dominant side
+B-P8S.09	ENTRY-LEGAL	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	LARGE-vs-SMALL divergence flag (opposed sides)
+J-P8S.09	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	LARGE-vs-SMALL divergence flag (opposed sides)
+X-P8S.09	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	LARGE-vs-SMALL divergence flag (opposed sides)
+B-P8S.10	ENTRY-LEGAL	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small threshold in force (~p50)
+J-P8S.10	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small threshold in force (~p50)
+X-P8S.10	POST-HOC	P8S -- SMALL MKT panel	P8S -- SMALL MKT panel	Small threshold in force (~p50)
+B-P9.01	ENTRY-LEGAL	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Bull line value (badge)
+J-P9.01	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Bull line value (badge)
+X-P9.01	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Bull line value (badge)
+B-P9.02	ENTRY-LEGAL	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Bear line value (badge)
+J-P9.02	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Bear line value (badge)
+X-P9.02	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Bear line value (badge)
+B-P9.03	ENTRY-LEGAL	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	SUM line value (badge)
+J-P9.03	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	SUM line value (badge)
+X-P9.03	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	SUM line value (badge)
+B-P9.04	ENTRY-LEGAL	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Spread: bull - bear
+J-P9.04	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Spread: bull - bear
+X-P9.04	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Spread: bull - bear
+B-P9.05	ENTRY-LEGAL	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Sum sign (net lean direction)
+J-P9.05	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Sum sign (net lean direction)
+X-P9.05	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Sum sign (net lean direction)
+B-P9.06	ENTRY-LEGAL	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Sum slope over the last 5 buckets
+J-P9.06	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Sum slope over the last 5 buckets
+X-P9.06	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Sum slope over the last 5 buckets
+B-P9.07	ENTRY-LEGAL	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Zero-cross count in the selection
+J-P9.07	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Zero-cross count in the selection
+X-P9.07	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Zero-cross count in the selection
+B-P9.08	ENTRY-LEGAL	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	+/-50 breach count
+J-P9.08	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	+/-50 breach count
+X-P9.08	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	+/-50 breach count
+B-P9.09	ENTRY-LEGAL	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Mean |lean| across selection (conviction)
+J-P9.09	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Mean |lean| across selection (conviction)
+X-P9.09	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Mean |lean| across selection (conviction)
+B-P9.10	ENTRY-LEGAL	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Entry-bucket raw lean
+J-P9.10	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Entry-bucket raw lean
+X-P9.10	POST-HOC	P9 -- COMPOSITE LEAN panel	P9 -- COMPOSITE LEAN panel	Entry-bucket raw lean
+B-P0.01	ENTRY-LEGAL	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Smoothed bull value
+J-P0.01	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Smoothed bull value
+X-P0.01	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Smoothed bull value
+B-P0.02	ENTRY-LEGAL	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Smoothed bear value
+J-P0.02	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Smoothed bear value
+X-P0.02	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Smoothed bear value
+B-P0.03	ENTRY-LEGAL	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Smoothed SUM value
+J-P0.03	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Smoothed SUM value
+X-P0.03	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Smoothed SUM value
+B-P0.04	ENTRY-LEGAL	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Spread
+J-P0.04	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Spread
+X-P0.04	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Spread
+B-P0.05	ENTRY-LEGAL	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Locked-region end value
+J-P0.05	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Locked-region end value
+X-P0.05	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Locked-region end value
+B-P0.06	ENTRY-LEGAL	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Settling-tail delta (current - locked)
+J-P0.06	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Settling-tail delta (current - locked)
+X-P0.06	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Settling-tail delta (current - locked)
+B-P0.07	ENTRY-LEGAL	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Last confirmed cross level (+50 / 0 / -50)
+J-P0.07	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Last confirmed cross level (+50 / 0 / -50)
+X-P0.07	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Last confirmed cross level (+50 / 0 / -50)
+B-P0.08	ENTRY-LEGAL	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Side of the last confirmed cross
+J-P0.08	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Side of the last confirmed cross
+X-P0.08	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Side of the last confirmed cross
+B-P0.09	ENTRY-LEGAL	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Buckets since the last confirmed cross
+J-P0.09	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Buckets since the last confirmed cross
+X-P0.09	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Buckets since the last confirmed cross
+B-P0.10	ENTRY-LEGAL	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Cross-marker count in the selection
+J-P0.10	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Cross-marker count in the selection
+X-P0.10	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Cross-marker count in the selection
+B-P0.11	ENTRY-LEGAL	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Twin-coherence flag (sign agrees with P9)
+J-P0.11	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Twin-coherence flag (sign agrees with P9)
+X-P0.11	POST-HOC	P0 -- SMOOTHED LEAN panel	P0 -- SMOOTHED LEAN panel	Twin-coherence flag (sign agrees with P9)
+B-S.01	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Selection bucket count
+J-S.01	POST-HOC	S -- Selection stats box	S -- Selection stats box	Selection bucket count
+X-S.01	POST-HOC	S -- Selection stats box	S -- Selection stats box	Selection bucket count
+B-S.02	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Selection wall-clock duration
+J-S.02	POST-HOC	S -- Selection stats box	S -- Selection stats box	Selection wall-clock duration
+X-S.02	POST-HOC	S -- Selection stats box	S -- Selection stats box	Selection wall-clock duration
+B-S.03	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Total volume
+J-S.03	POST-HOC	S -- Selection stats box	S -- Selection stats box	Total volume
+X-S.03	POST-HOC	S -- Selection stats box	S -- Selection stats box	Total volume
+B-S.04	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Sell | Buy split
+J-S.04	POST-HOC	S -- Selection stats box	S -- Selection stats box	Sell | Buy split
+X-S.04	POST-HOC	S -- Selection stats box	S -- Selection stats box	Sell | Buy split
+B-S.05	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Net delta + delta percentage
+J-S.05	POST-HOC	S -- Selection stats box	S -- Selection stats box	Net delta + delta percentage
+X-S.05	POST-HOC	S -- Selection stats box	S -- Selection stats box	Net delta + delta percentage
+B-S.06	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Net dOI
+J-S.06	POST-HOC	S -- Selection stats box	S -- Selection stats box	Net dOI
+X-S.06	POST-HOC	S -- Selection stats box	S -- Selection stats box	Net dOI
+B-S.07	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Sum OpL
+J-S.07	POST-HOC	S -- Selection stats box	S -- Selection stats box	Sum OpL
+X-S.07	POST-HOC	S -- Selection stats box	S -- Selection stats box	Sum OpL
+B-S.08	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Sum OpS
+J-S.08	POST-HOC	S -- Selection stats box	S -- Selection stats box	Sum OpS
+X-S.08	POST-HOC	S -- Selection stats box	S -- Selection stats box	Sum OpS
+B-S.09	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Sum ClL
+J-S.09	POST-HOC	S -- Selection stats box	S -- Selection stats box	Sum ClL
+X-S.09	POST-HOC	S -- Selection stats box	S -- Selection stats box	Sum ClL
+B-S.10	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Sum ClS
+J-S.10	POST-HOC	S -- Selection stats box	S -- Selection stats box	Sum ClS
+X-S.10	POST-HOC	S -- Selection stats box	S -- Selection stats box	Sum ClS
+B-S.11	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Aggregate B-E/R multiple
+J-S.11	POST-HOC	S -- Selection stats box	S -- Selection stats box	Aggregate B-E/R multiple
+X-S.11	POST-HOC	S -- Selection stats box	S -- Selection stats box	Aggregate B-E/R multiple
+B-S.12	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Aggregate S-E/R multiple
+J-S.12	POST-HOC	S -- Selection stats box	S -- Selection stats box	Aggregate S-E/R multiple
+X-S.12	POST-HOC	S -- Selection stats box	S -- Selection stats box	Aggregate S-E/R multiple
+B-S.13	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Average VEL + Speed multiple
+J-S.13	POST-HOC	S -- Selection stats box	S -- Selection stats box	Average VEL + Speed multiple
+X-S.13	POST-HOC	S -- Selection stats box	S -- Selection stats box	Average VEL + Speed multiple
+B-S.14	ENTRY-LEGAL	S -- Selection stats box	S -- Selection stats box	Selection range + net price change %
+J-S.14	POST-HOC	S -- Selection stats box	S -- Selection stats box	Selection range + net price change %
+X-S.14	POST-HOC	S -- Selection stats box	S -- Selection stats box	Selection range + net price change %
+C.01	ENTRY-LEGAL	C -- Last-15 pre-entry context	C -- Last-15 pre-entry context	Direction over the 15: net UP or DOWN
+C.02	ENTRY-LEGAL	C -- Last-15 pre-entry context	C -- Last-15 pre-entry context	Net % change over the 15
+C.03	ENTRY-LEGAL	C -- Last-15 pre-entry context	C -- Last-15 pre-entry context	Linear-fit slope + R-squared (trendiness)
+C.04	ENTRY-LEGAL	C -- Last-15 pre-entry context	C -- Last-15 pre-entry context	Path class: trend / range / V-shape
+C.05	ENTRY-LEGAL	C -- Last-15 pre-entry context	C -- Last-15 pre-entry context	Max drawup and drawdown within the 15
+C.06	ENTRY-LEGAL	C -- Last-15 pre-entry context	C -- Last-15 pre-entry context	Realized volatility of the 15
+C.07	ENTRY-LEGAL	C -- Last-15 pre-entry context	C -- Last-15 pre-entry context	Higher-highs / lower-lows counts
+C.08	ENTRY-LEGAL	C -- Last-15 pre-entry context	C -- Last-15 pre-entry context	Dominant 12-state verdict over the 15
+C.09	ENTRY-LEGAL	C -- Last-15 pre-entry context	C -- Last-15 pre-entry context	Cumulative delta over the 15
+C.10	ENTRY-LEGAL	C -- Last-15 pre-entry context	C -- Last-15 pre-entry context	Cumulative dOI over the 15
+C.11	ENTRY-LEGAL	C -- Last-15 pre-entry context	C -- Last-15 pre-entry context	Compression share (buckets under 0.6 ATR)
+C.12	ENTRY-LEGAL	C -- Last-15 pre-entry context	C -- Last-15 pre-entry context	Sweep-event count in the 15
+L.01	POST-HOC	L -- Episode identity & labels	L -- Episode identity & labels	Episode direction: long / short
+L.02	POST-HOC	L -- Episode identity & labels	L -- Episode identity & labels	Outcome label: TP / SL / UNRESOLVED
+L.03	POST-HOC	L -- Episode identity & labels	L -- Episode identity & labels	Resolved flag: barrier hit within the 6h window and available data
+L.04	POST-HOC	L -- Episode identity & labels	L -- Episode identity & labels	Censor reason: none / 6h-window / end-of-data
+L.05	POST-HOC	L -- Episode identity & labels	L -- Episode identity & labels	Entry price (entry-bucket close) + absolute TP and SL prices
+L.06	POST-HOC	L -- Episode identity & labels	L -- Episode identity & labels	Entry bucket id + entry timestamp
+L.07	POST-HOC	L -- Episode identity & labels	L -- Episode identity & labels	Ambiguous-hit flag: one bucket spanned BOTH barriers -> ruled SL by convention
+L.08	POST-HOC	L -- Episode identity & labels	L -- Episode identity & labels	Joint 3-way path label mirror (UP / DOWN / WHIPSAW)
+L.09	POST-HOC	L -- Episode identity & labels	L -- Episode identity & labels	Episode id: bucket_id x direction key
+O.01	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	Three-way path label: UP-resolve / DOWN-resolve / WHIPSAW
+O.02	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	Per-direction outcome: long TP/SL and short TP/SL
+O.03	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	Time to barrier touch (entry close -> touch)
+O.04	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	Buckets to barrier touch
+O.05	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	Barrier-touch bucket id (end of J-scope)
+O.06	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	TP episodes: max favorable excursion BEYOND TP, % (6h cap)
+O.07	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	TP episodes: time to that max
+O.08	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	TP episodes: buckets to that max
+O.09	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	Excursion velocity: % per hour to the max
+O.10	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	Retention: window-end value vs max (give-back %)
+O.11	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	Censoring flag: max sits at the 6h window edge
+O.12	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	SL episodes: max adverse continuation BEYOND SL, %
+O.13	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	SL episodes: time to the max adverse point
+O.14	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	Adverse velocity: % per hour
+O.15	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	Recovery flags: re-crossed SL / re-crossed entry within 6h
+O.16	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	Excursion-max bucket id (end of X-scope)
+O.17	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	TP episodes: max against-entry depth BEFORE the hit, % from entry
+O.18	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	SL episodes: max in-favor move BEFORE the stop, % from entry
+O.19	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	TP episodes: price crossed entry AGAINST the position first (Y/N)
+O.20	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	TP episodes: underwater time before the TP hit
+O.21	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	TP episodes: near-death ratio -- against-entry depth / SL distance
+O.22	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	SL episodes: price crossed entry IN FAVOR first (Y/N)
+O.23	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	SL episodes: time in profit before the stop
+O.24	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	SL episodes: near-win ratio -- in-favor move / TP distance
+O.25	POST-HOC	O -- Barrier outcome + excursion family	O -- Barrier outcome + excursion family	Entry re-cross count before the barrier (chop around entry)
+K.01	ENTRY-LEGAL	K -- Keltner channel & POC baseline	K -- Keltner channel & POC baseline	KC middle line value at entry (EMA-20 of close)
+K.02	ENTRY-LEGAL	K -- Keltner channel & POC baseline	K -- Keltner channel & POC baseline	KC upper band (mid + 2.0 x ATR-20)
+K.03	ENTRY-LEGAL	K -- Keltner channel & POC baseline	K -- Keltner channel & POC baseline	KC lower band (mid - 2.0 x ATR-20)
+K.04	ENTRY-LEGAL	K -- Keltner channel & POC baseline	K -- Keltner channel & POC baseline	Bandwidth: (upper - lower) / mid
+K.05	ENTRY-LEGAL	K -- Keltner channel & POC baseline	K -- Keltner channel & POC baseline	Entry close position inside the channel, 0..1
+K.06	ENTRY-LEGAL	K -- Keltner channel & POC baseline	K -- Keltner channel & POC baseline	Zone tag: above / upper-half / lower-half / below
+K.07	ENTRY-LEGAL	K -- Keltner channel & POC baseline	K -- Keltner channel & POC baseline	Distance to nearest band (ticks and ATRs)
+K.08	ENTRY-LEGAL	K -- Keltner channel & POC baseline	K -- Keltner channel & POC baseline	Channel slope (mid-line drift over N buckets)
+K.09	ENTRY-LEGAL	K -- Keltner channel & POC baseline	K -- Keltner channel & POC baseline	Squeeze flag: bandwidth in bottom percentile
+K.10	ENTRY-LEGAL	K -- Keltner channel & POC baseline	K -- Keltner channel & POC baseline	Rolling-POC baseline value (240-bucket window POC)
+K.11	ENTRY-LEGAL	K -- Keltner channel & POC baseline	K -- Keltner channel & POC baseline	Close vs POC baseline: side + distance
+K.12	ENTRY-LEGAL	K -- Keltner channel & POC baseline	K -- Keltner channel & POC baseline	POC-baseline slope + consecutive-side streak

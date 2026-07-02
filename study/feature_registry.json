@@ -1,0 +1,5141 @@
+{
+ "meta": {
+  "name": "smc_quant bucket feature registry",
+  "generated": "2026-07-02",
+  "source": "smc_quant_legacy @ pipeline-integrity",
+  "totals": {
+   "entries": 72,
+   "entry_derivations": 724,
+   "groups": 22,
+   "group_derivations": 112,
+   "panel_fields": 115,
+   "scoped_mode10_fields": 387,
+   "context": 12,
+   "labels": 9,
+   "outcome": 25,
+   "kc_poc": 12,
+   "grand_total_coded": 1281
+  },
+  "row_model": "one row per (bucket_id, direction); entry-legal fields identical across the long/short pair",
+  "entry_legal_universe": [
+   "E*",
+   "G*",
+   "C.*",
+   "K.*",
+   "B-* scope"
+  ],
+  "post_hoc_universe": [
+   "J-* scope",
+   "X-* scope",
+   "L.*",
+   "O.*"
+  ]
+ },
+ "scopes": [
+  {
+   "prefix": "B-",
+   "name": "BASE selection",
+   "definition": "The 15 buckets BEFORE entry + the entry bucket (16 total), extracted at entry close.",
+   "legality": "ENTRY-LEGAL"
+  },
+  {
+   "prefix": "J-",
+   "name": "JOURNEY selection",
+   "definition": "Entry bucket through the bucket that TOUCHED the barrier (TP or SL).",
+   "legality": "POST-HOC"
+  },
+  {
+   "prefix": "X-",
+   "name": "EXCURSION selection",
+   "definition": "Entry bucket through the bucket of the DIRECTIONAL 6h max: TP episodes end at the max IN the position's favor (a long that ran to +1.0% ends there); SL episodes end at the max adverse point.",
+   "legality": "POST-HOC"
+  }
+ ],
+ "sections": [
+  {
+   "part": "I",
+   "title": "A. Identity & Geometry",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E01",
+     "field": "start_time",
+     "tag": "P",
+     "desc": "Epoch timestamp of the first trade that seeded the bucket.",
+     "derivations": [
+      {
+       "code": "E01.01",
+       "text": "UTC hour-of-day (0-23)"
+      },
+      {
+       "code": "E01.02",
+       "text": "Trading session tag: Asia / London / NY / overlap"
+      },
+      {
+       "code": "E01.03",
+       "text": "Session-OPEN proximity flag: within 30m of London or NY open (Y/N)"
+      },
+      {
+       "code": "E01.04",
+       "text": "Session-CLOSE proximity flag (Y/N)"
+      },
+      {
+       "code": "E01.05",
+       "text": "Binance funding-window proximity: 00/08/16 UTC (Y/N + minutes)"
+      },
+      {
+       "code": "E01.06",
+       "text": "Day-of-week / weekend flag"
+      },
+      {
+       "code": "E01.07",
+       "text": "Top-of-hour or half-hour flag (algo-clock effects)"
+      },
+      {
+       "code": "E01.08",
+       "text": "Minutes since UTC midnight (day position)"
+      },
+      {
+       "code": "E01.09",
+       "text": "US data-hour flag (12:30 / 14:00 UTC class times)"
+      },
+      {
+       "code": "E01.10",
+       "text": "Minutes since prior session's close"
+      },
+      {
+       "code": "E01.11",
+       "text": "Same-hour historical norm join key"
+      },
+      {
+       "code": "E01.12",
+       "text": "Month / quarter position (calendar seasonality key)"
+      }
+     ]
+    },
+    {
+     "code": "E02",
+     "field": "end_time",
+     "tag": "P",
+     "desc": "Epoch timestamp at close, i.e. the tick that filled the volume target.",
+     "derivations": [
+      {
+       "code": "E02.01",
+       "text": "UTC hour-of-day at close"
+      },
+      {
+       "code": "E02.02",
+       "text": "Session tag at close"
+      },
+      {
+       "code": "E02.03",
+       "text": "Session-STRADDLE flag: opened in one session, closed in another (Y/N)"
+      },
+      {
+       "code": "E02.04",
+       "text": "Funding-timestamp straddle flag (crossed 00/08/16 UTC) (Y/N)"
+      },
+      {
+       "code": "E02.05",
+       "text": "Round-hour close proximity (Y/N)"
+      },
+      {
+       "code": "E02.06",
+       "text": "Day-of-week at close / weekend flag"
+      },
+      {
+       "code": "E02.07",
+       "text": "Gap to NEXT bucket's start (tape idle time)"
+      },
+      {
+       "code": "E02.08",
+       "text": "Elapsed fraction of the current session"
+      },
+      {
+       "code": "E02.09",
+       "text": "Proximity to daily (00:00 UTC) candle close"
+      },
+      {
+       "code": "E02.10",
+       "text": "Close inside a scheduled-news window flag"
+      }
+     ]
+    },
+    {
+     "code": "E03",
+     "field": "duration",
+     "tag": "D",
+     "desc": "end_time - start_time. Volume buckets stretch in quiet tape and compress in fast tape.",
+     "derivations": [
+      {
+       "code": "E03.01",
+       "text": "Raw seconds / log-duration"
+      },
+      {
+       "code": "E03.02",
+       "text": "Duration percentile vs trailing 30 and 240 buckets"
+      },
+      {
+       "code": "E03.03",
+       "text": "Duration z-score vs trailing window"
+      },
+      {
+       "code": "E03.04",
+       "text": "FAST-fill flag: bottom decile (Y/N)"
+      },
+      {
+       "code": "E03.05",
+       "text": "SLOW-fill flag: top decile (Y/N)"
+      },
+      {
+       "code": "E03.06",
+       "text": "Duration vs same-UTC-hour historical norm"
+      },
+      {
+       "code": "E03.07",
+       "text": "Fast/slow STREAK length (consecutive buckets same class)"
+      },
+      {
+       "code": "E03.08",
+       "text": "Duration acceleration: ratio vs prior bucket"
+      },
+      {
+       "code": "E03.09",
+       "text": "Implied tape-pace regime tag (quiet/normal/hot)"
+      },
+      {
+       "code": "E03.10",
+       "text": "Duration share of the trailing-10 total (burstiness)"
+      }
+     ]
+    },
+    {
+     "code": "E04",
+     "field": "open / high / low / close",
+     "tag": "P",
+     "desc": "Classic OHLC of the bucket; high/low fall back to close on a pre-tick live snapshot.",
+     "derivations": [
+      {
+       "code": "E04.01",
+       "text": "Gap vs prior close: size, sign, gap-in-ticks"
+      },
+      {
+       "code": "E04.02",
+       "text": "Round-number proximity of each price (xx00 / xx50)"
+      },
+      {
+       "code": "E04.03",
+       "text": "New N-bucket HIGH flag / new N-bucket LOW flag"
+      },
+      {
+       "code": "E04.04",
+       "text": "Relation to prior bucket: inside / engulfing / breakout tag"
+      },
+      {
+       "code": "E04.05",
+       "text": "Close>open sign (up/down bucket)"
+      },
+      {
+       "code": "E04.06",
+       "text": "Close position within range, 0..1"
+      },
+      {
+       "code": "E04.07",
+       "text": "Equal-highs / equal-lows vs recent extremes (resting-liquidity pools)"
+      },
+      {
+       "code": "E04.08",
+       "text": "True range (gap-adjusted) vs raw range"
+      },
+      {
+       "code": "E04.09",
+       "text": "Log return open->close"
+      },
+      {
+       "code": "E04.10",
+       "text": "Close vs POC side (above/below the control price)"
+      },
+      {
+       "code": "E04.11",
+       "text": "Distance of close to nearest round number in ticks"
+      }
+     ]
+    },
+    {
+     "code": "E05",
+     "field": "range",
+     "tag": "D",
+     "desc": "high - low. Denominator for sweep, fail, reclaim and moved fractions.",
+     "derivations": [
+      {
+       "code": "E05.01",
+       "text": "Absolute range / range in ticks"
+      },
+      {
+       "code": "E05.02",
+       "text": "Range percentile vs trailing 30/240"
+      },
+      {
+       "code": "E05.03",
+       "text": "Range z-score"
+      },
+      {
+       "code": "E05.04",
+       "text": "Range vs ATR ratio (the compression/expansion read)"
+      },
+      {
+       "code": "E05.05",
+       "text": "COMPRESSION flag: range < 0.60 x ATR (Y/N)"
+      },
+      {
+       "code": "E05.06",
+       "text": "EXPANSION flag: range > 1.20 x ATR (Y/N)"
+      },
+      {
+       "code": "E05.07",
+       "text": "Expanding/contracting range STREAK"
+      },
+      {
+       "code": "E05.08",
+       "text": "Range per second (volatility pace)"
+      },
+      {
+       "code": "E05.09",
+       "text": "Share of the day's range contributed so far"
+      },
+      {
+       "code": "E05.10",
+       "text": "Range rank within the session"
+      }
+     ]
+    },
+    {
+     "code": "E06",
+     "field": "result (body)",
+     "tag": "D",
+     "desc": "close - open: what all that effort actually moved.",
+     "derivations": [
+      {
+       "code": "E06.01",
+       "text": "Sign (direction) and magnitude"
+      },
+      {
+       "code": "E06.02",
+       "text": "Log return of the body"
+      },
+      {
+       "code": "E06.03",
+       "text": "Body percentile / z-score vs window"
+      },
+      {
+       "code": "E06.04",
+       "text": "Same-direction streak length"
+      },
+      {
+       "code": "E06.05",
+       "text": "Reversal flag vs prior bucket direction (Y/N)"
+      },
+      {
+       "code": "E06.06",
+       "text": "Body ratio vs prior body (momentum of result)"
+      },
+      {
+       "code": "E06.07",
+       "text": "Net progress over trailing N buckets (drift context)"
+      },
+      {
+       "code": "E06.08",
+       "text": "Marubozu-ness: body ~ range (Y/N)"
+      },
+      {
+       "code": "E06.09",
+       "text": "Body-in-ticks vs fee+spread hurdle (economically meaningful move?)"
+      },
+      {
+       "code": "E06.10",
+       "text": "Contribution sign to trailing bucket-CVD of price"
+      }
+     ]
+    },
+    {
+     "code": "E07",
+     "field": "body fraction",
+     "tag": "D",
+     "desc": "abs(close-open)/range -- the MOVED ramp (0.55-0.80): decisive bar vs round trip.",
+     "derivations": [
+      {
+       "code": "E07.01",
+       "text": "Raw fraction 0..1"
+      },
+      {
+       "code": "E07.02",
+       "text": "TREND-BAR flag: fraction > 0.80 (Y/N)"
+      },
+      {
+       "code": "E07.03",
+       "text": "DOJI flag: fraction < 0.10 (Y/N)"
+      },
+      {
+       "code": "E07.04",
+       "text": "Percentile / z vs trailing window"
+      },
+      {
+       "code": "E07.05",
+       "text": "Trend-bar streak length"
+      },
+      {
+       "code": "E07.06",
+       "text": "Two-sided rejection flag (small body, both wicks large)"
+      },
+      {
+       "code": "E07.07",
+       "text": "Conviction class: low / mid / high"
+      },
+      {
+       "code": "E07.08",
+       "text": "Fraction x volume interaction (decisive AND heavy?)"
+      },
+      {
+       "code": "E07.09",
+       "text": "Rolling-mean fraction (regime trendiness)"
+      },
+      {
+       "code": "E07.10",
+       "text": "State-engine MOVED ramp value (0.55-0.80)"
+      }
+     ]
+    },
+    {
+     "code": "E08",
+     "field": "upper / lower wick",
+     "tag": "D",
+     "desc": "Rejection tails: high-max(o,c) and min(o,c)-low.",
+     "derivations": [
+      {
+       "code": "E08.01",
+       "text": "Upper wick size / lower wick size (ticks)"
+      },
+      {
+       "code": "E08.02",
+       "text": "Upper/range and lower/range fractions"
+      },
+      {
+       "code": "E08.03",
+       "text": "Wick asymmetry: (upper-lower)/range"
+      },
+      {
+       "code": "E08.04",
+       "text": "PIN-BAR flag: one wick > 60% of range (Y/N)"
+      },
+      {
+       "code": "E08.05",
+       "text": "BOTH-WICKS flag: whipsaw shape (Y/N)"
+      },
+      {
+       "code": "E08.06",
+       "text": "Wick-to-body ratio per side"
+      },
+      {
+       "code": "E08.07",
+       "text": "Rejected side inference (which extreme got refused)"
+      },
+      {
+       "code": "E08.08",
+       "text": "Wick percentile vs trailing window"
+      },
+      {
+       "code": "E08.09",
+       "text": "Wick at NEW extreme flag (swept then rejected)"
+      },
+      {
+       "code": "E08.10",
+       "text": "Wick into round-number / OB zone flag"
+      }
+     ]
+    },
+    {
+     "code": "E09",
+     "field": "poc_price",
+     "tag": "P",
+     "desc": "Price level holding the largest footprint volume (Point of Control), finalized at close.",
+     "derivations": [
+      {
+       "code": "E09.01",
+       "text": "POC round-number proximity"
+      },
+      {
+       "code": "E09.02",
+       "text": "POC shift vs prior bucket's POC (migration size + direction)"
+      },
+      {
+       "code": "E09.03",
+       "text": "POC gap vs current close (ticks)"
+      },
+      {
+       "code": "E09.04",
+       "text": "POC at bucket extreme flag (top/bottom 15% of range)"
+      },
+      {
+       "code": "E09.05",
+       "text": "POC inside prior bucket's range flag (acceptance)"
+      },
+      {
+       "code": "E09.06",
+       "text": "Distance from POC to nearest order block"
+      },
+      {
+       "code": "E09.07",
+       "text": "Naked/untested prior POCs above and below (count, nearest)"
+      },
+      {
+       "code": "E09.08",
+       "text": "POC retest count over trailing window"
+      },
+      {
+       "code": "E09.09",
+       "text": "POC percentile within the day's range"
+      },
+      {
+       "code": "E09.10",
+       "text": "POC coincides with a heatmap wall price (6h) (Y/N)"
+      }
+     ]
+    },
+    {
+     "code": "E10",
+     "field": "poc_pos",
+     "tag": "D",
+     "desc": "POC position inside the range 0..1; stacked-high POC (0.50-0.85 ramp) is a bull-trap factor.",
+     "derivations": [
+      {
+       "code": "E10.01",
+       "text": "Raw 0..1 position"
+      },
+      {
+       "code": "E10.02",
+       "text": "HIGH-POC flag (>0.70) / LOW-POC flag (<0.30)"
+      },
+      {
+       "code": "E10.03",
+       "text": "CENTER-POC flag (0.40-0.60, balanced auction)"
+      },
+      {
+       "code": "E10.04",
+       "text": "Percentile vs trailing window"
+      },
+      {
+       "code": "E10.05",
+       "text": "POC-pos vs close-pos divergence (control vs settle)"
+      },
+      {
+       "code": "E10.06",
+       "text": "Trap-geometry ramp value (0.50-0.85)"
+      },
+      {
+       "code": "E10.07",
+       "text": "Persistently-high/low POC streak"
+      },
+      {
+       "code": "E10.08",
+       "text": "POC-pos flip vs prior bucket (rotation of control)"
+      },
+      {
+       "code": "E10.09",
+       "text": "Profile shape inference: p / b / D-shaped"
+      },
+      {
+       "code": "E10.10",
+       "text": "POC-pos x direction interaction (control against the move?)"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "B. Volume & Aggression Flow",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E11",
+     "field": "curr_vol",
+     "tag": "P",
+     "desc": "Total bucket volume -- the defining quantum, ~= target_vol at close.",
+     "derivations": [
+      {
+       "code": "E11.01",
+       "text": "Overshoot ratio: curr_vol / target_vol (last-print spillover)"
+      },
+      {
+       "code": "E11.02",
+       "text": "Volume percentile / z vs trailing window"
+      },
+      {
+       "code": "E11.03",
+       "text": "Log volume"
+      },
+      {
+       "code": "E11.04",
+       "text": "Share of trailing-N total volume (activity concentration)"
+      },
+      {
+       "code": "E11.05",
+       "text": "Above/below-mean volume streak"
+      },
+      {
+       "code": "E11.06",
+       "text": "Volume per tick of range (grind density)"
+      },
+      {
+       "code": "E11.07",
+       "text": "Same-UTC-hour normalized volume (session-relative heat)"
+      },
+      {
+       "code": "E11.08",
+       "text": "Cumulative session volume position"
+      },
+      {
+       "code": "E11.09",
+       "text": "Day-rank of the bucket's volume"
+      },
+      {
+       "code": "E11.10",
+       "text": "Volume regime tag (quiet / normal / heavy)"
+      }
+     ]
+    },
+    {
+     "code": "E12",
+     "field": "buy_vol",
+     "tag": "P",
+     "desc": "Volume where the aggressor was the buyer (taker buys).",
+     "derivations": [
+      {
+       "code": "E12.01",
+       "text": "Buy share: buy_vol / curr_vol"
+      },
+      {
+       "code": "E12.02",
+       "text": "Buy z-score / percentile vs trailing window"
+      },
+      {
+       "code": "E12.03",
+       "text": "Buy-dominance streak (share > 0.5)"
+      },
+      {
+       "code": "E12.04",
+       "text": "Change in buy share vs prior bucket"
+      },
+      {
+       "code": "E12.05",
+       "text": "Buy volume per second (buy pace)"
+      },
+      {
+       "code": "E12.06",
+       "text": "Day-rank of buy volume"
+      },
+      {
+       "code": "E12.07",
+       "text": "Extreme-buy flag: top decile (Y/N)"
+      },
+      {
+       "code": "E12.08",
+       "text": "Log buy volume"
+      },
+      {
+       "code": "E12.09",
+       "text": "Buy share vs same-hour norm"
+      },
+      {
+       "code": "E12.10",
+       "text": "Buy-share slope over trailing 5 buckets"
+      }
+     ]
+    },
+    {
+     "code": "E13",
+     "field": "sell_vol",
+     "tag": "P",
+     "desc": "Volume where the aggressor was the seller (taker sells).",
+     "derivations": [
+      {
+       "code": "E13.01",
+       "text": "Sell share: sell_vol / curr_vol"
+      },
+      {
+       "code": "E13.02",
+       "text": "Sell z-score / percentile"
+      },
+      {
+       "code": "E13.03",
+       "text": "Sell-dominance streak"
+      },
+      {
+       "code": "E13.04",
+       "text": "Change in sell share vs prior bucket"
+      },
+      {
+       "code": "E13.05",
+       "text": "Sell volume per second"
+      },
+      {
+       "code": "E13.06",
+       "text": "Day-rank of sell volume"
+      },
+      {
+       "code": "E13.07",
+       "text": "Extreme-sell flag: top decile (Y/N)"
+      },
+      {
+       "code": "E13.08",
+       "text": "Log sell volume"
+      },
+      {
+       "code": "E13.09",
+       "text": "Sell share vs same-hour norm"
+      },
+      {
+       "code": "E13.10",
+       "text": "Sell-share slope over trailing 5 buckets"
+      }
+     ]
+    },
+    {
+     "code": "E14",
+     "field": "delta",
+     "tag": "D",
+     "desc": "buy_vol - sell_vol: net aggression in contracts.",
+     "derivations": [
+      {
+       "code": "E14.01",
+       "text": "Sign and magnitude"
+      },
+      {
+       "code": "E14.02",
+       "text": "Delta as % of volume"
+      },
+      {
+       "code": "E14.03",
+       "text": "Delta z-score / percentile"
+      },
+      {
+       "code": "E14.04",
+       "text": "Same-sign delta streak (pressure persistence)"
+      },
+      {
+       "code": "E14.05",
+       "text": "Delta FLIP flag vs prior bucket (Y/N)"
+      },
+      {
+       "code": "E14.06",
+       "text": "Delta acceleration (this vs prior magnitude)"
+      },
+      {
+       "code": "E14.07",
+       "text": "Trailing-N cumulative delta (bucket CVD)"
+      },
+      {
+       "code": "E14.08",
+       "text": "Delta vs price divergence flag (delta up, close down / inverse)"
+      },
+      {
+       "code": "E14.09",
+       "text": "Day-rank of abs(delta)"
+      },
+      {
+       "code": "E14.10",
+       "text": "Intrabucket delta path min/max (6h tape)"
+      }
+     ]
+    },
+    {
+     "code": "E15",
+     "field": "delta fraction",
+     "tag": "D",
+     "desc": "abs(delta)/curr_vol -- the DELTA ramp (0.10-0.55): how one-sided initiative was.",
+     "derivations": [
+      {
+       "code": "E15.01",
+       "text": "Raw fraction"
+      },
+      {
+       "code": "E15.02",
+       "text": "ONE-SIDED flag: > 0.55 (Y/N)"
+      },
+      {
+       "code": "E15.03",
+       "text": "BALANCED flag: < 0.10 (Y/N)"
+      },
+      {
+       "code": "E15.04",
+       "text": "Percentile / z vs window"
+      },
+      {
+       "code": "E15.05",
+       "text": "One-sidedness streak"
+      },
+      {
+       "code": "E15.06",
+       "text": "Alignment with body fraction (initiative translated?)"
+      },
+      {
+       "code": "E15.07",
+       "text": "Fraction regime mean (trailing)"
+      },
+      {
+       "code": "E15.08",
+       "text": "Session rank of one-sidedness"
+      },
+      {
+       "code": "E15.09",
+       "text": "Fraction x volume interaction (one-sided AND heavy)"
+      },
+      {
+       "code": "E15.10",
+       "text": "DELTA ramp value fed to the state engine"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "C. Open-Interest Attribution (Step 19)",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E16",
+     "field": "opL",
+     "tag": "P",
+     "desc": "Volume attributed to FRESH LONGS opening.",
+     "derivations": [
+      {
+       "code": "E16.01",
+       "text": "opL / vol fraction"
+      },
+      {
+       "code": "E16.02",
+       "text": "z-score / percentile vs window"
+      },
+      {
+       "code": "E16.03",
+       "text": "FRESH-LONG-WAVE flag: fraction > 0.30 (Y/N)"
+      },
+      {
+       "code": "E16.04",
+       "text": "opL streak (persistent long initiative)"
+      },
+      {
+       "code": "E16.05",
+       "text": "opL vs opS dominance ratio"
+      },
+      {
+       "code": "E16.06",
+       "text": "Day-rank of opL"
+      },
+      {
+       "code": "E16.07",
+       "text": "opL into highs vs into lows (location context)"
+      },
+      {
+       "code": "E16.08",
+       "text": "opL acceleration vs prior bucket"
+      },
+      {
+       "code": "E16.09",
+       "text": "Share of total opens (opL/(opL+opS))"
+      },
+      {
+       "code": "E16.10",
+       "text": "TRAP-FUEL candidate: heavy opL into a failed upside break"
+      }
+     ]
+    },
+    {
+     "code": "E17",
+     "field": "opS",
+     "tag": "P",
+     "desc": "Volume attributed to FRESH SHORTS opening.",
+     "derivations": [
+      {
+       "code": "E17.01",
+       "text": "opS / vol fraction"
+      },
+      {
+       "code": "E17.02",
+       "text": "z-score / percentile"
+      },
+      {
+       "code": "E17.03",
+       "text": "FRESH-SHORT-WAVE flag: fraction > 0.30 (Y/N)"
+      },
+      {
+       "code": "E17.04",
+       "text": "opS streak"
+      },
+      {
+       "code": "E17.05",
+       "text": "opS vs opL dominance ratio"
+      },
+      {
+       "code": "E17.06",
+       "text": "Day-rank of opS"
+      },
+      {
+       "code": "E17.07",
+       "text": "opS into lows vs into highs (location context)"
+      },
+      {
+       "code": "E17.08",
+       "text": "opS acceleration"
+      },
+      {
+       "code": "E17.09",
+       "text": "Share of total opens"
+      },
+      {
+       "code": "E17.10",
+       "text": "TRAP-FUEL candidate: heavy opS into a failed downside break"
+      }
+     ]
+    },
+    {
+     "code": "E18",
+     "field": "clL",
+     "tag": "P",
+     "desc": "Volume attributed to LONGS CLOSING (unwind into the tape).",
+     "derivations": [
+      {
+       "code": "E18.01",
+       "text": "clL / vol fraction"
+      },
+      {
+       "code": "E18.02",
+       "text": "z / percentile"
+      },
+      {
+       "code": "E18.03",
+       "text": "LONG-CAPITULATION flag: heavy clL into lows (Y/N)"
+      },
+      {
+       "code": "E18.04",
+       "text": "clL streak (sustained unwind)"
+      },
+      {
+       "code": "E18.05",
+       "text": "Long-cohort net: opL - clL (cohort building or leaving)"
+      },
+      {
+       "code": "E18.06",
+       "text": "Share of total closes (clL/(clL+clS))"
+      },
+      {
+       "code": "E18.07",
+       "text": "clL acceleration"
+      },
+      {
+       "code": "E18.08",
+       "text": "Day-rank of clL"
+      },
+      {
+       "code": "E18.09",
+       "text": "clL at NEW low flag (puke print)"
+      },
+      {
+       "code": "E18.10",
+       "text": "Closing-flow ramp contribution (CLOSE_FLOW 0.15-0.50)"
+      }
+     ]
+    },
+    {
+     "code": "E19",
+     "field": "clS",
+     "tag": "P",
+     "desc": "Volume attributed to SHORTS CLOSING (short covering).",
+     "derivations": [
+      {
+       "code": "E19.01",
+       "text": "clS / vol fraction"
+      },
+      {
+       "code": "E19.02",
+       "text": "z / percentile"
+      },
+      {
+       "code": "E19.03",
+       "text": "SHORT-COVER-POP flag: heavy clS into highs (Y/N)"
+      },
+      {
+       "code": "E19.04",
+       "text": "clS streak"
+      },
+      {
+       "code": "E19.05",
+       "text": "Short-cohort net: opS - clS"
+      },
+      {
+       "code": "E19.06",
+       "text": "Share of total closes"
+      },
+      {
+       "code": "E19.07",
+       "text": "clS acceleration"
+      },
+      {
+       "code": "E19.08",
+       "text": "Day-rank of clS"
+      },
+      {
+       "code": "E19.09",
+       "text": "clS at NEW high flag (forced-out print)"
+      },
+      {
+       "code": "E19.10",
+       "text": "Closing-flow ramp contribution"
+      }
+     ]
+    },
+    {
+     "code": "E20",
+     "field": "churn",
+     "tag": "P",
+     "desc": "OI-neutral transfer volume: hands change, net interest does not.",
+     "derivations": [
+      {
+       "code": "E20.01",
+       "text": "churn / vol fraction"
+      },
+      {
+       "code": "E20.02",
+       "text": "ROTATION flag: fraction > 0.55 (CHURN ramp) (Y/N)"
+      },
+      {
+       "code": "E20.03",
+       "text": "z / percentile"
+      },
+      {
+       "code": "E20.04",
+       "text": "High-churn streak"
+      },
+      {
+       "code": "E20.05",
+       "text": "Churn regime mean (trailing)"
+      },
+      {
+       "code": "E20.06",
+       "text": "Churn x moved interaction: transfer that MOVED price (markdown/markup hand-off)"
+      },
+      {
+       "code": "E20.07",
+       "text": "Day-rank of churn"
+      },
+      {
+       "code": "E20.08",
+       "text": "Churn acceleration"
+      },
+      {
+       "code": "E20.09",
+       "text": "OI-neutrality corroboration (|dOI| small while churn high)"
+      },
+      {
+       "code": "E20.10",
+       "text": "Hand-off inference tag: distribution vs accumulation candidate"
+      }
+     ]
+    },
+    {
+     "code": "E21",
+     "field": "delta_oi",
+     "tag": "D",
+     "desc": "Net open-interest change: opens minus closes (stats-box dOI).",
+     "derivations": [
+      {
+       "code": "E21.01",
+       "text": "Sign: BUILD vs DRAIN"
+      },
+      {
+       "code": "E21.02",
+       "text": "Magnitude / vol fraction"
+      },
+      {
+       "code": "E21.03",
+       "text": "z / percentile"
+      },
+      {
+       "code": "E21.04",
+       "text": "BUILD streak / DRAIN streak lengths"
+      },
+      {
+       "code": "E21.05",
+       "text": "dOI x delta quadrant: new-money push / covering push / distribution / unwind-drop"
+      },
+      {
+       "code": "E21.06",
+       "text": "OI-NEUTRAL flag: |dOI|/vol < 0.22 (Y/N)"
+      },
+      {
+       "code": "E21.07",
+       "text": "BUILD ramp value (0.08-0.18)"
+      },
+      {
+       "code": "E21.08",
+       "text": "dOI acceleration"
+      },
+      {
+       "code": "E21.09",
+       "text": "Trailing-N cumulative dOI (positioning trend)"
+      },
+      {
+       "code": "E21.10",
+       "text": "Day-rank of |dOI|"
+      }
+     ]
+    },
+    {
+     "code": "E22",
+     "field": "open/close/churn fractions",
+     "tag": "D",
+     "desc": "The named state-engine ramps computed from the decomposition.",
+     "derivations": [
+      {
+       "code": "E22.01",
+       "text": "OPEN_OI ramp value (0.10-0.50)"
+      },
+      {
+       "code": "E22.02",
+       "text": "DRAIN_OI ramp value (0.05-0.45)"
+      },
+      {
+       "code": "E22.03",
+       "text": "CLOSE_FLOW ramp value (0.15-0.50)"
+      },
+      {
+       "code": "E22.04",
+       "text": "CHURN ramp value (0.55-0.90)"
+      },
+      {
+       "code": "E22.05",
+       "text": "OI_NEUTRAL ramp value (0.05-0.22)"
+      },
+      {
+       "code": "E22.06",
+       "text": "BUILD ramp value (0.08-0.18)"
+      },
+      {
+       "code": "E22.07",
+       "text": "Dominant-component label (which fraction leads)"
+      },
+      {
+       "code": "E22.08",
+       "text": "Component ENTROPY (how mixed the bucket's OI story is)"
+      },
+      {
+       "code": "E22.09",
+       "text": "Open:close ratio"
+      },
+      {
+       "code": "E22.10",
+       "text": "Long-side vs short-side initiative index"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "D. Effort / Result (Step 4)",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E23",
+     "field": "buyer_er",
+     "tag": "P",
+     "desc": "Buyer effort: buy_vol per unit of volume-weighted price dispersion.",
+     "derivations": [
+      {
+       "code": "E23.01",
+       "text": "Raw value / log value"
+      },
+      {
+       "code": "E23.02",
+       "text": "z vs trailing-30 (the baseline convention)"
+      },
+      {
+       "code": "E23.03",
+       "text": "Multiple vs trailing mean (stats-box x-figure)"
+      },
+      {
+       "code": "E23.04",
+       "text": "Percentile vs window"
+      },
+      {
+       "code": "E23.05",
+       "text": "HOT flag: >= 1.5x baseline (Y/N)"
+      },
+      {
+       "code": "E23.06",
+       "text": "Hot streak length"
+      },
+      {
+       "code": "E23.07",
+       "text": "buyer_er / seller_er ratio (effort dominance)"
+      },
+      {
+       "code": "E23.08",
+       "text": "Effort acceleration vs prior"
+      },
+      {
+       "code": "E23.09",
+       "text": "Day-rank of buyer effort"
+      },
+      {
+       "code": "E23.10",
+       "text": "Effort-hot leg value for exhaustion gating"
+      }
+     ]
+    },
+    {
+     "code": "E24",
+     "field": "seller_er",
+     "tag": "P",
+     "desc": "Seller effort: sell_vol per unit of dispersion -- the symmetric read.",
+     "derivations": [
+      {
+       "code": "E24.01",
+       "text": "Raw value / log value"
+      },
+      {
+       "code": "E24.02",
+       "text": "z vs trailing-30"
+      },
+      {
+       "code": "E24.03",
+       "text": "Multiple vs trailing mean"
+      },
+      {
+       "code": "E24.04",
+       "text": "Percentile"
+      },
+      {
+       "code": "E24.05",
+       "text": "HOT flag: >= 1.5x (Y/N)"
+      },
+      {
+       "code": "E24.06",
+       "text": "Hot streak"
+      },
+      {
+       "code": "E24.07",
+       "text": "seller_er / buyer_er ratio"
+      },
+      {
+       "code": "E24.08",
+       "text": "Effort acceleration"
+      },
+      {
+       "code": "E24.09",
+       "text": "Day-rank"
+      },
+      {
+       "code": "E24.10",
+       "text": "Effort-hot leg value for exhaustion gating"
+      }
+     ]
+    },
+    {
+     "code": "E25",
+     "field": "effort_ticks",
+     "tag": "D",
+     "desc": "The dispersion denominator: volume-weighted footprint spread (1-tick floor).",
+     "derivations": [
+      {
+       "code": "E25.01",
+       "text": "Raw dispersion (ticks)"
+      },
+      {
+       "code": "E25.02",
+       "text": "Percentile / z vs window"
+      },
+      {
+       "code": "E25.03",
+       "text": "NARROW-auction flag (bottom quintile)"
+      },
+      {
+       "code": "E25.04",
+       "text": "WIDE-auction flag (top quintile)"
+      },
+      {
+       "code": "E25.05",
+       "text": "Dispersion vs range ratio (profile fatness)"
+      },
+      {
+       "code": "E25.06",
+       "text": "Narrow/wide streak"
+      },
+      {
+       "code": "E25.07",
+       "text": "Dispersion per unit volume"
+      },
+      {
+       "code": "E25.08",
+       "text": "Regime mean of dispersion"
+      },
+      {
+       "code": "E25.09",
+       "text": "Auction-type inference: compressed grind vs sweep"
+      },
+      {
+       "code": "E25.10",
+       "text": "Floor-hit flag (dispersion at the 1-tick floor)"
+      }
+     ]
+    },
+    {
+     "code": "E26",
+     "field": "B-E/R, S-E/R anomaly",
+     "tag": "W",
+     "desc": "Each side's E/R as a multiple of its trailing-30 baseline.",
+     "derivations": [
+      {
+       "code": "E26.01",
+       "text": "Buyer multiple / seller multiple values"
+      },
+      {
+       "code": "E26.02",
+       "text": "Hotter side label"
+      },
+      {
+       "code": "E26.03",
+       "text": "BOTH-HOT flag (Y/N)"
+      },
+      {
+       "code": "E26.04",
+       "text": "Multiple percentile vs day"
+      },
+      {
+       "code": "E26.05",
+       "text": "Hot-side streak"
+      },
+      {
+       "code": "E26.06",
+       "text": "First-hot-after-quiet flag (regime break)"
+      },
+      {
+       "code": "E26.07",
+       "text": "Multiple slope over last 5 buckets"
+      },
+      {
+       "code": "E26.08",
+       "text": "Side-switch of hotness flag"
+      },
+      {
+       "code": "E26.09",
+       "text": "Effort-hot x no-result divergence candidate (pair with body)"
+      },
+      {
+       "code": "E26.10",
+       "text": "Anomaly co-fire with velocity flag (Y/N)"
+      }
+     ]
+    },
+    {
+     "code": "E27",
+     "field": "E/R neon border flag",
+     "tag": "W",
+     "desc": "Descriptive 2px border when a side's E/R z is strongly elevated.",
+     "derivations": [
+      {
+       "code": "E27.01",
+       "text": "Fired (Y/N) + side"
+      },
+      {
+       "code": "E27.02",
+       "text": "z magnitude behind the fire"
+      },
+      {
+       "code": "E27.03",
+       "text": "Count of fires in trailing window (density)"
+      },
+      {
+       "code": "E27.04",
+       "text": "First-fire-in-N flag"
+      },
+      {
+       "code": "E27.05",
+       "text": "Fired AT a new extreme flag"
+      },
+      {
+       "code": "E27.06",
+       "text": "With-trend vs counter-trend fire"
+      },
+      {
+       "code": "E27.07",
+       "text": "Consecutive-fire streak"
+      },
+      {
+       "code": "E27.08",
+       "text": "Co-fire with abnormal-velocity flag"
+      },
+      {
+       "code": "E27.09",
+       "text": "Co-fire with liquidation presence"
+      },
+      {
+       "code": "E27.10",
+       "text": "Fire followed by direction flip (study join)"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "E. Pace & Velocity",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E28",
+     "field": "vol_mult",
+     "tag": "P",
+     "desc": "Close-time velocity as a multiple of the engine's rolling average (Speed x).",
+     "derivations": [
+      {
+       "code": "E28.01",
+       "text": "Raw multiple"
+      },
+      {
+       "code": "E28.02",
+       "text": "STRONG flag: >= 1.2 (stats-box highlight)"
+      },
+      {
+       "code": "E28.03",
+       "text": "Squeeze-violence ramp value (1.30-3.00)"
+      },
+      {
+       "code": "E28.04",
+       "text": "Mild-pace ramp value (1.00-2.20)"
+      },
+      {
+       "code": "E28.05",
+       "text": "Percentile / z vs window"
+      },
+      {
+       "code": "E28.06",
+       "text": "Speed streak (consecutive > 1x)"
+      },
+      {
+       "code": "E28.07",
+       "text": "Speed acceleration vs prior"
+      },
+      {
+       "code": "E28.08",
+       "text": "QUIET flag: < 1.0 (Y/N)"
+      },
+      {
+       "code": "E28.09",
+       "text": "Day-rank of speed"
+      },
+      {
+       "code": "E28.10",
+       "text": "Speed x direction interaction (fast up vs fast down)"
+      }
+     ]
+    },
+    {
+     "code": "E29",
+     "field": "vel",
+     "tag": "D",
+     "desc": "curr_vol / duration in units per second -- the raw pace number.",
+     "derivations": [
+      {
+       "code": "E29.01",
+       "text": "Raw units/s / log pace"
+      },
+      {
+       "code": "E29.02",
+       "text": "Percentile / z vs trailing window"
+      },
+      {
+       "code": "E29.03",
+       "text": "Same-UTC-hour normalized pace"
+      },
+      {
+       "code": "E29.04",
+       "text": "Pace streak"
+      },
+      {
+       "code": "E29.05",
+       "text": "Pace acceleration"
+      },
+      {
+       "code": "E29.06",
+       "text": "Day-max pace flag (Y/N)"
+      },
+      {
+       "code": "E29.07",
+       "text": "Pace regime class (quiet/normal/hot)"
+      },
+      {
+       "code": "E29.08",
+       "text": "Pace vs range coupling (fast AND wide?)"
+      },
+      {
+       "code": "E29.09",
+       "text": "Pace vs spread regime (6h BBO join)"
+      },
+      {
+       "code": "E29.10",
+       "text": "Trailing-30 mean pace (the flag's denominator)"
+      }
+     ]
+    },
+    {
+     "code": "E30",
+     "field": "abnormal-velocity flag",
+     "tag": "W",
+     "desc": "Fires at vel >= 5.0x trailing-30 mean (caps at 10x); ~6% of buckets. Visual-study marker, not a signal.",
+     "derivations": [
+      {
+       "code": "E30.01",
+       "text": "Fired (Y/N)"
+      },
+      {
+       "code": "E30.02",
+       "text": "Ratio value (5x..10x+)"
+      },
+      {
+       "code": "E30.03",
+       "text": "CAPPED flag (>= 10x)"
+      },
+      {
+       "code": "E30.04",
+       "text": "Fires count in trailing window (cluster density)"
+      },
+      {
+       "code": "E30.05",
+       "text": "First-after-quiet flag"
+      },
+      {
+       "code": "E30.06",
+       "text": "Fire direction (bucket up/down)"
+      },
+      {
+       "code": "E30.07",
+       "text": "Fired AT a sweep flag"
+      },
+      {
+       "code": "E30.08",
+       "text": "Co-fire with liquidation flag"
+      },
+      {
+       "code": "E30.09",
+       "text": "Co-fire with E/R neon flag"
+      },
+      {
+       "code": "E30.10",
+       "text": "Cluster id / time since previous fire"
+      }
+     ]
+    },
+    {
+     "code": "E31",
+     "field": "avg_velocity",
+     "tag": "CTX",
+     "desc": "The engine's rolling velocity baseline all multiples are measured against.",
+     "derivations": [
+      {
+       "code": "E31.01",
+       "text": "Current level"
+      },
+      {
+       "code": "E31.02",
+       "text": "Slope over trailing window (regime drift)"
+      },
+      {
+       "code": "E31.03",
+       "text": "Stability (variance) of the baseline"
+      },
+      {
+       "code": "E31.04",
+       "text": "Percentile vs the day"
+      },
+      {
+       "code": "E31.05",
+       "text": "Jump flag (recent step-change)"
+      },
+      {
+       "code": "E31.06",
+       "text": "Time since last regime change"
+      },
+      {
+       "code": "E31.07",
+       "text": "Ratio to day mean"
+      },
+      {
+       "code": "E31.08",
+       "text": "Session-profile position (hour curve)"
+      },
+      {
+       "code": "E31.09",
+       "text": "Baseline freshness (window fill)"
+      },
+      {
+       "code": "E31.10",
+       "text": "Cross-check: implied buckets/hour"
+      }
+     ]
+    },
+    {
+     "code": "E32",
+     "field": "target_vol",
+     "tag": "CTX",
+     "desc": "The adaptive volume quantum a bucket must accumulate to close.",
+     "derivations": [
+      {
+       "code": "E32.01",
+       "text": "Current size"
+      },
+      {
+       "code": "E32.02",
+       "text": "Recalibration delta (latest change)"
+      },
+      {
+       "code": "E32.03",
+       "text": "Slope of target over the day"
+      },
+      {
+       "code": "E32.04",
+       "text": "Ratio to day-mean target"
+      },
+      {
+       "code": "E32.05",
+       "text": "Stability (variance)"
+      },
+      {
+       "code": "E32.06",
+       "text": "Implied buckets/hour at current pace"
+      },
+      {
+       "code": "E32.07",
+       "text": "Percentile vs history"
+      },
+      {
+       "code": "E32.08",
+       "text": "Jump flag (regime resize)"
+      },
+      {
+       "code": "E32.09",
+       "text": "Timeframe-relative scale (1m vs 5m ladder)"
+      },
+      {
+       "code": "E32.10",
+       "text": "Time since last recalibration"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "F. Exhaustion (Step 5)",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E33",
+     "field": "b_mult / s_mult",
+     "tag": "W",
+     "desc": "Per-side effort z-multipliers over the 30-bucket EXH_WINDOW.",
+     "derivations": [
+      {
+       "code": "E33.01",
+       "text": "Buyer multiplier / seller multiplier values"
+      },
+      {
+       "code": "E33.02",
+       "text": "Dominant side label"
+      },
+      {
+       "code": "E33.03",
+       "text": "ABSORB-fire read: >= 1.20 ramp (1.20-2.00)"
+      },
+      {
+       "code": "E33.04",
+       "text": "TRANSLATE read ramp (1.30-2.00)"
+      },
+      {
+       "code": "E33.05",
+       "text": "Percentile of each vs day"
+      },
+      {
+       "code": "E33.06",
+       "text": "Slope over the selection window"
+      },
+      {
+       "code": "E33.07",
+       "text": "Both-elevated flag (Y/N)"
+      },
+      {
+       "code": "E33.08",
+       "text": "Crossover proximity (bull vs bear lines)"
+      },
+      {
+       "code": "E33.09",
+       "text": "Stability of the z-baseline (window health)"
+      },
+      {
+       "code": "E33.10",
+       "text": "Multiplier at bucket extremes vs mid"
+      }
+     ]
+    },
+    {
+     "code": "E34",
+     "field": "gated true-exhaustion",
+     "tag": "D",
+     "desc": "Geomean of effort-hot AND OI-draining AND closing-flow; any missing leg gates to zero.",
+     "derivations": [
+      {
+       "code": "E34.01",
+       "text": "Score 0..1 + side"
+      },
+      {
+       "code": "E34.02",
+       "text": "FIRED flag above threshold (Y/N)"
+      },
+      {
+       "code": "E34.03",
+       "text": "Weakest-leg name (what limited the score)"
+      },
+      {
+       "code": "E34.04",
+       "text": "Per-leg values (3 features)"
+      },
+      {
+       "code": "E34.05",
+       "text": "Percentile of score vs window"
+      },
+      {
+       "code": "E34.06",
+       "text": "Fired streak / decay since last fire"
+      },
+      {
+       "code": "E34.07",
+       "text": "First-fire-in-N flag"
+      },
+      {
+       "code": "E34.08",
+       "text": "Fired AT new extreme flag"
+      },
+      {
+       "code": "E34.09",
+       "text": "Co-fire with reclaim (squeeze-completion candidate)"
+      },
+      {
+       "code": "E34.10",
+       "text": "Score slope across the last 5 buckets"
+      }
+     ]
+    },
+    {
+     "code": "E35",
+     "field": "exhaustion lines + crossover",
+     "tag": "S",
+     "desc": "Selection-scoped expanding-z lines, symmetric smoothing, crossover diamonds ('1' toggle).",
+     "derivations": [
+      {
+       "code": "E35.01",
+       "text": "Crossover occurred in selection (Y/N) + direction"
+      },
+      {
+       "code": "E35.02",
+       "text": "Diamond count in the selection"
+      },
+      {
+       "code": "E35.03",
+       "text": "Bull-line slope / bear-line slope"
+      },
+      {
+       "code": "E35.04",
+       "text": "Spread between the two lines (dominance margin)"
+      },
+      {
+       "code": "E35.05",
+       "text": "Buckets since last cross"
+      },
+      {
+       "code": "E35.06",
+       "text": "Confirmed vs forming state of latest cross"
+      },
+      {
+       "code": "E35.07",
+       "text": "Cross at a price extreme flag"
+      },
+      {
+       "code": "E35.08",
+       "text": "Double-cross whipsaw flag"
+      },
+      {
+       "code": "E35.09",
+       "text": "Line values at the selected bucket"
+      },
+      {
+       "code": "E35.10",
+       "text": "Alignment with the state verdict (Y/N)"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "G. Absorption & Effective Aggression",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E36",
+     "field": "suppression score s",
+     "tag": "D",
+     "desc": "0..1: how much of the bucket's aggression price refused to translate.",
+     "derivations": [
+      {
+       "code": "E36.01",
+       "text": "Raw s"
+      },
+      {
+       "code": "E36.02",
+       "text": "VALIDATED flag: s >= 0.60 (Y/N)"
+      },
+      {
+       "code": "E36.03",
+       "text": "Percentile / z vs window"
+      },
+      {
+       "code": "E36.04",
+       "text": "High-s streak"
+      },
+      {
+       "code": "E36.05",
+       "text": "s slope over last 5 buckets"
+      },
+      {
+       "code": "E36.06",
+       "text": "s x delta-fraction interaction (one-sided AND absorbed = wall)"
+      },
+      {
+       "code": "E36.07",
+       "text": "Absorbed-side inference (with delta sign)"
+      },
+      {
+       "code": "E36.08",
+       "text": "s regime mean"
+      },
+      {
+       "code": "E36.09",
+       "text": "s at price extreme flag (absorption at highs/lows)"
+      },
+      {
+       "code": "E36.10",
+       "text": "Rank of s within the day"
+      }
+     ]
+    },
+    {
+     "code": "E37",
+     "field": "bull/bear absorption (V*s)",
+     "tag": "D",
+     "desc": "Volume absorbed, split by the side under attack.",
+     "derivations": [
+      {
+       "code": "E37.01",
+       "text": "Absolute absorbed volume + side"
+      },
+      {
+       "code": "E37.02",
+       "text": "Percentile / z vs window"
+      },
+      {
+       "code": "E37.03",
+       "text": "Day-rank of absorbed volume"
+      },
+      {
+       "code": "E37.04",
+       "text": "Absorbed share of trailing-N volume"
+      },
+      {
+       "code": "E37.05",
+       "text": "Absorption streak per side"
+      },
+      {
+       "code": "E37.06",
+       "text": "Absorption acceleration"
+      },
+      {
+       "code": "E37.07",
+       "text": "Adaptive-zone crossing flag (display zones)"
+      },
+      {
+       "code": "E37.08",
+       "text": "Validated-strength dot present (Y/N)"
+      },
+      {
+       "code": "E37.09",
+       "text": "Absorption at extreme location flag"
+      },
+      {
+       "code": "E37.10",
+       "text": "Bull-vs-bear absorption dominance ratio"
+      }
+     ]
+    },
+    {
+     "code": "E38",
+     "field": "effective aggression V*(1-s)",
+     "tag": "D",
+     "desc": "The exact mirror: volume that actually moved price (partition proven).",
+     "derivations": [
+      {
+       "code": "E38.01",
+       "text": "Absolute eff-agg + side"
+      },
+      {
+       "code": "E38.02",
+       "text": "Percentile / z"
+      },
+      {
+       "code": "E38.03",
+       "text": "Day-rank"
+      },
+      {
+       "code": "E38.04",
+       "text": "Eff-agg share of trailing-N volume"
+      },
+      {
+       "code": "E38.05",
+       "text": "Dominance ratio vs absorption"
+      },
+      {
+       "code": "E38.06",
+       "text": "Eff-agg streak per side"
+      },
+      {
+       "code": "E38.07",
+       "text": "Acceleration"
+      },
+      {
+       "code": "E38.08",
+       "text": "Zone-crossing flag"
+      },
+      {
+       "code": "E38.09",
+       "text": "Partition sanity: V*s + V*(1-s) == V (audit feature)"
+      },
+      {
+       "code": "E38.10",
+       "text": "Eff-agg per tick moved (thrust efficiency)"
+      }
+     ]
+    },
+    {
+     "code": "E39",
+     "field": "validated-strength dot",
+     "tag": "D",
+     "desc": "The grounded s = 0.60 boundary: absorption strong enough to count.",
+     "derivations": [
+      {
+       "code": "E39.01",
+       "text": "Present (Y/N) + side"
+      },
+      {
+       "code": "E39.02",
+       "text": "Count in trailing window"
+      },
+      {
+       "code": "E39.03",
+       "text": "First-in-N flag"
+      },
+      {
+       "code": "E39.04",
+       "text": "Consecutive-dot streak"
+      },
+      {
+       "code": "E39.05",
+       "text": "Dot at new high/low flag"
+      },
+      {
+       "code": "E39.06",
+       "text": "Co-fire with exhaustion fire"
+      },
+      {
+       "code": "E39.07",
+       "text": "Co-fire with liquidation presence"
+      },
+      {
+       "code": "E39.08",
+       "text": "Dot preceded direction flip (study join)"
+      },
+      {
+       "code": "E39.09",
+       "text": "Dot density regime (dots per 100 buckets)"
+      },
+      {
+       "code": "E39.10",
+       "text": "Side-switch of dots flag"
+      }
+     ]
+    },
+    {
+     "code": "E40",
+     "field": "absorption/eff-agg zones",
+     "tag": "S",
+     "desc": "Adaptive display zones with floorless sliders over the stored raw values.",
+     "derivations": [
+      {
+       "code": "E40.01",
+       "text": "In-zone (Y/N) per zone"
+      },
+      {
+       "code": "E40.02",
+       "text": "Zone width (current adaptive setting)"
+      },
+      {
+       "code": "E40.03",
+       "text": "Distance to nearest zone edge"
+      },
+      {
+       "code": "E40.04",
+       "text": "Dwell time in zone (buckets)"
+      },
+      {
+       "code": "E40.05",
+       "text": "Zone entries count in selection"
+      },
+      {
+       "code": "E40.06",
+       "text": "Breach direction of last exit"
+      },
+      {
+       "code": "E40.07",
+       "text": "Zone percentile setting (slider state)"
+      },
+      {
+       "code": "E40.08",
+       "text": "Dwell streak"
+      },
+      {
+       "code": "E40.09",
+       "text": "Zone vs validated-dot agreement"
+      },
+      {
+       "code": "E40.10",
+       "text": "Zone regime (tight/wide adaptive state)"
+      }
+     ]
+    },
+    {
+     "code": "E41",
+     "field": "absorption marks",
+     "tag": "6h",
+     "desc": "Intrabucket iceberg-absorption events detected from live tape bands.",
+     "derivations": [
+      {
+       "code": "E41.01",
+       "text": "Marks count in bucket"
+      },
+      {
+       "code": "E41.02",
+       "text": "Side split of marks"
+      },
+      {
+       "code": "E41.03",
+       "text": "Largest mark size"
+      },
+      {
+       "code": "E41.04",
+       "text": "Marks at bucket extremes flag"
+      },
+      {
+       "code": "E41.05",
+       "text": "Mark price-band width"
+      },
+      {
+       "code": "E41.06",
+       "text": "Marks clustering (bursts vs spread)"
+      },
+      {
+       "code": "E41.07",
+       "text": "Mark-to-close displacement (did price leave the mark?)"
+      },
+      {
+       "code": "E41.08",
+       "text": "Marks per minute"
+      },
+      {
+       "code": "E41.09",
+       "text": "Mark co-location with a heatmap wall"
+      },
+      {
+       "code": "E41.10",
+       "text": "Iceberg-side classification share (buy vs sell)"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "H. The Footprint Ladder (levels)",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E42",
+     "field": "levels {price:{b,s}}",
+     "tag": "P",
+     "desc": "Full ladder: buy and sell volume at every traded price.",
+     "derivations": [
+      {
+       "code": "E42.01",
+       "text": "Traded-level count"
+      },
+      {
+       "code": "E42.02",
+       "text": "Top-3 level concentration share"
+      },
+      {
+       "code": "E42.03",
+       "text": "Volume-weighted mean price vs close (settle skew)"
+      },
+      {
+       "code": "E42.04",
+       "text": "Profile skewness (volume tilt)"
+      },
+      {
+       "code": "E42.05",
+       "text": "Profile kurtosis (fat middle vs barbell)"
+      },
+      {
+       "code": "E42.06",
+       "text": "Max single-level side imbalance (b:s odds)"
+      },
+      {
+       "code": "E42.07",
+       "text": "Single-print level count (thin spots)"
+      },
+      {
+       "code": "E42.08",
+       "text": "Profile shape class: P / b / D"
+      },
+      {
+       "code": "E42.09",
+       "text": "Low-volume-node presence + nearest LVN distance"
+      },
+      {
+       "code": "E42.10",
+       "text": "High-volume-node distance to close"
+      },
+      {
+       "code": "E42.11",
+       "text": "Buy-vs-sell tilt by range third (top/mid/bottom loading)"
+      }
+     ]
+    },
+    {
+     "code": "E43",
+     "field": "POC volume / share",
+     "tag": "D",
+     "desc": "Volume at the control price and its share of the bucket.",
+     "derivations": [
+      {
+       "code": "E43.01",
+       "text": "POC share of curr_vol"
+      },
+      {
+       "code": "E43.02",
+       "text": "Percentile / z of the share"
+      },
+      {
+       "code": "E43.03",
+       "text": "DOMINANT-POC flag (share > threshold)"
+      },
+      {
+       "code": "E43.04",
+       "text": "POC vs 2nd-node ratio (peakedness)"
+      },
+      {
+       "code": "E43.05",
+       "text": "Dominant-POC streak"
+      },
+      {
+       "code": "E43.06",
+       "text": "THIN-POC flag (weak control)"
+      },
+      {
+       "code": "E43.07",
+       "text": "Buy:sell split AT the POC"
+      },
+      {
+       "code": "E43.08",
+       "text": "POC-share regime mean"
+      },
+      {
+       "code": "E43.09",
+       "text": "POC share x poc_pos interaction (strong control at extreme)"
+      },
+      {
+       "code": "E43.10",
+       "text": "Day-rank of POC share"
+      }
+     ]
+    },
+    {
+     "code": "E44",
+     "field": "per-level imbalance flag",
+     "tag": "W",
+     "desc": "Level side-volume vs the trailing-30 BER/SER baseline; strong levels invert to neon.",
+     "derivations": [
+      {
+       "code": "E44.01",
+       "text": "Flagged-level count + side split"
+      },
+      {
+       "code": "E44.02",
+       "text": "Max imbalance multiple on the ladder"
+      },
+      {
+       "code": "E44.03",
+       "text": "STACKED flag: consecutive flagged levels (Y/N + depth)"
+      },
+      {
+       "code": "E44.04",
+       "text": "Stack side (buyer wall vs seller wall)"
+      },
+      {
+       "code": "E44.05",
+       "text": "Stack at bucket extreme flag"
+      },
+      {
+       "code": "E44.06",
+       "text": "Flag density percentile vs window"
+      },
+      {
+       "code": "E44.07",
+       "text": "First-stack-in-N flag"
+      },
+      {
+       "code": "E44.08",
+       "text": "Stack vs close side (did price respect the stack?)"
+      },
+      {
+       "code": "E44.09",
+       "text": "Neon count per side"
+      },
+      {
+       "code": "E44.10",
+       "text": "Diagonal-imbalance read across adjacent levels"
+      }
+     ]
+    },
+    {
+     "code": "E45",
+     "field": "ladder depth / dispersion",
+     "tag": "D",
+     "desc": "Traded-level count and volume-weighted spread (the effort_ticks geometry).",
+     "derivations": [
+      {
+       "code": "E45.01",
+       "text": "Level count / dispersion in ticks"
+      },
+      {
+       "code": "E45.02",
+       "text": "Dispersion percentile vs window"
+      },
+      {
+       "code": "E45.03",
+       "text": "FAT profile flag / THIN profile flag"
+      },
+      {
+       "code": "E45.04",
+       "text": "Dispersion vs range ratio"
+      },
+      {
+       "code": "E45.05",
+       "text": "z-score of dispersion"
+      },
+      {
+       "code": "E45.06",
+       "text": "Fat/thin streak"
+      },
+      {
+       "code": "E45.07",
+       "text": "Dispersion regime mean"
+      },
+      {
+       "code": "E45.08",
+       "text": "Auction-type tag: grind vs sweep"
+      },
+      {
+       "code": "E45.09",
+       "text": "Single-print tail flag (unfinished business at an extreme)"
+      },
+      {
+       "code": "E45.10",
+       "text": "Dispersion per unit volume"
+      }
+     ]
+    },
+    {
+     "code": "E46",
+     "field": "further derivables",
+     "tag": "D",
+     "desc": "Not pre-computed by the platform, but exactly derivable from levels.",
+     "derivations": [
+      {
+       "code": "E46.01",
+       "text": "Value-area (70%) width + position vs close"
+      },
+      {
+       "code": "E46.02",
+       "text": "VA overlap vs prior bucket (acceptance/rejection)"
+      },
+      {
+       "code": "E46.03",
+       "text": "Top-vs-bottom loading index"
+      },
+      {
+       "code": "E46.04",
+       "text": "Unfinished-auction flag at high / at low"
+      },
+      {
+       "code": "E46.05",
+       "text": "LVN / HVN map (counts + nearest distances)"
+      },
+      {
+       "code": "E46.06",
+       "text": "Profile entropy (auction dispersion)"
+      },
+      {
+       "code": "E46.07",
+       "text": "Delta-by-level tilt (where the net aggression sat)"
+      },
+      {
+       "code": "E46.08",
+       "text": "Mid-range acceptance share"
+      },
+      {
+       "code": "E46.09",
+       "text": "Poor-high / poor-low flags"
+      },
+      {
+       "code": "E46.10",
+       "text": "Composite profile tag for pattern joins"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "I. Forced Liquidations",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E47",
+     "field": "liq_short",
+     "tag": "P",
+     "desc": "Volume of SHORTS liquidated (forced buys).",
+     "derivations": [
+      {
+       "code": "E47.01",
+       "text": "Absolute + /vol fraction"
+      },
+      {
+       "code": "E47.02",
+       "text": "z / percentile vs window"
+      },
+      {
+       "code": "E47.03",
+       "text": "FIRED flag: fraction >= 0.03 (LIQ ramp floor)"
+      },
+      {
+       "code": "E47.04",
+       "text": "VIOLENT flag: fraction >= 0.20"
+      },
+      {
+       "code": "E47.05",
+       "text": "Liq-short streak"
+      },
+      {
+       "code": "E47.06",
+       "text": "Day-rank"
+      },
+      {
+       "code": "E47.07",
+       "text": "Co-fire with up-move (squeeze corroboration)"
+      },
+      {
+       "code": "E47.08",
+       "text": "First-after-quiet flag"
+      },
+      {
+       "code": "E47.09",
+       "text": "Share of window's total liq-short"
+      },
+      {
+       "code": "E47.10",
+       "text": "Acceleration vs prior bucket"
+      }
+     ]
+    },
+    {
+     "code": "E48",
+     "field": "liq_long",
+     "tag": "P",
+     "desc": "Volume of LONGS liquidated (forced sells).",
+     "derivations": [
+      {
+       "code": "E48.01",
+       "text": "Absolute + /vol fraction"
+      },
+      {
+       "code": "E48.02",
+       "text": "z / percentile"
+      },
+      {
+       "code": "E48.03",
+       "text": "FIRED flag (>= 0.03)"
+      },
+      {
+       "code": "E48.04",
+       "text": "VIOLENT flag (>= 0.20)"
+      },
+      {
+       "code": "E48.05",
+       "text": "Liq-long streak"
+      },
+      {
+       "code": "E48.06",
+       "text": "Day-rank"
+      },
+      {
+       "code": "E48.07",
+       "text": "Co-fire with down-move (long-squeeze corroboration)"
+      },
+      {
+       "code": "E48.08",
+       "text": "First-after-quiet flag"
+      },
+      {
+       "code": "E48.09",
+       "text": "Share of window's total liq-long"
+      },
+      {
+       "code": "E48.10",
+       "text": "Acceleration"
+      }
+     ]
+    },
+    {
+     "code": "E49",
+     "field": "liq fractions",
+     "tag": "D",
+     "desc": "liq_side/vol and liq_total/vol -- the LIQ and LIQ_COIL ramps.",
+     "derivations": [
+      {
+       "code": "E49.01",
+       "text": "Total-liq fraction"
+      },
+      {
+       "code": "E49.02",
+       "text": "Side-dominance of forced flow"
+      },
+      {
+       "code": "E49.03",
+       "text": "COIL-band flag: absorbed liqs inside compression (0.03-0.15)"
+      },
+      {
+       "code": "E49.04",
+       "text": "BOTH-SIDES liq flag"
+      },
+      {
+       "code": "E49.05",
+       "text": "Percentile of total fraction"
+      },
+      {
+       "code": "E49.06",
+       "text": "Cluster count in trailing window"
+      },
+      {
+       "code": "E49.07",
+       "text": "Buckets since last liq event"
+      },
+      {
+       "code": "E49.08",
+       "text": "Liq vs delta alignment (forced flow with or against)"
+      },
+      {
+       "code": "E49.09",
+       "text": "Liq at price extremes flag"
+      },
+      {
+       "code": "E49.10",
+       "text": "Cascade shape: rising liq sequence across buckets"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "J. Trade-Size Classification (since 2026-06-30)",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E50",
+     "field": "sz_cb / sz_cs",
+     "tag": "P",
+     "desc": "Trade COUNT per size bin, buy / sell.",
+     "derivations": [
+      {
+       "code": "E50.01",
+       "text": "Counts per bin (vector feature)"
+      },
+      {
+       "code": "E50.02",
+       "text": "Large-count share (bins >= p95 anchor)"
+      },
+      {
+       "code": "E50.03",
+       "text": "Small-count share (bins <= ~p50)"
+      },
+      {
+       "code": "E50.04",
+       "text": "Count entropy across bins"
+      },
+      {
+       "code": "E50.05",
+       "text": "Highest occupied bin (largest print class)"
+      },
+      {
+       "code": "E50.06",
+       "text": "WHALE-print count (bins >= p99)"
+      },
+      {
+       "code": "E50.07",
+       "text": "ZERO-LARGE flag (no large prints at all)"
+      },
+      {
+       "code": "E50.08",
+       "text": "Large-count percentile vs window"
+      },
+      {
+       "code": "E50.09",
+       "text": "Large-count streak"
+      },
+      {
+       "code": "E50.10",
+       "text": "Buy-vs-sell count skew per size class"
+      }
+     ]
+    },
+    {
+     "code": "E51",
+     "field": "sz_vb / sz_vs",
+     "tag": "P",
+     "desc": "Trade VOLUME per size bin, buy / sell.",
+     "derivations": [
+      {
+       "code": "E51.01",
+       "text": "Volume per bin (vector feature)"
+      },
+      {
+       "code": "E51.02",
+       "text": "LARGE-volume share of bucket"
+      },
+      {
+       "code": "E51.03",
+       "text": "WHALE-volume share"
+      },
+      {
+       "code": "E51.04",
+       "text": "SMALL-volume share"
+      },
+      {
+       "code": "E51.05",
+       "text": "Side split of large volume"
+      },
+      {
+       "code": "E51.06",
+       "text": "Max-bin volume + its bin index"
+      },
+      {
+       "code": "E51.07",
+       "text": "z / percentile of large share"
+      },
+      {
+       "code": "E51.08",
+       "text": "Large-share streak"
+      },
+      {
+       "code": "E51.09",
+       "text": "Dominance flip of large volume side"
+      },
+      {
+       "code": "E51.10",
+       "text": "Volume entropy across bins"
+      }
+     ]
+    },
+    {
+     "code": "E52",
+     "field": "LARGE/SMALL/WHALE slices",
+     "tag": "D",
+     "desc": "Counts and volumes above/below any threshold, re-sliced instantly.",
+     "derivations": [
+      {
+       "code": "E52.01",
+       "text": "Large net side: large-buy minus large-sell"
+      },
+      {
+       "code": "E52.02",
+       "text": "Large delta as % of bucket delta"
+      },
+      {
+       "code": "E52.03",
+       "text": "Small net side"
+      },
+      {
+       "code": "E52.04",
+       "text": "LARGE-vs-SMALL divergence flag (opposed)"
+      },
+      {
+       "code": "E52.05",
+       "text": "Large-participation trend over trailing N"
+      },
+      {
+       "code": "E52.06",
+       "text": "Whale present (Y/N)"
+      },
+      {
+       "code": "E52.07",
+       "text": "Large share of total delta"
+      },
+      {
+       "code": "E52.08",
+       "text": "Small-crowd one-sidedness"
+      },
+      {
+       "code": "E52.09",
+       "text": "Threshold-sweep stability: does the read hold p90->p97?"
+      },
+      {
+       "code": "E52.10",
+       "text": "Day-rank of large participation"
+      }
+     ]
+    },
+    {
+     "code": "E53",
+     "field": "size_thr",
+     "tag": "CTX",
+     "desc": "Daemon rolling 60-min percentile anchors (p95 large / p99 whale / ~p50 small).",
+     "derivations": [
+      {
+       "code": "E53.01",
+       "text": "Current p50/p95/p99 values"
+      },
+      {
+       "code": "E53.02",
+       "text": "Anchor slope (sizing regime drift)"
+      },
+      {
+       "code": "E53.03",
+       "text": "p99/p50 ratio (live tail width)"
+      },
+      {
+       "code": "E53.04",
+       "text": "Anchor jump flag"
+      },
+      {
+       "code": "E53.05",
+       "text": "Percentile of anchors vs the day"
+      },
+      {
+       "code": "E53.06",
+       "text": "Time since last material shift"
+      },
+      {
+       "code": "E53.07",
+       "text": "Window fill n (cold-start health)"
+      },
+      {
+       "code": "E53.08",
+       "text": "Bucket max print vs anchors (class of the biggest print)"
+      },
+      {
+       "code": "E53.09",
+       "text": "Anchor stability (variance)"
+      },
+      {
+       "code": "E53.10",
+       "text": "Cross-check vs stored histograms (audit)"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "K. VPIN & Flow Toxicity",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E54",
+     "field": "vpin",
+     "tag": "CTX",
+     "desc": "Rolling 50-bucket VPIN estimate (persisted in engine_state).",
+     "derivations": [
+      {
+       "code": "E54.01",
+       "text": "Current value"
+      },
+      {
+       "code": "E54.02",
+       "text": "Tier: calm / warn / toxic (adaptive percentiles)"
+      },
+      {
+       "code": "E54.03",
+       "text": "z / percentile vs trailing 240"
+      },
+      {
+       "code": "E54.04",
+       "text": "Slope over last N buckets"
+      },
+      {
+       "code": "E54.05",
+       "text": "Tier-dwell streak"
+      },
+      {
+       "code": "E54.06",
+       "text": "TOXIC-entry flag (crossed up into toxic)"
+      },
+      {
+       "code": "E54.07",
+       "text": "VPIN vs delta alignment (toxic AND one-sided)"
+      },
+      {
+       "code": "E54.08",
+       "text": "Regime mean"
+      },
+      {
+       "code": "E54.09",
+       "text": "Buckets since last toxic episode"
+      },
+      {
+       "code": "E54.10",
+       "text": "VPIN x speed co-elevation flag"
+      }
+     ]
+    },
+    {
+     "code": "E55",
+     "field": "adaptive toxic/warn tiers",
+     "tag": "W",
+     "desc": "Thresholds as PERCENTILES of the trailing-240 VPIN distribution (self-calibrating).",
+     "derivations": [
+      {
+       "code": "E55.01",
+       "text": "Current warn / toxic threshold values"
+      },
+      {
+       "code": "E55.02",
+       "text": "Distance of vpin to toxic line"
+      },
+      {
+       "code": "E55.03",
+       "text": "Tier transitions count in window"
+      },
+      {
+       "code": "E55.04",
+       "text": "Dwell time per tier"
+      },
+      {
+       "code": "E55.05",
+       "text": "Crossing direction of last transition"
+      },
+      {
+       "code": "E55.06",
+       "text": "Tier at bucket close"
+      },
+      {
+       "code": "E55.07",
+       "text": "Threshold drift (window freshness)"
+      },
+      {
+       "code": "E55.08",
+       "text": "Tier stability score"
+      },
+      {
+       "code": "E55.09",
+       "text": "Percentile-window fill health"
+      },
+      {
+       "code": "E55.10",
+       "text": "Tier co-fire with liq/velocity flags"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "L. Windowed Structure Context",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E56",
+     "field": "ATR / range compression",
+     "tag": "W",
+     "desc": "Trailing range baseline; range/ATR (0.60-1.20) reads inside-bar compression.",
+     "derivations": [
+      {
+       "code": "E56.01",
+       "text": "ATR value"
+      },
+      {
+       "code": "E56.02",
+       "text": "range/ATR ratio"
+      },
+      {
+       "code": "E56.03",
+       "text": "COMPRESSION flag (< 0.60)"
+      },
+      {
+       "code": "E56.04",
+       "text": "EXPANSION flag (> 1.20)"
+      },
+      {
+       "code": "E56.05",
+       "text": "ATR slope (vol regime drift)"
+      },
+      {
+       "code": "E56.06",
+       "text": "ATR percentile vs day"
+      },
+      {
+       "code": "E56.07",
+       "text": "Squeeze duration: consecutive compressed buckets"
+      },
+      {
+       "code": "E56.08",
+       "text": "Post-compression break direction (study join)"
+      },
+      {
+       "code": "E56.09",
+       "text": "ATR regime tag"
+      },
+      {
+       "code": "E56.10",
+       "text": "ATR x duration coupling (slow AND tight = coil)"
+      }
+     ]
+    },
+    {
+     "code": "E57",
+     "field": "sweep depth",
+     "tag": "W",
+     "desc": "How far the bucket swept beyond prior 10-bucket extremes, over range (0.03-0.50 ramp).",
+     "derivations": [
+      {
+       "code": "E57.01",
+       "text": "Swept prior HIGH (Y/N) / swept prior LOW (Y/N)"
+      },
+      {
+       "code": "E57.02",
+       "text": "Sweep depth / range value"
+      },
+      {
+       "code": "E57.03",
+       "text": "Depth percentile vs window"
+      },
+      {
+       "code": "E57.04",
+       "text": "BOTH-SIDES sweep flag"
+      },
+      {
+       "code": "E57.05",
+       "text": "Sweep magnitude z"
+      },
+      {
+       "code": "E57.06",
+       "text": "Sweep at session extreme flag"
+      },
+      {
+       "code": "E57.07",
+       "text": "Sweeps count in trailing window"
+      },
+      {
+       "code": "E57.08",
+       "text": "Distance to nearest untouched equal-highs/lows pool"
+      },
+      {
+       "code": "E57.09",
+       "text": "Sweep-then-reclaim same-bucket flag"
+      },
+      {
+       "code": "E57.10",
+       "text": "Sweep direction vs close direction (grab-and-go?)"
+      }
+     ]
+    },
+    {
+     "code": "E58",
+     "field": "fail / reclaim depth",
+     "tag": "W",
+     "desc": "Failed-break depth (trap factor) and close-back-past-swept-level depth (squeeze reclaim).",
+     "derivations": [
+      {
+       "code": "E58.01",
+       "text": "Fail depth /range value (0.05-0.50 ramp)"
+      },
+      {
+       "code": "E58.02",
+       "text": "Fail direction (upside/downside break failed)"
+      },
+      {
+       "code": "E58.03",
+       "text": "Reclaim depth /range (0.00-0.30 ramp)"
+      },
+      {
+       "code": "E58.04",
+       "text": "Reclaim in SAME bucket flag (speed of reclaim)"
+      },
+      {
+       "code": "E58.05",
+       "text": "Trap-geometry composite (fail x POC-pos x trapped-opens)"
+      },
+      {
+       "code": "E58.06",
+       "text": "Fail percentile vs window"
+      },
+      {
+       "code": "E58.07",
+       "text": "Reclaim strength z"
+      },
+      {
+       "code": "E58.08",
+       "text": "Consecutive-fail streak"
+      },
+      {
+       "code": "E58.09",
+       "text": "Close position after reclaim (conviction)"
+      },
+      {
+       "code": "E58.10",
+       "text": "Squeeze-floor trigger proximity (liq >= 0.10)"
+      }
+     ]
+    },
+    {
+     "code": "E59",
+     "field": "trailing-30 baselines",
+     "tag": "W",
+     "desc": "The shared denominators: E/R baselines, velocity mean, exhaustion z-window.",
+     "derivations": [
+      {
+       "code": "E59.01",
+       "text": "Each baseline level (BER, SER, vel-mean, exh-z mean/sd)"
+      },
+      {
+       "code": "E59.02",
+       "text": "Baseline slopes (regime drift per metric)"
+      },
+      {
+       "code": "E59.03",
+       "text": "Baseline variance (stability)"
+      },
+      {
+       "code": "E59.04",
+       "text": "Window fill / freshness n"
+      },
+      {
+       "code": "E59.05",
+       "text": "Regime tags per metric"
+      },
+      {
+       "code": "E59.06",
+       "text": "Cross-metric coherence (all hot vs mixed)"
+      },
+      {
+       "code": "E59.07",
+       "text": "Baseline jump flags"
+      },
+      {
+       "code": "E59.08",
+       "text": "Position of window extremes (how long ago the max)"
+      },
+      {
+       "code": "E59.09",
+       "text": "Baseline percentile vs the day"
+      },
+      {
+       "code": "E59.10",
+       "text": "Normalization health audit (zeros / floors hit)"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "M. The 12-State Verdict (classify_bucket)",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E60",
+     "field": "state + confidence",
+     "tag": "D",
+     "desc": "Highest-scoring of 12 states; the geomean score IS the confidence (starred >= 0.80).",
+     "derivations": [
+      {
+       "code": "E60.01",
+       "text": "State label (categorical) + one-hot vector"
+      },
+      {
+       "code": "E60.02",
+       "text": "Confidence value"
+      },
+      {
+       "code": "E60.03",
+       "text": "STARRED flag (>= 0.80)"
+      },
+      {
+       "code": "E60.04",
+       "text": "Confidence percentile vs window"
+      },
+      {
+       "code": "E60.05",
+       "text": "Same-state streak length"
+      },
+      {
+       "code": "E60.06",
+       "text": "Transition pair tag: prior state -> this state"
+      },
+      {
+       "code": "E60.07",
+       "text": "Directional class mapping: bullish / bearish / neutral"
+      },
+      {
+       "code": "E60.08",
+       "text": "State entropy over trailing window (regime clarity)"
+      },
+      {
+       "code": "E60.09",
+       "text": "Confidence slope over last N"
+      },
+      {
+       "code": "E60.10",
+       "text": "Verdict at price extreme flag"
+      }
+     ]
+    },
+    {
+     "code": "E61",
+     "field": "factor breakdown",
+     "tag": "D",
+     "desc": "The named geomean inputs per state -- score and debug can never drift.",
+     "derivations": [
+      {
+       "code": "E61.01",
+       "text": "Weakest-factor name (what limited the verdict)"
+      },
+      {
+       "code": "E61.02",
+       "text": "Weakest-factor value (gating margin)"
+      },
+      {
+       "code": "E61.03",
+       "text": "Runner-up state + score gap (fragility)"
+      },
+      {
+       "code": "E61.04",
+       "text": "Floored soft-factor count"
+      },
+      {
+       "code": "E61.05",
+       "text": "Squeeze-floor engaged (Y/N)"
+      },
+      {
+       "code": "E61.06",
+       "text": "Full factor vector as features"
+      },
+      {
+       "code": "E61.07",
+       "text": "Core-vs-soft balance index"
+      },
+      {
+       "code": "E61.08",
+       "text": "Factor coherence (variance across inputs)"
+      },
+      {
+       "code": "E61.09",
+       "text": "Hard-gate near-miss flags (core just above 0)"
+      },
+      {
+       "code": "E61.10",
+       "text": "Factor deltas vs prior bucket"
+      }
+     ]
+    },
+    {
+     "code": "E62",
+     "field": "the 12 states",
+     "tag": "D",
+     "desc": "STRONG BULL/BEAR; BULL/BEAR EXHAUSTION; BULL/BEAR TRAP; SHORT/LONG SQUEEZE; LIQUIDITY COIL; ROTATION; CHOP; NEUTRAL.",
+     "derivations": [
+      {
+       "code": "E62.01",
+       "text": "Historical frequency of each state"
+      },
+      {
+       "code": "E62.02",
+       "text": "Mean same-state run length"
+      },
+      {
+       "code": "E62.03",
+       "text": "Transition-matrix row for current state"
+      },
+      {
+       "code": "E62.04",
+       "text": "Per-state confidence distribution"
+      },
+      {
+       "code": "E62.05",
+       "text": "Session-hour distribution per state"
+      },
+      {
+       "code": "E62.06",
+       "text": "State co-occurrence with flags (liq / velocity / dots)"
+      },
+      {
+       "code": "E62.07",
+       "text": "Rarity flag (bottom-decile frequency state)"
+      },
+      {
+       "code": "E62.08",
+       "text": "State cluster tag (trend / reversal / neutral families)"
+      },
+      {
+       "code": "E62.09",
+       "text": "Per-state next-bucket outcome stats (study join)"
+      },
+      {
+       "code": "E62.10",
+       "text": "Regime dependence (state mix drift over days)"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "N. Market-Structure Context (order_blocks)",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E63",
+     "field": "OB zones per tf",
+     "tag": "CTX",
+     "desc": "The active order-block set (price bands + metadata) for each of the 5 timeframes.",
+     "derivations": [
+      {
+       "code": "E63.01",
+       "text": "Active-OB count per tf"
+      },
+      {
+       "code": "E63.02",
+       "text": "Nearest OB distance (ticks / ATRs)"
+      },
+      {
+       "code": "E63.03",
+       "text": "Nearest OB side: support vs resistance"
+      },
+      {
+       "code": "E63.04",
+       "text": "Nearest OB age (buckets since formed)"
+      },
+      {
+       "code": "E63.05",
+       "text": "Nearest OB strength score"
+      },
+      {
+       "code": "E63.06",
+       "text": "Freshly-formed OB flag (this session)"
+      },
+      {
+       "code": "E63.07",
+       "text": "Mitigated fraction of nearest OB"
+      },
+      {
+       "code": "E63.08",
+       "text": "Nearest OB width"
+      },
+      {
+       "code": "E63.09",
+       "text": "Stacked-OB count within N ticks"
+      },
+      {
+       "code": "E63.10",
+       "text": "OB density above vs below price"
+      }
+     ]
+    },
+    {
+     "code": "E64",
+     "field": "distance-to-OB / inside-OB",
+     "tag": "D",
+     "desc": "The bucket's position relative to the nearest zone.",
+     "derivations": [
+      {
+       "code": "E64.01",
+       "text": "Signed distance in ticks"
+      },
+      {
+       "code": "E64.02",
+       "text": "Distance in ATR units"
+      },
+      {
+       "code": "E64.03",
+       "text": "INSIDE-OB flag (Y/N) + which tf"
+      },
+      {
+       "code": "E64.04",
+       "text": "Approach velocity (distance change per bucket)"
+      },
+      {
+       "code": "E64.05",
+       "text": "FIRST-TOUCH flag of this OB"
+      },
+      {
+       "code": "E64.06",
+       "text": "Touch count of this OB so far"
+      },
+      {
+       "code": "E64.07",
+       "text": "Rejection-at-OB flag (wick into, close out)"
+      },
+      {
+       "code": "E64.08",
+       "text": "Close inside vs wick-only penetration"
+      },
+      {
+       "code": "E64.09",
+       "text": "Buckets since last touch"
+      },
+      {
+       "code": "E64.10",
+       "text": "BREAK-THROUGH flag (closed beyond the zone)"
+      }
+     ]
+    },
+    {
+     "code": "E65",
+     "field": "cross-tf confluence",
+     "tag": "CTX",
+     "desc": "Order-block overlap scoring across timeframes -- the platform's original idea.",
+     "derivations": [
+      {
+       "code": "E65.01",
+       "text": "Confluence score at current price"
+      },
+      {
+       "code": "E65.02",
+       "text": "Count of tfs overlapping here"
+      },
+      {
+       "code": "E65.03",
+       "text": "Highest timeframe involved"
+      },
+      {
+       "code": "E65.04",
+       "text": "Distance to nearest confluence cluster"
+      },
+      {
+       "code": "E65.05",
+       "text": "INSIDE-confluence flag"
+      },
+      {
+       "code": "E65.06",
+       "text": "Score percentile vs the day"
+      },
+      {
+       "code": "E65.07",
+       "text": "Cluster freshness (age of youngest member)"
+      },
+      {
+       "code": "E65.08",
+       "text": "Score slope as price approaches"
+      },
+      {
+       "code": "E65.09",
+       "text": "Confluence co-location with heatmap wall (6h)"
+      },
+      {
+       "code": "E65.10",
+       "text": "Top-confluence-of-day flag"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "I",
+   "title": "O. The Six-Hour Stores (depth.db + trade tape)",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "E66",
+     "field": "heatmap columns",
+     "tag": "6h",
+     "desc": "Reconstructed resting-liquidity grid (re-anchored at every snapshot, bit-faithful).",
+     "derivations": [
+      {
+       "code": "E66.01",
+       "text": "Nearest wall ABOVE: distance + size"
+      },
+      {
+       "code": "E66.02",
+       "text": "Nearest wall BELOW: distance + size"
+      },
+      {
+       "code": "E66.03",
+       "text": "Wall asymmetry (above vs below mass)"
+      },
+      {
+       "code": "E66.04",
+       "text": "Wall persistence age"
+      },
+      {
+       "code": "E66.05",
+       "text": "Wall-eaten fraction during the bucket"
+      },
+      {
+       "code": "E66.06",
+       "text": "SPOOF-PULL flag: wall vanished untouched"
+      },
+      {
+       "code": "E66.07",
+       "text": "Approach outcome: held / broke / faded"
+      },
+      {
+       "code": "E66.08",
+       "text": "Wall count within +/- N ticks"
+      },
+      {
+       "code": "E66.09",
+       "text": "Book imbalance around price (resting, not taker)"
+      },
+      {
+       "code": "E66.10",
+       "text": "New-wall appearance during bucket flag"
+      }
+     ]
+    },
+    {
+     "code": "E67",
+     "field": "BBO series",
+     "tag": "6h",
+     "desc": "Best bid/ask through the bucket's lifetime.",
+     "derivations": [
+      {
+       "code": "E67.01",
+       "text": "Mean spread / max spread in bucket"
+      },
+      {
+       "code": "E67.02",
+       "text": "Spread z vs 6h norm"
+      },
+      {
+       "code": "E67.03",
+       "text": "Microprice drift vs close"
+      },
+      {
+       "code": "E67.04",
+       "text": "BBO flip rate (quote instability)"
+      },
+      {
+       "code": "E67.05",
+       "text": "Spread at bucket close"
+      },
+      {
+       "code": "E67.06",
+       "text": "Quote-fade events count"
+      },
+      {
+       "code": "E67.07",
+       "text": "Spread regime tag"
+      },
+      {
+       "code": "E67.08",
+       "text": "Spread x volume coupling (wide AND heavy = stress)"
+      },
+      {
+       "code": "E67.09",
+       "text": "Locked/crossed anomalies count"
+      },
+      {
+       "code": "E67.10",
+       "text": "Spread percentile of the bucket"
+      }
+     ]
+    },
+    {
+     "code": "E68",
+     "field": "DOM / COB snapshot",
+     "tag": "6h",
+     "desc": "The current-order-book ladder as the terminal's DOM panel reads it.",
+     "derivations": [
+      {
+       "code": "E68.01",
+       "text": "Top-N depth per side"
+      },
+      {
+       "code": "E68.02",
+       "text": "Depth imbalance ratio"
+      },
+      {
+       "code": "E68.03",
+       "text": "Depth slope by level (front-loaded vs deep)"
+      },
+      {
+       "code": "E68.04",
+       "text": "Refresh/replenish rate at touch"
+      },
+      {
+       "code": "E68.05",
+       "text": "Large resting order present (Y/N + size)"
+      },
+      {
+       "code": "E68.06",
+       "text": "Near-touch depth (1-3 ticks)"
+      },
+      {
+       "code": "E68.07",
+       "text": "Pull/stack event counts"
+      },
+      {
+       "code": "E68.08",
+       "text": "Depth percentile vs 6h"
+      },
+      {
+       "code": "E68.09",
+       "text": "Ladder skew (bid-heavy vs ask-heavy shape)"
+      },
+      {
+       "code": "E68.10",
+       "text": "DOM coherence with heatmap wall read"
+      }
+     ]
+    },
+    {
+     "code": "E69",
+     "field": "executed trade tape",
+     "tag": "6h",
+     "desc": "Every aggTrade (ts, price, qty, side): exact intrabucket sequencing.",
+     "derivations": [
+      {
+       "code": "E69.01",
+       "text": "Intrabucket delta path shape: front / mid / back-loaded"
+      },
+      {
+       "code": "E69.02",
+       "text": "Largest single print size + its position in the bucket"
+      },
+      {
+       "code": "E69.03",
+       "text": "Burst count (trades per 100ms clusters)"
+      },
+      {
+       "code": "E69.04",
+       "text": "Inter-trade gap stats (mean / max idle)"
+      },
+      {
+       "code": "E69.05",
+       "text": "Longest same-side print run"
+      },
+      {
+       "code": "E69.06",
+       "text": "Bucket VWAP vs close (who paid up)"
+      },
+      {
+       "code": "E69.07",
+       "text": "First-third vs last-third delta split"
+      },
+      {
+       "code": "E69.08",
+       "text": "Print-size autocorrelation (iceberg smell)"
+      },
+      {
+       "code": "E69.09",
+       "text": "Aggressive-cluster timestamps (sequencing joins)"
+      },
+      {
+       "code": "E69.10",
+       "text": "Tape-order audit for OHLC-ambiguous barrier hits"
+      }
+     ]
+    },
+    {
+     "code": "E70",
+     "field": "trade bubbles / aggregates",
+     "tag": "6h",
+     "desc": "Tape rendered as size-scaled bubbles; aggregated by total qty, colored by net side on zoom.",
+     "derivations": [
+      {
+       "code": "E70.01",
+       "text": "Net side per cell"
+      },
+      {
+       "code": "E70.02",
+       "text": "Total qty per cell"
+      },
+      {
+       "code": "E70.03",
+       "text": "Max bubble size in bucket"
+      },
+      {
+       "code": "E70.04",
+       "text": "Bubble density (prints per cell)"
+      },
+      {
+       "code": "E70.05",
+       "text": "Large-bubble count over threshold"
+      },
+      {
+       "code": "E70.06",
+       "text": "Spatial same-side streaks (sweep tracks)"
+      },
+      {
+       "code": "E70.07",
+       "text": "Bubble-at-wall co-location count"
+      },
+      {
+       "code": "E70.08",
+       "text": "Aggregate color flips along price"
+      },
+      {
+       "code": "E70.09",
+       "text": "Min-size-filtered bubble count"
+      },
+      {
+       "code": "E70.10",
+       "text": "Bubble asymmetry above vs below POC"
+      }
+     ]
+    },
+    {
+     "code": "E71",
+     "field": "iceberg side classification",
+     "tag": "6h",
+     "desc": "Cells flagged iceberg-buy / iceberg-sell via absorption-mark bands.",
+     "derivations": [
+      {
+       "code": "E71.01",
+       "text": "Iceberg cell count + side split"
+      },
+      {
+       "code": "E71.02",
+       "text": "Iceberg at bucket extreme flag"
+      },
+      {
+       "code": "E71.03",
+       "text": "Iceberg persistence (recurring at same price)"
+      },
+      {
+       "code": "E71.04",
+       "text": "Iceberg size proxy (qty at flagged cells)"
+      },
+      {
+       "code": "E71.05",
+       "text": "Coherence with suppression score s"
+      },
+      {
+       "code": "E71.06",
+       "text": "First-iceberg-in-window flag"
+      },
+      {
+       "code": "E71.07",
+       "text": "Iceberg-wall co-location flag"
+      },
+      {
+       "code": "E71.08",
+       "text": "Post-iceberg drift (study join)"
+      },
+      {
+       "code": "E71.09",
+       "text": "Iceberg density regime"
+      },
+      {
+       "code": "E71.10",
+       "text": "Side-switch of icebergs across the bucket"
+      }
+     ]
+    },
+    {
+     "code": "E72",
+     "field": "per-cell max buy/sell qty",
+     "tag": "6h",
+     "desc": "Largest single executed order per heatmap cell per side.",
+     "derivations": [
+      {
+       "code": "E72.01",
+       "text": "Max buy print / max sell print in bucket"
+      },
+      {
+       "code": "E72.02",
+       "text": "Max print class vs size_thr anchors (large / whale)"
+      },
+      {
+       "code": "E72.03",
+       "text": "Cells >= large threshold count"
+      },
+      {
+       "code": "E72.04",
+       "text": "Location of max print within the range"
+      },
+      {
+       "code": "E72.05",
+       "text": "Max-print side"
+      },
+      {
+       "code": "E72.06",
+       "text": "Top-cell clustering (adjacent large prints)"
+      },
+      {
+       "code": "E72.07",
+       "text": "Max print share of bucket volume"
+      },
+      {
+       "code": "E72.08",
+       "text": "NEW-max-of-window flag"
+      },
+      {
+       "code": "E72.09",
+       "text": "Side flip of the max print vs prior bucket"
+      },
+      {
+       "code": "E72.10",
+       "text": "Max print at wall / at OB co-location"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G01 -- Elapsed time & clock straddles",
+   "legality": "ENTRY-LEGAL",
+   "members": "start_time + end_time",
+   "items": [
+    {
+     "code": "G01.1",
+     "text": "Duration (the canonical example: elapsed seconds)"
+    },
+    {
+     "code": "G01.2",
+     "text": "Session-straddle flag (opened and closed in different sessions)"
+    },
+    {
+     "code": "G01.3",
+     "text": "Funding-timestamp straddle flag (crossed 00/08/16 UTC)"
+    },
+    {
+     "code": "G01.4",
+     "text": "Bucket's session-transition position (pre/post-open bucket index)"
+    },
+    {
+     "code": "G01.5",
+     "text": "Idle gap to the next bucket (tape silence after close)"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G02 -- Candle geometry set",
+   "legality": "ENTRY-LEGAL",
+   "members": "open + high + low + close",
+   "items": [
+    {
+     "code": "G02.1",
+     "text": "Range, body, wicks, close-position -- the full geometry family"
+    },
+    {
+     "code": "G02.2",
+     "text": "Gap vs prior close + true range"
+    },
+    {
+     "code": "G02.3",
+     "text": "Inside / engulfing / breakout relation to prior bucket"
+    },
+    {
+     "code": "G02.4",
+     "text": "Marubozu / doji / pin-bar shape tags"
+    },
+    {
+     "code": "G02.5",
+     "text": "Equal-highs / equal-lows liquidity-pool distances"
+    },
+    {
+     "code": "G02.6",
+     "text": "Two-bucket sweep-and-reclaim pattern flags"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G03 -- Net initiative",
+   "legality": "ENTRY-LEGAL",
+   "members": "buy_vol + sell_vol",
+   "items": [
+    {
+     "code": "G03.1",
+     "text": "delta and delta fraction (the canonical pair)"
+    },
+    {
+     "code": "G03.2",
+     "text": "Dominance ratio and log-odds of buy vs sell"
+    },
+    {
+     "code": "G03.3",
+     "text": "Side-flip flag vs prior bucket"
+    },
+    {
+     "code": "G03.4",
+     "text": "Trailing bucket-CVD (cumulative delta)"
+    },
+    {
+     "code": "G03.5",
+     "text": "Buy/sell share slopes (pressure drift)"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G04 -- Thrust efficiency",
+   "legality": "ENTRY-LEGAL",
+   "members": "delta + range (+ body)",
+   "items": [
+    {
+     "code": "G04.1",
+     "text": "Price moved per net contract (efficiency of aggression)"
+    },
+    {
+     "code": "G04.2",
+     "text": "STALL index: heavy delta, no body (absorption smell)"
+    },
+    {
+     "code": "G04.3",
+     "text": "OVERDRIVE flag: small delta, big body (vacuum move)"
+    },
+    {
+     "code": "G04.4",
+     "text": "Efficiency percentile vs window"
+    },
+    {
+     "code": "G04.5",
+     "text": "Efficiency regime tag"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G05 -- Initiative quadrants",
+   "legality": "ENTRY-LEGAL",
+   "members": "delta + delta_oi",
+   "items": [
+    {
+     "code": "G05.1",
+     "text": "Quadrant: +delta +dOI = new-money push (fresh longs driving)"
+    },
+    {
+     "code": "G05.2",
+     "text": "Quadrant: +delta -dOI = covering push (shorts forced out)"
+    },
+    {
+     "code": "G05.3",
+     "text": "Quadrant: -delta +dOI = distribution push (fresh shorts driving)"
+    },
+    {
+     "code": "G05.4",
+     "text": "Quadrant: -delta -dOI = unwind drop (longs leaving)"
+    },
+    {
+     "code": "G05.5",
+     "text": "Quadrant streaks and transitions (positioning narrative)"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G06 -- Cohort accounting",
+   "legality": "ENTRY-LEGAL",
+   "members": "opL + opS + clL + clS + churn",
+   "items": [
+    {
+     "code": "G06.1",
+     "text": "Net OI change + open:close ratio"
+    },
+    {
+     "code": "G06.2",
+     "text": "Long-cohort net (opL-clL) and short-cohort net (opS-clS)"
+    },
+    {
+     "code": "G06.3",
+     "text": "Side initiative index (who is opening harder)"
+    },
+    {
+     "code": "G06.4",
+     "text": "Trapped-cohort fuel: opens into a failed break direction"
+    },
+    {
+     "code": "G06.5",
+     "text": "Rotation completeness: churn share of total transfer"
+    },
+    {
+     "code": "G06.6",
+     "text": "OI-story entropy (mixed vs clean narrative)"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G07 -- Effort vs result verdict",
+   "legality": "ENTRY-LEGAL",
+   "members": "buyer_er + seller_er + body (+ range)",
+   "items": [
+    {
+     "code": "G07.1",
+     "text": "ABSORPTION verdict: hot effort, no result"
+    },
+    {
+     "code": "G07.2",
+     "text": "TRANSLATION verdict: hot effort, full result"
+    },
+    {
+     "code": "G07.3",
+     "text": "One-sided-effort divergence (hot side lost the bucket)"
+    },
+    {
+     "code": "G07.4",
+     "text": "Effort-result efficiency ratio per side"
+    },
+    {
+     "code": "G07.5",
+     "text": "Verdict streaks (persistent absorption at a level)"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G08 -- Urgency",
+   "legality": "ENTRY-LEGAL",
+   "members": "curr_vol + duration (+ avg_velocity)",
+   "items": [
+    {
+     "code": "G08.1",
+     "text": "vel = volume/second and Speed multiple (canonical)"
+    },
+    {
+     "code": "G08.2",
+     "text": "Urgency class: heavy AND fast vs heavy-slow grind"
+    },
+    {
+     "code": "G08.3",
+     "text": "Pace-adjusted volume anomaly (residual vs both norms)"
+    },
+    {
+     "code": "G08.4",
+     "text": "Urgency streak across buckets"
+    },
+    {
+     "code": "G08.5",
+     "text": "Urgency at extremes (fast into highs/lows)"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G09 -- Squeeze fingerprint",
+   "legality": "ENTRY-LEGAL",
+   "members": "liq_short/liq_long + delta + body",
+   "items": [
+    {
+     "code": "G09.1",
+     "text": "Forced-flow share of the move's aggression"
+    },
+    {
+     "code": "G09.2",
+     "text": "Squeeze corroboration: liq side aligned with direction"
+    },
+    {
+     "code": "G09.3",
+     "text": "Cascade quality: liq rising across consecutive buckets"
+    },
+    {
+     "code": "G09.4",
+     "text": "Post-liq continuation vs fade (study join)"
+    },
+    {
+     "code": "G09.5",
+     "text": "Coil read: liqs absorbed with no body (LIQ_COIL)"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G10 -- Profile placement",
+   "legality": "ENTRY-LEGAL",
+   "members": "levels + OHLC",
+   "items": [
+    {
+     "code": "G10.1",
+     "text": "poc_pos and close-vs-VA position (acceptance/rejection)"
+    },
+    {
+     "code": "G10.2",
+     "text": "Top-vs-bottom loading vs close direction"
+    },
+    {
+     "code": "G10.3",
+     "text": "Unfinished-auction extreme vs next-bucket revisit"
+    },
+    {
+     "code": "G10.4",
+     "text": "LVN-cross flag: body traversed a low-volume node"
+    },
+    {
+     "code": "G10.5",
+     "text": "Profile-shape x direction interaction tags"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G11 -- Large-trader read",
+   "legality": "ENTRY-LEGAL",
+   "members": "sz histograms + delta",
+   "items": [
+    {
+     "code": "G11.1",
+     "text": "Large-net vs small-net side split of the bucket's delta"
+    },
+    {
+     "code": "G11.2",
+     "text": "DIVERGENCE flag: large one way, small the other"
+    },
+    {
+     "code": "G11.3",
+     "text": "Whale-with-move vs whale-against-move tags"
+    },
+    {
+     "code": "G11.4",
+     "text": "Large share of the winning side's volume"
+    },
+    {
+     "code": "G11.5",
+     "text": "Threshold-sweep robustness of the large read (p90->p97)"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G12 -- Large-order placement",
+   "legality": "ENTRY-LEGAL",
+   "members": "sz histograms + levels (+ tape 6h)",
+   "items": [
+    {
+     "code": "G12.1",
+     "text": "Large-print price placement: at extremes vs mid-range"
+    },
+    {
+     "code": "G12.2",
+     "text": "Large-at-POC concentration"
+    },
+    {
+     "code": "G12.3",
+     "text": "Large prints into the wick (rejection of size)"
+    },
+    {
+     "code": "G12.4",
+     "text": "Exact large-print sequencing within the bucket (6h tape)"
+    },
+    {
+     "code": "G12.5",
+     "text": "Large-print co-location with imbalance stacks"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G13 -- Who absorbed whom",
+   "legality": "ENTRY-LEGAL",
+   "members": "suppression s + delta sign (+ levels)",
+   "items": [
+    {
+     "code": "G13.1",
+     "text": "Absorbed-side attribution: aggressors who failed"
+    },
+    {
+     "code": "G13.2",
+     "text": "Absorbing-level location (where the wall stood)"
+    },
+    {
+     "code": "G13.3",
+     "text": "Validated absorption against the trend flag"
+    },
+    {
+     "code": "G13.4",
+     "text": "Absorption-then-flip candidate sequence (study join)"
+    },
+    {
+     "code": "G13.5",
+     "text": "s x stacked-imbalance coherence check"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G14 -- Toxic push composite",
+   "legality": "ENTRY-LEGAL",
+   "members": "vpin + delta fraction + vol_mult",
+   "items": [
+    {
+     "code": "G14.1",
+     "text": "Toxic AND one-sided AND fast composite score"
+    },
+    {
+     "code": "G14.2",
+     "text": "Informed-flow candidate flag (all three elevated)"
+    },
+    {
+     "code": "G14.3",
+     "text": "Composite percentile vs window"
+    },
+    {
+     "code": "G14.4",
+     "text": "Composite streak (sustained informed pressure)"
+    },
+    {
+     "code": "G14.5",
+     "text": "Composite at structure (at OB / at wall) join"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G15 -- State sequencing",
+   "legality": "ENTRY-LEGAL",
+   "members": "state verdict + prior/next buckets",
+   "items": [
+    {
+     "code": "G15.1",
+     "text": "Transition-pair features (e.g. COIL -> SQUEEZE)"
+    },
+    {
+     "code": "G15.2",
+     "text": "State run-length at current bucket"
+    },
+    {
+     "code": "G15.3",
+     "text": "Verdict-flip density (regime instability)"
+    },
+    {
+     "code": "G15.4",
+     "text": "Confidence-weighted transition score"
+    },
+    {
+     "code": "G15.5",
+     "text": "Per-transition outcome stats vs the barrier labels (study join)"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G16 -- Window normalization family",
+   "legality": "ENTRY-LEGAL",
+   "members": "any metric + trailing 10/30/240 windows",
+   "items": [
+    {
+     "code": "G16.1",
+     "text": "z-score version of every raw metric"
+    },
+    {
+     "code": "G16.2",
+     "text": "Percentile version of every raw metric"
+    },
+    {
+     "code": "G16.3",
+     "text": "Streak length above/below own baseline"
+    },
+    {
+     "code": "G16.4",
+     "text": "Slope of every metric over last N buckets"
+    },
+    {
+     "code": "G16.5",
+     "text": "Regime tag per metric (calm/normal/hot)"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G17 -- Structure-conditioned bundle",
+   "legality": "ENTRY-LEGAL",
+   "members": "bucket + order_blocks (+ confluence)",
+   "items": [
+    {
+     "code": "G17.1",
+     "text": "At-OB behavior: touch / reject / break with all flow features"
+    },
+    {
+     "code": "G17.2",
+     "text": "Distance-decay features (flow x proximity to OB)"
+    },
+    {
+     "code": "G17.3",
+     "text": "Confluence-weighted position score"
+    },
+    {
+     "code": "G17.4",
+     "text": "First-touch vs n-th-touch interaction with absorption"
+    },
+    {
+     "code": "G17.5",
+     "text": "OB-break with large-order participation flag"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G18 -- Wall interaction bundle",
+   "legality": "ENTRY-LEGAL",
+   "members": "bucket + heatmap walls (6h) -- the untested angle",
+   "items": [
+    {
+     "code": "G18.1",
+     "text": "Approach-outcome label: wall held / broke / pulled"
+    },
+    {
+     "code": "G18.2",
+     "text": "Wall-eaten rate vs taker aggression (who is winning)"
+    },
+    {
+     "code": "G18.3",
+     "text": "Absorption s AT a visible wall (the flagged study)"
+    },
+    {
+     "code": "G18.4",
+     "text": "Spoof-pull preceding the move flag"
+    },
+    {
+     "code": "G18.5",
+     "text": "Wall distance as a barrier-odds conditioning feature"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G19 -- Sequencing bundle",
+   "legality": "ENTRY-LEGAL",
+   "members": "bucket + trade tape (6h)",
+   "items": [
+    {
+     "code": "G19.1",
+     "text": "Front-loaded vs back-loaded aggression shape"
+    },
+    {
+     "code": "G19.2",
+     "text": "Largest-print timing vs bucket outcome"
+    },
+    {
+     "code": "G19.3",
+     "text": "Burst-timing pattern (early bursts vs late bursts)"
+    },
+    {
+     "code": "G19.4",
+     "text": "Same-side run lengths inside the bucket"
+    },
+    {
+     "code": "G19.5",
+     "text": "Exact barrier-hit ORDER for OHLC-ambiguous buckets (labeler upgrade)"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G20 -- Cross-timeframe join",
+   "legality": "ENTRY-LEGAL",
+   "members": "1m bucket + live 5m/15m/1h/4h context",
+   "items": [
+    {
+     "code": "G20.1",
+     "text": "Position of the 1m bucket inside the forming higher-tf bucket"
+    },
+    {
+     "code": "G20.2",
+     "text": "Higher-tf state verdict at the moment"
+    },
+    {
+     "code": "G20.3",
+     "text": "Higher-tf delta/dOI alignment flag"
+    },
+    {
+     "code": "G20.4",
+     "text": "Multi-tf agreement score (how many tfs point the same way)"
+    },
+    {
+     "code": "G20.5",
+     "text": "Higher-tf OB/confluence proximity at the 1m close"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G21 -- Trap / squeeze composite",
+   "legality": "ENTRY-LEGAL",
+   "members": "exhaustion + sweep + reclaim + trapped-opens",
+   "items": [
+    {
+     "code": "G21.1",
+     "text": "The state-engine trap recipe exposed as one composite feature"
+    },
+    {
+     "code": "G21.2",
+     "text": "Sweep-fail-reclaim three-beat pattern flag"
+    },
+    {
+     "code": "G21.3",
+     "text": "Trapped-cohort size behind the failed break"
+    },
+    {
+     "code": "G21.4",
+     "text": "Squeeze-completion score (reclaim + forced flow + speed)"
+    },
+    {
+     "code": "G21.5",
+     "text": "Composite vs the labeled outcome (study join)"
+    }
+   ]
+  },
+  {
+   "part": "II",
+   "title": "G22 -- Effort triangle",
+   "legality": "ENTRY-LEGAL",
+   "members": "duration + range + curr_vol",
+   "items": [
+    {
+     "code": "G22.1",
+     "text": "Volatility per unit volume (fragility of the tape)"
+    },
+    {
+     "code": "G22.2",
+     "text": "Time-price-volume consistency residual (anomaly detector)"
+    },
+    {
+     "code": "G22.3",
+     "text": "Slow-wide flag (thin tape, big moves)"
+    },
+    {
+     "code": "G22.4",
+     "text": "Fast-narrow flag (heavy grind, no travel)"
+    },
+    {
+     "code": "G22.5",
+     "text": "Triangle regime tag joining pace and volatility"
+    }
+   ]
+  },
+  {
+   "part": "III",
+   "title": "P1 -- ABSORPTION panel",
+   "desc": "Bull vs bear absorbed volume (V*s) across the selection; badges carry the side percentages.",
+   "scoped": true,
+   "scope_note": "expand to B-/J-/X- prefixed columns",
+   "items": [
+    {
+     "code": "P1.01",
+     "text": "Bull absorption percentage (badge)"
+    },
+    {
+     "code": "P1.02",
+     "text": "Bear absorption percentage (badge)"
+    },
+    {
+     "code": "P1.03",
+     "text": "Spread: bull% - bear%"
+    },
+    {
+     "code": "P1.04",
+     "text": "Dominant side label"
+    },
+    {
+     "code": "P1.05",
+     "text": "Absolute bull V*s over the selection"
+    },
+    {
+     "code": "P1.06",
+     "text": "Absolute bear V*s over the selection"
+    },
+    {
+     "code": "P1.07",
+     "text": "Sum: absorbed share of selection volume"
+    },
+    {
+     "code": "P1.08",
+     "text": "Trajectory slope across the selection"
+    },
+    {
+     "code": "P1.09",
+     "text": "Peak-absorption bucket position (0..15)"
+    },
+    {
+     "code": "P1.10",
+     "text": "Validated-dot (s>=0.60) count in selection"
+    },
+    {
+     "code": "P1.11",
+     "text": "Entry-bucket raw (un-smoothed) hover value"
+    }
+   ]
+  },
+  {
+   "part": "III",
+   "title": "P2 -- EFF-AGG panel",
+   "desc": "Bull vs bear effective aggression V*(1-s) -- the mirror partition.",
+   "scoped": true,
+   "scope_note": "expand to B-/J-/X- prefixed columns",
+   "items": [
+    {
+     "code": "P2.01",
+     "text": "Bull eff-agg percentage (badge)"
+    },
+    {
+     "code": "P2.02",
+     "text": "Bear eff-agg percentage (badge)"
+    },
+    {
+     "code": "P2.03",
+     "text": "Spread: bull% - bear%"
+    },
+    {
+     "code": "P2.04",
+     "text": "Dominant side label"
+    },
+    {
+     "code": "P2.05",
+     "text": "Absolute bull V*(1-s) over the selection"
+    },
+    {
+     "code": "P2.06",
+     "text": "Absolute bear V*(1-s) over the selection"
+    },
+    {
+     "code": "P2.07",
+     "text": "Sum: eff-agg share of selection volume"
+    },
+    {
+     "code": "P2.08",
+     "text": "Trajectory slope across the selection"
+    },
+    {
+     "code": "P2.09",
+     "text": "Peak eff-agg bucket position"
+    },
+    {
+     "code": "P2.10",
+     "text": "Dominance-flip count across the selection"
+    },
+    {
+     "code": "P2.11",
+     "text": "Entry-bucket raw value"
+    }
+   ]
+  },
+  {
+   "part": "III",
+   "title": "P3 -- E/R panel",
+   "desc": "Buyer vs seller effort-per-result across the selection.",
+   "scoped": true,
+   "scope_note": "expand to B-/J-/X- prefixed columns",
+   "items": [
+    {
+     "code": "P3.01",
+     "text": "Buyer-side percentage (badge)"
+    },
+    {
+     "code": "P3.02",
+     "text": "Seller-side percentage (badge)"
+    },
+    {
+     "code": "P3.03",
+     "text": "Spread: buyer% - seller%"
+    },
+    {
+     "code": "P3.04",
+     "text": "Dominant side label"
+    },
+    {
+     "code": "P3.05",
+     "text": "Aggregate buyer multiple vs trailing baseline"
+    },
+    {
+     "code": "P3.06",
+     "text": "Aggregate seller multiple vs baseline"
+    },
+    {
+     "code": "P3.07",
+     "text": "Hot-bucket count (>=1.5x) in selection"
+    },
+    {
+     "code": "P3.08",
+     "text": "Both-hot bucket count"
+    },
+    {
+     "code": "P3.09",
+     "text": "Peak-E/R bucket position"
+    },
+    {
+     "code": "P3.10",
+     "text": "Entry-bucket raw value"
+    }
+   ]
+  },
+  {
+   "part": "III",
+   "title": "P4 -- EXHAUSTION panel",
+   "desc": "Gated exhaustion with side badge -- the value + last-exhausted-side readout.",
+   "scoped": true,
+   "scope_note": "expand to B-/J-/X- prefixed columns",
+   "items": [
+    {
+     "code": "P4.01",
+     "text": "Current exhaustion value (badge)"
+    },
+    {
+     "code": "P4.02",
+     "text": "LAST EXHAUSTED SIDE (bull / bear)"
+    },
+    {
+     "code": "P4.03",
+     "text": "Last-exhausted side's percentage"
+    },
+    {
+     "code": "P4.04",
+     "text": "Opposite side's percentage"
+    },
+    {
+     "code": "P4.05",
+     "text": "Spread between the two sides"
+    },
+    {
+     "code": "P4.06",
+     "text": "Bull-fire count inside the selection"
+    },
+    {
+     "code": "P4.07",
+     "text": "Bear-fire count inside the selection"
+    },
+    {
+     "code": "P4.08",
+     "text": "Buckets since the last fire"
+    },
+    {
+     "code": "P4.09",
+     "text": "Peak gated score + its bucket position"
+    },
+    {
+     "code": "P4.10",
+     "text": "Crossover-diamond count in the selection"
+    },
+    {
+     "code": "P4.11",
+     "text": "Weakest gating leg at the entry bucket"
+    }
+   ]
+  },
+  {
+   "part": "III",
+   "title": "P5 -- Phase panel: BEFORE",
+   "desc": "Two lines = the BEFORE phase's bull/bear trajectory (default-ON phase panel).",
+   "scoped": true,
+   "scope_note": "expand to B-/J-/X- prefixed columns",
+   "items": [
+    {
+     "code": "P5.01",
+     "text": "Phase bull percentage"
+    },
+    {
+     "code": "P5.02",
+     "text": "Phase bear percentage"
+    },
+    {
+     "code": "P5.03",
+     "text": "Spread: bull% - bear%"
+    },
+    {
+     "code": "P5.04",
+     "text": "Phase winner (UP green / DOWN red)"
+    },
+    {
+     "code": "P5.05",
+     "text": "Phase share of selection volume"
+    },
+    {
+     "code": "P5.06",
+     "text": "Phase length in buckets"
+    },
+    {
+     "code": "P5.07",
+     "text": "Phase trajectory slope"
+    },
+    {
+     "code": "P5.08",
+     "text": "Phase net delta"
+    },
+    {
+     "code": "P5.09",
+     "text": "Phase intensity vs selection average"
+    },
+    {
+     "code": "P5.10",
+     "text": "Entry-membership flag (entry inside this phase)"
+    }
+   ]
+  },
+  {
+   "part": "III",
+   "title": "P6 -- Phase panel: DURING",
+   "desc": "The START/DURING merged phase's bull/bear trajectory.",
+   "scoped": true,
+   "scope_note": "expand to B-/J-/X- prefixed columns",
+   "items": [
+    {
+     "code": "P6.01",
+     "text": "Phase bull percentage"
+    },
+    {
+     "code": "P6.02",
+     "text": "Phase bear percentage"
+    },
+    {
+     "code": "P6.03",
+     "text": "Spread"
+    },
+    {
+     "code": "P6.04",
+     "text": "Phase winner"
+    },
+    {
+     "code": "P6.05",
+     "text": "Phase share of selection volume"
+    },
+    {
+     "code": "P6.06",
+     "text": "Phase length in buckets"
+    },
+    {
+     "code": "P6.07",
+     "text": "Phase trajectory slope"
+    },
+    {
+     "code": "P6.08",
+     "text": "Phase net delta"
+    },
+    {
+     "code": "P6.09",
+     "text": "DURING-minus-BEFORE shift (phase transition)"
+    },
+    {
+     "code": "P6.10",
+     "text": "Phase peak bucket position"
+    }
+   ]
+  },
+  {
+   "part": "III",
+   "title": "P7 -- Phase panel: END",
+   "desc": "The END phase's bull/bear trajectory -- the freshest read at entry.",
+   "scoped": true,
+   "scope_note": "expand to B-/J-/X- prefixed columns",
+   "items": [
+    {
+     "code": "P7.01",
+     "text": "Phase bull percentage"
+    },
+    {
+     "code": "P7.02",
+     "text": "Phase bear percentage"
+    },
+    {
+     "code": "P7.03",
+     "text": "Spread"
+    },
+    {
+     "code": "P7.04",
+     "text": "Phase winner"
+    },
+    {
+     "code": "P7.05",
+     "text": "Phase share of selection volume"
+    },
+    {
+     "code": "P7.06",
+     "text": "Phase length in buckets"
+    },
+    {
+     "code": "P7.07",
+     "text": "Phase trajectory slope"
+    },
+    {
+     "code": "P7.08",
+     "text": "Phase net delta"
+    },
+    {
+     "code": "P7.09",
+     "text": "END-minus-DURING shift (late acceleration)"
+    },
+    {
+     "code": "P7.10",
+     "text": "END-winner alignment with entry-bucket direction"
+    }
+   ]
+  },
+  {
+   "part": "III",
+   "title": "P8L -- LARGE MKT panel",
+   "desc": "Market-order size class LARGE ('8' cycle slot 1) -- the broad daemon threshold, not selection-local.",
+   "scoped": true,
+   "scope_note": "expand to B-/J-/X- prefixed columns",
+   "items": [
+    {
+     "code": "P8L.01",
+     "text": "Large BUY volume in selection"
+    },
+    {
+     "code": "P8L.02",
+     "text": "Large SELL volume in selection"
+    },
+    {
+     "code": "P8L.03",
+     "text": "Sum: total large volume"
+    },
+    {
+     "code": "P8L.04",
+     "text": "Large delta (buy - sell)"
+    },
+    {
+     "code": "P8L.05",
+     "text": "Large share of selection volume"
+    },
+    {
+     "code": "P8L.06",
+     "text": "Large trade count"
+    },
+    {
+     "code": "P8L.07",
+     "text": "Largest print class vs size_thr anchors"
+    },
+    {
+     "code": "P8L.08",
+     "text": "Large-activity slope across selection"
+    },
+    {
+     "code": "P8L.09",
+     "text": "Run-winner badge total (latest bar)"
+    },
+    {
+     "code": "P8L.10",
+     "text": "Threshold in force (slider or p95 auto)"
+    },
+    {
+     "code": "P8L.11",
+     "text": "Large bull/bear split at the entry bucket"
+    }
+   ]
+  },
+  {
+   "part": "III",
+   "title": "P8S -- SMALL MKT panel",
+   "desc": "Market-order size class SMALL ('8' cycle slot 2).",
+   "scoped": true,
+   "scope_note": "expand to B-/J-/X- prefixed columns",
+   "items": [
+    {
+     "code": "P8S.01",
+     "text": "Small BUY volume in selection"
+    },
+    {
+     "code": "P8S.02",
+     "text": "Small SELL volume in selection"
+    },
+    {
+     "code": "P8S.03",
+     "text": "Sum: total small volume"
+    },
+    {
+     "code": "P8S.04",
+     "text": "Small delta (buy - sell)"
+    },
+    {
+     "code": "P8S.05",
+     "text": "Small share of selection volume"
+    },
+    {
+     "code": "P8S.06",
+     "text": "Small trade count"
+    },
+    {
+     "code": "P8S.07",
+     "text": "Small-activity slope across selection"
+    },
+    {
+     "code": "P8S.08",
+     "text": "Small-crowd dominant side"
+    },
+    {
+     "code": "P8S.09",
+     "text": "LARGE-vs-SMALL divergence flag (opposed sides)"
+    },
+    {
+     "code": "P8S.10",
+     "text": "Small threshold in force (~p50)"
+    }
+   ]
+  },
+  {
+   "part": "III",
+   "title": "P9 -- COMPOSITE LEAN panel",
+   "desc": "One line per side = per-bucket average of the four measure panels' signed leans (+/- own-side exhaustion); badges = BULL / BEAR / SUM.",
+   "scoped": true,
+   "scope_note": "expand to B-/J-/X- prefixed columns",
+   "items": [
+    {
+     "code": "P9.01",
+     "text": "Bull line value (badge)"
+    },
+    {
+     "code": "P9.02",
+     "text": "Bear line value (badge)"
+    },
+    {
+     "code": "P9.03",
+     "text": "SUM line value (badge)"
+    },
+    {
+     "code": "P9.04",
+     "text": "Spread: bull - bear"
+    },
+    {
+     "code": "P9.05",
+     "text": "Sum sign (net lean direction)"
+    },
+    {
+     "code": "P9.06",
+     "text": "Sum slope over the last 5 buckets"
+    },
+    {
+     "code": "P9.07",
+     "text": "Zero-cross count in the selection"
+    },
+    {
+     "code": "P9.08",
+     "text": "+/-50 breach count"
+    },
+    {
+     "code": "P9.09",
+     "text": "Mean |lean| across selection (conviction)"
+    },
+    {
+     "code": "P9.10",
+     "text": "Entry-bucket raw lean"
+    }
+   ]
+  },
+  {
+   "part": "III",
+   "title": "P0 -- SMOOTHED LEAN panel",
+   "desc": "Panel 9's smoothed twin: (current + locked)/2, locked region, settling tail, and confirmed +50/0/-50 cross markers.",
+   "scoped": true,
+   "scope_note": "expand to B-/J-/X- prefixed columns",
+   "items": [
+    {
+     "code": "P0.01",
+     "text": "Smoothed bull value"
+    },
+    {
+     "code": "P0.02",
+     "text": "Smoothed bear value"
+    },
+    {
+     "code": "P0.03",
+     "text": "Smoothed SUM value"
+    },
+    {
+     "code": "P0.04",
+     "text": "Spread"
+    },
+    {
+     "code": "P0.05",
+     "text": "Locked-region end value"
+    },
+    {
+     "code": "P0.06",
+     "text": "Settling-tail delta (current - locked)"
+    },
+    {
+     "code": "P0.07",
+     "text": "Last confirmed cross level (+50 / 0 / -50)"
+    },
+    {
+     "code": "P0.08",
+     "text": "Side of the last confirmed cross"
+    },
+    {
+     "code": "P0.09",
+     "text": "Buckets since the last confirmed cross"
+    },
+    {
+     "code": "P0.10",
+     "text": "Cross-marker count in the selection"
+    },
+    {
+     "code": "P0.11",
+     "text": "Twin-coherence flag (sign agrees with P9)"
+    }
+   ]
+  },
+  {
+   "part": "III",
+   "title": "S -- Selection stats box",
+   "scoped": true,
+   "scope_note": "expand to B-/J-/X- prefixed columns",
+   "items": [
+    {
+     "code": "S.01",
+     "text": "Selection bucket count"
+    },
+    {
+     "code": "S.02",
+     "text": "Selection wall-clock duration"
+    },
+    {
+     "code": "S.03",
+     "text": "Total volume"
+    },
+    {
+     "code": "S.04",
+     "text": "Sell | Buy split"
+    },
+    {
+     "code": "S.05",
+     "text": "Net delta + delta percentage"
+    },
+    {
+     "code": "S.06",
+     "text": "Net dOI"
+    },
+    {
+     "code": "S.07",
+     "text": "Sum OpL"
+    },
+    {
+     "code": "S.08",
+     "text": "Sum OpS"
+    },
+    {
+     "code": "S.09",
+     "text": "Sum ClL"
+    },
+    {
+     "code": "S.10",
+     "text": "Sum ClS"
+    },
+    {
+     "code": "S.11",
+     "text": "Aggregate B-E/R multiple"
+    },
+    {
+     "code": "S.12",
+     "text": "Aggregate S-E/R multiple"
+    },
+    {
+     "code": "S.13",
+     "text": "Average VEL + Speed multiple"
+    },
+    {
+     "code": "S.14",
+     "text": "Selection range + net price change %"
+    }
+   ]
+  },
+  {
+   "part": "III",
+   "title": "C -- Last-15 pre-entry context",
+   "legality": "ENTRY-LEGAL",
+   "items": [
+    {
+     "code": "C.01",
+     "text": "Direction over the 15: net UP or DOWN"
+    },
+    {
+     "code": "C.02",
+     "text": "Net % change over the 15"
+    },
+    {
+     "code": "C.03",
+     "text": "Linear-fit slope + R-squared (trendiness)"
+    },
+    {
+     "code": "C.04",
+     "text": "Path class: trend / range / V-shape"
+    },
+    {
+     "code": "C.05",
+     "text": "Max drawup and drawdown within the 15"
+    },
+    {
+     "code": "C.06",
+     "text": "Realized volatility of the 15"
+    },
+    {
+     "code": "C.07",
+     "text": "Higher-highs / lower-lows counts"
+    },
+    {
+     "code": "C.08",
+     "text": "Dominant 12-state verdict over the 15"
+    },
+    {
+     "code": "C.09",
+     "text": "Cumulative delta over the 15"
+    },
+    {
+     "code": "C.10",
+     "text": "Cumulative dOI over the 15"
+    },
+    {
+     "code": "C.11",
+     "text": "Compression share (buckets under 0.6 ATR)"
+    },
+    {
+     "code": "C.12",
+     "text": "Sweep-event count in the 15"
+    }
+   ]
+  },
+  {
+   "part": "IV",
+   "title": "L -- Episode identity & labels",
+   "legality": "POST-HOC",
+   "items": [
+    {
+     "code": "L.01",
+     "text": "Episode direction: long / short"
+    },
+    {
+     "code": "L.02",
+     "text": "Outcome label: TP / SL / UNRESOLVED"
+    },
+    {
+     "code": "L.03",
+     "text": "Resolved flag: barrier hit within the 6h window and available data"
+    },
+    {
+     "code": "L.04",
+     "text": "Censor reason: none / 6h-window / end-of-data"
+    },
+    {
+     "code": "L.05",
+     "text": "Entry price (entry-bucket close) + absolute TP and SL prices"
+    },
+    {
+     "code": "L.06",
+     "text": "Entry bucket id + entry timestamp"
+    },
+    {
+     "code": "L.07",
+     "text": "Ambiguous-hit flag: one bucket spanned BOTH barriers -> ruled SL by convention"
+    },
+    {
+     "code": "L.08",
+     "text": "Joint 3-way path label mirror (UP / DOWN / WHIPSAW)"
+    },
+    {
+     "code": "L.09",
+     "text": "Episode id: bucket_id x direction key"
+    }
+   ]
+  },
+  {
+   "part": "IV",
+   "title": "O -- Barrier outcome + excursion family",
+   "legality": "POST-HOC",
+   "items": [
+    {
+     "code": "O.01",
+     "text": "Three-way path label: UP-resolve / DOWN-resolve / WHIPSAW"
+    },
+    {
+     "code": "O.02",
+     "text": "Per-direction outcome: long TP/SL and short TP/SL"
+    },
+    {
+     "code": "O.03",
+     "text": "Time to barrier touch (entry close -> touch)"
+    },
+    {
+     "code": "O.04",
+     "text": "Buckets to barrier touch"
+    },
+    {
+     "code": "O.05",
+     "text": "Barrier-touch bucket id (end of J-scope)"
+    },
+    {
+     "code": "O.06",
+     "text": "TP episodes: max favorable excursion BEYOND TP, % (6h cap)"
+    },
+    {
+     "code": "O.07",
+     "text": "TP episodes: time to that max"
+    },
+    {
+     "code": "O.08",
+     "text": "TP episodes: buckets to that max"
+    },
+    {
+     "code": "O.09",
+     "text": "Excursion velocity: % per hour to the max"
+    },
+    {
+     "code": "O.10",
+     "text": "Retention: window-end value vs max (give-back %)"
+    },
+    {
+     "code": "O.11",
+     "text": "Censoring flag: max sits at the 6h window edge"
+    },
+    {
+     "code": "O.12",
+     "text": "SL episodes: max adverse continuation BEYOND SL, %"
+    },
+    {
+     "code": "O.13",
+     "text": "SL episodes: time to the max adverse point"
+    },
+    {
+     "code": "O.14",
+     "text": "Adverse velocity: % per hour"
+    },
+    {
+     "code": "O.15",
+     "text": "Recovery flags: re-crossed SL / re-crossed entry within 6h"
+    },
+    {
+     "code": "O.16",
+     "text": "Excursion-max bucket id (end of X-scope)"
+    },
+    {
+     "code": "O.17",
+     "text": "TP episodes: max against-entry depth BEFORE the hit, % from entry"
+    },
+    {
+     "code": "O.18",
+     "text": "SL episodes: max in-favor move BEFORE the stop, % from entry"
+    },
+    {
+     "code": "O.19",
+     "text": "TP episodes: price crossed entry AGAINST the position first (Y/N)"
+    },
+    {
+     "code": "O.20",
+     "text": "TP episodes: underwater time before the TP hit"
+    },
+    {
+     "code": "O.21",
+     "text": "TP episodes: near-death ratio -- against-entry depth / SL distance"
+    },
+    {
+     "code": "O.22",
+     "text": "SL episodes: price crossed entry IN FAVOR first (Y/N)"
+    },
+    {
+     "code": "O.23",
+     "text": "SL episodes: time in profit before the stop"
+    },
+    {
+     "code": "O.24",
+     "text": "SL episodes: near-win ratio -- in-favor move / TP distance"
+    },
+    {
+     "code": "O.25",
+     "text": "Entry re-cross count before the barrier (chop around entry)"
+    }
+   ]
+  },
+  {
+   "part": "IV",
+   "title": "K -- Keltner channel & POC baseline",
+   "legality": "ENTRY-LEGAL",
+   "note": "offline-computed; defaults EMA-20 +/- 2.0xATR-20, 240-bucket rolling POC",
+   "items": [
+    {
+     "code": "K.01",
+     "text": "KC middle line value at entry (EMA-20 of close)"
+    },
+    {
+     "code": "K.02",
+     "text": "KC upper band (mid + 2.0 x ATR-20)"
+    },
+    {
+     "code": "K.03",
+     "text": "KC lower band (mid - 2.0 x ATR-20)"
+    },
+    {
+     "code": "K.04",
+     "text": "Bandwidth: (upper - lower) / mid"
+    },
+    {
+     "code": "K.05",
+     "text": "Entry close position inside the channel, 0..1"
+    },
+    {
+     "code": "K.06",
+     "text": "Zone tag: above / upper-half / lower-half / below"
+    },
+    {
+     "code": "K.07",
+     "text": "Distance to nearest band (ticks and ATRs)"
+    },
+    {
+     "code": "K.08",
+     "text": "Channel slope (mid-line drift over N buckets)"
+    },
+    {
+     "code": "K.09",
+     "text": "Squeeze flag: bandwidth in bottom percentile"
+    },
+    {
+     "code": "K.10",
+     "text": "Rolling-POC baseline value (240-bucket window POC)"
+    },
+    {
+     "code": "K.11",
+     "text": "Close vs POC baseline: side + distance"
+    },
+    {
+     "code": "K.12",
+     "text": "POC-baseline slope + consecutive-side streak"
+    }
+   ]
+  }
+ ]
+}

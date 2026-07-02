@@ -1,0 +1,10 @@
+# raw snapshots + big generated datasets stay out of git (regenerable / reference gitignored data)
+data/*
+out/*
+# ...but track the small code-required / deliverable text artifacts (own-line comments; git has no inline):
+# - column_contract.tsv: the enumerated 1281-code contract that build_dataset.py reads
+# - extraction_report.md: the banked validation report
+# - deferred_codes.tsv: the on-demand enrichment shopping list
+!data/column_contract.tsv
+!out/extraction_report.md
+!out/deferred_codes.tsv

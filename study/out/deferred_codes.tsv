@@ -1,0 +1,987 @@
+code	family	reason
+E01.02	E	catalog transform not unambiguously specified
+E01.03	E	catalog transform not unambiguously specified
+E01.04	E	catalog transform not unambiguously specified
+E01.05	E	catalog transform not unambiguously specified
+E01.06	E	catalog transform not unambiguously specified
+E01.07	E	catalog transform not unambiguously specified
+E01.08	E	catalog transform not unambiguously specified
+E01.09	E	catalog transform not unambiguously specified
+E01.10	E	catalog transform not unambiguously specified
+E01.11	E	catalog transform not unambiguously specified
+E01.12	E	catalog transform not unambiguously specified
+E02.02	E	catalog transform not unambiguously specified
+E02.03	E	catalog transform not unambiguously specified
+E02.04	E	catalog transform not unambiguously specified
+E02.05	E	catalog transform not unambiguously specified
+E02.06	E	catalog transform not unambiguously specified
+E02.07	E	catalog transform not unambiguously specified
+E02.08	E	catalog transform not unambiguously specified
+E02.09	E	catalog transform not unambiguously specified
+E02.10	E	catalog transform not unambiguously specified
+E03.04	E	catalog transform not unambiguously specified
+E03.05	E	catalog transform not unambiguously specified
+E03.06	E	catalog transform not unambiguously specified
+E03.09	E	catalog transform not unambiguously specified
+E03.10	E	catalog transform not unambiguously specified
+E04.02	E	catalog transform not unambiguously specified
+E04.03	E	catalog transform not unambiguously specified
+E04.04	E	catalog transform not unambiguously specified
+E04.06	E	catalog transform not unambiguously specified
+E04.07	E	catalog transform not unambiguously specified
+E04.10	E	catalog transform not unambiguously specified
+E04.11	E	catalog transform not unambiguously specified
+E05.04	E	catalog transform not unambiguously specified
+E05.05	E	catalog transform not unambiguously specified
+E05.06	E	catalog transform not unambiguously specified
+E05.08	E	catalog transform not unambiguously specified
+E05.09	E	catalog transform not unambiguously specified
+E05.10	E	catalog transform not unambiguously specified
+E06.05	E	catalog transform not unambiguously specified
+E06.06	E	catalog transform not unambiguously specified
+E06.07	E	catalog transform not unambiguously specified
+E06.08	E	catalog transform not unambiguously specified
+E06.09	E	catalog transform not unambiguously specified
+E07.02	E	catalog transform not unambiguously specified
+E07.03	E	catalog transform not unambiguously specified
+E07.06	E	catalog transform not unambiguously specified
+E07.07	E	catalog transform not unambiguously specified
+E07.08	E	catalog transform not unambiguously specified
+E07.09	E	catalog transform not unambiguously specified
+E07.10	E	catalog transform not unambiguously specified
+E08.02	E	catalog transform not unambiguously specified
+E08.03	E	catalog transform not unambiguously specified
+E08.04	E	catalog transform not unambiguously specified
+E08.05	E	catalog transform not unambiguously specified
+E08.06	E	catalog transform not unambiguously specified
+E08.07	E	catalog transform not unambiguously specified
+E08.09	E	catalog transform not unambiguously specified
+E08.10	E	catalog transform not unambiguously specified
+E09.02	E	catalog transform not unambiguously specified
+E09.03	E	catalog transform not unambiguously specified
+E09.04	E	catalog transform not unambiguously specified
+E09.05	E	catalog transform not unambiguously specified
+E09.06	E	catalog transform not unambiguously specified
+E09.07	E	catalog transform not unambiguously specified
+E09.08	E	catalog transform not unambiguously specified
+E09.10	E	catalog transform not unambiguously specified
+E10.02	E	catalog transform not unambiguously specified
+E10.03	E	catalog transform not unambiguously specified
+E10.05	E	catalog transform not unambiguously specified
+E10.06	E	catalog transform not unambiguously specified
+E10.08	E	catalog transform not unambiguously specified
+E10.09	E	catalog transform not unambiguously specified
+E10.10	E	catalog transform not unambiguously specified
+E11.04	E	catalog transform not unambiguously specified
+E11.06	E	catalog transform not unambiguously specified
+E11.07	E	catalog transform not unambiguously specified
+E11.08	E	catalog transform not unambiguously specified
+E11.10	E	catalog transform not unambiguously specified
+E12.04	E	catalog transform not unambiguously specified
+E12.05	E	catalog transform not unambiguously specified
+E12.07	E	catalog transform not unambiguously specified
+E12.09	E	catalog transform not unambiguously specified
+E13.04	E	catalog transform not unambiguously specified
+E13.05	E	catalog transform not unambiguously specified
+E13.07	E	catalog transform not unambiguously specified
+E13.09	E	catalog transform not unambiguously specified
+E14.02	E	catalog transform not unambiguously specified
+E14.05	E	catalog transform not unambiguously specified
+E14.07	E	catalog transform not unambiguously specified
+E14.08	E	catalog transform not unambiguously specified
+E14.10	E	catalog transform not unambiguously specified
+E15.02	E	catalog transform not unambiguously specified
+E15.03	E	catalog transform not unambiguously specified
+E15.06	E	catalog transform not unambiguously specified
+E15.07	E	catalog transform not unambiguously specified
+E15.08	E	catalog transform not unambiguously specified
+E15.09	E	catalog transform not unambiguously specified
+E15.10	E	catalog transform not unambiguously specified
+E16.03	E	catalog transform not unambiguously specified
+E16.05	E	catalog transform not unambiguously specified
+E16.07	E	catalog transform not unambiguously specified
+E16.09	E	catalog transform not unambiguously specified
+E16.10	E	catalog transform not unambiguously specified
+E17.03	E	catalog transform not unambiguously specified
+E17.05	E	catalog transform not unambiguously specified
+E17.07	E	catalog transform not unambiguously specified
+E17.09	E	catalog transform not unambiguously specified
+E17.10	E	catalog transform not unambiguously specified
+E18.03	E	catalog transform not unambiguously specified
+E18.05	E	catalog transform not unambiguously specified
+E18.06	E	catalog transform not unambiguously specified
+E18.09	E	catalog transform not unambiguously specified
+E18.10	E	catalog transform not unambiguously specified
+E19.03	E	catalog transform not unambiguously specified
+E19.05	E	catalog transform not unambiguously specified
+E19.06	E	catalog transform not unambiguously specified
+E19.09	E	catalog transform not unambiguously specified
+E19.10	E	catalog transform not unambiguously specified
+E20.02	E	catalog transform not unambiguously specified
+E20.05	E	catalog transform not unambiguously specified
+E20.06	E	catalog transform not unambiguously specified
+E20.09	E	catalog transform not unambiguously specified
+E20.10	E	catalog transform not unambiguously specified
+E21.02	E	catalog transform not unambiguously specified
+E21.05	E	catalog transform not unambiguously specified
+E21.06	E	catalog transform not unambiguously specified
+E21.07	E	catalog transform not unambiguously specified
+E21.09	E	catalog transform not unambiguously specified
+E22.02	E	catalog transform not unambiguously specified
+E22.03	E	catalog transform not unambiguously specified
+E22.04	E	catalog transform not unambiguously specified
+E22.05	E	catalog transform not unambiguously specified
+E22.06	E	catalog transform not unambiguously specified
+E22.07	E	catalog transform not unambiguously specified
+E22.08	E	catalog transform not unambiguously specified
+E22.09	E	catalog transform not unambiguously specified
+E22.10	E	catalog transform not unambiguously specified
+E23.03	E	catalog transform not unambiguously specified
+E23.05	E	catalog transform not unambiguously specified
+E23.07	E	catalog transform not unambiguously specified
+E23.10	E	catalog transform not unambiguously specified
+E24.03	E	catalog transform not unambiguously specified
+E24.05	E	catalog transform not unambiguously specified
+E24.07	E	catalog transform not unambiguously specified
+E24.10	E	catalog transform not unambiguously specified
+E25.03	E	catalog transform not unambiguously specified
+E25.04	E	catalog transform not unambiguously specified
+E25.05	E	catalog transform not unambiguously specified
+E25.07	E	catalog transform not unambiguously specified
+E25.08	E	catalog transform not unambiguously specified
+E25.09	E	catalog transform not unambiguously specified
+E25.10	E	catalog transform not unambiguously specified
+E26.01	E	descriptive display anomaly (side E/R vs trailing-30 border) — deferred
+E26.02	E	descriptive display anomaly (side E/R vs trailing-30 border) — deferred
+E26.03	E	descriptive display anomaly (side E/R vs trailing-30 border) — deferred
+E26.04	E	descriptive display anomaly (side E/R vs trailing-30 border) — deferred
+E26.05	E	descriptive display anomaly (side E/R vs trailing-30 border) — deferred
+E26.06	E	descriptive display anomaly (side E/R vs trailing-30 border) — deferred
+E26.07	E	descriptive display anomaly (side E/R vs trailing-30 border) — deferred
+E26.08	E	descriptive display anomaly (side E/R vs trailing-30 border) — deferred
+E26.09	E	descriptive display anomaly (side E/R vs trailing-30 border) — deferred
+E26.10	E	descriptive display anomaly (side E/R vs trailing-30 border) — deferred
+E27.01	E	descriptive neon-border flag — deferred
+E27.02	E	descriptive neon-border flag — deferred
+E27.03	E	descriptive neon-border flag — deferred
+E27.04	E	descriptive neon-border flag — deferred
+E27.05	E	descriptive neon-border flag — deferred
+E27.06	E	descriptive neon-border flag — deferred
+E27.07	E	descriptive neon-border flag — deferred
+E27.08	E	descriptive neon-border flag — deferred
+E27.09	E	descriptive neon-border flag — deferred
+E27.10	E	descriptive neon-border flag — deferred
+E28.02	E	catalog transform not unambiguously specified
+E28.03	E	catalog transform not unambiguously specified
+E28.04	E	catalog transform not unambiguously specified
+E28.08	E	catalog transform not unambiguously specified
+E28.10	E	catalog transform not unambiguously specified
+E29.03	E	catalog transform not unambiguously specified
+E29.06	E	catalog transform not unambiguously specified
+E29.07	E	catalog transform not unambiguously specified
+E29.08	E	catalog transform not unambiguously specified
+E29.09	E	catalog transform not unambiguously specified
+E29.10	E	catalog transform not unambiguously specified
+E30.01	E	abnormal-velocity flag family — deferred (threshold semantics)
+E30.02	E	abnormal-velocity flag family — deferred (threshold semantics)
+E30.03	E	abnormal-velocity flag family — deferred (threshold semantics)
+E30.04	E	abnormal-velocity flag family — deferred (threshold semantics)
+E30.05	E	abnormal-velocity flag family — deferred (threshold semantics)
+E30.06	E	abnormal-velocity flag family — deferred (threshold semantics)
+E30.07	E	abnormal-velocity flag family — deferred (threshold semantics)
+E30.08	E	abnormal-velocity flag family — deferred (threshold semantics)
+E30.09	E	abnormal-velocity flag family — deferred (threshold semantics)
+E30.10	E	abnormal-velocity flag family — deferred (threshold semantics)
+E31.03	E	catalog transform not unambiguously specified
+E31.05	E	catalog transform not unambiguously specified
+E31.06	E	catalog transform not unambiguously specified
+E31.07	E	catalog transform not unambiguously specified
+E31.08	E	catalog transform not unambiguously specified
+E31.09	E	catalog transform not unambiguously specified
+E31.10	E	catalog transform not unambiguously specified
+E32.02	E	catalog transform not unambiguously specified
+E32.04	E	catalog transform not unambiguously specified
+E32.05	E	catalog transform not unambiguously specified
+E32.06	E	catalog transform not unambiguously specified
+E32.08	E	catalog transform not unambiguously specified
+E32.09	E	catalog transform not unambiguously specified
+E32.10	E	catalog transform not unambiguously specified
+E33.02	E	catalog transform not unambiguously specified
+E33.03	E	catalog transform not unambiguously specified
+E33.04	E	catalog transform not unambiguously specified
+E33.07	E	catalog transform not unambiguously specified
+E33.08	E	catalog transform not unambiguously specified
+E33.09	E	catalog transform not unambiguously specified
+E33.10	E	catalog transform not unambiguously specified
+E34.01	E	gated true-exhaustion geomean — deferred (exact gate not exposed as one fn)
+E34.02	E	gated true-exhaustion geomean — deferred (exact gate not exposed as one fn)
+E34.03	E	gated true-exhaustion geomean — deferred (exact gate not exposed as one fn)
+E34.04	E	gated true-exhaustion geomean — deferred (exact gate not exposed as one fn)
+E34.05	E	gated true-exhaustion geomean — deferred (exact gate not exposed as one fn)
+E34.06	E	gated true-exhaustion geomean — deferred (exact gate not exposed as one fn)
+E34.07	E	gated true-exhaustion geomean — deferred (exact gate not exposed as one fn)
+E34.08	E	gated true-exhaustion geomean — deferred (exact gate not exposed as one fn)
+E34.09	E	gated true-exhaustion geomean — deferred (exact gate not exposed as one fn)
+E34.10	E	gated true-exhaustion geomean — deferred (exact gate not exposed as one fn)
+E35.01	E	selection-scoped exhaustion lines — belongs to scope panels (T2/T3)
+E35.02	E	selection-scoped exhaustion lines — belongs to scope panels (T2/T3)
+E35.03	E	selection-scoped exhaustion lines — belongs to scope panels (T2/T3)
+E35.04	E	selection-scoped exhaustion lines — belongs to scope panels (T2/T3)
+E35.05	E	selection-scoped exhaustion lines — belongs to scope panels (T2/T3)
+E35.06	E	selection-scoped exhaustion lines — belongs to scope panels (T2/T3)
+E35.07	E	selection-scoped exhaustion lines — belongs to scope panels (T2/T3)
+E35.08	E	selection-scoped exhaustion lines — belongs to scope panels (T2/T3)
+E35.09	E	selection-scoped exhaustion lines — belongs to scope panels (T2/T3)
+E35.10	E	selection-scoped exhaustion lines — belongs to scope panels (T2/T3)
+E36.02	E	catalog transform not unambiguously specified
+E36.06	E	catalog transform not unambiguously specified
+E36.07	E	catalog transform not unambiguously specified
+E36.08	E	catalog transform not unambiguously specified
+E36.09	E	catalog transform not unambiguously specified
+E36.10	E	catalog transform not unambiguously specified
+E37.04	E	catalog transform not unambiguously specified
+E37.07	E	catalog transform not unambiguously specified
+E37.08	E	catalog transform not unambiguously specified
+E37.09	E	catalog transform not unambiguously specified
+E37.10	E	catalog transform not unambiguously specified
+E38.04	E	catalog transform not unambiguously specified
+E38.05	E	catalog transform not unambiguously specified
+E38.08	E	catalog transform not unambiguously specified
+E38.09	E	catalog transform not unambiguously specified
+E38.10	E	catalog transform not unambiguously specified
+E39.02	E	catalog transform not unambiguously specified
+E39.03	E	catalog transform not unambiguously specified
+E39.05	E	catalog transform not unambiguously specified
+E39.06	E	catalog transform not unambiguously specified
+E39.07	E	catalog transform not unambiguously specified
+E39.08	E	catalog transform not unambiguously specified
+E39.09	E	catalog transform not unambiguously specified
+E39.10	E	catalog transform not unambiguously specified
+E40.01	E	adaptive display zones — deferred (display-only)
+E40.02	E	adaptive display zones — deferred (display-only)
+E40.03	E	adaptive display zones — deferred (display-only)
+E40.04	E	adaptive display zones — deferred (display-only)
+E40.05	E	adaptive display zones — deferred (display-only)
+E40.06	E	adaptive display zones — deferred (display-only)
+E40.07	E	adaptive display zones — deferred (display-only)
+E40.08	E	adaptive display zones — deferred (display-only)
+E40.09	E	adaptive display zones — deferred (display-only)
+E40.10	E	adaptive display zones — deferred (display-only)
+E41.01	E	intrabucket iceberg-absorption marks — NOT COMPUTABLE (live tape / depth.db, 6h)
+E41.02	E	intrabucket iceberg-absorption marks — NOT COMPUTABLE (live tape / depth.db, 6h)
+E41.03	E	intrabucket iceberg-absorption marks — NOT COMPUTABLE (live tape / depth.db, 6h)
+E41.04	E	intrabucket iceberg-absorption marks — NOT COMPUTABLE (live tape / depth.db, 6h)
+E41.05	E	intrabucket iceberg-absorption marks — NOT COMPUTABLE (live tape / depth.db, 6h)
+E41.06	E	intrabucket iceberg-absorption marks — NOT COMPUTABLE (live tape / depth.db, 6h)
+E41.07	E	intrabucket iceberg-absorption marks — NOT COMPUTABLE (live tape / depth.db, 6h)
+E41.08	E	intrabucket iceberg-absorption marks — NOT COMPUTABLE (live tape / depth.db, 6h)
+E41.09	E	intrabucket iceberg-absorption marks — NOT COMPUTABLE (live tape / depth.db, 6h)
+E41.10	E	intrabucket iceberg-absorption marks — NOT COMPUTABLE (live tape / depth.db, 6h)
+E42.02	E	catalog transform not unambiguously specified
+E42.03	E	catalog transform not unambiguously specified
+E42.04	E	catalog transform not unambiguously specified
+E42.05	E	catalog transform not unambiguously specified
+E42.06	E	catalog transform not unambiguously specified
+E42.07	E	catalog transform not unambiguously specified
+E42.08	E	catalog transform not unambiguously specified
+E42.09	E	catalog transform not unambiguously specified
+E42.10	E	catalog transform not unambiguously specified
+E42.11	E	catalog transform not unambiguously specified
+E43.03	E	catalog transform not unambiguously specified
+E43.04	E	catalog transform not unambiguously specified
+E43.06	E	catalog transform not unambiguously specified
+E43.07	E	catalog transform not unambiguously specified
+E43.08	E	catalog transform not unambiguously specified
+E43.09	E	catalog transform not unambiguously specified
+E44.01	E	per-level imbalance flag — deferred (per-level, needs trailing BER/SER baseline)
+E44.02	E	per-level imbalance flag — deferred (per-level, needs trailing BER/SER baseline)
+E44.03	E	per-level imbalance flag — deferred (per-level, needs trailing BER/SER baseline)
+E44.04	E	per-level imbalance flag — deferred (per-level, needs trailing BER/SER baseline)
+E44.05	E	per-level imbalance flag — deferred (per-level, needs trailing BER/SER baseline)
+E44.06	E	per-level imbalance flag — deferred (per-level, needs trailing BER/SER baseline)
+E44.07	E	per-level imbalance flag — deferred (per-level, needs trailing BER/SER baseline)
+E44.08	E	per-level imbalance flag — deferred (per-level, needs trailing BER/SER baseline)
+E44.09	E	per-level imbalance flag — deferred (per-level, needs trailing BER/SER baseline)
+E44.10	E	per-level imbalance flag — deferred (per-level, needs trailing BER/SER baseline)
+E45.03	E	catalog transform not unambiguously specified
+E45.04	E	catalog transform not unambiguously specified
+E45.07	E	catalog transform not unambiguously specified
+E45.08	E	catalog transform not unambiguously specified
+E45.09	E	catalog transform not unambiguously specified
+E45.10	E	catalog transform not unambiguously specified
+E46.01	E	further-derivable ladder metrics — deferred (unspecified)
+E46.02	E	further-derivable ladder metrics — deferred (unspecified)
+E46.03	E	further-derivable ladder metrics — deferred (unspecified)
+E46.04	E	further-derivable ladder metrics — deferred (unspecified)
+E46.05	E	further-derivable ladder metrics — deferred (unspecified)
+E46.06	E	further-derivable ladder metrics — deferred (unspecified)
+E46.07	E	further-derivable ladder metrics — deferred (unspecified)
+E46.08	E	further-derivable ladder metrics — deferred (unspecified)
+E46.09	E	further-derivable ladder metrics — deferred (unspecified)
+E46.10	E	further-derivable ladder metrics — deferred (unspecified)
+E47.03	E	catalog transform not unambiguously specified
+E47.04	E	catalog transform not unambiguously specified
+E47.07	E	catalog transform not unambiguously specified
+E47.08	E	catalog transform not unambiguously specified
+E47.09	E	catalog transform not unambiguously specified
+E48.03	E	catalog transform not unambiguously specified
+E48.04	E	catalog transform not unambiguously specified
+E48.07	E	catalog transform not unambiguously specified
+E48.08	E	catalog transform not unambiguously specified
+E48.09	E	catalog transform not unambiguously specified
+E49.02	E	catalog transform not unambiguously specified
+E49.03	E	catalog transform not unambiguously specified
+E49.04	E	catalog transform not unambiguously specified
+E49.06	E	catalog transform not unambiguously specified
+E49.07	E	catalog transform not unambiguously specified
+E49.08	E	catalog transform not unambiguously specified
+E49.09	E	catalog transform not unambiguously specified
+E49.10	E	catalog transform not unambiguously specified
+E50.02	E	catalog transform not unambiguously specified
+E50.03	E	catalog transform not unambiguously specified
+E50.04	E	catalog transform not unambiguously specified
+E50.05	E	catalog transform not unambiguously specified
+E50.06	E	catalog transform not unambiguously specified
+E50.07	E	catalog transform not unambiguously specified
+E50.10	E	catalog transform not unambiguously specified
+E51.02	E	catalog transform not unambiguously specified
+E51.03	E	catalog transform not unambiguously specified
+E51.04	E	catalog transform not unambiguously specified
+E51.05	E	catalog transform not unambiguously specified
+E51.06	E	catalog transform not unambiguously specified
+E51.09	E	catalog transform not unambiguously specified
+E51.10	E	catalog transform not unambiguously specified
+E52.01	E	LARGE/SMALL/WHALE slices — deferred (needs size_thr percentile anchors, E53)
+E52.02	E	LARGE/SMALL/WHALE slices — deferred (needs size_thr percentile anchors, E53)
+E52.03	E	LARGE/SMALL/WHALE slices — deferred (needs size_thr percentile anchors, E53)
+E52.04	E	LARGE/SMALL/WHALE slices — deferred (needs size_thr percentile anchors, E53)
+E52.05	E	LARGE/SMALL/WHALE slices — deferred (needs size_thr percentile anchors, E53)
+E52.06	E	LARGE/SMALL/WHALE slices — deferred (needs size_thr percentile anchors, E53)
+E52.07	E	LARGE/SMALL/WHALE slices — deferred (needs size_thr percentile anchors, E53)
+E52.08	E	LARGE/SMALL/WHALE slices — deferred (needs size_thr percentile anchors, E53)
+E52.09	E	LARGE/SMALL/WHALE slices — deferred (needs size_thr percentile anchors, E53)
+E52.10	E	LARGE/SMALL/WHALE slices — deferred (needs size_thr percentile anchors, E53)
+E53.01	E	size_thr rolling-60min anchors — NOT in closed_buckets (engine_state; moving anchor)
+E53.02	E	size_thr rolling-60min anchors — NOT in closed_buckets (engine_state; moving anchor)
+E53.03	E	size_thr rolling-60min anchors — NOT in closed_buckets (engine_state; moving anchor)
+E53.04	E	size_thr rolling-60min anchors — NOT in closed_buckets (engine_state; moving anchor)
+E53.05	E	size_thr rolling-60min anchors — NOT in closed_buckets (engine_state; moving anchor)
+E53.06	E	size_thr rolling-60min anchors — NOT in closed_buckets (engine_state; moving anchor)
+E53.07	E	size_thr rolling-60min anchors — NOT in closed_buckets (engine_state; moving anchor)
+E53.08	E	size_thr rolling-60min anchors — NOT in closed_buckets (engine_state; moving anchor)
+E53.09	E	size_thr rolling-60min anchors — NOT in closed_buckets (engine_state; moving anchor)
+E53.10	E	size_thr rolling-60min anchors — NOT in closed_buckets (engine_state; moving anchor)
+E54.06	E	catalog transform not unambiguously specified
+E54.07	E	catalog transform not unambiguously specified
+E54.08	E	catalog transform not unambiguously specified
+E54.09	E	catalog transform not unambiguously specified
+E54.10	E	catalog transform not unambiguously specified
+E55.02	E	catalog transform not unambiguously specified
+E55.03	E	catalog transform not unambiguously specified
+E55.04	E	catalog transform not unambiguously specified
+E55.05	E	catalog transform not unambiguously specified
+E55.06	E	catalog transform not unambiguously specified
+E55.07	E	catalog transform not unambiguously specified
+E55.08	E	catalog transform not unambiguously specified
+E55.10	E	catalog transform not unambiguously specified
+E56.02	E	catalog transform not unambiguously specified
+E56.03	E	catalog transform not unambiguously specified
+E56.04	E	catalog transform not unambiguously specified
+E56.07	E	catalog transform not unambiguously specified
+E56.08	E	catalog transform not unambiguously specified
+E56.09	E	catalog transform not unambiguously specified
+E56.10	E	catalog transform not unambiguously specified
+E57.02	E	catalog transform not unambiguously specified
+E57.04	E	catalog transform not unambiguously specified
+E57.06	E	catalog transform not unambiguously specified
+E57.07	E	catalog transform not unambiguously specified
+E57.08	E	catalog transform not unambiguously specified
+E57.09	E	catalog transform not unambiguously specified
+E57.10	E	catalog transform not unambiguously specified
+E58.01	E	fail/reclaim depth — deferred (bespoke trap geometry)
+E58.02	E	fail/reclaim depth — deferred (bespoke trap geometry)
+E58.03	E	fail/reclaim depth — deferred (bespoke trap geometry)
+E58.04	E	fail/reclaim depth — deferred (bespoke trap geometry)
+E58.05	E	fail/reclaim depth — deferred (bespoke trap geometry)
+E58.06	E	fail/reclaim depth — deferred (bespoke trap geometry)
+E58.07	E	fail/reclaim depth — deferred (bespoke trap geometry)
+E58.08	E	fail/reclaim depth — deferred (bespoke trap geometry)
+E58.09	E	fail/reclaim depth — deferred (bespoke trap geometry)
+E58.10	E	fail/reclaim depth — deferred (bespoke trap geometry)
+E59.01	E	trailing-30 baseline bundle — deferred (multi-quantity, ambiguous canonical)
+E59.02	E	trailing-30 baseline bundle — deferred (multi-quantity, ambiguous canonical)
+E59.03	E	trailing-30 baseline bundle — deferred (multi-quantity, ambiguous canonical)
+E59.04	E	trailing-30 baseline bundle — deferred (multi-quantity, ambiguous canonical)
+E59.05	E	trailing-30 baseline bundle — deferred (multi-quantity, ambiguous canonical)
+E59.06	E	trailing-30 baseline bundle — deferred (multi-quantity, ambiguous canonical)
+E59.07	E	trailing-30 baseline bundle — deferred (multi-quantity, ambiguous canonical)
+E59.08	E	trailing-30 baseline bundle — deferred (multi-quantity, ambiguous canonical)
+E59.09	E	trailing-30 baseline bundle — deferred (multi-quantity, ambiguous canonical)
+E59.10	E	trailing-30 baseline bundle — deferred (multi-quantity, ambiguous canonical)
+E60.02	E	categorical state: only raw (.01) defined
+E60.03	E	categorical state: only raw (.01) defined
+E60.04	E	categorical state: only raw (.01) defined
+E60.05	E	categorical state: only raw (.01) defined
+E60.06	E	categorical state: only raw (.01) defined
+E60.07	E	categorical state: only raw (.01) defined
+E60.08	E	categorical state: only raw (.01) defined
+E60.09	E	categorical state: only raw (.01) defined
+E60.10	E	categorical state: only raw (.01) defined
+E61.01	E	per-state factor breakdown — deferred (dict output, not one scalar)
+E61.02	E	per-state factor breakdown — deferred (dict output, not one scalar)
+E61.03	E	per-state factor breakdown — deferred (dict output, not one scalar)
+E61.04	E	per-state factor breakdown — deferred (dict output, not one scalar)
+E61.05	E	per-state factor breakdown — deferred (dict output, not one scalar)
+E61.06	E	per-state factor breakdown — deferred (dict output, not one scalar)
+E61.07	E	per-state factor breakdown — deferred (dict output, not one scalar)
+E61.08	E	per-state factor breakdown — deferred (dict output, not one scalar)
+E61.09	E	per-state factor breakdown — deferred (dict output, not one scalar)
+E61.10	E	per-state factor breakdown — deferred (dict output, not one scalar)
+E62.02	E	categorical state: only raw (.01) defined
+E62.03	E	categorical state: only raw (.01) defined
+E62.04	E	categorical state: only raw (.01) defined
+E62.05	E	categorical state: only raw (.01) defined
+E62.06	E	categorical state: only raw (.01) defined
+E62.07	E	categorical state: only raw (.01) defined
+E62.08	E	categorical state: only raw (.01) defined
+E62.09	E	categorical state: only raw (.01) defined
+E62.10	E	categorical state: only raw (.01) defined
+E63.01	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E63.02	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E63.03	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E63.04	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E63.05	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E63.06	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E63.07	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E63.08	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E63.09	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E63.10	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E64.01	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E64.02	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E64.03	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E64.04	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E64.05	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E64.06	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E64.07	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E64.08	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E64.09	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E64.10	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E65.01	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E65.02	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E65.03	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E65.04	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E65.05	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E65.06	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E65.07	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E65.08	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E65.09	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E65.10	E	order-block / cross-tf structure — deferred (needs order_blocks reconstruction)
+E66.01	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E66.02	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E66.03	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E66.04	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E66.05	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E66.06	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E66.07	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E66.08	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E66.09	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E66.10	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E67.01	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E67.02	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E67.03	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E67.04	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E67.05	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E67.06	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E67.07	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E67.08	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E67.09	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E67.10	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E68.01	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E68.02	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E68.03	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E68.04	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E68.05	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E68.06	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E68.07	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E68.08	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E68.09	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E68.10	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E69.01	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E69.02	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E69.03	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E69.04	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E69.05	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E69.06	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E69.07	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E69.08	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E69.09	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E69.10	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E70.01	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E70.02	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E70.03	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E70.04	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E70.05	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E70.06	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E70.07	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E70.08	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E70.09	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E70.10	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E71.01	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E71.02	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E71.03	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E71.04	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E71.05	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E71.06	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E71.07	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E71.08	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E71.09	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E71.10	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E72.01	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E72.02	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E72.03	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E72.04	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E72.05	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E72.06	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E72.07	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E72.08	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E72.09	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+E72.10	E	six-hour store (depth.db / trade tape) — NOT COMPUTABLE (excluded by design)
+G01.2	G	bespoke composite — deferred (T1 core = named primitives)
+G01.3	G	bespoke composite — deferred (T1 core = named primitives)
+G01.4	G	bespoke composite — deferred (T1 core = named primitives)
+G01.5	G	bespoke composite — deferred (T1 core = named primitives)
+G02.2	G	bespoke composite — deferred (T1 core = named primitives)
+G02.3	G	bespoke composite — deferred (T1 core = named primitives)
+G02.4	G	bespoke composite — deferred (T1 core = named primitives)
+G02.5	G	bespoke composite — deferred (T1 core = named primitives)
+G02.6	G	bespoke composite — deferred (T1 core = named primitives)
+G03.2	G	bespoke composite — deferred (T1 core = named primitives)
+G03.3	G	bespoke composite — deferred (T1 core = named primitives)
+G03.4	G	bespoke composite — deferred (T1 core = named primitives)
+G03.5	G	bespoke composite — deferred (T1 core = named primitives)
+G04.2	G	bespoke composite — deferred (T1 core = named primitives)
+G04.3	G	bespoke composite — deferred (T1 core = named primitives)
+G04.4	G	bespoke composite — deferred (T1 core = named primitives)
+G04.5	G	bespoke composite — deferred (T1 core = named primitives)
+G05.1	G	bespoke composite — deferred (T1 core = named primitives)
+G05.2	G	bespoke composite — deferred (T1 core = named primitives)
+G05.3	G	bespoke composite — deferred (T1 core = named primitives)
+G05.4	G	bespoke composite — deferred (T1 core = named primitives)
+G05.5	G	bespoke composite — deferred (T1 core = named primitives)
+G06.2	G	bespoke composite — deferred (T1 core = named primitives)
+G06.3	G	bespoke composite — deferred (T1 core = named primitives)
+G06.4	G	bespoke composite — deferred (T1 core = named primitives)
+G06.5	G	bespoke composite — deferred (T1 core = named primitives)
+G06.6	G	bespoke composite — deferred (T1 core = named primitives)
+G07.1	G	bespoke composite — deferred (T1 core = named primitives)
+G07.2	G	bespoke composite — deferred (T1 core = named primitives)
+G07.3	G	bespoke composite — deferred (T1 core = named primitives)
+G07.4	G	bespoke composite — deferred (T1 core = named primitives)
+G07.5	G	bespoke composite — deferred (T1 core = named primitives)
+G08.2	G	bespoke composite — deferred (T1 core = named primitives)
+G08.3	G	bespoke composite — deferred (T1 core = named primitives)
+G08.4	G	bespoke composite — deferred (T1 core = named primitives)
+G08.5	G	bespoke composite — deferred (T1 core = named primitives)
+G09.1	G	bespoke composite — deferred (T1 core = named primitives)
+G09.2	G	bespoke composite — deferred (T1 core = named primitives)
+G09.3	G	bespoke composite — deferred (T1 core = named primitives)
+G09.4	G	bespoke composite — deferred (T1 core = named primitives)
+G09.5	G	bespoke composite — deferred (T1 core = named primitives)
+G10.2	G	bespoke composite — deferred (T1 core = named primitives)
+G10.3	G	bespoke composite — deferred (T1 core = named primitives)
+G10.4	G	bespoke composite — deferred (T1 core = named primitives)
+G10.5	G	bespoke composite — deferred (T1 core = named primitives)
+G11.1	G	bespoke composite — deferred (T1 core = named primitives)
+G11.2	G	bespoke composite — deferred (T1 core = named primitives)
+G11.3	G	bespoke composite — deferred (T1 core = named primitives)
+G11.4	G	bespoke composite — deferred (T1 core = named primitives)
+G11.5	G	bespoke composite — deferred (T1 core = named primitives)
+G12.1	G	bespoke composite — deferred (T1 core = named primitives)
+G12.2	G	bespoke composite — deferred (T1 core = named primitives)
+G12.3	G	bespoke composite — deferred (T1 core = named primitives)
+G12.4	G	six-hour tape sequencing — NOT COMPUTABLE (depth.db/tape)
+G12.5	G	bespoke composite — deferred (T1 core = named primitives)
+G13.1	G	bespoke composite — deferred (T1 core = named primitives)
+G13.2	G	bespoke composite — deferred (T1 core = named primitives)
+G13.3	G	bespoke composite — deferred (T1 core = named primitives)
+G13.4	G	bespoke composite — deferred (T1 core = named primitives)
+G13.5	G	bespoke composite — deferred (T1 core = named primitives)
+G14.1	G	bespoke composite — deferred (T1 core = named primitives)
+G14.2	G	bespoke composite — deferred (T1 core = named primitives)
+G14.3	G	bespoke composite — deferred (T1 core = named primitives)
+G14.4	G	bespoke composite — deferred (T1 core = named primitives)
+G14.5	G	bespoke composite — deferred (T1 core = named primitives)
+G15.1	G	bespoke composite — deferred (T1 core = named primitives)
+G15.2	G	bespoke composite — deferred (T1 core = named primitives)
+G15.3	G	bespoke composite — deferred (T1 core = named primitives)
+G15.4	G	bespoke composite — deferred (T1 core = named primitives)
+G15.5	G	bespoke composite — deferred (T1 core = named primitives)
+G16.1	G	bespoke composite — deferred (T1 core = named primitives)
+G16.2	G	bespoke composite — deferred (T1 core = named primitives)
+G16.3	G	bespoke composite — deferred (T1 core = named primitives)
+G16.4	G	bespoke composite — deferred (T1 core = named primitives)
+G16.5	G	bespoke composite — deferred (T1 core = named primitives)
+G17.1	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G17.2	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G17.3	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G17.4	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G17.5	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G18.1	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G18.2	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G18.3	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G18.4	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G18.5	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G19.1	G	bespoke composite — deferred (T1 core = named primitives)
+G19.2	G	six-hour tape sequencing — NOT COMPUTABLE (depth.db/tape)
+G19.3	G	six-hour tape sequencing — NOT COMPUTABLE (depth.db/tape)
+G19.4	G	bespoke composite — deferred (T1 core = named primitives)
+G19.5	G	bespoke composite — deferred (T1 core = named primitives)
+G20.1	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G20.2	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G20.3	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G20.4	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G20.5	G	structure/cross-tf composite — deferred (order-block / higher-tf)
+G21.1	G	bespoke composite — deferred (T1 core = named primitives)
+G21.2	G	bespoke composite — deferred (T1 core = named primitives)
+G21.3	G	bespoke composite — deferred (T1 core = named primitives)
+G21.4	G	bespoke composite — deferred (T1 core = named primitives)
+G21.5	G	bespoke composite — deferred (T1 core = named primitives)
+G22.1	G	bespoke composite — deferred (T1 core = named primitives)
+G22.2	G	bespoke composite — deferred (T1 core = named primitives)
+G22.3	G	bespoke composite — deferred (T1 core = named primitives)
+G22.4	G	bespoke composite — deferred (T1 core = named primitives)
+G22.5	G	bespoke composite — deferred (T1 core = named primitives)
+J-P1.01	J-	T3: J--scope (post-hoc)
+X-P1.01	X-	T3: X--scope (post-hoc)
+J-P1.02	J-	T3: J--scope (post-hoc)
+X-P1.02	X-	T3: X--scope (post-hoc)
+J-P1.03	J-	T3: J--scope (post-hoc)
+X-P1.03	X-	T3: X--scope (post-hoc)
+J-P1.04	J-	T3: J--scope (post-hoc)
+X-P1.04	X-	T3: X--scope (post-hoc)
+J-P1.05	J-	T3: J--scope (post-hoc)
+X-P1.05	X-	T3: X--scope (post-hoc)
+J-P1.06	J-	T3: J--scope (post-hoc)
+X-P1.06	X-	T3: X--scope (post-hoc)
+J-P1.07	J-	T3: J--scope (post-hoc)
+X-P1.07	X-	T3: X--scope (post-hoc)
+J-P1.08	J-	T3: J--scope (post-hoc)
+X-P1.08	X-	T3: X--scope (post-hoc)
+J-P1.09	J-	T3: J--scope (post-hoc)
+X-P1.09	X-	T3: X--scope (post-hoc)
+J-P1.10	J-	T3: J--scope (post-hoc)
+X-P1.10	X-	T3: X--scope (post-hoc)
+J-P1.11	J-	T3: J--scope (post-hoc)
+X-P1.11	X-	T3: X--scope (post-hoc)
+J-P2.01	J-	T3: J--scope (post-hoc)
+X-P2.01	X-	T3: X--scope (post-hoc)
+J-P2.02	J-	T3: J--scope (post-hoc)
+X-P2.02	X-	T3: X--scope (post-hoc)
+J-P2.03	J-	T3: J--scope (post-hoc)
+X-P2.03	X-	T3: X--scope (post-hoc)
+J-P2.04	J-	T3: J--scope (post-hoc)
+X-P2.04	X-	T3: X--scope (post-hoc)
+J-P2.05	J-	T3: J--scope (post-hoc)
+X-P2.05	X-	T3: X--scope (post-hoc)
+J-P2.06	J-	T3: J--scope (post-hoc)
+X-P2.06	X-	T3: X--scope (post-hoc)
+J-P2.07	J-	T3: J--scope (post-hoc)
+X-P2.07	X-	T3: X--scope (post-hoc)
+J-P2.08	J-	T3: J--scope (post-hoc)
+X-P2.08	X-	T3: X--scope (post-hoc)
+J-P2.09	J-	T3: J--scope (post-hoc)
+X-P2.09	X-	T3: X--scope (post-hoc)
+J-P2.10	J-	T3: J--scope (post-hoc)
+X-P2.10	X-	T3: X--scope (post-hoc)
+J-P2.11	J-	T3: J--scope (post-hoc)
+X-P2.11	X-	T3: X--scope (post-hoc)
+J-P3.01	J-	T3: J--scope (post-hoc)
+X-P3.01	X-	T3: X--scope (post-hoc)
+J-P3.02	J-	T3: J--scope (post-hoc)
+X-P3.02	X-	T3: X--scope (post-hoc)
+J-P3.03	J-	T3: J--scope (post-hoc)
+X-P3.03	X-	T3: X--scope (post-hoc)
+J-P3.04	J-	T3: J--scope (post-hoc)
+X-P3.04	X-	T3: X--scope (post-hoc)
+J-P3.05	J-	T3: J--scope (post-hoc)
+X-P3.05	X-	T3: X--scope (post-hoc)
+J-P3.06	J-	T3: J--scope (post-hoc)
+X-P3.06	X-	T3: X--scope (post-hoc)
+J-P3.07	J-	T3: J--scope (post-hoc)
+X-P3.07	X-	T3: X--scope (post-hoc)
+J-P3.08	J-	T3: J--scope (post-hoc)
+X-P3.08	X-	T3: X--scope (post-hoc)
+J-P3.09	J-	T3: J--scope (post-hoc)
+X-P3.09	X-	T3: X--scope (post-hoc)
+J-P3.10	J-	T3: J--scope (post-hoc)
+X-P3.10	X-	T3: X--scope (post-hoc)
+J-P4.01	J-	T3: J--scope (post-hoc)
+X-P4.01	X-	T3: X--scope (post-hoc)
+J-P4.02	J-	T3: J--scope (post-hoc)
+X-P4.02	X-	T3: X--scope (post-hoc)
+J-P4.03	J-	T3: J--scope (post-hoc)
+X-P4.03	X-	T3: X--scope (post-hoc)
+J-P4.04	J-	T3: J--scope (post-hoc)
+X-P4.04	X-	T3: X--scope (post-hoc)
+J-P4.05	J-	T3: J--scope (post-hoc)
+X-P4.05	X-	T3: X--scope (post-hoc)
+B-P4.06	B-	T2b: exhaustion fire-count / weakest-leg — pending
+J-P4.06	J-	T3: J--scope (post-hoc)
+X-P4.06	X-	T3: X--scope (post-hoc)
+B-P4.07	B-	T2b: exhaustion fire-count / weakest-leg — pending
+J-P4.07	J-	T3: J--scope (post-hoc)
+X-P4.07	X-	T3: X--scope (post-hoc)
+B-P4.08	B-	T2b: exhaustion fire-count / weakest-leg — pending
+J-P4.08	J-	T3: J--scope (post-hoc)
+X-P4.08	X-	T3: X--scope (post-hoc)
+J-P4.09	J-	T3: J--scope (post-hoc)
+X-P4.09	X-	T3: X--scope (post-hoc)
+J-P4.10	J-	T3: J--scope (post-hoc)
+X-P4.10	X-	T3: X--scope (post-hoc)
+B-P4.11	B-	T2b: exhaustion fire-count / weakest-leg — pending
+J-P4.11	J-	T3: J--scope (post-hoc)
+X-P4.11	X-	T3: X--scope (post-hoc)
+B-P5.01	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P5.01	J-	T3: J--scope (post-hoc)
+X-P5.01	X-	T3: X--scope (post-hoc)
+B-P5.02	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P5.02	J-	T3: J--scope (post-hoc)
+X-P5.02	X-	T3: X--scope (post-hoc)
+B-P5.03	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P5.03	J-	T3: J--scope (post-hoc)
+X-P5.03	X-	T3: X--scope (post-hoc)
+B-P5.04	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P5.04	J-	T3: J--scope (post-hoc)
+X-P5.04	X-	T3: X--scope (post-hoc)
+B-P5.05	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P5.05	J-	T3: J--scope (post-hoc)
+X-P5.05	X-	T3: X--scope (post-hoc)
+B-P5.06	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P5.06	J-	T3: J--scope (post-hoc)
+X-P5.06	X-	T3: X--scope (post-hoc)
+B-P5.07	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P5.07	J-	T3: J--scope (post-hoc)
+X-P5.07	X-	T3: X--scope (post-hoc)
+B-P5.08	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P5.08	J-	T3: J--scope (post-hoc)
+X-P5.08	X-	T3: X--scope (post-hoc)
+B-P5.09	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P5.09	J-	T3: J--scope (post-hoc)
+X-P5.09	X-	T3: X--scope (post-hoc)
+B-P5.10	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P5.10	J-	T3: J--scope (post-hoc)
+X-P5.10	X-	T3: X--scope (post-hoc)
+B-P6.01	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P6.01	J-	T3: J--scope (post-hoc)
+X-P6.01	X-	T3: X--scope (post-hoc)
+B-P6.02	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P6.02	J-	T3: J--scope (post-hoc)
+X-P6.02	X-	T3: X--scope (post-hoc)
+B-P6.03	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P6.03	J-	T3: J--scope (post-hoc)
+X-P6.03	X-	T3: X--scope (post-hoc)
+B-P6.04	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P6.04	J-	T3: J--scope (post-hoc)
+X-P6.04	X-	T3: X--scope (post-hoc)
+B-P6.05	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P6.05	J-	T3: J--scope (post-hoc)
+X-P6.05	X-	T3: X--scope (post-hoc)
+B-P6.06	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P6.06	J-	T3: J--scope (post-hoc)
+X-P6.06	X-	T3: X--scope (post-hoc)
+B-P6.07	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P6.07	J-	T3: J--scope (post-hoc)
+X-P6.07	X-	T3: X--scope (post-hoc)
+B-P6.08	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P6.08	J-	T3: J--scope (post-hoc)
+X-P6.08	X-	T3: X--scope (post-hoc)
+B-P6.09	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P6.09	J-	T3: J--scope (post-hoc)
+X-P6.09	X-	T3: X--scope (post-hoc)
+B-P6.10	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P6.10	J-	T3: J--scope (post-hoc)
+X-P6.10	X-	T3: X--scope (post-hoc)
+B-P7.01	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P7.01	J-	T3: J--scope (post-hoc)
+X-P7.01	X-	T3: X--scope (post-hoc)
+B-P7.02	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P7.02	J-	T3: J--scope (post-hoc)
+X-P7.02	X-	T3: X--scope (post-hoc)
+B-P7.03	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P7.03	J-	T3: J--scope (post-hoc)
+X-P7.03	X-	T3: X--scope (post-hoc)
+B-P7.04	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P7.04	J-	T3: J--scope (post-hoc)
+X-P7.04	X-	T3: X--scope (post-hoc)
+B-P7.05	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P7.05	J-	T3: J--scope (post-hoc)
+X-P7.05	X-	T3: X--scope (post-hoc)
+B-P7.06	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P7.06	J-	T3: J--scope (post-hoc)
+X-P7.06	X-	T3: X--scope (post-hoc)
+B-P7.07	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P7.07	J-	T3: J--scope (post-hoc)
+X-P7.07	X-	T3: X--scope (post-hoc)
+B-P7.08	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P7.08	J-	T3: J--scope (post-hoc)
+X-P7.08	X-	T3: X--scope (post-hoc)
+B-P7.09	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P7.09	J-	T3: J--scope (post-hoc)
+X-P7.09	X-	T3: X--scope (post-hoc)
+B-P7.10	B-	T2b: phase-panel segmentation (BEFORE/DURING/END) — pending
+J-P7.10	J-	T3: J--scope (post-hoc)
+X-P7.10	X-	T3: X--scope (post-hoc)
+B-P8L.01	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8L.01	J-	T3: J--scope (post-hoc)
+X-P8L.01	X-	T3: X--scope (post-hoc)
+B-P8L.02	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8L.02	J-	T3: J--scope (post-hoc)
+X-P8L.02	X-	T3: X--scope (post-hoc)
+B-P8L.03	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8L.03	J-	T3: J--scope (post-hoc)
+X-P8L.03	X-	T3: X--scope (post-hoc)
+B-P8L.04	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8L.04	J-	T3: J--scope (post-hoc)
+X-P8L.04	X-	T3: X--scope (post-hoc)
+B-P8L.05	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8L.05	J-	T3: J--scope (post-hoc)
+X-P8L.05	X-	T3: X--scope (post-hoc)
+B-P8L.06	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8L.06	J-	T3: J--scope (post-hoc)
+X-P8L.06	X-	T3: X--scope (post-hoc)
+B-P8L.07	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8L.07	J-	T3: J--scope (post-hoc)
+X-P8L.07	X-	T3: X--scope (post-hoc)
+B-P8L.08	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8L.08	J-	T3: J--scope (post-hoc)
+X-P8L.08	X-	T3: X--scope (post-hoc)
+B-P8L.09	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8L.09	J-	T3: J--scope (post-hoc)
+X-P8L.09	X-	T3: X--scope (post-hoc)
+B-P8L.10	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8L.10	J-	T3: J--scope (post-hoc)
+X-P8L.10	X-	T3: X--scope (post-hoc)
+B-P8L.11	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8L.11	J-	T3: J--scope (post-hoc)
+X-P8L.11	X-	T3: X--scope (post-hoc)
+B-P8S.01	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8S.01	J-	T3: J--scope (post-hoc)
+X-P8S.01	X-	T3: X--scope (post-hoc)
+B-P8S.02	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8S.02	J-	T3: J--scope (post-hoc)
+X-P8S.02	X-	T3: X--scope (post-hoc)
+B-P8S.03	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8S.03	J-	T3: J--scope (post-hoc)
+X-P8S.03	X-	T3: X--scope (post-hoc)
+B-P8S.04	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8S.04	J-	T3: J--scope (post-hoc)
+X-P8S.04	X-	T3: X--scope (post-hoc)
+B-P8S.05	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8S.05	J-	T3: J--scope (post-hoc)
+X-P8S.05	X-	T3: X--scope (post-hoc)
+B-P8S.06	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8S.06	J-	T3: J--scope (post-hoc)
+X-P8S.06	X-	T3: X--scope (post-hoc)
+B-P8S.07	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8S.07	J-	T3: J--scope (post-hoc)
+X-P8S.07	X-	T3: X--scope (post-hoc)
+B-P8S.08	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8S.08	J-	T3: J--scope (post-hoc)
+X-P8S.08	X-	T3: X--scope (post-hoc)
+B-P8S.09	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8S.09	J-	T3: J--scope (post-hoc)
+X-P8S.09	X-	T3: X--scope (post-hoc)
+B-P8S.10	B-	T2b: large/small needs daemon size_thr anchor (E53, not persisted)
+J-P8S.10	J-	T3: J--scope (post-hoc)
+X-P8S.10	X-	T3: X--scope (post-hoc)
+B-P9.01	B-	T2b: composite-lean panel — pending
+J-P9.01	J-	T3: J--scope (post-hoc)
+X-P9.01	X-	T3: X--scope (post-hoc)
+B-P9.02	B-	T2b: composite-lean panel — pending
+J-P9.02	J-	T3: J--scope (post-hoc)
+X-P9.02	X-	T3: X--scope (post-hoc)
+B-P9.03	B-	T2b: composite-lean panel — pending
+J-P9.03	J-	T3: J--scope (post-hoc)
+X-P9.03	X-	T3: X--scope (post-hoc)
+B-P9.04	B-	T2b: composite-lean panel — pending
+J-P9.04	J-	T3: J--scope (post-hoc)
+X-P9.04	X-	T3: X--scope (post-hoc)
+B-P9.05	B-	T2b: composite-lean panel — pending
+J-P9.05	J-	T3: J--scope (post-hoc)
+X-P9.05	X-	T3: X--scope (post-hoc)
+B-P9.06	B-	T2b: composite-lean panel — pending
+J-P9.06	J-	T3: J--scope (post-hoc)
+X-P9.06	X-	T3: X--scope (post-hoc)
+B-P9.07	B-	T2b: composite-lean panel — pending
+J-P9.07	J-	T3: J--scope (post-hoc)
+X-P9.07	X-	T3: X--scope (post-hoc)
+B-P9.08	B-	T2b: composite-lean panel — pending
+J-P9.08	J-	T3: J--scope (post-hoc)
+X-P9.08	X-	T3: X--scope (post-hoc)
+B-P9.09	B-	T2b: composite-lean panel — pending
+J-P9.09	J-	T3: J--scope (post-hoc)
+X-P9.09	X-	T3: X--scope (post-hoc)
+B-P9.10	B-	T2b: composite-lean panel — pending
+J-P9.10	J-	T3: J--scope (post-hoc)
+X-P9.10	X-	T3: X--scope (post-hoc)
+B-P0.01	B-	T2b: smoothed-lean twin (locked-region / confirmed-cross) — pending
+J-P0.01	J-	T3: J--scope (post-hoc)
+X-P0.01	X-	T3: X--scope (post-hoc)
+B-P0.02	B-	T2b: smoothed-lean twin (locked-region / confirmed-cross) — pending
+J-P0.02	J-	T3: J--scope (post-hoc)
+X-P0.02	X-	T3: X--scope (post-hoc)
+B-P0.03	B-	T2b: smoothed-lean twin (locked-region / confirmed-cross) — pending
+J-P0.03	J-	T3: J--scope (post-hoc)
+X-P0.03	X-	T3: X--scope (post-hoc)
+B-P0.04	B-	T2b: smoothed-lean twin (locked-region / confirmed-cross) — pending
+J-P0.04	J-	T3: J--scope (post-hoc)
+X-P0.04	X-	T3: X--scope (post-hoc)
+B-P0.05	B-	T2b: smoothed-lean twin (locked-region / confirmed-cross) — pending
+J-P0.05	J-	T3: J--scope (post-hoc)
+X-P0.05	X-	T3: X--scope (post-hoc)
+B-P0.06	B-	T2b: smoothed-lean twin (locked-region / confirmed-cross) — pending
+J-P0.06	J-	T3: J--scope (post-hoc)
+X-P0.06	X-	T3: X--scope (post-hoc)
+B-P0.07	B-	T2b: smoothed-lean twin (locked-region / confirmed-cross) — pending
+J-P0.07	J-	T3: J--scope (post-hoc)
+X-P0.07	X-	T3: X--scope (post-hoc)
+B-P0.08	B-	T2b: smoothed-lean twin (locked-region / confirmed-cross) — pending
+J-P0.08	J-	T3: J--scope (post-hoc)
+X-P0.08	X-	T3: X--scope (post-hoc)
+B-P0.09	B-	T2b: smoothed-lean twin (locked-region / confirmed-cross) — pending
+J-P0.09	J-	T3: J--scope (post-hoc)
+X-P0.09	X-	T3: X--scope (post-hoc)
+B-P0.10	B-	T2b: smoothed-lean twin (locked-region / confirmed-cross) — pending
+J-P0.10	J-	T3: J--scope (post-hoc)
+X-P0.10	X-	T3: X--scope (post-hoc)
+B-P0.11	B-	T2b: smoothed-lean twin (locked-region / confirmed-cross) — pending
+J-P0.11	J-	T3: J--scope (post-hoc)
+X-P0.11	X-	T3: X--scope (post-hoc)
+J-S.01	J-	T3: J--scope (post-hoc)
+X-S.01	X-	T3: X--scope (post-hoc)
+J-S.02	J-	T3: J--scope (post-hoc)
+X-S.02	X-	T3: X--scope (post-hoc)
+J-S.03	J-	T3: J--scope (post-hoc)
+X-S.03	X-	T3: X--scope (post-hoc)
+J-S.04	J-	T3: J--scope (post-hoc)
+X-S.04	X-	T3: X--scope (post-hoc)
+J-S.05	J-	T3: J--scope (post-hoc)
+X-S.05	X-	T3: X--scope (post-hoc)
+J-S.06	J-	T3: J--scope (post-hoc)
+X-S.06	X-	T3: X--scope (post-hoc)
+J-S.07	J-	T3: J--scope (post-hoc)
+X-S.07	X-	T3: X--scope (post-hoc)
+J-S.08	J-	T3: J--scope (post-hoc)
+X-S.08	X-	T3: X--scope (post-hoc)
+J-S.09	J-	T3: J--scope (post-hoc)
+X-S.09	X-	T3: X--scope (post-hoc)
+J-S.10	J-	T3: J--scope (post-hoc)
+X-S.10	X-	T3: X--scope (post-hoc)
+J-S.11	J-	T3: J--scope (post-hoc)
+X-S.11	X-	T3: X--scope (post-hoc)
+J-S.12	J-	T3: J--scope (post-hoc)
+X-S.12	X-	T3: X--scope (post-hoc)
+J-S.13	J-	T3: J--scope (post-hoc)
+X-S.13	X-	T3: X--scope (post-hoc)
+J-S.14	J-	T3: J--scope (post-hoc)
+X-S.14	X-	T3: X--scope (post-hoc)
