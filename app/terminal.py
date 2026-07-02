@@ -288,6 +288,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # the broad daemon distribution drives them (see _largesmall_thresholds).
         self._sel_sig = None           # Fix 1: change-detection signature of the last selection refresh (skip
                                        # the heavy recompute when nothing that affects the output changed)
+        # SELECTION CONFLUENCE ALERT (Mode-10): beep when panel-0 (+50/-50 both green|red) + panel-2 eff-agg
+        # confirmed spread >=65% (same colour) + panel-6 START/DURING phase confirmed spread >=15% (same
+        # colour) ALL align — on a bucket close (LIVE, edge-triggered) or a RIGHT-arrow move (once/press).
+        # Signals are captured at draw time -> panels 0, 2, 6 must be toggled ON.
+        self._alert_sig = {}           # {badge_key: (spread_pct, strong_is_bull)} captured in _set_spread_badge
+        self._alert_p0 = (0, 0)        # panel-0 +50/-50 cross colours: (n_green, n_red)
+        self._alert_armed = True       # edge-trigger for the LIVE close path (re-arms when alignment drops)
+        self._alert_last_tc = None     # last total_closed seen -> new-bucket-close detection
+        self._alert_right_pending = False  # set by the RIGHT-arrow handler; consumed once at the next eval
         # SELECTION-SCOPED EXHAUSTION STRIP — two smoothed lines (blue bull / red bear gated exhaustion)
         # across the selected buckets, in a panel hanging below the selection; gold diamonds mark crossovers
         # (the exhausted side swaps). Persistent plot item; hidden when no selection. zValue 2 like the zones.
@@ -339,6 +348,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_abs_strip.setZValue(2)
         self.plot.addItem(self.bc_abs_strip, ignoreBounds=True)
         self.bc_abs_strip.setVisible(False)
+        # SCORE v1-SEL (Ctrl+1) — frozen walk-forward score, FORWARD-TEST display (exam verdict FAIL).
+        # Two lines across the selection: pred_long (teal) / pred_short (magenta), + dashed frozen-baseline refs.
+        self._RGB_SCORE_L = (38, 208, 206); self._RGB_SCORE_S = (223, 86, 193)
+        self.bc_score_strip = ExhaustionStripLayer(self.plot, rgb_bull=self._RGB_SCORE_L, rgb_bear=self._RGB_SCORE_S)
+        self.bc_score_strip.setZValue(2); self.plot.addItem(self.bc_score_strip, ignoreBounds=True)
+        self.bc_score_strip.setVisible(False)
+        self.bc_score_ref_l = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_L, width=1, style=QtCore.Qt.DashLine))
+        self.bc_score_ref_s = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_S, width=1, style=QtCore.Qt.DashLine))
+        self.bc_score_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
+        self.bc_score_title.setZValue(62)
+        for _si in (self.bc_score_ref_l, self.bc_score_ref_s, self.bc_score_title):
+            self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
+        self._score_last_tc = None      # forward-log close detector (idempotent)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
         # heatmap large-order bubbles); SMALL = small-BUY vs small-SELL trade-COUNT share (green / red). Each
@@ -428,7 +450,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _k in ("ABSORPTION", "EFF-AGG", "E/R", "EXHAUSTION", "LARGE MKT", "SMALL MKT",
                    "BEFORE", "START/DURING", "END",        # phase panels 5/6/7 — UP/DOWN spread badge
                    "PANEL9_BULL", "PANEL9_BEAR", "PANEL9_SUM",
-                   "PANEL0_BULL", "PANEL0_BEAR", "PANEL0_SUM"):
+                   "PANEL0_BULL", "PANEL0_BEAR", "PANEL0_SUM",
+                   "SCORE_L", "SCORE_S", "SCORE_GAP"):     # Ctrl+1 SCORE v1-SEL forward-test panel
             _bd = pg.TextItem(anchor=(0, 0.5), color=(0, 0, 0))
             _bf = QtGui.QFont("Consolas", 11); _bf.setBold(True)
             _bd.textItem.setFont(_bf)
@@ -596,6 +619,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
         # PANEL 0 ('0') — a SMOOTHED twin of Panel 9: each line = (current + locked)/2. Identical items/colors.
         self.show_panel0 = True
+        self.show_score = False          # Ctrl+1 SCORE v1-SEL forward-test panel (default OFF; persisted)
         _gp0_hi = pg.mkPen("#ff9800", width=0.8); _gp0_hi.setCosmetic(True); _gp0_hi.setDashPattern([5.0, 10.0])
         _gp0_lo = pg.mkPen("#ff9800", width=0.8); _gp0_lo.setCosmetic(True); _gp0_lo.setDashPattern([5.0, 10.0])
         self.bc_p0_zero = pg.PlotDataItem(pen=pg.mkPen("#555555", width=1, style=QtCore.Qt.DashLine))
@@ -676,7 +700,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("Escape"), self, activated=self.drawer.cancel)
         # Both arrows move the Magic Selection's RIGHT edge only: Right = +1 bucket (extend), Left = -1
         # (pull back). Left edge stays; clamped to >= 1 bucket of width. No-op without a selection.
-        QtGui.QShortcut(QtGui.QKeySequence("Right"), self, activated=lambda: self.drawer.extend_selection("right", 1.0))
+        QtGui.QShortcut(QtGui.QKeySequence("Right"), self, activated=self._on_sel_right)   # +1 bucket + arm the alert eval
         QtGui.QShortcut(QtGui.QKeySequence("Left"), self, activated=lambda: self.drawer.extend_selection("right", -1.0))
         # quick toggles: 's' = Stats Box overlay, 'd' = Vector Drawing toolbar. Flip the menu
         # checkbox so the menu stays in sync and the existing show/hide + teardown logic runs.
@@ -716,6 +740,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("8"), self, activated=self._toggle_largesmall)  # panel 8: LARGE+SMALL mkt orders
         QtGui.QShortcut(QtGui.QKeySequence("9"), self, activated=self._toggle_panel9)    # panel 9: COMPOSITE lean
         QtGui.QShortcut(QtGui.QKeySequence("0"), self, activated=self._toggle_panel0)    # panel 0: smoothed P9
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+1"), self, activated=self._toggle_score)  # SCORE v1-SEL forward-test
         QtGui.QShortcut(QtGui.QKeySequence("T"), self, activated=self._toggle_phase_table)  # phase table (no panel needed)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
@@ -1266,10 +1291,59 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         NEON green (bull strongest) / NEON red (bear strongest) fill, at the panel's right."""
         bd = self._spread_badges[key]
         spread = abs(bull_last - bear_last) * 100.0
+        self._alert_sig[key] = (spread, bool(strong_is_bull))   # confluence alert: locked spread + dominant side
         bd.fill = pg.mkBrush(40, 230, 90) if strong_is_bull else pg.mkBrush(255, 45, 70)
         bd.setText(f" {spread:.0f}% ")
         bd.setPos(x, y)
         bd.show()
+
+    # ---------------------------------------------------------------- selection confluence alert
+    def _on_sel_right(self) -> None:
+        """RIGHT arrow: move the selection +1 bucket AND arm the confluence-alert eval for this move.
+        LEFT deliberately does NOT — only forward scrubbing fires."""
+        self._alert_right_pending = True
+        self.drawer.extend_selection("right", 1.0)
+
+    def _confluence_state(self):
+        """(aligned, direction) for the Mode-10 selection confluence, read from the draw-time signals — so
+        panels 0, 2, 6 must be toggled ON. BULL = panel-0 +50 & -50 both GREEN + eff-agg bull-dominant
+        spread >=65% + START/DURING UP-dominant spread >=15%; BEAR mirrors (RED / bear / DOWN)."""
+        ng, nr = self._alert_p0
+        direction = "bull" if ng >= 2 else ("bear" if nr >= 2 else None)
+        if direction is None:
+            return False, None
+        eff = self._alert_sig.get("EFF-AGG"); ph = self._alert_sig.get("START/DURING")
+        if eff is None or ph is None:                        # panel 2 or 6 not drawn -> can't confirm
+            return False, direction
+        eff_spread, eff_bull = eff; ph_spread, ph_up = ph
+        if direction == "bull":
+            ok = eff_bull and eff_spread >= 65.0 and ph_up and ph_spread >= 15.0
+        else:
+            ok = (not eff_bull) and eff_spread >= 65.0 and (not ph_up) and ph_spread >= 15.0
+        return bool(ok), direction
+
+    def _eval_confluence_alert(self, live_follow: bool) -> None:
+        """Fire once per alignment episode: on a NEW bucket close while LIVE-following, or on a RIGHT-arrow
+        move. Edge-triggered — re-arms only after the confluence drops, so a held trend doesn't beep repeatedly."""
+        aligned, _dir = self._confluence_state()
+        tc = (self._last_snap or {}).get("total_closed")
+        new_close = tc is not None and tc != self._alert_last_tc
+        self._alert_last_tc = tc
+        right = self._alert_right_pending
+        self._alert_right_pending = False
+        if not aligned:
+            self._alert_armed = True                         # re-arm for the next episode
+            return
+        if self._alert_armed and ((live_follow and new_close) or right):
+            self._alert_beep()
+            self._alert_armed = False
+
+    def _alert_beep(self) -> None:
+        try:
+            import winsound
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)   # default Windows notification sound (no file needed)
+        except Exception:
+            pass
 
     def _toggle_abs_strip(self) -> None:
         """'1' — show/hide the Mode-10 selection ABSORPTION panel (green bull / red bear absorption lines, the
@@ -1417,9 +1491,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         the new side >= 2 buckets. Only the most recent cross per level is kept (so the panel never fills up)."""
         n = len(vals); end = n - lk                       # locked region = vals[:end]
         if end < 2:
-            item.setData(spots=[]); item.setVisible(False); return
+            item.setData(spots=[]); item.setVisible(False); self._alert_p0 = (0, 0); return
         _G, _R, _W = (40, 230, 90), (255, 45, 70), (255, 255, 255)
-        spots = []
+        spots = []; _cols = []                            # _cols: kept cross colours for the confluence alert
         for (L, up_c, dn_c) in ((50.0, _G, _R), (0.0, _W, _W), (-50.0, _G, _R)):
             last = None
             for k in range(1, end):
@@ -1433,6 +1507,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if last is not None:
                 spots.append({"pos": (last[0], last[1]), "pen": pg.mkPen(last[2], width=1.3),
                               "brush": pg.mkBrush(0, 0, 0, 0), "symbol": "x", "size": 11})
+                _cols.append(last[2])
+        self._alert_p0 = (_cols.count(_G), _cols.count(_R))   # +50/-50 up-cross=green / down-cross=red (0-line white)
         item.setData(spots=spots); item.setVisible(bool(spots))
 
     def _toggle_largesmall(self) -> None:
@@ -1584,6 +1660,69 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._spread_badges["PANEL0_BEAR"].hide()
         self._spread_badges["PANEL0_SUM"].hide()
 
+    def _toggle_score(self) -> None:
+        """Ctrl+1 — show/hide SCORE v1-SEL: the frozen walk-forward score, FORWARD-TEST display only
+        (the exam verdict was FAIL). OFF clears + hides both lines, refs, title, and badges."""
+        self.show_score = not self.show_score
+        if not self.show_score:
+            self._clear_score()
+        self._save_ui_state()
+        self._refresh_selection_stats()
+
+    def _clear_score(self) -> None:
+        self.bc_score_strip.setVisible(False)
+        self.bc_score_ref_l.setData([], []); self.bc_score_ref_l.setVisible(False)
+        self.bc_score_ref_s.setData([], []); self.bc_score_ref_s.setVisible(False)
+        self.bc_score_title.setVisible(False)
+        for _k in ("SCORE_L", "SCORE_S", "SCORE_GAP"):
+            self._spread_badges[_k].hide()
+
+    def _score_badge(self, key, text, rgb, x, y) -> None:
+        bd = self._spread_badges[key]
+        bd.fill = pg.mkBrush(*rgb); bd.setText(" %s " % text)
+        bd.setPos(x, y); bd.show()
+
+    def _draw_score_panel(self, filtered, lo, hi, sc_bot, sc_top, badge_x) -> None:
+        """SCORE v1-SEL forward-test lines — reuses app.live_score (frozen bundle + the study feature engine on
+        a 16-bucket frame). NOT a validated probability; the walk-forward exam verdict was FAIL."""
+        import numpy as np
+        from app import live_score
+        LO, HI = 25.0, 50.0
+
+        def _sy(v):
+            if v is None:
+                return np.nan
+            z = (v - LO) / (HI - LO); z = 0.0 if z < 0 else (1.0 if z > 1 else z)
+            return sc_bot + z * (sc_top - sc_bot)
+
+        preds = live_score.score_selection(filtered, lo, hi)
+        xs = list(range(lo, hi + 1))
+        long_y = np.array([_sy(p[0]) for p in preds]); short_y = np.array([_sy(p[1]) for p in preds])
+        self.bc_score_strip.update_data(xs, long_y, short_y, lo - 0.5, hi + 0.5, sc_bot, sc_top, [], None)
+        self.bc_score_strip.setVisible(True)
+        bl_l, bl_s = live_score.baselines()
+        self.bc_score_ref_l.setData([lo - 0.5, hi + 0.5], [_sy(bl_l), _sy(bl_l)]); self.bc_score_ref_l.setVisible(True)
+        self.bc_score_ref_s.setData([lo - 0.5, hi + 0.5], [_sy(bl_s), _sy(bl_s)]); self.bc_score_ref_s.setVisible(True)
+        self.bc_score_title.setText("SCORE v1-SEL · frozen 2026-07-02 · forward-test")
+        self.bc_score_title.setPos(lo - 0.5, sc_top); self.bc_score_title.setVisible(True)
+        pl = next((p[0] for p in reversed(preds) if p[0] is not None), None)
+        ps = next((p[1] for p in reversed(preds) if p[1] is not None), None)
+        mid = (sc_top + sc_bot) / 2.0
+        self._score_badge("SCORE_L", ("L %.1f%%" % pl) if pl is not None else "L --",
+                          self._RGB_SCORE_L, badge_x, _sy(pl) if pl is not None else mid)
+        self._score_badge("SCORE_S", ("S %.1f%%" % ps) if ps is not None else "S --",
+                          self._RGB_SCORE_S, badge_x, _sy(ps) if ps is not None else mid)
+        gap = abs(pl - ps) if (pl is not None and ps is not None) else None
+        self._score_badge("SCORE_GAP", ("GAP %.1f" % gap) if gap is not None else "GAP --",
+                          (150, 150, 150), badge_x, sc_top)
+        tc = (self._last_snap or {}).get("total_closed")          # forward log: once per NEW close, idempotent
+        if tc is not None and tc != self._score_last_tc:
+            self._score_last_tc = tc
+            ci = len(filtered) - 2                                 # the just-closed bucket (live edge = filtered[-1])
+            if ci >= 15:
+                cp = live_score.score_bucket(filtered[ci - 15:ci + 1])
+                live_score.log_forward(int(tc) - 1, float(filtered[ci].get("end_time", 0.0)), cp[0], cp[1])
+
     def _toggle_phase_table(self) -> None:
         """'t' — show/hide the live PHASE TABLE on its own (no need to turn on a phase panel 5/6/7)."""
         self.show_phase_table = not self.show_phase_table
@@ -1601,6 +1740,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "abs": self.show_abs_strip, "eff": self.show_eff_strip,
                 "er": self.show_er_strip, "exh": self.show_exh_strip,
                 "ls_mode": self._ls_mode, "panel9": self.show_panel9, "panel0": self.show_panel0,
+                "score_v1": self.show_score,
                 "phase_table": self.show_phase_table,
                 "phase": {k: bool(v) for k, v in self.show_phase.items()},
                 "zone_s": self._zone_user_s, "eff_f": self._eff_user_f,   # persisted slider overrides (None = adaptive)
@@ -1631,6 +1771,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ls_mode = _lm if _lm in (0, 1, 2) else 0
         self.show_panel9 = bool(s.get("panel9", self.show_panel9))
         self.show_panel0 = bool(s.get("panel0", self.show_panel0))
+        self.show_score = bool(s.get("score_v1", self.show_score))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
         for _k, _v in (s.get("phase") or {}).items():
             if _k in self.show_phase:
@@ -2032,7 +2173,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0()                                              # smoothed twin: clear on teardown
+            self._clear_panel0(); self._clear_score()                        # smoothed twin + score: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2062,7 +2203,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0()                                              # smoothed twin: clear on teardown
+            self._clear_panel0(); self._clear_score()                        # smoothed twin + score: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2085,7 +2226,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 rect, filtered, lo_i, hi_i,
                 (self.show_abs_strip, self.show_eff_strip, self.show_er_strip, self.show_exh_strip,
                  tuple(self.show_phase[p] for p in self._PHASES), self.show_state, self.show_sel_stats,
-                 self._ls_mode, self.show_phase_table, self.show_panel9, self.show_panel0),
+                 self._ls_mode, self.show_phase_table, self.show_panel9, self.show_panel0, self.show_score),
                 (self.zone_slider.value_s(), self.eff_slider.value_s(),
                  self._largesmall_thr_sig()), tv, config.VPIN_ADAPT_WINDOW)
             if sig == self._sel_sig:
@@ -2113,7 +2254,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0()                                              # smoothed twin: clear on teardown
+            self._clear_panel0(); self._clear_score()                        # smoothed twin + score: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2223,6 +2364,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         sm_on = self._ls_mode >= 2 and _drawable            # SMALL only ever shows alongside LARGE
         p9_on = self.show_panel9 and _drawable
         p0_on = self.show_panel0 and _drawable
+        score_on = self.show_score and _drawable
         ph_geom = {}
         _cur = y0                                           # running bottom edge of the last placed panel
         if abs_on:
@@ -2253,6 +2395,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if p0_on:                                           # SMOOTHED twin of panel 9 (very BOTTOM)
             p0_top = _cur - config.EXH_STRIP_GAP * sel_h; p0_bot = p0_top - config.EXH_STRIP_FRAC * sel_h
             _cur = p0_bot
+        if score_on:                                        # SCORE v1-SEL (very bottom, under P0)
+            sc_top = _cur - config.EXH_STRIP_GAP * sel_h; sc_bot = sc_top - config.EXH_STRIP_FRAC * sel_h
+            _cur = sc_bot
         # minimalist hairline divider in each gap BETWEEN consecutive visible panels (stack order)
         _bands = []
         if abs_on: _bands.append((abs_top, abs_bot))
@@ -2265,6 +2410,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if sm_on: _bands.append((sm_top, sm_bot))
         if p9_on: _bands.append((p9_top, p9_bot))
         if p0_on: _bands.append((p0_top, p0_bot))
+        if score_on: _bands.append((sc_top, sc_bot))
         _sep_ys = [(_bands[i][1] + _bands[i + 1][0]) / 2.0 for i in range(len(_bands) - 1)]
         self.bc_panel_sep.update_data(lo - 0.5, hi + 0.5, _sep_ys)
         self.bc_panel_sep.setVisible(bool(_sep_ys))
@@ -2561,10 +2707,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._clear_panel9(); self._clear_panel0()
         else:
             self._clear_panel9(); self._clear_panel0()
+        if score_on:                              # SCORE v1-SEL forward-test lines (guarded — must never break the soak)
+            try:
+                self._draw_score_panel(filtered, lo, hi, sc_bot, sc_top, _badge_x)
+            except Exception:
+                self._clear_score()
+        else:
+            self._clear_score()
         self.sel_stats.set_content(
             self._selection_stat_lines(agg, state, conf, dbg, vtier,
                                        spark_op, spark_cl, flip,
                                        (abs_bull, abs_bear), (eff_bull, eff_bear)), "")
+        try:                                     # confluence alert — panel signals are fresh here; runs only on a
+            self._eval_confluence_alert(hi_i >= n_all - 1)   # real change (skip path already returned above)
+        except Exception:
+            pass
         self._reposition_sel_box(rect)   # place the screen-space box + sliders (also runs on the skip path)
 
     def _update_flip_line(self, flip, lo_i: int, rect) -> None:
