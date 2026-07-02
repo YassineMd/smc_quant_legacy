@@ -29,3 +29,5 @@ out/*
 !out/scalp_geometry_grid.csv
 !out/scalp_mfe_mae.csv
 !out/timeofday_map.csv
+!out/analysis_report_S3_setups.md
+!out/setups_S3_fires.csv
