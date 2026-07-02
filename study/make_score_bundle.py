@@ -28,7 +28,9 @@ def build():
     W, baseline, binners = A["W"], A["baseline"], A["binners"]
     bundle = {"variant": "W-STAT-SEL16", "frozen_date": FROZEN_DATE, "note":
               "Forward-test display; the walk-forward exam verdict was FAIL. Not a validated probability.",
-              "display": "edge-mode since 2026-07-02 (panel plots pred - own baseline); scoring "
+              "display": "edge-mode since 2026-07-02 (panel plots pred - own baseline); single L-S gap line "
+              "+ thin fast(1b) line since 2026-07-02 (fast = the E*/G* entry-bucket-reactive subset, same "
+              "frozen weights/bins renormalized within the subset — a display grouping); scoring "
               "(weights/bins/math) and the forward log (raw pred) are UNCHANGED.",
               "retained_pct": {}, "sides": {}}
     for s in ("long", "short"):
