@@ -8,3 +8,14 @@ out/*
 !data/column_contract.tsv
 !out/extraction_report.md
 !out/deferred_codes.tsv
+# analysis-phase deliverables (reports + result CSVs + frozen params)
+!out/analysis_report_A_discovery.md
+!out/analysis_report_C_autopsy.md
+!out/analysis_report_D_walkforward.md
+!out/screening_long.csv
+!out/screening_short.csv
+!out/correlation_long.csv
+!out/correlation_short.csv
+!out/score_weights.csv
+!out/walkforward_trades.csv
+!out/exam_frozen.json
