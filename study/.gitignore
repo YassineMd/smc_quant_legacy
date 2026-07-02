@@ -31,3 +31,4 @@ out/*
 !out/timeofday_map.csv
 !out/analysis_report_S3_setups.md
 !out/setups_S3_fires.csv
+!out/score_weights_k3_30m.csv
