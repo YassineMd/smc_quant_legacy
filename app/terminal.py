@@ -1114,6 +1114,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             bv, rv = ph["bull"][k], ph["bear"][k]
             if ph["fmt"] == "pct":
                 bs, rs = f"{bv * 100:.0f}%", f"{rv * 100:.0f}%"
+            elif ph["fmt"] == "pp":                 # signed percentage-POINT edge (SCORE panel)
+                bs, rs = f"{bv:+.1f}pp", f"{rv:+.1f}pp"
             else:                                   # volume / effort -> compact K formatting
                 bs, rs = self._fmt_k(bv), self._fmt_k(rv)
             _html = (
@@ -1739,12 +1741,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             rgb = self._RGB_SCORE_L if lg >= 0 else self._RGB_SCORE_S
             self._score_badge("SCORE_GAP", "GAP %+.1f pp" % lg, rgb, badge_x, _gy(lg))
-        # hover: raw LONG% / SHORT% only
+        # hover: per-side EDGE vs its own classroom baseline, in signed pp (same units as the plotted gap)
         self._panel_hovers.append({
-            "label": "SCORE", "lo": lo, "yb": sc_bot, "yt": sc_top,
-            "bull": [(p[0] / 100.0 if p[0] is not None else np.nan) for p in preds],
-            "bear": [(p[1] / 100.0 if p[1] is not None else np.nan) for p in preds],
-            "bcol": self._RGB_SCORE_L, "rcol": self._RGB_SCORE_S, "blbl": "LONG", "rlbl": "SHORT", "fmt": "pct"})
+            "label": "SCORE edge", "lo": lo, "yb": sc_bot, "yt": sc_top,
+            "bull": [((p[0] - bl_l) if p[0] is not None else np.nan) for p in preds],
+            "bear": [((p[1] - bl_s) if p[1] is not None else np.nan) for p in preds],
+            "bcol": self._RGB_SCORE_L, "rcol": self._RGB_SCORE_S, "blbl": "LONG", "rlbl": "SHORT", "fmt": "pp"})
         tc = (self._last_snap or {}).get("total_closed")          # forward log: RAW pred, once per NEW close, idempotent
         if tc is not None and tc != self._score_last_tc:
             self._score_last_tc = tc
