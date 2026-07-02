@@ -312,9 +312,9 @@ LIVE_PANEL_WINDOW = 15         # FIXED trailing window for the lean panels (1/2/
                               # selection start (panels become a stable live read, not a moving ruler). Tunable.
 LIQ_WAVE_WINDOW = 10          # fixed trailing window for the Liquidation Pressure panel's net-liq rolling sum
                               # (the "wave"): 10 = responsive (surf a building cascade), larger = smoother.
-SCORE_SMOOTH_W = 5            # SCORE panel gap-line smoothing: CENTERED rolling mean over this many dots
-                              # (odd; 1 = off). DISPLAY-ONLY — per-bucket scores, hover, and the forward log
-                              # stay RAW; zero-phase (no lag), edges/live tail use the available side only.
+SCORE_SMOOTH_W = 1            # SCORE panel gap-line smoothing: CENTERED rolling mean over this many dots
+                              # (odd; 1 = OFF — operator pref 2026-07-03: raw per-bucket line). DISPLAY-ONLY —
+                              # per-bucket scores, hover, and the forward log are raw regardless.
 PANEL9_SCALE = 100            # Panel-9 bull/bear lines: value (in points) mapped to the band edge; the gold
                               # dashed reference lines sit at +/-50 on this scale (0 = center).
 ER_LEAN_GAIN = 3.0             # E/R hugs 50% (two-sided), so its panel ZOOMS the deviation from the midline by
