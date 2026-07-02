@@ -97,22 +97,10 @@ def bin_of(v, fi):
     return str(v) if str(v) in fi["cats"] else None
 
 
-def is_fast(code):
-    """DISPLAY grouping by reaction speed (same frozen weights/bins — no re-tuning): 'fast' = features that
-    are functions of the ENTRY BUCKET alone (E*.01 scalars incl. E52.01, G primitives) and react in 1 bucket;
-    'slow' = the 16-window-diluted families (B-* panels, C.* context). A correction flips the fast vote
-    ~10+ buckets before the diluted full vote can move."""
-    return not code.startswith(("B-", "C."))
-
-
-def score_side(feat, side_bundle, only=None):
-    """pred% for one side; None (=> NaN / line gap) if no feature contributed. Per-row null-renorm.
-    ``only`` optionally restricts to a code-predicate SUBSET (weights renormalize within the subset —
-    the same mechanical rule as the null-renorm; used by the fast/slow display split)."""
+def score_side(feat, side_bundle):
+    """pred% for one side; None (=> NaN / line gap) if no feature contributed. Per-row null-renorm."""
     base = side_bundle["baseline"]; num = 0.0; den = 0.0
     for code, fi in side_bundle["features"].items():
-        if only is not None and not only(code):
-            continue
         b = bin_of(feat.get(code), fi["bin"])
         if b is None:
             continue

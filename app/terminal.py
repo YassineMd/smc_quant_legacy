@@ -354,15 +354,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._RGB_SCORE_L = (38, 208, 206); self._RGB_SCORE_S = (223, 86, 193)   # long teal / short magenta
         self.bc_score_up = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_L, width=2))   # gap >= 0 segment
         self.bc_score_dn = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_S, width=2))   # gap <  0 segment
-        # FAST vote (display split): the 1-bucket-reactive subset's gap, THIN + translucent — flips before
-        # the window-diluted full line in a correction. Same frozen weights/bins; grouping only.
-        self.bc_score_fup = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_L + (150,), width=1))
-        self.bc_score_fdn = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_S + (150,), width=1))
         self.bc_score_ref_l = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))  # zero ref
         self.bc_score_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
         self.bc_score_title.setZValue(62)
-        for _si in (self.bc_score_up, self.bc_score_dn, self.bc_score_fup, self.bc_score_fdn,
-                    self.bc_score_ref_l, self.bc_score_title):
+        for _si in (self.bc_score_up, self.bc_score_dn, self.bc_score_ref_l, self.bc_score_title):
             _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
         self._score_last_tc = None      # forward-log close detector (idempotent)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
@@ -455,7 +450,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                    "BEFORE", "START/DURING", "END",        # phase panels 5/6/7 — UP/DOWN spread badge
                    "PANEL9_BULL", "PANEL9_BEAR", "PANEL9_SUM",
                    "PANEL0_BULL", "PANEL0_BEAR", "PANEL0_SUM",
-                   "SCORE_L", "SCORE_S", "SCORE_GAP", "SCORE_F"):   # Ctrl+1 SCORE v1-SEL forward-test panel
+                   "SCORE_L", "SCORE_S", "SCORE_GAP"):     # Ctrl+1 SCORE v1-SEL forward-test panel
             _bd = pg.TextItem(anchor=(0, 0.5), color=(0, 0, 0))
             _bf = QtGui.QFont("Consolas", 11); _bf.setBold(True)
             _bd.textItem.setFont(_bf)
@@ -1674,32 +1669,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._refresh_selection_stats()
 
     def _clear_score(self) -> None:
-        for _it in (self.bc_score_up, self.bc_score_dn, self.bc_score_fup, self.bc_score_fdn,
-                    self.bc_score_ref_l):
+        for _it in (self.bc_score_up, self.bc_score_dn, self.bc_score_ref_l):
             _it.setData([], []); _it.setVisible(False)
         self.bc_score_title.setVisible(False)
-        for _k in ("SCORE_L", "SCORE_S", "SCORE_GAP", "SCORE_F"):
+        for _k in ("SCORE_L", "SCORE_S", "SCORE_GAP"):
             self._spread_badges[_k].hide()
-
-    @staticmethod
-    def _gap_segments(gaps, lo, gy, mid):
-        """Split a signed gap series into >=0 / <0 polylines, inserting the exact zero-crossing point in
-        BOTH so the sign-colored halves meet with no break. Returns (xs, up_ys, dn_ys) for connect='finite'."""
-        import numpy as np
-        xs, up, dn = [], [], []
-        prev = prevx = None
-        for k, g in enumerate(gaps):
-            x = lo + k
-            if prev is not None and g is not None and (prev >= 0) != (g >= 0):
-                t = prev / (prev - g) if (prev - g) != 0 else 0.0
-                xs.append(prevx + t); up.append(mid); dn.append(mid)
-            y = gy(g) if g is not None else np.nan
-            xs.append(x)
-            up.append(y if (g is not None and g >= 0) else np.nan)
-            dn.append(y if (g is not None and g < 0) else np.nan)
-            if g is not None:
-                prev, prevx = g, x
-        return xs, up, dn
 
     def _score_badge(self, key, text, rgb, x, y) -> None:
         bd = self._spread_badges[key]
@@ -1723,34 +1697,33 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         preds = live_score.score_selection(filtered, lo, hi)
         gaps = [((p[0] - bl_l) - (p[1] - bl_s)) if (p[0] is not None and p[1] is not None) else None for p in preds]
-        fgaps = [((p[2] - bl_l) - (p[3] - bl_s)) if (p[2] is not None and p[3] is not None) else None for p in preds]
-        # main (full 16-frame) gap — 2px; fast (1-bucket-reactive subset) gap — 1px translucent, flips first
-        xs, up, dn = self._gap_segments(gaps, lo, _gy, mid)
+        # split into teal(>=0)/magenta(<0) segments, inserting the zero-crossing so the line stays continuous
+        xs, up, dn = [], [], []
+        prev = prevx = None
+        for k, g in enumerate(gaps):
+            x = lo + k
+            if prev is not None and g is not None and (prev >= 0) != (g >= 0):
+                t = prev / (prev - g) if (prev - g) != 0 else 0.0
+                xs.append(prevx + t); up.append(mid); dn.append(mid)   # zero point in BOTH -> the segments meet
+            y = _gy(g) if g is not None else np.nan
+            xs.append(x)
+            up.append(y if (g is not None and g >= 0) else np.nan)
+            dn.append(y if (g is not None and g < 0) else np.nan)
+            if g is not None:
+                prev, prevx = g, x
         self.bc_score_up.setData(xs, up, connect="finite"); self.bc_score_up.setVisible(True)
         self.bc_score_dn.setData(xs, dn, connect="finite"); self.bc_score_dn.setVisible(True)
-        fxs, fup, fdn = self._gap_segments(fgaps, lo, _gy, mid)
-        self.bc_score_fup.setData(fxs, fup, connect="finite"); self.bc_score_fup.setVisible(True)
-        self.bc_score_fdn.setData(fxs, fdn, connect="finite"); self.bc_score_fdn.setVisible(True)
         self.bc_score_ref_l.setData([lo - 0.5, hi + 0.5], [mid, mid]); self.bc_score_ref_l.setVisible(True)
-        self.bc_score_title.setText("SCORE v1-SEL · L−S edge gap · thin=fast(1b) · forward-test (exam: FAIL)")
+        self.bc_score_title.setText("SCORE v1-SEL · L−S edge gap · forward-test (exam: FAIL)")
         self.bc_score_title.setPos(lo - 0.5, sc_top); self.bc_score_title.setVisible(True)
-        # badges: full gap (thick line) + fast gap (thin line), each in ITS dominant side's color
+        # badge: the gap in the DOMINANT side's color (last valid bucket)
         lg = next((g for g in reversed(gaps) if g is not None), None)
-        lf = next((g for g in reversed(fgaps) if g is not None), None)
         self._spread_badges["SCORE_L"].hide(); self._spread_badges["SCORE_S"].hide()
         if lg is None:
             self._score_badge("SCORE_GAP", "GAP --", (150, 150, 150), badge_x, mid)
         else:
             rgb = self._RGB_SCORE_L if lg >= 0 else self._RGB_SCORE_S
             self._score_badge("SCORE_GAP", "GAP %+.1f pp" % lg, rgb, badge_x, _gy(lg))
-        if lf is None:
-            self._spread_badges["SCORE_F"].hide()
-        else:
-            rgbf = self._RGB_SCORE_L if lf >= 0 else self._RGB_SCORE_S
-            fy = _gy(lf)
-            if lg is not None and abs(fy - _gy(lg)) < (sc_top - sc_bot) * 0.18:
-                fy = _gy(lf) + ((sc_top - sc_bot) * 0.18 if fy >= _gy(lg) else -(sc_top - sc_bot) * 0.18)
-            self._score_badge("SCORE_F", "F %+.1f pp" % lf, rgbf, badge_x, fy)
         # hover: raw LONG% / SHORT% only
         self._panel_hovers.append({
             "label": "SCORE", "lo": lo, "yb": sc_bot, "yt": sc_top,
