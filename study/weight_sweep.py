@@ -79,8 +79,8 @@ def derive(feats_df, roster, masks, tps, bases, excl_flags, flag_fn=decomp_flag)
     return out, agroups, alias
 
 
-def main():
-    t0 = time.time()
+def load(t0):
+    """Shared data-load: snapshot, repo series, roster, per-bucket frame, masks/baselines."""
     db = os.path.join(REPO, "study", "data", "history_snapshot_20260702.db")
     con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
     raw = [json.loads(x[0]) for x in con.execute("SELECT data FROM closed_buckets WHERE tf='1m' ORDER BY id")]
@@ -128,6 +128,82 @@ def main():
     both = rL & rS
     print("[%.0fs] rows=%d (identical universe every k) · baselines L %.2f / S %.2f"
           % (time.time() - t0, len(m), bases["long"], bases["short"]), flush=True)
+    return dict(snaps=snaps, bks=bks, rs=rs, m=m, wcsv=wcsv, roster=roster,
+                bcodes=bcodes, ccodes=ccodes, ecodes=ecodes, masks=masks, tps=tps, bases=bases, both=both)
+
+
+def build_Fk(D, k):
+    """The k-frame feature matrix for every row (B-* on [j-k+1,j]; C@k over k-1 priors; E/G shared)."""
+    m, bcodes, ccodes, ecodes = D["m"], D["bcodes"], D["ccodes"], D["ecodes"]
+    if k == 16:
+        return m[bcodes + ccodes + ecodes]
+    rows = np.empty((len(m), len(bcodes) + len(ccodes)), dtype=object)
+    for ri, j in enumerate(m["_j"].values):
+        bs = FTB.compute_bscope(D["snaps"], D["rs"], int(j), sel_len=k)
+        cx = FT.build_context(D["snaps"], D["rs"], int(j), n_ctx=k - 1)
+        rows[ri] = [bs.get(c) for c in bcodes] + [cx.get(c) for c in ccodes]
+    Fk = pd.DataFrame(rows, columns=bcodes + ccodes, index=m.index)
+    for c in Fk.columns:
+        try:
+            Fk[c] = pd.to_numeric(Fk[c])
+        except (ValueError, TypeError):
+            pass
+    return pd.concat([Fk, m[ecodes]], axis=1)
+
+
+def write_bundle(k):
+    """Freeze the SEL-k RE-DERIVED bundle to app/score_v1.json: k-frame features, discovery-fit bins,
+    weights = the k's OWN re-derived W-STAT (post-audit flags). Labeled a spent-data pick."""
+    t0 = time.time()
+    D = load(t0)
+    Fk = build_Fk(D, k)
+    dk, gk, aliask = derive(Fk, D["roster"], D["masks"], D["tps"], D["bases"], NEW_EXCL)
+
+    def e_kind(f):
+        if f.startswith(("B-", "C.")) or f == "E52.01" or not f.startswith("E"):
+            return "native"
+        return FT.classify_transform(MSB.TEXT.get(f, "")) or "raw"
+
+    bundle = {
+        "variant": "W-STAT-SEL%d-RD" % k, "frozen_date": "2026-07-02", "frame": k,
+        "note": ("Forward-test display; NOT a validated probability. Frame k=%d + RE-DERIVED weights "
+                 "(weight_sweep full re-derivation, post-audit flag set) chosen on SPENT data across 31 "
+                 "cumulative trials — spent-holdout selTP ~50.0%% (Δ-0.9 vs better-fixed; does NOT beat "
+                 "always-long). C.* here = context over k-1 priors (C@%d), NOT the registry's 15. "
+                 "OVERRIDES the architect's 'gate on forward evidence' amendment by operator decision "
+                 "2026-07-02." % (k, k)),
+        "display": "edge-mode: single L-S gap line (pred - own baseline per side); zero-crossing colored "
+                   "teal(long)/magenta(short); forward log keeps RAW pred.",
+        "retained_pct": {}, "sides": {}}
+    for s in ("long", "short"):
+        feats = {}
+        for f, w in dk[s]["wstat"].items():
+            bn = dk[s]["binners"].get(f)
+            if bn is None:
+                continue
+            bd = {"kind": bn.kind, "tpr": bn.tpr, "n": bn.n}
+            if bn.kind == "num":
+                bd["edges"] = [float(x) for x in bn.spec]
+            else:
+                bd["cats"] = [str(x) for x in bn.spec]
+            feats[f] = {"weight": w, "kind": e_kind(f), "bin": bd}
+        bundle["sides"][s] = {"baseline": D["bases"][s], "features": feats}
+        bundle["retained_pct"][s] = 100.0
+        print("%-5s SEL%d-RD bundle: %d features, Σw=%.6f"
+              % (s, k, len(feats), sum(f["weight"] for f in feats.values())))
+    path = os.path.join(REPO, "app", "score_v1.json")
+    json.dump(bundle, open(path, "w"), indent=1)
+    print("wrote %s (variant %s, frame=%d)" % (os.path.relpath(path, REPO), bundle["variant"], k))
+    return D, Fk, dk
+
+
+def main():
+    t0 = time.time()
+    D = load(t0)
+    snaps, bks, rs, m = D["snaps"], D["bks"], D["rs"], D["m"]
+    wcsv, roster = D["wcsv"], D["roster"]
+    bcodes, ccodes, ecodes = D["bcodes"], D["ccodes"], D["ecodes"]
+    masks, tps, bases, both = D["masks"], D["tps"], D["bases"], D["both"]
 
     # regression: parametrized build_context default == dataset C columns
     md = 0.0
@@ -272,4 +348,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) >= 3 and sys.argv[1] == "bundle":
+        write_bundle(int(sys.argv[2]))
+    else:
+        main()

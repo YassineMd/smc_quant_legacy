@@ -66,7 +66,8 @@ def sel16_features(snaps, bks, feat_kinds):
     base = FT.base_series(snaps, bks, rs)
     times = [float(s.get("end_time", 0.0)) for s in snaps]
     B = FT_B.compute_bscope(snaps, rs, i, sel_len=n)
-    C = FT.build_context(snaps, rs, i)
+    C = FT.build_context(snaps, rs, i, n_ctx=n - 1)   # C@k = context over the frame's k-1 priors
+    #                                                   (n=16 -> n_ctx=15 = the registry literal)
     G = FT.build_g(base, rs, times, i)
     out = {}
     for code, kind in feat_kinds.items():
