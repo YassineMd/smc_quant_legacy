@@ -354,8 +354,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_score_strip = ExhaustionStripLayer(self.plot, rgb_bull=self._RGB_SCORE_L, rgb_bear=self._RGB_SCORE_S)
         self.bc_score_strip.setZValue(2); self.plot.addItem(self.bc_score_strip, ignoreBounds=True)
         self.bc_score_strip.setVisible(False)
-        self.bc_score_ref_l = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_L, width=1, style=QtCore.Qt.DashLine))
-        self.bc_score_ref_s = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_S, width=1, style=QtCore.Qt.DashLine))
+        self.bc_score_ref_l = pg.PlotDataItem(pen=pg.mkPen((160, 160, 160), width=1))   # SOLID zero-edge ref (edge mode)
+        self.bc_score_ref_s = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_S, width=1, style=QtCore.Qt.DashLine))  # unused in edge mode
         self.bc_score_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
         self.bc_score_title.setZValue(62)
         for _si in (self.bc_score_ref_l, self.bc_score_ref_s, self.bc_score_title):
@@ -1683,39 +1683,48 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         bd.setPos(x, y); bd.show()
 
     def _draw_score_panel(self, filtered, lo, hi, sc_bot, sc_top, badge_x) -> None:
-        """SCORE v1-SEL forward-test lines — reuses app.live_score (frozen bundle + the study feature engine on
-        a 16-bucket frame). NOT a validated probability; the walk-forward exam verdict was FAIL."""
+        """SCORE v1-SEL forward-test lines — EDGE mode: each side plots pred_side − frozen_baseline_side around
+        a shared zero ref (strips the memorized discovery baseline asymmetry). Frozen weights/bins/scoring
+        UNTOUCHED; the forward log keeps RAW pred. Reuses app.live_score on a 16-bucket frame. Exam verdict: FAIL."""
         import numpy as np
         from app import live_score
-        LO, HI = 25.0, 50.0
+        bl_l, bl_s = live_score.baselines()
+        EDGE = 12.0                                               # ± display range in pp; zero at panel mid
+        mid = (sc_top + sc_bot) / 2.0; half = (sc_top - sc_bot) / 2.0
 
-        def _sy(v):
-            if v is None:
+        def _ey(e):
+            if e is None:
                 return np.nan
-            z = (v - LO) / (HI - LO); z = 0.0 if z < 0 else (1.0 if z > 1 else z)
-            return sc_bot + z * (sc_top - sc_bot)
+            z = e / EDGE; z = -1.0 if z < -1 else (1.0 if z > 1 else z)
+            return mid + z * half
 
         preds = live_score.score_selection(filtered, lo, hi)
+        edges = [((p[0] - bl_l) if p[0] is not None else None,
+                  (p[1] - bl_s) if p[1] is not None else None) for p in preds]
         xs = list(range(lo, hi + 1))
-        long_y = np.array([_sy(p[0]) for p in preds]); short_y = np.array([_sy(p[1]) for p in preds])
+        long_y = np.array([_ey(e[0]) for e in edges]); short_y = np.array([_ey(e[1]) for e in edges])
         self.bc_score_strip.update_data(xs, long_y, short_y, lo - 0.5, hi + 0.5, sc_bot, sc_top, [], None)
         self.bc_score_strip.setVisible(True)
-        bl_l, bl_s = live_score.baselines()
-        self.bc_score_ref_l.setData([lo - 0.5, hi + 0.5], [_sy(bl_l), _sy(bl_l)]); self.bc_score_ref_l.setVisible(True)
-        self.bc_score_ref_s.setData([lo - 0.5, hi + 0.5], [_sy(bl_s), _sy(bl_s)]); self.bc_score_ref_s.setVisible(True)
-        self.bc_score_title.setText("SCORE v1-SEL · frozen 2026-07-02 · forward-test")
+        self.bc_score_ref_l.setData([lo - 0.5, hi + 0.5], [mid, mid]); self.bc_score_ref_l.setVisible(True)  # solid zero
+        self.bc_score_ref_s.setVisible(False)
+        self.bc_score_title.setText("SCORE v1-SEL · edge vs own classroom baseline · forward-test (exam: FAIL)")
         self.bc_score_title.setPos(lo - 0.5, sc_top); self.bc_score_title.setVisible(True)
-        pl = next((p[0] for p in reversed(preds) if p[0] is not None), None)
-        ps = next((p[1] for p in reversed(preds) if p[1] is not None), None)
-        mid = (sc_top + sc_bot) / 2.0
-        self._score_badge("SCORE_L", ("L %.1f%%" % pl) if pl is not None else "L --",
-                          self._RGB_SCORE_L, badge_x, _sy(pl) if pl is not None else mid)
-        self._score_badge("SCORE_S", ("S %.1f%%" % ps) if ps is not None else "S --",
-                          self._RGB_SCORE_S, badge_x, _sy(ps) if ps is not None else mid)
-        gap = abs(pl - ps) if (pl is not None and ps is not None) else None
-        self._score_badge("SCORE_GAP", ("GAP %.1f" % gap) if gap is not None else "GAP --",
+        el = next((e[0] for e in reversed(edges) if e[0] is not None), None)
+        es = next((e[1] for e in reversed(edges) if e[1] is not None), None)
+        self._score_badge("SCORE_L", ("L %+.1f pp" % el) if el is not None else "L --",
+                          self._RGB_SCORE_L, badge_x, _ey(el) if el is not None else mid)
+        self._score_badge("SCORE_S", ("S %+.1f pp" % es) if es is not None else "S --",
+                          self._RGB_SCORE_S, badge_x, _ey(es) if es is not None else mid)
+        gap = (el - es) if (el is not None and es is not None) else None
+        self._score_badge("SCORE_GAP", ("GAP %+.1f" % gap) if gap is not None else "GAP --",
                           (150, 150, 150), badge_x, sc_top)
-        tc = (self._last_snap or {}).get("total_closed")          # forward log: once per NEW close, idempotent
+        # hover un-hides RAW pred% (label "L"/"S") — the edge is the plotted line, nothing is hidden
+        self._panel_hovers.append({
+            "label": "SCORE raw pred% (chart=edge)", "lo": lo, "yb": sc_bot, "yt": sc_top,
+            "bull": [(p[0] / 100.0 if p[0] is not None else float("nan")) for p in preds],
+            "bear": [(p[1] / 100.0 if p[1] is not None else float("nan")) for p in preds],
+            "bcol": self._RGB_SCORE_L, "rcol": self._RGB_SCORE_S, "blbl": "L", "rlbl": "S", "fmt": "pct"})
+        tc = (self._last_snap or {}).get("total_closed")          # forward log: RAW pred, once per NEW close, idempotent
         if tc is not None and tc != self._score_last_tc:
             self._score_last_tc = tc
             ci = len(filtered) - 2                                 # the just-closed bucket (live edge = filtered[-1])

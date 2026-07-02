@@ -28,6 +28,8 @@ def build():
     W, baseline, binners = A["W"], A["baseline"], A["binners"]
     bundle = {"variant": "W-STAT-SEL16", "frozen_date": FROZEN_DATE, "note":
               "Forward-test display; the walk-forward exam verdict was FAIL. Not a validated probability.",
+              "display": "edge-mode since 2026-07-02 (panel plots pred - own baseline); scoring "
+              "(weights/bins/math) and the forward log (raw pred) are UNCHANGED.",
               "retained_pct": {}, "sides": {}}
     for s in ("long", "short"):
         wst = W[("W-STAT", s)]

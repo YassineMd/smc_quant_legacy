@@ -2,6 +2,7 @@
  "variant": "W-STAT-SEL16",
  "frozen_date": "2026-07-02",
  "note": "Forward-test display; the walk-forward exam verdict was FAIL. Not a validated probability.",
+ "display": "edge-mode since 2026-07-02 (panel plots pred - own baseline); scoring (weights/bins/math) and the forward log (raw pred) are UNCHANGED.",
  "retained_pct": {
   "long": 44.90000000000002,
   "short": 41.83
