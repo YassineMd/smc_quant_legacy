@@ -644,6 +644,13 @@ class DrawingController(QtCore.QObject):
         self._selection: Optional[DrawnShape] = None
         self.sel_handles = ShapeHandles(plot)
         self.sel_handles.changed.connect(self.selectionChanged.emit)   # corner-resize -> recompute stats
+        # Mode-10 Idx-anchored persistence state (see set_idx_frame): drawings stored in GLOBAL bucket-Idx
+        # coords per (symbol, tf); rendered only while their Idx range is in the displayed window.
+        self._idx_ctx = None; self._idx_off = None; self._idx_n = 0
+        self._idx_pending: List[dict] = []
+        self._idx_save = QtCore.QTimer(); self._idx_save.setSingleShot(True); self._idx_save.setInterval(400)
+        self._idx_save.timeout.connect(self._save_idx)
+        self.selectionChanged.connect(self._schedule_idx_save)         # set/resize/clear/arrow-extend
 
         # §7.1 — press-drag-release: override the ViewBox drag handler while a tool
         # is armed; the captured original still drives native pan/zoom otherwise.
@@ -844,7 +851,9 @@ class DrawingController(QtCore.QObject):
                 stop, target = entry + risk, entry - risk * 1.5
         bracket = PositionBracket(self.plot, kind, x0, x1, entry, stop, target)
         if self.index_mode:
-            self._idx_brackets.append(bracket)   # session-only, not persisted
+            self._idx_brackets.append(bracket)   # Mode 10 index space (Idx-anchored, persisted)
+            bracket.changed.connect(self._schedule_idx_save)
+            self._schedule_idx_save()
         else:
             bracket.changed.connect(self._save)
             self.brackets.append(bracket)
@@ -854,7 +863,8 @@ class DrawingController(QtCore.QObject):
     def _commit_shape(self, shape: DrawnShape) -> None:
         self.plot.addItem(shape)
         if self.index_mode:
-            self._idx_shapes.append(shape)       # session-only (Mode 10 index space)
+            self._idx_shapes.append(shape)       # Mode 10 index space (Idx-anchored, persisted)
+            self._schedule_idx_save()
         else:
             self.shapes.append(shape)
             self._save()
@@ -895,6 +905,7 @@ class DrawingController(QtCore.QObject):
                     br.remove(); store.remove(br)
         self.handles.clear()   # a selected shape may have been erased -> drop its handles
         self._save()
+        self._schedule_idx_save()
 
     def clear_all(self) -> None:
         for s in self.shapes + self._idx_shapes:
@@ -920,19 +931,129 @@ class DrawingController(QtCore.QObject):
             self.handles.clear()
 
     def flush_index_drawings(self) -> None:
-        """Wipe the session-only index-space drawings (Mode 10 teardown, §6.2).
-
-        Touches ONLY the index lists — the persisted time-space shapes/brackets and
-        ``drawings.json`` are untouched.
-        """
+        """Mode-10 teardown (§6.2): PERSIST the index-space drawings (Idx-anchored, see set_idx_frame),
+        then clear the rendered items. They reload on the next Mode-10 entry via set_idx_frame; the
+        time-space shapes/brackets are untouched."""
+        if self._idx_ctx is not None:
+            self._save_idx()
         for s in self._idx_shapes:
             self.plot.removeItem(s)
         for br in self._idx_brackets:
             br.remove()
         self._idx_shapes.clear()
         self._idx_brackets.clear()
+        self.clear_selection()               # the Magic Selection is idx-space too (persisted just above)
+        self._idx_pending = []; self._idx_ctx = None; self._idx_off = None
         self.handles.clear()   # a selected Mode-10 index shape may be going away
         self._cancel_live()
+
+    # ------------------------------------------------------------------
+    # Mode-10 Idx-anchored persistence: drawings are stored in GLOBAL bucket-Idx coordinates (the
+    # monotonic per-tf counter — stable across the 10k cap and restarts) and re-rendered only while
+    # their full Idx range is inside the displayed window; otherwise they stay in the file, hidden.
+    # ------------------------------------------------------------------
+    def _schedule_idx_save(self) -> None:
+        if self.index_mode and self._idx_ctx is not None:
+            self._idx_save.start()
+
+    def set_idx_frame(self, offset: float, n: int, tf: str) -> None:
+        """Per-draw hook from the terminal (Mode 10): keeps idx drawings glued to their BUCKETS —
+        when the cap/anchor shifts the array under them the rendered items shift by the offset delta
+        (so a selection stays on the same candles instead of silently sliding) — and renders any
+        persisted drawing whose bucket range has entered the window. Loads the (symbol, tf) set on
+        first call / tf switch."""
+        if not self.index_mode:
+            return
+        ctx = (config.SYMBOL, tf)
+        if ctx != self._idx_ctx:
+            self._idx_ctx = ctx
+            self._idx_pending = self._load_idx()
+            self._idx_off = None
+        if self._idx_off is not None and offset != self._idx_off:
+            d = self._idx_off - offset                      # array coords slide by (old − new)
+            for s in self._idx_shapes:
+                s.pts = [[px + d, py] for px, py in s.pts]
+                s.rebuild()
+            if self._selection is not None and len(self._selection.pts) == 2:
+                self._selection.pts = [[px + d, py] for px, py in self._selection.pts]
+                self._selection.rebuild()
+                self.sel_handles.attach(self._selection, corners_only=True)
+                self.selectionChanged.emit()                 # panels re-anchor to the SAME buckets
+            for br in list(self._idx_brackets):
+                dd = br.to_dict()
+                self._idx_brackets.remove(br); br.remove()
+                self._make_bracket(dd["kind"], [dd["x0"] + d, dd["entry"]], [dd["x1"] + d, dd["stop"]],
+                                   entry=dd["entry"], stop=dd["stop"], target=dd["target"])
+        self._idx_off = offset; self._idx_n = int(n)
+        self._render_idx_pending()
+
+    def _render_idx_pending(self) -> None:
+        if not self._idx_pending or self._idx_off is None:
+            return
+        off = self._idx_off; keep = []
+        for d in self._idx_pending:
+            if d["t"] == "bracket":
+                axs = [d["x0"] - off, d["x1"] - off]
+            else:
+                axs = [p[0] - off for p in d["pts"]]
+            if all(-0.5 <= x <= self._idx_n - 0.5 for x in axs):    # bucket Idx visible -> render
+                if d["t"] == "shape":
+                    s = DrawnShape(d["kind"], [[p[0] - off, p[1]] for p in d["pts"]],
+                                   d.get("color", "#ffffff"), d.get("width", 2),
+                                   d.get("fill_color", "#3498db"), d.get("fill_opacity", 0.0))
+                    self.plot.addItem(s); self._idx_shapes.append(s)
+                elif d["t"] == "bracket":
+                    self._make_bracket(d["kind"], [d["x0"] - off, d["entry"]], [d["x1"] - off, d["stop"]],
+                                       entry=d["entry"], stop=d["stop"], target=d["target"])
+                else:                                       # the Magic Selection
+                    a, b = d["pts"]
+                    self._set_selection([a[0] - off, a[1]], [b[0] - off, b[1]])
+            else:
+                keep.append(d)                              # hidden until its bucket Idx shows
+        self._idx_pending = keep
+
+    def _save_idx(self) -> None:
+        if self._idx_ctx is None or self._idx_off is None:
+            return
+        off = self._idx_off
+        entry = {
+            "shapes": [dict(s.to_dict(), pts=[[p[0] + off, p[1]] for p in s.pts]) for s in self._idx_shapes],
+            "brackets": [dict(b.to_dict(), **{"x0": b.to_dict()["x0"] + off, "x1": b.to_dict()["x1"] + off})
+                         for b in self._idx_brackets],
+            "selection": ([[p[0] + off, p[1]] for p in self._selection.pts]
+                          if (self._selection is not None and len(self._selection.pts) == 2) else None),
+            "pending": self._idx_pending,                   # off-window drawings ride along untouched
+        }
+        try:
+            config.ensure_data_dir()
+            data = {}
+            if os.path.exists(_DRAW_FILE):
+                try:
+                    with open(_DRAW_FILE) as f:
+                        data = json.load(f)
+                except (OSError, json.JSONDecodeError):
+                    data = {}
+            data.setdefault("idx", {})["|".join(self._idx_ctx)] = entry
+            with open(_DRAW_FILE, "w") as f:
+                json.dump(data, f)
+        except OSError:
+            pass
+
+    def _load_idx(self) -> list:
+        if not os.path.exists(_DRAW_FILE):
+            return []
+        try:
+            with open(_DRAW_FILE) as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return []
+        e = (data.get("idx") or {}).get("|".join(self._idx_ctx), {})
+        out = [dict(d, t="shape") for d in e.get("shapes", [])]
+        out += [dict(d, t="bracket") for d in e.get("brackets", [])]
+        if e.get("selection"):
+            out.append({"t": "selection", "pts": e["selection"]})
+        out += e.get("pending", [])
+        return out
 
     # ------------------------------------------------------------------
     # Persistence (replaces browser localStorage, spec §8.3)
@@ -940,10 +1061,17 @@ class DrawingController(QtCore.QObject):
     def _save(self) -> None:
         try:
             config.ensure_data_dir()
-            payload = {config.SYMBOL: {
+            payload = {}
+            if os.path.exists(_DRAW_FILE):
+                try:
+                    with open(_DRAW_FILE) as f:
+                        payload = json.load(f)
+                except (OSError, json.JSONDecodeError):
+                    payload = {}
+            payload[config.SYMBOL] = {
                 "shapes": [s.to_dict() for s in self.shapes],
                 "brackets": [b.to_dict() for b in self.brackets],
-            }}
+            }
             with open(_DRAW_FILE, "w") as f:
                 json.dump(payload, f)
         except OSError:
