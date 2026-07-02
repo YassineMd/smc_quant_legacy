@@ -4717,15 +4717,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             else:
                 _wc = (0, 255, 127) if cl >= op else (255, 7, 58)   # green = closed up, red = closed down
         wick_pen = pg.mkPen(_wc, width=_w); wick_pen.setCosmetic(True)
+        # trailing-30 BER/SER means (the renderer's footprint/imbalance thresholds) + the abnormal-velocity
+        # ratio — pure trailing-window functions of 0..i-1 closed data (+ this bucket's own value), so they
+        # obey the SAME #3 cache contract as everything above (final the instant the bucket closes). Hoisted
+        # here from _scan_bucket_canvas, where they were re-averaged O(N·30) per FRAME (~106ms at 10k buckets).
+        w30 = buckets[max(0, i - EXH_WINDOW):i]
+        if w30:
+            ber30 = sum(bb.get("buyer_er", 0.0) for bb in w30) / len(w30)
+            ser30 = sum(bb.get("seller_er", 0.0) for bb in w30) / len(w30)
+        else:
+            ber30 = ser30 = 0.0
+        wv = vels[max(0, i - config.VEL_ABN_WINDOW):i]
+        vbase = (sum(wv) / len(wv)) if wv else 0.0
+        velabn = (vels[i] / vbase) if vbase > 0 else 0.0
         row = (b.get("open", 0.0), b.get("high", 0.0), b.get("low", 0.0),
                b.get("close", 0.0), poc, brush,
-               baseline, vpin, wick_pen)
+               baseline, vpin, wick_pen, ber30, ser30, velabn)
         return row, baseline
 
     # The parallel render arrays, in row-tuple order (see _bucket_row). vbrush is NOT here:
     # the VPIN heatmap brush is render-time (adaptive percentile), recomputed each frame.
     _M10_ARR_KEYS = ("opens", "highs", "lows", "closes", "pocs", "brushes",
-                     "baseline", "vpin", "pens")
+                     "baseline", "vpin", "pens", "ber30", "ser30", "velabn")
 
     def _compute_bucket_arrays(self, buckets: list, anchor_unix: float) -> dict:
         """Static closed-bucket compute cache (#3): return the 10 per-bucket render
@@ -4749,7 +4762,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                  and cc["anchor"] == anchor_unix and cc["n"] <= n_closed)
         if not reuse:                          # full rebuild (front/anchor change or first run)
             cc = {k: [] for k in self._M10_ARR_KEYS}
-            cc.update(vels=[], fold=None, n=0, front_id=front_id, anchor=anchor_unix)
+            cc.update(vels=[], fold=None, n=0, front_id=front_id, anchor=anchor_unix,
+                      kc_up=[], kc_lo=[], kc_fold=None)
+
+        # Keltner fold: same sequential arithmetic as _keltner_bands (EMA basis + Wilder RMA ATR), carried
+        # as (e, a) after the last computed bucket — a closed bucket's KC is final at close (the recurrence
+        # only reads backwards), so the O(N) full-history walk is paid once, not per frame.
+        _kl = config.KELTNER_LENGTH; _km = config.KELTNER_ATR_MULT; _kk = 2.0 / (_kl + 1)
+
+        def _kc_step(fold, h, l, c, c_prev):
+            if fold is None:                                   # seed exactly like _keltner_bands i == 0
+                e, a = float(c), float(h) - float(l)
+            else:
+                e0, a0 = fold
+                e = float(c) * _kk + e0 * (1.0 - _kk)
+                tr = max(float(h) - float(l), abs(float(h) - float(c_prev)), abs(float(l) - float(c_prev)))
+                a = (a0 * (_kl - 1) + tr) / _kl
+            return (e, a), e + _km * a, e - _km * a
 
         # extend velocities (per-bucket, immutable) + finalize newly-closed rows ONCE each
         for i in range(cc["n"], n_closed):
@@ -4759,11 +4788,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             row, cc["fold"] = self._bucket_row(buckets, i, cc["vels"], cc["fold"])
             for k, v in zip(self._M10_ARR_KEYS, row):
                 cc[k].append(v)
+            cc["kc_fold"], _u, _l = _kc_step(cc["kc_fold"], cc["highs"][i], cc["lows"][i], cc["closes"][i],
+                                             cc["closes"][i - 1] if i > 0 else None)
+            cc["kc_up"].append(_u); cc["kc_lo"].append(_l)
         cc["n"] = n_closed
         self._m10_cc = cc                      # cache holds exactly the closed prefix
 
         # full arrays = cached closed prefix (O(N) pointer copy) + the FRESH live edge
         out = {k: list(cc[k]) for k in self._M10_ARR_KEYS}
+        out["kc_up"] = list(cc["kc_up"]); out["kc_lo"] = list(cc["kc_lo"])
         if L >= 1:
             b = buckets[L - 1]
             dur = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))
@@ -4771,6 +4804,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             row, _ = self._bucket_row(buckets, L - 1, cc["vels"] + [live_vel], cc["fold"])
             for k, v in zip(self._M10_ARR_KEYS, row):
                 out[k].append(v)
+            _, _u, _l = _kc_step(cc["kc_fold"], b.get("high", 0.0), b.get("low", 0.0), b.get("close", 0.0),
+                                 cc["closes"][-1] if cc["closes"] else None)
+            out["kc_up"].append(_u); out["kc_lo"].append(_l)
         return out
 
     @staticmethod
@@ -4815,17 +4851,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         wick_pens = arr["pens"]   # per-candle flow-colored wick/border pens
 
         # Abnormal-velocity flag — a bucket whose velocity (curr_vol/dur) is >= VEL_ABN_RATIO x its
-        # trailing-VEL_ABN_WINDOW MEAN (the SAME 30b basis as the stats box's 30b BER/SER). Computed ONCE
-        # here for BOTH cues on a flagged candle: a 2px wick/border (vs the 0.3-1.0 flow width, KEEPING
+        # trailing-VEL_ABN_WINDOW MEAN (the SAME 30b basis as the stats box's 30b BER/SER). Ratios come from
+        # the #3 cache (arr["velabn"], computed once per closed bucket — was re-averaged O(N·30) per frame).
+        # Used for BOTH cues on a flagged candle: a 2px wick/border (vs the 0.3-1.0 flow width, KEEPING
         # the flow colour) — ALWAYS ON — plus a diamond above it ('v' toggles; neon green=buyer /
         # red=seller dominated, GOLD on divergence). DESCRIPTIVE study marker, not a signal.
-        _bvel = [(b.get("buy_vol", 0.0) + b.get("sell_vol", 0.0)) /
-                 max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0)) for b in buckets]
-        vel_abn = []
-        for i in range(len(buckets)):
-            w = _bvel[max(0, i - config.VEL_ABN_WINDOW):i]
-            base = (sum(w) / len(w)) if w else 0.0
-            vel_abn.append((_bvel[i] / base) if base > 0 else 0.0)
+        vel_abn = arr["velabn"]
         wick_pens = list(wick_pens)            # copy before swapping entries (never mutate the #3 cache)
         for i, r in enumerate(vel_abn):
             if r >= config.VEL_ABN_RATIO:
@@ -4860,10 +4891,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._scan_handles["kc_mid"] = self._add_scanner_item(pg.PlotCurveItem(
                 pen=pg.mkPen((180, 180, 180, 120), width=1.0, style=QtCore.Qt.DashLine)))
             self._scan_handles["kc_mid"].setVisible(False)   # hide the EMA basis line
-        _kc_up, _, _kc_lo = self._keltner_bands(
-            highs, lows, closes, config.KELTNER_LENGTH, config.KELTNER_ATR_MULT)
-        self._scan_handles["kc_upper"].setData(x, _kc_up)
-        self._scan_handles["kc_lower"].setData(x, _kc_lo)
+        # KC bands from the #3 cache (sequential fold extended once per close — was a full O(N) walk per frame)
+        self._scan_handles["kc_upper"].setData(x, arr["kc_up"])
+        self._scan_handles["kc_lower"].setData(x, arr["kc_lo"])
 
         # --- STAGE 0: true per-bucket POC marker (gold dot) — rides the whole DETAIL regime ---
         # poc_price is already finalized in every BucketSnapshot (and computed on the fly for the
@@ -4908,14 +4938,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # stats-box 30b BER/SER). Used by BOTH the footprint number highlight (gated) AND the imbalance
         # lines (always-on), so compute it once here regardless of the footprint toggle.
         levels_list = [b.get("levels", {}) for b in buckets]
-        ber30s, ser30s = [], []
-        for i in range(len(buckets)):
-            w = buckets[max(0, i - EXH_WINDOW):i]
-            if w:
-                ber30s.append(sum(bb.get("buyer_er", 0.0) for bb in w) / len(w))
-                ser30s.append(sum(bb.get("seller_er", 0.0) for bb in w) / len(w))
-            else:
-                ber30s.append(0.0); ser30s.append(0.0)
+        # trailing-30 BER/SER from the #3 cache (arr["ber30"/"ser30"], computed once per closed bucket —
+        # this was the single biggest per-frame cost: O(N·30) dict-gets, ~81ms at 10k buckets).
+        ber30s, ser30s = arr["ber30"], arr["ser30"]
 
         # IMBALANCE LINES — ALWAYS drawn (independent of the footprint toggle): a horizontal neon line the
         # candle's width AT an imbalanced level's EXACT price (buy >= 30b BER -> neon BLUE; sell >= 30b SER
