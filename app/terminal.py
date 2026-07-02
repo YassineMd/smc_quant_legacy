@@ -355,9 +355,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_score_up = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_L, width=2))   # gap >= 0 segment
         self.bc_score_dn = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_S, width=2))   # gap <  0 segment
         self.bc_score_ref_l = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))  # zero ref
+        # LOCK-IN divider (like panels 1-4): SCORE dots are TRAILING-frame pure functions, so closed buckets
+        # are final instantly — only the FORMING bucket's dot settles (+ the smoothing tail when enabled).
+        self.bc_score_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
         self.bc_score_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
         self.bc_score_title.setZValue(62)
-        for _si in (self.bc_score_up, self.bc_score_dn, self.bc_score_ref_l, self.bc_score_title):
+        for _si in (self.bc_score_up, self.bc_score_dn, self.bc_score_ref_l, self.bc_score_lock,
+                    self.bc_score_title):
             _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
         self._score_last_tc = None      # forward-log close detector (idempotent)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
@@ -1671,7 +1675,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._refresh_selection_stats()
 
     def _clear_score(self) -> None:
-        for _it in (self.bc_score_up, self.bc_score_dn, self.bc_score_ref_l):
+        for _it in (self.bc_score_up, self.bc_score_dn, self.bc_score_ref_l, self.bc_score_lock):
             _it.setData([], []); _it.setVisible(False)
         self.bc_score_title.setVisible(False)
         for _k in ("SCORE_L", "SCORE_S", "SCORE_GAP"):
@@ -1728,6 +1732,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_score_up.setData(xs, up, connect="finite"); self.bc_score_up.setVisible(True)
         self.bc_score_dn.setData(xs, dn, connect="finite"); self.bc_score_dn.setVisible(True)
         self.bc_score_ref_l.setData([lo - 0.5, hi + 0.5], [mid, mid]); self.bc_score_ref_l.setVisible(True)
+        # LOCK divider: closed-bucket dots are FINAL (trailing frame) — only the forming bucket settles
+        # (when the selection touches the live edge), plus the centered-smoothing tail when enabled.
+        _lockd = (_W // 2 if _W > 1 else 0) + (1 if hi >= len(filtered) - 1 else 0)
+        if _lockd > 0:
+            self._draw_panel_lock(self.bc_score_lock, _lockd, lo, hi, sc_bot, sc_top)
+        else:
+            self.bc_score_lock.setData([], []); self.bc_score_lock.setVisible(False)
         _var = live_score.bundle().get("variant", "W-STAT-SEL16")
         _smtag = (" · sm%d" % _W) if _W > 1 else ""
         self.bc_score_title.setText("SCORE %s · L−S edge gap%s · forward-test · unvalidated (frame picked on"
