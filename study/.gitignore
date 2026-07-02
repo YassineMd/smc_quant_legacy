@@ -25,3 +25,7 @@ out/*
 !out/score_weights_k*.csv
 !out/weight_sweep_summary.csv
 !out/weight_sweep_summary_ext.csv
+!out/analysis_report_S1_geometry.md
+!out/scalp_geometry_grid.csv
+!out/scalp_mfe_mae.csv
+!out/timeofday_map.csv
