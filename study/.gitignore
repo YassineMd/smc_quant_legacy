@@ -24,3 +24,4 @@ out/*
 !out/frame_sweep.csv
 !out/score_weights_k*.csv
 !out/weight_sweep_summary.csv
+!out/weight_sweep_summary_ext.csv

@@ -139,6 +139,9 @@ def build_Fk(D, k):
         return m[bcodes + ccodes + ecodes]
     rows = np.empty((len(m), len(bcodes) + len(ccodes)), dtype=object)
     for ri, j in enumerate(m["_j"].values):
+        if j < k - 1:                                       # insufficient lookback: a negative frame start
+            rows[ri] = [None] * (len(bcodes) + len(ccodes))  # would WRAP the python slice -> NULL instead
+            continue
         bs = FTB.compute_bscope(D["snaps"], D["rs"], int(j), sel_len=k)
         cx = FT.build_context(D["snaps"], D["rs"], int(j), n_ctx=k - 1)
         rows[ri] = [bs.get(c) for c in bcodes] + [cx.get(c) for c in ccodes]
@@ -197,8 +200,9 @@ def write_bundle(k):
     return D, Fk, dk
 
 
-def main():
+def main(ks=None, gate=True):
     t0 = time.time()
+    ks = list(ks) if ks is not None else list(range(1, 17))
     D = load(t0)
     snaps, bks, rs, m = D["snaps"], D["bks"], D["rs"], D["m"]
     wcsv, roster = D["wcsv"], D["roster"]
@@ -224,32 +228,35 @@ def main():
     # (analysis_A screening bins -> weights_A.raw_strength) — must match < 1e-9; (b) the frozen 4-decimal
     # score_weights.csv within its quantization bound (0.5e-4 amplified by subset renorm 1/Σ ≈ 2.2).
     F16 = m[bcodes + ccodes + [c for c in ecodes]]
-    d16, g16, alias16 = derive(F16, roster, masks, tps, bases, OLD_EXCL, flag_fn=CA.flag)   # ORIGINAL flags
-    print("\n== k=16 PARITY GATE (old flags {level,tempo}; must reproduce the original pipeline) ==", flush=True)
-    import weights_A
-    _dfA, _discA, _featsA, _priorsA, outA, _metaA = analysis_A.main()
-    for side in ("long", "short"):
-        recsA = {r["feature"]: r for r in outA[side]["recs"]}
-        baseA = outA[side]["baseline"]
-        rs_mine = d16[side]["rs"]
-        shared_rs = [f for f in rs_mine if f in recsA and "bins" in recsA[f]]
-        dev_rs = max(abs(rs_mine[f] - weights_A.raw_strength(recsA[f], baseA)[0]) for f in shared_rs)
-        mine = d16[side]["wstat"]
-        shared = [f for f in mine if f in wcsv[side]]
-        tot = sum(wcsv[side][f] for f in shared)
-        ref = {f: wcsv[side][f] / tot for f in shared}
-        dev_csv = max(abs(mine[f] - ref[f]) for f in shared)
-        # csv 4dp worst case: |δ_f/Σ − w_f·Σδ/Σ²| ≤ (0.5e-4/Σ)·(1 + N·max_w) — each of the N stored
-        # weights carries up to half-ULP rounding, and the renormalization couples them.
-        maxw = max(ref.values())
-        qbound = (0.5e-4 / max(tot, 1e-9)) * (1.0 + len(shared) * maxw) + 1e-9
-        missing = [f for f in mine if f not in wcsv[side]] + [f for f in wcsv[side]
-                   if f in rs_mine and f not in mine]
-        print("  %-5s full-precision max|Δrs|=%.2e (n=%d)  ·  csv max|Δw|=%.2e (bound %.2e)  ·  unshared=%s"
-              % (side, dev_rs, len(shared_rs), dev_csv, qbound, missing or "none"))
-        assert dev_rs < 1e-9, "PARITY FAIL (full precision) — do not trust other k"
-        assert dev_csv < qbound, "PARITY FAIL (csv beyond quantization bound)"
-    print("  PARITY PASS — proceeding.", flush=True)
+    if not gate:
+        print("[parity gate skipped — passed on the committed 1..16 run]", flush=True)
+    else:
+        d16, g16, alias16 = derive(F16, roster, masks, tps, bases, OLD_EXCL, flag_fn=CA.flag)  # ORIGINAL flags
+        print("\n== k=16 PARITY GATE (old flags {level,tempo}; must reproduce the original pipeline) ==", flush=True)
+        import weights_A
+        _dfA, _discA, _featsA, _priorsA, outA, _metaA = analysis_A.main()
+        for side in ("long", "short"):
+            recsA = {r["feature"]: r for r in outA[side]["recs"]}
+            baseA = outA[side]["baseline"]
+            rs_mine = d16[side]["rs"]
+            shared_rs = [f for f in rs_mine if f in recsA and "bins" in recsA[f]]
+            dev_rs = max(abs(rs_mine[f] - weights_A.raw_strength(recsA[f], baseA)[0]) for f in shared_rs)
+            mine = d16[side]["wstat"]
+            shared = [f for f in mine if f in wcsv[side]]
+            tot = sum(wcsv[side][f] for f in shared)
+            ref = {f: wcsv[side][f] / tot for f in shared}
+            dev_csv = max(abs(mine[f] - ref[f]) for f in shared)
+            # csv 4dp worst case: |δ_f/Σ − w_f·Σδ/Σ²| ≤ (0.5e-4/Σ)·(1 + N·max_w) — each of the N stored
+            # weights carries up to half-ULP rounding, and the renormalization couples them.
+            maxw = max(ref.values())
+            qbound = (0.5e-4 / max(tot, 1e-9)) * (1.0 + len(shared) * maxw) + 1e-9
+            missing = [f for f in mine if f not in wcsv[side]] + [f for f in wcsv[side]
+                       if f in rs_mine and f not in mine]
+            print("  %-5s full-precision max|Δrs|=%.2e (n=%d)  ·  csv max|Δw|=%.2e (bound %.2e)  ·  unshared=%s"
+                  % (side, dev_rs, len(shared_rs), dev_csv, qbound, missing or "none"))
+            assert dev_rs < 1e-9, "PARITY FAIL (full precision) — do not trust other k"
+            assert dev_csv < qbound, "PARITY FAIL (csv beyond quantization bound)"
+        print("  PARITY PASS — proceeding.", flush=True)
 
     # newly-removed by the post-audit flag set (within roster)
     newly = sorted(f for f in roster if decomp_flag(f) in NEW_EXCL and CA.flag(f) not in OLD_EXCL)
@@ -258,24 +265,13 @@ def main():
     # ── the sweep ──
     summary = []
     all_groups = {}
-    for k in range(1, 17):
+    for k in ks:
         tk = time.time()
-        if k == 16:
-            Fk = F16
-        else:
-            rows = np.empty((len(m), len(bcodes) + len(ccodes)), dtype=object)
-            for ri, j in enumerate(m["_j"].values):
-                bs = FTB.compute_bscope(snaps, rs, int(j), sel_len=k)
-                cx = FT.build_context(snaps, rs, int(j), n_ctx=k - 1)
-                rows[ri] = [bs.get(c) for c in bcodes] + [cx.get(c) for c in ccodes]
-            Fk = pd.DataFrame(rows, columns=bcodes + ccodes, index=m.index)
-            for c in Fk.columns:
-                try:
-                    Fk[c] = pd.to_numeric(Fk[c])
-                except (ValueError, TypeError):
-                    pass
-            Fk = pd.concat([Fk, m[ecodes]], axis=1)
-        dk, gk, aliask = derive(Fk, roster, masks, tps, bases, NEW_EXCL)
+        Fk = F16 if k == 16 else build_Fk(D, k)
+        vmask = (m["_j"] >= k - 1)                 # rows with a full k-frame (all-True for k<=17; large k
+        masks_k = {"long": masks["long"] & vmask,  # excludes early rows whose frame precedes the snapshot)
+                   "short": masks["short"] & vmask, "disc_any": masks["disc_any"] & vmask}
+        dk, gk, aliask = derive(Fk, roster, masks_k, tps, bases, NEW_EXCL)
         all_groups[k] = set(gk)
         # per-k weight CSV (both variants)
         path = os.path.join(OUT, "score_weights_k%d.csv" % k)
@@ -306,7 +302,7 @@ def main():
         gap = (pl - bases["long"]) - (ps - bases["short"])
         cal = {}
         for side, pred, tp in (("L", pl, tps["long"]), ("S", ps, tps["short"])):
-            mm = masks["long" if side == "L" else "short"].values
+            mm = masks_k["long" if side == "L" else "short"].values
             q = pd.qcut(pd.Series(pred[mm]), 10, labels=False, duplicates="drop")
             cal[side] = [round(100.0 * tp[mm][(q == d).values].mean()) for d in sorted(q.dropna().unique())]
         rec = {"k": k, "sum_ok": sum_ok,
@@ -314,7 +310,7 @@ def main():
                "kept_S": dk["short"]["kept"], "degen_S": dk["short"]["degen"],
                "alias_groups": len(gk)}
         for win in ("disc", "hold"):
-            mm = (both & (m["_win"] == win)).values
+            mm = (both & (m["_win"] == win) & vmask).values
             sel_tp = np.where(gap[mm] >= 0, tps["long"][mm], tps["short"][mm])
             aL, aS = 100.0 * tps["long"][mm].mean(), 100.0 * tps["short"][mm].mean()
             st = 100.0 * sel_tp.mean()
@@ -328,27 +324,34 @@ def main():
                  rec["disc_selTP"], rec["disc_delta"], rec["hold_selTP"], rec["hold_delta"],
                  time.time() - tk), flush=True)
 
-    # alias-group diffs vs k=16
-    print("\nalias-group check vs k=16:")
-    for k in range(1, 17):
-        diff = all_groups[k] ^ all_groups[16]
-        if diff:
-            print("  k=%d groups differ: %s" % (k, [sorted(g) for g in diff]))
-    if all(all_groups[k] == all_groups[16] for k in range(1, 17)):
-        print("  identical dedup groups at every k")
+    # alias-group diffs vs k=16 (only when 16 is part of the run)
+    if 16 in all_groups:
+        print("\nalias-group check vs k=16:")
+        anydiff = False
+        for k in ks:
+            diff = all_groups[k] ^ all_groups[16]
+            if diff:
+                anydiff = True
+                print("  k=%d groups differ: %s" % (k, [sorted(g) for g in diff]))
+        if not anydiff:
+            print("  identical dedup groups at every k")
 
-    with open(os.path.join(OUT, "weight_sweep_summary.csv"), "w", newline="", encoding="utf-8") as f:
+    _suffix = "" if ks == list(range(1, 17)) else "_ext"
+    with open(os.path.join(OUT, "weight_sweep_summary%s.csv" % _suffix), "w", newline="", encoding="utf-8") as f:
         f.write("# Full weight re-derivation per k. HOLD* = %s\n" % HOLDOUT_LABEL)
         cols = ["k", "sum_ok", "kept_L", "degen_L", "kept_S", "degen_S", "alias_groups",
                 "disc_n", "disc_selTP", "disc_delta", "hold_n", "hold_selTP", "hold_delta"]
         w = csv.writer(f); w.writerow(cols)
         for r in summary:
             w.writerow([("%.2f" % r[c]) if isinstance(r[c], float) else r[c] for c in cols])
-    print("\nwrote weight_sweep_summary.csv + score_weights_k1..16.csv  ·  HOLD* = " + HOLDOUT_LABEL)
+    print("\nwrote weight_sweep_summary%s.csv + score_weights_k{%s}.csv  ·  HOLD* = %s"
+          % (_suffix, ",".join(str(k) for k in ks), HOLDOUT_LABEL))
 
 
 if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "bundle":
         write_bundle(int(sys.argv[2]))
+    elif len(sys.argv) >= 3 and sys.argv[1] == "ext":
+        main(ks=[int(a) for a in sys.argv[2:]], gate=False)
     else:
         main()

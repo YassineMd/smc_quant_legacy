@@ -1,0 +1,5 @@
+# Full weight re-derivation per k. HOLD* = comparison material — 15 extra trials of selection bias; forward data is the only judge
+k,sum_ok,kept_L,degen_L,kept_S,degen_S,alias_groups,disc_n,disc_selTP,disc_delta,hold_n,hold_selTP,hold_delta
+50,True,87,2,87,2,0,6836,50.54,10.27,2565,44.48,-6.39
+100,True,88,1,88,1,0,6786,51.21,10.70,2565,41.40,-9.47
+200,True,88,1,88,1,0,6686,53.54,13.10,2565,47.80,-3.08
