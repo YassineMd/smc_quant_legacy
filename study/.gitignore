@@ -19,3 +19,5 @@ out/*
 !out/score_weights.csv
 !out/walkforward_trades.csv
 !out/exam_frozen.json
+!out/decomposition_direction.csv
+!out/decomposition_movement.csv

@@ -1,0 +1,257 @@
+# NOTE: flag=empty is necessary but not sufficient — apply the clock/volume/price test when reading. The excess_diff subtraction AMPLIFIES drift-trackers (regime/time/tempo/level), it does not clean them.
+rank,feature_code,plain_name,flag,best_bin,n,TP_L,TP_S,whip_pct,raw_diff,excess_diff,shared,ci_lo,ci_hi,eff_blocks
+1,E51.01,Volume per bin (vector feature),,Q2,575,36.5,45.9,17.6,-9.4,-12.15,6.33,-5.44,17.65,4
+2,E48.02,z / percentile,,Q4,495,41.2,40.6,18.2,0.6,-2.16,5.72,3.26,8.03,31
+3,E04.01,"Gap vs prior close: size, sign, gap-in-ticks",level,Q2,1726,45.9,34.8,19.4,11.1,8.36,4.55,0.4,7.92,13
+4,E04.08,True range (gap-adjusted) vs raw range,level,Q2,1726,45.9,34.8,19.4,11.1,8.36,4.55,0.4,7.92,13
+5,E04.09,Log return open->close,level,Q2,1726,45.9,34.8,19.4,11.1,8.36,4.55,0.4,7.92,13
+6,E09.01,POC round-number proximity,level,Q2,1713,45.7,34.9,19.4,10.8,8.04,4.52,0.07,7.87,13
+7,C.08,Dominant 12-state verdict over the 15,,STRONG BULL,148,36.5,43.9,19.6,-7.4,-10.19,4.3,-3.77,11.21,20
+8,B-S.13,Average VEL + Speed multiple,tempo,Q2,2213,39.8,40.4,19.7,-0.6,-3.39,4.15,1.54,6.75,32
+9,E51.07,z / percentile of large share,,Q3,1168,46.9,33.3,19.8,13.6,10.85,4.12,1.36,7.55,14
+10,K.12,POC-baseline slope + consecutive-side streak,,Q2,111,36.9,43.2,19.8,-6.3,-9.07,4.08,-0.75,8.84,29
+11,E51.08,Large-share streak,,Q2,1476,50.7,29.3,20.0,21.5,18.72,3.91,0.42,8.27,12
+12,K.01,KC middle line value at entry (EMA-20 of close),level,Q2,1716,45.6,34.1,20.3,11.5,8.72,3.56,-0.3,6.87,11
+13,E50.08,Large-count percentile vs window,,Q3,1406,46.4,33.2,20.3,13.2,10.47,3.56,1.51,5.91,16
+14,E55.09,Percentile-window fill health,warmup-artifact,Q3,2360,39.5,40.1,20.4,-0.6,-3.31,3.52,1.34,5.48,32
+15,B-S.10,Sum ClS,suspect-regime,Q2,2294,39.1,40.5,20.4,-1.4,-4.2,3.45,1.28,5.71,31
+16,K.02,KC upper band (mid + 2.0 x ATR-20),level,Q2,1716,46.0,33.6,20.5,12.4,9.65,3.44,-1.5,7.22,12
+17,K.03,KC lower band (mid - 2.0 x ATR-20),level,Q2,1716,45.3,33.9,20.7,11.4,8.66,3.15,-1.11,6.41,10
+18,B-P1.03,Spread: bull% - bear%,,Q1,2400,41.3,37.8,20.9,3.6,0.82,2.98,0.98,4.74,32
+19,E60.01,State label (categorical) + one-hot vector,,BULL TRAP,239,41.8,37.2,20.9,4.6,1.84,2.98,-0.81,6.99,32
+20,E62.01,Historical frequency of each state,,BULL TRAP,239,41.8,37.2,20.9,4.6,1.84,2.98,-0.81,6.99,32
+21,E19.07,clS acceleration,,Q3,2350,39.4,39.6,21.0,-0.3,-3.02,2.88,,,32
+22,C.10,Cumulative dOI over the 15,,Q4,2962,44.9,34.1,21.0,10.8,8.01,2.86,,,32
+23,K.07,Distance to nearest band (ticks and ATRs),,Q1,2378,40.7,38.0,21.3,2.8,0.01,2.62,,,32
+24,E03.01,Raw seconds / log-duration,,Q2,2421,43.3,35.4,21.3,8.0,5.21,2.58,,,32
+25,G01.1,Duration (the canonical example: elapsed seconds),,Q2,2421,43.3,35.4,21.3,8.0,5.21,2.58,,,32
+26,B-S.06,Net dOI,,Q4,2978,44.7,33.9,21.3,10.8,8.02,2.57,,,32
+27,B-P1.02,Bear absorption percentage (badge),,Q3,2494,41.6,37.1,21.3,4.5,1.73,2.57,,,32
+28,B-P1.01,Bull absorption percentage (badge),,Q2,2493,41.6,37.1,21.3,4.5,1.77,2.56,,,32
+29,E11.02,Volume percentile / z vs trailing window,tempo,Q4,2338,43.2,35.4,21.4,7.8,5.02,2.51,,,29
+30,E50.01,Counts per bin (vector feature),,Q4,1807,44.1,34.5,21.4,9.6,6.87,2.48,,,16
+31,E11.05,Above/below-mean volume streak,tempo,Q3,2458,45.4,33.1,21.4,12.3,9.57,2.46,,,29
+32,E50.09,Large-count streak,,Q4,1046,50.6,27.9,21.5,22.7,19.9,2.39,,,16
+33,E48.05,Liq-long streak,,Q3,2287,39.8,38.7,21.5,1.1,-1.67,2.39,,,32
+34,E57.03,Depth percentile vs window,,Q2,2761,40.7,37.7,21.6,2.9,0.17,2.31,,,32
+35,E29.01,Raw units/s / log pace,tempo,Q3,2510,44.0,34.4,21.6,9.6,6.88,2.3,,,32
+36,G08.1,vel = volume/second and Speed multiple (canonical),tempo,Q3,2510,44.0,34.4,21.6,9.6,6.88,2.3,,,32
+37,E29.04,Pace streak,tempo,Q2,2159,39.8,38.5,21.6,1.3,-1.46,2.27,,,32
+38,B-P2.07,Sum: eff-agg share of selection volume,,Q1,2572,43.0,35.4,21.7,7.6,4.82,2.24,,,32
+39,E52.01,large-order net side (APPROX fixed-273c),,large-sell,2525,43.0,35.3,21.7,7.6,4.88,2.2,,,16
+40,E17.01,opS / vol fraction,,Q3,2704,40.3,37.9,21.7,2.4,-0.36,2.19,,,32
+41,E17.06,Day-rank of opS,,Q4,2575,40.1,38.1,21.7,2.0,-0.78,2.15,,,32
+42,E28.05,Percentile / z vs window,,Q3,2490,39.5,38.7,21.8,0.8,-1.96,2.13,,,32
+43,B-S.07,Sum OpL,,Q4,3064,43.8,34.5,21.8,9.3,6.54,2.13,,,31
+44,E42.01,Traded-level count,,Q4,2535,42.4,35.8,21.8,6.7,3.91,2.12,,,32
+45,E45.01,Level count / dispersion in ticks,,Q4,2535,42.4,35.8,21.8,6.7,3.91,2.12,,,32
+46,E17.08,opS acceleration,,Q4,2603,40.0,38.2,21.8,1.8,-0.99,2.12,,,32
+47,E17.04,opS streak,,Q4,1492,41.0,37.3,21.8,3.7,0.93,2.12,,,32
+48,E28.06,Speed streak (consecutive > 1x),,Q2,2625,39.6,38.6,21.8,1.0,-1.81,2.11,,,32
+49,B-P2.03,Spread: bull% - bear%,,Q3,2490,40.4,37.8,21.8,2.5,-0.23,2.09,,,32
+50,E32.01,Current size,tempo,Q4,2848,40.5,37.7,21.8,2.8,0.05,2.06,,,18
+51,K.10,Rolling-POC baseline value (240-bucket window POC),level,Q1,1743,41.0,37.1,21.9,3.9,1.14,2.04,,,8
+52,B-P4.09,Peak gated score + its bucket position,,Q2,2630,40.6,37.6,21.9,3.0,0.24,2.03,,,32
+53,E05.01,Absolute range / range in ticks,,Q4,2552,42.4,35.8,21.9,6.6,3.82,2.03,,,32
+54,E11.01,Overshoot ratio: curr_vol / target_vol (last-print spillover),tempo,Q4,2849,40.4,37.7,21.9,2.7,-0.09,2.03,,,18
+55,E11.03,Log volume,tempo,Q4,2849,40.4,37.7,21.9,2.7,-0.09,2.03,,,18
+56,B-S.09,Sum ClL,,Q2,2341,39.8,38.4,21.9,1.4,-1.35,2.03,,,30
+57,B-S.08,Sum OpS,,Q4,3049,41.5,36.6,21.9,4.9,2.16,2.02,,,30
+58,E08.08,Wick percentile vs trailing window,,Q2,2371,38.0,40.2,21.9,-2.2,-4.95,2.01,,,32
+59,B-S.03,Total volume,tempo,Q4,2865,40.7,37.3,22.0,3.5,0.69,1.91,,,18
+60,E07.05,Trend-bar streak length,,Q3,1114,39.5,38.5,22.0,1.0,-1.77,1.91,,,32
+61,B-P3.01,Buyer-side percentage (badge),,Q2,2249,37.5,40.5,22.0,-3.0,-5.78,1.89,,,32
+62,B-P3.02,Seller-side percentage (badge),,Q3,2249,37.4,40.6,22.0,-3.1,-5.87,1.89,,,32
+63,E13.01,Sell share: sell_vol / curr_vol,,Q4,2859,40.1,37.8,22.0,2.3,-0.49,1.86,,,29
+64,E13.08,Log sell volume,,Q4,2859,40.1,37.8,22.0,2.3,-0.49,1.86,,,29
+65,E32.07,Percentile vs history,tempo,Q3,4474,46.9,31.1,22.0,15.8,13.06,1.86,,,24
+66,B-P2.09,Peak eff-agg bucket position,,Q2,2457,40.4,37.6,22.1,2.8,0.05,1.84,,,32
+67,B-S.05,Net delta + delta percentage,,Q2,2143,37.5,40.5,22.1,-3.0,-5.75,1.83,,,32
+68,E47.05,Liq-short streak,,Q4,2019,43.3,34.6,22.1,8.8,6.01,1.81,,,29
+69,E28.01,Raw multiple,,Q2,2390,39.7,38.2,22.1,1.4,-1.34,1.81,,,32
+70,E18.01,clL / vol fraction,,Q3,2557,39.5,38.4,22.1,1.2,-1.59,1.8,,,32
+71,B-P3.10,Entry-bucket raw value,,Q3,2525,42.5,35.4,22.1,7.1,4.33,1.8,,,32
+72,E16.04,opL streak (persistent long initiative),,Q4,1461,42.2,35.7,22.1,6.4,3.67,1.79,,,32
+73,E48.10,Acceleration,,Q2,1291,38.9,39.0,22.2,-0.1,-2.84,1.74,,,32
+74,B-P1.05,Absolute bull V*s over the selection,,Q3,2478,40.6,37.3,22.2,3.3,0.51,1.74,,,32
+75,E07.04,Percentile / z vs trailing window,,Q2,2080,40.1,37.7,22.2,2.4,-0.41,1.73,,,32
+76,E54.01,Current value,,Q1,2602,38.3,39.5,22.2,-1.3,-4.03,1.72,,,31
+77,E54.05,Tier-dwell streak,,Q3,2339,33.3,44.5,22.2,-11.2,-13.96,1.71,,,32
+78,E24.01,Raw value / log value,,Q3,2492,40.4,37.4,22.2,3.1,0.33,1.71,,,32
+79,E18.04,clL streak (sustained unwind),,Q3,1815,40.1,37.7,22.2,2.4,-0.34,1.69,,,32
+80,C.09,Cumulative delta over the 15,,Q2,2161,38.5,39.3,22.2,-0.8,-3.55,1.69,,,32
+81,E03.02,Duration percentile vs trailing 30 and 240 buckets,,Q3,2443,39.9,37.9,22.2,2.0,-0.8,1.67,,,32
+82,G03.1,delta and delta fraction (the canonical pair),,Q1,2534,38.5,39.3,22.3,-0.8,-3.55,1.64,,,32
+83,E12.06,Day-rank of buy volume,,Q2,2448,39.3,38.5,22.3,0.8,-1.99,1.63,,,32
+84,E37.02,Percentile / z vs window,,Q3,2488,40.7,37.0,22.3,3.7,0.94,1.63,,,32
+85,E21.03,z / percentile,,Q1,2478,40.5,37.2,22.3,3.2,0.47,1.62,,,32
+86,E03.07,Fast/slow STREAK length (consecutive buckets same class),,Q3,2355,38.5,39.2,22.3,-0.8,-3.53,1.6,,,32
+87,G06.1,Net OI change + open:close ratio,,Q4,2661,41.3,36.3,22.3,5.0,2.24,1.58,,,32
+88,E15.04,Percentile / z vs window,,Q2,2539,40.3,37.3,22.3,3.0,0.23,1.57,,,32
+89,E31.01,Current level,tempo,Q2,2624,39.7,38.0,22.3,1.8,-1.01,1.57,,,32
+90,E06.03,Body percentile / z-score vs window,,Q1,2512,40.1,37.5,22.3,2.6,-0.17,1.57,,,32
+91,E10.04,Percentile vs trailing window,,Q3,2408,41.5,36.1,22.3,5.4,2.64,1.56,,,32
+92,E01.01,UTC hour-of-day (0-23),clock,Q1,1718,38.7,38.9,22.4,-0.2,-2.99,1.55,,,6
+93,E02.01,UTC hour-of-day at close,clock,Q1,1718,38.7,38.9,22.4,-0.2,-2.99,1.55,,,6
+94,E48.06,Day-rank,,Q3,3032,38.2,39.4,22.4,-1.2,-3.95,1.54,,,30
+95,E28.07,Speed acceleration vs prior,,Q3,2427,40.4,37.2,22.4,3.2,0.45,1.52,,,32
+96,B-P3.03,Spread: buyer% - seller%,,Q2,2458,39.9,37.8,22.4,2.1,-0.65,1.52,,,32
+97,E21.10,Day-rank of |dOI|,,Q4,2586,41.3,36.3,22.4,5.0,2.23,1.51,,,32
+98,E06.02,Log return of the body,,Q1,2612,39.9,37.7,22.4,2.1,-0.66,1.5,,,32
+99,B-P1.07,Sum: absorbed share of selection volume,,Q3,2433,40.4,37.2,22.4,3.2,0.44,1.5,,,32
+100,E20.04,High-churn streak,,Q2,2258,39.0,38.6,22.4,0.4,-2.41,1.49,,,32
+101,E10.01,Raw 0..1 position,,Q3,2195,42.2,35.4,22.4,6.9,4.12,1.48,,,32
+102,G10.1,poc_pos and close-vs-VA position (acceptance/rejection),,Q3,2195,42.2,35.4,22.4,6.9,4.12,1.48,,,32
+103,E23.02,z vs trailing-30 (the baseline convention),,Q2,2573,41.2,36.4,22.4,4.8,2.06,1.47,,,32
+104,K.04,Bandwidth: (upper - lower) / mid,,Q4,2274,39.1,38.5,22.4,0.6,-2.15,1.47,,,23
+105,E13.06,Day-rank of sell volume,,Q4,2501,39.2,38.4,22.4,0.8,-1.96,1.47,,,32
+106,E20.03,z / percentile,,Q2,2532,38.4,39.1,22.4,-0.7,-3.47,1.47,,,32
+107,E28.09,Day-rank of speed,,Q2,2456,40.3,37.3,22.4,3.1,0.29,1.46,,,32
+108,E21.01,Sign: BUILD vs DRAIN,,1,4466,40.4,37.1,22.4,3.3,0.55,1.46,,,32
+109,E09.09,POC percentile within the day's range,level,Q3,2410,37.4,40.2,22.4,-2.8,-5.54,1.45,,,32
+110,E18.08,Day-rank of clL,,Q4,2507,39.6,37.9,22.5,1.7,-1.09,1.44,,,32
+111,E22.01,OPEN_OI ramp value (0.10-0.50),,Q2,2455,38.7,38.8,22.5,-0.1,-2.88,1.41,,,32
+112,E36.04,High-s streak,,Q4,1791,38.0,39.5,22.5,-1.5,-4.21,1.4,,,32
+113,E16.01,opL / vol fraction,,Q3,2662,41.3,36.2,22.5,5.1,2.31,1.4,,,32
+114,E19.08,Day-rank of clS,,Q3,2444,39.9,37.6,22.5,2.3,-0.47,1.39,,,32
+115,E17.02,z-score / percentile,,Q4,2461,39.7,37.7,22.5,2.0,-0.77,1.39,,,32
+116,E16.06,Day-rank of opL,,Q4,2603,40.8,36.7,22.5,4.1,1.35,1.39,,,32
+117,E05.07,Expanding/contracting range STREAK,,Q4,2203,41.2,36.3,22.5,4.9,2.19,1.38,,,32
+118,E54.04,Slope over last N buckets,,Q3,2437,38.5,39.0,22.5,-0.5,-3.25,1.37,,,32
+119,K.09,Squeeze flag: bandwidth in bottom percentile,,Q2,2423,36.9,40.6,22.5,-3.8,-6.52,1.36,,,32
+120,E14.09,Day-rank of abs(delta),,Q3,2405,40.5,37.0,22.5,3.5,0.77,1.36,,,32
+121,E15.01,Raw fraction,,Q2,2544,40.8,36.6,22.6,4.2,1.48,1.34,,,32
+122,E23.01,Raw value / log value,,Q2,2340,40.0,37.5,22.6,2.5,-0.28,1.33,,,32
+123,E24.06,Hot streak,,Q4,2130,38.4,39.1,22.6,-0.7,-3.47,1.32,,,32
+124,B-P2.10,Dominance-flip count across the selection,,Q2,916,42.6,34.8,22.6,7.8,4.99,1.3,,,32
+125,E24.09,Day-rank,,Q3,2584,41.0,36.4,22.6,4.6,1.81,1.3,,,32
+126,E32.03,Slope of target over the day,tempo,Q3,2392,41.1,36.3,22.6,4.7,1.96,1.28,,,32
+127,E36.01,Raw s,,Q2,2466,40.1,37.3,22.6,2.8,-0.0,1.27,,,32
+128,E31.04,Percentile vs the day,tempo,Q1,2311,39.0,38.4,22.6,0.6,-2.16,1.27,,,32
+129,E37.05,Absorption streak per side,,Q4,1732,38.2,39.2,22.6,-1.0,-3.8,1.27,,,32
+130,E18.02,z / percentile,,Q4,2430,39.6,37.8,22.6,1.8,-0.95,1.26,,,32
+131,E07.01,Raw fraction 0..1,,Q2,2436,40.1,37.2,22.7,3.0,0.19,1.24,,,32
+132,G02.1,"Range, body, wicks, close-position -- the full geometry family",,Q2,2436,40.1,37.2,22.7,3.0,0.19,1.24,,,32
+133,E25.01,Raw dispersion (ticks),,Q4,2567,41.6,35.7,22.7,6.0,3.2,1.23,,,32
+134,E06.01,Sign (direction) and magnitude,,0,763,37.6,39.7,22.7,-2.1,-4.86,1.22,,,32
+135,E06.10,Contribution sign to trailing bucket-CVD of price,,0,763,37.6,39.7,22.7,-2.1,-4.86,1.22,,,32
+136,B-P3.05,Aggregate buyer multiple vs trailing baseline,,Q4,2530,40.2,37.1,22.7,3.1,0.32,1.21,,,32
+137,B-S.11,Aggregate B-E/R multiple,,Q4,2530,40.2,37.1,22.7,3.1,0.32,1.21,,,32
+138,E38.02,Percentile / z,,Q3,2437,39.1,38.2,22.7,0.9,-1.86,1.21,,,32
+139,E43.05,Dominant-POC streak,,Q4,1798,36.7,40.7,22.7,-4.0,-6.77,1.21,,,32
+140,E31.02,Slope over trailing window (regime drift),tempo,Q3,2278,35.6,41.7,22.7,-6.0,-8.78,1.2,,,32
+141,E38.03,Day-rank,,Q1,2692,42.1,35.2,22.7,6.9,4.11,1.2,,,32
+142,E05.02,Range percentile vs trailing 30/240,,Q4,2401,42.3,35.0,22.7,7.2,4.49,1.2,,,32
+143,E25.02,Percentile / z vs window,,Q1,2514,38.8,38.5,22.7,0.3,-2.48,1.19,,,32
+144,B-P1.09,Peak-absorption bucket position (0..15),,Q4,1893,39.0,38.3,22.7,0.7,-2.07,1.18,,,32
+145,B-P3.07,Hot-bucket count (>=1.5x) in selection,,Q2,4085,39.2,38.1,22.7,1.2,-1.61,1.18,,,32
+146,E08.01,Upper wick size / lower wick size (ticks),,Q4,2372,42.6,34.7,22.7,7.9,5.12,1.17,,,32
+147,E16.08,opL acceleration vs prior bucket,,Q3,2363,38.9,38.3,22.7,0.6,-2.17,1.17,,,32
+148,E16.02,z-score / percentile vs window,,Q4,2495,40.2,37.1,22.7,3.1,0.36,1.17,,,32
+149,E24.08,Effort acceleration,,Q4,2626,39.9,37.3,22.7,2.6,-0.13,1.16,,,32
+150,B-P3.06,Aggregate seller multiple vs baseline,,Q3,2496,39.9,37.3,22.8,2.6,-0.12,1.14,,,32
+151,B-S.12,Aggregate S-E/R multiple,,Q3,2496,39.9,37.3,22.8,2.6,-0.12,1.14,,,32
+152,B-P2.08,Trajectory slope across the selection,,Q1,2506,40.9,36.4,22.8,4.5,1.75,1.11,,,32
+153,E45.02,Dispersion percentile vs window,,Q4,2421,41.9,35.3,22.8,6.7,3.89,1.1,,,32
+154,E45.06,Fat/thin streak,,Q4,2223,41.1,36.1,22.8,5.0,2.28,1.09,,,32
+155,E20.08,Churn acceleration,,Q4,2547,40.8,36.4,22.8,4.3,1.56,1.09,,,32
+156,E54.03,z / percentile vs trailing 240,,Q3,2437,36.4,40.8,22.8,-4.5,-7.23,1.08,,,32
+157,E39.04,Consecutive-dot streak,,Q2,2384,40.0,37.2,22.8,2.9,0.09,1.08,,,32
+158,B-P1.10,Validated-dot (s>=0.60) count in selection,,Q2,2186,42.0,35.1,22.8,6.9,4.15,1.07,,,32
+159,E36.03,Percentile / z vs window,,Q3,2431,39.7,37.5,22.8,2.1,-0.62,1.07,,,32
+160,E21.08,dOI acceleration,,Q1,2601,39.6,37.6,22.8,2.0,-0.72,1.06,,,32
+161,E23.06,Hot streak length,,Q2,2058,39.5,37.7,22.8,1.7,-1.01,1.06,,,32
+162,E37.03,Day-rank of absorbed volume,,Q3,2469,40.1,37.1,22.8,3.0,0.2,1.05,,,32
+163,E57.05,Sweep magnitude z,,Q4,2136,39.2,38.0,22.8,1.2,-1.54,1.05,,,32
+164,E13.03,Sell-dominance streak,,Q4,1934,39.3,37.8,22.9,1.4,-1.31,1.04,,,32
+165,C.12,Sweep-event count in the 15,,Q3,2555,40.3,36.9,22.9,3.4,0.64,1.04,,,32
+166,K.08,Channel slope (mid-line drift over N buckets),,Q1,2301,38.7,38.5,22.9,0.2,-2.54,1.04,,,32
+167,C.11,Compression share (buckets under 0.6 ATR),,Q3,2646,41.2,36.0,22.9,5.2,2.42,1.03,,,32
+168,E03.08,Duration acceleration: ratio vs prior bucket,,Q4,2483,36.4,40.7,22.9,-4.2,-6.99,1.02,,,32
+169,E24.02,z vs trailing-30,,Q4,2482,39.4,37.8,22.9,1.6,-1.15,1.01,,,32
+170,E13.10,Sell-share slope over trailing 5 buckets,,Q4,2638,38.4,38.7,22.9,-0.2,-2.99,1.0,,,32
+171,E37.01,Absolute absorbed volume + side,,Q2,2209,38.9,38.2,22.9,0.8,-1.99,0.99,,,32
+172,E29.02,Percentile / z vs trailing window,tempo,Q4,1915,40.3,36.8,22.9,3.4,0.69,0.97,,,32
+173,E06.04,Same-direction streak length,,Q2,4842,39.7,37.3,22.9,2.4,-0.37,0.97,,,32
+174,E25.06,Narrow/wide streak,,Q4,1771,40.9,36.2,22.9,4.7,1.93,0.97,,,32
+175,E38.07,Acceleration,,Q2,2442,39.4,37.6,22.9,1.8,-0.96,0.97,,,32
+176,E03.03,Duration z-score vs trailing window,,Q3,2468,39.7,37.4,22.9,2.4,-0.41,0.96,,,32
+177,B-P4.05,Spread between the two sides,,Q3,2398,39.7,37.3,22.9,2.4,-0.34,0.96,,,32
+178,K.05,"Entry close position inside the channel, 0..1",,Q1,2206,38.0,39.1,22.9,-1.1,-3.85,0.96,,,32
+179,E19.01,clS / vol fraction,,Q2,2458,37.6,39.4,22.9,-1.8,-4.55,0.95,,,32
+180,E24.04,Percentile,,Q3,2444,39.8,37.2,23.0,2.6,-0.18,0.94,,,32
+181,E38.06,Eff-agg streak per side,,Q4,1285,41.9,35.1,23.0,6.8,4.09,0.94,,,32
+182,E13.02,Sell z-score / percentile,,Q4,2508,39.2,37.8,23.0,1.4,-1.33,0.93,,,32
+183,E29.05,Pace acceleration,tempo,Q2,2233,36.2,40.8,23.0,-4.7,-7.42,0.92,,,32
+184,E47.02,z / percentile vs window,,Q3,3733,42.9,34.1,23.0,8.8,6.0,0.91,,,32
+185,E19.04,clS streak,,Q2,3218,39.4,37.6,23.0,1.8,-0.96,0.9,,,32
+186,B-P3.09,Peak-E/R bucket position,,Q4,2396,40.1,36.9,23.0,3.1,0.37,0.9,,,32
+187,E54.02,Tier: calm / warn / toxic (adaptive percentiles),,Q2,2393,40.9,36.1,23.0,4.8,2.09,0.87,,,32
+188,E55.01,Current warn / toxic threshold values,,Q2,2393,40.9,36.1,23.0,4.8,2.09,0.87,,,32
+189,C.05,Max drawup and drawdown within the 15,,Q2,2588,37.5,39.5,23.0,-1.9,-4.69,0.87,,,32
+190,E20.07,Day-rank of churn,,Q2,2462,39.5,37.5,23.0,2.0,-0.77,0.87,,,32
+191,E45.05,z-score of dispersion,,Q4,2501,40.9,36.1,23.0,4.8,2.0,0.87,,,32
+192,E14.03,Delta z-score / percentile,,Q2,2487,38.8,38.1,23.0,0.7,-2.04,0.86,,,32
+193,B-P1.06,Absolute bear V*s over the selection,,Q2,2139,39.0,38.0,23.0,1.0,-1.73,0.85,,,32
+194,E05.03,Range z-score,,Q4,2499,40.8,36.2,23.0,4.6,1.84,0.85,,,32
+195,E47.06,Day-rank,,Q4,1948,34.2,42.8,23.0,-8.6,-11.33,0.85,,,32
+196,E33.06,Slope over the selection window,,Q1,2512,40.0,37.0,23.0,3.0,0.22,0.85,,,32
+197,K.11,Close vs POC baseline: side + distance,,Q4,3201,44.2,32.7,23.1,11.5,8.77,0.84,,,28
+198,E14.04,Same-sign delta streak (pressure persistence),,Q2,1950,39.4,37.5,23.1,1.9,-0.81,0.82,,,32
+199,B-S.14,Selection range + net price change %,,Q4,2544,42.0,34.9,23.1,7.2,4.39,0.78,,,32
+200,B-P4.10,Crossover-diamond count in the selection,,0,6907,40.4,36.5,23.1,3.9,1.18,0.78,,,32
+201,E43.02,Percentile / z of the share,,Q4,2409,38.9,37.9,23.1,1.0,-1.77,0.78,,,32
+202,E33.01,Buyer multiplier / seller multiplier values,,Q1,2543,40.8,36.1,23.1,4.7,1.92,0.78,,,32
+203,B-S.02,Selection wall-clock duration,tempo,Q3,2594,36.0,40.9,23.1,-4.9,-7.62,0.77,,,32
+204,E15.05,One-sidedness streak,,Q2,2222,39.3,37.6,23.1,1.7,-1.05,0.77,,,32
+205,E56.06,ATR percentile vs day,,Q3,2420,40.6,36.3,23.1,4.3,1.54,0.76,,,32
+206,E12.03,Buy-dominance streak (share > 0.5),,Q2,1939,39.4,37.4,23.2,2.0,-0.8,0.74,,,32
+207,E19.02,z / percentile,,Q4,2431,39.4,37.4,23.2,2.1,-0.7,0.74,,,32
+208,E33.05,Percentile of each vs day,,Q1,2409,40.0,36.9,23.2,3.1,0.35,0.73,,,32
+209,E11.09,Day-rank of the bucket's volume,tempo,Q3,4679,41.4,35.5,23.2,5.9,3.16,0.73,,,25
+210,C.07,Higher-highs / lower-lows counts,,Q2,2548,40.0,36.8,23.2,3.3,0.5,0.7,,,32
+211,E10.07,Persistently-high/low POC streak,,Q4,2138,40.9,35.9,23.2,5.0,2.2,0.7,,,32
+212,C.04,Path class: trend / range / V-shape,,chop,5116,40.3,36.5,23.2,3.8,1.03,0.68,,,32
+213,E12.01,Buy share: buy_vol / curr_vol,,Q1,1998,38.2,38.6,23.2,-0.4,-3.16,0.67,,,32
+214,E12.08,Log buy volume,,Q1,1998,38.2,38.6,23.2,-0.4,-3.16,0.67,,,32
+215,B-P2.05,Absolute bull V*(1-s) over the selection,,Q2,2105,35.9,40.9,23.2,-4.9,-7.7,0.67,,,32
+216,E56.05,ATR slope (vol regime drift),,Q1,2506,39.7,37.1,23.3,2.6,-0.17,0.63,,,32
+217,B-P4.02,LAST EXHAUSTED SIDE (bull / bear),,bull,4147,38.4,38.3,23.3,0.1,-2.62,0.63,,,32
+218,G04.1,Price moved per net contract (efficiency of aggression),,Q1,3150,39.9,36.9,23.3,3.0,0.25,0.63,,,32
+219,E49.05,Percentile of total fraction,,Q3,2191,39.1,37.7,23.3,1.4,-1.35,0.62,,,31
+220,B-P4.04,Opposite side's percentage,,Q1,7649,40.9,35.8,23.3,5.1,2.36,0.61,,,32
+221,E12.02,Buy z-score / percentile vs trailing window,,Q3,2493,40.6,36.1,23.3,4.5,1.73,0.59,,,32
+222,K.06,Zone tag: above / upper-half / lower-half / below,,inside,7703,39.7,37.0,23.3,2.8,0.0,0.58,,,32
+223,C.06,Realized volatility of the 15,,Q3,2868,41.2,35.4,23.3,5.8,3.06,0.57,,,32
+224,E12.10,Buy-share slope over trailing 5 buckets,,Q1,2644,38.5,38.1,23.3,0.4,-2.35,0.56,,,32
+225,E18.07,clL acceleration,,Q4,2562,39.1,37.5,23.3,1.6,-1.2,0.56,,,32
+226,E23.08,Effort acceleration vs prior,,Q1,2639,40.5,36.2,23.3,4.3,1.52,0.56,,,32
+227,E14.06,Delta acceleration (this vs prior magnitude),,Q1,2681,40.1,36.5,23.3,3.6,0.86,0.55,,,32
+228,E23.04,Percentile vs window,,Q4,2428,40.2,36.5,23.4,3.7,0.9,0.55,,,32
+229,E21.04,BUILD streak / DRAIN streak lengths,,Q2,3820,39.7,36.9,23.4,2.9,0.09,0.52,,,32
+230,E37.06,Absorption acceleration,,Q4,2732,40.4,36.2,23.4,4.2,1.45,0.51,,,32
+231,E43.10,Day-rank of POC share,,Q3,2380,39.8,36.8,23.4,3.1,0.31,0.49,,,32
+232,B-P1.08,Trajectory slope across the selection,,Q1,2435,38.6,38.0,23.4,0.6,-2.15,0.49,,,32
+233,B-P2.11,Entry-bucket raw value,,Q1,6494,38.8,37.8,23.5,1.0,-1.78,0.43,,,32
+234,B-P2.01,Bull eff-agg percentage (badge),,Q3,2447,39.8,36.7,23.5,3.2,0.43,0.4,,,32
+235,B-P4.01,Current exhaustion value (badge),,Q3,2387,39.4,37.1,23.5,2.3,-0.5,0.4,,,32
+236,B-P4.03,Last-exhausted side's percentage,,Q3,2387,39.4,37.1,23.5,2.3,-0.5,0.4,,,32
+237,B-P2.04,Dominant side label,,bull,5142,41.8,34.7,23.5,7.1,4.38,0.39,,,32
+238,B-P1.04,Dominant side label,,bull,5059,41.2,35.3,23.5,5.9,3.15,0.38,,,32
+239,E20.01,churn / vol fraction,,Q1,1917,36.3,40.2,23.5,-4.0,-6.73,0.37,,,31
+240,E56.01,ATR value,,Q3,2481,40.0,36.4,23.5,3.6,0.83,0.36,,,32
+241,B-P2.02,Bear eff-agg percentage (badge),,Q2,2447,39.8,36.7,23.5,3.1,0.39,0.36,,,32
+242,E23.09,Day-rank of buyer effort,,Q2,2510,40.3,36.2,23.5,4.1,1.34,0.35,,,32
+243,E43.01,POC share of curr_vol,,Q1,2658,40.8,35.7,23.6,5.1,2.36,0.35,,,32
+244,B-P2.06,Absolute bear V*(1-s) over the selection,,Q1,2331,41.8,34.6,23.6,7.2,4.45,0.35,,,30
+245,E36.05,s slope over last 5 buckets,,Q4,2499,38.5,37.9,23.6,0.6,-2.12,0.33,,,32
+246,E57.01,Swept prior HIGH (Y/N) / swept prior LOW (Y/N),,Q2,2383,41.0,35.5,23.6,5.5,2.74,0.31,,,32
+247,C.03,Linear-fit slope + R-squared (trendiness),,Q3,2556,39.6,36.8,23.6,2.8,0.02,0.31,,,32
+248,E14.01,Sign and magnitude,,-1,4874,38.2,38.2,23.6,-0.1,-2.84,0.3,,,32
+249,B-P1.11,Entry-bucket raw (un-smoothed) hover value,,Q2,2850,37.9,38.5,23.6,-0.7,-3.43,0.28,,,32
+250,E38.01,Absolute eff-agg + side,,Q1,4767,39.3,37.0,23.6,2.3,-0.47,0.28,,,32
+251,B-P3.04,Dominant side label,,seller,4777,37.1,39.2,23.6,-2.1,-4.85,0.26,,,32
+252,B-P3.08,Both-hot bucket count,,1,625,41.9,34.4,23.7,7.5,4.76,0.22,,,20
+253,C.02,Net % change over the 15,,Q3,2473,41.1,35.2,23.7,5.9,3.1,0.2,,,32
+254,C.01,Direction over the 15: net UP or DOWN,,1,5025,41.4,34.9,23.7,6.4,3.67,0.18,,,32
+255,E47.10,Acceleration vs prior bucket,,Q1,8443,39.2,36.9,23.9,2.3,-0.5,0.04,,,32
