@@ -21,3 +21,4 @@ out/*
 !out/exam_frozen.json
 !out/decomposition_direction.csv
 !out/decomposition_movement.csv
+!out/frame_sweep.csv

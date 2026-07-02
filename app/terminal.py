@@ -1714,7 +1714,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_score_up.setData(xs, up, connect="finite"); self.bc_score_up.setVisible(True)
         self.bc_score_dn.setData(xs, dn, connect="finite"); self.bc_score_dn.setVisible(True)
         self.bc_score_ref_l.setData([lo - 0.5, hi + 0.5], [mid, mid]); self.bc_score_ref_l.setVisible(True)
-        self.bc_score_title.setText("SCORE v1-SEL · L−S edge gap · forward-test (exam: FAIL)")
+        _var = live_score.bundle().get("variant", "W-STAT-SEL16")
+        self.bc_score_title.setText("SCORE %s · L−S edge gap · forward-test · unvalidated (frame picked on"
+                                    " spent data)" % _var)
         self.bc_score_title.setPos(lo - 0.5, sc_top); self.bc_score_title.setVisible(True)
         # badge: the gap in the DOMINANT side's color (last valid bucket)
         lg = next((g for g in reversed(gaps) if g is not None), None)
@@ -1734,8 +1736,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if tc is not None and tc != self._score_last_tc:
             self._score_last_tc = tc
             ci = len(filtered) - 2                                 # the just-closed bucket (live edge = filtered[-1])
-            if ci >= 15:
-                cp = live_score.score_bucket(filtered[ci - 15:ci + 1])
+            _F = live_score.frame()
+            if ci >= _F - 1:
+                cp = live_score.score_bucket(filtered[ci - _F + 1:ci + 1])
                 live_score.log_forward(int(tc) - 1, float(filtered[ci].get("end_time", 0.0)), cp[0], cp[1])
 
     def _toggle_phase_table(self) -> None:

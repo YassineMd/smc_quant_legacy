@@ -58,13 +58,14 @@ def e01_value(base, code, i, kind):
 
 
 def sel16_features(snaps, bks, feat_kinds):
-    """{code: value} for the SEL16 features, computed on the 16-frame (i = last bucket). feat_kinds maps
-    each code to 'native' (B/C/G) or the E .01 transform kind (raw/sign/log)."""
+    """{code: value} for the SEL-k features, computed on the WHOLE provided frame (i = last bucket; the
+    frame length IS the selection length — 16 for SEL16, 7 for SEL7...). feat_kinds maps each code to
+    'native' (B/C/G) or the E .01 transform kind (raw/sign/log)."""
     n = len(snaps); i = n - 1
     rs = FT.repo_series(snaps, bks)
     base = FT.base_series(snaps, bks, rs)
     times = [float(s.get("end_time", 0.0)) for s in snaps]
-    B = FT_B.compute_bscope(snaps, rs, i)
+    B = FT_B.compute_bscope(snaps, rs, i, sel_len=n)
     C = FT.build_context(snaps, rs, i)
     G = FT.build_g(base, rs, times, i)
     out = {}

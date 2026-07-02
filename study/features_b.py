@@ -56,10 +56,11 @@ def _badge_share(ext_bull, ext_ser_or_bear, pre0, higher_is_strong):
     return b * 100.0, r * 100.0, abs(b - r) * 100.0, strong_bull
 
 
-def compute_bscope(snaps, rs, i):
-    """B-scope panel values for entry bucket i (selection [i-15, i]). rs = precomputed repo series."""
+def compute_bscope(snaps, rs, i, sel_len=SEL):
+    """B-scope panel values for entry bucket i (selection [i-sel_len+1, i]). rs = precomputed repo series.
+    ``sel_len`` defaults to the study's frozen 16 (T1/T2 reproducibility); the frame-sweep passes 1..15."""
     out = {}
-    lo, hi = i - SEL + 1, i
+    lo, hi = i - sel_len + 1, i
     sel = snaps[lo:hi + 1]
     n = len(snaps)
     pre0 = min(lo, PREMAX)
@@ -82,8 +83,8 @@ def compute_bscope(snaps, rs, i):
     out["P1.07"] = (abs_bull + abs_bear) / sumcv
     sh1 = R.rolling_share(eb, er, LW)[pre0:]
     out["P1.08"] = _slope(sh1)
-    tot_abs = [absb_sl[k] + absr_sl[k] for k in range(SEL)]
-    out["P1.09"] = max(range(SEL), key=lambda k: tot_abs[k])
+    tot_abs = [absb_sl[k] + absr_sl[k] for k in range(sel_len)]
+    out["P1.09"] = max(range(sel_len), key=lambda k: tot_abs[k])
     out["P1.10"] = sum(1 for s in s_sl if s is not None and s >= 0.60)
     _t = absb_sl[-1] + absr_sl[-1]
     out["P1.11"] = (absb_sl[-1] / _t * 100.0) if _t > 0 else 50.0
@@ -99,8 +100,8 @@ def compute_bscope(snaps, rs, i):
     out["P2.07"] = (eff_bull + eff_bear) / sumcv
     sh2 = R.rolling_share(e2b, e2r, LW)[pre0:]
     out["P2.08"] = _slope(sh2)
-    tot_eff = [eff_bull_sl[k] + eff_bear_sl[k] for k in range(SEL)]
-    out["P2.09"] = max(range(SEL), key=lambda k: tot_eff[k])
+    tot_eff = [eff_bull_sl[k] + eff_bear_sl[k] for k in range(sel_len)]
+    out["P2.09"] = max(range(sel_len), key=lambda k: tot_eff[k])
     out["P2.10"] = _zero_cross(sh2, 0.5)
     _te = eff_bull_sl[-1] + eff_bear_sl[-1]
     out["P2.11"] = (eff_bull_sl[-1] / _te * 100.0) if _te > 0 else 50.0
@@ -112,11 +113,11 @@ def compute_bscope(snaps, rs, i):
     out["P3.01"], out["P3.02"], out["P3.03"] = b3, r3, sp3
     out["P3.04"] = ("buyer" if strong3 else "seller") if strong3 is not None else None
     bmul = rs["bmult"][lo:hi + 1]; smul = rs["smult"][lo:hi + 1]
-    out["P3.05"] = sum(bmul) / SEL
-    out["P3.06"] = sum(smul) / SEL
-    out["P3.07"] = sum(1 for k in range(SEL) if max(bmul[k], smul[k]) >= 1.5)
-    out["P3.08"] = sum(1 for k in range(SEL) if bmul[k] >= 1.5 and smul[k] >= 1.5)
-    out["P3.09"] = max(range(SEL), key=lambda k: max(bmul[k], smul[k]))
+    out["P3.05"] = sum(bmul) / sel_len
+    out["P3.06"] = sum(smul) / sel_len
+    out["P3.07"] = sum(1 for k in range(sel_len) if max(bmul[k], smul[k]) >= 1.5)
+    out["P3.08"] = sum(1 for k in range(sel_len) if bmul[k] >= 1.5 and smul[k] >= 1.5)
+    out["P3.09"] = max(range(sel_len), key=lambda k: max(bmul[k], smul[k]))
     _tb = ber[-1] + ser[-1]
     out["P3.10"] = (ber[-1] / _tb * 100.0) if _tb > 0 else 50.0
 
@@ -152,19 +153,19 @@ def compute_bscope(snaps, rs, i):
     dur = float(sel[-1].get("end_time", 0.0)) - float(sel[0].get("start_time", 0.0))
     hi_p = max(float(b.get("high", 0.0)) for b in sel); lo_p = min(float(b.get("low", 0.0)) for b in sel)
     c0 = float(sel[0].get("open", 0.0)); c1 = float(sel[-1].get("close", 0.0))
-    out["S.01"] = SEL
+    out["S.01"] = sel_len
     out["S.02"] = dur
     out["S.03"] = sumcv
     out["S.04"] = "%.1f | %.1f" % (sumsell, sumbuy)
     out["S.05"] = delta
     out["S.06"] = doi
     out["S.07"] = opL; out["S.08"] = opS; out["S.09"] = clL; out["S.10"] = clS
-    out["S.11"] = sum(bmul) / SEL                    # aggregate B-E/R multiple (mean exhaustion buyer z-mult)
-    out["S.12"] = sum(smul) / SEL
+    out["S.11"] = sum(bmul) / sel_len                    # aggregate B-E/R multiple (mean exhaustion buyer z-mult)
+    out["S.12"] = sum(smul) / sel_len
     vels = [(float(sel[k].get("curr_vol", 0.0)) /
              max(1.0, float(sel[k].get("end_time", 0.0)) - float(sel[k].get("start_time", 0.0))))
-            for k in range(SEL)]
-    out["S.13"] = sum(vels) / SEL
+            for k in range(sel_len)]
+    out["S.13"] = sum(vels) / sel_len
     out["S.14"] = (c1 - c0) / c0 * 100.0 if c0 else None    # net % change over the selection
 
     return {"B-" + k: v for k, v in out.items()}

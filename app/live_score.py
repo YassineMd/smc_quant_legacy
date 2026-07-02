@@ -13,7 +13,6 @@ from app.persistence import bucket_from_snapshot     # noqa: E402
 from app import config                               # noqa: E402
 
 _BUNDLE = None
-FRAME = 16
 
 
 def bundle():
@@ -22,6 +21,11 @@ def bundle():
         with open(os.path.join(_HERE, "score_v1.json"), encoding="utf-8") as f:
             _BUNDLE = json.load(f)
     return _BUNDLE
+
+
+def frame():
+    """Scoring frame length — read from the FROZEN bundle (SEL16=16, SEL7=7, ...)."""
+    return int(bundle().get("frame", 16))
 
 
 def _kinds(b):
@@ -45,11 +49,12 @@ def _fp(t):
 
 def score_bucket(frame_snaps):
     """frame_snaps: chronological BucketSnapshot dicts ending at the target bucket. (pred_long, pred_short)
-    in %, or (None, None) when <16 buckets of lookback exist (line gap — never zero-filled). Memoized: a
-    closed bucket's score is a pure function of its own trailing 16, so it is computed once and reused."""
-    if len(frame_snaps) < FRAME:
+    in %, or (None, None) when fewer than frame() buckets of lookback exist (line gap — never zero-filled).
+    Memoized: a closed bucket's score is a pure function of its own trailing frame, so it computes once."""
+    F = frame()
+    if len(frame_snaps) < F:
         return None, None
-    fr = frame_snaps[-FRAME:]
+    fr = frame_snaps[-F:]
     key = _fp(fr[-1])
     hit = _cache.get(key)
     if hit is not None:
@@ -66,11 +71,12 @@ def score_bucket(frame_snaps):
 
 
 def score_selection(cache, lo, hi):
-    """Per-bucket (pred_long, pred_short) for cache indices [lo, hi] — the two panel lines across the
-    selection. cache = the terminal's filtered BucketSnapshot list (live edge included)."""
+    """Per-bucket (pred_long, pred_short) for cache indices [lo, hi] — the panel line across the selection.
+    cache = the terminal's filtered BucketSnapshot list (live edge included)."""
+    F = frame()
     out = []
     for b in range(lo, hi + 1):
-        out.append(score_bucket(cache[max(0, b - FRAME + 1): b + 1]))
+        out.append(score_bucket(cache[max(0, b - F + 1): b + 1]))
     return out
 
 
