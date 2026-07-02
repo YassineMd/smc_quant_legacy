@@ -1697,6 +1697,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         preds = live_score.score_selection(filtered, lo, hi)
         gaps = [((p[0] - bl_l) - (p[1] - bl_s)) if (p[0] is not None and p[1] is not None) else None for p in preds]
+        # DISPLAY smoothing (config.SCORE_SMOOTH_W, CENTERED rolling mean = zero-phase, NaN-preserving): the
+        # plotted line + badge read the smoothed gap; per-bucket scores, hover, and the forward log stay RAW.
+        # Edges / the live tail average over the available side only (a settling tail, like the lean panels).
+        _W = max(1, int(getattr(config, "SCORE_SMOOTH_W", 1)))
+        if _W > 1 and len(gaps) >= 2:
+            _v = np.array([np.nan if g is None else g for g in gaps], float)
+            _ker = np.ones(_W)
+            _s = np.convolve(np.nan_to_num(_v), _ker, "same")
+            _c = np.convolve(np.isfinite(_v).astype(float), _ker, "same")
+            _sm = np.where(_c > 0, _s / np.maximum(_c, 1.0), np.nan)
+            _sm[~np.isfinite(_v)] = np.nan                     # a gap in the raw line stays a gap
+            gaps = [None if not np.isfinite(g) else float(g) for g in _sm]
         # split into teal(>=0)/magenta(<0) segments, inserting the zero-crossing so the line stays continuous
         xs, up, dn = [], [], []
         prev = prevx = None
@@ -1715,8 +1727,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_score_dn.setData(xs, dn, connect="finite"); self.bc_score_dn.setVisible(True)
         self.bc_score_ref_l.setData([lo - 0.5, hi + 0.5], [mid, mid]); self.bc_score_ref_l.setVisible(True)
         _var = live_score.bundle().get("variant", "W-STAT-SEL16")
-        self.bc_score_title.setText("SCORE %s · L−S edge gap · forward-test · unvalidated (frame picked on"
-                                    " spent data)" % _var)
+        _smtag = (" · sm%d" % _W) if _W > 1 else ""
+        self.bc_score_title.setText("SCORE %s · L−S edge gap%s · forward-test · unvalidated (frame picked on"
+                                    " spent data)" % (_var, _smtag))
         self.bc_score_title.setPos(lo - 0.5, sc_top); self.bc_score_title.setVisible(True)
         # badge: the gap in the DOMINANT side's color (last valid bucket)
         lg = next((g for g in reversed(gaps) if g is not None), None)
