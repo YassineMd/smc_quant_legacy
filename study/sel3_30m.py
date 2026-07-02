@@ -19,12 +19,16 @@ import make_score_bundle as MSB      # noqa: E402
 import features as FT                # noqa: E402
 
 REPO = os.path.dirname(HERE); OUT = os.path.join(REPO, "study", "out")
-TP, SL, H_S = 0.005, 0.003, 1800.0
+TP, SL = 0.005, 0.003
+H_MIN = float(sys.argv[1]) if len(sys.argv) > 1 else 30.0     # horizon in minutes (CLI)
+WIRE = "wire" in sys.argv[2:]                                  # write the panel bundle only when asked
+H_S = H_MIN * 60.0
 K = 3
 
 
 def main():
     t0 = time.time()
+    print("=== SEL3 vs %dmin label%s ===" % (H_MIN, "" if WIRE else " (DRY — panel bundle NOT written)"))
     # ── 30-minute labels from the parity-proven S1 walker ──
     hi, lo_, cl, st, et = SG.load()
     levels = sorted({TP, SL})
@@ -37,7 +41,7 @@ def main():
         o = np.where(tp, "TP", np.where(sl, "SL", "UNRESOLVED"))
         return o
     outL30 = out_arr(tpL, slL); outS30 = out_arr(tpS, slS)
-    print("[%.0fs] 30m labels: long TP/SL/UN = %d/%d/%d  short = %d/%d/%d  (unresolved %.1f%%)"
+    print("[%.0fs] labels: long TP/SL/UN = %d/%d/%d  short = %d/%d/%d  (unresolved %.1f%%)"
           % (time.time() - t0, tpL.sum(), slL.sum(), unL.sum(), tpS.sum(), slS.sum(), unS.sum(),
              100 * (unL.sum() + unS.sum()) / (2 * len(ents))), flush=True)
 
@@ -55,7 +59,7 @@ def main():
              "short": 100.0 * tps["short"][masks["short"].values].mean()}
     both = rL & rS
     null = 100.0 * SL / (TP + SL)
-    print("[%.0fs] 30m discovery baselines (of resolved): L %.2f / S %.2f  (geometric null %.1f)"
+    print("[%.0fs] discovery baselines (of resolved): L %.2f / S %.2f  (geometric null %.1f)"
           % (time.time() - t0, bases["long"], bases["short"], null), flush=True)
 
     # ── k=3 features + re-derived weights vs the 30m label ──
@@ -64,7 +68,7 @@ def main():
     pl = FS.predict(Fk, dk["long"]["binners"], dk["long"]["wstat"], bases["long"])
     ps = FS.predict(Fk, dk["short"]["binners"], dk["short"]["wstat"], bases["short"])
     gap = (pl - bases["long"]) - (ps - bases["short"])
-    print("\n== characterization (30m label; spent data — forward is the judge) ==")
+    print("\n== characterization (%dmin label;" % H_MIN + " spent data — forward is the judge) ==")
     for win in ("disc", "hold"):
         mm = (both & (m["_win"] == win)).values
         sel_tp = np.where(gap[mm] >= 0, tps["long"][mm], tps["short"][mm])
@@ -74,21 +78,21 @@ def main():
               % (win, mm.sum(), stp, aL, aS, stp - max(aL, aS)), flush=True)
 
     # ── weights CSV + bundle ──
-    with open(os.path.join(OUT, "score_weights_k3_30m.csv"), "w", newline="", encoding="utf-8") as f:
-        f.write("# SEL-k=3 re-derivation vs the 30-MINUTE label (barriers 0.5/0.3 unchanged; unresolved "
+    with open(os.path.join(OUT, "score_weights_k3_%dm.csv" % int(H_MIN)), "w", newline="", encoding="utf-8") as f:
+        f.write("# SEL-k=3 re-derivation vs the %d-MINUTE label" % int(H_MIN) + " (barriers 0.5/0.3 unchanged; unresolved "
                 "dropped). Spent-data characterization only; forward data is the judge.\n")
         w = csv.writer(f)
         w.writerow(["variant", "direction", "rank", "feature_code", "weight", "raw_strength"])
         for side in ("long", "short"):
             for rk, (fc, wt) in enumerate(sorted(dk[side]["wstat"].items(), key=lambda kv: -kv[1]), 1):
-                w.writerow(["W-STAT-30M", side, rk, fc, "%.4f" % wt, "%.4f" % dk[side]["rs"][fc]])
+                w.writerow(["W-STAT-%dM" % int(H_MIN), side, rk, fc, "%.4f" % wt, "%.4f" % dk[side]["rs"][fc]])
 
     def e_kind(f):
         if f.startswith(("B-", "C.")) or f == "E52.01" or not f.startswith("E"):
             return "native"
         return FT.classify_transform(MSB.TEXT.get(f, "")) or "raw"
-    bundle = {"variant": "W-STAT-SEL3-RD30", "frozen_date": "2026-07-02", "frame": K,
-              "label": "TP +0.5%% / SL -0.3%%, 30-MINUTE horizon (S2 operator pick; was 6h). UNRESOLVED "
+    bundle = {"variant": "W-STAT-SEL3-RD%dM" % int(H_MIN), "frozen_date": "2026-07-02", "frame": K,
+              "label": "TP +0.5%%%% / SL -0.3%%%%, %d-MINUTE horizon (S2 operator pick; was 6h). UNRESOLVED " % int(H_MIN) +
                        "(~%.0f%% of episodes) dropped — pred reads TP-first GIVEN resolution."
                        % (100 * (unL.sum() + unS.sum()) / (2 * len(ents))),
               "note": "Forward-test display; NOT a validated probability. k=3 + re-derived weights vs the "
@@ -111,8 +115,11 @@ def main():
         bundle["retained_pct"][s] = 100.0
         print("%-5s SEL3-RD30 bundle: %d features, Σw=%.6f" % (s, len(feats),
               sum(x["weight"] for x in feats.values())))
-    json.dump(bundle, open(os.path.join(REPO, "app", "score_v1.json"), "w"), indent=1)
-    print("wrote app/score_v1.json (W-STAT-SEL3-RD30) + study/out/score_weights_k3_30m.csv")
+    if WIRE:
+        json.dump(bundle, open(os.path.join(REPO, "app", "score_v1.json"), "w"), indent=1)
+        print("wrote app/score_v1.json (%s) + study/out/score_weights_k3_%dm.csv" % (bundle["variant"], int(H_MIN)))
+    else:
+        print("[dry] bundle prepared (%s) — run with 'wire' to install on the panel" % bundle["variant"])
 
 
 if __name__ == "__main__":
