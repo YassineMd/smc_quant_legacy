@@ -349,17 +349,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.plot.addItem(self.bc_abs_strip, ignoreBounds=True)
         self.bc_abs_strip.setVisible(False)
         # SCORE v1-SEL (Ctrl+1) — frozen walk-forward score, FORWARD-TEST display (exam verdict FAIL).
-        # Two lines across the selection: pred_long (teal) / pred_short (magenta), + dashed frozen-baseline refs.
-        self._RGB_SCORE_L = (38, 208, 206); self._RGB_SCORE_S = (223, 86, 193)
-        self.bc_score_strip = ExhaustionStripLayer(self.plot, rgb_bull=self._RGB_SCORE_L, rgb_bear=self._RGB_SCORE_S)
-        self.bc_score_strip.setZValue(2); self.plot.addItem(self.bc_score_strip, ignoreBounds=True)
-        self.bc_score_strip.setVisible(False)
-        self.bc_score_ref_l = pg.PlotDataItem(pen=pg.mkPen((160, 160, 160), width=1))   # SOLID zero-edge ref (edge mode)
-        self.bc_score_ref_s = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_S, width=1, style=QtCore.Qt.DashLine))  # unused in edge mode
+        # ONE signed line = the L−S edge gap, colored by side of zero: teal above (long-leaning) / magenta below
+        # (short-leaning); dashed zero ref at the middle.
+        self._RGB_SCORE_L = (38, 208, 206); self._RGB_SCORE_S = (223, 86, 193)   # long teal / short magenta
+        self.bc_score_up = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_L, width=2))   # gap >= 0 segment
+        self.bc_score_dn = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_S, width=2))   # gap <  0 segment
+        self.bc_score_ref_l = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))  # zero ref
         self.bc_score_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
         self.bc_score_title.setZValue(62)
-        for _si in (self.bc_score_ref_l, self.bc_score_ref_s, self.bc_score_title):
-            self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
+        for _si in (self.bc_score_up, self.bc_score_dn, self.bc_score_ref_l, self.bc_score_title):
+            _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
         self._score_last_tc = None      # forward-log close detector (idempotent)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
@@ -1670,9 +1669,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._refresh_selection_stats()
 
     def _clear_score(self) -> None:
-        self.bc_score_strip.setVisible(False)
-        self.bc_score_ref_l.setData([], []); self.bc_score_ref_l.setVisible(False)
-        self.bc_score_ref_s.setData([], []); self.bc_score_ref_s.setVisible(False)
+        for _it in (self.bc_score_up, self.bc_score_dn, self.bc_score_ref_l):
+            _it.setData([], []); _it.setVisible(False)
         self.bc_score_title.setVisible(False)
         for _k in ("SCORE_L", "SCORE_S", "SCORE_GAP"):
             self._spread_badges[_k].hide()
@@ -1683,47 +1681,55 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         bd.setPos(x, y); bd.show()
 
     def _draw_score_panel(self, filtered, lo, hi, sc_bot, sc_top, badge_x) -> None:
-        """SCORE v1-SEL forward-test lines — EDGE mode: each side plots pred_side − frozen_baseline_side around
-        a shared zero ref (strips the memorized discovery baseline asymmetry). Frozen weights/bins/scoring
-        UNTOUCHED; the forward log keeps RAW pred. Reuses app.live_score on a 16-bucket frame. Exam verdict: FAIL."""
+        """SCORE v1-SEL — ONE signed line = the L−S edge gap [(pred_L−base_L) − (pred_S−base_S)] around a zero
+        ref, colored by side of zero (teal above = long-leaning / magenta below = short-leaning). Hover shows
+        raw LONG% / SHORT%; the badge shows the gap in the dominant side's color. Frozen scoring UNTOUCHED;
+        forward log keeps RAW pred. Reuses app.live_score on a 16-bucket frame. Exam verdict: FAIL."""
         import numpy as np
         from app import live_score
         bl_l, bl_s = live_score.baselines()
-        EDGE = 12.0                                               # ± display range in pp; zero at panel mid
+        GAP = 8.0                                                 # ± display range (pp) for the gap; zero at mid
         mid = (sc_top + sc_bot) / 2.0; half = (sc_top - sc_bot) / 2.0
 
-        def _ey(e):
-            if e is None:
-                return np.nan
-            z = e / EDGE; z = -1.0 if z < -1 else (1.0 if z > 1 else z)
+        def _gy(g):
+            z = g / GAP; z = -1.0 if z < -1 else (1.0 if z > 1 else z)
             return mid + z * half
 
         preds = live_score.score_selection(filtered, lo, hi)
-        edges = [((p[0] - bl_l) if p[0] is not None else None,
-                  (p[1] - bl_s) if p[1] is not None else None) for p in preds]
-        xs = list(range(lo, hi + 1))
-        long_y = np.array([_ey(e[0]) for e in edges]); short_y = np.array([_ey(e[1]) for e in edges])
-        self.bc_score_strip.update_data(xs, long_y, short_y, lo - 0.5, hi + 0.5, sc_bot, sc_top, [], None)
-        self.bc_score_strip.setVisible(True)
-        self.bc_score_ref_l.setData([lo - 0.5, hi + 0.5], [mid, mid]); self.bc_score_ref_l.setVisible(True)  # solid zero
-        self.bc_score_ref_s.setVisible(False)
-        self.bc_score_title.setText("SCORE v1-SEL · edge vs own classroom baseline · forward-test (exam: FAIL)")
+        gaps = [((p[0] - bl_l) - (p[1] - bl_s)) if (p[0] is not None and p[1] is not None) else None for p in preds]
+        # split into teal(>=0)/magenta(<0) segments, inserting the zero-crossing so the line stays continuous
+        xs, up, dn = [], [], []
+        prev = prevx = None
+        for k, g in enumerate(gaps):
+            x = lo + k
+            if prev is not None and g is not None and (prev >= 0) != (g >= 0):
+                t = prev / (prev - g) if (prev - g) != 0 else 0.0
+                xs.append(prevx + t); up.append(mid); dn.append(mid)   # zero point in BOTH -> the segments meet
+            y = _gy(g) if g is not None else np.nan
+            xs.append(x)
+            up.append(y if (g is not None and g >= 0) else np.nan)
+            dn.append(y if (g is not None and g < 0) else np.nan)
+            if g is not None:
+                prev, prevx = g, x
+        self.bc_score_up.setData(xs, up, connect="finite"); self.bc_score_up.setVisible(True)
+        self.bc_score_dn.setData(xs, dn, connect="finite"); self.bc_score_dn.setVisible(True)
+        self.bc_score_ref_l.setData([lo - 0.5, hi + 0.5], [mid, mid]); self.bc_score_ref_l.setVisible(True)
+        self.bc_score_title.setText("SCORE v1-SEL · L−S edge gap · forward-test (exam: FAIL)")
         self.bc_score_title.setPos(lo - 0.5, sc_top); self.bc_score_title.setVisible(True)
-        el = next((e[0] for e in reversed(edges) if e[0] is not None), None)
-        es = next((e[1] for e in reversed(edges) if e[1] is not None), None)
-        self._score_badge("SCORE_L", ("L %+.1f pp" % el) if el is not None else "L --",
-                          self._RGB_SCORE_L, badge_x, _ey(el) if el is not None else mid)
-        self._score_badge("SCORE_S", ("S %+.1f pp" % es) if es is not None else "S --",
-                          self._RGB_SCORE_S, badge_x, _ey(es) if es is not None else mid)
-        gap = (el - es) if (el is not None and es is not None) else None
-        self._score_badge("SCORE_GAP", ("GAP %+.1f" % gap) if gap is not None else "GAP --",
-                          (150, 150, 150), badge_x, sc_top)
-        # hover un-hides RAW pred% (label "L"/"S") — the edge is the plotted line, nothing is hidden
+        # badge: the gap in the DOMINANT side's color (last valid bucket)
+        lg = next((g for g in reversed(gaps) if g is not None), None)
+        self._spread_badges["SCORE_L"].hide(); self._spread_badges["SCORE_S"].hide()
+        if lg is None:
+            self._score_badge("SCORE_GAP", "GAP --", (150, 150, 150), badge_x, mid)
+        else:
+            rgb = self._RGB_SCORE_L if lg >= 0 else self._RGB_SCORE_S
+            self._score_badge("SCORE_GAP", "GAP %+.1f pp" % lg, rgb, badge_x, _gy(lg))
+        # hover: raw LONG% / SHORT% only
         self._panel_hovers.append({
-            "label": "SCORE raw pred% (chart=edge)", "lo": lo, "yb": sc_bot, "yt": sc_top,
-            "bull": [(p[0] / 100.0 if p[0] is not None else float("nan")) for p in preds],
-            "bear": [(p[1] / 100.0 if p[1] is not None else float("nan")) for p in preds],
-            "bcol": self._RGB_SCORE_L, "rcol": self._RGB_SCORE_S, "blbl": "L", "rlbl": "S", "fmt": "pct"})
+            "label": "SCORE", "lo": lo, "yb": sc_bot, "yt": sc_top,
+            "bull": [(p[0] / 100.0 if p[0] is not None else np.nan) for p in preds],
+            "bear": [(p[1] / 100.0 if p[1] is not None else np.nan) for p in preds],
+            "bcol": self._RGB_SCORE_L, "rcol": self._RGB_SCORE_S, "blbl": "LONG", "rlbl": "SHORT", "fmt": "pct"})
         tc = (self._last_snap or {}).get("total_closed")          # forward log: RAW pred, once per NEW close, idempotent
         if tc is not None and tc != self._score_last_tc:
             self._score_last_tc = tc
