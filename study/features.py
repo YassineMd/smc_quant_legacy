@@ -420,28 +420,31 @@ def build_kc(snaps):
     return out
 
 
-# ── C.* 15-bucket PRE-ENTRY context (indices [i-15, i-1]) ───────────────────
-def build_context(snaps, rs, i):
+# ── C.* PRE-ENTRY context (indices [i-n_ctx, i-1]) ──────────────────────────
+def build_context(snaps, rs, i, n_ctx=CTX_N):
+    """C.* context over the ``n_ctx`` buckets strictly before entry. Default n_ctx=15 = the registry's
+    literal definition (byte-identical to T1); the weight sweep passes k-1 per frame (labeled C@k there —
+    only k=16 equals the registry). n_ctx<1 (the k=1 bookend) -> all None."""
     C = {("C.%02d" % k): NULL for k in range(1, 13)}
-    if i < CTX_N:
+    if n_ctx < 1 or i < n_ctx:
         return C
-    a, b = i - CTX_N, i                                  # window [i-15 .. i-1]
+    a, b = i - n_ctx, i                                  # window [i-n_ctx .. i-1]
     close = [float(snaps[j].get("close", 0.0)) for j in range(a, b)]
     high = [float(snaps[j].get("high", 0.0)) for j in range(a, b)]
     low = [float(snaps[j].get("low", 0.0)) for j in range(a, b)]
-    rng = [high[k] - low[k] for k in range(CTX_N)]
+    rng = [high[k] - low[k] for k in range(n_ctx)]
     delta = [float(snaps[j].get("buy_vol", 0.0)) - float(snaps[j].get("sell_vol", 0.0)) for j in range(a, b)]
     doi = [(float(snaps[j].get("opL", 0.0)) + float(snaps[j].get("opS", 0.0)))
            - (float(snaps[j].get("clL", 0.0)) + float(snaps[j].get("clS", 0.0))) for j in range(a, b)]
-    rets = [close[k] - close[k - 1] for k in range(1, CTX_N)]
+    rets = [close[k] - close[k - 1] for k in range(1, n_ctx)]
     net = close[-1] - close[0]
     C["C.01"] = 1 if net > 0 else (-1 if net < 0 else 0)
     C["C.02"] = net / close[0] if close[0] else NULL
-    C["C.03"] = slope_lastN(close, CTX_N - 1, CTX_N)      # slope over the 15-window
+    C["C.03"] = slope_lastN(close, n_ctx - 1, n_ctx)      # slope over the window
     # R^2 of close vs time
-    mx = (CTX_N - 1) / 2.0; my = sum(close) / CTX_N
-    sxx = sum((k - mx) ** 2 for k in range(CTX_N)); syy = sum((c - my) ** 2 for c in close)
-    sxy = sum((k - mx) * (close[k] - my) for k in range(CTX_N))
+    mx = (n_ctx - 1) / 2.0; my = sum(close) / n_ctx
+    sxx = sum((k - mx) ** 2 for k in range(n_ctx)); syy = sum((c - my) ** 2 for c in close)
+    sxy = sum((k - mx) * (close[k] - my) for k in range(n_ctx))
     r2 = (sxy * sxy) / (sxx * syy) if sxx and syy else NULL
     C["C.04"] = "trend" if (r2 is not None and r2 >= 0.5) else "chop"
     # drawup / drawdown over window
@@ -451,17 +454,17 @@ def build_context(snaps, rs, i):
         maxup = max(maxup, c - trough); maxdn = min(maxdn, c - peak)
     C["C.05"] = maxup / close[0] if close[0] else NULL      # drawup fraction (drawdown in C.05b via maxdn sign)
     C["C.06"] = _std(rets)                                  # realized vol (stdev of 1-bucket changes)
-    C["C.07"] = sum(1 for k in range(1, CTX_N) if high[k] > high[k - 1]) \
-        - sum(1 for k in range(1, CTX_N) if low[k] < low[k - 1])   # HH minus LL count
+    C["C.07"] = sum(1 for k in range(1, n_ctx) if high[k] > high[k - 1]) \
+        - sum(1 for k in range(1, n_ctx) if low[k] < low[k - 1])   # HH minus LL count
     states = [rs["state"][j] for j in range(a, b) if rs["state"][j] is not None]
     if states:
         C["C.08"] = max(set(states), key=states.count)     # dominant 12-state
     C["C.09"] = sum(delta)
     C["C.10"] = sum(doi)
-    m_rng = sum(rng) / CTX_N
-    C["C.11"] = sum(1 for r in rng if r < m_rng) / CTX_N   # compression share
+    m_rng = sum(rng) / n_ctx
+    C["C.11"] = sum(1 for r in rng if r < m_rng) / n_ctx   # compression share
     sweeps = 0
-    for k in range(1, CTX_N):
+    for k in range(1, n_ctx):
         if high[k] > max(high[:k] or [high[k]]) or low[k] < min(low[:k] or [low[k]]):
             sweeps += 1
     C["C.12"] = sweeps

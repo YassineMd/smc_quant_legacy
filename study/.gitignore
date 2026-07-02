@@ -22,3 +22,5 @@ out/*
 !out/decomposition_direction.csv
 !out/decomposition_movement.csv
 !out/frame_sweep.csv
+!out/score_weights_k*.csv
+!out/weight_sweep_summary.csv
