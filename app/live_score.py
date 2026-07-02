@@ -4,6 +4,7 @@ terminal's cached buckets. Forward-test display only — the walk-forward exam v
 a validated probability.
 """
 import os, sys, csv, json
+from collections import OrderedDict
 
 _HERE = os.path.dirname(os.path.abspath(__file__)); _REPO = os.path.dirname(_HERE)
 sys.path.insert(0, os.path.join(_REPO, "study"))   # accepted: reuse the study feature engine at runtime
@@ -27,15 +28,41 @@ def _kinds(b):
     return {c: b["sides"]["long"]["features"][c]["kind"] for c in b["sides"]["long"]["features"]}
 
 
+_cache = OrderedDict()          # LRU {target fingerprint -> (pred_long, pred_short)}; scores are immutable per
+_CACHE_CAP = 20000             # closed bucket, so this is a pure memoization (identical output, no recompute)
+
+
+def clear_cache():
+    _cache.clear()
+
+
+def _fp(t):
+    """Immutable fingerprint of a CLOSED bucket (the live/forming edge changes end_time+curr_vol every tick,
+    so it naturally misses the cache and re-scores until it closes)."""
+    return (round(float(t.get("end_time", 0.0)), 3), round(float(t.get("curr_vol", 0.0)), 2),
+            round(float(t.get("close", 0.0)), 5))
+
+
 def score_bucket(frame_snaps):
     """frame_snaps: chronological BucketSnapshot dicts ending at the target bucket. (pred_long, pred_short)
-    in %, or (None, None) when <16 buckets of lookback exist (line gap — never zero-filled)."""
+    in %, or (None, None) when <16 buckets of lookback exist (line gap — never zero-filled). Memoized: a
+    closed bucket's score is a pure function of its own trailing 16, so it is computed once and reused."""
     if len(frame_snaps) < FRAME:
         return None, None
-    b = bundle(); fr = frame_snaps[-FRAME:]
+    fr = frame_snaps[-FRAME:]
+    key = _fp(fr[-1])
+    hit = _cache.get(key)
+    if hit is not None:
+        _cache.move_to_end(key)
+        return hit
+    b = bundle()
     bks = [bucket_from_snapshot(d) for d in fr]
     feat = score_core.sel16_features(fr, bks, _kinds(b))     # entry-legal values shared by both sides
-    return score_core.score_side(feat, b["sides"]["long"]), score_core.score_side(feat, b["sides"]["short"])
+    res = (score_core.score_side(feat, b["sides"]["long"]), score_core.score_side(feat, b["sides"]["short"]))
+    _cache[key] = res; _cache.move_to_end(key)
+    if len(_cache) > _CACHE_CAP:
+        _cache.popitem(last=False)
+    return res
 
 
 def score_selection(cache, lo, hi):
