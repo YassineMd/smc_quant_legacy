@@ -62,3 +62,6 @@ out/*
 !out/s5b_episodes.csv
 !out/m10_sweep_1m.parquet
 !out/m10_sweep_1m.csv
+!out/analysis_report_S5c.md
+!out/s5c_episodes_locked.csv
+!out/s5c_episodes_unlocked.csv
