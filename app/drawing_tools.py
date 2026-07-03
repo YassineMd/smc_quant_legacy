@@ -134,7 +134,38 @@ class DrawnShape(pg.GraphicsObject):
         self.prepareGeometryChange(); self.update()
 
     def near(self, x, y, tol_x, tol_y) -> bool:
-        return any(abs(px - x) <= tol_x and abs(py - y) <= tol_y for px, py in self.pts)
+        """True when (x, y) is ON the drawing (anywhere along a line / inside a rect or ellipse),
+        within the viewport-scaled tolerance — not just near the endpoints."""
+        tol_x = max(tol_x, 1e-12); tol_y = max(tol_y, 1e-12)
+        x0, y0 = self.pts[0]
+        if self.kind == "hline":
+            return abs(y - y0) <= tol_y
+        if self.kind == "vline":
+            return abs(x - x0) <= tol_x
+        if len(self.pts) < 2:
+            return abs(x - x0) <= tol_x and abs(y - y0) <= tol_y
+        x1, y1 = self.pts[1]
+        if self.kind == "rect":
+            return (min(x0, x1) - tol_x <= x <= max(x0, x1) + tol_x
+                    and min(y0, y1) - tol_y <= y <= max(y0, y1) + tol_y)
+        if self.kind == "ellipse":
+            cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+            rx = abs(x1 - x0) / 2.0 + tol_x; ry = abs(y1 - y0) / 2.0 + tol_y
+            return ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1.0
+        # trend / measure / ray: distance to the segment in TOLERANCE-normalized space (so the
+        # hit band is tol_x wide horizontally and tol_y vertically regardless of zoom/aspect)
+        ax, ay = (x - x0) / tol_x, (y - y0) / tol_y
+        bx, by = (x1 - x0) / tol_x, (y1 - y0) / tol_y
+        bb = bx * bx + by * by
+        if bb <= 1e-18:
+            return ax * ax + ay * ay <= 1.0
+        t = (ax * bx + ay * by) / bb
+        if self.kind == "ray":
+            t = max(0.0, t)                       # extends indefinitely past the second point
+        else:
+            t = max(0.0, min(1.0, t))
+        dx, dy = ax - t * bx, ay - t * by
+        return dx * dx + dy * dy <= 1.0
 
     def paint(self, p, *a): p.drawPicture(0, 0, self.picture)
     def boundingRect(self): return self._rect
@@ -657,6 +688,7 @@ class DrawingController(QtCore.QObject):
         self._styles: dict = self._load_styles()
         self.edit_panel.changed.connect(self._remember_style)
         self._idx_deleted: set = set()   # ids erased THIS session (merge tombstones, multi-window safe)
+        self._picked = None              # the shape last selected by clicking it (Delete key target)
 
         # §7.1 — press-drag-release: override the ViewBox drag handler while a tool
         # is armed; the captured original still drives native pan/zoom otherwise.
@@ -936,11 +968,30 @@ class DrawingController(QtCore.QObject):
         # scan both coordinate spaces so editing is unified (§6.2)
         for s in reversed(self.shapes + self._idx_shapes):   # topmost first
             if s.near(x, y, tol_x, tol_y):
+                self._picked = s
                 self.edit_panel.bind(s)
                 self.handles.attach(s)        # show draggable edit handles on the picked shape
                 return
+        self._picked = None
         self.edit_panel.hide()   # clicked empty space
         self.handles.clear()
+
+    def delete_selected(self) -> None:
+        """Delete/Backspace: remove the clicked-selected shape (tombstoned + persisted); with no shape
+        picked, an active Magic Selection is cleared instead."""
+        s = self._picked
+        if s is not None:
+            for store in (self.shapes, self._idx_shapes):
+                if s in store:
+                    self.plot.removeItem(s); store.remove(s)
+                    if store is self._idx_shapes and hasattr(s, "uid"):
+                        self._idx_deleted.add(s.uid)
+            self._picked = None
+            self.edit_panel.hide(); self.handles.clear()
+            self._save(); self._schedule_idx_save()
+            return
+        if self._selection is not None:
+            self.clear_selection()
 
     def _erase_at(self, x, y) -> None:
         sr = self.selection_rect()   # eraser inside the Magic Selection box -> remove it

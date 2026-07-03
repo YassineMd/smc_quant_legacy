@@ -747,6 +747,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("0"), self, activated=self._toggle_panel0)    # panel 0: smoothed P9
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+1"), self, activated=self._toggle_score)  # SCORE v1-SEL forward-test
         QtGui.QShortcut(QtGui.QKeySequence("W"), self, activated=self._toggle_whisker)   # volume-quantile whisker bars
+        QtGui.QShortcut(QtGui.QKeySequence("Delete"), self, activated=lambda: self.drawer.delete_selected())
+        QtGui.QShortcut(QtGui.QKeySequence("Backspace"), self, activated=lambda: self.drawer.delete_selected())
         QtGui.QShortcut(QtGui.QKeySequence("T"), self, activated=self._toggle_phase_table)  # phase table (no panel needed)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
