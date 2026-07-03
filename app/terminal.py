@@ -1521,29 +1521,42 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             "bcol": (40, 230, 90), "rcol": (255, 45, 70), "blbl": "BULL", "rlbl": "BEAR", "fmt": "pct"})
 
     def _draw_level_crosses(self, item, vals, ex, yfn, lk) -> None:
-        """Panel-0 'X' markers at the LAST CONFIRMED cross of each reference level, detected on the LOCKED region
-        only (vals[:n-lk]). +50/-50: up-cross GREEN, down-cross RED; the 0 line: WHITE. Confirmed = the line holds
-        the new side >= 2 buckets. Only the most recent cross per level is kept (so the panel never fills up)."""
+        """Panel-0 'X' markers at the LAST CONFIRMED cross of each reference level. LOCKED region
+        (vals[:n-lk]): solid full-size X — these are final and feed the confluence alert. SETTLING region
+        (the last lk buckets): the same detection drawn DIM + smaller — provisional, may still move/vanish
+        as the smoothing tail firms up; NEVER counted by the alert. +50/-50: up-cross GREEN, down-cross
+        RED; the 0 line: WHITE. Confirmed = the line holds the new side >= 2 buckets (or all buckets that
+        exist yet, at the live edge). One most-recent cross per level per region."""
         n = len(vals); end = n - lk                       # locked region = vals[:end]
         if end < 2:
             item.setData(spots=[]); item.setVisible(False); self._alert_p0 = (0, 0); return
         _G, _R, _W = (40, 230, 90), (255, 45, 70), (255, 255, 255)
-        spots = []; _cols = []                            # _cols: kept cross colours for the confluence alert
-        for (L, up_c, dn_c) in ((50.0, _G, _R), (0.0, _W, _W), (-50.0, _G, _R)):
+
+        def _last_cross(lo_k, hi_k, L, up_c, dn_c, confirm_end):
             last = None
-            for k in range(1, end):
+            for k in range(lo_k, hi_k):
                 a = float(vals[k - 1]) - L; b = float(vals[k]) - L
                 if a == 0.0 or b == 0.0 or (a < 0) == (b < 0):
                     continue                              # no sign change across L
                 newpos = b > 0                            # crossed to ABOVE L (upward)
-                if all((float(vals[j]) - L > 0) == newpos for j in range(k, min(end, k + 2))):
+                if all((float(vals[j]) - L > 0) == newpos for j in range(k, min(confirm_end, k + 2))):
                     frac = a / (a - b)                    # interpolate the crossing x
                     last = (ex[k - 1] + frac * (ex[k] - ex[k - 1]), float(yfn(L)), up_c if newpos else dn_c)
+            return last
+
+        spots = []; _cols = []                            # _cols: LOCKED cross colours for the confluence alert
+        for (L, up_c, dn_c) in ((50.0, _G, _R), (0.0, _W, _W), (-50.0, _G, _R)):
+            last = _last_cross(1, end, L, up_c, dn_c, end)
             if last is not None:
                 spots.append({"pos": (last[0], last[1]), "pen": pg.mkPen(last[2], width=1.3),
                               "brush": pg.mkBrush(0, 0, 0, 0), "symbol": "x", "size": 11})
                 _cols.append(last[2])
-        self._alert_p0 = (_cols.count(_G), _cols.count(_R))   # +50/-50 up-cross=green / down-cross=red (0-line white)
+            prov = _last_cross(max(1, end), n, L, up_c, dn_c, n)   # SETTLING tail: dim + smaller
+            if prov is not None:
+                spots.append({"pos": (prov[0], prov[1]),
+                              "pen": pg.mkPen((prov[2][0], prov[2][1], prov[2][2], 110), width=1.1),
+                              "brush": pg.mkBrush(0, 0, 0, 0), "symbol": "x", "size": 8})
+        self._alert_p0 = (_cols.count(_G), _cols.count(_R))   # LOCKED only — the alert never sees settling crosses
         item.setData(spots=spots); item.setVisible(bool(spots))
 
     def _toggle_largesmall(self) -> None:
