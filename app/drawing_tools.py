@@ -952,7 +952,7 @@ class DrawingController(QtCore.QObject):
         if self.index_mode:
             if not hasattr(shape, "uid"):
                 shape.uid = uuid.uuid4().hex     # identity for multi-window merge-by-id saves
-            if self._idx_bks:
+            if self._idx_bks and shape.kind != "hline":      # hlines are PRICE-only (tf-universal)
                 shape.anchors = self._anchor_pts(shape.pts)
             self._idx_shapes.append(shape)       # Mode 10 index space (Idx-anchored, persisted)
             self._schedule_idx_save()
@@ -1141,6 +1141,8 @@ class DrawingController(QtCore.QObject):
         if self._idx_off is not None and offset != self._idx_off:
             d = self._idx_off - offset                      # array coords slide by (old − new)
             for s in list(self._idx_shapes):
+                if s.kind == "hline":
+                    continue                                  # price-only: x is meaningless, never moves
                 anch = getattr(s, "anchors", None)
                 if anch and self._idx_bks:
                     js = [self._find_ts(ts) for ts, _f in anch]
@@ -1193,7 +1195,10 @@ class DrawingController(QtCore.QObject):
         sel_restored = False
         for d in todo:
             anch = d.get("anch")
-            if anch and self._idx_bks:                       # TIME anchor: exact as soon as the bucket loads
+            if d.get("kind") == "hline":                     # tf-universal price level: always renderable
+                axs = [0.0]
+                anch = None
+            elif anch and self._idx_bks:                     # TIME anchor: exact as soon as the bucket loads
                 js = [self._find_ts(ts) for ts, _f in anch]
                 if any(j is None for j in js):
                     keep.append(d); continue
@@ -1246,7 +1251,10 @@ class DrawingController(QtCore.QObject):
         if self._idx_ctx is None or self._idx_off is None:
             return
         off = self._idx_off
-        mine_shapes = [self._shape_dict_global(s, off) for s in self._idx_shapes]
+        mine_shapes = [self._shape_dict_global(s, off) for s in self._idx_shapes
+                       if s.kind != "hline"]
+        mine_hl = [self._shape_dict_global(s, 0.0) for s in self._idx_shapes
+                   if s.kind == "hline"]                     # x meaningless -> stored as-is
         mine_brs = []
         for b in self._idx_brackets:
             bd = b.to_dict()
@@ -1255,6 +1263,7 @@ class DrawingController(QtCore.QObject):
             mine_brs.append(dict(bd, id=getattr(b, "uid", None) or uuid.uuid4().hex,
                                  anch=anch, **{"x0": bd["x0"] + off, "x1": bd["x1"] + off}))
         mine_ids = ({d["id"] for d in mine_shapes} | {d["id"] for d in mine_brs}
+                    | {d["id"] for d in mine_hl}
                     | {d.get("id") for d in self._idx_pending if d.get("id")})
         # MERGE with disk (multi-window): keep other windows' items (ids we neither own nor deleted)
         disk = {}
@@ -1277,6 +1286,15 @@ class DrawingController(QtCore.QObject):
                              and self._idx_bks) else None),
             "pending": self._idx_pending + _foreign(disk.get("pending", [])),
         }
+        # GLOBAL horizontal price levels (tf-universal), merged by id like everything else
+        hdisk = {}
+        if os.path.exists(_DRAW_FILE):
+            try:
+                with open(_DRAW_FILE) as f:
+                    hdisk = (json.load(f).get("idx") or {}).get(config.SYMBOL + "|hlines", {})
+            except (OSError, json.JSONDecodeError):
+                hdisk = {}
+        hentry = {"shapes": mine_hl + _foreign(hdisk.get("shapes", []))}
         try:
             config.ensure_data_dir()
             data = {}
@@ -1287,6 +1305,7 @@ class DrawingController(QtCore.QObject):
                 except (OSError, json.JSONDecodeError):
                     data = {}
             data.setdefault("idx", {})["|".join(self._idx_ctx)] = entry
+            data["idx"][config.SYMBOL + "|hlines"] = hentry
             with open(_DRAW_FILE, "w") as f:
                 json.dump(data, f)
         except OSError:
@@ -1300,8 +1319,10 @@ class DrawingController(QtCore.QObject):
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
             return []
-        e = (data.get("idx") or {}).get("|".join(self._idx_ctx), {})
+        idxd = data.get("idx") or {}
+        e = idxd.get("|".join(self._idx_ctx), {})
         out = [dict(d, t="shape") for d in e.get("shapes", [])]
+        out += [dict(d, t="shape") for d in idxd.get(config.SYMBOL + "|hlines", {}).get("shapes", [])]
         out += [dict(d, t="bracket") for d in e.get("brackets", [])]
         if e.get("selection"):
             out.append({"t": "selection", "pts": e["selection"], "anch": e.get("sel_anch")})
