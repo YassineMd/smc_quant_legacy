@@ -1524,13 +1524,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Panel-0 'X' markers at the LAST CONFIRMED cross of each reference level. LOCKED region
         (vals[:n-lk]): solid full-size X — these are final and feed the confluence alert. SETTLING region
         (the last lk buckets): the same detection drawn as a SMALL FILLED DOT (full opacity) — provisional,
-        may still move/vanish as the smoothing tail firms up; NEVER counted by the alert. +50/-50: up-cross GREEN, down-cross
-        RED; the 0 line: WHITE. Confirmed = the line holds the new side >= 2 buckets (or all buckets that
+        may still move/vanish as the smoothing tail firms up; NEVER counted by the alert. ALL levels (incl. the 0 line): up-cross GREEN,
+        down-cross RED. Confirmed = the line holds the new side >= 2 buckets (or all buckets that
         exist yet, at the live edge). One most-recent cross per level per region."""
         n = len(vals); end = n - lk                       # locked region = vals[:end]
         if end < 2:
             item.setData(spots=[]); item.setVisible(False); self._alert_p0 = (0, 0); return
-        _G, _R, _W = (40, 230, 90), (255, 45, 70), (255, 255, 255)
+        _G, _R = (40, 230, 90), (255, 45, 70)          # 0-line now green/red too (no more white)
 
         def _last_cross(lo_k, hi_k, L, up_c, dn_c, confirm_end):
             last = None
@@ -1544,13 +1544,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     last = (ex[k - 1] + frac * (ex[k] - ex[k - 1]), float(yfn(L)), up_c if newpos else dn_c)
             return last
 
-        spots = []; _cols = []                            # _cols: LOCKED cross colours for the confluence alert
-        for (L, up_c, dn_c) in ((50.0, _G, _R), (0.0, _W, _W), (-50.0, _G, _R)):
+        spots = []; _cols = []                            # _cols: LOCKED ±50 cross colours (alert semantics
+        for (L, up_c, dn_c) in ((50.0, _G, _R), (0.0, _G, _R), (-50.0, _G, _R)):   # unchanged: 0-line excluded)
             last = _last_cross(1, end, L, up_c, dn_c, end)
             if last is not None:
                 spots.append({"pos": (last[0], last[1]), "pen": pg.mkPen(last[2], width=1.3),
                               "brush": pg.mkBrush(0, 0, 0, 0), "symbol": "x", "size": 11})
-                _cols.append(last[2])
+                if L != 0.0:                              # the alert keeps counting ±50 only, as always
+                    _cols.append(last[2])
             prov = _last_cross(max(1, end), n, L, up_c, dn_c, n)   # SETTLING tail: small filled DOT
             if prov is not None:
                 spots.append({"pos": (prov[0], prov[1]),
