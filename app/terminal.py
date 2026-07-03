@@ -1523,8 +1523,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _draw_level_crosses(self, item, vals, ex, yfn, lk) -> None:
         """Panel-0 'X' markers at the LAST CONFIRMED cross of each reference level. LOCKED region
         (vals[:n-lk]): solid full-size X — these are final and feed the confluence alert. SETTLING region
-        (the last lk buckets): the same detection drawn DIM + smaller — provisional, may still move/vanish
-        as the smoothing tail firms up; NEVER counted by the alert. +50/-50: up-cross GREEN, down-cross
+        (the last lk buckets): the same detection drawn as a SMALL FILLED DOT (full opacity) — provisional,
+        may still move/vanish as the smoothing tail firms up; NEVER counted by the alert. +50/-50: up-cross GREEN, down-cross
         RED; the 0 line: WHITE. Confirmed = the line holds the new side >= 2 buckets (or all buckets that
         exist yet, at the live edge). One most-recent cross per level per region."""
         n = len(vals); end = n - lk                       # locked region = vals[:end]
@@ -1551,11 +1551,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 spots.append({"pos": (last[0], last[1]), "pen": pg.mkPen(last[2], width=1.3),
                               "brush": pg.mkBrush(0, 0, 0, 0), "symbol": "x", "size": 11})
                 _cols.append(last[2])
-            prov = _last_cross(max(1, end), n, L, up_c, dn_c, n)   # SETTLING tail: dim + smaller
+            prov = _last_cross(max(1, end), n, L, up_c, dn_c, n)   # SETTLING tail: small filled DOT
             if prov is not None:
                 spots.append({"pos": (prov[0], prov[1]),
-                              "pen": pg.mkPen((prov[2][0], prov[2][1], prov[2][2], 110), width=1.1),
-                              "brush": pg.mkBrush(0, 0, 0, 0), "symbol": "x", "size": 8})
+                              "pen": pg.mkPen(prov[2], width=1.0),
+                              "brush": pg.mkBrush(*prov[2]), "symbol": "o", "size": 6})
         self._alert_p0 = (_cols.count(_G), _cols.count(_R))   # LOCKED only — the alert never sees settling crosses
         item.setData(spots=spots); item.setVisible(bool(spots))
 
