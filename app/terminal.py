@@ -3414,7 +3414,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # trims / anchor moves / restarts (drawer no-ops outside index mode). AFTER the cache commit, so a
         # re-entrant _build_scanner_buckets (selectionChanged -> stats refresh) hits the cache, not a rebuild.
         if getattr(self, "drawer", None) is not None:
-            self.drawer.set_idx_frame(self._global_idx_offset, len(filtered), self.worker.tf)
+            self.drawer.set_idx_frame(self._global_idx_offset, len(filtered), self.worker.tf, filtered)
         return result
 
     # ------------------------------------------------------------------

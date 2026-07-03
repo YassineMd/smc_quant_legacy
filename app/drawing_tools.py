@@ -691,6 +691,7 @@ class DrawingController(QtCore.QObject):
         self._picked = None              # the shape last selected by clicking it (Delete key target)
         self._idx_busy = False           # re-entrancy guard: selectionChanged -> terminal refresh -> build
                                          # -> set_idx_frame would otherwise RECURSE during restore/shift
+        self._idx_bks = None             # reference to the terminal's current filtered bucket list
 
         # §7.1 — press-drag-release: override the ViewBox drag handler while a tool
         # is armed; the captured original still drives native pan/zoom otherwise.
@@ -951,6 +952,8 @@ class DrawingController(QtCore.QObject):
         if self.index_mode:
             if not hasattr(shape, "uid"):
                 shape.uid = uuid.uuid4().hex     # identity for multi-window merge-by-id saves
+            if self._idx_bks:
+                shape.anchors = self._anchor_pts(shape.pts)
             self._idx_shapes.append(shape)       # Mode 10 index space (Idx-anchored, persisted)
             self._schedule_idx_save()
         else:
@@ -1075,7 +1078,36 @@ class DrawingController(QtCore.QObject):
         if self.index_mode and self._idx_ctx is not None:
             self._idx_save.start()
 
-    def set_idx_frame(self, offset: float, n: int, tf: str) -> None:
+    def _find_ts(self, ts: float):
+        """Binary-search the current bucket frame for end_time == ts -> array index, or None if that
+        bucket hasn't streamed in yet / fell off retention. end_time is unique & strictly increasing."""
+        bks = self._idx_bks
+        if not bks or ts is None:
+            return None
+        lo, hi = 0, len(bks) - 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            v = float(bks[mid].get("end_time", 0.0))
+            if abs(v - ts) < 1e-6:
+                return mid
+            if v < ts:
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return None
+
+    def _anchor_pts(self, pts):
+        """[(ts, frac), ...] time-anchors for array-coord points (ts = the bucket's end_time)."""
+        bks = self._idx_bks
+        if not bks:
+            return None
+        out = []
+        for px, _py in pts:
+            j = max(0, min(len(bks) - 1, int(round(px))))
+            out.append([float(bks[j].get("end_time", 0.0)), px - j])
+        return out
+
+    def set_idx_frame(self, offset: float, n: int, tf: str, bks=None) -> None:
         """Per-draw hook from the terminal (Mode 10): keeps idx drawings glued to their BUCKETS —
         when the cap/anchor shifts the array under them the rendered items shift by the offset delta
         (so a selection stays on the same candles instead of silently sliding) — and renders any
@@ -1085,6 +1117,7 @@ class DrawingController(QtCore.QObject):
             return
         self._idx_busy = True
         try:
+            self._idx_bks = bks
             self._set_idx_frame_inner(offset, n, tf)
         finally:
             self._idx_busy = False
@@ -1107,19 +1140,48 @@ class DrawingController(QtCore.QObject):
             self._idx_deleted = set()
         if self._idx_off is not None and offset != self._idx_off:
             d = self._idx_off - offset                      # array coords slide by (old − new)
-            for s in self._idx_shapes:
-                s.pts = [[px + d, py] for px, py in s.pts]
+            for s in list(self._idx_shapes):
+                anch = getattr(s, "anchors", None)
+                if anch and self._idx_bks:
+                    js = [self._find_ts(ts) for ts, _f in anch]
+                    if any(j is None for j in js):          # its bucket left the window -> back to hidden
+                        self.plot.removeItem(s); self._idx_shapes.remove(s)
+                        self._idx_pending.append(self._shape_dict_global(s, offset))
+                        continue
+                    s.pts = [[j + f, py] for (j, (_t, f), (_px, py)) in zip(js, anch, s.pts)]
+                else:
+                    s.pts = [[px + d, py] for px, py in s.pts]
                 s.rebuild()
             if self._selection is not None and len(self._selection.pts) == 2:
-                self._selection.pts = [[px + d, py] for px, py in self._selection.pts]
+                anch = getattr(self._selection, "anchors", None)
+                if anch and self._idx_bks:
+                    js = [self._find_ts(ts) for ts, _f in anch]
+                    if all(j is not None for j in js):
+                        self._selection.pts = [[j + f, py] for (j, (_t, f), (_px, py))
+                                               in zip(js, anch, self._selection.pts)]
+                    else:
+                        self._selection.pts = [[px + d, py] for px, py in self._selection.pts]
+                else:
+                    self._selection.pts = [[px + d, py] for px, py in self._selection.pts]
                 self._selection.rebuild()
                 self.sel_handles.attach(self._selection, corners_only=True)
                 QtCore.QTimer.singleShot(0, self.selectionChanged.emit)   # DEFERRED: after this draw pass
             for br in list(self._idx_brackets):
                 dd = br.to_dict()
+                anch = getattr(br, "anchors", None)
                 self._idx_brackets.remove(br); br.remove()
-                self._make_bracket(dd["kind"], [dd["x0"] + d, dd["entry"]], [dd["x1"] + d, dd["stop"]],
-                                   entry=dd["entry"], stop=dd["stop"], target=dd["target"])
+                if anch and self._idx_bks:
+                    j0 = self._find_ts(anch[0][0]); j1 = self._find_ts(anch[1][0])
+                else:
+                    j0 = j1 = None
+                if j0 is not None and j1 is not None:
+                    nx0, nx1 = j0 + anch[0][1], j1 + anch[1][1]
+                else:
+                    nx0, nx1 = dd["x0"] + d, dd["x1"] + d
+                nb = self._make_bracket(dd["kind"], [nx0, dd["entry"]], [nx1, dd["stop"]],
+                                        entry=dd["entry"], stop=dd["stop"], target=dd["target"])
+                if anch:
+                    nb.anchors = anch
         self._idx_off = offset; self._idx_n = int(n)
         self._render_idx_pending()
 
@@ -1130,29 +1192,41 @@ class DrawingController(QtCore.QObject):
         todo, self._idx_pending = self._idx_pending, []      # swap first: re-entrant calls see empty
         sel_restored = False
         for d in todo:
-            if d["t"] == "bracket":
+            anch = d.get("anch")
+            if anch and self._idx_bks:                       # TIME anchor: exact as soon as the bucket loads
+                js = [self._find_ts(ts) for ts, _f in anch]
+                if any(j is None for j in js):
+                    keep.append(d); continue
+                axs = [j + f for j, (_t, f) in zip(js, anch)]
+            elif d["t"] == "bracket":
                 axs = [d["x0"] - off, d["x1"] - off]
             else:
                 axs = [p[0] - off for p in d["pts"]]
             if all(-0.5 <= x <= self._idx_n - 0.5 for x in axs):    # bucket Idx visible -> render
+                ys = ([d["entry"], d["stop"]] if d["t"] == "bracket" else [p[1] for p in d["pts"]])
                 if d["t"] == "shape":
-                    s = DrawnShape(d["kind"], [[p[0] - off, p[1]] for p in d["pts"]],
+                    s = DrawnShape(d["kind"], [[ax, py] for ax, py in zip(axs, ys)],
                                    d.get("color", "#ffffff"), d.get("width", 2),
                                    d.get("fill_color", "#3498db"), d.get("fill_opacity", 0.0))
                     s.uid = d.get("id") or uuid.uuid4().hex
+                    if anch:
+                        s.anchors = anch
                     self.plot.addItem(s); self._idx_shapes.append(s)
                 elif d["t"] == "bracket":
-                    _nb = self._make_bracket(d["kind"], [d["x0"] - off, d["entry"]],
-                                             [d["x1"] - off, d["stop"]],
+                    _nb = self._make_bracket(d["kind"], [axs[0], d["entry"]], [axs[1], d["stop"]],
                                              entry=d["entry"], stop=d["stop"], target=d["target"])
                     _nb.uid = d.get("id") or _nb.uid
+                    if anch:
+                        _nb.anchors = anch
                 else:                                       # the Magic Selection
                     a, b = d["pts"]
                     blocker = QtCore.QSignalBlocker(self)   # no synchronous re-entrancy mid-restore
                     try:
-                        self._set_selection([a[0] - off, a[1]], [b[0] - off, b[1]])
+                        self._set_selection([axs[0], a[1]], [axs[1], b[1]])
                     finally:
                         del blocker
+                    if self._selection is not None and anch:
+                        self._selection.anchors = anch
                     sel_restored = True
             else:
                 keep.append(d)                              # hidden until its bucket Idx shows
@@ -1160,15 +1234,23 @@ class DrawingController(QtCore.QObject):
         if sel_restored:
             QtCore.QTimer.singleShot(0, self.selectionChanged.emit)   # panels anchor AFTER the draw pass
 
+    def _shape_dict_global(self, s, off) -> dict:
+        return dict(s.to_dict(), t="shape", id=getattr(s, "uid", None) or uuid.uuid4().hex,
+                    anch=(self._anchor_pts(s.pts) if self._idx_bks else getattr(s, "anchors", None)),
+                    pts=[[p[0] + off, p[1]] for p in s.pts])
+
     def _save_idx(self) -> None:
         if self._idx_ctx is None or self._idx_off is None:
             return
         off = self._idx_off
-        mine_shapes = [dict(s.to_dict(), id=getattr(s, "uid", None) or uuid.uuid4().hex,
-                            pts=[[p[0] + off, p[1]] for p in s.pts]) for s in self._idx_shapes]
-        mine_brs = [dict(b.to_dict(), id=getattr(b, "uid", None) or uuid.uuid4().hex,
-                         **{"x0": b.to_dict()["x0"] + off, "x1": b.to_dict()["x1"] + off})
-                    for b in self._idx_brackets]
+        mine_shapes = [self._shape_dict_global(s, off) for s in self._idx_shapes]
+        mine_brs = []
+        for b in self._idx_brackets:
+            bd = b.to_dict()
+            anch = (self._anchor_pts([[bd["x0"], 0], [bd["x1"], 0]])
+                    if self._idx_bks else getattr(b, "anchors", None))
+            mine_brs.append(dict(bd, id=getattr(b, "uid", None) or uuid.uuid4().hex,
+                                 anch=anch, **{"x0": bd["x0"] + off, "x1": bd["x1"] + off}))
         mine_ids = ({d["id"] for d in mine_shapes} | {d["id"] for d in mine_brs}
                     | {d.get("id") for d in self._idx_pending if d.get("id")})
         # MERGE with disk (multi-window): keep other windows' items (ids we neither own nor deleted)
@@ -1187,6 +1269,9 @@ class DrawingController(QtCore.QObject):
             "brackets": mine_brs + _foreign(disk.get("brackets", [])),
             "selection": ([[p[0] + off, p[1]] for p in self._selection.pts]
                           if (self._selection is not None and len(self._selection.pts) == 2) else None),
+            "sel_anch": (self._anchor_pts(self._selection.pts)
+                         if (self._selection is not None and len(self._selection.pts) == 2
+                             and self._idx_bks) else None),
             "pending": self._idx_pending + _foreign(disk.get("pending", [])),
         }
         try:
@@ -1216,7 +1301,7 @@ class DrawingController(QtCore.QObject):
         out = [dict(d, t="shape") for d in e.get("shapes", [])]
         out += [dict(d, t="bracket") for d in e.get("brackets", [])]
         if e.get("selection"):
-            out.append({"t": "selection", "pts": e["selection"]})
+            out.append({"t": "selection", "pts": e["selection"], "anch": e.get("sel_anch")})
         out += e.get("pending", [])
         return out
 
