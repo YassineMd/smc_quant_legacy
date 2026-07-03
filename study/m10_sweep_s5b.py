@@ -17,8 +17,11 @@ PART 1 — sweep table (m10_sweep_1m.parquet + .csv), one row per bar b (idx >= 
    last / 2nd-last marker columns (level, direction, bars-ago; bars-ago fractional — the marker's
    interpolated x, exactly what the panel draws).
  * LEG columns both sides: leg1' = two most recent confirmed markers both bullish (long) / both
-   bearish (short), any level, >= 2 markers required. leg2 = eff-agg share at the locked index
-   >= 65% (S3 A3 verbatim). leg3 = phase dominant == START/DURING. leg4 = P6 spread >= 15pp.
+   bearish (short), any level, >= 2 markers required. leg2 = the LOCKED eff-agg badge SPREAD
+   |bull-bear|*100 >= 65 with the side dominant (share >= 82.5%) — the terminal's own
+   _set_spread_badge/_confluence_state rule (S5b-r redo: the first run mistranslated this as
+   share >= 65%). leg3 = phase dominant == START/DURING. leg4 = P6 spread >= 15pp (already the
+   locked badge form: up-dominant AND |up-dn| >= 15 == signed spread >= +15 at the locked row).
    fire_long / fire_short = AND of four.
  * OUTCOME columns (instrumentation, overlapping): fwd-30min MFE% / MAE% / end% from bar close.
  * P8 EXCLUDED: size_thr was never persisted to history -> P8 cannot be replayed offline.
@@ -177,12 +180,17 @@ def main():
                 row[tag + "_ago"] = round(15.0 - x, 3)
             else:
                 row[tag + "_level"] = np.nan; row[tag + "_dir"] = ""; row[tag + "_ago"] = np.nan
-        # legs (leg2 = S3 A3 verbatim; leg3/leg4 = S3 A4/A5 verbatim)
+        # legs (leg2 = the terminal badge/alert rule: LOCKED SPREAD, _set_spread_badge/_confluence_state;
+        # leg3/leg4 = S3 A4/A5 verbatim). S5b-r REDO 2026-07-03: the first run mistranslated leg 2 as
+        # share >= 65% — the operator's rule reads the LOCKED badge spread |bull-bear|*100 >= 65
+        # (dominant share >= 82.5%), exactly what the confluence alert checks.
         two = len(mk) >= 2
         row["leg1_long"] = bool(two and mk[0][2] > 0 and mk[1][2] > 0)
         row["leg1_short"] = bool(two and mk[0][2] < 0 and mk[1][2] < 0)
         sh = e_sh[max(0, b - LOCK)]
-        row["leg2_long"] = bool(sh * 100 >= 65.0); row["leg2_short"] = bool((1 - sh) * 100 >= 65.0)
+        spr2 = (2.0 * sh - 1.0) * 100.0                 # locked badge spread, signed toward bull
+        row["p2_lock_spread"] = round(spr2, 3)
+        row["leg2_long"] = bool(spr2 >= 65.0); row["leg2_short"] = bool(-spr2 >= 65.0)
         row["leg3_long"] = bool(int(np.argmax(upv)) == 1); row["leg3_short"] = bool(int(np.argmax(dnv)) == 1)
         sd_up, sd_dn = upv[1], dnv[1]
         row["leg4_long"] = bool((sd_up - sd_dn) >= 15.0); row["leg4_short"] = bool((sd_dn - sd_up) >= 15.0)
@@ -209,9 +217,10 @@ def main():
     g = ga.iloc[0]
     print("\nSTEP 0 — ANCHOR PARITY (bid %d, %s UTC):" % (
         ANCHOR_BID, time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(g["ts"]))))
-    print("  eff-agg badge (leg2 path) %.1f%%  | B-scope P2.01 %.1f%%  [screenshot: 81%%]"
-          % (e_sh[max(0, int(np.where(bid_arr == ANCHOR_BID)[0][0]) - LOCK)] * 100, g["P2.01"]))
-    print("  absorption badge P1.01 %.1f%%  [screenshot second badge: 26%%]" % g["P1.01"])
+    print("  eff-agg LOCKED badge spread %+.1f (share %.1f%%)  [screenshot badge: 81%% = spread]"
+          % (g["p2_lock_spread"], g["P2.01"]))
+    print("  P1 absorption spread %.1f | P3 E/R spread %.1f  [screenshot 2nd badge: 26%%]"
+          % (g["P1.03"], g["P3.03"]))
     print("  P0 smoothed sum @lock %+.1f  [screenshot: +55.6%%]" % g["p0_sum"])
     print("  phase UP [BEFORE/STARTDUR/END] = [%.0f, %.0f, %.0f]  [screenshot: 13/52/35]"
           % (g["p5_up"], g["p6_up"], g["p7_up"]))
@@ -351,13 +360,16 @@ def main():
         lines.append("")
         return lines
 
-    md = ["# S5b — Corrected Confluence Study + M10 Sweep (1m, merged span)", "",
+    md = ["# S5b-r — Corrected Confluence Study + M10 Sweep (1m, merged span)", "",
           "_**Pre-registered CORRECTION of S5's leg 1 (mistranslation from the operator's screenshot,"
-          " bucket idx 20977) — not a tweak: multiplicity +2 (long, short) -> program counter 454.**"
-          " Legs 2-4 unchanged (65% share / START-DURING dominant / +15pp spread, frozen). The sweep"
-          " table is INSTRUMENTATION — any rule found by browsing it must be pre-registered and"
-          " judged on forward tape before it counts. Excursions are an information measure — no fees,"
-          " no execution model. P8 is EXCLUDED from the sweep (size_thr never persisted)._", "",
+          " bucket idx 20977), RE-JUDGED once more (S5b-r) after an operator-mandated leg-2 fix: the"
+          " rule reads the LOCKED eff-agg badge SPREAD |bull-bear| >= 65 points (dominant share >="
+          " 82.5%) exactly as the terminal's confluence alert does — the first S5b run mistranslated"
+          " it as share >= 65%. Multiplicity: +2 (S5b) +2 (this re-judgment) -> program counter"
+          " 456.** Legs 3-4 unchanged (START-DURING dominant / +15pp locked spread, frozen). The"
+          " sweep table is INSTRUMENTATION — any rule found by browsing it must be pre-registered"
+          " and judged on forward tape before it counts. Excursions are an information measure — no"
+          " fees, no execution model. P8 is EXCLUDED from the sweep (size_thr never persisted)._", "",
           "## Data",
           "Merged %d bars (frozen %s + fresh pull %s, dedup by bucket_id removed %d overlap rows), "
           "continuous bids %d..%d, span %s -> %s UTC (%.2f days), gaps: %s. Evaluable rows %d "
@@ -369,8 +381,9 @@ def main():
           "Anchor = bucket idx %d, end 2026-07-03 03:20:49 UTC (= 04:20:49 operator local, UTC+1); "
           "identity verified by idx + exact OHLC match (O 80.79 H 80.80 L 80.77 C 80.79)." % ANCHOR_BID, "",
           "| quantity | computed | screenshot |", "|---|---|---|",
-          "| eff-agg badge (leg2 path) | %.1f%% | 81%% |" % (g["P2.01"]),
-          "| absorption badge P1.01 | %.1f%% | 26%% (2nd badge) |" % g["P1.01"],
+          "| eff-agg LOCKED badge spread | %+.1f (share %.1f%%) | 81%% (the badge IS the spread) |"
+          % (g["p2_lock_spread"], g["P2.01"]),
+          "| P1 abs spread / P3 E/R spread | %.1f / %.1f | 26%% (2nd badge) |" % (g["P1.03"], g["P3.03"]),
           "| P0 smoothed sum @lock | %+.1f | +55.6 |" % g["p0_sum"],
           "| phase UP row | %.0f / %.0f / %.0f | 13 / 52 / 35 |" % (g["p5_up"], g["p6_up"], g["p7_up"]),
           "| confirmed markers | %s@%s, %s@%s | -50/0/+50 all green |"
@@ -385,8 +398,8 @@ def main():
           "made the leg nearly unfireable.", "",
           "## Leg attrition (all %d evaluable bars)" % ev, "",
           "| side | leg | standalone | cumulative (1..k) |", "|---|---|---|---|"]
-    leg_names = ("1' two most-recent markers on-side", "2 eff-agg >= 65%",
-                 "3 phase dominant START/DURING", "4 P6 spread >= 15pp")
+    leg_names = ("1' two most-recent markers on-side", "2 eff-agg LOCKED spread >= 65 (share >= 82.5%)",
+                 "3 phase dominant START/DURING", "4 P6 locked spread >= 15pp")
     for side in ("long", "short"):
         for k in range(4):
             md.append("| %s | %s | %d (%.2f%%) | %d (%.3f%%) |" % (
