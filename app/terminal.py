@@ -4960,7 +4960,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _wb = self._scan_handles["bc_whisker"]
         _wq_lo, _wq_med, _wq_hi = arr["vq_lo"], arr["vq_med"], arr["vq_hi"]
         if self.show_whisker and (px_per_x * 0.8) >= 3.0:
-            _wb.update_data(x, _wq_lo, _wq_med, _wq_hi, highs, lows, opens, closes, 0.8, vx0, vx1)
+            _wb.update_data(x, _wq_lo, _wq_med, _wq_hi, highs, lows, opens, closes,
+                            brushes, wick_pens, 0.8, vx0, vx1)
             _wb.setVisible(True)
             _fi = [i for i in range(len(x)) if _wq_med[i] != _wq_med[i]]   # NaN ladder -> candle fallback
             self._scan_handles["bc_candles"].update_data(

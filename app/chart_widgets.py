@@ -744,29 +744,26 @@ class WhiskerBarItem(pg.GraphicsObject):
     no per-bar QGraphicsItems). Encoding per bar: box = the ladder's volume acceptance zone
     [C>=25%V, C>=75%V] with the volume-weighted median line inside; thin whiskers to high/low
     (rejection tails); OHLC-style OPEN tick on the left edge / CLOSE tick on the right (~40% width);
-    fill bull/bear by close>=open at slightly-under-body alpha so the median/notches read."""
-
-    _A_BOX = 190          # box fill alpha (candle bodies are opaque -> "slightly under")
+    box fill = the SAME per-candle dominance brush and border/whiskers/notches = the SAME flow-colored
+    wick pens the normal candle chart uses (visual language identical across render modes)."""
 
     def __init__(self):
         super().__init__()
         self.picture = QtGui.QPicture()
         self._rect = QtCore.QRectF()
-        self._wpen = QtGui.QPen(QtGui.QColor("#888888")); self._wpen.setCosmetic(True)   # whisker/border
+        self._wpen = QtGui.QPen(QtGui.QColor("#888888")); self._wpen.setCosmetic(True)   # fallback pen
         self._mpen = QtGui.QPen(QtGui.QColor("#ffffff")); self._mpen.setCosmetic(True); self._mpen.setWidth(2)
-        self._bull = QtGui.QColor(*config.RGB_GREEN_STD); self._bull.setAlpha(self._A_BOX)
-        self._bear = QtGui.QColor(*config.RGB_RED_STD); self._bear.setAlpha(self._A_BOX)
-        self._tpen_b = QtGui.QPen(QtGui.QColor(*config.RGB_GREEN_STD)); self._tpen_b.setCosmetic(True); self._tpen_b.setWidth(2)
-        self._tpen_r = QtGui.QPen(QtGui.QColor(*config.RGB_RED_STD)); self._tpen_r.setCosmetic(True); self._tpen_r.setWidth(2)
         self._x = []; self._qlo = []; self._qmed = []; self._qhi = []
         self._h = []; self._l = []; self._o = []; self._c = []
+        self._brushes = []; self._pens = []
         self._width = 0.8
         self._vx0, self._vx1 = float("-inf"), float("inf")
 
     def update_data(self, x, qlo, qmed, qhi, highs, lows, opens, closes,
-                    width=0.8, x0=None, x1=None):
+                    brushes=None, pens=None, width=0.8, x0=None, x1=None):
         self._x, self._qlo, self._qmed, self._qhi = x, qlo, qmed, qhi
         self._h, self._l, self._o, self._c = highs, lows, opens, closes
+        self._brushes = brushes or []; self._pens = pens or []
         self._width = width
         if not x:
             self.picture = QtGui.QPicture(); self._rect = QtCore.QRectF()
@@ -805,15 +802,15 @@ class WhiskerBarItem(pg.GraphicsObject):
             blo, bmed, bhi = qlo[i], qmed[i], qhi[i]
             if blo != blo or bmed != bmed or bhi != bhi:      # NaN = degenerate ladder -> candle item draws it
                 continue
-            bull = c[i] >= o[i]
+            bar_pen = self._pens[i] if i < len(self._pens) else self._wpen  # SAME flow pen as candles
             # whiskers: thin lines beyond the box only (rejection tails)
-            p.setPen(self._wpen)
+            p.setPen(bar_pen)
             if h[i] > bhi:
                 p.drawLine(QtCore.QPointF(xi, bhi), QtCore.QPointF(xi, h[i]))
             if blo > l[i]:
                 p.drawLine(QtCore.QPointF(xi, l[i]), QtCore.QPointF(xi, blo))
-            # acceptance box (25-75% cumulative volume), translucent fill + neutral border
-            p.setBrush(self._bull if bull else self._bear)
+            # acceptance box (25-75% cumulative volume): SAME dominance brush as the candle body
+            p.setBrush(self._brushes[i] if i < len(self._brushes) else QtCore.Qt.NoBrush)
             bot, top = min(blo, bhi), max(blo, bhi)
             if top - bot < config.TICK_SIZE / 2.0:            # one-tick acceptance -> sliver stays visible
                 top = bot + config.TICK_SIZE / 2.0
@@ -821,8 +818,8 @@ class WhiskerBarItem(pg.GraphicsObject):
             # volume-weighted median line inside the box
             p.setPen(self._mpen)
             p.drawLine(QtCore.QPointF(xi - half, bmed), QtCore.QPointF(xi + half, bmed))
-            # OHLC-style notches: OPEN tick on the LEFT edge, CLOSE tick on the RIGHT (~40% width)
-            p.setPen(self._tpen_b if bull else self._tpen_r)
+            # OHLC notches: OPEN tick LEFT / CLOSE tick RIGHT (~40% width), flow-colored like the border
+            p.setPen(bar_pen)
             p.drawLine(QtCore.QPointF(xi - half, o[i]), QtCore.QPointF(xi - half + tick_w, o[i]))
             p.drawLine(QtCore.QPointF(xi + half - tick_w, c[i]), QtCore.QPointF(xi + half, c[i]))
         p.end()
