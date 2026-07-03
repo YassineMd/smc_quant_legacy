@@ -753,9 +753,9 @@ class WhiskerBarItem(pg.GraphicsObject):
         self._rect = QtCore.QRectF()
         self._wpen = QtGui.QPen(QtGui.QColor("#888888")); self._wpen.setCosmetic(True)   # fallback pen
         self._mpen = QtGui.QPen(QtGui.QColor("#ffffff")); self._mpen.setCosmetic(True); self._mpen.setWidth(2)
-        # open/close notches: fixed GREEN/RED 3px by bar direction (operator pref — consistent everywhere)
-        self._ocpen_g = QtGui.QPen(QtGui.QColor(*config.RGB_GREEN_STD)); self._ocpen_g.setCosmetic(True); self._ocpen_g.setWidth(3)
-        self._ocpen_r = QtGui.QPen(QtGui.QColor(*config.RGB_RED_STD)); self._ocpen_r.setCosmetic(True); self._ocpen_r.setWidth(3)
+        # open/close notches: fixed GREEN/RED 2px by bar direction (operator pref — consistent everywhere)
+        self._ocpen_g = QtGui.QPen(QtGui.QColor(*config.RGB_GREEN_STD)); self._ocpen_g.setCosmetic(True); self._ocpen_g.setWidth(2)
+        self._ocpen_r = QtGui.QPen(QtGui.QColor(*config.RGB_RED_STD)); self._ocpen_r.setCosmetic(True); self._ocpen_r.setWidth(2)
         self._x = []; self._qlo = []; self._qmed = []; self._qhi = []
         self._h = []; self._l = []; self._o = []; self._c = []
         self._brushes = []; self._pens = []
