@@ -1146,7 +1146,7 @@ class DrawingController(QtCore.QObject):
                     js = [self._find_ts(ts) for ts, _f in anch]
                     if any(j is None for j in js):          # its bucket left the window -> back to hidden
                         self.plot.removeItem(s); self._idx_shapes.remove(s)
-                        self._idx_pending.append(self._shape_dict_global(s, offset))
+                        self._idx_pending.append(self._shape_dict_global(s, self._idx_off))
                         continue
                     s.pts = [[j + f, py] for (j, (_t, f), (_px, py)) in zip(js, anch, s.pts)]
                 else:
@@ -1235,9 +1235,12 @@ class DrawingController(QtCore.QObject):
             QtCore.QTimer.singleShot(0, self.selectionChanged.emit)   # panels anchor AFTER the draw pass
 
     def _shape_dict_global(self, s, off) -> dict:
+        # EXISTING anchors are authoritative (re-placement keeps pts in sync with them); only anchor
+        # from pts for legacy shapes that never had them. Re-anchoring from pts against a frame the
+        # shape is NOT correctly placed in (e.g. demotion after its bucket left) would corrupt them.
+        anch = getattr(s, "anchors", None) or (self._anchor_pts(s.pts) if self._idx_bks else None)
         return dict(s.to_dict(), t="shape", id=getattr(s, "uid", None) or uuid.uuid4().hex,
-                    anch=(self._anchor_pts(s.pts) if self._idx_bks else getattr(s, "anchors", None)),
-                    pts=[[p[0] + off, p[1]] for p in s.pts])
+                    anch=anch, pts=[[p[0] + off, p[1]] for p in s.pts])
 
     def _save_idx(self) -> None:
         if self._idx_ctx is None or self._idx_off is None:
