@@ -651,6 +651,10 @@ class DrawingController(QtCore.QObject):
         self._idx_save = QtCore.QTimer(); self._idx_save.setSingleShot(True); self._idx_save.setInterval(400)
         self._idx_save.timeout.connect(self._save_idx)
         self.selectionChanged.connect(self._schedule_idx_save)         # set/resize/clear/arrow-extend
+        # last-used style memory (per shape KIND: color/width/fill), persisted in drawings.json ->
+        # a reopened session creates new shapes with the same style you last set in the edit panel.
+        self._styles: dict = self._load_styles()
+        self.edit_panel.changed.connect(self._remember_style)
 
         # §7.1 — press-drag-release: override the ViewBox drag handler while a tool
         # is armed; the captured original still drives native pan/zoom otherwise.
@@ -729,14 +733,58 @@ class DrawingController(QtCore.QObject):
             except Exception:
                 pass
 
-    def _new_two_point(self, kind: str, pts: list) -> "DrawnShape":
-        """Build a two-point shape with kind-specific defaults. The rectangle tool defaults to a
-        borderless white 10%-opacity fill (a faint highlight box); other shapes use the plain
-        DrawnShape defaults (white border, no fill)."""
+    def _remember_style(self) -> None:
+        """Edit-panel change -> remember that KIND's style as the default for future shapes (persisted)."""
+        t = self.edit_panel.target
+        if t is None:
+            return
+        self._styles[t.kind] = {"color": t.color, "width": t.width,
+                                "fill_color": t.fill_color, "fill_opacity": t.fill_opacity}
+        self._save_styles()
+
+    def _save_styles(self) -> None:
+        try:
+            config.ensure_data_dir()
+            data = {}
+            if os.path.exists(_DRAW_FILE):
+                try:
+                    with open(_DRAW_FILE) as f:
+                        data = json.load(f)
+                except (OSError, json.JSONDecodeError):
+                    data = {}
+            data["styles"] = self._styles
+            with open(_DRAW_FILE, "w") as f:
+                json.dump(data, f)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _load_styles() -> dict:
+        if not os.path.exists(_DRAW_FILE):
+            return {}
+        try:
+            with open(_DRAW_FILE) as f:
+                return dict(json.load(f).get("styles") or {})
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _styled(self, kind: str, pts: list) -> "DrawnShape":
+        """Construct a shape with the REMEMBERED style for its kind (falls back to the built-in
+        defaults: rect = borderless white 10% highlight box, others = plain white 2px)."""
+        st = self._styles.get(kind)
+        if st:
+            return DrawnShape(kind, pts, color=st.get("color", "#ffffff"),
+                              width=int(st.get("width", 2)),
+                              fill_color=st.get("fill_color", "#3498db"),
+                              fill_opacity=float(st.get("fill_opacity", 0.0)))
         if kind == "rect":
             return DrawnShape(kind, pts, color="#ffffff", width=0,
                               fill_color="#ffffff", fill_opacity=0.1)
         return DrawnShape(kind, pts)
+
+    def _new_two_point(self, kind: str, pts: list) -> "DrawnShape":
+        """Build a two-point shape with the remembered (or default) style for its kind."""
+        return self._styled(kind, pts)
 
     def _begin_draw(self, x: float, y: float) -> None:
         self._cancel_live()
@@ -778,7 +826,7 @@ class DrawingController(QtCore.QObject):
         if tool in _POSITION_TOOLS:
             self._make_bracket(tool, [x0, y0], [x1, y1])
         elif tool in ("hline", "vline"):
-            self._commit_shape(DrawnShape(tool, [[x0, y0]]))
+            self._commit_shape(self._styled(tool, [[x0, y0]]))
         else:
             self._commit_shape(self._new_two_point(tool, [[x0, y0], [x1, y1]]))
         self._drag_start = None
