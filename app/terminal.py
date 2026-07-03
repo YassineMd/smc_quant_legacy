@@ -694,6 +694,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # fix #10: double-click anywhere on the chart resets/auto-fits the view
         self.plot.scene().sigMouseClicked.connect(self._on_scene_click)
 
+        # --- connection watchdog: on-chart banner + tunnel/socket auto-heal ---
+        # The pipe worker already retries its socket forever, but a DEAD SSH TUNNEL left the retry loop
+        # spinning against a closed port with the only evidence in the console. This 1s watchdog shows a
+        # banner ON THE CHART while disconnected and re-heals every 5s (tunnel relaunch if its port died
+        # + immediate socket retry, exactly what the manual refresh button does).
+        self._conn_banner = QtWidgets.QLabel(self.plot)
+        self._conn_banner.setStyleSheet(
+            "background:#7a1f1f; color:#ffffff; font: bold 12px 'Consolas';"
+            "border:1px solid #b03030; border-radius:6px; padding:6px 14px;")
+        self._conn_banner.hide()
+        self._conn_down_s = 0
+        self._conn_timer = QtCore.QTimer(self)
+        self._conn_timer.timeout.connect(self._conn_watchdog)
+        self._conn_timer.start(1000)
+
         # --- drawing controller ---
         self.drawer = DrawingController(self.plot)
         self.drawer.toolbar = self.drawbar         # §7.3 — enables auto-revert
@@ -5252,6 +5267,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.drawer.edit_panel.move((self.width() - self.drawer.edit_panel.width()) // 2,
                                     8 + self.drawbar.height() + 4)
 
+    def _conn_watchdog(self) -> None:
+        """1s tick: surface a lost connection ON THE CHART and auto-heal it. Cheap (one bool read when
+        healthy). Also covers first-boot waiting (banner shows until the daemon link is up)."""
+        if bool(self.worker.connected):
+            if self._conn_down_s:
+                self._conn_down_s = 0
+                self._conn_banner.hide()
+            return
+        self._conn_down_s += 1
+        if self._conn_down_s >= 2:                       # ignore sub-2s blips
+            dots = "." * (self._conn_down_s % 4)
+            self._conn_banner.setText("⟳ CONNECTION LOST — reconnecting%s  (down %ds)"
+                                      % (dots, self._conn_down_s))
+            self._conn_banner.adjustSize()
+            self._conn_banner.move(max(8, (self.plot.width() - self._conn_banner.width()) // 2), 8)
+            self._conn_banner.show()
+            self._conn_banner.raise_()
+        if self._conn_down_s % 5 == 0:                   # heal attempt every 5s while down
+            try:
+                if _TUNNEL is not None:
+                    _TUNNEL.ensure()                     # relaunch the gcloud tunnel ONLY if its port died
+            except Exception:
+                pass
+            try:
+                self.worker.refresh()                    # drop any half-dead socket + retry immediately
+            except Exception:
+                pass
+
     def closeEvent(self, event) -> None:
         try:                                   # final SYNCHRONOUS drawing save — covers a close/shutdown
             self.drawer._save_idx()            # landing inside the 400ms debounce window
@@ -5259,6 +5302,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         self.timer.stop()
+        self._conn_timer.stop()
         self.worker.stop()
         if self in _OPEN_WINDOWS:
             _OPEN_WINDOWS.remove(self)
