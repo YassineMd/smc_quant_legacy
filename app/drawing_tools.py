@@ -1222,7 +1222,8 @@ class DrawingController(QtCore.QObject):
                     nx0, nx1 = dd["x0"] + d, dd["x1"] + d
                 nb = self._make_bracket(dd["kind"], [nx0, dd["entry"]], [nx1, dd["stop"]],
                                         entry=dd["entry"], stop=dd["stop"], target=dd["target"])
-                if anch:
+                nb.uid = getattr(br, "uid", nb.uid)     # SAME identity — else every shift duplicates the
+                if anch:                                # bracket in the file (merge keeps the orphaned id)
                     nb.anchors = anch
         self._idx_off = offset; self._idx_n = int(n)
         self._render_idx_pending()
