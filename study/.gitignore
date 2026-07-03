@@ -44,3 +44,15 @@ out/*
 !out/s4geo_assignments_1h.csv
 !out/s4geo_cells_4h.csv
 !out/s4geo_assignments_4h.csv
+!out/analysis_report_S4GEO_EQ.md
+!out/S4GEO_EQ_report.pdf
+!out/s4geo_eq_cells_1m.csv
+!out/s4geo_eq_assign_1m.csv
+!out/s4geo_eq_cells_5m.csv
+!out/s4geo_eq_assign_5m.csv
+!out/s4geo_eq_cells_15m.csv
+!out/s4geo_eq_assign_15m.csv
+!out/s4geo_eq_cells_1h.csv
+!out/s4geo_eq_assign_1h.csv
+!out/s4geo_eq_cells_4h.csv
+!out/s4geo_eq_assign_4h.csv
