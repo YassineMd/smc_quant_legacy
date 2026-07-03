@@ -763,10 +763,11 @@ class WhiskerBarItem(pg.GraphicsObject):
         self._vx0, self._vx1 = float("-inf"), float("inf")
 
     def update_data(self, x, qlo, qmed, qhi, highs, lows, opens, closes,
-                    brushes=None, pens=None, width=0.8, x0=None, x1=None):
+                    brushes=None, pens=None, width=0.8, x0=None, x1=None, show_med=True):
         self._x, self._qlo, self._qmed, self._qhi = x, qlo, qmed, qhi
         self._h, self._l, self._o, self._c = highs, lows, opens, closes
         self._brushes = brushes or []; self._pens = pens or []
+        self._show_med = show_med                 # median follows the POC toggle ('P'), like the gold dot
         self._width = width
         if not x:
             self.picture = QtGui.QPicture(); self._rect = QtCore.QRectF()
@@ -818,9 +819,10 @@ class WhiskerBarItem(pg.GraphicsObject):
             if top - bot < config.TICK_SIZE / 2.0:            # one-tick acceptance -> sliver stays visible
                 top = bot + config.TICK_SIZE / 2.0
             p.drawRect(QtCore.QRectF(xi - half, bot, width, top - bot))
-            # volume-weighted median line inside the box
-            p.setPen(self._mpen)
-            p.drawLine(QtCore.QPointF(xi - half, bmed), QtCore.QPointF(xi + half, bmed))
+            # volume-weighted median line inside the box — only when the POC layer ('P') is on
+            if getattr(self, "_show_med", True):
+                p.setPen(self._mpen)
+                p.drawLine(QtCore.QPointF(xi - half, bmed), QtCore.QPointF(xi + half, bmed))
             # OHLC notches ATTACHED to the center wick line: OPEN tick extends LEFT from center,
             # CLOSE tick extends RIGHT from center (~40% width each). Fixed GREEN/RED 3px by direction.
             p.setPen(self._ocpen_g if c[i] >= o[i] else self._ocpen_r)
