@@ -78,3 +78,5 @@ out/*
 !out/s5e_trades.csv
 !out/analysis_report_S5f.md
 !out/s5f_episodes.csv
+!out/analysis_report_S5g.md
+!out/s5g_episodes.csv
