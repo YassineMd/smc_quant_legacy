@@ -35,3 +35,12 @@ out/*
 !out/analysis_report_S4GEO_1m.md
 !out/s4geo_cells_1m.csv
 !out/s4geo_assignments_1m.csv
+!out/analysis_report_S4GEO_HTF.md
+!out/s4geo_cells_5m.csv
+!out/s4geo_assignments_5m.csv
+!out/s4geo_cells_15m.csv
+!out/s4geo_assignments_15m.csv
+!out/s4geo_cells_1h.csv
+!out/s4geo_assignments_1h.csv
+!out/s4geo_cells_4h.csv
+!out/s4geo_assignments_4h.csv
