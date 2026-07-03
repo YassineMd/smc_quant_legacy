@@ -753,6 +753,9 @@ class WhiskerBarItem(pg.GraphicsObject):
         self._rect = QtCore.QRectF()
         self._wpen = QtGui.QPen(QtGui.QColor("#888888")); self._wpen.setCosmetic(True)   # fallback pen
         self._mpen = QtGui.QPen(QtGui.QColor("#ffffff")); self._mpen.setCosmetic(True); self._mpen.setWidth(2)
+        # open/close notches: fixed GREEN/RED 3px by bar direction (operator pref — consistent everywhere)
+        self._ocpen_g = QtGui.QPen(QtGui.QColor(*config.RGB_GREEN_STD)); self._ocpen_g.setCosmetic(True); self._ocpen_g.setWidth(3)
+        self._ocpen_r = QtGui.QPen(QtGui.QColor(*config.RGB_RED_STD)); self._ocpen_r.setCosmetic(True); self._ocpen_r.setWidth(3)
         self._x = []; self._qlo = []; self._qmed = []; self._qhi = []
         self._h = []; self._l = []; self._o = []; self._c = []
         self._brushes = []; self._pens = []
@@ -818,10 +821,11 @@ class WhiskerBarItem(pg.GraphicsObject):
             # volume-weighted median line inside the box
             p.setPen(self._mpen)
             p.drawLine(QtCore.QPointF(xi - half, bmed), QtCore.QPointF(xi + half, bmed))
-            # OHLC notches: OPEN tick LEFT / CLOSE tick RIGHT (~40% width), flow-colored like the border
-            p.setPen(bar_pen)
-            p.drawLine(QtCore.QPointF(xi - half, o[i]), QtCore.QPointF(xi - half + tick_w, o[i]))
-            p.drawLine(QtCore.QPointF(xi + half - tick_w, c[i]), QtCore.QPointF(xi + half, c[i]))
+            # OHLC notches ATTACHED to the center wick line: OPEN tick extends LEFT from center,
+            # CLOSE tick extends RIGHT from center (~40% width each). Fixed GREEN/RED 3px by direction.
+            p.setPen(self._ocpen_g if c[i] >= o[i] else self._ocpen_r)
+            p.drawLine(QtCore.QPointF(xi - tick_w, o[i]), QtCore.QPointF(xi, o[i]))
+            p.drawLine(QtCore.QPointF(xi, c[i]), QtCore.QPointF(xi + tick_w, c[i]))
         p.end()
 
     def paint(self, p, *args):
