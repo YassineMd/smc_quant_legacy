@@ -230,8 +230,8 @@ def main():
         lines += ["Control (null: %d random non-overlapping 30-min windows, %d seeded draws, seed %d) "
                   "— actual vs control mean ± sd:" % (st["n"], N_DRAWS, SEED),
                   "", "| stat | actual | control |", "|---|---|---|",
-                  "| median MFE % | %.3f | %.3f ± %.3f |" % (st["mfe"]["med"], c["med_mfe"][0], c["med_mfe"][1]),
-                  "| median \\|MAE\\| % | %.3f | %.3f ± %.3f |" % (st["amae"]["med"], c["med_amae"][0], c["med_amae"][1]),
+                  "| median MFE %% | %.3f | %.3f ± %.3f |" % (st["mfe"]["med"], c["med_mfe"][0], c["med_mfe"][1]),
+                  "| median \\|MAE\\| %% | %.3f | %.3f ± %.3f |" % (st["amae"]["med"], c["med_amae"][0], c["med_amae"][1]),
                   "| %% MFE > \\|MAE\\| | %.1f | %.1f ± %.1f |" % (st["pct_win"], c["pct_win"][0], c["pct_win"][1]),
                   "| mean end %% | %+.3f | %+.3f ± %.3f |" % (st["end_mean"], c["mean_end"][0], c["mean_end"][1]),
                   "| median end %% | %+.3f | %+.3f ± %.3f |" % (st["end_med"], c["med_end"][0], c["med_end"][1]), ""]
