@@ -199,3 +199,107 @@ Regime: pre n=9 med end -0.109% | post n=15 med end +0.099%.
 
 ## HARD STOP
 Judged once; forward snapshots are the judge.
+
+## APPENDIX — barrier race + 1h post-TP / post-SL runs (S5d-BARRIERS+)
+
+_Outcome columns appended to the committed S5d fire sets — no re-detection, no new cells (counter stays 466). Barrier race re-derived with the S1 walker and asserted equal to s5d_barrier_trades.csv row-for-row. Fires simulated INDEPENDENTLY — they may overlap in time. References: geometric null 37.5%, taker breakeven 50.0% (0.10% RT). 1h runs are right-censored when the extreme prints in the window's last bar (capped flag; also in the CSVs). missed_tp can be negative for winners that hit TP after the hour._
+
+### LOCKED-long — 26 fires
+
+TP 12 / SL 14 / unresolved 0 / eod 0 -> TP 46.2% of resolved (null 37.5%, breakeven 50.0%). Expectancy/trade gross +0.069%, net -0.031%. Resolution med 11.5 / p90 48.4 min; resolved inside 30 min: 20/26.
+
+WINNERS (post-TP run within 1h of entry):
+
+| ts (UTC) | entry | min to TP | mfe_1h % | missed_tp % | capped |
+|---|---|---|---|---|---|
+| 06-28 17:41 | 71.22 | 13.6 | 0.674 | +0.174 |  |
+| 06-29 12:03 | 72.96 | 3.3 | 2.179 | +1.679 |  |
+| 06-29 16:40 | 73.50 | 7.6 | 4.068 | +3.568 |  |
+| 06-30 08:49 | 73.44 | 60.2 | 0.490 | -0.010 |  |
+| 06-30 13:07 | 72.35 | 23.1 | 1.714 | +1.214 |  |
+| 06-30 16:54 | 73.44 | 13.8 | 0.640 | +0.140 |  |
+| 06-30 22:45 | 73.40 | 89.2 | 0.382 | -0.118 |  |
+| 07-01 02:13 | 74.17 | 13.0 | 1.146 | +0.646 |  |
+| 07-01 13:38 | 75.31 | 7.7 | 2.589 | +2.089 |  |
+| 07-01 20:30 | 76.84 | 10.1 | 1.614 | +1.114 |  |
+| 07-02 00:53 | 77.28 | 22.5 | 1.812 | +1.312 |  |
+| 07-03 14:31 | 81.39 | 35.2 | 0.872 | +0.372 |  |
+
+missed_tp median +0.880% / mean +1.015%; winners running >= +1.0% within the hour: 7/12 (58%).
+
+LOSERS: median post-SL continuation (max adverse within 1h) 0.736% (n=14).
+
+### LOCKED-short — 12 fires — **UNDERPOWERED (n<20): counts only, no verdict language**
+
+TP 3 / SL 9 / unresolved 0 / eod 0 -> TP 25.0% of resolved (null 37.5%, breakeven 50.0%). Expectancy/trade gross -0.100%, net -0.200%. Resolution med 4.9 / p90 46.0 min; resolved inside 30 min: 9/12.
+
+WINNERS (post-TP run within 1h of entry):
+
+| ts (UTC) | entry | min to TP | mfe_1h % | missed_tp % | capped |
+|---|---|---|---|---|---|
+| 06-28 17:15 | 71.59 | 19.7 | 0.964 | +0.464 |  |
+| 06-29 12:38 | 73.74 | 0.7 | 0.963 | +0.463 |  |
+| 07-03 15:12 | 81.76 | 4.1 | 0.917 | +0.417 |  |
+
+missed_tp median +0.463% / mean +0.448%; winners running >= +1.0% within the hour: 0/3 (0%).
+
+LOSERS: median post-SL continuation (max adverse within 1h) 0.920% (n=9).
+
+### UNLOCKED-long — 51 fires
+
+TP 22 / SL 29 / unresolved 0 / eod 0 -> TP 43.1% of resolved (null 37.5%, breakeven 50.0%). Expectancy/trade gross +0.045%, net -0.055%. Resolution med 13.0 / p90 47.6 min; resolved inside 30 min: 40/51.
+
+WINNERS (post-TP run within 1h of entry):
+
+| ts (UTC) | entry | min to TP | mfe_1h % | missed_tp % | capped |
+|---|---|---|---|---|---|
+| 06-28 17:41 | 71.22 | 13.6 | 0.674 | +0.174 |  |
+| 06-28 22:56 | 70.11 | 5.3 | 2.339 | +1.839 |  |
+| 06-29 16:37 | 73.20 | 2.2 | 4.495 | +3.994 |  |
+| 06-30 01:21 | 74.26 | 6.8 | 0.512 | +0.012 |  |
+| 06-30 08:49 | 73.44 | 60.2 | 0.490 | -0.010 |  |
+| 06-30 13:07 | 72.35 | 23.1 | 1.714 | +1.214 |  |
+| 06-30 16:54 | 73.44 | 13.8 | 0.640 | +0.140 |  |
+| 06-30 21:28 | 73.29 | 34.4 | 0.600 | +0.100 |  |
+| 06-30 22:45 | 73.40 | 89.2 | 0.382 | -0.118 |  |
+| 07-01 02:13 | 74.17 | 13.0 | 1.146 | +0.646 |  |
+| 07-01 13:38 | 75.31 | 7.7 | 2.589 | +2.089 |  |
+| 07-01 20:30 | 76.84 | 10.1 | 1.614 | +1.114 |  |
+| 07-02 00:53 | 77.28 | 22.5 | 1.812 | +1.312 |  |
+| 07-02 02:30 | 78.09 | 8.0 | 0.768 | +0.268 |  |
+| 07-02 03:29 | 78.38 | 21.2 | 0.740 | +0.240 |  |
+| 07-02 11:08 | 81.87 | 3.1 | 1.124 | +0.624 |  |
+| 07-02 13:41 | 81.55 | 6.3 | 0.515 | +0.015 |  |
+| 07-02 15:25 | 80.63 | 40.5 | 0.546 | +0.046 |  |
+| 07-03 04:28 | 80.57 | 64.5 | 0.385 | -0.115 | Y |
+| 07-03 05:18 | 80.67 | 16.8 | 0.855 | +0.355 |  |
+| 07-03 14:19 | 81.03 | 20.6 | 1.321 | +0.821 |  |
+| 07-03 16:06 | 81.30 | 63.7 | 0.381 | -0.119 | Y |
+
+missed_tp median +0.254% / mean +0.665%; winners running >= +1.0% within the hour: 9/22 (41%).
+
+LOSERS: median post-SL continuation (max adverse within 1h) 0.672% (n=29).
+
+### UNLOCKED-short — 24 fires
+
+TP 10 / SL 14 / unresolved 0 / eod 0 -> TP 41.7% of resolved (null 37.5%, breakeven 50.0%). Expectancy/trade gross +0.033%, net -0.067%. Resolution med 18.5 / p90 43.7 min; resolved inside 30 min: 18/24.
+
+WINNERS (post-TP run within 1h of entry):
+
+| ts (UTC) | entry | min to TP | mfe_1h % | missed_tp % | capped |
+|---|---|---|---|---|---|
+| 06-28 17:15 | 71.59 | 19.7 | 0.964 | +0.464 |  |
+| 06-28 23:40 | 71.60 | 19.6 | 1.802 | +1.302 |  |
+| 06-29 01:08 | 71.45 | 9.2 | 0.742 | +0.242 |  |
+| 06-29 12:38 | 73.74 | 0.7 | 0.963 | +0.463 |  |
+| 06-29 13:38 | 73.33 | 3.5 | 1.432 | +0.932 |  |
+| 07-01 10:21 | 75.46 | 16.6 | 1.100 | +0.600 |  |
+| 07-01 11:34 | 74.82 | 38.9 | 0.668 | +0.168 |  |
+| 07-01 23:37 | 77.56 | 25.1 | 0.761 | +0.261 | Y |
+| 07-03 13:29 | 81.56 | 44.4 | 0.871 | +0.370 |  |
+| 07-03 15:12 | 81.76 | 4.1 | 0.917 | +0.417 |  |
+
+missed_tp median +0.440% / mean +0.522%; winners running >= +1.0% within the hour: 3/10 (30%).
+
+LOSERS: median post-SL continuation (max adverse within 1h) 0.648% (n=14).
+
