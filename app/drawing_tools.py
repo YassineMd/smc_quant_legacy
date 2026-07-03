@@ -689,6 +689,8 @@ class DrawingController(QtCore.QObject):
         self.edit_panel.changed.connect(self._remember_style)
         self._idx_deleted: set = set()   # ids erased THIS session (merge tombstones, multi-window safe)
         self._picked = None              # the shape last selected by clicking it (Delete key target)
+        self._idx_busy = False           # re-entrancy guard: selectionChanged -> terminal refresh -> build
+                                         # -> set_idx_frame would otherwise RECURSE during restore/shift
 
         # §7.1 — press-drag-release: override the ViewBox drag handler while a tool
         # is armed; the captured original still drives native pan/zoom otherwise.
@@ -1079,8 +1081,15 @@ class DrawingController(QtCore.QObject):
         (so a selection stays on the same candles instead of silently sliding) — and renders any
         persisted drawing whose bucket range has entered the window. Loads the (symbol, tf) set on
         first call / tf switch."""
-        if not self.index_mode:
+        if not self.index_mode or self._idx_busy:
             return
+        self._idx_busy = True
+        try:
+            self._set_idx_frame_inner(offset, n, tf)
+        finally:
+            self._idx_busy = False
+
+    def _set_idx_frame_inner(self, offset: float, n: int, tf: str) -> None:
         ctx = (config.SYMBOL, tf)
         if ctx != self._idx_ctx:
             if self._idx_ctx is not None:                    # tf/symbol switch: persist + CLEAR the old
@@ -1105,7 +1114,7 @@ class DrawingController(QtCore.QObject):
                 self._selection.pts = [[px + d, py] for px, py in self._selection.pts]
                 self._selection.rebuild()
                 self.sel_handles.attach(self._selection, corners_only=True)
-                self.selectionChanged.emit()                 # panels re-anchor to the SAME buckets
+                QtCore.QTimer.singleShot(0, self.selectionChanged.emit)   # DEFERRED: after this draw pass
             for br in list(self._idx_brackets):
                 dd = br.to_dict()
                 self._idx_brackets.remove(br); br.remove()
@@ -1118,7 +1127,9 @@ class DrawingController(QtCore.QObject):
         if not self._idx_pending or self._idx_off is None:
             return
         off = self._idx_off; keep = []
-        for d in self._idx_pending:
+        todo, self._idx_pending = self._idx_pending, []      # swap first: re-entrant calls see empty
+        sel_restored = False
+        for d in todo:
             if d["t"] == "bracket":
                 axs = [d["x0"] - off, d["x1"] - off]
             else:
@@ -1137,10 +1148,17 @@ class DrawingController(QtCore.QObject):
                     _nb.uid = d.get("id") or _nb.uid
                 else:                                       # the Magic Selection
                     a, b = d["pts"]
-                    self._set_selection([a[0] - off, a[1]], [b[0] - off, b[1]])
+                    blocker = QtCore.QSignalBlocker(self)   # no synchronous re-entrancy mid-restore
+                    try:
+                        self._set_selection([a[0] - off, a[1]], [b[0] - off, b[1]])
+                    finally:
+                        del blocker
+                    sel_restored = True
             else:
                 keep.append(d)                              # hidden until its bucket Idx shows
-        self._idx_pending = keep
+        self._idx_pending = keep + self._idx_pending
+        if sel_restored:
+            QtCore.QTimer.singleShot(0, self.selectionChanged.emit)   # panels anchor AFTER the draw pass
 
     def _save_idx(self) -> None:
         if self._idx_ctx is None or self._idx_off is None:

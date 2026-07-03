@@ -3405,15 +3405,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # closed_list (+ live active), db_id(closed_list[-1]) = total_closed, so db_id(combined[j]) =
         # total_closed - len(closed_list) + 1 + j, and j = anchor_idx + local_idx. (0 -> legacy local idx.)
         self._global_idx_offset = (total_closed - len(closed_list) + 1 + anchor_idx) if total_closed > 0 else 0
-        # Idx-anchored drawings: keep Mode-10 shapes/brackets/selection glued to their BUCKETS across cap
-        # trims / anchor moves / restarts (drawer no-ops outside index mode).
-        if getattr(self, "drawer", None) is not None:
-            self.drawer.set_idx_frame(self._global_idx_offset, len(filtered), self.worker.tf)
 
         x_indices: list[int] = list(range(len(filtered)))
         result = (filtered, x_indices, anchor_idx)
         self._scanner_bucket_sig = sig
         self._scanner_bucket_cache = result
+        # Idx-anchored drawings: keep Mode-10 shapes/brackets/selection glued to their BUCKETS across cap
+        # trims / anchor moves / restarts (drawer no-ops outside index mode). AFTER the cache commit, so a
+        # re-entrant _build_scanner_buckets (selectionChanged -> stats refresh) hits the cache, not a rebuild.
+        if getattr(self, "drawer", None) is not None:
+            self.drawer.set_idx_frame(self._global_idx_offset, len(filtered), self.worker.tf)
         return result
 
     # ------------------------------------------------------------------
