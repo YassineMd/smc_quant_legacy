@@ -240,41 +240,7 @@ class _PositionFill(pg.GraphicsObject):
         self.prepareGeometryChange(); self.update()
 
     def paint(self, p, *a): p.drawPicture(0, 0, self.picture)
-
-    def boundingRect(self):
-        # Infinite lines paint +/-1e7 but a point-sized rect got them CULLED as soon as the anchor
-        # left the viewport (they "disappeared on zoom"). Culling rect = the current view span along
-        # the infinite axis (pg.InfiniteLine idiom); autorange is protected by dataBounds().
-        if self.kind in ("hline", "vline") and self.pts:
-            vb = self.getViewBox()
-            if vb is not None:
-                try:
-                    vr = vb.viewRect()
-                    if self.kind == "hline":
-                        y0 = self.pts[0][1]; pad = abs(vr.height()) * 0.01 + 1e-9
-                        return QtCore.QRectF(vr.left(), y0 - pad, vr.width(), 2 * pad)
-                    x0 = self.pts[0][0]; pad = abs(vr.width()) * 0.01 + 1e-9
-                    return QtCore.QRectF(x0 - pad, vr.top(), 2 * pad, vr.height())
-                except Exception:
-                    pass
-        return self._rect
-
-    def dataBounds(self, ax, frac=1.0, orthoRange=None):
-        # autorange/Y-fit contribution: only the FINITE axis of infinite lines (else a view-sized or
-        # +/-1e6 boundingRect would explode auto-fit); normal shapes contribute their point extents.
-        if not self.pts:
-            return None
-        if self.kind == "hline":
-            return None if ax == 0 else [self.pts[0][1], self.pts[0][1]]
-        if self.kind == "vline":
-            return [self.pts[0][0], self.pts[0][0]] if ax == 0 else None
-        vals = [pt[ax] for pt in self.pts]
-        return [min(vals), max(vals)]
-
-    def viewTransformChanged(self):
-        if self.kind in ("hline", "vline"):
-            self.prepareGeometryChange()          # view moved -> the culling rect must follow
-        super().viewTransformChanged()
+    def boundingRect(self): return self._rect
 
 
 class PositionBracket(QtCore.QObject):
