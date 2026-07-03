@@ -39,6 +39,7 @@ from . import bucket_state, config, region_state, vpin_adaptive
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
 from .chart_widgets import (
+    WhiskerBarItem,
     AbsorptionLayer, AbsorptionZoneLayer, BucketCandleItem, ExhaustionStripLayer, LocalTimeAxis,
     OrderBlockLayer, PanelSeparatorLayer, PriceAxis, _RGB_ABS_BEAR, _RGB_ABS_BULL, _RGB_EFF_BEAR,
     _RGB_EFF_BULL, _RGB_ER_BEAR, _RGB_ER_BULL, _RGB_EXH_BEAR, _RGB_EXH_BULL,
@@ -623,6 +624,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # PANEL 0 ('0') — a SMOOTHED twin of Panel 9: each line = (current + locked)/2. Identical items/colors.
         self.show_panel0 = True
         self.show_score = False          # Ctrl+1 SCORE v1-SEL forward-test panel (default OFF; persisted)
+        self.show_whisker = False        # 'W' volume-quantile whisker bars (candles stay default; persisted)
         _gp0_hi = pg.mkPen("#ff9800", width=0.8); _gp0_hi.setCosmetic(True); _gp0_hi.setDashPattern([5.0, 10.0])
         _gp0_lo = pg.mkPen("#ff9800", width=0.8); _gp0_lo.setCosmetic(True); _gp0_lo.setDashPattern([5.0, 10.0])
         self.bc_p0_zero = pg.PlotDataItem(pen=pg.mkPen("#555555", width=1, style=QtCore.Qt.DashLine))
@@ -744,6 +746,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("9"), self, activated=self._toggle_panel9)    # panel 9: COMPOSITE lean
         QtGui.QShortcut(QtGui.QKeySequence("0"), self, activated=self._toggle_panel0)    # panel 0: smoothed P9
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+1"), self, activated=self._toggle_score)  # SCORE v1-SEL forward-test
+        QtGui.QShortcut(QtGui.QKeySequence("W"), self, activated=self._toggle_whisker)   # volume-quantile whisker bars
         QtGui.QShortcut(QtGui.QKeySequence("T"), self, activated=self._toggle_phase_table)  # phase table (no panel needed)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
 
@@ -1229,6 +1232,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         h = self._scan_handles.get("bc_vel_abn")
         if h is not None:
             h.setVisible(self.show_vel_abn)
+
+    def _toggle_whisker(self) -> None:
+        """'W' — volume-quantile WHISKER BARS render mode: box = the ladder's 25-75%% cumulative-volume
+        acceptance zone, volume-weighted median line, OHLC-style open/close notches, thin whiskers to
+        high/low (rejection tails). Candles stay the default; ladder-less buckets and zoomed-out views
+        (<~3 px/bar) always render as candles."""
+        self.show_whisker = not self.show_whisker
+        self._save_ui_state()
+        self._last_scanner_sig = None   # force the sig-gated scanner redraw to repaint immediately
+        self._draw_scanner()
 
     def _phase_post(self, key: str, vals) -> list:
         """Naive-Bayes posterior over the MERGED phases [BEFORE, START/DURING, END] for a direction. vals =
@@ -1785,6 +1798,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "er": self.show_er_strip, "exh": self.show_exh_strip,
                 "ls_mode": self._ls_mode, "panel9": self.show_panel9, "panel0": self.show_panel0,
                 "score_v1": self.show_score,
+                "whisker": self.show_whisker,
                 "phase_table": self.show_phase_table,
                 "phase": {k: bool(v) for k, v in self.show_phase.items()},
                 "zone_s": self._zone_user_s, "eff_f": self._eff_user_f,   # persisted slider overrides (None = adaptive)
@@ -1816,6 +1830,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_panel9 = bool(s.get("panel9", self.show_panel9))
         self.show_panel0 = bool(s.get("panel0", self.show_panel0))
         self.show_score = bool(s.get("score_v1", self.show_score))
+        self.show_whisker = bool(s.get("whisker", self.show_whisker))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
         for _k, _v in (s.get("phase") or {}).items():
             if _k in self.show_phase:
@@ -3903,6 +3918,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         bc = self._scan_handles.get("bc_candles")
         if bc is not None:
             bc.set_view(nx0, nx1)
+        wb = self._scan_handles.get("bc_whisker")
+        if wb is not None:
+            wb.set_view(nx0, nx1)
 
     # ------------------------------------------------------------------
     # Polish-pass shared helpers (theme, value trackers, formatting)
@@ -4750,6 +4768,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             else:
                 _wc = (0, 255, 127) if cl >= op else (255, 7, 58)   # green = closed up, red = closed down
         wick_pen = pg.mkPen(_wc, width=_w); wick_pen.setCosmetic(True)
+        # volume-quantile whisker encoding ('W' render mode): box = [C>=25%V, C>=75%V] of the ladder's
+        # cumulative volume (prices ascending), median = C>=50%V. NaN when the ladder is missing/degenerate
+        # (old rows) -> the candle path draws those bars. Cached here (#3): immutable per closed bucket.
+        _nan = float("nan")
+        vq_lo = vq_med = vq_hi = _nan
+        _lv = b.get("levels") or {}
+        if len(_lv) >= 2:
+            _pr = sorted((float(_pp), float(_vv.get("b", 0.0)) + float(_vv.get("s", 0.0)))
+                         for _pp, _vv in _lv.items())
+            _V = sum(_v for _, _v in _pr)
+            if _V > 0:
+                _cum = 0.0; _thr = (0.25 * _V, 0.50 * _V, 0.75 * _V); _got = []
+                for _price, _v in _pr:
+                    _cum += _v
+                    while len(_got) < 3 and _cum >= _thr[len(_got)] - 1e-12:
+                        _got.append(_price)
+                    if len(_got) == 3:
+                        break
+                if len(_got) == 3:
+                    vq_lo, vq_med, vq_hi = _got
         # trailing-30 BER/SER means (the renderer's footprint/imbalance thresholds) + the abnormal-velocity
         # ratio — pure trailing-window functions of 0..i-1 closed data (+ this bucket's own value), so they
         # obey the SAME #3 cache contract as everything above (final the instant the bucket closes). Hoisted
@@ -4765,13 +4803,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         velabn = (vels[i] / vbase) if vbase > 0 else 0.0
         row = (b.get("open", 0.0), b.get("high", 0.0), b.get("low", 0.0),
                b.get("close", 0.0), poc, brush,
-               baseline, vpin, wick_pen, ber30, ser30, velabn)
+               baseline, vpin, wick_pen, ber30, ser30, velabn, vq_lo, vq_med, vq_hi)
         return row, baseline
 
     # The parallel render arrays, in row-tuple order (see _bucket_row). vbrush is NOT here:
     # the VPIN heatmap brush is render-time (adaptive percentile), recomputed each frame.
     _M10_ARR_KEYS = ("opens", "highs", "lows", "closes", "pocs", "brushes",
-                     "baseline", "vpin", "pens", "ber30", "ser30", "velabn")
+                     "baseline", "vpin", "pens", "ber30", "ser30", "velabn",
+                     "vq_lo", "vq_med", "vq_hi")
 
     def _compute_bucket_arrays(self, buckets: list, anchor_unix: float) -> dict:
         """Static closed-bucket compute cache (#3): return the 10 per-bucket render
@@ -4912,7 +4951,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 pg.PlotCurveItem(pen=pg.mkPen((180, 180, 180, 150), width=1.5,
                                               style=QtCore.Qt.DashLine)))
         # vx0/vx1: viewport cull — paint ONLY the visible candles (O(visible), not O(N)).
-        self._scan_handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
+        # 'W' render mode: volume-quantile whisker bars (batched WhiskerBarItem; quantiles from the #3
+        # cache, so ZERO extra per-frame compute). DEGRADATION: bar px width is uniform across the view
+        # (linear x), so below ~3 px/bar the WHOLE view falls back to candles (boxes would smear);
+        # ladder-less buckets (NaN quantiles) always fall back to candles individually.
+        if "bc_whisker" not in self._scan_handles:
+            self._scan_handles["bc_whisker"] = self._add_scanner_item(WhiskerBarItem())
+        _wb = self._scan_handles["bc_whisker"]
+        _wq_lo, _wq_med, _wq_hi = arr["vq_lo"], arr["vq_med"], arr["vq_hi"]
+        if self.show_whisker and (px_per_x * 0.8) >= 3.0:
+            _wb.update_data(x, _wq_lo, _wq_med, _wq_hi, highs, lows, opens, closes, 0.8, vx0, vx1)
+            _wb.setVisible(True)
+            _fi = [i for i in range(len(x)) if _wq_med[i] != _wq_med[i]]   # NaN ladder -> candle fallback
+            self._scan_handles["bc_candles"].update_data(
+                [x[i] for i in _fi], [opens[i] for i in _fi], [highs[i] for i in _fi],
+                [lows[i] for i in _fi], [closes[i] for i in _fi],
+                [brushes[i] for i in _fi], [wick_pens[i] for i in _fi], 0.8, vx0, vx1)
+        else:
+            _wb.setVisible(False)
+            _wb.update_data([], [], [], [], [], [], [], [])                 # free the picture
+            self._scan_handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
         self._scan_handles["bc_baseline"].setData(x, baseline_arr)   # gray dashed POC-center baseline (KEPT)
 
         # --- Keltner Channel: EMA(close) basis ± ATR band. LIGHT GRAY upper/lower (match the POC baseline);
