@@ -154,6 +154,16 @@ class StackedBarLayer(pg.GraphicsObject):
         self.prepareGeometryChange(); self.update()
 
 
+class _IdxJumpEdit(QtWidgets.QLineEdit):
+    """Ctrl+F jump-to-Idx box (Mode-10 index space). Enter -> jump (returnPressed); Escape -> dismiss."""
+
+    def keyPressEvent(self, ev):  # noqa: N802 (Qt casing)
+        if ev.key() == QtCore.Qt.Key_Escape:
+            self.hide()
+            return
+        super().keyPressEvent(ev)
+
+
 class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def __init__(self, tf: str = config.DEFAULT_TF):
         super().__init__()
@@ -767,6 +777,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("Backspace"), self, activated=lambda: self.drawer.delete_selected())
         QtGui.QShortcut(QtGui.QKeySequence("T"), self, activated=self._toggle_phase_table)  # phase table (no panel needed)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
+        # Ctrl+F = jump-to-Idx: type/paste a bucket Idx (tooltip format fine, e.g. "20.977"),
+        # Enter centers that bucket on screen (index modes; unlocks view-follow like a manual pan)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+F"), self, activated=self._idx_jump_show)
 
         # §7.4 — yellow follow-spot shown on the cursor while a draw tool is armed
         self.cursor_spot = pg.ScatterPlotItem(size=10, pxMode=True,
@@ -1380,6 +1393,69 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             winsound.MessageBeep(winsound.MB_ICONASTERISK)   # default Windows notification sound (no file needed)
         except Exception:
             pass
+
+    # ---------------------------------------------------------------- Ctrl+F jump-to-Idx
+    _IDXJUMP_CSS = ("QLineEdit { background: #14161a; color: #eef1f5; border: 1px solid %s; "
+                    "border-radius: 4px; padding: 4px 10px; font: 12px Consolas; }")
+
+    def _idx_jump_show(self) -> None:
+        """Ctrl+F: overlay input top-center of the window. Accepts a bucket Idx in any format the
+        tooltip prints (dots/spaces/commas stripped); Enter centers that bucket, Escape dismisses.
+        Index-space scanner modes only (the heatmap x-axis is time, not Idx)."""
+        if self.scanner_mode == "depth_heatmap":
+            return
+        if getattr(self, "_idx_jump", None) is None:
+            self._idx_jump = _IdxJumpEdit(self)
+            self._idx_jump.setPlaceholderText("jump to Idx…")
+            self._idx_jump.setFixedWidth(190)
+            self._idx_jump.setStyleSheet(self._IDXJUMP_CSS % "#3a404a")
+            self._idx_jump.returnPressed.connect(self._idx_jump_go)
+            # any edit clears a previous out-of-range flash back to the neutral border
+            self._idx_jump.textEdited.connect(
+                lambda _t: self._idx_jump.setStyleSheet(self._IDXJUMP_CSS % "#3a404a"))
+        self._idx_jump.setText("")
+        self._idx_jump.setStyleSheet(self._IDXJUMP_CSS % "#3a404a")
+        self._idx_jump.move((self.width() - self._idx_jump.width()) // 2, 34)
+        self._idx_jump.show()
+        self._idx_jump.raise_()
+        self._idx_jump.setFocus()
+
+    def _idx_jump_go(self) -> None:
+        """Enter in the jump box: map the global Idx to the filtered-local x (tooltip inverse:
+        local = Idx - _global_idx_offset), center X there keeping the current zoom width, refit Y
+        over the buckets that become visible, and unlock view-follow exactly like a manual pan
+        (double-click re-locks onto the live edge, as always)."""
+        digits = "".join(ch for ch in self._idx_jump.text() if ch.isdigit())
+        cache = getattr(self, "_scanner_bucket_cache", None)   # None until the first scanner draw
+        if not digits or cache is None:
+            self._idx_jump.setStyleSheet(self._IDXJUMP_CSS % "#ff2d46")
+            return
+        filtered = cache[0]; n = len(filtered)
+        local = int(digits) - self._global_idx_offset
+        if not (0 <= local < n):
+            lo_id = self._global_idx_offset; hi_id = self._global_idx_offset + n - 1
+            self._idx_jump.setStyleSheet(self._IDXJUMP_CSS % "#ff2d46")
+            self._idx_jump.setText("")
+            self._idx_jump.setPlaceholderText("loaded: %d … %d" % (lo_id, hi_id))
+            return
+        (vx0, vx1), _ = self.vb.viewRange()
+        w = vx1 - vx0
+        if not (1.0 <= w <= max(1.0, float(n))):
+            w = float(min(FOLLOW_WINDOW, n))            # degenerate zoom -> sane default width
+        self.vb.setXRange(local - w / 2.0, local + w / 2.0, padding=0)
+        j0 = max(0, int(local - w / 2.0)); j1 = min(n, int(local + w / 2.0) + 1)
+        lows = [float(b.get("low", 0.0)) for b in filtered[j0:j1]]
+        highs = [float(b.get("high", 0.0)) for b in filtered[j0:j1]]
+        if lows and highs:
+            lo, hi = min(lows), max(highs)
+            if not (hi > lo):
+                hi = lo + 1.0
+            pad = (hi - lo) * FOLLOW_PAD_FRAC
+            self.vb.setYRange(lo - pad, hi + pad, padding=0)
+        self._follow_x = self._follow_y = False         # stay put; double-click re-locks the follow
+        self._idx_jump.setPlaceholderText("jump to Idx…")
+        self._idx_jump.hide()
+        self.setFocus()
 
     def _toggle_abs_strip(self) -> None:
         """'1' — show/hide the Mode-10 selection ABSORPTION panel (green bull / red bear absorption lines, the
