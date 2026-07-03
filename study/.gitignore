@@ -72,3 +72,5 @@ out/*
 !out/s5d_episodes_unlocked.csv
 !out/s5d_barrier_trades.csv
 !out/s5d_episodes_all.csv
+!out/analysis_report_S5d_grid.md
+!out/s5d_grid.csv
