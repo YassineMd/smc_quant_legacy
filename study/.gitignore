@@ -71,3 +71,4 @@ out/*
 !out/s5d_episodes_locked.csv
 !out/s5d_episodes_unlocked.csv
 !out/s5d_barrier_trades.csv
+!out/s5d_episodes_all.csv
