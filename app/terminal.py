@@ -5249,6 +5249,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                     8 + self.drawbar.height() + 4)
 
     def closeEvent(self, event) -> None:
+        try:                                   # final SYNCHRONOUS drawing save — covers a close/shutdown
+            self.drawer._save_idx()            # landing inside the 400ms debounce window
+            self.drawer._save()
+        except Exception:
+            pass
         self.timer.stop()
         self.worker.stop()
         if self in _OPEN_WINDOWS:

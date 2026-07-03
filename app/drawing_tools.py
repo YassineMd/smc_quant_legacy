@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from typing import List, Optional
 
 import pyqtgraph as pg
@@ -655,6 +656,7 @@ class DrawingController(QtCore.QObject):
         # a reopened session creates new shapes with the same style you last set in the edit panel.
         self._styles: dict = self._load_styles()
         self.edit_panel.changed.connect(self._remember_style)
+        self._idx_deleted: set = set()   # ids erased THIS session (merge tombstones, multi-window safe)
 
         # §7.1 — press-drag-release: override the ViewBox drag handler while a tool
         # is armed; the captured original still drives native pan/zoom otherwise.
@@ -899,6 +901,8 @@ class DrawingController(QtCore.QObject):
                 stop, target = entry + risk, entry - risk * 1.5
         bracket = PositionBracket(self.plot, kind, x0, x1, entry, stop, target)
         if self.index_mode:
+            if not hasattr(bracket, "uid"):
+                bracket.uid = uuid.uuid4().hex
             self._idx_brackets.append(bracket)   # Mode 10 index space (Idx-anchored, persisted)
             bracket.changed.connect(self._schedule_idx_save)
             self._schedule_idx_save()
@@ -911,6 +915,8 @@ class DrawingController(QtCore.QObject):
     def _commit_shape(self, shape: DrawnShape) -> None:
         self.plot.addItem(shape)
         if self.index_mode:
+            if not hasattr(shape, "uid"):
+                shape.uid = uuid.uuid4().hex     # identity for multi-window merge-by-id saves
             self._idx_shapes.append(shape)       # Mode 10 index space (Idx-anchored, persisted)
             self._schedule_idx_save()
         else:
@@ -947,15 +953,27 @@ class DrawingController(QtCore.QObject):
             for s in list(store):
                 if s.near(x, y, tol_x, tol_y):
                     self.plot.removeItem(s); store.remove(s)
+                    if store is self._idx_shapes and hasattr(s, "uid"):
+                        self._idx_deleted.add(s.uid)          # tombstone: don't resurrect from disk
         for store in (self.brackets, self._idx_brackets):
             for br in list(store):
                 if br.near(x, y, tol_x, tol_y):
                     br.remove(); store.remove(br)
+                    if store is self._idx_brackets and hasattr(br, "uid"):
+                        self._idx_deleted.add(br.uid)
         self.handles.clear()   # a selected shape may have been erased -> drop its handles
         self._save()
         self._schedule_idx_save()
 
     def clear_all(self) -> None:
+        for s in self._idx_shapes:
+            if hasattr(s, "uid"):
+                self._idx_deleted.add(s.uid)
+        for br in self._idx_brackets:
+            if hasattr(br, "uid"):
+                self._idx_deleted.add(br.uid)
+        self._idx_deleted.update(d.get("id") for d in self._idx_pending if d.get("id"))
+        self._idx_pending = []
         for s in self.shapes + self._idx_shapes:
             self.plot.removeItem(s)
         for br in self.brackets + self._idx_brackets:
@@ -1014,9 +1032,19 @@ class DrawingController(QtCore.QObject):
             return
         ctx = (config.SYMBOL, tf)
         if ctx != self._idx_ctx:
+            if self._idx_ctx is not None:                    # tf/symbol switch: persist + CLEAR the old
+                self._save_idx()                             # set so 1m drawings never leak into 5m
+                for s in self._idx_shapes:
+                    self.plot.removeItem(s)
+                for br in self._idx_brackets:
+                    br.remove()
+                self._idx_shapes.clear(); self._idx_brackets.clear()
+                self.clear_selection()
+                self.handles.clear()
             self._idx_ctx = ctx
             self._idx_pending = self._load_idx()
             self._idx_off = None
+            self._idx_deleted = set()
         if self._idx_off is not None and offset != self._idx_off:
             d = self._idx_off - offset                      # array coords slide by (old − new)
             for s in self._idx_shapes:
@@ -1049,10 +1077,13 @@ class DrawingController(QtCore.QObject):
                     s = DrawnShape(d["kind"], [[p[0] - off, p[1]] for p in d["pts"]],
                                    d.get("color", "#ffffff"), d.get("width", 2),
                                    d.get("fill_color", "#3498db"), d.get("fill_opacity", 0.0))
+                    s.uid = d.get("id") or uuid.uuid4().hex
                     self.plot.addItem(s); self._idx_shapes.append(s)
                 elif d["t"] == "bracket":
-                    self._make_bracket(d["kind"], [d["x0"] - off, d["entry"]], [d["x1"] - off, d["stop"]],
-                                       entry=d["entry"], stop=d["stop"], target=d["target"])
+                    _nb = self._make_bracket(d["kind"], [d["x0"] - off, d["entry"]],
+                                             [d["x1"] - off, d["stop"]],
+                                             entry=d["entry"], stop=d["stop"], target=d["target"])
+                    _nb.uid = d.get("id") or _nb.uid
                 else:                                       # the Magic Selection
                     a, b = d["pts"]
                     self._set_selection([a[0] - off, a[1]], [b[0] - off, b[1]])
@@ -1064,13 +1095,30 @@ class DrawingController(QtCore.QObject):
         if self._idx_ctx is None or self._idx_off is None:
             return
         off = self._idx_off
+        mine_shapes = [dict(s.to_dict(), id=getattr(s, "uid", None) or uuid.uuid4().hex,
+                            pts=[[p[0] + off, p[1]] for p in s.pts]) for s in self._idx_shapes]
+        mine_brs = [dict(b.to_dict(), id=getattr(b, "uid", None) or uuid.uuid4().hex,
+                         **{"x0": b.to_dict()["x0"] + off, "x1": b.to_dict()["x1"] + off})
+                    for b in self._idx_brackets]
+        mine_ids = ({d["id"] for d in mine_shapes} | {d["id"] for d in mine_brs}
+                    | {d.get("id") for d in self._idx_pending if d.get("id")})
+        # MERGE with disk (multi-window): keep other windows' items (ids we neither own nor deleted)
+        disk = {}
+        if os.path.exists(_DRAW_FILE):
+            try:
+                with open(_DRAW_FILE) as f:
+                    disk = (json.load(f).get("idx") or {}).get("|".join(self._idx_ctx), {})
+            except (OSError, json.JSONDecodeError):
+                disk = {}
+        def _foreign(items):
+            return [d for d in items
+                    if d.get("id") and d["id"] not in mine_ids and d["id"] not in self._idx_deleted]
         entry = {
-            "shapes": [dict(s.to_dict(), pts=[[p[0] + off, p[1]] for p in s.pts]) for s in self._idx_shapes],
-            "brackets": [dict(b.to_dict(), **{"x0": b.to_dict()["x0"] + off, "x1": b.to_dict()["x1"] + off})
-                         for b in self._idx_brackets],
+            "shapes": mine_shapes + _foreign(disk.get("shapes", [])),
+            "brackets": mine_brs + _foreign(disk.get("brackets", [])),
             "selection": ([[p[0] + off, p[1]] for p in self._selection.pts]
                           if (self._selection is not None and len(self._selection.pts) == 2) else None),
-            "pending": self._idx_pending,                   # off-window drawings ride along untouched
+            "pending": self._idx_pending + _foreign(disk.get("pending", [])),
         }
         try:
             config.ensure_data_dir()
