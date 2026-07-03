@@ -1,0 +1,2 @@
+ts,bucket_id,side,baseline,MFE_pct,MAE_pct,end_pct,t_max_up_min,t_max_dn_min
+1782870413.432,15960,short,74.0,0.4865,-0.3378,0.4865,29.92,20.45

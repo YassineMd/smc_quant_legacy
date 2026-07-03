@@ -56,3 +56,5 @@ out/*
 !out/s4geo_eq_assign_1h.csv
 !out/s4geo_eq_cells_4h.csv
 !out/s4geo_eq_assign_4h.csv
+!out/analysis_report_S5_confluence.md
+!out/s5_confluence_episodes.csv
