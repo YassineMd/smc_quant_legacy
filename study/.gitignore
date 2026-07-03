@@ -65,3 +65,5 @@ out/*
 !out/analysis_report_S5c.md
 !out/s5c_episodes_locked.csv
 !out/s5c_episodes_unlocked.csv
+!out/analysis_report_S5c_barriers.md
+!out/s5c_barrier_trades.csv
