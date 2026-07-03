@@ -38,6 +38,7 @@ from .heatmap import (HeatmapCache, TradeBubbleCache, decode_col, decode_grid,
 from . import bucket_state, config, region_state, vpin_adaptive
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
+from . import bar_quantiles
 from .chart_widgets import (
     WhiskerBarItem,
     AbsorptionLayer, AbsorptionZoneLayer, BucketCandleItem, ExhaustionStripLayer, LocalTimeAxis,
@@ -4801,25 +4802,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _wc = (0, 255, 127) if cl >= op else (255, 7, 58)   # green = closed up, red = closed down
         wick_pen = pg.mkPen(_wc, width=_w); wick_pen.setCosmetic(True)
         # volume-quantile whisker encoding ('W' render mode): box = [C>=25%V, C>=75%V] of the ladder's
-        # cumulative volume (prices ascending), median = C>=50%V. NaN when the ladder is missing/degenerate
-        # (old rows) -> the candle path draws those bars. Cached here (#3): immutable per closed bucket.
-        _nan = float("nan")
-        vq_lo = vq_med = vq_hi = _nan
-        _lv = b.get("levels") or {}
-        if len(_lv) >= 2:
-            _pr = sorted((float(_pp), float(_vv.get("b", 0.0)) + float(_vv.get("s", 0.0)))
-                         for _pp, _vv in _lv.items())
-            _V = sum(_v for _, _v in _pr)
-            if _V > 0:
-                _cum = 0.0; _thr = (0.25 * _V, 0.50 * _V, 0.75 * _V); _got = []
-                for _price, _v in _pr:
-                    _cum += _v
-                    while len(_got) < 3 and _cum >= _thr[len(_got)] - 1e-12:
-                        _got.append(_price)
-                    if len(_got) == 3:
-                        break
-                if len(_got) == 3:
-                    vq_lo, vq_med, vq_hi = _got
+        # cumulative volume, median = C>=50%V — computed by the SHARED app.bar_quantiles module (the same
+        # implementation the S4-GEO study reads, so M/P mean one thing everywhere). NaN when the ladder is
+        # missing/degenerate (old rows) -> the candle path draws those bars. Cached here (#3).
+        vq_lo, vq_med, vq_hi = bar_quantiles.vq(b.get("levels") or {})
         # trailing-30 BER/SER means (the renderer's footprint/imbalance thresholds) + the abnormal-velocity
         # ratio — pure trailing-window functions of 0..i-1 closed data (+ this bucket's own value), so they
         # obey the SAME #3 cache contract as everything above (final the instant the bucket closes). Hoisted

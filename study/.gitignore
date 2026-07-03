@@ -32,3 +32,6 @@ out/*
 !out/analysis_report_S3_setups.md
 !out/setups_S3_fires.csv
 !out/score_weights_k3_30m.csv
+!out/analysis_report_S4GEO_1m.md
+!out/s4geo_cells_1m.csv
+!out/s4geo_assignments_1m.csv
