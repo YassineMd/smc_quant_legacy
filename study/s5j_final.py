@@ -30,7 +30,7 @@ import pandas as pd
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 from app.persistence import _bucket_from_dict                       # noqa: E402
-from m10_sweep_s5b import load_merged, p9_full, sel_markers, LOCK   # noqa: E402
+from m10_sweep_s5b import load_merged, p9_full, sel_markers, _last_cross, LOCK  # noqa: E402
 
 REPO = os.path.dirname(HERE); OUT = os.path.join(REPO, "study", "out")
 WIN = 3600.0; H_S = 6 * 3600.0
@@ -55,23 +55,41 @@ def main():
     df = pd.read_parquet(os.path.join(OUT, "m10_sweep_1m.parquet"))
     idx = np.arange(16, n)
 
-    # legs 2-4 (all LOCKED): leg 2 = the BADGE SPREAD >= 65 (S5b-r alert rule; the S5i "share"
-    # wording was a second mistranslation — 14876 is its regression anchor: spread +61.9 < 65,
-    # share 80.9% would have passed). legs 3/4 = locked phase row (sweep verbatim).
+    # legs 2-4 (all LOCKED). leg 2 = BADGE SPREAD >= 65 (14876 anchor). leg 3 TWO-SIDED per the r3
+    # update: own-side table's dominant phase == START/DURING AND the opposite table's dominant
+    # phase != START/DURING. leg 4 = locked P6 spread (sweep verbatim).
     sh = e_sh[np.maximum(0, idx - LOCK)]
     spr2 = (2.0 * sh - 1.0) * 100.0
     l2 = {"long": spr2 >= 65.0, "short": -spr2 >= 65.0}
-    l2_r1 = {"long": sh * 100.0 >= 65.0, "short": (1 - sh) * 100.0 >= 65.0}   # r1 share form (comparison only)
-    legs34 = {s: (df["leg3_" + s].to_numpy() & df["leg4_" + s].to_numpy()) for s in ("long", "short")}
+    dom_u = df.phase_dom_up.to_numpy(); dom_d = df.phase_dom_dn.to_numpy()
+    l3 = {"long": (dom_u == "STARTDUR") & (dom_d != "STARTDUR"),
+          "short": (dom_d == "STARTDUR") & (dom_u != "STARTDUR")}
+    legs34 = {s: l3[s] & df["leg4_" + s].to_numpy() for s in ("long", "short")}
     legs234 = {s: l2[s] & legs34[s] for s in ("long", "short")}
     r_14876 = (14876 - bids[0]) - 16
     assert not l2["long"][r_14876], "14876 leg-2 anchor must FAIL (spread < 65)"
     assert l2["long"][(20977 - bids[0]) - 16], "20977 must still pass leg 2 (spread 78.5)"
 
-    # LEG 1'' — LOCKED-ONLY panel-0 rule (S5j-r): two most recent LOCKED markers on-side AND the
-    # newest is the on-side EXTREME cross (+50 long / -50 short). A settling dot never counts.
+    # LEG 1'' on a 100-BAR selection (r3 update; was 16): two most recent LOCKED markers on-side
+    # AND the newest is the on-side EXTREME cross (+50 long / -50 short). Dots never count.
+    SELW = 100
+
+    def sel_markers_w(b):
+        """Panel markers on the [b-99, b] selection — terminal _last_cross verbatim, one most-
+        recent locked cross per level, locked region = first SELW-LOCK bars; newest first."""
+        vals = sum0[b - (SELW - 1):b + 1]; ex = list(range(SELW)); end = SELW - LOCK
+        out = []
+        for L in (50.0, 0.0, -50.0):
+            m = _last_cross(vals, ex, 1, end, L, 1, -1, end)
+            if m is not None:
+                out.append(m)
+        out.sort(key=lambda m: -m[0])
+        return out
+
     def leg1pp(b, s):
-        mk = sel_markers(sum0, b)
+        if b < SELW - 1:                                  # needs the full 100-bar selection
+            return False
+        mk = sel_markers_w(b)
         if len(mk) < 2:
             return False
         if s == "long":
@@ -81,22 +99,39 @@ def main():
     b0_ = bids[0]
     assert leg1pp(20977 - b0_, "long"), "20977 leg-1 anchor must PASS"
     assert not leg1pp(14873 - b0_, "long"), "14873 leg-1 anchor must FAIL"
-    def apply_leg1(mask, s):
+    def leg1pp16(b, s):                                   # r2's 16-bar leg 1'' (comparison only)
+        mk = sel_markers(sum0, b)
+        if len(mk) < 2:
+            return False
+        if s == "long":
+            return mk[0][2] > 0 and mk[1][2] > 0 and mk[0][1] == 50.0
+        return mk[0][2] < 0 and mk[1][2] < 0 and mk[0][1] == -50.0
+
+    # anchors under the r3 definitions: leg-level, as ruled
+    assert leg1pp(20977 - b0_, "long"), "20977 leg-1'' (100-bar) must PASS"
+    assert not leg1pp(14873 - b0_, "long"), "14873 leg-1'' (100-bar) must FAIL (+50 was a dot)"
+
+    def apply_leg1(mask, s, fn):
         m = mask.copy()
         for r in np.flatnonzero(m):
-            if not leg1pp(int(idx[r]), s):
+            if not fn(int(idx[r]), s):
                 m[r] = False
         return m
-    legs14 = {s: apply_leg1(legs234[s], s) for s in ("long", "short")}
-    r1_leg14 = {s: apply_leg1(l2_r1[s] & legs34[s], s) for s in ("long", "short")}  # S5j-r1 set
+    legs14 = {s: apply_leg1(legs234[s], s, leg1pp) for s in ("long", "short")}
+    r2_leg14 = {s: apply_leg1(l2[s] & df["leg3_" + s].to_numpy() & df["leg4_" + s].to_numpy(),
+                              s, leg1pp16) for s in ("long", "short")}       # S5j-r2 set
 
-    # LEG 5 — S5d leg5w code (rolling max/min EXISTS form), verbatim
+    # LEG 5 — EXISTS form on the r3 zone N = 60..100 (opens b-99..b-59; was 50..100)
     rop = np.round(op * 100).astype(np.int64); rcl = np.round(cl * 100).astype(np.int64)
-    zmax = pd.Series(rop).rolling(51).max().shift(49).to_numpy()
-    zmin = pd.Series(rop).rolling(51).min().shift(49).to_numpy()
+    zmax = pd.Series(rop).rolling(41).max().shift(59).to_numpy()
+    zmin = pd.Series(rop).rolling(41).min().shift(59).to_numpy()
+    zmax50 = pd.Series(rop).rolling(51).max().shift(49).to_numpy()   # r2 zone, comparison only
+    zmin50 = pd.Series(rop).rolling(51).min().shift(49).to_numpy()
     okk = np.arange(n) >= FIRST
     rng_L = np.zeros(n, bool); rng_S = np.zeros(n, bool)
     rng_L[okk] = rcl[okk] < zmax[okk]; rng_S[okk] = rcl[okk] > zmin[okk]
+    rng_L50 = np.zeros(n, bool); rng_S50 = np.zeros(n, bool)
+    rng_L50[okk] = rcl[okk] < zmax50[okk]; rng_S50[okk] = rcl[okk] > zmin50[okk]
 
     fire_bars = {s: [int(idx[r]) for r in np.flatnonzero(
         legs14[s] & (rng_L if s == "long" else rng_S)[idx])] for s in ("long", "short")}
@@ -115,12 +150,12 @@ def main():
                 break
         return red, green
 
-    # comparison sets: S5j-r1 (leg1'' + share leg2) and S5d-locked (any-level leg1 + spread leg2)
+    # comparison sets: S5j-r2 (16-bar leg1'', one-sided leg3, zone 50-100) and S5d-locked
     s5d_bars = {s: {int(idx[r]) for r in np.flatnonzero(
-        df["fire_" + s].to_numpy() & (rng_L if s == "long" else rng_S)[idx])}
+        df["fire_" + s].to_numpy() & (rng_L50 if s == "long" else rng_S50)[idx])}
         for s in ("long", "short")}
     s5j_old_bars = {s: {int(idx[r]) for r in np.flatnonzero(
-        r1_leg14[s] & (rng_L if s == "long" else rng_S)[idx])} for s in ("long", "short")}
+        r2_leg14[s] & (rng_L50 if s == "long" else rng_S50)[idx])} for s in ("long", "short")}
 
     poc = np.array([float(d.get("poc_price", 0.0)) for d in raws])
     base = np.empty(n); base[0] = poc[0]
@@ -201,20 +236,22 @@ def main():
         for r in rows:
             w.writerow(r)
 
-    md = ["# S5j-r2 — Fully-Locked Confluence (legs 1'' + 2 corrected) + EXISTS leg 5", "",
-          "_**S5j-r2: the second operator correction. Leg 1'' (from 14873): two most recent LOCKED"
-          " markers on-side AND the newest is the on-side EXTREME cross — settling dots never"
-          " count. Leg 2 (from 14876): the LOCKED BADGE SPREAD >= 65 points (share >= 82.5%%), the"
-          " terminal alert rule — the S5i 'share >= 65%%' wording was a second mistranslation."
-          " Regression anchors asserted in code: 20977 PASSES all legs; 14873 FAILS leg 1''; 14876"
-          " FAILS leg 2 (spread +61.9). Multiplicity +2 -> counter 520.** Legs 3/4 = locked phase"
-          " row; leg 5 = S5d leg5w EXISTS verbatim; 1h windows + fire-search blackout (%d fires"
-          " absorbed); moving-baseline router (no self-touch); taker %.2f%% net; fixed TP+0.5/"
-          "SL-0.3 exits (S1, * = ambiguous). References: %.1f%% null / %.1f%% breakeven."
-          " Underpowered: n < %d -> counts only._"
+    md = ["# S5j-r3 — Fully-Locked Confluence, operator leg updates (100-bar P0, two-sided"
+          " phase, zone 60-100)", "",
+          "_**S5j-r3 updates (operator, 2026-07-04): leg 1'' now reads the P0 markers on a 100-BAR"
+          " selection [b-99, b] (was 16) — same rule: two most recent LOCKED markers on-side, the"
+          " newest must be the on-side EXTREME cross, dots never count. Leg 3 is TWO-SIDED: the"
+          " own-side table's dominant phase == START/DURING AND the opposite table's dominant"
+          " phase != START/DURING. Leg 5 zone narrowed to N = 60..100 (EXISTS form unchanged)."
+          " Leg 2 stays the LOCKED BADGE SPREAD >= 65 (share >= 82.5%%). Regression anchors"
+          " asserted: 20977 passes legs 1-4; 14873 fails leg 1'' (its +50 cross was a dot); 14876"
+          " fails leg 2 (spread +61.9). Multiplicity +2 -> counter 522.** 1h windows + fire-search"
+          " blackout (%d fires absorbed); moving-baseline router (no self-touch); taker %.2f%% net;"
+          " fixed TP+0.5/SL-0.3 exits (S1, * = ambiguous). References: %.1f%% null / %.1f%%"
+          " breakeven. Underpowered: n < %d -> counts only._"
           % (n_blk, FEE, NULL, BREAKEVEN, UNDER_N), "",
-          "## 1. Funnel (deltas vs S5j-r1 and S5d-locked)", "",
-          "| side | fire bars | vs S5j-r1 | vs S5d-locked | episodes | MKT | WAIT | "
+          "## 1. Funnel (deltas vs S5j-r2 and S5d-locked)", "",
+          "| side | fire bars | vs S5j-r2 | vs S5d-locked | episodes | MKT | WAIT | "
           "touched | CANCELLED |", "|---|---|---|---|---|---|---|---|---|"]
     for s in ("long", "short"):
         fb = set(fire_bars[s])
