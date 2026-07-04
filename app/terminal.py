@@ -367,9 +367,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._RGB_SPD_BUY = (40, 230, 90); self._RGB_SPD_SELL = (255, 45, 70)   # match the FLOW Buy/Sell colours
         self.bc_spd_buy = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_BUY, width=2))
         self.bc_spd_sell = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_SELL, width=2))
+        # ONE-SIDED marker: buckets where only one side traded (the other 0/s) — excluded from the
+        # scale so they can't flatten the graph, drawn as a diamond coloured by the active side.
+        self.bc_spd_flag = pg.ScatterPlotItem(pxMode=True, size=9, symbol="d")
         self.bc_spd_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
         self.bc_spd_title.setZValue(62)
-        for _si in (self.bc_spd_buy, self.bc_spd_sell, self.bc_spd_title):
+        for _si in (self.bc_spd_buy, self.bc_spd_sell, self.bc_spd_flag, self.bc_spd_title):
             _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
@@ -1793,6 +1796,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _clear_speed(self) -> None:
         for _it in (self.bc_spd_buy, self.bc_spd_sell):
             _it.setData([], []); _it.setVisible(False)
+        self.bc_spd_flag.setData(spots=[]); self.bc_spd_flag.setVisible(False)
         self.bc_spd_title.setVisible(False)
         for _k in ("SPD_BUY", "SPD_SELL"):
             self._spread_badges[_k].hide()
@@ -1808,19 +1812,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         so their CROSSINGS and DIVERGENCE read directly. Per-bucket, final the instant a bucket closes (no
         smoothing, no lock lag); only the forming bucket at the live edge is partial (uses elapsed)."""
         xs = list(range(lo, hi + 1))
-        buy_s, sell_s = [], []
+        if not xs:
+            self._clear_speed(); return
+        buy_s, sell_s, flag = [], [], []
         for k in xs:
             b = filtered[k]
             dur = max(1e-9, float(b.get("end_time", 0.0)) - float(b.get("start_time", 0.0)))
-            buy_s.append(float(b.get("buy_vol", 0.0)) / dur)
-            sell_s.append(float(b.get("sell_vol", 0.0)) / dur)
-        if not xs:
-            self._clear_speed(); return
-        # ROBUST scale: an abnormal-volume bucket must not flatten the rest. Scale to each bucket's
-        # ENVELOPE (the larger of its two rates); cap the axis at the largest NON-outlier envelope
-        # (Tukey far-out fence q75+3*IQR). A spike above the cap saturates at the ceiling; the badge
-        # + hover still report the true (unclipped) rate.
-        _env = sorted(max(buy_s[i], sell_s[i]) for i in range(len(buy_s)))
+            bs = float(b.get("buy_vol", 0.0)) / dur; ss = float(b.get("sell_vol", 0.0)) / dur
+            buy_s.append(bs); sell_s.append(ss)
+            flag.append((bs == 0.0) != (ss == 0.0))       # ONE-SIDED bucket (exactly one side traded)
+        # scale on the TWO-SIDED buckets only (one-sided spikes excluded so they can't flatten it);
+        # remaining two-sided outliers still capped by a Tukey far-out fence, clip to the ceiling.
+        _env = sorted(max(buy_s[i], sell_s[i]) for i in range(len(xs)) if not flag[i])
+        if not _env:
+            _env = sorted(max(buy_s[i], sell_s[i]) for i in range(len(xs)))
 
         def _pc(q):
             if len(_env) == 1:
@@ -1834,10 +1839,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         def _sy(v):
             z = v / vmax
-            return sc_bot + (z if z < 1.0 else 1.0) * (sc_top - sc_bot)   # 0..cap -> band, clip spikes to top
+            return sc_bot + (z if z < 1.0 else 1.0) * (sc_top - sc_bot)   # 0..cap -> band, clip to top
 
-        self.bc_spd_buy.setData(xs, [_sy(v) for v in buy_s]); self.bc_spd_buy.setVisible(True)
-        self.bc_spd_sell.setData(xs, [_sy(v) for v in sell_s]); self.bc_spd_sell.setVisible(True)
+        # lines BRIDGE the one-sided buckets (excluded points); a diamond marks each, coloured by the
+        # side that traded (green = buy-only, red = sell-only), pinned at the panel top.
+        gx, gbuy, gsell, spots = [], [], [], []
+        for i, k in enumerate(xs):
+            if flag[i]:
+                col = self._RGB_SPD_BUY if buy_s[i] > 0 else self._RGB_SPD_SELL
+                spots.append({"pos": (k, sc_top), "brush": pg.mkBrush(*col),
+                              "pen": pg.mkPen(20, 22, 26), "symbol": "d", "size": 9})
+            else:
+                gx.append(k); gbuy.append(_sy(buy_s[i])); gsell.append(_sy(sell_s[i]))
+        self.bc_spd_buy.setData(gx, gbuy); self.bc_spd_buy.setVisible(True)
+        self.bc_spd_sell.setData(gx, gsell); self.bc_spd_sell.setVisible(True)
+        self.bc_spd_flag.setData(spots=spots); self.bc_spd_flag.setVisible(bool(spots))
         self.bc_spd_title.setText("SPEED · buyer/seller trading rate (vol/sec) · selection")
         self.bc_spd_title.setPos(lo - 0.5, sc_top); self.bc_spd_title.setVisible(True)
         # badges: each side's current (last-bucket) rate, in its colour, at the panel right
