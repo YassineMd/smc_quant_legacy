@@ -377,6 +377,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_spd_title.setZValue(62)
         for _si in (self.bc_spd_mid, self.bc_spd_q, self.bc_spd_lock, self.bc_spd_title):
             _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
+        # CUMULATIVE SPEED-DELTA panel (Ctrl+2) — running sum of (buy_spd - sell_spd) across the
+        # selection, ONE sign-split line on a zero baseline: CYAN above (net buyers faster) / MAGENTA
+        # below (net sellers). Auto-scaled to include zero — a rate-based CVD of the trading speed.
+        self.bc_cd_pos = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_BUY, width=2), connect="finite")
+        self.bc_cd_neg = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_SELL, width=2), connect="finite")
+        self.bc_cd_zero = pg.PlotDataItem(pen=_dpen((150, 150, 150)))               # zero baseline
+        self.bc_cd_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
+        self.bc_cd_title.setZValue(62)
+        for _si in (self.bc_cd_pos, self.bc_cd_neg, self.bc_cd_zero, self.bc_cd_title):
+            _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
         # heatmap large-order bubbles); SMALL = small-BUY vs small-SELL trade-COUNT share (green / red). Each
@@ -467,7 +477,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                    "BEFORE", "START/DURING", "END",        # phase panels 5/6/7 — UP/DOWN spread badge
                    "PANEL9_BULL", "PANEL9_BEAR", "PANEL9_SUM",
                    "PANEL0_BULL", "PANEL0_BEAR", "PANEL0_SUM",
-                   "SPD_BUY", "SPD_SELL"):                  # Ctrl+1 SPEED panel (buyer/seller trading rate)
+                   "SPD_BUY", "SPD_SELL",                   # Ctrl+1 SPEED panel (buyer/seller trading rate)
+                   "CUMDELTA"):                             # Ctrl+2 cumulative speed-delta panel
             _bd = pg.TextItem(anchor=(0, 0.5), color=(0, 0, 0))
             _bf = QtGui.QFont("Consolas", 11); _bf.setBold(True)
             _bd.textItem.setFont(_bf)
@@ -636,6 +647,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # PANEL 0 ('0') — a SMOOTHED twin of Panel 9: each line = (current + locked)/2. Identical items/colors.
         self.show_panel0 = True
         self.show_speed = False          # Ctrl+1 SPEED panel — buyer/seller trading rate (default OFF; persisted)
+        self.show_cumdelta = False       # Ctrl+2 cumulative speed-delta panel (default OFF; persisted)
         self.show_whisker = False        # 'W' volume-quantile whisker bars (candles stay default; persisted)
         _gp0_hi = pg.mkPen("#ff9800", width=0.8); _gp0_hi.setCosmetic(True); _gp0_hi.setDashPattern([5.0, 10.0])
         _gp0_lo = pg.mkPen("#ff9800", width=0.8); _gp0_lo.setCosmetic(True); _gp0_lo.setDashPattern([5.0, 10.0])
@@ -773,6 +785,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("9"), self, activated=self._toggle_panel9)    # panel 9: COMPOSITE lean
         QtGui.QShortcut(QtGui.QKeySequence("0"), self, activated=self._toggle_panel0)    # panel 0: smoothed P9
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+1"), self, activated=self._toggle_speed)  # SPEED panel (buyer/seller rate)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+2"), self, activated=self._toggle_cumdelta)  # cumulative speed-delta
         QtGui.QShortcut(QtGui.QKeySequence("W"), self, activated=self._toggle_whisker)   # volume-quantile whisker bars
         QtGui.QShortcut(QtGui.QKeySequence("Delete"), self, activated=lambda: self.drawer.delete_selected())
         QtGui.QShortcut(QtGui.QKeySequence("Backspace"), self, activated=lambda: self.drawer.delete_selected())
@@ -1853,6 +1866,74 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             "bull": buy_sh, "bear": sell_sh, "bcol": self._RGB_SPD_BUY, "rcol": self._RGB_SPD_SELL,
             "blbl": "BUY", "rlbl": "SELL", "fmt": "pct"})
 
+    def _toggle_cumdelta(self) -> None:
+        """Ctrl+2 — show/hide the CUMULATIVE SPEED-DELTA panel (running Σ of buy_spd − sell_spd)."""
+        self.show_cumdelta = not self.show_cumdelta
+        if not self.show_cumdelta:
+            self._clear_cumdelta()
+        self._save_ui_state()
+        self._refresh_selection_stats()
+
+    def _clear_cumdelta(self) -> None:
+        for _it in (self.bc_cd_pos, self.bc_cd_neg, self.bc_cd_zero):
+            _it.setData([], []); _it.setVisible(False)
+        self.bc_cd_title.setVisible(False)
+        self._spread_badges["CUMDELTA"].hide()
+
+    def _draw_cumdelta_panel(self, filtered, lo, hi, cd_bot, cd_top, badge_x) -> None:
+        """CUMULATIVE SPEED-DELTA — running sum of the per-bucket speed imbalance (buy_spd − sell_spd)
+        from the selection start. ONE line, sign-split at the zero baseline: CYAN where the cumulative
+        is >= 0 (net buyers have been faster) / MAGENTA where < 0. The per-bucket delta is centered-
+        smoothed (SPEED_SMOOTH_W) before accumulation so a one-sided spike ramps instead of stepping;
+        auto-scaled to always include zero. A rate-based CVD of trading speed."""
+        import numpy as np
+        xs = list(range(lo, hi + 1))
+        if not xs:
+            self._clear_cumdelta(); return
+        delta = []
+        for k in xs:
+            b = filtered[k]
+            dur = max(1e-9, float(b.get("end_time", 0.0)) - float(b.get("start_time", 0.0)))
+            delta.append(float(b.get("buy_vol", 0.0)) / dur - float(b.get("sell_vol", 0.0)) / dur)
+        d = np.array(delta, float)
+        _W = max(1, int(getattr(config, "SPEED_SMOOTH_W", 7)))
+        if _W > 1 and len(d) >= 2:
+            ker = np.ones(_W)
+            d = np.convolve(d, ker, "same") / np.convolve(np.ones_like(d), ker, "same")   # centered mean
+        cum = np.cumsum(d)
+        ymin = min(0.0, float(cum.min())); ymax = max(0.0, float(cum.max()))
+        if ymax - ymin < 1e-9:
+            ymax = ymin + 1.0
+
+        def _cy(v):
+            return cd_bot + (v - ymin) / (ymax - ymin) * (cd_top - cd_bot)
+
+        zy = _cy(0.0)
+        # sign-split into cyan(>=0)/magenta(<0), inserting the zero-crossing so segments meet on the line
+        xs_s, pos, neg = [], [], []
+        prev = prevx = None
+        for i, k in enumerate(xs):
+            c = float(cum[i])
+            if prev is not None and (prev >= 0) != (c >= 0):
+                t = prev / (prev - c) if (prev - c) != 0 else 0.0
+                xs_s.append(prevx + t); pos.append(zy); neg.append(zy)
+            y = _cy(c); xs_s.append(k)
+            pos.append(y if c >= 0 else np.nan); neg.append(y if c < 0 else np.nan)
+            prev, prevx = c, k
+        self.bc_cd_pos.setData(xs_s, pos, connect="finite"); self.bc_cd_pos.setVisible(True)
+        self.bc_cd_neg.setData(xs_s, neg, connect="finite"); self.bc_cd_neg.setVisible(True)
+        self.bc_cd_zero.setData([lo - 0.5, hi + 0.5], [zy, zy]); self.bc_cd_zero.setVisible(True)
+        _sm = (" · sm%d" % _W) if _W > 1 else ""
+        self.bc_cd_title.setText("CUM ΔSPEED · Σ(buy−sell rate) · selection" + _sm)
+        self.bc_cd_title.setPos(lo - 0.5, cd_top); self.bc_cd_title.setVisible(True)
+        _cur = float(cum[-1])
+        self._spd_badge("CUMDELTA", self._fmt_k(_cur),
+                        self._RGB_SPD_BUY if _cur >= 0 else self._RGB_SPD_SELL, badge_x, _cy(_cur))
+        self._panel_hovers.append({                # hover -> running cumulative + per-bucket delta
+            "label": "CUM Δ", "lo": lo, "yb": cd_bot, "yt": cd_top,
+            "bull": list(cum), "bear": list(d), "bcol": self._RGB_SPD_BUY, "rcol": self._RGB_SPD_SELL,
+            "blbl": "CUM", "rlbl": "Δ/bkt", "fmt": "k"})
+
     def _toggle_phase_table(self) -> None:
         """'t' — show/hide the live PHASE TABLE on its own (no need to turn on a phase panel 5/6/7)."""
         self.show_phase_table = not self.show_phase_table
@@ -1871,6 +1952,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "er": self.show_er_strip, "exh": self.show_exh_strip,
                 "ls_mode": self._ls_mode, "panel9": self.show_panel9, "panel0": self.show_panel0,
                 "speed_dev": self.show_speed,
+                "cum_delta": self.show_cumdelta,
                 "whisker": self.show_whisker,
                 "phase_table": self.show_phase_table,
                 "phase": {k: bool(v) for k, v in self.show_phase.items()},
@@ -1903,6 +1985,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_panel9 = bool(s.get("panel9", self.show_panel9))
         self.show_panel0 = bool(s.get("panel0", self.show_panel0))
         self.show_speed = bool(s.get("speed_dev", self.show_speed))
+        self.show_cumdelta = bool(s.get("cum_delta", self.show_cumdelta))
         self.show_whisker = bool(s.get("whisker", self.show_whisker))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
         for _k, _v in (s.get("phase") or {}).items():
@@ -2305,7 +2388,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0(); self._clear_speed()                        # smoothed twin + speed: clear on teardown
+            self._clear_panel0(); self._clear_speed(); self._clear_cumdelta()  # smoothed twin + speed + cumΔ: teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2335,7 +2418,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0(); self._clear_speed()                        # smoothed twin + speed: clear on teardown
+            self._clear_panel0(); self._clear_speed(); self._clear_cumdelta()  # smoothed twin + speed + cumΔ: teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2358,7 +2441,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 rect, filtered, lo_i, hi_i,
                 (self.show_abs_strip, self.show_eff_strip, self.show_er_strip, self.show_exh_strip,
                  tuple(self.show_phase[p] for p in self._PHASES), self.show_state, self.show_sel_stats,
-                 self._ls_mode, self.show_phase_table, self.show_panel9, self.show_panel0, self.show_speed),
+                 self._ls_mode, self.show_phase_table, self.show_panel9, self.show_panel0, self.show_speed,
+                 self.show_cumdelta),
                 (self.zone_slider.value_s(), self.eff_slider.value_s(),
                  self._largesmall_thr_sig()), tv, config.VPIN_ADAPT_WINDOW)
             if sig == self._sel_sig:
@@ -2386,7 +2470,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0(); self._clear_speed()                        # smoothed twin + speed: clear on teardown
+            self._clear_panel0(); self._clear_speed(); self._clear_cumdelta()  # smoothed twin + speed + cumΔ: teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2497,6 +2581,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         p9_on = self.show_panel9 and _drawable
         p0_on = self.show_panel0 and _drawable
         speed_on = self.show_speed and _drawable
+        cd_on = self.show_cumdelta and _drawable
         ph_geom = {}
         _cur = y0                                           # running bottom edge of the last placed panel
         if abs_on:
@@ -2527,9 +2612,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if p0_on:                                           # SMOOTHED twin of panel 9 (very BOTTOM)
             p0_top = _cur - config.EXH_STRIP_GAP * sel_h; p0_bot = p0_top - config.EXH_STRIP_FRAC * sel_h
             _cur = p0_bot
-        if speed_on:                                        # SPEED panel (very bottom, under P0)
+        if speed_on:                                        # SPEED panel (under P0)
             sc_top = _cur - config.EXH_STRIP_GAP * sel_h; sc_bot = sc_top - config.EXH_STRIP_FRAC * sel_h
             _cur = sc_bot
+        if cd_on:                                           # CUMULATIVE SPEED-DELTA (very bottom)
+            cd_top = _cur - config.EXH_STRIP_GAP * sel_h; cd_bot = cd_top - config.EXH_STRIP_FRAC * sel_h
+            _cur = cd_bot
         # minimalist hairline divider in each gap BETWEEN consecutive visible panels (stack order)
         _bands = []
         if abs_on: _bands.append((abs_top, abs_bot))
@@ -2543,6 +2631,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if p9_on: _bands.append((p9_top, p9_bot))
         if p0_on: _bands.append((p0_top, p0_bot))
         if speed_on: _bands.append((sc_top, sc_bot))
+        if cd_on: _bands.append((cd_top, cd_bot))
         _sep_ys = [(_bands[i][1] + _bands[i + 1][0]) / 2.0 for i in range(len(_bands) - 1)]
         self.bc_panel_sep.update_data(lo - 0.5, hi + 0.5, _sep_ys)
         self.bc_panel_sep.setVisible(bool(_sep_ys))
@@ -2846,6 +2935,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._clear_speed()
         else:
             self._clear_speed()
+        if cd_on:                                 # CUMULATIVE SPEED-DELTA panel (guarded)
+            try:
+                self._draw_cumdelta_panel(filtered, lo, hi, cd_bot, cd_top, _badge_x)
+            except Exception:
+                self._clear_cumdelta()
+        else:
+            self._clear_cumdelta()
         self.sel_stats.set_content(
             self._selection_stat_lines(agg, state, conf, dbg, vtier,
                                        spark_op, spark_cl, flip,
