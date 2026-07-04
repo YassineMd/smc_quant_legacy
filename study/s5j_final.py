@@ -210,14 +210,16 @@ def main():
             row["route"] = "MKT"; row["status"] = "MKT"; row["delay"] = 0.0
         else:
             row["route"] = "WAIT"
+            # r5 correction: bar COLOR is the only close requirement — a bullish bar under the
+            # baseline (long) / bearish bar above it (short) is a valid entry; close vs baseline
+            # does not matter. Entry bar = first bar touching/at the line with the on-side color.
             for j in range(b + 1, j1):
-                bc = int(np.round(base[j] * 100))
                 if long:
-                    if lo_[j] <= base[j] and rcl[j] > max(rop[j], bc):
+                    if lo_[j] <= base[j] and rcl[j] > rop[j]:
                         j_e = j
                         break
                 else:
-                    if hi[j] >= base[j] and rcl[j] < min(rop[j], bc):
+                    if hi[j] >= base[j] and rcl[j] < rop[j]:
                         j_e = j
                         break
             if j_e is not None:
@@ -260,18 +262,17 @@ def main():
         for r in rows:
             w.writerow(r)
 
-    md = ["# S5j-r4 — Fully-Locked Confluence + qualified close-entries (bar color rule)", "",
-          "_**S5j-r4 updates (operator, 2026-07-04): (1) w_max/w_min are now ENTRY-referenced —"
-          " %% from the entry price over 1h from the entry bar (CANCELLED rows keep the fire-close"
-          " counterfactual). (2) Entry qualification: the entry bar must close BULLISH for longs /"
-          " BEARISH for shorts, and every entry executes AT THE BAR CLOSE (translation on the"
-          " record: the color is a close property, so the operator's 'enter the close' is applied"
-          " to all entries; a MKT-route fire bar that fails the color test FALLS THROUGH to the"
-          " WAIT scan rather than dying). WAIT entry bar (long) = touches the moving baseline AND"
-          " closes above BOTH its open and the baseline — one condition covering the normal"
-          " pullback and the reclaim exception (open below the line, close above); short mirrored."
-          " Legs unchanged from r3 (100-bar leg 1'', spread-65 leg 2, two-sided leg 3, zone"
-          " 60-100); anchors hold (20977 / 14873 / 14876). Multiplicity +2 -> counter 524.**"
+    md = ["# S5j-r5 — Fully-Locked Confluence + color-qualified close-entries (corrected)", "",
+          "_**S5j-r5 (operator correction of r4's entry translation): the bar COLOR is the only"
+          " close requirement — a bullish bar UNDER the baseline is a valid long entry, a bearish"
+          " bar ABOVE it a valid short entry; close-vs-baseline does not matter (r4 wrongly"
+          " required the close beyond the line). WAIT entry bar (long) = first bar touching/at the"
+          " moving baseline (low <= line) that closes bullish; short mirrored. Every entry still"
+          " executes AT THE BAR CLOSE; a MKT-route fire bar failing the color test falls through"
+          " to the WAIT scan. w_max/w_min stay ENTRY-referenced (CANCELLED rows keep the"
+          " fire-close counterfactual). Legs unchanged from r3 (100-bar leg 1'', spread-65 leg 2,"
+          " two-sided leg 3, zone 60-100); anchors hold (20977 / 14873 / 14876). Multiplicity +2"
+          " -> counter 526.**"
           " 1h windows + fire-search blackout (%d fires absorbed); taker %.2f%% net; fixed"
           " TP+0.5/SL-0.3 exits from the entry close (S1, * = ambiguous). References: %.1f%% null"
           " / %.1f%% breakeven. Underpowered: n < %d -> counts only._"
