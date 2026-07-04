@@ -1816,10 +1816,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             sell_s.append(float(b.get("sell_vol", 0.0)) / dur)
         if not xs:
             self._clear_speed(); return
-        vmax = max([*buy_s, *sell_s, 1e-9])
+        # ROBUST scale: an abnormal-volume bucket must not flatten the rest. Scale to each bucket's
+        # ENVELOPE (the larger of its two rates); cap the axis at the largest NON-outlier envelope
+        # (Tukey far-out fence q75+3*IQR). A spike above the cap saturates at the ceiling; the badge
+        # + hover still report the true (unclipped) rate.
+        _env = sorted(max(buy_s[i], sell_s[i]) for i in range(len(buy_s)))
+
+        def _pc(q):
+            if len(_env) == 1:
+                return _env[0]
+            _i = q / 100.0 * (len(_env) - 1); _lo = int(_i); _fr = _i - _lo
+            return _env[_lo] + _fr * (_env[_lo + 1] - _env[_lo]) if _lo + 1 < len(_env) else _env[_lo]
+
+        _q1, _q3 = _pc(25), _pc(75); _fence = _q3 + 3.0 * (_q3 - _q1)
+        _under = [v for v in _env if v <= _fence]
+        vmax = max(1e-9, _under[-1] if _under else _env[-1])
 
         def _sy(v):
-            return sc_bot + (v / vmax) * (sc_top - sc_bot)        # 0..max -> panel band
+            z = v / vmax
+            return sc_bot + (z if z < 1.0 else 1.0) * (sc_top - sc_bot)   # 0..cap -> band, clip spikes to top
 
         self.bc_spd_buy.setData(xs, [_sy(v) for v in buy_s]); self.bc_spd_buy.setVisible(True)
         self.bc_spd_sell.setData(xs, [_sy(v) for v in sell_s]); self.bc_spd_sell.setVisible(True)
