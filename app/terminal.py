@@ -3082,6 +3082,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             oi_d = (opL + opS) - (clL + clS)
             dur = b.get("end_time", 0.0) - b.get("start_time", 0.0)
             vel = b.get("vol_mult", 1.0)
+            bspd = bv / max(1e-9, dur); sspd = sv / max(1e-9, dur)   # per-side trading speed (vol/sec)
             bm, sm, _om = _exhaustion_mults(buckets, idx)
             win = buckets[max(0, idx - EXH_WINDOW):idx]
             b30 = (sum(w.get("buyer_er", 0.0) for w in win) / len(win)) if win else 0.0
@@ -3113,6 +3114,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 # lesser side renders dim.
                 f"{span('Sell '+K(sv), r if sv > bv else gray)} | "
                 f"{span('Buy '+K(bv), g if bv > sv else gray)}",
+                # per-side trading SPEED (vol/sec) — the total VEL split into who's transacting faster
+                f"{span('Spd S '+K(sspd)+'/s', r if sspd > bspd else gray)} | "
+                f"{span('B '+K(bspd)+'/s', g if bspd > sspd else gray)}",
                 f"Delta {span(sk(delta)+f' ({dpct:+.0f}%)', g if delta >= 0 else r)}",
                 f"OI Δ {span(sk(oi_d), g if oi_d >= 0 else r)}",
                 sep("POSITIONING"),
