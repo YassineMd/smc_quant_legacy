@@ -367,13 +367,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._RGB_SPD_BUY = (40, 230, 90); self._RGB_SPD_SELL = (255, 45, 70)   # match the FLOW Buy/Sell colours
         self.bc_spd_buy = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_BUY, width=2))
         self.bc_spd_sell = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_SELL, width=2))
-        self.bc_spd_mid = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))  # 50%
+        # reference lines identical to panels 1/2/3: 50% light-gray midline + 25%/75% ORANGE quarters
+        # (_dpen / _ORANGE defined just above, in the panel-1/2/3 reference block).
+        self.bc_spd_mid = pg.PlotDataItem(pen=_dpen((150, 150, 150)))               # 50% midline
+        self.bc_spd_q = pg.PlotDataItem(pen=_dpen(_ORANGE), connect="finite")       # 25%/75% quarters
         # ONE-SIDED marker: buckets where only one side traded (the other 0/s) — excluded from the
         # share line so they can't distort it, drawn as a diamond coloured by the active side.
         self.bc_spd_flag = pg.ScatterPlotItem(pxMode=True, size=9, symbol="d")
         self.bc_spd_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
         self.bc_spd_title.setZValue(62)
-        for _si in (self.bc_spd_buy, self.bc_spd_sell, self.bc_spd_mid, self.bc_spd_flag, self.bc_spd_title):
+        for _si in (self.bc_spd_buy, self.bc_spd_sell, self.bc_spd_mid, self.bc_spd_q,
+                    self.bc_spd_flag, self.bc_spd_title):
             _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
@@ -1798,6 +1802,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _it in (self.bc_spd_buy, self.bc_spd_sell):
             _it.setData([], []); _it.setVisible(False)
         self.bc_spd_mid.setData([], []); self.bc_spd_mid.setVisible(False)
+        self.bc_spd_q.setData([], []); self.bc_spd_q.setVisible(False)
         self.bc_spd_flag.setData(spots=[]); self.bc_spd_flag.setVisible(False)
         self.bc_spd_title.setVisible(False)
         for _k in ("SPD_BUY", "SPD_SELL"):
@@ -1843,7 +1848,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         def _sy(sh):                                       # FIXED share 0..1 -> panel band (no auto-scale)
             return sc_bot + sh * (sc_top - sc_bot)
 
-        self.bc_spd_mid.setData([lo - 0.5, hi + 0.5], [_sy(0.5), _sy(0.5)]); self.bc_spd_mid.setVisible(True)
+        # reference lines: 50% gray midline + 25%/75% orange quarters, identical to panels 1/2/3
+        self._draw_panel_refs(self.bc_spd_mid, self.bc_spd_q, lo, hi, sc_bot, sc_top)
         # lines BRIDGE the excluded buckets; one-sided ones get a diamond coloured by the side that traded.
         gx, gbuy, gsell, spots = [], [], [], []
         for i, k in enumerate(xs):
