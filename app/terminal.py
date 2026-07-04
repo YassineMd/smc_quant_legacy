@@ -367,12 +367,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._RGB_SPD_BUY = (40, 230, 90); self._RGB_SPD_SELL = (255, 45, 70)   # match the FLOW Buy/Sell colours
         self.bc_spd_buy = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_BUY, width=2))
         self.bc_spd_sell = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_SELL, width=2))
+        self.bc_spd_mid = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))  # 50%
         # ONE-SIDED marker: buckets where only one side traded (the other 0/s) — excluded from the
-        # scale so they can't flatten the graph, drawn as a diamond coloured by the active side.
+        # share line so they can't distort it, drawn as a diamond coloured by the active side.
         self.bc_spd_flag = pg.ScatterPlotItem(pxMode=True, size=9, symbol="d")
         self.bc_spd_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
         self.bc_spd_title.setZValue(62)
-        for _si in (self.bc_spd_buy, self.bc_spd_sell, self.bc_spd_flag, self.bc_spd_title):
+        for _si in (self.bc_spd_buy, self.bc_spd_sell, self.bc_spd_mid, self.bc_spd_flag, self.bc_spd_title):
             _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
@@ -1796,6 +1797,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _clear_speed(self) -> None:
         for _it in (self.bc_spd_buy, self.bc_spd_sell):
             _it.setData([], []); _it.setVisible(False)
+        self.bc_spd_mid.setData([], []); self.bc_spd_mid.setVisible(False)
         self.bc_spd_flag.setData(spots=[]); self.bc_spd_flag.setVisible(False)
         self.bc_spd_title.setVisible(False)
         for _k in ("SPD_BUY", "SPD_SELL"):
@@ -1807,85 +1809,72 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         bd.setPos(x, y); bd.show()
 
     def _draw_speed_panel(self, filtered, lo, hi, sc_bot, sc_top, badge_x) -> None:
-        """SPEED — buyer (green) vs seller (red) TRADING RATE across the selection [lo, hi]. Each bucket's
-        rate = side volume / bucket duration (contracts/sec); both lines share one auto-scaled 0..max axis
-        so their CROSSINGS and DIVERGENCE read directly. Per-bucket, final the instant a bucket closes (no
-        smoothing, no lock lag); only the forming bucket at the live edge is partial (uses elapsed)."""
+        """SPEED — buyer (green) vs seller (red) SHARE OF TRADING SPEED across the selection [lo, hi].
+        Each bucket's buy_share = buy_spd / (buy_spd + sell_spd), sell_share = 1 − buy_share (speed =
+        side volume / bucket duration). FIXED 0–100% axis with a 50% midline: above 50 = buyers
+        transacting faster, below = sellers. Crossings read directly. One-sided buckets (other side
+        0/s) are a degenerate 100/0 — excluded from the line (bridged) and diamond-marked."""
         import numpy as np
         xs = list(range(lo, hi + 1))
         if not xs:
             self._clear_speed(); return
-        buy_s, sell_s, flag = [], [], []
+        share, flag, buy_dom = [], [], []
         for k in xs:
             b = filtered[k]
             dur = max(1e-9, float(b.get("end_time", 0.0)) - float(b.get("start_time", 0.0)))
             bs = float(b.get("buy_vol", 0.0)) / dur; ss = float(b.get("sell_vol", 0.0)) / dur
-            buy_s.append(bs); sell_s.append(ss)
+            tot = bs + ss
             flag.append((bs == 0.0) != (ss == 0.0))       # ONE-SIDED bucket (exactly one side traded)
-        _fa = np.array(flag)
-        # CENTERED (zero-phase) rolling-mean smoothing of each line; one-sided buckets are treated as
-        # gaps (never contribute, stay excluded). DISPLAY-ONLY — the flags + hover read the RAW rate.
+            buy_dom.append(bs > 0)
+            share.append(bs / tot if tot > 0 else np.nan)  # NaN = dead bucket (no trades) -> gap
+        _drop = np.array([flag[i] or not np.isfinite(share[i]) for i in range(len(xs))])
+        # CENTERED (zero-phase) rolling-mean smoothing of the SHARE; dropped buckets never contribute
+        # and stay excluded/bridged. DISPLAY-ONLY — the flags + hover read the raw per-bucket share.
         _W = max(1, int(getattr(config, "SPEED_SMOOTH_W", 5)))
+        v = np.where(_drop, np.nan, np.array(share, float))
+        if _W > 1 and len(v) >= 2:
+            ker = np.ones(_W)
+            num = np.convolve(np.nan_to_num(v), ker, "same")
+            cnt = np.convolve(np.isfinite(v).astype(float), ker, "same")
+            v = np.where(cnt > 0, num / np.maximum(cnt, 1.0), np.nan)
+        v[_drop] = np.nan
+        buy_sm = v; sell_sm = 1.0 - v
 
-        def _smooth(vals):
-            v = np.where(_fa, np.nan, np.array(vals, float))
-            if _W > 1 and len(v) >= 2:
-                ker = np.ones(_W)
-                num = np.convolve(np.nan_to_num(v), ker, "same")
-                cnt = np.convolve(np.isfinite(v).astype(float), ker, "same")
-                v = np.where(cnt > 0, num / np.maximum(cnt, 1.0), np.nan)
-            v[_fa] = np.nan                                # one-sided buckets stay excluded/bridged
-            return v
+        def _sy(sh):                                       # FIXED share 0..1 -> panel band (no auto-scale)
+            return sc_bot + sh * (sc_top - sc_bot)
 
-        buy_sm = _smooth(buy_s); sell_sm = _smooth(sell_s)
-        # scale on the TWO-SIDED (smoothed) buckets only; remaining outliers capped by a Tukey fence.
-        _env = sorted(max(buy_sm[i], sell_sm[i]) for i in range(len(xs)) if not flag[i])
-        if not _env:
-            _env = sorted(max(buy_s[i], sell_s[i]) for i in range(len(xs)))
-
-        def _pc(q):
-            if len(_env) == 1:
-                return _env[0]
-            _i = q / 100.0 * (len(_env) - 1); _lo = int(_i); _fr = _i - _lo
-            return _env[_lo] + _fr * (_env[_lo + 1] - _env[_lo]) if _lo + 1 < len(_env) else _env[_lo]
-
-        _q1, _q3 = _pc(25), _pc(75); _fence = _q3 + 3.0 * (_q3 - _q1)
-        _under = [v for v in _env if v <= _fence]
-        vmax = max(1e-9, _under[-1] if _under else _env[-1])
-
-        def _sy(v):
-            z = v / vmax
-            return sc_bot + (z if z < 1.0 else 1.0) * (sc_top - sc_bot)   # 0..cap -> band, clip to top
-
-        # lines BRIDGE the one-sided buckets (excluded points); a diamond marks each, coloured by the
-        # side that traded (green = buy-only, red = sell-only), pinned at the panel top.
+        self.bc_spd_mid.setData([lo - 0.5, hi + 0.5], [_sy(0.5), _sy(0.5)]); self.bc_spd_mid.setVisible(True)
+        # lines BRIDGE the excluded buckets; one-sided ones get a diamond coloured by the side that traded.
         gx, gbuy, gsell, spots = [], [], [], []
         for i, k in enumerate(xs):
-            if flag[i]:
-                col = self._RGB_SPD_BUY if buy_s[i] > 0 else self._RGB_SPD_SELL
-                spots.append({"pos": (k, sc_top), "brush": pg.mkBrush(*col),
-                              "pen": pg.mkPen(20, 22, 26), "symbol": "d", "size": 9})
+            if _drop[i]:
+                if flag[i]:
+                    col = self._RGB_SPD_BUY if buy_dom[i] else self._RGB_SPD_SELL
+                    spots.append({"pos": (k, _sy(1.0) if buy_dom[i] else _sy(0.0)),
+                                  "brush": pg.mkBrush(*col), "pen": pg.mkPen(20, 22, 26),
+                                  "symbol": "d", "size": 9})
             else:
                 gx.append(k); gbuy.append(_sy(float(buy_sm[i]))); gsell.append(_sy(float(sell_sm[i])))
         self.bc_spd_buy.setData(gx, gbuy); self.bc_spd_buy.setVisible(True)
         self.bc_spd_sell.setData(gx, gsell); self.bc_spd_sell.setVisible(True)
         self.bc_spd_flag.setData(spots=spots); self.bc_spd_flag.setVisible(bool(spots))
         _sm = (" · sm%d" % _W) if _W > 1 else ""
-        self.bc_spd_title.setText("SPEED · buyer/seller trading rate (vol/sec) · selection" + _sm)
+        self.bc_spd_title.setText("SPEED · buyer/seller share of trading rate (%) · selection" + _sm)
         self.bc_spd_title.setPos(lo - 0.5, sc_top); self.bc_spd_title.setVisible(True)
-        # badges: each side's current (last TWO-SIDED bucket) SMOOTHED rate, in its colour, panel right
-        _lb = next((i for i in range(len(xs) - 1, -1, -1) if not flag[i]), None)
+        # badges: current (last valid bucket) SMOOTHED share %, each side in its colour, panel right
+        _lb = next((i for i in range(len(xs) - 1, -1, -1) if not _drop[i]), None)
         if _lb is not None:
-            self._spd_badge("SPD_BUY", "B " + self._fmt_k(float(buy_sm[_lb])) + "/s",
-                            self._RGB_SPD_BUY, badge_x, _sy(float(buy_sm[_lb])))
-            self._spd_badge("SPD_SELL", "S " + self._fmt_k(float(sell_sm[_lb])) + "/s",
-                            self._RGB_SPD_SELL, badge_x, _sy(float(sell_sm[_lb])))
+            _b = float(buy_sm[_lb])
+            self._spd_badge("SPD_BUY", "B %.0f%%" % (_b * 100), self._RGB_SPD_BUY, badge_x, _sy(_b))
+            self._spd_badge("SPD_SELL", "S %.0f%%" % ((1 - _b) * 100), self._RGB_SPD_SELL, badge_x, _sy(1 - _b))
         else:
             self._spread_badges["SPD_BUY"].hide(); self._spread_badges["SPD_SELL"].hide()
-        self._panel_hovers.append({                # hover -> raw per-bucket buy/sell speed (vol/sec)
+        self._panel_hovers.append({                # hover -> raw per-bucket buy/sell share %
             "label": "SPEED", "lo": lo, "yb": sc_bot, "yt": sc_top,
-            "bull": buy_s, "bear": sell_s, "bcol": self._RGB_SPD_BUY, "rcol": self._RGB_SPD_SELL,
-            "blbl": "BUY", "rlbl": "SELL", "fmt": "spd"})
+            "bull": [(sh if np.isfinite(sh) else np.nan) for sh in share],
+            "bear": [(1 - sh if np.isfinite(sh) else np.nan) for sh in share],
+            "bcol": self._RGB_SPD_BUY, "rcol": self._RGB_SPD_SELL,
+            "blbl": "BUY", "rlbl": "SELL", "fmt": "pct"})
 
     def _toggle_phase_table(self) -> None:
         """'t' — show/hide the live PHASE TABLE on its own (no need to turn on a phase panel 5/6/7)."""
