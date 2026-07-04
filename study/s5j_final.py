@@ -55,11 +55,18 @@ def main():
     df = pd.read_parquet(os.path.join(OUT, "m10_sweep_1m.parquet"))
     idx = np.arange(16, n)
 
-    # legs 2-4 — S5i verbatim (leg 2 = share form, LOCKED badge index; legs 3/4 = locked phase row)
+    # legs 2-4 (all LOCKED): leg 2 = the BADGE SPREAD >= 65 (S5b-r alert rule; the S5i "share"
+    # wording was a second mistranslation — 14876 is its regression anchor: spread +61.9 < 65,
+    # share 80.9% would have passed). legs 3/4 = locked phase row (sweep verbatim).
     sh = e_sh[np.maximum(0, idx - LOCK)]
-    l2 = {"long": sh * 100.0 >= 65.0, "short": (1 - sh) * 100.0 >= 65.0}
-    legs234 = {s: (l2[s] & df["leg3_" + s].to_numpy() & df["leg4_" + s].to_numpy())
-               for s in ("long", "short")}
+    spr2 = (2.0 * sh - 1.0) * 100.0
+    l2 = {"long": spr2 >= 65.0, "short": -spr2 >= 65.0}
+    l2_r1 = {"long": sh * 100.0 >= 65.0, "short": (1 - sh) * 100.0 >= 65.0}   # r1 share form (comparison only)
+    legs34 = {s: (df["leg3_" + s].to_numpy() & df["leg4_" + s].to_numpy()) for s in ("long", "short")}
+    legs234 = {s: l2[s] & legs34[s] for s in ("long", "short")}
+    r_14876 = (14876 - bids[0]) - 16
+    assert not l2["long"][r_14876], "14876 leg-2 anchor must FAIL (spread < 65)"
+    assert l2["long"][(20977 - bids[0]) - 16], "20977 must still pass leg 2 (spread 78.5)"
 
     # LEG 1'' — LOCKED-ONLY panel-0 rule (S5j-r): two most recent LOCKED markers on-side AND the
     # newest is the on-side EXTREME cross (+50 long / -50 short). A settling dot never counts.
@@ -74,14 +81,14 @@ def main():
     b0_ = bids[0]
     assert leg1pp(20977 - b0_, "long"), "20977 leg-1 anchor must PASS"
     assert not leg1pp(14873 - b0_, "long"), "14873 leg-1 anchor must FAIL"
-    legs14 = {}
-    for s in ("long", "short"):
-        m = legs234[s].copy()
+    def apply_leg1(mask, s):
+        m = mask.copy()
         for r in np.flatnonzero(m):
             if not leg1pp(int(idx[r]), s):
                 m[r] = False
-        legs14[s] = m
-    old_leg14 = {s: (df["leg1_" + s].to_numpy() & legs234[s]) for s in ("long", "short")}
+        return m
+    legs14 = {s: apply_leg1(legs234[s], s) for s in ("long", "short")}
+    r1_leg14 = {s: apply_leg1(l2_r1[s] & legs34[s], s) for s in ("long", "short")}  # S5j-r1 set
 
     # LEG 5 — S5d leg5w code (rolling max/min EXISTS form), verbatim
     rop = np.round(op * 100).astype(np.int64); rcl = np.round(cl * 100).astype(np.int64)
@@ -108,24 +115,12 @@ def main():
                 break
         return red, green
 
-    # comparison sets: S5i (priority scan) and S5d-locked (spread legs + EXISTS)
-    def context_scan(b):
-        c = rcl[b]
-        for N in range(50, 101):
-            o = rop[b - N + 1]
-            if o > c:
-                return "long"
-            if o < c:
-                return "short"
-        return None
-    s5i_bars = {s: {int(idx[r]) for r in np.flatnonzero(old_leg14[s])
-                    if int(idx[r]) >= FIRST and context_scan(int(idx[r])) == s}
-                for s in ("long", "short")}
+    # comparison sets: S5j-r1 (leg1'' + share leg2) and S5d-locked (any-level leg1 + spread leg2)
     s5d_bars = {s: {int(idx[r]) for r in np.flatnonzero(
         df["fire_" + s].to_numpy() & (rng_L if s == "long" else rng_S)[idx])}
         for s in ("long", "short")}
     s5j_old_bars = {s: {int(idx[r]) for r in np.flatnonzero(
-        old_leg14[s] & (rng_L if s == "long" else rng_S)[idx])} for s in ("long", "short")}
+        r1_leg14[s] & (rng_L if s == "long" else rng_S)[idx])} for s in ("long", "short")}
 
     poc = np.array([float(d.get("poc_price", 0.0)) for d in raws])
     base = np.empty(n); base[0] = poc[0]
@@ -206,27 +201,26 @@ def main():
         for r in rows:
             w.writerow(r)
 
-    md = ["# S5j-r — Locked-Only Confluence (leg 1'' corrected) + EXISTS leg 5 + S5i machinery", "",
-          "_**S5j-r REDO (operator ruling, the 14873 post-mortem): the study reads EXCLUSIVELY"
-          " LOCKED data on panels 0, 2 and 6. Panels 2/6 already did (locked badge index, locked"
-          " phase row). LEG 1'' corrected: the two most recent LOCKED markers must be on-side AND"
-          " the newest must be the on-side EXTREME cross (+50 up for long / -50 down for short) —"
-          " a settling DOT at the extreme never counts. Anchors asserted: 20977 passes, 14873"
-          " fails. Multiplicity +2 for the re-judgment -> counter 518.** Leg 5 = S5d leg5w EXISTS"
-          " form verbatim; leg 2 = share >= 65%% as registered; 1h windows + fire-search blackout"
-          " (%d fires absorbed); moving-baseline router (no self-touch); taker %.2f%% net; fixed"
-          " TP+0.5/SL-0.3 exits (S1, * = ambiguous). References: %.1f%% null / %.1f%% breakeven."
+    md = ["# S5j-r2 — Fully-Locked Confluence (legs 1'' + 2 corrected) + EXISTS leg 5", "",
+          "_**S5j-r2: the second operator correction. Leg 1'' (from 14873): two most recent LOCKED"
+          " markers on-side AND the newest is the on-side EXTREME cross — settling dots never"
+          " count. Leg 2 (from 14876): the LOCKED BADGE SPREAD >= 65 points (share >= 82.5%%), the"
+          " terminal alert rule — the S5i 'share >= 65%%' wording was a second mistranslation."
+          " Regression anchors asserted in code: 20977 PASSES all legs; 14873 FAILS leg 1''; 14876"
+          " FAILS leg 2 (spread +61.9). Multiplicity +2 -> counter 520.** Legs 3/4 = locked phase"
+          " row; leg 5 = S5d leg5w EXISTS verbatim; 1h windows + fire-search blackout (%d fires"
+          " absorbed); moving-baseline router (no self-touch); taker %.2f%% net; fixed TP+0.5/"
+          "SL-0.3 exits (S1, * = ambiguous). References: %.1f%% null / %.1f%% breakeven."
           " Underpowered: n < %d -> counts only._"
           % (n_blk, FEE, NULL, BREAKEVEN, UNDER_N), "",
-          "## 1. Funnel (deltas vs S5j pre-redo, S5i and S5d-locked)", "",
-          "| side | fire bars | vs S5j pre-redo | vs S5i | vs S5d-locked | episodes | MKT | WAIT | "
-          "touched | CANCELLED |", "|---|---|---|---|---|---|---|---|---|---|"]
+          "## 1. Funnel (deltas vs S5j-r1 and S5d-locked)", "",
+          "| side | fire bars | vs S5j-r1 | vs S5d-locked | episodes | MKT | WAIT | "
+          "touched | CANCELLED |", "|---|---|---|---|---|---|---|---|---|"]
     for s in ("long", "short"):
         fb = set(fire_bars[s])
         ep_all = [r for r in rows if r["side"] == s]
-        md.append("| %s | %d | +%d / -%d (n=%d) | +%d / -%d (n=%d) | +%d / -%d (n=%d) | %d | %d | %d | %d | %d |" % (
+        md.append("| %s | %d | +%d / -%d (n=%d) | +%d / -%d (n=%d) | %d | %d | %d | %d | %d |" % (
             s, len(fb), len(fb - s5j_old_bars[s]), len(s5j_old_bars[s] - fb), len(s5j_old_bars[s]),
-            len(fb - s5i_bars[s]), len(s5i_bars[s] - fb), len(s5i_bars[s]),
             len(fb - s5d_bars[s]), len(s5d_bars[s] - fb), len(s5d_bars[s]),
             len(ep_all), sum(1 for r in ep_all if r["status"] == "MKT"),
             sum(1 for r in ep_all if r["status"] in ("TOUCH", "CANCELLED")),

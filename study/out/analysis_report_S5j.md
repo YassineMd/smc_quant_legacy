@@ -1,30 +1,30 @@
-# S5j-r — Locked-Only Confluence (leg 1'' corrected) + EXISTS leg 5 + S5i machinery
+# S5j-r2 — Fully-Locked Confluence (legs 1'' + 2 corrected) + EXISTS leg 5
 
-_**S5j-r REDO (operator ruling, the 14873 post-mortem): the study reads EXCLUSIVELY LOCKED data on panels 0, 2 and 6. Panels 2/6 already did (locked badge index, locked phase row). LEG 1'' corrected: the two most recent LOCKED markers must be on-side AND the newest must be the on-side EXTREME cross (+50 up for long / -50 down for short) — a settling DOT at the extreme never counts. Anchors asserted: 20977 passes, 14873 fails. Multiplicity +2 for the re-judgment -> counter 518.** Leg 5 = S5d leg5w EXISTS form verbatim; leg 2 = share >= 65% as registered; 1h windows + fire-search blackout (79 fires absorbed); moving-baseline router (no self-touch); taker 0.10% net; fixed TP+0.5/SL-0.3 exits (S1, * = ambiguous). References: 37.5% null / 50.0% breakeven. Underpowered: n < 20 -> counts only._
+_**S5j-r2: the second operator correction. Leg 1'' (from 14873): two most recent LOCKED markers on-side AND the newest is the on-side EXTREME cross — settling dots never count. Leg 2 (from 14876): the LOCKED BADGE SPREAD >= 65 points (share >= 82.5%), the terminal alert rule — the S5i 'share >= 65%' wording was a second mistranslation. Regression anchors asserted in code: 20977 PASSES all legs; 14873 FAILS leg 1''; 14876 FAILS leg 2 (spread +61.9). Multiplicity +2 -> counter 520.** Legs 3/4 = locked phase row; leg 5 = S5d leg5w EXISTS verbatim; 1h windows + fire-search blackout (37 fires absorbed); moving-baseline router (no self-touch); taker 0.10% net; fixed TP+0.5/SL-0.3 exits (S1, * = ambiguous). References: 37.5% null / 50.0% breakeven. Underpowered: n < 20 -> counts only._
 
-## 1. Funnel (deltas vs S5j pre-redo, S5i and S5d-locked)
+## 1. Funnel (deltas vs S5j-r1 and S5d-locked)
 
-| side | fire bars | vs S5j pre-redo | vs S5i | vs S5d-locked | episodes | MKT | WAIT | touched | CANCELLED |
-|---|---|---|---|---|---|---|---|---|---|
-| long | 83 | +0 / -50 (n=133) | +41 / -36 (n=78) | +35 / -17 (n=65) | 30 | 7 | 23 | 23 | 0 |
-| short | 39 | +0 / -1 (n=40) | +14 / -1 (n=26) | +25 / -1 (n=15) | 13 | 4 | 9 | 9 | 0 |
+| side | fire bars | vs S5j-r1 | vs S5d-locked | episodes | MKT | WAIT | touched | CANCELLED |
+|---|---|---|---|---|---|---|---|---|
+| long | 48 | +0 / -35 (n=83) | +0 / -17 (n=65) | 20 | 1 | 19 | 19 | 0 |
+| short | 14 | +0 / -25 (n=39) | +0 / -1 (n=15) | 5 | 1 | 4 | 4 | 0 |
 
 ## 2. Economics per side (fixed exit; filled entries)
 
 | side | n | TP/SL/unres | TP rate | vs null | vs BE | exp gross | exp net | med hold | delay med/p90 |
 |---|---|---|---|---|---|---|---|---|---|
-| long | 30 | 9/21/0 | 30.0% | -7.5 | -20.0 | -0.060% | -0.160% | 16.8 | 4.1/35.9 |
-| short _(under)_ | 13 | 6/7/0 | 46.2% | +8.7 | -3.8 | +0.069% | -0.031% | 18.5 | 3.0/9.1 |
+| long | 20 | 5/15/0 | 25.0% | -12.5 | -25.0 | -0.100% | -0.200% | 13.9 | 8.1/29.1 |
+| short _(under)_ | 5 | 2/3/0 | 40.0% | +2.5 | -10.0 | +0.020% | -0.080% | 20.3 | 4.6/29.1 |
 
 ## 3. 1h excursions from fire close (raw extremes), split by route
 
 | side | rows | status | med max | p25/p75 max | med min | p25/p75 min |
 |---|---|---|---|---|---|---|
-| long | 7 | MKT | +0.600 | +0.316/+0.938 | -0.511 | -0.891/-0.392 |
-| long | 23 | TOUCH | +0.407 | +0.225/+0.974 | -0.405 | -0.623/-0.217 |
+| long | 1 | MKT | +0.812 | +0.812/+0.812 | -0.787 | -0.787/-0.787 |
+| long | 19 | TOUCH | +0.603 | +0.258/+1.464 | -0.382 | -0.623/-0.205 |
 | long | 0 | CANCELLED | - | - | - | - |
-| short | 4 | MKT | +0.344 | +0.224/+1.053 | -0.985 | -1.110/-0.686 |
-| short | 9 | TOUCH | +0.505 | +0.418/+1.121 | -0.257 | -0.761/-0.098 |
+| short | 1 | MKT | +3.027 | +3.027/+3.027 | -0.133 | -0.133/-0.133 |
+| short | 4 | TOUCH | +0.327 | +0.111/+0.914 | -0.296 | -0.581/-0.106 |
 | short | 0 | CANCELLED | - | - | - | - |
 
 ## Honest flags
