@@ -1811,6 +1811,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         rate = side volume / bucket duration (contracts/sec); both lines share one auto-scaled 0..max axis
         so their CROSSINGS and DIVERGENCE read directly. Per-bucket, final the instant a bucket closes (no
         smoothing, no lock lag); only the forming bucket at the live edge is partial (uses elapsed)."""
+        import numpy as np
         xs = list(range(lo, hi + 1))
         if not xs:
             self._clear_speed(); return
@@ -1821,9 +1822,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             bs = float(b.get("buy_vol", 0.0)) / dur; ss = float(b.get("sell_vol", 0.0)) / dur
             buy_s.append(bs); sell_s.append(ss)
             flag.append((bs == 0.0) != (ss == 0.0))       # ONE-SIDED bucket (exactly one side traded)
-        # scale on the TWO-SIDED buckets only (one-sided spikes excluded so they can't flatten it);
-        # remaining two-sided outliers still capped by a Tukey far-out fence, clip to the ceiling.
-        _env = sorted(max(buy_s[i], sell_s[i]) for i in range(len(xs)) if not flag[i])
+        _fa = np.array(flag)
+        # CENTERED (zero-phase) rolling-mean smoothing of each line; one-sided buckets are treated as
+        # gaps (never contribute, stay excluded). DISPLAY-ONLY — the flags + hover read the RAW rate.
+        _W = max(1, int(getattr(config, "SPEED_SMOOTH_W", 5)))
+
+        def _smooth(vals):
+            v = np.where(_fa, np.nan, np.array(vals, float))
+            if _W > 1 and len(v) >= 2:
+                ker = np.ones(_W)
+                num = np.convolve(np.nan_to_num(v), ker, "same")
+                cnt = np.convolve(np.isfinite(v).astype(float), ker, "same")
+                v = np.where(cnt > 0, num / np.maximum(cnt, 1.0), np.nan)
+            v[_fa] = np.nan                                # one-sided buckets stay excluded/bridged
+            return v
+
+        buy_sm = _smooth(buy_s); sell_sm = _smooth(sell_s)
+        # scale on the TWO-SIDED (smoothed) buckets only; remaining outliers capped by a Tukey fence.
+        _env = sorted(max(buy_sm[i], sell_sm[i]) for i in range(len(xs)) if not flag[i])
         if not _env:
             _env = sorted(max(buy_s[i], sell_s[i]) for i in range(len(xs)))
 
@@ -1850,15 +1866,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 spots.append({"pos": (k, sc_top), "brush": pg.mkBrush(*col),
                               "pen": pg.mkPen(20, 22, 26), "symbol": "d", "size": 9})
             else:
-                gx.append(k); gbuy.append(_sy(buy_s[i])); gsell.append(_sy(sell_s[i]))
+                gx.append(k); gbuy.append(_sy(float(buy_sm[i]))); gsell.append(_sy(float(sell_sm[i])))
         self.bc_spd_buy.setData(gx, gbuy); self.bc_spd_buy.setVisible(True)
         self.bc_spd_sell.setData(gx, gsell); self.bc_spd_sell.setVisible(True)
         self.bc_spd_flag.setData(spots=spots); self.bc_spd_flag.setVisible(bool(spots))
-        self.bc_spd_title.setText("SPEED · buyer/seller trading rate (vol/sec) · selection")
+        _sm = (" · sm%d" % _W) if _W > 1 else ""
+        self.bc_spd_title.setText("SPEED · buyer/seller trading rate (vol/sec) · selection" + _sm)
         self.bc_spd_title.setPos(lo - 0.5, sc_top); self.bc_spd_title.setVisible(True)
-        # badges: each side's current (last-bucket) rate, in its colour, at the panel right
-        self._spd_badge("SPD_BUY", "B " + self._fmt_k(buy_s[-1]) + "/s", self._RGB_SPD_BUY, badge_x, _sy(buy_s[-1]))
-        self._spd_badge("SPD_SELL", "S " + self._fmt_k(sell_s[-1]) + "/s", self._RGB_SPD_SELL, badge_x, _sy(sell_s[-1]))
+        # badges: each side's current (last TWO-SIDED bucket) SMOOTHED rate, in its colour, panel right
+        _lb = next((i for i in range(len(xs) - 1, -1, -1) if not flag[i]), None)
+        if _lb is not None:
+            self._spd_badge("SPD_BUY", "B " + self._fmt_k(float(buy_sm[_lb])) + "/s",
+                            self._RGB_SPD_BUY, badge_x, _sy(float(buy_sm[_lb])))
+            self._spd_badge("SPD_SELL", "S " + self._fmt_k(float(sell_sm[_lb])) + "/s",
+                            self._RGB_SPD_SELL, badge_x, _sy(float(sell_sm[_lb])))
+        else:
+            self._spread_badges["SPD_BUY"].hide(); self._spread_badges["SPD_SELL"].hide()
         self._panel_hovers.append({                # hover -> raw per-bucket buy/sell speed (vol/sec)
             "label": "SPEED", "lo": lo, "yb": sc_bot, "yt": sc_top,
             "bull": buy_s, "bear": sell_s, "bcol": self._RGB_SPD_BUY, "rcol": self._RGB_SPD_SELL,
