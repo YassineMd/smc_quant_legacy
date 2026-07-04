@@ -193,14 +193,13 @@ def main():
         j1 = int(np.searchsorted(et, et[b] + WIN, side="right"))
         red, green = witness(b)
         # r5b: characterize the leg-5 CONTEXT zone (bars b-99..b-59, i.e. N=60..100) — its highest
-        # high and lowest low as % change from the fire close (the point at which leg 5 evaluated).
+        # high and lowest low. r5c: expressed as % from the ENTRY price (set below once the entry is
+        # known); CANCELLED rows have no entry -> fire-close counterfactual.
         zsl = slice(b - 99, b - 58)                        # 41 bars = N 60..100
         zhi = float(np.max(hi[zsl])); zlo = float(np.min(lo_[zsl]))
-        zone_hi_pct = round((zhi - c0) / c0 * 100.0, 4)
-        zone_lo_pct = round((zlo - c0) / c0 * 100.0, 4)
         row = dict(ts=round(float(et[b]), 3), fire_bid=int(bid_arr[b]), side=s,
                    first_red_N=red, first_green_N=green, baseline=round(B, 4),
-                   zone_hi_pct=zone_hi_pct, zone_lo_pct=zone_lo_pct, route="",
+                   zone_hi_pct="", zone_lo_pct="", route="",
                    status="", entry="", delay="", outcome="", pnl="", mins="",
                    w_max="", w_min="", t_max="", t_min="")
         # r4 entry qualification: the entry bar must close BULLISH for longs / BEARISH for shorts,
@@ -235,6 +234,8 @@ def main():
                 row["delay"] = round((et[j_e] - et[b]) / 60.0, 2)
         if j_e is None:
             row["status"] = "CANCELLED"
+            row["zone_hi_pct"] = round((zhi - c0) / c0 * 100.0, 4)   # no entry -> fire-close ref
+            row["zone_lo_pct"] = round((zlo - c0) / c0 * 100.0, 4)
             if j1 > b + 1:                                # counterfactual stays FIRE-referenced
                 w = slice(b + 1, j1)
                 k_up = int(np.argmax(hi[w])); k_dn = int(np.argmin(lo_[w]))
@@ -244,6 +245,9 @@ def main():
                 row["t_min"] = round((float(et[b + 1 + k_dn]) - et[b]) / 60.0, 2)
             rows.append(row)
             continue
+        # r5c: zone range now ENTRY-referenced (the zone bars are fixed; only the reference moves)
+        row["zone_hi_pct"] = round((zhi - entry) / entry * 100.0, 4)
+        row["zone_lo_pct"] = round((zlo - entry) / entry * 100.0, 4)
         # r4 excursions: ENTRY-referenced — % from the entry price over 1h from the entry bar
         j1e = int(np.searchsorted(et, et[j_e] + WIN, side="right"))
         if j1e > j_e + 1:
@@ -337,10 +341,10 @@ def main():
                 s, len(sub), stt, float(np.median(mx)), float(np.percentile(mx, 25)),
                 float(np.percentile(mx, 75)), float(np.median(mn)),
                 float(np.percentile(mn, 25)), float(np.percentile(mn, 75))))
-    md += ["", "## 4. Leg-5 CONTEXT zone range (bars b-99..b-59 = N 60..100), % from fire close",
-           "_The reach of the context window that qualified each fire: highest high above / lowest"
-           " low below the fire close. Split by episode outcome to see whether a bigger prior swing"
-           " precedes a better result._", "",
+    md += ["", "## 4. Leg-5 CONTEXT zone range (bars b-99..b-59 = N 60..100), % from ENTRY price",
+           "_The reach of the context window relative to the actual entry: highest high above /"
+           " lowest low below the entry price. Split by episode outcome to see whether a bigger"
+           " prior swing precedes a better result._", "",
            "| side | outcome | n | med zone HIGH % | med zone LOW % | med zone RANGE % |",
            "|---|---|---|---|---|---|"]
     for s in ("long", "short"):

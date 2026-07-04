@@ -27,17 +27,17 @@ _**S5j-r5 (operator correction of r4's entry translation): the bar COLOR is the 
 | short | 23 | TOUCH | +0.306 | +0.178/+0.570 | -0.690 | -1.102/-0.192 |
 | short | 1 | CANCELLED | +0.110 | +0.110/+0.110 | -1.167 | -1.167/-1.167 |
 
-## 4. Leg-5 CONTEXT zone range (bars b-99..b-59 = N 60..100), % from fire close
-_The reach of the context window that qualified each fire: highest high above / lowest low below the fire close. Split by episode outcome to see whether a bigger prior swing precedes a better result._
+## 4. Leg-5 CONTEXT zone range (bars b-99..b-59 = N 60..100), % from ENTRY price
+_The reach of the context window relative to the actual entry: highest high above / lowest low below the entry price. Split by episode outcome to see whether a bigger prior swing precedes a better result._
 
 | side | outcome | n | med zone HIGH % | med zone LOW % | med zone RANGE % |
 |---|---|---|---|---|---|
-| long | TP | 13 | +0.309 | -0.186 | 0.558 |
-| long | SL | 17 | +0.269 | -0.456 | 0.980 |
-| long | all filled | 30 | +0.288 | -0.347 | 0.723 |
-| short | TP | 14 | +0.310 | -0.309 | 0.648 |
-| short | SL | 9 | +0.414 | -0.297 | 0.872 |
-| short | all filled | 23 | +0.321 | -0.297 | 0.773 |
+| long | TP | 13 | +0.385 | -0.180 | 0.559 |
+| long | SL | 17 | +0.369 | -0.351 | 0.981 |
+| long | all filled | 30 | +0.377 | -0.217 | 0.725 |
+| short | TP | 14 | +0.192 | -0.367 | 0.649 |
+| short | SL | 9 | +0.026 | -0.530 | 0.873 |
+| short | all filled | 23 | +0.189 | -0.449 | 0.771 |
 
 ## Honest flags
 - Leg 2 stays the registered share form; leg 5 EXISTS is the loosest context in the program — the fire set is broad by design.
