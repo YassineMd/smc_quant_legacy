@@ -377,15 +377,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_spd_title.setZValue(62)
         for _si in (self.bc_spd_mid, self.bc_spd_q, self.bc_spd_lock, self.bc_spd_title):
             _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
-        # CUMULATIVE SPEED-DELTA panel (Ctrl+2) — running sum of (buy_spd - sell_spd) across the
-        # selection, ONE sign-split line on a zero baseline: CYAN above (net buyers faster) / MAGENTA
-        # below (net sellers). Auto-scaled to include zero — a rate-based CVD of the trading speed.
-        self.bc_cd_pos = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_BUY, width=2), connect="finite")
-        self.bc_cd_neg = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_SELL, width=2), connect="finite")
-        self.bc_cd_zero = pg.PlotDataItem(pen=_dpen((150, 150, 150)))               # zero baseline
+        # CUMULATIVE SPEED-SHARE panel (Ctrl+2) — the cumulative twin of the SPEED panel: buyer vs
+        # seller share of trading speed accumulated FROM the selection start (running, not rolling).
+        # Same panel-2 chrome: CYAN buy / MAGENTA sell on a fixed 0-100% axis, 50% midline + 25/75.
+        self.bc_cd_strip = ExhaustionStripLayer(self.plot, rgb_bull=self._RGB_SPD_BUY, rgb_bear=self._RGB_SPD_SELL)
+        self.bc_cd_strip.setZValue(2); self.plot.addItem(self.bc_cd_strip, ignoreBounds=True)
+        self.bc_cd_strip.setVisible(False)
+        self.bc_cd_mid = pg.PlotDataItem(pen=_dpen((150, 150, 150)))               # 50% midline
+        self.bc_cd_q = pg.PlotDataItem(pen=_dpen(_ORANGE), connect="finite")       # 25%/75% quarters
         self.bc_cd_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
         self.bc_cd_title.setZValue(62)
-        for _si in (self.bc_cd_pos, self.bc_cd_neg, self.bc_cd_zero, self.bc_cd_title):
+        for _si in (self.bc_cd_mid, self.bc_cd_q, self.bc_cd_title):
             _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
@@ -1875,64 +1877,48 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._refresh_selection_stats()
 
     def _clear_cumdelta(self) -> None:
-        for _it in (self.bc_cd_pos, self.bc_cd_neg, self.bc_cd_zero):
+        self.bc_cd_strip.setVisible(False)
+        for _it in (self.bc_cd_mid, self.bc_cd_q):
             _it.setData([], []); _it.setVisible(False)
         self.bc_cd_title.setVisible(False)
         self._spread_badges["CUMDELTA"].hide()
 
     def _draw_cumdelta_panel(self, filtered, lo, hi, cd_bot, cd_top, badge_x) -> None:
-        """CUMULATIVE SPEED-DELTA — running sum of the per-bucket speed imbalance (buy_spd − sell_spd)
-        from the selection start. ONE line, sign-split at the zero baseline: CYAN where the cumulative
-        is >= 0 (net buyers have been faster) / MAGENTA where < 0. The per-bucket delta is centered-
-        smoothed (SPEED_SMOOTH_W) before accumulation so a one-sided spike ramps instead of stepping;
-        auto-scaled to always include zero. A rate-based CVD of trading speed."""
-        import numpy as np
+        """CUMULATIVE SPEED SHARE — buyer vs seller share of trading speed accumulated FROM the selection
+        start: buy = Σbuy_spd / Σ(buy_spd + sell_spd), running bucket-by-bucket; sell = 1 − buy. Two lines
+        (buy CYAN / sell MAGENTA) on a fixed 0–100% axis with the 50% midline + 25/75 quarters — the SPEED
+        panel's twin, but CUMULATIVE (running) instead of rolling, so it shows the OVERALL balance building
+        up across the selection. Causal: each value is final on close (no settling tail)."""
         xs = list(range(lo, hi + 1))
         if not xs:
             self._clear_cumdelta(); return
-        delta = []
+        cb = cs = 0.0
+        buy_sh = []
         for k in xs:
             b = filtered[k]
             dur = max(1e-9, float(b.get("end_time", 0.0)) - float(b.get("start_time", 0.0)))
-            delta.append(float(b.get("buy_vol", 0.0)) / dur - float(b.get("sell_vol", 0.0)) / dur)
-        d = np.array(delta, float)
-        _W = max(1, int(getattr(config, "SPEED_SMOOTH_W", 7)))
-        if _W > 1 and len(d) >= 2:
-            ker = np.ones(_W)
-            d = np.convolve(d, ker, "same") / np.convolve(np.ones_like(d), ker, "same")   # centered mean
-        cum = np.cumsum(d)
-        ymin = min(0.0, float(cum.min())); ymax = max(0.0, float(cum.max()))
-        if ymax - ymin < 1e-9:
-            ymax = ymin + 1.0
+            cb += float(b.get("buy_vol", 0.0)) / dur
+            cs += float(b.get("sell_vol", 0.0)) / dur
+            tot = cb + cs
+            buy_sh.append(cb / tot if tot > 0 else 0.5)     # running cumulative buy share
+        sell_sh = [1.0 - s for s in buy_sh]
 
-        def _cy(v):
-            return cd_bot + (v - ymin) / (ymax - ymin) * (cd_top - cd_bot)
+        def _fy(v):
+            return cd_bot + v * (cd_top - cd_bot)           # share 0..1 -> panel y
 
-        zy = _cy(0.0)
-        # sign-split into cyan(>=0)/magenta(<0), inserting the zero-crossing so segments meet on the line
-        xs_s, pos, neg = [], [], []
-        prev = prevx = None
-        for i, k in enumerate(xs):
-            c = float(cum[i])
-            if prev is not None and (prev >= 0) != (c >= 0):
-                t = prev / (prev - c) if (prev - c) != 0 else 0.0
-                xs_s.append(prevx + t); pos.append(zy); neg.append(zy)
-            y = _cy(c); xs_s.append(k)
-            pos.append(y if c >= 0 else np.nan); neg.append(y if c < 0 else np.nan)
-            prev, prevx = c, k
-        self.bc_cd_pos.setData(xs_s, pos, connect="finite"); self.bc_cd_pos.setVisible(True)
-        self.bc_cd_neg.setData(xs_s, neg, connect="finite"); self.bc_cd_neg.setVisible(True)
-        self.bc_cd_zero.setData([lo - 0.5, hi + 0.5], [zy, zy]); self.bc_cd_zero.setVisible(True)
-        _sm = (" · sm%d" % _W) if _W > 1 else ""
-        self.bc_cd_title.setText("CUM ΔSPEED · Σ(buy−sell rate) · selection" + _sm)
+        self.bc_cd_strip.update_data(xs, [_fy(v) for v in buy_sh], [_fy(v) for v in sell_sh],
+                                     lo - 0.5, hi + 0.5, cd_bot, cd_top, [], None)   # None = all locked
+        self.bc_cd_strip.setVisible(True)
+        self._draw_panel_refs(self.bc_cd_mid, self.bc_cd_q, lo, hi, cd_bot, cd_top)
+        self.bc_cd_title.setText("CUM SPEED · cumulative buyer/seller share (%) · selection")
         self.bc_cd_title.setPos(lo - 0.5, cd_top); self.bc_cd_title.setVisible(True)
-        _cur = float(cum[-1])
-        self._spd_badge("CUMDELTA", self._fmt_k(_cur),
-                        self._RGB_SPD_BUY if _cur >= 0 else self._RGB_SPD_SELL, badge_x, _cy(_cur))
-        self._panel_hovers.append({                # hover -> running cumulative + per-bucket delta
-            "label": "CUM Δ", "lo": lo, "yb": cd_bot, "yt": cd_top,
-            "bull": list(cum), "bear": list(d), "bcol": self._RGB_SPD_BUY, "rcol": self._RGB_SPD_SELL,
-            "blbl": "CUM", "rlbl": "Δ/bkt", "fmt": "k"})
+        _bl = buy_sh[-1]; _dom_buy = _bl >= 0.5
+        self._spd_badge("CUMDELTA", "%.0f%%" % (abs(2 * _bl - 1) * 100),
+                        self._RGB_SPD_BUY if _dom_buy else self._RGB_SPD_SELL, badge_x, (cd_top + cd_bot) / 2.0)
+        self._panel_hovers.append({                # hover -> running cumulative buy/sell share %
+            "label": "CUM SPD", "lo": lo, "yb": cd_bot, "yt": cd_top,
+            "bull": buy_sh, "bear": sell_sh, "bcol": self._RGB_SPD_BUY, "rcol": self._RGB_SPD_SELL,
+            "blbl": "BUY", "rlbl": "SELL", "fmt": "pct"})
 
     def _toggle_phase_table(self) -> None:
         """'t' — show/hide the live PHASE TABLE on its own (no need to turn on a phase panel 5/6/7)."""
