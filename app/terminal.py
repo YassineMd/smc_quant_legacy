@@ -360,22 +360,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_abs_strip.setZValue(2)
         self.plot.addItem(self.bc_abs_strip, ignoreBounds=True)
         self.bc_abs_strip.setVisible(False)
-        # SCORE v1-SEL (Ctrl+1) — frozen walk-forward score, FORWARD-TEST display (exam verdict FAIL).
-        # ONE signed line = the L−S edge gap, colored by side of zero: teal above (long-leaning) / magenta below
-        # (short-leaning); dashed zero ref at the middle.
-        self._RGB_SCORE_L = (38, 208, 206); self._RGB_SCORE_S = (223, 86, 193)   # long teal / short magenta
-        self.bc_score_up = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_L, width=2))   # gap >= 0 segment
-        self.bc_score_dn = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SCORE_S, width=2))   # gap <  0 segment
-        self.bc_score_ref_l = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))  # zero ref
-        # LOCK-IN divider (like panels 1-4): SCORE dots are TRAILING-frame pure functions, so closed buckets
-        # are final instantly — only the FORMING bucket's dot settles (+ the smoothing tail when enabled).
-        self.bc_score_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
-        self.bc_score_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
-        self.bc_score_title.setZValue(62)
-        for _si in (self.bc_score_up, self.bc_score_dn, self.bc_score_ref_l, self.bc_score_lock,
-                    self.bc_score_title):
+        # SPEED panel (Ctrl+1) — buyer vs seller TRADING SPEED (vol/sec) developed across the Mode-10
+        # selection, from its first bucket to the live edge. TWO raw lines: buy (green) / sell (red),
+        # auto-scaled 0..max over the selection. Per-bucket instantaneous value (buy_vol / duration),
+        # FINAL the instant a bucket closes — no smoothing, no lock lag (only the forming bucket is partial).
+        self._RGB_SPD_BUY = (40, 230, 90); self._RGB_SPD_SELL = (255, 45, 70)   # match the FLOW Buy/Sell colours
+        self.bc_spd_buy = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_BUY, width=2))
+        self.bc_spd_sell = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_SELL, width=2))
+        self.bc_spd_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
+        self.bc_spd_title.setZValue(62)
+        for _si in (self.bc_spd_buy, self.bc_spd_sell, self.bc_spd_title):
             _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
-        self._score_last_tc = None      # forward-log close detector (idempotent)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
         # heatmap large-order bubbles); SMALL = small-BUY vs small-SELL trade-COUNT share (green / red). Each
@@ -466,7 +461,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                    "BEFORE", "START/DURING", "END",        # phase panels 5/6/7 — UP/DOWN spread badge
                    "PANEL9_BULL", "PANEL9_BEAR", "PANEL9_SUM",
                    "PANEL0_BULL", "PANEL0_BEAR", "PANEL0_SUM",
-                   "SCORE_L", "SCORE_S", "SCORE_GAP"):     # Ctrl+1 SCORE v1-SEL forward-test panel
+                   "SPD_BUY", "SPD_SELL"):                  # Ctrl+1 SPEED panel (buyer/seller trading rate)
             _bd = pg.TextItem(anchor=(0, 0.5), color=(0, 0, 0))
             _bf = QtGui.QFont("Consolas", 11); _bf.setBold(True)
             _bd.textItem.setFont(_bf)
@@ -634,7 +629,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
         # PANEL 0 ('0') — a SMOOTHED twin of Panel 9: each line = (current + locked)/2. Identical items/colors.
         self.show_panel0 = True
-        self.show_score = False          # Ctrl+1 SCORE v1-SEL forward-test panel (default OFF; persisted)
+        self.show_speed = False          # Ctrl+1 SPEED panel — buyer/seller trading rate (default OFF; persisted)
         self.show_whisker = False        # 'W' volume-quantile whisker bars (candles stay default; persisted)
         _gp0_hi = pg.mkPen("#ff9800", width=0.8); _gp0_hi.setCosmetic(True); _gp0_hi.setDashPattern([5.0, 10.0])
         _gp0_lo = pg.mkPen("#ff9800", width=0.8); _gp0_lo.setCosmetic(True); _gp0_lo.setDashPattern([5.0, 10.0])
@@ -771,7 +766,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("8"), self, activated=self._toggle_largesmall)  # panel 8: LARGE+SMALL mkt orders
         QtGui.QShortcut(QtGui.QKeySequence("9"), self, activated=self._toggle_panel9)    # panel 9: COMPOSITE lean
         QtGui.QShortcut(QtGui.QKeySequence("0"), self, activated=self._toggle_panel0)    # panel 0: smoothed P9
-        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+1"), self, activated=self._toggle_score)  # SCORE v1-SEL forward-test
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+1"), self, activated=self._toggle_speed)  # SPEED panel (buyer/seller rate)
         QtGui.QShortcut(QtGui.QKeySequence("W"), self, activated=self._toggle_whisker)   # volume-quantile whisker bars
         QtGui.QShortcut(QtGui.QKeySequence("Delete"), self, activated=lambda: self.drawer.delete_selected())
         QtGui.QShortcut(QtGui.QKeySequence("Backspace"), self, activated=lambda: self.drawer.delete_selected())
@@ -1152,8 +1147,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             bv, rv = ph["bull"][k], ph["bear"][k]
             if ph["fmt"] == "pct":
                 bs, rs = f"{bv * 100:.0f}%", f"{rv * 100:.0f}%"
-            elif ph["fmt"] == "pp":                 # signed percentage-POINT edge (SCORE panel)
-                bs, rs = f"{bv:+.1f}pp", f"{rv:+.1f}pp"
+            elif ph["fmt"] == "spd":                # trading speed (vol/sec) — SPEED panel
+                bs, rs = self._fmt_k(bv) + "/s", self._fmt_k(rv) + "/s"
             else:                                   # volume / effort -> compact K formatting
                 bs, rs = self._fmt_k(bv), self._fmt_k(rv)
             _html = (
@@ -1786,107 +1781,57 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._spread_badges["PANEL0_BEAR"].hide()
         self._spread_badges["PANEL0_SUM"].hide()
 
-    def _toggle_score(self) -> None:
-        """Ctrl+1 — show/hide SCORE v1-SEL: the frozen walk-forward score, FORWARD-TEST display only
-        (the exam verdict was FAIL). OFF clears + hides both lines, refs, title, and badges."""
-        self.show_score = not self.show_score
-        if not self.show_score:
-            self._clear_score()
+    def _toggle_speed(self) -> None:
+        """Ctrl+1 — show/hide the SPEED panel: buyer vs seller trading rate (vol/sec) developed across
+        the Mode-10 selection. OFF clears both lines, title and badges."""
+        self.show_speed = not self.show_speed
+        if not self.show_speed:
+            self._clear_speed()
         self._save_ui_state()
         self._refresh_selection_stats()
 
-    def _clear_score(self) -> None:
-        for _it in (self.bc_score_up, self.bc_score_dn, self.bc_score_ref_l, self.bc_score_lock):
+    def _clear_speed(self) -> None:
+        for _it in (self.bc_spd_buy, self.bc_spd_sell):
             _it.setData([], []); _it.setVisible(False)
-        self.bc_score_title.setVisible(False)
-        for _k in ("SCORE_L", "SCORE_S", "SCORE_GAP"):
+        self.bc_spd_title.setVisible(False)
+        for _k in ("SPD_BUY", "SPD_SELL"):
             self._spread_badges[_k].hide()
 
-    def _score_badge(self, key, text, rgb, x, y) -> None:
+    def _spd_badge(self, key, text, rgb, x, y) -> None:
         bd = self._spread_badges[key]
         bd.fill = pg.mkBrush(*rgb); bd.setText(" %s " % text)
         bd.setPos(x, y); bd.show()
 
-    def _draw_score_panel(self, filtered, lo, hi, sc_bot, sc_top, badge_x) -> None:
-        """SCORE v1-SEL — ONE signed line = the L−S edge gap [(pred_L−base_L) − (pred_S−base_S)] around a zero
-        ref, colored by side of zero (teal above = long-leaning / magenta below = short-leaning). Hover shows
-        raw LONG% / SHORT%; the badge shows the gap in the dominant side's color. Frozen scoring UNTOUCHED;
-        forward log keeps RAW pred. Reuses app.live_score on a 16-bucket frame. Exam verdict: FAIL."""
-        import numpy as np
-        from app import live_score
-        bl_l, bl_s = live_score.baselines()
-        GAP = 8.0                                                 # ± display range (pp) for the gap; zero at mid
-        mid = (sc_top + sc_bot) / 2.0; half = (sc_top - sc_bot) / 2.0
+    def _draw_speed_panel(self, filtered, lo, hi, sc_bot, sc_top, badge_x) -> None:
+        """SPEED — buyer (green) vs seller (red) TRADING RATE across the selection [lo, hi]. Each bucket's
+        rate = side volume / bucket duration (contracts/sec); both lines share one auto-scaled 0..max axis
+        so their CROSSINGS and DIVERGENCE read directly. Per-bucket, final the instant a bucket closes (no
+        smoothing, no lock lag); only the forming bucket at the live edge is partial (uses elapsed)."""
+        xs = list(range(lo, hi + 1))
+        buy_s, sell_s = [], []
+        for k in xs:
+            b = filtered[k]
+            dur = max(1e-9, float(b.get("end_time", 0.0)) - float(b.get("start_time", 0.0)))
+            buy_s.append(float(b.get("buy_vol", 0.0)) / dur)
+            sell_s.append(float(b.get("sell_vol", 0.0)) / dur)
+        if not xs:
+            self._clear_speed(); return
+        vmax = max([*buy_s, *sell_s, 1e-9])
 
-        def _gy(g):
-            z = g / GAP; z = -1.0 if z < -1 else (1.0 if z > 1 else z)
-            return mid + z * half
+        def _sy(v):
+            return sc_bot + (v / vmax) * (sc_top - sc_bot)        # 0..max -> panel band
 
-        preds = live_score.score_selection(filtered, lo, hi)
-        gaps = [((p[0] - bl_l) - (p[1] - bl_s)) if (p[0] is not None and p[1] is not None) else None for p in preds]
-        # DISPLAY smoothing (config.SCORE_SMOOTH_W, CENTERED rolling mean = zero-phase, NaN-preserving): the
-        # plotted line + badge read the smoothed gap; per-bucket scores, hover, and the forward log stay RAW.
-        # Edges / the live tail average over the available side only (a settling tail, like the lean panels).
-        _W = max(1, int(getattr(config, "SCORE_SMOOTH_W", 1)))
-        if _W > 1 and len(gaps) >= 2:
-            _v = np.array([np.nan if g is None else g for g in gaps], float)
-            _ker = np.ones(_W)
-            _s = np.convolve(np.nan_to_num(_v), _ker, "same")
-            _c = np.convolve(np.isfinite(_v).astype(float), _ker, "same")
-            _sm = np.where(_c > 0, _s / np.maximum(_c, 1.0), np.nan)
-            _sm[~np.isfinite(_v)] = np.nan                     # a gap in the raw line stays a gap
-            gaps = [None if not np.isfinite(g) else float(g) for g in _sm]
-        # split into teal(>=0)/magenta(<0) segments, inserting the zero-crossing so the line stays continuous
-        xs, up, dn = [], [], []
-        prev = prevx = None
-        for k, g in enumerate(gaps):
-            x = lo + k
-            if prev is not None and g is not None and (prev >= 0) != (g >= 0):
-                t = prev / (prev - g) if (prev - g) != 0 else 0.0
-                xs.append(prevx + t); up.append(mid); dn.append(mid)   # zero point in BOTH -> the segments meet
-            y = _gy(g) if g is not None else np.nan
-            xs.append(x)
-            up.append(y if (g is not None and g >= 0) else np.nan)
-            dn.append(y if (g is not None and g < 0) else np.nan)
-            if g is not None:
-                prev, prevx = g, x
-        self.bc_score_up.setData(xs, up, connect="finite"); self.bc_score_up.setVisible(True)
-        self.bc_score_dn.setData(xs, dn, connect="finite"); self.bc_score_dn.setVisible(True)
-        self.bc_score_ref_l.setData([lo - 0.5, hi + 0.5], [mid, mid]); self.bc_score_ref_l.setVisible(True)
-        # LOCK divider: closed-bucket dots are FINAL (trailing frame) — only the forming bucket settles
-        # (when the selection touches the live edge), plus the centered-smoothing tail when enabled.
-        _lockd = (_W // 2 if _W > 1 else 0) + (1 if hi >= len(filtered) - 1 else 0)
-        if _lockd > 0:
-            self._draw_panel_lock(self.bc_score_lock, _lockd, lo, hi, sc_bot, sc_top)
-        else:
-            self.bc_score_lock.setData([], []); self.bc_score_lock.setVisible(False)
-        _var = live_score.bundle().get("variant", "W-STAT-SEL16")
-        _smtag = (" · sm%d" % _W) if _W > 1 else ""
-        self.bc_score_title.setText("SCORE %s · L−S edge gap%s · forward-test · unvalidated (frame picked on"
-                                    " spent data)" % (_var, _smtag))
-        self.bc_score_title.setPos(lo - 0.5, sc_top); self.bc_score_title.setVisible(True)
-        # badge: the gap in the DOMINANT side's color (last valid bucket)
-        lg = next((g for g in reversed(gaps) if g is not None), None)
-        self._spread_badges["SCORE_L"].hide(); self._spread_badges["SCORE_S"].hide()
-        if lg is None:
-            self._score_badge("SCORE_GAP", "GAP --", (150, 150, 150), badge_x, mid)
-        else:
-            rgb = self._RGB_SCORE_L if lg >= 0 else self._RGB_SCORE_S
-            self._score_badge("SCORE_GAP", "GAP %+.1f pp" % lg, rgb, badge_x, _gy(lg))
-        # hover: per-side EDGE vs its own classroom baseline, in signed pp (same units as the plotted gap)
-        self._panel_hovers.append({
-            "label": "SCORE edge", "lo": lo, "yb": sc_bot, "yt": sc_top,
-            "bull": [((p[0] - bl_l) if p[0] is not None else np.nan) for p in preds],
-            "bear": [((p[1] - bl_s) if p[1] is not None else np.nan) for p in preds],
-            "bcol": self._RGB_SCORE_L, "rcol": self._RGB_SCORE_S, "blbl": "LONG", "rlbl": "SHORT", "fmt": "pp"})
-        tc = (self._last_snap or {}).get("total_closed")          # forward log: RAW pred, once per NEW close, idempotent
-        if tc is not None and tc != self._score_last_tc:
-            self._score_last_tc = tc
-            ci = len(filtered) - 2                                 # the just-closed bucket (live edge = filtered[-1])
-            _F = live_score.frame()
-            if ci >= _F - 1:
-                cp = live_score.score_bucket(filtered[ci - _F + 1:ci + 1])
-                live_score.log_forward(int(tc) - 1, float(filtered[ci].get("end_time", 0.0)), cp[0], cp[1])
+        self.bc_spd_buy.setData(xs, [_sy(v) for v in buy_s]); self.bc_spd_buy.setVisible(True)
+        self.bc_spd_sell.setData(xs, [_sy(v) for v in sell_s]); self.bc_spd_sell.setVisible(True)
+        self.bc_spd_title.setText("SPEED · buyer/seller trading rate (vol/sec) · selection")
+        self.bc_spd_title.setPos(lo - 0.5, sc_top); self.bc_spd_title.setVisible(True)
+        # badges: each side's current (last-bucket) rate, in its colour, at the panel right
+        self._spd_badge("SPD_BUY", "B " + self._fmt_k(buy_s[-1]) + "/s", self._RGB_SPD_BUY, badge_x, _sy(buy_s[-1]))
+        self._spd_badge("SPD_SELL", "S " + self._fmt_k(sell_s[-1]) + "/s", self._RGB_SPD_SELL, badge_x, _sy(sell_s[-1]))
+        self._panel_hovers.append({                # hover -> raw per-bucket buy/sell speed (vol/sec)
+            "label": "SPEED", "lo": lo, "yb": sc_bot, "yt": sc_top,
+            "bull": buy_s, "bear": sell_s, "bcol": self._RGB_SPD_BUY, "rcol": self._RGB_SPD_SELL,
+            "blbl": "BUY", "rlbl": "SELL", "fmt": "spd"})
 
     def _toggle_phase_table(self) -> None:
         """'t' — show/hide the live PHASE TABLE on its own (no need to turn on a phase panel 5/6/7)."""
@@ -1905,7 +1850,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "abs": self.show_abs_strip, "eff": self.show_eff_strip,
                 "er": self.show_er_strip, "exh": self.show_exh_strip,
                 "ls_mode": self._ls_mode, "panel9": self.show_panel9, "panel0": self.show_panel0,
-                "score_v1": self.show_score,
+                "speed_dev": self.show_speed,
                 "whisker": self.show_whisker,
                 "phase_table": self.show_phase_table,
                 "phase": {k: bool(v) for k, v in self.show_phase.items()},
@@ -1937,7 +1882,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ls_mode = _lm if _lm in (0, 1, 2) else 0
         self.show_panel9 = bool(s.get("panel9", self.show_panel9))
         self.show_panel0 = bool(s.get("panel0", self.show_panel0))
-        self.show_score = bool(s.get("score_v1", self.show_score))
+        self.show_speed = bool(s.get("speed_dev", self.show_speed))
         self.show_whisker = bool(s.get("whisker", self.show_whisker))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
         for _k, _v in (s.get("phase") or {}).items():
@@ -2340,7 +2285,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0(); self._clear_score()                        # smoothed twin + score: clear on teardown
+            self._clear_panel0(); self._clear_speed()                        # smoothed twin + speed: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2370,7 +2315,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0(); self._clear_score()                        # smoothed twin + score: clear on teardown
+            self._clear_panel0(); self._clear_speed()                        # smoothed twin + speed: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2393,7 +2338,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 rect, filtered, lo_i, hi_i,
                 (self.show_abs_strip, self.show_eff_strip, self.show_er_strip, self.show_exh_strip,
                  tuple(self.show_phase[p] for p in self._PHASES), self.show_state, self.show_sel_stats,
-                 self._ls_mode, self.show_phase_table, self.show_panel9, self.show_panel0, self.show_score),
+                 self._ls_mode, self.show_phase_table, self.show_panel9, self.show_panel0, self.show_speed),
                 (self.zone_slider.value_s(), self.eff_slider.value_s(),
                  self._largesmall_thr_sig()), tv, config.VPIN_ADAPT_WINDOW)
             if sig == self._sel_sig:
@@ -2421,7 +2366,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0(); self._clear_score()                        # smoothed twin + score: clear on teardown
+            self._clear_panel0(); self._clear_speed()                        # smoothed twin + speed: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2531,7 +2476,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         sm_on = self._ls_mode >= 2 and _drawable            # SMALL only ever shows alongside LARGE
         p9_on = self.show_panel9 and _drawable
         p0_on = self.show_panel0 and _drawable
-        score_on = self.show_score and _drawable
+        speed_on = self.show_speed and _drawable
         ph_geom = {}
         _cur = y0                                           # running bottom edge of the last placed panel
         if abs_on:
@@ -2562,7 +2507,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if p0_on:                                           # SMOOTHED twin of panel 9 (very BOTTOM)
             p0_top = _cur - config.EXH_STRIP_GAP * sel_h; p0_bot = p0_top - config.EXH_STRIP_FRAC * sel_h
             _cur = p0_bot
-        if score_on:                                        # SCORE v1-SEL (very bottom, under P0)
+        if speed_on:                                        # SPEED panel (very bottom, under P0)
             sc_top = _cur - config.EXH_STRIP_GAP * sel_h; sc_bot = sc_top - config.EXH_STRIP_FRAC * sel_h
             _cur = sc_bot
         # minimalist hairline divider in each gap BETWEEN consecutive visible panels (stack order)
@@ -2577,7 +2522,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if sm_on: _bands.append((sm_top, sm_bot))
         if p9_on: _bands.append((p9_top, p9_bot))
         if p0_on: _bands.append((p0_top, p0_bot))
-        if score_on: _bands.append((sc_top, sc_bot))
+        if speed_on: _bands.append((sc_top, sc_bot))
         _sep_ys = [(_bands[i][1] + _bands[i + 1][0]) / 2.0 for i in range(len(_bands) - 1)]
         self.bc_panel_sep.update_data(lo - 0.5, hi + 0.5, _sep_ys)
         self.bc_panel_sep.setVisible(bool(_sep_ys))
@@ -2874,13 +2819,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._clear_panel9(); self._clear_panel0()
         else:
             self._clear_panel9(); self._clear_panel0()
-        if score_on:                              # SCORE v1-SEL forward-test lines (guarded — must never break the soak)
+        if speed_on:                              # SPEED panel (guarded — must never break the soak)
             try:
-                self._draw_score_panel(filtered, lo, hi, sc_bot, sc_top, _badge_x)
+                self._draw_speed_panel(filtered, lo, hi, sc_bot, sc_top, _badge_x)
             except Exception:
-                self._clear_score()
+                self._clear_speed()
         else:
-            self._clear_score()
+            self._clear_speed()
         self.sel_stats.set_content(
             self._selection_stat_lines(agg, state, conf, dbg, vtier,
                                        spark_op, spark_cl, flip,
