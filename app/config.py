@@ -315,7 +315,7 @@ LIQ_WAVE_WINDOW = 10          # fixed trailing window for the Liquidation Pressu
 SCORE_SMOOTH_W = 1            # SCORE panel gap-line smoothing: CENTERED rolling mean over this many dots
                               # (odd; 1 = OFF — operator pref 2026-07-03: raw per-bucket line). DISPLAY-ONLY —
                               # per-bucket scores, hover, and the forward log are raw regardless.
-SPEED_SMOOTH_W = 20          # SPEED panel buy/sell line smoothing: CENTERED (zero-phase) rolling mean over
+SPEED_SMOOTH_W = 10          # SPEED panel buy/sell line smoothing: CENTERED (zero-phase) rolling mean over
                               # this many buckets (odd; 1 = OFF). DISPLAY-ONLY — one-sided flags & hover stay raw.
 PANEL9_SCALE = 100            # Panel-9 bull/bear lines: value (in points) mapped to the band edge; the gold
                               # dashed reference lines sit at +/-50 on this scale (0 = center).
