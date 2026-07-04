@@ -192,8 +192,15 @@ def main():
         long = s == "long"; c0 = float(cl[b]); B = float(base[b])
         j1 = int(np.searchsorted(et, et[b] + WIN, side="right"))
         red, green = witness(b)
+        # r5b: characterize the leg-5 CONTEXT zone (bars b-99..b-59, i.e. N=60..100) — its highest
+        # high and lowest low as % change from the fire close (the point at which leg 5 evaluated).
+        zsl = slice(b - 99, b - 58)                        # 41 bars = N 60..100
+        zhi = float(np.max(hi[zsl])); zlo = float(np.min(lo_[zsl]))
+        zone_hi_pct = round((zhi - c0) / c0 * 100.0, 4)
+        zone_lo_pct = round((zlo - c0) / c0 * 100.0, 4)
         row = dict(ts=round(float(et[b]), 3), fire_bid=int(bid_arr[b]), side=s,
-                   first_red_N=red, first_green_N=green, baseline=round(B, 4), route="",
+                   first_red_N=red, first_green_N=green, baseline=round(B, 4),
+                   zone_hi_pct=zone_hi_pct, zone_lo_pct=zone_lo_pct, route="",
                    status="", entry="", delay="", outcome="", pnl="", mins="",
                    w_max="", w_min="", t_max="", t_min="")
         # r4 entry qualification: the entry bar must close BULLISH for longs / BEARISH for shorts,
@@ -255,7 +262,8 @@ def main():
 
     with open(os.path.join(OUT, "s5j_episodes.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["ts", "fire_bid", "side", "first_red_N", "first_green_N",
-                                          "route", "baseline", "status", "entry", "delay",
+                                          "baseline", "zone_hi_pct", "zone_lo_pct", "route",
+                                          "status", "entry", "delay",
                                           "outcome", "pnl", "mins", "w_max", "w_min",
                                           "t_max", "t_min"])
         w.writeheader()
@@ -329,6 +337,25 @@ def main():
                 s, len(sub), stt, float(np.median(mx)), float(np.percentile(mx, 25)),
                 float(np.percentile(mx, 75)), float(np.median(mn)),
                 float(np.percentile(mn, 25)), float(np.percentile(mn, 75))))
+    md += ["", "## 4. Leg-5 CONTEXT zone range (bars b-99..b-59 = N 60..100), % from fire close",
+           "_The reach of the context window that qualified each fire: highest high above / lowest"
+           " low below the fire close. Split by episode outcome to see whether a bigger prior swing"
+           " precedes a better result._", "",
+           "| side | outcome | n | med zone HIGH % | med zone LOW % | med zone RANGE % |",
+           "|---|---|---|---|---|---|"]
+    for s in ("long", "short"):
+        for grp, pred in (("TP", lambda r: r["outcome"] == "TP"),
+                          ("SL", lambda r: str(r["outcome"]).startswith("SL")),
+                          ("all filled", lambda r: r["status"] in ("MKT", "TOUCH"))):
+            sub = [r for r in rows if r["side"] == s and r["status"] in ("MKT", "TOUCH") and pred(r)]
+            if not sub:
+                md.append("| %s | %s | 0 | - | - | - |" % (s, grp))
+                continue
+            zh = np.array([r["zone_hi_pct"] for r in sub], float)
+            zl = np.array([r["zone_lo_pct"] for r in sub], float)
+            md.append("| %s | %s | %d | %+.3f | %+.3f | %.3f |" % (
+                s, grp, len(sub), float(np.median(zh)), float(np.median(zl)),
+                float(np.median(zh - zl))))
     md += ["", "## Honest flags",
            "- Leg 2 stays the registered share form; leg 5 EXISTS is the loosest context in the"
            " program — the fire set is broad by design.",
