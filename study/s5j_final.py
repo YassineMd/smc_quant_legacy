@@ -199,7 +199,7 @@ def main():
         zhi = float(np.max(hi[zsl])); zlo = float(np.min(lo_[zsl]))
         row = dict(ts=round(float(et[b]), 3), fire_bid=int(bid_arr[b]), side=s,
                    first_red_N=red, first_green_N=green, baseline=round(B, 4),
-                   zone_hi_pct="", zone_lo_pct="", route="",
+                   zone_hi_pct="", zone_lo_pct="", zone_range="", route="",
                    status="", entry="", delay="", outcome="", pnl="", mins="",
                    w_max="", w_min="", t_max="", t_min="")
         # r4 entry qualification: the entry bar must close BULLISH for longs / BEARISH for shorts,
@@ -236,6 +236,7 @@ def main():
             row["status"] = "CANCELLED"
             row["zone_hi_pct"] = round((zhi - c0) / c0 * 100.0, 4)   # no entry -> fire-close ref
             row["zone_lo_pct"] = round((zlo - c0) / c0 * 100.0, 4)
+            row["zone_range"] = round((zhi - zlo) / c0 * 100.0, 4)
             if j1 > b + 1:                                # counterfactual stays FIRE-referenced
                 w = slice(b + 1, j1)
                 k_up = int(np.argmax(hi[w])); k_dn = int(np.argmin(lo_[w]))
@@ -248,6 +249,7 @@ def main():
         # r5c: zone range now ENTRY-referenced (the zone bars are fixed; only the reference moves)
         row["zone_hi_pct"] = round((zhi - entry) / entry * 100.0, 4)
         row["zone_lo_pct"] = round((zlo - entry) / entry * 100.0, 4)
+        row["zone_range"] = round((zhi - zlo) / entry * 100.0, 4)   # AO = hi - lo (as % of entry)
         # r4 excursions: ENTRY-referenced — % from the entry price over 1h from the entry bar
         j1e = int(np.searchsorted(et, et[j_e] + WIN, side="right"))
         if j1e > j_e + 1:
@@ -265,11 +267,11 @@ def main():
         rows.append(row)
 
     with open(os.path.join(OUT, "s5j_episodes.csv"), "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["ts", "fire_bid", "side", "first_red_N", "first_green_N",
-                                          "baseline", "zone_hi_pct", "zone_lo_pct", "route",
-                                          "status", "entry", "delay",
-                                          "outcome", "pnl", "mins", "w_max", "w_min",
-                                          "t_max", "t_min"])
+        w = csv.DictWriter(f, fieldnames=["fire_bid", "side", "outcome", "w_max", "w_min",
+                                          "zone_hi_pct", "zone_lo_pct", "zone_range",
+                                          "pnl", "mins", "entry", "baseline", "route", "status",
+                                          "delay", "t_max", "t_min", "first_red_N", "first_green_N",
+                                          "ts"])
         w.writeheader()
         for r in rows:
             w.writerow(r)
