@@ -87,3 +87,4 @@ out/*
 !out/s5i_episodes.csv
 !out/analysis_report_S5j.md
 !out/s5j_episodes.csv
+!out/s5j_speed_dev.csv

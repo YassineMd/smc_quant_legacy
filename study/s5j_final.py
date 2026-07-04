@@ -291,6 +291,28 @@ def main():
         for r in rows:
             w.writerow(r)
 
+    # ---- buyer/seller SPEED DEVELOPMENT around each fire (N = -100..+100, 0 = fire bar) ---------
+    # per-bar trading speed = side volume / bucket duration (contracts/sec), same split shipped in
+    # the terminal tooltip. buy_share = buy_spd / (buy_spd+sell_spd) is the fire-independent view.
+    bvv = np.array([float(d.get("buy_vol", 0.0)) for d in raws])
+    svv = np.array([float(d.get("sell_vol", 0.0)) for d in raws])
+    dur_all = np.maximum(1e-9, et - st)
+    buy_spd = bvv / dur_all; sell_spd = svv / dur_all
+    tot_spd = buy_spd + sell_spd
+    NDEV = 100
+    with open(os.path.join(OUT, "s5j_speed_dev.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["fire_bid", "side", "outcome", "N", "buy_spd", "sell_spd", "buy_share"])
+        for r in rows:
+            b = int(r["fire_bid"]) - b0
+            for N in range(-NDEV, NDEV + 1):
+                k = b + N
+                if k < 0 or k >= n:
+                    continue
+                bsh = round(buy_spd[k] / tot_spd[k], 4) if tot_spd[k] > 0 else ""
+                w.writerow([r["fire_bid"], r["side"], r["outcome"], N,
+                            round(float(buy_spd[k]), 2), round(float(sell_spd[k]), 2), bsh])
+
     md = ["# S5j-r5 — Fully-Locked Confluence + color-qualified close-entries (corrected)", "",
           "_**S5j-r5 (operator correction of r4's entry translation): the bar COLOR is the only"
           " close requirement — a bullish bar UNDER the baseline is a valid long entry, a bearish"
@@ -377,9 +399,31 @@ def main():
             md.append("| %s | %s | %d | %+.3f | %+.3f | %.3f |" % (
                 s, grp, len(sub), float(np.median(zh)), float(np.median(zl)),
                 float(np.median(zh - zl))))
+    md += ["", "## 5. Buyer/seller SPEED development around the fire (N=0 = fire bar)",
+           "_Mean buy-share of trading speed = buy_spd/(buy_spd+sell_spd), by side x outcome, at key"
+           " offsets (negative = bars before the fire, positive = after). Full per-bar trajectory in"
+           " s5j_speed_dev.csv. > 0.50 = buyers transacting faster; < 0.50 = sellers._", "",
+           "| side | outcome | n | N-100 | N-50 | N-20 | N-5 | **N0** | N+5 | N+20 | N+50 | N+100 |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    KEYN = (-100, -50, -20, -5, 0, 5, 20, 50, 100)
+    for s in ("long", "short"):
+        for grp, pred in (("TP", lambda r: r["outcome"] == "TP"),
+                          ("SL", lambda r: str(r["outcome"]).startswith("SL"))):
+            eb = [int(r["fire_bid"]) - b0 for r in rows
+                  if r["side"] == s and r["status"] in ("MKT", "TOUCH") and pred(r)]
+            if not eb:
+                continue
+            cells = []
+            for N in KEYN:
+                vals = [buy_spd[b + N] / tot_spd[b + N] for b in eb
+                        if 0 <= b + N < n and tot_spd[b + N] > 0]
+                cells.append(("**%.2f**" if N == 0 else "%.2f") % float(np.mean(vals)) if vals else "-")
+            md.append("| %s | %s | %d | %s |" % (s, grp, len(eb), " | ".join(cells)))
     md += ["", "## Honest flags",
            "- Leg 2 stays the registered share form; leg 5 EXISTS is the loosest context in the"
            " program — the fire set is broad by design.",
+           "- Speed-development N>0 overlaps the trade's own window (forward peek) — descriptive"
+           " only, never an entry input.",
            "- Touch entries fill on a bar-low touch of the moving line (no slippage); taker fees"
            " are the honesty floor.",
            "- Spent tape; the blackout makes episodes disjoint, trades may overlap beyond the hour.",

@@ -39,8 +39,19 @@ _The reach of the context window relative to the actual entry: highest high abov
 | short | SL | 9 | +0.026 | -0.530 | 0.873 |
 | short | all filled | 23 | +0.189 | -0.449 | 0.771 |
 
+## 5. Buyer/seller SPEED development around the fire (N=0 = fire bar)
+_Mean buy-share of trading speed = buy_spd/(buy_spd+sell_spd), by side x outcome, at key offsets (negative = bars before the fire, positive = after). Full per-bar trajectory in s5j_speed_dev.csv. > 0.50 = buyers transacting faster; < 0.50 = sellers._
+
+| side | outcome | n | N-100 | N-50 | N-20 | N-5 | **N0** | N+5 | N+20 | N+50 | N+100 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| long | TP | 13 | 0.56 | 0.48 | 0.53 | 0.68 | **0.67** | 0.59 | 0.50 | 0.45 | 0.57 |
+| long | SL | 17 | 0.43 | 0.57 | 0.53 | 0.67 | **0.66** | 0.59 | 0.44 | 0.46 | 0.54 |
+| short | TP | 14 | 0.53 | 0.58 | 0.47 | 0.38 | **0.34** | 0.49 | 0.48 | 0.55 | 0.57 |
+| short | SL | 9 | 0.44 | 0.50 | 0.34 | 0.24 | **0.30** | 0.39 | 0.49 | 0.41 | 0.57 |
+
 ## Honest flags
 - Leg 2 stays the registered share form; leg 5 EXISTS is the loosest context in the program — the fire set is broad by design.
+- Speed-development N>0 overlaps the trade's own window (forward peek) — descriptive only, never an entry input.
 - Touch entries fill on a bar-low touch of the moving line (no slippage); taker fees are the honesty floor.
 - Spent tape; the blackout makes episodes disjoint, trades may overlap beyond the hour.
 
