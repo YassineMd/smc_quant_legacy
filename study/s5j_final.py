@@ -196,32 +196,56 @@ def main():
                    first_red_N=red, first_green_N=green, baseline=round(B, 4), route="",
                    status="", entry="", delay="", outcome="", pnl="", mins="",
                    w_max="", w_min="", t_max="", t_min="")
-        if j1 > b + 1:
-            w = slice(b + 1, j1)
-            k_up = int(np.argmax(hi[w])); k_dn = int(np.argmin(lo_[w]))
-            row["w_max"] = round((float(np.max(hi[w])) - c0) / c0 * 100.0, 4)
-            row["w_min"] = round((float(np.min(lo_[w])) - c0) / c0 * 100.0, 4)
-            row["t_max"] = round((float(et[b + 1 + k_up]) - et[b]) / 60.0, 2)
-            row["t_min"] = round((float(et[b + 1 + k_dn]) - et[b]) / 60.0, 2)
-        mkt = (rcl[b] <= rbase[b]) if long else (rcl[b] >= rbase[b])
-        row["route"] = "MKT" if mkt else "WAIT"
-        if mkt:
-            row["status"] = "MKT"; row["entry"] = round(c0, 4); row["delay"] = 0.0
-            out, pnl, mins = walk_fixed(b, c0, s, entry_at_close=True)
+        # r4 entry qualification: the entry bar must close BULLISH for longs / BEARISH for shorts,
+        # and every entry executes AT THE BAR CLOSE (the color is a close property; the operator's
+        # "enter the close" generalized). MKT route requires the fire bar itself to qualify;
+        # otherwise the fire FALLS THROUGH to the WAIT scan. WAIT entry bar (long): touches the
+        # moving baseline AND closes above BOTH its open and the baseline — one condition covering
+        # the normal pullback case and the reclaim exception (open below the line, close above).
+        j_e = None; entry = None
+        mkt_ok = ((rcl[b] <= rbase[b]) and (rcl[b] > rop[b])) if long else \
+                 ((rcl[b] >= rbase[b]) and (rcl[b] < rop[b]))
+        if mkt_ok:
+            j_e = b; entry = c0
+            row["route"] = "MKT"; row["status"] = "MKT"; row["delay"] = 0.0
         else:
-            j_t = None
+            row["route"] = "WAIT"
             for j in range(b + 1, j1):
-                if (lo_[j] <= base[j]) if long else (hi[j] >= base[j]):
-                    j_t = j
-                    break
-            if j_t is None:
-                row["status"] = "CANCELLED"
-                rows.append(row)
-                continue
-            entry = float(base[j_t])
-            row["status"] = "TOUCH"; row["entry"] = round(entry, 4)
-            row["delay"] = round((st[j_t] - et[b]) / 60.0, 2)
-            out, pnl, mins = walk_fixed(j_t, entry, s, entry_at_close=False)
+                bc = int(np.round(base[j] * 100))
+                if long:
+                    if lo_[j] <= base[j] and rcl[j] > max(rop[j], bc):
+                        j_e = j
+                        break
+                else:
+                    if hi[j] >= base[j] and rcl[j] < min(rop[j], bc):
+                        j_e = j
+                        break
+            if j_e is not None:
+                entry = float(cl[j_e])
+                row["status"] = "TOUCH"
+                row["delay"] = round((et[j_e] - et[b]) / 60.0, 2)
+        if j_e is None:
+            row["status"] = "CANCELLED"
+            if j1 > b + 1:                                # counterfactual stays FIRE-referenced
+                w = slice(b + 1, j1)
+                k_up = int(np.argmax(hi[w])); k_dn = int(np.argmin(lo_[w]))
+                row["w_max"] = round((float(np.max(hi[w])) - c0) / c0 * 100.0, 4)
+                row["w_min"] = round((float(np.min(lo_[w])) - c0) / c0 * 100.0, 4)
+                row["t_max"] = round((float(et[b + 1 + k_up]) - et[b]) / 60.0, 2)
+                row["t_min"] = round((float(et[b + 1 + k_dn]) - et[b]) / 60.0, 2)
+            rows.append(row)
+            continue
+        # r4 excursions: ENTRY-referenced — % from the entry price over 1h from the entry bar
+        j1e = int(np.searchsorted(et, et[j_e] + WIN, side="right"))
+        if j1e > j_e + 1:
+            w = slice(j_e + 1, j1e)
+            k_up = int(np.argmax(hi[w])); k_dn = int(np.argmin(lo_[w]))
+            row["w_max"] = round((float(np.max(hi[w])) - entry) / entry * 100.0, 4)
+            row["w_min"] = round((float(np.min(lo_[w])) - entry) / entry * 100.0, 4)
+            row["t_max"] = round((float(et[j_e + 1 + k_up]) - et[j_e]) / 60.0, 2)
+            row["t_min"] = round((float(et[j_e + 1 + k_dn]) - et[j_e]) / 60.0, 2)
+        row["entry"] = round(entry, 4)
+        out, pnl, mins = walk_fixed(j_e, entry, s, entry_at_close=True)
         row["outcome"] = out
         row["pnl"] = round(pnl, 4) if pnl is not None else ""
         row["mins"] = round(mins, 2) if mins is not None else ""
@@ -236,19 +260,21 @@ def main():
         for r in rows:
             w.writerow(r)
 
-    md = ["# S5j-r3 — Fully-Locked Confluence, operator leg updates (100-bar P0, two-sided"
-          " phase, zone 60-100)", "",
-          "_**S5j-r3 updates (operator, 2026-07-04): leg 1'' now reads the P0 markers on a 100-BAR"
-          " selection [b-99, b] (was 16) — same rule: two most recent LOCKED markers on-side, the"
-          " newest must be the on-side EXTREME cross, dots never count. Leg 3 is TWO-SIDED: the"
-          " own-side table's dominant phase == START/DURING AND the opposite table's dominant"
-          " phase != START/DURING. Leg 5 zone narrowed to N = 60..100 (EXISTS form unchanged)."
-          " Leg 2 stays the LOCKED BADGE SPREAD >= 65 (share >= 82.5%%). Regression anchors"
-          " asserted: 20977 passes legs 1-4; 14873 fails leg 1'' (its +50 cross was a dot); 14876"
-          " fails leg 2 (spread +61.9). Multiplicity +2 -> counter 522.** 1h windows + fire-search"
-          " blackout (%d fires absorbed); moving-baseline router (no self-touch); taker %.2f%% net;"
-          " fixed TP+0.5/SL-0.3 exits (S1, * = ambiguous). References: %.1f%% null / %.1f%%"
-          " breakeven. Underpowered: n < %d -> counts only._"
+    md = ["# S5j-r4 — Fully-Locked Confluence + qualified close-entries (bar color rule)", "",
+          "_**S5j-r4 updates (operator, 2026-07-04): (1) w_max/w_min are now ENTRY-referenced —"
+          " %% from the entry price over 1h from the entry bar (CANCELLED rows keep the fire-close"
+          " counterfactual). (2) Entry qualification: the entry bar must close BULLISH for longs /"
+          " BEARISH for shorts, and every entry executes AT THE BAR CLOSE (translation on the"
+          " record: the color is a close property, so the operator's 'enter the close' is applied"
+          " to all entries; a MKT-route fire bar that fails the color test FALLS THROUGH to the"
+          " WAIT scan rather than dying). WAIT entry bar (long) = touches the moving baseline AND"
+          " closes above BOTH its open and the baseline — one condition covering the normal"
+          " pullback and the reclaim exception (open below the line, close above); short mirrored."
+          " Legs unchanged from r3 (100-bar leg 1'', spread-65 leg 2, two-sided leg 3, zone"
+          " 60-100); anchors hold (20977 / 14873 / 14876). Multiplicity +2 -> counter 524.**"
+          " 1h windows + fire-search blackout (%d fires absorbed); taker %.2f%% net; fixed"
+          " TP+0.5/SL-0.3 exits from the entry close (S1, * = ambiguous). References: %.1f%% null"
+          " / %.1f%% breakeven. Underpowered: n < %d -> counts only._"
           % (n_blk, FEE, NULL, BREAKEVEN, UNDER_N), "",
           "## 1. Funnel (deltas vs S5j-r2 and S5d-locked)", "",
           "| side | fire bars | vs S5j-r2 | vs S5d-locked | episodes | MKT | WAIT | "
@@ -286,7 +312,8 @@ def main():
                 "%.1f/%.1f" % (float(np.median(dls)), float(np.percentile(dls, 90))) if dls else "-"))
         else:
             md.append("| %s | %d | 0/0/%d | - | - | - | - | - | - | - |" % (s, len(e), nun))
-    md += ["", "## 3. 1h excursions from fire close (raw extremes), split by route", "",
+    md += ["", "## 3. 1h excursions (ENTRY-referenced for filled rows; CANCELLED = fire-close"
+           " counterfactual), split by route", "",
            "| side | rows | status | med max | p25/p75 max | med min | p25/p75 min |",
            "|---|---|---|---|---|---|---|"]
     for s in ("long", "short"):
