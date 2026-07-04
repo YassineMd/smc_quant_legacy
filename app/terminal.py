@@ -360,24 +360,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_abs_strip.setZValue(2)
         self.plot.addItem(self.bc_abs_strip, ignoreBounds=True)
         self.bc_abs_strip.setVisible(False)
-        # SPEED panel (Ctrl+1) — buyer vs seller TRADING SPEED (vol/sec) developed across the Mode-10
-        # selection, from its first bucket to the live edge. TWO raw lines: buy (green) / sell (red),
-        # auto-scaled 0..max over the selection. Per-bucket instantaneous value (buy_vol / duration),
-        # FINAL the instant a bucket closes — no smoothing, no lock lag (only the forming bucket is partial).
-        self._RGB_SPD_BUY = (40, 230, 90); self._RGB_SPD_SELL = (255, 45, 70)   # match the FLOW Buy/Sell colours
-        self.bc_spd_buy = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_BUY, width=2))
-        self.bc_spd_sell = pg.PlotDataItem(pen=pg.mkPen(self._RGB_SPD_SELL, width=2))
-        # reference lines identical to panels 1/2/3: 50% light-gray midline + 25%/75% ORANGE quarters
-        # (_dpen / _ORANGE defined just above, in the panel-1/2/3 reference block).
+        # SPEED panel (Ctrl+1) — buyer vs seller SHARE of trading speed across the Mode-10 selection,
+        # rendered exactly like panels 1/2/3: buy CYAN / sell MAGENTA lines crossing the 50% midline on
+        # a fixed 0-100% axis, SOLID in the locked region + DASHED/FADED in the settling tail (via the
+        # shared ExhaustionStripLayer), with 25/75 orange quarter guides, a lock-in divider and a
+        # spread % badge coloured by the dominant side.
+        self._RGB_SPD_BUY = (0, 229, 255); self._RGB_SPD_SELL = (255, 77, 255)   # buy cyan / sell magenta
+        self.bc_spd_strip = ExhaustionStripLayer(self.plot, rgb_bull=self._RGB_SPD_BUY, rgb_bear=self._RGB_SPD_SELL)
+        self.bc_spd_strip.setZValue(2); self.plot.addItem(self.bc_spd_strip, ignoreBounds=True)
+        self.bc_spd_strip.setVisible(False)
+        # reference lines identical to panels 1/2/3 (_dpen / _ORANGE from the reference block above)
         self.bc_spd_mid = pg.PlotDataItem(pen=_dpen((150, 150, 150)))               # 50% midline
         self.bc_spd_q = pg.PlotDataItem(pen=_dpen(_ORANGE), connect="finite")       # 25%/75% quarters
-        # ONE-SIDED marker: buckets where only one side traded (the other 0/s) — excluded from the
-        # share line so they can't distort it, drawn as a diamond coloured by the active side.
-        self.bc_spd_flag = pg.ScatterPlotItem(pxMode=True, size=9, symbol="d")
+        self.bc_spd_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))  # lock divider
         self.bc_spd_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
         self.bc_spd_title.setZValue(62)
-        for _si in (self.bc_spd_buy, self.bc_spd_sell, self.bc_spd_mid, self.bc_spd_q,
-                    self.bc_spd_flag, self.bc_spd_title):
+        for _si in (self.bc_spd_mid, self.bc_spd_q, self.bc_spd_lock, self.bc_spd_title):
             _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
@@ -1799,11 +1797,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._refresh_selection_stats()
 
     def _clear_speed(self) -> None:
-        for _it in (self.bc_spd_buy, self.bc_spd_sell):
+        self.bc_spd_strip.setVisible(False)
+        for _it in (self.bc_spd_mid, self.bc_spd_q, self.bc_spd_lock):
             _it.setData([], []); _it.setVisible(False)
-        self.bc_spd_mid.setData([], []); self.bc_spd_mid.setVisible(False)
-        self.bc_spd_q.setData([], []); self.bc_spd_q.setVisible(False)
-        self.bc_spd_flag.setData(spots=[]); self.bc_spd_flag.setVisible(False)
         self.bc_spd_title.setVisible(False)
         for _k in ("SPD_BUY", "SPD_SELL"):
             self._spread_badges[_k].hide()
@@ -1814,72 +1810,47 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         bd.setPos(x, y); bd.show()
 
     def _draw_speed_panel(self, filtered, lo, hi, sc_bot, sc_top, badge_x) -> None:
-        """SPEED — buyer (green) vs seller (red) SHARE OF TRADING SPEED across the selection [lo, hi].
-        Each bucket's buy_share = buy_spd / (buy_spd + sell_spd), sell_share = 1 − buy_share (speed =
-        side volume / bucket duration). FIXED 0–100% axis with a 50% midline: above 50 = buyers
-        transacting faster, below = sellers. Crossings read directly. One-sided buckets (other side
-        0/s) are a degenerate 100/0 — excluded from the line (bridged) and diamond-marked."""
-        import numpy as np
+        """SPEED — buyer (CYAN) vs seller (MAGENTA) SHARE of trading speed across the selection [lo, hi],
+        rendered exactly like the eff-agg panel (2). Each bucket's speed = side volume / bucket duration;
+        buy_share = rolling_share over a CENTERED SPEED_SMOOTH_W window (same volume-weighted method as
+        panel 2), sell = 1 − buy. FIXED 0–100% axis; solid in the locked region, dashed/faded settling
+        tail; 50% gray midline + 25/75 orange quarters; spread % badge coloured by the dominant side."""
         xs = list(range(lo, hi + 1))
         if not xs:
             self._clear_speed(); return
-        share, flag, buy_dom = [], [], []
+        buy_spd, sell_spd = [], []
         for k in xs:
             b = filtered[k]
             dur = max(1e-9, float(b.get("end_time", 0.0)) - float(b.get("start_time", 0.0)))
-            bs = float(b.get("buy_vol", 0.0)) / dur; ss = float(b.get("sell_vol", 0.0)) / dur
-            tot = bs + ss
-            flag.append((bs == 0.0) != (ss == 0.0))       # ONE-SIDED bucket (exactly one side traded)
-            buy_dom.append(bs > 0)
-            share.append(bs / tot if tot > 0 else np.nan)  # NaN = dead bucket (no trades) -> gap
-        _drop = np.array([flag[i] or not np.isfinite(share[i]) for i in range(len(xs))])
-        # CENTERED (zero-phase) rolling-mean smoothing of the SHARE; dropped buckets never contribute
-        # and stay excluded/bridged. DISPLAY-ONLY — the flags + hover read the raw per-bucket share.
-        _W = max(1, int(getattr(config, "SPEED_SMOOTH_W", 5)))
-        v = np.where(_drop, np.nan, np.array(share, float))
-        if _W > 1 and len(v) >= 2:
-            ker = np.ones(_W)
-            num = np.convolve(np.nan_to_num(v), ker, "same")
-            cnt = np.convolve(np.isfinite(v).astype(float), ker, "same")
-            v = np.where(cnt > 0, num / np.maximum(cnt, 1.0), np.nan)
-        v[_drop] = np.nan
-        buy_sm = v; sell_sm = 1.0 - v
+            buy_spd.append(float(b.get("buy_vol", 0.0)) / dur)
+            sell_spd.append(float(b.get("sell_vol", 0.0)) / dur)
+        _W = max(1, int(getattr(config, "SPEED_SMOOTH_W", 7)))
+        buy_sh = region_state.rolling_share(buy_spd, sell_spd, _W)   # centered, volume-weighted (panel-2 method)
+        sell_sh = [1.0 - s for s in buy_sh]
 
-        def _sy(sh):                                       # FIXED share 0..1 -> panel band (no auto-scale)
-            return sc_bot + sh * (sc_top - sc_bot)
+        def _fy(v):
+            return sc_bot + v * (sc_top - sc_bot)          # share 0..1 -> panel y (0% bottom, 50% mid, 100% top)
 
-        # reference lines: 50% gray midline + 25%/75% orange quarters, identical to panels 1/2/3
+        _eli = len(buy_sh) - 1 - (_W // 2)                  # last fully-locked idx (settling tail = W//2)
+        self.bc_spd_strip.update_data(xs, [_fy(v) for v in buy_sh], [_fy(v) for v in sell_sh],
+                                      lo - 0.5, hi + 0.5, sc_bot, sc_top, [],
+                                      _eli if _eli >= 0 else None)
+        self.bc_spd_strip.setVisible(True)
         self._draw_panel_refs(self.bc_spd_mid, self.bc_spd_q, lo, hi, sc_bot, sc_top)
-        # lines BRIDGE the excluded buckets; one-sided ones get a diamond coloured by the side that traded.
-        gx, gbuy, gsell, spots = [], [], [], []
-        for i, k in enumerate(xs):
-            if _drop[i]:
-                if flag[i]:
-                    col = self._RGB_SPD_BUY if buy_dom[i] else self._RGB_SPD_SELL
-                    spots.append({"pos": (k, _sy(1.0) if buy_dom[i] else _sy(0.0)),
-                                  "brush": pg.mkBrush(*col), "pen": pg.mkPen(20, 22, 26),
-                                  "symbol": "d", "size": 9})
-            else:
-                gx.append(k); gbuy.append(_sy(float(buy_sm[i]))); gsell.append(_sy(float(sell_sm[i])))
-        self.bc_spd_buy.setData(gx, gbuy); self.bc_spd_buy.setVisible(True)
-        self.bc_spd_sell.setData(gx, gsell); self.bc_spd_sell.setVisible(True)
-        self.bc_spd_flag.setData(spots=spots); self.bc_spd_flag.setVisible(bool(spots))
+        self._draw_panel_lock(self.bc_spd_lock, _W // 2, lo, hi, sc_bot, sc_top)
         _sm = (" · sm%d" % _W) if _W > 1 else ""
         self.bc_spd_title.setText("SPEED · buyer/seller share of trading rate (%) · selection" + _sm)
         self.bc_spd_title.setPos(lo - 0.5, sc_top); self.bc_spd_title.setVisible(True)
-        # badges: current (last valid bucket) SMOOTHED share %, each side in its colour, panel right
-        _lb = next((i for i in range(len(xs) - 1, -1, -1) if not _drop[i]), None)
-        if _lb is not None:
-            _b = float(buy_sm[_lb])
-            self._spd_badge("SPD_BUY", "B %.0f%%" % (_b * 100), self._RGB_SPD_BUY, badge_x, _sy(_b))
-            self._spd_badge("SPD_SELL", "S %.0f%%" % ((1 - _b) * 100), self._RGB_SPD_SELL, badge_x, _sy(1 - _b))
-        else:
-            self._spread_badges["SPD_BUY"].hide(); self._spread_badges["SPD_SELL"].hide()
-        self._panel_hovers.append({                # hover -> raw per-bucket buy/sell share %
+        # spread % badge at the LOCKED value, black text on the dominant side's colour (like panel 2)
+        _bi = _eli if _eli >= 0 else len(buy_sh) - 1
+        _bl = buy_sh[_bi]; _dom_buy = _bl >= 0.5
+        self._spd_badge("SPD_BUY", "%.0f%%" % (abs(2 * _bl - 1) * 100),
+                        self._RGB_SPD_BUY if _dom_buy else self._RGB_SPD_SELL,
+                        badge_x, (sc_top + sc_bot) / 2.0)
+        self._spread_badges["SPD_SELL"].hide()
+        self._panel_hovers.append({                # hover -> running buy/sell share %, labelled
             "label": "SPEED", "lo": lo, "yb": sc_bot, "yt": sc_top,
-            "bull": [(sh if np.isfinite(sh) else np.nan) for sh in share],
-            "bear": [(1 - sh if np.isfinite(sh) else np.nan) for sh in share],
-            "bcol": self._RGB_SPD_BUY, "rcol": self._RGB_SPD_SELL,
+            "bull": buy_sh, "bear": sell_sh, "bcol": self._RGB_SPD_BUY, "rcol": self._RGB_SPD_SELL,
             "blbl": "BUY", "rlbl": "SELL", "fmt": "pct"})
 
     def _toggle_phase_table(self) -> None:
