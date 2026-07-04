@@ -85,3 +85,5 @@ out/*
 !out/forward_ledger.md
 !out/analysis_report_S5i.md
 !out/s5i_episodes.csv
+!out/analysis_report_S5j.md
+!out/s5j_episodes.csv
