@@ -2508,7 +2508,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Precomputed hover stats for a setup. N = bars back to the leg-5 reference candle; N->det = that
         reference OPEN to the detection CLOSE %; det->entry = detection CLOSE to entry CLOSE %; room ratio =
         profit-room / risk-room from the ENTRY to the leg-5 zone hi/lo, side-aware (the study's
-        profit_room_ratio; >1 = favourable geometry)."""
+        profit_room_ratio; >1 = favourable geometry). Plus the LARGE-player (panel-8: sz_vb/sz_vs >= daemon p95)
+        net buy/sell VOLUME over N=0..100 and their spread-delta %, coloured blue(buy)/orange(sell)."""
         sc = "#28e65a" if buy else "#ff5566"
         c_det = _cl(det)
         has_ref = 0 <= zref < n
@@ -2528,14 +2529,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if abs(ar) > 1e-9:
                     ratio_s = "<b style='color:#e8ebf0'>%.2f : 1</b>" % (pr / ar)
 
+        # LARGE market-order net volume over N=0..100 (SAME numbers as panel 8: sz_vb/sz_vs summed >= the
+        # daemon's live p95 large cutoff). Blue buy / orange sell; the DOMINANT side + the spread carry colour.
+        BL, OR, GY = "#00b4ff", "#ff9100", "#9aa0aa"
+        large_thr = self._largesmall_thresholds()[0]
+        lo0 = max(0, det - 100)
+        bvol = sum(self._hist_side(filtered[k].get("sz_vb"), large_thr, True) for k in range(lo0, det + 1))
+        svol = sum(self._hist_side(filtered[k].get("sz_vs"), large_thr, True) for k in range(lo0, det + 1))
+        tot = bvol + svol
+        dsp = ((bvol - svol) / tot * 100.0) if tot > 1e-9 else 0.0
+        bcol = BL if bvol > svol else GY                         # colour only the dominant side, loser stays gray
+        scol = OR if svol > bvol else GY
+        dcol = BL if dsp > 0 else (OR if dsp < 0 else GY)
+
         def _pc(v):
             return "<span style='color:%s'>%+.2f%%</span>" % ("#28e65a" if v >= 0 else "#ff5566", v)
 
         return ("<div style='font-family:Consolas; font-size:11px; color:#c8ccd4; padding:1px 3px'>"
                 "<b style='color:%s'>%s-P_%s</b><br>"
                 "N (leg-5): <b style='color:#e8ebf0'>%d</b> bars<br>"
-                "N&rarr;det: %s<br>det&rarr;entry: %s<br>room ratio: %s</div>"
-                ) % (sc, "B" if buy else "S", self._fmt_idx(gid), N, _pc(d_ndet), _pc(d_dentry), ratio_s)
+                "N&rarr;det: %s<br>det&rarr;entry: %s<br>room ratio: %s<br>"
+                "lg buy <b style='color:%s'>%s</b> &nbsp; lg sell <b style='color:%s'>%s</b><br>"
+                "&Delta;spread: <b style='color:%s'>%+.1f%%</b></div>"
+                ) % (sc, "B" if buy else "S", self._fmt_idx(gid), N, _pc(d_ndet), _pc(d_dentry), ratio_s,
+                     bcol, self._fmt_k(bvol), scol, self._fmt_k(svol), dcol, dsp)
 
     def _hover_pivot(self, scene_pos) -> None:
         """Stats box for whichever pivot label the cursor is over — buy -> box BELOW the label, sell -> box
