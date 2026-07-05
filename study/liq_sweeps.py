@@ -38,6 +38,8 @@ Z_BASE = 30              # trailing baseline for the forced-flow z-score
 Z_MIN = 2.0
 VACUUM_MAX = 0.10        # volume beyond the level < 10% of bar volume
 SEED = 13
+GRADEABLE_MIN_IDX = 16960  # calibration pack: drop events below the terminal's live 10k-bucket window floor
+                           # (~live_edge - 10000). Older events can't be viewed on the chart, so can't be graded.
 
 
 def pivots(H, L):
@@ -129,31 +131,33 @@ def main():
     nA = sum(1 for r in rows if r["tier"] == "A"); nB = len(rows) - nA
     print("emitted %d rows: Tier-A %d, Tier-B %d" % (len(rows), nA, nB), flush=True)
 
-    # ---- blind calibration pack: 24 Tier-A + 6 Tier-B decoys, shuffled, tier hidden -------------
+    # ---- calibration pack: TIER-A ONLY, GRADEABLE RANGE ONLY -------------------------------------
+    # Tier-B are calibration chaff — dropped entirely. Events below GRADEABLE_MIN_IDX can't be viewed in
+    # the terminal's live 10k-bucket window, so they can't be eyeball-graded and are excluded. Take up to
+    # 30 of the survivors; if fewer than 30 are gradeable, use all of them. Idx-ordered (all Tier-A, so
+    # nothing to blind). Format: sequence # + Idx + blank verdict — no tier / no signature shown.
     rng = random.Random(SEED)
-    A = [r for r in rows if r["tier"] == "A"]; B = [r for r in rows if r["tier"] == "B"]
-    pick_A = rng.sample(A, min(24, len(A))); pick_B = rng.sample(B, min(6, len(B)))
-    pack = pick_A + pick_B; rng.shuffle(pack)
-    import time as _t
+    gradeable = sorted((r for r in rows if r["tier"] == "A" and int(r["bucket_id"]) >= GRADEABLE_MIN_IDX),
+                       key=lambda r: int(r["bucket_id"]))
+    pack = (gradeable if len(gradeable) <= 30
+            else sorted(rng.sample(gradeable, 30), key=lambda r: int(r["bucket_id"])))
     with open(os.path.join(OUT, "liq_calibration_pack.md"), "w", encoding="utf-8") as f:
-        f.write("# Liquidity-sweep calibration pack (BLIND — %d events)\n\n" % len(pack))
-        f.write("_Grade each as **sweep** or **not** by eyeball in the terminal (Ctrl+F to the Idx, look at "
-                "the wick vs the swept level, the close-back-inside, the flow). Tier is HIDDEN. Fill the "
-                "verdict column; the answer key (liq_calibration_key.csv) reveals Tier-A vs Tier-B decoy "
-                "afterwards so we can measure precision. Idx = terminal bucket Idx; ts shown UTC and UTC+1._\n\n")
-        f.write("| # | Idx (Ctrl+F) | UTC | your local (UTC+1) | side | swept level | wick % | verdict (sweep? y/n) |\n")
-        f.write("|---|---|---|---|---|---|---|---|\n")
+        f.write("# Liquidity-sweep calibration pack — TIER-A ONLY (%d events)\n\n" % len(pack))
+        f.write("_All %d gradeable Tier-A sweeps (Idx >= %d, the terminal's loaded 10k-bucket window; older "
+                "events can't be viewed so aren't listed). Grade each by eyeball in the terminal: Ctrl+F to "
+                "the Idx and judge whether it is a genuine sweep (wick pierces the swept level, close back "
+                "inside, flow climax). Fill the verdict; no tier or signature is shown — this measures Tier-A "
+                "precision directly._\n\n" % (len(pack), GRADEABLE_MIN_IDX))
+        f.write("| # | Idx (Ctrl+F) | verdict (sweep? y/n) |\n")
+        f.write("|---|---|---|\n")
         for e, r in enumerate(pack, 1):
-            utc = _t.strftime("%m-%d %H:%M", _t.gmtime(r["ts"]))
-            loc = _t.strftime("%m-%d %H:%M", _t.gmtime(r["ts"] + 3600))
-            f.write("| %d | %s | %s | %s | %s | %.2f | %.3f |  |\n"
-                    % (e, "%d" % r["bucket_id"], utc, loc, r["side_label"], r["swept_level"], r["wick_pct"]))
+            f.write("| %d | %d |  |\n" % (e, int(r["bucket_id"])))
     with open(os.path.join(OUT, "liq_calibration_key.csv"), "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f); w.writerow(["event", "bucket_id", "tier", "side_label", "forced_z", "vacuum_frac"])
+        w = csv.writer(f); w.writerow(["event", "bucket_id", "side_label", "forced_z", "vacuum_frac"])
         for e, r in enumerate(pack, 1):
-            w.writerow([e, r["bucket_id"], r["tier"], r["side_label"], r["forced_z"], r["vacuum_frac"]])
-    print("calibration pack: %d events (%d Tier-A + %d Tier-B decoys), key hidden separately"
-          % (len(pack), len(pick_A), len(pick_B)), flush=True)
+            w.writerow([e, int(r["bucket_id"]), r["side_label"], r["forced_z"], r["vacuum_frac"]])
+    print("calibration pack: %d Tier-A events (gradeable pool Idx >= %d of %d Tier-A total), Tier-B dropped"
+          % (len(pack), GRADEABLE_MIN_IDX, sum(1 for r in rows if r["tier"] == "A")), flush=True)
 
 
 if __name__ == "__main__":
