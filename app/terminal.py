@@ -360,6 +360,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_abs_strip.setZValue(2)
         self.plot.addItem(self.bc_abs_strip, ignoreBounds=True)
         self.bc_abs_strip.setVisible(False)
+        # LIQUIDITY-SWEEP LABELS (Ctrl+L) — detector-v1 event markers on the candles: a dashed leader from
+        # the swept bar to a filled label ("S L. Sweep" red / "B L. Sweep" green, black text). Offline events
+        # from study/out/liq_sweeps.csv; live = app.liq_detect (SAME frozen function) at bucket close. The
+        # "Pull" label types exist for Phase 3 but no Pull events are produced yet. UNCALIBRATED (see tooltip).
+        self.show_liq = False
+        self._liq_csv = self._load_liq_csv()                     # {bucket_id: {side, kind, level, tier}}
+        self._liq_live_sig = None; self._liq_live = []           # cached live-detect on the loaded window
+        self.bc_liq_leader = pg.PlotDataItem(
+            pen=pg.mkPen((160, 160, 160, 180), width=1, style=QtCore.Qt.DashLine))
+        self.bc_liq_leader.setZValue(30); self.plot.addItem(self.bc_liq_leader, ignoreBounds=True)
+        self.bc_liq_leader.setVisible(False)
+        self._liq_label_pool = []                                # reused TextItems (grown lazily)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
         # heatmap large-order bubbles); SMALL = small-BUY vs small-SELL trade-COUNT share (green / red). Each
@@ -761,6 +773,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Ctrl+F = jump-to-Idx: type/paste a bucket Idx (tooltip format fine, e.g. "20.977"),
         # Enter centers that bucket on screen (index modes; unlocks view-follow like a manual pan)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+F"), self, activated=self._idx_jump_show)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+L"), self, activated=self._toggle_liq)  # liquidity-sweep labels
 
         # §7.4 — yellow follow-spot shown on the cursor while a draw tool is armed
         self.cursor_spot = pg.ScatterPlotItem(size=10, pxMode=True,
@@ -1765,6 +1778,87 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._spread_badges["PANEL0_BEAR"].hide()
         self._spread_badges["PANEL0_SUM"].hide()
 
+    # ---------------------------------------------------------------- liquidity-sweep labels (Ctrl+L)
+    @staticmethod
+    def _load_liq_csv() -> dict:
+        """Offline detector events (study/out/liq_sweeps.csv) -> {(bucket_id, side): {side,kind,level,tier}}
+        (keyed by side too — a wide bar can sweep BOTH ends, one S event and one B event on the same bucket)."""
+        import csv as _csv
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "study", "out", "liq_sweeps.csv")
+        out = {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                first = f.tell(); ln = f.readline()
+                if not ln.startswith("#"):
+                    f.seek(first)
+                for r in _csv.DictReader(f):
+                    out[(int(r["bucket_id"]), r["side_label"])] = dict(
+                        side=r["side_label"], kind="Sweep", level=float(r["swept_level"]), tier=r["tier"])
+        except (OSError, KeyError, ValueError):
+            pass
+        return out
+
+    def _toggle_liq(self) -> None:
+        """Ctrl+L — show/hide the liquidity-sweep labels (detector v1, uncalibrated)."""
+        self.show_liq = not self.show_liq
+        if not self.show_liq:
+            self._clear_liq()
+        self._save_ui_state()
+        self._last_scanner_sig = None                # force a re-render so labels appear/disappear now
+        self._draw_scanner()
+
+    def _clear_liq(self) -> None:
+        self.bc_liq_leader.setData([], []); self.bc_liq_leader.setVisible(False)
+        for _it in self._liq_label_pool:
+            _it.setVisible(False)
+
+    def _draw_liq(self, buckets, x, highs, lows, vx0, vx1, vy0, vy1) -> None:
+        """Batched liquidity-sweep labels over the candles (bucket_canvas only). Offline events from the
+        CSV + live-detected events NEWER than the CSV's coverage (app.liq_detect, same frozen rule),
+        viewport-culled; a dashed leader from the swept wick to a filled label, black text."""
+        if not self.show_liq or not buckets:
+            self._clear_liq(); return
+        from app import liq_detect
+        n = len(buckets); off = self._global_idx_offset
+        sig = (n, round(float(buckets[-1].get("curr_vol", 0.0)), 1), off)
+        if sig != self._liq_live_sig:                # cache: recompute only when the bucket set changes
+            self._liq_live_sig = sig
+            try:
+                self._liq_live = liq_detect.detect_sweeps(buckets)
+            except Exception:
+                self._liq_live = []
+        csv_max = max((b for (b, _s) in self._liq_csv), default=0)
+        events = {}                                   # (local_i, side) -> {side,kind,level}
+        for (bid, side), ev in self._liq_csv.items():
+            li = bid - off
+            if 0 <= li < n:
+                events[(li, side)] = ev
+        for e in self._liq_live:                       # live events strictly newer than the offline set
+            if off + e["i"] > csv_max:
+                events[(e["i"], e["side"])] = e
+        dy = (vy1 - vy0) * 0.035
+        lx, ly = [], []; used = 0
+        for (li, side) in sorted(events):
+            if not (vx0 - 1.0 <= x[li] <= vx1 + 1.0):  # viewport cull
+                continue
+            ev = events[(li, side)]; up = ev["side"] == "S"
+            tip = highs[li] if up else lows[li]
+            lab_y = tip + dy if up else tip - dy
+            lx += [x[li], x[li], float("nan")]; ly += [tip, lab_y, float("nan")]
+            if used >= len(self._liq_label_pool):
+                _t = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0))
+                _t.setZValue(31)
+                _bf = QtGui.QFont("Consolas", 9); _bf.setBold(True); _t.textItem.setFont(_bf)
+                _t.setToolTip("detector v1 — uncalibrated")
+                self.plot.addItem(_t, ignoreBounds=True); self._liq_label_pool.append(_t)
+            _lab = self._liq_label_pool[used]; used += 1
+            _lab.fill = pg.mkBrush(255, 45, 70) if up else pg.mkBrush(40, 230, 90)   # S red / B green
+            _lab.setText(" %s L. %s " % (ev["side"], ev["kind"]))
+            _lab.setPos(x[li], lab_y); _lab.setVisible(True)
+        for _j in range(used, len(self._liq_label_pool)):
+            self._liq_label_pool[_j].setVisible(False)
+        self.bc_liq_leader.setData(lx, ly, connect="finite"); self.bc_liq_leader.setVisible(bool(lx))
+
     def _toggle_phase_table(self) -> None:
         """'t' — show/hide the live PHASE TABLE on its own (no need to turn on a phase panel 5/6/7)."""
         self.show_phase_table = not self.show_phase_table
@@ -1785,6 +1879,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "whisker": self.show_whisker,
                 "phase_table": self.show_phase_table,
                 "phase": {k: bool(v) for k, v in self.show_phase.items()},
+                "liq_labels": self.show_liq,
                 "zone_s": self._zone_user_s, "eff_f": self._eff_user_f,   # persisted slider overrides (None = adaptive)
             }
             with open(os.path.join(config.DATA_DIR, "terminal_ui.json"), "w") as f:
@@ -1813,6 +1908,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ls_mode = _lm if _lm in (0, 1, 2) else 0
         self.show_panel9 = bool(s.get("panel9", self.show_panel9))
         self.show_panel0 = bool(s.get("panel0", self.show_panel0))
+        self.show_liq = bool(s.get("liq_labels", self.show_liq))
         self.show_whisker = bool(s.get("whisker", self.show_whisker))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
         for _k, _v in (s.get("phase") or {}).items():
@@ -2215,7 +2311,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0()                        # smoothed twin: clear on teardown
+            self._clear_panel0(); self._clear_liq()     # smoothed twin + liq labels: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2245,7 +2341,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0()                        # smoothed twin: clear on teardown
+            self._clear_panel0(); self._clear_liq()     # smoothed twin + liq labels: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2296,7 +2392,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0()                        # smoothed twin: clear on teardown
+            self._clear_panel0(); self._clear_liq()     # smoothed twin + liq labels: clear on teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -4931,6 +5027,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _wb.update_data([], [], [], [], [], [], [], [])                 # free the picture
             self._scan_handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
         self._scan_handles["bc_baseline"].setData(x, baseline_arr)   # gray dashed POC-center baseline (KEPT)
+        # liquidity-sweep labels (Ctrl+L) — batched, viewport-culled, guarded (never break the candle draw)
+        try:
+            self._draw_liq(buckets, x, highs, lows, vx0, vx1, vy0, vy1)
+        except Exception:
+            self._clear_liq()
 
         # --- Keltner Channel: EMA(close) basis ± ATR band. LIGHT GRAY upper/lower (match the POC baseline);
         #     the EMA MIDDLE line is HIDDEN (operator pref — the POC baseline is the center reference). ---
