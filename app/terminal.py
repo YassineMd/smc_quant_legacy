@@ -2449,7 +2449,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         LB, FWD = 220, 260                      # lookback (legs 1/5 + phase warm) / forward (1h entry scan)
         a = max(0, lo_i - LB); b_end = min(n, hi_i + 1 + FWD)
         try:
-            fires = pivot_detect.detect_pivots(filtered[a:b_end])
+            fires, e_sh = pivot_detect.detect_pivots(filtered[a:b_end], return_eff=True)
         except Exception:
             self._clear_pivot(); self._pivot_sig = sig; return
         fl = sorted(((a + f["det_i"], (a + f["entry_i"]) if f["entry_i"] is not None else None,
@@ -2492,7 +2492,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 tips.append(float(filtered[ent].get(fld, 0.0)))
             shelf = (min(tips) - dy) if buy else (max(tips) + dy)
             gid = off + det
-            html = self._pivot_stats_html(filtered, det, ent, zref, buy, gid, n, _cl, _op)
+            html = self._pivot_stats_html(filtered, det, ent, zref, buy, gid, n, _cl, _op, e_sh, a)
             used = self._pivot_put_label(used, det, shelf, "D")          # DETECTION badge
             spots.append({"pos": (det, shelf), "brush": brush})
             self._pivot_hovers.append((det, shelf, html, buy))
@@ -2515,12 +2515,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_pivot_conn[_sd].setData(_cx, _cy, connect="finite")
             self.bc_pivot_conn[_sd].setVisible(bool(_cx))
 
-    def _pivot_stats_html(self, filtered, det, ent, zref, buy, gid, n, _cl, _op) -> str:
+    def _pivot_stats_html(self, filtered, det, ent, zref, buy, gid, n, _cl, _op, e_sh=None, sl0=0) -> str:
         """Precomputed hover stats for a setup. N = bars back to the leg-5 reference candle; N->det = that
         reference OPEN to the detection CLOSE %; det->entry = detection CLOSE to entry CLOSE %; room ratio =
         profit-room / risk-room from the ENTRY to the leg-5 zone hi/lo, side-aware (the study's
         profit_room_ratio; >1 = favourable geometry). Plus the LARGE-player (panel-8: sz_vb/sz_vs >= daemon p95)
-        net buy/sell VOLUME over N=0..100 and their spread-delta %, coloured blue(buy)/orange(sell)."""
+        net buy/sell VOLUME over N=0..100 and their spread-delta %, coloured blue(buy)/orange(sell), and the
+        PANEL-2 eff-agg spread TRAJECTORY over the entry wait D->E (e_sh sliced at sl0): the LIVE spread AT the
+        entry bar E and its minimum over [D,E], aligned so +ve = still leaning WITH the trade. Study finding
+        (in-sample): winners hold spr@E positive / never breach -50; a flip negative marks a likely loser."""
         sc = "#28e65a" if buy else "#ff5566"
         c_det = _cl(det)
         has_ref = 0 <= zref < n
@@ -2553,6 +2556,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         scol = OR if svol > bvol else GY
         dcol = BL if dsp > 0 else (OR if dsp < 0 else GY)
 
+        # PANEL-2 eff-agg spread TRAJECTORY over the entry wait [D, E], aligned (+ve = still WITH the trade).
+        # Study finding: winners hold spr@E > 0 and never breach -50; a flip negative marks a likely loser.
+        de_html = ""
+        di, ei = det - sl0, ent - sl0
+        if e_sh is not None and ent >= det and 0 <= di < len(e_sh) and 0 <= ei < len(e_sh):
+            sg = 1.0 if buy else -1.0
+            liv = [sg * (2.0 * float(e_sh[k]) - 1.0) * 100.0 for k in range(di, ei + 1)]
+            spr_e, spr_min = liv[-1], min(liv)
+            ecol = "#28e65a" if spr_e > 0 else "#ff5566"
+            mcol = "#ff5566" if spr_min <= -50.0 else "#c8ccd4"
+            held = spr_e > 0.0 and spr_min > -50.0
+            vcol = "#28e65a" if held else "#ff5566"
+            vtxt = "eff-agg HELD &#10003;" if held else "eff-agg FLIPPED &#10007;"
+            de_html = ("<span style='color:#5a6070'>&#8213;&#8213;&#8213;</span><br>"
+                       "spr@E: <b style='color:%s'>%+.1f%%</b> &nbsp; min: <b style='color:%s'>%+.1f%%</b><br>"
+                       "<b style='color:%s'>%s</b>") % (ecol, spr_e, mcol, spr_min, vcol, vtxt)
+
         def _pc(v):
             return "<span style='color:%s'>%+.2f%%</span>" % ("#28e65a" if v >= 0 else "#ff5566", v)
 
@@ -2561,9 +2581,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "N (leg-5): <b style='color:#e8ebf0'>%d</b> bars<br>"
                 "N&rarr;det: %s<br>det&rarr;entry: %s<br>room ratio: %s<br>"
                 "lg buy <b style='color:%s'>%s</b> &nbsp; lg sell <b style='color:%s'>%s</b><br>"
-                "&Delta;spread: <b style='color:%s'>%+.1f%%</b></div>"
+                "&Delta;spread: <b style='color:%s'>%+.1f%%</b><br>%s</div>"
                 ) % (sc, "B" if buy else "S", self._fmt_idx(gid), N, _pc(d_ndet), _pc(d_dentry), ratio_s,
-                     bcol, self._fmt_k(bvol), scol, self._fmt_k(svol), dcol, dsp)
+                     bcol, self._fmt_k(bvol), scol, self._fmt_k(svol), dcol, dsp, de_html)
 
     def _hover_pivot(self, scene_pos) -> None:
         """Stats box for whichever D/E badge the cursor is over — buy -> box BELOW the badge, sell -> box ABOVE.
