@@ -371,7 +371,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # lists so the draw path culls to the visible range by bisect — NEVER iterates all rows, NEVER
         # re-detects per frame (that was the 250->1700-item / 0.55->572ms regression).
         self._liq_events = []; self._liq_gids = []; self._liq_seen = set()
-        self._csv_max_gid = 0; self._liq_live_max_gid = 0; self._liq_live_tc = None
+        self._csv_max_gid = 0; self._liq_scan_lo = None; self._liq_scan_hi = 0; self._liq_live_key = None
         self._load_liq_csv()                                     # historical event set, ONCE on load
         self.bc_liq_leader = pg.PlotDataItem(
             pen=pg.mkPen((160, 160, 160, 180), width=1, style=QtCore.Qt.DashLine))
@@ -1812,39 +1812,58 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_gids = [e["gid"] for e in evs]
         self._liq_seen = {(e["gid"], e["side"]) for e in evs}
         self._csv_max_gid = self._liq_gids[-1] if self._liq_gids else 0
-        self._liq_live_max_gid = self._csv_max_gid          # live events must be STRICTLY newer than the CSV
+        self._liq_scan_lo = None                            # live-scan covered range (None = nothing scanned yet)
+        self._liq_scan_hi = self._csv_max_gid               # everything <= csv_max is the CSV's job
 
     def _liq_scan_live(self, filtered: list, off: int, n_closed: int) -> None:
-        """Bucket-close hook (NOT the draw path, gated on total_closed by the caller): detect sweeps on the
-        tail of the loaded CLOSED buckets and append any event newer than the watermark. Tail-windowed to the
-        new bars + context, so steady-state cost is O(new bars) once per close — never O(N) per frame. Keeps
-        _liq_events / _liq_gids gid-sorted because new gids are strictly greater than every recorded one."""
-        if n_closed < 40:
+        """Bucket-close / window-growth hook (NOT the draw path): detect sweeps on the loaded CLOSED buckets
+        ABOVE the CSV horizon and merge any new event. Scans ONLY the parts of the loaded region not yet
+        covered — two-sided: new closes at the top AND older chunks that fill in BEHIND (the pipe sets
+        total_closed before the window finishes streaming), each with left-context and deduped. So it is
+        robust to progressive loading and stays O(new bars), never O(N) per frame."""
+        from app import liq_detect
+        ctx = liq_detect.LOOKBACK + liq_detect.Z_BASE + liq_detect.K + 5      # left-context for a scanned bar
+        if n_closed < liq_detect.Z_BASE + liq_detect.K + 1:
             return
-        edge_gid = off + n_closed - 1
-        if edge_gid <= self._liq_live_max_gid:
-            return                                          # nothing new closed since last scan
-        new_bars = edge_gid - self._liq_live_max_gid
-        w = min(new_bars + 200, n_closed)                   # 200 > LOOKBACK+Z_BASE+K left-context for the new bars
-        a = n_closed - w
-        try:
-            from app import liq_detect
-            evs = liq_detect.detect_sweeps(filtered[a:n_closed])
-        except Exception:
-            return
-        base = off + a; floor_gid = self._liq_live_max_gid
-        for e in evs:
-            gid = base + e["i"]
-            if gid <= floor_gid:
+        edge = off + n_closed - 1
+        region_lo = max(off, self._csv_max_gid + 1)         # only the loaded region ABOVE the CSV horizon
+        region_hi = edge
+        if region_hi < region_lo:
+            return                                          # nothing above the CSV horizon is loaded yet
+        subs = []                                           # gid sub-ranges still to scan
+        if self._liq_scan_lo is None:                       # first scan -> the whole loaded above-CSV region
+            subs.append((region_lo, region_hi))
+        else:
+            if region_hi > self._liq_scan_hi:               # new closes at the top
+                subs.append((max(region_lo, self._liq_scan_hi + 1), region_hi))
+            if region_lo < self._liq_scan_lo:               # older chunks filled in behind (overlap for context)
+                subs.append((region_lo, min(region_hi, self._liq_scan_lo + ctx - 1)))
+        added = False
+        for g0, g1 in subs:
+            if g1 < g0:
                 continue
-            key = (gid, e["side"])
-            if key in self._liq_seen:
+            lo_i = max(0, (g0 - off) - ctx); hi_i = (g1 - off) + 1
+            try:
+                evs = liq_detect.detect_sweeps(filtered[lo_i:hi_i])
+            except Exception:
                 continue
-            self._liq_seen.add(key)
-            self._liq_events.append(dict(gid=gid, side=e["side"], kind=e["kind"],
-                                         level=e["level"], tier=e["tier"]))
-            self._liq_gids.append(gid)
-        self._liq_live_max_gid = edge_gid
+            base = off + lo_i
+            for e in evs:
+                gid = base + e["i"]
+                if not (g0 <= gid <= g1):
+                    continue
+                key = (gid, e["side"])
+                if key in self._liq_seen:
+                    continue
+                self._liq_seen.add(key)
+                self._liq_events.append(dict(gid=gid, side=e["side"], kind=e["kind"],
+                                             level=e["level"], tier=e["tier"]))
+                added = True
+        self._liq_scan_lo = region_lo if self._liq_scan_lo is None else min(self._liq_scan_lo, region_lo)
+        self._liq_scan_hi = max(self._liq_scan_hi, region_hi)
+        if added:                                           # low-side inserts break append-order -> re-sort
+            self._liq_events.sort(key=lambda ev: ev["gid"])
+            self._liq_gids = [ev["gid"] for ev in self._liq_events]
 
     def _toggle_liq(self) -> None:
         """Ctrl+L — show/hide the liquidity-sweep labels (detector v1, uncalibrated)."""
@@ -3565,11 +3584,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # total_closed - len(closed_list) + 1 + j, and j = anchor_idx + local_idx. (0 -> legacy local idx.)
         self._global_idx_offset = (total_closed - len(closed_list) + 1 + anchor_idx) if total_closed > 0 else 0
 
-        # LIVE liquidity detection — a real bucket-close hook, gated on total_closed (once per new close),
-        # NOT the draw path and NOT keyed on curr_vol. Excludes the still-forming active bar.
-        if total_closed and total_closed != self._liq_live_tc:
-            self._liq_live_tc = total_closed
-            n_closed_local = len(filtered) - (1 if active_appended else 0)
+        # LIVE liquidity detection — bucket-close / window-growth hook, NOT the draw path and NOT keyed on
+        # curr_vol. Keyed on (total_closed, #closed loaded): fires on a new close AND as the pipe streams the
+        # window in behind a known total_closed (so live events aren't skipped on a partial first frame).
+        n_closed_local = len(filtered) - (1 if active_appended else 0)
+        live_key = (total_closed, n_closed_local)
+        if total_closed and live_key != self._liq_live_key:
+            self._liq_live_key = live_key
             self._liq_scan_live(filtered, self._global_idx_offset, n_closed_local)
 
         x_indices: list[int] = list(range(len(filtered)))
