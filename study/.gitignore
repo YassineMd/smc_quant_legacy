@@ -88,3 +88,6 @@ out/*
 !out/analysis_report_S5j.md
 !out/s5j_episodes.csv
 !out/s5j_speed_dev.csv
+!out/liq_sweeps.csv
+!out/liq_calibration_pack.md
+!out/liq_calibration_key.csv
