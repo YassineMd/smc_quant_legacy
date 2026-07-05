@@ -69,12 +69,25 @@ def hist_side(arr, thr=LARGE_THR):
     return tot
 
 
+def large_delta(snaps, lo, hi):
+    """LARGE net buy/sell VOLUME + spread-delta % over buckets [lo, hi] inclusive. Returns ('', '', '') if
+    the range runs off the start OR any bucket in it lacks populated size histograms (no-data, not a zero)."""
+    if lo < 0 or not all(_has_size(snaps[k]) for k in range(lo, hi + 1)):
+        return "", "", ""
+    bv = sum(hist_side(snaps[k].get("sz_vb")) for k in range(lo, hi + 1))
+    sv = sum(hist_side(snaps[k].get("sz_vs")) for k in range(lo, hi + 1))
+    tot = bv + sv
+    return round(bv, 2), round(sv, 2), (round((bv - sv) / tot * 100.0, 2) if tot > 1e-9 else 0.0)
+
+
 def main():
     t0 = time.time()
     bids, raws, gaps = load_local_tape()
     n = len(raws)
     bks = [_bucket_from_dict(d) for d in raws]
     snaps = [b.full_snapshot() for b in bks]
+    _, e_sh, _, _ = PD._p9_global(snaps)                # panel-2 eff-agg share (locked/live badge spreads)
+    LOCK = PD.LOCK
     hi = np.array([b.high for b in bks]); lo_ = np.array([b.low for b in bks])
     cl = np.array([b.close_price for b in bks]); op = np.array([b.open_price for b in bks])
     et = np.array([b.end_time for b in bks]); st = np.array([float(d["start_time"]) for d in raws])
@@ -181,26 +194,28 @@ def main():
             row["pnl"] = round(pnl, 4) if pnl is not None else ""
             row["mins"] = round(mins, 2) if mins is not None else ""
 
-        # ---- the six hover-stats-box fields ----------------------------------------------------------
+        # ---- hover-stats-box fields + quarter deltas + panel-2 spreads --------------------------------
         row["leg5_N"] = int(b - zref)
         row["ref_to_det_pct"] = round((c0 - op[zref]) / op[zref] * 100.0, 4) if op[zref] else ""
         row["det_to_entry_pct"] = round((entry - c0) / c0 * 100.0, 4) if (entry is not None and c0) else ""
-        lo0 = max(0, b - 100)                           # LARGE net volume over N=0..100 ([det-100, det])
-        if all(_has_size(snaps[k]) for k in range(lo0, b + 1)):
-            bvol = sum(hist_side(snaps[k].get("sz_vb")) for k in range(lo0, b + 1))
-            svol = sum(hist_side(snaps[k].get("sz_vs")) for k in range(lo0, b + 1))
-            tot = bvol + svol
-            row["lg_buy_vol"] = round(bvol, 2); row["lg_sell_vol"] = round(svol, 2)
-            row["lg_spread_delta_pct"] = round((bvol - svol) / tot * 100.0, 2) if tot > 1e-9 else 0.0
-        else:                                           # size histograms not live across the whole window
-            row["lg_buy_vol"] = row["lg_sell_vol"] = row["lg_spread_delta_pct"] = ""
+        # LARGE net buy/sell VOLUME + spread-delta over the full N=0..100, then per 25-bar quarter
+        row["lg_buy_vol"], row["lg_sell_vol"], row["lg_spread_delta_pct"] = large_delta(snaps, b - 100, b)
+        row["lg_spr_n0_25"] = large_delta(snaps, b - 24, b)[2]           # most recent 25 bars (incl. fire)
+        row["lg_spr_n25_50"] = large_delta(snaps, b - 49, b - 25)[2]
+        row["lg_spr_n50_75"] = large_delta(snaps, b - 74, b - 50)[2]
+        row["lg_spr_n75_100"] = large_delta(snaps, b - 99, b - 75)[2]   # oldest quarter
+        # PANEL 2 (eff-agg) badge spread: LOCKED = leg-2's value at b-LOCK (|.|>=65 by construction) vs
+        # UNLOCKED = the live value at the fire bar b — their gap shows whether eff-agg firmed or decayed.
+        row["p2_lock_spread"] = round((2.0 * float(e_sh[max(0, b - LOCK)]) - 1.0) * 100.0, 2)
+        row["p2_live_spread"] = round((2.0 * float(e_sh[b]) - 1.0) * 100.0, 2)
         rows.append(row)
 
     cols = ["fire_bid", "side", "outcome", "w_max", "w_min", "zone_hi_pct", "zone_lo_pct", "zone_range",
             "profit_room", "adverse_room", "profit_room_ratio", "pnl", "mins", "entry", "baseline",
             "route", "status", "delay", "t_max", "t_min", "first_red_N", "first_green_N", "ts",
             "leg5_N", "ref_to_det_pct", "det_to_entry_pct", "lg_buy_vol", "lg_sell_vol",
-            "lg_spread_delta_pct"]
+            "lg_spread_delta_pct", "lg_spr_n0_25", "lg_spr_n25_50", "lg_spr_n50_75", "lg_spr_n75_100",
+            "p2_lock_spread", "p2_live_spread"]
     os.makedirs(OUT, exist_ok=True)
     with open(os.path.join(OUT, "pivot_backtest_episodes.csv"), "w", newline="", encoding="utf-8") as fp:
         w = csv.DictWriter(fp, fieldnames=cols); w.writeheader()
