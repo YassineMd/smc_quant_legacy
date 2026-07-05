@@ -381,20 +381,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_status.setZValue(33); self.plot.addItem(self._liq_status, ignoreBounds=True)
         self._liq_status.setVisible(False); self._liq_status_txt = None
         # PIVOT INDICATOR (Ctrl+P) — S5j-r5 confluence detection + entry, SELECTION-SCOPED (only inside a drawn
-        # Mode-10 selection; app.pivot_detect). Marks the FIRST fire's detection + its entry: two filled labels
-        # labels ("B/S-P_idx" detection + "B/S-P-E_idx" entry), GREEN bg for buys / RED for sells, a DASHED
-        # faded-gray leader from each candle to its label, and a SOLID faded-gray line joining the two. Buys
-        # below the candles, sells mirrored above.
+        # Mode-10 selection; app.pivot_detect). Marks each setup's detection + its entry: two filled labels
+        # ("B/S-P_idx" detection + "B/S-P-E_idx" entry), GREEN bg for buys / RED for sells, a DASHED faded leader
+        # from each candle to its label (+ a 2nd back to the leg-5 N=60..100 candle), and a SOLID line joining
+        # detection<->entry. Leaders/connectors are faded GREEN (buy) / RED (sell), split per side. Buys below
+        # the candles, sells mirrored above. Hovering a label pops a stats box (buy -> below, sell -> above).
         self.show_pivot = False
-        _pv_pen = pg.mkPen((165, 165, 165, 150), width=1, style=QtCore.Qt.DashLine)
-        self.bc_pivot_leaders = pg.PlotDataItem(pen=_pv_pen, connect="finite")
-        self.bc_pivot_leaders.setZValue(30); self.plot.addItem(self.bc_pivot_leaders, ignoreBounds=True)
-        self.bc_pivot_leaders.setVisible(False)
-        self.bc_pivot_conn = pg.PlotDataItem(pen=pg.mkPen((165, 165, 165, 150), width=1.4))   # SOLID connector
-        self.bc_pivot_conn.setZValue(30); self.plot.addItem(self.bc_pivot_conn, ignoreBounds=True)
-        self.bc_pivot_conn.setVisible(False)
+        _grn = (40, 230, 90, 140); _red = (255, 45, 70, 140)     # faded side colours (alpha keeps them behind)
+        self.bc_pivot_leaders = {}               # side -> DASHED PlotDataItem (candle<->label + label->leg-5)
+        self.bc_pivot_conn = {}                  # side -> SOLID PlotDataItem (detection<->entry)
+        for _sd, _c in (("long", _grn), ("short", _red)):
+            _ld = pg.PlotDataItem(pen=pg.mkPen(_c, width=1, style=QtCore.Qt.DashLine), connect="finite")
+            _ld.setZValue(30); self.plot.addItem(_ld, ignoreBounds=True); _ld.setVisible(False)
+            _cn = pg.PlotDataItem(pen=pg.mkPen(_c, width=1.4), connect="finite")
+            _cn.setZValue(30); self.plot.addItem(_cn, ignoreBounds=True); _cn.setVisible(False)
+            self.bc_pivot_leaders[_sd] = _ld; self.bc_pivot_conn[_sd] = _cn
         self._pivot_label_pool = []              # reused TextItems (2 per setup: detection + entry), grown lazily
+        self._pivot_hovers = []                  # [(label_item, stats_html, is_buy)] -> the hover stats box
         self._pivot_sig = None
+        self.pivot_tooltip = pg.TextItem(anchor=(0.5, 0.0), fill=pg.mkBrush(18, 20, 26, 238),
+                                         border=pg.mkPen(90, 96, 108, 220))
+        self.pivot_tooltip.setZValue(62); self.plot.addItem(self.pivot_tooltip, ignoreBounds=True)
+        self.pivot_tooltip.hide()
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
         # heatmap large-order bubbles); SMALL = small-BUY vs small-SELL trade-COUNT share (green / red). Each
@@ -1096,6 +1104,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.hm_vol_tip.hide()
             self.dom_tooltip.hide()
             self.panel_tooltip.hide()
+            self.pivot_tooltip.hide()
             self._last_hover_pos = None      # left the plot -> stop the hover re-fire
             if self.scanner_mode == "bucket_canvas":
                 self._show_forming_stats()   # keep the live candle's readout on by default
@@ -1153,6 +1162,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._hover_scanner(pt.x(), pos)
         self._hover_dom_wall(pt.x(), pt.y())   # DOM wall hover-volume (bucket_canvas + m10_dom)
         self._hover_panels(pt.x(), pt.y())  # cursor label: RAW values of whichever stacked panel is hovered
+        self._hover_pivot(pos)              # PIVOT label hover -> setup stats box (scene coords for hit-test)
 
     def _hover_panels(self, x: float, y: float) -> None:
         """Cursor label of the hovered bucket's RAW (un-smoothed) values for WHICHEVER stacked selection panel
@@ -2398,10 +2408,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sel_sig = None                    # force the selection readout to recompute so marks appear/vanish
 
     def _clear_pivot(self) -> None:
-        self.bc_pivot_leaders.setData([], []); self.bc_pivot_leaders.setVisible(False)
-        self.bc_pivot_conn.setData([], []); self.bc_pivot_conn.setVisible(False)
+        for _sd in ("long", "short"):
+            self.bc_pivot_leaders[_sd].setData([], []); self.bc_pivot_leaders[_sd].setVisible(False)
+            self.bc_pivot_conn[_sd].setData([], []); self.bc_pivot_conn[_sd].setVisible(False)
         for _lab in self._pivot_label_pool:
             _lab.setVisible(False)
+        self._pivot_hovers = []; self.pivot_tooltip.hide()
         self._pivot_sig = None
 
     def _pivot_put_label(self, used: int, x, y, brush, text: str) -> int:
@@ -2448,34 +2460,106 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             else:
                 scan_from[side] = we            # cancelled -> resume that side past the dead hour, don't mark
         if not setups:
+            self._pivot_hovers = []; self.pivot_tooltip.hide()
             for _lab in self._pivot_label_pool:
                 _lab.setVisible(False)
-            self.bc_pivot_leaders.setVisible(False); self.bc_pivot_conn.setVisible(False)
+            for _sd in ("long", "short"):
+                self.bc_pivot_leaders[_sd].setVisible(False); self.bc_pivot_conn[_sd].setVisible(False)
             return
         (_vx0, _vx1), (vy0, vy1) = self.vb.viewRange()
         dy = (vy1 - vy0) * 0.08
-        lx, ly, cx, cy, used = [], [], [], [], 0
+
+        def _cl(i): return float(filtered[i].get("close", filtered[i].get("close_price", 0.0)))
+        def _op(i): return float(filtered[i].get("open", filtered[i].get("open_price", 0.0)))
+
+        seg = {"long": ([], []), "short": ([], [])}      # DASHED leaders lx/ly per side
+        con = {"long": ([], []), "short": ([], [])}      # SOLID connectors cx/cy per side
+        self._pivot_hovers = []; used = 0
         for det, ent, side, zref in setups:
             buy = side == "long"; pfx = "B" if buy else "S"; fld = "low" if buy else "high"
             col = pg.mkBrush(40, 230, 90) if buy else pg.mkBrush(255, 45, 70)   # green buy / red sell
+            lx, ly = seg[side]; cx, cy = con[side]
             tips = [float(filtered[det].get(fld, 0.0))]
             if ent < n:
                 tips.append(float(filtered[ent].get(fld, 0.0)))
             shelf = (min(tips) - dy) if buy else (max(tips) + dy)
             gid = off + det
+            html = self._pivot_stats_html(filtered, det, ent, zref, buy, gid, n, _cl, _op)
             used = self._pivot_put_label(used, det, shelf, col, " %s-P_%d " % (pfx, gid))
+            self._pivot_hovers.append((self._pivot_label_pool[used - 1], html, buy))
             lx += [det, det, float("nan")]; ly += [float(filtered[det].get(fld, 0.0)), shelf, float("nan")]
             if 0 <= zref < n:                    # dashed leader from the label back to the leg-5 (N=60..100)
-                zy = float(filtered[zref].get("open", filtered[zref].get("open_price", 0.0)))  # reference open
-                lx += [det, zref, float("nan")]; ly += [shelf, zy, float("nan")]
+                lx += [det, zref, float("nan")]; ly += [shelf, _op(zref), float("nan")]   # -> reference open
             if ent < n:                          # entry references the DETECTION idx
                 used = self._pivot_put_label(used, ent, shelf, col, " %s-P-E_%d " % (pfx, gid))
+                self._pivot_hovers.append((self._pivot_label_pool[used - 1], html, buy))
                 lx += [ent, ent, float("nan")]; ly += [float(filtered[ent].get(fld, 0.0)), shelf, float("nan")]
                 cx += [det, ent, float("nan")]; cy += [shelf, shelf, float("nan")]
         for j in range(used, len(self._pivot_label_pool)):
             self._pivot_label_pool[j].setVisible(False)
-        self.bc_pivot_leaders.setData(lx, ly, connect="finite"); self.bc_pivot_leaders.setVisible(bool(lx))
-        self.bc_pivot_conn.setData(cx, cy, connect="finite"); self.bc_pivot_conn.setVisible(bool(cx))
+        for _sd in ("long", "short"):
+            _lx, _ly = seg[_sd]; _cx, _cy = con[_sd]
+            self.bc_pivot_leaders[_sd].setData(_lx, _ly, connect="finite")
+            self.bc_pivot_leaders[_sd].setVisible(bool(_lx))
+            self.bc_pivot_conn[_sd].setData(_cx, _cy, connect="finite")
+            self.bc_pivot_conn[_sd].setVisible(bool(_cx))
+
+    def _pivot_stats_html(self, filtered, det, ent, zref, buy, gid, n, _cl, _op) -> str:
+        """Precomputed hover stats for a setup. N = bars back to the leg-5 reference candle; N->det = that
+        reference OPEN to the detection CLOSE %; det->entry = detection CLOSE to entry CLOSE %; room ratio =
+        profit-room / risk-room from the ENTRY to the leg-5 zone hi/lo, side-aware (the study's
+        profit_room_ratio; >1 = favourable geometry)."""
+        sc = "#28e65a" if buy else "#ff5566"
+        c_det = _cl(det)
+        has_ref = 0 <= zref < n
+        N = det - zref if has_ref else 0
+        o_ref = _op(zref) if has_ref else 0.0
+        d_ndet = ((c_det - o_ref) / o_ref * 100.0) if o_ref else 0.0
+        d_dentry = 0.0; ratio_s = "&mdash;"
+        if ent < n:
+            c_ent = _cl(ent)
+            d_dentry = ((c_ent - c_det) / c_det * 100.0) if c_det else 0.0
+            zlo0, zhi0 = det - 99, det - 58                       # leg-5 zone [det-99, det-59], N=60..100
+            if zlo0 >= 0:
+                zhi = max(float(filtered[k].get("high", 0.0)) for k in range(zlo0, zhi0))
+                zlo = min(float(filtered[k].get("low", 0.0)) for k in range(zlo0, zhi0))
+                zhp = (zhi - c_ent) / c_ent * 100.0; zlp = (zlo - c_ent) / c_ent * 100.0
+                pr, ar = (zhp, -zlp) if buy else (-zlp, zhp)      # profit room / risk room, side-aware
+                if abs(ar) > 1e-9:
+                    ratio_s = "<b style='color:#e8ebf0'>%.2f : 1</b>" % (pr / ar)
+
+        def _pc(v):
+            return "<span style='color:%s'>%+.2f%%</span>" % ("#28e65a" if v >= 0 else "#ff5566", v)
+
+        return ("<div style='font-family:Consolas; font-size:11px; color:#c8ccd4; padding:1px 3px'>"
+                "<b style='color:%s'>%s-P_%s</b><br>"
+                "N (leg-5): <b style='color:#e8ebf0'>%d</b> bars<br>"
+                "N&rarr;det: %s<br>det&rarr;entry: %s<br>room ratio: %s</div>"
+                ) % (sc, "B" if buy else "S", self._fmt_idx(gid), N, _pc(d_ndet), _pc(d_dentry), ratio_s)
+
+    def _hover_pivot(self, scene_pos) -> None:
+        """Stats box for whichever pivot label the cursor is over — buy -> box BELOW the label, sell -> box
+        ABOVE. Hit-tests the pooled label items' scene rects; hidden when none is hovered."""
+        if not self.show_pivot or not self._pivot_hovers:
+            self.pivot_tooltip.hide(); return
+        for lab, html, buy in self._pivot_hovers:
+            if not lab.isVisible():
+                continue
+            r = lab.mapRectToScene(lab.boundingRect())
+            if not r.contains(scene_pos):
+                continue
+            cx = r.center().x()
+            if buy:                              # box hangs BELOW the label (down the screen)
+                self.pivot_tooltip.anchor = pg.Point(0.5, 0.0)
+                p = self.vb.mapSceneToView(QtCore.QPointF(cx, r.bottom() + 4))
+            else:                                # box sits ABOVE the label
+                self.pivot_tooltip.anchor = pg.Point(0.5, 1.0)
+                p = self.vb.mapSceneToView(QtCore.QPointF(cx, r.top() - 4))
+            self.pivot_tooltip.setHtml(html)
+            self.pivot_tooltip.setPos(p.x(), p.y())
+            self.pivot_tooltip.show()
+            return
+        self.pivot_tooltip.hide()
 
     def _refresh_selection_stats(self) -> None:
         """Live Magic-Selection readout: aggregate the buckets inside the box + show the stats box.
