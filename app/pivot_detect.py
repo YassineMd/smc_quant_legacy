@@ -55,14 +55,15 @@ def _p9_global(snaps):
     return a_sh, e_sh, r_sh, sum0
 
 
-# --- phase trajectory (setups_S3.phase_traj, verbatim) ---------------------------------------------
-def _phase_traj(a_sh, e_sh, r_sh, i):
-    lo = max(0, i - W_SEL + 1); pre = min(lo, LW); a0 = lo - pre
-    lam = config.PHASE_EMA_LAMBDA
-    res = {}
-    for key, sgn in (("up", 1.0), ("down", -1.0)):
-        op = None; traj = []
-        for k in range(a0, i + 1):
+# --- phase trajectory (setups_S3.phase_traj, split for speed — EXACT same result) ------------------
+# phase_traj(i) EMAs the per-bar Naive-Bayes posterior over the trailing selection ending at i. The
+# posterior (the gaussian/exp) depends ONLY on bar k, not on i, so we compute it ONCE per bar
+# (_phase_posteriors) and phase_traj becomes a cheap windowed EMA over those cached vectors (_phase_locked).
+def _phase_posteriors(a_sh, e_sh, r_sh):
+    """Per-bar posterior [BEFORE, START/DURING, END] for the up & down tables (the expensive part, once/bar)."""
+    n = len(a_sh); pu = [None] * n; pd = [None] * n
+    for k in range(n):
+        for key, sgn, store in (("up", 1.0, pu), ("down", -1.0, pd)):
             vals = (sgn * (a_sh[k] - 0.5) * 200.0, sgn * (r_sh[k] - 0.5) * 200.0, sgn * (e_sh[k] - 0.5) * 200.0)
             ll = []
             for _n, *g in config.PHASE_STATS[key]:
@@ -72,13 +73,23 @@ def _phase_traj(a_sh, e_sh, r_sh, i):
                 ll.append(s)
             mx = max(ll); exp_ = [math.exp(l - mx) for l in ll]; t = sum(exp_) or 1.0
             p = [e / t for e in exp_]
-            conf = [p[0] * 100, (p[1] + p[2]) * 100, p[3] * 100]
-            op = conf[:] if op is None else [lam * op[j] + (1 - lam) * conf[j] for j in range(3)]
-            traj.append(op[:])
-        traj = traj[pre:]
-        ti = len(traj) - 1 - LOCK
-        res[key] = traj[ti if ti >= 0 else -1]
-    return res["up"], res["down"]
+            store[k] = [p[0] * 100, (p[1] + p[2]) * 100, p[3] * 100]
+    return pu, pd
+
+
+def _phase_locked(post, i):
+    """LOCKED phase row = EMA over the trailing W_SEL selection ending at i (re-seeded at the preroll start,
+    EXACT as the study). Cheap: ~W_SEL 3-element EMA steps over the cached posteriors."""
+    lo = max(0, i - W_SEL + 1); pre = min(lo, LW); a0 = lo - pre
+    lam = config.PHASE_EMA_LAMBDA
+    op = None; traj = []
+    for k in range(a0, i + 1):
+        conf = post[k]
+        op = conf[:] if op is None else [lam * op[j] + (1 - lam) * conf[j] for j in range(3)]
+        traj.append(op)
+    traj = traj[pre:]
+    ti = len(traj) - 1 - LOCK
+    return traj[ti if ti >= 0 else -1]
 
 
 # --- P0 confirmed-cross markers (m10_sweep_s5b._last_cross / sel_markers, verbatim) -----------------
@@ -131,6 +142,7 @@ def detect_pivots(buckets):
     lo_ = np.array([float(b.get("low", 0.0)) for b in buckets])
     poc = np.array([float(b.get("poc_price", 0.0)) for b in buckets])
     a_sh, e_sh, r_sh, sum0 = _p9_global(buckets)
+    post_up, post_dn = _phase_posteriors(a_sh, e_sh, r_sh)   # posteriors ONCE; phase EMA is then cheap
 
     # moving POC baseline (5% EMA), verbatim
     base = np.empty(n); base[0] = poc[0]
@@ -148,21 +160,24 @@ def detect_pivots(buckets):
 
     out = []
     for b in range(FIRST, n):
-        upv, dnv = _phase_traj(a_sh, e_sh, r_sh, b)
-        dom_u = PHASE_NAMES[int(np.argmax(upv))]; dom_d = PHASE_NAMES[int(np.argmax(dnv))]
+        # CHEAP-FIRST short-circuit (AND is order-free): leg 2 (eff-agg spread) gates the whole bar;
+        # only when a side passes leg 2 + leg 5 do we compute the phase (legs 3/4) and then leg 1.
         sh = e_sh[max(0, b - LOCK)]; spr2 = (2.0 * sh - 1.0) * 100.0
-        for side in ("long", "short"):
+        l2L = spr2 >= 65.0; l2S = -spr2 >= 65.0
+        if not (l2L or l2S):
+            continue
+        upv = dnv = None                             # compute the phase at most once for this bar
+        for side, l2, l5 in (("long", l2L, rcl[b] < zmax[b]), ("short", l2S, rcl[b] > zmin[b])):
+            if not (l2 and l5):
+                continue
+            if upv is None:
+                upv = _phase_locked(post_up, b); dnv = _phase_locked(post_dn, b)
+            dom_u = PHASE_NAMES[int(np.argmax(upv))]; dom_d = PHASE_NAMES[int(np.argmax(dnv))]
             if side == "long":
-                l2 = spr2 >= 65.0
-                l3 = dom_u == "STARTDUR" and dom_d != "STARTDUR"
-                l4 = (upv[1] - dnv[1]) >= 15.0
-                l5 = rcl[b] < zmax[b]
+                l3 = dom_u == "STARTDUR" and dom_d != "STARTDUR"; l4 = (upv[1] - dnv[1]) >= 15.0
             else:
-                l2 = -spr2 >= 65.0
-                l3 = dom_d == "STARTDUR" and dom_u != "STARTDUR"
-                l4 = (dnv[1] - upv[1]) >= 15.0
-                l5 = rcl[b] > zmin[b]
-            if not (l2 and l3 and l4 and l5):
+                l3 = dom_d == "STARTDUR" and dom_u != "STARTDUR"; l4 = (dnv[1] - upv[1]) >= 15.0
+            if not (l3 and l4):
                 continue
             if not _leg1(sum0, b, side):
                 continue
