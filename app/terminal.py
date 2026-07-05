@@ -393,13 +393,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_pivot_conn = pg.PlotDataItem(pen=pg.mkPen((165, 165, 165, 150), width=1.4))   # SOLID connector
         self.bc_pivot_conn.setZValue(30); self.plot.addItem(self.bc_pivot_conn, ignoreBounds=True)
         self.bc_pivot_conn.setVisible(False)
-        _pvf = QtGui.QFont("Consolas", 7); _pvf.setBold(True)
-        self.bc_pivot_det = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0))       # green (buy) / red (sell) bg
-        self.bc_pivot_det.textItem.setFont(_pvf); self.bc_pivot_det.setZValue(32)
-        self.plot.addItem(self.bc_pivot_det, ignoreBounds=True); self.bc_pivot_det.setVisible(False)
-        self.bc_pivot_entry = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0))     # green (buy) / red (sell) bg
-        self.bc_pivot_entry.textItem.setFont(_pvf); self.bc_pivot_entry.setZValue(32)
-        self.plot.addItem(self.bc_pivot_entry, ignoreBounds=True); self.bc_pivot_entry.setVisible(False)
+        self._pivot_label_pool = []              # reused TextItems (2 per setup: detection + entry), grown lazily
         self._pivot_sig = None
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
@@ -2406,13 +2400,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _clear_pivot(self) -> None:
         self.bc_pivot_leaders.setData([], []); self.bc_pivot_leaders.setVisible(False)
         self.bc_pivot_conn.setData([], []); self.bc_pivot_conn.setVisible(False)
-        self.bc_pivot_det.setVisible(False); self.bc_pivot_entry.setVisible(False)
+        for _lab in self._pivot_label_pool:
+            _lab.setVisible(False)
         self._pivot_sig = None
 
+    def _pivot_put_label(self, used: int, x, y, brush, text: str) -> int:
+        """Set the next pooled label (grow lazily). Green(buy)/red(sell) fill, black text, small font."""
+        if used >= len(self._pivot_label_pool):
+            _t = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0)); _t.setZValue(32)
+            _f = QtGui.QFont("Consolas", 7); _f.setBold(True); _t.textItem.setFont(_f)
+            self.plot.addItem(_t, ignoreBounds=True); self._pivot_label_pool.append(_t)
+        lab = self._pivot_label_pool[used]
+        lab.fill = brush; lab.setText(text); lab.setPos(x, y); lab.setVisible(True)
+        return used + 1
+
     def _draw_pivot(self, filtered, off, lo_i, hi_i) -> None:
-        """Scan the drawn selection for the FIRST S5j-r5 fire and mark its detection + entry. Cached by the
-        selection's bucket range (off, lo_i, hi_i) so it re-detects only when that changes — not on y-drags or
-        live-edge ticks. Runs on a lookback+forward window (legs 1/5 + phase warm; the entry scans ahead)."""
+        """Scan the selection for a SEQUENCE of S5j-r5 setups: the first fire's detection + entry, then — right
+        AFTER that entry — the next detection + entry, and so on, non-overlapping. A cancelled fire (no baseline
+        touch within the 1h WAIT) is skipped past its dead hour (so a fired RUN collapses to ONE setup, not one
+        mark per bar). Cached by the selection's bucket range so it re-detects only when the bars change."""
         if not self.show_pivot:
             self._clear_pivot(); return
         n = len(filtered)
@@ -2421,47 +2427,50 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return                              # same range -> marks already drawn, keep them
         self._pivot_sig = sig
         from app import pivot_detect
-        LB, FWD = 220, 200                      # lookback (legs 1/5 + phase warm) / forward (entry scan)
+        LB, FWD = 220, 260                      # lookback (legs 1/5 + phase warm) / forward (1h entry scan)
         a = max(0, lo_i - LB); b_end = min(n, hi_i + 1 + FWD)
         try:
             fires = pivot_detect.detect_pivots(filtered[a:b_end])
         except Exception:
             self._clear_pivot(); self._pivot_sig = sig; return
-        hit = None
-        for f in sorted(fires, key=lambda f: f["det_i"]):
-            di = a + f["det_i"]
-            if lo_i <= di <= hi_i:
-                ei = (a + f["entry_i"]) if f["entry_i"] is not None else None
-                hit = (di, ei, f["side"]); break
-        if hit is None:                         # no confluence fire in this selection
+        fl = sorted((a + f["det_i"], (a + f["entry_i"]) if f["entry_i"] is not None else None,
+                     a + f["wait_end_i"], f["side"]) for f in fires)
+        setups = []; scan_from = lo_i           # SEQUENTIAL: complete setups only; resume after each entry
+        for det, ent, we, side in fl:
+            if det > hi_i:
+                break
+            if det < scan_from:
+                continue
+            if ent is not None:
+                setups.append((det, ent, side)); scan_from = ent + 1
+            else:
+                scan_from = we                  # cancelled -> resume past the dead hour, don't mark
+        if not setups:
+            for _lab in self._pivot_label_pool:
+                _lab.setVisible(False)
             self.bc_pivot_leaders.setVisible(False); self.bc_pivot_conn.setVisible(False)
-            self.bc_pivot_det.setVisible(False); self.bc_pivot_entry.setVisible(False)
             return
-        det_i, entry_i, side = hit
-        buy = side == "long"; pfx = "B" if buy else "S"
         (_vx0, _vx1), (vy0, vy1) = self.vb.viewRange()
         dy = (vy1 - vy0) * 0.08
-        fld = "low" if buy else "high"          # buy shelf below the lows, sell shelf above the highs
-        tips = [float(filtered[det_i].get(fld, 0.0))]
-        if entry_i is not None and entry_i < n:
-            tips.append(float(filtered[entry_i].get(fld, 0.0)))
-        shelf = (min(tips) - dy) if buy else (max(tips) + dy)
-        det_gid = off + det_i
-        pvcol = pg.mkBrush(40, 230, 90) if buy else pg.mkBrush(255, 45, 70)   # green buy / red sell
-        self.bc_pivot_det.fill = pvcol
-        self.bc_pivot_det.setText(" %s-P_%d " % (pfx, det_gid))
-        self.bc_pivot_det.setPos(det_i, shelf); self.bc_pivot_det.setVisible(True)
-        lx = [det_i, det_i, float("nan")]; ly = [float(filtered[det_i].get(fld, 0.0)), shelf, float("nan")]
-        if entry_i is not None and entry_i < n:
-            self.bc_pivot_entry.fill = pvcol
-            self.bc_pivot_entry.setText(" %s-P-E_%d " % (pfx, det_gid))   # entry references the DETECTION idx
-            self.bc_pivot_entry.setPos(entry_i, shelf); self.bc_pivot_entry.setVisible(True)
-            lx += [entry_i, entry_i, float("nan")]
-            ly += [float(filtered[entry_i].get(fld, 0.0)), shelf, float("nan")]
-            self.bc_pivot_conn.setData([det_i, entry_i], [shelf, shelf]); self.bc_pivot_conn.setVisible(True)
-        else:
-            self.bc_pivot_entry.setVisible(False); self.bc_pivot_conn.setVisible(False)
-        self.bc_pivot_leaders.setData(lx, ly, connect="finite"); self.bc_pivot_leaders.setVisible(True)
+        lx, ly, cx, cy, used = [], [], [], [], 0
+        for det, ent, side in setups:
+            buy = side == "long"; pfx = "B" if buy else "S"; fld = "low" if buy else "high"
+            col = pg.mkBrush(40, 230, 90) if buy else pg.mkBrush(255, 45, 70)   # green buy / red sell
+            tips = [float(filtered[det].get(fld, 0.0))]
+            if ent < n:
+                tips.append(float(filtered[ent].get(fld, 0.0)))
+            shelf = (min(tips) - dy) if buy else (max(tips) + dy)
+            gid = off + det
+            used = self._pivot_put_label(used, det, shelf, col, " %s-P_%d " % (pfx, gid))
+            lx += [det, det, float("nan")]; ly += [float(filtered[det].get(fld, 0.0)), shelf, float("nan")]
+            if ent < n:                          # entry references the DETECTION idx
+                used = self._pivot_put_label(used, ent, shelf, col, " %s-P-E_%d " % (pfx, gid))
+                lx += [ent, ent, float("nan")]; ly += [float(filtered[ent].get(fld, 0.0)), shelf, float("nan")]
+                cx += [det, ent, float("nan")]; cy += [shelf, shelf, float("nan")]
+        for j in range(used, len(self._pivot_label_pool)):
+            self._pivot_label_pool[j].setVisible(False)
+        self.bc_pivot_leaders.setData(lx, ly, connect="finite"); self.bc_pivot_leaders.setVisible(bool(lx))
+        self.bc_pivot_conn.setData(cx, cy, connect="finite"); self.bc_pivot_conn.setVisible(bool(cx))
 
     def _refresh_selection_stats(self) -> None:
         """Live Magic-Selection readout: aggregate the buckets inside the box + show the stats box.

@@ -29,6 +29,7 @@ LOCK = LW // 2                         # 7
 W_SEL = 64                             # phase-trajectory trailing selection
 SELW = 100                             # leg 1'' selection width
 FIRST = 100                            # leg 5 needs the full 100-bar zone
+WAIT_SECS = 3600.0                      # entry WAIT window (s5j WIN): no baseline touch in 1h -> CANCELLED
 PHASE_NAMES = ("BEFORE", "STARTDUR", "END")
 
 
@@ -141,6 +142,7 @@ def detect_pivots(buckets):
     hi = np.array([float(b.get("high", 0.0)) for b in buckets])
     lo_ = np.array([float(b.get("low", 0.0)) for b in buckets])
     poc = np.array([float(b.get("poc_price", 0.0)) for b in buckets])
+    et = np.array([float(b.get("end_time", 0.0)) for b in buckets])
     a_sh, e_sh, r_sh, sum0 = _p9_global(buckets)
     post_up, post_dn = _phase_posteriors(a_sh, e_sh, r_sh)   # posteriors ONCE; phase EMA is then cheap
 
@@ -181,18 +183,24 @@ def detect_pivots(buckets):
                 continue
             if not _leg1(sum0, b, side):
                 continue
-            out.append({"det_i": b, "side": side, "entry_i": _entry_after(rcl, rop, rbase, lo_, hi, base, b, side, n)})
+            out.append({"det_i": b, "side": side,
+                        "entry_i": _entry_after(rcl, rop, rbase, lo_, hi, base, et, b, side, n),
+                        "wait_end_i": int(np.searchsorted(et, et[b] + WAIT_SECS, side="right"))})
     return out
 
 
-def _entry_after(rcl, rop, rbase, lo_, hi, base, b, side, n):
-    """S5j-r5 WAIT-baseline-touch entry. Returns the entry bucket index, or None (no touch found ahead)."""
+def _entry_after(rcl, rop, rbase, lo_, hi, base, et, b, side, n):
+    """S5j-r5 WAIT-baseline-touch entry, CAPPED at the 1h WAIT window (verbatim s5j: no touch in the hour ->
+    CANCELLED -> None). Returns the entry bucket index or None."""
     long = side == "long"
     mkt_ok = ((rcl[b] <= rbase[b]) and (rcl[b] > rop[b])) if long else \
              ((rcl[b] >= rbase[b]) and (rcl[b] < rop[b]))
     if mkt_ok:
         return b
+    t_end = et[b] + WAIT_SECS
     for j in range(b + 1, n):
+        if et[j] > t_end:                        # 1h elapsed with no touch -> CANCELLED
+            break
         if long:
             if lo_[j] <= base[j] and rcl[j] > rop[j]:
                 return j
