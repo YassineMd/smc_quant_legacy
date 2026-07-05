@@ -911,6 +911,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scanner_bucket_sig = self._last_scanner_sig = None
         self._m10_cc = None   # #3 static closed-bucket compute cache (see _compute_bucket_arrays)
         self._depth_needs_calibration = True  # new tf -> re-baseline the depth slider (§1)
+        self._load_liq_csv()                  # tf-aware: swap in THIS timeframe's sweep set (resets scan state)
+        self._clear_liq()                     # drop the previous tf's labels immediately
         self.worker.request_timeframe(tf)
 
     def _refresh(self) -> None:
@@ -1788,29 +1790,36 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._spread_badges["PANEL0_SUM"].hide()
 
     # ---------------------------------------------------------------- liquidity-sweep labels (Ctrl+L)
+    # study sweep table per timeframe (Tier-A only reaches the chart); a tf with no table shows LIVE-detected
+    # sweeps only. gid = per-tf bucket Idx, same family as _global_idx_offset, so it only lines up on that tf.
+    _LIQ_CSV_BY_TF = {"1m": "liq_sweeps.csv", "15m": "liq_sweeps_15m.csv"}
+
     def _load_liq_csv(self) -> None:
-        """Build the historical event set ONCE on load from study/out/liq_sweeps.csv into gid-sorted parallel
-        lists (self._liq_events / self._liq_gids) for O(log n) visible-range culling in the draw path. A wide
-        bar can sweep BOTH ends, so events are keyed by (gid, side); gid = the CSV bucket_id (per-tf Idx,
-        same family as _global_idx_offset)."""
+        """(Re)build the sweep set for the CURRENT timeframe into gid-sorted parallel lists
+        (self._liq_events / self._liq_gids) for O(log n) visible-range culling. TIMEFRAME-AWARE: loads the
+        table matching self._tf (1m/15m today); other tfs get an empty offline set and rely on live detection.
+        Resets the live-scan state too, so switching tf never mixes another timeframe's Idx numbering."""
         import csv as _csv
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "study", "out", "liq_sweeps.csv")
+        tf = getattr(self, "_tf", config.DEFAULT_TF)
+        fname = self._LIQ_CSV_BY_TF.get(tf)
         evs = []; csv_max = 0
-        try:
-            with open(path, encoding="utf-8") as f:
-                first = f.tell(); ln = f.readline()
-                if not ln.startswith("#"):
-                    f.seek(first)
-                for r in _csv.DictReader(f):
-                    bid = int(r["bucket_id"])
-                    if bid > csv_max:
-                        csv_max = bid                       # CSV data horizon spans ALL tiers (live starts past it)
-                    if r["tier"] != "A":                    # TIER-A ONLY on the chart — Tier-B are calibration
-                        continue                            # decoys (still in liq_sweeps.csv + the pack, just not drawn)
-                    evs.append(dict(gid=bid, side=r["side_label"], kind="Sweep",
-                                    level=float(r["swept_level"]), tier="A"))
-        except (OSError, KeyError, ValueError):
-            evs = []; csv_max = 0
+        if fname:
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "study", "out", fname)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    first = f.tell(); ln = f.readline()
+                    if not ln.startswith("#"):
+                        f.seek(first)
+                    for r in _csv.DictReader(f):
+                        bid = int(r["bucket_id"])
+                        if bid > csv_max:
+                            csv_max = bid                   # CSV data horizon (live detection starts past it)
+                        if r["tier"] != "A":                # TIER-A ONLY on the chart — Tier-B are calibration
+                            continue                        # decoys (kept in the CSV + pack, just not drawn)
+                        evs.append(dict(gid=bid, side=r["side_label"], kind="Sweep",
+                                        level=float(r["swept_level"]), tier="A"))
+            except (OSError, KeyError, ValueError):
+                evs = []; csv_max = 0
         evs.sort(key=lambda e: e["gid"])
         self._liq_events = evs
         self._liq_gids = [e["gid"] for e in evs]
@@ -1818,6 +1827,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._csv_max_gid = csv_max
         self._liq_scan_lo = None                            # live-scan covered range (None = nothing scanned yet)
         self._liq_scan_hi = self._csv_max_gid               # everything <= csv_max is the CSV's job
+        self._liq_live_key = None                           # force a fresh live scan on the new tf
 
     def _liq_scan_live(self, filtered: list, off: int, n_closed: int) -> None:
         """Bucket-close / window-growth hook (NOT the draw path): detect sweeps on the loaded CLOSED buckets
