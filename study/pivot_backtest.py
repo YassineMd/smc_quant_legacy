@@ -210,6 +210,16 @@ def main():
         # UNLOCKED = the live value at the fire bar b — their gap shows whether eff-agg firmed or decayed.
         row["p2_lock_spread"] = round((2.0 * float(e_sh[max(0, b - LOCK)]) - 1.0) * 100.0, 2)
         row["p2_live_spread"] = round((2.0 * float(e_sh[b]) - 1.0) * 100.0, 2)
+        # PANEL-2 spread TRAJECTORY over the entry wait [D, E], ALIGNED (+ve = still leaning WITH the trade):
+        # winners hold it up; losers' live spread collapses below 0 (often past -50) by the entry bar E.
+        if j_e is not None:
+            sgn = 1.0 if long else -1.0
+            liv = [sgn * (2.0 * float(e_sh[k]) - 1.0) * 100.0 for k in range(b, j_e + 1)]
+            lck = [sgn * (2.0 * float(e_sh[max(0, k - LOCK)]) - 1.0) * 100.0 for k in range(b, j_e + 1)]
+            row["p2_live_min_de"] = round(min(liv), 2); row["p2_lock_min_de"] = round(min(lck), 2)
+            row["p2_live_at_e"] = round(liv[-1], 2)   # live aligned spread AT the entry bar (contemporaneous)
+        else:
+            row["p2_live_min_de"] = row["p2_lock_min_de"] = row["p2_live_at_e"] = ""
         rows.append(row)
 
     cols = ["fire_bid", "side", "outcome", "w_max", "w_min", "zone_hi_pct", "zone_lo_pct", "zone_range",
@@ -217,7 +227,8 @@ def main():
             "route", "status", "delay", "t_max", "t_min", "first_red_N", "first_green_N", "ts",
             "leg5_N", "ref_to_det_pct", "det_to_entry_pct", "lg_buy_vol", "lg_sell_vol",
             "lg_spread_delta_pct", "lg_spr_n0_25", "lg_spr_n25_50", "lg_spr_n50_75", "lg_spr_n75_100",
-            "lg_spr_n0_50", "lg_spr_n0_75", "p2_lock_spread", "p2_live_spread"]
+            "lg_spr_n0_50", "lg_spr_n0_75", "p2_lock_spread", "p2_live_spread",
+            "p2_live_min_de", "p2_lock_min_de", "p2_live_at_e"]
     os.makedirs(OUT, exist_ok=True)
     with open(os.path.join(OUT, "pivot_backtest_episodes.csv"), "w", newline="", encoding="utf-8") as fp:
         w = csv.DictWriter(fp, fieldnames=cols); w.writeheader()
