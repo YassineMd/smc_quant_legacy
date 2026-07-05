@@ -377,17 +377,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_spd_title.setZValue(62)
         for _si in (self.bc_spd_mid, self.bc_spd_q, self.bc_spd_lock, self.bc_spd_title):
             _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
-        # CUMULATIVE SPEED-SHARE panel (Ctrl+2) — the cumulative twin of the SPEED panel: buyer vs
-        # seller share of trading speed accumulated FROM the selection start (running, not rolling).
-        # Same panel-2 chrome: CYAN buy / MAGENTA sell on a fixed 0-100% axis, 50% midline + 25/75.
+        # AVG-SPEED panel (Ctrl+2) — buyer vs seller trading SPEED (vol/sec) developing bucket by bucket
+        # across the selection, moving-average smoothed. Magnitude twin of the Ctrl+1 share panel: CYAN
+        # buy / MAGENTA sell lines (solid locked + dashed settling tail), robust auto-scale (a one-sided
+        # spike clips at the ceiling rather than flattening the rest).
         self.bc_cd_strip = ExhaustionStripLayer(self.plot, rgb_bull=self._RGB_SPD_BUY, rgb_bear=self._RGB_SPD_SELL)
         self.bc_cd_strip.setZValue(2); self.plot.addItem(self.bc_cd_strip, ignoreBounds=True)
         self.bc_cd_strip.setVisible(False)
-        self.bc_cd_mid = pg.PlotDataItem(pen=_dpen((150, 150, 150)))               # 50% midline
-        self.bc_cd_q = pg.PlotDataItem(pen=_dpen(_ORANGE), connect="finite")       # 25%/75% quarters
+        self.bc_cd_lock = pg.PlotDataItem(pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))  # lock divider
         self.bc_cd_title = pg.TextItem(anchor=(0, 1.0), color=(170, 170, 170))
         self.bc_cd_title.setZValue(62)
-        for _si in (self.bc_cd_mid, self.bc_cd_q, self.bc_cd_title):
+        for _si in (self.bc_cd_lock, self.bc_cd_title):
             _si.setZValue(2); self.plot.addItem(_si, ignoreBounds=True); _si.setVisible(False)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
@@ -1878,47 +1878,83 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _clear_cumdelta(self) -> None:
         self.bc_cd_strip.setVisible(False)
-        for _it in (self.bc_cd_mid, self.bc_cd_q):
-            _it.setData([], []); _it.setVisible(False)
+        self.bc_cd_lock.setData([], []); self.bc_cd_lock.setVisible(False)
         self.bc_cd_title.setVisible(False)
         self._spread_badges["CUMDELTA"].hide()
 
     def _draw_cumdelta_panel(self, filtered, lo, hi, cd_bot, cd_top, badge_x) -> None:
-        """CUMULATIVE SPEED SHARE — buyer vs seller share of trading speed accumulated FROM the selection
-        start: buy = Σbuy_spd / Σ(buy_spd + sell_spd), running bucket-by-bucket; sell = 1 − buy. Two lines
-        (buy CYAN / sell MAGENTA) on a fixed 0–100% axis with the 50% midline + 25/75 quarters — the SPEED
-        panel's twin, but CUMULATIVE (running) instead of rolling, so it shows the OVERALL balance building
-        up across the selection. Causal: each value is final on close (no settling tail)."""
+        """AVG SPEED — buyer (CYAN) vs seller (MAGENTA) trading SPEED (vol/sec) developing bucket by
+        bucket across the selection. Each bucket's rate = side volume / duration, MOVING-AVERAGE smoothed
+        over a centered SPEED_SMOOTH_W window (solid in the locked region, dashed/faded settling tail).
+        Magnitude twin of the Ctrl+1 share panel; robust auto-scale (Tukey far-out fence on the per-bucket
+        envelope) so a one-sided abnormal bucket clips at the ceiling instead of flattening the rest."""
+        import numpy as np
         xs = list(range(lo, hi + 1))
         if not xs:
             self._clear_cumdelta(); return
-        cb = cs = 0.0
-        buy_sh = []
+        buy_s, sell_s, one = [], [], []
         for k in xs:
             b = filtered[k]
             dur = max(1e-9, float(b.get("end_time", 0.0)) - float(b.get("start_time", 0.0)))
-            cb += float(b.get("buy_vol", 0.0)) / dur
-            cs += float(b.get("sell_vol", 0.0)) / dur
-            tot = cb + cs
-            buy_sh.append(cb / tot if tot > 0 else 0.5)     # running cumulative buy share
-        sell_sh = [1.0 - s for s in buy_sh]
+            bs = float(b.get("buy_vol", 0.0)) / dur; ss = float(b.get("sell_vol", 0.0)) / dur
+            buy_s.append(bs); sell_s.append(ss)
+            one.append((bs == 0.0) != (ss == 0.0))         # ONE-SIDED bucket (the abnormal spikes)
+        _oa = np.array(one)
+        _W = max(1, int(getattr(config, "SPEED_SMOOTH_W", 7)))
 
-        def _fy(v):
-            return cd_bot + v * (cd_top - cd_bot)           # share 0..1 -> panel y
+        def _ffill(a):                                      # carry the last finite value across NaN gaps
+            out = np.array(a, float); last = np.nan
+            for i in range(len(out)):
+                if np.isfinite(out[i]):
+                    last = out[i]
+                elif np.isfinite(last):
+                    out[i] = last
+            if not np.isfinite(out[0]):                     # back-fill any leading gap
+                nxt = next((v for v in out if np.isfinite(v)), 0.0)
+                out[~np.isfinite(out)] = nxt
+            return out
 
-        self.bc_cd_strip.update_data(xs, [_fy(v) for v in buy_sh], [_fy(v) for v in sell_sh],
-                                     lo - 0.5, hi + 0.5, cd_bot, cd_top, [], None)   # None = all locked
+        def _smooth(v):
+            # one-sided buckets EXCLUDED from the mean (never contribute, never spread the spike); their
+            # own value becomes the local finite-neighbour average, so the spike neither flattens nor bumps.
+            a = np.where(_oa, np.nan, np.array(v, float))
+            if _W > 1 and len(a) >= 2:
+                ker = np.ones(_W)
+                num = np.convolve(np.nan_to_num(a), ker, "same")
+                cnt = np.convolve(np.isfinite(a).astype(float), ker, "same")
+                a = np.where(cnt > 0, num / np.maximum(cnt, 1.0), np.nan)
+            return _ffill(a)
+
+        buy_sm = _smooth(buy_s); sell_sm = _smooth(sell_s)
+        # scale on the CLEAN (spike-removed) envelope; median-multiple cap as a backstop for any
+        # residual two-sided outlier so it can't flatten the rest.
+        _env = sorted(max(float(buy_sm[i]), float(sell_sm[i])) for i in range(len(xs)))
+        _med = _env[len(_env) // 2]
+        _cap = _med * 8.0 if _med > 0 else (_env[-1] or 1e-9)
+        _under = [v for v in _env if v <= _cap]
+        vmax = max(1e-9, _under[-1] if _under else _env[-1])
+
+        def _sy(v):
+            z = v / vmax
+            return cd_bot + (z if z < 1.0 else 1.0) * (cd_top - cd_bot)   # 0..cap -> band, clip to top
+
+        _eli = len(xs) - 1 - (_W // 2)                      # last fully-locked idx (settling tail = W//2)
+        self.bc_cd_strip.update_data(xs, [_sy(float(v)) for v in buy_sm], [_sy(float(v)) for v in sell_sm],
+                                     lo - 0.5, hi + 0.5, cd_bot, cd_top, [], _eli if _eli >= 0 else None)
         self.bc_cd_strip.setVisible(True)
-        self._draw_panel_refs(self.bc_cd_mid, self.bc_cd_q, lo, hi, cd_bot, cd_top)
-        self.bc_cd_title.setText("CUM SPEED · cumulative buyer/seller share (%) · selection")
+        self._draw_panel_lock(self.bc_cd_lock, _W // 2, lo, hi, cd_bot, cd_top)
+        _sm = (" · sm%d" % _W) if _W > 1 else ""
+        self.bc_cd_title.setText("AVG SPEED · buyer/seller rate (vol/sec) · selection" + _sm)
         self.bc_cd_title.setPos(lo - 0.5, cd_top); self.bc_cd_title.setVisible(True)
-        _bl = buy_sh[-1]; _dom_buy = _bl >= 0.5
-        self._spd_badge("CUMDELTA", "%.0f%%" % (abs(2 * _bl - 1) * 100),
-                        self._RGB_SPD_BUY if _dom_buy else self._RGB_SPD_SELL, badge_x, (cd_top + cd_bot) / 2.0)
-        self._panel_hovers.append({                # hover -> running cumulative buy/sell share %
-            "label": "CUM SPD", "lo": lo, "yb": cd_bot, "yt": cd_top,
-            "bull": buy_sh, "bear": sell_sh, "bcol": self._RGB_SPD_BUY, "rcol": self._RGB_SPD_SELL,
-            "blbl": "BUY", "rlbl": "SELL", "fmt": "pct"})
+        _bi = _eli if _eli >= 0 else len(xs) - 1            # badge: dominant side's current (locked) rate
+        _bb = float(buy_sm[_bi]); _ss = float(sell_sm[_bi]); _dom_buy = _bb >= _ss
+        self._spd_badge("CUMDELTA", self._fmt_k(_bb if _dom_buy else _ss) + "/s",
+                        self._RGB_SPD_BUY if _dom_buy else self._RGB_SPD_SELL, badge_x,
+                        _sy(_bb if _dom_buy else _ss))
+        self._panel_hovers.append({                # hover -> raw per-bucket buy/sell speed (vol/sec)
+            "label": "AVG SPD", "lo": lo, "yb": cd_bot, "yt": cd_top,
+            "bull": buy_s, "bear": sell_s, "bcol": self._RGB_SPD_BUY, "rcol": self._RGB_SPD_SELL,
+            "blbl": "BUY", "rlbl": "SELL", "fmt": "spd"})
 
     def _toggle_phase_table(self) -> None:
         """'t' — show/hide the live PHASE TABLE on its own (no need to turn on a phase panel 5/6/7)."""
