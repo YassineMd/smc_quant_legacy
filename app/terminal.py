@@ -2449,7 +2449,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         LB, FWD = 220, 260                      # lookback (legs 1/5 + phase warm) / forward (1h entry scan)
         a = max(0, lo_i - LB); b_end = min(n, hi_i + 1 + FWD)
         try:
-            fires, e_sh = pivot_detect.detect_pivots(filtered[a:b_end], return_eff=True)
+            fires, e_sh, sum0 = pivot_detect.detect_pivots(filtered[a:b_end], return_eff=True)
         except Exception:
             self._clear_pivot(); self._pivot_sig = sig; return
         fl = sorted(((a + f["det_i"], (a + f["entry_i"]) if f["entry_i"] is not None else None,
@@ -2492,7 +2492,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 tips.append(float(filtered[ent].get(fld, 0.0)))
             shelf = (min(tips) - dy) if buy else (max(tips) + dy)
             gid = off + det
-            html = self._pivot_stats_html(filtered, det, ent, zref, buy, gid, n, _cl, _op, e_sh, a)
+            html = self._pivot_stats_html(filtered, det, ent, zref, buy, gid, n, _cl, _op, e_sh, sum0, a)
             used = self._pivot_put_label(used, det, shelf, "D")          # DETECTION badge
             spots.append({"pos": (det, shelf), "brush": brush})
             self._pivot_hovers.append((det, shelf, html, buy))
@@ -2519,11 +2519,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Precomputed hover stats for a setup. N = bars back to the leg-5 reference candle; N->det = that
         reference OPEN to the detection CLOSE %; det->entry = detection CLOSE to entry CLOSE %; room ratio =
         profit-room / risk-room from the ENTRY to the leg-5 zone hi/lo, side-aware (the study's
-        profit_room_ratio; >1 = favourable geometry). Plus the LARGE-player (panel-8: sz_vb/sz_vs >= daemon p95)
-        net buy/sell VOLUME over N=0..100 and their spread-delta %, coloured blue(buy)/orange(sell), and the
-        PANEL-2 eff-agg spread TRAJECTORY over the entry wait D->E (e_sh sliced at sl0): the LIVE spread AT the
-        entry bar E and its minimum over [D,E], aligned so +ve = still leaning WITH the trade. Study finding
-        (in-sample): winners hold spr@E positive / never breach -50; a flip negative marks a likely loser."""
+        profit_room_ratio; >1 = favourable geometry). Then the spread TRAJECTORY over the entry wait [D,E],
+        ALIGNED (+ve = still WITH the trade), for PANEL 2 (eff-agg, e_sh) and PANEL 0 (composite SUM, sum0),
+        both sliced at sl0: the value AT entry E and the min over [D,E], plus a HELD/FLIPPED verdict. Study
+        (in-sample): winners hold P2 spr@E positive & never breach -50 (P2 the stronger signal, p<0.001;
+        P0 weaker & correlated, shown for context)."""
         sc = "#28e65a" if buy else "#ff5566"
         c_det = _cl(det)
         has_ref = 0 <= zref < n
@@ -2543,47 +2543,41 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if abs(ar) > 1e-9:
                     ratio_s = "<b style='color:#e8ebf0'>%.2f : 1</b>" % (pr / ar)
 
-        # LARGE market-order net volume over N=0..100 (SAME numbers as panel 8: sz_vb/sz_vs summed >= the
-        # daemon's live p95 large cutoff). Blue buy / orange sell; the DOMINANT side + the spread carry colour.
-        BL, OR, GY = "#00b4ff", "#ff9100", "#9aa0aa"
-        large_thr = self._largesmall_thresholds()[0]
-        lo0 = max(0, det - 100)
-        bvol = sum(self._hist_side(filtered[k].get("sz_vb"), large_thr, True) for k in range(lo0, det + 1))
-        svol = sum(self._hist_side(filtered[k].get("sz_vs"), large_thr, True) for k in range(lo0, det + 1))
-        tot = bvol + svol
-        dsp = ((bvol - svol) / tot * 100.0) if tot > 1e-9 else 0.0
-        bcol = BL if bvol > svol else GY                         # colour only the dominant side, loser stays gray
-        scol = OR if svol > bvol else GY
-        dcol = BL if dsp > 0 else (OR if dsp < 0 else GY)
-
-        # PANEL-2 eff-agg spread TRAJECTORY over the entry wait [D, E], aligned (+ve = still WITH the trade).
-        # Study finding: winners hold spr@E > 0 and never breach -50; a flip negative marks a likely loser.
-        de_html = ""
-        di, ei = det - sl0, ent - sl0
-        if e_sh is not None and ent >= det and 0 <= di < len(e_sh) and 0 <= ei < len(e_sh):
-            sg = 1.0 if buy else -1.0
-            liv = [sg * (2.0 * float(e_sh[k]) - 1.0) * 100.0 for k in range(di, ei + 1)]
-            spr_e, spr_min = liv[-1], min(liv)
-            ecol = "#28e65a" if spr_e > 0 else "#ff5566"
-            mcol = "#ff5566" if spr_min <= -50.0 else "#c8ccd4"
-            held = spr_e > 0.0 and spr_min > -50.0
-            vcol = "#28e65a" if held else "#ff5566"
-            vtxt = "eff-agg HELD &#10003;" if held else "eff-agg FLIPPED &#10007;"
-            de_html = ("<span style='color:#5a6070'>&#8213;&#8213;&#8213;</span><br>"
-                       "spr@E: <b style='color:%s'>%+.1f%%</b> &nbsp; min: <b style='color:%s'>%+.1f%%</b><br>"
-                       "<b style='color:%s'>%s</b>") % (ecol, spr_e, mcol, spr_min, vcol, vtxt)
-
         def _pc(v):
             return "<span style='color:%s'>%+.2f%%</span>" % ("#28e65a" if v >= 0 else "#ff5566", v)
 
+        # spread TRAJECTORY over the entry wait [D, E], aligned (+ve = still WITH the trade), for P2 (eff-agg)
+        # and P0 (composite SUM). value @E + min over [D,E] + a HELD/FLIPPED verdict. P2 verdict = @E>0 AND
+        # min>-50 (the strong signal); P0 verdict = min>-50 (the operator's floor; weaker, redundant w/ P2).
+        di, ei = det - sl0, ent - sl0
+
+        def _traj(series, tag, kind):
+            if series is None or not (ent >= det and 0 <= di < len(series) and 0 <= ei < len(series)):
+                return ""
+            sg = 1.0 if buy else -1.0
+            if kind == "eff":                                    # P2 eff-agg share -> spread
+                vals = [sg * (2.0 * float(series[k]) - 1.0) * 100.0 for k in range(di, ei + 1)]
+                held = vals[-1] > 0.0 and min(vals) > -50.0
+            else:                                                # P0 composite SUM (already a spread)
+                vals = [sg * float(series[k]) for k in range(di, ei + 1)]
+                held = min(vals) > -50.0
+            v_e, v_min = vals[-1], min(vals)
+            ecol = "#28e65a" if v_e > 0 else "#ff5566"
+            mcol = "#ff5566" if v_min <= -50.0 else "#c8ccd4"
+            vcol = "#28e65a" if held else "#ff5566"
+            vtxt = ("%s HELD &#10003;" % tag) if held else ("%s FLIPPED &#10007;" % tag)
+            return ("%s @<b>E</b>: <b style='color:%s'>%+.1f%%</b> &nbsp; min: <b style='color:%s'>%+.1f%%</b>"
+                    "<br><b style='color:%s'>%s</b><br>") % (tag, ecol, v_e, mcol, v_min, vcol, vtxt)
+
+        traj = _traj(e_sh, "P2", "eff") + _traj(sum0, "P0", "sum")
+        if traj:
+            traj = "<span style='color:#5a6070'>&#8213;&#8213;&#8213;</span><br>" + traj
+
         return ("<div style='font-family:Consolas; font-size:11px; color:#c8ccd4; padding:1px 3px'>"
                 "<b style='color:%s'>%s-P_%s</b><br>"
-                "N (leg-5): <b style='color:#e8ebf0'>%d</b> bars<br>"
-                "N&rarr;det: %s<br>det&rarr;entry: %s<br>room ratio: %s<br>"
-                "lg buy <b style='color:%s'>%s</b> &nbsp; lg sell <b style='color:%s'>%s</b><br>"
-                "&Delta;spread: <b style='color:%s'>%+.1f%%</b><br>%s</div>"
-                ) % (sc, "B" if buy else "S", self._fmt_idx(gid), N, _pc(d_ndet), _pc(d_dentry), ratio_s,
-                     bcol, self._fmt_k(bvol), scol, self._fmt_k(svol), dcol, dsp, de_html)
+                "<b>N</b>: <b style='color:#e8ebf0'>%d</b> bars<br>"
+                "<b>N</b>&rarr;<b>D</b>: %s<br><b>D</b>&rarr;<b>E</b>: %s<br>room ratio: %s<br>%s</div>"
+                ) % (sc, "B" if buy else "S", self._fmt_idx(gid), N, _pc(d_ndet), _pc(d_dentry), ratio_s, traj)
 
     def _hover_pivot(self, scene_pos) -> None:
         """Stats box for whichever D/E badge the cursor is over — buy -> box BELOW the badge, sell -> box ABOVE.

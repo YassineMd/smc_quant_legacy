@@ -135,11 +135,11 @@ def detect_pivots(buckets, return_eff=False):
     """Scan ``buckets`` (list of wire/full_snapshot dicts) and return every S5j-r5 fire as
     {det_i, entry_i, side, wait_end_i, zref_i}. det_i/entry_i/zref_i are indices into ``buckets`` (entry_i
     None = CANCELLED); zref_i = the bar that set the leg-5 N=60..100 extreme open (for the overlay leader).
-    return_eff=True -> (fires, e_sh) where e_sh is the panel-2 eff-agg share per bar (for the D->E spread
-    trajectory readout); the fire set is byte-identical either way."""
+    return_eff=True -> (fires, e_sh, sum0) where e_sh is the panel-2 eff-agg share and sum0 the panel-0
+    smoothed SUM line per bar (for the D->E spread-trajectory readout); the fire set is byte-identical."""
     n = len(buckets)
     if n < FIRST + 1:
-        return ([], np.zeros(n)) if return_eff else []
+        return ([], np.zeros(n), np.zeros(n)) if return_eff else []
     op = np.array([float(b.get("open", b.get("open_price", 0.0))) for b in buckets])
     cl = np.array([float(b.get("close", b.get("close_price", 0.0))) for b in buckets])
     hi = np.array([float(b.get("high", 0.0)) for b in buckets])
@@ -194,7 +194,7 @@ def detect_pivots(buckets, return_eff=False):
                         "entry_i": _entry_after(rcl, rop, rbase, lo_, hi, base, et, b, side, n),
                         "wait_end_i": int(np.searchsorted(et, et[b] + WAIT_SECS, side="right")),
                         "zref_i": int(zamax[b] if side == "long" else zamin[b])})
-    return (out, e_sh) if return_eff else out
+    return (out, e_sh, sum0) if return_eff else out
 
 
 def _entry_after(rcl, rop, rbase, lo_, hi, base, et, b, side, n):
