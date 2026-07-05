@@ -66,7 +66,6 @@ _TUNNEL: "Optional[SSHTunnelManager]" = None   # set in main(); the refresh butt
 # per-tick (truest follow), both False = per-close, X-True/Y-False = track-X / stable-Y.
 FOLLOW_WINDOW = 100       # buckets shown in the live window
 FOLLOW_MARGIN = 8         # buckets of right padding so the live edge isn't flush to the axis
-LIQ_MIN_PX_PER_BAR = 0.5  # Ctrl+L labels: below this bar width, suppress (cap+even-spread keep it readable/perf-safe)
 LIQ_MAX_LABELS = 40       # Ctrl+L labels: hard cap on simultaneously-drawn labels (Tier-A first, then even spread)
 FOLLOW_PAD_FRAC = 0.08    # Y padding as a fraction of the visible candle range
 FOLLOW_AXIS_TOL_FRAC = 0.01  # per-axis "did it move?" threshold as a fraction of that axis's span —
@@ -1921,20 +1920,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return "%s liq events loaded — nearest %s bars ahead  (Ctrl+F %s)" % (
             "{:,}".format(len(g)), "{:,}".format(nearest - hi_gid), "{:,}".format(nearest))
 
-    def _draw_liq(self, buckets, x, highs, lows, px_per_x, vx0, vx1, vy0, vy1) -> None:
-        """Liquidity-sweep labels over the candles (bucket_canvas only) — cull-then-work like the candle
-        layer: bisect the gid-sorted event set to the VISIBLE range (never iterate all rows), suppress below
-        a px/bar density floor, hard-cap the drawn set (highest-tier / nearest kept), and reuse a BOUNDED
-        pool freed when nothing shows. Detection is NOT done here (see _load_liq_csv / _liq_scan_live)."""
+    def _draw_liq(self, buckets, x, highs, lows, vx0, vx1, vy0, vy1) -> None:
+        """Liquidity-sweep labels over the candles (bucket_canvas only). Simple + zoom-INSENSITIVE: bisect the
+        gid-sorted event set to the VISIBLE range (never iterate all rows), draw up to LIQ_MAX_LABELS of them
+        (Tier-A first, then evenly spread), reusing a bounded pool. On/off is purely self.show_liq — no density
+        floor, nothing view-dependent that would blink them. Detection is NOT done here (see _liq_scan_live)."""
         import bisect as _bi
         if not self.show_liq or not buckets or not self._liq_gids:
             self._clear_liq(); return
         n = len(buckets); off = self._global_idx_offset
-        if px_per_x < LIQ_MIN_PX_PER_BAR:                    # density floor — too zoomed-out to label
-            self._liq_hide_marks()
-            self._liq_note("%s liq events loaded — zoom in to label them" % "{:,}".format(len(self._liq_gids)),
-                           vx0, vy1)
-            return
         lo_local = max(0, int(vx0)); hi_local = min(n - 1, int(vx1) + 1)   # x IS the local index 0..n-1
         lo_gid = off + lo_local; hi_gid = off + hi_local
         a = _bi.bisect_left(self._liq_gids, lo_gid); b = _bi.bisect_right(self._liq_gids, hi_gid)
@@ -2427,7 +2421,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0(); self._clear_liq()     # smoothed twin + liq labels: clear on teardown
+            self._clear_panel0()                        # smoothed twin: clear on selection teardown (liq is NOT selection-scoped)
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2457,7 +2451,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0(); self._clear_liq()     # smoothed twin + liq labels: clear on teardown
+            self._clear_panel0()                        # smoothed twin: clear on selection teardown (liq is NOT selection-scoped)
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2508,7 +2502,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0(); self._clear_liq()     # smoothed twin + liq labels: clear on teardown
+            self._clear_panel0()                        # smoothed twin: clear on selection teardown (liq is NOT selection-scoped)
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -5157,7 +5151,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # its OWN profiler section ('liq') so this layer is measured directly, not inferred under draw_scanner.
         _ls = time.perf_counter()
         try:
-            self._draw_liq(buckets, x, highs, lows, px_per_x, vx0, vx1, vy0, vy1)
+            self._draw_liq(buckets, x, highs, lows, vx0, vx1, vy0, vy1)
         except Exception:
             self._clear_liq()
         self._perf_note("liq", _ls)
