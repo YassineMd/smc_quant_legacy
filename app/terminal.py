@@ -1795,22 +1795,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         same family as _global_idx_offset)."""
         import csv as _csv
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "study", "out", "liq_sweeps.csv")
-        evs = []
+        evs = []; csv_max = 0
         try:
             with open(path, encoding="utf-8") as f:
                 first = f.tell(); ln = f.readline()
                 if not ln.startswith("#"):
                     f.seek(first)
                 for r in _csv.DictReader(f):
-                    evs.append(dict(gid=int(r["bucket_id"]), side=r["side_label"], kind="Sweep",
-                                    level=float(r["swept_level"]), tier=r["tier"]))
+                    bid = int(r["bucket_id"])
+                    if bid > csv_max:
+                        csv_max = bid                       # CSV data horizon spans ALL tiers (live starts past it)
+                    if r["tier"] != "A":                    # TIER-A ONLY on the chart — Tier-B are calibration
+                        continue                            # decoys (still in liq_sweeps.csv + the pack, just not drawn)
+                    evs.append(dict(gid=bid, side=r["side_label"], kind="Sweep",
+                                    level=float(r["swept_level"]), tier="A"))
         except (OSError, KeyError, ValueError):
-            evs = []
+            evs = []; csv_max = 0
         evs.sort(key=lambda e: e["gid"])
         self._liq_events = evs
         self._liq_gids = [e["gid"] for e in evs]
         self._liq_seen = {(e["gid"], e["side"]) for e in evs}
-        self._csv_max_gid = self._liq_gids[-1] if self._liq_gids else 0
+        self._csv_max_gid = csv_max
         self._liq_scan_lo = None                            # live-scan covered range (None = nothing scanned yet)
         self._liq_scan_hi = self._csv_max_gid               # everything <= csv_max is the CSV's job
 
@@ -1848,6 +1853,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue
             base = off + lo_i
             for e in evs:
+                if e["tier"] != "A":                        # TIER-A ONLY on the chart (Tier-B are decoys)
+                    continue
                 gid = base + e["i"]
                 if not (g0 <= gid <= g1):
                     continue
@@ -1856,7 +1863,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     continue
                 self._liq_seen.add(key)
                 self._liq_events.append(dict(gid=gid, side=e["side"], kind=e["kind"],
-                                             level=e["level"], tier=e["tier"]))
+                                             level=e["level"], tier="A"))
                 added = True
         self._liq_scan_lo = region_lo if self._liq_scan_lo is None else min(self._liq_scan_lo, region_lo)
         self._liq_scan_hi = max(self._liq_scan_hi, region_hi)
@@ -1937,14 +1944,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._liq_hide_marks(); self._liq_note(self._liq_empty_msg(lo_gid, hi_gid), vx0, vy1)
             return
         self._liq_note(None)                                 # something to draw -> drop the note
-        if len(vis) > LIQ_MAX_LABELS:                        # cap: keep all Tier-A, then EVENLY sample the rest
-            A = [e for e in vis if e["tier"] == "A"]          # (spread across the view, not bunched at centre)
-            B = [e for e in vis if e["tier"] != "A"]
-            keep = A[:LIQ_MAX_LABELS]; room = LIQ_MAX_LABELS - len(keep)
-            if room > 0 and B:
-                step = max(1, len(B) // room)
-                keep += B[::step][:room]
-            vis = sorted(keep, key=lambda ev: ev["gid"])
+        if len(vis) > LIQ_MAX_LABELS:                        # rarely hit (Tier-A is sparse) -> keep an even spread
+            step = max(1, len(vis) // LIQ_MAX_LABELS)
+            vis = vis[::step][:LIQ_MAX_LABELS]
         dy = (vy1 - vy0) * 0.035
         lx, ly = [], []; used = 0
         for ev in vis:
