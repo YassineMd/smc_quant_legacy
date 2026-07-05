@@ -2573,11 +2573,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if traj:
             traj = "<span style='color:#5a6070'>&#8213;&#8213;&#8213;</span><br>" + traj
 
+        # D->E WAIT (time + buckets). Study (in-sample, n=116): the farther E is from D the likelier a LOSS
+        # (time strongest, r=-0.25 p=0.007). Fast entry -> green, slow -> red (soft readout, not a hard gate).
+        et_d = float(filtered[det].get("end_time", 0.0)); et_e = float(filtered[ent].get("end_time", 0.0))
+        wmin = (et_e - et_d) / 60.0 if (ent >= det and et_e and et_d) else 0.0
+        wcol = "#28e65a" if wmin <= 7.0 else ("#ff5566" if wmin > 15.0 else "#c8ccd4")
+
         return ("<div style='font-family:Consolas; font-size:11px; color:#c8ccd4; padding:1px 3px'>"
                 "<b style='color:%s'>%s-P_%s</b><br>"
                 "<b>N</b>: <b style='color:#e8ebf0'>%d</b> bars<br>"
-                "<b>N</b>&rarr;<b>D</b>: %s<br><b>D</b>&rarr;<b>E</b>: %s<br>room ratio: %s<br>%s</div>"
-                ) % (sc, "B" if buy else "S", self._fmt_idx(gid), N, _pc(d_ndet), _pc(d_dentry), ratio_s, traj)
+                "<b>N</b>&rarr;<b>D</b>: %s<br><b>D</b>&rarr;<b>E</b>: %s<br>"
+                "wait: <b style='color:%s'>%.1fm &middot; %d bk</b><br>room ratio: %s<br>%s</div>"
+                ) % (sc, "B" if buy else "S", self._fmt_idx(gid), N, _pc(d_ndet), _pc(d_dentry),
+                     wcol, wmin, ent - det, ratio_s, traj)
 
     def _hover_pivot(self, scene_pos) -> None:
         """Stats box for whichever D/E badge the cursor is over — buy -> box BELOW the badge, sell -> box ABOVE.
