@@ -66,6 +66,8 @@ _TUNNEL: "Optional[SSHTunnelManager]" = None   # set in main(); the refresh butt
 # per-tick (truest follow), both False = per-close, X-True/Y-False = track-X / stable-Y.
 FOLLOW_WINDOW = 100       # buckets shown in the live window
 FOLLOW_MARGIN = 8         # buckets of right padding so the live edge isn't flush to the axis
+LIQ_MIN_PX_PER_BAR = 3.0  # Ctrl+L labels: below this bar width, suppress (density floor — mirrors the whisker fallback)
+LIQ_MAX_LABELS = 40       # Ctrl+L labels: hard cap on simultaneously-drawn labels (highest-tier / nearest kept)
 FOLLOW_PAD_FRAC = 0.08    # Y padding as a fraction of the visible candle range
 FOLLOW_AXIS_TOL_FRAC = 0.01  # per-axis "did it move?" threshold as a fraction of that axis's span —
                              # absorbs float noise + off-axis drift on a wobbly horizontal drag (tunable)
@@ -365,13 +367,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # from study/out/liq_sweeps.csv; live = app.liq_detect (SAME frozen function) at bucket close. The
         # "Pull" label types exist for Phase 3 but no Pull events are produced yet. UNCALIBRATED (see tooltip).
         self.show_liq = False
-        self._liq_csv = self._load_liq_csv()                     # {bucket_id: {side, kind, level, tier}}
-        self._liq_live_sig = None; self._liq_live = []           # cached live-detect on the loaded window
+        # Event set is built ONCE (CSV on load + live appended at bucket close) into gid-sorted parallel
+        # lists so the draw path culls to the visible range by bisect — NEVER iterates all rows, NEVER
+        # re-detects per frame (that was the 250->1700-item / 0.55->572ms regression).
+        self._liq_events = []; self._liq_gids = []; self._liq_seen = set()
+        self._csv_max_gid = 0; self._liq_live_max_gid = 0; self._liq_live_tc = None
+        self._load_liq_csv()                                     # historical event set, ONCE on load
         self.bc_liq_leader = pg.PlotDataItem(
             pen=pg.mkPen((160, 160, 160, 180), width=1, style=QtCore.Qt.DashLine))
         self.bc_liq_leader.setZValue(30); self.plot.addItem(self.bc_liq_leader, ignoreBounds=True)
         self.bc_liq_leader.setVisible(False)
-        self._liq_label_pool = []                                # reused TextItems (grown lazily)
+        self._liq_label_pool = []                                # BOUNDED reuse pool (<= LIQ_MAX_LABELS), freed when empty
+        self._liq_status = pg.TextItem(anchor=(0, 0), color=(235, 225, 140))   # corner note: empty-by-location / zoom-in
+        _lsf = QtGui.QFont("Consolas", 9); self._liq_status.textItem.setFont(_lsf)
+        self._liq_status.setZValue(33); self.plot.addItem(self._liq_status, ignoreBounds=True)
+        self._liq_status.setVisible(False); self._liq_status_txt = None
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
         # heatmap large-order bubbles); SMALL = small-BUY vs small-SELL trade-COUNT share (green / red). Each
@@ -1779,24 +1789,62 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._spread_badges["PANEL0_SUM"].hide()
 
     # ---------------------------------------------------------------- liquidity-sweep labels (Ctrl+L)
-    @staticmethod
-    def _load_liq_csv() -> dict:
-        """Offline detector events (study/out/liq_sweeps.csv) -> {(bucket_id, side): {side,kind,level,tier}}
-        (keyed by side too — a wide bar can sweep BOTH ends, one S event and one B event on the same bucket)."""
+    def _load_liq_csv(self) -> None:
+        """Build the historical event set ONCE on load from study/out/liq_sweeps.csv into gid-sorted parallel
+        lists (self._liq_events / self._liq_gids) for O(log n) visible-range culling in the draw path. A wide
+        bar can sweep BOTH ends, so events are keyed by (gid, side); gid = the CSV bucket_id (per-tf Idx,
+        same family as _global_idx_offset)."""
         import csv as _csv
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "study", "out", "liq_sweeps.csv")
-        out = {}
+        evs = []
         try:
             with open(path, encoding="utf-8") as f:
                 first = f.tell(); ln = f.readline()
                 if not ln.startswith("#"):
                     f.seek(first)
                 for r in _csv.DictReader(f):
-                    out[(int(r["bucket_id"]), r["side_label"])] = dict(
-                        side=r["side_label"], kind="Sweep", level=float(r["swept_level"]), tier=r["tier"])
+                    evs.append(dict(gid=int(r["bucket_id"]), side=r["side_label"], kind="Sweep",
+                                    level=float(r["swept_level"]), tier=r["tier"]))
         except (OSError, KeyError, ValueError):
-            pass
-        return out
+            evs = []
+        evs.sort(key=lambda e: e["gid"])
+        self._liq_events = evs
+        self._liq_gids = [e["gid"] for e in evs]
+        self._liq_seen = {(e["gid"], e["side"]) for e in evs}
+        self._csv_max_gid = self._liq_gids[-1] if self._liq_gids else 0
+        self._liq_live_max_gid = self._csv_max_gid          # live events must be STRICTLY newer than the CSV
+
+    def _liq_scan_live(self, filtered: list, off: int, n_closed: int) -> None:
+        """Bucket-close hook (NOT the draw path, gated on total_closed by the caller): detect sweeps on the
+        tail of the loaded CLOSED buckets and append any event newer than the watermark. Tail-windowed to the
+        new bars + context, so steady-state cost is O(new bars) once per close — never O(N) per frame. Keeps
+        _liq_events / _liq_gids gid-sorted because new gids are strictly greater than every recorded one."""
+        if n_closed < 40:
+            return
+        edge_gid = off + n_closed - 1
+        if edge_gid <= self._liq_live_max_gid:
+            return                                          # nothing new closed since last scan
+        new_bars = edge_gid - self._liq_live_max_gid
+        w = min(new_bars + 200, n_closed)                   # 200 > LOOKBACK+Z_BASE+K left-context for the new bars
+        a = n_closed - w
+        try:
+            from app import liq_detect
+            evs = liq_detect.detect_sweeps(filtered[a:n_closed])
+        except Exception:
+            return
+        base = off + a; floor_gid = self._liq_live_max_gid
+        for e in evs:
+            gid = base + e["i"]
+            if gid <= floor_gid:
+                continue
+            key = (gid, e["side"])
+            if key in self._liq_seen:
+                continue
+            self._liq_seen.add(key)
+            self._liq_events.append(dict(gid=gid, side=e["side"], kind=e["kind"],
+                                         level=e["level"], tier=e["tier"]))
+            self._liq_gids.append(gid)
+        self._liq_live_max_gid = edge_gid
 
     def _toggle_liq(self) -> None:
         """Ctrl+L — show/hide the liquidity-sweep labels (detector v1, uncalibrated)."""
@@ -1807,45 +1855,90 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None                # force a re-render so labels appear/disappear now
         self._draw_scanner()
 
-    def _clear_liq(self) -> None:
-        self.bc_liq_leader.setData([], []); self.bc_liq_leader.setVisible(False)
-        for _it in self._liq_label_pool:
-            _it.setVisible(False)
+    def _free_liq_pool(self) -> None:
+        """Remove the pooled label TextItems from the scene (not just hide) so the item count returns to
+        baseline when labels are off / out of view — the scene must not carry a dormant pool."""
+        if self._liq_label_pool:
+            for _it in self._liq_label_pool:
+                self.plot.removeItem(_it)
+            self._liq_label_pool = []
 
-    def _draw_liq(self, buckets, x, highs, lows, vx0, vx1, vy0, vy1) -> None:
-        """Batched liquidity-sweep labels over the candles (bucket_canvas only). Offline events from the
-        CSV + live-detected events NEWER than the CSV's coverage (app.liq_detect, same frozen rule),
-        viewport-culled; a dashed leader from the swept wick to a filled label, black text."""
-        if not self.show_liq or not buckets:
+    def _liq_hide_marks(self) -> None:
+        self._free_liq_pool()
+        self.bc_liq_leader.setData([], []); self.bc_liq_leader.setVisible(False)
+
+    def _clear_liq(self) -> None:
+        self._liq_hide_marks(); self._liq_note(None)
+
+    def _liq_note(self, text, vx0=None, vy1=None) -> None:
+        """Corner status line (top-left of the view). Shown when labels are on but nothing is drawable in
+        view — so an empty screen reads as 'empty-by-location', not 'broken'."""
+        if not text:
+            if self._liq_status_txt is not None:
+                self._liq_status.setVisible(False); self._liq_status_txt = None
+            return
+        if text != self._liq_status_txt:
+            self._liq_status.setText(text); self._liq_status_txt = text
+        if vx0 is not None:
+            self._liq_status.setPos(vx0, vy1)
+        self._liq_status.setVisible(True)
+
+    def _liq_empty_msg(self, lo_gid: int, hi_gid: int):
+        """Nothing in view -> point the operator at the nearest cluster (with a Ctrl+F Idx to jump to)."""
+        import bisect as _bi
+        g = self._liq_gids
+        if not g:
+            return None
+        i = _bi.bisect_left(g, lo_gid)
+        cand = []
+        if i < len(g):
+            cand.append(g[i])
+        if i > 0:
+            cand.append(g[i - 1])
+        nearest = min(cand, key=lambda c: min(abs(c - lo_gid), abs(c - hi_gid)))
+        if nearest < lo_gid:
+            return "%s liq events loaded — nearest %s bars back  (Ctrl+F %s)" % (
+                "{:,}".format(len(g)), "{:,}".format(lo_gid - nearest), "{:,}".format(nearest))
+        return "%s liq events loaded — nearest %s bars ahead  (Ctrl+F %s)" % (
+            "{:,}".format(len(g)), "{:,}".format(nearest - hi_gid), "{:,}".format(nearest))
+
+    def _draw_liq(self, buckets, x, highs, lows, px_per_x, vx0, vx1, vy0, vy1) -> None:
+        """Liquidity-sweep labels over the candles (bucket_canvas only) — cull-then-work like the candle
+        layer: bisect the gid-sorted event set to the VISIBLE range (never iterate all rows), suppress below
+        a px/bar density floor, hard-cap the drawn set (highest-tier / nearest kept), and reuse a BOUNDED
+        pool freed when nothing shows. Detection is NOT done here (see _load_liq_csv / _liq_scan_live)."""
+        import bisect as _bi
+        if not self.show_liq or not buckets or not self._liq_gids:
             self._clear_liq(); return
-        from app import liq_detect
         n = len(buckets); off = self._global_idx_offset
-        sig = (n, round(float(buckets[-1].get("curr_vol", 0.0)), 1), off)
-        if sig != self._liq_live_sig:                # cache: recompute only when the bucket set changes
-            self._liq_live_sig = sig
-            try:
-                self._liq_live = liq_detect.detect_sweeps(buckets)
-            except Exception:
-                self._liq_live = []
-        csv_max = max((b for (b, _s) in self._liq_csv), default=0)
-        events = {}                                   # (local_i, side) -> {side,kind,level}
-        for (bid, side), ev in self._liq_csv.items():
-            li = bid - off
-            if 0 <= li < n:
-                events[(li, side)] = ev
-        for e in self._liq_live:                       # live events strictly newer than the offline set
-            if off + e["i"] > csv_max:
-                events[(e["i"], e["side"])] = e
+        if px_per_x < LIQ_MIN_PX_PER_BAR:                    # density floor — too zoomed-out to label
+            self._liq_hide_marks()
+            self._liq_note("%s liq events loaded — zoom in to label them" % "{:,}".format(len(self._liq_gids)),
+                           vx0, vy1)
+            return
+        lo_local = max(0, int(vx0)); hi_local = min(n - 1, int(vx1) + 1)   # x IS the local index 0..n-1
+        lo_gid = off + lo_local; hi_gid = off + hi_local
+        a = _bi.bisect_left(self._liq_gids, lo_gid); b = _bi.bisect_right(self._liq_gids, hi_gid)
+        vis = self._liq_events[a:b]
+        if not vis:                                          # empty-by-location -> point at the nearest cluster
+            self._liq_hide_marks(); self._liq_note(self._liq_empty_msg(lo_gid, hi_gid), vx0, vy1)
+            return
+        self._liq_note(None)                                 # something to draw -> drop the note
+        if len(vis) > LIQ_MAX_LABELS:                        # cap: Tier-A first, then nearest the view centre
+            cx = (lo_gid + hi_gid) * 0.5
+            vis = sorted(vis, key=lambda ev: (0 if ev["tier"] == "A" else 1, abs(ev["gid"] - cx)))[:LIQ_MAX_LABELS]
+            vis.sort(key=lambda ev: ev["gid"])
         dy = (vy1 - vy0) * 0.035
         lx, ly = [], []; used = 0
-        for (li, side) in sorted(events):
-            if not (vx0 - 1.0 <= x[li] <= vx1 + 1.0):  # viewport cull
+        for ev in vis:
+            li = ev["gid"] - off
+            if not (0 <= li < n):
                 continue
-            ev = events[(li, side)]; up = ev["side"] == "S"
+            up = ev["side"] == "S"
             tip = highs[li] if up else lows[li]
             lab_y = tip + dy if up else tip - dy
             lx += [x[li], x[li], float("nan")]; ly += [tip, lab_y, float("nan")]
-            if used >= len(self._liq_label_pool):
+            if used >= len(self._liq_label_pool):            # grow lazily, but bounded by LIQ_MAX_LABELS
                 _t = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0))
                 _t.setZValue(31)
                 _bf = QtGui.QFont("Consolas", 9); _bf.setBold(True); _t.textItem.setFont(_bf)
@@ -3437,6 +3530,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # minute and share it — so the fingerprint must include curr_vol. The
         # stale active is identical to closed[-1] (start_time AND a full curr_vol);
         # a fresh same-minute bucket has a smaller, differing curr_vol and is kept.
+        active_appended = False
         if active and active.get("curr_vol", 0.0) > 0:
             last = closed_list[-1] if closed_list else None
             is_stale_dup = (
@@ -3445,7 +3539,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 and active.get("curr_vol") == last.get("curr_vol")
             )
             if not is_stale_dup:
-                combined.append(active)
+                combined.append(active); active_appended = True
 
         anchor_unix = self.menu.scan_start_unix()
         total_closed = int(snap.get("total_closed", 0) or 0)   # DB-id of closed_list[-1] (0 = pre-redeploy daemon)
@@ -3470,6 +3564,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # closed_list (+ live active), db_id(closed_list[-1]) = total_closed, so db_id(combined[j]) =
         # total_closed - len(closed_list) + 1 + j, and j = anchor_idx + local_idx. (0 -> legacy local idx.)
         self._global_idx_offset = (total_closed - len(closed_list) + 1 + anchor_idx) if total_closed > 0 else 0
+
+        # LIVE liquidity detection — a real bucket-close hook, gated on total_closed (once per new close),
+        # NOT the draw path and NOT keyed on curr_vol. Excludes the still-forming active bar.
+        if total_closed and total_closed != self._liq_live_tc:
+            self._liq_live_tc = total_closed
+            n_closed_local = len(filtered) - (1 if active_appended else 0)
+            self._liq_scan_live(filtered, self._global_idx_offset, n_closed_local)
 
         x_indices: list[int] = list(range(len(filtered)))
         result = (filtered, x_indices, anchor_idx)
@@ -5027,11 +5128,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _wb.update_data([], [], [], [], [], [], [], [])                 # free the picture
             self._scan_handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
         self._scan_handles["bc_baseline"].setData(x, baseline_arr)   # gray dashed POC-center baseline (KEPT)
-        # liquidity-sweep labels (Ctrl+L) — batched, viewport-culled, guarded (never break the candle draw)
+        # liquidity-sweep labels (Ctrl+L) — cull-to-visible, density-floored, capped, bounded pool; timed as
+        # its OWN profiler section ('liq') so this layer is measured directly, not inferred under draw_scanner.
+        _ls = time.perf_counter()
         try:
-            self._draw_liq(buckets, x, highs, lows, vx0, vx1, vy0, vy1)
+            self._draw_liq(buckets, x, highs, lows, px_per_x, vx0, vx1, vy0, vy1)
         except Exception:
             self._clear_liq()
+        self._perf_note("liq", _ls)
 
         # --- Keltner Channel: EMA(close) basis ± ATR band. LIGHT GRAY upper/lower (match the POC baseline);
         #     the EMA MIDDLE line is HIDDEN (operator pref — the POC baseline is the center reference). ---
