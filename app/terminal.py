@@ -365,7 +365,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # the swept bar to a filled label ("S L. Sweep" red / "B L. Sweep" green, black text). Offline events
         # from study/out/liq_sweeps.csv; live = app.liq_detect (SAME frozen function) at bucket close. The
         # "Pull" label types exist for Phase 3 but no Pull events are produced yet. UNCALIBRATED (see tooltip).
-        self.show_liq = False
+        self.show_liq = True         # 15m sweeps ON by default (Ctrl+L toggles; persisted in terminal_ui.json)
         # Event set is built ONCE (CSV on load + live appended at bucket close) into gid-sorted parallel
         # lists so the draw path culls to the visible range by bisect — NEVER iterates all rows, NEVER
         # re-detects per frame (that was the 250->1700-item / 0.55->572ms regression).
@@ -2515,7 +2515,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_pivot_conn[_sd].setData(_cx, _cy, connect="finite")
             self.bc_pivot_conn[_sd].setVisible(bool(_cx))
 
-    def _pivot_stats_html(self, filtered, det, ent, zref, buy, gid, n, _cl, _op, e_sh=None, sl0=0) -> str:
+    def _pivot_stats_html(self, filtered, det, ent, zref, buy, gid, n, _cl, _op, e_sh=None, sum0=None, sl0=0) -> str:
         """Precomputed hover stats for a setup. N = bars back to the leg-5 reference candle; N->det = that
         reference OPEN to the detection CLOSE %; det->entry = detection CLOSE to entry CLOSE %; room ratio =
         profit-room / risk-room from the ENTRY to the leg-5 zone hi/lo, side-aware (the study's
