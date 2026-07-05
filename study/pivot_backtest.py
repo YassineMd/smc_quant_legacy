@@ -90,6 +90,7 @@ def main():
     LOCK = PD.LOCK
     hi = np.array([b.high for b in bks]); lo_ = np.array([b.low for b in bks])
     cl = np.array([b.close_price for b in bks]); op = np.array([b.open_price for b in bks])
+    bvv = np.array([b.buy_vol for b in bks]); svv = np.array([b.sell_vol for b in bks])   # absorption-candle
     et = np.array([b.end_time for b in bks]); st = np.array([float(d["start_time"]) for d in raws])
     rop = np.round(op * 100).astype(np.int64); rcl = np.round(cl * 100).astype(np.int64)
     poc = np.array([float(d.get("poc_price", 0.0)) for d in raws])
@@ -218,8 +219,13 @@ def main():
             lck = [sgn * (2.0 * float(e_sh[max(0, k - LOCK)]) - 1.0) * 100.0 for k in range(b, j_e + 1)]
             row["p2_live_min_de"] = round(min(liv), 2); row["p2_lock_min_de"] = round(min(lck), 2)
             row["p2_live_at_e"] = round(liv[-1], 2)   # live aligned spread AT the entry bar (contemporaneous)
+            # ABSORPTION-CANDLE entry (forward-ledger): the entry bar was led by the OPPOSITE side but closed
+            # the trade's way (long: sell-led & closed up = blue; short: buy-led & closed down = orange).
+            row["entry_absorption"] = int((svv[j_e] > bvv[j_e] and cl[j_e] > op[j_e]) if long
+                                          else (bvv[j_e] > svv[j_e] and cl[j_e] < op[j_e]))
         else:
             row["p2_live_min_de"] = row["p2_lock_min_de"] = row["p2_live_at_e"] = ""
+            row["entry_absorption"] = ""
         rows.append(row)
 
     cols = ["fire_bid", "side", "outcome", "w_max", "w_min", "zone_hi_pct", "zone_lo_pct", "zone_range",
@@ -228,7 +234,7 @@ def main():
             "leg5_N", "ref_to_det_pct", "det_to_entry_pct", "lg_buy_vol", "lg_sell_vol",
             "lg_spread_delta_pct", "lg_spr_n0_25", "lg_spr_n25_50", "lg_spr_n50_75", "lg_spr_n75_100",
             "lg_spr_n0_50", "lg_spr_n0_75", "p2_lock_spread", "p2_live_spread",
-            "p2_live_min_de", "p2_lock_min_de", "p2_live_at_e"]
+            "p2_live_min_de", "p2_lock_min_de", "p2_live_at_e", "entry_absorption"]
     os.makedirs(OUT, exist_ok=True)
     with open(os.path.join(OUT, "pivot_backtest_episodes.csv"), "w", newline="", encoding="utf-8") as fp:
         w = csv.DictWriter(fp, fieldnames=cols); w.writeheader()
