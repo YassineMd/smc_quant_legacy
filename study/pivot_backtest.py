@@ -204,6 +204,8 @@ def main():
         row["lg_spr_n25_50"] = large_delta(snaps, b - 49, b - 25)[2]
         row["lg_spr_n50_75"] = large_delta(snaps, b - 74, b - 50)[2]
         row["lg_spr_n75_100"] = large_delta(snaps, b - 99, b - 75)[2]   # oldest quarter
+        row["lg_spr_n0_50"] = large_delta(snaps, b - 49, b)[2]           # cumulative recent HALF
+        row["lg_spr_n0_75"] = large_delta(snaps, b - 74, b)[2]           # cumulative recent 3 quarters
         # PANEL 2 (eff-agg) badge spread: LOCKED = leg-2's value at b-LOCK (|.|>=65 by construction) vs
         # UNLOCKED = the live value at the fire bar b — their gap shows whether eff-agg firmed or decayed.
         row["p2_lock_spread"] = round((2.0 * float(e_sh[max(0, b - LOCK)]) - 1.0) * 100.0, 2)
@@ -215,7 +217,7 @@ def main():
             "route", "status", "delay", "t_max", "t_min", "first_red_N", "first_green_N", "ts",
             "leg5_N", "ref_to_det_pct", "det_to_entry_pct", "lg_buy_vol", "lg_sell_vol",
             "lg_spread_delta_pct", "lg_spr_n0_25", "lg_spr_n25_50", "lg_spr_n50_75", "lg_spr_n75_100",
-            "p2_lock_spread", "p2_live_spread"]
+            "lg_spr_n0_50", "lg_spr_n0_75", "p2_lock_spread", "p2_live_spread"]
     os.makedirs(OUT, exist_ok=True)
     with open(os.path.join(OUT, "pivot_backtest_episodes.csv"), "w", newline="", encoding="utf-8") as fp:
         w = csv.DictWriter(fp, fieldnames=cols); w.writeheader()
