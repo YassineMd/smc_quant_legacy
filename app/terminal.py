@@ -369,9 +369,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Event set is built ONCE (CSV on load + live appended at bucket close) into gid-sorted parallel
         # lists so the draw path culls to the visible range by bisect — NEVER iterates all rows, NEVER
         # re-detects per frame (that was the 250->1700-item / 0.55->572ms regression).
-        self._liq_events = []; self._liq_gids = []; self._liq_seen = set()
+        self._liq_events = []; self._liq_gids = []; self._liq_ts = []; self._liq_seen = set()
         self._csv_max_gid = 0; self._liq_scan_lo = None; self._liq_scan_hi = 0; self._liq_live_key = None
-        self._load_liq_csv()                                     # historical event set, ONCE on load
+        self._load_liq_csv()                                     # 15m sweep set, ONCE on load (always 15m)
         self.bc_liq_leader = pg.PlotDataItem(
             pen=pg.mkPen((160, 160, 160, 180), width=1, style=QtCore.Qt.DashLine))
         self.bc_liq_leader.setZValue(30); self.plot.addItem(self.bc_liq_leader, ignoreBounds=True)
@@ -911,8 +911,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scanner_bucket_sig = self._last_scanner_sig = None
         self._m10_cc = None   # #3 static closed-bucket compute cache (see _compute_bucket_arrays)
         self._depth_needs_calibration = True  # new tf -> re-baseline the depth slider (§1)
-        self._load_liq_csv()                  # tf-aware: swap in THIS timeframe's sweep set (resets scan state)
-        self._clear_liq()                     # drop the previous tf's labels immediately
+        self._clear_liq()                     # drop the drawn 15m labels; they re-place (by ts) on the new chart
         self.worker.request_timeframe(tf)
 
     def _refresh(self) -> None:
@@ -1790,44 +1789,43 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._spread_badges["PANEL0_SUM"].hide()
 
     # ---------------------------------------------------------------- liquidity-sweep labels (Ctrl+L)
-    # study sweep table per timeframe (Tier-A only reaches the chart); a tf with no table shows LIVE-detected
-    # sweeps only. gid = per-tf bucket Idx, same family as _global_idx_offset, so it only lines up on that tf.
-    _LIQ_CSV_BY_TF = {"1m": "liq_sweeps.csv", "15m": "liq_sweeps_15m.csv"}
+    # The chart ALWAYS shows the 15m sweeps (they grade far cleaner than 1m) — on EVERY timeframe. Each event
+    # is placed by TIMESTAMP onto whatever bar it happened on (a 15m sweep pins to the 1m/5m/etc. bar covering
+    # its close), so it lands correctly regardless of the chart's own bucket Idx. Live 15m detection appends
+    # here only while the 15m feed is active (gated in _build_scanner_buckets).
+    _LIQ_TF = "15m"
 
     def _load_liq_csv(self) -> None:
-        """(Re)build the sweep set for the CURRENT timeframe into gid-sorted parallel lists
-        (self._liq_events / self._liq_gids) for O(log n) visible-range culling. TIMEFRAME-AWARE: loads the
-        table matching self._tf (1m/15m today); other tfs get an empty offline set and rely on live detection.
-        Resets the live-scan state too, so switching tf never mixes another timeframe's Idx numbering."""
+        """Load the 15m Tier-A sweep set ONCE into gid- AND ts-sorted parallel lists. gid drives the live-scan
+        bookkeeping (per-15m-Idx); ts drives DRAW placement (works on any chart). gid is monotonic with ts for
+        a single tf, so one sort keeps both lists ordered."""
         import csv as _csv
-        tf = getattr(self, "_tf", config.DEFAULT_TF)
-        fname = self._LIQ_CSV_BY_TF.get(tf)
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "study", "out", "liq_sweeps_15m.csv")
         evs = []; csv_max = 0
-        if fname:
-            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "study", "out", fname)
-            try:
-                with open(path, encoding="utf-8") as f:
-                    first = f.tell(); ln = f.readline()
-                    if not ln.startswith("#"):
-                        f.seek(first)
-                    for r in _csv.DictReader(f):
-                        bid = int(r["bucket_id"])
-                        if bid > csv_max:
-                            csv_max = bid                   # CSV data horizon (live detection starts past it)
-                        if r["tier"] != "A":                # TIER-A ONLY on the chart — Tier-B are calibration
-                            continue                        # decoys (kept in the CSV + pack, just not drawn)
-                        evs.append(dict(gid=bid, side=r["side_label"], kind="Sweep",
-                                        level=float(r["swept_level"]), tier="A"))
-            except (OSError, KeyError, ValueError):
-                evs = []; csv_max = 0
+        try:
+            with open(path, encoding="utf-8") as f:
+                first = f.tell(); ln = f.readline()
+                if not ln.startswith("#"):
+                    f.seek(first)
+                for r in _csv.DictReader(f):
+                    bid = int(r["bucket_id"])
+                    if bid > csv_max:
+                        csv_max = bid                       # CSV data horizon (live detection starts past it)
+                    if r["tier"] != "A":                    # TIER-A ONLY — Tier-B are calibration decoys
+                        continue
+                    evs.append(dict(gid=bid, ts=float(r["ts"]), side=r["side_label"], kind="Sweep",
+                                    level=float(r["swept_level"]), tier="A"))
+        except (OSError, KeyError, ValueError):
+            evs = []; csv_max = 0
         evs.sort(key=lambda e: e["gid"])
         self._liq_events = evs
         self._liq_gids = [e["gid"] for e in evs]
+        self._liq_ts = [e["ts"] for e in evs]               # DRAW places by this (timestamp), not gid
         self._liq_seen = {(e["gid"], e["side"]) for e in evs}
         self._csv_max_gid = csv_max
         self._liq_scan_lo = None                            # live-scan covered range (None = nothing scanned yet)
-        self._liq_scan_hi = self._csv_max_gid               # everything <= csv_max is the CSV's job
-        self._liq_live_key = None                           # force a fresh live scan on the new tf
+        self._liq_scan_hi = self._csv_max_gid
+        self._liq_live_key = None
 
     def _liq_scan_live(self, filtered: list, off: int, n_closed: int) -> None:
         """Bucket-close / window-growth hook (NOT the draw path): detect sweeps on the loaded CLOSED buckets
@@ -1872,7 +1870,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if key in self._liq_seen:
                     continue
                 self._liq_seen.add(key)
-                self._liq_events.append(dict(gid=gid, side=e["side"], kind=e["kind"],
+                bts = float(filtered[gid - off].get("end_time", 0.0))   # bar time -> DRAW places by this
+                self._liq_events.append(dict(gid=gid, ts=bts, side=e["side"], kind=e["kind"],
                                              level=e["level"], tier="A"))
                 added = True
         self._liq_scan_lo = region_lo if self._liq_scan_lo is None else min(self._liq_scan_lo, region_lo)
@@ -1880,6 +1879,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if added:                                           # low-side inserts break append-order -> re-sort
             self._liq_events.sort(key=lambda ev: ev["gid"])
             self._liq_gids = [ev["gid"] for ev in self._liq_events]
+            self._liq_ts = [ev["ts"] for ev in self._liq_events]
 
     def _toggle_liq(self) -> None:
         """Ctrl+L — show/hide the liquidity-sweep labels (detector v1, uncalibrated)."""
@@ -1918,64 +1918,64 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._liq_status.setPos(vx0, vy1)
         self._liq_status.setVisible(True)
 
-    def _liq_empty_msg(self, lo_gid: int, hi_gid: int):
-        """Nothing in view -> point the operator at the nearest cluster (with a Ctrl+F Idx to jump to)."""
-        import bisect as _bi
-        g = self._liq_gids
-        if not g:
+    def _liq_empty_msg(self, t_lo: float, t_hi: float):
+        """Nothing in view -> name the nearest 15m sweep by time (Idx is per-15m, useless for Ctrl+F on a 1m
+        chart, so we give the clock instead)."""
+        import bisect as _bi, time as _t
+        ts = self._liq_ts
+        if not ts:
             return None
-        i = _bi.bisect_left(g, lo_gid)
-        cand = []
-        if i < len(g):
-            cand.append(g[i])
-        if i > 0:
-            cand.append(g[i - 1])
-        nearest = min(cand, key=lambda c: min(abs(c - lo_gid), abs(c - hi_gid)))
-        if nearest < lo_gid:
-            return "%s liq events loaded — nearest %s bars back  (Ctrl+F %s)" % (
-                "{:,}".format(len(g)), "{:,}".format(lo_gid - nearest), "{:,}".format(nearest))
-        return "%s liq events loaded — nearest %s bars ahead  (Ctrl+F %s)" % (
-            "{:,}".format(len(g)), "{:,}".format(nearest - hi_gid), "{:,}".format(nearest))
+        i = _bi.bisect_left(ts, t_lo)
+        cand = ([ts[i]] if i < len(ts) else []) + ([ts[i - 1]] if i > 0 else [])
+        if not cand:
+            return "%d 15m sweeps loaded" % len(ts)
+        nearest = min(cand, key=lambda c: min(abs(c - t_lo), abs(c - t_hi)))
+        rel = "back" if nearest < t_lo else "ahead"
+        return "%d 15m sweeps loaded — none in view; nearest %s UTC (%s)" % (
+            len(ts), _t.strftime("%m-%d %H:%M", _t.gmtime(nearest)), rel)
 
-    def _draw_liq(self, buckets, x, highs, lows, vx0, vx1, vy0, vy1) -> None:
-        """Liquidity-sweep labels over the candles (bucket_canvas only). Simple + zoom-INSENSITIVE: bisect the
-        gid-sorted event set to the VISIBLE range (never iterate all rows), draw up to LIQ_MAX_LABELS of them
-        (Tier-A first, then evenly spread), reusing a bounded pool. On/off is purely self.show_liq — no density
-        floor, nothing view-dependent that would blink them. Detection is NOT done here (see _liq_scan_live)."""
+    def _draw_liq(self, buckets, x, vx0, vx1, vy0, vy1) -> None:
+        """15m sweep labels on the ACTIVE chart, placed by TIMESTAMP (so 15m sweeps land on the 1m bar they
+        happened on). Cull the ts-sorted set to the visible time window, cap at LIQ_MAX_LABELS (even spread),
+        reuse a bounded pool. Each label sits at the SWEPT PRICE level of that sweep. On/off is purely
+        self.show_liq. Detection is NOT done here (see _liq_scan_live)."""
         import bisect as _bi
-        if not self.show_liq or not buckets or not self._liq_gids:
+        if not self.show_liq or not buckets or not self._liq_ts:
             self._clear_liq(); return
-        n = len(buckets); off = self._global_idx_offset
-        lo_local = max(0, int(vx0)); hi_local = min(n - 1, int(vx1) + 1)   # x IS the local index 0..n-1
-        lo_gid = off + lo_local; hi_gid = off + hi_local
-        a = _bi.bisect_left(self._liq_gids, lo_gid); b = _bi.bisect_right(self._liq_gids, hi_gid)
+        n = len(buckets)
+        lo_local = max(0, int(vx0)); hi_local = min(n - 1, int(vx1) + 1)
+        bt = [float(b.get("start_time", 0.0)) for b in buckets]            # bar START times, ascending
+        t_lo = bt[lo_local]; t_hi = float(buckets[hi_local].get("end_time", bt[hi_local]))
+        a = _bi.bisect_left(self._liq_ts, t_lo); b = _bi.bisect_right(self._liq_ts, t_hi)
         vis = self._liq_events[a:b]
-        if not vis:                                          # empty-by-location -> point at the nearest cluster
-            self._liq_hide_marks(); self._liq_note(self._liq_empty_msg(lo_gid, hi_gid), vx0, vy1)
+        if not vis:                                          # nothing in this time window -> nearest by clock
+            self._liq_hide_marks(); self._liq_note(self._liq_empty_msg(t_lo, t_hi), vx0, vy1)
             return
-        self._liq_note(None)                                 # something to draw -> drop the note
-        if len(vis) > LIQ_MAX_LABELS:                        # rarely hit (Tier-A is sparse) -> keep an even spread
+        self._liq_note(None)
+        if len(vis) > LIQ_MAX_LABELS:                        # rarely hit (15m sweeps are sparse) -> even spread
             step = max(1, len(vis) // LIQ_MAX_LABELS)
             vis = vis[::step][:LIQ_MAX_LABELS]
         dy = (vy1 - vy0) * 0.035
         lx, ly = [], []; used = 0
         for ev in vis:
-            li = ev["gid"] - off
-            if not (0 <= li < n):
-                continue
+            li = _bi.bisect_right(bt, ev["ts"]) - 1          # the bar covering this sweep's time
+            if li < 0:
+                li = 0
+            elif li >= n:
+                li = n - 1
             up = ev["side"] == "S"
-            tip = highs[li] if up else lows[li]
-            lab_y = tip + dy if up else tip - dy
-            lx += [x[li], x[li], float("nan")]; ly += [tip, lab_y, float("nan")]
+            lvl = ev["level"]                                 # anchor at the SWEPT PRICE (correct cross-tf)
+            lab_y = lvl + dy if up else lvl - dy
+            lx += [x[li], x[li], float("nan")]; ly += [lvl, lab_y, float("nan")]
             if used >= len(self._liq_label_pool):            # grow lazily, but bounded by LIQ_MAX_LABELS
                 _t = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0))
                 _t.setZValue(31)
                 _bf = QtGui.QFont("Consolas", 9); _bf.setBold(True); _t.textItem.setFont(_bf)
-                _t.setToolTip("detector v1 — uncalibrated")
+                _t.setToolTip("15m detector v1 — uncalibrated")
                 self.plot.addItem(_t, ignoreBounds=True); self._liq_label_pool.append(_t)
             _lab = self._liq_label_pool[used]; used += 1
             _lab.fill = pg.mkBrush(255, 45, 70) if up else pg.mkBrush(40, 230, 90)   # S red / B green
-            _lab.setText(" %s L. %s " % (ev["side"], ev["kind"]))
+            _lab.setText(" %s 15m Sweep " % ev["side"])
             _lab.setPos(x[li], lab_y); _lab.setVisible(True)
         for _j in range(used, len(self._liq_label_pool)):
             self._liq_label_pool[_j].setVisible(False)
@@ -3597,9 +3597,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # LIVE liquidity detection — bucket-close / window-growth hook, NOT the draw path and NOT keyed on
         # curr_vol. Keyed on (total_closed, #closed loaded): fires on a new close AND as the pipe streams the
         # window in behind a known total_closed (so live events aren't skipped on a partial first frame).
+        # only detect live when the 15m feed is actually streaming (the sweep set is 15m; running the detector
+        # on 1m/5m/etc. buckets would produce that timeframe's sweeps, not 15m).
         n_closed_local = len(filtered) - (1 if active_appended else 0)
         live_key = (total_closed, n_closed_local)
-        if total_closed and live_key != self._liq_live_key:
+        if total_closed and live_key != self._liq_live_key and getattr(self, "_tf", None) == self._LIQ_TF:
             self._liq_live_key = live_key
             self._liq_scan_live(filtered, self._global_idx_offset, n_closed_local)
 
@@ -5163,7 +5165,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # its OWN profiler section ('liq') so this layer is measured directly, not inferred under draw_scanner.
         _ls = time.perf_counter()
         try:
-            self._draw_liq(buckets, x, highs, lows, vx0, vx1, vy0, vy1)
+            self._draw_liq(buckets, x, vx0, vx1, vy0, vy1)
         except Exception:
             self._clear_liq()
         self._perf_note("liq", _ls)
