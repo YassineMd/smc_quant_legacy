@@ -382,8 +382,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_status.setVisible(False); self._liq_status_txt = None
         # PIVOT INDICATOR (Ctrl+P) — S5j-r5 confluence detection + entry, SELECTION-SCOPED (only inside a drawn
         # Mode-10 selection; app.pivot_detect). Marks the FIRST fire's detection + its entry: two filled labels
-        # (yellow = detection B/S-P_idx, white = entry B/S-P-E_idx), a DASHED faded-gray leader from each candle
-        # to its label, and a SOLID faded-gray line joining the two. Buys below the candles, sells mirrored above.
+        # labels ("B/S-P_idx" detection + "B/S-P-E_idx" entry), GREEN bg for buys / RED for sells, a DASHED
+        # faded-gray leader from each candle to its label, and a SOLID faded-gray line joining the two. Buys
+        # below the candles, sells mirrored above.
         self.show_pivot = False
         _pv_pen = pg.mkPen((165, 165, 165, 150), width=1, style=QtCore.Qt.DashLine)
         self.bc_pivot_leaders = pg.PlotDataItem(pen=_pv_pen, connect="finite")
@@ -392,11 +393,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_pivot_conn = pg.PlotDataItem(pen=pg.mkPen((165, 165, 165, 150), width=1.4))   # SOLID connector
         self.bc_pivot_conn.setZValue(30); self.plot.addItem(self.bc_pivot_conn, ignoreBounds=True)
         self.bc_pivot_conn.setVisible(False)
-        _pvf = QtGui.QFont("Consolas", 9); _pvf.setBold(True)
-        self.bc_pivot_det = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0))       # detection: yellow fill
+        _pvf = QtGui.QFont("Consolas", 7); _pvf.setBold(True)
+        self.bc_pivot_det = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0))       # green (buy) / red (sell) bg
         self.bc_pivot_det.textItem.setFont(_pvf); self.bc_pivot_det.setZValue(32)
         self.plot.addItem(self.bc_pivot_det, ignoreBounds=True); self.bc_pivot_det.setVisible(False)
-        self.bc_pivot_entry = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0))     # entry: white fill
+        self.bc_pivot_entry = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0))     # green (buy) / red (sell) bg
         self.bc_pivot_entry.textItem.setFont(_pvf); self.bc_pivot_entry.setZValue(32)
         self.plot.addItem(self.bc_pivot_entry, ignoreBounds=True); self.bc_pivot_entry.setVisible(False)
         self._pivot_sig = None
@@ -2446,12 +2447,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             tips.append(float(filtered[entry_i].get(fld, 0.0)))
         shelf = (min(tips) - dy) if buy else (max(tips) + dy)
         det_gid = off + det_i
-        self.bc_pivot_det.fill = pg.mkBrush(245, 215, 55)          # yellow = detection
+        pvcol = pg.mkBrush(40, 230, 90) if buy else pg.mkBrush(255, 45, 70)   # green buy / red sell
+        self.bc_pivot_det.fill = pvcol
         self.bc_pivot_det.setText(" %s-P_%d " % (pfx, det_gid))
         self.bc_pivot_det.setPos(det_i, shelf); self.bc_pivot_det.setVisible(True)
         lx = [det_i, det_i, float("nan")]; ly = [float(filtered[det_i].get(fld, 0.0)), shelf, float("nan")]
         if entry_i is not None and entry_i < n:
-            self.bc_pivot_entry.fill = pg.mkBrush(240, 240, 240)   # white = entry
+            self.bc_pivot_entry.fill = pvcol
             self.bc_pivot_entry.setText(" %s-P-E_%d " % (pfx, det_gid))   # entry references the DETECTION idx
             self.bc_pivot_entry.setPos(entry_i, shelf); self.bc_pivot_entry.setVisible(True)
             lx += [entry_i, entry_i, float("nan")]
