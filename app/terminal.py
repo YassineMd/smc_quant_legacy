@@ -381,11 +381,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_status.setZValue(33); self.plot.addItem(self._liq_status, ignoreBounds=True)
         self._liq_status.setVisible(False); self._liq_status_txt = None
         # PIVOT INDICATOR (Ctrl+P) — S5j-r5 confluence detection + entry, SELECTION-SCOPED (only inside a drawn
-        # Mode-10 selection; app.pivot_detect). Marks each setup's detection + its entry: two filled labels
-        # ("B/S-P_idx" detection + "B/S-P-E_idx" entry), GREEN bg for buys / RED for sells, a DASHED faded leader
-        # from each candle to its label (+ a 2nd back to the leg-5 N=60..100 candle), and a SOLID line joining
+        # Mode-10 selection; app.pivot_detect). Marks each setup's detection + its entry as two circular BADGES —
+        # a bold "D" (detection) and "E" (entry) coin, GREEN for buys / RED for sells — with a DASHED faded leader
+        # from each candle to its badge (+ a 2nd back to the leg-5 N=60..100 candle) and a SOLID line joining
         # detection<->entry. Leaders/connectors are faded GREEN (buy) / RED (sell), split per side. Buys below
-        # the candles, sells mirrored above. Hovering a label pops a stats box (buy -> below, sell -> above).
+        # the candles, sells mirrored above. Hovering a badge pops a stats box (buy -> below, sell -> above).
         self.show_pivot = False
         _grn = (40, 230, 90, 140); _red = (255, 45, 70, 140)     # faded side colours (alpha keeps them behind)
         self.bc_pivot_leaders = {}               # side -> DASHED PlotDataItem (candle<->label + label->leg-5)
@@ -396,8 +396,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _cn = pg.PlotDataItem(pen=pg.mkPen(_c, width=1.4), connect="finite")
             _cn.setZValue(30); self.plot.addItem(_cn, ignoreBounds=True); _cn.setVisible(False)
             self.bc_pivot_leaders[_sd] = _ld; self.bc_pivot_conn[_sd] = _cn
-        self._pivot_label_pool = []              # reused TextItems (2 per setup: detection + entry), grown lazily
-        self._pivot_hovers = []                  # [(label_item, stats_html, is_buy)] -> the hover stats box
+        # circular D/E badges — green (buy) / red (sell) coins at a fixed pixel size (read the same at any zoom),
+        # with the bold letter drawn on top via the pooled TextItems.
+        self.bc_pivot_dots = pg.ScatterPlotItem(pxMode=True, symbol="o", size=20,
+                                                pen=pg.mkPen(0, 0, 0, 180, width=1))
+        self.bc_pivot_dots.setZValue(31); self.plot.addItem(self.bc_pivot_dots, ignoreBounds=True)
+        self.bc_pivot_dots.setVisible(False)
+        self._pivot_label_pool = []              # reused TextItems (the bold D/E glyphs), grown lazily
+        self._pivot_hovers = []                  # [(x, y, stats_html, is_buy)] badge centres -> the hover box
         self._pivot_sig = None
         self.pivot_tooltip = pg.TextItem(anchor=(0.5, 0.0), fill=pg.mkBrush(18, 20, 26, 238),
                                          border=pg.mkPen(90, 96, 108, 220))
@@ -2411,19 +2417,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _sd in ("long", "short"):
             self.bc_pivot_leaders[_sd].setData([], []); self.bc_pivot_leaders[_sd].setVisible(False)
             self.bc_pivot_conn[_sd].setData([], []); self.bc_pivot_conn[_sd].setVisible(False)
+        self.bc_pivot_dots.setData([]); self.bc_pivot_dots.setVisible(False)
         for _lab in self._pivot_label_pool:
             _lab.setVisible(False)
         self._pivot_hovers = []; self.pivot_tooltip.hide()
         self._pivot_sig = None
 
-    def _pivot_put_label(self, used: int, x, y, brush, text: str) -> int:
-        """Set the next pooled label (grow lazily). Green(buy)/red(sell) fill, black text, small font."""
+    def _pivot_put_label(self, used: int, x, y, text: str) -> int:
+        """Set the next pooled D/E glyph (grow lazily): bold BLACK letter centred on its coloured circle."""
         if used >= len(self._pivot_label_pool):
             _t = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0)); _t.setZValue(32)
-            _f = QtGui.QFont("Consolas", 7); _f.setBold(True); _t.textItem.setFont(_f)
+            _f = QtGui.QFont("Consolas", 8); _f.setBold(True); _t.textItem.setFont(_f)
             self.plot.addItem(_t, ignoreBounds=True); self._pivot_label_pool.append(_t)
         lab = self._pivot_label_pool[used]
-        lab.fill = brush; lab.setText(text); lab.setPos(x, y); lab.setVisible(True)
+        lab.setText(text); lab.setPos(x, y); lab.setVisible(True)
         return used + 1
 
     def _draw_pivot(self, filtered, off, lo_i, hi_i) -> None:
@@ -2463,6 +2470,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._pivot_hovers = []; self.pivot_tooltip.hide()
             for _lab in self._pivot_label_pool:
                 _lab.setVisible(False)
+            self.bc_pivot_dots.setData([]); self.bc_pivot_dots.setVisible(False)
             for _sd in ("long", "short"):
                 self.bc_pivot_leaders[_sd].setVisible(False); self.bc_pivot_conn[_sd].setVisible(False)
             return
@@ -2474,10 +2482,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         seg = {"long": ([], []), "short": ([], [])}      # DASHED leaders lx/ly per side
         con = {"long": ([], []), "short": ([], [])}      # SOLID connectors cx/cy per side
-        self._pivot_hovers = []; used = 0
+        self._pivot_hovers = []; used = 0; spots = []
         for det, ent, side, zref in setups:
-            buy = side == "long"; pfx = "B" if buy else "S"; fld = "low" if buy else "high"
-            col = pg.mkBrush(40, 230, 90) if buy else pg.mkBrush(255, 45, 70)   # green buy / red sell
+            buy = side == "long"; fld = "low" if buy else "high"
+            brush = pg.mkBrush(40, 230, 90) if buy else pg.mkBrush(255, 45, 70)   # green buy / red sell coin
             lx, ly = seg[side]; cx, cy = con[side]
             tips = [float(filtered[det].get(fld, 0.0))]
             if ent < n:
@@ -2485,18 +2493,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             shelf = (min(tips) - dy) if buy else (max(tips) + dy)
             gid = off + det
             html = self._pivot_stats_html(filtered, det, ent, zref, buy, gid, n, _cl, _op)
-            used = self._pivot_put_label(used, det, shelf, col, " %s-P_%d " % (pfx, gid))
-            self._pivot_hovers.append((self._pivot_label_pool[used - 1], html, buy))
+            used = self._pivot_put_label(used, det, shelf, "D")          # DETECTION badge
+            spots.append({"pos": (det, shelf), "brush": brush})
+            self._pivot_hovers.append((det, shelf, html, buy))
             lx += [det, det, float("nan")]; ly += [float(filtered[det].get(fld, 0.0)), shelf, float("nan")]
-            if 0 <= zref < n:                    # dashed leader from the label back to the leg-5 (N=60..100)
+            if 0 <= zref < n:                    # dashed leader from the badge back to the leg-5 (N=60..100)
                 lx += [det, zref, float("nan")]; ly += [shelf, _op(zref), float("nan")]   # -> reference open
-            if ent < n:                          # entry references the DETECTION idx
-                used = self._pivot_put_label(used, ent, shelf, col, " %s-P-E_%d " % (pfx, gid))
-                self._pivot_hovers.append((self._pivot_label_pool[used - 1], html, buy))
+            if ent < n:                          # ENTRY badge (references the DETECTION idx in the hover box)
+                used = self._pivot_put_label(used, ent, shelf, "E")
+                spots.append({"pos": (ent, shelf), "brush": brush})
+                self._pivot_hovers.append((ent, shelf, html, buy))
                 lx += [ent, ent, float("nan")]; ly += [float(filtered[ent].get(fld, 0.0)), shelf, float("nan")]
                 cx += [det, ent, float("nan")]; cy += [shelf, shelf, float("nan")]
         for j in range(used, len(self._pivot_label_pool)):
             self._pivot_label_pool[j].setVisible(False)
+        self.bc_pivot_dots.setData(spots); self.bc_pivot_dots.setVisible(bool(spots))
         for _sd in ("long", "short"):
             _lx, _ly = seg[_sd]; _cx, _cy = con[_sd]
             self.bc_pivot_leaders[_sd].setData(_lx, _ly, connect="finite")
@@ -2555,23 +2566,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                      bcol, self._fmt_k(bvol), scol, self._fmt_k(svol), dcol, dsp)
 
     def _hover_pivot(self, scene_pos) -> None:
-        """Stats box for whichever pivot label the cursor is over — buy -> box BELOW the label, sell -> box
-        ABOVE. Hit-tests the pooled label items' scene rects; hidden when none is hovered."""
+        """Stats box for whichever D/E badge the cursor is over — buy -> box BELOW the badge, sell -> box ABOVE.
+        Hit-tests each badge centre within a pixel radius (matches the circle); hidden when none is hovered."""
         if not self.show_pivot or not self._pivot_hovers:
             self.pivot_tooltip.hide(); return
-        for lab, html, buy in self._pivot_hovers:
-            if not lab.isVisible():
+        R = 13.0                                  # px hit radius (~the coin)
+        for x, y, html, buy in self._pivot_hovers:
+            c = self.vb.mapViewToScene(QtCore.QPointF(float(x), float(y)))
+            if (c.x() - scene_pos.x()) ** 2 + (c.y() - scene_pos.y()) ** 2 > R * R:
                 continue
-            r = lab.mapRectToScene(lab.boundingRect())
-            if not r.contains(scene_pos):
-                continue
-            cx = r.center().x()
-            if buy:                              # box hangs BELOW the label (down the screen)
+            if buy:                              # box hangs BELOW the badge (down the screen)
                 self.pivot_tooltip.anchor = pg.Point(0.5, 0.0)
-                p = self.vb.mapSceneToView(QtCore.QPointF(cx, r.bottom() + 4))
-            else:                                # box sits ABOVE the label
+                p = self.vb.mapSceneToView(QtCore.QPointF(c.x(), c.y() + R + 2))
+            else:                                # box sits ABOVE the badge
                 self.pivot_tooltip.anchor = pg.Point(0.5, 1.0)
-                p = self.vb.mapSceneToView(QtCore.QPointF(cx, r.top() - 4))
+                p = self.vb.mapSceneToView(QtCore.QPointF(c.x(), c.y() - R - 2))
             self.pivot_tooltip.setHtml(html)
             self.pivot_tooltip.setPos(p.x(), p.y())
             self.pivot_tooltip.show()
