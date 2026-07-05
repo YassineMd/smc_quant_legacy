@@ -75,6 +75,7 @@ class PipeClientWorker(threading.Thread):
         self.order_blocks: List[dict] = []
         self.absorptions: List[dict] = []        # whale-absorption marks (new wire field; liquidations-style plain copy, no OB COW)
         self.liquidations: List[dict] = []       # {side, price, qty, time}
+        self._liq_sweeps: dict = {}               # (idx,side) -> {ts,side,level,idx}; daemon-pushed 15m sweeps
         self.depth: Dict[str, list] = {"bids": [], "asks": []}
         self.oi: float = 0.0
         self.size_thr: List[float] = []   # rolling 60-min trade-size pctiles [p50,p90,p95,p99,p99.5] (contracts); [] = not warm
