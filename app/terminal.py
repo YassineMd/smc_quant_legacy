@@ -380,6 +380,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _lsf = QtGui.QFont("Consolas", 9); self._liq_status.textItem.setFont(_lsf)
         self._liq_status.setZValue(33); self.plot.addItem(self._liq_status, ignoreBounds=True)
         self._liq_status.setVisible(False); self._liq_status_txt = None
+        # PIVOT INDICATOR ('p') — S5j-r5 confluence detection + entry, SELECTION-SCOPED (only inside a drawn
+        # Mode-10 selection; app.pivot_detect). Marks the FIRST fire's detection + its entry: two filled labels
+        # (yellow = detection B/S-P_idx, white = entry B/S-P-E_idx), a DASHED faded-gray leader from each candle
+        # to its label, and a SOLID faded-gray line joining the two. Buys below the candles, sells mirrored above.
+        self.show_pivot = False
+        _pv_pen = pg.mkPen((165, 165, 165, 150), width=1, style=QtCore.Qt.DashLine)
+        self.bc_pivot_leaders = pg.PlotDataItem(pen=_pv_pen, connect="finite")
+        self.bc_pivot_leaders.setZValue(30); self.plot.addItem(self.bc_pivot_leaders, ignoreBounds=True)
+        self.bc_pivot_leaders.setVisible(False)
+        self.bc_pivot_conn = pg.PlotDataItem(pen=pg.mkPen((165, 165, 165, 150), width=1.4))   # SOLID connector
+        self.bc_pivot_conn.setZValue(30); self.plot.addItem(self.bc_pivot_conn, ignoreBounds=True)
+        self.bc_pivot_conn.setVisible(False)
+        _pvf = QtGui.QFont("Consolas", 9); _pvf.setBold(True)
+        self.bc_pivot_det = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0))       # detection: yellow fill
+        self.bc_pivot_det.textItem.setFont(_pvf); self.bc_pivot_det.setZValue(32)
+        self.plot.addItem(self.bc_pivot_det, ignoreBounds=True); self.bc_pivot_det.setVisible(False)
+        self.bc_pivot_entry = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0))     # entry: white fill
+        self.bc_pivot_entry.textItem.setFont(_pvf); self.bc_pivot_entry.setZValue(32)
+        self.plot.addItem(self.bc_pivot_entry, ignoreBounds=True); self.bc_pivot_entry.setVisible(False)
+        self._pivot_sig = None
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
         # heatmap large-order bubbles); SMALL = small-BUY vs small-SELL trade-COUNT share (green / red). Each
@@ -741,8 +761,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         activated=lambda: self.menu.layer_checks["m10_stats"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("D"), self,
                         activated=lambda: self.menu.sub_checks["drawing"].toggle())
-        QtGui.QShortcut(QtGui.QKeySequence("P"), self,
-                        activated=lambda: self.menu.layer_checks["m10_poc"].toggle())
+        QtGui.QShortcut(QtGui.QKeySequence("P"), self, activated=self._toggle_pivot)  # PIVOT INDICATOR (selection-scoped); m10_poc stays on its menu checkbox
         QtGui.QShortcut(QtGui.QKeySequence("L"), self,
                         activated=lambda: self.menu.layer_checks["m10_liq"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("F"), self,
@@ -1961,6 +1980,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "phase_table": self.show_phase_table,
                 "phase": {k: bool(v) for k, v in self.show_phase.items()},
                 "liq_labels": self.show_liq,
+                "pivot": self.show_pivot,
                 "zone_s": self._zone_user_s, "eff_f": self._eff_user_f,   # persisted slider overrides (None = adaptive)
             }
             with open(os.path.join(config.DATA_DIR, "terminal_ui.json"), "w") as f:
@@ -1990,6 +2010,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_panel9 = bool(s.get("panel9", self.show_panel9))
         self.show_panel0 = bool(s.get("panel0", self.show_panel0))
         self.show_liq = bool(s.get("liq_labels", self.show_liq))
+        self.show_pivot = bool(s.get("pivot", self.show_pivot))
         self.show_whisker = bool(s.get("whisker", self.show_whisker))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
         for _k, _v in (s.get("phase") or {}).items():
@@ -2370,6 +2391,74 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.zone_slider.hide()
             self.eff_slider.hide()
 
+    # ---------------------------------------------------------------- PIVOT INDICATOR ('p')
+    def _toggle_pivot(self) -> None:
+        """'p' — PIVOT INDICATOR on/off (S5j-r5 confluence detection + entry; only shows inside a selection)."""
+        self.show_pivot = not self.show_pivot
+        if not self.show_pivot:
+            self._clear_pivot()
+        self._save_ui_state()
+        self._sel_sig = None                    # force the selection readout to recompute so marks appear/vanish
+
+    def _clear_pivot(self) -> None:
+        self.bc_pivot_leaders.setData([], []); self.bc_pivot_leaders.setVisible(False)
+        self.bc_pivot_conn.setData([], []); self.bc_pivot_conn.setVisible(False)
+        self.bc_pivot_det.setVisible(False); self.bc_pivot_entry.setVisible(False)
+        self._pivot_sig = None
+
+    def _draw_pivot(self, filtered, off, lo_i, hi_i) -> None:
+        """Scan the drawn selection for the FIRST S5j-r5 fire and mark its detection + entry. Cached by the
+        selection's bucket range (off, lo_i, hi_i) so it re-detects only when that changes — not on y-drags or
+        live-edge ticks. Runs on a lookback+forward window (legs 1/5 + phase warm; the entry scans ahead)."""
+        if not self.show_pivot:
+            self._clear_pivot(); return
+        n = len(filtered)
+        sig = (off, lo_i, hi_i)
+        if sig == self._pivot_sig:
+            return                              # same range -> marks already drawn, keep them
+        self._pivot_sig = sig
+        from app import pivot_detect
+        LB, FWD = 220, 200                      # lookback (legs 1/5 + phase warm) / forward (entry scan)
+        a = max(0, lo_i - LB); b_end = min(n, hi_i + 1 + FWD)
+        try:
+            fires = pivot_detect.detect_pivots(filtered[a:b_end])
+        except Exception:
+            self._clear_pivot(); self._pivot_sig = sig; return
+        hit = None
+        for f in sorted(fires, key=lambda f: f["det_i"]):
+            di = a + f["det_i"]
+            if lo_i <= di <= hi_i:
+                ei = (a + f["entry_i"]) if f["entry_i"] is not None else None
+                hit = (di, ei, f["side"]); break
+        if hit is None:                         # no confluence fire in this selection
+            self.bc_pivot_leaders.setVisible(False); self.bc_pivot_conn.setVisible(False)
+            self.bc_pivot_det.setVisible(False); self.bc_pivot_entry.setVisible(False)
+            return
+        det_i, entry_i, side = hit
+        buy = side == "long"; pfx = "B" if buy else "S"
+        (_vx0, _vx1), (vy0, vy1) = self.vb.viewRange()
+        dy = (vy1 - vy0) * 0.08
+        fld = "low" if buy else "high"          # buy shelf below the lows, sell shelf above the highs
+        tips = [float(filtered[det_i].get(fld, 0.0))]
+        if entry_i is not None and entry_i < n:
+            tips.append(float(filtered[entry_i].get(fld, 0.0)))
+        shelf = (min(tips) - dy) if buy else (max(tips) + dy)
+        det_gid = off + det_i
+        self.bc_pivot_det.fill = pg.mkBrush(245, 215, 55)          # yellow = detection
+        self.bc_pivot_det.setText(" %s-P_%d " % (pfx, det_gid))
+        self.bc_pivot_det.setPos(det_i, shelf); self.bc_pivot_det.setVisible(True)
+        lx = [det_i, det_i, float("nan")]; ly = [float(filtered[det_i].get(fld, 0.0)), shelf, float("nan")]
+        if entry_i is not None and entry_i < n:
+            self.bc_pivot_entry.fill = pg.mkBrush(240, 240, 240)   # white = entry
+            self.bc_pivot_entry.setText(" %s-P-E_%d " % (pfx, det_gid))   # entry references the DETECTION idx
+            self.bc_pivot_entry.setPos(entry_i, shelf); self.bc_pivot_entry.setVisible(True)
+            lx += [entry_i, entry_i, float("nan")]
+            ly += [float(filtered[entry_i].get(fld, 0.0)), shelf, float("nan")]
+            self.bc_pivot_conn.setData([det_i, entry_i], [shelf, shelf]); self.bc_pivot_conn.setVisible(True)
+        else:
+            self.bc_pivot_entry.setVisible(False); self.bc_pivot_conn.setVisible(False)
+        self.bc_pivot_leaders.setData(lx, ly, connect="finite"); self.bc_pivot_leaders.setVisible(True)
+
     def _refresh_selection_stats(self) -> None:
         """Live Magic-Selection readout: aggregate the buckets inside the box + show the stats box.
         Runs each frame, so a selection reaching the live edge updates as buckets form."""
@@ -2392,7 +2481,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0()                        # smoothed twin: clear on selection teardown (liq is NOT selection-scoped)
+            self._clear_panel0(); self._clear_pivot()   # smoothed twin + pivot marks: clear on selection teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2422,7 +2511,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0()                        # smoothed twin: clear on selection teardown (liq is NOT selection-scoped)
+            self._clear_panel0(); self._clear_pivot()   # smoothed twin + pivot marks: clear on selection teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
@@ -2452,8 +2541,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._reposition_sel_box(rect)   # reuse last frame's overlays; just keep the box glued
                 return
             self._sel_sig = sig
+            try:
+                self._draw_pivot(filtered, self._global_idx_offset, lo_i, hi_i)   # PIVOT INDICATOR ('p')
+            except Exception:
+                self._clear_pivot()
         else:
             self._sel_sig = None
+            self._clear_pivot()
         agg = self._aggregate_selection(filtered, x0, y0, x1, y1, tv)
         if not agg:
             self.sel_stats.hide()
@@ -2473,7 +2567,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0()                        # smoothed twin: clear on selection teardown (liq is NOT selection-scoped)
+            self._clear_panel0(); self._clear_pivot()   # smoothed twin + pivot marks: clear on selection teardown
             for _b in self._spread_badges.values():
                 _b.hide()
             self.phase_tbl.hide()
