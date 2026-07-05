@@ -66,8 +66,8 @@ _TUNNEL: "Optional[SSHTunnelManager]" = None   # set in main(); the refresh butt
 # per-tick (truest follow), both False = per-close, X-True/Y-False = track-X / stable-Y.
 FOLLOW_WINDOW = 100       # buckets shown in the live window
 FOLLOW_MARGIN = 8         # buckets of right padding so the live edge isn't flush to the axis
-LIQ_MIN_PX_PER_BAR = 3.0  # Ctrl+L labels: below this bar width, suppress (density floor — mirrors the whisker fallback)
-LIQ_MAX_LABELS = 40       # Ctrl+L labels: hard cap on simultaneously-drawn labels (highest-tier / nearest kept)
+LIQ_MIN_PX_PER_BAR = 0.5  # Ctrl+L labels: below this bar width, suppress (cap+even-spread keep it readable/perf-safe)
+LIQ_MAX_LABELS = 40       # Ctrl+L labels: hard cap on simultaneously-drawn labels (Tier-A first, then even spread)
 FOLLOW_PAD_FRAC = 0.08    # Y padding as a fraction of the visible candle range
 FOLLOW_AXIS_TOL_FRAC = 0.01  # per-axis "did it move?" threshold as a fraction of that axis's span —
                              # absorbs float noise + off-axis drift on a wobbly horizontal drag (tunable)
@@ -1943,10 +1943,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._liq_hide_marks(); self._liq_note(self._liq_empty_msg(lo_gid, hi_gid), vx0, vy1)
             return
         self._liq_note(None)                                 # something to draw -> drop the note
-        if len(vis) > LIQ_MAX_LABELS:                        # cap: Tier-A first, then nearest the view centre
-            cx = (lo_gid + hi_gid) * 0.5
-            vis = sorted(vis, key=lambda ev: (0 if ev["tier"] == "A" else 1, abs(ev["gid"] - cx)))[:LIQ_MAX_LABELS]
-            vis.sort(key=lambda ev: ev["gid"])
+        if len(vis) > LIQ_MAX_LABELS:                        # cap: keep all Tier-A, then EVENLY sample the rest
+            A = [e for e in vis if e["tier"] == "A"]          # (spread across the view, not bunched at centre)
+            B = [e for e in vis if e["tier"] != "A"]
+            keep = A[:LIQ_MAX_LABELS]; room = LIQ_MAX_LABELS - len(keep)
+            if room > 0 and B:
+                step = max(1, len(B) // room)
+                keep += B[::step][:room]
+            vis = sorted(keep, key=lambda ev: ev["gid"])
         dy = (vy1 - vy0) * 0.035
         lx, ly = [], []; used = 0
         for ev in vis:
