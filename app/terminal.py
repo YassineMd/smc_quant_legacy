@@ -380,7 +380,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _lsf = QtGui.QFont("Consolas", 9); self._liq_status.textItem.setFont(_lsf)
         self._liq_status.setZValue(33); self.plot.addItem(self._liq_status, ignoreBounds=True)
         self._liq_status.setVisible(False); self._liq_status_txt = None
-        # PIVOT INDICATOR ('p') — S5j-r5 confluence detection + entry, SELECTION-SCOPED (only inside a drawn
+        # PIVOT INDICATOR (Ctrl+P) — S5j-r5 confluence detection + entry, SELECTION-SCOPED (only inside a drawn
         # Mode-10 selection; app.pivot_detect). Marks the FIRST fire's detection + its entry: two filled labels
         # (yellow = detection B/S-P_idx, white = entry B/S-P-E_idx), a DASHED faded-gray leader from each candle
         # to its label, and a SOLID faded-gray line joining the two. Buys below the candles, sells mirrored above.
@@ -761,7 +761,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         activated=lambda: self.menu.layer_checks["m10_stats"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("D"), self,
                         activated=lambda: self.menu.sub_checks["drawing"].toggle())
-        QtGui.QShortcut(QtGui.QKeySequence("P"), self, activated=self._toggle_pivot)  # PIVOT INDICATOR (selection-scoped); m10_poc stays on its menu checkbox
+        QtGui.QShortcut(QtGui.QKeySequence("P"), self,
+                        activated=lambda: self.menu.layer_checks["m10_poc"].toggle())
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+P"), self, activated=self._toggle_pivot)  # PIVOT INDICATOR (selection-scoped)
         QtGui.QShortcut(QtGui.QKeySequence("L"), self,
                         activated=lambda: self.menu.layer_checks["m10_liq"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("F"), self,
@@ -2391,9 +2393,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.zone_slider.hide()
             self.eff_slider.hide()
 
-    # ---------------------------------------------------------------- PIVOT INDICATOR ('p')
+    # ---------------------------------------------------------------- PIVOT INDICATOR (Ctrl+P)
     def _toggle_pivot(self) -> None:
-        """'p' — PIVOT INDICATOR on/off (S5j-r5 confluence detection + entry; only shows inside a selection)."""
+        """Ctrl+P — PIVOT INDICATOR on/off (S5j-r5 confluence detection + entry; only shows inside a selection)."""
         self.show_pivot = not self.show_pivot
         if not self.show_pivot:
             self._clear_pivot()
@@ -2542,7 +2544,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 return
             self._sel_sig = sig
             try:
-                self._draw_pivot(filtered, self._global_idx_offset, lo_i, hi_i)   # PIVOT INDICATOR ('p')
+                self._draw_pivot(filtered, self._global_idx_offset, lo_i, hi_i)   # PIVOT INDICATOR (Ctrl+P)
             except Exception:
                 self._clear_pivot()
         else:
