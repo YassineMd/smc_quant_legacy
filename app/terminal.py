@@ -2433,18 +2433,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             fires = pivot_detect.detect_pivots(filtered[a:b_end])
         except Exception:
             self._clear_pivot(); self._pivot_sig = sig; return
-        fl = sorted((a + f["det_i"], (a + f["entry_i"]) if f["entry_i"] is not None else None,
-                     a + f["wait_end_i"], f["side"]) for f in fires)
-        setups = []; scan_from = lo_i           # SEQUENTIAL: complete setups only; resume after each entry
+        fl = sorted(((a + f["det_i"], (a + f["entry_i"]) if f["entry_i"] is not None else None,
+                      a + f["wait_end_i"], f["side"]) for f in fires), key=lambda t: (t[0], t[3]))
+        # INDEPENDENT buy/sell chains: each side keeps its OWN resume pointer, so a buy setup's entry gates
+        # only the next BUY and a sell's only the next SELL — the two sequences can overlap in time.
+        setups = []; scan_from = {"long": lo_i, "short": lo_i}
         for det, ent, we, side in fl:
             if det > hi_i:
                 break
-            if det < scan_from:
+            if det < scan_from[side]:
                 continue
             if ent is not None:
-                setups.append((det, ent, side)); scan_from = ent + 1
+                setups.append((det, ent, side)); scan_from[side] = ent + 1
             else:
-                scan_from = we                  # cancelled -> resume past the dead hour, don't mark
+                scan_from[side] = we            # cancelled -> resume that side past the dead hour, don't mark
         if not setups:
             for _lab in self._pivot_label_pool:
                 _lab.setVisible(False)
