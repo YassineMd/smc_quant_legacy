@@ -152,14 +152,17 @@ DATA_DIR = os.path.join(PROJECT_DIR, "data")
 FOOTPRINTS_FILE = os.path.join(DATA_DIR, "server_footprints.json")  # legacy JSON (migration source)
 HISTORY_DB = os.path.join(DATA_DIR, "history.db")  # SQLite state store (instant rehydration)
 
-# --- Bookmap-style depth/trade capture (Phase 1) — a SEPARATE, ephemeral 6h rolling store -------------
+# --- Bookmap-style depth/trade capture (Phase 1) — a SEPARATE, ephemeral rolling store ----------------
 # Lives in its own depth.db (own connection/sync/prune), fully decoupled from the durable bucket history.
 DEPTH_DB = os.path.join(DATA_DIR, "depth.db")
 DEPTH_CAPTURE_ENABLED = True    # master off-switch for the whole depth/trade capture subsystem
 DEPTH_BAND_PCT = 0.0            # capture band as ±% of mid; <=0 = WHOLE BOOK (no truncation, real fidelity)
 DEPTH_SNAPSHOT_SECS = 30        # full-book anchor cadence (+ one on every diff-stream reconnect)
 DEPTH_SYNC_SECS = 10            # off-loop executor write cadence (drain buffers -> depth.db)
-DEPTH_RETENTION_HOURS = 6       # HARD time-based prune: nothing older than this survives a sync
+DEPTH_RETENTION_HOURS = 72      # HARD time-based prune (governs depth_deltas + trade_tape + snapshots alike).
+                                # 2026-07-05: 6 -> 72 after the mem PLATEAU gate (725.6MB @84.5h < 734.7 @23.5h),
+                                # so the Pull detector has real forward depth+tape history to test against.
+                                # Disk: depth.db ~101MB@6h -> ~1.2GB@72h projected (linear); / has 5.1GB free.
 DEPTH_BUFFER_CAP = 200000       # max buffered records per stream (drop-oldest) so a stalled write can't grow RAM
 # Phase 2b — terminal heatmap render (the daemon serves raw sizes; these shape the request + local contrast)
 HEATMAP_YBINS = 400             # price bins (Y resolution) requested per window
