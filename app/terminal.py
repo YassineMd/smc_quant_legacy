@@ -2434,17 +2434,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             self._clear_pivot(); self._pivot_sig = sig; return
         fl = sorted(((a + f["det_i"], (a + f["entry_i"]) if f["entry_i"] is not None else None,
-                      a + f["wait_end_i"], f["side"]) for f in fires), key=lambda t: (t[0], t[3]))
+                      a + f["wait_end_i"], f["side"], a + f["zref_i"]) for f in fires), key=lambda t: (t[0], t[3]))
         # INDEPENDENT buy/sell chains: each side keeps its OWN resume pointer, so a buy setup's entry gates
         # only the next BUY and a sell's only the next SELL — the two sequences can overlap in time.
         setups = []; scan_from = {"long": lo_i, "short": lo_i}
-        for det, ent, we, side in fl:
+        for det, ent, we, side, zref in fl:
             if det > hi_i:
                 break
             if det < scan_from[side]:
                 continue
             if ent is not None:
-                setups.append((det, ent, side)); scan_from[side] = ent + 1
+                setups.append((det, ent, side, zref)); scan_from[side] = ent + 1
             else:
                 scan_from[side] = we            # cancelled -> resume that side past the dead hour, don't mark
         if not setups:
@@ -2455,7 +2455,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (_vx0, _vx1), (vy0, vy1) = self.vb.viewRange()
         dy = (vy1 - vy0) * 0.08
         lx, ly, cx, cy, used = [], [], [], [], 0
-        for det, ent, side in setups:
+        for det, ent, side, zref in setups:
             buy = side == "long"; pfx = "B" if buy else "S"; fld = "low" if buy else "high"
             col = pg.mkBrush(40, 230, 90) if buy else pg.mkBrush(255, 45, 70)   # green buy / red sell
             tips = [float(filtered[det].get(fld, 0.0))]
@@ -2465,6 +2465,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             gid = off + det
             used = self._pivot_put_label(used, det, shelf, col, " %s-P_%d " % (pfx, gid))
             lx += [det, det, float("nan")]; ly += [float(filtered[det].get(fld, 0.0)), shelf, float("nan")]
+            if 0 <= zref < n:                    # dashed leader from the label back to the leg-5 (N=60..100)
+                zy = float(filtered[zref].get("open", filtered[zref].get("open_price", 0.0)))  # reference open
+                lx += [det, zref, float("nan")]; ly += [shelf, zy, float("nan")]
             if ent < n:                          # entry references the DETECTION idx
                 used = self._pivot_put_label(used, ent, shelf, col, " %s-P-E_%d " % (pfx, gid))
                 lx += [ent, ent, float("nan")]; ly += [float(filtered[ent].get(fld, 0.0)), shelf, float("nan")]

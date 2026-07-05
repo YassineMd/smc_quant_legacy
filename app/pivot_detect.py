@@ -133,7 +133,8 @@ def _leg1(sum0, b, side):
 # --- the full per-bar detection -------------------------------------------------------------------
 def detect_pivots(buckets):
     """Scan ``buckets`` (list of wire/full_snapshot dicts) and return every S5j-r5 fire as
-    {det_i, entry_i, side}. det_i/entry_i are indices into ``buckets`` (entry_i None = CANCELLED)."""
+    {det_i, entry_i, side, wait_end_i, zref_i}. det_i/entry_i/zref_i are indices into ``buckets`` (entry_i
+    None = CANCELLED); zref_i = the bar that set the leg-5 N=60..100 extreme open (for the overlay leader)."""
     n = len(buckets)
     if n < FIRST + 1:
         return []
@@ -153,12 +154,16 @@ def detect_pivots(buckets):
     rop = np.round(op * 100).astype(np.int64); rcl = np.round(cl * 100).astype(np.int64)
     rbase = np.round(base * 100).astype(np.int64)
 
-    # leg 5 zone: max/min open over [b-99, b-59] (N 60..100), EXISTS form
+    # leg 5 zone: max/min open over [b-99, b-59] (N 60..100), EXISTS form. zamax/zamin = the bar that SET that
+    # extreme (first occurrence on a tie) — the candle the range context is measured against, for the overlay.
     zmax = np.full(n, np.inf); zmin = np.full(n, -np.inf)
+    zamax = np.zeros(n, np.int64); zamin = np.zeros(n, np.int64)
     for b in range(FIRST, n):
-        z = rop[b - 99:b - 58]                      # 41 opens = N 60..100
+        lo0 = b - 99
+        z = rop[lo0:b - 58]                         # 41 opens = N 60..100
         if len(z):
             zmax[b] = z.max(); zmin[b] = z.min()
+            zamax[b] = lo0 + int(np.argmax(z)); zamin[b] = lo0 + int(np.argmin(z))
 
     out = []
     for b in range(FIRST, n):
@@ -185,7 +190,8 @@ def detect_pivots(buckets):
                 continue
             out.append({"det_i": b, "side": side,
                         "entry_i": _entry_after(rcl, rop, rbase, lo_, hi, base, et, b, side, n),
-                        "wait_end_i": int(np.searchsorted(et, et[b] + WAIT_SECS, side="right"))})
+                        "wait_end_i": int(np.searchsorted(et, et[b] + WAIT_SECS, side="right")),
+                        "zref_i": int(zamax[b] if side == "long" else zamin[b])})
     return out
 
 
