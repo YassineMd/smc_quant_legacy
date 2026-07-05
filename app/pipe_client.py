@@ -136,6 +136,7 @@ class PipeClientWorker(threading.Thread):
             self.order_blocks = []
             self.absorptions = []
             self.liquidations = []
+            self._liq_sweeps: dict = {}   # (idx,side) -> {ts,side,level,idx}; 15m sweeps pushed by the daemon
             self.closed_buckets = []
             self.active_bucket = {}
             self.target_vol = 0.0   # stale until the new tf's catch-up arrives (scale labels skip till then)
@@ -389,6 +390,9 @@ class PipeClientWorker(threading.Thread):
                 self.depth = {"bids": pkt.bids, "asks": pkt.asks}
                 self.oi = pkt.oi
                 self.size_thr = pkt.size_thr
+            elif isinstance(pkt, protocol.LiqSweepPacket):   # tf-agnostic: keep regardless of subscribed tf
+                self._liq_sweeps[(pkt.idx, pkt.side)] = {
+                    "ts": pkt.ts, "side": pkt.side, "level": pkt.level, "idx": pkt.idx}
             elif isinstance(pkt, protocol.DepthWindowPacket):
                 self._hm_window = pkt          # ~MB grid stays in the delivery buffer (NOT snapshot())
                 self._hm_ver += 1
@@ -450,6 +454,7 @@ class PipeClientWorker(threading.Thread):
                 "target_vol": self.target_vol,
                 "closed_buckets": self._cb_exp,
                 "total_closed": self._total_closed,
+                "liq_sweeps": list(self._liq_sweeps.values()),   # daemon-pushed 15m sweeps (read-only)
                 "active_bucket": dict(self.active_bucket),
                 "connected": self.connected,
                 "catchup_loading": self._catchup_loading,

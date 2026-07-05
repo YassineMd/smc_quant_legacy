@@ -36,7 +36,7 @@ from urllib3.util.retry import Retry
 
 from . import config
 from .protocol import (CatchupEndPacket, CatchupPacket, CatchupStartPacket,
-                       LiquidationPacket, ObPacket, PulsePacket, TickPacket)
+                       LiqSweepPacket, LiquidationPacket, ObPacket, PulsePacket, TickPacket)
 from .aggtrade import OiAttributor, candle_open, median_target_vol, trade_to_tick
 from .quant_engine import (QuantEngine, build_engine_registry, calc_absorption,
                            calc_quant_obs, rank_obs)
@@ -67,6 +67,8 @@ def _combined_kline_url() -> str:
 # "daemon down" and never thrash-recreating.
 # ---------------------------------------------------------------------------
 _OB_POOL_MAX_FAILS = 3   # after this many failures, latch permanently to on-loop (stable, no thrash)
+LIQ_SWEEP_TF = "15m"     # the sweep signal timeframe pushed tf-agnostically to every client
+LIQ_SWEEP_WINDOW = 140   # per-close detector tail (> LOOKBACK+Z_BASE+K); a new sweep is always at the edge
 
 
 def _recompute_ob_line(buckets: list, tf_key: str, vpin: float) -> str:
@@ -134,6 +136,12 @@ class MarketDataCore:
         self._size_win: deque = deque()
         self._size_thr: list = []
         self._size_thr_t: float = 0.0    # last recompute (ms; throttle)
+        # LIVE 15m SWEEP PUSH: the frozen Tier-A detector runs on 15m closes (ungated) and broadcast_all's each
+        # NEW sweep so any client (even one on 1m) can place it by ts. _liq_sweeps = the current set (for
+        # catch-up); _liq_emitted = (idx,side) dedup keys; seeded once from the rehydrated history at startup.
+        self._liq_sweeps: list = []
+        self._liq_emitted: set = set()
+        self._liq_seeded: bool = False
 
     # ------------------------------------------------------------------
     # CATCHUP builder (per subscribing client's timeframe)
@@ -478,6 +486,62 @@ class MarketDataCore:
                              new_buckets=new_buckets, vpin=engine.vpin,
                              total_closed=engine.total_closed).to_line(),
                 )
+            # LIVE 15m SWEEP PUSH — UNGATED (runs whether or not anyone subscribes to 15m): a 1m client must
+            # still get 15m sweeps. Windowed detect on the just-closed 15m bars -> broadcast_all any new Tier-A.
+            if delta > 0 and tf_key == LIQ_SWEEP_TF:
+                self._emit_liq_sweeps(engine)
+
+    # ------------------------------------------------------------------
+    # Live 15m liquidity-sweep push (tf-agnostic; the SAME frozen app.liq_detect the study/terminal use)
+    # ------------------------------------------------------------------
+    def _liq_scan(self, engine: "QuantEngine", full: bool) -> None:
+        """Detect Tier-A sweeps on the 15m closed buckets and record + (live) broadcast any NEW one.
+        ``full`` scans the whole history (one-time seed); otherwise a windowed tail (per close). Deduped by
+        (idx, side); idx is the ABSOLUTE 15m Idx so seed and live never double-count. O(window) steady-state."""
+        from app import liq_detect                          # local import: keep daemon import graph lean
+        cb = engine.closed_buckets
+        n = len(cb)
+        if n < liq_detect.Z_BASE + liq_detect.K + 1:
+            return
+        win = n if full else min(n, LIQ_SWEEP_WINDOW)
+        try:                                                 # NEVER let a bad bucket crash startup or the loop
+            tail = [b.full_snapshot() for b in list(cb)[-win:]]  # wire dicts ('close' not 'close_price' — detector copes)
+            evs = liq_detect.detect_sweeps(tail)
+        except Exception as ex:
+            print(f"LIQ SWEEP SCAN ERROR (full={full}): {ex}")
+            return
+        base_idx = engine.total_closed - len(tail) + 1       # absolute 15m Idx of tail[0]
+        for e in evs:
+            if e["tier"] != "A":                             # TIER-A ONLY on the wire
+                continue
+            idx = base_idx + e["i"]
+            key = (idx, e["side"])
+            if key in self._liq_emitted:
+                continue
+            self._liq_emitted.add(key)
+            d = tail[e["i"]]
+            rec = dict(ts=round(float(d.get("end_time", 0.0)), 3), side=e["side"],
+                       level=round(float(e["level"]), 4), idx=int(idx))
+            self._liq_sweeps.append(rec)
+            if not full:                                     # seed is silent; live pushes to everyone
+                self.broadcast_all(LiqSweepPacket(**rec).to_line())
+
+    def seed_liq_sweeps(self) -> None:
+        """One-time full scan of the rehydrated 15m history so a client connecting before the first live 15m
+        close still gets the recent sweeps as catch-up. Called at startup, off the trade loop."""
+        if self._liq_seeded:
+            return
+        eng = self.engines.get(LIQ_SWEEP_TF)
+        if eng is not None:
+            self._liq_scan(eng, full=True)
+        self._liq_seeded = True
+
+    def _emit_liq_sweeps(self, engine: "QuantEngine") -> None:
+        self._liq_scan(engine, full=False)
+
+    def liq_sweep_catchup_lines(self) -> list:
+        """The current 15m Tier-A set as wire lines — sent to each client on connect (one packet per sweep)."""
+        return [LiqSweepPacket(**rec).to_line() for rec in self._liq_sweeps]
 
     # ------------------------------------------------------------------
     # Phase 1: depth/trade capture tees (O(1), on-loop; bucket path untouched)

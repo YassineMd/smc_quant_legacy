@@ -26,6 +26,15 @@ def _f(d, k):
     return float(v) if v is not None else 0.0
 
 
+def _close(d):
+    """Bucket close price. The persisted/study dicts use 'close_price'; the live WIRE snapshot uses 'close'
+    (quant_engine._assemble). Accept either so the SAME rule runs identically on study data AND live buckets."""
+    v = d.get("close_price")
+    if v is None:
+        v = d.get("close")
+    return float(v) if v is not None else 0.0
+
+
 def _pivots(H, L):
     n = len(H); ph = {}; pl = {}
     for j in range(K, n - K):
@@ -64,7 +73,7 @@ def detect_sweeps(buckets, start=None):
     if n < Z_BASE + K + 1:
         return []
     H = [_f(b, "high") for b in buckets]; L = [_f(b, "low") for b in buckets]
-    C = [_f(b, "close_price") for b in buckets]
+    C = [_close(b) for b in buckets]
     clS = [_f(b, "clS") for b in buckets]; clL = [_f(b, "clL") for b in buckets]
     oi = [(_f(b, "opL") + _f(b, "opS")) - (_f(b, "clL") + _f(b, "clS")) for b in buckets]
     ph, pl = _pivots(H, L)

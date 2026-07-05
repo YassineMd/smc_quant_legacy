@@ -38,6 +38,7 @@ TYPE_DEPTH_WINDOW = "DEPTH_WINDOW"   # Phase 2a: heatmap window (W×H resting-si
 TYPE_DEPTH_COL = "DEPTH_COL"         # Phase 2a: one live heatmap column (right-edge update)
 TYPE_TRADES_WINDOW = "TRADES_WINDOW"  # Phase 3: executed-trade bubbles window (raw trades in [t0,t1]×[ylo,yhi])
 TYPE_TRADE_BATCH = "TRADE_BATCH"      # Phase 3: live executed trades since the last batch (pulse cadence)
+TYPE_LIQSWEEP = "LIQ_SWEEP"           # live 15m Tier-A liquidity sweep (tf-agnostic, broadcast_all)
 
 NEWLINE = "\n"
 
@@ -316,6 +317,23 @@ class TradeBatchPacket:
         return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
 
 
+@dataclass
+class LiqSweepPacket:
+    """One 15m Tier-A liquidity sweep, computed daemon-side and pushed tf-agnostically (broadcast_all) the
+    moment a 15m bucket closes — so ANY terminal (even one on the 1m chart) can place it by ``ts``. Also used
+    one-per-sweep for the on-connect catch-up. Tiny: a few per day live, the whole 15m set (~dozens) on
+    connect."""
+
+    ts: float          # 15m bucket close time (unix seconds) — the terminal places the label by this
+    side: str          # "S" (upside sweep) / "B" (downside)
+    level: float       # swept price level (the label's y-anchor)
+    idx: int           # 15m bucket Idx (per-tf counter) — dedup key on both ends
+    type: str = TYPE_LIQSWEEP
+
+    def to_line(self) -> str:
+        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+
+
 # ---------------------------------------------------------------------------
 # Decode
 # ---------------------------------------------------------------------------
@@ -378,6 +396,9 @@ _PARSERS = {
     TYPE_TRADE_BATCH: lambda d: TradeBatchPacket(
         n=d["n"], ts_b64=d.get("ts_b64", ""), price_b64=d.get("price_b64", ""),
         qty_b64=d.get("qty_b64", ""), side_b64=d.get("side_b64", ""),
+    ),
+    TYPE_LIQSWEEP: lambda d: LiqSweepPacket(
+        ts=d["ts"], side=d["side"], level=d["level"], idx=d.get("idx", 0),
     ),
 }
 

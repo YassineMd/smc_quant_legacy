@@ -370,8 +370,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # lists so the draw path culls to the visible range by bisect — NEVER iterates all rows, NEVER
         # re-detects per frame (that was the 250->1700-item / 0.55->572ms regression).
         self._liq_events = []; self._liq_gids = []; self._liq_ts = []; self._liq_seen = set()
-        self._csv_max_gid = 0; self._liq_scan_lo = None; self._liq_scan_hi = 0; self._liq_live_key = None
-        self._load_liq_csv()                                     # 15m sweep set, ONCE on load (always 15m)
+        self._load_liq_csv()                                     # offline 15m set (historical fallback); live = daemon
         self.bc_liq_leader = pg.PlotDataItem(
             pen=pg.mkPen((160, 160, 160, 180), width=1, style=QtCore.Qt.DashLine))
         self.bc_liq_leader.setZValue(30); self.plot.addItem(self.bc_liq_leader, ignoreBounds=True)
@@ -1791,95 +1790,55 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # ---------------------------------------------------------------- liquidity-sweep labels (Ctrl+L)
     # The chart ALWAYS shows the 15m sweeps (they grade far cleaner than 1m) — on EVERY timeframe. Each event
     # is placed by TIMESTAMP onto whatever bar it happened on (a 15m sweep pins to the 1m/5m/etc. bar covering
-    # its close), so it lands correctly regardless of the chart's own bucket Idx. Live 15m detection appends
-    # here only while the 15m feed is active (gated in _build_scanner_buckets).
-    _LIQ_TF = "15m"
-
+    # its close), so it lands correctly regardless of the chart's own bucket Idx. LIVE sweeps arrive from the
+    # daemon (broadcast_all, tf-agnostic) via _merge_liq_sweeps; the offline CSV is a historical fallback.
     def _load_liq_csv(self) -> None:
-        """Load the 15m Tier-A sweep set ONCE into gid- AND ts-sorted parallel lists. gid drives the live-scan
-        bookkeeping (per-15m-Idx); ts drives DRAW placement (works on any chart). gid is monotonic with ts for
-        a single tf, so one sort keeps both lists ordered."""
+        """Load the 15m Tier-A sweep set (historical fallback) into gid- AND ts-sorted parallel lists. LIVE
+        sweeps now arrive from the DAEMON (_merge_liq_sweeps); this offline set just seeds history for when the
+        daemon's set doesn't reach back far enough (or it's disconnected). ts drives DRAW placement (any chart);
+        gid is the 15m Idx, used only for (gid,side) dedup against the daemon feed."""
         import csv as _csv
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "study", "out", "liq_sweeps_15m.csv")
-        evs = []; csv_max = 0
+        evs = []
         try:
             with open(path, encoding="utf-8") as f:
                 first = f.tell(); ln = f.readline()
                 if not ln.startswith("#"):
                     f.seek(first)
                 for r in _csv.DictReader(f):
-                    bid = int(r["bucket_id"])
-                    if bid > csv_max:
-                        csv_max = bid                       # CSV data horizon (live detection starts past it)
                     if r["tier"] != "A":                    # TIER-A ONLY — Tier-B are calibration decoys
                         continue
-                    evs.append(dict(gid=bid, ts=float(r["ts"]), side=r["side_label"], kind="Sweep",
-                                    level=float(r["swept_level"]), tier="A"))
+                    evs.append(dict(gid=int(r["bucket_id"]), ts=float(r["ts"]), side=r["side_label"],
+                                    kind="Sweep", level=float(r["swept_level"]), tier="A"))
         except (OSError, KeyError, ValueError):
-            evs = []; csv_max = 0
+            evs = []
         evs.sort(key=lambda e: e["gid"])
         self._liq_events = evs
         self._liq_gids = [e["gid"] for e in evs]
-        self._liq_ts = [e["ts"] for e in evs]               # DRAW places by this (timestamp), not gid
+        self._liq_ts = [e["ts"] for e in evs]
         self._liq_seen = {(e["gid"], e["side"]) for e in evs}
-        self._csv_max_gid = csv_max
-        self._liq_scan_lo = None                            # live-scan covered range (None = nothing scanned yet)
-        self._liq_scan_hi = self._csv_max_gid
-        self._liq_live_key = None
 
-    def _liq_scan_live(self, filtered: list, off: int, n_closed: int) -> None:
-        """Bucket-close / window-growth hook (NOT the draw path): detect sweeps on the loaded CLOSED buckets
-        ABOVE the CSV horizon and merge any new event. Scans ONLY the parts of the loaded region not yet
-        covered — two-sided: new closes at the top AND older chunks that fill in BEHIND (the pipe sets
-        total_closed before the window finishes streaming), each with left-context and deduped. So it is
-        robust to progressive loading and stays O(new bars), never O(N) per frame."""
-        from app import liq_detect
-        ctx = liq_detect.LOOKBACK + liq_detect.Z_BASE + liq_detect.K + 5      # left-context for a scanned bar
-        if n_closed < liq_detect.Z_BASE + liq_detect.K + 1:
+    def _merge_liq_sweeps(self, sweeps) -> None:
+        """Merge the daemon-pushed 15m sweeps (snapshot['liq_sweeps']) into the layer, deduped by (idx, side)
+        against the offline set and each other. Cheap: dozens of tiny dicts, and a re-sort only when a genuinely
+        new sweep arrives — which then forces one redraw so it appears the instant the 15m bar closes."""
+        if not sweeps:
             return
-        edge = off + n_closed - 1
-        region_lo = max(off, self._csv_max_gid + 1)         # only the loaded region ABOVE the CSV horizon
-        region_hi = edge
-        if region_hi < region_lo:
-            return                                          # nothing above the CSV horizon is loaded yet
-        subs = []                                           # gid sub-ranges still to scan
-        if self._liq_scan_lo is None:                       # first scan -> the whole loaded above-CSV region
-            subs.append((region_lo, region_hi))
-        else:
-            if region_hi > self._liq_scan_hi:               # new closes at the top
-                subs.append((max(region_lo, self._liq_scan_hi + 1), region_hi))
-            if region_lo < self._liq_scan_lo:               # older chunks filled in behind (overlap for context)
-                subs.append((region_lo, min(region_hi, self._liq_scan_lo + ctx - 1)))
         added = False
-        for g0, g1 in subs:
-            if g1 < g0:
+        for s in sweeps:
+            gid = int(s.get("idx", 0)); side = s.get("side")
+            key = (gid, side)
+            if key in self._liq_seen:
                 continue
-            lo_i = max(0, (g0 - off) - ctx); hi_i = (g1 - off) + 1
-            try:
-                evs = liq_detect.detect_sweeps(filtered[lo_i:hi_i])
-            except Exception:
-                continue
-            base = off + lo_i
-            for e in evs:
-                if e["tier"] != "A":                        # TIER-A ONLY on the chart (Tier-B are decoys)
-                    continue
-                gid = base + e["i"]
-                if not (g0 <= gid <= g1):
-                    continue
-                key = (gid, e["side"])
-                if key in self._liq_seen:
-                    continue
-                self._liq_seen.add(key)
-                bts = float(filtered[gid - off].get("end_time", 0.0))   # bar time -> DRAW places by this
-                self._liq_events.append(dict(gid=gid, ts=bts, side=e["side"], kind=e["kind"],
-                                             level=e["level"], tier="A"))
-                added = True
-        self._liq_scan_lo = region_lo if self._liq_scan_lo is None else min(self._liq_scan_lo, region_lo)
-        self._liq_scan_hi = max(self._liq_scan_hi, region_hi)
-        if added:                                           # low-side inserts break append-order -> re-sort
-            self._liq_events.sort(key=lambda ev: ev["gid"])
-            self._liq_gids = [ev["gid"] for ev in self._liq_events]
-            self._liq_ts = [ev["ts"] for ev in self._liq_events]
+            self._liq_seen.add(key)
+            self._liq_events.append(dict(gid=gid, ts=float(s.get("ts", 0.0)), side=side, kind="Sweep",
+                                         level=float(s.get("level", 0.0)), tier="A"))
+            added = True
+        if added:
+            self._liq_events.sort(key=lambda e: e["gid"])
+            self._liq_gids = [e["gid"] for e in self._liq_events]
+            self._liq_ts = [e["ts"] for e in self._liq_events]
+            self._last_scanner_sig = None                   # a new live sweep -> repaint now
 
     def _toggle_liq(self) -> None:
         """Ctrl+L — show/hide the liquidity-sweep labels (detector v1, uncalibrated)."""
@@ -1938,7 +1897,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """15m sweep labels on the ACTIVE chart, placed by TIMESTAMP (so 15m sweeps land on the 1m bar they
         happened on). Cull the ts-sorted set to the visible time window, cap at LIQ_MAX_LABELS (even spread),
         reuse a bounded pool. Each label sits at the SWEPT PRICE level of that sweep. On/off is purely
-        self.show_liq. Detection is NOT done here (see _liq_scan_live)."""
+        self.show_liq. Detection is NOT done here (offline CSV + daemon feed populate the set)."""
         import bisect as _bi
         if not self.show_liq or not buckets or not self._liq_ts:
             self._clear_liq(); return
@@ -3247,6 +3206,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _pc = time.perf_counter; _t0 = _pc()                 # session profiler: frame total (negligible)
         snap = self.worker.snapshot()
         self._last_snap = snap
+        self._merge_liq_sweeps(snap.get("liq_sweeps"))   # fold in any daemon-pushed 15m sweeps (tf-agnostic)
         _s = _pc(); self._audio_announce(snap); self._refresh_scale_labels(snap); self._perf_note("audio_scale", _s)
 
         # Every mode is bucket-native now (time chart removed, Phase B): draw the scanner, refresh
@@ -3559,7 +3519,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # minute and share it — so the fingerprint must include curr_vol. The
         # stale active is identical to closed[-1] (start_time AND a full curr_vol);
         # a fresh same-minute bucket has a smaller, differing curr_vol and is kept.
-        active_appended = False
         if active and active.get("curr_vol", 0.0) > 0:
             last = closed_list[-1] if closed_list else None
             is_stale_dup = (
@@ -3568,7 +3527,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 and active.get("curr_vol") == last.get("curr_vol")
             )
             if not is_stale_dup:
-                combined.append(active); active_appended = True
+                combined.append(active)
 
         anchor_unix = self.menu.scan_start_unix()
         total_closed = int(snap.get("total_closed", 0) or 0)   # DB-id of closed_list[-1] (0 = pre-redeploy daemon)
@@ -3597,14 +3556,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # LIVE liquidity detection — bucket-close / window-growth hook, NOT the draw path and NOT keyed on
         # curr_vol. Keyed on (total_closed, #closed loaded): fires on a new close AND as the pipe streams the
         # window in behind a known total_closed (so live events aren't skipped on a partial first frame).
-        # only detect live when the 15m feed is actually streaming (the sweep set is 15m; running the detector
-        # on 1m/5m/etc. buckets would produce that timeframe's sweeps, not 15m).
-        n_closed_local = len(filtered) - (1 if active_appended else 0)
-        live_key = (total_closed, n_closed_local)
-        if total_closed and live_key != self._liq_live_key and getattr(self, "_tf", None) == self._LIQ_TF:
-            self._liq_live_key = live_key
-            self._liq_scan_live(filtered, self._global_idx_offset, n_closed_local)
-
         x_indices: list[int] = list(range(len(filtered)))
         result = (filtered, x_indices, anchor_idx)
         self._scanner_bucket_sig = sig

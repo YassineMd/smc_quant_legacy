@@ -174,6 +174,9 @@ class DaemonServer:
                     tf=tf, seq=seq, closed_buckets=buckets[i:i + size]).to_line())
                 await asyncio.sleep(0)
             self._enqueue(client, self.core.catchup_end(tf).to_line())
+            # 15m sweeps are tf-agnostic — ship the current set so even a 1m client has them immediately.
+            for line in self.core.liq_sweep_catchup_lines():
+                self._enqueue(client, line)
         except Exception as e:
             print(f"CATCHUP SEND ERROR ({tf}): {e}")
 
@@ -257,6 +260,7 @@ class DaemonServer:
     # ------------------------------------------------------------------
     async def serve(self) -> None:
         self.store.rehydrate_engines(self.core.engines, self.footprints_db)
+        self.core.seed_liq_sweeps()   # one-time: build the 15m Tier-A set from the rehydrated history
 
         server = await asyncio.start_server(
             self.handle_client, host=config.IPC_HOST, port=config.IPC_PORT
