@@ -9,10 +9,13 @@ appends results; a config graduates or dies on accumulated forward sample only (
 | S5H-CONDROUTER | 2026-07-04 (this commit) | locked legs 1'-4 + ALL-form pullback leg 5 + cluster rule (anchor 21340 must stay rejected) | ROUTER: close beyond baseline -> MARKET at close; else WAIT 30 min for moving-baseline touch (taker) | arm A fixed TP+0.5/SL-0.3; arm B signal-death locked | taker/taker 0.10 | registered; ~1 setup/day; underpowered until forward n >= 20 |
 | PIVOT-P2HELD | 2026-07-06 (this commit) | S5j-r5 confluence via app/pivot_detect (the SHIPPED indicator), INDEPENDENT per-side sequential walk | WAIT-baseline-touch, taken ONLY IF the ALIGNED live eff-agg (panel-2) spread @E > 0 AND its min over [D,E] > -50 (`p2_live_at_e`>0 & `p2_live_min_de`>-50 in the CSV) | fixed TP+0.5/SL-0.3, 6h cap | taker/taker 0.10 | in-sample (Jul2-5, n=116) KEEP 47 TP 63.8% net +0.117% vs 44.0% base, Fisher p=0.0003; the STRONG candidate; awaiting forward n>=20/side |
 | PIVOT-ABSORB-E | 2026-07-06 (this commit) | S5j-r5 confluence via app/pivot_detect, INDEPENDENT per-side sequential walk | WAIT-baseline-touch, taken ONLY IF the entry bar is an ALIGNED absorption candle (long: sell-led `sv>bv` & closed up; short: buy-led & closed down; `entry_absorption`==1 in the CSV) | fixed TP+0.5/SL-0.3, 6h cap | taker/taker 0.10 | in-sample KEEP 41 TP 48.8% vs 44.0% base, Fisher p=0.56 (DIRECTIONAL only, underpowered); awaiting forward n |
+| PIVOT-4HZONE | 2026-07-06 (this commit) | S5j-r5 via app/pivot_detect, independent per-side walk | WAIT-baseline-touch, taken ONLY IF the pivot's DETECTION price sits in the last-COMPLETED 240x/4h buy/sell zone: buy -> lower/buyer wick (price <= vq_lo), sell -> upper/seller wick (price >= vq_hi); zones = `bar_quantiles.vq()` of the tf='4h' stored buckets (== the live SSH 240x stream) | fixed TP+0.5/SL-0.3, 6h cap | taker/taker 0.10 | in-sample (Jun28-Jul5, n=116) IN-ZONE 40 TP 62.5% vs OUT 34.2%, **Fisher p=0.006, both-sided (L 60/34, S 65/34)**; INDEPENDENT source (4h vol profile, not 1m eff-agg) -> the strongest candidate besides P2-held; awaiting forward n>=20/side |
 
 Re-run recipe per new snapshot: study/s5e_signal_exit.py (needs the S5b/S5d chain);
 study/s5h_conditional.py (self-contained on the merged tape + sweep parquet);
 study/pivot_backtest.py -> study/out/pivot_backtest_episodes.csv, then filter its rows: PIVOT-P2HELD =
 `p2_live_at_e`>0 AND `p2_live_min_de`>-50; PIVOT-ABSORB-E = `entry_absorption`==1 (both vs the unfiltered
 TP rate, over MKT/TOUCH rows only). pivot_backtest auto-globs study/data/history_snapshot_*.db so a fresh
-pull is picked up with no edits.
+pull is picked up with no edits. PIVOT-4HZONE = `python study/pivot_4hzone.py` (reads the tf='4h' buckets from
+the newest snapshot for the 240x zones + the CSV for outcomes). NOTE the 1m aged June 22 off the 10k cap, so
+the forward window starts wherever the freshest snapshot's 1m begins.
