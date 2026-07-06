@@ -2471,7 +2471,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                       a + f["wait_end_i"], f["side"], a + f["zref_i"]) for f in fires), key=lambda t: (t[0], t[3]))
         # INDEPENDENT buy/sell chains: each side keeps its OWN resume pointer, so a buy setup's entry gates
         # only the next BUY and a sell's only the next SELL — the two sequences can overlap in time.
-        setups = []; scan_from = {"long": lo_i, "short": lo_i}
+        setups = []; pending = []; scan_from = {"long": lo_i, "short": lo_i}
         for det, ent, we, side, zref in fl:
             if det > hi_i:
                 break
@@ -2479,9 +2479,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue
             if ent is not None:
                 setups.append((det, ent, side, zref)); scan_from[side] = ent + 1
+            elif we >= n:                       # PENDING: the 1h WAIT still runs past the live edge -> a fired
+                pending.append((det, side, zref)); scan_from[side] = we   # D whose entry hasn't landed yet
             else:
-                scan_from[side] = we            # cancelled -> resume that side past the dead hour, don't mark
-        if not setups:
+                scan_from[side] = we            # CANCELLED: wait fully elapsed, no touch -> don't mark
+        if not setups and not pending:
             self._pivot_hovers = []; self.pivot_tooltip.hide()
             for _lab in self._pivot_label_pool:
                 _lab.setVisible(False)
@@ -2566,6 +2568,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         self._pivot_hovers.append((e2, shelf, html_e2, buy))
                         lx += [e2, e2, float("nan")]; ly += [float(filtered[e2].get(fld, 0.0)), shelf, float("nan")]
                         cx += [ent, e2, float("nan")]; cy += [shelf, shelf, float("nan")]
+        # PENDING live D's: a fire whose entry hasn't landed yet (1h WAIT still open at the edge). Distinct
+        # AMBER ring = "waiting for entry"; it auto-completes into the full D(+E) setup on the next re-detect
+        # once price touches the baseline. Side colour = direction; no E/connector yet.
+        for det, side, zref in pending:
+            buy = side == "long"; fld = "low" if buy else "high"
+            fill = pg.mkBrush(40, 230, 90) if buy else pg.mkBrush(255, 45, 70)
+            lx, ly = seg[side]
+            dtip = float(filtered[det].get(fld, 0.0)); shelf = (dtip - dy) if buy else (dtip + dy)
+            gid = off + det; di = det - a
+            sd = ((2.0 * float(e_sh[di]) - 1.0) * 100.0) if 0 <= di < len(e_sh) else 0.0
+            p2d = sd if buy else -sd
+            phtml = ("<div style='font-family:Consolas; font-size:11px; color:#c8ccd4; padding:1px 3px'>"
+                     "<b style='color:%s'>%s-P_%s</b><br><b>N</b>: <b style='color:#e8ebf0'>%d</b> bars<br>"
+                     "P2@<b>D</b>: <span style='color:%s'>%+.0f%%</span><br>"
+                     "<b style='color:#ffb400'>&#9203; waiting for entry</b></div>"
+                     ) % ("#28e65a" if buy else "#ff5566", "B" if buy else "S", self._fmt_idx(gid),
+                          (det - zref) if 0 <= zref < n else 0,
+                          "#28e65a" if p2d >= 0 else "#ff5566", p2d)
+            used = self._pivot_put_label(used, det, shelf, "D")
+            spots.append({"pos": (det, shelf), "brush": fill, "pen": pg.mkPen(255, 180, 0, width=2.5)})  # amber
+            self._pivot_hovers.append((det, shelf, phtml, buy))
+            lx += [det, det, float("nan")]; ly += [dtip, shelf, float("nan")]
         for j in range(used, len(self._pivot_label_pool)):
             self._pivot_label_pool[j].setVisible(False)
         self.bc_pivot_dots.setData(spots); self.bc_pivot_dots.setVisible(bool(spots))
