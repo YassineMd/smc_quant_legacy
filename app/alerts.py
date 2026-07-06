@@ -55,9 +55,10 @@ class AudioEngine:
         if self.armed and self._effect is not None:
             self._effect.play()
 
-    def speak(self, text: str) -> None:
-        """Speak ``text`` aloud when armed (the Audio Feed toggle)."""
-        if self.armed and self._tts is not None:
+    def speak(self, text: str, gated: bool = True) -> None:
+        """Speak ``text`` aloud. gated=True honours the master Audio Feed arm (OB/Iceberg); gated=False speaks
+        regardless — for feeds with their OWN toggle (the Pivot alert)."""
+        if (self.armed or not gated) and self._tts is not None:
             self._tts.say(text)
 
 

@@ -298,7 +298,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         # Alerts moved to a dedicated floating 🔔 button (fix #8) — not here.
         for key, label in [("drawing", "Vector Drawing Toolbar"),
                            ("cob", "Order Book DOM Ladder"),
-                           ("audio", "Audio Feed")]:
+                           ("audio", "Audio Feed"),
+                           ("pivot_audio", "Pivot Alert")]:      # OWN voice, independent of the Audio Feed
             cb = QtWidgets.QCheckBox(label)
             cb.setChecked(key in ("audio", "drawing"))   # Audio + Vector Drawing ON by default (before connect)
             cb.toggled.connect(lambda on, k=key: self.subWidgetToggled.emit(k, on))

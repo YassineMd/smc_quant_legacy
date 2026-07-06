@@ -741,9 +741,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._announced_obs: set = set()
         self._announced_icebergs: set = set()
         self._audio_seeded = False
-        # LIVE pivot audio: seed silently + track the closed-bucket count so only NEW live detections speak
+        # LIVE pivot audio ('Pivot Alert' sub-toggle, OWN voice): seed silently + track the LAST bucket's
+        # end_time (closed_buckets is a rolling-capped list, so len() is constant — a new close = new end_time)
+        self._pivot_audio_on = False          # its own toggle, independent of the master Audio Feed
         self._pivot_audio_seeded = False
-        self._pivot_audio_last_n = 0
+        self._pivot_audio_last_et = 0.0
 
         # fix #10: double-click anywhere on the chart resets/auto-fits the view
         self.plot.scene().sigMouseClicked.connect(self._on_scene_click)
@@ -868,6 +870,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.chartFilterChanged.connect(lambda v: setattr(self.depthwall_item, "threshold", float(v)))
         self.menu.layerToggled.connect(self._toggle_layer)
         self.menu.subWidgetToggled.connect(self._toggle_subwidget)
+        if self._pivot_audio_on:                   # reflect the persisted Pivot Alert state in the menu checkbox
+            _pa = self.menu.sub_checks.get("pivot_audio")
+            if _pa is not None:
+                _pa.setChecked(True)               # emits -> _toggle_subwidget (re-seeds; no backlog readout)
         self.menu.scannerChanged.connect(self._set_scanner)
         self.menu.scan_time_changed.connect(self._on_scan_time_changed)
 
@@ -1042,6 +1048,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             (self.cob_col if self.cob_col is not None else self.cob).setVisible(on)
         elif key == "audio":
             self.alerts.audio.set_armed(on)
+        elif key == "pivot_audio":
+            self._pivot_audio_on = on
+            if on:
+                self._pivot_audio_seeded = False    # re-seed on enable -> only NEW live fires speak, not the edge
 
     def _on_scene_click(self, ev) -> None:
         """Double-click handling. Mode 10: per-axis follow LOCK — double-clicking the X axis
@@ -2008,6 +2018,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "phase": {k: bool(v) for k, v in self.show_phase.items()},
                 "liq_labels": self.show_liq,
                 "pivot": self.show_pivot,
+                "pivot_audio": self._pivot_audio_on,
                 "zone_s": self._zone_user_s, "eff_f": self._eff_user_f,   # persisted slider overrides (None = adaptive)
             }
             with open(os.path.join(config.DATA_DIR, "terminal_ui.json"), "w") as f:
@@ -2038,6 +2049,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_panel0 = bool(s.get("panel0", self.show_panel0))
         self.show_liq = bool(s.get("liq_labels", self.show_liq))
         self.show_pivot = bool(s.get("pivot", self.show_pivot))
+        self._pivot_audio_on = bool(s.get("pivot_audio", self._pivot_audio_on))   # checkbox synced post-menu
         self.show_whisker = bool(s.get("whisker", self.show_whisker))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
         for _k, _v in (s.get("phase") or {}).items():
@@ -3656,21 +3668,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _audio_announce_pivot(self, snap) -> None:
         """Speak a LIVE PIVOT detection ('Pivot Buy/Sell Detected') the instant the S5j-r5 confluence FIRES on
-        the just-closed bucket — i.e. at D, BEFORE any entry. LIVE-ONLY: seeded silently on first data / tf-
-        change and gated on a NEW closed bucket, so studying past data (drawing selections) never speaks; a
-        fire that is a continuation of the previous bar's run is skipped (one voice per pivot). Requires the
-        PIVOT indicator ON (Ctrl+P) and the Audio Feed armed (alerts.audio gates speak())."""
-        if not self.show_pivot:
+        the just-closed bucket — at D, BEFORE any entry. Its OWN 'Pivot Alert' toggle, INDEPENDENT of the
+        Audio Feed (speaks ungated). LIVE-ONLY: seeded silently on enable / first data / tf-change and gated on
+        a NEW bucket close (tracked by the last bucket's end_time — closed_buckets is rolling-capped so len is
+        constant); a fire that continues the previous bar's run is skipped (one voice per pivot)."""
+        if not self._pivot_audio_on:
             return
         closed = (snap.get("closed_buckets") if snap else None) or []
-        n = len(closed)
-        if not self._pivot_audio_seeded:
-            if n:                              # first data -> record the count, DON'T read out the backlog
-                self._pivot_audio_last_n = n; self._pivot_audio_seeded = True
+        if not closed:
             return
-        if n <= self._pivot_audio_last_n:
-            return                             # no new bucket closed since last check
-        self._pivot_audio_last_n = n
+        last_et = float(closed[-1].get("end_time", 0.0))
+        if not self._pivot_audio_seeded:       # first data / just enabled -> record the edge, DON'T read backlog
+            self._pivot_audio_last_et = last_et; self._pivot_audio_seeded = True
+            return
+        if last_et == self._pivot_audio_last_et:
+            return                             # no NEW bucket closed since last check
+        self._pivot_audio_last_et = last_et
         win = closed[-350:]                    # live window with the legs-1/5 + phase warm-up context
         if len(win) < 120:
             return
@@ -3682,7 +3695,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         L = len(win) - 1                       # the just-closed (live-edge) bucket
         for side, spoken in (("long", "Buy"), ("short", "Sell")):
             if (L, side) in fired and (L - 1, side) not in fired:   # NEW fire (not a run continuation)
-                self.alerts.audio.speak(f"Pivot {spoken} Detected")
+                self.alerts.audio.speak(f"Pivot {spoken} Detected", gated=False)
 
     def _refresh_scale_labels(self, snap) -> None:
         """Push live per-tf bucket ~volumes into the Bucket Scale selector + window title. All
