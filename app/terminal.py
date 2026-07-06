@@ -2554,9 +2554,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             if (_v if buy else -_v) >= PIVOT_E2_MIN:
                                 e2 = j; break
                     if e2 is not None and e2 < n:
+                        html_e2 = self._pivot_stats_html(filtered, det, e2, zref, buy, gid, n, _cl, _op,
+                                                         e_sh, sum0, a, ent)   # E2 box: flip@E -> re-conf@E2
                         used = self._pivot_put_label(used, e2, shelf, "E2")
                         spots.append({"pos": (e2, shelf), "brush": brush, "pen": pg.mkPen(0, 0, 0, 180)})
-                        self._pivot_hovers.append((e2, shelf, html, buy))
+                        self._pivot_hovers.append((e2, shelf, html_e2, buy))
                         lx += [e2, e2, float("nan")]; ly += [float(filtered[e2].get(fld, 0.0)), shelf, float("nan")]
                         cx += [ent, e2, float("nan")]; cy += [shelf, shelf, float("nan")]
         for j in range(used, len(self._pivot_label_pool)):
@@ -2569,7 +2571,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_pivot_conn[_sd].setData(_cx, _cy, connect="finite")
             self.bc_pivot_conn[_sd].setVisible(bool(_cx))
 
-    def _pivot_stats_html(self, filtered, det, ent, zref, buy, gid, n, _cl, _op, e_sh=None, sum0=None, sl0=0) -> str:
+    def _pivot_stats_html(self, filtered, det, ent, zref, buy, gid, n, _cl, _op, e_sh=None, sum0=None, sl0=0,
+                          e_flip=None) -> str:
         """Precomputed hover stats for a setup. N = bars back to the leg-5 reference candle; N->det = that
         reference OPEN to the detection CLOSE %; det->entry = detection CLOSE to entry CLOSE %; room ratio =
         profit-room / risk-room from the ENTRY to the leg-5 zone hi/lo, side-aware (the study's
@@ -2625,6 +2628,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         traj = _traj(e_sh, "P2", "eff")          # P0 dropped from the box (weaker + redundant with P2)
         if traj:
             traj = "<span style='color:#5a6070'>&#8213;&#8213;&#8213;</span><br>" + traj
+        # E2 box (this entry is a RE-CONFIRMATION after a flip at the original E): the [D,E2] verdict would
+        # still read FLIPPED (it dipped past -50 before recovering), so show the honest two-part story instead.
+        if e_flip is not None and e_sh is not None:
+            _di, _fi, _e2i = det - sl0, e_flip - sl0, ent - sl0
+            if 0 <= _di <= _fi < len(e_sh) and 0 <= _e2i < len(e_sh):
+                _sg = 1.0 if buy else -1.0
+                _dip = min(_sg * (2.0 * float(e_sh[k]) - 1.0) * 100.0 for k in range(_di, _fi + 1))  # [D,E] low
+                _pr = _sg * (2.0 * float(e_sh[_e2i]) - 1.0) * 100.0                                   # spr @E2
+                traj = ("<span style='color:#5a6070'>&#8213;&#8213;&#8213;</span><br>"
+                        "P2: dipped %s &rarr; re-conf @<b>E2</b> %s") % (_pc(_dip), _pc(_pr))
 
         # D->E WAIT (time + buckets). Study (in-sample, n=116): the farther E is from D the likelier a LOSS
         # (time strongest, r=-0.25 p=0.007). Fast entry -> green, slow -> red (soft readout, not a hard gate).
@@ -2632,12 +2645,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         wmin = (et_e - et_d) / 60.0 if (ent >= det and et_e and et_d) else 0.0
         wcol = "#28e65a" if wmin <= 7.0 else ("#ff5566" if wmin > 15.0 else "#c8ccd4")
 
+        elab = "E2" if e_flip is not None else "E"   # this box describes the E2 entry when e_flip is set
         return ("<div style='font-family:Consolas; font-size:11px; color:#c8ccd4; padding:1px 3px'>"
                 "<b style='color:%s'>%s-P_%s</b><br>"
                 "<b>N</b>: <b style='color:#e8ebf0'>%d</b> bars<br>"
-                "<b>N</b>&rarr;<b>D</b>: %s<br><b>D</b>&rarr;<b>E</b>: %s<br>"
+                "<b>N</b>&rarr;<b>D</b>: %s<br><b>D</b>&rarr;<b>%s</b>: %s<br>"
                 "wait: <b style='color:%s'>%.1fm &middot; %d bk</b><br>room ratio: %s<br>%s</div>"
-                ) % (sc, "B" if buy else "S", self._fmt_idx(gid), N, _pc(d_ndet), _pc(d_dentry),
+                ) % (sc, "B" if buy else "S", self._fmt_idx(gid), N, _pc(d_ndet), elab, _pc(d_dentry),
                      wcol, wmin, ent - det, ratio_s, traj)
 
     def _hover_pivot(self, scene_pos) -> None:
