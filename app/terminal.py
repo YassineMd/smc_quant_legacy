@@ -66,6 +66,11 @@ _TUNNEL: "Optional[SSHTunnelManager]" = None   # set in main(); the refresh butt
 # per-tick (truest follow), both False = per-close, X-True/Y-False = track-X / stable-Y.
 FOLLOW_WINDOW = 100       # buckets shown in the live window
 FOLLOW_MARGIN = 8         # buckets of right padding so the live edge isn't flush to the axis
+# PIVOT D-badge fill thresholds on the aligned LIVE eff-agg (panel-2) spread AT D — where entering at D beats
+# waiting for E (study/pivot_backtest, Jul2-5 tape, IN-SAMPLE; retune as the forward tape grows). Top-1/3 of
+# the live spread (>63) = D beats E; >80 = the biggest win-rate edge. Below these, E is the better entry.
+PIVOT_P2D_HIGH = 63.0
+PIVOT_P2D_VHIGH = 80.0
 LIQ_MAX_LABELS = 40       # Ctrl+L labels: hard cap on simultaneously-drawn labels (Tier-A first, then even spread)
 FOLLOW_PAD_FRAC = 0.08    # Y padding as a fraction of the visible candle range
 FOLLOW_AXIS_TOL_FRAC = 0.01  # per-axis "did it move?" threshold as a fraction of that axis's span —
@@ -2423,14 +2428,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._pivot_hovers = []; self.pivot_tooltip.hide()
         self._pivot_sig = None
 
-    def _pivot_put_label(self, used: int, x, y, text: str) -> int:
-        """Set the next pooled D/E glyph (grow lazily): bold BLACK letter centred on its coloured circle."""
+    def _pivot_put_label(self, used: int, x, y, text: str, color=(0, 0, 0)) -> int:
+        """Set the next pooled D/E glyph (grow lazily): bold letter centred on its circle. ``color`` is the
+        glyph colour — black on a FILLED badge, the side colour on a HOLLOW (border-only) D badge."""
         if used >= len(self._pivot_label_pool):
             _t = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0)); _t.setZValue(32)
             _f = QtGui.QFont("Consolas", 8); _f.setBold(True); _t.textItem.setFont(_f)
             self.plot.addItem(_t, ignoreBounds=True); self._pivot_label_pool.append(_t)
         lab = self._pivot_label_pool[used]
-        lab.setText(text); lab.setPos(x, y); lab.setVisible(True)
+        lab.setColor(color); lab.setText(text); lab.setPos(x, y); lab.setVisible(True)
         return used + 1
 
     def _draw_pivot(self, filtered, off, lo_i, hi_i) -> None:
@@ -2485,7 +2491,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._pivot_hovers = []; used = 0; spots = []
         for det, ent, side, zref in setups:
             buy = side == "long"; fld = "low" if buy else "high"
-            brush = pg.mkBrush(40, 230, 90) if buy else pg.mkBrush(255, 45, 70)   # green buy / red sell coin
+            side_rgb = (40, 230, 90) if buy else (255, 45, 70)       # green buy / red sell
+            brush = pg.mkBrush(*side_rgb)                            # E badge (+ filled very-high D) fill
             lx, ly = seg[side]; cx, cy = con[side]
             tips = [float(filtered[det].get(fld, 0.0))]
             if ent < n:
@@ -2493,8 +2500,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             shelf = (min(tips) - dy) if buy else (max(tips) + dy)
             gid = off + det
             html = self._pivot_stats_html(filtered, det, ent, zref, buy, gid, n, _cl, _op, e_sh, sum0, a)
-            used = self._pivot_put_label(used, det, shelf, "D")          # DETECTION badge
-            spots.append({"pos": (det, shelf), "brush": brush})
+            # D badge fill encodes the ENTRY-TIMING edge: the aligned LIVE eff-agg (panel-2) spread AT D.
+            # HOLLOW (border only) = E is the better entry (default); FILLED = D beats E. High (top-1/3,
+            # spread > P2D_HIGH) fills cyan(buy)/orange(sell); VERY HIGH (> P2D_VHIGH) fills the side colour.
+            di = det - a
+            sd = ((2.0 * float(e_sh[di]) - 1.0) * 100.0) if 0 <= di < len(e_sh) else 0.0
+            p2d = sd if buy else -sd                                 # aligned (+ve = with the trade)
+            if p2d > PIVOT_P2D_VHIGH:                                # very high -> filled side colour
+                d_spot = {"pos": (det, shelf), "brush": brush, "pen": pg.mkPen(0, 0, 0, 180)}; d_letter = (0, 0, 0)
+            elif p2d > PIVOT_P2D_HIGH:                               # high (top 1/3) -> filled cyan/orange
+                _f = (0, 200, 255) if buy else (255, 145, 0)
+                d_spot = {"pos": (det, shelf), "brush": pg.mkBrush(*_f), "pen": pg.mkPen(0, 0, 0, 180)}; d_letter = (0, 0, 0)
+            else:                                                    # default (E better) -> hollow, side colour
+                d_spot = {"pos": (det, shelf), "brush": pg.mkBrush(0, 0, 0, 0),
+                          "pen": pg.mkPen(side_rgb, width=2)}; d_letter = side_rgb
+            used = self._pivot_put_label(used, det, shelf, "D", d_letter)   # DETECTION badge
+            spots.append(d_spot)
             self._pivot_hovers.append((det, shelf, html, buy))
             lx += [det, det, float("nan")]; ly += [float(filtered[det].get(fld, 0.0)), shelf, float("nan")]
             if 0 <= zref < n:                    # dashed leader from the badge back to the leg-5 (N=60..100)
