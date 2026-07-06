@@ -1370,6 +1370,30 @@ class DrawingController(QtCore.QObject):
         out += e.get("pending", [])
         return out
 
+    def earliest_drawing_ts(self, tf: str):
+        """Oldest saved-drawing TIME-anchor (a bucket end_time) for (SYMBOL, tf), or None when this
+        tf has no anchored drawings. The terminal reads this to pull the scan Zero Point back far
+        enough that persisted drawings are never stranded outside the frame. hlines (price-only, no
+        time anchor) are ignored; un-anchored legacy items contribute nothing."""
+        if not os.path.exists(_DRAW_FILE):
+            return None
+        try:
+            with open(_DRAW_FILE) as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+        e = (data.get("idx") or {}).get("%s|%s" % (config.SYMBOL, tf), {})
+        tss = []
+        for d in (e.get("shapes", []) + e.get("brackets", []) + e.get("pending", [])):
+            if d.get("kind") == "hline":
+                continue
+            for a in (d.get("anch") or []):
+                try:
+                    tss.append(float(a[0]))
+                except (TypeError, ValueError, IndexError):
+                    pass
+        return min(tss) if tss else None
+
     # ------------------------------------------------------------------
     # Persistence (replaces browser localStorage, spec §8.3)
     # ------------------------------------------------------------------

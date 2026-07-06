@@ -39,6 +39,7 @@ from . import bucket_state, config, region_state, vpin_adaptive
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
 from . import bar_quantiles
+from . import archive          # local cold-archive reader — extends the scanner frame past the daemon's cap
 from .chart_widgets import (
     WhiskerBarItem,
     AbsorptionLayer, AbsorptionZoneLayer, BucketCandleItem, ExhaustionStripLayer, LocalTimeAxis,
@@ -238,6 +239,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # (stable all-time index; first bucket ever saved = 1). 0 = legacy local idx (daemon hasn't shipped
         # total_closed yet). Recomputed in _build_scanner_buckets.
         self._global_idx_offset: int = 0
+        # ARCHIVE EXTEND: seamlessly prepend older buckets from the local cold-archive mirror when the Zero
+        # Point reaches before the daemon's live window. _arch_win caches the walked run per (tf, anchor, edge).
+        self._archive_extend: bool = True
+        self._arch_win_key = None
+        self._arch_win: list = []
         self._last_scanner_sig: Optional[tuple] = None   # render-skip gate (Phase 7 perf)
         self._scanner_needs_autofit: bool = True         # one-shot Y/X fit (frees manual zoom)
         # View-follow (Mode 10), per-axis lock model. follow_x / follow_y track each axis to
@@ -712,6 +718,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _it in (self.bc_abs_lock, self.bc_eff_lock, self.bc_er_lock, self.bc_exh_lock,
                     self.bc_lg_lock, self.bc_sm_lock):
             _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
+        # LIVE pivot audio ('Pivot Alert' sub-toggle, OWN voice, independent of the master Audio Feed).
+        # MUST be set before _load_ui_state so the persisted "pivot_audio" value can override this default.
+        self._pivot_audio_on = False
+        self._pivot_audio_seeded = False
+        self._pivot_audio_last_et = 0.0
         self._load_ui_state()   # restore the panel toggles saved by a prior session (overrides the defaults above)
         self.alerts = AlertsLedger(self)
         self.drawbar = DrawingToolbar(self)
@@ -741,11 +752,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._announced_obs: set = set()
         self._announced_icebergs: set = set()
         self._audio_seeded = False
-        # LIVE pivot audio ('Pivot Alert' sub-toggle, OWN voice): seed silently + track the LAST bucket's
-        # end_time (closed_buckets is a rolling-capped list, so len() is constant — a new close = new end_time)
-        self._pivot_audio_on = False          # its own toggle, independent of the master Audio Feed
-        self._pivot_audio_seeded = False
-        self._pivot_audio_last_et = 0.0
+        # (LIVE pivot-audio state — _pivot_audio_on / _seeded / _last_et — is initialized above, BEFORE
+        # _load_ui_state, so the persisted 'pivot_audio' toggle can override it. Tracking uses the last
+        # bucket's end_time since closed_buckets is a rolling-capped list — len() is constant.)
 
         # fix #10: double-click anywhere on the chart resets/auto-fits the view
         self.plot.scene().sigMouseClicked.connect(self._on_scene_click)
@@ -822,6 +831,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("Backspace"), self, activated=lambda: self.drawer.delete_selected())
         QtGui.QShortcut(QtGui.QKeySequence("T"), self, activated=self._toggle_phase_table)  # phase table (no panel needed)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), self, activated=self._save_drawings_now)  # force-flush drawings + confirm
         # Ctrl+F = jump-to-Idx: type/paste a bucket Idx (tooltip format fine, e.g. "20.977"),
         # Enter centers that bucket on screen (index modes; unlocks view-follow like a manual pan)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+F"), self, activated=self._idx_jump_show)
@@ -923,8 +933,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # scanners default to a tighter 1h window. Signal blocked so the _on_timer below redraws from
         # the new anchor without firing an extra _on_scan_time_changed teardown.
         _anchor_secs = -86400 if is_canvas else -3600
+        target_dt = QtCore.QDateTime.currentDateTime().addSecs(_anchor_secs)
+        if is_canvas:                                   # auto-extend the window back to cover saved drawings
+            floor = self._drawing_scan_floor(self.worker.tf)
+            if floor is not None:
+                floor_dt = QtCore.QDateTime.fromSecsSinceEpoch(int(floor))
+                if floor_dt < target_dt:
+                    target_dt = floor_dt
         self.menu.scan_time_edit.blockSignals(True)
-        self.menu.scan_time_edit.setDateTime(QtCore.QDateTime.currentDateTime().addSecs(_anchor_secs))
+        self.menu.scan_time_edit.setDateTime(target_dt)
         self.menu.scan_time_edit.blockSignals(False)
         # (Mode 10 COB lives in cob_col, built + shown by _ensure_canvas_panes from _cob_want.)
         if mode == "depth_heatmap":
@@ -961,6 +978,39 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._depth_needs_calibration = True  # new tf -> re-baseline the depth slider (§1)
         self._clear_liq()                     # drop the drawn 15m labels; they re-place (by ts) on the new chart
         self.worker.request_timeframe(tf)
+        if self.scanner_mode == "bucket_canvas":        # keep THIS tf's saved drawings in view
+            floor = self._drawing_scan_floor(tf)
+            if floor is not None:
+                floor_dt = QtCore.QDateTime.fromSecsSinceEpoch(int(floor))
+                if floor_dt < self.menu.scan_time_edit.dateTime():   # only ever pull back, never forward
+                    self.menu.scan_time_edit.blockSignals(True)      # the tf-switch redraw reads the new anchor
+                    self.menu.scan_time_edit.setDateTime(floor_dt)
+                    self.menu.scan_time_edit.blockSignals(False)
+
+    def _drawing_scan_floor(self, tf: str):
+        """Earliest saved-drawing anchor for `tf` as a Unix epoch, pulled back a tf-sized margin so
+        the whole drawing (not just its right edge) lands inside the frame — or None when this tf has
+        no anchored drawings. Lets the scan Zero Point auto-extend to keep persisted drawings visible
+        instead of stranding them in hidden `pending` outside the default 24h window."""
+        if getattr(self, "drawer", None) is None:
+            return None
+        ts = self.drawer.earliest_drawing_ts(tf)
+        if ts is None:
+            return None
+        return ts - max(2 * config.TF_SECONDS.get(tf, 60), 300)
+
+    def _save_drawings_now(self) -> None:
+        """Ctrl+S — force an immediate flush of all drawings (idx-anchored + time-space) past the
+        400ms debounce, with a brief on-screen confirmation. Drawings already auto-save on every
+        edit; this is a manual belt-and-braces plus a visible acknowledgement."""
+        ok = True
+        try:
+            self.drawer._save_idx()
+            self.drawer._save()
+        except Exception:
+            ok = False
+        QtWidgets.QToolTip.showText(QtGui.QCursor.pos(),
+                                    "Drawings saved" if ok else "Save failed", self)
 
     def _refresh(self) -> None:
         """Manual chart refresh — re-establish the data feed after a freeze (net blip / stale
@@ -2491,12 +2541,32 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue                        # UNCLOSED close, so the fire flickers/un-fires as price moves
             if det < scan_from[side]:           # (e.g. a short's own favorable drop kills leg5) -> only fire on
                 continue                        # CLOSED bars, matching the audio. It shows once the bar closes.
-            if ent is not None:
+            if ent is not None and ent < n - 1:   # entry on a CLOSED bar -> CONFIRMED fill: settled, can't move.
                 setups.append((det, ent, side, zref)); scan_from[side] = ent + 1
-            elif we >= n:                       # PENDING: the 1h WAIT still runs past the live edge -> a fired
-                pending.append((det, side, zref)); scan_from[side] = we   # D whose entry hasn't landed yet
-            else:
+            elif (ent is not None and ent >= n - 1) or we >= n:   # entry on the still-FORMING bar (its provisional
+                pending.append((det, side, zref)); scan_from[side] = we   # touch can evaporate on close), OR the 1h
+            else:                               # WAIT still runs past the live edge -> PENDING, not yet a fill.
                 scan_from[side] = we            # CANCELLED: wait fully elapsed, no touch -> don't mark
+        # DIAGNOSTIC (temporary): a CONFIRMED filled D must never vanish while still on-screen. Detection is
+        # cached per close, so this runs only when the marks actually recompute. If a D that was filled last
+        # pass is gone now yet still inside the window, append the context to data/pivot_vanish.log — including
+        # whether it still RAW-fires (walk drop) or not (detection drop). Offline replay can't reproduce the
+        # live case, so this captures ground truth. Tiny append-only file; delete this block once root-caused.
+        try:
+            raw_abs = {(off + d, s) for d, e, w, s, z in fl}
+            pend_abs = {(off + d, s) for d, s, z in pending}
+            filled_now = {(off + d, s): off + e for d, e, s, z in setups}
+            for (ad, s), pe in getattr(self, "_pivot_shown_filled", {}).items():
+                if off <= ad <= off + n - 1 and (ad, s) not in filled_now:
+                    with open(os.path.join(config.DATA_DIR, "pivot_vanish.log"), "a") as _lf:
+                        _lf.write("%s VANISHED %-5s filled-D idx=%d entry_idx=%d -> now=%s still_raw_fires=%s "
+                                  "off=%d n=%d hi_i=%d\n" % (
+                                      time.strftime("%Y-%m-%d %H:%M:%S"), s, ad, pe,
+                                      "PENDING" if (ad, s) in pend_abs else "GONE",
+                                      (ad, s) in raw_abs, off, n, off + hi_i))
+            self._pivot_shown_filled = filled_now
+        except Exception:
+            pass
         if not setups and not pending:
             self._pivot_hovers = []; self.pivot_tooltip.hide()
             for _lab in self._pivot_label_pool:
@@ -3895,6 +3965,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         snap = self._last_snap or self.worker.snapshot()
         closed_list: list[dict] = snap.get("closed_buckets", []) or []
         active: dict = snap.get("active_bucket") or {}
+        anchor_unix = self.menu.scan_start_unix()
+        total_closed = int(snap.get("total_closed", 0) or 0)   # DB-id of closed_list[-1] (0 = pre-redeploy daemon)
+
+        # ARCHIVE EXTEND: when the Zero Point reaches before the daemon's oldest LIVE bucket, prepend the
+        # contiguous older run from the LOCAL cold-archive mirror. Archive bids == absolute Idx (both from
+        # total_closed), so the offset below stays exact — offset lands on the oldest archived bid. Gated to
+        # the scrolled-back case + cached per (tf, anchor, edge) + guarded: normal use and any archive failure
+        # fall straight through to the live-only frame, so this can never break the live path.
+        if (self._archive_extend and total_closed > 0 and closed_list
+                and anchor_unix < float(closed_list[0].get("start_time", 0.0))):
+            before_bid = total_closed - len(closed_list) + 1
+            akey = (self.worker.tf, anchor_unix, before_bid)
+            if akey != self._arch_win_key:
+                try:
+                    self._arch_win = archive.window(self.worker.tf, anchor_unix, before_bid)
+                except Exception:
+                    self._arch_win = []
+                self._arch_win_key = akey
+            if self._arch_win:
+                closed_list = self._arch_win + closed_list
 
         combined: list[dict] = list(closed_list)
         # Append the live edge — but guard the ~1-frame window right after a close
@@ -3914,9 +4004,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             )
             if not is_stale_dup:
                 combined.append(active)
-
-        anchor_unix = self.menu.scan_start_unix()
-        total_closed = int(snap.get("total_closed", 0) or 0)   # DB-id of closed_list[-1] (0 = pre-redeploy daemon)
 
         # signature gate: rebuild only when the bucket set, the live edge volume, the anchor, or the absolute
         # index base (total_closed — which moves at the 10k cap even when len(combined) doesn't) changes.
