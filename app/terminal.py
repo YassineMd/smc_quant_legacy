@@ -2487,8 +2487,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for det, ent, we, side, zref in fl:
             if det > hi_i:
                 break
-            if det < scan_from[side]:
-                continue
+            if det >= n - 1:                    # SKIP the still-FORMING live-edge bucket: its leg 5 reads the
+                continue                        # UNCLOSED close, so the fire flickers/un-fires as price moves
+            if det < scan_from[side]:           # (e.g. a short's own favorable drop kills leg5) -> only fire on
+                continue                        # CLOSED bars, matching the audio. It shows once the bar closes.
             if ent is not None:
                 setups.append((det, ent, side, zref)); scan_from[side] = ent + 1
             elif we >= n:                       # PENDING: the 1h WAIT still runs past the live edge -> a fired
