@@ -5,6 +5,9 @@
 data/*
 !data/.gitkeep
 
+# --- Cold-archive local mirror (master lives in GCS; pulled via study/pull_archive.ps1) ---
+study/archive_data/
+
 # --- Python bytecode caches ---
 __pycache__/
 *.pyc
