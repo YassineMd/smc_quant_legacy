@@ -2534,9 +2534,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     e_held = _liv[-1] > 0.0 and min(_liv) > -50.0
                 else:
                     e_held = True
-                e_brush = brush if e_held else pg.mkBrush(120, 120, 120)      # green/red HELD, GRAY flipped
+                if e_held:                       # green/red fill, black border
+                    e_brush, e_pen = brush, pg.mkPen(0, 0, 0, 180)
+                else:                            # FLIPPED -> gray fill + ORANGE border (don't-take flag)
+                    e_brush, e_pen = pg.mkBrush(120, 120, 120), pg.mkPen(255, 145, 0, width=2.5)
                 used = self._pivot_put_label(used, ent, shelf, "E")
-                spots.append({"pos": (ent, shelf), "brush": e_brush, "pen": pg.mkPen(0, 0, 0, 180)})
+                spots.append({"pos": (ent, shelf), "brush": e_brush, "pen": e_pen})
                 self._pivot_hovers.append((ent, shelf, html, buy))
                 lx += [ent, ent, float("nan")]; ly += [float(filtered[ent].get(fld, 0.0)), shelf, float("nan")]
                 cx += [det, ent, float("nan")]; cy += [shelf, shelf, float("nan")]
@@ -2570,11 +2573,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Precomputed hover stats for a setup. N = bars back to the leg-5 reference candle; N->det = that
         reference OPEN to the detection CLOSE %; det->entry = detection CLOSE to entry CLOSE %; room ratio =
         profit-room / risk-room from the ENTRY to the leg-5 zone hi/lo, side-aware (the study's
-        profit_room_ratio; >1 = favourable geometry). Then the spread TRAJECTORY over the entry wait [D,E],
-        ALIGNED (+ve = still WITH the trade), for PANEL 2 (eff-agg, e_sh) and PANEL 0 (composite SUM, sum0),
-        both sliced at sl0: the value AT entry E and the min over [D,E], plus a HELD/FLIPPED verdict. Study
-        (in-sample): winners hold P2 spr@E positive & never breach -50 (P2 the stronger signal, p<0.001;
-        P0 weaker & correlated, shown for context)."""
+        profit_room_ratio; >1 = favourable geometry). Then the PANEL-2 (eff-agg) spread TRAJECTORY over the
+        entry wait [D,E], ALIGNED (+ve = still WITH the trade), sliced at sl0: the value AT entry E and the min
+        over [D,E], plus a HELD/FLIPPED verdict. Study (in-sample): winners hold P2 spr@E positive & never
+        breach -50 (p<0.001). (P0 dropped from the box -- weaker & redundant with P2.)"""
         sc = "#28e65a" if buy else "#ff5566"
         c_det = _cl(det)
         has_ref = 0 <= zref < n
@@ -2620,7 +2622,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return ("%s @<b>E</b>: <b style='color:%s'>%+.1f%%</b> &nbsp; min: <b style='color:%s'>%+.1f%%</b>"
                     "<br><b style='color:%s'>%s</b><br>") % (tag, ecol, v_e, mcol, v_min, vcol, vtxt)
 
-        traj = _traj(e_sh, "P2", "eff") + _traj(sum0, "P0", "sum")
+        traj = _traj(e_sh, "P2", "eff")          # P0 dropped from the box (weaker + redundant with P2)
         if traj:
             traj = "<span style='color:#5a6070'>&#8213;&#8213;&#8213;</span><br>" + traj
 
