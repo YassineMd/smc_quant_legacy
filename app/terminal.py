@@ -71,6 +71,10 @@ FOLLOW_MARGIN = 8         # buckets of right padding so the live edge isn't flus
 # the live spread (>63) = D beats E; >80 = the biggest win-rate edge. Below these, E is the better entry.
 PIVOT_P2D_HIGH = 63.0
 PIVOT_P2D_VHIGH = 80.0
+# E greys out when panel-2 FLIPPED (aligned live spread @E <= 0 or it breached -50 over [D,E]); the indicator
+# then hunts E2 = the first later bar (within 1h) where the live spread RE-CONFIRMS to >= this. Study: the
+# p2@E<0 (flipped) setups go 29% -> 69% TP if entered on the >=+30 recovery (Jul2-5 tape, in-sample).
+PIVOT_E2_MIN = 30.0
 LIQ_MAX_LABELS = 40       # Ctrl+L labels: hard cap on simultaneously-drawn labels (Tier-A first, then even spread)
 FOLLOW_PAD_FRAC = 0.08    # Y padding as a fraction of the visible candle range
 FOLLOW_AXIS_TOL_FRAC = 0.01  # per-axis "did it move?" threshold as a fraction of that axis's span —
@@ -2521,11 +2525,37 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if 0 <= zref < n:                    # dashed leader from the badge back to the leg-5 (N=60..100)
                 lx += [det, zref, float("nan")]; ly += [shelf, _op(zref), float("nan")]   # -> reference open
             if ent < n:                          # ENTRY badge (references the DETECTION idx in the hover box)
+                # E is a VALID entry only if panel-2 HELD to E (aligned live spread @E > 0 AND its min over
+                # [D,E] > -50). If it FLIPPED, the E badge GREYS OUT and the indicator hunts E2 = the first
+                # later bar (within 1h) whose live spread RE-CONFIRMS to >= PIVOT_E2_MIN (rescues the flip).
+                _di, _ei, _sg = det - a, ent - a, (1.0 if buy else -1.0)
+                if 0 <= _di < len(e_sh) and 0 <= _ei < len(e_sh):
+                    _liv = [_sg * (2.0 * float(e_sh[k]) - 1.0) * 100.0 for k in range(_di, _ei + 1)]
+                    e_held = _liv[-1] > 0.0 and min(_liv) > -50.0
+                else:
+                    e_held = True
+                e_brush = brush if e_held else pg.mkBrush(120, 120, 120)      # green/red HELD, GRAY flipped
                 used = self._pivot_put_label(used, ent, shelf, "E")
-                spots.append({"pos": (ent, shelf), "brush": brush})
+                spots.append({"pos": (ent, shelf), "brush": e_brush, "pen": pg.mkPen(0, 0, 0, 180)})
                 self._pivot_hovers.append((ent, shelf, html, buy))
                 lx += [ent, ent, float("nan")]; ly += [float(filtered[ent].get(fld, 0.0)), shelf, float("nan")]
                 cx += [det, ent, float("nan")]; cy += [shelf, shelf, float("nan")]
+                if not e_held:                   # gray E -> look for the E2 re-confirmation entry
+                    et_e = float(filtered[ent].get("end_time", 0.0)); e2 = None
+                    for j in range(ent + 1, b_end):
+                        if et_e and float(filtered[j].get("end_time", 0.0)) > et_e + 3600.0:
+                            break
+                        jj = j - a
+                        if 0 <= jj < len(e_sh):
+                            _v = (2.0 * float(e_sh[jj]) - 1.0) * 100.0
+                            if (_v if buy else -_v) >= PIVOT_E2_MIN:
+                                e2 = j; break
+                    if e2 is not None and e2 < n:
+                        used = self._pivot_put_label(used, e2, shelf, "E2")
+                        spots.append({"pos": (e2, shelf), "brush": brush, "pen": pg.mkPen(0, 0, 0, 180)})
+                        self._pivot_hovers.append((e2, shelf, html, buy))
+                        lx += [e2, e2, float("nan")]; ly += [float(filtered[e2].get(fld, 0.0)), shelf, float("nan")]
+                        cx += [ent, e2, float("nan")]; cy += [shelf, shelf, float("nan")]
         for j in range(used, len(self._pivot_label_pool)):
             self._pivot_label_pool[j].setVisible(False)
         self.bc_pivot_dots.setData(spots); self.bc_pivot_dots.setVisible(bool(spots))
