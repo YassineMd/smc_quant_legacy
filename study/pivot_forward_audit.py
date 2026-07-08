@@ -1,24 +1,33 @@
-"""FORWARD AUDIT of the FROZEN PIVOT-ZZTRAIL strategy — the periodic out-of-sample check.
-Runs the frozen strategy (base C + breakeven lock arm 0.40%/0.10%, ALL params read from study/out/pivot_freeze.json)
-on the latest tape, splits trades at the freeze line (detection end_time > freeze_ts = FORWARD), and reports
-forward-only stats vs the in-sample baseline. Also isolates the ENTRY signal quality (raw pivot fires at a fixed
-exit) — the linchpin. Prints PASS / FAIL / CONTINUE and APPENDS one dated row to study/out/pivot_forward_log.md.
-NEVER re-tune anything here; this script only OBSERVES the frozen rule. Run: python study/pivot_forward_audit.py
+"""FORWARD AUDIT of the pivot strategies — the periodic out-of-sample check.
+Runs BOTH frozen configs on the latest tape and splits trades at each config's freeze line
+(detection end_time > freeze_ts = FORWARD):
+  * PIVOT-ZZTRAIL  (v1, the CONTROL)  — base C + breakeven lock, params from study/out/pivot_freeze.json.
+  * PIVOT-ZZTRAIL-v2 (the DEFAULT)    — v1 + composite-v2 zone TAKE filter (D or entry) + hollow AVOID list,
+                                        params/rules from study/out/pivot_freeze_v2.json.
+Reports forward-only stats vs the in-sample baseline for each, plus (v2) per-tier and per-entry-zone forward
+breakdowns so we can see WHICH fitted cells hold up as tape accrues. Prints PASS/FAIL/CONTINUE and appends one
+dated row to pivot_forward_log.md (v1) and pivot_forward_log_v2.md (v2). NEVER re-tunes — only OBSERVES the
+frozen rules. Run: python study/pivot_forward_audit.py
 """
-import os, sys, glob, json, sqlite3, time
+import os, sys, glob, json, sqlite3, time, bisect
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__)); REPO = os.path.dirname(HERE)
 sys.path.insert(0, REPO); sys.path.insert(0, HERE)
 from app.persistence import _bucket_from_dict            # noqa: E402
-from app import pivot_detect as PD                        # noqa: E402
+from app import pivot_detect as PD, bar_quantiles         # noqa: E402
 from app.structure import ZIGZAG_PCT                       # noqa: E402
 
 FRZ = json.load(open(os.path.join(REPO, "study", "out", "pivot_freeze.json")))
 FREEZE_TS = float(FRZ["freeze_ts"]); BASE = FRZ["in_sample_baseline"]; CR = FRZ["criteria"]
+FRZ2 = json.load(open(os.path.join(REPO, "study", "out", "pivot_freeze_v2.json")))
+FREEZE_TS2 = float(FRZ2["freeze_ts"]); BASE2 = FRZ2["in_sample_baseline"]; CR2 = FRZ2["criteria"]
 WIN = 3600.0; FEE = 0.10; P2D_HI = 63.0; P2D_VHI = 80.0; E2_MIN = 30.0; SL = 0.003
-TRAIL = 0.0005; SL_PAD = 0.001; ARM = 0.0040; LOCK = 0.0010; H_S = 6 * 3600.0
+TRAIL = 0.0005; SL_PAD = 0.001; ARM = 0.0040; LOCK = 0.0010; H_S = 6 * 3600.0; BE = 0.05
 LOG = os.path.join(REPO, "study", "out", "pivot_forward_log.md")
+LOG2 = os.path.join(REPO, "study", "out", "pivot_forward_log_v2.md")
+AVOID = {("buy", "inzone-sell", "body"), ("sell", "inzone-sell", "inzone-sell"),
+         ("buy", "beyond-down", "beyond-down"), ("sell", "beyond-up", "beyond-up")}
 
 
 def load_1m():
@@ -34,6 +43,46 @@ def load_1m():
                 by[base + j + 1] = d
         con.close()
     return [by[b] for b in sorted(by)]
+
+
+def load_4h():
+    by = {}
+    for db in sorted(glob.glob(os.path.join(REPO, "study", "data", "history_snapshot_*.db"))):
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+        for (x,) in con.execute("SELECT data FROM closed_buckets WHERE tf='4h' ORDER BY id"):
+            b = json.loads(x)
+            if b.get("levels"):
+                by[float(b["end_time"])] = b
+        con.close()
+    b4 = [by[k] for k in sorted(by)]
+    et = [float(b["end_time"]) for b in b4]; vlo = []; vhi = []; lw = []; hg = []
+    for b in b4:
+        q = bar_quantiles.vq(b["levels"]); vlo.append(float(q[0])); vhi.append(float(q[2]))
+        lw.append(float(b["low"])); hg.append(float(b["high"]))
+    return et, vlo, vhi, lw, hg
+
+
+def zone5(px, low, vlo, vhi, high):
+    if px < low:
+        return "beyond-down"
+    if px <= vlo:
+        return "inzone-buy"
+    if px < vhi:
+        return "body"
+    if px <= high:
+        return "inzone-sell"
+    return "beyond-up"
+
+
+def take_rule(zone, buy, tier):
+    own_in = (zone == "inzone-buy") if buy else (zone == "inzone-sell")
+    rev_in = (zone == "inzone-sell") if buy else (zone == "inzone-buy")
+    own_bey = (zone == "beyond-down") if buy else (zone == "beyond-up")
+    if tier == "hollow":
+        return rev_in or (zone == "body") or own_bey
+    if tier == "cyan/orange":
+        return own_in
+    return own_in or own_bey
 
 
 def zigzag(H, L, thr):
@@ -63,11 +112,28 @@ def summ(net):
     return dict(n=len(net), win=100.0 * len(w) / len(net), mean=net.mean(), cum=net.sum(), t=t, pf=pf)
 
 
+def summ3(net):
+    """three-outcome on NET: winner>+BE, breakeven |.|<=BE, loser<-BE."""
+    a = np.array(net); s = summ(net)
+    if not len(a):
+        s.update(wp=float("nan"), bep=float("nan"), lp=float("nan")); return s
+    s.update(wp=100.0 * (a > BE).mean(), bep=100.0 * (np.abs(a) <= BE).mean(), lp=100.0 * (a < -BE).mean())
+    return s
+
+
 def main():
     raws = load_1m(); bks = [_bucket_from_dict(d) for d in raws]; snaps = [b.full_snapshot() for b in bks]
     n = len(bks); _, e_sh, _, _ = PD._p9_global(snaps)
     hi = np.array([b.high for b in bks]); lo = np.array([b.low for b in bks]); cl = np.array([b.close_price for b in bks])
     et = np.array([b.end_time for b in bks]); st = np.array([float(d["start_time"]) for d in raws])
+    z_et, z_lo, z_hi, z_low, z_high = load_4h()
+
+    def zone_at(bar):
+        i4 = bisect.bisect_right(z_et, et[bar]) - 1
+        if i4 < 0:
+            return None
+        return zone5(float(cl[bar]), z_low[i4], z_lo[i4], z_hi[i4], z_high[i4])
+
     sw = zigzag(list(hi), list(lo), ZIGZAG_PCT / 100.0)
     lows = []; highs = []; ph = pl = None
     for pb, p, ih, cb in sw:
@@ -131,12 +197,14 @@ def main():
     fires = sorted(PD.detect_pivots(snaps), key=lambda f: (f["det_i"], f["side"]))
     scan = {"long": 0, "short": 0}
     strat_is = []; strat_fw = []; ent_is = []; ent_fw = []
+    v2_is = []; v2_fw = []; v2_tier = {}; v2_zone = {}          # v2 forward per-tier / per-entry-zone nets
     for f in fires:
         s = f["side"]; det = f["det_i"]; ent = f["entry_i"]
         if det < scan[s]:
             continue
         scan[s] = (ent + 1) if ent is not None else f["wait_end_i"]
-        fwd = float(et[det]) > FREEZE_TS                         # detection AFTER the freeze = forward
+        fwd = float(et[det]) > FREEZE_TS                         # detection AFTER the v1 freeze = forward
+        fwd2 = float(et[det]) > FREEZE_TS2                       # ... after the v2 freeze
         if ent is not None:                                     # raw ENTRY probe: every E at the fixed exit
             rf = walk_fixed(ent, s == "long")
             if rf is not None:
@@ -144,7 +212,7 @@ def main():
         if ent is None:
             continue
         buy = s == "long"; p2d = spr(det, buy)
-        tier = "cyan" if p2d > P2D_VHI else ("green" if p2d > P2D_HI else "hollow")
+        tier = "cyan/orange" if p2d > P2D_VHI else ("red/green" if p2d > P2D_HI else "hollow")
         liv = [spr(k, buy) for k in range(det, ent + 1)]
         e_held = (liv[-1] > 0.0 and min(liv) > -50.0) if liv else True
         j0 = None
@@ -162,9 +230,27 @@ def main():
                 j0 = e2
         if j0 is None:
             continue
-        (strat_fw if fwd else strat_is).append(walk(det, j0, buy) - FEE)
+        net = walk(det, j0, buy) - FEE
+        (strat_fw if fwd else strat_is).append(net)
+        # ---- v2 overlay: zone TAKE filter (D or entry) + hollow AVOID ----
+        zD = zone_at(det); zE = zone_at(j0)
+        if zD is not None and zE is not None:
+            take = take_rule(zD, buy, tier) or take_rule(zE, buy, tier)
+            side = "buy" if buy else "sell"
+            if tier == "hollow" and (side, zD, zE) in AVOID:
+                take = False
+            if take:
+                (v2_fw if fwd2 else v2_is).append(net)
+                if fwd2:
+                    v2_tier.setdefault(tier, []).append(net)
+                    v2_zone.setdefault(zE, []).append(net)
 
     S_is = summ(strat_is); S_fw = summ(strat_fw); E_is = summ(ent_is); E_fw = summ(ent_fw)
+    V_is = summ3(v2_is); V_fw = summ3(v2_fw)
+    now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    tape_end = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(et[-1]))
+
+    # ---- v1 verdict ----
     nf = S_fw["n"]; netf = S_fw["mean"]; tf = S_fw["t"]
     if nf < CR["continue_below_n"]:
         verdict = "CONTINUE (forward n=%d < %d)" % (nf, CR["continue_below_n"])
@@ -175,20 +261,45 @@ def main():
     else:
         verdict = "BORDERLINE (positive but weak, t=%.2f)" % tf
     warn = (nf >= 30 and netf < 0.093)
-    now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
 
-    print("PIVOT-ZZTRAIL FORWARD AUDIT  (%s UTC)" % now)
-    print("  freeze: %s UTC | tape now: %s UTC | in-sample baseline: %+.3f%%/trade, %.1f%% win, PF %.2f\n"
-          % (FRZ["freeze_utc"], time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(et[-1])),
-             BASE["net_per_trade"], BASE["net_win_pct"], BASE["profit_factor"]))
-    for tag, d in (("STRATEGY in-sample", S_is), ("STRATEGY forward ", S_fw)):
-        print("  %s : n=%-3d | win %5.1f%% | net %+.3f%%/trade | cum %+7.2f%% | t=%s | PF %s"
+    # ---- v2 verdict ----
+    nf2 = V_fw["n"]; netf2 = V_fw["mean"]; tf2 = V_fw["t"]
+    if nf2 < CR2["continue_below_n"]:
+        verdict2 = "CONTINUE (forward n=%d < %d)" % (nf2, CR2["continue_below_n"])
+    elif netf2 <= 0:
+        verdict2 = "FAIL (forward net/trade <= 0)"
+    elif tf2 >= 1.5:
+        verdict2 = "PASS (edge holding, t=%.2f)" % tf2
+    else:
+        verdict2 = "BORDERLINE (positive but weak, t=%.2f)" % tf2
+    warn2 = (nf2 >= 30 and netf2 < BASE2["net_per_trade"] / 2.0)
+
+    print("PIVOT FORWARD AUDIT  (%s UTC)   tape now: %s UTC\n" % (now, tape_end))
+    print("== PIVOT-ZZTRAIL v1 (CONTROL) ==  freeze %s | in-sample %+.3f%%/tr, %.1f%% win, PF %.2f"
+          % (FRZ["freeze_utc"], BASE["net_per_trade"], BASE["net_win_pct"], BASE["profit_factor"]))
+    for tag, d in (("in-sample", S_is), ("forward  ", S_fw)):
+        print("  %s : n=%-3d | win %5.1f%% | net %+.3f%%/tr | cum %+7.2f%% | t=%s | PF %s"
               % (tag, d["n"], d["win"], d["mean"], d["cum"],
                  ("%.2f" % d["t"]) if d["n"] > 1 else " --", ("%.2f" % d["pf"]) if d["n"] else "--"))
-    print("  ENTRY-only (raw fires, fixed exit)  in-sample win %5.1f%% (n=%d) | forward win %5.1f%% (n=%d)"
-          % (E_is["win"], E_is["n"], E_fw["win"], E_fw["n"]))
-    print("\n  VERDICT: %s%s" % (verdict, "   [!] DEGRADATION WARNING" if warn else ""))
+    print("  ENTRY-only (raw fires, fixed exit): forward win %5.1f%% (n=%d) | in-sample %5.1f%% (n=%d)"
+          % (E_fw["win"], E_fw["n"], E_is["win"], E_is["n"]))
+    print("  VERDICT: %s%s\n" % (verdict, "   [!] DEGRADATION WARNING" if warn else ""))
 
+    print("== PIVOT-ZZTRAIL-v2 (DEFAULT) ==  freeze %s | in-sample n=%d %+.3f%%/tr, %.1f%%W/%.1f%%L, PF %.2f"
+          % (FRZ2["freeze_utc"], BASE2["n"], BASE2["net_per_trade"], BASE2["net_win_pct"], BASE2["loss_pct"],
+             BASE2["profit_factor"]))
+    for tag, d in (("in-sample", V_is), ("forward  ", V_fw)):
+        print("  %s : n=%-3d | W %5.1f%% | BE %5.1f%% | L %5.1f%% | net %+.3f%%/tr | cum %+7.2f%% | t=%s"
+              % (tag, d["n"], d["wp"], d["bep"], d["lp"], d["mean"], d["cum"], ("%.2f" % d["t"]) if d["n"] > 1 else " --"))
+    if nf2:
+        print("  forward by tier:  " + " | ".join(
+            "%s n=%d net%+.3f%%" % (t, len(v2_tier.get(t, [])), summ(v2_tier[t])["mean"])
+            for t in ("hollow", "cyan/orange", "red/green") if v2_tier.get(t)))
+        print("  forward by entry-zone:  " + " | ".join(
+            "%s n=%d net%+.3f%%" % (z, len(v2_zone[z]), summ(v2_zone[z])["mean"]) for z in sorted(v2_zone)))
+    print("  VERDICT: %s%s" % (verdict2, "   [!] DEGRADATION WARNING" if warn2 else ""))
+
+    # ---- append v1 log (unchanged format) ----
     new = not os.path.exists(LOG)
     with open(LOG, "a", encoding="utf-8") as fh:
         if new:
@@ -207,7 +318,29 @@ def main():
             ("%+.2f%%" % S_fw["cum"]) if nf else "--", ("%.2f" % tf) if nf > 1 else "--",
             ("%.0f%%" % E_fw["win"]) if E_fw["n"] else "--", ("%.0f%%" % E_is["win"]) if E_is["n"] else "--",
             verdict + (" [!]" if warn else "")))
-    print("  -> appended to %s" % os.path.relpath(LOG, REPO))
+
+    # ---- append v2 log ----
+    new2 = not os.path.exists(LOG2)
+    with open(LOG2, "a", encoding="utf-8") as fh:
+        if new2:
+            fh.write("# PIVOT-ZZTRAIL-v2 forward audit log (append-only — never edit past rows)\n\n")
+            fh.write("Freeze: %s UTC. In-sample baseline: n=%d, %+.3f%%/trade, %.1f%%W / %.1f%%L, PF %.2f, t %.2f "
+                     "(HEAVILY in-sample-fit — rules+avoid cells from the same tape). A trade is FORWARD iff its "
+                     "detection end_time > freeze_ts. Criteria: continue<%d, pass=n>=%d & net>0 & t>=1.5, "
+                     "fail=n>=%d & net<=0.\n\n"
+                     % (FRZ2["freeze_utc"], BASE2["n"], BASE2["net_per_trade"], BASE2["net_win_pct"],
+                        BASE2["loss_pct"], BASE2["profit_factor"], BASE2["t_stat"],
+                        CR2["continue_below_n"], CR2["continue_below_n"], CR2["continue_below_n"]))
+            fh.write("| audit UTC | tape end UTC | fwd n | fwd W% | fwd BE% | fwd L% | fwd net/trade | fwd cum% | "
+                     "t | verdict |\n")
+            fh.write("|---|---|---|---|---|---|---|---|---|---|\n")
+        fh.write("| %s | %s | %d | %s | %s | %s | %s | %s | %s | %s |\n" % (
+            now, time.strftime("%Y-%m-%d %H:%M", time.gmtime(et[-1])), nf2,
+            ("%.1f%%" % V_fw["wp"]) if nf2 else "--", ("%.1f%%" % V_fw["bep"]) if nf2 else "--",
+            ("%.1f%%" % V_fw["lp"]) if nf2 else "--", ("%+.3f%%" % netf2) if nf2 else "--",
+            ("%+.2f%%" % V_fw["cum"]) if nf2 else "--", ("%.2f" % tf2) if nf2 > 1 else "--",
+            verdict2 + (" [!]" if warn2 else "")))
+    print("\n  -> appended v1 -> %s | v2 -> %s" % (os.path.relpath(LOG, REPO), os.path.relpath(LOG2, REPO)))
 
 
 if __name__ == "__main__":
