@@ -97,6 +97,10 @@ _M10_LAYERS = [
     ("m10_stats", "Stats Box", False, True),              # default OFF ('s' toggles); checkbox state, restart resets.
     ("m10_icebergs", "Absorption", False, True),            # whale-defense bands (calc_absorption); default OFF, 'o' toggles
     ("m10_dom", "Depth / DOM Walls", True, True),           # live order-book walls on the bucket canvas (Phase A)
+    ("m10_structure", "Market Structure — scalp ZigZag", False, True),   # fine ZigZag (ZIGZAG_PCT, app/structure.py)
+    ("m10_structure_swing", "Market Structure — swing ZigZag", False, True),   # coarse ZigZag (ZIGZAG_SWING_PCT)
+    ("m10_choch", "Change of Character (CHoCH)", False, True),   # dashed break-lines on the scalp ZigZag
+    ("m10_4hzone", "4h Buy/Sell Zones (wicks)", False, True),   # last completed 4h bucket buyer/seller wick bands
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
 ]
 
@@ -195,6 +199,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     subWidgetToggled = QtCore.Signal(str, bool)
     scannerChanged = QtCore.Signal(str)
     scan_time_changed = QtCore.Signal()   # user moved the scanner "Zero Point"
+    helpRequested = QtCore.Signal()       # the top-right '?' — show the keyboard-shortcuts cheatsheet
 
     PANEL_WIDTH = 240
 
@@ -232,6 +237,20 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         outer.addWidget(scroll)
         content = QtWidgets.QWidget()
         scroll.setWidget(content)
+
+        # top-right '?' — floats above the scroll; opens the keyboard-shortcuts cheatsheet
+        self.help_btn = QtWidgets.QPushButton("?", self)
+        self.help_btn.setObjectName("helpbtn")
+        self.help_btn.setFixedSize(22, 22)
+        self.help_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.help_btn.setToolTip("Keyboard shortcuts")
+        self.help_btn.setStyleSheet(
+            "QPushButton#helpbtn { background:#2a2e39; color:#8fd6ff; border:1px solid #3a4150;"
+            " border-radius:11px; font-weight:bold; font-family:Consolas; font-size:13px; }"
+            "QPushButton#helpbtn:hover { background:#3a4150; color:#bfe8ff; }")
+        self.help_btn.move(self.PANEL_WIDTH - 30, 8)
+        self.help_btn.clicked.connect(self.helpRequested.emit)
+        self.help_btn.raise_()
 
         root = QtWidgets.QVBoxLayout(content)
         root.setContentsMargins(12, 40, 12, 12); root.setSpacing(6)
@@ -298,10 +317,12 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         # Alerts moved to a dedicated floating 🔔 button (fix #8) — not here.
         for key, label in [("drawing", "Vector Drawing Toolbar"),
                            ("cob", "Order Book DOM Ladder"),
-                           ("audio", "Audio Feed"),
-                           ("pivot_audio", "Pivot Alert")]:      # OWN voice, independent of the Audio Feed
+                           ("audio", "OB/Iceberg Alert"),
+                           ("pivot_audio", "Pivot Alert")]:      # OWN voice, independent of the OB/Iceberg alert
             cb = QtWidgets.QCheckBox(label)
-            cb.setChecked(key in ("audio", "drawing"))   # Audio + Vector Drawing ON by default (before connect)
+            # First-launch DEFAULTS (before connect): Pivot Alert + Vector Drawing ON, OB/Iceberg Alert OFF.
+            # Persistence (terminal saved toggles) overrides these on every later launch.
+            cb.setChecked(key in ("drawing", "pivot_audio"))
             cb.toggled.connect(lambda on, k=key: self.subWidgetToggled.emit(k, on))
             self.sub_checks[key] = cb
             self.sub_section.addWidget(cb)

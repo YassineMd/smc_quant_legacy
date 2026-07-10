@@ -56,6 +56,30 @@ def _p9_global(snaps):
     return a_sh, e_sh, r_sh, sum0
 
 
+def _causal_share(bull, bear, window):
+    """FIRST-PRINT (non-locked) rolling share: left-clamped window [i-h, i] using ONLY data up to bar i (no
+    forward buckets). This is the LIVE panel-2 value as it reads the instant bar i prints — it never repaints,
+    unlike the centered rolling_share. The D tier is read off this (frozen at the fire bar)."""
+    h = max(1, window) // 2
+    b = np.asarray(bull, float); r = np.asarray(bear, float)
+    B = np.concatenate([[0.0], np.cumsum(b)]); Rr = np.concatenate([[0.0], np.cumsum(r)])
+    out = np.empty(len(b))
+    for i in range(len(b)):
+        lo = max(0, i - h); sb = B[i + 1] - B[lo]; sr = Rr[i + 1] - Rr[lo]; tot = sb + sr
+        out[i] = sb / tot if tot > 0 else 0.5
+    return out
+
+
+def eff_causal_share(buckets):
+    """The first-print eff-agg (panel-2) share over `buckets` — the frozen, non-repainting value the D tier uses."""
+    n = len(buckets)
+    if n == 0:
+        return np.zeros(0)
+    ab, ar, sval = R.absorption_series(buckets, 0, n - 1, config.ABSORP_VOL_WINDOW)
+    eb, er_, _ = R.eff_agg_from_absorption(buckets, 0, n - 1, config.EFF_AGG_FORCE_WINDOW, sval)
+    return _causal_share(eb, er_, LW)
+
+
 # --- phase trajectory (setups_S3.phase_traj, split for speed — EXACT same result) ------------------
 # phase_traj(i) EMAs the per-bar Naive-Bayes posterior over the trailing selection ending at i. The
 # posterior (the gaussian/exp) depends ONLY on bar k, not on i, so we compute it ONCE per bar
@@ -135,11 +159,12 @@ def detect_pivots(buckets, return_eff=False):
     """Scan ``buckets`` (list of wire/full_snapshot dicts) and return every S5j-r5 fire as
     {det_i, entry_i, side, wait_end_i, zref_i}. det_i/entry_i/zref_i are indices into ``buckets`` (entry_i
     None = CANCELLED); zref_i = the bar that set the leg-5 N=60..100 extreme open (for the overlay leader).
-    return_eff=True -> (fires, e_sh, sum0) where e_sh is the panel-2 eff-agg share and sum0 the panel-0
+    return_eff=True -> (fires, e_sh, e_sh_c, sum0): e_sh = centered panel-2 share (repaints), e_sh_c = FIRST-PRINT
+    share (non-locked, frozen — read the D tier off this), sum0 = panel-0
     smoothed SUM line per bar (for the D->E spread-trajectory readout); the fire set is byte-identical."""
     n = len(buckets)
     if n < FIRST + 1:
-        return ([], np.zeros(n), np.zeros(n)) if return_eff else []
+        return ([], np.zeros(n), np.zeros(n), np.zeros(n)) if return_eff else []
     op = np.array([float(b.get("open", b.get("open_price", 0.0))) for b in buckets])
     cl = np.array([float(b.get("close", b.get("close_price", 0.0))) for b in buckets])
     hi = np.array([float(b.get("high", 0.0)) for b in buckets])
@@ -194,7 +219,7 @@ def detect_pivots(buckets, return_eff=False):
                         "entry_i": _entry_after(rcl, rop, rbase, lo_, hi, base, et, b, side, n),
                         "wait_end_i": int(np.searchsorted(et, et[b] + WAIT_SECS, side="right")),
                         "zref_i": int(zamax[b] if side == "long" else zamin[b])})
-    return (out, e_sh, sum0) if return_eff else out
+    return (out, e_sh, eff_causal_share(buckets), sum0) if return_eff else out
 
 
 def _entry_after(rcl, rop, rbase, lo_, hi, base, et, b, side, n):
