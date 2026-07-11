@@ -1,26 +1,23 @@
-"""P0 divergence from D to the ENTRY (E2 or E-held). P0 = panel-0 smoothed SUM line (sum0 in pivot_detect,
-the signed confluence oscillator that crosses +/-50; +ve = bull confluence). For each frozen-strategy trade we
-read aligned-P0 (sum0 for long, -sum0 for short, so higher = more in the trade's favour) at the DETECTION bar D
-and at the ENTRY bar, and the price move D->entry (aligned).
-
-DIVERGENCE question: as price pulls back into the entry (price_aligned < 0), does P0 hold up / rise
-(dp0 = P0_entry - P0_D > 0)?  That 'confluence building while price dips' is bullish/supportive divergence;
-P0 eroding into the entry (dp0 < 0) is the warning. We split trades by dp0 sign and by the price/P0 sign cross
-(BULL-DIV / BEAR-DIV / CONFIRM) and report the three-outcome mix (winner net>+0.05%% / breakeven |net|<=0.05%% /
-loser net<-0.05%%), plus mean dp0 per outcome and corr(dp0, net). Frozen exit throughout.
-Run: python study/pivot_p0_divergence.py
+"""Study the SETTLING WINDOW — what happens between the moment a signal prints (entry bar j0, on the unlocked
+value) and when it confirms/repaints 7 buckets later (c = j0 + LOCK). Compares:
+  A = enter@PRINT (j0)            — the settled-immediate look-ahead reference (+$234).
+  B = enter@CONFIRMATION (j0+7)   — wait the full settle, then enter at market (no pullback).
+Then dissects the [j0 -> c] window (aligned to the trade): close move, MFE, MAE, split by A-winner/breakeven/loser
+— to see whether the 'edge' is simply the favourable price move that happens DURING settling (i.e. the look-ahead).
+Three-outcome NET + t. Run: python study/pivot_settle_window.py
 """
-import os, sys, glob, json, sqlite3
+import os, sys, glob, json, sqlite3, bisect
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__)); REPO = os.path.dirname(HERE)
 sys.path.insert(0, REPO); sys.path.insert(0, HERE)
 from app.persistence import _bucket_from_dict            # noqa: E402
-from app import pivot_detect as PD                        # noqa: E402
+from app import pivot_detect as PD, config               # noqa: E402
 from app.structure import ZIGZAG_PCT                       # noqa: E402
 
 WIN = 3600.0; FEE = 0.10; P2D_HI = 63.0; P2D_VHI = 80.0; E2_MIN = 30.0; SL = 0.003
 TRAIL = 0.0005; SL_PAD = 0.001; ARM = 0.0040; LOCK = 0.0010; BE = 0.05
+LOCK_LAG = config.LIVE_PANEL_WINDOW // 2        # 7
 
 
 def load_1m():
@@ -57,11 +54,10 @@ def zz(H, L, thr):
 
 def main():
     raws = load_1m(); bks = [_bucket_from_dict(d) for d in raws]; snaps = [b.full_snapshot() for b in bks]
-    n = len(bks)
-    fires, e_sh, _e_sh_c, sum0 = PD.detect_pivots(snaps, return_eff=True)   # sum0 = P0 panel-0 SUM line, byte-identical
-    e_sh = np.asarray(e_sh, float); sum0 = np.asarray(sum0, float)
+    n = len(bks); _, e_sh, _, _ = PD._p9_global(snaps); e_sh = np.asarray(e_sh, float)
     hi = np.array([b.high for b in bks]); lo = np.array([b.low for b in bks]); cl = np.array([b.close_price for b in bks])
     et = np.array([b.end_time for b in bks]); st = np.array([float(d["start_time"]) for d in raws])
+
     sw = zz(list(hi), list(lo), ZIGZAG_PCT / 100.0)
     lows = []; highs = []; ph = pl = None
     for pb, p, ih, cb in sw:
@@ -110,7 +106,7 @@ def main():
                 armed = True
         return ((cl[-1] - entry) if buy else (entry - cl[-1])) / entry * 100.0
 
-    fires = sorted(fires, key=lambda f: (f["det_i"], f["side"]))
+    fires = sorted(PD.detect_pivots(snaps), key=lambda f: (f["det_i"], f["side"]))
     scan = {"long": 0, "short": 0}; rows = []
     for f in fires:
         s = f["side"]; det = f["det_i"]; ent = f["entry_i"]
@@ -120,7 +116,7 @@ def main():
         if ent is None:
             continue
         buy = s == "long"; p2d = spr(det, buy)
-        tier = "cyan" if p2d > P2D_VHI else ("green" if p2d > P2D_HI else "hollow")
+        tier = "cyan/orange" if p2d > P2D_VHI else ("red/green" if p2d > P2D_HI else "hollow")
         liv = [spr(k, buy) for k in range(det, ent + 1)]
         e_held = (liv[-1] > 0.0 and min(liv) > -50.0) if liv else True
         j0 = None
@@ -128,63 +124,56 @@ def main():
             if tier == "hollow":
                 j0 = ent
         else:
-            te = float(et[ent]); e2 = None
+            te = float(et[ent])
             for j in range(ent + 1, n):
                 if st[j] > te + WIN:
                     break
                 if spr(j, buy) >= E2_MIN:
-                    e2 = j; break
-            if e2 is not None:
-                j0 = e2
+                    j0 = j; break
         if j0 is None:
             continue
-        g = walk(det, j0, buy)
-        pd = float(cl[det]); pe = float(cl[j0])
-        ap0_d = sum0[det] if buy else -sum0[det]                 # aligned P0 at D
-        ap0_e = sum0[j0] if buy else -sum0[j0]                   # aligned P0 at entry
-        dp0 = ap0_e - ap0_d                                      # P0 change into the entry (aligned)
-        pxal = ((pe - pd) if buy else (pd - pe)) / pd * 100.0    # price move D->entry (aligned; <0 = pullback)
-        rows.append((g, buy, ap0_d, ap0_e, dp0, pxal))
+        c = j0 + LOCK_LAG
+        gA = walk(det, j0, buy) - FEE
+        gB = (walk(det, c, buy) - FEE) if c < n else None
+        px0 = float(cl[j0]); sg = 1.0 if buy else -1.0
+        end = min(c, n - 1)
+        # settling window [j0+1 .. c], aligned to the trade
+        mfe = mae = 0.0
+        for k in range(j0 + 1, end + 1):
+            fav = sg * (float(hi[k] if buy else lo[k]) - px0) / px0 * 100.0
+            adv = sg * (px0 - float(lo[k] if buy else hi[k])) / px0 * 100.0
+            mfe = max(mfe, fav); mae = max(mae, adv)
+        cmove = sg * (float(cl[end]) - px0) / px0 * 100.0        # close move over the window
+        rows.append(dict(buy=buy, gA=gA, gB=gB, mfe=mfe, mae=mae, cmove=cmove))
 
-    G = np.array([r[0] for r in rows]); NET = G - FEE
-    AP0D = np.array([r[2] for r in rows]); AP0E = np.array([r[3] for r in rows])
-    DP0 = np.array([r[4] for r in rows]); PXAL = np.array([r[5] for r in rows])
-    d = 1000.0 / 100.0
-    win = NET > BE; be = np.abs(NET) <= BE; los = NET < -BE
+    gA = np.array([r["gA"] for r in rows]); gB = np.array([r["gB"] if r["gB"] is not None else np.nan for r in rows])
+    mfe = np.array([r["mfe"] for r in rows]); mae = np.array([r["mae"] for r in rows]); cmove = np.array([r["cmove"] for r in rows])
+    win = gA > BE; los = gA < -BE; beq = np.abs(gA) <= BE
 
-    def line(tag, m):
-        g = NET[m]; nn = max(1, len(g))
-        if not len(g):
-            print("  %-24s n=0" % tag); return
-        print("  %-24s n=%-3d | W %2d (%4.1f%%) | BE %2d (%4.1f%%) | L %2d (%4.1f%%) | net %+.3f%% | TOT %+.2f%% ($%+.0f)"
-              % (tag, len(g), int(win[m].sum()), 100.0 * win[m].sum() / nn,
-                 int(be[m].sum()), 100.0 * be[m].sum() / nn,
-                 int(los[m].sum()), 100.0 * los[m].sum() / nn, g.mean(), g.sum(), g.sum() * d))
+    def show(tag, a):
+        a = np.asarray(a); a = a[~np.isnan(a)]
+        if not len(a):
+            print("  %-28s n=0" % tag); return
+        w = int((a > BE).sum()); l = int((a < -BE).sum()); nn = len(a)
+        t = a.mean() / (a.std(ddof=1) / np.sqrt(nn)) if nn > 1 and a.std(ddof=1) > 0 else 0.0
+        print("  %-28s n=%-3d | W %5.1f%% | L %5.1f%% | net %+.3f%% | TOT %+.2f%% ($%+.0f) | t=%+.2f"
+              % (tag, nn, 100.0 * w / nn, 100.0 * l / nn, a.mean(), a.sum(), a.sum() * 10.0, t))
 
-    print("P0 DIVERGENCE  D -> entry (E2 / E-held)  — P0 = panel-0 SUM line, aligned to trade side  (n=%d)\n" % len(rows))
-    print("  CONTEXT: mean aligned-P0 @D %+.1f -> @entry %+.1f | mean dP0 %+.1f | mean price move D->entry %+.2f%% (<0=pullback)"
-          % (AP0D.mean(), AP0E.mean(), DP0.mean(), PXAL.mean()))
-
-    print("\n  by dP0 sign (did aligned-P0 rise or fall into the entry?):")
-    line("P0 ROSE  (dP0 > 0)", DP0 > 0)
-    line("P0 FELL  (dP0 <= 0)", DP0 <= 0)
-
-    print("\n  divergence cross (price move vs P0 move, both aligned):")
-    line("BULL-DIV (px dn, P0 up)", (PXAL < 0) & (DP0 > 0))
-    line("BEAR-DIV (px up, P0 dn)", (PXAL > 0) & (DP0 < 0))
-    line("CONFIRM+ (px up, P0 up)", (PXAL > 0) & (DP0 > 0))
-    line("CONFIRM- (px dn, P0 dn)", (PXAL < 0) & (DP0 < 0))
-
-    print("\n  mean dP0 per outcome (does divergence separate winners from losers?):")
-    for tag, m in (("winners", win), ("breakeven", be), ("losers", los)):
+    print("SETTLING WINDOW study  (print bar j0 -> confirmation j0+%d), %d trades\n" % (LOCK_LAG, len(rows)))
+    print("A vs B — where you enter:")
+    show("  A: enter@PRINT (look-ahead)", gA)
+    show("  B: enter@CONFIRMATION+%d" % LOCK_LAG, gB)
+    print("\nWhat happens in the %d-bucket window [j0 -> j0+%d], aligned to the trade:" % (LOCK_LAG, LOCK_LAG))
+    print("  %-16s | close-move | MFE(fav) | MAE(adv)" % "A-outcome")
+    for tag, m in (("WINNERS", win), ("BREAKEVEN", beq), ("LOSERS", los)):
         if m.any():
-            print("    %-10s n=%-3d | mean dP0 %+.2f | mean P0@D %+.1f | mean P0@entry %+.1f | mean px %+.2f%%"
-                  % (tag, int(m.sum()), DP0[m].mean(), AP0D[m].mean(), AP0E[m].mean(), PXAL[m].mean()))
-    cw = np.corrcoef(DP0, (NET > BE).astype(float))[0, 1]
-    cn = np.corrcoef(DP0, NET)[0, 1]
-    print("\n  corr(dP0, winner) %.2f | corr(dP0, net) %.2f" % (cw, cn))
-
-    print("\n  ALL (reference):"); line("ALL", np.ones(len(G), bool))
+            print("  %-16s | %+8.3f%% | %+7.3f%% | %+7.3f%%" % (tag, cmove[m].mean(), mfe[m].mean(), mae[m].mean()))
+    print("\n  corr(window close-move, full trade gA) = %.2f" % np.corrcoef(cmove, gA)[0, 1])
+    # how much of the eventual move is already spent by confirmation, for winners
+    wmask = win & ~np.isnan(gB)
+    print("  A-winners: mean full trade %+.3f%% | mean move already made by confirmation %+.3f%% (%.0f%% of it)"
+          % (gA[wmask].mean(), cmove[wmask].mean(), 100.0 * cmove[wmask].mean() / max(1e-9, gA[wmask].mean())))
+    print("  => entering at confirmation (B) forgoes that window move; A 'knew' it because the settled signal IS it.")
 
 
 if __name__ == "__main__":

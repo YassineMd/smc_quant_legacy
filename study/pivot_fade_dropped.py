@@ -1,26 +1,34 @@
-"""P0 divergence from D to the ENTRY (E2 or E-held). P0 = panel-0 smoothed SUM line (sum0 in pivot_detect,
-the signed confluence oscillator that crosses +/-50; +ve = bull confluence). For each frozen-strategy trade we
-read aligned-P0 (sum0 for long, -sum0 for short, so higher = more in the trade's favour) at the DETECTION bar D
-and at the ENTRY bar, and the price move D->entry (aligned).
-
-DIVERGENCE question: as price pulls back into the entry (price_aligned < 0), does P0 hold up / rise
-(dp0 = P0_entry - P0_D > 0)?  That 'confluence building while price dips' is bullish/supportive divergence;
-P0 eroding into the entry (dp0 < 0) is the warning. We split trades by dp0 sign and by the price/P0 sign cross
-(BULL-DIV / BEAR-DIV / CONFIRM) and report the three-outcome mix (winner net>+0.05%% / breakeven |net|<=0.05%% /
-loser net<-0.05%%), plus mean dp0 per outcome and corr(dp0, net). Frozen exit throughout.
-Run: python study/pivot_p0_divergence.py
+"""FADE test: for the pivot setups PIVOT-ZZTRAIL-v2 DROPS (fail the zone take-filter or hit a hollow AVOID cell),
+take the OPPOSITE direction at the same entry bar (mirrored ZZTRAIL structural SL/trail + breakeven lock).
+Compares: v2 TAKE book (normal dir) | the DROPPED setups in their ORIGINAL dir (what skipping forgoes) | the
+DROPPED setups FADED (opposite dir) | the COMBINED book (take normal + fade dropped). Three-outcome on NET.
+Answers: does fading the non-qualifying setups make money, and does take+fade beat take-only?
+Run: python study/pivot_fade_dropped.py
 """
-import os, sys, glob, json, sqlite3
+import os, sys, glob, json, sqlite3, bisect
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__)); REPO = os.path.dirname(HERE)
 sys.path.insert(0, REPO); sys.path.insert(0, HERE)
 from app.persistence import _bucket_from_dict            # noqa: E402
-from app import pivot_detect as PD                        # noqa: E402
+from app import pivot_detect as PD, bar_quantiles         # noqa: E402
 from app.structure import ZIGZAG_PCT                       # noqa: E402
 
 WIN = 3600.0; FEE = 0.10; P2D_HI = 63.0; P2D_VHI = 80.0; E2_MIN = 30.0; SL = 0.003
 TRAIL = 0.0005; SL_PAD = 0.001; ARM = 0.0040; LOCK = 0.0010; BE = 0.05
+AVOID = {("buy", "inzone-sell", "body"), ("sell", "inzone-sell", "inzone-sell"),
+         ("buy", "beyond-down", "beyond-down"), ("sell", "beyond-up", "beyond-up")}
+
+
+def take_rule(zone, buy, tier):
+    own_in = (zone == "inzone-buy") if buy else (zone == "inzone-sell")
+    rev_in = (zone == "inzone-sell") if buy else (zone == "inzone-buy")
+    own_bey = (zone == "beyond-down") if buy else (zone == "beyond-up")
+    if tier == "hollow":
+        return rev_in or (zone == "body") or own_bey
+    if tier == "cyan/orange":
+        return own_in
+    return own_in or own_bey
 
 
 def load_1m():
@@ -36,6 +44,35 @@ def load_1m():
                 by[base + j + 1] = d
         con.close()
     return [by[b] for b in sorted(by)]
+
+
+def load_4h():
+    by = {}
+    for db in sorted(glob.glob(os.path.join(REPO, "study", "data", "history_snapshot_*.db"))):
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+        for (x,) in con.execute("SELECT data FROM closed_buckets WHERE tf='4h' ORDER BY id"):
+            b = json.loads(x)
+            if b.get("levels"):
+                by[float(b["end_time"])] = b
+        con.close()
+    b4 = [by[k] for k in sorted(by)]
+    et = [float(b["end_time"]) for b in b4]; vlo = []; vhi = []; lw = []; hg = []
+    for b in b4:
+        q = bar_quantiles.vq(b["levels"]); vlo.append(float(q[0])); vhi.append(float(q[2]))
+        lw.append(float(b["low"])); hg.append(float(b["high"]))
+    return et, vlo, vhi, lw, hg
+
+
+def zone5(px, low, vlo, vhi, high):
+    if px < low:
+        return "beyond-down"
+    if px <= vlo:
+        return "inzone-buy"
+    if px < vhi:
+        return "body"
+    if px <= high:
+        return "inzone-sell"
+    return "beyond-up"
 
 
 def zz(H, L, thr):
@@ -57,11 +94,17 @@ def zz(H, L, thr):
 
 def main():
     raws = load_1m(); bks = [_bucket_from_dict(d) for d in raws]; snaps = [b.full_snapshot() for b in bks]
-    n = len(bks)
-    fires, e_sh, _e_sh_c, sum0 = PD.detect_pivots(snaps, return_eff=True)   # sum0 = P0 panel-0 SUM line, byte-identical
-    e_sh = np.asarray(e_sh, float); sum0 = np.asarray(sum0, float)
+    n = len(bks); _, e_sh, _, _ = PD._p9_global(snaps)
     hi = np.array([b.high for b in bks]); lo = np.array([b.low for b in bks]); cl = np.array([b.close_price for b in bks])
     et = np.array([b.end_time for b in bks]); st = np.array([float(d["start_time"]) for d in raws])
+    z_et, z_lo, z_hi, z_low, z_high = load_4h()
+
+    def zone_at(bar):
+        i4 = bisect.bisect_right(z_et, et[bar]) - 1
+        if i4 < 0:
+            return None
+        return zone5(float(cl[bar]), z_low[i4], z_lo[i4], z_hi[i4], z_high[i4])
+
     sw = zz(list(hi), list(lo), ZIGZAG_PCT / 100.0)
     lows = []; highs = []; ph = pl = None
     for pb, p, ih, cb in sw:
@@ -110,7 +153,7 @@ def main():
                 armed = True
         return ((cl[-1] - entry) if buy else (entry - cl[-1])) / entry * 100.0
 
-    fires = sorted(fires, key=lambda f: (f["det_i"], f["side"]))
+    fires = sorted(PD.detect_pivots(snaps), key=lambda f: (f["det_i"], f["side"]))
     scan = {"long": 0, "short": 0}; rows = []
     for f in fires:
         s = f["side"]; det = f["det_i"]; ent = f["entry_i"]
@@ -120,7 +163,7 @@ def main():
         if ent is None:
             continue
         buy = s == "long"; p2d = spr(det, buy)
-        tier = "cyan" if p2d > P2D_VHI else ("green" if p2d > P2D_HI else "hollow")
+        tier = "cyan/orange" if p2d > P2D_VHI else ("red/green" if p2d > P2D_HI else "hollow")
         liv = [spr(k, buy) for k in range(det, ent + 1)]
         e_held = (liv[-1] > 0.0 and min(liv) > -50.0) if liv else True
         j0 = None
@@ -128,63 +171,53 @@ def main():
             if tier == "hollow":
                 j0 = ent
         else:
-            te = float(et[ent]); e2 = None
+            te = float(et[ent])
             for j in range(ent + 1, n):
                 if st[j] > te + WIN:
                     break
                 if spr(j, buy) >= E2_MIN:
-                    e2 = j; break
-            if e2 is not None:
-                j0 = e2
+                    j0 = j; break
         if j0 is None:
             continue
-        g = walk(det, j0, buy)
-        pd = float(cl[det]); pe = float(cl[j0])
-        ap0_d = sum0[det] if buy else -sum0[det]                 # aligned P0 at D
-        ap0_e = sum0[j0] if buy else -sum0[j0]                   # aligned P0 at entry
-        dp0 = ap0_e - ap0_d                                      # P0 change into the entry (aligned)
-        pxal = ((pe - pd) if buy else (pd - pe)) / pd * 100.0    # price move D->entry (aligned; <0 = pullback)
-        rows.append((g, buy, ap0_d, ap0_e, dp0, pxal))
+        zD = zone_at(det); zE = zone_at(j0)
+        if zD is None or zE is None:
+            continue
+        take = take_rule(zD, buy, tier) or take_rule(zE, buy, tier)
+        side = "buy" if buy else "sell"
+        if tier == "hollow" and (side, zD, zE) in AVOID:
+            take = False
+        rows.append(dict(norm=walk(det, j0, buy) - FEE, fade=walk(det, j0, not buy) - FEE,
+                         take=take, tier=tier, buy=buy))
 
-    G = np.array([r[0] for r in rows]); NET = G - FEE
-    AP0D = np.array([r[2] for r in rows]); AP0E = np.array([r[3] for r in rows])
-    DP0 = np.array([r[4] for r in rows]); PXAL = np.array([r[5] for r in rows])
-    d = 1000.0 / 100.0
-    win = NET > BE; be = np.abs(NET) <= BE; los = NET < -BE
+    NORM = np.array([r["norm"] for r in rows]); FADE = np.array([r["fade"] for r in rows])
+    TAKE = np.array([r["take"] for r in rows]); TIER = np.array([r["tier"] for r in rows]); BUY = np.array([r["buy"] for r in rows])
 
-    def line(tag, m):
-        g = NET[m]; nn = max(1, len(g))
-        if not len(g):
-            print("  %-24s n=0" % tag); return
-        print("  %-24s n=%-3d | W %2d (%4.1f%%) | BE %2d (%4.1f%%) | L %2d (%4.1f%%) | net %+.3f%% | TOT %+.2f%% ($%+.0f)"
-              % (tag, len(g), int(win[m].sum()), 100.0 * win[m].sum() / nn,
-                 int(be[m].sum()), 100.0 * be[m].sum() / nn,
-                 int(los[m].sum()), 100.0 * los[m].sum() / nn, g.mean(), g.sum(), g.sum() * d))
+    def line(tag, net):
+        a = np.asarray(net); nn = len(a)
+        if nn == 0:
+            print("  %-30s n=0" % tag); return
+        w = int((a > BE).sum()); b = int((np.abs(a) <= BE).sum()); l = int((a < -BE).sum())
+        print("  %-30s n=%-3d | W %2d (%5.1f%%) | BE %2d (%5.1f%%) | L %2d (%5.1f%%) | net %+.3f%% | TOT %+.2f%% ($%+.0f)"
+              % (tag, nn, w, 100.0 * w / nn, b, 100.0 * b / nn, l, 100.0 * l / nn, a.mean(), a.sum(), a.sum() * 10.0))
 
-    print("P0 DIVERGENCE  D -> entry (E2 / E-held)  — P0 = panel-0 SUM line, aligned to trade side  (n=%d)\n" % len(rows))
-    print("  CONTEXT: mean aligned-P0 @D %+.1f -> @entry %+.1f | mean dP0 %+.1f | mean price move D->entry %+.2f%% (<0=pullback)"
-          % (AP0D.mean(), AP0E.mean(), DP0.mean(), PXAL.mean()))
+    drop = ~TAKE
+    print("FADE-the-dropped test  (%d setups; v2 takes %d, drops %d)\n" % (len(rows), int(TAKE.sum()), int(drop.sum())))
+    line("v2 TAKE (normal dir)", NORM[TAKE])
+    print("\n  the DROPPED setups:")
+    line("  original dir (skip=forgo)", NORM[drop])
+    line("  FADED (opposite dir)", FADE[drop])
+    print("\n  COMBINED books:")
+    line("take-only (v2, %d)" % int(TAKE.sum()), NORM[TAKE])
+    combined = np.concatenate([NORM[TAKE], FADE[drop]])
+    line("take + FADE dropped", combined)
+    line("(ref) take + skip dropped", NORM[TAKE])
+    line("(ref) ALL normal, no filter", NORM)
 
-    print("\n  by dP0 sign (did aligned-P0 rise or fall into the entry?):")
-    line("P0 ROSE  (dP0 > 0)", DP0 > 0)
-    line("P0 FELL  (dP0 <= 0)", DP0 <= 0)
-
-    print("\n  divergence cross (price move vs P0 move, both aligned):")
-    line("BULL-DIV (px dn, P0 up)", (PXAL < 0) & (DP0 > 0))
-    line("BEAR-DIV (px up, P0 dn)", (PXAL > 0) & (DP0 < 0))
-    line("CONFIRM+ (px up, P0 up)", (PXAL > 0) & (DP0 > 0))
-    line("CONFIRM- (px dn, P0 dn)", (PXAL < 0) & (DP0 < 0))
-
-    print("\n  mean dP0 per outcome (does divergence separate winners from losers?):")
-    for tag, m in (("winners", win), ("breakeven", be), ("losers", los)):
-        if m.any():
-            print("    %-10s n=%-3d | mean dP0 %+.2f | mean P0@D %+.1f | mean P0@entry %+.1f | mean px %+.2f%%"
-                  % (tag, int(m.sum()), DP0[m].mean(), AP0D[m].mean(), AP0E[m].mean(), PXAL[m].mean()))
-    cw = np.corrcoef(DP0, (NET > BE).astype(float))[0, 1]
-    cn = np.corrcoef(DP0, NET)[0, 1]
-    print("\n  corr(dP0, winner) %.2f | corr(dP0, net) %.2f" % (cw, cn))
-
-    print("\n  ALL (reference):"); line("ALL", np.ones(len(G), bool))
+    print("\n  FADE book by what's being faded:")
+    for t in ("hollow", "cyan/orange", "red/green"):
+        line("  faded %-11s" % t, FADE[drop & (TIER == t)])
+    line("  faded original-longs", FADE[drop & BUY])
+    line("  faded original-shorts", FADE[drop & ~BUY])
 
 
 if __name__ == "__main__":

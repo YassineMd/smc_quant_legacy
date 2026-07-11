@@ -1,14 +1,10 @@
-"""P0 divergence from D to the ENTRY (E2 or E-held). P0 = panel-0 smoothed SUM line (sum0 in pivot_detect,
-the signed confluence oscillator that crosses +/-50; +ve = bull confluence). For each frozen-strategy trade we
-read aligned-P0 (sum0 for long, -sum0 for short, so higher = more in the trade's favour) at the DETECTION bar D
-and at the ENTRY bar, and the price move D->entry (aligned).
-
-DIVERGENCE question: as price pulls back into the entry (price_aligned < 0), does P0 hold up / rise
-(dp0 = P0_entry - P0_D > 0)?  That 'confluence building while price dips' is bullish/supportive divergence;
-P0 eroding into the entry (dp0 < 0) is the warning. We split trades by dp0 sign and by the price/P0 sign cross
-(BULL-DIV / BEAR-DIV / CONFIRM) and report the three-outcome mix (winner net>+0.05%% / breakeven |net|<=0.05%% /
-loser net<-0.05%%), plus mean dp0 per outcome and corr(dp0, net). Frozen exit throughout.
-Run: python study/pivot_p0_divergence.py
+"""Analyse the PANELS through the settle. Panels (signed, aligned to the trade): P1=absorption (1-2a)*100,
+P2=eff-agg (2e-1)*100, P3=E/R (2r-1)*100, P4=exhaustion (trailing -> CAUSAL, no repaint), P0=SUM (sum0), and
+P9=composite lean. P1/P2/P3 use the CENTERED rolling-share (repaint over 7 buckets); P4 is trailing (causal).
+For every confirmed settled trade, take each panel's value at the entry bar j0 in SETTLED and CAUSAL (unlocked,
+left-clamped) form, split by outcome (winner/breakeven/loser of the look-ahead entry), and report: mean aligned
+CAUSAL value per outcome, corr(causal panel, trade PnL), and the repaint (settled-causal). Point: does any panel
+predict the outcome CAUSALLY (P4 is the prime suspect since it doesn't repaint)? Run: python study/pivot_panel_settle.py
 """
 import os, sys, glob, json, sqlite3
 import numpy as np
@@ -16,11 +12,22 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); REPO = os.path.dirname(HERE)
 sys.path.insert(0, REPO); sys.path.insert(0, HERE)
 from app.persistence import _bucket_from_dict            # noqa: E402
-from app import pivot_detect as PD                        # noqa: E402
+from app import pivot_detect as PD, region_state as R, config   # noqa: E402
 from app.structure import ZIGZAG_PCT                       # noqa: E402
 
 WIN = 3600.0; FEE = 0.10; P2D_HI = 63.0; P2D_VHI = 80.0; E2_MIN = 30.0; SL = 0.003
-TRAIL = 0.0005; SL_PAD = 0.001; ARM = 0.0040; LOCK = 0.0010; BE = 0.05
+TRAIL = 0.0005; SL_PAD = 0.001; ARM = 0.0040; LOCK = 0.0010; BE = 0.05; LW = config.LIVE_PANEL_WINDOW; LK = LW // 2
+
+
+def causal_share(bull, bear, window):
+    h = max(1, window) // 2
+    b = np.asarray(bull, float); r = np.asarray(bear, float)
+    B = np.concatenate([[0.0], np.cumsum(b)]); Rr = np.concatenate([[0.0], np.cumsum(r)])
+    out = np.empty(len(b))
+    for i in range(len(b)):
+        lo = max(0, i - h); sb = B[i + 1] - B[lo]; sr = Rr[i + 1] - Rr[lo]; tot = sb + sr
+        out[i] = sb / tot if tot > 0 else 0.5
+    return out
 
 
 def load_1m():
@@ -58,8 +65,31 @@ def zz(H, L, thr):
 def main():
     raws = load_1m(); bks = [_bucket_from_dict(d) for d in raws]; snaps = [b.full_snapshot() for b in bks]
     n = len(bks)
-    fires, e_sh, _e_sh_c, sum0 = PD.detect_pivots(snaps, return_eff=True)   # sum0 = P0 panel-0 SUM line, byte-identical
-    e_sh = np.asarray(e_sh, float); sum0 = np.asarray(sum0, float)
+    _, e_sh_ref, _, sum0_ref = PD._p9_global(snaps)
+    # rebuild the panel inputs (mirror _p9_global)
+    ab, ar, sval = R.absorption_series(snaps, 0, n - 1, config.ABSORP_VOL_WINDOW)
+    eb, er_, _ = R.eff_agg_from_absorption(snaps, 0, n - 1, config.EFF_AGG_FORCE_WINDOW, sval)
+    rb = [s.get("buyer_er", 0.0) for s in snaps]; rs_ = [s.get("seller_er", 0.0) for s in snaps]
+    ex = R.trailing_exhaustion(snaps, 0, n - 1, LW, config.EXH_MEASURE, config.EXH_SEL_MIN_WINDOW)
+    s4 = np.empty(n); hold = 0.0
+    for k, (b4, s4_) in enumerate(ex):
+        inst = (s4_ - b4) * 100.0
+        if abs(inst) > 1e-9:
+            hold = inst
+        s4[k] = hold
+    a_s = np.array(R.rolling_share(ab, ar, LW)); e_s = np.array(R.rolling_share(eb, er_, LW)); r_s = np.array(R.rolling_share(rb, rs_, LW))
+    a_c = causal_share(ab, ar, LW); e_c = causal_share(eb, er_, LW); r_c = causal_share(rb, rs_, LW)
+
+    def panels(a, e, r):                                          # signed panel series from shares (P4/exh causal both)
+        P1 = (1 - 2 * a) * 100.0; P2 = (2 * e - 1) * 100.0; P3 = (2 * r - 1) * 100.0; P4 = s4
+        lean = P1 + P2 + P3; bull = (lean + s4) / 4.0; bear = (lean - s4) / 4.0
+        idx0 = np.maximum(np.arange(n) - LK, 0)
+        P0 = (bull + bull[idx0]) / 2.0 + (bear + bear[idx0]) / 2.0
+        P9 = (P1 + P2 + P3 + P4) / 4.0
+        return dict(P0=P0, P1=P1, P2=P2, P3=P3, P4=P4, P9=P9)
+    PS = panels(a_s, e_s, r_s); PC = panels(a_c, e_c, r_c)        # settled / causal
+    print("sanity: rebuilt settled P0 vs _p9_global sum0 max|diff|=%.2e" % np.max(np.abs(PS["P0"] - np.array(sum0_ref))))
+
     hi = np.array([b.high for b in bks]); lo = np.array([b.low for b in bks]); cl = np.array([b.close_price for b in bks])
     et = np.array([b.end_time for b in bks]); st = np.array([float(d["start_time"]) for d in raws])
     sw = zz(list(hi), list(lo), ZIGZAG_PCT / 100.0)
@@ -85,7 +115,7 @@ def main():
         return r
 
     def spr(k, buy):
-        return (1.0 if buy else -1.0) * (2.0 * float(e_sh[k]) - 1.0) * 100.0 if 0 <= k < n else 0.0
+        return (1.0 if buy else -1.0) * (2.0 * float(e_s[k]) - 1.0) * 100.0 if 0 <= k < n else 0.0
 
     def walk(det, j0, buy):
         entry = float(cl[j0])
@@ -110,7 +140,7 @@ def main():
                 armed = True
         return ((cl[-1] - entry) if buy else (entry - cl[-1])) / entry * 100.0
 
-    fires = sorted(fires, key=lambda f: (f["det_i"], f["side"]))
+    fires = sorted(PD.detect_pivots(snaps), key=lambda f: (f["det_i"], f["side"]))
     scan = {"long": 0, "short": 0}; rows = []
     for f in fires:
         s = f["side"]; det = f["det_i"]; ent = f["entry_i"]
@@ -120,7 +150,7 @@ def main():
         if ent is None:
             continue
         buy = s == "long"; p2d = spr(det, buy)
-        tier = "cyan" if p2d > P2D_VHI else ("green" if p2d > P2D_HI else "hollow")
+        tier = "cyan/orange" if p2d > P2D_VHI else ("red/green" if p2d > P2D_HI else "hollow")
         liv = [spr(k, buy) for k in range(det, ent + 1)]
         e_held = (liv[-1] > 0.0 and min(liv) > -50.0) if liv else True
         j0 = None
@@ -128,63 +158,33 @@ def main():
             if tier == "hollow":
                 j0 = ent
         else:
-            te = float(et[ent]); e2 = None
+            te = float(et[ent])
             for j in range(ent + 1, n):
                 if st[j] > te + WIN:
                     break
                 if spr(j, buy) >= E2_MIN:
-                    e2 = j; break
-            if e2 is not None:
-                j0 = e2
+                    j0 = j; break
         if j0 is None:
             continue
-        g = walk(det, j0, buy)
-        pd = float(cl[det]); pe = float(cl[j0])
-        ap0_d = sum0[det] if buy else -sum0[det]                 # aligned P0 at D
-        ap0_e = sum0[j0] if buy else -sum0[j0]                   # aligned P0 at entry
-        dp0 = ap0_e - ap0_d                                      # P0 change into the entry (aligned)
-        pxal = ((pe - pd) if buy else (pd - pe)) / pd * 100.0    # price move D->entry (aligned; <0 = pullback)
-        rows.append((g, buy, ap0_d, ap0_e, dp0, pxal))
+        sg = 1.0 if buy else -1.0
+        rec = dict(g=walk(det, j0, buy) - FEE)
+        for p in ("P0", "P1", "P2", "P3", "P4", "P9"):
+            rec[p + "c"] = sg * PC[p][j0]; rec[p + "s"] = sg * PS[p][j0]
+        rows.append(rec)
 
-    G = np.array([r[0] for r in rows]); NET = G - FEE
-    AP0D = np.array([r[2] for r in rows]); AP0E = np.array([r[3] for r in rows])
-    DP0 = np.array([r[4] for r in rows]); PXAL = np.array([r[5] for r in rows])
-    d = 1000.0 / 100.0
-    win = NET > BE; be = np.abs(NET) <= BE; los = NET < -BE
-
-    def line(tag, m):
-        g = NET[m]; nn = max(1, len(g))
-        if not len(g):
-            print("  %-24s n=0" % tag); return
-        print("  %-24s n=%-3d | W %2d (%4.1f%%) | BE %2d (%4.1f%%) | L %2d (%4.1f%%) | net %+.3f%% | TOT %+.2f%% ($%+.0f)"
-              % (tag, len(g), int(win[m].sum()), 100.0 * win[m].sum() / nn,
-                 int(be[m].sum()), 100.0 * be[m].sum() / nn,
-                 int(los[m].sum()), 100.0 * los[m].sum() / nn, g.mean(), g.sum(), g.sum() * d))
-
-    print("P0 DIVERGENCE  D -> entry (E2 / E-held)  — P0 = panel-0 SUM line, aligned to trade side  (n=%d)\n" % len(rows))
-    print("  CONTEXT: mean aligned-P0 @D %+.1f -> @entry %+.1f | mean dP0 %+.1f | mean price move D->entry %+.2f%% (<0=pullback)"
-          % (AP0D.mean(), AP0E.mean(), DP0.mean(), PXAL.mean()))
-
-    print("\n  by dP0 sign (did aligned-P0 rise or fall into the entry?):")
-    line("P0 ROSE  (dP0 > 0)", DP0 > 0)
-    line("P0 FELL  (dP0 <= 0)", DP0 <= 0)
-
-    print("\n  divergence cross (price move vs P0 move, both aligned):")
-    line("BULL-DIV (px dn, P0 up)", (PXAL < 0) & (DP0 > 0))
-    line("BEAR-DIV (px up, P0 dn)", (PXAL > 0) & (DP0 < 0))
-    line("CONFIRM+ (px up, P0 up)", (PXAL > 0) & (DP0 > 0))
-    line("CONFIRM- (px dn, P0 dn)", (PXAL < 0) & (DP0 < 0))
-
-    print("\n  mean dP0 per outcome (does divergence separate winners from losers?):")
-    for tag, m in (("winners", win), ("breakeven", be), ("losers", los)):
-        if m.any():
-            print("    %-10s n=%-3d | mean dP0 %+.2f | mean P0@D %+.1f | mean P0@entry %+.1f | mean px %+.2f%%"
-                  % (tag, int(m.sum()), DP0[m].mean(), AP0D[m].mean(), AP0E[m].mean(), PXAL[m].mean()))
-    cw = np.corrcoef(DP0, (NET > BE).astype(float))[0, 1]
-    cn = np.corrcoef(DP0, NET)[0, 1]
-    print("\n  corr(dP0, winner) %.2f | corr(dP0, net) %.2f" % (cw, cn))
-
-    print("\n  ALL (reference):"); line("ALL", np.ones(len(G), bool))
+    G = np.array([r["g"] for r in rows]); win = G > BE; los = G < -BE; beq = np.abs(G) <= BE
+    print("\nPANELS at print (aligned to trade), CAUSAL value split by outcome + corr with PnL  (n=%d):\n" % len(rows))
+    print("  panel | winners | breakev | losers  | corr(causal,PnL) | mean repaint |settled-causal|")
+    for p in ("P0", "P1", "P2", "P3", "P4", "P9"):
+        c = np.array([r[p + "c"] for r in rows]); sv = np.array([r[p + "s"] for r in rows])
+        cw = c[win].mean() if win.any() else float("nan"); cb = c[beq].mean() if beq.any() else float("nan")
+        clo = c[los].mean() if los.any() else float("nan")
+        corr = np.corrcoef(c, G)[0, 1]; rep = np.mean(np.abs(sv - c))
+        note = ""
+        if p == "P4":
+            note = "  <- CAUSAL (trailing, no repaint)"
+        print("   %-4s | %+7.2f | %+7.2f | %+7.2f | %+15.2f | %12.2f |%s" % (p, cw, cb, clo, corr, rep, note))
+    print("\n  (winners vs losers gap in the CAUSAL column = causal predictive power; corr sign should favour longs>0.)")
 
 
 if __name__ == "__main__":
