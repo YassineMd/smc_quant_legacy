@@ -47,3 +47,29 @@ def poc(levels: dict) -> float:
         if v > best_v:
             best_p, best_v = price, v
     return best_p
+
+
+def value_area(levels: dict, pct: float = 0.70) -> "tuple[float, float]":
+    """(VAL, VAH): the low/high price bounds of the Value Area — the contiguous band grown OUTWARD from the POC,
+    at each step taking the heavier of the two adjacent levels, until it holds `pct` of total volume (standard
+    Market-Profile 70% VA). NaN for unusable ladders."""
+    if not levels or len(levels) < 2:
+        return _NAN, _NAN
+    pr = sorted((float(pp), float(vv.get("b", 0.0)) + float(vv.get("s", 0.0)))
+                for pp, vv in levels.items())
+    V = sum(v for _, v in pr)
+    if V <= 0:
+        return _NAN, _NAN
+    poc_i = 0                                            # POC index (first on a tie, matching poc())
+    for i in range(1, len(pr)):
+        if pr[i][1] > pr[poc_i][1]:
+            poc_i = i
+    lo = hi = poc_i; acc = pr[poc_i][1]; target = pct * V
+    while acc < target and (lo > 0 or hi < len(pr) - 1):
+        up = pr[hi + 1][1] if hi < len(pr) - 1 else -1.0
+        dn = pr[lo - 1][1] if lo > 0 else -1.0
+        if up >= dn:
+            hi += 1; acc += up
+        else:
+            lo -= 1; acc += dn
+    return pr[lo][0], pr[hi][0]

@@ -101,6 +101,7 @@ _M10_LAYERS = [
     ("m10_structure_swing", "Market Structure — swing ZigZag", False, True),   # coarse ZigZag (ZIGZAG_SWING_PCT)
     ("m10_choch", "Change of Character (CHoCH)", False, True),   # dashed break-lines on the scalp ZigZag
     ("m10_4hzone", "4h Buy/Sell Zones (wicks)", False, True),   # last completed 4h bucket buyer/seller wick bands
+    ("m10_4hsep", "4h Bucket Separators", True, True),          # dashed vline at each completed 4h bucket's start
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
 ]
 

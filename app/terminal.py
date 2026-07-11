@@ -504,6 +504,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _zff = QtGui.QFont("Consolas", 11); _zff.setBold(True); self._z4_fill_lbl.textItem.setFont(_zff)
         self._z4_fill_lbl.setZValue(60); self.plot.addItem(self._z4_fill_lbl, ignoreBounds=True)
         self._z4_fill_lbl.setVisible(False)
+        # Per-4h-bucket V (volume profile) / Z (zone) DISPLAY, driven by small buttons above the x-axis (detached
+        # from the selection tool). Pools grown lazily; state = explicit user toggles keyed by (bucket end_time, kind).
+        self._z4_curve_pool = []      # overlay curves: zone bands (fillLevel rects) + VP level lines
+        self._z4_sep_pool = []        # 4h bucket-start separators (full-height dashed vlines, completed buckets only)
+        self._z4_hist_pool = []       # volume-profile histograms (horizontal BarGraphItems, one per shown V)
+        self._z4_btn_pool = []        # per-span 'V'/'Z' button TextItems
+        self._z4_user = {}            # {(round(end_time,3), 'V'|'Z'): bool}  (absent -> default: last bucket's Z on)
+        self._z4_btn_hits = []        # [(x, y, end_time, kind, on)] rebuilt each draw, for click hit-testing
+        self._z4_last_buckets = []    # cached canvas buckets so a button click can redraw the layer immediately
         self._liq_status = pg.TextItem(anchor=(0, 0), color=(235, 225, 140))   # corner note: empty-by-location / zoom-in
         _lsf = QtGui.QFont("Consolas", 9); self._liq_status.textItem.setFont(_lsf)
         self._liq_status.setZValue(33); self.plot.addItem(self._liq_status, ignoreBounds=True)
@@ -557,6 +566,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._hm_ncyc = 2                        # HMS box + backdrop span the last N LOCKED cycles
         self._pivot_hovers = []                  # [(x, y, stats_html, is_buy)] badge centres -> the hover box
         self._pivot_sig = None
+        self._psc = None            # no-selection Pivot V3 detection cache (incremental: settled prefix + frontier)
         # clickable per-entry exit-line overlay (V3 D-EXIT): click a trade entry to toggle its lines — entry
         # (white), fixed structural SL (yellow), MAX-reached (green), same-D stop ratchets (blue dash) — plus a
         # TP@opp-D / stop tag at the exit bar. Default (see _entry_default_key): the last RECORDED entry is ON,
@@ -985,6 +995,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("9"), self, activated=self._toggle_panel9)    # panel 9: COMPOSITE lean
         QtGui.QShortcut(QtGui.QKeySequence("0"), self, activated=self._toggle_panel0)    # panel 0: smoothed P9
         QtGui.QShortcut(QtGui.QKeySequence("W"), self, activated=self._toggle_whisker)   # volume-quantile whisker bars
+        QtGui.QShortcut(QtGui.QKeySequence("Z"), self, activated=self._z4_deactivate_all)   # turn OFF all 4h V/Z overlays
         QtGui.QShortcut(QtGui.QKeySequence("Delete"), self, activated=lambda: self.drawer.delete_selected())
         QtGui.QShortcut(QtGui.QKeySequence("Backspace"), self, activated=lambda: self.drawer.delete_selected())
         QtGui.QShortcut(QtGui.QKeySequence("T"), self, activated=self._toggle_phase_table)  # phase table (no panel needed)
@@ -1362,6 +1373,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         locks X, the Y axis locks Y, the plot body locks both (snap to full follow). The
         bottom/right axis strips are distinct scene rects, so the hit-test is unambiguous.
         Every other mode keeps the reset + auto-fit (fix #10, TradingView parity)."""
+        # SINGLE click on a 4h V/Z button (just above the x-axis) toggles that bucket's volume-profile / zone overlay.
+        if (not ev.double() and self.scanner_mode == "bucket_canvas" and self._z4_btn_hits):
+            try:
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_zx0, _zx1), (_zy0, _zy1) = self.vb.viewRange()
+                xtol = (_zx1 - _zx0) * 0.02; ytol = (_zy1 - _zy0) * 0.05
+                best = None; bestd = 1e18
+                for _bx, _by, _key, _kind, _on in self._z4_btn_hits:
+                    if abs(xc - _bx) <= xtol and abs(yc - _by) <= ytol and abs(xc - _bx) < bestd:
+                        bestd = abs(xc - _bx); best = (_key, _kind, _on)   # _key already final (rounded or 'live')
+                if best is not None:
+                    self._z4_user[(best[0], best[1])] = not best[2]   # flip THIS bucket's V or Z
+                    if self._z4_last_buckets:
+                        self._draw_4h_zone(self._z4_last_buckets)      # redraw the layer immediately
+                    ev.accept(); return
+            except Exception:
+                pass
         # SINGLE click near an actual trade entry (E-held-hollow / E2) toggles its SL/+0.10%/+0.40% line overlay.
         if (not ev.double() and self.scanner_mode == "bucket_canvas" and self.show_pivot and self._pivot_entries):
             try:
@@ -2468,11 +2496,43 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _hide_4h_zone(self) -> None:
         self._hide_4h_bands()
         self._z4_fill_lbl.setVisible(False)
+        for _c in self._z4_curve_pool:
+            _c.setVisible(False)
+        for _sp in self._z4_sep_pool:
+            _sp.setVisible(False)
+        for _h in self._z4_hist_pool:
+            _h.setVisible(False)
+        for _b in self._z4_btn_pool:
+            _b.setVisible(False)
+        self._z4_btn_hits = []
+
+    @staticmethod
+    def _z4_profile(bb):
+        """One 4h profile row from a raw bucket dict (closed OR the live active bucket), or None if unusable:
+        {lo, vlo, vmed, vhi, hi, s(start), e(end), poc, val, vah, levels}."""
+        try:
+            lv = bb.get("levels") or {}
+            vlo, vmed, vhi = bar_quantiles.vq(lv)
+            low = bb.get("low"); high = bb.get("high")
+            if low is None or high is None or not (vlo and vhi):
+                return None
+            low = float(low); high = float(high)
+            if not (high > low):
+                return None
+            val, vah = bar_quantiles.value_area(lv)
+            return {"lo": low, "vlo": vlo, "vmed": vmed, "vhi": vhi, "hi": high,
+                    "s": float(bb.get("start_time", 0.0)), "e": float(bb.get("end_time", 0.0) or 0.0),
+                    "poc": bar_quantiles.poc(lv), "val": val, "vah": vah, "levels": lv,
+                    "opL": float(bb.get("opL", 0.0)), "opS": float(bb.get("opS", 0.0)),   # bucket force totals
+                    "clL": float(bb.get("clL", 0.0)), "clS": float(bb.get("clS", 0.0))}   # (per-level split by ratio)
+        except Exception:
+            return None
 
     def _z4_lut(self):
-        """Cached 4h zone lookup: (ets, rows) with rows[i]=(low,vq_lo,vq_hi,high,start_time) for the completed 4h
-        bucket ending at ets[i]. Rebuilt only when the newest 4h bucket changes. Source = the secondary 4h
-        worker's closed buckets (+ archive fallback). Used by the pivot fade AND the as-of 4h zone drawing."""
+        """Cached 4h profile lookup: (ets, rows) with rows[i] a dict for the completed 4h bucket ending at ets[i]:
+        {lo, vlo, vmed, vhi, hi, s(start), e(end), poc, val, vah}. vlo/vhi = the q25/q75 wick bounds (Z zone);
+        poc/val/vah/vmed = the volume profile (V). Rebuilt only when the newest 4h bucket changes. Source = the
+        secondary 4h worker's closed buckets (+ archive fallback). Read by the pivot fade AND the 4h display."""
         snap4 = self.worker_4h.snapshot() if getattr(self, "worker_4h", None) else None
         cb = (snap4 or {}).get("closed_buckets") or []
         key = ("live", float(cb[-1].get("end_time", 0.0))) if cb else None
@@ -2486,15 +2546,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return self._z4_lut_cache
         pairs = []
         for bb in cb:
-            try:
-                vlo, _m, vhi = bar_quantiles.vq(bb.get("levels") or {})
-                low = float(bb.get("low", 0.0)); high = float(bb.get("high", 0.0)); e = float(bb.get("end_time", 0.0))
-                if vlo and vhi and high > low:
-                    pairs.append((e, (low, vlo, vhi, high, float(bb.get("start_time", 0.0)))))
-            except Exception:
-                pass
-        pairs.sort()
-        self._z4_lut_key = key
+            r = self._z4_profile(bb)
+            if r is not None:
+                pairs.append((r["e"], r))
+        pairs.sort(key=lambda p: p[0])          # key on end_time ONLY — the rows are dicts (not orderable) so a
+        self._z4_lut_key = key                  # plain sort() would TypeError on any end_time tie
         self._z4_lut_cache = ([p[0] for p in pairs], [p[1] for p in pairs])
         return self._z4_lut_cache
 
@@ -2505,17 +2561,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         i = bisect.bisect_right(ets, t) - 1
         if i < 0:
             return None
-        low, vlo, vhi, high, _s = rows[i]
-        return _pivot_zone5(float(price), low, vlo, vhi, high)
-
-    def _z4_asof(self, t):
-        """The last COMPLETED 4h bucket at time t -> (low, vq_lo, vq_hi, high, start_time) or None. Lets the zone
-        show the wick that was live AS OF the scrub edge, instead of always the newest one."""
-        ets, rows = self._z4_lut()
-        if not ets:
-            return None
-        i = bisect.bisect_right(ets, float(t)) - 1
-        return rows[i] if i >= 0 else None
+        r = rows[i]
+        return _pivot_zone5(float(price), r["lo"], r["vlo"], r["vhi"], r["hi"])
 
     def _pivot_v2_taken(self, filtered, det, ent, buy, e_sh, a, n, b_end):
         """True if PIVOT-ZZTRAIL-v2 would TAKE this setup (D-fill tier + E-held-else-E2 entry + zone TAKE filter
@@ -2567,81 +2614,190 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             spot["pen"] = pg.mkPen(c.red(), c.green(), c.blue(), 70, width=w)
         return spot
 
+    def _z4_curve(self, used):                                   # pooled overlay curve (zone band via fillLevel, or VP line)
+        if used >= len(self._z4_curve_pool):
+            _c = pg.PlotCurveItem(); _c.setZValue(1)
+            self.plot.addItem(_c, ignoreBounds=True); self._z4_curve_pool.append(_c)
+        return self._z4_curve_pool[used]
+
+    def _z4_button(self, used):                                  # pooled 'V'/'Z' button (bottom-anchored, on the axis)
+        if used >= len(self._z4_btn_pool):
+            _t = pg.TextItem(anchor=(0.5, 1.0), color=(0, 0, 0),   # anchor = bottom-centre -> sits ON the x-axis
+                             border=pg.mkPen((165, 175, 190), width=1))   # always-visible outline (on OR off)
+            _t.setZValue(60)
+            _f = QtGui.QFont("Consolas", 10); _f.setBold(True); _t.textItem.setFont(_f)
+            self.plot.addItem(_t, ignoreBounds=True); self._z4_btn_pool.append(_t)
+        return self._z4_btn_pool[used]
+
+    def _z4_deactivate_all(self) -> None:
+        """'z' — turn OFF every currently-active 4h V and Z overlay (only deactivates; never activates). Sets each
+        explicit toggle False and force-closes the default-on last-bucket Z (read off the drawn buttons)."""
+        for _k in list(self._z4_user):
+            self._z4_user[_k] = False
+        for _bx, _by, _key, _kind, _on in self._z4_btn_hits:     # catches the default-ON (last completed bucket's Z)
+            if _on:
+                self._z4_user[(_key, _kind)] = False
+        if self._z4_last_buckets:
+            try:
+                self._draw_4h_zone(self._z4_last_buckets)         # redraw immediately
+            except Exception:
+                pass
+
+    def _z4_sep(self, used):                                     # pooled 4h bucket-start separator (dashed vline)
+        if used >= len(self._z4_sep_pool):
+            _pn = pg.mkPen(color=(170, 170, 170, 150), width=1); _pn.setCosmetic(True)   # match the crosshair style
+            _pn.setDashPattern([4.0, 8.0])
+            _ln = pg.InfiniteLine(angle=90, movable=False, pen=_pn); _ln.setZValue(14)
+            self.plot.addItem(_ln, ignoreBounds=True); self._z4_sep_pool.append(_ln)
+        return self._z4_sep_pool[used]
+
+    def _z4_hist(self, used, **opts):                            # pooled horizontal volume-profile histogram
+        if used >= len(self._z4_hist_pool):
+            _h = pg.BarGraphItem(x0=[0.0], width=[0.0], y=[0.0], height=[0.0], pen=None)
+            _h.setZValue(1); self.plot.addItem(_h, ignoreBounds=True); self._z4_hist_pool.append(_h)
+        _hb = self._z4_hist_pool[used]; _hb.setOpts(**opts)
+        return _hb
+
+    @staticmethod
+    def _z4_force_hist(buckets, starts, s_t, e_t):
+        """Per-price {price_str: [opL, opS, clL, clS]} aggregated over the 1m buckets in [s_t, e_t) — each 1m
+        bucket's per-level buy(=OPL+CLS)/sell(=OPS+CLL) volume split by ITS OWN force ratios. Far finer than one
+        4h ratio: different 1m buckets tag the same price with different forces, so the profile shows real detail."""
+        i0 = bisect.bisect_left(starts, s_t); i1 = bisect.bisect_left(starts, e_t)
+        agg = {}
+        for m in buckets[i0:i1]:
+            lv = m.get("levels") or {}
+            if not lv:
+                continue
+            oL = float(m.get("opL", 0.0)); oS = float(m.get("opS", 0.0))
+            cL = float(m.get("clL", 0.0)); cS = float(m.get("clS", 0.0))
+            bd = oL + cS; sd = oS + cL
+            fOL = oL / bd if bd > 0 else 0.5; fCS = cS / bd if bd > 0 else 0.5
+            fOS = oS / sd if sd > 0 else 0.5; fCL = cL / sd if sd > 0 else 0.5
+            for ps, vv in lv.items():
+                _b = float(vv.get("b", 0.0)); _s = float(vv.get("s", 0.0))
+                a = agg.get(ps)
+                if a is None:
+                    a = [0.0, 0.0, 0.0, 0.0]; agg[ps] = a
+                a[0] += _b * fOL; a[1] += _s * fOS; a[2] += _s * fCL; a[3] += _b * fCS
+        return agg
+
     def _draw_4h_zone(self, buckets) -> None:
-        """GREEN buy zone (buyer wick low..vq_lo) + RED sell zone (seller wick vq_hi..high) of the last COMPLETED
-        4h bucket — NON-MERGED (single bucket's raw wick, matches the study/strategy zones). Filled bands from the
-        1m bar where that 4h bucket started out to the live edge. Plus the FORMING 4h bucket's fill-% at the sell
-        zone's top-right corner. Hamburger m10_4hzone. LIVE source = secondary 4h worker; archive fallback."""
+        """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median) and ZONE ('Z': buy/sell wick bands) overlays,
+        DETACHED from the selection tool. Each completed 4h bucket gets a small V/Z button pair just above the
+        x-axis, under its DISPLAY span = the NEXT 4h window — so bucket N's levels overlay the 1m candles that
+        formed AFTER it (study the reaction). The LAST completed bucket's span is the live forming region; its Z
+        shows there by default. Master gate m10_4hzone. Pivot V3 reads _zone5_at separately, so this is display-only."""
         if not self.menu.layer_state("m10_4hzone") or not buckets:
             self._hide_4h_zone(); return
-        snap4 = self.worker_4h.snapshot() if getattr(self, "worker_4h", None) else None
-        # Anchor the drawn band to the SELECTION's right edge (as-of): a scrubbed / scrolled-back HISTORICAL window
-        # then shows the 4h wick that was live BACK THEN. With the old always-newest behaviour the newest bucket's
-        # start sat to the RIGHT of a past window, so xb==x1==n-1 collapsed the band to a zero-width sliver (the
-        # "4h zone vanished on a selection" bug). No selection -> None -> live newest. The strategy fades read the
-        # as-of wick separately via _zone5_at, so this stays presentation-only and never leaks look-ahead.
-        asof = self._sel_hi_t
-        _ets_all, _ = self._z4_lut(); _newest_end = _ets_all[-1] if _ets_all else 0.0
-        live = asof is None or asof >= _newest_end          # window reaches the live edge -> the forming bucket is real
-        # fill-% of the FORMING 4h bucket — only meaningful live (hidden at a historical scrub edge)
-        fill_txt = None; fill_col = (200, 205, 215)
-        if live:
-            active = (snap4 or {}).get("active_bucket") or {}
-            target = float((snap4 or {}).get("target_vol") or 0.0)
-            if target > 0.0:
-                fill = min(99.9, max(0.0, float(active.get("curr_vol", 0.0)) / target * 100.0))
-                fill_txt = "4h fill %.0f%%" % fill
-                fill_col = (255, 170, 60) if fill >= 85.0 else (200, 205, 215)     # amber near close
-        # the relevant COMPLETED 4h bucket -> its raw wick zones (NON-MERGED). as-of the scrub edge, else newest.
-        low = vlo = vhi = high = s4 = None; key = None
-        if not live:                                        # historical scrub -> the 4h wick completed AS-OF that edge
-            row = self._z4_asof(asof)
-            if row is not None:
-                low, vlo, vhi, high, s4 = row; key = ("asof", round(s4, 3))
-        else:
-            cb = (snap4 or {}).get("closed_buckets") or []; b = None
-            if cb:
-                b = cb[-1]; key = ("live", float(b.get("end_time", 0.0)))
-            elif archive.available("4h"):
-                try:
-                    d = archive._load("4h"); mk = max(d); b = d[mk]; key = ("arch", mk)
-                except Exception:
-                    b = None
-            if b is not None:
-                try:
-                    vlo, _m, vhi = bar_quantiles.vq(b.get("levels") or {})
-                    low = float(b.get("low", 0.0)); high = float(b.get("high", 0.0)); s4 = float(b.get("start_time", 0.0))
-                except Exception:
-                    low = None
-        if low is None or key is None:
-            self._hide_4h_zone(); return
-        if key != self._zone4h_bid:                               # recompute only when the bucket/anchor changes
-            self._zone4h_data = (low, vlo, s4, vhi, high, s4) if (vlo and vhi and high > low) else None
-            self._zone4h_bid = key
-        if not self._zone4h_data:
-            self._hide_4h_zone(); return
-        blo, bhi, bs, slo, shi, ss = self._zone4h_data
+        ets, rows = self._z4_lut()
         n = len(buckets)
         sig = (n, float(buckets[0].get("start_time", 0.0)), float(buckets[-1].get("start_time", 0.0)))
         if sig != self._zone4h_starts_sig:                        # cache the 1m start-times (rebuild only on frame change)
             self._zone4h_starts = [float(bk.get("start_time", 0.0)) for bk in buckets]; self._zone4h_starts_sig = sig
-        # right edge: the scrub edge in causal mode (don't draw the band past where you've scrubbed), else live edge
-        x1 = (max(0, min(bisect.bisect_right(self._zone4h_starts, asof) - 1, n - 1)) if asof is not None else n - 1)
+        starts = self._zone4h_starts
+        self._z4_last_buckets = buckets                           # a button click redraws off this cached frame
+        if not ets or not starts:
+            self._hide_4h_zone(); return
+        now_t = float(buckets[-1].get("end_time", 0.0)) or starts[-1]
+        canvas_lo = starts[0]
 
-        def _x0(s):
-            return max(0, min(bisect.bisect_left(self._zone4h_starts, s), n - 1))
-        xb = _x0(bs); xs = _x0(ss)
-        self._z4_buy_t.setData([xb, x1], [bhi, bhi]); self._z4_buy_b.setData([xb, x1], [blo, blo])     # GREEN
-        self._z4_sell_t.setData([xs, x1], [shi, shi]); self._z4_sell_b.setData([xs, x1], [slo, slo])   # RED
-        for _z in self._z4_items:
-            _z.setVisible(True)
-        # fill-% readout at the SELL zone's TOP-RIGHT corner (x clamped to the view so it stays visible)
-        if fill_txt is not None:
+        def _xt(t):                                               # time -> visible bar index
+            return max(0, min(bisect.bisect_left(starts, t), n - 1))
+        (_vx0, _vx1), (vy0, vy1) = self.vb.viewRange()
+        yb_btn = vy0 + (vy1 - vy0) * 0.008                        # button row: sits ON the x-axis (bottom-anchored)
+        _vbw = max(1.0, float(self.vb.width()))                   # px -> data-x so V/Z stay adjacent at ANY zoom
+        _hw = 13.0 * (_vx1 - _vx0) / _vbw                         # half a button's width, in data-x units
+        last_i = len(rows) - 1
+        snap4 = self.worker_4h.snapshot() if getattr(self, "worker_4h", None) else None
+        active = (snap4 or {}).get("active_bucket") or {}
+        # Render list: every entry draws over its OWN span. The LAST completed bucket's bands+lines EXTEND right into
+        # the live forming region (the reference for the live candles; default ON). The LIVE forming bucket gets its
+        # OWN entry+button (in-progress profile). Tuple = (r, x0, x1_own, x1_ext, bx_left, key, default_z).
+        entries = []
+        for i, r in enumerate(rows):
+            s_t = r["s"]; ext_hi = now_t if i == last_i else r["e"]   # last completed extends to the live edge
+            if ext_hi <= canvas_lo or s_t >= now_t:
+                continue
+            _x0 = _xt(max(s_t, canvas_lo))
+            entries.append((r, _x0, _xt(min(r["e"], now_t)), _xt(min(ext_hi, now_t)), _x0, round(r["e"], 3),
+                            i == last_i, r["s"], r["e"]))                # + the bucket's OWN [start,end] time window
+        if rows:                                                  # the LIVE forming bucket -> its own partial profile
+            lr = self._z4_profile(active); s_t = rows[-1]["e"]    # live region begins at the last close
+            if lr is not None and s_t < now_t:
+                _x0 = _xt(max(s_t, canvas_lo))
+                entries.append((lr, _x0, n - 1, n - 1, _x0, "live", False, s_t, now_t))
+        uc = uh = ub = us = 0; self._z4_btn_hits = []
+        _OFF = (52, 58, 72); _OFF_TXT = (205, 212, 225)   # OFF button: dark-slate fill + light text (+ the outline)
+        for r, x0, x1o, x1e, bx0, key, default_z, own_s, own_e in entries:
+            if x1e <= x0:
+                x1e = min(n - 1, x0 + 1)
+            x1o = max(x0 + 1, min(x1o, x1e))
+            z_on = self._z4_user.get((key, "Z"), default_z)       # default: last completed bucket's Z (extended)
+            v_on = self._z4_user.get((key, "V"), False)
+            if z_on and r["hi"] > r["lo"]:                        # Z bands (green buy wick / red sell wick) -> x1_ext
+                _cb = self._z4_curve(uc); uc += 1
+                _cb.setData([x0, x1e], [r["vlo"], r["vlo"]]); _cb.setFillLevel(r["lo"])
+                _cb.setBrush(pg.mkBrush(40, 230, 90, 30)); _cb.setPen(pg.mkPen(None)); _cb.setVisible(True)
+                _cs = self._z4_curve(uc); uc += 1
+                _cs.setData([x0, x1e], [r["hi"], r["hi"]]); _cs.setFillLevel(r["vhi"])
+                _cs.setBrush(pg.mkBrush(255, 45, 70, 30)); _cs.setPen(pg.mkPen(None)); _cs.setVisible(True)
+            if v_on:                                              # DOMINANT-FORCE histogram, aggregated from the 1m buckets
+                _agg = self._z4_force_hist(buckets, starts, own_s, own_e)   # {price: [opL, opS, clL, clS]}
+                if _agg:
+                    _rw = sorted((float(_ps), _a) for _ps, _a in _agg.items())
+                    _tot = [sum(_a) for _, _a in _rw]
+                    _vmax = max(_tot, default=0.0)
+                    if _vmax > 0 and len(_rw) >= 2:
+                        _hwid = max(1.0, (x1o - x0) * 0.35)       # profile occupies 35% of the OWN span, from its left edge
+                        _prices = [p for p, _ in _rw]
+                        _widths = [(t / _vmax) * _hwid for t in _tot]
+                        _gaps = sorted(_prices[k + 1] - _prices[k] for k in range(len(_prices) - 1))
+                        _thick = _gaps[len(_gaps) // 2] if _gaps else (_prices[-1] - _prices[0]) / len(_prices)
+                        # colour each level by its dominant force: 0 opL green / 1 opS red / 2 clL magenta / 3 clS cyan
+                        _FCOL = ((40, 230, 90, 150), (255, 55, 70, 150), (235, 70, 255, 150), (0, 210, 255, 150))
+                        _brushes = [pg.mkBrush(*_FCOL[max(range(4), key=lambda k: _a[k])]) for _, _a in _rw]
+                        self._z4_hist(uh, x0=float(x0), width=_widths, y=_prices, height=float(_thick),
+                                      brushes=_brushes, pen=None).setVisible(True); uh += 1
+                for lvl, col, dash in ((r["vah"], (255, 30, 70), False),      # VAH  neon red
+                                       (r["val"], (0, 255, 120), False),        # VAL  neon green
+                                       (r["poc"], (255, 240, 0), False),        # POC  neon yellow
+                                       (r["vmed"], (255, 255, 255), True)):     # median neon white (spaced dashes)
+                    if not (lvl and lvl == lvl):                  # skip 0 / NaN
+                        continue
+                    _ln = self._z4_curve(uc); uc += 1             # level lines -> x1_ext (no labels — colour = identity)
+                    _pn = pg.mkPen(col, width=1.5); _pn.setCosmetic(True)
+                    if dash:
+                        _pn.setDashPattern([3.0, 8.0])            # median: short dash, wide gap
+                    _ln.setData([x0, x1e], [lvl, lvl]); _ln.setBrush(None); _ln.setPen(_pn); _ln.setVisible(True)
+            if key != "live" and self.menu.layer_state("m10_4hsep"):   # dashed bucket-START separator at the V button's
+                _sp = self._z4_sep(us); us += 1                        # left edge (bx0); skip the live forming bucket
+                _sp.setValue(bx0); _sp.setVisible(True)
+            for kind, on, rgb in (("V", v_on, (90, 190, 255)), ("Z", z_on, (40, 230, 90))):
+                _bt = self._z4_button(ub); ub += 1                # pair at the LEFT edge (where the bucket started)
+                _bx = bx0 + (_hw if kind == "V" else 3.0 * _hw)
+                _bt.fill = pg.mkBrush(*rgb) if on else pg.mkBrush(*_OFF)   # fill BEFORE setText so the repaint uses it
+                _bt.setColor((10, 12, 16) if on else _OFF_TXT); _bt.setText(f" {kind} ")
+                _bt.setPos(_bx, yb_btn); _bt.setVisible(True)
+                self._z4_btn_hits.append((_bx, yb_btn, key, kind, on))
+        # FORMING 4h bucket fill-% at the live region's top-right (live only)
+        target = float((snap4 or {}).get("target_vol") or 0.0)
+        if target > 0.0 and rows:
+            fill = min(99.9, max(0.0, float(active.get("curr_vol", 0.0)) / target * 100.0))
             (_zvx0, zvx1), _zvy = self.vb.viewRange()
-            self._z4_fill_lbl.setText(fill_txt); self._z4_fill_lbl.setColor(fill_col)
-            self._z4_fill_lbl.setPos(min(x1, zvx1), shi); self._z4_fill_lbl.setVisible(True)
+            self._z4_fill_lbl.setText("4h fill %.0f%%" % fill)
+            self._z4_fill_lbl.setColor((255, 170, 60) if fill >= 85.0 else (200, 205, 215))
+            self._z4_fill_lbl.setPos(min(n - 1, zvx1), rows[-1]["hi"]); self._z4_fill_lbl.setVisible(True)
         else:
             self._z4_fill_lbl.setVisible(False)
+        for _j in range(uc, len(self._z4_curve_pool)):
+            self._z4_curve_pool[_j].setVisible(False)
+        for _j in range(us, len(self._z4_sep_pool)):
+            self._z4_sep_pool[_j].setVisible(False)
+        for _j in range(uh, len(self._z4_hist_pool)):
+            self._z4_hist_pool[_j].setVisible(False)
+        for _j in range(ub, len(self._z4_btn_pool)):
+            self._z4_btn_pool[_j].setVisible(False)
 
     def _toggle_phase_table(self) -> None:
         """'t' — show/hide the live PHASE TABLE on its own (no need to turn on a phase panel 5/6/7)."""
@@ -3090,7 +3246,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     # ---------------------------------------------------------------- PIVOT INDICATOR (Ctrl+P)
     def _toggle_pivot(self) -> None:
-        """Ctrl+P — PIVOT INDICATOR on/off (S5j-r5 confluence detection + entry; only shows inside a selection)."""
+        """Ctrl+P — PIVOT INDICATOR on/off (S5j-r5 confluence detection + entry). Shows over the FULL loaded window
+        with no selection drawn; drawing a Mode-10 selection narrows it to that range as an optional focus."""
         self.show_pivot = not self.show_pivot
         if not self.show_pivot:
             self._clear_pivot()
@@ -3338,7 +3495,43 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _t in self._eff_cyc_labels:
             _t.setVisible(False)
 
-    def _draw_pivot(self, filtered, off, lo_i, hi_i) -> None:
+    def _pivot_scan(self, filtered):
+        """Full Pivot V3 detection over the LOADED set ``filtered``, cached + INCREMENTAL: the settled prefix is
+        reused and only a ~FRONT-bar live FRONTIER is re-detected on each new bucket, then spliced. Proven
+        byte-identical to a fresh detect_pivots over the whole set (test: incremental eff arrays + raw fires match
+        exactly). Re-scans in FULL when the Zero Point / start date moves (``off`` changes) — that's the 'scan the
+        newly loaded buckets' case. Returns ``(fires, e_sh, e_sh_c, sum0)`` with fire indices ABSOLUTE into filtered."""
+        from app import pivot_detect
+        n = len(filtered); off = self._global_idx_offset
+        LB = 220                                # detect warm-up (legs 1/5 + phase)
+        SETTLE = pivot_detect.WAIT_SECS + 300.0   # a fire is FINAL once its 1h entry-WAIT has elapsed in WALL-CLOCK
+        now_t = float(filtered[-1].get("end_time", 0.0)) or float(filtered[-1].get("start_time", 0.0))
+        m = n                                   # frozen prefix [0, m): bars whose WAIT window fully closed (settled)
+        while m > 0 and (float(filtered[m - 1].get("end_time", 0.0)) or float(filtered[m - 1].get("start_time", 0.0))) >= now_t - SETTLE:
+            m -= 1
+        c = self._psc
+        if c is not None and c["off"] == off and 0 < m <= c["n"] <= n:   # cache covers the frozen prefix -> splice
+            base = max(0, m - LB)
+            f2, e2, ec2, s2 = pivot_detect.detect_pivots(filtered[base:n], return_eff=True)
+            e_sh = c["e_sh"][:m] + list(e2[m - base:])
+            e_shc = c["e_shc"][:m] + list(ec2[m - base:])
+            sum0 = c["sum0"][:m] + list(s2[m - base:])
+
+            def _sh(f):                          # frontier fires are 0-indexed from `base` -> shift to absolute
+                g = dict(f)
+                for k in ("det_i", "wait_end_i", "zref_i"):
+                    g[k] = f[k] + base
+                g["entry_i"] = (f["entry_i"] + base) if f["entry_i"] is not None else None
+                return g
+            fires = [f for f in c["fires"] if f["det_i"] < m] + [_sh(f) for f in f2 if base + f["det_i"] >= m]
+        else:                                    # first draw / anchor moved / big jump -> full scan of the loaded set
+            f0, e0, ec0, s0 = pivot_detect.detect_pivots(filtered, return_eff=True)
+            e_sh = list(e0); e_shc = list(ec0); sum0 = list(s0)
+            fires = [dict(f) for f in f0]        # indices already absolute (base == 0)
+        self._psc = {"off": off, "n": n, "e_sh": e_sh, "e_shc": e_shc, "sum0": sum0, "fires": fires}
+        return fires, e_sh, e_shc, sum0
+
+    def _draw_pivot(self, filtered, off, lo_i, hi_i, incremental=False) -> None:
         """Scan the selection for a SEQUENCE of S5j-r5 setups: the first fire's detection + entry, then — right
         AFTER that entry — the next detection + entry, and so on, non-overlapping. A cancelled fire (no baseline
         touch within the 1h WAIT) is skipped past its dead hour (so a fired RUN collapses to ONE setup, not one
@@ -3354,11 +3547,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         LB, FWD = 220, 260                      # lookback (legs 1/5 + phase warm) / forward (1h entry scan)
         # NO-LOOK-AHEAD ('N'): stop at the selection edge so the eff-agg driving tier/E-held/E2 uses only data up
         # to hi_i (causal); an entry only shows once it has actually landed by the edge. Else keep the +FWD window.
-        a = max(0, lo_i - LB); b_end = (hi_i + 1) if self.pivot_causal else min(n, hi_i + 1 + FWD)
-        try:
-            fires, e_sh, e_sh_c, sum0 = pivot_detect.detect_pivots(filtered[a:b_end], return_eff=True)
-        except Exception:
-            self._clear_pivot(); self._pivot_sig = sig; return
+        if incremental:                         # no-selection: full loaded set via the cached/incremental scanner
+            a = 0; b_end = n                     # whole loaded set; fires come back ABSOLUTE (a == 0)
+            try:
+                fires, e_sh, e_sh_c, sum0 = self._pivot_scan(filtered)
+            except Exception:
+                self._clear_pivot(); self._pivot_sig = sig; return
+        else:                                   # selection: detect only the drawn range (+ lookback), as before
+            a = max(0, lo_i - LB); b_end = (hi_i + 1) if self.pivot_causal else min(n, hi_i + 1 + FWD)
+            try:
+                fires, e_sh, e_sh_c, sum0 = pivot_detect.detect_pivots(filtered[a:b_end], return_eff=True)
+            except Exception:
+                self._clear_pivot(); self._pivot_sig = sig; return
         fl = sorted(((a + f["det_i"], (a + f["entry_i"]) if f["entry_i"] is not None else None,
                       a + f["wait_end_i"], f["side"], a + f["zref_i"]) for f in fires), key=lambda t: (t[0], t[3]))
         # INDEPENDENT buy/sell chains: each side keeps its OWN resume pointer, so a buy setup's entry gates
@@ -4027,7 +4227,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0(); self._clear_pivot()   # smoothed twin + pivot marks: clear on selection teardown
+            self._clear_panel0()        # smoothed twin: clear on teardown (pivot handled below so its sig-gate holds)
             self._hide_eff_cycles(); self._hide_abs_cycles()   # P2 + P1 HM sub-panels: clear on selection teardown too
             for _b in self._spread_badges.values():
                 _b.hide()
@@ -4039,6 +4239,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._panel_hovers = []
             self._sel_sig = None        # Fix 1: hidden -> force a full recompute when a selection returns
             self._sel_hi_t = None       # no selection -> the 4h zone reverts to the LIVE newest wick (+ fill%)
+            # Pivot V3 shows WITHOUT a selection: scan the loaded set incrementally. Do NOT _clear_pivot() first —
+            # that resets _pivot_sig EVERY frame and forces a full re-detect each frame (the lag). Left intact, the
+            # sig-gate holds, so this re-detects ONLY when a new bucket closes.
+            if self.scanner_mode == "bucket_canvas" and self.show_pivot:
+                _pf, _, _ = self._build_scanner_buckets()
+                if _pf:
+                    try:
+                        self._draw_pivot(_pf, self._global_idx_offset, 0, len(_pf) - 1, incremental=True)
+                    except Exception:
+                        self._clear_pivot()
+            else:
+                self._clear_pivot()      # pivot toggled off / not Mode 10 -> clear it (sig reset here is fine)
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -5813,6 +6025,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         wb = self._scan_handles.get("bc_whisker")
         if wb is not None:
             wb.set_view(nx0, nx1)
+        if self._z4_last_buckets:                            # keep the 4h V/Z buttons glued just above the axis on
+            try:                                             # a manual zoom/pan (their y is view-relative)
+                self._draw_4h_zone(self._z4_last_buckets)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Polish-pass shared helpers (theme, value trackers, formatting)
