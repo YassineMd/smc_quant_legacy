@@ -361,6 +361,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.eff_slider.changed.connect(self._on_eff_f_changed)
         self.eff_slider.hide()
         self._eff_sel_id = None        # identity of the live selection; on change -> re-seed adaptive default
+        # Volume-Profile-over-selection toggle: a standalone checkbox card that rides in the SAME stack as the two
+        # zone/force sliders under the 'h' stats box (grouped WITH them — the sliders are NOT reparented or touched).
+        # Independent of the stats box: once ticked, the VP stays on even when the box is hidden with 'h'.
+        self.show_sel_vp = False
+        self.sel_vp_chk = QtWidgets.QCheckBox("  Volume Profile", self)
+        self.sel_vp_chk.setFixedWidth(210)
+        self.sel_vp_chk.setAttribute(QtCore.Qt.WA_StyledBackground, True)
+        self.sel_vp_chk.setStyleSheet(
+            "QCheckBox{background:rgba(17,19,26,235); border:1px solid #2a2e39; border-radius:5px;"
+            " color:#d2d7df; font-family:Consolas; font-size:11px; padding:6px 8px; spacing:7px;}")
+        self.sel_vp_chk.toggled.connect(self._on_sel_vp_toggled)
+        self.sel_vp_chk.hide()
+        # Volume-profile-over-selection chart items: force-coloured horizontal histogram + POC/VAH/VAL/median lines.
+        self.bc_sel_vp = pg.BarGraphItem(x0=[0.0], width=[0.0], y=[0.0], height=[0.0], pen=None)
+        self.bc_sel_vp.setZValue(2); self.plot.addItem(self.bc_sel_vp, ignoreBounds=True); self.bc_sel_vp.setVisible(False)
+        self.bc_sel_vp_lines = []
+        for _vpc in ((255, 45, 70), (40, 230, 90), (255, 215, 0), (235, 235, 245)):   # VAH red / VAL green / POC yellow / med white
+            _ln = pg.PlotDataItem(pen=pg.mkPen(_vpc, width=1.3)); _ln.setZValue(3)
+            self.plot.addItem(_ln, ignoreBounds=True); _ln.setVisible(False)
+            self.bc_sel_vp_lines.append(_ln)
         # PERSISTED manual slider overrides (None = use the per-selection adaptive seed). Once the user drags a
         # slider, that value sticks across selections AND sessions (saved to terminal_ui.json).
         self._zone_user_s = None
@@ -552,6 +572,41 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                                 pen=pg.mkPen(0, 0, 0, 180, width=1))
         self.bc_pivot_dots.setZValue(31); self.plot.addItem(self.bc_pivot_dots, ignoreBounds=True)
         self.bc_pivot_dots.setVisible(False)
+        # GOLDEN STAR for Buy-D's whose forming-VP meets the criteria (VPFADE overlay). Drawn just off the D coin,
+        # its own scatter layer so it never touches the badges. Pure highlight — no effect on fade/entry/detection.
+        self.bc_pivot_stars = pg.ScatterPlotItem(pxMode=True, symbol="star", size=18,
+                                                 brush=pg.mkBrush(255, 205, 40),
+                                                 pen=pg.mkPen(140, 100, 0, width=1))
+        self.bc_pivot_stars.setZValue(33); self.plot.addItem(self.bc_pivot_stars, ignoreBounds=True)
+        self.bc_pivot_stars.setVisible(False)
+        # RED cross ✕ = the TRAP marker for E-entries in the WRONG value-half (m10_estar overlay; UNVALIDATED).
+        self.bc_pivot_traps = pg.ScatterPlotItem(pxMode=True, symbol="x", size=15,
+                                                 brush=pg.mkBrush(235, 60, 60),
+                                                 pen=pg.mkPen(120, 0, 0, width=1))
+        self.bc_pivot_traps.setZValue(33); self.plot.addItem(self.bc_pivot_traps, ignoreBounds=True)
+        self.bc_pivot_traps.setVisible(False)
+        # CLOCK = wait-marker for cyan/orange D's that fail Step 3 (non-directional zone -> Path-B E-hunter). Register
+        # a custom 'clock' symbol once (circle face + hour/minute hands), then a light-blue hollow scatter for it.
+        from pyqtgraph.graphicsItems.ScatterPlotItem import Symbols as _SYM
+        if "clock" not in _SYM:
+            from pyqtgraph.Qt import QtGui as _QtGui
+            _clk = _QtGui.QPainterPath()
+            _clk.addEllipse(-0.5, -0.5, 1.0, 1.0)                 # face
+            _clk.moveTo(0.0, 0.0); _clk.lineTo(0.0, -0.34)        # hour hand (up)
+            _clk.moveTo(0.0, 0.0); _clk.lineTo(0.26, 0.0)         # minute hand (right)
+            _SYM["clock"] = _clk
+        self.bc_pivot_clocks = pg.ScatterPlotItem(pxMode=True, symbol="clock", size=16,
+                                                  brush=pg.mkBrush(0, 0, 0, 0),
+                                                  pen=pg.mkPen(150, 205, 255, width=1.4))
+        self.bc_pivot_clocks.setZValue(33); self.plot.addItem(self.bc_pivot_clocks, ignoreBounds=True)
+        self.bc_pivot_clocks.setVisible(False)
+        # ELECTRIC-PURPLE ring around a V3 entry (D or E) that ALSO has VPIN confluence (VPIN >= its warn line at the
+        # entry bar, ratio >= 1.0). Hollow ring larger than the badge so it encircles it. Toggle m10_vpinring.
+        self.bc_pivot_vpin = pg.ScatterPlotItem(pxMode=True, symbol="o", size=30,
+                                                brush=pg.mkBrush(0, 0, 0, 0),
+                                                pen=pg.mkPen(178, 70, 255, width=2.4))
+        self.bc_pivot_vpin.setZValue(32); self.plot.addItem(self.bc_pivot_vpin, ignoreBounds=True)
+        self.bc_pivot_vpin.setVisible(False)
         self.bc_entry_active = pg.ScatterPlotItem(pxMode=True, symbol="o", size=30,   # electric-magenta ring on
                                                   pen=pg.mkPen(255, 0, 230, width=2.6),  # the entry being viewed
                                                   brush=pg.mkBrush(0, 0, 0, 0))
@@ -1268,6 +1323,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif key == "m10_4hzone":
             if not on:                              # 4h wick zones -> hide now (draw-gate re-adds on ON)
                 self._hide_4h_zone()
+        elif key in ("m10_vpfade", "m10_estar", "m10_vpinring"):
+            self._pivot_sig = None                  # VP-edge star/trap or VPIN ring toggled -> re-run the pivot draw
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -1501,12 +1558,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         self._last_hover_pos = pos           # park here for the live-breathe re-fire
         pt = self.vb.mapSceneToView(pos)
-        self.vline.setPos(pt.x()); self.hline.setPos(pt.y())
+        self.vline.setPos(pt.x()); self.hline.setPos(pt.y()); self.hline.show()
         # A2: right-axis price tag tracks the cursor Y (all modes); PRICE_DECIMALS
         # matches PriceAxis so the badge value lines up with the axis ticks.
         self.price_tag.setText(f"{pt.y():.{config.PRICE_DECIMALS}f}")
         self.price_tag.setPos(self.vb.viewRange()[0][1], pt.y())
         self.price_tag.show()
+        if getattr(self, "lower_vline", None) is not None:   # sync the SHARED vertical crosshair into the VPIN pane
+            self.lower_vline.setPos(pt.x())
+            self.lower_hline.hide(); self.vpin_tag.hide()     # cursor is over the price pane -> no VPIN y readout
         # X-axis time readout at the crosshair (heatmap mode only; x = epoch seconds)
         if self.scanner_mode == "depth_heatmap":
             try:
@@ -1551,6 +1611,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._hover_dom_wall(pt.x(), pt.y())   # DOM wall hover-volume (bucket_canvas + m10_dom)
         self._hover_panels(pt.x(), pt.y())  # cursor label: RAW values of whichever stacked panel is hovered
         self._hover_pivot(pos)              # PIVOT label hover -> setup stats box (scene coords for hit-test)
+
+    def _on_lower_mouse_move(self, evt) -> None:
+        """Cursor over the VPIN pane: drive its OWN crosshair (x+y lines) + a right-axis VPIN value badge, and sync
+        the SHARED vertical crosshair into the main chart (same X-link, so they line up). The price pane's horizontal
+        line + price tag hide, since the cursor isn't there. Mirrors the main _on_mouse_move for the lower pane."""
+        if getattr(self, "lower_vb", None) is None:
+            return
+        pos = evt[0]
+        if not self.lower_plot.sceneBoundingRect().contains(pos):
+            self.vpin_tag.hide()               # left the VPIN pane -> drop its badge (the lines linger, like the main)
+            return
+        pt = self.lower_vb.mapSceneToView(pos)
+        self.lower_vline.setPos(pt.x()); self.lower_hline.setPos(pt.y()); self.lower_hline.show()
+        self.vline.setPos(pt.x())              # shared vertical crosshair -> mirror the X into the price pane
+        self.hline.hide(); self.price_tag.hide()   # cursor isn't over the price pane -> no price-y readout there
+        self.vpin_tag.setText(f"{pt.y():.3f}")     # VPIN is 0..1 -> 3 decimals; sits on the pane's right axis
+        self.vpin_tag.setPos(self.lower_vb.viewRange()[0][1], pt.y())
+        self.vpin_tag.show()
 
     def _hover_panels(self, x: float, y: float) -> None:
         """Cursor label of the hovered bucket's RAW (un-smoothed) values for WHICHEVER stacked selection panel
@@ -2564,6 +2642,48 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         r = rows[i]
         return _pivot_zone5(float(price), r["lo"], r["vlo"], r["vhi"], r["hi"])
 
+    def _vpform_bin_at(self, filtered, det):
+        """CAUSAL forming-VP 4-bin of the D's close vs the CURRENTLY-FORMING 4h bucket — reconstructed from the
+        primary buckets' footprints since the last completed 4h close, up to and INCLUDING the D bar. Mirrors the
+        study de_zone_effectiveness.forming()/vp_bin() exactly (bar_quantiles.value_area/vq on the summed b/s
+        levels). Returns 'above VAH' / 'upper VA' / 'lower VA' / 'below VAL', or None when it can't be
+        reconstructed (no 4h close yet, degenerate profile, or the forming window reaches before the loaded set)
+        -> None means DON'T fade. Read only in _draw_pivot for the Buy-D VP-edge overlay; V3 detection untouched."""
+        try:
+            ets, _rows = self._z4_lut()
+            if not ets:
+                return None
+            t = float(filtered[det].get("end_time", 0.0))
+            i4 = bisect.bisect_right(ets, t) - 1          # last COMPLETED 4h close as-of the D (causal)
+            start_t = ets[i4] if i4 >= 0 else -1.0
+            agg = {}; j = det
+            while j >= 0 and float(filtered[j].get("end_time", 0.0)) > start_t:   # primary bars in (last 4h close, D]
+                for ps, vv in (filtered[j].get("levels") or {}).items():
+                    a = agg.get(ps)
+                    if a is None:
+                        a = [0.0, 0.0]; agg[ps] = a
+                    a[0] += float(vv.get("b", 0.0)); a[1] += float(vv.get("s", 0.0))
+                j -= 1
+            if j < 0 and start_t >= 0.0 and float(filtered[0].get("end_time", 0.0)) > start_t:
+                return None                               # forming bucket starts before the loaded window -> incomplete
+            if len(agg) < 2:
+                return None
+            lv = {p: {"b": v[0], "s": v[1]} for p, v in agg.items()}
+            _q = bar_quantiles.vq(lv); _va = bar_quantiles.value_area(lv)
+            val, med, vah = float(_va[0]), float(_q[1]), float(_va[1])
+            if not (val == val and vah == vah and med == med and vah > val):
+                return None                               # degenerate value area -> can't bin -> don't fade
+            px = float(filtered[det].get("close", filtered[det].get("close_price", 0.0)))
+            if px > vah:
+                return "above VAH"
+            if px > med:
+                return "upper VA"
+            if px >= val:
+                return "lower VA"
+            return "below VAL"
+        except Exception:
+            return None
+
     def _pivot_v2_taken(self, filtered, det, ent, buy, e_sh, a, n, b_end):
         """True if PIVOT-ZZTRAIL-v2 would TAKE this setup (D-fill tier + E-held-else-E2 entry + zone TAKE filter
         at the D zone OR the entry zone + hollow AVOID). False -> the overlay FADES the setup. Overlay-only."""
@@ -2892,8 +3012,86 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._refresh_selection_stats()    # re-place + re-show if a selection is active
         else:
             self.sel_stats.hide()
-            self.zone_slider.hide()
-            self.eff_slider.hide()
+            self._hide_sel_ctrls()              # hide the box + controls card; the VP overlay persists (independent of 'h')
+
+    def _on_sel_vp_toggled(self, on: bool) -> None:
+        """'h'-card 'Volume Profile' checkbox — show/hide the profile over the current selection."""
+        self.show_sel_vp = bool(on)
+        self._sel_sig = None                   # force a selection recompute so the VP draws/clears now
+        self._refresh_selection_stats()
+
+    @staticmethod
+    def _sel_vp_hist(sel):
+        """Per-price {price_str: [opL, opS, clL, clS]} over the selected buckets — the SAME 1m-force split as the
+        4h VP (_z4_force_hist), so colours match: buy = opL+clS, sell = opS+clL, coloured by the dominant force."""
+        agg = {}
+        for m in sel:
+            lv = m.get("levels") or {}
+            if not lv:
+                continue
+            oL = float(m.get("opL", 0.0)); oS = float(m.get("opS", 0.0))
+            cL = float(m.get("clL", 0.0)); cS = float(m.get("clS", 0.0))
+            bd = oL + cS; sd = oS + cL
+            fOL = oL / bd if bd > 0 else 0.5; fCS = cS / bd if bd > 0 else 0.5
+            fOS = oS / sd if sd > 0 else 0.5; fCL = cL / sd if sd > 0 else 0.5
+            for ps, vv in lv.items():
+                _b = float(vv.get("b", 0.0)); _s = float(vv.get("s", 0.0))
+                a = agg.get(ps)
+                if a is None:
+                    a = [0.0, 0.0, 0.0, 0.0]; agg[ps] = a
+                a[0] += _b * fOL; a[1] += _s * fOS; a[2] += _s * fCL; a[3] += _b * fCS
+        return agg
+
+    def _hide_sel_ctrls(self) -> None:
+        """Hide the 'h'-box controls group (VP checkbox + the two zone/force sliders)."""
+        self.sel_vp_chk.hide(); self.zone_slider.hide(); self.eff_slider.hide()
+
+    def _hide_selection_vp(self) -> None:
+        self.bc_sel_vp.setVisible(False)
+        for _ln in self.bc_sel_vp_lines:
+            _ln.setVisible(False)
+
+    def _draw_selection_vp(self, filtered, lo_i, hi_i) -> None:
+        """Volume profile over the SELECTED buckets: a force-coloured horizontal histogram anchored at the
+        selection's LEFT edge + POC/VAH/VAL/median lines across the span. Gated by the 'h' box + its VP checkbox
+        (show_sel_stats AND show_sel_vp). Display-only — nothing here touches the strategy or the buckets."""
+        if not self.show_sel_vp or hi_i < lo_i:   # INDEPENDENT of the 'h' box — the VP stays on while show_sel_vp
+            self._hide_selection_vp(); return
+        sel = filtered[lo_i:hi_i + 1]
+        agg = self._sel_vp_hist(sel)
+        if len(agg) < 2:
+            self._hide_selection_vp(); return
+        rows = sorted((float(ps), a) for ps, a in agg.items())
+        prices = [p for p, _ in rows]; tot = [sum(a) for _, a in rows]
+        vmax = max(tot, default=0.0)
+        if vmax <= 0:
+            self._hide_selection_vp(); return
+        hwid = max(1.0, float(hi_i - lo_i)) * 0.40             # bars occupy up to 40% of the selection width
+        widths = [(t / vmax) * hwid for t in tot]
+        gaps = sorted(prices[k + 1] - prices[k] for k in range(len(prices) - 1))
+        thick = (gaps[len(gaps) // 2] if gaps else (prices[-1] - prices[0]) / max(1, len(prices))) * 0.9
+        _FCOL = ((40, 230, 90, 150), (255, 55, 70, 150), (235, 70, 255, 150), (0, 210, 255, 150))
+        brushes = [pg.mkBrush(*_FCOL[max(range(4), key=lambda k: a[k])]) for _, a in rows]
+        self.bc_sel_vp.setOpts(x0=float(lo_i), width=widths, y=prices, height=float(thick), brushes=brushes)
+        self.bc_sel_vp.setVisible(True)
+        raw = {}                                               # raw b+s ladder -> POC / value area / median
+        for b in sel:
+            for ps, vv in (b.get("levels") or {}).items():
+                r = raw.get(ps)
+                if r is None:
+                    r = [0.0, 0.0]; raw[ps] = r
+                r[0] += float(vv.get("b", 0.0)); r[1] += float(vv.get("s", 0.0))
+        lvl = {ps: {"b": v[0], "s": v[1]} for ps, v in raw.items()}
+        try:
+            _q = bar_quantiles.vq(lvl); _va = bar_quantiles.value_area(lvl); _poc = bar_quantiles.poc(lvl)
+            levels = [_va[1], _va[0], _poc, _q[1]]             # VAH, VAL, POC, median (matches the line colour order)
+        except Exception:
+            levels = [None, None, None, None]
+        for _ln, _y in zip(self.bc_sel_vp_lines, levels):
+            if _y is not None and _y == _y:
+                _ln.setData([float(lo_i), float(hi_i)], [float(_y), float(_y)]); _ln.setVisible(True)
+            else:
+                _ln.setVisible(False)
 
     def _on_zone_s_changed(self, _s: float) -> None:
         """User dragged the absorption-zone slider — pin it as a PERSISTED override (sticks across selections +
@@ -3227,22 +3425,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                         self.sel_stats.width(), self.sel_stats.height())
             self.sel_stats.move(bx, by)
             self.sel_stats.show_raise()
-            # the two zone-threshold sliders ride STACKED (absorption above eff-agg) just under the box; if the
-            # pair would run off the bottom, stack them ABOVE the box instead (same order).
-            gap, sh = 3, self.zone_slider.height()
-            below_zone = by + self.sel_stats.height() + gap
-            if below_zone + 2 * sh + gap <= self.height():
-                zone_y = below_zone
-            else:
-                zone_y = max(0, by - gap - sh - (sh + gap))   # pair above the box, zone on top
-            self.zone_slider.move(bx, zone_y)
-            self.zone_slider.show(); self.zone_slider.raise_()
-            self.eff_slider.move(bx, zone_y + sh + gap)
-            self.eff_slider.show(); self.eff_slider.raise_()
+            # GROUP under the box: VP checkbox (top) + Zone-s slider + Force-f slider, stacked with breathing room
+            # (gap 6, was 3 = the 'crumbed up' look). Flip the whole group ABOVE the box if it'd run off the bottom.
+            gap = 6; ch = self.sel_vp_chk.sizeHint().height(); sh = self.zone_slider.height()
+            total = ch + gap + sh + gap + sh
+            top_y = by + self.sel_stats.height() + gap
+            if top_y + total > self.height():
+                top_y = max(0, by - gap - total)
+            for _w, _wy in ((self.sel_vp_chk, top_y), (self.zone_slider, top_y + ch + gap),
+                            (self.eff_slider, top_y + ch + gap + sh + gap)):
+                _w.move(bx, _wy); _w.show(); _w.raise_()
+                if self.menu.isVisible():
+                    _w.stackUnder(self.menu)
         else:
             self.sel_stats.hide()
-            self.zone_slider.hide()
-            self.eff_slider.hide()
+            self._hide_sel_ctrls()              # 'h' off -> hide box + card, but KEEP the VP overlay (independent)
 
     # ---------------------------------------------------------------- PIVOT INDICATOR (Ctrl+P)
     def _toggle_pivot(self) -> None:
@@ -3267,6 +3464,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_pivot_leaders[_sd].setData([], []); self.bc_pivot_leaders[_sd].setVisible(False)
             self.bc_pivot_conn[_sd].setData([], []); self.bc_pivot_conn[_sd].setVisible(False)
         self.bc_pivot_dots.setData([]); self.bc_pivot_dots.setVisible(False)
+        self.bc_pivot_stars.setData([]); self.bc_pivot_stars.setVisible(False)
+        self.bc_pivot_traps.setData([]); self.bc_pivot_traps.setVisible(False)
+        self.bc_pivot_clocks.setData([]); self.bc_pivot_clocks.setVisible(False)
+        self.bc_pivot_vpin.setData([]); self.bc_pivot_vpin.setVisible(False)
         for _lab in self._pivot_label_pool:
             _lab.setVisible(False)
         self._pivot_hovers = []; self.pivot_tooltip.hide()
@@ -3539,7 +3740,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.show_pivot:
             self._clear_pivot(); return
         n = len(filtered)
-        sig = (off, lo_i, hi_i, self.pivot_causal)
+        sig = (off, lo_i, hi_i, self.pivot_causal, self.menu.layer_state("m10_vpfade"),
+               self.menu.layer_state("m10_estar"), self.menu.layer_state("m10_vpinring"))
         if sig == self._pivot_sig:
             return                              # same range -> marks already drawn, keep them
         self._pivot_sig = sig
@@ -3550,13 +3752,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if incremental:                         # no-selection: full loaded set via the cached/incremental scanner
             a = 0; b_end = n                     # whole loaded set; fires come back ABSOLUTE (a == 0)
             try:
+                _ps = time.perf_counter()
                 fires, e_sh, e_sh_c, sum0 = self._pivot_scan(filtered)
+                self._perf_note("pivot_scan", _ps)   # profiler: pivot detection cost (Start-Date-change hotspot)
             except Exception:
                 self._clear_pivot(); self._pivot_sig = sig; return
         else:                                   # selection: detect only the drawn range (+ lookback), as before
             a = max(0, lo_i - LB); b_end = (hi_i + 1) if self.pivot_causal else min(n, hi_i + 1 + FWD)
             try:
+                _ps = time.perf_counter()
                 fires, e_sh, e_sh_c, sum0 = pivot_detect.detect_pivots(filtered[a:b_end], return_eff=True)
+                self._perf_note("pivot_scan", _ps)
             except Exception:
                 self._clear_pivot(); self._pivot_sig = sig; return
         fl = sorted(((a + f["det_i"], (a + f["entry_i"]) if f["entry_i"] is not None else None,
@@ -3607,6 +3813,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _lab in self._pivot_label_pool:
                 _lab.setVisible(False)
             self.bc_pivot_dots.setData([]); self.bc_pivot_dots.setVisible(False)
+            self.bc_pivot_stars.setData([]); self.bc_pivot_stars.setVisible(False)
+            self.bc_pivot_traps.setData([]); self.bc_pivot_traps.setVisible(False)
+            self.bc_pivot_clocks.setData([]); self.bc_pivot_clocks.setVisible(False)
+            self.bc_pivot_vpin.setData([]); self.bc_pivot_vpin.setVisible(False)
             for _sd in ("long", "short"):
                 self.bc_pivot_leaders[_sd].setVisible(False); self.bc_pivot_conn[_sd].setVisible(False)
             self._clear_entry_lines()
@@ -3673,6 +3883,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         seg = {"long": ([], []), "short": ([], [])}      # DASHED leaders lx/ly per side
         con = {"long": ([], []), "short": ([], [])}      # SOLID connectors cx/cy per side
         self._pivot_hovers = []; used = 0; spots = []; trade_entries = []; e_ok_live = []   # recorded E's (for live audio)
+        star_spots = []; trap_spots = []; clock_spots = []; vpin_spots = []   # VPFADE ★/✕/clock + VPIN-confluence ring
+        _vpin_on = self.menu.layer_state("m10_vpinring")     # electric-purple ring on entries with VPIN >= warn (ratio>=1)
+        # ONE fast causal-tier pass over the window (byte-identical to per-bar cutpoints), then O(1) lookups per badge
+        # — instead of re-sorting a 240-window at every D/E. WARN/TOXIC tier == VPIN >= warn == ratio >= 1.0.
+        _vptiers = (vpin_adaptive.vpin_tiers_from_series(
+            vpin_adaptive.rolling_vpin(filtered, config.VPIN_WINDOW))[0]) if _vpin_on else None
+
+        def _vpin_elev(i):
+            """VPIN ratio >= 1.0 at bar i: its causal adaptive tier is WARN or TOXIC (at/above the warn cutpoint)."""
+            return _vptiers is not None and 0 <= i < len(_vptiers) and _vptiers[i] != vpin_adaptive.NORMAL
+
         _usedE = {"long": set(), "short": set()}   # dedup: one New-E per bar per side (many D's can converge on one E)
         _usedEf = {"long": set(), "short": set()}  # dedup for FADED study E's (kept separate so a taken E is never dropped)
 
@@ -3741,6 +3962,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                 continue
                             _usedE[side].add(_ne)
                 faded = not (step3 or e_ok)                        # fade everything that is NOT a recorded D or E entry
+            # D-entry VP STAR / TRAP + cyan wait-CLOCK (overlay; toggle m10_vpfade). A real D-ENTRY (Step-3 Path A =
+            # cyan/orange tier + directional zone; `step3`) earns a gold ★ if its forming-VP is a good bin, or a red ✕
+            # if it is the TRAP bin: BUY trap = lower-VA (data-backed), SELL trap = upper-VA (NOT data-backed — user's
+            # structural choice; the study said Sell's worst bin is above-VAH). Star bins are the other three (both
+            # value-area edges above-VAH/below-VAL always star; interior leans to the trade's own break). A cyan/orange
+            # D that FAILS Step 3 (non-directional zone -> it drops to Path-B and hunts a New-E) gets a wait-CLOCK
+            # instead. Pure highlight, no trade change; frozen V3 detection untouched. None VP -> no mark.
+            _d_star = _d_trap = _d_clock = False
+            if self.menu.layer_state("m10_vpfade"):
+                if step3:                                       # cyan/orange + directional -> real D-entry: ★ or ✕
+                    _dtrap = "lower VA" if buy else "upper VA"
+                    _dvp = self._vpform_bin_at(filtered, det)
+                    if _dvp == _dtrap:
+                        _d_trap = True
+                    elif _dvp is not None:
+                        _d_star = True
+                elif tier == "cyan" and self.pivot_d_only and self.pivot_v3_filter:   # cyan, non-directional -> Path-B
+                    _d_clock = True                              # this cyan/orange D is an E-hunter, not a D-entry
             _tname = {"cyan": ("CYAN" if buy else "ORANGE"),        # tier colour is side-specific
                       "green": ("GREEN" if buy else "RED"),
                       "hollow": ("HOLLOW GREEN" if buy else "HOLLOW RED")}[tier]
@@ -3765,6 +4004,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._pivot_fade_spot(d_spot); d_letter = PIVOT_FADE_RGB
             used = self._pivot_put_label(used, det, shelf, "D", d_letter)   # DETECTION badge
             spots.append(d_spot)
+            if _vpin_elev(det):                  # VPIN confluence -> electric-purple ring on EVERY D badge (any tier/fade)
+                vpin_spots.append({"pos": (det, shelf)})
+            if _d_star or _d_trap or _d_clock:   # D mark just outside the coin, away from the candle (buy below / sell above)
+                _dy_ann = (shelf - dy * 0.5) if buy else (shelf + dy * 0.5)
+                (star_spots if _d_star else trap_spots if _d_trap else clock_spots).append({"pos": (det, _dy_ann)})
             self._pivot_hovers.append((det, shelf, html, buy))
             lx += [det, det, float("nan")]; ly += [float(filtered[det].get(fld, 0.0)), shelf, float("nan")]
             if 0 <= zref < n:                    # dashed leader from the badge back to the leg-5 (N=60..100)
@@ -3785,12 +4029,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._pivot_fade_spot(e_spot); e_letter = PIVOT_FADE_RGB
                 used = self._pivot_put_label(used, _draw_e, shelf, "E", e_letter)
                 spots.append(e_spot)
+                if _vpin_elev(_draw_e):          # VPIN confluence -> ring on EVERY E badge (recorded OR faded)
+                    vpin_spots.append({"pos": (_draw_e, shelf)})
                 self._pivot_hovers.append((_draw_e, shelf, html, buy))
                 lx += [_draw_e, _draw_e, float("nan")]; ly += [float(filtered[_draw_e].get(fld, 0.0)), shelf, float("nan")]
                 cx += [det, _draw_e, float("nan")]; cy += [shelf, shelf, float("nan")]
                 trade_entries.append((_draw_e, buy, shelf, not e_ok, "B"))   # Path B = fixed bracket exit; fade = study E
                 if e_ok:
                     e_ok_live.append((_draw_e, buy))               # recorded E entry -> candidate for the live audio
+                # E VP-edge STAR / TRAP (overlay; toggle m10_estar) — UNVALIDATED study aid on EVERY drawn E (recorded
+                # or faded). E is the MIRROR of the D: it wants its OWN value-half (Buy ★ = lower-VA / below-VAL;
+                # Sell ★ = above-VAH / upper-VA), and the OPPOSITE half is the trap (red ✕). Pure highlight, no trade
+                # change; frozen V3 untouched. NOT data-backed (E cohorts breakeven/negative) — for eyeballing only.
+                if self.menu.layer_state("m10_estar"):
+                    _evp = self._vpform_bin_at(filtered, _draw_e)
+                    _eown = ("lower VA", "below VAL") if buy else ("above VAH", "upper VA")
+                    _etrap = ("upper VA", "above VAH") if buy else ("lower VA", "below VAL")
+                    _ey = (shelf - dy * 0.5) if buy else (shelf + dy * 0.5)
+                    if _evp in _eown:
+                        star_spots.append({"pos": (_draw_e, _ey)})
+                    elif _evp in _etrap:
+                        trap_spots.append({"pos": (_draw_e, _ey)})
             if step3 and det < n:                                  # V3 Step-3 (Path A) = direct entry at D
                 trade_entries.append((det, buy, shelf, False, "A"))   # Path A = D-EXIT (ride opp-D), anchored at the D
             if ent < n and not self.pivot_d_only:   # ENTRY badge (E/E2/E3) — GATED OFF in V3 D-only mode
@@ -3876,6 +4135,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for j in range(used, len(self._pivot_label_pool)):
             self._pivot_label_pool[j].setVisible(False)
         self.bc_pivot_dots.setData(spots); self.bc_pivot_dots.setVisible(bool(spots))
+        self.bc_pivot_stars.setData(star_spots); self.bc_pivot_stars.setVisible(bool(star_spots))
+        self.bc_pivot_traps.setData(trap_spots); self.bc_pivot_traps.setVisible(bool(trap_spots))
+        self.bc_pivot_clocks.setData(clock_spots); self.bc_pivot_clocks.setVisible(bool(clock_spots))
+        self.bc_pivot_vpin.setData(vpin_spots); self.bc_pivot_vpin.setVisible(bool(vpin_spots))
         for _sd in ("long", "short"):
             _lx, _ly = seg[_sd]; _cx, _cy = con[_sd]
             self.bc_pivot_leaders[_sd].setData(_lx, _ly, connect="finite")
@@ -4211,8 +4474,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         rect = self.drawer.selection_rect()
         if rect is None or self.scanner_mode != "bucket_canvas":
             self.sel_stats.hide()
-            self.zone_slider.hide()
-            self.eff_slider.hide()
+            self._hide_sel_ctrls()
+            self._hide_selection_vp()
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
@@ -4255,8 +4518,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
             self.sel_stats.hide()
-            self.zone_slider.hide()
-            self.eff_slider.hide()
+            self._hide_sel_ctrls()
+            self._hide_selection_vp()
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
@@ -4309,14 +4572,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_pivot(filtered, self._global_idx_offset, lo_i, hi_i)   # PIVOT INDICATOR (Ctrl+P)
             except Exception:
                 self._clear_pivot()
+            try:
+                self._draw_selection_vp(filtered, lo_i, hi_i)   # 'h'-card Volume-Profile-over-selection overlay
+            except Exception:
+                self._hide_selection_vp()
         else:
             self._sel_sig = None
             self._clear_pivot()
+            self._hide_selection_vp()
         agg = self._aggregate_selection(filtered, x0, y0, x1, y1, tv)
         if not agg:
             self.sel_stats.hide()
-            self.zone_slider.hide()
-            self.eff_slider.hide()
+            self._hide_sel_ctrls()
+            self._hide_selection_vp()
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
@@ -5071,10 +5339,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             ti = sum(abs(x.get("buy_vol", 0.0) - x.get("sell_vol", 0.0)) for x in window)
             tv = sum(x.get("curr_vol", 0.0) for x in window)
             v = ti / tv if tv > 0 else 0.0
-            # adaptive tiers — SAME percentile mechanism + same rolling-50 series as Mode 6, so
-            # the hovered bucket's label agrees with the bar/heatmap colour at that bucket.
+            # adaptive tiers — CAUSAL as-of the hovered bucket (cutpoints from the trailing window ENDING at idx,
+            # not the latest window), so the label matches the causally-coloured bar at that bucket and, like the
+            # bars, never repaints as later buckets shift the distribution.
             warn_cut, toxic_cut = vpin_adaptive.vpin_cutpoints(
-                vpin_adaptive.rolling_vpin(buckets)[-config.VPIN_ADAPT_WINDOW:])
+                vpin_adaptive.rolling_vpin(buckets)[max(0, idx - config.VPIN_ADAPT_WINDOW + 1): idx + 1])
             cls, col = {
                 vpin_adaptive.TOXIC: ("HFT Liquidity Trap", r),
                 vpin_adaptive.WARN: ("Institutional Accumulation", gold),
@@ -5313,6 +5582,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         secondary ViewBox teardown; (3) Mode 10 lower-pane + COB-column teardown.
         """
         self.price_tag.hide()   # A2: drop the cursor price tag on any mode switch (no orphan)
+        if getattr(self, "vpin_tag", None) is not None:
+            self.vpin_tag.hide()   # VPIN-pane value badge — drop on any mode switch too (no orphan)
         self.time_tag.hide()    # heatmap crosshair time tag — drop on any mode switch
         self.stats.hide()       # A3a: drop the hover readout too (no orphan across modes)
         self.panel_tooltip.hide()  # exhaustion-lines hover label
@@ -5549,7 +5820,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return   # nothing changed — skip the heavy recompute
         self._last_scanner_sig = current_sig
 
+        _sb = time.perf_counter()
         filtered, x_indices, _anchor = self._build_scanner_buckets()
+        self._perf_note("scan_build", _sb)       # profiler: bucket assembly + archive fetch (Start-Date-change hotspot)
         if not filtered:
             # nothing past the Zero Point yet — leave a clean empty canvas
             return
@@ -6323,38 +6596,40 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Mode 6 — true rolling N=50 VPIN, bars + risk line keyed to the ADAPTIVE percentile
         tiers (the dead fixed 0.85 line is gone; the line now sits at the live toxic cutpoint)."""
         vpin_arr = vpin_adaptive.rolling_vpin(buckets)
-        warn_cut, toxic_cut = vpin_adaptive.vpin_cutpoints(vpin_arr[-config.VPIN_ADAPT_WINDOW:])
+        tiers, toxics = vpin_adaptive.vpin_tiers_from_series(vpin_arr)   # CAUSAL per-bucket tier (frozen, no repaint)
         _br = {t: pg.mkBrush(h) for t, h in _VPIN_TIER_HEX.items()}
-        brushes = [_br[vpin_adaptive.vpin_tier(v, warn_cut, toxic_cut)] for v in vpin_arr]
+        brushes = [_br[t] for t in tiers]
 
         if "vpin" not in self._scan_handles:
             self._scan_handles["vpin"] = self._add_scanner_item(
                 pg.BarGraphItem(x=x, height=vpin_arr, width=0.8, brushes=brushes, pen=None))
             self._scan_handles["vpin_line"] = self._add_scanner_item(
-                pg.InfiniteLine(pos=0.0, angle=0,
-                                pen=pg.mkPen("#ff073a", style=QtCore.Qt.DashLine, width=2)))
+                pg.PlotDataItem(pen=pg.mkPen("#ff073a", style=QtCore.Qt.DashLine, width=2)))
         else:
             self._scan_handles["vpin"].setOpts(x=x, height=vpin_arr, width=0.8,
                                                brushes=brushes, pen=None)
-        self._set_vpin_line("vpin_line", toxic_cut)
+        self._set_vpin_line("vpin_line", x, toxics)
         self._fit_scanner_y(len(x), clamp=(0.0, 1.05))
         v = vpin_arr[-1]
-        tier = vpin_adaptive.vpin_tier(v, warn_cut, toxic_cut)
+        tier = tiers[-1]
         col = {vpin_adaptive.TOXIC: "#ff073a", vpin_adaptive.WARN: "#f1c40f"}.get(tier, "#999999")
         self._scanner_tracker("t_vpin", v, col, f"VPIN {v:.2f}<br>({v * 100:.0f}%)",
                               x[-1], "mid")
 
-    def _set_vpin_line(self, handle_key: str, toxic_cut) -> None:
-        """Position the adaptive VPIN risk line at the live toxic cutpoint (or hide it during
-        warm-up when there aren't enough samples for a percentile)."""
+    def _set_vpin_line(self, handle_key: str, x, toxics) -> None:
+        """Draw the adaptive toxic threshold as a per-bucket CAUSAL line: at each x it sits at THAT bucket's own
+        as-of-that-bucket toxic cutpoint, so it tracks the bars (a bar is red iff it pokes above the line at its
+        own x) and — like the bars — never repaints as later buckets shift the distribution. Warm-up buckets (no
+        percentile yet) leave a gap; the whole line hides if every bucket is warm-up."""
         line = self._scan_handles.get(handle_key)
         if line is None:
             return
-        if toxic_cut is None:
+        if not toxics or all(t is None for t in toxics):
             line.setVisible(False)
-        else:
-            line.setPos(toxic_cut)
-            line.setVisible(True)
+            return
+        ys = [float(t) if t is not None else float("nan") for t in toxics]
+        line.setData(x=list(x), y=ys, connect="finite")
+        line.setVisible(True)
 
     def _scan_effort_result(self, buckets: list, x: list) -> None:
         """Mode 9 — mirrored friction: buyer E/R up (green), seller E/R down (red)."""
@@ -6714,6 +6989,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # and the hard Y-clamp below isn't overridden.
         self.lower_plot.getViewBox().disableAutoRange()
         self.lower_plot.getViewBox().setYRange(0.0, 1.05, padding=0)
+        # Shared crosshair + VPIN value badge on the VPIN pane: the VERTICAL (x) line is shared with the main chart
+        # (same X-link, so the two align), while the HORIZONTAL (y) line + a right-axis value badge are the pane's
+        # own — mirroring the main chart's price tag. Driven by both scenes' sigMouseMoved (main -> just sync x;
+        # lower -> full x+y readout + VPIN badge). Lines linger like the main crosshair; the badge hides on leave.
+        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
+        self.lower_vline = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
+        self.lower_hline = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
+        self.lower_vline.setZValue(15); self.lower_hline.setZValue(15)
+        self.lower_plot.addItem(self.lower_vline, ignoreBounds=True)
+        self.lower_plot.addItem(self.lower_hline, ignoreBounds=True)
+        self.lower_hline.hide()
+        self.vpin_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        _vtf = QtGui.QFont("Consolas", 9); _vtf.setBold(True)
+        self.vpin_tag.textItem.setFont(_vtf); self.vpin_tag.setZValue(16)
+        self.lower_plot.addItem(self.vpin_tag, ignoreBounds=True); self.vpin_tag.hide()
+        self.lower_vb = self.lower_plot.getViewBox()
+        self._lower_proxy = pg.SignalProxy(self.lower_plot.scene().sigMouseMoved,
+                                           rateLimit=60, slot=self._on_lower_mouse_move)
         self.splitter_v.addWidget(self.lower_plot)
         self.splitter_v.setStretchFactor(0, 3)   # 75% upper price space
         self.splitter_v.setStretchFactor(1, 1)   # 25% lower toxicity space
@@ -7005,15 +7298,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # #3 static closed-bucket compute cache: closed buckets are immutable, so their
         # OHLC/poc/brush + baseline EMA + rolling-50 VPIN rows are computed ONCE
         # (on close) and reused; only the live edge (buckets[-1]) is recomputed each frame.
+        _ba = time.perf_counter()
         arr = self._compute_bucket_arrays(buckets, self.menu.scan_start_unix())
+        self._perf_note("bc_arrays", _ba)        # profiler: candle/OHLC/baseline/rolling-VPIN cache build
         opens, highs, lows, closes = arr["opens"], arr["highs"], arr["lows"], arr["closes"]
         pocs, brushes = arr["pocs"], arr["brushes"]
         baseline_arr = arr["baseline"]
         vpin_arr = arr["vpin"]
-        # adaptive VPIN heatmap brushes (same percentile mechanism as Mode 6 / hover / selection)
-        v_warn, v_toxic = vpin_adaptive.vpin_cutpoints(vpin_arr[-config.VPIN_ADAPT_WINDOW:])
+        # adaptive VPIN brushes — CAUSAL per-bucket tier (each bar judged against ONLY its own trailing window),
+        # so a bar's colour FREEZES when it closes and never repaints as the recent distribution drifts later.
+        _vt = time.perf_counter()
+        vtiers, vtoxics = vpin_adaptive.vpin_tiers_from_series(vpin_arr)
+        self._perf_note("vpin_tiers", _vt)       # profiler: causal VPIN tier pass (per redraw, now rolling-window)
         _vbr = {t: pg.mkBrush(h) for t, h in _VPIN_TIER_HEX.items()}
-        vbrushes = [_vbr[vpin_adaptive.vpin_tier(v, v_warn, v_toxic)] for v in vpin_arr]
+        vbrushes = [_vbr[t] for t in vtiers]
         wick_pens = arr["pens"]   # per-candle flow-colored wick/border pens
 
         # Abnormal-velocity flag — a bucket whose velocity (curr_vol/dur) is >= VEL_ABN_RATIO x its
@@ -7301,14 +7599,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._scan_handles["bc_vpin"] = pg.BarGraphItem(
                 x=x, height=vpin_arr, width=0.8, brushes=vbrushes, pen=None)
             self.lower_plot.addItem(self._scan_handles["bc_vpin"])
-            line = pg.InfiniteLine(pos=0.0, angle=0,
-                                   pen=pg.mkPen("#ff073a", style=QtCore.Qt.DashLine, width=2))
+            line = pg.PlotDataItem(pen=pg.mkPen("#ff073a", style=QtCore.Qt.DashLine, width=2))
             self.lower_plot.addItem(line)
             self._scan_handles["bc_vpin_line"] = line
         else:
             self._scan_handles["bc_vpin"].setOpts(x=x, height=vpin_arr, width=0.8,
                                                   brushes=vbrushes, pen=None)
-        self._set_vpin_line("bc_vpin_line", v_toxic)
+        self._set_vpin_line("bc_vpin_line", x, vtoxics)
 
         # --- view-follow (replaces the one-shot fit). A mode/tf/Zero-Point re-arm
         # (_scanner_needs_autofit) re-locks BOTH axes + drops us on the live edge, consuming

@@ -102,6 +102,9 @@ _M10_LAYERS = [
     ("m10_choch", "Change of Character (CHoCH)", False, True),   # dashed break-lines on the scalp ZigZag
     ("m10_4hzone", "4h Buy/Sell Zones (wicks)", False, True),   # last completed 4h bucket buyer/seller wick bands
     ("m10_4hsep", "4h Bucket Separators", True, True),          # dashed vline at each completed 4h bucket's start
+    ("m10_vpfade", "D VP star/trap/clock", True, True),         # D-entry gold star/red-x trap + cyan Path-B wait clock
+    ("m10_estar", "E VP star/trap (unval.)", True, True),       # star/trap on E's own vs opposite value-half
+    ("m10_vpinring", "VPIN confluence ring", True, True),       # electric-purple ring on D/E entries with VPIN>=warn
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
 ]
 

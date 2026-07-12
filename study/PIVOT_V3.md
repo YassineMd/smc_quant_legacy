@@ -154,6 +154,127 @@ Path B does **not** ride to the opposite-D. Each New-E entry is a pure fixed bra
 
 ---
 
+## Candidate refinement — forming-VP edge STAR (VPFADE, both sides)  ⚠ CANDIDATE / in-sample
+
+**Added 2026-07-11 (scope-corrected same day). Pure-highlight overlay — it changes NO trades, so the frozen Steps 1–4,
+the freeze, and the forward audit are all literally unchanged. It only *annotates* which cyan/orange D-entries sit at a
+good forming-VP location.**
+
+**SCOPE = the V3 D-ENTRY only: cyan/orange tier + Step-3 directional 4H zone (`step3`).** NOT green/hollow tiers, and
+NOT Path-B New-E anchors (those are E-entries). A qualifying **D-entry** earns a **gold star ★** (good forming-VP bin)
+or a **red ✕ trap** (the one bad bin). The forming VP = the D close vs the value area of the 4h bucket *being built* at
+the D bar, reconstructed **causally** from the primary footprints since the last completed 4h close. Both value-area
+**edges** (above-VAH, below-VAL) always star; the interior leans to the trade's own break:
+
+- **BUY** ★ = **above VAH · upper VA · below VAL** · **✕ trap = lower VA**.  *(data-backed — see table.)*
+- **SELL** ★ = **above VAH · below VAL · lower VA** · **✕ trap = upper VA**.  *(⚠ **NOT data-backed** — user's structural choice; the study says otherwise, see below.)*
+
+Plus a **wait-CLOCK 🕐** on every cyan/orange D that **FAILS Step 3** (non-directional zone → it drops to Path B and
+hunts a New-E). It answers "why does a strong-tier D not enter at the D": its 4H zone doesn't confirm its direction, so
+it is an E-hunter, not a D-entry (see the Step 3 → Step 4 routing). It is normal and follows V3 exactly.
+
+Nothing is faded, skipped, or re-priced — the marks are a visual guide only; the frozen detection is untouched.
+
+Where it comes from (study `study/de_zone_effectiveness.py`, CAUSAL, in-sample ~13-day tape; **cyan+step3 D-entries**
+split by forming-VP position — the corrected scope, cyan/orange tier ONLY):
+
+| forming VP | BUY-D non-faded (n=24) | | SELL-D non-faded (n=28) | |
+|------------|---|---|---|---|
+| | n · net/tr | verdict (rule) | n · net/tr | verdict (rule) |
+| above VAH | 5 · **+0.578%** | ★ (edge, data ✓) | 5 · **−0.108%** | ★ (edge) — **but data says WORST ✗** |
+| upper VA  | 13 · +0.141% | ★ (data ✓) | 5 · +0.014% | **✕ trap** — **but data ~flat-positive ✗** |
+| lower VA  | 3 · **−0.138%** | **✕ trap (data ✓)** | 7 · −0.018% | ★ (own-side interior) |
+| below VAL | 3 · +0.148% | ★ (edge, data ✓) | 11 · **+0.285%** | ★ (edge, data ✓) |
+
+Cohort nets: Buy-D non-faded **+0.198%/tr** (62% RR-win), Sell-D non-faded **+0.091%/tr** (50% RR-win).
+
+**The BUY-D rule is data-backed** — all three star bins are net-positive and the lower-VA trap is net-negative; skipping
+it lifts the Buy-D book **+0.198→~+0.246%/tr** (n 24→21). **The SELL-D rule is NOT data-backed** (recorded per the
+user's explicit structural choice): the study's actual sell numbers make **above-VAH the worst** (−0.108%, which the
+rule *stars*) and **upper-VA net-positive** (+0.014%, which the rule *traps*). The rule instead imposes a clean symmetry
+— **both value-area edges star; the interior half leans to the trade's own break** (Buy keeps upper-VA / traps lower-VA;
+Sell keeps lower-VA / traps upper-VA). **It needs a dedicated study to validate** (n per sell bin is 5–11, in-sample).
+Terminal **only marks**, does not enforce. FADED (cyan, non-directional) confirmation: both sides net-negative (Buy-D
+faded n=55 −0.048%/tr; Sell-D faded n=36 −0.110%/tr).
+
+> **Scope-correction note (2026-07-11):** the FIRST cut of this study pooled ALL D tiers (cyan+green+hollow) and even
+> folded Path-B New-E anchors into "non-faded" — WRONG (n=30 buy / 36 sell). V3 D-entries are cyan/orange-tier Step-3
+> only. Re-run on that scope: cohorts shrank (buy 30→24, sell 36→28) but the star's traps/stars are the SAME buckets, so
+> the rule stood. Reports `study/buy_d_report.py` + `study/sell_d_report.py` now filter `d_tier=="cyan" & d_step3`.
+
+**Status: in-sample / POST-HOC** on the study's ZZTRAIL-at-D framing, shown as a decision aid only. A tradeable
+forward-audit variant is **pending**. Terminal: toggle **`m10_vpfade`** (hamburger "D VP star/trap + clock (V3)", **ON
+by default**) draws, on **`step3` D-entries only**, a gold **★** (good bin) or red **✕** (trap bin), plus a **🕐 clock**
+on cyan/orange Path-B D's (non-directional). `_vpform_bin_at` mirrors the study `forming()/vp_bin()` — **parity proven**
+(forming-VP bin identical on all 118 Buy-D + 95 Sell-D fires; 1 Sell opening-region None, never live). Scatter layers
+`bc_pivot_stars` (gold star), `bc_pivot_traps` (red ✕), `bc_pivot_clocks` (custom clock symbol). Because the marks
+remove no trades, frozen V3 is byte-for-byte the same whether the toggle is on or off. In-sample counts: Buy 21★/3✕ +
+55🕐, Sell 23★/5✕ + 36🕐.
+
+### E-entry VP star / trap  ⚠⚠ UNVALIDATED — NOT backed by data, study aid ONLY (added 2026-07-11)
+
+The star/trap is also drawn on **every V3 E-entry** (Path-B New-E, **recorded OR faded**) as a study overlay. **E is
+the MIRROR of the D**: it earns a **★** in its OWN value-half and a **red ✕ (trap)** in the opposite half —
+
+| side | ★ star (own value-half) | ✕ trap (opposite half) |
+|------|-------------------------|------------------------|
+| **BUY-E**  | **lower VA · below VAL** | upper VA · above VAH |
+| **SELL-E** | **above VAH · upper VA** | lower VA · below VAL |
+
+**⚠ THIS IS NOT BACKED BY DATA — it is a HYPOTHESIS to study, not a validated rule.** Unlike the D-star (which sits on
+net-positive cohorts), the E cohorts are **breakeven-to-negative** (pooled Buy-E −0.011%/tr, Sell-E −0.125%/tr; recorded
+non-faded Buy-E n=6 / Sell-E n=8 are far too small; faded Buy-E −0.021%, Sell-E −0.110%). The ONLY genuinely positive E
+pocket was **Buy-E lower-VA** (~+0.11%, n=13, in-sample). The own-half/opp-half split is the cleanest *structure*
+observed (E likes the trade's own value-half, opp of the D-breakout; forming VP discriminates, filled VP does not) but
+it **needs a dedicated study to validate before it means anything.** Terminal: separate toggle **`m10_estar`** ("E
+VP-edge star/trap (V3, unvalidated)", ON by default); gold ★ = own-half, red ✕ = opposite-half; drawn on all E's;
+**pure highlight, no trade change, frozen V3 untouched.** Study `study/e_report.py` → `{buy,sell}_e_{nonfaded,faded}.pdf`;
+recs carry `e_tier/e_idx/e_zform/e_fill/e_mae/e_mfe`.
+
+---
+
+## Candidate refinement — VPIN confluence (adaptive threshold)  ⚠ CANDIDATE / in-sample
+
+**Added 2026-07-12. The first clean EXTERNAL filter for V3 entries. A confluence/sizing layer — does NOT replace the
+zones (they are complementary — see below). Study `study/de_vpin.py`.**
+
+**The measure: VPIN ≥ its own adaptive WARN threshold (ratio ≥ 1.0).** At each entry bar, compare the trailing-50 VPIN
+to its CAUSAL adaptive warn cutpoint (p75 of the trailing 240 VPIN, the same tier the terminal now displays after the
+causal-tier fix). "Elevated" = VPIN at/above warn = a **yellow or red** VPIN bar. This normalisation matters:
+
+- **Absolute VPIN is useless** — AUC ≈ 0.50, winner-VPIN ≈ loser-VPIN. There is no absolute line.
+- **VPIN relative to its warn threshold is the best single VPIN measure** — AUC ≈ 0.62, with a clean **step at
+  ratio 1.0** (win-rate jumps at the warn line, then flat above it — deeper toxic adds nothing). Regime-invariant.
+
+**Zones and VPIN are COMPLEMENTARY — each roughly DOUBLES the other's per-trade edge (so do NOT drop the zones):**
+
+| variant | n | W/BE/L | net/tr | win% |
+|---------|---|--------|--------|------|
+| **zones only** (V3 non-faded, no VPIN) | 66 | 31/12/23 | +0.126% | 57% |
+| **VPIN only** (zones dropped, cyan D + all New-E, VPIN≥warn) | 62 | 26/11/25 | +0.121% | 51% |
+| **zones AND VPIN** (V3 non-faded + VPIN≥warn) | 16 | 9/3/4 | **+0.283%** | **69%** |
+
+Either filter alone turns the base into ~+0.12%/tr; together they hit **+0.283%/tr, 69% win** — only possible if their
+edges are largely INDEPENDENT (VPIN is not re-capturing the zones). So the zone+VPIN entries are the **A+ setups**. The
+trade-off is selectivity: both filters = 16 trades ($+452); either alone = ~62–66 trades ($+750–834). For total $, a
+single filter banks more (more opportunities); for per-trade quality, the double filter wins big.
+
+**VPIN-only W/BE/L (drop tier/zone/VP, gate on VPIN≥warn):** all D + all E = **72 trades, 28W/13BE/31L, +0.064%/tr,
+47%**; the rejected side (VPIN<warn) is where the bleeding is (−0.074% D / −0.104% E). VPIN alone flips both books
+positive — a legitimate alternative gate, but the zones still add ~+0.16%/tr on top.
+
+**Terminal cue:** an **electric-purple ring** (`bc_pivot_vpin`) encircles **EVERY drawn D and E badge — faded or
+non-faded** — whose VPIN is ≥ warn at that bar (ratio ≥ 1.0 = yellow/red VPIN bar). Toggle **`m10_vpinring`** (ON
+default). Pure highlight; frozen V3 untouched; parity-checked (52 D + 20 E rings in-sample = every elevated-flow fire).
+A ring on a **non-faded** (recorded) entry = the A+ confluence setup to size up; a ring on a **faded** D/E = a
+VPIN-elevated setup the zones rejected (the study says VPIN-only still nets positive there, so it's watch-worthy).
+
+**Status: in-sample / POST-HOC**, ~13-day one-regime tape; the zones+VPIN cell is n=16 (D carries it at n=14/+0.321%;
+E is n=2). The *direction* is solid (both filters independently beat base and stack across all cohorts) but the exact
++0.283% is thin. Candidate for a forward-test of "V3 + VPIN confluence" beside the frozen V3.
+
+---
+
 ## Change log
 - **2026-07-09** — V3 created. Steps 1–2 recorded. D-tier definition **locked** to the non-locked/first-print
   frozen value (`>80` / `>63…≤80` / `≤63`).
@@ -179,3 +300,43 @@ Path B does **not** ride to the opposite-D. Each New-E entry is a pure fixed bra
   plateau, 69% reach 0.5% AND 0.6%). Path A stays D-EXIT (ride opp-D). Combined **+$163, t+3.37** (Path A +$130 +
   Path B +$33). All 6 E combos KEPT (Sell body→buy not dropped — n=2, mirror of Buy body→sell; structure check
   mixed). Terminal: per-path overlay, Path B TP drawn as a light-blue no-border zone. Freeze re-cut still pending.
+- **2026-07-11** — Candidate refinement **VPFADE** added, then reworked from a FADE into a **STAR** (pure highlight,
+  changes NO trades → frozen Steps 1–4 / freeze / audit byte-identical): a **golden ★** marks any NON-FADED **BUY** D
+  whose CURRENT forming-VP MEETS the criteria (above-VAH / upper-VA / below-VAL — everything but the lower-VA trap,
+  n=3, 33% W, −0.138%). Skipping the trap would be +0.163→+0.197/tr, but the terminal only marks, doesn't enforce;
+  edges-only (+0.347, n=9) not adopted — user stars upper-VA too. Terminal toggle `m10_vpfade` (ON default),
+  `_vpform_bin_at` parity-proven vs the study (0/118 Buy-D mismatch). Star = decision aid; a tradeable-variant audit
+  is pending.
+- **2026-07-11** — VPFADE star extended to the **SELL** side (exact mirror): a **golden ★** marks any NON-FADED Sell-D
+  whose forming-VP is **not the above-VAH trap** (star below-VAL / lower-VA / upper-VA). Sell study (`de_zone_effectiveness`,
+  n=36): below-VAL = strongest short pocket (64% RR-win, +0.285%), above-VAH = the trap (17% RR-win, −0.122%) — mirrors
+  the Buy edge/trap. Star drawn above the sell coin (below the buy coin). Parity-proven: star decision identical on all
+  95 Sell-D fires (1 opening-region None, never live). Report: `study/sell_d_report.py` → `sell_d_nonfaded.pdf`.
+- **2026-07-11 (SCOPE FIX)** — the D-entry study had pooled ALL tiers (cyan+green+hollow) + Path-B anchors. **Corrected
+  to the V3 D-entry scope: cyan/orange tier + Step-3 directional zone ONLY.** Cohorts re-cut (Buy non-faded 30→24, Sell
+  28; Buy faded 55, Sell faded 36); recs now carry `d_tier`/`d_step3`; reports filter `d_tier=="cyan" & d_step3`. Traps
+  & stars are the SAME buckets (Buy trap lower-VA, Sell trap above-VAH), so the rule held; numbers refreshed (Buy
+  non-faded +0.198%/tr 62%RR; Sell +0.091%/tr 50%RR). **Terminal star tightened to `step3` D-entries only** (was
+  `not faded` = also Path-B New-E anchors). Faded cohorts both net-negative. All 4 PDFs regenerated.
+- **2026-07-11** — D star/trap rule **updated + trap ✕ and cyan-Path-B 🕐 clock icons added** (per user). Rule: both
+  value-area edges (above-VAH/below-VAL) star; interior leans to the trade's own break — **Buy** ✕trap = lower-VA (star
+  above-VAH/upper-VA/below-VAL) **[data-backed]**; **Sell** ✕trap = **upper-VA** (star above-VAH/below-VAL/lower-VA)
+  **[NOT data-backed** — changed from the prior data-derived Sell trap = above-VAH; user's structural symmetry choice].
+  Clock 🕐 marks cyan/orange D's that fail Step 3 (non-directional → Path-B E-hunter; normal per V3). Toggle `m10_vpfade`
+  renamed "D VP star/trap + clock (V3)". New scatters `bc_pivot_traps`, `bc_pivot_clocks` (custom symbol). Pure highlight.
+- **2026-07-11** — E-entry study run (Path-B New-E; `study/e_report.py`, 4 PDFs). Combo selection is the edge
+  (non-faded Buy-E +0.069%/Sell +0.079% n=6/8; faded net-neg). No net-positive VP pocket except Buy-E lower-VA
+  (~+0.11%, n=13). **E★/✕ overlay added — UNVALIDATED, per user, NOT data-backed:** ★ on an E's own value-half
+  (Buy lower-VA/below-VAL, Sell above-VAH/upper-VA), red ✕ on the opposite half; drawn on ALL E's (faded+non-faded);
+  toggle `m10_estar` (ON). Pure highlight. Needs a dedicated study to validate. Mirror of the D-star.
+- **2026-07-12** — **VPIN adaptive-tier display FIXED to be causal** (`vpin_adaptive.vpin_tiers_from_series`): each bar
+  tiered against ONLY its trailing 240-VPIN window, so colours FREEZE on close and never repaint (was: latest-window
+  cutpoints applied to all bars → past reds turned gray as the day's distribution drifted). Both VPIN panes + hover +
+  a causal stepped toxic line. Proven 0 repaint (vs 91 with the old approach).
+- **2026-07-12** — **VPIN confluence filter recorded** (`study/de_vpin.py`, §"Candidate refinement — VPIN confluence").
+  Measure = VPIN ≥ its adaptive warn threshold (ratio ≥ 1.0 = yellow/red bar); absolute VPIN useless (AUC 0.5), the
+  ratio is the best measure (AUC 0.62, clean step at 1.0). **Zones & VPIN are COMPLEMENTARY** — each ~doubles the
+  other: zones-only n=66 +0.126%, VPIN-only n=62 +0.121%, zones+VPIN n=16 **+0.283% 69%W**. So keep the zones; VPIN is
+  a confluence/sizing layer. **Terminal: electric-purple ring** `bc_pivot_vpin` on **EVERY** drawn D/E badge (faded or
+  non-faded) with VPIN≥warn, toggle `m10_vpinring` (ON), parity-checked (52 D + 20 E rings = all elevated-flow fires).
+  In-sample, zones+VPIN cell n=16 — forward-test candidate.

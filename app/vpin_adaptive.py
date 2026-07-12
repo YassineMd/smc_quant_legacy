@@ -49,6 +49,49 @@ def window_vpin_samples(buckets: list, n: int, target_vol: float) -> list:
     return out
 
 
+def vpin_tiers_from_series(vp: list, adapt: int = config.VPIN_ADAPT_WINDOW) -> tuple:
+    """Per-bucket **CAUSAL** adaptive VPIN state from a precomputed rolling-VPIN series ``vp``.
+
+    Each bucket is tiered against ONLY the trailing ``adapt`` VPIN values ENDING AT it (no future data), so its
+    tier + threshold **freeze the moment the bucket closes** and never repaint as later buckets shift the recent
+    distribution. This is the fix for studying past data: the legacy display tiered every historical bar against
+    the LATEST window's cutpoints, so a bar that printed red at time T re-coloured to gray once the window's
+    percentiles rose later in the day. Here bar T keeps time-T's threshold forever.
+
+    Returns ``(tiers, toxic_cuts)`` — lists the length of ``vp``; ``toxic_cut`` is ``None`` during warm-up
+    (< ``VPIN_ADAPT_MIN`` trailing samples), which callers render as NORMAL / a gap in the threshold line.
+
+    Perf: a rolling sorted window (bisect insert + evict), so it is **byte-identical** to calling ``vpin_cutpoints``
+    on each trailing slice — the window at bar i IS ``sorted(vp[i-adapt+1 : i+1])`` and the SAME ``_percentile`` runs
+    on it — but O(N·adapt) instead of O(N·adapt·log adapt), i.e. no per-bar re-sort. This is the cost that scaled
+    with the loaded window on a Start-Date change; the output is unchanged. (``vp`` must be numeric — it is always
+    ``rolling_vpin`` output.)
+    """
+    import bisect
+    from collections import deque
+    warn_p = config.VPIN_WARN_PCTL
+    tox_p = config.VPIN_TOXIC_PCTL
+    mn = config.VPIN_ADAPT_MIN
+    tiers = []
+    toxics = []
+    win = []            # sorted multiset of the trailing-`adapt` values == sorted(vp[i-adapt+1 : i+1])
+    order = deque()     # arrival order, for O(1) identity of the value to evict
+    for x in vp:
+        bisect.insort(win, x)
+        order.append(x)
+        if len(order) > adapt:
+            win.pop(bisect.bisect_left(win, order.popleft()))
+        if len(win) < mn:
+            tiers.append(NORMAL)
+            toxics.append(None)
+        else:
+            w = _percentile(win, warn_p)
+            t = _percentile(win, tox_p)
+            tiers.append(vpin_tier(x, w, t))
+            toxics.append(t)
+    return tiers, toxics
+
+
 def _percentile(sorted_xs: list, p: float) -> float:
     """Linear-interpolated percentile (matches numpy 'linear'); ``sorted_xs`` non-empty."""
     if len(sorted_xs) == 1:
