@@ -263,8 +263,13 @@ class _ZoneThresholdSlider(QtWidgets.QWidget):
     """Floorless 0.00-1.00 threshold control for a Mode-10 zone layer. A DOT on the track marks a grounded
     boundary (``floor``): at/above = the distinctive regime, below = the ordinary/weaker one (a gradient).
     Emits ``changed(v)`` only on a USER drag (programmatic ``set_value`` is silent). Subclassed per measure
-    (absorption rides s; effective-aggression rides force f) — the axis label / tags / accent differ."""
+    (absorption rides s; effective-aggression rides force f) — the axis label / tags / accent differ.
+
+    Also carries a BULL/BEAR side filter (two toggles under the slider, both ON by default): the caller reads
+    :meth:`sides` to show only green (bull) and/or red (bear) zones for this layer, and gets :attr:`side_changed`
+    on a user toggle."""
     changed = QtCore.Signal(float)
+    side_changed = QtCore.Signal()   # a Bull/Bear zone filter toggle flipped (user)
 
     def __init__(self, parent, floor, axis_label, above_tag, below_tag,
                  above_col, below_col, border_col="#2a2e39", dot_rgb=(241, 196, 15)):
@@ -275,7 +280,7 @@ class _ZoneThresholdSlider(QtWidgets.QWidget):
         self._below = (below_tag, below_col)
         self._silent = False
         lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(8, 5, 8, 6); lay.setSpacing(2)
+        lay.setContentsMargins(8, 5, 8, 7); lay.setSpacing(3)
         self.lbl = QtWidgets.QLabel()
         self.lbl.setTextFormat(QtCore.Qt.RichText)
         self.lbl.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:11px;")
@@ -285,11 +290,39 @@ class _ZoneThresholdSlider(QtWidgets.QWidget):
         self.slider.setFixedHeight(16)
         self.slider.valueChanged.connect(self._on_change)
         lay.addWidget(self.slider)
+        # Bull/Bear side filter — independently show the green (bull) / red (bear) zones of THIS layer (default both).
+        srow = QtWidgets.QHBoxLayout(); srow.setContentsMargins(0, 4, 0, 0); srow.setSpacing(6)
+        self.bull_btn = self._side_btn("▲ Bull", "#2ecc71")
+        self.bear_btn = self._side_btn("▼ Bear", "#e74c3c")
+        self.bull_btn.toggled.connect(lambda _c: self.side_changed.emit())
+        self.bear_btn.toggled.connect(lambda _c: self.side_changed.emit())
+        srow.addWidget(self.bull_btn); srow.addWidget(self.bear_btn)
+        lay.addLayout(srow)
         self.setFixedWidth(210)
         self.setAttribute(QtCore.Qt.WA_StyledBackground, True)   # so the stylesheet bg actually paints
         self.setStyleSheet(f"{type(self).__name__}{{background:rgba(17,19,26,235);"
                            f"border:1px solid {border_col}; border-radius:5px;}}")
         self._render(0.0)
+
+    def _side_btn(self, text: str, col: str) -> QtWidgets.QPushButton:
+        b = QtWidgets.QPushButton(text)
+        b.setCheckable(True); b.setChecked(True); b.setCursor(QtCore.Qt.PointingHandCursor)
+        b.setFixedHeight(19)
+        b.setStyleSheet(
+            "QPushButton{color:%s; background:transparent; border:1px solid %s; border-radius:3px;"
+            "font-family:Consolas; font-size:10px; font-weight:bold; padding:1px 4px;}"
+            "QPushButton:checked{background:%s; color:#0d0f14;}"
+            "QPushButton:!checked{color:#575e6b; border-color:#333844;}" % (col, col, col))
+        return b
+
+    def sides(self) -> "tuple[bool, bool]":
+        """(show_bull, show_bear) — which sides of this layer's zones to display."""
+        return (self.bull_btn.isChecked(), self.bear_btn.isChecked())
+
+    def set_sides(self, bull: bool, bear: bool) -> None:
+        """Restore the persisted Bull/Bear filter WITHOUT emitting side_changed."""
+        for btn, on in ((self.bull_btn, bull), (self.bear_btn, bear)):
+            btn.blockSignals(True); btn.setChecked(bool(on)); btn.blockSignals(False)
 
     def set_value(self, v: float) -> None:
         """Set the slider WITHOUT emitting (used to apply the adaptive default each selection)."""

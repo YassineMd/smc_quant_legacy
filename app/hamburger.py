@@ -207,7 +207,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     replayToggled = QtCore.Signal(bool)   # Replay Mode on/off (default OFF; chart replays from the Start Date)
     helpRequested = QtCore.Signal()       # the top-right '?' — show the keyboard-shortcuts cheatsheet
 
-    PANEL_WIDTH = 240
+    PANEL_WIDTH = 308
 
     def __init__(self, parent: QtWidgets.QWidget):
         super().__init__(parent)
@@ -259,8 +259,9 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.help_btn.raise_()
 
         root = QtWidgets.QVBoxLayout(content)
-        # right margin is generous (clears the ~9px vertical scrollbar + leaves visible padding at the panel edge)
-        root.setContentsMargins(12, 40, 22, 12); root.setSpacing(6)
+        # right margin is generous (clears the ~9px vertical scrollbar + leaves visible padding at the panel edge);
+        # PANEL_WIDTH is wide enough that the longest labels/combos ("Market Structure — swing ZigZag") fit inside it.
+        root.setContentsMargins(14, 40, 26, 12); root.setSpacing(6)
 
         # --- bucket scale (formerly "Timeframe") — selects which order-flow window sizes the
         # volume buckets. NO number here: the buckets drawn on the chart ARE the honest scale

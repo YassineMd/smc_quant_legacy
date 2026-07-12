@@ -305,8 +305,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # (background QProcess) and re-render when it lands. Throttled so a genuinely-unavailable range can't tight-loop.
         self._arch_pull_proc = None
         self._arch_pull_active: bool = False
-        self._arch_pull_last: float = 0.0
-        self._arch_pull_key = None            # the (tf, anchor) we last fetched for — don't refetch the same miss
+        self._arch_pull_last: float = 0.0     # wall time of the last GCS fetch (time-gated, one rsync grabs all of GCS)
         self._last_scanner_sig: Optional[tuple] = None   # render-skip gate (Phase 7 perf)
         self._scanner_needs_autofit: bool = True         # one-shot Y/X fit (frees manual zoom)
         # View-follow (Mode 10), per-axis lock model. follow_x / follow_y track each axis to
@@ -357,6 +356,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # holds until the selection identity changes. Yellow dot on the track = validated-strength floor.
         self.zone_slider = AbsorptionZoneSlider(self, config.ABSORP_ZONE_FLOOR_S)
         self.zone_slider.changed.connect(self._on_zone_s_changed)
+        self.zone_slider.side_changed.connect(self._on_zone_side_filter)   # Bull/Bear zone filter
         self.zone_slider.hide()
         self._zone_sel_id = None       # identity of the live selection; on change -> re-seed adaptive default
         # EFFECTIVE-AGGRESSION zones — the validated mirror (heavy volume that MOVED price), NEON green/red,
@@ -368,6 +368,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_eff_zones.setVisible(False)
         self.eff_slider = EffAggZoneSlider(self, config.EFF_AGG_ZONE_DOT_F)
         self.eff_slider.changed.connect(self._on_eff_f_changed)
+        self.eff_slider.side_changed.connect(self._on_zone_side_filter)    # Bull/Bear zone filter
         self.eff_slider.hide()
         self._eff_sel_id = None        # identity of the live selection; on change -> re-seed adaptive default
         # Volume-Profile-over-selection toggle: a standalone checkbox card that rides in the SAME stack as the two
@@ -2964,6 +2965,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "liq_labels": self.show_liq,
                 "pivot": self.show_pivot, "pivot_causal": self.pivot_causal,
                 "zone_s": self._zone_user_s, "eff_f": self._eff_user_f,   # persisted slider overrides (None = adaptive)
+                "zone_sides": list(self.zone_slider.sides()),             # Bull/Bear zone filters (both = default)
+                "eff_sides": list(self.eff_slider.sides()),
             }
             # EVERY hamburger toggle (Sub-Widgets + Mode 10 Overlays), keyed by its menu key, so a reopened
             # session restores the exact menu the user left (POC, footprint, alerts, … all sticky).
@@ -3013,6 +3016,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _zs = s.get("zone_s"); _ef = s.get("eff_f")          # restore persisted slider overrides (float or None)
         self._zone_user_s = float(_zs) if isinstance(_zs, (int, float)) else None
         self._eff_user_f = float(_ef) if isinstance(_ef, (int, float)) else None
+        for _sl, _key in ((self.zone_slider, "zone_sides"), (self.eff_slider, "eff_sides")):
+            _sd = s.get(_key)                                 # restore Bull/Bear zone filters (default both on)
+            if isinstance(_sd, (list, tuple)) and len(_sd) == 2:
+                _sl.set_sides(bool(_sd[0]), bool(_sd[1]))
 
     def _toggle_ob_iceberg(self) -> None:
         """'o' — toggle the Order Blocks + Absorption/Iceberg overlays TOGETHER (both hidden by default).
@@ -3125,6 +3132,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """User dragged the effective-aggression slider — pin it as a PERSISTED override and recompute live."""
         self._eff_user_f = _f
         self._save_ui_state()
+        self._refresh_selection_stats()
+
+    def _on_zone_side_filter(self) -> None:
+        """A Bull/Bear toggle flipped on either zone slider — persist the choice and recompute the bands now."""
+        self._save_ui_state()
+        self._sel_sig = None                 # side filter isn't in the aggregate; force a recompute
         self._refresh_selection_stats()
 
 
@@ -3446,9 +3459,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                         self.sel_stats.width(), self.sel_stats.height())
             self.sel_stats.move(bx, by)
             self.sel_stats.show_raise()
-            # GROUP under the box: VP checkbox (top) + Zone-s slider + Force-f slider, stacked with breathing room
-            # (gap 6, was 3 = the 'crumbed up' look). Flip the whole group ABOVE the box if it'd run off the bottom.
-            gap = 6; ch = self.sel_vp_chk.sizeHint().height(); sh = self.zone_slider.height()
+            # GROUP under the box: VP checkbox (top) + Zone-s slider + Force-f slider, stacked with breathing room.
+            # These are hand-positioned (not in a layout), so Qt never auto-sizes them — size each to its sizeHint
+            # here (else the taller Bull/Bear row gets compressed onto the slider) and stack by sizeHint, not the
+            # possibly-stale .height(). Flip the whole group ABOVE the box if it'd run off the bottom.
+            gap = 8
+            ch = self.sel_vp_chk.sizeHint().height()
+            sh = self.zone_slider.sizeHint().height()
+            self.sel_vp_chk.adjustSize(); self.zone_slider.adjustSize(); self.eff_slider.adjustSize()
             total = ch + gap + sh + gap + sh
             top_y = by + self.sel_stats.height() + gap
             if top_y + total > self.height():
@@ -4583,6 +4601,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                  self._ls_mode, self.show_phase_table, self.show_panel9, self.show_panel0,
                  self.show_abs_hm, self.show_eff_hm, self._abshm_ncyc),   # HM toggles + P1 span drag -> re-render
                 (self.zone_slider.value_s(), self.eff_slider.value_s(),
+                 self.zone_slider.sides(), self.eff_slider.sides(),   # Bull/Bear zone filters -> re-render on toggle
                  self._largesmall_thr_sig()), tv, config.VPIN_ADAPT_WINDOW)
             if sig == self._sel_sig:
                 self._reposition_sel_box(rect)   # reuse last frame's overlays; just keep the box glued
@@ -4686,11 +4705,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # -> green/red price x time bands at the run's price range, labelled with absorbed volume, projected
         # (dashed) to the selection's right edge. DESCRIPTIVE; rare (no band = no sustained defense there).
         x_right = hi + 0.5
+        zbull, zbear = self.zone_slider.sides()               # Bull/Bear filter for the absorption-zone layer
         zspecs = [(z["start"] - 0.5, z["end"] + 0.5, x_right, z["plo"], z["phi"], z["side"],
                    f"{z['side'].upper()} {self._fmt_k(z['vol'])}")
                   for z in region_state.zones_from_series(
                       abs_bull_arr, abs_bear_arr, abs_sval, lo, filtered,
-                      s_thr, config.ABSORP_ZONE_MIN_RUN)]
+                      s_thr, config.ABSORP_ZONE_MIN_RUN)
+                  if (zbull if z["side"] == "bull" else zbear)]
         self.bc_absorp_zones.update_zones(zspecs)
         self.bc_absorp_zones.setVisible(bool(zspecs))
         # EFFECTIVE-AGGRESSION zones — the MIRROR (heavy volume that MOVED price its way): eff_bull/bear =
@@ -4704,11 +4725,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.eff_slider.set_value(self._eff_user_f if self._eff_user_f is not None
                                       else region_state.eff_agg_default_f(eff_bull_arr, eff_bear_arr, eff_fval))
         f_thr = self.eff_slider.value_s()
+        ebull, ebear = self.eff_slider.sides()                # Bull/Bear filter for the effective-aggression layer
         especs = [(z["start"] - 0.5, z["end"] + 0.5, x_right, z["plo"], z["phi"], z["side"],
                    f"{z['side'].upper()} {self._fmt_k(z['vol'])}")
                   for z in region_state.eff_zones_from_series(
                       eff_bull_arr, eff_bear_arr, eff_fval, lo, filtered,
-                      f_thr, config.EFF_AGG_ZONE_MIN_RUN)]
+                      f_thr, config.EFF_AGG_ZONE_MIN_RUN)
+                  if (ebull if z["side"] == "bull" else ebear)]
         self.bc_eff_zones.update_zones(especs)
         self.bc_eff_zones.setVisible(bool(especs))
         # The selection panels stack BELOW the box — EXHAUSTION, then EFF-AGG evolution, then EFFORT/RESULT —
@@ -5661,21 +5684,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # Cold-archive GCS fetch-if-missing (on-demand history download)
     # ------------------------------------------------------------------
-    def _maybe_pull_archive(self, key) -> None:
-        """A selected date's history isn't in the local mirror -> rsync it down from the GCS bucket in the
-        BACKGROUND (reusing study/pull_archive.ps1, the tested puller), then re-render. Throttled: one pull at a
-        time, and the SAME miss won't refetch within ARCHIVE_FETCH_COOLDOWN_S (so a range that isn't on GCS yet can
-        never tight-loop). Needs gsutil on PATH + gcloud auth. Any failure is surfaced, never fatal."""
+    def _maybe_pull_archive(self) -> None:
+        """The bridging history isn't in the local mirror -> rsync it down from the GCS bucket in the BACKGROUND
+        (reusing study/pull_archive.ps1, the tested puller), then re-render. Throttled to ONE pull per
+        ARCHIVE_FETCH_COOLDOWN_S on wall time (NOT per-miss — a per-miss key including before_bid drifts on every
+        live bucket close and would bypass the cooldown, tight-looping the ~1.8s archive reload). One rsync fetches
+        everything on GCS, so time-gating is sufficient. Needs gsutil + gcloud auth; any failure is surfaced, non-fatal."""
         import os
         import time as _t
         if self._arch_pull_active:
             return
         now = _t.monotonic()
-        if now - self._arch_pull_last < 2.0:                 # hard floor: re-entrant builds in one frame don't double-fire
-            return
-        if key == self._arch_pull_key and (now - self._arch_pull_last) < config.ARCHIVE_FETCH_COOLDOWN_S:
-            return                                           # already fetched for this exact miss recently — not on GCS yet
-        self._arch_pull_key = key
+        if (now - self._arch_pull_last) < config.ARCHIVE_FETCH_COOLDOWN_S:
+            return                                           # a full rsync in the last cooldown already fetched all of GCS
         self._arch_pull_last = now
         self._arch_pull_active = True
         self._show_arch_status("⬇  fetching history from cloud…")
@@ -5898,6 +5919,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (The spec says "four arrays"; there are three documented returns —
         ``anchor_idx`` is a scalar pointer, not an array. Implemented as listed.)
         """
+        # REPLAY fast-path: the frame is fully determined by the cursor (clip is <= cursor and the archive is stable),
+        # so if the cursor hasn't moved just return the cache — skipping the archive walk + ~11k-element concat + clip
+        # that otherwise run EVERY frame here via the always-on selection refresh. A step/date change nulls the sig, so
+        # this only short-circuits genuine idle. (Normal mode is untouched.)
+        if (self._replay_on and self._replay_edge_t is not None
+                and self._scanner_bucket_cache is not None and self._scanner_bucket_sig is not None
+                and self._scanner_bucket_sig[-1] == self._replay_edge_t):
+            return self._scanner_bucket_cache
         snap = self._last_snap or self.worker.snapshot()
         closed_list: list[dict] = snap.get("closed_buckets", []) or []
         active: dict = snap.get("active_bucket") or {}
@@ -5919,7 +5948,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # fall straight through to the live-only frame, so this can never break the live path.
         if (self._archive_extend and total_closed > 0 and closed_list
                 and anchor_unix < float(closed_list[0].get("start_time", 0.0))):
-            wk_oldest = float(closed_list[0].get("start_time", 0.0))
             before_bid = total_closed - len(closed_list) + 1
             akey = (self.worker.tf, anchor_unix, before_bid)
             if akey != self._arch_win_key:
@@ -5930,12 +5958,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._arch_win_key = akey
             if self._arch_win:
                 closed_list = self._arch_win + closed_list
-            # FETCH-IF-MISSING: did the local mirror reach the requested anchor? If the walk came back empty or its
-            # oldest bucket still starts AFTER the anchor, the bridging chunks aren't local yet — pull them from GCS
-            # in the background and re-render when they land. (Reached == we already have everything; do nothing.)
-            reached = bool(self._arch_win) and float(self._arch_win[0].get("start_time", 0.0)) <= anchor_unix
-            if not reached and anchor_unix < wk_oldest:
-                self._maybe_pull_archive((self.worker.tf, before_bid))
+            # FETCH-IF-MISSING: pull from GCS ONLY when the BRIDGE bid (before_bid-1) is genuinely absent locally —
+            # an EMPTY walk == the local mirror is stale vs GCS (the gap the user first hit). A non-empty-but-short
+            # walk just means we've reached the archive's earliest; pulling can't add older data, so DON'T (that
+            # 48h-lookback false-alarm was re-firing the pull every live close -> a ~1.8s archive reload loop).
+            if not self._arch_win:
+                self._maybe_pull_archive()
 
         combined: list[dict] = list(closed_list)
         _rk = 0
@@ -5983,9 +6011,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         # signature gate: rebuild only when the bucket set, the live edge volume, the anchor, or the absolute
         # index base (total_closed — which moves at the 10k cap even when len(combined) doesn't) changes.
-        # In replay the live 'active' vol is irrelevant (dropped) — key on the cursor so it rebuilds only on a step.
+        # In REPLAY the frame is a FROZEN historical clip: the live active vol AND total_closed are irrelevant
+        # (both drift on every live bucket close but change nothing in [cursor-24h, cursor]). Keying on them would
+        # rebuild the frame + re-run the pivot scan ~every live close (the lag). Key ONLY on the cursor + clip length
+        # + anchor, so replay rebuilds exclusively on a step/date change. (offset == the fixed archive bid either way.)
         sig = (len(combined), (0.0 if _replay else round(active.get("curr_vol", 0.0), 1)),
-               anchor_unix, total_closed, (self._replay_edge_t if _replay else None))
+               anchor_unix, (None if _replay else total_closed), (self._replay_edge_t if _replay else None))
         if sig == self._scanner_bucket_sig:
             return self._scanner_bucket_cache
 
@@ -6040,16 +6071,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         snap = self._last_snap or self.worker.snapshot()
         closed = snap.get("closed_buckets", []) or []
         active = snap.get("active_bucket") or {}
-        # Mode-10 absorption marks must repaint on a lifecycle/geometry change even when the bucket
-        # set and live-edge volume are static (a QUIET market): without this, an active->dead flip
-        # leaves (len, curr_vol, scan_start, mode) identical, the redraw is skipped, and the dead
-        # band stays drawn OPEN to the live edge. (Path 1 will also align deaths to bucket closes.)
-        abs_sig = tuple((m.get("id"), m.get("active"), m.get("end"),
-                         round(float(m.get("kappa", 0.0)), 2), m.get("price"))
-                        for m in sorted(snap.get("absorptions", []), key=lambda m: m.get("id", "")))
-        current_sig = (len(closed), active.get("curr_vol", 0.0),
-                       self.menu.scan_start_unix(), self.scanner_mode, abs_sig,
-                       self._replay_edge_t if self._replay_on else None)   # replay cursor moves -> never skip
+        if self._replay_on:
+            # REPLAY is a FROZEN historical frame — nothing live (len(closed), curr_vol, absorptions) belongs on it,
+            # and keying on those made the full recompute fire at 20 Hz for off-screen data (the lag). Key ONLY on
+            # what actually changes the replay frame: the cursor, the Start Date, and the mode. Idle replay => skip,
+            # so a step is the only work. (A step / date change also clears _last_scanner_sig, so it never sticks.)
+            current_sig = ("replay", self._replay_edge_t, self.menu.scan_start_unix(), self.scanner_mode)
+        else:
+            # Mode-10 absorption marks must repaint on a lifecycle/geometry change even when the bucket set and
+            # live-edge volume are static (a QUIET market): without this, an active->dead flip leaves (len,
+            # curr_vol, scan_start, mode) identical, the redraw is skipped, and the dead band stays drawn OPEN.
+            abs_sig = tuple((m.get("id"), m.get("active"), m.get("end"),
+                             round(float(m.get("kappa", 0.0)), 2), m.get("price"))
+                            for m in sorted(snap.get("absorptions", []), key=lambda m: m.get("id", "")))
+            current_sig = (len(closed), active.get("curr_vol", 0.0),
+                           self.menu.scan_start_unix(), self.scanner_mode, abs_sig)
         if current_sig == self._last_scanner_sig:
             return   # nothing changed — skip the heavy recompute
         self._last_scanner_sig = current_sig
