@@ -212,6 +212,21 @@ GUI_TIMER_MS = 50               # 20Hz master redraw loop
 SESSION_PERF = True             # terminal-side session profiler: ~10s CSV row to data/session_perf.log
 SESSION_PERF_SECS = 10.0        # profiler flush cadence (progressive-lag instrumentation; negligible overhead)
 CHART_CACHE_CAP = 10000         # max candles per viewport (spec §1.1.2)
+# Replay mode. On entering replay (or moving the Start Date) the chart loads the last REPLAY_SPAN_SECS (24h) of data
+# ENDING at the replay cursor — that 24h window is what's shown and stepped. REPLAY_MIN_BUCKETS floors the load in case
+# 24h is unusually quiet, so the pivot/VPIN/HM lookback is always valid; REPLAY_WINDOW caps it for perf if 24h is very
+# busy. REPLAY_LOOKBACK_SECS = how far back the cold-archive is asked to reach so a replay of OLD data still has
+# context before the cursor (the window is then trimmed to the 24h span).
+REPLAY_SPAN_SECS = 24 * 3600
+REPLAY_MIN_BUCKETS = 300
+REPLAY_WINDOW = 1200
+REPLAY_LOOKBACK_SECS = 2 * 24 * 3600
+# Cold-archive GCS bucket (must match study/pull_archive.ps1 $GCS and ops/archive_buckets.py GCS_DEFAULT). When the
+# terminal scrolls/replays before the local mirror's coverage, it rsyncs missing chunks from here ON DEMAND and caches
+# them under study/archive_data — so any date on GCS is reachable without a manual pull. ARCHIVE_FETCH_COOLDOWN_S
+# throttles retries when a range genuinely isn't on GCS yet (never a tight loop).
+ARCHIVE_GCS = "gs://smc-quant-archive/solusdt"
+ARCHIVE_FETCH_COOLDOWN_S = 45.0
 
 # ---------------------------------------------------------------------------
 # Hamburger control ranges (spec §7)

@@ -289,6 +289,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scan_trackers: dict = {}  # tracker key -> redock record (line/text/x/vb)
         self._scanner_bucket_sig: Optional[tuple] = None
         self._scanner_bucket_cache: tuple = ([], [], 0)
+        self._replay_on = False            # REPLAY MODE: causal historical playback from the Start Date (default OFF)
+        self._replay_edge_t: Optional[float] = None   # replay cursor = live-edge bucket end_time; Right arrow advances it
+        self._replay_dbg = False           # replay diagnostics -> console + data/replay_debug.log (flip True to debug)
         # ABSOLUTE bucket index: add this to a filtered-local idx to get the bucket's permanent history.db id
         # (stable all-time index; first bucket ever saved = 1). 0 = legacy local idx (daemon hasn't shipped
         # total_closed yet). Recomputed in _build_scanner_buckets.
@@ -298,6 +301,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._archive_extend: bool = True
         self._arch_win_key = None
         self._arch_win: list = []
+        # GCS FETCH-IF-MISSING: when a date's history isn't in the local mirror, rsync it from the bucket on demand
+        # (background QProcess) and re-render when it lands. Throttled so a genuinely-unavailable range can't tight-loop.
+        self._arch_pull_proc = None
+        self._arch_pull_active: bool = False
+        self._arch_pull_last: float = 0.0
+        self._arch_pull_key = None            # the (tf, anchor) we last fetched for — don't refetch the same miss
         self._last_scanner_sig: Optional[tuple] = None   # render-skip gate (Phase 7 perf)
         self._scanner_needs_autofit: bool = True         # one-shot Y/X fit (frees manual zoom)
         # View-follow (Mode 10), per-axis lock model. follow_x / follow_y track each axis to
@@ -1005,8 +1014,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("Escape"), self, activated=self.drawer.cancel)
         # Both arrows move the Magic Selection's RIGHT edge only: Right = +1 bucket (extend), Left = -1
         # (pull back). Left edge stays; clamped to >= 1 bucket of width. No-op without a selection.
-        QtGui.QShortcut(QtGui.QKeySequence("Right"), self, activated=self._on_sel_right)   # +1 bucket + arm the alert eval
-        QtGui.QShortcut(QtGui.QKeySequence("Left"), self, activated=lambda: self.drawer.extend_selection("right", -1.0))
+        QtGui.QShortcut(QtGui.QKeySequence("Right"), self, activated=self._on_sel_right)   # +1 bucket / replay: next candle
+        QtGui.QShortcut(QtGui.QKeySequence("Left"), self, activated=self._on_sel_left)     # -1 bucket / replay: prev candle
         # quick toggles: 's' = Stats Box overlay, 'd' = Vector Drawing toolbar. Flip the menu
         # checkbox so the menu stays in sync and the existing show/hide + teardown logic runs.
         QtGui.QShortcut(QtGui.QKeySequence("S"), self,
@@ -1112,6 +1121,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._apply_saved_toggles()                # restore EVERY hamburger toggle from the saved state
         self.menu.scannerChanged.connect(self._set_scanner)
         self.menu.scan_time_changed.connect(self._on_scan_time_changed)
+        self.menu.replayToggled.connect(self._on_replay_toggled)
+        self.menu.scan_time_edit.set_range_provider(self._data_date_range)   # calendar: disable no-data days
 
         # Modifier mouse-wheel over the chart: Ctrl nudges the Scan Start (Zero Point) anchor ±1 min
         # (debounced — title scrubs live, one coalesced redraw); Shift zooms the X axis only.
@@ -1853,10 +1864,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     # ---------------------------------------------------------------- selection confluence alert
     def _on_sel_right(self) -> None:
-        """RIGHT arrow: move the selection +1 bucket AND arm the confluence-alert eval for this move.
-        LEFT deliberately does NOT — only forward scrubbing fires."""
+        """RIGHT arrow. Replay Mode: reveal the NEXT candle (advance the cursor). Otherwise: move the selection
+        +1 bucket AND arm the confluence-alert eval (LEFT deliberately does not — only forward scrubbing fires)."""
+        if self._replay_on:
+            self._advance_replay(1)
+            return
         self._alert_right_pending = True
         self.drawer.extend_selection("right", 1.0)
+
+    def _on_sel_left(self) -> None:
+        """LEFT arrow. Replay Mode: step BACK one candle. Otherwise: pull the selection's right edge -1 bucket."""
+        if self._replay_on:
+            self._advance_replay(-1)
+            return
+        self.drawer.extend_selection("right", -1.0)
 
     def _confluence_state(self):
         """(aligned, direction) for the Mode-10 selection confluence, read from the draw-time signals — so
@@ -5539,13 +5560,174 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # Phase 1: bucket pipeline + Zero-Point anchor
     # ------------------------------------------------------------------
     def _on_scan_time_changed(self) -> None:
-        """User moved the Zero Point: flush geometry and redraw from the new anchor."""
+        """User moved the Zero Point: flush geometry and redraw from the new anchor. In Replay Mode the Start Date
+        is the replay START, so re-seat the cursor there before the rebuild."""
+        if self._replay_on:
+            self._replay_edge_t = self._replay_snap_to_bucket(float(self.menu.scan_start_unix()))
+            self._rdbg("SCAN_TIME_CHANGED replay_on=1 scan_start=%d -> snapped cursor=%s"
+                       % (int(self.menu.scan_start_unix()), int(self._replay_edge_t) if self._replay_edge_t else None))
         self.clear_scanner_canvas()
+        # The loaded set moved, so EVERYTHING derived from it must re-derive — same invalidation the replay step does.
+        # Without this the Pivot D/E marks (sig-gated on offset/range) and the selection kept their last values, so a
+        # Start-Date / replay-cursor change only visibly took effect on the next right-arrow step.
         self._scanner_bucket_sig = None       # force a fresh bucket rebuild
+        self._last_scanner_sig = None         # force _draw_scanner past its render-skip gate
+        self._pivot_sig = None; self._sel_sig = None   # force the Pivot D/E + selection to re-detect on the new frame
+        self._psc = None                      # drop the incremental pivot-scan cache (prefix belongs to the old frame)
         self._scanner_needs_autofit = True    # re-fit once to the new window
         if self.scanner_mode == "depth_heatmap":
             self._hm_enter()                  # re-request the heatmap from the new Scan Start Time
         self._on_timer()                      # immediate manual redraw
+
+    def _data_date_range(self):
+        """(min QDate, max QDate) of the data the terminal can actually load — the earliest cold-archived bucket
+        (falling back to the daemon's oldest live bucket) through today. The date picker disables everything outside
+        this so no-data days can't be selected in either normal or replay mode. Bounds are host-local, matching
+        scan_start_unix()'s toSecsSinceEpoch()."""
+        tf = self.worker.tf if getattr(self, "worker", None) else "1m"
+        min_ts = None
+        try:
+            if archive.available(tf):
+                min_ts = archive.earliest_start(tf)
+        except Exception:
+            min_ts = None
+        if min_ts is None:                                   # archive empty -> oldest bucket the daemon still holds
+            snap = self._last_snap or (self.worker.snapshot() if getattr(self, "worker", None) else None)
+            cb = (snap or {}).get("closed_buckets") or []
+            if cb:
+                min_ts = float(cb[0].get("start_time", 0.0))
+        min_d = QtCore.QDateTime.fromSecsSinceEpoch(int(min_ts)).date() if min_ts else None
+        return min_d, QtCore.QDate.currentDate()
+
+    def _on_replay_toggled(self, on: bool) -> None:
+        """Replay Mode on/off (default OFF). ON: seat the cursor at the Start Date and redraw a CAUSAL frame ending
+        there — the whole pipeline (candles, VPIN, pivot, selection, HM) reads the clipped frame, so it behaves
+        exactly as live did at that moment. OFF: back to the real live edge. Right arrow steps one candle (_on_sel_right)."""
+        self._replay_on = bool(on)
+        if not on:
+            self._replay_edge_t = None
+        # _on_scan_time_changed seats the cursor at the Start Date (when on) and forces the full re-derive + refit.
+        self._on_scan_time_changed()
+
+    def _rdbg(self, msg: str) -> None:
+        """TEMP replay diagnostics -> the console (stderr) AND data/replay_debug.log. Only when self._replay_dbg is on."""
+        if not getattr(self, "_replay_dbg", False):
+            return
+        try:
+            import sys
+            print("[REPLAY] " + msg, file=sys.stderr, flush=True)
+        except Exception:
+            pass
+        try:
+            import os
+            import datetime as _dt
+            p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "replay_debug.log")
+            with open(p, "a", encoding="utf-8") as f:
+                f.write("%s  %s\n" % (_dt.datetime.now().strftime("%H:%M:%S"), msg))
+        except Exception:
+            pass
+
+    def _replay_snap_to_bucket(self, t: float) -> float:
+        """Snap a wall time to the newest CLOSED bucket end_time <= t, so the cursor always sits on a real bar edge."""
+        snap = self._last_snap or (self.worker.snapshot() if getattr(self, "worker", None) else None)
+        cand = [float(b.get("end_time", 0.0)) for b in ((snap or {}).get("closed_buckets") or [])
+                if float(b.get("end_time", 0.0)) <= t]
+        return cand[-1] if cand else float(t)
+
+    def _advance_replay(self, step: int = 1) -> None:
+        """Reveal the next/prev candle in Replay Mode: move the cursor by `step` closed buckets (Right +1 / Left -1),
+        clamped so you can't step past the real live edge. Everything downstream re-derives from the newly-clipped
+        frame, so it stays causal."""
+        if not self._replay_on or self._replay_edge_t is None:
+            return
+        snap = self._last_snap or self.worker.snapshot()
+        # step through the FULL available sequence — the loaded cold-archive window PLUS the live closed buckets —
+        # so an archive-region replay advances bar-by-bar instead of jumping to (or stalling at) the live buffer.
+        seq = list(self._arch_win or []) + list(snap.get("closed_buckets") or [])
+        ets = sorted({float(b.get("end_time", 0.0)) for b in seq})
+        if not ets:
+            return
+        i = bisect.bisect_left(ets, self._replay_edge_t)   # current cursor bucket (cursor is always a bar edge)
+        j = min(max(i + step, 0), len(ets) - 1)
+        self._rdbg("ADVANCE step=%d seq=%d(arch=%d) i=%d j=%d cursor %d->%d"
+                   % (step, len(ets), len(self._arch_win or []), i, j,
+                      int(self._replay_edge_t), int(ets[j])))
+        if j != i:
+            self._replay_edge_t = ets[j]
+            self._scanner_bucket_sig = None; self._last_scanner_sig = None
+            self._pivot_sig = None; self._sel_sig = None
+            self._on_timer()
+
+    # ------------------------------------------------------------------
+    # Cold-archive GCS fetch-if-missing (on-demand history download)
+    # ------------------------------------------------------------------
+    def _maybe_pull_archive(self, key) -> None:
+        """A selected date's history isn't in the local mirror -> rsync it down from the GCS bucket in the
+        BACKGROUND (reusing study/pull_archive.ps1, the tested puller), then re-render. Throttled: one pull at a
+        time, and the SAME miss won't refetch within ARCHIVE_FETCH_COOLDOWN_S (so a range that isn't on GCS yet can
+        never tight-loop). Needs gsutil on PATH + gcloud auth. Any failure is surfaced, never fatal."""
+        import os
+        import time as _t
+        if self._arch_pull_active:
+            return
+        now = _t.monotonic()
+        if now - self._arch_pull_last < 2.0:                 # hard floor: re-entrant builds in one frame don't double-fire
+            return
+        if key == self._arch_pull_key and (now - self._arch_pull_last) < config.ARCHIVE_FETCH_COOLDOWN_S:
+            return                                           # already fetched for this exact miss recently — not on GCS yet
+        self._arch_pull_key = key
+        self._arch_pull_last = now
+        self._arch_pull_active = True
+        self._show_arch_status("⬇  fetching history from cloud…")
+        try:
+            os.makedirs(archive.local_dir(), exist_ok=True)
+            script = os.path.join(config.PROJECT_DIR, "study", "pull_archive.ps1")
+            proc = QtCore.QProcess(self)
+            proc.setProgram("powershell")
+            proc.setArguments(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script])
+            proc.finished.connect(self._on_archive_pulled)
+            proc.errorOccurred.connect(lambda _e: self._on_archive_pulled(-1, None))
+            self._arch_pull_proc = proc
+            proc.start()
+        except Exception:
+            self._arch_pull_active = False
+            self._show_arch_status("cloud fetch failed to start (gsutil / powershell?)", err=True, timeout=6000)
+
+    def _on_archive_pulled(self, code: int = 0, status=None) -> None:
+        """rsync finished. On success: drop the archive cache, force a fresh walk + full re-derive, and re-render so
+        the just-downloaded history appears. Idempotent (finished + errorOccurred can both fire)."""
+        if not self._arch_pull_active:
+            return
+        self._arch_pull_active = False
+        self._arch_pull_proc = None
+        if code == 0:
+            archive.invalidate()                             # re-read the freshly-pulled chunks from disk
+            self._arch_win_key = None                        # force a new archive walk with the new coverage
+            self._scanner_bucket_sig = None; self._last_scanner_sig = None
+            self._pivot_sig = None; self._sel_sig = None; self._psc = None
+            self._hide_arch_status()
+            self._on_timer()                                 # repaint with the now-available 24h/history
+        else:
+            self._show_arch_status("cloud fetch failed — check gsutil / gcloud auth", err=True, timeout=7000)
+
+    def _show_arch_status(self, text: str, err: bool = False, timeout: int = 0) -> None:
+        """Small top-center overlay on the chart while history is being fetched (blue) or on failure (red)."""
+        if getattr(self, "arch_status", None) is None:
+            self.arch_status = QtWidgets.QLabel("", self.plot)
+            self.arch_status.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        col = "#ff6b6b" if err else "#7ec2ff"
+        self.arch_status.setStyleSheet(
+            "QLabel{color:%s; background:rgba(18,18,18,215); padding:5px 12px; border:1px solid %s;"
+            "border-radius:6px; font-family:Consolas; font-size:12px; font-weight:bold;}" % (col, col))
+        self.arch_status.setText(text); self.arch_status.adjustSize()
+        self.arch_status.move(max(8, (self.plot.width() - self.arch_status.width()) // 2), 10)
+        self.arch_status.show(); self.arch_status.raise_()
+        if timeout > 0:
+            QtCore.QTimer.singleShot(timeout, self._hide_arch_status)
+
+    def _hide_arch_status(self) -> None:
+        if getattr(self, "arch_status", None) is not None:
+            self.arch_status.hide()
 
     def _vb_wheel(self, ev, axis=None):
         """Modifier wheel over the chart: Ctrl -> nudge the Scan Start anchor ±1 min (consumed, no
@@ -5663,6 +5845,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.lower_plot = None
             self.splitter_v = None
             self.cob_col = None
+            # the VPIN-pane crosshair/badge items were CHILDREN of the just-deleted lower_plot — null the Python refs
+            # so _on_mouse_move / _on_lower_mouse_move skip them (else 'C++ object already deleted' on the next hover).
+            # _ensure_canvas_panes recreates them when the pane is rebuilt.
+            self.lower_vline = None; self.lower_hline = None; self.vpin_tag = None
+            self.lower_vb = None; self._lower_proxy = None
 
     def _sync_kinetic_vb(self) -> None:
         """Keep the Mode 4 secondary price ViewBox glued to the main viewport.
@@ -5716,6 +5903,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         active: dict = snap.get("active_bucket") or {}
         anchor_unix = self.menu.scan_start_unix()
         total_closed = int(snap.get("total_closed", 0) or 0)   # DB-id of closed_list[-1] (0 = pre-redeploy daemon)
+        _replay = self._replay_on and self._replay_edge_t is not None
+        if _replay:                                            # REPLAY: reach cold-archive context BEFORE the cursor
+            anchor_unix = int(self._replay_edge_t) - config.REPLAY_LOOKBACK_SECS
+        if _replay and getattr(self, "_replay_dbg", False):
+            _o0 = float(closed_list[0].get("start_time", 0.0)) if closed_list else 0.0
+            self._rdbg("BUILD cursor=%d anchor=%d wk_closed=%d wk_oldest_start=%d total_closed=%d arch_ext=%s gate=%s"
+                       % (int(self._replay_edge_t), anchor_unix, len(closed_list), int(_o0), total_closed,
+                          self._archive_extend, anchor_unix < _o0))
 
         # ARCHIVE EXTEND: when the Zero Point reaches before the daemon's oldest LIVE bucket, prepend the
         # contiguous older run from the LOCAL cold-archive mirror. Archive bids == absolute Idx (both from
@@ -5724,6 +5919,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # fall straight through to the live-only frame, so this can never break the live path.
         if (self._archive_extend and total_closed > 0 and closed_list
                 and anchor_unix < float(closed_list[0].get("start_time", 0.0))):
+            wk_oldest = float(closed_list[0].get("start_time", 0.0))
             before_bid = total_closed - len(closed_list) + 1
             akey = (self.worker.tf, anchor_unix, before_bid)
             if akey != self._arch_win_key:
@@ -5734,8 +5930,39 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._arch_win_key = akey
             if self._arch_win:
                 closed_list = self._arch_win + closed_list
+            # FETCH-IF-MISSING: did the local mirror reach the requested anchor? If the walk came back empty or its
+            # oldest bucket still starts AFTER the anchor, the bridging chunks aren't local yet — pull them from GCS
+            # in the background and re-render when they land. (Reached == we already have everything; do nothing.)
+            reached = bool(self._arch_win) and float(self._arch_win[0].get("start_time", 0.0)) <= anchor_unix
+            if not reached and anchor_unix < wk_oldest:
+                self._maybe_pull_archive((self.worker.tf, before_bid))
 
         combined: list[dict] = list(closed_list)
+        _rk = 0
+        if _replay:
+            # REPLAY causal clip: keep only bars whose bucket CLOSED at/before the cursor, then the trailing 24h
+            # (REPLAY_SPAN_SECS) ending there — floored at REPLAY_MIN_BUCKETS so the lookback is valid on quiet days
+            # and capped at REPLAY_WINDOW for perf. The newest kept bucket is the (fake) live edge; the real-'now'
+            # active is dropped. closed_list is ascending, so bars <= cursor are a prefix. Fully causal by construction.
+            et = float(self._replay_edge_t); m = 0
+            for b in closed_list:
+                if float(b.get("end_time", 0.0)) <= et:
+                    m += 1
+                else:
+                    break
+            t24 = et - config.REPLAY_SPAN_SECS
+            n24 = 0
+            for b in closed_list[:m]:
+                if float(b.get("end_time", 0.0)) >= t24:
+                    n24 += 1
+            keep = min(max(n24, config.REPLAY_MIN_BUCKETS), config.REPLAY_WINDOW, m)
+            _rk = m - keep
+            combined = closed_list[_rk:m]
+            if getattr(self, "_replay_dbg", False):
+                _wk = len(closed_list) - len(self._arch_win or [])
+                _sp = ((float(combined[-1].get('end_time', 0)) - float(combined[0].get('end_time', 0))) / 3600.0) if combined else 0.0
+                self._rdbg("CLIP cursor=%d closed=%d(arch=%d wk=%d) m=%d n24=%d keep=%d frame=%d span=%.1fh"
+                           % (int(et), len(closed_list), len(self._arch_win or []), _wk, m, n24, keep, len(combined), _sp))
         # Append the live edge — but guard the ~1-frame window right after a close
         # where the just-closed bucket is in closed_list AND still the stale active
         # (until the next TICK ships a fresh active), which would double-count it.
@@ -5744,7 +5971,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # minute and share it — so the fingerprint must include curr_vol. The
         # stale active is identical to closed[-1] (start_time AND a full curr_vol);
         # a fresh same-minute bucket has a smaller, differing curr_vol and is kept.
-        if active and active.get("curr_vol", 0.0) > 0:
+        elif active and active.get("curr_vol", 0.0) > 0:
             last = closed_list[-1] if closed_list else None
             is_stale_dup = (
                 last is not None
@@ -5756,19 +5983,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         # signature gate: rebuild only when the bucket set, the live edge volume, the anchor, or the absolute
         # index base (total_closed — which moves at the 10k cap even when len(combined) doesn't) changes.
-        sig = (len(combined), round(active.get("curr_vol", 0.0), 1), anchor_unix, total_closed)
+        # In replay the live 'active' vol is irrelevant (dropped) — key on the cursor so it rebuilds only on a step.
+        sig = (len(combined), (0.0 if _replay else round(active.get("curr_vol", 0.0), 1)),
+               anchor_unix, total_closed, (self._replay_edge_t if _replay else None))
         if sig == self._scanner_bucket_sig:
             return self._scanner_bucket_cache
 
-        anchor_idx: Optional[int] = None
-        filtered: list[dict] = []
-        for i, b in enumerate(combined):
-            if float(b.get("start_time", 0.0)) >= anchor_unix:
-                if anchor_idx is None:
-                    anchor_idx = i
-                filtered.append(b)
-        if anchor_idx is None:
-            anchor_idx = len(combined)
+        if _replay:                                # the clipped frame IS exactly the causal window
+            filtered: list[dict] = list(combined)
+            anchor_idx: Optional[int] = _rk        # clip start's index into closed_list -> exact Idx offset below
+        else:
+            anchor_idx = None
+            filtered = []
+            for i, b in enumerate(combined):
+                if float(b.get("start_time", 0.0)) >= anchor_unix:
+                    if anchor_idx is None:
+                        anchor_idx = i
+                    filtered.append(b)
+            if anchor_idx is None:
+                anchor_idx = len(combined)
 
         # ABSOLUTE index base: a filtered-local idx maps to history.db id = offset + idx. Since combined =
         # closed_list (+ live active), db_id(closed_list[-1]) = total_closed, so db_id(combined[j]) =
@@ -5815,7 +6048,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                          round(float(m.get("kappa", 0.0)), 2), m.get("price"))
                         for m in sorted(snap.get("absorptions", []), key=lambda m: m.get("id", "")))
         current_sig = (len(closed), active.get("curr_vol", 0.0),
-                       self.menu.scan_start_unix(), self.scanner_mode, abs_sig)
+                       self.menu.scan_start_unix(), self.scanner_mode, abs_sig,
+                       self._replay_edge_t if self._replay_on else None)   # replay cursor moves -> never skip
         if current_sig == self._last_scanner_sig:
             return   # nothing changed — skip the heavy recompute
         self._last_scanner_sig = current_sig
@@ -6240,12 +6474,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         overflow. Cadence per FOLLOW_*_PER_TICK (per-tick vs only on a bucket close)."""
         if n <= 0:
             return
-        new_bucket = (n != self._follow_last_n)
+        # In replay the whole frame slides on each step (usually with the SAME bucket count), so the plain
+        # 'n changed' gate would skip the Y re-fit and clip the freshly-revealed candle — force the re-fit while
+        # following. (When the user zooms/pans, follow unlocks and this method doesn't run, so their zoom is kept.)
+        new_bucket = (n != self._follow_last_n) or self._replay_on
+        # In Replay Mode the loaded frame IS the 24h window the user asked for, so show ALL of it (window = n)
+        # rather than the narrow live FOLLOW_WINDOW; the newest kept bucket (the replay cursor) sits at the right.
+        win = n if self._replay_on else FOLLOW_WINDOW
         if self._follow_x and (FOLLOW_X_PER_TICK or new_bucket):
-            self.vb.setXRange(max(-0.5, n - FOLLOW_WINDOW - 0.5),
+            self.vb.setXRange(max(-0.5, n - win - 0.5),
                               (n - 1) + FOLLOW_MARGIN + 0.5, padding=0)
         if self._follow_y and (FOLLOW_Y_PER_TICK or new_bucket):
-            w0 = max(0, n - FOLLOW_WINDOW)
+            w0 = max(0, n - win)
             lo, hi = min(lows[w0:n]), max(highs[w0:n])
             if not (hi > lo):
                 hi = lo + 1.0
@@ -7613,6 +7853,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # (lows/highs) — re-fit every draw so an extreme in-window bucket can't squish them. The
         # roll runs whenever either axis is locked (each axis gated inside). After the draw
         # we snapshot the displayed range so the per-axis unlock can diff against it. ---
+        _vr_before = self.vb.viewRange()[0]        # X range the candles above were viewport-culled against
         if self._scanner_needs_autofit:
             self._follow_x = self._follow_y = True
             self._scanner_needs_autofit = False
@@ -7620,6 +7861,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._roll_to_live_edge(len(x), lows, highs)
         self.lower_plot.getViewBox().setYRange(0.0, 1.05, padding=0)
         self._follow_prev_range = self.vb.viewRange()
+        # If the view JUMPED this frame (autofit / replay cursor move / mode switch), the candles were culled to the
+        # OLD X range and are wrong (empty on a big jump) while the pivot/overlays — drawn AFTER the view moved — are
+        # correct. The render-sig is now stable, so the 20 Hz loop would never re-cull. Force one re-cull next frame.
+        _vr_after = self.vb.viewRange()[0]
+        if abs(_vr_after[0] - _vr_before[0]) > 1e-6 or abs(_vr_after[1] - _vr_before[1]) > 1e-6:
+            self._last_scanner_sig = None
 
         # §5 right-edge spot price + active-bucket fill badge, plus the baseline readout
         # (all on the upper price pane; stacked + left-padded to avoid clipping).

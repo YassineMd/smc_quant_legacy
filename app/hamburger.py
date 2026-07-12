@@ -15,6 +15,7 @@ import math
 from PySide6 import QtCore, QtWidgets
 
 from . import config
+from .date_picker import DateTimeField
 
 
 def _fmt_vol_1sig(v: float) -> str:
@@ -203,6 +204,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     subWidgetToggled = QtCore.Signal(str, bool)
     scannerChanged = QtCore.Signal(str)
     scan_time_changed = QtCore.Signal()   # user moved the scanner "Zero Point"
+    replayToggled = QtCore.Signal(bool)   # Replay Mode on/off (default OFF; chart replays from the Start Date)
     helpRequested = QtCore.Signal()       # the top-right '?' — show the keyboard-shortcuts cheatsheet
 
     PANEL_WIDTH = 240
@@ -257,7 +259,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.help_btn.raise_()
 
         root = QtWidgets.QVBoxLayout(content)
-        root.setContentsMargins(12, 40, 12, 12); root.setSpacing(6)
+        # right margin is generous (clears the ~9px vertical scrollbar + leaves visible padding at the panel edge)
+        root.setContentsMargins(12, 40, 22, 12); root.setSpacing(6)
 
         # --- bucket scale (formerly "Timeframe") — selects which order-flow window sizes the
         # volume buckets. NO number here: the buckets drawn on the chart ARE the honest scale
@@ -289,13 +292,29 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
         # --- scanner "Zero Point" anchor (Phase 1) ---
         root.addWidget(self._header("Scan Start Time"))
-        self.scan_time_edit = QtWidgets.QDateTimeEdit()
-        self.scan_time_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
-        self.scan_time_edit.setCalendarPopup(True)
+        # Flutter/Material-style date+time picker (drop-in: same dateTime()/setDateTime()/dateTimeChanged interface).
+        self.scan_time_edit = DateTimeField()
         # default the anchor to exactly 24 hours before the host clock
         self.scan_time_edit.setDateTime(QtCore.QDateTime.currentDateTime().addSecs(-86400))
         self.scan_time_edit.dateTimeChanged.connect(lambda _dt: self.scan_time_changed.emit())
         root.addWidget(self.scan_time_edit)
+
+        # --- Replay Mode toggle (default OFF). ON => the chart replays FROM the Start Date, causal; Right arrow
+        #     steps one candle instead of moving the selection. ---
+        self.replay_btn = QtWidgets.QPushButton("▶  Replay Mode  ·  OFF")
+        self.replay_btn.setCheckable(True); self.replay_btn.setChecked(False)
+        self.replay_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.replay_btn.setStyleSheet(
+            "QPushButton{background:#11131a; color:#8891a3; border:1px solid #2a2e39; border-radius:5px;"
+            " padding:7px 10px; text-align:left; font-family:Consolas; font-size:11px; font-weight:bold;}"
+            "QPushButton:hover{border-color:#3b82f6;}"
+            "QPushButton:checked{background:#16324f; color:#7ec2ff; border-color:#3b82f6;}")
+        self.replay_btn.toggled.connect(self._on_replay_btn)
+        root.addWidget(self.replay_btn)
+        self.replay_hint = QtWidgets.QLabel("→ Right arrow steps one candle")
+        self.replay_hint.setStyleSheet("color:#6b7280; font-family:Consolas; font-size:10px; padding:0 2px;")
+        self.replay_hint.setVisible(False)
+        root.addWidget(self.replay_hint)
 
         # --- min multiplier filter (spec §7.2.3) ---
         self.mult_label = QtWidgets.QLabel("Min Multiplier: x0.0")
@@ -372,6 +391,14 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     def layer_state(self, key: str) -> bool:
         cb = self.layer_checks.get(key)
         return cb.isChecked() if cb else False
+
+    def _on_replay_btn(self, on: bool) -> None:
+        self.replay_btn.setText("▶  Replay Mode  ·  ON" if on else "▶  Replay Mode  ·  OFF")
+        self.replay_hint.setVisible(on)
+        self.replayToggled.emit(on)
+
+    def is_replay(self) -> bool:
+        return self.replay_btn.isChecked()
 
     def scan_start_unix(self) -> int:
         """The scanner 'Zero Point' as Unix epoch seconds (host-local interpreted).

@@ -25,6 +25,20 @@ _cache: dict[str, dict[int, dict]] = {}     # tf -> {bid: wire_bucket}
 _stamp: dict[str, float] = {}               # tf -> newest-chunk mtime the cache was built from
 
 
+def local_dir() -> str:
+    """The local mirror root (study/archive_data) that the GCS bucket rsyncs into."""
+    return _ROOT
+
+
+def invalidate(tf: "str | None" = None) -> None:
+    """Drop the in-memory cache so the next _load re-reads freshly-pulled chunks from disk. (The mtime guard in
+    _load already auto-reloads when a chunk changes; this is an explicit belt-and-suspenders after a GCS fetch.)"""
+    if tf is None:
+        _cache.clear(); _stamp.clear()
+    else:
+        _cache.pop(tf, None); _stamp.pop(tf, None)
+
+
 def _chunk_paths(tf: str) -> list[str]:
     return sorted(glob.glob(os.path.join(_ROOT, tf, "%s_*.jsonl.gz" % tf)))
 
@@ -65,6 +79,16 @@ def available(tf: str) -> bool:
 def oldest_bid(tf: str):
     d = _load(tf)
     return min(d) if d else None
+
+
+def earliest_start(tf: str):
+    """Unix ``start_time`` of the oldest archived bucket for ``tf`` (the earliest data the terminal can reach),
+    or ``None`` when the archive is empty. Used to bound the date picker so no-data days are disabled."""
+    d = _load(tf)
+    if not d:
+        return None
+    st = float(d[min(d)].get("start_time", 0.0))
+    return st or None
 
 
 def window(tf: str, min_start_unix: float, before_bid: int) -> list[dict]:
