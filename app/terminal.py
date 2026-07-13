@@ -291,7 +291,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scanner_bucket_cache: tuple = ([], [], 0)
         self._replay_on = False            # REPLAY MODE: causal historical playback from the Start Date (default OFF)
         self._replay_edge_t: Optional[float] = None   # replay cursor = live-edge bucket end_time; Right arrow advances it
+        self._replay_saved_edge_t: Optional[float] = None   # last replay position, persisted -> restored on next toggle-on
         self._replay_dbg = False           # replay diagnostics -> console + data/replay_debug.log (flip True to debug)
+        self._replay_save_timer = QtCore.QTimer(self)       # debounce persisting the cursor (holding the arrow -> 1 write)
+        self._replay_save_timer.setSingleShot(True); self._replay_save_timer.setInterval(800)
+        self._replay_save_timer.timeout.connect(self._save_ui_state)
         # ABSOLUTE bucket index: add this to a filtered-local idx to get the bucket's permanent history.db id
         # (stable all-time index; first bucket ever saved = 1). 0 = legacy local idx (daemon hasn't shipped
         # total_closed yet). Recomputed in _build_scanner_buckets.
@@ -509,6 +513,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._struct_rsig = None                                 # render-skip guard (visible slice + y-scale)
         self._struct_label_pool_sw = []                          # swing-structure (coarse ZigZag) label pool
         self._struct_labels_sw = []; self._struct_idx_sw = []    # cached coarse swings (shares the _struct_sig gate)
+        self._struct_pct_pool_sw = []                            # swing % -change sub-label pool (below each HH/HL/LH/LL)
+        self._struct_pct_sw = []                                 # cached per-swing % move from the previous swing
+        self._swing_pct = structure.ZIGZAG_SWING_PCT             # swing-ZigZag threshold %, live-set by the hamburger slider
         _cbp = pg.mkPen((70, 200, 255), width=1.3, style=QtCore.Qt.DashLine); _cbp.setCosmetic(True)   # CHoCH bull
         _crp = pg.mkPen((255, 120, 90), width=1.3, style=QtCore.Qt.DashLine); _crp.setCosmetic(True)   # CHoCH bear
         self._choch_bull = pg.PlotCurveItem(pen=_cbp, connect="finite"); self._choch_bull.setZValue(28)
@@ -957,6 +964,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.alerts = AlertsLedger(self)
         self.drawbar = DrawingToolbar(self)
         self.menu = FloatingOverlayMenu(self)
+        self.menu.set_swing_pct(self._swing_pct)   # sync the swing slider to the restored/default sensitivity
         self.stats.keep_under = self.menu   # stats overlay stays below an open menu (z-order)
         self.sel_stats.keep_under = self.menu
         self.menu_btn = HamburgerButton(self)
@@ -1026,6 +1034,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("P"), self,
                         activated=lambda: self.menu.layer_checks["m10_poc"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+P"), self, activated=self._toggle_pivot)  # PIVOT INDICATOR (selection-scoped)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Z"), self, activated=self._toggle_sel_vp)  # selection Volume Profile on/off
         QtGui.QShortcut(QtGui.QKeySequence("N"), self, activated=self._toggle_pivot_causal)  # No-look-ahead pivot badges
         QtGui.QShortcut(QtGui.QKeySequence("L"), self,
                         activated=lambda: self.menu.layer_checks["m10_liq"].toggle())
@@ -1123,6 +1132,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.scannerChanged.connect(self._set_scanner)
         self.menu.scan_time_changed.connect(self._on_scan_time_changed)
         self.menu.replayToggled.connect(self._on_replay_toggled)
+        self.menu.swingSensitivityChanged.connect(self._on_swing_sensitivity)   # swing-ZigZag threshold slider
         self.menu.scan_time_edit.set_range_provider(self._data_date_range)   # calendar: disable no-data days
 
         # Modifier mouse-wheel over the chart: Ctrl nudges the Scan Start (Zero Point) anchor ±1 min
@@ -1397,7 +1407,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     ("P", "POC dot"), ("F", "Footprint ladder"),
                     ("O", "Order Blocks + Absorption/Iceberg"), ("L", "Liquidation marks"),
                     ("V", "Abnormal-velocity diamonds"), ("W", "Volume-quantile whisker bars"),
-                    ("Ctrl+P", "Pivot indicator (selection-scoped)")]),
+                    ("Ctrl+P", "Pivot indicator (selection-scoped)"),
+                    ("Ctrl+Z", "Selection Volume Profile")]),
                 ("Stats &amp; panels", [
                     ("S", "Stats box overlay"), ("H", "Selection stats box"),
                     ("Y", "State verdict / debug lines"),
@@ -2483,10 +2494,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._liq_label_pool[_j].setVisible(False)
         self.bc_liq_leader.setData(lx, ly, connect="finite"); self.bc_liq_leader.setVisible(bool(lx))
 
+    def _on_swing_sensitivity(self, pct: float) -> None:
+        """Hamburger swing-ZigZag slider moved — set the threshold %, re-detect the swing structure at it, persist,
+        and repaint now (the threshold is in _struct_sig, so this forces a fresh detection)."""
+        self._swing_pct = float(pct)
+        self._struct_sig = None; self._struct_rsig = None
+        self._save_ui_state()
+        self._last_scanner_sig = None
+        self._draw_scanner()
+
     def _clear_structure(self) -> None:
         for _l in self._struct_label_pool:
             _l.setVisible(False)
         for _l in self._struct_label_pool_sw:
+            _l.setVisible(False)
+        for _l in self._struct_pct_pool_sw:
             _l.setVisible(False)
         self._struct_sig = None; self._struct_rsig = None
 
@@ -2507,14 +2529,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # the forming bucket's start_time (new each close), the first bucket's start_time (front rolls off), + the
         # scalp/swing on-state. Panning/zooming leaves all of these fixed, so it never re-detects.
         tc = int((self._last_snap or {}).get("total_closed", 0))
-        sig = (n, tc, float(buckets[-1].get("start_time", 0.0)), float(buckets[0].get("start_time", 0.0)), scalp, swing)
+        sig = (n, tc, float(buckets[-1].get("start_time", 0.0)), float(buckets[0].get("start_time", 0.0)),
+               scalp, swing, self._swing_pct)   # swing threshold in the key -> a slider drag re-detects
         if sig != self._struct_sig:
             H = [float(b.get("high", 0.0)) for b in buckets]; L = [float(b.get("low", 0.0)) for b in buckets]
             self._struct_labels = structure.detect_structure_zigzag(H, L) if scalp else []
-            self._struct_labels_sw = (structure.detect_structure_zigzag(H, L, structure.ZIGZAG_SWING_PCT / 100.0)
+            self._struct_labels_sw = (structure.detect_structure_zigzag(H, L, self._swing_pct / 100.0)
                                       if swing else [])
             self._struct_idx = [s[0] for s in self._struct_labels]           # sorted bar-index -> bisect cull
             self._struct_idx_sw = [s[0] for s in self._struct_labels_sw]
+            self._struct_pct_sw = self._swing_pcts(self._struct_labels_sw)   # % move of each swing from the previous one
             self._struct_sig = sig
         lo_i = max(0, int(vx0) - 1); hi_i = min(n - 1, int(vx1) + 1)
         a = bisect.bisect_left(self._struct_idx, lo_i); b = bisect.bisect_right(self._struct_idx, hi_i)
@@ -2524,16 +2548,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return                                                            # nothing visible changed -> auto-follows
         self._struct_rsig = rsig
         self._render_struct(self._struct_labels[a:b], self._struct_label_pool, x, vy0, vy1, swing=False)
-        self._render_struct(self._struct_labels_sw[asw:bsw], self._struct_label_pool_sw, x, vy0, vy1, swing=True)
+        self._render_struct(self._struct_labels_sw[asw:bsw], self._struct_label_pool_sw, x, vy0, vy1, swing=True,
+                            pcts=self._struct_pct_sw[asw:bsw])
 
-    def _render_struct(self, vis, pool, x, vy0, vy1, swing) -> None:
+    @staticmethod
+    def _swing_pcts(swings) -> list:
+        """Per-swing % price move FROM THE PREVIOUS swing (the leg): (price - prev) / prev * 100. First swing -> None
+        (no prior leg). Parallel to ``swings`` so it culls with the same slice."""
+        out = []; prev = None
+        for s in swings:
+            price = float(s[1])
+            out.append(((price - prev) / prev * 100.0) if (prev not in (None, 0.0)) else None)
+            prev = price
+        return out
+
+    def _render_struct(self, vis, pool, x, vy0, vy1, swing, pcts=None) -> None:
         """Paint the already-culled swing slice into its own label pool. swing=True -> coarse (large gold/magenta,
-        further off the wick); swing=False -> scalp (small green/red). Cap 120, bounded reuse pool."""
+        further off the wick); swing=False -> scalp (small green/red). SWING labels also get a smaller % sub-label
+        (the leg's move from the previous swing) just below each HH/HL/LH/LL, from _struct_pct_pool_sw. Cap 120."""
         if len(vis) > 120:                                       # keep only the most RECENT on a zoomed-out view
+            if pcts is not None:
+                pcts = pcts[-120:]
             vis = vis[-120:]
         dy = (vy1 - vy0) * (0.05 if swing else 0.03)
         used = 0
-        for i, price, lab, is_high in vis:
+        for k, (i, price, lab, is_high) in enumerate(vis):
             if swing:
                 col = (255, 205, 50) if lab in ("HH", "HL") else (235, 90, 200)   # bullish gold / bearish magenta
             else:
@@ -2543,10 +2582,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _t = pg.TextItem(anchor=(0.5, 0.5)); _t.setZValue(29 if swing else 30)
                 _bf = QtGui.QFont("Consolas", 11 if swing else 8); _bf.setBold(True); _t.textItem.setFont(_bf)
                 self.plot.addItem(_t, ignoreBounds=True); pool.append(_t)
-            _lab = pool[used]; used += 1
+            _lab = pool[used]
             _lab.setColor(col); _lab.setText(lab); _lab.setPos(x[i], y); _lab.setVisible(True)
+            # SWING only: the leg % move, one line below the HH/HL/LH/LL (same colour, smaller font)
+            if swing and pcts is not None:
+                ppool = self._struct_pct_pool_sw
+                if used >= len(ppool):
+                    _pt = pg.TextItem(anchor=(0.5, 0.5)); _pt.setZValue(29)
+                    _pf = QtGui.QFont("Consolas", 8); _pf.setBold(True); _pt.textItem.setFont(_pf)
+                    self.plot.addItem(_pt, ignoreBounds=True); ppool.append(_pt)
+                _pt = ppool[used]
+                pc = pcts[k] if k < len(pcts) else None
+                if pc is None:
+                    _pt.setVisible(False)
+                else:
+                    _pt.setColor(col); _pt.setText("%+.2f%%" % pc)
+                    _pt.setPos(x[i], y - dy * 0.5); _pt.setVisible(True)   # just below the label
+            used += 1
         for _j in range(used, len(pool)):
             pool[_j].setVisible(False)
+        if swing:                                                # hide any leftover % sub-labels
+            for _j in range(used, len(self._struct_pct_pool_sw)):
+                self._struct_pct_pool_sw[_j].setVisible(False)
 
     def _clear_choch(self) -> None:
         if self._choch_added:
@@ -2967,6 +3024,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "zone_s": self._zone_user_s, "eff_f": self._eff_user_f,   # persisted slider overrides (None = adaptive)
                 "zone_sides": list(self.zone_slider.sides()),             # Bull/Bear zone filters (both = default)
                 "eff_sides": list(self.eff_slider.sides()),
+                "replay_edge_t": self._replay_saved_edge_t,               # last replay cursor -> resume here on toggle-on
+                "swing_pct": self._swing_pct,                             # swing-ZigZag sensitivity slider (%)
             }
             # EVERY hamburger toggle (Sub-Widgets + Mode 10 Overlays), keyed by its menu key, so a reopened
             # session restores the exact menu the user left (POC, footprint, alerts, … all sticky).
@@ -3020,6 +3079,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _sd = s.get(_key)                                 # restore Bull/Bear zone filters (default both on)
             if isinstance(_sd, (list, tuple)) and len(_sd) == 2:
                 _sl.set_sides(bool(_sd[0]), bool(_sd[1]))
+        _ret = s.get("replay_edge_t")                         # remembered replay position (restored on next toggle-on)
+        self._replay_saved_edge_t = float(_ret) if isinstance(_ret, (int, float)) else None
+        _sp = s.get("swing_pct")                              # restore the swing-ZigZag sensitivity (the menu slider is
+        if isinstance(_sp, (int, float)):                     # synced to this right after the menu is built — see __init__)
+            self._swing_pct = float(_sp)
 
     def _toggle_ob_iceberg(self) -> None:
         """'o' — toggle the Order Blocks + Absorption/Iceberg overlays TOGETHER (both hidden by default).
@@ -3047,6 +3111,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_sel_vp = bool(on)
         self._sel_sig = None                   # force a selection recompute so the VP draws/clears now
         self._refresh_selection_stats()
+
+    def _toggle_sel_vp(self) -> None:
+        """Ctrl+Z — toggle the Mode-10 selection Volume Profile on/off. Flips the 'h'-box VP checkbox (which drives
+        _on_sel_vp_toggled), so the checkbox stays in sync and it works even while that box is hidden."""
+        self.sel_vp_chk.setChecked(not self.sel_vp_chk.isChecked())
 
     @staticmethod
     def _sel_vp_hist(sel):
@@ -5587,6 +5656,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         is the replay START, so re-seat the cursor there before the rebuild."""
         if self._replay_on:
             self._replay_edge_t = self._replay_snap_to_bucket(float(self.menu.scan_start_unix()))
+            self._replay_remember()           # persist the new replay position (debounced)
             self._rdbg("SCAN_TIME_CHANGED replay_on=1 scan_start=%d -> snapped cursor=%s"
                        % (int(self.menu.scan_start_unix()), int(self._replay_edge_t) if self._replay_edge_t else None))
         self.clear_scanner_canvas()
@@ -5623,14 +5693,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return min_d, QtCore.QDate.currentDate()
 
     def _on_replay_toggled(self, on: bool) -> None:
-        """Replay Mode on/off (default OFF). ON: seat the cursor at the Start Date and redraw a CAUSAL frame ending
-        there — the whole pipeline (candles, VPIN, pivot, selection, HM) reads the clipped frame, so it behaves
-        exactly as live did at that moment. OFF: back to the real live edge. Right arrow steps one candle (_on_sel_right)."""
+        """Replay Mode on/off (default OFF). ON: RESTORE the last replay position (persisted across sessions) into
+        the Start Date, then seat the cursor there and redraw a CAUSAL frame ending at it — the whole pipeline
+        (candles, VPIN, pivot, selection, HM) reads the clipped frame, so it behaves exactly as live did at that
+        moment. OFF: back to the real live edge. Right arrow steps one candle (_on_sel_right)."""
         self._replay_on = bool(on)
+        if on and self._replay_saved_edge_t is not None:
+            # pick up exactly where you left off: set the Start Date field SILENTLY (blockSignals so it doesn't
+            # double-fire _on_scan_time_changed) so scan_start_unix() returns the remembered time.
+            edit = self.menu.scan_time_edit
+            edit.blockSignals(True)
+            edit.setDateTime(QtCore.QDateTime.fromSecsSinceEpoch(int(self._replay_saved_edge_t)))
+            edit.blockSignals(False)
         if not on:
             self._replay_edge_t = None
         # _on_scan_time_changed seats the cursor at the Start Date (when on) and forces the full re-derive + refit.
         self._on_scan_time_changed()
+        if on:
+            self._save_ui_state()            # persist immediately (also records the just-restored cursor)
+
+    def _replay_remember(self) -> None:
+        """Remember the current replay cursor so the next session (after a full restart) picks up exactly here on the
+        next toggle-on. Debounced so holding the arrow key coalesces into one disk write."""
+        if self._replay_on and self._replay_edge_t is not None:
+            self._replay_saved_edge_t = self._replay_edge_t
+            self._replay_save_timer.start()
 
     def _rdbg(self, msg: str) -> None:
         """TEMP replay diagnostics -> the console (stderr) AND data/replay_debug.log. Only when self._replay_dbg is on."""
@@ -5677,6 +5764,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                       int(self._replay_edge_t), int(ets[j])))
         if j != i:
             self._replay_edge_t = ets[j]
+            self._replay_remember()           # persist the new position (debounced) so a restart resumes here
             self._scanner_bucket_sig = None; self._last_scanner_sig = None
             self._pivot_sig = None; self._sel_sig = None
             self._on_timer()
@@ -6564,6 +6652,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if abs(ny0 - py0) > tol_y or abs(ny1 - py1) > tol_y:
             self._follow_y = False                           # price pan/zoom -> unlock Y
         self._follow_prev_range = ((nx0, nx1), (ny0, ny1))
+        # A manual pan/zoom changes which swing (HH/HL/LH/LL) / liquidity / imbalance / footprint labels are
+        # ON-SCREEN, but those cull-to-view overlays are only re-culled INSIDE _draw_scanner — which the sig-gate
+        # SKIPS in an idle Replay Mode (nothing new streams). Without this the structure labels stay culled to the
+        # PRIOR view (zoom in -> they hide most of the window; zoom out -> stay hidden until you step). Force one
+        # redraw so every overlay re-culls to the new viewport. (Live mode already redraws each tick — harmless there.)
+        self._last_scanner_sig = None
         # Candle viewport re-cull: redraw ONLY the new visible range from the cached series
         # (O(visible), not O(N)) so a manual pan/zoom refreshes the on-screen candles instantly
         # instead of waiting for the next live tick to fire update_data. Fires on both pan
@@ -7889,7 +7983,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # (lows/highs) — re-fit every draw so an extreme in-window bucket can't squish them. The
         # roll runs whenever either axis is locked (each axis gated inside). After the draw
         # we snapshot the displayed range so the per-axis unlock can diff against it. ---
-        _vr_before = self.vb.viewRange()[0]        # X range the candles above were viewport-culled against
+        _vr_before = self.vb.viewRange()           # FULL range (X and Y) the candles/footprint above were sized against
         if self._scanner_needs_autofit:
             self._follow_x = self._follow_y = True
             self._scanner_needs_autofit = False
@@ -7898,10 +7992,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.lower_plot.getViewBox().setYRange(0.0, 1.05, padding=0)
         self._follow_prev_range = self.vb.viewRange()
         # If the view JUMPED this frame (autofit / replay cursor move / mode switch), the candles were culled to the
-        # OLD X range and are wrong (empty on a big jump) while the pivot/overlays — drawn AFTER the view moved — are
-        # correct. The render-sig is now stable, so the 20 Hz loop would never re-cull. Force one re-cull next frame.
-        _vr_after = self.vb.viewRange()[0]
-        if abs(_vr_after[0] - _vr_before[0]) > 1e-6 or abs(_vr_after[1] - _vr_before[1]) > 1e-6:
+        # OLD X range AND the footprint bubbles were sized with the OLD px_per_y (r_px/px_per_y in DATA units) — so
+        # on a Y-only jump (a replay step keeps X but changes the price range) the bubbles render outside the candles.
+        # The render-sig is now stable, so the 20 Hz loop would never re-draw. Force ONE re-draw next frame — and
+        # check BOTH axes (the old X-only test missed the replay Y-jump that spilled the footprint outside).
+        _vr_after = self.vb.viewRange()
+        if (abs(_vr_after[0][0] - _vr_before[0][0]) > 1e-6 or abs(_vr_after[0][1] - _vr_before[0][1]) > 1e-6
+                or abs(_vr_after[1][0] - _vr_before[1][0]) > 1e-6 or abs(_vr_after[1][1] - _vr_before[1][1]) > 1e-6):
             self._last_scanner_sig = None
 
         # §5 right-edge spot price + active-bucket fill badge, plus the baseline readout
@@ -7975,6 +8072,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:                                   # final SYNCHRONOUS drawing save — covers a close/shutdown
             self.drawer._save_idx()            # landing inside the 400ms debounce window
             self.drawer._save()
+        except Exception:
+            pass
+        try:
+            self._save_ui_state()              # flush the replay position (+ toggles) inside the 800ms debounce window
         except Exception:
             pass
         self.timer.stop()

@@ -17,8 +17,9 @@ from .liq_detect import _pivots
 ZIGZAG_PCT = 0.20        # SCALP overlay swing sensitivity, in PERCENT. A leg confirms when price retraces this
 #                          much from the running extreme. Lower = more/smaller swings; higher = only big turns.
 #                          Tune this one number (0.12 dense .. 0.25 clean) then relaunch the terminal.
-ZIGZAG_SWING_PCT = 0.60  # SWING overlay sensitivity, in PERCENT — the coarse structure (major turns only) for
-#                          swing trading. Same ZigZag engine, bigger threshold. Tune (0.4 .. 1.0) + relaunch.
+ZIGZAG_SWING_PCT = 0.60  # SWING overlay DEFAULT sensitivity, in PERCENT (coarse structure / major turns for swing
+#                          trading). Live-adjustable via the hamburger slider under "Market Structure — swing ZigZag";
+#                          this constant is just the default the slider starts at. Same ZigZag engine, bigger threshold.
 
 
 def detect_structure(highs, lows):

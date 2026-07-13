@@ -205,6 +205,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     scannerChanged = QtCore.Signal(str)
     scan_time_changed = QtCore.Signal()   # user moved the scanner "Zero Point"
     replayToggled = QtCore.Signal(bool)   # Replay Mode on/off (default OFF; chart replays from the Start Date)
+    swingSensitivityChanged = QtCore.Signal(float)   # swing-ZigZag threshold slider, in PERCENT
     helpRequested = QtCore.Signal()       # the top-right '?' — show the keyboard-shortcuts cheatsheet
 
     PANEL_WIDTH = 308
@@ -363,9 +364,48 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
             self.layer_checks[key] = cb
             self.m10_section.addWidget(cb)
+            if key == "m10_structure_swing":
+                self._build_swing_slider()   # user-adjustable swing sensitivity, right under its toggle
         root.addWidget(self.m10_section)
 
         root.addStretch(1)
+
+    # ------------------------------------------------------------------
+    def _build_swing_slider(self) -> None:
+        """Compact slider under the 'swing ZigZag' toggle: live-adjust the swing sensitivity (percent retrace that
+        confirms a leg). Lower = more/smaller swings, higher = only major turns. Emits swingSensitivityChanged(pct)."""
+        from . import structure
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w); lay.setContentsMargins(26, 1, 8, 5); lay.setSpacing(2)
+        self.swing_lbl = QtWidgets.QLabel()
+        self.swing_lbl.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:10px;")
+        lay.addWidget(self.swing_lbl)
+        self.swing_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.swing_slider.setRange(20, 250)      # 0.20% .. 2.50% in 0.01% steps
+        self.swing_slider.setValue(int(round(structure.ZIGZAG_SWING_PCT * 100)))   # default from the constant (0.60%)
+        self.swing_slider.setFixedHeight(16)
+        self.swing_slider.valueChanged.connect(self._on_swing_slider)
+        lay.addWidget(self.swing_slider)
+        self.m10_section.addWidget(w)
+        self._render_swing_lbl()
+
+    def _on_swing_slider(self, _v: int) -> None:
+        self._render_swing_lbl()
+        self.swingSensitivityChanged.emit(self.swing_pct())
+
+    def _render_swing_lbl(self) -> None:
+        self.swing_lbl.setText("Swing sensitivity · %.2f%%" % self.swing_pct())
+
+    def swing_pct(self) -> float:
+        """Current swing-ZigZag threshold in PERCENT."""
+        return self.swing_slider.value() / 100.0
+
+    def set_swing_pct(self, pct: float) -> None:
+        """Restore a persisted swing sensitivity WITHOUT emitting (clamped to the slider range)."""
+        self.swing_slider.blockSignals(True)
+        self.swing_slider.setValue(int(round(max(0.20, min(2.50, float(pct))) * 100)))
+        self.swing_slider.blockSignals(False)
+        self._render_swing_lbl()
 
     # ------------------------------------------------------------------
     def _emit_multiplier(self, raw: int) -> None:
