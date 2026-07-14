@@ -38,6 +38,16 @@ def scale_label(tf: str, vol: float) -> str:
     nx = config.TF_SECONDS.get(tf, 60) // 60
     return f"{nx}× ({_fmt_vol_1sig(vol)})"
 
+def _fmt_tf_secs(secs: float) -> str:
+    """Compact 'effective timeframe' label for the Keltner-scale slider: seconds -> '5m' / '1h' / '1h30m' / '4h'."""
+    m = secs / 60.0
+    if m < 60:
+        return ("%dm" % round(m)) if abs(m - round(m)) < 0.05 else ("%.1fm" % m)
+    h = m / 60.0
+    if abs(h - round(h)) < 0.03:
+        return "%dh" % round(h)
+    return "%dh%02dm" % (int(h), int(round((h - int(h)) * 60)))
+
 _BTN_QSS = """
 QPushButton {
   background-color: rgba(30, 34, 45, 0.85);
@@ -206,6 +216,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     scan_time_changed = QtCore.Signal()   # user moved the scanner "Zero Point"
     replayToggled = QtCore.Signal(bool)   # Replay Mode on/off (default OFF; chart replays from the Start Date)
     swingSensitivityChanged = QtCore.Signal(float)   # swing-ZigZag threshold slider, in PERCENT
+    keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
     helpRequested = QtCore.Signal()       # the top-right '?' — show the keyboard-shortcuts cheatsheet
 
     PANEL_WIDTH = 308
@@ -337,6 +348,19 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.chart_slider.valueChanged.connect(self._emit_chart_filter)
         root.addWidget(self.chart_slider)
 
+        # --- Keltner smooth-approx scale (UNDER Depth Wall): stretch the 1m KC + POC baseline toward a higher-TF
+        #     channel (EMA/ATR period ×scale, band ×sqrt(scale)). Label shows the ≈ effective timeframe. ---
+        self.kc_label = QtWidgets.QLabel()
+        root.addWidget(self.kc_label)
+        self.kc_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.kc_slider.setRange(10, int(round(config.KELTNER_SCALE_MAX * 10)))   # ×1.0 .. ×MAX in 0.1 steps
+        self.kc_slider.setSingleStep(1); self.kc_slider.setPageStep(10)
+        self.kc_slider.setValue(int(round(config.KELTNER_SCALE_DEFAULT * 10)))
+        self.kc_slider.valueChanged.connect(self._on_kc_slider)
+        root.addWidget(self.kc_slider)
+        self.tf_combo.currentIndexChanged.connect(lambda _i: self._render_kc_lbl())   # base tf changed -> refresh ≈eff-TF
+        self._render_kc_lbl()
+
         # --- sub-widgets accordion (patch §14) ---
         self.sub_section = CollapsibleSection("Sub-Widgets", expanded=False)
         # Alerts moved to a dedicated floating 🔔 button (fix #8) — not here.
@@ -406,6 +430,27 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.swing_slider.setValue(int(round(max(0.20, min(2.50, float(pct))) * 100)))
         self.swing_slider.blockSignals(False)
         self._render_swing_lbl()
+
+    # ------------------------------------------------------------------
+    def _on_kc_slider(self, _v: int) -> None:
+        self._render_kc_lbl()
+        self.keltnerScaleChanged.emit(self.kc_scale())
+
+    def _render_kc_lbl(self) -> None:
+        s = self.kc_scale()
+        base = config.TF_SECONDS.get(self.tf_combo.currentData() or config.DEFAULT_TF, 60)
+        self.kc_label.setText("Keltner ~ %s  ·  %.1fx" % (_fmt_tf_secs(base * s), s))
+
+    def kc_scale(self) -> float:
+        """Current Keltner smooth-approx effective-TF scale (1.0 = native)."""
+        return self.kc_slider.value() / 10.0
+
+    def set_kc_scale(self, s: float) -> None:
+        """Restore a persisted Keltner scale WITHOUT emitting (clamped to the slider range)."""
+        self.kc_slider.blockSignals(True)
+        self.kc_slider.setValue(int(round(max(1.0, min(config.KELTNER_SCALE_MAX, float(s))) * 10)))
+        self.kc_slider.blockSignals(False)
+        self._render_kc_lbl()
 
     # ------------------------------------------------------------------
     def _emit_multiplier(self, raw: int) -> None:

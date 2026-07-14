@@ -73,6 +73,16 @@ class DrawnShape(pg.GraphicsObject):
         self.picture = QtGui.QPicture()
         self._rect = QtCore.QRectF()
         self.setAcceptHoverEvents(True)   # pointing-hand cursor on hover (patch §18)
+        # Trend line carries an always-positive %-change label — a fixed-pixel-size child TextItem (anchored to the
+        # end point in data coords) so it never distorts/scales with zoom the way an in-picture drawText would.
+        self._pct_label = None
+        if kind == "trend":
+            self._pct_label = pg.TextItem(color=color, anchor=(-0.15, 0.5))
+            try:
+                self._pct_label.textItem.setFont(QtGui.QFont("Consolas", 9))
+            except Exception:
+                pass
+            self._pct_label.setParentItem(self)   # moves + deletes with the shape; renders at fixed pixel size
         self.rebuild()
 
     def hoverEnterEvent(self, ev):   # noqa: N802
@@ -123,6 +133,11 @@ class DrawnShape(pg.GraphicsObject):
                     dp = self.pts[1][1] - y0
                     pct = (dp / y0 * 100) if y0 else 0.0
                     p.drawText(QtCore.QPointF(self.pts[1][0], self.pts[1][1]), f"{dp:+.2f} ({pct:+.2f}%)")
+                elif self._pct_label is not None:   # trend: always-POSITIVE % change in a fixed-size child label
+                    pct = (abs(self.pts[1][1] - y0) / y0 * 100) if y0 else 0.0
+                    self._pct_label.setColor(self.color)
+                    self._pct_label.setText(f"{pct:.2f}%")
+                    self._pct_label.setPos(self.pts[1][0], self.pts[1][1])
             elif self.kind == "rect":
                 p.drawRect(QtCore.QRectF(x0, y0, self.pts[1][0] - x0, self.pts[1][1] - y0))
             elif self.kind == "ellipse":

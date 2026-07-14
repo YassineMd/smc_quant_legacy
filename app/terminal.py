@@ -291,11 +291,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scanner_bucket_cache: tuple = ([], [], 0)
         self._replay_on = False            # REPLAY MODE: causal historical playback from the Start Date (default OFF)
         self._replay_edge_t: Optional[float] = None   # replay cursor = live-edge bucket end_time; Right arrow advances it
+        self._replay_start_t: Optional[float] = None  # FIXED replay start (Start Date); the frame's LEFT edge = start-24h,
+        #                                               so stepping GROWS the window to the right (left history stays)
         self._replay_saved_edge_t: Optional[float] = None   # last replay position, persisted -> restored on next toggle-on
         self._replay_dbg = False           # replay diagnostics -> console + data/replay_debug.log (flip True to debug)
         self._replay_save_timer = QtCore.QTimer(self)       # debounce persisting the cursor (holding the arrow -> 1 write)
         self._replay_save_timer.setSingleShot(True); self._replay_save_timer.setInterval(800)
         self._replay_save_timer.timeout.connect(self._save_ui_state)
+        self._replay_autoplay_timer = QtCore.QTimer(self)   # Ctrl+Right auto-play: reveal one candle per tick (Left/Right stops it)
+        self._replay_autoplay_timer.setInterval(config.REPLAY_AUTOPLAY_MS)
+        self._replay_autoplay_timer.timeout.connect(self._replay_autoplay_tick)
         # ABSOLUTE bucket index: add this to a filtered-local idx to get the bucket's permanent history.db id
         # (stable all-time index; first bucket ever saved = 1). 0 = legacy local idx (daemon hasn't shipped
         # total_closed yet). Recomputed in _build_scanner_buckets.
@@ -338,6 +343,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Mode 10 order-block layer (index-space). Persistent object; added to the
         # plot lazily in _scan_bucket_canvas and swept on teardown. Tiers forced on.
         self.bc_obs = OrderBlockLayer(self.plot, show_tiers=True)
+        self._ob_unmitig_only = False           # 'o' cycle stage 2: hide mitigated OBs, keep only unmitigated (live)
+        # REPLAY: OB + absorption re-detected CAUSALLY from the clipped frame (mirrors the daemon). The re-detect is
+        # ~300ms (calc_absorption dominates), so it's DEFERRED off the step (debounced) — the step repaints with the
+        # last marks, the fresh ones land ~130ms after you stop; QuantBuckets are cached across steps (only the new
+        # bar is rebuilt), so a step's reconstruction is ~free.
+        self._replay_oba_key = None
+        self._replay_oba_cache: tuple = ([], [])
+        self._replay_oba_pending = None
+        self._replay_oba_timer = QtCore.QTimer(self); self._replay_oba_timer.setSingleShot(True)
+        self._replay_oba_timer.setInterval(130); self._replay_oba_timer.timeout.connect(self._replay_oba_recompute)
         # Mode 10 whale-absorption bands (phase c; index-space). Persistent; added lazily in
         # _scan_bucket_canvas, swept on teardown; its $-label pool attached here, cleared there.
         self.bc_absorption = AbsorptionLayer(self.plot)
@@ -391,8 +406,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_sel_vp = pg.BarGraphItem(x0=[0.0], width=[0.0], y=[0.0], height=[0.0], pen=None)
         self.bc_sel_vp.setZValue(2); self.plot.addItem(self.bc_sel_vp, ignoreBounds=True); self.bc_sel_vp.setVisible(False)
         self.bc_sel_vp_lines = []
-        for _vpc in ((255, 45, 70), (40, 230, 90), (255, 215, 0), (235, 235, 245)):   # VAH red / VAL green / POC yellow / med white
-            _ln = pg.PlotDataItem(pen=pg.mkPen(_vpc, width=1.3)); _ln.setZValue(3)
+        # VAH red / VAL green / POC yellow / median white / LVN electric-purple (dashed)
+        for _vpc, _dash in (((255, 45, 70), False), ((40, 230, 90), False), ((255, 215, 0), False),
+                            ((235, 235, 245), False), ((178, 70, 255), True)):
+            _pen = pg.mkPen(_vpc, width=1.3)
+            if _dash:
+                _pen.setDashPattern([3.0, 6.0])
+            _ln = pg.PlotDataItem(pen=_pen); _ln.setZValue(3)
             self.plot.addItem(_ln, ignoreBounds=True); _ln.setVisible(False)
             self.bc_sel_vp_lines.append(_ln)
         # PERSISTED manual slider overrides (None = use the per-selection adaptive seed). Once the user drags a
@@ -516,6 +536,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._struct_pct_pool_sw = []                            # swing % -change sub-label pool (below each HH/HL/LH/LL)
         self._struct_pct_sw = []                                 # cached per-swing % move from the previous swing
         self._swing_pct = structure.ZIGZAG_SWING_PCT             # swing-ZigZag threshold %, live-set by the hamburger slider
+        self._kc_scale = float(config.KELTNER_SCALE_DEFAULT)     # 1m-KC smooth-approx effective-TF scale (hamburger slider; 1.0 = native)
         _cbp = pg.mkPen((70, 200, 255), width=1.3, style=QtCore.Qt.DashLine); _cbp.setCosmetic(True)   # CHoCH bull
         _crp = pg.mkPen((255, 120, 90), width=1.3, style=QtCore.Qt.DashLine); _crp.setCosmetic(True)   # CHoCH bear
         self._choch_bull = pg.PlotCurveItem(pen=_cbp, connect="finite"); self._choch_bull.setZValue(28)
@@ -965,6 +986,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.drawbar = DrawingToolbar(self)
         self.menu = FloatingOverlayMenu(self)
         self.menu.set_swing_pct(self._swing_pct)   # sync the swing slider to the restored/default sensitivity
+        self.menu.set_kc_scale(self._kc_scale)     # sync the Keltner-scale slider to the restored/default value
         self.stats.keep_under = self.menu   # stats overlay stays below an open menu (z-order)
         self.sel_stats.keep_under = self.menu
         self.menu_btn = HamburgerButton(self)
@@ -1025,6 +1047,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # (pull back). Left edge stays; clamped to >= 1 bucket of width. No-op without a selection.
         QtGui.QShortcut(QtGui.QKeySequence("Right"), self, activated=self._on_sel_right)   # +1 bucket / replay: next candle
         QtGui.QShortcut(QtGui.QKeySequence("Left"), self, activated=self._on_sel_left)     # -1 bucket / replay: prev candle
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Right"), self, activated=self._toggle_replay_autoplay)  # replay: auto-play (Left/Right stops)
         # quick toggles: 's' = Stats Box overlay, 'd' = Vector Drawing toolbar. Flip the menu
         # checkbox so the menu stays in sync and the existing show/hide + teardown logic runs.
         QtGui.QShortcut(QtGui.QKeySequence("S"), self,
@@ -1133,6 +1156,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.scan_time_changed.connect(self._on_scan_time_changed)
         self.menu.replayToggled.connect(self._on_replay_toggled)
         self.menu.swingSensitivityChanged.connect(self._on_swing_sensitivity)   # swing-ZigZag threshold slider
+        self.menu.keltnerScaleChanged.connect(self._on_kc_scale)   # 1m-KC smooth-approx effective-TF scale slider
         self.menu.scan_time_edit.set_range_provider(self._data_date_range)   # calendar: disable no-data days
 
         # Modifier mouse-wheel over the chart: Ctrl nudges the Scan Start (Zero Point) anchor ±1 min
@@ -1421,6 +1445,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     ("Ctrl+wheel", "Nudge the Scan Start (Zero Point)"),
                     ("Shift+wheel", "Zoom the X axis only"),
                     ("Ctrl+F", "Jump to a bucket Idx"), ("Ctrl+N", "New terminal window")]),
+                ("Replay Mode", [
+                    ("&larr; / &rarr;", "Step back / forward one candle"),
+                    ("Ctrl+&rarr;", "Auto-play forward (&larr;/&rarr; or Ctrl+&rarr; stops)")]),
                 ("Heatmap mode", [("G", "Greyscale toggle"), ("B", "Trade bubbles")]),
             ]
             rows = []
@@ -1697,12 +1724,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     @staticmethod
     def _fmt_dur(seconds: float) -> str:
-        """Cycle duration, whole units: < 60s -> '45s'; < 1h -> '1m23s'; >= 1h -> '1h08m'."""
+        """Cycle duration, whole units: < 60s -> '45s' (seconds); >= 60s -> MINUTES only, no seconds ('13m'); >= 1h
+        -> '1h08m'. Seconds are dropped once past a minute so the P1/P2 (Ctrl+1/Ctrl+2) cycle labels stay compact."""
         s = int(round(seconds))
         if s < 60:
             return f"{s}s"
         if s < 3600:
-            return f"{s // 60}m{s % 60:02d}s"
+            return f"{s // 60}m"
         return f"{s // 3600}h{(s % 3600) // 60:02d}m"
 
     @staticmethod
@@ -1879,6 +1907,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """RIGHT arrow. Replay Mode: reveal the NEXT candle (advance the cursor). Otherwise: move the selection
         +1 bucket AND arm the confluence-alert eval (LEFT deliberately does not — only forward scrubbing fires)."""
         if self._replay_on:
+            self._replay_stop_autoplay()    # a manual step halts Ctrl+Right auto-play
             self._advance_replay(1)
             return
         self._alert_right_pending = True
@@ -1887,6 +1916,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _on_sel_left(self) -> None:
         """LEFT arrow. Replay Mode: step BACK one candle. Otherwise: pull the selection's right edge -1 bucket."""
         if self._replay_on:
+            self._replay_stop_autoplay()    # a manual step halts Ctrl+Right auto-play
             self._advance_replay(-1)
             return
         self.drawer.extend_selection("right", -1.0)
@@ -2503,6 +2533,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None
         self._draw_scanner()
 
+    def _on_kc_scale(self, scale: float) -> None:
+        """Hamburger Keltner-scale slider moved — set the smooth-approx effective-TF scale (KC EMA/ATR period ×scale,
+        band ×sqrt(scale); POC-baseline EMA period ×scale). KC + baseline live in the #3 closed-bucket cache, so
+        drop it to force a clean recompute at the new scale, then persist + repaint. 1.0 = native (unchanged)."""
+        self._kc_scale = max(1.0, min(float(config.KELTNER_SCALE_MAX), float(scale)))
+        self._m10_cc = None                    # cached KC + baseline rows are scale-dependent -> rebuild
+        self._save_ui_state()
+        self._last_scanner_sig = None
+        self._draw_scanner()
+
     def _clear_structure(self) -> None:
         for _l in self._struct_label_pool:
             _l.setVisible(False)
@@ -2679,7 +2719,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             val, vah = bar_quantiles.value_area(lv)
             return {"lo": low, "vlo": vlo, "vmed": vmed, "vhi": vhi, "hi": high,
                     "s": float(bb.get("start_time", 0.0)), "e": float(bb.get("end_time", 0.0) or 0.0),
-                    "poc": bar_quantiles.poc(lv), "val": val, "vah": vah, "levels": lv,
+                    "poc": bar_quantiles.poc(lv), "val": val, "vah": vah, "lvn": bar_quantiles.lvn(lv), "levels": lv,
                     "opL": float(bb.get("opL", 0.0)), "opS": float(bb.get("opS", 0.0)),   # bucket force totals
                     "clL": float(bb.get("clL", 0.0)), "clS": float(bb.get("clS", 0.0))}   # (per-level split by ratio)
         except Exception:
@@ -2961,6 +3001,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 for lvl, col, dash in ((r["vah"], (255, 30, 70), False),      # VAH  neon red
                                        (r["val"], (0, 255, 120), False),        # VAL  neon green
                                        (r["poc"], (255, 240, 0), False),        # POC  neon yellow
+                                       (r.get("lvn"), (178, 70, 255), True),    # LVN  electric purple (dashed)
                                        (r["vmed"], (255, 255, 255), True)):     # median neon white (spaced dashes)
                     if not (lvl and lvl == lvl):                  # skip 0 / NaN
                         continue
@@ -3026,6 +3067,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "eff_sides": list(self.eff_slider.sides()),
                 "replay_edge_t": self._replay_saved_edge_t,               # last replay cursor -> resume here on toggle-on
                 "swing_pct": self._swing_pct,                             # swing-ZigZag sensitivity slider (%)
+                "kc_scale": self._kc_scale,                               # 1m-KC smooth-approx effective-TF scale slider
+                "ob_unmitig_only": self._ob_unmitig_only,                 # 'o' cycle stage-2: unmitigated OBs only
             }
             # EVERY hamburger toggle (Sub-Widgets + Mode 10 Overlays), keyed by its menu key, so a reopened
             # session restores the exact menu the user left (POC, footprint, alerts, … all sticky).
@@ -3084,17 +3127,72 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _sp = s.get("swing_pct")                              # restore the swing-ZigZag sensitivity (the menu slider is
         if isinstance(_sp, (int, float)):                     # synced to this right after the menu is built — see __init__)
             self._swing_pct = float(_sp)
+        _kcs = s.get("kc_scale")                              # restore the Keltner smooth-approx scale (menu slider synced after build)
+        if isinstance(_kcs, (int, float)):
+            self._kc_scale = max(1.0, min(float(config.KELTNER_SCALE_MAX), float(_kcs)))
+        self._ob_unmitig_only = bool(s.get("ob_unmitig_only", self._ob_unmitig_only))   # 'o' cycle stage-2 filter
+
+    def _set_ob_ice(self, on: bool) -> None:
+        """Flip the Order Blocks + Absorption/Iceberg menu checkboxes together (emits layerToggled -> show/hide)."""
+        for cb in (self.menu.layer_checks.get("m10_obs"), self.menu.layer_checks.get("m10_icebergs")):
+            if cb is not None and cb.isChecked() != on:
+                cb.setChecked(on)
 
     def _toggle_ob_iceberg(self) -> None:
-        """'o' — toggle the Order Blocks + Absorption/Iceberg overlays TOGETHER (both hidden by default).
-        Flips both menu checkboxes (driving _set_scanner_overlay -> hide/show + repaint); OB's state is the
-        master so one press always lands them in the same on/off state even if they drift apart in the menu."""
+        """'o' — 3-stage cycle for Order Blocks + Absorption/Iceberg:
+        OFF -> ON (mitigated + unmitigated) -> ON (UNMITIGATED only) -> OFF.
+        Stages 1<->2 keep the overlays ON and just flip the mitigated filter (a repaint, no checkbox re-emit)."""
         obs = self.menu.layer_checks.get("m10_obs")
-        ice = self.menu.layer_checks.get("m10_icebergs")
-        new_on = not (obs.isChecked() if obs else False)
-        for cb in (obs, ice):
-            if cb is not None and cb.isChecked() != new_on:
-                cb.setChecked(new_on)   # emits layerToggled -> _set_scanner_overlay
+        on = obs.isChecked() if obs else False
+        if not on:                              # stage 1: turn on, show ALL (mitigated + unmitigated)
+            self._ob_unmitig_only = False
+            self._set_ob_ice(True)
+        elif not self._ob_unmitig_only:         # stage 2: stay on, show UNMITIGATED only
+            self._ob_unmitig_only = True
+            self._last_scanner_sig = None; self._draw_scanner()   # filter changed but checkboxes stay on -> force repaint
+        else:                                   # stage 3: turn off
+            self._ob_unmitig_only = False
+            self._set_ob_ice(False)
+        self._save_ui_state()
+
+    def _replay_ob_abs(self, filtered: list) -> tuple:
+        """Return the last causal OB + absorption marks for the REPLAY frame. On a NEW frame the ~300ms re-detect is
+        NOT run inline (that made stepping lag) — it's DEBOUNCED via _replay_oba_recompute, and the step repaints
+        immediately with the previous marks (fine: they live in data coords). Live mode never calls this."""
+        key = (len(filtered), float(filtered[-1].get("end_time", 0.0))) if filtered else (0, 0.0)
+        if key != self._replay_oba_key:
+            self._replay_oba_pending = (key, filtered)
+            self._replay_oba_timer.start()          # coalesces rapid steps -> one recompute after you pause
+        return self._replay_oba_cache
+
+    def _replay_qbs(self, filtered: list) -> list:
+        """Reconstruct the frame's QuantBuckets fresh (no cache — content keys weren't reliably unique in the
+        archive, and a stale/collided bucket silently skews the causal marks). ~75ms, absorbed by the debounce."""
+        from app import persistence
+        return [persistence.bucket_from_snapshot(b) for b in filtered]
+
+    def _replay_oba_recompute(self) -> None:
+        """Debounced heavy re-detect (fires ~130ms after the last step): run the daemon's exact pipeline
+        (rank_obs(calc_quant_obs(...)) + calc_absorption) on the pending frame, cache it, and repaint. Any failure
+        -> empty, never fatal."""
+        pend = self._replay_oba_pending
+        if pend is None:
+            return
+        key, filtered = pend
+        obs, absp = [], []
+        try:
+            from types import SimpleNamespace
+            from app import quant_engine
+            qbs = self._replay_qbs(filtered)
+            obs = quant_engine.rank_obs(quant_engine.calc_quant_obs(SimpleNamespace(closed_buckets=qbs), self.worker.tf))
+            absp = quant_engine.calc_absorption(qbs)
+        except Exception:
+            obs, absp = [], []
+        self._replay_oba_key = key
+        self._replay_oba_cache = (obs, absp)
+        self._replay_oba_pending = None
+        self._last_scanner_sig = None
+        self._draw_scanner()                         # repaint with the fresh marks (key now matches -> no re-schedule)
 
     def _toggle_sel_stats(self) -> None:
         """'h' — show/hide the Mode-10 Magic-Selection stats box ONLY. The selection's chart overlays
@@ -3181,9 +3279,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         lvl = {ps: {"b": v[0], "s": v[1]} for ps, v in raw.items()}
         try:
             _q = bar_quantiles.vq(lvl); _va = bar_quantiles.value_area(lvl); _poc = bar_quantiles.poc(lvl)
-            levels = [_va[1], _va[0], _poc, _q[1]]             # VAH, VAL, POC, median (matches the line colour order)
+            levels = [_va[1], _va[0], _poc, _q[1], bar_quantiles.lvn(lvl)]   # VAH, VAL, POC, median, LVN (line-colour order)
         except Exception:
-            levels = [None, None, None, None]
+            levels = [None, None, None, None, None]
         for _ln, _y in zip(self.bc_sel_vp_lines, levels):
             if _y is not None and _y == _y:
                 _ln.setData([float(lo_i), float(hi_i)], [float(_y), float(_y)]); _ln.setVisible(True)
@@ -3708,6 +3806,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # PER-CYCLE ELAPSED-TIME labels along the BOTTOM of the panel (locked on; only the primary HM panel gets them).
         pool = self._hm_time_labels; tused = 0
         if bt is not None and et is not None:
+            flags = self._cycle_hm_flags(bull_sh, cyc)          # SAME driver as the P2 %-labels -> colours agree
             ytl = yb + (yt - yb) * 0.07                        # bottom edge of the band (matches the P2 %-labels)
             for a, b in cyc:
                 if (b - a + 1) < self._eff_cyc_min or b >= len(et) or a >= len(bt):
@@ -3719,8 +3818,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _t = pg.TextItem(anchor=(0.5, 0.5)); _t.setZValue(33)
                     _f = QtGui.QFont("Consolas", 8); _f.setBold(True); _t.textItem.setFont(_f)
                     self.plot.addItem(_t, ignoreBounds=True); pool.append(_t)
+                fl = flags.get((a, b))                          # green/red (per side) if this cycle's HM rose, else white
+                is_bull, rose = (fl[0], fl[2]) if fl is not None else (True, False)
                 lab = pool[tused]
-                lab.setColor((175, 183, 198)); lab.setText(self._fmt_dur(dur))
+                lab.setColor(((40, 230, 90) if is_bull else (255, 60, 80)) if rose else (236, 239, 246))
+                lab.setText(self._fmt_dur(dur))
                 lab.setPos(lo + (a + b) / 2.0, ytl); lab.setVisible(True)
                 tused += 1
         self._hm_time_n = tused
@@ -3760,29 +3862,46 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._abshm_ncyc = max(1, len(snap) - i)                    # that many cycles back to the last locked one
         self._refresh_selection_stats()
 
+    def _cycle_hm_flags(self, bull_sh, cyc):
+        """Per-cycle colour driver SHARED by the P2 %-labels and the Ctrl+2 minutes labels so the two panels always
+        agree. For each cycle long enough to label (>= _eff_cyc_min bars), returns (is_bull, dominant-share HM, rose)
+        keyed by (a, b), where `rose` is True iff this cycle's HM is strictly higher than the previous LABELLED
+        cycle's HM (first labelled cycle -> False). Short/degenerate cycles are absent from the map."""
+        flags = {}; prev_hm = None
+        for a, b in cyc:
+            if (b - a + 1) < self._eff_cyc_min:
+                continue
+            is_bull = (sum(bull_sh[a:b + 1]) / (b - a + 1)) >= 0.5   # net side of the (possibly merged) cycle
+            vs = [(bull_sh[k] if is_bull else 1.0 - bull_sh[k]) for k in range(a, b + 1)]
+            vs = [v for v in vs if v > 1e-6]
+            if not vs:
+                continue
+            hm = len(vs) / sum(1.0 / v for v in vs)             # harmonic mean of the dominant share
+            flags[(a, b)] = (is_bull, hm, prev_hm is not None and hm > prev_hm)
+            prev_hm = hm
+        return flags
+
     def _draw_p2_cycle_labels(self, bull_sh, lo, hi, yb, yt) -> None:
         """Per-cycle harmonic-mean % labels along the bottom of P2 ITSELF: under each cycle, the HM of the DOMINANT
-        share (0.5-1.0) as a %, green (bull cycle) / red (bear cycle). A cycle = a run where one force stays
-        dominant (bull share one side of 50%). Cycles under _eff_cyc_min bars go unlabelled. Open cycle repaints."""
+        share (0.5-1.0) as a %. GREEN (bull) / RED (bear) when the cycle's HM ROSE vs the previous labelled cycle,
+        else WHITE — a strengthening run of cycles lights up, a fading one greys to white. A cycle = a run where one
+        force stays dominant (bull share one side of 50%). Cycles under _eff_cyc_min bars go unlabelled."""
         pool = self._eff_cyc_labels; used = 0; ny = len(bull_sh)
         if ny >= 2:
             cyc = self._hm_cycles(bull_sh, self._hm_min_cyc)    # noise cycles merged out (same as the sub-panel)
+            flags = self._cycle_hm_flags(bull_sh, cyc)          # (is_bull, HM, rose) -> colour, shared with Ctrl+2
             ylab = yb + (yt - yb) * 0.07                        # just inside the bottom edge of the P2 band
             for a, b in cyc:
-                if (b - a + 1) < self._eff_cyc_min:
+                fl = flags.get((a, b))
+                if fl is None:
                     continue
-                is_bull = (sum(bull_sh[a:b + 1]) / (b - a + 1)) >= 0.5   # net side of the (possibly merged) cycle
-                vs = [(bull_sh[k] if is_bull else 1.0 - bull_sh[k]) for k in range(a, b + 1)]
-                vs = [v for v in vs if v > 1e-6]
-                if not vs:
-                    continue
-                hm = len(vs) / sum(1.0 / v for v in vs)         # harmonic mean of the dominant share
+                is_bull, hm, rose = fl
                 if used >= len(pool):
                     _t = pg.TextItem(anchor=(0.5, 0.5)); _t.setZValue(33)
                     _f = QtGui.QFont("Consolas", 8); _f.setBold(True); _t.textItem.setFont(_f)
                     self.plot.addItem(_t, ignoreBounds=True); pool.append(_t)
                 lab = pool[used]
-                lab.setColor((40, 230, 90) if is_bull else (255, 60, 80))
+                lab.setColor(((40, 230, 90) if is_bull else (255, 60, 80)) if rose else (236, 239, 246))
                 lab.setText("%.0f%%" % (hm * 100.0)); lab.setPos(lo + (a + b) / 2.0, ylab); lab.setVisible(True)
                 used += 1
         for j in range(used, len(pool)):
@@ -3991,6 +4110,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         seg = {"long": ([], []), "short": ([], [])}      # DASHED leaders lx/ly per side
         con = {"long": ([], []), "short": ([], [])}      # SOLID connectors cx/cy per side
         self._pivot_hovers = []; used = 0; spots = []; trade_entries = []; e_ok_live = []   # recorded E's (for live audio)
+        faded_e_live = []                                    # faded study E's landing at the live edge (for the "Faded E" audio)
         star_spots = []; trap_spots = []; clock_spots = []; vpin_spots = []   # VPFADE ★/✕/clock + VPIN-confluence ring
         _vpin_on = self.menu.layer_state("m10_vpinring")     # electric-purple ring on entries with VPIN >= warn (ratio>=1)
         # ONE fast causal-tier pass over the window (byte-identical to per-bar cutpoints), then O(1) lookups per badge
@@ -4145,6 +4265,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 trade_entries.append((_draw_e, buy, shelf, not e_ok, "B"))   # Path B = fixed bracket exit; fade = study E
                 if e_ok:
                     e_ok_live.append((_draw_e, buy))               # recorded E entry -> candidate for the live audio
+                else:
+                    faded_e_live.append((_draw_e, buy))            # faded study E -> candidate for the "Faded E" live audio
                 # E VP-edge STAR / TRAP (overlay; toggle m10_estar) — UNVALIDATED study aid on EVERY drawn E (recorded
                 # or faded). E is the MIRROR of the D: it wants its OWN value-half (Buy ★ = lower-VA / below-VAL;
                 # Sell ★ = above-VAH / upper-VA), and the OPPOSITE half is the trap (red ✕). Pure highlight, no trade
@@ -4262,11 +4384,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if not self._pivot_e_seeded:
                 self._pivot_e_seeded = True; self._pivot_e_spoken.add(_etn)
             elif _etn not in self._pivot_e_spoken:
+                # ONE E voice per new bucket: a RECORDED E ("Enter E now") takes priority; else a FADED study E
+                # that landed on the just-closed edge speaks "Faded Buy/Sell E".
+                _said = None
                 for _eb, _buy in e_ok_live:
                     if float(filtered[_eb].get("end_time", 0.0)) == _etn:
-                        self._pivot_e_spoken.add(_etn)
-                        self.alerts.audio.speak(f"Enter {'Buy' if _buy else 'Sell'} E now", gated=False)
-                        break
+                        _said = f"Enter {'Buy' if _buy else 'Sell'} E now"; break
+                if _said is None:
+                    for _eb, _buy in faded_e_live:
+                        if float(filtered[_eb].get("end_time", 0.0)) == _etn:
+                            _said = f"Faded {'Buy' if _buy else 'Sell'} E"; break
+                if _said is not None:
+                    self._pivot_e_spoken.add(_etn)
+                    self.alerts.audio.speak(_said, gated=False)
         d_bars = {"long": set(), "short": set()}       # D-print timeline (drives D-EXIT: opposite-D TP / same-D trail)
         for _d, _e, _s, _z in setups:
             d_bars[_s].add(_d)
@@ -5585,8 +5715,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _audio_announce_pivot(self, snap) -> None:
         """Speak a LIVE pivot the instant the S5j-r5 confluence FIRES on the just-closed bucket — at D. V3-aware:
         a cyan/orange D (first-print P2>80) in a directional 4H zone = a Path-A DIRECT-D entry -> 'Enter Buy/Sell
-        D now'; any other D -> 'Buy/Sell Pivot Detected'. (The 'Enter Buy/Sell E now' cue for Path-B New-E entries
-        is spoken from _draw_pivot, which computes the E.) Its OWN 'Pivot Alert' toggle, INDEPENDENT of the Audio
+        D now'; any other D is drawn FADED (grey) -> 'Faded Buy/Sell D'. (The 'Enter Buy/Sell E now' cue for recorded
+        Path-B New-E entries AND the 'Faded Buy/Sell E' cue for faded study E's are spoken from _draw_pivot, which
+        computes the E.) Its OWN 'Pivot Alert' toggle, INDEPENDENT of the Audio
         Feed (speaks ungated). LIVE-ONLY: seeded silently on enable / first data / tf-change and gated on a NEW
         bucket close (tracked by the last bucket's end_time); a fire continuing the previous bar's run is skipped."""
         if not self._pivot_audio_on:
@@ -5615,7 +5746,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if (L, side) in fired and (L - 1, side) not in fired:   # NEW fire (not a run continuation)
                 buy = side == "long"
                 # V3 classify the live D: cyan/orange (first-print P2>80) + directional 4H zone = Path-A DIRECT-D
-                # entry -> "Enter D now"; otherwise it's just a detected pivot -> "Pivot Detected".
+                # entry -> "Enter D now"; otherwise the D is drawn faded -> "Faded Buy/Sell D".
                 p2d = (1.0 if buy else -1.0) * (2.0 * float(e_sh_c[L]) - 1.0) * 100.0
                 tier = "cyan" if p2d > PIVOT_P2D_VHIGH else ("green" if p2d > PIVOT_P2D_HIGH else "hollow")
                 zone = self._zone5_at(float(win[L].get("end_time", 0.0)),
@@ -5623,7 +5754,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if zone is not None and _pivot_v3_take(buy, tier, zone):
                     self.alerts.audio.speak(f"Enter {spoken} D now", gated=False)
                 else:
-                    self.alerts.audio.speak(f"{spoken} Pivot Detected", gated=False)
+                    self.alerts.audio.speak(f"Faded {spoken} D", gated=False)   # non-take D = a FADED D on screen
 
     def _refresh_scale_labels(self, snap) -> None:
         """Push live per-tf bucket ~volumes into the Bucket Scale selector + window title. All
@@ -5656,6 +5787,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         is the replay START, so re-seat the cursor there before the rebuild."""
         if self._replay_on:
             self._replay_edge_t = self._replay_snap_to_bucket(float(self.menu.scan_start_unix()))
+            self._replay_start_t = self._replay_edge_t   # anchor the LEFT edge here; a step moves only the cursor
             self._replay_remember()           # persist the new replay position (debounced)
             self._rdbg("SCAN_TIME_CHANGED replay_on=1 scan_start=%d -> snapped cursor=%s"
                        % (int(self.menu.scan_start_unix()), int(self._replay_edge_t) if self._replay_edge_t else None))
@@ -5698,6 +5830,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (candles, VPIN, pivot, selection, HM) reads the clipped frame, so it behaves exactly as live did at that
         moment. OFF: back to the real live edge. Right arrow steps one candle (_on_sel_right)."""
         self._replay_on = bool(on)
+        if not on:
+            self._replay_stop_autoplay()     # leaving Replay Mode halts any running auto-play
         if on and self._replay_saved_edge_t is not None:
             # pick up exactly where you left off: set the Start Date field SILENTLY (blockSignals so it doesn't
             # double-fire _on_scan_time_changed) so scan_start_unix() returns the remembered time.
@@ -5768,6 +5902,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._scanner_bucket_sig = None; self._last_scanner_sig = None
             self._pivot_sig = None; self._sel_sig = None
             self._on_timer()
+
+    def _toggle_replay_autoplay(self) -> None:
+        """Ctrl+Right in Replay Mode: START auto-playing forward (reveal a candle every REPLAY_AUTOPLAY_MS). Pressing
+        Ctrl+Right again — or a manual Left/Right step — STOPS it. No-op outside Replay Mode."""
+        if not self._replay_on:
+            return
+        if self._replay_autoplay_timer.isActive():
+            self._replay_stop_autoplay()
+        else:
+            self._replay_autoplay_timer.start()
+
+    def _replay_autoplay_tick(self) -> None:
+        """One auto-play frame: advance the cursor +1 (direct, so it doesn't self-stop via _on_sel_right). If the
+        cursor didn't move (we hit the real live edge), there's nothing left to play -> stop."""
+        before = self._replay_edge_t
+        self._advance_replay(1)
+        if not self._replay_on or self._replay_edge_t == before:   # replay off, or reached the live edge -> done
+            self._replay_stop_autoplay()
+
+    def _replay_stop_autoplay(self) -> None:
+        """Halt Ctrl+Right auto-play (idempotent)."""
+        if self._replay_autoplay_timer.isActive():
+            self._replay_autoplay_timer.stop()
 
     # ------------------------------------------------------------------
     # Cold-archive GCS fetch-if-missing (on-demand history download)
@@ -6056,22 +6213,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         combined: list[dict] = list(closed_list)
         _rk = 0
         if _replay:
-            # REPLAY causal clip: keep only bars whose bucket CLOSED at/before the cursor, then the trailing 24h
-            # (REPLAY_SPAN_SECS) ending there — floored at REPLAY_MIN_BUCKETS so the lookback is valid on quiet days
-            # and capped at REPLAY_WINDOW for perf. The newest kept bucket is the (fake) live edge; the real-'now'
-            # active is dropped. closed_list is ascending, so bars <= cursor are a prefix. Fully causal by construction.
+            # REPLAY causal clip: keep bars whose bucket CLOSED at/before the cursor (right edge), back to a FIXED
+            # left edge = (replay START - 24h). The left edge does NOT move with the cursor, so a Right-arrow step
+            # GROWS the window (reveals a new bar on the right) instead of sliding it (which dropped the leftmost
+            # bar). Floored at REPLAY_MIN_BUCKETS (lookback on quiet starts) and capped at REPLAY_WINDOW (perf — only
+            # then does the oldest slide off). The real-'now' active is dropped; closed_list is ascending -> causal.
             et = float(self._replay_edge_t); m = 0
             for b in closed_list:
                 if float(b.get("end_time", 0.0)) <= et:
                     m += 1
                 else:
                     break
-            t24 = et - config.REPLAY_SPAN_SECS
-            n24 = 0
+            left_t = float(self._replay_start_t if self._replay_start_t is not None else et) - config.REPLAY_SPAN_SECS
+            _lo = 0
             for b in closed_list[:m]:
-                if float(b.get("end_time", 0.0)) >= t24:
-                    n24 += 1
-            keep = min(max(n24, config.REPLAY_MIN_BUCKETS), config.REPLAY_WINDOW, m)
+                if float(b.get("start_time", 0.0)) < left_t:
+                    _lo += 1
+                else:
+                    break
+            keep = min(max(m - _lo, min(m, config.REPLAY_MIN_BUCKETS)), config.REPLAY_WINDOW)
             _rk = m - keep
             combined = closed_list[_rk:m]
             if getattr(self, "_replay_dbg", False):
@@ -7469,7 +7629,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return pg.mkBrush((neon_col[0], neon_col[1], neon_col[2], 255))
         return pg.mkBrush((std[0], std[1], std[2], alpha))
 
-    def _bucket_row(self, buckets: list, i: int, vels: list, fold_prev):
+    def _bucket_row(self, buckets: list, i: int, vels: list, fold_prev, poc_ab=(0.05, 0.95)):
         """Compute ONE bucket's Mode-10 render row at index ``i`` (#3 compute cache).
 
         ``vels`` must be populated for 0..i (``vels[i]`` = this bucket's velocity);
@@ -7486,10 +7646,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         brush = self._neon_v2_brush(b.get("opL", 0.0), b.get("opS", 0.0),
                                     b.get("clL", 0.0), b.get("clS", 0.0),
                                     b.get("curr_vol", 0.0), ratio)
-        # baseline EMA — the smoothed POC center line (slow 5%/95% EMA of the bucket POC).
+        # baseline EMA — the smoothed POC center line (slow EMA of the bucket POC). ``poc_ab`` = (α, 1-α) weights:
+        # native (0.05, 0.95) at scale 1×, stretched to a longer period by the Keltner-scale slider (period ×scale).
         # ``fold_prev`` is the prior bucket's baseline scalar (None for i == 0 = seed).
         poc = b.get("poc_price", 0.0)
-        baseline = poc if fold_prev is None else (poc * 0.05 + fold_prev * 0.95)
+        baseline = poc if fold_prev is None else (poc * poc_ab[0] + fold_prev * poc_ab[1])
         # trailing-50 VPIN VALUE only — the heatmap brush is assigned at RENDER time from the
         # adaptive percentile cutpoints (which shift as buckets arrive), so it must NOT be cached
         # here per closed bucket or it would go stale.
@@ -7586,18 +7747,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         n_closed = max(0, L - 1)               # 0..L-2 closed; L-1 is the live edge
         front_id = ((buckets[0].get("start_time", 0.0),
                      buckets[0].get("curr_vol", 0.0)) if buckets else None)
+        _S = float(self._kc_scale)             # smooth-approx effective-TF scale (KC period ×S, band ×sqrt(S); baseline period ×S)
         cc = self._m10_cc
         reuse = (cc is not None and cc["front_id"] == front_id
-                 and cc["anchor"] == anchor_unix and cc["n"] <= n_closed)
-        if not reuse:                          # full rebuild (front/anchor change or first run)
+                 and cc["anchor"] == anchor_unix and cc["n"] <= n_closed
+                 and cc.get("kc_s") == _S)     # a scale change invalidates the cached KC + baseline rows
+        if not reuse:                          # full rebuild (front/anchor change, scale change, or first run)
             cc = {k: [] for k in self._M10_ARR_KEYS}
             cc.update(vels=[], fold=None, n=0, front_id=front_id, anchor=anchor_unix,
-                      kc_up=[], kc_lo=[], kc_fold=None)
+                      kc_up=[], kc_lo=[], kc_fold=None, kc_s=_S)
 
         # Keltner fold: same sequential arithmetic as _keltner_bands (EMA basis + Wilder RMA ATR), carried
         # as (e, a) after the last computed bucket — a closed bucket's KC is final at close (the recurrence
         # only reads backwards), so the O(N) full-history walk is paid once, not per frame.
-        _kl = config.KELTNER_LENGTH; _km = config.KELTNER_ATR_MULT; _kk = 2.0 / (_kl + 1)
+        _kl = config.KELTNER_LENGTH * _S       # EMA basis + ATR period stretched ×scale (float ok in both recurrences)
+        _km = config.KELTNER_ATR_MULT * math.sqrt(_S)   # band half-width widens ~sqrt(scale) -> approximates the higher-TF range
+        _kk = 2.0 / (_kl + 1)
+        if _S == 1.0:                          # baseline EMA weights: native literals at 1× -> byte-identical POC baseline
+            _b_alpha, _b_beta = 0.05, 0.95
+        else:                                  # else stretch the native ≈39-bucket period ×scale
+            _b_alpha = 2.0 / (config.KELTNER_BASELINE_PERIOD * _S + 1.0); _b_beta = 1.0 - _b_alpha
+        _bab = (_b_alpha, _b_beta)
 
         def _kc_step(fold, h, l, c, c_prev):
             if fold is None:                                   # seed exactly like _keltner_bands i == 0
@@ -7614,7 +7784,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             b = buckets[i]
             dur = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))
             cc["vels"].append((b.get("buy_vol", 0.0) + b.get("sell_vol", 0.0)) / dur)
-            row, cc["fold"] = self._bucket_row(buckets, i, cc["vels"], cc["fold"])
+            row, cc["fold"] = self._bucket_row(buckets, i, cc["vels"], cc["fold"], _bab)
             for k, v in zip(self._M10_ARR_KEYS, row):
                 cc[k].append(v)
             cc["kc_fold"], _u, _l = _kc_step(cc["kc_fold"], cc["highs"][i], cc["lows"][i], cc["closes"][i],
@@ -7630,7 +7800,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             b = buckets[L - 1]
             dur = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))
             live_vel = (b.get("buy_vol", 0.0) + b.get("sell_vol", 0.0)) / dur
-            row, _ = self._bucket_row(buckets, L - 1, cc["vels"] + [live_vel], cc["fold"])
+            row, _ = self._bucket_row(buckets, L - 1, cc["vels"] + [live_vel], cc["fold"], _bab)
             for k, v in zip(self._M10_ARR_KEYS, row):
                 out[k].append(v)
             _, _u, _l = _kc_step(cc["kc_fold"], b.get("high", 0.0), b.get("low", 0.0), b.get("close", 0.0),
@@ -7882,28 +8052,38 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             i = bisect.bisect_right(_scan_start_times, ts) - 1
             return -1 if i < 0 else min(i, len(_scan_start_times) - 1)
 
-        if self.menu.layer_state("m10_obs"):
+        # DATA SOURCE: live -> the daemon's snapshot marks; REPLAY -> re-detect CAUSALLY from the clipped frame
+        # (the live marks are anchored at 'now' and fall off the historical view -> nothing shows). Same algorithm.
+        # Only pay the re-detect when a layer that needs it is actually on (it's ~250ms at the frame cap, cached/step).
+        _obs_on = self.menu.layer_state("m10_obs"); _ice_on = self.menu.layer_state("m10_icebergs")
+        if self._replay_on and self._replay_edge_t is not None and (_obs_on or _ice_on):
+            _ob_src, _abs_src = self._replay_ob_abs(buckets)
+        else:
+            _ob_src = self._last_snap.get("order_blocks", []); _abs_src = self._last_snap.get("absorptions", [])
+
+        if _obs_on:
             if "bc_obs" not in self._scan_handles:
                 self.bc_obs.setZValue(-5)          # zones render behind the candles
                 self._add_scanner_item(self.bc_obs, ignore_bounds=True)  # derived overlay: never drive the X/Y fit
                 self._scan_handles["bc_obs"] = self.bc_obs
             self.bc_obs.setVisible(True)
+            # 'o' cycle stage 2: hide mitigated (dead) OBs, keep only the live unmitigated zones.
+            if self._ob_unmitig_only:
+                _ob_src = [ob for ob in _ob_src if ob.get("active")]
             # Min-Mult slider writes bc_obs.visible_filter directly now (relocated off the dormant
             # time-chart ob_item, Phase C step 1); bc_obs.update_data_indexed reads it.
             vx0, vx1 = self.vb.viewRange()[0]   # clamp OB spans to the visible window (no corner-float)
-            self.bc_obs.update_data_indexed(
-                self._last_snap.get("order_blocks", []), float(x[-1]), _ts_to_idx, (vx0, vx1), px_per_y)
+            self.bc_obs.update_data_indexed(_ob_src, float(x[-1]), _ts_to_idx, (vx0, vx1), px_per_y)
 
         # Mode 10 whale-absorption bands (phase c) — gated by m10_icebergs (relabeled "Absorption").
-        if self.menu.layer_state("m10_icebergs"):
+        if _ice_on:
             if "bc_absorption" not in self._scan_handles:
                 self.bc_absorption.setZValue(-6)   # behind the OB zones + candles
                 self._add_scanner_item(self.bc_absorption, ignore_bounds=True)
                 self._scan_handles["bc_absorption"] = self.bc_absorption
             self.bc_absorption.setVisible(True)
             vx0, vx1 = self.vb.viewRange()[0]
-            self.bc_absorption.update_data_indexed(
-                self._last_snap.get("absorptions", []), float(x[-1]), _ts_to_idx, (vx0, vx1))
+            self.bc_absorption.update_data_indexed(_abs_src, float(x[-1]), _ts_to_idx, (vx0, vx1))
 
         # --- liquidation marks (A4 step 4) — per-bucket forced volume from A3b-pre.
         # liq_short = shorts liquidated (forced buys) -> mark at the bucket HIGH (price

@@ -73,3 +73,25 @@ def value_area(levels: dict, pct: float = 0.70) -> "tuple[float, float]":
         else:
             lo -= 1; acc += dn
     return pr[lo][0], pr[hi][0]
+
+
+def lvn(levels: dict) -> float:
+    """Low Volume Node: the price holding the SMALLEST total (b+s) volume STRICTLY INSIDE the value area
+    (VAL < price < VAH) — the shallowest volume 'valley' within the traded core, the structural mirror of the POC
+    (which is the peak). Confined to the value-area interior so it lands on a real low-volume gap, not a near-zero
+    tail edge and not the VAL/VAH bounds themselves. NaN for unusable ladders or when the VA has no interior level."""
+    if not levels or len(levels) < 3:
+        return _NAN
+    val, vah = value_area(levels)
+    if val != val or vah != vah or not (vah > val):        # NaN or degenerate VA
+        return _NAN
+    inside = sorted((float(pp), float(vv.get("b", 0.0)) + float(vv.get("s", 0.0)))
+                    for pp, vv in levels.items()
+                    if val < float(pp) < vah and (float(vv.get("b", 0.0)) + float(vv.get("s", 0.0))) > 0)
+    if not inside:
+        return _NAN
+    best_p, best_v = inside[0]
+    for price, v in inside[1:]:
+        if v < best_v:
+            best_p, best_v = price, v
+    return best_p

@@ -219,8 +219,10 @@ CHART_CACHE_CAP = 10000         # max candles per viewport (spec §1.1.2)
 # context before the cursor (the window is then trimmed to the 24h span).
 REPLAY_SPAN_SECS = 24 * 3600
 REPLAY_MIN_BUCKETS = 300
-REPLAY_WINDOW = 1200
+REPLAY_WINDOW = 1800    # max bars kept in a replay frame — the fixed-left window GROWS as you step (left history stays)
+#                         up to this cap; only past it does the oldest bar slide off (a perf ceiling, rarely reached)
 REPLAY_LOOKBACK_SECS = 2 * 24 * 3600
+REPLAY_AUTOPLAY_MS = 250   # Ctrl+Right auto-play cadence: reveal one candle every this-many ms (stops on Left/Right)
 # Cold-archive GCS bucket (must match study/pull_archive.ps1 $GCS and ops/archive_buckets.py GCS_DEFAULT). When the
 # terminal scrolls/replays before the local mirror's coverage, it rsyncs missing chunks from here ON DEMAND and caches
 # them under study/archive_data — so any date on GCS is reachable without a manual pull. ARCHIVE_FETCH_COOLDOWN_S
@@ -340,6 +342,13 @@ ER_LEAN_GAIN = 3.0             # E/R hugs 50% (two-sided), so its panel ZOOMS th
 # Keltner Channel overlay on the bucket-candle chart: EMA(close, LENGTH) basis ± ATR_MULT · ATR(LENGTH).
 KELTNER_LENGTH = 20            # EMA basis + ATR period (in buckets)
 KELTNER_ATR_MULT = 2.25       # band half-width = this × ATR
+# Smooth-approx "effective timeframe" scale for the 1m KC + POC baseline (hamburger slider under Depth Wall).
+# 1.0 = native (byte-identical to today); higher stretches the EMA+ATR period ×scale and widens the band
+# ×sqrt(scale) so the 1m channel APPROXIMATES a higher-TF one (≈5m at 5×, ≈15m at 15×, ≈1h at 60×, ≈4h at 240×)
+# WITHOUT re-aggregating — the POC baseline EMA period scales ×scale too, so its center line adapts in step.
+KELTNER_SCALE_DEFAULT = 1.0
+KELTNER_SCALE_MAX = 240.0     # slider ceiling (240× on a 1m base ≈ the 4h channel)
+KELTNER_BASELINE_PERIOD = 39  # native POC-baseline EMA period (α=0.05 → 2/(39+1)); scaled ×scale for the slider
 
 # ── Mode-10 PHASE TABLE (live, beside the panels): classify the selection as before/start/during/end of a
 #    move. Per phase, the MEAN and STD of the signed with-move spread (% pts, + favors the move) for
