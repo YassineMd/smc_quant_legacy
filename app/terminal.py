@@ -42,12 +42,13 @@ from . import bar_quantiles
 from . import archive          # local cold-archive reader — extends the scanner frame past the daemon's cap
 from . import structure        # market-structure swing labels (HH/HL/LH/LL)
 from .chart_widgets import (
-    WhiskerBarItem,
+    WhiskerBarItem, FootprintCandleItem, DeltaCandleItem, ForceCandleItem, DeltaForceCandleItem,
     AbsorptionLayer, AbsorptionZoneLayer, BucketCandleItem, ExhaustionStripLayer, LocalTimeAxis,
     OrderBlockLayer, PanelSeparatorLayer, PriceAxis, _RGB_ABS_BEAR, _RGB_ABS_BULL, _RGB_EFF_BEAR,
     _RGB_EFF_BULL, _RGB_ER_BEAR, _RGB_ER_BULL, _RGB_EXH_BEAR, _RGB_EXH_BULL,
 )
 from .cob_panel import CobPanel
+from .footprint_panel import FootprintPanel
 from .drawing_tools import DrawingController, DrawingToolbar
 from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visible
 from .hamburger import FloatingOverlayMenu, HamburgerButton, scale_label
@@ -263,12 +264,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.vb.setLimits(xMin=None, xMax=None, yMin=None, yMax=None)
 
         self.cob = CobPanel()
+        self.fp_panel = FootprintPanel()   # live forming-candle footprint side pane ('Live Footprint' toggle, Mode 10)
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.splitter.setHandleWidth(6)
         self.splitter.addWidget(self.plot)
         self.splitter.addWidget(self.cob)
+        self.splitter.addWidget(self.fp_panel)   # rightmost; rides the Mode-10 reparenting, gated by _fp_want + mode
         self.splitter.setStretchFactor(0, 1)
         self.cob.hide()
+        self.fp_panel.hide()
+        # footprint pane hover -> its own crosshair + mirror the price into the chart (shared like the VPIN pane)
+        self._fp_proxy = pg.SignalProxy(self.fp_panel.scene().sigMouseMoved,
+                                        rateLimit=60, slot=self._on_fp_mouse_move)
         self.setCentralWidget(self.splitter)
         self.vb.sigYRangeChanged.connect(self._sync_cob)
 
@@ -339,6 +346,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.splitter_v = None         # Mode 10 vertical splitter (upper/lower panes)
         self.cob_col = None            # Mode 10 COB column (cob + spacer), height-matched to the price pane
         self._cob_want = False         # user's COB-toggle intent (drives cob_col visibility in Mode 10)
+        self._fp_want = False          # user's Live-Footprint-pane intent (right-docked, Mode 10 only)
+        self._fp_sig = None            # last forming-bucket signature -> skip redundant footprint re-renders
         self._syncing_split = False    # reentrancy guard for the linked splitter-divider sync
         # Mode 10 order-block layer (index-space). Persistent object; added to the
         # plot lazily in _scan_bucket_canvas and swept on teardown. Tiers forced on.
@@ -555,6 +564,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                           self._z4_sell_t, self._z4_sell_b)
         for _z in self._z4_items:
             _z.setZValue(1); self.plot.addItem(_z, ignoreBounds=True); _z.setVisible(False)
+        # 'B' overlay: the 4h candle's ABNORMAL-ORDER lines (imbalanced footprint levels of the 4h bucket, drawn
+        # across its span). Two batched curves (connect='pairs'): buy = neon BLUE, sell = neon ORANGE — same
+        # colours as the 1m imbalance lines, but sourced from the 4h bucket's ladder. Independent of the 1m lines.
+        _pib = pg.mkPen((0, 153, 255), width=2.0); _pib.setCosmetic(True)
+        _pis = pg.mkPen((255, 128, 0), width=2.0); _pis.setCosmetic(True)
+        self._z4_imb_buy = pg.PlotCurveItem(pen=_pib); self._z4_imb_buy.setZValue(5)
+        self._z4_imb_sell = pg.PlotCurveItem(pen=_pis); self._z4_imb_sell.setZValue(5)
+        for _z in (self._z4_imb_buy, self._z4_imb_sell):
+            self.plot.addItem(_z, ignoreBounds=True); _z.setVisible(False)
         self._zone4h_bid = None; self._zone4h_data = None
         self._zone4h_starts = []; self._zone4h_starts_sig = None
         # top-right readout: how full the FORMING 4h bucket is (curr_vol / target_vol) -> when the zones update
@@ -932,7 +950,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
         # PANEL 0 ('0') — a SMOOTHED twin of Panel 9: each line = (current + locked)/2. Identical items/colors.
         self.show_panel0 = True
-        self.show_whisker = False        # 'W' volume-quantile whisker bars (candles stay default; persisted)
+        self._candle_mode = 0            # 'W' cycle: 0 normal>1 whisker>2 footprint>3 delta>4 force>5 delta-force (persisted)
+        self._vp_mode = 1                # volume-profile mode 0..5 (default 1 = Force, the existing 4h VP look; persisted)
+        self._hide_candles = False       # Ctrl+H — hide the candle glyphs (see the VP / zones without candle noise; persisted)
         _gp0_hi = pg.mkPen("#ff9800", width=0.8); _gp0_hi.setCosmetic(True); _gp0_hi.setDashPattern([5.0, 10.0])
         _gp0_lo = pg.mkPen("#ff9800", width=0.8); _gp0_lo.setCosmetic(True); _gp0_lo.setDashPattern([5.0, 10.0])
         self.bc_p0_zero = pg.PlotDataItem(pen=pg.mkPen("#555555", width=1, style=QtCore.Qt.DashLine))
@@ -987,6 +1007,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu = FloatingOverlayMenu(self)
         self.menu.set_swing_pct(self._swing_pct)   # sync the swing slider to the restored/default sensitivity
         self.menu.set_kc_scale(self._kc_scale)     # sync the Keltner-scale slider to the restored/default value
+        self.menu.set_candle_mode(self._candle_mode)   # sync the Candle-Mode dropdown to the restored/default
+        self.menu.set_vp_mode(self._vp_mode)           # sync the Volume-Profile-Mode dropdown
         self.stats.keep_under = self.menu   # stats overlay stays below an open menu (z-order)
         self.sel_stats.keep_under = self.menu
         self.menu_btn = HamburgerButton(self)
@@ -1024,10 +1046,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # spinning against a closed port with the only evidence in the console. This 1s watchdog shows a
         # banner ON THE CHART while disconnected and re-heals every 5s (tunnel relaunch if its port died
         # + immediate socket retry, exactly what the manual refresh button does).
-        self._conn_banner = QtWidgets.QLabel(self.plot)
+        self._conn_banner = QtWidgets.QLabel(self)   # child of the WINDOW -> centred + rises above the drawing toolbar
+        self._conn_banner.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        self._conn_banner.setAlignment(QtCore.Qt.AlignCenter)
         self._conn_banner.setStyleSheet(
-            "background:#7a1f1f; color:#ffffff; font: bold 12px 'Consolas';"
-            "border:1px solid #b03030; border-radius:6px; padding:6px 14px;")
+            "background:rgba(122,31,31,235); color:#ffffff; font: bold 15px 'Consolas';"
+            "border:1px solid #b03030; border-radius:10px; padding:14px 24px;")
         self._conn_banner.hide()
         self._conn_down_s = 0
         self._conn_timer = QtCore.QTimer(self)
@@ -1058,6 +1082,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         activated=lambda: self.menu.layer_checks["m10_poc"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+P"), self, activated=self._toggle_pivot)  # PIVOT INDICATOR (selection-scoped)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Z"), self, activated=self._toggle_sel_vp)  # selection Volume Profile on/off
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+H"), self, activated=self._toggle_hide_candles)  # hide candle glyphs (VP/zones only)
         QtGui.QShortcut(QtGui.QKeySequence("N"), self, activated=self._toggle_pivot_causal)  # No-look-ahead pivot badges
         QtGui.QShortcut(QtGui.QKeySequence("L"), self,
                         activated=lambda: self.menu.layer_checks["m10_liq"].toggle())
@@ -1157,6 +1182,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.replayToggled.connect(self._on_replay_toggled)
         self.menu.swingSensitivityChanged.connect(self._on_swing_sensitivity)   # swing-ZigZag threshold slider
         self.menu.keltnerScaleChanged.connect(self._on_kc_scale)   # 1m-KC smooth-approx effective-TF scale slider
+        self.menu.candleModeChanged.connect(self._on_candle_mode)  # Candle Mode dropdown (mirrors 'W')
+        self.menu.vpModeChanged.connect(self._on_vp_mode)          # Volume Profile Mode dropdown
         self.menu.scan_time_edit.set_range_provider(self._data_date_range)   # calendar: disable no-data days
 
         # Modifier mouse-wheel over the chart: Ctrl nudges the Scan Start (Zero Point) anchor ±1 min
@@ -1224,6 +1251,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             cob_cb = self.menu.sub_checks.get("cob")   # keep the menu checkbox in sync (no re-emit)
             if cob_cb is not None and not cob_cb.isChecked():
                 cob_cb.blockSignals(True); cob_cb.setChecked(True); cob_cb.blockSignals(False)
+        self._update_fp_pane_visibility()   # live-footprint pane rides Mode 10 only
         self._on_timer()   # immediate first draw from the current Zero Point
 
     def _hide_price_overlays(self) -> None:
@@ -1383,6 +1411,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # (the spacer goes too).
             self._cob_want = on
             (self.cob_col if self.cob_col is not None else self.cob).setVisible(on)
+        elif key == "fp_pane":
+            self._fp_want = on
+            self._update_fp_pane_visibility()
         elif key == "audio":
             self.alerts.audio.set_armed(on)
         elif key == "pivot_audio":
@@ -1392,6 +1423,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._pivot_e_seeded = False; self._pivot_e_spoken = set()   # same for the "Enter E now" audio
         if not self._loading_ui:
             self._save_ui_state()               # persist the sub-widget toggle across sessions
+
+    def _update_fp_pane_visibility(self) -> None:
+        """Show the live-footprint side pane only when the user wants it AND we're in Mode 10 (bucket_canvas), the
+        only mode with a per-bucket footprint. Clears the pane when hidden so it doesn't keep a stale forming candle."""
+        on = bool(self._fp_want) and self.scanner_mode == "bucket_canvas"
+        self.fp_panel.setVisible(on)
+        if on:
+            self._fp_sig = None                 # force a fresh render on (re)show
+        else:
+            self.fp_panel.clear_panel()
 
     def _apply_saved_toggles(self) -> None:
         """Restore EVERY hamburger toggle (Sub-Widgets + Mode 10 Overlays) from the saved state, so the exact
@@ -1430,9 +1471,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 ("Mode 10 overlays", [
                     ("P", "POC dot"), ("F", "Footprint ladder"),
                     ("O", "Order Blocks + Absorption/Iceberg"), ("L", "Liquidation marks"),
-                    ("V", "Abnormal-velocity diamonds"), ("W", "Volume-quantile whisker bars"),
+                    ("V", "Abnormal-velocity diamonds"), ("W", "Candle: normal/whisker/footprint/delta/force/delta-force"),
                     ("Ctrl+P", "Pivot indicator (selection-scoped)"),
-                    ("Ctrl+Z", "Selection Volume Profile")]),
+                    ("Ctrl+Z", "Selection Volume Profile"),
+                    ("Ctrl+H", "Hide candles (VP / zones only)")]),
                 ("Stats &amp; panels", [
                     ("S", "Stats box overlay"), ("H", "Selection stats box"),
                     ("Y", "State verdict / debug lines"),
@@ -1491,7 +1533,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if abs(xc - _bx) <= xtol and abs(yc - _by) <= ytol and abs(xc - _bx) < bestd:
                         bestd = abs(xc - _bx); best = (_key, _kind, _on)   # _key already final (rounded or 'live')
                 if best is not None:
-                    self._z4_user[(best[0], best[1])] = not best[2]   # flip THIS bucket's V or Z
+                    self._z4_user[(best[0], best[1])] = not best[2]   # flip THIS bucket's V / Z / B
                     if self._z4_last_buckets:
                         self._draw_4h_zone(self._z4_last_buckets)      # redraw the layer immediately
                     ev.accept(); return
@@ -1617,6 +1659,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self, "lower_vline", None) is not None:   # sync the SHARED vertical crosshair into the VPIN pane
             self.lower_vline.setPos(pt.x())
             self.lower_hline.hide(); self.vpin_tag.hide()     # cursor is over the price pane -> no VPIN y readout
+        if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
+            self.fp_panel.show_price_line(pt.y())
         # X-axis time readout at the crosshair (heatmap mode only; x = epoch seconds)
         if self.scanner_mode == "depth_heatmap":
             try:
@@ -1661,6 +1705,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._hover_dom_wall(pt.x(), pt.y())   # DOM wall hover-volume (bucket_canvas + m10_dom)
         self._hover_panels(pt.x(), pt.y())  # cursor label: RAW values of whichever stacked panel is hovered
         self._hover_pivot(pos)              # PIVOT label hover -> setup stats box (scene coords for hit-test)
+
+    def _on_fp_mouse_move(self, evt) -> None:
+        """Cursor over the live-footprint pane: drive its OWN crosshair (volume x-line + price y-line + right-axis
+        price tag) and mirror the PRICE into the main chart's horizontal crosshair + price tag (the footprint pane
+        shares the crosshair by PRICE, the way the VPIN pane shares it by time)."""
+        if not self._fp_want or not self.fp_panel.isVisible():
+            return
+        pos = evt[0]
+        if not self.fp_panel.sceneBoundingRect().contains(pos):
+            self.fp_panel.hide_crosshair()
+            return
+        pt = self.fp_panel.getViewBox().mapSceneToView(pos)
+        self.fp_panel.set_crosshair(pt.x(), pt.y())
+        self.hline.setPos(pt.y()); self.hline.show()          # mirror the PRICE into the chart's horizontal crosshair
+        self.price_tag.setText(f"{pt.y():.{config.PRICE_DECIMALS}f}")
+        self.price_tag.setPos(self.vb.viewRange()[0][1], pt.y()); self.price_tag.show()
 
     def _on_lower_mouse_move(self, evt) -> None:
         """Cursor over the VPIN pane: drive its OWN crosshair (x+y lines) + a right-axis VPIN value badge, and sync
@@ -1819,13 +1879,45 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             h.setVisible(self.show_vel_abn)
 
     def _toggle_whisker(self) -> None:
-        """'W' — volume-quantile WHISKER BARS render mode: box = the ladder's 25-75%% cumulative-volume
-        acceptance zone, volume-weighted median line, OHLC-style open/close notches, thin whiskers to
-        high/low (rejection tails). Candles stay the default; ladder-less buckets and zoomed-out views
-        (<~3 px/bar) always render as candles."""
-        self.show_whisker = not self.show_whisker
+        """'W' — cycle the candle RENDER MODE: 0 normal candles -> 1 volume-quantile WHISKER BARS -> 2 FOOTPRINT
+        CANDLES (mini centred buy/sell volume profile, like the live pane) -> 3 DELTA CANDLES (one bar per level =
+        net buy-sell delta, green right / red left) -> 4 FORCE CANDLES (footprint split into the 4 forces: opL green
+        + clS cyan right, opS red + clL magenta left) -> 5 DELTA-FORCE (the delta bar coloured by the level's
+        DOMINANT force) -> back to 0. Ladder-less buckets and zoomed-out views (whisker <~3 px/bar, the per-level
+        modes <~ FP_CANDLE_MIN_PX) fall back to normal candles. Mirrored by the hamburger 'Candle Mode' dropdown."""
+        self._set_candle_mode((self._candle_mode + 1) % 6)
+
+    def _on_candle_mode(self, m: int) -> None:
+        """Hamburger 'Candle Mode' dropdown changed -> apply it ('W' and the dropdown stay in lock-step)."""
+        self._set_candle_mode(int(m))
+
+    def _set_candle_mode(self, m: int) -> None:
+        """Apply a candle render mode (from 'W' or the dropdown): sync the dropdown, persist, repaint immediately."""
+        self._candle_mode = int(m) % 6
+        self.menu.set_candle_mode(self._candle_mode)
         self._save_ui_state()
         self._last_scanner_sig = None   # force the sig-gated scanner redraw to repaint immediately
+        self._draw_scanner()
+
+    def _toggle_hide_candles(self) -> None:
+        """Ctrl+H — hide/show the candle glyphs so the volume profile / zones can be read without the candle 'noise'.
+        Only the candles are hidden; the baseline, VP, zones, POC, overlays all stay."""
+        self._hide_candles = not self._hide_candles
+        self._save_ui_state()
+        self._last_scanner_sig = None
+        self._draw_scanner()
+
+    def _on_vp_mode(self, m: int) -> None:
+        """Hamburger 'Volume Profile Mode' dropdown changed -> re-render the selection VP + the 4h 'V' overlay."""
+        self._vp_mode = int(m) % 6
+        self._save_ui_state()
+        self._sel_sig = None                         # force the Mode-10 selection VP to redraw
+        if self._z4_last_buckets:                    # re-render the 4h V overlay immediately
+            try:
+                self._draw_4h_zone(self._z4_last_buckets)
+            except Exception:
+                pass
+        self._last_scanner_sig = None
         self._draw_scanner()
 
     def _phase_post(self, key: str, vals) -> list:
@@ -2702,6 +2794,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _b in self._z4_btn_pool:
             _b.setVisible(False)
         self._z4_btn_hits = []
+        self._z4_imb_buy.setVisible(False); self._z4_imb_sell.setVisible(False)   # 4h abnormal-order lines off
 
     @staticmethod
     def _z4_profile(bb):
@@ -2869,7 +2962,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return self._z4_btn_pool[used]
 
     def _z4_deactivate_all(self) -> None:
-        """'z' — turn OFF every currently-active 4h V and Z overlay (only deactivates; never activates). Sets each
+        """'z' — turn OFF every currently-active 4h V / Z / B overlay (only deactivates; never activates). Sets each
         explicit toggle False and force-closes the default-on last-bucket Z (read off the drawn buttons)."""
         for _k in list(self._z4_user):
             self._z4_user[_k] = False
@@ -2922,11 +3015,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return agg
 
     def _draw_4h_zone(self, buckets) -> None:
-        """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median) and ZONE ('Z': buy/sell wick bands) overlays,
-        DETACHED from the selection tool. Each completed 4h bucket gets a small V/Z button pair just above the
-        x-axis, under its DISPLAY span = the NEXT 4h window — so bucket N's levels overlay the 1m candles that
-        formed AFTER it (study the reaction). The LAST completed bucket's span is the live forming region; its Z
-        shows there by default. Master gate m10_4hzone. Pivot V3 reads _zone5_at separately, so this is display-only."""
+        """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median), ZONE ('Z': buy/sell wick bands), and ABNORMAL-ORDER
+        ('B') overlays, DETACHED from the selection tool. Each completed 4h bucket gets a small V/Z/B button trio just
+        above the x-axis, under its DISPLAY span = the NEXT 4h window — so bucket N's levels overlay the 1m candles that
+        formed AFTER it (study the reaction). The LAST completed bucket's span is the live forming region; its Z shows
+        there by default. B (default OFF, click to show) draws the 4h candle's own abnormal orders: each level in the 4h
+        bucket's ladder whose buy/sell volume >= FOOTPRINT_IMB_ER_MULT_4H x the bucket's AVERAGE per-level volume, as a
+        horizontal blue(buy)/orange(sell) line across the span — the 4h analog of the always-on 1m imbalance lines
+        (which are UNCHANGED). Master gate m10_4hzone. Pivot V3 reads _zone5_at separately, so this is display-only."""
         if not self.menu.layer_state("m10_4hzone") or not buckets:
             self._hide_4h_zone(); return
         ets, rows = self._z4_lut()
@@ -2967,6 +3063,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _x0 = _xt(max(s_t, canvas_lo))
                 entries.append((lr, _x0, n - 1, n - 1, _x0, "live", False, s_t, now_t))
         uc = uh = ub = us = 0; self._z4_btn_hits = []
+        _imb_bx = []; _imb_by = []; _imb_sx = []; _imb_sy = []    # 4h abnormal-order segments (buy blue / sell orange)
+        _mult4h = config.FOOTPRINT_IMB_ER_MULT_4H
         _OFF = (52, 58, 72); _OFF_TXT = (205, 212, 225)   # OFF button: dark-slate fill + light text (+ the outline)
         for r, x0, x1o, x1e, bx0, key, default_z, own_s, own_e in entries:
             if x1e <= x0:
@@ -2974,6 +3072,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             x1o = max(x0 + 1, min(x1o, x1e))
             z_on = self._z4_user.get((key, "Z"), default_z)       # default: last completed bucket's Z (extended)
             v_on = self._z4_user.get((key, "V"), False)
+            b_on = self._z4_user.get((key, "B"), False)          # 4h abnormal-order lines: OFF by default (click to show)
+            if b_on:                                             # ABNORMAL ORDERS of the 4h candle: imbalanced ladder
+                _lv = r.get("levels") or {}                      # levels whose buy/sell vol >> the bucket's per-level avg,
+                if len(_lv) >= 2:                                # drawn as a horizontal line across this span [x0, x1e]
+                    _tb = _ts = 0.0
+                    for _v in _lv.values():
+                        _tb += float(_v.get("b", 0.0)); _ts += float(_v.get("s", 0.0))
+                    _nl = len(_lv)
+                    _bthr = _mult4h * (_tb / _nl) if _tb > 0 else None   # mult x AVERAGE per-level buy (= buyer_er scale)
+                    _sthr = _mult4h * (_ts / _nl) if _ts > 0 else None
+                    _mid = (x0 + x1e) / 2.0
+                    for _ps, _v in _lv.items():
+                        _bi = _bthr is not None and float(_v.get("b", 0.0)) >= _bthr
+                        _si = _sthr is not None and float(_v.get("s", 0.0)) >= _sthr
+                        if not (_bi or _si):
+                            continue
+                        _yy = float(_ps)
+                        if _bi and _si:                          # both -> split: sell (orange) left, buy (blue) right
+                            _imb_sx += [x0, _mid]; _imb_sy += [_yy, _yy]
+                            _imb_bx += [_mid, x1e]; _imb_by += [_yy, _yy]
+                        elif _si:
+                            _imb_sx += [x0, x1e]; _imb_sy += [_yy, _yy]
+                        else:
+                            _imb_bx += [x0, x1e]; _imb_by += [_yy, _yy]
             if z_on and r["hi"] > r["lo"]:                        # Z bands (green buy wick / red sell wick) -> x1_ext
                 _cb = self._z4_curve(uc); uc += 1
                 _cb.setData([x0, x1e], [r["vlo"], r["vlo"]]); _cb.setFillLevel(r["lo"])
@@ -2981,23 +3103,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _cs = self._z4_curve(uc); uc += 1
                 _cs.setData([x0, x1e], [r["hi"], r["hi"]]); _cs.setFillLevel(r["vhi"])
                 _cs.setBrush(pg.mkBrush(255, 45, 70, 30)); _cs.setPen(pg.mkPen(None)); _cs.setVisible(True)
-            if v_on:                                              # DOMINANT-FORCE histogram, aggregated from the 1m buckets
-                _agg = self._z4_force_hist(buckets, starts, own_s, own_e)   # {price: [opL, opS, clL, clS]}
-                if _agg:
-                    _rw = sorted((float(_ps), _a) for _ps, _a in _agg.items())
-                    _tot = [sum(_a) for _, _a in _rw]
-                    _vmax = max(_tot, default=0.0)
-                    if _vmax > 0 and len(_rw) >= 2:
-                        _hwid = max(1.0, (x1o - x0) * 0.35)       # profile occupies 35% of the OWN span, from its left edge
+            if v_on:                                              # VOLUME PROFILE histogram (style = 'Volume Profile Mode' dropdown)
+                try:                                              # a VP-histogram failure must NOT hide the V/Z/B buttons + lines
+                    _agg = self._z4_force_hist(buckets, starts, own_s, own_e)   # {price: [opL, opS, clL, clS]}
+                    _rw = sorted(((float(_ps), _a) for _ps, _a in _agg.items()), key=lambda t: t[0])
+                    if len(_rw) >= 2 and max((sum(_a) for _, _a in _rw), default=0.0) > 0:
                         _prices = [p for p, _ in _rw]
-                        _widths = [(t / _vmax) * _hwid for t in _tot]
                         _gaps = sorted(_prices[k + 1] - _prices[k] for k in range(len(_prices) - 1))
                         _thick = _gaps[len(_gaps) // 2] if _gaps else (_prices[-1] - _prices[0]) / len(_prices)
-                        # colour each level by its dominant force: 0 opL green / 1 opS red / 2 clL magenta / 3 clS cyan
-                        _FCOL = ((40, 230, 90, 150), (255, 55, 70, 150), (235, 70, 255, 150), (0, 210, 255, 150))
-                        _brushes = [pg.mkBrush(*_FCOL[max(range(4), key=lambda k: _a[k])]) for _, _a in _rw]
-                        self._z4_hist(uh, x0=float(x0), width=_widths, y=_prices, height=float(_thick),
-                                      brushes=_brushes, pen=None).setVisible(True); uh += 1
+                        _vpx, _vpw, _vpy, _vph, _vpb = self._vp_segments(_rw, self._vp_mode, float(x0), float(x1o - x0), _thick)
+                        if _vpw:                          # NOTE: do NOT reuse _hw here — it's the button half-width used below
+                            self._z4_hist(uh, x0=_vpx, width=_vpw, y=_vpy, height=_vph, brushes=_vpb, pen=None).setVisible(True); uh += 1
+                except Exception:
+                    pass                                      # a VP-histogram glitch must never hide the V/Z/B buttons + lines
                 for lvl, col, dash in ((r["vah"], (255, 30, 70), False),      # VAH  neon red
                                        (r["val"], (0, 255, 120), False),        # VAL  neon green
                                        (r["poc"], (255, 240, 0), False),        # POC  neon yellow
@@ -3013,13 +3131,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if key != "live" and self.menu.layer_state("m10_4hsep"):   # dashed bucket-START separator at the V button's
                 _sp = self._z4_sep(us); us += 1                        # left edge (bx0); skip the live forming bucket
                 _sp.setValue(bx0); _sp.setVisible(True)
-            for kind, on, rgb in (("V", v_on, (90, 190, 255)), ("Z", z_on, (40, 230, 90))):
-                _bt = self._z4_button(ub); ub += 1                # pair at the LEFT edge (where the bucket started)
-                _bx = bx0 + (_hw if kind == "V" else 3.0 * _hw)
+            for kind, on, rgb, mul in (("V", v_on, (90, 190, 255), 1.0), ("Z", z_on, (40, 230, 90), 3.0),
+                                       ("B", b_on, (255, 128, 0), 5.0)):   # B = abnormal-order (imbalance) lines, orange
+                _bt = self._z4_button(ub); ub += 1                # trio at the LEFT edge (where the bucket started)
+                _bx = bx0 + mul * _hw
                 _bt.fill = pg.mkBrush(*rgb) if on else pg.mkBrush(*_OFF)   # fill BEFORE setText so the repaint uses it
                 _bt.setColor((10, 12, 16) if on else _OFF_TXT); _bt.setText(f" {kind} ")
                 _bt.setPos(_bx, yb_btn); _bt.setVisible(True)
                 self._z4_btn_hits.append((_bx, yb_btn, key, kind, on))
+        self._z4_imb_buy.setData(_imb_bx, _imb_by, connect="pairs")    # 4h abnormal-order lines (batched across B-on spans)
+        self._z4_imb_sell.setData(_imb_sx, _imb_sy, connect="pairs")
+        self._z4_imb_buy.setVisible(bool(_imb_bx)); self._z4_imb_sell.setVisible(bool(_imb_sx))
         # FORMING 4h bucket fill-% at the live region's top-right (live only)
         target = float((snap4 or {}).get("target_vol") or 0.0)
         if target > 0.0 and rows:
@@ -3057,7 +3179,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "abs_hm": self.show_abs_hm, "eff_hm": self.show_eff_hm,
                 "er": self.show_er_strip, "exh": self.show_exh_strip,
                 "ls_mode": self._ls_mode, "panel9": self.show_panel9, "panel0": self.show_panel0,
-                "whisker": self.show_whisker,
+                "candle_mode": self._candle_mode,
+                "vp_mode": self._vp_mode,
+                "hide_candles": self._hide_candles,
                 "phase_table": self.show_phase_table,
                 "phase": {k: bool(v) for k, v in self.show_phase.items()},
                 "liq_labels": self.show_liq,
@@ -3110,7 +3234,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_pivot = bool(s.get("pivot", self.show_pivot))
         self.pivot_causal = bool(s.get("pivot_causal", self.pivot_causal))
         self._saved_toggles = dict(s.get("toggles") or {})   # applied to the menu checkboxes in _apply_saved_toggles
-        self.show_whisker = bool(s.get("whisker", self.show_whisker))
+        _cm = s.get("candle_mode")                            # 0 normal / 1 whisker / 2 footprint (back-compat: old "whisker" bool)
+        if _cm is None:
+            _cm = 1 if s.get("whisker") else 0
+        self._candle_mode = int(_cm) % 6
+        _vm = s.get("vp_mode")
+        if isinstance(_vm, (int, float)):
+            self._vp_mode = int(_vm) % 6
+        self._hide_candles = bool(s.get("hide_candles", self._hide_candles))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
         for _k, _v in (s.get("phase") or {}).items():
             if _k in self.show_phase:
@@ -3246,6 +3377,55 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _ln in self.bc_sel_vp_lines:
             _ln.setVisible(False)
 
+    _VP_FCOL = ((40, 230, 90, 165), (255, 55, 70, 165), (235, 70, 255, 165), (0, 210, 255, 165))  # opL/opS/clL/clS
+    _VP_GREEN = (40, 230, 90, 165); _VP_RED = (235, 55, 70, 165)
+
+    def _vp_segments(self, rows, mode, x0, span, thick):
+        """Build BarGraphItem opts (x0s, widths, ys, heights, brushes) for a volume profile in the given VP `mode`,
+        over `rows` = sorted [(price, [opL,opS,clL,clS])], anchored in the region [x0, x0+span]. Shared by the
+        Mode-10 selection VP and the 4h 'V' overlay so both honour the 'Volume Profile Mode' dropdown. Modes:
+        0 Basic (right, green/red by net side), 1 Force (right, dominant-force colour), 2 Split Basic (buy green
+        right / sell red left), 3 Split Basic Delta (net delta signed), 4 Split Force (opL green+clS cyan right /
+        opS red+clL magenta left), 5 Split Force Delta (net delta signed, dominant-force colour)."""
+        x0s = []; ws = []; ys = []; hs = []; brs = []
+
+        def _add(bx, bw, by, col):
+            if bw > 0:
+                x0s.append(bx); ws.append(bw); ys.append(by); hs.append(thick); brs.append(pg.mkBrush(*col))
+
+        lv = []
+        for pr, a in rows:
+            oL, oS, cL, cS = a
+            buy = oL + cS; sell = oS + cL; tot = oL + oS + cL + cS
+            lv.append((pr, oL, oS, cL, cS, buy, sell, tot, buy - sell, max(range(4), key=lambda k: a[k])))
+        if not lv:
+            return x0s, ws, ys, hs, brs
+        if mode in (0, 1):                                     # RIGHT-only, sized by TOTAL volume
+            vmax = max(r[7] for r in lv) or 1.0; sc = (0.40 * span) / vmax
+            for pr, oL, oS, cL, cS, buy, sell, tot, d, dom in lv:
+                col = (self._VP_GREEN if buy >= sell else self._VP_RED) if mode == 0 else self._VP_FCOL[dom]
+                _add(x0, tot * sc, pr, col)
+        else:                                                  # SPLIT: the LEFT edge (selection's left line / 4h separator)
+            cx = x0                                            # is the split -> buy RIGHT (inside), sell LEFT (outside)
+            vmax = (max(max(r[5], r[6]) for r in lv) if mode in (2, 4) else max(abs(r[8]) for r in lv)) or 1.0
+            sc = (0.40 * span) / vmax
+            for pr, oL, oS, cL, cS, buy, sell, tot, d, dom in lv:
+                if mode == 2:                                  # split basic
+                    _add(cx, buy * sc, pr, self._VP_GREEN)
+                    _add(cx - sell * sc, sell * sc, pr, self._VP_RED)
+                elif mode == 4:                                # split force (opL green + clS cyan / opS red + clL magenta)
+                    _add(cx, oL * sc, pr, self._VP_FCOL[0]); _add(cx + oL * sc, cS * sc, pr, self._VP_FCOL[3])
+                    _add(cx - oS * sc, oS * sc, pr, self._VP_FCOL[1]); _add(cx - oS * sc - cL * sc, cL * sc, pr, self._VP_FCOL[2])
+                else:                                          # 3 split-basic-delta / 5 split-force-delta -> net signed bar
+                    # mode 5: colour by the dominant of ALL FOUR forces AT THIS LEVEL (`dom`), so a net-buy bar can
+                    # still be a sell colour if that force dominates the price; mode 3: plain green/red by net side.
+                    col = self._VP_FCOL[dom] if mode == 5 else (self._VP_GREEN if d >= 0 else self._VP_RED)
+                    if d >= 0:
+                        _add(cx, d * sc, pr, col)
+                    else:
+                        _add(cx - (-d) * sc, (-d) * sc, pr, col)
+        return x0s, ws, ys, hs, brs
+
     def _draw_selection_vp(self, filtered, lo_i, hi_i) -> None:
         """Volume profile over the SELECTED buckets: a force-coloured horizontal histogram anchored at the
         selection's LEFT edge + POC/VAH/VAL/median lines across the span. Gated by the 'h' box + its VP checkbox
@@ -3257,17 +3437,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if len(agg) < 2:
             self._hide_selection_vp(); return
         rows = sorted((float(ps), a) for ps, a in agg.items())
-        prices = [p for p, _ in rows]; tot = [sum(a) for _, a in rows]
-        vmax = max(tot, default=0.0)
-        if vmax <= 0:
+        prices = [p for p, _ in rows]
+        if max((sum(a) for _, a in rows), default=0.0) <= 0:
             self._hide_selection_vp(); return
-        hwid = max(1.0, float(hi_i - lo_i)) * 0.40             # bars occupy up to 40% of the selection width
-        widths = [(t / vmax) * hwid for t in tot]
         gaps = sorted(prices[k + 1] - prices[k] for k in range(len(prices) - 1))
         thick = (gaps[len(gaps) // 2] if gaps else (prices[-1] - prices[0]) / max(1, len(prices))) * 0.9
-        _FCOL = ((40, 230, 90, 150), (255, 55, 70, 150), (235, 70, 255, 150), (0, 210, 255, 150))
-        brushes = [pg.mkBrush(*_FCOL[max(range(4), key=lambda k: a[k])]) for _, a in rows]
-        self.bc_sel_vp.setOpts(x0=float(lo_i), width=widths, y=prices, height=float(thick), brushes=brushes)
+        _x0s, _ws, _ys, _hs, _brs = self._vp_segments(rows, self._vp_mode, float(lo_i), float(hi_i - lo_i), thick)
+        if not _ws:
+            self._hide_selection_vp(); return
+        self.bc_sel_vp.setOpts(x0=_x0s, width=_ws, y=_ys, height=_hs, brushes=_brs)
         self.bc_sel_vp.setVisible(True)
         raw = {}                                               # raw b+s ladder -> POC / value area / median
         for b in sel:
@@ -5976,24 +6154,65 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             self._show_arch_status("cloud fetch failed — check gsutil / gcloud auth", err=True, timeout=7000)
 
+    def _center_over_plot(self, widget) -> None:
+        """Place `widget` (a child of the main window) at the exact CENTRE of the chart, raised above the drawing
+        toolbar and every other overlay."""
+        widget.adjustSize()
+        tl = self.plot.mapTo(self, QtCore.QPoint(0, 0))
+        widget.move(tl.x() + (self.plot.width() - widget.width()) // 2,
+                    tl.y() + (self.plot.height() - widget.height()) // 2)
+        widget.show(); widget.raise_()
+
+    def _show_status_backdrop(self) -> None:
+        """Blur + dim the chart behind a centred system message so it reads even under the drawing toolbar. Cheap
+        downscale/upscale blur of a ONE-SHOT snapshot + a dark tint; a child of the WINDOW so it covers the toolbar
+        too. Idempotent: keeps the existing snapshot while a message is already up (no re-capture of the message)."""
+        if getattr(self, "_status_scrim", None) is None:
+            self._status_scrim = QtWidgets.QLabel(self)
+            self._status_scrim.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        scrim = self._status_scrim
+        if scrim.isVisible():
+            return
+        w, h = self.plot.width(), self.plot.height()
+        if w <= 0 or h <= 0:
+            return
+        pix = self.plot.grab()                                          # snapshot of the current chart (scrim/msg hidden)
+        small = pix.scaled(max(1, w // 12), max(1, h // 12), QtCore.Qt.IgnoreAspectRatio, QtCore.Qt.SmoothTransformation)
+        blur = small.scaled(w, h, QtCore.Qt.IgnoreAspectRatio, QtCore.Qt.SmoothTransformation)   # gaussian-ish blur
+        _p = QtGui.QPainter(blur); _p.fillRect(blur.rect(), QtGui.QColor(10, 12, 16, 150)); _p.end()   # dark tint
+        scrim.setPixmap(blur)
+        tl = self.plot.mapTo(self, QtCore.QPoint(0, 0))
+        scrim.setGeometry(tl.x(), tl.y(), w, h)
+        scrim.show(); scrim.raise_()
+
+    def _maybe_hide_status_backdrop(self) -> None:
+        """Drop the blurred backdrop once NO centred system message is on screen."""
+        a = getattr(self, "arch_status", None); c = getattr(self, "_conn_banner", None)
+        if (a is None or not a.isVisible()) and (c is None or not c.isVisible()):
+            s = getattr(self, "_status_scrim", None)
+            if s is not None:
+                s.hide()
+
     def _show_arch_status(self, text: str, err: bool = False, timeout: int = 0) -> None:
-        """Small top-center overlay on the chart while history is being fetched (blue) or on failure (red)."""
+        """Centred system message over a blurred chart while history is being fetched (blue) or on failure (red)."""
         if getattr(self, "arch_status", None) is None:
-            self.arch_status = QtWidgets.QLabel("", self.plot)
+            self.arch_status = QtWidgets.QLabel("", self)   # child of the WINDOW -> rises above the drawing toolbar
             self.arch_status.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+            self.arch_status.setAlignment(QtCore.Qt.AlignCenter)
         col = "#ff6b6b" if err else "#7ec2ff"
         self.arch_status.setStyleSheet(
-            "QLabel{color:%s; background:rgba(18,18,18,215); padding:5px 12px; border:1px solid %s;"
-            "border-radius:6px; font-family:Consolas; font-size:12px; font-weight:bold;}" % (col, col))
-        self.arch_status.setText(text); self.arch_status.adjustSize()
-        self.arch_status.move(max(8, (self.plot.width() - self.arch_status.width()) // 2), 10)
-        self.arch_status.show(); self.arch_status.raise_()
+            "QLabel{color:%s; background:rgba(18,20,26,235); padding:14px 24px; border:1px solid %s;"
+            "border-radius:10px; font-family:Consolas; font-size:15px; font-weight:bold;}" % (col, col))
+        self.arch_status.setText(text)
+        self._show_status_backdrop()
+        self._center_over_plot(self.arch_status)
         if timeout > 0:
             QtCore.QTimer.singleShot(timeout, self._hide_arch_status)
 
     def _hide_arch_status(self) -> None:
         if getattr(self, "arch_status", None) is not None:
             self.arch_status.hide()
+        self._maybe_hide_status_backdrop()
 
     def _vb_wheel(self, ev, axis=None):
         """Modifier wheel over the chart: Ctrl -> nudge the Scan Start anchor ±1 min (consumed, no
@@ -6828,6 +7047,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         wb = self._scan_handles.get("bc_whisker")
         if wb is not None:
             wb.set_view(nx0, nx1)
+        fpc = self._scan_handles.get("bc_fpcandle")
+        if fpc is not None:
+            fpc.set_view(nx0, nx1)
+        dc = self._scan_handles.get("bc_deltacandle")
+        if dc is not None:
+            dc.set_view(nx0, nx1)
+        fcc = self._scan_handles.get("bc_forcecandle")
+        if fcc is not None:
+            fcc.set_view(nx0, nx1)
+        dfc = self._scan_handles.get("bc_deltaforce")
+        if dfc is not None:
+            dfc.set_view(nx0, nx1)
         if self._z4_last_buckets:                            # keep the 4h V/Z buttons glued just above the axis on
             try:                                             # a manual zoom/pan (their y is view-relative)
                 self._draw_4h_zone(self._z4_last_buckets)
@@ -7882,28 +8113,67 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._scan_handles["bc_baseline"] = self._add_scanner_item(
                 pg.PlotCurveItem(pen=pg.mkPen((180, 180, 180, 150), width=1.5,
                                               style=QtCore.Qt.DashLine)))
-        # vx0/vx1: viewport cull — paint ONLY the visible candles (O(visible), not O(N)).
-        # 'W' render mode: volume-quantile whisker bars (batched WhiskerBarItem; quantiles from the #3
-        # cache, so ZERO extra per-frame compute). DEGRADATION: bar px width is uniform across the view
-        # (linear x), so below ~3 px/bar the WHOLE view falls back to candles (boxes would smear);
-        # ladder-less buckets (NaN quantiles) always fall back to candles individually.
+        # vx0/vx1: viewport cull — paint ONLY the visible candles (O(visible), not O(N)). 'W' cycles the render
+        # mode: 0 normal candles -> 1 volume-quantile WHISKER bars -> 2 FOOTPRINT candles (each bucket a mini
+        # centred buy/sell volume profile, like the live pane). Both alt modes use the #3 cache / per-bucket ladder
+        # (no extra per-frame compute) + viewport cull. DEGRADATION: below the per-mode px/bar floor the WHOLE view
+        # falls back to candles; ladder-less buckets fall back individually.
         if "bc_whisker" not in self._scan_handles:
             self._scan_handles["bc_whisker"] = self._add_scanner_item(WhiskerBarItem())
+        if "bc_fpcandle" not in self._scan_handles:
+            self._scan_handles["bc_fpcandle"] = self._add_scanner_item(FootprintCandleItem())
+        if "bc_deltacandle" not in self._scan_handles:
+            self._scan_handles["bc_deltacandle"] = self._add_scanner_item(DeltaCandleItem())
+        if "bc_forcecandle" not in self._scan_handles:
+            self._scan_handles["bc_forcecandle"] = self._add_scanner_item(ForceCandleItem())
+        if "bc_deltaforce" not in self._scan_handles:
+            self._scan_handles["bc_deltaforce"] = self._add_scanner_item(DeltaForceCandleItem())
         _wb = self._scan_handles["bc_whisker"]
+        _fpc = self._scan_handles["bc_fpcandle"]; _dc = self._scan_handles["bc_deltacandle"]
+        _fcc = self._scan_handles["bc_forcecandle"]; _dfc = self._scan_handles["bc_deltaforce"]
         _wq_lo, _wq_med, _wq_hi = arr["vq_lo"], arr["vq_med"], arr["vq_hi"]
-        if self.show_whisker and (px_per_x * 0.8) >= 3.0:
+        _cw = px_per_x * 0.8                                                # on-screen candle width in px
+        _force_items = (_fcc, _dfc)                                         # per-level modes that take a forces list
+
+        def _blank_fp(active=None):                                        # free the per-level candle pictures (except `active`)
+            for _it in (_fpc, _dc, _fcc, _dfc):
+                if _it is not active:
+                    _it.setVisible(False)
+                    _it.update_data([], [], [], [], []) if _it in _force_items else _it.update_data([], [], [], [])
+
+        def _fallback_candles(idxs):                                       # draw only the given (ladder-less) buckets
+            self._scan_handles["bc_candles"].update_data(
+                [x[i] for i in idxs], [opens[i] for i in idxs], [highs[i] for i in idxs],
+                [lows[i] for i in idxs], [closes[i] for i in idxs],
+                [brushes[i] for i in idxs], [wick_pens[i] for i in idxs], 0.8, vx0, vx1)
+
+        if self._hide_candles:                                             # Ctrl+H — hide every candle glyph (VP / zones only)
+            self._scan_handles["bc_candles"].update_data([], [], [], [], [], [], [])
+            _wb.setVisible(False); _wb.update_data([], [], [], [], [], [], [], [])
+            _blank_fp()
+        elif self._candle_mode in (2, 3, 4, 5) and _cw >= config.FP_CANDLE_MIN_PX:   # per-level candle modes
+            _ll = [b.get("levels") or {} for b in buckets]
+            if self._candle_mode in (4, 5):                               # FORCE (4) / DELTA-FORCE (5): need the 4-vector
+                _fl = [(float(b.get("opL", 0.0)), float(b.get("opS", 0.0)),
+                        float(b.get("clL", 0.0)), float(b.get("clS", 0.0))) for b in buckets]
+                _on = _fcc if self._candle_mode == 4 else _dfc
+                _on.update_data(x, _ll, _fl, highs, lows, 0.8, vx0, vx1); _on.setVisible(True)
+            else:                                                         # FOOTPRINT (2) / DELTA (3)
+                _on = _fpc if self._candle_mode == 2 else _dc
+                _on.update_data(x, _ll, highs, lows, config.FOOTPRINT_IMB_ER_MULT, 0.8, vx0, vx1); _on.setVisible(True)
+            _blank_fp(active=_on)                                          # hide the other per-level items
+            _wb.setVisible(False); _wb.update_data([], [], [], [], [], [], [], [])
+            _fallback_candles([i for i in range(len(x)) if not _ll[i]])    # ladder-less bucket -> normal candle
+        elif self._candle_mode == 1 and _cw >= 3.0:                        # WHISKER bars
+            _blank_fp()
             _wb.update_data(x, _wq_lo, _wq_med, _wq_hi, highs, lows, opens, closes,
                             brushes, wick_pens, 0.8, vx0, vx1,
                             show_med=self.menu.layer_state("m10_poc"))   # median rides the 'P' POC toggle
             _wb.setVisible(True)
-            _fi = [i for i in range(len(x)) if _wq_med[i] != _wq_med[i]]   # NaN ladder -> candle fallback
-            self._scan_handles["bc_candles"].update_data(
-                [x[i] for i in _fi], [opens[i] for i in _fi], [highs[i] for i in _fi],
-                [lows[i] for i in _fi], [closes[i] for i in _fi],
-                [brushes[i] for i in _fi], [wick_pens[i] for i in _fi], 0.8, vx0, vx1)
-        else:
-            _wb.setVisible(False)
-            _wb.update_data([], [], [], [], [], [], [], [])                 # free the picture
+            _fallback_candles([i for i in range(len(x)) if _wq_med[i] != _wq_med[i]])   # NaN ladder -> candle fallback
+        else:                                                              # NORMAL candles
+            _wb.setVisible(False); _wb.update_data([], [], [], [], [], [], [], [])   # free the pictures
+            _blank_fp()
             self._scan_handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
         self._scan_handles["bc_baseline"].setData(x, baseline_arr)   # gray dashed POC-center baseline (KEPT)
         # liquidity-sweep labels (Ctrl+L) — cull-to-visible, density-floored, capped, bounded pool; timed as
@@ -7939,6 +8209,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # KC bands from the #3 cache (sequential fold extended once per close — was a full O(N) walk per frame)
         self._scan_handles["kc_upper"].setData(x, arr["kc_up"])
         self._scan_handles["kc_lower"].setData(x, arr["kc_lo"])
+        self._scan_handles["kc_upper"].setVisible(not self._hide_candles)   # Ctrl+H hides the KC with the candles
+        self._scan_handles["kc_lower"].setVisible(not self._hide_candles)
 
         # --- STAGE 0: true per-bucket POC marker (gold dot) — rides the whole DETAIL regime ---
         # poc_price is already finalized in every BucketSnapshot (and computed on the fly for the
@@ -8027,8 +8299,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     bxs += [xi - hw, xi + hw]; bys += [yy, yy]
         self._scan_handles["bc_imb_sell"].setData(sxs, sys_, connect="pairs")
         self._scan_handles["bc_imb_buy"].setData(bxs, bys, connect="pairs")
-        self._scan_handles["bc_imb_sell"].setVisible(True)
-        self._scan_handles["bc_imb_buy"].setVisible(True)
+        _imb_vis = not self._hide_candles                     # Ctrl+H hides the abnormal-order lines with the candles
+        self._scan_handles["bc_imb_sell"].setVisible(_imb_vis)
+        self._scan_handles["bc_imb_buy"].setVisible(_imb_vis)
 
         if self.menu.layer_state("m10_footprint"):
             if "bc_fp" not in self._scan_handles:
@@ -8201,6 +8474,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         main_xr = self.plot.getViewBox().viewRange()[0]
         self.lower_plot.getViewBox().setXRange(main_xr[0], main_xr[1], padding=0)
 
+        # Live footprint side pane: redraw the FORMING candle's developing footprint (sig-cached on its
+        # curr_vol + level count, so it only re-renders when the live bucket actually changed).
+        if self._fp_want and self.fp_panel.isVisible():
+            _ab = (self._last_snap or {}).get("active_bucket") or {}
+            _fsig = (round(float(_ab.get("curr_vol", 0.0)), 3), len(_ab.get("levels") or {}))
+            if _fsig != self._fp_sig:
+                self._fp_sig = _fsig
+                _spot = closes[-1] if closes else _ab.get("close")   # current price -> the dashed line
+                # trailing-30 buyer/seller E/R of the live-edge bucket -> the SAME abnormal-order threshold the chart
+                # uses for its blue/orange imbalance lines, so the panel highlights exactly the same levels.
+                _b30 = ber30s[-1] if ber30s else None; _s30 = ser30s[-1] if ser30s else None
+                self.fp_panel.update_footprint(_ab, config.FOOTPRINT_IMB_ER_MULT, _spot, _b30, _s30)
+
 
     # ------------------------------------------------------------------
     def resizeEvent(self, event) -> None:
@@ -8227,16 +8513,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self._conn_down_s:
                 self._conn_down_s = 0
                 self._conn_banner.hide()
+                self._maybe_hide_status_backdrop()
             return
         self._conn_down_s += 1
         if self._conn_down_s >= 2:                       # ignore sub-2s blips
             dots = "." * (self._conn_down_s % 4)
             self._conn_banner.setText("⟳ CONNECTION LOST — reconnecting%s  (down %ds)"
                                       % (dots, self._conn_down_s))
-            self._conn_banner.adjustSize()
-            self._conn_banner.move(max(8, (self.plot.width() - self._conn_banner.width()) // 2), 8)
-            self._conn_banner.show()
-            self._conn_banner.raise_()
+            self._show_status_backdrop()                 # blur the chart behind the centred banner (idempotent)
+            self._center_over_plot(self._conn_banner)    # dead-centre, above the drawing toolbar
         if self._conn_down_s % 5 == 0:                   # heal attempt every 5s while down
             try:
                 if _TUNNEL is not None:

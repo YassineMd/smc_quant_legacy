@@ -244,11 +244,17 @@ DOM_BIN_STEP = 0.01             # spec §8.1 — depth aggregation bin
 # Analytics thresholds (spec §4)
 FOOTPRINT_UNPACK_PX = 35        # vertical grid spacing to unpack side-by-side rows (§4.1.1)
 IMBALANCE_RATIO = 2.0           # diagonal imbalance multiplier (§4.1.1)
+FP_CANDLE_MIN_PX = 6.0           # 'W' footprint-candle mode: below this on-screen candle width (px) the view
+#                                  falls back to normal candles (the per-level bars would smear thinner than a pixel)
 FOOTPRINT_IMB_ER_MULT = 1.0      # Mode-10 footprint imbalance: a price level's buy (or sell) volume
                                  # >= this x the bucket's 30b buyer (or seller) E/R baseline (trailing-30
                                  # mean) -> imbalance. Cues: the footprint NUMBER inverts to black-on-neon
                                  # (green buy / red sell) + a candle-WIDTH horizontal line just below the
                                  # number (wick-thin; neon blue = buyer / neon orange = seller). NOT a signal.
+# 4h abnormal-order overlay (the 'B' button next to V/Z): a price level in the 4h bucket's ladder is flagged when
+# its buy (or sell) volume >= this x the 4h bucket's AVERAGE per-level buy (or sell) volume. Higher than the 1m mult
+# because a 4h ladder spans many more levels, so only the genuine STANDOUT orders should light up.
+FOOTPRINT_IMB_ER_MULT_4H = 3.0
 IMBALANCE_OPACITY = (0.35, 0.95)  # min/max highlight opacity (§4.1.1)
 STACKED_IMBALANCE_MIN = 3       # consecutive rows to form a channel (§4.1.2)
 

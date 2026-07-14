@@ -26,6 +26,7 @@ import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import config
+from .chart_widgets import RoundedTextItem
 
 TOOLS = ["select", "magic_select", "trend", "ray", "hline", "vline", "rect", "ellipse",
          "measure", "long", "short", "eraser", "delete_all"]
@@ -284,16 +285,19 @@ class PositionBracket(QtCore.QObject):
         self.right_line = self._mk_edge(x1)
 
         # anchor (1,1): text bottom-right pinned to label_x -> flush against the
-        # right Y-axis margin when label_x tracks the view edge (patch §17).
-        self.label = pg.TextItem(anchor=(1, 1))
+        # right Y-axis margin when label_x tracks the view edge (patch §17). Rounded dark pill (modern card look).
+        self.label = RoundedTextItem(anchor=(1, 1), fill=pg.mkBrush(22, 24, 30, 240),
+                                      border=pg.mkPen((90, 96, 110), width=1))
         self.label.setZValue(70)
         plot.addItem(self.label, ignoreBounds=True)
 
-        # Right-anchored per-line value labels (bold value; SL/TP also show % vs entry).
-        # Replaces the InfiniteLine built-in left-side labels.
+        # Per-line value labels as rounded dark PILLS with the line's own colour (SL red / Entry blue / TP green),
+        # replacing the old plain white boxes. SL/TP also show % vs entry.
         self._val_labels = {}
+        _bord = {"SL": (231, 76, 60), "Entry": (41, 98, 255), "TP": (26, 188, 156)}
         for nm in ("SL", "Entry", "TP"):
-            t = pg.TextItem(anchor=(0.5, 0.5), fill=pg.mkBrush(255, 255, 255))
+            t = RoundedTextItem(anchor=(0.5, 0.5), fill=pg.mkBrush(22, 24, 30, 240),
+                                 border=pg.mkPen(_bord[nm], width=1))
             t.setZValue(70)
             plot.addItem(t, ignoreBounds=True)
             self._val_labels[nm] = t
@@ -351,15 +355,15 @@ class PositionBracket(QtCore.QObject):
         # top label: the R:R ratio only (E/T/S values now live in the right-side labels)
         self.label.setText(f"1 : {rr:.2f}", color=col)
         self.label.setPos(self.label_x, max(e, s, t))
-        # centered value labels — black bold text on a white bg; SL always shows a
+        # centered value labels — line-coloured bold text on the rounded dark pill; SL always shows a
         # negative % and TP a positive % (risk vs reward), regardless of long/short
         xc = (self.x0 + self.x1) / 2.0
         sl_pct = abs(s - e) / e * 100.0 if e else 0.0
         tp_pct = abs(t - e) / e * 100.0 if e else 0.0
-        _st = "color:#000000;font-size:14px"
-        self._val_labels["SL"].setHtml(f"<span style='{_st}'><b>{s:.2f}</b> (-{sl_pct:.2f}%)</span>")
-        self._val_labels["Entry"].setHtml(f"<span style='{_st}'><b>{e:.2f}</b></span>")
-        self._val_labels["TP"].setHtml(f"<span style='{_st}'><b>{t:.2f}</b> (+{tp_pct:.2f}%)</span>")
+        _f = "font-size:13px"
+        self._val_labels["SL"].setHtml(f"<span style='color:#ff8a80;{_f}'><b>{s:.2f}</b> (-{sl_pct:.2f}%)</span>")
+        self._val_labels["Entry"].setHtml(f"<span style='color:#82b1ff;{_f}'><b>{e:.2f}</b></span>")
+        self._val_labels["TP"].setHtml(f"<span style='color:#69f0ae;{_f}'><b>{t:.2f}</b> (+{tp_pct:.2f}%)</span>")
         self._val_labels["SL"].setPos(xc, s)
         self._val_labels["Entry"].setPos(xc, e)
         self._val_labels["TP"].setPos(xc, t)

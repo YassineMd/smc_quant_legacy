@@ -148,6 +148,11 @@ SCANNER_LABELS = {
     "depth_heatmap": "Heatmap",
 }
 
+# Candle render modes (index = _candle_mode; also cycled by 'W').
+CANDLE_MODE_LABELS = ["Normal candles", "Whisker bars", "Footprint", "Delta", "Force", "Delta-Force"]
+# Volume-profile render modes (index = _vp_mode; drives the Mode-10 selection VP + the 4h 'V' overlay).
+VP_MODE_LABELS = ["Basic", "Force", "Split Basic", "Split Basic Delta", "Split Force", "Split Force Delta"]
+
 
 class _WheelSlider(QtWidgets.QSlider):
     """Slider that steps a fixed amount per wheel notch (patch §15)."""
@@ -217,6 +222,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     replayToggled = QtCore.Signal(bool)   # Replay Mode on/off (default OFF; chart replays from the Start Date)
     swingSensitivityChanged = QtCore.Signal(float)   # swing-ZigZag threshold slider, in PERCENT
     keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
+    candleModeChanged = QtCore.Signal(int)   # candle render mode 0..5 (also cycled by 'W')
+    vpModeChanged = QtCore.Signal(int)       # volume-profile render mode 0..5 (selection VP + 4h 'V')
     helpRequested = QtCore.Signal()       # the top-right '?' — show the keyboard-shortcuts cheatsheet
 
     PANEL_WIDTH = 308
@@ -294,6 +301,26 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             lambda _i: self.tfChanged.emit(self.tf_combo.currentData()))
         root.addWidget(self.tf_combo)
 
+        # --- candle render mode (mirrors the 'W' key cycle; either changes the other) ---
+        root.addWidget(self._header("Candle Mode"))
+        self.candle_combo = QtWidgets.QComboBox()
+        for i, lbl in enumerate(CANDLE_MODE_LABELS):
+            self.candle_combo.addItem(lbl, i)
+        self.candle_combo.setToolTip("How each bucket candle is drawn. Also cycled with the 'W' key.")
+        self.candle_combo.currentIndexChanged.connect(
+            lambda _i: self.candleModeChanged.emit(int(self.candle_combo.currentData())))
+        root.addWidget(self.candle_combo)
+
+        # --- volume-profile render mode (drives BOTH the Mode-10 selection VP and the 4h 'V' overlay) ---
+        root.addWidget(self._header("Volume Profile Mode"))
+        self.vp_combo = QtWidgets.QComboBox()
+        for i, lbl in enumerate(VP_MODE_LABELS):
+            self.vp_combo.addItem(lbl, i)
+        self.vp_combo.setToolTip("How volume profiles are drawn — applies to the Mode-10 selection VP and the 4h 'V' overlay.")
+        self.vp_combo.currentIndexChanged.connect(
+            lambda _i: self.vpModeChanged.emit(int(self.vp_combo.currentData())))
+        root.addWidget(self.vp_combo)
+
         # --- order-flow scanner mode (patch §12) ---
         root.addWidget(self._header("Scanner Mode"))
         self.scanner_combo = QtWidgets.QComboBox()
@@ -366,6 +393,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         # Alerts moved to a dedicated floating 🔔 button (fix #8) — not here.
         for key, label in [("drawing", "Vector Drawing Toolbar"),
                            ("cob", "Order Book DOM Ladder"),
+                           ("fp_pane", "Live Footprint Pane"),   # right-docked forming-candle footprint (Mode 10)
                            ("audio", "OB/Iceberg Alert"),
                            ("pivot_audio", "Pivot Alert")]:      # OWN voice, independent of the OB/Iceberg alert
             cb = QtWidgets.QCheckBox(label)
@@ -451,6 +479,18 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.kc_slider.setValue(int(round(max(1.0, min(config.KELTNER_SCALE_MAX, float(s))) * 10)))
         self.kc_slider.blockSignals(False)
         self._render_kc_lbl()
+
+    def set_candle_mode(self, m: int) -> None:
+        """Sync the Candle-Mode dropdown to `m` WITHOUT emitting (used when 'W' cycles it or on restore)."""
+        self.candle_combo.blockSignals(True)
+        self.candle_combo.setCurrentIndex(int(m) % self.candle_combo.count())
+        self.candle_combo.blockSignals(False)
+
+    def set_vp_mode(self, m: int) -> None:
+        """Sync the Volume-Profile-Mode dropdown to `m` WITHOUT emitting (on restore)."""
+        self.vp_combo.blockSignals(True)
+        self.vp_combo.setCurrentIndex(int(m) % self.vp_combo.count())
+        self.vp_combo.blockSignals(False)
 
     # ------------------------------------------------------------------
     def _emit_multiplier(self, raw: int) -> None:

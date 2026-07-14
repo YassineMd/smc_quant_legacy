@@ -33,6 +33,27 @@ _MONO = QtGui.QFont("Consolas", 9)
 _MONO.setBold(True)
 
 
+class RoundedTextItem(pg.TextItem):
+    """A pg.TextItem whose background is a PADDED, ROUNDED pill (modern card look) instead of the default sharp box.
+    Pass fill=/border= like pg.TextItem; the text (a child QGraphicsTextItem) paints itself on top. `pad`/`radius`
+    size the pill; when there is no fill AND no border it draws exactly like a plain TextItem (just the text)."""
+
+    def __init__(self, *args, pad: float = 5.0, radius: float = 7.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pad = float(pad)
+        self._radius = float(radius)
+
+    def boundingRect(self):
+        return super().boundingRect().adjusted(-self._pad, -self._pad, self._pad, self._pad)
+
+    def paint(self, p, *args):
+        if self.fill.style() != QtCore.Qt.NoBrush or self.border.style() != QtCore.Qt.NoPen:
+            p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+            p.setPen(self.border)
+            p.setBrush(self.fill)
+            p.drawRoundedRect(self.boundingRect(), self._radius, self._radius)
+
+
 # ---------------------------------------------------------------------------
 # Pooled text labels — the ONLY correct way to draw chart text
 # ---------------------------------------------------------------------------
@@ -94,7 +115,7 @@ class TextPool:
         if self._plot is None or not self._enabled:
             return
         while len(self.items) < len(specs):
-            ti = pg.TextItem(anchor=self.anchor)
+            ti = RoundedTextItem(anchor=self.anchor, pad=2.5, radius=4.5)   # imbalance highlights render as rounded pills
             ti.textItem.setFont(self.font)
             ti.setZValue(self.z)
             self._plot.addItem(ti, ignoreBounds=True)
@@ -828,6 +849,436 @@ class WhiskerBarItem(pg.GraphicsObject):
             p.setPen(self._ocpen_g if c[i] >= o[i] else self._ocpen_r)
             p.drawLine(QtCore.QPointF(xi - tick_w, o[i]), QtCore.QPointF(xi, o[i]))
             p.drawLine(QtCore.QPointF(xi, c[i]), QtCore.QPointF(xi + tick_w, c[i]))
+        p.end()
+
+    def paint(self, p, *args):
+        p.drawPicture(0, 0, self.picture)
+
+    def boundingRect(self):
+        return self._rect
+
+
+_FPC_BUY = (46, 204, 113); _FPC_SELL = (231, 76, 60)          # footprint-candle bar colours (match the live pane)
+_FPC_BUY_HOT = (0, 255, 127); _FPC_SELL_HOT = (255, 45, 70)   # imbalanced rows -> neon
+
+
+class FootprintCandleItem(pg.GraphicsObject):
+    """Per-candle FOOTPRINT render mode (the 3rd 'W' stage): each bucket is drawn as a mini centred volume profile
+    — SELL (red) bars extend LEFT of the candle centre, BUY (green) RIGHT, one row per price level, each scaled to
+    fill the candle's half-width (so every candle's profile is legible). Rows whose buy/sell volume is >= mult x the
+    candle's AVERAGE per-level volume go NEON (imbalance), exactly like the live footprint pane. A faint grey wick
+    marks the high-low range. Same batched QPicture + viewport-cull + set_view architecture as BucketCandleItem, so
+    a ladder-less bucket paints nothing here and is drawn by the normal candle item as a fallback."""
+
+    def __init__(self):
+        super().__init__()
+        self.picture = QtGui.QPicture()
+        self._rect = QtCore.QRectF()
+        self._wick = QtGui.QPen(QtGui.QColor(136, 136, 136, 130)); self._wick.setCosmetic(True)
+        self._x = []; self._levels = []; self._h = []; self._l = []
+        self._width = 0.8; self._mult = 1.0
+        self._vx0, self._vx1 = float("-inf"), float("inf")
+
+    def update_data(self, x, levels_list, highs, lows, mult=1.0, width=0.8, x0=None, x1=None):
+        self._x = x; self._levels = levels_list; self._h = highs; self._l = lows
+        self._mult = mult; self._width = width
+        if not x:
+            self.picture = QtGui.QPicture(); self._rect = QtCore.QRectF()
+            self.prepareGeometryChange(); self.update(); return
+        half = width / 2.0
+        lo_all, hi_all = min(lows), max(highs)
+        span = (hi_all - lo_all) if hi_all > lo_all else 1.0
+        self._rect = QtCore.QRectF(float(x[0]) - half, lo_all,
+                                   float(x[-1]) - float(x[0]) + width, span)
+        self._vx0 = float("-inf") if x0 is None else float(x0)
+        self._vx1 = float("inf") if x1 is None else float(x1)
+        self._build_picture()
+        self.prepareGeometryChange()
+        self.informViewBoundsChanged()
+        self.update()
+
+    def set_view(self, x0, x1):
+        """Cheap viewport re-cull on manual pan/zoom (no geometry-change signals — see BucketCandleItem)."""
+        if not self._x:
+            return
+        self._vx0, self._vx1 = float(x0), float(x1)
+        self._build_picture()
+        self.update()
+
+    def _build_picture(self):
+        x, levels, h, l = self._x, self._levels, self._h, self._l
+        width = self._width; half = width / 2.0; mult = self._mult
+        x0v, x1v = self._vx0, self._vx1
+        self.picture = QtGui.QPicture()
+        p = QtGui.QPainter(self.picture)
+        for i in range(len(x)):
+            xi = float(x[i])
+            if xi < x0v - width or xi > x1v + width:      # CULL to the visible X viewport (+1 width margin)
+                continue
+            p.setPen(self._wick)                          # faint high-low range wick at the candle centre
+            p.drawLine(QtCore.QPointF(xi, float(l[i])), QtCore.QPointF(xi, float(h[i])))
+            p.setPen(QtCore.Qt.NoPen)
+            lv = levels[i] if i < len(levels) else None
+            if not lv:
+                continue
+            rows = []
+            for ps, v in lv.items():
+                try:
+                    pr = float(ps)
+                except (TypeError, ValueError):
+                    continue
+                bb = float(v.get("b", 0.0)); ss = float(v.get("s", 0.0))
+                if bb + ss > 0:
+                    rows.append((pr, bb, ss))
+            if not rows:
+                continue
+            rows.sort(key=lambda r: r[0])
+            n = len(rows)
+            mx = max(max(bb, ss) for _, bb, ss in rows) or 1.0
+            tb = sum(bb for _, bb, _ in rows); ts = sum(ss for _, _, ss in rows)
+            bthr = mult * (tb / n) if tb > 0 else None
+            sthr = mult * (ts / n) if ts > 0 else None
+            if n > 1:
+                gaps = sorted(rows[k + 1][0] - rows[k][0] for k in range(n - 1))
+                bh = gaps[len(gaps) // 2] or ((rows[-1][0] - rows[0][0]) / n)
+            else:
+                bh = config.TICK_SIZE
+            for pr, bb, ss in rows:
+                y = pr - bh / 2.0
+                if ss > 0:
+                    hot = sthr is not None and ss >= sthr
+                    col = QtGui.QColor(*(_FPC_SELL_HOT if hot else _FPC_SELL)); col.setAlphaF(0.92 if hot else 0.58)
+                    w = (ss / mx) * half
+                    p.setBrush(col); p.drawRect(QtCore.QRectF(xi - w, y, w, bh))
+                if bb > 0:
+                    hot = bthr is not None and bb >= bthr
+                    col = QtGui.QColor(*(_FPC_BUY_HOT if hot else _FPC_BUY)); col.setAlphaF(0.92 if hot else 0.58)
+                    w = (bb / mx) * half
+                    p.setBrush(col); p.drawRect(QtCore.QRectF(xi, y, w, bh))
+        p.end()
+
+    def paint(self, p, *args):
+        p.drawPicture(0, 0, self.picture)
+
+    def boundingRect(self):
+        return self._rect
+
+
+class DeltaCandleItem(pg.GraphicsObject):
+    """Per-candle DELTA-FOOTPRINT render mode (the 4th 'W' stage): each bucket is a mini centred DELTA profile —
+    one bar per price level showing the NET delta (buy - sell). Net-buy levels draw GREEN to the RIGHT of centre,
+    net-sell RED to the LEFT, each scaled to the candle's largest |delta| so the profile fills its width. Levels
+    whose |delta| is >= mult x the candle's AVERAGE |delta| go NEON (the dominant aggression). A faint grey wick
+    marks the high-low range. Same batched QPicture + viewport-cull + set_view architecture as FootprintCandleItem;
+    a ladder-less bucket paints nothing here (the normal candle item draws it as a fallback)."""
+
+    def __init__(self):
+        super().__init__()
+        self.picture = QtGui.QPicture()
+        self._rect = QtCore.QRectF()
+        self._wick = QtGui.QPen(QtGui.QColor(136, 136, 136, 130)); self._wick.setCosmetic(True)
+        self._x = []; self._levels = []; self._h = []; self._l = []
+        self._width = 0.8; self._mult = 1.0
+        self._vx0, self._vx1 = float("-inf"), float("inf")
+
+    def update_data(self, x, levels_list, highs, lows, mult=1.0, width=0.8, x0=None, x1=None):
+        self._x = x; self._levels = levels_list; self._h = highs; self._l = lows
+        self._mult = mult; self._width = width
+        if not x:
+            self.picture = QtGui.QPicture(); self._rect = QtCore.QRectF()
+            self.prepareGeometryChange(); self.update(); return
+        half = width / 2.0
+        lo_all, hi_all = min(lows), max(highs)
+        span = (hi_all - lo_all) if hi_all > lo_all else 1.0
+        self._rect = QtCore.QRectF(float(x[0]) - half, lo_all,
+                                   float(x[-1]) - float(x[0]) + width, span)
+        self._vx0 = float("-inf") if x0 is None else float(x0)
+        self._vx1 = float("inf") if x1 is None else float(x1)
+        self._build_picture()
+        self.prepareGeometryChange()
+        self.informViewBoundsChanged()
+        self.update()
+
+    def set_view(self, x0, x1):
+        """Cheap viewport re-cull on manual pan/zoom (no geometry-change signals — see BucketCandleItem)."""
+        if not self._x:
+            return
+        self._vx0, self._vx1 = float(x0), float(x1)
+        self._build_picture()
+        self.update()
+
+    def _build_picture(self):
+        x, levels, h, l = self._x, self._levels, self._h, self._l
+        width = self._width; half = width / 2.0; mult = self._mult
+        x0v, x1v = self._vx0, self._vx1
+        self.picture = QtGui.QPicture()
+        p = QtGui.QPainter(self.picture)
+        for i in range(len(x)):
+            xi = float(x[i])
+            if xi < x0v - width or xi > x1v + width:      # CULL to the visible X viewport (+1 width margin)
+                continue
+            p.setPen(self._wick)                          # faint high-low range wick at the candle centre
+            p.drawLine(QtCore.QPointF(xi, float(l[i])), QtCore.QPointF(xi, float(h[i])))
+            p.setPen(QtCore.Qt.NoPen)
+            lv = levels[i] if i < len(levels) else None
+            if not lv:
+                continue
+            rows = []          # (price, delta) per level; skip balanced levels (delta == 0)
+            for ps, v in lv.items():
+                try:
+                    pr = float(ps)
+                except (TypeError, ValueError):
+                    continue
+                d = float(v.get("b", 0.0)) - float(v.get("s", 0.0))
+                if d != 0.0:
+                    rows.append((pr, d))
+            if not rows:
+                continue
+            rows.sort(key=lambda r: r[0])
+            n = len(rows)
+            mx = max(abs(d) for _, d in rows) or 1.0
+            avg = (sum(abs(d) for _, d in rows) / n) if n else 0.0
+            thr = mult * avg if avg > 0 else None
+            prices = [r[0] for r in rows]
+            if n > 1:
+                gaps = sorted(prices[k + 1] - prices[k] for k in range(n - 1))
+                bh = gaps[len(gaps) // 2] or ((prices[-1] - prices[0]) / n)
+            else:
+                bh = config.TICK_SIZE
+            for pr, d in rows:
+                y = pr - bh / 2.0
+                hot = thr is not None and abs(d) >= thr
+                w = (abs(d) / mx) * half
+                if d > 0:
+                    col = QtGui.QColor(*(_FPC_BUY_HOT if hot else _FPC_BUY)); col.setAlphaF(0.92 if hot else 0.58)
+                    p.setBrush(col); p.drawRect(QtCore.QRectF(xi, y, w, bh))
+                else:
+                    col = QtGui.QColor(*(_FPC_SELL_HOT if hot else _FPC_SELL)); col.setAlphaF(0.92 if hot else 0.58)
+                    p.setBrush(col); p.drawRect(QtCore.QRectF(xi - w, y, w, bh))
+        p.end()
+
+    def paint(self, p, *args):
+        p.drawPicture(0, 0, self.picture)
+
+    def boundingRect(self):
+        return self._rect
+
+
+# 4-vector force colours (match the 4h VP force histogram): opL green / opS red / clL magenta / clS cyan
+_FC_OPL = (40, 230, 90); _FC_OPS = (255, 55, 70); _FC_CLL = (235, 70, 255); _FC_CLS = (0, 210, 255)
+
+
+class ForceCandleItem(pg.GraphicsObject):
+    """Per-candle FORCE-FOOTPRINT render mode (the 5th 'W' stage): the footprint candle, but each side split into
+    its two order-flow FORCES via the bucket's own ratios (exactly as the 4h VP force histogram does) so a plain
+    red/green bar becomes four colours telling you WHAT happened at each level. A level's BUY volume splits into
+    opL (OPEN-long, GREEN) + clS (short-COVER, CYAN), stacked RIGHT; its SELL volume into opS (OPEN-short, RED) +
+    clL (long-LIQUIDATION, MAGENTA), stacked LEFT — opening force nearest the centre, closing force outward. Each
+    candle is scaled to its largest level so the profile fills its width; a faint grey wick marks the range. Same
+    batched QPicture + viewport-cull + set_view architecture; a ladder-less bucket paints nothing (candle fallback)."""
+
+    def __init__(self):
+        super().__init__()
+        self.picture = QtGui.QPicture()
+        self._rect = QtCore.QRectF()
+        self._wick = QtGui.QPen(QtGui.QColor(136, 136, 136, 130)); self._wick.setCosmetic(True)
+        self._x = []; self._levels = []; self._forces = []; self._h = []; self._l = []
+        self._width = 0.8
+        self._vx0, self._vx1 = float("-inf"), float("inf")
+
+    def update_data(self, x, levels_list, forces_list, highs, lows, width=0.8, x0=None, x1=None):
+        self._x = x; self._levels = levels_list; self._forces = forces_list; self._h = highs; self._l = lows
+        self._width = width
+        if not x:
+            self.picture = QtGui.QPicture(); self._rect = QtCore.QRectF()
+            self.prepareGeometryChange(); self.update(); return
+        half = width / 2.0
+        lo_all, hi_all = min(lows), max(highs)
+        span = (hi_all - lo_all) if hi_all > lo_all else 1.0
+        self._rect = QtCore.QRectF(float(x[0]) - half, lo_all,
+                                   float(x[-1]) - float(x[0]) + width, span)
+        self._vx0 = float("-inf") if x0 is None else float(x0)
+        self._vx1 = float("inf") if x1 is None else float(x1)
+        self._build_picture()
+        self.prepareGeometryChange()
+        self.informViewBoundsChanged()
+        self.update()
+
+    def set_view(self, x0, x1):
+        """Cheap viewport re-cull on manual pan/zoom (no geometry-change signals — see BucketCandleItem)."""
+        if not self._x:
+            return
+        self._vx0, self._vx1 = float(x0), float(x1)
+        self._build_picture()
+        self.update()
+
+    def _build_picture(self):
+        x, levels, forces, h, l = self._x, self._levels, self._forces, self._h, self._l
+        width = self._width; half = width / 2.0
+        x0v, x1v = self._vx0, self._vx1
+        _c_opl = QtGui.QColor(*_FC_OPL); _c_ops = QtGui.QColor(*_FC_OPS)
+        _c_cll = QtGui.QColor(*_FC_CLL); _c_cls = QtGui.QColor(*_FC_CLS)
+        for _c in (_c_opl, _c_ops, _c_cll, _c_cls):
+            _c.setAlphaF(0.72)
+        self.picture = QtGui.QPicture()
+        p = QtGui.QPainter(self.picture)
+        for i in range(len(x)):
+            xi = float(x[i])
+            if xi < x0v - width or xi > x1v + width:      # CULL to the visible X viewport (+1 width margin)
+                continue
+            p.setPen(self._wick)                          # faint high-low range wick at the candle centre
+            p.drawLine(QtCore.QPointF(xi, float(l[i])), QtCore.QPointF(xi, float(h[i])))
+            p.setPen(QtCore.Qt.NoPen)
+            lv = levels[i] if i < len(levels) else None
+            if not lv:
+                continue
+            oL, oS, cL, cS = forces[i] if i < len(forces) else (0.0, 0.0, 0.0, 0.0)
+            bd = oL + cS; sd = oS + cL                    # buy drivers (open-long + short-cover) / sell drivers
+            fOL = (oL / bd) if bd > 0 else 0.5; fCS = 1.0 - fOL   # buy volume splits opL / clS
+            fOS = (oS / sd) if sd > 0 else 0.5; fCL = 1.0 - fOS   # sell volume splits opS / clL
+            rows = []
+            for ps, v in lv.items():
+                try:
+                    pr = float(ps)
+                except (TypeError, ValueError):
+                    continue
+                bb = float(v.get("b", 0.0)); ss = float(v.get("s", 0.0))
+                if bb + ss > 0:
+                    rows.append((pr, bb, ss))
+            if not rows:
+                continue
+            rows.sort(key=lambda r: r[0])
+            n = len(rows)
+            mx = max(max(bb, ss) for _, bb, ss in rows) or 1.0
+            if n > 1:
+                gaps = sorted(rows[k + 1][0] - rows[k][0] for k in range(n - 1))
+                bh = gaps[len(gaps) // 2] or ((rows[-1][0] - rows[0][0]) / n)
+            else:
+                bh = config.TICK_SIZE
+            sc = half / mx                                # volume -> half-width scale
+            for pr, bb, ss in rows:
+                y = pr - bh / 2.0
+                if bb > 0:                                # BUY -> opL (green, inner) + clS (cyan, outer), rightward
+                    w1 = bb * fOL * sc; w2 = bb * fCS * sc
+                    if w1 > 0:
+                        p.setBrush(_c_opl); p.drawRect(QtCore.QRectF(xi, y, w1, bh))
+                    if w2 > 0:
+                        p.setBrush(_c_cls); p.drawRect(QtCore.QRectF(xi + w1, y, w2, bh))
+                if ss > 0:                                # SELL -> opS (red, inner) + clL (magenta, outer), leftward
+                    w1 = ss * fOS * sc; w2 = ss * fCL * sc
+                    if w1 > 0:
+                        p.setBrush(_c_ops); p.drawRect(QtCore.QRectF(xi - w1, y, w1, bh))
+                    if w2 > 0:
+                        p.setBrush(_c_cll); p.drawRect(QtCore.QRectF(xi - w1 - w2, y, w2, bh))
+        p.end()
+
+    def paint(self, p, *args):
+        p.drawPicture(0, 0, self.picture)
+
+    def boundingRect(self):
+        return self._rect
+
+
+class DeltaForceCandleItem(pg.GraphicsObject):
+    """Per-candle DELTA-BY-FORCE render mode (the 6th 'W' stage): the delta candle's shape (one signed net buy-sell
+    bar per level, right = net buy / left = net sell) but each bar is COLOURED by the single force that dominated at
+    that level — opL green (new longs) / opS red (new shorts) / clL magenta (long liquidation) / clS cyan (short
+    cover). A level's buy volume is split opL/clS and its sell volume opS/clL by the bucket's own force ratios (as in
+    the force candle); the largest of those four picks the colour. Net-flat levels draw nothing. Faint grey wick for
+    range. Same batched QPicture + viewport-cull + set_view; ladder-less buckets fall back to normal candles."""
+
+    def __init__(self):
+        super().__init__()
+        self.picture = QtGui.QPicture()
+        self._rect = QtCore.QRectF()
+        self._wick = QtGui.QPen(QtGui.QColor(136, 136, 136, 130)); self._wick.setCosmetic(True)
+        self._x = []; self._levels = []; self._forces = []; self._h = []; self._l = []
+        self._width = 0.8
+        self._vx0, self._vx1 = float("-inf"), float("inf")
+
+    def update_data(self, x, levels_list, forces_list, highs, lows, width=0.8, x0=None, x1=None):
+        self._x = x; self._levels = levels_list; self._forces = forces_list; self._h = highs; self._l = lows
+        self._width = width
+        if not x:
+            self.picture = QtGui.QPicture(); self._rect = QtCore.QRectF()
+            self.prepareGeometryChange(); self.update(); return
+        half = width / 2.0
+        lo_all, hi_all = min(lows), max(highs)
+        span = (hi_all - lo_all) if hi_all > lo_all else 1.0
+        self._rect = QtCore.QRectF(float(x[0]) - half, lo_all,
+                                   float(x[-1]) - float(x[0]) + width, span)
+        self._vx0 = float("-inf") if x0 is None else float(x0)
+        self._vx1 = float("inf") if x1 is None else float(x1)
+        self._build_picture()
+        self.prepareGeometryChange()
+        self.informViewBoundsChanged()
+        self.update()
+
+    def set_view(self, x0, x1):
+        """Cheap viewport re-cull on manual pan/zoom (no geometry-change signals — see BucketCandleItem)."""
+        if not self._x:
+            return
+        self._vx0, self._vx1 = float(x0), float(x1)
+        self._build_picture()
+        self.update()
+
+    def _build_picture(self):
+        x, levels, forces, h, l = self._x, self._levels, self._forces, self._h, self._l
+        width = self._width; half = width / 2.0
+        x0v, x1v = self._vx0, self._vx1
+        _cols = (QtGui.QColor(*_FC_OPL), QtGui.QColor(*_FC_OPS), QtGui.QColor(*_FC_CLL), QtGui.QColor(*_FC_CLS))
+        for _c in _cols:
+            _c.setAlphaF(0.82)
+        self.picture = QtGui.QPicture()
+        p = QtGui.QPainter(self.picture)
+        for i in range(len(x)):
+            xi = float(x[i])
+            if xi < x0v - width or xi > x1v + width:      # CULL to the visible X viewport (+1 width margin)
+                continue
+            p.setPen(self._wick)                          # faint high-low range wick at the candle centre
+            p.drawLine(QtCore.QPointF(xi, float(l[i])), QtCore.QPointF(xi, float(h[i])))
+            p.setPen(QtCore.Qt.NoPen)
+            lv = levels[i] if i < len(levels) else None
+            if not lv:
+                continue
+            oL, oS, cL, cS = forces[i] if i < len(forces) else (0.0, 0.0, 0.0, 0.0)
+            bd = oL + cS; sd = oS + cL
+            fOL = (oL / bd) if bd > 0 else 0.5; fCS = 1.0 - fOL   # buy volume splits opL / clS
+            fOS = (oS / sd) if sd > 0 else 0.5; fCL = 1.0 - fOS   # sell volume splits opS / clL
+            rows = []          # (price, delta, dom_colour_index) per level; skip net-flat levels
+            for ps, v in lv.items():
+                try:
+                    pr = float(ps)
+                except (TypeError, ValueError):
+                    continue
+                bb = float(v.get("b", 0.0)); ss = float(v.get("s", 0.0))
+                d = bb - ss
+                if d == 0.0:
+                    continue
+                # colour = the dominant of ALL FOUR forces AT THIS LEVEL (bb/ss vary per level, so this varies too):
+                # a net-buy bar can still be opS-red if opS is the biggest force at that price. 0 opL/1 opS/2 clL/3 clS
+                comp = (bb * fOL, ss * fOS, ss * fCL, bb * fCS)
+                rows.append((pr, d, max(range(4), key=lambda k: comp[k])))
+            if not rows:
+                continue
+            rows.sort(key=lambda r: r[0])
+            n = len(rows)
+            mx = max(abs(d) for _, d, _ in rows) or 1.0
+            prices = [r[0] for r in rows]
+            if n > 1:
+                gaps = sorted(prices[k + 1] - prices[k] for k in range(n - 1))
+                bh = gaps[len(gaps) // 2] or ((prices[-1] - prices[0]) / n)
+            else:
+                bh = config.TICK_SIZE
+            sc = half / mx
+            for pr, d, dom in rows:
+                y = pr - bh / 2.0
+                w = abs(d) * sc
+                p.setBrush(_cols[dom])
+                if d > 0:
+                    p.drawRect(QtCore.QRectF(xi, y, w, bh))       # net buy -> right
+                else:
+                    p.drawRect(QtCore.QRectF(xi - w, y, w, bh))   # net sell -> left
         p.end()
 
     def paint(self, p, *args):
