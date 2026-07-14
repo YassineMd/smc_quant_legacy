@@ -8477,8 +8477,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Live footprint side pane: redraw the FORMING candle's developing footprint (sig-cached on its
         # curr_vol + level count, so it only re-renders when the live bucket actually changed).
         if self._fp_want and self.fp_panel.isVisible():
-            _ab = (self._last_snap or {}).get("active_bucket") or {}
-            _fsig = (round(float(_ab.get("curr_vol", 0.0)), 3), len(_ab.get("levels") or {}))
+            # LIVE: the real-time forming candle (active_bucket). REPLAY: the candle AT the cursor = the frame's last
+            # bucket (active_bucket is the live edge, unrelated to where you're scrubbing). start_time in the sig so a
+            # cursor step to a same-volume bucket still repaints.
+            _ab = ((buckets[-1] if buckets else None) if self._replay_on
+                   else (self._last_snap or {}).get("active_bucket")) or {}
+            _fsig = (round(float(_ab.get("start_time", 0.0)), 3),
+                     round(float(_ab.get("curr_vol", 0.0)), 3), len(_ab.get("levels") or {}))
             if _fsig != self._fp_sig:
                 self._fp_sig = _fsig
                 _spot = closes[-1] if closes else _ab.get("close")   # current price -> the dashed line
