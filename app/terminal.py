@@ -1166,7 +1166,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # A5 — open straight onto Mode 10 (the primary surface), never the time chart. Same
         # path the combo uses: hides time components, applies the dark scanner theme, and
         # _on_timer paints Mode 10 directly. The reordered combo already shows it at index 0.
-        self._set_scanner("bucket_canvas")
+        # initial=True -> a HARD last-24h window on open (never auto-extend back to an old study/replay drawing,
+        # which would strand the Start Date weeks back and make the first load crawl). Replay still resumes its
+        # own remembered cursor on toggle-on, independently of this.
+        self._set_scanner("bucket_canvas", initial=True)
 
     # ------------------------------------------------------------------
     def _wire_menu(self) -> None:
@@ -1195,11 +1198,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scan_nudge_timer.setInterval(90)
         self._scan_nudge_timer.timeout.connect(self._on_scan_time_changed)
 
-    def _set_scanner(self, mode: str) -> None:
+    def _set_scanner(self, mode: str, initial: bool = False) -> None:
         """Route between the bucket-native modes (Mode 10 canvas + the 9 metric scanners). Order:
         set mode -> teardown -> hide the (dormant) time-scene items + flip the axis to bucket-index.
         Per-mode geometry is drawn by the 50ms loop via :meth:`_draw_scanner`. (Time chart removed
-        in Phase B — every mode is a scanner mode now.)
+        in Phase B — every mode is a scanner mode now.) initial=True (launch only) pins a HARD last-24h
+        window and skips the saved-drawing auto-extend, so a stranded old drawing can't slow the first load.
         """
         prev_mode = self.scanner_mode
         self.scanner_mode = mode
@@ -1233,7 +1237,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # the new anchor without firing an extra _on_scan_time_changed teardown.
         _anchor_secs = -86400 if is_canvas else -3600
         target_dt = QtCore.QDateTime.currentDateTime().addSecs(_anchor_secs)
-        if is_canvas:                                   # auto-extend the window back to cover saved drawings
+        if is_canvas and not initial:                   # auto-extend the window back to cover saved drawings
             floor = self._drawing_scan_floor(self.worker.tf)
             if floor is not None:
                 floor_dt = QtCore.QDateTime.fromSecsSinceEpoch(int(floor))
@@ -4688,13 +4692,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._pivot_entries = []
 
     def _entry_default_key(self):
-        """The entry whose position sim shows by DEFAULT: the last RECORDED (non-faded) entry, else — when only
-        FADED study D/E's are in view — the last one anyway, so a faded setup's sim is still eyeball-able (the
-        overlay is never blank when entries exist). Click any badge to toggle others on/off."""
-        ent = self._pivot_entries
-        if not ent:
-            return None
-        return next((e[0] for e in reversed(ent) if not e[12]), ent[-1][0])
+        """NO entry shows its position sim by DEFAULT — the overlay starts hidden on every D and E (returning
+        None makes `key == last_key` False for every real key). Click a badge to toggle that entry's lines on;
+        click again to hide. (Was: the last RECORDED non-faded entry auto-showed.)"""
+        return None
 
     def _draw_entry_lines(self) -> None:
         """Render the PER-PATH exit overlay for each entry effectively ON (user toggle, else default = last entry).
