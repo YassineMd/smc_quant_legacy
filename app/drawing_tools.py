@@ -29,11 +29,11 @@ from . import config
 from .chart_widgets import RoundedTextItem
 
 TOOLS = ["select", "magic_select", "trend", "ray", "hline", "vline", "rect", "ellipse",
-         "measure", "long", "short", "eraser", "delete_all"]
+         "measure", "long", "short", "eraser", "delete_all", "undo", "redo"]
 _LABELS = {
     "select": "↖️", "magic_select": "🪄", "trend": "📏", "ray": "↗️", "hline": "➖", "vline": "｜",
     "rect": "🔲", "ellipse": "⭕", "measure": "📐", "long": "📈", "short": "📉",
-    "eraser": "🧽", "delete_all": "🗑️",
+    "eraser": "🧽", "delete_all": "🗑️", "undo": "↩️", "redo": "↪️",
 }
 _TOOLTIPS = {
     "select": "Select / Edit",
@@ -42,7 +42,11 @@ _TOOLTIPS = {
     "hline": "Horizontal Line", "vline": "Vertical Line", "rect": "Rectangle",
     "ellipse": "Ellipse", "measure": "Measure %", "long": "Long Position",
     "short": "Short Position", "eraser": "Eraser", "delete_all": "Delete All",
+    "undo": "Undo — restore the last draw / move / delete (Ctrl+Z is the Selection VP)",
+    "redo": "Redo the undone step",
 }
+# One-shot ACTIONS, not drawing modes: they fire and must never stay latched like a tool.
+_ACTION_TOOLS = {"delete_all", "undo", "redo"}
 _SHAPE_TWO_POINT = {"trend", "ray", "rect", "ellipse", "measure"}
 _POSITION_TOOLS = {"long", "short"}
 _PRESET_COLORS = ["#ffffff", "#000000", "#2962ff", "#e74c3c", "#1abc9c", "#f1c40f", "#9b59b6", "#ff7f0e"]
@@ -425,7 +429,7 @@ class DrawingToolbar(QtWidgets.QFrame):
             b = QtWidgets.QPushButton(_LABELS[t])
             b.setToolTip(_TOOLTIPS[t])
             b.setCursor(QtCore.Qt.PointingHandCursor)
-            if t != "delete_all":
+            if t not in _ACTION_TOOLS:
                 b.setCheckable(True); self._group.addButton(b)
             b.clicked.connect(lambda _=False, tool=t: self.toolSelected.emit(tool))
             self.buttons[t] = b
@@ -590,6 +594,7 @@ class ShapeHandles(QtCore.QObject):
     h/v-line -> 1 position handle. Drag updates the shape live; persists on release."""
 
     changed = QtCore.Signal()   # emitted on drag-release -> controller persists
+    started = QtCore.Signal()   # emitted ONCE at the start of a drag, BEFORE pts move -> controller snapshots for undo
 
     def __init__(self, plot: pg.PlotWidget):
         super().__init__()
@@ -598,6 +603,7 @@ class ShapeHandles(QtCore.QObject):
         self.shape: Optional[DrawnShape] = None
         self.handles: list = []      # [{"item": TargetItem, "role": str}]
         self.corners_only = False    # the Magic-Selection rect uses 4 corners only
+        self._dragging = False       # gesture guard so `started` fires once per drag, not per move event
 
     def attach(self, shape: "DrawnShape", corners_only: bool = False) -> None:
         self.clear()
@@ -651,6 +657,9 @@ class ShapeHandles(QtCore.QObject):
         s = self.shape
         if s is None:
             return
+        if not self._dragging:          # gesture start — pts are still PRE-drag, so the snapshot is exact
+            self._dragging = True
+            self.started.emit()
         nx, ny = item.pos().x(), item.pos().y()
         if role == "hline":
             s.pts[0][1] = ny
@@ -678,6 +687,7 @@ class ShapeHandles(QtCore.QObject):
         self._reposition(exclude=item)               # keep the OTHER handles glued to the new geometry
 
     def _on_finish(self, *args) -> None:
+        self._dragging = False                       # gesture over -> the next drag snapshots again
         self._reposition(exclude=None)               # snap the dragged (edge) handle back onto the shape
         self.changed.emit()                          # -> controller _save (persist on release)
 
@@ -730,7 +740,10 @@ class DrawingController(QtCore.QObject):
         self.edit_panel.changed.connect(self._save)
         self.handles = ShapeHandles(plot)   # draggable edit dots on the selected shape
         self.handles.changed.connect(self._save)
+        self.handles.started.connect(self._push_undo)             # snapshot the PRE-drag geometry for undo
+        self.handles.changed.connect(self._reanchor_edited)       # a move/resize must re-anchor + persist,
         self.edit_panel.changed.connect(self.handles.reposition)  # panel geometry edits re-sync the dots
+        self.edit_panel.changed.connect(self._reanchor_edited)    # else the next Idx shift snaps it back
         # Magic Selection — a transient dashed rect (NOT in shapes/idx_shapes) with 4 corner handles.
         self._selection: Optional[DrawnShape] = None
         self.sel_handles = ShapeHandles(plot)
@@ -747,6 +760,8 @@ class DrawingController(QtCore.QObject):
         self._styles: dict = self._load_styles()
         self.edit_panel.changed.connect(self._remember_style)
         self._idx_deleted: set = set()   # ids erased THIS session (merge tombstones, multi-window safe)
+        self._undo: List[dict] = []      # snapshots of the Idx drawing set, newest last (toolbar ↩️ / ↪️)
+        self._redo: List[dict] = []
         self._picked = None              # the shape last selected by clicking it (Delete key target)
         self._idx_busy = False           # re-entrancy guard: selectionChanged -> terminal refresh -> build
                                          # -> set_idx_frame would otherwise RECURSE during restore/shift
@@ -770,6 +785,10 @@ class DrawingController(QtCore.QObject):
     def set_tool(self, tool: Optional[str]) -> None:
         if tool == "delete_all":
             self.clear_all(); return
+        if tool == "undo":                 # one-shot actions: run and leave the armed tool untouched
+            self.undo(); return
+        if tool == "redo":
+            self.redo(); return
         self.active_tool = tool
         self._cancel_live()
         self.handles.clear()              # changing tool -> drop any edit handles
@@ -919,6 +938,7 @@ class DrawingController(QtCore.QObject):
             if self.toolbar is not None:
                 self.toolbar.select_tool("select")
             return
+        self._push_undo()          # the ONE user-creation site (internal _make_bracket calls must not push)
         if tool in _POSITION_TOOLS:
             self._make_bracket(tool, [x0, y0], [x1, y1])
         elif tool in ("hline", "vline"):
@@ -1045,6 +1065,7 @@ class DrawingController(QtCore.QObject):
         picked, an active Magic Selection is cleared instead."""
         s = self._picked
         if s is not None:
+            self._push_undo()                       # ↩️ can bring an accidental delete back
             for store in (self.shapes, self._idx_shapes):
                 if s in store:
                     self.plot.removeItem(s); store.remove(s)
@@ -1058,6 +1079,7 @@ class DrawingController(QtCore.QObject):
             self.clear_selection()
 
     def _erase_at(self, x, y) -> None:
+        self._push_undo()            # ↩️ can bring an erased shape back
         sr = self.selection_rect()   # eraser inside the Magic Selection box -> remove it
         if sr is not None and sr[0] <= x <= sr[2] and sr[1] <= y <= sr[3]:
             self.clear_selection()
@@ -1081,6 +1103,7 @@ class DrawingController(QtCore.QObject):
         self._schedule_idx_save()
 
     def clear_all(self) -> None:
+        self._push_undo()            # 🗑️ Delete All is recoverable with a single ↩️
         for s in self._idx_shapes:
             if hasattr(s, "uid"):
                 self._idx_deleted.add(s.uid)
@@ -1165,6 +1188,94 @@ class DrawingController(QtCore.QObject):
             j = max(0, min(len(bks) - 1, int(round(px))))
             out.append([float(bks[j].get("end_time", 0.0)), px - j])
         return out
+
+    # ------------------------------------------------------------------
+    # Undo / redo (toolbar ↩️ / ↪️ — Ctrl+Z is already the Selection VP). Snapshot-based: the whole
+    # Mode-10 Idx drawing set is serialized to the SAME dicts the persisted-render path consumes, so
+    # a restore is just "swap the pending set + re-render" through machinery that is already proven.
+    # ------------------------------------------------------------------
+    _UNDO_MAX = 60
+
+    def _snapshot(self) -> Optional[dict]:
+        """The full Idx drawing set in GLOBAL coords + the delete-tombstones, or None when unavailable."""
+        if not self.index_mode or self._idx_off is None:
+            return None
+        off = self._idx_off
+        idx = [self._shape_dict_global(s, off) for s in self._idx_shapes if s.kind != "hline"]
+        idx += [self._shape_dict_global(s, 0.0) for s in self._idx_shapes if s.kind == "hline"]
+        for b in self._idx_brackets:
+            bd = b.to_dict()
+            anch = (self._anchor_pts([[bd["x0"], 0], [bd["x1"], 0]])
+                    if self._idx_bks else getattr(b, "anchors", None))
+            idx.append(dict(bd, t="bracket", id=getattr(b, "uid", None) or uuid.uuid4().hex,
+                            anch=anch, **{"x0": bd["x0"] + off, "x1": bd["x1"] + off}))
+        idx += [dict(d) for d in self._idx_pending]      # offscreen items are part of the set too
+        return {"idx": idx, "deleted": set(self._idx_deleted)}
+
+    def _push_undo(self) -> None:
+        """Snapshot BEFORE a mutation. Any new edit invalidates the redo branch (standard undo semantics)."""
+        st = self._snapshot()
+        if st is None:
+            return
+        self._undo.append(st)
+        del self._undo[:-self._UNDO_MAX]                  # bounded history
+        self._redo.clear()
+
+    def _restore(self, st: dict) -> None:
+        """Rebuild the Idx set from a snapshot: drop the rendered items, swap in the snapshot as the
+        pending set, and let _render_idx_pending re-materialise whatever is inside the window."""
+        self._idx_busy = True          # a rebuild must not re-enter set_idx_frame via selectionChanged
+        try:
+            for s in list(self._idx_shapes):
+                self.plot.removeItem(s)
+            for br in list(self._idx_brackets):
+                br.remove()
+            self._idx_shapes.clear(); self._idx_brackets.clear()
+            self.handles.clear(); self._picked = None
+            self.edit_panel.hide()
+            self._idx_deleted = set(st["deleted"])
+            self._idx_pending = [dict(d) for d in st["idx"]]
+        finally:
+            self._idx_busy = False
+        self._render_idx_pending()
+        self._schedule_idx_save()
+
+    def undo(self) -> None:
+        """Toolbar ↩️ — step back one draw / move / delete."""
+        if not self._undo:
+            return
+        cur = self._snapshot()
+        st = self._undo.pop()
+        if cur is not None:
+            self._redo.append(cur)
+        self._restore(st)
+
+    def redo(self) -> None:
+        """Toolbar ↪️ — re-apply the step that undo took back."""
+        if not self._redo:
+            return
+        cur = self._snapshot()
+        st = self._redo.pop()
+        if cur is not None:
+            self._undo.append(cur)
+        self._restore(st)
+
+    def _reanchor_edited(self) -> None:
+        """A handle drag / edit-panel geometry change MOVED or RESIZED the picked shape, so its pts are now
+        the authoritative position -> re-derive its time-anchors from them, and persist.
+
+        anchors are otherwise set ONLY at creation (see the _idx_shapes append), while _set_idx_frame_inner
+        rebuilds x FROM the anchors every time the global Idx offset shifts. So without this an edited shape
+        snapped straight back to where it was first drawn on the next offset change (e.g. a REPLAY step),
+        silently dropping the edit. Re-anchoring is only safe HERE, where the shape is correctly placed in the
+        current frame — _shape_dict_global deliberately does NOT re-anchor, since a shape being demoted after
+        its bucket left the window is NOT correctly placed and would corrupt its anchors."""
+        s = self._picked
+        if s is None or not self.index_mode or s.kind == "hline":
+            return                                    # hline is price-only: x is meaningless, so is its anchor
+        if s in self._idx_shapes and self._idx_bks:
+            s.anchors = self._anchor_pts(s.pts)       # pts are authoritative here -> anchors follow the edit
+            self._schedule_idx_save()                 # persist the move (handles.changed alone only ran _save)
 
     def set_idx_frame(self, offset: float, n: int, tf: str, bks=None) -> None:
         """Per-draw hook from the terminal (Mode 10): keeps idx drawings glued to their BUCKETS —
