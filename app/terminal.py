@@ -951,7 +951,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # PANEL 0 ('0') — a SMOOTHED twin of Panel 9: each line = (current + locked)/2. Identical items/colors.
         self.show_panel0 = True
         self._candle_mode = 0            # 'W' cycle: 0 normal>1 whisker>2 footprint>3 delta>4 force>5 delta-force (persisted)
-        self._vp_mode = 1                # volume-profile mode 0..5 (default 1 = Force, the existing 4h VP look; persisted)
+        self._vp_mode = 1                # volume-profile mode 0..7 (default 1 = Force, the existing 4h VP look; persisted)
         self._hide_candles = False       # Ctrl+H — hide the candle glyphs (see the VP / zones without candle noise; persisted)
         _gp0_hi = pg.mkPen("#ff9800", width=0.8); _gp0_hi.setCosmetic(True); _gp0_hi.setDashPattern([5.0, 10.0])
         _gp0_lo = pg.mkPen("#ff9800", width=0.8); _gp0_lo.setCosmetic(True); _gp0_lo.setDashPattern([5.0, 10.0])
@@ -1905,7 +1905,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _toggle_hide_candles(self) -> None:
         """Ctrl+H — hide/show the candle glyphs so the volume profile / zones can be read without the candle 'noise'.
-        Only the candles are hidden; the baseline, VP, zones, POC, overlays all stay."""
+        Hides the candles, the Keltner Channel, the abnormal-order lines AND the gray POC baseline; VP, zones,
+        POC dots and the other overlays stay."""
         self._hide_candles = not self._hide_candles
         self._save_ui_state()
         self._last_scanner_sig = None
@@ -1913,7 +1914,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _on_vp_mode(self, m: int) -> None:
         """Hamburger 'Volume Profile Mode' dropdown changed -> re-render the selection VP + the 4h 'V' overlay."""
-        self._vp_mode = int(m) % 6
+        self._vp_mode = int(m) % 8       # 8 VP modes (0..7)
         self._save_ui_state()
         self._sel_sig = None                         # force the Mode-10 selection VP to redraw
         if self._z4_last_buckets:                    # re-render the 4h V overlay immediately
@@ -3244,7 +3245,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._candle_mode = int(_cm) % 6
         _vm = s.get("vp_mode")
         if isinstance(_vm, (int, float)):
-            self._vp_mode = int(_vm) % 6
+            self._vp_mode = int(_vm) % 8
         self._hide_candles = bool(s.get("hide_candles", self._hide_candles))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
         for _k, _v in (s.get("phase") or {}).items():
@@ -3390,7 +3391,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         Mode-10 selection VP and the 4h 'V' overlay so both honour the 'Volume Profile Mode' dropdown. Modes:
         0 Basic (right, green/red by net side), 1 Force (right, dominant-force colour), 2 Split Basic (buy green
         right / sell red left), 3 Split Basic Delta (net delta signed), 4 Split Force (opL green+clS cyan right /
-        opS red+clL magenta left), 5 Split Force Delta (net delta signed, dominant-force colour)."""
+        opS red+clL magenta left), 5 Split Force Delta (net delta signed, dominant-force colour), 6 Basic Bulls
+        (right, net-BUY delta only = bull-dominant price zones, green), 7 Basic Bears (right, net-SELL delta only
+        = bear-dominant zones, red). 6 & 7 share the max|delta| scale so the two are directly comparable."""
         x0s = []; ws = []; ys = []; hs = []; brs = []
 
         def _add(bx, bw, by, col):
@@ -3404,11 +3407,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             lv.append((pr, oL, oS, cL, cS, buy, sell, tot, buy - sell, max(range(4), key=lambda k: a[k])))
         if not lv:
             return x0s, ws, ys, hs, brs
-        if mode in (0, 1):                                     # RIGHT-only, sized by TOTAL volume
-            vmax = max(r[7] for r in lv) or 1.0; sc = (0.40 * span) / vmax
+        if mode in (0, 1, 6, 7):                               # RIGHT-only histograms
+            if mode in (6, 7):                                 # delta-filtered basic: one side's NET-dominant zones,
+                vmax = max(abs(r[8]) for r in lv) or 1.0       # shared max|delta| scale -> the two are comparable
+            else:                                              # 0 basic / 1 force -> TOTAL volume
+                vmax = max(r[7] for r in lv) or 1.0
+            sc = (0.40 * span) / vmax
             for pr, oL, oS, cL, cS, buy, sell, tot, d, dom in lv:
-                col = (self._VP_GREEN if buy >= sell else self._VP_RED) if mode == 0 else self._VP_FCOL[dom]
-                _add(x0, tot * sc, pr, col)
+                if mode == 6:                                  # BULLS: only net-buy levels (d>0), green bar = delta
+                    _add(x0, d * sc, pr, self._VP_GREEN)       # d<=0 -> width<=0 -> skipped by _add (not bull-dominant)
+                elif mode == 7:                                # BEARS: only net-sell levels (d<0), red bar = |delta|
+                    _add(x0, -d * sc, pr, self._VP_RED)        # d>=0 -> width<=0 -> skipped by _add (not bear-dominant)
+                else:
+                    col = (self._VP_GREEN if buy >= sell else self._VP_RED) if mode == 0 else self._VP_FCOL[dom]
+                    _add(x0, tot * sc, pr, col)
         else:                                                  # SPLIT: the LEFT edge (selection's left line / 4h separator)
             cx = x0                                            # is the split -> buy RIGHT (inside), sell LEFT (outside)
             vmax = (max(max(r[5], r[6]) for r in lv) if mode in (2, 4) else max(abs(r[8]) for r in lv)) or 1.0
@@ -8176,7 +8188,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _wb.setVisible(False); _wb.update_data([], [], [], [], [], [], [], [])   # free the pictures
             _blank_fp()
             self._scan_handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
-        self._scan_handles["bc_baseline"].setData(x, baseline_arr)   # gray dashed POC-center baseline (KEPT)
+        self._scan_handles["bc_baseline"].setData(x, baseline_arr)   # gray dashed POC-center baseline
+        self._scan_handles["bc_baseline"].setVisible(not self._hide_candles)   # Ctrl+H hides the POC baseline with the candles
         # liquidity-sweep labels (Ctrl+L) — cull-to-visible, density-floored, capped, bounded pool; timed as
         # its OWN profiler section ('liq') so this layer is measured directly, not inferred under draw_scanner.
         _ls = time.perf_counter()
@@ -8581,6 +8594,10 @@ _TUNNEL_GCLOUD_ARGS = [
     "--ssh-flag=-N",
     f"--ssh-flag=-L {config.IPC_PORT}:127.0.0.1:{config.IPC_PORT}",
 ]
+# gcloud needs ~10-15s (cold: key check + SSH handshake + PuTTY) to bring the forwarded port up, while the
+# connection watchdog re-heals every 5s. This is how long a launch we started is left alone before it is
+# judged wedged — WITHOUT it, every cold start stacked 2-3 duplicate tunnels (each with its own PuTTY window).
+_TUNNEL_BOOT_GRACE = 30.0
 
 
 def _ipc_port_open() -> bool:
@@ -8603,13 +8620,27 @@ class SSHTunnelManager:
 
     def __init__(self) -> None:
         self._proc: Optional[subprocess.Popen] = None
+        self._launched_at: float = 0.0     # when the in-flight launch started (monotonic)
 
     def ensure(self) -> None:
-        """Requirement 1 (port check) + 2 (invisible background launch with fallback)."""
+        """Requirement 1 (port check) + 2 (invisible background launch with fallback).
+
+        NEVER stacks tunnels. The watchdog calls this every 5s while disconnected, but gcloud takes
+        ~10-15s to bring the port up — so a launch already in flight is left alone until it either
+        starts serving, exits on its own, or blows past _TUNNEL_BOOT_GRACE (wedged -> torn down and
+        relaunched here). Without this guard each cold start fired 2-3 duplicate tunnels, and every
+        extra one ORPHANED a PuTTY: self._proc only ever held the LAST handle, so stop() could not
+        kill the earlier trees and their windows outlived the terminal.
+        """
         if _ipc_port_open():
             print(f"[tunnel] {config.IPC_HOST}:{config.IPC_PORT} already live — reusing it.")
             return
-            
+        if self._proc is not None and self._proc.poll() is None:      # a launch WE started is still alive
+            if (time.monotonic() - self._launched_at) < _TUNNEL_BOOT_GRACE:
+                return                                                # still booting — let it finish, don't stack
+            print("[tunnel] launch wedged past the boot grace — killing it and retrying.")
+            self.stop()                                               # wedged: tear the tree down, relaunch below
+
         gcloud = shutil.which("gcloud")   # resolves gcloud.cmd on Windows via standard PATH
         
         # --- HARDCODED WIN-ENVIRONMENT PATH FALLBACK FOR STANDALONE EXECUTABLE BUBBLE ---
@@ -8637,6 +8668,7 @@ class SSHTunnelManager:
                 cmd, stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 creationflags=flags)
+            self._launched_at = time.monotonic()   # starts the boot grace -> the 5s watchdog won't stack another
             print(f"[tunnel] SSH tunnel launching (pid {self._proc.pid}); the terminal "
                   "auto-connects once it is up.")
         except Exception as exc:
