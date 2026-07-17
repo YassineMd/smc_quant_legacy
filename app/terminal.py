@@ -5809,6 +5809,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _bvl, _svl = bv / _bdur, sv / _bdur
             delta = bv - sv
             dpct = (delta / cv * 100.0) if cv > 0 else 0.0
+            # KINETIC EFFICIENCY RATIO (KER) — Realized Work / Kinetic Force per side (see _bucket_ker).
+            _ker_buy, _ker_sell = self._bucket_ker(b)
+
+            def _kerf(v):
+                return "9999.0" if v == 9999.0 else f"{v:.4f}"
+            # Mov.Magnitude (operator formula) — the squared percent move, scaled ×100: a direction-agnostic
+            # magnitude that GROWS QUADRATICALLY with the % move (a 2% bucket reads 4× a 1% one).
+            # = ((close*100/open - 100)^2) * 100  ("--" when open<=0). Gray below 1 (quiet, ~<0.1% move) ->
+            # GOLD at >= 1, so only a notable move lights up.
+            _pmr_v = ((((c * 100.0) / o) - 100.0) ** 2) * 100.0 if o > 0 else None
+            _pmr_s = f"{_pmr_v:.4f}" if _pmr_v is not None else "--"
+            _pmr_col = gold if (_pmr_v is not None and _pmr_v >= 1.0) else gray
             oi_d = (opL + opS) - (clL + clS)
             dur = b.get("end_time", 0.0) - b.get("start_time", 0.0)
             vel = b.get("vol_mult", 1.0)
@@ -5823,6 +5835,38 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         max(1.0, bb.get("end_time", 0.0) - bb.get("start_time", 0.0)))
             v30 = (sum(_bvel(w) for w in win) / len(win)) if win else 0.0
             vabn = (_bvel(b) / v30) if v30 > 0 else 0.0
+            # EFFORT vs RESULT, PER SIDE. A raw cost/tick is uninterpretable on its own ("is 163 high?"),
+            # so each side is scored against ITS OWN trailing-30 mean — the same causal window as the 30b
+            # BER/SER and 30b VEL above. >1 = paying MORE per tick it won than it has lately (that side is
+            # being absorbed); <1 = getting more per contract than usual (thin that way). Both sides
+            # are ALWAYS defined because each owns its denominator (up_ticks vs dn_ticks) — unlike
+            # buyer_er/seller_er whose SHARED dispersion cancels to the delta (corr +1.0000 measured), or
+            # per-side friction, where only one side can win the net move so the loser is always 0.
+            def _cpt(w, is_buy):
+                t = float((w.get("up_ticks") if is_buy else w.get("dn_ticks")) or 0.0)
+                v = float((w.get("buy_vol") if is_buy else w.get("sell_vol")) or 0.0)
+                return (v / t) if t > 0 else None
+            _bh = [x for x in (_cpt(w, True) for w in win) if x is not None]
+            _sh = [x for x in (_cpt(w, False) for w in win) if x is not None]
+            _b30t = (sum(_bh) / len(_bh)) if _bh else 0.0
+            _s30t = (sum(_sh) / len(_sh)) if _sh else 0.0
+            _bptr = (_bpt / _b30t) if (_b30t > 0 and _ut > 0) else 0.0   # buyer cost vs its own normal
+            _sptr = (_spt / _s30t) if (_s30t > 0 and _dt > 0) else 0.0
+
+            def _ptl(lbl, val_s, val, other_val, rr, other_rr, col):
+                """One COST · SPEED line, coloured on TWO independent axes:
+                  * the /tick VALUE takes that side's colour when it paid MORE per tick than the other side
+                    (the absolute cost of moving price its way);
+                  * the (x) — its cost against its OWN trailing-30 normal — goes GOLD when that side is the
+                    one grinding harder relative to itself.
+                These answer different questions and routinely land on opposite sides, which is the point:
+                a side can pay the most per tick while still being cheaper than usual for itself.
+                The (x) is omitted entirely during warm-up or when that side never moved price its way —
+                no baseline, no verdict."""
+                out = span("%s %s" % (lbl, val_s), col if (val > 0 and val > other_val) else gray)
+                if rr > 0:
+                    out += " " + span("(%.1fx)" % rr, gold if rr > other_rr else gray)
+                return out
             # BULL/BEAR absorption (volume) — aggressive volume that FAILED to move price, vs the region's
             # trailing-norm. Directional: only the heavier aggressor that failed gets credit.
             bull_abs, bear_abs, _sabs = region_state.absorption_vol(buckets, idx, config.ABSORP_VOL_WINDOW)
@@ -5853,14 +5897,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 span(f"Seller E/R {ser:.1f} [{(sm - 1.0) * 100:+.0f}%]", r if ser > ber else gray),
                 span(f"30b Buyer E/R {b30:.1f}", g if b30 > s30 else gray),
                 span(f"30b Seller E/R {s30:.1f}", r if s30 > b30 else gray),
-                # EFFORT PER TICK — contracts each side spent per tick price ACTUALLY TRAVELLED ITS WAY
-                # (buyers per tick UP, sellers per tick DOWN). The E/R lines above divide by volume-weighted
-                # DISPERSION, which BOTH sides share, so Buyer-vs-Seller E/R can only restate the delta
-                # (measured corr +1.0000). Here each side owns its denominator, so this is the real "what did
-                # it COST to move it my way" read: HIGHER = that side paid more per tick it won. "--" on
-                # buckets built before the daemon shipped up_ticks/dn_ticks (never back-fillable).
-                f"{span('Buyer /tick ' + _bpt_s, g if (_bpt > _spt > 0) else gray)} | "
-                f"{span('Seller /tick ' + _spt_s, r if (_spt > _bpt > 0) else gray)}",
                 sep("ABSORPTION · VOL"),
                 span(f"Bull Absorp {K(bull_abs)}", g if bull_abs > 0 else gray),
                 span(f"Bear Absorp {K(bear_abs)}", r if bear_abs > 0 else gray),
@@ -5870,10 +5906,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 sep("READ"),
                 f"VEL {span(f'{vel:.2f}x', gold)}",
                 f"30b VEL {span(f'{vabn:.1f}×', gold if vabn >= config.VEL_ABN_RATIO else gray)}",
-                # Per-side arrival RATE for this bucket (contracts/sec). VEL above is a ratio-vs-normal and
-                # sums both sides; these are the absolute speeds behind it.
+                # What each side PAID per tick it won, and how fast it ARRIVED. Two independent colourings
+                # per line: the /tick VALUE lights on whichever side paid more per tick (its own side colour),
+                # while the (x) — that side's cost against its own trailing-30 normal — lights GOLD on
+                # whichever side is grinding harder RELATIVE to itself. They deliberately land on different
+                # sides: paying the most per tick and paying the most vs-normal are different statements.
+                sep("COST · SPEED"),
+                _ptl("Buyer /tick", _bpt_s, _bpt, _spt, _bptr, _sptr, g),
+                _ptl("Seller /tick", _spt_s, _spt, _bpt, _sptr, _bptr, r),
                 f"{span('Buy-vel ' + K(_bvl) + '/s', g if _bvl > _svl else gray)} | "
                 f"{span('Sell-vel ' + K(_svl) + '/s', r if _svl > _bvl else gray)}",
+                span("KER_buy: " + _kerf(_ker_buy), g if _ker_buy > 0 else gray),
+                span("KER_sell: " + _kerf(_ker_sell), r if _ker_sell > 0 else gray),
+                span("Mov.Magnitude: " + _pmr_s, _pmr_col),
             ]
             # A3b — STATE verdict + its calibration debug lines (top-3 states + winner factors).
             # Hidden by default; 'y' toggles (self.show_state).
@@ -8386,6 +8431,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             m = s / (n if i >= n else i + 1)
             out.append((v / m) if m > 0 else 0.0)
         return out
+
+    @staticmethod
+    def _bucket_ker(b) -> tuple:
+        """(KER_buy, KER_sell) for ONE bucket — Kinetic Efficiency Ratio = Realized Work / Kinetic Force,
+        per side. delta_p = ticks moved (close-open); vol_delta = buy-sell; omega = contracts per tick moved
+        that side's way; v = execution velocity (contracts/sec). W = max(0,±delta_p)*omega, F =
+        max(0,±vol_delta)*v, KER = W/F with the VACUUM guard (F==0 while W>0 -> 9999.0: a move realised
+        with no directional force). Needs up_ticks/dn_ticks (post-daemon-upgrade); a pre-upgrade bucket has
+        omega=0 -> W=0 -> 0.0. Pure scalar arithmetic — no I/O, no loop, safe on the paint path."""
+        o = float(b.get("open", 0.0)); c = float(b.get("close", 0.0))
+        bv = float(b.get("buy_vol", 0.0)); sv = float(b.get("sell_vol", 0.0))
+        ut = float(b.get("up_ticks", 0.0) or 0.0); dt = float(b.get("dn_ticks", 0.0) or 0.0)
+        dur = max(1.0, float(b.get("end_time", 0.0)) - float(b.get("start_time", 0.0)))
+        dp = (c - o) / config.TICK_SIZE
+        vd = bv - sv
+        omega_b = (bv / ut) if ut > 0 else 0.0
+        omega_s = (sv / dt) if dt > 0 else 0.0
+        v_b, v_s = bv / dur, sv / dur
+        F_bull = max(0.0, vd) * v_b;   F_bear = max(0.0, -vd) * v_s
+        W_bull = max(0.0, dp) * omega_b; W_bear = max(0.0, -dp) * omega_s
+        kb = (W_bull / F_bull) if F_bull > 0.0 else (9999.0 if (F_bull == 0.0 and W_bull > 0.0) else 0.0)
+        ks = (W_bear / F_bear) if F_bear > 0.0 else (9999.0 if (F_bear == 0.0 and W_bear > 0.0) else 0.0)
+        return kb, ks
 
     @staticmethod
     def _cvd_candles(buckets: list) -> tuple:
