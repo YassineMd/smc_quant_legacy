@@ -64,6 +64,11 @@ class BucketSnapshot(TypedDict):
     poc_price: float     # price row with the highest accumulated volume
     buy_vol: float       # taker buy volume
     sell_vol: float      # taker sell volume
+    up_ticks: float      # "E/R per tick": ticks price ACTUALLY TRAVELLED up inside the bucket (summed over the
+    dn_ticks: float      # trade stream), and down. buy_vol/up_ticks = what buying COST per tick of upward
+                         # travel — a per-DIRECTION impact, unlike buyer_er whose dispersion denominator is
+                         # SHARED (so buyer_er/seller_er cancels to buy_vol/sell_vol: corr +1.0000, no new
+                         # info). Wire-additive, default 0.0 -> pre-upgrade buckets show "--".
     cvd_hi: float        # CVD wicks: intrabar PEAK of the running (buy-sell) delta, vs the bucket's own start
     cvd_lo: float        # ... and its intrabar TROUGH (cvd_lo <= 0 <= cvd_hi). Wire-additive, default 0.0:
                          # buy_vol/sell_vol ship only the TOTAL, which loses the order trades arrived in, so

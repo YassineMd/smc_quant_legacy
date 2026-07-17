@@ -90,6 +90,12 @@ def _bucket_to_dict(b: QuantBucket) -> dict:
         # LARGE/SMALL size histograms — additive (_bucket_from_dict reads with a zero-filled default, so
         # NO BUCKET_SCHEMA_VERSION bump; pre-feature rows reload as zeros).
         "sz_cb": b.sz_cb, "sz_cs": b.sz_cs, "sz_vb": b.sz_vb, "sz_vs": b.sz_vs,
+        # Same additive contract: CVD wicks (intrabar delta peak/trough) + "E/R per tick" (ticks price
+        # actually travelled each way). These MUST be persisted — they are measured per aggTrade as the
+        # bucket is built and can NEVER be recomputed from the stored aggregates, so dropping them here
+        # would silently make them ephemeral: correct on the live wire, then gone at the next restart.
+        "cvd_hi": b.cvd_hi, "cvd_lo": b.cvd_lo,
+        "up_ticks": b.up_ticks, "dn_ticks": b.dn_ticks,
     }
 
 
@@ -113,6 +119,10 @@ def _bucket_from_dict(d: dict) -> QuantBucket:
     b.poc_price = d.get("poc_price", 0.0)
     b.buyer_er = d.get("buyer_er", 1.0)
     b.seller_er = d.get("seller_er", 1.0)
+    # Additive, zero-filled: a pre-feature row simply reloads with no wick / no per-tick E/R, which the
+    # terminal renders as a plain body / "--" rather than inventing a value.
+    b.cvd_hi = d.get("cvd_hi", 0.0); b.cvd_lo = d.get("cvd_lo", 0.0)
+    b.up_ticks = d.get("up_ticks", 0.0); b.dn_ticks = d.get("dn_ticks", 0.0)
     # LARGE/SMALL size histograms: override the __init__ zero arrays only when present AND the right length
     # (fixed edges => stable length; the guard keeps a stale/short row from corrupting the bucket).
     _nb = config.SIZE_HIST_NBINS
@@ -149,6 +159,9 @@ def bucket_from_snapshot(s: dict) -> QuantBucket:
         "buyer_er": s.get("buyer_er", 1.0), "seller_er": s.get("seller_er", 1.0),
         "sz_cb": s.get("sz_cb", []), "sz_cs": s.get("sz_cs", []),
         "sz_vb": s.get("sz_vb", []), "sz_vs": s.get("sz_vs", []),
+        # wire form carries these under the SAME names (see BucketSnapshot); 0.0 when the daemon predates them
+        "cvd_hi": s.get("cvd_hi", 0.0), "cvd_lo": s.get("cvd_lo", 0.0),
+        "up_ticks": s.get("up_ticks", 0.0), "dn_ticks": s.get("dn_ticks", 0.0),
     })
 
 

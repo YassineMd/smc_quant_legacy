@@ -114,6 +114,15 @@ class QuantBucket:
         # own start, so cvd_lo <= 0 <= cvd_hi always and the terminal just adds its carried-in CVD open.
         self.cvd_hi = 0.0
         self.cvd_lo = 0.0
+        # DIRECTIONAL price impact ("E/R per tick"): ticks price ACTUALLY TRAVELLED up / down inside this
+        # bucket, summed over the trade stream. Distinct from the E/R denominator, which is volume-weighted
+        # DISPERSION and is SHARED by both sides — so buyer_er/seller_er cancels to buy_vol/sell_vol and says
+        # nothing the delta doesn't (measured: corr +1.0000). These are per-DIRECTION, so buy_vol/up_ticks is
+        # what buying actually cost per tick of upward travel. STORE-RAW like sz_cb/sz_vb: ship the ticks, let
+        # the terminal form the ratio, so nothing is baked in here.
+        self.up_ticks = 0.0
+        self.dn_ticks = 0.0
+        self._prev_px = None      # last trade price seen in THIS bucket (internal; never serialized)
         self.opL, self.opS, self.clL, self.clS = 0.0, 0.0, 0.0, 0.0
         # DIVERGES FROM LEGACY (Step 3): OI-neutral "unattributed transfer" volume.
         # Conservation law: opL + opS + clL + clS + churn == curr_vol.
@@ -173,6 +182,10 @@ class QuantBucket:
             # built before this daemon shipped, simply has no wick and falls back to an open->close body.
             "cvd_hi": float(self.cvd_hi),
             "cvd_lo": float(self.cvd_lo),
+            # "E/R per tick" (directional impact) — RAW ticks travelled up/down inside this bucket. The
+            # terminal forms buy_vol/up_ticks and sell_vol/dn_ticks, so no cutoff is baked in here.
+            "up_ticks": float(self.up_ticks),
+            "dn_ticks": float(self.dn_ticks),
             "curr_vol": float(self.curr_vol),
             "opL": float(self.opL),
             "opS": float(self.opS),
@@ -333,6 +346,15 @@ class QuantEngine:
         if b.open_price == 0.0:
             b.open_price = price
         b.close_price = price
+        if b._prev_px is None:                 # first trade seeds the walk; it contributes no increment
+            b._prev_px = price
+        else:                                  # ticks price ACTUALLY travelled, per direction
+            _d = price - b._prev_px
+            if _d > 0.0:
+                b.up_ticks += _d / config.TICK_SIZE
+            elif _d < 0.0:
+                b.dn_ticks += -_d / config.TICK_SIZE
+            b._prev_px = price
 
         b.curr_vol += chunk_vol
         b.buy_vol += chunk_vol * b_r

@@ -53,6 +53,23 @@ _PRESET_COLORS = ["#ffffff", "#000000", "#2962ff", "#e74c3c", "#1abc9c", "#f1c40
 _DRAW_FILE = os.path.join(config.DATA_DIR, "drawings.json")
 
 
+def _afrac(f: float) -> float:
+    """Clamp an anchor's fraction to +-0.5 — its only meaningful range, since it is an offset WITHIN
+    the anchored bucket.
+
+    _anchor_pts clamps the bucket INDEX for a point drawn past the data (the empty right margin, easy
+    to hit zoomed out) but left the fraction unbounded: `frac = px - j` reached +491 on real saved
+    drawings, i.e. an anchor meaning "the last bucket, plus 491 buckets". That is unplaceable, so on
+    reload the render gate (which needs the WHOLE shape in-frame) rejected it forever — the shape drew
+    fine all session, then vanished at the next restart.
+
+    A no-op for any in-range point (`px - round(px)` is already within +-0.5), so the normal path is
+    unchanged; an out-of-range edge simply pins to the bucket it was clamped to. Applied on READ as
+    well as write, so drawings ALREADY saved with a broken fraction heal rather than staying invisible.
+    """
+    return -0.5 if f < -0.5 else (0.5 if f > 0.5 else f)
+
+
 def _rr_color(rr: float) -> str:
     if rr >= 1.5:
         return "#1abc9c"   # teal — high quality
@@ -1161,8 +1178,21 @@ class DrawingController(QtCore.QObject):
             self._idx_save.start()
 
     def _find_ts(self, ts: float):
-        """Binary-search the current bucket frame for end_time == ts -> array index, or None if that
-        bucket hasn't streamed in yet / fell off retention. end_time is unique & strictly increasing."""
+        """Binary-search the current bucket frame for the bucket at end_time ``ts`` -> array index, or
+        None when that bucket is genuinely outside the loaded frame. end_time is strictly increasing.
+
+        NEAREST-BUCKET SNAP (not exact match): a bucket's end_time MOVES. Whatever bucket is still
+        forming when the daemon restarts gets re-closed at a different end_time, so an anchor taken
+        against it no longer matches to 1e-6 — and since _render_idx_pending drops a shape when ANY of
+        its anchors miss, one drifted corner stranded the whole drawing in _idx_pending forever: saved
+        perfectly, invisible after every restart. Measured on real anchors: the drift was 4-104s while
+        the local bucket spacing was ~155s, i.e. ALWAYS less than one bucket.
+
+        So: if ``ts`` is BRACKETED by two buckets it lies inside the frame's span -> snap to the nearer
+        one (at most half a bucket away — the same bucket its author clicked). Only when it falls off
+        either END is it really outside the frame, and it stays pending exactly as before, so a window
+        that later grows to cover it still renders it. No tolerance constant: the bracketing IS the
+        tolerance, which self-scales across 1m..4h instead of baking in a magic number."""
         bks = self._idx_bks
         if not bks or ts is None:
             return None
@@ -1171,12 +1201,17 @@ class DrawingController(QtCore.QObject):
             mid = (lo + hi) // 2
             v = float(bks[mid].get("end_time", 0.0))
             if abs(v - ts) < 1e-6:
-                return mid
+                return mid                      # exact hit (the common case)
             if v < ts:
                 lo = mid + 1
             else:
                 hi = mid - 1
-        return None
+        # loop exit invariant: bks[hi] < ts < bks[lo], with hi == lo - 1.
+        n = len(bks)
+        if 0 <= hi < n and 0 <= lo < n:         # bracketed -> inside the frame; take the closer bucket
+            return hi if (ts - float(bks[hi].get("end_time", 0.0))) <= \
+                         (float(bks[lo].get("end_time", 0.0)) - ts) else lo
+        return None                             # before the first / after the last -> outside the frame
 
     def _anchor_pts(self, pts):
         """[(ts, frac), ...] time-anchors for array-coord points (ts = the bucket's end_time)."""
@@ -1186,7 +1221,7 @@ class DrawingController(QtCore.QObject):
         out = []
         for px, _py in pts:
             j = max(0, min(len(bks) - 1, int(round(px))))
-            out.append([float(bks[j].get("end_time", 0.0)), px - j])
+            out.append([float(bks[j].get("end_time", 0.0)), _afrac(px - j)])   # j is clamped -> so must the frac be
         return out
 
     # ------------------------------------------------------------------
@@ -1320,7 +1355,7 @@ class DrawingController(QtCore.QObject):
                         self.plot.removeItem(s); self._idx_shapes.remove(s)
                         self._idx_pending.append(self._shape_dict_global(s, self._idx_off))
                         continue
-                    s.pts = [[j + f, py] for (j, (_t, f), (_px, py)) in zip(js, anch, s.pts)]
+                    s.pts = [[j + _afrac(f), py] for (j, (_t, f), (_px, py)) in zip(js, anch, s.pts)]
                 else:
                     s.pts = [[px + d, py] for px, py in s.pts]
                 s.rebuild()
@@ -1373,7 +1408,7 @@ class DrawingController(QtCore.QObject):
                 js = [self._find_ts(ts) for ts, _f in anch]
                 if any(j is None for j in js):
                     keep.append(d); continue
-                axs = [j + f for j, (_t, f) in zip(js, anch)]
+                axs = [j + _afrac(f) for j, (_t, f) in zip(js, anch)]   # heal a frac saved out of range
             elif d["t"] == "bracket":
                 axs = [d["x0"] - off, d["x1"] - off]
             else:

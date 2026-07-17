@@ -3645,6 +3645,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             "vpin": (imb / (len(sel) * target_vol)) if (target_vol and sel) else 0.0,
             "buyer_er": (full_buy / ticks) if ticks else 0.0,
             "seller_er": (full_sell / ticks) if ticks else 0.0,
+            # "E/R per tick" — DIRECTIONAL impact. Unlike buyer_er's dispersion denominator (which is shared,
+            # so buyer_er/seller_er just cancels to buy/sell), these are per-direction: what each side cost per
+            # tick price ACTUALLY travelled its way. Tick-paths are additive, so summing over the selection is
+            # legitimate (dispersion is NOT — see region_state.py:84).
+            "up_ticks": S("up_ticks"), "dn_ticks": S("dn_ticks"),
             "n": len(sel),
             "t_span": max(0.0, float(sel[-1].get("end_time", 0.0)) - float(sel[0].get("start_time", 0.0))),
             "band_lo": band_lo, "band_hi": band_hi,
@@ -3739,6 +3744,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         dl = sk(d["delta"]) + f" ({d['delta_pct']:+.0f}%)"
         vel, vpin = f"{d['vel']:.0f}/s", f"{d['vpin']:.2f}"
         ber, ser = f"{d['buyer_er']:.1f}", f"{d['seller_er']:.1f}"
+        # E/R per tick: contracts spent per tick price actually travelled THAT side's way. 0 ticks travelled
+        # (or a pre-upgrade bucket with no up_ticks/dn_ticks) -> "--" rather than a fabricated number.
+        _ut, _dt = float(d.get("up_ticks", 0.0) or 0.0), float(d.get("dn_ticks", 0.0) or 0.0)
+        _bpt_v = (d["buy"] / _ut) if _ut > 0 else 0.0
+        _spt_v = (d["sell"] / _dt) if _dt > 0 else 0.0
+        bpt = K(_bpt_v) if _ut > 0 else "--"
+        spt = K(_spt_v) if _dt > 0 else "--"
         nb = f"{d['n']} buckets · {self._fmt_elapsed(d['t_span'])}"
         cc = g if c >= o else r
         # 4-vector: colour ONLY the two dominant vectors (the ones that drove the span); the other
@@ -3765,6 +3777,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             sep("EFFORT · SPAN"),
             span("Buyer E/R " + ber, g if d['buyer_er'] > d['seller_er'] else gray),
             span("Seller E/R " + ser, r if d['seller_er'] > d['buyer_er'] else gray),
+            # E/R PER TICK — contracts each side spent per tick price ACTUALLY TRAVELLED ITS WAY (up for
+            # buyers, down for sellers). This is the "what did it COST to move it" read the plain E/R above
+            # cannot give: that one divides by volume-weighted DISPERSION, which BOTH sides share, so
+            # Buyer E/R vs Seller E/R just restates the delta (measured corr +1.0000). Here each side has its
+            # OWN denominator, so HIGHER = that side had to pay more per tick it won. "--" on buckets from
+            # before the daemon shipped up_ticks/dn_ticks.
+            f"{span('Buy/tick ' + bpt, g if _bpt_v > _spt_v and _spt_v > 0 else gray)} | "
+            f"{span('Sell/tick ' + spt, r if _spt_v > _bpt_v and _bpt_v > 0 else gray)}",
             sep("READ · SPAN"),
             # VPIN coloured by the ADAPTIVE tier (same percentile mechanism as the other VPIN
             # sites, ranked vs same-length windows): toxic=crimson, warn=gold, normal=gray.
@@ -5774,6 +5794,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             opL, opS = b.get("opL", 0.0), b.get("opS", 0.0)
             clL, clS = b.get("clL", 0.0), b.get("clS", 0.0)
             ber, ser = b.get("buyer_er", 0.0), b.get("seller_er", 0.0)
+            # Effort per tick: buy_vol per tick price travelled UP, sell_vol per tick travelled DOWN.
+            # 0 ticks that way (or a pre-upgrade bucket) -> "--", never a fabricated ratio.
+            _ut, _dt = float(b.get("up_ticks", 0.0) or 0.0), float(b.get("dn_ticks", 0.0) or 0.0)
+            _bpt = (bv / _ut) if _ut > 0 else 0.0
+            _spt = (sv / _dt) if _dt > 0 else 0.0
+            _bpt_s = K(_bpt) if _ut > 0 else "--"
+            _spt_s = K(_spt) if _dt > 0 else "--"
+            # Per-side VELOCITY for THIS bucket — the absolute rate each side arrived at (contracts/sec).
+            # Same 1.0s duration floor as _bvel below, so all three velocity readouts share one basis.
+            # NOTE: their RATIO is just the delta (duration cancels: corr +1.000000 measured) — the value here
+            # is the ABSOLUTE rates, which VEL (a ratio) and Delta (a split) can't show without mental math.
+            _bdur = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))
+            _bvl, _svl = bv / _bdur, sv / _bdur
             delta = bv - sv
             dpct = (delta / cv * 100.0) if cv > 0 else 0.0
             oi_d = (opL + opS) - (clL + clS)
@@ -5820,6 +5853,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 span(f"Seller E/R {ser:.1f} [{(sm - 1.0) * 100:+.0f}%]", r if ser > ber else gray),
                 span(f"30b Buyer E/R {b30:.1f}", g if b30 > s30 else gray),
                 span(f"30b Seller E/R {s30:.1f}", r if s30 > b30 else gray),
+                # EFFORT PER TICK — contracts each side spent per tick price ACTUALLY TRAVELLED ITS WAY
+                # (buyers per tick UP, sellers per tick DOWN). The E/R lines above divide by volume-weighted
+                # DISPERSION, which BOTH sides share, so Buyer-vs-Seller E/R can only restate the delta
+                # (measured corr +1.0000). Here each side owns its denominator, so this is the real "what did
+                # it COST to move it my way" read: HIGHER = that side paid more per tick it won. "--" on
+                # buckets built before the daemon shipped up_ticks/dn_ticks (never back-fillable).
+                f"{span('Buyer /tick ' + _bpt_s, g if (_bpt > _spt > 0) else gray)} | "
+                f"{span('Seller /tick ' + _spt_s, r if (_spt > _bpt > 0) else gray)}",
                 sep("ABSORPTION · VOL"),
                 span(f"Bull Absorp {K(bull_abs)}", g if bull_abs > 0 else gray),
                 span(f"Bear Absorp {K(bear_abs)}", r if bear_abs > 0 else gray),
@@ -5829,6 +5870,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 sep("READ"),
                 f"VEL {span(f'{vel:.2f}x', gold)}",
                 f"30b VEL {span(f'{vabn:.1f}×', gold if vabn >= config.VEL_ABN_RATIO else gray)}",
+                # Per-side arrival RATE for this bucket (contracts/sec). VEL above is a ratio-vs-normal and
+                # sums both sides; these are the absolute speeds behind it.
+                f"{span('Buy-vel ' + K(_bvl) + '/s', g if _bvl > _svl else gray)} | "
+                f"{span('Sell-vel ' + K(_svl) + '/s', r if _svl > _bvl else gray)}",
             ]
             # A3b — STATE verdict + its calibration debug lines (top-3 states + winner factors).
             # Hidden by default; 'y' toggles (self.show_state).
