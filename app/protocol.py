@@ -64,6 +64,11 @@ class BucketSnapshot(TypedDict):
     poc_price: float     # price row with the highest accumulated volume
     buy_vol: float       # taker buy volume
     sell_vol: float      # taker sell volume
+    cvd_hi: float        # CVD wicks: intrabar PEAK of the running (buy-sell) delta, vs the bucket's own start
+    cvd_lo: float        # ... and its intrabar TROUGH (cvd_lo <= 0 <= cvd_hi). Wire-additive, default 0.0:
+                         # buy_vol/sell_vol ship only the TOTAL, which loses the order trades arrived in, so
+                         # without these a CVD candle can only be an open->close body. Pre-upgrade buckets
+                         # (and the cold archive) have none -> the terminal draws them body-only.
     curr_vol: float      # total volume accumulated in the bucket
     opL: float           # open longs (4-vector)
     opS: float           # open shorts

@@ -395,6 +395,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         for key, label in [("drawing", "Vector Drawing Toolbar"),
                            ("cob", "Order Book DOM Ladder"),
                            ("fp_pane", "Live Footprint Pane"),   # right-docked forming-candle footprint (Mode 10)
+                           ("cvd_pane", "CVD Pane (1D anchored)"),   # cumulative volume delta, resets each UTC midnight
                            ("audio", "OB/Iceberg Alert"),
                            ("pivot_audio", "Pivot Alert")]:      # OWN voice, independent of the OB/Iceberg alert
             cb = QtWidgets.QCheckBox(label)

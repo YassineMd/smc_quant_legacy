@@ -157,6 +157,56 @@ CHURN_RGBA = (110, 112, 120, 115)  # deliberate muted slate (~45% alpha) — neu
 # use the charcoal 'normal'; text surfaces (hover/selection) swap in a lighter gray below.
 _VPIN_TIER_HEX = {vpin_adaptive.TOXIC: "#ff073a", vpin_adaptive.WARN: "#f1c40f",
                   vpin_adaptive.NORMAL: "#555555"}
+# CVD candles: teal = the session's cumulative delta ADVANCED over this bucket, red = it retreated.
+_CVD_GREEN = (38, 166, 154)
+_CVD_RED = (239, 83, 80)
+# DIVERGENCE borders (fill unchanged — only the outline): effort disagreed with result on that bucket.
+_CVD_DIV_UP = (255, 140, 0)    # orange — CVD candle GREEN but the bucket candle RED (net buying, price fell)
+_CVD_DIV_DN = (0, 153, 255)    # electric blue — CVD candle RED but the bucket candle GREEN (net selling, price rose)
+# RESULT >> EFFORT borders: the CVD and the bucket AGREE in direction, but the price move is far bigger than the
+# delta behind it — a move that came cheap (thin book), not one that was paid for.
+# Both must sit FAR from their normal counterpart or the flag is invisible: a neon red beside the standard red
+# reads as the same colour, so the down-flag is a full hue shift to pink rather than another shade of red.
+_CVD_RE_UP = (0, 255, 127)     # electric green — big BULLISH result on little buying effort
+_CVD_RE_DN = (255, 16, 240)    # electric pink  — big BEARISH result on little selling effort
+CVD_RE_RATIO = 1.5             # flag when result-strength >= this x effort-strength (each vs its OWN 30b mean)
+CVD_RE_WINDOW = 30             # trailing baseline — the same causal 30-bucket basis as the stats box's BER/SER
+CVD_RE_EFFORT_FLOOR = 1.0      # never credit effort as weaker than this x normal. Stops a ~0-delta bucket from
+                               # making `result >= RATIO x ~0` trivially true, and sets the floor on what counts:
+                               # a bar can never flag on a result below RATIO x FLOOR of its own normal.
+                               # LOWER these two -> more electric flags (RATIO is the sensitivity knob).
+
+
+class _ClickHandle(QtWidgets.QSplitterHandle):
+    """Splitter divider that also reports a plain CLICK. Dragging is untouched: the click only fires when the
+    mouse never actually moved between press and release, so the two gestures can never collide."""
+
+    def __init__(self, orientation, parent):
+        super().__init__(orientation, parent)
+        self._press = None
+
+    def mousePressEvent(self, ev):
+        self._press = ev.globalPosition().toPoint()
+        super().mousePressEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        super().mouseReleaseEvent(ev)
+        if self._press is not None and (ev.globalPosition().toPoint() - self._press).manhattanLength() <= 3:
+            sp = self.splitter()
+            for i in range(1, sp.count()):          # handle(i) is the divider between widget i-1 and widget i
+                if sp.handle(i) is self:
+                    sp.handleClicked.emit(i)
+                    break
+        self._press = None
+
+
+class _ClickSplitter(QtWidgets.QSplitter):
+    """QSplitter whose dividers emit ``handleClicked(index)`` on a click (see :class:`_ClickHandle`)."""
+
+    handleClicked = QtCore.Signal(int)
+
+    def createHandle(self):
+        return _ClickHandle(self.orientation(), self)
 
 
 def _split_curve_by_sign(x: np.ndarray, y: np.ndarray):
@@ -343,9 +393,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.vb_kinetic_price = None   # Mode 4 secondary linked price ViewBox
         self.vb_pulse_churn = None     # Modes 7/8 secondary churn-scale ViewBox
         self.lower_plot = None         # Mode 10 lower VPIN sub-pane
+        self.cvd_plot = None           # Mode 10 CVD sub-pane (between the price and VPIN panes)
+        self._cvd_qt = None            # lazy {green/red QBrush + QPen} for the CVD candles
+        self._cvd_follow_y = True      # CVD Y auto-fits its visible data; a Y-scroll hands the user control
+                                       # (double-click / a divider click re-arms it), mirroring _follow_y
         self.splitter_v = None         # Mode 10 vertical splitter (upper/lower panes)
         self.cob_col = None            # Mode 10 COB column (cob + spacer), height-matched to the price pane
         self._cob_want = False         # user's COB-toggle intent (drives cob_col visibility in Mode 10)
+        self._cvd_want = False         # user's CVD-pane intent (drives cvd_plot visibility in Mode 10; persisted)
         self._fp_want = False          # user's Live-Footprint-pane intent (right-docked, Mode 10 only)
         self._fp_sig = None            # last forming-bucket signature -> skip redundant footprint re-renders
         self._syncing_split = False    # reentrancy guard for the linked splitter-divider sync
@@ -1418,6 +1473,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif key == "fp_pane":
             self._fp_want = on
             self._update_fp_pane_visibility()
+        elif key == "cvd_pane":
+            self._cvd_want = on
+            if self.cvd_plot is not None:
+                self.cvd_plot.setVisible(on)
+                if on:                       # reveal it at a usable height (it collapses to 0 when hidden)
+                    self._show_cvd_pane()
+            self._last_scanner_sig = None    # force a redraw so the pane fills immediately
         elif key == "audio":
             self.alerts.audio.set_armed(on)
         elif key == "pivot_audio":
@@ -1582,6 +1644,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._follow_y = True                  # Y axis -> lock price auto-fit
             else:
                 self._follow_x = self._follow_y = True  # plot body -> snap to full follow
+            self._follow_last_n = -1                   # re-fit NOW even if FOLLOW_*_PER_TICK is flipped off
             self._last_scanner_sig = None              # force an immediate roll so the lock takes effect
             return
         self._autoranged = False
@@ -1663,6 +1726,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self, "lower_vline", None) is not None:   # sync the SHARED vertical crosshair into the VPIN pane
             self.lower_vline.setPos(pt.x())
             self.lower_hline.hide(); self.vpin_tag.hide()     # cursor is over the price pane -> no VPIN y readout
+        if getattr(self, "cvd_vline", None) is not None:      # ... and into the CVD pane
+            self.cvd_vline.setPos(pt.x())
+            self.cvd_hline.hide(); self.cvd_tag.hide()        # cursor is over the price pane -> no CVD y readout
         if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
             self.fp_panel.show_price_line(pt.y())
         # X-axis time readout at the crosshair (heatmap mode only; x = epoch seconds)
@@ -1740,6 +1806,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.lower_vline.setPos(pt.x()); self.lower_hline.setPos(pt.y()); self.lower_hline.show()
         self.vline.setPos(pt.x())              # shared vertical crosshair -> mirror the X into the price pane
         self.hline.hide(); self.price_tag.hide()   # cursor isn't over the price pane -> no price-y readout there
+        if getattr(self, "cvd_vline", None) is not None:   # ... and into the CVD pane (all three share the X line)
+            self.cvd_vline.setPos(pt.x())
+            self.cvd_hline.hide(); self.cvd_tag.hide()
         self.vpin_tag.setText(f"{pt.y():.3f}")     # VPIN is 0..1 -> 3 decimals; sits on the pane's right axis
         self.vpin_tag.setPos(self.lower_vb.viewRange()[0][1], pt.y())
         self.vpin_tag.show()
@@ -7001,8 +7070,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.vb.setXRange(max(-0.5, n - win - 0.5),
                               (n - 1) + FOLLOW_MARGIN + 0.5, padding=0)
         if self._follow_y and (FOLLOW_Y_PER_TICK or new_bucket):
-            w0 = max(0, n - win)
-            lo, hi = min(lows[w0:n]), max(highs[w0:n])
+            if self._follow_x:
+                w0, w1 = max(0, n - win), n          # following X: the follow window IS what's on screen
+            else:
+                # X is where the USER left it (they panned/zoomed, then double-clicked only the Y axis to
+                # auto-fit). Fit Y to the buckets ACTUALLY VISIBLE — fitting the live window here would scale
+                # Y to candles that are nowhere on screen, which is the "doesn't zoom properly" case.
+                _vx0, _vx1 = self.vb.viewRange()[0]
+                w0 = max(0, int(math.floor(_vx0)))
+                w1 = min(n, int(math.ceil(_vx1)) + 1)
+                if w1 <= w0:                          # degenerate/off-data view -> fall back to the live window
+                    w0, w1 = max(0, n - win), n
+            lo, hi = min(lows[w0:w1]), max(highs[w0:w1])
             if not (hi > lo):
                 hi = lo + 1.0
             pad = (hi - lo) * FOLLOW_PAD_FRAC
@@ -7742,7 +7821,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         vertical splitter and add the lower VPIN sub-pane, X-linked to the chart."""
         if self.lower_plot is not None:
             return
-        self.splitter_v = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self.splitter_v = _ClickSplitter(QtCore.Qt.Vertical)
+        self.splitter_v.handleClicked.connect(self._on_pane_handle_clicked)   # click a divider -> 50/50 snap
         # reparent the primary chart out of the horizontal splitter into the upper track
         self.splitter_v.addWidget(self.plot)
 
@@ -7781,9 +7861,59 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.lower_vb = self.lower_plot.getViewBox()
         self._lower_proxy = pg.SignalProxy(self.lower_plot.scene().sigMouseMoved,
                                            rateLimit=60, slot=self._on_lower_mouse_move)
+        # --- CVD sub-pane: sits BETWEEN the price and VPIN panes, same construction/feel as the VPIN pane.
+        # X is mirrored from the price pane every frame (see the note at the end of this method), so it zooms
+        # and pans in lock-step. Y is the USER'S: autorange is left ON with setAutoVisible so it fits the CVD
+        # inside the visible X window, and pyqtgraph drops that autorange the moment you scroll the Y axis —
+        # which is exactly "scroll the y axis to control its height".
+        self.cvd_plot = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom")})
+        self.cvd_plot.setBackground("#141414")
+        self.cvd_plot.showAxis("right"); self.cvd_plot.hideAxis("left")
+        for _ax in ("bottom", "right"):
+            self.cvd_plot.getAxis(_ax).setPen(pg.mkPen("#dcdcdc", width=1))
+            self.cvd_plot.getAxis(_ax).setTextPen(pg.mkPen("#dcdcdc"))
+        self.cvd_plot.showGrid(x=True, y=True, alpha=0.12)
+        self.cvd_plot.setMenuEnabled(False)
+        self.cvd_plot.setViewportUpdateMode(
+            QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        self.cvd_plot.getAxis("bottom").set_scanner_active(True)
+        _cvb = self.cvd_plot.getViewBox()
+        _cvb.setMouseEnabled(x=True, y=True)
+        # Y is fit EXPLICITLY from the CVD's own data each frame (see _fit_cvd_y) rather than via
+        # enableAutoRange — the same policy the scanner Y-fits use, so stray items can't pollute the bounds
+        # and the fit is deterministic. X belongs to the per-frame mirror. Both autoranges stay off.
+        _cvb.disableAutoRange()
+        _cvb.sigRangeChangedManually.connect(self._on_cvd_manual_range)   # user scrolls Y -> they own it
+        _cz = pg.InfiniteLine(angle=0, movable=False,      # the 1D anchor: CVD re-zeroes here each UTC midnight
+                              pen=pg.mkPen((150, 150, 150, 120), width=1, style=QtCore.Qt.DashLine))
+        _cz.setValue(0.0); _cz.setZValue(5)
+        self.cvd_plot.addItem(_cz, ignoreBounds=True)
+        # SHARED crosshair, same contract as the VPIN pane: the VERTICAL (x) line is shared across all three
+        # panes (they're X-locked, so it lines up), while the HORIZONTAL (y) line + right-axis value badge are
+        # this pane's own. Lines linger like the main crosshair; the badge hides on leave.
+        _cxc = pg.mkPen(color=(170, 170, 170, 150), width=1); _cxc.setCosmetic(True); _cxc.setDashPattern([4.0, 8.0])
+        self.cvd_vline = pg.InfiniteLine(angle=90, movable=False, pen=_cxc)
+        self.cvd_hline = pg.InfiniteLine(angle=0, movable=False, pen=_cxc)
+        self.cvd_vline.setZValue(15); self.cvd_hline.setZValue(15)
+        self.cvd_plot.addItem(self.cvd_vline, ignoreBounds=True)
+        self.cvd_plot.addItem(self.cvd_hline, ignoreBounds=True)
+        self.cvd_hline.hide()
+        self.cvd_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        _ctf = QtGui.QFont("Consolas", 9); _ctf.setBold(True)
+        self.cvd_tag.textItem.setFont(_ctf); self.cvd_tag.setZValue(16)
+        self.cvd_plot.addItem(self.cvd_tag, ignoreBounds=True); self.cvd_tag.hide()
+        self.cvd_vb = self.cvd_plot.getViewBox()
+        self._cvd_proxy = pg.SignalProxy(self.cvd_plot.scene().sigMouseMoved,
+                                         rateLimit=60, slot=self._on_cvd_mouse_move)
+        self.cvd_plot.setMinimumHeight(0)
+        self.cvd_plot.setVisible(self._cvd_want)           # honor the hamburger toggle
+        self.cvd_plot.scene().sigMouseClicked.connect(self._on_cvd_click)   # double-click -> auto-adjust
+        self.splitter_v.addWidget(self.cvd_plot)
+
         self.splitter_v.addWidget(self.lower_plot)
         self.splitter_v.setStretchFactor(0, 3)   # 75% upper price space
-        self.splitter_v.setStretchFactor(1, 1)   # 25% lower toxicity space
+        self.splitter_v.setStretchFactor(1, 1)   # CVD
+        self.splitter_v.setStretchFactor(2, 1)   # 25% lower toxicity space
 
         # re-inject the vertical splitter into the horizontal splitter at index 0
         self.splitter.insertWidget(0, self.splitter_v)
@@ -7799,13 +7929,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.cob_col.setMaximumWidth(self.cob.maximumWidth())
         self.cob.setParent(None)
         self.cob_col.addWidget(self.cob)
-        spacer = QtWidgets.QWidget()                             # dead strip beside the VPIN pane
-        spacer.setAutoFillBackground(True)
-        _sp_pal = spacer.palette(); _sp_pal.setColor(QtGui.QPalette.Window, QtGui.QColor("#141414"))
-        spacer.setPalette(_sp_pal)
-        self.cob_col.addWidget(spacer)
+        # One dead strip PER lower sub-pane (CVD + VPIN): cob_col must keep the SAME section count as
+        # splitter_v, because _sync_pane_split mirrors sizes between them wholesale.
+        def _spacer():
+            w = QtWidgets.QWidget()
+            w.setAutoFillBackground(True)
+            _p = w.palette(); _p.setColor(QtGui.QPalette.Window, QtGui.QColor("#141414")); w.setPalette(_p)
+            return w
+        self.cob_col.addWidget(_spacer())                        # beside the CVD pane
+        self.cob_col.addWidget(_spacer())                        # beside the VPIN pane
         self.cob_col.setStretchFactor(0, 3)   # COB matches the price pane's 75%
-        self.cob_col.setStretchFactor(1, 1)   # spacer matches the VPIN pane's 25%
+        self.cob_col.setStretchFactor(1, 1)   # spacer matches the CVD pane
+        self.cob_col.setStretchFactor(2, 1)   # spacer matches the VPIN pane's 25%
         self.splitter.insertWidget(1, self.cob_col)
         self.cob.setVisible(True)                       # gated by cob_col's visibility below
         self.cob_col.setVisible(self._cob_want)         # honor the user's COB toggle
@@ -7818,6 +7953,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # first; allow full collapse and set BOTH linked splitters (setSizes doesn't emit splitterMoved).
         self.lower_plot.setMinimumHeight(0)
         QtCore.QTimer.singleShot(0, self._collapse_vpin_pane)
+        if self._cvd_want:      # restored ON from the saved toggles (which apply BEFORE the panes exist)
+            QtCore.QTimer.singleShot(0, self._show_cvd_pane)   # queued AFTER the collapse -> gets its slice
 
         # Horizontal lock is enforced deterministically every frame in
         # _scan_bucket_canvas (mirror main X -> lower X). We deliberately do NOT
@@ -7832,9 +7969,123 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         linked vertical splitters (price/VPIN and COB/spacer) set together so their dividers stay aligned."""
         if self.splitter_v is None:
             return
-        self.splitter_v.setSizes([10_000, 0])
+        self.splitter_v.setSizes([10_000, 0, 0])
         if self.cob_col is not None:
-            self.cob_col.setSizes([10_000, 0])
+            self.cob_col.setSizes([10_000, 0, 0])
+
+    def _on_cvd_manual_range(self, *args) -> None:
+        """The user zoomed/panned the CVD pane by hand -> stop auto-fitting its Y (they own it now). A
+        double-click, or a click on the price|CVD divider, re-arms the fit. Mirrors _on_scanner_manual_range."""
+        self._cvd_follow_y = False
+
+    def _fit_cvd_y(self, x: list, lo_arr: list, hi_arr: list) -> None:
+        """Fit the CVD pane's Y to the candles ACTUALLY VISIBLE in X, explicitly (not enableAutoRange, which
+        the scanner Y-fits avoid so stray items can't pollute the bounds). Same window + padding rule as the
+        price pane's _roll_to_live_edge, so after a 50/50 divider click BOTH panes frame their own data the
+        same way and effort/result read proportionally."""
+        n = len(x)
+        if n == 0 or not self._cvd_follow_y:
+            return
+        _vx0, _vx1 = self.cvd_vb.viewRange()[0]
+        w0 = max(0, int(math.floor(_vx0)))
+        w1 = min(n, int(math.ceil(_vx1)) + 1)
+        if w1 <= w0:
+            w0, w1 = 0, n                       # degenerate/off-data view -> frame everything rather than nothing
+        lo, hi = min(lo_arr[w0:w1]), max(hi_arr[w0:w1])
+        if not (hi > lo):
+            lo, hi = lo - 1.0, hi + 1.0         # a flat session (delta 0) still needs a visible band
+        pad = (hi - lo) * FOLLOW_PAD_FRAC
+        self.cvd_vb.setYRange(lo - pad, hi + pad, padding=0)
+
+    def _on_cvd_mouse_move(self, evt) -> None:
+        """Cursor over the CVD pane: drive its OWN crosshair (x+y) + a right-axis CVD badge, and push the SHARED
+        vertical crosshair into the price and VPIN panes so all three line up. The other panes' horizontal lines
+        and value tags hide — the cursor isn't over them. Mirrors _on_lower_mouse_move for the CVD pane."""
+        if getattr(self, "cvd_vb", None) is None or not self.cvd_plot.isVisible():
+            return
+        pos = evt[0]
+        if not self.cvd_plot.sceneBoundingRect().contains(pos):
+            self.cvd_tag.hide()                # left the pane -> drop the badge (lines linger, like the main)
+            return
+        pt = self.cvd_vb.mapSceneToView(pos)
+        self.cvd_vline.setPos(pt.x()); self.cvd_hline.setPos(pt.y()); self.cvd_hline.show()
+        self.vline.setPos(pt.x())              # shared vertical crosshair -> price pane
+        self.hline.hide(); self.price_tag.hide()
+        if getattr(self, "lower_vline", None) is not None:      # ... and the VPIN pane
+            self.lower_vline.setPos(pt.x())
+            self.lower_hline.hide(); self.vpin_tag.hide()
+        self.cvd_tag.setText(f"{pt.y():,.0f}")   # CVD is a volume total -> thousands-separated, no decimals
+        self.cvd_tag.setPos(self.cvd_vb.viewRange()[0][1], pt.y())
+        self.cvd_tag.show()
+
+    def _on_pane_handle_clicked(self, idx: int) -> None:
+        """Click the price|CVD divider -> snap those two panes to a 50/50 height split and re-fit BOTH, so
+        effort (CVD) and result (price) are read on equal footing. The VPIN pane keeps whatever slice it has.
+        Dragging the divider still works normally — only a click (no movement) triggers this."""
+        if idx != 1 or self.splitter_v is None or self.cvd_plot is None or not self.cvd_plot.isVisible():
+            return
+        sz = self.splitter_v.sizes()
+        if len(sz) < 3:
+            return
+        avail = sz[0] + sz[1]
+        if avail <= 0:
+            return
+        half = avail // 2
+        new = [half, avail - half, sz[2]]
+        self.splitter_v.setSizes(new)
+        if self.cob_col is not None:
+            self.cob_col.setSizes(new)          # keep the COB divider glued to the price-pane bottom
+        # Re-frame BOTH panes into their new equal heights, each fit to its own data over the SAME visible X
+        # window -> effort (CVD) and result (price) become directly comparable.
+        self._cvd_follow_y = True               # CVD: re-arm its explicit Y fit
+        self._follow_y = True                   # price pane: re-arm the Y auto-fit ...
+        self._follow_last_n = -1                # ... and force it to land on the very next frame
+        self._last_scanner_sig = None
+
+    def _on_cvd_click(self, ev) -> None:
+        """Double-click the CVD pane -> auto-adjust, with the SAME per-axis semantics as the price pane:
+        the X axis re-locks the horizontal follow, the Y axis re-arms the auto-fit, the body does both.
+
+        Y is the CVD's own (its autorange is what a Y-axis scroll turns off to hand you manual control, so
+        double-click just re-arms it). X is NOT the CVD's to own — it is mirrored from the price pane every
+        frame — so an X double-click here re-locks the SHARED follow, which the mirror then carries over."""
+        if self.cvd_plot is None or not ev.double():
+            return
+        sp = ev.scenePos()
+        on_x = self.cvd_plot.getAxis("bottom").sceneBoundingRect().contains(sp)
+        on_y = self.cvd_plot.getAxis("right").sceneBoundingRect().contains(sp)
+
+        def _fit_y():
+            self._cvd_follow_y = True          # re-arm the explicit per-frame fit (a Y-scroll turned it off)
+            self._last_scanner_sig = None      # ... and force the frame that applies it
+
+        def _lock_x():
+            self._follow_x = True
+            self._follow_last_n = -1
+            self._last_scanner_sig = None
+        if on_x:
+            _lock_x()
+        elif on_y:
+            _fit_y()
+        else:
+            _fit_y(); _lock_x()
+        ev.accept()
+
+    def _show_cvd_pane(self) -> None:
+        """Give the CVD pane a usable slice when it is toggled ON (it sits collapsed at 0 until then).
+        Only grows the CVD section — the price pane keeps the rest and the VPIN divider is left where the
+        user put it. Both linked splitters are set together so their dividers stay aligned."""
+        if self.splitter_v is None:
+            return
+        sz = self.splitter_v.sizes()
+        if len(sz) < 3 or sz[1] > 0:
+            return                                   # already open (or not built yet) -> don't fight the user
+        total = sum(sz) or 10_000
+        want = max(120, int(total * 0.25))           # ~25% of the stack, floored so it is always usable
+        sz = [max(0, sz[0] - want), want, sz[2]]
+        self.splitter_v.setSizes(sz)
+        if self.cob_col is not None:
+            self.cob_col.setSizes(sz)
 
     def _neon_v2_brush(self, opL: float, opS: float, clL: float, clS: float,
                        curr_vol: float, vel_ratio: float) -> "pg.QtGui.QBrush":
@@ -8074,6 +8325,59 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         upper = [mid[i] + mult * atr[i] for i in range(n)]
         lower = [mid[i] - mult * atr[i] for i in range(n)]
         return upper, mid, lower
+
+    @staticmethod
+    def _re_ratios(vals: list, n: int) -> list:
+        """Each value over its OWN trailing-``n`` mean (itself included) — a unitless 'how big is this vs
+        normal lately' strength. CAUSAL: the window only ever looks BACKWARD, so a bar's ratio is final the
+        moment it prints and never repaints. O(N) via a running sum — never the O(N·n) rescan the #3 cache
+        exists to avoid. 0.0 where the baseline is empty/zero (nothing to be a multiple of)."""
+        out = []
+        s = 0.0
+        for i, v in enumerate(vals):
+            s += v
+            if i >= n:
+                s -= vals[i - n]
+            m = s / (n if i >= n else i + 1)
+            out.append((v / m) if m > 0 else 0.0)
+        return out
+
+    @staticmethod
+    def _cvd_candles(buckets: list) -> tuple:
+        """CVD candles, **1-DAY ANCHORED at UTC midnight** (what 'session/1D anchored CVD' means on crypto —
+        Binance's daily roll). Returns ``(opens, highs, lows, closes)``, one candle per bucket.
+
+        The running cumulative delta (Σ buy_vol − sell_vol) re-zeroes on the first bucket of each new UTC day,
+        so each session starts from a flat 0 baseline. Per candle: ``open`` = the running CVD carried in from
+        the previous bucket (0 at an anchor), ``close`` = open + this bucket's delta. Unix time is UTC-based,
+        so ``start_time // 86400`` flips exactly at UTC midnight — no tz math needed.
+
+        WICKS come from the daemon's ``cvd_hi`` / ``cvd_lo`` — the intrabar peak/trough of that bucket's running
+        delta, measured per aggTrade as the bucket is built (so they are EXACT, not a lower-timeframe estimate
+        like TradingView's). They are relative to the bucket's own start, so the absolute wick is just
+        ``open + cvd_hi`` / ``open + cvd_lo``. Both fields are wire-additive: buckets built before the daemon
+        shipped them (and everything in the cold archive) carry none, and those candles fall back to an
+        open->close BODY — the only thing the aggregates alone can honestly support. Expect a visible boundary
+        in history where the wicks begin. Green = the session's delta advanced over this bucket, red = it retreated.
+        """
+        o = []; h = []; l = []; c = []
+        run = 0.0; day = None
+        for b in buckets:
+            d = int(float(b.get("start_time", 0.0)) // 86400.0)     # UTC day index (epoch is UTC-based)
+            if day is not None and d != day:
+                run = 0.0                                            # new UTC day -> re-anchor the session at 0
+            day = d
+            op = run
+            cl = run + (float(b.get("buy_vol", 0.0)) - float(b.get("sell_vol", 0.0)))
+            run = cl
+            hi = op + float(b.get("cvd_hi", 0.0) or 0.0)             # absent (old bucket) -> 0 -> collapses to the body
+            lo = op + float(b.get("cvd_lo", 0.0) or 0.0)
+            if hi < cl: hi = cl                                      # the close must always sit inside the wick,
+            if hi < op: hi = op                                      # and so must the open — clamp, never invent
+            if lo > cl: lo = cl
+            if lo > op: lo = op
+            o.append(op); c.append(cl); h.append(hi); l.append(lo)
+        return o, h, l, c
 
     def _scan_bucket_canvas(self, buckets: list, x: list) -> None:
         """Mode 10 — neon-graded bucket candles + gray baseline (upper pane)
@@ -8483,10 +8787,62 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             f"<span style='color:#000; font-weight:normal'>{fill:.0f}%</span></div>",
             x_edge, "up", span=True, fill_bg="#ffffff")
 
+        # --- CVD sub-pane: 1D-anchored cumulative-delta candles (gated by the hamburger toggle) ---
+        if self.cvd_plot is not None and self._cvd_want and self.cvd_plot.isVisible():
+            if self._cvd_qt is None:                       # fixed palette -> build the Qt objects once
+                self._cvd_qt = {"gb": pg.mkBrush(*_CVD_GREEN), "rb": pg.mkBrush(*_CVD_RED),
+                                "gp": pg.mkPen(*_CVD_GREEN), "rp": pg.mkPen(*_CVD_RED),
+                                "op": pg.mkPen(*_CVD_DIV_UP, width=2),    # divergence outlines, drawn heavier
+                                "bp": pg.mkPen(*_CVD_DIV_DN, width=2),    # so they read against the body fill
+                                "egb": pg.mkBrush(*_CVD_RE_UP),           # result >> effort -> FILL (bullish)
+                                "erb": pg.mkBrush(*_CVD_RE_DN)}           # result >> effort -> FILL (bearish)
+            if "bc_cvd" not in self._scan_handles:
+                self._scan_handles["bc_cvd"] = BucketCandleItem()
+                self.cvd_plot.addItem(self._scan_handles["bc_cvd"])
+            _co, _ch, _cl, _cc = self._cvd_candles(buckets)
+            _q = self._cvd_qt
+            # Two INDEPENDENT visual channels:
+            #   FILL   = the CVD's own direction (teal up / red down), so it always agrees with the body's
+            #            geometry. It goes ELECTRIC when the price result is >= CVD_RE_RATIO x the delta effort
+            #            behind it — the move came CHEAP. Each side is scored against its OWN trailing-30 mean,
+            #            so dollars and contracts compare as 'x times normal, lately'.
+            #   BORDER = the disagreement. Orange when the CVD rose on a RED bucket, electric blue when it fell
+            #            on a GREEN bucket (absorbed); otherwise it just matches the body.
+            # The two are INDEPENDENT and deliberately MIX: an electric fill inside an orange/blue border is the
+            # most extreme bar there is — price ran a long way AND the delta went the other way.
+            _pxr = self._re_ratios([abs(closes[_i] - opens[_i]) for _i in range(len(x))], CVD_RE_WINDOW)
+            _cvr = self._re_ratios([abs(_cc[_i] - _co[_i]) for _i in range(len(x))], CVD_RE_WINDOW)
+            _cbr = []; _cpn = []
+            for _i, (_oo, _ccl) in enumerate(zip(_co, _cc)):
+                _cvd_up = _ccl >= _oo
+                _px_up = closes[_i] >= opens[_i]
+                _div_up = _cvd_up and not _px_up
+                _div_dn = _px_up and not _cvd_up
+                # Independent of divergence — a bar can be BOTH (electric fill + orange/blue border).
+                # The effort FLOOR is what stops a near-zero-delta bucket from making `result >= RATIO x ~0`
+                # trivially true (which fired on every low-effort bar, and always GREEN since a 0 delta counts
+                # as up). With it, the result must clear RATIO x FLOOR of its own normal at minimum, and more
+                # than that once the effort ran above normal.
+                _cheap = _pxr[_i] >= CVD_RE_RATIO * max(_cvr[_i], CVD_RE_EFFORT_FLOOR)
+                if _cheap:                                                 # FILL: result >> effort, hue = CVD dir
+                    _cbr.append(_q["egb"] if _cvd_up else _q["erb"])
+                else:
+                    _cbr.append(_q["gb"] if _cvd_up else _q["rb"])         # FILL: the CVD's own direction
+                if _div_up:
+                    _cpn.append(_q["op"])                  # CVD green vs RED bucket  -> orange border
+                elif _div_dn:
+                    _cpn.append(_q["bp"])                  # CVD red   vs GREEN bucket -> blue border
+                else:
+                    _cpn.append(_q["gp"] if _cvd_up else _q["rp"])
+            self._scan_handles["bc_cvd"].update_data(x, _co, _ch, _cl, _cc, _cbr, _cpn, 0.8, vx0, vx1)
+            self._fit_cvd_y(x, _cl, _ch)     # frame the CVD in its own pane (skipped once the user owns Y)
+
         # Deterministic horizontal lock: mirror the main X range onto the lower
-        # pane every frame so the dual panes stay in pixel-perfect lock-step.
+        # panes every frame so the stacked panes stay in pixel-perfect lock-step.
         main_xr = self.plot.getViewBox().viewRange()[0]
         self.lower_plot.getViewBox().setXRange(main_xr[0], main_xr[1], padding=0)
+        if self.cvd_plot is not None and self.cvd_plot.isVisible():
+            self.cvd_plot.getViewBox().setXRange(main_xr[0], main_xr[1], padding=0)
 
         # Live footprint side pane: redraw the FORMING candle's developing footprint (sig-cached on its
         # curr_vol + level count, so it only re-renders when the live bucket actually changed).

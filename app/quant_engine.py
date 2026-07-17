@@ -107,6 +107,13 @@ class QuantBucket:
         self.curr_vol = 0.0
         self.buy_vol = 0.0
         self.sell_vol = 0.0
+        # INTRABAR delta excursion (Mode-10 CVD wicks): the running (buy_vol - sell_vol) inside THIS bucket
+        # peaks/troughs here. buy_vol/sell_vol only ever ship the TOTAL, which loses the ORDER trades arrived
+        # in — so the CVD candle could only be drawn open->close (a body, no wick). Tracked per trade below,
+        # it is exact (every aggTrade is seen), not a lower-timeframe approximation. Relative to the bucket's
+        # own start, so cvd_lo <= 0 <= cvd_hi always and the terminal just adds its carried-in CVD open.
+        self.cvd_hi = 0.0
+        self.cvd_lo = 0.0
         self.opL, self.opS, self.clL, self.clS = 0.0, 0.0, 0.0, 0.0
         # DIVERGES FROM LEGACY (Step 3): OI-neutral "unattributed transfer" volume.
         # Conservation law: opL + opS + clL + clS + churn == curr_vol.
@@ -161,6 +168,11 @@ class QuantBucket:
             "poc_price": float(poc_price),
             "buy_vol": float(self.buy_vol),
             "sell_vol": float(self.sell_vol),
+            # Mode-10 CVD wicks: the intrabar peak/trough of this bucket's running delta, relative to its own
+            # start (cvd_lo <= 0 <= cvd_hi). Wire-additive — a terminal that predates these fields, or a bucket
+            # built before this daemon shipped, simply has no wick and falls back to an open->close body.
+            "cvd_hi": float(self.cvd_hi),
+            "cvd_lo": float(self.cvd_lo),
             "curr_vol": float(self.curr_vol),
             "opL": float(self.opL),
             "opS": float(self.opS),
@@ -325,6 +337,11 @@ class QuantEngine:
         b.curr_vol += chunk_vol
         b.buy_vol += chunk_vol * b_r
         b.sell_vol += chunk_vol * s_r
+        _run = b.buy_vol - b.sell_vol      # running intrabar delta -> its peak/trough ARE the CVD candle's wicks
+        if _run > b.cvd_hi:
+            b.cvd_hi = _run
+        elif _run < b.cvd_lo:
+            b.cvd_lo = _run
         b.opL += chunk_vol * opL_r
         b.opS += chunk_vol * opS_r
         b.clL += chunk_vol * clL_r
