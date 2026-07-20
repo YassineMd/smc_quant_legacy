@@ -48,7 +48,7 @@ from .chart_widgets import (
     _RGB_EFF_BULL, _RGB_ER_BEAR, _RGB_ER_BULL, _RGB_EXH_BEAR, _RGB_EXH_BULL,
 )
 from .cob_panel import CobPanel
-from .footprint_panel import FootprintPanel
+from .footprint_panel import FootprintPanel, profile_skewness, skew_read, skew_color
 from .drawing_tools import DrawingController, DrawingToolbar
 from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visible
 from .hamburger import FloatingOverlayMenu, HamburgerButton, scale_label
@@ -741,6 +741,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._entry_lines_user = {}              # global key -> explicit user on/off (absent = default: last-on)
         self._entry_line_pool = []; self._entry_lbl_pool = []; self._pivot_n = 0
         self._entry_zone_pool = []               # Path-B light-blue TP zones (filled, no border)
+        # MMXSKEW / MMXSKEW-ORB entry overlay (1h only; hamburger toggles m10_mmxskew + m10_mmxskew_orb) —
+        # self-contained, never touches the pivot subsystem. L/S = MMXSKEW long/short (green/red), oL/oS = the
+        # once-per-day NY-session ORB variant (cyan/magenta pill). Click a badge to toggle its SL (−%) + TP (+%).
+        self._mmx_entries = []                   # [(key, x, side, orb, entry, sl, tp, y_badge)]
+        self._mmx_badge_pool = []; self._mmx_line_pool = []; self._mmx_lbl_pool = []
+        self._mmx_lines_user = {}                # key -> SL/TP lines shown
+        self._mmx_sig = None; self._mmx_n = 0
+        self._mmx_audio_seeded = False; self._mmx_audio_last_et = 0.0   # sound-alert seed (never blast the backlog)
         self.pivot_tooltip = pg.TextItem(anchor=(0.5, 0.0), fill=pg.mkBrush(18, 20, 26, 238),
                                          border=pg.mkPen(90, 96, 108, 220))
         self.pivot_tooltip.setZValue(62); self.plot.addItem(self.pivot_tooltip, ignoreBounds=True)
@@ -1458,6 +1466,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._hide_4h_zone()
         elif key in ("m10_vpfade", "m10_estar", "m10_vpinring"):
             self._pivot_sig = None                  # VP-edge star/trap or VPIN ring toggled -> re-run the pivot draw
+        elif key in ("m10_mmxskew", "m10_mmxskew_orb"):
+            self._mmx_sig = None; self._sel_sig = None    # MMXSKEW / ORB toggled -> re-run the overlay draw
+            if not (self.menu.layer_state("m10_mmxskew") or self.menu.layer_state("m10_mmxskew_orb")):
+                self._clear_mmxskew()               # both off -> tear the badges down now
+        elif key == "m10_mmx_sound":
+            self._mmx_audio_seeded = False          # re-seed on enable -> only NEW live prints beep, not the backlog
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -1620,6 +1634,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     last_key = self._entry_default_key()   # match _draw_entry_lines' default
                     self._entry_lines_user[best] = not self._entry_lines_user.get(best, best == last_key)
                     self._draw_entry_lines(); ev.accept(); return
+            except Exception:
+                pass
+        if (not ev.double() and self.scanner_mode == "bucket_canvas" and self._mmx_entries
+                and (self.menu.layer_state("m10_mmxskew") or self.menu.layer_state("m10_mmxskew_orb"))):
+            try:                                   # click an L/S/oL/oS badge -> toggle its SL/TP price lines
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
+                best = None; bestdx = 2.5
+                for _en in self._mmx_entries:
+                    dx = abs(xc - _en[1])
+                    if dx <= bestdx and abs(yc - _en[7]) <= ytol:
+                        best = _en[0]; bestdx = dx
+                if best is not None:
+                    self._mmx_lines_user[best] = not self._mmx_lines_user.get(best, False)
+                    self._draw_mmx_lines(); ev.accept(); return
             except Exception:
                 pass
         if not ev.double():
@@ -3963,6 +3992,91 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._clear_entry_lines()
         self._pivot_sig = None
 
+    # ------------------------------------------------------------------
+    # MMXSKEW / MMXSKEW-ORB entry overlay (Ctrl+M, 1h only) — self-contained
+    # ------------------------------------------------------------------
+    def _clear_mmxskew(self) -> None:
+        for _it in self._mmx_badge_pool + self._mmx_line_pool + self._mmx_lbl_pool:
+            _it.setVisible(False)
+        self._mmx_entries = []; self._mmx_sig = None
+
+    def _mmx_badge(self, used, x, y, text, tcol, fill):
+        if used >= len(self._mmx_badge_pool):
+            _t = pg.TextItem(anchor=(0.5, 0.5))
+            _f = QtGui.QFont("Consolas", 11); _f.setBold(True); _t.textItem.setFont(_f)
+            _t.setZValue(34); self.plot.addItem(_t, ignoreBounds=True); self._mmx_badge_pool.append(_t)
+        _t = self._mmx_badge_pool[used]
+        _t.fill = pg.mkBrush(*fill) if fill else pg.mkBrush(18, 20, 26, 190)
+        _t.border = pg.mkPen(*(fill if fill else tcol), width=1.2)
+        _t.setColor(tcol); _t.setText(text); _t.setPos(x, y); _t.setVisible(True)
+        return _t
+
+    def _draw_mmxskew(self, filtered) -> None:
+        """Render L/S/oL/oS badges over the 1h bucket canvas (causal detect via app.mmxskew_detect).
+        Fail-safe: any error clears the overlay so it can never break the scanner render."""
+        _mmx_on = self.menu.layer_state("m10_mmxskew")          # L/S (plain MMXSKEW)
+        _orb_on = self.menu.layer_state("m10_mmxskew_orb")      # oL/oS (NY-session ORB)
+        if not (_mmx_on or _orb_on) or self.scanner_mode != "bucket_canvas" or self._tf != "1h":
+            self._clear_mmxskew(); return
+        n = len(filtered)
+        _sig = (n, _mmx_on, _orb_on, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._mmx_sig and self._mmx_badge_pool:
+            return                                 # nothing new closed / same toggles -> keep the drawn badges
+        self._mmx_sig = _sig
+        try:
+            from app import mmxskew_detect
+            entries = mmxskew_detect.detect(filtered)
+        except Exception:
+            self._clear_mmxskew(); return
+        self._mmx_n = n
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.028, 1e-9)
+        GREEN, RED, CYAN, MAG, INK = (40, 230, 90), (255, 45, 70), (0, 225, 255), (255, 0, 162), (12, 14, 20)
+        used = 0; self._mmx_entries = []
+        for e in entries:
+            i = e["i"]; orb = e["orb"]
+            if i >= n or (orb and not _orb_on) or ((not orb) and not _mmx_on):
+                continue                            # each strategy has its OWN toggle
+            b = filtered[i]; hi = float(b.get("high", 0.0)); lo = float(b.get("low", 0.0))
+            side = e["side"]
+            if side > 0:
+                y = lo - pad; text = "oL" if orb else "L"
+            else:
+                y = hi + pad; text = "oS" if orb else "S"
+            fill = (CYAN if side > 0 else MAG) if orb else None
+            tcol = INK if orb else (GREEN if side > 0 else RED)
+            self._mmx_badge(used, i, y, text, tcol, fill); used += 1
+            self._mmx_entries.append(("mmx%d" % i, i, side, orb, e["entry"], e["sl"], e["tp"], y))
+        for j in range(used, len(self._mmx_badge_pool)):
+            self._mmx_badge_pool[j].setVisible(False)
+        self._draw_mmx_lines()
+
+    def _draw_mmx_lines(self) -> None:
+        """SL (yellow) + TP (green) horizontal lines with price tags for every badge toggled ON. The % is
+        trade-aligned: SL always reads negative, TP always positive (side·(level−entry)/entry)."""
+        used_l = used_t = 0
+        for key, x, side, orb, entry, sl, tp, yb in self._mmx_entries:
+            if not self._mmx_lines_user.get(key, False) or entry <= 0:
+                continue
+            rb = min(x + 45, max(x + 1, self._mmx_n - 1))
+            for lvl, col in ((sl, (255, 220, 0)), (tp, (40, 230, 90))):
+                if used_l >= len(self._mmx_line_pool):
+                    _ln = pg.PlotCurveItem(); _ln.setZValue(27)
+                    self.plot.addItem(_ln, ignoreBounds=True); self._mmx_line_pool.append(_ln)
+                _ln = self._mmx_line_pool[used_l]; used_l += 1
+                _pen = pg.mkPen(*col, width=1.8); _pen.setCosmetic(True)
+                _ln.setPen(_pen); _ln.setData([x, rb], [lvl, lvl]); _ln.setVisible(True)
+                if used_t >= len(self._mmx_lbl_pool):
+                    _tl = pg.TextItem(anchor=(0.0, 0.5)); _tl.setZValue(35)
+                    _tf = QtGui.QFont("Consolas", 10); _tf.setBold(True); _tl.textItem.setFont(_tf)
+                    self.plot.addItem(_tl, ignoreBounds=True); self._mmx_lbl_pool.append(_tl)
+                _tl = self._mmx_lbl_pool[used_t]; used_t += 1
+                _pct = side * (lvl - entry) / entry * 100.0
+                _tl.setColor(col); _tl.setText("%.2f (%+.2f%%)" % (lvl, _pct)); _tl.setPos(rb, lvl); _tl.setVisible(True)
+        for j in range(used_l, len(self._mmx_line_pool)):
+            self._mmx_line_pool[j].setVisible(False)
+        for j in range(used_t, len(self._mmx_lbl_pool)):
+            self._mmx_lbl_pool[j].setVisible(False)
+
     def _pivot_put_label(self, used: int, x, y, text: str, color=(0, 0, 0)) -> int:
         """Set the next pooled D/E glyph (grow lazily): bold letter centred on its circle. ``color`` is the
         glyph colour — black on a FILLED badge, the side colour on a HOLLOW (border-only) D badge."""
@@ -5023,15 +5137,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # Pivot V3 shows WITHOUT a selection: scan the loaded set incrementally. Do NOT _clear_pivot() first —
             # that resets _pivot_sig EVERY frame and forces a full re-detect each frame (the lag). Left intact, the
             # sig-gate holds, so this re-detects ONLY when a new bucket closes.
-            if self.scanner_mode == "bucket_canvas" and self.show_pivot:
+            if self.scanner_mode == "bucket_canvas" and (self.show_pivot
+                    or self.menu.layer_state("m10_mmxskew") or self.menu.layer_state("m10_mmxskew_orb")):
                 _pf, _, _ = self._build_scanner_buckets()
-                if _pf:
+                if self.show_pivot and _pf:
                     try:
                         self._draw_pivot(_pf, self._global_idx_offset, 0, len(_pf) - 1, incremental=True)
                     except Exception:
                         self._clear_pivot()
+                elif not self.show_pivot:
+                    self._clear_pivot()
+                try:
+                    self._draw_mmxskew(_pf or [])   # MMXSKEW/ORB overlay (Ctrl+M, 1h) — self-gated, fail-safe
+                except Exception:
+                    self._clear_mmxskew()
             else:
-                self._clear_pivot()      # pivot toggled off / not Mode 10 -> clear it (sig reset here is fine)
+                self._clear_pivot(); self._clear_mmxskew()      # nothing on -> clear both
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -5091,6 +5212,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_pivot(filtered, self._global_idx_offset, lo_i, hi_i)   # PIVOT INDICATOR (Ctrl+P)
             except Exception:
                 self._clear_pivot()
+            try:
+                self._draw_mmxskew(filtered)   # MMXSKEW/ORB overlay (Ctrl+M, 1h) — self-gated, fail-safe
+            except Exception:
+                self._clear_mmxskew()
             try:
                 self._draw_selection_vp(filtered, lo_i, hi_i)   # 'h'-card Volume-Profile-over-selection overlay
             except Exception:
@@ -5807,6 +5932,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # is the ABSOLUTE rates, which VEL (a ratio) and Delta (a split) can't show without mental math.
             _bdur = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))
             _bvl, _svl = bv / _bdur, sv / _bdur
+            # SPEED OF TAPE (prints/sec) — buyers vs sellers, from the per-side trade-count histograms
+            # (sz_cb = taker-BUY count, sz_cs = taker-SELL count; sum = total prints that side). "--" on a
+            # pre-upgrade bucket that shipped no size histogram.
+            _szcb = b.get("sz_cb") or []; _szcs = b.get("sz_cs") or []
+            _tape_b = (sum(_szcb) / _bdur) if _szcb else None
+            _tape_s = (sum(_szcs) / _bdur) if _szcs else None
+            def _tps(v):
+                return f"{v:.2f}/s" if v is not None else "--"
             delta = bv - sv
             dpct = (delta / cv * 100.0) if cv > 0 else 0.0
             # KINETIC EFFICIENCY RATIO (KER) — Realized Work / Kinetic Force per side (see _bucket_ker).
@@ -5814,13 +5947,37 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
             def _kerf(v):
                 return "9999.0" if v == 9999.0 else f"{v:.4f}"
-            # Mov.Magnitude (operator formula) — the squared percent move, scaled ×100: a direction-agnostic
-            # magnitude that GROWS QUADRATICALLY with the % move (a 2% bucket reads 4× a 1% one).
-            # = ((close*100/open - 100)^2) * 100  ("--" when open<=0). Gray below 1 (quiet, ~<0.1% move) ->
-            # GOLD at >= 1, so only a notable move lights up.
-            _pmr_v = ((((c * 100.0) / o) - 100.0) ** 2) * 100.0 if o > 0 else None
+            # Mov.Magnitude (operator formula) — the squared percent move, scaled ×100: a magnitude that GROWS
+            # QUADRATICALLY with the % move (a 2% bucket reads 4× a 1% one). = ((close*100/ref - 100)^2) * 100.
+            # The reference is the candle's FAR extreme, so the magnitude spans the whole DIRECTIONAL range
+            # (wick excursion included), not just the body:
+            #   BULL (close>open) -> from the LOW ;  BEAR (close<open) -> from the HIGH ;  doji -> open (= 0)
+            # Coloured by candle DIRECTION: GREEN when bullish (close>open) / RED when bearish; gray for a doji
+            # or when the reference price <= 0 ("--").
+            if c > o:
+                _pmr_ref = l
+            elif c < o:
+                _pmr_ref = h
+            else:
+                _pmr_ref = o
+            _pmr_v = ((((c * 100.0) / _pmr_ref) - 100.0) ** 2) * 100.0 if _pmr_ref > 0 else None
             _pmr_s = f"{_pmr_v:.4f}" if _pmr_v is not None else "--"
-            _pmr_col = gold if (_pmr_v is not None and _pmr_v >= 1.0) else gray
+            _pmr_col = gray if (_pmr_v is None or c == o) else (g if c > o else r)
+            # SKEW — volume-weighted skewness of THIS bucket's volume-by-price profile (same shared helper the
+            # live footprint pane uses; PROFILE-READ convention: >0 = mass at the HIGHER prices/tail down,
+            # <0 = mass at the LOWER prices/tail up, ~0 symmetric). Shown in plain words (high/low/flat) with the
+            # signed number for magnitude; coloured green/red for a mild lean, cyan/magenta once strongly
+            # lopsided (|skew| >= 0.5), gray when "--" (<3 levels).
+            _skew_v = profile_skewness(b.get("levels"))
+            _skew_word, _skew_notable = skew_read(_skew_v)
+            _skew_s = f"{_skew_word}" if _skew_v is None else f"{_skew_word} {_skew_v:+.2f}"
+            _skew_col = skew_color(_skew_v)
+            # MM × Skew — Mov.Magnitude (always >= 0) times the signed skew: the PRODUCT's sign tracks the skew
+            # (green = mass high / red = mass low) while its magnitude scales the move by how lopsided the volume
+            # was. "--" when either factor is undefined; gray at exactly 0 (doji, or a symmetric profile).
+            _ms_v = (_pmr_v * _skew_v) if (_pmr_v is not None and _skew_v is not None) else None
+            _ms_s = f"{_ms_v:+.2f}" if _ms_v is not None else "--"
+            _ms_col = gray if (_ms_v is None or _ms_v == 0.0) else (g if _ms_v > 0.0 else r)
             oi_d = (opL + opS) - (clL + clS)
             dur = b.get("end_time", 0.0) - b.get("start_time", 0.0)
             vel = b.get("vol_mult", 1.0)
@@ -5916,9 +6073,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _ptl("Seller /tick", _spt_s, _spt, _bpt, _sptr, _bptr, r),
                 f"{span('Buy-vel ' + K(_bvl) + '/s', g if _bvl > _svl else gray)} | "
                 f"{span('Sell-vel ' + K(_svl) + '/s', r if _svl > _bvl else gray)}",
+                f"{span('Tape-B ' + _tps(_tape_b), g if (_tape_b or 0.0) > (_tape_s or 0.0) else gray)} | "
+                f"{span('Tape-S ' + _tps(_tape_s), r if (_tape_s or 0.0) > (_tape_b or 0.0) else gray)}",
                 span("KER_buy: " + _kerf(_ker_buy), g if _ker_buy > 0 else gray),
                 span("KER_sell: " + _kerf(_ker_sell), r if _ker_sell > 0 else gray),
                 span("Mov.Magnitude: " + _pmr_s, _pmr_col),
+                span("Skew: " + _skew_s, _skew_col),
+                span("MM × Skew: " + _ms_s, _ms_col),
             ]
             # A3b — STATE verdict + its calibration debug lines (top-3 states + winner factors).
             # Hidden by default; 'y' toggles (self.show_state).
@@ -5955,7 +6116,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         snap = self.worker.snapshot()
         self._last_snap = snap
         self._merge_liq_sweeps(snap.get("liq_sweeps"))   # fold in any daemon-pushed 15m sweeps (tf-agnostic)
-        _s = _pc(); self._audio_announce(snap); self._audio_announce_pivot(snap)
+        _s = _pc(); self._audio_announce(snap); self._audio_announce_pivot(snap); self._audio_announce_mmxskew(snap)
         self._refresh_scale_labels(snap); self._perf_note("audio_scale", _s)
 
         # Every mode is bucket-native now (time chart removed, Phase B): draw the scanner, refresh
@@ -6105,6 +6266,57 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self.alerts.audio.speak(f"Enter {spoken} D now", gated=False)
                 else:
                     self.alerts.audio.speak(f"Faded {spoken} D", gated=False)   # non-take D = a FADED D on screen
+
+    def _mmx_beep(self, buy: bool, orb: bool) -> None:
+        """Non-blocking bell for a new MMXSKEW / ORB print — winsound only (built into Python on Windows, no
+        file/download). Buy = higher pitch, sell = lower; ORB = a distinctive DOUBLE bell so an oL/oS is
+        audibly different from a plain L/S. Runs in a daemon thread so winsound.Beep never stutters the GUI."""
+        def _play():
+            try:
+                import winsound
+                if orb:
+                    winsound.Beep(1320 if buy else 660, 110); winsound.Beep(1760 if buy else 440, 150)
+                else:
+                    winsound.Beep(988 if buy else 494, 170)
+            except Exception:
+                try:
+                    import winsound; winsound.MessageBeep(-1)
+                except Exception:
+                    pass
+        try:
+            import threading
+            threading.Thread(target=_play, daemon=True).start()
+        except Exception:
+            pass
+
+    def _audio_announce_mmxskew(self, snap) -> None:
+        """Beep the instant a NEW MMXSKEW (L/S) or MMXSKEW-ORB (oL/oS) entry prints on the just-closed 1h bucket.
+        Own 'MMXSKEW entry sound alert' toggle. LIVE-ONLY: seeded silently on enable / first data / tf-change,
+        gated on a NEW bucket close (end_time), and only when the just-closed live-edge bucket IS the entry."""
+        if not self.menu.layer_state("m10_mmx_sound") or self._tf != "1h":
+            return                                 # strategy is 1h-only; sound off -> nothing to do
+        closed = (snap.get("closed_buckets") if snap else None) or []
+        if not closed:
+            return
+        last_et = float(closed[-1].get("end_time", 0.0))
+        if not self._mmx_audio_seeded:             # first data / just enabled -> record the edge, DON'T beep backlog
+            self._mmx_audio_last_et = last_et; self._mmx_audio_seeded = True
+            return
+        if last_et == self._mmx_audio_last_et:
+            return                                 # no NEW bucket closed since last check
+        self._mmx_audio_last_et = last_et
+        win = closed[-400:]                        # enough lookback for spread/skew + the ORB day grouping
+        if len(win) < 60:
+            return
+        try:
+            from app import mmxskew_detect
+            entries = mmxskew_detect.detect(win)
+        except Exception:
+            return
+        L = len(win) - 1                           # the just-closed (live-edge) bucket
+        for e in entries:
+            if e["i"] == L:
+                self._mmx_beep(e["side"] > 0, e["orb"]); break
 
     def _refresh_scale_labels(self, snap) -> None:
         """Push live per-tf bucket ~volumes into the Bucket Scale selector + window title. All

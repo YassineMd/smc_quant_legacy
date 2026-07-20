@@ -30,6 +30,74 @@ def _kfmt(v: float) -> str:
     return f"{v:.0f}"
 
 
+def profile_skewness(levels) -> "float | None":
+    """Volume-weighted skewness of a bucket's volume-by-price profile, in PROFILE-READ convention.
+
+    Each price level contributes weight = buy+sell volume at that price; we take the population
+    skewness m3 / m2**1.5 of the volume-weighted price distribution and FLIP ITS SIGN so the number
+    reads the way you look at the ladder:
+        >0  volume mass sits at the HIGHER prices, thin tail reaching DOWN  (top-heavy);
+        <0  volume mass sits at the LOWER prices,  thin tail reaching UP    (bottom-heavy);
+        ~0  the profile is roughly symmetric about its volume-weighted mean price.
+    (NOTE: this is the NEGATIVE of the textbook Fisher-Pearson coefficient, on purpose — textbook >0
+    means the tail is up / mass is down, which is the opposite of how the desk reads a profile.)
+    None when there are fewer than 3 priced levels (a 2-bin histogram has no meaningful skew shape —
+    its coefficient is a degenerate function of the weight ratio and explodes) or the profile has no
+    price dispersion (all volume at one level). SHARED by the live footprint pane and the bucket stats
+    box so both read the exact same number off the exact same ``levels`` dict."""
+    pts = []
+    W = 0.0
+    for ps, v in (levels or {}).items():
+        try:
+            p = float(ps)
+        except (TypeError, ValueError):
+            continue
+        w = float(v.get("b", 0.0)) + float(v.get("s", 0.0))
+        if w > 0.0:
+            pts.append((p, w)); W += w
+    if len(pts) < 3 or W <= 0.0:
+        return None
+    mean = sum(p * w for p, w in pts) / W
+    m2 = sum(w * (p - mean) ** 2 for p, w in pts) / W
+    if m2 <= 0.0:
+        return None
+    m3 = sum(w * (p - mean) ** 3 for p, w in pts) / W
+    return -(m3 / (m2 ** 1.5))          # sign flipped -> +ve = mass HIGH (see docstring)
+
+
+def skew_read(sk) -> tuple:
+    """Plain-language read of a profile-convention skew (from ``profile_skewness``):
+    returns (word, notable). 'high' = mass at higher prices, 'low' = mass at lower prices, 'flat' =
+    roughly symmetric (|skew| < 0.5); '--' when undefined. ``notable`` is True for high/low (|skew|
+    >= 0.5) so callers can highlight only a genuinely lopsided profile. Keeps both readouts identical."""
+    if sk is None:
+        return ("--", False)
+    if sk >= 0.5:
+        return ("high", True)
+    if sk <= -0.5:
+        return ("low", True)
+    return ("flat", False)
+
+
+# skew colour tiers — GREEN/RED for a mild lean (mass slightly high/low), escalating to CYAN/MAGENTA
+# once the profile is strongly lopsided (skew >= +0.5 / <= -0.5). Positive (mass HIGH) = green->cyan,
+# negative (mass LOW) = red->magenta. Gray when undefined. Shared so the pane and the stats box match.
+_SK_CYAN, _SK_MAGENTA = "#00f3ff", "#ff00a2"
+_SK_GREEN, _SK_RED, _SK_GRAY = "#2ecc71", "#e74c3c", "#9aa0aa"
+
+
+def skew_color(sk) -> str:
+    """Hex colour for a profile-convention skew: cyan (>=+0.5) / green (0..+0.5) / red (-0.5..0) /
+    magenta (<=-0.5) / gray (undefined). SHARED by the footprint pane and the bucket stats box."""
+    if sk is None:
+        return _SK_GRAY
+    if sk >= 0.5:
+        return _SK_CYAN
+    if sk <= -0.5:
+        return _SK_MAGENTA
+    return _SK_GREEN if sk >= 0.0 else _SK_RED
+
+
 _BUY = (46, 204, 113); _SELL = (231, 76, 60)          # normal bar colours
 _BUY_HOT = (0, 255, 127); _SELL_HOT = (255, 45, 70)   # imbalanced (>= mult x per-level avg) — neon
 _POC = (255, 215, 0)
@@ -138,6 +206,13 @@ class FootprintPanel(pg.PlotWidget):
         for _t in (self.price_tag, self.vol_tag):
             _f = QtGui.QFont("Consolas", 9); _f.setBold(True); _t.textItem.setFont(_f)
             _t.setZValue(16); self.addItem(_t, ignoreBounds=True); _t.hide()
+        # Volume-profile SKEWNESS readout, pinned top-left of the pane (repositioned each frame to the
+        # current view corner so it rides the auto-fit Y range). Gold when notably lopsided (|skew| >= 0.5),
+        # muted otherwise; the sign lives in the number.
+        self._skew_label = pg.TextItem(anchor=(0.0, 0.0), color="#9aa0a6")
+        _sf = QtGui.QFont("Consolas", 9); _sf.setBold(True); self._skew_label.textItem.setFont(_sf)
+        self._skew_label.setZValue(16); self.addItem(self._skew_label, ignoreBounds=True)
+        self._skew_label.hide()
         self._sell_pool = []; self._buy_pool = []
         self._show_numbers = True                 # double-click toggles this
         self._last = None                         # (active, mult, price) cache -> re-render on a numbers toggle
@@ -194,7 +269,7 @@ class FootprintPanel(pg.PlotWidget):
 
     def clear_panel(self) -> None:
         self.bars.update_data([], 1.0, None, None)
-        self._poc.hide(); self._price_line.hide()
+        self._poc.hide(); self._price_line.hide(); self._skew_label.hide()
         for t in self._sell_pool + self._buy_pool:
             t.setVisible(False)
 
@@ -266,7 +341,17 @@ class FootprintPanel(pg.PlotWidget):
             self._buy_pool[j].setVisible(False)
         pad = max(bin_h, (hi - lo) * 0.05, hi * 1e-5)
         self.setYRange(lo - pad, hi + pad, padding=0)
-        self.setXRange(-max_vol * 1.16, max_vol * 1.16, padding=0)
+        x_lim = max_vol * 1.16
+        self.setXRange(-x_lim, x_lim, padding=0)
+        # skewness of the FORMING bucket's volume profile — top-left corner of the view. Plain-language
+        # read (high/low/flat) so it's legible at a glance; the signed number rides along for magnitude.
+        # Colour: green/red for a mild lean, cyan/magenta once strongly lopsided (|skew| >= 0.5).
+        sk = profile_skewness(levels)
+        _word, _notable = skew_read(sk)
+        _txt = f"Skew {_word}" if sk is None else f"Skew {_word} {sk:+.2f}"
+        self._skew_label.setText(_txt, color=skew_color(sk))
+        self._skew_label.setPos(-x_lim + x_lim * 0.03, hi + pad)
+        self._skew_label.show()
 
     # ---- crosshair (driven by the owning window) ----
     def set_crosshair(self, x: float, price: float) -> None:
