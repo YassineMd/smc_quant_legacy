@@ -5976,6 +5976,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 return f"{v:.2f}/s" if v is not None else "--"
             delta = bv - sv
             dpct = (delta / cv * 100.0) if cv > 0 else 0.0
+            # sub-bucket delta split (MMXSKEW delta_accel_2): first-half net delta from the daemon `delta_h1`
+            # (captured at the 50%-volume mark; None on pre-ship/pre-backfill buckets). H2 = total − H1;
+            # da2 = (H2 − H1)/curr_vol > 0 => aggression ACCELERATING into the bucket close (green), < 0 = fading.
+            _dh1 = b.get("delta_h1")
+            if _dh1 is not None and cv > 0:
+                _dh1 = float(_dh1); _dh2 = delta - _dh1; _da2v = (_dh2 - _dh1) / cv
+                _da2_s = "%+.3f  (H1 %s / H2 %s)" % (_da2v, sk(_dh1), sk(_dh2))
+                _da2_col = g if _da2v > 0 else (r if _da2v < 0 else gray)
+            else:
+                _da2_s = "--"; _da2_col = gray
             # KINETIC EFFICIENCY RATIO (KER) — Realized Work / Kinetic Force per side (see _bucket_ker).
             _ker_buy, _ker_sell = self._bucket_ker(b)
 
@@ -6090,6 +6100,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 f"{span('Sell '+K(sv), r if sv > bv else gray)} | "
                 f"{span('Buy '+K(bv), g if bv > sv else gray)}",
                 f"Delta {span(sk(delta)+f' ({dpct:+.0f}%)', g if delta >= 0 else r)}",
+                span("Δ-accel " + _da2_s, _da2_col),
                 f"OI Δ {span(sk(oi_d), g if oi_d >= 0 else r)}",
                 # What each side PAID per tick it won, and how fast it ARRIVED. Two independent colourings
                 # per line: the /tick VALUE lights on whichever side paid more per tick (its own side colour),
