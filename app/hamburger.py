@@ -119,6 +119,7 @@ _M10_LAYERS = [
     ("m10_mmxskew", "MMXSKEW entries (L / S)", False, True),          # 1h MMXSKEW long/short badges (click -> SL/TP)
     ("m10_mmxskew_orb", "MMXSKEW-ORB entries (oL / oS)", False, True),   # 1h once-per-day NY-session ORB badges
     ("m10_mmx_sound", "MMXSKEW entry sound alert", False, True),         # beep when a new L/S/oL/oS prints (live edge)
+    ("m10_mmx_gate", "MMXSKEW v1.2 gate (gold bg)", False, True),        # gold bg on L/S passing run_pos<=4 & mov_mag>=39
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
 ]
 

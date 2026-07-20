@@ -1472,6 +1472,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._clear_mmxskew()               # both off -> tear the badges down now
         elif key == "m10_mmx_sound":
             self._mmx_audio_seeded = False          # re-seed on enable -> only NEW live prints beep, not the backlog
+        elif key == "m10_mmx_gate":
+            self._mmx_sig = None                    # v1.2 gate gold-bg highlight toggled -> re-run the overlay draw
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -4016,10 +4018,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         Fail-safe: any error clears the overlay so it can never break the scanner render."""
         _mmx_on = self.menu.layer_state("m10_mmxskew")          # L/S (plain MMXSKEW)
         _orb_on = self.menu.layer_state("m10_mmxskew_orb")      # oL/oS (NY-session ORB)
+        _gate_on = self.menu.layer_state("m10_mmx_gate")        # gold bg on plain L/S passing the v1.2 gate
         if not (_mmx_on or _orb_on) or self.scanner_mode != "bucket_canvas" or self._tf != "1h":
             self._clear_mmxskew(); return
         n = len(filtered)
-        _sig = (n, _mmx_on, _orb_on, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        _sig = (n, _mmx_on, _orb_on, _gate_on, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
         if _sig == self._mmx_sig and self._mmx_badge_pool:
             return                                 # nothing new closed / same toggles -> keep the drawn badges
         self._mmx_sig = _sig
@@ -4031,6 +4034,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._mmx_n = n
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.028, 1e-9)
         GREEN, RED, CYAN, MAG, INK = (40, 230, 90), (255, 45, 70), (0, 225, 255), (255, 0, 162), (12, 14, 20)
+        GOLD = (241, 196, 15)
+        # v1.2 gate highlight (gold bg): PLAIN L/S signals passing run_pos<=4 AND mov_mag>=39. run_pos = the
+        # consecutive same-side count over the plain v1.1 signals; mov_mag = ((close·100/ref−100)^2)·100,
+        # ref = low(bull)/high(bear)/open. Pure highlight — changes NO trade, NO detection. (delta_accel_2 is
+        # NOT live-computable here — it needs the 1m sub-buckets the single-tf terminal doesn't carry.)
+        _gold_pass = set()
+        if _gate_on:
+            _run = 0; _prev = 0
+            for _e in sorted((e for e in entries if not e["orb"] and e["i"] < n), key=lambda e: e["i"]):
+                _run = _run + 1 if _e["side"] == _prev else 1; _prev = _e["side"]
+                _bb = filtered[_e["i"]]; _o = float(_bb.get("open", 0.0)); _c = float(_bb.get("close", 0.0))
+                _hh = float(_bb.get("high", 0.0)); _ll = float(_bb.get("low", 0.0))
+                _ref = _ll if _c > _o else (_hh if _c < _o else _o)
+                _mm = ((((_c * 100.0) / _ref) - 100.0) ** 2) * 100.0 if _ref > 0 else 0.0
+                if _run <= 4 and _mm >= 39.0:
+                    _gold_pass.add(_e["i"])
         used = 0; self._mmx_entries = []
         for e in entries:
             i = e["i"]; orb = e["orb"]
@@ -4044,6 +4063,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 y = hi + pad; text = "oS" if orb else "S"
             fill = (CYAN if side > 0 else MAG) if orb else None
             tcol = INK if orb else (GREEN if side > 0 else RED)
+            if (not orb) and i in _gold_pass:       # v1.2-gate pass -> gold bg, dark text for contrast
+                fill = GOLD; tcol = INK
             self._mmx_badge(used, i, y, text, tcol, fill); used += 1
             self._mmx_entries.append(("mmx%d" % i, i, side, orb, e["entry"], e["sl"], e["tp"], y))
         for j in range(used, len(self._mmx_badge_pool)):
