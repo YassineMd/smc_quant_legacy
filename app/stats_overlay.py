@@ -217,9 +217,9 @@ class StatsOverlay(QtWidgets.QLabel):
         body = "<br>".join(lines)
         if verdict:
             vcol = _verdict_color(verdict)
-            html = (f"<div style='font-family:Consolas;font-size:11px'>{body}"
-                    f"<hr style='border:0;border-top:1px solid #2a2e39'>"
-                    f"<b style='color:{vcol}'>{verdict}</b></div>")
+            html = (f"<div style='font-family:Consolas;font-size:11px'>"
+                    f"<b style='color:{vcol}'>{verdict}</b>"
+                    f"<hr style='border:0;border-top:1px solid #2a2e39'>{body}</div>")
         else:
             html = f"<div style='font-family:Consolas;font-size:11px'>{body}</div>"
         self.setText(html)

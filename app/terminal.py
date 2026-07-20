@@ -5980,6 +5980,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _ms_col = gray if (_ms_v is None or _ms_v == 0.0) else (g if _ms_v > 0.0 else r)
             oi_d = (opL + opS) - (clL + clS)
             dur = b.get("end_time", 0.0) - b.get("start_time", 0.0)
+            # τ-ratio (MMXSKEW v1.2 climactic-blow-off WATCH-flag, 2026-07-20; display-only, changes no trade):
+            # this bucket's fill DURATION vs a trailing EMA-15 of durations. τ<0.3 = filled >3× faster than
+            # normal = a climactic volume blow-off / stop-run sweep (entering at that close = buying the panic).
+            # Underpowered (split-half-robust both RR but p≈0.35, n=35) — a caution flag, not a gate. Causal:
+            # trailing 30-bucket EMA (α=2/16, well past warm-up), uses only data up to the hovered bucket.
+            _tau_a = 2.0 / 16.0; _tau_ema = None
+            for _wb in buckets[max(0, idx - 30):idx + 1]:
+                _wd = max(1.0, _wb.get("end_time", 0.0) - _wb.get("start_time", 0.0))
+                _tau_ema = _wd if _tau_ema is None else _wd * _tau_a + _tau_ema * (1 - _tau_a)
+            _tau = (max(1.0, dur) / _tau_ema) if (_tau_ema and _tau_ema > 0) else 1.0
+            _tau_climactic = _tau < 0.3
             vel = b.get("vol_mult", 1.0)
             bm, sm, _om = _exhaustion_mults(buckets, idx)
             win = buckets[max(0, idx - EXH_WINDOW):idx]
@@ -6046,23 +6057,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 f"{span('Buy '+K(bv), g if bv > sv else gray)}",
                 f"Delta {span(sk(delta)+f' ({dpct:+.0f}%)', g if delta >= 0 else r)}",
                 f"OI Δ {span(sk(oi_d), g if oi_d >= 0 else r)}",
-                sep("POSITIONING"),
-                f"{span('OpL '+K(opL), vc('opL'))} | {span('OpS '+K(opS), vc('opS'))}",
-                f"{span('ClS '+K(clS), vc('clS'))} | {span('ClL '+K(clL), vc('clL'))}",
-                sep("EFFORT"),
-                span(f"Buyer E/R {ber:.1f} [{(bm - 1.0) * 100:+.0f}%]", g if ber > ser else gray),
-                span(f"Seller E/R {ser:.1f} [{(sm - 1.0) * 100:+.0f}%]", r if ser > ber else gray),
-                span(f"30b Buyer E/R {b30:.1f}", g if b30 > s30 else gray),
-                span(f"30b Seller E/R {s30:.1f}", r if s30 > b30 else gray),
-                sep("ABSORPTION · VOL"),
-                span(f"Bull Absorp {K(bull_abs)}", g if bull_abs > 0 else gray),
-                span(f"Bear Absorp {K(bear_abs)}", r if bear_abs > 0 else gray),
-                sep("EFF-AGG · VOL"),
-                span(f"Bull Eff {K(eff_bull_b)}", "#00ff80" if eff_bull_b > 0 else gray),
-                span(f"Bear Eff {K(eff_bear_b)}", "#ff2d6b" if eff_bear_b > 0 else gray),
-                sep("READ"),
-                f"VEL {span(f'{vel:.2f}x', gold)}",
-                f"30b VEL {span(f'{vabn:.1f}×', gold if vabn >= config.VEL_ABN_RATIO else gray)}",
                 # What each side PAID per tick it won, and how fast it ARRIVED. Two independent colourings
                 # per line: the /tick VALUE lights on whichever side paid more per tick (its own side colour),
                 # while the (x) — that side's cost against its own trailing-30 normal — lights GOLD on
@@ -6080,6 +6074,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 span("Mov.Magnitude: " + _pmr_s, _pmr_col),
                 span("Skew: " + _skew_s, _skew_col),
                 span("MM × Skew: " + _ms_s, _ms_col),
+                sep("POSITIONING"),
+                f"{span('OpL '+K(opL), vc('opL'))} | {span('OpS '+K(opS), vc('opS'))}",
+                f"{span('ClS '+K(clS), vc('clS'))} | {span('ClL '+K(clL), vc('clL'))}",
+                sep("EFFORT"),
+                span(f"Buyer E/R {ber:.1f} [{(bm - 1.0) * 100:+.0f}%]", g if ber > ser else gray),
+                span(f"Seller E/R {ser:.1f} [{(sm - 1.0) * 100:+.0f}%]", r if ser > ber else gray),
+                span(f"30b Buyer E/R {b30:.1f}", g if b30 > s30 else gray),
+                span(f"30b Seller E/R {s30:.1f}", r if s30 > b30 else gray),
+                sep("ABSORPTION · VOL"),
+                span(f"Bull Absorp {K(bull_abs)}", g if bull_abs > 0 else gray),
+                span(f"Bear Absorp {K(bear_abs)}", r if bear_abs > 0 else gray),
+                sep("EFF-AGG · VOL"),
+                span(f"Bull Eff {K(eff_bull_b)}", "#00ff80" if eff_bull_b > 0 else gray),
+                span(f"Bear Eff {K(eff_bear_b)}", "#ff2d6b" if eff_bear_b > 0 else gray),
+                sep("READ"),
+                f"VEL {span(f'{vel:.2f}x', gold)}",
+                f"30b VEL {span(f'{vabn:.1f}×', gold if vabn >= config.VEL_ABN_RATIO else gray)}",
+                span("τ-ratio %.2f%s" % (_tau, "  ⚠ CLIMACTIC" if _tau_climactic else ""),
+                     gold if _tau_climactic else gray),
             ]
             # A3b — STATE verdict + its calibration debug lines (top-3 states + winner factors).
             # Hidden by default; 'y' toggles (self.show_state).
