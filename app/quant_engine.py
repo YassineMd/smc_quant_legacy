@@ -114,6 +114,11 @@ class QuantBucket:
         # own start, so cvd_lo <= 0 <= cvd_hi always and the terminal just adds its carried-in CVD open.
         self.cvd_hi = 0.0
         self.cvd_lo = 0.0
+        # HALVES delta split (MMXSKEW delta_accel_2): the running (buy_vol - sell_vol) captured the instant
+        # curr_vol first crosses 50% of target_vol = the FIRST-HALF net delta. None until that mark is reached.
+        # The terminal forms delta_accel_2 = (buy_vol - sell_vol - 2*delta_h1)/curr_vol (2nd-half vs 1st-half
+        # aggression acceleration). Wire-additive, exactly like cvd_hi/cvd_lo above.
+        self.delta_h1 = None
         # DIRECTIONAL price impact ("E/R per tick"): ticks price ACTUALLY TRAVELLED up / down inside this
         # bucket, summed over the trade stream. Distinct from the E/R denominator, which is volume-weighted
         # DISPERSION and is SHARED by both sides — so buyer_er/seller_er cancels to buy_vol/sell_vol and says
@@ -182,6 +187,10 @@ class QuantBucket:
             # built before this daemon shipped, simply has no wick and falls back to an open->close body.
             "cvd_hi": float(self.cvd_hi),
             "cvd_lo": float(self.cvd_lo),
+            # first-half net delta (running buy-sell at the 50%-volume mark) for MMXSKEW delta_accel_2:
+            # da2 = (buy_vol - sell_vol - 2*delta_h1)/curr_vol. Wire-additive — None on a bucket built before
+            # this shipped (or one that closed under 50% target, which cannot happen for a full bucket).
+            "delta_h1": (float(self.delta_h1) if self.delta_h1 is not None else None),
             # "E/R per tick" (directional impact) — RAW ticks travelled up/down inside this bucket. The
             # terminal forms buy_vol/up_ticks and sell_vol/dn_ticks, so no cutoff is baked in here.
             "up_ticks": float(self.up_ticks),
@@ -364,6 +373,8 @@ class QuantEngine:
             b.cvd_hi = _run
         elif _run < b.cvd_lo:
             b.cvd_lo = _run
+        if b.delta_h1 is None and b.curr_vol >= 0.5 * b.target_vol:
+            b.delta_h1 = _run              # first crossing of the 50%-volume mark -> first-half net delta (da2)
         b.opL += chunk_vol * opL_r
         b.opS += chunk_vol * opS_r
         b.clL += chunk_vol * clL_r

@@ -120,6 +120,7 @@ _M10_LAYERS = [
     ("m10_mmxskew_orb", "MMXSKEW-ORB entries (oL / oS)", False, True),   # 1h once-per-day NY-session ORB badges
     ("m10_mmx_sound", "MMXSKEW entry sound alert", False, True),         # beep when a new L/S/oL/oS prints (live edge)
     ("m10_mmx_gate", "MMXSKEW v1.2 gate (gold bg)", False, True),        # gold bg on L/S passing run_pos<=4 & mov_mag>=39
+    ("m10_mmx_gate_da2", "MMXSKEW da2 gate (R/G bg)", False, True),      # green/red bg on L/S passing delta_accel_2>0 & mov_mag>=39 (needs daemon delta_h1)
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
 ]
 
