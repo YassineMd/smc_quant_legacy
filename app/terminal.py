@@ -747,6 +747,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._mmx_entries = []                   # [(key, x, side, entry, sl, tp, y_badge)]
         self._mmx_badge_pool = []; self._mmx_line_pool = []; self._mmx_lbl_pool = []
         self._mmx_lines_user = {}                # key -> SL/TP lines shown
+        self._mmx_warm = []                      # MMXSKEW EMA/run_pos warm-up prefix (see _build_scanner_buckets)
+        self._mmx_last_forming = True            # does the render window end on a still-forming bucket?
+        self._mmx_drawn = False                  # a draw pass completed -> the sig-cache is armed
         self._mmx_sig = None; self._mmx_n = 0
         self._mmx_audio_seeded = False; self._mmx_audio_last_et = 0.0   # sound-alert seed (never blast the backlog)
         self.pivot_tooltip = pg.TextItem(anchor=(0.5, 0.0), fill=pg.mkBrush(18, 20, 26, 238),
@@ -4076,7 +4079,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _clear_mmxskew(self) -> None:
         for _it in self._mmx_badge_pool + self._mmx_line_pool + self._mmx_lbl_pool:
             _it.setVisible(False)
-        self._mmx_entries = []; self._mmx_sig = None
+        self._mmx_entries = []; self._mmx_sig = None; self._mmx_drawn = False
 
     def _mmx_badge(self, used, x, y, text, tcol, fill):
         if used >= len(self._mmx_badge_pool):
@@ -4096,7 +4099,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         the v1.1-NP base), so a badge takes the style of the HIGHEST tier it qualifies for **among the ENABLED
         toggles** — and is skipped entirely if it qualifies for none of them:
             v1.3         -> GOLD background          (mov_mag>=39 + asymmetric da2>0)
-            v1.2-Dynamic -> GREEN(long)/RED(short) bg (run_pos<=4 + mov_mag_ratio>=1.25)
+            v1.2-Dynamic -> GREEN(long)/RED(short) bg (run_pos<=4 + mov_mag_ratio>=1.30)
             v1.1-NP      -> plain badge, no fill      (the base signal)
         Fail-safe: any error clears the overlay so it can never break the scanner render."""
         _v11 = self.menu.layer_state("m10_mmx_v11")
@@ -4105,24 +4108,33 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not (_v11 or _v12d or _v13) or self.scanner_mode != "bucket_canvas" or self._tf != "1h":
             self._clear_mmxskew(); return
         n = len(filtered)
-        _sig = (n, _v11, _v12d, _v13, filtered[-1].get("end_time") if n else 0,
+        warm = getattr(self, "_mmx_warm", None) or []
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        _sig = (n, len(warm), _forming, _v11, _v12d, _v13, filtered[-1].get("end_time") if n else 0,
                 filtered[-1].get("close") if n else 0)
-        if _sig == self._mmx_sig and self._mmx_badge_pool:
+        # Gate on a DRAWN flag, not on the badge pool: the pool starts empty and only grows inside _mmx_badge,
+        # so `and self._mmx_badge_pool` defeated the cache on every frame until the first badge existed —
+        # v1.2-Dynamic fires on ~1.7% of buckets, so that was almost always.
+        if _sig == self._mmx_sig and getattr(self, "_mmx_drawn", False):
             return                                 # nothing new closed / same toggles -> keep the drawn badges
         self._mmx_sig = _sig
         try:
+            # Prepend the warm-up prefix so the EMA-50 / run_pos / eff-agg match the FROZEN study gate, then
+            # shift indices back into `filtered` space. Without this the scan window alone mis-flags 14/174
+            # v1.2-Dynamic badges (biased toward over-firing) — see mmxskew_detect.WARMUP_MIN.
             from app import mmxskew_detect
-            entries = mmxskew_detect.detect(filtered)
+            entries = mmxskew_detect.detect(list(warm) + list(filtered), skip_last=_forming)
         except Exception:
             self._clear_mmxskew(); return
+        _off = len(warm)
         self._mmx_n = n
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.028, 1e-9)
         GREEN, RED, INK, GOLD = (40, 230, 90), (255, 45, 70), (12, 14, 20), (241, 196, 15)
         used = 0; self._mmx_entries = []
         for e in entries:
-            i = e["i"]
-            if i >= n:
-                continue
+            i = e["i"] - _off                       # detect() ran over warm+filtered -> back to filtered space
+            if i < 0 or i >= n:
+                continue                            # entry sat in the warm-up prefix (outside the scan window)
             side = e["side"]
             if _v13 and e["v13"]:                   # highest enabled tier wins
                 fill = GOLD; tcol = INK
@@ -4138,6 +4150,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._mmx_entries.append(("mmx%d" % i, i, side, e["entry"], e["sl"], e["tp"], y))
         for j in range(used, len(self._mmx_badge_pool)):
             self._mmx_badge_pool[j].setVisible(False)
+        self._mmx_drawn = True          # arms the sig-cache even when this pass drew ZERO badges
         self._draw_mmx_lines()
 
     def _draw_mmx_lines(self) -> None:
@@ -6426,7 +6439,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         try:
             from app import mmxskew_detect
-            entries = mmxskew_detect.detect(win)
+            # CLOSED buckets only here (no active appended) -> skip_last=False, or the just-closed live-edge
+            # bucket (the ONLY one this path can ever beep on) would never be emitted and the alert goes silent.
+            entries = mmxskew_detect.detect(win, skip_last=False)
         except Exception:
             return
         L = len(win) - 1                           # the just-closed (live-edge) bucket
@@ -6931,6 +6946,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         combined: list[dict] = list(closed_list)
         _rk = 0
+        _mmx_forming = False        # set True only if the still-forming active bucket is actually appended below
         if _replay:
             # REPLAY causal clip: keep bars whose bucket CLOSED at/before the cursor (right edge), back to a FIXED
             # left edge = (replay START - 24h). The left edge does NOT move with the cursor, so a Right-arrow step
@@ -6974,7 +6990,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 and active.get("curr_vol") == last.get("curr_vol")
             )
             if not is_stale_dup:
-                combined.append(active)
+                combined.append(active); _mmx_forming = True
 
         # signature gate: rebuild only when the bucket set, the live edge volume, the anchor, or the absolute
         # index base (total_closed — which moves at the 10k cap even when len(combined) doesn't) changes.
@@ -7000,6 +7016,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     filtered.append(b)
             if anchor_idx is None:
                 anchor_idx = len(combined)
+
+        # MMXSKEW warm-up prefix. mmxskew_detect restarts its EMA-50, run_pos AND eff-agg share at index 0 of
+        # whatever list it gets, but the frozen study evaluates against full history — so the scan window alone
+        # (median ~41 volume buckets at the now-24h default) draws a DIFFERENT gate than the registered one.
+        # Stash the preceding history for _draw_mmxskew to prepend; it discards entries landing in the prefix.
+        # Guarded + fallback: this is the single source of truth for EVERY scanner mode, so an MMXSKEW import
+        # failure must never break it (the overlay has its own fail-safe; the bucket builder must not inherit one).
+        try:
+            from app.mmxskew_detect import WARMUP_MIN as _mmxw
+        except Exception:
+            _mmxw = 200
+        self._mmx_warm = (closed_list[max(0, _rk - _mmxw):_rk] if _replay
+                          else combined[max(0, anchor_idx - _mmxw):anchor_idx])
+        # Does the window END on a still-forming bucket? Only when the live active was actually appended —
+        # REPLAY never appends one, and the stale-dup guard skips it for ~1 frame after every close. Passing
+        # skip_last=True in those cases would suppress the badge on the newest CLOSED bucket (in replay, the
+        # very bar the cursor sits on).
+        self._mmx_last_forming = bool(_mmx_forming)
 
         # ABSOLUTE index base: a filtered-local idx maps to history.db id = offset + idx. Since combined =
         # closed_list (+ live active), db_id(closed_list[-1]) = total_closed, so db_id(combined[j]) =

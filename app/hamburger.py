@@ -119,7 +119,7 @@ _M10_LAYERS = [
     # MMXSKEW no-POC family (2026-07-21) — one toggle per version; nested tiers, highest ENABLED tier styles the
     # badge (v1.3 gold > v1.2-Dynamic red/green > v1.1-NP plain). Click a badge -> its SL/TP lines.
     ("m10_mmx_v11", "MMXSKEW v1.1-NP (plain)", False, True),             # base: dir+skew+spread+delta, no POC
-    ("m10_mmx_v12d", "MMXSKEW v1.2-Dynamic (red/green)", False, True),   # + run_pos<=4 & mov_mag_ratio>=1.25
+    ("m10_mmx_v12d", "MMXSKEW v1.2-Dynamic (red/green)", False, True),   # + run_pos<=4 & mov_mag_ratio>=1.30
     ("m10_mmx_v13", "MMXSKEW v1.3 (gold)", False, True),                 # + mov_mag>=39 & asymmetric da2>0
     ("m10_mmx_sound", "MMXSKEW entry sound alert", False, True),         # beep on a new live-edge print (v1.3 = double)
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),

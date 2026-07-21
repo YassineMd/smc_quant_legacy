@@ -1,6 +1,6 @@
 """MMXSKEW v1.2-Dynamic gate — FORWARD AUDIT (mirrors study/mmxskew_v12r_forward_audit.py).
 
-Frozen gate: v1.1 + run_pos<=4 + mov_mag_ratio>=1.25 (see study/mm_skew_v12d_validate.py). Splits taken trades at
+Frozen gate: v1.1 + run_pos<=4 + mov_mag_ratio>=1.30 (see study/mm_skew_v12d_validate.py). Splits taken trades at
 freeze_ts (bootstrapped first run = newest in-sample entry), prints in-sample vs FORWARD per RR + verdict, appends
 study/out/mmxskew_v12d_forward_log.md. No 1m dependency — a plain snapshot/archive pull is enough forward.
 

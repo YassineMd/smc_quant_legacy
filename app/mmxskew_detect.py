@@ -10,7 +10,7 @@ it adds NO edge (study/MMXSKEW_NOPOC.md) — it only culled ~17% of signals (mos
 
 Three NESTED tiers are tagged per signal (each has its OWN terminal toggle / badge style):
     v11  — the base signal itself (always True on a returned row)          -> plain badge
-    v12d — v1.2-Dynamic: run_pos <= 4 AND mov_mag_ratio >= 1.25            -> green/red background
+    v12d — v1.2-Dynamic: run_pos <= 4 AND mov_mag_ratio >= 1.30            -> green/red background
            run_pos = consecutive same-side count over the base sequence; mov_mag_ratio = mov_mag /
            trailing-EMA50(mov_mag) with the EMA EXCLUDING the current bucket (causal); mov_mag =
            ((close*100/ref - 100)^2)*100, ref = low(bull) / high(bear) / open(doji).
@@ -20,7 +20,27 @@ Three NESTED tiers are tagged per signal (each has its OWN terminal toggle / bad
            and needs the daemon `delta_h1` field (post-deploy / backfilled buckets); absent -> v13 False.
 
 detect(buckets, rr) -> [{i, side(+1/-1), entry, sl, tp, v11, v12d, v13}]. SL = 0.1% beyond the bucket extreme,
-TP = rr * SL distance (rr=1.5 default). Feed the SAME bucket window the terminal renders.
+TP = rr * SL distance (rr=1.5 default).
+
+*** NO TRADE SEQUENCING HERE. *** detect() returns EVERY qualifying signal independently. The frozen study
+baselines are NOT computed that way: study taken()/walk() enforce a non-overlap rule with a declared same-bucket
+re-entry convention — `if sg["i"] <= last: continue`, where `last` is the PRIOR TRADE'S EXIT BAR, i.e. a signal
+firing on the bucket in which the previous trade exited is SKIPPED. That rule is load-bearing (it removes ~11%
+of signals, all post-take-profit same-side re-loads) and it is audited/hard-locked — see study/MMXSKEW_NOPOC.md
+"Execution contract". Because nothing in this module or its callers implements it, any live/forward execution
+built on these badges MUST enforce it explicitly, or the forward tape will accumulate trades the freeze never
+priced and the audit will diverge while every baseline guard still passes.
+
+TWO CALLER CONTRACTS, both required for the emitted gate to equal the FROZEN study gate:
+  1. WARM-UP — prepend >= WARMUP_MIN buckets of history (see below); indices come back in that extended space.
+  2. CLOSED-ONLY — `skip_last` controls whether the final element is evaluated, and the caller MUST set it to
+     match what it actually passes:
+        skip_last=True  (default) — the list ENDS WITH A STILL-FORMING bucket. It is dropped, mirroring the
+                        study's `range(first, len(A) - 1)`, so a badge appears only once its bucket has closed
+                        and never repaints. This is the live draw path (the terminal appends the active bucket).
+        skip_last=False — the list is CLOSED BUCKETS ONLY, so the final element is a legitimate signal bar.
+                        This is the audio-alert path (`closed[-400:]`) and REPLAY (which never appends an
+                        active bucket). Getting this wrong silently suppresses the newest signal.
 """
 from __future__ import annotations
 import numpy as np
@@ -34,8 +54,24 @@ DELTA_MAX = 15.0
 SL_BUF = 0.001
 DEF_RR = 1.5
 RUN_MAX = 4          # v1.2-Dynamic
-RATIO_MIN = 1.25     # v1.2-Dynamic
+RATIO_MIN = 1.30     # v1.2-Dynamic — MUST equal study/mm_skew_v12d_validate.T_OPT (re-frozen 1.25->1.30
+                     # on 2026-07-21: identical trade set, but immune to data jitter that flips 1.25 36-52%
+                     # of the time; 1.30016 = sqrt(1.24716*1.35539), the midpoint of the two material cliffs)
 MM_MIN_V13 = 39.0    # v1.3
+
+# detect() is WINDOW-SENSITIVE: the EMA-50, run_pos and eff_causal_share all restart at index 0 of whatever
+# list it is handed, while the frozen study always evaluates against full history. Feeding it a short window
+# therefore produces a DIFFERENT gate than the registered one. Measured on the 174 in-sample base signals,
+# Pre-fix (no prefix at all) this cost 14/174 wrong v1.2-Dynamic verdicts at the real now-24h window — 10
+# false-positive, 4 false-negative, the over-firing bias coming from a truncated window also UNDERSTATING
+# run_pos. Sufficiency swept over warm-up length x scan anchor (wrong/174, anchors 1h/3h/6h/12h/24h/48h/168h):
+#     100 -> 1,0,1,1,1,1,0    150 -> 1,1,1,0,0,0,0    200 -> 0,1,1,1,0,0,0
+#     250 -> 0,0,0,0,0,0,0    300/400/500 -> all 0
+# 250 is the FIRST length exact at every anchor, so that is the value. Not higher: detect() runs on the 20Hz
+# GUI thread (GUI_TIMER_MS=50) and cost is linear in list length — 41-bucket window alone ~2.9ms, +250 warm
+# ~14ms (29% of a frame), +500 warm ~27ms (55%). 500 doubles the cost to buy nothing measurable.
+# Callers MUST prepend >= WARMUP_MIN buckets of history and discard entries landing in the prefix.
+WARMUP_MIN = 250
 
 
 def _oc(b):
@@ -49,7 +85,7 @@ def _mov_mag(o, c, h, l):
     return ((((c * 100.0) / ref) - 100.0) ** 2) * 100.0 if ref > 0 else 0.0
 
 
-def detect(buckets: list, rr: float = DEF_RR) -> "list[dict]":
+def detect(buckets: list, rr: float = DEF_RR, skip_last: bool = True) -> "list[dict]":
     n = len(buckets)
     if n == 0:
         return []
@@ -62,8 +98,16 @@ def detect(buckets: list, rr: float = DEF_RR) -> "list[dict]":
         ratio[i] = (mm[i] / ema) if (ema and ema > 0) else 1.0
         ema = mm[i] if ema is None else mm[i] * (2.0 / 51.0) + ema * (1.0 - 2.0 / 51.0)
 
+    # CLOSED BUCKETS ONLY (skip_last=True). A partial bucket's mov_mag/skew/delta are not the closed bucket's —
+    # measured against 1m-reconstructed partials, the v1.2-Dynamic verdict differs from the final one on 25% of
+    # signals at 25% formation, 21% at 50% and 16% at 75%, so badging it repaints (a signal can appear then
+    # vanish). The frozen study never evaluates it either — every study build() loops `range(first, len(A)-1)`.
+    # Safe for the earlier bars because eff_causal_share is genuinely causal (verified: appending a bucket
+    # changes no earlier share by >0.0) and the trailing EMA excludes the current bucket, so the dropped bar
+    # feeds nothing that is emitted. Callers passing a CLOSED-ONLY list must set skip_last=False or the newest
+    # signal is silently swallowed.
     out = []; run = 0; prev = 0
-    for i in range(n):
+    for i in range(n - 1 if skip_last else n):
         b = buckets[i]
         o, c = _oc(b)
         if o <= 0 or c <= 0:
