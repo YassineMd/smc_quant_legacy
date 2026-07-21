@@ -34,6 +34,18 @@ def GATE(sg):
     return sg["run"] <= RUN_MAX and sg["ratio"] >= T_OPT
 
 
+def sig_np(b):
+    """v1.1 signal MINUS the POC-baseline condition. POC DROPPED 2026-07-21 (ablation: no edge, only culls ~17%
+    of signals — mostly shorts). Dropping it buys sample size, the binding constraint on every candidate."""
+    if b.get("sk") is None:
+        return 0
+    if b["up"] and b["sk"] > 0 and b["spread"] >= 35 and b["delta"] < 15:
+        return 1
+    if b["dn"] and b["sk"] < 0 and b["spread"] <= -35:
+        return -1
+    return 0
+
+
 def build():
     A, first, _, _ = FM.build()
     mm_all = [_mm(b) for b in A]; ratio = [1.0] * len(A); ema = None
@@ -42,7 +54,7 @@ def build():
         ema = mm_all[k] if ema is None else mm_all[k] * (2 / 51) + ema * (1 - 2 / 51)
     sigs = []; rc = 0; prev = 0
     for i in range(first, len(A) - 1):
-        s = FM.sig(A[i])                             # frozen v1.1 (WITH POC + delta<15)
+        s = sig_np(A[i])                             # v1.1 minus POC (run_pos over the NO-POC sequence)
         if s == 0:
             continue
         rc = rc + 1 if s == prev else 1; prev = s

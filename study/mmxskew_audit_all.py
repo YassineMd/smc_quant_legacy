@@ -28,8 +28,8 @@ OUT = os.path.join(HERE, "out")
 BOARD_LOG = os.path.join(OUT, "mmxskew_audit_all_log.md")
 LINES = [
     ("v1.3",         V13,  "mmxskew_v13_freeze.json",  "v1.1-POC + mov_mag>=39 + raw da2>0 (asymmetric)"),
-    ("v1.2-Relaxed", V12R, "mmxskew_v12r_freeze.json", "v1.1 + run_pos<=4 + mov_mag>=25"),
-    ("v1.2-Dynamic", V12D, "mmxskew_v12d_freeze.json", "v1.1 + run_pos<=4 + mov_mag_ratio>=1.25"),
+    ("v1.2-Relaxed", V12R, "mmxskew_v12r_freeze.json", "v1.1-noPOC + run_pos<=4 + mov_mag>=25"),
+    ("v1.2-Dynamic", V12D, "mmxskew_v12d_freeze.json", "v1.1-noPOC + run_pos<=4 + mov_mag_ratio>=1.25"),
 ]
 
 

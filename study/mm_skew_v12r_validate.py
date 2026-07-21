@@ -27,9 +27,31 @@ def GATE(sg):
     return sg["run"] <= RUN_MAX and sg["mm"] >= MM_MIN
 
 
+def sig_np(b):
+    """v1.1 signal MINUS the POC-baseline condition. POC DROPPED 2026-07-21: the ablation across every version
+    showed it adds no edge (base-level v1.1 with vs without = 53%/52% win, identical expectancy) — it only culls
+    ~17% of signals (mostly shorts). Dropping it buys sample size, the binding constraint on every candidate."""
+    if b.get("sk") is None:
+        return 0
+    if b["up"] and b["sk"] > 0 and b["spread"] >= 35 and b["delta"] < 15:
+        return 1
+    if b["dn"] and b["sk"] < 0 and b["spread"] <= -35:
+        return -1
+    return 0
+
+
 def build():
     A, first, _, _ = FM.build()
-    return A, G.all_signals(A, first)
+    sigs = []; rc = 0; prev = 0
+    for i in range(first, len(A) - 1):
+        s = sig_np(A[i])
+        if s == 0:
+            continue
+        rc = rc + 1 if s == prev else 1; prev = s          # run_pos over the NO-POC signal sequence
+        b = A[i]; ref = b["l"] if b["c"] > b["o"] else (b["h"] if b["c"] < b["o"] else b["o"])
+        mm = ((((b["c"] * 100.0) / ref) - 100.0) ** 2) * 100.0 if ref > 0 else 0.0
+        sigs.append(dict(i=i, side=s, run=rc, mm=mm, t=float(b.get("start_time", 0))))
+    return A, sigs
 
 
 def taken(A, sigs, rr):

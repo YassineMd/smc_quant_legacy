@@ -42,7 +42,7 @@ def main():
         allt = [t["t"] for rr in trades for t in trades[rr]]
         ft = max(allt) if allt else 0.0
         fz = dict(freeze_ts=ft, freeze_utc=datetime.datetime.utcfromtimestamp(ft).strftime("%Y-%m-%d %H:%M:%S UTC"),
-                  gate="v1.1 + run_pos<=4 + mov_mag_ratio>=%.2f (v1.2-Dynamic)" % V12D.T_OPT,
+                  gate="v1.1 MINUS POC + run_pos<=4 + mov_mag_ratio>=%.2f (v1.2-Dynamic)" % V12D.T_OPT,
                   baseline={str(rr): stats(trades[rr]) for rr in (1.0, 1.5)},
                   predeclared="PASS fwd n>=20 & net>0 & t>=1.5 | FAIL n>=20 & net<=0 | degrade-warn n>=15 & exp<=0")
         os.makedirs(os.path.dirname(FREEZE), exist_ok=True)
