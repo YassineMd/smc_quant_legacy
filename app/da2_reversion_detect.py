@@ -4,9 +4,15 @@ Registered spec: study/da2_reversion_validate.py · freeze study/out/da2_reversi
 study/out/forward_ledger.md. This module is the LIVE mirror of that frozen rule — it must stay byte-equivalent.
 
 RULE (per closed bucket b):
-    universe : MATURE buckets only — target_vol >= TV_MIN. The study excludes everything before
+    universe : MATURE buckets only — **curr_vol** >= VOL_MIN. The study excludes everything before
                FM.build()'s `first` (=2618), an 11.6h backfill burst at target_vol=5000 whose sub-second
-               buckets make a % stop meaningless. TV_MIN is the live equivalent of that cut.
+               buckets make a % stop meaningless.
+               *** GATE ON curr_vol, NOT target_vol. *** `target_vol` is a SNAPSHOT-level field
+               (app/protocol.py:130,156), NOT a per-bucket one, so live wire buckets carry no `target_vol`
+               and a gate on it rejects EVERYTHING while still passing an archive-based test (archive rows
+               come from history.db and DO have it). `curr_vol` is per-bucket and on the wire. Measured
+               equivalence over 3880 archive buckets: 1263 vs 1262 accepted, ONE disagreement, zero false
+               rejects — pre-first curr_vol is p99 5,000 vs post-first p1 140,432, a clean step.
     signal   : da2 OPPOSED to the candle
                  bearish (close<open) AND da2 > 0  -> LONG   (buying accelerated into a decline = absorbed)
                  bullish (close>open) AND da2 < 0  -> SHORT  (selling accelerated into a rally  = absorbed)
@@ -36,7 +42,8 @@ from __future__ import annotations
 
 SL_PCT = 0.008        # FROZEN — must equal study/da2_reversion_validate.SL_PCT
 TP_PCT = 0.010        # FROZEN — must equal study/da2_reversion_validate.TP_PCT
-TV_MIN = 100000.0     # maturity gate; the live equivalent of the study's `first` (target_vol >= 100k)
+VOL_MIN = 100000.0    # maturity gate on the bucket's OWN curr_vol (see the docstring: target_vol is
+                      # snapshot-level and absent from wire buckets, so gating on it yields ZERO signals live)
 
 
 def _oc(b):
@@ -64,7 +71,7 @@ def detect(buckets: list, skip_last: bool = True) -> "list[dict]":
     out = []
     for i in range(n - 1 if skip_last else n):
         b = buckets[i]
-        if float(b.get("target_vol", 0.0) or 0.0) < TV_MIN:
+        if float(b.get("curr_vol", 0.0) or 0.0) < VOL_MIN:
             continue                                   # immature bucket -> outside the frozen universe
         o, c = _oc(b)
         if o <= 0 or c <= 0 or c == o:
