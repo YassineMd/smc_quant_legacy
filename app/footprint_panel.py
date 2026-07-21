@@ -273,8 +273,8 @@ class FootprintPanel(pg.PlotWidget):
         for t in self._sell_pool + self._buy_pool:
             t.setVisible(False)
 
-    def update_footprint(self, active: dict, mult: float, price=None, ber30=None, ser30=None) -> None:
-        self._last = (active, mult, price, ber30, ser30)
+    def update_footprint(self, active: dict, mult: float, price=None, ber30=None, ser30=None, top_html=None) -> None:
+        self._last = (active, mult, price, ber30, ser30, top_html)
         levels = (active or {}).get("levels") or {}
         rows = []
         for ps, v in levels.items():
@@ -343,13 +343,16 @@ class FootprintPanel(pg.PlotWidget):
         self.setYRange(lo - pad, hi + pad, padding=0)
         x_lim = max_vol * 1.16
         self.setXRange(-x_lim, x_lim, padding=0)
-        # skewness of the FORMING bucket's volume profile — top-left corner of the view. Plain-language
-        # read (high/low/flat) so it's legible at a glance; the signed number rides along for magnitude.
-        # Colour: green/red for a mild lean, cyan/magenta once strongly lopsided (|skew| >= 0.5).
-        sk = profile_skewness(levels)
-        _word, _notable = skew_read(sk)
-        _txt = f"Skew {_word}" if sk is None else f"Skew {_word} {sk:+.2f}"
-        self._skew_label.setText(_txt, color=skew_color(sk))
+        # Top-left readout, pinned to the view corner. When the caller passes a pre-built HTML block
+        # (the live-footprint multi-metric readout: Mov.Magn / Skew / MMxSkew / Tape / τ-ratio / Δ-accel,
+        # labels neutral + VALUES coloured), render that; else fall back to the standalone skewness label.
+        if top_html is not None:
+            self._skew_label.setHtml(top_html)
+        else:
+            sk = profile_skewness(levels)
+            _word, _notable = skew_read(sk)
+            _txt = f"Skew {_word}" if sk is None else f"Skew {_word} {sk:+.2f}"
+            self._skew_label.setText(_txt, color=skew_color(sk))
         self._skew_label.setPos(-x_lim + x_lim * 0.03, hi + pad)
         self._skew_label.show()
 

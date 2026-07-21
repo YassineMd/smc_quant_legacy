@@ -1951,6 +1951,59 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         wp = self.mapFromGlobal(gp)
         self.stats.show_stats(lines, clock, wp.x(), wp.y())
 
+    def _fp_top_html(self, ab: dict, buckets: list) -> str:
+        """Live-footprint top-left readout: Mov.Magn / Skew / MMxSkew / Tape-B/S / τ-ratio / Δ-accel for the
+        forming (or cursor) bucket. Labels neutral, only the VALUES are coloured. τ-ratio uses the trailing
+        bucket durations; each metric shows '--' when its inputs are absent (partial forming bucket / missing field)."""
+        NEU, G, R, GRAY, GOLD = "#9aa0a6", "#28e65a", "#ff2d46", "#7a828c", "#f1c40f"
+        def row(lbl, val, col):
+            return "<span style='color:%s'>%s</span> <span style='color:%s'>%s</span>" % (NEU, lbl, col, val)
+        ab = ab or {}
+        o = float(ab.get("open", ab.get("open_price", 0.0)) or 0.0)
+        c = float(ab.get("close", ab.get("close_price", 0.0)) or 0.0)
+        h = float(ab.get("high", 0.0) or 0.0); l = float(ab.get("low", 0.0) or 0.0)
+        cv = float(ab.get("curr_vol", 0.0) or 0.0)
+        bv = float(ab.get("buy_vol", 0.0) or 0.0); sv = float(ab.get("sell_vol", 0.0) or 0.0)
+        out = []
+        ref = l if c > o else (h if c < o else o)
+        mm = ((((c * 100.0) / ref) - 100.0) ** 2) * 100.0 if ref > 0 else None
+        out.append(row("Mov.Magn", ("%.4f" % mm) if mm is not None else "--",
+                       GRAY if (mm is None or c == o) else (G if c > o else R)))
+        sk = profile_skewness(ab.get("levels"))
+        _w, _ = skew_read(sk)
+        out.append(row("Skew", (_w if sk is None else "%s %+.2f" % (_w, sk)), skew_color(sk)))
+        ms = (mm * sk) if (mm is not None and sk is not None) else None
+        out.append(row("MMxSkew", ("%+.2f" % ms) if ms is not None else "--",
+                       GRAY if (ms is None or ms == 0) else (G if ms > 0 else R)))
+        st = float(ab.get("start_time", 0.0) or 0.0); et = float(ab.get("end_time", 0.0) or 0.0)
+        dur = (et - st) if et > st else 0.0
+        szb = ab.get("sz_cb") or []; szs = ab.get("sz_cs") or []
+        if dur > 0 and szb:
+            tb = sum(szb) / dur; ts = (sum(szs) / dur) if szs else 0.0
+            out.append("<span style='color:%s'>Tape</span> <span style='color:%s'>B %.2f/s</span>"
+                       " <span style='color:%s'>/</span> <span style='color:%s'>S %.2f/s</span>"
+                       % (NEU, G if tb > ts else GRAY, tb, NEU, R if ts > tb else GRAY, ts))
+        else:
+            out.append(row("Tape", "--", GRAY))
+        tau = None
+        if dur > 0 and buckets:
+            a_ = 2.0 / 16.0; ema = None
+            for wb in buckets[-30:]:
+                wd = float(wb.get("end_time", 0.0) or 0.0) - float(wb.get("start_time", 0.0) or 0.0)
+                if wd <= 0:
+                    continue
+                ema = wd if ema is None else wd * a_ + ema * (1 - a_)
+            tau = (dur / ema) if (ema and ema > 0) else None
+        out.append(row("τ-ratio", ("%.2f" % tau) if tau is not None else "--",
+                       GOLD if (tau is not None and tau < 0.3) else GRAY))
+        dh1 = ab.get("delta_h1")
+        if dh1 is not None and cv > 0:
+            da2 = ((bv - sv) - 2.0 * float(dh1)) / cv
+            out.append(row("Δ-accel", "%+.3f" % da2, G if da2 > 0 else (R if da2 < 0 else GRAY)))
+        else:
+            out.append(row("Δ-accel", "--", GRAY))
+        return "<br>".join(out)
+
     def _refresh_parked_hover(self) -> None:
         """A3a live-breathe — re-run the readout each redraw frame. With a parked cursor it
         re-renders the hovered bucket tick-by-tick; with NO hover it falls back to the always-on
@@ -9243,7 +9296,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 # trailing-30 buyer/seller E/R of the live-edge bucket -> the SAME abnormal-order threshold the chart
                 # uses for its blue/orange imbalance lines, so the panel highlights exactly the same levels.
                 _b30 = ber30s[-1] if ber30s else None; _s30 = ser30s[-1] if ser30s else None
-                self.fp_panel.update_footprint(_ab, config.FOOTPRINT_IMB_ER_MULT, _spot, _b30, _s30)
+                self.fp_panel.update_footprint(_ab, config.FOOTPRINT_IMB_ER_MULT, _spot, _b30, _s30,
+                                               self._fp_top_html(_ab, buckets))
 
 
     # ------------------------------------------------------------------
