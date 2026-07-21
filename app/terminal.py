@@ -1975,6 +1975,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         ms = (mm * sk) if (mm is not None and sk is not None) else None
         out.append(row("MMxSkew", ("%+.2f" % ms) if ms is not None else "--",
                        GRAY if (ms is None or ms == 0) else (G if ms > 0 else R)))
+        # NON-LOCKED (first-print / causal) eff-agg spread = (2*eff_causal_share - 1)*100 — the exact panel-2
+        # value MMXSKEW gates on (>= +35 long / <= -35 short), NOT the centered/settled one (that repaints).
+        # Computed over a trailing 150-bucket slice: the norms look back 50 (ABSORP/EFF_AGG) + 7 (causal half
+        # of LIVE_PANEL_WINDOW), so the LAST value is identical to the full-history compute, far cheaper.
+        # Green once the long gate is met, red once the short gate is met, grey in between.
+        _eff_s, _eff_col = "--", GRAY
+        try:
+            _w = buckets[-150:] if buckets else []
+            if len(_w) >= 8:
+                from . import pivot_detect as _PD
+                _ev = (2.0 * float(_PD.eff_causal_share(_w)[-1]) - 1.0) * 100.0
+                _eff_s = "%+.1f" % _ev
+                _eff_col = G if _ev >= 35.0 else (R if _ev <= -35.0 else GRAY)
+        except Exception:
+            pass
+        out.append(row("eff-agg", _eff_s, _eff_col))
         st = float(ab.get("start_time", 0.0) or 0.0); et = float(ab.get("end_time", 0.0) or 0.0)
         dur = (et - st) if et > st else 0.0
         szb = ab.get("sz_cb") or []; szs = ab.get("sz_cs") or []
