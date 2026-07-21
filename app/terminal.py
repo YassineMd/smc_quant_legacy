@@ -1998,10 +1998,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                        GOLD if (tau is not None and tau < 0.3) else GRAY))
         dh1 = ab.get("delta_h1")
         if dh1 is not None and cv > 0:
-            da2 = ((bv - sv) - 2.0 * float(dh1)) / cv
+            def _kv(v):
+                a = abs(v); s = "+" if v >= 0 else "-"
+                return ("%s%.1fK" % (s, a / 1000.0)) if a >= 1000 else ("%s%.0f" % (s, a))
+            _d1 = float(dh1); _d2 = (bv - sv) - _d1; da2 = (_d2 - _d1) / cv
             out.append(row("Δ-accel", "%+.1f%%" % (da2 * 100.0), G if da2 > 0 else (R if da2 < 0 else GRAY)))
+            out.append("<span style='color:%s'>H1/H2</span> <span style='color:%s'>%s</span>"
+                       " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
+                       % (NEU, G if _d1 >= 0 else R, _kv(_d1), NEU, G if _d2 >= 0 else R, _kv(_d2)))
         else:
             out.append(row("Δ-accel", "--", GRAY))
+            out.append(row("H1/H2", "--", GRAY))
         return "<br>".join(out)
 
     def _refresh_parked_hover(self) -> None:
