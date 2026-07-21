@@ -116,11 +116,12 @@ _M10_LAYERS = [
     ("m10_vpfade", "D VP star/trap/clock", True, True),         # D-entry gold star/red-x trap + cyan Path-B wait clock
     ("m10_estar", "E VP star/trap (unval.)", True, True),       # star/trap on E's own vs opposite value-half
     ("m10_vpinring", "VPIN confluence ring", True, True),       # electric-purple ring on D/E entries with VPIN>=warn
-    ("m10_mmxskew", "MMXSKEW entries (L / S)", False, True),          # 1h MMXSKEW long/short badges (click -> SL/TP)
-    ("m10_mmxskew_orb", "MMXSKEW-ORB entries (oL / oS)", False, True),   # 1h once-per-day NY-session ORB badges
-    ("m10_mmx_sound", "MMXSKEW entry sound alert", False, True),         # beep when a new L/S/oL/oS prints (live edge)
-    ("m10_mmx_gate", "MMXSKEW v1.2 gate (gold bg)", False, True),        # gold bg on L/S passing run_pos<=4 & mov_mag>=39
-    ("m10_mmx_gate_da2", "MMXSKEW da2 gate (R/G bg)", False, True),      # green/red bg on L/S passing delta_accel_2>0 & mov_mag>=39 (needs daemon delta_h1)
+    # MMXSKEW no-POC family (2026-07-21) — one toggle per version; nested tiers, highest ENABLED tier styles the
+    # badge (v1.3 gold > v1.2-Dynamic red/green > v1.1-NP plain). Click a badge -> its SL/TP lines.
+    ("m10_mmx_v11", "MMXSKEW v1.1-NP (plain)", False, True),             # base: dir+skew+spread+delta, no POC
+    ("m10_mmx_v12d", "MMXSKEW v1.2-Dynamic (red/green)", False, True),   # + run_pos<=4 & mov_mag_ratio>=1.25
+    ("m10_mmx_v13", "MMXSKEW v1.3 (gold)", False, True),                 # + mov_mag>=39 & asymmetric da2>0
+    ("m10_mmx_sound", "MMXSKEW entry sound alert", False, True),         # beep on a new live-edge print (v1.3 = double)
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
 ]
 
