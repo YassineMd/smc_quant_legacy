@@ -752,6 +752,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._mmx_drawn = False                  # a draw pass completed -> the sig-cache is armed
         self._mmx_sig = None; self._mmx_n = 0
         self._mmx_audio_seeded = False; self._mmx_audio_last_et = 0.0   # sound-alert seed (never blast the backlog)
+        # DA2-REVERSION v1.0 overlay — own pools so it never contends with the MMXSKEW badges. da2-L / da2-S,
+        # amber (fade-up) / violet (fade-down). Click a badge for its fixed 0.8% SL / 1.0% TP lines.
+        self._d2r_entries = []                   # [(key, x, side, entry, sl, tp, y_badge)]
+        self._d2r_badge_pool = []; self._d2r_line_pool = []; self._d2r_lbl_pool = []
+        self._d2r_lines_user = {}; self._d2r_sig = None; self._d2r_drawn = False; self._d2r_n = 0
         self.pivot_tooltip = pg.TextItem(anchor=(0.5, 0.0), fill=pg.mkBrush(18, 20, 26, 238),
                                          border=pg.mkPen(90, 96, 108, 220))
         self.pivot_tooltip.setZValue(62); self.plot.addItem(self.pivot_tooltip, ignoreBounds=True)
@@ -1654,6 +1659,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if best is not None:
                     self._mmx_lines_user[best] = not self._mmx_lines_user.get(best, False)
                     self._draw_mmx_lines(); ev.accept(); return
+            except Exception:
+                pass
+        if (not ev.double() and self.scanner_mode == "bucket_canvas"
+                and self._d2r_entries and self.menu.layer_state("m10_da2rev")):
+            try:                               # click a da2-L/da2-S badge -> toggle its fixed SL/TP lines
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
+                best = None; bestdx = 2.5
+                for _en in self._d2r_entries:
+                    dx = abs(xc - _en[1])
+                    if dx <= bestdx and abs(yc - _en[6]) <= ytol:
+                        best = _en[0]; bestdx = dx
+                if best is not None:
+                    self._d2r_lines_user[best] = not self._d2r_lines_user.get(best, False)
+                    self._draw_da2rev_lines(); ev.accept(); return
             except Exception:
                 pass
         if not ev.double():
@@ -4081,6 +4101,87 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _it.setVisible(False)
         self._mmx_entries = []; self._mmx_sig = None; self._mmx_drawn = False
 
+    # ------------------------------------------------------------------
+    # DA2-REVERSION v1.0 overlay (hamburger m10_da2rev, 1h only) — self-contained, fail-safe
+    # ------------------------------------------------------------------
+    def _clear_da2rev(self) -> None:
+        for _it in self._d2r_badge_pool + self._d2r_line_pool + self._d2r_lbl_pool:
+            _it.setVisible(False)
+        self._d2r_entries = []; self._d2r_sig = None; self._d2r_drawn = False
+
+    def _draw_da2rev(self, filtered) -> None:
+        """da2-L / da2-S badges for the FROZEN mean-reversion candidate (app/da2_reversion_detect).
+
+        NO warm-up prefix: every input is per-bucket (da2, direction, target_vol), so a truncated scan window
+        cannot change a verdict — unlike MMXSKEW, whose EMA/run_pos/eff-agg all restart at index 0.
+        Closed-only: the still-forming bucket is skipped unless the window is closed-only (replay), because
+        delta_h1 is stamped at the 50%-volume mark while buy/sell keep moving -> da2 would repaint.
+        Badges appear ONLY on buckets carrying the daemon's `delta_h1` (2026-07-20 23:18 onward)."""
+        if not self.menu.layer_state("m10_da2rev") or self.scanner_mode != "bucket_canvas" or self._tf != "1h":
+            self._clear_da2rev(); return
+        n = len(filtered)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))   # same window semantics as the MMXSKEW path
+        _sig = (n, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._d2r_sig and self._d2r_drawn:
+            return
+        self._d2r_sig = _sig
+        try:
+            from app import da2_reversion_detect
+            entries = da2_reversion_detect.detect(filtered, skip_last=_forming)
+        except Exception:
+            self._clear_da2rev(); return
+        self._d2r_n = n
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.045, 1e-9)
+        AMBER, VIOLET, INK = (255, 176, 32), (170, 120, 255), (12, 14, 20)
+        used = 0; self._d2r_entries = []
+        for e in entries:
+            i = e["i"]
+            if i >= n:
+                continue
+            side = e["side"]
+            fill = AMBER if side > 0 else VIOLET
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)   # offset beyond the MMXSKEW badges so both can show
+            if used >= len(self._d2r_badge_pool):
+                _t = pg.TextItem(anchor=(0.5, 0.5))
+                _f = QtGui.QFont("Consolas", 10); _f.setBold(True); _t.textItem.setFont(_f)
+                _t.setZValue(33); self.plot.addItem(_t, ignoreBounds=True); self._d2r_badge_pool.append(_t)
+            _t = self._d2r_badge_pool[used]
+            _t.fill = pg.mkBrush(*fill); _t.border = pg.mkPen(*fill, width=1.2)
+            _t.setColor(INK); _t.setText("da2-L" if side > 0 else "da2-S")
+            _t.setPos(i, y); _t.setVisible(True); used += 1
+            self._d2r_entries.append(("d2r%d" % i, i, side, e["entry"], e["sl"], e["tp"], y))
+        for j in range(used, len(self._d2r_badge_pool)):
+            self._d2r_badge_pool[j].setVisible(False)
+        self._d2r_drawn = True
+        self._draw_da2rev_lines()
+
+    def _draw_da2rev_lines(self) -> None:
+        """Fixed 0.8% SL (yellow) / 1.0% TP (green) for every da2 badge toggled ON, with price + % tags."""
+        used_l = used_t = 0
+        for key, x, side, entry, sl, tp, yb in self._d2r_entries:
+            if not self._d2r_lines_user.get(key, False) or entry <= 0:
+                continue
+            rb = min(x + 45, max(x + 1, self._d2r_n - 1))
+            for lvl, col in ((sl, (255, 220, 0)), (tp, (40, 230, 90))):
+                if used_l >= len(self._d2r_line_pool):
+                    _ln = pg.PlotCurveItem(); _ln.setZValue(26)
+                    self.plot.addItem(_ln, ignoreBounds=True); self._d2r_line_pool.append(_ln)
+                _ln = self._d2r_line_pool[used_l]; used_l += 1
+                _pen = pg.mkPen(*col, width=1.4, style=QtCore.Qt.DashLine); _pen.setCosmetic(True)
+                _ln.setPen(_pen); _ln.setData([x, rb], [lvl, lvl]); _ln.setVisible(True)
+                if used_t >= len(self._d2r_lbl_pool):
+                    _tl = pg.TextItem(anchor=(0.0, 0.5)); _tl.setZValue(35)
+                    _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True); _tl.textItem.setFont(_tf)
+                    self.plot.addItem(_tl, ignoreBounds=True); self._d2r_lbl_pool.append(_tl)
+                _tl = self._d2r_lbl_pool[used_t]; used_t += 1
+                _pct = side * (lvl - entry) / entry * 100.0
+                _tl.setColor(col); _tl.setText("%.2f (%+.2f%%)" % (lvl, _pct)); _tl.setPos(rb, lvl); _tl.setVisible(True)
+        for j in range(used_l, len(self._d2r_line_pool)):
+            self._d2r_line_pool[j].setVisible(False)
+        for j in range(used_t, len(self._d2r_lbl_pool)):
+            self._d2r_lbl_pool[j].setVisible(False)
+
     def _mmx_badge(self, used, x, y, text, tcol, fill):
         if used >= len(self._mmx_badge_pool):
             _t = pg.TextItem(anchor=(0.5, 0.5))
@@ -5255,8 +5356,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_mmxskew(_pf or [])   # MMXSKEW/ORB overlay (Ctrl+M, 1h) — self-gated, fail-safe
                 except Exception:
                     self._clear_mmxskew()
+                try:
+                    self._draw_da2rev(_pf or [])    # DA2-REVERSION v1.0 overlay — self-gated, fail-safe
+                except Exception:
+                    self._clear_da2rev()
             else:
-                self._clear_pivot(); self._clear_mmxskew()      # nothing on -> clear both
+                self._clear_pivot(); self._clear_mmxskew(); self._clear_da2rev()   # nothing on -> clear all
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -5320,6 +5425,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_mmxskew(filtered)   # MMXSKEW/ORB overlay (Ctrl+M, 1h) — self-gated, fail-safe
             except Exception:
                 self._clear_mmxskew()
+            try:
+                self._draw_da2rev(filtered)    # DA2-REVERSION v1.0 overlay — self-gated, fail-safe
+            except Exception:
+                self._clear_da2rev()
             try:
                 self._draw_selection_vp(filtered, lo_i, hi_i)   # 'h'-card Volume-Profile-over-selection overlay
             except Exception:

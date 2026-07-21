@@ -122,6 +122,7 @@ _M10_LAYERS = [
     ("m10_mmx_v12d", "MMXSKEW v1.2-Dynamic (red/green)", False, True),   # + run_pos<=4 & mov_mag_ratio>=1.30
     ("m10_mmx_v13", "MMXSKEW v1.3 (gold)", False, True),                 # + mov_mag>=39 & asymmetric da2>0
     ("m10_mmx_sound", "MMXSKEW entry sound alert", False, True),         # beep on a new live-edge print (v1.3 = double)
+    ("m10_da2rev", "DA2-REVERSION v1.0 (da2-L / da2-S)", False, True),   # frozen mean-reversion candidate; needs delta_h1
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
 ]
 
