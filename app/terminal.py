@@ -1999,7 +1999,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         dh1 = ab.get("delta_h1")
         if dh1 is not None and cv > 0:
             da2 = ((bv - sv) - 2.0 * float(dh1)) / cv
-            out.append(row("Δ-accel", "%+.3f" % da2, G if da2 > 0 else (R if da2 < 0 else GRAY)))
+            out.append(row("Δ-accel", "%+.1f%%" % (da2 * 100.0), G if da2 > 0 else (R if da2 < 0 else GRAY)))
         else:
             out.append(row("Δ-accel", "--", GRAY))
         return "<br>".join(out)
@@ -6035,7 +6035,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _dh1 = b.get("delta_h1")
             if _dh1 is not None and cv > 0:
                 _dh1 = float(_dh1); _dh2 = delta - _dh1; _da2v = (_dh2 - _dh1) / cv
-                _da2_s = "%+.3f  (H1 %s / H2 %s)" % (_da2v, sk(_dh1), sk(_dh2))
+                _da2_s = "%+.1f%%  (H1 %s / H2 %s)" % (_da2v * 100.0, sk(_dh1), sk(_dh2))
                 _da2_col = g if _da2v > 0 else (r if _da2v < 0 else gray)
             else:
                 _da2_s = "--"; _da2_col = gray
