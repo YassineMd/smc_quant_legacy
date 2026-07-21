@@ -4110,34 +4110,40 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._d2r_entries = []; self._d2r_sig = None; self._d2r_drawn = False
 
     def _draw_da2rev(self, filtered) -> None:
-        """da2-L / da2-S badges for the FROZEN mean-reversion candidate (app/da2_reversion_detect).
+        """da2-L / da2-S badges for the FROZEN DA2-REVERSION **v1.1** candidate (app/da2_reversion_detect).
 
-        NO warm-up prefix: every input is per-bucket (da2, direction, target_vol), so a truncated scan window
-        cannot change a verdict — unlike MMXSKEW, whose EMA/run_pos/eff-agg all restart at index 0.
+        WARM-UP IS REQUIRED — v1.1 added the |eff-agg spread| <= 50 gate, and eff_causal_share is a RUNNING
+        causal computation that restarts at index 0 of whatever list it gets. (v1.0 needed no prefix because
+        every input was per-bucket; that no longer holds.) Measured on the 435 signals, verdict errors by
+        prefix length: 0 -> 275 WRONG (spread off by up to 189.5), 50 -> 1, 100 -> 0. We reuse the MMXSKEW
+        250-bucket prefix, comfortably past the measured sufficiency point.
         Closed-only: the still-forming bucket is skipped unless the window is closed-only (replay), because
         delta_h1 is stamped at the 50%-volume mark while buy/sell keep moving -> da2 would repaint.
         Badges appear ONLY on buckets carrying the daemon's `delta_h1` (2026-07-20 23:18 onward)."""
         if not self.menu.layer_state("m10_da2rev") or self.scanner_mode != "bucket_canvas" or self._tf != "1h":
             self._clear_da2rev(); return
         n = len(filtered)
+        warm = getattr(self, "_mmx_warm", None) or []               # shared prefix; >= da2's WARMUP_MIN
         _forming = bool(getattr(self, "_mmx_last_forming", True))   # same window semantics as the MMXSKEW path
-        _sig = (n, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        _sig = (n, len(warm), _forming, filtered[-1].get("end_time") if n else 0,
+                filtered[-1].get("close") if n else 0)
         if _sig == self._d2r_sig and self._d2r_drawn:
             return
         self._d2r_sig = _sig
         try:
             from app import da2_reversion_detect
-            entries = da2_reversion_detect.detect(filtered, skip_last=_forming)
+            entries = da2_reversion_detect.detect(list(warm) + list(filtered), skip_last=_forming)
         except Exception:
             self._clear_da2rev(); return
+        _off = len(warm)
         self._d2r_n = n
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.045, 1e-9)
         AMBER, VIOLET, INK = (255, 176, 32), (170, 120, 255), (12, 14, 20)
         used = 0; self._d2r_entries = []
         for e in entries:
-            i = e["i"]
-            if i >= n:
-                continue
+            i = e["i"] - _off                        # detect() ran over warm+filtered -> back to filtered space
+            if i < 0 or i >= n:
+                continue                             # entry sat in the warm-up prefix (outside the scan window)
             side = e["side"]
             fill = AMBER if side > 0 else VIOLET
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
