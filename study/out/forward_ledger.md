@@ -18,6 +18,14 @@ appends one dated line to the forward log; it graduates or dies on accumulated *
 
 ---
 
+## CANDIDATE — DA2-REVERSION v1.0 (independent MEAN-REVERSION line, registered 2026-07-21)
+
+| id | frozen | fires | entry | exit | fee | status |
+|---|---|---|---|---|---|---|
+| **DA2-REVERSION-v1.0** | 2026-07-21 · freeze_ts 1784534492 (Jul20 08:01:32 UTC) · `study/out/da2_reversion_freeze.json` | **One condition.** Mature 1h volume buckets only (`i >= FM.build().first`, i.e. target_vol≥100k — the pre-2618 backfill burst is EXCLUDED). **da2 OPPOSED to the candle:** bearish candle (c<o) AND `da2>0` → **LONG**; bullish candle (c>o) AND `da2<0` → **SHORT**; doji never fires. `da2 = (buy_vol−sell_vol−2·delta_h1)/curr_vol`, delta_h1 = running delta at the bucket's **50%-VOLUME** mark (daemon field when present, else reconstructed from the 1m stream). NO skew / eff-agg / run_pos / POC — deliberately independent of the MMXSKEW family. | signal bucket's **close** | **FIXED percentages off entry** (NOT bucket-extreme-derived): stop **0.8%**, target **1.0%** (RR 1:1.25). Same-bar TP+SL → stop (conservative). Unresolved → dropped, never booked a loss. Non-overlap convention A (`i <= last` skipped). | taker/taker 0.08 | **in-sample n=123 · win 56.1% vs 48.9% break-even · +0.1298%/tr · +16.0% · maxDD 5.9% · t+1.60.** SPLIT-HALF **both positive** (H1 +0.064 / H2 +0.194); drop-best-5 still +0.096; permutation **p=0.0030**; MC P(profit) 93.9%, 95%CI [−0.031, +0.291] **straddles 0**. ⚠ **SHORT-CARRIED** (SHORT +0.230 n=60 vs LONG +0.034 n=63). ⚠ **SL/TP GRID-SELECTED on this tape** (~110 in-sample cells that session) — permutation p controls which *buckets* were picked, never how many *configurations* were tried; magnitude WILL regress. Registered because it is the ONLY cell from that session to survive split-half at both RRs — five other p<0.05 cells dissolved. Win rate rises monotonically as TP tightens (49.1%@1.2 → 78.8%@0.3, 7 cells ordered) but break-even rises faster; 1.0% sits mid-plateau of a positive 0.6–1.2% band. Pre-declared: **PASS** fwd n≥40 & net>0 & t≥1.5; **FAIL** n≥40 & net≤0; **degrade-warn** n≥25 & exp≤0. (n≥40 not 20: ~0.9% per-trade SD cannot be separated from zero at n=20.) Spec/validate: `study/da2_reversion_validate.py`; audit: `study/da2_reversion_forward_audit.py`; log: `study/out/da2_reversion_forward_log.md` (**forward n=0 at freeze**). **⚠ 1m DEPENDENCY:** the GCS archive carries no `delta_h1` (0/3843), so da2 is reconstructed from the 1m stream — forward scoring is limited to buckets with 1m coverage until the daemon's `delta_h1` reaches the archive. |
+
+---
+
 ## CANDIDATE — PIVOT-V3-VPFADE (Buy-D VP-edge STAR — highlight only, does NOT change the ACTIVE row's trades)
 
 | id | frozen | delta vs PIVOT-V3 | status |
