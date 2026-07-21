@@ -4099,9 +4099,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # v1.2 gate HIGHLIGHTS on plain L/S signals (pure highlight — changes NO trade, NO detection):
         #   GOLD bg = run_pos<=4 AND mov_mag>=39  (run_pos = consecutive same-side count; mov_mag =
         #            ((close·100/ref−100)^2)·100, ref=low(bull)/high(bear)/open).
-        #   R/G  bg = delta_accel_2>0 AND mov_mag>=39 — da2 = (buy-sell − 2·delta_h1)/curr_vol · side, the
-        #            sub-bucket 2nd-half-vs-1st-half aggression acceleration. Needs the daemon `delta_h1` field
-        #            (post-deploy buckets only); absent on older/archived buckets -> those get no R/G flag.
+        #   R/G  bg = mov_mag>=39 AND raw Δ-accel > 0 (v1.3 ASYMMETRIC: LONG = buying ACCELERATING into the close
+        #            / SHORT = selling DECELERATING-absorbed = a fade, not a sell-climax — BOTH pass on raw da2 > 0;
+        #            the old side-aligned form was backwards for shorts and nuked them all). da2 =
+        #            (buy-sell − 2·delta_h1)/curr_vol. Needs the daemon `delta_h1` field (post-deploy/backfilled).
         # Gold wins when a signal passes both.
         _gold_pass = set(); _da2_pass = set()
         if _gate_on or _da2_on:
@@ -4118,7 +4119,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _dh1 = _bb.get("delta_h1"); _cv = float(_bb.get("curr_vol", 0.0))
                     if _dh1 is not None and _cv > 0:
                         _tot = float(_bb.get("buy_vol", 0.0)) - float(_bb.get("sell_vol", 0.0))
-                        if ((_tot - 2.0 * float(_dh1)) / _cv) * _e["side"] > 0:
+                        if (_tot - 2.0 * float(_dh1)) / _cv > 0:   # v1.3 asymmetric: raw da2>0 passes both sides
                             _da2_pass.add(_e["i"])
         used = 0; self._mmx_entries = []
         for e in entries:
