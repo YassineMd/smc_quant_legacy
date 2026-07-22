@@ -101,6 +101,75 @@ def absorption(buckets: list, i: int, window: int = WINDOW):
     return (-R if side > 0 else R), R, side
 
 
+def _halves(b):
+    """((dV,dP) for h1, (dV,dP) for h2) split at the 50%-VOLUME mark, or None.
+
+    Needs BOTH daemon fields: `delta_h1` (effort at the mark) and `price_h1` (result at the mark).
+    price_h1 ships only from the 2026-07-22 13:40 UTC daemon restart onward, so historical buckets
+    return None here — bucket-level `residual()` still works on those."""
+    dh = b.get("delta_h1"); ph = b.get("price_h1")
+    if dh is None or ph is None:
+        return None
+    o, c = _oc(b)
+    ph = float(ph)
+    if o <= 0 or c <= 0 or ph <= 0:
+        return None
+    tot = float(b.get("buy_vol", 0.0) or 0.0) - float(b.get("sell_vol", 0.0) or 0.0)
+    d1 = float(dh)
+    return ((d1, (ph - o) / o * 100.0),            # h1: open -> the 50%-volume price
+            (tot - d1, (c - ph) / ph * 100.0))     # h2: that price -> close
+
+
+def _resid_from(win, cur):
+    """R = Zp - rho*Zv for `cur` against the (dV,dP) pairs in `win`. None when degenerate."""
+    if len(win) < MIN_OBS:
+        return None
+    vs = [p[0] for p in win]; ps = [p[1] for p in win]; n = float(len(win))
+    mv = sum(vs) / n; mp = sum(ps) / n
+    sv = math.sqrt(sum((x - mv) ** 2 for x in vs) / (n - 1))
+    sp = math.sqrt(sum((x - mp) ** 2 for x in ps) / (n - 1))
+    if sv <= 0 or sp <= 0:
+        return None
+    cov = sum((vs[k] - mv) * (ps[k] - mp) for k in range(len(win))) / (n - 1)
+    rho = max(-1.0, min(1.0, cov / (sv * sp)))
+    return (cur[1] - mp) / sp - rho * (cur[0] - mv) / sv
+
+
+def residual_halves(buckets: list, i: int, window: int = WINDOW):
+    """(R_h1, R_h2) for bucket i — each baselined on the SAME half of the prior `window` buckets.
+
+    Per-half baselines, not a pooled one: h1 and h2 have systematically different delta/price
+    distributions, so pooling them would bake that asymmetry into the residual.
+    Measured over 940 reconstructable buckets: corr(R_h1,R_h2) = -0.050 (near-INDEPENDENT), the halves
+    disagree in sign on 51.7% of buckets, and neither proxies the bucket-level R (+0.679 / +0.632).
+    Returns (None, None) until enough PRIOR buckets carry price_h1."""
+    if i <= 0 or i >= len(buckets):
+        return None, None
+    cur = _halves(buckets[i])
+    if cur is None:
+        return None, None
+    w1 = []; w2 = []
+    for b in buckets[max(0, i - window):i]:
+        h = _halves(b)
+        if h is not None:
+            w1.append(h[0]); w2.append(h[1])
+    return _resid_from(w1, cur[0]), _resid_from(w2, cur[1])
+
+
+def absorption_halves(buckets: list, i: int, window: int = WINDOW):
+    """(A_h1, A_h2) oriented so POSITIVE = that half's aggressor was ABSORBED, per the half's own delta sign."""
+    R1, R2 = residual_halves(buckets, i, window)
+    cur = _halves(buckets[i]) if (0 < i < len(buckets)) else None
+    if cur is None:
+        return None, None
+    out = []
+    for R, (dv, _dp) in ((R1, cur[0]), (R2, cur[1])):
+        if R is None:
+            out.append(None); continue
+        out.append(0.0 if dv == 0 else (-R if dv > 0 else R))
+    return out[0], out[1]
+
+
 def label(A):
     """Short verdict for a readout. Thresholds are DESCRIPTIVE, chosen on SD(R) ~ 0.78 measured, not fitted."""
     if A is None:

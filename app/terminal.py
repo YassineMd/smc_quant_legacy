@@ -2061,6 +2061,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             _acol = GOLD if _A >= 1.5 else (G if _A >= 0.75 else (R if _A <= -0.75 else NEU))
             out.append(row("Absorb R", "%+.2f %s" % (_A, _absmod.label(_A)), _acol))
+        # PER-HALF absorption — needs the daemon's price_h1 (shipped 2026-07-22 13:40 UTC) on this bucket AND
+        # on >=20 of the prior 30, so it reads "--" until that many post-restart buckets exist.
+        try:
+            _A1, _A2 = _absmod.absorption_halves(buckets, len(buckets) - 1)
+        except Exception:
+            _A1 = _A2 = None
+        if _A1 is None and _A2 is None:
+            out.append(row("R h1/h2", "--", GRAY))
+        else:
+            def _hc(v):
+                return GRAY if v is None else (GOLD if v >= 1.5 else (G if v >= 0.75 else (R if v <= -0.75 else NEU)))
+            def _hs(v):
+                return "--" if v is None else ("%+.2f" % v)
+            out.append("<span style='color:%s'>R h1/h2</span> <span style='color:%s'>%s</span>"
+                       " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
+                       % (NEU, _hc(_A1), _hs(_A1), NEU, _hc(_A2), _hs(_A2)))
         return "<br>".join(out)
 
     def _refresh_parked_hover(self) -> None:
@@ -6197,6 +6213,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             else:
                 _absR_s = "%+.2f  %s" % (_absA, _absmod.label(_absA))
                 _absR_col = gold if _absA >= 1.5 else (g if _absA >= 0.75 else (r if _absA <= -0.75 else gray))
+            try:
+                _absA1, _absA2 = _absmod.absorption_halves(buckets, idx)
+            except Exception:
+                _absA1 = _absA2 = None
+            if _absA1 is None and _absA2 is None:
+                _absH_s = "--"; _absH_col = gray
+            else:
+                _f = lambda v: "--" if v is None else ("%+.2f" % v)
+                _absH_s = "%s / %s" % (_f(_absA1), _f(_absA2))
+                _mx = max([v for v in (_absA1, _absA2) if v is not None], default=0.0)
+                _absH_col = gold if _mx >= 1.5 else (g if _mx >= 0.75 else gray)
             # KINETIC EFFICIENCY RATIO (KER) — Realized Work / Kinetic Force per side (see _bucket_ker).
             _ker_buy, _ker_sell = self._bucket_ker(b)
 
@@ -6313,6 +6340,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 f"Delta {span(sk(delta)+f' ({dpct:+.0f}%)', g if delta >= 0 else r)}",
                 span("Δ-accel " + _da2_s, _da2_col),
                 span("Absorb R " + _absR_s, _absR_col),
+                span("R h1/h2 " + _absH_s, _absH_col),
                 f"OI Δ {span(sk(oi_d), g if oi_d >= 0 else r)}",
                 # What each side PAID per tick it won, and how fast it ARRIVED. Two independent colourings
                 # per line: the /tick VALUE lights on whichever side paid more per tick (its own side colour),
