@@ -96,6 +96,7 @@ def _bucket_to_dict(b: QuantBucket) -> dict:
         # would silently make them ephemeral: correct on the live wire, then gone at the next restart.
         "cvd_hi": b.cvd_hi, "cvd_lo": b.cvd_lo,
         "delta_h1": b.delta_h1,          # first-half net delta (50%-vol mark) for MMXSKEW delta_accel_2; None until reached
+        "price_h1": b.price_h1,          # price at that same mark -> per-half absorption residual; None until reached
         "up_ticks": b.up_ticks, "dn_ticks": b.dn_ticks,
     }
 
@@ -124,6 +125,7 @@ def _bucket_from_dict(d: dict) -> QuantBucket:
     # terminal renders as a plain body / "--" rather than inventing a value.
     b.cvd_hi = d.get("cvd_hi", 0.0); b.cvd_lo = d.get("cvd_lo", 0.0)
     b.delta_h1 = d.get("delta_h1")   # None if absent (pre-ship bucket) -> the terminal skips its da2 flag
+    b.price_h1 = d.get("price_h1")   # None if absent -> per-half absorption unavailable, bucket-level R still works
     b.up_ticks = d.get("up_ticks", 0.0); b.dn_ticks = d.get("dn_ticks", 0.0)
     # LARGE/SMALL size histograms: override the __init__ zero arrays only when present AND the right length
     # (fixed edges => stable length; the guard keeps a stale/short row from corrupting the bucket).
@@ -164,6 +166,7 @@ def bucket_from_snapshot(s: dict) -> QuantBucket:
         # wire form carries these under the SAME names (see BucketSnapshot); 0.0 when the daemon predates them
         "cvd_hi": s.get("cvd_hi", 0.0), "cvd_lo": s.get("cvd_lo", 0.0),
         "delta_h1": s.get("delta_h1"),
+        "price_h1": s.get("price_h1"),
         "up_ticks": s.get("up_ticks", 0.0), "dn_ticks": s.get("dn_ticks", 0.0),
     })
 

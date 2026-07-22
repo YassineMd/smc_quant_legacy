@@ -119,6 +119,10 @@ class QuantBucket:
         # The terminal forms delta_accel_2 = (buy_vol - sell_vol - 2*delta_h1)/curr_vol (2nd-half vs 1st-half
         # aggression acceleration). Wire-additive, exactly like cvd_hi/cvd_lo above.
         self.delta_h1 = None
+        # PRICE at that same 50%-volume mark. Pairs with delta_h1 so the terminal can form the ABSORPTION
+        # RESIDUAL per half (R = Zp - rho*Zv on h1 and h2 separately) — delta alone is not enough, the split
+        # PRICE is what turns a half into an effort-vs-result pair. Wire-additive: None on a pre-ship bucket.
+        self.price_h1 = None
         # DIRECTIONAL price impact ("E/R per tick"): ticks price ACTUALLY TRAVELLED up / down inside this
         # bucket, summed over the trade stream. Distinct from the E/R denominator, which is volume-weighted
         # DISPERSION and is SHARED by both sides — so buyer_er/seller_er cancels to buy_vol/sell_vol and says
@@ -191,6 +195,8 @@ class QuantBucket:
             # da2 = (buy_vol - sell_vol - 2*delta_h1)/curr_vol. Wire-additive — None on a bucket built before
             # this shipped (or one that closed under 50% target, which cannot happen for a full bucket).
             "delta_h1": (float(self.delta_h1) if self.delta_h1 is not None else None),
+            # price at the 50%-volume mark — with delta_h1 this yields (dV,dP) for h1 AND h2 separately.
+            "price_h1": (float(self.price_h1) if self.price_h1 is not None else None),
             # "E/R per tick" (directional impact) — RAW ticks travelled up/down inside this bucket. The
             # terminal forms buy_vol/up_ticks and sell_vol/dn_ticks, so no cutoff is baked in here.
             "up_ticks": float(self.up_ticks),
@@ -375,6 +381,7 @@ class QuantEngine:
             b.cvd_lo = _run
         if b.delta_h1 is None and b.curr_vol >= 0.5 * b.target_vol:
             b.delta_h1 = _run              # first crossing of the 50%-volume mark -> first-half net delta (da2)
+            b.price_h1 = price             # ...and the price THERE, so h1/h2 each have an effort+result pair
         b.opL += chunk_vol * opL_r
         b.opS += chunk_vol * opS_r
         b.clL += chunk_vol * clL_r
