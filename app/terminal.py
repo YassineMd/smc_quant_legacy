@@ -2048,6 +2048,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             out.append(row("Δ-accel", "--", GRAY))
             out.append(row("H1/H2", "--", GRAY))
+        # ABSORPTION RESIDUAL — did the delta produce the price move it should have? R = Zp - rho*Zv against a
+        # trailing-30 window (rho measured on that same window, NOT assumed 1.0 — see app/absorption.py).
+        # A is oriented so POSITIVE = the aggressor got absorbed, whichever side was aggressing.
+        try:
+            from app import absorption as _absmod
+            _A, _R, _aside = _absmod.absorption(buckets, len(buckets) - 1)
+        except Exception:
+            _A = _R = None; _aside = 0
+        if _A is None:
+            out.append(row("Absorb R", "--", GRAY))
+        else:
+            _acol = GOLD if _A >= 1.5 else (G if _A >= 0.75 else (R if _A <= -0.75 else NEU))
+            out.append(row("Absorb R", "%+.2f %s" % (_A, _absmod.label(_A)), _acol))
         return "<br>".join(out)
 
     def _refresh_parked_hover(self) -> None:
@@ -6171,6 +6184,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _da2_col = g if _da2v > 0 else (r if _da2v < 0 else gray)
             else:
                 _da2_s = "--"; _da2_col = gray
+            # ABSORPTION RESIDUAL — R = Zp - rho*Zv vs a trailing-30 window, rho measured on that window
+            # (NOT assumed 1.0: the naive Zv-Zp form stays ~0.45-correlated with raw delta and so half-measures
+            # "was delta big?" instead of "did delta work?"). A is oriented so POSITIVE = aggressor ABSORBED.
+            try:
+                from app import absorption as _absmod
+                _absA, _absR, _abss = _absmod.absorption(buckets, idx)
+            except Exception:
+                _absA = None
+            if _absA is None:
+                _absR_s = "--"; _absR_col = gray
+            else:
+                _absR_s = "%+.2f  %s" % (_absA, _absmod.label(_absA))
+                _absR_col = gold if _absA >= 1.5 else (g if _absA >= 0.75 else (r if _absA <= -0.75 else gray))
             # KINETIC EFFICIENCY RATIO (KER) — Realized Work / Kinetic Force per side (see _bucket_ker).
             _ker_buy, _ker_sell = self._bucket_ker(b)
 
@@ -6286,6 +6312,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 f"{span('Buy '+K(bv), g if bv > sv else gray)}",
                 f"Delta {span(sk(delta)+f' ({dpct:+.0f}%)', g if delta >= 0 else r)}",
                 span("Δ-accel " + _da2_s, _da2_col),
+                span("Absorb R " + _absR_s, _absR_col),
                 f"OI Δ {span(sk(oi_d), g if oi_d >= 0 else r)}",
                 # What each side PAID per tick it won, and how fast it ARRIVED. Two independent colourings
                 # per line: the /tick VALUE lights on whichever side paid more per tick (its own side colour),
