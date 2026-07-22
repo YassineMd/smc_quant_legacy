@@ -301,12 +301,23 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         # still receives "1m"/"5m"/... unchanged. Mirrors the scanner_combo pattern below.
         for tf in config.TIMEFRAMES:
             self.tf_combo.addItem(scale_label(tf, 0.0), tf)
-        self.tf_combo.setCurrentIndex(0)   # 1m = the 1× base scale
+        self.tf_combo.setCurrentIndex(0)   # 1m = the 1× base scale (set_tf() overrides on a restored session)
         self.tf_combo.setToolTip(
             "Volume-bucket scale. N× is the structural multiple of the 1× (1-minute) base; the "
             "~volume is the live target per bucket. (Bucket scales, not time candles.)")
         self.tf_combo.currentIndexChanged.connect(
             lambda _i: self.tfChanged.emit(self.tf_combo.currentData()))
+
+        def _set_tf(tf: str) -> None:
+            """Point the selector at `tf` WITHOUT emitting tfChanged — used to sync the combo to a restored
+            session's timeframe. Emitting here would re-enter _change_tf during construction."""
+            for _i in range(self.tf_combo.count()):
+                if self.tf_combo.itemData(_i) == tf:
+                    _b = self.tf_combo.blockSignals(True)
+                    self.tf_combo.setCurrentIndex(_i)
+                    self.tf_combo.blockSignals(_b)
+                    return
+        self.set_tf = _set_tf
         root.addWidget(self.tf_combo)
 
         # --- candle render mode (mirrors the 'W' key cycle; either changes the other) ---

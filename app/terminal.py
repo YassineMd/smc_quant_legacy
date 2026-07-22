@@ -1072,12 +1072,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # save churn while restoring.
         self._saved_toggles: dict = {}
         self._loading_ui: bool = False
+        # Timeframe: seed from the ctor arg HERE, before _load_ui_state, so a persisted "tf" can override it
+        # (same convention as pivot_audio above). NOTE the arg was previously used ONLY for the window title
+        # and never reached self._tf — spawn_window("4h") titled 4h but charted the default.
+        self._tf = tf if tf in config.TF_SECONDS else config.DEFAULT_TF
         self._load_ui_state()   # restore the panel toggles saved by a prior session (overrides the defaults above)
         self.alerts = AlertsLedger(self)
         self.drawbar = DrawingToolbar(self)
         self.menu = FloatingOverlayMenu(self)
         self.menu.set_swing_pct(self._swing_pct)   # sync the swing slider to the restored/default sensitivity
         self.menu.set_kc_scale(self._kc_scale)     # sync the Keltner-scale slider to the restored/default value
+        self.menu.set_tf(self._tf)                 # point the tf selector at the restored/default timeframe
+        self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {config.TF_SECONDS.get(self._tf, 60) // 60}×")
         self.menu.set_candle_mode(self._candle_mode)   # sync the Candle-Mode dropdown to the restored/default
         self.menu.set_vp_mode(self._vp_mode)           # sync the Volume-Profile-Mode dropdown
         self.stats.keep_under = self.menu   # stats overlay stays below an open menu (z-order)
@@ -1101,7 +1107,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Audio Feed — speak NEW icebergs/OBs aloud (via self.alerts.audio, gated by the
         # "Audio Feed" sub-widget; default OFF). The announce seeds silently on first data /
         # tf-change so the history backlog is never read out — only live events after.
-        self._tf = config.DEFAULT_TF
+        # (self._tf was seeded before _load_ui_state and may carry a RESTORED timeframe — do not reset it here.)
         self._announced_obs: set = set()
         self._announced_icebergs: set = set()
         self._audio_seeded = False
@@ -1340,6 +1346,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _change_tf(self, tf: str) -> None:
         self._tf = tf
+        self._save_ui_state()             # remember it — a reopened session starts on this timeframe
         self._audio_seeded = False        # new tf -> re-seed; don't read out its backlog
         self._pivot_audio_seeded = False
         self._announced_obs = set(); self._announced_icebergs = set()
@@ -3425,6 +3432,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "replay_edge_t": self._replay_saved_edge_t,               # last replay cursor -> resume here on toggle-on
                 "swing_pct": self._swing_pct,                             # swing-ZigZag sensitivity slider (%)
                 "kc_scale": self._kc_scale,                               # 1m-KC smooth-approx effective-TF scale slider
+                "tf": self._tf,                                           # last chart timeframe -> reopen on it
                 "ob_unmitig_only": self._ob_unmitig_only,                 # 'o' cycle stage-2: unmitigated OBs only
             }
             # EVERY hamburger toggle (Sub-Widgets + Mode 10 Overlays), keyed by its menu key, so a reopened
@@ -3451,6 +3459,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 s = json.load(f)
         except (OSError, json.JSONDecodeError):
             return
+        _tfv = s.get("tf")                                    # reopen on the timeframe last used
+        if isinstance(_tfv, str) and _tfv in config.TF_SECONDS:
+            self._tf = _tfv
         self.show_abs_strip = bool(s.get("abs", self.show_abs_strip))
         self.show_eff_strip = bool(s.get("eff", self.show_eff_strip))
         self.show_abs_hm = bool(s.get("abs_hm", self.show_abs_hm))

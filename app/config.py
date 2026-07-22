@@ -111,7 +111,7 @@ OI_VW_FLOOR_FRAC = 0.1          # floor Vw at this fraction of the MEDIAN engine
 # Timeframes (spec §7.2.1 — exactly five)
 # ---------------------------------------------------------------------------
 TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h"]
-DEFAULT_TF = "1m"
+DEFAULT_TF = "1h"   # cold-start timeframe. A saved terminal_ui.json "tf" overrides this (see _load_ui_state).
 
 TF_SECONDS = {
     "1m": 60,
