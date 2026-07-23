@@ -22,6 +22,73 @@ _IMB_BUY_BG = (0, 153, 255)     # electric-blue pill for an imbalanced BUY level
 _IMB_SELL_BG = (255, 140, 0)    # orange pill for an imbalanced SELL level (black text)
 
 
+class _GlassReadout(RoundedTextItem):
+    """Frosted-glass card behind the top-left readout, so the coloured VALUES stay legible where they overlap
+    the buy/sell histogram bars — without hiding the bars.
+
+    Deliberately NOT a solid fill. Three layers, cheap to paint and drawn once per frame:
+      1. a soft drop shadow, which is what actually separates the card from the bars behind it;
+      2. a translucent body with a VERTICAL alpha gradient — denser at the top where the label column sits,
+         fading toward the bottom so the histogram reads straight through the lower half;
+      3. a 1px specular highlight along the top inside edge, the cue that makes it read as glass rather than
+         as a flat scrim.
+    LEGIBILITY IS CARRIED BY A GLYPH HALO, NOT BY OPACITY. The card sits over the SELL (red, left) side of the
+    ladder, so the worst case is the red value colour #ff2d46 over a red bar. Measured WCAG contrast of that
+    pair through the card: 1.39:1 at the original alpha, and still only 3.45:1 at alpha 200 — i.e. no
+    transparency this side of opaque fixes it, because red text and red bars sit at nearly the same
+    luminance. A tight black drop-shadow on the text item solves it instead: contrast becomes text-vs-halo
+    rather than text-vs-bar, so the body can stay translucent. Alphas below are therefore set for LOOK, not
+    for legibility, and the bars keep ~55%/41% of their colour through the top/bottom of the card."""
+
+    _BODY_TOP = (26, 29, 36, 185)      # denser where the labels are
+    _BODY_BOT = (14, 16, 20, 150)      # bars still read through the foot of the card
+    _SHADOW = (0, 0, 0, 70)
+    _EDGE = (255, 255, 255, 28)
+    _SPECULAR = (255, 255, 255, 22)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        halo = QtWidgets.QGraphicsDropShadowEffect()
+        halo.setBlurRadius(5.0)
+        halo.setOffset(0.0, 0.0)            # centred -> a halo, not a cast shadow
+        halo.setColor(QtGui.QColor(0, 0, 0, 235))
+        self.textItem.setGraphicsEffect(halo)
+
+    def _cardRect(self) -> QtCore.QRectF:
+        return RoundedTextItem.boundingRect(self)          # the pad-inflated text rect IS the card
+
+    def boundingRect(self) -> QtCore.QRectF:
+        return self._cardRect().adjusted(-2.0, -2.0, 2.0, 4.0)   # room for the border + dropped shadow
+
+    def paint(self, p, *args) -> None:
+        # pg.TextItem.paint does the scene/transform bookkeeping that keeps the text upright and unscaled;
+        # RoundedTextItem overrides paint without it, so re-establish it here before drawing.
+        s = self.scene(); ls = self._lastScene
+        if s is not ls:
+            if ls is not None:
+                ls.sigPrepareForPaint.disconnect(self.updateTransform)
+            self._lastScene = s
+            if s is not None:
+                s.sigPrepareForPaint.connect(self.updateTransform)
+            self.updateTransform()
+            p.setTransform(self.sceneTransform())
+        r = self._cardRect()
+        rad = self._radius
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QtCore.Qt.PenStyle.NoPen)
+        p.setBrush(QtGui.QColor(*self._SHADOW))
+        p.drawRoundedRect(r.translated(0.0, 1.8), rad, rad)
+        grad = QtGui.QLinearGradient(r.topLeft(), r.bottomLeft())
+        grad.setColorAt(0.0, QtGui.QColor(*self._BODY_TOP))
+        grad.setColorAt(1.0, QtGui.QColor(*self._BODY_BOT))
+        p.setBrush(QtGui.QBrush(grad))
+        p.setPen(QtGui.QPen(QtGui.QColor(*self._EDGE), 1.0))
+        p.drawRoundedRect(r, rad, rad)
+        p.setPen(QtGui.QPen(QtGui.QColor(*self._SPECULAR), 1.0))
+        p.drawLine(QtCore.QPointF(r.left() + rad, r.top() + 1.0),
+                   QtCore.QPointF(r.right() - rad, r.top() + 1.0))
+
+
 def _kfmt(v: float) -> str:
     if v >= 1_000_000:
         return f"{v / 1e6:.1f}M"
@@ -209,7 +276,7 @@ class FootprintPanel(pg.PlotWidget):
         # Volume-profile SKEWNESS readout, pinned top-left of the pane (repositioned each frame to the
         # current view corner so it rides the auto-fit Y range). Gold when notably lopsided (|skew| >= 0.5),
         # muted otherwise; the sign lives in the number.
-        self._skew_label = pg.TextItem(anchor=(0.0, 0.0), color="#9aa0a6")
+        self._skew_label = _GlassReadout(anchor=(0.0, 0.0), color="#9aa0a6", pad=8.0, radius=8.0)
         _sf = QtGui.QFont("Consolas", 9); _sf.setBold(True); self._skew_label.textItem.setFont(_sf)
         self._skew_label.setZValue(16); self.addItem(self._skew_label, ignoreBounds=True)
         self._skew_label.hide()

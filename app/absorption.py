@@ -170,6 +170,30 @@ def absorption_halves(buckets: list, i: int, window: int = WINDOW):
     return out[0], out[1]
 
 
+def price_halves(b):
+    """(dP_h1, dP_h2, dP_acc) in PERCENT for ONE bucket, or None when `price_h1` is absent/degenerate.
+
+    dP_h1 = open -> the 50%-volume mark, dP_h2 = that mark -> close, and
+        **dP_acc = dP_h2 - dP_h1**  -- price ACCELERATION, the exact price-side analogue of `da2`
+        (= (delta_h2 - delta_h1)/curr_vol). POSITIVE = the second half travelled further UP than the first;
+        NEGATIVE = the move decelerated or reversed. This is deliberately NOT the whole-bucket move
+        (close-open)/open, which is already readable off O/H/L/C.
+
+    This is the RESULT side of exactly the split whose residuals `residual_halves` scores.
+
+    Unlike `residual_halves` this needs NO trailing window, so it reads on any bucket carrying price_h1 --
+    including ones where R h1/h2 is still (None, None) for want of MIN_OBS baselined priors. That makes it a
+    free diagnostic: dP populated while R h1/h2 shows "--" means the warm-up window is short, whereas BOTH
+    blank means the bucket itself has no price_h1.
+
+    The two legs compound off different bases, so they are differenced as-measured (each is already a % of
+    its own leg's open); dP_acc is a difference of two percentages, not a percentage of anything."""
+    h = _halves(b)
+    if h is None:
+        return None
+    return (h[0][1], h[1][1], h[1][1] - h[0][1])        # h2 - h1 = acceleration, mirrors da2
+
+
 def label(A):
     """Short verdict for a readout. Thresholds are DESCRIPTIVE, chosen on SD(R) ~ 0.78 measured, not fitted."""
     if A is None:

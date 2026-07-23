@@ -280,6 +280,31 @@ class _IdxJumpEdit(QtWidgets.QLineEdit):
         super().keyPressEvent(ev)
 
 
+def _absorb_color(a) -> str:
+    """Colour for an absorption residual A, shared by the footprint pane and the bucket stats box so the
+    metric reads the same everywhere.
+
+    ORANGE = the aggressor got ABSORBED (A positive, heavy side). BLUE = the move was EASY (A negative,
+    light side). Deliberately NOT green/red: those already mean buy/sell everywhere else in the terminal,
+    and absorption is orthogonal to side — a green candle and a red candle can both be absorbed. The two
+    hues are the SAME orange/blue the divergence borders use for absorbed flow (app/terminal.py wick pens,
+    footprint_panel._IMB_*), so the language is consistent across chart and panes.
+
+    The bright shade switches on at |A| >= 1.5 — the exact threshold absorption.label() switches its word
+    at (ABSORBED / EASY), so colour and verdict never disagree."""
+    if a is None:
+        return "#7a828c"                 # GRAY - unavailable
+    if a >= 1.5:
+        return "#ff8000"                 # ABSORBED
+    if a >= 0.75:
+        return "#c8701a"                 # heavy
+    if a <= -1.5:
+        return "#0099ff"                 # EASY
+    if a <= -0.75:
+        return "#2f80c4"                 # light
+    return "#9aa0a6"                     # proportional -> neutral
+
+
 class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def __init__(self, tf: str = config.DEFAULT_TF):
         super().__init__()
@@ -757,6 +782,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._d2r_entries = []                   # [(key, x, side, entry, sl, tp, y_badge)]
         self._d2r_badge_pool = []; self._d2r_line_pool = []; self._d2r_lbl_pool = []
         self._d2r_lines_user = {}; self._d2r_sig = None; self._d2r_drawn = False; self._d2r_n = 0
+        # SKEW DIVERGENCE overlay (hamburger m10_skewdiv, 1h) — green up-triangle L / red down-triangle S.
+        self._skd_tri = None                     # single ScatterPlotItem holds every triangle
+        self._skd_lbl_pool = []                  # TextItems for the L/S letters
+        self._skd_sig = None; self._skd_drawn = False
+        # FLOW FLIP overlay (hamburger m10_flowflip, 1h) — green sphere L / red sphere S on a big reversal candle.
+        self._ff_sph = None                      # single ScatterPlotItem holds every sphere
+        self._ff_lbl_pool = []                   # TextItems for the L/S letters
+        self._ff_sig = None; self._ff_drawn = False
         self.pivot_tooltip = pg.TextItem(anchor=(0.5, 0.0), fill=pg.mkBrush(18, 20, 26, 238),
                                          border=pg.mkPen(90, 96, 108, 220))
         self.pivot_tooltip.setZValue(62); self.plot.addItem(self.pivot_tooltip, ignoreBounds=True)
@@ -1488,6 +1521,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._clear_mmxskew()               # all three off -> tear the badges down now
         elif key == "m10_mmx_sound":
             self._mmx_audio_seeded = False          # re-seed on enable -> only NEW live prints beep, not the backlog
+        elif key == "m10_skewdiv":
+            self._skd_sig = None; self._sel_sig = None   # Skew Divergence toggled -> re-run the overlay draw
+            if not on:
+                self._clear_skewdiv()               # off -> tear the triangles down now
+        elif key == "m10_flowflip":
+            self._ff_sig = None; self._sel_sig = None    # Flow Flip toggled -> re-run the overlay draw
+            if not on:
+                self._clear_flowflip()              # off -> tear the spheres down now
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -1982,9 +2023,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.stats.show_stats(lines, clock, wp.x(), wp.y())
 
     def _fp_top_html(self, ab: dict, buckets: list) -> str:
-        """Live-footprint top-left readout: Mov.Magn / Skew / MMxSkew / Tape-B/S / τ-ratio / Δ-accel for the
-        forming (or cursor) bucket. Labels neutral, only the VALUES are coloured. τ-ratio uses the trailing
-        bucket durations; each metric shows '--' when its inputs are absent (partial forming bucket / missing field)."""
+        """Live-footprint top-left readout for the forming (or cursor) bucket:
+        Mov.Magn / Skew / MMxSkew / eff-agg / bER-sER / Tape-B/S / τ-ratio / Δ-accel / Absorb R / ΔP.
+
+        Labels neutral, only the VALUES are coloured. Metrics that split into halves put the whole-bucket
+        value first and the h1/h2 legs in parentheses on the SAME line — Δ-accel, Absorb R and ΔP all share
+        that shape, and each leg is coloured on its own sign so a bucket that reversed between halves is
+        visible at a glance. τ-ratio uses the trailing bucket durations; each metric shows '--' when its
+        inputs are absent (partial forming bucket / missing field)."""
         NEU, G, R, GRAY, GOLD = "#9aa0a6", "#28e65a", "#ff2d46", "#7a828c", "#f1c40f"
         def row(lbl, val, col):
             return "<span style='color:%s'>%s</span> <span style='color:%s'>%s</span>" % (NEU, lbl, col, val)
@@ -2021,6 +2067,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         out.append(row("eff-agg", _eff_s, _eff_col))
+        # BUYER / SELLER E/R EXHAUSTION-% — the SAME quantity the candle's E/R border thresholds on, so this
+        # row and the 2px/3px border always agree: (mult - 1) * 100, where mult is that side's E/R z-scored
+        # against the preceding EXH_WINDOW buckets (region_state.exhaustion_mults). GOLD once a side reaches
+        # config.ER_BORDER_EXH_PCT — the exact point the chart repaints that bucket's border.
+        _bp = _sp = None
+        try:
+            _bm, _sm, _ = _exhaustion_mults(buckets, len(buckets) - 1)
+            _bp = (_bm - 1.0) * 100.0; _sp = (_sm - 1.0) * 100.0
+        except Exception:
+            pass
+        if _bp is None:
+            out.append(row("bER / sER", "--", GRAY))
+        else:
+            _bp = 0.0 if abs(_bp) < 0.5 else _bp        # kill "-0%" from a rounded sub-half-percent
+            _sp = 0.0 if abs(_sp) < 0.5 else _sp
+            def _erc(v):
+                return GOLD if v >= config.ER_BORDER_EXH_PCT else (NEU if v >= 0.0 else GRAY)
+            out.append("<span style='color:%s'>bER</span> <span style='color:%s'>%+.0f%%</span>"
+                       " <span style='color:%s'>/</span> <span style='color:%s'>sER</span>"
+                       " <span style='color:%s'>%+.0f%%</span>"
+                       % (NEU, _erc(_bp), _bp, NEU, NEU, _erc(_sp), _sp))
         st = float(ab.get("start_time", 0.0) or 0.0); et = float(ab.get("end_time", 0.0) or 0.0)
         dur = (et - st) if et > st else 0.0
         szb = ab.get("sz_cb") or []; szs = ab.get("sz_cs") or []
@@ -2048,42 +2115,58 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 a = abs(v); s = "+" if v >= 0 else "-"
                 return ("%s%.1fK" % (s, a / 1000.0)) if a >= 1000 else ("%s%.0f" % (s, a))
             _d1 = float(dh1); _d2 = (bv - sv) - _d1; da2 = (_d2 - _d1) / cv
-            out.append(row("Δ-accel", "%+.1f%%" % (da2 * 100.0), G if da2 > 0 else (R if da2 < 0 else GRAY)))
-            out.append("<span style='color:%s'>H1/H2</span> <span style='color:%s'>%s</span>"
+            out.append("<span style='color:%s'>Δ-accel</span> <span style='color:%s'>%+.1f%%</span>"
+                       " <span style='color:%s'>(</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
-                       % (NEU, G if _d1 >= 0 else R, _kv(_d1), NEU, G if _d2 >= 0 else R, _kv(_d2)))
+                       " <span style='color:%s'>)</span>"
+                       % (NEU, G if da2 > 0 else (R if da2 < 0 else GRAY), da2 * 100.0,
+                          NEU, G if _d1 >= 0 else R, _kv(_d1),
+                          NEU, G if _d2 >= 0 else R, _kv(_d2), NEU))
         else:
             out.append(row("Δ-accel", "--", GRAY))
-            out.append(row("H1/H2", "--", GRAY))
         # ABSORPTION RESIDUAL — did the delta produce the price move it should have? R = Zp - rho*Zv against a
         # trailing-30 window (rho measured on that same window, NOT assumed 1.0 — see app/absorption.py).
         # A is oriented so POSITIVE = the aggressor got absorbed, whichever side was aggressing.
+        # The per-half legs need the daemon's price_h1 on this bucket AND on >=20 of the prior 30, so they
+        # read "--" while the bucket-level R already has a value — that split is expected, not a fault.
+        _absmod = None; _A = _A1 = _A2 = None
         try:
             from app import absorption as _absmod
-            _A, _R, _aside = _absmod.absorption(buckets, len(buckets) - 1)
-        except Exception:
-            _A = _R = None; _aside = 0
-        if _A is None:
-            out.append(row("Absorb R", "--", GRAY))
-        else:
-            _acol = GOLD if _A >= 1.5 else (G if _A >= 0.75 else (R if _A <= -0.75 else NEU))
-            out.append(row("Absorb R", "%+.2f %s" % (_A, _absmod.label(_A)), _acol))
-        # PER-HALF absorption — needs the daemon's price_h1 (shipped 2026-07-22 13:40 UTC) on this bucket AND
-        # on >=20 of the prior 30, so it reads "--" until that many post-restart buckets exist.
-        try:
+            _A = _absmod.absorption(buckets, len(buckets) - 1)[0]
             _A1, _A2 = _absmod.absorption_halves(buckets, len(buckets) - 1)
         except Exception:
-            _A1 = _A2 = None
-        if _A1 is None and _A2 is None:
-            out.append(row("R h1/h2", "--", GRAY))
+            pass
+        if _A is None and _A1 is None and _A2 is None:
+            out.append(row("Absorb R", "--", GRAY))
         else:
-            def _hc(v):
-                return GRAY if v is None else (GOLD if v >= 1.5 else (G if v >= 0.75 else (R if v <= -0.75 else NEU)))
+            _hc = _absorb_color            # ORANGE = absorbed, BLUE = easy (see _absorb_color)
             def _hs(v):
                 return "--" if v is None else ("%+.2f" % v)
-            out.append("<span style='color:%s'>R h1/h2</span> <span style='color:%s'>%s</span>"
+            _head = "--" if _A is None else ("%+.2f %s" % (_A, _absmod.label(_A)))
+            out.append("<span style='color:%s'>Absorb R</span> <span style='color:%s'>%s</span>"
+                       " <span style='color:%s'>(</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
-                       % (NEU, _hc(_A1), _hs(_A1), NEU, _hc(_A2), _hs(_A2)))
+                       " <span style='color:%s'>)</span>"
+                       % (NEU, _hc(_A), _head, NEU, _hc(_A1), _hs(_A1), NEU, _hc(_A2), _hs(_A2), NEU))
+        # PER-HALF PRICE CHANGE — the RESULT half of the same split R h1/h2 scores. Pure per-bucket
+        # arithmetic (no trailing baseline), so it reads on ANY bucket carrying price_h1, including ones
+        # where R h1/h2 is still "--" for want of 20 baselined priors. Each leg is coloured on its own sign:
+        # a bucket that rose in h1 and gave it back in h2 is the whole point of the split.
+        try:
+            _ph = _absmod.price_halves(ab)
+        except Exception:
+            _ph = None
+        if _ph is None:
+            out.append(row("ΔP", "--", GRAY))
+        else:
+            _p1, _p2, _pt = _ph
+            def _pc(v):
+                return GRAY if v == 0 else (G if v > 0 else R)
+            out.append("<span style='color:%s'>ΔP</span> <span style='color:%s'>%+.2f%%</span>"
+                       " <span style='color:%s'>(</span> <span style='color:%s'>%+.2f</span>"
+                       " <span style='color:%s'>/</span> <span style='color:%s'>%+.2f</span>"
+                       " <span style='color:%s'>)</span>"
+                       % (NEU, _pc(_pt), _pt, NEU, _pc(_p1), _p1, NEU, _pc(_p2), _p2, NEU))
         return "<br>".join(out)
 
     def _refresh_parked_hover(self) -> None:
@@ -4228,6 +4311,150 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for j in range(used_t, len(self._d2r_lbl_pool)):
             self._d2r_lbl_pool[j].setVisible(False)
 
+    # ------------------------------------------------------------------
+    # SKEW DIVERGENCE overlay (hamburger m10_skewdiv, 1h only) — EXPLORATORY, self-gated, fail-safe.
+    # Green up-triangle 'L' below a bearish pair whose profile leans HIGH; red down-triangle 'S' above a
+    # bullish pair whose profile leans LOW. Triangle SHAPE distinguishes it from the other overlays' pills.
+    # ------------------------------------------------------------------
+    def _clear_skewdiv(self) -> None:
+        if self._skd_tri is not None:
+            self._skd_tri.setVisible(False)
+        for _it in self._skd_lbl_pool:
+            _it.setVisible(False)
+        self._skd_sig = None; self._skd_drawn = False
+
+    def _draw_skewdiv(self, filtered) -> None:
+        """L/S triangle badges for the SKEW DIVERGENCE exploratory setups (app/skew_divergence_detect).
+
+        No warm-up prefix: skew is per-bucket from `levels` and the only cross-bucket input is the prior
+        candle's direction, so the scan window alone is exact. Closed-only via skip_last (the forming bucket's
+        skew repaints as `levels` fills)."""
+        if (not self.menu.layer_state("m10_skewdiv") or self.scanner_mode != "bucket_canvas"
+                or self._tf != "1h"):
+            self._clear_skewdiv(); return
+        n = len(filtered)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))     # same window semantics as the other overlays
+        _sig = (n, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._skd_sig and self._skd_drawn:
+            return
+        self._skd_sig = _sig
+        try:
+            from app import skew_divergence_detect
+            entries = skew_divergence_detect.detect(list(filtered), skip_last=_forming)
+        except Exception:
+            self._clear_skewdiv(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.055, 1e-9)
+        GRN, RED, INK = (40, 220, 100), (240, 60, 78), (10, 12, 18)
+        if self._skd_tri is None:
+            self._skd_tri = pg.ScatterPlotItem(pxMode=True, size=22)
+            self._skd_tri.setZValue(32); self.plot.addItem(self._skd_tri, ignoreBounds=True)
+        spots = []; used = 0
+        for e in entries:
+            i = e["i"]
+            if i < 0 or i >= n:
+                continue
+            side = e["side"]
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)               # triangle sits beyond the wick
+            col = GRN if side > 0 else RED
+            spots.append({"pos": (i, y), "symbol": "t1" if side > 0 else "t",
+                          "brush": pg.mkBrush(*col), "pen": pg.mkPen(*col, width=1.2), "size": 22})
+            if used >= len(self._skd_lbl_pool):
+                _t = pg.TextItem(anchor=(0.5, 0.5))
+                _f = QtGui.QFont("Consolas", 8); _f.setBold(True); _t.textItem.setFont(_f)
+                _t.setZValue(33); self.plot.addItem(_t, ignoreBounds=True); self._skd_lbl_pool.append(_t)
+            _lb = self._skd_lbl_pool[used]
+            _lb.setColor(INK); _lb.setText("L" if side > 0 else "S")
+            # letter nudged toward the triangle's centroid (up-tri centroid sits above the point, down below)
+            _lb.setPos(i, y + (pad * 0.20 if side > 0 else -pad * 0.20)); _lb.setVisible(True); used += 1
+        self._skd_tri.setData(spots); self._skd_tri.setVisible(True)
+        for j in range(used, len(self._skd_lbl_pool)):
+            self._skd_lbl_pool[j].setVisible(False)
+        self._skd_drawn = True
+
+    # ------------------------------------------------------------------
+    # FLOW FLIP overlay (hamburger m10_flowflip, 1h only) — EXPLORATORY, self-gated, fail-safe.
+    # Green sphere 'L' below a bearish->bullish big reversal; red sphere 'S' above a bullish->bearish one.
+    # Sphere SHAPE distinguishes it from the pill (mmx/da2) and triangle (skewdiv) overlays.
+    # ------------------------------------------------------------------
+    def _clear_flowflip(self) -> None:
+        if self._ff_sph is not None:
+            self._ff_sph.setVisible(False)
+        for _it in self._ff_lbl_pool:
+            _it.setVisible(False)
+        self._ff_sig = None; self._ff_drawn = False
+
+    def _draw_flowflip(self, filtered) -> None:
+        """L/S sphere badges for FLOW FLIP (app/flow_flip_detect), SHADED by the eff-agg flip dE.
+
+        The base signal (big reversal + mov_magn>50) needs no warm-up, but the SHADE does: dE = eff-agg(c2) -
+        eff-agg(c1) and eff_causal_share is a RUNNING causal computation, so it is fed warm+filtered (the
+        shared MMXSKEW 250-prefix) for accuracy, then indexed back into filtered space. Colour is BINARY on
+        the SIGN of dE (operator choice): **dE < 0 -> FULL red/green, dE >= 0 -> PALE (same hue, not grey)**.
+        In-sample dE<0 (flow flipped bearish across the reversal) is the winning band on BOTH sides -- the
+        short by confirmation, the long by divergence (n=15, NOT significant; the long side is dead overall).
+        If eff-agg is unavailable dE is unknown and the sphere draws FULL colour."""
+        if (not self.menu.layer_state("m10_flowflip") or self.scanner_mode != "bucket_canvas"
+                or self._tf != "1h"):
+            self._clear_flowflip(); return
+        n = len(filtered)
+        warm = getattr(self, "_mmx_warm", None) or []                # shared eff-agg warm-up prefix
+        _off = len(warm)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        _sig = (n, _off, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._ff_sig and self._ff_drawn:
+            return
+        self._ff_sig = _sig
+        try:
+            from app import flow_flip_detect
+            entries = flow_flip_detect.detect(list(filtered), skip_last=_forming)
+        except Exception:
+            self._clear_flowflip(); return
+        eff = None                                                   # eff-agg % over warm+filtered, or None
+        try:
+            from . import pivot_detect as _PD
+            eff = (2.0 * np.asarray(_PD.eff_causal_share(list(warm) + list(filtered)), float) - 1.0) * 100.0
+        except Exception:
+            eff = None
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.055, 1e-9)
+        INK = (10, 12, 18)
+        GRN, RED = (40, 220, 100), (240, 60, 78)                    # FULL  (dE < 0)
+        GRN_PALE, RED_PALE = (128, 190, 150), (215, 140, 152)       # PALE hue-preserving (dE >= 0), not grey
+        if self._ff_sph is None:
+            self._ff_sph = pg.ScatterPlotItem(pxMode=True, size=24, symbol="o")
+            self._ff_sph.setZValue(32); self.plot.addItem(self._ff_sph, ignoreBounds=True)
+        spots = []; used = 0
+        for e in entries:
+            i = e["i"]
+            if i < 0 or i >= n:
+                continue
+            side = e["side"]
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)
+            # dE = eff-agg(c2) - eff-agg(c1); c2 = filtered i -> warm+filtered index i+_off (i>=1 so c1 exists).
+            # BINARY: dE < 0 (flow flipped bearish) -> FULL colour; dE >= 0 or unknown -> PALE.
+            full = True
+            if eff is not None and 0 < (i + _off) < len(eff):
+                full = (eff[i + _off] - eff[i + _off - 1]) < 0.0
+            if side > 0:
+                col = GRN if full else GRN_PALE
+            else:
+                col = RED if full else RED_PALE
+            spots.append({"pos": (i, y), "symbol": "o",
+                          "brush": pg.mkBrush(*col), "pen": pg.mkPen(*[int(c * 0.55) for c in col], width=1.2),
+                          "size": 24})
+            if used >= len(self._ff_lbl_pool):
+                _tl = pg.TextItem(anchor=(0.5, 0.5))
+                _f = QtGui.QFont("Consolas", 8); _f.setBold(True); _tl.textItem.setFont(_f)
+                _tl.setZValue(33); self.plot.addItem(_tl, ignoreBounds=True); self._ff_lbl_pool.append(_tl)
+            _lb = self._ff_lbl_pool[used]
+            _lb.setColor(INK); _lb.setText("L" if side > 0 else "S")
+            _lb.setPos(i, y); _lb.setVisible(True); used += 1
+        self._ff_sph.setData(spots); self._ff_sph.setVisible(True)
+        for j in range(used, len(self._ff_lbl_pool)):
+            self._ff_lbl_pool[j].setVisible(False)
+        self._ff_drawn = True
+
     def _mmx_badge(self, used, x, y, text, tcol, fill):
         if used >= len(self._mmx_badge_pool):
             _t = pg.TextItem(anchor=(0.5, 0.5))
@@ -5406,8 +5633,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_da2rev(_pf or [])    # DA2-REVERSION v1.0 overlay — self-gated, fail-safe
                 except Exception:
                     self._clear_da2rev()
+                try:
+                    self._draw_skewdiv(_pf or [])   # SKEW DIVERGENCE overlay — self-gated, fail-safe
+                except Exception:
+                    self._clear_skewdiv()
+                try:
+                    self._draw_flowflip(_pf or [])  # FLOW FLIP overlay — self-gated, fail-safe
+                except Exception:
+                    self._clear_flowflip()
             else:
                 self._clear_pivot(); self._clear_mmxskew(); self._clear_da2rev()   # nothing on -> clear all
+                self._clear_skewdiv(); self._clear_flowflip()
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -5475,6 +5711,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_da2rev(filtered)    # DA2-REVERSION v1.0 overlay — self-gated, fail-safe
             except Exception:
                 self._clear_da2rev()
+            try:
+                self._draw_skewdiv(filtered)   # SKEW DIVERGENCE overlay — self-gated, fail-safe
+            except Exception:
+                self._clear_skewdiv()
+            try:
+                self._draw_flowflip(filtered)  # FLOW FLIP overlay — self-gated, fail-safe
+            except Exception:
+                self._clear_flowflip()
             try:
                 self._draw_selection_vp(filtered, lo_i, hi_i)   # 'h'-card Volume-Profile-over-selection overlay
             except Exception:
@@ -6223,7 +6467,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _absR_s = "--"; _absR_col = gray
             else:
                 _absR_s = "%+.2f  %s" % (_absA, _absmod.label(_absA))
-                _absR_col = gold if _absA >= 1.5 else (g if _absA >= 0.75 else (r if _absA <= -0.75 else gray))
+                _absR_col = _absorb_color(_absA)      # ORANGE = absorbed, BLUE = easy
             try:
                 _absA1, _absA2 = _absmod.absorption_halves(buckets, idx)
             except Exception:
@@ -6233,8 +6477,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             else:
                 _f = lambda v: "--" if v is None else ("%+.2f" % v)
                 _absH_s = "%s / %s" % (_f(_absA1), _f(_absA2))
-                _mx = max([v for v in (_absA1, _absA2) if v is not None], default=0.0)
-                _absH_col = gold if _mx >= 1.5 else (g if _mx >= 0.75 else gray)
+                # colour by the MORE EXTREME leg by absolute value — plain max() would hide a strongly
+                # negative (EASY, blue) half behind a mildly positive one now that both signs are coloured.
+                _ex = max([v for v in (_absA1, _absA2) if v is not None], key=abs, default=None)
+                _absH_col = _absorb_color(_ex)
+            # PER-HALF PRICE CHANGE (the RESULT side of the same open/50%-vol-mark/close split the R h1/h2
+            # residuals score). NO trailing baseline, so this lights up on any bucket carrying price_h1, even
+            # where R h1/h2 still reads "--" for want of 20 baselined priors — which also makes it a free
+            # diagnostic: ΔP populated + R h1/h2 blank = short warm-up, BOTH blank = no price_h1 on the bucket.
+            try:
+                _dP = _absmod.price_halves(b)
+            except Exception:
+                _dP = None
+            if _dP is None:
+                _dP_row = span("ΔP --", gray)
+            else:
+                _dP_1, _dP_2, _dP_t = _dP
+                _pcol = lambda v: gray if v == 0 else (g if v > 0 else r)
+                # each leg on its OWN sign: a bucket that rose in h1 and gave it back in h2 is the point
+                _dP_row = (f"{span('ΔP', gray)} {span('%+.2f%%' % _dP_t, _pcol(_dP_t))}"
+                           f"  {span('(h1 %+.2f' % _dP_1, _pcol(_dP_1))} {span('/', gray)}"
+                           f" {span('h2 %+.2f)' % _dP_2, _pcol(_dP_2))}")
             # KINETIC EFFICIENCY RATIO (KER) — Realized Work / Kinetic Force per side (see _bucket_ker).
             _ker_buy, _ker_sell = self._bucket_ker(b)
 
@@ -6352,6 +6615,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 span("Δ-accel " + _da2_s, _da2_col),
                 span("Absorb R " + _absR_s, _absR_col),
                 span("R h1/h2 " + _absH_s, _absH_col),
+                _dP_row,
                 f"OI Δ {span(sk(oi_d), g if oi_d >= 0 else r)}",
                 # What each side PAID per tick it won, and how fast it ARRIVED. Two independent colourings
                 # per line: the /tick VALUE lights on whichever side paid more per tick (its own side colour),

@@ -116,14 +116,22 @@ _M10_LAYERS = [
     ("m10_vpfade", "D VP star/trap/clock", True, True),         # D-entry gold star/red-x trap + cyan Path-B wait clock
     ("m10_estar", "E VP star/trap (unval.)", True, True),       # star/trap on E's own vs opposite value-half
     ("m10_vpinring", "VPIN confluence ring", True, True),       # electric-purple ring on D/E entries with VPIN>=warn
-    # MMXSKEW no-POC family (2026-07-21) — one toggle per version; nested tiers, highest ENABLED tier styles the
-    # badge (v1.3 gold > v1.2-Dynamic red/green > v1.1-NP plain). Click a badge -> its SL/TP lines.
+    ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
+]
+
+# Signal STRATEGIES — their own hamburger accordion (own draw path, each self-gated / fail-safe). Same
+# ``m10_`` key namespace + layer_state() as the overlays above, split out only for the menu grouping.
+# Tuple: (key, label, default_on, enabled).
+_M10_STRATEGIES = [
+    # MMXSKEW no-POC family (2026-07-21) — nested tiers, highest ENABLED tier styles the badge
+    # (v1.3 gold > v1.2-Dynamic red/green > v1.1-NP plain). Click a badge -> its SL/TP lines.
     ("m10_mmx_v11", "MMXSKEW v1.1-NP (plain)", False, True),             # base: dir+skew+spread+delta, no POC
     ("m10_mmx_v12d", "MMXSKEW v1.2-Dynamic (red/green)", False, True),   # + run_pos<=4 & mov_mag_ratio>=1.30
     ("m10_mmx_v13", "MMXSKEW v1.3 (gold)", False, True),                 # + mov_mag>=39 & asymmetric da2>0
     ("m10_mmx_sound", "MMXSKEW entry sound alert", False, True),         # beep on a new live-edge print (v1.3 = double)
     ("m10_da2rev", "DA2-REVERSION v1.1 (da2-L / da2-S)", False, True),   # quiet-tape variant; needs delta_h1 + warm-up
-    ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
+    ("m10_skewdiv", "Skew Divergence (L / S triangles)", False, True),   # bear/bull pair vs opposing profile skew
+    ("m10_flowflip", "Flow Flip (L / S spheres)", False, True),          # big reversal candle; flow flips across it
 ]
 
 # Order-flow scanner — the authoritative 10-mode bucket architecture (time chart removed, Phase B).
@@ -439,6 +447,18 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             if key == "m10_structure_swing":
                 self._build_swing_slider()   # user-adjustable swing sensitivity, right under its toggle
         root.addWidget(self.m10_section)
+
+        # --- Strategies accordion — the signal overlays (MMXSKEW / DA2-REVERSION / Skew Divergence / Flow
+        # Flip), same layerToggled framework and m10_ keys, grouped into their own collapsible section.
+        self.strat_section = CollapsibleSection("Strategies", expanded=False)
+        for key, label, default, enabled in _M10_STRATEGIES:
+            cb = QtWidgets.QCheckBox(label)
+            cb.setChecked(default)
+            cb.setEnabled(enabled)
+            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
+            self.layer_checks[key] = cb
+            self.strat_section.addWidget(cb)
+        root.addWidget(self.strat_section)
 
         root.addStretch(1)
 
