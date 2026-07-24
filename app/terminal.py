@@ -43,7 +43,7 @@ from . import archive          # local cold-archive reader — extends the scann
 from . import structure        # market-structure swing labels (HH/HL/LH/LL)
 from .chart_widgets import (
     WhiskerBarItem, FootprintCandleItem, DeltaCandleItem, ForceCandleItem, DeltaForceCandleItem,
-    AbsorptionLayer, AbsorptionZoneLayer, BucketCandleItem, ExhaustionStripLayer, LocalTimeAxis,
+    AbsorptionLayer, AbsorptionZoneLayer, BucketCandleItem, ExhaustionStripLayer, LocalTimeAxis, RoundedTextItem,
     OrderBlockLayer, PanelSeparatorLayer, PriceAxis, _RGB_ABS_BEAR, _RGB_ABS_BULL, _RGB_EFF_BEAR,
     _RGB_EFF_BULL, _RGB_ER_BEAR, _RGB_ER_BULL, _RGB_EXH_BEAR, _RGB_EXH_BULL,
 )
@@ -303,6 +303,251 @@ def _absorb_color(a) -> str:
     if a <= -0.75:
         return "#2f80c4"                 # light
     return "#9aa0a6"                     # proportional -> neutral
+
+
+class _SubTimeAxis(pg.AxisItem):
+    """Bottom axis for the 1m popup. Candles sit at integer indices; each tick shows that bucket's START TIME as
+    HH:MM (never seconds), chosen ADAPTIVELY for the current zoom (≈1 label / 80px of axis). Since these are
+    constant-VOLUME "1m" buckets, several can fall in the same clock minute, so a repeated minute is BLANKED (the
+    label prints once per minute) — no seconds, no "13:54 13:54 13:54". Replaces the old fixed setTicks() that
+    produced the repeated/garbled labels and never re-spaced on zoom."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._starts: list = []           # candle index -> bucket start_time (unix seconds)
+        try:
+            self.enableAutoSIPrefix(False)
+        except Exception:
+            pass
+
+    def set_starts(self, starts) -> None:
+        self._starts = [float(s or 0.0) for s in starts]
+
+    def tickValues(self, minVal, maxVal, size):
+        n = len(self._starts)
+        if n == 0:
+            return []
+        lo = max(0, int(minVal)); hi = min(n - 1, int(maxVal) + 1)
+        if hi < lo:
+            return []
+        span = hi - lo + 1
+        want = max(2, min(span, int(size / 80) if size else 6))   # ~1 label per 80px, zoom-adaptive
+        step = max(1, round(span / want))
+        return [(float(step), [float(v) for v in range(lo, hi + 1, step)])]
+
+    def tickStrings(self, values, scale, spacing):
+        import datetime as _dt
+        n = len(self._starts)
+        out = []; prev = None
+        for v in values:
+            i = int(round(v))
+            if not (0 <= i < n):
+                out.append(""); continue
+            lab = _dt.datetime.utcfromtimestamp(self._starts[i]).strftime("%H:%M")   # HH:MM only, never seconds
+            out.append("" if lab == prev else lab)                 # blank a repeated minute (no "13:54 13:54")
+            if lab != prev:
+                prev = lab
+        return out
+
+
+# Strategy overlays now print a FADED preview on the still-forming (unconfirmed) live-edge bucket; on close the
+# detector re-evaluates the now-closed bucket and, if it still fires, the badge redraws SOLID (and the entry sound —
+# _audio_announce_strategies — fires only then). This is the alpha of the faded preview; confirmed prints use 255.
+_PREVIEW_ALPHA = 90
+
+
+class SubCandleWindow(QtWidgets.QDialog):
+    """Ctrl+double-click a 1h/4h candle -> a pop-up: LEFT a zoomable 1m sub-candle chart of what happened INSIDE
+    that bucket, RIGHT the SAME footprint pane + stats box for the clicked bucket. Non-modal (several at once).
+    When opened on the LIVE forming candle the owner calls refresh() each tick, so the 1m develops in real time
+    (the view re-fits only when a NEW 1m closes, not on every tick, so it isn't jumpy). 1m source: local archive
+    first, then the live 1m stream. `_live`/`_cs`/`_live_sig` are read/written by the owning terminal."""
+
+    def __init__(self, parent, candle: dict, subs: list, top_html: str, mult: float, title: str,
+                 target_vol: float = 0.0):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        # own top-level window with a normal frame + min/max buttons + a corner grip, so it's freely resizable
+        self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.WindowMinMaxButtonsHint
+                            | QtCore.Qt.WindowCloseButtonHint | QtCore.Qt.WindowSystemMenuHint)
+        self.setSizeGripEnabled(True)
+        self.setMinimumSize(520, 340)                    # only a floor — the user drags width/height as they like
+        self.resize(1180, 660)
+        self.setStyleSheet("background:#141414;")
+        self._mult = mult
+        # target_vol is a SNAPSHOT-level field (protocol.CatchupPacket), NOT on the per-bucket wire dict — the owner
+        # passes the current tf's target so the live fill% = curr_vol / target_vol tracks as the bucket fills.
+        self._tv = float(target_vol or 0.0)
+        self._live = False; self._cs = 0.0; self._live_sig = None; self._nsub = -1
+        lay = QtWidgets.QHBoxLayout(self); lay.setContentsMargins(4, 4, 4, 4); lay.setSpacing(4)
+        split = QtWidgets.QSplitter(QtCore.Qt.Horizontal); lay.addWidget(split)
+        # LEFT — 1m candlesticks (zoom/pan = default pyqtgraph mouse)
+        self._left = pg.PlotWidget(axisItems={"right": PriceAxis(orientation="right"),
+                                              "bottom": _SubTimeAxis(orientation="bottom")})
+        self._left.setBackground("#141414"); self._left.showAxis("right"); self._left.hideAxis("left")
+        self._left.setMenuEnabled(False); self._left.showGrid(x=True, y=True, alpha=0.12)
+        self._left.getAxis("right").setPen(pg.mkPen("#dcdcdc")); self._left.getAxis("right").setTextPen(pg.mkPen("#dcdcdc"))
+        self._left.getAxis("bottom").setPen(pg.mkPen("#dcdcdc")); self._left.getAxis("bottom").setTextPen(pg.mkPen("#dcdcdc"))
+        self._item = None
+        self._msg = pg.TextItem("", color="#9aa0a6", anchor=(0.5, 0.5)); self._msg.setZValue(50)
+        self._left.addItem(self._msg, ignoreBounds=True); self._msg.hide()
+        # live-price dashed line — SAME pen as the main chart's crosshair (faded gray, cosmetic [4,8]) — plus a
+        # rounded price-over-fill% pill pinned to the plot's EXTREME RIGHT (like the chart's price tag) so it rides
+        # the right margin instead of covering candles. fill = curr_vol / target_vol of the 1h bucket.
+        self._px = None; self._fitted = False            # _fitted: the view auto-fits ONCE, then the zoom is the user's
+        _pp = pg.mkPen(color=(170, 170, 170, 150), width=1); _pp.setCosmetic(True); _pp.setDashPattern([4.0, 8.0])
+        self._pline = pg.InfiniteLine(angle=0, movable=False, pen=_pp); self._pline.setZValue(55)
+        self._left.addItem(self._pline, ignoreBounds=True); self._pline.hide()
+        self._plabel = RoundedTextItem(anchor=(1.0, 0.5), pad=6.5, radius=9.0,
+                                       fill=pg.mkBrush(18, 22, 30, 236), border=pg.mkPen(96, 106, 126, 210))
+        _pf = QtGui.QFont("Consolas", 10); _pf.setBold(True); self._plabel.textItem.setFont(_pf)
+        self._plabel.setZValue(60); self._left.addItem(self._plabel, ignoreBounds=True); self._plabel.hide()
+        # hover CROSSHAIR — mirrors the main chart: faded-gray dashed vline+hline + a right-edge cursor-price badge.
+        _cpen = pg.mkPen(color=(170, 170, 170, 150), width=1); _cpen.setCosmetic(True); _cpen.setDashPattern([4.0, 8.0])
+        self._vline = pg.InfiniteLine(angle=90, movable=False, pen=_cpen)
+        self._hline = pg.InfiniteLine(angle=0, movable=False, pen=_cpen)
+        self._vline.setZValue(15); self._hline.setZValue(15)
+        self._left.addItem(self._vline, ignoreBounds=True); self._left.addItem(self._hline, ignoreBounds=True)
+        self._vline.hide(); self._hline.hide()
+        self._ctag = pg.TextItem(anchor=(1.0, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        _ctf = QtGui.QFont("Consolas", 9); _ctf.setBold(True); self._ctag.textItem.setFont(_ctf)
+        self._ctag.setZValue(16); self._left.addItem(self._ctag, ignoreBounds=True); self._ctag.hide()
+        self._cross_proxy = pg.SignalProxy(self._left.scene().sigMouseMoved, rateLimit=60, slot=self._on_cross_move)
+        _lvb = self._left.getViewBox()
+        _lvb.sigXRangeChanged.connect(self._reposition_price_label)
+        # Shift/Alt + wheel zoom, mirroring the main chart: Shift -> X-axis only, Alt -> Y-axis only, plain -> both.
+        self._orig_left_wheel = _lvb.wheelEvent
+        _lvb.wheelEvent = self._sub_wheel
+        self._left.scene().sigMouseClicked.connect(self._on_sub_dblclick)   # double-click -> auto-fit both axes
+        split.addWidget(self._left)
+        # RIGHT — the SAME footprint pane + stats for the clicked bucket
+        self._fp = FootprintPanel(); self._fp.setMaximumWidth(9999); self._fp.setMinimumWidth(260)
+        split.addWidget(self._fp); split.setSizes([840, 340])
+        self._render_candles(subs)
+        self._set_footprint(candle, top_html)
+        self._update_price(candle)
+
+    def _update_price(self, candle: dict) -> None:
+        """Dashed live-price line (chart-style pen) + a rounded price-over-fill% pill pinned to the plot's extreme
+        right. Fill = curr_vol / target_vol of the constant-volume bucket. The % + pill outline are GREEN when the
+        bucket is bullish (close >= open) and RED when bearish, so the tag reads direction at a glance."""
+        px = candle.get("close", candle.get("close_price"))
+        if not px or self._nsub <= 0:
+            self._px = None; self._pline.hide(); self._plabel.hide(); return
+        px = float(px); self._px = px
+        o = float(candle.get("open", candle.get("open_price", px)) or px)
+        cv = float(candle.get("curr_vol", 0.0) or 0.0); tv = self._tv   # target_vol is snapshot-level, not on the bucket
+        fill = max(0.0, min(100.0, cv / tv * 100.0)) if tv > 0 else 0.0
+        self._pline.setPos(px); self._pline.show()
+        fcol = "#28e65a" if px >= o else "#ef4444"           # green when bullish, red when bearish
+        self._plabel.setHtml(
+            "<div style='font-family:Consolas;text-align:center;line-height:1.06'>"
+            "<span style='font-size:14px;font-weight:800;color:#eef2f8'>%.2f</span><br>"
+            "<span style='font-size:12px;font-weight:800;color:%s'>%.0f%%</span></div>" % (px, fcol, fill))
+        self._plabel.border = pg.mkPen(fcol, width=1.3)      # pill outline green (bull) / red (bear)
+        self._reposition_price_label(); self._plabel.update(); self._plabel.show()
+
+    def _reposition_price_label(self, *args) -> None:
+        """Keep the live-price pill pinned to the plot's right edge at the live price (re-fired on every x-range
+        change, so a pan/zoom can never drag it off the margin onto the candles)."""
+        if self._px is None or self._nsub <= 0:
+            return
+        try:
+            self._plabel.setPos(self._left.getViewBox().viewRange()[0][1], self._px)
+        except Exception:
+            pass
+
+    def _on_cross_move(self, evt) -> None:
+        """Hover crosshair for the 1m pane — vline+hline track the cursor, a right-edge badge shows the cursor price;
+        mirrors the main chart's crosshair (same faded-gray dashed pen, same PRICE_DECIMALS, same right-anchored tag)."""
+        pos = evt[0]
+        vb = self._left.getViewBox()
+        if not self._left.sceneBoundingRect().contains(pos):
+            self._vline.hide(); self._hline.hide(); self._ctag.hide(); return
+        pt = vb.mapSceneToView(pos)
+        self._vline.setPos(pt.x()); self._vline.show()
+        self._hline.setPos(pt.y()); self._hline.show()
+        self._ctag.setText("%.*f" % (config.PRICE_DECIMALS, pt.y()))
+        self._ctag.setPos(vb.viewRange()[0][1], pt.y()); self._ctag.show()
+
+    def _sub_wheel(self, ev, axis=None):
+        """Modifier wheel over the 1m pane, matching the main chart: Shift -> zoom X only, Alt -> zoom Y only,
+        plain wheel -> zoom both. Wrapped so a fault can never break the pane's zoom."""
+        try:
+            mods = ev.modifiers()
+            if mods & QtCore.Qt.ShiftModifier:
+                return self._orig_left_wheel(ev, axis=0)   # X-axis-only zoom
+            if mods & QtCore.Qt.AltModifier:
+                return self._orig_left_wheel(ev, axis=1)   # Y-axis-only zoom
+        except Exception:
+            pass
+        return self._orig_left_wheel(ev, axis)
+
+    def _on_sub_dblclick(self, ev) -> None:
+        """Double-click the 1m pane -> auto-fit BOTH axes to the data (then re-freeze), exactly like double-clicking
+        the main chart. This is the reset for the zoom/pan the user built up after the one-time open fit."""
+        try:
+            if not ev.double():
+                return
+            self._left.enableAutoRange(); self._left.autoRange(); self._left.disableAutoRange()
+            self._fitted = True                          # a manual re-fit counts as fitted (don't auto-fit again)
+            self._reposition_price_label()
+            ev.accept()
+        except Exception:
+            pass
+
+    def _set_footprint(self, candle: dict, top_html: str) -> None:
+        _px = candle.get("close", candle.get("close_price"))
+        try:
+            self._fp.update_footprint(candle, self._mult, float(_px) if _px else None, None, None, top_html)
+        except Exception:
+            pass
+
+    def _render_candles(self, subs: list) -> None:
+        if not subs:
+            if self._item is not None:
+                self._item.setVisible(False)
+            self._msg.setText("1m sub-candles not on disk or in the live stream yet for this bucket.\n"
+                              "Fetching / waiting for the feed — close & re-open in a few seconds.")
+            self._msg.setPos(0.0, 0.0); self._msg.show(); self._left.setXRange(-1, 1); self._left.setYRange(-1, 1)
+            self._left.getAxis("bottom").set_starts([])   # clear time ticks while there's no data
+            self._nsub = 0
+            return
+        self._msg.hide()
+
+        def _f(s, *keys):
+            for k in keys:
+                v = s.get(k)
+                if v is not None:
+                    return float(v)
+            return 0.0
+        m = len(subs); xs = list(range(m))
+        o = [_f(s, "open", "open_price") for s in subs]; h = [_f(s, "high") for s in subs]
+        l = [_f(s, "low") for s in subs]; c = [_f(s, "close", "close_price") for s in subs]
+        UP, DN = (0, 190, 110), (230, 70, 80)
+        brushes = [pg.mkBrush(*((UP if c[i] >= o[i] else DN)), 160) for i in range(m)]
+        pens = [pg.mkPen(*((UP if c[i] >= o[i] else DN)), width=1) for i in range(m)]
+        if self._item is None:
+            self._item = BucketCandleItem(); self._left.addItem(self._item)
+        self._item.setVisible(True)
+        self._item.update_data(xs, o, h, l, c, brushes, pens, 0.72)
+        self._left.getAxis("bottom").set_starts([_f(s, "start_time") for s in subs])   # zoom-adaptive time ticks
+        self._left.setTitle("%d one-minute sub-candles%s" % (m, "   · LIVE" if self._live else ""),
+                            color="#9aa0a6", size="9pt")
+        if not self._fitted:                             # fit the view ONCE on the first render, then FREEZE it — a
+            self._left.autoRange()                       # newly-closed 1m must never snap the user's zoom/pan back
+            self._left.disableAutoRange()
+            self._fitted = True
+        self._nsub = m
+
+    def refresh(self, candle: dict, subs: list, top_html: str, target_vol: "float | None" = None) -> None:
+        """Owner calls this each tick while the popup's bucket is still FORMING -> live 1m development. target_vol is
+        the snapshot-level constant-volume target (not a bucket field), refreshed so the fill% grows with curr_vol."""
+        if target_vol is not None:
+            self._tv = float(target_vol or 0.0)
+        self._render_candles(subs)
+        self._set_footprint(candle, top_html)
+        self._update_price(candle)
 
 
 class MinimalTerminalWindow(QtWidgets.QMainWindow):
@@ -843,6 +1088,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.vline.setZValue(15); self.hline.setZValue(15)
         self.plot.addItem(self.vline, ignoreBounds=True)
         self.plot.addItem(self.hline, ignoreBounds=True)
+        # --- LIVE-price badge (bucket_canvas): a dashed line at the forming bucket's close + a right-edge
+        # price-over-fill% pill (curr_vol/target_vol), coloured GREEN when the bucket is bullish / RED when bearish.
+        # Same design as the 1m-detail popup. Positioned per-frame in _update_live_price_label; pinned to the right
+        # edge (reposition on x-range change); hidden in replay / heatmap / on any mode switch (clear_scanner_canvas).
+        self._live_px = None
+        _lpp = pg.mkPen(color=(170, 170, 170, 150), width=1); _lpp.setCosmetic(True); _lpp.setDashPattern([4.0, 8.0])
+        self._live_pline = pg.InfiniteLine(angle=0, movable=False, pen=_lpp); self._live_pline.setZValue(55)
+        self.plot.addItem(self._live_pline, ignoreBounds=True); self._live_pline.hide()
+        self._live_plabel = RoundedTextItem(anchor=(1.0, 0.5), pad=6.5, radius=9.0,
+                                            fill=pg.mkBrush(18, 22, 30, 236), border=pg.mkPen(96, 106, 126, 210))
+        _lpf = QtGui.QFont("Consolas", 10); _lpf.setBold(True); self._live_plabel.textItem.setFont(_lpf)
+        self._live_plabel.setZValue(60); self.plot.addItem(self._live_plabel, ignoreBounds=True); self._live_plabel.hide()
+        self.vb.sigXRangeChanged.connect(self._reposition_live_price_label)
         # --- A2: cursor Y-axis price tag — a right-axis badge tracking the hline's Y,
         # shown in ALL modes. Reads the cursor price via mapSceneToView and formats with
         # config.PRICE_DECIMALS so it matches PriceAxis exactly. On a full cursor-leave it
@@ -1267,6 +1525,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # the 4h buy/sell wick zones so they update automatically, no manual archive pull. No baseline needed.
         self.worker_4h = PipeClientWorker(tf="4h")
         self.worker_4h.start()
+        # THIRD worker on the LIVE 1m stream -> feeds the Ctrl+double-click "1m detail" popup for buckets too fresh
+        # to be in the cold archive yet (same live source as opening the 1m chart). No baseline; live catch-up only.
+        self.worker_1m = PipeClientWorker(tf="1m")
+        self.worker_1m.start()
 
         # --- 20Hz master loop ---
         self.timer = QtCore.QTimer(self)
@@ -1781,6 +2043,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 pass
         if not ev.double():
             return
+        # Ctrl + double-click a candle on 1h/4h -> pop-up: 1m detail chart of that bucket + its footprint pane
+        if (self.scanner_mode == "bucket_canvas" and self._tf in ("1h", "4h")
+                and (QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ControlModifier)):
+            try:
+                pt = self.vb.mapSceneToView(ev.scenePos())
+                self._open_subcandle(int(round(pt.x()))); ev.accept(); return
+            except Exception:
+                pass
         if self.scanner_mode == "bucket_canvas" and self._abshm_hit is not None:
             try:                               # double-click inside the P1 HM band -> reset the span to 2 cycles
                 pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
@@ -1809,6 +2079,112 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.plot.autoRange()
         self.plot.disableAutoRange()
         self._autoranged = True
+
+    def _open_subcandle(self, idx: int) -> None:
+        """Pop up a SubCandleWindow for the bucket at scanner index `idx`: its 1m constituents (left, from the
+        local archive) + its footprint pane and stats (right, reusing _fp_top_html)."""
+        try:
+            filtered, _x, _a = self._build_scanner_buckets()
+        except Exception:
+            return
+        if idx < 0 or idx >= len(filtered):
+            return
+        b = filtered[idx]
+        cs = float(b.get("start_time", 0.0) or 0.0); ce = float(b.get("end_time", 0.0) or 0.0)
+        if cs <= 0.0:
+            return
+        _live = (not self._replay_on) and (idx == len(filtered) - 1)   # clicked the LIVE forming candle?
+        if ce <= cs:                                                   # forming bucket has no end yet -> all since cs
+            ce = cs + 24 * 3600.0
+        try:
+            subs = archive.subbuckets("1m", cs, ce)     # 1) local cold-archive mirror (historical)
+        except Exception:
+            subs = []
+        if not subs and getattr(self, "worker_1m", None) is not None:
+            try:                                          # 2) too fresh for the archive -> the LIVE 1m stream
+                _cb = (self.worker_1m.snapshot() or {}).get("closed_buckets") or []
+                subs = sorted((x for x in _cb if cs <= float(x.get("start_time", 0.0) or 0.0) < ce),
+                              key=lambda x: float(x.get("start_time", 0.0) or 0.0))
+            except Exception:
+                subs = []
+        if not subs:
+            try:
+                self._maybe_pull_archive()                # 3) neither had it -> kick an archive refresh; re-open
+            except Exception:
+                pass
+        try:
+            top = self._fp_top_html(b, filtered[:idx + 1])
+        except Exception:
+            top = ""
+        try:
+            import datetime as _dt
+            _lbl = _dt.datetime.utcfromtimestamp(cs).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            _lbl = "?"
+        title = "1m detail — %s bucket @ %s UTC  (Idx %s)" % (
+            self._tf, _lbl, self._fmt_idx(self._global_idx_offset + idx))
+        _tv = float((self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL)   # snapshot-level target
+        try:
+            dlg = SubCandleWindow(self, b, subs, top, config.FOOTPRINT_IMB_ER_MULT, title, _tv)
+            dlg._live = _live; dlg._cs = cs         # live-update this popup while its bucket keeps forming
+            if not hasattr(self, "_subcandle_windows"):
+                self._subcandle_windows = []
+            self._subcandle_windows = [w for w in self._subcandle_windows if w.isVisible()]  # drop closed refs
+            self._subcandle_windows.append(dlg)     # keep a ref so the non-modal window isn't GC'd
+            dlg.show(); dlg.raise_()
+        except Exception:
+            pass
+
+    def _tick_subcandles(self) -> None:
+        """Live-refresh any SubCandleWindow opened on the still-FORMING candle: re-pull its 1m constituents from
+        the live 1m stream (closed 1m + the developing one) and redraw. Early-returns when none are live-open."""
+        wins = getattr(self, "_subcandle_windows", None)
+        if not wins:
+            return
+        live = [w for w in wins if getattr(w, "_live", False) and w.isVisible()]
+        if not live:
+            return
+        act = (self._last_snap or {}).get("active_bucket") or {}
+        a_start = float(act.get("start_time", 0.0) or 0.0)
+        if a_start <= 0.0:
+            return
+        _tv = float((self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL)   # snapshot-level target
+        subs = []
+        w1 = getattr(self, "worker_1m", None)
+        if w1 is not None:
+            try:
+                s1 = w1.snapshot() or {}
+                cb = s1.get("closed_buckets") or []; a1 = s1.get("active_bucket") or {}
+                subs = [x for x in cb if float(x.get("start_time", 0.0) or 0.0) >= a_start]
+                if a1 and float(a1.get("start_time", 0.0) or 0.0) >= a_start:
+                    subs = subs + [a1]                     # the developing 1m -> the last candle grows live
+                subs.sort(key=lambda x: float(x.get("start_time", 0.0) or 0.0))
+            except Exception:
+                subs = []
+        sig = (len(subs), round(float(act.get("curr_vol", 0.0) or 0.0)),
+               round(float((subs[-1] if subs else {}).get("curr_vol", 0.0) or 0.0)))
+        for w in live:
+            if abs(getattr(w, "_cs", 0.0) - a_start) > 0.5:
+                # the popup's 1h bucket CLOSED and a NEW one is forming -> AUTO-ADVANCE this live popup onto the new
+                # live candle (no more close/re-open). Re-target its start, reset the one-time fit + sig cache, retitle.
+                w._cs = a_start; w._fitted = False; w._live_sig = None
+                try:
+                    import datetime as _dt
+                    _lbl = _dt.datetime.utcfromtimestamp(a_start).strftime("%Y-%m-%d %H:%M")
+                    w.setWindowTitle("1m detail — %s LIVE bucket @ %s UTC" % (self._tf, _lbl))
+                except Exception:
+                    pass
+            if getattr(w, "_live_sig", None) == sig:
+                continue
+            w._live_sig = sig
+            try:
+                top = self._fp_top_html(act, list(self._trline_buckets or []))
+            except Exception:
+                top = ""
+            try:
+                w.refresh(act, subs, top, _tv)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     def _sync_cob(self) -> None:
@@ -4352,9 +4728,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if _sig == self._d2r_sig and self._d2r_drawn:
             return
         self._d2r_sig = _sig
+        _fi = (n - 1) if _forming else -1                           # forming (unconfirmed) bucket -> faded preview
         try:
             from app import da2_reversion_detect
-            entries = da2_reversion_detect.detect(list(warm) + list(filtered), skip_last=_forming)
+            entries = da2_reversion_detect.detect(list(warm) + list(filtered), skip_last=False)   # incl. forming (faded)
         except Exception:
             self._clear_da2rev(); return
         _off = len(warm)
@@ -4375,8 +4752,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _f = QtGui.QFont("Consolas", 10); _f.setBold(True); _t.textItem.setFont(_f)
                 _t.setZValue(33); self.plot.addItem(_t, ignoreBounds=True); self._d2r_badge_pool.append(_t)
             _t = self._d2r_badge_pool[used]
-            _t.fill = pg.mkBrush(*fill); _t.border = pg.mkPen(*fill, width=1.2)
-            _t.setColor(INK); _t.setText("da2-L" if side > 0 else "da2-S")
+            _a = _PREVIEW_ALPHA if i == _fi else 255                # forming bucket -> faded (unconfirmed) preview
+            _t.fill = pg.mkBrush(*fill, _a); _t.border = pg.mkPen(*fill, _a, width=1.2)
+            _t.setColor((INK[0], INK[1], INK[2], _a)); _t.setText("da2-L" if side > 0 else "da2-S")
             _t.setPos(i, y); _t.setVisible(True); used += 1
             self._d2r_entries.append(("d2r%d" % i, i, side, e["entry"], e["sl"], e["tp"], y))
         for j in range(used, len(self._d2r_badge_pool)):
@@ -4417,9 +4795,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if _sig == self._skd_sig and self._skd_drawn:
             return
         self._skd_sig = _sig
+        _fi = (n - 1) if _forming else -1                            # forming (unconfirmed) bucket -> faded preview
         try:
             from app import skew_divergence_detect
-            entries = skew_divergence_detect.detect(list(filtered), skip_last=_forming)
+            entries = skew_divergence_detect.detect(list(filtered), skip_last=False)   # incl. forming bucket (faded)
         except Exception:
             self._clear_skewdiv(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.055, 1e-9)
@@ -4442,13 +4821,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
             y = (lo - pad) if side > 0 else (hi + pad)               # triangle sits beyond the wick
             col = GRN if side > 0 else RED
+            _a = _PREVIEW_ALPHA if i == _fi else 255                 # forming bucket -> faded (unconfirmed) preview
             spots.append({"pos": (i, y), "symbol": "t1" if side > 0 else "t",
-                          "brush": pg.mkBrush(*col), "pen": pg.mkPen(*col, width=1.2), "size": 22})
+                          "brush": pg.mkBrush(*col, _a), "pen": pg.mkPen(*col, _a, width=1.2), "size": 22})
             # GOLD STAR inside the triangle = the FULL 4-filter setup (dom+climax + R2-vacuum + move-expansion):
             # higher per-trade odds in-sample (~75% vs ~69%), but fewer signals. Star absent = core (dom+climax).
             if e.get("pass_full"):
                 stars.append({"pos": (i, y), "symbol": "star",
-                              "brush": pg.mkBrush(*GOLD), "pen": pg.mkPen(150, 110, 0, width=0.8), "size": 10})
+                              "brush": pg.mkBrush(*GOLD, _a), "pen": pg.mkPen(150, 110, 0, _a, width=0.8), "size": 10})
             self._skd_entries.append(("skd%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
         self._skd_tri.setData(spots); self._skd_tri.setVisible(True)
         self._skd_star.setData(stars); self._skd_star.setVisible(True)
@@ -4495,9 +4875,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if _sig == self._ff_sig and self._ff_drawn:
             return
         self._ff_sig = _sig
+        _fi = (n - 1) if _forming else -1                            # forming (unconfirmed) bucket -> faded preview
         try:
             from app import flow_flip_detect
-            entries = flow_flip_detect.detect(list(filtered), skip_last=_forming)
+            entries = flow_flip_detect.detect(list(filtered), skip_last=False)   # incl. the forming bucket (faded)
         except Exception:
             self._clear_flowflip(); return
         eff = None                                                   # eff-agg % over warm+filtered, or None
@@ -4533,15 +4914,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 col = GRN if full else GRN_PALE
             else:
                 col = RED if full else RED_PALE
+            _a = _PREVIEW_ALPHA if i == _fi else 255             # forming bucket -> faded (unconfirmed) preview
+            _pen_rgb = [int(c * 0.55) for c in col] + [_a]
             spots.append({"pos": (i, y), "symbol": "o",
-                          "brush": pg.mkBrush(*col), "pen": pg.mkPen(*[int(c * 0.55) for c in col], width=1.2),
+                          "brush": pg.mkBrush(*col, _a), "pen": pg.mkPen(*_pen_rgb, width=1.2),
                           "size": 24})
             if used >= len(self._ff_lbl_pool):
                 _tl = pg.TextItem(anchor=(0.5, 0.5))
                 _f = QtGui.QFont("Consolas", 8); _f.setBold(True); _tl.textItem.setFont(_f)
                 _tl.setZValue(33); self.plot.addItem(_tl, ignoreBounds=True); self._ff_lbl_pool.append(_tl)
             _lb = self._ff_lbl_pool[used]
-            _lb.setColor(INK); _lb.setText("L" if side > 0 else "S")
+            _lb.setColor((INK[0], INK[1], INK[2], _a)); _lb.setText("L" if side > 0 else "S")
             _lb.setPos(i, y); _lb.setVisible(True); used += 1
         self._ff_sph.setData(spots); self._ff_sph.setVisible(True)
         for j in range(used, len(self._ff_lbl_pool)):
@@ -4614,15 +4997,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _it.setData(xs, ys); _it.setVisible(bool(xs))
         self._sr_drawn = True
 
-    def _mmx_badge(self, used, x, y, text, tcol, fill):
+    def _mmx_badge(self, used, x, y, text, tcol, fill, alpha=255):
         if used >= len(self._mmx_badge_pool):
             _t = pg.TextItem(anchor=(0.5, 0.5))
             _f = QtGui.QFont("Consolas", 11); _f.setBold(True); _t.textItem.setFont(_f)
             _t.setZValue(34); self.plot.addItem(_t, ignoreBounds=True); self._mmx_badge_pool.append(_t)
         _t = self._mmx_badge_pool[used]
-        _t.fill = pg.mkBrush(*fill) if fill else pg.mkBrush(18, 20, 26, 190)
-        _t.border = pg.mkPen(*(fill if fill else tcol), width=1.2)
-        _t.setColor(tcol); _t.setText(text); _t.setPos(x, y); _t.setVisible(True)
+        _t.fill = pg.mkBrush(*fill, alpha) if fill else pg.mkBrush(18, 20, 26, min(190, alpha))
+        _t.border = pg.mkPen(*(fill if fill else tcol), alpha, width=1.2)
+        _t.setColor((tcol[0], tcol[1], tcol[2], alpha)); _t.setText(text); _t.setPos(x, y); _t.setVisible(True)
         return _t
 
     def _draw_mmxskew(self, filtered) -> None:
@@ -4657,10 +5040,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # shift indices back into `filtered` space. Without this the scan window alone mis-flags 14/174
             # v1.2-Dynamic badges (biased toward over-firing) — see mmxskew_detect.WARMUP_MIN.
             from app import mmxskew_detect
-            entries = mmxskew_detect.detect(list(warm) + list(filtered), skip_last=_forming)
+            entries = mmxskew_detect.detect(list(warm) + list(filtered), skip_last=False)   # incl. forming (faded)
         except Exception:
             self._clear_mmxskew(); return
         _off = len(warm)
+        _fi = (n - 1) if _forming else -1                           # forming (unconfirmed) bucket -> faded preview
         self._mmx_n = n
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.028, 1e-9)
         GREEN, RED, INK, GOLD = (40, 230, 90), (255, 45, 70), (12, 14, 20), (241, 196, 15)
@@ -4680,7 +5064,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue                            # qualifies for no ENABLED tier -> not drawn
             b = filtered[i]; hi = float(b.get("high", 0.0)); lo = float(b.get("low", 0.0))
             y = (lo - pad) if side > 0 else (hi + pad)
-            self._mmx_badge(used, i, y, "L" if side > 0 else "S", tcol, fill); used += 1
+            self._mmx_badge(used, i, y, "L" if side > 0 else "S", tcol, fill,
+                            alpha=_PREVIEW_ALPHA if i == _fi else 255); used += 1
             self._mmx_entries.append(("mmx%d" % i, i, side, e["entry"], e["sl"], e["tp"], y))
         for j in range(used, len(self._mmx_badge_pool)):
             self._mmx_badge_pool[j].setVisible(False)
@@ -6874,6 +7259,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _pc = time.perf_counter; _t0 = _pc()                 # session profiler: frame total (negligible)
         snap = self.worker.snapshot()
         self._last_snap = snap
+        try:
+            self._tick_subcandles()                      # live-develop any open 1m-detail popup on the forming candle
+        except Exception:
+            pass
         self._merge_liq_sweeps(snap.get("liq_sweeps"))   # fold in any daemon-pushed 15m sweeps (tf-agnostic)
         _s = _pc(); self._audio_announce(snap); self._audio_announce_pivot(snap); self._audio_announce_strategies(snap)
         self._refresh_scale_labels(snap); self._perf_note("audio_scale", _s)
@@ -7448,6 +7837,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         secondary ViewBox teardown; (3) Mode 10 lower-pane + COB-column teardown.
         """
         self.price_tag.hide()   # A2: drop the cursor price tag on any mode switch (no orphan)
+        if getattr(self, "_live_pline", None) is not None:   # drop the live-price badge when leaving the candle canvas
+            self._live_px = None; self._live_pline.hide(); self._live_plabel.hide()
         if getattr(self, "vpin_tag", None) is not None:
             self.vpin_tag.hide()   # VPIN-pane value badge — drop on any mode switch too (no orphan)
         self.time_tag.hide()    # heatmap crosshair time tag — drop on any mode switch
@@ -8328,6 +8719,40 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         ab = snap.get("active_bucket") or {}
         cv = ab.get("curr_vol", 0.0)
         return (cv / tv * 100.0) if tv > 0 else 0.0
+
+    def _update_live_price_label(self, buckets: list, x: list) -> None:
+        """Dashed line at the live (forming) bucket's close + a right-edge price-over-fill% pill, GREEN when that
+        bucket is bullish / RED when bearish — the same badge as the 1m-detail popup. Called from _scan_bucket_canvas
+        each frame; hidden in replay (frozen frame) or when candles are hidden (Ctrl+H). fill = _active_fill_pct."""
+        if self._replay_on or self._hide_candles or not buckets:
+            self._live_px = None; self._live_pline.hide(); self._live_plabel.hide(); return
+        b = buckets[-1]
+        px = b.get("close", b.get("close_price"))
+        if not px:
+            self._live_px = None; self._live_pline.hide(); self._live_plabel.hide(); return
+        px = float(px); self._live_px = px
+        o = float(b.get("open", b.get("open_price", px)) or px)
+        fill = max(0.0, min(100.0, self._active_fill_pct()))
+        col = "#28e65a" if px >= o else "#ef4444"            # green when bullish, red when bearish
+        self._live_pline.setPos(px); self._live_pline.show()
+        self._live_plabel.setHtml(
+            "<div style='font-family:Consolas;text-align:center;line-height:1.06'>"
+            "<span style='font-size:14px;font-weight:800;color:#eef2f8'>%.*f</span><br>"
+            "<span style='font-size:12px;font-weight:800;color:%s'>%.0f%%</span></div>"
+            % (config.PRICE_DECIMALS, px, col, fill))
+        self._live_plabel.border = pg.mkPen(col, width=1.3)  # pill outline green (bull) / red (bear)
+        self._live_plabel.show()
+        self._reposition_live_price_label(); self._live_plabel.update()
+
+    def _reposition_live_price_label(self, *args) -> None:
+        """Keep the live-price pill pinned to the plot's right edge at the live price (re-fired on every x-range
+        change — auto-follow scroll or a manual pan — so it stays glued to the margin, never onto the candles)."""
+        if self._live_px is None:
+            return
+        try:
+            self._live_plabel.setPos(self.vb.viewRange()[0][1], self._live_px)
+        except Exception:
+            pass
 
     # Right-docked anchors: x≈1.0 pins the badge's right edge against the Y-axis;
     # the y-fraction stacks converging values (up above, down below, mid centered).
@@ -9543,6 +9968,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Mode 10 — neon-graded bucket candles + gray baseline (upper pane)
         synchronized with a rolling-50 VPIN toxicity heatmap (lower pane)."""
         self._ensure_canvas_panes()
+        self._update_live_price_label(buckets, x)   # dashed live-price line + right-edge price/fill% pill (green/red)
         # #3 static closed-bucket compute cache: closed buckets are immutable, so their
         # OHLC/poc/brush + baseline EMA + rolling-50 VPIN rows are computed ONCE
         # (on close) and reused; only the live edge (buckets[-1]) is recomputed each frame.
@@ -9932,20 +10358,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 or abs(_vr_after[1][0] - _vr_before[1][0]) > 1e-6 or abs(_vr_after[1][1] - _vr_before[1][1]) > 1e-6):
             self._last_scanner_sig = None
 
-        # §5 right-edge spot price + active-bucket fill badge, plus the baseline readout
-        # (all on the upper price pane; stacked + left-padded to avoid clipping).
-        x_edge = x[-1]
-        fill = self._active_fill_pct()
-        spot = closes[-1]
-        # §5.2 — minimalist spot badge: a WHITE pill with the bare price (bold) over the
-        # active bucket's fill% (not bold), both black. No "Price"/"$"/"Fill"/"Base" labels;
-        # the gray dashed baseline curve still shows the EMA baseline's position separately.
-        # Anchored "up" (bottom edge at spot) so the block stacks ABOVE the spanning price line.
-        self._scanner_tracker("t_spot", spot, "#999999",
-            f"<div style='text-align:center'>"
-            f"<span style='color:#000'>{spot:.2f}</span><br>"
-            f"<span style='color:#000; font-weight:normal'>{fill:.0f}%</span></div>",
-            x_edge, "up", span=True, fill_bg="#ffffff")
+        # §5 right-edge spot price + active-bucket fill badge — now drawn by _update_live_price_label (top of this
+        # method): a dashed live-price line + a right-pinned price-over-fill% pill, green/red by direction. The old
+        # white "t_spot" pill + spanning line were REMOVED (they anchored at the live candle's X and overlapped the
+        # new right-edge badge); the gray dashed EMA baseline curve still shows the baseline separately.
 
         # --- CVD sub-pane: 1D-anchored cumulative-delta candles (gated by the hamburger toggle) ---
         if self.cvd_plot is not None and self._cvd_want and self.cvd_plot.isVisible():
@@ -10084,6 +10500,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.worker.stop()
         try:
             self.worker_4h.stop()
+        except Exception:
+            pass
+        try:
+            self.worker_1m.stop()
         except Exception:
             pass
         if self in _OPEN_WINDOWS:

@@ -146,6 +146,19 @@ def earliest_start(tf: str):
     return st or None
 
 
+def subbuckets(tf: str, start_unix: float, end_unix: float) -> "list[dict]":
+    """Wire-buckets of ``tf`` whose start_time falls in [start_unix, end_unix), ascending — the fine-grained
+    constituents of a coarser candle (e.g. the 1m buckets inside a clicked 1h/4h bucket). From the LOCAL mirror;
+    returns [] when the range isn't covered (outside the ~pulled 1m window)."""
+    d = _load(tf)
+    if not d:
+        return []
+    out = [snap for snap in d.values()
+           if start_unix <= float(snap.get("start_time", 0.0) or 0.0) < end_unix]
+    out.sort(key=lambda s: float(s.get("start_time", 0.0) or 0.0))
+    return out
+
+
 def window(tf: str, min_start_unix: float, before_bid: int) -> list[dict]:
     """Contiguous wire-buckets with bid < ``before_bid``, walking back until one starts before
     ``min_start_unix`` (so the frame reaches the Zero Point) or the archive runs out / breaks contiguity.

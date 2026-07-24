@@ -281,7 +281,7 @@ class FootprintPanel(pg.PlotWidget):
         self._skew_label.setZValue(16); self.addItem(self._skew_label, ignoreBounds=True)
         self._skew_label.hide()
         self._sell_pool = []; self._buy_pool = []
-        self._show_numbers = True                 # double-click toggles this
+        self._show_numbers = False                # OFF by default; double-click the pane toggles the number chips on
         self._last = None                         # (active, mult, price) cache -> re-render on a numbers toggle
         self.scene().sigMouseClicked.connect(self._on_click)
 
