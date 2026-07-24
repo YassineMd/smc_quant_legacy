@@ -40,18 +40,22 @@ def GATE(sg):
 
 
 def _da2_recon(subs):
-    """Reconstruct da2 = (H2-H1)/vol from the 1m sub-buckets (running delta at the 50%-vol mark)."""
+    """Reconstruct da2 = (delta_h2 - delta_h1)/curr_vol from the 1m sub-buckets (running delta at the
+    50%-vol mark). da2 = (delta_total - 2*delta_h1)/vol, so the NUMERATOR total is total DELTA (sum of the
+    per-minute buy-sell), NOT total volume; only the denominator is volume. (Pre-2026-07-23 this used total
+    VOLUME in the numerator too, which left da2 offset by ~+1 — correlation-preserving, so it validated at
+    corr 0.997 with the exact field, but it made the `da2 > 0` gate near-vacuous on reconstructed buckets.)"""
     vols = [float(x.get("curr_vol", 0)) for x in subs]
     dels = [float(x.get("buy_vol", 0)) - float(x.get("sell_vol", 0)) for x in subs]
-    tot = sum(vols)
-    if tot <= 0 or len(subs) < 12:
+    vtot = sum(vols); dtot = sum(dels)
+    if vtot <= 0 or len(subs) < 12:
         return None
-    half = 0.5 * tot; cum = 0.0; run = 0.0
+    half = 0.5 * vtot; cum = 0.0; run = 0.0
     for v, d in zip(vols, dels):
         run += d; cum += v
         if cum >= half:
-            return (tot - 2 * run) / tot
-    return (tot - 2 * run) / tot
+            return (dtot - 2 * run) / vtot
+    return (dtot - 2 * run) / vtot
 
 
 def build():
