@@ -100,38 +100,53 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background:transp
 # ``m10_`` keys, read via layer_state() by the Mode-10 draw path.
 # Tuple: (key, label, default_on, enabled). Disabled rows are Phase-3 placeholders:
 # shown so the full control panel is visible, but non-clickable until their logic lands.
+# Tuple everywhere below: (key, label, default_on, enabled). Disabled rows are Phase-3 placeholders.
+# All four groups share the SAME ``m10_`` key namespace + layer_state() + layer_checks dict; they are split
+# only for the menu grouping (persistence iterates layer_checks, so a key's SECTION is transparent to save/load).
+
+# "Mode 10 Overlays" — the render-layer overlays that aren't candles / indicators / strategies.
 _M10_LAYERS = [
-    ("m10_poc", "POC Dot", False, True),               # default OFF (operator preference)
     ("m10_footprint", "Footprint Ladder", False, True),   # default OFF — heavy overlay, opt-in
-    ("m10_obs", "Order Blocks", False, True),             # default OFF — toggle with Order Blocks + Iceberg via 'o'
-    ("m10_liq", "Liquidation Marks", False, True),        # default OFF. In-session toggles persist as
-    ("m10_stats", "Stats Box", False, True),              # default OFF ('s' toggles); checkbox state, restart resets.
-    ("m10_icebergs", "Absorption", False, True),            # whale-defense bands (calc_absorption); default OFF, 'o' toggles
-    ("m10_dom", "Depth / DOM Walls", True, True),           # live order-book walls on the bucket canvas (Phase A)
-    ("m10_structure", "Market Structure — scalp ZigZag", False, True),   # fine ZigZag (ZIGZAG_PCT, app/structure.py)
-    ("m10_structure_swing", "Market Structure — swing ZigZag", False, True),   # coarse ZigZag (ZIGZAG_SWING_PCT)
-    ("m10_choch", "Change of Character (CHoCH)", False, True),   # dashed break-lines on the scalp ZigZag
-    ("m10_4hzone", "4h Buy/Sell Zones (wicks)", False, True),   # last completed 4h bucket buyer/seller wick bands
-    ("m10_4hsep", "4h Bucket Separators", True, True),          # dashed vline at each completed 4h bucket's start
-    ("m10_vpfade", "D VP star/trap/clock", True, True),         # D-entry gold star/red-x trap + cyan Path-B wait clock
-    ("m10_estar", "E VP star/trap (unval.)", True, True),       # star/trap on E's own vs opposite value-half
-    ("m10_vpinring", "VPIN confluence ring", True, True),       # electric-purple ring on D/E entries with VPIN>=warn
+    ("m10_icebergs", "Absorption", False, True),          # whale-defense bands (calc_absorption); default OFF, 'o' toggles
+    ("m10_dom", "Depth / DOM Walls", True, True),         # live order-book walls on the bucket canvas (Phase A)
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),
 ]
 
-# Signal STRATEGIES — their own hamburger accordion (own draw path, each self-gated / fail-safe). Same
-# ``m10_`` key namespace + layer_state() as the overlays above, split out only for the menu grouping.
-# Tuple: (key, label, default_on, enabled).
+# "Indicator" — structure / zones / separators.
+_M10_INDICATORS = [
+    ("m10_sr", "Support & Resistance", False, True),      # neon-blue support / neon-red resistance (pivot fractals)
+    ("m10_obs", "Order Blocks", False, True),             # default OFF — toggle with Order Blocks + Iceberg via 'o'
+    ("m10_structure", "Market Structure — scalp ZigZag", False, True),   # fine ZigZag (ZIGZAG_PCT, app/structure.py)
+    ("m10_structure_swing", "Market Structure — swing ZigZag", False, True),   # coarse ZigZag (+ its sensitivity slider)
+    ("m10_choch", "Change of Character (CHoCH)", False, True),   # dashed break-lines on the scalp ZigZag
+    ("m10_4hzone", "4h Buy/Sell Zones (wicks)", False, True),   # last completed 4h bucket buyer/seller wick bands
+    ("m10_4hsep", "4h Bucket Separators", True, True),          # dashed vline at each completed 4h bucket's start
+]
+
+# "Candles" — per-candle marks on the canvas.
+_M10_CANDLES = [
+    ("m10_poc", "POC Dot", False, True),                  # default OFF (operator preference)
+    ("m10_liq", "Liquidation Marks", False, True),        # default OFF; in-session toggles persist
+    ("m10_stats", "Stats Box", False, True),              # default OFF ('s' toggles)
+]
+
+# "Strategies" — signal overlays (own draw path, each self-gated / fail-safe) + the D/E VP + VPIN annotations.
 _M10_STRATEGIES = [
+    # Section-wide ENTRY SOUND (bell). Beeps for the SIGNAL strategies below (MMXSKEW/DA2/SkewDiv/FlowFlip)
+    # only while each is toggled ON; plays an audible confirmation whenever it is enabled.
+    ("m10_mmx_sound", "\U0001F514", False, True),                       # bell icon
     # MMXSKEW no-POC family (2026-07-21) — nested tiers, highest ENABLED tier styles the badge
     # (v1.3 gold > v1.2-Dynamic red/green > v1.1-NP plain). Click a badge -> its SL/TP lines.
     ("m10_mmx_v11", "MMXSKEW v1.1-NP (plain)", False, True),             # base: dir+skew+spread+delta, no POC
     ("m10_mmx_v12d", "MMXSKEW v1.2-Dynamic (red/green)", False, True),   # + run_pos<=4 & mov_mag_ratio>=1.30
     ("m10_mmx_v13", "MMXSKEW v1.3 (gold)", False, True),                 # + mov_mag>=39 & asymmetric da2>0
-    ("m10_mmx_sound", "MMXSKEW entry sound alert", False, True),         # beep on a new live-edge print (v1.3 = double)
     ("m10_da2rev", "DA2-REVERSION v1.1 (da2-L / da2-S)", False, True),   # quiet-tape variant; needs delta_h1 + warm-up
     ("m10_skewdiv", "Skew Divergence (L / S triangles)", False, True),   # bear/bull pair vs opposing profile skew
     ("m10_flowflip", "Flow Flip (L / S spheres)", False, True),          # big reversal candle; flow flips across it
+    # PIVOT (D/E) value-profile annotations — moved here from the overlays. NOT covered by the entry-sound bell.
+    ("m10_vpfade", "D VP star/trap/clock", True, True),         # D-entry gold star/red-x trap + cyan Path-B wait clock
+    ("m10_estar", "E VP star/trap (unval.)", True, True),       # star/trap on E's own vs opposite value-half
+    ("m10_vpinring", "VPIN confluence ring", True, True),       # electric-purple ring on D/E entries with VPIN>=warn
 ]
 
 # Order-flow scanner — the authoritative 10-mode bucket architecture (time chart removed, Phase B).
@@ -433,39 +448,41 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             self.sub_section.addWidget(cb)
         root.addWidget(self.sub_section)
 
-        # --- Mode 10 overlay toggles accordion (A4) — same layer_state framework,
-        # distinct m10_ keys. setChecked runs BEFORE connect (matching the loop above)
-        # so the build-time toggled signal never reaches the not-yet-wired window slot.
-        self.m10_section = CollapsibleSection("Mode 10 Overlays", expanded=True)
-        for key, label, default, enabled in _M10_LAYERS:
-            cb = QtWidgets.QCheckBox(label)
-            cb.setChecked(default)
-            cb.setEnabled(enabled)   # Phase-3 placeholders: visible but non-clickable
-            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
-            self.layer_checks[key] = cb
-            self.m10_section.addWidget(cb)
-            if key == "m10_structure_swing":
-                self._build_swing_slider()   # user-adjustable swing sensitivity, right under its toggle
-        root.addWidget(self.m10_section)
-
-        # --- Strategies accordion — the signal overlays (MMXSKEW / DA2-REVERSION / Skew Divergence / Flow
-        # Flip), same layerToggled framework and m10_ keys, grouped into their own collapsible section.
-        self.strat_section = CollapsibleSection("Strategies", expanded=False)
-        for key, label, default, enabled in _M10_STRATEGIES:
-            cb = QtWidgets.QCheckBox(label)
-            cb.setChecked(default)
-            cb.setEnabled(enabled)
-            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
-            self.layer_checks[key] = cb
-            self.strat_section.addWidget(cb)
-        root.addWidget(self.strat_section)
+        # --- m10_ toggle accordions (A4) — same layer_state framework across four grouped sections. setChecked
+        # runs BEFORE connect so the build-time toggled signal never reaches the not-yet-wired window slot. Every
+        # checkbox lands in self.layer_checks regardless of section, so persistence + layer_state stay uniform.
+        self.m10_section = self._build_layer_section("Mode 10 Overlays", _M10_LAYERS, expanded=False)
+        self.indicator_section = self._build_layer_section("Indicator", _M10_INDICATORS, expanded=False)
+        self.candles_section = self._build_layer_section("Candles", _M10_CANDLES, expanded=False)
+        self.strat_section = self._build_layer_section("Strategies", _M10_STRATEGIES, expanded=False)
+        for _sec in (self.m10_section, self.indicator_section, self.candles_section, self.strat_section):
+            root.addWidget(_sec)
 
         root.addStretch(1)
 
+    def _build_layer_section(self, title: str, items, expanded: bool = True) -> "CollapsibleSection":
+        """Build one m10_ toggle accordion from `items`. Checkboxes go into self.layer_checks (section-agnostic),
+        the swing-sensitivity slider is placed under its own toggle in THIS section, and the bell gets a tooltip."""
+        sec = CollapsibleSection(title, expanded=expanded)
+        for key, label, default, enabled in items:
+            cb = QtWidgets.QCheckBox(label)
+            cb.setChecked(default)
+            cb.setEnabled(enabled)                       # Phase-3 placeholders: visible but non-clickable
+            if key == "m10_mmx_sound":
+                cb.setToolTip("Entry sound — beeps on a new L/S print (1h) for the ENABLED signal strategies "
+                              "(MMXSKEW / DA2 / Skew Divergence / Flow Flip). Buy = high tone, sell = low. "
+                              "Plays a confirmation chime whenever it is enabled.")
+            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
+            self.layer_checks[key] = cb
+            sec.addWidget(cb)
+            if key == "m10_structure_swing":
+                self._build_swing_slider(sec)            # sensitivity slider directly under its toggle
+        return sec
+
     # ------------------------------------------------------------------
-    def _build_swing_slider(self) -> None:
-        """Compact slider under the 'swing ZigZag' toggle: live-adjust the swing sensitivity (percent retrace that
-        confirms a leg). Lower = more/smaller swings, higher = only major turns. Emits swingSensitivityChanged(pct)."""
+    def _build_swing_slider(self, section) -> None:
+        """Compact slider under the 'swing ZigZag' toggle (placed in `section`): live-adjust the swing sensitivity
+        (percent retrace that confirms a leg). Lower = more/smaller swings, higher = only major turns."""
         from . import structure
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w); lay.setContentsMargins(26, 1, 8, 5); lay.setSpacing(2)
@@ -478,7 +495,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.swing_slider.setFixedHeight(16)
         self.swing_slider.valueChanged.connect(self._on_swing_slider)
         lay.addWidget(self.swing_slider)
-        self.m10_section.addWidget(w)
+        section.addWidget(w)
         self._render_swing_lbl()
 
     def _on_swing_slider(self, _v: int) -> None:

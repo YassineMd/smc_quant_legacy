@@ -783,13 +783,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._d2r_badge_pool = []; self._d2r_line_pool = []; self._d2r_lbl_pool = []
         self._d2r_lines_user = {}; self._d2r_sig = None; self._d2r_drawn = False; self._d2r_n = 0
         # SKEW DIVERGENCE overlay (hamburger m10_skewdiv, 1h) — green up-triangle L / red down-triangle S.
-        self._skd_tri = None                     # single ScatterPlotItem holds every triangle
+        self._skd_tri = None                     # ScatterPlotItem — triangles (printed on dom+climax core setup)
+        self._skd_star = None                    # ScatterPlotItem — gold stars overlaid on the FULL 4-filter ones
         self._skd_lbl_pool = []                  # TextItems for the L/S letters
         self._skd_sig = None; self._skd_drawn = False
+        self._skd_entries = []                   # [(key,x,side,entry,sl,tp,y)] clickable -> trade lines
+        self._skd_ln_pool = []; self._skd_lnlbl_pool = []; self._skd_lines_user = {}
         # FLOW FLIP overlay (hamburger m10_flowflip, 1h) — green sphere L / red sphere S on a big reversal candle.
         self._ff_sph = None                      # single ScatterPlotItem holds every sphere
         self._ff_lbl_pool = []                   # TextItems for the L/S letters
         self._ff_sig = None; self._ff_drawn = False
+        self._ff_entries = []                    # [(key,x,side,entry,sl,tp,y)] clickable -> trade lines
+        self._ff_ln_pool = []; self._ff_lnlbl_pool = []; self._ff_lines_user = {}
+        self._trline_buckets = []                # visible frame buckets for the shared trade-line exit walk
+        # SUPPORT & RESISTANCE indicator (hamburger m10_sr) — neon-red resistance / neon-blue support, extended
+        # until a candle closes through the level. Line THICKNESS = rejection strength (one curve per width tier,
+        # segments NaN-separated), so a level thickens as price gets thrown back off it.
+        self._sr_items = None                    # dict (kind, tier) -> PlotCurveItem, lazily built
+        self._sr_sig = None; self._sr_drawn = False
         self.pivot_tooltip = pg.TextItem(anchor=(0.5, 0.0), fill=pg.mkBrush(18, 20, 26, 238),
                                          border=pg.mkPen(90, 96, 108, 220))
         self.pivot_tooltip.setZValue(62); self.plot.addItem(self.pivot_tooltip, ignoreBounds=True)
@@ -1308,6 +1319,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scan_nudge_timer.setInterval(90)
         self._scan_nudge_timer.timeout.connect(self._on_scan_time_changed)
 
+    def _default_scan_secs(self, tf: str) -> int:
+        """Default initial look-back for a fresh candle-canvas window, in seconds (past = negative).
+        1h and 4h load the last 10 DAYS by default (the multi-day setups need the context); every other
+        timeframe keeps the last 24h — 10 days of 1m/5m VOLUME buckets would be far too many to load/render."""
+        return -10 * 24 * 3600 if tf in ("1h", "4h") else -86400
+
     def _set_scanner(self, mode: str, initial: bool = False) -> None:
         """Route between the bucket-native modes (Mode 10 canvas + the 9 metric scanners). Order:
         set mode -> teardown -> hide the (dormant) time-scene items + flip the axis to bucket-index.
@@ -1342,10 +1359,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scanner_needs_autofit = True       # one-shot fit for the new mode
         self._scanner_bucket_sig = None
         self._last_scanner_sig = None
-        # Mode-appropriate Scan Start window: Mode 10 (candle canvas) keeps the 24h anchor; the metric
-        # scanners default to a tighter 1h window. Signal blocked so the _on_timer below redraws from
-        # the new anchor without firing an extra _on_scan_time_changed teardown.
-        _anchor_secs = -86400 if is_canvas else -3600
+        # Mode-appropriate Scan Start window: Mode 10 (candle canvas) uses the per-tf default (10d on 1h/4h,
+        # 24h otherwise — see _default_scan_secs); the metric scanners default to a tighter 1h window. Signal
+        # blocked so the _on_timer below redraws from the new anchor without firing an extra teardown.
+        _anchor_secs = self._default_scan_secs(self.worker.tf) if is_canvas else -3600
         target_dt = QtCore.QDateTime.currentDateTime().addSecs(_anchor_secs)
         if is_canvas and not initial:                   # auto-extend the window back to cover saved drawings
             floor = self._drawing_scan_floor(self.worker.tf)
@@ -1395,14 +1412,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._clear_structure()               # HH/HL labels re-detect on the new tf's buckets
         self._clear_choch()                   # CHoCH lines re-detect on the new tf's buckets
         self.worker.request_timeframe(tf)
-        if self.scanner_mode == "bucket_canvas":        # keep THIS tf's saved drawings in view
-            floor = self._drawing_scan_floor(tf)
+        if self.scanner_mode == "bucket_canvas":
+            # Re-anchor to THIS tf's default window (10d on 1h/4h, 24h otherwise) so switching timeframe
+            # honours the per-tf default instead of carrying the old tf's window (e.g. 1h's 10d onto 1m).
+            target_dt = QtCore.QDateTime.currentDateTime().addSecs(self._default_scan_secs(tf))
+            floor = self._drawing_scan_floor(tf)                     # then pull back to keep saved drawings in view
             if floor is not None:
                 floor_dt = QtCore.QDateTime.fromSecsSinceEpoch(int(floor))
-                if floor_dt < self.menu.scan_time_edit.dateTime():   # only ever pull back, never forward
-                    self.menu.scan_time_edit.blockSignals(True)      # the tf-switch redraw reads the new anchor
-                    self.menu.scan_time_edit.setDateTime(floor_dt)
-                    self.menu.scan_time_edit.blockSignals(False)
+                if floor_dt < target_dt:                            # only ever pull back, never forward
+                    target_dt = floor_dt
+            self.menu.scan_time_edit.blockSignals(True)             # the tf-switch redraw reads the new anchor
+            self.menu.scan_time_edit.setDateTime(target_dt)
+            self.menu.scan_time_edit.blockSignals(False)
 
     def _drawing_scan_floor(self, tf: str):
         """Earliest saved-drawing anchor for `tf` as a Unix epoch, pulled back a tf-sized margin so
@@ -1521,6 +1542,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._clear_mmxskew()               # all three off -> tear the badges down now
         elif key == "m10_mmx_sound":
             self._mmx_audio_seeded = False          # re-seed on enable -> only NEW live prints beep, not the backlog
+            if on:
+                self._strat_sound_test()            # ALWAYS confirm audibly on enable, so you know sound works
         elif key == "m10_skewdiv":
             self._skd_sig = None; self._sel_sig = None   # Skew Divergence toggled -> re-run the overlay draw
             if not on:
@@ -1529,6 +1552,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._ff_sig = None; self._sel_sig = None    # Flow Flip toggled -> re-run the overlay draw
             if not on:
                 self._clear_flowflip()              # off -> tear the spheres down now
+        elif key == "m10_sr":
+            self._sr_sig = None; self._sel_sig = None    # Support/Resistance toggled -> re-run the overlay draw
+            if not on:
+                self._clear_sr()                    # off -> tear the S/R lines down now
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -1722,6 +1749,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if best is not None:
                     self._d2r_lines_user[best] = not self._d2r_lines_user.get(best, False)
                     self._draw_da2rev_lines(); ev.accept(); return
+            except Exception:
+                pass
+        if (not ev.double() and self.scanner_mode == "bucket_canvas"
+                and self._skd_entries and self.menu.layer_state("m10_skewdiv")):
+            try:                               # click a Skew-Divergence triangle -> toggle its entry/TP/SL lines
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
+                best = None; bestdx = 2.5
+                for _en in self._skd_entries:
+                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:
+                        best = _en[0]; bestdx = abs(xc - _en[1])
+                if best is not None:
+                    self._skd_lines_user[best] = not self._skd_lines_user.get(best, False)
+                    self._draw_skd_lines(); ev.accept(); return
+            except Exception:
+                pass
+        if (not ev.double() and self.scanner_mode == "bucket_canvas"
+                and self._ff_entries and self.menu.layer_state("m10_flowflip")):
+            try:                               # click a Flow-Flip sphere -> toggle its entry/TP/SL lines
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
+                best = None; bestdx = 2.5
+                for _en in self._ff_entries:
+                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:
+                        best = _en[0]; bestdx = abs(xc - _en[1])
+                if best is not None:
+                    self._ff_lines_user[best] = not self._ff_lines_user.get(best, False)
+                    self._draw_ff_lines(); ev.accept(); return
             except Exception:
                 pass
         if not ev.double():
@@ -2024,7 +2079,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _fp_top_html(self, ab: dict, buckets: list) -> str:
         """Live-footprint top-left readout for the forming (or cursor) bucket:
-        Mov.Magn / Skew / MMxSkew / eff-agg / bER-sER / Tape-B/S / τ-ratio / Δ-accel / Absorb R / ΔP.
+        Mov.Magn / Skew / MMxSkew / eff-agg / bER-sER / Tape-B/S / τ-ratio / Δ-accel / Absorb R / ΔP / Δ↑Δ↓ / ½dom.
 
         Labels neutral, only the VALUES are coloured. Metrics that split into halves put the whole-bucket
         value first and the h1/h2 legs in parentheses on the SAME line — Δ-accel, Absorb R and ΔP all share
@@ -2167,6 +2222,49 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                        " <span style='color:%s'>/</span> <span style='color:%s'>%+.2f</span>"
                        " <span style='color:%s'>)</span>"
                        % (NEU, _pc(_pt), _pt, NEU, _pc(_p1), _p1, NEU, _pc(_p2), _p2, NEU))
+        # VERTICAL split at the price MIDPOINT (high+low)/2 — two readouts off the volume profile:
+        #   Δ↑ / Δ↓  — NET delta (buy-sell) of each half as % of curr_vol (so Δ↑ + Δ↓ = the whole-bucket delta%).
+        #   ½dom     — each half's buy/sell COMPOSITION: the DOMINANT side and its SHARE of that half. A share
+        #              near 100 means the other side is nearly ABSENT there (buyers gone from the lows / sellers
+        #              gone from the highs) — a share, so it flags dominance regardless of the half's size,
+        #              unlike Δ↑/Δ↓. Both need the per-price `levels` profile; '--' on a bucket without it.
+        _lv = ab.get("levels") or {}
+        if _lv and h > 0 and l > 0 and h >= l and cv > 0:
+            _mid = (h + l) / 2.0; _ub = _us = _lb = _ls = 0.0
+            for _ps, _lvv in _lv.items():
+                try:
+                    _p = float(_ps)
+                except (TypeError, ValueError):
+                    continue
+                _bb = float(_lvv.get("b", 0.0) or 0.0); _ss = float(_lvv.get("s", 0.0) or 0.0)
+                if _p >= _mid:
+                    _ub += _bb; _us += _ss
+                else:
+                    _lb += _bb; _ls += _ss
+            _upp = (_ub - _us) / cv * 100.0; _lop = (_lb - _ls) / cv * 100.0
+            def _dvc(v):
+                return GRAY if abs(v) < 0.05 else (G if v > 0 else R)
+            out.append("<span style='color:%s'>Δ↑</span> <span style='color:%s'>%+.1f%%</span>"
+                       " <span style='color:%s'>/</span> <span style='color:%s'>Δ↓</span>"
+                       " <span style='color:%s'>%+.1f%%</span>"
+                       % (NEU, _dvc(_upp), _upp, NEU, NEU, _dvc(_lop), _lop))
+            def _mix(_bb, _ss):
+                _t = _bb + _ss
+                if _t <= 0:
+                    return "--", GRAY
+                _bs = _bb / _t * 100.0                      # buy share of the half
+                if _bs > 55.0:
+                    return "%.0f%%B" % _bs, G               # buy-dominated
+                if _bs < 45.0:
+                    return "%.0f%%S" % (100.0 - _bs), R     # sell-dominated (share -> 100 => buyers absent)
+                return (("%.0f%%B" % _bs) if _bs >= 50.0 else ("%.0f%%S" % (100.0 - _bs))), GRAY
+            _um, _uc = _mix(_ub, _us); _lm, _lc = _mix(_lb, _ls)
+            out.append("<span style='color:%s'>½dom ↑</span> <span style='color:%s'>%s</span>"
+                       " <span style='color:%s'>/ ↓</span> <span style='color:%s'>%s</span>"
+                       % (NEU, _uc, _um, NEU, _lc, _lm))
+        else:
+            out.append(row("Δ↑ / Δ↓", "--", GRAY))
+            out.append(row("½dom", "--", GRAY))
         return "<br>".join(out)
 
     def _refresh_parked_hover(self) -> None:
@@ -4246,6 +4344,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.menu.layer_state("m10_da2rev") or self.scanner_mode != "bucket_canvas" or self._tf != "1h":
             self._clear_da2rev(); return
         n = len(filtered)
+        self._trline_buckets = filtered                             # shared trade-line exit walk (filtered space)
         warm = getattr(self, "_mmx_warm", None) or []               # shared prefix; >= da2's WARMUP_MIN
         _forming = bool(getattr(self, "_mmx_last_forming", True))   # same window semantics as the MMXSKEW path
         _sig = (n, len(warm), _forming, filtered[-1].get("end_time") if n else 0,
@@ -4286,41 +4385,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._draw_da2rev_lines()
 
     def _draw_da2rev_lines(self) -> None:
-        """Fixed 0.8% SL (yellow) / 1.0% TP (green) for every da2 badge toggled ON, with price + % tags."""
-        used_l = used_t = 0
-        for key, x, side, entry, sl, tp, yb in self._d2r_entries:
-            if not self._d2r_lines_user.get(key, False) or entry <= 0:
-                continue
-            rb = min(x + 45, max(x + 1, self._d2r_n - 1))
-            for lvl, col in ((sl, (255, 220, 0)), (tp, (40, 230, 90))):
-                if used_l >= len(self._d2r_line_pool):
-                    _ln = pg.PlotCurveItem(); _ln.setZValue(26)
-                    self.plot.addItem(_ln, ignoreBounds=True); self._d2r_line_pool.append(_ln)
-                _ln = self._d2r_line_pool[used_l]; used_l += 1
-                _pen = pg.mkPen(*col, width=1.4, style=QtCore.Qt.DashLine); _pen.setCosmetic(True)
-                _ln.setPen(_pen); _ln.setData([x, rb], [lvl, lvl]); _ln.setVisible(True)
-                if used_t >= len(self._d2r_lbl_pool):
-                    _tl = pg.TextItem(anchor=(0.0, 0.5)); _tl.setZValue(35)
-                    _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True); _tl.textItem.setFont(_tf)
-                    self.plot.addItem(_tl, ignoreBounds=True); self._d2r_lbl_pool.append(_tl)
-                _tl = self._d2r_lbl_pool[used_t]; used_t += 1
-                _pct = side * (lvl - entry) / entry * 100.0
-                _tl.setColor(col); _tl.setText("%.2f (%+.2f%%)" % (lvl, _pct)); _tl.setPos(rb, lvl); _tl.setVisible(True)
-        for j in range(used_l, len(self._d2r_line_pool)):
-            self._d2r_line_pool[j].setVisible(False)
-        for j in range(used_t, len(self._d2r_lbl_pool)):
-            self._d2r_lbl_pool[j].setVisible(False)
+        self._trade_lines(self._d2r_entries, self._d2r_lines_user, self._d2r_line_pool, self._d2r_lbl_pool, 26)
 
     # ------------------------------------------------------------------
     # SKEW DIVERGENCE overlay (hamburger m10_skewdiv, 1h only) — EXPLORATORY, self-gated, fail-safe.
-    # Green up-triangle 'L' below a bearish pair whose profile leans HIGH; red down-triangle 'S' above a
-    # bullish pair whose profile leans LOW. Triangle SHAPE distinguishes it from the other overlays' pills.
+    # Green UP-triangle (long) below a bearish pair whose profile leans HIGH; red DOWN-triangle (short) above
+    # a bullish pair whose profile leans LOW. The up/down triangle shape carries the direction — no L/S letter.
     # ------------------------------------------------------------------
     def _clear_skewdiv(self) -> None:
         if self._skd_tri is not None:
             self._skd_tri.setVisible(False)
-        for _it in self._skd_lbl_pool:
+        if self._skd_star is not None:
+            self._skd_star.setVisible(False)
+        for _it in self._skd_lbl_pool + self._skd_ln_pool + self._skd_lnlbl_pool:
             _it.setVisible(False)
+        self._skd_entries = []
         self._skd_sig = None; self._skd_drawn = False
 
     def _draw_skewdiv(self, filtered) -> None:
@@ -4344,14 +4423,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             self._clear_skewdiv(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.055, 1e-9)
-        GRN, RED, INK = (40, 220, 100), (240, 60, 78), (10, 12, 18)
+        GRN, RED, GOLD = (40, 220, 100), (240, 60, 78), (255, 205, 40)
         if self._skd_tri is None:
             self._skd_tri = pg.ScatterPlotItem(pxMode=True, size=22)
             self._skd_tri.setZValue(32); self.plot.addItem(self._skd_tri, ignoreBounds=True)
-        spots = []; used = 0
+            self._skd_star = pg.ScatterPlotItem(pxMode=True, size=10)
+            self._skd_star.setZValue(33); self.plot.addItem(self._skd_star, ignoreBounds=True)
+        spots = []; stars = []; self._skd_entries = []
         for e in entries:
             i = e["i"]
             if i < 0 or i >= n:
+                continue
+            # PRINT the triangle ONLY when the CORE setup passes — dom > 0.55 AND climax close (the two filters
+            # that actually separate outcomes in-sample). No hollow any more: a fail simply draws nothing.
+            if not (e.get("pass_dom") and e.get("pass_climax")):
                 continue
             side = e["side"]
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
@@ -4359,18 +4444,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             col = GRN if side > 0 else RED
             spots.append({"pos": (i, y), "symbol": "t1" if side > 0 else "t",
                           "brush": pg.mkBrush(*col), "pen": pg.mkPen(*col, width=1.2), "size": 22})
-            if used >= len(self._skd_lbl_pool):
-                _t = pg.TextItem(anchor=(0.5, 0.5))
-                _f = QtGui.QFont("Consolas", 8); _f.setBold(True); _t.textItem.setFont(_f)
-                _t.setZValue(33); self.plot.addItem(_t, ignoreBounds=True); self._skd_lbl_pool.append(_t)
-            _lb = self._skd_lbl_pool[used]
-            _lb.setColor(INK); _lb.setText("L" if side > 0 else "S")
-            # letter nudged toward the triangle's centroid (up-tri centroid sits above the point, down below)
-            _lb.setPos(i, y + (pad * 0.20 if side > 0 else -pad * 0.20)); _lb.setVisible(True); used += 1
+            # GOLD STAR inside the triangle = the FULL 4-filter setup (dom+climax + R2-vacuum + move-expansion):
+            # higher per-trade odds in-sample (~75% vs ~69%), but fewer signals. Star absent = core (dom+climax).
+            if e.get("pass_full"):
+                stars.append({"pos": (i, y), "symbol": "star",
+                              "brush": pg.mkBrush(*GOLD), "pen": pg.mkPen(150, 110, 0, width=0.8), "size": 10})
+            self._skd_entries.append(("skd%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
         self._skd_tri.setData(spots); self._skd_tri.setVisible(True)
-        for j in range(used, len(self._skd_lbl_pool)):
-            self._skd_lbl_pool[j].setVisible(False)
+        self._skd_star.setData(stars); self._skd_star.setVisible(True)
+        for _it in self._skd_lbl_pool:
+            _it.setVisible(False)
         self._skd_drawn = True
+        self._trline_buckets = filtered                              # click a triangle -> entry/TP/SL trade lines
+        self._draw_skd_lines()
+
+    def _draw_skd_lines(self) -> None:
+        self._trade_lines(self._skd_entries, self._skd_lines_user, self._skd_ln_pool, self._skd_lnlbl_pool, 28)
 
     # ------------------------------------------------------------------
     # FLOW FLIP overlay (hamburger m10_flowflip, 1h only) — EXPLORATORY, self-gated, fail-safe.
@@ -4380,8 +4469,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _clear_flowflip(self) -> None:
         if self._ff_sph is not None:
             self._ff_sph.setVisible(False)
-        for _it in self._ff_lbl_pool:
+        for _it in self._ff_lbl_pool + self._ff_ln_pool + self._ff_lnlbl_pool:
             _it.setVisible(False)
+        self._ff_entries = []
         self._ff_sig = None; self._ff_drawn = False
 
     def _draw_flowflip(self, filtered) -> None:
@@ -4423,14 +4513,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._ff_sph is None:
             self._ff_sph = pg.ScatterPlotItem(pxMode=True, size=24, symbol="o")
             self._ff_sph.setZValue(32); self.plot.addItem(self._ff_sph, ignoreBounds=True)
-        spots = []; used = 0
+        spots = []; used = 0; self._ff_entries = []
         for e in entries:
             i = e["i"]
             if i < 0 or i >= n:
                 continue
+            if not e.get("pass_entry", True):     # DON'T-CHASE filter (frozen): skip extended reversals —
+                continue                          # only print when close2 < high1 (long) / close2 > low1 (short)
             side = e["side"]
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
             y = (lo - pad) if side > 0 else (hi + pad)
+            self._ff_entries.append(("ff%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
             # dE = eff-agg(c2) - eff-agg(c1); c2 = filtered i -> warm+filtered index i+_off (i>=1 so c1 exists).
             # BINARY: dE < 0 (flow flipped bearish) -> FULL colour; dE >= 0 or unknown -> PALE.
             full = True
@@ -4454,6 +4547,72 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for j in range(used, len(self._ff_lbl_pool)):
             self._ff_lbl_pool[j].setVisible(False)
         self._ff_drawn = True
+        self._trline_buckets = filtered                              # click a sphere -> entry/TP/SL trade lines
+        self._draw_ff_lines()
+
+    def _draw_ff_lines(self) -> None:
+        self._trade_lines(self._ff_entries, self._ff_lines_user, self._ff_ln_pool, self._ff_lnlbl_pool, 28)
+
+    # ------------------------------------------------------------------
+    # SUPPORT & RESISTANCE indicator (hamburger m10_sr) — self-gated, fail-safe. A pivot high -> neon-RED
+    # resistance, a pivot low -> neon-BLUE support; each extends right until a candle CLOSES through it, then
+    # freezes. Line THICKNESS grows with rejection strength (how far price is thrown back off the level): one
+    # PlotCurveItem per (kind, width tier), all segments NaN-separated, so it stays a fixed handful of draws.
+    # ------------------------------------------------------------------
+    def _clear_sr(self) -> None:
+        if self._sr_items:
+            for _it in self._sr_items.values():
+                _it.setVisible(False)
+        self._sr_sig = None; self._sr_drawn = False
+
+    def _draw_sr(self, filtered) -> None:
+        """Neon S/R lines (app/support_resistance), thickness = rejection strength. Any timeframe; closed-only
+        detection (the forming bucket can't be a confirmed pivot). Unbroken levels extend to the live edge."""
+        if not self.menu.layer_state("m10_sr") or self.scanner_mode != "bucket_canvas":
+            self._clear_sr(); return
+        n = len(filtered)
+        if n < 3:
+            self._clear_sr(); return
+        _sig = (n, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._sr_sig and self._sr_drawn:
+            return
+        self._sr_sig = _sig
+        try:
+            from app import support_resistance as _srm
+            levels = _srm.detect(list(filtered))
+        except Exception:
+            self._clear_sr(); return
+        if len(levels) > _srm.SR_MAX_LEVELS:                          # keep the most-recent N (by pivot index)
+            levels = sorted(levels, key=lambda z: z["i0"])[-_srm.SR_MAX_LEVELS:]
+        RES, SUP = (255, 42, 58), (0, 168, 255)                      # neon red / neon blue
+        widths = _srm.SR_TIER_WIDTHS; nt = len(widths)
+        if self._sr_items is None:
+            self._sr_items = {}
+            for _kind, _rgb in (("R", RES), ("S", SUP)):
+                for _t, _w in enumerate(widths):
+                    _it = pg.PlotCurveItem(connect="finite"); _it.setZValue(24)
+                    _it.setPen(pg.mkPen(*_rgb, width=_w)); _it.opts["pen"].setCosmetic(True)
+                    self.plot.addItem(_it, ignoreBounds=True)
+                    self._sr_items[(_kind, _t)] = _it
+        _nan = float("nan")
+        buf = {k: ([], []) for k in self._sr_items}                  # (xs, ys) per (kind, tier)
+        for lv in levels:
+            kind = lv["kind"]; price = lv["price"]
+            segs = lv.get("segs") or []
+            if not segs:                                             # fallback: whole line at the thinnest tier
+                x0 = lv["i0"]; x1 = lv["i1"] if lv["i1"] is not None else (n - 1)
+                if x1 > x0:
+                    segs = [(x0, x1, 0)]
+            for sa, sb, t in segs:
+                if sb <= sa:
+                    continue
+                t = 0 if t < 0 else (nt - 1 if t >= nt else t)
+                xs, ys = buf[(kind, t)]
+                xs += [sa, sb, _nan]; ys += [price, price, _nan]
+        for key, _it in self._sr_items.items():
+            xs, ys = buf[key]
+            _it.setData(xs, ys); _it.setVisible(bool(xs))
+        self._sr_drawn = True
 
     def _mmx_badge(self, used, x, y, text, tcol, fill):
         if used >= len(self._mmx_badge_pool):
@@ -4482,6 +4641,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not (_v11 or _v12d or _v13) or self.scanner_mode != "bucket_canvas" or self._tf != "1h":
             self._clear_mmxskew(); return
         n = len(filtered)
+        self._trline_buckets = filtered                             # shared trade-line exit walk (filtered space)
         warm = getattr(self, "_mmx_warm", None) or []
         _forming = bool(getattr(self, "_mmx_last_forming", True))
         _sig = (n, len(warm), _forming, _v11, _v12d, _v13, filtered[-1].get("end_time") if n else 0,
@@ -4527,32 +4687,50 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._mmx_drawn = True          # arms the sig-cache even when this pass drew ZERO badges
         self._draw_mmx_lines()
 
-    def _draw_mmx_lines(self) -> None:
-        """SL (yellow) + TP (green) horizontal lines with price tags for every badge toggled ON. The % is
-        trade-aligned: SL always reads negative, TP always positive (side·(level−entry)/entry)."""
-        used_l = used_t = 0
-        for key, x, side, entry, sl, tp, yb in self._mmx_entries:
-            if not self._mmx_lines_user.get(key, False) or entry <= 0:
+    def _trade_lines(self, entries, user, cpool, lpool, zline) -> None:
+        """Shared renderer: for each toggled-ON entry draw ENTRY (white dashed, price tag) + TP (green) + SL (red)
+        horizontals, each running from the entry bar to the EXIT bar — the FIRST TP/SL touch in the visible frame.
+        In REPLAY the frame is clipped to the cursor, so the walk naturally stops at min(cursor, exit): the lines
+        grow as you step forward and FREEZE once the trade hits its target/stop. Price + trade-aligned % tags at
+        the right end (SL reads negative, TP positive); the entry tag is just the price."""
+        buckets = self._trline_buckets; n = len(buckets)
+        WHITE = (236, 238, 244)
+        ul = ut = 0
+        for key, x, side, entry, sl, tp, yb in entries:
+            if not user.get(key, False) or entry <= 0 or x < 0 or x >= n:
                 continue
-            rb = min(x + 45, max(x + 1, self._mmx_n - 1))
-            for lvl, col in ((sl, (255, 220, 0)), (tp, (40, 230, 90))):
-                if used_l >= len(self._mmx_line_pool):
-                    _ln = pg.PlotCurveItem(); _ln.setZValue(27)
-                    self.plot.addItem(_ln, ignoreBounds=True); self._mmx_line_pool.append(_ln)
-                _ln = self._mmx_line_pool[used_l]; used_l += 1
-                _pen = pg.mkPen(*col, width=1.8); _pen.setCosmetic(True)
+            exit_x = n - 1                                    # not hit within the frame -> extend to the right edge
+            for j in range(x + 1, n):
+                b = buckets[j]; hh = float(b.get("high", 0.0) or 0.0); ll = float(b.get("low", 0.0) or 0.0)
+                if hh <= 0 or ll <= 0:
+                    continue
+                if ((hh >= tp) if side > 0 else (ll <= tp)) or ((ll <= sl) if side > 0 else (hh >= sl)):
+                    exit_x = j; break                          # TP or SL touched -> stop the lines here
+            rb = max(x + 1, exit_x)
+            for lvl, col, w, is_entry in ((sl, (255, 90, 90), 1.5, False),
+                                          (tp, (40, 230, 90), 1.5, False),
+                                          (entry, WHITE, 1.9, True)):
+                if ul >= len(cpool):
+                    _ln = pg.PlotCurveItem(); _ln.setZValue(zline)
+                    self.plot.addItem(_ln, ignoreBounds=True); cpool.append(_ln)
+                _ln = cpool[ul]; ul += 1
+                _pen = pg.mkPen(*col, width=w, style=QtCore.Qt.DashLine); _pen.setCosmetic(True)
                 _ln.setPen(_pen); _ln.setData([x, rb], [lvl, lvl]); _ln.setVisible(True)
-                if used_t >= len(self._mmx_lbl_pool):
-                    _tl = pg.TextItem(anchor=(0.0, 0.5)); _tl.setZValue(35)
-                    _tf = QtGui.QFont("Consolas", 10); _tf.setBold(True); _tl.textItem.setFont(_tf)
-                    self.plot.addItem(_tl, ignoreBounds=True); self._mmx_lbl_pool.append(_tl)
-                _tl = self._mmx_lbl_pool[used_t]; used_t += 1
-                _pct = side * (lvl - entry) / entry * 100.0
-                _tl.setColor(col); _tl.setText("%.2f (%+.2f%%)" % (lvl, _pct)); _tl.setPos(rb, lvl); _tl.setVisible(True)
-        for j in range(used_l, len(self._mmx_line_pool)):
-            self._mmx_line_pool[j].setVisible(False)
-        for j in range(used_t, len(self._mmx_lbl_pool)):
-            self._mmx_lbl_pool[j].setVisible(False)
+                if ut >= len(lpool):
+                    _tl = pg.TextItem(anchor=(0.0, 0.5)); _tl.setZValue(36)
+                    _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True); _tl.textItem.setFont(_tf)
+                    self.plot.addItem(_tl, ignoreBounds=True); lpool.append(_tl)
+                _tl = lpool[ut]; ut += 1
+                _tl.setText(("%.2f" % entry) if is_entry
+                            else ("%.2f (%+.2f%%)" % (lvl, side * (lvl - entry) / entry * 100.0)))
+                _tl.setColor(col); _tl.setPos(rb, lvl); _tl.setVisible(True)
+        for j in range(ul, len(cpool)):
+            cpool[j].setVisible(False)
+        for j in range(ut, len(lpool)):
+            lpool[j].setVisible(False)
+
+    def _draw_mmx_lines(self) -> None:
+        self._trade_lines(self._mmx_entries, self._mmx_lines_user, self._mmx_line_pool, self._mmx_lbl_pool, 27)
 
     def _pivot_put_label(self, used: int, x, y, text: str, color=(0, 0, 0)) -> int:
         """Set the next pooled D/E glyph (grow lazily): bold letter centred on its circle. ``color`` is the
@@ -5641,9 +5819,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_flowflip(_pf or [])  # FLOW FLIP overlay — self-gated, fail-safe
                 except Exception:
                     self._clear_flowflip()
+                try:
+                    self._draw_sr(_pf or [])        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
+                except Exception:
+                    self._clear_sr()
             else:
                 self._clear_pivot(); self._clear_mmxskew(); self._clear_da2rev()   # nothing on -> clear all
-                self._clear_skewdiv(); self._clear_flowflip()
+                self._clear_skewdiv(); self._clear_flowflip(); self._clear_sr()
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -5719,6 +5901,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_flowflip(filtered)  # FLOW FLIP overlay — self-gated, fail-safe
             except Exception:
                 self._clear_flowflip()
+            try:
+                self._draw_sr(filtered)        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
+            except Exception:
+                self._clear_sr()
             try:
                 self._draw_selection_vp(filtered, lo_i, hi_i)   # 'h'-card Volume-Profile-over-selection overlay
             except Exception:
@@ -6689,7 +6875,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         snap = self.worker.snapshot()
         self._last_snap = snap
         self._merge_liq_sweeps(snap.get("liq_sweeps"))   # fold in any daemon-pushed 15m sweeps (tf-agnostic)
-        _s = _pc(); self._audio_announce(snap); self._audio_announce_pivot(snap); self._audio_announce_mmxskew(snap)
+        _s = _pc(); self._audio_announce(snap); self._audio_announce_pivot(snap); self._audio_announce_strategies(snap)
         self._refresh_scale_labels(snap); self._perf_note("audio_scale", _s)
 
         # Every mode is bucket-native now (time chart removed, Phase B): draw the scanner, refresh
@@ -6840,35 +7026,84 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 else:
                     self.alerts.audio.speak(f"Faded {spoken} D", gated=False)   # non-take D = a FADED D on screen
 
-    def _mmx_beep(self, buy: bool, strong: bool) -> None:
-        """Non-blocking bell for a new MMXSKEW print — winsound only (built into Python on Windows, no
-        file/download). Buy = higher pitch, sell = lower; a v1.3-qualifying print (the most selective tier)
-        gets a distinctive DOUBLE bell. Runs in a daemon thread so winsound.Beep never stutters the GUI."""
-        def _play():
+    @staticmethod
+    def _synth_wav(tones, rate: int = 44100, vol: float = 0.6) -> bytes:
+        """PCM-16 mono WAV bytes for a sequence of (freq_hz, dur_ms) sine tones (short raised-cosine fade to
+        kill clicks). Alerts are played as REAL AUDIO through the default output device so they are audible
+        even when winsound.Beep is silent (legacy PC-speaker path, off on most modern PCs) AND when the Windows
+        sound scheme is 'No Sounds' (which mutes MessageBeep). Only a muted output device can silence this."""
+        import struct, math
+        amp = int(32767 * max(0.0, min(1.0, vol)))
+        frames = bytearray()
+        for freq, dur_ms in tones:
+            nf = max(1, int(rate * dur_ms / 1000.0))
+            fade = max(1, int(nf * 0.06))
+            for i in range(nf):
+                env = (i / fade) if i < fade else ((nf - i) / fade if i > nf - fade else 1.0)
+                frames += struct.pack("<h", int(amp * env * math.sin(2.0 * math.pi * freq * (i / rate))))
+        data = bytes(frames)
+        return (b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVE"
+                + b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+                + b"data" + struct.pack("<I", len(data)) + data)
+
+    def _play_tones(self, tones) -> None:
+        """Play a tone sequence OFF the GUI thread. Primary = real PCM audio via winsound.PlaySound(SND_MEMORY,
+        synchronous in this daemon thread so the wav stays referenced); falls back to Beep then MessageBeep."""
+        def _run():
             try:
                 import winsound
-                if strong:
-                    winsound.Beep(1320 if buy else 660, 110); winsound.Beep(1760 if buy else 440, 150)
-                else:
-                    winsound.Beep(988 if buy else 494, 170)
+                winsound.PlaySound(self._synth_wav(tones), winsound.SND_MEMORY)   # real audio, sync in-thread
+                return
             except Exception:
-                try:
-                    import winsound; winsound.MessageBeep(-1)
-                except Exception:
-                    pass
+                pass
+            try:
+                import winsound
+                for f, d in tones:
+                    winsound.Beep(int(f), int(d))
+                return
+            except Exception:
+                pass
+            try:
+                import winsound; winsound.MessageBeep(-1)
+            except Exception:
+                pass
         try:
             import threading
-            threading.Thread(target=_play, daemon=True).start()
+            threading.Thread(target=_run, daemon=True).start()
         except Exception:
             pass
 
-    def _audio_announce_mmxskew(self, snap) -> None:
-        """Beep the instant a NEW MMXSKEW (L/S) base entry prints on the just-closed 1h bucket (double bell if it
-        also qualifies for v1.3).
-        Own 'MMXSKEW entry sound alert' toggle. LIVE-ONLY: seeded silently on enable / first data / tf-change,
-        gated on a NEW bucket close (end_time), and only when the just-closed live-edge bucket IS the entry."""
+    def _mmx_beep(self, buy: bool, strong: bool) -> None:
+        """Bell for a new strategy entry print. Buy = higher pitch, sell = lower; a v1.3-qualifying MMXSKEW
+        print (the most selective tier) gets a distinctive DOUBLE bell. Real audio via _play_tones."""
+        if strong:
+            self._play_tones([(1320 if buy else 660, 120), (1760 if buy else 440, 160)])
+        else:
+            self._play_tones([(988 if buy else 494, 200)])
+
+    def _strat_sound_test(self) -> None:
+        """One-shot audible confirmation when the entry-sound toggle is enabled — so you KNOW the audio works
+        even before any signal prints (entries are rare, so silence otherwise reads as 'broken'). Plays real
+        PCM audio (see _synth_wav), the SAME engine the entry alerts use, so hearing it proves those work too."""
+        self._play_tones([(880, 150), (1320, 200)])   # ascending confirm chime
+
+    # entry sound: which enabled strategy detectors to scan on a new close, first-hit wins.
+    # (key -> (module name, kwargs)); the module's detect(win, skip_last=False) is called.
+    _SOUND_STRATS = (
+        (("m10_mmx_v11", "m10_mmx_v12d", "m10_mmx_v13"), "mmxskew_detect"),
+        (("m10_da2rev",),   "da2_reversion_detect"),
+        (("m10_skewdiv",),  "skew_divergence_detect"),
+        (("m10_flowflip",), "flow_flip_detect"),
+    )
+
+    def _audio_announce_strategies(self, snap) -> None:
+        """Beep the instant a NEW L/S entry prints on the just-closed 1h bucket, for ANY ENABLED strategy
+        overlay (MMXSKEW / DA2-REVERSION / Skew Divergence / Flow Flip). One shared 'entry sound' toggle
+        (m10_mmx_sound). LIVE-ONLY: seeded silently on enable / first data / tf-change, gated on a NEW bucket
+        close, and only when the just-closed live-edge bucket IS an entry. Buy=high tone, sell=low; a
+        v1.3-qualifying MMXSKEW print gets the distinctive double bell."""
         if not self.menu.layer_state("m10_mmx_sound") or self._tf != "1h":
-            return                                 # strategy is 1h-only; sound off -> nothing to do
+            return                                 # strategies are 1h-only; sound off -> nothing to do
         closed = (snap.get("closed_buckets") if snap else None) or []
         if not closed:
             return
@@ -6879,20 +7114,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if last_et == self._mmx_audio_last_et:
             return                                 # no NEW bucket closed since last check
         self._mmx_audio_last_et = last_et
-        win = closed[-400:]                        # enough lookback for spread/skew + the ORB day grouping
+        win = closed[-400:]                        # enough lookback for eff-agg warm-up + the ORB day grouping
         if len(win) < 60:
             return
-        try:
-            from app import mmxskew_detect
-            # CLOSED buckets only here (no active appended) -> skip_last=False, or the just-closed live-edge
-            # bucket (the ONLY one this path can ever beep on) would never be emitted and the alert goes silent.
-            entries = mmxskew_detect.detect(win, skip_last=False)
-        except Exception:
-            return
         L = len(win) - 1                           # the just-closed (live-edge) bucket
-        for e in entries:
-            if e["i"] == L:
-                self._mmx_beep(e["side"] > 0, bool(e.get("v13"))); break
+        import importlib
+        for keys, modname in self._SOUND_STRATS:
+            if not any(self.menu.layer_state(k) for k in keys):
+                continue                           # this strategy's overlay is off -> don't announce it
+            try:
+                # CLOSED buckets only (no active appended) -> skip_last=False, else the live-edge bucket (the
+                # ONLY one this path can beep on) is never emitted and the alert goes silent.
+                mod = importlib.import_module("app." + modname)
+                entries = mod.detect(win, skip_last=False)
+            except Exception:
+                continue
+            for e in entries:
+                if e["i"] == L:
+                    self._mmx_beep(e["side"] > 0, bool(e.get("v13"))); return   # first enabled hit wins
 
     def _refresh_scale_labels(self, snap) -> None:
         """Push live per-tf bucket ~volumes into the Bucket Scale selector + window title. All
@@ -7390,6 +7629,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._maybe_pull_archive()
 
         combined: list[dict] = list(closed_list)
+        archive.enrich_halves(combined, self.worker.tf)   # fill pre-daemon delta_h1/price_h1 -> Δ-accel/ΔP/R-h1-h2
         _rk = 0
         _mmx_forming = False        # set True only if the still-forming active bucket is actually appended below
         if _replay:
