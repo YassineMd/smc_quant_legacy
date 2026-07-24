@@ -78,6 +78,11 @@ def detect(buckets: list, skip_last: bool = True) -> "list[dict]":
         stop = l2 * (1 - SL_PAD) if s > 0 else h2 * (1 + SL_PAD)
         if (s > 0 and stop >= c2) or (s < 0 and stop <= c2):
             continue                                     # degenerate (close at/through its own structural stop)
+        # DON'T-CHASE entry filter (forward-test, 2026-07-24): only take the turn when the reversal candle has
+        # NOT yet closed past candle 1's far extreme, so there's still room to the 0.5% target — LONG close2 <
+        # high1, SHORT close2 > low1. In-sample it revived the (otherwise dead) LONG side (80% vs 69% chasing);
+        # the SHORT side is indifferent. NOT significant (p=0.33). pass_entry gates the terminal sphere.
+        _pe = (c2 < _h1) if s > 0 else (c2 > _l1)
         out.append(dict(i=i, side=s, entry=c2, mm=float(mm), sl=stop,
-                        tp=c2 * (1 + TP_PCT) if s > 0 else c2 * (1 - TP_PCT)))
+                        tp=c2 * (1 + TP_PCT) if s > 0 else c2 * (1 - TP_PCT), pass_entry=_pe))
     return out
