@@ -1040,6 +1040,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ff_sig = None; self._ff_drawn = False
         self._ff_entries = []                    # [(key,x,side,entry,sl,tp,y)] clickable -> trade lines
         self._ff_ln_pool = []; self._ff_lnlbl_pool = []; self._ff_lines_user = {}
+        # 15mReasy overlay (m10_r15easy, 15m only) — diamond L/S badges; click -> entry/TP/SL trade lines
+        self._r15_sph = None                     # ScatterPlotItem of diamond badges
+        self._r15_lbl_pool = []                  # L/S letters
+        self._r15_sig = None; self._r15_drawn = False
+        self._r15_entries = []
+        self._r15_ln_pool = []; self._r15_lnlbl_pool = []; self._r15_lines_user = {}
         self._trline_buckets = []                # visible frame buckets for the shared trade-line exit walk
         # SUPPORT & RESISTANCE indicator (hamburger m10_sr) — neon-red resistance / neon-blue support, extended
         # until a candle closes through the level. Line THICKNESS = rejection strength (one curve per width tier,
@@ -1814,6 +1820,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._ff_sig = None; self._sel_sig = None    # Flow Flip toggled -> re-run the overlay draw
             if not on:
                 self._clear_flowflip()              # off -> tear the spheres down now
+        elif key == "m10_r15easy":
+            self._r15_sig = None; self._sel_sig = None   # 15mReasy toggled -> re-run the overlay draw
+            if not on:
+                self._clear_r15easy()               # off -> tear the diamonds down now
         elif key == "m10_sr":
             self._sr_sig = None; self._sel_sig = None    # Support/Resistance toggled -> re-run the overlay draw
             if not on:
@@ -1994,8 +2004,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if dx <= bestdx and abs(yc - _en[6]) <= ytol:
                         best = _en[0]; bestdx = dx
                 if best is not None:
-                    self._mmx_lines_user[best] = not self._mmx_lines_user.get(best, False)
-                    self._draw_mmx_lines(); ev.accept(); return
+                    _on = not self._mmx_lines_user.get(best, False)   # exclusive: this position only, hide all others
+                    self._solo_trade_lines(self._mmx_lines_user, best, _on); ev.accept(); return
             except Exception:
                 pass
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
@@ -2009,8 +2019,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if dx <= bestdx and abs(yc - _en[6]) <= ytol:
                         best = _en[0]; bestdx = dx
                 if best is not None:
-                    self._d2r_lines_user[best] = not self._d2r_lines_user.get(best, False)
-                    self._draw_da2rev_lines(); ev.accept(); return
+                    _on = not self._d2r_lines_user.get(best, False)   # exclusive: this position only, hide all others
+                    self._solo_trade_lines(self._d2r_lines_user, best, _on); ev.accept(); return
             except Exception:
                 pass
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
@@ -2023,8 +2033,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:
                         best = _en[0]; bestdx = abs(xc - _en[1])
                 if best is not None:
-                    self._skd_lines_user[best] = not self._skd_lines_user.get(best, False)
-                    self._draw_skd_lines(); ev.accept(); return
+                    _on = not self._skd_lines_user.get(best, False)   # exclusive: this position only, hide all others
+                    self._solo_trade_lines(self._skd_lines_user, best, _on); ev.accept(); return
             except Exception:
                 pass
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
@@ -2037,8 +2047,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:
                         best = _en[0]; bestdx = abs(xc - _en[1])
                 if best is not None:
-                    self._ff_lines_user[best] = not self._ff_lines_user.get(best, False)
-                    self._draw_ff_lines(); ev.accept(); return
+                    _on = not self._ff_lines_user.get(best, False)    # exclusive: this position only, hide all others
+                    self._solo_trade_lines(self._ff_lines_user, best, _on); ev.accept(); return
+            except Exception:
+                pass
+        if (not ev.double() and self.scanner_mode == "bucket_canvas"
+                and self._r15_entries and self.menu.layer_state("m10_r15easy")):
+            try:                               # click a 15mReasy diamond -> toggle its entry/TP/SL lines
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
+                best = None; bestdx = 2.5
+                for _en in self._r15_entries:
+                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:
+                        best = _en[0]; bestdx = abs(xc - _en[1])
+                if best is not None:
+                    _on = not self._r15_lines_user.get(best, False)   # exclusive: this position only, hide all others
+                    self._solo_trade_lines(self._r15_lines_user, best, _on); ev.accept(); return
             except Exception:
                 pass
         if not ev.double():
@@ -4937,6 +4961,76 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._trade_lines(self._ff_entries, self._ff_lines_user, self._ff_ln_pool, self._ff_lnlbl_pool, 28)
 
     # ------------------------------------------------------------------
+    # 15mReasy overlay (hamburger m10_r15easy, 15m ONLY) — EXPLORATORY, self-gated, fail-safe.
+    # DIAMOND 'L'/'S' badge (distinct from the pill / triangle / sphere overlays). LONG = bullish + A<=-0.75 +
+    # skew>0 + prev bullish; SHORT = mirror + mov_mag<=10. Click a diamond -> its entry/TP/SL trade lines.
+    # ------------------------------------------------------------------
+    def _clear_r15easy(self) -> None:
+        if self._r15_sph is not None:
+            self._r15_sph.setVisible(False)
+        for _it in self._r15_lbl_pool + self._r15_ln_pool + self._r15_lnlbl_pool:
+            _it.setVisible(False)
+        self._r15_entries = []
+        self._r15_sig = None; self._r15_drawn = False
+
+    def _draw_r15easy(self, filtered) -> None:
+        """Diamond L/S badges for 15mReasy (app/r15easy_detect). Absorption needs a trailing window, so the shared
+        warm-up prefix is prepended and indices shifted back (like DA2/MMXSKEW). 15m ONLY."""
+        if (not self.menu.layer_state("m10_r15easy") or self.scanner_mode != "bucket_canvas"
+                or self._tf != "15m"):
+            self._clear_r15easy(); return
+        n = len(filtered)
+        warm = getattr(self, "_mmx_warm", None) or []                # shared prefix (absorption trailing window)
+        _off = len(warm)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        _sig = (n, _off, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._r15_sig and self._r15_drawn:
+            return
+        self._r15_sig = _sig
+        _fi = (n - 1) if _forming else -1                            # forming (unconfirmed) bucket -> faded preview
+        try:
+            from app import r15easy_detect
+            entries = r15easy_detect.detect(list(warm) + list(filtered), skip_last=False)
+        except Exception:
+            self._clear_r15easy(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        INK = (10, 12, 18)
+        GRN, RED = (40, 220, 100), (240, 60, 78)
+        if self._r15_sph is None:
+            self._r15_sph = pg.ScatterPlotItem(pxMode=True, size=22, symbol="d")   # diamond distinguishes it
+            self._r15_sph.setZValue(32); self.plot.addItem(self._r15_sph, ignoreBounds=True)
+        spots = []; used = 0; self._r15_entries = []
+        for e in entries:
+            i = e["i"] - _off                                        # detect ran over warm+filtered -> filtered space
+            if i < 0 or i >= n:
+                continue
+            side = e["side"]
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)
+            self._r15_entries.append(("r15%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
+            col = GRN if side > 0 else RED
+            _al = _PREVIEW_ALPHA if i == _fi else 255                # forming bucket -> faded preview
+            _pen_rgb = [int(c * 0.55) for c in col] + [_al]
+            spots.append({"pos": (i, y), "symbol": "d", "brush": pg.mkBrush(*col, _al),
+                          "pen": pg.mkPen(*_pen_rgb, width=1.2), "size": 22})
+            if used >= len(self._r15_lbl_pool):
+                _tl = pg.TextItem(anchor=(0.5, 0.5))
+                _f = QtGui.QFont("Consolas", 8); _f.setBold(True); _tl.textItem.setFont(_f)
+                _tl.setZValue(33); self.plot.addItem(_tl, ignoreBounds=True); self._r15_lbl_pool.append(_tl)
+            _lb = self._r15_lbl_pool[used]
+            _lb.setColor((INK[0], INK[1], INK[2], _al)); _lb.setText("L" if side > 0 else "S")
+            _lb.setPos(i, y); _lb.setVisible(True); used += 1
+        self._r15_sph.setData(spots); self._r15_sph.setVisible(True)
+        for j in range(used, len(self._r15_lbl_pool)):
+            self._r15_lbl_pool[j].setVisible(False)
+        self._r15_drawn = True
+        self._trline_buckets = filtered                              # click a diamond -> entry/TP/SL trade lines
+        self._draw_r15_lines()
+
+    def _draw_r15_lines(self) -> None:
+        self._trade_lines(self._r15_entries, self._r15_lines_user, self._r15_ln_pool, self._r15_lnlbl_pool, 29)
+
+    # ------------------------------------------------------------------
     # SUPPORT & RESISTANCE indicator (hamburger m10_sr) — self-gated, fail-safe. A pivot high -> neon-RED
     # resistance, a pivot low -> neon-BLUE support; each extends right until a candle CLOSES through it, then
     # freezes. Line THICKNESS grows with rejection strength (how far price is thrown back off the level): one
@@ -5058,7 +5152,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 fill = GOLD; tcol = INK
             elif _v12d and e["v12d"]:
                 fill = GREEN if side > 0 else RED; tcol = INK
-            elif _v11:
+            elif _v11 and e["v11"]:                 # v1.1 badge now carries its own delta filter (frozen 2026-07-24)
                 fill = None; tcol = GREEN if side > 0 else RED
             else:
                 continue                            # qualifies for no ENABLED tier -> not drawn
@@ -5071,6 +5165,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._mmx_badge_pool[j].setVisible(False)
         self._mmx_drawn = True          # arms the sig-cache even when this pass drew ZERO badges
         self._draw_mmx_lines()
+
+    def _solo_trade_lines(self, active_user, key, turn_on) -> None:
+        """EXCLUSIVE badge selection: showing one strategy's entry/TP/SL trade lines HIDES every other opened badge's
+        (across MMXSKEW / DA2 / Skew Divergence / Flow Flip), so only ONE position is on the chart at a time.
+        Clicking the already-shown badge turns it OFF (nothing shown). Called by every strategy badge click."""
+        for d in (self._mmx_lines_user, self._d2r_lines_user, self._skd_lines_user,
+                  self._ff_lines_user, self._r15_lines_user):
+            d.clear()                          # drop every currently-shown position (this + all other strategies)
+        if turn_on:
+            active_user[key] = True            # ...then light up only the just-clicked one
+        # redraw all so the cleared strategies' lines disappear and the chosen one appears
+        self._draw_mmx_lines(); self._draw_da2rev_lines(); self._draw_skd_lines()
+        self._draw_ff_lines(); self._draw_r15_lines()
 
     def _trade_lines(self, entries, user, cpool, lpool, zline) -> None:
         """Shared renderer: for each toggled-ON entry draw ENTRY (white dashed, price tag) + TP (green) + SL (red)
@@ -6205,12 +6312,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 except Exception:
                     self._clear_flowflip()
                 try:
+                    self._draw_r15easy(_pf or [])   # 15mReasy overlay (15m) — self-gated, fail-safe
+                except Exception:
+                    self._clear_r15easy()
+                try:
                     self._draw_sr(_pf or [])        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
                 except Exception:
                     self._clear_sr()
             else:
                 self._clear_pivot(); self._clear_mmxskew(); self._clear_da2rev()   # nothing on -> clear all
-                self._clear_skewdiv(); self._clear_flowflip(); self._clear_sr()
+                self._clear_skewdiv(); self._clear_flowflip(); self._clear_r15easy(); self._clear_sr()
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -6286,6 +6397,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_flowflip(filtered)  # FLOW FLIP overlay — self-gated, fail-safe
             except Exception:
                 self._clear_flowflip()
+            try:
+                self._draw_r15easy(filtered)   # 15mReasy overlay (15m) — self-gated, fail-safe
+            except Exception:
+                self._clear_r15easy()
             try:
                 self._draw_sr(filtered)        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
             except Exception:
@@ -7519,8 +7634,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 continue
             for e in entries:
-                if e["i"] == L:
-                    self._mmx_beep(e["side"] > 0, bool(e.get("v13"))); return   # first enabled hit wins
+                if e["i"] != L:
+                    continue
+                if modname == "mmxskew_detect":
+                    # tier-aware: only announce when the entry qualifies for an ENABLED tier. v11 now carries the
+                    # v1.1 delta filter (frozen 2026-07-24), so a base signal that fails it must stay SILENT when
+                    # only v1.1 is enabled (matching the badge, which no longer draws for it).
+                    if not ((self.menu.layer_state("m10_mmx_v13") and e.get("v13"))
+                            or (self.menu.layer_state("m10_mmx_v12d") and e.get("v12d"))
+                            or (self.menu.layer_state("m10_mmx_v11") and e.get("v11"))):
+                        break                       # this bucket's mmx signal isn't in an enabled tier -> next strat
+                self._mmx_beep(e["side"] > 0, bool(e.get("v13"))); return   # first enabled hit wins
 
     def _refresh_scale_labels(self, snap) -> None:
         """Push live per-tf bucket ~volumes into the Bucket Scale selector + window title. All

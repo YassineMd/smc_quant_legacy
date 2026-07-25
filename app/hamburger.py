@@ -143,6 +143,7 @@ _M10_STRATEGIES = [
     ("m10_da2rev", "DA2-REVERSION v1.1 (da2-L / da2-S)", False, True),   # quiet-tape variant; needs delta_h1 + warm-up
     ("m10_skewdiv", "Skew Divergence (L / S triangles)", False, True),   # bear/bull pair vs opposing profile skew
     ("m10_flowflip", "Flow Flip (L / S spheres)", False, True),          # big reversal candle; flow flips across it
+    ("m10_r15easy", "15mReasy (L / S diamonds)", False, True),           # 15m: R-easy(A<=-0.75) + |skew|>=0.4 + prev-same-dir
     # PIVOT (D/E) value-profile annotations — moved here from the overlays. NOT covered by the entry-sound bell.
     ("m10_vpfade", "D VP star/trap/clock", True, True),         # D-entry gold star/red-x trap + cyan Path-B wait clock
     ("m10_estar", "E VP star/trap (unval.)", True, True),       # star/trap on E's own vs opposite value-half
