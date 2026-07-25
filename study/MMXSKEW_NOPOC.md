@@ -214,6 +214,95 @@ Neither fix changed a gate, threshold or feature — both freezes are untouched;
 registered gate. `study/mmxskew_audit_all.py` additionally asserts each candidate's in-sample half still
 reproduces `fz["baseline"]` and refuses to append a forward log row on drift.
 
+## v1.1 DELTA FILTER — FROZEN 2026-07-24 (v1.1 BADGE ONLY, v1.2/v1.3 UNTOUCHED)
+A direction-agreement delta filter was frozen onto the **v1.1 flag** (`app/mmxskew_detect.detect`, `v11=`):
+- **LONG  `0 < delta <= +15%`** — net buying, not a blowoff.
+- **SHORT `delta < 0%`** — net selling (drops counter-directional net-buying shorts).
+
+`delta = (buy_vol - sell_vol)/curr_vol * 100`. **SCOPE = v1.1 ONLY**: the shared BASE gate (which the v1.2-Dynamic
+& v1.3 flags are tagged over) is DELIBERATELY unchanged, so v11 is no longer a strict superset — a v12d/v13 signal
+can exist where v11 is now False (badge/audio show it under v12d/v13, not under plain v1.1). Wired: terminal draws
+the plain v1.1 badge only when `e["v11"]`, and `_audio_announce_strategies` is tier-aware (silent on a base signal
+that fails the enabled tier). v12d/v13 signal sets + registered baselines are byte-unchanged (verified: v12d flags
+are pure `run_pos/ratio`, v13 pure `mov_mag/da2`).
+
+**Evidence (study/mm_skew_long_delta_floor.py, taken() non-overlap, one 34-day regime):**
+| long band | RR1.0 win/net | RR1.5 win/net | note |
+|---|---|---|---|
+| `delta<0`  | 44%/−1.3% | 38%/−0.7% | weak — the `>0` floor drops this |
+| **`0<delta<=15`** (KEEP) | **64%/+7.9%** | **56%/+10.6%** | sweet spot |
+| `delta>=15` | 38%/−6.5% | 37%/−3.5% | **net-losing — the cap is right** |
+
+Long cap `delta>=15` vs `0-15`: Fisher **p=0.090** (the strongest of all the delta cuts; everything else p=0.44–1.0).
+SHORT: `delta<0` removes the tiny net-buying-short band (28.6% win, the worst); the short side is a net loser
+regardless, so this is a mild direction-agreement cleanup, NOT an edge (control: dropping ALL shorts beats every
+short delta-band). **Structural choice, in-sample, not significant — forward tape decides. NOTE `>0` is STRICT
+(delta==0 excluded); the `<=15` upper bound is redundant with the base `delta<15` (no delta>=15 long reaches v11).**
+
+## v1.1 ABSORPTION-R2 FILTER — FROZEN 2026-07-24 (v1.1 BADGE ONLY, BOTH sides)
+Second frozen condition on the **v1.1 flag** (`app/mmxskew_detect`, `ABS_R2_MAX`): **`A_h2 < 0`** on both sides.
+`A_h2` = 2nd leg of `absorption.absorption_halves` (split at the 50%-volume mark), oriented so POSITIVE = that
+half's aggressor was ABSORBED. So `A_h2 < 0` = **the second half moved EASILY** — no wall on the leg you enter on.
+
+**Why this one and not the other eight.** Nine filter families were tested on the frozen v1.1 population
+(`study/mm_skew_v11_secondhalf.py`, `_vertdelta.py`, `_cross.py`, `_full.py`, `_absorbr2.py`). Only this one
+survived all four checks:
+
+| check | A2<0 @RR1:1.5 | the other eight |
+|---|---|---|
+| within-chain partition (Fisher) | pass 60.0% (n=30) vs fail 32.4% (n=37), **p=0.029** | p=0.13–1.00, none significant |
+| opposite-filter control | A2>=0 -> **36.2%, −5.3%** (right way) | complement often BEAT the filter |
+| split-half of the pass set | H1 73.3% -> H2 46.7% — **H2 still above BE**, net + | collapsed below BE (e.g. 72.7->27.3) |
+| both sides | LONG 56.5->**71.4%**, SHORT 38.6->**54.5%** | only ever trimmed the losing short side |
+
+Per-side win: **LONG 71.4% (n=14) both RRs · SHORT 55.6% (n=27) @1:1.0 / 54.5% (n=22) @1:1.5.** Filtered set
+@1:1.5 n=36 win 61.1% net +15.1% (P=0.008 vs BE). **RR-dependent BY DESIGN** — easy travel helps the WIDER
+target, so it is strong at 1:1.5 and n.s. at 1:1.0 (Fisher p=0.357); that matches the mechanism rather than
+contradicting it. The absolute (`A2<0`) and relative (`dA=A2−A1<=0`) forms are near-identical here (61.1% vs
+62.5%) — note the Skew-Divergence line rated the RELATIVE form its WEAKEST filter, so the same metric has
+opposite verdicts in two strategies; unexplained, worth a dig.
+
+**FAIL-CLOSED.** `A_h2` needs `price_h1` on the bucket AND >=20 baselined priors in the trailing 30; when it
+can't be computed the v1.1 badge is WITHHELD (the condition is a requirement, not a bonus). Consequence: v1.1
+badges are SPARSE on old replay data — of delta-passing signals, `A_h2` is computable on **33% over all history
+but 70% over the last 7 days**, so badge-on runs 15% historically vs 24% recently and keeps improving as the
+daemon's `price_h1` history deepens.
+
+**⚠ EVIDENCE CAVEAT — the biggest risk on this freeze.** `price_h1` is **1m-RECONSTRUCTED** on most of the
+backtest window and its accuracy is **UNVERIFIED** (zero daemon/overlay overlap to check against; the sibling
+`delta_h1` reconstruction shows a median 11% relative error and 89% sign agreement). The LIVE gate uses the
+daemon's EXACT `price_h1`, so live behaviour is correct — but the in-sample evidence above rests on
+reconstructed inputs and could be an artifact. Validate the reconstruction before trusting the magnitude.
+Also: this is ~the 9th family tested, so p=0.029 is unadjusted for that search. Forward tape decides.
+
+## v1.1 EFF-AGG MOMENTUM — FROZEN 2026-07-24 ("cell D", v1.1 BADGE ONLY, both sides)
+Third frozen condition on the **v1.1 flag** (`EFF_MOM_MIN=0.0`): the eff-agg reading must also have MOVED in the
+trade's direction across the two candles — **LONG `spread(i) > spread(i-1)`, SHORT `spread(i) < spread(i-1)`**
+(the same `dE` the Flow Flip overlay grades on). **ADDITIVE**: the base `spread >= |35|` LEVEL gate is KEPT.
+
+**The level gate was tested for removal and RETAINED — it is the strongest condition in the strategy**
+(`study/mm_skew_v11_nospread.py`). Disjoint bands of directional spread @RR1:1.5 show a CLIFF, not a gradient:
+`<0` 41.7% · `0-15` **29.6%** · `15-35` 40.0% · **`>=35` 61.1% (+15.1%)**; every band below 35 is at/under
+break-even. Within-chain partition: pass 67.6% vs fail 41.5% **Fisher p=0.020** @1:1.0 and p=0.099 @1:1.5, and
+its split-half stays above break-even at BOTH RRs. Dropping it grows n 55->156 but the added signals are the
+losers (win 61.1%->41.7%, net +15.1%->+1.1%). Thresholds 25/35/45 are within ~2pp — a plateau, not a knife-edge.
+
+**Momentum 2x2** (`study/mm_skew_v11_effmom.py`, delta + A_h2<0 fixed, @RR1:1.5):
+| cell | n | win | net |
+|---|---|---|---|
+| A neither | 84 | 41.7% | +1.1% |
+| B LEVEL only | 36 | 61.1% | +15.1% |
+| C MOMENTUM only | 73 | 45.2% | +8.3% |
+| **D BOTH (FROZEN)** | **31** | **64.5%** | **+16.3%** |
+
+**⚠ MOMENTUM CANNOT REPLACE LEVEL** (C 45.2% vs B 61.1%; it passes 83% of signals, so it barely filters).
+**⚠ THE D-over-B GAIN IS NOT SIGNIFICANT**: +3.4pp win / +1.2pp net bought by dropping just **5 trades** —
+pass-vs-fail Fisher **p=0.357** with n=5 in the discriminating bucket; momentum's own split-half falls below
+break-even (H1 54.3% -> H2 31.4%). It is also **LONG-SIDE ONLY** (standalone longs 51.9->63.6%, shorts
+36.8->37.3% = nothing). Frozen as an OPERATOR CHOICE against the analysis recommendation; forward tape decides.
+
+Live v1.1 after all three freezes: **48 signals (17L/31S)** over the archive (detector/study parity verified).
+
 ## Caveats
 In-sample, one 30-day regime, short-heavy (dropping POC makes it more so). v1.2-Dynamic's T=1.30 is not
 performance-tuned (no T in [1.10,1.55] is separable) but the magnitude will still regress. v1.3's long cell is small. Forward tape is the only real test.
