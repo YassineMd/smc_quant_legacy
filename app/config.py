@@ -211,9 +211,9 @@ DOM_LEVELS = 200                # main.py:881 — sorted depth levels per side
 GUI_TIMER_MS = 50               # 20Hz master redraw loop
 SESSION_PERF = True             # terminal-side session profiler: ~10s CSV row to data/session_perf.log
 SESSION_PERF_SECS = 10.0        # profiler flush cadence (progressive-lag instrumentation; negligible overhead)
-# tracemalloc LEAK HUNT -> data/session_memtrace.log. DIAGNOSTIC (tracemalloc ~2x alloc cost) — default ON now to pin
-# the RSS growth; disable with env SMC_MEMTRACE=0, and set this to "0" default before committing once the leak is named.
-SESSION_MEMTRACE = os.environ.get("SMC_MEMTRACE", "1") != "0"
+# tracemalloc LEAK HUNT -> data/session_memtrace.log. DIAGNOSTIC and DEFAULT OFF: with millions of live JSON objects
+# in the worker, take_snapshot() on the GUI thread froze the terminal. Opt in ONLY for a short capture with SMC_MEMTRACE=1.
+SESSION_MEMTRACE = os.environ.get("SMC_MEMTRACE", "0") != "0"
 SESSION_MEMTRACE_SECS = 30.0    # tracemalloc snapshot cadence (leak deltas ~ this * leak-rate; 30s ≈ 13MB steps)
 CHART_CACHE_CAP = 10000         # max candles per viewport (spec §1.1.2)
 # Replay mode. On entering replay (or moving the Start Date) the chart loads the PER-TF minimum window ENDING at the
