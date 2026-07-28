@@ -50,6 +50,89 @@ _COLS = ["ts", "mode", "uptime_s", "frames", "frame_p50_ms", "frame_p99_ms", "fr
          "closed_buckets", "draw_items", "extra", "top3_draw"]
 
 
+class MemTracer:
+    """tracemalloc leak-hunt. After a short warm-up (so one-time startup allocations settle) it fixes a BASELINE
+    snapshot, then every ``interval_s`` appends the top allocation sites that GREW vs that baseline — so what remains
+    in the log IS the accumulator, named by file:line and its call chain. DIAGNOSTIC ONLY: tracemalloc roughly doubles
+    allocation cost and inflates RSS with its own bookkeeping (read the ``traced=`` MB, not process RSS, for the true
+    app figure) — gate behind config.SESSION_MEMTRACE and turn it OFF once the leak is named. Never raises."""
+
+    def __init__(self, log_path: str, nframes: int = 6, baseline_after_s: float = 45.0,
+                 interval_s: float = 30.0, top: int = 12):
+        self.log_path = log_path
+        self.nframes = nframes
+        self.baseline_after_s = baseline_after_s
+        self.interval_s = interval_s
+        self.top = top
+        self._t0 = time.perf_counter()
+        self._last = 0.0
+        self._baseline = None
+        self._ok = False
+        try:
+            import tracemalloc
+            self._tm = tracemalloc
+            tracemalloc.start(nframes)
+            self._ok = True
+            with open(self.log_path, "a") as f:
+                f.write("\n==== MemTracer start (nframes=%d, baseline@+%.0fs, every %.0fs) — %s ====\n"
+                        % (nframes, baseline_after_s, interval_s, time.strftime("%Y-%m-%d %H:%M:%S")))
+        except Exception:
+            self._ok = False
+
+    def _uptime(self) -> float:
+        return time.perf_counter() - self._t0
+
+    def _snapshot(self):
+        tm = self._tm
+        return tm.take_snapshot().filter_traces((
+            tm.Filter(False, "<frozen importlib._bootstrap>"),
+            tm.Filter(False, "<frozen importlib._bootstrap_external>"),
+            tm.Filter(False, tm.__file__),
+            tm.Filter(False, __file__),
+        ))
+
+    def maybe_snapshot(self) -> None:
+        """Call every profiler flush (~10s); it self-throttles to ``interval_s`` and self-baselines after warm-up."""
+        if not self._ok:
+            return
+        try:
+            up = self._uptime()
+            if up - self._last < self.interval_s:
+                return
+            self._last = up
+            snap = self._snapshot()
+            cur, peak = self._tm.get_traced_memory()
+            if self._baseline is None:
+                if up >= self.baseline_after_s:
+                    self._baseline = snap
+                    self._append("BASELINE @ +%.0fs  traced=%.1fMB peak=%.1fMB" % (up, cur / 1e6, peak / 1e6), [])
+                return
+            diffs = self._snapshot_compare(snap)
+            growers = [d for d in diffs if d.size_diff > 0][:self.top]
+            lines = []
+            for d in growers:
+                lines.append("  +%9.1f KB  %+7d blocks  (now %.1f KB / %d blocks)"
+                             % (d.size_diff / 1024.0, d.count_diff, d.size / 1024.0, d.count))
+                for fr in list(d.traceback)[::-1][:self.nframes]:   # allocation site first, then its callers upward
+                    lines.append("        %s:%d" % (fr.filename, fr.lineno))
+            self._append("t=+%.0fs  traced=%.1fMB peak=%.1fMB  |  top %d GROWERS vs baseline:"
+                         % (up, cur / 1e6, peak / 1e6, len(growers)), lines)
+        except Exception:
+            pass
+
+    def _snapshot_compare(self, snap):
+        return snap.compare_to(self._baseline, "traceback")
+
+    def _append(self, header: str, lines) -> None:
+        try:
+            with open(self.log_path, "a") as f:
+                f.write("\n[" + time.strftime("%Y-%m-%d %H:%M:%S") + "] " + header + "\n")
+                for ln in lines:
+                    f.write(ln + "\n")
+        except Exception:
+            pass
+
+
 class SessionProfiler:
     """Accumulates frame + per-section timings between ~10s flushes; each flush appends one CSV row built
     from the window's frame stats plus a caller-supplied accumulator ``sample`` dict. Never raises."""

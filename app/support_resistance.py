@@ -23,7 +23,10 @@ stepping thicker at each new deepest rejection) so the caller can draw one curve
 """
 from __future__ import annotations
 
+import math
+
 SR_PIVOT_K = 8          # fractal lookback each side; higher = fewer, more significant levels
+SR_ZONE_PAD_STEP = 0.001   # widened-area granularity: half the zone height is truncated DOWN to this (0.1% of price)
 SR_MAX_LEVELS = 16      # keep only the most-recent N (by pivot index) so a wide window stays uncluttered
 
 SR_TOUCH_TOL = 0.0005                       # price within 0.05% of the line counts as a touch (starts a rejection)
@@ -49,7 +52,17 @@ def strength_tier(pct: float) -> int:
     return t
 
 
-def detect(buckets: list, k: int = SR_PIVOT_K) -> "list[dict]":
+def _zone_pad(price: float, lo: float, hi: float) -> float:
+    """The widened-area pad (price units): HALF the zone height, truncated DOWN to SR_ZONE_PAD_STEP (0.1% of price)."""
+    if price <= 0 or hi <= lo:
+        return 0.0
+    return math.floor(((hi - lo) / price / 2.0) / SR_ZONE_PAD_STEP) * SR_ZONE_PAD_STEP * price
+
+
+def detect(buckets: list, k: int = SR_PIVOT_K, zone_mitigation: bool = False) -> "list[dict]":
+    """zone_mitigation=True (5m strategy only): a level is BROKEN only when a close clears the WIDENED area edge
+    (support = pivot low MINUS the pad, resistance = pivot high PLUS the pad), not the raw pivot extreme. Default
+    False keeps the strict pivot-extreme break for every other consumer (15m/1h) so they are unaffected."""
     n = len(buckets)
     if n < 2 * k + 1:
         return []
@@ -65,17 +78,19 @@ def detect(buckets: list, k: int = SR_PIVOT_K) -> "list[dict]":
         hp = H[p]
         if (all(ok[j] and hp > H[j] for j in range(p - k, p))
                 and all(ok[j] and hp > H[j] for j in range(p + 1, p + k + 1))):
+            thr = hp + _zone_pad(hp, L[p], H[p]) if zone_mitigation else hp   # break above the WIDENED top (5m)
             i1 = None
             for j in range(p + 1, n):
-                if ok[j] and C[j] > hp:
+                if ok[j] and C[j] > thr:
                     i1 = j; break
             out.append(_level("R", hp, p, i1, n, H, L, ok))
         lp = L[p]
         if (all(ok[j] and lp < L[j] for j in range(p - k, p))
                 and all(ok[j] and lp < L[j] for j in range(p + 1, p + k + 1))):
+            thr = lp - _zone_pad(lp, L[p], H[p]) if zone_mitigation else lp   # break below the WIDENED bottom (5m)
             i1 = None
             for j in range(p + 1, n):
-                if ok[j] and C[j] < lp:
+                if ok[j] and C[j] < thr:
                     i1 = j; break
             out.append(_level("S", lp, p, i1, n, H, L, ok))
     return out
@@ -119,5 +134,12 @@ def _level(kind, price, p, i1, n, H, L, ok) -> dict:
             seg_start = j; cur_tier = t
     if x_end > seg_start:
         segs.append((seg_start, x_end, cur_tier))
+    # WIDENED "area" [zlo, zhi]: the pivot candle's low->high, extended on its OUTER side (BELOW a support / ABOVE a
+    # resistance) by HALF the zone height, truncated DOWN to SR_ZONE_PAD_STEP (0.1% of price) -- e.g. a 0.94% zone adds
+    # 0.4% (half=0.47%, floored). This softens only "is price IN the zone" (touch/overlap); the level LINE and the
+    # mitigation (i1, close-through the pivot extreme) are unchanged, so consumers that read i1 are unaffected.
+    zlo0 = min(L[p], H[p]); zhi0 = max(L[p], H[p]); pad = _zone_pad(price, zlo0, zhi0)
+    zlo = zlo0 - pad if kind == "S" else zlo0
+    zhi = zhi0 + pad if kind == "R" else zhi0
     return {"kind": kind, "price": price, "i0": p, "i1": i1,
-            "strength": strength, "tier": strength_tier(strength), "segs": segs}
+            "strength": strength, "tier": strength_tier(strength), "segs": segs, "zlo": zlo, "zhi": zhi}

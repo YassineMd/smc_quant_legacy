@@ -211,6 +211,10 @@ DOM_LEVELS = 200                # main.py:881 — sorted depth levels per side
 GUI_TIMER_MS = 50               # 20Hz master redraw loop
 SESSION_PERF = True             # terminal-side session profiler: ~10s CSV row to data/session_perf.log
 SESSION_PERF_SECS = 10.0        # profiler flush cadence (progressive-lag instrumentation; negligible overhead)
+# tracemalloc LEAK HUNT -> data/session_memtrace.log. DIAGNOSTIC (tracemalloc ~2x alloc cost) — default ON now to pin
+# the RSS growth; disable with env SMC_MEMTRACE=0, and set this to "0" default before committing once the leak is named.
+SESSION_MEMTRACE = os.environ.get("SMC_MEMTRACE", "1") != "0"
+SESSION_MEMTRACE_SECS = 30.0    # tracemalloc snapshot cadence (leak deltas ~ this * leak-rate; 30s ≈ 13MB steps)
 CHART_CACHE_CAP = 10000         # max candles per viewport (spec §1.1.2)
 # Replay mode. On entering replay (or moving the Start Date) the chart loads the PER-TF minimum window ENDING at the
 # replay cursor (terminal._replay_span_secs = -_default_scan_secs: 7d on 1h/4h, 5d on 15m, 3d on 5m, 24h on 1m) — the

@@ -122,6 +122,7 @@ _M10_INDICATORS = [
     ("m10_4hzone", "4h Buy/Sell Zones (wicks)", False, True),   # last completed 4h bucket buyer/seller wick bands
     ("m10_4hsep", "4h Bucket Separators", True, True),          # dashed vline at each completed 4h bucket's start
     ("m10_prevday_vp", "Prev. Day VP", False, True),            # per-previous-UTC-day Volume Profile (style = 'Volume Profile Mode' dropdown)
+    ("m10_breakout5m", "5m Breakout", False, True),             # 5m ONLY: green/red 'Br' badges on S/R-breakout (mitigation) candles
 ]
 
 # "Candles" — per-candle marks on the canvas.
@@ -131,26 +132,12 @@ _M10_CANDLES = [
     ("m10_stats", "Stats Box", False, True),              # default OFF ('s' toggles)
 ]
 
-# "Strategies" — signal overlays (own draw path, each self-gated / fail-safe) + the D/E VP + VPIN annotations.
+# "Strategies" — the three ENGULF S/R signal overlays (own draw path, each self-gated / fail-safe).
 _M10_STRATEGIES = [
-    # Section-wide ENTRY SOUND (bell). Beeps for the SIGNAL strategies below (MMXSKEW/DA2/SkewDiv/FlowFlip)
-    # only while each is toggled ON; plays an audible confirmation whenever it is enabled.
-    ("m10_mmx_sound", "\U0001F514", False, True),                       # bell icon
-    # MMXSKEW no-POC family (2026-07-21) — nested tiers, highest ENABLED tier styles the badge
-    # (v1.3 gold > v1.2-Dynamic red/green > v1.1-NP plain). Click a badge -> its SL/TP lines.
-    ("m10_mmx_v11", "MMXSKEW v1.1-NP (plain)", False, True),             # base: dir+skew+spread+delta, no POC
-    ("m10_mmx_v12d", "MMXSKEW v1.2-Dynamic (red/green)", False, True),   # + run_pos<=4 & mov_mag_ratio>=1.30
-    ("m10_mmx_v13", "MMXSKEW v1.3 (gold)", False, True),                 # + mov_mag>=39 & asymmetric da2>0
-    ("m10_da2rev", "DA2-REVERSION v1.1 (da2-L / da2-S)", False, True),   # quiet-tape variant; needs delta_h1 + warm-up
-    ("m10_skewdiv", "Skew Divergence (L / S triangles)", False, True),   # bear/bull pair vs opposing profile skew
-    ("m10_flowflip", "Flow Flip (L / S spheres)", False, True),          # big reversal candle; flow flips across it
-    ("m10_r15easy", "15mReasy (L / S diamonds)", False, True),           # 15m: R-easy(A<=-0.75) + |skew|>=0.4 + prev-same-dir
+    ("m10_mmx_sound", "\U0001F514", False, True),                       # bell icon — audible confirmation when enabled
     ("m10_engulfsr", "1h Engulf S/R Reversal (L / S triangles)", False, True),  # 1h: engulf at VA/S/R zone; fwd candidate
     ("m10_momentum", "15m Engulfing S/R (L / S losanges)", False, True),  # 15m: last-mit engulf; gold/blue tiers, tier-dependent skew
-    # PIVOT (D/E) value-profile annotations — moved here from the overlays. NOT covered by the entry-sound bell.
-    ("m10_vpfade", "D VP star/trap/clock", True, True),         # D-entry gold star/red-x trap + cyan Path-B wait clock
-    ("m10_estar", "E VP star/trap (unval.)", True, True),       # star/trap on E's own vs opposite value-half
-    ("m10_vpinring", "VPIN confluence ring", True, True),       # electric-purple ring on D/E entries with VPIN>=warn
+    ("m10_engulf5m", "5m Engulfing S/R (L / S losanges + triangles)", False, True),  # 5m: newest-level bias + reversals + gold
 ]
 
 # Order-flow scanner — the authoritative 10-mode bucket architecture (time chart removed, Phase B).

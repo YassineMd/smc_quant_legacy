@@ -54,7 +54,7 @@ from .drawing_tools import DrawingController, DrawingToolbar
 from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visible
 from .hamburger import FloatingOverlayMenu, HamburgerButton, scale_label
 from .pipe_client import PipeClientWorker
-from .session_perf import SessionProfiler, rss_mb
+from .session_perf import MemTracer, SessionProfiler, rss_mb
 from .stats_overlay import AbsorptionZoneSlider, EffAggZoneSlider, HeatmapContrastBar, StatsOverlay
 
 _OPEN_WINDOWS: List["MinimalTerminalWindow"] = []
@@ -1034,41 +1034,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._entry_lines_user = {}              # global key -> explicit user on/off (absent = default: last-on)
         self._entry_line_pool = []; self._entry_lbl_pool = []; self._pivot_n = 0
         self._entry_zone_pool = []               # Path-B light-blue TP zones (filled, no border)
-        # MMXSKEW entry overlay (1h only; toggles m10_mmx_v11 / m10_mmx_v12d / m10_mmx_v13) —
-        # self-contained, never touches the pivot subsystem. L/S = MMXSKEW long/short (green/red), oL/oS = the
-        # once-per-day NY-session ORB variant (cyan/magenta pill). Click a badge to toggle its SL (−%) + TP (+%).
-        self._mmx_entries = []                   # [(key, x, side, entry, sl, tp, y_badge)]
-        self._mmx_badge_pool = []; self._mmx_line_pool = []; self._mmx_lbl_pool = []
-        self._mmx_lines_user = {}                # key -> SL/TP lines shown
-        self._mmx_warm = []                      # MMXSKEW EMA/run_pos warm-up prefix (see _build_scanner_buckets)
+        # Shared scanner warm-up prefix (the ENGULF overlays reuse it for S/R + prev-day-VA context) + entry-sound state.
+        self._mmx_warm = []                      # EMA/run_pos warm-up prefix (see _build_scanner_buckets)
         self._mmx_last_forming = True            # does the render window end on a still-forming bucket?
-        self._mmx_drawn = False                  # a draw pass completed -> the sig-cache is armed
-        self._mmx_sig = None; self._mmx_n = 0
-        self._mmx_audio_seeded = False; self._mmx_audio_last_et = 0.0   # sound-alert seed (never blast the backlog)
-        # DA2-REVERSION v1.0 overlay — own pools so it never contends with the MMXSKEW badges. da2-L / da2-S,
-        # amber (fade-up) / violet (fade-down). Click a badge for its fixed 0.8% SL / 1.0% TP lines.
-        self._d2r_entries = []                   # [(key, x, side, entry, sl, tp, y_badge)]
-        self._d2r_badge_pool = []; self._d2r_line_pool = []; self._d2r_lbl_pool = []
-        self._d2r_lines_user = {}; self._d2r_sig = None; self._d2r_drawn = False; self._d2r_n = 0
-        # SKEW DIVERGENCE overlay (hamburger m10_skewdiv, 1h) — green up-triangle L / red down-triangle S.
-        self._skd_tri = None                     # ScatterPlotItem — triangles (printed on dom+climax core setup)
-        self._skd_star = None                    # ScatterPlotItem — gold stars overlaid on the FULL 4-filter ones
-        self._skd_lbl_pool = []                  # TextItems for the L/S letters
-        self._skd_sig = None; self._skd_drawn = False
-        self._skd_entries = []                   # [(key,x,side,entry,sl,tp,y)] clickable -> trade lines
-        self._skd_ln_pool = []; self._skd_lnlbl_pool = []; self._skd_lines_user = {}
-        # FLOW FLIP overlay (hamburger m10_flowflip, 1h) — green sphere L / red sphere S on a big reversal candle.
-        self._ff_sph = None                      # single ScatterPlotItem holds every sphere
-        self._ff_lbl_pool = []                   # TextItems for the L/S letters
-        self._ff_sig = None; self._ff_drawn = False
-        self._ff_entries = []                    # [(key,x,side,entry,sl,tp,y)] clickable -> trade lines
-        self._ff_ln_pool = []; self._ff_lnlbl_pool = []; self._ff_lines_user = {}
-        # 15mReasy overlay (m10_r15easy, 15m only) — diamond L/S badges; click -> entry/TP/SL trade lines
-        self._r15_sph = None                     # ScatterPlotItem of diamond badges
-        self._r15_lbl_pool = []                  # L/S letters
-        self._r15_sig = None; self._r15_drawn = False
-        self._r15_entries = []
-        self._r15_ln_pool = []; self._r15_lnlbl_pool = []; self._r15_lines_user = {}
+        self._mmx_audio_seeded = False; self._mmx_audio_last_et = 0.0   # entry-sound seed (never blast the backlog)
         # 1h Engulf S/R Reversal overlay (m10_engulfsr, 1h only) — star L/S badges; click -> entry/TP/SL trade lines
         self._eng_sph = None                     # ScatterPlotItem of star badges
         self._eng_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
@@ -1083,6 +1052,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._mom_sig = None; self._mom_drawn = False
         self._mom_entries = []
         self._mom_ln_pool = []; self._mom_lnlbl_pool = []; self._mom_lines_user = {}
+        # 5m Engulfing S/R overlay (m10_engulf5m, 5m only) — red/green losange L/S badges; click -> entry/TP/SL lines
+        self._e5m_sph = None                     # ScatterPlotItem of losange/triangle badges
+        self._e5m_gold = None                    # ScatterPlotItem — GOLD spheres on NON-signal |absorption|>=2.5 candles
+        self._e5m_lbl_pool = []                  # (colour-only badges)
+        self._e5m_sig = None; self._e5m_drawn = False
+        self._e5m_entries = []
+        self._e5m_ln_pool = []; self._e5m_lnlbl_pool = []; self._e5m_lines_user = {}
+        # '5m Breakout' indicator (m10_breakout5m) — squared 'Br' badges on S/R-breakout (mitigation) candles, 5m ONLY.
+        self._brk5m_grn_pool = []                # green 'Br' TextItems (up-break / resistance mitigated), grown lazily
+        self._brk5m_red_pool = []                # red 'Br' TextItems (down-break / support mitigated), grown lazily
+        self._brk5m_sig = None; self._brk5m_drawn = False
         self._trline_buckets = []                # visible frame buckets for the shared trade-line exit walk
         # SUPPORT & RESISTANCE indicator (hamburger m10_sr) — neon-red resistance / neon-blue support, extended
         # until a candle closes through the level. Line THICKNESS = rejection strength (one curve per width tier,
@@ -1562,8 +1542,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._wire_menu()
 
         # --- data worker (baseline before show, spec §9.1.3 / §9.2.2) ---
-        self.worker = PipeClientWorker(tf=tf)
-        self.worker.load_baseline(tf)
+        # Subscribe + baseline on the RESTORED timeframe (self._tf), NOT the raw ctor arg: _load_ui_state may have
+        # overridden self._tf with the persisted tf (e.g. a session saved on 5m). Using `tf` here (= DEFAULT_TF, 1h)
+        # loaded the 1h baseline + subscribed 1h while the UI/overlays read 5m -> the chart showed 1h-labelled-5m
+        # until a manual tf switch forced request_timeframe. Seed both from self._tf so they agree on open.
+        self.worker = PipeClientWorker(tf=self._tf)
+        self.worker.load_baseline(self._tf)
         self.worker.start()
         # SECOND lightweight worker subscribed to the LIVE 4h stream (the daemon streams every timeframe) — feeds
         # the 4h buy/sell wick zones so they update automatically, no manual archive pull. No baseline needed.
@@ -1584,11 +1568,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(config, "SESSION_PERF", False):
             try:
                 self._perf = SessionProfiler(os.path.join(config.DATA_DIR, "session_perf.log"))
+            except Exception:
+                self._perf = None
+        # --- tracemalloc leak hunt (DIAGNOSTIC; env SMC_MEMTRACE=0 disables) -> data/session_memtrace.log ---
+        self._memtrace = None
+        if getattr(config, "SESSION_MEMTRACE", False):
+            try:
+                self._memtrace = MemTracer(os.path.join(config.DATA_DIR, "session_memtrace.log"),
+                                           interval_s=float(getattr(config, "SESSION_MEMTRACE_SECS", 30.0)))
+            except Exception:
+                self._memtrace = None
+        # one 10s flush timer drives BOTH (the profiler CSV row + the tracemalloc snapshot, each self-throttled)
+        if self._perf is not None or self._memtrace is not None:
+            try:
                 self._perf_timer = QtCore.QTimer(self)
                 self._perf_timer.timeout.connect(self._perf_flush)
                 self._perf_timer.start(int(getattr(config, "SESSION_PERF_SECS", 10.0) * 1000))
             except Exception:
-                self._perf = None
+                pass
 
         # A5 — open straight onto Mode 10 (the primary surface), never the time chart. Same
         # path the combo uses: hides time components, applies the dark scanner theme, and
@@ -1857,29 +1854,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif key == "m10_4hzone":
             if not on:                              # 4h wick zones -> hide now (draw-gate re-adds on ON)
                 self._hide_4h_zone()
-        elif key in ("m10_vpfade", "m10_estar", "m10_vpinring"):
-            self._pivot_sig = None                  # VP-edge star/trap or VPIN ring toggled -> re-run the pivot draw
-        elif key in ("m10_mmx_v11", "m10_mmx_v12d", "m10_mmx_v13"):
-            self._mmx_sig = None; self._sel_sig = None    # an MMXSKEW version toggled -> re-run the overlay draw
-            if not (self.menu.layer_state("m10_mmx_v11") or self.menu.layer_state("m10_mmx_v12d")
-                    or self.menu.layer_state("m10_mmx_v13")):
-                self._clear_mmxskew()               # all three off -> tear the badges down now
         elif key == "m10_mmx_sound":
             self._mmx_audio_seeded = False          # re-seed on enable -> only NEW live prints beep, not the backlog
             if on:
                 self._strat_sound_test()            # ALWAYS confirm audibly on enable, so you know sound works
-        elif key == "m10_skewdiv":
-            self._skd_sig = None; self._sel_sig = None   # Skew Divergence toggled -> re-run the overlay draw
-            if not on:
-                self._clear_skewdiv()               # off -> tear the triangles down now
-        elif key == "m10_flowflip":
-            self._ff_sig = None; self._sel_sig = None    # Flow Flip toggled -> re-run the overlay draw
-            if not on:
-                self._clear_flowflip()              # off -> tear the spheres down now
-        elif key == "m10_r15easy":
-            self._r15_sig = None; self._sel_sig = None   # 15mReasy toggled -> re-run the overlay draw
-            if not on:
-                self._clear_r15easy()               # off -> tear the diamonds down now
         elif key == "m10_engulfsr":
             self._eng_sig = None; self._sel_sig = None   # 1h Engulf S/R toggled -> re-run the overlay draw
             if not on:
@@ -1895,6 +1873,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif key == "m10_prevday_vp":
             if not on:                              # per-prev-day VP -> hide now (draw-gate re-adds on ON)
                 self._hide_prevday_vp()
+        elif key == "m10_breakout5m":
+            self._brk5m_sig = None; self._sel_sig = None   # 5m Breakout toggled -> re-run the overlay draw
+            if not on:
+                self._clear_breakout5m()            # off -> tear the 'Br' badges down now
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -2043,95 +2025,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
         # SINGLE click near an actual trade entry (E-held-hollow / E2) toggles its SL/+0.10%/+0.40% line overlay.
-        if (not ev.double() and self.scanner_mode == "bucket_canvas" and self.show_pivot and self._pivot_entries):
-            try:
-                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
-                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.12
-                best = None; bestdx = 2.5
-                for e in self._pivot_entries:
-                    key, eb, shelf = e[0], e[1], e[2]
-                    dx = abs(xc - eb)
-                    if dx <= bestdx and abs(yc - shelf) <= ytol:
-                        best = key; bestdx = dx
-                if best is not None:
-                    last_key = self._entry_default_key()   # match _draw_entry_lines' default
-                    self._entry_lines_user[best] = not self._entry_lines_user.get(best, best == last_key)
-                    self._draw_entry_lines(); ev.accept(); return
-            except Exception:
-                pass
-        if (not ev.double() and self.scanner_mode == "bucket_canvas" and self._mmx_entries
-                and (self.menu.layer_state("m10_mmx_v11") or self.menu.layer_state("m10_mmx_v12d")
-                     or self.menu.layer_state("m10_mmx_v13"))):
-            try:                                   # click an L/S badge -> toggle its SL/TP price lines
-                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
-                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
-                best = None; bestdx = 2.5
-                for _en in self._mmx_entries:
-                    dx = abs(xc - _en[1])
-                    if dx <= bestdx and abs(yc - _en[6]) <= ytol:
-                        best = _en[0]; bestdx = dx
-                if best is not None:
-                    _on = not self._mmx_lines_user.get(best, False)   # exclusive: this position only, hide all others
-                    self._solo_trade_lines(self._mmx_lines_user, best, _on); ev.accept(); return
-            except Exception:
-                pass
-        if (not ev.double() and self.scanner_mode == "bucket_canvas"
-                and self._d2r_entries and self.menu.layer_state("m10_da2rev")):
-            try:                               # click a da2-L/da2-S badge -> toggle its fixed SL/TP lines
-                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
-                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
-                best = None; bestdx = 2.5
-                for _en in self._d2r_entries:
-                    dx = abs(xc - _en[1])
-                    if dx <= bestdx and abs(yc - _en[6]) <= ytol:
-                        best = _en[0]; bestdx = dx
-                if best is not None:
-                    _on = not self._d2r_lines_user.get(best, False)   # exclusive: this position only, hide all others
-                    self._solo_trade_lines(self._d2r_lines_user, best, _on); ev.accept(); return
-            except Exception:
-                pass
-        if (not ev.double() and self.scanner_mode == "bucket_canvas"
-                and self._skd_entries and self.menu.layer_state("m10_skewdiv")):
-            try:                               # click a Skew-Divergence triangle -> toggle its entry/TP/SL lines
-                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
-                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
-                best = None; bestdx = 2.5
-                for _en in self._skd_entries:
-                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:
-                        best = _en[0]; bestdx = abs(xc - _en[1])
-                if best is not None:
-                    _on = not self._skd_lines_user.get(best, False)   # exclusive: this position only, hide all others
-                    self._solo_trade_lines(self._skd_lines_user, best, _on); ev.accept(); return
-            except Exception:
-                pass
-        if (not ev.double() and self.scanner_mode == "bucket_canvas"
-                and self._ff_entries and self.menu.layer_state("m10_flowflip")):
-            try:                               # click a Flow-Flip sphere -> toggle its entry/TP/SL lines
-                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
-                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
-                best = None; bestdx = 2.5
-                for _en in self._ff_entries:
-                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:
-                        best = _en[0]; bestdx = abs(xc - _en[1])
-                if best is not None:
-                    _on = not self._ff_lines_user.get(best, False)    # exclusive: this position only, hide all others
-                    self._solo_trade_lines(self._ff_lines_user, best, _on); ev.accept(); return
-            except Exception:
-                pass
-        if (not ev.double() and self.scanner_mode == "bucket_canvas"
-                and self._r15_entries and self.menu.layer_state("m10_r15easy")):
-            try:                               # click a 15mReasy diamond -> toggle its entry/TP/SL lines
-                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
-                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
-                best = None; bestdx = 2.5
-                for _en in self._r15_entries:
-                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:
-                        best = _en[0]; bestdx = abs(xc - _en[1])
-                if best is not None:
-                    _on = not self._r15_lines_user.get(best, False)   # exclusive: this position only, hide all others
-                    self._solo_trade_lines(self._r15_lines_user, best, _on); ev.accept(); return
-            except Exception:
-                pass
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
                 and self._eng_entries and self.menu.layer_state("m10_engulfsr")):
             try:                               # click a 1h Engulf S/R star -> toggle its entry/TP/SL lines
@@ -2158,6 +2051,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if best is not None:
                     _on = not self._mom_lines_user.get(best, False)   # exclusive: this position only, hide all others
                     self._solo_trade_lines(self._mom_lines_user, best, _on); ev.accept(); return
+            except Exception:
+                pass
+        if (not ev.double() and self.scanner_mode == "bucket_canvas"
+                and self._e5m_entries and self.menu.layer_state("m10_engulf5m")):
+            try:                               # click a 5m Engulf S/R losange -> toggle its entry/TP/SL lines
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
+                best = None; bestdx = 2.5
+                for _en in self._e5m_entries:
+                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:
+                        best = _en[0]; bestdx = abs(xc - _en[1])
+                if best is not None:
+                    _on = not self._e5m_lines_user.get(best, False)   # exclusive: this position only, hide all others
+                    self._solo_trade_lines(self._e5m_lines_user, best, _on); ev.accept(); return
             except Exception:
                 pass
         if not ev.double():
@@ -4945,319 +4852,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # MMXSKEW / MMXSKEW-ORB entry overlay (Ctrl+M, 1h only) — self-contained
     # ------------------------------------------------------------------
-    def _clear_mmxskew(self) -> None:
-        for _it in self._mmx_badge_pool + self._mmx_line_pool + self._mmx_lbl_pool:
-            _it.setVisible(False)
-        self._mmx_entries = []; self._mmx_sig = None; self._mmx_drawn = False
-
     # ------------------------------------------------------------------
     # DA2-REVERSION v1.0 overlay (hamburger m10_da2rev, 1h only) — self-contained, fail-safe
     # ------------------------------------------------------------------
-    def _clear_da2rev(self) -> None:
-        for _it in self._d2r_badge_pool + self._d2r_line_pool + self._d2r_lbl_pool:
-            _it.setVisible(False)
-        self._d2r_entries = []; self._d2r_sig = None; self._d2r_drawn = False
-
-    def _draw_da2rev(self, filtered) -> None:
-        """da2-L / da2-S badges for the FROZEN DA2-REVERSION **v1.1** candidate (app/da2_reversion_detect).
-
-        WARM-UP IS REQUIRED — v1.1 added the |eff-agg spread| <= 50 gate, and eff_causal_share is a RUNNING
-        causal computation that restarts at index 0 of whatever list it gets. (v1.0 needed no prefix because
-        every input was per-bucket; that no longer holds.) Measured on the 435 signals, verdict errors by
-        prefix length: 0 -> 275 WRONG (spread off by up to 189.5), 50 -> 1, 100 -> 0. We reuse the MMXSKEW
-        250-bucket prefix, comfortably past the measured sufficiency point.
-        Closed-only: the still-forming bucket is skipped unless the window is closed-only (replay), because
-        delta_h1 is stamped at the 50%-volume mark while buy/sell keep moving -> da2 would repaint.
-        Badges appear ONLY on buckets carrying the daemon's `delta_h1` (2026-07-20 23:18 onward)."""
-        if not self.menu.layer_state("m10_da2rev") or self.scanner_mode != "bucket_canvas" or self._tf != "1h":
-            self._clear_da2rev(); return
-        n = len(filtered)
-        self._trline_buckets = filtered                             # shared trade-line exit walk (filtered space)
-        warm = getattr(self, "_mmx_warm", None) or []               # shared prefix; >= da2's WARMUP_MIN
-        _forming = bool(getattr(self, "_mmx_last_forming", True))   # same window semantics as the MMXSKEW path
-        _sig = (n, len(warm), _forming, filtered[-1].get("end_time") if n else 0,
-                filtered[-1].get("close") if n else 0)
-        if _sig == self._d2r_sig and self._d2r_drawn:
-            return
-        self._d2r_sig = _sig
-        _fi = (n - 1) if _forming else -1                           # forming (unconfirmed) bucket -> faded preview
-        try:
-            from app import da2_reversion_detect
-            entries = da2_reversion_detect.detect(list(warm) + list(filtered), skip_last=False)   # incl. forming (faded)
-        except Exception:
-            self._clear_da2rev(); return
-        _off = len(warm)
-        self._d2r_n = n
-        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.045, 1e-9)
-        AMBER, VIOLET, INK = (255, 176, 32), (170, 120, 255), (12, 14, 20)
-        used = 0; self._d2r_entries = []
-        for e in entries:
-            i = e["i"] - _off                        # detect() ran over warm+filtered -> back to filtered space
-            if i < 0 or i >= n:
-                continue                             # entry sat in the warm-up prefix (outside the scan window)
-            side = e["side"]
-            fill = AMBER if side > 0 else VIOLET
-            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            y = (lo - pad) if side > 0 else (hi + pad)   # offset beyond the MMXSKEW badges so both can show
-            if used >= len(self._d2r_badge_pool):
-                _t = pg.TextItem(anchor=(0.5, 0.5))
-                _f = QtGui.QFont("Consolas", 10); _f.setBold(True); _t.textItem.setFont(_f)
-                _t.setZValue(33); self.plot.addItem(_t, ignoreBounds=True); self._d2r_badge_pool.append(_t)
-            _t = self._d2r_badge_pool[used]
-            _a = _PREVIEW_ALPHA if i == _fi else 255                # forming bucket -> faded (unconfirmed) preview
-            _t.fill = pg.mkBrush(*fill, _a); _t.border = pg.mkPen(*fill, _a, width=1.2)
-            _t.setColor((INK[0], INK[1], INK[2], _a)); _t.setText("da2-L" if side > 0 else "da2-S")
-            _t.setPos(i, y); _t.setVisible(True); used += 1
-            self._d2r_entries.append(("d2r%d" % i, i, side, e["entry"], e["sl"], e["tp"], y))
-        for j in range(used, len(self._d2r_badge_pool)):
-            self._d2r_badge_pool[j].setVisible(False)
-        self._d2r_drawn = True
-        self._draw_da2rev_lines()
-
-    def _draw_da2rev_lines(self) -> None:
-        self._trade_lines(self._d2r_entries, self._d2r_lines_user, self._d2r_line_pool, self._d2r_lbl_pool, 26)
-
     # ------------------------------------------------------------------
     # SKEW DIVERGENCE overlay (hamburger m10_skewdiv, 1h only) — EXPLORATORY, self-gated, fail-safe.
     # Green UP-triangle (long) below a bearish pair whose profile leans HIGH; red DOWN-triangle (short) above
     # a bullish pair whose profile leans LOW. The up/down triangle shape carries the direction — no L/S letter.
     # ------------------------------------------------------------------
-    def _clear_skewdiv(self) -> None:
-        if self._skd_tri is not None:
-            self._skd_tri.setVisible(False)
-        if self._skd_star is not None:
-            self._skd_star.setVisible(False)
-        for _it in self._skd_lbl_pool + self._skd_ln_pool + self._skd_lnlbl_pool:
-            _it.setVisible(False)
-        self._skd_entries = []
-        self._skd_sig = None; self._skd_drawn = False
-
-    def _draw_skewdiv(self, filtered) -> None:
-        """L/S triangle badges for the SKEW DIVERGENCE exploratory setups (app/skew_divergence_detect).
-
-        No warm-up prefix: skew is per-bucket from `levels` and the only cross-bucket input is the prior
-        candle's direction, so the scan window alone is exact. Closed-only via skip_last (the forming bucket's
-        skew repaints as `levels` fills)."""
-        if (not self.menu.layer_state("m10_skewdiv") or self.scanner_mode != "bucket_canvas"
-                or self._tf != "1h"):
-            self._clear_skewdiv(); return
-        n = len(filtered)
-        _forming = bool(getattr(self, "_mmx_last_forming", True))     # same window semantics as the other overlays
-        _sig = (n, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
-        if _sig == self._skd_sig and self._skd_drawn:
-            return
-        self._skd_sig = _sig
-        _fi = (n - 1) if _forming else -1                            # forming (unconfirmed) bucket -> faded preview
-        try:
-            from app import skew_divergence_detect
-            entries = skew_divergence_detect.detect(list(filtered), skip_last=False)   # incl. forming bucket (faded)
-        except Exception:
-            self._clear_skewdiv(); return
-        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.055, 1e-9)
-        GRN, RED, GOLD = (40, 220, 100), (240, 60, 78), (255, 205, 40)
-        if self._skd_tri is None:
-            self._skd_tri = pg.ScatterPlotItem(pxMode=True, size=22)
-            self._skd_tri.setZValue(32); self.plot.addItem(self._skd_tri, ignoreBounds=True)
-            self._skd_star = pg.ScatterPlotItem(pxMode=True, size=10)
-            self._skd_star.setZValue(33); self.plot.addItem(self._skd_star, ignoreBounds=True)
-        spots = []; stars = []; self._skd_entries = []
-        for e in entries:
-            i = e["i"]
-            if i < 0 or i >= n:
-                continue
-            # PRINT the triangle ONLY when the CORE setup passes — dom > 0.55 AND climax close (the two filters
-            # that actually separate outcomes in-sample). No hollow any more: a fail simply draws nothing.
-            if not (e.get("pass_dom") and e.get("pass_climax")):
-                continue
-            side = e["side"]
-            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            y = (lo - pad) if side > 0 else (hi + pad)               # triangle sits beyond the wick
-            col = GRN if side > 0 else RED
-            _a = _PREVIEW_ALPHA if i == _fi else 255                 # forming bucket -> faded (unconfirmed) preview
-            spots.append({"pos": (i, y), "symbol": "t1" if side > 0 else "t",
-                          "brush": pg.mkBrush(*col, _a), "pen": pg.mkPen(*col, _a, width=1.2), "size": 22})
-            # GOLD STAR inside the triangle = the FULL 4-filter setup (dom+climax + R2-vacuum + move-expansion):
-            # higher per-trade odds in-sample (~75% vs ~69%), but fewer signals. Star absent = core (dom+climax).
-            if e.get("pass_full"):
-                stars.append({"pos": (i, y), "symbol": "star",
-                              "brush": pg.mkBrush(*GOLD, _a), "pen": pg.mkPen(150, 110, 0, _a, width=0.8), "size": 10})
-            self._skd_entries.append(("skd%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
-        self._skd_tri.setData(spots); self._skd_tri.setVisible(True)
-        self._skd_star.setData(stars); self._skd_star.setVisible(True)
-        for _it in self._skd_lbl_pool:
-            _it.setVisible(False)
-        self._skd_drawn = True
-        self._trline_buckets = filtered                              # click a triangle -> entry/TP/SL trade lines
-        self._draw_skd_lines()
-
-    def _draw_skd_lines(self) -> None:
-        self._trade_lines(self._skd_entries, self._skd_lines_user, self._skd_ln_pool, self._skd_lnlbl_pool, 28)
-
     # ------------------------------------------------------------------
     # FLOW FLIP overlay (hamburger m10_flowflip, 1h only) — EXPLORATORY, self-gated, fail-safe.
     # Green sphere 'L' below a bearish->bullish big reversal; red sphere 'S' above a bullish->bearish one.
     # Sphere SHAPE distinguishes it from the pill (mmx/da2) and triangle (skewdiv) overlays.
     # ------------------------------------------------------------------
-    def _clear_flowflip(self) -> None:
-        if self._ff_sph is not None:
-            self._ff_sph.setVisible(False)
-        for _it in self._ff_lbl_pool + self._ff_ln_pool + self._ff_lnlbl_pool:
-            _it.setVisible(False)
-        self._ff_entries = []
-        self._ff_sig = None; self._ff_drawn = False
-
-    def _draw_flowflip(self, filtered) -> None:
-        """L/S sphere badges for FLOW FLIP (app/flow_flip_detect), SHADED by the eff-agg flip dE.
-
-        The base signal (big reversal + mov_magn>50) needs no warm-up, but the SHADE does: dE = eff-agg(c2) -
-        eff-agg(c1) and eff_causal_share is a RUNNING causal computation, so it is fed warm+filtered (the
-        shared MMXSKEW 250-prefix) for accuracy, then indexed back into filtered space. Colour is BINARY on
-        the SIGN of dE (operator choice): **dE < 0 -> FULL red/green, dE >= 0 -> PALE (same hue, not grey)**.
-        In-sample dE<0 (flow flipped bearish across the reversal) is the winning band on BOTH sides -- the
-        short by confirmation, the long by divergence (n=15, NOT significant; the long side is dead overall).
-        If eff-agg is unavailable dE is unknown and the sphere draws FULL colour."""
-        if (not self.menu.layer_state("m10_flowflip") or self.scanner_mode != "bucket_canvas"
-                or self._tf != "1h"):
-            self._clear_flowflip(); return
-        n = len(filtered)
-        warm = getattr(self, "_mmx_warm", None) or []                # shared eff-agg warm-up prefix
-        _off = len(warm)
-        _forming = bool(getattr(self, "_mmx_last_forming", True))
-        _sig = (n, _off, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
-        if _sig == self._ff_sig and self._ff_drawn:
-            return
-        self._ff_sig = _sig
-        _fi = (n - 1) if _forming else -1                            # forming (unconfirmed) bucket -> faded preview
-        try:
-            from app import flow_flip_detect
-            entries = flow_flip_detect.detect(list(filtered), skip_last=False)   # incl. the forming bucket (faded)
-        except Exception:
-            self._clear_flowflip(); return
-        eff = None                                                   # eff-agg % over warm+filtered, or None
-        try:
-            from . import pivot_detect as _PD
-            eff = (2.0 * np.asarray(_PD.eff_causal_share(list(warm) + list(filtered)), float) - 1.0) * 100.0
-        except Exception:
-            eff = None
-        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.055, 1e-9)
-        INK = (10, 12, 18)
-        GRN, RED = (40, 220, 100), (240, 60, 78)                    # FULL  (dE < 0)
-        GRN_PALE, RED_PALE = (128, 190, 150), (215, 140, 152)       # PALE hue-preserving (dE >= 0), not grey
-        if self._ff_sph is None:
-            self._ff_sph = pg.ScatterPlotItem(pxMode=True, size=24, symbol="o")
-            self._ff_sph.setZValue(32); self.plot.addItem(self._ff_sph, ignoreBounds=True)
-        spots = []; used = 0; self._ff_entries = []
-        for e in entries:
-            i = e["i"]
-            if i < 0 or i >= n:
-                continue
-            if not e.get("pass_entry", True):     # DON'T-CHASE filter (frozen): skip extended reversals —
-                continue                          # only print when close2 < high1 (long) / close2 > low1 (short)
-            side = e["side"]
-            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            y = (lo - pad) if side > 0 else (hi + pad)
-            self._ff_entries.append(("ff%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
-            # dE = eff-agg(c2) - eff-agg(c1); c2 = filtered i -> warm+filtered index i+_off (i>=1 so c1 exists).
-            # BINARY: dE < 0 (flow flipped bearish) -> FULL colour; dE >= 0 or unknown -> PALE.
-            full = True
-            if eff is not None and 0 < (i + _off) < len(eff):
-                full = (eff[i + _off] - eff[i + _off - 1]) < 0.0
-            if side > 0:
-                col = GRN if full else GRN_PALE
-            else:
-                col = RED if full else RED_PALE
-            _a = _PREVIEW_ALPHA if i == _fi else 255             # forming bucket -> faded (unconfirmed) preview
-            _pen_rgb = [int(c * 0.55) for c in col] + [_a]
-            spots.append({"pos": (i, y), "symbol": "o",
-                          "brush": pg.mkBrush(*col, _a), "pen": pg.mkPen(*_pen_rgb, width=1.2),
-                          "size": 24})
-            if used >= len(self._ff_lbl_pool):
-                _tl = pg.TextItem(anchor=(0.5, 0.5))
-                _f = QtGui.QFont("Consolas", 8); _f.setBold(True); _tl.textItem.setFont(_f)
-                _tl.setZValue(33); self.plot.addItem(_tl, ignoreBounds=True); self._ff_lbl_pool.append(_tl)
-            _lb = self._ff_lbl_pool[used]
-            _lb.setColor((INK[0], INK[1], INK[2], _a)); _lb.setText("L" if side > 0 else "S")
-            _lb.setPos(i, y); _lb.setVisible(True); used += 1
-        self._ff_sph.setData(spots); self._ff_sph.setVisible(True)
-        for j in range(used, len(self._ff_lbl_pool)):
-            self._ff_lbl_pool[j].setVisible(False)
-        self._ff_drawn = True
-        self._trline_buckets = filtered                              # click a sphere -> entry/TP/SL trade lines
-        self._draw_ff_lines()
-
-    def _draw_ff_lines(self) -> None:
-        self._trade_lines(self._ff_entries, self._ff_lines_user, self._ff_ln_pool, self._ff_lnlbl_pool, 28)
-
     # ------------------------------------------------------------------
     # 15mReasy overlay (hamburger m10_r15easy, 15m ONLY) — EXPLORATORY, self-gated, fail-safe.
     # DIAMOND 'L'/'S' badge (distinct from the pill / triangle / sphere overlays). LONG = bullish + A<=-0.75 +
     # skew>0 + prev bullish; SHORT = mirror + mov_mag<=10. Click a diamond -> its entry/TP/SL trade lines.
     # ------------------------------------------------------------------
-    def _clear_r15easy(self) -> None:
-        if self._r15_sph is not None:
-            self._r15_sph.setVisible(False)
-        for _it in self._r15_lbl_pool + self._r15_ln_pool + self._r15_lnlbl_pool:
-            _it.setVisible(False)
-        self._r15_entries = []
-        self._r15_sig = None; self._r15_drawn = False
-
-    def _draw_r15easy(self, filtered) -> None:
-        """Diamond L/S badges for 15mReasy (app/r15easy_detect). Absorption needs a trailing window, so the shared
-        warm-up prefix is prepended and indices shifted back (like DA2/MMXSKEW). 15m ONLY."""
-        if (not self.menu.layer_state("m10_r15easy") or self.scanner_mode != "bucket_canvas"
-                or self._tf != "15m"):
-            self._clear_r15easy(); return
-        n = len(filtered)
-        warm = getattr(self, "_mmx_warm", None) or []                # shared prefix (absorption trailing window)
-        _off = len(warm)
-        _forming = bool(getattr(self, "_mmx_last_forming", True))
-        _sig = (n, _off, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
-        if _sig == self._r15_sig and self._r15_drawn:
-            return
-        self._r15_sig = _sig
-        _fi = (n - 1) if _forming else -1                            # forming (unconfirmed) bucket -> faded preview
-        try:
-            from app import r15easy_detect
-            entries = r15easy_detect.detect(list(warm) + list(filtered), skip_last=False)
-        except Exception:
-            self._clear_r15easy(); return
-        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
-        INK = (10, 12, 18)
-        GRN, RED = (40, 220, 100), (240, 60, 78)
-        if self._r15_sph is None:
-            self._r15_sph = pg.ScatterPlotItem(pxMode=True, size=22, symbol="d")   # diamond distinguishes it
-            self._r15_sph.setZValue(32); self.plot.addItem(self._r15_sph, ignoreBounds=True)
-        spots = []; used = 0; self._r15_entries = []
-        for e in entries:
-            i = e["i"] - _off                                        # detect ran over warm+filtered -> filtered space
-            if i < 0 or i >= n:
-                continue
-            side = e["side"]
-            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            y = (lo - pad) if side > 0 else (hi + pad)
-            self._r15_entries.append(("r15%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
-            col = GRN if side > 0 else RED
-            _al = _PREVIEW_ALPHA if i == _fi else 255                # forming bucket -> faded preview
-            _pen_rgb = [int(c * 0.55) for c in col] + [_al]
-            spots.append({"pos": (i, y), "symbol": "d", "brush": pg.mkBrush(*col, _al),
-                          "pen": pg.mkPen(*_pen_rgb, width=1.2), "size": 22})
-            if used >= len(self._r15_lbl_pool):
-                _tl = pg.TextItem(anchor=(0.5, 0.5))
-                _f = QtGui.QFont("Consolas", 8); _f.setBold(True); _tl.textItem.setFont(_f)
-                _tl.setZValue(33); self.plot.addItem(_tl, ignoreBounds=True); self._r15_lbl_pool.append(_tl)
-            _lb = self._r15_lbl_pool[used]
-            _lb.setColor((INK[0], INK[1], INK[2], _al)); _lb.setText("L" if side > 0 else "S")
-            _lb.setPos(i, y); _lb.setVisible(True); used += 1
-        self._r15_sph.setData(spots); self._r15_sph.setVisible(True)
-        for j in range(used, len(self._r15_lbl_pool)):
-            self._r15_lbl_pool[j].setVisible(False)
-        self._r15_drawn = True
-        self._trline_buckets = filtered                              # click a diamond -> entry/TP/SL trade lines
-        self._draw_r15_lines()
-
-    def _draw_r15_lines(self) -> None:
-        self._trade_lines(self._r15_entries, self._r15_lines_user, self._r15_ln_pool, self._r15_lnlbl_pool, 29)
-
     # 1h Engulf S/R Reversal overlay (hamburger m10_engulfsr, 1h ONLY) — FORWARD CANDIDATE, self-gated, fail-safe.
     # TRIANGLE 'L'/'S' badge (up-triangle long = buy at support / down-triangle short = sell at resistance — a mean-
     # reversion; green/red + 1h-only keep it distinct from the skew-div triangles). Engulf reversal where c2 opens/
@@ -5410,6 +5022,148 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _draw_mom_lines(self) -> None:
         self._trade_lines(self._mom_entries, self._mom_lines_user, self._mom_ln_pool, self._mom_lnlbl_pool, 30)
 
+    # 5m ENGULFING S/R overlay (hamburger m10_engulf5m, 5m ONLY) — EYEBALL candidate, self-gated, fail-safe.
+    # LOSANGE (diamond) = continuation-BIAS signal; TRIANGLE = REVERSAL-exception signal (engulf inside a held
+    # support/resistance, bias bypassed). Green up long / red down short (no tiers). Absorption-extreme engulf;
+    # SL 0.1% beyond the widest of prev/entry candle; TP 1:1.5 (1:2 on VA+SR confluence).
+    # Click a badge -> its entry/TP/SL trade lines (exclusive). NOT a proven edge (see app/engulf5m_detect docstring).
+    def _clear_engulf5m(self) -> None:
+        if self._e5m_sph is not None:
+            self._e5m_sph.setVisible(False)
+        if self._e5m_gold is not None:
+            self._e5m_gold.setVisible(False)
+        for _it in self._e5m_lbl_pool + self._e5m_ln_pool + self._e5m_lnlbl_pool:
+            _it.setVisible(False)
+        self._e5m_entries = []
+        self._e5m_sig = None; self._e5m_drawn = False
+
+    def _draw_engulf5m(self, filtered) -> None:
+        """Losange L/S badges for the 5m Engulfing S/R candidate (app/engulf5m_detect). Needs S/R + prev-day VA +
+        structure context, so the shared warm-up prefix is prepended and indices shifted back. 5m ONLY."""
+        if (not self.menu.layer_state("m10_engulf5m") or self.scanner_mode != "bucket_canvas"
+                or self._tf != "5m"):
+            self._clear_engulf5m(); return
+        n = len(filtered)
+        warm = getattr(self, "_mmx_warm", None) or []
+        _off = len(warm)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        _sig = (n, _off, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._e5m_sig and self._e5m_drawn:
+            return
+        self._e5m_sig = _sig
+        _fi = (n - 1) if _forming else -1
+        try:
+            from app import engulf5m_detect
+            entries = engulf5m_detect.detect(list(warm) + list(filtered), skip_last=False)
+        except Exception:
+            self._clear_engulf5m(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        GRN, RED, GOLD = (40, 220, 100), (240, 60, 78), (255, 200, 40)
+        if self._e5m_sph is None:
+            self._e5m_sph = pg.ScatterPlotItem(pxMode=True, size=17, symbol="d")
+            self._e5m_sph.setZValue(32); self.plot.addItem(self._e5m_sph, ignoreBounds=True)
+        spots = []; self._e5m_entries = []
+        for e in entries:
+            i = e["i"] - _off
+            if i < 0 or i >= n:
+                continue
+            side = e["side"]
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)
+            self._e5m_entries.append(("e5m%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
+            col = GOLD if e.get("gold") else (GRN if side > 0 else RED)   # |absorption|>=2.5 -> GOLD badge
+            _al = _PREVIEW_ALPHA if i == _fi else 255
+            _pen_rgb = [int(c * 0.55) for c in col] + [_al]
+            _sym = ("t1" if side > 0 else "t") if e.get("rev") else "d"   # reversal-exception -> TRIANGLE, bias -> losange
+            spots.append({"pos": (i, y), "symbol": _sym, "brush": pg.mkBrush(*col, _al),
+                          "pen": pg.mkPen(*_pen_rgb, width=1.2), "size": 17})
+        self._e5m_sph.setData(spots); self._e5m_sph.setVisible(True)
+        # GOLD SPHERE on NON-signal candles with |absorption| >= 2.5 (extreme-absorption marker, not a trade)
+        sig_set = set(e["i"] for e in entries)
+        try:
+            gextremes = engulf5m_detect.extreme_absorption(list(warm) + list(filtered), start=_off)
+        except Exception:
+            gextremes = []
+        _gpen = pg.mkPen(int(GOLD[0] * 0.55), int(GOLD[1] * 0.55), int(GOLD[2] * 0.55), 210, width=1.0)
+        gspots = []
+        for gi, _ga in gextremes:
+            if gi in sig_set:
+                continue
+            ii = gi - _off
+            if ii < 0 or ii >= n:
+                continue
+            ghi = float(filtered[ii].get("high", 0.0) or 0.0)
+            gspots.append({"pos": (ii, ghi + pad), "symbol": "o", "size": 11,
+                           "brush": pg.mkBrush(*GOLD, 210), "pen": _gpen})
+        if self._e5m_gold is None:
+            self._e5m_gold = pg.ScatterPlotItem(pxMode=True, symbol="o", size=11)
+            self._e5m_gold.setZValue(30); self.plot.addItem(self._e5m_gold, ignoreBounds=True)
+        self._e5m_gold.setData(gspots); self._e5m_gold.setVisible(True)
+        for _lb in self._e5m_lbl_pool:
+            _lb.setVisible(False)
+        self._e5m_drawn = True
+        self._trline_buckets = filtered
+        self._draw_e5m_lines()
+
+    def _draw_e5m_lines(self) -> None:
+        self._trade_lines(self._e5m_entries, self._e5m_lines_user, self._e5m_ln_pool, self._e5m_lnlbl_pool, 31)
+
+    # ------------------------------------------------------------------
+    # 5m BREAKOUT indicator (hamburger m10_breakout5m, 5m ONLY) — self-gated, fail-safe. Green 'Br' badge ABOVE a
+    # candle that broke a RESISTANCE (up-break), red 'Br' BELOW a candle that broke a SUPPORT (down-break). Breaks use
+    # the WIDENED 5m mitigation edge (same as the 5m S/R display). Causal: marks the breaking candle at its own close.
+    # Descriptive marker, not a signal (breaks aren't predictable in advance — see app/breakout5m_detect docstring).
+    # ------------------------------------------------------------------
+    def _clear_breakout5m(self) -> None:
+        for _t in self._brk5m_grn_pool + self._brk5m_red_pool:
+            _t.setVisible(False)
+        self._brk5m_sig = None; self._brk5m_drawn = False
+
+    def _fill_brk_pool(self, pool, positions, col) -> None:
+        while len(pool) < len(positions):
+            _t = pg.TextItem("Br", anchor=(0.5, 0.5), color=(12, 14, 18), fill=pg.mkBrush(*col),
+                             border=pg.mkPen(int(col[0] * 0.5), int(col[1] * 0.5), int(col[2] * 0.5), 255, width=1.3))
+            _t.setZValue(33); self.plot.addItem(_t, ignoreBounds=True)
+            pool.append(_t)
+        for _idx, (_xi, _y) in enumerate(positions):
+            _t = pool[_idx]; _t.setPos(_xi, _y); _t.setVisible(True)
+        for _t in pool[len(positions):]:
+            _t.setVisible(False)
+
+    def _draw_breakout5m(self, filtered) -> None:
+        """Squared 'Br' badges on S/R-breakout (mitigation) candles (app/breakout5m_detect). Needs S/R context, so the
+        shared warm-up prefix is prepended and indices shifted back. 5m ONLY."""
+        if (not self.menu.layer_state("m10_breakout5m") or self.scanner_mode != "bucket_canvas"
+                or self._tf != "5m"):
+            self._clear_breakout5m(); return
+        n = len(filtered)
+        warm = getattr(self, "_mmx_warm", None) or []
+        _off = len(warm)
+        _sig = (n, _off, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._brk5m_sig and self._brk5m_drawn:
+            return
+        self._brk5m_sig = _sig
+        try:
+            from app import breakout5m_detect
+            marks = breakout5m_detect.detect(list(warm) + list(filtered))
+        except Exception:
+            self._clear_breakout5m(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        GRN, RED = (40, 220, 100), (240, 60, 78)
+        grn = []; red = []
+        for m in marks:
+            i = m["i"] - _off
+            if i < 0 or i >= n:
+                continue
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            if m["side"] > 0:
+                grn.append((i, hi + pad))          # up-break (resistance mitigated) -> green 'Br' ABOVE the candle
+            else:
+                red.append((i, lo - pad))          # down-break (support mitigated) -> red 'Br' BELOW the candle
+        self._fill_brk_pool(self._brk5m_grn_pool, grn, GRN)
+        self._fill_brk_pool(self._brk5m_red_pool, red, RED)
+        self._brk5m_drawn = True
+
     # ------------------------------------------------------------------
     # SUPPORT & RESISTANCE indicator (hamburger m10_sr) — self-gated, fail-safe. A pivot high -> neon-RED
     # resistance, a pivot low -> neon-BLUE support; each extends right until a candle CLOSES through it, then
@@ -5442,7 +5196,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sr_sig = _sig
         try:
             from app import support_resistance as _srm
-            levels = _srm.detect(list(filtered))
+            levels = _srm.detect(list(filtered), zone_mitigation=(self._tf == "5m"))   # 5m: break past the WIDENED edge
         except Exception:
             self._clear_sr(); return
         if len(levels) > _srm.SR_MAX_LEVELS:                          # keep the most-recent N (by pivot index)
@@ -5466,9 +5220,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             kind = lv["kind"]; price = lv["price"]; i0 = lv["i0"]; i1 = lv["i1"]
             rgb = RES if kind == "R" else SUP
             _t0 = min(nt - 1, max(0, int(lv.get("tier", 0))))
-            if i1 is None and 0 <= i0 < n:                           # ACTIVE -> filled band over the pivot candle range
+            if i1 is None and 0 <= i0 < n:                           # ACTIVE -> filled band over the WIDENED S/R area
                 b0 = filtered[i0]
-                ylo = float(b0.get("low", 0.0) or 0.0); yhi = float(b0.get("high", 0.0) or 0.0)
+                ylo = float(lv.get("zlo", b0.get("low", 0.0)) or 0.0); yhi = float(lv.get("zhi", b0.get("high", 0.0)) or 0.0)
                 if yhi <= ylo:                                       # degenerate pivot candle -> a hair around the level
                     ylo, yhi = price * (1 - 5e-4), price * (1 + 5e-4)
                 rects.append((i0, n - 1, ylo, yhi, rgb, _t0))
@@ -5513,93 +5267,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._sr_rects[j].setVisible(False)
         self._sr_drawn = True
 
-    def _mmx_badge(self, used, x, y, text, tcol, fill, alpha=255):
-        if used >= len(self._mmx_badge_pool):
-            _t = pg.TextItem(anchor=(0.5, 0.5))
-            _f = QtGui.QFont("Consolas", 11); _f.setBold(True); _t.textItem.setFont(_f)
-            _t.setZValue(34); self.plot.addItem(_t, ignoreBounds=True); self._mmx_badge_pool.append(_t)
-        _t = self._mmx_badge_pool[used]
-        _t.fill = pg.mkBrush(*fill, alpha) if fill else pg.mkBrush(18, 20, 26, min(190, alpha))
-        _t.border = pg.mkPen(*(fill if fill else tcol), alpha, width=1.2)
-        _t.setColor((tcol[0], tcol[1], tcol[2], alpha)); _t.setText(text); _t.setPos(x, y); _t.setVisible(True)
-        return _t
-
-    def _draw_mmxskew(self, filtered) -> None:
-        """Render L/S badges for the NO-POC MMXSKEW family (causal detect via app.mmxskew_detect).
-
-        THREE INDEPENDENT TOGGLES, one per version. The tiers are NESTED (v1.3 and v1.2-Dynamic are subsets of
-        the v1.1-NP base), so a badge takes the style of the HIGHEST tier it qualifies for **among the ENABLED
-        toggles** — and is skipped entirely if it qualifies for none of them:
-            v1.3         -> GOLD background          (mov_mag>=39 + asymmetric da2>0)
-            v1.2-Dynamic -> GREEN(long)/RED(short) bg (run_pos<=4 + mov_mag_ratio>=1.30)
-            v1.1-NP      -> plain badge, no fill      (the base signal)
-        Fail-safe: any error clears the overlay so it can never break the scanner render."""
-        _v11 = self.menu.layer_state("m10_mmx_v11")
-        _v12d = self.menu.layer_state("m10_mmx_v12d")
-        _v13 = self.menu.layer_state("m10_mmx_v13")
-        if not (_v11 or _v12d or _v13) or self.scanner_mode != "bucket_canvas" or self._tf != "1h":
-            self._clear_mmxskew(); return
-        n = len(filtered)
-        self._trline_buckets = filtered                             # shared trade-line exit walk (filtered space)
-        warm = getattr(self, "_mmx_warm", None) or []
-        _forming = bool(getattr(self, "_mmx_last_forming", True))
-        _sig = (n, len(warm), _forming, _v11, _v12d, _v13, filtered[-1].get("end_time") if n else 0,
-                filtered[-1].get("close") if n else 0)
-        # Gate on a DRAWN flag, not on the badge pool: the pool starts empty and only grows inside _mmx_badge,
-        # so `and self._mmx_badge_pool` defeated the cache on every frame until the first badge existed —
-        # v1.2-Dynamic fires on ~1.7% of buckets, so that was almost always.
-        if _sig == self._mmx_sig and getattr(self, "_mmx_drawn", False):
-            return                                 # nothing new closed / same toggles -> keep the drawn badges
-        self._mmx_sig = _sig
-        try:
-            # Prepend the warm-up prefix so the EMA-50 / run_pos / eff-agg match the FROZEN study gate, then
-            # shift indices back into `filtered` space. Without this the scan window alone mis-flags 14/174
-            # v1.2-Dynamic badges (biased toward over-firing) — see mmxskew_detect.WARMUP_MIN.
-            from app import mmxskew_detect
-            entries = mmxskew_detect.detect(list(warm) + list(filtered), skip_last=False)   # incl. forming (faded)
-        except Exception:
-            self._clear_mmxskew(); return
-        _off = len(warm)
-        _fi = (n - 1) if _forming else -1                           # forming (unconfirmed) bucket -> faded preview
-        self._mmx_n = n
-        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.028, 1e-9)
-        GREEN, RED, INK, GOLD = (40, 230, 90), (255, 45, 70), (12, 14, 20), (241, 196, 15)
-        used = 0; self._mmx_entries = []
-        for e in entries:
-            i = e["i"] - _off                       # detect() ran over warm+filtered -> back to filtered space
-            if i < 0 or i >= n:
-                continue                            # entry sat in the warm-up prefix (outside the scan window)
-            side = e["side"]
-            if _v13 and e["v13"]:                   # highest enabled tier wins
-                fill = GOLD; tcol = INK
-            elif _v12d and e["v12d"]:
-                fill = GREEN if side > 0 else RED; tcol = INK
-            elif _v11 and e["v11"]:                 # v1.1 badge now carries its own delta filter (frozen 2026-07-24)
-                fill = None; tcol = GREEN if side > 0 else RED
-            else:
-                continue                            # qualifies for no ENABLED tier -> not drawn
-            b = filtered[i]; hi = float(b.get("high", 0.0)); lo = float(b.get("low", 0.0))
-            y = (lo - pad) if side > 0 else (hi + pad)
-            self._mmx_badge(used, i, y, "L" if side > 0 else "S", tcol, fill,
-                            alpha=_PREVIEW_ALPHA if i == _fi else 255); used += 1
-            self._mmx_entries.append(("mmx%d" % i, i, side, e["entry"], e["sl"], e["tp"], y))
-        for j in range(used, len(self._mmx_badge_pool)):
-            self._mmx_badge_pool[j].setVisible(False)
-        self._mmx_drawn = True          # arms the sig-cache even when this pass drew ZERO badges
-        self._draw_mmx_lines()
-
     def _solo_trade_lines(self, active_user, key, turn_on) -> None:
-        """EXCLUSIVE badge selection: showing one strategy's entry/TP/SL trade lines HIDES every other opened badge's
-        (across MMXSKEW / DA2 / Skew Divergence / Flow Flip), so only ONE position is on the chart at a time.
-        Clicking the already-shown badge turns it OFF (nothing shown). Called by every strategy badge click."""
-        for d in (self._mmx_lines_user, self._d2r_lines_user, self._skd_lines_user,
-                  self._ff_lines_user, self._r15_lines_user, self._eng_lines_user, self._mom_lines_user):
-            d.clear()                          # drop every currently-shown position (this + all other strategies)
+        """EXCLUSIVE badge selection: showing one ENGULF overlay's entry/TP/SL trade lines HIDES every other opened
+        badge's (1h / 15m / 5m Engulf S/R), so only ONE position is on the chart at a time. Clicking the already-shown
+        badge turns it OFF (nothing shown). Called by every strategy badge click."""
+        for d in (self._eng_lines_user, self._mom_lines_user, self._e5m_lines_user):
+            d.clear()                          # drop every currently-shown position (this + all other overlays)
         if turn_on:
             active_user[key] = True            # ...then light up only the just-clicked one
-        # redraw all so the cleared strategies' lines disappear and the chosen one appears
-        self._draw_mmx_lines(); self._draw_da2rev_lines(); self._draw_skd_lines()
-        self._draw_ff_lines(); self._draw_r15_lines(); self._draw_eng_lines(); self._draw_mom_lines()
+        self._draw_eng_lines(); self._draw_mom_lines(); self._draw_e5m_lines()
 
     def _trade_lines(self, entries, user, cpool, lpool, zline) -> None:
         """Shared renderer: for each toggled-ON entry draw ENTRY (white dashed, price tag) + TP (green) + SL (red)
@@ -5642,9 +5318,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             cpool[j].setVisible(False)
         for j in range(ut, len(lpool)):
             lpool[j].setVisible(False)
-
-    def _draw_mmx_lines(self) -> None:
-        self._trade_lines(self._mmx_entries, self._mmx_lines_user, self._mmx_line_pool, self._mmx_lbl_pool, 27)
 
     def _pivot_put_label(self, used: int, x, y, text: str, color=(0, 0, 0)) -> int:
         """Set the next pooled D/E glyph (grow lazily): bold letter centred on its circle. ``color`` is the
@@ -6703,56 +6376,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._panel_hovers = []
             self._sel_sig = None        # Fix 1: hidden -> force a full recompute when a selection returns
             self._sel_hi_t = None       # no selection -> the 4h zone reverts to the LIVE newest wick (+ fill%)
-            # Pivot V3 shows WITHOUT a selection: scan the loaded set incrementally. Do NOT _clear_pivot() first —
-            # that resets _pivot_sig EVERY frame and forces a full re-detect each frame (the lag). Left intact, the
-            # sig-gate holds, so this re-detects ONLY when a new bucket closes.
-            if self.scanner_mode == "bucket_canvas" and (self.show_pivot
-                    or self.menu.layer_state("m10_mmx_v11") or self.menu.layer_state("m10_mmx_v12d")
-                    or self.menu.layer_state("m10_mmx_v13")):
+            # The ENGULF S/R overlays + the S/R indicator show WITHOUT a selection: scan the loaded set incrementally.
+            if self.scanner_mode == "bucket_canvas" and (self.menu.layer_state("m10_engulfsr")
+                    or self.menu.layer_state("m10_momentum") or self.menu.layer_state("m10_engulf5m")
+                    or self.menu.layer_state("m10_breakout5m") or self.menu.layer_state("m10_sr")):
                 _pf, _, _ = self._build_scanner_buckets()
-                if self.show_pivot and _pf:
-                    try:
-                        self._draw_pivot(_pf, self._global_idx_offset, 0, len(_pf) - 1, incremental=True)
-                    except Exception:
-                        self._clear_pivot()
-                elif not self.show_pivot:
-                    self._clear_pivot()
-                try:
-                    self._draw_mmxskew(_pf or [])   # MMXSKEW/ORB overlay (Ctrl+M, 1h) — self-gated, fail-safe
-                except Exception:
-                    self._clear_mmxskew()
-                try:
-                    self._draw_da2rev(_pf or [])    # DA2-REVERSION v1.0 overlay — self-gated, fail-safe
-                except Exception:
-                    self._clear_da2rev()
-                try:
-                    self._draw_skewdiv(_pf or [])   # SKEW DIVERGENCE overlay — self-gated, fail-safe
-                except Exception:
-                    self._clear_skewdiv()
-                try:
-                    self._draw_flowflip(_pf or [])  # FLOW FLIP overlay — self-gated, fail-safe
-                except Exception:
-                    self._clear_flowflip()
-                try:
-                    self._draw_r15easy(_pf or [])   # 15mReasy overlay (15m) — self-gated, fail-safe
-                except Exception:
-                    self._clear_r15easy()
                 try:
                     self._draw_engulfsr(_pf or [])  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
                 except Exception:
                     self._clear_engulfsr()
                 try:
-                    self._draw_momentum(_pf or [])  # 15m Momentum overlay (15m) — self-gated, fail-safe
+                    self._draw_momentum(_pf or [])  # 15m Engulfing S/R overlay (15m) — self-gated, fail-safe
                 except Exception:
                     self._clear_momentum()
+                try:
+                    self._draw_engulf5m(_pf or [])  # 5m Engulfing S/R overlay (5m) — self-gated, fail-safe
+                except Exception:
+                    self._clear_engulf5m()
+                try:
+                    self._draw_breakout5m(_pf or [])  # 5m Breakout indicator (5m) — self-gated, fail-safe
+                except Exception:
+                    self._clear_breakout5m()
                 try:
                     self._draw_sr(_pf or [])        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
                 except Exception:
                     self._clear_sr()
             else:
-                self._clear_pivot(); self._clear_mmxskew(); self._clear_da2rev()   # nothing on -> clear all
-                self._clear_skewdiv(); self._clear_flowflip(); self._clear_r15easy(); self._clear_engulfsr()
-                self._clear_momentum(); self._clear_sr()
+                self._clear_engulfsr(); self._clear_momentum(); self._clear_engulf5m()
+                self._clear_breakout5m(); self._clear_sr()
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -6809,30 +6460,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._sel_sig = sig
             self._sel_hi_t = float(filtered[hi_i].get("end_time", 0.0))   # scrub 'as-of' edge -> the 4h zone reads it
             try:
-                self._draw_pivot(filtered, self._global_idx_offset, lo_i, hi_i)   # PIVOT INDICATOR (Ctrl+P)
-            except Exception:
-                self._clear_pivot()
-            try:
-                self._draw_mmxskew(filtered)   # MMXSKEW/ORB overlay (Ctrl+M, 1h) — self-gated, fail-safe
-            except Exception:
-                self._clear_mmxskew()
-            try:
-                self._draw_da2rev(filtered)    # DA2-REVERSION v1.0 overlay — self-gated, fail-safe
-            except Exception:
-                self._clear_da2rev()
-            try:
-                self._draw_skewdiv(filtered)   # SKEW DIVERGENCE overlay — self-gated, fail-safe
-            except Exception:
-                self._clear_skewdiv()
-            try:
-                self._draw_flowflip(filtered)  # FLOW FLIP overlay — self-gated, fail-safe
-            except Exception:
-                self._clear_flowflip()
-            try:
-                self._draw_r15easy(filtered)   # 15mReasy overlay (15m) — self-gated, fail-safe
-            except Exception:
-                self._clear_r15easy()
-            try:
                 self._draw_engulfsr(filtered)  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
             except Exception:
                 self._clear_engulfsr()
@@ -6840,6 +6467,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_momentum(filtered)  # 15m Momentum overlay (15m) — self-gated, fail-safe
             except Exception:
                 self._clear_momentum()
+            try:
+                self._draw_engulf5m(filtered)  # 5m Engulfing S/R overlay (5m) — self-gated, fail-safe
+            except Exception:
+                self._clear_engulf5m()
+            try:
+                self._draw_breakout5m(filtered)  # 5m Breakout indicator (5m) — self-gated, fail-safe
+            except Exception:
+                self._clear_breakout5m()
             try:
                 self._draw_sr(filtered)        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
             except Exception:
@@ -7850,6 +7485,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             p.note_section(name, (time.perf_counter() - start) * 1000.0)
 
     def _perf_flush(self) -> None:
+        if self._memtrace is not None:
+            self._memtrace.maybe_snapshot()   # tracemalloc leak hunt: self-throttled to SESSION_MEMTRACE_SECS
         if self._perf is None:
             return
         try:
@@ -8028,23 +7665,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         PCM audio (see _synth_wav), the SAME engine the entry alerts use, so hearing it proves those work too."""
         self._play_tones([(880, 150), (1320, 200)])   # ascending confirm chime
 
-    # entry sound: which enabled strategy detectors to scan on a new close, first-hit wins.
-    # (key -> (module name, kwargs)); the module's detect(win, skip_last=False) is called.
+    # entry sound: each ENGULF strategy is tf-specific, so scan only the one whose tf matches the current chart.
     _SOUND_STRATS = (
-        (("m10_mmx_v11", "m10_mmx_v12d", "m10_mmx_v13"), "mmxskew_detect"),
-        (("m10_da2rev",),   "da2_reversion_detect"),
-        (("m10_skewdiv",),  "skew_divergence_detect"),
-        (("m10_flowflip",), "flow_flip_detect"),
+        ("m10_engulfsr", "engulf_sr_detect", "1h"),
+        ("m10_momentum", "momentum_detect", "15m"),
+        ("m10_engulf5m", "engulf5m_detect", "5m"),
     )
 
     def _audio_announce_strategies(self, snap) -> None:
-        """Beep the instant a NEW L/S entry prints on the just-closed 1h bucket, for ANY ENABLED strategy
-        overlay (MMXSKEW / DA2-REVERSION / Skew Divergence / Flow Flip). One shared 'entry sound' toggle
-        (m10_mmx_sound). LIVE-ONLY: seeded silently on enable / first data / tf-change, gated on a NEW bucket
-        close, and only when the just-closed live-edge bucket IS an entry. Buy=high tone, sell=low; a
-        v1.3-qualifying MMXSKEW print gets the distinctive double bell."""
-        if not self.menu.layer_state("m10_mmx_sound") or self._tf != "1h":
-            return                                 # strategies are 1h-only; sound off -> nothing to do
+        """Beep the instant a NEW L/S entry prints on the just-closed bucket, for whichever ENGULF S/R overlay is
+        ENABLED and matches the current timeframe (1h Engulf on 1h / 15m Engulf on 15m / 5m Engulf on 5m). One
+        shared 'entry sound' toggle (m10_mmx_sound). LIVE-ONLY: seeded silently on enable / first data / tf-change,
+        gated on a NEW bucket close, and only when the just-closed live-edge bucket IS an entry. Buy=high, sell=low."""
+        if not self.menu.layer_state("m10_mmx_sound"):
+            return
+        pick = next(((k, m) for k, m, tf in self._SOUND_STRATS
+                     if tf == self._tf and self.menu.layer_state(k)), None)
+        if pick is None:
+            return                                 # no enabled engulf strategy on this timeframe -> nothing to do
+        _key, modname = pick
         closed = (snap.get("closed_buckets") if snap else None) or []
         if not closed:
             return
@@ -8055,33 +7694,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if last_et == self._mmx_audio_last_et:
             return                                 # no NEW bucket closed since last check
         self._mmx_audio_last_et = last_et
-        win = closed[-400:]                        # enough lookback for eff-agg warm-up + the ORB day grouping
+        win = closed[-600:]                        # enough S/R + last-mitigation history for the engulf detectors
         if len(win) < 60:
             return
         L = len(win) - 1                           # the just-closed (live-edge) bucket
         import importlib
-        for keys, modname in self._SOUND_STRATS:
-            if not any(self.menu.layer_state(k) for k in keys):
-                continue                           # this strategy's overlay is off -> don't announce it
-            try:
-                # CLOSED buckets only (no active appended) -> skip_last=False, else the live-edge bucket (the
-                # ONLY one this path can beep on) is never emitted and the alert goes silent.
-                mod = importlib.import_module("app." + modname)
-                entries = mod.detect(win, skip_last=False)
-            except Exception:
-                continue
-            for e in entries:
-                if e["i"] != L:
-                    continue
-                if modname == "mmxskew_detect":
-                    # tier-aware: only announce when the entry qualifies for an ENABLED tier. v11 now carries the
-                    # v1.1 delta filter (frozen 2026-07-24), so a base signal that fails it must stay SILENT when
-                    # only v1.1 is enabled (matching the badge, which no longer draws for it).
-                    if not ((self.menu.layer_state("m10_mmx_v13") and e.get("v13"))
-                            or (self.menu.layer_state("m10_mmx_v12d") and e.get("v12d"))
-                            or (self.menu.layer_state("m10_mmx_v11") and e.get("v11"))):
-                        break                       # this bucket's mmx signal isn't in an enabled tier -> next strat
-                self._mmx_beep(e["side"] > 0, bool(e.get("v13"))); return   # first enabled hit wins
+        try:
+            # CLOSED buckets only -> skip_last=False so the live-edge bucket (the only one this path beeps on) is emitted.
+            mod = importlib.import_module("app." + modname)
+            entries = mod.detect(win, skip_last=False)
+        except Exception:
+            return
+        for e in entries:
+            if e["i"] == L:
+                self._mmx_beep(e["side"] > 0, False); return   # new entry on the just-closed bucket -> beep
 
     def _refresh_scale_labels(self, snap) -> None:
         """Push live per-tf bucket ~volumes into the Bucket Scale selector + window title. All
