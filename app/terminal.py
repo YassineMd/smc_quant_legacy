@@ -40,6 +40,7 @@ from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
 from . import bar_quantiles
 from . import archive          # local cold-archive reader — extends the scanner frame past the daemon's cap
+from . import recon_replay     # SEPARATE pre-daemon Binance-reconstruction store — replay-only, never merges with daemon
 from . import structure        # market-structure swing labels (HH/HL/LH/LL)
 from .chart_widgets import (
     WhiskerBarItem, FootprintCandleItem, DeltaCandleItem, ForceCandleItem, DeltaForceCandleItem,
@@ -303,6 +304,20 @@ def _absorb_color(a) -> str:
     if a <= -0.75:
         return "#2f80c4"                 # light
     return "#9aa0a6"                     # proportional -> neutral
+
+
+def _ker_read(v) -> str:
+    """Readable KER (Kinetic Efficiency Ratio = realized work / kinetic force). Shown as an EFFICIENCY PERCENT
+    (100% = work equals force); most buckets are heavily absorbed so read a fraction of 1% — far more legible
+    than the raw 4-decimal ratio. The vacuum case (work realised with zero directional force) shows as ∞."""
+    if v == 9999.0:
+        return "∞"                  # vacuum: work with no force
+    p = float(v) * 100.0
+    if p >= 1000.0:
+        return "%.0f%%" % p
+    if p >= 10.0:
+        return "%.1f%%" % p
+    return "%.2f%%" % p
 
 
 class _SubTimeAxis(pg.AxisItem):
@@ -654,6 +669,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._follow_x: bool = True
         self._follow_y: bool = True
         self._follow_last_n: int = -1
+        self._scanner_frame_n: int = 0     # rendered bucket count each frame (for replay step-follow when X is unlocked)
+        self._scanner_last_low = None      # newest rendered candle low/high (for replay VERTICAL step-follow)
+        self._scanner_last_high = None
         self._follow_prev_range = None
         self.vb.sigRangeChangedManually.connect(self._on_scanner_manual_range)
         self._depth_needs_calibration: bool = True       # one-shot depth-slider 90%-of-max baseline (§1)
@@ -914,6 +932,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._z4_user = {}            # {(round(end_time,3), 'V'|'Z'): bool}  (absent -> default: last bucket's Z on)
         self._z4_btn_hits = []        # [(x, y, end_time, kind, on)] rebuilt each draw, for click hit-testing
         self._z4_last_buckets = []    # cached canvas buckets so a button click can redraw the layer immediately
+        # "Prev. Day VP" indicator (m10_prevday_vp): one Volume Profile per PREVIOUS UTC day loaded on the canvas
+        # (current/most-recent day excluded). Histogram style follows the 'Volume Profile Mode' dropdown (_vp_mode).
+        self._pvp_hist_pool = []      # per-day VP histograms (horizontal BarGraphItems)
+        self._pvp_line_pool = []      # per-day POC/VAH/VAL/median/LVN level lines (PlotCurveItems)
+        self._pvp_sep_pool = []       # per-day UTC-midnight separators (dashed vlines)
         self._liq_status = pg.TextItem(anchor=(0, 0), color=(235, 225, 140))   # corner note: empty-by-location / zoom-in
         _lsf = QtGui.QFont("Consolas", 9); self._liq_status.textItem.setFont(_lsf)
         self._liq_status.setZValue(33); self.plot.addItem(self._liq_status, ignoreBounds=True)
@@ -1046,11 +1069,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._r15_sig = None; self._r15_drawn = False
         self._r15_entries = []
         self._r15_ln_pool = []; self._r15_lnlbl_pool = []; self._r15_lines_user = {}
+        # 1h Engulf S/R Reversal overlay (m10_engulfsr, 1h only) — star L/S badges; click -> entry/TP/SL trade lines
+        self._eng_sph = None                     # ScatterPlotItem of star badges
+        self._eng_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
+        self._eng_lbl_pool = []                  # L/S letters
+        self._eng_sig = None; self._eng_drawn = False
+        self._eng_entries = []
+        self._eng_ln_pool = []; self._eng_lnlbl_pool = []; self._eng_lines_user = {}
+        # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
+        self._mom_sph = None                     # ScatterPlotItem of square badges
+        self._mom_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
+        self._mom_lbl_pool = []                  # (unused; colour-only badges, kept for pool symmetry)
+        self._mom_sig = None; self._mom_drawn = False
+        self._mom_entries = []
+        self._mom_ln_pool = []; self._mom_lnlbl_pool = []; self._mom_lines_user = {}
         self._trline_buckets = []                # visible frame buckets for the shared trade-line exit walk
         # SUPPORT & RESISTANCE indicator (hamburger m10_sr) — neon-red resistance / neon-blue support, extended
         # until a candle closes through the level. Line THICKNESS = rejection strength (one curve per width tier,
         # segments NaN-separated), so a level thickens as price gets thrown back off it.
-        self._sr_items = None                    # dict (kind, tier) -> PlotCurveItem, lazily built
+        self._sr_items = None                    # dict (kind, tier) -> PlotCurveItem, lazily built (MITIGATED lines)
+        self._sr_rects = None                    # pool of QGraphicsRectItem — ACTIVE levels drawn as filled bands
         self._sr_sig = None; self._sr_drawn = False
         self.pivot_tooltip = pg.TextItem(anchor=(0.5, 0.0), fill=pg.mkBrush(18, 20, 26, 238),
                                          border=pg.mkPen(90, 96, 108, 220))
@@ -1588,10 +1626,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scan_nudge_timer.timeout.connect(self._on_scan_time_changed)
 
     def _default_scan_secs(self, tf: str) -> int:
-        """Default initial look-back for a fresh candle-canvas window, in seconds (past = negative).
-        1h and 4h load the last 10 DAYS by default (the multi-day setups need the context); every other
-        timeframe keeps the last 24h — 10 days of 1m/5m VOLUME buckets would be far too many to load/render."""
-        return -10 * 24 * 3600 if tf in ("1h", "4h") else -86400
+        """Default initial look-back for a fresh candle-canvas window, in seconds (past = negative). Per-tf so each
+        scale loads only the context it needs, not the whole archive: 1h/4h = 7 DAYS (multi-day setups), 15m = 5 DAYS
+        (the 15mReasy overlay context), 5m = 3 DAYS, 1m = last 24h (a week of 1m VOLUME buckets would be far too many
+        to load/render)."""
+        if tf in ("1h", "4h"):
+            return -7 * 24 * 3600
+        if tf == "15m":
+            return -5 * 24 * 3600
+        if tf == "5m":
+            return -3 * 24 * 3600
+        return -86400          # 1m: last 24h
+
+    def _replay_span_secs(self) -> int:
+        """Replay window WIDTH for the current tf = the SAME per-tf minimum as normal mode (7d on 1h/4h, 5d on 15m,
+        3d on 5m, 24h on 1m — see _default_scan_secs), so a replay loads the same days it would live instead of a
+        flat 24h. Left edge = replay-start - this. Drives BOTH the daemon and the recon (non-daemon) replay tracks."""
+        return -self._default_scan_secs(self.worker.tf)
+
+    def _replay_lookback_secs(self) -> int:
+        """How far the cold-archive is asked to reach before the replay cursor — always >= the replay span (+1d
+        buffer) so the whole window is populated even when it is wider than the config default (15m = 5 days)."""
+        return max(config.REPLAY_LOOKBACK_SECS, self._replay_span_secs() + 24 * 3600)
 
     def _set_scanner(self, mode: str, initial: bool = False) -> None:
         """Route between the bucket-native modes (Mode 10 canvas + the 9 metric scanners). Order:
@@ -1627,8 +1683,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scanner_needs_autofit = True       # one-shot fit for the new mode
         self._scanner_bucket_sig = None
         self._last_scanner_sig = None
-        # Mode-appropriate Scan Start window: Mode 10 (candle canvas) uses the per-tf default (10d on 1h/4h,
-        # 24h otherwise — see _default_scan_secs); the metric scanners default to a tighter 1h window. Signal
+        # Mode-appropriate Scan Start window: Mode 10 (candle canvas) uses the per-tf default (7d on 1h/4h, 5d on
+        # 15m, 3d on 5m, 24h on 1m — see _default_scan_secs); the metric scanners default to a tighter 1h window. Signal
         # blocked so the _on_timer below redraws from the new anchor without firing an extra teardown.
         _anchor_secs = self._default_scan_secs(self.worker.tf) if is_canvas else -3600
         target_dt = QtCore.QDateTime.currentDateTime().addSecs(_anchor_secs)
@@ -1681,8 +1737,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._clear_choch()                   # CHoCH lines re-detect on the new tf's buckets
         self.worker.request_timeframe(tf)
         if self.scanner_mode == "bucket_canvas":
-            # Re-anchor to THIS tf's default window (10d on 1h/4h, 24h otherwise) so switching timeframe
-            # honours the per-tf default instead of carrying the old tf's window (e.g. 1h's 10d onto 1m).
+            # Re-anchor to THIS tf's default window (7d on 1h/4h, 5d 15m, 3d 5m, 24h 1m) so switching timeframe
+            # honours the per-tf default instead of carrying the old tf's window (e.g. 1h's 7d onto 1m).
             target_dt = QtCore.QDateTime.currentDateTime().addSecs(self._default_scan_secs(tf))
             floor = self._drawing_scan_floor(tf)                     # then pull back to keep saved drawings in view
             if floor is not None:
@@ -1824,10 +1880,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._r15_sig = None; self._sel_sig = None   # 15mReasy toggled -> re-run the overlay draw
             if not on:
                 self._clear_r15easy()               # off -> tear the diamonds down now
+        elif key == "m10_engulfsr":
+            self._eng_sig = None; self._sel_sig = None   # 1h Engulf S/R toggled -> re-run the overlay draw
+            if not on:
+                self._clear_engulfsr()              # off -> tear the stars down now
+        elif key == "m10_momentum":
+            self._mom_sig = None; self._sel_sig = None   # 15m Momentum toggled -> re-run the overlay draw
+            if not on:
+                self._clear_momentum()              # off -> tear the squares down now
         elif key == "m10_sr":
             self._sr_sig = None; self._sel_sig = None    # Support/Resistance toggled -> re-run the overlay draw
             if not on:
                 self._clear_sr()                    # off -> tear the S/R lines down now
+        elif key == "m10_prevday_vp":
+            if not on:                              # per-prev-day VP -> hide now (draw-gate re-adds on ON)
+                self._hide_prevday_vp()
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -2065,10 +2132,38 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._solo_trade_lines(self._r15_lines_user, best, _on); ev.accept(); return
             except Exception:
                 pass
+        if (not ev.double() and self.scanner_mode == "bucket_canvas"
+                and self._eng_entries and self.menu.layer_state("m10_engulfsr")):
+            try:                               # click a 1h Engulf S/R star -> toggle its entry/TP/SL lines
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
+                best = None; bestdx = 2.5
+                for _en in self._eng_entries:
+                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:
+                        best = _en[0]; bestdx = abs(xc - _en[1])
+                if best is not None:
+                    _on = not self._eng_lines_user.get(best, False)   # exclusive: this position only, hide all others
+                    self._solo_trade_lines(self._eng_lines_user, best, _on); ev.accept(); return
+            except Exception:
+                pass
+        if (not ev.double() and self.scanner_mode == "bucket_canvas"
+                and self._mom_entries and self.menu.layer_state("m10_momentum")):
+            try:                               # click a 15m Momentum square -> toggle its entry/TP/SL lines
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
+                best = None; bestdx = 2.5
+                for _en in self._mom_entries:
+                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:
+                        best = _en[0]; bestdx = abs(xc - _en[1])
+                if best is not None:
+                    _on = not self._mom_lines_user.get(best, False)   # exclusive: this position only, hide all others
+                    self._solo_trade_lines(self._mom_lines_user, best, _on); ev.accept(); return
+            except Exception:
+                pass
         if not ev.double():
             return
-        # Ctrl + double-click a candle on 1h/4h -> pop-up: 1m detail chart of that bucket + its footprint pane
-        if (self.scanner_mode == "bucket_canvas" and self._tf in ("1h", "4h")
+        # Ctrl + double-click a candle on 15m/1h/4h -> pop-up: 1m detail chart of that bucket + its footprint pane
+        if (self.scanner_mode == "bucket_canvas" and self._tf in ("15m", "1h", "4h")
                 and (QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ControlModifier)):
             try:
                 pt = self.vb.mapSceneToView(ev.scenePos())
@@ -2121,10 +2216,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if ce <= cs:                                                   # forming bucket has no end yet -> all since cs
             ce = cs + 24 * 3600.0
         try:
-            subs = archive.subbuckets("1m", cs, ce)     # 1) local cold-archive mirror (historical)
+            if self._in_recon_replay():                 # RECON track: 1m constituents come from the reconstruction,
+                subs = recon_replay.window_by_time("1m", cs, ce)   # NOT the daemon archive (which has no pre-06-20 1m)
+            else:
+                subs = archive.subbuckets("1m", cs, ce)  # 1) local cold-archive mirror (historical)
         except Exception:
             subs = []
-        if not subs and getattr(self, "worker_1m", None) is not None:
+        if not subs and not self._in_recon_replay() and getattr(self, "worker_1m", None) is not None:
             try:                                          # 2) too fresh for the archive -> the LIVE 1m stream
                 _cb = (self.worker_1m.snapshot() or {}).get("closed_buckets") or []
                 subs = sorted((x for x in _cb if cs <= float(x.get("start_time", 0.0) or 0.0) < ce),
@@ -2665,6 +2763,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             out.append(row("Δ↑ / Δ↓", "--", GRAY))
             out.append(row("½dom", "--", GRAY))
+        _kb, _ks = self._bucket_ker(ab)                     # ker (Kinetic Efficiency Ratio) per side — pinned to the BOTTOM
+        out.append("<span style='color:%s'>ker</span> <span style='color:%s'>%s</span>"
+                   " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
+                   % (NEU, G if _kb > _ks else GRAY, _ker_read(_kb), NEU, R if _ks > _kb else GRAY, _ker_read(_ks)))
         return "<br>".join(out)
 
     def _refresh_parked_hover(self) -> None:
@@ -3834,6 +3936,132 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     a = [0.0, 0.0, 0.0, 0.0]; agg[ps] = a
                 a[0] += _b * fOL; a[1] += _s * fOS; a[2] += _s * fCL; a[3] += _b * fCS
         return agg
+
+    # ------------------------------------------------------------------
+    # "Prev. Day VP" indicator (m10_prevday_vp): a per-UTC-day Volume Profile for every PREVIOUS day loaded on the
+    # canvas. Reuses _vp_segments so the histogram TYPE follows the 'Volume Profile Mode' dropdown (_vp_mode).
+    # ------------------------------------------------------------------
+    def _pvp_hist(self, used, **opts):                          # pooled per-day VP histogram (BarGraphItem)
+        if used >= len(self._pvp_hist_pool):
+            _h = pg.BarGraphItem(x0=[0.0], width=[0.0], y=[0.0], height=[0.0], pen=None)
+            _h.setZValue(1); self.plot.addItem(_h, ignoreBounds=True); self._pvp_hist_pool.append(_h)
+        _hb = self._pvp_hist_pool[used]; _hb.setOpts(**opts)
+        return _hb
+
+    def _pvp_line(self, used):                                  # pooled per-day POC/VA level line (PlotCurveItem)
+        if used >= len(self._pvp_line_pool):
+            _c = pg.PlotCurveItem(); _c.setZValue(2)
+            self.plot.addItem(_c, ignoreBounds=True); self._pvp_line_pool.append(_c)
+        return self._pvp_line_pool[used]
+
+    def _pvp_sep(self, used):                                   # pooled per-day UTC-midnight separator (dashed vline)
+        if used >= len(self._pvp_sep_pool):
+            _pn = pg.mkPen(color=(150, 158, 175, 120), width=1); _pn.setCosmetic(True)
+            _pn.setDashPattern([2.0, 6.0])
+            _ln = pg.InfiniteLine(angle=90, movable=False, pen=_pn); _ln.setZValue(13)
+            self.plot.addItem(_ln, ignoreBounds=True); self._pvp_sep_pool.append(_ln)
+        return self._pvp_sep_pool[used]
+
+    def _hide_prevday_vp(self) -> None:
+        for _h in self._pvp_hist_pool:
+            _h.setVisible(False)
+        for _c in self._pvp_line_pool:
+            _c.setVisible(False)
+        for _s in self._pvp_sep_pool:
+            _s.setVisible(False)
+
+    @staticmethod
+    def _pvp_force_agg(day_bkts):
+        """{price_str: [opL, opS, clL, clS]} over ONE day's buckets — each bucket's per-level buy/sell volume split
+        by ITS OWN force ratios (identical detail to _z4_force_hist, but over an explicit bucket slice)."""
+        agg = {}
+        for m in day_bkts:
+            lv = m.get("levels") or {}
+            if not lv:
+                continue
+            oL = float(m.get("opL", 0.0)); oS = float(m.get("opS", 0.0))
+            cL = float(m.get("clL", 0.0)); cS = float(m.get("clS", 0.0))
+            bd = oL + cS; sd = oS + cL
+            fOL = oL / bd if bd > 0 else 0.5; fCS = cS / bd if bd > 0 else 0.5
+            fOS = oS / sd if sd > 0 else 0.5; fCL = cL / sd if sd > 0 else 0.5
+            for ps, vv in lv.items():
+                _b = float(vv.get("b", 0.0)); _s = float(vv.get("s", 0.0))
+                a = agg.get(ps)
+                if a is None:
+                    a = [0.0, 0.0, 0.0, 0.0]; agg[ps] = a
+                a[0] += _b * fOL; a[1] += _s * fOS; a[2] += _s * fCL; a[3] += _b * fCS
+        return agg
+
+    def _draw_prevday_vp(self, buckets) -> None:
+        """'Prev. Day VP' indicator (m10_prevday_vp): draw a Volume Profile for EVERY PREVIOUS UTC calendar day
+        present on the loaded canvas — the current / most-recent loaded day is EXCLUDED (prev day ONLY). Each day's
+        histogram is anchored at that day's LEFT edge and styled by the 'Volume Profile Mode' dropdown (_vp_mode);
+        POC/VAH/VAL/median/LVN lines span the day, and a dashed vline marks each UTC-midnight boundary. Days are UTC
+        (midnight..23:59), matching the daily-VA study + the Binance daily roll. Display-only — touches no buckets."""
+        if not self.menu.layer_state("m10_prevday_vp") or not buckets:
+            self._hide_prevday_vp(); return
+        # contiguous index range per UTC calendar day (buckets are time-ordered -> each date is one run)
+        days = []
+        cur = None
+        for i, b in enumerate(buckets):
+            d = datetime.utcfromtimestamp(float(b.get("start_time", 0.0) or 0.0)).date()
+            if cur is None or d != cur[0]:
+                cur = [d, i, i]; days.append(cur)
+            else:
+                cur[2] = i
+        if len(days) < 2:
+            self._hide_prevday_vp(); return          # only the current day loaded -> nothing "previous" to draw
+        uh = ul = us = 0
+        for _d, i0, i1 in days[:-1]:                  # EXCLUDE the last (current / most-recent) day
+            seg = buckets[i0:i1 + 1]
+            agg = self._pvp_force_agg(seg)
+            rows = sorted(((float(ps), a) for ps, a in agg.items()), key=lambda t: t[0])
+            if len(rows) >= 2 and max((sum(a) for _, a in rows), default=0.0) > 0:
+                prices = [p for p, _ in rows]
+                gaps = sorted(prices[k + 1] - prices[k] for k in range(len(prices) - 1))
+                thick = (gaps[len(gaps) // 2] if gaps else (prices[-1] - prices[0]) / max(1, len(prices))) * 0.9
+                span = float(max(1, i1 - i0))
+                _x0s, _ws, _ys, _hs, _brs = self._vp_segments(rows, self._vp_mode, float(i0), span, thick)
+                if _ws:
+                    self._pvp_hist(uh, x0=_x0s, width=_ws, y=_ys, height=_hs, brushes=_brs, pen=None).setVisible(True)
+                    uh += 1
+                raw = {}                              # raw b+s ladder -> POC / value area / median / LVN
+                for b in seg:
+                    for ps, vv in (b.get("levels") or {}).items():
+                        r = raw.get(ps)
+                        if r is None:
+                            r = [0.0, 0.0]; raw[ps] = r
+                        r[0] += float(vv.get("b", 0.0)); r[1] += float(vv.get("s", 0.0))
+                lvl = {ps: {"b": v[0], "s": v[1]} for ps, v in raw.items()}
+                try:
+                    _q = bar_quantiles.vq(lvl); _va = bar_quantiles.value_area(lvl); _poc = bar_quantiles.poc(lvl)
+                    lines = ((_va[1], (255, 30, 70), False), (_va[0], (0, 255, 120), False),
+                             (_poc, (255, 240, 0), False), (_q[1], (255, 255, 255), True),
+                             (bar_quantiles.lvn(lvl), (178, 70, 255), True))
+                except Exception:
+                    lines = ()
+                for _y, _col, _dash in lines:
+                    if not (_y and _y == _y):         # skip 0 / NaN
+                        continue
+                    _ln = self._pvp_line(ul); ul += 1
+                    _pn = pg.mkPen(_col, width=1.2); _pn.setCosmetic(True)
+                    if _dash:
+                        _pn.setDashPattern([3.0, 8.0])
+                    _ln.setData([float(i0), float(i1)], [float(_y), float(_y)])
+                    _ln.setBrush(None); _ln.setPen(_pn); _ln.setVisible(True)
+            if i0 > 0:                                # dashed UTC-midnight separator at the day's left edge (skip canvas edge)
+                _sp = self._pvp_sep(us); us += 1
+                _sp.setValue(float(i0)); _sp.setVisible(True)
+        cur_i0 = days[-1][1]                          # mark the current-day boundary too (where the prev-day VPs end)
+        if cur_i0 > 0:
+            _sp = self._pvp_sep(us); us += 1
+            _sp.setValue(float(cur_i0)); _sp.setVisible(True)
+        for _h in self._pvp_hist_pool[uh:]:           # hide leftovers from a previous (denser) frame
+            _h.setVisible(False)
+        for _c in self._pvp_line_pool[ul:]:
+            _c.setVisible(False)
+        for _s in self._pvp_sep_pool[us:]:
+            _s.setVisible(False)
 
     def _draw_4h_zone(self, buckets) -> None:
         """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median), ZONE ('Z': buy/sell wick bands), and ABNORMAL-ORDER
@@ -5030,6 +5258,158 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _draw_r15_lines(self) -> None:
         self._trade_lines(self._r15_entries, self._r15_lines_user, self._r15_ln_pool, self._r15_lnlbl_pool, 29)
 
+    # 1h Engulf S/R Reversal overlay (hamburger m10_engulfsr, 1h ONLY) — FORWARD CANDIDATE, self-gated, fail-safe.
+    # TRIANGLE 'L'/'S' badge (up-triangle long = buy at support / down-triangle short = sell at resistance — a mean-
+    # reversion; green/red + 1h-only keep it distinct from the skew-div triangles). Engulf reversal where c2 opens/
+    # touches a support (long) / resistance (short) zone = prev-day VA edge OR the S/R indicator (close-beyond only).
+    # Click a badge -> its entry/TP/SL trade lines. NOT a proven edge (see app/engulf_sr_detect docstring).
+    def _clear_engulfsr(self) -> None:
+        if self._eng_sph is not None:
+            self._eng_sph.setVisible(False)
+        if self._eng_ring is not None:
+            self._eng_ring.setVisible(False)
+        for _it in self._eng_lbl_pool + self._eng_ln_pool + self._eng_lnlbl_pool:
+            _it.setVisible(False)
+        self._eng_entries = []
+        self._eng_sig = None; self._eng_drawn = False
+
+    def _draw_engulfsr(self, filtered) -> None:
+        """Triangle L/S badges for the 1h Engulf S/R Reversal candidate (app/engulf_sr_detect). Needs S/R + prev-day VA
+        context, so the shared warm-up prefix is prepended and indices shifted back (like DA2/MMXSKEW/15mReasy). 1h ONLY."""
+        if (not self.menu.layer_state("m10_engulfsr") or self.scanner_mode != "bucket_canvas"
+                or self._tf != "1h"):
+            self._clear_engulfsr(); return
+        n = len(filtered)
+        warm = getattr(self, "_mmx_warm", None) or []                # shared prefix (S/R + prev-day VA context)
+        _off = len(warm)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        _sig = (n, _off, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._eng_sig and self._eng_drawn:
+            return
+        self._eng_sig = _sig
+        _fi = (n - 1) if _forming else -1                            # forming (unconfirmed) bucket -> faded preview
+        try:
+            from app import engulf_sr_detect
+            entries = engulf_sr_detect.detect(list(warm) + list(filtered), skip_last=False)
+        except Exception:
+            self._clear_engulfsr(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        INK = (10, 12, 18)
+        GRN, RED = (40, 220, 100), (240, 60, 78)
+        if self._eng_sph is None:
+            self._eng_sph = pg.ScatterPlotItem(pxMode=True, size=20, symbol="t1")   # triangle (reversal); per-spot below
+            self._eng_sph.setZValue(32); self.plot.addItem(self._eng_sph, ignoreBounds=True)
+        spots = []; ring_spots = []; self._eng_entries = []
+        for e in entries:
+            i = e["i"] - _off                                        # detect ran over warm+filtered -> filtered space
+            if i < 0 or i >= n:
+                continue
+            side = e["side"]
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)
+            self._eng_entries.append(("eng%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
+            col = (0, 168, 255) if e.get("relaxed") else (GRN if side > 0 else RED)   # R-easy-relaxed c1 -> BLUE (both sides)
+            _al = _PREVIEW_ALPHA if i == _fi else 255                # forming bucket -> faded preview
+            _pen_rgb = [int(c * 0.55) for c in col] + [_al]
+            _sym = "t1" if side > 0 else "t"                         # up-triangle long (buy support) / down short (sell resist.)
+            spots.append({"pos": (i, y), "symbol": _sym, "brush": pg.mkBrush(*col, _al),
+                          "pen": pg.mkPen(*_pen_rgb, width=1.2), "size": 20})
+            if e.get("flow_align"):                                  # trailing-flow aligns with the trade -> ring in the badge colour
+                ring_spots.append({"pos": (i, y), "symbol": "o", "size": 30, "brush": pg.mkBrush(0, 0, 0, 0),
+                                   "pen": pg.mkPen(*col, _al, width=1.8)})
+        self._eng_sph.setData(spots); self._eng_sph.setVisible(True)
+        if self._eng_ring is None:
+            self._eng_ring = pg.ScatterPlotItem(pxMode=True, symbol="o", size=30, brush=pg.mkBrush(0, 0, 0, 0))
+            self._eng_ring.setZValue(31); self.plot.addItem(self._eng_ring, ignoreBounds=True)
+        self._eng_ring.setData(ring_spots); self._eng_ring.setVisible(True)
+        for _lb in self._eng_lbl_pool:                               # colour-only badges — no L/S letters
+            _lb.setVisible(False)
+        self._eng_drawn = True
+        self._trline_buckets = filtered                              # click a star -> entry/TP/SL trade lines
+        self._draw_eng_lines()
+
+    def _draw_eng_lines(self) -> None:
+        self._trade_lines(self._eng_entries, self._eng_lines_user, self._eng_ln_pool, self._eng_lnlbl_pool, 29)
+
+    # 15m MOMENTUM overlay (hamburger m10_momentum, 15m ONLY) — FORWARD CANDIDATE, self-gated, fail-safe.
+    # LOSANGE (diamond) L/S badge: green up long / red down short; BLUE = at-S/R confluence (TP 1:2) — the positive subset.
+    # Engulfing breakout in the last-mitigation S/R regime; TP bumps to 1:2 when the signal sits AT a same-side S/R zone.
+    # Click a badge -> its entry/TP/SL trade lines. NOT a proven edge (see app/momentum_detect docstring).
+    def _clear_momentum(self) -> None:
+        if self._mom_sph is not None:
+            self._mom_sph.setVisible(False)
+        if self._mom_ring is not None:
+            self._mom_ring.setVisible(False)
+        for _it in self._mom_lbl_pool + self._mom_ln_pool + self._mom_lnlbl_pool:
+            _it.setVisible(False)
+        self._mom_entries = []
+        self._mom_sig = None; self._mom_drawn = False
+
+    def _draw_momentum(self, filtered) -> None:
+        """Square L/S badges for the 15m Momentum candidate (app/momentum_detect). Needs S/R + prev-day VA + structure-
+        bias context, so the shared warm-up prefix is prepended and indices shifted back (like Engulf/15mReasy). 15m ONLY."""
+        if (not self.menu.layer_state("m10_momentum") or self.scanner_mode != "bucket_canvas"
+                or self._tf != "15m"):
+            self._clear_momentum(); return
+        n = len(filtered)
+        warm = getattr(self, "_mmx_warm", None) or []                # shared prefix (S/R + prev-day VA + bias context)
+        _off = len(warm)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        _sig = (n, _off, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._mom_sig and self._mom_drawn:
+            return
+        self._mom_sig = _sig
+        _fi = (n - 1) if _forming else -1                            # forming (unconfirmed) bucket -> faded preview
+        try:
+            from app import momentum_detect
+            entries = momentum_detect.detect(list(warm) + list(filtered), skip_last=False)
+        except Exception:
+            self._clear_momentum(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        GRN, RED, GOLD = (40, 220, 100), (240, 60, 78), (255, 200, 40)
+        US_CYAN, US_MAG = (0, 230, 255), (255, 0, 230)              # US tier = NEON cyan(long)/magenta(short) (edge pocket)
+        if self._mom_sph is None:
+            self._mom_sph = pg.ScatterPlotItem(pxMode=True, size=17, symbol="d")   # losange/diamond (momentum); per-spot below
+            self._mom_sph.setZValue(32); self.plot.addItem(self._mom_sph, ignoreBounds=True)
+        spots = []; ring_spots = []; self._mom_entries = []
+        for e in entries:
+            i = e["i"] - _off                                        # detect ran over warm+filtered -> filtered space
+            if i < 0 or i >= n:
+                continue
+            side = e["side"]
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)
+            self._mom_entries.append(("mom%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
+            _tier = e.get("tier", "normal")                          # gold / conf(blue) / us(NEON) / normal
+            if _tier == "gold":
+                col = GOLD
+            elif _tier == "conf":
+                col = (0, 168, 255)                                  # blue
+            elif _tier == "us":
+                col = US_CYAN if side > 0 else US_MAG                # US-pocket edge -> NEON cyan(long)/magenta(short)
+            else:
+                col = GRN if side > 0 else RED
+            _al = _PREVIEW_ALPHA if i == _fi else 255                # forming bucket -> faded preview
+            _pen_rgb = [int(c * 0.55) for c in col] + [_al]
+            spots.append({"pos": (i, y), "symbol": "d", "brush": pg.mkBrush(*col, _al),
+                          "pen": pg.mkPen(*_pen_rgb, width=1.2), "size": 17})
+            if e.get("flow_align"):                                  # trailing-flow aligns with the trade -> ring in the badge colour
+                ring_spots.append({"pos": (i, y), "symbol": "o", "size": 26, "brush": pg.mkBrush(0, 0, 0, 0),
+                                   "pen": pg.mkPen(*col, _al, width=1.8)})
+        self._mom_sph.setData(spots); self._mom_sph.setVisible(True)
+        if self._mom_ring is None:
+            self._mom_ring = pg.ScatterPlotItem(pxMode=True, symbol="o", size=26, brush=pg.mkBrush(0, 0, 0, 0))
+            self._mom_ring.setZValue(31); self.plot.addItem(self._mom_ring, ignoreBounds=True)
+        self._mom_ring.setData(ring_spots); self._mom_ring.setVisible(True)
+        for _lb in self._mom_lbl_pool:                               # colour-only badges — no L/S letters
+            _lb.setVisible(False)
+        self._mom_drawn = True
+        self._trline_buckets = filtered                             # click a square -> entry/TP/SL trade lines
+        self._draw_mom_lines()
+
+    def _draw_mom_lines(self) -> None:
+        self._trade_lines(self._mom_entries, self._mom_lines_user, self._mom_ln_pool, self._mom_lnlbl_pool, 30)
+
     # ------------------------------------------------------------------
     # SUPPORT & RESISTANCE indicator (hamburger m10_sr) — self-gated, fail-safe. A pivot high -> neon-RED
     # resistance, a pivot low -> neon-BLUE support; each extends right until a candle CLOSES through it, then
@@ -5040,11 +5420,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._sr_items:
             for _it in self._sr_items.values():
                 _it.setVisible(False)
+        if self._sr_rects:
+            for _rc in self._sr_rects:
+                _rc.setVisible(False)
         self._sr_sig = None; self._sr_drawn = False
 
     def _draw_sr(self, filtered) -> None:
-        """Neon S/R lines (app/support_resistance), thickness = rejection strength. Any timeframe; closed-only
-        detection (the forming bucket can't be a confirmed pivot). Unbroken levels extend to the live edge."""
+        """S/R as AREAS (app/support_resistance). An ACTIVE (unbroken) level draws as a faint blue(support)/red
+        (resistance) BAND spanning the whole pivot candle's high->low, extending right to the live edge; the fill is
+        low-opacity and the BORDER thickens with rejection strength (same tier scale the line thickness used). Once a
+        level is MITIGATED (a candle closed through it) the band converts to a plain LINE, so the two read differently.
+        Any timeframe; closed-only detection (a forming bucket can't be a confirmed pivot)."""
         if not self.menu.layer_state("m10_sr") or self.scanner_mode != "bucket_canvas":
             self._clear_sr(); return
         n = len(filtered)
@@ -5067,19 +5453,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._sr_items = {}
             for _kind, _rgb in (("R", RES), ("S", SUP)):
                 for _t, _w in enumerate(widths):
-                    _it = pg.PlotCurveItem(connect="finite"); _it.setZValue(24)
+                    _it = pg.PlotCurveItem(connect="finite"); _it.setZValue(24)   # MITIGATED level -> line, on top
                     _it.setPen(pg.mkPen(*_rgb, width=_w)); _it.opts["pen"].setCosmetic(True)
                     self.plot.addItem(_it, ignoreBounds=True)
                     self._sr_items[(_kind, _t)] = _it
+        if self._sr_rects is None:
+            self._sr_rects = []
         _nan = float("nan")
-        buf = {k: ([], []) for k in self._sr_items}                  # (xs, ys) per (kind, tier)
+        buf = {k: ([], []) for k in self._sr_items}                  # (xs, ys) per (kind, tier) — mitigated lines
+        rects = []                                                   # (x0, x1, ylo, yhi, rgb, tier) — active bands
         for lv in levels:
-            kind = lv["kind"]; price = lv["price"]
-            segs = lv.get("segs") or []
-            if not segs:                                             # fallback: whole line at the thinnest tier
-                x0 = lv["i0"]; x1 = lv["i1"] if lv["i1"] is not None else (n - 1)
-                if x1 > x0:
-                    segs = [(x0, x1, 0)]
+            kind = lv["kind"]; price = lv["price"]; i0 = lv["i0"]; i1 = lv["i1"]
+            rgb = RES if kind == "R" else SUP
+            _t0 = min(nt - 1, max(0, int(lv.get("tier", 0))))
+            if i1 is None and 0 <= i0 < n:                           # ACTIVE -> filled band over the pivot candle range
+                b0 = filtered[i0]
+                ylo = float(b0.get("low", 0.0) or 0.0); yhi = float(b0.get("high", 0.0) or 0.0)
+                if yhi <= ylo:                                       # degenerate pivot candle -> a hair around the level
+                    ylo, yhi = price * (1 - 5e-4), price * (1 + 5e-4)
+                rects.append((i0, n - 1, ylo, yhi, rgb, _t0))
+                continue
+            segs = lv.get("segs") or []                              # MITIGATED -> line segments at the level price
+            if not segs:
+                x1 = i1 if i1 is not None else (n - 1)
+                if x1 > i0:
+                    segs = [(i0, x1, 0)]
             for sa, sb, t in segs:
                 if sb <= sa:
                     continue
@@ -5089,6 +5487,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for key, _it in self._sr_items.items():
             xs, ys = buf[key]
             _it.setData(xs, ys); _it.setVisible(bool(xs))
+
+        def _merge_bands(rs):                                        # fold same-kind ACTIVE bands whose price ranges overlap
+            rs = sorted(rs, key=lambda z: z[2])                      # into ONE (widest span, deepest low->high, strongest tier)
+            m = []
+            for r in rs:
+                if m and r[2] <= m[-1][3]:                           # this ylo <= the running yhi -> overlap -> merge
+                    p = m[-1]
+                    m[-1] = (min(p[0], r[0]), max(p[1], r[1]), min(p[2], r[2]), max(p[3], r[3]), p[4], max(p[5], r[5]))
+                else:
+                    m.append(r)
+            return m
+        rects = _merge_bands([r for r in rects if r[4] == RES]) + _merge_bands([r for r in rects if r[4] == SUP])
+        for j, (x0, x1, ylo, yhi, rgb, tier) in enumerate(rects):    # active bands: faint fill + strength-thickened border
+            if j >= len(self._sr_rects):
+                _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-7)   # behind the candles -> background zone
+                self.vb.addItem(_rc, ignoreBounds=True); self._sr_rects.append(_rc)
+            _rc = self._sr_rects[j]
+            _rc.setRect(x0, ylo, max(1e-9, x1 - x0), max(1e-9, yhi - ylo))
+            _rc.setBrush(pg.mkBrush(*rgb, 20 + tier * 8))            # low opacity, a touch stronger per tier
+            _pen = pg.mkPen(*rgb, 210, width=widths[tier]); _pen.setCosmetic(True)
+            _rc.setPen(_pen)
+            _rc.setVisible(True)
+        for j in range(len(rects), len(self._sr_rects)):
+            self._sr_rects[j].setVisible(False)
         self._sr_drawn = True
 
     def _mmx_badge(self, used, x, y, text, tcol, fill, alpha=255):
@@ -5171,13 +5593,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (across MMXSKEW / DA2 / Skew Divergence / Flow Flip), so only ONE position is on the chart at a time.
         Clicking the already-shown badge turns it OFF (nothing shown). Called by every strategy badge click."""
         for d in (self._mmx_lines_user, self._d2r_lines_user, self._skd_lines_user,
-                  self._ff_lines_user, self._r15_lines_user):
+                  self._ff_lines_user, self._r15_lines_user, self._eng_lines_user, self._mom_lines_user):
             d.clear()                          # drop every currently-shown position (this + all other strategies)
         if turn_on:
             active_user[key] = True            # ...then light up only the just-clicked one
         # redraw all so the cleared strategies' lines disappear and the chosen one appears
         self._draw_mmx_lines(); self._draw_da2rev_lines(); self._draw_skd_lines()
-        self._draw_ff_lines(); self._draw_r15_lines()
+        self._draw_ff_lines(); self._draw_r15_lines(); self._draw_eng_lines(); self._draw_mom_lines()
 
     def _trade_lines(self, entries, user, cpool, lpool, zline) -> None:
         """Shared renderer: for each toggled-ON entry draw ENTRY (white dashed, price tag) + TP (green) + SL (red)
@@ -6316,12 +6738,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 except Exception:
                     self._clear_r15easy()
                 try:
+                    self._draw_engulfsr(_pf or [])  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
+                except Exception:
+                    self._clear_engulfsr()
+                try:
+                    self._draw_momentum(_pf or [])  # 15m Momentum overlay (15m) — self-gated, fail-safe
+                except Exception:
+                    self._clear_momentum()
+                try:
                     self._draw_sr(_pf or [])        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
                 except Exception:
                     self._clear_sr()
             else:
                 self._clear_pivot(); self._clear_mmxskew(); self._clear_da2rev()   # nothing on -> clear all
-                self._clear_skewdiv(); self._clear_flowflip(); self._clear_r15easy(); self._clear_sr()
+                self._clear_skewdiv(); self._clear_flowflip(); self._clear_r15easy(); self._clear_engulfsr()
+                self._clear_momentum(); self._clear_sr()
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -6401,6 +6832,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_r15easy(filtered)   # 15mReasy overlay (15m) — self-gated, fail-safe
             except Exception:
                 self._clear_r15easy()
+            try:
+                self._draw_engulfsr(filtered)  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
+            except Exception:
+                self._clear_engulfsr()
+            try:
+                self._draw_momentum(filtered)  # 15m Momentum overlay (15m) — self-gated, fail-safe
+            except Exception:
+                self._clear_momentum()
             try:
                 self._draw_sr(filtered)        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
             except Exception:
@@ -7184,11 +7623,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _dP_row = (f"{span('ΔP', gray)} {span('%+.2f%%' % _dP_t, _pcol(_dP_t))}"
                            f"  {span('(h1 %+.2f' % _dP_1, _pcol(_dP_1))} {span('/', gray)}"
                            f" {span('h2 %+.2f)' % _dP_2, _pcol(_dP_2))}")
-            # KINETIC EFFICIENCY RATIO (KER) — Realized Work / Kinetic Force per side (see _bucket_ker).
+            # KINETIC EFFICIENCY RATIO (KER) — Realized Work / Kinetic Force per side (see _bucket_ker), shown as a
+            # readable efficiency % via _ker_read (100% = work == force; ∞ = vacuum).
             _ker_buy, _ker_sell = self._bucket_ker(b)
-
-            def _kerf(v):
-                return "9999.0" if v == 9999.0 else f"{v:.4f}"
             # Mov.Magnitude (operator formula) — the squared percent move, scaled ×100: a magnitude that GROWS
             # QUADRATICALLY with the % move (a 2% bucket reads 4× a 1% one). = ((close*100/ref - 100)^2) * 100.
             # The reference is the candle's FAR extreme, so the magnitude spans the whole DIRECTIONAL range
@@ -7315,8 +7752,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 f"{span('Sell-vel ' + K(_svl) + '/s', r if _svl > _bvl else gray)}",
                 f"{span('Tape-B ' + _tps(_tape_b), g if (_tape_b or 0.0) > (_tape_s or 0.0) else gray)} | "
                 f"{span('Tape-S ' + _tps(_tape_s), r if (_tape_s or 0.0) > (_tape_b or 0.0) else gray)}",
-                span("KER_buy: " + _kerf(_ker_buy), g if _ker_buy > 0 else gray),
-                span("KER_sell: " + _kerf(_ker_sell), r if _ker_sell > 0 else gray),
+                span("KER_buy: " + _ker_read(_ker_buy), g if _ker_buy > 0 else gray),
+                span("KER_sell: " + _ker_read(_ker_sell), r if _ker_sell > 0 else gray),
                 span("Mov.Magnitude: " + _pmr_s, _pmr_col),
                 span("Skew: " + _skew_s, _skew_col),
                 span("MM × Skew: " + _ms_s, _ms_col),
@@ -7711,6 +8148,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             cb = (snap or {}).get("closed_buckets") or []
             if cb:
                 min_ts = float(cb[0].get("start_time", 0.0))
+        # REPLAY mode also unlocks the pre-daemon Binance reconstruction (back to 2025-01-01); NORMAL mode never does,
+        # so the reconstructed pre-2026-06-20 dates stay FADED/unselectable while live.
+        if self._replay_on:
+            try:
+                if recon_replay.available(tf):
+                    rmin = recon_replay.earliest_start(tf)
+                    if rmin is not None:
+                        min_ts = min(min_ts, rmin) if min_ts is not None else rmin
+            except Exception:
+                pass
         min_d = QtCore.QDateTime.fromSecsSinceEpoch(int(min_ts)).date() if min_ts else None
         return min_d, QtCore.QDate.currentDate()
 
@@ -7731,6 +8178,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             edit.blockSignals(False)
         if not on:
             self._replay_edge_t = None
+            # RESET the Zero Point to THIS tf's normal window. Otherwise the Start Date stays parked at the replay
+            # cursor (which may be a pre-daemon 2025 date), so normal mode would load from there all the way to now
+            # — the whole archive. Mirror _change_tf: per-tf default, pulled back only to keep saved drawings in view.
+            _tf = self.worker.tf
+            reset_dt = QtCore.QDateTime.currentDateTime().addSecs(self._default_scan_secs(_tf))
+            floor = self._drawing_scan_floor(_tf)
+            if floor is not None:
+                floor_dt = QtCore.QDateTime.fromSecsSinceEpoch(int(floor))
+                if floor_dt < reset_dt:                          # only ever pull back, never forward
+                    reset_dt = floor_dt
+            edit = self.menu.scan_time_edit
+            edit.blockSignals(True)
+            edit.setDateTime(reset_dt)
+            edit.blockSignals(False)
         # _on_scan_time_changed seats the cursor at the Start Date (when on) and forces the full re-derive + refit.
         self._on_scan_time_changed()
         if on:
@@ -7761,8 +8222,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
+    def _in_recon_replay(self) -> bool:
+        """True when a replay cursor sits in the pre-daemon (Binance-reconstruction) era — a SEPARATE replay track
+        that sources ONLY from recon_replay and never touches daemon data. Normal mode is never recon."""
+        return bool(self._replay_on and self._replay_edge_t is not None
+                    and float(self._replay_edge_t) < recon_replay.CUTOFF
+                    and recon_replay.available(self.worker.tf if getattr(self, "worker", None) else "1m"))
+
     def _replay_snap_to_bucket(self, t: float) -> float:
-        """Snap a wall time to the newest CLOSED bucket end_time <= t, so the cursor always sits on a real bar edge."""
+        """Snap a wall time to the newest CLOSED bucket end_time <= t, so the cursor sits on a real bar edge. In the
+        pre-daemon (reconstruction) era, snap against the RECON buckets instead of the daemon's live window."""
+        if self._replay_on and float(t) < recon_replay.CUTOFF and getattr(self, "worker", None) \
+                and recon_replay.available(self.worker.tf):
+            win = recon_replay.window_by_time(self.worker.tf, float(t) - self._replay_lookback_secs(), float(t))
+            cand = [float(b.get("end_time", 0.0)) for b in win if float(b.get("end_time", 0.0)) <= t]
+            return cand[-1] if cand else float(t)
         snap = self._last_snap or (self.worker.snapshot() if getattr(self, "worker", None) else None)
         cand = [float(b.get("end_time", 0.0)) for b in ((snap or {}).get("closed_buckets") or [])
                 if float(b.get("end_time", 0.0)) <= t]
@@ -7777,7 +8251,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         snap = self._last_snap or self.worker.snapshot()
         # step through the FULL available sequence — the loaded cold-archive window PLUS the live closed buckets —
         # so an archive-region replay advances bar-by-bar instead of jumping to (or stalling at) the live buffer.
-        seq = list(self._arch_win or []) + list(snap.get("closed_buckets") or [])
+        # RECON track: step ONLY over the reconstruction window (no daemon live buckets) -> a hard wall at 2026-06-20.
+        if self._in_recon_replay():
+            seq = list(self._arch_win or [])
+        else:
+            seq = list(self._arch_win or []) + list(snap.get("closed_buckets") or [])
         ets = sorted({float(b.get("end_time", 0.0)) for b in seq})
         if not ets:
             return
@@ -7791,7 +8269,46 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._replay_remember()           # persist the new position (debounced) so a restart resumes here
             self._scanner_bucket_sig = None; self._last_scanner_sig = None
             self._pivot_sig = None; self._sel_sig = None
+            prev_n = self._scanner_frame_n                        # frame length BEFORE the re-render (for the follow delta)
+            (pvx0, pvx1), _ = self.vb.viewRange()                # the user's current X framing, captured pre-render
             self._on_timer()
+            self._replay_follow(prev_n, pvx0, pvx1)              # scroll WITH the cursor, keeping the user's exact framing
+
+    def _replay_follow(self, prev_n: int, pvx0: float, pvx1: float) -> None:
+        """After a Left/Right replay step, move the view WITH the cursor while preserving EXACTLY how the user framed
+        the window — the newest candle keeps its same offset from the right edge and the same zoom width (X), and the
+        view pans up/down only when that candle would otherwise fall OUTSIDE the current vertical window (Y), keeping
+        the user's zoom height. Each axis is handled only when its live-follow is unlocked; a still-locked axis was
+        already positioned by _roll_to_live_edge, so it's skipped here."""
+        if not self._replay_on or self.scanner_mode != "bucket_canvas":
+            return
+        new_n = self._scanner_frame_n
+        if new_n <= 0:
+            return
+        # --- X: keep the newest candle's exact horizontal placement (its offset from the right edge + the width) ---
+        if not self._follow_x and prev_n > 0:
+            width = pvx1 - pvx0
+            if width > 0:
+                off_right = pvx1 - (prev_n - 1)                  # gap the user left to the right of the cursor
+                vx1 = (new_n - 1) + off_right                    # re-anchor to the newest candle's current index
+                self.vb.setXRange(vx1 - width, vx1, padding=0)   # programmatic -> won't trip the manual-unlock
+        # --- Y: pan vertically ONLY if the newest candle left the window; preserve the user's zoom height ---
+        if not self._follow_y and self._scanner_last_low is not None and self._scanner_last_high is not None:
+            (_, (vy0, vy1)) = self.vb.viewRange(); h = vy1 - vy0
+            lo = self._scanner_last_low; hi = self._scanner_last_high
+            if h > 0:
+                if (hi - lo) > h:                                # candle taller than the view -> centre it
+                    mid = 0.5 * (hi + lo)
+                    self.vb.setYRange(mid - 0.5 * h, mid + 0.5 * h, padding=0)
+                else:
+                    m = 0.08 * h; dy = 0.0
+                    if hi > vy1:                                 # poked above the top -> pan up
+                        dy = hi - vy1 + m
+                    elif lo < vy0:                               # poked below the bottom -> pan down
+                        dy = lo - vy0 - m
+                    if dy != 0.0:
+                        self.vb.setYRange(vy0 + dy, vy1 + dy, padding=0)
+        self._follow_prev_range = self.vb.viewRange()            # keep the mouse-diff baseline current
 
     def _toggle_replay_autoplay(self) -> None:
         """Ctrl+Right in Replay Mode: START auto-playing forward (reveal a candle every REPLAY_AUTOPLAY_MS). Pressing
@@ -7971,6 +8488,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._clear_structure()    # hide HH/HL/LH/LL labels when leaving Mode 10 (pool-managed, not swept)
         self._clear_choch()        # hide CHoCH dashed lines when leaving Mode 10
         self._hide_4h_zone()       # hide the 4h buy/sell wick bands when leaving Mode 10
+        self._hide_prevday_vp()    # hide the per-previous-day Volume Profiles when leaving Mode 10
         self._hide_eff_cycles(); self._hide_abs_cycles()   # hide the P2 + P1 HM sub-panels when leaving Mode 10
         # 1. sweep every tracked scanner item off the plot
         for item in self.active_scanner_items:
@@ -8112,7 +8630,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         total_closed = int(snap.get("total_closed", 0) or 0)   # DB-id of closed_list[-1] (0 = pre-redeploy daemon)
         _replay = self._replay_on and self._replay_edge_t is not None
         if _replay:                                            # REPLAY: reach cold-archive context BEFORE the cursor
-            anchor_unix = int(self._replay_edge_t) - config.REPLAY_LOOKBACK_SECS
+            anchor_unix = int(self._replay_edge_t) - self._replay_lookback_secs()
+        if _replay and self._in_recon_replay():                # RECON TRACK: source the frame from the Binance
+            _edge = float(self._replay_edge_t)                 # reconstruction, NOT the daemon — a self-contained
+            _start = float(self._replay_start_t if self._replay_start_t is not None else _edge)  # pre-2026-06-20 replay
+            _lo = min(_start - self._replay_span_secs(), _edge - self._replay_lookback_secs())
+            closed_list = recon_replay.window_by_time(self.worker.tf, _lo,
+                                                      min(_edge + self._replay_span_secs(), recon_replay.CUTOFF))
+            active = {}                                        # no live forming edge before the daemon existed
+            total_closed = len(closed_list)                    # frozen historical clip -> Idx base is cosmetic here
+            self._arch_win = closed_list; self._arch_win_key = None   # _advance_replay steps over this recon window
         if _replay and getattr(self, "_replay_dbg", False):
             _o0 = float(closed_list[0].get("start_time", 0.0)) if closed_list else 0.0
             self._rdbg("BUILD cursor=%d anchor=%d wk_closed=%d wk_oldest_start=%d total_closed=%d arch_ext=%s gate=%s"
@@ -8124,7 +8651,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # total_closed), so the offset below stays exact — offset lands on the oldest archived bid. Gated to
         # the scrolled-back case + cached per (tf, anchor, edge) + guarded: normal use and any archive failure
         # fall straight through to the live-only frame, so this can never break the live path.
-        if (self._archive_extend and total_closed > 0 and closed_list
+        if (self._archive_extend and total_closed > 0 and closed_list and not self._in_recon_replay()
                 and anchor_unix < float(closed_list[0].get("start_time", 0.0))):
             before_bid = total_closed - len(closed_list) + 1
             akey = (self.worker.tf, anchor_unix, before_bid)
@@ -8159,7 +8686,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     m += 1
                 else:
                     break
-            left_t = float(self._replay_start_t if self._replay_start_t is not None else et) - config.REPLAY_SPAN_SECS
+            left_t = float(self._replay_start_t if self._replay_start_t is not None else et) - self._replay_span_secs()
             _lo = 0
             for b in closed_list[:m]:
                 if float(b.get("start_time", 0.0)) < left_t:
@@ -9911,6 +10438,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                      "baseline", "vpin", "pens", "ber30", "ser30", "velabn",
                      "vq_lo", "vq_med", "vq_hi")
 
+    def _imb_baseline_rel(self, buckets: list) -> tuple:
+        """RECON-REPLAY ONLY abnormal-order baseline, price-scale-invariant (daemon/live path never calls this).
+
+        The stored per-bucket ``buyer_er = buy_vol / effort_ticks`` measures dispersion in ABSOLUTE $0.01 ticks,
+        so at the reconstruction's ~$200 SOL (2025) vs the daemon's ~$72 the same % dispersion is ~3x more ticks
+        and the imbalance lines over-light. Re-express effort in BASIS POINTS of price — algebraically an exact
+        rescale of the stored value: ``er_rel = buyer_er * (close / 100)`` (reference $100, where it equals the
+        daemon's current behaviour). Then take the trailing-``EXH_WINDOW`` mean EXCLUDING i, byte-identical to the
+        windowing ``_bucket_row`` uses for the daemon ber30/ser30 (``buckets[i-EXH:i]``). Returns (ber30s, ser30s).
+        """
+        n = len(buckets)
+        er_b = [0.0] * n; er_s = [0.0] * n
+        for i, b in enumerate(buckets):
+            px = float(b.get("close", 0.0) or 0.0)
+            if px <= 0.0:
+                continue
+            k = px / 100.0
+            er_b[i] = float(b.get("buyer_er", 0.0)) * k
+            er_s[i] = float(b.get("seller_er", 0.0)) * k
+        ber30s = [0.0] * n; ser30s = [0.0] * n
+        for i in range(n):
+            lo = max(0, i - EXH_WINDOW)
+            if i > lo:
+                w = i - lo
+                ber30s[i] = sum(er_b[lo:i]) / w
+                ser30s[i] = sum(er_s[lo:i]) / w
+        return ber30s, ser30s
+
     def _compute_bucket_arrays(self, buckets: list, anchor_unix: float) -> dict:
         """Static closed-bucket compute cache (#3): return the 10 per-bucket render
         arrays, recomputing ONLY the live edge (``buckets[-1]``) + any newly-closed
@@ -10224,6 +10779,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_4h_zone(buckets)                            # 4h buy/sell wick zones (m10_4hzone)
         except Exception:
             self._hide_4h_zone()
+        try:
+            self._draw_prevday_vp(buckets)                         # per-previous-UTC-day Volume Profile (m10_prevday_vp)
+        except Exception:
+            self._hide_prevday_vp()
 
         # --- Keltner Channel: EMA(close) basis ± ATR band. LIGHT GRAY upper/lower (match the POC baseline);
         #     the EMA MIDDLE line is HIDDEN (operator pref — the POC baseline is the center reference). ---
@@ -10286,6 +10845,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # trailing-30 BER/SER from the #3 cache (arr["ber30"/"ser30"], computed once per closed bucket —
         # this was the single biggest per-frame cost: O(N·30) dict-gets, ~81ms at 10k buckets).
         ber30s, ser30s = arr["ber30"], arr["ser30"]
+        # RECON REPLAY ONLY (daemon/live path untouched): the abnormal-order baseline buyer_er = buy_vol/effort_ticks
+        # counts effort in ABSOLUTE $0.01 ticks, so at the reconstruction's higher SOL price (~$200 in 2025 vs the
+        # daemon's ~$72) the same % dispersion spans ~3x more ticks -> the imbalance lines over-light (4-18/candle vs
+        # the daemon's ~1). Swap in a PRICE-SCALE-INVARIANT baseline (effort in basis points of price) so the lines
+        # mean the same at any price. Same trailing-EXH_WINDOW windowing as _bucket_row (buckets[i-EXH:i]).
+        if self._in_recon_replay():
+            ber30s, ser30s = self._imb_baseline_rel(buckets)
 
         # IMBALANCE LINES — ALWAYS drawn (independent of the footprint toggle): a horizontal neon line the
         # candle's width AT an imbalanced level's EXACT price (buy >= 30b BER -> neon BLUE; sell >= 30b SER
@@ -10458,6 +11024,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                                   brushes=vbrushes, pen=None)
         self._set_vpin_line("bc_vpin_line", x, vtoxics)
 
+        # --- lower pane: signed trailing-FLOW line (order imbalance), 0.5-centred on the VPIN scale ---
+        # 0.5 = balanced; ABOVE mid = net BUY flow (longs earn the align RING), BELOW = net SELL flow (shorts).
+        # Uses the SAME trailing window the engulf overlays ring with (15m: 12 incl / 1h: 3 pre-signal; else 8),
+        # so this cyan line reads as "why that badge is / isn't ringed". Signed RSV in [-1,1] -> 0.5+0.5*RSV in [0,1].
+        _fk, _fx = {"15m": (12, False), "1h": (3, True)}.get(self._tf, (8, False))
+        _pb = [0.0] * (len(buckets) + 1); _psv = [0.0] * (len(buckets) + 1)
+        for _i, _b in enumerate(buckets):
+            _pb[_i + 1] = _pb[_i] + float(_b.get("buy_vol", 0.0) or 0.0)
+            _psv[_i + 1] = _psv[_i] + float(_b.get("sell_vol", 0.0) or 0.0)
+        flow_y = []
+        for _i in range(len(buckets)):
+            _hi = _i if _fx else _i + 1
+            _a = max(0, _hi - _fk); _bs = _pb[_hi] - _pb[_a]; _ss = _psv[_hi] - _psv[_a]
+            flow_y.append((0.5 + 0.5 * ((_bs - _ss) / (_bs + _ss))) if (_bs + _ss) > 0 else 0.5)
+        if "bc_flow" not in self._scan_handles:
+            _mid = pg.InfiniteLine(pos=0.5, angle=0, pen=pg.mkPen("#555555", style=QtCore.Qt.DotLine, width=1))
+            _mid.setZValue(5); self.lower_plot.addItem(_mid, ignoreBounds=True)
+            self._scan_handles["bc_flow_mid"] = _mid
+            _fl = pg.PlotDataItem(pen=pg.mkPen("#00e5ff", width=1.6))
+            _fl.setZValue(21); self.lower_plot.addItem(_fl)
+            self._scan_handles["bc_flow"] = _fl
+        self._scan_handles["bc_flow"].setData(x=list(x), y=flow_y)
+
         # --- view-follow (replaces the one-shot fit). A mode/tf/Zero-Point re-arm
         # (_scanner_needs_autofit) re-locks BOTH axes + drops us on the live edge, consuming
         # that flag exactly as _fit_scanner_y used to. The Y fit uses candles only
@@ -10465,6 +11054,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # roll runs whenever either axis is locked (each axis gated inside). After the draw
         # we snapshot the displayed range so the per-axis unlock can diff against it. ---
         _vr_before = self.vb.viewRange()           # FULL range (X and Y) the candles/footprint above were sized against
+        self._scanner_frame_n = len(x)             # reliable frame length for the replay step-follow (roll may not run)
+        if lows and highs:                         # newest candle extent — for the replay VERTICAL step-follow
+            self._scanner_last_low = lows[-1]; self._scanner_last_high = highs[-1]
         if self._scanner_needs_autofit:
             self._follow_x = self._follow_y = True
             self._scanner_needs_autofit = False

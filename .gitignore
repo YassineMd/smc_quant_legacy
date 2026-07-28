@@ -7,6 +7,8 @@ data/*
 
 # --- Cold-archive local mirror (master lives in GCS; pulled via study/pull_archive.ps1) ---
 study/archive_data/
+# --- Local pre-daemon reconstruction (2025-01..2026-06-19; built from Binance tape, kept out of git) ---
+study/recon_archive/
 
 # --- Python bytecode caches ---
 __pycache__/

@@ -212,15 +212,17 @@ GUI_TIMER_MS = 50               # 20Hz master redraw loop
 SESSION_PERF = True             # terminal-side session profiler: ~10s CSV row to data/session_perf.log
 SESSION_PERF_SECS = 10.0        # profiler flush cadence (progressive-lag instrumentation; negligible overhead)
 CHART_CACHE_CAP = 10000         # max candles per viewport (spec §1.1.2)
-# Replay mode. On entering replay (or moving the Start Date) the chart loads the last REPLAY_SPAN_SECS (24h) of data
-# ENDING at the replay cursor — that 24h window is what's shown and stepped. REPLAY_MIN_BUCKETS floors the load in case
-# 24h is unusually quiet, so the pivot/VPIN/HM lookback is always valid; REPLAY_WINDOW caps it for perf if 24h is very
-# busy. REPLAY_LOOKBACK_SECS = how far back the cold-archive is asked to reach so a replay of OLD data still has
-# context before the cursor (the window is then trimmed to the 24h span).
-REPLAY_SPAN_SECS = 24 * 3600
+# Replay mode. On entering replay (or moving the Start Date) the chart loads the PER-TF minimum window ENDING at the
+# replay cursor (terminal._replay_span_secs = -_default_scan_secs: 7d on 1h/4h, 5d on 15m, 3d on 5m, 24h on 1m) — the
+# same days it would show live. REPLAY_MIN_BUCKETS floors the load when the window is unusually quiet so the
+# pivot/VPIN/HM lookback stays valid; REPLAY_WINDOW caps it for perf. REPLAY_LOOKBACK_SECS = how far the cold-archive
+# is asked to reach so a replay of OLD data still has context before the cursor (then trimmed to the per-tf span).
+REPLAY_SPAN_SECS = 24 * 3600    # the 1m default; higher tfs override per-tf via terminal._replay_span_secs
 REPLAY_MIN_BUCKETS = 300
-REPLAY_WINDOW = 1800    # max bars kept in a replay frame — the fixed-left window GROWS as you step (left history stays)
-#                         up to this cap; only past it does the oldest bar slide off (a perf ceiling, rarely reached)
+REPLAY_WINDOW = 3600    # max bars kept in a replay frame — sized to hold the densest per-tf target (a BUSY 1m 24h
+#                         runs ~3.5k buckets; higher tfs top out ~1.7k) so no per-tf window is silently clipped. Only
+#                         1m ever approaches this; the fixed-left window GROWS as you step up to the cap, then the
+#                         oldest bar slides off (a perf ceiling — heavier only when stepping far on 1m)
 REPLAY_LOOKBACK_SECS = 2 * 24 * 3600
 REPLAY_AUTOPLAY_MS = 250   # Ctrl+Right auto-play cadence: reveal one candle every this-many ms (stops on Left/Right)
 # Cold-archive GCS bucket (must match study/pull_archive.ps1 $GCS and ops/archive_buckets.py GCS_DEFAULT). When the

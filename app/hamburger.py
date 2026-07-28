@@ -121,6 +121,7 @@ _M10_INDICATORS = [
     ("m10_choch", "Change of Character (CHoCH)", False, True),   # dashed break-lines on the scalp ZigZag
     ("m10_4hzone", "4h Buy/Sell Zones (wicks)", False, True),   # last completed 4h bucket buyer/seller wick bands
     ("m10_4hsep", "4h Bucket Separators", True, True),          # dashed vline at each completed 4h bucket's start
+    ("m10_prevday_vp", "Prev. Day VP", False, True),            # per-previous-UTC-day Volume Profile (style = 'Volume Profile Mode' dropdown)
 ]
 
 # "Candles" — per-candle marks on the canvas.
@@ -144,6 +145,8 @@ _M10_STRATEGIES = [
     ("m10_skewdiv", "Skew Divergence (L / S triangles)", False, True),   # bear/bull pair vs opposing profile skew
     ("m10_flowflip", "Flow Flip (L / S spheres)", False, True),          # big reversal candle; flow flips across it
     ("m10_r15easy", "15mReasy (L / S diamonds)", False, True),           # 15m: R-easy(A<=-0.75) + |skew|>=0.4 + prev-same-dir
+    ("m10_engulfsr", "1h Engulf S/R Reversal (L / S triangles)", False, True),  # 1h: engulf at VA/S/R zone; fwd candidate
+    ("m10_momentum", "15m Engulfing S/R (L / S losanges)", False, True),  # 15m: last-mit engulf; gold/blue tiers, tier-dependent skew
     # PIVOT (D/E) value-profile annotations — moved here from the overlays. NOT covered by the entry-sound bell.
     ("m10_vpfade", "D VP star/trap/clock", True, True),         # D-entry gold star/red-x trap + cyan Path-B wait clock
     ("m10_estar", "E VP star/trap (unval.)", True, True),       # star/trap on E's own vs opposite value-half
@@ -456,7 +459,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.indicator_section = self._build_layer_section("Indicator", _M10_INDICATORS, expanded=False)
         self.candles_section = self._build_layer_section("Candles", _M10_CANDLES, expanded=False)
         self.strat_section = self._build_layer_section("Strategies", _M10_STRATEGIES, expanded=False)
-        for _sec in (self.m10_section, self.indicator_section, self.candles_section, self.strat_section):
+        # Strategies dropdown FIRST, then Indicator, then the base overlays / candles.
+        for _sec in (self.strat_section, self.indicator_section, self.m10_section, self.candles_section):
             root.addWidget(_sec)
 
         root.addStretch(1)
