@@ -932,6 +932,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # 1m-FINISH strength (validated: a strong 1m finish -> the break/engulf follows through 55% vs 42%). Br badges
         # keep ONLY strong-finish breaks; strong-finish 5m engulf signals get a GOLD RING. Cached per (start_time,side).
         self._finish_1m_cache = {}
+        # 1m-PATH efficiency (Kaufman ER of the candle's 1m closes): a DESCRIPTIVE smoothness readout in the stats
+        # box — weakly predictive on the NORMAL/continuation subset (study/engulf_1m_efficiency), NOT a filter.
+        # Closed buckets cache their final ER by start_time; the forming bucket recomputes at most every ~20s.
+        self._er_1m_cache = {}
+        self._er_live = (0.0, 0.0, None)         # (bucket start_time, last-compute wallclock, ER) for the forming bucket
         self._e5m_ring = None                    # ScatterPlotItem — gold halo on STRONG-1m-FINISH 5m engulf signals
         self._sr5m_cache = None                  # per-frame (sig, levels): ONE zone-mitig S/R pass shared engulf+absorb2+breakout
         self._trline_buckets = []                # visible frame buckets for the shared trade-line exit walk
@@ -2098,6 +2103,49 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             return []
 
+    @staticmethod
+    def _er_from_subs(subs) -> "float | None":
+        """Kaufman Efficiency Ratio of a candle's 1m-close path: |net move| / gross path, in [0,1].
+        1.0 = perfectly straight/diagonal 1m path; ~0 = choppy back-and-forth. Direction-agnostic (the
+        candle colour already carries the sign). None if fewer than 3 sub-bars or a flat path."""
+        if not subs or len(subs) < 3:
+            return None
+        cl = [float(b.get("close", b.get("close_price", 0.0)) or 0.0) for b in subs]
+        gross = 0.0
+        for k in range(1, len(cl)):
+            gross += abs(cl[k] - cl[k - 1])
+        if gross <= 1e-12:
+            return None
+        return abs(cl[-1] - cl[0]) / gross
+
+    def _path_er(self, ab: dict) -> "float | None":
+        """1m-path Efficiency Ratio for bucket ``ab`` (see _er_from_subs), fetched via the shared 1m window.
+        Closed buckets cache their FINAL value by start_time; the live forming bucket recomputes at most every
+        ~20s (its 1m window only grows once a minute) so the per-frame stats readout never re-fetches. Returns
+        None on the 1m timeframe (no sub-bars) or when the window is too short/flat."""
+        if self._tf == "1m":
+            return None
+        st = float(ab.get("start_time", 0.0) or 0.0)
+        et = float(ab.get("end_time", 0.0) or 0.0)
+        if st <= 0.0:
+            return None
+        now = time.time()
+        forming = (et <= st) or (et >= now - 3.0)   # the active bucket's end_time is proxied to ~now
+        if not forming:
+            if st in self._er_1m_cache:
+                return self._er_1m_cache[st]
+            er = self._er_from_subs(self._fetch_1m_window(st, et))
+            if len(self._er_1m_cache) > 5000:       # bounded cache — just clear when large (values are recomputable)
+                self._er_1m_cache.clear()
+            self._er_1m_cache[st] = er
+            return er
+        lst, lts, ler = self._er_live               # forming bucket: throttle re-fetch to ~20s
+        if lst == st and (now - lts) < 20.0:
+            return ler
+        er = self._er_from_subs(self._fetch_1m_window(st, now))
+        self._er_live = (st, now, er)
+        return er
+
     def _finish_map(self, filtered, sig_list, fn, tag):
         """sig_list = [(i, side), ...] in `filtered` space. Returns {i: fn(1m-constituents, side)} — fn reads the
         candle's 1m bars (strong_finish -> bool; ring_tier -> 0/1/2). {} when the 1m source has NO data for the span
@@ -2585,6 +2633,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             out.append(row("Δ↑ / Δ↓", "--", GRAY))
             out.append(row("½dom", "--", GRAY))
+        # 1m-PATH EFFICIENCY — Kaufman ER of this candle's 1m closes: 1.0 = clean diagonal, ~0 = chop. Descriptive
+        # smoothness readout (weakly predictive on continuation only — study/engulf_1m_efficiency), not a filter.
+        _er = self._path_er(ab)
+        if _er is None:
+            out.append(row("1m Eff", "--", GRAY))
+        else:
+            _erc = GOLD if _er >= 0.70 else (G if _er >= 0.50 else (NEU if _er >= 0.30 else GRAY))
+            out.append(row("1m Eff", "%.2f" % _er, _erc))
         _kb, _ks = self._bucket_ker(ab)                     # ker (Kinetic Efficiency Ratio) per side — pinned to the BOTTOM
         out.append("<span style='color:%s'>ker</span> <span style='color:%s'>%s</span>"
                    " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
