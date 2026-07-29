@@ -5090,10 +5090,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             col = (CYA if t2 else GRN) if side > 0 else (MAG if t2 else RED)
             y = (lo - pad) if side > 0 else (hi + pad)          # bull sphere below the low, bear above the high
             _pen = pg.mkPen(int(col[0] * 0.55), int(col[1] * 0.55), int(col[2] * 0.55), 235, width=1.1)
-            spots.append({"pos": (i, y), "symbol": "o", "size": (15 if t2 else 12),
+            spots.append({"pos": (i, y), "symbol": "d", "size": (15 if t2 else 12),
                           "brush": pg.mkBrush(*col, 220), "pen": _pen})
         if self._e1m_sph is None:
-            self._e1m_sph = pg.ScatterPlotItem(pxMode=True, symbol="o", size=12)
+            self._e1m_sph = pg.ScatterPlotItem(pxMode=True, symbol="d", size=12)
             self._e1m_sph.setZValue(30); self.plot.addItem(self._e1m_sph, ignoreBounds=True)
         self._e1m_sph.setData(spots); self._e1m_sph.setVisible(True)
         self._e1m_drawn = True
