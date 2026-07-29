@@ -34,9 +34,6 @@ _FP_BLACK = QtGui.QColor(0, 0, 0)
 # Imbalance line colours (the horizontal under-number line): neon BLUE = buyer / neon ORANGE = seller.
 _FP_IMB_BUY = QtGui.QColor(0, 153, 255)
 _FP_IMB_SELL = QtGui.QColor(255, 128, 0)
-# BUBBLE colours (per-level volume ellipse): neon CYAN = buy-dominant / neon MAGENTA = sell-dominant.
-_FP_BUB_BUY = (0, 255, 255)
-_FP_BUB_SELL = (255, 0, 255)
 _EMPTY: dict = {}
 ICON_MIN_PX_PER_CANDLE = 22.0  # hide iceberg icons when candles get this narrow
 
@@ -61,12 +58,12 @@ def detail_visible(n_vis: float) -> bool:
 
 
 def _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y):
-    """Pixel-round volume bubble at (xi, price); radius ~ volume fraction, colour = buy/sell dominance
-    (neon cyan / neon magenta). Shared by the numbers-overflow fallback and the top-3 bubble regime."""
+    """Pixel-round volume bubble at (xi, price); radius ~ volume fraction, color = buy/sell
+    dominance. Shared by the numbers-overflow fallback and the top-3 bubble regime."""
     frac = tot / max_vol
     r_px = 2.5 + 11.0 * frac
-    rgb = _FP_BUB_BUY if buy >= sell else _FP_BUB_SELL
-    col = QtGui.QColor(*rgb); col.setAlphaF(min(1.0, 0.45 + 0.55 * frac))   # a touch more opaque than before
+    rgb = config.RGB_GREEN_STD if buy >= sell else config.RGB_RED_STD
+    col = QtGui.QColor(*rgb); col.setAlphaF(0.30 + 0.55 * frac)
     p.setBrush(QtGui.QBrush(col)); p.setPen(QtCore.Qt.NoPen)
     p.drawEllipse(QtCore.QPointF(xi, price), r_px / px_per_x, r_px / px_per_y)
 
