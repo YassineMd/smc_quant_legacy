@@ -34,6 +34,9 @@ _FP_BLACK = QtGui.QColor(0, 0, 0)
 # Imbalance line colours (the horizontal under-number line): neon BLUE = buyer / neon ORANGE = seller.
 _FP_IMB_BUY = QtGui.QColor(0, 153, 255)
 _FP_IMB_SELL = QtGui.QColor(255, 128, 0)
+# BUBBLE colours (per-level volume ellipse): neon CYAN = buy-dominant / neon MAGENTA = sell-dominant.
+_FP_BUB_BUY = (0, 255, 255)
+_FP_BUB_SELL = (255, 0, 255)
 _EMPTY: dict = {}
 ICON_MIN_PX_PER_CANDLE = 22.0  # hide iceberg icons when candles get this narrow
 
@@ -58,12 +61,12 @@ def detail_visible(n_vis: float) -> bool:
 
 
 def _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y):
-    """Pixel-round volume bubble at (xi, price); radius ~ volume fraction, color = buy/sell
-    dominance. Shared by the numbers-overflow fallback and the top-3 bubble regime."""
+    """Pixel-round volume bubble at (xi, price); radius ~ volume fraction, colour = buy/sell dominance
+    (neon cyan / neon magenta). Shared by the numbers-overflow fallback and the top-3 bubble regime."""
     frac = tot / max_vol
     r_px = 2.5 + 11.0 * frac
-    rgb = config.RGB_GREEN_STD if buy >= sell else config.RGB_RED_STD
-    col = QtGui.QColor(*rgb); col.setAlphaF(0.30 + 0.55 * frac)
+    rgb = _FP_BUB_BUY if buy >= sell else _FP_BUB_SELL
+    col = QtGui.QColor(*rgb); col.setAlphaF(min(1.0, 0.45 + 0.55 * frac))   # a touch more opaque than before
     p.setBrush(QtGui.QBrush(col)); p.setPen(QtCore.Qt.NoPen)
     p.drawEllipse(QtCore.QPointF(xi, price), r_px / px_per_x, r_px / px_per_y)
 
@@ -106,7 +109,8 @@ class BucketFootprintItem(pg.GraphicsObject):
         self.buy_pool.set_enabled(v); self.sell_pool.set_enabled(v)
 
     def update_data(self, x: list, levels_list: list, ber30s: list, ser30s: list,
-                    x0: float, x1: float, width: float, px_per_x: float, px_per_y: float) -> None:
+                    x0: float, x1: float, width: float, px_per_x: float, px_per_y: float,
+                    show_num_layer: bool = True, show_bub_layer: bool = True) -> None:
         self.picture = QtGui.QPicture()
         p = QtGui.QPainter(self.picture)
         px_per_x = max(1e-9, px_per_x); px_per_y = max(1e-9, px_per_y)
@@ -128,8 +132,10 @@ class BucketFootprintItem(pg.GraphicsObject):
         #             old uncapped one-ellipse-per-level).
         #   NONE      (> MAX_BUBBLE_BUCKETS): a sub-pixel blur anyway -- candles + POC carry it.
         n_vis = len(visible)
-        show_numbers = numbers_visible(n_vis, px_per_y)
-        show_bubbles = (not show_numbers) and detail_visible(n_vis)  # detail_visible also drives the POC
+        # NUMBERS gated by the 'Footprint Ladder' layer, BUBBLES by the 'Candle Bubbles' layer. When numbers are
+        # OFF (or zoomed out), bubbles fill in so there's no dead zone. (detail_visible also drives the POC.)
+        show_numbers = numbers_visible(n_vis, px_per_y) and show_num_layer
+        show_bubbles = (not show_numbers) and detail_visible(n_vis) and show_bub_layer
 
         lo_all = hi_all = None
         if show_numbers or show_bubbles:
@@ -164,7 +170,7 @@ class BucketFootprintItem(pg.GraphicsObject):
                         sell_specs.append((xi - width * 0.10, price, f"{sell:.0f}",
                                            _FP_BLACK if sell_imb else _FP_NEON_SELL,
                                            _FP_NEON_SELL if sell_imb else None))
-                    else:
+                    elif show_bub_layer:            # cap-overflow level falls back to a bubble (only if bubbles on)
                         _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y)
         elif show_bubbles:
             # TOP-3 levels by TOTAL volume (buy+sell) per bucket -- the significant nodes only.

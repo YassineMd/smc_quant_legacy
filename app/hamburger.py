@@ -106,7 +106,8 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background:transp
 
 # "Mode 10 Overlays" — the render-layer overlays that aren't candles / indicators / strategies.
 _M10_LAYERS = [
-    ("m10_footprint", "Footprint Ladder", False, True),   # default OFF — heavy overlay, opt-in
+    ("m10_footprint", "Footprint Ladder", False, True),   # default OFF — footprint NUMBERS ('f'); heavy overlay, opt-in
+    ("m10_bubbles", "Candle Bubbles", False, True),       # default OFF — per-level volume BUBBLES ('b' in Mode 10)
     ("m10_icebergs", "Absorption", False, True),          # whale-defense bands (calc_absorption); default OFF, 'o' toggles
     ("m10_dom", "Depth / DOM Walls", True, True),         # live order-book walls on the bucket canvas (Phase A)
     ("m10_imbalance", "Imbalance Gaps (Phase 3)", False, False),

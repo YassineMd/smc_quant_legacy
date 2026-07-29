@@ -1364,8 +1364,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("V"), self, activated=self._toggle_vel_abn)
         # 'g' = greyscale toggle for the Liquidity Heatmap (depth_heatmap mode only)
         QtGui.QShortcut(QtGui.QKeySequence("G"), self, activated=self._toggle_heatmap_grey)
-        # 'b' = trade-bubbles overlay toggle (Phase 3; depth_heatmap mode only)
-        QtGui.QShortcut(QtGui.QKeySequence("B"), self, activated=self._toggle_heatmap_bubbles)
+        # 'b' = bubbles toggle, context-aware: heatmap trade-bubbles in the heatmap, else Mode-10 Candle Bubbles
+        QtGui.QShortcut(QtGui.QKeySequence("B"), self, activated=self._toggle_bubbles)
         # 'h' = show/hide the Mode-10 Magic-Selection stats box (chart overlays like the flip line stay)
         QtGui.QShortcut(QtGui.QKeySequence("H"), self, activated=self._toggle_sel_stats)
         # Mode-10 selection panels, STACKED below the box in this order: 1 ABSORPTION, 2 EFF-AGG, 3 E/R, 4 EXHAUSTION
@@ -1681,13 +1681,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             h = self._scan_handles.get("bc_poc")
             if h is not None:
                 h.setVisible(on)
-        elif key == "m10_footprint":
-            # Sub-pool teardown: bc_fp's bubble QPicture hides via setVisible, but its
-            # number TextPools are NOT in active_scanner_items — clear them explicitly
-            # (same call clear_scanner_canvas uses) or they orphan as floating numbers.
+        elif key in ("m10_footprint", "m10_bubbles"):
+            # bc_fp renders BOTH the footprint NUMBERS (m10_footprint) and the volume BUBBLES (m10_bubbles),
+            # so it stays visible while EITHER is on. Sub-pool teardown: its number TextPools are NOT in
+            # active_scanner_items — clear them explicitly when both go off or they orphan as floating numbers.
             if "bc_fp" in self._scan_handles:
-                self.bc_fp.setVisible(on)
-                if not on:
+                _vis = self.menu.layer_state("m10_footprint") or self.menu.layer_state("m10_bubbles")
+                self.bc_fp.setVisible(_vis)
+                if not _vis:
                     self.bc_fp.clear_text(self.plot)
         elif key == "m10_obs":
             # Same trap: zone bands hide via setVisible, but the tier_pool labels are
@@ -7931,6 +7932,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.hm_grey = not self.hm_grey
         self._hm_render()
 
+    def _toggle_bubbles(self) -> None:
+        """'b' — context-aware bubbles toggle: the heatmap TRADE-bubbles in depth_heatmap mode, else the
+        Mode-10 footprint 'Candle Bubbles' layer (bucket_canvas). No-op in the metric-scanner modes."""
+        if self.scanner_mode == "depth_heatmap":
+            self._toggle_heatmap_bubbles()
+        elif self.scanner_mode == "bucket_canvas":
+            self.menu.layer_checks["m10_bubbles"].toggle()
+
     def _toggle_heatmap_bubbles(self) -> None:
         """'b' — toggle the Phase 3 trade-bubbles overlay (heatmap mode only). OFF hides them; ON re-requests
         the trades for the current view so they reappear without leaving the mode."""
@@ -9694,14 +9703,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scan_handles["bc_imb_sell"].setVisible(_imb_vis)
         self._scan_handles["bc_imb_buy"].setVisible(_imb_vis)
 
-        if self.menu.layer_state("m10_footprint"):
+        _fp_on = self.menu.layer_state("m10_footprint"); _bub_on = self.menu.layer_state("m10_bubbles")
+        if _fp_on or _bub_on:                       # bc_fp draws NUMBERS (m10_footprint) and/or BUBBLES (m10_bubbles)
             if "bc_fp" not in self._scan_handles:
                 self.bc_fp.setZValue(5)            # ladder above candles (z0), below the POC dot (z6)
                 self._add_scanner_item(self.bc_fp)
                 self._scan_handles["bc_fp"] = self.bc_fp
             self.bc_fp.setVisible(True)
             self.bc_fp.update_data(x, levels_list, ber30s, ser30s,
-                                   vx0, vx1, 0.8, px_per_x, px_per_y)   # vx0/vx1: viewport cull
+                                   vx0, vx1, 0.8, px_per_x, px_per_y, _fp_on, _bub_on)   # vx0/vx1: viewport cull
 
         # --- order blocks mapped onto the integer bucket grid (§6.1) ---
         # A4 draw-gate: OB zones gated by m10_obs. Toggle-off teardown is in
