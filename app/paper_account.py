@@ -80,6 +80,23 @@ class PaperAccount:
         pct = (net / pos["margin"] * 100.0) if pos["margin"] > 0 else 0.0
         return net, pct
 
+    def hypo_pct(self, entry: float, exit_price: float, side: int) -> tuple:
+        """(net_usd, pct_on_margin) for a HYPOTHETICAL open@entry -> close@exit_price, sized off the CURRENT
+        balance (no open position needed, no file reload). Used for the SL/TP badges so they read on the same
+        leveraged + fees basis as the live PnL (a raw price-distance % was confusing next to the leveraged PnL)."""
+        margin = max(0.0, self.balance) * self.risk_frac
+        notional = margin * self.leverage
+        qty = (notional / entry) if entry > 0 else 0.0
+        gross = qty * (exit_price - entry) * side
+        net = gross - notional * self.fee_rate - qty * exit_price * self.fee_rate
+        pct = (net / margin * 100.0) if margin > 0 else 0.0
+        return net, pct
+
+    def breakeven(self, entry: float, side: int) -> float:
+        """Exit price where net PnL = 0 (round-trip fees only) — entry nudged by the fee cost."""
+        f = self.fee_rate
+        return entry * (1 + f) / (1 - f) if side > 0 else entry * (1 - f) / (1 + f)
+
     def close(self, pos: dict, exit_price: float) -> dict:
         """Realize the position at ``exit_price``, credit/debit the balance, persist. Returns the result.
         The net is computed from ``pos`` alone, so re-reading the shared balance first (read-modify-write)

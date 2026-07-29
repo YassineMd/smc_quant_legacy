@@ -278,6 +278,12 @@ class PositionBracket(QtCore.QObject):
         self.entry_line = self._mk_line(entry, "#2962ff", "Entry")
         self.stop_line = self._mk_line(stop, "#e74c3c", "SL")
         self.target_line = self._mk_line(target, "#1abc9c", "TP")
+        # BREAK-EVEN line: white dashed, NO badge — entry nudged by the round-trip fee (placed in _recalc).
+        _bepen = QtGui.QPen(QtGui.QColor(255, 255, 255, 150))
+        _bepen.setWidth(1); _bepen.setCosmetic(True); _bepen.setDashPattern([3.0, 7.0])
+        self.be_line = pg.InfiniteLine(pos=entry, angle=0, movable=False, pen=_bepen)
+        self.be_line.setZValue(71)
+        plot.addItem(self.be_line, ignoreBounds=True)
 
         # §7.2 — full-height vertical edge handles for horizontal (span) adjustment
         self.left_line = self._mk_edge(x0)
@@ -293,7 +299,7 @@ class PositionBracket(QtCore.QObject):
         self.close_btn = pg.ScatterPlotItem(pxMode=True, symbol="x", size=16,
                                             brush=pg.mkBrush(231, 76, 60, 235),
                                             pen=pg.mkPen(255, 255, 255, 210, width=1.5))
-        self.close_btn.setZValue(74)
+        self.close_btn.setZValue(75)
         self.close_btn.setToolTip("Close / cancel this position")
         self.close_btn.sigClicked.connect(lambda *a: self._on_close_click(self) if self._on_close_click else None)
         plot.addItem(self.close_btn, ignoreBounds=True)
@@ -303,9 +309,11 @@ class PositionBracket(QtCore.QObject):
         self._val_labels = {}
         _bord = {"SL": (231, 76, 60), "Entry": (41, 98, 255), "TP": (26, 188, 156)}
         for nm in ("SL", "Entry", "TP"):
-            t = RoundedTextItem(anchor=(1, 0.5), fill=pg.mkBrush(22, 24, 30, 240),
+            # OPAQUE fill (255) + z ABOVE the price lines (72) so the badge cleanly HIDES the dashed line
+            # running behind it — the values stay readable (was: line drawn over the badge).
+            t = RoundedTextItem(anchor=(1, 0.5), fill=pg.mkBrush(22, 24, 30, 255),
                                  border=pg.mkPen(_bord[nm], width=1))
-            t.setZValue(70)
+            t.setZValue(73)
             plot.addItem(t, ignoreBounds=True)
             self._val_labels[nm] = t
 
@@ -334,7 +342,7 @@ class PositionBracket(QtCore.QObject):
 
     def _mk_line(self, price: float, color: str, name: str) -> pg.InfiniteLine:
         pen = QtGui.QPen(QtGui.QColor(color))
-        pen.setWidth(1); pen.setCosmetic(True); pen.setStyle(QtCore.Qt.DashLine)
+        pen.setWidth(1); pen.setCosmetic(True); pen.setDashPattern([3.0, 7.0])   # sleeker, more-spaced dashes
         hover = QtGui.QPen(QtGui.QColor(color)); hover.setWidth(2); hover.setCosmetic(True)
         ln = pg.InfiniteLine(
             pos=price, angle=0, movable=True, pen=pen, hoverPen=hover,
@@ -359,17 +367,22 @@ class PositionBracket(QtCore.QObject):
         e = self.entry_line.value()
         s = self.stop_line.value()
         t = self.target_line.value()
-        # value labels pinned to the FAR RIGHT (right-aligned at label_x, which tracks the view edge) so they
-        # sit just left of the y-axis live-price tag — replaces the old red/green boxes + centered labels.
-        # SL always shows a negative %, TP a positive % (risk vs reward), regardless of long/short.
-        sl_pct = abs(s - e) / e * 100.0 if e else 0.0
-        tp_pct = abs(t - e) / e * 100.0 if e else 0.0
         rr = self.rr
         _f = "font-size:13px"
-        self._val_labels["SL"].setHtml(f"<span style='color:#ff8a80;{_f}'><b>{s:.2f}</b> (-{sl_pct:.2f}%)</span>")
+        # SL/TP badges show the leveraged NET margin % (fees included) you'd realise IF that level hits — the
+        # SAME basis as the live PnL, so all three are directly comparable (the raw price-distance % was
+        # confusing next to the leveraged PnL). Break-even line = entry nudged by the round-trip fee.
+        if self._acct is not None:
+            _, sl_pct = self._acct.hypo_pct(e, s, self._side)
+            _, tp_pct = self._acct.hypo_pct(e, t, self._side)
+            self.be_line.setValue(self._acct.breakeven(e, self._side))
+        else:
+            sl_pct = tp_pct = 0.0
+            self.be_line.setValue(e)
+        self._val_labels["SL"].setHtml(f"<span style='color:#ff8a80;{_f}'><b>{s:.2f}</b> ({sl_pct:+.1f}%)</span>")
         # TP badge carries the R:R ratio (was the old top label, which overlapped the TP badge)
         self._val_labels["TP"].setHtml(
-            f"<span style='color:#69f0ae;{_f}'><b>{t:.2f}</b> (+{tp_pct:.2f}%)</span>"
+            f"<span style='color:#69f0ae;{_f}'><b>{t:.2f}</b> ({tp_pct:+.1f}%)</span>"
             f"<span style='color:#9aa0a6;{_f}'>  1:{rr:.2f}</span>")
         self._render_entry()                                # ENTRY badge = entry value (+ live PnL when active)
         self._val_labels["SL"].setPos(self.label_x, s)
@@ -401,7 +414,7 @@ class PositionBracket(QtCore.QObject):
         self._last_px = None
         self.result = None
         self.state = "PENDING"
-        self._render_entry()
+        self._recalc()          # now that the account is attached: fill in the leveraged SL/TP % + break-even line
 
     def on_price(self, price: float, ts: float) -> None:
         """Drive the state machine from the live price (fed each frame). Fills AT the entry line, closes AT
@@ -467,13 +480,13 @@ class PositionBracket(QtCore.QObject):
                    for ln in (self.entry_line, self.stop_line, self.target_line))
 
     def set_visible(self, on: bool) -> None:
-        for it in (self.entry_line, self.stop_line, self.target_line,
+        for it in (self.entry_line, self.stop_line, self.target_line, self.be_line,
                    self.left_line, self.right_line, self.close_btn,
                    *self._val_labels.values()):
             it.setVisible(on)
 
     def remove(self) -> None:
-        for it in (self.entry_line, self.stop_line, self.target_line,
+        for it in (self.entry_line, self.stop_line, self.target_line, self.be_line,
                    self.left_line, self.right_line, self.close_btn,
                    *self._val_labels.values()):
             self.plot.removeItem(it)
@@ -928,44 +941,19 @@ class DrawingController(QtCore.QObject):
         if uid and getattr(br, "_acct", None) is not None:
             self._sim_state[uid] = br.sim_snapshot()
 
-    def _sim_dbg(self, msg: str) -> None:
-        """TEMP diagnostic -> data/sim_debug.log (gated by SMC_SIM_DEBUG=1)."""
-        import os
-        if os.environ.get("SMC_SIM_DEBUG", "0") != "1":
-            return
-        try:
-            import time as _t
-            from . import config
-            with open(os.path.join(config.DATA_DIR, "sim_debug.log"), "a", encoding="utf-8") as f:
-                f.write("%.1f %s\n" % (_t.time(), msg))
-        except Exception:
-            pass
-
     def on_price(self, price: float, ts: float) -> None:
         """Feed the live price to every bracket's sim (called each frame). Lazily arms a not-yet-armed
         bracket first — including a just-recreated index bracket, whose uid is now finalised so its saved
         sim state is restored rather than reset."""
         if self._paper_account is None:
-            self._sim_dbg("SKIP: no account")
             return
-        n = 0
         for br in self.brackets + self._idx_brackets:
-            n += 1
             try:
                 if br._acct is None:
                     self._arm_bracket(br)
-                _st0 = br.state
                 br.on_price(price, ts)
-                if br.state != _st0:
-                    self._sim_dbg("bracket %s: %s->%s px=%.4f e=%.4f s=%.4f t=%.4f"
-                                  % (getattr(br, "uid", "?"), _st0, br.state, price,
-                                     br.entry_line.value(), br.stop_line.value(), br.target_line.value()))
-            except Exception as _e:
-                self._sim_dbg("bracket ERR: %r" % (_e,))
-        import time as _t
-        if _t.time() - getattr(self, "_sim_dbg_t", 0.0) > 3.0:
-            self._sim_dbg_t = _t.time()
-            self._sim_dbg("hb px=%.4f nbr=%d" % (price, n))
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     def set_tool(self, tool: Optional[str]) -> None:
