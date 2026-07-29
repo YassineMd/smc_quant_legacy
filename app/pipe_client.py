@@ -24,6 +24,7 @@ drop-free under high-frequency updates.
 
 from __future__ import annotations
 
+import os
 import socket
 import threading
 import time
@@ -89,6 +90,15 @@ class PipeClientWorker(threading.Thread):
         self.active_bucket: dict = {}
         self.connected: bool = False
         self._catchup_loading: bool = False   # True while a chunked catch-up streams
+        # --- startup instrumentation (writes ONE line to data/startup_perf.log per catch-up) ---
+        # Splits the "slow load" into its real phases so a fix targets the actual bottleneck:
+        #   wall = CatchupStart->End elapsed; parse_s = time inside protocol.parse_line (JSON->objects);
+        #   net_idle = wall - parse_s (socket-wait / daemon-build); bytes = catch-up payload size;
+        #   n_buckets / n_levels = heap the parse produced. Near-zero cost (a few counters + one write).
+        self._cu_active: bool = False
+        self._cu_t0: float = 0.0
+        self._cu_bytes: int = 0
+        self._cu_parse: float = 0.0
         self._force_reconnect = threading.Event()   # manual refresh: drop the socket + reconnect now
         self._sock: Optional[socket.socket] = None  # active socket, exposed for refresh()'s force-drop
         # copy-on-write export caches: bump the version on every write to the heavy,
@@ -245,9 +255,16 @@ class PipeClientWorker(threading.Thread):
                     if not data:
                         break  # daemon closed
                     buffer += data
+                    if self._cu_active:
+                        self._cu_bytes += len(data)
                     while b"\n" in buffer:
                         line, buffer = buffer.split(b"\n", 1)
-                        pkt = protocol.parse_line(line.decode("utf-8", "ignore"))
+                        if self._cu_active:
+                            _p = time.perf_counter()
+                            pkt = protocol.parse_line(line.decode("utf-8", "ignore"))
+                            self._cu_parse += time.perf_counter() - _p
+                        else:
+                            pkt = protocol.parse_line(line.decode("utf-8", "ignore"))
                         if pkt is not None:
                             self._apply(pkt)
             except (ConnectionError, OSError):
@@ -274,6 +291,23 @@ class PipeClientWorker(threading.Thread):
                 sock.sendall(line.encode("utf-8"))
             except OSError:
                 pass
+
+    def _write_startup_perf(self, tf, wall, parse, nbytes, n_buckets, n_levels) -> None:
+        """Append ONE catch-up breakdown line to data/startup_perf.log (worker thread, best-effort).
+
+        net_idle = wall - parse ~= socket-wait + daemon-side build; payload = catch-up bytes on the wire;
+        obj~ = 3*n_levels (each price level is a dict + a 'b' + an 's' float) = the heap the parse leaves
+        resident. This is the ground truth for whether the 'slow load' is network, parse, or heap."""
+        try:
+            net_idle = max(0.0, wall - parse)
+            mb = nbytes / (1024.0 * 1024.0)
+            line = ("CATCHUP tf=%s wall=%.2fs parse=%.2fs net_idle=%.2fs payload=%.1fMB "
+                    "buckets=%d levels=%d obj~=%.2fM\n" % (
+                        tf, wall, parse, net_idle, mb, n_buckets, n_levels, 3.0 * n_levels / 1e6))
+            with open(os.path.join(config.DATA_DIR, "startup_perf.log"), "a", encoding="utf-8") as f:
+                f.write(line)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Packet application (all writes under data_lock)
@@ -302,6 +336,10 @@ class PipeClientWorker(threading.Thread):
                 self._cb_ver += 1
                 self._ob_ver += 1
                 self._catchup_loading = True
+                self._cu_active = True                  # arm startup-phase timing (see __init__)
+                self._cu_t0 = time.perf_counter()
+                self._cu_bytes = 0
+                self._cu_parse = 0.0
             return
         if isinstance(pkt, protocol.CatchupChunkPacket):
             if pkt.tf != self.tf:
@@ -317,6 +355,7 @@ class PipeClientWorker(threading.Thread):
             if pkt.tf != self.tf:
                 return
             active = dict(pkt.active_bucket)
+            _cu = False
             with self.data_lock:
                 if pkt.tf != self.tf:
                     return
@@ -326,6 +365,15 @@ class PipeClientWorker(threading.Thread):
                     self.closed_buckets = self.closed_buckets[-config.CLOSED_BUCKETS_CAP:]
                     self._cb_ver += 1
                 self._catchup_loading = False
+                if self._cu_active:                    # capture startup-phase numbers under the lock
+                    self._cu_active = False
+                    _cu = True
+                    _wall = time.perf_counter() - self._cu_t0
+                    _parse, _bytes = self._cu_parse, self._cu_bytes
+                    _nb = len(self.closed_buckets)
+                    _nl = sum(len(b.get("levels") or ()) for b in self.closed_buckets)
+            if _cu:                                    # write OUTSIDE the lock (no I/O under lock)
+                self._write_startup_perf(self.tf, _wall, _parse, _bytes, _nb, _nl)
             return
 
         # --- light / high-frequency frames: one short lock, as before ---
