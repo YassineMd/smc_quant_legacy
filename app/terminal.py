@@ -1482,24 +1482,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scan_nudge_timer.setInterval(90)
         self._scan_nudge_timer.timeout.connect(self._on_scan_time_changed)
 
-    def _default_scan_secs(self, tf: str) -> int:
-        """Default initial look-back for a fresh candle-canvas window, in seconds (past = negative). Per-tf so each
-        scale loads only the context it needs, not the whole archive: 1h/4h = 7 DAYS (multi-day setups), 15m = 5 DAYS
-        (the 15mReasy overlay context), 5m = 3 DAYS, 1m = last 24h (a week of 1m VOLUME buckets would be far too many
-        to load/render)."""
+    def _base_scan_secs(self, tf: str) -> int:
+        """Per-tf BASE look-back in seconds (past = negative): 1h/4h = 7 DAYS, 15m = 5 DAYS, 5m = 3 DAYS, 1m = 24h.
+        This is the span a REPLAY loads (see _replay_span_secs) so a replay covers the same days it would live.
+        NORMAL mode narrows the two high-density low scales on top of this (see _default_scan_secs)."""
         if tf in ("1h", "4h"):
             return -7 * 24 * 3600
         if tf == "15m":
             return -5 * 24 * 3600
         if tf == "5m":
             return -3 * 24 * 3600
-        return -86400          # 1m: last 24h
+        return -86400          # 1m
+
+    def _default_scan_secs(self, tf: str) -> int:
+        """Default initial look-back for a fresh NORMAL-mode candle-canvas window, in seconds (past = negative).
+        Same as the base span EXCEPT the two high-density low scales load TIGHTER so the first window isn't a wall
+        of buckets: 5m = 24h (was 3d), 1m = 12h (was 24h). Replay keeps the wider base span (see _replay_span_secs),
+        so this narrowing is NORMAL-mode only."""
+        if tf == "1m":
+            return -12 * 3600
+        if tf == "5m":
+            return -24 * 3600
+        return self._base_scan_secs(tf)
 
     def _replay_span_secs(self) -> int:
-        """Replay window WIDTH for the current tf = the SAME per-tf minimum as normal mode (7d on 1h/4h, 5d on 15m,
-        3d on 5m, 24h on 1m — see _default_scan_secs), so a replay loads the same days it would live instead of a
-        flat 24h. Left edge = replay-start - this. Drives BOTH the daemon and the recon (non-daemon) replay tracks."""
-        return -self._default_scan_secs(self.worker.tf)
+        """Replay window WIDTH for the current tf = the per-tf BASE span (7d on 1h/4h, 5d on 15m, 3d on 5m, 24h on
+        1m — see _base_scan_secs), NOT the narrower normal-mode default, so a replay loads the same days it would
+        live. Left edge = replay-start - this. Drives BOTH the daemon and the recon (non-daemon) replay tracks."""
+        return -self._base_scan_secs(self.worker.tf)
 
     def _replay_lookback_secs(self) -> int:
         """How far the cold-archive is asked to reach before the replay cursor — always >= the replay span (+1d
@@ -1541,7 +1551,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scanner_bucket_sig = None
         self._last_scanner_sig = None
         # Mode-appropriate Scan Start window: Mode 10 (candle canvas) uses the per-tf default (7d on 1h/4h, 5d on
-        # 15m, 3d on 5m, 24h on 1m — see _default_scan_secs); the metric scanners default to a tighter 1h window. Signal
+        # 15m, 24h on 5m, 12h on 1m — see _default_scan_secs); the metric scanners default to a tighter 1h window. Signal
         # blocked so the _on_timer below redraws from the new anchor without firing an extra teardown.
         _anchor_secs = self._default_scan_secs(self.worker.tf) if is_canvas else -3600
         target_dt = QtCore.QDateTime.currentDateTime().addSecs(_anchor_secs)
@@ -1594,7 +1604,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._clear_choch()                   # CHoCH lines re-detect on the new tf's buckets
         self.worker.request_timeframe(tf)
         if self.scanner_mode == "bucket_canvas":
-            # Re-anchor to THIS tf's default window (7d on 1h/4h, 5d 15m, 3d 5m, 24h 1m) so switching timeframe
+            # Re-anchor to THIS tf's default window (7d on 1h/4h, 5d 15m, 24h 5m, 12h 1m) so switching timeframe
             # honours the per-tf default instead of carrying the old tf's window (e.g. 1h's 7d onto 1m).
             target_dt = QtCore.QDateTime.currentDateTime().addSecs(self._default_scan_secs(tf))
             floor = self._drawing_scan_floor(tf)                     # then pull back to keep saved drawings in view
