@@ -18,10 +18,11 @@ from . import support_resistance as _sr
 K = _sr.SR_PIVOT_K
 
 
-def detect(buckets):
+def detect(buckets, levels=None):
     if len(buckets) < 2 * K + 2:
         return []
-    levels = _sr.detect(buckets, K, zone_mitigation=True)   # 5m: a level breaks only past the WIDENED area edge
+    if levels is None:                                     # shared in from the terminal to avoid a redundant S/R pass
+        levels = _sr.detect(buckets, K, zone_mitigation=True)   # 5m: a level breaks only past the WIDENED area edge
     kinds = {}
     for lv in levels:
         i1 = lv.get("i1")

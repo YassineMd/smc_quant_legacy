@@ -71,66 +71,14 @@ _TUNNEL: "Optional[SSHTunnelManager]" = None   # set in main(); the refresh butt
 # per-tick (truest follow), both False = per-close, X-True/Y-False = track-X / stable-Y.
 FOLLOW_WINDOW = 100       # buckets shown in the live window
 FOLLOW_MARGIN = 8         # buckets of right padding so the live edge isn't flush to the axis
-# PIVOT D-badge fill thresholds on the aligned LIVE eff-agg (panel-2) spread AT D — where entering at D beats
-# waiting for E (study/pivot_backtest, Jul2-5 tape, IN-SAMPLE; retune as the forward tape grows). Top-1/3 of
-# the live spread (>63) = D beats E; >80 = the biggest win-rate edge. Below these, E is the better entry.
-PIVOT_P2D_HIGH = 63.0
-PIVOT_P2D_VHIGH = 80.0
-# E greys out when panel-2 FLIPPED (aligned live spread @E <= 0 or it breached -50 over [D,E]); the indicator
-# then hunts E2 = the first later bar (within 1h) where the live spread RE-CONFIRMS to >= this. Study: the
-# p2@E<0 (flipped) setups go 29% -> 69% TP if entered on the >=+30 recovery (Jul2-5 tape, in-sample).
-PIVOT_E2_MIN = 30.0
-# --- PIVOT-ZZTRAIL-v2 overlay FADE: dim the pivot setups the v2 strategy would SKIP (zone TAKE filter on the
-# non-merged 4h wick + hollow AVOID list). OVERLAY-ONLY — does not change any trade/entry logic. Take if the D
-# zone OR the entry (E2/E-held) zone qualifies. tier names here use the STUDY spelling (cyan/orange, red/green).
-PIVOT_V2_AVOID = {("buy", "inzone-sell", "body"), ("sell", "inzone-sell", "inzone-sell"),
-                  ("buy", "beyond-down", "beyond-down"), ("sell", "beyond-up", "beyond-up")}
-PIVOT_FADE_RGB = (110, 115, 125)   # dim grey for faded (skipped) setup glyphs
 
 
-def _pivot_zone5(px, low, vlo, vhi, high):
-    if px < low:
-        return "beyond-down"
-    if px <= vlo:
-        return "inzone-buy"
-    if px < vhi:
-        return "body"
-    if px <= high:
-        return "inzone-sell"
-    return "beyond-up"
 
 
-def _pivot_v2_take_rule(zone, buy, tier):
-    own_in = (zone == "inzone-buy") if buy else (zone == "inzone-sell")
-    rev_in = (zone == "inzone-sell") if buy else (zone == "inzone-buy")
-    own_bey = (zone == "beyond-down") if buy else (zone == "beyond-up")
-    if tier == "hollow":
-        return rev_in or (zone == "body") or own_bey
-    if tier == "cyan/orange":
-        return own_in
-    return own_in or own_bey
 
 
-def _pivot_v3_take(buy, tier, zone):
-    """PIVOT V3 Step-3 entry: take the D only if tier is cyan/orange AND its 4H-zone position CONFIRMS its
-    direction — Buy in the buy area or above the sell area; Sell in the sell area or below the buy area.
-    (`tier` here is the terminal's fill name: 'cyan' == the >80 cyan/orange tier.)"""
-    if tier != "cyan":
-        return False
-    if buy:
-        return zone in ("inzone-buy", "beyond-up")            # buy area / above sell area (breakout up)
-    return zone in ("inzone-sell", "beyond-down")             # sell area / below buy area (breakdown down)
 
 
-def _pivot_v3_e_take(buy, tier, d_zone, e_zone):
-    """PIVOT V3 Step-4 E-entry SELECTION: take the New-E only on these (side, D-zone, E-zone) combos. First 4 =
-    any tier; last 2 = cyan/orange only. Zone names per _pivot_zone5 (inzone-buy=buy area, inzone-sell=sell area,
-    beyond-down=below buy, beyond-up=above sell)."""
-    c = (("buy" if buy else "sell"), d_zone, e_zone)
-    if c in (("buy", "inzone-buy", "body"), ("sell", "inzone-sell", "body"),
-             ("buy", "beyond-down", "inzone-buy"), ("sell", "beyond-up", "inzone-sell")):
-        return True
-    return tier == "cyan" and c in (("buy", "body", "inzone-sell"), ("sell", "body", "inzone-buy"))
 
 
 LIQ_MAX_LABELS = 40       # Ctrl+L labels: hard cap on simultaneously-drawn labels (Tier-A first, then even spread)
@@ -942,99 +890,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _lsf = QtGui.QFont("Consolas", 9); self._liq_status.textItem.setFont(_lsf)
         self._liq_status.setZValue(33); self.plot.addItem(self._liq_status, ignoreBounds=True)
         self._liq_status.setVisible(False); self._liq_status_txt = None
-        # PIVOT INDICATOR (Ctrl+P) — S5j-r5 confluence detection + entry, SELECTION-SCOPED (only inside a drawn
-        # Mode-10 selection; app.pivot_detect). Marks each setup's detection + its entry as two circular BADGES —
-        # a bold "D" (detection) and "E" (entry) coin, GREEN for buys / RED for sells — with a DASHED faded leader
-        # from each candle to its badge (+ a 2nd back to the leg-5 N=60..100 candle) and a SOLID line joining
-        # detection<->entry. Leaders/connectors are faded GREEN (buy) / RED (sell), split per side. Buys below
-        # the candles, sells mirrored above. Hovering a badge pops a stats box (buy -> below, sell -> above).
-        self.show_pivot = False
-        self.pivot_d_only = True     # PIVOT V3: draw ONLY the D detections (tier-filled). No E/E2/E3, no connectors,
-                                     # no entry-line overlay. The E-stage code is kept but gated off until V3 re-adds entries.
-        self.pivot_v3_filter = True  # PIVOT V3 Step-3: FADE the D's that fail the entry rule (cyan/orange + directional
-                                     # 4H zone), so only the tradeable D's stand out. Applied in D-only mode.
-        self.pivot_new_e = True      # PIVOT V3 NEW E: the recorded-combo E's are BRIGHT (real entries); every OTHER
-                                     # (faded) D also gets its E drawn DIM + a click-to-study position sim, for eyeballing.
-        self.pivot_causal = False   # 'N' — NO-LOOK-AHEAD: truncate pivot detection at the selection's right edge so
-                                    # the D-tier / E-held / E2 badges read only data up to the edge (true LIVE
-                                    # values), not the +FWD future window that settles them. Panels are already
-                                    # causal-to-edge; this makes the pivot honest while scrubbing the Right arrow.
         self._sel_hi_t = None       # end_time of the selection's right edge (the scrub 'as-of' point) — set each
                                     # time the selection draws; the 4h zone reads it in causal mode so it, too, shows
                                     # the wick that was live AS OF the edge instead of the newest 4h bucket.
-        _grn = (40, 230, 90, 140); _red = (255, 45, 70, 140)     # faded side colours (alpha keeps them behind)
-        self.bc_pivot_leaders = {}               # side -> DASHED PlotDataItem (candle<->label + label->leg-5)
-        self.bc_pivot_conn = {}                  # side -> SOLID PlotDataItem (detection<->entry)
-        for _sd, _c in (("long", _grn), ("short", _red)):
-            _ld = pg.PlotDataItem(pen=pg.mkPen(_c, width=1, style=QtCore.Qt.DashLine), connect="finite")
-            _ld.setZValue(30); self.plot.addItem(_ld, ignoreBounds=True); _ld.setVisible(False)
-            _cn = pg.PlotDataItem(pen=pg.mkPen(_c, width=1.4), connect="finite")
-            _cn.setZValue(30); self.plot.addItem(_cn, ignoreBounds=True); _cn.setVisible(False)
-            self.bc_pivot_leaders[_sd] = _ld; self.bc_pivot_conn[_sd] = _cn
-        # circular D/E badges — green (buy) / red (sell) coins at a fixed pixel size (read the same at any zoom),
-        # with the bold letter drawn on top via the pooled TextItems.
-        self.bc_pivot_dots = pg.ScatterPlotItem(pxMode=True, symbol="o", size=20,
-                                                pen=pg.mkPen(0, 0, 0, 180, width=1))
-        self.bc_pivot_dots.setZValue(31); self.plot.addItem(self.bc_pivot_dots, ignoreBounds=True)
-        self.bc_pivot_dots.setVisible(False)
-        # GOLDEN STAR for Buy-D's whose forming-VP meets the criteria (VPFADE overlay). Drawn just off the D coin,
-        # its own scatter layer so it never touches the badges. Pure highlight — no effect on fade/entry/detection.
-        self.bc_pivot_stars = pg.ScatterPlotItem(pxMode=True, symbol="star", size=18,
-                                                 brush=pg.mkBrush(255, 205, 40),
-                                                 pen=pg.mkPen(140, 100, 0, width=1))
-        self.bc_pivot_stars.setZValue(33); self.plot.addItem(self.bc_pivot_stars, ignoreBounds=True)
-        self.bc_pivot_stars.setVisible(False)
-        # RED cross ✕ = the TRAP marker for E-entries in the WRONG value-half (m10_estar overlay; UNVALIDATED).
-        self.bc_pivot_traps = pg.ScatterPlotItem(pxMode=True, symbol="x", size=15,
-                                                 brush=pg.mkBrush(235, 60, 60),
-                                                 pen=pg.mkPen(120, 0, 0, width=1))
-        self.bc_pivot_traps.setZValue(33); self.plot.addItem(self.bc_pivot_traps, ignoreBounds=True)
-        self.bc_pivot_traps.setVisible(False)
-        # CLOCK = wait-marker for cyan/orange D's that fail Step 3 (non-directional zone -> Path-B E-hunter). Register
-        # a custom 'clock' symbol once (circle face + hour/minute hands), then a light-blue hollow scatter for it.
-        from pyqtgraph.graphicsItems.ScatterPlotItem import Symbols as _SYM
-        if "clock" not in _SYM:
-            from pyqtgraph.Qt import QtGui as _QtGui
-            _clk = _QtGui.QPainterPath()
-            _clk.addEllipse(-0.5, -0.5, 1.0, 1.0)                 # face
-            _clk.moveTo(0.0, 0.0); _clk.lineTo(0.0, -0.34)        # hour hand (up)
-            _clk.moveTo(0.0, 0.0); _clk.lineTo(0.26, 0.0)         # minute hand (right)
-            _SYM["clock"] = _clk
-        self.bc_pivot_clocks = pg.ScatterPlotItem(pxMode=True, symbol="clock", size=16,
-                                                  brush=pg.mkBrush(0, 0, 0, 0),
-                                                  pen=pg.mkPen(150, 205, 255, width=1.4))
-        self.bc_pivot_clocks.setZValue(33); self.plot.addItem(self.bc_pivot_clocks, ignoreBounds=True)
-        self.bc_pivot_clocks.setVisible(False)
-        # ELECTRIC-PURPLE ring around a V3 entry (D or E) that ALSO has VPIN confluence (VPIN >= its warn line at the
-        # entry bar, ratio >= 1.0). Hollow ring larger than the badge so it encircles it. Toggle m10_vpinring.
-        self.bc_pivot_vpin = pg.ScatterPlotItem(pxMode=True, symbol="o", size=30,
-                                                brush=pg.mkBrush(0, 0, 0, 0),
-                                                pen=pg.mkPen(178, 70, 255, width=2.4))
-        self.bc_pivot_vpin.setZValue(32); self.plot.addItem(self.bc_pivot_vpin, ignoreBounds=True)
-        self.bc_pivot_vpin.setVisible(False)
-        self.bc_entry_active = pg.ScatterPlotItem(pxMode=True, symbol="o", size=30,   # electric-magenta ring on
-                                                  pen=pg.mkPen(255, 0, 230, width=2.6),  # the entry being viewed
-                                                  brush=pg.mkBrush(0, 0, 0, 0))
-        self.bc_entry_active.setZValue(34); self.plot.addItem(self.bc_entry_active, ignoreBounds=True)
-        self.bc_entry_active.setVisible(False)
-        self._pivot_label_pool = []              # reused TextItems (the bold D/E glyphs), grown lazily
         self._eff_cyc_labels = []                # P2 per-cycle harmonic-mean % labels (reused TextItems), grown lazily
         self._eff_cyc_min = 3                    # min bars in a P2 cycle to bother labelling its harmonic mean
         self._hm_time_labels = []                # HM sub-panel per-cycle ELAPSED-TIME labels (locked on, always shown)
         self._hm_time_n = 0                      # count of active (positioned) HM time labels this refresh
         self._hm_min_cyc = 4                     # P2 cycles shorter than this (buckets) are NOISE -> merged out of cycle detection
         self._hm_ncyc = 2                        # HMS box + backdrop span the last N LOCKED cycles
-        self._pivot_hovers = []                  # [(x, y, stats_html, is_buy)] badge centres -> the hover box
-        self._pivot_sig = None
-        self._psc = None            # no-selection Pivot V3 detection cache (incremental: settled prefix + frontier)
-        # clickable per-entry exit-line overlay (V3 D-EXIT): click a trade entry to toggle its lines — entry
-        # (white), fixed structural SL (yellow), MAX-reached (green), same-D stop ratchets (blue dash) — plus a
-        # TP@opp-D / stop tag at the exit bar. Default (see _entry_default_key): the last RECORDED entry is ON,
-        # else — if only faded study D/E's are in view — the last one anyway, so it's never blank.
-        self._pivot_entries = []                 # [(key, eb, shelf, epx, sl, reason, tp, buy, ratchets/trails, maxpx, exit_bar, gross, fade, path)]
-        self._entry_lines_user = {}              # global key -> explicit user on/off (absent = default: last-on)
-        self._entry_line_pool = []; self._entry_lbl_pool = []; self._pivot_n = 0
-        self._entry_zone_pool = []               # Path-B light-blue TP zones (filled, no border)
         # Shared scanner warm-up prefix (the ENGULF overlays reuse it for S/R + prev-day-VA context) + entry-sound state.
         self._mmx_warm = []                      # EMA/run_pos warm-up prefix (see _build_scanner_buckets)
         self._mmx_last_forming = True            # does the render window end on a still-forming bucket?
@@ -1069,6 +933,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # keep ONLY strong-finish breaks; strong-finish 5m engulf signals get a GOLD RING. Cached per (start_time,side).
         self._finish_1m_cache = {}
         self._e5m_ring = None                    # ScatterPlotItem — gold halo on STRONG-1m-FINISH 5m engulf signals
+        self._sr5m_cache = None                  # per-frame (sig, levels): ONE zone-mitig S/R pass shared engulf+absorb2+breakout
         self._trline_buckets = []                # visible frame buckets for the shared trade-line exit walk
         # SUPPORT & RESISTANCE indicator (hamburger m10_sr) — neon-red resistance / neon-blue support, extended
         # until a candle closes through the level. Line THICKNESS = rejection strength (one curve per width tier,
@@ -1076,10 +941,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sr_items = None                    # dict (kind, tier) -> PlotCurveItem, lazily built (MITIGATED lines)
         self._sr_rects = None                    # pool of QGraphicsRectItem — ACTIVE levels drawn as filled bands
         self._sr_sig = None; self._sr_drawn = False
-        self.pivot_tooltip = pg.TextItem(anchor=(0.5, 0.0), fill=pg.mkBrush(18, 20, 26, 238),
-                                         border=pg.mkPen(90, 96, 108, 220))
-        self.pivot_tooltip.setZValue(62); self.plot.addItem(self.pivot_tooltip, ignoreBounds=True)
-        self.pivot_tooltip.hide()
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
         # heatmap large-order bubbles); SMALL = small-BUY vs small-SELL trade-COUNT share (green / red). Each
@@ -1392,13 +1253,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _it in (self.bc_abs_lock, self.bc_eff_lock, self.bc_er_lock, self.bc_exh_lock,
                     self.bc_lg_lock, self.bc_sm_lock):
             _it.setZValue(3); _it.setVisible(False); self.plot.addItem(_it, ignoreBounds=True)
-        # LIVE pivot audio ('Pivot Alert' sub-toggle, OWN voice, independent of the master Audio Feed).
-        # MUST be set before _load_ui_state so the persisted "pivot_audio" value can override this default.
-        self._pivot_audio_on = False
-        self._pivot_audio_seeded = False
-        self._pivot_audio_last_et = 0.0
-        self._pivot_e_seeded = False              # "Enter E now" audio (Path-B New-E at the live edge), seed + dedup
-        self._pivot_e_spoken = set()              # bucket end_times already announced as an E entry
         # Persisted hamburger toggles (Sub-Widgets + Mode 10 Overlays): {key: checked}. Loaded here,
         # applied to the checkboxes once the menu is wired (_apply_saved_toggles). _loading_ui suppresses
         # save churn while restoring.
@@ -1443,9 +1297,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._announced_obs: set = set()
         self._announced_icebergs: set = set()
         self._audio_seeded = False
-        # (LIVE pivot-audio state — _pivot_audio_on / _seeded / _last_et — is initialized above, BEFORE
-        # _load_ui_state, so the persisted 'pivot_audio' toggle can override it. Tracking uses the last
-        # bucket's end_time since closed_buckets is a rolling-capped list — len() is constant.)
 
         # fix #10: double-click anywhere on the chart resets/auto-fits the view
         self.plot.scene().sigMouseClicked.connect(self._on_scene_click)
@@ -1489,10 +1340,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         activated=lambda: self.menu.sub_checks["drawing"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("P"), self,
                         activated=lambda: self.menu.layer_checks["m10_poc"].toggle())
-        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+P"), self, activated=self._toggle_pivot)  # PIVOT INDICATOR (selection-scoped)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Z"), self, activated=self._toggle_sel_vp)  # selection Volume Profile on/off
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+H"), self, activated=self._toggle_hide_candles)  # hide candle glyphs (VP/zones only)
-        QtGui.QShortcut(QtGui.QKeySequence("N"), self, activated=self._toggle_pivot_causal)  # No-look-ahead pivot badges
         QtGui.QShortcut(QtGui.QKeySequence("L"), self,
                         activated=lambda: self.menu.layer_checks["m10_liq"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("F"), self,
@@ -1725,7 +1574,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._tf = tf
         self._save_ui_state()             # remember it — a reopened session starts on this timeframe
         self._audio_seeded = False        # new tf -> re-seed; don't read out its backlog
-        self._pivot_audio_seeded = False
         self._announced_obs = set(); self._announced_icebergs = set()
         self._title_scale = None   # force the title to re-render with this tf's ~vol next tick
         self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {config.TF_SECONDS.get(tf, 60) // 60}×")
@@ -1793,7 +1641,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sig_candles = self._sig_obs = self._sig_fp = None
         self._scanner_bucket_sig = self._last_scanner_sig = None
         self._audio_seeded = False
-        self._pivot_audio_seeded = False
         self._announced_obs = set(); self._announced_icebergs = set()
 
     def _toggle_layer(self, key: str, on: bool) -> None:
@@ -1908,11 +1755,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._last_scanner_sig = None    # force a redraw so the pane fills immediately
         elif key == "audio":
             self.alerts.audio.set_armed(on)
-        elif key == "pivot_audio":
-            self._pivot_audio_on = on
-            if on:
-                self._pivot_audio_seeded = False    # re-seed on enable -> only NEW live fires speak, not the edge
-                self._pivot_e_seeded = False; self._pivot_e_spoken = set()   # same for the "Enter E now" audio
         if not self._loading_ui:
             self._save_ui_state()               # persist the sub-widget toggle across sessions
 
@@ -1964,7 +1806,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     ("P", "POC dot"), ("F", "Footprint ladder"),
                     ("O", "Order Blocks + Absorption/Iceberg"), ("L", "Liquidation marks"),
                     ("V", "Abnormal-velocity diamonds"), ("W", "Candle: normal/whisker/footprint/delta/force/delta-force"),
-                    ("Ctrl+P", "Pivot indicator (selection-scoped)"),
                     ("Ctrl+Z", "Selection Volume Profile"),
                     ("Ctrl+H", "Hide candles (VP / zones only)")]),
                 ("Stats &amp; panels", [
@@ -2226,6 +2067,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # 1m-FINISH strength for the 5m break/engulf badges. Reuses the SAME 1m source as the Ctrl+double-click popup
     # (recon in replay / cold-archive live / live 1m stream fallback). One window fetch per redraw (chunk-cached),
     # per-candle result cached by (start_time, side) since a closed candle's finish never changes.
+    def _shared_5m_levels(self, buck):
+        """ONE zone-mitigation S/R detection over the warm+filtered `buck`, shared by every 5m overlay that uses that
+        exact buck (engulf / absorb2 / breakout / spheres). Cached per-frame by the buck signature, so on a bucket-close
+        redraw whichever overlay runs first detects and the rest reuse — instead of 2-3 identical S/R passes. (The S/R
+        INDICATOR keeps its own pass: it detects over `filtered` only, not warm+filtered, so its level set differs.)"""
+        if not buck:
+            return []
+        last = buck[-1]
+        sig = (len(buck), float(last.get("end_time", 0.0) or 0.0),
+               float(last.get("close", last.get("close_price", 0.0)) or 0.0))
+        cached = self._sr5m_cache
+        if cached is not None and cached[0] == sig:
+            return cached[1]
+        from app import support_resistance as _srm
+        levels = _srm.detect(buck, _srm.SR_PIVOT_K, zone_mitigation=True)
+        self._sr5m_cache = (sig, levels)
+        return levels
+
     def _fetch_1m_window(self, cs: float, ce: float) -> list:
         try:
             if self._in_recon_replay():
@@ -2328,7 +2187,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.hm_vol_tip.hide()
             self.dom_tooltip.hide()
             self.panel_tooltip.hide()
-            self.pivot_tooltip.hide()
             self._last_hover_pos = None      # left the plot -> stop the hover re-fire
             if self.scanner_mode == "bucket_canvas":
                 self._show_forming_stats()   # keep the live candle's readout on by default
@@ -2394,7 +2252,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._hover_scanner(pt.x(), pos)
         self._hover_dom_wall(pt.x(), pt.y())   # DOM wall hover-volume (bucket_canvas + m10_dom)
         self._hover_panels(pt.x(), pt.y())  # cursor label: RAW values of whichever stacked panel is hovered
-        self._hover_pivot(pos)              # PIVOT label hover -> setup stats box (scene coords for hit-test)
 
     def _on_fp_mouse_move(self, evt) -> None:
         """Cursor over the live-footprint pane: drive its OWN crosshair (volume x-line + price y-line + right-axis
@@ -3732,107 +3589,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._z4_lut_cache = ([p[0] for p in pairs], [p[1] for p in pairs])
         return self._z4_lut_cache
 
-    def _zone5_at(self, t, price):
-        ets, rows = self._z4_lut()
-        if not ets:
-            return None
-        i = bisect.bisect_right(ets, t) - 1
-        if i < 0:
-            return None
-        r = rows[i]
-        return _pivot_zone5(float(price), r["lo"], r["vlo"], r["vhi"], r["hi"])
 
-    def _vpform_bin_at(self, filtered, det):
-        """CAUSAL forming-VP 4-bin of the D's close vs the CURRENTLY-FORMING 4h bucket — reconstructed from the
-        primary buckets' footprints since the last completed 4h close, up to and INCLUDING the D bar. Mirrors the
-        study de_zone_effectiveness.forming()/vp_bin() exactly (bar_quantiles.value_area/vq on the summed b/s
-        levels). Returns 'above VAH' / 'upper VA' / 'lower VA' / 'below VAL', or None when it can't be
-        reconstructed (no 4h close yet, degenerate profile, or the forming window reaches before the loaded set)
-        -> None means DON'T fade. Read only in _draw_pivot for the Buy-D VP-edge overlay; V3 detection untouched."""
-        try:
-            ets, _rows = self._z4_lut()
-            if not ets:
-                return None
-            t = float(filtered[det].get("end_time", 0.0))
-            i4 = bisect.bisect_right(ets, t) - 1          # last COMPLETED 4h close as-of the D (causal)
-            start_t = ets[i4] if i4 >= 0 else -1.0
-            agg = {}; j = det
-            while j >= 0 and float(filtered[j].get("end_time", 0.0)) > start_t:   # primary bars in (last 4h close, D]
-                for ps, vv in (filtered[j].get("levels") or {}).items():
-                    a = agg.get(ps)
-                    if a is None:
-                        a = [0.0, 0.0]; agg[ps] = a
-                    a[0] += float(vv.get("b", 0.0)); a[1] += float(vv.get("s", 0.0))
-                j -= 1
-            if j < 0 and start_t >= 0.0 and float(filtered[0].get("end_time", 0.0)) > start_t:
-                return None                               # forming bucket starts before the loaded window -> incomplete
-            if len(agg) < 2:
-                return None
-            lv = {p: {"b": v[0], "s": v[1]} for p, v in agg.items()}
-            _q = bar_quantiles.vq(lv); _va = bar_quantiles.value_area(lv)
-            val, med, vah = float(_va[0]), float(_q[1]), float(_va[1])
-            if not (val == val and vah == vah and med == med and vah > val):
-                return None                               # degenerate value area -> can't bin -> don't fade
-            px = float(filtered[det].get("close", filtered[det].get("close_price", 0.0)))
-            if px > vah:
-                return "above VAH"
-            if px > med:
-                return "upper VA"
-            if px >= val:
-                return "lower VA"
-            return "below VAL"
-        except Exception:
-            return None
 
-    def _pivot_v2_taken(self, filtered, det, ent, buy, e_sh, a, n, b_end):
-        """True if PIVOT-ZZTRAIL-v2 would TAKE this setup (D-fill tier + E-held-else-E2 entry + zone TAKE filter
-        at the D zone OR the entry zone + hollow AVOID). False -> the overlay FADES the setup. Overlay-only."""
-        di = det - a
-        sd = ((2.0 * float(e_sh[di]) - 1.0) * 100.0) if 0 <= di < len(e_sh) else 0.0
-        p2d = sd if buy else -sd
-        tier = "cyan/orange" if p2d > PIVOT_P2D_VHIGH else ("red/green" if p2d > PIVOT_P2D_HIGH else "hollow")
-        sg = 1.0 if buy else -1.0; _di, _ei = det - a, ent - a
-        if 0 <= _di < len(e_sh) and 0 <= _ei < len(e_sh):
-            liv = [sg * (2.0 * float(e_sh[k]) - 1.0) * 100.0 for k in range(_di, _ei + 1)]
-            e_held = liv[-1] > 0.0 and min(liv) > -50.0
-        else:
-            e_held = True
-        j0 = None
-        if e_held:
-            if tier == "hollow":
-                j0 = ent
-        else:
-            et_e = float(filtered[ent].get("end_time", 0.0))
-            for j in range(ent + 1, b_end):
-                if et_e and float(filtered[j].get("end_time", 0.0)) > et_e + 3600.0:
-                    break
-                jj = j - a
-                if 0 <= jj < len(e_sh):
-                    v = (2.0 * float(e_sh[jj]) - 1.0) * 100.0
-                    if (v if buy else -v) >= PIVOT_E2_MIN:
-                        j0 = j; break
-        if j0 is None or j0 >= n:
-            return False                                          # no valid v2 entry -> skip -> fade
-        px = lambda i: float(filtered[i].get("close", filtered[i].get("close_price", 0.0)))
-        zD = self._zone5_at(float(filtered[det].get("end_time", 0.0)), px(det))
-        zE = self._zone5_at(float(filtered[j0].get("end_time", 0.0)), px(j0))
-        if zD is None or zE is None:
-            return True                                           # no 4h data to judge -> don't fade
-        take = _pivot_v2_take_rule(zD, buy, tier) or _pivot_v2_take_rule(zE, buy, tier)
-        if tier == "hollow" and (("buy" if buy else "sell"), zD, zE) in PIVOT_V2_AVOID:
-            take = False
-        return take
-
-    @staticmethod
-    def _pivot_fade_spot(spot):
-        """Dim a scatter spot's brush+pen (translucent) to signal 'v2 skips this setup'."""
-        br = spot.get("brush"); pn = spot.get("pen")
-        if br is not None:
-            c = br.color(); spot["brush"] = pg.mkBrush(c.red(), c.green(), c.blue(), 35)
-        if pn is not None:
-            c = pn.color(); w = max(1.0, pn.widthF())
-            spot["pen"] = pg.mkPen(c.red(), c.green(), c.blue(), 70, width=w)
-        return spot
 
     def _z4_curve(self, used):                                   # pooled overlay curve (zone band via fillLevel, or VP line)
         if used >= len(self._z4_curve_pool):
@@ -4199,7 +3957,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "phase_table": self.show_phase_table,
                 "phase": {k: bool(v) for k, v in self.show_phase.items()},
                 "liq_labels": self.show_liq,
-                "pivot": self.show_pivot, "pivot_causal": self.pivot_causal,
                 "zone_s": self._zone_user_s, "eff_f": self._eff_user_f,   # persisted slider overrides (None = adaptive)
                 "zone_sides": list(self.zone_slider.sides()),             # Bull/Bear zone filters (both = default)
                 "eff_sides": list(self.eff_slider.sides()),
@@ -4249,8 +4006,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_panel9 = bool(s.get("panel9", self.show_panel9))
         self.show_panel0 = bool(s.get("panel0", self.show_panel0))
         self.show_liq = bool(s.get("liq_labels", self.show_liq))
-        self.show_pivot = bool(s.get("pivot", self.show_pivot))
-        self.pivot_causal = bool(s.get("pivot_causal", self.pivot_causal))
         self._saved_toggles = dict(s.get("toggles") or {})   # applied to the menu checkboxes in _apply_saved_toggles
         _cm = s.get("candle_mode")                            # 0 normal / 1 whisker / 2 footprint (back-compat: old "whisker" bool)
         if _cm is None:
@@ -4875,37 +4630,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hide_sel_ctrls()              # 'h' off -> hide box + card, but KEEP the VP overlay (independent)
 
     # ---------------------------------------------------------------- PIVOT INDICATOR (Ctrl+P)
-    def _toggle_pivot(self) -> None:
-        """Ctrl+P — PIVOT INDICATOR on/off (S5j-r5 confluence detection + entry). Shows over the FULL loaded window
-        with no selection drawn; drawing a Mode-10 selection narrows it to that range as an optional focus."""
-        self.show_pivot = not self.show_pivot
-        if not self.show_pivot:
-            self._clear_pivot()
-        self._save_ui_state()
-        self._sel_sig = None                    # force the selection readout to recompute so marks appear/vanish
 
-    def _toggle_pivot_causal(self) -> None:
-        """'N' — NO-LOOK-AHEAD pivot: truncate detection at the selection's right edge so the D-tier / E-held / E2
-        badges read only data up to the edge (the true LIVE values), instead of the +FWD forward window that
-        settles them. Panels are already causal-to-edge; this makes the pivot honest as you scrub the Right arrow."""
-        self.pivot_causal = not self.pivot_causal
-        self._pivot_sig = None; self._sel_sig = None            # force a full pivot recompute
-        self._save_ui_state()
 
-    def _clear_pivot(self) -> None:
-        for _sd in ("long", "short"):
-            self.bc_pivot_leaders[_sd].setData([], []); self.bc_pivot_leaders[_sd].setVisible(False)
-            self.bc_pivot_conn[_sd].setData([], []); self.bc_pivot_conn[_sd].setVisible(False)
-        self.bc_pivot_dots.setData([]); self.bc_pivot_dots.setVisible(False)
-        self.bc_pivot_stars.setData([]); self.bc_pivot_stars.setVisible(False)
-        self.bc_pivot_traps.setData([]); self.bc_pivot_traps.setVisible(False)
-        self.bc_pivot_clocks.setData([]); self.bc_pivot_clocks.setVisible(False)
-        self.bc_pivot_vpin.setData([]); self.bc_pivot_vpin.setVisible(False)
-        for _lab in self._pivot_label_pool:
-            _lab.setVisible(False)
-        self._pivot_hovers = []; self.pivot_tooltip.hide()
-        self._clear_entry_lines()
-        self._pivot_sig = None
 
     # ------------------------------------------------------------------
     # MMXSKEW / MMXSKEW-ORB entry overlay (Ctrl+M, 1h only) — self-contained
@@ -5116,10 +4842,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _fi = (n - 1) if _forming else -1
         buck = list(warm) + list(filtered)
         try:
-            from app import engulf5m_detect, absorb2_detect, support_resistance as _srm, absorption as _absm
+            from app import engulf5m_detect, absorb2_detect, absorption as _absm
             from app.engulf_sr_detect import _daily_va as _dva
-            _levels = _srm.detect(buck, _srm.SR_PIVOT_K, zone_mitigation=True)   # shared: ONE S/R + absorption + VA pass
-            _absorp = []                                                         # for engulf + absorb2 + sphere markers
+            _levels = self._shared_5m_levels(buck)                              # shared: ONE S/R (also reused by breakout)
+            _absorp = []                                                         # + ONE absorption pass (engulf/absorb2/spheres)
             for _k in range(len(buck)):
                 try:
                     _absorp.append(_absm.absorption(buck, _k)[0])
@@ -5271,7 +4997,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._brk5m_sig = _sig
         try:
             from app import breakout5m_detect
-            marks = breakout5m_detect.detect(list(warm) + list(filtered))
+            _buck = list(warm) + list(filtered)
+            marks = breakout5m_detect.detect(_buck, levels=self._shared_5m_levels(_buck))   # reuse engulf's S/R pass
         except Exception:
             self._clear_breakout5m(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
@@ -5447,16 +5174,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for j in range(ut, len(lpool)):
             lpool[j].setVisible(False)
 
-    def _pivot_put_label(self, used: int, x, y, text: str, color=(0, 0, 0)) -> int:
-        """Set the next pooled D/E glyph (grow lazily): bold letter centred on its circle. ``color`` is the
-        glyph colour — black on a FILLED badge, the side colour on a HOLLOW (border-only) D badge."""
-        if used >= len(self._pivot_label_pool):
-            _t = pg.TextItem(anchor=(0.5, 0.5), color=(0, 0, 0)); _t.setZValue(32)
-            _f = QtGui.QFont("Consolas", 8); _f.setBold(True); _t.textItem.setFont(_f)
-            self.plot.addItem(_t, ignoreBounds=True); self._pivot_label_pool.append(_t)
-        lab = self._pivot_label_pool[used]
-        lab.setColor(color); lab.setText(text); lab.setPos(x, y); lab.setVisible(True)
-        return used + 1
 
     def _hm_cycles(self, share, min_len):
         """P2 cycles (runs of `share` on one side of 50%), with NOISE cycles de-noised out: any run shorter than
@@ -5690,486 +5407,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _t in self._eff_cyc_labels:
             _t.setVisible(False)
 
-    def _pivot_scan(self, filtered):
-        """Full Pivot V3 detection over the LOADED set ``filtered``, cached + INCREMENTAL: the settled prefix is
-        reused and only a ~FRONT-bar live FRONTIER is re-detected on each new bucket, then spliced. Proven
-        byte-identical to a fresh detect_pivots over the whole set (test: incremental eff arrays + raw fires match
-        exactly). Re-scans in FULL when the Zero Point / start date moves (``off`` changes) — that's the 'scan the
-        newly loaded buckets' case. Returns ``(fires, e_sh, e_sh_c, sum0)`` with fire indices ABSOLUTE into filtered."""
-        from app import pivot_detect
-        n = len(filtered); off = self._global_idx_offset
-        LB = 220                                # detect warm-up (legs 1/5 + phase)
-        SETTLE = pivot_detect.WAIT_SECS + 300.0   # a fire is FINAL once its 1h entry-WAIT has elapsed in WALL-CLOCK
-        now_t = float(filtered[-1].get("end_time", 0.0)) or float(filtered[-1].get("start_time", 0.0))
-        m = n                                   # frozen prefix [0, m): bars whose WAIT window fully closed (settled)
-        while m > 0 and (float(filtered[m - 1].get("end_time", 0.0)) or float(filtered[m - 1].get("start_time", 0.0))) >= now_t - SETTLE:
-            m -= 1
-        c = self._psc
-        if c is not None and c["off"] == off and 0 < m <= c["n"] <= n:   # cache covers the frozen prefix -> splice
-            base = max(0, m - LB)
-            f2, e2, ec2, s2 = pivot_detect.detect_pivots(filtered[base:n], return_eff=True)
-            e_sh = c["e_sh"][:m] + list(e2[m - base:])
-            e_shc = c["e_shc"][:m] + list(ec2[m - base:])
-            sum0 = c["sum0"][:m] + list(s2[m - base:])
 
-            def _sh(f):                          # frontier fires are 0-indexed from `base` -> shift to absolute
-                g = dict(f)
-                for k in ("det_i", "wait_end_i", "zref_i"):
-                    g[k] = f[k] + base
-                g["entry_i"] = (f["entry_i"] + base) if f["entry_i"] is not None else None
-                return g
-            fires = [f for f in c["fires"] if f["det_i"] < m] + [_sh(f) for f in f2 if base + f["det_i"] >= m]
-        else:                                    # first draw / anchor moved / big jump -> full scan of the loaded set
-            f0, e0, ec0, s0 = pivot_detect.detect_pivots(filtered, return_eff=True)
-            e_sh = list(e0); e_shc = list(ec0); sum0 = list(s0)
-            fires = [dict(f) for f in f0]        # indices already absolute (base == 0)
-        self._psc = {"off": off, "n": n, "e_sh": e_sh, "e_shc": e_shc, "sum0": sum0, "fires": fires}
-        return fires, e_sh, e_shc, sum0
-
-    def _draw_pivot(self, filtered, off, lo_i, hi_i, incremental=False) -> None:
-        """Scan the selection for a SEQUENCE of S5j-r5 setups: the first fire's detection + entry, then — right
-        AFTER that entry — the next detection + entry, and so on, non-overlapping. A cancelled fire (no baseline
-        touch within the 1h WAIT) is skipped past its dead hour (so a fired RUN collapses to ONE setup, not one
-        mark per bar). Cached by the selection's bucket range so it re-detects only when the bars change."""
-        if not self.show_pivot:
-            self._clear_pivot(); return
-        n = len(filtered)
-        sig = (off, lo_i, hi_i, self.pivot_causal, self.menu.layer_state("m10_vpfade"),
-               self.menu.layer_state("m10_estar"), self.menu.layer_state("m10_vpinring"))
-        if sig == self._pivot_sig:
-            return                              # same range -> marks already drawn, keep them
-        self._pivot_sig = sig
-        from app import pivot_detect
-        LB, FWD = 220, 260                      # lookback (legs 1/5 + phase warm) / forward (1h entry scan)
-        # NO-LOOK-AHEAD ('N'): stop at the selection edge so the eff-agg driving tier/E-held/E2 uses only data up
-        # to hi_i (causal); an entry only shows once it has actually landed by the edge. Else keep the +FWD window.
-        if incremental:                         # no-selection: full loaded set via the cached/incremental scanner
-            a = 0; b_end = n                     # whole loaded set; fires come back ABSOLUTE (a == 0)
-            try:
-                _ps = time.perf_counter()
-                fires, e_sh, e_sh_c, sum0 = self._pivot_scan(filtered)
-                self._perf_note("pivot_scan", _ps)   # profiler: pivot detection cost (Start-Date-change hotspot)
-            except Exception:
-                self._clear_pivot(); self._pivot_sig = sig; return
-        else:                                   # selection: detect only the drawn range (+ lookback), as before
-            a = max(0, lo_i - LB); b_end = (hi_i + 1) if self.pivot_causal else min(n, hi_i + 1 + FWD)
-            try:
-                _ps = time.perf_counter()
-                fires, e_sh, e_sh_c, sum0 = pivot_detect.detect_pivots(filtered[a:b_end], return_eff=True)
-                self._perf_note("pivot_scan", _ps)
-            except Exception:
-                self._clear_pivot(); self._pivot_sig = sig; return
-        fl = sorted(((a + f["det_i"], (a + f["entry_i"]) if f["entry_i"] is not None else None,
-                      a + f["wait_end_i"], f["side"], a + f["zref_i"]) for f in fires), key=lambda t: (t[0], t[3]))
-        # INDEPENDENT buy/sell chains: each side keeps its OWN resume pointer, so a buy setup's entry gates
-        # only the next BUY and a sell's only the next SELL — the two sequences can overlap in time.
-        setups = []; pending = []; scan_from = {"long": lo_i, "short": lo_i}
-        _le = hi_i if self.pivot_causal else (n - 1)   # the "live edge": in no-look-ahead ('N') replay it's the
-        for det, ent, we, side, zref in fl:            # SELECTION right edge, so D/E/E2 appear + settle bar-by-bar
-            if det > hi_i:                             # as you scrub the Right arrow (else the true forming edge).
-                break
-            if det >= _le:                      # SKIP the still-FORMING edge bucket: its leg 5 reads the UNCLOSED
-                continue                        # close, so the fire flickers/un-fires. It shows once the bar closes.
-            if det < scan_from[side]:
-                continue
-            if ent is not None and ent < _le:   # entry on a CLOSED bar -> CONFIRMED fill: settled, can't move.
-                setups.append((det, ent, side, zref)); scan_from[side] = ent + 1
-            elif (ent is not None and ent >= _le) or we > _le:   # entry on the still-FORMING bar OR the 1h WAIT
-                pending.append((det, side, zref)); scan_from[side] = we   # still runs past the edge -> PENDING
-            else:                               # CANCELLED: wait fully elapsed, no touch -> don't mark
-                scan_from[side] = we
-        # DIAGNOSTIC (temporary): a CONFIRMED filled D must never vanish while still on-screen. Detection is
-        # cached per close, so this runs only when the marks actually recompute. If a D that was filled last
-        # pass is gone now yet still inside the window, append the context to data/pivot_vanish.log — including
-        # whether it still RAW-fires (walk drop) or not (detection drop). Offline replay can't reproduce the
-        # live case, so this captures ground truth. Tiny append-only file; delete this block once root-caused.
-        try:
-            raw_abs = {(off + d, s) for d, e, w, s, z in fl}
-            pend_abs = {(off + d, s) for d, s, z in pending}
-            filled_now = {(off + d, s): off + e for d, e, s, z in setups}
-            for (ad, s), pe in getattr(self, "_pivot_shown_filled", {}).items():
-                if off <= ad <= off + n - 1 and (ad, s) not in filled_now:
-                    with open(os.path.join(config.DATA_DIR, "pivot_vanish.log"), "a") as _lf:
-                        _lf.write("%s VANISHED %-5s filled-D idx=%d entry_idx=%d -> now=%s still_raw_fires=%s "
-                                  "off=%d n=%d hi_i=%d\n" % (
-                                      time.strftime("%Y-%m-%d %H:%M:%S"), s, ad, pe,
-                                      "PENDING" if (ad, s) in pend_abs else "GONE",
-                                      (ad, s) in raw_abs, off, n, off + hi_i))
-            self._pivot_shown_filled = filled_now
-        except Exception:
-            pass
-        if self.pivot_d_only:                          # V3: every fired D is just a D — fold pending into setups
-            for _d, _s, _z in pending:                 # (ent=n placeholder -> the E/E2/E3 block is skipped below)
-                setups.append((_d, n, _s, _z))
-            pending = []
-        if not setups and not pending:
-            self._pivot_hovers = []; self.pivot_tooltip.hide()
-            for _lab in self._pivot_label_pool:
-                _lab.setVisible(False)
-            self.bc_pivot_dots.setData([]); self.bc_pivot_dots.setVisible(False)
-            self.bc_pivot_stars.setData([]); self.bc_pivot_stars.setVisible(False)
-            self.bc_pivot_traps.setData([]); self.bc_pivot_traps.setVisible(False)
-            self.bc_pivot_clocks.setData([]); self.bc_pivot_clocks.setVisible(False)
-            self.bc_pivot_vpin.setData([]); self.bc_pivot_vpin.setVisible(False)
-            for _sd in ("long", "short"):
-                self.bc_pivot_leaders[_sd].setVisible(False); self.bc_pivot_conn[_sd].setVisible(False)
-            self._clear_entry_lines()
-            return
-        (_vx0, _vx1), (vy0, vy1) = self.vb.viewRange()
-        dy = (vy1 - vy0) * 0.08
-
-        def _cl(i): return float(filtered[i].get("close", filtered[i].get("close_price", 0.0)))
-        def _op(i): return float(filtered[i].get("open", filtered[i].get("open_price", 0.0)))
-        # P2 BACKDROP for the E3 / E-held-2 stage — computed EXACTLY like the HM box (EFF-HM): the net-dominant side
-        # of the last 3 LOCKED cycles as-of each bar (a cycle locks once its close is >= LW/2 buckets behind, so it
-        # can't repaint). So E3 can only appear where the HM box itself would read in the trade's favour at that bar.
-        # _hm_side(bar) -> True (net-bull) / False (net-bear) / None (no locked cycle yet -> box hidden).
-        _LOCK = config.LIVE_PANEL_WINDOW // 2
-        _le_c = len(e_sh)
-        _cyc = self._hm_cycles(e_sh, self._hm_min_cyc)          # noise cycles merged out (same as the HM box)
-        _cyc_end = [c[1] for c in _cyc]
-        _csum = [0.0]
-        for _v in e_sh:
-            _csum.append(_csum[-1] + float(_v))
-        _netbull = [None] * _le_c; _mp = 0
-        for _li in range(_le_c):
-            _lockidx = _li - _LOCK                               # last settled bar as-of _li
-            while _mp < len(_cyc_end) and _cyc_end[_mp] < _lockidx:
-                _mp += 1                                         # _mp = # of cycles whose close is locked
-            if _mp == 0:
-                continue                                         # no locked cycle -> no backdrop (box hidden)
-            _l3 = _cyc[max(0, _mp - self._hm_ncyc):_mp]          # last N LOCKED cycles (matches the HMS box)
-            _s0 = _l3[0][0]; _s1 = _l3[-1][1]; _cnt = _s1 - _s0 + 1
-            if _cnt > 0:
-                _netbull[_li] = ((_csum[_s1 + 1] - _csum[_s0]) / _cnt) >= 0.5
-
-        def _hm_side(bar):
-            _l = bar - a
-            return _netbull[_l] if 0 <= _l < _le_c else None
-
-        _csum_c = [0.0]                                          # prefix sums of the FIRST-PRINT share (current-HM)
-        for _v in e_sh_c:
-            _csum_c.append(_csum_c[-1] + float(_v))
-
-        def _cur_side(bar):
-            """The CURRENT (forming) cycle's net side as-of `bar`, causal (first-print): net-bull(True)/bear(False)."""
-            _l = bar - a
-            if not (0 <= _l < _le_c):
-                return None
-            _ci = bisect.bisect_left(_cyc_end, _l)              # cycle containing _l
-            _cs = _cyc[min(_ci, len(_cyc) - 1)][0]
-            _cnt = _l + 1 - _cs
-            return ((_csum_c[_l + 1] - _csum_c[_cs]) / _cnt) >= 0.5 if _cnt > 0 else None
-
-        def _new_e(det, buy):
-            """V3 NEW E: first bar (<=4h from D) where the aligned LOCKED P2 eff-agg spread (settled badge, LOCK
-            buckets back) >= 15 AND the HMS is in favour AND the current (forming) HM cycle is also in favour."""
-            _t0 = float(filtered[det].get("end_time", 0.0))
-            for j in range(det, b_end):                              # start at D to catch the same-candle case
-                if float(filtered[j].get("end_time", 0.0)) > _t0 + 4 * 3600.0:
-                    break
-                _jl = j - a - _LOCK                                   # LOCKED value = LOCK buckets back (settled badge)
-                _spr = ((1.0 if buy else -1.0) * (2.0 * float(e_sh[_jl]) - 1.0) * 100.0) if 0 <= _jl < len(e_sh) else 0.0
-                if _spr >= 15.0 and _hm_side(j) == buy and _cur_side(j) == buy:
-                    return j                                         # first qualifying bar (may be the D bar itself)
-            return None
-
-        seg = {"long": ([], []), "short": ([], [])}      # DASHED leaders lx/ly per side
-        con = {"long": ([], []), "short": ([], [])}      # SOLID connectors cx/cy per side
-        self._pivot_hovers = []; used = 0; spots = []; trade_entries = []; e_ok_live = []   # recorded E's (for live audio)
-        faded_e_live = []                                    # faded study E's landing at the live edge (for the "Faded E" audio)
-        star_spots = []; trap_spots = []; clock_spots = []; vpin_spots = []   # VPFADE ★/✕/clock + VPIN-confluence ring
-        _vpin_on = self.menu.layer_state("m10_vpinring")     # electric-purple ring on entries with VPIN >= warn (ratio>=1)
-        # ONE fast causal-tier pass over the window (byte-identical to per-bar cutpoints), then O(1) lookups per badge
-        # — instead of re-sorting a 240-window at every D/E. WARN/TOXIC tier == VPIN >= warn == ratio >= 1.0.
-        _vptiers = (vpin_adaptive.vpin_tiers_from_series(
-            vpin_adaptive.rolling_vpin(filtered, config.VPIN_WINDOW))[0]) if _vpin_on else None
-
-        def _vpin_elev(i):
-            """VPIN ratio >= 1.0 at bar i: its causal adaptive tier is WARN or TOXIC (at/above the warn cutpoint)."""
-            return _vptiers is not None and 0 <= i < len(_vptiers) and _vptiers[i] != vpin_adaptive.NORMAL
-
-        _usedE = {"long": set(), "short": set()}   # dedup: one New-E per bar per side (many D's can converge on one E)
-        _usedEf = {"long": set(), "short": set()}  # dedup for FADED study E's (kept separate so a taken E is never dropped)
-
-        def _e3_entry(cand, buy, shelf, side, faded, html):
-            """E3 / E-held-2: if the live P2 HM backdrop is AGAINST the trade at the candidate entry (E-held / E2),
-            wait for the first later bar (<=4h) whose backdrop flips IN FAVOUR and mark it 'E3' — that becomes the
-            trade entry, so its SL/+0.10%/+0.40% re-anchor to E3 (via _entry_sl, entry-referenced) just like E2.
-            Backdrop already agreeing (or no flip within the window) -> keep the candidate as the entry."""
-            nonlocal used
-            _sd = _hm_side(cand)
-            if _sd is None or _sd == buy:
-                return cand                                       # no backdrop info, or already in favour -> no E3
-            et_c = float(filtered[cand].get("end_time", 0.0)); e3 = None
-            for j in range(cand + 1, b_end):                      # backdrop is AGAINST -> wait for a definite flip
-                if et_c and float(filtered[j].get("end_time", 0.0)) > et_c + 4 * 3600.0:
-                    break
-                _sj = _hm_side(j)
-                if _sj is not None and _sj == buy:
-                    e3 = j; break
-            if e3 is None or e3 >= n:
-                return cand
-            _rgb = (40, 230, 90) if buy else (255, 45, 70)
-            e3_spot = {"pos": (e3, shelf), "brush": pg.mkBrush(*_rgb), "pen": pg.mkPen(0, 0, 0, 180)}
-            e3_letter = (0, 0, 0)
-            if faded:
-                self._pivot_fade_spot(e3_spot); e3_letter = PIVOT_FADE_RGB
-            used = self._pivot_put_label(used, e3, shelf, "E3", e3_letter)
-            spots.append(e3_spot)
-            self._pivot_hovers.append((e3, shelf, html, buy))
-            _lx, _ly = seg[side]; _cx, _cy = con[side]; _fld = "low" if buy else "high"
-            _lx += [e3, e3, float("nan")]; _ly += [float(filtered[e3].get(_fld, 0.0)), shelf, float("nan")]
-            _cx += [cand, e3, float("nan")]; _cy += [shelf, shelf, float("nan")]
-            return e3
-
-        for det, ent, side, zref in setups:
-            buy = side == "long"; fld = "low" if buy else "high"
-            side_rgb = (40, 230, 90) if buy else (255, 45, 70)       # green buy / red sell
-            brush = pg.mkBrush(*side_rgb)                            # E badge (+ filled very-high D) fill
-            # PIVOT-ZZTRAIL-v2 fade: dim the whole setup (D + E/E2 glyphs) if the strategy would SKIP it. Overlay-only.
-            faded = (ent < n) and not self.pivot_d_only and not self._pivot_v2_taken(filtered, det, ent, buy, e_sh_c, a, n, b_end)
-            lx, ly = seg[side]; cx, cy = con[side]
-            tips = [float(filtered[det].get(fld, 0.0))]
-            if ent < n:
-                tips.append(float(filtered[ent].get(fld, 0.0)))
-            shelf = (min(tips) - dy) if buy else (max(tips) + dy)
-            gid = off + det
-            # D badge fill = the FROZEN first-print P2 spread AT D (V3 tier). HOLLOW (border only) = <=63; FILLED
-            # side colour = >63 (top-1/3); cyan(buy)/orange(sell) = >80 (strongest).
-            di = det - a
-            sd = ((2.0 * float(e_sh_c[di]) - 1.0) * 100.0) if 0 <= di < len(e_sh_c) else 0.0   # FIRST-PRINT (frozen)
-            p2d = sd if buy else -sd                                 # aligned (+ve = with the trade)
-            tier = "cyan" if p2d > PIVOT_P2D_VHIGH else ("green" if p2d > PIVOT_P2D_HIGH else "hollow")  # D fill tier
-            _z3 = None; step3 = False; _ne = None; e_ok = False     # V3: which D's/E's are RECORDED entries (kept bright)
-            if self.pivot_d_only and self.pivot_v3_filter:
-                _z3 = self._zone5_at(float(filtered[det].get("end_time", 0.0)), _cl(det))
-                step3 = _pivot_v3_take(buy, tier, _z3)              # Path A: cyan/orange + directional 4H zone (enter at D)
-                if self.pivot_new_e and not step3:                 # Path B: the OTHER D's hunt the New E
-                    _ne = _new_e(det, buy)
-                    if _ne == det:                                 # E = D (same candle) -> setup skipped entirely
-                        continue
-                    if _ne is not None:
-                        _ez = self._zone5_at(float(filtered[_ne].get("end_time", 0.0)), _cl(_ne))
-                        e_ok = _pivot_v3_e_take(buy, tier, _z3, _ez)   # is this E one of the RECORDED combos?
-                        if e_ok:
-                            if _ne in _usedE[side]:                # dedup: one recorded E per bar per side
-                                continue
-                            _usedE[side].add(_ne)
-                faded = not (step3 or e_ok)                        # fade everything that is NOT a recorded D or E entry
-            # D-entry VP STAR / TRAP + cyan wait-CLOCK (overlay; toggle m10_vpfade). A real D-ENTRY (Step-3 Path A =
-            # cyan/orange tier + directional zone; `step3`) earns a gold ★ if its forming-VP is a good bin, or a red ✕
-            # if it is the TRAP bin: BUY trap = lower-VA (data-backed), SELL trap = upper-VA (NOT data-backed — user's
-            # structural choice; the study said Sell's worst bin is above-VAH). Star bins are the other three (both
-            # value-area edges above-VAH/below-VAL always star; interior leans to the trade's own break). A cyan/orange
-            # D that FAILS Step 3 (non-directional zone -> it drops to Path-B and hunts a New-E) gets a wait-CLOCK
-            # instead. Pure highlight, no trade change; frozen V3 detection untouched. None VP -> no mark.
-            _d_star = _d_trap = _d_clock = False
-            if self.menu.layer_state("m10_vpfade"):
-                if step3:                                       # cyan/orange + directional -> real D-entry: ★ or ✕
-                    _dtrap = "lower VA" if buy else "upper VA"
-                    _dvp = self._vpform_bin_at(filtered, det)
-                    if _dvp == _dtrap:
-                        _d_trap = True
-                    elif _dvp is not None:
-                        _d_star = True
-                elif tier == "cyan" and self.pivot_d_only and self.pivot_v3_filter:   # cyan, non-directional -> Path-B
-                    _d_clock = True                              # this cyan/orange D is an E-hunter, not a D-entry
-            _tname = {"cyan": ("CYAN" if buy else "ORANGE"),        # tier colour is side-specific
-                      "green": ("GREEN" if buy else "RED"),
-                      "hollow": ("HOLLOW GREEN" if buy else "HOLLOW RED")}[tier]
-            if self.pivot_d_only:                                   # V3: lightweight D-only hover (no E/E2 trajectory)
-                html = ("<div style='font-family:Consolas; font-size:11px; color:#c8ccd4; padding:1px 3px'>"
-                        "<b style='color:%s'>%s-P_%s</b> &nbsp;<b>%s</b><br><b>N</b>: "
-                        "<b style='color:#e8ebf0'>%d</b> bars &nbsp; P2@<b>D</b>: <span style='color:%s'>%+.0f%%</span></div>"
-                        ) % ("#28e65a" if buy else "#ff5566", "B" if buy else "S", self._fmt_idx(gid),
-                             _tname, (det - zref) if 0 <= zref < n else 0,
-                             "#28e65a" if p2d >= 0 else "#ff5566", p2d)
-            else:
-                html = self._pivot_stats_html(filtered, det, ent, zref, buy, gid, n, _cl, _op, e_sh_c, sum0, a)
-            if p2d > PIVOT_P2D_VHIGH:                                # very high (strongest D) -> filled cyan/orange
-                _f = (0, 200, 255) if buy else (255, 145, 0)
-                d_spot = {"pos": (det, shelf), "brush": pg.mkBrush(*_f), "pen": pg.mkPen(0, 0, 0, 180)}; d_letter = (0, 0, 0)
-            elif p2d > PIVOT_P2D_HIGH:                               # high (D beats E) -> filled side colour
-                d_spot = {"pos": (det, shelf), "brush": brush, "pen": pg.mkPen(0, 0, 0, 180)}; d_letter = (0, 0, 0)
-            else:                                                    # default (E better) -> hollow, side colour
-                d_spot = {"pos": (det, shelf), "brush": pg.mkBrush(0, 0, 0, 0),
-                          "pen": pg.mkPen(side_rgb, width=2)}; d_letter = side_rgb
-            if faded:                                              # V3: dim any D that is not a recorded entry (v2 fade unchanged)
-                self._pivot_fade_spot(d_spot); d_letter = PIVOT_FADE_RGB
-            used = self._pivot_put_label(used, det, shelf, "D", d_letter)   # DETECTION badge
-            spots.append(d_spot)
-            if _vpin_elev(det):                  # VPIN confluence -> electric-purple ring on EVERY D badge (any tier/fade)
-                vpin_spots.append({"pos": (det, shelf)})
-            if _d_star or _d_trap or _d_clock:   # D mark just outside the coin, away from the candle (buy below / sell above)
-                _dy_ann = (shelf - dy * 0.5) if buy else (shelf + dy * 0.5)
-                (star_spots if _d_star else trap_spots if _d_trap else clock_spots).append({"pos": (det, _dy_ann)})
-            self._pivot_hovers.append((det, shelf, html, buy))
-            lx += [det, det, float("nan")]; ly += [float(filtered[det].get(fld, 0.0)), shelf, float("nan")]
-            if 0 <= zref < n:                    # dashed leader from the badge back to the leg-5 (N=60..100)
-                lx += [det, zref, float("nan")]; ly += [shelf, _op(zref), float("nan")]   # -> reference open
-            # NEW E badge: BRIGHT for a RECORDED combo (e_ok, a real V3 entry); DIM for a FADED study D so its E +
-            # position sim can still be eyeballed. Study E's dedup separately so a taken E is never dropped by one.
-            _draw_e = None
-            if e_ok and _ne is not None and det < _ne < n:
-                _draw_e = _ne                                      # recorded combo (already deduped in the filter phase)
-            elif (not e_ok) and _ne is not None and det < _ne < n \
-                    and _ne not in _usedE[side] and _ne not in _usedEf[side]:
-                _usedEf[side].add(_ne); _draw_e = _ne             # faded study E (kept dim, no cross-drop of a taken E)
-            if _draw_e is not None:
-                _ergb = (40, 230, 90) if buy else (255, 45, 70)
-                e_spot = {"pos": (_draw_e, shelf), "brush": pg.mkBrush(*_ergb), "pen": pg.mkPen(0, 0, 0, 180)}
-                e_letter = (0, 0, 0)
-                if not e_ok:                                       # study E -> dim badge + grey letter
-                    self._pivot_fade_spot(e_spot); e_letter = PIVOT_FADE_RGB
-                used = self._pivot_put_label(used, _draw_e, shelf, "E", e_letter)
-                spots.append(e_spot)
-                if _vpin_elev(_draw_e):          # VPIN confluence -> ring on EVERY E badge (recorded OR faded)
-                    vpin_spots.append({"pos": (_draw_e, shelf)})
-                self._pivot_hovers.append((_draw_e, shelf, html, buy))
-                lx += [_draw_e, _draw_e, float("nan")]; ly += [float(filtered[_draw_e].get(fld, 0.0)), shelf, float("nan")]
-                cx += [det, _draw_e, float("nan")]; cy += [shelf, shelf, float("nan")]
-                trade_entries.append((_draw_e, buy, shelf, not e_ok, "B"))   # Path B = fixed bracket exit; fade = study E
-                if e_ok:
-                    e_ok_live.append((_draw_e, buy))               # recorded E entry -> candidate for the live audio
-                else:
-                    faded_e_live.append((_draw_e, buy))            # faded study E -> candidate for the "Faded E" live audio
-                # E VP-edge STAR / TRAP (overlay; toggle m10_estar) — UNVALIDATED study aid on EVERY drawn E (recorded
-                # or faded). E is the MIRROR of the D: it wants its OWN value-half (Buy ★ = lower-VA / below-VAL;
-                # Sell ★ = above-VAH / upper-VA), and the OPPOSITE half is the trap (red ✕). Pure highlight, no trade
-                # change; frozen V3 untouched. NOT data-backed (E cohorts breakeven/negative) — for eyeballing only.
-                if self.menu.layer_state("m10_estar"):
-                    _evp = self._vpform_bin_at(filtered, _draw_e)
-                    _eown = ("lower VA", "below VAL") if buy else ("above VAH", "upper VA")
-                    _etrap = ("upper VA", "above VAH") if buy else ("lower VA", "below VAL")
-                    _ey = (shelf - dy * 0.5) if buy else (shelf + dy * 0.5)
-                    if _evp in _eown:
-                        star_spots.append({"pos": (_draw_e, _ey)})
-                    elif _evp in _etrap:
-                        trap_spots.append({"pos": (_draw_e, _ey)})
-            if step3 and det < n:                                  # V3 Step-3 (Path A) = direct entry at D
-                trade_entries.append((det, buy, shelf, False, "A"))   # Path A = D-EXIT (ride opp-D), anchored at the D
-            if ent < n and not self.pivot_d_only:   # ENTRY badge (E/E2/E3) — GATED OFF in V3 D-only mode
-                # E is a VALID entry only if panel-2 HELD to E (aligned live spread @E > 0 AND its min over
-                # [D,E] > -50). If it FLIPPED, the E badge GREYS OUT and the indicator hunts E2 = the first
-                # later bar (within 1h) whose live spread RE-CONFIRMS to >= PIVOT_E2_MIN (rescues the flip).
-                _di, _ei, _sg = det - a, ent - a, (1.0 if buy else -1.0)
-                if 0 <= _di < len(e_sh_c) and 0 <= _ei < len(e_sh_c):
-                    _liv = [_sg * (2.0 * float(e_sh_c[k]) - 1.0) * 100.0 for k in range(_di, _ei + 1)]   # first-print
-                    e_held = _liv[-1] > 0.0 and min(_liv) > -50.0
-                else:
-                    e_held = True
-                if e_held:                       # green/red fill, black border
-                    e_brush, e_pen = brush, pg.mkPen(0, 0, 0, 180)
-                else:                            # FLIPPED -> gray fill + ORANGE border (don't-take flag)
-                    e_brush, e_pen = pg.mkBrush(120, 120, 120), pg.mkPen(255, 145, 0, width=2.5)
-                e_spot = {"pos": (ent, shelf), "brush": e_brush, "pen": e_pen}; e_letter = (0, 0, 0)
-                if faded:
-                    self._pivot_fade_spot(e_spot); e_letter = PIVOT_FADE_RGB
-                used = self._pivot_put_label(used, ent, shelf, "E", e_letter)
-                spots.append(e_spot)
-                self._pivot_hovers.append((ent, shelf, html, buy))
-                lx += [ent, ent, float("nan")]; ly += [float(filtered[ent].get(fld, 0.0)), shelf, float("nan")]
-                cx += [det, ent, float("nan")]; cy += [shelf, shelf, float("nan")]
-                if e_held and tier == "hollow":  # hollow + E held -> trade entry (E, or E3 if HM backdrop is against)
-                    trade_entries.append((_e3_entry(ent, buy, shelf, side, faded, html), buy, shelf, faded, "A"))
-                if not e_held:                   # gray E -> look for the E2 re-confirmation entry
-                    et_e = float(filtered[ent].get("end_time", 0.0)); e2 = None
-                    for j in range(ent + 1, b_end):
-                        if et_e and float(filtered[j].get("end_time", 0.0)) > et_e + 3600.0:
-                            break
-                        jj = j - a
-                        if 0 <= jj < len(e_sh_c):
-                            _v = (2.0 * float(e_sh_c[jj]) - 1.0) * 100.0        # first-print re-confirm
-                            if (_v if buy else -_v) >= PIVOT_E2_MIN:
-                                e2 = j; break
-                    if e2 is not None and e2 < n:
-                        html_e2 = self._pivot_stats_html(filtered, det, e2, zref, buy, gid, n, _cl, _op,
-                                                         e_sh_c, sum0, a, ent)   # E2 box: flip@E -> re-conf@E2
-                        e2_spot = {"pos": (e2, shelf), "brush": brush, "pen": pg.mkPen(0, 0, 0, 180)}
-                        e2_letter = (0, 0, 0)
-                        if faded:
-                            self._pivot_fade_spot(e2_spot); e2_letter = PIVOT_FADE_RGB
-                        used = self._pivot_put_label(used, e2, shelf, "E2", e2_letter)
-                        spots.append(e2_spot)
-                        self._pivot_hovers.append((e2, shelf, html_e2, buy))
-                        lx += [e2, e2, float("nan")]; ly += [float(filtered[e2].get(fld, 0.0)), shelf, float("nan")]
-                        cx += [ent, e2, float("nan")]; cy += [shelf, shelf, float("nan")]
-                        # E2 = trade entry, unless the HM backdrop is against here -> then E3 (the flip) is the entry
-                        trade_entries.append((_e3_entry(e2, buy, shelf, side, faded, html_e2), buy, shelf, faded, "A"))
-        # PENDING live D's: a fire whose entry hasn't landed yet (1h WAIT still open at the edge). Distinct
-        # AMBER ring = "waiting for entry"; it auto-completes into the full D(+E) setup on the next re-detect
-        # once price touches the baseline. Side colour = direction; no E/connector yet.
-        for det, side, zref in pending:
-            buy = side == "long"; fld = "low" if buy else "high"
-            fill = pg.mkBrush(40, 230, 90) if buy else pg.mkBrush(255, 45, 70)
-            lx, ly = seg[side]
-            dtip = float(filtered[det].get(fld, 0.0)); shelf = (dtip - dy) if buy else (dtip + dy)
-            gid = off + det; di = det - a
-            sd = ((2.0 * float(e_sh_c[di]) - 1.0) * 100.0) if 0 <= di < len(e_sh_c) else 0.0   # FIRST-PRINT (frozen)
-            p2d = sd if buy else -sd
-            phtml = ("<div style='font-family:Consolas; font-size:11px; color:#c8ccd4; padding:1px 3px'>"
-                     "<b style='color:%s'>%s-P_%s</b><br><b>N</b>: <b style='color:#e8ebf0'>%d</b> bars<br>"
-                     "P2@<b>D</b>: <span style='color:%s'>%+.0f%%</span><br>"
-                     "<b style='color:#ffb400'>&#9203; waiting for entry</b></div>"
-                     ) % ("#28e65a" if buy else "#ff5566", "B" if buy else "S", self._fmt_idx(gid),
-                          (det - zref) if 0 <= zref < n else 0,
-                          "#28e65a" if p2d >= 0 else "#ff5566", p2d)
-            if self.pivot_causal:                        # replay: show the LIVE tier badge (hollow/filled, repaints
-                if p2d > PIVOT_P2D_VHIGH:                # as you scrub) inside an amber ring = still waiting for entry
-                    _pf = (0, 200, 255) if buy else (255, 145, 0); _pbr = pg.mkBrush(*_pf); _plt = (0, 0, 0)
-                elif p2d > PIVOT_P2D_HIGH:
-                    _pbr = fill; _plt = (0, 0, 0)
-                else:                                    # hollow: transparent centre, side-colour letter
-                    _pbr = pg.mkBrush(0, 0, 0, 0); _plt = (40, 230, 90) if buy else (255, 45, 70)
-                used = self._pivot_put_label(used, det, shelf, "D", _plt)
-                spots.append({"pos": (det, shelf), "brush": _pbr, "pen": pg.mkPen(255, 180, 0, width=2.5)})  # amber ring
-            else:
-                used = self._pivot_put_label(used, det, shelf, "D")
-                spots.append({"pos": (det, shelf), "brush": fill, "pen": pg.mkPen(255, 180, 0, width=2.5)})  # amber
-            self._pivot_hovers.append((det, shelf, phtml, buy))
-            lx += [det, det, float("nan")]; ly += [dtip, shelf, float("nan")]
-        for j in range(used, len(self._pivot_label_pool)):
-            self._pivot_label_pool[j].setVisible(False)
-        self.bc_pivot_dots.setData(spots); self.bc_pivot_dots.setVisible(bool(spots))
-        self.bc_pivot_stars.setData(star_spots); self.bc_pivot_stars.setVisible(bool(star_spots))
-        self.bc_pivot_traps.setData(trap_spots); self.bc_pivot_traps.setVisible(bool(trap_spots))
-        self.bc_pivot_clocks.setData(clock_spots); self.bc_pivot_clocks.setVisible(bool(clock_spots))
-        self.bc_pivot_vpin.setData(vpin_spots); self.bc_pivot_vpin.setVisible(bool(vpin_spots))
-        for _sd in ("long", "short"):
-            _lx, _ly = seg[_sd]; _cx, _cy = con[_sd]
-            self.bc_pivot_leaders[_sd].setData(_lx, _ly, connect="finite")
-            self.bc_pivot_leaders[_sd].setVisible(bool(_lx))
-            self.bc_pivot_conn[_sd].setData(_cx, _cy, connect="finite")
-            self.bc_pivot_conn[_sd].setVisible(bool(_cx))
-        self._pivot_n = n
-        # LIVE audio: "Enter Buy/Sell E now" the instant a recorded Path-B E entry lands on the just-closed
-        # live-edge bucket (live mode only; causal replay truncates detection so nothing sits at the true edge).
-        # Seed once on enable so a pre-existing edge E doesn't blast; then one voice per new bucket.
-        if self._pivot_audio_on and not self.pivot_causal and n:
-            _etn = float(filtered[-1].get("end_time", 0.0))
-            if not self._pivot_e_seeded:
-                self._pivot_e_seeded = True; self._pivot_e_spoken.add(_etn)
-            elif _etn not in self._pivot_e_spoken:
-                # ONE E voice per new bucket: a RECORDED E ("Enter E now") takes priority; else a FADED study E
-                # that landed on the just-closed edge speaks "Faded Buy/Sell E".
-                _said = None
-                for _eb, _buy in e_ok_live:
-                    if float(filtered[_eb].get("end_time", 0.0)) == _etn:
-                        _said = f"Enter {'Buy' if _buy else 'Sell'} E now"; break
-                if _said is None:
-                    for _eb, _buy in faded_e_live:
-                        if float(filtered[_eb].get("end_time", 0.0)) == _etn:
-                            _said = f"Faded {'Buy' if _buy else 'Sell'} E"; break
-                if _said is not None:
-                    self._pivot_e_spoken.add(_etn)
-                    self.alerts.audio.speak(_said, gated=False)
-        d_bars = {"long": set(), "short": set()}       # D-print timeline (drives D-EXIT: opposite-D TP / same-D trail)
-        for _d, _e, _s, _z in setups:
-            d_bars[_s].add(_d)
-        for _d, _s, _z in pending:                     # (empty in D-only mode; folded into setups above)
-            d_bars[_s].add(_d)
-        self._build_entry_overlay(filtered, off, trade_entries, d_bars)
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -6184,291 +5422,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 lvl = p
         return lvl
 
-    def _entry_sl(self, lab, eb, buy, epx):
-        """D-EXIT initial stop: 0.1% below the last CONFIRMED swing low (long) / above the last confirmed swing
-        high (short) known at entry (HL or LL / HH or LH, confirm_bar <= eb). Fallback 0.3%."""
-        lvl = self._last_swing(lab, eb, buy)
-        if lvl is None:
-            return epx * (1 - 0.003) if buy else epx * (1 + 0.003)
-        return lvl * (1 - 0.001) if buy else lvl * (1 + 0.001)
 
-    def _entry_sim(self, lab, H, L, C, eb, buy, sl0, entry, d_bars):
-        """Forward-simulate the V3 D-EXIT from entry eb: FIXED structural stop (NO auto-trail); TAKE PROFIT when
-        an OPPOSITE-side D prints (close at that bar); when a SAME-side D prints, ratchet the stop to 0.1% below
-        the last confirmed swing low / above swing high (tighten only). No fixed TP, no breakeven lock.
-        -> (ratchets [(same_D_bar, level)], exit_bar, max reached price, exit gross%, reason in {oppD,SL,edge}).
-        Still open at the data edge -> gross is the m2m."""
-        n = len(H)
-        opp = d_bars["short" if buy else "long"]; same = d_bars["long" if buy else "short"]
-        sl = sl0; maxpx = entry; ratchets = []; exit_bar = n - 1; gross = None; reason = "edge"
-        for j in range(eb + 1, n):
-            maxpx = max(maxpx, H[j]) if buy else min(maxpx, L[j])
-            if (L[j] <= sl) if buy else (H[j] >= sl):                    # fixed / same-D-trailed stop hit intrabar
-                exit_bar = j; gross = ((sl - entry) if buy else (entry - sl)) / entry * 100.0; reason = "SL"; break
-            if j in opp:                                                 # opposite-side D prints -> take profit at close
-                exit_bar = j; gross = ((C[j] - entry) if buy else (entry - C[j])) / entry * 100.0; reason = "oppD"; break
-            if j in same:                                               # same-side D prints -> ratchet the stop
-                lvl = self._last_swing(lab, j, buy)
-                if lvl is not None:
-                    new = lvl * (1 - 0.001) if buy else lvl * (1 + 0.001)
-                    new = max(sl, new) if buy else min(sl, new)          # tighten only
-                    if abs(new - sl) > 1e-12:
-                        ratchets.append((j, new))                        # a same-D that RAISED the stop
-                    sl = new
-        if gross is None:                                               # still open at the data edge -> mark to market
-            gross = ((C[n - 1] - entry) if buy else (entry - C[n - 1])) / entry * 100.0
-        return ratchets, exit_bar, maxpx, gross, reason
 
-    @staticmethod
-    def _entry_sim_bracket(H, L, C, eb, buy, sl, tp, entry):
-        """Path-B exit: a PURE fixed bracket — flat 0.2% stop / +0.6% target from entry. SL checked first intrabar.
-        -> ([], exit_bar, max reached price, gross%, reason in {TP,SL,edge}). Open at the edge -> m2m."""
-        n = len(H); maxpx = entry; exit_bar = n - 1; gross = None; reason = "edge"
-        for j in range(eb + 1, n):
-            maxpx = max(maxpx, H[j]) if buy else min(maxpx, L[j])
-            if (L[j] <= sl) if buy else (H[j] >= sl):                    # flat stop hit (checked first)
-                exit_bar = j; gross = ((sl - entry) if buy else (entry - sl)) / entry * 100.0; reason = "SL"; break
-            if (H[j] >= tp) if buy else (L[j] <= tp):                    # fixed take-profit hit
-                exit_bar = j; gross = ((tp - entry) if buy else (entry - tp)) / entry * 100.0; reason = "TP"; break
-        if gross is None:
-            gross = ((C[n - 1] - entry) if buy else (entry - C[n - 1])) / entry * 100.0
-        return [], exit_bar, maxpx, gross, reason
 
-    def _build_entry_overlay(self, filtered, off, trade_entries, d_bars) -> None:
-        """Per trade entry, forward-sim the PER-PATH exit + store it, then (re)draw. Path A (direct-D) = D-EXIT
-        (structural stop, opposite-D take-profit, same-D ratchets; needs `d_bars` = the D-print timeline). Path B
-        (New-E) = a flat 0.2% SL / +0.6% TP bracket (its TP renders as a light-blue zone). trade_entries carry the
-        path tag; `d_bars` = {'long': set(bars), 'short': set(bars)}."""
-        if not trade_entries:
-            self._clear_entry_lines(); return
-        H = [float(b.get("high", 0.0)) for b in filtered]; L = [float(b.get("low", 0.0)) for b in filtered]
-        C = [float(b.get("close", b.get("close_price", 0.0))) for b in filtered]
-        swc = structure._zigzag_confirmed(H, L, structure.ZIGZAG_PCT / 100.0)
-        lab = []; ph = pl = None                                       # label swings + carry the confirm bar
-        for pb, p, ih, cb in swc:
-            if ih:
-                lv = "HH" if (ph is not None and p > ph) else ("LH" if ph is not None else None); ph = p
-            else:
-                lv = "HL" if (pl is not None and p > pl) else ("LL" if pl is not None else None); pl = p
-            lab.append((pb, p, ih, cb, lv))
-        ent = []
-        for eb, buy, shelf, fade, path in trade_entries:
-            epx = C[eb]
-            if path == "B":                                            # Path B (New-E) -> flat 0.2% SL / +0.6% TP bracket
-                sl = epx * (1 - 0.002) if buy else epx * (1 + 0.002)
-                tp = epx * (1 + 0.006) if buy else epx * (1 - 0.006)
-                trails, exit_bar, maxpx, gross, reason = self._entry_sim_bracket(H, L, C, eb, buy, sl, tp, epx)
-            else:                                                      # Path A (direct-D) -> D-EXIT (ride opp-D)
-                sl = self._entry_sl(lab, eb, buy, epx); tp = None
-                trails, exit_bar, maxpx, gross, reason = self._entry_sim(lab, H, L, C, eb, buy, sl, epx, d_bars)
-            ent.append((off + eb, eb, shelf, epx, sl, reason, tp, buy, trails, maxpx, exit_bar, gross, fade, path))
-        ent.sort(key=lambda e: e[1])
-        self._pivot_entries = ent
-        self._draw_entry_lines()
 
-    def _clear_entry_lines(self) -> None:
-        for _l in self._entry_line_pool:
-            _l.setVisible(False)
-        for _t in self._entry_lbl_pool:
-            _t.setVisible(False)
-        for _z in self._entry_zone_pool:
-            _z.setVisible(False)
-        self.bc_entry_active.setVisible(False)
-        self._pivot_entries = []
 
-    def _entry_default_key(self):
-        """NO entry shows its position sim by DEFAULT — the overlay starts hidden on every D and E (returning
-        None makes `key == last_key` False for every real key). Click a badge to toggle that entry's lines on;
-        click again to hide. (Was: the last RECORDED non-faded entry auto-showed.)"""
-        return None
 
-    def _draw_entry_lines(self) -> None:
-        """Render the PER-PATH exit overlay for each entry effectively ON (user toggle, else default = last entry).
-        Common: entry white solid; MAX reached green solid (+%); outcome ring (red loser / white flat / green winner)
-        + a tag. **Path A (D-EXIT):** fixed structural SL yellow; same-D stop RATCHETS blue dashed; on a definitive
-        exit the EXIT line is highlighted and the rest drop to 60% opacity — TP@opposite-D = NEON PURPLE line, stop =
-        yellow SL. **Path B (bracket):** flat 0.2% SL yellow + the TP drawn as an ELECTRIC-BLUE no-border BOX
-        spanning +0.6%..+0.7% (fills at 0.6%). Lines run to the EXIT bar (min 60-bar)."""
-        entries = self._pivot_entries
-        last_key = self._entry_default_key()   # last RECORDED entry, else the last faded one (never blank)
-        LINE_W = 60                                                 # minimum line width in bars (quick-stop floor)
-        RTAG = {"oppD": "TP @ opp-D", "TP": "TP +0.6%", "SL": "stop", "edge": "open"}
-        used_l = used_t = used_z = 0; ring_spots = []
-        for e in entries:
-            key, eb, epx = e[0], e[1], e[3]
-            on = self._entry_lines_user.get(key, key == last_key)   # faded study E (e[12]) never defaults on -> click its badge
-            if not on:
-                continue
-            buy = e[7]; sgn = 1.0 if buy else -1.0                  # % trade-aligned (short SL reads negative)
-            gross = e[11]
-            rcol = (255, 30, 70) if gross < 0.0 else ((255, 255, 255) if gross < 0.2 else (30, 255, 100))
-            ring_spots.append({"pos": (eb, e[2]), "size": 30, "brush": pg.mkBrush(0, 0, 0, 0),
-                               "pen": pg.mkPen(rcol, width=2.8)})    # red loser / green winner / white ~flat
-            rb = min(max(e[10], eb + LINE_W), self._pivot_n - 1)    # right = exit bar, floored to a min width
-            reason = e[5]; path = e[13]
-            exit_px = epx * (1.0 + (1.0 if buy else -1.0) * gross / 100.0)
-            # (left_bar, level, colour, dash, show_%, is_exit) — is_exit line stays full, others dim to 60% on exit
-            lines = [(eb, e[3], (235, 235, 235), None, False, False),     # entry — white SOLID
-                     (eb, e[4], (255, 220, 0), None, True, reason == "SL"),   # SL — yellow (exit if stopped)
-                     (eb, e[9], (40, 230, 90), None, True, False)]        # MAX reached price — green SOLID (+%)
-            if path == "B":                                        # Path B bracket: +0.6% TP = LIGHT-BLUE no-border ZONE
-                exited = False                                     # (no dim for the bracket view — the zone is the highlight)
-                if used_z >= len(self._entry_zone_pool):
-                    _zn = pg.PlotCurveItem(pen=pg.mkPen(None)); _zn.setZValue(5)   # behind the price action
-                    self.plot.addItem(_zn, ignoreBounds=True); self._entry_zone_pool.append(_zn)
-                _zn = self._entry_zone_pool[used_z]; used_z += 1
-                tp_lo = epx * (1 + sgn * 0.006); tp_hi = epx * (1 + sgn * 0.007)    # target BOX = +0.6% .. +0.7%
-                _zn.setData([eb, rb], [tp_hi, tp_hi]); _zn.setFillLevel(tp_lo)      # electric-blue band between them
-                _zn.setBrush(pg.mkBrush(0, 150, 255, 34)); _zn.setPen(pg.mkPen(None)); _zn.setVisible(True)
-                if used_t >= len(self._entry_lbl_pool):
-                    _tz = pg.TextItem(anchor=(0.0, 0.5)); _tz.setZValue(33)
-                    _tf = QtGui.QFont("Consolas", 10); _tf.setBold(True); _tz.textItem.setFont(_tf)
-                    self.plot.addItem(_tz, ignoreBounds=True); self._entry_lbl_pool.append(_tz)
-                _tz = self._entry_lbl_pool[used_t]; used_t += 1
-                _tz.setColor((70, 175, 255)); _tz.setText("TP 0.6-0.7%"); _tz.setPos(rb, tp_hi); _tz.setVisible(True)
-            else:                                                  # Path A D-EXIT: ratchets + purple opp-D line + dim
-                exited = reason in ("oppD", "SL")
-                for pb, lvl in e[8]:                               # same-D stop ratchets — left attached to that D
-                    lines.append((pb, lvl, (70, 150, 255), [4.0, 7.0], True, False))
-                if reason == "oppD":                              # TAKE PROFIT @ opposite-D -> NEON PURPLE exit line
-                    lines.append((eb, exit_px, (200, 80, 255), None, True, True))
-            # exit-reason tag at the exit bar (on the badge shelf row, clear of the price lines)
-            if used_t >= len(self._entry_lbl_pool):
-                _tg = pg.TextItem(anchor=(0.0, 0.5)); _tg.setZValue(33)
-                _tf = QtGui.QFont("Consolas", 10); _tf.setBold(True); _tg.textItem.setFont(_tf)
-                self.plot.addItem(_tg, ignoreBounds=True); self._entry_lbl_pool.append(_tg)
-            _tg = self._entry_lbl_pool[used_t]; used_t += 1
-            _tgcol = (200, 80, 255) if reason == "oppD" else ((150, 200, 255) if reason == "TP" else rcol)
-            _tg.setColor(_tgcol); _tg.setText(RTAG.get(reason, "")); _tg.setPos(rb, e[2]); _tg.setVisible(True)
-            for lb, lvl, col, dash, pct, emph in lines:
-                a = 255 if (not exited or emph) else 153            # 60% opacity on the non-exit lines once exited
-                if used_l >= len(self._entry_line_pool):
-                    _ln = pg.PlotCurveItem(); _ln.setZValue(27)
-                    self.plot.addItem(_ln, ignoreBounds=True); self._entry_line_pool.append(_ln)
-                _ln = self._entry_line_pool[used_l]; used_l += 1
-                pen = pg.mkPen(col + (a,), width=(2.4 if emph else 1.6)); pen.setCosmetic(True)
-                if dash:
-                    pen.setDashPattern(dash)
-                _ln.setPen(pen); _ln.setData([lb, rb], [lvl, lvl]); _ln.setVisible(True)
-                if used_t >= len(self._entry_lbl_pool):
-                    _tl = pg.TextItem(anchor=(0.0, 0.5)); _tl.setZValue(33)   # anchor left -> label on the RIGHT
-                    _tf = QtGui.QFont("Consolas", 10); _tf.setBold(True); _tl.textItem.setFont(_tf)
-                    self.plot.addItem(_tl, ignoreBounds=True); self._entry_lbl_pool.append(_tl)
-                _tl = self._entry_lbl_pool[used_t]; used_t += 1
-                txt = ("%.2f (%+.2f%%)" % (lvl, sgn * (lvl - epx) / epx * 100.0)) if pct else ("%.2f" % lvl)
-                _tl.setColor(col + (a,)); _tl.setText(txt); _tl.setPos(rb, lvl); _tl.setVisible(True)
-        self.bc_entry_active.setData(ring_spots); self.bc_entry_active.setVisible(bool(ring_spots))
-        for _j in range(used_l, len(self._entry_line_pool)):
-            self._entry_line_pool[_j].setVisible(False)
-        for _j in range(used_t, len(self._entry_lbl_pool)):
-            self._entry_lbl_pool[_j].setVisible(False)
-        for _j in range(used_z, len(self._entry_zone_pool)):
-            self._entry_zone_pool[_j].setVisible(False)
 
-    def _pivot_stats_html(self, filtered, det, ent, zref, buy, gid, n, _cl, _op, e_sh=None, sum0=None, sl0=0,
-                          e_flip=None) -> str:
-        """Precomputed hover stats for a setup. N = bars back to the leg-5 reference candle; N->det = that
-        reference OPEN to the detection CLOSE %; det->entry = detection CLOSE to entry CLOSE %; room ratio =
-        profit-room / risk-room from the ENTRY to the leg-5 zone hi/lo, side-aware (the study's
-        profit_room_ratio; >1 = favourable geometry). Then the PANEL-2 (eff-agg) spread TRAJECTORY over the
-        entry wait [D,E], ALIGNED (+ve = still WITH the trade), sliced at sl0: the value AT entry E and the min
-        over [D,E], plus a HELD/FLIPPED verdict. Study (in-sample): winners hold P2 spr@E positive & never
-        breach -50 (p<0.001). (P0 dropped from the box -- weaker & redundant with P2.)"""
-        sc = "#28e65a" if buy else "#ff5566"
-        c_det = _cl(det)
-        has_ref = 0 <= zref < n
-        N = det - zref if has_ref else 0
-        o_ref = _op(zref) if has_ref else 0.0
-        d_ndet = ((c_det - o_ref) / o_ref * 100.0) if o_ref else 0.0
-        d_dentry = 0.0; ratio_s = "&mdash;"
-        if ent < n:
-            c_ent = _cl(ent)
-            d_dentry = ((c_ent - c_det) / c_det * 100.0) if c_det else 0.0
-            zlo0, zhi0 = det - 99, det - 58                       # leg-5 zone [det-99, det-59], N=60..100
-            if zlo0 >= 0:
-                zhi = max(float(filtered[k].get("high", 0.0)) for k in range(zlo0, zhi0))
-                zlo = min(float(filtered[k].get("low", 0.0)) for k in range(zlo0, zhi0))
-                zhp = (zhi - c_ent) / c_ent * 100.0; zlp = (zlo - c_ent) / c_ent * 100.0
-                pr, ar = (zhp, -zlp) if buy else (-zlp, zhp)      # profit room / risk room, side-aware
-                if abs(ar) > 1e-9:
-                    ratio_s = "<b style='color:#e8ebf0'>%.2f : 1</b>" % (pr / ar)
 
-        def _pc(v):
-            return "<span style='color:%s'>%+.2f%%</span>" % ("#28e65a" if v >= 0 else "#ff5566", v)
-
-        # spread TRAJECTORY over the entry wait [D, E], aligned (+ve = still WITH the trade), for P2 (eff-agg)
-        # and P0 (composite SUM). value @E + min over [D,E] + a HELD/FLIPPED verdict. P2 verdict = @E>0 AND
-        # min>-50 (the strong signal); P0 verdict = min>-50 (the operator's floor; weaker, redundant w/ P2).
-        di, ei = det - sl0, ent - sl0
-
-        def _traj(series, tag, kind):
-            if series is None or not (ent >= det and 0 <= di < len(series) and 0 <= ei < len(series)):
-                return ""
-            sg = 1.0 if buy else -1.0
-            if kind == "eff":                                    # P2 eff-agg share -> spread
-                vals = [sg * (2.0 * float(series[k]) - 1.0) * 100.0 for k in range(di, ei + 1)]
-                held = vals[-1] > 0.0 and min(vals) > -50.0
-            else:                                                # P0 composite SUM (already a spread)
-                vals = [sg * float(series[k]) for k in range(di, ei + 1)]
-                held = min(vals) > -50.0
-            v_e, v_min = vals[-1], min(vals)
-            ecol = "#28e65a" if v_e > 0 else "#ff5566"
-            mcol = "#ff5566" if v_min <= -50.0 else "#c8ccd4"
-            vcol = "#28e65a" if held else "#ff5566"
-            vtxt = ("%s HELD &#10003;" % tag) if held else ("%s FLIPPED &#10007;" % tag)
-            return ("%s @<b>E</b>: <b style='color:%s'>%+.1f%%</b> &nbsp; min: <b style='color:%s'>%+.1f%%</b>"
-                    "<br><b style='color:%s'>%s</b><br>") % (tag, ecol, v_e, mcol, v_min, vcol, vtxt)
-
-        traj = _traj(e_sh, "P2", "eff")          # P0 dropped from the box (weaker + redundant with P2)
-        if traj:
-            traj = "<span style='color:#5a6070'>&#8213;&#8213;&#8213;</span><br>" + traj
-        # E2 box (this entry is a RE-CONFIRMATION after a flip at the original E): the [D,E2] verdict would
-        # still read FLIPPED (it dipped past -50 before recovering), so show the honest two-part story instead.
-        if e_flip is not None and e_sh is not None:
-            _di, _fi, _e2i = det - sl0, e_flip - sl0, ent - sl0
-            if 0 <= _di <= _fi < len(e_sh) and 0 <= _e2i < len(e_sh):
-                _sg = 1.0 if buy else -1.0
-                _dip = min(_sg * (2.0 * float(e_sh[k]) - 1.0) * 100.0 for k in range(_di, _fi + 1))  # [D,E] low
-                _pr = _sg * (2.0 * float(e_sh[_e2i]) - 1.0) * 100.0                                   # spr @E2
-                traj = ("<span style='color:#5a6070'>&#8213;&#8213;&#8213;</span><br>"
-                        "P2: dipped %s &rarr; re-conf @<b>E2</b> %s") % (_pc(_dip), _pc(_pr))
-
-        # D->E WAIT (time + buckets). Study (in-sample, n=116): the farther E is from D the likelier a LOSS
-        # (time strongest, r=-0.25 p=0.007). Fast entry -> green, slow -> red (soft readout, not a hard gate).
-        et_d = float(filtered[det].get("end_time", 0.0)); et_e = float(filtered[ent].get("end_time", 0.0))
-        wmin = (et_e - et_d) / 60.0 if (ent >= det and et_e and et_d) else 0.0
-        wcol = "#28e65a" if wmin <= 7.0 else ("#ff5566" if wmin > 15.0 else "#c8ccd4")
-
-        elab = "E2" if e_flip is not None else "E"   # this box describes the E2 entry when e_flip is set
-        return ("<div style='font-family:Consolas; font-size:11px; color:#c8ccd4; padding:1px 3px'>"
-                "<b style='color:%s'>%s-P_%s</b><br>"
-                "<b>N</b>: <b style='color:#e8ebf0'>%d</b> bars<br>"
-                "<b>N</b>&rarr;<b>D</b>: %s<br><b>D</b>&rarr;<b>%s</b>: %s<br>"
-                "wait: <b style='color:%s'>%.1fm &middot; %d bk</b><br>room ratio: %s<br>%s</div>"
-                ) % (sc, "B" if buy else "S", self._fmt_idx(gid), N, _pc(d_ndet), elab, _pc(d_dentry),
-                     wcol, wmin, ent - det, ratio_s, traj)
-
-    def _hover_pivot(self, scene_pos) -> None:
-        """Stats box for whichever D/E badge the cursor is over — buy -> box BELOW the badge, sell -> box ABOVE.
-        Hit-tests each badge centre within a pixel radius (matches the circle); hidden when none is hovered."""
-        if not self.show_pivot or not self._pivot_hovers:
-            self.pivot_tooltip.hide(); return
-        R = 13.0                                  # px hit radius (~the coin)
-        for x, y, html, buy in self._pivot_hovers:
-            c = self.vb.mapViewToScene(QtCore.QPointF(float(x), float(y)))
-            if (c.x() - scene_pos.x()) ** 2 + (c.y() - scene_pos.y()) ** 2 > R * R:
-                continue
-            if buy:                              # box hangs BELOW the badge (down the screen)
-                self.pivot_tooltip.anchor = pg.Point(0.5, 0.0)
-                p = self.vb.mapSceneToView(QtCore.QPointF(c.x(), c.y() + R + 2))
-            else:                                # box sits ABOVE the badge
-                self.pivot_tooltip.anchor = pg.Point(0.5, 1.0)
-                p = self.vb.mapSceneToView(QtCore.QPointF(c.x(), c.y() - R - 2))
-            self.pivot_tooltip.setHtml(html)
-            self.pivot_tooltip.setPos(p.x(), p.y())
-            self.pivot_tooltip.show()
-            return
-        self.pivot_tooltip.hide()
 
     def _refresh_selection_stats(self) -> None:
         """Live Magic-Selection readout: aggregate the buckets inside the box + show the stats box.
@@ -6552,7 +5513,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0(); self._clear_pivot()   # smoothed twin + pivot marks: clear on selection teardown
+            self._clear_panel0()   # smoothed twin + pivot marks: clear on selection teardown
             self._hide_eff_cycles(); self._hide_abs_cycles()   # P2 + P1 HM sub-panels: clear on selection teardown too
             for _b in self._spread_badges.values():
                 _b.hide()
@@ -6613,7 +5574,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._hide_selection_vp()
         else:
             self._sel_sig = None
-            self._clear_pivot()
             self._hide_selection_vp()
         agg = self._aggregate_selection(filtered, x0, y0, x1, y1, tv)
         if not agg:
@@ -6634,7 +5594,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.bc_panel_sep.setVisible(False)
             self._clear_largesmall_panels()                                  # LARGE/SMALL panels: clear on teardown
             self._clear_panel9()                                              # composite panel: clear on teardown
-            self._clear_panel0(); self._clear_pivot()   # smoothed twin + pivot marks: clear on selection teardown
+            self._clear_panel0()   # smoothed twin + pivot marks: clear on selection teardown
             self._hide_eff_cycles(); self._hide_abs_cycles()   # P2 + P1 HM sub-panels: clear on selection teardown too
             for _b in self._spread_badges.values():
                 _b.hide()
@@ -7579,7 +6539,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         self._merge_liq_sweeps(snap.get("liq_sweeps"))   # fold in any daemon-pushed 15m sweeps (tf-agnostic)
-        _s = _pc(); self._audio_announce(snap); self._audio_announce_pivot(snap); self._audio_announce_strategies(snap)
+        _s = _pc(); self._audio_announce(snap); self._audio_announce_strategies(snap)
         self._refresh_scale_labels(snap); self._perf_note("audio_scale", _s)
 
         # Every mode is bucket-native now (time chart removed, Phase B): draw the scanner, refresh
@@ -7688,49 +6648,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 side = "Buy" if m.get("side") == "BUY" else "Sell"
                 self.alerts.audio.speak(f"{scale} {side} Iceberg")
 
-    def _audio_announce_pivot(self, snap) -> None:
-        """Speak a LIVE pivot the instant the S5j-r5 confluence FIRES on the just-closed bucket — at D. V3-aware:
-        a cyan/orange D (first-print P2>80) in a directional 4H zone = a Path-A DIRECT-D entry -> 'Enter Buy/Sell
-        D now'; any other D is drawn FADED (grey) -> 'Faded Buy/Sell D'. (The 'Enter Buy/Sell E now' cue for recorded
-        Path-B New-E entries AND the 'Faded Buy/Sell E' cue for faded study E's are spoken from _draw_pivot, which
-        computes the E.) Its OWN 'Pivot Alert' toggle, INDEPENDENT of the Audio
-        Feed (speaks ungated). LIVE-ONLY: seeded silently on enable / first data / tf-change and gated on a NEW
-        bucket close (tracked by the last bucket's end_time); a fire continuing the previous bar's run is skipped."""
-        if not self._pivot_audio_on:
-            return
-        closed = (snap.get("closed_buckets") if snap else None) or []
-        if not closed:
-            return
-        last_et = float(closed[-1].get("end_time", 0.0))
-        if not self._pivot_audio_seeded:       # first data / just enabled -> record the edge, DON'T read backlog
-            self._pivot_audio_last_et = last_et; self._pivot_audio_seeded = True
-            return
-        if last_et == self._pivot_audio_last_et:
-            return                             # no NEW bucket closed since last check
-        self._pivot_audio_last_et = last_et
-        win = closed[-350:]                    # live window with the legs-1/5 + phase warm-up context
-        if len(win) < 120:
-            return
-        try:
-            from app import pivot_detect
-            out, _esh, e_sh_c, _s0 = pivot_detect.detect_pivots(win, return_eff=True)
-            fired = {(f["det_i"], f["side"]) for f in out}
-        except Exception:
-            return
-        L = len(win) - 1                       # the just-closed (live-edge) bucket
-        for side, spoken in (("long", "Buy"), ("short", "Sell")):
-            if (L, side) in fired and (L - 1, side) not in fired:   # NEW fire (not a run continuation)
-                buy = side == "long"
-                # V3 classify the live D: cyan/orange (first-print P2>80) + directional 4H zone = Path-A DIRECT-D
-                # entry -> "Enter D now"; otherwise the D is drawn faded -> "Faded Buy/Sell D".
-                p2d = (1.0 if buy else -1.0) * (2.0 * float(e_sh_c[L]) - 1.0) * 100.0
-                tier = "cyan" if p2d > PIVOT_P2D_VHIGH else ("green" if p2d > PIVOT_P2D_HIGH else "hollow")
-                zone = self._zone5_at(float(win[L].get("end_time", 0.0)),
-                                      float(win[L].get("close", win[L].get("close_price", 0.0))))
-                if zone is not None and _pivot_v3_take(buy, tier, zone):
-                    self.alerts.audio.speak(f"Enter {spoken} D now", gated=False)
-                else:
-                    self.alerts.audio.speak(f"Faded {spoken} D", gated=False)   # non-take D = a FADED D on screen
 
     @staticmethod
     def _synth_wav(tones, rate: int = 44100, vol: float = 0.6) -> bytes:
@@ -7877,8 +6794,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Start-Date / replay-cursor change only visibly took effect on the next right-arrow step.
         self._scanner_bucket_sig = None       # force a fresh bucket rebuild
         self._last_scanner_sig = None         # force _draw_scanner past its render-skip gate
-        self._pivot_sig = None; self._sel_sig = None   # force the Pivot D/E + selection to re-detect on the new frame
-        self._psc = None                      # drop the incremental pivot-scan cache (prefix belongs to the old frame)
+        self._sel_sig = None
         self._scanner_needs_autofit = True    # re-fit once to the new window
         if self.scanner_mode == "depth_heatmap":
             self._hm_enter()                  # re-request the heatmap from the new Scan Start Time
@@ -8021,7 +6937,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._replay_edge_t = ets[j]
             self._replay_remember()           # persist the new position (debounced) so a restart resumes here
             self._scanner_bucket_sig = None; self._last_scanner_sig = None
-            self._pivot_sig = None; self._sel_sig = None
             prev_n = self._scanner_frame_n                        # frame length BEFORE the re-render (for the follow delta)
             (pvx0, pvx1), _ = self.vb.viewRange()                # the user's current X framing, captured pre-render
             self._on_timer()
@@ -8130,7 +7045,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             archive.invalidate()                             # re-read the freshly-pulled chunks from disk
             self._arch_win_key = None                        # force a new archive walk with the new coverage
             self._scanner_bucket_sig = None; self._last_scanner_sig = None
-            self._pivot_sig = None; self._sel_sig = None; self._psc = None
+            self._sel_sig = None
             self._hide_arch_status()
             self._on_timer()                                 # repaint with the now-available 24h/history
         else:

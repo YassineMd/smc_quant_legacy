@@ -428,12 +428,11 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("cob", "Order Book DOM Ladder"),
                            ("fp_pane", "Live Footprint Pane"),   # right-docked forming-candle footprint (Mode 10)
                            ("cvd_pane", "CVD Pane (1D anchored)"),   # cumulative volume delta, resets each UTC midnight
-                           ("audio", "OB/Iceberg Alert"),
-                           ("pivot_audio", "Pivot Alert")]:      # OWN voice, independent of the OB/Iceberg alert
+                           ("audio", "OB/Iceberg Alert")]:
             cb = QtWidgets.QCheckBox(label)
-            # First-launch DEFAULTS (before connect): Pivot Alert + Vector Drawing ON, OB/Iceberg Alert OFF.
-            # Persistence (terminal saved toggles) overrides these on every later launch.
-            cb.setChecked(key in ("drawing", "pivot_audio"))
+            # First-launch DEFAULT (before connect): Vector Drawing ON, OB/Iceberg Alert OFF.
+            # Persistence (terminal saved toggles) overrides this on every later launch.
+            cb.setChecked(key == "drawing")
             cb.toggled.connect(lambda on, k=key: self.subWidgetToggled.emit(k, on))
             self.sub_checks[key] = cb
             self.sub_section.addWidget(cb)
