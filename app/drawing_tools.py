@@ -283,12 +283,20 @@ class PositionBracket(QtCore.QObject):
         self.left_line = self._mk_edge(x0)
         self.right_line = self._mk_edge(x1)
 
-        # anchor (1,1): text bottom-right pinned to label_x -> flush against the
-        # right Y-axis margin when label_x tracks the view edge (patch §17). Rounded dark pill (modern card look).
-        self.label = RoundedTextItem(anchor=(1, 1), fill=pg.mkBrush(22, 24, 30, 240),
-                                      border=pg.mkPen((90, 96, 110), width=1))
-        self.label.setZValue(70)
-        plot.addItem(self.label, ignoreBounds=True)
+        # sim callbacks (set by the DrawingController): _on_close records + REMOVES on TP/SL/×; _on_close_click
+        # fires from the × button below.
+        self._on_close = None
+        self._on_close_click = None
+        self._close_x = self.label_x
+        # × CLOSE button (clickable scatter) — sits just right of the ENTRY badge; click = close (if in trade) /
+        # cancel (if pending) the position.
+        self.close_btn = pg.ScatterPlotItem(pxMode=True, symbol="x", size=16,
+                                            brush=pg.mkBrush(231, 76, 60, 235),
+                                            pen=pg.mkPen(255, 255, 255, 210, width=1.5))
+        self.close_btn.setZValue(74)
+        self.close_btn.setToolTip("Close / cancel this position")
+        self.close_btn.sigClicked.connect(lambda *a: self._on_close_click(self) if self._on_close_click else None)
+        plot.addItem(self.close_btn, ignoreBounds=True)
 
         # Per-line value labels as rounded dark PILLS with the line's own colour (SL red / Entry blue / TP green),
         # replacing the old plain white boxes. SL/TP also show % vs entry.
@@ -336,15 +344,16 @@ class PositionBracket(QtCore.QObject):
         self.plot.addItem(ln, ignoreBounds=True)
         return ln
 
-    def set_label_x(self, x: float) -> None:
-        """Pin the labels to a view x-coordinate (the right edge). LIGHTWEIGHT: only repositions (setPos) —
-        no setHtml / no ``changed`` emit — so calling it every frame from update_view can't spam _save."""
-        self.label_x = x
+    def set_label_x(self, label_x: float, close_x: float = None) -> None:
+        """Pin the badges to the view right edge + the × button just right of the ENTRY badge. LIGHTWEIGHT
+        (setPos/setData only — no setHtml / no ``changed`` emit) so calling it every frame can't spam _save."""
+        self.label_x = label_x
+        self._close_x = close_x if close_x is not None else label_x
         e = self.entry_line.value(); s = self.stop_line.value(); t = self.target_line.value()
-        self._val_labels["SL"].setPos(x, s)
-        self._val_labels["Entry"].setPos(x, e)
-        self._val_labels["TP"].setPos(x, t)
-        self.label.setPos(x, max(e, s, t))
+        self._val_labels["SL"].setPos(label_x, s)
+        self._val_labels["Entry"].setPos(label_x, e)
+        self._val_labels["TP"].setPos(label_x, t)
+        self.close_btn.setData([{"pos": (self._close_x, e)}])
 
     def _recalc(self) -> None:
         e = self.entry_line.value()
@@ -355,33 +364,34 @@ class PositionBracket(QtCore.QObject):
         # SL always shows a negative %, TP a positive % (risk vs reward), regardless of long/short.
         sl_pct = abs(s - e) / e * 100.0 if e else 0.0
         tp_pct = abs(t - e) / e * 100.0 if e else 0.0
+        rr = self.rr
         _f = "font-size:13px"
-        _in = "  IN" if self.state == "ACTIVE" else ""
         self._val_labels["SL"].setHtml(f"<span style='color:#ff8a80;{_f}'><b>{s:.2f}</b> (-{sl_pct:.2f}%)</span>")
-        self._val_labels["Entry"].setHtml(f"<span style='color:#82b1ff;{_f}'><b>{e:.2f}</b>{_in}</span>")
-        self._val_labels["TP"].setHtml(f"<span style='color:#69f0ae;{_f}'><b>{t:.2f}</b> (+{tp_pct:.2f}%)</span>")
+        # TP badge carries the R:R ratio (was the old top label, which overlapped the TP badge)
+        self._val_labels["TP"].setHtml(
+            f"<span style='color:#69f0ae;{_f}'><b>{t:.2f}</b> (+{tp_pct:.2f}%)</span>"
+            f"<span style='color:#9aa0a6;{_f}'>  1:{rr:.2f}</span>")
+        self._render_entry()                                # ENTRY badge = entry value (+ live PnL when active)
         self._val_labels["SL"].setPos(self.label_x, s)
         self._val_labels["Entry"].setPos(self.label_x, e)
         self._val_labels["TP"].setPos(self.label_x, t)
-        self._render_top()
+        self.close_btn.setData([{"pos": (self._close_x, e)}])
         self.changed.emit()
 
-    def _render_top(self, price: float = None) -> None:
-        """Top-right label: R:R while PENDING, LIVE net PnL while ACTIVE, the realized result once CLOSED."""
-        G, R = "#69f0ae", "#ff5252"
+    def _render_entry(self, price: float = None) -> None:
+        """ENTRY badge: the entry price + the LIVE net PnL ($ and % on margin) once the trade is ACTIVE."""
+        e = self.entry_line.value()
+        _f = "font-size:13px"
         if self.state == "ACTIVE" and self._pos is not None and self._acct is not None:
             px = price if price is not None else self._last_px
             if px is not None:
                 net, pct = self._acct.live_pnl(self._pos, px)
-                self.label.setText(f"{net:+,.0f}$  ({pct:+.1f}%)", color=(G if net >= 0 else R))
-        elif self.state == "CLOSED" and self.result is not None:
-            net = self.result["net"]
-            self.label.setText(f"{self.result['reason']}  {net:+,.0f}$", color=(G if net >= 0 else R))
-        else:  # PENDING
-            rr = self.rr
-            self.label.setText(f"1 : {rr:.2f}", color=_rr_color(rr))
-        self.label.setPos(self.label_x, max(self.entry_line.value(), self.stop_line.value(),
-                                            self.target_line.value()))
+                col = "#69f0ae" if net >= 0 else "#ff5252"
+                self._val_labels["Entry"].setHtml(
+                    f"<span style='color:#82b1ff;{_f}'><b>{e:.2f}</b></span>"
+                    f"<span style='color:{col};{_f}'>  {net:+,.0f}$ ({pct:+.1f}%)</span>")
+                return
+        self._val_labels["Entry"].setHtml(f"<span style='color:#82b1ff;{_f}'><b>{e:.2f}</b></span>")
 
     # -- live paper-trade simulation --------------------------------------
     def arm(self, account) -> None:
@@ -391,7 +401,7 @@ class PositionBracket(QtCore.QObject):
         self._last_px = None
         self.result = None
         self.state = "PENDING"
-        self._render_top()
+        self._render_entry()
 
     def on_price(self, price: float, ts: float) -> None:
         """Drive the state machine from the live price (fed each frame). Fills AT the entry line, closes AT
@@ -403,11 +413,12 @@ class PositionBracket(QtCore.QObject):
             if self._last_px is not None and (self._last_px - e) * (price - e) <= 0.0:
                 self._pos = self._acct.open(e, self._side)      # price crossed/touched entry -> fill AT the line
                 self.state = "ACTIVE"
-                self._render_top(price)
+                self._render_entry(price)
                 self.filled.emit()
             self._last_px = price
             return
         # ACTIVE:
+        self._last_px = price
         if self._side > 0:
             hit = "SL" if price <= s else ("TP" if price >= t else None)
         else:
@@ -415,16 +426,16 @@ class PositionBracket(QtCore.QObject):
         if hit is not None:
             self._close(s if hit == "SL" else t, hit, ts)
         else:
-            self._last_px = price
-            self._render_top(price)
+            self._render_entry(price)
 
     def _close(self, exit_price: float, reason: str, ts: float) -> None:
         r = self._acct.close(self._pos, exit_price)
         self.state = "CLOSED"
         self.result = {"kind": self.kind, "reason": reason, "entry": self._pos["entry"],
                        "exit": exit_price, "net": r["net"], "pct": r["pct"], "balance": r["balance"], "ts": ts}
-        self._render_top(exit_price)
         self.closed.emit(self.result)
+        if self._on_close is not None:
+            self._on_close(self, self.result)   # DrawingController: record to the ledger + REMOVE the bracket
 
     def sim_snapshot(self) -> dict:
         """Sim state to carry across a recreate (Mode-10 index brackets are destroyed+rebuilt on every scroll)."""
@@ -437,7 +448,7 @@ class PositionBracket(QtCore.QObject):
         self._pos = snap.get("pos")
         self._last_px = snap.get("last_px")
         self.result = snap.get("result")
-        self._render_top(self._last_px)
+        self._render_entry(self._last_px)
 
     @property
     def rr(self) -> float:
@@ -457,13 +468,13 @@ class PositionBracket(QtCore.QObject):
 
     def set_visible(self, on: bool) -> None:
         for it in (self.entry_line, self.stop_line, self.target_line,
-                   self.left_line, self.right_line, self.label,
+                   self.left_line, self.right_line, self.close_btn,
                    *self._val_labels.values()):
             it.setVisible(on)
 
     def remove(self) -> None:
         for it in (self.entry_line, self.stop_line, self.target_line,
-                   self.left_line, self.right_line, self.label,
+                   self.left_line, self.right_line, self.close_btn,
                    *self._val_labels.values()):
             self.plot.removeItem(it)
 
@@ -845,10 +856,10 @@ class DrawingController(QtCore.QObject):
         plot.scene().sigMouseClicked.connect(self._on_click)
         self._load()
 
-    def update_view(self, x_right: float) -> None:
-        """Right-align every bracket's data labels to the current view edge (§17)."""
+    def update_view(self, label_x: float, close_x: float = None) -> None:
+        """Right-align every bracket's data labels to the view edge + place the × close button (§17)."""
         for br in self.brackets + self._idx_brackets:
-            br.set_label_x(x_right)
+            br.set_label_x(label_x, close_x)
 
     # -- live paper-trade simulation wiring --------------------------------
     def set_paper_account(self, account, on_closed=None) -> None:
@@ -877,12 +888,39 @@ class DrawingController(QtCore.QObject):
         uid = getattr(br, "uid", None)
         if uid and uid in self._sim_state:
             br.sim_restore(self._sim_state[uid])           # resume a live/closed sim after a recreate
-        cb = self._on_trade_closed
-        if cb is not None:
+        br._on_close = self._handle_close                  # TP/SL/× -> record to the ledger + REMOVE the bracket
+        br._on_close_click = self._manual_close            # the × close button
+
+    def _handle_close(self, br, result) -> None:
+        """A trade closed (TP/SL or a manual ×): record it in the ledger, then delete the bracket."""
+        if self._on_trade_closed is not None:
             try:
-                br.closed.connect(cb, QtCore.Qt.UniqueConnection)   # never double-connect on re-arm
+                self._on_trade_closed(result)
             except Exception:
                 pass
+        self._remove_bracket(br)
+
+    def _manual_close(self, br) -> None:
+        """The × button: close an ACTIVE trade at the last price (records + removes via _handle_close), or
+        just cancel/remove a PENDING one (no record)."""
+        if br.state == "ACTIVE" and br._pos is not None and br._last_px:
+            br._close(float(br._last_px), "×", 0.0)
+        else:
+            self._remove_bracket(br)
+
+    def _remove_bracket(self, br) -> None:
+        """Delete a bracket from the chart + persistence (tombstoned so it can't resurrect from disk)."""
+        uid = getattr(br, "uid", None)
+        if uid:
+            self._sim_state.pop(uid, None)
+        removed = False
+        for store in (self.brackets, self._idx_brackets):
+            if br in store:
+                store.remove(br); br.remove(); removed = True
+                if store is self._idx_brackets and uid:
+                    self._idx_deleted.add(uid)
+        if removed:
+            self._save(); self._schedule_idx_save()
 
     def _save_sim(self, br) -> None:
         """Stash a bracket's sim state by uid before it's destroyed (index brackets rebuild on every scroll)."""
