@@ -38,6 +38,7 @@ from .heatmap import (HeatmapCache, TradeBubbleCache, decode_col, decode_grid,
 from . import bucket_state, config, region_state, vpin_adaptive
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
+from .paper_account import PaperAccount
 from . import bar_quantiles
 from . import archive          # local cold-archive reader — extends the scanner frame past the daemon's cap
 from . import recon_replay     # SEPARATE pre-daemon Binance-reconstruction store — replay-only, never merges with daemon
@@ -1272,6 +1273,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._tf = tf if tf in config.TF_SECONDS else config.DEFAULT_TF
         self._load_ui_state()   # restore the panel toggles saved by a prior session (overrides the defaults above)
         self.alerts = AlertsLedger(self)
+        self.paper = PaperAccount()          # live position-tool paper-trade sim ($200k, 10% margin x10, compounding)
         self.drawbar = DrawingToolbar(self)
         self.menu = FloatingOverlayMenu(self)
         self.menu.set_swing_pct(self._swing_pct)   # sync the swing slider to the restored/default sensitivity
@@ -1334,6 +1336,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                # toggled signal isn't wired yet at build, so show it explicitly (resizeEvent
                                # positions it top-centre once the window lays out).
         self.drawer.selectionChanged.connect(self._refresh_selection_stats)   # Magic Selection -> stats
+        self.drawer.set_paper_account(self.paper, self.alerts.record_trade)    # arm the live position simulation
         QtGui.QShortcut(QtGui.QKeySequence("Escape"), self, activated=self.drawer.cancel)
         # Both arrows move the Magic Selection's RIGHT edge only: Right = +1 bucket (extend), Left = -1
         # (pull back). Left edge stays; clamped to >= 1 bucket of width. No-op without a selection.
@@ -6659,6 +6662,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _pc = time.perf_counter; _t0 = _pc()                 # session profiler: frame total (negligible)
         snap = self.worker.snapshot()
         self._last_snap = snap
+        # live position-tool paper-trade sim: feed the live price (fills/closes) + pin the labels to the view edge
+        try:
+            _lp = snap.get("latest_price") or 0.0
+            if _lp > 0:
+                self.drawer.on_price(_lp, time.time())
+                _vx1 = self.vb.viewRange()[0][1]
+                self.drawer.update_view(_vx1 - 55.0 * self.vb.viewPixelSize()[0])   # clear the y-axis price tag
+        except Exception:
+            pass
         try:
             self._tick_subcandles()                      # live-develop any open 1m-detail popup on the forming candle
         except Exception:

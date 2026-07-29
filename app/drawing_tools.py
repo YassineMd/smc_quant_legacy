@@ -251,39 +251,12 @@ class DrawnShape(pg.GraphicsObject):
 # ---------------------------------------------------------------------------
 # Interactive position bracket (TradingView parity)
 # ---------------------------------------------------------------------------
-class _PositionFill(pg.GraphicsObject):
-    """Green profit / red risk zones bounded to the bracket's x-window."""
-
-    def __init__(self, x0: float, x1: float):
-        super().__init__()
-        self.x0, self.x1 = x0, x1
-        self.entry = self.stop = self.target = 0.0
-        self.picture = QtGui.QPicture()
-        self._rect = QtCore.QRectF()
-
-    def update_levels(self, entry, stop, target) -> None:
-        self.entry, self.stop, self.target = entry, stop, target
-        self.picture = QtGui.QPicture()
-        p = QtGui.QPainter(self.picture)
-        green = QtGui.QColor(46, 204, 113, 26)   # ~10% opacity
-        red = QtGui.QColor(231, 76, 60, 26)      # ~10% opacity
-        w = self.x1 - self.x0
-        for y_a, y_b, col in ((entry, target, green), (entry, stop, red)):
-            top, bot = max(y_a, y_b), min(y_a, y_b)
-            p.fillRect(QtCore.QRectF(self.x0, bot, w, top - bot), col)
-        p.end()
-        lo = min(entry, stop, target); hi = max(entry, stop, target)
-        self._rect = QtCore.QRectF(self.x0, lo, w, max(1e-6, hi - lo))
-        self.prepareGeometryChange(); self.update()
-
-    def paint(self, p, *a): p.drawPicture(0, 0, self.picture)
-    def boundingRect(self): return self._rect
-
-
 class PositionBracket(QtCore.QObject):
     """Entry/Stop/Target with independent drag handles + live R:R (spec §8.3)."""
 
     changed = QtCore.Signal()
+    filled = QtCore.Signal()          # entry line hit -> paper position opened
+    closed = QtCore.Signal(object)    # TP/SL hit -> position closed (emits the result dict)
 
     def __init__(self, plot: pg.PlotWidget, kind: str, x0: float, x1: float,
                  entry: float, stop: float, target: float):
@@ -292,10 +265,15 @@ class PositionBracket(QtCore.QObject):
         self.kind = kind
         self.x0, self.x1 = x0, x1
 
-        self.label_x = x1  # x at which the data label is anchored (right-aligned)
+        self.label_x = x1  # x at which the data labels are anchored (right-aligned; tracks the view edge)
 
-        self.fill = _PositionFill(x0, x1)
-        plot.addItem(self.fill, ignoreBounds=True)
+        # live paper-trade simulation state (armed by the terminal, fed the live price each frame)
+        self._acct = None
+        self._pos = None
+        self._last_px = None
+        self.state = "PENDING"            # PENDING (awaiting entry) -> ACTIVE (in trade) -> CLOSED
+        self.result = None
+        self._side = 1 if kind == "long" else -1
 
         self.entry_line = self._mk_line(entry, "#2962ff", "Entry")
         self.stop_line = self._mk_line(stop, "#e74c3c", "SL")
@@ -317,7 +295,7 @@ class PositionBracket(QtCore.QObject):
         self._val_labels = {}
         _bord = {"SL": (231, 76, 60), "Entry": (41, 98, 255), "TP": (26, 188, 156)}
         for nm in ("SL", "Entry", "TP"):
-            t = RoundedTextItem(anchor=(0.5, 0.5), fill=pg.mkBrush(22, 24, 30, 240),
+            t = RoundedTextItem(anchor=(1, 0.5), fill=pg.mkBrush(22, 24, 30, 240),
                                  border=pg.mkPen(_bord[nm], width=1))
             t.setZValue(70)
             plot.addItem(t, ignoreBounds=True)
@@ -344,7 +322,6 @@ class PositionBracket(QtCore.QObject):
         """Vertical handles moved -> update the bracket's x-window + fill geometry."""
         self.x0 = min(self.left_line.value(), self.right_line.value())
         self.x1 = max(self.left_line.value(), self.right_line.value())
-        self.fill.x0, self.fill.x1 = self.x0, self.x1
         self._recalc()
 
     def _mk_line(self, price: float, color: str, name: str) -> pg.InfiniteLine:
@@ -360,35 +337,107 @@ class PositionBracket(QtCore.QObject):
         return ln
 
     def set_label_x(self, x: float) -> None:
-        """Pin the data label to a view x-coordinate (e.g. the right edge)."""
+        """Pin the labels to a view x-coordinate (the right edge). LIGHTWEIGHT: only repositions (setPos) —
+        no setHtml / no ``changed`` emit — so calling it every frame from update_view can't spam _save."""
         self.label_x = x
-        self._recalc()
+        e = self.entry_line.value(); s = self.stop_line.value(); t = self.target_line.value()
+        self._val_labels["SL"].setPos(x, s)
+        self._val_labels["Entry"].setPos(x, e)
+        self._val_labels["TP"].setPos(x, t)
+        self.label.setPos(x, max(e, s, t))
 
     def _recalc(self) -> None:
         e = self.entry_line.value()
         s = self.stop_line.value()
         t = self.target_line.value()
-        risk = abs(e - s)
-        reward = abs(t - e)
-        rr = reward / risk if risk > 1e-9 else 0.0
-        self.fill.update_levels(e, s, t)
-        col = _rr_color(rr)
-        # top label: the R:R ratio only (E/T/S values now live in the right-side labels)
-        self.label.setText(f"1 : {rr:.2f}", color=col)
-        self.label.setPos(self.label_x, max(e, s, t))
-        # centered value labels — line-coloured bold text on the rounded dark pill; SL always shows a
-        # negative % and TP a positive % (risk vs reward), regardless of long/short
-        xc = (self.x0 + self.x1) / 2.0
+        # value labels pinned to the FAR RIGHT (right-aligned at label_x, which tracks the view edge) so they
+        # sit just left of the y-axis live-price tag — replaces the old red/green boxes + centered labels.
+        # SL always shows a negative %, TP a positive % (risk vs reward), regardless of long/short.
         sl_pct = abs(s - e) / e * 100.0 if e else 0.0
         tp_pct = abs(t - e) / e * 100.0 if e else 0.0
         _f = "font-size:13px"
+        _in = "  IN" if self.state == "ACTIVE" else ""
         self._val_labels["SL"].setHtml(f"<span style='color:#ff8a80;{_f}'><b>{s:.2f}</b> (-{sl_pct:.2f}%)</span>")
-        self._val_labels["Entry"].setHtml(f"<span style='color:#82b1ff;{_f}'><b>{e:.2f}</b></span>")
+        self._val_labels["Entry"].setHtml(f"<span style='color:#82b1ff;{_f}'><b>{e:.2f}</b>{_in}</span>")
         self._val_labels["TP"].setHtml(f"<span style='color:#69f0ae;{_f}'><b>{t:.2f}</b> (+{tp_pct:.2f}%)</span>")
-        self._val_labels["SL"].setPos(xc, s)
-        self._val_labels["Entry"].setPos(xc, e)
-        self._val_labels["TP"].setPos(xc, t)
+        self._val_labels["SL"].setPos(self.label_x, s)
+        self._val_labels["Entry"].setPos(self.label_x, e)
+        self._val_labels["TP"].setPos(self.label_x, t)
+        self._render_top()
         self.changed.emit()
+
+    def _render_top(self, price: float = None) -> None:
+        """Top-right label: R:R while PENDING, LIVE net PnL while ACTIVE, the realized result once CLOSED."""
+        G, R = "#69f0ae", "#ff5252"
+        if self.state == "ACTIVE" and self._pos is not None and self._acct is not None:
+            px = price if price is not None else self._last_px
+            if px is not None:
+                net, pct = self._acct.live_pnl(self._pos, px)
+                self.label.setText(f"{net:+,.0f}$  ({pct:+.1f}%)", color=(G if net >= 0 else R))
+        elif self.state == "CLOSED" and self.result is not None:
+            net = self.result["net"]
+            self.label.setText(f"{self.result['reason']}  {net:+,.0f}$", color=(G if net >= 0 else R))
+        else:  # PENDING
+            rr = self.rr
+            self.label.setText(f"1 : {rr:.2f}", color=_rr_color(rr))
+        self.label.setPos(self.label_x, max(self.entry_line.value(), self.stop_line.value(),
+                                            self.target_line.value()))
+
+    # -- live paper-trade simulation --------------------------------------
+    def arm(self, account) -> None:
+        """Attach a PaperAccount + (re)arm as PENDING. Called by the terminal when the position is committed."""
+        self._acct = account
+        self._pos = None
+        self._last_px = None
+        self.result = None
+        self.state = "PENDING"
+        self._render_top()
+
+    def on_price(self, price: float, ts: float) -> None:
+        """Drive the state machine from the live price (fed each frame). Fills AT the entry line, closes AT
+        the TP/SL line (no slippage). SL is checked before TP (conservative when a tick spans both)."""
+        if self._acct is None or self.state == "CLOSED" or price is None or price <= 0:
+            return
+        e = self.entry_line.value(); s = self.stop_line.value(); t = self.target_line.value()
+        if self.state == "PENDING":
+            if self._last_px is not None and (self._last_px - e) * (price - e) <= 0.0:
+                self._pos = self._acct.open(e, self._side)      # price crossed/touched entry -> fill AT the line
+                self.state = "ACTIVE"
+                self._render_top(price)
+                self.filled.emit()
+            self._last_px = price
+            return
+        # ACTIVE:
+        if self._side > 0:
+            hit = "SL" if price <= s else ("TP" if price >= t else None)
+        else:
+            hit = "SL" if price >= s else ("TP" if price <= t else None)
+        if hit is not None:
+            self._close(s if hit == "SL" else t, hit, ts)
+        else:
+            self._last_px = price
+            self._render_top(price)
+
+    def _close(self, exit_price: float, reason: str, ts: float) -> None:
+        r = self._acct.close(self._pos, exit_price)
+        self.state = "CLOSED"
+        self.result = {"kind": self.kind, "reason": reason, "entry": self._pos["entry"],
+                       "exit": exit_price, "net": r["net"], "pct": r["pct"], "balance": r["balance"], "ts": ts}
+        self._render_top(exit_price)
+        self.closed.emit(self.result)
+
+    def sim_snapshot(self) -> dict:
+        """Sim state to carry across a recreate (Mode-10 index brackets are destroyed+rebuilt on every scroll)."""
+        return {"state": self.state, "pos": self._pos, "last_px": self._last_px, "result": self.result}
+
+    def sim_restore(self, snap: dict) -> None:
+        """Re-apply a saved sim snapshot after a recreate — so a live trade keeps running (never re-fires
+        the `closed` signal; the close already happened before the snapshot was taken)."""
+        self.state = snap.get("state", "PENDING")
+        self._pos = snap.get("pos")
+        self._last_px = snap.get("last_px")
+        self.result = snap.get("result")
+        self._render_top(self._last_px)
 
     @property
     def rr(self) -> float:
@@ -407,13 +456,13 @@ class PositionBracket(QtCore.QObject):
                    for ln in (self.entry_line, self.stop_line, self.target_line))
 
     def set_visible(self, on: bool) -> None:
-        for it in (self.fill, self.entry_line, self.stop_line, self.target_line,
+        for it in (self.entry_line, self.stop_line, self.target_line,
                    self.left_line, self.right_line, self.label,
                    *self._val_labels.values()):
             it.setVisible(on)
 
     def remove(self) -> None:
-        for it in (self.fill, self.entry_line, self.stop_line, self.target_line,
+        for it in (self.entry_line, self.stop_line, self.target_line,
                    self.left_line, self.right_line, self.label,
                    *self._val_labels.values()):
             self.plot.removeItem(it)
@@ -748,6 +797,9 @@ class DrawingController(QtCore.QObject):
         # index-space drawings (Mode 10): session-only, flushed on teardown (§6.2)
         self._idx_shapes: List[DrawnShape] = []
         self._idx_brackets: List[PositionBracket] = []
+        self._paper_account = None            # live paper-trade sim: set via set_paper_account()
+        self._on_trade_closed = None
+        self._sim_state: dict = {}            # uid -> sim snapshot, carried across index-bracket recreation
 
         # live press-drag-release state
         self._live: Optional[DrawnShape] = None   # in-progress shape during a drag
@@ -794,9 +846,53 @@ class DrawingController(QtCore.QObject):
         self._load()
 
     def update_view(self, x_right: float) -> None:
-        """Right-align every bracket's data label to the current view edge (§17)."""
-        for br in self.brackets:
+        """Right-align every bracket's data labels to the current view edge (§17)."""
+        for br in self.brackets + self._idx_brackets:
             br.set_label_x(x_right)
+
+    # -- live paper-trade simulation wiring --------------------------------
+    def set_paper_account(self, account, on_closed=None) -> None:
+        """Wire the position tool to a PaperAccount: arm every existing + future bracket, and route each
+        trade close to ``on_closed`` (the terminal records it in the alerts ledger)."""
+        self._paper_account = account
+        self._on_trade_closed = on_closed
+        for br in self.brackets + self._idx_brackets:
+            self._arm_bracket(br)
+
+    def _arm_bracket(self, br) -> None:
+        acct = self._paper_account
+        if acct is None:
+            return
+        br.arm(acct)
+        uid = getattr(br, "uid", None)
+        if uid and uid in self._sim_state:
+            br.sim_restore(self._sim_state[uid])           # resume a live/closed sim after a recreate
+        cb = self._on_trade_closed
+        if cb is not None:
+            try:
+                br.closed.connect(cb, QtCore.Qt.UniqueConnection)   # never double-connect on re-arm
+            except Exception:
+                pass
+
+    def _save_sim(self, br) -> None:
+        """Stash a bracket's sim state by uid before it's destroyed (index brackets rebuild on every scroll)."""
+        uid = getattr(br, "uid", None)
+        if uid and getattr(br, "_acct", None) is not None:
+            self._sim_state[uid] = br.sim_snapshot()
+
+    def on_price(self, price: float, ts: float) -> None:
+        """Feed the live price to every bracket's sim (called each frame). Lazily arms a not-yet-armed
+        bracket first — including a just-recreated index bracket, whose uid is now finalised so its saved
+        sim state is restored rather than reset."""
+        if self._paper_account is None:
+            return
+        for br in self.brackets + self._idx_brackets:
+            try:
+                if br._acct is None:
+                    self._arm_bracket(br)
+                br.on_price(price, ts)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     def set_tool(self, tool: Optional[str]) -> None:
@@ -1041,7 +1137,7 @@ class DrawingController(QtCore.QObject):
             bracket.changed.connect(self._save)
             self.brackets.append(bracket)
             self._save()
-        return bracket
+        return bracket   # the sim is armed LAZILY in on_price (after the caller finalises bracket.uid)
 
     def _commit_shape(self, shape: DrawnShape) -> None:
         self.plot.addItem(shape)
@@ -1264,6 +1360,7 @@ class DrawingController(QtCore.QObject):
             for s in list(self._idx_shapes):
                 self.plot.removeItem(s)
             for br in list(self._idx_brackets):
+                self._save_sim(br)                       # carry the live sim across undo/redo recreate
                 br.remove()
             self._idx_shapes.clear(); self._idx_brackets.clear()
             self.handles.clear(); self._picked = None
@@ -1376,6 +1473,7 @@ class DrawingController(QtCore.QObject):
             for br in list(self._idx_brackets):
                 dd = br.to_dict()
                 anch = getattr(br, "anchors", None)
+                self._save_sim(br)                       # carry the live paper-trade sim across the recreate
                 self._idx_brackets.remove(br); br.remove()
                 if anch and self._idx_bks:
                     j0 = self._find_ts(anch[0][0]); j1 = self._find_ts(anch[1][0])

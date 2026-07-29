@@ -104,6 +104,18 @@ class AlertsLedger(QtWidgets.QFrame):
             self._unread += 1
             self.unreadChanged.emit(self._unread)
 
+    def record_trade(self, r: dict) -> None:
+        """Log a CLOSED paper trade (position tool simulation): win = green, loss = red, with entry -> exit,
+        net $ / % on margin, and the resulting balance. Plays the notification sound."""
+        win = r.get("net", 0.0) >= 0.0
+        icon = "✅" if win else "❌"
+        kind = (r.get("kind") or "").upper()
+        txt = ("%s %s %s  %.2f→%.2f  %+,.0f$ (%+.1f%%)  bal %,.0f$"
+               % (icon, kind, r.get("reason", ""), r.get("entry", 0.0), r.get("exit", 0.0),
+                  r.get("net", 0.0), r.get("pct", 0.0), r.get("balance", 0.0)))
+        self._add(txt, "#27ae60" if win else "#e74c3c")
+        self.audio.play()
+
     def feed(self, snap: dict) -> None:
         for ob in snap.get("order_blocks", []):
             oid = ob.get("ob_id")
