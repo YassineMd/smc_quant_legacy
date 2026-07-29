@@ -929,6 +929,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._brk5m_grn_pool = []                # green 'Br' TextItems (up-break / resistance mitigated), grown lazily
         self._brk5m_red_pool = []                # red 'Br' TextItems (down-break / support mitigated), grown lazily
         self._brk5m_sig = None; self._brk5m_drawn = False
+        # '1m Engulfing' indicator (m10_engulf1m) — absorption-extreme spheres on 1m engulf candles, 1m ONLY.
+        self._e1m_sph = None                     # ScatterPlotItem — red/green (|A|>=1) + magenta/cyan (|A|>=2) spheres
+        self._e1m_sig = None; self._e1m_drawn = False
         # 1m-FINISH strength (validated: a strong 1m finish -> the break/engulf follows through 55% vs 42%). Br badges
         # keep ONLY strong-finish breaks; strong-finish 5m engulf signals get a GOLD RING. Cached per (start_time,side).
         self._finish_1m_cache = {}
@@ -1596,7 +1599,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._autoranged = False
         self._scanner_needs_autofit = True    # new tf -> refit the scanner once
         self._scanner_bucket_sig = self._last_scanner_sig = None
-        self._brk5m_sig = self._e5m_sig = None   # 5m badge overlays re-detect + re-filter on the new tf
+        self._brk5m_sig = self._e5m_sig = self._e1m_sig = None   # tf-specific badge overlays re-detect on the new tf
         self._m10_cc = None   # #3 static closed-bucket compute cache (see _compute_bucket_arrays)
         self._depth_needs_calibration = True  # new tf -> re-baseline the depth slider (§1)
         self._clear_liq()                     # drop the drawn 15m labels; they re-place (by ts) on the new chart
@@ -1746,6 +1749,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._brk5m_sig = None; self._sel_sig = None   # 5m Breakout toggled -> re-run the overlay draw
             if not on:
                 self._clear_breakout5m()            # off -> tear the 'Br' badges down now
+        elif key == "m10_engulf1m":
+            self._e1m_sig = None; self._sel_sig = None     # 1m Engulfing toggled -> re-run the overlay draw
+            if not on:
+                self._clear_engulf1m()              # off -> tear the spheres down now
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -5048,6 +5055,48 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _t in pool[len(positions):]:
             _t.setVisible(False)
 
+    def _clear_engulf1m(self) -> None:
+        if self._e1m_sph is not None:
+            self._e1m_sph.setVisible(False)
+        self._e1m_sig = None; self._e1m_drawn = False
+
+    def _draw_engulf1m(self, filtered) -> None:
+        """1m Engulfing absorption spheres (app/engulf1m_detect): a sphere on any 1m candle that engulfs its prev,
+        is non-doji, and hits an absorption extreme — red/green |A|>=1, magenta/cyan |A|>=2. Colour = engulf side
+        (green/cyan bull, red/magenta bear); size grows on tier 2. Self-gated, fail-safe, 1m ONLY."""
+        if (not self.menu.layer_state("m10_engulf1m") or self.scanner_mode != "bucket_canvas"
+                or self._tf != "1m"):
+            self._clear_engulf1m(); return
+        n = len(filtered)
+        _sig = (n, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._e1m_sig and self._e1m_drawn:
+            return
+        self._e1m_sig = _sig
+        try:
+            from app import engulf1m_detect
+            marks = engulf1m_detect.detect(filtered, skip_last=False)
+        except Exception:
+            self._clear_engulf1m(); return
+        GRN, RED, CYA, MAG = (40, 220, 100), (240, 60, 78), (0, 229, 255), (233, 30, 220)
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        spots = []
+        for m in marks:
+            i = m["i"]
+            if i < 0 or i >= n:
+                continue
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            side = m["side"]; t2 = (m["tier"] == 2)
+            col = (CYA if t2 else GRN) if side > 0 else (MAG if t2 else RED)
+            y = (lo - pad) if side > 0 else (hi + pad)          # bull sphere below the low, bear above the high
+            _pen = pg.mkPen(int(col[0] * 0.55), int(col[1] * 0.55), int(col[2] * 0.55), 235, width=1.1)
+            spots.append({"pos": (i, y), "symbol": "o", "size": (15 if t2 else 12),
+                          "brush": pg.mkBrush(*col, 220), "pen": _pen})
+        if self._e1m_sph is None:
+            self._e1m_sph = pg.ScatterPlotItem(pxMode=True, symbol="o", size=12)
+            self._e1m_sph.setZValue(30); self.plot.addItem(self._e1m_sph, ignoreBounds=True)
+        self._e1m_sph.setData(spots); self._e1m_sph.setVisible(True)
+        self._e1m_drawn = True
+
     def _draw_breakout5m(self, filtered) -> None:
         """Squared 'Br' badges on S/R-breakout (mitigation) candles (app/breakout5m_detect). Needs S/R context, so the
         shared warm-up prefix is prepended and indices shifted back. 5m ONLY."""
@@ -5534,7 +5583,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # The ENGULF S/R overlays + the S/R indicator show WITHOUT a selection: scan the loaded set incrementally.
             if self.scanner_mode == "bucket_canvas" and (self.menu.layer_state("m10_engulfsr")
                     or self.menu.layer_state("m10_momentum") or self.menu.layer_state("m10_engulf5m")
-                    or self.menu.layer_state("m10_breakout5m") or self.menu.layer_state("m10_sr")):
+                    or self.menu.layer_state("m10_breakout5m") or self.menu.layer_state("m10_engulf1m")
+                    or self.menu.layer_state("m10_sr")):
                 _pf, _, _ = self._build_scanner_buckets()
                 try:
                     self._draw_engulfsr(_pf or [])  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
@@ -5553,12 +5603,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 except Exception:
                     self._clear_breakout5m()
                 try:
+                    self._draw_engulf1m(_pf or [])  # 1m Engulfing indicator (1m) — self-gated, fail-safe
+                except Exception:
+                    self._clear_engulf1m()
+                try:
                     self._draw_sr(_pf or [])        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
                 except Exception:
                     self._clear_sr()
             else:
                 self._clear_engulfsr(); self._clear_momentum(); self._clear_engulf5m()
-                self._clear_breakout5m(); self._clear_sr()
+                self._clear_breakout5m(); self._clear_engulf1m(); self._clear_sr()
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -5630,6 +5684,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_breakout5m(filtered)  # 5m Breakout indicator (5m) — self-gated, fail-safe
             except Exception:
                 self._clear_breakout5m()
+            try:
+                self._draw_engulf1m(filtered)  # 1m Engulfing indicator (1m) — self-gated, fail-safe
+            except Exception:
+                self._clear_engulf1m()
             try:
                 self._draw_sr(filtered)        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
             except Exception:
