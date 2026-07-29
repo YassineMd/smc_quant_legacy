@@ -9159,7 +9159,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not reuse:                          # full rebuild (front/anchor change, scale change, or first run)
             cc = {k: [] for k in self._M10_ARR_KEYS}
             cc.update(vels=[], fold=None, n=0, front_id=front_id, anchor=anchor_unix,
-                      kc_up=[], kc_lo=[], kc_fold=None, kc_s=_S)
+                      kc_up=[], kc_lo=[], kc_fold=None, kc_s=_S, vfold=vpin_adaptive.VpinTierFold())
 
         # Keltner fold: same sequential arithmetic as _keltner_bands (EMA basis + Wilder RMA ATR), carried
         # as (e, a) after the last computed bucket — a closed bucket's KC is final at close (the recurrence
@@ -9195,6 +9195,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                              cc["closes"][i - 1] if i > 0 else None)
             cc["kc_up"].append(_u); cc["kc_lo"].append(_l)
         cc["n"] = n_closed
+        _vn = len(cc["vfold"].tiers)           # incremental VPIN tiers: extend the fold by the newly-closed buckets only
+        if n_closed > _vn:
+            cc["vfold"].extend(cc["vpin"][_vn:n_closed])
         self._m10_cc = cc                      # cache holds exactly the closed prefix
 
         # full arrays = cached closed prefix (O(N) pointer copy) + the FRESH live edge
@@ -9210,6 +9213,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _, _u, _l = _kc_step(cc["kc_fold"], b.get("high", 0.0), b.get("low", 0.0), b.get("close", 0.0),
                                  cc["closes"][-1] if cc["closes"] else None)
             out["kc_up"].append(_u); out["kc_lo"].append(_l)
+        out["vtiers"] = list(cc["vfold"].tiers); out["vtoxics"] = list(cc["vfold"].toxics)   # cached CLOSED tiers ...
+        if L >= 1:
+            _lt, _lx = cc["vfold"].live(out["vpin"][-1])                                      # ... + fresh LIVE edge
+            out["vtiers"].append(_lt); out["vtoxics"].append(_lx)
         return out
 
     @staticmethod
@@ -9328,9 +9335,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         vpin_arr = arr["vpin"]
         # adaptive VPIN brushes — CAUSAL per-bucket tier (each bar judged against ONLY its own trailing window),
         # so a bar's colour FREEZES when it closes and never repaints as the recent distribution drifts later.
-        _vt = time.perf_counter()
-        vtiers, vtoxics = vpin_adaptive.vpin_tiers_from_series(vpin_arr)
-        self._perf_note("vpin_tiers", _vt)       # profiler: causal VPIN tier pass (per redraw, now rolling-window)
+        vtiers, vtoxics = arr["vtiers"], arr["vtoxics"]   # incremental VPIN tiers cached in _compute_bucket_arrays (was a full per-redraw re-tier)
         _vbr = {t: pg.mkBrush(h) for t, h in _VPIN_TIER_HEX.items()}
         vbrushes = [_vbr[t] for t in vtiers]
         wick_pens = arr["pens"]   # per-candle flow-colored wick/border pens

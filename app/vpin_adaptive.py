@@ -92,6 +92,46 @@ def vpin_tiers_from_series(vp: list, adapt: int = config.VPIN_ADAPT_WINDOW) -> t
     return tiers, toxics
 
 
+class VpinTierFold:
+    """Incremental, CAUSAL VPIN tiering — BYTE-IDENTICAL to vpin_tiers_from_series over the same series, but lets a
+    caller cache the CLOSED prefix (feed each newly-closed value ONCE via extend) and query the LIVE edge every frame
+    (live) WITHOUT mutating the fold. Same rolling-sorted-window + _percentile as the function; the fold state after
+    `extend`ing bars 0..k is exactly the window sorted(vp[k-adapt+1 : k+1]), so live(x) reproduces bar (k+1)'s tier.
+    Used by _compute_bucket_arrays so the terminal stops re-tiering the whole visible window every redraw."""
+
+    def __init__(self, adapt: int = None):
+        import bisect
+        from collections import deque
+        self._bisect = bisect
+        self.adapt = int(adapt if adapt is not None else config.VPIN_ADAPT_WINDOW)
+        self.win = []            # sorted trailing-`adapt` window == sorted(vp[i-adapt+1 : i+1])
+        self.order = deque()     # arrival order, for O(1) evict identity
+        self.tiers = []          # frozen tier per CLOSED bucket, in order
+        self.toxics = []
+
+    def _eval(self, win, order, x):
+        b = self._bisect
+        b.insort(win, x); order.append(x)
+        if len(order) > self.adapt:
+            win.pop(b.bisect_left(win, order.popleft()))
+        if len(win) < config.VPIN_ADAPT_MIN:
+            return NORMAL, None
+        w = _percentile(win, config.VPIN_WARN_PCTL)
+        t = _percentile(win, config.VPIN_TOXIC_PCTL)
+        return vpin_tier(x, w, t), t
+
+    def extend(self, closed_vals):
+        """Feed newly-CLOSED vpin values in order; mutates the fold + appends their (now frozen) tier/toxic."""
+        for x in closed_vals:
+            tr, tx = self._eval(self.win, self.order, x)
+            self.tiers.append(tr); self.toxics.append(tx)
+
+    def live(self, x):
+        """(tier, toxic) for a LIVE value `x` on top of the closed fold, WITHOUT mutating it (copies the window)."""
+        from collections import deque
+        return self._eval(list(self.win), deque(self.order), x)
+
+
 def _percentile(sorted_xs: list, p: float) -> float:
     """Linear-interpolated percentile (matches numpy 'linear'); ``sorted_xs`` non-empty."""
     if len(sorted_xs) == 1:
