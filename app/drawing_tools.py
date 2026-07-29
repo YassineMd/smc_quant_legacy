@@ -928,19 +928,44 @@ class DrawingController(QtCore.QObject):
         if uid and getattr(br, "_acct", None) is not None:
             self._sim_state[uid] = br.sim_snapshot()
 
+    def _sim_dbg(self, msg: str) -> None:
+        """TEMP diagnostic -> data/sim_debug.log (gated by SMC_SIM_DEBUG=1)."""
+        import os
+        if os.environ.get("SMC_SIM_DEBUG", "0") != "1":
+            return
+        try:
+            import time as _t
+            from . import config
+            with open(os.path.join(config.DATA_DIR, "sim_debug.log"), "a", encoding="utf-8") as f:
+                f.write("%.1f %s\n" % (_t.time(), msg))
+        except Exception:
+            pass
+
     def on_price(self, price: float, ts: float) -> None:
         """Feed the live price to every bracket's sim (called each frame). Lazily arms a not-yet-armed
         bracket first — including a just-recreated index bracket, whose uid is now finalised so its saved
         sim state is restored rather than reset."""
         if self._paper_account is None:
+            self._sim_dbg("SKIP: no account")
             return
+        n = 0
         for br in self.brackets + self._idx_brackets:
+            n += 1
             try:
                 if br._acct is None:
                     self._arm_bracket(br)
+                _st0 = br.state
                 br.on_price(price, ts)
-            except Exception:
-                pass
+                if br.state != _st0:
+                    self._sim_dbg("bracket %s: %s->%s px=%.4f e=%.4f s=%.4f t=%.4f"
+                                  % (getattr(br, "uid", "?"), _st0, br.state, price,
+                                     br.entry_line.value(), br.stop_line.value(), br.target_line.value()))
+            except Exception as _e:
+                self._sim_dbg("bracket ERR: %r" % (_e,))
+        import time as _t
+        if _t.time() - getattr(self, "_sim_dbg_t", 0.0) > 3.0:
+            self._sim_dbg_t = _t.time()
+            self._sim_dbg("hb px=%.4f nbr=%d" % (price, n))
 
     # ------------------------------------------------------------------
     def set_tool(self, tool: Optional[str]) -> None:

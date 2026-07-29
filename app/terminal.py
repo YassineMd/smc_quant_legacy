@@ -6671,9 +6671,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self._replay_on:
                 self._feed_replay_sim()
             else:
-                _lp = snap.get("latest_price") or 0.0
-                if _lp > 0:
-                    self.drawer.on_price(_lp, time.time())
+                self.drawer.on_price(snap.get("latest_price") or 0.0, time.time())
             _vx1 = self.vb.viewRange()[0][1]; _px = self.vb.viewPixelSize()[0]
             self.drawer.update_view(_vx1 - 55.0 * _px, _vx1 - 37.0 * _px)   # badges + the × button, left of the price tag
         except Exception:
