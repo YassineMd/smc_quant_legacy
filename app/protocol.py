@@ -159,6 +159,7 @@ class CatchupStartPacket:
     footprints: Dict[str, Any] = field(default_factory=dict)
     total_buckets: int = 0
     total_closed: int = 0          # absolute DB-id of closed_buckets[-1] (stable all-time bucket index)
+    delta: bool = False            # True => APPEND the chunks to the client's cached base (don't clear); see bucket_cache
     type: str = TYPE_CATCHUP_START
 
     def to_line(self) -> str:
@@ -369,6 +370,7 @@ _PARSERS = {
         footprints=d.get("footprints", {}),
         total_buckets=d.get("total_buckets", 0),
         total_closed=d.get("total_closed", 0),
+        delta=d.get("delta", False),   # absent (old daemon) => full catch-up (clear + rebuild)
     ),
     TYPE_CATCHUP_CHUNK: lambda d: CatchupChunkPacket(
         tf=d["tf"], seq=d.get("seq", 0),

@@ -34,7 +34,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import requests
 
-from . import config, protocol
+from . import bucket_cache, config, protocol
 
 
 def fetch_baseline_candles(tf: str) -> "OrderedDict[int, list]":
@@ -99,6 +99,11 @@ class PipeClientWorker(threading.Thread):
         self._cu_t0: float = 0.0
         self._cu_bytes: int = 0
         self._cu_parse: float = 0.0
+        # --- persistent bucket cache / delta catch-up (see app.bucket_cache) ---
+        self._pending_since = None      # the `since` cursor sent with the in-flight set_tf (for the delta check)
+        self._delta_expect = None       # buckets a DELTA catch-up should deliver (None = full catch-up)
+        self._delta_got: int = 0        # buckets actually appended during the current catch-up
+        self._last_cache_save: float = 0.0
         self._force_reconnect = threading.Event()   # manual refresh: drop the socket + reconnect now
         self._sock: Optional[socket.socket] = None  # active socket, exposed for refresh()'s force-drop
         # copy-on-write export caches: bump the version on every write to the heavy,
@@ -139,24 +144,75 @@ class PipeClientWorker(threading.Thread):
     # Outbound control
     # ------------------------------------------------------------------
     def request_timeframe(self, tf: str) -> None:
-        """Queue a set_tf control frame and reset the local candle cache."""
+        """Announce ``tf`` to the daemon and seed the local cache so the catch-up is a DELTA when possible.
+
+        Three cases:
+          * RECONNECT (same tf, we still hold buckets): keep the in-memory base (freshest) and ask for the
+            delta since it — never regress to the on-disk copy.
+          * TF-SWITCH / cold start: persist the tf we're leaving, then seed the new tf from
+            :mod:`app.bucket_cache` (if a valid cache exists) and ask for the delta since it; on a cache
+            miss, clear and ask for a full catch-up exactly as before.
+        On an old daemon (or a rejected cursor) the reply is a full ``delta=False`` catch-up that clears the
+        seed — no benefit, no corruption. Disk I/O (save/load) happens OUTSIDE the lock."""
+        # Only KEEP the in-memory base if the last catch-up actually COMPLETED — a partial window
+        # (interrupted mid-stream) has closed_buckets that lag _total_closed, so trusting it + asking
+        # since=_total_closed would leave a silent gap. If in doubt, reseed from disk / full-catch-up.
+        reconnect_same = (tf == self.tf and bool(self.closed_buckets) and not self._catchup_loading)
+        entry = None
+        if not reconnect_same:
+            self.save_cache_now()             # persist the outgoing tf (no-op if it has no data)
+            entry = bucket_cache.load(tf)     # seed the incoming tf (disk read off-lock)
         with self.data_lock:
             self.tf = tf
             self.candles = OrderedDict()
-            self.footprints = OrderedDict()
-            self.order_blocks = []
-            self.absorptions = []
             self.liquidations = []
-            self._liq_sweeps: dict = {}   # (idx,side) -> {ts,side,level,idx}; 15m sweeps pushed by the daemon
-            self.closed_buckets = []
+            self._liq_sweeps = {}             # (idx,side) -> {ts,side,level,idx}; 15m sweeps pushed by the daemon
             self.active_bucket = {}
-            self.target_vol = 0.0   # stale until the new tf's catch-up arrives (scale labels skip till then)
-            self._cb_ver += 1   # invalidate COW caches on the tf-switch clear
+            if reconnect_same:
+                since = self._total_closed    # keep in-memory closed_buckets/footprints/target_vol as-is
+            elif entry is not None:
+                self.closed_buckets = list(entry["buckets"])
+                self._total_closed = int(entry.get("total_closed", 0))
+                self.footprints = OrderedDict(
+                    sorted(entry.get("footprints", {}).items(), key=lambda x: int(x[0])))
+                self.target_vol = float(entry.get("target_vol", 0.0)) or config.DEFAULT_TARGET_VOL
+                self.order_blocks = []        # OBs/absorptions arrive fresh in the catch-up start
+                self.absorptions = []
+                since = self._total_closed
+            else:
+                self.footprints = OrderedDict()
+                self.order_blocks = []
+                self.absorptions = []
+                self.closed_buckets = []
+                self._total_closed = 0
+                self.target_vol = 0.0         # stale until the new tf's catch-up arrives (scale labels skip)
+                since = None
+            self._pending_since = since
+            self._cb_ver += 1                 # invalidate COW caches on the reseed/clear
             self._ob_ver += 1
+        frame = {"action": "set_tf", "tf": tf}
+        if since is not None and since > 0:
+            frame["since"] = since
         with self._send_lock:
-            self._outgoing.append(protocol.json.dumps({"action": "set_tf", "tf": tf}) + "\n")
+            self._outgoing.append(protocol.json.dumps(frame) + "\n")
         # Repopulate baseline synchronously so the chart never blanks for long
         self.load_baseline(tf)
+
+    def save_cache_now(self) -> None:
+        """Persist the CURRENT tf's base window to disk (shallow-copy under the lock, pickle off-lock).
+        No-op if there's nothing worth caching. Called periodically, on tf-switch, and on stop."""
+        with self.data_lock:
+            # Never persist a window mid-catch-up: closed_buckets is still filling behind _total_closed,
+            # so the pair would be inconsistent (partial buckets, complete cursor) and seed a gap next open.
+            if not self.closed_buckets or self._total_closed <= 0 or self._catchup_loading:
+                return
+            tf = self.tf
+            buckets = list(self.closed_buckets)   # shallow: inner closed-bucket dicts are immutable
+            tc = self._total_closed
+            fps = dict(self.footprints)
+            tv = self.target_vol
+        bucket_cache.save(tf, buckets, tc, fps, tv)
+        self._last_cache_save = time.time()
 
     def request_depth_window(self, t0: int, t1: int, cols: int,
                              ylo: float, yhi: float, ybins: int) -> None:
@@ -209,6 +265,10 @@ class PipeClientWorker(threading.Thread):
 
     def stop(self) -> None:
         self._stop.set()
+        try:
+            self.save_cache_now()   # best-effort clean-close persist (the periodic save is the backstop)
+        except Exception:
+            pass
 
     def refresh(self) -> None:
         """Force-drop the current socket and reconnect immediately (manual chart refresh).
@@ -246,6 +306,9 @@ class PipeClientWorker(threading.Thread):
                 buffer = b""
                 while not self._stop.is_set():
                     self._flush_outgoing(sock)
+                    if (self.closed_buckets and not self._catchup_loading
+                            and time.time() - self._last_cache_save > config.BUCKET_CACHE_SAVE_SECS):
+                        self.save_cache_now()   # refresh the on-disk base so the next open deltas
                     try:
                         data = sock.recv(65536)
                     except socket.timeout:
@@ -330,8 +393,15 @@ class PipeClientWorker(threading.Thread):
                 self.target_vol = tgt
                 self.order_blocks = new_obs
                 self.absorptions = new_abs   # paint whale bands on boot, before the first recompute
-                self.footprints = new_fp
-                self.closed_buckets = []
+                self.footprints = new_fp     # the ~200 recent footprint nodes, current either way
+                if pkt.delta:
+                    # DELTA: keep the seeded base; the chunks APPEND the buckets closed since our cursor.
+                    self._delta_expect = int(pkt.total_closed) - int(self._pending_since or 0)
+                else:
+                    # FULL: clear + rebuild from chunks (also the fallback when the cursor was rejected).
+                    self.closed_buckets = []
+                    self._delta_expect = None
+                self._delta_got = 0
                 self._total_closed = pkt.total_closed   # DB-id of the window's last bucket (chunks fill behind)
                 self._cb_ver += 1
                 self._ob_ver += 1
@@ -349,6 +419,7 @@ class PipeClientWorker(threading.Thread):
                 if pkt.tf != self.tf:
                     return
                 self.closed_buckets.extend(batch)
+                self._delta_got += len(batch)
                 self._cb_ver += 1
             return
         if isinstance(pkt, protocol.CatchupEndPacket):
@@ -356,6 +427,7 @@ class PipeClientWorker(threading.Thread):
                 return
             active = dict(pkt.active_bucket)
             _cu = False
+            _bad_delta = False
             with self.data_lock:
                 if pkt.tf != self.tf:
                     return
@@ -365,6 +437,12 @@ class PipeClientWorker(threading.Thread):
                     self.closed_buckets = self.closed_buckets[-config.CLOSED_BUCKETS_CAP:]
                     self._cb_ver += 1
                 self._catchup_loading = False
+                # Delta sanity: a DELTA must have delivered exactly the expected count. The daemon
+                # validates the cursor on a single event loop so this can't fail in practice, but if it
+                # ever did we must NOT trust the stitched base -> force a clean full reload below.
+                if self._delta_expect is not None and self._delta_got != self._delta_expect:
+                    _bad_delta = True
+                self._delta_expect = None
                 if self._cu_active:                    # capture startup-phase numbers under the lock
                     self._cu_active = False
                     _cu = True
@@ -372,6 +450,14 @@ class PipeClientWorker(threading.Thread):
                     _parse, _bytes = self._cu_parse, self._cu_bytes
                     _nb = len(self.closed_buckets)
                     _nl = sum(len(b.get("levels") or ()) for b in self.closed_buckets)
+            if _bad_delta:                             # drop the base + re-request a FULL catch-up (no `since`)
+                bucket_cache.discard(self.tf)
+                with self.data_lock:
+                    self.closed_buckets = []
+                    self._total_closed = 0
+                    self._cb_ver += 1
+                with self._send_lock:
+                    self._outgoing.append(protocol.json.dumps({"action": "set_tf", "tf": self.tf}) + "\n")
             if _cu:                                    # write OUTSIDE the lock (no I/O under lock)
                 self._write_startup_perf(self.tf, _wall, _parse, _bytes, _nb, _nl)
             return

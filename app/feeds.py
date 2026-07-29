@@ -174,9 +174,14 @@ class MarketDataCore:
     # ------------------------------------------------------------------
     # Chunked CATCHUP builders (the daemon orchestrates START -> CHUNKs -> END)
     # ------------------------------------------------------------------
-    def catchup_start(self, tf: str) -> CatchupStartPacket:
+    def catchup_start(self, tf: str, delta: bool = False) -> CatchupStartPacket:
         """Frame #1: target_vol + the current OB matrix + recent footprints +
-        the total bucket count (client renders these immediately + shows progress)."""
+        the total bucket count (client renders these immediately + shows progress).
+
+        ``delta=True`` tells the client to APPEND the following chunks to its cached base
+        (see :mod:`app.bucket_cache`) instead of clearing — used when the client supplied a valid
+        ``since`` cursor. The metadata (OBs / footprints / target_vol / total_closed) is the current
+        set either way, so a delta client still refreshes them."""
         if tf not in self.engines:
             tf = config.DEFAULT_TF
         engine = self.engines[tf]
@@ -188,7 +193,7 @@ class MarketDataCore:
             tf=tf, target_vol=engine.target_vol, order_blocks=order_blocks,
             absorptions=self._absorption_marks(tf),
             footprints=footprints, total_buckets=len(engine.closed_buckets),
-            total_closed=engine.total_closed)
+            total_closed=engine.total_closed, delta=delta)
 
     def catchup_buckets(self, tf: str) -> list:
         """The full closed-bucket snapshot list; the daemon slices it into
@@ -196,6 +201,38 @@ class MarketDataCore:
         if tf not in self.engines:
             tf = config.DEFAULT_TF
         return [b.full_snapshot() for b in self.engines[tf].closed_buckets]
+
+    def catchup_delta(self, tf: str, since):
+        """How many buckets to ship as a DELTA to a client whose cached last-bucket DB-id is ``since``.
+
+        Returns ``n_new`` (>= 0) iff the delta is CONTIGUOUS with this engine's retained window — the
+        client's cursor sits in ``[total_closed - len(window) .. total_closed]`` — else ``None`` (the
+        daemon then falls back to a full catch-up). ``since`` is client-supplied so it is validated
+        defensively: non-int, negative, ahead-of-us, or older than what we still retain all -> ``None``.
+        Reads ``total_closed`` / ``closed_buckets`` with no ``await`` between them, so the count matches
+        :meth:`catchup_delta_buckets` and :meth:`catchup_start`'s ``total_closed`` exactly."""
+        if tf not in self.engines:
+            tf = config.DEFAULT_TF
+        engine = self.engines[tf]
+        try:
+            since = int(since)
+        except (TypeError, ValueError):
+            return None
+        if since < 0:
+            return None
+        n_new = int(engine.total_closed) - since
+        nb = len(engine.closed_buckets)
+        if 0 <= n_new <= nb:          # behind us by n_new AND we still retain the join point
+            return n_new
+        return None
+
+    def catchup_delta_buckets(self, tf: str, n_new: int) -> list:
+        """The last ``n_new`` closed-bucket snapshots (the delta the client appends). ``n_new<=0`` -> []."""
+        if tf not in self.engines:
+            tf = config.DEFAULT_TF
+        if n_new <= 0:
+            return []
+        return [b.full_snapshot() for b in self.engines[tf].closed_buckets[-n_new:]]
 
     def catchup_end(self, tf: str) -> CatchupEndPacket:
         """Frame #N: the live pulsing ``active_bucket`` + the rolling vpin scalar."""

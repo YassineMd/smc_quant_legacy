@@ -133,8 +133,9 @@ class DaemonServer:
             tf = cmd.get("tf")
             if tf in config.TIMEFRAMES:
                 client.tf = tf
+                since = cmd.get("since")   # optional cached cursor -> DELTA catch-up (see app.bucket_cache)
                 # Stream a fresh chunked CATCHUP for the newly subscribed timeframe
-                asyncio.create_task(self._send_catchup(client, tf))
+                asyncio.create_task(self._send_catchup(client, tf, since))
                 print(f"CLIENT {client.writer.get_extra_info('peername')} -> {tf}")
         elif action == "depth_window" and self.depth_store is not None:
             # Phase 2a: serve a heatmap window (built OFF-loop) + subscribe this client to live columns.
@@ -157,17 +158,25 @@ class DaemonServer:
             client.heatmap = None   # leave the heatmap mode -> stop live-column pushes
 
     # ------------------------------------------------------------------
-    async def _send_catchup(self, client: _Client, tf: str) -> None:
+    async def _send_catchup(self, client: _Client, tf: str, since=None) -> None:
         """Stream a paginated catch-up: CATCHUP_START -> N×CATCHUP_CHUNK -> END.
 
-        ``await asyncio.sleep(0)`` between chunks yields the event loop so live
-        ticks and other clients keep flowing during a large (up to 10k-bucket)
-        dump. The client filters every frame by ``tf``, so a mid-stream tf switch
-        can't corrupt its cache — the stale stream's frames are simply dropped.
+        If the client supplied a valid ``since`` cursor (its cached last-bucket DB-id) AND the delta is
+        contiguous with our retained window, ship a DELTA — only the buckets closed since ``since``, with
+        ``delta=True`` so the client APPENDS them to its cache — otherwise the FULL window exactly as
+        before (also the fallback for an old client that sends no ``since``). The delta count and the
+        START packet's ``total_closed`` are read with no ``await`` between them, so the client receives
+        exactly ``total_closed - since`` buckets and the append is always contiguous.
+
+        ``await asyncio.sleep(0)`` between chunks yields the event loop so live ticks and other clients
+        keep flowing during a large (up to 10k-bucket) dump. The client filters every frame by ``tf``, so
+        a mid-stream tf switch can't corrupt its cache — the stale stream's frames are simply dropped.
         """
         try:
-            self._enqueue(client, self.core.catchup_start(tf).to_line())
-            buckets = self.core.catchup_buckets(tf)
+            n_new = self.core.catchup_delta(tf, since) if since is not None else None
+            self._enqueue(client, self.core.catchup_start(tf, delta=(n_new is not None)).to_line())
+            buckets = (self.core.catchup_delta_buckets(tf, n_new) if n_new is not None
+                       else self.core.catchup_buckets(tf))
             size = config.CATCHUP_CHUNK_SIZE
             for seq, i in enumerate(range(0, len(buckets), size)):
                 self._enqueue(client, CatchupChunkPacket(

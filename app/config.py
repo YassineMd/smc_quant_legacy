@@ -183,6 +183,7 @@ REHYDRATE_LIMIT = 1440          # main.py:248 — last 24h of entries per tf (le
 SAVE_INTERVAL_SECS = 15         # main.py:286 — periodic footprint flush (legacy JSON)
 SYNC_INTERVAL_SECS = 10         # async SQLite upsert cadence (replaces JSON flush)
 CATCHUP_CHUNK_SIZE = 1000       # closed buckets per CATCHUP_CHUNK frame
+BUCKET_CACHE_SAVE_SECS = 120    # worker persists its tf's base window (bucket_cache) at most this often
 BASELINE_CANDLES = 100          # spec §9.1.3 — REST baseline pull
 TS_FORMAT = "%Y-%m-%d %H:%M:00"  # spec §10.2.2 — temporal slicing key
 
