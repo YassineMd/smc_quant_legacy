@@ -369,20 +369,16 @@ class PositionBracket(QtCore.QObject):
         t = self.target_line.value()
         rr = self.rr
         _f = "font-size:13px"
-        # SL/TP badges show the leveraged NET margin % (fees included) you'd realise IF that level hits — the
-        # SAME basis as the live PnL, so all three are directly comparable (the raw price-distance % was
-        # confusing next to the leveraged PnL). Break-even line = entry nudged by the round-trip fee.
-        if self._acct is not None:
-            _, sl_pct = self._acct.hypo_pct(e, s, self._side)
-            _, tp_pct = self._acct.hypo_pct(e, t, self._side)
-            self.be_line.setValue(self._acct.breakeven(e, self._side))
-        else:
-            sl_pct = tp_pct = 0.0
-            self.be_line.setValue(e)
-        self._val_labels["SL"].setHtml(f"<span style='color:#ff8a80;{_f}'><b>{s:.2f}</b> ({sl_pct:+.1f}%)</span>")
+        # SL/TP show the PRICE-distance % (in the position's FAVOUR) minus the 0.1% round-trip fee — NOT
+        # leveraged, NOT the $ PnL. e.g. SL 0.2% away -> -0.30% ; TP 0.5% away -> +0.40%. Break-even line = the
+        # price where that % crosses 0 (entry nudged by the fee).
+        sl_pct = self._pct_net(s)
+        tp_pct = self._pct_net(t)
+        self.be_line.setValue(self._acct.breakeven(e, self._side) if self._acct is not None else e)
+        self._val_labels["SL"].setHtml(f"<span style='color:#ff8a80;{_f}'><b>{s:.2f}</b> ({sl_pct:+.2f}%)</span>")
         # TP badge carries the R:R ratio (was the old top label, which overlapped the TP badge)
         self._val_labels["TP"].setHtml(
-            f"<span style='color:#69f0ae;{_f}'><b>{t:.2f}</b> ({tp_pct:+.1f}%)</span>"
+            f"<span style='color:#69f0ae;{_f}'><b>{t:.2f}</b> ({tp_pct:+.2f}%)</span>"
             f"<span style='color:#9aa0a6;{_f}'>  1:{rr:.2f}</span>")
         self._render_entry()                                # ENTRY badge = entry value (+ live PnL when active)
         self._val_labels["SL"].setPos(self.label_x, s)
@@ -391,6 +387,16 @@ class PositionBracket(QtCore.QObject):
         self.close_btn.setData([{"pos": (self._close_x, e)}])
         self.changed.emit()
 
+    def _pct_net(self, level: float) -> float:
+        """Price change % of ``level`` vs entry in the position's FAVOUR direction, minus the round-trip fee %
+        (0.1% at 0.05%/side). SL comes out negative, TP positive; at the entry price it is exactly -fee (-0.1%).
+        This is a PRICE %, NOT leveraged and NOT the $ PnL."""
+        e = self.entry_line.value()
+        if e <= 0:
+            return 0.0
+        fee_pct = (self._acct.fee_rate * 200.0) if self._acct is not None else 0.1
+        return (level - e) / e * 100.0 * self._side - fee_pct
+
     def _render_entry(self, price: float = None) -> None:
         """ENTRY badge: the entry price + the LIVE net PnL ($ and % on margin) once the trade is ACTIVE."""
         e = self.entry_line.value()
@@ -398,11 +404,12 @@ class PositionBracket(QtCore.QObject):
         if self.state == "ACTIVE" and self._pos is not None and self._acct is not None:
             px = price if price is not None else self._last_px
             if px is not None:
-                net, pct = self._acct.live_pnl(self._pos, px)
+                net, _ = self._acct.live_pnl(self._pos, px)   # $ = the real leveraged PnL (fees included)
+                chg = self._pct_net(px)                       # % = live price change vs entry (favour) - fee, NOT PnL
                 col = "#69f0ae" if net >= 0 else "#ff5252"
                 self._val_labels["Entry"].setHtml(
                     f"<span style='color:#82b1ff;{_f}'><b>{e:.2f}</b></span>"
-                    f"<span style='color:{col};{_f}'>  {net:+,.0f}$ ({pct:+.1f}%)</span>")
+                    f"<span style='color:{col};{_f}'>  {net:+,.0f}$ ({chg:+.2f}%)</span>")
                 return
         self._val_labels["Entry"].setHtml(f"<span style='color:#82b1ff;{_f}'><b>{e:.2f}</b></span>")
 
