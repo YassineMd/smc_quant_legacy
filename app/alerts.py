@@ -64,13 +64,18 @@ class AudioEngine:
 
 _QSS = """
 QFrame#alerts { background-color: rgba(16,18,24,0.97); border:1px solid #2a2e39; }
-QLabel#title { color:#fff; font-weight:bold; font-family:Consolas; padding:6px; }
+QLabel#title { color:#fff; font-weight:bold; font-family:Consolas; }
+QLabel#bal { color:#69f0ae; font-weight:bold; font-family:Consolas; font-size:11px; }
 QListWidget { background:#0c0e12; color:#ddd; font-family:Consolas; font-size:11px; border:none; }
+QPushButton#clearbtn { background:#2a2e39; color:#ddd; border:none; padding:2px 8px;
+                       font-family:Consolas; font-size:11px; border-radius:3px; }
+QPushButton#clearbtn:hover { background:#e74c3c; color:#fff; }
 """
 
 
 class AlertsLedger(QtWidgets.QFrame):
     unreadChanged = QtCore.Signal(int)
+    clearRequested = QtCore.Signal()      # 'Clear' button -> the terminal resets the LIVE paper account
 
     def __init__(self, parent: QtWidgets.QWidget):
         super().__init__(parent)
@@ -86,11 +91,32 @@ class AlertsLedger(QtWidgets.QFrame):
 
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(0)
-        title = QtWidgets.QLabel("Institutional Alerts")
-        title.setObjectName("title")
-        lay.addWidget(title)
+        header = QtWidgets.QWidget()
+        hl = QtWidgets.QHBoxLayout(header)
+        hl.setContentsMargins(6, 4, 6, 4); hl.setSpacing(6)
+        self.title = QtWidgets.QLabel("Paper — LIVE"); self.title.setObjectName("title")
+        self.balance_lbl = QtWidgets.QLabel(""); self.balance_lbl.setObjectName("bal")
+        self.clear_btn = QtWidgets.QPushButton("Clear"); self.clear_btn.setObjectName("clearbtn")
+        self.clear_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.clear_btn.setToolTip("Reset the LIVE paper account to its start balance + clear this list")
+        self.clear_btn.clicked.connect(self.clearRequested.emit)
+        hl.addWidget(self.title); hl.addStretch(1); hl.addWidget(self.balance_lbl); hl.addWidget(self.clear_btn)
+        lay.addWidget(header)
         self.list = QtWidgets.QListWidget()
         lay.addWidget(self.list)
+
+    def set_mode(self, mode: str) -> None:
+        self.title.setText("Paper — %s" % mode)
+
+    def set_balance(self, bal: float) -> None:
+        self.balance_lbl.setText("{:,.0f}$".format(bal))
+
+    def clear_trades(self) -> None:
+        """Wipe the ledger list (the Clear button; also used when the live account is reset)."""
+        self.list.clear()
+        self._seen_obs.clear(); self._seen_liqs.clear()
+        self._unread = 0
+        self.unreadChanged.emit(0)
 
     # ------------------------------------------------------------------
     def _add(self, text: str, color: str) -> None:
@@ -110,10 +136,11 @@ class AlertsLedger(QtWidgets.QFrame):
         win = r.get("net", 0.0) >= 0.0
         icon = "✅" if win else "❌"
         kind = (r.get("kind") or "").upper()
-        txt = ("%s %s %s  %.2f→%.2f  %+,.0f$ (%+.1f%%)  bal %,.0f$"
-               % (icon, kind, r.get("reason", ""), r.get("entry", 0.0), r.get("exit", 0.0),
-                  r.get("net", 0.0), r.get("pct", 0.0), r.get("balance", 0.0)))
+        txt = ("{} {} {}  {:.2f}→{:.2f}  {:+,.0f}$ ({:+.1f}%)  bal {:,.0f}$".format(
+            icon, kind, r.get("reason", ""), r.get("entry", 0.0), r.get("exit", 0.0),
+            r.get("net", 0.0), r.get("pct", 0.0), r.get("balance", 0.0)))
         self._add(txt, "#27ae60" if win else "#e74c3c")
+        self.set_balance(r.get("balance", 0.0))
         self.audio.play()
 
     def feed(self, snap: dict) -> None:

@@ -23,7 +23,12 @@ FEE_RATE = 0.0005         # 0.05% taker, charged per side (entry + exit)
 
 
 class PaperAccount:
-    def __init__(self, path: str = None, start: float = START_BALANCE):
+    """``persist=True`` (LIVE): the balance is stored in ``path`` and SYNCED across terminal windows — every
+    open/close re-reads the file first, so two windows share one running account (read-modify-write on close).
+    ``persist=False`` (REPLAY): in-memory only, never touches disk, reset when replay mode toggles."""
+
+    def __init__(self, path: str = None, start: float = START_BALANCE, persist: bool = True):
+        self.persist = persist
         self.path = path or os.path.join(config.DATA_DIR, "paper_account.json")
         self.risk_frac = RISK_FRAC
         self.leverage = LEVERAGE
@@ -32,8 +37,10 @@ class PaperAccount:
         self.balance = start
         self._load()
 
-    # -- persistence (best-effort) --
+    # -- persistence (best-effort; no-op for a non-persistent replay account) --
     def _load(self) -> None:
+        if not self.persist:
+            return
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 self.balance = float(json.load(f).get("balance", self.start))
@@ -41,6 +48,8 @@ class PaperAccount:
             pass
 
     def _save(self) -> None:
+        if not self.persist:
+            return
         try:
             with open(self.path, "w", encoding="utf-8") as f:
                 json.dump({"balance": self.balance}, f)
@@ -55,6 +64,7 @@ class PaperAccount:
     def open(self, entry: float, side: int) -> dict:
         """Size a new position off the CURRENT balance. side = +1 long / -1 short. Returns the open dict
         (nothing is charged to the balance until close)."""
+        self._load()                                   # SYNC: pick up other windows' balance before sizing
         margin = max(0.0, self.balance) * self.risk_frac
         notional = margin * self.leverage
         qty = (notional / entry) if entry > 0 else 0.0            # SOL units controlled
@@ -71,8 +81,11 @@ class PaperAccount:
         return net, pct
 
     def close(self, pos: dict, exit_price: float) -> dict:
-        """Realize the position at ``exit_price``, credit/debit the balance, persist. Returns the result."""
+        """Realize the position at ``exit_price``, credit/debit the balance, persist. Returns the result.
+        The net is computed from ``pos`` alone, so re-reading the shared balance first (read-modify-write)
+        keeps the LIVE account consistent when another window closed a trade in the meantime."""
         net, pct = self.live_pnl(pos, exit_price)
+        self._load()                                   # SYNC: fold this trade onto the latest shared balance
         self.balance += net
         self._save()
         return {"net": net, "pct": pct, "balance": self.balance, "exit": exit_price}

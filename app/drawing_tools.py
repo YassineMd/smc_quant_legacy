@@ -859,6 +859,16 @@ class DrawingController(QtCore.QObject):
         for br in self.brackets + self._idx_brackets:
             self._arm_bracket(br)
 
+    def use_account(self, account) -> None:
+        """Switch the ACTIVE account (live <-> replay on a mode change): re-arm every bracket PENDING against
+        it and drop the old-context sim snapshots, so no trade resumes across the mode boundary."""
+        if account is None or account is self._paper_account:
+            return
+        self._paper_account = account
+        self._sim_state.clear()
+        for br in self.brackets + self._idx_brackets:
+            self._arm_bracket(br)
+
     def _arm_bracket(self, br) -> None:
         acct = self._paper_account
         if acct is None:
@@ -1334,13 +1344,9 @@ class DrawingController(QtCore.QObject):
         off = self._idx_off
         idx = [self._shape_dict_global(s, off) for s in self._idx_shapes if s.kind != "hline"]
         idx += [self._shape_dict_global(s, 0.0) for s in self._idx_shapes if s.kind == "hline"]
-        for b in self._idx_brackets:
-            bd = b.to_dict()
-            anch = (self._anchor_pts([[bd["x0"], 0], [bd["x1"], 0]])
-                    if self._idx_bks else getattr(b, "anchors", None))
-            idx.append(dict(bd, t="bracket", id=getattr(b, "uid", None) or uuid.uuid4().hex,
-                            anch=anch, **{"x0": bd["x0"] + off, "x1": bd["x1"] + off}))
-        idx += [dict(d) for d in self._idx_pending]      # offscreen items are part of the set too
+        # POSITION TOOL EXCLUDED FROM UNDO (it's a live paper-trade sim): brackets are neither captured here
+        # nor cleared/rebuilt in _restore, so undo/redo can never disturb an open or closed trade.
+        idx += [dict(d) for d in self._idx_pending if d.get("t") != "bracket"]
         return {"idx": idx, "deleted": set(self._idx_deleted)}
 
     def _push_undo(self) -> None:
@@ -1359,14 +1365,13 @@ class DrawingController(QtCore.QObject):
         try:
             for s in list(self._idx_shapes):
                 self.plot.removeItem(s)
-            for br in list(self._idx_brackets):
-                self._save_sim(br)                       # carry the live sim across undo/redo recreate
-                br.remove()
-            self._idx_shapes.clear(); self._idx_brackets.clear()
+            self._idx_shapes.clear()
+            # brackets are EXCLUDED from undo: leave rendered ones untouched + preserve pending (offscreen) ones.
+            _keep_brackets = [d for d in self._idx_pending if d.get("t") == "bracket"]
             self.handles.clear(); self._picked = None
             self.edit_panel.hide()
             self._idx_deleted = set(st["deleted"])
-            self._idx_pending = [dict(d) for d in st["idx"]]
+            self._idx_pending = [dict(d) for d in st["idx"]] + _keep_brackets
         finally:
             self._idx_busy = False
         self._render_idx_pending()

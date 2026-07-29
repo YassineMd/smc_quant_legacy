@@ -583,6 +583,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scanner_bucket_cache: tuple = ([], [], 0)
         self._replay_on = False            # REPLAY MODE: causal historical playback from the Start Date (default OFF)
         self._replay_edge_t: Optional[float] = None   # replay cursor = live-edge bucket end_time; Right arrow advances it
+        self._sim_fed_edge = None                      # last replay bucket end_time fed to the position sim (None = re-baseline)
         self._replay_start_t: Optional[float] = None  # FIXED replay start (Start Date); the frame's LEFT edge = start-24h,
         #                                               so stepping GROWS the window to the right (left history stays)
         self._replay_saved_edge_t: Optional[float] = None   # last replay position, persisted -> restored on next toggle-on
@@ -1273,7 +1274,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._tf = tf if tf in config.TF_SECONDS else config.DEFAULT_TF
         self._load_ui_state()   # restore the panel toggles saved by a prior session (overrides the defaults above)
         self.alerts = AlertsLedger(self)
-        self.paper = PaperAccount()          # live position-tool paper-trade sim ($200k, 10% margin x10, compounding)
+        self.paper_live = PaperAccount(persist=True)      # LIVE paper account — synced across windows, cleared by the button
+        self.paper_replay = PaperAccount(persist=False)   # REPLAY paper account — ephemeral, reset when replay toggles
         self.drawbar = DrawingToolbar(self)
         self.menu = FloatingOverlayMenu(self)
         self.menu.set_swing_pct(self._swing_pct)   # sync the swing slider to the restored/default sensitivity
@@ -1336,7 +1338,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                # toggled signal isn't wired yet at build, so show it explicitly (resizeEvent
                                # positions it top-centre once the window lays out).
         self.drawer.selectionChanged.connect(self._refresh_selection_stats)   # Magic Selection -> stats
-        self.drawer.set_paper_account(self.paper, self.alerts.record_trade)    # arm the live position simulation
+        self.drawer.set_paper_account(self.paper_live, self.alerts.record_trade)   # start on the LIVE account
+        self.alerts.set_mode("LIVE"); self.alerts.set_balance(self.paper_live.balance)
+        self.alerts.clearRequested.connect(self._on_clear_paper)
         QtGui.QShortcut(QtGui.QKeySequence("Escape"), self, activated=self.drawer.cancel)
         # Both arrows move the Magic Selection's RIGHT edge only: Right = +1 bucket (extend), Left = -1
         # (pull back). Left edge stays; clamped to >= 1 bucket of width. No-op without a selection.
@@ -6662,13 +6666,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _pc = time.perf_counter; _t0 = _pc()                 # session profiler: frame total (negligible)
         snap = self.worker.snapshot()
         self._last_snap = snap
-        # live position-tool paper-trade sim: feed the live price (fills/closes) + pin the labels to the view edge
+        # position-tool paper-trade sim: LIVE account fed the live tick, REPLAY account fed the playback path
         try:
-            _lp = snap.get("latest_price") or 0.0
-            if _lp > 0:
-                self.drawer.on_price(_lp, time.time())
-                _vx1 = self.vb.viewRange()[0][1]
-                self.drawer.update_view(_vx1 - 55.0 * self.vb.viewPixelSize()[0])   # clear the y-axis price tag
+            if self._replay_on:
+                self._feed_replay_sim()
+            else:
+                _lp = snap.get("latest_price") or 0.0
+                if _lp > 0:
+                    self.drawer.on_price(_lp, time.time())
+            _vx1 = self.vb.viewRange()[0][1]
+            self.drawer.update_view(_vx1 - 55.0 * self.vb.viewPixelSize()[0])   # labels just left of the price tag
         except Exception:
             pass
         try:
@@ -6967,12 +6974,55 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         min_d = QtCore.QDateTime.fromSecsSinceEpoch(int(min_ts)).date() if min_ts else None
         return min_d, QtCore.QDate.currentDate()
 
+    def _feed_replay_sim(self) -> None:
+        """Replay mode: feed the position sim every NEWLY-revealed bucket's intra-bar PATH (approximated by
+        candle direction — bullish: low->high->close, bearish: high->low->close) so intra-bar entry/TP/SL
+        fill, not just the close. Forward-only: stepping back doesn't un-run the sim."""
+        filt, _, _ = self._build_scanner_buckets()
+        if not filt:
+            return
+        et = float(filt[-1].get("end_time", 0.0) or 0.0)
+        if self._sim_fed_edge is None:       # first frame after replay-on: baseline the edge, don't dump the backlog
+            self._sim_fed_edge = et
+            return
+        last = self._sim_fed_edge
+        if et <= last:
+            return
+        for b in filt:
+            bet = float(b.get("end_time", 0.0) or 0.0)
+            if bet <= last:
+                continue
+            o = float(b.get("open", b.get("open_price", 0.0)) or 0.0)
+            c = float(b.get("close", b.get("close_price", 0.0)) or 0.0)
+            h = float(b.get("high", 0.0) or 0.0); l = float(b.get("low", 0.0) or 0.0)
+            for px in ([l, h, c] if c >= o else [h, l, c]):
+                if px > 0:
+                    self.drawer.on_price(px, bet)
+        self._sim_fed_edge = et
+
+    def _on_clear_paper(self) -> None:
+        """'Clear' on the alerts panel: reset the LIVE paper account to its start balance + wipe the ledger."""
+        self.paper_live.reset()
+        self.alerts.clear_trades()
+        self.alerts.set_mode("REPLAY" if self._replay_on else "LIVE")
+        self.alerts.set_balance((self.paper_replay if self._replay_on else self.paper_live).balance)
+
     def _on_replay_toggled(self, on: bool) -> None:
         """Replay Mode on/off (default OFF). ON: RESTORE the last replay position (persisted across sessions) into
         the Start Date, then seat the cursor there and redraw a CAUSAL frame ending at it — the whole pipeline
         (candles, VPIN, pivot, selection, HM) reads the clipped frame, so it behaves exactly as live did at that
         moment. OFF: back to the real live edge. Right arrow steps one candle (_on_sel_right)."""
         self._replay_on = bool(on)
+        # switch the position-tool paper account. The REPLAY account is ephemeral: reset on BOTH transitions
+        # (so it's clean entering AND auto-cleared leaving), the LIVE account is untouched here.
+        self._sim_fed_edge = None
+        self.paper_replay.reset()
+        if on:
+            self.drawer.use_account(self.paper_replay)
+            self.alerts.set_mode("REPLAY"); self.alerts.set_balance(self.paper_replay.balance)
+        else:
+            self.drawer.use_account(self.paper_live)
+            self.alerts.set_mode("LIVE"); self.alerts.set_balance(self.paper_live.balance)
         if not on:
             self._replay_stop_autoplay()     # leaving Replay Mode halts any running auto-play
         if on and self._replay_saved_edge_t is not None:
