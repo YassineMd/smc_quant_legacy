@@ -41,6 +41,7 @@ from .alerts import AlertsLedger
 from . import bar_quantiles
 from . import archive          # local cold-archive reader — extends the scanner frame past the daemon's cap
 from . import recon_replay     # SEPARATE pre-daemon Binance-reconstruction store — replay-only, never merges with daemon
+from . import finish_strength  # 1m-finish strong/weak test for 5m break/engulf badges (validated in the 1m-internal study)
 from . import structure        # market-structure swing labels (HH/HL/LH/LL)
 from .chart_widgets import (
     WhiskerBarItem, FootprintCandleItem, DeltaCandleItem, ForceCandleItem, DeltaForceCandleItem,
@@ -1055,6 +1056,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # 5m Engulfing S/R overlay (m10_engulf5m, 5m only) — red/green losange L/S badges; click -> entry/TP/SL lines
         self._e5m_sph = None                     # ScatterPlotItem of losange/triangle badges
         self._e5m_gold = None                    # ScatterPlotItem — GOLD spheres on NON-signal |absorption|>=2.5 candles
+        self._e5m_blue = None                    # ScatterPlotItem — BLUE spheres: 2 consecutive same-side candles, A<-1
         self._e5m_lbl_pool = []                  # (colour-only badges)
         self._e5m_sig = None; self._e5m_drawn = False
         self._e5m_entries = []
@@ -1063,6 +1065,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._brk5m_grn_pool = []                # green 'Br' TextItems (up-break / resistance mitigated), grown lazily
         self._brk5m_red_pool = []                # red 'Br' TextItems (down-break / support mitigated), grown lazily
         self._brk5m_sig = None; self._brk5m_drawn = False
+        # 1m-FINISH strength (validated: a strong 1m finish -> the break/engulf follows through 55% vs 42%). Br badges
+        # keep ONLY strong-finish breaks; strong-finish 5m engulf signals get a GOLD RING. Cached per (start_time,side).
+        self._finish_1m_cache = {}
+        self._e5m_ring = None                    # ScatterPlotItem — gold halo on STRONG-1m-FINISH 5m engulf signals
         self._trline_buckets = []                # visible frame buckets for the shared trade-line exit walk
         # SUPPORT & RESISTANCE indicator (hamburger m10_sr) — neon-red resistance / neon-blue support, extended
         # until a candle closes through the level. Line THICKNESS = rejection strength (one curve per width tier,
@@ -1727,6 +1733,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._autoranged = False
         self._scanner_needs_autofit = True    # new tf -> refit the scanner once
         self._scanner_bucket_sig = self._last_scanner_sig = None
+        self._brk5m_sig = self._e5m_sig = None   # 5m badge overlays re-detect + re-filter on the new tf
         self._m10_cc = None   # #3 static closed-bucket compute cache (see _compute_bucket_arrays)
         self._depth_needs_calibration = True  # new tf -> re-baseline the depth slider (§1)
         self._clear_liq()                     # drop the drawn 15m labels; they re-place (by ts) on the new chart
@@ -2069,8 +2076,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 pass
         if not ev.double():
             return
-        # Ctrl + double-click a candle on 15m/1h/4h -> pop-up: 1m detail chart of that bucket + its footprint pane
-        if (self.scanner_mode == "bucket_canvas" and self._tf in ("15m", "1h", "4h")
+        # Ctrl + double-click a candle on 5m/15m/1h/4h -> pop-up: 1m detail chart of that bucket + its footprint pane
+        if (self.scanner_mode == "bucket_canvas" and self._tf in ("5m", "15m", "1h", "4h")
                 and (QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ControlModifier)):
             try:
                 pt = self.vb.mapSceneToView(ev.scenePos())
@@ -2214,6 +2221,57 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 w.refresh(act, subs, top, _tv)
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # 1m-FINISH strength for the 5m break/engulf badges. Reuses the SAME 1m source as the Ctrl+double-click popup
+    # (recon in replay / cold-archive live / live 1m stream fallback). One window fetch per redraw (chunk-cached),
+    # per-candle result cached by (start_time, side) since a closed candle's finish never changes.
+    def _fetch_1m_window(self, cs: float, ce: float) -> list:
+        try:
+            if self._in_recon_replay():
+                return recon_replay.window_by_time("1m", cs, ce) or []
+            subs = archive.subbuckets("1m", cs, ce) or []
+            if not subs and getattr(self, "worker_1m", None) is not None:
+                cb = (self.worker_1m.snapshot() or {}).get("closed_buckets") or []
+                subs = sorted((x for x in cb if cs <= float(x.get("start_time", 0.0) or 0.0) < ce),
+                              key=lambda x: float(x.get("start_time", 0.0) or 0.0))
+            return subs
+        except Exception:
+            return []
+
+    def _finish_map(self, filtered, sig_list, fn, tag):
+        """sig_list = [(i, side), ...] in `filtered` space. Returns {i: fn(1m-constituents, side)} — fn reads the
+        candle's 1m bars (strong_finish -> bool; ring_tier -> 0/1/2). {} when the 1m source has NO data for the span
+        (callers degrade gracefully). Fetches the covering 1m window ONCE; caches per (start_time, side, tag)."""
+        idxs = [i for i, _ in sig_list if 0 <= i < len(filtered)]
+        if not idxs:
+            return {}
+        cs0 = float(filtered[min(idxs)].get("start_time", 0.0) or 0.0)
+        _lb = filtered[max(idxs)]
+        ce1 = float(_lb.get("end_time", 0.0) or 0.0) or (float(_lb.get("start_time", 0.0) or 0.0) + 600.0)
+        subs = self._fetch_1m_window(cs0, ce1)
+        if not subs:
+            return {}
+        import bisect as _bi
+        st1 = [float(x.get("start_time", 0.0) or 0.0) for x in subs]
+        last_i = len(filtered) - 1
+        out = {}
+        for i, side in sig_list:
+            if not (0 <= i < len(filtered)):
+                continue
+            b = filtered[i]; cs = float(b.get("start_time", 0.0) or 0.0); ce = float(b.get("end_time", 0.0) or 0.0)
+            forming = (i == last_i) and (ce <= cs)                    # live edge -> don't cache (still growing)
+            key = (cs, side, tag)
+            if not forming and key in self._finish_1m_cache:
+                out[i] = self._finish_1m_cache[key]; continue
+            if ce <= cs:
+                ce = cs + 600.0
+            lo = _bi.bisect_left(st1, cs); hi = _bi.bisect_left(st1, ce)
+            val = fn(subs[lo:hi], side)
+            if not forming:
+                self._finish_1m_cache[key] = val
+            out[i] = val
+        return out
 
     # ------------------------------------------------------------------
     def _sync_cob(self) -> None:
@@ -5032,6 +5090,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._e5m_sph.setVisible(False)
         if self._e5m_gold is not None:
             self._e5m_gold.setVisible(False)
+        if self._e5m_blue is not None:
+            self._e5m_blue.setVisible(False)
+        if self._e5m_ring is not None:
+            self._e5m_ring.setVisible(False)
         for _it in self._e5m_lbl_pool + self._e5m_ln_pool + self._e5m_lnlbl_pool:
             _it.setVisible(False)
         self._e5m_entries = []
@@ -5052,9 +5114,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         self._e5m_sig = _sig
         _fi = (n - 1) if _forming else -1
+        buck = list(warm) + list(filtered)
         try:
-            from app import engulf5m_detect
-            entries = engulf5m_detect.detect(list(warm) + list(filtered), skip_last=False)
+            from app import engulf5m_detect, absorb2_detect, support_resistance as _srm, absorption as _absm
+            from app.engulf_sr_detect import _daily_va as _dva
+            _levels = _srm.detect(buck, _srm.SR_PIVOT_K, zone_mitigation=True)   # shared: ONE S/R + absorption + VA pass
+            _absorp = []                                                         # for engulf + absorb2 + sphere markers
+            for _k in range(len(buck)):
+                try:
+                    _absorp.append(_absm.absorption(buck, _k)[0])
+                except Exception:
+                    _absorp.append(None)
+            _dayva = _dva(buck)
+            entries = engulf5m_detect.detect(buck, skip_last=False, levels=_levels, absorp=_absorp, dayva=_dayva)
         except Exception:
             self._clear_engulf5m(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
@@ -5062,7 +5134,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._e5m_sph is None:
             self._e5m_sph = pg.ScatterPlotItem(pxMode=True, size=17, symbol="d")
             self._e5m_sph.setZValue(32); self.plot.addItem(self._e5m_sph, ignoreBounds=True)
-        spots = []; self._e5m_entries = []
+        spots = []; badge_pos = []; self._e5m_entries = []
         for e in entries:
             i = e["i"] - _off
             if i < 0 or i >= n:
@@ -5077,13 +5149,52 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _sym = ("t1" if side > 0 else "t") if e.get("rev") else "d"   # reversal-exception -> TRIANGLE, bias -> losange
             spots.append({"pos": (i, y), "symbol": _sym, "brush": pg.mkBrush(*col, _al),
                           "pen": pg.mkPen(*_pen_rgb, width=1.2), "size": 17})
+            badge_pos.append((i, side, y))
+        # ABSORPTION-SEQUENCE signals (app/absorb2_detect) — BLUE (long) / ORANGE (short) LOSANGE in the SAME overlay,
+        # so they inherit the gold-finish ring + click-to-trade-lines. Deduped vs an engulf badge already on the bar.
+        eng_bars = {bi for bi, _bs, _by in badge_pos}
+        try:
+            ab = absorb2_detect.detect(buck, skip_last=False, levels=_levels, absorp=_absorp, dayva=_dayva)
+        except Exception:
+            ab = []
+        BLUE, ORANGE = (0, 153, 255), (255, 140, 0)
+        for e in ab:
+            i = e["i"] - _off
+            if i < 0 or i >= n or i in eng_bars:
+                continue
+            side = e["side"]
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)
+            self._e5m_entries.append(("e5m%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
+            col = BLUE if side > 0 else ORANGE
+            _al = _PREVIEW_ALPHA if i == _fi else 255
+            _pen_rgb = [int(c * 0.55) for c in col] + [_al]
+            _sym = ("t1" if side > 0 else "t") if e.get("rev") else "d"   # EXCEPTION REVERSAL -> triangle, else losange
+            spots.append({"pos": (i, y), "symbol": _sym, "brush": pg.mkBrush(*col, _al),
+                          "pen": pg.mkPen(*_pen_rgb, width=1.2), "size": 17})
+            badge_pos.append((i, side, y))
         self._e5m_sph.setData(spots); self._e5m_sph.setVisible(True)
+        # TIERED 1m-FINISH RING (all require a strong with-position final 1m bar): tier 1 = green(long)/red(short),
+        # tier 2 = GOLD (all-bars-with-position + full-marubozu finish + engulfing AND no-wick features). See finish_strength.
+        tmap = self._finish_map(filtered, [(i, side) for i, side, _y in badge_pos], finish_strength.ring_tier, "tier")
+        ring_spots = []
+        for i, side, y in badge_pos:
+            t = tmap.get(i) or 0
+            if t <= 0:
+                continue
+            rc = GOLD if t >= 2 else (GRN if side > 0 else RED)
+            ring_spots.append({"pos": (i, y), "symbol": "o", "size": 26, "brush": pg.mkBrush(0, 0, 0, 0),
+                               "pen": pg.mkPen(*rc, 255, width=2.2)})
+        if self._e5m_ring is None:
+            self._e5m_ring = pg.ScatterPlotItem(pxMode=True, symbol="o", size=26, brush=pg.mkBrush(0, 0, 0, 0))
+            self._e5m_ring.setZValue(31); self.plot.addItem(self._e5m_ring, ignoreBounds=True)
+        self._e5m_ring.setData(ring_spots); self._e5m_ring.setVisible(True)
         # GOLD SPHERE on NON-signal candles with |absorption| >= 2.5 (extreme-absorption marker, not a trade)
         sig_set = set(e["i"] for e in entries)
         try:
-            gextremes = engulf5m_detect.extreme_absorption(list(warm) + list(filtered), start=_off)
+            gextremes, bluepairs = engulf5m_detect.sphere_markers(buck, start=_off, absorp=_absorp)
         except Exception:
-            gextremes = []
+            gextremes, bluepairs = [], []
         _gpen = pg.mkPen(int(GOLD[0] * 0.55), int(GOLD[1] * 0.55), int(GOLD[2] * 0.55), 210, width=1.0)
         gspots = []
         for gi, _ga in gextremes:
@@ -5099,6 +5210,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._e5m_gold = pg.ScatterPlotItem(pxMode=True, symbol="o", size=11)
             self._e5m_gold.setZValue(30); self.plot.addItem(self._e5m_gold, ignoreBounds=True)
         self._e5m_gold.setData(gspots); self._e5m_gold.setVisible(True)
+        # BLUE SPHERE (descriptive marker, NOT a tier): 2nd candle of two consecutive SAME-SIDE candles each with A < -1
+        BLUES = (0, 153, 255)
+        _bpen = pg.mkPen(int(BLUES[0] * 0.55), int(BLUES[1] * 0.55), int(BLUES[2] * 0.55), 235, width=1.0)
+        bspots = []
+        for bi, bd in bluepairs:
+            ii = bi - _off
+            if ii < 0 or ii >= n:
+                continue
+            _b = filtered[ii]; _hi = float(_b.get("high", 0.0) or 0.0); _lo = float(_b.get("low", 0.0) or 0.0)
+            _by = (_lo - 1.6 * pad) if bd > 0 else (_hi + 1.6 * pad)   # bull pair below / bear pair above (clear of badges)
+            bspots.append({"pos": (ii, _by), "symbol": "o", "size": 13, "brush": pg.mkBrush(*BLUES, 220), "pen": _bpen})
+        if self._e5m_blue is None:
+            self._e5m_blue = pg.ScatterPlotItem(pxMode=True, symbol="o", size=13)
+            self._e5m_blue.setZValue(30); self.plot.addItem(self._e5m_blue, ignoreBounds=True)
+        self._e5m_blue.setData(bspots); self._e5m_blue.setVisible(True)
         for _lb in self._e5m_lbl_pool:
             _lb.setVisible(False)
         self._e5m_drawn = True
@@ -5150,13 +5276,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._clear_breakout5m(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
         GRN, RED = (40, 220, 100), (240, 60, 78)
+        mk = [(m["i"] - _off, m["side"]) for m in marks if 0 <= (m["i"] - _off) < n]
+        fmap = self._finish_map(filtered, mk, finish_strength.strong_finish, "strong")   # KEEP ONLY strong-finish breaks
+        evaluated = any(v is not None for v in fmap.values()) if fmap else False
         grn = []; red = []
-        for m in marks:
-            i = m["i"] - _off
-            if i < 0 or i >= n:
+        for i, side in mk:
+            if evaluated and fmap.get(i) is not True:      # weak / unevaluable finish -> filtered out (no 1m data -> show all)
                 continue
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            if m["side"] > 0:
+            if side > 0:
                 grn.append((i, hi + pad))          # up-break (resistance mitigated) -> green 'Br' ABOVE the candle
             else:
                 red.append((i, lo - pad))          # down-break (support mitigated) -> red 'Br' BELOW the candle
@@ -7670,6 +7798,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         ("m10_engulfsr", "engulf_sr_detect", "1h"),
         ("m10_momentum", "momentum_detect", "15m"),
         ("m10_engulf5m", "engulf5m_detect", "5m"),
+        ("m10_engulf5m", "absorb2_detect", "5m"),   # absorption-sequence signals ride the same 5m engulf overlay + bell
     )
 
     def _audio_announce_strategies(self, snap) -> None:
@@ -7679,11 +7808,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         gated on a NEW bucket close, and only when the just-closed live-edge bucket IS an entry. Buy=high, sell=low."""
         if not self.menu.layer_state("m10_mmx_sound"):
             return
-        pick = next(((k, m) for k, m, tf in self._SOUND_STRATS
-                     if tf == self._tf and self.menu.layer_state(k)), None)
-        if pick is None:
-            return                                 # no enabled engulf strategy on this timeframe -> nothing to do
-        _key, modname = pick
+        picks = [(k, m) for k, m, tf in self._SOUND_STRATS if tf == self._tf and self.menu.layer_state(k)]
+        if not picks:
+            return                                 # no enabled strategy on this timeframe -> nothing to do
         closed = (snap.get("closed_buckets") if snap else None) or []
         if not closed:
             return
@@ -7699,15 +7826,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         L = len(win) - 1                           # the just-closed (live-edge) bucket
         import importlib
-        try:
-            # CLOSED buckets only -> skip_last=False so the live-edge bucket (the only one this path beeps on) is emitted.
-            mod = importlib.import_module("app." + modname)
-            entries = mod.detect(win, skip_last=False)
-        except Exception:
-            return
-        for e in entries:
-            if e["i"] == L:
-                self._mmx_beep(e["side"] > 0, False); return   # new entry on the just-closed bucket -> beep
+        for _key, modname in picks:                # scan EVERY enabled strategy on this tf (5m has engulf + absorb2)
+            try:
+                # CLOSED buckets only -> skip_last=False so the live-edge bucket (the only one this beeps on) is emitted.
+                entries = importlib.import_module("app." + modname).detect(win, skip_last=False)
+            except Exception:
+                continue
+            for e in entries:
+                if e["i"] == L:
+                    self._mmx_beep(e["side"] > 0, False); return   # new entry on the just-closed bucket -> beep
 
     def _refresh_scale_labels(self, snap) -> None:
         """Push live per-tf bucket ~volumes into the Bucket Scale selector + window title. All

@@ -59,14 +59,43 @@ def extreme_absorption(buckets, thr=GOLD_ABS, start=0):
     return out
 
 
-def detect(buckets, skip_last=True):
+def sphere_markers(buckets, gold_thr=GOLD_ABS, easy_thr=-1.0, start=0, absorp=None):
+    """ONE absorption pass -> (gold, blue) descriptive markers (NOT signals/tiers):
+      gold = [(i, A)] with |A| >= gold_thr (the terminal skips the ones that are signals);
+      blue = [(i, dir)] = the SECOND candle of TWO consecutive SAME-SIDE candles each with A < easy_thr (a two-push
+             easy move; dir +1 both bullish / -1 both bearish).
+    Absorption uses the full `buckets` for context; `start` skips the off-screen warm-up prefix. `absorp` (a precomputed
+    per-bar A list) is reused when passed, so the terminal can share ONE absorption pass across the 5m overlays."""
+    n = len(buckets); A = [None] * n; D = [0] * n
+    for i, b in enumerate(buckets):
+        o, c, _h, _l = _ohlc(b); D[i] = 1 if c > o else (-1 if c < o else 0)
+        if absorp is not None:
+            A[i] = absorp[i]
+        else:
+            try:
+                A[i] = _absorption.absorption(buckets, i)[0]
+            except Exception:
+                A[i] = None
+    gold = []; blue = []
+    for i in range(len(buckets)):
+        a = A[i]
+        if i >= start and a is not None and (a <= -gold_thr or a >= gold_thr):
+            gold.append((i, a))
+        if (i >= max(1, start) and D[i] != 0 and D[i] == D[i - 1]
+                and a is not None and A[i - 1] is not None and a < easy_thr and A[i - 1] < easy_thr):
+            blue.append((i, D[i]))
+    return gold, blue
+
+
+def detect(buckets, skip_last=True, levels=None, absorp=None, dayva=None):
     n = len(buckets)
     if n < 2 * K + 2:
         return []
     O = [0.0] * n; C = [0.0] * n; Hi = [0.0] * n; Lo = [0.0] * n
     for i, b in enumerate(buckets):
         O[i], C[i], Hi[i], Lo[i] = _ohlc(b)
-    levels = _sr.detect(buckets, K, zone_mitigation=True)   # 5m: a level breaks only past the WIDENED area edge
+    if levels is None:                                     # `levels`/`absorp`/`dayva` may be shared in from the terminal
+        levels = _sr.detect(buckets, K, zone_mitigation=True)   # 5m: a level breaks only past the WIDENED area edge
     SUP = [x for x in levels if x["kind"] == "S"]; RES = [x for x in levels if x["kind"] == "R"]
 
     # ---- most-recently-CREATED (confirmed) level kind at each bar, + earliest opposite mitigation
@@ -82,7 +111,8 @@ def detect(buckets, skip_last=True):
         while mj < len(mits) and mits[mj][0] <= i:
             mk = mits[mj][1]; mj += 1
         lastmit[i] = mk
-    dayva = _daily_va(buckets)
+    if dayva is None:
+        dayva = _daily_va(buckets)
 
     def nd(i):
         b = abs(C[i] - O[i]); return b > (Hi[i] - max(O[i], C[i])) and b > (min(O[i], C[i]) - Lo[i])
@@ -188,10 +218,13 @@ def detect(buckets, skip_last=True):
         o, c, h, l = O[i], C[i], Hi[i], Lo[i]
         if o <= 0 or c <= 0 or (h - l) <= 0 or not nd(i):
             continue
-        try:
-            a = _absorption.absorption(buckets, i)[0]
-        except Exception:
-            a = None
+        if absorp is not None:
+            a = absorp[i]
+        else:
+            try:
+                a = _absorption.absorption(buckets, i)[0]
+            except Exception:
+                a = None
         if a is None:
             continue
         _extreme = a <= ABS_EASY or a >= ABS_HEAVY               # -1/+1 extreme (bias & Case-1 reversal)
