@@ -100,7 +100,9 @@ def _leg_stats(buckets, b0, b1, ends_high):
     return dict(lvn=lvn, median=med, val=val, vah=vah, poc=poc, zlo=zlo, zhi=zhi)
 
 
-def detect(buckets, thr=None):
+def _dev_leg(buckets, thr=None):
+    """Shared front-end: (H, L, C, thr, piv, dev). dev = the DEVELOPING leg (b0,p0,b1,p1,ends_high) — anchored at the
+    last confirmed pivot, extended to the RUNNING extreme — or None. Returns None (whole) if the window is too short."""
     n = len(buckets)
     if n < 4:
         return None
@@ -110,21 +112,32 @@ def detect(buckets, thr=None):
     if thr is None:
         thr = _adaptive_thr(H, L, C)                    # volatility-adaptive leg size (see _adaptive_thr)
     piv = _st._zigzag_confirmed(H, L, thr)              # [(pivot_bar, price, is_high, confirm_bar)], alternating
-    if len(piv) < 2:
+    dev = None
+    if piv:
+        pb, pprice, anchor_is_high, _cb = piv[-1]       # anchor of the developing leg
+        if anchor_is_high:                             # developing DOWN leg -> running LOW (ends at a low)
+            j = pb
+            for k in range(pb + 1, n):
+                if L[k] < L[j]:
+                    j = k
+            dev = (pb, pprice, j, L[j], False)
+        else:                                          # developing UP leg -> running HIGH (ends at a high)
+            j = pb
+            for k in range(pb + 1, n):
+                if H[k] > H[j]:
+                    j = k
+            dev = (pb, pprice, j, H[j], True)
+    return H, L, C, thr, piv, dev
+
+
+def detect(buckets, thr=None):
+    r = _dev_leg(buckets, thr)
+    if not r:
         return None
-    pb, pprice, anchor_is_high, _cb = piv[-1]           # anchor of the developing leg
-    if anchor_is_high:                                 # developing DOWN leg -> running LOW (ends at a low)
-        j = pb
-        for k in range(pb + 1, n):
-            if L[k] < L[j]:
-                j = k
-        dev = (pb, pprice, j, L[j], False)
-    else:                                              # developing UP leg -> running HIGH (ends at a high)
-        j = pb
-        for k in range(pb + 1, n):
-            if H[k] > H[j]:
-                j = k
-        dev = (pb, pprice, j, H[j], True)
+    H, L, C, thr, piv, dev = r
+    if len(piv) < 2 or dev is None:
+        return None
+    n = len(buckets)
     dev_mag = abs(dev[3] - dev[1]) / dev[1] if dev[1] > 0 else 0.0
     legs_raw = []
     if dev[2] > dev[0] and dev_mag >= thr:             # developing leg = the most recent (live) leg
@@ -150,3 +163,47 @@ def detect(buckets, thr=None):
             continue
         out.append(dict(b0=b0, p0=p0, b1=b1, p1=p1, ends_high=ends_high, **stats))
     return out or None
+
+
+# Forecast projection knobs (all CAUSAL — computed from the developing leg + past legs only).
+CONT_MIN = 0.5        # continuation: min ("at least") target = leg size * this, beyond the current extreme
+CONT_MAX = 1.0        # continuation: max ("maximum") target = a full measured move (leg size * this)
+RETR_MIN_FIB = 0.382  # fallback retrace (no zone): min = this * leg size back from the extreme
+RETR_MAX_FIB = 0.618  # fallback retrace (no zone): max = this * leg size back from the extreme
+
+
+def forecast(buckets, thr=None):
+    """CAUSAL forecast of the developing swing as TWO gray lines fanning from the current swing extreme, each with a
+    'min' (at least) and 'max' (maximum) dot, angled by projecting to the target over the typical recent-leg duration:
+      * CONTINUATION (with the move): min = extreme + CONT_MIN*legsize, max = extreme + CONT_MAX*legsize (measured move).
+      * RETRACEMENT (against the move): into the developing leg's OWN zone — min = the zone edge NEAR the extreme,
+        max = the FAR edge; falls back to fib retracements of the leg if the leg has no drawable zone.
+    -> {b1, p1, is_up, cont:[(bar,px)min,(bar,px)max], retr:[(bar,px)min,(bar,px)max]} or None.
+    Re-aims every frame as the extreme / leg size / durations update, so it adjusts as price develops."""
+    r = _dev_leg(buckets, thr)
+    if not r:
+        return None
+    H, L, C, thr, piv, dev = r
+    if dev is None:
+        return None
+    b0, p0, b1, p1, is_up = dev
+    if b1 <= b0 or p1 <= 0:
+        return None
+    lsz = abs(p1 - p0)                                   # current leg size (price)
+    if lsz <= 0:
+        return None
+    s = 1 if is_up else -1
+    durs = [piv[k][0] - piv[k - 1][0] for k in range(1, len(piv)) if piv[k][0] > piv[k - 1][0]]
+    D = max(4, int(sorted(durs)[len(durs) // 2])) if durs else max(4, b1 - b0)   # typical recent-leg duration (bars)
+    # CONTINUATION (with the move): extend past the extreme by [CONT_MIN, CONT_MAX] * leg size
+    cont = [(b1 + max(2, round(0.75 * D)), p1 + s * CONT_MIN * lsz),
+            (b1 + max(3, round(1.5 * D)), p1 + s * CONT_MAX * lsz)]
+    # RETRACEMENT (against the move): into the developing leg's own zone (near edge -> far edge), else fib retrace
+    st = _leg_stats(buckets, b0, b1, is_up)
+    if st:
+        near, far = (st["zhi"], st["zlo"]) if is_up else (st["zlo"], st["zhi"])   # near = zone edge closer to the extreme
+    else:
+        near, far = p1 - s * RETR_MIN_FIB * lsz, p1 - s * RETR_MAX_FIB * lsz
+    retr = [(b1 + max(2, round(0.5 * D)), near),
+            (b1 + max(3, round(1.0 * D)), far)]
+    return dict(b1=b1, p1=p1, is_up=is_up, cont=cont, retr=retr)

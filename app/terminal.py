@@ -959,6 +959,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # RECENT-SWING LOW-VOLUME AREA indicator (hamburger m10_swinglvn) — every still-UNMITIGATED swing-leg LVN ZONE
         # (electric-purple) forecasting S/R (up-leg = support / down-leg = resistance); a zone persists until broken.
         self._svl_slots = None                   # list of per-zone dicts of pg items (lazy-built, one slot per live zone)
+        self._svl_fc_cont = None                 # forecast: CONTINUATION line (gray dashed, with the move)
+        self._svl_fc_retr = None                 # forecast: RETRACEMENT line (gray dashed, against the move)
+        self._svl_fc_dots = None                 # forecast: the 4 min/max dots
         self._svl_sig = None; self._svl_drawn = False
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
@@ -5267,6 +5270,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _slot in self._svl_slots:
                 for _it in _slot.values():
                     _it.setVisible(False)
+        for _it in (self._svl_fc_cont, self._svl_fc_retr, self._svl_fc_dots):
+            if _it is not None:
+                _it.setVisible(False)
         self._svl_sig = None; self._svl_drawn = False
 
     def _draw_swinglvn(self, filtered) -> None:
@@ -5314,6 +5320,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _slot["lbl"].setPos(x_r, (zlo + zhi) / 2.0)
             for _it in _slot.values():
                 _it.setVisible(True)
+        # FORECAST: two gray dashed lines from the current swing extreme — CONTINUATION (with the move) + RETRACEMENT
+        # (against it) — each with a small "min" (at least) + large "max" (maximum) dot. Re-aims each frame (causal).
+        try:
+            fc = swing_lvn_detect.forecast(filtered)
+        except Exception:
+            fc = None
+        if self._svl_fc_cont is None:
+            self._svl_fc_cont = pg.PlotDataItem(); self._svl_fc_retr = pg.PlotDataItem()
+            self._svl_fc_dots = pg.ScatterPlotItem(pxMode=True)
+            for _it, _z in ((self._svl_fc_cont, 28), (self._svl_fc_retr, 28), (self._svl_fc_dots, 35)):
+                _it.setZValue(_z); self.plot.addItem(_it, ignoreBounds=True)
+        if fc:
+            GRY = (172, 172, 178)
+            b1, p1 = fc["b1"], fc["p1"]; c1, c2 = fc["cont"]; r1, r2 = fc["retr"]
+            _gpen = pg.mkPen(*GRY, 205, width=1.3, style=QtCore.Qt.DashLine)
+            self._svl_fc_cont.setData([b1, c1[0], c2[0]], [p1, c1[1], c2[1]], pen=_gpen)
+            self._svl_fc_retr.setData([b1, r1[0], r2[0]], [p1, r1[1], r2[1]], pen=_gpen)
+            _gb = pg.mkBrush(*GRY, 235); _gpn = pg.mkPen(235, 235, 240, 255, width=1.0)
+            self._svl_fc_dots.setData([
+                {"pos": c1, "symbol": "o", "size": 7, "brush": _gb, "pen": _gpn},    # continuation MIN (at least)
+                {"pos": c2, "symbol": "o", "size": 12, "brush": _gb, "pen": _gpn},   # continuation MAX (maximum)
+                {"pos": r1, "symbol": "o", "size": 7, "brush": _gb, "pen": _gpn},    # retracement MIN (at least)
+                {"pos": r2, "symbol": "o", "size": 12, "brush": _gb, "pen": _gpn}])  # retracement MAX (maximum)
+            for _it in (self._svl_fc_cont, self._svl_fc_retr, self._svl_fc_dots):
+                _it.setVisible(True)
+        else:
+            for _it in (self._svl_fc_cont, self._svl_fc_retr, self._svl_fc_dots):
+                _it.setVisible(False)
         self._svl_drawn = True
 
     def _solo_trade_lines(self, active_user, key, turn_on) -> None:
