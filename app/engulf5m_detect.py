@@ -41,7 +41,7 @@ VA_BAND = 0.0015     # "opens at" a VA edge = the open within 0.15% of it
 ABS_EASY = -1.0      # entry absorption extreme: very-easy  (A <= this)
 ABS_HEAVY = 1.0      # entry absorption extreme: heavy/absorbed (A >= this)
 SE2_ABS = -0.5       # Case-2 (SE2) re-entry: looser absorption gate (A <= this)
-GOLD_ABS = 2.5       # |A| >= this -> GOLD badge (signal) / GOLD sphere (non-signal)
+GOLD_ABS = 2.5       # |A| >= this -> GOLD ring around a signal badge
 
 
 def extreme_absorption(buckets, thr=GOLD_ABS, start=0):
@@ -57,34 +57,6 @@ def extreme_absorption(buckets, thr=GOLD_ABS, start=0):
         if a is not None and (a <= -thr or a >= thr):
             out.append((i, a))
     return out
-
-
-def sphere_markers(buckets, gold_thr=GOLD_ABS, easy_thr=-1.0, start=0, absorp=None):
-    """ONE absorption pass -> (gold, blue) descriptive markers (NOT signals/tiers):
-      gold = [(i, A)] with |A| >= gold_thr (the terminal skips the ones that are signals);
-      blue = [(i, dir)] = the SECOND candle of TWO consecutive SAME-SIDE candles each with A < easy_thr (a two-push
-             easy move; dir +1 both bullish / -1 both bearish).
-    Absorption uses the full `buckets` for context; `start` skips the off-screen warm-up prefix. `absorp` (a precomputed
-    per-bar A list) is reused when passed, so the terminal can share ONE absorption pass across the 5m overlays."""
-    n = len(buckets); A = [None] * n; D = [0] * n
-    for i, b in enumerate(buckets):
-        o, c, _h, _l = _ohlc(b); D[i] = 1 if c > o else (-1 if c < o else 0)
-        if absorp is not None:
-            A[i] = absorp[i]
-        else:
-            try:
-                A[i] = _absorption.absorption(buckets, i)[0]
-            except Exception:
-                A[i] = None
-    gold = []; blue = []
-    for i in range(len(buckets)):
-        a = A[i]
-        if i >= start and a is not None and (a <= -gold_thr or a >= gold_thr):
-            gold.append((i, a))
-        if (i >= max(1, start) and D[i] != 0 and D[i] == D[i - 1]
-                and a is not None and A[i - 1] is not None and a < easy_thr and A[i - 1] < easy_thr):
-            blue.append((i, D[i]))
-    return gold, blue
 
 
 def current_bias(buckets, levels=None):

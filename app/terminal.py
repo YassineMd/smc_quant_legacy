@@ -921,8 +921,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._mom_ln_pool = []; self._mom_lnlbl_pool = []; self._mom_lines_user = {}
         # 5m Engulfing S/R overlay (m10_engulf5m, 5m only) — red/green losange L/S badges; click -> entry/TP/SL lines
         self._e5m_sph = None                     # ScatterPlotItem of losange/triangle badges
-        self._e5m_gold = None                    # ScatterPlotItem — GOLD spheres on NON-signal |absorption|>=2.5 candles
-        self._e5m_blue = None                    # ScatterPlotItem — BLUE spheres: 2 consecutive same-side candles, A<-1
         self._e5m_lbl_pool = []                  # (colour-only badges)
         self._e5m_sig = None; self._e5m_drawn = False
         self._e5m_entries = []
@@ -4902,10 +4900,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _clear_engulf5m(self) -> None:
         if self._e5m_sph is not None:
             self._e5m_sph.setVisible(False)
-        if self._e5m_gold is not None:
-            self._e5m_gold.setVisible(False)
-        if self._e5m_blue is not None:
-            self._e5m_blue.setVisible(False)
         if self._e5m_ring is not None:
             self._e5m_ring.setVisible(False)
         for _it in self._e5m_lbl_pool + self._e5m_ln_pool + self._e5m_lnlbl_pool:
@@ -5025,42 +5019,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._e5m_ring = pg.ScatterPlotItem(pxMode=True, symbol="o", size=26, brush=pg.mkBrush(0, 0, 0, 0))
             self._e5m_ring.setZValue(31); self.plot.addItem(self._e5m_ring, ignoreBounds=True)
         self._e5m_ring.setData(ring_spots); self._e5m_ring.setVisible(True)
-        # GOLD SPHERE on NON-signal candles with |absorption| >= 2.5 (extreme-absorption marker, not a trade)
-        sig_set = set(e["i"] for e in entries)
-        try:
-            gextremes, bluepairs = engulf5m_detect.sphere_markers(buck, start=_off, absorp=_absorp)
-        except Exception:
-            gextremes, bluepairs = [], []
-        _gpen = pg.mkPen(int(GOLD[0] * 0.55), int(GOLD[1] * 0.55), int(GOLD[2] * 0.55), 210, width=1.0)
-        gspots = []
-        for gi, _ga in gextremes:
-            if gi in sig_set:
-                continue
-            ii = gi - _off
-            if ii < 0 or ii >= n:
-                continue
-            ghi = float(filtered[ii].get("high", 0.0) or 0.0)
-            gspots.append({"pos": (ii, ghi + pad), "symbol": "o", "size": 11,
-                           "brush": pg.mkBrush(*GOLD, 210), "pen": _gpen})
-        if self._e5m_gold is None:
-            self._e5m_gold = pg.ScatterPlotItem(pxMode=True, symbol="o", size=11)
-            self._e5m_gold.setZValue(30); self.plot.addItem(self._e5m_gold, ignoreBounds=True)
-        self._e5m_gold.setData(gspots); self._e5m_gold.setVisible(True)
-        # BLUE SPHERE (descriptive marker, NOT a tier): 2nd candle of two consecutive SAME-SIDE candles each with A < -1
-        BLUES = (0, 153, 255)
-        _bpen = pg.mkPen(int(BLUES[0] * 0.55), int(BLUES[1] * 0.55), int(BLUES[2] * 0.55), 235, width=1.0)
-        bspots = []
-        for bi, bd in bluepairs:
-            ii = bi - _off
-            if ii < 0 or ii >= n:
-                continue
-            _b = filtered[ii]; _hi = float(_b.get("high", 0.0) or 0.0); _lo = float(_b.get("low", 0.0) or 0.0)
-            _by = (_lo - 1.6 * pad) if bd > 0 else (_hi + 1.6 * pad)   # bull pair below / bear pair above (clear of badges)
-            bspots.append({"pos": (ii, _by), "symbol": "o", "size": 13, "brush": pg.mkBrush(*BLUES, 220), "pen": _bpen})
-        if self._e5m_blue is None:
-            self._e5m_blue = pg.ScatterPlotItem(pxMode=True, symbol="o", size=13)
-            self._e5m_blue.setZValue(30); self.plot.addItem(self._e5m_blue, ignoreBounds=True)
-        self._e5m_blue.setData(bspots); self._e5m_blue.setVisible(True)
         for _lb in self._e5m_lbl_pool:
             _lb.setVisible(False)
         self._e5m_drawn = True
