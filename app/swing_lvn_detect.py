@@ -20,7 +20,10 @@ and the EXTERIOR low-volume node on the trade side:
   where LVN_below_VAL / LVN_above_VAH = the lowest-volume price in the leg profile strictly outside the value area
   on that side (the low-volume 'gap' beyond the traded core).
 
-detect(buckets, thr=SWING_THR) -> [rec, ...] (up to MAX_LEGS legs, MOST-RECENT first) or None, where rec =
+The leg size is VOLATILITY-ADAPTIVE by default (thr=None -> `_adaptive_thr`), so swings stay structural as the
+regime changes; pass an explicit `thr` (fraction) to override.
+
+detect(buckets, thr=None) -> [rec, ...] (up to MAX_LEGS legs, MOST-RECENT first) or None, where rec =
   { b0,p0, b1,p1,          # leg endpoints (bar, price): p0->p1
     ends_high,             # True = up-leg (swing HIGH, support zone) / False = down-leg (swing LOW, resistance zone)
     lvn, median, val, vah, poc, lvn_ext,   # lvn_ext = the exterior low-vol node (the zone's outer edge)
@@ -32,8 +35,29 @@ from . import structure as _st
 from . import bar_quantiles as _bq
 
 _NAN = float("nan")
-SWING_THR = 0.004     # ZigZag leg confirm threshold (FRACTION) = 0.4%. Tune + relaunch (0.25% dense .. 0.6% coarse).
+SWING_THR = 0.004     # FALLBACK leg threshold (fraction) if the adaptive estimate can't compute.
 MAX_LEGS = 3          # how many of the most-recent legs to draw LVN zones for
+# ADAPTIVE swing threshold — scale the ZigZag leg-confirm retracement to recent VOLATILITY so a "leg" stays a
+# structurally-significant move as the regime changes (quiet -> smaller swings / volatile -> bigger), rather than a
+# fixed % that over-segments in calm markets and under-segments in volatile ones. Recomputed each frame, so the
+# swing scale tracks the market as it develops. threshold = ATR_MULT * (mean bucket range% over ATR_WINDOW), clamped.
+ATR_WINDOW = 80       # trailing buckets for the volatility estimate
+ATR_MULT = 3.0        # << MAIN eyeball knob >> leg threshold = this * mean bucket-range%. Higher = fewer/bigger swings.
+THR_MIN = 0.004       # clamp: adaptive threshold never below 0.4%
+THR_MAX = 0.020       # clamp: never above 2.0%
+
+
+def _adaptive_thr(H, L, C, window=ATR_WINDOW, mult=ATR_MULT):
+    """Volatility-scaled ZigZag threshold = mult * (mean (high-low)/close over the last `window` buckets), clamped
+    to [THR_MIN, THR_MAX]. On 5m SOL the mean bucket range is ~0.3%, so mult~3 -> ~0.9% legs (~8-10 bars = structural,
+    matching hand-drawn swings); a calmer/hotter regime shrinks/grows it automatically."""
+    rr = []
+    for i in range(max(0, len(C) - window), len(C)):
+        if C[i] > 0 and H[i] >= L[i]:
+            rr.append((H[i] - L[i]) / C[i])
+    if not rr:
+        return SWING_THR
+    return max(THR_MIN, min(THR_MAX, mult * (sum(rr) / len(rr))))
 
 
 def _leg_profile(buckets, b0, b1):
@@ -95,10 +119,11 @@ def detect(buckets, thr=None):
     n = len(buckets)
     if n < 4:
         return None
-    if thr is None:
-        thr = SWING_THR
     H = [float(b.get("high", 0.0) or 0.0) for b in buckets]
     L = [float(b.get("low", 0.0) or 0.0) for b in buckets]
+    C = [float(b.get("close", b.get("close_price", 0.0)) or 0.0) for b in buckets]
+    if thr is None:
+        thr = _adaptive_thr(H, L, C)                    # volatility-adaptive leg size (see _adaptive_thr)
     piv = _st._zigzag_confirmed(H, L, thr)              # [(pivot_bar, price, is_high, confirm_bar)], alternating
     if len(piv) < 2:
         return None
