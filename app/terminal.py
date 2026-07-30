@@ -4980,14 +4980,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             spots.append({"pos": (i, y), "symbol": _sym, "brush": pg.mkBrush(*col, _al),
                           "pen": pg.mkPen(*_pen_rgb, width=1.2), "size": 17})
             badge_pos.append((i, side, y))
-        # ABSORPTION-SEQUENCE signals (app/absorb2_detect) — BLUE (long) / ORANGE (short) LOSANGE in the SAME overlay,
+        # ABSORPTION-SEQUENCE signals (app/absorb2_detect) — CYAN (long) / MAGENTA (short) LOSANGE in the SAME overlay,
         # so they inherit the gold-finish ring + click-to-trade-lines. Deduped vs an engulf badge already on the bar.
         eng_bars = {bi for bi, _bs, _by in badge_pos}
         try:
             ab = absorb2_detect.detect(buck, skip_last=False, levels=_levels, absorp=_absorp, dayva=_dayva)
         except Exception:
             ab = []
-        BLUE, ORANGE = (0, 153, 255), (255, 140, 0)
+        CYAN, MAGENTA = (0, 255, 255), (255, 0, 255)
         for e in ab:
             i = e["i"] - _off
             if i < 0 or i >= n or i in eng_bars:
@@ -4996,7 +4996,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
             y = (lo - pad) if side > 0 else (hi + pad)
             self._e5m_entries.append(("e5m%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
-            col = BLUE if side > 0 else ORANGE
+            col = CYAN if side > 0 else MAGENTA
             _al = _PREVIEW_ALPHA if i == _fi else 255
             _pen_rgb = [int(c * 0.55) for c in col] + [_al]
             _sym = ("t1" if side > 0 else "t") if e.get("rev") else "d"   # EXCEPTION REVERSAL -> triangle, else losange

@@ -1,5 +1,5 @@
-"""5m ABSORPTION-SEQUENCE setup — LIVE terminal overlay signal, shown inside the 5m Engulfing overlay as a BLUE (long)
-/ ORANGE (short) LOSANGE. NOT an engulf: a two-candle absorption continuation in the S/R trend.
+"""5m ABSORPTION-SEQUENCE setup — LIVE terminal overlay signal, shown inside the 5m Engulfing overlay as a CYAN (long)
+/ MAGENTA (short) LOSANGE. NOT an engulf: a two-candle absorption continuation in the S/R trend.
 
   C1 (prev bar): WITH-TREND (may be small-bodied), with an ORANGE/BLUE BORDER = a delta-vs-direction divergence. BLUE = a BULLISH
                  candle on NEGATIVE delta (price closed UP on net aggressive SELLING -> buyers absorbed it); ORANGE = a
