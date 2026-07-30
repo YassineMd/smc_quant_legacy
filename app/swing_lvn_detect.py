@@ -7,8 +7,13 @@ recent legs and draw a directional LVN ZONE for each.
 Legs (causal): `structure._zigzag_confirmed` gives confirmed pivots; the CURRENT leg is the DEVELOPING one =
 anchor at the last confirmed pivot -> the RUNNING extreme since it (so a leg tracks the live swing, not a lagged
 confirmed pivot). The rest are the CONFIRMED legs walking back (piv[-2]->piv[-1], piv[-3]->piv[-2], ...). ZigZag
-legs alternate, so the 3 legs are up/down/up or down/up/down: an up-leg ENDS at a high (swing HIGH), a down-leg ENDS
-at a low (swing LOW). A leg with no exterior low-volume node (its value area reaches the leg extreme) is omitted.
+legs alternate up/down: an up-leg ENDS at a high (swing HIGH, support zone), a down-leg ENDS at a low (swing LOW,
+resistance zone). A leg with no exterior low-volume node (its value area reaches the leg extreme) is omitted.
+
+CONSUMED zones are dropped: a resistance zone once price CLOSES above it (above the zone's high), a support zone once
+price CLOSES below it (below the zone's low) — checked from the leg's extreme onward. We walk back through up to
+SCAN_LEGS recent legs and keep the MAX_LEGS most recent UNCONSUMED zones (so a broken zone is replaced by an older
+live one, not just removed).
 
 For each leg: sum its bars' footprints into ONE {price:{b,s}} ladder -> bar_quantiles interior LVN / value_area
 (VAL,VAH) / vw-median / POC, PLUS the EXTERIOR low-volume node just outside the value area (the lowest-volume price
@@ -36,7 +41,8 @@ from . import bar_quantiles as _bq
 
 _NAN = float("nan")
 SWING_THR = 0.004     # FALLBACK leg threshold (fraction) if the adaptive estimate can't compute.
-MAX_LEGS = 3          # how many of the most-recent legs to draw LVN zones for
+MAX_LEGS = 3          # how many UNCONSUMED zones to draw (walk back through older legs to backfill this many)
+SCAN_LEGS = 14        # cap on how many recent legs to examine while backfilling (bounds the consumed-check cost)
 # ADAPTIVE swing threshold — scale the ZigZag leg-confirm retracement to recent VOLATILITY so a "leg" stays a
 # structurally-significant move as the regime changes (quiet -> smaller swings / volatile -> bigger), rather than a
 # fixed % that over-segments in calm markets and under-segments in volatile ones. Recomputed each frame, so the
@@ -148,11 +154,22 @@ def detect(buckets, thr=None):
         a = piv[k - 1]; b = piv[k]
         legs_raw.append((a[0], a[1], b[0], b[1], b[2]))   # ends_high = b.is_high
     out = []
-    for (b0, p0, b1, p1, ends_high) in legs_raw[:MAX_LEGS]:   # the MAX_LEGS most recent legs
+    for (b0, p0, b1, p1, ends_high) in legs_raw[:SCAN_LEGS]:   # walk back through recent legs, keeping UNCONSUMED zones
+        if len(out) >= MAX_LEGS:
+            break
         if b1 <= b0:
             continue
         stats = _leg_stats(buckets, b0, b1, ends_high)
         if not stats:                                  # no exterior low-vol node -> omit this leg's zone
+            continue
+        zlo = stats["zlo"]; zhi = stats["zhi"]
+        # CONSUMED: price CLOSED beyond the far edge AFTER the leg's extreme (resistance broken UP / support broken DOWN)
+        consumed = False
+        for k in range(b1 + 1, n):
+            if (ends_high and C[k] < zlo) or (not ends_high and C[k] > zhi):
+                consumed = True
+                break
+        if consumed:
             continue
         out.append(dict(b0=b0, p0=p0, b1=b1, p1=p1, ends_high=ends_high, **stats))
     return out or None
