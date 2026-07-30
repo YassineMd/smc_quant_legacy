@@ -1,8 +1,8 @@
 """RECENT-SWING LOW-VOLUME AREA — forecast S/R zones from the last swing-HIGH and swing-LOW legs.
 
 Auction-theory idea (the user's): after an impulse leg, price tends to RETRACE into the leg's LOW-VOLUME region
-before continuing. So the leg's LVN (+ its value-area context) forecasts the next S/R. We track the MAX_LEGS (3) most
-recent legs and draw a directional LVN ZONE for each.
+before continuing. So the leg's LVN (+ its value-area context) forecasts the next S/R. We keep EVERY still-UNMITIGATED
+LVN zone from the recent legs (a zone persists on the chart until price closes through it).
 
 Legs (causal): `structure._zigzag_confirmed` gives confirmed pivots; the CURRENT leg is the DEVELOPING one =
 anchor at the last confirmed pivot -> the RUNNING extreme since it (so a leg tracks the live swing, not a lagged
@@ -10,10 +10,10 @@ confirmed pivot). The rest are the CONFIRMED legs walking back (piv[-2]->piv[-1]
 legs alternate up/down: an up-leg ENDS at a high (swing HIGH, support zone), a down-leg ENDS at a low (swing LOW,
 resistance zone). A leg with no exterior low-volume node (its value area reaches the leg extreme) is omitted.
 
-CONSUMED zones are dropped: a resistance zone once price CLOSES above it (above the zone's high), a support zone once
-price CLOSES below it (below the zone's low) — checked from the leg's extreme onward. We walk back through up to
-SCAN_LEGS recent legs and keep the MAX_LEGS most recent UNCONSUMED zones (so a broken zone is replaced by an older
-live one, not just removed).
+CONSUMED (mitigated) zones are dropped: a resistance zone once price CLOSES above it (above the zone's high), a
+support zone once price CLOSES below it (below the zone's low) — checked from the leg's extreme onward. We examine up
+to SCAN_LEGS recent legs and keep EVERY still-unmitigated zone, so live zones persist on the chart until broken
+(the drawn set can be any size and non-alternating — e.g. several stacked supports if the resistances were consumed).
 
 For each leg: sum its bars' footprints into ONE {price:{b,s}} ladder -> bar_quantiles interior LVN / value_area
 (VAL,VAH) / vw-median / POC, PLUS the EXTERIOR low-volume node just outside the value area (the lowest-volume price
@@ -41,8 +41,7 @@ from . import bar_quantiles as _bq
 
 _NAN = float("nan")
 SWING_THR = 0.004     # FALLBACK leg threshold (fraction) if the adaptive estimate can't compute.
-MAX_LEGS = 3          # how many UNCONSUMED zones to draw (walk back through older legs to backfill this many)
-SCAN_LEGS = 14        # cap on how many recent legs to examine while backfilling (bounds the consumed-check cost)
+SCAN_LEGS = 30        # how many recent legs to examine — EVERY still-UNMITIGATED zone among them is kept/drawn
 # ADAPTIVE swing threshold — scale the ZigZag leg-confirm retracement to recent VOLATILITY so a "leg" stays a
 # structurally-significant move as the regime changes (quiet -> smaller swings / volatile -> bigger), rather than a
 # fixed % that over-segments in calm markets and under-segments in volatile ones. Recomputed each frame, so the
@@ -154,9 +153,7 @@ def detect(buckets, thr=None):
         a = piv[k - 1]; b = piv[k]
         legs_raw.append((a[0], a[1], b[0], b[1], b[2]))   # ends_high = b.is_high
     out = []
-    for (b0, p0, b1, p1, ends_high) in legs_raw[:SCAN_LEGS]:   # walk back through recent legs, keeping UNCONSUMED zones
-        if len(out) >= MAX_LEGS:
-            break
+    for (b0, p0, b1, p1, ends_high) in legs_raw[:SCAN_LEGS]:   # keep EVERY still-unmitigated zone among the recent legs
         if b1 <= b0:
             continue
         stats = _leg_stats(buckets, b0, b1, ends_high)

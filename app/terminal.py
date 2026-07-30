@@ -956,9 +956,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sr_items = None                    # dict (kind, tier) -> PlotCurveItem, lazily built (MITIGATED lines)
         self._sr_rects = None                    # pool of QGraphicsRectItem — ACTIVE levels drawn as filled bands
         self._sr_sig = None; self._sr_drawn = False
-        # RECENT-SWING LOW-VOLUME AREA indicator (hamburger m10_swinglvn) — the MAX_LEGS (3) most-recent legs, each
-        # drawn as an LVN ZONE (electric-purple) forecasting the next S/R (up-leg = support / down-leg = resistance).
-        self._svl_slots = None                   # list of per-leg dicts of pg items (lazy-built, one slot per leg)
+        # RECENT-SWING LOW-VOLUME AREA indicator (hamburger m10_swinglvn) — every still-UNMITIGATED swing-leg LVN ZONE
+        # (electric-purple) forecasting S/R (up-leg = support / down-leg = resistance); a zone persists until broken.
+        self._svl_slots = None                   # list of per-zone dicts of pg items (lazy-built, one slot per live zone)
         self._svl_sig = None; self._svl_drawn = False
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
@@ -5247,9 +5247,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sr_drawn = True
 
     # RECENT-SWING LOW-VOLUME AREA (hamburger m10_swinglvn) — self-gated, fail-safe, ALL timeframes.
-    # Draws the MAX_LEGS (3) most-recent legs: each up-leg (green) -> LVN support zone [LVN_below_VAL, min(LVN,median)];
-    # each down-leg (red) -> LVN resistance zone [max(LVN,median), LVN_above_VAH]. LVN = electric-purple dashed; zone =
-    # faint purple fill with dotted edges; projected right as forecast S/R. One slot per leg, coloured by direction.
+    # Draws EVERY still-unmitigated swing-leg zone: each up-leg (green) -> LVN support [LVN_below_VAL, min(LVN,median)];
+    # each down-leg (red) -> LVN resistance [max(LVN,median), LVN_above_VAH]. LVN = electric-purple dashed; zone = faint
+    # purple fill with dotted edges; projected right as forecast S/R. One slot per live zone, coloured by direction.
     def _build_svl_slot(self):
         PUR = (178, 70, 255)
         lo = pg.PlotDataItem(); hi = pg.PlotDataItem()
@@ -5270,8 +5270,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._svl_sig = None; self._svl_drawn = False
 
     def _draw_swinglvn(self, filtered) -> None:
-        """Recent-swing low-volume-area forecast (app/swing_lvn_detect): the MAX_LEGS most-recent legs, each drawn as
-        an LVN ZONE (per the exterior-node median rule) projected right as forecast S/R. Self-gated, fail-safe."""
+        """Recent-swing low-volume-area forecast (app/swing_lvn_detect): every still-unmitigated swing-leg LVN ZONE
+        (per the exterior-node median rule) projected right as forecast S/R. Self-gated, fail-safe."""
         if not self.menu.layer_state("m10_swinglvn") or self.scanner_mode != "bucket_canvas":
             self._clear_swinglvn(); return
         n = len(filtered)
@@ -5287,8 +5287,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not res:
             self._clear_swinglvn(); return
         if self._svl_slots is None:
-            self._svl_slots = [self._build_svl_slot() for _ in range(swing_lvn_detect.MAX_LEGS)]
-        while len(self._svl_slots) < len(res):                       # grow if MAX_LEGS ever increases
+            self._svl_slots = []
+        while len(self._svl_slots) < len(res):                       # one slot per live zone (grows as needed)
             self._svl_slots.append(self._build_svl_slot())
         PUR = (178, 70, 255)
         x_r = n - 1 + 12                                              # project a few bars right = "forecast"
