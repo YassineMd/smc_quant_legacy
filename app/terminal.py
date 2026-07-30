@@ -5333,21 +5333,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _it.setVisible(False)
                 continue
             sw = res[idx]; up = sw["ends_high"]
-            bcol = (40, 220, 100) if up else (240, 60, 78)           # up-leg green (support) / down-leg red (resistance)
             tag = "LVN&#183;SUP" if up else "LVN&#183;RES"
             tcol = "#7dffab" if up else "#ff8494"
-            b0, b1, p0, p1 = sw["b0"], sw["b1"], sw["p0"], sw["p1"]
-            lvn, zlo, zhi = sw["lvn"], sw["zlo"], sw["zhi"]
-            _bpen = pg.mkPen(*[int(c * 0.5) for c in bcol], 255, width=1.0)
-            _slot["leg"].setData([b0, b1], [p0, p1], pen=pg.mkPen(*bcol, 200, width=1.3, style=QtCore.Qt.DashLine))
-            _slot["piv"].setData([{"pos": (b0, p0), "symbol": "o", "size": 8, "brush": pg.mkBrush(*bcol, 220), "pen": _bpen},
-                                  {"pos": (b1, p1), "symbol": "o", "size": 8, "brush": pg.mkBrush(*bcol, 220), "pen": _bpen}])
+            if sw.get("n", 1) > 1:                                   # merged band -> show how many zones combined
+                tag += " &#215;%d" % sw["n"]
+            b0 = sw["b0"]; lvn, zlo, zhi = sw["lvn"], sw["zlo"], sw["zhi"]
+            _slot["leg"].setVisible(False)                           # merged zones have no single leg -> no leg line/pivots
+            _slot["piv"].setVisible(False)
             _slot["lvn"].setData([b0, x_r], [lvn, lvn], pen=pg.mkPen(*PUR, 255, width=1.4, style=QtCore.Qt.DashLine))
             _slot["bandlo"].setData([b0, x_r], [zlo, zlo], pen=pg.mkPen(*PUR, 95, width=1, style=QtCore.Qt.DotLine))
             _slot["bandhi"].setData([b0, x_r], [zhi, zhi], pen=pg.mkPen(*PUR, 95, width=1, style=QtCore.Qt.DotLine))
             _slot["lbl"].setHtml("<span style='color:%s;font-family:Consolas;font-size:10px'>%s</span>" % (tcol, tag))
             _slot["lbl"].setPos(x_r, (zlo + zhi) / 2.0)
-            for _it in _slot.values():
+            for _it in (_slot["band"], _slot["bandlo"], _slot["bandhi"], _slot["lvn"], _slot["lbl"]):
                 _it.setVisible(True)
         # FORECAST: two gray dashed lines from the current swing extreme — CONTINUATION (with the move) + RETRACEMENT
         # (against it) — each with a small "min" (at least) + large "max" (maximum) dot. Re-aims each frame (causal).

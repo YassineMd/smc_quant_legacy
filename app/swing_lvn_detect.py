@@ -25,11 +25,12 @@ VALUE-AREA boundary on the trade side:
 The leg size is VOLATILITY-ADAPTIVE by default (thr=None -> `_adaptive_thr`), so swings stay structural as the
 regime changes; pass an explicit `thr` (fraction) to override.
 
-detect(buckets, thr=None) -> [rec, ...] (up to MAX_LEGS legs, MOST-RECENT first) or None, where rec =
-  { b0,p0, b1,p1,          # leg endpoints (bar, price): p0->p1
-    ends_high,             # True = up-leg (swing HIGH, support zone) / False = down-leg (swing LOW, resistance zone)
-    lvn, median, val, vah, poc,
-    zlo, zhi }             # the LVN zone (zlo <= zhi)
+detect(buckets, thr=None) -> [zone, ...] MOST-RECENT first, or None. Overlapping SAME-TYPE zones are MERGED, so a
+zone is a consolidated band: { ends_high,   # True = support (up-leg) / False = resistance (down-leg)
+    zlo, zhi,             # the merged LVN band (union of the overlapping zones, zlo <= zhi)
+    lvn,                  # representative LVN (the most-recent constituent's)
+    b0, b1,              # earliest constituent bar (band left extent) + most-recent constituent bar
+    n }                   # how many raw zones were merged into this band
 """
 from __future__ import annotations
 
@@ -162,7 +163,33 @@ def detect(buckets, thr=None):
         if consumed:
             continue
         out.append(dict(b0=b0, p0=p0, b1=b1, p1=p1, ends_high=ends_high, **stats))
-    return out or None
+    return _merge_zones(out) or None
+
+
+def _merge_zones(zones):
+    """Merge overlapping SAME-TYPE LVN zones (support+support / resistance+resistance) into consolidated bands =
+    the union of their [zlo,zhi]. Keeps the MOST-RECENT constituent's LVN + bar, the EARLIEST bar (band left
+    extent), and a count `n` of how many zones were merged. Returns merged zone dicts sorted most-recent first."""
+    merged = []
+    for kind in (True, False):                          # supports (ends_high=True), then resistances
+        grp = sorted((z for z in zones if z["ends_high"] == kind), key=lambda z: z["zlo"])
+        cur = None
+        for z in grp:
+            if cur is not None and z["zlo"] <= cur["zhi"]:      # overlaps / touches -> merge into the running band
+                cur["zlo"] = min(cur["zlo"], z["zlo"])
+                cur["zhi"] = max(cur["zhi"], z["zhi"])
+                cur["b0"] = min(cur["b0"], z["b0"])
+                if z["b1"] >= cur["b1"]:                        # most-recent leg drives the representative LVN
+                    cur["b1"] = z["b1"]; cur["lvn"] = z["lvn"]
+                cur["n"] += 1
+            else:
+                if cur is not None:
+                    merged.append(cur)
+                cur = dict(ends_high=kind, zlo=z["zlo"], zhi=z["zhi"], lvn=z["lvn"], b0=z["b0"], b1=z["b1"], n=1)
+        if cur is not None:
+            merged.append(cur)
+    merged.sort(key=lambda z: z["b1"], reverse=True)    # most-recent first (stable render-slot ordering)
+    return merged
 
 
 # WAVE-forecast knobs (CAUSAL — the ratios are MEASURED from the market's own recent waves, not fixed fibs).
