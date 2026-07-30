@@ -956,9 +956,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sr_items = None                    # dict (kind, tier) -> PlotCurveItem, lazily built (MITIGATED lines)
         self._sr_rects = None                    # pool of QGraphicsRectItem — ACTIVE levels drawn as filled bands
         self._sr_sig = None; self._sr_drawn = False
-        # RECENT-SWING LOW-VOLUME AREA indicator (hamburger m10_swinglvn) — the last swing-HIGH (up-leg) + swing-LOW
-        # (down-leg) legs, each drawn as an LVN ZONE (electric-purple) forecasting the next S/R.
-        self._svl_slots = None                   # [swing_high, swing_low] each a dict of pg items (lazy-built)
+        # RECENT-SWING LOW-VOLUME AREA indicator (hamburger m10_swinglvn) — the MAX_LEGS (3) most-recent legs, each
+        # drawn as an LVN ZONE (electric-purple) forecasting the next S/R (up-leg = support / down-leg = resistance).
+        self._svl_slots = None                   # list of per-leg dicts of pg items (lazy-built, one slot per leg)
         self._svl_sig = None; self._svl_drawn = False
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
@@ -5247,9 +5247,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sr_drawn = True
 
     # RECENT-SWING LOW-VOLUME AREA (hamburger m10_swinglvn) — self-gated, fail-safe, ALL timeframes.
-    # Draws TWO swings: the last swing-HIGH leg (up-leg, green) with its LVN ZONE in the LOWER value area (support,
-    # [VAL, min(LVN,median)]) and the last swing-LOW leg (down-leg, red) with its ZONE in the UPPER value area
-    # (resistance, [max(LVN,median), VAH]). LVN = electric-purple dashed; zone = faint purple fill; projected right.
+    # Draws the MAX_LEGS (3) most-recent legs: each up-leg (green) -> LVN support zone [LVN_below_VAL, min(LVN,median)];
+    # each down-leg (red) -> LVN resistance zone [max(LVN,median), LVN_above_VAH]. LVN = electric-purple dashed; zone =
+    # faint purple fill with dotted edges; projected right as forecast S/R. One slot per leg, coloured by direction.
     def _build_svl_slot(self):
         PUR = (178, 70, 255)
         lo = pg.PlotDataItem(); hi = pg.PlotDataItem()
@@ -5270,8 +5270,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._svl_sig = None; self._svl_drawn = False
 
     def _draw_swinglvn(self, filtered) -> None:
-        """Recent-swing low-volume-area forecast (app/swing_lvn_detect): the last swing-HIGH + swing-LOW legs, each
-        drawn as an LVN ZONE (per the median rule) projected right as forecast S/R. Self-gated, fail-safe."""
+        """Recent-swing low-volume-area forecast (app/swing_lvn_detect): the MAX_LEGS most-recent legs, each drawn as
+        an LVN ZONE (per the exterior-node median rule) projected right as forecast S/R. Self-gated, fail-safe."""
         if not self.menu.layer_state("m10_swinglvn") or self.scanner_mode != "bucket_canvas":
             self._clear_swinglvn(); return
         n = len(filtered)
@@ -5287,17 +5287,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not res:
             self._clear_swinglvn(); return
         if self._svl_slots is None:
-            self._svl_slots = [self._build_svl_slot(), self._build_svl_slot()]
+            self._svl_slots = [self._build_svl_slot() for _ in range(swing_lvn_detect.MAX_LEGS)]
+        while len(self._svl_slots) < len(res):                       # grow if MAX_LEGS ever increases
+            self._svl_slots.append(self._build_svl_slot())
         PUR = (178, 70, 255)
         x_r = n - 1 + 12                                              # project a few bars right = "forecast"
-        specs = [("swing_high", (40, 220, 100), "LVN&#183;SUP", "#7dffab"),   # up-leg -> support zone (green leg)
-                 ("swing_low", (240, 60, 78), "LVN&#183;RES", "#ff8494")]      # down-leg -> resistance zone (red leg)
-        for _slot, (key, bcol, tag, tcol) in zip(self._svl_slots, specs):
-            sw = res.get(key)
-            if not sw:
+        for idx, _slot in enumerate(self._svl_slots):
+            if idx >= len(res):
                 for _it in _slot.values():
                     _it.setVisible(False)
                 continue
+            sw = res[idx]; up = sw["ends_high"]
+            bcol = (40, 220, 100) if up else (240, 60, 78)           # up-leg green (support) / down-leg red (resistance)
+            tag = "LVN&#183;SUP" if up else "LVN&#183;RES"
+            tcol = "#7dffab" if up else "#ff8494"
             b0, b1, p0, p1 = sw["b0"], sw["b1"], sw["p0"], sw["p1"]
             lvn, zlo, zhi = sw["lvn"], sw["zlo"], sw["zhi"]
             _bpen = pg.mkPen(*[int(c * 0.5) for c in bcol], 255, width=1.0)
