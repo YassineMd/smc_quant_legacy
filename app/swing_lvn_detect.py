@@ -256,3 +256,81 @@ def forecast(buckets, thr=None):
     cont_dots = [(t + max(2, round(0.5 * D)), cont[0]), (t + max(3, round(1.0 * D)), cont[1])]
     retr_dots = [(t + max(2, round(0.5 * D)), retr[0]), (t + max(3, round(1.0 * D)), retr[1])]
     return dict(b1=t, p1=cur, is_up=(s > 0), cont=cont_dots, retr=retr_dots)
+
+
+# BIAS + CONFIDENCE knobs (all CAUSAL). Confidence = weighted blend of three 0..1 sub-scores.
+ALIGN_SCALE = 0.010   # zone-alignment falloff: price this fraction (1%) of price away from the aligned zone -> ~0
+W_AGREE = 0.35        # weight: trend-agreement (structure cleanliness)
+W_DOM = 0.35          # weight: impulse dominance (impulses vs corrections)
+W_ALIGN = 0.30        # weight: zone alignment (setup quality)
+
+
+def bias(buckets, thr=None, zones=None):
+    """CAUSAL directional bias + 0..1 confidence from the swing/LVN structure. dir = trend from the wave sequence
+    (net higher-highs/lows -> long); confidence = W_AGREE*agreement + W_DOM*dominance + W_ALIGN*alignment where:
+      agreement = fraction of recent same-type pivots moving WITH the trend (clean HH/HL vs mixed),
+      dominance = median impulse / (median impulse + median correction) (shallow retraces -> trend in control),
+      alignment = price's position vs the aligned live zone (in the support zone for a long -> 1; in the OPPOSITE
+                  zone -> 0 conflict; far -> ~0 extended).
+    state = 'setup' (price at the aligned zone) / 'extended' / 'conflict'; dir None (NEUTRAL) when structure is unclear.
+    -> {dir, state, confidence, sub:{agreement, dominance, alignment}}."""
+    r = _dev_leg(buckets, thr)
+    _neutral = {"dir": None, "state": None, "confidence": 0.0,
+                "sub": {"agreement": 0.0, "dominance": 0.0, "alignment": 0.0}}
+    if not r:
+        return _neutral
+    H, L, C, thr, piv, dev = r
+    if dev is None or len(piv) < 4:
+        return _neutral
+    legs = [(piv[k - 1][0], piv[k - 1][1], piv[k][0], piv[k][1], piv[k][2]) for k in range(1, len(piv))]
+    legs.append(dev)
+    ref_i = max(0, len(legs) - 6)
+    s = 1 if legs[-1][3] >= legs[ref_i][1] else -1
+    recent = legs[-(WAVE_LEGS + 1):-1]
+    if not recent:
+        return _neutral
+    sizes = [abs(l[3] - l[1]) for l in recent]
+    isimp = [(l[4] == (s > 0)) for l in recent]
+    # 1. trend agreement: recent same-type pivots moving WITH the trend
+    highs = [p[1] for p in piv if p[2]]
+    lows = [p[1] for p in piv if not p[2]]
+
+    def _frac(vals):
+        v = vals[-4:]
+        if len(v) < 2:
+            return 0.5
+        return sum(1 for i in range(1, len(v)) if (v[i] > v[i - 1]) == (s > 0)) / (len(v) - 1)
+    agreement = 0.5 * _frac(highs) + 0.5 * _frac(lows)
+    # 2. impulse dominance
+    imp = [sizes[i] for i in range(len(recent)) if isimp[i]]
+    cor = [sizes[i] for i in range(len(recent)) if not isimp[i]]
+    if imp and cor:
+        mi = sorted(imp)[len(imp) // 2]; mc = sorted(cor)[len(cor) // 2]
+        dom_raw = mi / (mi + mc) if (mi + mc) > 0 else 0.5
+    else:
+        dom_raw = 0.85 if imp else 0.5
+    dominance = _clamp((dom_raw - 0.45) / 0.35, 0.0, 1.0)
+    # 3. zone alignment (aligned = support zones for a long / resistance for a short)
+    cur = C[-1] if C and C[-1] > 0 else legs[-1][3]
+    if zones is None:
+        zones = detect(buckets, thr) or []
+    aligned = [z for z in zones if z["ends_high"] == (s > 0)]
+    opposite = [z for z in zones if z["ends_high"] != (s > 0)]
+    if any(z["zlo"] <= cur <= z["zhi"] for z in opposite):
+        alignment = 0.0; state = "conflict"
+    else:
+        best = None
+        for z in aligned:
+            d = 0.0 if z["zlo"] <= cur <= z["zhi"] else (abs(z["zlo"] - cur if cur < z["zlo"] else cur - z["zhi"]) / cur)
+            best = d if best is None else min(best, d)
+        if best is None:
+            alignment = 0.0; state = "extended"
+        else:
+            alignment = _clamp(1.0 - best / ALIGN_SCALE, 0.0, 1.0)
+            state = "setup" if alignment >= 0.5 else "extended"
+    conf = W_AGREE * agreement + W_DOM * dominance + W_ALIGN * alignment
+    direction = ("long" if s > 0 else "short") if (agreement >= 0.5 and len(recent) >= 3) else None
+    if direction is None:                               # unclear trend -> neutral, damp the confidence
+        state = None; conf *= 0.5
+    return {"dir": direction, "state": state, "confidence": round(_clamp(conf, 0.0, 1.0), 3),
+            "sub": {"agreement": round(agreement, 3), "dominance": round(dominance, 3), "alignment": round(alignment, 3)}}

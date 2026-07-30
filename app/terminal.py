@@ -963,6 +963,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._svl_fc_retr = None                 # forecast: RETRACEMENT line (gray dashed, against the move)
         self._svl_fc_dots = None                 # forecast: the 4 min/max dots
         self._svl_sig = None; self._svl_drawn = False
+        # Swing-LVN BIAS badge (bottom-left) — LONG/SHORT + confidence% from the swing/zone structure.
+        self._svl_bias = None                    # cached swing_lvn_detect.bias() result
+        self._svl_bias_shown = None              # last-rendered (dir, conf%, state) — skip re-setHtml when unchanged
+        self.svl_bias_badge = pg.TextItem(anchor=(0, 1), fill=pg.mkBrush(16, 18, 24, 235))
+        self.svl_bias_badge.setZValue(60); self.plot.addItem(self.svl_bias_badge, ignoreBounds=True)
+        self.svl_bias_badge.setVisible(False)
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
         # heatmap large-order bubbles); SMALL = small-BUY vs small-SELL trade-COUNT share (green / red). Each
@@ -4940,6 +4946,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bias_badge.setPos(vx0, vy0)
         self.bias_badge.setVisible(True)
 
+    def _update_svl_bias_badge(self) -> None:
+        """Bottom-left LONG/SHORT + confidence% badge from the Swing Low-Volume Area structure (swing_lvn_detect.bias).
+        Shown with m10_swinglvn on, in Mode 10; sits just above the 5m strategy badge so both can coexist."""
+        b = self._svl_bias
+        on = (self.scanner_mode == "bucket_canvas" and self.menu.layer_state("m10_swinglvn") and b is not None)
+        if not on:
+            if self._svl_bias_shown is not None:
+                self.svl_bias_badge.setVisible(False); self._svl_bias_shown = None
+            return
+        d = b.get("dir"); conf = int(round(b.get("confidence", 0.0) * 100.0)); state = b.get("state") or ""
+        key = (d, conf, state)
+        if key != self._svl_bias_shown:
+            col, lab = ("#28e65a", "LONG") if d == "long" else (("#ff2d46", "SHORT") if d == "short" else ("#9aa3b2", "NEUTRAL"))
+            self.svl_bias_badge.setHtml(
+                "<span style='color:%s;font-family:Consolas;font-size:15px'>&#9670; <b>%s</b> &#183; %d%%</span>"
+                "<span style='color:#8891a3;font-family:Consolas;font-size:11px'> %s</span>" % (col, lab, conf, state))
+            self.svl_bias_badge.border = pg.mkPen(col, width=1.4); self.svl_bias_badge.update()
+            self._svl_bias_shown = key
+        (vx0, _vx1), (vy0, vy1) = self.vb.viewRange()      # bottom-left, offset up to clear the 5m strategy badge
+        self.svl_bias_badge.setPos(vx0, vy0 + 0.055 * (vy1 - vy0))
+        self.svl_bias_badge.setVisible(True)
+
     def _draw_engulf5m(self, filtered) -> None:
         """Triangle L/S badges for the 5m ABSORPTION S/R candidate (app/engulf5m_detect + app/absorb2_detect). Needs
         S/R + prev-day VA + structure context, so the shared warm-up prefix is prepended and indices shifted back.
@@ -5273,6 +5301,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _it in (self._svl_fc_cont, self._svl_fc_retr, self._svl_fc_dots):
             if _it is not None:
                 _it.setVisible(False)
+        self._svl_bias = None
         self._svl_sig = None; self._svl_drawn = False
 
     def _draw_swinglvn(self, filtered) -> None:
@@ -5348,6 +5377,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             for _it in (self._svl_fc_cont, self._svl_fc_retr, self._svl_fc_dots):
                 _it.setVisible(False)
+        try:
+            self._svl_bias = swing_lvn_detect.bias(filtered, zones=res)   # bottom-left LONG/SHORT + confidence badge
+        except Exception:
+            self._svl_bias = None
         self._svl_drawn = True
 
     def _solo_trade_lines(self, active_user, key, turn_on) -> None:
@@ -6803,6 +6836,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _s = _pc(); self._draw_scanner(); self._perf_note("draw_scanner", _s)
         try:
             self._update_bias_badge()          # bottom-left LONG/SHORT bias badge (5m engulf strategy)
+        except Exception:
+            pass
+        try:
+            self._update_svl_bias_badge()      # bottom-left LONG/SHORT + confidence% badge (Swing Low-Volume Area)
         except Exception:
             pass
         if self.scanner_mode == "bucket_canvas":
