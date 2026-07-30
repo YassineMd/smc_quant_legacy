@@ -87,6 +87,52 @@ def sphere_markers(buckets, gold_thr=GOLD_ABS, easy_thr=-1.0, start=0, absorp=No
     return gold, blue
 
 
+def current_bias(buckets, levels=None):
+    """The 5m ENGULF strategy's CURRENT structural bias at the live edge (last bucket): 'long' when the last
+    MITIGATION broke a RESISTANCE and the newest (created or still-active) level is a SUPPORT, 'short' is the
+    mirror, None when there's no clear structure or an S/R overlap. This is the directional lean the LONG/SHORT
+    signals key off (lastmit + newest-level) — the per-candle absorption/touch ENTRY gates are NOT applied, so
+    it's a bias readout, not a signal."""
+    n = len(buckets)
+    if n < 2 * K + 2:
+        return None
+    if levels is None:
+        levels = _sr.detect(buckets, K, zone_mitigation=True)
+    i = n - 1
+    SUP = [x for x in levels if x["kind"] == "S"]; RES = [x for x in levels if x["kind"] == "R"]
+
+    def _active(levs):
+        return [x for x in levs if x["i0"] + K <= i and (x["i1"] is None or x["i1"] > i)]
+
+    act_sup = _active(SUP); act_res = _active(RES)
+    for a in act_sup:                                   # S/R overlap at the live edge -> ambiguous, no bias
+        for b in act_res:
+            if a["zlo"] <= b["zhi"] and a["zhi"] >= b["zlo"]:
+                return None
+    lastmit = None                                      # kind of the most-recent mitigated (broken) level, i1 <= i
+    for i1, kind in sorted((x["i1"], x["kind"]) for x in levels if x["i1"] is not None):
+        if i1 <= i:
+            lastmit = kind
+        else:
+            break
+    mrc = None                                          # kind of the most-recent CREATED level (i0 + K <= i)
+    for x in sorted(levels, key=lambda z: z["i0"]):
+        if x["i0"] + K <= i:
+            mrc = x["kind"]
+        else:
+            break
+    best = None; bi = -1                                # kind of the most-recent still-ACTIVE level
+    for x in act_sup + act_res:
+        if x["i0"] > bi:
+            bi = x["i0"]; best = x["kind"]
+    mru = best
+    if lastmit == "R" and (mrc == "S" or mru == "S"):
+        return "long"
+    if lastmit == "S" and (mrc == "R" or mru == "R"):
+        return "short"
+    return None
+
+
 def detect(buckets, skip_last=True, levels=None, absorp=None, dayva=None):
     n = len(buckets)
     if n < 2 * K + 2:

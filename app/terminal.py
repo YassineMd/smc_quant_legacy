@@ -934,6 +934,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # '1m Engulfing' indicator (m10_engulf1m) — absorption-extreme spheres on 1m engulf candles, 1m ONLY.
         self._e1m_sph = None                     # ScatterPlotItem — red/green (|A|>=1) + magenta/cyan (|A|>=2) spheres
         self._e1m_sig = None; self._e1m_drawn = False
+        # 5m ENGULF strategy BIAS badge — bottom-left corner, "LONG"/"SHORT" from the S/R structure
+        # (engulf5m_detect.current_bias). Shown only with m10_engulf5m on, 5m, Mode 10.
+        self._e5m_bias = None                    # 'long' / 'short' / None, recomputed in _draw_engulf5m
+        self._bias_badge_shown = None            # last-rendered bias (skip re-setHtml when unchanged)
+        self.bias_badge = pg.TextItem(anchor=(0, 1), fill=pg.mkBrush(16, 18, 24, 235))
+        self.bias_badge.setZValue(60); self.plot.addItem(self.bias_badge, ignoreBounds=True)
+        self.bias_badge.setVisible(False)
         # 1m-FINISH strength (validated: a strong 1m finish -> the break/engulf follows through 55% vs 42%). Br badges
         # keep ONLY strong-finish breaks; strong-finish 5m engulf signals get a GOLD RING. Cached per (start_time,side).
         self._finish_1m_cache = {}
@@ -4905,6 +4912,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _it.setVisible(False)
         self._e5m_entries = []
         self._e5m_sig = None; self._e5m_drawn = False
+        self._e5m_bias = None
+
+    def _update_bias_badge(self) -> None:
+        """Bottom-left 'LONG'/'SHORT' badge = the 5m ENGULF strategy's current S/R bias. Position tracks the
+        view corner every frame; text/colour only re-set when the bias changes. Shown only with m10_engulf5m
+        on, on the 5m tf, in Mode 10 (and when a bias exists)."""
+        on = (self.scanner_mode == "bucket_canvas" and self._tf == "5m"
+              and self.menu.layer_state("m10_engulf5m") and self._e5m_bias is not None)
+        if not on:
+            if self._bias_badge_shown is not None:
+                self.bias_badge.setVisible(False); self._bias_badge_shown = None
+            return
+        if self._e5m_bias != self._bias_badge_shown:
+            col = "#28e65a" if self._e5m_bias == "long" else "#ff2d46"
+            self.bias_badge.setHtml("<span style='color:%s;font-family:Consolas;font-size:15px'>&#9670; "
+                                    "<b>%s</b></span>" % (col, self._e5m_bias.upper()))
+            self.bias_badge.border = pg.mkPen(col, width=1.4); self.bias_badge.update()
+            self._bias_badge_shown = self._e5m_bias
+        (vx0, _vx1), (vy0, _vy1) = self.vb.viewRange()     # bottom-left of the view (anchor (0,1))
+        self.bias_badge.setPos(vx0, vy0)
+        self.bias_badge.setVisible(True)
 
     def _draw_engulf5m(self, filtered) -> None:
         """Losange L/S badges for the 5m Engulfing S/R candidate (app/engulf5m_detect). Needs S/R + prev-day VA +
@@ -4926,6 +4954,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             from app import engulf5m_detect, absorb2_detect, absorption as _absm
             from app.engulf_sr_detect import _daily_va as _dva
             _levels = self._shared_5m_levels(buck)                              # shared: ONE S/R (also reused by breakout)
+            self._e5m_bias = engulf5m_detect.current_bias(buck, _levels)        # LONG/SHORT bias badge (reuses this S/R pass)
             _absorp = []                                                         # + ONE absorption pass (engulf/absorb2/spheres)
             for _k in range(len(buck)):
                 try:
@@ -6688,6 +6717,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Mode-10 DOM (ungated, bucket_canvas-only — depth pulses independently of the sig-gated
         # _draw_scanner), re-dock the axis badges, breathe the hovered bucket.
         _s = _pc(); self._draw_scanner(); self._perf_note("draw_scanner", _s)
+        try:
+            self._update_bias_badge()          # bottom-left LONG/SHORT bias badge (5m engulf strategy)
+        except Exception:
+            pass
         if self.scanner_mode == "bucket_canvas":
             _s = _pc(); self._update_m10_dom(snap); self._perf_note("m10_dom", _s)
         elif self.scanner_mode == "depth_heatmap" and self.cob.isVisible():
