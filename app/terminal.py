@@ -929,8 +929,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._brk5m_grn_pool = []                # green 'Br' TextItems (up-break / resistance mitigated), grown lazily
         self._brk5m_red_pool = []                # red 'Br' TextItems (down-break / support mitigated), grown lazily
         self._brk5m_sig = None; self._brk5m_drawn = False
-        # '1m Engulfing' indicator (m10_engulf1m) — absorption-extreme spheres on 1m engulf candles, 1m ONLY.
-        self._e1m_sph = None                     # ScatterPlotItem — red/green (|A|>=1) + magenta/cyan (|A|>=2) spheres
+        # 'Absorption Candle indicator' (m10_engulf1m) — absorption-tiered losanges, ALL timeframes.
+        self._e1m_sph = None                     # ScatterPlotItem — cyan/magenta (engulf |A|>=2) + blue/orange (same-side pair) + green/red (engulf |A|>=1)
         self._e1m_sig = None; self._e1m_drawn = False
         # 5m ENGULF strategy BIAS badge — bottom-left corner, "LONG"/"SHORT" from the S/R structure
         # (engulf5m_detect.current_bias). Shown only with m10_engulf5m on, 5m, Mode 10.
@@ -1763,9 +1763,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if not on:
                 self._clear_breakout5m()            # off -> tear the 'Br' badges down now
         elif key == "m10_engulf1m":
-            self._e1m_sig = None; self._sel_sig = None     # 1m Engulfing toggled -> re-run the overlay draw
+            self._e1m_sig = None; self._sel_sig = None     # Absorption Candle indicator toggled -> re-run the overlay draw
             if not on:
-                self._clear_engulf1m()              # off -> tear the spheres down now
+                self._clear_engulf1m()              # off -> tear the losanges down now
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
@@ -5056,11 +5056,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._e1m_sig = None; self._e1m_drawn = False
 
     def _draw_engulf1m(self, filtered) -> None:
-        """1m Engulfing absorption spheres (app/engulf1m_detect): a sphere on any 1m candle that engulfs its prev,
-        is non-doji, and hits an absorption extreme — red/green |A|>=1, magenta/cyan |A|>=2. Colour = engulf side
-        (green/cyan bull, red/magenta bear); size grows on tier 2. Self-gated, fail-safe, 1m ONLY."""
-        if (not self.menu.layer_state("m10_engulf1m") or self.scanner_mode != "bucket_canvas"
-                or self._tf != "1m"):
+        """Absorption Candle indicator (app/engulf1m_detect): a small LOSANGE on candles hitting an absorption
+        extreme — CYAN/MAGENTA (engulf |A|>=2), BLUE/ORANGE (two same-side |A|>=1 candles), GREEN/RED (engulf
+        |A|>=1). Colour = candle/pair SIDE (long/short); kind = the pattern. Losanges are SMALLER than the
+        size-17 reversal triangles the other strategies use. Self-gated, fail-safe, ALL timeframes."""
+        if not self.menu.layer_state("m10_engulf1m") or self.scanner_mode != "bucket_canvas":
             self._clear_engulf1m(); return
         n = len(filtered)
         _sig = (n, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
@@ -5072,7 +5072,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             marks = engulf1m_detect.detect(filtered, skip_last=False)
         except Exception:
             self._clear_engulf1m(); return
-        GRN, RED, CYA, MAG = (40, 220, 100), (240, 60, 78), (0, 229, 255), (233, 30, 220)
+        GRN, RED = (40, 220, 100), (240, 60, 78)
+        CYA, MAG = (0, 229, 255), (233, 30, 220)
+        BLU, ORG = (0, 153, 255), (255, 140, 0)
+        _COL = {"cm": (CYA, MAG), "ob": (BLU, ORG), "rg": (GRN, RED)}   # (long, short) per kind
+        _SZ = {"cm": 13, "ob": 12, "rg": 12}                            # all < 17 (other strategies' triangles)
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
         spots = []
         for m in marks:
@@ -5080,11 +5084,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if i < 0 or i >= n:
                 continue
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            side = m["side"]; t2 = (m["tier"] == 2)
-            col = (CYA if t2 else GRN) if side > 0 else (MAG if t2 else RED)
-            y = (lo - pad) if side > 0 else (hi + pad)          # bull sphere below the low, bear above the high
+            side = m["side"]; kind = m["kind"]
+            col = _COL[kind][0] if side > 0 else _COL[kind][1]
+            y = (lo - pad) if side > 0 else (hi + pad)          # long badge below the low, short above the high
             _pen = pg.mkPen(int(col[0] * 0.55), int(col[1] * 0.55), int(col[2] * 0.55), 235, width=1.1)
-            spots.append({"pos": (i, y), "symbol": "d", "size": (15 if t2 else 12),
+            spots.append({"pos": (i, y), "symbol": "d", "size": _SZ[kind],
                           "brush": pg.mkBrush(*col, 220), "pen": _pen})
         if self._e1m_sph is None:
             self._e1m_sph = pg.ScatterPlotItem(pxMode=True, symbol="d", size=12)
@@ -5598,7 +5602,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 except Exception:
                     self._clear_breakout5m()
                 try:
-                    self._draw_engulf1m(_pf or [])  # 1m Engulfing indicator (1m) — self-gated, fail-safe
+                    self._draw_engulf1m(_pf or [])  # Absorption Candle indicator (all tf) — self-gated, fail-safe
                 except Exception:
                     self._clear_engulf1m()
                 try:
@@ -5680,7 +5684,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 self._clear_breakout5m()
             try:
-                self._draw_engulf1m(filtered)  # 1m Engulfing indicator (1m) — self-gated, fail-safe
+                self._draw_engulf1m(filtered)  # Absorption Candle indicator (all tf) — self-gated, fail-safe
             except Exception:
                 self._clear_engulf1m()
             try:
