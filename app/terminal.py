@@ -956,10 +956,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sr_items = None                    # dict (kind, tier) -> PlotCurveItem, lazily built (MITIGATED lines)
         self._sr_rects = None                    # pool of QGraphicsRectItem — ACTIVE levels drawn as filled bands
         self._sr_sig = None; self._sr_drawn = False
-        # RECENT-SWING LOW-VOLUME AREA indicator (hamburger m10_swinglvn) — last ZigZag leg's volume-profile LVN
-        # (electric-purple) + low-volume AREA band, as a forecast support (up-leg) / resistance (down-leg).
-        self._svl_leg = None; self._svl_piv = None; self._svl_lvn = None
-        self._svl_bandlo = None; self._svl_bandhi = None; self._svl_band = None; self._svl_lbl = None
+        # RECENT-SWING LOW-VOLUME AREA indicator (hamburger m10_swinglvn) — the last swing-HIGH (up-leg) + swing-LOW
+        # (down-leg) legs, each drawn as an LVN ZONE (electric-purple) forecasting the next S/R.
+        self._svl_slots = None                   # [swing_high, swing_low] each a dict of pg items (lazy-built)
         self._svl_sig = None; self._svl_drawn = False
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
@@ -5248,18 +5247,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sr_drawn = True
 
     # RECENT-SWING LOW-VOLUME AREA (hamburger m10_swinglvn) — self-gated, fail-safe, ALL timeframes.
-    # ZigZag last completed leg -> that leg's volume-profile LVN (electric-purple dashed) + the low-volume AREA
-    # band around it, projected right as a forecast SUPPORT (up-leg, green leg) / RESISTANCE (down-leg, red leg).
+    # Draws TWO swings: the last swing-HIGH leg (up-leg, green) with its LVN ZONE in the LOWER value area (support,
+    # [VAL, min(LVN,median)]) and the last swing-LOW leg (down-leg, red) with its ZONE in the UPPER value area
+    # (resistance, [max(LVN,median), VAH]). LVN = electric-purple dashed; zone = faint purple fill; projected right.
+    def _build_svl_slot(self):
+        PUR = (178, 70, 255)
+        lo = pg.PlotDataItem(); hi = pg.PlotDataItem()
+        slot = {"band": pg.FillBetweenItem(lo, hi, brush=pg.mkBrush(*PUR, 45)),
+                "bandlo": lo, "bandhi": hi, "leg": pg.PlotDataItem(),
+                "lvn": pg.PlotDataItem(), "piv": pg.ScatterPlotItem(pxMode=True),
+                "lbl": pg.TextItem(anchor=(0, 0.5))}
+        for _k, _z in (("band", 6), ("bandlo", 7), ("bandhi", 7),
+                       ("leg", 29), ("lvn", 30), ("piv", 33), ("lbl", 34)):
+            slot[_k].setZValue(_z); self.plot.addItem(slot[_k], ignoreBounds=True)
+        return slot
+
     def _clear_swinglvn(self) -> None:
-        for _it in (self._svl_leg, self._svl_piv, self._svl_lvn, self._svl_bandlo,
-                    self._svl_bandhi, self._svl_band, self._svl_lbl):
-            if _it is not None:
-                _it.setVisible(False)
+        if self._svl_slots:
+            for _slot in self._svl_slots:
+                for _it in _slot.values():
+                    _it.setVisible(False)
         self._svl_sig = None; self._svl_drawn = False
 
     def _draw_swinglvn(self, filtered) -> None:
-        """Recent-swing low-volume-area forecast (app/swing_lvn_detect): the last completed ZigZag leg's volume
-        profile -> its LVN + low-volume AREA band, projected right as a forecast S/R. Self-gated, fail-safe."""
+        """Recent-swing low-volume-area forecast (app/swing_lvn_detect): the last swing-HIGH + swing-LOW legs, each
+        drawn as an LVN ZONE (per the median rule) projected right as forecast S/R. Self-gated, fail-safe."""
         if not self.menu.layer_state("m10_swinglvn") or self.scanner_mode != "bucket_canvas":
             self._clear_swinglvn(); return
         n = len(filtered)
@@ -5274,35 +5286,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._clear_swinglvn(); return
         if not res:
             self._clear_swinglvn(); return
+        if self._svl_slots is None:
+            self._svl_slots = [self._build_svl_slot(), self._build_svl_slot()]
         PUR = (178, 70, 255)
-        up = res["is_up"]; bcol = (40, 220, 100) if up else (240, 60, 78)
-        b0, b1, p0, p1 = res["b0"], res["b1"], res["p0"], res["p1"]
-        lvn, blo, bhi = res["lvn"], res["blo"], res["bhi"]
         x_r = n - 1 + 12                                              # project a few bars right = "forecast"
-        if self._svl_leg is None:                                    # lazy build (z: band under lines under dots)
-            self._svl_bandlo = pg.PlotDataItem(); self._svl_bandhi = pg.PlotDataItem()
-            self._svl_band = pg.FillBetweenItem(self._svl_bandlo, self._svl_bandhi, brush=pg.mkBrush(*PUR, 38))
-            self._svl_leg = pg.PlotDataItem()
-            self._svl_lvn = pg.PlotDataItem()
-            self._svl_piv = pg.ScatterPlotItem(pxMode=True)
-            self._svl_lbl = pg.TextItem(anchor=(0, 0.5))
-            for _it, _z in ((self._svl_band, 6), (self._svl_bandlo, 7), (self._svl_bandhi, 7),
-                            (self._svl_leg, 29), (self._svl_lvn, 30), (self._svl_piv, 33), (self._svl_lbl, 34)):
-                _it.setZValue(_z); self.plot.addItem(_it, ignoreBounds=True)
-        _bpen = pg.mkPen(*[int(c * 0.5) for c in bcol], 255, width=1.0)
-        self._svl_leg.setData([b0, b1], [p0, p1],
-                              pen=pg.mkPen(*bcol, 200, width=1.4, style=QtCore.Qt.DashLine))
-        self._svl_piv.setData([{"pos": (b0, p0), "symbol": "o", "size": 9, "brush": pg.mkBrush(*bcol, 220), "pen": _bpen},
-                               {"pos": (b1, p1), "symbol": "o", "size": 9, "brush": pg.mkBrush(*bcol, 220), "pen": _bpen}])
-        self._svl_lvn.setData([b0, x_r], [lvn, lvn], pen=pg.mkPen(*PUR, 255, width=1.6, style=QtCore.Qt.DashLine))
-        self._svl_bandlo.setData([b0, x_r], [blo, blo], pen=pg.mkPen(*PUR, 90, width=1, style=QtCore.Qt.DotLine))
-        self._svl_bandhi.setData([b0, x_r], [bhi, bhi], pen=pg.mkPen(*PUR, 90, width=1, style=QtCore.Qt.DotLine))
-        self._svl_lbl.setHtml("<span style='color:#b246ff;font-family:Consolas;font-size:11px'>Swing LVN &#183; %s</span>"
-                              % res["bias"].upper())
-        self._svl_lbl.setPos(x_r, lvn)
-        for _it in (self._svl_band, self._svl_bandlo, self._svl_bandhi, self._svl_leg,
-                    self._svl_lvn, self._svl_piv, self._svl_lbl):
-            _it.setVisible(True)
+        specs = [("swing_high", (40, 220, 100), "LVN&#183;SUP", "#7dffab"),   # up-leg -> support zone (green leg)
+                 ("swing_low", (240, 60, 78), "LVN&#183;RES", "#ff8494")]      # down-leg -> resistance zone (red leg)
+        for _slot, (key, bcol, tag, tcol) in zip(self._svl_slots, specs):
+            sw = res.get(key)
+            if not sw:
+                for _it in _slot.values():
+                    _it.setVisible(False)
+                continue
+            b0, b1, p0, p1 = sw["b0"], sw["b1"], sw["p0"], sw["p1"]
+            lvn, zlo, zhi = sw["lvn"], sw["zlo"], sw["zhi"]
+            _bpen = pg.mkPen(*[int(c * 0.5) for c in bcol], 255, width=1.0)
+            _slot["leg"].setData([b0, b1], [p0, p1], pen=pg.mkPen(*bcol, 200, width=1.3, style=QtCore.Qt.DashLine))
+            _slot["piv"].setData([{"pos": (b0, p0), "symbol": "o", "size": 8, "brush": pg.mkBrush(*bcol, 220), "pen": _bpen},
+                                  {"pos": (b1, p1), "symbol": "o", "size": 8, "brush": pg.mkBrush(*bcol, 220), "pen": _bpen}])
+            _slot["lvn"].setData([b0, x_r], [lvn, lvn], pen=pg.mkPen(*PUR, 255, width=1.4, style=QtCore.Qt.DashLine))
+            _slot["bandlo"].setData([b0, x_r], [zlo, zlo], pen=pg.mkPen(*PUR, 95, width=1, style=QtCore.Qt.DotLine))
+            _slot["bandhi"].setData([b0, x_r], [zhi, zhi], pen=pg.mkPen(*PUR, 95, width=1, style=QtCore.Qt.DotLine))
+            _slot["lbl"].setHtml("<span style='color:%s;font-family:Consolas;font-size:10px'>%s</span>" % (tcol, tag))
+            _slot["lbl"].setPos(x_r, (zlo + zhi) / 2.0)
+            for _it in _slot.values():
+                _it.setVisible(True)
         self._svl_drawn = True
 
     def _solo_trade_lines(self, active_user, key, turn_on) -> None:

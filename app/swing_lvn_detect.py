@@ -1,24 +1,26 @@
-"""RECENT-SWING LOW-VOLUME AREA — forecast S/R from the last completed swing leg's volume profile.
+"""RECENT-SWING LOW-VOLUME AREA — forecast S/R zones from the last swing-HIGH and swing-LOW legs.
 
-Auction-theory idea (the user's): after an impulse leg, price tends to RETRACE into the leg's LOW-VOLUME
-NODE (the price it passed through fastest / on least volume) before continuing in the leg's direction. So the
-LVN of the last completed leg is a forecast SUPPORT (up-leg -> bias long) or RESISTANCE (down-leg -> bias short).
+Auction-theory idea (the user's): after an impulse leg, price tends to RETRACE into the leg's LOW-VOLUME region
+before continuing. So the leg's LVN (+ its value-area context) forecasts the next S/R. We track the TWO most recent
+legs — the one ending at the last swing HIGH (up-leg) and the one ending at the last swing LOW (down-leg) — and draw
+a directional LVN ZONE for each.
 
-Pipeline: ZigZag (structure._zigzag_confirmed, causal/confirmed pivots) -> the CURRENT (developing) leg =
-the last confirmed pivot ANCHOR -> the RUNNING extreme (the live swing high/low since that pivot) -> sum that
-leg's bars' footprints into ONE price ladder -> bar_quantiles LVN / value area / POC -> a low-volume AREA band.
+Legs (causal): `structure._zigzag_confirmed` gives confirmed pivots; the CURRENT leg is the DEVELOPING one =
+anchor at the last confirmed pivot -> the RUNNING extreme since it (so a leg tracks the live swing, not a lagged
+confirmed pivot). The other of the two is the last CONFIRMED leg (piv[-2]->piv[-1]). Because ZigZag legs alternate,
+one of the two ends at a HIGH (up-leg = swing_high) and the other ends at a LOW (down-leg = swing_low).
 
-Why the developing leg, not the last CONFIRMED leg: the ZigZag only "closes" a leg once price retraces the full
-threshold FROM the extreme, so during (and just after) an impulse the newest swing high/low is not yet a confirmed
-pivot and the last-confirmed leg lags a whole swing behind price. Anchoring at the last confirmed pivot and
-extending to the running extreme tracks the swing the eye sees NOW (low->running high = up-leg / high->running low =
-down-leg). Its two endpoints are the leg's extremes, so summing those bars' footprints profiles exactly that swing.
+For each leg: sum its bars' footprints into ONE {price:{b,s}} ladder -> bar_quantiles LVN / value_area (VAL,VAH) /
+vw-median / POC. Then the LVN ZONE (the user's rule), where `median` is the volume-weighted median:
+  * swing HIGH (up-leg)  -> zone in the LOWER value area, capped below by VAL:  [VAL, min(LVN, median)]
+                           (LVN below median -> [VAL, LVN];  LVN above median -> [VAL, median])
+  * swing LOW  (down-leg)-> zone in the UPPER value area, capped above by VAH:  [max(LVN, median), VAH]
+                           (LVN above median -> [LVN, VAH];  LVN below median -> [median, VAH])
 
-detect(buckets, thr=SWING_THR) -> dict | None:
-  { b0,p0, b1,p1,        # leg endpoints (bar, price): p0->p1
-    is_up, bias,         # up-leg -> bias 'long' (LVN = support); down-leg -> 'short' (LVN = resistance)
-    lvn, val, vah, poc,  # the leg profile's low-volume node + 70% value area + point of control
-    blo, bhi }           # the contiguous low-volume AREA band containing the LVN (blo <= lvn <= bhi)
+detect(buckets, thr=SWING_THR) -> { 'swing_high': rec|—, 'swing_low': rec|— } or None, where rec =
+  { b0,p0, b1,p1,          # leg endpoints (bar, price): p0->p1
+    lvn, median, val, vah, poc,
+    zlo, zhi }             # the LVN zone (zlo <= zhi)
 """
 from __future__ import annotations
 
@@ -26,7 +28,6 @@ from . import structure as _st
 from . import bar_quantiles as _bq
 
 SWING_THR = 0.004     # ZigZag leg confirm threshold (FRACTION) = 0.4%. Tune + relaunch (0.25% dense .. 0.6% coarse).
-BAND_FRAC = 0.40      # low-volume AREA = contiguous VA-interior levels with total vol <= this * POC vol (containing the LVN)
 
 
 def _leg_profile(buckets, b0, b1):
@@ -44,20 +45,28 @@ def _leg_profile(buckets, b0, b1):
     return prof
 
 
-def _lv_band(prof, val, vah, lvn, poc_vol):
-    """Contiguous LOW-VOLUME AREA around the LVN: the run of VA-interior levels (val<price<vah) whose total
-    volume stays <= BAND_FRAC*poc_vol, containing the LVN. Returns (blo, bhi); (lvn, lvn) if the LVN is isolated."""
-    pr = sorted((p, c["b"] + c["s"]) for p, c in prof.items() if val < p < vah)
-    if not pr or poc_vol <= 0:
-        return lvn, lvn
-    thr = BAND_FRAC * poc_vol
-    idx = min(range(len(pr)), key=lambda k: abs(pr[k][0] - lvn))
-    lo = hi = idx
-    while lo - 1 >= 0 and pr[lo - 1][1] <= thr:
-        lo -= 1
-    while hi + 1 < len(pr) and pr[hi + 1][1] <= thr:
-        hi += 1
-    return pr[lo][0], pr[hi][0]
+def _leg_stats(buckets, b0, b1, ends_high):
+    """Volume-profile stats + LVN ZONE for the leg [b0..b1]. `ends_high` True = up-leg (swing high). None if degenerate."""
+    prof = _leg_profile(buckets, b0, b1)
+    if len(prof) < 3:
+        return None
+    lvn = _bq.lvn(prof)
+    if lvn != lvn:                                      # NaN
+        return None
+    val, vah = _bq.value_area(prof)
+    if val != val or vah != vah or not (vah > val):
+        return None
+    med = _bq.vq(prof)[1]
+    if med != med:
+        return None
+    poc = _bq.poc(prof)
+    if ends_high:                                       # swing HIGH (up-leg): LOWER VA, capped below by VAL
+        zlo, zhi = val, min(lvn, med)
+    else:                                               # swing LOW (down-leg): UPPER VA, capped above by VAH
+        zlo, zhi = max(lvn, med), vah
+    if zhi <= zlo:
+        return None
+    return dict(lvn=lvn, median=med, val=val, vah=vah, poc=poc, zlo=zlo, zhi=zhi)
 
 
 def detect(buckets, thr=None):
@@ -69,40 +78,35 @@ def detect(buckets, thr=None):
     H = [float(b.get("high", 0.0) or 0.0) for b in buckets]
     L = [float(b.get("low", 0.0) or 0.0) for b in buckets]
     piv = _st._zigzag_confirmed(H, L, thr)              # [(pivot_bar, price, is_high, confirm_bar)], alternating
-    if not piv:
+    if len(piv) < 2:
         return None
-    pb, pprice, is_high, c1 = piv[-1]                   # last CONFIRMED pivot = the anchor of the developing leg
-    # developing leg: from the anchor to the RUNNING extreme in the opposite direction (the live swing)
-    if is_high:                                        # anchor a HIGH -> developing DOWN leg (track the running LOW)
+    pb, pprice, anchor_is_high, _cb = piv[-1]           # anchor of the developing leg
+    if anchor_is_high:                                 # developing DOWN leg -> running LOW (ends at a low)
         j = pb
         for k in range(pb + 1, n):
             if L[k] < L[j]:
                 j = k
-        b0, p0, b1, p1, is_up = pb, pprice, j, L[j], False
-    else:                                              # anchor a LOW -> developing UP leg (track the running HIGH)
+        dev = (pb, pprice, j, L[j], False)
+    else:                                              # developing UP leg -> running HIGH (ends at a high)
         j = pb
         for k in range(pb + 1, n):
             if H[k] > H[j]:
                 j = k
-        b0, p0, b1, p1, is_up = pb, pprice, j, H[j], True
-    dev_mag = abs(p1 - p0) / p0 if p0 > 0 else 0.0
-    if not (b1 > b0 and dev_mag >= thr):               # developing leg too small/degenerate -> last CONFIRMED leg
-        if len(piv) < 2:
-            return None
-        (b0, p0, _ih0, _c0), (b1, p1, ih1, c1) = piv[-2], piv[-1]
-        is_up = bool(ih1)
+        dev = (pb, pprice, j, H[j], True)
+    dev_mag = abs(dev[3] - dev[1]) / dev[1] if dev[1] > 0 else 0.0
+    conf = (piv[-2][0], piv[-2][1], piv[-1][0], piv[-1][1], piv[-1][2])   # last CONFIRMED leg (ends at piv[-1])
+    if dev[2] > dev[0] and dev_mag >= thr:             # developing leg valid -> {developing, last-confirmed}
+        legs = [dev, conf]
+    elif len(piv) >= 3:                                # degenerate developing -> last two CONFIRMED legs
+        legs = [conf, (piv[-3][0], piv[-3][1], piv[-2][0], piv[-2][1], piv[-2][2])]
+    else:
+        legs = [conf]
+    out = {}
+    for (b0, p0, b1, p1, ends_high) in legs:
         if b1 <= b0:
-            return None
-    prof = _leg_profile(buckets, b0, b1)
-    if len(prof) < 3:
-        return None
-    lvn = _bq.lvn(prof)
-    if lvn != lvn:                                     # NaN -> no interior low-volume node (degenerate profile)
-        return None
-    val, vah = _bq.value_area(prof)
-    poc = _bq.poc(prof)
-    poc_vol = max((c["b"] + c["s"]) for c in prof.values())
-    blo, bhi = _lv_band(prof, val, vah, lvn, poc_vol)
-    return dict(b0=b0, p0=p0, b1=b1, p1=p1, is_up=is_up,
-                bias=("long" if is_up else "short"),
-                lvn=lvn, val=val, vah=vah, poc=poc, blo=blo, bhi=bhi, confirm=c1)
+            continue
+        stats = _leg_stats(buckets, b0, b1, ends_high)
+        if not stats:
+            continue
+        out["swing_high" if ends_high else "swing_low"] = dict(b0=b0, p0=p0, b1=b1, p1=p1, **stats)
+    return out or None
