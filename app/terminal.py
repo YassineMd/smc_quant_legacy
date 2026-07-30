@@ -956,6 +956,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sr_items = None                    # dict (kind, tier) -> PlotCurveItem, lazily built (MITIGATED lines)
         self._sr_rects = None                    # pool of QGraphicsRectItem — ACTIVE levels drawn as filled bands
         self._sr_sig = None; self._sr_drawn = False
+        # RECENT-SWING LOW-VOLUME AREA indicator (hamburger m10_swinglvn) — last ZigZag leg's volume-profile LVN
+        # (electric-purple) + low-volume AREA band, as a forecast support (up-leg) / resistance (down-leg).
+        self._svl_leg = None; self._svl_piv = None; self._svl_lvn = None
+        self._svl_bandlo = None; self._svl_bandhi = None; self._svl_band = None; self._svl_lbl = None
+        self._svl_sig = None; self._svl_drawn = False
         # LARGE / SMALL MARKET-ORDER STRIPS (slot 8, replacing the old liquidation wave). Two share-style
         # panels like 1/2/3: LARGE = large-BUY vs large-SELL VOLUME share (blue buy / orange sell, matching the
         # heatmap large-order bubbles); SMALL = small-BUY vs small-SELL trade-COUNT share (green / red). Each
@@ -1755,6 +1760,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._sr_sig = None; self._sel_sig = None    # Support/Resistance toggled -> re-run the overlay draw
             if not on:
                 self._clear_sr()                    # off -> tear the S/R lines down now
+        elif key == "m10_swinglvn":
+            self._svl_sig = None; self._sel_sig = None   # Swing Low-Volume Area toggled -> re-run the overlay draw
+            if not on:
+                self._clear_swinglvn()              # off -> tear the LVN forecast down now
         elif key == "m10_prevday_vp":
             if not on:                              # per-prev-day VP -> hide now (draw-gate re-adds on ON)
                 self._hide_prevday_vp()
@@ -5238,6 +5247,64 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._sr_rects[j].setVisible(False)
         self._sr_drawn = True
 
+    # RECENT-SWING LOW-VOLUME AREA (hamburger m10_swinglvn) — self-gated, fail-safe, ALL timeframes.
+    # ZigZag last completed leg -> that leg's volume-profile LVN (electric-purple dashed) + the low-volume AREA
+    # band around it, projected right as a forecast SUPPORT (up-leg, green leg) / RESISTANCE (down-leg, red leg).
+    def _clear_swinglvn(self) -> None:
+        for _it in (self._svl_leg, self._svl_piv, self._svl_lvn, self._svl_bandlo,
+                    self._svl_bandhi, self._svl_band, self._svl_lbl):
+            if _it is not None:
+                _it.setVisible(False)
+        self._svl_sig = None; self._svl_drawn = False
+
+    def _draw_swinglvn(self, filtered) -> None:
+        """Recent-swing low-volume-area forecast (app/swing_lvn_detect): the last completed ZigZag leg's volume
+        profile -> its LVN + low-volume AREA band, projected right as a forecast S/R. Self-gated, fail-safe."""
+        if not self.menu.layer_state("m10_swinglvn") or self.scanner_mode != "bucket_canvas":
+            self._clear_swinglvn(); return
+        n = len(filtered)
+        _sig = (n, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._svl_sig and self._svl_drawn:
+            return
+        self._svl_sig = _sig
+        try:
+            from app import swing_lvn_detect
+            res = swing_lvn_detect.detect(filtered)
+        except Exception:
+            self._clear_swinglvn(); return
+        if not res:
+            self._clear_swinglvn(); return
+        PUR = (178, 70, 255)
+        up = res["is_up"]; bcol = (40, 220, 100) if up else (240, 60, 78)
+        b0, b1, p0, p1 = res["b0"], res["b1"], res["p0"], res["p1"]
+        lvn, blo, bhi = res["lvn"], res["blo"], res["bhi"]
+        x_r = n - 1 + 12                                              # project a few bars right = "forecast"
+        if self._svl_leg is None:                                    # lazy build (z: band under lines under dots)
+            self._svl_bandlo = pg.PlotDataItem(); self._svl_bandhi = pg.PlotDataItem()
+            self._svl_band = pg.FillBetweenItem(self._svl_bandlo, self._svl_bandhi, brush=pg.mkBrush(*PUR, 38))
+            self._svl_leg = pg.PlotDataItem()
+            self._svl_lvn = pg.PlotDataItem()
+            self._svl_piv = pg.ScatterPlotItem(pxMode=True)
+            self._svl_lbl = pg.TextItem(anchor=(0, 0.5))
+            for _it, _z in ((self._svl_band, 6), (self._svl_bandlo, 7), (self._svl_bandhi, 7),
+                            (self._svl_leg, 29), (self._svl_lvn, 30), (self._svl_piv, 33), (self._svl_lbl, 34)):
+                _it.setZValue(_z); self.plot.addItem(_it, ignoreBounds=True)
+        _bpen = pg.mkPen(*[int(c * 0.5) for c in bcol], 255, width=1.0)
+        self._svl_leg.setData([b0, b1], [p0, p1],
+                              pen=pg.mkPen(*bcol, 200, width=1.4, style=QtCore.Qt.DashLine))
+        self._svl_piv.setData([{"pos": (b0, p0), "symbol": "o", "size": 9, "brush": pg.mkBrush(*bcol, 220), "pen": _bpen},
+                               {"pos": (b1, p1), "symbol": "o", "size": 9, "brush": pg.mkBrush(*bcol, 220), "pen": _bpen}])
+        self._svl_lvn.setData([b0, x_r], [lvn, lvn], pen=pg.mkPen(*PUR, 255, width=1.6, style=QtCore.Qt.DashLine))
+        self._svl_bandlo.setData([b0, x_r], [blo, blo], pen=pg.mkPen(*PUR, 90, width=1, style=QtCore.Qt.DotLine))
+        self._svl_bandhi.setData([b0, x_r], [bhi, bhi], pen=pg.mkPen(*PUR, 90, width=1, style=QtCore.Qt.DotLine))
+        self._svl_lbl.setHtml("<span style='color:#b246ff;font-family:Consolas;font-size:11px'>Swing LVN &#183; %s</span>"
+                              % res["bias"].upper())
+        self._svl_lbl.setPos(x_r, lvn)
+        for _it in (self._svl_band, self._svl_bandlo, self._svl_bandhi, self._svl_leg,
+                    self._svl_lvn, self._svl_piv, self._svl_lbl):
+            _it.setVisible(True)
+        self._svl_drawn = True
+
     def _solo_trade_lines(self, active_user, key, turn_on) -> None:
         """EXCLUSIVE badge selection: showing one ENGULF overlay's entry/TP/SL trade lines HIDES every other opened
         badge's (1h / 15m / 5m Engulf S/R), so only ONE position is on the chart at a time. Clicking the already-shown
@@ -5585,7 +5652,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self.scanner_mode == "bucket_canvas" and (self.menu.layer_state("m10_engulfsr")
                     or self.menu.layer_state("m10_momentum") or self.menu.layer_state("m10_engulf5m")
                     or self.menu.layer_state("m10_breakout5m") or self.menu.layer_state("m10_engulf1m")
-                    or self.menu.layer_state("m10_sr")):
+                    or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")):
                 _pf, _, _ = self._build_scanner_buckets()
                 try:
                     self._draw_engulfsr(_pf or [])  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
@@ -5611,9 +5678,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_sr(_pf or [])        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
                 except Exception:
                     self._clear_sr()
+                try:
+                    self._draw_swinglvn(_pf or [])  # Recent-swing Low-Volume Area (all tf) — self-gated, fail-safe
+                except Exception:
+                    self._clear_swinglvn()
             else:
                 self._clear_engulfsr(); self._clear_momentum(); self._clear_engulf5m()
-                self._clear_breakout5m(); self._clear_engulf1m(); self._clear_sr()
+                self._clear_breakout5m(); self._clear_engulf1m(); self._clear_sr(); self._clear_swinglvn()
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -5693,6 +5764,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_sr(filtered)        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
             except Exception:
                 self._clear_sr()
+            try:
+                self._draw_swinglvn(filtered)  # Recent-swing Low-Volume Area (all tf) — self-gated, fail-safe
+            except Exception:
+                self._clear_swinglvn()
             try:
                 self._draw_selection_vp(filtered, lo_i, hi_i)   # 'h'-card Volume-Profile-over-selection overlay
             except Exception:
