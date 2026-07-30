@@ -15,15 +15,12 @@ support zone once price CLOSES below it (below the zone's low) — checked from 
 to SCAN_LEGS recent legs and keep EVERY still-unmitigated zone, so live zones persist on the chart until broken
 (the drawn set can be any size and non-alternating — e.g. several stacked supports if the resistances were consumed).
 
-For each leg: sum its bars' footprints into ONE {price:{b,s}} ladder -> bar_quantiles interior LVN / value_area
-(VAL,VAH) / vw-median / POC, PLUS the EXTERIOR low-volume node just outside the value area (the lowest-volume price
-BELOW VAL / ABOVE VAH). Then the LVN ZONE (the user's rule), where `median` is the volume-weighted median and the
-zone runs between the near INTERIOR edge (the interior LVN or the median, whichever is nearer the value-area centre)
-and the EXTERIOR low-volume node on the trade side:
-  * swing HIGH (up-leg)  -> [LVN_below_VAL, min(LVN, median)]   (LVN<median -> inner=LVN; LVN>median -> inner=median)
-  * swing LOW  (down-leg)-> [max(LVN, median), LVN_above_VAH]   (LVN>median -> inner=LVN; LVN<median -> inner=median)
-  where LVN_below_VAL / LVN_above_VAH = the lowest-volume price in the leg profile strictly outside the value area
-  on that side (the low-volume 'gap' beyond the traded core).
+For each leg: sum its bars' footprints into ONE {price:{b,s}} ladder -> bar_quantiles LVN / value_area (VAL,VAH) /
+vw-median / POC. Then the LVN ZONE (the user's rule), where `median` is the volume-weighted median and the zone runs
+between the near INTERIOR edge (the interior LVN or the median, whichever is nearer the value-area centre) and the
+VALUE-AREA boundary on the trade side:
+  * swing HIGH (up-leg)  -> [VAL, min(LVN, median)]   (LVN<median -> inner=LVN; LVN>median -> inner=median)
+  * swing LOW  (down-leg)-> [max(LVN, median), VAH]   (LVN>median -> inner=LVN; LVN<median -> inner=median)
 
 The leg size is VOLATILITY-ADAPTIVE by default (thr=None -> `_adaptive_thr`), so swings stay structural as the
 regime changes; pass an explicit `thr` (fraction) to override.
@@ -31,7 +28,7 @@ regime changes; pass an explicit `thr` (fraction) to override.
 detect(buckets, thr=None) -> [rec, ...] (up to MAX_LEGS legs, MOST-RECENT first) or None, where rec =
   { b0,p0, b1,p1,          # leg endpoints (bar, price): p0->p1
     ends_high,             # True = up-leg (swing HIGH, support zone) / False = down-leg (swing LOW, resistance zone)
-    lvn, median, val, vah, poc, lvn_ext,   # lvn_ext = the exterior low-vol node (the zone's outer edge)
+    lvn, median, val, vah, poc,
     zlo, zhi }             # the LVN zone (zlo <= zhi)
 """
 from __future__ import annotations
@@ -39,7 +36,6 @@ from __future__ import annotations
 from . import structure as _st
 from . import bar_quantiles as _bq
 
-_NAN = float("nan")
 SWING_THR = 0.004     # FALLBACK leg threshold (fraction) if the adaptive estimate can't compute.
 SCAN_LEGS = 30        # how many recent legs to examine — EVERY still-UNMITIGATED zone among them is kept/drawn
 # ADAPTIVE swing threshold — scale the ZigZag leg-confirm retracement to recent VOLATILITY so a "leg" stays a
@@ -80,20 +76,6 @@ def _leg_profile(buckets, b0, b1):
     return prof
 
 
-def _lvn_outside(prof, bound, below):
-    """Lowest-total-volume price strictly BELOW `bound` (below=True) or strictly ABOVE it (below=False), among
-    levels with volume > 0 — the low-volume 'gap' just outside the value area. NaN if there is no such level."""
-    best_p = _NAN; best_v = None
-    for pp, vv in prof.items():
-        p = float(pp); v = float(vv.get("b", 0.0)) + float(vv.get("s", 0.0))
-        if v <= 0:
-            continue
-        if (p < bound) if below else (p > bound):
-            if best_v is None or v < best_v:
-                best_v = v; best_p = p
-    return best_p
-
-
 def _leg_stats(buckets, b0, b1, ends_high):
     """Volume-profile stats + LVN ZONE for the leg [b0..b1]. `ends_high` True = up-leg (swing high). None if degenerate."""
     prof = _leg_profile(buckets, b0, b1)
@@ -109,15 +91,13 @@ def _leg_stats(buckets, b0, b1, ends_high):
     if med != med:
         return None
     poc = _bq.poc(prof)
-    if ends_high:                                       # swing HIGH (up-leg): from the low-vol node BELOW VAL up to
-        ext = _lvn_outside(prof, val, True)             # the near interior edge = min(LVN, median)
-        zlo, zhi = ext, min(lvn, med)
-    else:                                               # swing LOW (down-leg): from the near interior edge = max(LVN,
-        ext = _lvn_outside(prof, vah, False)            # median) up to the low-vol node ABOVE VAH
-        zlo, zhi = max(lvn, med), ext
-    if ext != ext or zhi <= zlo:                        # no exterior low-vol node, or degenerate zone
+    if ends_high:                                       # swing HIGH (up-leg): LOWER value area, capped below by VAL
+        zlo, zhi = val, min(lvn, med)
+    else:                                               # swing LOW (down-leg): UPPER value area, capped above by VAH
+        zlo, zhi = max(lvn, med), vah
+    if zhi <= zlo:                                      # degenerate zone
         return None
-    return dict(lvn=lvn, median=med, val=val, vah=vah, poc=poc, lvn_ext=ext, zlo=zlo, zhi=zhi)
+    return dict(lvn=lvn, median=med, val=val, vah=vah, poc=poc, zlo=zlo, zhi=zhi)
 
 
 def detect(buckets, thr=None):
