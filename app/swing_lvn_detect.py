@@ -165,45 +165,94 @@ def detect(buckets, thr=None):
     return out or None
 
 
-# Forecast projection knobs (all CAUSAL — computed from the developing leg + past legs only).
-CONT_MIN = 0.5        # continuation: min ("at least") target = leg size * this, beyond the current extreme
-CONT_MAX = 1.0        # continuation: max ("maximum") target = a full measured move (leg size * this)
-RETR_MIN_FIB = 0.382  # fallback retrace (no zone): min = this * leg size back from the extreme
-RETR_MAX_FIB = 0.618  # fallback retrace (no zone): max = this * leg size back from the extreme
+# WAVE-forecast knobs (CAUSAL — the ratios are MEASURED from the market's own recent waves, not fixed fibs).
+WAVE_LEGS = 12        # how many recent CONFIRMED legs to measure the wave rhythm from
+PCT_LO = 0.30         # "at least" percentile of the measured ratio distribution
+PCT_HI = 0.75         # "maximum" percentile
+RET_FALLBACK = (0.382, 0.618)   # retrace ratio (correction / prior impulse) when too few measured waves yet
+EXP_FALLBACK = (0.80, 1.30)     # expansion ratio (impulse / prior impulse) fallback
+RET_CLAMP = (0.10, 1.30)        # sane bounds on a measured retrace ratio
+EXP_CLAMP = (0.40, 3.00)        # sane bounds on a measured expansion ratio
+
+
+def _pct(vals, q):
+    if not vals:
+        return None
+    sv = sorted(vals)
+    return sv[min(len(sv) - 1, max(0, int(round(q * (len(sv) - 1)))))]
+
+
+def _clamp(x, lo, hi):
+    return lo if x < lo else (hi if x > hi else x)
 
 
 def forecast(buckets, thr=None):
-    """CAUSAL forecast of the developing swing as TWO gray lines fanning from the current swing extreme, each with a
-    'min' (at least) and 'max' (maximum) dot, angled by projecting to the target over the typical recent-leg duration:
-      * CONTINUATION (with the move): min = extreme + CONT_MIN*legsize, max = extreme + CONT_MAX*legsize (measured move).
-      * RETRACEMENT (against the move): into the developing leg's OWN zone — min = the zone edge NEAR the extreme,
-        max = the FAR edge; falls back to fib retracements of the leg if the leg has no drawable zone.
-    -> {b1, p1, is_up, cont:[(bar,px)min,(bar,px)max], retr:[(bar,px)min,(bar,px)max]} or None.
-    Re-aims every frame as the extreme / leg size / durations update, so it adjusts as price develops."""
+    """CAUSAL WAVE forecast: read the recent swing legs as a wave sequence, MEASURE this market's own retrace depth
+    (correction/prior-impulse) and impulse expansion (impulse/prior-impulse) + duration, then project TWO gray lines
+    from the current price — CONTINUATION (with the trend) and RETRACEMENT (against it) — each with a 'min' (at least)
+    and 'max' (maximum) dot taken from the PCT_LO/PCT_HI percentiles of those measured ratios. Adapts every frame as
+    the waves develop (deeper retraces / expanding impulses shift the targets). Falls back to fibs with too few waves.
+    -> {b1, p1, is_up, cont:[(bar,px)min,(bar,px)max], retr:[(bar,px)min,(bar,px)max]} or None."""
     r = _dev_leg(buckets, thr)
     if not r:
         return None
     H, L, C, thr, piv, dev = r
-    if dev is None:
+    if dev is None or len(piv) < 3:
         return None
-    b0, p0, b1, p1, is_up = dev
-    if b1 <= b0 or p1 <= 0:
+    n = len(buckets)
+    b0, p0, b1, p1, dev_up = dev
+    # wave sequence = confirmed legs + the developing leg, as (b0,p0,b1,p1,ends_high)
+    legs = [(piv[k - 1][0], piv[k - 1][1], piv[k][0], piv[k][1], piv[k][2]) for k in range(1, len(piv))]
+    legs.append(dev)
+    # trend = net displacement over the recent legs
+    ref_i = max(0, len(legs) - 6)
+    s = 1 if legs[-1][3] >= legs[ref_i][1] else -1
+    # measure ratios from the recent CONFIRMED legs (exclude the incomplete developing leg)
+    recent = legs[-(WAVE_LEGS + 1):-1]
+    if not recent:
         return None
-    lsz = abs(p1 - p0)                                   # current leg size (price)
-    if lsz <= 0:
+    sizes = [abs(l[3] - l[1]) for l in recent]
+    isimp = [(l[4] == (s > 0)) for l in recent]                      # impulse if the leg runs WITH the trend
+    ret_r = []; exp_r = []
+    for i in range(len(recent)):
+        if not isimp[i] and i >= 1 and isimp[i - 1] and sizes[i - 1] > 0:     # correction after an impulse
+            ret_r.append(sizes[i] / sizes[i - 1])
+        if isimp[i] and i >= 2 and isimp[i - 2] and sizes[i - 2] > 0:         # impulse vs the prior impulse
+            exp_r.append(sizes[i] / sizes[i - 2])
+    _rl = _pct(ret_r, PCT_LO); _rh = _pct(ret_r, PCT_HI)
+    _el = _pct(exp_r, PCT_LO); _eh = _pct(exp_r, PCT_HI)
+    ret_lo = _clamp(_rl if _rl is not None else RET_FALLBACK[0], *RET_CLAMP)
+    ret_hi = _clamp(_rh if _rh is not None else RET_FALLBACK[1], *RET_CLAMP)
+    exp_lo = _clamp(_el if _el is not None else EXP_FALLBACK[0], *EXP_CLAMP)
+    exp_hi = _clamp(_eh if _eh is not None else EXP_FALLBACK[1], *EXP_CLAMP)
+    # reference impulse size = the most recent completed impulse leg (in trend direction)
+    I_ref = next((abs(l[3] - l[1]) for l in reversed(recent) if l[4] == (s > 0) and abs(l[3] - l[1]) > 0), 0.0)
+    if I_ref <= 0:
+        I_ref = max(sizes, default=abs(p1 - p0))
+    if I_ref <= 0:
         return None
-    s = 1 if is_up else -1
-    durs = [piv[k][0] - piv[k - 1][0] for k in range(1, len(piv)) if piv[k][0] > piv[k - 1][0]]
-    D = max(4, int(sorted(durs)[len(durs) // 2])) if durs else max(4, b1 - b0)   # typical recent-leg duration (bars)
-    # CONTINUATION (with the move): extend past the extreme by [CONT_MIN, CONT_MAX] * leg size
-    cont = [(b1 + max(2, round(0.75 * D)), p1 + s * CONT_MIN * lsz),
-            (b1 + max(3, round(1.5 * D)), p1 + s * CONT_MAX * lsz)]
-    # RETRACEMENT (against the move): into the developing leg's own zone (near edge -> far edge), else fib retrace
-    st = _leg_stats(buckets, b0, b1, is_up)
-    if st:
-        near, far = (st["zhi"], st["zlo"]) if is_up else (st["zlo"], st["zhi"])   # near = zone edge closer to the extreme
+    lastHigh = p1 if dev_up else p0                                  # structural refs (developing extreme is one of them)
+    lastLow = p0 if dev_up else p1
+    cur = C[-1] if C and C[-1] > 0 else p1
+    # targets from the MEASURED ratios: continuation off the last low (up-trend) / high (down-trend); retrace off the other
+    if s > 0:
+        cont = [lastLow + exp_lo * I_ref, lastLow + exp_hi * I_ref]
+        retr = [lastHigh - ret_lo * I_ref, lastHigh - ret_hi * I_ref]
     else:
-        near, far = p1 - s * RETR_MIN_FIB * lsz, p1 - s * RETR_MAX_FIB * lsz
-    retr = [(b1 + max(2, round(0.5 * D)), near),
-            (b1 + max(3, round(1.0 * D)), far)]
-    return dict(b1=b1, p1=p1, is_up=is_up, cont=cont, retr=retr)
+        cont = [lastHigh - exp_lo * I_ref, lastHigh - exp_hi * I_ref]
+        retr = [lastLow + ret_lo * I_ref, lastLow + ret_hi * I_ref]
+
+    def _ahead(tp, d):                                              # keep the target on the correct side of price
+        return max(tp, cur * 1.001) if d > 0 else min(tp, cur * 0.999)
+    cont = [_ahead(cont[0], s), _ahead(cont[1], s)]
+    retr = [_ahead(retr[0], -s), _ahead(retr[1], -s)]
+    if s > 0:
+        cont[1] = max(cont[1], cont[0]); retr[1] = min(retr[1], retr[0])   # max dot beyond min dot
+    else:
+        cont[1] = min(cont[1], cont[0]); retr[1] = max(retr[1], retr[0])
+    durs = [piv[k][0] - piv[k - 1][0] for k in range(1, len(piv)) if piv[k][0] > piv[k - 1][0]]
+    D = max(4, int(_pct(durs, 0.5))) if durs else max(4, b1 - b0)   # typical recent-leg duration (bars)
+    t = n - 1
+    cont_dots = [(t + max(2, round(0.5 * D)), cont[0]), (t + max(3, round(1.0 * D)), cont[1])]
+    retr_dots = [(t + max(2, round(0.5 * D)), retr[0]), (t + max(3, round(1.0 * D)), retr[1])]
+    return dict(b1=t, p1=cur, is_up=(s > 0), cont=cont_dots, retr=retr_dots)
