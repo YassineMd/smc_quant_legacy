@@ -919,8 +919,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._mom_sig = None; self._mom_drawn = False
         self._mom_entries = []
         self._mom_ln_pool = []; self._mom_lnlbl_pool = []; self._mom_lines_user = {}
-        # 5m Engulfing S/R overlay (m10_engulf5m, 5m only) — red/green losange L/S badges; click -> entry/TP/SL lines
-        self._e5m_sph = None                     # ScatterPlotItem of losange/triangle badges
+        # 5m Absorption S/R overlay (m10_engulf5m, 5m only) — triangle L/S badges (engulf green/red/gold + absorb2 blue/orange); click -> entry/TP/SL lines
+        self._e5m_sph = None                     # ScatterPlotItem of triangle badges
         self._e5m_lbl_pool = []                  # (colour-only badges)
         self._e5m_sig = None; self._e5m_drawn = False
         self._e5m_entries = []
@@ -1938,7 +1938,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 pass
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
                 and self._e5m_entries and self.menu.layer_state("m10_engulf5m")):
-            try:                               # click a 5m Engulf S/R losange -> toggle its entry/TP/SL lines
+            try:                               # click a 5m Absorption S/R triangle -> toggle its entry/TP/SL lines
                 pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
                 (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
                 best = None; bestdx = 2.5
@@ -4892,11 +4892,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _draw_mom_lines(self) -> None:
         self._trade_lines(self._mom_entries, self._mom_lines_user, self._mom_ln_pool, self._mom_lnlbl_pool, 30)
 
-    # 5m ENGULFING S/R overlay (hamburger m10_engulf5m, 5m ONLY) — EYEBALL candidate, self-gated, fail-safe.
-    # LOSANGE (diamond) = continuation-BIAS signal; TRIANGLE = REVERSAL-exception signal (engulf inside a held
-    # support/resistance, bias bypassed). Green up long / red down short (no tiers). Absorption-extreme engulf;
-    # SL 0.1% beyond the widest of prev/entry candle; TP 1:1.5 (1:2 on VA+SR confluence).
-    # Click a badge -> its entry/TP/SL trade lines (exclusive). NOT a proven edge (see app/engulf5m_detect docstring).
+    # 5m ABSORPTION S/R overlay (hamburger m10_engulf5m, 5m ONLY) — EYEBALL candidate, self-gated, fail-safe.
+    # ALL signals are TRIANGLES (up = long, down = short) — continuation bias only, no reversals. Badge tiers:
+    # GREEN/RED (engulf |A|>=1), GOLD (engulf |A|>=2), BLUE/ORANGE (absorb2 two-candle absorption sequence).
+    # A 1m-FINISH RING (green/red or gold) rings the badge when the 5m candle finishes strong on the 1m tape.
+    # SL 0.1% beyond the widest of prev/entry candle; TP 1:1.5 (1:2 on VA+SR confluence). Click a badge -> its
+    # entry/TP/SL trade lines (exclusive). NOT a proven edge (see app/engulf5m_detect docstring).
     def _clear_engulf5m(self) -> None:
         if self._e5m_sph is not None:
             self._e5m_sph.setVisible(False)
@@ -4909,7 +4910,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._e5m_bias = None
 
     def _update_bias_badge(self) -> None:
-        """Bottom-left 'LONG'/'SHORT' badge = the 5m ENGULF strategy's current S/R bias. Position tracks the
+        """Bottom-left 'LONG'/'SHORT' badge = the 5m ABSORPTION S/R strategy's current bias. Position tracks the
         view corner every frame; text/colour only re-set when the bias changes. Shown only with m10_engulf5m
         on, on the 5m tf, in Mode 10 (and when a bias exists)."""
         on = (self.scanner_mode == "bucket_canvas" and self._tf == "5m"
@@ -4929,8 +4930,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bias_badge.setVisible(True)
 
     def _draw_engulf5m(self, filtered) -> None:
-        """Losange L/S badges for the 5m Engulfing S/R candidate (app/engulf5m_detect). Needs S/R + prev-day VA +
-        structure context, so the shared warm-up prefix is prepended and indices shifted back. 5m ONLY."""
+        """Triangle L/S badges for the 5m ABSORPTION S/R candidate (app/engulf5m_detect + app/absorb2_detect). Needs
+        S/R + prev-day VA + structure context, so the shared warm-up prefix is prepended and indices shifted back.
+        Engulf -> green/red or gold triangle; absorb2 sequence -> blue/orange triangle; 1m-finish ring on top. 5m ONLY."""
         if (not self.menu.layer_state("m10_engulf5m") or self.scanner_mode != "bucket_canvas"
                 or self._tf != "5m"):
             self._clear_engulf5m(); return
@@ -4973,21 +4975,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
             y = (lo - pad) if side > 0 else (hi + pad)
             self._e5m_entries.append(("e5m%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
-            col = GOLD if e.get("gold") else (GRN if side > 0 else RED)   # |absorption|>=2.5 -> GOLD badge
+            col = GOLD if e.get("gold") else (GRN if side > 0 else RED)   # |A|>=2 -> GOLD badge, else GREEN(long)/RED(short)
             _al = _PREVIEW_ALPHA if i == _fi else 255
             _pen_rgb = [int(c * 0.55) for c in col] + [_al]
-            _sym = ("t1" if side > 0 else "t") if e.get("rev") else "d"   # reversal-exception -> TRIANGLE, bias -> losange
+            _sym = "t1" if side > 0 else "t"                              # TRIANGLE: up = long, down = short (no reversals)
             spots.append({"pos": (i, y), "symbol": _sym, "brush": pg.mkBrush(*col, _al),
                           "pen": pg.mkPen(*_pen_rgb, width=1.2), "size": 17})
             badge_pos.append((i, side, y))
-        # ABSORPTION-SEQUENCE signals (app/absorb2_detect) — CYAN (long) / MAGENTA (short) LOSANGE in the SAME overlay,
-        # so they inherit the gold-finish ring + click-to-trade-lines. Deduped vs an engulf badge already on the bar.
+        # ABSORPTION-SEQUENCE signals (app/absorb2_detect) — BLUE (long) / ORANGE (short) TRIANGLE in the SAME overlay,
+        # so they inherit the 1m-finish ring + click-to-trade-lines. Deduped vs an engulf badge already on the bar.
         eng_bars = {bi for bi, _bs, _by in badge_pos}
         try:
             ab = absorb2_detect.detect(buck, skip_last=False, levels=_levels, absorp=_absorp, dayva=_dayva)
         except Exception:
             ab = []
-        CYAN, MAGENTA = (0, 255, 255), (255, 0, 255)
+        BLU, ORG = (0, 153, 255), (255, 140, 0)
         for e in ab:
             i = e["i"] - _off
             if i < 0 or i >= n or i in eng_bars:
@@ -4996,10 +4998,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
             y = (lo - pad) if side > 0 else (hi + pad)
             self._e5m_entries.append(("e5m%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0), e.get("tp", 0.0), y))
-            col = CYAN if side > 0 else MAGENTA
+            col = BLU if side > 0 else ORG                               # BLUE = long, ORANGE = short
             _al = _PREVIEW_ALPHA if i == _fi else 255
             _pen_rgb = [int(c * 0.55) for c in col] + [_al]
-            _sym = ("t1" if side > 0 else "t") if e.get("rev") else "d"   # EXCEPTION REVERSAL -> triangle, else losange
+            _sym = "t1" if side > 0 else "t"                            # TRIANGLE: up = long, down = short (no reversals)
             spots.append({"pos": (i, y), "symbol": _sym, "brush": pg.mkBrush(*col, _al),
                           "pen": pg.mkPen(*_pen_rgb, width=1.2), "size": 17})
             badge_pos.append((i, side, y))
@@ -5594,7 +5596,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 except Exception:
                     self._clear_momentum()
                 try:
-                    self._draw_engulf5m(_pf or [])  # 5m Engulfing S/R overlay (5m) — self-gated, fail-safe
+                    self._draw_engulf5m(_pf or [])  # 5m Absorption S/R overlay (5m) — self-gated, fail-safe
                 except Exception:
                     self._clear_engulf5m()
                 try:
@@ -5676,7 +5678,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 self._clear_momentum()
             try:
-                self._draw_engulf5m(filtered)  # 5m Engulfing S/R overlay (5m) — self-gated, fail-safe
+                self._draw_engulf5m(filtered)  # 5m Absorption S/R overlay (5m) — self-gated, fail-safe
             except Exception:
                 self._clear_engulf5m()
             try:

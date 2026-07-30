@@ -1,21 +1,21 @@
-"""5m ABSORPTION-SEQUENCE setup — LIVE terminal overlay signal, shown inside the 5m Engulfing overlay as a CYAN (long)
-/ MAGENTA (short) LOSANGE. NOT an engulf: a two-candle absorption continuation in the S/R trend.
+"""5m ABSORPTION-SEQUENCE setup — LIVE terminal overlay signal, shown inside the 5m ABSORPTION S/R overlay as a
+BLUE (long) / ORANGE (short) TRIANGLE. NOT an engulf: a two-candle absorption continuation in the S/R trend.
 
-  C1 (prev bar): WITH-TREND (may be small-bodied), with an ORANGE/BLUE BORDER = a delta-vs-direction divergence. BLUE = a BULLISH
-                 candle on NEGATIVE delta (price closed UP on net aggressive SELLING -> buyers absorbed it); ORANGE = a
-                 BEARISH candle on POSITIVE delta (price closed DOWN on net aggressive BUYING -> sellers absorbed it).
-                 delta = buy_vol - sell_vol. A long needs a BLUE C1, a short needs an ORANGE C1.
-  C2 (signal bar, follows C1): WITH-TREND, non-doji, absorption A <= 0 (a with-trend candle that is NOT absorbed).
+  C1 (prev bar): WITH-POSITION (may be small-bodied), with an ORANGE/BLUE BORDER = a delta-vs-direction divergence.
+                 BLUE = a BULLISH candle on NEGATIVE delta (price closed UP on net aggressive SELLING -> buyers absorbed
+                 it); ORANGE = a BEARISH candle on POSITIVE delta (price closed DOWN on net aggressive BUYING). delta =
+                 buy_vol - sell_vol. A long needs a BLUE C1, a short needs an ORANGE C1.
+  C2 (signal bar, follows C1): WITH-POSITION, NON-doji, absorption A < 0 (a with-trend candle that is NOT absorbed).
+  C1 and C2 must be the SAME side (both bullish for a long, both bearish for a short); C1 may be small/weak, C2 may not.
 
-Same S/R machinery as the 5m engulf strategy for the CONTINUATION (losange): bias = last-mitigation + newest-created/
-newest-active level; guards = no support/resistance overlap + don't fire INTO the opposite zone (widened 5m edges).
-EXCEPTION REVERSAL (TRIANGLE, rev=True): when the pattern is valid but the S/R continuation bias/guards do NOT hold,
-fire it ANYWAY against the bias, omitting the whole S/R rule (operator choice — the pattern outranks the structure).
+Same S/R machinery as the 5m ABSORPTION S/R strategy: bias = last-mitigation + newest-created/newest-active level;
+guards = no support/resistance overlap + don't fire INTO the opposite zone (widened 5m areas). Fires ONLY on the
+continuation bias — NO reversal exception (removed 2026-07-30). Every signal is a TRIANGLE (up = long, down = short).
 EXIT identical: SL 0.1% beyond the widest of {C1,C2} extreme; TP 1:1.5, bumped to 1:2 on a VA+SR confluence. Entry = C2 close.
 
 ⚠ IN-SAMPLE candidate — NOT a proven edge. Study: study/absorb2_setup.py (delta-border variant).
 
-detect(buckets, skip_last=True) -> [{i, side(+1/-1), entry, sl, tp, src('ABSORB2'), conf, rev(bool)}]
+detect(buckets, skip_last=True) -> [{i, side(+1/-1), entry, sl, tp, src('ABSORB2'), conf}]
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ SL_PAD = 0.001
 RR = 1.5
 RR_CONF = 2.0
 VA_BAND = 0.0015
-ABS_C2 = 0.0         # C2 absorption gate: A <= 0 (a with-trend candle that is NOT absorbed / an easy push)
+ABS_C2 = 0.0         # C2 absorption gate: A < 0 (a with-trend candle that is NOT absorbed / an easy push)
 
 
 def detect(buckets, skip_last=True, levels=None, absorp=None, dayva=None, require_border=True):
@@ -110,8 +110,8 @@ def detect(buckets, skip_last=True, levels=None, absorp=None, dayva=None, requir
                 a2 = _absorption.absorption(buckets, i)[0]
             except Exception:
                 a2 = None
-        if a2 is None or a2 > ABS_C2 or not nd(i):    # C2 must be a real (non-doji) move; C1 need NOT be — the border
-            continue                                  # (a bullish/bearish candle on divergent delta) can be small-bodied
+        if a2 is None or a2 >= ABS_C2 or not nd(i):   # C2 must be a real (non-doji) move with A < 0; C1 need NOT be non-doji
+            continue                                  # — the border (a bullish/bearish candle on divergent delta) can be small
         _ov = overlap(i); blue1, orange1 = border(i - 1)
         for side in (1, -1):
             if side > 0:
@@ -122,11 +122,10 @@ def detect(buckets, skip_last=True, levels=None, absorp=None, dayva=None, requir
                 bias = lastmit[i] == "S" and (mrc[i] == "R" or mru(i) == "R")
                 trend = (C[i] < O[i]) and (C[i - 1] < O[i - 1]); imb_ok = orange1
                 guard = (not _ov) and (not touches(i, SUP))
-            if not (trend and (imb_ok or not require_border)):    # C1 border + C2 with-trend direction (A<=0 already gated)
+            if not (trend and (imb_ok or not require_border)):    # C1 border + C1/C2 same-side (A<0 already gated on C2)
                 continue
-            # continuation (LOSANGE) when the S/R bias + guards hold; else EXCEPTION REVERSAL (TRIANGLE) — fire the pattern
-            # against the bias, omitting the whole S/R rule (operator choice: pattern > S/R structure here).
-            rev = not (bias and guard)
+            if not (bias and guard):                              # CONTINUATION bias ONLY — no reversal exception (removed)
+                continue
             c = C[i]
             if side > 0:
                 sl = min(Lo[i], Lo[i - 1]) * (1 - SL_PAD)
@@ -140,6 +139,6 @@ def detect(buckets, skip_last=True, levels=None, absorp=None, dayva=None, requir
                 conf = at_va(i, va_ref(i)[0]) and touches(i, RES)
             sld = (c - sl) if side > 0 else (sl - c)
             rr = RR_CONF if conf else RR
-            out.append(dict(i=i, side=side, entry=c, sl=sl, tp=c + rr * sld * side, src="ABSORB2", conf=conf, rev=rev))
+            out.append(dict(i=i, side=side, entry=c, sl=sl, tp=c + rr * sld * side, src="ABSORB2", conf=conf))
             break
     return out

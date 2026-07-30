@@ -20,6 +20,20 @@ FRONT_MAX = 0.55      # aligned-delta share by the bucket midpoint must be <= th
 MIN_BARS = 3
 STRONG_BODY = 0.55    # body/range >= this = a "strong" (body-dominant) 1m bar
 NOWICK = 0.06         # wick/range <= this = "no wick" on that side
+EFF_MIN = 0.80        # Kaufman efficiency ratio of the 1m CLOSE path >= this = a clean directional push (ring feature)
+
+
+def _efficiency(cl) -> "float | None":
+    """Kaufman efficiency ratio of a 1m CLOSE path: |net move| / gross path, in [0,1]. 1.0 = perfectly
+    straight, ~0 = choppy. Direction-agnostic. None if < 3 closes or a flat path. (Mirrors terminal._er_from_subs.)"""
+    if not cl or len(cl) < 3:
+        return None
+    gross = 0.0
+    for k in range(1, len(cl)):
+        gross += abs(cl[k] - cl[k - 1])
+    if gross <= 1e-12:
+        return None
+    return abs(cl[-1] - cl[0]) / gross
 
 
 def _ohlc(b):
@@ -49,10 +63,11 @@ def strong_finish(sub1m, side, min_bars=MIN_BARS):
 
 def ring_tier(sub1m, side, min_bars=MIN_BARS):
     """RING tier from the 1m constituents (side +1 long / -1 short). 0 = no ring, 1 = red/green ring, 2 = gold ring.
-    ALL tiers require the signal to END with a STRONG WITH-POSITION 1m bar. Red/green = that base + EITHER a with-position
-    ENGULFING 1m bar OR a strong with-position bar with NO trend-direction wick (no top wick long / no bottom wick short).
-    Gold = that base + ANY ONE of: ALL 1m bars with-position, OR a full-marubozu with-trend LAST bar, OR BOTH red/green
-    features (engulfing AND no-wick)."""
+    ALL tiers require the signal to END with a STRONG WITH-POSITION 1m bar.
+    Red/green = that base + ANY of: a with-position ENGULFING 1m bar, OR the LAST bar has NO trend-side wick
+      (no top wick long / no bottom wick short), OR the 1m path efficiency (Kaufman ER) >= EFF_MIN (0.80).
+    Gold = that base + ANY of: ALL 1m bars with-position, OR a full-marubozu with-trend LAST bar, OR ALL THREE
+      red/green features together (engulfing AND last-no-wick AND efficient)."""
     if not sub1m or len(sub1m) < min_bars or side == 0:
         return 0
     o = []; c = []; h = []; l = []
@@ -72,17 +87,18 @@ def ring_tier(sub1m, side, min_bars=MIN_BARS):
     if not (with_pos(last) and strong(last)):                        # BASE: ends with a strong with-position bar
         return 0
     eng = False
-    for j in range(1, m):                                           # a with-position ENGULFING 1m bar
+    for j in range(1, m):                                           # (a) a with-position ENGULFING 1m bar (any bar)
         if not with_pos(j):
             continue
         plo = min(o[j - 1], c[j - 1]); phi = max(o[j - 1], c[j - 1])
         if (side > 0 and o[j] <= plo and c[j] >= phi) or (side < 0 and o[j] >= phi and c[j] <= plo):
             eng = True; break
-    nowick = any(with_pos(j) and strong(j) and no_trend_wick(j) for j in range(m))   # strong bar, no trend-side wick
+    nowick = no_trend_wick(last)                                    # (b) the LAST bar (already strong+with-pos) has no trend-side wick
+    _e = _efficiency(c); eff_ok = _e is not None and _e >= EFF_MIN  # (c) the 1m close path is efficient (ER >= 0.80)
     all_pos = all(with_pos(j) for j in range(m))                    # every 1m bar with-position
-    last_maru = with_pos(last) and upper(last) <= NOWICK and lower(last) <= NOWICK   # last = full marubozu with-trend
-    if all_pos or last_maru or (eng and nowick):                    # GOLD: ANY ONE of the three
+    last_maru = upper(last) <= NOWICK and lower(last) <= NOWICK     # last = full marubozu (base guarantees with-trend)
+    if all_pos or last_maru or (eng and nowick and eff_ok):         # GOLD: all-pos OR last-marubozu OR all-three red/green features
         return 2
-    if eng or nowick:                                              # RED/GREEN: engulfing OR no-wick strong bar
+    if eng or nowick or eff_ok:                                    # RED/GREEN: engulfing OR last-no-wick OR efficient path
         return 1
     return 0

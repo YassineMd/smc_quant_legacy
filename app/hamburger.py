@@ -139,7 +139,7 @@ _M10_STRATEGIES = [
     ("m10_mmx_sound", "\U0001F514", False, True),                       # bell icon — audible confirmation when enabled
     ("m10_engulfsr", "1h Engulf S/R Reversal (L / S triangles)", False, True),  # 1h: engulf at VA/S/R zone; fwd candidate
     ("m10_momentum", "15m Engulfing S/R (L / S losanges)", False, True),  # 15m: last-mit engulf; gold/blue tiers, tier-dependent skew
-    ("m10_engulf5m", "5m Engulfing S/R (L / S losanges + triangles)", False, True),  # 5m: newest-level bias + reversals + gold
+    ("m10_engulf5m", "5m Absorption S/R", False, True),  # 5m: continuation bias only, all triangles; engulf green/red/gold + absorb2 blue/orange
 ]
 
 # Order-flow scanner — the authoritative 10-mode bucket architecture (time chart removed, Phase B).
