@@ -4,12 +4,15 @@ Auction-theory idea (the user's): after an impulse leg, price tends to RETRACE i
 NODE (the price it passed through fastest / on least volume) before continuing in the leg's direction. So the
 LVN of the last completed leg is a forecast SUPPORT (up-leg -> bias long) or RESISTANCE (down-leg -> bias short).
 
-Pipeline: ZigZag (structure._zigzag_confirmed, causal/confirmed pivots) -> the last COMPLETED leg
-[pivot -> opposite pivot] -> sum that leg's bars' footprints into ONE price ladder -> bar_quantiles LVN /
-value area / POC -> a contiguous LOW-VOLUME AREA band around the LVN.
+Pipeline: ZigZag (structure._zigzag_confirmed, causal/confirmed pivots) -> the CURRENT (developing) leg =
+the last confirmed pivot ANCHOR -> the RUNNING extreme (the live swing high/low since that pivot) -> sum that
+leg's bars' footprints into ONE price ladder -> bar_quantiles LVN / value area / POC -> a low-volume AREA band.
 
-The leg spans low->high (up-leg) or high->low (down-leg): its two endpoints are the confirmed ZigZag pivots,
-which ARE the leg's extremes, so summing the leg bars' footprints gives the profile of exactly that swing.
+Why the developing leg, not the last CONFIRMED leg: the ZigZag only "closes" a leg once price retraces the full
+threshold FROM the extreme, so during (and just after) an impulse the newest swing high/low is not yet a confirmed
+pivot and the last-confirmed leg lags a whole swing behind price. Anchoring at the last confirmed pivot and
+extending to the running extreme tracks the swing the eye sees NOW (low->running high = up-leg / high->running low =
+down-leg). Its two endpoints are the leg's extremes, so summing those bars' footprints profiles exactly that swing.
 
 detect(buckets, thr=SWING_THR) -> dict | None:
   { b0,p0, b1,p1,        # leg endpoints (bar, price): p0->p1
@@ -66,11 +69,30 @@ def detect(buckets, thr=None):
     H = [float(b.get("high", 0.0) or 0.0) for b in buckets]
     L = [float(b.get("low", 0.0) or 0.0) for b in buckets]
     piv = _st._zigzag_confirmed(H, L, thr)              # [(pivot_bar, price, is_high, confirm_bar)], alternating
-    if len(piv) < 2:
+    if not piv:
         return None
-    (b0, p0, _ih0, _c0), (b1, p1, ih1, c1) = piv[-2], piv[-1]   # the last COMPLETED leg
-    if b1 <= b0:
-        return None
+    pb, pprice, is_high, c1 = piv[-1]                   # last CONFIRMED pivot = the anchor of the developing leg
+    # developing leg: from the anchor to the RUNNING extreme in the opposite direction (the live swing)
+    if is_high:                                        # anchor a HIGH -> developing DOWN leg (track the running LOW)
+        j = pb
+        for k in range(pb + 1, n):
+            if L[k] < L[j]:
+                j = k
+        b0, p0, b1, p1, is_up = pb, pprice, j, L[j], False
+    else:                                              # anchor a LOW -> developing UP leg (track the running HIGH)
+        j = pb
+        for k in range(pb + 1, n):
+            if H[k] > H[j]:
+                j = k
+        b0, p0, b1, p1, is_up = pb, pprice, j, H[j], True
+    dev_mag = abs(p1 - p0) / p0 if p0 > 0 else 0.0
+    if not (b1 > b0 and dev_mag >= thr):               # developing leg too small/degenerate -> last CONFIRMED leg
+        if len(piv) < 2:
+            return None
+        (b0, p0, _ih0, _c0), (b1, p1, ih1, c1) = piv[-2], piv[-1]
+        is_up = bool(ih1)
+        if b1 <= b0:
+            return None
     prof = _leg_profile(buckets, b0, b1)
     if len(prof) < 3:
         return None
@@ -81,7 +103,6 @@ def detect(buckets, thr=None):
     poc = _bq.poc(prof)
     poc_vol = max((c["b"] + c["s"]) for c in prof.values())
     blo, bhi = _lv_band(prof, val, vah, lvn, poc_vol)
-    is_up = bool(ih1)                                  # last pivot a HIGH => up-leg (low p0 -> high p1)
     return dict(b0=b0, p0=p0, b1=b1, p1=p1, is_up=is_up,
                 bias=("long" if is_up else "short"),
                 lvn=lvn, val=val, vah=vah, poc=poc, blo=blo, bhi=bhi, confirm=c1)
