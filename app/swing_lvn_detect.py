@@ -34,6 +34,8 @@ zone is a consolidated band: { ends_high,   # True = support (up-leg) / False = 
 """
 from __future__ import annotations
 
+import math
+
 from . import structure as _st
 from . import bar_quantiles as _bq
 
@@ -361,3 +363,118 @@ def bias(buckets, thr=None, zones=None):
         state = None; conf *= 0.5
     return {"dir": direction, "state": state, "confidence": round(_clamp(conf, 0.0, 1.0), 3),
             "sub": {"agreement": round(agreement, 3), "dominance": round(dominance, 3), "alignment": round(alignment, 3)}}
+
+
+# --------------------------------------------------------------------------------------------------
+# SWING absorb-A — the whole-swing analog of app/absorption.py, measuring whether the CVD swing
+# (net delta over the leg) is PROPORTIONAL to the price swing (leg displacement). Measured 2026-07-31:
+# corr(dV,dP) ~ +0.76 (structural 15m), ~84% of swings proportional; down-legs track flow better than up.
+#   A ~ 0  proportional (symmetric) · A > 0 ABSORBED (price lagged the flow) · A < 0 EASY (ran on little flow)
+# Each swing is split at its MIDPOINT bar into two halves; A1 / A2 are the same measure on each half, baselined
+# on prior legs' matching half (per-half baselines, like absorption.residual_halves).
+# --------------------------------------------------------------------------------------------------
+SL_WLEGS = 30         # trailing legs for the swing absorb-A z-score baseline (matches absorption.WINDOW)
+SL_MINOBS = 12        # min prior legs before A is trusted (a live frame holds fewer legs than the 18mo study)
+
+
+def _swing_A(win, cur):
+    """A from a window of prior (dP, dV) leg-pairs + the current pair. + = absorbed, - = easy, ~0 = proportional.
+    None when the baseline is too thin/degenerate. Mirrors absorption.residual: R = Z(dP) - rho*Z(dV), A oriented
+    by the delta's sign."""
+    if len(win) < SL_MINOBS:
+        return None
+    ps = [p[0] for p in win]; vs = [p[1] for p in win]; nw = float(len(win))
+    mp = sum(ps) / nw; mv = sum(vs) / nw
+    sp = math.sqrt(sum((x - mp) ** 2 for x in ps) / (nw - 1))
+    sv = math.sqrt(sum((x - mv) ** 2 for x in vs) / (nw - 1))
+    if sp <= 0 or sv <= 0:
+        return None
+    cov = sum((vs[k] - mv) * (ps[k] - mp) for k in range(len(win))) / (nw - 1)
+    rho = max(-1.0, min(1.0, cov / (sv * sp)))
+    dP, dV = cur
+    R = (dP - mp) / sp - rho * (dV - mv) / sv
+    return 0.0 if dV == 0 else (-R if dV > 0 else R)
+
+
+def _leg_key(buckets, b0, p0):
+    """Stable per-leg identity across frames: the anchor pivot's (start_time, price*1000). Lets the terminal
+    remember a leg's click-chosen division (÷2/÷3/÷4) as the frame scrolls and bar indices shift."""
+    t = float(buckets[b0].get("start_time", 0.0) or 0.0) if 0 <= b0 < len(buckets) else 0.0
+    return (int(t), int(round(p0 * 1000)))
+
+
+def _leg_segments(cum, C, b0, p0, b1, p1, N):
+    """Split the leg [b0..b1] into N even-by-BAR segments. RESULT = the real price path (pivot -> interior closes ->
+    pivot); EFFORT = net delta over each segment. -> (pairs=[(dP_k,dV_k)], splitbars=[N-1 interior bars], N_used)."""
+    span = b1 - b0
+    if span < 1:
+        return [], [], 1
+    N = max(1, min(int(N), span))                            # can't have more parts than bars
+    bnds = [b0 + int(round(span * k / N)) for k in range(N + 1)]
+    bnds[0] = b0; bnds[-1] = b1
+    for k in range(1, len(bnds)):                            # keep strictly increasing on tiny legs
+        if bnds[k] <= bnds[k - 1]:
+            bnds[k] = bnds[k - 1] + 1
+    if bnds[-1] != b1:                                       # couldn't split cleanly -> one whole segment
+        return [((p1 - p0) / p0 * 100.0 if p0 > 0 else 0.0, cum[b1 + 1] - cum[b0 + 1])], [], 1
+    prices = [p0] + [(C[bnds[k]] if 0 <= bnds[k] < len(C) and C[bnds[k]] > 0 else p0) for k in range(1, N)] + [p1]
+    pairs = []
+    for k in range(N):
+        a = bnds[k]; b = bnds[k + 1]; pa = prices[k]; pb = prices[k + 1]
+        pairs.append(((pb - pa) / pa * 100.0 if pa > 0 else 0.0, cum[b + 1] - cum[a + 1]))
+    return pairs, bnds[1:-1], N
+
+
+def swing_lines(buckets, thr=None, divs=None):
+    """Every recent ZigZag leg (confirmed + developing) as a line with its swing absorb-A. Each leg is split into
+    N parts (N = divs[key] or 2, cycled by clicking the line) -> per-part absorb-A. CAUSAL: each part is z-scored
+    against the PRIOR legs split the SAME way. Returns OLDEST->NEWEST:
+      [{b0,p0,b1,p1, ends_high, developing, key, b0_time, N, dots:[(bar,price)], segs:[A_1..A_N], A, dP, dV}]."""
+    r = _dev_leg(buckets, thr)
+    if not r:
+        return []
+    H, L, C, thr, piv, dev = r
+    n = len(buckets)
+    geo = []                                            # OLDEST -> NEWEST so the trailing baseline is prior legs
+    for k in range(1, len(piv)):
+        a = piv[k - 1]; b = piv[k]
+        if b[0] > a[0]:
+            geo.append((a[0], a[1], b[0], b[1], b[2], False))
+    if dev is not None and dev[2] > dev[0] and dev[1] > 0 and abs(dev[3] - dev[1]) / dev[1] >= thr * 0.5:
+        geo.append((dev[0], dev[1], dev[2], dev[3], dev[4], True))   # developing leg = the live, newest one
+    geo = geo[-SCAN_LEGS:]
+    if not geo:
+        return []
+    dlt = [float(b.get("buy_vol", 0.0) or 0.0) - float(b.get("sell_vol", 0.0) or 0.0) for b in buckets]
+    cum = [0.0] * (n + 1)
+    for i in range(n):
+        cum[i + 1] = cum[i] + dlt[i]
+    divs = divs or {}
+    seg_by_N = {}                                       # N -> [ (pairs, splitbars, N_used) | None ] per leg
+    for N in (1, 2, 3, 4):
+        seg_by_N[N] = [(_leg_segments(cum, C, g[0], g[1], g[2], g[3], N) if g[2] > g[0] and g[1] > 0 else None)
+                       for g in geo]
+    out = []
+    for m, g in enumerate(geo):
+        if seg_by_N[1][m] is None:
+            continue
+        b0, p0, b1, p1, eh, dv = g
+        key = _leg_key(buckets, b0, p0)
+        reqN = min(4, max(2, int(divs.get(key, 2))))
+        pairs, splitbars, aN = seg_by_N[reqN][m] or seg_by_N[2][m] or seg_by_N[1][m]
+        prior = range(max(0, m - SL_WLEGS), m)
+        wpair = seg_by_N[1][m][0][0]                    # whole-leg (dP, dV)
+        wbase = [seg_by_N[1][j][0][0] for j in prior if seg_by_N[1][j] is not None]
+        segs = []
+        for k in range(aN):
+            base = [seg_by_N[aN][j][0][k] for j in prior
+                    if seg_by_N[aN][j] is not None and k < len(seg_by_N[aN][j][0])]
+            segs.append(_swing_A(base, pairs[k]))
+        dots = []
+        for sb in splitbars:
+            frac = (sb - b0) / (b1 - b0) if b1 > b0 else 0.0
+            dots.append((sb, p0 + (p1 - p0) * frac))
+        out.append(dict(b0=b0, p0=p0, b1=b1, p1=p1, ends_high=eh, developing=dv, key=key,
+                        b0_time=float(buckets[b0].get("start_time", 0.0) or 0.0) if 0 <= b0 < n else 0.0,
+                        N=aN, dots=dots, segs=segs, A=_swing_A(wbase, wpair), dP=wpair[0], dV=wpair[1]))
+    return out

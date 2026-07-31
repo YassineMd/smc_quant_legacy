@@ -471,7 +471,24 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             sec.addWidget(cb)
             if key == "m10_structure_swing":
                 self._build_swing_slider(sec)            # sensitivity slider directly under its toggle
+            if key == "m10_swinglvn":
+                self._build_svl_subtoggles(sec)          # RCLI sub-toggles: LVA zones / swing lines
         return sec
+
+    def _build_svl_subtoggles(self, section) -> None:
+        """RCLI (Recent Swing LVA) sub-toggles under its master toggle — the LVA zones and the swing lines,
+        each on/off independently. Both are m10_ keys, so they persist + read via layer_state like every other
+        layer; the master m10_swinglvn still gates the whole indicator."""
+        for key, label, default in (("m10_svl_zones", "· LVA zones", True),
+                                     ("m10_svl_lines", "· Swing lines", True),
+                                     ("m10_svl_bias", "· Bias badge", True),
+                                     ("m10_svl_lock", "· Lock swing stats", False)):
+            cb = QtWidgets.QCheckBox(label)
+            cb.setChecked(default)
+            cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
+            self.layer_checks[key] = cb
+            section.addWidget(cb)
 
     # ------------------------------------------------------------------
     def _build_swing_slider(self, section) -> None:

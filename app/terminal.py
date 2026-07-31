@@ -644,6 +644,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                        # (double-click / a divider click re-arms it), mirroring _follow_y
         self._cvd_last_lo = None       # newest CVD candle low/high -> replay-step Y-follow (keeps it on-screen)
         self._cvd_last_hi = None
+        self._cvd_closes = None        # per-bar CVD close -> mirror a hovered swing (start/end) onto the CVD pane
         self.splitter_v = None         # Mode 10 vertical splitter (upper/lower panes)
         self.cob_col = None            # Mode 10 COB column (cob + spacer), height-matched to the price pane
         self._cob_want = False         # user's COB-toggle intent (drives cob_col visibility in Mode 10)
@@ -967,6 +968,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # RECENT-SWING LOW-VOLUME AREA indicator (hamburger m10_swinglvn) — every still-UNMITIGATED swing-leg LVN ZONE
         # (electric-purple) forecasting S/R (up-leg = support / down-leg = resistance); a zone persists until broken.
         self._svl_slots = None                   # list of per-zone dicts of pg items (lazy-built, one slot per live zone)
+        self._svl_line = None                    # ZigZag SWING-LINE polyline (m10_svl_lines) — pivot->pivot legs
+        self._svl_dots = None                    # midpoint split dots on each swing line
+        self._svl_lines = []                     # per-leg geometry + swing absorb-A (A/A1/A2) for the hover box
+        self._svl_hover = None                   # hover info box (pg.TextItem) shown when the cursor is on a swing line
+        self._svl_hover_dot = None               # emphasised midpoint dot for the hovered leg
+        self._svl_div = {}                       # per-leg (stable key) division 2/3/4 — cycled by CLICKING a swing line
+        self._svl_hovering = False               # True while the cursor is on a swing (Lock defers to the hover box)
+        self._svl_cvd_line = None                # hovered swing mirrored onto the CVD pane (start -> end)
+        self._svl_cvd_dots = None                # its division dots on that CVD line
         self._svl_sig = None; self._svl_drawn = False
         # Swing-LVN BIAS badge (bottom-left) — LONG/SHORT + confidence% from the swing/zone structure.
         self._svl_bias = None                    # cached swing_lvn_detect.bias() result
@@ -1774,10 +1784,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._sr_sig = None; self._sel_sig = None    # Support/Resistance toggled -> re-run the overlay draw
             if not on:
                 self._clear_sr()                    # off -> tear the S/R lines down now
-        elif key == "m10_swinglvn":
-            self._svl_sig = None; self._sel_sig = None   # Swing Low-Volume Area toggled -> re-run the overlay draw
-            if not on:
-                self._clear_swinglvn()              # off -> tear the LVN forecast down now
+        elif key in ("m10_swinglvn", "m10_svl_zones", "m10_svl_lines", "m10_svl_bias"):
+            self._svl_sig = None; self._sel_sig = None   # RCLI (master or a sub-toggle) changed -> re-run the draw
+            if not self.menu.layer_state("m10_swinglvn"):
+                self._clear_swinglvn()              # master off -> tear the whole indicator down now
+            self._update_svl_bias_badge()           # apply a bias-badge on/off immediately
+        elif key == "m10_svl_lock":
+            if not on and not self._svl_hovering:
+                self._svl_hover_hide()              # Lock off + not hovering -> drop the pinned developing-swing box
         elif key == "m10_prevday_vp":
             if not on:                              # per-prev-day VP -> hide now (draw-gate re-adds on ON)
                 self._hide_prevday_vp()
@@ -1971,6 +1985,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if best is not None:
                     _on = not self._e5m_lines_user.get(best, False)   # exclusive: this position only, hide all others
                     self._solo_trade_lines(self._e5m_lines_user, best, _on); ev.accept(); return
+            except Exception:
+                pass
+        # SINGLE click ON a SWING LINE (RCLI) -> cycle THAT line's division 2 -> 3 -> 4 -> 2 (line-sensitive).
+        if (not ev.double() and self.scanner_mode == "bucket_canvas"
+                and self._svl_lines and self.menu.layer_state("m10_svl_lines")):
+            try:
+                pt = self.vb.mapSceneToView(ev.scenePos())
+                psx, psy = self.vb.viewPixelSize()
+                if psx > 0 and psy > 0:
+                    mx, my = pt.x(), pt.y(); best = None; best_d = 8.0     # px tolerance
+                    for lg in self._svl_lines:
+                        d = self._seg_px_dist(mx, my, lg["b0"], lg["p0"], lg["b1"], lg["p1"], psx, psy)
+                        if d < best_d:
+                            best_d = d; best = lg
+                    if best is not None:
+                        self._svl_div[best["key"]] = {2: 3, 3: 4, 4: 2}.get(self._svl_div.get(best["key"], 2), 3)
+                        self._svl_sig = None                              # force the overlay to rebuild with the new N
+                        try:
+                            self._draw_swinglvn(self._build_scanner_buckets()[0])
+                        except Exception:
+                            pass
+                        self._svl_hover_update(pt)                        # refresh the box under the cursor now
+                        ev.accept(); return
             except Exception:
                 pass
         if not ev.double():
@@ -2288,6 +2325,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.hm_vol_tip.hide()
             self.dom_tooltip.hide()
             self.panel_tooltip.hide()
+            self._svl_hovering = False
+            if not (self.scanner_mode == "bucket_canvas" and self.menu.layer_state("m10_swinglvn")
+                    and self.menu.layer_state("m10_svl_lines") and self.menu.layer_state("m10_svl_lock")):
+                self._svl_hover_hide()       # Lock off -> drop the box; Lock on -> _svl_lock_tick keeps it pinned
             self._last_hover_pos = None      # left the plot -> stop the hover re-fire
             if self.scanner_mode == "bucket_canvas":
                 self._show_forming_stats()   # keep the live candle's readout on by default
@@ -2347,6 +2388,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.cursor_spot.show()
         else:
             self.cursor_spot.hide()
+
+        if self.scanner_mode == "bucket_canvas":
+            try:
+                self._svl_hover_update(pt)   # RCLI: swing-line absorb-A hover box (no-op when lines are off)
+            except RuntimeError:
+                self._svl_hover_hide()       # a canvas teardown deleted a hover item mid-move -> heal + skip
 
         # Every mode is bucket-native now: surface the hovered bucket's readout + (Mode 10) the DOM
         # wall volume. (The time-chart _hover_stats path went with the Off mode in Phase B.)
@@ -2713,6 +2760,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         pt = self.vb.mapSceneToView(pos)
         self._hover_scanner(pt.x(), pos)
         self._hover_dom_wall(pt.x(), pt.y())   # live-update the hovered wall's volume as the book pulses
+        if self.scanner_mode == "bucket_canvas":
+            try:
+                self._svl_hover_update(pt)     # keep the swing-line absorb-A box fresh on a PARKED cursor — so a
+                #                                replay step (Right arrow) refreshes it without moving the mouse
+            except Exception:
+                pass                           # never let the hover box abort the frame (overlays draw AFTER this)
 
     def _toggle_states(self) -> None:
         """'y' — flip STATE-verdict + debug-line visibility in BOTH the per-bucket stats box and the
@@ -4956,7 +5009,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Bottom-left LONG/SHORT + confidence% badge from the Swing Low-Volume Area structure (swing_lvn_detect.bias).
         Shown with m10_swinglvn on, in Mode 10; sits just above the 5m strategy badge so both can coexist."""
         b = self._svl_bias
-        on = (self.scanner_mode == "bucket_canvas" and self.menu.layer_state("m10_swinglvn") and b is not None)
+        on = (self.scanner_mode == "bucket_canvas" and self.menu.layer_state("m10_swinglvn")
+              and self.menu.layer_state("m10_svl_bias") and b is not None)
         if not on:
             if self._svl_bias_shown is not None:
                 self.svl_bias_badge.setVisible(False); self._svl_bias_shown = None
@@ -5304,16 +5358,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _slot in self._svl_slots:
                 for _it in _slot.values():
                     _it.setVisible(False)
+        for _name in ("_svl_line", "_svl_dots", "_svl_hover", "_svl_hover_dot", "_svl_cvd_line", "_svl_cvd_dots"):
+            _it = getattr(self, _name, None)
+            if _it is not None:
+                try:
+                    _it.setVisible(False)
+                except RuntimeError:
+                    setattr(self, _name, None)      # deleted by a canvas teardown -> drop the ref, recreate lazily
+        self._svl_lines = []
         self._svl_bias = None
         self._svl_sig = None; self._svl_drawn = False
 
     def _draw_swinglvn(self, filtered) -> None:
-        """Recent-swing low-volume-area forecast (app/swing_lvn_detect): every still-unmitigated swing-leg LVN ZONE
-        (per the exterior-node median rule) projected right as forecast S/R. Self-gated, fail-safe."""
+        """Recent-Swing-LVA (RCLI): unmitigated swing-leg LVN ZONES (m10_svl_zones) + the ZigZag SWING LINES with
+        midpoint split dots and per-leg swing absorb-A on hover (m10_svl_lines). The bottom-left bias badge follows
+        the master toggle. Self-gated, fail-safe."""
+        want_zones = self.menu.layer_state("m10_svl_zones")
+        want_lines = self.menu.layer_state("m10_svl_lines")
         if not self.menu.layer_state("m10_swinglvn") or self.scanner_mode != "bucket_canvas":
             self._clear_swinglvn(); return
         n = len(filtered)
-        _sig = (n, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        _sig = (n, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0,
+                want_zones, want_lines)
         if _sig == self._svl_sig and self._svl_drawn:
             return
         self._svl_sig = _sig
@@ -5321,40 +5387,248 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             from app import swing_lvn_detect
             res = swing_lvn_detect.detect(filtered)
         except Exception:
-            self._clear_swinglvn(); return
-        if not res:
-            self._clear_swinglvn(); return
+            res = None
         if self._svl_slots is None:
             self._svl_slots = []
-        while len(self._svl_slots) < len(res):                       # one slot per live zone (grows as needed)
-            self._svl_slots.append(self._build_svl_slot())
-        PUR = (178, 70, 255)
-        x_r = n - 1 + 12                                              # project a few bars right = "forecast"
-        for idx, _slot in enumerate(self._svl_slots):
-            if idx >= len(res):
+        # ---- LVN ZONES (gated by m10_svl_zones) ----
+        if want_zones and res:
+            while len(self._svl_slots) < len(res):                   # one slot per live zone (grows as needed)
+                self._svl_slots.append(self._build_svl_slot())
+            PUR = (178, 70, 255); x_r = n - 1 + 12                    # project a few bars right = "forecast"
+            for idx, _slot in enumerate(self._svl_slots):
+                if idx >= len(res):
+                    for _it in _slot.values():
+                        _it.setVisible(False)
+                    continue
+                sw = res[idx]; up = sw["ends_high"]
+                tag = "LVN&#183;SUP" if up else "LVN&#183;RES"
+                tcol = "#7dffab" if up else "#ff8494"
+                if sw.get("n", 1) > 1:
+                    tag += " &#215;%d" % sw["n"]
+                b0 = sw["b0"]; lvn, zlo, zhi = sw["lvn"], sw["zlo"], sw["zhi"]
+                _slot["leg"].setVisible(False); _slot["piv"].setVisible(False)
+                _slot["lvn"].setData([b0, x_r], [lvn, lvn], pen=pg.mkPen(*PUR, 255, width=1.4, style=QtCore.Qt.DashLine))
+                _slot["bandlo"].setData([b0, x_r], [zlo, zlo], pen=pg.mkPen(*PUR, 95, width=1, style=QtCore.Qt.DotLine))
+                _slot["bandhi"].setData([b0, x_r], [zhi, zhi], pen=pg.mkPen(*PUR, 95, width=1, style=QtCore.Qt.DotLine))
+                _slot["lbl"].setHtml("<span style='color:%s;font-family:Consolas;font-size:10px'>%s</span>" % (tcol, tag))
+                _slot["lbl"].setPos(x_r, (zlo + zhi) / 2.0)
+                for _it in (_slot["band"], _slot["bandlo"], _slot["bandhi"], _slot["lvn"], _slot["lbl"]):
+                    _it.setVisible(True)
+        else:
+            for _slot in self._svl_slots:
                 for _it in _slot.values():
                     _it.setVisible(False)
-                continue
-            sw = res[idx]; up = sw["ends_high"]
-            tag = "LVN&#183;SUP" if up else "LVN&#183;RES"
-            tcol = "#7dffab" if up else "#ff8494"
-            if sw.get("n", 1) > 1:                                   # merged band -> show how many zones combined
-                tag += " &#215;%d" % sw["n"]
-            b0 = sw["b0"]; lvn, zlo, zhi = sw["lvn"], sw["zlo"], sw["zhi"]
-            _slot["leg"].setVisible(False)                           # merged zones have no single leg -> no leg line/pivots
-            _slot["piv"].setVisible(False)
-            _slot["lvn"].setData([b0, x_r], [lvn, lvn], pen=pg.mkPen(*PUR, 255, width=1.4, style=QtCore.Qt.DashLine))
-            _slot["bandlo"].setData([b0, x_r], [zlo, zlo], pen=pg.mkPen(*PUR, 95, width=1, style=QtCore.Qt.DotLine))
-            _slot["bandhi"].setData([b0, x_r], [zhi, zhi], pen=pg.mkPen(*PUR, 95, width=1, style=QtCore.Qt.DotLine))
-            _slot["lbl"].setHtml("<span style='color:%s;font-family:Consolas;font-size:10px'>%s</span>" % (tcol, tag))
-            _slot["lbl"].setPos(x_r, (zlo + zhi) / 2.0)
-            for _it in (_slot["band"], _slot["bandlo"], _slot["bandhi"], _slot["lvn"], _slot["lbl"]):
-                _it.setVisible(True)
+        # ---- SWING LINES + midpoint dots (gated by m10_svl_lines; hover shows swing absorb-A) ----
+        if self._svl_line is None:
+            self._svl_line = pg.PlotDataItem(connect="finite")       # NaN-separated 2-pt segments, one per leg
+            self._svl_dots = pg.ScatterPlotItem(pxMode=True)
+            for _it, _z in ((self._svl_line, 27), (self._svl_dots, 28)):
+                _it.setZValue(_z); self.plot.addItem(_it, ignoreBounds=True)
+        if want_lines:
+            try:
+                lines = swing_lvn_detect.swing_lines(filtered, divs=self._svl_div) or []
+            except Exception:
+                lines = []
+            self._svl_lines = lines
+            GOLD = (222, 190, 96); xs = []; ys = []; dots = []
+            for lg in lines:
+                xs += [lg["b0"], lg["b1"], float("nan")]
+                ys += [lg["p0"], lg["p1"], float("nan")]
+                for (_dbar, _dpx) in lg["dots"]:               # N-1 split dots per leg (÷2 -> 1, ÷3 -> 2, ÷4 -> 3)
+                    dots.append({"pos": (_dbar, _dpx), "size": 6,
+                                 "brush": pg.mkBrush(*GOLD, 235), "pen": pg.mkPen(25, 25, 25, 200, width=0.8)})
+            self._svl_line.setData(xs, ys, pen=pg.mkPen(*GOLD, 205, width=1.3), connect="finite")
+            self._svl_dots.setData(dots)
+            self._svl_line.setVisible(True); self._svl_dots.setVisible(True)
+        else:
+            self._svl_lines = []
+            self._svl_line.setVisible(False); self._svl_dots.setVisible(False)
+            self._svl_hover_hide()                       # lines off -> drop the hover box + CVD mirror too
+        # ---- bias badge (from the zones; independent of the sub-toggles) ----
         try:
-            self._svl_bias = swing_lvn_detect.bias(filtered, zones=res)   # bottom-left LONG/SHORT + confidence badge
+            self._svl_bias = swing_lvn_detect.bias(filtered, zones=res) if res else None
         except Exception:
             self._svl_bias = None
         self._svl_drawn = True
+
+    @staticmethod
+    def _seg_px_dist(mx, my, x0, y0, x1, y1, psx, psy):
+        """Distance in PIXELS from (mx,my) to the segment (x0,y0)-(x1,y1). View coords divided by the view's
+        per-pixel size so x (bar index) and y (price) compare on the same screen scale."""
+        ax = (x1 - x0) / psx; ay = (y1 - y0) / psy
+        px = (mx - x0) / psx; py = (my - y0) / psy
+        l2 = ax * ax + ay * ay
+        t = 0.0 if l2 <= 0 else max(0.0, min(1.0, (px * ax + py * ay) / l2))
+        dx = px - t * ax; dy = py - t * ay
+        return (dx * dx + dy * dy) ** 0.5
+
+    @staticmethod
+    def _fmt_kmb(v):
+        """Signed compact volume: 7291 -> '7.3k', 1_200_000 -> '1.2M', 291 -> '291'."""
+        sign = "-" if v < 0 else ""
+        a = abs(float(v))
+        if a >= 1e9:
+            return "%s%.1fB" % (sign, a / 1e9)
+        if a >= 1e6:
+            return "%s%.1fM" % (sign, a / 1e6)
+        if a >= 1e3:
+            return "%s%.1fk" % (sign, a / 1e3)
+        return "%s%.0f" % (sign, a)
+
+    @staticmethod
+    def _svl_hover_html(lg):
+        """Minimalist hover card for a swing line. absorb-A = was the price move PROPORTIONAL to the CVD (order
+        flow) behind it — ~0 proportional · + ABSORBED (price lagged the flow) · - EASY (ran on little flow)."""
+        up = lg["ends_high"]
+        dcol = "#4ecb8d" if up else "#ff6b6b"
+        arrow = "&#9650;" if up else "&#9660;"                       # ▲ / ▼
+        dev = "<span style='color:#e0b64a'> &#183; forming</span>" if lg.get("developing") else ""
+
+        def acol(a):
+            return "#ff7b72" if a >= 0.75 else ("#6ec6ff" if a <= -0.75 else "#8fe3a2")
+
+        def verb(a):
+            if a is None:
+                return "--"
+            return ("ABSORBED" if a >= 1.5 else "heavy") if a >= 0.75 else \
+                   (("EASY" if a <= -1.5 else "light") if a <= -0.75 else "proportional")
+
+        def aspan(a, size):
+            if a is None:
+                return "<span style='color:#6b7280; font-size:%dpx'>&#8211;&#8211;</span>" % size
+            return "<span style='color:%s; font-size:%dpx; font-weight:bold'>%+.2f</span>" % (acol(a), size, a)
+
+        A = lg["A"]
+        meaning = {"ABSORBED": "price lagged the flow", "heavy": "price lagged the flow",
+                   "EASY": "ran on little flow", "light": "ran on little flow",
+                   "proportional": "flow matched the move", "--": ""}[verb(A)]
+        pcol = "#4ecb8d" if lg["dP"] >= 0 else "#ff6b6b"
+        vcol = "#4ecb8d" if lg["dV"] >= 0 else "#ff6b6b"
+        _lbl = "color:#8b93a3; padding-right:18px"
+        _num = "text-align:right; font-weight:bold"
+        segs = lg.get("segs") or []                                  # per-part absorb-A (A1..AN) — N = click-cycled ÷2/3/4
+        seg_rows = "".join(
+            "<tr><td style='%s'>A%d</td><td style='text-align:right'>%s</td></tr>" % (_lbl, i + 1, aspan(a, 12))
+            for i, a in enumerate(segs))
+        return (
+            "<div style='font-family:Consolas; color:#e6e9ef; white-space:nowrap'>"
+            "<div style='font-size:13px; font-weight:bold; color:%s; padding-bottom:5px'>%s %s swing%s"
+            " <span style='color:#727c8c; font-size:10px; font-weight:normal'>&#247;%d</span></div>"
+            "<table cellspacing='0' cellpadding='2' style='font-size:12px'>"
+            "<tr><td style='%s'>Move</td><td style='%s; color:%s'>%+.2f%%</td></tr>"
+            "<tr><td style='%s'>CVD</td><td style='%s; color:%s'>%s</td></tr>"
+            "</table>"
+            "<div style='font-size:11px; color:#8b93a3; padding-top:7px'>swing absorb-A</div>"
+            "<div style='padding-top:1px'>%s &nbsp; <span style='color:%s; font-size:12px; font-weight:bold'>%s</span></div>"
+            "<div style='font-size:10px; color:#727c8c; padding-bottom:3px'>%s</div>"
+            "<table cellspacing='0' cellpadding='2' style='font-size:11px; color:#b9c0cc'>%s</table>"
+            "</div>"
+        ) % (dcol, arrow, ("UP" if up else "DOWN"), dev, lg.get("N", 2),
+             _lbl, _num, pcol, lg["dP"],
+             _lbl, _num, vcol, MinimalTerminalWindow._fmt_kmb(lg["dV"]),
+             aspan(A, 15), (acol(A) if A is not None else "#6b7280"), verb(A), meaning,
+             seg_rows)
+
+    def _svl_hover_hide(self) -> None:
+        """Hide every swing-line hover artefact (price box + dots AND the CVD-pane mirror). Self-heals: if a canvas
+        teardown deleted an item's C++ object, drop the dead Python ref so it recreates on the next hover."""
+        for _name in ("_svl_hover", "_svl_hover_dot", "_svl_cvd_line", "_svl_cvd_dots"):
+            _it = getattr(self, _name, None)
+            if _it is None:
+                continue
+            try:
+                _it.setVisible(False)
+            except RuntimeError:
+                setattr(self, _name, None)          # C++ object gone -> drop the ref, recreate lazily
+
+    def _svl_dev_leg(self):
+        """The DEVELOPING (most-recent forming) swing leg, or the newest leg if none is flagged developing."""
+        return (next((lg for lg in reversed(self._svl_lines) if lg.get("developing")), None)
+                or (self._svl_lines[-1] if self._svl_lines else None))
+
+    def _svl_show_box(self, lg) -> None:
+        """Draw the swing stats box PINNED bottom-right for leg `lg`, emphasise its split dots, and (when the CVD pane
+        is on) mirror the swing onto the CVD pane. Shared by the hover box and the Lock (developing-swing) box."""
+        try:
+            psx, psy = self.vb.viewPixelSize()
+        except Exception:
+            return
+        if psx <= 0 or psy <= 0:
+            return
+        GOLD = (222, 190, 96)
+        if self._svl_hover is None:
+            self._svl_hover = pg.TextItem(anchor=(1, 1),         # anchor = card's bottom-right corner
+                                          fill=pg.mkBrush(15, 17, 23, 242), border=pg.mkPen(60, 68, 84, 255))
+            self._svl_hover.setZValue(70); self.plot.addItem(self._svl_hover, ignoreBounds=True)
+            self._svl_hover_dot = pg.ScatterPlotItem(pxMode=True); self._svl_hover_dot.setZValue(71)
+            self.plot.addItem(self._svl_hover_dot, ignoreBounds=True)
+        self._svl_hover.setHtml(self._svl_hover_html(lg))
+        (vx0, vx1), (vy0, vy1) = self.vb.viewRange()                 # PIN to the bottom-right corner (~6px inset)
+        self._svl_hover.setPos(vx1 - 6 * psx, vy0 + 6 * psy)
+        self._svl_hover.setVisible(True)
+        self._svl_hover_dot.setData([{"pos": (_db, _dp), "size": 11,
+                                      "brush": pg.mkBrush(255, 236, 140, 255),
+                                      "pen": pg.mkPen(20, 20, 20, 255, width=1.2)} for (_db, _dp) in lg["dots"]])
+        self._svl_hover_dot.setVisible(True)
+        cc = self._cvd_closes; b0, b1 = lg["b0"], lg["b1"]
+        if (getattr(self, "cvd_plot", None) is not None and self.cvd_plot.isVisible()
+                and cc is not None and 0 <= b0 < len(cc) and 0 <= b1 < len(cc)):
+            if self._svl_cvd_line is None:
+                self._svl_cvd_line = pg.PlotDataItem(); self._svl_cvd_line.setZValue(29)
+                self.cvd_plot.addItem(self._svl_cvd_line, ignoreBounds=True)
+                self._svl_cvd_dots = pg.ScatterPlotItem(pxMode=True); self._svl_cvd_dots.setZValue(30)
+                self.cvd_plot.addItem(self._svl_cvd_dots, ignoreBounds=True)
+            c0 = float(cc[b0]); c1 = float(cc[b1]); span = b1 - b0
+            self._svl_cvd_line.setData([b0, b1], [c0, c1], pen=pg.mkPen(*GOLD, 235, width=1.6))
+            cdots = []
+            for (_db, _dp) in lg["dots"]:
+                frac = (_db - b0) / span if span > 0 else 0.0
+                cdots.append({"pos": (_db, c0 + (c1 - c0) * frac), "size": 7,
+                              "brush": pg.mkBrush(255, 236, 140, 255), "pen": pg.mkPen(20, 20, 20, 255, width=1.0)})
+            self._svl_cvd_dots.setData(cdots)
+            self._svl_cvd_line.setVisible(True); self._svl_cvd_dots.setVisible(True)
+        elif self._svl_cvd_line is not None:
+            self._svl_cvd_line.setVisible(False); self._svl_cvd_dots.setVisible(False)
+
+    def _svl_hover_update(self, pt) -> None:
+        """Cursor near a SWING LINE -> show that swing's stats box (pinned bottom-right) + emphasise its dots + CVD
+        mirror. When the cursor is off every leg: show the DEVELOPING swing if Lock is on, else hide."""
+        lines = self._svl_lines
+        if not lines or not self.menu.layer_state("m10_svl_lines"):
+            self._svl_hovering = False; self._svl_hover_hide(); return
+        try:
+            psx, psy = self.vb.viewPixelSize()
+        except Exception:
+            return
+        if psx <= 0 or psy <= 0:
+            return
+        mx, my = pt.x(), pt.y()
+        best = None; best_d = 9.0                                    # px tolerance
+        for lg in lines:
+            d = self._seg_px_dist(mx, my, lg["b0"], lg["p0"], lg["b1"], lg["p1"], psx, psy)
+            if d < best_d:
+                best_d = d; best = lg
+        self._svl_hovering = best is not None
+        if best is None:
+            best = self._svl_dev_leg() if self.menu.layer_state("m10_svl_lock") else None
+            if best is None:
+                self._svl_hover_hide(); return
+        self._svl_show_box(best)
+
+    def _svl_lock_tick(self) -> None:
+        """Per-frame: with Lock on and the cursor NOT over a swing, keep the stats box pinned on the DEVELOPING
+        (most-recent forming) swing, updating live as it grows. No-op otherwise."""
+        if not (self.scanner_mode == "bucket_canvas" and self.menu.layer_state("m10_swinglvn")
+                and self.menu.layer_state("m10_svl_lines") and self.menu.layer_state("m10_svl_lock")):
+            return
+        if self._svl_hovering:                  # the hover box is showing the swing under the cursor -> leave it
+            return
+        dev = self._svl_dev_leg()
+        if dev is not None:
+            try:
+                self._svl_show_box(dev)
+            except RuntimeError:
+                self._svl_hover_hide()
 
     def _solo_trade_lines(self, active_user, key, turn_on) -> None:
         """EXCLUSIVE badge selection: showing one ENGULF overlay's entry/TP/SL trade lines HIDES every other opened
@@ -6815,6 +7089,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._update_svl_bias_badge()      # bottom-left LONG/SHORT + confidence% badge (Swing Low-Volume Area)
         except Exception:
             pass
+        try:
+            self._svl_lock_tick()              # Lock swing stats: pin the box on the developing swing when not hovering
+        except Exception:
+            pass
         if self.scanner_mode == "bucket_canvas":
             _s = _pc(); self._update_m10_dom(snap); self._perf_note("m10_dom", _s)
         elif self.scanner_mode == "depth_heatmap" and self.cob.isVisible():
@@ -6830,7 +7108,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._sync_cob()                                  # wall can't flatten the zoomed-in ladder; Y -> band
             self._perf_note("heatmap_cob", _s)
         _s = _pc(); self._redock_trackers(); self._perf_note("redock", _s)
-        _s = _pc(); self._refresh_parked_hover(); self._perf_note("parked_hover", _s)
+        try:
+            _s = _pc(); self._refresh_parked_hover(); self._perf_note("parked_hover", _s)
+        except Exception:
+            pass                 # a parked-hover error must NEVER abort the frame before the overlays draw below
         _s = _pc(); self._refresh_selection_stats(); self._perf_note("selection_stats", _s)   # live Magic-Selection aggregate
         if self._perf is not None:
             self._perf.note_frame((_pc() - _t0) * 1000.0)
@@ -7662,6 +7943,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # _ensure_canvas_panes recreates them when the pane is rebuilt.
             self.lower_vline = None; self.lower_hline = None; self.vpin_tag = None
             self.lower_vb = None; self._lower_proxy = None
+            # the swing-line CVD-mirror items lived on the CVD pane (a child of the just-deleted splitter_v) — null
+            # them too, so the next hover recreates them on the rebuilt pane instead of touching a deleted C++ object.
+            self._svl_cvd_line = None; self._svl_cvd_dots = None
 
     def _sync_kinetic_vb(self) -> None:
         """Keep the Mode 4 secondary price ViewBox glued to the main viewport.
@@ -10250,6 +10534,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._fit_cvd_y(x, _cl, _ch)     # frame the CVD in its own pane (skipped once the user owns Y)
             self._cvd_last_lo = _cl[-1] if _cl else None    # newest CVD bar -> _replay_follow keeps it on-screen
             self._cvd_last_hi = _ch[-1] if _ch else None
+            self._cvd_closes = _cc           # per-bar CVD close -> hovered-swing mirror onto the CVD pane
 
         # Deterministic horizontal lock: mirror the main X range onto the lower
         # panes every frame so the stacked panes stay in pixel-perfect lock-step.
