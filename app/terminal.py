@@ -642,6 +642,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cvd_qt = None            # lazy {green/red QBrush + QPen} for the CVD candles
         self._cvd_follow_y = True      # CVD Y auto-fits its visible data; a Y-scroll hands the user control
                                        # (double-click / a divider click re-arms it), mirroring _follow_y
+        self._cvd_last_lo = None       # newest CVD candle low/high -> replay-step Y-follow (keeps it on-screen)
+        self._cvd_last_hi = None
         self.splitter_v = None         # Mode 10 vertical splitter (upper/lower panes)
         self.cob_col = None            # Mode 10 COB column (cob + spacer), height-matched to the price pane
         self._cob_want = False         # user's COB-toggle intent (drives cob_col visibility in Mode 10)
@@ -7301,7 +7303,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self, "lower_plot", None) is not None:
             self.lower_plot.getViewBox().setXRange(mxr[0], mxr[1], padding=0)
         if getattr(self, "cvd_plot", None) is not None and self.cvd_plot.isVisible():
-            self.cvd_plot.getViewBox().setXRange(mxr[0], mxr[1], padding=0)
+            _cvb = self.cvd_plot.getViewBox()
+            _cvb.setXRange(mxr[0], mxr[1], padding=0)
+            # CVD Y: pan ONLY if the newest CVD bar left the window, preserving the user's zoom height — exactly the
+            # price pane's step-follow above, so the new CVD candle never lands off-screen after a Right/Shift+Right
+            # (and it works even after a manual pan, which otherwise disables the pane's own auto-fit).
+            if self._cvd_last_lo is not None and self._cvd_last_hi is not None:
+                (_, (cy0, cy1)) = _cvb.viewRange(); chg = cy1 - cy0
+                clo = self._cvd_last_lo; chi = self._cvd_last_hi
+                if chg > 0:
+                    if (chi - clo) > chg:                        # bar taller than the pane -> centre it
+                        mid = 0.5 * (chi + clo)
+                        _cvb.setYRange(mid - 0.5 * chg, mid + 0.5 * chg, padding=0)
+                    else:
+                        m = 0.08 * chg; dy = 0.0
+                        if chi > cy1:
+                            dy = chi - cy1 + m
+                        elif clo < cy0:
+                            dy = clo - cy0 - m
+                        if dy != 0.0:
+                            _cvb.setYRange(cy0 + dy, cy1 + dy, padding=0)
         self._follow_prev_range = self.vb.viewRange()            # keep the mouse-diff baseline current
 
     def _toggle_replay_autoplay(self) -> None:
@@ -10227,6 +10248,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _cpn.append(_q["gp"] if _cvd_up else _q["rp"])
             self._scan_handles["bc_cvd"].update_data(x, _co, _ch, _cl, _cc, _cbr, _cpn, 0.8, vx0, vx1)
             self._fit_cvd_y(x, _cl, _ch)     # frame the CVD in its own pane (skipped once the user owns Y)
+            self._cvd_last_lo = _cl[-1] if _cl else None    # newest CVD bar -> _replay_follow keeps it on-screen
+            self._cvd_last_hi = _ch[-1] if _ch else None
 
         # Deterministic horizontal lock: mirror the main X range onto the lower
         # panes every frame so the stacked panes stay in pixel-perfect lock-step.
