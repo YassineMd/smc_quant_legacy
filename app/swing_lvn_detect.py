@@ -465,6 +465,7 @@ def swing_lines(buckets, thr=None, divs=None):
         prior = range(max(0, m - SL_WLEGS), m)
         wpair = seg_by_N[1][m][0][0]                    # whole-leg (dP, dV)
         wbase = [seg_by_N[1][j][0][0] for j in prior if seg_by_N[1][j] is not None]
+        A = _swing_A(wbase, wpair); dP, dV = wpair
         segs = []
         for k in range(aN):
             base = [seg_by_N[aN][j][0][k] for j in prior
@@ -474,7 +475,22 @@ def swing_lines(buckets, thr=None, divs=None):
         for sb in splitbars:
             frac = (sb - b0) / (b1 - b0) if b1 > b0 else 0.0
             dots.append((sb, p0 + (p1 - p0) * frac))
+        # RETRACEMENT predictive verdict (study/retracement_predict.py — replicated 5m/15m/1h, durable both years):
+        #   a leg is a RETRACEMENT if |dP| < |dP| of the leg before it. For a retracement:
+        #     diverge (net CVD opposes the move) -> CONTINUATION ~76%; easy (A<=-0.5) OR extreme 4th-quarter A4
+        #     (|A4|>=0.5) -> REVERSAL risk ~52-58%; else neutral. Impulse legs (|dP| >= prior) carry no verdict.
+        dP_prev = seg_by_N[1][m - 1][0][0][0] if (m >= 1 and seg_by_N[1][m - 1] is not None) else None
+        is_retr = dP_prev is not None and abs(dP) < abs(dP_prev)
+        diverge = dV != 0 and ((dV > 0) != (dP > 0))
+        A4 = None                                            # 4th-quarter A (N=4), independent of the DISPLAY division
+        if seg_by_N[4][m] is not None and len(seg_by_N[4][m][0]) >= 4:
+            _b4 = [seg_by_N[4][j][0][3] for j in prior if seg_by_N[4][j] is not None and len(seg_by_N[4][j][0]) >= 4]
+            A4 = _swing_A(_b4, seg_by_N[4][m][0][3])
+        easy = A is not None and A <= -0.5
+        a4x = A4 is not None and abs(A4) >= 0.5
+        verdict = "impulse" if not is_retr else ("rev" if (easy or a4x) else ("cont" if diverge else "neutral"))
         out.append(dict(b0=b0, p0=p0, b1=b1, p1=p1, ends_high=eh, developing=dv, key=key,
                         b0_time=float(buckets[b0].get("start_time", 0.0) or 0.0) if 0 <= b0 < n else 0.0,
-                        N=aN, dots=dots, segs=segs, A=_swing_A(wbase, wpair), dP=wpair[0], dV=wpair[1]))
+                        N=aN, dots=dots, segs=segs, A=A, dP=dP, dV=dV,
+                        is_retr=is_retr, diverge=diverge, verdict=verdict, easy=easy, a4x=a4x))
     return out

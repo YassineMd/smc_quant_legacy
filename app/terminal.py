@@ -642,8 +642,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cvd_qt = None            # lazy {green/red QBrush + QPen} for the CVD candles
         self._cvd_follow_y = True      # CVD Y auto-fits its visible data; a Y-scroll hands the user control
                                        # (double-click / a divider click re-arms it), mirroring _follow_y
-        self._cvd_last_lo = None       # newest CVD candle low/high -> replay-step Y-follow (keeps it on-screen)
+        self._cvd_last_lo = None       # newest CVD candle low/high (kept for reference)
         self._cvd_last_hi = None
+        self._cvd_lows = None          # per-bar CVD low/high arrays -> replay-step Y RE-FIT (rescale as it develops)
+        self._cvd_highs = None
         self._cvd_closes = None        # per-bar CVD close -> mirror a hovered swing (start/end) onto the CVD pane
         self.splitter_v = None         # Mode 10 vertical splitter (upper/lower panes)
         self.cob_col = None            # Mode 10 COB column (cob + spacer), height-matched to the price pane
@@ -5510,10 +5512,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         seg_rows = "".join(
             "<tr><td style='%s'>A%d</td><td style='text-align:right'>%s</td></tr>" % (_lbl, i + 1, aspan(a, 12))
             for i, a in enumerate(segs))
+        # RETRACEMENT predictive verdict (study/retracement_predict.py, replicated 5m/15m/1h, durable both years)
+        _v = lg.get("verdict", "")
+        if _v == "cont":
+            _vhtml = ("<span style='color:#4ecb8d; font-weight:bold'>retrace &#8594; continuation</span>"
+                      "<span style='color:#727c8c'> &#183; unpaid CVD</span>")
+        elif _v == "rev":
+            _why = " + ".join(w for w, on in (("easy", lg.get("easy")), ("unstable end", lg.get("a4x"))) if on) or "unstable"
+            _vhtml = ("<span style='color:#ff6b6b; font-weight:bold'>retrace &#8594; reversal risk</span>"
+                      "<span style='color:#727c8c'> &#183; %s</span>" % _why)
+        elif _v == "neutral":
+            _vhtml = "<span style='color:#8b93a3'>retrace &#183; neutral</span>"
+        else:
+            _vhtml = "<span style='color:#8b93a3'>impulse</span>"
         return (
             "<div style='font-family:Consolas; color:#e6e9ef; white-space:nowrap'>"
-            "<div style='font-size:13px; font-weight:bold; color:%s; padding-bottom:5px'>%s %s swing%s"
+            "<div style='font-size:13px; font-weight:bold; color:%s; padding-bottom:3px'>%s %s swing%s"
             " <span style='color:#727c8c; font-size:10px; font-weight:normal'>&#247;%d</span></div>"
+            "<div style='font-size:11px; padding-bottom:5px'>%s</div>"
             "<table cellspacing='0' cellpadding='2' style='font-size:12px'>"
             "<tr><td style='%s'>Move</td><td style='%s; color:%s'>%+.2f%%</td></tr>"
             "<tr><td style='%s'>CVD</td><td style='%s; color:%s'>%s</td></tr>"
@@ -5523,7 +5539,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             "<div style='font-size:10px; color:#727c8c; padding-bottom:3px'>%s</div>"
             "<table cellspacing='0' cellpadding='2' style='font-size:11px; color:#b9c0cc'>%s</table>"
             "</div>"
-        ) % (dcol, arrow, ("UP" if up else "DOWN"), dev, lg.get("N", 2),
+        ) % (dcol, arrow, ("UP" if up else "DOWN"), dev, lg.get("N", 2), _vhtml,
              _lbl, _num, pcol, lg["dP"],
              _lbl, _num, vcol, MinimalTerminalWindow._fmt_kmb(lg["dV"]),
              aspan(A, 15), (acol(A) if A is not None else "#6b7280"), verb(A), meaning,
@@ -7586,24 +7602,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self, "cvd_plot", None) is not None and self.cvd_plot.isVisible():
             _cvb = self.cvd_plot.getViewBox()
             _cvb.setXRange(mxr[0], mxr[1], padding=0)
-            # CVD Y: pan ONLY if the newest CVD bar left the window, preserving the user's zoom height — exactly the
-            # price pane's step-follow above, so the new CVD candle never lands off-screen after a Right/Shift+Right
-            # (and it works even after a manual pan, which otherwise disables the pane's own auto-fit).
-            if self._cvd_last_lo is not None and self._cvd_last_hi is not None:
-                (_, (cy0, cy1)) = _cvb.viewRange(); chg = cy1 - cy0
-                clo = self._cvd_last_lo; chi = self._cvd_last_hi
-                if chg > 0:
-                    if (chi - clo) > chg:                        # bar taller than the pane -> centre it
-                        mid = 0.5 * (chi + clo)
-                        _cvb.setYRange(mid - 0.5 * chg, mid + 0.5 * chg, padding=0)
-                    else:
-                        m = 0.08 * chg; dy = 0.0
-                        if chi > cy1:
-                            dy = chi - cy1 + m
-                        elif clo < cy0:
-                            dy = clo - cy0 - m
-                        if dy != 0.0:
-                            _cvb.setYRange(cy0 + dy, cy1 + dy, padding=0)
+            # CVD Y: RE-FIT to the CVD bars now visible so the pane rescales as the swing develops (not just pans) —
+            # CVD is cumulative and can swing hard, so a fit keeps the whole developing swing on screen each step.
+            _lows = self._cvd_lows; _highs = self._cvd_highs
+            if _lows and _highs:
+                _w0 = max(0, int(math.floor(mxr[0]))); _w1 = min(len(_lows), int(math.ceil(mxr[1])) + 1)
+                if _w1 <= _w0:
+                    _w0, _w1 = 0, len(_lows)
+                _clo = min(_lows[_w0:_w1]); _chi = max(_highs[_w0:_w1])
+                if _chi > _clo:
+                    _pad = (_chi - _clo) * 0.08
+                    _cvb.setYRange(_clo - _pad, _chi + _pad, padding=0)
         self._follow_prev_range = self.vb.viewRange()            # keep the mouse-diff baseline current
 
     def _toggle_replay_autoplay(self) -> None:
@@ -10463,6 +10472,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._scanner_last_low = lows[-1]; self._scanner_last_high = highs[-1]
         if self._scanner_needs_autofit:
             self._follow_x = self._follow_y = True
+            self._cvd_follow_y = True         # re-arm the CVD pane's Y too, so BOTH panes follow live on X and Y
             self._scanner_needs_autofit = False
         if self._follow_x or self._follow_y:
             self._roll_to_live_edge(len(x), lows, highs)
@@ -10532,8 +10542,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _cpn.append(_q["gp"] if _cvd_up else _q["rp"])
             self._scan_handles["bc_cvd"].update_data(x, _co, _ch, _cl, _cc, _cbr, _cpn, 0.8, vx0, vx1)
             self._fit_cvd_y(x, _cl, _ch)     # frame the CVD in its own pane (skipped once the user owns Y)
-            self._cvd_last_lo = _cl[-1] if _cl else None    # newest CVD bar -> _replay_follow keeps it on-screen
+            self._cvd_last_lo = _cl[-1] if _cl else None
             self._cvd_last_hi = _ch[-1] if _ch else None
+            self._cvd_lows = _cl; self._cvd_highs = _ch       # visible-window CVD Y re-fit in _replay_follow
             self._cvd_closes = _cc           # per-bar CVD close -> hovered-swing mirror onto the CVD pane
 
         # Deterministic horizontal lock: mirror the main X range onto the lower
