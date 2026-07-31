@@ -482,7 +482,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         for key, label, default in (("m10_svl_zones", "· LVA zones", True),
                                      ("m10_svl_lines", "· Swing lines", True),
                                      ("m10_svl_bias", "· Bias badge", True),
-                                     ("m10_svl_lock", "· Lock swing stats", False)):
+                                     ("m10_svl_lock", "· Lock swing stats", False),
+                                     ("m10_svl_proj", "· Projections", False)):
             cb = QtWidgets.QCheckBox(label)
             cb.setChecked(default)
             cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level

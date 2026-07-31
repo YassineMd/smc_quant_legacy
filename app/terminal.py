@@ -979,6 +979,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._svl_hovering = False               # True while the cursor is on a swing (Lock defers to the hover box)
         self._svl_cvd_line = None                # hovered swing mirrored onto the CVD pane (start -> end)
         self._svl_cvd_dots = None                # its division dots on that CVD line
+        self._svl_proj = None                    # PROJECTION overlay (m10_svl_proj): retrace band (purple) + follow band (green)
         self._svl_sig = None; self._svl_drawn = False
         # Swing-LVN BIAS badge (bottom-left) — LONG/SHORT + confidence% from the swing/zone structure.
         self._svl_bias = None                    # cached swing_lvn_detect.bias() result
@@ -1794,6 +1795,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif key == "m10_svl_lock":
             if not on and not self._svl_hovering:
                 self._svl_hover_hide()              # Lock off + not hovering -> drop the pinned developing-swing box
+        elif key == "m10_svl_proj":
+            if not on:
+                self._svl_proj_hide()               # Projections off -> drop the retrace/follow bands now
         elif key == "m10_prevday_vp":
             if not on:                              # per-prev-day VP -> hide now (draw-gate re-adds on ON)
                 self._hide_prevday_vp()
@@ -5367,6 +5371,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _it.setVisible(False)
                 except RuntimeError:
                     setattr(self, _name, None)      # deleted by a canvas teardown -> drop the ref, recreate lazily
+        self._svl_proj_hide()
         self._svl_lines = []
         self._svl_bias = None
         self._svl_sig = None; self._svl_drawn = False
@@ -5625,11 +5630,90 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if d < best_d:
                 best_d = d; best = lg
         self._svl_hovering = best is not None
+        # PROJECTION follows the SAME leg as the box, but auto-shows on the developing swing regardless of Lock:
+        # hovered leg if the cursor is on one, else the developing swing.
+        self._svl_proj_update(best if best is not None else self._svl_dev_leg())
         if best is None:
             best = self._svl_dev_leg() if self.menu.layer_state("m10_svl_lock") else None
             if best is None:
                 self._svl_hover_hide(); return
         self._svl_show_box(best)
+
+    def _svl_draw_projection(self, lg) -> None:
+        """Retracement + follow-through PROJECTION anchored on swing `lg` (treated as the impulse being retraced).
+        Ratios from study/retracement_measure.py (CVD-divergent cohort, median [p25..p75]): the retrace runs
+        70% [50..84] of the swing, then the follow-through move runs 135% [95..190] of THAT retrace. Each is a filled
+        RECTANGLE spanning the min..max expected (neon-purple pullback / neon-green continuation) with a DASHED line
+        inside at the high-probability (median) level, projected forward in bar-time from the swing's extreme (b1).
+        A canvas teardown that deletes an item raises RuntimeError -> caller heals."""
+        # ANCHOR on the IMPULSE: if `lg` is a retracement-in-progress, project from the leg it is retracing (its
+        # predecessor) so the purple band shows where THIS pullback is heading; else `lg` is itself the impulse.
+        imp = lg
+        if lg.get("is_retr"):
+            _i = next((k for k, _l in enumerate(self._svl_lines) if _l is lg), -1)
+            if _i > 0:
+                imp = self._svl_lines[_i - 1]
+        b0 = imp["b0"]; p0 = imp["p0"]; b1 = imp["b1"]; p1 = imp["p1"]
+        d = p1 - p0
+        if b1 <= b0 or abs(d) < 1e-9:
+            self._svl_proj_hide(); return
+        r_lo = p1 - 0.50 * d; r_hi = p1 - 0.84 * d; r_md = p1 - 0.70 * d     # retrace box 50..84% edges, 70% line
+        _rmag = 0.70 * d                                                     # median retrace magnitude (signed toward p0)
+        f_lo = r_md + 0.95 * _rmag; f_hi = r_md + 1.90 * _rmag; f_md = r_md + 1.35 * _rmag   # follow 95..190%, line 135%
+        # Both boxes project forward from the impulse extreme b1; purple (pullback) sits below, green (continuation)
+        # above (for an up-impulse), so overlapping x is unambiguous AND both stay visible in the right margin.
+        dur = max(6, min(b1 - b0, 30))
+        x0 = b1; xw = dur
+        PUR = (190, 70, 255); GRN = (30, 235, 120)
+        if self._svl_proj is None:
+            pr = {"rrect": QtWidgets.QGraphicsRectItem(), "frect": QtWidgets.QGraphicsRectItem(),
+                  "rdash": pg.PlotDataItem(), "fdash": pg.PlotDataItem()}
+            for _k, _z in (("rrect", 1), ("frect", 1)):
+                pr[_k].setZValue(_z); self.vb.addItem(pr[_k], ignoreBounds=True)
+            for _k, _z in (("rdash", 27), ("fdash", 27)):
+                pr[_k].setZValue(_z); self.plot.addItem(pr[_k], ignoreBounds=True)
+            self._svl_proj = pr
+        pr = self._svl_proj
+        # AREA = rectangle spanning min..max expected (bordered edges); DASHED LINE inside = high-probability level.
+        _ry0 = min(r_lo, r_hi); pr["rrect"].setRect(x0, _ry0, xw, max(1e-9, abs(r_hi - r_lo)))
+        pr["rrect"].setBrush(pg.mkBrush(*PUR, 34)); pr["rrect"].setPen(pg.mkPen(None))     # softer fill, NO border
+        _fy0 = min(f_lo, f_hi); pr["frect"].setRect(x0, _fy0, xw, max(1e-9, abs(f_hi - f_lo)))
+        pr["frect"].setBrush(pg.mkBrush(*GRN, 34)); pr["frect"].setPen(pg.mkPen(None))
+        _rp = pg.mkPen(*PUR, 215, width=1.0); _rp.setCosmetic(True); _rp.setDashPattern([2.5, 7])   # thin, widely spaced
+        pr["rdash"].setData([x0, x0 + xw], [r_md, r_md], pen=_rp)
+        _fp = pg.mkPen(*GRN, 215, width=1.0); _fp.setCosmetic(True); _fp.setDashPattern([2.5, 7])
+        pr["fdash"].setData([x0, x0 + xw], [f_md, f_md], pen=_fp)
+        for _it in pr.values():
+            _it.setVisible(True)
+
+    def _svl_proj_hide(self) -> None:
+        """Hide the projection bands + dashed target lines. Self-heals a deleted C++ object by dropping the ref."""
+        if not self._svl_proj:
+            return
+        for _k in list(self._svl_proj.keys()):
+            try:
+                self._svl_proj[_k].setVisible(False)
+            except RuntimeError:
+                self._svl_proj = None; return       # torn down by a canvas rebuild -> recreate lazily
+
+    def _svl_proj_update(self, target) -> None:
+        """Draw the retrace+follow projection for `target` leg, or hide it when Projections / lines / the master
+        toggle are off or there is no target. Fail-safe against a mid-frame canvas teardown."""
+        if not (self.scanner_mode == "bucket_canvas" and self.menu.layer_state("m10_swinglvn")
+                and self.menu.layer_state("m10_svl_lines") and self.menu.layer_state("m10_svl_proj")
+                and target is not None):
+            self._svl_proj_hide(); return
+        try:
+            self._svl_draw_projection(target)
+        except RuntimeError:
+            self._svl_proj_hide()
+
+    def _svl_proj_tick(self) -> None:
+        """Per-frame: auto-show the retrace+follow projection on the DEVELOPING swing whenever the cursor is not on a
+        leg (the hover path handles the hovered case). No-op / hide when Projections is off."""
+        if self._svl_hovering:
+            return
+        self._svl_proj_update(self._svl_dev_leg())
 
     def _svl_lock_tick(self) -> None:
         """Per-frame: with Lock on and the cursor NOT over a swing, keep the stats box pinned on the DEVELOPING
@@ -7107,6 +7191,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pass
         try:
             self._svl_lock_tick()              # Lock swing stats: pin the box on the developing swing when not hovering
+        except Exception:
+            pass
+        try:
+            self._svl_proj_tick()              # Projections: auto-show retrace/follow bands on the developing swing
         except Exception:
             pass
         if self.scanner_mode == "bucket_canvas":
