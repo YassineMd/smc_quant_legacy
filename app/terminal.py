@@ -5301,7 +5301,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 ylo = float(lv.get("zlo", b0.get("low", 0.0)) or 0.0); yhi = float(lv.get("zhi", b0.get("high", 0.0)) or 0.0)
                 if yhi <= ylo:                                       # degenerate pivot candle -> a hair around the level
                     ylo, yhi = price * (1 - 5e-4), price * (1 + 5e-4)
-                rects.append((i0, n - 1, ylo, yhi, rgb, _t0))
+                # extend a few bars PAST the live edge so the (thick) right border clears the newest candle instead of
+                # slicing through it when price is sitting inside the zone
+                rects.append((i0, n - 1 + 4, ylo, yhi, rgb, _t0))
                 continue
             segs = lv.get("segs") or []                              # MITIGATED -> line segments at the level price
             if not segs:
