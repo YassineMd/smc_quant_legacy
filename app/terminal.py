@@ -594,6 +594,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._replay_autoplay_timer = QtCore.QTimer(self)   # Ctrl+Right auto-play: reveal one candle per tick (Left/Right stops it)
         self._replay_autoplay_timer.setInterval(config.REPLAY_AUTOPLAY_MS)
         self._replay_autoplay_timer.timeout.connect(self._replay_autoplay_tick)
+        # MICRO-STEP (Shift+Right, recon replay only): grow the NEXT higher-tf candle one 1m constituent at a time,
+        # so a higher-tf bar builds up minute-by-minute (approx real conditions) instead of appearing whole. State:
+        self._micro_k = 0                  # # of 1m constituents of the next bucket currently revealed (0 = normal)
+        self._micro_subs = None            # cached ascending 1m constituents of the next bucket
+        self._micro_next = None            # the true (full) next higher-tf bucket the partial snaps to on completion
+        self._micro_edge = None            # the _replay_edge_t this micro session is anchored at (edge move => re-arm)
         # ABSOLUTE bucket index: add this to a filtered-local idx to get the bucket's permanent history.db id
         # (stable all-time index; first bucket ever saved = 1). 0 = legacy local idx (daemon hasn't shipped
         # total_closed yet). Recomputed in _build_scanner_buckets.
@@ -959,9 +965,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # RECENT-SWING LOW-VOLUME AREA indicator (hamburger m10_swinglvn) — every still-UNMITIGATED swing-leg LVN ZONE
         # (electric-purple) forecasting S/R (up-leg = support / down-leg = resistance); a zone persists until broken.
         self._svl_slots = None                   # list of per-zone dicts of pg items (lazy-built, one slot per live zone)
-        self._svl_fc_cont = None                 # forecast: CONTINUATION line (gray dashed, with the move)
-        self._svl_fc_retr = None                 # forecast: RETRACEMENT line (gray dashed, against the move)
-        self._svl_fc_dots = None                 # forecast: the 4 min/max dots
         self._svl_sig = None; self._svl_drawn = False
         # Swing-LVN BIAS badge (bottom-left) — LONG/SHORT + confidence% from the swing/zone structure.
         self._svl_bias = None                    # cached swing_lvn_detect.bias() result
@@ -1365,6 +1368,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("Right"), self, activated=self._on_sel_right)   # +1 bucket / replay: next candle
         QtGui.QShortcut(QtGui.QKeySequence("Left"), self, activated=self._on_sel_left)     # -1 bucket / replay: prev candle
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Right"), self, activated=self._toggle_replay_autoplay)  # replay: auto-play (Left/Right stops)
+        QtGui.QShortcut(QtGui.QKeySequence("Shift+Right"), self, activated=self._replay_microstep)  # replay: grow next candle by 1m (recon)
         # quick toggles: 's' = Stats Box overlay, 'd' = Vector Drawing toolbar. Flip the menu
         # checkbox so the menu stays in sync and the existing show/hide + teardown logic runs.
         QtGui.QShortcut(QtGui.QKeySequence("S"), self,
@@ -5298,9 +5302,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _slot in self._svl_slots:
                 for _it in _slot.values():
                     _it.setVisible(False)
-        for _it in (self._svl_fc_cont, self._svl_fc_retr, self._svl_fc_dots):
-            if _it is not None:
-                _it.setVisible(False)
         self._svl_bias = None
         self._svl_sig = None; self._svl_drawn = False
 
@@ -5347,34 +5348,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _slot["lbl"].setPos(x_r, (zlo + zhi) / 2.0)
             for _it in (_slot["band"], _slot["bandlo"], _slot["bandhi"], _slot["lvn"], _slot["lbl"]):
                 _it.setVisible(True)
-        # FORECAST: two gray dashed lines from the current swing extreme — CONTINUATION (with the move) + RETRACEMENT
-        # (against it) — each with a small "min" (at least) + large "max" (maximum) dot. Re-aims each frame (causal).
-        try:
-            fc = swing_lvn_detect.forecast(filtered)
-        except Exception:
-            fc = None
-        if self._svl_fc_cont is None:
-            self._svl_fc_cont = pg.PlotDataItem(); self._svl_fc_retr = pg.PlotDataItem()
-            self._svl_fc_dots = pg.ScatterPlotItem(pxMode=True)
-            for _it, _z in ((self._svl_fc_cont, 28), (self._svl_fc_retr, 28), (self._svl_fc_dots, 35)):
-                _it.setZValue(_z); self.plot.addItem(_it, ignoreBounds=True)
-        if fc:
-            GRY = (172, 172, 178)
-            b1, p1 = fc["b1"], fc["p1"]; c1, c2 = fc["cont"]; r1, r2 = fc["retr"]
-            _gpen = pg.mkPen(*GRY, 205, width=1.3, style=QtCore.Qt.DashLine)
-            self._svl_fc_cont.setData([b1, c1[0], c2[0]], [p1, c1[1], c2[1]], pen=_gpen)
-            self._svl_fc_retr.setData([b1, r1[0], r2[0]], [p1, r1[1], r2[1]], pen=_gpen)
-            _gb = pg.mkBrush(*GRY, 235); _gpn = pg.mkPen(235, 235, 240, 255, width=1.0)
-            self._svl_fc_dots.setData([
-                {"pos": c1, "symbol": "o", "size": 7, "brush": _gb, "pen": _gpn},    # continuation MIN (at least)
-                {"pos": c2, "symbol": "o", "size": 12, "brush": _gb, "pen": _gpn},   # continuation MAX (maximum)
-                {"pos": r1, "symbol": "o", "size": 7, "brush": _gb, "pen": _gpn},    # retracement MIN (at least)
-                {"pos": r2, "symbol": "o", "size": 12, "brush": _gb, "pen": _gpn}])  # retracement MAX (maximum)
-            for _it in (self._svl_fc_cont, self._svl_fc_retr, self._svl_fc_dots):
-                _it.setVisible(True)
-        else:
-            for _it in (self._svl_fc_cont, self._svl_fc_retr, self._svl_fc_dots):
-                _it.setVisible(False)
         try:
             self._svl_bias = swing_lvn_detect.bias(filtered, zones=res)   # bottom-left LONG/SHORT + confidence badge
         except Exception:
@@ -7077,6 +7050,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """User moved the Zero Point: flush geometry and redraw from the new anchor. In Replay Mode the Start Date
         is the replay START, so re-seat the cursor there before the rebuild."""
         if self._replay_on:
+            self._micro_reset()               # a Start-Date re-seat cancels any in-progress 1m micro-grow
             self._replay_edge_t = self._replay_snap_to_bucket(float(self.menu.scan_start_unix()))
             self._replay_start_t = self._replay_edge_t   # anchor the LEFT edge here; a step moves only the cursor
             self._replay_remember()           # persist the new replay position (debounced)
@@ -7132,8 +7106,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not filt:
             return
         et = float(filt[-1].get("end_time", 0.0) or 0.0)
-        if self._sim_fed_edge is None:       # first frame after replay-on: baseline the edge, don't dump the backlog
+        # Re-baseline (don't feed) on the FIRST frame after replay-on AND whenever the cursor moved BACK — so a rewind
+        # to set up a trade, then step forward, RE-FEEDS that ground instead of staying blocked behind the old high-
+        # water mark (a closed trade is already removed from the drawer, so re-feeding can't double-record it). Seeding
+        # the reference price here means a bracket armed before the next step still has a valid entry-cross reference.
+        if self._sim_fed_edge is None or et < self._sim_fed_edge:
             self._sim_fed_edge = et
+            self.drawer.seed_price(float(filt[-1].get("close", filt[-1].get("close_price", 0.0)) or 0.0))
             return
         last = self._sim_fed_edge
         if et <= last:
@@ -7163,6 +7142,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (candles, VPIN, pivot, selection, HM) reads the clipped frame, so it behaves exactly as live did at that
         moment. OFF: back to the real live edge. Right arrow steps one candle (_on_sel_right)."""
         self._replay_on = bool(on)
+        self._micro_reset()          # never carry a partial 1m micro-grow across a replay on/off transition
         # switch the position-tool paper account. The REPLAY account is ephemeral: reset on BOTH transitions
         # (so it's clean entering AND auto-cleared leaving), the LIVE account is untouched here.
         self._sim_fed_edge = None
@@ -7254,6 +7234,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         frame, so it stays causal."""
         if not self._replay_on or self._replay_edge_t is None:
             return
+        self._micro_reset()          # a full-bucket step supersedes any in-progress 1m micro-grow
         snap = self._last_snap or self.worker.snapshot()
         # step through the FULL available sequence — the loaded cold-archive window PLUS the live closed buckets —
         # so an archive-region replay advances bar-by-bar instead of jumping to (or stalling at) the live buffer.
@@ -7313,6 +7294,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         dy = lo - vy0 - m
                     if dy != 0.0:
                         self.vb.setYRange(vy0 + dy, vy1 + dy, padding=0)
+        # Propagate the price X onto the stacked panes (CVD + VPIN/lower) so they follow the cursor in LOCKSTEP.
+        # The per-frame X-mirror lives in _scan_bucket_canvas, but in replay that render is cursor-sig-gated and
+        # does NOT re-run after this follow scroll, so without this the CVD/VPIN panes lag a step behind the price.
+        mxr = self.vb.viewRange()[0]
+        if getattr(self, "lower_plot", None) is not None:
+            self.lower_plot.getViewBox().setXRange(mxr[0], mxr[1], padding=0)
+        if getattr(self, "cvd_plot", None) is not None and self.cvd_plot.isVisible():
+            self.cvd_plot.getViewBox().setXRange(mxr[0], mxr[1], padding=0)
         self._follow_prev_range = self.vb.viewRange()            # keep the mouse-diff baseline current
 
     def _toggle_replay_autoplay(self) -> None:
@@ -7337,6 +7326,86 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Halt Ctrl+Right auto-play (idempotent)."""
         if self._replay_autoplay_timer.isActive():
             self._replay_autoplay_timer.stop()
+
+    def _micro_reset(self) -> None:
+        """Clear any in-progress 1m micro-grow (back to whole-bucket stepping)."""
+        self._micro_k = 0; self._micro_subs = None; self._micro_next = None; self._micro_edge = None
+
+    def _micro_next_bucket(self):
+        """The first recon bucket whose close is strictly AFTER the cursor — the one a micro-grow builds up."""
+        et = float(self._replay_edge_t)
+        for b in (self._arch_win or []):
+            if float(b.get("end_time", 0.0) or 0.0) > et:
+                return b
+        return None
+
+    def _micro_partial(self, subs_k, full_bucket):
+        """Aggregate the first k 1m constituents into ONE developing higher-tf wire bucket. Starts from a copy of the
+        true next bucket (every field present & correctly shaped) and overrides the developing values (OHLC, volumes,
+        footprint, partial end_time). Point-in-time fields (OI, halves) keep the full bucket's values — a deliberate
+        approximation; the candle / footprint / volume the eye watches are exact for the revealed slice. None if the
+        slice can't form a valid candle (caller then just steps)."""
+        if not subs_k:
+            return None
+        o = float(subs_k[0].get("open_price", subs_k[0].get("open", 0.0)) or 0.0)
+        c = float(subs_k[-1].get("close_price", subs_k[-1].get("close", 0.0)) or 0.0)
+        highs = [float(s.get("high", 0.0) or 0.0) for s in subs_k if float(s.get("high", 0.0) or 0.0) > 0.0]
+        lows = [float(s.get("low", 0.0) or 0.0) for s in subs_k if float(s.get("low", 0.0) or 0.0) > 0.0]
+        if o <= 0.0 or c <= 0.0 or not highs or not lows:
+            return None
+        bv = sum(float(s.get("buy_vol", 0.0) or 0.0) for s in subs_k)
+        sv = sum(float(s.get("sell_vol", 0.0) or 0.0) for s in subs_k)
+        cv = sum(float(s.get("curr_vol", 0.0) or 0.0) for s in subs_k) or (bv + sv)
+        lv: dict = {}
+        for s in subs_k:
+            for pr, v in (s.get("levels") or {}).items():
+                e = lv.get(pr)
+                if e is None:
+                    e = {"b": 0.0, "s": 0.0}; lv[pr] = e
+                e["b"] += float(v.get("b", 0.0) or 0.0); e["s"] += float(v.get("s", 0.0) or 0.0)
+        b = dict(full_bucket)
+        # write BOTH wire variants: the terminal frame uses full_snapshot's open/close (read first by _ohlc), while
+        # raw-archive / study code reads open_price/close_price — set both so the developing values win either way.
+        b["open"] = b["open_price"] = o; b["close"] = b["close_price"] = c
+        b["high"] = max(highs); b["low"] = min(lows)
+        b["buy_vol"] = bv; b["sell_vol"] = sv; b["curr_vol"] = cv
+        b["end_time"] = float(subs_k[-1].get("end_time", b.get("end_time", 0.0)) or 0.0)
+        b["levels"] = lv
+        if lv:
+            b["poc_price"] = float(max(lv.items(), key=lambda kv: kv[1]["b"] + kv[1]["s"])[0])
+        return b
+
+    def _replay_microstep(self) -> None:
+        """Shift+Right in Replay Mode (recon only): reveal ONE more 1m constituent of the NEXT higher-tf candle, so the
+        bar grows minute-by-minute (approx real conditions). Re-arms when the cursor moved; on the last constituent it
+        snaps to the true stored bucket (a normal +1 step, keeping the closed bar exact). Outside recon replay it just
+        does a full-bucket step (the 1m stream is only guaranteed pre-cutoff)."""
+        if not self._replay_on or self._replay_edge_t is None:
+            return
+        self._replay_stop_autoplay()
+        if not self._in_recon_replay():
+            self._advance_replay(1); return
+        if self._micro_k == 0 or self._micro_edge != self._replay_edge_t or not self._micro_subs:
+            nb = self._micro_next_bucket()
+            if nb is None:
+                return                                            # at the recon wall -> nothing left to grow
+            cs = float(nb.get("start_time", 0.0) or 0.0); ce = float(nb.get("end_time", 0.0) or 0.0)
+            try:
+                subs = recon_replay.window_by_time("1m", cs, ce) or []
+            except Exception:
+                subs = []
+            subs = [s for s in subs if cs <= float(s.get("start_time", 0.0) or 0.0) < ce]
+            self._micro_subs = subs; self._micro_next = nb; self._micro_edge = self._replay_edge_t; self._micro_k = 0
+        self._micro_k += 1
+        if not self._micro_subs or self._micro_k >= len(self._micro_subs):
+            self._micro_reset()                                   # last constituent (or none) -> snap to the true bucket
+            self._advance_replay(1)
+            return
+        self._scanner_bucket_sig = None; self._last_scanner_sig = None   # partial frame -> force rebuild + redraw
+        prev_n = self._scanner_frame_n
+        (pvx0, pvx1), _ = self.vb.viewRange()
+        self._on_timer()
+        self._replay_follow(prev_n, pvx0, pvx1)
 
     # ------------------------------------------------------------------
     # Cold-archive GCS fetch-if-missing (on-demand history download)
@@ -7626,7 +7695,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # this only short-circuits genuine idle. (Normal mode is untouched.)
         if (self._replay_on and self._replay_edge_t is not None
                 and self._scanner_bucket_cache is not None and self._scanner_bucket_sig is not None
-                and self._scanner_bucket_sig[-1] == self._replay_edge_t):
+                and self._scanner_bucket_sig[4] == self._replay_edge_t
+                and self._scanner_bucket_sig[5] == self._micro_k):
             return self._scanner_bucket_cache
         snap = self._last_snap or self.worker.snapshot()
         closed_list: list[dict] = snap.get("closed_buckets", []) or []
@@ -7701,6 +7771,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             keep = min(max(m - _lo, min(m, config.REPLAY_MIN_BUCKETS)), config.REPLAY_WINDOW)
             _rk = m - keep
             combined = closed_list[_rk:m]
+            # MICRO-STEP: append the DEVELOPING next higher-tf candle, grown from its first _micro_k 1m constituents
+            # (Shift+Right, recon replay only). It rides the frame exactly like a live forming edge bucket; the final
+            # constituent snaps to the true stored bucket via a normal +1 step, so the closed bar stays exact.
+            if self._micro_k > 0 and self._micro_subs and self._micro_edge == self._replay_edge_t and self._micro_next:
+                _pk = min(self._micro_k, len(self._micro_subs))
+                _partial = self._micro_partial(self._micro_subs[:_pk], self._micro_next)
+                if _partial is not None:
+                    combined = combined + [_partial]
+                    _mmx_forming = True                        # last bar is forming -> mmxskew treats it as skip_last
             if getattr(self, "_replay_dbg", False):
                 _wk = len(closed_list) - len(self._arch_win or [])
                 _sp = ((float(combined[-1].get('end_time', 0)) - float(combined[0].get('end_time', 0))) / 3600.0) if combined else 0.0
@@ -7731,7 +7810,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # rebuild the frame + re-run the pivot scan ~every live close (the lag). Key ONLY on the cursor + clip length
         # + anchor, so replay rebuilds exclusively on a step/date change. (offset == the fixed archive bid either way.)
         sig = (len(combined), (0.0 if _replay else round(active.get("curr_vol", 0.0), 1)),
-               anchor_unix, (None if _replay else total_closed), (self._replay_edge_t if _replay else None))
+               anchor_unix, (None if _replay else total_closed), (self._replay_edge_t if _replay else None),
+               self._micro_k)
         if sig == self._scanner_bucket_sig:
             return self._scanner_bucket_cache
 
@@ -7809,7 +7889,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # and keying on those made the full recompute fire at 20 Hz for off-screen data (the lag). Key ONLY on
             # what actually changes the replay frame: the cursor, the Start Date, and the mode. Idle replay => skip,
             # so a step is the only work. (A step / date change also clears _last_scanner_sig, so it never sticks.)
-            current_sig = ("replay", self._replay_edge_t, self.menu.scan_start_unix(), self.scanner_mode)
+            current_sig = ("replay", self._replay_edge_t, self.menu.scan_start_unix(), self.scanner_mode, self._micro_k)
         else:
             # Mode-10 absorption marks must repaint on a lifecycle/geometry change even when the bucket set and
             # live-edge volume are static (a QUIET market): without this, an active->dead flip leaves (len,

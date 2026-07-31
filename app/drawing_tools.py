@@ -831,6 +831,8 @@ class DrawingController(QtCore.QObject):
         self._paper_account = None            # live paper-trade sim: set via set_paper_account()
         self._on_trade_closed = None
         self._sim_state: dict = {}            # uid -> sim snapshot, carried across index-bracket recreation
+        self._cur_px = None                   # last price fed to on_price -> seeds a fresh bracket's cross-reference
+        #                                       (so a first fed price that GAPS over the entry still fills)
 
         # live press-drag-release state
         self._live: Optional[DrawnShape] = None   # in-progress shape during a drag
@@ -908,6 +910,10 @@ class DrawingController(QtCore.QObject):
         uid = getattr(br, "uid", None)
         if uid and uid in self._sim_state:
             br.sim_restore(self._sim_state[uid])           # resume a live/closed sim after a recreate
+        elif br.state == "PENDING" and br._last_px is None and self._cur_px is not None:
+            br._last_px = float(self._cur_px)              # seed the cross-reference to the CURRENT price, so a first
+            #                                                fed price that gaps over the entry still fills (replay ticks
+            #                                                are whole-candle jumps -> without this the fill is missed)
         br._on_close = self._handle_close                  # TP/SL/× -> record to the ledger + REMOVE the bracket
         br._on_close_click = self._manual_close            # the × close button
 
@@ -948,6 +954,12 @@ class DrawingController(QtCore.QObject):
         if uid and getattr(br, "_acct", None) is not None:
             self._sim_state[uid] = br.sim_snapshot()
 
+    def seed_price(self, px: float) -> None:
+        """Prime the cross-reference price without running a sim tick (e.g. the replay cursor's close at baseline),
+        so a bracket armed BEFORE the first fed tick still gets a valid reference for its entry-cross check."""
+        if px and px > 0:
+            self._cur_px = float(px)
+
     def on_price(self, price: float, ts: float) -> None:
         """Feed the live price to every bracket's sim (called each frame). Lazily arms a not-yet-armed
         bracket first — including a just-recreated index bracket, whose uid is now finalised so its saved
@@ -961,6 +973,8 @@ class DrawingController(QtCore.QObject):
                 br.on_price(price, ts)
             except Exception:
                 pass
+        if price and price > 0:
+            self._cur_px = float(price)      # remember the reference so the NEXT fresh arm seeds its cross-check
 
     # ------------------------------------------------------------------
     def set_tool(self, tool: Optional[str]) -> None:
