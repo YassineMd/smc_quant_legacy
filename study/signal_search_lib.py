@@ -81,8 +81,8 @@ def _trend(a, b):
     return 0
 
 
-def build_features(tf="1h"):
-    _, raws, _ = load_archive(tf, root=RECON)
+def build_features(tf="1h", root=RECON):
+    _, raws, _ = load_archive(tf, root=root)
     A = []
     for r in raws:
         o = r.get("open_price"); c = r.get("close_price"); h = r.get("high"); l = r.get("low")
@@ -135,16 +135,16 @@ def _safe_abs(A, i):
         return None
 
 
-def _cache_path(tf):
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", "signal_feat_%s.pkl" % tf)
+def _cache_path(tf, tag=""):
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", "signal_feat_%s%s.pkl" % (tf, tag))
 
 
-def load_features(tf="1h"):
-    cp = _cache_path(tf)
+def load_features(tf="1h", root=RECON, tag=""):
+    cp = _cache_path(tf, tag)
     if os.path.exists(cp):
         with open(cp, "rb") as f:
             return pickle.load(f)
-    F = build_features(tf)
+    F = build_features(tf, root=root)
     os.makedirs(os.path.dirname(cp), exist_ok=True)
     with open(cp, "wb") as f:
         pickle.dump(F, f)
