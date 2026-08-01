@@ -489,10 +489,11 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("st_halfdom", "· ½dom"), ("st_rhalves", "· R h1/h2"), ("st_dp", "· ΔP"),
                            ("st_oi", "· OI Δ"), ("st_costtick", "· Cost/tick"), ("st_vel", "· Buy/Sell-vel"),
                            ("st_tape", "· Tape B/S"), ("st_ker", "· KER"), ("st_movmag", "· Mov.Magnitude"),
-                           ("st_skew", "· Skew"), ("st_mmxskew", "· MM×Skew"), ("st_openpos", "· Open pos"),
-                           ("st_closepos", "· Close pos"), ("st_er", "· E/R (bER/sER)"), ("st_er30", "· 30b E/R"),
-                           ("st_absorpvol", "· Absorption"), ("st_effagg", "· Eff-agg"), ("st_1meff", "· 1m Eff"),
-                           ("st_velread", "· VEL"), ("st_vel30", "· 30b VEL"), ("st_tau", "· τ-ratio")):
+                           ("st_skew", "· Skew"), ("st_mmxskew", "· MM×Skew"), ("st_effaggsp", "· eff-agg (spread)"),
+                           ("st_openpos", "· Open pos"), ("st_closepos", "· Close pos"), ("st_er", "· E/R (bER/sER)"),
+                           ("st_er30", "· 30b E/R"), ("st_absorpvol", "· Absorption"), ("st_effagg", "· Eff-agg VOL"),
+                           ("st_1meff", "· 1m Eff"), ("st_velread", "· VEL"), ("st_vel30", "· 30b VEL"),
+                           ("st_tau", "· τ-ratio")):
             cb = QtWidgets.QCheckBox(label)
             cb.setChecked(True)
             cb.setStyleSheet("QCheckBox{ padding-left:26px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level

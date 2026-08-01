@@ -1716,8 +1716,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if key.startswith("m10_"):
             self._set_scanner_overlay(key, on)
         elif key.startswith("st_"):
+            # Unified stat-row toggle -> re-render BOTH readouts. The stats box refreshes via the parked-hover path;
+            # the footprint side pane is sig-cached, so force a full scanner repaint (reset both sigs) to re-run
+            # _scan_bucket_canvas, which re-renders the pane from the same toggles.
+            self._fp_sig = None
+            self._last_scanner_sig = None
             try:
-                self._refresh_parked_hover()    # unified stat-row toggle -> re-render both the footprint pane + stats box
+                self._draw_scanner()            # footprint side pane
+            except Exception:
+                pass
+            try:
+                self._refresh_parked_hover()    # candle stats box
             except Exception:
                 pass
         if not self._loading_ui:
@@ -2569,183 +2578,120 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         wp = self.mapFromGlobal(gp)
         self.stats.show_stats(lines, clock, wp.x(), wp.y())
 
-    def _fp_top_html(self, ab: dict, buckets: list) -> str:
-        """Live-footprint top-left readout for the forming (or cursor) bucket:
-        Mov.Magn / Skew / MMxSkew / eff-agg / bER-sER / Tape-B/S / τ-ratio / Δ-accel / Absorb R / ΔP / Δ↑Δ↓ / ½dom.
+    def _bucket_stat_lines(self, b, buckets, idx) -> "list[str]":
+        """Unified per-bucket order-flow readout — the ONE source both the candle Stats Box (_hover_context) and the
+        Live Footprint pane (_fp_top_html) render from, so every stat is available in EITHER box and a single toggle
+        (hamburger: Candles > Stats Box) gates it in both. `b` supplies the bucket's OWN scalars (the forming candle
+        for the footprint pane, the hovered candle for the stats box); (buckets, idx) drive the trailing-window
+        baselines (idx = the last element for the footprint pane). Rows are grouped into sections and each is gated by
+        its st_ key via _add; an all-off section drops its header too (deferred via _sec)."""
+        b = b or {}
+        K = self._fmt_k
+        g, r, bl, pu = "#2ecc71", "#e74c3c", "#3498db", "#9b59b6"
+        teal, gold, gray = "#26a69a", "#f1c40f", "#9aa0aa"
 
-        Labels neutral, only the VALUES are coloured. Metrics that split into halves put the whole-bucket
-        value first and the h1/h2 legs in parentheses on the SAME line — Δ-accel, Absorb R and ΔP all share
-        that shape, and each leg is coloured on its own sign so a bucket that reversed between halves is
-        visible at a glance. τ-ratio uses the trailing bucket durations; each metric shows '--' when its
-        inputs are absent (partial forming bucket / missing field)."""
-        NEU, G, R, GRAY, GOLD = "#9aa0a6", "#28e65a", "#ff2d46", "#7a828c", "#f1c40f"
-        def row(lbl, val, col):
-            return "<span style='color:%s'>%s</span> <span style='color:%s'>%s</span>" % (NEU, lbl, col, val)
-        ab = ab or {}
-        o = float(ab.get("open", ab.get("open_price", 0.0)) or 0.0)
-        c = float(ab.get("close", ab.get("close_price", 0.0)) or 0.0)
-        h = float(ab.get("high", 0.0) or 0.0); l = float(ab.get("low", 0.0) or 0.0)
-        cv = float(ab.get("curr_vol", 0.0) or 0.0)
-        bv = float(ab.get("buy_vol", 0.0) or 0.0); sv = float(ab.get("sell_vol", 0.0) or 0.0)
-        out = []
-        def add(key, html):                     # per-stat toggle (hamburger, under the Live Footprint Pane); on if unregistered
-            _cb = self.menu.layer_checks.get(key)
-            if _cb is None or _cb.isChecked():
-                out.append(html)
-        ref = l if c > o else (h if c < o else o)
-        mm = ((((c * 100.0) / ref) - 100.0) ** 2) * 100.0 if ref > 0 else None
-        add("st_movmag", row("Mov.Magn", ("%.4f" % mm) if mm is not None else "--",
-                              GRAY if (mm is None or c == o) else (G if c > o else R)))
-        sk = profile_skewness(ab.get("levels"))
-        _w, _ = skew_read(sk)
-        add("st_skew", row("Skew", (_w if sk is None else "%s %+.2f" % (_w, sk)), skew_color(sk)))
-        ms = (mm * sk) if (mm is not None and sk is not None) else None
-        add("st_mmxskew", row("MMxSkew", ("%+.2f" % ms) if ms is not None else "--",
-                              GRAY if (ms is None or ms == 0) else (G if ms > 0 else R)))
-        # NON-LOCKED (first-print / causal) eff-agg spread = (2*eff_causal_share - 1)*100 — the exact panel-2
-        # value MMXSKEW gates on (>= +35 long / <= -35 short), NOT the centered/settled one (that repaints).
-        # Computed over a trailing 150-bucket slice: the norms look back 50 (ABSORP/EFF_AGG) + 7 (causal half
-        # of LIVE_PANEL_WINDOW), so the LAST value is identical to the full-history compute, far cheaper.
-        # Green once the long gate is met, red once the short gate is met, grey in between.
-        _eff_s, _eff_col = "--", GRAY
-        try:
-            _w = buckets[-150:] if buckets else []
-            if len(_w) >= 8:
-                from . import pivot_detect as _PD
-                _ev = (2.0 * float(_PD.eff_causal_share(_w)[-1]) - 1.0) * 100.0
-                _eff_s = "%+.1f" % _ev
-                _eff_col = G if _ev >= 35.0 else (R if _ev <= -35.0 else GRAY)
-        except Exception:
-            pass
-        add("st_effagg", row("eff-agg", _eff_s, _eff_col))
-        # BUYER / SELLER E/R EXHAUSTION-% — the SAME quantity the candle's E/R border thresholds on, so this
-        # row and the 2px/3px border always agree: (mult - 1) * 100, where mult is that side's E/R z-scored
-        # against the preceding EXH_WINDOW buckets (region_state.exhaustion_mults). GOLD once a side reaches
-        # config.ER_BORDER_EXH_PCT — the exact point the chart repaints that bucket's border.
-        _bp = _sp = None
-        try:
-            _bm, _sm, _ = _exhaustion_mults(buckets, len(buckets) - 1)
-            _bp = (_bm - 1.0) * 100.0; _sp = (_sm - 1.0) * 100.0
-        except Exception:
-            pass
-        if _bp is None:
-            add("st_er", row("bER / sER", "--", GRAY))
+        def span(text, col):
+            return f"<span style='color:{col}'>{text}</span>"
+        PD = config.PRICE_DECIMALS
+        def pf(v): return f"{v:.{PD}f}"                          # price -> axis precision
+        def sk(v): return ("+" if v >= 0 else "-") + K(abs(v))   # signed K (e.g. +1.2k)
+        def sep(t):   # subtle section header: dim, small, letter-spaced; recedes below data
+            return f"<span style='color:#5a6170;font-size:9px;letter-spacing:2px'>{t}</span>"
+        # per-bucket scalars come from `b` (robust field access — the forming active_bucket carries open_price/
+        # close_price, closed buckets carry open/close).
+        o = float(b.get("open", b.get("open_price", 0.0)) or 0.0)
+        c = float(b.get("close", b.get("close_price", 0.0)) or 0.0)
+        h = float(b.get("high", 0.0) or 0.0); l = float(b.get("low", 0.0) or 0.0)
+        poc = float(b.get("poc_price", 0.0) or 0.0)
+        cv = float(b.get("curr_vol", 0.0) or 0.0)
+        bv = float(b.get("buy_vol", 0.0) or 0.0); sv = float(b.get("sell_vol", 0.0) or 0.0)
+        opL = float(b.get("opL", 0.0) or 0.0); opS = float(b.get("opS", 0.0) or 0.0)
+        clL = float(b.get("clL", 0.0) or 0.0); clS = float(b.get("clS", 0.0) or 0.0)
+        ber, ser = float(b.get("buyer_er", 0.0) or 0.0), float(b.get("seller_er", 0.0) or 0.0)
+        # Effort per tick: buy_vol per tick UP, sell_vol per tick DOWN. 0 ticks that way -> "--", never fabricated.
+        _ut, _dt = float(b.get("up_ticks", 0.0) or 0.0), float(b.get("dn_ticks", 0.0) or 0.0)
+        _bpt = (bv / _ut) if _ut > 0 else 0.0
+        _spt = (sv / _dt) if _dt > 0 else 0.0
+        _bpt_s = K(_bpt) if _ut > 0 else "--"
+        _spt_s = K(_spt) if _dt > 0 else "--"
+        # Per-side VELOCITY (contracts/sec) with a 1.0s duration floor (shared by every velocity readout below).
+        _bdur = max(1.0, float(b.get("end_time", 0.0) or 0.0) - float(b.get("start_time", 0.0) or 0.0))
+        _bvl, _svl = bv / _bdur, sv / _bdur
+        # SPEED OF TAPE (prints/sec) from the per-side trade-count histograms; "--" on a pre-upgrade bucket.
+        _szcb = b.get("sz_cb") or []; _szcs = b.get("sz_cs") or []
+        _tape_b = (sum(_szcb) / _bdur) if _szcb else None
+        _tape_s = (sum(_szcs) / _bdur) if _szcs else None
+
+        def _tps(v):
+            return f"{v:.2f}/s" if v is not None else "--"
+        delta = bv - sv
+        dpct = (delta / cv * 100.0) if cv > 0 else 0.0
+        # sub-bucket delta split (MMXSKEW delta_accel_2): H1 = daemon `delta_h1`; H2 = total - H1; da2 = (H2-H1)/cv.
+        _dh1 = b.get("delta_h1")
+        if _dh1 is not None and cv > 0:
+            _dh1 = float(_dh1); _dh2 = delta - _dh1; _da2v = (_dh2 - _dh1) / cv
+            _da2_s = "%+.1f%%  (H1 %s / H2 %s)" % (_da2v * 100.0, sk(_dh1), sk(_dh2))
+            _da2_col = g if _da2v > 0 else (r if _da2v < 0 else gray)
         else:
-            _bp = 0.0 if abs(_bp) < 0.5 else _bp        # kill "-0%" from a rounded sub-half-percent
-            _sp = 0.0 if abs(_sp) < 0.5 else _sp
-            def _erc(v):
-                return GOLD if v >= config.ER_BORDER_EXH_PCT else (NEU if v >= 0.0 else GRAY)
-            add("st_er", "<span style='color:%s'>bER</span> <span style='color:%s'>%+.0f%%</span>"
-                       " <span style='color:%s'>/</span> <span style='color:%s'>sER</span>"
-                       " <span style='color:%s'>%+.0f%%</span>"
-                       % (NEU, _erc(_bp), _bp, NEU, NEU, _erc(_sp), _sp))
-        st = float(ab.get("start_time", 0.0) or 0.0); et = float(ab.get("end_time", 0.0) or 0.0)
-        dur = (et - st) if et > st else 0.0
-        szb = ab.get("sz_cb") or []; szs = ab.get("sz_cs") or []
-        if dur > 0 and szb:
-            tb = sum(szb) / dur; ts = (sum(szs) / dur) if szs else 0.0
-            add("st_tape", "<span style='color:%s'>Tape</span> <span style='color:%s'>B %.2f/s</span>"
-                       " <span style='color:%s'>/</span> <span style='color:%s'>S %.2f/s</span>"
-                       % (NEU, G if tb > ts else GRAY, tb, NEU, R if ts > tb else GRAY, ts))
-        else:
-            add("st_tape", row("Tape", "--", GRAY))
-        tau = None
-        if dur > 0 and buckets:
-            a_ = 2.0 / 16.0; ema = None
-            for wb in buckets[-30:]:
-                wd = float(wb.get("end_time", 0.0) or 0.0) - float(wb.get("start_time", 0.0) or 0.0)
-                if wd <= 0:
-                    continue
-                ema = wd if ema is None else wd * a_ + ema * (1 - a_)
-            tau = (dur / ema) if (ema and ema > 0) else None
-        add("st_tau", row("τ-ratio", ("%.2f" % tau) if tau is not None else "--",
-                          GOLD if (tau is not None and tau < 0.3) else GRAY))
-        dh1 = ab.get("delta_h1")
-        if dh1 is not None and cv > 0:
-            def _kv(v):
-                a = abs(v); s = "+" if v >= 0 else "-"
-                return ("%s%.1fK" % (s, a / 1000.0)) if a >= 1000 else ("%s%.0f" % (s, a))
-            _d1 = float(dh1); _d2 = (bv - sv) - _d1; da2 = (_d2 - _d1) / cv
-            add("st_daccel", "<span style='color:%s'>Δ-accel</span> <span style='color:%s'>%+.1f%%</span>"
-                       " <span style='color:%s'>(</span> <span style='color:%s'>%s</span>"
-                       " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
-                       " <span style='color:%s'>)</span>"
-                       % (NEU, G if da2 > 0 else (R if da2 < 0 else GRAY), da2 * 100.0,
-                          NEU, G if _d1 >= 0 else R, _kv(_d1),
-                          NEU, G if _d2 >= 0 else R, _kv(_d2), NEU))
-        else:
-            add("st_daccel", row("Δ-accel", "--", GRAY))
-        # ABSORPTION RESIDUAL — did the delta produce the price move it should have? R = Zp - rho*Zv against a
-        # trailing-30 window (rho measured on that same window, NOT assumed 1.0 — see app/absorption.py).
-        # A is oriented so POSITIVE = the aggressor got absorbed, whichever side was aggressing.
-        # The per-half legs need the daemon's price_h1 on this bucket AND on >=20 of the prior 30, so they
-        # read "--" while the bucket-level R already has a value — that split is expected, not a fault.
-        _absmod = None; _A = _A1 = _A2 = None
+            _da2_s = "--"; _da2_col = gray
+        # ABSORPTION RESIDUAL — R = Zp - rho*Zv vs a trailing-30 window (rho measured on it). +ve = aggressor ABSORBED.
         try:
             from app import absorption as _absmod
-            _A = _absmod.absorption(buckets, len(buckets) - 1)[0]
-            _A1, _A2 = _absmod.absorption_halves(buckets, len(buckets) - 1)
+            _absA, _absR, _abss = _absmod.absorption(buckets, idx)
         except Exception:
-            pass
-        if _A is None and _A1 is None and _A2 is None:
-            add("st_absorb", row("Absorb R", "--", GRAY))
+            _absmod = None; _absA = None
+        if _absA is None:
+            _absR_s = "--"; _absR_col = gray
         else:
-            _hc = _absorb_color            # ORANGE = absorbed, BLUE = easy (see _absorb_color)
-            def _hs(v):
-                return "--" if v is None else ("%+.2f" % v)
-            _head = "--" if _A is None else ("%+.2f %s" % (_A, _absmod.label(_A)))
-            add("st_absorb", "<span style='color:%s'>Absorb R</span> <span style='color:%s'>%s</span>"
-                       " <span style='color:%s'>(</span> <span style='color:%s'>%s</span>"
-                       " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
-                       " <span style='color:%s'>)</span>"
-                       % (NEU, _hc(_A), _head, NEU, _hc(_A1), _hs(_A1), NEU, _hc(_A2), _hs(_A2), NEU))
-        # MOVE-EASE per side (rB / rS): each side's SHARE of the price travel = up_ticks/(up+dn) and dn_ticks/(up+dn).
-        # This is the VOLUME-WEIGHTED form of the per-contract efficiency (efficiency x volume-share -> volumes cancel):
-        # bounded 0..100, sums to 100, so it can't blow up on a thin side. rB = "buyers moved X% of the price", rS the
-        # rest. The +vw% badge is their ratio (up/dn) -> directional-conviction magnitude, coloured by the winner.
-        _ut = float(ab.get("up_ticks", 0.0) or 0.0); _dt = float(ab.get("dn_ticks", 0.0) or 0.0)
+            _absR_s = "%+.2f  %s" % (_absA, _absmod.label(_absA))
+            _absR_col = _absorb_color(_absA)                    # ORANGE = absorbed, BLUE = easy
+        try:
+            _absA1, _absA2 = _absmod.absorption_halves(buckets, idx) if _absmod is not None else (None, None)
+        except Exception:
+            _absA1 = _absA2 = None
+        if _absA1 is None and _absA2 is None:
+            _absH_s = "--"; _absH_col = gray
+        else:
+            _f = lambda v: "--" if v is None else ("%+.2f" % v)
+            _absH_s = "%s / %s" % (_f(_absA1), _f(_absA2))
+            _ex = max([v for v in (_absA1, _absA2) if v is not None], key=abs, default=None)
+            _absH_col = _absorb_color(_ex)
+        # MOVE-EASE per side (rB / rS) = up_ticks/(up+dn) & dn_ticks/(up+dn) — volume-weighted travel share, bounded
+        # 0..100. +vw% is their ratio (up/dn) = directional conviction, coloured by the winner. "--" with no travel.
         _tot = _ut + _dt
         _rB = (100.0 * _ut / _tot) if _tot > 0 else None
         _rS = (100.0 * _dt / _tot) if _tot > 0 else None
-        if _rB is None:
-            add("st_ease", row("Ease", "--", GRAY))
+        _ease_row = ("Ease " + span("rB " + ("%.0f%%" % _rB if _rB is not None else "--"),
+                                    g if (_rB is not None and _rB > _rS) else gray)
+                     + " | " + span("rS " + ("%.0f%%" % _rS if _rS is not None else "--"),
+                                    r if (_rS is not None and _rS > _rB) else gray))
+        if _rB is not None and min(_ut, _dt) > 0:
+            _vw = min(999.0, (max(_ut, _dt) / min(_ut, _dt) - 1.0) * 100.0)
+            _ease_row += " " + span("+%.0f%% vw" % _vw, g if _ut > _dt else (r if _dt > _ut else gray))
+        # 1m-PATH EFFICIENCY — Kaufman ER of this candle's 1m closes: 1.0 = clean diagonal, ~0 = chop. Descriptive.
+        _er1 = self._path_er(b)
+        if _er1 is None:
+            _eff1_row = span("1m Eff --", gray)
         else:
-            _erow = ("<span style='color:%s'>Ease</span> <span style='color:%s'>rB %.0f%%</span>"
-                     " <span style='color:%s'>/</span> <span style='color:%s'>rS %.0f%%</span>"
-                     % (NEU, G if _rB > _rS else GRAY, _rB, NEU, R if _rS > _rB else GRAY, _rS))
-            # +vw% = up/dn ratio -> directional conviction (green=buyers won / red=sellers won), high=decisive.
-            if min(_ut, _dt) > 0:
-                _vw = min(999.0, (max(_ut, _dt) / min(_ut, _dt) - 1.0) * 100.0)
-                _vcol = G if _ut > _dt else (R if _dt > _ut else GRAY)
-                _erow += (" <span style='color:%s'>+%.0f%%</span>"
-                          " <span style='color:%s; font-size:9px'>vw</span>" % (_vcol, _vw, GRAY))
-            add("st_ease", _erow)
-        # PER-HALF PRICE CHANGE — the RESULT half of the same split R h1/h2 scores. Pure per-bucket
-        # arithmetic (no trailing baseline), so it reads on ANY bucket carrying price_h1, including ones
-        # where R h1/h2 is still "--" for want of 20 baselined priors. Each leg is coloured on its own sign:
-        # a bucket that rose in h1 and gave it back in h2 is the whole point of the split.
+            _e1c = gold if _er1 >= 0.70 else (g if _er1 >= 0.50 else gray)
+            _eff1_row = span("1m Eff %.2f" % _er1, _e1c)
+        # PER-HALF PRICE CHANGE (the RESULT side of the R h1/h2 split). No trailing baseline -> lights up on any
+        # bucket carrying price_h1, even where R h1/h2 still reads "--".
         try:
-            _ph = _absmod.price_halves(ab)
+            _dP = _absmod.price_halves(b) if _absmod is not None else None
         except Exception:
-            _ph = None
-        if _ph is None:
-            add("st_dp", row("ΔP", "--", GRAY))
+            _dP = None
+        if _dP is None:
+            _dP_row = span("ΔP --", gray)
         else:
-            _p1, _p2, _pt = _ph
-            def _pc(v):
-                return GRAY if v == 0 else (G if v > 0 else R)
-            add("st_dp", "<span style='color:%s'>ΔP</span> <span style='color:%s'>%+.2f%%</span>"
-                       " <span style='color:%s'>(</span> <span style='color:%s'>%+.2f</span>"
-                       " <span style='color:%s'>/</span> <span style='color:%s'>%+.2f</span>"
-                       " <span style='color:%s'>)</span>"
-                       % (NEU, _pc(_pt), _pt, NEU, _pc(_p1), _p1, NEU, _pc(_p2), _p2, NEU))
-        # VERTICAL split at the price MIDPOINT (high+low)/2 — two readouts off the volume profile:
-        #   Δ↑ / Δ↓  — NET delta (buy-sell) of each half as % of curr_vol (so Δ↑ + Δ↓ = the whole-bucket delta%).
-        #   ½dom     — each half's buy/sell COMPOSITION: the DOMINANT side and its SHARE of that half. A share
-        #              near 100 means the other side is nearly ABSENT there (buyers gone from the lows / sellers
-        #              gone from the highs) — a share, so it flags dominance regardless of the half's size,
-        #              unlike Δ↑/Δ↓. Both need the per-price `levels` profile; '--' on a bucket without it.
-        _lv = ab.get("levels") or {}
+            _dP_1, _dP_2, _dP_t = _dP
+            _pcol = lambda v: gray if v == 0 else (g if v > 0 else r)
+            _dP_row = (f"{span('ΔP', gray)} {span('%+.2f%%' % _dP_t, _pcol(_dP_t))}"
+                       f"  {span('(h1 %+.2f' % _dP_1, _pcol(_dP_1))} {span('/', gray)}"
+                       f" {span('h2 %+.2f)' % _dP_2, _pcol(_dP_2))}")
+        # VERTICAL split at the price MIDPOINT (high+low)/2 — Δ↑/Δ↓ (net delta % per half, sums to the bucket delta%)
+        # + ½dom (each half's DOMINANT side and its SHARE). Both need the per-price `levels` profile; '--' without it.
+        _lv = b.get("levels") or {}
         if _lv and h > 0 and l > 0 and h >= l and cv > 0:
             _mid = (h + l) / 2.0; _ub = _us = _lb = _ls = 0.0
             for _ps, _lvv in _lv.items():
@@ -2759,42 +2705,184 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 else:
                     _lb += _bb; _ls += _ss
             _upp = (_ub - _us) / cv * 100.0; _lop = (_lb - _ls) / cv * 100.0
+
             def _dvc(v):
-                return GRAY if abs(v) < 0.05 else (G if v > 0 else R)
-            add("st_deltaud", "<span style='color:%s'>Δ↑</span> <span style='color:%s'>%+.1f%%</span>"
-                       " <span style='color:%s'>/</span> <span style='color:%s'>Δ↓</span>"
-                       " <span style='color:%s'>%+.1f%%</span>"
-                       % (NEU, _dvc(_upp), _upp, NEU, NEU, _dvc(_lop), _lop))
+                return gray if abs(v) < 0.05 else (g if v > 0 else r)
+            _dud_row = (f"{span('Δ↑', gray)} {span('%+.1f%%' % _upp, _dvc(_upp))} {span('/', gray)}"
+                        f" {span('Δ↓', gray)} {span('%+.1f%%' % _lop, _dvc(_lop))}")
+
             def _mix(_bb, _ss):
                 _t = _bb + _ss
                 if _t <= 0:
-                    return "--", GRAY
-                _bs = _bb / _t * 100.0                      # buy share of the half
+                    return "--", gray
+                _bs = _bb / _t * 100.0                           # buy share of the half
                 if _bs > 55.0:
-                    return "%.0f%%B" % _bs, G               # buy-dominated
+                    return "%.0f%%B" % _bs, g
                 if _bs < 45.0:
-                    return "%.0f%%S" % (100.0 - _bs), R     # sell-dominated (share -> 100 => buyers absent)
-                return (("%.0f%%B" % _bs) if _bs >= 50.0 else ("%.0f%%S" % (100.0 - _bs))), GRAY
+                    return "%.0f%%S" % (100.0 - _bs), r
+                return (("%.0f%%B" % _bs) if _bs >= 50.0 else ("%.0f%%S" % (100.0 - _bs))), gray
             _um, _uc = _mix(_ub, _us); _lm, _lc = _mix(_lb, _ls)
-            add("st_halfdom", "<span style='color:%s'>½dom ↑</span> <span style='color:%s'>%s</span>"
-                       " <span style='color:%s'>/ ↓</span> <span style='color:%s'>%s</span>"
-                       % (NEU, _uc, _um, NEU, _lc, _lm))
+            _hd_row = f"{span('½dom ↑', gray)} {span(_um, _uc)} {span('/ ↓', gray)} {span(_lm, _lc)}"
         else:
-            add("st_deltaud", row("Δ↑ / Δ↓", "--", GRAY))
-            add("st_halfdom", row("½dom", "--", GRAY))
-        # 1m-PATH EFFICIENCY — Kaufman ER of this candle's 1m closes: 1.0 = clean diagonal, ~0 = chop. Descriptive
-        # smoothness readout (weakly predictive on continuation only — study/engulf_1m_efficiency), not a filter.
-        _er = self._path_er(ab)
-        if _er is None:
-            add("st_1meff", row("1m Eff", "--", GRAY))
+            _dud_row = span("Δ↑ / Δ↓ --", gray)
+            _hd_row = span("½dom --", gray)
+        # KINETIC EFFICIENCY RATIO (KER) — Realized Work / Kinetic Force per side, as a readable % via _ker_read.
+        _ker_buy, _ker_sell = self._bucket_ker(b)
+        # Mov.Magnitude — squared percent move x100 (quadratic), ref = the candle's FAR extreme (wick included).
+        if c > o:
+            _pmr_ref = l
+        elif c < o:
+            _pmr_ref = h
         else:
-            _erc = GOLD if _er >= 0.70 else (G if _er >= 0.50 else (NEU if _er >= 0.30 else GRAY))
-            add("st_1meff", row("1m Eff", "%.2f" % _er, _erc))
-        _kb, _ks = self._bucket_ker(ab)                     # ker (Kinetic Efficiency Ratio) per side — pinned to the BOTTOM
-        add("st_ker", "<span style='color:%s'>ker</span> <span style='color:%s'>%s</span>"
-                   " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
-                   % (NEU, G if _kb > _ks else GRAY, _ker_read(_kb), NEU, R if _ks > _kb else GRAY, _ker_read(_ks)))
-        return "<br>".join(out)
+            _pmr_ref = o
+        _pmr_v = ((((c * 100.0) / _pmr_ref) - 100.0) ** 2) * 100.0 if _pmr_ref > 0 else None
+        _pmr_s = f"{_pmr_v:.4f}" if _pmr_v is not None else "--"
+        _pmr_col = gray if (_pmr_v is None or c == o) else (g if c > o else r)
+        # SKEW — volume-weighted skewness of THIS bucket's volume-by-price profile (>0 mass high / <0 mass low).
+        _skew_v = profile_skewness(b.get("levels"))
+        _skew_word, _skew_notable = skew_read(_skew_v)
+        _skew_s = f"{_skew_word}" if _skew_v is None else f"{_skew_word} {_skew_v:+.2f}"
+        _skew_col = skew_color(_skew_v)
+        # MM x Skew — Mov.Magnitude times the signed skew: sign tracks the skew, magnitude scales by lopsidedness.
+        _ms_v = (_pmr_v * _skew_v) if (_pmr_v is not None and _skew_v is not None) else None
+        _ms_s = f"{_ms_v:+.2f}" if _ms_v is not None else "--"
+        _ms_col = gray if (_ms_v is None or _ms_v == 0.0) else (g if _ms_v > 0.0 else r)
+        # eff-agg SPREAD — the causal / first-print panel-2 value MMXSKEW gates on = (2*eff_causal_share - 1)*100
+        # over a trailing 150-bucket slice up to idx. Green >= +35 (long gate), red <= -35 (short), gray between.
+        _effsp_s, _effsp_col = "--", gray
+        try:
+            _wsp = buckets[:idx + 1][-150:]
+            if len(_wsp) >= 8:
+                from . import pivot_detect as _PD
+                _ev = (2.0 * float(_PD.eff_causal_share(_wsp)[-1]) - 1.0) * 100.0
+                _effsp_s = "%+.1f" % _ev
+                _effsp_col = g if _ev >= 35.0 else (r if _ev <= -35.0 else gray)
+        except Exception:
+            pass
+        oi_d = (opL + opS) - (clL + clS)
+        dur = float(b.get("end_time", 0.0) or 0.0) - float(b.get("start_time", 0.0) or 0.0)
+        # tau-ratio — this bucket's fill DURATION vs a trailing EMA-15 of durations. tau<0.3 = climactic blow-off.
+        _tau_a = 2.0 / 16.0; _tau_ema = None
+        for _wb in buckets[max(0, idx - 30):idx + 1]:
+            _wd = max(1.0, float(_wb.get("end_time", 0.0) or 0.0) - float(_wb.get("start_time", 0.0) or 0.0))
+            _tau_ema = _wd if _tau_ema is None else _wd * _tau_a + _tau_ema * (1 - _tau_a)
+        _tau = (max(1.0, dur) / _tau_ema) if (_tau_ema and _tau_ema > 0) else 1.0
+        _tau_climactic = _tau < 0.3
+        vel = float(b.get("vol_mult", 1.0) or 1.0)
+        bm, sm, _om = _exhaustion_mults(buckets, idx)
+        win = buckets[max(0, idx - EXH_WINDOW):idx]
+        b30 = (sum(w.get("buyer_er", 0.0) for w in win) / len(win)) if win else 0.0
+        s30 = (sum(w.get("seller_er", 0.0) for w in win) / len(win)) if win else 0.0
+
+        def _bvel(bb):
+            return ((bb.get("buy_vol", 0.0) + bb.get("sell_vol", 0.0)) /
+                    max(1.0, bb.get("end_time", 0.0) - bb.get("start_time", 0.0)))
+        v30 = (sum(_bvel(w) for w in win) / len(win)) if win else 0.0
+        vabn = (_bvel(b) / v30) if v30 > 0 else 0.0
+
+        def _cpt(w, is_buy):
+            t = float((w.get("up_ticks") if is_buy else w.get("dn_ticks")) or 0.0)
+            v = float((w.get("buy_vol") if is_buy else w.get("sell_vol")) or 0.0)
+            return (v / t) if t > 0 else None
+        _bh = [x for x in (_cpt(w, True) for w in win) if x is not None]
+        _sh = [x for x in (_cpt(w, False) for w in win) if x is not None]
+        _b30t = (sum(_bh) / len(_bh)) if _bh else 0.0
+        _s30t = (sum(_sh) / len(_sh)) if _sh else 0.0
+        _bptr = (_bpt / _b30t) if (_b30t > 0 and _ut > 0) else 0.0   # buyer cost vs its own trailing-30 normal
+        _sptr = (_spt / _s30t) if (_s30t > 0 and _dt > 0) else 0.0
+
+        def _ptl(lbl, val_s, val, other_val, rr, other_rr, col):
+            """One COST/tick line, coloured on TWO axes: the /tick VALUE takes that side's colour when it paid MORE
+            per tick than the other side; the (x) — its cost vs its OWN trailing-30 normal — goes GOLD when that side
+            is grinding harder relative to itself. Omitted during warm-up / when that side never moved price its way."""
+            out = span("%s %s" % (lbl, val_s), col if (val > 0 and val > other_val) else gray)
+            if rr > 0:
+                out += " " + span("(%.1fx)" % rr, gold if rr > other_rr else gray)
+            return out
+        # BULL/BEAR absorption (volume) that FAILED to move price vs the region norm; EFF-AGG the mirror (moved price).
+        bull_abs, bear_abs, _sabs = region_state.absorption_vol(buckets, idx, config.ABSORP_VOL_WINDOW)
+        eff_bull_b, eff_bear_b, _se = region_state.effective_aggression(buckets, idx, config.ABSORP_VOL_WINDOW)
+        vmag = {"opL": opL, "opS": opS, "clS": clS, "clL": clL}
+        vclr = {"opL": g, "opS": r, "clS": bl, "clL": pu}
+        top2 = set(sorted(vmag, key=lambda k: vmag[k], reverse=True)[:2])
+
+        def vc(name):
+            return vclr[name] if (name in top2 and vmag[name] > 0) else gray
+        # Per-stat toggles (hamburger: Candles > Stats Box). _add gates a row by its st_ key (default ON when
+        # unregistered); _sec defers a section header so an all-off section drops its header too.
+        lines = []; _psec = [None]
+
+        def _son(_k):
+            _cb = self.menu.layer_checks.get(_k)
+            return _cb is None or _cb.isChecked()
+
+        def _sec(name):
+            _psec[0] = name
+
+        def _add(_k, content):
+            if _son(_k):
+                if _psec[0] is not None:
+                    lines.append(sep(_psec[0])); _psec[0] = None
+                lines.append(content)
+        _add("st_ohlc", f"O {pf(o)}  H {pf(h)}  L {pf(l)}  {span('C '+pf(c), g if c >= o else r)}")
+        _add("st_poc", f"Elapsed {self._fmt_elapsed(dur)}   {span('POC '+pf(poc), gold)}")
+        _sec("FLOW")
+        _add("st_volume", f"Volume {K(cv)}")
+        _add("st_buysell", f"{span('Sell '+K(sv), r if sv > bv else gray)} | {span('Buy '+K(bv), g if bv > sv else gray)}")
+        _add("st_delta", f"Delta {span(sk(delta)+f' ({dpct:+.0f}%)', g if delta >= 0 else r)}")
+        _add("st_daccel", span("Δ-accel " + _da2_s, _da2_col))
+        _add("st_absorb", span("Absorb R " + _absR_s, _absR_col))
+        _add("st_ease", _ease_row)
+        _add("st_1meff", _eff1_row)
+        _add("st_rhalves", span("R h1/h2 " + _absH_s, _absH_col))
+        _add("st_dp", _dP_row)
+        _add("st_deltaud", _dud_row)
+        _add("st_halfdom", _hd_row)
+        _add("st_oi", f"OI Δ {span(sk(oi_d), g if oi_d >= 0 else r)}")
+        _sec("COST · SPEED")
+        _add("st_costtick", _ptl("Buyer /tick", _bpt_s, _bpt, _spt, _bptr, _sptr, g))
+        _add("st_costtick", _ptl("Seller /tick", _spt_s, _spt, _bpt, _sptr, _bptr, r))
+        _add("st_vel", f"{span('Buy-vel ' + K(_bvl) + '/s', g if _bvl > _svl else gray)} | "
+                       f"{span('Sell-vel ' + K(_svl) + '/s', r if _svl > _bvl else gray)}")
+        _add("st_tape", f"{span('Tape-B ' + _tps(_tape_b), g if (_tape_b or 0.0) > (_tape_s or 0.0) else gray)} | "
+                        f"{span('Tape-S ' + _tps(_tape_s), r if (_tape_s or 0.0) > (_tape_b or 0.0) else gray)}")
+        _add("st_ker", span("KER_buy: " + _ker_read(_ker_buy), g if _ker_buy > 0 else gray))
+        _add("st_ker", span("KER_sell: " + _ker_read(_ker_sell), r if _ker_sell > 0 else gray))
+        _add("st_movmag", span("Mov.Magnitude: " + _pmr_s, _pmr_col))
+        _add("st_skew", span("Skew: " + _skew_s, _skew_col))
+        _add("st_mmxskew", span("MM × Skew: " + _ms_s, _ms_col))
+        _add("st_effaggsp", span("eff-agg " + _effsp_s, _effsp_col))
+        _sec("POSITIONING")
+        _add("st_openpos", f"{span('OpL '+K(opL), vc('opL'))} | {span('OpS '+K(opS), vc('opS'))}")
+        _add("st_closepos", f"{span('ClS '+K(clS), vc('clS'))} | {span('ClL '+K(clL), vc('clL'))}")
+        _sec("EFFORT")
+        _add("st_er", span(f"Buyer E/R {ber:.1f} [{(bm - 1.0) * 100:+.0f}%]", g if ber > ser else gray))
+        _add("st_er", span(f"Seller E/R {ser:.1f} [{(sm - 1.0) * 100:+.0f}%]", r if ser > ber else gray))
+        _add("st_er30", span(f"30b Buyer E/R {b30:.1f}", g if b30 > s30 else gray))
+        _add("st_er30", span(f"30b Seller E/R {s30:.1f}", r if s30 > b30 else gray))
+        _sec("ABSORPTION · VOL")
+        _add("st_absorpvol", span(f"Bull Absorp {K(bull_abs)}", g if bull_abs > 0 else gray))
+        _add("st_absorpvol", span(f"Bear Absorp {K(bear_abs)}", r if bear_abs > 0 else gray))
+        _sec("EFF-AGG · VOL")
+        _add("st_effagg", span(f"Bull Eff {K(eff_bull_b)}", "#00ff80" if eff_bull_b > 0 else gray))
+        _add("st_effagg", span(f"Bear Eff {K(eff_bear_b)}", "#ff2d6b" if eff_bear_b > 0 else gray))
+        _sec("READ")
+        _add("st_velread", f"VEL {span(f'{vel:.2f}x', gold)}")
+        _add("st_vel30", f"30b VEL {span(f'{vabn:.1f}×', gold if vabn >= config.VEL_ABN_RATIO else gray)}")
+        _add("st_tau", span("τ-ratio %.2f%s" % (_tau, "  ⚠ CLIMACTIC" if _tau_climactic else ""),
+                            gold if _tau_climactic else gray))
+        return lines
+
+    def _fp_top_html(self, ab, buckets) -> str:
+        """Live Footprint pane readout = the SAME unified rows as the candle Stats Box (see _bucket_stat_lines), so
+        any stat shows in EITHER box and one toggle gates both. `ab` = the forming / cursor bucket; the trailing-
+        window baselines read off `buckets` with the LAST element treated as current."""
+        if not buckets:
+            return ""
+        try:
+            return "<br>".join(self._bucket_stat_lines(ab or {}, buckets, len(buckets) - 1))
+        except Exception:
+            return ""
 
     def _refresh_parked_hover(self) -> None:
         """A3a live-breathe — re-run the readout each redraw frame. With a parked cursor it
@@ -7023,282 +7111,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     f"Fcast {span(f'+{baseline + bull_st:.2f}', g)} / "
                     f"{span(f'-{baseline - bear_st:.2f}', r)}"]
         if mode == "bucket_canvas":
-            # A3a — full order-flow readout from the bucket scalars, grouped into four
-            # sections (Flow / Positioning / Effort / Read). STATE is a placeholder until
-            # A3b. Anomaly % = the EXACT Step-5/Mode-3 multiplier (read-only call to
-            # _exhaustion_mults), shown as % off 1.0 so it reconciles with the future
-            # STATE verdict; the 30-bucket rolling E/R uses the SAME window (EXH_WINDOW)
-            # the anomaly is measured against.
-            PD = config.PRICE_DECIMALS
-            def pf(v): return f"{v:.{PD}f}"                         # price -> axis precision
-            def sk(v): return ("+" if v >= 0 else "-") + K(abs(v))  # signed K (e.g. +1.2k)
-            def sep(t):   # subtle section header: dim, small, letter-spaced; recedes below data
-                return f"<span style='color:#5a6170;font-size:9px;letter-spacing:2px'>{t}</span>"
-            o, h, l, c = (b.get("open", 0.0), b.get("high", 0.0),
-                          b.get("low", 0.0), b.get("close", 0.0))
-            poc = b.get("poc_price", 0.0)
-            cv, bv, sv = b.get("curr_vol", 0.0), b.get("buy_vol", 0.0), b.get("sell_vol", 0.0)
-            opL, opS = b.get("opL", 0.0), b.get("opS", 0.0)
-            clL, clS = b.get("clL", 0.0), b.get("clS", 0.0)
-            ber, ser = b.get("buyer_er", 0.0), b.get("seller_er", 0.0)
-            # Effort per tick: buy_vol per tick price travelled UP, sell_vol per tick travelled DOWN.
-            # 0 ticks that way (or a pre-upgrade bucket) -> "--", never a fabricated ratio.
-            _ut, _dt = float(b.get("up_ticks", 0.0) or 0.0), float(b.get("dn_ticks", 0.0) or 0.0)
-            _bpt = (bv / _ut) if _ut > 0 else 0.0
-            _spt = (sv / _dt) if _dt > 0 else 0.0
-            _bpt_s = K(_bpt) if _ut > 0 else "--"
-            _spt_s = K(_spt) if _dt > 0 else "--"
-            # Per-side VELOCITY for THIS bucket — the absolute rate each side arrived at (contracts/sec).
-            # Same 1.0s duration floor as _bvel below, so all three velocity readouts share one basis.
-            # NOTE: their RATIO is just the delta (duration cancels: corr +1.000000 measured) — the value here
-            # is the ABSOLUTE rates, which VEL (a ratio) and Delta (a split) can't show without mental math.
-            _bdur = max(1.0, b.get("end_time", 0.0) - b.get("start_time", 0.0))
-            _bvl, _svl = bv / _bdur, sv / _bdur
-            # SPEED OF TAPE (prints/sec) — buyers vs sellers, from the per-side trade-count histograms
-            # (sz_cb = taker-BUY count, sz_cs = taker-SELL count; sum = total prints that side). "--" on a
-            # pre-upgrade bucket that shipped no size histogram.
-            _szcb = b.get("sz_cb") or []; _szcs = b.get("sz_cs") or []
-            _tape_b = (sum(_szcb) / _bdur) if _szcb else None
-            _tape_s = (sum(_szcs) / _bdur) if _szcs else None
-            def _tps(v):
-                return f"{v:.2f}/s" if v is not None else "--"
-            delta = bv - sv
-            dpct = (delta / cv * 100.0) if cv > 0 else 0.0
-            # sub-bucket delta split (MMXSKEW delta_accel_2): first-half net delta from the daemon `delta_h1`
-            # (captured at the 50%-volume mark; None on pre-ship/pre-backfill buckets). H2 = total − H1;
-            # da2 = (H2 − H1)/curr_vol > 0 => aggression ACCELERATING into the bucket close (green), < 0 = fading.
-            _dh1 = b.get("delta_h1")
-            if _dh1 is not None and cv > 0:
-                _dh1 = float(_dh1); _dh2 = delta - _dh1; _da2v = (_dh2 - _dh1) / cv
-                _da2_s = "%+.1f%%  (H1 %s / H2 %s)" % (_da2v * 100.0, sk(_dh1), sk(_dh2))
-                _da2_col = g if _da2v > 0 else (r if _da2v < 0 else gray)
-            else:
-                _da2_s = "--"; _da2_col = gray
-            # ABSORPTION RESIDUAL — R = Zp - rho*Zv vs a trailing-30 window, rho measured on that window
-            # (NOT assumed 1.0: the naive Zv-Zp form stays ~0.45-correlated with raw delta and so half-measures
-            # "was delta big?" instead of "did delta work?"). A is oriented so POSITIVE = aggressor ABSORBED.
-            try:
-                from app import absorption as _absmod
-                _absA, _absR, _abss = _absmod.absorption(buckets, idx)
-            except Exception:
-                _absA = None
-            if _absA is None:
-                _absR_s = "--"; _absR_col = gray
-            else:
-                _absR_s = "%+.2f  %s" % (_absA, _absmod.label(_absA))
-                _absR_col = _absorb_color(_absA)      # ORANGE = absorbed, BLUE = easy
-            try:
-                _absA1, _absA2 = _absmod.absorption_halves(buckets, idx)
-            except Exception:
-                _absA1 = _absA2 = None
-            if _absA1 is None and _absA2 is None:
-                _absH_s = "--"; _absH_col = gray
-            else:
-                _f = lambda v: "--" if v is None else ("%+.2f" % v)
-                _absH_s = "%s / %s" % (_f(_absA1), _f(_absA2))
-                # colour by the MORE EXTREME leg by absolute value — plain max() would hide a strongly
-                # negative (EASY, blue) half behind a mildly positive one now that both signs are coloured.
-                _ex = max([v for v in (_absA1, _absA2) if v is not None], key=abs, default=None)
-                _absH_col = _absorb_color(_ex)
-            # MOVE-EASE per side (rB / rS): each side's SHARE of the price travel = up_ticks/(up+dn) & dn_ticks/(up+dn).
-            # The VOLUME-WEIGHTED form of the per-contract efficiency (volumes cancel), bounded 0..100 & summing to 100
-            # -> no thin-side blow-up. rB = "buyers moved X% of the price", rS the rest; +vw% is their ratio (up/dn) =
-            # directional conviction, coloured by the winner. "--" with no travel / pre-upgrade bucket.
-            _tot = _ut + _dt
-            _rB = (100.0 * _ut / _tot) if _tot > 0 else None
-            _rS = (100.0 * _dt / _tot) if _tot > 0 else None
-            _ease_row = ("Ease " + span("rB " + ("%.0f%%" % _rB if _rB is not None else "--"),
-                                        g if (_rB is not None and _rB > _rS) else gray)
-                         + " | " + span("rS " + ("%.0f%%" % _rS if _rS is not None else "--"),
-                                        r if (_rS is not None and _rS > _rB) else gray))
-            if _rB is not None and min(_ut, _dt) > 0:
-                _vw = min(999.0, (max(_ut, _dt) / min(_ut, _dt) - 1.0) * 100.0)
-                _ease_row += " " + span("+%.0f%% vw" % _vw, g if _ut > _dt else (r if _dt > _ut else gray))
-            # PER-HALF PRICE CHANGE (the RESULT side of the same open/50%-vol-mark/close split the R h1/h2
-            # residuals score). NO trailing baseline, so this lights up on any bucket carrying price_h1, even
-            # where R h1/h2 still reads "--" for want of 20 baselined priors — which also makes it a free
-            # diagnostic: ΔP populated + R h1/h2 blank = short warm-up, BOTH blank = no price_h1 on the bucket.
-            try:
-                _dP = _absmod.price_halves(b)
-            except Exception:
-                _dP = None
-            if _dP is None:
-                _dP_row = span("ΔP --", gray)
-            else:
-                _dP_1, _dP_2, _dP_t = _dP
-                _pcol = lambda v: gray if v == 0 else (g if v > 0 else r)
-                # each leg on its OWN sign: a bucket that rose in h1 and gave it back in h2 is the point
-                _dP_row = (f"{span('ΔP', gray)} {span('%+.2f%%' % _dP_t, _pcol(_dP_t))}"
-                           f"  {span('(h1 %+.2f' % _dP_1, _pcol(_dP_1))} {span('/', gray)}"
-                           f" {span('h2 %+.2f)' % _dP_2, _pcol(_dP_2))}")
-            # KINETIC EFFICIENCY RATIO (KER) — Realized Work / Kinetic Force per side (see _bucket_ker), shown as a
-            # readable efficiency % via _ker_read (100% = work == force; ∞ = vacuum).
-            _ker_buy, _ker_sell = self._bucket_ker(b)
-            # Mov.Magnitude (operator formula) — the squared percent move, scaled ×100: a magnitude that GROWS
-            # QUADRATICALLY with the % move (a 2% bucket reads 4× a 1% one). = ((close*100/ref - 100)^2) * 100.
-            # The reference is the candle's FAR extreme, so the magnitude spans the whole DIRECTIONAL range
-            # (wick excursion included), not just the body:
-            #   BULL (close>open) -> from the LOW ;  BEAR (close<open) -> from the HIGH ;  doji -> open (= 0)
-            # Coloured by candle DIRECTION: GREEN when bullish (close>open) / RED when bearish; gray for a doji
-            # or when the reference price <= 0 ("--").
-            if c > o:
-                _pmr_ref = l
-            elif c < o:
-                _pmr_ref = h
-            else:
-                _pmr_ref = o
-            _pmr_v = ((((c * 100.0) / _pmr_ref) - 100.0) ** 2) * 100.0 if _pmr_ref > 0 else None
-            _pmr_s = f"{_pmr_v:.4f}" if _pmr_v is not None else "--"
-            _pmr_col = gray if (_pmr_v is None or c == o) else (g if c > o else r)
-            # SKEW — volume-weighted skewness of THIS bucket's volume-by-price profile (same shared helper the
-            # live footprint pane uses; PROFILE-READ convention: >0 = mass at the HIGHER prices/tail down,
-            # <0 = mass at the LOWER prices/tail up, ~0 symmetric). Shown in plain words (high/low/flat) with the
-            # signed number for magnitude; coloured green/red for a mild lean, cyan/magenta once strongly
-            # lopsided (|skew| >= 0.5), gray when "--" (<3 levels).
-            _skew_v = profile_skewness(b.get("levels"))
-            _skew_word, _skew_notable = skew_read(_skew_v)
-            _skew_s = f"{_skew_word}" if _skew_v is None else f"{_skew_word} {_skew_v:+.2f}"
-            _skew_col = skew_color(_skew_v)
-            # MM × Skew — Mov.Magnitude (always >= 0) times the signed skew: the PRODUCT's sign tracks the skew
-            # (green = mass high / red = mass low) while its magnitude scales the move by how lopsided the volume
-            # was. "--" when either factor is undefined; gray at exactly 0 (doji, or a symmetric profile).
-            _ms_v = (_pmr_v * _skew_v) if (_pmr_v is not None and _skew_v is not None) else None
-            _ms_s = f"{_ms_v:+.2f}" if _ms_v is not None else "--"
-            _ms_col = gray if (_ms_v is None or _ms_v == 0.0) else (g if _ms_v > 0.0 else r)
-            oi_d = (opL + opS) - (clL + clS)
-            dur = b.get("end_time", 0.0) - b.get("start_time", 0.0)
-            # τ-ratio (MMXSKEW v1.2 climactic-blow-off WATCH-flag, 2026-07-20; display-only, changes no trade):
-            # this bucket's fill DURATION vs a trailing EMA-15 of durations. τ<0.3 = filled >3× faster than
-            # normal = a climactic volume blow-off / stop-run sweep (entering at that close = buying the panic).
-            # Underpowered (split-half-robust both RR but p≈0.35, n=35) — a caution flag, not a gate. Causal:
-            # trailing 30-bucket EMA (α=2/16, well past warm-up), uses only data up to the hovered bucket.
-            _tau_a = 2.0 / 16.0; _tau_ema = None
-            for _wb in buckets[max(0, idx - 30):idx + 1]:
-                _wd = max(1.0, _wb.get("end_time", 0.0) - _wb.get("start_time", 0.0))
-                _tau_ema = _wd if _tau_ema is None else _wd * _tau_a + _tau_ema * (1 - _tau_a)
-            _tau = (max(1.0, dur) / _tau_ema) if (_tau_ema and _tau_ema > 0) else 1.0
-            _tau_climactic = _tau < 0.3
-            vel = b.get("vol_mult", 1.0)
-            bm, sm, _om = _exhaustion_mults(buckets, idx)
-            win = buckets[max(0, idx - EXH_WINDOW):idx]
-            b30 = (sum(w.get("buyer_er", 0.0) for w in win) / len(win)) if win else 0.0
-            s30 = (sum(w.get("seller_er", 0.0) for w in win) / len(win)) if win else 0.0
-            # 30b velocity ratio — current velocity vs the trailing-30 MEAN velocity (same 30b basis as
-            # 30b BER/SER above). Matches the abnormal-velocity chart flag; >= VEL_ABN_RATIO == flagged.
-            def _bvel(bb):
-                return ((bb.get("buy_vol", 0.0) + bb.get("sell_vol", 0.0)) /
-                        max(1.0, bb.get("end_time", 0.0) - bb.get("start_time", 0.0)))
-            v30 = (sum(_bvel(w) for w in win) / len(win)) if win else 0.0
-            vabn = (_bvel(b) / v30) if v30 > 0 else 0.0
-            # EFFORT vs RESULT, PER SIDE. A raw cost/tick is uninterpretable on its own ("is 163 high?"),
-            # so each side is scored against ITS OWN trailing-30 mean — the same causal window as the 30b
-            # BER/SER and 30b VEL above. >1 = paying MORE per tick it won than it has lately (that side is
-            # being absorbed); <1 = getting more per contract than usual (thin that way). Both sides
-            # are ALWAYS defined because each owns its denominator (up_ticks vs dn_ticks) — unlike
-            # buyer_er/seller_er whose SHARED dispersion cancels to the delta (corr +1.0000 measured), or
-            # per-side friction, where only one side can win the net move so the loser is always 0.
-            def _cpt(w, is_buy):
-                t = float((w.get("up_ticks") if is_buy else w.get("dn_ticks")) or 0.0)
-                v = float((w.get("buy_vol") if is_buy else w.get("sell_vol")) or 0.0)
-                return (v / t) if t > 0 else None
-            _bh = [x for x in (_cpt(w, True) for w in win) if x is not None]
-            _sh = [x for x in (_cpt(w, False) for w in win) if x is not None]
-            _b30t = (sum(_bh) / len(_bh)) if _bh else 0.0
-            _s30t = (sum(_sh) / len(_sh)) if _sh else 0.0
-            _bptr = (_bpt / _b30t) if (_b30t > 0 and _ut > 0) else 0.0   # buyer cost vs its own normal
-            _sptr = (_spt / _s30t) if (_s30t > 0 and _dt > 0) else 0.0
-
-            def _ptl(lbl, val_s, val, other_val, rr, other_rr, col):
-                """One COST · SPEED line, coloured on TWO independent axes:
-                  * the /tick VALUE takes that side's colour when it paid MORE per tick than the other side
-                    (the absolute cost of moving price its way);
-                  * the (x) — its cost against its OWN trailing-30 normal — goes GOLD when that side is the
-                    one grinding harder relative to itself.
-                These answer different questions and routinely land on opposite sides, which is the point:
-                a side can pay the most per tick while still being cheaper than usual for itself.
-                The (x) is omitted entirely during warm-up or when that side never moved price its way —
-                no baseline, no verdict."""
-                out = span("%s %s" % (lbl, val_s), col if (val > 0 and val > other_val) else gray)
-                if rr > 0:
-                    out += " " + span("(%.1fx)" % rr, gold if rr > other_rr else gray)
-                return out
-            # BULL/BEAR absorption (volume) — aggressive volume that FAILED to move price, vs the region's
-            # trailing-norm. Directional: only the heavier aggressor that failed gets credit.
-            bull_abs, bear_abs, _sabs = region_state.absorption_vol(buckets, idx, config.ABSORP_VOL_WINDOW)
-            # EFFECTIVE AGGRESSION (the mirror): heavy directional volume that MOVED price its way = V*(1-s).
-            eff_bull_b, eff_bear_b, _se = region_state.effective_aggression(buckets, idx, config.ABSORP_VOL_WINDOW)
-            # color ONLY the two dominant 4-vectors (the ones that drove the move); the
-            # other two render dim. A zero vector never lights up even if it lands "top 2".
-            vmag = {"opL": opL, "opS": opS, "clS": clS, "clL": clL}
-            vclr = {"opL": g, "opS": r, "clS": bl, "clL": pu}
-            top2 = set(sorted(vmag, key=lambda k: vmag[k], reverse=True)[:2])
-            def vc(name): return vclr[name] if (name in top2 and vmag[name] > 0) else gray
-            # Per-stat toggles (hamburger: Candles > Stats Box). _add gates a row by its st_ key (default ON when
-            # unregistered); _sec defers a section header so an all-off section drops its header too.
-            lines = []; _psec = [None]
-
-            def _son(_k):
-                _cb = self.menu.layer_checks.get(_k)
-                return _cb is None or _cb.isChecked()
-
-            def _sec(name):
-                _psec[0] = name
-
-            def _add(_k, content):
-                if _son(_k):
-                    if _psec[0] is not None:
-                        lines.append(sep(_psec[0])); _psec[0] = None
-                    lines.append(content)
-            _add("st_ohlc", f"O {pf(o)}  H {pf(h)}  L {pf(l)}  {span('C '+pf(c), g if c >= o else r)}")
-            _add("st_poc", f"Elapsed {self._fmt_elapsed(dur)}   {span('POC '+pf(poc), gold)}")
-            _sec("FLOW")
-            _add("st_volume", f"Volume {K(cv)}")
-            # colour ONLY the dominant side (sell>buy -> sell red, buy>sell -> buy green); the lesser side dim.
-            _add("st_buysell", f"{span('Sell '+K(sv), r if sv > bv else gray)} | {span('Buy '+K(bv), g if bv > sv else gray)}")
-            _add("st_delta", f"Delta {span(sk(delta)+f' ({dpct:+.0f}%)', g if delta >= 0 else r)}")
-            _add("st_daccel", span("Δ-accel " + _da2_s, _da2_col))
-            _add("st_absorb", span("Absorb R " + _absR_s, _absR_col))
-            _add("st_ease", _ease_row)
-            _add("st_rhalves", span("R h1/h2 " + _absH_s, _absH_col))
-            _add("st_dp", _dP_row)
-            _add("st_oi", f"OI Δ {span(sk(oi_d), g if oi_d >= 0 else r)}")
-            _sec("COST · SPEED")
-            _add("st_costtick", _ptl("Buyer /tick", _bpt_s, _bpt, _spt, _bptr, _sptr, g))
-            _add("st_costtick", _ptl("Seller /tick", _spt_s, _spt, _bpt, _sptr, _bptr, r))
-            _add("st_vel", f"{span('Buy-vel ' + K(_bvl) + '/s', g if _bvl > _svl else gray)} | "
-                           f"{span('Sell-vel ' + K(_svl) + '/s', r if _svl > _bvl else gray)}")
-            _add("st_tape", f"{span('Tape-B ' + _tps(_tape_b), g if (_tape_b or 0.0) > (_tape_s or 0.0) else gray)} | "
-                            f"{span('Tape-S ' + _tps(_tape_s), r if (_tape_s or 0.0) > (_tape_b or 0.0) else gray)}")
-            _add("st_ker", span("KER_buy: " + _ker_read(_ker_buy), g if _ker_buy > 0 else gray))
-            _add("st_ker", span("KER_sell: " + _ker_read(_ker_sell), r if _ker_sell > 0 else gray))
-            _add("st_movmag", span("Mov.Magnitude: " + _pmr_s, _pmr_col))
-            _add("st_skew", span("Skew: " + _skew_s, _skew_col))
-            _add("st_mmxskew", span("MM × Skew: " + _ms_s, _ms_col))
-            _sec("POSITIONING")
-            _add("st_openpos", f"{span('OpL '+K(opL), vc('opL'))} | {span('OpS '+K(opS), vc('opS'))}")
-            _add("st_closepos", f"{span('ClS '+K(clS), vc('clS'))} | {span('ClL '+K(clL), vc('clL'))}")
-            _sec("EFFORT")
-            _add("st_er", span(f"Buyer E/R {ber:.1f} [{(bm - 1.0) * 100:+.0f}%]", g if ber > ser else gray))
-            _add("st_er", span(f"Seller E/R {ser:.1f} [{(sm - 1.0) * 100:+.0f}%]", r if ser > ber else gray))
-            _add("st_er30", span(f"30b Buyer E/R {b30:.1f}", g if b30 > s30 else gray))
-            _add("st_er30", span(f"30b Seller E/R {s30:.1f}", r if s30 > b30 else gray))
-            _sec("ABSORPTION · VOL")
-            _add("st_absorpvol", span(f"Bull Absorp {K(bull_abs)}", g if bull_abs > 0 else gray))
-            _add("st_absorpvol", span(f"Bear Absorp {K(bear_abs)}", r if bear_abs > 0 else gray))
-            _sec("EFF-AGG · VOL")
-            _add("st_effagg", span(f"Bull Eff {K(eff_bull_b)}", "#00ff80" if eff_bull_b > 0 else gray))
-            _add("st_effagg", span(f"Bear Eff {K(eff_bear_b)}", "#ff2d6b" if eff_bear_b > 0 else gray))
-            _sec("READ")
-            _add("st_velread", f"VEL {span(f'{vel:.2f}x', gold)}")
-            _add("st_vel30", f"30b VEL {span(f'{vabn:.1f}×', gold if vabn >= config.VEL_ABN_RATIO else gray)}")
-            _add("st_tau", span("τ-ratio %.2f%s" % (_tau, "  ⚠ CLIMACTIC" if _tau_climactic else ""),
-                                gold if _tau_climactic else gray))
-            # A3b — STATE verdict + its calibration debug lines (top-3 states + winner factors).
-            # Hidden by default; 'y' toggles (self.show_state).
+            # A3a — full order-flow readout, now built by the SHARED _bucket_stat_lines so the Stats Box and the
+            # Live Footprint pane render the exact same rows under the exact same toggles (no distinction).
+            lines = self._bucket_stat_lines(b, buckets, idx)
+            # A3b — STATE verdict + its calibration debug lines (top-3 states + winner factors). Hidden by default;
+            # 'y' toggles (self.show_state).
             if self.show_state:
-                state, conf = bucket_state.classify_bucket(buckets, idx, bm, sm)
+                _bm, _sm, _ = _exhaustion_mults(buckets, idx)
+                state, conf = bucket_state.classify_bucket(buckets, idx, _bm, _sm)
                 lines.append(f"STATE {bucket_state.render_state_line(state, conf)}")
-                lines += bucket_state.render_debug_lines(buckets, idx, bm, sm)
+                lines += bucket_state.render_debug_lines(buckets, idx, _bm, _sm)
             return lines
         if mode == "vpin":
             window = buckets[max(0, idx - 49): idx + 1]
