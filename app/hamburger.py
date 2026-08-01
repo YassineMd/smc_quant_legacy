@@ -439,8 +439,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             cb.toggled.connect(lambda on, k=key: self.subWidgetToggled.emit(k, on))
             self.sub_checks[key] = cb
             self.sub_section.addWidget(cb)
-            if key == "fp_pane":
-                self._build_fp_substats(self.sub_section)   # per-stat on/off for the footprint readout
         root.addWidget(self.sub_section)
 
         # --- m10_ toggle accordions (A4) — same layer_state framework across four grouped sections. setChecked
@@ -482,30 +480,19 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     def _build_stats_substats(self, section) -> None:
         """Per-stat toggles under the Stats Box (Candles) — each row of the Mode-10 hover/forming stats readout on/off
         independently. Registered as layer_ keys so _hover_context reads them via layer_state (and they persist)."""
+        # One unified set gating BOTH the candle stats box (_hover_context) and the footprint pane (_fp_top_html).
+        # Shared concepts share a key (toggle once → hides in both); footprint-only rows (Δ↑/Δ↓, ½dom, 1m Eff) get
+        # their own keys here. Nothing from either box is left without a toggle.
         for key, label in (("st_ohlc", "· OHLC"), ("st_poc", "· Elapsed/POC"), ("st_volume", "· Volume"),
-                           ("st_buysell", "· Buy/Sell"), ("st_delta", "· Delta"), ("st_daccel", "· Δ-accel"),
-                           ("st_absorb", "· Absorb R"), ("st_ease", "· Ease"), ("st_rhalves", "· R h1/h2"),
-                           ("st_dp", "· ΔP"), ("st_oi", "· OI Δ"), ("st_costtick", "· Cost/tick"),
-                           ("st_vel", "· Buy/Sell-vel"), ("st_tape", "· Tape B/S"), ("st_ker", "· KER"),
-                           ("st_movmag", "· Mov.Magnitude"), ("st_skew", "· Skew"), ("st_mmxskew", "· MM×Skew"),
-                           ("st_openpos", "· Open pos"), ("st_closepos", "· Close pos"), ("st_er", "· E/R"),
-                           ("st_er30", "· 30b E/R"), ("st_absorpvol", "· Absorption"), ("st_effagg", "· Eff-agg"),
+                           ("st_buysell", "· Buy/Sell"), ("st_delta", "· Delta"), ("st_deltaud", "· Δ↑ / Δ↓"),
+                           ("st_daccel", "· Δ-accel"), ("st_absorb", "· Absorb R"), ("st_ease", "· Ease"),
+                           ("st_halfdom", "· ½dom"), ("st_rhalves", "· R h1/h2"), ("st_dp", "· ΔP"),
+                           ("st_oi", "· OI Δ"), ("st_costtick", "· Cost/tick"), ("st_vel", "· Buy/Sell-vel"),
+                           ("st_tape", "· Tape B/S"), ("st_ker", "· KER"), ("st_movmag", "· Mov.Magnitude"),
+                           ("st_skew", "· Skew"), ("st_mmxskew", "· MM×Skew"), ("st_openpos", "· Open pos"),
+                           ("st_closepos", "· Close pos"), ("st_er", "· E/R (bER/sER)"), ("st_er30", "· 30b E/R"),
+                           ("st_absorpvol", "· Absorption"), ("st_effagg", "· Eff-agg"), ("st_1meff", "· 1m Eff"),
                            ("st_velread", "· VEL"), ("st_vel30", "· 30b VEL"), ("st_tau", "· τ-ratio")):
-            cb = QtWidgets.QCheckBox(label)
-            cb.setChecked(True)
-            cb.setStyleSheet("QCheckBox{ padding-left:26px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
-            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
-            self.layer_checks[key] = cb
-            section.addWidget(cb)
-
-    def _build_fp_substats(self, section) -> None:
-        """Per-stat toggles under the Live Footprint Pane — each row of the footprint readout on/off independently.
-        Registered as layer_ keys so _fp_top_html reads them via layer_state (and they persist); default all ON."""
-        for key, label in (("fp_movmagn", "· Mov.Magn"), ("fp_skew", "· Skew"), ("fp_mmxskew", "· MMxSkew"),
-                           ("fp_effagg", "· eff-agg"), ("fp_ber", "· bER / sER"), ("fp_tape", "· Tape"),
-                           ("fp_tau", "· τ-ratio"), ("fp_daccel", "· Δ-accel"), ("fp_absorb", "· Absorb R"),
-                           ("fp_ease", "· Ease"), ("fp_dp", "· ΔP"), ("fp_deltaud", "· Δ↑ / Δ↓"),
-                           ("fp_halfdom", "· ½dom"), ("fp_1meff", "· 1m Eff"), ("fp_ker", "· ker")):
             cb = QtWidgets.QCheckBox(label)
             cb.setChecked(True)
             cb.setStyleSheet("QCheckBox{ padding-left:26px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level

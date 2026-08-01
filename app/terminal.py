@@ -1715,9 +1715,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # removed with the time chart, so every layer key is an m10_ key -> the overlay dispatch.
         if key.startswith("m10_"):
             self._set_scanner_overlay(key, on)
-        elif key.startswith("fp_") or key.startswith("st_"):
+        elif key.startswith("st_"):
             try:
-                self._refresh_parked_hover()    # footprint / stats-box row toggled -> re-render the readout now
+                self._refresh_parked_hover()    # unified stat-row toggle -> re-render both the footprint pane + stats box
             except Exception:
                 pass
         if not self._loading_ui:
@@ -2594,13 +2594,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 out.append(html)
         ref = l if c > o else (h if c < o else o)
         mm = ((((c * 100.0) / ref) - 100.0) ** 2) * 100.0 if ref > 0 else None
-        add("fp_movmagn", row("Mov.Magn", ("%.4f" % mm) if mm is not None else "--",
+        add("st_movmag", row("Mov.Magn", ("%.4f" % mm) if mm is not None else "--",
                               GRAY if (mm is None or c == o) else (G if c > o else R)))
         sk = profile_skewness(ab.get("levels"))
         _w, _ = skew_read(sk)
-        add("fp_skew", row("Skew", (_w if sk is None else "%s %+.2f" % (_w, sk)), skew_color(sk)))
+        add("st_skew", row("Skew", (_w if sk is None else "%s %+.2f" % (_w, sk)), skew_color(sk)))
         ms = (mm * sk) if (mm is not None and sk is not None) else None
-        add("fp_mmxskew", row("MMxSkew", ("%+.2f" % ms) if ms is not None else "--",
+        add("st_mmxskew", row("MMxSkew", ("%+.2f" % ms) if ms is not None else "--",
                               GRAY if (ms is None or ms == 0) else (G if ms > 0 else R)))
         # NON-LOCKED (first-print / causal) eff-agg spread = (2*eff_causal_share - 1)*100 — the exact panel-2
         # value MMXSKEW gates on (>= +35 long / <= -35 short), NOT the centered/settled one (that repaints).
@@ -2617,7 +2617,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _eff_col = G if _ev >= 35.0 else (R if _ev <= -35.0 else GRAY)
         except Exception:
             pass
-        add("fp_effagg", row("eff-agg", _eff_s, _eff_col))
+        add("st_effagg", row("eff-agg", _eff_s, _eff_col))
         # BUYER / SELLER E/R EXHAUSTION-% — the SAME quantity the candle's E/R border thresholds on, so this
         # row and the 2px/3px border always agree: (mult - 1) * 100, where mult is that side's E/R z-scored
         # against the preceding EXH_WINDOW buckets (region_state.exhaustion_mults). GOLD once a side reaches
@@ -2629,13 +2629,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         if _bp is None:
-            add("fp_ber", row("bER / sER", "--", GRAY))
+            add("st_er", row("bER / sER", "--", GRAY))
         else:
             _bp = 0.0 if abs(_bp) < 0.5 else _bp        # kill "-0%" from a rounded sub-half-percent
             _sp = 0.0 if abs(_sp) < 0.5 else _sp
             def _erc(v):
                 return GOLD if v >= config.ER_BORDER_EXH_PCT else (NEU if v >= 0.0 else GRAY)
-            add("fp_ber", "<span style='color:%s'>bER</span> <span style='color:%s'>%+.0f%%</span>"
+            add("st_er", "<span style='color:%s'>bER</span> <span style='color:%s'>%+.0f%%</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>sER</span>"
                        " <span style='color:%s'>%+.0f%%</span>"
                        % (NEU, _erc(_bp), _bp, NEU, NEU, _erc(_sp), _sp))
@@ -2644,11 +2644,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         szb = ab.get("sz_cb") or []; szs = ab.get("sz_cs") or []
         if dur > 0 and szb:
             tb = sum(szb) / dur; ts = (sum(szs) / dur) if szs else 0.0
-            add("fp_tape", "<span style='color:%s'>Tape</span> <span style='color:%s'>B %.2f/s</span>"
+            add("st_tape", "<span style='color:%s'>Tape</span> <span style='color:%s'>B %.2f/s</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>S %.2f/s</span>"
                        % (NEU, G if tb > ts else GRAY, tb, NEU, R if ts > tb else GRAY, ts))
         else:
-            add("fp_tape", row("Tape", "--", GRAY))
+            add("st_tape", row("Tape", "--", GRAY))
         tau = None
         if dur > 0 and buckets:
             a_ = 2.0 / 16.0; ema = None
@@ -2658,7 +2658,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     continue
                 ema = wd if ema is None else wd * a_ + ema * (1 - a_)
             tau = (dur / ema) if (ema and ema > 0) else None
-        add("fp_tau", row("τ-ratio", ("%.2f" % tau) if tau is not None else "--",
+        add("st_tau", row("τ-ratio", ("%.2f" % tau) if tau is not None else "--",
                           GOLD if (tau is not None and tau < 0.3) else GRAY))
         dh1 = ab.get("delta_h1")
         if dh1 is not None and cv > 0:
@@ -2666,7 +2666,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 a = abs(v); s = "+" if v >= 0 else "-"
                 return ("%s%.1fK" % (s, a / 1000.0)) if a >= 1000 else ("%s%.0f" % (s, a))
             _d1 = float(dh1); _d2 = (bv - sv) - _d1; da2 = (_d2 - _d1) / cv
-            add("fp_daccel", "<span style='color:%s'>Δ-accel</span> <span style='color:%s'>%+.1f%%</span>"
+            add("st_daccel", "<span style='color:%s'>Δ-accel</span> <span style='color:%s'>%+.1f%%</span>"
                        " <span style='color:%s'>(</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>)</span>"
@@ -2674,7 +2674,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                           NEU, G if _d1 >= 0 else R, _kv(_d1),
                           NEU, G if _d2 >= 0 else R, _kv(_d2), NEU))
         else:
-            add("fp_daccel", row("Δ-accel", "--", GRAY))
+            add("st_daccel", row("Δ-accel", "--", GRAY))
         # ABSORPTION RESIDUAL — did the delta produce the price move it should have? R = Zp - rho*Zv against a
         # trailing-30 window (rho measured on that same window, NOT assumed 1.0 — see app/absorption.py).
         # A is oriented so POSITIVE = the aggressor got absorbed, whichever side was aggressing.
@@ -2688,13 +2688,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         if _A is None and _A1 is None and _A2 is None:
-            add("fp_absorb", row("Absorb R", "--", GRAY))
+            add("st_absorb", row("Absorb R", "--", GRAY))
         else:
             _hc = _absorb_color            # ORANGE = absorbed, BLUE = easy (see _absorb_color)
             def _hs(v):
                 return "--" if v is None else ("%+.2f" % v)
             _head = "--" if _A is None else ("%+.2f %s" % (_A, _absmod.label(_A)))
-            add("fp_absorb", "<span style='color:%s'>Absorb R</span> <span style='color:%s'>%s</span>"
+            add("st_absorb", "<span style='color:%s'>Absorb R</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>(</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>)</span>"
@@ -2708,7 +2708,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _rB = (100.0 * _ut / _tot) if _tot > 0 else None
         _rS = (100.0 * _dt / _tot) if _tot > 0 else None
         if _rB is None:
-            add("fp_ease", row("Ease", "--", GRAY))
+            add("st_ease", row("Ease", "--", GRAY))
         else:
             _erow = ("<span style='color:%s'>Ease</span> <span style='color:%s'>rB %.0f%%</span>"
                      " <span style='color:%s'>/</span> <span style='color:%s'>rS %.0f%%</span>"
@@ -2719,7 +2719,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _vcol = G if _ut > _dt else (R if _dt > _ut else GRAY)
                 _erow += (" <span style='color:%s'>+%.0f%%</span>"
                           " <span style='color:%s; font-size:9px'>vw</span>" % (_vcol, _vw, GRAY))
-            add("fp_ease", _erow)
+            add("st_ease", _erow)
         # PER-HALF PRICE CHANGE — the RESULT half of the same split R h1/h2 scores. Pure per-bucket
         # arithmetic (no trailing baseline), so it reads on ANY bucket carrying price_h1, including ones
         # where R h1/h2 is still "--" for want of 20 baselined priors. Each leg is coloured on its own sign:
@@ -2729,12 +2729,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             _ph = None
         if _ph is None:
-            add("fp_dp", row("ΔP", "--", GRAY))
+            add("st_dp", row("ΔP", "--", GRAY))
         else:
             _p1, _p2, _pt = _ph
             def _pc(v):
                 return GRAY if v == 0 else (G if v > 0 else R)
-            add("fp_dp", "<span style='color:%s'>ΔP</span> <span style='color:%s'>%+.2f%%</span>"
+            add("st_dp", "<span style='color:%s'>ΔP</span> <span style='color:%s'>%+.2f%%</span>"
                        " <span style='color:%s'>(</span> <span style='color:%s'>%+.2f</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>%+.2f</span>"
                        " <span style='color:%s'>)</span>"
@@ -2761,7 +2761,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _upp = (_ub - _us) / cv * 100.0; _lop = (_lb - _ls) / cv * 100.0
             def _dvc(v):
                 return GRAY if abs(v) < 0.05 else (G if v > 0 else R)
-            add("fp_deltaud", "<span style='color:%s'>Δ↑</span> <span style='color:%s'>%+.1f%%</span>"
+            add("st_deltaud", "<span style='color:%s'>Δ↑</span> <span style='color:%s'>%+.1f%%</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>Δ↓</span>"
                        " <span style='color:%s'>%+.1f%%</span>"
                        % (NEU, _dvc(_upp), _upp, NEU, NEU, _dvc(_lop), _lop))
@@ -2776,22 +2776,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     return "%.0f%%S" % (100.0 - _bs), R     # sell-dominated (share -> 100 => buyers absent)
                 return (("%.0f%%B" % _bs) if _bs >= 50.0 else ("%.0f%%S" % (100.0 - _bs))), GRAY
             _um, _uc = _mix(_ub, _us); _lm, _lc = _mix(_lb, _ls)
-            add("fp_halfdom", "<span style='color:%s'>½dom ↑</span> <span style='color:%s'>%s</span>"
+            add("st_halfdom", "<span style='color:%s'>½dom ↑</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>/ ↓</span> <span style='color:%s'>%s</span>"
                        % (NEU, _uc, _um, NEU, _lc, _lm))
         else:
-            add("fp_deltaud", row("Δ↑ / Δ↓", "--", GRAY))
-            add("fp_halfdom", row("½dom", "--", GRAY))
+            add("st_deltaud", row("Δ↑ / Δ↓", "--", GRAY))
+            add("st_halfdom", row("½dom", "--", GRAY))
         # 1m-PATH EFFICIENCY — Kaufman ER of this candle's 1m closes: 1.0 = clean diagonal, ~0 = chop. Descriptive
         # smoothness readout (weakly predictive on continuation only — study/engulf_1m_efficiency), not a filter.
         _er = self._path_er(ab)
         if _er is None:
-            add("fp_1meff", row("1m Eff", "--", GRAY))
+            add("st_1meff", row("1m Eff", "--", GRAY))
         else:
             _erc = GOLD if _er >= 0.70 else (G if _er >= 0.50 else (NEU if _er >= 0.30 else GRAY))
-            add("fp_1meff", row("1m Eff", "%.2f" % _er, _erc))
+            add("st_1meff", row("1m Eff", "%.2f" % _er, _erc))
         _kb, _ks = self._bucket_ker(ab)                     # ker (Kinetic Efficiency Ratio) per side — pinned to the BOTTOM
-        add("fp_ker", "<span style='color:%s'>ker</span> <span style='color:%s'>%s</span>"
+        add("st_ker", "<span style='color:%s'>ker</span> <span style='color:%s'>%s</span>"
                    " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
                    % (NEU, G if _kb > _ks else GRAY, _ker_read(_kb), NEU, R if _ks > _kb else GRAY, _ker_read(_ks)))
         return "<br>".join(out)
