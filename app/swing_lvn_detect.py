@@ -103,11 +103,11 @@ def _leg_stats(buckets, b0, b1, ends_high):
     return dict(lvn=lvn, median=med, val=val, vah=vah, poc=poc, zlo=zlo, zhi=zhi)
 
 
-def va_lines(buckets, b0, b1):
-    """Three WITHIN-VALUE-AREA levels for the leg [b0..b1]: the price with the most BUY volume, the price with the most
-    SELL volume, and the LVN — all clipped to [VAL, VAH]. For the hover 'VA lines' overlay. None if degenerate."""
-    prof = _leg_profile(buckets, b0, b1)
-    if len(prof) < 3:
+def va_lines_from_profile(prof):
+    """Three WITHIN-VALUE-AREA levels for a prebuilt {price: {'b','s'}} profile: the price with the most BUY volume,
+    the price with the most SELL volume, and the LVN — all clipped to [VAL, VAH]. None if degenerate. Shared by the
+    swing hover overlay (per-leg) and the 'Zoneds' volume-profile mode (per selection / 4h / prev-day region)."""
+    if not prof or len(prof) < 3:
         return None
     val, vah = _bq.value_area(prof)
     if val != val or vah != vah or not (vah > val):
@@ -121,6 +121,12 @@ def va_lines(buckets, b0, b1):
     buy_poc = max(inva, key=lambda pd: pd[1].get("b", 0.0))[0]
     sell_poc = max(inva, key=lambda pd: pd[1].get("s", 0.0))[0]
     return dict(val=val, vah=vah, buy_poc=buy_poc, sell_poc=sell_poc, lvn=lvn)
+
+
+def va_lines(buckets, b0, b1):
+    """Three WITHIN-VALUE-AREA levels for the leg [b0..b1] (buy-POC / sell-POC / LVN). For the swing hover overlay.
+    None if degenerate. Thin wrapper over va_lines_from_profile on the leg's summed footprint."""
+    return va_lines_from_profile(_leg_profile(buckets, b0, b1))
 
 
 def _dev_leg(buckets, thr=None):

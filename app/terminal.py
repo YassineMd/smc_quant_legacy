@@ -729,6 +729,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _ln = pg.PlotDataItem(pen=_pen); _ln.setZValue(3)
             self.plot.addItem(_ln, ignoreBounds=True); _ln.setVisible(False)
             self.bc_sel_vp_lines.append(_ln)
+        # 'Zoneds' VP mode (dropdown index 8) — the SAME three within-VA lines as the Price&CVD-Swings VA Zones:
+        # buy-POC green / sell-POC red / LVN purple, dashed. Shown only when _vp_mode == 8 (line-only, no histogram).
+        self.bc_sel_va = {}
+        for _zk, _zc in (("buy", (78, 203, 141)), ("sell", (255, 82, 82)), ("lvn", (178, 70, 255))):
+            _zln = pg.PlotDataItem(pen=pg.mkPen(*_zc, 235, width=1.4, style=QtCore.Qt.DashLine)); _zln.setZValue(3)
+            self.plot.addItem(_zln, ignoreBounds=True); _zln.setVisible(False)
+            self.bc_sel_va[_zk] = _zln
         # PERSISTED manual slider overrides (None = use the per-selection adaptive seed). Once the user drags a
         # slider, that value sticks across selections AND sessions (saved to terminal_ui.json).
         self._zone_user_s = None
@@ -1266,7 +1273,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # PANEL 0 ('0') — a SMOOTHED twin of Panel 9: each line = (current + locked)/2. Identical items/colors.
         self.show_panel0 = True
         self._candle_mode = 0            # 'W' cycle: 0 normal>1 whisker>2 footprint>3 delta>4 force>5 delta-force (persisted)
-        self._vp_mode = 1                # volume-profile mode 0..7 (default 1 = Force, the existing 4h VP look; persisted)
+        self._vp_mode = 1                # volume-profile mode 0..8 (default 1 = Force; 8 = Zoneds VA-zone lines; persisted)
         self._hide_candles = False       # Ctrl+H — hide the candle glyphs (see the VP / zones without candle noise; persisted)
         _gp0_hi = pg.mkPen("#ff9800", width=0.8); _gp0_hi.setCosmetic(True); _gp0_hi.setDashPattern([5.0, 10.0])
         _gp0_lo = pg.mkPen("#ff9800", width=0.8); _gp0_lo.setCosmetic(True); _gp0_lo.setDashPattern([5.0, 10.0])
@@ -2953,7 +2960,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _on_vp_mode(self, m: int) -> None:
         """Hamburger 'Volume Profile Mode' dropdown changed -> re-render the selection VP + the 4h 'V' overlay."""
-        self._vp_mode = int(m) % 8       # 8 VP modes (0..7)
+        self._vp_mode = int(m) % 9       # 9 VP modes (0..8; 8 = Zoneds, line-only VA zones)
         self._save_ui_state()
         self._sel_sig = None                         # force the Mode-10 selection VP to redraw
         if self._z4_last_buckets:                    # re-render the 4h V overlay immediately
@@ -4055,13 +4062,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             r = [0.0, 0.0]; raw[ps] = r
                         r[0] += float(vv.get("b", 0.0)); r[1] += float(vv.get("s", 0.0))
                 lvl = {ps: {"b": v[0], "s": v[1]} for ps, v in raw.items()}
-                try:
-                    _q = bar_quantiles.vq(lvl); _va = bar_quantiles.value_area(lvl); _poc = bar_quantiles.poc(lvl)
-                    lines = ((_va[1], (255, 30, 70), False), (_va[0], (0, 255, 120), False),
-                             (_poc, (255, 240, 0), False), (_q[1], (255, 255, 255), True),
-                             (bar_quantiles.lvn(lvl), (178, 70, 255), True))
-                except Exception:
-                    lines = ()
+                if self._vp_mode == 8:                    # ZONEDS — within-VA buy/sell-POC + LVN lines (dashed), no bars
+                    lines = self._vp_zone_lines(lvl)
+                else:
+                    try:
+                        _q = bar_quantiles.vq(lvl); _va = bar_quantiles.value_area(lvl); _poc = bar_quantiles.poc(lvl)
+                        lines = ((_va[1], (255, 30, 70), False), (_va[0], (0, 255, 120), False),
+                                 (_poc, (255, 240, 0), False), (_q[1], (255, 255, 255), True),
+                                 (bar_quantiles.lvn(lvl), (178, 70, 255), True))
+                    except Exception:
+                        lines = ()
                 for _y, _col, _dash in lines:
                     if not (_y and _y == _y):         # skip 0 / NaN
                         continue
@@ -4187,11 +4197,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             self._z4_hist(uh, x0=_vpx, width=_vpw, y=_vpy, height=_vph, brushes=_vpb, pen=None).setVisible(True); uh += 1
                 except Exception:
                     pass                                      # a VP-histogram glitch must never hide the V/Z/B buttons + lines
-                for lvl, col, dash in ((r["vah"], (255, 30, 70), False),      # VAH  neon red
-                                       (r["val"], (0, 255, 120), False),        # VAL  neon green
-                                       (r["poc"], (255, 240, 0), False),        # POC  neon yellow
-                                       (r.get("lvn"), (178, 70, 255), True),    # LVN  electric purple (dashed)
-                                       (r["vmed"], (255, 255, 255), True)):     # median neon white (spaced dashes)
+                _vlines = (self._vp_zone_lines(r.get("levels")) if self._vp_mode == 8  # ZONEDS -> VA-zone lines
+                           else ((r["vah"], (255, 30, 70), False),       # VAH  neon red
+                                 (r["val"], (0, 255, 120), False),        # VAL  neon green
+                                 (r["poc"], (255, 240, 0), False),        # POC  neon yellow
+                                 (r.get("lvn"), (178, 70, 255), True),    # LVN  electric purple (dashed)
+                                 (r["vmed"], (255, 255, 255), True)))     # median neon white (spaced dashes)
+                for lvl, col, dash in _vlines:
                     if not (lvl and lvl == lvl):                  # skip 0 / NaN
                         continue
                     _ln = self._z4_curve(uc); uc += 1             # level lines -> x1_ext (no labels — colour = identity)
@@ -4312,7 +4324,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._candle_mode = int(_cm) % 6
         _vm = s.get("vp_mode")
         if isinstance(_vm, (int, float)):
-            self._vp_mode = int(_vm) % 8
+            self._vp_mode = int(_vm) % 9
         self._hide_candles = bool(s.get("hide_candles", self._hide_candles))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
         for _k, _v in (s.get("phase") or {}).items():
@@ -4448,9 +4460,35 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.bc_sel_vp.setVisible(False)
         for _ln in self.bc_sel_vp_lines:
             _ln.setVisible(False)
+        for _zln in self.bc_sel_va.values():
+            _zln.setVisible(False)
 
     _VP_FCOL = ((40, 230, 90, 165), (255, 55, 70, 165), (235, 70, 255, 165), (0, 210, 255, 165))  # opL/opS/clL/clS
     _VP_GREEN = (40, 230, 90, 165); _VP_RED = (235, 55, 70, 165)
+
+    def _vp_zone_lines(self, lvl):
+        """ZONEDS VP mode line set: the three within-VALUE-AREA levels (buy-POC green / sell-POC red / LVN purple, all
+        dashed) as (price, rgb, dash) tuples for the shared prev-day / 4h line loops. `lvl` = {price: {'b','s'}} (keys
+        may be strings). Same levels as the Price&CVD-Swings VA Zones; empty tuple on a degenerate profile."""
+        from app import swing_lvn_detect
+        prof = {}
+        for ps, d in (lvl or {}).items():
+            try:
+                prof[float(ps)] = d
+            except (TypeError, ValueError):
+                continue
+        try:
+            va = swing_lvn_detect.va_lines_from_profile(prof)
+        except Exception:
+            va = None
+        if not va:
+            return ()
+        out = []
+        for _key, _rgb in (("buy_poc", (78, 203, 141)), ("sell_poc", (255, 82, 82)), ("lvn", (178, 70, 255))):
+            _y = va.get(_key)
+            if _y is not None and _y == _y:
+                out.append((_y, _rgb, True))
+        return tuple(out)
 
     def _vp_segments(self, rows, mode, x0, span, thick):
         """Build BarGraphItem opts (x0s, widths, ys, heights, brushes) for a volume profile in the given VP `mode`,
@@ -4460,8 +4498,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         right / sell red left), 3 Split Basic Delta (net delta signed), 4 Split Force (opL green+clS cyan right /
         opS red+clL magenta left), 5 Split Force Delta (net delta signed, dominant-force colour), 6 Basic Bulls
         (right, net-BUY delta only = bull-dominant price zones, green), 7 Basic Bears (right, net-SELL delta only
-        = bear-dominant zones, red). 6 & 7 share the max|delta| scale so the two are directly comparable."""
+        = bear-dominant zones, red). 6 & 7 share the max|delta| scale so the two are directly comparable.
+        Mode 8 (Zoneds) is line-only (the caller draws the VA-zone lines instead) -> no histogram bars here."""
         x0s = []; ws = []; ys = []; hs = []; brs = []
+        if mode == 8:
+            return x0s, ws, ys, hs, brs
 
         def _add(bx, bw, by, col):
             if bw > 0:
@@ -4516,6 +4557,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.show_sel_vp or hi_i < lo_i:   # INDEPENDENT of the 'h' box — the VP stays on while show_sel_vp
             self._hide_selection_vp(); return
         sel = filtered[lo_i:hi_i + 1]
+        if self._vp_mode == 8:                                  # ZONEDS — line-only VA zones (see _draw_sel_va_zone)
+            self._draw_sel_va_zone(sel, lo_i, hi_i); return
+        for _zln in self.bc_sel_va.values():                   # any other mode -> ensure the VA-zone lines are hidden
+            _zln.setVisible(False)
         agg = self._sel_vp_hist(sel)
         if len(agg) < 2:
             self._hide_selection_vp(); return
@@ -4548,6 +4593,35 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _ln.setData([float(lo_i), float(hi_i)], [float(_y), float(_y)]); _ln.setVisible(True)
             else:
                 _ln.setVisible(False)
+
+    def _draw_sel_va_zone(self, sel, lo_i, hi_i) -> None:
+        """ZONEDS VP mode: draw the three WITHIN-VALUE-AREA lines over the selection — buy-POC (green), sell-POC (red),
+        LVN (purple), dashed — the SAME levels the Price&CVD-Swings VA Zones use, computed from the selection's summed
+        footprint. Line-only: the histogram + standard VAH/VAL/POC/median/LVN lines are hidden."""
+        from app import swing_lvn_detect
+        self.bc_sel_vp.setVisible(False)                       # no histogram bars in Zoneds
+        for _ln in self.bc_sel_vp_lines:                       # and no standard VAH/VAL/POC/median/LVN lines
+            _ln.setVisible(False)
+        prof = {}
+        for b in sel:
+            for ps, vv in (b.get("levels") or {}).items():
+                try:
+                    p = float(ps)
+                except (TypeError, ValueError):
+                    continue
+                c = prof.setdefault(p, {"b": 0.0, "s": 0.0})
+                c["b"] += float(vv.get("b", 0.0) or 0.0); c["s"] += float(vv.get("s", 0.0) or 0.0)
+        try:
+            va = swing_lvn_detect.va_lines_from_profile(prof)
+        except Exception:
+            va = None
+        _x0, _x1 = float(lo_i), float(hi_i)
+        for _k, _key in (("buy", "buy_poc"), ("sell", "sell_poc"), ("lvn", "lvn")):
+            _it = self.bc_sel_va[_k]; _y = (va or {}).get(_key)
+            if _y is not None and _y == _y:
+                _it.setData([_x0, _x1], [float(_y), float(_y)]); _it.setVisible(True)
+            else:
+                _it.setVisible(False)
 
     def _on_zone_s_changed(self, _s: float) -> None:
         """User dragged the absorption-zone slider — pin it as a PERSISTED override (sticks across selections +

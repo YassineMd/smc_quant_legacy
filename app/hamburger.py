@@ -175,8 +175,9 @@ SCANNER_LABELS = {
 # Candle render modes (index = _candle_mode; also cycled by 'W').
 CANDLE_MODE_LABELS = ["Normal candles", "Whisker bars", "Footprint", "Delta", "Force", "Delta-Force"]
 # Volume-profile render modes (index = _vp_mode; drives the Mode-10 selection VP + the 4h 'V' overlay).
+# "Zoneds" (8) is line-only: the Price&CVD-Swings VA Zones — buy-POC green / sell-POC red / LVN purple, no histogram.
 VP_MODE_LABELS = ["Basic", "Force", "Split Basic", "Split Basic Delta", "Split Force", "Split Force Delta",
-                  "Basic Bulls", "Basic Bears"]
+                  "Basic Bulls", "Basic Bears", "Zoneds"]
 
 
 class _WheelSlider(QtWidgets.QSlider):
@@ -248,7 +249,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     swingSensitivityChanged = QtCore.Signal(float)   # swing-ZigZag threshold slider, in PERCENT
     keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
     candleModeChanged = QtCore.Signal(int)   # candle render mode 0..5 (also cycled by 'W')
-    vpModeChanged = QtCore.Signal(int)       # volume-profile render mode 0..7 (selection VP + 4h 'V')
+    vpModeChanged = QtCore.Signal(int)       # volume-profile render mode 0..8 (selection VP + 4h 'V' + prev-day VP)
     helpRequested = QtCore.Signal()       # the top-right '?' — show the keyboard-shortcuts cheatsheet
 
     PANEL_WIDTH = 308
