@@ -175,9 +175,10 @@ SCANNER_LABELS = {
 # Candle render modes (index = _candle_mode; also cycled by 'W').
 CANDLE_MODE_LABELS = ["Normal candles", "Whisker bars", "Footprint", "Delta", "Force", "Delta-Force"]
 # Volume-profile render modes (index = _vp_mode; drives the Mode-10 selection VP + the 4h 'V' overlay).
-# "Zoneds" (8) is line-only: the Price&CVD-Swings VA Zones — buy-POC green / sell-POC red / LVN purple, no histogram.
+# "VP Zones" (8) is line-only: the Price&CVD-Swings VA Zones — buy-POC green / sell-POC red / LVN purple, plus
+# VAH/VAL white solid, no histogram.
 VP_MODE_LABELS = ["Basic", "Force", "Split Basic", "Split Basic Delta", "Split Force", "Split Force Delta",
-                  "Basic Bulls", "Basic Bears", "Zoneds"]
+                  "Basic Bulls", "Basic Bears", "VP Zones"]
 
 
 class _WheelSlider(QtWidgets.QSlider):
