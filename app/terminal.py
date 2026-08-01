@@ -644,7 +644,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                        # (double-click / a divider click re-arms it), mirroring _follow_y
         self._cvd_last_lo = None       # newest CVD candle low/high (kept for reference)
         self._cvd_last_hi = None
-        self._cvd_lows = None          # per-bar CVD low/high arrays -> replay-step Y RE-FIT (rescale as it develops)
+        self._cvd_lows = None          # per-bar CVD low/high arrays -> AUTO-FIT-mode replay-step window rescale
         self._cvd_highs = None
         self._cvd_closes = None        # per-bar CVD close -> mirror a hovered swing (start/end) onto the CVD pane
         self.splitter_v = None         # Mode 10 vertical splitter (upper/lower panes)
@@ -971,8 +971,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # (electric-purple) forecasting S/R (up-leg = support / down-leg = resistance); a zone persists until broken.
         self._svl_slots = None                   # list of per-zone dicts of pg items (lazy-built, one slot per live zone)
         self._svl_line = None                    # ZigZag SWING-LINE polyline (m10_svl_lines) — pivot->pivot legs
+        self._svl_line_unpaid = None             # RED overlay on the UNPAID sub-segments (net delta opposed the move)
         self._svl_dots = None                    # midpoint split dots on each swing line
         self._svl_lines = []                     # per-leg geometry + swing absorb-A (A/A1/A2) for the hover box
+        self._svl_buckets = None                 # frame buckets kept for the card's cumulative per-candle absorb-A
         self._svl_hover = None                   # hover info box (pg.TextItem) shown when the cursor is on a swing line
         self._svl_hover_dot = None               # emphasised midpoint dot for the hovered leg
         self._svl_div = {}                       # per-leg (stable key) division 2/3/4 — cycled by CLICKING a swing line
@@ -980,6 +982,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._svl_cvd_line = None                # hovered swing mirrored onto the CVD pane (start -> end)
         self._svl_cvd_dots = None                # its division dots on that CVD line
         self._svl_proj = None                    # PROJECTION overlay (m10_svl_proj): retrace band (purple) + follow band (green)
+        self._svl_va = None                      # VA-lines POOL (m10_svl_zones): buy-POC(green)/sell-POC(red)/LVN(purple) dashed
+        self._svl_va_locked = set()              # leg-keys whose VA lines are PINNED (Ctrl+click a swing to lock/unlock)
+        self._svl_hovered_leg = None             # the swing under the cursor (for the hover VA lines)
         self._svl_sig = None; self._svl_drawn = False
         # Swing-LVN BIAS badge (bottom-left) — LONG/SHORT + confidence% from the swing/zone structure.
         self._svl_bias = None                    # cached swing_lvn_detect.bias() result
@@ -1710,6 +1715,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # removed with the time chart, so every layer key is an m10_ key -> the overlay dispatch.
         if key.startswith("m10_"):
             self._set_scanner_overlay(key, on)
+        elif key.startswith("fp_") or key.startswith("st_"):
+            try:
+                self._refresh_parked_hover()    # footprint / stats-box row toggled -> re-render the readout now
+            except Exception:
+                pass
         if not self._loading_ui:
             self._save_ui_state()               # persist the overlay toggle across sessions
 
@@ -2005,8 +2015,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         d = self._seg_px_dist(mx, my, lg["b0"], lg["p0"], lg["b1"], lg["p1"], psx, psy)
                         if d < best_d:
                             best_d = d; best = lg
+                    if best is not None and (ev.modifiers() & QtCore.Qt.ControlModifier):
+                        _vk = best["key"]                                 # Ctrl+click -> LOCK / unlock this swing's VA lines
+                        (self._svl_va_locked.discard if _vk in self._svl_va_locked else self._svl_va_locked.add)(_vk)
+                        try:
+                            self._svl_va_render()
+                        except Exception:
+                            pass
+                        ev.accept(); return
                     if best is not None:
-                        self._svl_div[best["key"]] = {2: 3, 3: 4, 4: 2}.get(self._svl_div.get(best["key"], 2), 3)
+                        self._svl_div[best["key"]] = {4: 2, 2: 3, 3: 4}.get(self._svl_div.get(best["key"], 4), 2)
                         self._svl_sig = None                              # force the overlay to rebuild with the new N
                         try:
                             self._draw_swinglvn(self._build_scanner_buckets()[0])
@@ -2570,16 +2588,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         cv = float(ab.get("curr_vol", 0.0) or 0.0)
         bv = float(ab.get("buy_vol", 0.0) or 0.0); sv = float(ab.get("sell_vol", 0.0) or 0.0)
         out = []
+        def add(key, html):                     # per-stat toggle (hamburger, under the Live Footprint Pane); on if unregistered
+            _cb = self.menu.layer_checks.get(key)
+            if _cb is None or _cb.isChecked():
+                out.append(html)
         ref = l if c > o else (h if c < o else o)
         mm = ((((c * 100.0) / ref) - 100.0) ** 2) * 100.0 if ref > 0 else None
-        out.append(row("Mov.Magn", ("%.4f" % mm) if mm is not None else "--",
-                       GRAY if (mm is None or c == o) else (G if c > o else R)))
+        add("fp_movmagn", row("Mov.Magn", ("%.4f" % mm) if mm is not None else "--",
+                              GRAY if (mm is None or c == o) else (G if c > o else R)))
         sk = profile_skewness(ab.get("levels"))
         _w, _ = skew_read(sk)
-        out.append(row("Skew", (_w if sk is None else "%s %+.2f" % (_w, sk)), skew_color(sk)))
+        add("fp_skew", row("Skew", (_w if sk is None else "%s %+.2f" % (_w, sk)), skew_color(sk)))
         ms = (mm * sk) if (mm is not None and sk is not None) else None
-        out.append(row("MMxSkew", ("%+.2f" % ms) if ms is not None else "--",
-                       GRAY if (ms is None or ms == 0) else (G if ms > 0 else R)))
+        add("fp_mmxskew", row("MMxSkew", ("%+.2f" % ms) if ms is not None else "--",
+                              GRAY if (ms is None or ms == 0) else (G if ms > 0 else R)))
         # NON-LOCKED (first-print / causal) eff-agg spread = (2*eff_causal_share - 1)*100 — the exact panel-2
         # value MMXSKEW gates on (>= +35 long / <= -35 short), NOT the centered/settled one (that repaints).
         # Computed over a trailing 150-bucket slice: the norms look back 50 (ABSORP/EFF_AGG) + 7 (causal half
@@ -2595,7 +2617,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _eff_col = G if _ev >= 35.0 else (R if _ev <= -35.0 else GRAY)
         except Exception:
             pass
-        out.append(row("eff-agg", _eff_s, _eff_col))
+        add("fp_effagg", row("eff-agg", _eff_s, _eff_col))
         # BUYER / SELLER E/R EXHAUSTION-% — the SAME quantity the candle's E/R border thresholds on, so this
         # row and the 2px/3px border always agree: (mult - 1) * 100, where mult is that side's E/R z-scored
         # against the preceding EXH_WINDOW buckets (region_state.exhaustion_mults). GOLD once a side reaches
@@ -2607,13 +2629,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         if _bp is None:
-            out.append(row("bER / sER", "--", GRAY))
+            add("fp_ber", row("bER / sER", "--", GRAY))
         else:
             _bp = 0.0 if abs(_bp) < 0.5 else _bp        # kill "-0%" from a rounded sub-half-percent
             _sp = 0.0 if abs(_sp) < 0.5 else _sp
             def _erc(v):
                 return GOLD if v >= config.ER_BORDER_EXH_PCT else (NEU if v >= 0.0 else GRAY)
-            out.append("<span style='color:%s'>bER</span> <span style='color:%s'>%+.0f%%</span>"
+            add("fp_ber", "<span style='color:%s'>bER</span> <span style='color:%s'>%+.0f%%</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>sER</span>"
                        " <span style='color:%s'>%+.0f%%</span>"
                        % (NEU, _erc(_bp), _bp, NEU, NEU, _erc(_sp), _sp))
@@ -2622,11 +2644,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         szb = ab.get("sz_cb") or []; szs = ab.get("sz_cs") or []
         if dur > 0 and szb:
             tb = sum(szb) / dur; ts = (sum(szs) / dur) if szs else 0.0
-            out.append("<span style='color:%s'>Tape</span> <span style='color:%s'>B %.2f/s</span>"
+            add("fp_tape", "<span style='color:%s'>Tape</span> <span style='color:%s'>B %.2f/s</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>S %.2f/s</span>"
                        % (NEU, G if tb > ts else GRAY, tb, NEU, R if ts > tb else GRAY, ts))
         else:
-            out.append(row("Tape", "--", GRAY))
+            add("fp_tape", row("Tape", "--", GRAY))
         tau = None
         if dur > 0 and buckets:
             a_ = 2.0 / 16.0; ema = None
@@ -2636,15 +2658,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     continue
                 ema = wd if ema is None else wd * a_ + ema * (1 - a_)
             tau = (dur / ema) if (ema and ema > 0) else None
-        out.append(row("τ-ratio", ("%.2f" % tau) if tau is not None else "--",
-                       GOLD if (tau is not None and tau < 0.3) else GRAY))
+        add("fp_tau", row("τ-ratio", ("%.2f" % tau) if tau is not None else "--",
+                          GOLD if (tau is not None and tau < 0.3) else GRAY))
         dh1 = ab.get("delta_h1")
         if dh1 is not None and cv > 0:
             def _kv(v):
                 a = abs(v); s = "+" if v >= 0 else "-"
                 return ("%s%.1fK" % (s, a / 1000.0)) if a >= 1000 else ("%s%.0f" % (s, a))
             _d1 = float(dh1); _d2 = (bv - sv) - _d1; da2 = (_d2 - _d1) / cv
-            out.append("<span style='color:%s'>Δ-accel</span> <span style='color:%s'>%+.1f%%</span>"
+            add("fp_daccel", "<span style='color:%s'>Δ-accel</span> <span style='color:%s'>%+.1f%%</span>"
                        " <span style='color:%s'>(</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>)</span>"
@@ -2652,7 +2674,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                           NEU, G if _d1 >= 0 else R, _kv(_d1),
                           NEU, G if _d2 >= 0 else R, _kv(_d2), NEU))
         else:
-            out.append(row("Δ-accel", "--", GRAY))
+            add("fp_daccel", row("Δ-accel", "--", GRAY))
         # ABSORPTION RESIDUAL — did the delta produce the price move it should have? R = Zp - rho*Zv against a
         # trailing-30 window (rho measured on that same window, NOT assumed 1.0 — see app/absorption.py).
         # A is oriented so POSITIVE = the aggressor got absorbed, whichever side was aggressing.
@@ -2666,17 +2688,38 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         if _A is None and _A1 is None and _A2 is None:
-            out.append(row("Absorb R", "--", GRAY))
+            add("fp_absorb", row("Absorb R", "--", GRAY))
         else:
             _hc = _absorb_color            # ORANGE = absorbed, BLUE = easy (see _absorb_color)
             def _hs(v):
                 return "--" if v is None else ("%+.2f" % v)
             _head = "--" if _A is None else ("%+.2f %s" % (_A, _absmod.label(_A)))
-            out.append("<span style='color:%s'>Absorb R</span> <span style='color:%s'>%s</span>"
+            add("fp_absorb", "<span style='color:%s'>Absorb R</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>(</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>)</span>"
                        % (NEU, _hc(_A), _head, NEU, _hc(_A1), _hs(_A1), NEU, _hc(_A2), _hs(_A2), NEU))
+        # MOVE-EASE per side (rB / rS): each side's SHARE of the price travel = up_ticks/(up+dn) and dn_ticks/(up+dn).
+        # This is the VOLUME-WEIGHTED form of the per-contract efficiency (efficiency x volume-share -> volumes cancel):
+        # bounded 0..100, sums to 100, so it can't blow up on a thin side. rB = "buyers moved X% of the price", rS the
+        # rest. The +vw% badge is their ratio (up/dn) -> directional-conviction magnitude, coloured by the winner.
+        _ut = float(ab.get("up_ticks", 0.0) or 0.0); _dt = float(ab.get("dn_ticks", 0.0) or 0.0)
+        _tot = _ut + _dt
+        _rB = (100.0 * _ut / _tot) if _tot > 0 else None
+        _rS = (100.0 * _dt / _tot) if _tot > 0 else None
+        if _rB is None:
+            add("fp_ease", row("Ease", "--", GRAY))
+        else:
+            _erow = ("<span style='color:%s'>Ease</span> <span style='color:%s'>rB %.0f%%</span>"
+                     " <span style='color:%s'>/</span> <span style='color:%s'>rS %.0f%%</span>"
+                     % (NEU, G if _rB > _rS else GRAY, _rB, NEU, R if _rS > _rB else GRAY, _rS))
+            # +vw% = up/dn ratio -> directional conviction (green=buyers won / red=sellers won), high=decisive.
+            if min(_ut, _dt) > 0:
+                _vw = min(999.0, (max(_ut, _dt) / min(_ut, _dt) - 1.0) * 100.0)
+                _vcol = G if _ut > _dt else (R if _dt > _ut else GRAY)
+                _erow += (" <span style='color:%s'>+%.0f%%</span>"
+                          " <span style='color:%s; font-size:9px'>vw</span>" % (_vcol, _vw, GRAY))
+            add("fp_ease", _erow)
         # PER-HALF PRICE CHANGE — the RESULT half of the same split R h1/h2 scores. Pure per-bucket
         # arithmetic (no trailing baseline), so it reads on ANY bucket carrying price_h1, including ones
         # where R h1/h2 is still "--" for want of 20 baselined priors. Each leg is coloured on its own sign:
@@ -2686,12 +2729,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             _ph = None
         if _ph is None:
-            out.append(row("ΔP", "--", GRAY))
+            add("fp_dp", row("ΔP", "--", GRAY))
         else:
             _p1, _p2, _pt = _ph
             def _pc(v):
                 return GRAY if v == 0 else (G if v > 0 else R)
-            out.append("<span style='color:%s'>ΔP</span> <span style='color:%s'>%+.2f%%</span>"
+            add("fp_dp", "<span style='color:%s'>ΔP</span> <span style='color:%s'>%+.2f%%</span>"
                        " <span style='color:%s'>(</span> <span style='color:%s'>%+.2f</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>%+.2f</span>"
                        " <span style='color:%s'>)</span>"
@@ -2718,7 +2761,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _upp = (_ub - _us) / cv * 100.0; _lop = (_lb - _ls) / cv * 100.0
             def _dvc(v):
                 return GRAY if abs(v) < 0.05 else (G if v > 0 else R)
-            out.append("<span style='color:%s'>Δ↑</span> <span style='color:%s'>%+.1f%%</span>"
+            add("fp_deltaud", "<span style='color:%s'>Δ↑</span> <span style='color:%s'>%+.1f%%</span>"
                        " <span style='color:%s'>/</span> <span style='color:%s'>Δ↓</span>"
                        " <span style='color:%s'>%+.1f%%</span>"
                        % (NEU, _dvc(_upp), _upp, NEU, NEU, _dvc(_lop), _lop))
@@ -2733,22 +2776,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     return "%.0f%%S" % (100.0 - _bs), R     # sell-dominated (share -> 100 => buyers absent)
                 return (("%.0f%%B" % _bs) if _bs >= 50.0 else ("%.0f%%S" % (100.0 - _bs))), GRAY
             _um, _uc = _mix(_ub, _us); _lm, _lc = _mix(_lb, _ls)
-            out.append("<span style='color:%s'>½dom ↑</span> <span style='color:%s'>%s</span>"
+            add("fp_halfdom", "<span style='color:%s'>½dom ↑</span> <span style='color:%s'>%s</span>"
                        " <span style='color:%s'>/ ↓</span> <span style='color:%s'>%s</span>"
                        % (NEU, _uc, _um, NEU, _lc, _lm))
         else:
-            out.append(row("Δ↑ / Δ↓", "--", GRAY))
-            out.append(row("½dom", "--", GRAY))
+            add("fp_deltaud", row("Δ↑ / Δ↓", "--", GRAY))
+            add("fp_halfdom", row("½dom", "--", GRAY))
         # 1m-PATH EFFICIENCY — Kaufman ER of this candle's 1m closes: 1.0 = clean diagonal, ~0 = chop. Descriptive
         # smoothness readout (weakly predictive on continuation only — study/engulf_1m_efficiency), not a filter.
         _er = self._path_er(ab)
         if _er is None:
-            out.append(row("1m Eff", "--", GRAY))
+            add("fp_1meff", row("1m Eff", "--", GRAY))
         else:
             _erc = GOLD if _er >= 0.70 else (G if _er >= 0.50 else (NEU if _er >= 0.30 else GRAY))
-            out.append(row("1m Eff", "%.2f" % _er, _erc))
+            add("fp_1meff", row("1m Eff", "%.2f" % _er, _erc))
         _kb, _ks = self._bucket_ker(ab)                     # ker (Kinetic Efficiency Ratio) per side — pinned to the BOTTOM
-        out.append("<span style='color:%s'>ker</span> <span style='color:%s'>%s</span>"
+        add("fp_ker", "<span style='color:%s'>ker</span> <span style='color:%s'>%s</span>"
                    " <span style='color:%s'>/</span> <span style='color:%s'>%s</span>"
                    % (NEU, G if _kb > _ks else GRAY, _ker_read(_kb), NEU, R if _ks > _kb else GRAY, _ker_read(_ks)))
         return "<br>".join(out)
@@ -5366,7 +5409,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _slot in self._svl_slots:
                 for _it in _slot.values():
                     _it.setVisible(False)
-        for _name in ("_svl_line", "_svl_dots", "_svl_hover", "_svl_hover_dot", "_svl_cvd_line", "_svl_cvd_dots"):
+        for _name in ("_svl_line", "_svl_line_unpaid", "_svl_dots", "_svl_hover", "_svl_hover_dot",
+                      "_svl_cvd_line", "_svl_cvd_dots"):
             _it = getattr(self, _name, None)
             if _it is not None:
                 try:
@@ -5374,6 +5418,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 except RuntimeError:
                     setattr(self, _name, None)      # deleted by a canvas teardown -> drop the ref, recreate lazily
         self._svl_proj_hide()
+        self._svl_va_hide_all()
         self._svl_lines = []
         self._svl_bias = None
         self._svl_sig = None; self._svl_drawn = False
@@ -5399,39 +5444,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             res = None
         if self._svl_slots is None:
             self._svl_slots = []
-        # ---- LVN ZONES (gated by m10_svl_zones) ----
-        if want_zones and res:
-            while len(self._svl_slots) < len(res):                   # one slot per live zone (grows as needed)
-                self._svl_slots.append(self._build_svl_slot())
-            PUR = (178, 70, 255); x_r = n - 1 + 12                    # project a few bars right = "forecast"
-            for idx, _slot in enumerate(self._svl_slots):
-                if idx >= len(res):
-                    for _it in _slot.values():
-                        _it.setVisible(False)
-                    continue
-                sw = res[idx]; up = sw["ends_high"]
-                tag = "LVN&#183;SUP" if up else "LVN&#183;RES"
-                tcol = "#7dffab" if up else "#ff8494"
-                if sw.get("n", 1) > 1:
-                    tag += " &#215;%d" % sw["n"]
-                b0 = sw["b0"]; lvn, zlo, zhi = sw["lvn"], sw["zlo"], sw["zhi"]
-                _slot["leg"].setVisible(False); _slot["piv"].setVisible(False)
-                _slot["lvn"].setData([b0, x_r], [lvn, lvn], pen=pg.mkPen(*PUR, 255, width=1.4, style=QtCore.Qt.DashLine))
-                _slot["bandlo"].setData([b0, x_r], [zlo, zlo], pen=pg.mkPen(*PUR, 95, width=1, style=QtCore.Qt.DotLine))
-                _slot["bandhi"].setData([b0, x_r], [zhi, zhi], pen=pg.mkPen(*PUR, 95, width=1, style=QtCore.Qt.DotLine))
-                _slot["lbl"].setHtml("<span style='color:%s;font-family:Consolas;font-size:10px'>%s</span>" % (tcol, tag))
-                _slot["lbl"].setPos(x_r, (zlo + zhi) / 2.0)
-                for _it in (_slot["band"], _slot["bandlo"], _slot["bandhi"], _slot["lvn"], _slot["lbl"]):
-                    _it.setVisible(True)
-        else:
+        # ---- LVN ZONES REMOVED -> replaced by the hover VA lines (_svl_va_*, still gated by m10_svl_zones).
+        # `res` above is kept only for the bias badge below; keep any old zone slots hidden.
+        if self._svl_slots:
             for _slot in self._svl_slots:
                 for _it in _slot.values():
                     _it.setVisible(False)
         # ---- SWING LINES + midpoint dots (gated by m10_svl_lines; hover shows swing absorb-A) ----
         if self._svl_line is None:
             self._svl_line = pg.PlotDataItem(connect="finite")       # NaN-separated 2-pt segments, one per leg
+            self._svl_line_unpaid = pg.PlotDataItem(connect="finite")  # red overlay: the unpaid sub-segments, on top
             self._svl_dots = pg.ScatterPlotItem(pxMode=True)
-            for _it, _z in ((self._svl_line, 27), (self._svl_dots, 28)):
+            for _it, _z in ((self._svl_line, 27), (self._svl_line_unpaid, 28), (self._svl_dots, 29)):
                 _it.setZValue(_z); self.plot.addItem(_it, ignoreBounds=True)
         if want_lines:
             try:
@@ -5439,19 +5463,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 lines = []
             self._svl_lines = lines
-            GOLD = (222, 190, 96); xs = []; ys = []; dots = []
+            self._svl_buckets = filtered              # cache for the card's cumulative per-candle absorb-A
+            GOLD = (222, 190, 96); RED = (255, 74, 74)
+            xs = []; ys = []; dots = []; rxs = []; rys = []
             for lg in lines:
                 xs += [lg["b0"], lg["b1"], float("nan")]
                 ys += [lg["p0"], lg["p1"], float("nan")]
+                _su = lg.get("seg_unpaid") or []                     # per-part UNPAID (current ÷N division)
+                if any(_su):                                         # red-overlay the unpaid sub-segments (pivot->dots->pivot)
+                    _pts = [(lg["b0"], lg["p0"])] + [(_d[0], _d[1]) for _d in lg["dots"]] + [(lg["b1"], lg["p1"])]
+                    for _k in range(min(len(_su), len(_pts) - 1)):
+                        if _su[_k]:
+                            rxs += [_pts[_k][0], _pts[_k + 1][0], float("nan")]
+                            rys += [_pts[_k][1], _pts[_k + 1][1], float("nan")]
                 for (_dbar, _dpx) in lg["dots"]:               # N-1 split dots per leg (÷2 -> 1, ÷3 -> 2, ÷4 -> 3)
                     dots.append({"pos": (_dbar, _dpx), "size": 6,
                                  "brush": pg.mkBrush(*GOLD, 235), "pen": pg.mkPen(25, 25, 25, 200, width=0.8)})
             self._svl_line.setData(xs, ys, pen=pg.mkPen(*GOLD, 205, width=1.3), connect="finite")
+            self._svl_line_unpaid.setData(rxs, rys, pen=pg.mkPen(*RED, 235, width=2.4), connect="finite")
             self._svl_dots.setData(dots)
-            self._svl_line.setVisible(True); self._svl_dots.setVisible(True)
+            self._svl_line.setVisible(True); self._svl_line_unpaid.setVisible(True); self._svl_dots.setVisible(True)
         else:
             self._svl_lines = []
-            self._svl_line.setVisible(False); self._svl_dots.setVisible(False)
+            self._svl_line.setVisible(False); self._svl_line_unpaid.setVisible(False); self._svl_dots.setVisible(False)
             self._svl_hover_hide()                       # lines off -> drop the hover box + CVD mirror too
         # ---- bias badge (from the zones; independent of the sub-toggles) ----
         try:
@@ -5486,39 +5520,42 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     @staticmethod
     def _svl_hover_html(lg):
-        """Minimalist hover card for a swing line. absorb-A = was the price move PROPORTIONAL to the CVD (order
-        flow) behind it — ~0 proportional · + ABSORBED (price lagged the flow) · - EASY (ran on little flow)."""
+        """Minimalist hover card for a swing line. absorb-A here is the CUMULATIVE SWING-RELATIVE candle reading (sum
+        of app/absorption residuals over the leg's bars, oriented by the SWING's price direction): + = the swing's
+        dominant side got ABSORBED (its push resisted) · - = it had it EASY (ran free). Headline = whole-leg sum;
+        A1..AN = the same summed within each ÷N quarter (they add up to the total)."""
         up = lg["ends_high"]
         dcol = "#4ecb8d" if up else "#ff6b6b"
         arrow = "&#9650;" if up else "&#9660;"                       # ▲ / ▼
         dev = "<span style='color:#e0b64a'> &#183; forming</span>" if lg.get("developing") else ""
 
-        def acol(a):
-            return "#ff7b72" if a >= 0.75 else ("#6ec6ff" if a <= -0.75 else "#8fe3a2")
+        def _sumcol(s, n):                                           # colour a cumulative candle-A sum by its per-bar avg
+            av = (s / n) if (s is not None and n) else 0.0
+            return "#ff7b72" if av >= 0.15 else ("#6ec6ff" if av <= -0.15 else "#8fe3a2")
 
-        def verb(a):
-            if a is None:
-                return "--"
-            return ("ABSORBED" if a >= 1.5 else "heavy") if a >= 0.75 else \
-                   (("EASY" if a <= -1.5 else "light") if a <= -0.75 else "proportional")
-
-        def aspan(a, size):
-            if a is None:
-                return "<span style='color:#6b7280; font-size:%dpx'>&#8211;&#8211;</span>" % size
-            return "<span style='color:%s; font-size:%dpx; font-weight:bold'>%+.2f</span>" % (acol(a), size, a)
-
-        A = lg["A"]
-        meaning = {"ABSORBED": "price lagged the flow", "heavy": "price lagged the flow",
-                   "EASY": "ran on little flow", "light": "ran on little flow",
-                   "proportional": "flow matched the move", "--": ""}[verb(A)]
         pcol = "#4ecb8d" if lg["dP"] >= 0 else "#ff6b6b"
         vcol = "#4ecb8d" if lg["dV"] >= 0 else "#ff6b6b"
         _lbl = "color:#8b93a3; padding-right:18px"
         _num = "text-align:right; font-weight:bold"
-        segs = lg.get("segs") or []                                  # per-part absorb-A (A1..AN) — N = click-cycled ÷2/3/4
+        seg_unpaid = lg.get("seg_unpaid") or []                      # per-part UNPAID: that part's net delta opposed its move
+
+        def _umk(i):                                                 # inline "· unpaid" marker on a divergent A-part
+            return ("<span style='color:#e0b64a; font-size:10px'>&#183; unpaid</span>"
+                    if i < len(seg_unpaid) and seg_unpaid[i] else "")
+        # A1..AN = cumulative candle-A summed WITHIN each ÷N quarter (bar-by-bar; they add up to the leg headline)
+        _segabs = lg.get("seg_absorb") or []
         seg_rows = "".join(
-            "<tr><td style='%s'>A%d</td><td style='text-align:right'>%s</td></tr>" % (_lbl, i + 1, aspan(a, 12))
-            for i, a in enumerate(segs))
+            "<tr><td style='%s'>A%d</td><td style='text-align:right'>%s</td>"
+            "<td style='padding-left:8px'>%s</td></tr>" % (
+                _lbl, i + 1,
+                ("<span style='color:%s; font-size:12px; font-weight:bold'>%+.1f</span>" % (_sumcol(s, n), s))
+                    if s is not None else "<span style='color:#6b7280; font-size:12px'>&#8211;&#8211;</span>",
+                _umk(i))
+            for i, (s, n) in enumerate(_segabs))
+        # whole-swing UNPAID (net CVD opposed the move) -> a tag on the CVD row
+        _cvd_str = MinimalTerminalWindow._fmt_kmb(lg["dV"])
+        if lg.get("diverge"):
+            _cvd_str += " <span style='color:#e0b64a; font-weight:normal; font-size:11px'>&#183; unpaid</span>"
         # RETRACEMENT predictive verdict (study/retracement_predict.py, replicated 5m/15m/1h, durable both years)
         _v = lg.get("verdict", "")
         if _v == "cont":
@@ -5532,6 +5569,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _vhtml = "<span style='color:#8b93a3'>retrace &#183; neutral</span>"
         else:
             _vhtml = "<span style='color:#8b93a3'>impulse</span>"
+        # absorb-A = CUMULATIVE bar-by-bar candle-A (app/absorption). Headline = whole-leg sum; A1..AN = per-quarter
+        # sums (they add up to it). The whole-swing z-scored A (normalised vs the last ~30 swings) was dropped per
+        # request — a scalper reads the bar-by-bar friction, not the 30-swing baseline.
+        _ca = lg.get("cum_absorb"); _can = lg.get("cum_absorb_n") or 0
+        if _ca is not None and _can > 0:
+            _avg = _ca / _can                                # per-bar avg (candle-A SD~0.78 -> avg SD~0.78/sqrt(n))
+            _cacol = "#ff7b72" if _avg >= 0.15 else ("#6ec6ff" if _avg <= -0.15 else "#8fe3a2")
+            _caverb = "net absorbed" if _avg >= 0.15 else ("net easy" if _avg <= -0.15 else "balanced")
+            _prom = ("<span style='color:%s; font-size:15px; font-weight:bold'>%+.1f</span>"
+                     "<span style='color:#727c8c; font-size:11px'> &#183; %s</span>" % (_cacol, _ca, _caverb))
+        else:
+            _prom = "<span style='color:#6b7280; font-size:13px'>&#8211;&#8211;</span>"
         return (
             "<div style='font-family:Consolas; color:#e6e9ef; white-space:nowrap'>"
             "<div style='font-size:13px; font-weight:bold; color:%s; padding-bottom:3px'>%s %s swing%s"
@@ -5541,15 +5590,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             "<tr><td style='%s'>Move</td><td style='%s; color:%s'>%+.2f%%</td></tr>"
             "<tr><td style='%s'>CVD</td><td style='%s; color:%s'>%s</td></tr>"
             "</table>"
-            "<div style='font-size:11px; color:#8b93a3; padding-top:7px'>swing absorb-A</div>"
-            "<div style='padding-top:1px'>%s &nbsp; <span style='color:%s; font-size:12px; font-weight:bold'>%s</span></div>"
-            "<div style='font-size:10px; color:#727c8c; padding-bottom:3px'>%s</div>"
+            "<div style='font-size:11px; color:#8b93a3; padding-top:7px'>swing absorb-A"
+            " <span style='color:#5a6270; font-weight:normal'>&#183; &#931; candle</span></div>"
+            "<div style='padding-top:1px; padding-bottom:2px'>%s</div>"
             "<table cellspacing='0' cellpadding='2' style='font-size:11px; color:#b9c0cc'>%s</table>"
             "</div>"
         ) % (dcol, arrow, ("UP" if up else "DOWN"), dev, lg.get("N", 2), _vhtml,
              _lbl, _num, pcol, lg["dP"],
-             _lbl, _num, vcol, MinimalTerminalWindow._fmt_kmb(lg["dV"]),
-             aspan(A, 15), (acol(A) if A is not None else "#6b7280"), verb(A), meaning,
+             _lbl, _num, vcol, _cvd_str,
+             _prom,
              seg_rows)
 
     def _svl_hover_hide(self) -> None:
@@ -5569,6 +5618,38 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return (next((lg for lg in reversed(self._svl_lines) if lg.get("developing")), None)
                 or (self._svl_lines[-1] if self._svl_lines else None))
 
+    def _svl_leg_absorb(self, lg):
+        """Cumulative SWING-RELATIVE per-candle absorb-A over swing `lg`. Each candle's residual (app/absorption R) is
+        oriented by the LEG's price direction (up = buy side / down = sell side), NOT by the candle's own delta -> +
+        means the swing's dominant side got ABSORBED (its push resisted), - means it had it EASY (ran free). So a
+        net-negative total on a DOWN swing reads cleanly as "the sellers got price cheaply through the leg", and a
+        counter-bar that pushes back reads as absorption of the swing side (not as its own easy move). Returns
+        (total_sum, total_n, seg_list) with seg_list = [(seg_sum, seg_n), ...] over the CURRENT ÷N quarters -> A1..AN
+        add up to the total. (None, 0, []) when no candle has a usable trailing window."""
+        from app import absorption as _absmod
+        buck = self._svl_buckets
+        if not buck:
+            return None, 0, []
+        b0 = lg.get("b0"); b1 = lg.get("b1")
+        if b0 is None or b1 is None or b1 <= b0:
+            return None, 0, []
+        sign = 1.0 if lg.get("ends_high") else -1.0          # up leg = buy side / down leg = sell side (swing-relative)
+        aA = {}                                              # bar -> swing-relative candle-A (memoised for segment sums)
+        for i in range(b0 + 1, min(b1 + 1, len(buck))):
+            R = _absmod.residual(buck, i)
+            if R is not None:
+                aA[i] = (-R if sign > 0 else R)              # + absorbed against the swing side, - easy for it
+        bounds = [b0] + [int(d[0]) for d in (lg.get("dots") or [])] + [b1]   # ÷N segment bar boundaries (from split dots)
+        seg_list = []
+        for k in range(len(bounds) - 1):
+            lo = bounds[k]; hi = min(bounds[k + 1], len(buck) - 1)
+            s = 0.0; nn = 0
+            for i in range(lo + 1, hi + 1):
+                if i in aA:
+                    s += aA[i]; nn += 1
+            seg_list.append((s if nn > 0 else None, nn))
+        return (sum(aA.values()) if aA else None), len(aA), seg_list
+
     def _svl_show_box(self, lg) -> None:
         """Draw the swing stats box PINNED bottom-right for leg `lg`, emphasise its split dots, and (when the CVD pane
         is on) mirror the swing onto the CVD pane. Shared by the hover box and the Lock (developing-swing) box."""
@@ -5585,6 +5666,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._svl_hover.setZValue(70); self.plot.addItem(self._svl_hover, ignoreBounds=True)
             self._svl_hover_dot = pg.ScatterPlotItem(pxMode=True); self._svl_hover_dot.setZValue(71)
             self.plot.addItem(self._svl_hover_dot, ignoreBounds=True)
+        _ca, _can, _segabs = self._svl_leg_absorb(lg)        # cumulative per-candle absorb-A: leg total + per-quarter
+        lg["cum_absorb"] = _ca; lg["cum_absorb_n"] = _can; lg["seg_absorb"] = _segabs
         self._svl_hover.setHtml(self._svl_hover_html(lg))
         (vx0, vx1), (vy0, vy1) = self.vb.viewRange()                 # PIN to the bottom-right corner (~6px inset)
         self._svl_hover.setPos(vx1 - 6 * psx, vy0 + 6 * psy)
@@ -5613,6 +5696,67 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif self._svl_cvd_line is not None:
             self._svl_cvd_line.setVisible(False); self._svl_cvd_dots.setVisible(False)
 
+    def _build_va_set(self):
+        """One pooled set of the three VA dashed lines (buy-POC green / sell-POC red / LVN purple)."""
+        _set = {}
+        for _k in ("buy", "sell", "lvn"):
+            _it = pg.PlotDataItem(); _it.setZValue(26); self.plot.addItem(_it, ignoreBounds=True)
+            _set[_k] = _it
+        return _set
+
+    def _svl_va_render(self) -> None:
+        """Draw the swing VA lines (m10_svl_zones): three within-VA dashed levels per swing — green = highest-BUY-volume
+        price, red = highest-SELL-volume price, purple = LVN — for every LOCKED swing (Ctrl+click) PLUS the hovered
+        swing. Projected right from each swing's start as forecast S/R. Pooled; unused sets are hidden."""
+        if self._svl_va is None:
+            self._svl_va = []
+        if not (self.scanner_mode == "bucket_canvas" and self.menu.layer_state("m10_swinglvn")
+                and self.menu.layer_state("m10_svl_zones") and self._svl_buckets):
+            self._svl_va_hide_all(); return
+        legs = [lg for lg in self._svl_lines if lg.get("key") in self._svl_va_locked]     # locked swings persist
+        _hv = self._svl_hovered_leg if self._svl_hovering else None                       # + the hovered swing
+        if _hv is not None and _hv.get("key") not in self._svl_va_locked:
+            legs.append(_hv)
+        from app import swing_lvn_detect
+        _n = len(self._svl_buckets); _x1 = _n - 1 + 8; di = 0
+        for lg in legs:
+            try:
+                va = swing_lvn_detect.va_lines(self._svl_buckets, lg["b0"], lg["b1"])
+            except Exception:
+                va = None
+            if va is None:
+                continue
+            while di >= len(self._svl_va):
+                self._svl_va.append(self._build_va_set())
+            _set = self._svl_va[di]; di += 1; _x0 = lg["b0"]
+            for _k, _lvl, _rgb in (("buy", va["buy_poc"], (78, 203, 141)), ("sell", va["sell_poc"], (255, 82, 82)),
+                                   ("lvn", va["lvn"], (178, 70, 255))):
+                _it = _set[_k]
+                try:
+                    if _lvl is None:
+                        _it.setVisible(False); continue
+                    _it.setData([_x0, _x1], [_lvl, _lvl], pen=pg.mkPen(*_rgb, 235, width=1.4, style=QtCore.Qt.DashLine))
+                    _it.setVisible(True)
+                except RuntimeError:
+                    self._svl_va = None; return                # torn down -> rebuild lazily next frame
+        for j in range(di, len(self._svl_va)):                 # hide unused pooled sets
+            for _it in self._svl_va[j].values():
+                try:
+                    _it.setVisible(False)
+                except RuntimeError:
+                    self._svl_va = None; return
+
+    def _svl_va_hide_all(self) -> None:
+        """Hide every pooled VA-line set (does NOT clear the locks — they re-render when the toggle comes back)."""
+        if not self._svl_va:
+            return
+        for _set in self._svl_va:
+            for _it in _set.values():
+                try:
+                    _it.setVisible(False)
+                except RuntimeError:
+                    self._svl_va = None; return
+
     def _svl_hover_update(self, pt) -> None:
         """Cursor near a SWING LINE -> show that swing's stats box (pinned bottom-right) + emphasise its dots + CVD
         mirror. When the cursor is off every leg: show the DEVELOPING swing if Lock is on, else hide."""
@@ -5632,9 +5776,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if d < best_d:
                 best_d = d; best = lg
         self._svl_hovering = best is not None
-        # PROJECTION follows the SAME leg as the box, but auto-shows on the developing swing regardless of Lock:
-        # hovered leg if the cursor is on one, else the developing swing.
-        self._svl_proj_update(best if best is not None else self._svl_dev_leg())
+        # PROJECTION is hover-only; VA-LINES draw the hovered swing + any Ctrl+click-LOCKED swings.
+        self._svl_proj_update(best)
+        self._svl_hovered_leg = best
+        self._svl_va_render()
         if best is None:
             best = self._svl_dev_leg() if self.menu.layer_state("m10_svl_lock") else None
             if best is None:
@@ -5711,11 +5856,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._svl_proj_hide()
 
     def _svl_proj_tick(self) -> None:
-        """Per-frame: auto-show the retrace+follow projection on the DEVELOPING swing whenever the cursor is not on a
-        leg (the hover path handles the hovered case). No-op / hide when Projections is off."""
-        if self._svl_hovering:
-            return
-        self._svl_proj_update(self._svl_dev_leg())
+        """Per-frame: the projection is HOVER-ONLY, so keep it hidden whenever the cursor is not on a swing (covers
+        leaving the plot, where the hover path doesn't run). The hover path shows/refreshes the hovered swing."""
+        if not self._svl_hovering:
+            self._svl_proj_hide()
 
     def _svl_lock_tick(self) -> None:
         """Per-frame: with Lock on and the cursor NOT over a swing, keep the stats box pinned on the DEVELOPING
@@ -6956,6 +7100,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 # negative (EASY, blue) half behind a mildly positive one now that both signs are coloured.
                 _ex = max([v for v in (_absA1, _absA2) if v is not None], key=abs, default=None)
                 _absH_col = _absorb_color(_ex)
+            # MOVE-EASE per side (rB / rS): each side's SHARE of the price travel = up_ticks/(up+dn) & dn_ticks/(up+dn).
+            # The VOLUME-WEIGHTED form of the per-contract efficiency (volumes cancel), bounded 0..100 & summing to 100
+            # -> no thin-side blow-up. rB = "buyers moved X% of the price", rS the rest; +vw% is their ratio (up/dn) =
+            # directional conviction, coloured by the winner. "--" with no travel / pre-upgrade bucket.
+            _tot = _ut + _dt
+            _rB = (100.0 * _ut / _tot) if _tot > 0 else None
+            _rS = (100.0 * _dt / _tot) if _tot > 0 else None
+            _ease_row = ("Ease " + span("rB " + ("%.0f%%" % _rB if _rB is not None else "--"),
+                                        g if (_rB is not None and _rB > _rS) else gray)
+                         + " | " + span("rS " + ("%.0f%%" % _rS if _rS is not None else "--"),
+                                        r if (_rS is not None and _rS > _rB) else gray))
+            if _rB is not None and min(_ut, _dt) > 0:
+                _vw = min(999.0, (max(_ut, _dt) / min(_ut, _dt) - 1.0) * 100.0)
+                _ease_row += " " + span("+%.0f%% vw" % _vw, g if _ut > _dt else (r if _dt > _ut else gray))
             # PER-HALF PRICE CHANGE (the RESULT side of the same open/50%-vol-mark/close split the R h1/h2
             # residuals score). NO trailing baseline, so this lights up on any bucket carrying price_h1, even
             # where R h1/h2 still reads "--" for want of 20 baselined priors — which also makes it a free
@@ -7075,58 +7233,66 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             vclr = {"opL": g, "opS": r, "clS": bl, "clL": pu}
             top2 = set(sorted(vmag, key=lambda k: vmag[k], reverse=True)[:2])
             def vc(name): return vclr[name] if (name in top2 and vmag[name] > 0) else gray
-            lines = [
-                f"O {pf(o)}  H {pf(h)}  L {pf(l)}  {span('C '+pf(c), g if c >= o else r)}",
-                f"Elapsed {self._fmt_elapsed(dur)}   {span('POC '+pf(poc), gold)}",
-                sep("FLOW"),
-                f"Volume {K(cv)}",
-                # colour ONLY the dominant side (sell>buy -> sell red, buy>sell -> buy green); the
-                # lesser side renders dim.
-                f"{span('Sell '+K(sv), r if sv > bv else gray)} | "
-                f"{span('Buy '+K(bv), g if bv > sv else gray)}",
-                f"Delta {span(sk(delta)+f' ({dpct:+.0f}%)', g if delta >= 0 else r)}",
-                span("Δ-accel " + _da2_s, _da2_col),
-                span("Absorb R " + _absR_s, _absR_col),
-                span("R h1/h2 " + _absH_s, _absH_col),
-                _dP_row,
-                f"OI Δ {span(sk(oi_d), g if oi_d >= 0 else r)}",
-                # What each side PAID per tick it won, and how fast it ARRIVED. Two independent colourings
-                # per line: the /tick VALUE lights on whichever side paid more per tick (its own side colour),
-                # while the (x) — that side's cost against its own trailing-30 normal — lights GOLD on
-                # whichever side is grinding harder RELATIVE to itself. They deliberately land on different
-                # sides: paying the most per tick and paying the most vs-normal are different statements.
-                sep("COST · SPEED"),
-                _ptl("Buyer /tick", _bpt_s, _bpt, _spt, _bptr, _sptr, g),
-                _ptl("Seller /tick", _spt_s, _spt, _bpt, _sptr, _bptr, r),
-                f"{span('Buy-vel ' + K(_bvl) + '/s', g if _bvl > _svl else gray)} | "
-                f"{span('Sell-vel ' + K(_svl) + '/s', r if _svl > _bvl else gray)}",
-                f"{span('Tape-B ' + _tps(_tape_b), g if (_tape_b or 0.0) > (_tape_s or 0.0) else gray)} | "
-                f"{span('Tape-S ' + _tps(_tape_s), r if (_tape_s or 0.0) > (_tape_b or 0.0) else gray)}",
-                span("KER_buy: " + _ker_read(_ker_buy), g if _ker_buy > 0 else gray),
-                span("KER_sell: " + _ker_read(_ker_sell), r if _ker_sell > 0 else gray),
-                span("Mov.Magnitude: " + _pmr_s, _pmr_col),
-                span("Skew: " + _skew_s, _skew_col),
-                span("MM × Skew: " + _ms_s, _ms_col),
-                sep("POSITIONING"),
-                f"{span('OpL '+K(opL), vc('opL'))} | {span('OpS '+K(opS), vc('opS'))}",
-                f"{span('ClS '+K(clS), vc('clS'))} | {span('ClL '+K(clL), vc('clL'))}",
-                sep("EFFORT"),
-                span(f"Buyer E/R {ber:.1f} [{(bm - 1.0) * 100:+.0f}%]", g if ber > ser else gray),
-                span(f"Seller E/R {ser:.1f} [{(sm - 1.0) * 100:+.0f}%]", r if ser > ber else gray),
-                span(f"30b Buyer E/R {b30:.1f}", g if b30 > s30 else gray),
-                span(f"30b Seller E/R {s30:.1f}", r if s30 > b30 else gray),
-                sep("ABSORPTION · VOL"),
-                span(f"Bull Absorp {K(bull_abs)}", g if bull_abs > 0 else gray),
-                span(f"Bear Absorp {K(bear_abs)}", r if bear_abs > 0 else gray),
-                sep("EFF-AGG · VOL"),
-                span(f"Bull Eff {K(eff_bull_b)}", "#00ff80" if eff_bull_b > 0 else gray),
-                span(f"Bear Eff {K(eff_bear_b)}", "#ff2d6b" if eff_bear_b > 0 else gray),
-                sep("READ"),
-                f"VEL {span(f'{vel:.2f}x', gold)}",
-                f"30b VEL {span(f'{vabn:.1f}×', gold if vabn >= config.VEL_ABN_RATIO else gray)}",
-                span("τ-ratio %.2f%s" % (_tau, "  ⚠ CLIMACTIC" if _tau_climactic else ""),
-                     gold if _tau_climactic else gray),
-            ]
+            # Per-stat toggles (hamburger: Candles > Stats Box). _add gates a row by its st_ key (default ON when
+            # unregistered); _sec defers a section header so an all-off section drops its header too.
+            lines = []; _psec = [None]
+
+            def _son(_k):
+                _cb = self.menu.layer_checks.get(_k)
+                return _cb is None or _cb.isChecked()
+
+            def _sec(name):
+                _psec[0] = name
+
+            def _add(_k, content):
+                if _son(_k):
+                    if _psec[0] is not None:
+                        lines.append(sep(_psec[0])); _psec[0] = None
+                    lines.append(content)
+            _add("st_ohlc", f"O {pf(o)}  H {pf(h)}  L {pf(l)}  {span('C '+pf(c), g if c >= o else r)}")
+            _add("st_poc", f"Elapsed {self._fmt_elapsed(dur)}   {span('POC '+pf(poc), gold)}")
+            _sec("FLOW")
+            _add("st_volume", f"Volume {K(cv)}")
+            # colour ONLY the dominant side (sell>buy -> sell red, buy>sell -> buy green); the lesser side dim.
+            _add("st_buysell", f"{span('Sell '+K(sv), r if sv > bv else gray)} | {span('Buy '+K(bv), g if bv > sv else gray)}")
+            _add("st_delta", f"Delta {span(sk(delta)+f' ({dpct:+.0f}%)', g if delta >= 0 else r)}")
+            _add("st_daccel", span("Δ-accel " + _da2_s, _da2_col))
+            _add("st_absorb", span("Absorb R " + _absR_s, _absR_col))
+            _add("st_ease", _ease_row)
+            _add("st_rhalves", span("R h1/h2 " + _absH_s, _absH_col))
+            _add("st_dp", _dP_row)
+            _add("st_oi", f"OI Δ {span(sk(oi_d), g if oi_d >= 0 else r)}")
+            _sec("COST · SPEED")
+            _add("st_costtick", _ptl("Buyer /tick", _bpt_s, _bpt, _spt, _bptr, _sptr, g))
+            _add("st_costtick", _ptl("Seller /tick", _spt_s, _spt, _bpt, _sptr, _bptr, r))
+            _add("st_vel", f"{span('Buy-vel ' + K(_bvl) + '/s', g if _bvl > _svl else gray)} | "
+                           f"{span('Sell-vel ' + K(_svl) + '/s', r if _svl > _bvl else gray)}")
+            _add("st_tape", f"{span('Tape-B ' + _tps(_tape_b), g if (_tape_b or 0.0) > (_tape_s or 0.0) else gray)} | "
+                            f"{span('Tape-S ' + _tps(_tape_s), r if (_tape_s or 0.0) > (_tape_b or 0.0) else gray)}")
+            _add("st_ker", span("KER_buy: " + _ker_read(_ker_buy), g if _ker_buy > 0 else gray))
+            _add("st_ker", span("KER_sell: " + _ker_read(_ker_sell), r if _ker_sell > 0 else gray))
+            _add("st_movmag", span("Mov.Magnitude: " + _pmr_s, _pmr_col))
+            _add("st_skew", span("Skew: " + _skew_s, _skew_col))
+            _add("st_mmxskew", span("MM × Skew: " + _ms_s, _ms_col))
+            _sec("POSITIONING")
+            _add("st_openpos", f"{span('OpL '+K(opL), vc('opL'))} | {span('OpS '+K(opS), vc('opS'))}")
+            _add("st_closepos", f"{span('ClS '+K(clS), vc('clS'))} | {span('ClL '+K(clL), vc('clL'))}")
+            _sec("EFFORT")
+            _add("st_er", span(f"Buyer E/R {ber:.1f} [{(bm - 1.0) * 100:+.0f}%]", g if ber > ser else gray))
+            _add("st_er", span(f"Seller E/R {ser:.1f} [{(sm - 1.0) * 100:+.0f}%]", r if ser > ber else gray))
+            _add("st_er30", span(f"30b Buyer E/R {b30:.1f}", g if b30 > s30 else gray))
+            _add("st_er30", span(f"30b Seller E/R {s30:.1f}", r if s30 > b30 else gray))
+            _sec("ABSORPTION · VOL")
+            _add("st_absorpvol", span(f"Bull Absorp {K(bull_abs)}", g if bull_abs > 0 else gray))
+            _add("st_absorpvol", span(f"Bear Absorp {K(bear_abs)}", r if bear_abs > 0 else gray))
+            _sec("EFF-AGG · VOL")
+            _add("st_effagg", span(f"Bull Eff {K(eff_bull_b)}", "#00ff80" if eff_bull_b > 0 else gray))
+            _add("st_effagg", span(f"Bear Eff {K(eff_bear_b)}", "#ff2d6b" if eff_bear_b > 0 else gray))
+            _sec("READ")
+            _add("st_velread", f"VEL {span(f'{vel:.2f}x', gold)}")
+            _add("st_vel30", f"30b VEL {span(f'{vabn:.1f}×', gold if vabn >= config.VEL_ABN_RATIO else gray)}")
+            _add("st_tau", span("τ-ratio %.2f%s" % (_tau, "  ⚠ CLIMACTIC" if _tau_climactic else ""),
+                                gold if _tau_climactic else gray))
             # A3b — STATE verdict + its calibration debug lines (top-3 states + winner factors).
             # Hidden by default; 'y' toggles (self.show_state).
             if self.show_state:
@@ -7197,6 +7363,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pass
         try:
             self._svl_proj_tick()              # Projections: auto-show retrace/follow bands on the developing swing
+        except Exception:
+            pass
+        try:
+            self._svl_va_render()              # VA lines: locked swings persist + the hovered swing
         except Exception:
             pass
         if self.scanner_mode == "bucket_canvas":
@@ -7692,17 +7862,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self, "cvd_plot", None) is not None and self.cvd_plot.isVisible():
             _cvb = self.cvd_plot.getViewBox()
             _cvb.setXRange(mxr[0], mxr[1], padding=0)
-            # CVD Y: RE-FIT to the CVD bars now visible so the pane rescales as the swing develops (not just pans) —
-            # CVD is cumulative and can swing hard, so a fit keeps the whole developing swing on screen each step.
-            _lows = self._cvd_lows; _highs = self._cvd_highs
-            if _lows and _highs:
-                _w0 = max(0, int(math.floor(mxr[0]))); _w1 = min(len(_lows), int(math.ceil(mxr[1])) + 1)
-                if _w1 <= _w0:
-                    _w0, _w1 = 0, len(_lows)
-                _clo = min(_lows[_w0:_w1]); _chi = max(_highs[_w0:_w1])
-                if _chi > _clo:
-                    _pad = (_chi - _clo) * 0.08
-                    _cvb.setYRange(_clo - _pad, _chi + _pad, padding=0)
+            # CVD Y: when the user owns the zoom (_cvd_follow_y False) keep it FIXED and only pan to the newest candle,
+            # exactly like the price pane above; only in auto-fit mode do we rescale to the visible window each step.
+            if not self._cvd_follow_y:
+                self._cvd_pan_to_candle(self._cvd_last_lo, self._cvd_last_hi)
+            else:
+                _lows = self._cvd_lows; _highs = self._cvd_highs
+                if _lows and _highs:
+                    _w0 = max(0, int(math.floor(mxr[0]))); _w1 = min(len(_lows), int(math.ceil(mxr[1])) + 1)
+                    if _w1 <= _w0:
+                        _w0, _w1 = 0, len(_lows)
+                    _clo = min(_lows[_w0:_w1]); _chi = max(_highs[_w0:_w1])
+                    if _chi > _clo:
+                        _pad = (_chi - _clo) * 0.08
+                        _cvb.setYRange(_clo - _pad, _chi + _pad, padding=0)
         self._follow_prev_range = self.vb.viewRange()            # keep the mouse-diff baseline current
 
     def _toggle_replay_autoplay(self) -> None:
@@ -9688,13 +9861,38 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         double-click, or a click on the price|CVD divider, re-arms the fit. Mirrors _on_scanner_manual_range."""
         self._cvd_follow_y = False
 
+    def _cvd_pan_to_candle(self, lo, hi) -> None:
+        """Keep the user's CVD zoom HEIGHT; pan the CVD pane vertically ONLY if the newest CVD candle (lo..hi) would
+        fall outside the current window — never rescale. Mirrors the price pane's replay Y-follow, and is what runs
+        once the user owns the CVD Y (_cvd_follow_y False) so the pane tracks the developing candle at a fixed zoom."""
+        if getattr(self, "cvd_vb", None) is None or lo is None or hi is None:
+            return
+        (_, (cy0, cy1)) = self.cvd_vb.viewRange(); ch = cy1 - cy0
+        if ch <= 0:
+            return
+        if (hi - lo) > ch:                          # candle taller than the view -> centre it (zoom unchanged)
+            mid = 0.5 * (hi + lo)
+            self.cvd_vb.setYRange(mid - 0.5 * ch, mid + 0.5 * ch, padding=0)
+            return
+        m = 0.08 * ch; dy = 0.0
+        if hi > cy1:                                # poked above the top -> pan up
+            dy = hi - cy1 + m
+        elif lo < cy0:                              # poked below the bottom -> pan down
+            dy = lo - cy0 - m
+        if dy != 0.0:
+            self.cvd_vb.setYRange(cy0 + dy, cy1 + dy, padding=0)
+
     def _fit_cvd_y(self, x: list, lo_arr: list, hi_arr: list) -> None:
         """Fit the CVD pane's Y to the candles ACTUALLY VISIBLE in X, explicitly (not enableAutoRange, which
         the scanner Y-fits avoid so stray items can't pollute the bounds). Same window + padding rule as the
         price pane's _roll_to_live_edge, so after a 50/50 divider click BOTH panes frame their own data the
-        same way and effort/result read proportionally."""
+        same way and effort/result read proportionally. Once the user owns the Y (a Y-scroll turned auto-fit
+        off), keep their zoom and just TRACK the newest candle instead of rescaling."""
         n = len(x)
-        if n == 0 or not self._cvd_follow_y:
+        if n == 0:
+            return
+        if not self._cvd_follow_y:                  # user owns the CVD Y -> fixed zoom, pan to the newest candle
+            self._cvd_pan_to_candle(lo_arr[-1], hi_arr[-1])
             return
         _vx0, _vx1 = self.cvd_vb.viewRange()[0]
         w0 = max(0, int(math.floor(_vx0)))
@@ -10675,12 +10873,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.width() - self.menu_btn.width() - self.bell_btn.width() - self.refresh_btn.width() - 20, 8)
         self.menu.setGeometry(self.width() - self.menu.PANEL_WIDTH, 0,
                               self.menu.PANEL_WIDTH, self.height())
-        self.drawbar.move((self.width() - self.drawbar.width()) // 2, 8)
+        self.drawbar.move(8, 8)                                   # TOP-LEFT corner (was top-centre)
         self.alerts.setGeometry(self.width() - self.alerts.width() - self.menu.PANEL_WIDTH,
                                 40, self.alerts.width(), min(420, self.height() - 80))
-        # edit panel (shape color/thickness) sits just under the drawing toolbar
-        self.drawer.edit_panel.move((self.width() - self.drawer.edit_panel.width()) // 2,
-                                    8 + self.drawbar.height() + 4)
+        # edit panel (shape color/thickness) sits just under the drawing toolbar, left-aligned with it
+        self.drawer.edit_panel.move(8, 8 + self.drawbar.height() + 4)
 
     def _conn_watchdog(self) -> None:
         """1s tick: surface a lost connection ON THE CHART and auto-heal it. Cheap (one bool read when

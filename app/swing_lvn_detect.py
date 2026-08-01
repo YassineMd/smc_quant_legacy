@@ -103,6 +103,26 @@ def _leg_stats(buckets, b0, b1, ends_high):
     return dict(lvn=lvn, median=med, val=val, vah=vah, poc=poc, zlo=zlo, zhi=zhi)
 
 
+def va_lines(buckets, b0, b1):
+    """Three WITHIN-VALUE-AREA levels for the leg [b0..b1]: the price with the most BUY volume, the price with the most
+    SELL volume, and the LVN — all clipped to [VAL, VAH]. For the hover 'VA lines' overlay. None if degenerate."""
+    prof = _leg_profile(buckets, b0, b1)
+    if len(prof) < 3:
+        return None
+    val, vah = _bq.value_area(prof)
+    if val != val or vah != vah or not (vah > val):
+        return None
+    lvn = _bq.lvn(prof)
+    if lvn != lvn or not (val <= lvn <= vah):              # keep the LVN inside the VA (it is, by construction)
+        lvn = None
+    inva = [(p, d) for p, d in prof.items() if val <= p <= vah]
+    if not inva:
+        return None
+    buy_poc = max(inva, key=lambda pd: pd[1].get("b", 0.0))[0]
+    sell_poc = max(inva, key=lambda pd: pd[1].get("s", 0.0))[0]
+    return dict(val=val, vah=vah, buy_poc=buy_poc, sell_poc=sell_poc, lvn=lvn)
+
+
 def _dev_leg(buckets, thr=None):
     """Shared front-end: (H, L, C, thr, piv, dev). dev = the DEVELOPING leg (b0,p0,b1,p1,ends_high) — anchored at the
     last confirmed pivot, extended to the RUNNING extreme — or None. Returns None (whole) if the window is too short."""
@@ -427,7 +447,7 @@ def _leg_segments(cum, C, b0, p0, b1, p1, N):
 
 def swing_lines(buckets, thr=None, divs=None):
     """Every recent ZigZag leg (confirmed + developing) as a line with its swing absorb-A. Each leg is split into
-    N parts (N = divs[key] or 2, cycled by clicking the line) -> per-part absorb-A. CAUSAL: each part is z-scored
+    N parts (N = divs[key] or 4, cycled by clicking the line) -> per-part absorb-A. CAUSAL: each part is z-scored
     against the PRIOR legs split the SAME way. Returns OLDEST->NEWEST:
       [{b0,p0,b1,p1, ends_high, developing, key, b0_time, N, dots:[(bar,price)], segs:[A_1..A_N], A, dP, dV}]."""
     r = _dev_leg(buckets, thr)
@@ -460,17 +480,20 @@ def swing_lines(buckets, thr=None, divs=None):
             continue
         b0, p0, b1, p1, eh, dv = g
         key = _leg_key(buckets, b0, p0)
-        reqN = min(4, max(2, int(divs.get(key, 2))))
+        reqN = min(4, max(2, int(divs.get(key, 4))))          # DEFAULT ÷4 (A1..A4); click a leg to cycle 4->2->3
         pairs, splitbars, aN = seg_by_N[reqN][m] or seg_by_N[2][m] or seg_by_N[1][m]
         prior = range(max(0, m - SL_WLEGS), m)
         wpair = seg_by_N[1][m][0][0]                    # whole-leg (dP, dV)
         wbase = [seg_by_N[1][j][0][0] for j in prior if seg_by_N[1][j] is not None]
         A = _swing_A(wbase, wpair); dP, dV = wpair
         segs = []
-        for k in range(aN):
+        seg_unpaid = []                                      # per-part UNPAID: the part's net delta opposes its own
+        for k in range(aN):                                  # price move (same sign test as the whole-swing `diverge`)
             base = [seg_by_N[aN][j][0][k] for j in prior
                     if seg_by_N[aN][j] is not None and k < len(seg_by_N[aN][j][0])]
             segs.append(_swing_A(base, pairs[k]))
+            _dpk, _dvk = pairs[k]
+            seg_unpaid.append(bool(_dvk != 0 and ((_dvk > 0) != (_dpk > 0))))
         dots = []
         for sb in splitbars:
             frac = (sb - b0) / (b1 - b0) if b1 > b0 else 0.0
@@ -491,6 +514,6 @@ def swing_lines(buckets, thr=None, divs=None):
         verdict = "impulse" if not is_retr else ("rev" if (easy or a4x) else ("cont" if diverge else "neutral"))
         out.append(dict(b0=b0, p0=p0, b1=b1, p1=p1, ends_high=eh, developing=dv, key=key,
                         b0_time=float(buckets[b0].get("start_time", 0.0) or 0.0) if 0 <= b0 < n else 0.0,
-                        N=aN, dots=dots, segs=segs, A=A, dP=dP, dV=dV,
+                        N=aN, dots=dots, segs=segs, seg_unpaid=seg_unpaid, A=A, dP=dP, dV=dV,
                         is_retr=is_retr, diverge=diverge, verdict=verdict, easy=easy, a4x=a4x))
     return out
