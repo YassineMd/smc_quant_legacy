@@ -2255,7 +2255,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue
             w._live_sig = sig
             try:
-                top = self._fp_top_html(act, list(self._trline_buckets or []))
+                # window for the trailing-baseline stats = the current scanner frame. _trline_buckets is only set on a
+                # star/square/swing click, so in NORMAL live mode it's empty -> _fp_top_html returned "" and the popup's
+                # stats went blank on the first live tick (footprint bars kept updating). Fall back to the scanner frame.
+                _bwin = list(self._trline_buckets or []) or (self._build_scanner_buckets()[0] or [])
+                top = self._fp_top_html(act, _bwin)
             except Exception:
                 top = ""
             try:
