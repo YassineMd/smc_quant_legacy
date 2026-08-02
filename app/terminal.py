@@ -331,6 +331,16 @@ class SubCandleWindow(QtWidgets.QDialog):
     def __init__(self, parent, candle: dict, subs: list, top_html: str, mult: float, title: str,
                  target_vol: float = 0.0):
         super().__init__(parent)
+        self._owner = parent                             # owning terminal — the replay-nav keys drive it
+        # Drive the REPLAY from THIS popup too, so it works while the popup is the active window (not the main chart):
+        # Right = step, Shift+Right = 1m micro-step, Ctrl+Shift+Right = 1m auto-play, Ctrl+Right = candle auto-play,
+        # Left = step back. WindowShortcut context -> fires regardless of which child widget holds focus. This window
+        # then follows the replay edge like any other. No-op unless the owner is in Replay Mode.
+        for _seq, _fn in (("Right", "_on_sel_right"), ("Left", "_on_sel_left"), ("Shift+Right", "_replay_microstep"),
+                          ("Ctrl+Right", "_toggle_replay_autoplay"), ("Ctrl+Shift+Right", "_toggle_micro_autoplay")):
+            QtGui.QShortcut(QtGui.QKeySequence(_seq), self,
+                            activated=lambda fn=_fn: (getattr(self._owner, fn)()
+                                                      if getattr(self._owner, "_replay_on", False) else None))
         self.setWindowTitle(title)
         # own top-level window with a normal frame + min/max buttons + a corner grip, so it's freely resizable
         self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.WindowMinMaxButtonsHint
@@ -500,11 +510,32 @@ class SubCandleWindow(QtWidgets.QDialog):
         self._left.getAxis("bottom").set_starts([_f(s, "start_time") for s in subs])   # zoom-adaptive time ticks
         self._left.setTitle("%d one-minute sub-candles%s" % (m, "   · LIVE" if self._live else ""),
                             color="#9aa0a6", size="9pt")
-        if not self._fitted:                             # fit the view ONCE on the first render, then FREEZE it — a
-            self._left.autoRange()                       # newly-closed 1m must never snap the user's zoom/pan back
+        if not self._fitted:                             # first render of THIS bucket -> fit the view ONCE, then FOLLOW
+            self._left.autoRange()                       # (a NEW bucket resets _fitted, so it re-fits; same bucket follows)
             self._left.disableAutoRange()
             self._fitted = True
+        elif m > self._nsub and self._nsub > 0:          # more 1m revealed on the SAME developing bucket -> follow the edge
+            self._follow_edge(m, h[-1], l[-1])
         self._nsub = m
+
+    def _follow_edge(self, m: int, hi: float, lo: float) -> None:
+        """As the bucket develops (Shift+Right / Ctrl+Shift+Right or a LIVE tick reveals another 1m), scroll to keep the
+        NEWEST 1m candle in view like the main chart's replay-follow: X keeps the same zoom WIDTH and the newest
+        candle's offset from the right edge; Y keeps the same HEIGHT and pans only when the newest candle would fall
+        OUTSIDE the current vertical window."""
+        try:
+            vb = self._left.getViewBox()
+            (vx0, vx1), (vy0, vy1) = vb.viewRange()
+            dx = float(m - self._nsub)                   # number of new candles -> shift X right by that much
+            if dx:
+                vb.setXRange(vx0 + dx, vx1 + dx, padding=0)
+            h = vy1 - vy0; pad = h * 0.06
+            if hi + pad > vy1:                           # newest candle pokes above the window -> pan up (keep height)
+                vb.setYRange(hi + pad - h, hi + pad, padding=0)
+            elif lo - pad < vy0:                         # below the window -> pan down
+                vb.setYRange(lo - pad, lo - pad + h, padding=0)
+        except Exception:
+            pass
 
     def refresh(self, candle: dict, subs: list, top_html: str, target_vol: "float | None" = None) -> None:
         """Owner calls this each tick while the popup's bucket is still FORMING -> live 1m development. target_vol is
