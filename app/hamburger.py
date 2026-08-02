@@ -131,6 +131,8 @@ _M10_INDICATORS = [
 # "Candles" — per-candle marks on the canvas.
 _M10_CANDLES = [
     ("m10_poc", "POC Dot", False, True),                  # default OFF (operator preference)
+    ("m10_candle_va", "VP Lines", False, True),           # per-candle buy-POC green / sell-POC red / LVN purple stub, right of each candle (Ctrl+A)
+    ("m10_imb", "Abnormal Volume", True, True),           # blue(buy)/orange(sell) abnormal-volume level lines inside each candle; default ON (was always-on)
     ("m10_liq", "Liquidation Marks", False, True),        # default OFF; in-session toggles persist
     ("m10_stats", "Stats Box", False, True),              # default OFF ('s' toggles)
 ]
@@ -139,6 +141,7 @@ _M10_CANDLES = [
 _M10_STRATEGIES = [
     ("m10_mmx_sound", "\U0001F514", False, True),                       # bell icon — audible confirmation when enabled
     ("m10_engulfsr", "1h Engulf S/R Reversal (L / S triangles)", False, True),  # 1h: engulf at VA/S/R zone; fwd candidate
+    ("m10_reversal", "1h Reversal (R / G losanges)", False, True),  # 1h: causal reversal-candle shape (wide-range rejection); DESCRIPTIVE eyeball, not an edge
     ("m10_momentum", "15m Engulfing S/R (L / S losanges)", False, True),  # 15m: last-mit engulf; gold/blue tiers, tier-dependent skew
     ("m10_engulf5m", "5m Absorption S/R", False, True),  # 5m: continuation bias only, all triangles; engulf green/red/gold + absorb2 blue/orange
 ]

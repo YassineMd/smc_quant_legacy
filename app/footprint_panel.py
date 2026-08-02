@@ -170,6 +170,57 @@ _BUY_HOT = (0, 255, 127); _SELL_HOT = (255, 45, 70)   # imbalanced (>= mult x pe
 _POC = (255, 215, 0)
 
 
+def _bin_ladder(rows, lo, hi):
+    """Aggregate a fine (price, buy, sell) ladder into <= _MAX_ROWS equal price bins -> (rows, bin_h). Pass-through
+    when already coarse enough. The SINGLE binning used by both the pane's bars and the VP-line computation."""
+    n = len(rows)
+    if n <= _MAX_ROWS:
+        if n > 1:
+            gaps = sorted(rows[k + 1][0] - rows[k][0] for k in range(n - 1))
+            bh = gaps[len(gaps) // 2] or ((hi - lo) / n)
+        else:
+            bh = max(1e-6, (lo or 1.0) * 1e-4)
+        return rows, bh
+    span = (hi - lo) or 1e-9
+    bw = span / _MAX_ROWS
+    agg = {}
+    for pr, b, s in rows:
+        bi = min(_MAX_ROWS - 1, int((pr - lo) / bw))
+        a = agg.setdefault(bi, [0.0, 0.0]); a[0] += b; a[1] += s
+    out = [(lo + (bi + 0.5) * bw, a[0], a[1]) for bi, a in sorted(agg.items())]
+    return out, bw
+
+
+def vp_lines_from_levels(levels):
+    """(buy_poc, sell_poc, lvn) for a candle's per-price footprint — the ONE calculation both the footprint pane and
+    the chart's per-candle VP Lines use. Bin the ladder to <= _MAX_ROWS bins (as the pane draws its bars), then
+    buy_poc = the strongest BUY-only bin, sell_poc = the strongest SELL-only bin (both UNBOUNDED); lvn = the interior
+    low-volume node (bar_quantiles.lvn, bounded to [VAL, VAH]). Each is None when undefined."""
+    rows = []
+    for ps, v in (levels or {}).items():
+        try:
+            pr = float(ps)
+        except (TypeError, ValueError):
+            continue
+        b = float(v.get("b", 0.0) or 0.0); s = float(v.get("s", 0.0) or 0.0)
+        if b + s > 0:
+            rows.append((pr, b, s))
+    if not rows:
+        return (None, None, None)
+    rows.sort(key=lambda r: r[0])
+    rows, _bh = _bin_ladder(rows, rows[0][0], rows[-1][0])
+    bp = max(rows, key=lambda r: r[1])[0]                  # strongest BUY-only level (binned)
+    sp = max(rows, key=lambda r: r[2])[0]                  # strongest SELL-only level (binned)
+    try:
+        from . import bar_quantiles as _bq
+        lvn = _bq.lvn({p: {"b": b, "s": s} for p, b, s in rows})   # interior low-volume node (VAL < .. < VAH)
+        if lvn != lvn:                                    # NaN -> no interior node
+            lvn = None
+    except Exception:
+        lvn = None
+    return (bp, sp, lvn)
+
+
 class _PriceAxis(pg.AxisItem):
     """Right price axis: 2-decimal labels, tick spacing floored to 0.01 so no two labels round to the same value."""
 
@@ -261,6 +312,15 @@ class FootprintPanel(pg.PlotWidget):
         _pl = pg.mkPen((175, 175, 185, 190), width=1.8); _pl.setDashPattern([3.0, 9.0])
         self._price_line = pg.InfiniteLine(angle=0, movable=False, pen=_pl)
         self._price_line.setZValue(3); self.addItem(self._price_line, ignoreBounds=True); self._price_line.hide()
+        # VP lines of the FORMING candle's OWN volume profile — buy-POC green (strongest BUY-only volume) / sell-POC
+        # red (strongest SELL-only volume), both UNBOUNDED; LVN purple = the interior low-volume node, bounded to
+        # [VAL, VAH]. FULL-WIDTH DASHED (far left to far right). Shown only when the owner enables them (show_va).
+        self._va_lines = {}
+        for _vk, _vrgb in (("buy", (78, 203, 141)), ("sell", (255, 82, 82)), ("lvn", (178, 70, 255))):
+            _vp = pg.mkPen(*_vrgb, 235, width=1.6); _vp.setDashPattern([5.0, 5.0])
+            _vln = pg.InfiniteLine(angle=0, movable=False, pen=_vp); _vln.setZValue(4)
+            self.addItem(_vln, ignoreBounds=True); _vln.hide()
+            self._va_lines[_vk] = _vln
         # crosshair — shared with the chart by PRICE (vertical = volume / own; horizontal = price + right-axis tag)
         _xc = pg.mkPen((170, 170, 170, 150), width=1); _xc.setDashPattern([4.0, 8.0])
         self.xhair_v = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
@@ -315,33 +375,21 @@ class FootprintPanel(pg.PlotWidget):
 
     @staticmethod
     def _bin_rows(rows, lo, hi):
-        """Aggregate a fine ladder into <= _MAX_ROWS equal price bins (returns (rows, bin_h)); pass-through when
-        already coarse enough. Keeps the number chips from crowding on a deep footprint."""
-        n = len(rows)
-        if n <= _MAX_ROWS:
-            if n > 1:
-                gaps = sorted(rows[k + 1][0] - rows[k][0] for k in range(n - 1))
-                bh = gaps[len(gaps) // 2] or ((hi - lo) / n)
-            else:
-                bh = max(1e-6, (lo or 1.0) * 1e-4)
-            return rows, bh
-        span = (hi - lo) or 1e-9
-        bw = span / _MAX_ROWS
-        agg = {}
-        for pr, b, s in rows:
-            bi = min(_MAX_ROWS - 1, int((pr - lo) / bw))
-            a = agg.setdefault(bi, [0.0, 0.0]); a[0] += b; a[1] += s
-        out = [(lo + (bi + 0.5) * bw, a[0], a[1]) for bi, a in sorted(agg.items())]
-        return out, bw
+        """Aggregate a fine ladder into <= _MAX_ROWS equal price bins -> the module-level _bin_ladder (shared with the
+        VP-line calculation so the bars and the VP lines bin IDENTICALLY)."""
+        return _bin_ladder(rows, lo, hi)
 
     def clear_panel(self) -> None:
         self.bars.update_data([], 1.0, None, None)
         self._poc.hide(); self._price_line.hide(); self._skew_label.hide()
+        for _ln in self._va_lines.values():
+            _ln.hide()
         for t in self._sell_pool + self._buy_pool:
             t.setVisible(False)
 
-    def update_footprint(self, active: dict, mult: float, price=None, ber30=None, ser30=None, top_html=None) -> None:
-        self._last = (active, mult, price, ber30, ser30, top_html)
+    def update_footprint(self, active: dict, mult: float, price=None, ber30=None, ser30=None, top_html=None,
+                         show_va=False) -> None:
+        self._last = (active, mult, price, ber30, ser30, top_html, show_va)
         levels = (active or {}).get("levels") or {}
         rows = []
         for ps, v in levels.items():
@@ -385,6 +433,18 @@ class FootprintPanel(pg.PlotWidget):
             self._price_line.setPos(price); self._price_line.show()
         else:
             self._price_line.hide()
+        # VP lines of THIS candle's own profile (full-width dashed), from the SHARED vp_lines_from_levels so the pane
+        # and the chart's per-candle VP Lines compute identically: buy-POC green (strongest BUY-only) / sell-POC red
+        # (strongest SELL-only), both UNBOUNDED; LVN purple = interior node bounded to [VAL, VAH]. Only when show_va.
+        _bp = _sp = _lvn = None
+        if show_va:
+            _bp, _sp, _lvn = vp_lines_from_levels(levels)
+        for _vk, _yv in (("buy", _bp), ("sell", _sp), ("lvn", _lvn)):
+            _ln = self._va_lines[_vk]
+            if _yv is not None and _yv == _yv:
+                _ln.setPos(float(_yv)); _ln.show()
+            else:
+                _ln.hide()
         # centre-column numbers as WHITE chips (black text) — sell right-anchored just left of centre, buy left-
         # anchored just right, so the two never touch; only meaningful rows get a chip. Hidden via double-click.
         us = ub = 0

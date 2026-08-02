@@ -51,7 +51,7 @@ from .chart_widgets import (
     _RGB_EFF_BULL, _RGB_ER_BEAR, _RGB_ER_BULL, _RGB_EXH_BEAR, _RGB_EXH_BULL,
 )
 from .cob_panel import CobPanel
-from .footprint_panel import FootprintPanel, profile_skewness, skew_read, skew_color
+from .footprint_panel import FootprintPanel, profile_skewness, skew_read, skew_color, vp_lines_from_levels
 from .drawing_tools import DrawingController, DrawingToolbar
 from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visible
 from .hamburger import FloatingOverlayMenu, HamburgerButton, scale_label
@@ -464,7 +464,8 @@ class SubCandleWindow(QtWidgets.QDialog):
     def _set_footprint(self, candle: dict, top_html: str) -> None:
         _px = candle.get("close", candle.get("close_price"))
         try:
-            self._fp.update_footprint(candle, self._mult, float(_px) if _px else None, None, None, top_html)
+            self._fp.update_footprint(candle, self._mult, float(_px) if _px else None, None, None, top_html,
+                                      show_va=True)   # the 1m-detail popup always shows the VP lines
         except Exception:
             pass
 
@@ -594,6 +595,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._replay_autoplay_timer = QtCore.QTimer(self)   # Ctrl+Right auto-play: reveal one candle per tick (Left/Right stops it)
         self._replay_autoplay_timer.setInterval(config.REPLAY_AUTOPLAY_MS)
         self._replay_autoplay_timer.timeout.connect(self._replay_autoplay_tick)
+        self._micro_autoplay_timer = QtCore.QTimer(self)    # Ctrl+Shift+Right auto-play: reveal one 1m constituent per tick
+        self._micro_autoplay_timer.setInterval(config.REPLAY_AUTOPLAY_MS)
+        self._micro_autoplay_timer.timeout.connect(self._micro_autoplay_tick)
         # MICRO-STEP (Shift+Right, recon replay only): grow the NEXT higher-tf candle one 1m constituent at a time,
         # so a higher-tf bar builds up minute-by-minute (approx real conditions) instead of appearing whole. State:
         self._micro_k = 0                  # # of 1m constituents of the next bucket currently revealed (0 = normal)
@@ -941,6 +945,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._mom_sig = None; self._mom_drawn = False
         self._mom_entries = []
         self._mom_ln_pool = []; self._mom_lnlbl_pool = []; self._mom_lines_user = {}
+        # 1h Reversal overlay (m10_reversal, 1h only) — red lozenge ABOVE tops / green lozenge BELOW bottoms;
+        # gold ring on the eff-agg exhaustion-blow-off tier. DESCRIPTIVE (candle shape), not a proven edge.
+        self._rev_sph = None                     # ScatterPlotItem of red/green lozenges
+        self._rev_ring = None                    # ScatterPlotItem — gold halo on the eff-agg blow-off (STRONG) tier
+        self._rev_sig = None; self._rev_drawn = False
         # 5m Absorption S/R overlay (m10_engulf5m, 5m only) — triangle L/S badges (engulf green/red/gold + absorb2 blue/orange); click -> entry/TP/SL lines
         self._e5m_sph = None                     # ScatterPlotItem of triangle badges
         self._e5m_lbl_pool = []                  # (colour-only badges)
@@ -1400,6 +1409,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("Left"), self, activated=self._on_sel_left)     # -1 bucket / replay: prev candle
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Right"), self, activated=self._toggle_replay_autoplay)  # replay: auto-play (Left/Right stops)
         QtGui.QShortcut(QtGui.QKeySequence("Shift+Right"), self, activated=self._replay_microstep)  # replay: grow next candle by 1m (recon)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Shift+Right"), self, activated=self._toggle_micro_autoplay)  # replay: AUTO 1m micro-play
         # quick toggles: 's' = Stats Box overlay, 'd' = Vector Drawing toolbar. Flip the menu
         # checkbox so the menu stays in sync and the existing show/hide + teardown logic runs.
         QtGui.QShortcut(QtGui.QKeySequence("S"), self,
@@ -1416,6 +1426,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         activated=lambda: self.menu.layer_checks["m10_footprint"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("A"), self,
                         activated=lambda: self.menu.sub_checks["audio"].toggle())
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+A"), self,   # Ctrl+A = per-candle VP Lines (buy/sell-POC + LVN)
+                        activated=lambda: self.menu.layer_checks["m10_candle_va"].toggle())
         # 'o' = Order Blocks + Absorption/Iceberg overlays TOGETHER (both hidden by default)
         QtGui.QShortcut(QtGui.QKeySequence("O"), self, activated=self._toggle_ob_iceberg)
         # 'y' = show/hide the STATE verdict + debug lines in BOTH stats boxes (hidden by default)
@@ -1755,6 +1767,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             h = self._scan_handles.get("bc_poc")
             if h is not None:
                 h.setVisible(on)
+        elif key == "m10_candle_va":
+            for _hk in ("bc_cva_buy", "bc_cva_sell", "bc_cva_lvn"):   # per-candle LVA line stubs
+                _h = self._scan_handles.get(_hk)
+                if _h is not None:
+                    _h.setVisible(on)
+        elif key == "m10_imb":
+            for _hk in ("bc_imb_buy", "bc_imb_sell"):                 # abnormal-volume level lines (blue/orange)
+                _h = self._scan_handles.get(_hk)
+                if _h is not None:
+                    _h.setVisible(on)
         elif key in ("m10_footprint", "m10_bubbles"):
             # bc_fp renders BOTH the footprint NUMBERS (m10_footprint) and the volume BUBBLES (m10_bubbles),
             # so it stays visible while EITHER is on. Sub-pool teardown: its number TextPools are NOT in
@@ -1813,6 +1835,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._mom_sig = None; self._sel_sig = None   # 15m Momentum toggled -> re-run the overlay draw
             if not on:
                 self._clear_momentum()              # off -> tear the squares down now
+        elif key == "m10_reversal":
+            self._rev_sig = None; self._sel_sig = None   # 1h Reversal toggled -> re-run the overlay draw
+            if not on:
+                self._clear_reversal()              # off -> tear the lozenges down now
         elif key == "m10_sr":
             self._sr_sig = None; self._sel_sig = None    # Support/Resistance toggled -> re-run the overlay draw
             if not on:
@@ -2036,8 +2062,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         if d < best_d:
                             best_d = d; best = lg
                     if best is not None and (ev.modifiers() & QtCore.Qt.ControlModifier):
-                        _vk = best["key"]                                 # Ctrl+click -> LOCK / unlock this swing's VA lines
-                        (self._svl_va_locked.discard if _vk in self._svl_va_locked else self._svl_va_locked.add)(_vk)
+                        _vk = best["key"]                                 # Ctrl+click -> LOCK this swing's VA lines (EXCLUSIVE)
+                        if _vk in self._svl_va_locked:
+                            self._svl_va_locked.discard(_vk)              # click the locked swing again -> unlock it
+                        else:
+                            self._svl_va_locked.clear()                   # only ONE locked at a time -> drop any other lock
+                            self._svl_va_locked.add(_vk)                  # the rest still show on hover
                         try:
                             self._svl_va_render()
                         except Exception:
@@ -2155,7 +2185,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Live-refresh any SubCandleWindow opened on the still-FORMING candle: re-pull its 1m constituents from
         the live 1m stream (closed 1m + the developing one) and redraw. Early-returns when none are live-open."""
         wins = getattr(self, "_subcandle_windows", None)
-        if not wins:
+        if not wins or self._replay_on:      # in Replay Mode, _tick_subcandles_replay follows the replay edge instead
             return
         live = [w for w in wins if getattr(w, "_live", False) and w.isVisible()]
         if not live:
@@ -2199,6 +2229,61 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 top = ""
             try:
                 w.refresh(act, subs, top, _tv)
+            except Exception:
+                pass
+
+    def _tick_subcandles_replay(self) -> None:
+        """Replay: refresh every open 1m-detail window to the CURRENT replay edge candle's 1m constituents in place —
+        so a step (Right), a manual micro-step (Shift+Right) or the micro auto-play (Ctrl+Shift+Right) updates the
+        window without close/re-open. During a 1m micro-grow it shows only the constituents revealed so far (the candle
+        builds up minute-by-minute); on a full step it shows the whole edge candle's 1m."""
+        wins = getattr(self, "_subcandle_windows", None)
+        if not wins or not self._replay_on:
+            return
+        self._subcandle_windows = wins = [w for w in wins if w.isVisible()]
+        if not wins:
+            return
+        try:
+            filtered, _x, _a = self._build_scanner_buckets()
+        except Exception:
+            return
+        if not filtered:
+            return
+        b = filtered[-1]                                     # the replay EDGE candle (full, or the developing micro partial)
+        cs = float(b.get("start_time", 0.0) or 0.0); ce = float(b.get("end_time", 0.0) or 0.0)
+        if cs <= 0.0:
+            return
+        micro = (self._micro_k > 0 and self._micro_subs and self._micro_edge == self._replay_edge_t)
+        if micro:
+            subs = list(self._micro_subs[:self._micro_k])    # only the 1m revealed so far -> the candle grows live
+        else:
+            _ce = ce if ce > cs else cs + 24 * 3600.0
+            try:
+                subs = (recon_replay.window_by_time("1m", cs, _ce) if self._in_recon_replay()
+                        else archive.subbuckets("1m", cs, _ce)) or []
+            except Exception:
+                subs = []
+            subs = [s for s in subs if cs <= float(s.get("start_time", 0.0) or 0.0) < _ce]
+        _tv = float((self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL)
+        try:
+            top = self._fp_top_html(b, filtered)
+        except Exception:
+            top = ""
+        sig = (round(cs, 3), len(subs), round(float(b.get("curr_vol", 0.0) or 0.0), 3), int(self._micro_k))
+        for w in wins:
+            if getattr(w, "_replay_sig", None) == sig:
+                continue
+            w._replay_sig = sig
+            if abs(getattr(w, "_cs", 0.0) - cs) > 0.5:       # edge candle changed -> re-fit + retitle
+                w._cs = cs; w._fitted = False
+                try:
+                    import datetime as _dt
+                    _lbl = _dt.datetime.utcfromtimestamp(cs).strftime("%Y-%m-%d %H:%M")
+                    w.setWindowTitle("1m detail — %s REPLAY bucket @ %s UTC" % (self._tf, _lbl))
+                except Exception:
+                    pass
+            try:
+                w.refresh(b, subs, top, _tv)
             except Exception:
                 pass
 
@@ -3054,7 +3139,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """RIGHT arrow. Replay Mode: reveal the NEXT candle (advance the cursor). Otherwise: move the selection
         +1 bucket AND arm the confluence-alert eval (LEFT deliberately does not — only forward scrubbing fires)."""
         if self._replay_on:
-            self._replay_stop_autoplay()    # a manual step halts Ctrl+Right auto-play
+            self._replay_stop_autoplay(); self._micro_stop_autoplay()   # a manual step halts either auto-play
             self._advance_replay(1)
             return
         self._alert_right_pending = True
@@ -3063,7 +3148,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _on_sel_left(self) -> None:
         """LEFT arrow. Replay Mode: step BACK one candle. Otherwise: pull the selection's right edge -1 bucket."""
         if self._replay_on:
-            self._replay_stop_autoplay()    # a manual step halts Ctrl+Right auto-play
+            self._replay_stop_autoplay(); self._micro_stop_autoplay()   # a manual step halts either auto-play
             self._advance_replay(-1)
             return
         self.drawer.extend_selection("right", -1.0)
@@ -5185,6 +5270,65 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _draw_mom_lines(self) -> None:
         self._trade_lines(self._mom_entries, self._mom_lines_user, self._mom_ln_pool, self._mom_lnlbl_pool, 30)
 
+    # 1h REVERSAL overlay (hamburger m10_reversal, 1h ONLY) — DESCRIPTIVE reversal-candle marker, self-gated, fail-safe.
+    # Red lozenge ABOVE a TOP-reversal candle (up->down rejection) / green lozenge BELOW a BOTTOM one, from the causal
+    # wide-range-rejection shape (app/reversal_detect, built off study/reversal_candle_1h). Gold ring = the eff-agg
+    # exhaustion blow-off (STRONG) tier. Marks candle SHAPE — NOT a proven edge (study/reversal_detect_validate: no
+    # tradeable forward move on 1h); an eyeball tool. No trade lines.
+    def _clear_reversal(self) -> None:
+        if self._rev_sph is not None:
+            self._rev_sph.setVisible(False)
+        if self._rev_ring is not None:
+            self._rev_ring.setVisible(False)
+        self._rev_sig = None; self._rev_drawn = False
+
+    def _draw_reversal(self, filtered) -> None:
+        """Red/green reversal-candle lozenges (app/reversal_detect), 1h ONLY. Causal shape marker: red ABOVE a top,
+        green BELOW a bottom; gold ring on the eff-agg exhaustion-blow-off tier. Self-gated, fail-safe."""
+        if (not self.menu.layer_state("m10_reversal") or self.scanner_mode != "bucket_canvas"
+                or self._tf != "1h"):
+            self._clear_reversal(); return
+        n = len(filtered)
+        if n == 0:
+            self._clear_reversal(); return
+        _sig = (n, filtered[-1].get("end_time"), filtered[-1].get("close"))
+        if _sig == self._rev_sig and self._rev_drawn:
+            return
+        self._rev_sig = _sig
+        try:
+            from app import reversal_detect
+            fires = reversal_detect.detect(filtered, skip_last=False)
+        except Exception:
+            self._clear_reversal(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        GRN, RED, GOLD = (40, 220, 100), (240, 60, 78), (255, 200, 40)
+        if self._rev_sph is None:
+            self._rev_sph = pg.ScatterPlotItem(pxMode=True, size=15, symbol="d")   # lozenge / diamond
+            self._rev_sph.setZValue(32); self.plot.addItem(self._rev_sph, ignoreBounds=True)
+        if self._rev_ring is None:
+            self._rev_ring = pg.ScatterPlotItem(pxMode=True, symbol="o", size=23, brush=pg.mkBrush(0, 0, 0, 0))
+            self._rev_ring.setZValue(31); self.plot.addItem(self._rev_ring, ignoreBounds=True)
+        _fi = n - 1                                              # forming (unconfirmed) bucket -> faded preview
+        spots = []; rings = []
+        for e in fires:
+            i = e["i"]
+            if i < 0 or i >= n:
+                continue
+            side = e["side"]
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (hi + pad) if side < 0 else (lo - pad)           # TOP -> red ABOVE / BOTTOM -> green BELOW
+            col = RED if side < 0 else GRN
+            _al = _PREVIEW_ALPHA if i == _fi else 255
+            _pen_rgb = [int(cc * 0.55) for cc in col] + [_al]
+            spots.append({"pos": (i, y), "symbol": "d", "brush": pg.mkBrush(*col, _al),
+                          "pen": pg.mkPen(*_pen_rgb, width=1.2), "size": 15})
+            if e.get("strong"):                                  # eff-agg exhaustion blow-off -> gold ring highlight
+                rings.append({"pos": (i, y), "symbol": "o", "size": 23, "brush": pg.mkBrush(0, 0, 0, 0),
+                              "pen": pg.mkPen(*GOLD, _al, width=1.6)})
+        self._rev_sph.setData(spots); self._rev_sph.setVisible(True)
+        self._rev_ring.setData(rings); self._rev_ring.setVisible(True)
+        self._rev_drawn = True
+
     # 5m ABSORPTION S/R overlay (hamburger m10_engulf5m, 5m ONLY) — EYEBALL candidate, self-gated, fail-safe.
     # ALL signals are TRIANGLES (up = long, down = short) — continuation bias only, no reversals. Badge tiers:
     # GREEN/RED (engulf |A|>=1), GOLD (engulf |A|>=2), BLUE/ORANGE (absorb2 two-candle absorption sequence).
@@ -6391,12 +6535,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self.scanner_mode == "bucket_canvas" and (self.menu.layer_state("m10_engulfsr")
                     or self.menu.layer_state("m10_momentum") or self.menu.layer_state("m10_engulf5m")
                     or self.menu.layer_state("m10_breakout5m") or self.menu.layer_state("m10_engulf1m")
+                    or self.menu.layer_state("m10_reversal")
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")):
                 _pf, _, _ = self._build_scanner_buckets()
                 try:
                     self._draw_engulfsr(_pf or [])  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
                 except Exception:
                     self._clear_engulfsr()
+                try:
+                    self._draw_reversal(_pf or [])  # 1h Reversal overlay (1h) — self-gated, fail-safe
+                except Exception:
+                    self._clear_reversal()
                 try:
                     self._draw_momentum(_pf or [])  # 15m Engulfing S/R overlay (15m) — self-gated, fail-safe
                 except Exception:
@@ -6483,6 +6632,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_engulfsr(filtered)  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
             except Exception:
                 self._clear_engulfsr()
+            try:
+                self._draw_reversal(filtered)  # 1h Reversal overlay (1h) — self-gated, fail-safe
+            except Exception:
+                self._clear_reversal()
             try:
                 self._draw_momentum(filtered)  # 15m Momentum overlay (15m) — self-gated, fail-safe
             except Exception:
@@ -7615,7 +7768,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.drawer.use_account(self.paper_live)
             self.alerts.set_mode("LIVE"); self.alerts.set_balance(self.paper_live.balance)
         if not on:
-            self._replay_stop_autoplay()     # leaving Replay Mode halts any running auto-play
+            self._replay_stop_autoplay(); self._micro_stop_autoplay()   # leaving Replay Mode halts any running auto-play
         if on and self._replay_saved_edge_t is not None:
             # pick up exactly where you left off: set the Start Date field SILENTLY (blockSignals so it doesn't
             # double-fire _on_scan_time_changed) so scan_start_unix() returns the remembered time.
@@ -7720,6 +7873,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             (pvx0, pvx1), _ = self.vb.viewRange()                # the user's current X framing, captured pre-render
             self._on_timer()
             self._replay_follow(prev_n, pvx0, pvx1)              # scroll WITH the cursor, keeping the user's exact framing
+            self._tick_subcandles_replay()                      # follow the edge in any open 1m-detail window
 
     def _replay_follow(self, prev_n: int, pvx0: float, pvx1: float) -> None:
         """After a Left/Right replay step, move the view WITH the cursor while preserving EXACTLY how the user framed
@@ -7788,6 +7942,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._replay_autoplay_timer.isActive():
             self._replay_stop_autoplay()
         else:
+            self._micro_stop_autoplay()             # candle vs micro auto-play are mutually exclusive
             self._replay_autoplay_timer.start()
 
     def _replay_autoplay_tick(self) -> None:
@@ -7799,9 +7954,33 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._replay_stop_autoplay()
 
     def _replay_stop_autoplay(self) -> None:
-        """Halt Ctrl+Right auto-play (idempotent)."""
+        """Halt Ctrl+Right (candle) auto-play (idempotent)."""
         if self._replay_autoplay_timer.isActive():
             self._replay_autoplay_timer.stop()
+
+    def _toggle_micro_autoplay(self) -> None:
+        """Ctrl+Shift+Right in Replay Mode: START auto-playing the MINUTE — reveal one 1m constituent of the developing
+        candle every tick (the auto-play version of Shift+Right). Ctrl+Shift+Right again, or a manual step, STOPS it."""
+        if not self._replay_on:
+            return
+        if self._micro_autoplay_timer.isActive():
+            self._micro_stop_autoplay()
+        else:
+            self._replay_stop_autoplay()            # candle vs micro auto-play are mutually exclusive
+            self._micro_autoplay_timer.start()
+
+    def _micro_autoplay_tick(self) -> None:
+        """One micro auto-play frame: grow the developing candle by one 1m constituent (direct, so it doesn't self-stop).
+        If nothing advanced (recon wall / replay off), there's nothing left to grow -> stop."""
+        before = (self._replay_edge_t, self._micro_k)
+        self._micro_step_once()
+        if not self._replay_on or (self._replay_edge_t, self._micro_k) == before:
+            self._micro_stop_autoplay()
+
+    def _micro_stop_autoplay(self) -> None:
+        """Halt Ctrl+Shift+Right (minute) auto-play (idempotent)."""
+        if self._micro_autoplay_timer.isActive():
+            self._micro_autoplay_timer.stop()
 
     def _micro_reset(self) -> None:
         """Clear any in-progress 1m micro-grow (back to whole-bucket stepping)."""
@@ -7852,13 +8031,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return b
 
     def _replay_microstep(self) -> None:
-        """Shift+Right in Replay Mode (recon only): reveal ONE more 1m constituent of the NEXT higher-tf candle, so the
-        bar grows minute-by-minute (approx real conditions). Re-arms when the cursor moved; on the last constituent it
-        snaps to the true stored bucket (a normal +1 step, keeping the closed bar exact). Outside recon replay it just
-        does a full-bucket step (the 1m stream is only guaranteed pre-cutoff)."""
+        """Shift+Right in Replay Mode (manual entry): reveal ONE more 1m constituent of the developing candle. Halts any
+        running auto-play (candle OR micro), then does one micro-step."""
         if not self._replay_on or self._replay_edge_t is None:
             return
         self._replay_stop_autoplay()
+        self._micro_stop_autoplay()             # a manual micro-step halts Ctrl+Shift+Right micro auto-play
+        self._micro_step_once()
+
+    def _micro_step_once(self) -> None:
+        """Reveal ONE more 1m constituent of the NEXT higher-tf candle, so the bar grows minute-by-minute (approx real
+        conditions). Re-arms when the cursor moved; on the last constituent it snaps to the true stored bucket (a normal
+        +1 step, keeping the closed bar exact). Outside recon replay it just does a full-bucket step (the 1m stream is
+        only guaranteed pre-cutoff). SHARED by Shift+Right (manual) and the Ctrl+Shift+Right micro auto-play tick."""
+        if not self._replay_on or self._replay_edge_t is None:
+            return
         if not self._in_recon_replay():
             self._advance_replay(1); return
         if self._micro_k == 0 or self._micro_edge != self._replay_edge_t or not self._micro_subs:
@@ -7882,6 +8069,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (pvx0, pvx1), _ = self.vb.viewRange()
         self._on_timer()
         self._replay_follow(prev_n, pvx0, pvx1)
+        self._tick_subcandles_replay()                          # grow the open 1m-detail window with the micro-step
 
     # ------------------------------------------------------------------
     # Cold-archive GCS fetch-if-missing (on-demand history download)
@@ -10455,7 +10643,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._in_recon_replay():
             ber30s, ser30s = self._imb_baseline_rel(buckets)
 
-        # IMBALANCE LINES — ALWAYS drawn (independent of the footprint toggle): a horizontal neon line the
+        # ABNORMAL-VOLUME LINES (Candles > "Abnormal Volume", m10_imb, default ON) — a horizontal neon line the
         # candle's width AT an imbalanced level's EXACT price (buy >= 30b BER -> neon BLUE; sell >= 30b SER
         # -> neon ORANGE; both at a level -> split). Price-anchored, so it scales with the candles/grid on
         # zoom and never drifts. Two PlotCurveItems (connect='pairs'), one per side. NOT a signal.
@@ -10466,38 +10654,77 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._scan_handles["bc_imb_sell"].setZValue(6)
             self._scan_handles["bc_imb_buy"] = self._add_scanner_item(pg.PlotCurveItem(pen=_pb))
             self._scan_handles["bc_imb_buy"].setZValue(6)
-        mult = config.FOOTPRINT_IMB_ER_MULT
-        hw = 0.8 / 2.0
-        sxs, sys_, bxs, bys = [], [], [], []
-        for i, b in enumerate(buckets):
-            xi = x[i]
-            if xi < vx0 - 1.0 or xi > vx1 + 1.0:
-                continue
-            lv = b.get("levels") or {}
-            if not lv:
-                continue
-            buy_thr = mult * ber30s[i] if ber30s[i] > 0 else None
-            sell_thr = mult * ser30s[i] if ser30s[i] > 0 else None
-            if buy_thr is None and sell_thr is None:
-                continue
-            for ps2, v in lv.items():
-                buy_imb = buy_thr is not None and v.get("b", 0.0) >= buy_thr
-                sell_imb = sell_thr is not None and v.get("s", 0.0) >= sell_thr
-                if not (buy_imb or sell_imb):
+        _imb_on = self.menu.layer_state("m10_imb") and not self._hide_candles   # toggle (Candles > Abnormal Volume) + Ctrl+H
+        if _imb_on:
+            mult = config.FOOTPRINT_IMB_ER_MULT
+            hw = 0.8 / 2.0
+            sxs, sys_, bxs, bys = [], [], [], []
+            for i, b in enumerate(buckets):
+                xi = x[i]
+                if xi < vx0 - 1.0 or xi > vx1 + 1.0:
                     continue
-                yy = float(ps2)            # EXACTLY at the level's price -> zoom-stable (no pixel offset)
-                if buy_imb and sell_imb:   # split: sell (orange) left half, buy (blue) right half
-                    sxs += [xi - hw, xi]; sys_ += [yy, yy]
-                    bxs += [xi, xi + hw]; bys += [yy, yy]
-                elif sell_imb:
-                    sxs += [xi - hw, xi + hw]; sys_ += [yy, yy]
-                else:
-                    bxs += [xi - hw, xi + hw]; bys += [yy, yy]
-        self._scan_handles["bc_imb_sell"].setData(sxs, sys_, connect="pairs")
-        self._scan_handles["bc_imb_buy"].setData(bxs, bys, connect="pairs")
-        _imb_vis = not self._hide_candles                     # Ctrl+H hides the abnormal-order lines with the candles
-        self._scan_handles["bc_imb_sell"].setVisible(_imb_vis)
-        self._scan_handles["bc_imb_buy"].setVisible(_imb_vis)
+                lv = b.get("levels") or {}
+                if not lv:
+                    continue
+                buy_thr = mult * ber30s[i] if ber30s[i] > 0 else None
+                sell_thr = mult * ser30s[i] if ser30s[i] > 0 else None
+                if buy_thr is None and sell_thr is None:
+                    continue
+                for ps2, v in lv.items():
+                    buy_imb = buy_thr is not None and v.get("b", 0.0) >= buy_thr
+                    sell_imb = sell_thr is not None and v.get("s", 0.0) >= sell_thr
+                    if not (buy_imb or sell_imb):
+                        continue
+                    yy = float(ps2)            # EXACTLY at the level's price -> zoom-stable (no pixel offset)
+                    if buy_imb and sell_imb:   # split: sell (orange) left half, buy (blue) right half
+                        sxs += [xi - hw, xi]; sys_ += [yy, yy]
+                        bxs += [xi, xi + hw]; bys += [yy, yy]
+                    elif sell_imb:
+                        sxs += [xi - hw, xi + hw]; sys_ += [yy, yy]
+                    else:
+                        bxs += [xi - hw, xi + hw]; bys += [yy, yy]
+            self._scan_handles["bc_imb_sell"].setData(sxs, sys_, connect="pairs")
+            self._scan_handles["bc_imb_buy"].setData(bxs, bys, connect="pairs")
+        self._scan_handles["bc_imb_sell"].setVisible(_imb_on)
+        self._scan_handles["bc_imb_buy"].setVisible(_imb_on)
+
+        # PER-CANDLE LVA LINES (m10_candle_va) — each candle's OWN unbounded buy-POC (green) / sell-POC (red) / LVN
+        # (purple, thinnest level), as a short segment from the candle CENTRE (x=i) extending RIGHT toward the next
+        # candle. Same three levels as the 1h footprint pane, one set per candle. Gated by the toggle + the detail
+        # zoom gate (hidden when zoomed out, like the POC dots) so it never becomes a dense mess.
+        if "bc_cva_buy" not in self._scan_handles:
+            for _hk, _rgb in (("bc_cva_buy", (78, 203, 141)), ("bc_cva_sell", (255, 82, 82)),
+                              ("bc_cva_lvn", (178, 70, 255))):
+                _cpen = pg.mkPen(*_rgb, 245, width=2.5); _cpen.setCapStyle(QtCore.Qt.RoundCap)
+                _cit = self._add_scanner_item(pg.PlotCurveItem(pen=_cpen)); _cit.setZValue(6)
+                self._scan_handles[_hk] = _cit
+        _cva_on = self.menu.layer_state("m10_candle_va") and detail_visible(vx1 - vx0)
+        if _cva_on:
+            _RGT = 0.9                                         # segment reaches from the centre toward the next candle
+            _cbx = []; _cby = []; _csx = []; _csy = []; _clx = []; _cly = []
+            for i, b in enumerate(buckets):
+                xi = x[i]
+                if xi < vx0 - 1.0 or xi > vx1 + 1.0:
+                    continue
+                lv = b.get("levels") or {}
+                if not lv:
+                    continue
+                _bp, _sp, _ln = vp_lines_from_levels(lv)           # SAME calc as the footprint pane (binned)
+                if _bp is not None:
+                    _cbx += [xi, xi + _RGT]; _cby += [_bp, _bp]
+                if _sp is not None:
+                    _csx += [xi, xi + _RGT]; _csy += [_sp, _sp]
+                if _ln is not None:
+                    _clx += [xi, xi + _RGT]; _cly += [_ln, _ln]
+            _cvis = not self._hide_candles
+            self._scan_handles["bc_cva_buy"].setData(_cbx, _cby, connect="pairs")
+            self._scan_handles["bc_cva_sell"].setData(_csx, _csy, connect="pairs")
+            self._scan_handles["bc_cva_lvn"].setData(_clx, _cly, connect="pairs")
+            for _hk in ("bc_cva_buy", "bc_cva_sell", "bc_cva_lvn"):
+                self._scan_handles[_hk].setVisible(_cvis)
+        else:
+            for _hk in ("bc_cva_buy", "bc_cva_sell", "bc_cva_lvn"):
+                self._scan_handles[_hk].setVisible(False)
 
         _fp_on = self.menu.layer_state("m10_footprint"); _bub_on = self.menu.layer_state("m10_bubbles")
         if _fp_on or _bub_on:                       # bc_fp draws NUMBERS (m10_footprint) and/or BUBBLES (m10_bubbles)
@@ -10761,7 +10988,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 # uses for its blue/orange imbalance lines, so the panel highlights exactly the same levels.
                 _b30 = ber30s[-1] if ber30s else None; _s30 = ser30s[-1] if ser30s else None
                 self.fp_panel.update_footprint(_ab, config.FOOTPRINT_IMB_ER_MULT, _spot, _b30, _s30,
-                                               self._fp_top_html(_ab, buckets))
+                                               self._fp_top_html(_ab, buckets), show_va=(self._tf == "1h"))
 
 
     # ------------------------------------------------------------------
