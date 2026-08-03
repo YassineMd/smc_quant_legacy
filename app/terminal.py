@@ -367,7 +367,25 @@ class SubCandleWindow(QtWidgets.QDialog):
         self._left.setMenuEnabled(False); self._left.showGrid(x=True, y=True, alpha=0.12)
         self._left.getAxis("right").setPen(pg.mkPen("#dcdcdc")); self._left.getAxis("right").setTextPen(pg.mkPen("#dcdcdc"))
         self._left.getAxis("bottom").setPen(pg.mkPen("#dcdcdc")); self._left.getAxis("bottom").setTextPen(pg.mkPen("#dcdcdc"))
-        self._item = None
+        self._item = None                                # legacy simple candle item (fallback only)
+        # FULL 1m-chart parity: this popup renders its candles through the OWNER's shared _render_candle_glyphs in the
+        # main chart's current Candle Mode. Per-popup handles + add-hook + a SEPARATE #3 compute cache (never touches
+        # the owner's self._m10_cc) so the main chart is untouched.
+        self._sub_handles = {}                           # per-mode candle glyph items for THIS popup plot
+        self._sub_add = lambda _it: (self._left.addItem(_it), _it)[1]   # add-item hook for _render_candle_glyphs
+        self._arr_cache = {"cc": None}                   # own #3 static closed-bucket compute cache
+        self._sub_fp_item = BucketFootprintItem()        # this popup's OWN footprint ladder (text pools attach to _left)
+        self._sub_fp_item.attach_text(self._left)
+        # Tier 3 — 1m-compatible indicator overlays on THIS popup (own items/pools; the detectors are reused). Absorption
+        # Candle (m10_engulf1m), market structure (m10_structure/_swing), CHoCH (m10_choch) — the all-timeframe overlays a
+        # native 1m chart would show. TF-locked strategies + the S/R & Swing-LVN corner chrome intentionally stay off.
+        self._sub_e1m_sph = None
+        self._sub_struct_pool = []; self._sub_struct_pool_sw = []; self._sub_struct_pct_pool_sw = []
+        _cbp = pg.mkPen((70, 200, 255), width=1.3, style=QtCore.Qt.DashLine); _cbp.setCosmetic(True)   # CHoCH bull
+        _crp = pg.mkPen((255, 120, 90), width=1.3, style=QtCore.Qt.DashLine); _crp.setCosmetic(True)   # CHoCH bear
+        self._sub_choch_bull = pg.PlotCurveItem(pen=_cbp, connect="finite"); self._sub_choch_bull.setZValue(28)
+        self._sub_choch_bear = pg.PlotCurveItem(pen=_crp, connect="finite"); self._sub_choch_bear.setZValue(28)
+        self._left.addItem(self._sub_choch_bull, ignoreBounds=True); self._left.addItem(self._sub_choch_bear, ignoreBounds=True)
         self._msg = pg.TextItem("", color="#9aa0a6", anchor=(0.5, 0.5)); self._msg.setZValue(50)
         self._left.addItem(self._msg, ignoreBounds=True); self._msg.hide()
         # live-price dashed line — SAME pen as the main chart's crosshair (faded gray, cosmetic [4,8]) — plus a
@@ -409,16 +427,35 @@ class SubCandleWindow(QtWidgets.QDialog):
             " padding:4px 12px; font-family:Consolas; font-size:11px;} QPushButton:hover{background:#242938;}")
         self._prev_btn.clicked.connect(lambda: self._owner._subcandle_prev(self)
                                        if self._owner is not None else None)
+        self._draw_bar = DrawingToolbar(self)            # the SAME vector-drawing tools as the main chart, for the 1m plot
         _bar = QtWidgets.QHBoxLayout(); _bar.setContentsMargins(2, 2, 2, 0)
-        _bar.addWidget(self._prev_btn); _bar.addStretch(1)
+        _bar.addWidget(self._prev_btn); _bar.addStretch(1); _bar.addWidget(self._draw_bar)
         _lv.addLayout(_bar); _lv.addWidget(self._left, 1)
         split.addWidget(_leftw)
+        # DrawingController bound to THIS 1m plot, IN-MEMORY only (persist=False -> it neither loads the main chart's
+        # saved drawings nor writes the popup's own to disk; no coordinate clash with the main time-space canvas).
+        self._draw_ctrl = None
+        try:
+            self._draw_ctrl = DrawingController(self._left, persist=False)
+            self._draw_ctrl.toolbar = self._draw_bar
+            self._draw_bar.toolSelected.connect(self._draw_ctrl.set_tool)
+            self._draw_bar.show()
+            QtGui.QShortcut(QtGui.QKeySequence("Escape"), self, activated=self._esc)   # cancel tool, else close
+        except Exception:
+            self._draw_ctrl = None
         # RIGHT — the SAME footprint pane + stats for the clicked bucket
         self._fp = FootprintPanel(); self._fp.setMaximumWidth(9999); self._fp.setMinimumWidth(260)
         split.addWidget(self._fp); split.setSizes([840, 340])
         self._render_candles(subs)
         self._set_footprint(candle, top_html)
         self._update_price(candle)
+
+    def _esc(self) -> None:
+        """Escape: cancel an armed drawing tool if there is one; otherwise close the popup (default dialog behaviour)."""
+        if getattr(self, "_draw_ctrl", None) is not None and self._draw_ctrl.active_tool:
+            self._draw_ctrl.cancel()
+        else:
+            self.reject()
 
     def _update_price(self, candle: dict) -> None:
         """Dashed live-price line (chart-style pen) + a rounded price-over-fill% pill pinned to the plot's extreme
@@ -499,6 +536,10 @@ class SubCandleWindow(QtWidgets.QDialog):
 
     def _render_candles(self, subs: list) -> None:
         if not subs:
+            for _h in self._sub_handles.values():        # hide any glyphs from a previous render
+                try: _h.setVisible(False)
+                except Exception: pass
+            self._hide_sub_indicators()                  # + Tier-3 indicator glyphs
             if self._item is not None:
                 self._item.setVisible(False)
             self._msg.setText("1m sub-candles not on disk or in the live stream yet for this bucket.\n"
@@ -515,16 +556,47 @@ class SubCandleWindow(QtWidgets.QDialog):
                 if v is not None:
                     return float(v)
             return 0.0
-        m = len(subs); xs = list(range(m))
-        o = [_f(s, "open", "open_price") for s in subs]; h = [_f(s, "high") for s in subs]
-        l = [_f(s, "low") for s in subs]; c = [_f(s, "close", "close_price") for s in subs]
-        UP, DN = (0, 190, 110), (230, 70, 80)
-        brushes = [pg.mkBrush(*((UP if c[i] >= o[i] else DN)), 160) for i in range(m)]
-        pens = [pg.mkPen(*((UP if c[i] >= o[i] else DN)), width=1) for i in range(m)]
-        if self._item is None:
-            self._item = BucketCandleItem(); self._left.addItem(self._item)
-        self._item.setVisible(True)
-        self._item.update_data(xs, o, h, l, c, brushes, pens, 0.72)
+        m = len(subs); xs = list(range(m)); vb = self._left.getViewBox()
+        # --- FULL 1m-chart parity: render the sub-candles through the OWNER's shared _render_candle_glyphs so they
+        #     look IDENTICAL to the main chart in whatever Candle Mode is active (normal / whisker / footprint / delta
+        #     / force / delta-force), flow-colored + abnormal-velocity wicks + POC baseline. Own #3 cache -> the main
+        #     chart's cache is never touched. Any failure falls back to the simple green/red item so it never blanks. ---
+        arr = None
+        try:
+            arr = self._owner._compute_bucket_arrays(subs, _f(subs[0], "start_time"), cache=self._arr_cache)
+            brushes = arr["brushes"]; wick_pens = list(arr["pens"]); highs, lows = arr["highs"], arr["lows"]
+            for i, r in enumerate(arr["velabn"]):        # abnormal-velocity: >=2px wick (never reduce), keep the flow colour
+                if i < len(wick_pens) and r >= config.VEL_ABN_RATIO:
+                    tp = pg.mkPen(wick_pens[i].color(), width=max(wick_pens[i].widthF(), 2.0)); tp.setCosmetic(True)
+                    wick_pens[i] = tp
+            if self._item is not None:
+                self._item.setVisible(False)             # retire the legacy simple item
+        except Exception:
+            arr = None
+
+        def _draw_glyphs():
+            # px_per_x drives the candle-MODE degrade (footprint/whisker collapse to normal when too narrow) exactly as on
+            # the main chart; full-range vx0/vx1 keep every sub-candle drawn (the popup holds far fewer than the 10k cull cap).
+            (vx0, vx1), _ = vb.viewRange()
+            pxx = self._left.width() / max(1e-9, vx1 - vx0)
+            self._owner._render_candle_glyphs(self._left, self._sub_handles, self._sub_add,
+                                              subs, xs, arr, brushes, wick_pens, -1.0, float(m), pxx)
+
+        if arr is not None:
+            _draw_glyphs()
+        else:                                            # fallback — simple green/red so the popup never blanks
+            for _h in self._sub_handles.values():
+                try: _h.setVisible(False)
+                except Exception: pass
+            o = [_f(s, "open", "open_price") for s in subs]; h = [_f(s, "high") for s in subs]
+            l = [_f(s, "low") for s in subs]; c = [_f(s, "close", "close_price") for s in subs]
+            UP, DN = (0, 190, 110), (230, 70, 80)
+            brushes = [pg.mkBrush(*((UP if c[i] >= o[i] else DN)), 160) for i in range(m)]
+            pens = [pg.mkPen(*((UP if c[i] >= o[i] else DN)), width=1) for i in range(m)]
+            if self._item is None:
+                self._item = BucketCandleItem(); self._left.addItem(self._item)
+            self._item.setVisible(True); self._item.update_data(xs, o, h, l, c, brushes, pens, 0.72)
+            highs, lows = h, l
         self._left.getAxis("bottom").set_starts([_f(s, "start_time") for s in subs])   # zoom-adaptive time ticks
         self._left.setTitle("%d one-minute sub-candles%s" % (m, "   · LIVE" if self._live else ""),
                             color="#9aa0a6", size="9pt")
@@ -532,8 +604,24 @@ class SubCandleWindow(QtWidgets.QDialog):
             self._left.autoRange()                       # (a NEW bucket resets _fitted, so it re-fits; same bucket follows)
             self._left.disableAutoRange()
             self._fitted = True
+            if arr is not None:                          # re-draw with the now-fitted view -> correct candle MODE + width
+                _draw_glyphs()
         elif m > self._nsub and self._nsub > 0:          # more 1m revealed on the SAME developing bucket -> follow the edge
-            self._follow_edge(m, h[-1], l[-1])
+            self._follow_edge(m, highs[-1], lows[-1])
+        # --- Tier 2: per-candle marks (POC / Abnormal-Volume / VP Lines / footprint) via the OWNER's shared renderer,
+        #     drawn AFTER the view is settled so the REAL popup view range drives the cull + detail zoom gate ---
+        if arr is not None:
+            try:
+                (rvx0, rvx1), (rvy0, rvy1) = vb.viewRange()
+                rpxx = vb.width() / max(1e-9, rvx1 - rvx0); rpxy = vb.height() / max(1e-9, rvy1 - rvy0)
+                _ber, _ser = arr["ber30"], arr["ser30"]
+                if self._owner._in_recon_replay():
+                    _ber, _ser = self._owner._imb_baseline_rel(subs)
+                self._owner._render_candle_marks(self._left, self._sub_handles, self._sub_add, subs, xs, arr,
+                                                 _ber, _ser, rvx0, rvx1, rpxx, rpxy, self._sub_fp_item)
+            except Exception:
+                pass
+        self._draw_indicators(subs)                      # Tier 3 — 1m-compatible indicator overlays (self-gated)
         self._nsub = m
 
     def _follow_edge(self, m: int, hi: float, lo: float) -> None:
@@ -556,6 +644,134 @@ class SubCandleWindow(QtWidgets.QDialog):
                 vb.setYRange(lo - pad, lo - pad + h, padding=0)
         except Exception:
             pass
+
+    def _hide_sub_indicators(self) -> None:
+        """Hide every Tier-3 indicator glyph (used on the no-data path)."""
+        try:
+            self._sub_choch_bull.setVisible(False); self._sub_choch_bear.setVisible(False)
+            if self._sub_e1m_sph is not None:
+                self._sub_e1m_sph.setVisible(False)
+            for _p in (self._sub_struct_pool, self._sub_struct_pool_sw, self._sub_struct_pct_pool_sw):
+                for _t in _p:
+                    _t.setVisible(False)
+        except Exception:
+            pass
+
+    def _render_sub_struct(self, vis, pool, vy0, vy1, swing, pcts) -> None:
+        """Popup-local twin of the main chart's _render_struct: paint the swing slice into `pool` on self._left, x =
+        the bucket ORDINAL (the popup's index-x). SWING labels also carry the leg's %-move sub-label. Cap 120."""
+        if len(vis) > 120:
+            if pcts is not None:
+                pcts = pcts[-120:]
+            vis = vis[-120:]
+        dy = (vy1 - vy0) * (0.05 if swing else 0.03)
+        used = 0
+        for k, (i, price, lab, is_high) in enumerate(vis):
+            if swing:
+                col = (255, 205, 50) if lab in ("HH", "HL") else (235, 90, 200)   # bullish gold / bearish magenta
+            else:
+                col = (40, 230, 90) if lab in ("HH", "HL") else (255, 45, 70)     # bullish green / bearish red
+            y = price + dy if is_high else price - dy
+            if used >= len(pool):
+                _t = pg.TextItem(anchor=(0.5, 0.5)); _t.setZValue(29 if swing else 30)
+                _bf = QtGui.QFont("Consolas", 11 if swing else 8); _bf.setBold(True); _t.textItem.setFont(_bf)
+                self._left.addItem(_t, ignoreBounds=True); pool.append(_t)
+            _lab = pool[used]
+            _lab.setColor(col); _lab.setText(lab); _lab.setPos(i, y); _lab.setVisible(True)
+            if swing and pcts is not None:
+                ppool = self._sub_struct_pct_pool_sw
+                if used >= len(ppool):
+                    _pt = pg.TextItem(anchor=(0.5, 0.5)); _pt.setZValue(29)
+                    _pf = QtGui.QFont("Consolas", 8); _pf.setBold(True); _pt.textItem.setFont(_pf)
+                    self._left.addItem(_pt, ignoreBounds=True); ppool.append(_pt)
+                _pt = ppool[used]
+                pc = pcts[k] if k < len(pcts) else None
+                if pc is None:
+                    _pt.setVisible(False)
+                else:
+                    _pt.setColor(col); _pt.setText("%+.2f%%" % pc); _pt.setPos(i, y - dy * 0.5); _pt.setVisible(True)
+            used += 1
+        for _j in range(used, len(pool)):
+            pool[_j].setVisible(False)
+        if swing:
+            for _j in range(used, len(self._sub_struct_pct_pool_sw)):
+                self._sub_struct_pct_pool_sw[_j].setVisible(False)
+
+    def _draw_indicators(self, subs: list) -> None:
+        """Tier 3 — draw the 1m-compatible indicator overlays that are active on the main chart onto THIS popup, run on
+        the popup's OWN 1m buckets so they appear 'as if the 1m chart were open': Absorption Candle (m10_engulf1m),
+        market structure HH/HL/LH/LL (m10_structure fine / m10_structure_swing coarse) and CHoCH (m10_choch). Each is
+        self-gated + fail-safe. The TF-locked strategy badges (5m/15m/1h) and the S/R + Swing-LVN corner chrome are
+        intentionally NOT ported — a native 1m chart wouldn't show them either."""
+        o = self._owner; n = len(subs)
+        if n == 0:
+            self._hide_sub_indicators(); return
+        try:
+            (vx0, vx1), (vy0, vy1) = self._left.getViewBox().viewRange()
+        except Exception:
+            return
+        pad = max((vy1 - vy0) * 0.05, 1e-9)
+
+        # --- Absorption Candle (m10_engulf1m) — a small losange on each absorption-extreme candle (ALL tf) ---
+        try:
+            if o.menu.layer_state("m10_engulf1m"):
+                from app import engulf1m_detect
+                marks = engulf1m_detect.detect(subs, skip_last=False)
+                GRN, RED = (40, 220, 100), (240, 60, 78); CYA, MAG = (0, 229, 255), (233, 30, 220)
+                BLU, ORG = (0, 153, 255), (255, 140, 0)
+                _COL = {"cm": (CYA, MAG), "ob": (BLU, ORG), "rg": (GRN, RED)}; _SZ = {"cm": 13, "ob": 12, "rg": 12}
+                spots = []
+                for mk in marks:
+                    i = mk["i"]
+                    if i < 0 or i >= n:
+                        continue
+                    b = subs[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+                    side = mk["side"]; kind = mk["kind"]; col = _COL[kind][0] if side > 0 else _COL[kind][1]
+                    y = (lo - pad) if side > 0 else (hi + pad)          # long badge below the low, short above the high
+                    _pen = pg.mkPen(int(col[0] * 0.55), int(col[1] * 0.55), int(col[2] * 0.55), 235, width=1.1)
+                    spots.append({"pos": (i, y), "symbol": "d", "size": _SZ[kind], "brush": pg.mkBrush(*col, 220), "pen": _pen})
+                if self._sub_e1m_sph is None:
+                    self._sub_e1m_sph = pg.ScatterPlotItem(pxMode=True, symbol="d", size=12); self._sub_e1m_sph.setZValue(30)
+                    self._left.addItem(self._sub_e1m_sph, ignoreBounds=True)
+                self._sub_e1m_sph.setData(spots); self._sub_e1m_sph.setVisible(True)
+            elif self._sub_e1m_sph is not None:
+                self._sub_e1m_sph.setVisible(False)
+        except Exception:
+            if self._sub_e1m_sph is not None:
+                self._sub_e1m_sph.setVisible(False)
+
+        # --- market structure HH/HL/LH/LL (m10_structure fine + m10_structure_swing coarse) ---
+        try:
+            scalp = o.menu.layer_state("m10_structure"); swing = o.menu.layer_state("m10_structure_swing")
+            H = [float(b.get("high", 0.0)) for b in subs]; L = [float(b.get("low", 0.0)) for b in subs]
+            lab_s = structure.detect_structure_zigzag(H, L) if scalp else []
+            lab_w = structure.detect_structure_zigzag(H, L, o._swing_pct / 100.0) if swing else []
+            self._render_sub_struct(lab_s, self._sub_struct_pool, vy0, vy1, swing=False, pcts=None)
+            self._render_sub_struct(lab_w, self._sub_struct_pool_sw, vy0, vy1, swing=True,
+                                    pcts=(o._swing_pcts(lab_w) if lab_w else []))
+        except Exception:
+            for _p in (self._sub_struct_pool, self._sub_struct_pool_sw, self._sub_struct_pct_pool_sw):
+                for _t in _p:
+                    _t.setVisible(False)
+
+        # --- CHoCH dashed lines (m10_choch) — broken scalp-ZigZag swing -> the bar price closed through it ---
+        try:
+            if o.menu.layer_state("m10_choch"):
+                H = [float(b.get("high", 0.0)) for b in subs]; L = [float(b.get("low", 0.0)) for b in subs]
+                C = [float(b.get("close", 0.0)) for b in subs]
+                events = structure.detect_choch(H, L, C)
+                xb = []; yb = []; xr = []; yr = []
+                for sb, sp, bb, direction in events[-40:]:
+                    if direction == "bull":
+                        xb += [sb, bb, np.nan]; yb += [sp, sp, np.nan]
+                    else:
+                        xr += [sb, bb, np.nan]; yr += [sp, sp, np.nan]
+                self._sub_choch_bull.setData(xb, yb); self._sub_choch_bull.setVisible(bool(xb))
+                self._sub_choch_bear.setData(xr, yr); self._sub_choch_bear.setVisible(bool(xr))
+            else:
+                self._sub_choch_bull.setVisible(False); self._sub_choch_bear.setVisible(False)
+        except Exception:
+            self._sub_choch_bull.setVisible(False); self._sub_choch_bear.setVisible(False)
 
     def refresh(self, candle: dict, subs: list, top_html: str, target_vol: "float | None" = None) -> None:
         """Owner calls this each tick while the popup's bucket is still FORMING -> live 1m development. target_vol is
@@ -10410,7 +10626,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 ser30s[i] = sum(er_s[lo:i]) / w
         return ber30s, ser30s
 
-    def _compute_bucket_arrays(self, buckets: list, anchor_unix: float) -> dict:
+    def _compute_bucket_arrays(self, buckets: list, anchor_unix: float, cache: dict = None) -> dict:
         """Static closed-bucket compute cache (#3): return the 10 per-bucket render
         arrays, recomputing ONLY the live edge (``buckets[-1]``) + any newly-closed
         buckets — closed buckets are immutable so their rows are cached and reused.
@@ -10428,7 +10644,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         front_id = ((buckets[0].get("start_time", 0.0),
                      buckets[0].get("curr_vol", 0.0)) if buckets else None)
         _S = float(self._kc_scale)             # smooth-approx effective-TF scale (KC period ×S, band ×sqrt(S); baseline period ×S)
-        cc = self._m10_cc
+        cc = (cache.get("cc") if cache is not None else self._m10_cc)   # separate cache for the 1m popup (own bucket set)
         reuse = (cc is not None and cc["front_id"] == front_id
                  and cc["anchor"] == anchor_unix and cc["n"] <= n_closed
                  and cc.get("kc_s") == _S)     # a scale change invalidates the cached KC + baseline rows
@@ -10474,7 +10690,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _vn = len(cc["vfold"].tiers)           # incremental VPIN tiers: extend the fold by the newly-closed buckets only
         if n_closed > _vn:
             cc["vfold"].extend(cc["vpin"][_vn:n_closed])
-        self._m10_cc = cc                      # cache holds exactly the closed prefix
+        if cache is not None:
+            cache["cc"] = cc
+        else:
+            self._m10_cc = cc                  # cache holds exactly the closed prefix
 
         # full arrays = cached closed prefix (O(N) pointer copy) + the FRESH live edge
         out = {k: list(cc[k]) for k in self._M10_ARR_KEYS}
@@ -10594,6 +10813,197 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             o.append(op); c.append(cl); h.append(hi); l.append(lo)
         return o, h, l, c
 
+    def _render_candle_glyphs(self, plot, handles, add_item, buckets, x, arr, brushes, wick_pens,
+                              vx0, vx1, px_per_x) -> None:
+        """Draw the upper-pane candles + gray POC baseline onto `plot` in the CURRENT Candle Mode (0 normal / 1 whisker
+        / 2 footprint / 3 delta / 4 force / 5 delta-force), storing the per-mode items in `handles` (created via
+        add_item). SHARED by the main chart (self.plot / self._scan_handles / self._add_scanner_item) and the 1m-detail
+        popup (its own plot + handles) so the popup's candles render IDENTICALLY. arr = _compute_bucket_arrays output;
+        brushes/wick_pens are the FINAL (post abnormal-velocity) arrays from the caller."""
+        opens, highs, lows, closes = arr["opens"], arr["highs"], arr["lows"], arr["closes"]
+        baseline_arr = arr["baseline"]
+        if "bc_candles" not in handles:
+            handles["bc_candles"] = add_item(BucketCandleItem())
+            handles["bc_baseline"] = add_item(pg.PlotCurveItem(pen=pg.mkPen((180, 180, 180, 150), width=1.5,
+                                                                            style=QtCore.Qt.DashLine)))
+        if "bc_whisker" not in handles:
+            handles["bc_whisker"] = add_item(WhiskerBarItem())
+        if "bc_fpcandle" not in handles:
+            handles["bc_fpcandle"] = add_item(FootprintCandleItem())
+        if "bc_deltacandle" not in handles:
+            handles["bc_deltacandle"] = add_item(DeltaCandleItem())
+        if "bc_forcecandle" not in handles:
+            handles["bc_forcecandle"] = add_item(ForceCandleItem())
+        if "bc_deltaforce" not in handles:
+            handles["bc_deltaforce"] = add_item(DeltaForceCandleItem())
+        _wb = handles["bc_whisker"]
+        _fpc = handles["bc_fpcandle"]; _dc = handles["bc_deltacandle"]
+        _fcc = handles["bc_forcecandle"]; _dfc = handles["bc_deltaforce"]
+        _wq_lo, _wq_med, _wq_hi = arr["vq_lo"], arr["vq_med"], arr["vq_hi"]
+        _cw = px_per_x * 0.8                                                # on-screen candle width in px
+        _force_items = (_fcc, _dfc)                                         # per-level modes that take a forces list
+
+        def _blank_fp(active=None):                                        # free the per-level candle pictures (except `active`)
+            for _it in (_fpc, _dc, _fcc, _dfc):
+                if _it is not active:
+                    _it.setVisible(False)
+                    _it.update_data([], [], [], [], []) if _it in _force_items else _it.update_data([], [], [], [])
+
+        def _fallback_candles(idxs):                                       # draw only the given (ladder-less) buckets
+            handles["bc_candles"].update_data(
+                [x[i] for i in idxs], [opens[i] for i in idxs], [highs[i] for i in idxs],
+                [lows[i] for i in idxs], [closes[i] for i in idxs],
+                [brushes[i] for i in idxs], [wick_pens[i] for i in idxs], 0.8, vx0, vx1)
+
+        if self._hide_candles:                                             # Ctrl+H — hide every candle glyph (VP / zones only)
+            handles["bc_candles"].update_data([], [], [], [], [], [], [])
+            _wb.setVisible(False); _wb.update_data([], [], [], [], [], [], [], [])
+            _blank_fp()
+        elif self._candle_mode in (2, 3, 4, 5) and _cw >= config.FP_CANDLE_MIN_PX:   # per-level candle modes
+            _ll = [b.get("levels") or {} for b in buckets]
+            if self._candle_mode in (4, 5):                               # FORCE (4) / DELTA-FORCE (5): need the 4-vector
+                _fl = [(float(b.get("opL", 0.0)), float(b.get("opS", 0.0)),
+                        float(b.get("clL", 0.0)), float(b.get("clS", 0.0))) for b in buckets]
+                _on = _fcc if self._candle_mode == 4 else _dfc
+                _on.update_data(x, _ll, _fl, highs, lows, 0.8, vx0, vx1); _on.setVisible(True)
+            else:                                                         # FOOTPRINT (2) / DELTA (3)
+                _on = _fpc if self._candle_mode == 2 else _dc
+                _on.update_data(x, _ll, highs, lows, config.FOOTPRINT_IMB_ER_MULT, 0.8, vx0, vx1); _on.setVisible(True)
+            _blank_fp(active=_on)                                          # hide the other per-level items
+            _wb.setVisible(False); _wb.update_data([], [], [], [], [], [], [], [])
+            _fallback_candles([i for i in range(len(x)) if not _ll[i]])    # ladder-less bucket -> normal candle
+        elif self._candle_mode == 1 and _cw >= 3.0:                        # WHISKER bars
+            _blank_fp()
+            _wb.update_data(x, _wq_lo, _wq_med, _wq_hi, highs, lows, opens, closes,
+                            brushes, wick_pens, 0.8, vx0, vx1,
+                            show_med=self.menu.layer_state("m10_poc"))   # median rides the 'P' POC toggle
+            _wb.setVisible(True)
+            _fallback_candles([i for i in range(len(x)) if _wq_med[i] != _wq_med[i]])   # NaN ladder -> candle fallback
+        else:                                                              # NORMAL candles
+            _wb.setVisible(False); _wb.update_data([], [], [], [], [], [], [], [])   # free the pictures
+            _blank_fp()
+            handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
+        handles["bc_baseline"].setData(x, baseline_arr)                    # gray dashed POC-center baseline
+        handles["bc_baseline"].setVisible(not self._hide_candles)         # Ctrl+H hides the POC baseline with the candles
+
+    def _render_candle_marks(self, plot, handles, add_item, buckets, x, arr, ber30s, ser30s,
+                             vx0, vx1, px_per_x, px_per_y, fp_item) -> None:
+        """Per-candle marks that ride the candle geometry — POC gold dot (m10_poc), Abnormal-Volume lines
+        (m10_imb), per-candle VP Lines (m10_candle_va) + the footprint NUMBER/BUBBLE ladder (m10_footprint /
+        m10_bubbles). SHARED by the main chart (self.plot / self._scan_handles / self._add_scanner_item /
+        self.bc_fp) and the 1m-detail popup (its own plot + handles + fp_item) so the popup shows the SAME marks
+        under the SAME hamburger toggles. ber30s/ser30s = the caller's finalized trailing-30 baselines (recon-rel
+        already applied); fp_item = a BucketFootprintItem attached to THIS plot (None -> skip the ladder)."""
+        pocs = arr["pocs"]; lows = arr["lows"]; highs = arr["highs"]
+
+        # --- POC gold dot (m10_poc) — rides the whole DETAIL regime (detail_visible), guarded to [low, high] ---
+        poc_show = self.menu.layer_state("m10_poc") and detail_visible(vx1 - vx0)
+        if "bc_poc" not in handles:
+            handles["bc_poc"] = add_item(pg.ScatterPlotItem(
+                size=7, symbol="o", pen=pg.mkPen("#141414", width=0.5), brush=pg.mkBrush("#f1c40f")))
+            handles["bc_poc"].setZValue(6)   # POC dots ride above the candles
+        if poc_show:
+            poc_x, poc_y = [], []
+            for i in range(len(buckets)):
+                pv = pocs[i]
+                if pv > 0.0 and lows[i] <= pv <= highs[i]:
+                    poc_x.append(x[i]); poc_y.append(pv)
+            handles["bc_poc"].setVisible(True); handles["bc_poc"].setData(poc_x, poc_y)
+        else:
+            handles["bc_poc"].setVisible(False)
+
+        # --- ABNORMAL-VOLUME LINES (m10_imb) — neon line the candle's width AT an imbalanced level's EXACT price
+        #     (buy >= 30b BER -> BLUE; sell >= 30b SER -> ORANGE; both -> split). Two PlotCurveItems (pairs). ---
+        if "bc_imb_sell" not in handles:
+            _ps = pg.mkPen((255, 128, 0), width=2.0); _ps.setCosmetic(True)
+            _pb = pg.mkPen((0, 153, 255), width=2.0); _pb.setCosmetic(True)
+            handles["bc_imb_sell"] = add_item(pg.PlotCurveItem(pen=_ps)); handles["bc_imb_sell"].setZValue(6)
+            handles["bc_imb_buy"] = add_item(pg.PlotCurveItem(pen=_pb)); handles["bc_imb_buy"].setZValue(6)
+        _imb_on = self.menu.layer_state("m10_imb") and not self._hide_candles   # toggle + Ctrl+H
+        if _imb_on:
+            mult = config.FOOTPRINT_IMB_ER_MULT
+            hw = 0.8 / 2.0
+            sxs, sys_, bxs, bys = [], [], [], []
+            for i, b in enumerate(buckets):
+                xi = x[i]
+                if xi < vx0 - 1.0 or xi > vx1 + 1.0:
+                    continue
+                lv = b.get("levels") or {}
+                if not lv:
+                    continue
+                buy_thr = mult * ber30s[i] if ber30s[i] > 0 else None
+                sell_thr = mult * ser30s[i] if ser30s[i] > 0 else None
+                if buy_thr is None and sell_thr is None:
+                    continue
+                for ps2, v in lv.items():
+                    buy_imb = buy_thr is not None and v.get("b", 0.0) >= buy_thr
+                    sell_imb = sell_thr is not None and v.get("s", 0.0) >= sell_thr
+                    if not (buy_imb or sell_imb):
+                        continue
+                    yy = float(ps2)            # EXACTLY at the level's price -> zoom-stable (no pixel offset)
+                    if buy_imb and sell_imb:   # split: sell (orange) left half, buy (blue) right half
+                        sxs += [xi - hw, xi]; sys_ += [yy, yy]
+                        bxs += [xi, xi + hw]; bys += [yy, yy]
+                    elif sell_imb:
+                        sxs += [xi - hw, xi + hw]; sys_ += [yy, yy]
+                    else:
+                        bxs += [xi - hw, xi + hw]; bys += [yy, yy]
+            handles["bc_imb_sell"].setData(sxs, sys_, connect="pairs")
+            handles["bc_imb_buy"].setData(bxs, bys, connect="pairs")
+        handles["bc_imb_sell"].setVisible(_imb_on)
+        handles["bc_imb_buy"].setVisible(_imb_on)
+
+        # --- PER-CANDLE VP LINES (m10_candle_va) — each candle's OWN unbounded buy-POC (green) / sell-POC (red) /
+        #     LVN (purple) as a short segment from the candle centre toward the next candle (same calc as the
+        #     footprint pane, binned). Gated by the toggle + the detail zoom gate (like the POC dots). ---
+        if "bc_cva_buy" not in handles:
+            for _hk, _rgb in (("bc_cva_buy", (78, 203, 141)), ("bc_cva_sell", (255, 82, 82)),
+                              ("bc_cva_lvn", (178, 70, 255))):
+                _cpen = pg.mkPen(*_rgb, 245, width=2.5); _cpen.setCapStyle(QtCore.Qt.RoundCap)
+                _cit = add_item(pg.PlotCurveItem(pen=_cpen)); _cit.setZValue(6)
+                handles[_hk] = _cit
+        _cva_on = self.menu.layer_state("m10_candle_va") and detail_visible(vx1 - vx0)
+        if _cva_on:
+            _RGT = 0.9                                         # segment reaches from the centre toward the next candle
+            _cbx = []; _cby = []; _csx = []; _csy = []; _clx = []; _cly = []
+            for i, b in enumerate(buckets):
+                xi = x[i]
+                if xi < vx0 - 1.0 or xi > vx1 + 1.0:
+                    continue
+                lv = b.get("levels") or {}
+                if not lv:
+                    continue
+                _bp, _sp, _ln = vp_lines_from_levels(lv)           # SAME calc as the footprint pane (binned)
+                if _bp is not None:
+                    _cbx += [xi, xi + _RGT]; _cby += [_bp, _bp]
+                if _sp is not None:
+                    _csx += [xi, xi + _RGT]; _csy += [_sp, _sp]
+                if _ln is not None:
+                    _clx += [xi, xi + _RGT]; _cly += [_ln, _ln]
+            _cvis = not self._hide_candles
+            handles["bc_cva_buy"].setData(_cbx, _cby, connect="pairs")
+            handles["bc_cva_sell"].setData(_csx, _csy, connect="pairs")
+            handles["bc_cva_lvn"].setData(_clx, _cly, connect="pairs")
+            for _hk in ("bc_cva_buy", "bc_cva_sell", "bc_cva_lvn"):
+                handles[_hk].setVisible(_cvis)
+        else:
+            for _hk in ("bc_cva_buy", "bc_cva_sell", "bc_cva_lvn"):
+                handles[_hk].setVisible(False)
+
+        # --- FOOTPRINT ladder — NUMBERS (m10_footprint) and/or BUBBLES (m10_bubbles). fp_item is per-plot. ---
+        _fp_on = self.menu.layer_state("m10_footprint"); _bub_on = self.menu.layer_state("m10_bubbles")
+        if fp_item is not None and (_fp_on or _bub_on):
+            if "bc_fp" not in handles:
+                fp_item.setZValue(5)            # ladder above candles (z0), below the POC dot (z6)
+                add_item(fp_item)
+                handles["bc_fp"] = fp_item
+            fp_item.setVisible(True)
+            levels_list = [b.get("levels", {}) for b in buckets]
+            fp_item.update_data(x, levels_list, ber30s, ser30s,
+                                vx0, vx1, 0.8, px_per_x, px_per_y, _fp_on, _bub_on)   # vx0/vx1: viewport cull
+        elif "bc_fp" in handles:               # both layers off -> hide the ladder (popup has no _set_scanner_overlay hook)
+            handles["bc_fp"].setVisible(False)
+
     def _scan_bucket_canvas(self, buckets: list, x: list) -> None:
         """Mode 10 — neon-graded bucket candles + gray baseline (upper pane)
         synchronized with a rolling-50 VPIN toxicity heatmap (lower pane)."""
@@ -10638,76 +11048,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         px_per_x = self.vb.width() / max(1e-9, vx1 - vx0)
         px_per_y = self.vb.height() / max(1e-9, vy1 - vy0)
 
-        # --- upper pane: candles + the gray baseline (create-once / update-after) ---
-        if "bc_candles" not in self._scan_handles:
-            self._scan_handles["bc_candles"] = self._add_scanner_item(BucketCandleItem())
-            self._scan_handles["bc_baseline"] = self._add_scanner_item(
-                pg.PlotCurveItem(pen=pg.mkPen((180, 180, 180, 150), width=1.5,
-                                              style=QtCore.Qt.DashLine)))
-        # vx0/vx1: viewport cull — paint ONLY the visible candles (O(visible), not O(N)). 'W' cycles the render
-        # mode: 0 normal candles -> 1 volume-quantile WHISKER bars -> 2 FOOTPRINT candles (each bucket a mini
-        # centred buy/sell volume profile, like the live pane). Both alt modes use the #3 cache / per-bucket ladder
-        # (no extra per-frame compute) + viewport cull. DEGRADATION: below the per-mode px/bar floor the WHOLE view
-        # falls back to candles; ladder-less buckets fall back individually.
-        if "bc_whisker" not in self._scan_handles:
-            self._scan_handles["bc_whisker"] = self._add_scanner_item(WhiskerBarItem())
-        if "bc_fpcandle" not in self._scan_handles:
-            self._scan_handles["bc_fpcandle"] = self._add_scanner_item(FootprintCandleItem())
-        if "bc_deltacandle" not in self._scan_handles:
-            self._scan_handles["bc_deltacandle"] = self._add_scanner_item(DeltaCandleItem())
-        if "bc_forcecandle" not in self._scan_handles:
-            self._scan_handles["bc_forcecandle"] = self._add_scanner_item(ForceCandleItem())
-        if "bc_deltaforce" not in self._scan_handles:
-            self._scan_handles["bc_deltaforce"] = self._add_scanner_item(DeltaForceCandleItem())
-        _wb = self._scan_handles["bc_whisker"]
-        _fpc = self._scan_handles["bc_fpcandle"]; _dc = self._scan_handles["bc_deltacandle"]
-        _fcc = self._scan_handles["bc_forcecandle"]; _dfc = self._scan_handles["bc_deltaforce"]
-        _wq_lo, _wq_med, _wq_hi = arr["vq_lo"], arr["vq_med"], arr["vq_hi"]
-        _cw = px_per_x * 0.8                                                # on-screen candle width in px
-        _force_items = (_fcc, _dfc)                                         # per-level modes that take a forces list
-
-        def _blank_fp(active=None):                                        # free the per-level candle pictures (except `active`)
-            for _it in (_fpc, _dc, _fcc, _dfc):
-                if _it is not active:
-                    _it.setVisible(False)
-                    _it.update_data([], [], [], [], []) if _it in _force_items else _it.update_data([], [], [], [])
-
-        def _fallback_candles(idxs):                                       # draw only the given (ladder-less) buckets
-            self._scan_handles["bc_candles"].update_data(
-                [x[i] for i in idxs], [opens[i] for i in idxs], [highs[i] for i in idxs],
-                [lows[i] for i in idxs], [closes[i] for i in idxs],
-                [brushes[i] for i in idxs], [wick_pens[i] for i in idxs], 0.8, vx0, vx1)
-
-        if self._hide_candles:                                             # Ctrl+H — hide every candle glyph (VP / zones only)
-            self._scan_handles["bc_candles"].update_data([], [], [], [], [], [], [])
-            _wb.setVisible(False); _wb.update_data([], [], [], [], [], [], [], [])
-            _blank_fp()
-        elif self._candle_mode in (2, 3, 4, 5) and _cw >= config.FP_CANDLE_MIN_PX:   # per-level candle modes
-            _ll = [b.get("levels") or {} for b in buckets]
-            if self._candle_mode in (4, 5):                               # FORCE (4) / DELTA-FORCE (5): need the 4-vector
-                _fl = [(float(b.get("opL", 0.0)), float(b.get("opS", 0.0)),
-                        float(b.get("clL", 0.0)), float(b.get("clS", 0.0))) for b in buckets]
-                _on = _fcc if self._candle_mode == 4 else _dfc
-                _on.update_data(x, _ll, _fl, highs, lows, 0.8, vx0, vx1); _on.setVisible(True)
-            else:                                                         # FOOTPRINT (2) / DELTA (3)
-                _on = _fpc if self._candle_mode == 2 else _dc
-                _on.update_data(x, _ll, highs, lows, config.FOOTPRINT_IMB_ER_MULT, 0.8, vx0, vx1); _on.setVisible(True)
-            _blank_fp(active=_on)                                          # hide the other per-level items
-            _wb.setVisible(False); _wb.update_data([], [], [], [], [], [], [], [])
-            _fallback_candles([i for i in range(len(x)) if not _ll[i]])    # ladder-less bucket -> normal candle
-        elif self._candle_mode == 1 and _cw >= 3.0:                        # WHISKER bars
-            _blank_fp()
-            _wb.update_data(x, _wq_lo, _wq_med, _wq_hi, highs, lows, opens, closes,
-                            brushes, wick_pens, 0.8, vx0, vx1,
-                            show_med=self.menu.layer_state("m10_poc"))   # median rides the 'P' POC toggle
-            _wb.setVisible(True)
-            _fallback_candles([i for i in range(len(x)) if _wq_med[i] != _wq_med[i]])   # NaN ladder -> candle fallback
-        else:                                                              # NORMAL candles
-            _wb.setVisible(False); _wb.update_data([], [], [], [], [], [], [], [])   # free the pictures
-            _blank_fp()
-            self._scan_handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
-        self._scan_handles["bc_baseline"].setData(x, baseline_arr)   # gray dashed POC-center baseline
-        self._scan_handles["bc_baseline"].setVisible(not self._hide_candles)   # Ctrl+H hides the POC baseline with the candles
+        # --- upper pane: candles + the gray baseline, in the current Candle Mode (shared with the 1m-detail popup) ---
+        self._render_candle_glyphs(self.plot, self._scan_handles, self._add_scanner_item,
+                                   buckets, x, arr, brushes, wick_pens, vx0, vx1, px_per_x)
         # liquidity-sweep labels (Ctrl+L) — cull-to-visible, density-floored, capped, bounded pool; timed as
         # its OWN profiler section ('liq') so this layer is measured directly, not inferred under draw_scanner.
         _ls = time.perf_counter()
@@ -10748,152 +11091,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scan_handles["kc_upper"].setVisible(not self._hide_candles)   # Ctrl+H hides the KC with the candles
         self._scan_handles["kc_lower"].setVisible(not self._hide_candles)
 
-        # --- STAGE 0: true per-bucket POC marker (gold dot) — rides the whole DETAIL regime ---
-        # poc_price is already finalized in every BucketSnapshot (and computed on the fly for the
-        # live edge), so this draws what the engine ships, guarded to within [low, high] so a
-        # cold poc=0 can't drop a dot at y=0. Visibility is the SHARED detail gate (detail_visible:
-        # <= MAX_BUBBLE_BUCKETS visible) AND the m10_poc toggle — so the POC stays with ANY footprint
-        # detail (numbers AND bubbles) and vanishes only when you zoom out past the bubbles (>200).
-        # NO row-height check: rows only decide numbers-vs-bubbles, and the POC rides both. The
-        # scatter is cheap, so we gate VISIBILITY rather than cull the dot set (culling without a
-        # pan re-cull hook would drop leading-edge dots on a drag).
-        poc_show = (self.menu.layer_state("m10_poc")
-                    and detail_visible(vx1 - vx0))
-        if "bc_poc" not in self._scan_handles:
-            self._scan_handles["bc_poc"] = self._add_scanner_item(pg.ScatterPlotItem(
-                size=7, symbol="o", pen=pg.mkPen("#141414", width=0.5),
-                brush=pg.mkBrush("#f1c40f")))
-            self._scan_handles["bc_poc"].setZValue(6)   # POC dots ride above the candles
-        if poc_show:
-            poc_x, poc_y = [], []
-            for i in range(len(buckets)):
-                pv = pocs[i]
-                if pv > 0.0 and lows[i] <= pv <= highs[i]:
-                    poc_x.append(x[i]); poc_y.append(pv)
-            self._scan_handles["bc_poc"].setVisible(True)
-            self._scan_handles["bc_poc"].setData(poc_x, poc_y)
-        else:
-            self._scan_handles["bc_poc"].setVisible(False)
-
-        # --- STAGE 1: per-bucket footprint ladder from b["levels"] (wire-additive) ---
-        # levels now ride on the BucketSnapshot (quant_engine._assemble), so the
-        # footprint is a property of the BUCKET, drawn in its ordinal column. The POC is
-        # marked by the separate gold
-        # dot (bc_poc above), so the ladder draws only the volume distribution. px_per_*
-        # drive the bubble/number switch + pixel-round bubble radii; recomputed each
-        # bucket-change frame.
-        # (vx0/vx1/px_per_* hoisted above — single viewRange() call shared with the candle cull.)
-        # A4 draw-gate: footprint (bubbles/numbers) gated by m10_footprint. Toggle-off
-        # teardown is in _set_scanner_overlay (setVisible + clear_text for the TextPools,
-        # which are not in active_scanner_items). px_per_* are computed above regardless
-        # (cheap, footprint-only) so nothing downstream can break when this is off.
-        # per-bucket 30b BER/SER baseline (trailing-30 mean of buyer_er/seller_er — the SAME window as the
-        # stats-box 30b BER/SER). Used by BOTH the footprint number highlight (gated) AND the imbalance
-        # lines (always-on), so compute it once here regardless of the footprint toggle.
-        levels_list = [b.get("levels", {}) for b in buckets]
-        # trailing-30 BER/SER from the #3 cache (arr["ber30"/"ser30"], computed once per closed bucket —
-        # this was the single biggest per-frame cost: O(N·30) dict-gets, ~81ms at 10k buckets).
+        # per-bucket trailing-30 BER/SER baseline (buyer_er/seller_er mean) — used by the imbalance lines + the
+        # footprint number highlight (both inside _render_candle_marks) AND the hover readout below, so compute once.
         ber30s, ser30s = arr["ber30"], arr["ser30"]
-        # RECON REPLAY ONLY (daemon/live path untouched): the abnormal-order baseline buyer_er = buy_vol/effort_ticks
-        # counts effort in ABSOLUTE $0.01 ticks, so at the reconstruction's higher SOL price (~$200 in 2025 vs the
-        # daemon's ~$72) the same % dispersion spans ~3x more ticks -> the imbalance lines over-light (4-18/candle vs
-        # the daemon's ~1). Swap in a PRICE-SCALE-INVARIANT baseline (effort in basis points of price) so the lines
-        # mean the same at any price. Same trailing-EXH_WINDOW windowing as _bucket_row (buckets[i-EXH:i]).
-        if self._in_recon_replay():
+        if self._in_recon_replay():                 # recon: price-scale-invariant baseline (see _imb_baseline_rel)
             ber30s, ser30s = self._imb_baseline_rel(buckets)
-
-        # ABNORMAL-VOLUME LINES (Candles > "Abnormal Volume", m10_imb, default ON) — a horizontal neon line the
-        # candle's width AT an imbalanced level's EXACT price (buy >= 30b BER -> neon BLUE; sell >= 30b SER
-        # -> neon ORANGE; both at a level -> split). Price-anchored, so it scales with the candles/grid on
-        # zoom and never drifts. Two PlotCurveItems (connect='pairs'), one per side. NOT a signal.
-        if "bc_imb_sell" not in self._scan_handles:
-            _ps = pg.mkPen((255, 128, 0), width=2.0); _ps.setCosmetic(True)
-            _pb = pg.mkPen((0, 153, 255), width=2.0); _pb.setCosmetic(True)
-            self._scan_handles["bc_imb_sell"] = self._add_scanner_item(pg.PlotCurveItem(pen=_ps))
-            self._scan_handles["bc_imb_sell"].setZValue(6)
-            self._scan_handles["bc_imb_buy"] = self._add_scanner_item(pg.PlotCurveItem(pen=_pb))
-            self._scan_handles["bc_imb_buy"].setZValue(6)
-        _imb_on = self.menu.layer_state("m10_imb") and not self._hide_candles   # toggle (Candles > Abnormal Volume) + Ctrl+H
-        if _imb_on:
-            mult = config.FOOTPRINT_IMB_ER_MULT
-            hw = 0.8 / 2.0
-            sxs, sys_, bxs, bys = [], [], [], []
-            for i, b in enumerate(buckets):
-                xi = x[i]
-                if xi < vx0 - 1.0 or xi > vx1 + 1.0:
-                    continue
-                lv = b.get("levels") or {}
-                if not lv:
-                    continue
-                buy_thr = mult * ber30s[i] if ber30s[i] > 0 else None
-                sell_thr = mult * ser30s[i] if ser30s[i] > 0 else None
-                if buy_thr is None and sell_thr is None:
-                    continue
-                for ps2, v in lv.items():
-                    buy_imb = buy_thr is not None and v.get("b", 0.0) >= buy_thr
-                    sell_imb = sell_thr is not None and v.get("s", 0.0) >= sell_thr
-                    if not (buy_imb or sell_imb):
-                        continue
-                    yy = float(ps2)            # EXACTLY at the level's price -> zoom-stable (no pixel offset)
-                    if buy_imb and sell_imb:   # split: sell (orange) left half, buy (blue) right half
-                        sxs += [xi - hw, xi]; sys_ += [yy, yy]
-                        bxs += [xi, xi + hw]; bys += [yy, yy]
-                    elif sell_imb:
-                        sxs += [xi - hw, xi + hw]; sys_ += [yy, yy]
-                    else:
-                        bxs += [xi - hw, xi + hw]; bys += [yy, yy]
-            self._scan_handles["bc_imb_sell"].setData(sxs, sys_, connect="pairs")
-            self._scan_handles["bc_imb_buy"].setData(bxs, bys, connect="pairs")
-        self._scan_handles["bc_imb_sell"].setVisible(_imb_on)
-        self._scan_handles["bc_imb_buy"].setVisible(_imb_on)
-
-        # PER-CANDLE LVA LINES (m10_candle_va) — each candle's OWN unbounded buy-POC (green) / sell-POC (red) / LVN
-        # (purple, thinnest level), as a short segment from the candle CENTRE (x=i) extending RIGHT toward the next
-        # candle. Same three levels as the 1h footprint pane, one set per candle. Gated by the toggle + the detail
-        # zoom gate (hidden when zoomed out, like the POC dots) so it never becomes a dense mess.
-        if "bc_cva_buy" not in self._scan_handles:
-            for _hk, _rgb in (("bc_cva_buy", (78, 203, 141)), ("bc_cva_sell", (255, 82, 82)),
-                              ("bc_cva_lvn", (178, 70, 255))):
-                _cpen = pg.mkPen(*_rgb, 245, width=2.5); _cpen.setCapStyle(QtCore.Qt.RoundCap)
-                _cit = self._add_scanner_item(pg.PlotCurveItem(pen=_cpen)); _cit.setZValue(6)
-                self._scan_handles[_hk] = _cit
-        _cva_on = self.menu.layer_state("m10_candle_va") and detail_visible(vx1 - vx0)
-        if _cva_on:
-            _RGT = 0.9                                         # segment reaches from the centre toward the next candle
-            _cbx = []; _cby = []; _csx = []; _csy = []; _clx = []; _cly = []
-            for i, b in enumerate(buckets):
-                xi = x[i]
-                if xi < vx0 - 1.0 or xi > vx1 + 1.0:
-                    continue
-                lv = b.get("levels") or {}
-                if not lv:
-                    continue
-                _bp, _sp, _ln = vp_lines_from_levels(lv)           # SAME calc as the footprint pane (binned)
-                if _bp is not None:
-                    _cbx += [xi, xi + _RGT]; _cby += [_bp, _bp]
-                if _sp is not None:
-                    _csx += [xi, xi + _RGT]; _csy += [_sp, _sp]
-                if _ln is not None:
-                    _clx += [xi, xi + _RGT]; _cly += [_ln, _ln]
-            _cvis = not self._hide_candles
-            self._scan_handles["bc_cva_buy"].setData(_cbx, _cby, connect="pairs")
-            self._scan_handles["bc_cva_sell"].setData(_csx, _csy, connect="pairs")
-            self._scan_handles["bc_cva_lvn"].setData(_clx, _cly, connect="pairs")
-            for _hk in ("bc_cva_buy", "bc_cva_sell", "bc_cva_lvn"):
-                self._scan_handles[_hk].setVisible(_cvis)
-        else:
-            for _hk in ("bc_cva_buy", "bc_cva_sell", "bc_cva_lvn"):
-                self._scan_handles[_hk].setVisible(False)
-
-        _fp_on = self.menu.layer_state("m10_footprint"); _bub_on = self.menu.layer_state("m10_bubbles")
-        if _fp_on or _bub_on:                       # bc_fp draws NUMBERS (m10_footprint) and/or BUBBLES (m10_bubbles)
-            if "bc_fp" not in self._scan_handles:
-                self.bc_fp.setZValue(5)            # ladder above candles (z0), below the POC dot (z6)
-                self._add_scanner_item(self.bc_fp)
-                self._scan_handles["bc_fp"] = self.bc_fp
-            self.bc_fp.setVisible(True)
-            self.bc_fp.update_data(x, levels_list, ber30s, ser30s,
-                                   vx0, vx1, 0.8, px_per_x, px_per_y, _fp_on, _bub_on)   # vx0/vx1: viewport cull
+        # --- per-candle marks (POC dot / Abnormal-Volume lines / VP Lines / footprint numbers+bubbles) —
+        #     shared with the 1m-detail popup so it shows the SAME marks under the SAME toggles ---
+        self._render_candle_marks(self.plot, self._scan_handles, self._add_scanner_item, buckets, x, arr,
+                                  ber30s, ser30s, vx0, vx1, px_per_x, px_per_y, self.bc_fp)
 
         # --- order blocks mapped onto the integer bucket grid (§6.1) ---
         # A4 draw-gate: OB zones gated by m10_obs. Toggle-off teardown is in

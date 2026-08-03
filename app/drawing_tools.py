@@ -813,10 +813,11 @@ class ShapeHandles(QtCore.QObject):
 class DrawingController(QtCore.QObject):
     selectionChanged = QtCore.Signal()   # Magic-Selection rect created / resized / cleared
 
-    def __init__(self, plot: pg.PlotWidget):
+    def __init__(self, plot: pg.PlotWidget, persist: bool = True):
         super().__init__()
         self.plot = plot
         self.vb = plot.getViewBox()
+        self._persist = persist        # False -> in-memory only (no load/save); e.g. the 1m-detail popup's own drawings
         self.active_tool: Optional[str] = None
         self.locked: bool = False      # True while a NON-canvas scanner mode owns the view
         self.index_mode: bool = False  # True on Mode 10 (bucket_canvas): session-only drawings
@@ -876,7 +877,8 @@ class DrawingController(QtCore.QObject):
 
         # single-click actions (select / eraser) still ride sigMouseClicked
         plot.scene().sigMouseClicked.connect(self._on_click)
-        self._load()
+        if self._persist:
+            self._load()
 
     def update_view(self, label_x: float, close_x: float = None) -> None:
         """Right-align every bracket's data labels to the view edge + place the × close button (§17)."""
@@ -1629,7 +1631,7 @@ class DrawingController(QtCore.QObject):
                     anch=anch, pts=[[p[0] + off, p[1]] for p in s.pts])
 
     def _save_idx(self) -> None:
-        if self._idx_ctx is None or self._idx_off is None:
+        if not self._persist or self._idx_ctx is None or self._idx_off is None:
             return
         off = self._idx_off
         mine_shapes = [self._shape_dict_global(s, off) for s in self._idx_shapes
@@ -1738,6 +1740,8 @@ class DrawingController(QtCore.QObject):
     # Persistence (replaces browser localStorage, spec §8.3)
     # ------------------------------------------------------------------
     def _save(self) -> None:
+        if not self._persist:
+            return
         try:
             config.ensure_data_dir()
             payload = {}
