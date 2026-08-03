@@ -354,6 +354,10 @@ class SubCandleWindow(QtWidgets.QDialog):
         # passes the current tf's target so the live fill% = curr_vol / target_vol tracks as the bucket fills.
         self._tv = float(target_vol or 0.0)
         self._live = False; self._cs = 0.0; self._live_sig = None; self._nsub = -1
+        # "Display Previous" CONTINUOUS mode: once on, the 1m chart shows a continuous range [_range_start, live edge]
+        # that grows forward WITHOUT resetting on a bucket close; each button click extends _range_start one HTF candle
+        # back. _range_start is seeded to the opened bucket's start by the owner.
+        self._range_start = 0.0; self._continuous = False; self._cont_sig = None
         lay = QtWidgets.QHBoxLayout(self); lay.setContentsMargins(4, 4, 4, 4); lay.setSpacing(4)
         split = QtWidgets.QSplitter(QtCore.Qt.Horizontal); lay.addWidget(split)
         # LEFT — 1m candlesticks (zoom/pan = default pyqtgraph mouse)
@@ -394,7 +398,21 @@ class SubCandleWindow(QtWidgets.QDialog):
         self._orig_left_wheel = _lvb.wheelEvent
         _lvb.wheelEvent = self._sub_wheel
         self._left.scene().sigMouseClicked.connect(self._on_sub_dblclick)   # double-click -> auto-fit both axes
-        split.addWidget(self._left)
+        # LEFT column = a "Display Previous" toolbar above the 1m chart. Click -> prepend one more HTF candle's 1m and
+        # switch to continuous mode (chart keeps growing, no reset on bucket close).
+        _leftw = QtWidgets.QWidget(); _lv = QtWidgets.QVBoxLayout(_leftw)
+        _lv.setContentsMargins(0, 0, 0, 0); _lv.setSpacing(3)
+        self._prev_btn = QtWidgets.QPushButton("◀  Display Previous")
+        self._prev_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self._prev_btn.setStyleSheet(
+            "QPushButton{background:#1b1f2a; color:#cbd2de; border:1px solid #2a2e39; border-radius:5px;"
+            " padding:4px 12px; font-family:Consolas; font-size:11px;} QPushButton:hover{background:#242938;}")
+        self._prev_btn.clicked.connect(lambda: self._owner._subcandle_prev(self)
+                                       if self._owner is not None else None)
+        _bar = QtWidgets.QHBoxLayout(); _bar.setContentsMargins(2, 2, 2, 0)
+        _bar.addWidget(self._prev_btn); _bar.addStretch(1)
+        _lv.addLayout(_bar); _lv.addWidget(self._left, 1)
+        split.addWidget(_leftw)
         # RIGHT — the SAME footprint pane + stats for the clicked bucket
         self._fp = FootprintPanel(); self._fp.setMaximumWidth(9999); self._fp.setMinimumWidth(260)
         split.addWidget(self._fp); split.setSizes([840, 340])
@@ -526,6 +544,8 @@ class SubCandleWindow(QtWidgets.QDialog):
         try:
             vb = self._left.getViewBox()
             (vx0, vx1), (vy0, vy1) = vb.viewRange()
+            if vx1 < (self._nsub - 1) - 3.0:             # user scrolled back into history -> don't yank to the live edge
+                return
             dx = float(m - self._nsub)                   # number of new candles -> shift X right by that much
             if dx:
                 vb.setXRange(vx0 + dx, vx1 + dx, padding=0)
@@ -2204,6 +2224,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             dlg = SubCandleWindow(self, b, subs, top, config.FOOTPRINT_IMB_ER_MULT, title, _tv)
             dlg._live = _live; dlg._cs = cs         # live-update this popup while its bucket keeps forming
+            dlg._range_start = cs                    # "Display Previous" extends the continuous range back from here
             if not hasattr(self, "_subcandle_windows"):
                 self._subcandle_windows = []
             self._subcandle_windows = [w for w in self._subcandle_windows if w.isVisible()]  # drop closed refs
@@ -2218,7 +2239,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         wins = getattr(self, "_subcandle_windows", None)
         if not wins or self._replay_on:      # in Replay Mode, _tick_subcandles_replay follows the replay edge instead
             return
-        live = [w for w in wins if getattr(w, "_live", False) and w.isVisible()]
+        for w in [w for w in wins if getattr(w, "_continuous", False) and w.isVisible()]:
+            self._refresh_continuous_subcandle(w)   # "Display Previous" windows grow continuously (no auto-advance)
+        live = [w for w in wins if getattr(w, "_live", False) and not getattr(w, "_continuous", False) and w.isVisible()]
         if not live:
             return
         act = (self._last_snap or {}).get("active_bucket") or {}
@@ -2278,6 +2301,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._subcandle_windows = wins = [w for w in wins if w.isVisible()]
         if not wins:
             return
+        for w in [w for w in wins if getattr(w, "_continuous", False)]:
+            self._refresh_continuous_subcandle(w)   # "Display Previous" windows grow continuously (no re-target)
+        wins = [w for w in wins if not getattr(w, "_continuous", False)]
+        if not wins:
+            return
         try:
             filtered, _x, _a = self._build_scanner_buckets()
         except Exception:
@@ -2321,6 +2349,102 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 w.refresh(b, subs, top, _tv)
             except Exception:
                 pass
+
+    def _prev_htf_start(self, t: float) -> "float | None":
+        """The start_time of the higher-tf candle immediately BEFORE time `t` — from the loaded scanner frame, the
+        archive replay window, and the live closed buckets. None if nothing earlier is loaded."""
+        starts = set()
+        for b in (self._arch_win or []):
+            _st = float(b.get("start_time", 0.0) or 0.0)
+            if _st > 0.0:
+                starts.add(_st)
+        try:
+            for b in (self._build_scanner_buckets()[0] or []):
+                _st = float(b.get("start_time", 0.0) or 0.0)
+                if _st > 0.0:
+                    starts.add(_st)
+        except Exception:
+            pass
+        for b in ((self._last_snap or {}).get("closed_buckets") or []):
+            _st = float(b.get("start_time", 0.0) or 0.0)
+            if _st > 0.0:
+                starts.add(_st)
+        below = sorted(s for s in starts if s < t - 0.5)
+        return below[-1] if below else None
+
+    def _subcandle_prev(self, w) -> None:
+        """'Display Previous' clicked: extend this 1m window's continuous range one HTF candle further back and switch
+        it to CONTINUOUS mode — the chart then grows forward without resetting on a bucket close (keeps going until the
+        user closes it). Re-fits once to reveal the newly-added history."""
+        rs = float(getattr(w, "_range_start", 0.0) or 0.0)
+        if rs <= 0.0:
+            return
+        prev = self._prev_htf_start(rs)
+        if prev is None:
+            return                                            # nothing earlier is loaded
+        w._range_start = prev; w._continuous = True
+        w._fitted = False; w._cont_force = True               # re-fit to show the extended range, force a redraw
+        try:
+            import datetime as _dt
+            w.setWindowTitle("1m detail — %s CONTINUOUS from %s UTC"
+                             % (self._tf, _dt.datetime.utcfromtimestamp(prev).strftime("%Y-%m-%d %H:%M")))
+        except Exception:
+            pass
+        try:
+            self._refresh_continuous_subcandle(w)
+        except Exception:
+            pass
+
+    def _refresh_continuous_subcandle(self, w) -> None:
+        """Refresh a CONTINUOUS ('Display Previous') 1m window: render every 1m from w._range_start to the current live/
+        replay edge, growing forward without resetting on a bucket close. Footprint/stats track the edge candle."""
+        rs = float(getattr(w, "_range_start", 0.0) or 0.0)
+        if rs <= 0.0:
+            return
+        if self._replay_on:
+            try:
+                filtered = self._build_scanner_buckets()[0] or []
+            except Exception:
+                filtered = []
+            if not filtered:
+                return
+            edge = filtered[-1]
+            edge_t = float(edge.get("end_time", 0.0) or 0.0) or float(self._replay_edge_t or 0.0)
+        else:
+            edge = (self._last_snap or {}).get("active_bucket") or {}
+            import time as _t
+            edge_t = _t.time()
+        subs = self._fetch_1m_window(rs, edge_t + 90.0)
+        if not self._replay_on and not self._in_recon_replay():   # MERGE the live 1m stream (recent closed + developing)
+            w1 = getattr(self, "worker_1m", None)               # with the archive, which lags the last ~hour
+            if w1 is not None:
+                try:
+                    s1 = w1.snapshot() or {}
+                    have = {round(float(x.get("start_time", 0.0) or 0.0), 1) for x in subs}
+                    for x in ((s1.get("closed_buckets") or []) + [s1.get("active_bucket") or {}]):
+                        xs = float(x.get("start_time", 0.0) or 0.0)
+                        if x and xs >= rs and round(xs, 1) not in have:
+                            subs.append(x); have.add(round(xs, 1))
+                except Exception:
+                    pass
+        subs = [s for s in subs if rs - 0.5 <= float(s.get("start_time", 0.0) or 0.0) < edge_t]   # causal, within range
+        subs.sort(key=lambda x: float(x.get("start_time", 0.0) or 0.0))
+        if not subs:
+            return
+        sig = (round(rs, 3), len(subs), round(float((subs[-1] or {}).get("curr_vol", 0.0) or 0.0), 3))
+        if getattr(w, "_cont_sig", None) == sig and not getattr(w, "_cont_force", False):
+            return
+        w._cont_sig = sig; w._cont_force = False
+        _tv = float((self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL)
+        try:
+            _bwin = list(self._trline_buckets or []) or (self._build_scanner_buckets()[0] or [])
+            top = self._fp_top_html(edge, _bwin)
+        except Exception:
+            top = ""
+        try:
+            w.refresh(edge, subs, top, _tv)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # 1m-FINISH strength for the 5m break/engulf badges. Reuses the SAME 1m source as the Ctrl+double-click popup
