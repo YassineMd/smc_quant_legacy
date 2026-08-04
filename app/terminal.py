@@ -618,7 +618,8 @@ class SubCandleWindow(QtWidgets.QDialog):
                 if self._owner._in_recon_replay():
                     _ber, _ser = self._owner._imb_baseline_rel(subs)
                 self._owner._render_candle_marks(self._left, self._sub_handles, self._sub_add, subs, xs, arr,
-                                                 _ber, _ser, rvx0, rvx1, rpxx, rpxy, self._sub_fp_item)
+                                                 _ber, _ser, rvx0, rvx1, rpxx, rpxy, self._sub_fp_item,
+                                                 allow_cva=False, allow_bub=False)   # no VP Lines / Candle Bubbles on the 1m popup
             except Exception:
                 pass
         self._draw_indicators(subs)                      # Tier 3 — 1m-compatible indicator overlays (self-gated)
@@ -10887,13 +10888,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         handles["bc_baseline"].setVisible(not self._hide_candles)         # Ctrl+H hides the POC baseline with the candles
 
     def _render_candle_marks(self, plot, handles, add_item, buckets, x, arr, ber30s, ser30s,
-                             vx0, vx1, px_per_x, px_per_y, fp_item) -> None:
+                             vx0, vx1, px_per_x, px_per_y, fp_item, allow_cva=True, allow_bub=True) -> None:
         """Per-candle marks that ride the candle geometry — POC gold dot (m10_poc), Abnormal-Volume lines
         (m10_imb), per-candle VP Lines (m10_candle_va) + the footprint NUMBER/BUBBLE ladder (m10_footprint /
         m10_bubbles). SHARED by the main chart (self.plot / self._scan_handles / self._add_scanner_item /
         self.bc_fp) and the 1m-detail popup (its own plot + handles + fp_item) so the popup shows the SAME marks
         under the SAME hamburger toggles. ber30s/ser30s = the caller's finalized trailing-30 baselines (recon-rel
-        already applied); fp_item = a BucketFootprintItem attached to THIS plot (None -> skip the ladder)."""
+        already applied); fp_item = a BucketFootprintItem attached to THIS plot (None -> skip the ladder).
+        allow_cva/allow_bub gate the VP Lines / footprint bubbles independently of the toggle — the 1m popup passes
+        both False so 'Ctrl+A' VP Lines and 'B' Candle Bubbles never appear there (operator pref)."""
         pocs = arr["pocs"]; lows = arr["lows"]; highs = arr["highs"]
 
         # --- POC gold dot (m10_poc) — rides the whole DETAIL regime (detail_visible), guarded to [low, high] ---
@@ -10962,7 +10965,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _cpen = pg.mkPen(*_rgb, 245, width=2.5); _cpen.setCapStyle(QtCore.Qt.RoundCap)
                 _cit = add_item(pg.PlotCurveItem(pen=_cpen)); _cit.setZValue(6)
                 handles[_hk] = _cit
-        _cva_on = self.menu.layer_state("m10_candle_va") and detail_visible(vx1 - vx0)
+        _cva_on = allow_cva and self.menu.layer_state("m10_candle_va") and detail_visible(vx1 - vx0)
         if _cva_on:
             _RGT = 0.9                                         # segment reaches from the centre toward the next candle
             _cbx = []; _cby = []; _csx = []; _csy = []; _clx = []; _cly = []
@@ -10991,7 +10994,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 handles[_hk].setVisible(False)
 
         # --- FOOTPRINT ladder — NUMBERS (m10_footprint) and/or BUBBLES (m10_bubbles). fp_item is per-plot. ---
-        _fp_on = self.menu.layer_state("m10_footprint"); _bub_on = self.menu.layer_state("m10_bubbles")
+        _fp_on = self.menu.layer_state("m10_footprint"); _bub_on = allow_bub and self.menu.layer_state("m10_bubbles")
         if fp_item is not None and (_fp_on or _bub_on):
             if "bc_fp" not in handles:
                 fp_item.setZValue(5)            # ladder above candles (z0), below the POC dot (z6)
