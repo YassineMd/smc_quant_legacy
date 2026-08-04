@@ -1182,6 +1182,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._pvp_hist_pool = []      # per-day VP histograms (horizontal BarGraphItems)
         self._pvp_line_pool = []      # per-day POC/VAH/VAL/median/LVN level lines (PlotCurveItems)
         self._pvp_sep_pool = []       # per-day UTC-midnight separators (dashed vlines)
+        self._sess_rect_pool = []     # Session Filter: per-session translucent boxes (QGraphicsRectItem)
+        self._sess_line_pool = []     # Session Filter: dashed high / low / avg(VWAP) lines (PlotCurveItem)
+        self._sess_lbl_pool = []      # Session Filter: 'Range / Avg / name' labels (TextItem)
         self._liq_status = pg.TextItem(anchor=(0, 0), color=(235, 225, 140))   # corner note: empty-by-location / zoom-in
         _lsf = QtGui.QFont("Consolas", 9); self._liq_status.textItem.setFont(_lsf)
         self._liq_status.setZValue(33); self.plot.addItem(self._liq_status, ignoreBounds=True)
@@ -2125,6 +2128,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif key == "m10_prevday_vp":
             if not on:                              # per-prev-day VP -> hide now (draw-gate re-adds on ON)
                 self._hide_prevday_vp()
+        elif key == "m10_session":
+            if not on:                              # session boxes -> hide now (draw-gate re-adds on ON)
+                self._hide_session()
         elif key == "m10_breakout5m":
             self._brk5m_sig = None; self._sel_sig = None   # 5m Breakout toggled -> re-run the overlay draw
             if not on:
@@ -3019,7 +3025,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         end_time = filtered[idx].get("end_time", 0.0)
         try:
-            clock = datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S")
+            clock = datetime.fromtimestamp(end_time).strftime("%a %d/%m/%Y - %H:%M:%S")   # Ddd dd/mm/yyyy - time
         except (OSError, ValueError, OverflowError):
             clock = "--"
         lines = [f"<b>Idx: {self._fmt_idx(self._global_idx_offset + idx)}</b>"] + self._hover_context(self.scanner_mode, filtered, idx)
@@ -3041,7 +3047,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         b = filtered[idx]
         end_time = b.get("end_time", 0.0)
         try:
-            clock = datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S")
+            clock = datetime.fromtimestamp(end_time).strftime("%a %d/%m/%Y - %H:%M:%S")   # Ddd dd/mm/yyyy - time
         except (OSError, ValueError, OverflowError):
             clock = "--"
         lines = [f"<b>Idx: {self._fmt_idx(self._global_idx_offset + idx)}</b>"] + self._hover_context(self.scanner_mode, filtered, idx)
@@ -4559,6 +4565,117 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _c.setVisible(False)
         for _s in self._pvp_sep_pool[us:]:
             _s.setVisible(False)
+
+    # ------------------------------------------------------------------
+    # SESSION FILTER (hamburger m10_session) — per-UTC-day Tokyo/London/New-York sessions rendered as VOLUME-PROFILE
+    # ZONES: each session's footprint is aggregated over its hour window and drawn as the 'VP Zones' level set —
+    # VAH/VAL (white solid) + buy-POC (green) / sell-POC (red) / LVN (purple) dashed — spanning the session's time,
+    # inside a faint session-tinted value-area box with a session-name label. Same level calc as the 'VP Zones' mode
+    # (swing_lvn_detect.va_lines_from_profile). Display-only, culled to the viewport, pooled like the Prev-Day-VP overlay.
+    # ------------------------------------------------------------------
+    _SESSIONS = (("Tokyo", 0, 8, (96, 140, 226)),        # (name, start_hour, end_hour[excl, UTC], rgb)
+                 ("London", 8, 16, (240, 158, 58)),
+                 ("New York", 13, 21, (58, 190, 122)))
+
+    def _sess_rect(self, used, rgb):                           # pooled translucent session box (behind candles)
+        if used >= len(self._sess_rect_pool):
+            _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-8)
+            self.vb.addItem(_rc, ignoreBounds=True); self._sess_rect_pool.append(_rc)
+        _rc = self._sess_rect_pool[used]
+        _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(*rgb, 38))
+        return _rc
+
+    def _sess_line(self, used):                               # pooled dashed high/low/avg line
+        if used >= len(self._sess_line_pool):
+            _c = pg.PlotCurveItem(); _c.setZValue(-6)         # above the box fill, behind the candles
+            self.plot.addItem(_c, ignoreBounds=True); self._sess_line_pool.append(_c)
+        return self._sess_line_pool[used]
+
+    def _sess_lbl(self, used):                                # pooled 'Range/Avg/name' label
+        if used >= len(self._sess_lbl_pool):
+            _t = pg.TextItem(anchor=(0, 0)); _t.setZValue(15)
+            _f = QtGui.QFont("Consolas", 8); _t.textItem.setFont(_f)
+            self.plot.addItem(_t, ignoreBounds=True); self._sess_lbl_pool.append(_t)
+        return self._sess_lbl_pool[used]
+
+    def _hide_session(self) -> None:
+        for _r in self._sess_rect_pool:
+            _r.setVisible(False)
+        for _c in self._sess_line_pool:
+            _c.setVisible(False)
+        for _t in self._sess_lbl_pool:
+            _t.setVisible(False)
+
+    def _draw_session(self, buckets, x, vx0, vx1) -> None:
+        """Session Filter (m10_session): one VOLUME-PROFILE-ZONES set per UTC calendar-day session (Tokyo / London /
+        New York). The session's footprint is aggregated over its hour window and drawn as the 'VP Zones' levels —
+        VAH/VAL white + buy-POC green / sell-POC red / LVN purple dashed — spanning the session's time inside a faint
+        session-tinted value-area box with a name label. Culled to the viewport."""
+        if not self.menu.layer_state("m10_session") or not buckets:
+            self._hide_session(); return
+        from app import swing_lvn_detect                       # value-area / VP-zone levels (same as the 'VP Zones' mode)
+        n = len(buckets)
+        hrs = [-1] * n; dord = [-1] * n                       # per-bucket UTC hour + date-ordinal (one pass)
+        for i, b in enumerate(buckets):
+            st = float(b.get("start_time", 0.0) or 0.0)
+            if st > 0:
+                t = datetime.utcfromtimestamp(st); hrs[i] = t.hour; dord[i] = t.toordinal()
+        ur = ul = ut = 0
+        for name, h0, h1, rgb in self._SESSIONS:
+            i = 0
+            while i < n:
+                if hrs[i] < 0 or not (h0 <= hrs[i] < h1):
+                    i += 1; continue
+                j = i; d0 = dord[i]                            # maximal same-date run inside the window
+                while j + 1 < n and (h0 <= hrs[j + 1] < h1) and dord[j + 1] == d0:
+                    j += 1
+                if not (x[j] < vx0 - 1.0 or x[i] > vx1 + 1.0):  # cull to the visible viewport
+                    seg = buckets[i:j + 1]
+                    prof = {}                                 # aggregate the SESSION footprint -> {price: {'b','s'}}
+                    for b in seg:
+                        for ps, vv in (b.get("levels") or {}).items():
+                            try:
+                                p = float(ps)
+                            except (TypeError, ValueError):
+                                continue
+                            r = prof.get(p)
+                            if r is None:
+                                r = {"b": 0.0, "s": 0.0}; prof[p] = r
+                            r["b"] += float(vv.get("b", 0.0) or 0.0); r["s"] += float(vv.get("s", 0.0) or 0.0)
+                    va = None
+                    if len(prof) >= 2:
+                        try:
+                            va = swing_lvn_detect.va_lines_from_profile(prof)   # SAME levels as the 'VP Zones' mode
+                        except Exception:
+                            va = None
+                    if va:
+                        x0 = x[i] - 0.5; x1 = x[j] + 0.5
+                        vah = va.get("vah"); val = va.get("val")
+                        if vah is not None and val is not None and vah > val:   # faint session-tinted value-area box
+                            self._sess_rect(ur, rgb).setRect(x0, val, max(1e-9, x1 - x0), max(1e-9, vah - val))
+                            self._sess_rect_pool[ur].setVisible(True); ur += 1
+                        for _key, _crgb, _dash in (("vah", rgb, None), ("val", rgb, None),   # VAH/VAL in the session colour
+                                                   ("buy_poc", (78, 203, 141), [3.0, 6.0]),
+                                                   ("sell_poc", (255, 82, 82), [3.0, 6.0]),
+                                                   ("lvn", (178, 70, 255), [3.0, 6.0])):
+                            _y = va.get(_key)
+                            if _y is None or _y != _y:        # skip missing / NaN levels
+                                continue
+                            _pn = pg.mkPen(*_crgb, 225, width=1.2); _pn.setCosmetic(True)
+                            if _dash:
+                                _pn.setDashPattern(_dash)
+                            _ln = self._sess_line(ul); ul += 1
+                            _ln.setData([x0, x1], [float(_y), float(_y)]); _ln.setPen(_pn); _ln.setVisible(True)
+                        _lb = self._sess_lbl(ut); ut += 1
+                        _lb.setColor(pg.mkColor(*rgb)); _lb.setText(name)
+                        _lb.setPos(x0, float(val) if val is not None else float(vah)); _lb.setVisible(True)
+                i = j + 1
+        for _r in self._sess_rect_pool[ur:]:                  # hide leftovers from a denser previous frame
+            _r.setVisible(False)
+        for _c in self._sess_line_pool[ul:]:
+            _c.setVisible(False)
+        for _t in self._sess_lbl_pool[ut:]:
+            _t.setVisible(False)
 
     def _draw_4h_zone(self, buckets) -> None:
         """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median), ZONE ('Z': buy/sell wick bands), and ABNORMAL-ORDER
@@ -8603,6 +8720,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._clear_choch()        # hide CHoCH dashed lines when leaving Mode 10
         self._hide_4h_zone()       # hide the 4h buy/sell wick bands when leaving Mode 10
         self._hide_prevday_vp()    # hide the per-previous-day Volume Profiles when leaving Mode 10
+        self._hide_session()       # hide the per-session boxes when leaving Mode 10
         self._hide_eff_cycles(); self._hide_abs_cycles()   # hide the P2 + P1 HM sub-panels when leaving Mode 10
         # 1. sweep every tracked scanner item off the plot
         for item in self.active_scanner_items:
@@ -11078,6 +11196,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_prevday_vp(buckets)                         # per-previous-UTC-day Volume Profile (m10_prevday_vp)
         except Exception:
             self._hide_prevday_vp()
+        try:
+            self._draw_session(buckets, x, vx0, vx1)               # per-session Tokyo/London/NY boxes (m10_session)
+        except Exception:
+            self._hide_session()
 
         # --- Keltner Channel: EMA(close) basis ± ATR band. LIGHT GRAY upper/lower (match the POC baseline);
         #     the EMA MIDDLE line is HIDDEN (operator pref — the POC baseline is the center reference). ---

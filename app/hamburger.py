@@ -125,6 +125,7 @@ _M10_INDICATORS = [
     ("m10_4hzone", "4h Buy/Sell Zones (wicks)", False, True),   # last completed 4h bucket buyer/seller wick bands
     ("m10_4hsep", "4h Bucket Separators", True, True),          # dashed vline at each completed 4h bucket's start
     ("m10_prevday_vp", "Prev. Day VP", False, True),            # per-previous-UTC-day Volume Profile (style = 'Volume Profile Mode' dropdown)
+    ("m10_session", "Session Filter", False, True),            # per-UTC-day Tokyo/London/New-York boxes: range + avg (VWAP) + high/low
     ("m10_breakout5m", "5m Breakout", False, True),             # 5m ONLY: green/red 'Br' badges on S/R-breakout (mitigation) candles
 ]
 
