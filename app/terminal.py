@@ -1339,7 +1339,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # SUPPORT & RESISTANCE indicator (hamburger m10_sr) — neon-red resistance / neon-blue support, extended
         # until a candle closes through the level. Line THICKNESS = rejection strength (one curve per width tier,
         # segments NaN-separated), so a level thickens as price gets thrown back off it.
-        self._sr_items = None                    # dict (kind, tier) -> PlotCurveItem, lazily built (MITIGATED lines)
+        self._sr_items = None                    # dict (kind, tier) -> PlotCurveItem, lazily built (MITIGATED lines, faint)
+        self._sr_act_items = None                # dict (kind, tier) -> PlotCurveItem — ACTIVE levels as lines (Area OFF), full opacity
         self._sr_rects = None                    # pool of QGraphicsRectItem — ACTIVE levels drawn as filled bands
         self._sr_sig = None; self._sr_drawn = False
         # RECENT-SWING LOW-VOLUME AREA indicator (hamburger m10_swinglvn) — every still-UNMITIGATED swing-leg LVN ZONE
@@ -6423,9 +6424,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # PlotCurveItem per (kind, width tier), all segments NaN-separated, so it stays a fixed handful of draws.
     # ------------------------------------------------------------------
     def _clear_sr(self) -> None:
-        if self._sr_items:
-            for _it in self._sr_items.values():
-                _it.setVisible(False)
+        for _d in (self._sr_items, self._sr_act_items):
+            if _d:
+                for _it in _d.values():
+                    _it.setVisible(False)
         if self._sr_rects:
             for _rc in self._sr_rects:
                 _rc.setVisible(False)
@@ -6457,17 +6459,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         RES, SUP = (255, 42, 58), (0, 168, 255)                      # neon red / neon blue
         widths = _srm.SR_TIER_WIDTHS; nt = len(widths)
         if self._sr_items is None:
-            self._sr_items = {}
+            self._sr_items = {}; self._sr_act_items = {}
             for _kind, _rgb in (("R", RES), ("S", SUP)):
                 for _t, _w in enumerate(widths):
-                    _it = pg.PlotCurveItem(connect="finite"); _it.setZValue(24)   # MITIGATED level -> line, on top
-                    _it.setPen(pg.mkPen(*_rgb, width=_w)); _it.opts["pen"].setCosmetic(True)
-                    self.plot.addItem(_it, ignoreBounds=True)
-                    self._sr_items[(_kind, _t)] = _it
+                    _mi = pg.PlotCurveItem(connect="finite"); _mi.setZValue(23)   # MITIGATED level -> FAINT line (behind active)
+                    _mi.setPen(pg.mkPen(*_rgb, 120, width=_w)); _mi.opts["pen"].setCosmetic(True)
+                    self.plot.addItem(_mi, ignoreBounds=True)
+                    self._sr_items[(_kind, _t)] = _mi
+                    _ai = pg.PlotCurveItem(connect="finite"); _ai.setZValue(24)   # ACTIVE level as line (Area OFF) -> full opacity
+                    _ai.setPen(pg.mkPen(*_rgb, width=_w)); _ai.opts["pen"].setCosmetic(True)
+                    self.plot.addItem(_ai, ignoreBounds=True)
+                    self._sr_act_items[(_kind, _t)] = _ai
         if self._sr_rects is None:
             self._sr_rects = []
         _nan = float("nan")
-        buf = {k: ([], []) for k in self._sr_items}                  # (xs, ys) per (kind, tier) — mitigated lines
+        buf = {k: ([], []) for k in self._sr_items}                  # (xs, ys) per (kind, tier) — MITIGATED lines (faint)
+        bufa = {k: ([], []) for k in self._sr_act_items}             # ACTIVE levels as lines when Area OFF (full opacity)
         rects = []                                                   # (x0, x1, ylo, yhi, rgb, tier) — active bands
         for lv in levels:
             kind = lv["kind"]; price = lv["price"]; i0 = lv["i0"]; i1 = lv["i1"]
@@ -6481,8 +6488,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         ylo, yhi = price * (1 - 5e-4), price * (1 + 5e-4)
                     # extend a few bars PAST the live edge so the band fill clears the newest candle instead of ending on it
                     rects.append((i0, n - 1 + 4, ylo, yhi, rgb, _t0))
-                else:                                                # Area OFF -> draw the active level as a LINE to the edge
-                    xs, ys = buf[(kind, _t0)]
+                else:                                                # Area OFF -> draw the active level as a full-opacity LINE
+                    xs, ys = bufa[(kind, _t0)]
                     xs += [i0, n - 1, _nan]; ys += [price, price, _nan]
                 continue
             segs = lv.get("segs") or []                              # MITIGATED -> line segments at the level price
@@ -6498,6 +6505,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 xs += [sa, sb, _nan]; ys += [price, price, _nan]
         for key, _it in self._sr_items.items():
             xs, ys = buf[key]
+            _it.setData(xs, ys); _it.setVisible(bool(xs))
+        for key, _it in self._sr_act_items.items():
+            xs, ys = bufa[key]
             _it.setData(xs, ys); _it.setVisible(bool(xs))
 
         def _merge_bands(rs):                                        # fold same-kind ACTIVE bands whose price ranges overlap
