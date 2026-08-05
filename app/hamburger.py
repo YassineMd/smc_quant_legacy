@@ -478,6 +478,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             sec.addWidget(cb)
             if key == "m10_structure_swing":
                 self._build_swing_slider(sec)            # sensitivity slider directly under its toggle
+            if key == "m10_sr":
+                self._build_sr_subtoggles(sec)           # S/R sub-toggle: Area (bands) vs lines-only
             if key == "m10_swinglvn":
                 self._build_svl_subtoggles(sec)          # RCLI sub-toggles: LVA zones / swing lines
             if key == "m10_stats":
@@ -507,6 +509,17 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
             self.layer_checks[key] = cb
             section.addWidget(cb)
+
+    def _build_sr_subtoggles(self, section) -> None:
+        """Support & Resistance sub-toggle: 'Area' ON -> ACTIVE levels draw as filled zones (bands); OFF -> every
+        level (active + mitigated) draws as a plain LINE. An m10_ key, so it persists + reads via layer_state; the
+        master m10_sr still gates the whole indicator."""
+        cb = QtWidgets.QCheckBox("· Area")
+        cb.setChecked(True)                              # default ON -> the current banded look
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.toggled.connect(lambda on, k="m10_sr_area": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_sr_area"] = cb
+        section.addWidget(cb)
 
     def _build_svl_subtoggles(self, section) -> None:
         """RCLI (Recent Swing LVA) sub-toggles under its master toggle — the LVA zones and the swing lines,

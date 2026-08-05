@@ -12,10 +12,12 @@ from datetime import datetime, timezone
 import numpy as np
 import study.signal_search_lib as L
 import study.mom_absorb_1h as MA
-from app import engulf1m_detect as E, structure, swing_lvn_detect as SW
+from app import engulf1m_detect as E, structure, swing_lvn_detect as SW, region_state as RS, config as CFG
 
 rng = np.random.default_rng(20260805)
 SWING_ON = os.environ.get("SWING_OFF") != "1"                 # SWING_OFF=1 -> drop the Price&CVD swing filter (discretionary)
+EFFAGG = os.environ.get("EFFAGG") == "1"                      # EFFAGG=1 -> signed eff-agg RISING for long / FALLING for short vs prev candle
+EFFAGG_SPREAD = os.environ.get("EFFAGG_SPREAD") == "1"        # +EFFAGG_SPREAD=1 -> use the eff-agg SPREAD (causal buy-share) not VOL
 ABS_OR = os.environ.get("ABS_OR") == "1"                      # ABS_OR=1 -> add the heavy branch (absR >= ABS_HI)
 ABS_LO = float(os.environ.get("ABS_LO", "-0.5"))             # easy absorption cap: absR <= ABS_LO
 ABS_HI = float(os.environ.get("ABS_HI", "1.0"))             # heavy absorption floor: absR >= ABS_HI (only if ABS_OR)
@@ -37,19 +39,41 @@ for _i in range(n):
         _cur = -1 if _piv[_pi][2] else 1; _pi += 1
     swing_dir[_i] = _cur
 
+# per-candle SIGNED eff-agg. SPREAD = causal buy-share (2*share-1)*100 [-100..100]; VOL = eff_bull - eff_bear (volume)
+if EFFAGG and EFFAGG_SPREAD:
+    from app import pivot_detect as _PV
+    _sh = _PV.eff_causal_share(A)
+    signed_eff = [(2.0 * float(_sh[k]) - 1.0) * 100.0 for k in range(n)]
+elif EFFAGG:
+    _eb, _es, _ = RS.eff_agg_series(A, 0, n - 1, CFG.ABSORP_VOL_WINDOW, CFG.EFF_AGG_FORCE_WINDOW)
+    signed_eff = [float(_eb[k]) - float(_es[k]) for k in range(n)]
+else:
+    signed_eff = [0.0] * n
+
 
 def vw_ok(i):
     ut = float(A[i].get("up_ticks", 0.0) or 0.0); dt = float(A[i].get("dn_ticks", 0.0) or 0.0)
     return min(ut, dt) > 0 and (max(ut, dt) / min(ut, dt) - 1.0) * 100.0 >= VW_MIN
 
 
-marks = E.detect(A, skip_last=True, absorp=list(absA))
+ALL_CANDLES = os.environ.get("ALL_CANDLES") == "1"               # ALL_CANDLES=1 -> EVERY 1h candle (ignore the Absorption badge)
+if ALL_CANDLES:
+    cand = [(i, (1 if C[i] > O[i] else -1)) for i in range(0, n - 1) if C[i] != O[i]]   # candle side = bull/bear
+else:
+    marks = E.detect(A, skip_last=True, absorp=list(absA))
+    cand = [(m["i"], m["side"]) for m in marks]
+print("candidate pool (pre-filter): %d %s" % (len(cand), "ALL candles" if ALL_CANDLES else "Absorption-badge candles"))
 sigs = []
-for m in marks:
-    i = m["i"]; side = m["side"]
+_seen = 0
+for i, side in cand:
     _abs_ok = (absA[i] <= ABS_LO) or (ABS_OR and absA[i] >= ABS_HI)   # easy/momentum, + heavy/absorbed if ABS_OR
     if not vw_ok(i) or not _abs_ok:
         continue
+    if EFFAGG and (i < 1 or (signed_eff[i] > signed_eff[i - 1]) != (side > 0)):   # eff-agg RISING(long)/FALLING(short) vs prev
+        continue
+    _seen += 1
+    if _seen % 1000 == 0:
+        print("  ...swing-filtering %d" % _seen, file=sys.stderr)
     if SWING_ON:                                                     # Price&CVD swing filter (skip if SWING_OFF=1)
         if swing_dir[i] == 0:
             continue

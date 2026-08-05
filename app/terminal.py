@@ -396,6 +396,18 @@ class SubCandleWindow(QtWidgets.QDialog):
         self._sub_choch_bull = pg.PlotCurveItem(pen=_cbp, connect="finite"); self._sub_choch_bull.setZValue(28)
         self._sub_choch_bear = pg.PlotCurveItem(pen=_crp, connect="finite"); self._sub_choch_bear.setZValue(28)
         self._left.addItem(self._sub_choch_bull, ignoreBounds=True); self._left.addItem(self._sub_choch_bear, ignoreBounds=True)
+        # Support & Resistance (m10_sr) — run on THIS popup's sub-candles; blue support / red resistance, ACTIVE solid,
+        # MITIGATED faint. Four curve items (kind x active/mitigated), each a NaN-separated set of level segments.
+        _srp_s = pg.mkPen(0, 168, 255, width=1.6); _srp_s.setCosmetic(True)
+        _srp_r = pg.mkPen(255, 42, 58, width=1.6); _srp_r.setCosmetic(True)
+        _srp_sm = pg.mkPen(0, 168, 255, 140, width=1.0); _srp_sm.setCosmetic(True)
+        _srp_rm = pg.mkPen(255, 42, 58, 140, width=1.0); _srp_rm.setCosmetic(True)
+        self._sub_sr_s = pg.PlotCurveItem(pen=_srp_s, connect="finite"); self._sub_sr_s.setZValue(24)
+        self._sub_sr_r = pg.PlotCurveItem(pen=_srp_r, connect="finite"); self._sub_sr_r.setZValue(24)
+        self._sub_sr_sm = pg.PlotCurveItem(pen=_srp_sm, connect="finite"); self._sub_sr_sm.setZValue(23)
+        self._sub_sr_rm = pg.PlotCurveItem(pen=_srp_rm, connect="finite"); self._sub_sr_rm.setZValue(23)
+        for _srit in (self._sub_sr_s, self._sub_sr_r, self._sub_sr_sm, self._sub_sr_rm):
+            self._left.addItem(_srit, ignoreBounds=True)
         self._msg = pg.TextItem("", color="#9aa0a6", anchor=(0.5, 0.5)); self._msg.setZValue(50)
         self._left.addItem(self._msg, ignoreBounds=True); self._msg.hide()
         # live-price dashed line — SAME pen as the main chart's crosshair (faded gray, cosmetic [4,8]) — plus a
@@ -679,6 +691,8 @@ class SubCandleWindow(QtWidgets.QDialog):
         """Hide every Tier-3 indicator glyph (used on the no-data path)."""
         try:
             self._sub_choch_bull.setVisible(False); self._sub_choch_bear.setVisible(False)
+            for _it in (self._sub_sr_s, self._sub_sr_r, self._sub_sr_sm, self._sub_sr_rm):
+                _it.setVisible(False)
             if self._sub_e1m_sph is not None:
                 self._sub_e1m_sph.setVisible(False)
             for _p in (self._sub_struct_pool, self._sub_struct_pool_sw, self._sub_struct_pct_pool_sw):
@@ -730,9 +744,9 @@ class SubCandleWindow(QtWidgets.QDialog):
     def _draw_indicators(self, subs: list) -> None:
         """Tier 3 — draw the 1m-compatible indicator overlays that are active on the main chart onto THIS popup, run on
         the popup's OWN 1m buckets so they appear 'as if the 1m chart were open': Absorption Candle (m10_engulf1m),
-        market structure HH/HL/LH/LL (m10_structure fine / m10_structure_swing coarse) and CHoCH (m10_choch). Each is
-        self-gated + fail-safe. The TF-locked strategy badges (5m/15m/1h) and the S/R + Swing-LVN corner chrome are
-        intentionally NOT ported — a native 1m chart wouldn't show them either."""
+        market structure HH/HL/LH/LL (m10_structure fine / m10_structure_swing coarse), CHoCH (m10_choch) and
+        Support & Resistance (m10_sr). Each is self-gated + fail-safe. The TF-locked strategy badges (5m/15m/1h) and
+        the Swing-LVN corner chrome stay off — a native 1m chart wouldn't show them either."""
         o = self._owner; n = len(subs)
         if n == 0:
             self._hide_sub_indicators(); return
@@ -804,6 +818,37 @@ class SubCandleWindow(QtWidgets.QDialog):
                 self._sub_choch_bull.setVisible(False); self._sub_choch_bear.setVisible(False)
         except Exception:
             self._sub_choch_bull.setVisible(False); self._sub_choch_bear.setVisible(False)
+
+        # --- Support & Resistance (m10_sr) — detected on THIS popup's sub-candles; horizontal level lines from the
+        #     pivot bar to the right edge (ACTIVE) or to the break bar (MITIGATED, faint). Blue support / red resistance.
+        _sr_items = (self._sub_sr_s, self._sub_sr_r, self._sub_sr_sm, self._sub_sr_rm)
+        try:
+            if o.menu.layer_state("m10_sr") and n >= 3:
+                from app import support_resistance as _srm
+                levels = _srm.detect(list(subs), zone_mitigation=(getattr(self, "_sub_tf", "1m") == "5m"))
+                xs_s = []; ys_s = []; xs_r = []; ys_r = []; xs_sm = []; ys_sm = []; xs_rm = []; ys_rm = []
+                for lv in levels:
+                    i0 = int(lv.get("i0", -1)); i1 = lv.get("i1"); price = float(lv.get("price", 0.0) or 0.0)
+                    if i0 < 0 or i0 >= n or price <= 0:
+                        continue
+                    x1 = (n - 1) if i1 is None else min(int(i1), n - 1)
+                    if x1 <= i0:
+                        x1 = n - 1
+                    if lv.get("kind") == "S":
+                        tgt = (xs_s, ys_s) if i1 is None else (xs_sm, ys_sm)
+                    else:
+                        tgt = (xs_r, ys_r) if i1 is None else (xs_rm, ys_rm)
+                    tgt[0].extend([i0, x1, np.nan]); tgt[1].extend([price, price, np.nan])
+                self._sub_sr_s.setData(xs_s, ys_s); self._sub_sr_s.setVisible(bool(xs_s))
+                self._sub_sr_r.setData(xs_r, ys_r); self._sub_sr_r.setVisible(bool(xs_r))
+                self._sub_sr_sm.setData(xs_sm, ys_sm); self._sub_sr_sm.setVisible(bool(xs_sm))
+                self._sub_sr_rm.setData(xs_rm, ys_rm); self._sub_sr_rm.setVisible(bool(xs_rm))
+            else:
+                for _it in _sr_items:
+                    _it.setVisible(False)
+        except Exception:
+            for _it in _sr_items:
+                _it.setVisible(False)
 
     def refresh(self, candle: dict, subs: list, top_html: str, target_vol: "float | None" = None) -> None:
         """Owner calls this each tick while the popup's bucket is still FORMING -> live 1m development. target_vol is
@@ -2153,10 +2198,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._rev_sig = None; self._sel_sig = None   # 1h Reversal toggled -> re-run the overlay draw
             if not on:
                 self._clear_reversal()              # off -> tear the lozenges down now
-        elif key == "m10_sr":
-            self._sr_sig = None; self._sel_sig = None    # Support/Resistance toggled -> re-run the overlay draw
-            if not on:
-                self._clear_sr()                    # off -> tear the S/R lines down now
+        elif key in ("m10_sr", "m10_sr_area"):
+            self._sr_sig = None; self._sel_sig = None    # Support/Resistance (or its Area sub-toggle) -> re-run the draw
+            if key == "m10_sr" and not on:
+                self._clear_sr()                    # master off -> tear the S/R down now (Area toggle just re-draws)
         elif key in ("m10_swinglvn", "m10_svl_zones", "m10_svl_lines", "m10_svl_bias"):
             self._svl_sig = None; self._sel_sig = None   # RCLI (master or a sub-toggle) changed -> re-run the draw
             if not self.menu.layer_state("m10_swinglvn"):
@@ -6389,15 +6434,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _draw_sr(self, filtered) -> None:
         """S/R as AREAS (app/support_resistance). An ACTIVE (unbroken) level draws as a faint blue(support)/red
         (resistance) BAND spanning the whole pivot candle's high->low, extending right to the live edge; the fill is
-        low-opacity and the BORDER thickens with rejection strength (same tier scale the line thickness used). Once a
-        level is MITIGATED (a candle closed through it) the band converts to a plain LINE, so the two read differently.
-        Any timeframe; closed-only detection (a forming bucket can't be a confirmed pivot)."""
+        low-opacity, BORDERLESS, and a touch stronger per rejection tier. Once a level is MITIGATED (a candle closed
+        through it) the band converts to a plain LINE, so the two read differently. Any timeframe; closed-only
+        detection (a forming bucket can't be a confirmed pivot)."""
         if not self.menu.layer_state("m10_sr") or self.scanner_mode != "bucket_canvas":
             self._clear_sr(); return
         n = len(filtered)
         if n < 3:
             self._clear_sr(); return
-        _sig = (n, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        _area = bool(self.menu.layer_state("m10_sr_area"))           # 'Area' sub-toggle: bands (on) vs lines-only (off)
+        _sig = (n, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0, _area)
         if _sig == self._sr_sig and self._sr_drawn:
             return
         self._sr_sig = _sig
@@ -6427,14 +6473,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             kind = lv["kind"]; price = lv["price"]; i0 = lv["i0"]; i1 = lv["i1"]
             rgb = RES if kind == "R" else SUP
             _t0 = min(nt - 1, max(0, int(lv.get("tier", 0))))
-            if i1 is None and 0 <= i0 < n:                           # ACTIVE -> filled band over the WIDENED S/R area
-                b0 = filtered[i0]
-                ylo = float(lv.get("zlo", b0.get("low", 0.0)) or 0.0); yhi = float(lv.get("zhi", b0.get("high", 0.0)) or 0.0)
-                if yhi <= ylo:                                       # degenerate pivot candle -> a hair around the level
-                    ylo, yhi = price * (1 - 5e-4), price * (1 + 5e-4)
-                # extend a few bars PAST the live edge so the (thick) right border clears the newest candle instead of
-                # slicing through it when price is sitting inside the zone
-                rects.append((i0, n - 1 + 4, ylo, yhi, rgb, _t0))
+            if i1 is None and 0 <= i0 < n:                           # ACTIVE level
+                if _area:                                            # Area ON -> filled band over the WIDENED S/R area
+                    b0 = filtered[i0]
+                    ylo = float(lv.get("zlo", b0.get("low", 0.0)) or 0.0); yhi = float(lv.get("zhi", b0.get("high", 0.0)) or 0.0)
+                    if yhi <= ylo:                                   # degenerate pivot candle -> a hair around the level
+                        ylo, yhi = price * (1 - 5e-4), price * (1 + 5e-4)
+                    # extend a few bars PAST the live edge so the band fill clears the newest candle instead of ending on it
+                    rects.append((i0, n - 1 + 4, ylo, yhi, rgb, _t0))
+                else:                                                # Area OFF -> draw the active level as a LINE to the edge
+                    xs, ys = buf[(kind, _t0)]
+                    xs += [i0, n - 1, _nan]; ys += [price, price, _nan]
                 continue
             segs = lv.get("segs") or []                              # MITIGATED -> line segments at the level price
             if not segs:
@@ -6462,15 +6511,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     m.append(r)
             return m
         rects = _merge_bands([r for r in rects if r[4] == RES]) + _merge_bands([r for r in rects if r[4] == SUP])
-        for j, (x0, x1, ylo, yhi, rgb, tier) in enumerate(rects):    # active bands: faint fill + strength-thickened border
+        for j, (x0, x1, ylo, yhi, rgb, tier) in enumerate(rects):    # active bands: faint fill, NO border
             if j >= len(self._sr_rects):
                 _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-7)   # behind the candles -> background zone
                 self.vb.addItem(_rc, ignoreBounds=True); self._sr_rects.append(_rc)
             _rc = self._sr_rects[j]
             _rc.setRect(x0, ylo, max(1e-9, x1 - x0), max(1e-9, yhi - ylo))
-            _rc.setBrush(pg.mkBrush(*rgb, 20 + tier * 8))            # low opacity, a touch stronger per tier
-            _pen = pg.mkPen(*rgb, 210, width=widths[tier]); _pen.setCosmetic(True)
-            _rc.setPen(_pen)
+            _rc.setBrush(pg.mkBrush(*rgb, 10 + tier * 4))           # lower opacity, a touch stronger per tier
+            _rc.setPen(pg.mkPen(None))                              # borderless — fill only
             _rc.setVisible(True)
         for j in range(len(rects), len(self._sr_rects)):
             self._sr_rects[j].setVisible(False)
