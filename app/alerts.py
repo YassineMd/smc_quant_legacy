@@ -119,8 +119,8 @@ class AlertsLedger(QtWidgets.QFrame):
         self.unreadChanged.emit(0)
 
     # ------------------------------------------------------------------
-    def _add(self, text: str, color: str) -> None:
-        ts = time.strftime("%H:%M:%S")
+    def _add(self, text: str, color: str, stamp: str = None) -> None:
+        ts = stamp if stamp else time.strftime("%H:%M:%S")   # paper trades pass the ENTRY date+time; feeds use wall-clock
         item = QtWidgets.QListWidgetItem(f"{ts}  {text}")
         item.setForeground(QtGui.QColor(color))
         self.list.insertItem(0, item)
@@ -130,16 +130,32 @@ class AlertsLedger(QtWidgets.QFrame):
             self._unread += 1
             self.unreadChanged.emit(self._unread)
 
+    @staticmethod
+    def _fmt_entry_dt(ts) -> str:
+        """Entry date+time as 'd/m/yy - hh:mm' (no leading zero on day/month; matches the ENTRY, i.e. the replay
+        bar time in replay / wall-clock in live). Falls back to the wall-clock time if no entry stamp is present."""
+        if not ts:
+            return time.strftime("%H:%M:%S")
+        try:
+            from datetime import datetime
+            d = datetime.fromtimestamp(float(ts))                # LOCAL, matching the chart's time axis
+            return "%d/%d/%02d - %02d:%02d" % (d.day, d.month, d.year % 100, d.hour, d.minute)
+        except Exception:
+            return time.strftime("%H:%M:%S")
+
     def record_trade(self, r: dict) -> None:
-        """Log a CLOSED paper trade (position tool simulation): win = green, loss = red, with entry -> exit,
-        net $ / % on margin, and the resulting balance. Plays the notification sound."""
+        """Log a CLOSED paper trade (position tool simulation): win = green, loss = red. Shows the ENTRY date+time,
+        L/S side, the signed PRICE % (in favour: + on a win, - on a loss), the net $ / % on margin, and the balance."""
         win = r.get("net", 0.0) >= 0.0
         icon = "✅" if win else "❌"
-        kind = (r.get("kind") or "").upper()
-        txt = ("{} {} {}  {:.2f}→{:.2f}  {:+,.0f}$ ({:+.1f}%)  bal {:,.0f}$".format(
-            icon, kind, r.get("reason", ""), r.get("entry", 0.0), r.get("exit", 0.0),
+        side = 1 if r.get("kind") == "long" else -1
+        sc = "L" if side > 0 else "S"
+        e = r.get("entry", 0.0); x = r.get("exit", 0.0)
+        pct_px = ((x - e) / e * side * 100.0) if e else 0.0     # price move in the trade's favour -> + win / - loss
+        txt = ("{} {} {}  {:+.2f}%  {:+,.0f}$ ({:+.1f}%)  bal {:,.0f}$".format(
+            icon, sc, r.get("reason", ""), pct_px,
             r.get("net", 0.0), r.get("pct", 0.0), r.get("balance", 0.0)))
-        self._add(txt, "#27ae60" if win else "#e74c3c")
+        self._add(txt, "#27ae60" if win else "#e74c3c", stamp=self._fmt_entry_dt(r.get("entry_ts")))
         self.set_balance(r.get("balance", 0.0))
         self.audio.play()
 

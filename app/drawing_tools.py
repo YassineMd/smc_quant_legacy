@@ -259,7 +259,7 @@ class PositionBracket(QtCore.QObject):
     closed = QtCore.Signal(object)    # TP/SL hit -> position closed (emits the result dict)
 
     def __init__(self, plot: pg.PlotWidget, kind: str, x0: float, x1: float,
-                 entry: float, stop: float, target: float):
+                 entry: float, stop: float, target: float, target2: float = None, tp2_on: bool = False):
         super().__init__()
         self.plot = plot
         self.kind = kind
@@ -271,13 +271,24 @@ class PositionBracket(QtCore.QObject):
         self._acct = None
         self._pos = None
         self._last_px = None
+        self._entry_ts = None             # fill time (replay bar time / wall-clock) -> shown as the ledger date+time
         self.state = "PENDING"            # PENDING (awaiting entry) -> ACTIVE (in trade) -> CLOSED
         self.result = None
         self._side = 1 if kind == "long" else -1
+        # TWO-TARGET take-profit: with TP2 OFF the whole position closes at TP1 (100%); with TP2 ON it scales out
+        # 50% at TP1 then 50% at TP2. _tp1_done flips after the first (partial) fill; _remaining tracks the open size.
+        self._tp2_on = bool(tp2_on)
+        self._tp1_done = False
+        self._remaining = 1.0
+        self._on_partial = None           # DrawingController: record the TP1 partial to the ledger WITHOUT removing
 
         self.entry_line = self._mk_line(entry, "#2962ff", "Entry")
         self.stop_line = self._mk_line(stop, "#e74c3c", "SL")
         self.target_line = self._mk_line(target, "#1abc9c", "TP")
+        # TP2 — a second, further target (draggable), shown only while enabled. Default = one TP1-distance beyond TP1.
+        if target2 is None:
+            target2 = target + (target - entry)
+        self.target2_line = self._mk_line(target2, "#12d3a5", "TP2")
         # BREAK-EVEN line: white dashed, NO badge — entry nudged by the round-trip fee (placed in _recalc).
         _bepen = QtGui.QPen(QtGui.QColor(255, 255, 255, 150))
         _bepen.setWidth(1); _bepen.setCosmetic(True); _bepen.setDashPattern([3.0, 7.0])
@@ -303,12 +314,21 @@ class PositionBracket(QtCore.QObject):
         self.close_btn.setToolTip("Close / cancel this position")
         self.close_btn.sigClicked.connect(lambda *a: self._on_close_click(self) if self._on_close_click else None)
         plot.addItem(self.close_btn, ignoreBounds=True)
+        # TP2 toggle — a small green square button sitting at the TP1 line; click to ADD a second target (then drag
+        # the dashed TP2 line to place it) or REMOVE it. TP2 ON -> 50% at TP1 / 50% at TP2; OFF -> 100% at TP1.
+        self.tp2_btn = pg.ScatterPlotItem(pxMode=True, symbol="s", size=13,
+                                          brush=pg.mkBrush(18, 211, 165, 235),
+                                          pen=pg.mkPen(255, 255, 255, 210, width=1.2))
+        self.tp2_btn.setZValue(75)
+        self.tp2_btn.setToolTip("Toggle TP2 (drag the TP2 line to place it) — 50% at TP1, 50% at TP2")
+        self.tp2_btn.sigClicked.connect(lambda *a: self._toggle_tp2())
+        plot.addItem(self.tp2_btn, ignoreBounds=True)
 
         # Per-line value labels as rounded dark PILLS with the line's own colour (SL red / Entry blue / TP green),
         # replacing the old plain white boxes. SL/TP also show % vs entry.
         self._val_labels = {}
-        _bord = {"SL": (231, 76, 60), "Entry": (41, 98, 255), "TP": (26, 188, 156)}
-        for nm in ("SL", "Entry", "TP"):
+        _bord = {"SL": (231, 76, 60), "Entry": (41, 98, 255), "TP": (26, 188, 156), "TP2": (18, 211, 165)}
+        for nm in ("SL", "Entry", "TP", "TP2"):
             # OPAQUE fill (255) + z ABOVE the price lines (72) so the badge cleanly HIDES the dashed line
             # running behind it — the values stay readable (was: line drawn over the badge).
             t = RoundedTextItem(anchor=(1, 0.5), fill=pg.mkBrush(22, 24, 30, 255),
@@ -317,10 +337,11 @@ class PositionBracket(QtCore.QObject):
             plot.addItem(t, ignoreBounds=True)
             self._val_labels[nm] = t
 
-        for ln in (self.entry_line, self.stop_line, self.target_line):
+        for ln in (self.entry_line, self.stop_line, self.target_line, self.target2_line):
             ln.sigPositionChanged.connect(self._recalc)
         for vln in (self.left_line, self.right_line):
             vln.sigPositionChanged.connect(self._recalc_span)
+        self._apply_tp2_visibility()
         self._recalc()
 
     def _mk_edge(self, x: float) -> pg.InfiniteLine:
@@ -361,12 +382,38 @@ class PositionBracket(QtCore.QObject):
         self._val_labels["SL"].setPos(label_x, s)
         self._val_labels["Entry"].setPos(label_x, e)
         self._val_labels["TP"].setPos(label_x, t)
+        self._val_labels["TP2"].setPos(label_x, self.target2_line.value())
         self.close_btn.setData([{"pos": (self._close_x, e)}])
+        self.tp2_btn.setData([{"pos": (self._close_x, t)}])
+
+    def _toggle_tp2(self) -> None:
+        """TP2 button: add / remove the second target. Locked once the TP1 partial has already filled."""
+        if self._tp1_done:
+            return
+        self._tp2_on = not self._tp2_on
+        if self._tp2_on:
+            e = self.entry_line.value(); t1 = self.target_line.value(); t2 = self.target2_line.value()
+            if (t2 - t1) * self._side <= 0:               # TP2 not beyond TP1 in the favour dir -> seed a default
+                self.target2_line.setValue(t1 + (t1 - e))
+        self._apply_tp2_visibility()
+        self._recalc()
+
+    def _apply_tp2_visibility(self) -> None:
+        on = self._tp2_on
+        self.target2_line.setVisible(on)
+        self._val_labels["TP2"].setVisible(on)
+        self.tp2_btn.setBrush(pg.mkBrush(18, 211, 165, 235 if on else 120))   # bright when ON, dim add-affordance when OFF
+        # once TP1 has scaled out, the TP1 line/badge + the toggle button are done -> remove them; TP2 + SL run the rest
+        done = self._tp1_done
+        self.target_line.setVisible(not done)
+        self._val_labels["TP"].setVisible(not done)
+        self.tp2_btn.setVisible(not done)
 
     def _recalc(self) -> None:
         e = self.entry_line.value()
         s = self.stop_line.value()
         t = self.target_line.value()
+        t2 = self.target2_line.value()
         rr = self.rr
         _f = "font-size:13px"
         # SL/TP show the PRICE-distance % (in the position's FAVOUR) minus the 0.1% round-trip fee — NOT
@@ -376,15 +423,24 @@ class PositionBracket(QtCore.QObject):
         tp_pct = self._pct_net(t)
         self.be_line.setValue(self._acct.breakeven(e, self._side) if self._acct is not None else e)
         self._val_labels["SL"].setHtml(f"<span style='color:#ff8a80;{_f}'><b>{s:.2f}</b> ({sl_pct:+.2f}%)</span>")
-        # TP badge carries the R:R ratio (was the old top label, which overlapped the TP badge)
+        # TP badge carries the R:R ratio; with TP2 on it reads "TP1 … 50%" and a TP2 badge appears alongside.
+        _tpn = "TP1" if self._tp2_on else "TP"; _sz = "  50%" if self._tp2_on else ""
         self._val_labels["TP"].setHtml(
-            f"<span style='color:#69f0ae;{_f}'><b>{t:.2f}</b> ({tp_pct:+.2f}%)</span>"
-            f"<span style='color:#9aa0a6;{_f}'>  1:{rr:.2f}</span>")
+            f"<span style='color:#69f0ae;{_f}'>{_tpn} <b>{t:.2f}</b> ({tp_pct:+.2f}%)</span>"
+            f"<span style='color:#9aa0a6;{_f}'>  1:{rr:.2f}{_sz}</span>")
+        if self._tp2_on:
+            risk = abs(e - s); rr2 = (abs(t2 - e) / risk) if risk > 1e-9 else 0.0
+            tp2_pct = self._pct_net(t2)
+            self._val_labels["TP2"].setHtml(
+                f"<span style='color:#5eead4;{_f}'>TP2 <b>{t2:.2f}</b> ({tp2_pct:+.2f}%)</span>"
+                f"<span style='color:#9aa0a6;{_f}'>  1:{rr2:.2f}  50%</span>")
+            self._val_labels["TP2"].setPos(self.label_x, t2)
         self._render_entry()                                # ENTRY badge = entry value (+ live PnL when active)
         self._val_labels["SL"].setPos(self.label_x, s)
         self._val_labels["Entry"].setPos(self.label_x, e)
         self._val_labels["TP"].setPos(self.label_x, t)
         self.close_btn.setData([{"pos": (self._close_x, e)}])
+        self.tp2_btn.setData([{"pos": (self._close_x, t)}])   # TP2 toggle sits at the TP1 line
         self.changed.emit()
 
     def _pct_net(self, level: float) -> float:
@@ -419,6 +475,7 @@ class PositionBracket(QtCore.QObject):
         self._acct = account
         self._pos = None
         self._last_px = None
+        self._entry_ts = None
         self.result = None
         self.state = "PENDING"
         self._recalc()          # now that the account is attached: fill in the leveraged SL/TP % + break-even line
@@ -433,33 +490,77 @@ class PositionBracket(QtCore.QObject):
             if self._last_px is not None and (self._last_px - e) * (price - e) <= 0.0:
                 self._pos = self._acct.open(e, self._side)      # price crossed/touched entry -> fill AT the line
                 self.state = "ACTIVE"
+                self._entry_ts = ts                             # stamp the entry time (replay bar time / live wall-clock)
                 self._render_entry(price)
                 self.filled.emit()
             self._last_px = price
             return
         # ACTIVE:
         self._last_px = price
+        s = self.stop_line.value(); t1 = self.target_line.value(); t2 = self.target2_line.value()
         if self._side > 0:
-            hit = "SL" if price <= s else ("TP" if price >= t else None)
+            sl_hit = price <= s; tp1_hit = price >= t1; tp2_hit = price >= t2
         else:
-            hit = "SL" if price >= s else ("TP" if price <= t else None)
-        if hit is not None:
-            self._close(s if hit == "SL" else t, hit, ts)
-        else:
-            self._render_entry(price)
+            sl_hit = price >= s; tp1_hit = price <= t1; tp2_hit = price <= t2
+        if not self._tp1_done:                            # full position: SL (100%), or TP1 (partial if TP2 on, else 100%)
+            if sl_hit:                                    # SL checked first (conservative on a tick spanning both)
+                self._close(s, "SL", ts)
+            elif tp1_hit:
+                if self._tp2_on:
+                    self._partial(t1, "TP1", ts)          # scale out 50% at TP1, keep the rest running to TP2
+                    if tp2_hit:                           # a gap that cleared BOTH targets -> close the remainder now
+                        self._close(t2, "TP2", ts)
+                else:
+                    self._close(t1, "TP", ts)             # single target -> 100%
+            else:
+                self._render_entry(price)
+        else:                                             # after the TP1 partial: remaining 50% -> SL or TP2
+            if sl_hit:
+                self._close(s, "SL", ts)
+            elif tp2_hit:
+                self._close(t2, "TP2", ts)
+            else:
+                self._render_entry(price)
 
     def _close(self, exit_price: float, reason: str, ts: float) -> None:
         r = self._acct.close(self._pos, exit_price)
         self.state = "CLOSED"
         self.result = {"kind": self.kind, "reason": reason, "entry": self._pos["entry"],
-                       "exit": exit_price, "net": r["net"], "pct": r["pct"], "balance": r["balance"], "ts": ts}
+                       "exit": exit_price, "net": r["net"], "pct": r["pct"], "balance": r["balance"],
+                       "ts": ts, "entry_ts": self._entry_ts}
         self.closed.emit(self.result)
         if self._on_close is not None:
             self._on_close(self, self.result)   # DrawingController: record to the ledger + REMOVE the bracket
 
+    @staticmethod
+    def _scaled(pos: dict, frac: float) -> dict:
+        """A copy of ``pos`` sized to ``frac`` of the position (money fields scaled; entry/side unchanged)."""
+        p = dict(pos)
+        for k in ("margin", "notional", "qty", "entry_fee"):
+            p[k] = pos.get(k, 0.0) * frac
+        return p
+
+    def _partial(self, exit_price: float, reason: str, ts: float) -> None:
+        """TP2 mode: scale out HALF the position at ``exit_price`` (TP1), record it, keep the other half running to TP2."""
+        if self._pos is None or self._acct is None:
+            return
+        r = self._acct.close(self._scaled(self._pos, 0.5), exit_price)   # realize 50% -> balance updated + persisted
+        self._pos = self._scaled(self._pos, 0.5)                          # the remaining 50% keeps running (to TP2 / SL)
+        self._tp1_done = True
+        self._remaining = 0.5
+        self._apply_tp2_visibility()                                      # TP1 line/badge + toggle removed; keep TP2 + SL
+        result = {"kind": self.kind, "reason": reason, "entry": self._pos["entry"], "exit": exit_price,
+                  "net": r["net"], "pct": r["pct"], "balance": r["balance"], "ts": ts, "partial": True,
+                  "entry_ts": self._entry_ts}
+        if self._on_partial is not None:
+            self._on_partial(self, result)      # record the TP1 fill in the ledger, but DON'T remove the bracket
+        self._render_entry(self._last_px)
+
     def sim_snapshot(self) -> dict:
         """Sim state to carry across a recreate (Mode-10 index brackets are destroyed+rebuilt on every scroll)."""
-        return {"state": self.state, "pos": self._pos, "last_px": self._last_px, "result": self.result}
+        return {"state": self.state, "pos": self._pos, "last_px": self._last_px, "result": self.result,
+                "tp1_done": self._tp1_done, "remaining": self._remaining, "tp2_on": self._tp2_on,
+                "entry_ts": self._entry_ts}
 
     def sim_restore(self, snap: dict) -> None:
         """Re-apply a saved sim snapshot after a recreate — so a live trade keeps running (never re-fires
@@ -468,6 +569,11 @@ class PositionBracket(QtCore.QObject):
         self._pos = snap.get("pos")
         self._last_px = snap.get("last_px")
         self.result = snap.get("result")
+        self._tp1_done = snap.get("tp1_done", False)
+        self._remaining = snap.get("remaining", 1.0)
+        self._tp2_on = snap.get("tp2_on", self._tp2_on)
+        self._entry_ts = snap.get("entry_ts")
+        self._apply_tp2_visibility()
         self._render_entry(self._last_px)
 
     @property
@@ -478,7 +584,8 @@ class PositionBracket(QtCore.QObject):
     def to_dict(self) -> dict:
         return {"kind": self.kind, "x0": self.x0, "x1": self.x1,
                 "entry": self.entry_line.value(), "stop": self.stop_line.value(),
-                "target": self.target_line.value()}
+                "target": self.target_line.value(),
+                "target2": self.target2_line.value(), "tp2_on": self._tp2_on}
 
     def near(self, x, y, tol_x, tol_y) -> bool:
         if not (self.x0 - tol_x <= x <= self.x1 + tol_x):
@@ -487,14 +594,16 @@ class PositionBracket(QtCore.QObject):
                    for ln in (self.entry_line, self.stop_line, self.target_line))
 
     def set_visible(self, on: bool) -> None:
-        for it in (self.entry_line, self.stop_line, self.target_line, self.be_line,
-                   self.left_line, self.right_line, self.close_btn,
+        for it in (self.entry_line, self.stop_line, self.target_line, self.target2_line, self.be_line,
+                   self.left_line, self.right_line, self.close_btn, self.tp2_btn,
                    *self._val_labels.values()):
             it.setVisible(on)
+        if on:
+            self._apply_tp2_visibility()      # keep the TP2 line/label hidden unless TP2 is enabled
 
     def remove(self) -> None:
-        for it in (self.entry_line, self.stop_line, self.target_line, self.be_line,
-                   self.left_line, self.right_line, self.close_btn,
+        for it in (self.entry_line, self.stop_line, self.target_line, self.target2_line, self.be_line,
+                   self.left_line, self.right_line, self.close_btn, self.tp2_btn,
                    *self._val_labels.values()):
             self.plot.removeItem(it)
 
@@ -918,6 +1027,7 @@ class DrawingController(QtCore.QObject):
             #                                                are whole-candle jumps -> without this the fill is missed)
         br._on_close = self._handle_close                  # TP/SL/× -> record to the ledger + REMOVE the bracket
         br._on_close_click = self._manual_close            # the × close button
+        br._on_partial = self._handle_partial              # TP1 scale-out (TP2 mode) -> record, KEEP the bracket
 
     def _handle_close(self, br, result) -> None:
         """A trade closed (TP/SL or a manual ×): record it in the ledger, then delete the bracket."""
@@ -927,6 +1037,15 @@ class DrawingController(QtCore.QObject):
             except Exception:
                 pass
         self._remove_bracket(br)
+
+    def _handle_partial(self, br, result) -> None:
+        """A TP1 scale-out in TP2 mode: record the partial fill in the ledger but KEEP the bracket running to TP2."""
+        if self._on_trade_closed is not None:
+            try:
+                self._on_trade_closed(result)
+            except Exception:
+                pass
+        self._save_sim(br)     # persist the tp1_done/remaining sim state (index brackets rebuild on scroll)
 
     def _manual_close(self, br) -> None:
         """The × button: close an ACTIVE trade at the last price (records + removes via _handle_close), or
@@ -1201,7 +1320,7 @@ class DrawingController(QtCore.QObject):
         self.selectionChanged.emit()
 
     # ------------------------------------------------------------------
-    def _make_bracket(self, kind, a, b, entry=None, stop=None, target=None) -> PositionBracket:
+    def _make_bracket(self, kind, a, b, entry=None, stop=None, target=None, target2=None, tp2_on=False) -> PositionBracket:
         x0, x1 = sorted((a[0], b[0]))
         if entry is None:
             entry = a[1]
@@ -1210,7 +1329,7 @@ class DrawingController(QtCore.QObject):
                 stop, target = entry - risk, entry + risk * 1.5
             else:
                 stop, target = entry + risk, entry - risk * 1.5
-        bracket = PositionBracket(self.plot, kind, x0, x1, entry, stop, target)
+        bracket = PositionBracket(self.plot, kind, x0, x1, entry, stop, target, target2=target2, tp2_on=tp2_on)
         if self.index_mode:
             if not hasattr(bracket, "uid"):
                 bracket.uid = uuid.uuid4().hex
@@ -1563,7 +1682,8 @@ class DrawingController(QtCore.QObject):
                 else:
                     nx0, nx1 = dd["x0"] + d, dd["x1"] + d
                 nb = self._make_bracket(dd["kind"], [nx0, dd["entry"]], [nx1, dd["stop"]],
-                                        entry=dd["entry"], stop=dd["stop"], target=dd["target"])
+                                        entry=dd["entry"], stop=dd["stop"], target=dd["target"],
+                                        target2=dd.get("target2"), tp2_on=dd.get("tp2_on", False))
                 nb.uid = getattr(br, "uid", nb.uid)     # SAME identity — else every shift duplicates the
                 if anch:                                # bracket in the file (merge keeps the orphaned id)
                     nb.anchors = anch
@@ -1602,7 +1722,8 @@ class DrawingController(QtCore.QObject):
                     self.plot.addItem(s); self._idx_shapes.append(s)
                 elif d["t"] == "bracket":
                     _nb = self._make_bracket(d["kind"], [axs[0], d["entry"]], [axs[1], d["stop"]],
-                                             entry=d["entry"], stop=d["stop"], target=d["target"])
+                                             entry=d["entry"], stop=d["stop"], target=d["target"],
+                                             target2=d.get("target2"), tp2_on=d.get("tp2_on", False))
                     _nb.uid = d.get("id") or _nb.uid
                     if anch:
                         _nb.anchors = anch
@@ -1777,4 +1898,5 @@ class DrawingController(QtCore.QObject):
             self.plot.addItem(shape)
         for d in (entry.get("brackets", []) if isinstance(entry, dict) else []):
             self._make_bracket(d["kind"], [d["x0"], d["entry"]], [d["x1"], d["stop"]],
-                               entry=d["entry"], stop=d["stop"], target=d["target"])
+                               entry=d["entry"], stop=d["stop"], target=d["target"],
+                               target2=d.get("target2"), tp2_on=d.get("tp2_on", False))

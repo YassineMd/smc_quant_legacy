@@ -719,8 +719,9 @@ class SubCandleWindow(QtWidgets.QDialog):
                 from app import engulf1m_detect
                 marks = engulf1m_detect.detect(subs, skip_last=False)
                 GRN, RED = (40, 220, 100), (240, 60, 78); CYA, MAG = (0, 229, 255), (233, 30, 220)
-                BLU, ORG = (0, 153, 255), (255, 140, 0)
-                _COL = {"cm": (CYA, MAG), "ob": (BLU, ORG), "rg": (GRN, RED)}; _SZ = {"cm": 13, "ob": 12, "rg": 12}
+                BLU, ORG = (0, 153, 255), (255, 140, 0); GLD = (255, 195, 40)
+                _COL = {"gd": (GLD, GLD), "cm": (CYA, MAG), "ob": (BLU, ORG), "rg": (GRN, RED)}
+                _SZ = {"gd": 14, "cm": 13, "ob": 12, "rg": 12}
                 spots = []
                 for mk in marks:
                     i = mk["i"]
@@ -730,7 +731,8 @@ class SubCandleWindow(QtWidgets.QDialog):
                     side = mk["side"]; kind = mk["kind"]; col = _COL[kind][0] if side > 0 else _COL[kind][1]
                     y = (lo - pad) if side > 0 else (hi + pad)          # long badge below the low, short above the high
                     _pen = pg.mkPen(int(col[0] * 0.55), int(col[1] * 0.55), int(col[2] * 0.55), 235, width=1.1)
-                    spots.append({"pos": (i, y), "symbol": "d", "size": _SZ[kind], "brush": pg.mkBrush(*col, 220), "pen": _pen})
+                    spots.append({"pos": (i, y), "symbol": ("s" if kind == "gd" else "d"), "size": _SZ[kind],
+                                  "brush": pg.mkBrush(*col, 220), "pen": _pen})
                 if self._sub_e1m_sph is None:
                     self._sub_e1m_sph = pg.ScatterPlotItem(pxMode=True, symbol="d", size=12); self._sub_e1m_sph.setZValue(30)
                     self._left.addItem(self._sub_e1m_sph, ignoreBounds=True)
@@ -1209,6 +1211,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._eng_sig = None; self._eng_drawn = False
         self._eng_entries = []
         self._eng_ln_pool = []; self._eng_lnlbl_pool = []; self._eng_lines_user = {}
+        # 1h Easy 0.5% overlay (m10_easy1h, 1h only) — neon green/purple triangle L/S badges; click -> entry/SL/TP1/TP2 lines.
+        # FORWARD CANDIDATE (absorption+vw>=1+absR<=-0.3+swing-aligned scale-out; in-sample, CI incl 0). app/easy1h_detect.
+        self._ez_sph = None                      # ScatterPlotItem of triangle badges
+        self._ez_sig = None; self._ez_drawn = False
+        self._ez_entries = []
+        self._ez_ln_pool = []; self._ez_lnlbl_pool = []; self._ez_lines_user = {}
+        self._ez_swing_cache = {}                # per-bar causal swing state (keyed by start_time; closed bars only)
+        self._ez_win_front = None                # loaded-window left-edge start_time — cache is valid only while stable
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
         self._mom_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
@@ -2106,6 +2116,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._mom_sig = None; self._sel_sig = None   # 15m Momentum toggled -> re-run the overlay draw
             if not on:
                 self._clear_momentum()              # off -> tear the squares down now
+        elif key == "m10_easy1h":
+            self._ez_sig = None; self._sel_sig = None    # 1h Easy 0.5% toggled -> re-run the overlay draw
+            if not on:
+                self._clear_easy1h()                # off -> tear the triangles down now
         elif key == "m10_reversal":
             self._rev_sig = None; self._sel_sig = None   # 1h Reversal toggled -> re-run the overlay draw
             if not on:
@@ -2307,6 +2321,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if best is not None:
                     _on = not self._mom_lines_user.get(best, False)   # exclusive: this position only, hide all others
                     self._solo_trade_lines(self._mom_lines_user, best, _on); ev.accept(); return
+            except Exception:
+                pass
+        if (not ev.double() and self.scanner_mode == "bucket_canvas"
+                and self._ez_entries and self.menu.layer_state("m10_easy1h")):
+            try:                               # click a 1h Easy triangle -> toggle its entry/SL/TP1/TP2 lines
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
+                best = None; bestdx = 2.5
+                for _en in self._ez_entries:
+                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[7]) <= ytol:   # yb at index 7 (tuple carries tp2)
+                        best = _en[0]; bestdx = abs(xc - _en[1])
+                if best is not None:
+                    _on = not self._ez_lines_user.get(best, False)   # exclusive: this position only, hide all others
+                    self._solo_trade_lines(self._ez_lines_user, best, _on); ev.accept(); return
             except Exception:
                 pass
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
@@ -4574,7 +4602,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # (swing_lvn_detect.va_lines_from_profile). Display-only, culled to the viewport, pooled like the Prev-Day-VP overlay.
     # ------------------------------------------------------------------
     _SESSIONS = (("Tokyo", 0, 8, (96, 140, 226)),        # (name, start_hour, end_hour[excl, UTC], rgb)
-                 ("London", 8, 16, (240, 158, 58)),
+                 ("London", 8, 13, (240, 158, 58)),      # ends at the NY open (13:00 UTC) -> no London/NY overlap
                  ("New York", 13, 21, (58, 190, 122)))
 
     def _sess_rect(self, used, rgb):                           # pooled translucent session box (behind candles)
@@ -5684,6 +5712,107 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _draw_eng_lines(self) -> None:
         self._trade_lines(self._eng_entries, self._eng_lines_user, self._eng_ln_pool, self._eng_lnlbl_pool, 29)
 
+    # 1h Easy 0.5% overlay (hamburger m10_easy1h, 1h ONLY) — FORWARD CANDIDATE, self-gated, fail-safe.
+    # Neon TRIANGLE L/S badge: green up long / purple down short. Absorption badge + ease vw%>=1 + absR<=-0.3 +
+    # swing-aligned (retrace->opposite) + swing-A/A4<=0. Scale-out 50% TP1 +0.5% / 50% TP2 +1.0%, SL 0.1% beyond
+    # candle, BE-trail after TP1. Click a badge -> its entry/SL/TP1/TP2 trade lines. NOT a proven edge (in-sample, CI incl 0).
+    def _clear_easy1h(self) -> None:
+        if self._ez_sph is not None:
+            self._ez_sph.setVisible(False)
+        for _it in self._ez_ln_pool + self._ez_lnlbl_pool:
+            _it.setVisible(False)
+        self._ez_entries = []
+        self._ez_sig = None; self._ez_drawn = False
+
+    def _draw_easy1h(self, filtered) -> None:
+        """Neon triangle L/S badges for the 1h Easy 0.5% candidate (app/easy1h_detect). 1h ONLY. The swing state is
+        computed CAUSALLY per candidate (swing_lines over buckets[:i+1]); a persistent per-bar cache keeps that a
+        one-time cost per closed bar. Click a badge -> its entry/SL/TP1/TP2 trade lines."""
+        if (not self.menu.layer_state("m10_easy1h") or self.scanner_mode != "bucket_canvas"
+                or self._tf != "1h"):
+            self._clear_easy1h(); return
+        n = len(filtered)
+        _wf = float(filtered[0].get("start_time", 0.0) or 0.0) if n else 0.0
+        if _wf != self._ez_win_front:                                # window rebuilt -> cached causal prefixes invalid
+            self._ez_swing_cache.clear(); self._ez_win_front = _wf
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        _sig = (n, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._ez_sig and self._ez_drawn:
+            return
+        self._ez_sig = _sig
+        _fi = (n - 1) if _forming else -1                            # forming (unconfirmed) bucket -> faded preview
+        try:
+            from app import easy1h_detect
+            entries = easy1h_detect.detect(filtered, skip_last=False, swing_cache=self._ez_swing_cache)
+        except Exception:
+            self._clear_easy1h(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        GRN, PUR = (57, 255, 20), (190, 70, 255)                     # neon green long / neon purple short
+        if self._ez_sph is None:
+            self._ez_sph = pg.ScatterPlotItem(pxMode=True, size=20, symbol="t1")
+            self._ez_sph.setZValue(32); self.plot.addItem(self._ez_sph, ignoreBounds=True)
+        spots = []; self._ez_entries = []
+        for e in entries:
+            i = int(e["i"])
+            if i < 0 or i >= n:
+                continue
+            side = int(e["side"])
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)
+            self._ez_entries.append(("ez%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0),
+                                     e.get("tp1", 0.0), e.get("tp2", 0.0), y))
+            col = GRN if side > 0 else PUR
+            _al = _PREVIEW_ALPHA if i == _fi else 255                # forming bucket -> faded preview
+            _pen_rgb = [int(c * 0.55) for c in col] + [_al]
+            _sym = "t1" if side > 0 else "t"                         # up-triangle long / down-triangle short
+            spots.append({"pos": (i, y), "symbol": _sym, "brush": pg.mkBrush(*col, _al),
+                          "pen": pg.mkPen(*_pen_rgb, width=1.2), "size": 20})
+        self._ez_sph.setData(spots); self._ez_sph.setVisible(True)
+        self._ez_drawn = True
+        self._trline_buckets = filtered                             # click a triangle -> entry/SL/TP1/TP2 trade lines
+        self._draw_ez_lines()
+
+    def _draw_ez_lines(self) -> None:
+        """Entry (white) / SL (red) / TP1 (green) / TP2 (bright green) dashed lines for the toggled-ON 1h-Easy badge.
+        Lines run from the entry bar to the first touch of SL or the runner target (TP2) in the visible frame."""
+        buckets = self._trline_buckets; n = len(buckets)
+        user = self._ez_lines_user; cpool = self._ez_ln_pool; lpool = self._ez_lnlbl_pool
+        WHITE = (236, 238, 244)
+        ul = ut = 0
+        for key, x, side, entry, sl, tp1, tp2, yb in self._ez_entries:
+            if not user.get(key, False) or entry <= 0 or x < 0 or x >= n:
+                continue
+            exit_x = n - 1
+            for j in range(x + 1, n):
+                bb = buckets[j]; hh = float(bb.get("high", 0.0) or 0.0); ll = float(bb.get("low", 0.0) or 0.0)
+                if hh <= 0 or ll <= 0:
+                    continue
+                if ((hh >= tp2) if side > 0 else (ll <= tp2)) or ((ll <= sl) if side > 0 else (hh >= sl)):
+                    exit_x = j; break
+            rb = max(x + 1, exit_x)
+            for lvl, col, w, tag in ((sl, (255, 90, 90), 1.5, "sl"),
+                                     (tp1, (40, 230, 90), 1.5, "tp"),
+                                     (tp2, (120, 255, 150), 1.5, "tp"),
+                                     (entry, WHITE, 1.9, "entry")):
+                if ul >= len(cpool):
+                    _ln = pg.PlotCurveItem(); _ln.setZValue(29)
+                    self.plot.addItem(_ln, ignoreBounds=True); cpool.append(_ln)
+                _ln = cpool[ul]; ul += 1
+                _pen = pg.mkPen(*col, width=w, style=QtCore.Qt.DashLine); _pen.setCosmetic(True)
+                _ln.setPen(_pen); _ln.setData([x, rb], [lvl, lvl]); _ln.setVisible(True)
+                if ut >= len(lpool):
+                    _tl = pg.TextItem(anchor=(0.0, 0.5)); _tl.setZValue(36)
+                    _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True); _tl.textItem.setFont(_tf)
+                    self.plot.addItem(_tl, ignoreBounds=True); lpool.append(_tl)
+                _tl = lpool[ut]; ut += 1
+                _tl.setText(("%.2f" % entry) if tag == "entry"
+                            else ("%.2f (%+.2f%%)" % (lvl, side * (lvl - entry) / entry * 100.0)))
+                _tl.setColor(col); _tl.setPos(rb, lvl); _tl.setVisible(True)
+        for j in range(ul, len(cpool)):
+            cpool[j].setVisible(False)
+        for j in range(ut, len(lpool)):
+            lpool[j].setVisible(False)
+
     # 15m MOMENTUM overlay (hamburger m10_momentum, 15m ONLY) — FORWARD CANDIDATE, self-gated, fail-safe.
     # LOSANGE (diamond) L/S badge: green up long / red down short; BLUE = at-S/R confluence (TP 1:2) — the positive subset.
     # Engulfing breakout in the last-mitigation S/R regime; TP bumps to 1:2 when the signal sits AT a same-side S/R zone.
@@ -6030,8 +6159,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         GRN, RED = (40, 220, 100), (240, 60, 78)
         CYA, MAG = (0, 229, 255), (233, 30, 220)
         BLU, ORG = (0, 153, 255), (255, 140, 0)
-        _COL = {"cm": (CYA, MAG), "ob": (BLU, ORG), "rg": (GRN, RED)}   # (long, short) per kind
-        _SZ = {"cm": 13, "ob": 12, "rg": 12}                            # all < 17 (other strategies' triangles)
+        GLD = (255, 195, 40)
+        _COL = {"gd": (GLD, GLD), "cm": (CYA, MAG), "ob": (BLU, ORG), "rg": (GRN, RED)}   # (long, short) per kind
+        _SZ = {"gd": 14, "cm": 13, "ob": 12, "rg": 12}                  # all < 17 (other strategies' triangles)
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
         spots = []
         for m in marks:
@@ -6043,7 +6173,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             col = _COL[kind][0] if side > 0 else _COL[kind][1]
             y = (lo - pad) if side > 0 else (hi + pad)          # long badge below the low, short above the high
             _pen = pg.mkPen(int(col[0] * 0.55), int(col[1] * 0.55), int(col[2] * 0.55), 235, width=1.1)
-            spots.append({"pos": (i, y), "symbol": "d", "size": _SZ[kind],
+            spots.append({"pos": (i, y), "symbol": ("s" if kind == "gd" else "d"), "size": _SZ[kind],
                           "brush": pg.mkBrush(*col, 220), "pen": _pen})
         if self._e1m_sph is None:
             self._e1m_sph = pg.ScatterPlotItem(pxMode=True, symbol="d", size=12)
@@ -6685,11 +6815,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """EXCLUSIVE badge selection: showing one ENGULF overlay's entry/TP/SL trade lines HIDES every other opened
         badge's (1h / 15m / 5m Engulf S/R), so only ONE position is on the chart at a time. Clicking the already-shown
         badge turns it OFF (nothing shown). Called by every strategy badge click."""
-        for d in (self._eng_lines_user, self._mom_lines_user, self._e5m_lines_user):
+        for d in (self._eng_lines_user, self._mom_lines_user, self._e5m_lines_user, self._ez_lines_user):
             d.clear()                          # drop every currently-shown position (this + all other overlays)
         if turn_on:
             active_user[key] = True            # ...then light up only the just-clicked one
-        self._draw_eng_lines(); self._draw_mom_lines(); self._draw_e5m_lines()
+        self._draw_eng_lines(); self._draw_mom_lines(); self._draw_e5m_lines(); self._draw_ez_lines()
 
     def _trade_lines(self, entries, user, cpool, lpool, zline) -> None:
         """Shared renderer: for each toggled-ON entry draw ENTRY (white dashed, price tag) + TP (green) + SL (red)
@@ -7028,7 +7158,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self.scanner_mode == "bucket_canvas" and (self.menu.layer_state("m10_engulfsr")
                     or self.menu.layer_state("m10_momentum") or self.menu.layer_state("m10_engulf5m")
                     or self.menu.layer_state("m10_breakout5m") or self.menu.layer_state("m10_engulf1m")
-                    or self.menu.layer_state("m10_reversal")
+                    or self.menu.layer_state("m10_reversal") or self.menu.layer_state("m10_easy1h")
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")):
                 _pf, _, _ = self._build_scanner_buckets()
                 try:
@@ -7043,6 +7173,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_momentum(_pf or [])  # 15m Engulfing S/R overlay (15m) — self-gated, fail-safe
                 except Exception:
                     self._clear_momentum()
+                try:
+                    self._draw_easy1h(_pf or [])    # 1h Easy 0.5% overlay (1h) — self-gated, fail-safe
+                except Exception:
+                    self._clear_easy1h()
                 try:
                     self._draw_engulf5m(_pf or [])  # 5m Absorption S/R overlay (5m) — self-gated, fail-safe
                 except Exception:
@@ -7066,6 +7200,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             else:
                 self._clear_engulfsr(); self._clear_momentum(); self._clear_engulf5m()
                 self._clear_breakout5m(); self._clear_engulf1m(); self._clear_sr(); self._clear_swinglvn()
+                self._clear_easy1h()
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -7133,6 +7268,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_momentum(filtered)  # 15m Momentum overlay (15m) — self-gated, fail-safe
             except Exception:
                 self._clear_momentum()
+            try:
+                self._draw_easy1h(filtered)    # 1h Easy 0.5% overlay (1h) — self-gated, fail-safe
+            except Exception:
+                self._clear_easy1h()
             try:
                 self._draw_engulf5m(filtered)  # 5m Absorption S/R overlay (5m) — self-gated, fail-safe
             except Exception:

@@ -145,6 +145,7 @@ _M10_STRATEGIES = [
     ("m10_reversal", "1h Reversal (R / G losanges)", False, True),  # 1h: causal reversal-candle shape (wide-range rejection); DESCRIPTIVE eyeball, not an edge
     ("m10_momentum", "15m Engulfing S/R (L / S losanges)", False, True),  # 15m: last-mit engulf; gold/blue tiers, tier-dependent skew
     ("m10_engulf5m", "5m Absorption S/R", False, True),  # 5m: continuation bias only, all triangles; engulf green/red/gold + absorb2 blue/orange
+    ("m10_easy1h", "1h Easy 0.5% (L / S triangles)", False, True),  # 1h: absorption+vw+swing scale-out; neon green/purple; fwd candidate
 ]
 
 # Order-flow scanner — the authoritative 10-mode bucket architecture (time chart removed, Phase B).

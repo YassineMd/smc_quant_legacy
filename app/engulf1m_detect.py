@@ -1,7 +1,9 @@
 """ABSORPTION CANDLE indicator — LIVE terminal overlay, ALL timeframes (hamburger key 'm10_engulf1m',
 shown in the dropdown as 'Absorption Candle indicator').
 
-A small LOSANGE badge on a candle, in one of three tiers (highest priority first — one badge per candle):
+A small badge on a candle, in one of four tiers (highest priority first — one badge per candle):
+  * GOLD SQUARE (kind 'gd'):       a "big engulf" — an ENGULFING candle (non-doji) whose BODY (|close-open|) is
+                                   BIGGER than each of the LAST 5 bars' FULL RANGE (high-low). No |A| gate.
   * CYAN (long) / MAGENTA (short): an ENGULFING candle (non-doji) with |A| >= 2  (extreme-absorption engulf).
   * BLUE (long) / ORANGE (short):  TWO consecutive SAME-SIDE candles, EACH with |A| >= 1 (badge on the 2nd).
   * GREEN (long) / RED (short):    an ENGULFING candle (non-doji) with |A| >= 1  (moderate-absorption engulf).
@@ -11,7 +13,7 @@ absorption extremes qualify — the sign of A is NOT the colour; the colour enco
 (bull vs bear). Descriptive marker, NOT a proven edge (no S/R / trend context, unlike the 5m/15m/1h engulf
 strategies). Works on any tf's buckets (absorption is per-bucket, tf-agnostic).
 
-detect(buckets, skip_last=False, absorp=None) -> [{i, side(+1/-1), kind('cm'|'ob'|'rg'), a}]
+detect(buckets, skip_last=False, absorp=None) -> [{i, side(+1/-1), kind('gd'|'cm'|'ob'|'rg'), a}]
 """
 from __future__ import annotations
 
@@ -49,6 +51,10 @@ def detect(buckets, skip_last=False, absorp=None):
                 absorp.append(_absorption.absorption(buckets, k)[0])
             except Exception:
                 absorp.append(None)
+    body = []; rng = []                                   # per-bar BODY |c-o| and full RANGE (h-l) for the GOLD big-bar test
+    for b in buckets:
+        _o, _c, _h, _l = _ohlc(b)
+        body.append(abs(_c - _o)); rng.append(_h - _l)
     out = []
     hi = (n - 1) if skip_last else n
     for i in range(1, hi):
@@ -58,13 +64,16 @@ def detect(buckets, skip_last=False, absorp=None):
         po, pc, ph, pl = _ohlc(buckets[i - 1])
         if po <= 0 or pc <= 0 or (ph - pl) <= 0:
             continue
-        a = absorp[i]
-        if a is None:
-            continue
-        aa = abs(a)
         eng = _is_engulf(o, c, po, pc)                    # +1 / -1 / 0
         eng_ok = eng != 0 and _non_doji(o, c, h, l)
         # --- tier ladder, first match wins (user's listed priority) ---
+        if eng_ok and i >= 5 and body[i] > max(rng[i - 5:i]):   # 0) GOLD SQUARE — big engulf: BODY > each of the last 5 bars' full range (h-l); no |A| gate
+            out.append(dict(i=i, side=eng, kind="gd", a=absorp[i]))
+            continue
+        a = absorp[i]
+        if a is None:                                     # the |A|-based tiers below need a valid absorption
+            continue
+        aa = abs(a)
         if eng_ok and aa >= T2:                           # 1) CYAN/MAGENTA — extreme-absorption engulf
             out.append(dict(i=i, side=eng, kind="cm", a=a))
             continue
