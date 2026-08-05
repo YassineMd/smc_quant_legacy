@@ -15,6 +15,7 @@ import study.mom_absorb_1h as MA
 from app import engulf1m_detect as E, structure, swing_lvn_detect as SW
 
 rng = np.random.default_rng(20260805)
+SWING_ON = os.environ.get("SWING_OFF") != "1"                 # SWING_OFF=1 -> drop the Price&CVD swing filter (discretionary)
 ABS_OR = os.environ.get("ABS_OR") == "1"                      # ABS_OR=1 -> add the heavy branch (absR >= ABS_HI)
 ABS_LO = float(os.environ.get("ABS_LO", "-0.5"))             # easy absorption cap: absR <= ABS_LO
 ABS_HI = float(os.environ.get("ABS_HI", "1.0"))             # heavy absorption floor: absR >= ABS_HI (only if ABS_OR)
@@ -47,19 +48,22 @@ sigs = []
 for m in marks:
     i = m["i"]; side = m["side"]
     _abs_ok = (absA[i] <= ABS_LO) or (ABS_OR and absA[i] >= ABS_HI)   # easy/momentum, + heavy/absorbed if ABS_OR
-    if not vw_ok(i) or not _abs_ok or swing_dir[i] == 0:
+    if not vw_ok(i) or not _abs_ok:
         continue
-    legs = SW.swing_lines(A[:i + 1])
-    dev = next((lg for lg in reversed(legs) if lg.get("developing")), None)
-    if dev is None:
-        continue
-    a = dev.get("A"); a4 = dev.get("A4")
-    if (a is not None and a > 0) or (a4 is not None and a4 > 0):
-        continue
-    legdir = 1 if dev.get("ends_high") else -1
-    eff = -legdir if dev.get("is_retr") else legdir
-    if side != eff:
-        continue
+    if SWING_ON:                                                     # Price&CVD swing filter (skip if SWING_OFF=1)
+        if swing_dir[i] == 0:
+            continue
+        legs = SW.swing_lines(A[:i + 1])
+        dev = next((lg for lg in reversed(legs) if lg.get("developing")), None)
+        if dev is None:
+            continue
+        a = dev.get("A"); a4 = dev.get("A4")
+        if (a is not None and a > 0) or (a4 is not None and a4 > 0):
+            continue
+        legdir = 1 if dev.get("ends_high") else -1
+        eff = -legdir if dev.get("is_retr") else legdir
+        if side != eff:
+            continue
     sigs.append((i, side, int(yr[i])))
 sigs.sort()
 

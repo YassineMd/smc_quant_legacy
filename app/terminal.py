@@ -336,11 +336,20 @@ class SubCandleWindow(QtWidgets.QDialog):
         # Right = step, Shift+Right = 1m micro-step, Ctrl+Shift+Right = 1m auto-play, Ctrl+Right = candle auto-play,
         # Left = step back. WindowShortcut context -> fires regardless of which child widget holds focus. This window
         # then follows the replay edge like any other. No-op unless the owner is in Replay Mode.
+        _MICRO_FNS = ("_replay_microstep", "_toggle_micro_autoplay")   # granularity follows THIS popup's timeframe
+
+        def _mk_replay_key(fn):
+            def _act():
+                if self._owner is None or not getattr(self._owner, "_replay_on", False):
+                    return
+                if fn in _MICRO_FNS:
+                    getattr(self._owner, fn)(self._sub_tf)     # Shift+Right / Ctrl+Shift+Right step in the popup's tf
+                else:
+                    getattr(self._owner, fn)()
+            return _act
         for _seq, _fn in (("Right", "_on_sel_right"), ("Left", "_on_sel_left"), ("Shift+Right", "_replay_microstep"),
                           ("Ctrl+Right", "_toggle_replay_autoplay"), ("Ctrl+Shift+Right", "_toggle_micro_autoplay")):
-            QtGui.QShortcut(QtGui.QKeySequence(_seq), self,
-                            activated=lambda fn=_fn: (getattr(self._owner, fn)()
-                                                      if getattr(self._owner, "_replay_on", False) else None))
+            QtGui.QShortcut(QtGui.QKeySequence(_seq), self, activated=_mk_replay_key(_fn))
         self.setWindowTitle(title)
         # own top-level window with a normal frame + min/max buttons + a corner grip, so it's freely resizable
         self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.WindowMinMaxButtonsHint
@@ -354,6 +363,7 @@ class SubCandleWindow(QtWidgets.QDialog):
         # passes the current tf's target so the live fill% = curr_vol / target_vol tracks as the bucket fills.
         self._tv = float(target_vol or 0.0)
         self._live = False; self._cs = 0.0; self._live_sig = None; self._nsub = -1
+        self._sub_tf = "1m"                              # LEFT-chart resolution inside the HTF bucket (1m / 5m / 15m)
         # "Display Previous" CONTINUOUS mode: once on, the 1m chart shows a continuous range [_range_start, live edge]
         # that grows forward WITHOUT resetting on a bucket close; each button click extends _range_start one HTF candle
         # back. _range_start is seeded to the opened bucket's start by the owner.
@@ -427,9 +437,26 @@ class SubCandleWindow(QtWidgets.QDialog):
             " padding:4px 12px; font-family:Consolas; font-size:11px;} QPushButton:hover{background:#242938;}")
         self._prev_btn.clicked.connect(lambda: self._owner._subcandle_prev(self)
                                        if self._owner is not None else None)
+        # 1m / 5m / 15m sub-timeframe toggle — switches the LEFT chart's resolution INSIDE the same HTF bucket (the
+        # right-pane footprint/stats stay on the clicked bucket). Exclusive; the active tf is highlighted.
+        self._tf_btns = {}
+        self._tf_btn_group = QtWidgets.QButtonGroup(self); self._tf_btn_group.setExclusive(True)
+        _tfbar = QtWidgets.QHBoxLayout(); _tfbar.setContentsMargins(0, 0, 0, 0); _tfbar.setSpacing(2)
+        for _t in ("1m", "5m", "15m"):
+            _tb = QtWidgets.QPushButton(_t); _tb.setCheckable(True); _tb.setCursor(QtCore.Qt.PointingHandCursor)
+            _tb.setStyleSheet(
+                "QPushButton{background:#1b1f2a; color:#9aa4b4; border:1px solid #2a2e39; border-radius:5px;"
+                " padding:4px 10px; font-family:Consolas; font-size:11px; font-weight:700;}"
+                " QPushButton:hover{background:#242938;}"
+                " QPushButton:checked{background:#2b6cff; color:#ffffff; border:1px solid #3b7bff;}")
+            _tb.clicked.connect(lambda _checked=False, tf=_t: (self._owner._subcandle_set_tf(self, tf)
+                                                              if self._owner is not None else None))
+            self._tf_btn_group.addButton(_tb); self._tf_btns[_t] = _tb; _tfbar.addWidget(_tb)
+        self._tf_btns["1m"].setChecked(True)
         self._draw_bar = DrawingToolbar(self)            # the SAME vector-drawing tools as the main chart, for the 1m plot
         _bar = QtWidgets.QHBoxLayout(); _bar.setContentsMargins(2, 2, 2, 0)
-        _bar.addWidget(self._prev_btn); _bar.addStretch(1); _bar.addWidget(self._draw_bar)
+        _bar.addWidget(self._prev_btn); _bar.addSpacing(6); _bar.addLayout(_tfbar)
+        _bar.addStretch(1); _bar.addWidget(self._draw_bar)
         _lv.addLayout(_bar); _lv.addWidget(self._left, 1)
         split.addWidget(_leftw)
         # DrawingController bound to THIS 1m plot, IN-MEMORY only (persist=False -> it neither loads the main chart's
@@ -542,8 +569,8 @@ class SubCandleWindow(QtWidgets.QDialog):
             self._hide_sub_indicators()                  # + Tier-3 indicator glyphs
             if self._item is not None:
                 self._item.setVisible(False)
-            self._msg.setText("1m sub-candles not on disk or in the live stream yet for this bucket.\n"
-                              "Fetching / waiting for the feed — close & re-open in a few seconds.")
+            self._msg.setText("%s sub-candles not on disk or in the live stream yet for this bucket.\n"
+                              "Fetching / waiting for the feed — try again in a few seconds." % getattr(self, "_sub_tf", "1m"))
             self._msg.setPos(0.0, 0.0); self._msg.show(); self._left.setXRange(-1, 1); self._left.setYRange(-1, 1)
             self._left.getAxis("bottom").set_starts([])   # clear time ticks while there's no data
             self._nsub = 0
@@ -598,7 +625,9 @@ class SubCandleWindow(QtWidgets.QDialog):
             self._item.setVisible(True); self._item.update_data(xs, o, h, l, c, brushes, pens, 0.72)
             highs, lows = h, l
         self._left.getAxis("bottom").set_starts([_f(s, "start_time") for s in subs])   # zoom-adaptive time ticks
-        self._left.setTitle("%d one-minute sub-candles%s" % (m, "   · LIVE" if self._live else ""),
+        _tflabel = {"1m": "one-minute", "5m": "five-minute", "15m": "fifteen-minute"}.get(
+            getattr(self, "_sub_tf", "1m"), "sub")
+        self._left.setTitle("%d %s sub-candles%s" % (m, _tflabel, "   · LIVE" if self._live else ""),
                             color="#9aa0a6", size="9pt")
         if not self._fitted:                             # first render of THIS bucket -> fit the view ONCE, then FOLLOW
             self._left.autoRange()                       # (a NEW bucket resets _fitted, so it re-fits; same bucket follows)
@@ -870,10 +899,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._micro_autoplay_timer.timeout.connect(self._micro_autoplay_tick)
         # MICRO-STEP (Shift+Right, recon replay only): grow the NEXT higher-tf candle one 1m constituent at a time,
         # so a higher-tf bar builds up minute-by-minute (approx real conditions) instead of appearing whole. State:
-        self._micro_k = 0                  # # of 1m constituents of the next bucket currently revealed (0 = normal)
-        self._micro_subs = None            # cached ascending 1m constituents of the next bucket
+        self._micro_k = 0                  # # of sub-candles of the next bucket currently revealed (0 = normal)
+        self._micro_subs = None            # cached ascending sub-candles of the next bucket (at _micro_subs_tf)
         self._micro_next = None            # the true (full) next higher-tf bucket the partial snaps to on completion
         self._micro_edge = None            # the _replay_edge_t this micro session is anchored at (edge move => re-arm)
+        self._micro_tf = "1m"              # micro-step GRANULARITY — 1m from the main chart, the popup's tf when it drives
+        self._micro_subs_tf = None         # the tf _micro_subs was fetched at (re-arm when _micro_tf changes)
         # ABSOLUTE bucket index: add this to a filtered-local idx to get the bucket's permanent history.db id
         # (stable all-time index; first bucket ever saved = 1). 0 = legacy local idx (daemon hasn't shipped
         # total_closed yet). Recomputed in _build_scanner_buckets.
@@ -1212,13 +1243,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._eng_entries = []
         self._eng_ln_pool = []; self._eng_lnlbl_pool = []; self._eng_lines_user = {}
         # 1h Easy 0.5% overlay (m10_easy1h, 1h only) — neon green/purple triangle L/S badges; click -> entry/SL/TP1/TP2 lines.
-        # FORWARD CANDIDATE (absorption+vw>=1+absR<=-0.3+swing-aligned scale-out; in-sample, CI incl 0). app/easy1h_detect.
+        # FORWARD CANDIDATE (absorption+vw>=1+absR<=-0.3, candle side; swing filter is discretionary; in-sample, CI incl 0). app/easy1h_detect.
         self._ez_sph = None                      # ScatterPlotItem of triangle badges
         self._ez_sig = None; self._ez_drawn = False
         self._ez_entries = []
         self._ez_ln_pool = []; self._ez_lnlbl_pool = []; self._ez_lines_user = {}
-        self._ez_swing_cache = {}                # per-bar causal swing state (keyed by start_time; closed bars only)
-        self._ez_win_front = None                # loaded-window left-edge start_time — cache is valid only while stable
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
         self._mom_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
@@ -2475,12 +2504,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             dlg = SubCandleWindow(self, b, subs, top, config.FOOTPRINT_IMB_ER_MULT, title, _tv)
             dlg._live = _live; dlg._cs = cs         # live-update this popup while its bucket keeps forming
+            dlg._ce = ce                             # bucket end — the 1m/5m/15m switch re-fetches [cs, ce] at the new tf
+            dlg._htf_candle = b; dlg._htf_top = top  # the clicked HTF bucket + its stats (right pane; tf-switch keeps them)
             dlg._range_start = cs                    # "Display Previous" extends the continuous range back from here
             if not hasattr(self, "_subcandle_windows"):
                 self._subcandle_windows = []
             self._subcandle_windows = [w for w in self._subcandle_windows if w.isVisible()]  # drop closed refs
             self._subcandle_windows.append(dlg)     # keep a ref so the non-modal window isn't GC'd
             dlg.show(); dlg.raise_()
+            try:
+                if not self._in_recon_replay():               # live workers are unused in recon replay (recon is the source)
+                    self._sub_worker("5m"); self._sub_worker("15m")   # pre-warm so a later 5m/15m switch has data ready
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -2500,21 +2536,38 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if a_start <= 0.0:
             return
         _tv = float((self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL)   # snapshot-level target
-        subs = []
-        w1 = getattr(self, "worker_1m", None)
-        if w1 is not None:
-            try:
-                s1 = w1.snapshot() or {}
-                cb = s1.get("closed_buckets") or []; a1 = s1.get("active_bucket") or {}
-                subs = [x for x in cb if float(x.get("start_time", 0.0) or 0.0) >= a_start]
-                if a1 and float(a1.get("start_time", 0.0) or 0.0) >= a_start:
-                    subs = subs + [a1]                     # the developing 1m -> the last candle grows live
-                subs.sort(key=lambda x: float(x.get("start_time", 0.0) or 0.0))
-            except Exception:
-                subs = []
-        sig = (len(subs), round(float(act.get("curr_vol", 0.0) or 0.0)),
-               round(float((subs[-1] if subs else {}).get("curr_vol", 0.0) or 0.0)))
+        import time as _t
+        _now_ts = _t.time()
+        def _live_subs(tf):                                  # live constituents of the forming bucket since a_start
+            out = []
+            if tf != "1m":                                   # 5m/15m: seed from the ARCHIVE so a just-created (cold)
+                try:                                         # worker never blanks the chart; the worker then fills the tail
+                    out = [x for x in (self._fetch_sub_window(a_start, _now_ts + 90.0, tf) or [])
+                           if float(x.get("start_time", 0.0) or 0.0) >= a_start]
+                except Exception:
+                    out = []
+            wk = self._sub_worker(tf)
+            if wk is not None:
+                try:
+                    s1 = wk.snapshot() or {}
+                    cb = s1.get("closed_buckets") or []; a1 = s1.get("active_bucket") or {}
+                    have = {round(float(x.get("start_time", 0.0) or 0.0), 1) for x in out}
+                    for x in (cb + ([a1] if a1 else [])):    # developing sub-candle -> the last candle grows live
+                        xs = float(x.get("start_time", 0.0) or 0.0)
+                        if x and xs >= a_start and round(xs, 1) not in have:
+                            out.append(x); have.add(round(xs, 1))
+                except Exception:
+                    pass
+            out.sort(key=lambda x: float(x.get("start_time", 0.0) or 0.0))
+            return out
+        subs_by_tf = {}                                      # per popup timeframe (usually all 1m; switch adds 5m/15m)
         for w in live:
+            _wtf = getattr(w, "_sub_tf", "1m")
+            if _wtf not in subs_by_tf:
+                subs_by_tf[_wtf] = _live_subs(_wtf)
+            subs = subs_by_tf[_wtf]
+            sig = (_wtf, len(subs), round(float(act.get("curr_vol", 0.0) or 0.0)),
+                   round(float((subs[-1] if subs else {}).get("curr_vol", 0.0) or 0.0)))
             if abs(getattr(w, "_cs", 0.0) - a_start) > 0.5:
                 # the popup's 1h bucket CLOSED and a NEW one is forming -> AUTO-ADVANCE this live popup onto the new
                 # live candle (no more close/re-open). Re-target its start, reset the one-time fit + sig cache, retitle.
@@ -2567,24 +2620,41 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         cs = float(b.get("start_time", 0.0) or 0.0); ce = float(b.get("end_time", 0.0) or 0.0)
         if cs <= 0.0:
             return
-        micro = (self._micro_k > 0 and self._micro_subs and self._micro_edge == self._replay_edge_t)
-        if micro:
-            subs = list(self._micro_subs[:self._micro_k])    # only the 1m revealed so far -> the candle grows live
-        else:
-            _ce = ce if ce > cs else cs + 24 * 3600.0
-            try:
-                subs = (recon_replay.window_by_time("1m", cs, _ce) if self._in_recon_replay()
-                        else archive.subbuckets("1m", cs, _ce)) or []
-            except Exception:
-                subs = []
-            subs = [s for s in subs if cs <= float(s.get("start_time", 0.0) or 0.0) < _ce]
+        _ce = ce if ce > cs else cs + 24 * 3600.0
+        micro_active = bool(self._micro_k > 0 and self._micro_subs and self._micro_edge == self._replay_edge_t)
+        _micro_tf_cur = getattr(self, "_micro_subs_tf", None) or "1m"   # the tf the micro-reveal is stepping in
         _tv = float((self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL)
         try:
             top = self._fp_top_html(b, filtered)
         except Exception:
             top = ""
-        sig = (round(cs, 3), len(subs), round(float(b.get("curr_vol", 0.0) or 0.0), 3), int(self._micro_k))
+
+        _rev_bound = -1.0
+        if micro_active:                                     # how far in time the micro-reveal has progressed
+            _rev = self._micro_subs[:self._micro_k]
+            if _rev:
+                _rev_bound = float(_rev[-1].get("end_time", 0.0) or 0.0) or float(_rev[-1].get("start_time", 0.0) or 0.0)
+
+        def _replay_subs(tf):                                # edge candle's constituents at timeframe tf (recon/archive)
+            if micro_active and tf == _micro_tf_cur:
+                return list(self._micro_subs[:self._micro_k])   # the popup AT the step granularity -> the exact revealed set
+            try:
+                out = (recon_replay.window_by_time(tf, cs, _ce) if self._in_recon_replay()
+                       else archive.subbuckets(tf, cs, _ce)) or []
+            except Exception:
+                out = []
+            out = [s for s in out if cs <= float(s.get("start_time", 0.0) or 0.0) < _ce]
+            if micro_active:                                 # other tfs follow the SAME reveal: only sub-candles started so far
+                out = [s for s in out if float(s.get("start_time", 0.0) or 0.0) < _rev_bound]
+            return out
+        subs_by_tf = {}                                      # per popup timeframe (usually all 1m; switch adds 5m/15m)
         for w in wins:
+            _wtf = getattr(w, "_sub_tf", "1m")
+            if _wtf not in subs_by_tf:
+                subs_by_tf[_wtf] = _replay_subs(_wtf)
+            subs = subs_by_tf[_wtf]
+            sig = (_wtf, round(cs, 3), len(subs), round(float(b.get("curr_vol", 0.0) or 0.0), 3),
+                   int(self._micro_k))
             if getattr(w, "_replay_sig", None) == sig:
                 continue
             w._replay_sig = sig
@@ -2646,6 +2716,66 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
+    def _subcandle_set_tf(self, w, tf: str) -> None:
+        """1m / 5m / 15m button on a sub-candle popup: switch which timeframe its LEFT chart renders (the right-pane
+        footprint/stats stay on the clicked HTF bucket). Forces a full re-fit + re-fetch of the popup's CURRENT range
+        at the new tf; works the same in live, replay and 'Display Previous' continuous mode."""
+        if tf not in ("1m", "5m", "15m") or getattr(w, "_sub_tf", "1m") == tf:
+            return
+        w._sub_tf = tf
+        try:
+            _b = (getattr(w, "_tf_btns", {}) or {}).get(tf)
+            if _b is not None and not _b.isChecked():
+                _b.setChecked(True)
+        except Exception:
+            pass
+        w._fitted = False                                    # re-fit to the new resolution
+        w._live_sig = None; w._replay_sig = None; w._cont_sig = None; w._nsub = -1   # invalidate every refresh cache
+        try:
+            if getattr(w, "_continuous", False):
+                w._cont_force = True
+                self._refresh_continuous_subcandle(w)
+            elif self._replay_on:
+                self._tick_subcandles_replay()               # re-fetch the CURRENT replay edge at the new tf (not stale _ce)
+            elif getattr(w, "_live", False):
+                self._tick_subcandles()                      # re-fetch the live forming bucket at the new tf
+            else:
+                self._resend_subcandle(w)                    # static scrolled-back candle -> fetch [_cs, _ce] at the new tf
+        except Exception:
+            pass
+
+    def _resend_subcandle(self, w) -> None:
+        """Re-fetch a NON-continuous popup's opened bucket window [_cs, _ce] at its current _sub_tf and re-render the
+        left chart (right-pane footprint/stats are the HTF bucket's, so they're carried unchanged). Used by the tf
+        switch; the per-tick refreshers keep it current afterwards. Live forming bucket also merges the live tf stream."""
+        cs = float(getattr(w, "_cs", 0.0) or 0.0)
+        ce = float(getattr(w, "_ce", 0.0) or 0.0)
+        if cs <= 0.0:
+            return
+        if ce <= cs:
+            ce = cs + 24 * 3600.0
+        tf = getattr(w, "_sub_tf", "1m")
+        subs = self._fetch_sub_window(cs, ce, tf)
+        if getattr(w, "_live", False) and not self._replay_on and not self._in_recon_replay():
+            wk = self._sub_worker(tf)                        # merge the live tf stream for the still-forming bucket
+            if wk is not None:
+                try:
+                    s1 = wk.snapshot() or {}
+                    have = {round(float(x.get("start_time", 0.0) or 0.0), 1) for x in subs}
+                    for x in ((s1.get("closed_buckets") or []) + [s1.get("active_bucket") or {}]):
+                        xs = float(x.get("start_time", 0.0) or 0.0)
+                        if x and cs <= xs < ce and round(xs, 1) not in have:
+                            subs.append(x); have.add(round(xs, 1))
+                except Exception:
+                    pass
+        subs = [s for s in subs if cs - 0.5 <= float(s.get("start_time", 0.0) or 0.0) < ce]
+        subs.sort(key=lambda x: float(x.get("start_time", 0.0) or 0.0))
+        _tv = float((self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL)
+        try:
+            w.refresh(getattr(w, "_htf_candle", {}) or {}, subs, getattr(w, "_htf_top", "") or "", _tv)
+        except Exception:
+            pass
+
     def _refresh_continuous_subcandle(self, w) -> None:
         """Refresh a CONTINUOUS ('Display Previous') 1m window: render every 1m from w._range_start to the current live/
         replay edge, growing forward without resetting on a bucket close. Footprint/stats track the edge candle."""
@@ -2665,9 +2795,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             edge = (self._last_snap or {}).get("active_bucket") or {}
             import time as _t
             edge_t = _t.time()
-        subs = self._fetch_1m_window(rs, edge_t + 90.0)
-        if not self._replay_on and not self._in_recon_replay():   # MERGE the live 1m stream (recent closed + developing)
-            w1 = getattr(self, "worker_1m", None)               # with the archive, which lags the last ~hour
+        _tf = getattr(w, "_sub_tf", "1m")
+        subs = self._fetch_sub_window(rs, edge_t + 90.0, _tf)
+        if not self._replay_on and not self._in_recon_replay():   # MERGE the live tf stream (recent closed + developing)
+            w1 = self._sub_worker(_tf)                           # with the archive, which lags the last ~hour
             if w1 is not None:
                 try:
                     s1 = w1.snapshot() or {}
@@ -2682,7 +2813,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         subs.sort(key=lambda x: float(x.get("start_time", 0.0) or 0.0))
         if not subs:
             return
-        sig = (round(rs, 3), len(subs), round(float((subs[-1] or {}).get("curr_vol", 0.0) or 0.0), 3))
+        sig = (_tf, round(rs, 3), len(subs), round(float((subs[-1] or {}).get("curr_vol", 0.0) or 0.0), 3))
         if getattr(w, "_cont_sig", None) == sig and not getattr(w, "_cont_force", False):
             return
         w._cont_sig = sig; w._cont_force = False
@@ -2719,18 +2850,43 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sr5m_cache = (sig, levels)
         return levels
 
-    def _fetch_1m_window(self, cs: float, ce: float) -> list:
+    def _sub_worker(self, tf: str):
+        """Live PipeClientWorker for a sub-candle timeframe. worker_1m always exists (started at open); the 5m/15m
+        workers are created LAZILY on first use — the daemon streams every timeframe, so this mirrors worker_4h/
+        worker_1m (no baseline, live catch-up only). Cached on self and reused; returns None on failure."""
+        if tf == "1m":
+            return getattr(self, "worker_1m", None)
+        cache = getattr(self, "_sub_workers", None)
+        if cache is None:
+            cache = self._sub_workers = {}
+        w = cache.get(tf)
+        if w is not None:
+            return w
+        try:
+            w = PipeClientWorker(tf=tf); w.start(); cache[tf] = w
+            return w
+        except Exception:
+            return None
+
+    def _fetch_sub_window(self, cs: float, ce: float, tf: str = "1m") -> list:
+        """Sub-candles of timeframe `tf` with start_time in [cs, ce): recon in replay, else the cold archive, else the
+        live `tf` stream (worker_1m / lazily-created worker_5m|15m). Same source order the 1m popup always used."""
         try:
             if self._in_recon_replay():
-                return recon_replay.window_by_time("1m", cs, ce) or []
-            subs = archive.subbuckets("1m", cs, ce) or []
-            if not subs and getattr(self, "worker_1m", None) is not None:
-                cb = (self.worker_1m.snapshot() or {}).get("closed_buckets") or []
-                subs = sorted((x for x in cb if cs <= float(x.get("start_time", 0.0) or 0.0) < ce),
-                              key=lambda x: float(x.get("start_time", 0.0) or 0.0))
+                return recon_replay.window_by_time(tf, cs, ce) or []
+            subs = archive.subbuckets(tf, cs, ce) or []
+            if not subs:
+                wk = self._sub_worker(tf)
+                if wk is not None:
+                    cb = (wk.snapshot() or {}).get("closed_buckets") or []
+                    subs = sorted((x for x in cb if cs <= float(x.get("start_time", 0.0) or 0.0) < ce),
+                                  key=lambda x: float(x.get("start_time", 0.0) or 0.0))
             return subs
         except Exception:
             return []
+
+    def _fetch_1m_window(self, cs: float, ce: float) -> list:
+        return self._fetch_sub_window(cs, ce, "1m")     # 1m-specific callers (finish-strength / 1m-ER readouts)
 
     @staticmethod
     def _er_from_subs(subs) -> "float | None":
@@ -5713,9 +5869,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._trade_lines(self._eng_entries, self._eng_lines_user, self._eng_ln_pool, self._eng_lnlbl_pool, 29)
 
     # 1h Easy 0.5% overlay (hamburger m10_easy1h, 1h ONLY) — FORWARD CANDIDATE, self-gated, fail-safe.
-    # Neon TRIANGLE L/S badge: green up long / purple down short. Absorption badge + ease vw%>=1 + absR<=-0.3 +
-    # swing-aligned (retrace->opposite) + swing-A/A4<=0. Scale-out 50% TP1 +0.5% / 50% TP2 +1.0%, SL 0.1% beyond
-    # candle, BE-trail after TP1. Click a badge -> its entry/SL/TP1/TP2 trade lines. NOT a proven edge (in-sample, CI incl 0).
+    # Neon TRIANGLE L/S badge: green up long / purple down short. Absorption badge + ease vw%>=1 + absR<=-0.3, take
+    # candle side (Price&CVD swing filter is applied DISCRETIONARILY by the operator, not here). Scale-out 50% TP1
+    # +0.5% / 50% TP2 +1.0%, SL 0.1% beyond candle, BE-trail after TP1. Click a badge -> its entry/SL/TP1/TP2 trade
+    # lines. NOT a proven edge (in-sample, CI incl 0).
     def _clear_easy1h(self) -> None:
         if self._ez_sph is not None:
             self._ez_sph.setVisible(False)
@@ -5725,16 +5882,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ez_sig = None; self._ez_drawn = False
 
     def _draw_easy1h(self, filtered) -> None:
-        """Neon triangle L/S badges for the 1h Easy 0.5% candidate (app/easy1h_detect). 1h ONLY. The swing state is
-        computed CAUSALLY per candidate (swing_lines over buckets[:i+1]); a persistent per-bar cache keeps that a
-        one-time cost per closed bar. Click a badge -> its entry/SL/TP1/TP2 trade lines."""
+        """Neon triangle L/S badges for the 1h Easy 0.5% candidate (app/easy1h_detect). 1h ONLY. Absorption badge +
+        vw>=1 + absR<=-0.3, take candle side (swing filter applied by eye, not here). Click a badge -> entry/SL/TP1/TP2."""
         if (not self.menu.layer_state("m10_easy1h") or self.scanner_mode != "bucket_canvas"
                 or self._tf != "1h"):
             self._clear_easy1h(); return
         n = len(filtered)
-        _wf = float(filtered[0].get("start_time", 0.0) or 0.0) if n else 0.0
-        if _wf != self._ez_win_front:                                # window rebuilt -> cached causal prefixes invalid
-            self._ez_swing_cache.clear(); self._ez_win_front = _wf
         _forming = bool(getattr(self, "_mmx_last_forming", True))
         _sig = (n, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
         if _sig == self._ez_sig and self._ez_drawn:
@@ -5743,7 +5896,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _fi = (n - 1) if _forming else -1                            # forming (unconfirmed) bucket -> faded preview
         try:
             from app import easy1h_detect
-            entries = easy1h_detect.detect(filtered, skip_last=False, swing_cache=self._ez_swing_cache)
+            entries = easy1h_detect.detect(filtered, skip_last=False)
         except Exception:
             self._clear_easy1h(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
@@ -8590,11 +8743,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._replay_autoplay_timer.isActive():
             self._replay_autoplay_timer.stop()
 
-    def _toggle_micro_autoplay(self) -> None:
-        """Ctrl+Shift+Right in Replay Mode: START auto-playing the MINUTE — reveal one 1m constituent of the developing
-        candle every tick (the auto-play version of Shift+Right). Ctrl+Shift+Right again, or a manual step, STOPS it."""
+    def _toggle_micro_autoplay(self, tf: str = "1m") -> None:
+        """Ctrl+Shift+Right in Replay Mode: START auto-playing the developing candle one SUB-CANDLE at a time (the
+        auto-play version of Shift+Right). Granularity `tf` = 1m from the main chart, or the driving popup's timeframe
+        (5m/15m). Ctrl+Shift+Right again, or a manual step, STOPS it."""
         if not self._replay_on:
             return
+        if tf in ("1m", "5m", "15m") and tf != self._micro_tf:
+            self._micro_tf = tf; self._micro_reset()          # granularity changed -> re-arm at the new tf
         if self._micro_autoplay_timer.isActive():
             self._micro_stop_autoplay()
         else:
@@ -8615,8 +8771,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._micro_autoplay_timer.stop()
 
     def _micro_reset(self) -> None:
-        """Clear any in-progress 1m micro-grow (back to whole-bucket stepping)."""
+        """Clear any in-progress micro-grow (back to whole-bucket stepping)."""
         self._micro_k = 0; self._micro_subs = None; self._micro_next = None; self._micro_edge = None
+        self._micro_subs_tf = None
 
     def _micro_next_bucket(self):
         """The first recon bucket whose close is strictly AFTER the cursor — the one a micro-grow builds up."""
@@ -8662,11 +8819,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             b["poc_price"] = float(max(lv.items(), key=lambda kv: kv[1]["b"] + kv[1]["s"])[0])
         return b
 
-    def _replay_microstep(self) -> None:
-        """Shift+Right in Replay Mode (manual entry): reveal ONE more 1m constituent of the developing candle. Halts any
-        running auto-play (candle OR micro), then does one micro-step."""
+    def _replay_microstep(self, tf: str = "1m") -> None:
+        """Shift+Right in Replay Mode (manual entry): reveal ONE more sub-candle of the developing candle. Granularity
+        `tf` = 1m from the main chart, or the driving popup's timeframe (5m/15m). Halts any running auto-play (candle
+        OR micro), then does one micro-step."""
         if not self._replay_on or self._replay_edge_t is None:
             return
+        if tf in ("1m", "5m", "15m") and tf != self._micro_tf:
+            self._micro_tf = tf; self._micro_reset()          # granularity changed -> re-arm at the new tf
         self._replay_stop_autoplay()
         self._micro_stop_autoplay()             # a manual micro-step halts Ctrl+Shift+Right micro auto-play
         self._micro_step_once()
@@ -8680,17 +8840,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         if not self._in_recon_replay():
             self._advance_replay(1); return
-        if self._micro_k == 0 or self._micro_edge != self._replay_edge_t or not self._micro_subs:
+        if (self._micro_k == 0 or self._micro_edge != self._replay_edge_t
+                or self._micro_subs_tf != self._micro_tf or not self._micro_subs):
             nb = self._micro_next_bucket()
             if nb is None:
                 return                                            # at the recon wall -> nothing left to grow
             cs = float(nb.get("start_time", 0.0) or 0.0); ce = float(nb.get("end_time", 0.0) or 0.0)
             try:
-                subs = recon_replay.window_by_time("1m", cs, ce) or []
+                subs = recon_replay.window_by_time(self._micro_tf, cs, ce) or []   # 1m / 5m / 15m granularity
             except Exception:
                 subs = []
             subs = [s for s in subs if cs <= float(s.get("start_time", 0.0) or 0.0) < ce]
-            self._micro_subs = subs; self._micro_next = nb; self._micro_edge = self._replay_edge_t; self._micro_k = 0
+            self._micro_subs = subs; self._micro_subs_tf = self._micro_tf
+            self._micro_next = nb; self._micro_edge = self._replay_edge_t; self._micro_k = 0
         self._micro_k += 1
         if not self._micro_subs or self._micro_k >= len(self._micro_subs):
             self._micro_reset()                                   # last constituent (or none) -> snap to the true bucket
@@ -11685,6 +11847,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.worker_1m.stop()
         except Exception:
             pass
+        for _sw in (getattr(self, "_sub_workers", None) or {}).values():   # lazily-created 5m/15m sub-popup workers
+            try:
+                _sw.stop()
+            except Exception:
+                pass
         if self in _OPEN_WINDOWS:
             _OPEN_WINDOWS.remove(self)
         super().closeEvent(event)
