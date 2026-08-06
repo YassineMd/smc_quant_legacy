@@ -146,6 +146,7 @@ _M10_STRATEGIES = [
     ("m10_momentum", "15m Engulfing S/R (L / S losanges)", False, True),  # 15m: last-mit engulf; gold/blue tiers, tier-dependent skew
     ("m10_engulf5m", "5m Absorption S/R", False, True),  # 5m: continuation bias only, all triangles; engulf green/red/gold + absorb2 blue/orange
     ("m10_easy1h", "1h Easy 0.5% (L / S triangles)", False, True),  # 1h: absorption+vw+swing scale-out; neon green/purple; fwd candidate
+    ("m10_nyrangebreak", "NY Range-break (brB / brS · 1h·15m)", False, True),  # 1h/15m: 2-5pm range box + first close-break label; SHORT side alpha in-sample (P=0.003)
 ]
 
 # Order-flow scanner — the authoritative 10-mode bucket architecture (time chart removed, Phase B).
@@ -482,9 +483,22 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_sr_subtoggles(sec)           # S/R sub-toggle: Area (bands) vs lines-only
             if key == "m10_swinglvn":
                 self._build_svl_subtoggles(sec)          # RCLI sub-toggles: LVA zones / swing lines
+            if key == "m10_session":
+                self._build_session_subtoggles(sec)      # Session sub-toggle: VP lines (VAH/VAL/POC/LVN) on/off
             if key == "m10_stats":
                 self._build_stats_substats(sec)          # per-stat on/off for the Mode-10 stats box
         return sec
+
+    def _build_session_subtoggles(self, section) -> None:
+        """Session Filter sub-toggle: 'VP lines' ON -> draw the per-session VAH/VAL + buy/sell-POC + LVN volume-profile
+        lines; OFF -> just the faint session box + name label. An m10_ key (persists + reads via layer_state); the
+        master m10_session still gates the whole indicator."""
+        cb = QtWidgets.QCheckBox("· VP lines")
+        cb.setChecked(True)                              # default ON -> the current VP-line look
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.toggled.connect(lambda on, k="m10_sess_vp": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_sess_vp"] = cb
+        section.addWidget(cb)
 
     def _build_stats_substats(self, section) -> None:
         """Per-stat toggles under the Stats Box (Candles) — each row of the Mode-10 hover/forming stats readout on/off

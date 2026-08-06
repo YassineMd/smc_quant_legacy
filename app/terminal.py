@@ -1293,6 +1293,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ez_sig = None; self._ez_drawn = False
         self._ez_entries = []
         self._ez_ln_pool = []; self._ez_lnlbl_pool = []; self._ez_lines_user = {}
+        # 1h NY Range-break overlay (m10_nyrangebreak, 1h only) — draws the 2-5pm range box + rhi/rlo edges, marks the
+        # first 1h close beyond it with a green 'brB' (long) / red 'brS' (short) text label. app/ny_rangebreak_detect.
+        self._nyrb_box_pool = []                 # QGraphicsRectItem — faint range fill
+        self._nyrb_line_pool = []                # PlotCurveItem — rhi/rlo edge lines
+        self._nyrb_lbl_pool = []                 # TextItem — 'brB'/'brS' break labels (text only, no triangle)
+        self._nyrb_prob_pool = []                # TextItem — 'brB x% - brS y%' break-side probability readout
+        self._nyrb_ranges = []; self._nyrb_data_sig = None   # cached detect() output (recompute only on data change)
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
         self._mom_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
@@ -2223,6 +2230,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif key == "m10_session":
             if not on:                              # session boxes -> hide now (draw-gate re-adds on ON)
                 self._hide_session()
+        elif key == "m10_nyrangebreak":
+            self._nyrb_data_sig = None              # NY Range-break toggled -> force a re-detect on the next repaint
+            if not on:
+                self._clear_nyrb()                  # off -> tear the range box + brB/brS badges down now
         elif key == "m10_breakout5m":
             self._brk5m_sig = None; self._sel_sig = None   # 5m Breakout toggled -> re-run the overlay draw
             if not on:
@@ -4815,7 +4826,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-8)
             self.vb.addItem(_rc, ignoreBounds=True); self._sess_rect_pool.append(_rc)
         _rc = self._sess_rect_pool[used]
-        _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(*rgb, 38))
+        _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(*rgb, 15))   # faint tint over the FULL session high->low range
         return _rc
 
     def _sess_line(self, used):                               # pooled dashed high/low/avg line
@@ -4843,9 +4854,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Session Filter (m10_session): one VOLUME-PROFILE-ZONES set per UTC calendar-day session (Tokyo / London /
         New York). The session's footprint is aggregated over its hour window and drawn as the 'VP Zones' levels —
         VAH/VAL white + buy-POC green / sell-POC red / LVN purple dashed — spanning the session's time inside a faint
-        session-tinted value-area box with a name label. Culled to the viewport."""
+        session-tinted box that covers the FULL candle high->low range (not just the value area) with a name label.
+        Culled to the viewport."""
         if not self.menu.layer_state("m10_session") or not buckets:
             self._hide_session(); return
+        _vp_on = self.menu.layer_state("m10_sess_vp")         # VP-lines sub-toggle (VAH/VAL/POC/LVN); the box + label stay regardless
         from app import swing_lvn_detect                       # value-area / VP-zone levels (same as the 'VP Zones' mode)
         n = len(buckets)
         hrs = [-1] * n; dord = [-1] * n                       # per-bucket UTC hour + date-ordinal (one pass)
@@ -4864,6 +4877,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     j += 1
                 if not (x[j] < vx0 - 1.0 or x[i] > vx1 + 1.0):  # cull to the visible viewport
                     seg = buckets[i:j + 1]
+                    _hs = [v for v in (float(b.get("high", 0.0) or 0.0) for b in seg) if v > 0]   # session high/low span
+                    _ls = [v for v in (float(b.get("low", 0.0) or 0.0) for b in seg) if v > 0]
+                    _shi = max(_hs) if _hs else 0.0; _slo = min(_ls) if _ls else 0.0
                     prof = {}                                 # aggregate the SESSION footprint -> {price: {'b','s'}}
                     for b in seg:
                         for ps, vv in (b.get("levels") or {}).items():
@@ -4884,21 +4900,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if va:
                         x0 = x[i] - 0.5; x1 = x[j] + 0.5
                         vah = va.get("vah"); val = va.get("val")
-                        if vah is not None and val is not None and vah > val:   # faint session-tinted value-area box
-                            self._sess_rect(ur, rgb).setRect(x0, val, max(1e-9, x1 - x0), max(1e-9, vah - val))
+                        if _shi > _slo > 0:                    # faint session box spans the FULL candle high->low range
+                            self._sess_rect(ur, rgb).setRect(x0, _slo, max(1e-9, x1 - x0), max(1e-9, _shi - _slo))
                             self._sess_rect_pool[ur].setVisible(True); ur += 1
-                        for _key, _crgb, _dash in (("vah", rgb, None), ("val", rgb, None),   # VAH/VAL in the session colour
-                                                   ("buy_poc", (78, 203, 141), [3.0, 6.0]),
-                                                   ("sell_poc", (255, 82, 82), [3.0, 6.0]),
-                                                   ("lvn", (178, 70, 255), [3.0, 6.0])):
-                            _y = va.get(_key)
-                            if _y is None or _y != _y:        # skip missing / NaN levels
-                                continue
-                            _pn = pg.mkPen(*_crgb, 225, width=1.2); _pn.setCosmetic(True)
-                            if _dash:
-                                _pn.setDashPattern(_dash)
-                            _ln = self._sess_line(ul); ul += 1
-                            _ln.setData([x0, x1], [float(_y), float(_y)]); _ln.setPen(_pn); _ln.setVisible(True)
+                        if _vp_on:                            # VP-lines sub-toggle (m10_sess_vp) — box stays either way
+                            for _key, _crgb, _dash in (("vah", rgb, None), ("val", rgb, None),   # VAH/VAL in the session colour
+                                                       ("buy_poc", (78, 203, 141), [3.0, 6.0]),
+                                                       ("sell_poc", (255, 82, 82), [3.0, 6.0]),
+                                                       ("lvn", (178, 70, 255), [3.0, 6.0])):
+                                _y = va.get(_key)
+                                if _y is None or _y != _y:    # skip missing / NaN levels
+                                    continue
+                                _pn = pg.mkPen(*_crgb, 225, width=1.2); _pn.setCosmetic(True)
+                                if _dash:
+                                    _pn.setDashPattern(_dash)
+                                _ln = self._sess_line(ul); ul += 1
+                                _ln.setData([x0, x1], [float(_y), float(_y)]); _ln.setPen(_pn); _ln.setVisible(True)
                         _lb = self._sess_lbl(ut); ut += 1
                         _lb.setColor(pg.mkColor(*rgb)); _lb.setText(name)
                         _lb.setPos(x0, float(val) if val is not None else float(vah)); _lb.setVisible(True)
@@ -6016,6 +6033,106 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             cpool[j].setVisible(False)
         for j in range(ut, len(lpool)):
             lpool[j].setVisible(False)
+
+    # NY RANGE-BREAK overlay (hamburger m10_nyrangebreak, 1h + 15m) — self-gated, fail-safe. Drawn in the main candle
+    # renderer beside the session boxes, so it culls to the viewport and follows pans. Draws the NY 2-5pm (13-16 UTC)
+    # range as a faint neutral box + dashed rhi/rlo edges projected to the break, and marks the first 1h close beyond
+    # the range with a green 'brB' (long) / red 'brS' (short) TEXT label. SHORT side passed a random-timed-short null
+    # in-sample (P=0.003). app/ny_rangebreak_detect.
+    def _nyrb_box(self, used, rgb):                               # pooled faint range fill (behind candles)
+        if used >= len(self._nyrb_box_pool):
+            _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-8)
+            self.vb.addItem(_rc, ignoreBounds=True); self._nyrb_box_pool.append(_rc)
+        _rc = self._nyrb_box_pool[used]
+        _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(*rgb, 20))
+        return _rc
+
+    def _nyrb_line(self, used):                                  # pooled dashed rhi/rlo edge line
+        if used >= len(self._nyrb_line_pool):
+            _c = pg.PlotCurveItem(); _c.setZValue(-6)
+            self.plot.addItem(_c, ignoreBounds=True); self._nyrb_line_pool.append(_c)
+        return self._nyrb_line_pool[used]
+
+    def _nyrb_lbl(self, used):                                   # pooled 'brB'/'brS' label
+        if used >= len(self._nyrb_lbl_pool):
+            _t = pg.TextItem(anchor=(0.5, 0.5)); _t.setZValue(34)
+            _f = QtGui.QFont("Consolas", 9); _f.setBold(True); _t.textItem.setFont(_f)
+            self.plot.addItem(_t, ignoreBounds=True); self._nyrb_lbl_pool.append(_t)
+        return self._nyrb_lbl_pool[used]
+
+    def _nyrb_prob(self, used):                                  # pooled 'brB x% - brS y%' probability readout (HTML two-tone)
+        if used >= len(self._nyrb_prob_pool):
+            _t = pg.TextItem(anchor=(0.0, 1.0), fill=pg.mkBrush(16, 18, 24, 205)); _t.setZValue(35)
+            self.plot.addItem(_t, ignoreBounds=True); self._nyrb_prob_pool.append(_t)
+        return self._nyrb_prob_pool[used]
+
+    def _clear_nyrb(self) -> None:
+        for _it in self._nyrb_box_pool + self._nyrb_line_pool + self._nyrb_lbl_pool + self._nyrb_prob_pool:
+            _it.setVisible(False)
+        self._nyrb_data_sig = None
+
+    def _draw_nyrb(self, buckets, x, vx0, vx1, vy0, vy1) -> None:
+        """NY 2-5pm range box + rhi/rlo edges + brB/brS break label (app/ny_rangebreak_detect). 1h + 15m, culled to the
+        viewport. On 15m the range uses clock-hourly closes (hourly_range). Cached by data-signature so panning only
+        re-positions the pooled items."""
+        if not self.menu.layer_state("m10_nyrangebreak") or self._tf not in ("1h", "15m") or not buckets:
+            self._clear_nyrb(); return
+        n = len(buckets)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        _hourly = (self._tf == "15m")                            # 15m chart -> clock-hourly-close range (narrow, faithful)
+        _dsig = (self._tf, n, float(buckets[-1].get("end_time", 0.0) or 0.0), float(buckets[-1].get("close", 0.0) or 0.0))
+        if _dsig != self._nyrb_data_sig:                         # recompute the ranges only when the data changed
+            try:
+                from app import ny_rangebreak_detect
+                self._nyrb_ranges = ny_rangebreak_detect.detect(buckets, hourly_range=_hourly)
+            except Exception:
+                self._nyrb_ranges = []
+            self._nyrb_data_sig = _dsig
+        pad = max((vy1 - vy0) * 0.05, 1e-9)
+        GRN, RED, EDGE = (40, 220, 100), (240, 60, 78), (176, 190, 218)
+        _fi = (n - 1) if _forming else -1
+        ub = ul = ut = up_ = 0
+        for r in self._nyrb_ranges:
+            i0 = int(r["i0"]); i1 = int(r["i1"]); bi = r["break_i"]
+            if i0 >= n or i1 >= n:
+                continue
+            xr = (x[int(bi)] + 0.5) if (bi is not None and int(bi) < n) else (x[i1] + 0.5)
+            xl = x[i0] - 0.5
+            if xr < vx0 - 1.0 or xl > vx1 + 1.0:                 # cull to the visible viewport
+                continue
+            rhi = float(r["rhi"]); rlo = float(r["rlo"]); side = int(r["side"])
+            self._nyrb_box(ub, EDGE).setRect(xl, rlo, max(1e-9, (x[i1] + 0.5) - xl), max(1e-9, rhi - rlo))
+            self._nyrb_box_pool[ub].setVisible(True); ub += 1
+            for _y in (rhi, rlo):                                # dashed edges projected to the break
+                _pn = pg.mkPen(*EDGE, 150, width=1.0); _pn.setCosmetic(True); _pn.setDashPattern([4.0, 4.0])
+                _ln = self._nyrb_line(ul); ul += 1
+                _ln.setData([xl, xr], [_y, _y]); _ln.setPen(_pn); _ln.setVisible(True)
+            pu = r.get("prob_up")                               # break-side probability readout above the range box
+            if pu is not None:
+                xb = int(round(float(pu) * 100.0))
+                _pt = self._nyrb_prob(up_); up_ += 1
+                _pt.setHtml("<span style='color:#28dc64;font-family:Consolas;font-size:12px'><b>brB %d%%</b></span>"
+                            "<span style='color:#8891a3;font-family:Consolas;font-size:11px'> - </span>"
+                            "<span style='color:#f03c4e;font-family:Consolas;font-size:12px'><b>brS %d%%</b></span>"
+                            % (xb, 100 - xb))
+                _pt.setPos(xl, rhi + pad * 1.5); _pt.setVisible(True)
+            if bi is not None and 0 <= int(bi) < n:              # the break label — text only (brB long / brS short)
+                bb = buckets[int(bi)]; hi = float(bb.get("high", 0.0) or 0.0); lo = float(bb.get("low", 0.0) or 0.0)
+                _al = _PREVIEW_ALPHA if int(bi) == _fi else 255
+                if side > 0:
+                    col = GRN; txt = "brB"; ty = lo - pad * 1.2
+                else:
+                    col = RED; txt = "brS"; ty = hi + pad * 1.2
+                _lb = self._nyrb_lbl(ut); ut += 1
+                _lb.setText(txt); _lb.setColor(pg.mkColor(*col, _al)); _lb.setPos(x[int(bi)], ty); _lb.setVisible(True)
+        for _it in self._nyrb_box_pool[ub:]:
+            _it.setVisible(False)
+        for _it in self._nyrb_line_pool[ul:]:
+            _it.setVisible(False)
+        for _it in self._nyrb_lbl_pool[ut:]:
+            _it.setVisible(False)
+        for _it in self._nyrb_prob_pool[up_:]:
+            _it.setVisible(False)
 
     # 15m MOMENTUM overlay (hamburger m10_momentum, 15m ONLY) — FORWARD CANDIDATE, self-gated, fail-safe.
     # LOSANGE (diamond) L/S badge: green up long / red down short; BLUE = at-S/R confluence (TP 1:2) — the positive subset.
@@ -11616,6 +11733,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_session(buckets, x, vx0, vx1)               # per-session Tokyo/London/NY boxes (m10_session)
         except Exception:
             self._hide_session()
+        try:
+            self._draw_nyrb(buckets, x, vx0, vx1, vy0, vy1)        # 1h NY Range-break box + brB/brS badges (m10_nyrangebreak)
+        except Exception:
+            self._clear_nyrb()
 
         # --- Keltner Channel: EMA(close) basis ± ATR band. LIGHT GRAY upper/lower (match the POC baseline);
         #     the EMA MIDDLE line is HIDDEN (operator pref — the POC baseline is the center reference). ---
