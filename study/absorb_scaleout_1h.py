@@ -30,6 +30,7 @@ yr = np.array([datetime.fromtimestamp(float(t), tz=timezone.utc).year for t in F
 FEE = MA.FEE; SL_PAD = 0.001; BE = 0.001                              # BE trail = entry +/- 0.1%
 TP1 = float(os.environ.get("TP1", "0.3")) / 100.0                     # TP1 %, default 0.3
 TP2 = float(os.environ.get("TP2", "1.0")) / 100.0                     # TP2 %, default 1.0
+FULL_TP = os.environ.get("FULL_TP") == "1"                            # FULL_TP=1 -> take 100% at TP1 (no runner/scale-out)
 
 Harr = [float(b.get("high", 0.0) or 0.0) for b in A]; Larr = [float(b.get("low", 0.0) or 0.0) for b in A]
 Carr = [float(b.get("close", b.get("close_price", 0.0)) or 0.0) for b in A]
@@ -56,6 +57,21 @@ else:
 def vw_ok(i):
     ut = float(A[i].get("up_ticks", 0.0) or 0.0); dt = float(A[i].get("dn_ticks", 0.0) or 0.0)
     return min(ut, dt) > 0 and (max(ut, dt) / min(ut, dt) - 1.0) * 100.0 >= VW_MIN
+
+
+SESSION = os.environ.get("SESSION", "").strip().upper()      # NY / LONDON / TOKYO -> that UTC session only + EXCLUDE weekends
+_SESS_HRS = {"NY": (13, 21), "LONDON": (8, 13), "TOKYO": (0, 8)}
+_start = F["start"]
+
+
+def sess_ok(i):
+    if not SESSION:
+        return True
+    t = datetime.fromtimestamp(float(_start[i]), tz=timezone.utc)
+    if t.weekday() >= 5:                                      # Sat(5)/Sun(6) -> exclude weekend
+        return False
+    h0, h1 = _SESS_HRS.get(SESSION, (0, 24))
+    return h0 <= t.hour < h1
 
 
 BIAS_FILTER = os.environ.get("BIAS") == "1"                  # BIAS=1 -> take a signal only if it aligns with the swing Bias-badge dir
@@ -93,7 +109,7 @@ sigs = []
 _seen = 0
 for i, side in cand:
     _abs_ok = (absA[i] <= ABS_LO) or (ABS_OR and absA[i] >= ABS_HI)   # easy/momentum, + heavy/absorbed if ABS_OR
-    if not vw_ok(i) or not _abs_ok:
+    if not vw_ok(i) or not _abs_ok or not sess_ok(i):                 # session + weekday gate
         continue
     if EFFAGG and (i < 1 or (signed_eff[i] > signed_eff[i - 1]) != (side > 0)):   # eff-agg RISING(long)/FALLING(short) vs prev
         continue
@@ -152,6 +168,8 @@ def scaleout(i, side):
             tp1_bar = j; break
     if tp1_bar is None:
         return (-dist - FEE), n - 1, "SL"                       # unresolved before TP1 -> treat as full loss
+    if FULL_TP:
+        return (TP1 - FEE), tp1_bar, "TP1"                      # take 100% at TP1 (no runner)
     runner = BE; outc = "TP1+BE"; ke = tp1_bar
     for k in range(tp1_bar, n):
         hi = float(A[k]["h"]); lo = float(A[k]["l"])
