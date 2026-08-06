@@ -6090,13 +6090,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _draw_nyrb(self, buckets, x, vx0, vx1, vy0, vy1) -> None:
         """NY 2-5pm range box + rhi/rlo edges + brB/brS break label (app/ny_rangebreak_detect). 1h + 15m, culled to the
-        viewport. On 15m the range uses clock-hourly closes (hourly_range). Cached by data-signature so panning only
-        re-positions the pooled items."""
+        viewport. Range = raw body edges (box hugs the candle bodies on both tf). Cached by data-signature so panning
+        only re-positions the pooled items."""
         if not self.menu.layer_state("m10_nyrangebreak") or self._tf not in ("1h", "15m") or not buckets:
             self._clear_nyrb(); return
         n = len(buckets)
         _forming = bool(getattr(self, "_mmx_last_forming", True))
-        _hourly = (self._tf == "15m")                            # 15m chart -> clock-hourly-close range (narrow, faithful)
+        _hourly = (self._tf == "15m")                            # 15m -> use the 15m strength calibration (range is raw-body on both tf)
         _dsig = (self._tf, n, float(buckets[-1].get("end_time", 0.0) or 0.0), float(buckets[-1].get("close", 0.0) or 0.0))
         if _dsig != self._nyrb_data_sig:                         # recompute the ranges only when the data changed
             try:

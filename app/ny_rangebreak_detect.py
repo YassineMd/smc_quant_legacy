@@ -69,11 +69,9 @@ def _strength_feats(b, side):
 def detect(buckets, hourly_range=False):
     """[{i0, i1, rhi, rlo, whi, wlo, side, break_i, entry, sl, tp}] per weekday NY range. Fail-safe: [].
 
-    Range = highest / lowest BODY edge (max/min of open & close) over the 2-5pm window.
-    hourly_range=False (1h chart): taken over the 2-5pm buckets directly.
-    hourly_range=True  (15m chart): each CLOCK HOUR (13/14/15 UTC) is first collapsed to a synthetic candle
-    (open = first sub-bar's open, close = last sub-bar's close) and the body edges are taken over those 3 hours — a
-    narrow, 1h-like range reconstructed from the sub-hour buckets. whi/wlo (the stop reference) are tf-invariant.
+    Range = highest / lowest BODY edge (max/min of open & close) over the 2-5pm candles — the RAW body range on BOTH
+    timeframes, so the box hugs the actual candle bodies shown on the chart. whi/wlo (the stop reference) are the wick
+    extremes. hourly_range is retained only to select the per-tf breakout-bar strength calibration (_CAL), NOT the range.
     """
     n = len(buckets)
     if n < 3:
@@ -95,18 +93,10 @@ def detect(buckets, hourly_range=False):
                 continue
             i0 = rng[0][1]; i1 = rng[-1][1]
             whi = max(_h(buckets[i]) for _, i in rng); wlo = min(_l(buckets[i]) for _, i in rng)   # wick extremes (stop)
-            if hourly_range:                                  # 15m chart: reconstruct each clock hour's candle -> its body edges
-                hours = {}                                    # hour -> [open_of_first_bar, close_of_last_bar]  (rng is time-ordered)
-                for hh, i in rng:
-                    if hh not in hours:
-                        hours[hh] = [_o(buckets[i]), _c(buckets[i])]
-                    hours[hh][1] = _c(buckets[i])
-                if len(hours) < 2:
-                    continue
-                rhi = max(max(oc) for oc in hours.values()); rlo = min(min(oc) for oc in hours.values())
-            else:                                             # 1h chart: highest / lowest BODY edge (open or close) directly
-                rhi = max(max(_o(buckets[i]), _c(buckets[i])) for _, i in rng)
-                rlo = min(min(_o(buckets[i]), _c(buckets[i])) for _, i in rng)
+            # RAW body range (both 1h and 15m): highest / lowest BODY edge (open|close) over the 2-5pm candles, so the
+            # box hugs the actual candle bodies shown on the chart. (hourly_range is kept only for the strength calibration.)
+            rhi = max(max(_o(buckets[i]), _c(buckets[i])) for _, i in rng)
+            rlo = min(min(_o(buckets[i]), _c(buckets[i])) for _, i in rng)
             if not (rhi > rlo) or not (whi > wlo):
                 continue
             hc = {}                                           # clock hour -> [open_of_first_bar, close_of_last_bar]
