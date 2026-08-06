@@ -127,16 +127,21 @@ def detect(buckets, hourly_range=False):
                 break
             out.append(dict(i0=i0, i1=i1, rhi=rhi, rlo=rlo, whi=whi, wlo=wlo, side=side, break_i=bi,
                             entry=entry, sl=sl, tp=tp, prob_up=prob_up, _szr=_szr, _dlr=_dlr, _err=_err))
-        # STRENGTH 0-100: mean percentile of the 3 breakout-bar dims across all breaks in the window; strong = >=50 (gold)
+        # STRENGTH 0-100 = percentile rank of a Z-COMPOSITE of the 3 breakout-bar dims (candle range %, aligned delta,
+        # aligned E/R). Ranking the COMPOSITE (not averaging per-dim ranks, which clusters everything at ~50) spreads
+        # the score evenly across 0-100. strong = >=50 -> gold tier.
         brks = [r for r in out if r.get("break_i") is not None and r["side"] != 0]
         if len(brks) >= 5:
-            for _f in ("_szr", "_dlr", "_err"):
-                vv = sorted(r[_f] for r in brks); m = float(len(vv))
+            for _f in ("_szr", "_dlr", "_err"):                # z-normalise each dim so they weigh equally
+                vals = [r[_f] for r in brks]; mu = sum(vals) / len(vals)
+                sd = (sum((v - mu) ** 2 for v in vals) / len(vals)) ** 0.5 or 1.0
                 for r in brks:
-                    r[_f + "p"] = bisect.bisect_right(vv, r[_f]) / m
+                    r["_z" + _f] = (r[_f] - mu) / sd
+            cv = sorted(r["_z_szr"] + r["_z_dlr"] + r["_z_err"] for r in brks); m = float(len(cv))
             for r in brks:
-                st = int(round(100.0 * (r["_szrp"] + r["_dlrp"] + r["_errp"]) / 3.0))
-                r["strength"] = st; r["strong"] = st >= 50
+                comp = r["_z_szr"] + r["_z_dlr"] + r["_z_err"]
+                r["strength"] = max(1, min(100, int(round(100.0 * bisect.bisect_right(cv, comp) / m))))
+                r["strong"] = r["strength"] >= 50
         else:
             for r in brks:
                 r["strength"] = 50; r["strong"] = False       # too few breaks to rank -> neutral

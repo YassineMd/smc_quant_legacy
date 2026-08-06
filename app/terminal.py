@@ -6165,8 +6165,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for key, xv, bidx, side, entry, sl, tp, strg, yb in self._nyrb_entries:
             if not user.get(key, False) or entry <= 0 or bidx < 0 or bidx >= n:
                 continue
-            exit_x = n - 1
-            for j in range(bidx + 1, n):
+            _cap = bidx                                       # cap the line to the END of the break's UTC day (session-scale)
+            try:
+                _bday = datetime.utcfromtimestamp(float(buckets[bidx].get("start_time", 0.0) or 0.0)).date()
+                for j in range(bidx + 1, n):
+                    if datetime.utcfromtimestamp(float(buckets[j].get("start_time", 0.0) or 0.0)).date() != _bday:
+                        break
+                    _cap = j
+            except Exception:
+                _cap = min(n - 1, bidx + 40)
+            exit_x = _cap
+            for j in range(bidx + 1, _cap + 1):               # walk only within the day, stop at first TP/SL touch
                 b = buckets[j]; hh = float(b.get("high", 0.0) or 0.0); ll = float(b.get("low", 0.0) or 0.0)
                 if hh <= 0 or ll <= 0:
                     continue
