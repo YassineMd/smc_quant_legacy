@@ -18,9 +18,12 @@ from app import swing_lvn_detect as SVL
 
 rng = np.random.default_rng(20260806)
 ENTRY_TF = os.environ.get("ENTRY_TF", "1h")                  # timeframe of the breakout ENTRY + exit walk (range is always 1h)
-FR = L.load_features("1h")                                    # RANGE definition (1h body closes / wicks)
+_DR = os.environ.get("DATA_ROOT", "")                        # e.g. study/archive_data -> forward/OOS daemon buckets (default recon)
+_LK = {"root": os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), _DR)),
+       "tag": os.environ.get("DATA_TAG", "_fwd")} if _DR else {}
+FR = L.load_features("1h", **_LK)                            # RANGE definition (1h body closes / wicks)
 RC = FR["c"]; RO = FR["o"]; RH = FR["h"]; RL = FR["l"]; Rstart = [float(t) for t in FR["start"]]
-FE = FR if ENTRY_TF == "1h" else L.load_features(ENTRY_TF)    # entry + walk (may be finer, e.g. 15m)
+FE = FR if ENTRY_TF == "1h" else L.load_features(ENTRY_TF, **_LK)    # entry + walk (may be finer, e.g. 15m)
 n = FE["n"]; O = FE["o"]; C = FE["c"]; H = FE["h"]; Lo = FE["l"]; start = [float(t) for t in FE["start"]]
 Abk = FE["A"]                                                 # entry-tf raw buckets (carry the footprint 'levels' for the VA)
 FEE = MA.FEE
