@@ -6144,7 +6144,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _lb.fill = pg.mkBrush(*_bg, _al); _lb.border = pg.mkPen(*[int(c * 0.5) for c in _bg], _al, width=1.0)
                 _lb.setText("brB" if side > 0 else "brS", color=_tc); _lb.setPos(x[_bi], _yb); _lb.update(); _lb.setVisible(True)
                 self._nyrb_entries.append(("nyrb%d" % _bi, x[_bi], _bi, side, float(r["entry"]),
-                                           float(r["sl"]), float(r["tp"]), _strg, _yb))
+                                           float(r["sl"]), float(r["tp"]), _strg, _yb, float(r.get("tp_mult") or 0.5)))
         for _it in self._nyrb_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._nyrb_line_pool[ul:]:
@@ -6162,7 +6162,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         buckets = getattr(self, "_trline_buckets", None) or []; n = len(buckets)
         user = self._nyrb_lines_user; cpool = self._nyrb_ln_pool; lpool = self._nyrb_lnlbl_pool
         WHITE = (236, 238, 244); ul = ut = 0
-        for key, xv, bidx, side, entry, sl, tp, strg, yb in self._nyrb_entries:
+        for key, xv, bidx, side, entry, sl, tp, strg, yb, tpm in self._nyrb_entries:
             if not user.get(key, False) or entry <= 0 or bidx < 0 or bidx >= n:
                 continue
             _cap = bidx                                       # cap the line to the END of the break's UTC day (session-scale)
@@ -6194,8 +6194,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True); _tl.textItem.setFont(_tf)
                     self.plot.addItem(_tl, ignoreBounds=True); lpool.append(_tl)
                 _tl = lpool[ut]; ut += 1
-                _tl.setText(("%.2f  ·  str %d%%" % (entry, strg)) if tag == "entry"
-                            else ("%.2f (%+.2f%%)" % (lvl, side * (lvl - entry) / entry * 100.0)))
+                if tag == "entry":
+                    _tl.setText("%.2f  ·  str %d%%" % (entry, strg))
+                elif tag == "tp":
+                    _tl.setText("TP %.1fx  %.2f (%+.2f%%)" % (tpm, lvl, side * (lvl - entry) / entry * 100.0))
+                else:
+                    _tl.setText("%.2f (%+.2f%%)" % (lvl, side * (lvl - entry) / entry * 100.0))
                 _tl.setColor(col); _tl.setPos(rb, lvl); _tl.setVisible(True)
         for j in range(ul, len(cpool)):
             cpool[j].setVisible(False)

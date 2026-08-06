@@ -6,8 +6,9 @@ Break = the FIRST 1h candle after 5pm (16:00-21:00 UTC, SAME UTC weekday) whose 
   close > rhi -> LONG  (badge 'brB', green) ; close < rlo -> SHORT (badge 'brS', red).
 
 Validated in-sample (SHORT side passed a random-timed-short null, P=0.003): enter at the break close,
-SL 0.1% beyond the range WICK, TP = 1/2 the range distance (0.5 x (whi-wlo)).  Weekends excluded.  The study
-edge used a 15m entry candle; this 1h-native overlay marks the first 1h close beyond the range instead.
+SL 0.1% beyond the range WICK, TP VOLATILITY-ADAPTIVE (2x range on low-vol days / 1/2x on high-vol; see _TP_* below;
+in-sample +141% -> +230%, NOT forward-confirmed).  Weekends excluded.  The study edge used a 15m entry candle; this
+1h-native overlay marks the first 1h close beyond the range instead.
 
 detect() returns one dict per weekday that forms a valid range (the break is optional -> side=0 / break_i=None
 so the range box can be drawn before price breaks).  Fail-safe: [] on any error.
@@ -18,7 +19,12 @@ from datetime import datetime, timezone
 
 R0, R1, BRK_END = 13, 16, 21     # UTC hours: NY open / 5pm Morocco / NY close
 SL_PAD = 0.001                   # SL 0.1% beyond the range wick
-TP_RANGE = 0.5                   # TP = 1/2 the range distance (whi - wlo)
+TP_RANGE = 0.5                   # TP = 1/2 the range distance (whi - wlo)   [high-vol default]
+# VOLATILITY-ADAPTIVE TP: a LOW-vol day (tight 2-5pm range) tends to EXPAND past its range on the break, so it wants a
+# WIDER target; a HIGH-vol (already-stretched) day wants 1/2-range. 2-5pm range% below _TP_THR -> _TP_LOW x range, else
+# _TP_HIGH x range. In-sample this lifted +141% -> +230% (both years, CI clears 0); NOT forward-confirmed (flat regime).
+_TP_THR = 2.85                   # median recon 2-5pm range% (same for 1h/15m); < this = low-vol
+_TP_LOW, _TP_HIGH = 2.0, 0.5     # TP multiple of range on low-vol / high-vol days
 
 # Breakout-bar STRENGTH calibration — (mean, std) of each dim over the recon breaks, per timeframe. Used for an
 # ABSOLUTE 0-100 score (window-independent) so a single break still gets a real strength. Dims: candle range %,
@@ -114,7 +120,7 @@ def detect(buckets, hourly_range=False):
                 hd[h] = 0 if not v else (1 if v[1] > v[0] else (-1 if v[1] < v[0] else 0))
             z = _PB0 + _PB13 * hd[13] + _PB14 * hd[14] + _PB15 * hd[15]
             prob_up = 1.0 / (1.0 + math.exp(-z))              # P(brB); brS = 1 - prob_up
-            side = 0; bi = None; entry = sl = tp = 0.0; _szr = _dlr = _err = 0.0
+            side = 0; bi = None; entry = sl = tp = 0.0; _szr = _dlr = _err = 0.0; _mult = TP_RANGE; _low = False
             for (hh, j) in lst:                               # first 1h close beyond the range, 5pm..NY close
                 if j <= i1 or not (R1 <= hh < BRK_END):
                     continue
@@ -127,11 +133,14 @@ def detect(buckets, hourly_range=False):
                     continue                                  # inside the range -> keep scanning
                 bi = j; entry = c
                 sl = wlo * (1 - SL_PAD) if side > 0 else whi * (1 + SL_PAD)
-                tp = entry + side * TP_RANGE * (whi - wlo)
+                _low = ((whi - wlo) / entry * 100.0) < _TP_THR            # low-vol day -> wider TP (volatility-adaptive)
+                _mult = _TP_LOW if _low else _TP_HIGH
+                tp = entry + side * _mult * (whi - wlo)
                 _szr, _dlr, _err = _strength_feats(buckets[j], side)   # raw strength dims of the breakout bar
                 break
             out.append(dict(i0=i0, i1=i1, rhi=rhi, rlo=rlo, whi=whi, wlo=wlo, side=side, break_i=bi,
-                            entry=entry, sl=sl, tp=tp, prob_up=prob_up, _szr=_szr, _dlr=_dlr, _err=_err))
+                            entry=entry, sl=sl, tp=tp, tp_mult=_mult, lowvol=_low, prob_up=prob_up,
+                            _szr=_szr, _dlr=_dlr, _err=_err))
         # STRENGTH 0-100 (ABSOLUTE, window-independent): z-score each breakout-bar dim vs its recon reference (mean,std),
         # sum, standardise, and map through the normal CDF -> spreads 0-100 for ANY number of breaks (even one). No
         # window ranking, no >=N fallback. strong = >=50 -> gold tier.
