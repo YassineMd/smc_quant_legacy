@@ -13,13 +13,18 @@ detect() returns one dict per weekday that forms a valid range (the break is opt
 so the range box can be drawn before price breaks).  Fail-safe: [] on any error.
 """
 from __future__ import annotations
-import bisect
 import math
 from datetime import datetime, timezone
 
 R0, R1, BRK_END = 13, 16, 21     # UTC hours: NY open / 5pm Morocco / NY close
 SL_PAD = 0.001                   # SL 0.1% beyond the range wick
 TP_RANGE = 0.5                   # TP = 1/2 the range distance (whi - wlo)
+
+# Breakout-bar STRENGTH calibration — (mean, std) of each dim over the recon breaks, per timeframe. Used for an
+# ABSOLUTE 0-100 score (window-independent) so a single break still gets a real strength. Dims: candle range %,
+# aligned delta %, aligned effort/result.  study/ny_range_break.py breakout-bar split.
+_CAL = {True:  ((0.720, 0.329), (12.43, 14.02), (7375.0, 5093.0)),      # hourly_range=True  -> 15m
+        False: ((1.511, 0.721), (8.74, 9.18), (13341.0, 7813.0))}       # hourly_range=False -> 1h
 
 # Break-side probability = logistic on the 2-5pm clock-hour candle directions (close vs open of hours 13/14/15 UTC).
 # Fitted in-sample on the 1h recon breaks (n=307, 75.9% acc, well-calibrated): later hours dominate (4-5pm >> 3-4pm >>
@@ -127,26 +132,16 @@ def detect(buckets, hourly_range=False):
                 break
             out.append(dict(i0=i0, i1=i1, rhi=rhi, rlo=rlo, whi=whi, wlo=wlo, side=side, break_i=bi,
                             entry=entry, sl=sl, tp=tp, prob_up=prob_up, _szr=_szr, _dlr=_dlr, _err=_err))
-        # STRENGTH 0-100 = percentile rank of a Z-COMPOSITE of the 3 breakout-bar dims (candle range %, aligned delta,
-        # aligned E/R). Ranking the COMPOSITE (not averaging per-dim ranks, which clusters everything at ~50) spreads
-        # the score evenly across 0-100. strong = >=50 -> gold tier.
-        brks = [r for r in out if r.get("break_i") is not None and r["side"] != 0]
-        if len(brks) >= 5:
-            for _f in ("_szr", "_dlr", "_err"):                # z-normalise each dim so they weigh equally
-                vals = [r[_f] for r in brks]; mu = sum(vals) / len(vals)
-                sd = (sum((v - mu) ** 2 for v in vals) / len(vals)) ** 0.5 or 1.0
-                for r in brks:
-                    r["_z" + _f] = (r[_f] - mu) / sd
-            cv = sorted(r["_z_szr"] + r["_z_dlr"] + r["_z_err"] for r in brks); m = float(len(cv))
-            for r in brks:
-                comp = r["_z_szr"] + r["_z_dlr"] + r["_z_err"]
-                r["strength"] = max(1, min(100, int(round(100.0 * bisect.bisect_right(cv, comp) / m))))
-                r["strong"] = r["strength"] >= 50
-        else:
-            for r in brks:
-                r["strength"] = 50; r["strong"] = False       # too few breaks to rank -> neutral
+        # STRENGTH 0-100 (ABSOLUTE, window-independent): z-score each breakout-bar dim vs its recon reference (mean,std),
+        # sum, standardise, and map through the normal CDF -> spreads 0-100 for ANY number of breaks (even one). No
+        # window ranking, no >=N fallback. strong = >=50 -> gold tier.
+        (ms, ss), (md, sd), (me, se) = _CAL[bool(hourly_range)]
         for r in out:
-            r.setdefault("strength", None); r.setdefault("strong", False)
+            if r.get("break_i") is None or r["side"] == 0:
+                r["strength"] = None; r["strong"] = False; continue
+            zc = ((r["_szr"] - ms) / ss + (r["_dlr"] - md) / sd + (r["_err"] - me) / se) / 1.7320508   # sum / sqrt(3)
+            st = int(round(50.0 * (1.0 + math.erf(zc / 1.4142136))))        # normal CDF x100
+            r["strength"] = max(1, min(99, st)); r["strong"] = st >= 50
         return out
     except Exception:
         return []
