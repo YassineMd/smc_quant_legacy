@@ -27,13 +27,15 @@ FE = FR if ENTRY_TF == "1h" else L.load_features(ENTRY_TF, **_LK)    # entry + w
 n = FE["n"]; O = FE["o"]; C = FE["c"]; H = FE["h"]; Lo = FE["l"]; start = [float(t) for t in FE["start"]]
 Abk = FE["A"]                                                 # entry-tf raw buckets (carry the footprint 'levels' for the VA)
 FEE = MA.FEE
-R0, R1 = 13, 16                                               # range window [13,16) UTC = 2-5pm Morocco
-BRK_END = 21                                                  # breakout must trigger before 9pm UTC (NY session close)
+R0 = float(os.environ.get("R0", "13")); R1 = float(os.environ.get("R1", "16"))   # range window [R0,R1) UTC (fractional ok; default 2-5pm)
+BRK_END = float(os.environ.get("BRK_END", "21"))             # breakout must trigger before this UTC hour (NY close)
 TP = float(os.environ.get("TP", "0.5")) / 100.0
 TP_RANGE = float(os.environ.get("TP_RANGE", "0"))            # >0 -> TP = this * (high-low of the 2-5pm range), overrides TP
 SL_PAD = float(os.environ.get("SL_PAD", "0.1")) / 100.0       # SL sits this far BEYOND the range wick
 SL_MID = os.environ.get("SL_MID") == "1"                      # SL_MID=1 -> SL at the MIDDLE of the 2-5pm range (~1:1 RR)
 SL_VA = os.environ.get("SL_VA") == "1"                        # SL_VA=1 -> SL at the CAUSAL NY-session VAL(long)/VAH(short) up to entry
+SL_STRUCT = os.environ.get("SL_STRUCT") == "1"               # SL_STRUCT=1 -> SL beyond the entry candle OR the one before it, whichever gives MORE room
+SL_CAP = float(os.environ.get("SL_CAP", "0")) / 100.0        # >0 -> cap the stop distance at this %% of entry (e.g. 1 = never risk >1%)
 MID_ENTRY = os.environ.get("MID_ENTRY") == "1"                # MID_ENTRY=1 -> break sets DIRECTION, enter on the pullback to
 #                                                               the MIDPOINT, SL beyond the range extreme, TP = the WHOLE range (2:1)
 TRAIL = os.environ.get("TRAIL") == "1"                        # TRAIL=1 -> enter at break, SL at range extreme, then TRAIL the SL
@@ -53,7 +55,7 @@ def _daymap(starts, count):
         t = datetime.fromtimestamp(float(starts[i]), tz=timezone.utc)
         if (t.weekday() >= 5) != WEEKEND:                     # weekdays by default; WEEKEND=1 -> weekends only
             continue
-        m[t.date()].append((t.hour, i))
+        m[t.date()].append((t.hour + t.minute / 60.0, i))    # fractional hour so R0/R1/BRK_END can be e.g. 15.5 (4:30pm)
     return m
 
 
@@ -114,6 +116,17 @@ for d, rbks in sorted(days_r.items()):
     if bside == 0:
         continue
     side = bside
+    _bo = float(O[bbar]); _bc = float(C[bbar]); _bh = float(H[bbar]); _bl = float(Lo[bbar]); _rc = max(_bh - _bl, 1e-9)
+    _bf = abs(_bc - _bo) / _rc                                             # BREAKOUT-BAR strength: body fraction (decisive vs wicky)
+    _sz = _rc / _bc * 100.0                                               # candle range % (big vs small bar)
+    _pen = ((_bc - rhi) if side > 0 else (rlo - _bc)) / _bc * 100.0       # % the close pierced BEYOND the range edge
+    _clx = ((_bc - _bl) if side > 0 else (_bh - _bc)) / _rc               # close near the breakout extreme (1=strong, 0=rejected)
+    _delta = float(FE["delta"][bbar]) * side                              # Stats-box order-flow on the break bar, SIGNED to the trade dir
+    _skew = float(FE["sk"][bbar]) * side                                  # profile Skew (aligned)
+    _eff = float(FE["spread"][bbar]) * side                               # eff-agg (spread), aligned
+    _absR = float(FE["absA"][bbar])                                       # Absorb R (raw; <0 = easy/momentum, not absorbed)
+    _mm = float(FE["movmag"][bbar])                                       # Mov.Magnitude
+    _er = float((Abk[bbar].get("buyer_er") if side > 0 else Abk[bbar].get("seller_er")) or 0.0)   # E/R aligned to the trade side
     if TRAIL:                                                              # enter at break, trail the SL, no fixed TP
         entry = C[bbar]; sl0 = wlo * (1 - TRAIL_PAD) if side > 0 else whi * (1 + TRAIL_PAD)
         if (side > 0 and sl0 >= entry) or (side < 0 and sl0 <= entry):
@@ -156,8 +169,16 @@ for d, rbks in sorted(days_r.items()):
             if not va or va.get("val") is None or va.get("vah") is None:
                 continue
             sl = float(va["val"]) if side > 0 else float(va["vah"])
+        elif SL_STRUCT:                                                    # SL beyond the entry candle OR the one before it (more room)
+            if bbar < 1:
+                continue
+            sl = (min(float(Lo[bbar]), float(Lo[bbar - 1])) * (1 - SL_PAD) if side > 0
+                  else max(float(H[bbar]), float(H[bbar - 1])) * (1 + SL_PAD))
         else:
             sl = (mid if SL_MID else (wlo * (1 - SL_PAD) if side > 0 else whi * (1 + SL_PAD)))
+        if SL_CAP > 0:                                                     # cap the stop no further than SL_CAP% from entry
+            cap = entry * (1 - SL_CAP) if side > 0 else entry * (1 + SL_CAP)
+            sl = max(sl, cap) if side > 0 else min(sl, cap)
         tp_price = (entry + side * (TP_RANGE * rangeh)) if TP_RANGE > 0 else (entry * (1 + side * TP))
         if (side > 0 and sl >= entry) or (side < 0 and sl <= entry):
             continue
@@ -165,6 +186,9 @@ for d, rbks in sorted(days_r.items()):
         if side < 0:
             short_brk.append((bbar, abs(entry - sl) / entry, abs(tp_price - entry) / entry))   # (entry_idx, SL%, TP%)
     rows.append(dict(net=net, side=side, yr=datetime.fromtimestamp(start[bbar], tz=timezone.utc).year,
+                     dow=datetime.fromtimestamp(start[bbar], tz=timezone.utc).weekday(),   # 0=Mon .. 4=Fri
+                     bf=_bf, sz=_sz, pen=_pen, clx=_clx,                  # breakout-bar geometry
+                     delta=_delta, skew=_skew, eff=_eff, absR=_absR, mm=_mm, er=_er,   # Stats-box order-flow (signed)
                      win=net > 0, outc=outc, rr=_rr))
 
 
@@ -191,6 +215,38 @@ print("  outcomes: " + " | ".join("%s %d (%.0f%%)" % (kk, vv, 100 * vv / K) for 
 print("=" * 104)
 rep("ALL", rows); rep("LONG", [r for r in rows if r["side"] > 0]); rep("SHORT", [r for r in rows if r["side"] < 0])
 rep("2025", [r for r in rows if r["yr"] == 2025]); rep("2026", [r for r in rows if r["yr"] == 2026])
+print("  -- by weekday (Morocco = UTC, NY session same day) --")
+for _di, _dn in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri")):
+    rr = [r for r in rows if r["dow"] == _di]
+    rep(_dn, rr)
+    if rr:
+        y25 = [r for r in rr if r["yr"] == 2025]; y26 = [r for r in rr if r["yr"] == 2026]
+        m25 = 100 * np.mean([r["net"] for r in y25]) if y25 else 0.0
+        m26 = 100 * np.mean([r["net"] for r in y26]) if y26 else 0.0
+        w25 = 100 * sum(r["win"] for r in y25) / len(y25) if y25 else 0.0
+        w26 = 100 * sum(r["win"] for r in y26) / len(y26) if y26 else 0.0
+        print("        2025 mean %+.3f%%/tr (n=%2d win %.0f%%) | 2026 mean %+.3f%%/tr (n=%2d win %.0f%%) | %s"
+              % (m25, len(y25), w25, m26, len(y26), w26,
+                 "STABLE" if (m25 > 0) == (m26 > 0) else "FLIPS"))
+
+
+def _grp(g):
+    if not g:
+        return (0.0, 0.0, 0.0)
+    nt = [r["net"] for r in g]; gg = sum(x for x in nt if x > 0); ll = -sum(x for x in nt if x < 0)
+    return ((np.prod([1 + x for x in nt]) - 1) * 100, 100 * sum(1 for x in nt if x > 0) / len(g), gg / ll if ll > 0 else float("inf"))
+
+
+print("  -- breakout-bar STRENGTH by Stats-box params (median split; UPPER = higher/aligned value) --")
+for _k, _lab in (("sz", "candle-size%"), ("delta", "delta(aligned)"), ("skew", "skew(aligned)"),
+                 ("eff", "eff-agg(align)"), ("absR", "absorb-R"), ("mm", "mov-mag"), ("er", "E/R(aligned)"),
+                 ("bf", "body-frac"), ("pen", "close-depth%"), ("clx", "close-pos")):
+    _vals = sorted(r[_k] for r in rows); _med = _vals[len(_vals) // 2]
+    _st = [r for r in rows if r[_k] >= _med]; _wk = [r for r in rows if r[_k] < _med]
+    _s = _grp(_st); _w = _grp(_wk)
+    _s25 = 100 * np.mean([r["net"] for r in _st if r["yr"] == 2025] or [0]); _s26 = 100 * np.mean([r["net"] for r in _st if r["yr"] == 2026] or [0])
+    print("  %-13s STRONG net %+7.1f%% win %.0f%% PF %.2f (n=%d; '25 %+.3f%% '26 %+.3f%%) | WEAK net %+7.1f%% win %.0f%% PF %.2f (n=%d)"
+          % (_lab, _s[0], _s[1], _s[2], len(_st), _s25, _s26, _w[0], _w[1], _w[2], len(_wk)))
 if rows:
     nt = np.array([r["net"] for r in rows])
     mm = np.array([rng.choice(nt, size=len(nt), replace=True).mean() for _ in range(10000)]) * 100

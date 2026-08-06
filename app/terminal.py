@@ -1297,8 +1297,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # first 1h close beyond it with a green 'brB' (long) / red 'brS' (short) text label. app/ny_rangebreak_detect.
         self._nyrb_box_pool = []                 # QGraphicsRectItem — faint range fill
         self._nyrb_line_pool = []                # PlotCurveItem — rhi/rlo edge lines
-        self._nyrb_lbl_pool = []                 # TextItem — 'brB'/'brS' break labels (text only, no triangle)
+        self._nyrb_lbl_pool = []                 # TextItem — brB/brS SQUARE badge (green/red/gold fill)
         self._nyrb_prob_pool = []                # TextItem — 'brB x% - brS y%' break-side probability readout
+        self._nyrb_entries = []                  # click a badge -> its entry/SL/TP lines (+ strength% at entry)
+        self._nyrb_ln_pool = []; self._nyrb_lnlbl_pool = []; self._nyrb_lines_user = {}
         self._nyrb_ranges = []; self._nyrb_data_sig = None   # cached detect() output (recompute only on data change)
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
@@ -2424,6 +2426,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if best is not None:
                     _on = not self._ez_lines_user.get(best, False)   # exclusive: this position only, hide all others
                     self._solo_trade_lines(self._ez_lines_user, best, _on); ev.accept(); return
+            except Exception:
+                pass
+        if (not ev.double() and self.scanner_mode == "bucket_canvas"
+                and self._nyrb_entries and self.menu.layer_state("m10_nyrangebreak")):
+            try:                               # click a NY Range-break SQUARE badge -> toggle its entry/SL/TP lines
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.06
+                best = None; bestdx = 2.5
+                for _en in self._nyrb_entries:
+                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[8]) <= ytol:   # xvis at idx1, yb at idx8
+                        best = _en[0]; bestdx = abs(xc - _en[1])
+                if best is not None:
+                    _on = not self._nyrb_lines_user.get(best, False)
+                    self._solo_trade_lines(self._nyrb_lines_user, best, _on); ev.accept(); return
             except Exception:
                 pass
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
@@ -6067,9 +6083,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return self._nyrb_prob_pool[used]
 
     def _clear_nyrb(self) -> None:
-        for _it in self._nyrb_box_pool + self._nyrb_line_pool + self._nyrb_lbl_pool + self._nyrb_prob_pool:
+        for _it in (self._nyrb_box_pool + self._nyrb_line_pool + self._nyrb_lbl_pool + self._nyrb_prob_pool
+                    + self._nyrb_ln_pool + self._nyrb_lnlbl_pool):
             _it.setVisible(False)
-        self._nyrb_data_sig = None
+        self._nyrb_entries = []; self._nyrb_data_sig = None
 
     def _draw_nyrb(self, buckets, x, vx0, vx1, vy0, vy1) -> None:
         """NY 2-5pm range box + rhi/rlo edges + brB/brS break label (app/ny_rangebreak_detect). 1h + 15m, culled to the
@@ -6089,9 +6106,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._nyrb_ranges = []
             self._nyrb_data_sig = _dsig
         pad = max((vy1 - vy0) * 0.05, 1e-9)
-        GRN, RED, EDGE = (40, 220, 100), (240, 60, 78), (176, 190, 218)
+        GRN, RED, EDGE, GOLD = (40, 220, 100), (240, 60, 78), (176, 190, 218), (255, 195, 40)
         _fi = (n - 1) if _forming else -1
-        ub = ul = ut = up_ = 0
+        ub = ul = ut = up_ = 0; self._nyrb_entries = []
         for r in self._nyrb_ranges:
             i0 = int(r["i0"]); i1 = int(r["i1"]); bi = r["break_i"]
             if i0 >= n or i1 >= n:
@@ -6116,15 +6133,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             "<span style='color:#f03c4e;font-family:Consolas;font-size:12px'><b>brS %d%%</b></span>"
                             % (xb, 100 - xb))
                 _pt.setPos(xl, rhi + pad * 1.5); _pt.setVisible(True)
-            if bi is not None and 0 <= int(bi) < n:              # the break label — text only (brB long / brS short)
-                bb = buckets[int(bi)]; hi = float(bb.get("high", 0.0) or 0.0); lo = float(bb.get("low", 0.0) or 0.0)
-                _al = _PREVIEW_ALPHA if int(bi) == _fi else 255
-                if side > 0:
-                    col = GRN; txt = "brB"; ty = lo - pad * 1.2
-                else:
-                    col = RED; txt = "brS"; ty = hi + pad * 1.2
+            if bi is not None and 0 <= int(bi) < n:              # SQUARE badge: green brB / red brS / GOLD strong break
+                _bi = int(bi); bb = buckets[_bi]
+                hi = float(bb.get("high", 0.0) or 0.0); lo = float(bb.get("low", 0.0) or 0.0)
+                _al = _PREVIEW_ALPHA if _bi == _fi else 255
+                _strong = bool(r.get("strong")); _strg = int(r.get("strength") or 0)
+                _bg, _tc = (GOLD, (18, 20, 26)) if _strong else ((GRN, (18, 20, 26)) if side > 0 else (RED, (245, 246, 250)))
+                _yb = (lo - pad * 1.7) if side > 0 else (hi + pad * 1.7)
                 _lb = self._nyrb_lbl(ut); ut += 1
-                _lb.setText(txt); _lb.setColor(pg.mkColor(*col, _al)); _lb.setPos(x[int(bi)], ty); _lb.setVisible(True)
+                _lb.fill = pg.mkBrush(*_bg, _al); _lb.border = pg.mkPen(*[int(c * 0.5) for c in _bg], _al, width=1.0)
+                _lb.setText("brB" if side > 0 else "brS", color=_tc); _lb.setPos(x[_bi], _yb); _lb.update(); _lb.setVisible(True)
+                self._nyrb_entries.append(("nyrb%d" % _bi, x[_bi], _bi, side, float(r["entry"]),
+                                           float(r["sl"]), float(r["tp"]), _strg, _yb))
         for _it in self._nyrb_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._nyrb_line_pool[ul:]:
@@ -6133,6 +6153,45 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _it.setVisible(False)
         for _it in self._nyrb_prob_pool[up_:]:
             _it.setVisible(False)
+        self._trline_buckets = buckets                          # click a badge -> entry/SL/TP lines (+ strength% at entry)
+        self._draw_nyrb_lines()
+
+    def _draw_nyrb_lines(self) -> None:
+        """Entry (white) / SL (red) / TP (green) dashed lines for a clicked NY Range-break badge. The entry tag also
+        carries the breakout-bar STRENGTH% (0 = weak / likely to reverse, 100 = strong / likely to continue)."""
+        buckets = getattr(self, "_trline_buckets", None) or []; n = len(buckets)
+        user = self._nyrb_lines_user; cpool = self._nyrb_ln_pool; lpool = self._nyrb_lnlbl_pool
+        WHITE = (236, 238, 244); ul = ut = 0
+        for key, xv, bidx, side, entry, sl, tp, strg, yb in self._nyrb_entries:
+            if not user.get(key, False) or entry <= 0 or bidx < 0 or bidx >= n:
+                continue
+            exit_x = n - 1
+            for j in range(bidx + 1, n):
+                b = buckets[j]; hh = float(b.get("high", 0.0) or 0.0); ll = float(b.get("low", 0.0) or 0.0)
+                if hh <= 0 or ll <= 0:
+                    continue
+                if ((hh >= tp) if side > 0 else (ll <= tp)) or ((ll <= sl) if side > 0 else (hh >= sl)):
+                    exit_x = j; break
+            rb = max(xv + 1.0, float(exit_x))
+            for lvl, col, w, tag in ((sl, (255, 90, 90), 1.5, "sl"), (tp, (40, 230, 90), 1.5, "tp"),
+                                     (entry, WHITE, 1.9, "entry")):
+                if ul >= len(cpool):
+                    _ln = pg.PlotCurveItem(); _ln.setZValue(29); self.plot.addItem(_ln, ignoreBounds=True); cpool.append(_ln)
+                _ln = cpool[ul]; ul += 1
+                _pen = pg.mkPen(*col, width=w, style=QtCore.Qt.DashLine); _pen.setCosmetic(True)
+                _ln.setPen(_pen); _ln.setData([xv, rb], [lvl, lvl]); _ln.setVisible(True)
+                if ut >= len(lpool):
+                    _tl = pg.TextItem(anchor=(0.0, 0.5)); _tl.setZValue(36)
+                    _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True); _tl.textItem.setFont(_tf)
+                    self.plot.addItem(_tl, ignoreBounds=True); lpool.append(_tl)
+                _tl = lpool[ut]; ut += 1
+                _tl.setText(("%.2f  ·  str %d%%" % (entry, strg)) if tag == "entry"
+                            else ("%.2f (%+.2f%%)" % (lvl, side * (lvl - entry) / entry * 100.0)))
+                _tl.setColor(col); _tl.setPos(rb, lvl); _tl.setVisible(True)
+        for j in range(ul, len(cpool)):
+            cpool[j].setVisible(False)
+        for j in range(ut, len(lpool)):
+            lpool[j].setVisible(False)
 
     # 15m MOMENTUM overlay (hamburger m10_momentum, 15m ONLY) — FORWARD CANDIDATE, self-gated, fail-safe.
     # LOSANGE (diamond) L/S badge: green up long / red down short; BLUE = at-S/R confluence (TP 1:2) — the positive subset.
@@ -7200,11 +7259,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """EXCLUSIVE badge selection: showing one ENGULF overlay's entry/TP/SL trade lines HIDES every other opened
         badge's (1h / 15m / 5m Engulf S/R), so only ONE position is on the chart at a time. Clicking the already-shown
         badge turns it OFF (nothing shown). Called by every strategy badge click."""
-        for d in (self._eng_lines_user, self._mom_lines_user, self._e5m_lines_user, self._ez_lines_user):
+        for d in (self._eng_lines_user, self._mom_lines_user, self._e5m_lines_user, self._ez_lines_user,
+                  self._nyrb_lines_user):
             d.clear()                          # drop every currently-shown position (this + all other overlays)
         if turn_on:
             active_user[key] = True            # ...then light up only the just-clicked one
-        self._draw_eng_lines(); self._draw_mom_lines(); self._draw_e5m_lines(); self._draw_ez_lines()
+        self._draw_eng_lines(); self._draw_mom_lines(); self._draw_e5m_lines(); self._draw_ez_lines(); self._draw_nyrb_lines()
 
     def _trade_lines(self, entries, user, cpool, lpool, zline) -> None:
         """Shared renderer: for each toggled-ON entry draw ENTRY (white dashed, price tag) + TP (green) + SL (red)

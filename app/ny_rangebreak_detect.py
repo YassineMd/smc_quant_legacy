@@ -13,6 +13,7 @@ detect() returns one dict per weekday that forms a valid range (the break is opt
 so the range box can be drawn before price breaks).  Fail-safe: [] on any error.
 """
 from __future__ import annotations
+import bisect
 import math
 from datetime import datetime, timezone
 
@@ -40,6 +41,18 @@ def _h(b):
 
 def _l(b):
     return float(b.get("low", 0.0) or 0.0)
+
+
+def _strength_feats(b, side):
+    """Raw breakout-bar strength dims (the validated Stats-box params): candle range %, aligned delta %, aligned E/R.
+    A strong break = a big-range candle with aggressive flow in the trade direction. Percentile-ranked in detect()."""
+    o = _o(b); c = _c(b); h = _h(b); l = _l(b)
+    size = ((h - l) / c * 100.0) if c > 0 else 0.0
+    bv = float(b.get("buy_vol", 0.0) or 0.0); sv = float(b.get("sell_vol", 0.0) or 0.0)
+    cv = float(b.get("curr_vol", 0.0) or 0.0) or 1.0
+    delta = (bv - sv) / cv * 100.0 * side
+    er = float((b.get("buyer_er") if side > 0 else b.get("seller_er")) or 0.0)
+    return size, delta, er
 
 
 def detect(buckets, hourly_range=False):
@@ -96,7 +109,7 @@ def detect(buckets, hourly_range=False):
                 hd[h] = 0 if not v else (1 if v[1] > v[0] else (-1 if v[1] < v[0] else 0))
             z = _PB0 + _PB13 * hd[13] + _PB14 * hd[14] + _PB15 * hd[15]
             prob_up = 1.0 / (1.0 + math.exp(-z))              # P(brB); brS = 1 - prob_up
-            side = 0; bi = None; entry = sl = tp = 0.0
+            side = 0; bi = None; entry = sl = tp = 0.0; _szr = _dlr = _err = 0.0
             for (hh, j) in lst:                               # first 1h close beyond the range, 5pm..NY close
                 if j <= i1 or not (R1 <= hh < BRK_END):
                     continue
@@ -110,9 +123,25 @@ def detect(buckets, hourly_range=False):
                 bi = j; entry = c
                 sl = wlo * (1 - SL_PAD) if side > 0 else whi * (1 + SL_PAD)
                 tp = entry + side * TP_RANGE * (whi - wlo)
+                _szr, _dlr, _err = _strength_feats(buckets[j], side)   # raw strength dims of the breakout bar
                 break
-            out.append(dict(i0=i0, i1=i1, rhi=rhi, rlo=rlo, whi=whi, wlo=wlo,
-                            side=side, break_i=bi, entry=entry, sl=sl, tp=tp, prob_up=prob_up))
+            out.append(dict(i0=i0, i1=i1, rhi=rhi, rlo=rlo, whi=whi, wlo=wlo, side=side, break_i=bi,
+                            entry=entry, sl=sl, tp=tp, prob_up=prob_up, _szr=_szr, _dlr=_dlr, _err=_err))
+        # STRENGTH 0-100: mean percentile of the 3 breakout-bar dims across all breaks in the window; strong = >=50 (gold)
+        brks = [r for r in out if r.get("break_i") is not None and r["side"] != 0]
+        if len(brks) >= 5:
+            for _f in ("_szr", "_dlr", "_err"):
+                vv = sorted(r[_f] for r in brks); m = float(len(vv))
+                for r in brks:
+                    r[_f + "p"] = bisect.bisect_right(vv, r[_f]) / m
+            for r in brks:
+                st = int(round(100.0 * (r["_szrp"] + r["_dlrp"] + r["_errp"]) / 3.0))
+                r["strength"] = st; r["strong"] = st >= 50
+        else:
+            for r in brks:
+                r["strength"] = 50; r["strong"] = False       # too few breaks to rank -> neutral
+        for r in out:
+            r.setdefault("strength", None); r.setdefault("strong", False)
         return out
     except Exception:
         return []
