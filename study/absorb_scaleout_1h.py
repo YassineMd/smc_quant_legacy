@@ -22,7 +22,9 @@ ABS_OR = os.environ.get("ABS_OR") == "1"                      # ABS_OR=1 -> add 
 ABS_LO = float(os.environ.get("ABS_LO", "-0.5"))             # easy absorption cap: absR <= ABS_LO
 ABS_HI = float(os.environ.get("ABS_HI", "1.0"))             # heavy absorption floor: absR >= ABS_HI (only if ABS_OR)
 VW_MIN = float(os.environ.get("VW_MIN", "3"))                 # ease vw% floor
-F = L.load_features("1h")
+TF = os.environ.get("TF", "1h")                               # timeframe to port the stack onto (1h / 15m / 5m ...)
+SWING_LB = int(os.environ.get("SWING_LB", "0"))               # >0 -> bound swing_lines lookback to last N bars (speed on big tf)
+F = L.load_features(TF)
 A = F["A"]; n = F["n"]; absA = F["absA"]; O = F["o"]; C = F["c"]; Hh = F["h"]; Ll = F["l"]
 yr = np.array([datetime.fromtimestamp(float(t), tz=timezone.utc).year for t in F["start"]])
 FEE = MA.FEE; SL_PAD = 0.001; BE = 0.001                              # BE trail = entry +/- 0.1%
@@ -56,13 +58,37 @@ def vw_ok(i):
     return min(ut, dt) > 0 and (max(ut, dt) / min(ut, dt) - 1.0) * 100.0 >= VW_MIN
 
 
-ALL_CANDLES = os.environ.get("ALL_CANDLES") == "1"               # ALL_CANDLES=1 -> EVERY 1h candle (ignore the Absorption badge)
+BIAS_FILTER = os.environ.get("BIAS") == "1"                  # BIAS=1 -> take a signal only if it aligns with the swing Bias-badge dir
+BIAS_CONF = float(os.environ.get("BIAS_CONF", "0"))          # optional: also require bias confidence >= this (0 = dir only)
+SR_FILTER = os.environ.get("SR_FILTER") == "1"               # long only if entry closer to closest SUPPORT than resistance; mirror short
+if SR_FILTER:
+    from app import support_resistance as _SR
+    _srlv = _SR.detect(A); _srK = _SR.SR_PIVOT_K              # causal: a level exists at i once i0+K<=i, until it breaks (i1)
+    _sup = [(lv["i0"], lv["i1"], float(lv["price"])) for lv in _srlv if lv["kind"] == "S"]
+    _res = [(lv["i0"], lv["i1"], float(lv["price"])) for lv in _srlv if lv["kind"] == "R"]
+    print("S/R levels: %d support / %d resistance" % (len(_sup), len(_res)))
+
+
+def sr_ok(i, side, e):
+    """entry e at bar i CLOSER to the nearest ACTIVE support (long) / resistance (short) than the opposite side."""
+    ds = min((abs(e - p) for (i0, i1, p) in _sup if i0 + _srK <= i and (i1 is None or i1 > i)), default=None)
+    dr = min((abs(e - p) for (i0, i1, p) in _res if i0 + _srK <= i and (i1 is None or i1 > i)), default=None)
+    if ds is None or dr is None:
+        return False                                          # need both a support and a resistance to compare
+    return (ds < dr) if side > 0 else (dr < ds)
+
+
+ALL_CANDLES = os.environ.get("ALL_CANDLES") == "1"               # ALL_CANDLES=1 -> EVERY candle (ignore the Absorption badge)
+GOLD_ONLY = os.environ.get("GOLD_ONLY") == "1"                   # GOLD_ONLY=1 -> only the GOLD-square tier (kind 'gd')
 if ALL_CANDLES:
     cand = [(i, (1 if C[i] > O[i] else -1)) for i in range(0, n - 1) if C[i] != O[i]]   # candle side = bull/bear
 else:
     marks = E.detect(A, skip_last=True, absorp=list(absA))
+    if GOLD_ONLY:
+        marks = [m for m in marks if m.get("kind") == "gd"]
     cand = [(m["i"], m["side"]) for m in marks]
-print("candidate pool (pre-filter): %d %s" % (len(cand), "ALL candles" if ALL_CANDLES else "Absorption-badge candles"))
+print("candidate pool (pre-filter): %d %s" % (len(cand),
+      "ALL candles" if ALL_CANDLES else ("GOLD squares" if GOLD_ONLY else "Absorption-badge candles")))
 sigs = []
 _seen = 0
 for i, side in cand:
@@ -77,7 +103,8 @@ for i, side in cand:
     if SWING_ON:                                                     # Price&CVD swing filter (skip if SWING_OFF=1)
         if swing_dir[i] == 0:
             continue
-        legs = SW.swing_lines(A[:i + 1])
+        _lo = max(0, i - SWING_LB) if SWING_LB > 0 else 0     # bounded lookback: swing structure is local (dev leg + recent)
+        legs = SW.swing_lines(A[_lo:i + 1])
         dev = next((lg for lg in reversed(legs) if lg.get("developing")), None)
         if dev is None:
             continue
@@ -88,6 +115,18 @@ for i, side in cand:
         eff = -legdir if dev.get("is_retr") else legdir
         if side != eff:
             continue
+    if BIAS_FILTER:                                                  # signal must align with the swing Bias-badge dir
+        _blo = max(0, i - SWING_LB) if SWING_LB > 0 else 0
+        try:
+            _bb = SW.bias(A[_blo:i + 1])
+        except Exception:
+            _bb = None
+        _bd = _bb.get("dir") if _bb else None                       # "long" / "short" / None
+        _bside = 1 if _bd == "long" else (-1 if _bd == "short" else None)
+        if _bside is None or side != _bside or (BIAS_CONF > 0 and float(_bb.get("confidence", 0.0)) < BIAS_CONF):
+            continue
+    if SR_FILTER and not sr_ok(i, side, C[i]):                       # entry closer to support (long) / resistance (short)
+        continue
     sigs.append((i, side, int(yr[i])))
 sigs.sort()
 
@@ -156,7 +195,7 @@ def rep(label, rs):
 from collections import Counter
 oc = Counter(r["outc"] for r in rows)
 print("=" * 100)
-print("FULL STACK + SCALE-OUT (50%% TP1 0.3%% / 50%% TP2 1%% + BE trail) | 1h recon | n=%d" % len(rows))
+print("FULL STACK + SCALE-OUT (50%% TP1 0.3%% / 50%% TP2 1%% + BE trail) | %s recon | n=%d" % (TF, len(rows)))
 print("  outcomes: SL %d (%.0f%%) | TP1+BE %d (%.0f%%) | TP1+TP2 %d (%.0f%%)"
       % (oc["SL"], 100 * oc["SL"] / max(1, len(rows)), oc["TP1+BE"], 100 * oc["TP1+BE"] / max(1, len(rows)),
          oc["TP1+TP2"], 100 * oc["TP1+TP2"] / max(1, len(rows))))

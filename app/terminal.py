@@ -1346,7 +1346,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # RECENT-SWING LOW-VOLUME AREA indicator (hamburger m10_swinglvn) — every still-UNMITIGATED swing-leg LVN ZONE
         # (electric-purple) forecasting S/R (up-leg = support / down-leg = resistance); a zone persists until broken.
         self._svl_slots = None                   # list of per-zone dicts of pg items (lazy-built, one slot per live zone)
-        self._svl_line = None                    # ZigZag SWING-LINE polyline (m10_svl_lines) — pivot->pivot legs
+        self._svl_line = None                    # UPPER trend-channel line (m10_svl_lines) — through the swing HIGHS
+        self._svl_line_lo = None                 # LOWER trend-channel line — through the swing LOWS
+        self._svl_zz = None                      # ZigZag SWING-LINE polyline (m10_svl_zigzag) — pivot->pivot legs
+        self._svl_break = None                   # RED ✕ where a candle CLOSED beyond its leg's trend line (a break)
         self._svl_line_unpaid = None             # RED overlay on the UNPAID sub-segments (net delta opposed the move)
         self._svl_dots = None                    # midpoint split dots on each swing line
         self._svl_lines = []                     # per-leg geometry + swing absorb-A (A/A1/A2) for the hover box
@@ -2203,7 +2206,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._sr_sig = None; self._sel_sig = None    # Support/Resistance (or its Area sub-toggle) -> re-run the draw
             if key == "m10_sr" and not on:
                 self._clear_sr()                    # master off -> tear the S/R down now (Area toggle just re-draws)
-        elif key in ("m10_swinglvn", "m10_svl_zones", "m10_svl_lines", "m10_svl_bias"):
+        elif key in ("m10_swinglvn", "m10_svl_zones", "m10_svl_lines", "m10_svl_zigzag", "m10_svl_bias"):
             self._svl_sig = None; self._sel_sig = None   # RCLI (master or a sub-toggle) changed -> re-run the draw
             if not self.menu.layer_state("m10_swinglvn"):
                 self._clear_swinglvn()              # master off -> tear the whole indicator down now
@@ -2426,9 +2429,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._solo_trade_lines(self._e5m_lines_user, best, _on); ev.accept(); return
             except Exception:
                 pass
-        # SINGLE click ON a SWING LINE (RCLI) -> cycle THAT line's division 2 -> 3 -> 4 -> 2 (line-sensitive).
+        # SINGLE click ON a SWING LINE (RCLI zigzag) -> cycle THAT line's division 2 -> 3 -> 4 -> 2 (line-sensitive).
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
-                and self._svl_lines and self.menu.layer_state("m10_svl_lines")):
+                and self._svl_lines and self.menu.layer_state("m10_svl_zigzag")):
             try:
                 pt = self.vb.mapSceneToView(ev.scenePos())
                 psx, psy = self.vb.viewPixelSize()
@@ -3068,7 +3071,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.panel_tooltip.hide()
             self._svl_hovering = False
             if not (self.scanner_mode == "bucket_canvas" and self.menu.layer_state("m10_swinglvn")
-                    and self.menu.layer_state("m10_svl_lines") and self.menu.layer_state("m10_svl_lock")):
+                    and self.menu.layer_state("m10_svl_zigzag") and self.menu.layer_state("m10_svl_lock")):
                 self._svl_hover_hide()       # Lock off -> drop the box; Lock on -> _svl_lock_tick keeps it pinned
             self._last_hover_pos = None      # left the plot -> stop the hover re-fire
             if self.scanner_mode == "bucket_canvas":
@@ -5915,8 +5918,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._trade_lines(self._eng_entries, self._eng_lines_user, self._eng_ln_pool, self._eng_lnlbl_pool, 29)
 
     # 1h Easy 0.5% overlay (hamburger m10_easy1h, 1h ONLY) — FORWARD CANDIDATE, self-gated, fail-safe.
-    # Neon TRIANGLE L/S badge: green up long / purple down short. Absorption badge + ease vw%>=1 + absR<=-0.3, take
-    # candle side (Price&CVD swing filter is applied DISCRETIONARILY by the operator, not here). Scale-out 50% TP1
+    # Neon TRIANGLE L/S badge: green up long / purple down short; GOLD when the entry passes the S/R proximity filter
+    # (closer to support for L / resistance for S — in-sample the strongest quality tier). Absorption badge + ease
+    # vw%>=1 + absR<=-0.3, take candle side (Price&CVD swing filter is applied DISCRETIONARILY by the operator, not here). Scale-out 50% TP1
     # +0.5% / 50% TP2 +1.0%, SL 0.1% beyond candle, BE-trail after TP1. Click a badge -> its entry/SL/TP1/TP2 trade
     # lines. NOT a proven edge (in-sample, CI incl 0).
     def _clear_easy1h(self) -> None:
@@ -5947,6 +5951,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._clear_easy1h(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
         GRN, PUR = (57, 255, 20), (190, 70, 255)                     # neon green long / neon purple short
+        GLD = (255, 195, 40)                                         # GOLD — entry passes the S/R proximity filter
         if self._ez_sph is None:
             self._ez_sph = pg.ScatterPlotItem(pxMode=True, size=20, symbol="t1")
             self._ez_sph.setZValue(32); self.plot.addItem(self._ez_sph, ignoreBounds=True)
@@ -5960,7 +5965,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             y = (lo - pad) if side > 0 else (hi + pad)
             self._ez_entries.append(("ez%d" % i, i, side, e.get("entry", 0.0), e.get("sl", 0.0),
                                      e.get("tp1", 0.0), e.get("tp2", 0.0), y))
-            col = GRN if side > 0 else PUR
+            col = GLD if e.get("sr") else (GRN if side > 0 else PUR)   # GOLD = passes S/R proximity, else green/purple by side
             _al = _PREVIEW_ALPHA if i == _fi else 255                # forming bucket -> faded preview
             _pen_rgb = [int(c * 0.55) for c in col] + [_al]
             _sym = "t1" if side > 0 else "t"                         # up-triangle long / down-triangle short
@@ -6555,8 +6560,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _slot in self._svl_slots:
                 for _it in _slot.values():
                     _it.setVisible(False)
-        for _name in ("_svl_line", "_svl_line_unpaid", "_svl_dots", "_svl_hover", "_svl_hover_dot",
-                      "_svl_cvd_line", "_svl_cvd_dots"):
+        for _name in ("_svl_line", "_svl_line_lo", "_svl_zz", "_svl_break", "_svl_line_unpaid", "_svl_dots",
+                      "_svl_hover", "_svl_hover_dot", "_svl_cvd_line", "_svl_cvd_dots"):
             _it = getattr(self, _name, None)
             if _it is not None:
                 try:
@@ -6570,16 +6575,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._svl_sig = None; self._svl_drawn = False
 
     def _draw_swinglvn(self, filtered) -> None:
-        """Recent-Swing-LVA (RCLI): unmitigated swing-leg LVN ZONES (m10_svl_zones) + the ZigZag SWING LINES with
-        midpoint split dots and per-leg swing absorb-A on hover (m10_svl_lines). The bottom-left bias badge follows
-        the master toggle. Self-gated, fail-safe."""
+        """Recent-Swing-LVA (RCLI): unmitigated swing-leg LVN ZONES (m10_svl_zones) + a high/low TREND CHANNEL
+        (m10_svl_lines: upper line through the swing highs, lower through the lows) and/or the original ZigZag SWING
+        LINES (m10_svl_zigzag: pivot->pivot legs + split dots + per-leg absorb-A on hover). The bottom-left bias badge
+        follows the master toggle. Self-gated, fail-safe."""
         want_zones = self.menu.layer_state("m10_svl_zones")
-        want_lines = self.menu.layer_state("m10_svl_lines")
+        want_lines = self.menu.layer_state("m10_svl_lines")          # trend channel (highs/lows)
+        want_zigzag = self.menu.layer_state("m10_svl_zigzag")        # original ZigZag swing lines
+        want_any = want_lines or want_zigzag
         if not self.menu.layer_state("m10_swinglvn") or self.scanner_mode != "bucket_canvas":
             self._clear_swinglvn(); return
         n = len(filtered)
         _sig = (n, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0,
-                want_zones, want_lines)
+                want_zones, want_lines, want_zigzag)
         if _sig == self._svl_sig and self._svl_drawn:
             return
         self._svl_sig = _sig
@@ -6596,14 +6604,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _slot in self._svl_slots:
                 for _it in _slot.values():
                     _it.setVisible(False)
-        # ---- SWING LINES + midpoint dots (gated by m10_svl_lines; hover shows swing absorb-A) ----
+        # ---- TREND CHANNEL (m10_svl_lines: highs/lows) and/or ZigZag SWING LINES (m10_svl_zigzag: pivot->pivot legs) ----
         if self._svl_line is None:
-            self._svl_line = pg.PlotDataItem(connect="finite")       # NaN-separated 2-pt segments, one per leg
-            self._svl_line_unpaid = pg.PlotDataItem(connect="finite")  # red overlay: the unpaid sub-segments, on top
+            self._svl_line = pg.PlotDataItem(connect="all")          # upper channel — polyline through the swing highs
+            self._svl_line_lo = pg.PlotDataItem(connect="all")       # lower channel — polyline through the swing lows
+            self._svl_zz = pg.PlotDataItem(connect="finite")         # ZigZag legs — NaN-separated 2-pt segments
+            self._svl_line_unpaid = pg.PlotDataItem(connect="finite")  # red overlay: the unpaid sub-segments (zigzag only)
             self._svl_dots = pg.ScatterPlotItem(pxMode=True)
-            for _it, _z in ((self._svl_line, 27), (self._svl_line_unpaid, 28), (self._svl_dots, 29)):
+            self._svl_break = pg.ScatterPlotItem(pxMode=True, symbol="x", size=12)   # trend-line BREAK markers
+            for _it, _z in ((self._svl_line, 27), (self._svl_line_lo, 27), (self._svl_zz, 27),
+                            (self._svl_line_unpaid, 28), (self._svl_dots, 29), (self._svl_break, 31)):
                 _it.setZValue(_z); self.plot.addItem(_it, ignoreBounds=True)
-        if want_lines:
+        if want_any:
             try:
                 lines = swing_lvn_detect.swing_lines(filtered, divs=self._svl_div) or []
             except Exception:
@@ -6611,27 +6623,72 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._svl_lines = lines
             self._svl_buckets = filtered              # cache for the card's cumulative per-candle absorb-A
             GOLD = (222, 190, 96); RED = (255, 74, 74)
-            xs = []; ys = []; dots = []; rxs = []; rys = []
-            for lg in lines:
-                xs += [lg["b0"], lg["b1"], float("nan")]
-                ys += [lg["p0"], lg["p1"], float("nan")]
-                _su = lg.get("seg_unpaid") or []                     # per-part UNPAID (current ÷N division)
-                if any(_su):                                         # red-overlay the unpaid sub-segments (pivot->dots->pivot)
-                    _pts = [(lg["b0"], lg["p0"])] + [(_d[0], _d[1]) for _d in lg["dots"]] + [(lg["b1"], lg["p1"])]
-                    for _k in range(min(len(_su), len(_pts) - 1)):
-                        if _su[_k]:
-                            rxs += [_pts[_k][0], _pts[_k + 1][0], float("nan")]
-                            rys += [_pts[_k][1], _pts[_k + 1][1], float("nan")]
-                for (_dbar, _dpx) in lg["dots"]:               # N-1 split dots per leg (÷2 -> 1, ÷3 -> 2, ÷4 -> 3)
-                    dots.append({"pos": (_dbar, _dpx), "size": 6,
-                                 "brush": pg.mkBrush(*GOLD, 235), "pen": pg.mkPen(25, 25, 25, 200, width=0.8)})
-            self._svl_line.setData(xs, ys, pen=pg.mkPen(*GOLD, 205, width=1.3), connect="finite")
-            self._svl_line_unpaid.setData(rxs, rys, pen=pg.mkPen(*RED, 235, width=2.4), connect="finite")
-            self._svl_dots.setData(dots)
-            self._svl_line.setVisible(True); self._svl_line_unpaid.setVisible(True); self._svl_dots.setVisible(True)
+            # -- trend channel PER SWING LEG. The TREND line is a least-squares fit through the LOWS (up-leg -> support)
+            #    or the HIGHS (down-leg -> resistance) so MOST candles sit along it; a break of it = a candle that
+            #    deviated from what most others did. The PARALLEL line (same slope) is offset to the opposite extreme.
+            #    Developing leg -> extends to the live edge (the active channel to watch for a break). --
+            self._svl_line.setVisible(False); self._svl_line_lo.setVisible(False); self._svl_break.setVisible(False)
+            if want_lines and lines:
+                Hh = [float(b.get("high", 0.0) or 0.0) for b in filtered]
+                Ll = [float(b.get("low", 0.0) or 0.0) for b in filtered]
+                Cc = [float(b.get("close", b.get("close_price", 0.0)) or 0.0) for b in filtered]
+                _nan = float("nan"); tx = []; ty = []; px = []; py = []               # trend line / parallel line segments
+                brk_spots = []; _RED = (240, 60, 78)
+                for lg in lines:
+                    b0 = int(lg["b0"]); b1 = (n - 1) if lg.get("developing") else int(lg["b1"]); b1 = min(b1, n - 1)
+                    if b1 - b0 < 3:
+                        continue
+                    up_leg = bool(lg["ends_high"])                                    # rising leg -> support=lows; falling -> resistance=highs
+                    idx = np.arange(b0, b1 + 1, dtype=float)
+                    his = np.array(Hh[b0:b1 + 1]); los = np.array(Ll[b0:b1 + 1])
+                    fit = los if up_leg else his                                      # least-squares fit of the side the trend line connects
+                    xm = idx.mean(); dx = idx - xm; denom = float((dx * dx).sum())
+                    if denom <= 0:
+                        continue
+                    m = float((dx * (fit - fit.mean())).sum() / denom); b = float(fit.mean() - m * xm)
+                    base = m * idx + b                                                # the trend line over the leg
+                    par_off = float((his - base).max()) if up_leg else float((los - base).min())   # parallel touches the opposite extreme
+                    t0 = m * b0 + b; t1 = m * b1 + b
+                    tx += [b0, b1, _nan]; ty += [t0, t1, _nan]                        # TREND line (support up / resistance down)
+                    px += [b0, b1, _nan]; py += [t0 + par_off, t1 + par_off, _nan]    # PARALLEL line
+                    cl = np.array(Cc[b0:b1 + 1])                                      # counter-trend BREAK = close beyond the trend line
+                    beyond = (base - cl) if up_leg else (cl - base)                   # how far each close broke past it (>0 = a break)
+                    brk = np.where(beyond > 0)[0]
+                    if len(brk):                                                     # mark ONLY the MOST SIGNIFICANT (deepest) break
+                        _bk = int(brk[int(np.argmax(beyond[brk]))])
+                        brk_spots.append({"pos": (b0 + _bk, float(los[_bk]) if up_leg else float(his[_bk])),
+                                          "symbol": "x", "size": 13,
+                                          "pen": pg.mkPen(*_RED, 255, width=2.3), "brush": pg.mkBrush(*_RED, 0)})
+                self._svl_line_lo.setData(tx, ty, pen=pg.mkPen(*GOLD, 235, width=1.7), connect="finite")   # trend/break line — prominent
+                self._svl_line.setData(px, py, pen=pg.mkPen(*GOLD, 120, width=1.0), connect="finite")      # parallel — faint context
+                self._svl_break.setData(brk_spots)
+                self._svl_line_lo.setVisible(True); self._svl_line.setVisible(True); self._svl_break.setVisible(True)
+            # -- ZigZag swing lines: pivot->pivot legs + midpoint split dots + unpaid red overlay --
+            if want_zigzag:
+                xs = []; ys = []; dots = []; rxs = []; rys = []
+                for lg in lines:
+                    xs += [lg["b0"], lg["b1"], float("nan")]
+                    ys += [lg["p0"], lg["p1"], float("nan")]
+                    _su = lg.get("seg_unpaid") or []                 # per-part UNPAID (current ÷N division)
+                    if any(_su):
+                        _pts = [(lg["b0"], lg["p0"])] + [(_d[0], _d[1]) for _d in lg["dots"]] + [(lg["b1"], lg["p1"])]
+                        for _k in range(min(len(_su), len(_pts) - 1)):
+                            if _su[_k]:
+                                rxs += [_pts[_k][0], _pts[_k + 1][0], float("nan")]
+                                rys += [_pts[_k][1], _pts[_k + 1][1], float("nan")]
+                    for (_dbar, _dpx) in lg["dots"]:
+                        dots.append({"pos": (_dbar, _dpx), "size": 6,
+                                     "brush": pg.mkBrush(*GOLD, 235), "pen": pg.mkPen(25, 25, 25, 200, width=0.8)})
+                self._svl_zz.setData(xs, ys, pen=pg.mkPen(*GOLD, 205, width=1.3), connect="finite")
+                self._svl_line_unpaid.setData(rxs, rys, pen=pg.mkPen(*RED, 235, width=2.4), connect="finite")
+                self._svl_dots.setData(dots)
+                self._svl_zz.setVisible(True); self._svl_line_unpaid.setVisible(True); self._svl_dots.setVisible(True)
+            else:
+                self._svl_zz.setVisible(False); self._svl_line_unpaid.setVisible(False); self._svl_dots.setVisible(False)
         else:
             self._svl_lines = []
-            self._svl_line.setVisible(False); self._svl_line_unpaid.setVisible(False); self._svl_dots.setVisible(False)
+            self._svl_line.setVisible(False); self._svl_line_lo.setVisible(False); self._svl_zz.setVisible(False)
+            self._svl_line_unpaid.setVisible(False); self._svl_dots.setVisible(False); self._svl_break.setVisible(False)
             self._svl_hover_hide()                       # lines off -> drop the hover box + CVD mirror too
         # ---- bias badge (from the zones; independent of the sub-toggles) ----
         try:
@@ -6907,7 +6964,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Cursor near a SWING LINE -> show that swing's stats box (pinned bottom-right) + emphasise its dots + CVD
         mirror. When the cursor is off every leg: show the DEVELOPING swing if Lock is on, else hide."""
         lines = self._svl_lines
-        if not lines or not self.menu.layer_state("m10_svl_lines"):
+        if not lines or not self.menu.layer_state("m10_svl_zigzag"):
             self._svl_hovering = False; self._svl_hover_hide(); return
         try:
             psx, psy = self.vb.viewPixelSize()
@@ -6993,7 +7050,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Draw the retrace+follow projection for `target` leg, or hide it when Projections / lines / the master
         toggle are off or there is no target. Fail-safe against a mid-frame canvas teardown."""
         if not (self.scanner_mode == "bucket_canvas" and self.menu.layer_state("m10_swinglvn")
-                and self.menu.layer_state("m10_svl_lines") and self.menu.layer_state("m10_svl_proj")
+                and self.menu.layer_state("m10_svl_zigzag") and self.menu.layer_state("m10_svl_proj")
                 and target is not None):
             self._svl_proj_hide(); return
         try:
@@ -7011,7 +7068,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Per-frame: with Lock on and the cursor NOT over a swing, keep the stats box pinned on the DEVELOPING
         (most-recent forming) swing, updating live as it grows. No-op otherwise."""
         if not (self.scanner_mode == "bucket_canvas" and self.menu.layer_state("m10_swinglvn")
-                and self.menu.layer_state("m10_svl_lines") and self.menu.layer_state("m10_svl_lock")):
+                and self.menu.layer_state("m10_svl_zigzag") and self.menu.layer_state("m10_svl_lock")):
             return
         if self._svl_hovering:                  # the hover box is showing the swing under the cursor -> leave it
             return

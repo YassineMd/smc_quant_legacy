@@ -526,7 +526,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         each on/off independently. Both are m10_ keys, so they persist + read via layer_state like every other
         layer; the master m10_swinglvn still gates the whole indicator."""
         for key, label, default in (("m10_svl_zones", "· VA Zones", True),
-                                     ("m10_svl_lines", "· Swing lines", True),
+                                     ("m10_svl_lines", "· Trend channel", True),
+                                     ("m10_svl_zigzag", "· Swing lines", False),
                                      ("m10_svl_bias", "· Bias badge", True),
                                      ("m10_svl_lock", "· Lock swing stats", False),
                                      ("m10_svl_proj", "· Projections", False)):
