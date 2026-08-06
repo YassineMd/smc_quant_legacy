@@ -6182,8 +6182,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if ((hh >= tp) if side > 0 else (ll <= tp)) or ((ll <= sl) if side > 0 else (hh >= sl)):
                     exit_x = j; break
             rb = max(xv + 1.0, float(exit_x))
+            tp04 = entry * (1 + side * 0.004)                # fixed 0.4% test target (gold), alongside the adaptive TP (green)
             for lvl, col, w, tag in ((sl, (255, 90, 90), 1.5, "sl"), (tp, (40, 230, 90), 1.5, "tp"),
-                                     (entry, WHITE, 1.9, "entry")):
+                                     (tp04, (255, 195, 40), 1.5, "tp04"), (entry, WHITE, 1.9, "entry")):
                 if ul >= len(cpool):
                     _ln = pg.PlotCurveItem(); _ln.setZValue(29); self.plot.addItem(_ln, ignoreBounds=True); cpool.append(_ln)
                 _ln = cpool[ul]; ul += 1
@@ -6198,6 +6199,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _tl.setText("%.2f  ·  str %d%%" % (entry, strg))
                 elif tag == "tp":
                     _tl.setText("TP %.1fx  %.2f (%+.2f%%)" % (tpm, lvl, side * (lvl - entry) / entry * 100.0))
+                elif tag == "tp04":
+                    _tl.setText("TP 0.4%%  %.2f (%+.2f%%)" % (lvl, side * (lvl - entry) / entry * 100.0))
                 else:
                     _tl.setText("%.2f (%+.2f%%)" % (lvl, side * (lvl - entry) / entry * 100.0))
                 _tl.setColor(col); _tl.setPos(rb, lvl); _tl.setVisible(True)
