@@ -4,8 +4,9 @@ Every interactive control lives inside the sliding top-right ``[☰]`` panel so 
 white canvas stays nude (spec §5.1.3). Controls emit Qt signals the window wires
 to render-layer toggles and the socket client.
 
-Excluded by Purge Protocol (§10.1): no EMA / Keltner toggles, no Market Replay,
-no Quant Sniper panel, no "Copy AI Data" export.
+Excluded by Purge Protocol (§10.1): no Market Replay, no Quant Sniper panel, no "Copy AI Data" export.
+(The Keltner channel / POC baseline / VWAP are on/off Indicator toggles — the old EMA/Keltner *scale slider*
+stays purged; only simple visibility toggles were re-added.)
 """
 
 from __future__ import annotations
@@ -37,16 +38,6 @@ def scale_label(tf: str, vol: float) -> str:
     (tf_seconds / 60), ~vol the live 1-sig-fig magnitude the sizing produces."""
     nx = config.TF_SECONDS.get(tf, 60) // 60
     return f"{nx}× ({_fmt_vol_1sig(vol)})"
-
-def _fmt_tf_secs(secs: float) -> str:
-    """Compact 'effective timeframe' label for the Keltner-scale slider: seconds -> '5m' / '1h' / '1h30m' / '4h'."""
-    m = secs / 60.0
-    if m < 60:
-        return ("%dm" % round(m)) if abs(m - round(m)) < 0.05 else ("%.1fm" % m)
-    h = m / 60.0
-    if abs(h - round(h)) < 0.03:
-        return "%dh" % round(h)
-    return "%dh%02dm" % (int(h), int(round((h - int(h)) * 60)))
 
 _BTN_QSS = """
 QPushButton {
@@ -117,6 +108,9 @@ _M10_LAYERS = [
 _M10_INDICATORS = [
     ("m10_engulf1m", "Absorption Candle indicator", False, True),   # ALL tf: absorption-tiered losanges (cyan/magenta engulf |A|>=2, blue/orange same-side pair, green/red engulf |A|>=1)
     ("m10_sr", "Support & Resistance", False, True),      # neon-blue support / neon-red resistance (pivot fractals)
+    ("m10_keltner", "Keltner Channel", True, True),        # EMA(close)±ATR band (light gray); was always-on, now toggleable
+    ("m10_poc_baseline", "POC Baseline", True, True),      # gray dashed POC-center EMA line; was always-on, now toggleable
+    ("m10_vwap", "VWAP", False, True),                     # daily-anchored (UTC-midnight reset) volume-weighted avg price — BLUE line
     ("m10_swinglvn", "Price & CVD Swings", False, True),   # ALL tf: ZigZag swing lines + swing absorb-A + retracement verdict; LVN zones sub-toggle
     ("m10_obs", "Order Blocks", False, True),             # default OFF — toggle with Order Blocks + Iceberg via 'o'
     ("m10_structure", "Market Structure — scalp ZigZag", False, True),   # fine ZigZag (ZIGZAG_PCT, app/structure.py)
@@ -126,6 +120,7 @@ _M10_INDICATORS = [
     ("m10_4hsep", "4h Bucket Separators", True, True),          # dashed vline at each completed 4h bucket's start
     ("m10_prevday_vp", "Prev. Day VP", False, True),            # per-previous-UTC-day Volume Profile (style = 'Volume Profile Mode' dropdown)
     ("m10_session", "Session Filter", False, True),            # per-UTC-day Tokyo/London/New-York boxes: range + avg (VWAP) + high/low
+    ("m10_ny_erange", "NY Expected Range", False, True),       # forecast today's NY range from YESTERDAY's NY range (day-over-day vol persistence, r=0.33)
     ("m10_breakout5m", "5m Breakout", False, True),             # 5m ONLY: green/red 'Br' badges on S/R-breakout (mitigation) candles
 ]
 
@@ -419,18 +414,10 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.chart_slider.valueChanged.connect(self._emit_chart_filter)
         root.addWidget(self.chart_slider)
 
-        # --- Keltner smooth-approx scale (UNDER Depth Wall): stretch the 1m KC + POC baseline toward a higher-TF
-        #     channel (EMA/ATR period ×scale, band ×sqrt(scale)). Label shows the ≈ effective timeframe. ---
-        self.kc_label = QtWidgets.QLabel()
-        root.addWidget(self.kc_label)
-        self.kc_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self.kc_slider.setRange(10, int(round(config.KELTNER_SCALE_MAX * 10)))   # ×1.0 .. ×MAX in 0.1 steps
-        self.kc_slider.setSingleStep(1); self.kc_slider.setPageStep(10)
-        self.kc_slider.setValue(int(round(config.KELTNER_SCALE_DEFAULT * 10)))
-        self.kc_slider.valueChanged.connect(self._on_kc_slider)
-        root.addWidget(self.kc_slider)
-        self.tf_combo.currentIndexChanged.connect(lambda _i: self._render_kc_lbl())   # base tf changed -> refresh ≈eff-TF
-        self._render_kc_lbl()
+        # (Keltner smooth-approx scale SLIDER removed — the Keltner channel is now a plain on/off toggle in the
+        #  Indicator group. The scale is pinned to the persisted/default value; set_kc_scale() still stores a
+        #  restored value, and kc_scale() feeds the terminal's KC fold exactly as before.)
+        self._kc_scale_val = float(config.KELTNER_SCALE_DEFAULT)
 
         # --- sub-widgets accordion (patch §14) ---
         self.sub_section = CollapsibleSection("Sub-Widgets", expanded=False)
@@ -439,6 +426,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("cob", "Order Book DOM Ladder"),
                            ("fp_pane", "Live Footprint Pane"),   # right-docked forming-candle footprint (Mode 10)
                            ("cvd_pane", "CVD Pane (1D anchored)"),   # cumulative volume delta, resets each UTC midnight
+                           ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:
             cb = QtWidgets.QCheckBox(label)
             # First-launch DEFAULT (before connect): Vector Drawing ON, OB/Iceberg Alert OFF.
@@ -590,25 +578,14 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self._render_swing_lbl()
 
     # ------------------------------------------------------------------
-    def _on_kc_slider(self, _v: int) -> None:
-        self._render_kc_lbl()
-        self.keltnerScaleChanged.emit(self.kc_scale())
-
-    def _render_kc_lbl(self) -> None:
-        s = self.kc_scale()
-        base = config.TF_SECONDS.get(self.tf_combo.currentData() or config.DEFAULT_TF, 60)
-        self.kc_label.setText("Keltner ~ %s  ·  %.1fx" % (_fmt_tf_secs(base * s), s))
-
     def kc_scale(self) -> float:
-        """Current Keltner smooth-approx effective-TF scale (1.0 = native)."""
-        return self.kc_slider.value() / 10.0
+        """Keltner smooth-approx effective-TF scale (1.0 = native). The live slider was removed; the value is
+        pinned to the persisted/default scale and only changes via set_kc_scale() on session restore."""
+        return self._kc_scale_val
 
     def set_kc_scale(self, s: float) -> None:
-        """Restore a persisted Keltner scale WITHOUT emitting (clamped to the slider range)."""
-        self.kc_slider.blockSignals(True)
-        self.kc_slider.setValue(int(round(max(1.0, min(config.KELTNER_SCALE_MAX, float(s))) * 10)))
-        self.kc_slider.blockSignals(False)
-        self._render_kc_lbl()
+        """Restore a persisted Keltner scale (slider removed — just store it, clamped to the valid range)."""
+        self._kc_scale_val = max(1.0, min(float(config.KELTNER_SCALE_MAX), float(s)))
 
     def set_candle_mode(self, m: int) -> None:
         """Sync the Candle-Mode dropdown to `m` WITHOUT emitting (used when 'W' cycles it or on restore)."""

@@ -367,7 +367,7 @@ class SubCandleWindow(QtWidgets.QDialog):
         # "Display Previous" CONTINUOUS mode: once on, the 1m chart shows a continuous range [_range_start, live edge]
         # BOUNDED to [_range_start, _range_end]; each 'Display Previous' click extends _range_start one parent candle
         # back while _range_end stays pinned at the opened bucket's end. Both are seeded by the owner on open.
-        self._range_start = 0.0; self._range_end = 0.0; self._continuous = False; self._cont_sig = None
+        self._range_start = 0.0; self._range_end = 0.0; self._follow_edge = False; self._continuous = False; self._cont_sig = None
         lay = QtWidgets.QHBoxLayout(self); lay.setContentsMargins(4, 4, 4, 4); lay.setSpacing(4)
         split = QtWidgets.QSplitter(QtCore.Qt.Horizontal); lay.addWidget(split)
         # LEFT — 1m candlesticks (zoom/pan = default pyqtgraph mouse)
@@ -1301,6 +1301,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._nyrb_prob_pool = []                # TextItem — 'brB x% - brS y%' break-side probability readout
         self._nyrb_entries = []                  # click a badge -> its entry/SL/TP lines (+ strength% at entry)
         self._nyrb_ln_pool = []; self._nyrb_lnlbl_pool = []; self._nyrb_lines_user = {}
+        self._nyer_box_pool = []      # NY Expected Range: forecast band (QGraphicsRectItem)
+        self._nyer_line_pool = []     # NY Expected Range: dashed expected hi/lo edges (PlotCurveItem)
+        self._nyer_lbl_pool = []      # NY Expected Range: 'NY exp X.X%' label (TextItem)
         self._nyrb_ranges = []; self._nyrb_data_sig = None   # cached detect() output (recompute only on data change)
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
@@ -1768,6 +1771,36 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                # positions it top-centre once the window lays out).
         self.drawer.selectionChanged.connect(self._refresh_selection_stats)   # Magic Selection -> stats
         self.drawer.set_paper_account(self.paper_live, self.alerts.record_trade)   # start on the LIVE account
+
+        # --- Market Position Buy/Sell overlay (sub-widget 'market_pos') — floating buttons pinned bottom-centre of the
+        #     chart; a click fires a DEFAULT simulated market position (entry = live price, SL 0.5%, TP 0.5%). ---
+        self._mkt_bar = QtWidgets.QWidget(self.plot)
+        _mlay = QtWidgets.QHBoxLayout(self._mkt_bar); _mlay.setContentsMargins(0, 0, 0, 0); _mlay.setSpacing(12)
+        self._mkt_buy = QtWidgets.QPushButton("▲  BUY"); self._mkt_buy.setObjectName("mktBuy")
+        self._mkt_sell = QtWidgets.QPushButton("▼  SELL"); self._mkt_sell.setObjectName("mktSell")
+        for _b in (self._mkt_buy, self._mkt_sell):
+            _b.setCursor(QtCore.Qt.PointingHandCursor); _b.setFixedSize(122, 42)
+            try:
+                _sh = QtWidgets.QGraphicsDropShadowEffect(self._mkt_bar); _sh.setBlurRadius(20)
+                _sh.setColor(QtGui.QColor(0, 0, 0, 170)); _sh.setOffset(0, 3); _b.setGraphicsEffect(_sh)
+            except Exception:
+                pass
+            _mlay.addWidget(_b)
+        self._mkt_bar.setStyleSheet(
+            "QPushButton{border:none;border-radius:9px;color:#ffffff;font-family:'Segoe UI';font-size:14px;font-weight:700;letter-spacing:0.5px;}"
+            "QPushButton#mktBuy{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #34d17f,stop:1 #12a24a);}"
+            "QPushButton#mktBuy:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #45e08f,stop:1 #17b757);}"
+            "QPushButton#mktBuy:pressed{background:#0f8a3e;}"
+            "QPushButton#mktSell{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ff5f6d,stop:1 #e23a4b);}"
+            "QPushButton#mktSell:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ff7683,stop:1 #ef4557);}"
+            "QPushButton#mktSell:pressed{background:#c62f40;}")
+        self._mkt_buy.clicked.connect(lambda: self._place_market("long"))
+        self._mkt_sell.clicked.connect(lambda: self._place_market("short"))
+        self._mkt_bar.hide()
+        try:
+            self.vb.sigResized.connect(self._reposition_mkt_bar)
+        except Exception:
+            pass
         self.alerts.set_mode("LIVE"); self.alerts.set_balance(self.paper_live.balance)
         self.alerts.clearRequested.connect(self._on_clear_paper)
         QtGui.QShortcut(QtGui.QKeySequence("Escape"), self, activated=self.drawer.cancel)
@@ -2268,8 +2301,35 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._last_scanner_sig = None    # force a redraw so the pane fills immediately
         elif key == "audio":
             self.alerts.audio.set_armed(on)
+        elif key == "market_pos":
+            self._mkt_bar.setVisible(on)
+            if on:
+                self._mkt_bar.raise_(); self._reposition_mkt_bar()
         if not self._loading_ui:
             self._save_ui_state()               # persist the sub-widget toggle across sessions
+
+    def _reposition_mkt_bar(self, *args) -> None:
+        """Keep the Buy/Sell bar centred at the bottom of the chart (clear of the x-axis)."""
+        bar = getattr(self, "_mkt_bar", None)
+        if bar is None or not bar.isVisible():
+            return
+        bar.adjustSize()
+        pw = self.plot.width(); ph = self.plot.height()
+        bar.move(max(0, int((pw - bar.width()) / 2)), max(0, int(ph - bar.height() - 44)))
+
+    def _place_market(self, kind: str) -> None:
+        """Buy/Sell click -> a DEFAULT simulated market position (entry = live price, SL 0.5%, TP 0.5%)."""
+        try:
+            p = self._live_px or getattr(self.drawer, "_cur_px", None)
+            if not p or float(p) <= 0.0:
+                act = (self._last_snap or {}).get("active_bucket") or {}
+                p = float(act.get("close", act.get("close_price", 0.0)) or 0.0)
+            if not p or float(p) <= 0.0:
+                return
+            x = max(0, int(getattr(self, "_scanner_frame_n", 1) or 1) - 1)
+            self.drawer.place_market(kind, float(p), x)
+        except Exception:
+            pass
 
     def _update_fp_pane_visibility(self) -> None:
         """Show the live-footprint side pane only when the user wants it AND we're in Mode 10 (bucket_canvas), the
@@ -2774,9 +2834,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return below[-1] if below else None
 
     def _subcandle_prev(self, w) -> None:
-        """'Display Previous' clicked: extend this window's range one parent candle further back, keeping the RIGHT edge
-        pinned at the opened candle (BOUNDED — shows the opened candle plus the previous one(s), NOT everything up to
-        'now'). Each click prepends one more previous candle. Re-fits once to reveal the newly-added history."""
+        """'Display Previous' clicked: extend this window's range one parent candle further back. A popup showing the
+        LATEST candle (replay edge, or the live forming candle) keeps FOLLOWING the edge forward, so steps / Shift+Right
+        micro-steps still grow it; a scrolled-back HISTORICAL popup stays BOUNDED to the opened candle (no jump to 'now').
+        Each click prepends one more previous candle. Re-fits once to reveal the newly-added history."""
         rs = float(getattr(w, "_range_start", 0.0) or 0.0)
         if rs <= 0.0:
             return
@@ -2784,6 +2845,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if prev is None:
             return                                            # nothing earlier is loaded
         w._range_start = prev; w._continuous = True
+        # follow the edge forward iff this popup shows the LATEST candle (so steps / Shift+Right keep growing it); a
+        # scrolled-back historical popup stays bounded. Replay: opened candle == the edge bucket; live: the forming candle.
+        if self._replay_on:
+            try:
+                _filt = self._build_scanner_buckets()[0] or []
+                _edge_cs = float(_filt[-1].get("start_time", 0.0) or 0.0) if _filt else 0.0
+            except Exception:
+                _edge_cs = 0.0
+            w._follow_edge = bool(_edge_cs > 0.0 and abs(float(getattr(w, "_cs", 0.0) or 0.0) - _edge_cs) < 1.0)
+        else:
+            w._follow_edge = bool(getattr(w, "_live", False))
         w._fitted = False; w._cont_force = True               # re-fit to show the extended range, force a redraw
         try:
             import datetime as _dt
@@ -2858,8 +2930,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pass
 
     def _refresh_continuous_subcandle(self, w) -> None:
-        """Refresh a CONTINUOUS ('Display Previous') 1m window: render every 1m from w._range_start to the current live/
-        replay edge, growing forward without resetting on a bucket close. Footprint/stats track the edge candle."""
+        """Refresh a CONTINUOUS ('Display Previous') window: render every sub-candle from w._range_start to the right
+        edge. FOLLOWING (opened on the latest candle) -> grows forward to the live/replay edge, including the Shift+Right
+        micro-reveal partials; BOUNDED (scrolled-back historical open) -> pinned at the opened candle. Stats track it."""
         rs = float(getattr(w, "_range_start", 0.0) or 0.0)
         if rs <= 0.0:
             return
@@ -2877,9 +2950,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             import time as _t
             edge_t = _t.time()
         _tf = getattr(w, "_sub_tf", "1m")
-        _rend = float(getattr(w, "_range_end", 0.0) or 0.0)      # "Display Previous" is BOUNDED to the opened candle's end
-        _right = _rend if _rend > rs else (edge_t + 90.0)        # -> shows only the added previous candle(s), not up to 'now'
-        _stat = (getattr(w, "_htf_candle", None) or edge) if _rend > rs else edge   # bounded -> stats = the opened candle
+        _rend = float(getattr(w, "_range_end", 0.0) or 0.0)      # "Display Previous" bound (the opened candle's end)
+        _follow = bool(getattr(w, "_follow_edge", False))        # opened at the live/replay edge -> keep FOLLOWING it forward
+        _bounded = (_rend > rs) and not _follow                  # historical open -> stay bounded; edge/live open -> follow
+        # a Shift+Right micro-reveal is in progress -> fetch CLOSED candles only up to the CURSOR (_replay_edge_t), then
+        # append the revealed developing constituents below; else the recon store hands back the WHOLE developing candle
+        # at once and the minute-by-minute growth never shows.
+        _micro_here = (not _bounded and self._replay_on and self._in_recon_replay() and self._micro_k > 0
+                       and self._micro_subs and self._micro_edge == self._replay_edge_t
+                       and (getattr(self, "_micro_subs_tf", None) or "1m") == _tf)
+        _right = float(self._replay_edge_t or 0.0) if _micro_here else (_rend if _bounded else (edge_t + 90.0))
+        _stat = (getattr(w, "_htf_candle", None) or edge) if _bounded else edge   # bounded -> stats = opened candle, else edge
         subs = self._fetch_sub_window(rs, _right, _tf)
         if not self._replay_on and not self._in_recon_replay():   # MERGE the live tf stream (recent closed + developing)
             w1 = self._sub_worker(_tf)                           # with the archive, which lags the last ~hour
@@ -2894,10 +2975,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 except Exception:
                     pass
         subs = [s for s in subs if rs - 0.5 <= float(s.get("start_time", 0.0) or 0.0) < _right]   # causal, within [start,end]
+        # MICRO-REVEAL (Shift+Right in recon replay): the replay edge freezes while the developing candle grows one 1m at
+        # a time -> append the revealed constituents so a FOLLOWING popup advances minute-by-minute (not just on the snap).
+        _mk = 0
+        if _micro_here:
+            _mk = int(self._micro_k)
+            _have = {round(float(s.get("start_time", 0.0) or 0.0), 1) for s in subs}
+            for _ms in self._micro_subs[:_mk]:
+                _mst = float(_ms.get("start_time", 0.0) or 0.0)
+                if _mst >= rs and round(_mst, 1) not in _have:
+                    subs.append(_ms)
         subs.sort(key=lambda x: float(x.get("start_time", 0.0) or 0.0))
         if not subs:
             return
-        sig = (_tf, round(rs, 3), len(subs), round(float((subs[-1] or {}).get("curr_vol", 0.0) or 0.0), 3))
+        sig = (_tf, round(rs, 3), len(subs), round(float((subs[-1] or {}).get("curr_vol", 0.0) or 0.0), 3), _mk)
         if getattr(w, "_cont_sig", None) == sig and not getattr(w, "_cont_force", False):
             return
         w._cont_sig = sig; w._cont_force = False
@@ -4845,6 +4936,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                  ("London", 8, 13, (240, 158, 58)),      # ends at the NY open (13:00 UTC) -> no London/NY overlap
                  ("New York", 13, 21, (58, 190, 122)))
 
+    # NY Expected-Range forecast (m10_ny_erange): today's NY range% ≈ A + B·(yesterday's NY range%). Winsorized OLS
+    # over 534 recon days (lag-1 range autocorr r=0.33; OOS MAE 1.58% beats use-the-mean 2.03%). NY range = (high-low)
+    # over the 13-21 UTC session. Band = NY_open × (1 ± ER/2), spanning that day's NY session; per UTC day.
+    NY_ER_A, NY_ER_B, NY_ER_MEAN = 0.03017, 0.2656, 0.04287
+    NY_ER_CLIP = (0.015, 0.12)                            # clamp the forecast to a sane 1.5%–12% band
+    NY_ER_RGB = (150, 120, 235)                           # violet — distinct from the green NY session box
+
     def _sess_rect(self, used, rgb):                           # pooled translucent session box (behind candles)
         if used >= len(self._sess_rect_pool):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-8)
@@ -4877,8 +4975,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _draw_session(self, buckets, x, vx0, vx1) -> None:
         """Session Filter (m10_session): one VOLUME-PROFILE-ZONES set per UTC calendar-day session (Tokyo / London /
         New York). The session's footprint is aggregated over its hour window and drawn as the 'VP Zones' levels —
-        VAH/VAL white + buy-POC green / sell-POC red / LVN purple dashed — spanning the session's time inside a faint
-        session-tinted box that covers the FULL candle high->low range (not just the value area) with a name label.
+        VAH/VAL (session colour) + POC yellow solid + buy-POC green / sell-POC red / LVN purple dashed — spanning the
+        session's time inside a faint session-tinted box covering the FULL candle high->low range, with a name label.
         Culled to the viewport."""
         if not self.menu.layer_state("m10_session") or not buckets:
             self._hide_session(); return
@@ -4922,6 +5020,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         except Exception:
                             va = None
                     if va:
+                        try:
+                            va["poc"] = bar_quantiles.poc(prof)   # overall POC (highest total b+s volume) -> yellow solid line
+                        except Exception:
+                            pass
                         x0 = x[i] - 0.5; x1 = x[j] + 0.5
                         vah = va.get("vah"); val = va.get("val")
                         if _shi > _slo > 0:                    # faint session box spans the FULL candle high->low range
@@ -4929,6 +5031,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             self._sess_rect_pool[ur].setVisible(True); ur += 1
                         if _vp_on:                            # VP-lines sub-toggle (m10_sess_vp) — box stays either way
                             for _key, _crgb, _dash in (("vah", rgb, None), ("val", rgb, None),   # VAH/VAL in the session colour
+                                                       ("poc", (255, 240, 0), None),             # overall POC — YELLOW solid
                                                        ("buy_poc", (78, 203, 141), [3.0, 6.0]),
                                                        ("sell_poc", (255, 82, 82), [3.0, 6.0]),
                                                        ("lvn", (178, 70, 255), [3.0, 6.0])):
@@ -4950,6 +5053,93 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _c.setVisible(False)
         for _t in self._sess_lbl_pool[ut:]:
             _t.setVisible(False)
+
+    # ------------------------------------------------------------------
+    # NY EXPECTED RANGE (hamburger m10_ny_erange) — forecast today's NY session range from YESTERDAY's NY range.
+    # Day-over-day volatility persistence (lag-1 range autocorr r=0.33, OOS-validated): a WIDE NY yesterday begets a
+    # wide NY today. Drawn as a violet band NY_open × (1 ± ER/2) spanning the 13-21 UTC session, per UTC day.
+    # Direction is NOT forecast (session direction has no day-over-day memory) — this is a width/volatility envelope.
+    # ------------------------------------------------------------------
+    def _nyer_box(self, used):                                # pooled forecast band (behind candles)
+        if used >= len(self._nyer_box_pool):
+            _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-7)
+            self.vb.addItem(_rc, ignoreBounds=True); self._nyer_box_pool.append(_rc)
+        _rc = self._nyer_box_pool[used]
+        _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(*self.NY_ER_RGB, 22))
+        return _rc
+
+    def _nyer_line(self, used):                               # pooled dashed expected hi/lo edge
+        if used >= len(self._nyer_line_pool):
+            _c = pg.PlotCurveItem(); _c.setZValue(-5)
+            self.plot.addItem(_c, ignoreBounds=True); self._nyer_line_pool.append(_c)
+        return self._nyer_line_pool[used]
+
+    def _nyer_lbl(self, used):                                # pooled 'NY exp X.X%' label
+        if used >= len(self._nyer_lbl_pool):
+            _t = pg.TextItem(anchor=(0, 1)); _t.setZValue(15)
+            _t.textItem.setFont(QtGui.QFont("Consolas", 8))
+            self.plot.addItem(_t, ignoreBounds=True); self._nyer_lbl_pool.append(_t)
+        return self._nyer_lbl_pool[used]
+
+    def _hide_ny_erange(self) -> None:
+        for _p in (self._nyer_box_pool + self._nyer_line_pool + self._nyer_lbl_pool):
+            _p.setVisible(False)
+
+    def _draw_ny_erange(self, buckets, x, vx0, vx1) -> None:
+        """NY Expected Range (m10_ny_erange): forecast today's NY session range from YESTERDAY's NY range
+        (ER = A + B·yest_range, clamped). A violet band NY_open × (1 ± ER/2) spans each day's 13-21 UTC session so
+        the operator sees the expected envelope as NY opens. Per UTC day, culled to the viewport. Falls back to the
+        mean when yesterday's NY session isn't in the loaded window (label suffixed '(avg)')."""
+        if not self.menu.layer_state("m10_ny_erange") or not buckets:
+            self._hide_ny_erange(); return
+        ny = {}                                               # date-ordinal -> NY session (open + hi/lo span + x extent)
+        for i, b in enumerate(buckets):
+            st = float(b.get("start_time", 0.0) or 0.0)
+            if st <= 0:
+                continue
+            t = datetime.utcfromtimestamp(st)
+            if not (13 <= t.hour < 21):
+                continue
+            hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            if hi <= 0 or lo <= 0:
+                continue
+            do = t.toordinal(); r = ny.get(do)
+            if r is None:                                     # first NY bucket of the day = session OPEN
+                o = float(b.get("open", b.get("open_price", 0.0)) or 0.0)
+                ny[do] = {"o": o, "hi": hi, "lo": lo, "i0": i, "i1": i}
+            else:
+                r["hi"] = max(r["hi"], hi); r["lo"] = min(r["lo"], lo); r["i1"] = i
+        ub = ul = ut = 0
+        for do in sorted(ny):
+            cur = ny[do]; o = cur["o"]
+            if o <= 0:
+                continue
+            xl = x[cur["i0"]] - 0.5; xr = x[cur["i1"]] + 0.5
+            if xr < vx0 - 1.0 or xl > vx1 + 1.0:              # cull to the visible viewport
+                continue
+            prev = ny.get(do - 1)                             # YESTERDAY's NY session
+            if prev is not None and prev["o"] > 0:
+                yr = (prev["hi"] - prev["lo"]) / prev["o"]
+                er = min(self.NY_ER_CLIP[1], max(self.NY_ER_CLIP[0], self.NY_ER_A + self.NY_ER_B * yr)); fb = False
+            else:
+                er = self.NY_ER_MEAN; fb = True
+            exp_hi = o * (1.0 + er / 2.0); exp_lo = o * (1.0 - er / 2.0)
+            self._nyer_box(ub).setRect(xl, exp_lo, max(1e-9, xr - xl), max(1e-9, exp_hi - exp_lo))
+            self._nyer_box_pool[ub].setVisible(True); ub += 1
+            for _y in (exp_hi, exp_lo):                       # dashed expected high / low edges
+                _pn = pg.mkPen(*self.NY_ER_RGB, 185, width=1.1); _pn.setCosmetic(True); _pn.setDashPattern([5.0, 4.0])
+                _ln = self._nyer_line(ul); ul += 1
+                _ln.setData([xl, xr], [_y, _y]); _ln.setPen(_pn); _ln.setVisible(True)
+            _lb = self._nyer_lbl(ut); ut += 1
+            _lb.setColor(pg.mkColor(*self.NY_ER_RGB))
+            _lb.setText("NY exp %.1f%%%s" % (er * 100.0, "  (avg)" if fb else ""))
+            _lb.setPos(xl, exp_hi); _lb.setVisible(True)
+        for _it in self._nyer_box_pool[ub:]:
+            _it.setVisible(False)
+        for _it in self._nyer_line_pool[ul:]:
+            _it.setVisible(False)
+        for _it in self._nyer_lbl_pool[ut:]:
+            _it.setVisible(False)
 
     def _draw_4h_zone(self, buckets) -> None:
         """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median), ZONE ('Z': buy/sell wick bands), and ABNORMAL-ORDER
@@ -9338,6 +9528,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._hide_4h_zone()       # hide the 4h buy/sell wick bands when leaving Mode 10
         self._hide_prevday_vp()    # hide the per-previous-day Volume Profiles when leaving Mode 10
         self._hide_session()       # hide the per-session boxes when leaving Mode 10
+        self._hide_ny_erange()     # hide the NY expected-range band too
         self._hide_eff_cycles(); self._hide_abs_cycles()   # hide the P2 + P1 HM sub-panels when leaving Mode 10
         # 1. sweep every tracked scanner item off the plot
         for item in self.active_scanner_items:
@@ -11620,7 +11811,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _blank_fp()
             handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
         handles["bc_baseline"].setData(x, baseline_arr)                    # gray dashed POC-center baseline
-        handles["bc_baseline"].setVisible(not self._hide_candles)         # Ctrl+H hides the POC baseline with the candles
+        handles["bc_baseline"].setVisible(self.menu.layer_state("m10_poc_baseline")
+                                          and not self._hide_candles)      # Indicator toggle (was always-on); Ctrl+H also hides
 
     def _render_candle_marks(self, plot, handles, add_item, buckets, x, arr, ber30s, ser30s,
                              vx0, vx1, px_per_x, px_per_y, fp_item, allow_cva=True, allow_bub=True) -> None:
@@ -11821,6 +12013,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_nyrb(buckets, x, vx0, vx1, vy0, vy1)        # 1h NY Range-break box + brB/brS badges (m10_nyrangebreak)
         except Exception:
             self._clear_nyrb()
+        try:
+            self._draw_ny_erange(buckets, x, vx0, vx1)             # NY expected-range forecast band (m10_ny_erange)
+        except Exception:
+            self._hide_ny_erange()
 
         # --- Keltner Channel: EMA(close) basis ± ATR band. LIGHT GRAY upper/lower (match the POC baseline);
         #     the EMA MIDDLE line is HIDDEN (operator pref — the POC baseline is the center reference). ---
@@ -11834,8 +12030,47 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # KC bands from the #3 cache (sequential fold extended once per close — was a full O(N) walk per frame)
         self._scan_handles["kc_upper"].setData(x, arr["kc_up"])
         self._scan_handles["kc_lower"].setData(x, arr["kc_lo"])
-        self._scan_handles["kc_upper"].setVisible(not self._hide_candles)   # Ctrl+H hides the KC with the candles
-        self._scan_handles["kc_lower"].setVisible(not self._hide_candles)
+        _kc_on = self.menu.layer_state("m10_keltner")                       # Indicator toggle (was always-on)
+        self._scan_handles["kc_upper"].setVisible(_kc_on and not self._hide_candles)   # Ctrl+H also hides it
+        self._scan_handles["kc_lower"].setVisible(_kc_on and not self._hide_candles)
+
+        # --- VWAP (m10_vwap): daily-anchored (re-zeroes each UTC midnight, like the CVD pane), typical price
+        #     (H+L+C)/3 weighted by bucket volume. Two-tone by SLOPE: BLUE where VWAP rises, MAGENTA where it
+        #     falls. One shared y-array drawn by two curves with per-segment `connect` masks — the up-curve draws
+        #     only rising segments, the down-curve only falling ones, so turns join seamlessly (shared vertices)
+        #     and a lone down-bar between ups can't get overpainted. Cheap O(N) walk over the frame's buckets. ---
+        if "vwap_up" not in self._scan_handles:
+            self._scan_handles["vwap_up"] = self._add_scanner_item(
+                pg.PlotCurveItem(pen=pg.mkPen((54, 138, 255), width=1.6)))    # rising -> blue
+            self._scan_handles["vwap_dn"] = self._add_scanner_item(
+                pg.PlotCurveItem(pen=pg.mkPen((240, 70, 210), width=1.6)))    # falling -> magenta
+        _vwap_on = self.menu.layer_state("m10_vwap")
+        if _vwap_on:
+            _vh, _vl, _vc = arr["highs"], arr["lows"], arr["closes"]
+            _vwap = []; _cpv = 0.0; _cv = 0.0; _vday = None
+            for _i, _b in enumerate(buckets):
+                _d = int(float(_b.get("start_time", 0.0)) // 86400.0)       # UTC day (epoch is UTC-based)
+                if _vday is not None and _d != _vday:
+                    _cpv = 0.0; _cv = 0.0                                    # new UTC day -> re-anchor VWAP
+                _vday = _d
+                _vol = float(_b.get("buy_vol", 0.0)) + float(_b.get("sell_vol", 0.0))
+                _tp = (float(_vh[_i]) + float(_vl[_i]) + float(_vc[_i])) / 3.0
+                _cpv += _tp * _vol; _cv += _vol
+                _vwap.append(_cpv / _cv if _cv > 0 else _tp)
+            # per-segment slope mask: conn[i]=1 connects point i -> i+1. Rising segments go to the blue curve,
+            # falling to the magenta; both share the SAME finite y-array so transition vertices align exactly.
+            _n = len(_vwap)
+            _vy = np.asarray(_vwap, dtype=float)
+            _up_c = np.zeros(_n, dtype=np.int32); _dn_c = np.zeros(_n, dtype=np.int32)
+            for _i in range(1, _n):
+                if _vwap[_i] >= _vwap[_i - 1]:
+                    _up_c[_i - 1] = 1
+                else:
+                    _dn_c[_i - 1] = 1
+            self._scan_handles["vwap_up"].setData(x, _vy, connect=_up_c)
+            self._scan_handles["vwap_dn"].setData(x, _vy, connect=_dn_c)
+        self._scan_handles["vwap_up"].setVisible(_vwap_on and not self._hide_candles)
+        self._scan_handles["vwap_dn"].setVisible(_vwap_on and not self._hide_candles)
 
         # per-bucket trailing-30 BER/SER baseline (buyer_er/seller_er mean) — used by the imbalance lines + the
         # footprint number highlight (both inside _render_candle_marks) AND the hover readout below, so compute once.

@@ -1326,9 +1326,9 @@ class DrawingController(QtCore.QObject):
             entry = a[1]
             risk = max(config.TICK_SIZE, abs(b[1] - entry))
             if kind == "long":
-                stop, target = entry - risk, entry * 1.005      # default TP = +0.5% from entry (was 1.5x risk)
+                stop, target = entry - risk, entry * 1.006      # default TP = +0.6% from entry
             else:
-                stop, target = entry + risk, entry * 0.995      # default TP = -0.5% from entry
+                stop, target = entry + risk, entry * 0.994      # default TP = -0.6% from entry
         bracket = PositionBracket(self.plot, kind, x0, x1, entry, stop, target, target2=target2, tp2_on=tp2_on)
         if self.index_mode:
             if not hasattr(bracket, "uid"):
@@ -1341,6 +1341,19 @@ class DrawingController(QtCore.QObject):
             self.brackets.append(bracket)
             self._save()
         return bracket   # the sim is armed LAZILY in on_price (after the caller finalises bracket.uid)
+
+    def place_market(self, kind, price, x, risk_pct=0.005):
+        """Programmatic MARKET entry (Buy/Sell buttons): a default position anchored at bar `x`, entry = `price`
+        (the live price), default stop `risk_pct` away, TP = the _make_bracket default. Mirrors a mouse-drawn
+        position exactly (entry=None path) so the sim arms + fills at market on the next fed tick. Fail-safe: None."""
+        try:
+            p = float(price)
+            if p <= 0.0 or kind not in ("long", "short"):
+                return None
+            stop_p = p * (1.0 - risk_pct) if kind == "long" else p * (1.0 + risk_pct)
+            return self._make_bracket(kind, [float(x), p], [float(x) + 8.0, stop_p])
+        except Exception:
+            return None
 
     def _commit_shape(self, shape: DrawnShape) -> None:
         self.plot.addItem(shape)
