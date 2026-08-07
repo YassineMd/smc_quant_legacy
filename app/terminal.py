@@ -365,9 +365,9 @@ class SubCandleWindow(QtWidgets.QDialog):
         self._live = False; self._cs = 0.0; self._live_sig = None; self._nsub = -1
         self._sub_tf = "1m"                              # LEFT-chart resolution inside the HTF bucket (1m / 5m / 15m)
         # "Display Previous" CONTINUOUS mode: once on, the 1m chart shows a continuous range [_range_start, live edge]
-        # that grows forward WITHOUT resetting on a bucket close; each button click extends _range_start one HTF candle
-        # back. _range_start is seeded to the opened bucket's start by the owner.
-        self._range_start = 0.0; self._continuous = False; self._cont_sig = None
+        # BOUNDED to [_range_start, _range_end]; each 'Display Previous' click extends _range_start one parent candle
+        # back while _range_end stays pinned at the opened bucket's end. Both are seeded by the owner on open.
+        self._range_start = 0.0; self._range_end = 0.0; self._continuous = False; self._cont_sig = None
         lay = QtWidgets.QHBoxLayout(self); lay.setContentsMargins(4, 4, 4, 4); lay.setSpacing(4)
         split = QtWidgets.QSplitter(QtCore.Qt.Horizontal); lay.addWidget(split)
         # LEFT — 1m candlesticks (zoom/pan = default pyqtgraph mouse)
@@ -2544,8 +2544,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if cs <= 0.0:
             return
         _live = (not self._replay_on) and (idx == len(filtered) - 1)   # clicked the LIVE forming candle?
-        if ce <= cs:                                                   # forming bucket has no end yet -> all since cs
-            ce = cs + 24 * 3600.0
+        _tfs = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}.get(self._tf, 900)
+        if ce <= cs or ce - cs > _tfs + 1:                             # missing/oversized end -> bound to ONE parent candle
+            ce = cs + _tfs                                             # (was +24h: over-fetched every sub-candle since cs)
         try:
             if self._in_recon_replay():                 # RECON track: 1m constituents come from the reconstruction,
                 subs = recon_replay.window_by_time("1m", cs, ce)   # NOT the daemon archive (which has no pre-06-20 1m)
@@ -2582,7 +2583,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             dlg._live = _live; dlg._cs = cs         # live-update this popup while its bucket keeps forming
             dlg._ce = ce                             # bucket end — the 1m/5m/15m switch re-fetches [cs, ce] at the new tf
             dlg._htf_candle = b; dlg._htf_top = top  # the clicked HTF bucket + its stats (right pane; tf-switch keeps them)
-            dlg._range_start = cs                    # "Display Previous" extends the continuous range back from here
+            dlg._range_start = cs                    # "Display Previous" extends the range back from here
+            dlg._range_end = ce                      # ...and keeps the RIGHT edge here -> BOUNDED (shows only the added
+            #                                          previous candle(s), not everything up to 'now')
             if not hasattr(self, "_subcandle_windows"):
                 self._subcandle_windows = []
             self._subcandle_windows = [w for w in self._subcandle_windows if w.isVisible()]  # drop closed refs
@@ -2696,7 +2699,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         cs = float(b.get("start_time", 0.0) or 0.0); ce = float(b.get("end_time", 0.0) or 0.0)
         if cs <= 0.0:
             return
-        _ce = ce if ce > cs else cs + 24 * 3600.0
+        _tfs = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}.get(self._tf, 900)
+        _ce = ce if (cs < ce <= cs + _tfs + 1) else cs + _tfs   # bound to ONE parent candle (was +24h -> over-fetched 5m/15m)
         micro_active = bool(self._micro_k > 0 and self._micro_subs and self._micro_edge == self._replay_edge_t)
         _micro_tf_cur = getattr(self, "_micro_subs_tf", None) or "1m"   # the tf the micro-reveal is stepping in
         _tv = float((self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL)
@@ -2770,9 +2774,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return below[-1] if below else None
 
     def _subcandle_prev(self, w) -> None:
-        """'Display Previous' clicked: extend this 1m window's continuous range one HTF candle further back and switch
-        it to CONTINUOUS mode — the chart then grows forward without resetting on a bucket close (keeps going until the
-        user closes it). Re-fits once to reveal the newly-added history."""
+        """'Display Previous' clicked: extend this window's range one parent candle further back, keeping the RIGHT edge
+        pinned at the opened candle (BOUNDED — shows the opened candle plus the previous one(s), NOT everything up to
+        'now'). Each click prepends one more previous candle. Re-fits once to reveal the newly-added history."""
         rs = float(getattr(w, "_range_start", 0.0) or 0.0)
         if rs <= 0.0:
             return
@@ -2828,8 +2832,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         ce = float(getattr(w, "_ce", 0.0) or 0.0)
         if cs <= 0.0:
             return
-        if ce <= cs:
-            ce = cs + 24 * 3600.0
+        _tfs = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}.get(self._tf, 900)
+        if ce <= cs or ce - cs > _tfs + 1:                   # bound to ONE parent candle (was +24h -> over-fetched)
+            ce = cs + _tfs
         tf = getattr(w, "_sub_tf", "1m")
         subs = self._fetch_sub_window(cs, ce, tf)
         if getattr(w, "_live", False) and not self._replay_on and not self._in_recon_replay():
@@ -2872,7 +2877,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             import time as _t
             edge_t = _t.time()
         _tf = getattr(w, "_sub_tf", "1m")
-        subs = self._fetch_sub_window(rs, edge_t + 90.0, _tf)
+        _rend = float(getattr(w, "_range_end", 0.0) or 0.0)      # "Display Previous" is BOUNDED to the opened candle's end
+        _right = _rend if _rend > rs else (edge_t + 90.0)        # -> shows only the added previous candle(s), not up to 'now'
+        _stat = (getattr(w, "_htf_candle", None) or edge) if _rend > rs else edge   # bounded -> stats = the opened candle
+        subs = self._fetch_sub_window(rs, _right, _tf)
         if not self._replay_on and not self._in_recon_replay():   # MERGE the live tf stream (recent closed + developing)
             w1 = self._sub_worker(_tf)                           # with the archive, which lags the last ~hour
             if w1 is not None:
@@ -2885,7 +2893,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             subs.append(x); have.add(round(xs, 1))
                 except Exception:
                     pass
-        subs = [s for s in subs if rs - 0.5 <= float(s.get("start_time", 0.0) or 0.0) < edge_t]   # causal, within range
+        subs = [s for s in subs if rs - 0.5 <= float(s.get("start_time", 0.0) or 0.0) < _right]   # causal, within [start,end]
         subs.sort(key=lambda x: float(x.get("start_time", 0.0) or 0.0))
         if not subs:
             return
@@ -2896,11 +2904,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _tv = float((self._last_snap or {}).get("target_vol") or config.DEFAULT_TARGET_VOL)
         try:
             _bwin = list(self._trline_buckets or []) or (self._build_scanner_buckets()[0] or [])
-            top = self._fp_top_html(edge, _bwin)
+            top = self._fp_top_html(_stat, _bwin)
         except Exception:
             top = ""
         try:
-            w.refresh(edge, subs, top, _tv)
+            w.refresh(_stat, subs, top, _tv)
         except Exception:
             pass
 

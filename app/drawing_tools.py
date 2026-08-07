@@ -1326,9 +1326,9 @@ class DrawingController(QtCore.QObject):
             entry = a[1]
             risk = max(config.TICK_SIZE, abs(b[1] - entry))
             if kind == "long":
-                stop, target = entry - risk, entry + risk * 1.5
+                stop, target = entry - risk, entry * 1.005      # default TP = +0.5% from entry (was 1.5x risk)
             else:
-                stop, target = entry + risk, entry - risk * 1.5
+                stop, target = entry + risk, entry * 0.995      # default TP = -0.5% from entry
         bracket = PositionBracket(self.plot, kind, x0, x1, entry, stop, target, target2=target2, tp2_on=tp2_on)
         if self.index_mode:
             if not hasattr(bracket, "uid"):
