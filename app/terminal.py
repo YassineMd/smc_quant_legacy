@@ -5189,11 +5189,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # REVERSAL POINT (hamburger m10_reversal) — ALL timeframes (1m..4h). Fires ON the current candle (app/reversal_detect,
     # early/predictive, validated 15m/1h/4h): fresh local extreme + hammer close + rejection wick + delta steps in.
-    # green ▲ below a swing LOW / red ▼ above a swing HIGH; STRONG (bigger) = choppy approach + capitulation flush.
-    # ~37-41% precision at hitting a real reversal (2x the ~18% base), regime-stable — an eyeball tell, NOT a proven edge.
+    # green ▲ below a swing LOW / red ▼ above a swing HIGH; STRONG (bigger) = engulfing hammer; GOLD (bigger + gold ring)
+    # = engulf + defenders absorbing the aggressors at the extreme (footprint win-share). ~37-41% base / ~43-52% strong /
+    # ~49-54% gold precision at hitting a real reversal (vs ~18% base), regime-stable — an eyeball tell, NOT a proven edge.
     # ------------------------------------------------------------------
     def _hide_reversal_point(self) -> None:
-        for _k in ("revpt_g", "revpt_r"):
+        for _k in ("revpt_g", "revpt_r", "revpt_gold"):
             if _k in self._scan_handles:
                 self._scan_handles[_k].setVisible(False)
 
@@ -5214,20 +5215,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 pg.ScatterPlotItem(symbol="t1", pen=pg.mkPen(18, 88, 48, 210), brush=pg.mkBrush(60, 220, 120, 235)))   # ▲ swing low
             self._scan_handles["revpt_r"] = self._add_scanner_item(
                 pg.ScatterPlotItem(symbol="t", pen=pg.mkPen(92, 20, 26, 210), brush=pg.mkBrush(240, 70, 82, 235)))     # ▼ swing high
+            self._scan_handles["revpt_gold"] = self._add_scanner_item(
+                pg.ScatterPlotItem(symbol="o", pxMode=True, pen=pg.mkPen(255, 200, 60, 240, width=2),
+                                   brush=pg.mkBrush(0, 0, 0, 0)))                                                      # gold halo on GOLD marks
         pad = max((vy1 - vy0) * 0.012, 1e-9)
-        gx = []; gy = []; gs = []; rx = []; ry = []; rs = []
+        gx = []; gy = []; gs = []; rx = []; ry = []; rs = []; orx = []; ory = []
         for m in self._revpt_marks:
             i = int(m["i"])
             if i >= n or x[i] < vx0 - 1.0 or x[i] > vx1 + 1.0:  # cull to the viewport
                 continue
-            sz = 17 if m.get("strong") else 11                 # strong tier bigger
+            gold = m.get("gold")
+            sz = 20 if gold else (17 if m.get("strong") else 11)   # gold > strong > normal
             if m["side"] == "bottom":
-                gx.append(x[i]); gy.append(float(m["price"]) - pad); gs.append(sz)
+                yy = float(m["price"]) - pad; gx.append(x[i]); gy.append(yy); gs.append(sz)
             else:
-                rx.append(x[i]); ry.append(float(m["price"]) + pad); rs.append(sz)
+                yy = float(m["price"]) + pad; rx.append(x[i]); ry.append(yy); rs.append(sz)
+            if gold:
+                orx.append(x[i]); ory.append(yy)
         self._scan_handles["revpt_g"].setData(x=gx, y=gy, size=gs)
         self._scan_handles["revpt_r"].setData(x=rx, y=ry, size=rs)
+        self._scan_handles["revpt_gold"].setData(x=orx, y=ory, size=30)
         self._scan_handles["revpt_g"].setVisible(True); self._scan_handles["revpt_r"].setVisible(True)
+        self._scan_handles["revpt_gold"].setVisible(True)
 
     def _draw_4h_zone(self, buckets) -> None:
         """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median), ZONE ('Z': buy/sell wick bands), and ABNORMAL-ORDER

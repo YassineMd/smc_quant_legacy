@@ -15,11 +15,14 @@ What predicts a reversal at candle 3's close (candidate = fresh LB-bar extreme; 
   side 'top'     red   ▼ ABOVE a swing high — mirror.
   STRONG (bigger): candle 3 also ENGULFS the prior candle (classic body-engulf — its body swallows the opposite-
                    coloured prior body). Lifts precision both years on every tf; beats the old run+sellconc tier on 1h/4h.
+  GOLD (ring):     STRONG + the DEFENDERS showed up aggressively AT the extreme (footprint: the winning side's taker
+                   volume in the extreme third >= WIN_MIN%) — the passive/active counterparty absorbing the aggressors.
 
-Calibrated PRECISION ~37-41% (2x the ~18% base), regime-STABLE both years; strong (engulf) tier ~43-52%. Early
-detection is inherently ~40% (most fresh-low hammers still break down) — a heads-up marker, NOT a proven edge. Fail-safe: [].
+Calibrated PRECISION ~37-41% (2x the ~18% base), regime-STABLE both years; strong (engulf) ~43-52%; gold (engulf +
+defenders) ~49% 15m / ~54% 1h. Early detection is inherently ~40% (most fresh-low hammers still break down) — a
+heads-up marker, NOT a proven edge. Fail-safe: [].
 
-detect(buckets, skip_last=True) -> [{i, side('top'|'bottom'), price, strong}]  (i = candle 3 = the pivot candle).
+detect(buckets, skip_last=True) -> [{i, side('top'|'bottom'), price, strong, gold}]  (i = candle 3 = the pivot candle).
 """
 from __future__ import annotations
 
@@ -32,6 +35,11 @@ DS = 3.0                # delta shift: candle-3 delta% minus the mean of the 2 a
 # STRONG tier = candle 3 also ENGULFS the prior candle (classic body-engulf: opposite-coloured prior candle, c3 body
 # swallows the prior body). study/reversal_engulf.py: lifts precision both years on every tf (hammer 15m 36->43% /
 # 1h 39->49% / 4h 42->52%) and beats the old run_down<=2 & sellconc>=40 footprint tier on 1h/4h (where it added ~0).
+# GOLD tier = STRONG + DEFENDERS at the extreme: the WINNING side's taker volume in the extreme third >= WIN_MIN%
+# (bottom: buy vol in bottom third / total buy; top: sell vol in top third / total sell) — the counterparty absorbing
+# the aggressors. study/reversal_absorption2.py + reversal_gold_sweep.py: engulf 15m 42.7->48.9% (n307) / 1h 49.3->
+# 54.4% (n57), both years. ⚠ SPIKE (biggest single-level bubble) is INVERTED = CONTINUATION (AUC 0.47), NOT used.
+WIN_MIN = 40.0
 
 
 def _f(x) -> float:
@@ -47,6 +55,28 @@ def _engulf(O, C, i, down):
     if down:
         return C[i - 1] < O[i - 1] and O[i] <= C[i - 1] and C[i] >= O[i - 1]
     return C[i - 1] > O[i - 1] and O[i] >= C[i - 1] and C[i] <= O[i - 1]
+
+
+def _winshare(b, hi, lo, down):
+    """DEFENDERS' aggression at the extreme third: the WINNING (reversal-favouring) side's taker volume transacted in
+    the extreme third, as a % of that side's total. bottom -> buyers in the bottom third; top -> sellers in the top
+    third. High => the counterparty stepped in AT the low/high and absorbed the aggressors. 0 if no footprint."""
+    lv = b.get("levels") or {}
+    rng = hi - lo
+    if not lv or rng <= 0:
+        return 0.0
+    thr = (lo + rng / 3.0) if down else (hi - rng / 3.0)
+    ext = tot = 0.0
+    for ps, vv in lv.items():
+        try:
+            p = float(ps)
+        except (TypeError, ValueError):
+            continue
+        w = _f(vv.get("b")) if down else _f(vv.get("s"))     # winning side = buyers (bottom) / sellers (top)
+        tot += w
+        if (p <= thr) if down else (p >= thr):
+            ext += w
+    return (ext / tot * 100.0) if tot > 0 else 0.0
 
 
 def detect(buckets, skip_last=True):
@@ -71,9 +101,13 @@ def detect(buckets, skip_last=True):
             uw = (H[i] - max(O[i], C[i])) / rng                  # upper wick fraction
             ds = DP[i] - (DP[i - 2] + DP[i - 1]) / 2.0           # flow shift at candle 3 vs the 2 approach candles
             if L[i] <= min(L[i - LB:i]) and cir >= CIR and lw >= WICK_MIN and C[i] > O[i] and ds >= DS:       # BOTTOM
-                out.append({"i": i, "side": "bottom", "price": L[i], "strong": _engulf(O, C, i, True)})
+                strong = _engulf(O, C, i, True)
+                gold = strong and _winshare(buckets[i], H[i], L[i], True) >= WIN_MIN
+                out.append({"i": i, "side": "bottom", "price": L[i], "strong": strong, "gold": gold})
             elif H[i] >= max(H[i - LB:i]) and (H[i] - C[i]) / rng >= CIR and uw >= WICK_MIN and C[i] < O[i] and ds <= -DS:  # TOP
-                out.append({"i": i, "side": "top", "price": H[i], "strong": _engulf(O, C, i, False)})
+                strong = _engulf(O, C, i, False)
+                gold = strong and _winshare(buckets[i], H[i], L[i], False) >= WIN_MIN
+                out.append({"i": i, "side": "top", "price": H[i], "strong": strong, "gold": gold})
         return out
     except Exception:
         return []
