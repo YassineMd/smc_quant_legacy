@@ -26,7 +26,11 @@ LB = 6                  # candle 3 must be the extreme over the last LB bars (a 
 CIR = 0.55              # candle 3 closes in the favourable CIR of its OWN range (hammer / rejection close)
 WICK_MIN = 0.25         # candle 3 rejection wick as a fraction of its range
 DS = 3.0                # delta shift: candle-3 delta% minus the mean of the 2 approach candles (buyers/sellers step in)
-STRONG_CIR, STRONG_WICK, STRONG_DS = 0.65, 0.35, 8.0        # strong (bigger) tier
+# STRONG (bigger) tier = the approach into the extreme was CHOPPY (<= this many consecutive same-direction candles),
+# not a straight-down/up crash. Robust both tf + both years: choppy approach reverses ~41% vs a straight run ~33%
+# (base ~17%). study/reversal_longwindow_15m.py. (The old tighter cir/wick/ds 'strong' did not lift precision.)
+STRONG_RUN_MAX = 2
+RUN_CAP = 6             # look back at most this far for the streak
 
 
 def _f(x) -> float:
@@ -34,6 +38,17 @@ def _f(x) -> float:
         return float(x)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _run(C, O, i, down, cap=RUN_CAP):
+    """Consecutive same-direction candles ending at i-1 (the streak INTO the extreme), capped at `cap`."""
+    r = 0
+    for k in range(i - 1, max(-1, i - 1 - cap), -1):
+        if (C[k] < O[k]) if down else (C[k] > O[k]):
+            r += 1
+        else:
+            break
+    return r
 
 
 def _o(b): return _f(b.get("open", b.get("open_price", 0.0)))
@@ -64,10 +79,10 @@ def detect(buckets):
             uw = (H[i] - max(O[i], C[i])) / rng                  # upper wick fraction
             ds = DP[i] - (DP[i - 2] + DP[i - 1]) / 2.0           # flow shift at candle 3 vs the 2 approach candles
             if L[i] <= min(L[i - LB:i]) and cir >= CIR and lw >= WICK_MIN and C[i] > O[i] and ds >= DS:        # BOTTOM
-                strong = cir >= STRONG_CIR and lw >= STRONG_WICK and ds >= STRONG_DS
+                strong = _run(C, O, i, True) <= STRONG_RUN_MAX                # choppy down-approach, not a straight crash
                 out.append({"i": i, "side": "bottom", "price": L[i], "strong": strong})
             elif H[i] >= max(H[i - LB:i]) and (H[i] - C[i]) / rng >= CIR and uw >= WICK_MIN and C[i] < O[i] and ds <= -DS:  # TOP
-                strong = (H[i] - C[i]) / rng >= STRONG_CIR and uw >= STRONG_WICK and ds <= -STRONG_DS
+                strong = _run(C, O, i, False) <= STRONG_RUN_MAX
                 out.append({"i": i, "side": "top", "price": H[i], "strong": strong})
         return out
     except Exception:
