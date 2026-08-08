@@ -1,25 +1,24 @@
-"""1h REVERSAL detector — EARLY / PREDICTIVE (m10_reversal overlay, 1h only).
+"""REVERSAL POINT detector — EARLY / PREDICTIVE (m10_reversal overlay, ALL timeframes 1m..4h).
 
 Fires ON candle 3 (the CURRENT, last-printed candle) — NOT after a confirmation. Decides from candles 1,2,3 only
 (fully causal): candle 3 makes a FRESH local extreme AND prints as a rejection/absorption candle. No look-ahead, no
-lag — the mark lands on the candle that is (predicted to be) the swing pivot itself.
+lag — the mark lands on the candle that is (predicted to be) the swing pivot itself. The SAME logic + thresholds
+validated across 15m / 1h / 4h (study/reversal_predict_1h.py, reversal_predict_15m.py, scratchpad 4h check).
 
-Validated PREDICTIVELY in study/reversal_predict_1h.py (candidate = fresh LB-bar extreme; outcome = holds + reverses
->=0.6% within 6 bars, used only to SCORE, never as a feature). What predicts a reversal at candle 3's close:
-  c3 close-in-range (hammer, AUC 0.78) >> lower/upper wick (0.69) > candle turned (0.67) > delta absorbs / steps in
-  (0.66) > delta-shift vs the 2 approach candles (0.64). The old 'wide range' signal was a LOOK-AHEAD artifact (the
-  pivot bar IS the extreme) and does NOT predict (AUC ~0.53) — so range is NOT used here.
+What predicts a reversal at candle 3's close (candidate = fresh LB-bar extreme; outcome = holds + reverses, scoring only):
+  c3 close-in-range (hammer, AUC ~0.78) >> lower/upper wick (0.69) > candle turned (0.67) > delta absorbs / steps in
+  (0.66) > delta-shift vs the 2 approach candles (0.64). The 'wide range' signal was a LOOK-AHEAD artifact (the pivot
+  bar IS the extreme) and does NOT predict (AUC ~0.53) — so range is NOT used here.
 
-  side +1  green lozenge BELOW a BOTTOM  — fresh low + closes in the upper CIR of its range + lower wick + turned
-                                           bullish + buyers step in (delta-shift up).
-  side -1  red   lozenge ABOVE a TOP     — mirror.
-  STRONG (gold ring): tighter hammer + a bigger flow flip.
+  side 'bottom'  green ▲ BELOW a swing low  — fresh low + closes in the upper CIR of its range + lower wick + turned
+                                              bullish + buyers step in (delta-shift up).
+  side 'top'     red   ▼ ABOVE a swing high — mirror.
+  STRONG (bigger): (a) CHOPPY approach (run_down<=2, not a straight crash) AND (b) CAPITULATION flush (sellconc>=40%).
 
-Calibrated PRECISION ~39% (2x the 18% base) at hitting an actual reversal — regime-STABLE (2025 39% / 2026 40%),
-catching ~25% of reversals IN REAL TIME. Early detection is inherently ~40% (most fresh-low hammers still break down);
-this is a heads-up marker, NOT a proven edge. Fail-safe: [] on any error.
+Calibrated PRECISION ~37-41% (2x the ~18% base), regime-STABLE both years; strong tier ~43-45%. Early detection is
+inherently ~40% (most fresh-low hammers still break down) — a heads-up marker, NOT a proven edge. Fail-safe: [].
 
-detect(buckets, skip_last=True) -> [{i, side(+1/-1), tier('gold'|'normal'), strong}]  (i = candle 3 = the pivot candle).
+detect(buckets, skip_last=True) -> [{i, side('top'|'bottom'), price, strong}]  (i = candle 3 = the pivot candle).
 """
 from __future__ import annotations
 
@@ -100,10 +99,10 @@ def detect(buckets, skip_last=True):
             ds = DP[i] - (DP[i - 2] + DP[i - 1]) / 2.0           # flow shift at candle 3 vs the 2 approach candles
             if L[i] <= min(L[i - LB:i]) and cir >= CIR and lw >= WICK_MIN and C[i] > O[i] and ds >= DS:       # BOTTOM
                 strong = _run(C, O, i, True) <= STRONG_RUN_MAX and _conc(buckets[i], H[i], L[i], True) >= STRONG_SELLCONC
-                out.append({"i": i, "side": 1, "tier": "gold" if strong else "normal", "strong": strong})
+                out.append({"i": i, "side": "bottom", "price": L[i], "strong": strong})
             elif H[i] >= max(H[i - LB:i]) and (H[i] - C[i]) / rng >= CIR and uw >= WICK_MIN and C[i] < O[i] and ds <= -DS:  # TOP
                 strong = _run(C, O, i, False) <= STRONG_RUN_MAX and _conc(buckets[i], H[i], L[i], False) >= STRONG_SELLCONC
-                out.append({"i": i, "side": -1, "tier": "gold" if strong else "normal", "strong": strong})
+                out.append({"i": i, "side": "top", "price": H[i], "strong": strong})
         return out
     except Exception:
         return []

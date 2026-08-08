@@ -112,7 +112,7 @@ _M10_INDICATORS = [
     ("m10_poc_baseline", "POC Baseline", True, True),      # gray dashed POC-center EMA line; was always-on, now toggleable
     ("m10_vwap", "VWAP", False, True),                     # daily-anchored (UTC-midnight reset) volume-weighted avg price — BLUE line
     ("m10_swinglvn", "Price & CVD Swings", False, True),   # ALL tf: ZigZag swing lines + swing absorb-A + retracement verdict; LVN zones sub-toggle
-    ("m10_reversal15", "15m Reversal Candles (R/G ▲▼)", False, True),   # 15m ONLY: reversal-candle anatomy (wide-range rejection at a local extreme); green ▲ swing-low / red ▼ swing-high
+    ("m10_reversal", "Reversal Point (R/G ▲▼)", False, True),   # ALL tf: early/predictive swing reversal (candle-3 hammer + choppy approach + capitulation); green ▲ swing-low / red ▼ swing-high; strong = bigger
     ("m10_obs", "Order Blocks", False, True),             # default OFF — toggle with Order Blocks + Iceberg via 'o'
     ("m10_structure", "Market Structure — scalp ZigZag", False, True),   # fine ZigZag (ZIGZAG_PCT, app/structure.py)
     ("m10_structure_swing", "Market Structure — swing ZigZag", False, True),   # coarse ZigZag (+ its sensitivity slider)
@@ -138,7 +138,6 @@ _M10_CANDLES = [
 _M10_STRATEGIES = [
     ("m10_mmx_sound", "\U0001F514", False, True),                       # bell icon — audible confirmation when enabled
     ("m10_engulfsr", "1h Engulf S/R Reversal (L / S triangles)", False, True),  # 1h: engulf at VA/S/R zone; fwd candidate
-    ("m10_reversal", "1h Reversal (R / G losanges)", False, True),  # 1h: causal reversal-candle shape (wide-range rejection); DESCRIPTIVE eyeball, not an edge
     ("m10_momentum", "15m Engulfing S/R (L / S losanges)", False, True),  # 15m: last-mit engulf; gold/blue tiers, tier-dependent skew
     ("m10_engulf5m", "5m Absorption S/R", False, True),  # 5m: continuation bias only, all triangles; engulf green/red/gold + absorb2 blue/orange
     ("m10_easy1h", "1h Easy 0.5% (L / S triangles)", False, True),  # 1h: absorption+vw+swing scale-out; neon green/purple; fwd candidate

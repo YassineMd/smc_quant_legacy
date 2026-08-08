@@ -1306,7 +1306,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._nyer_lbl_pool = []      # NY Expected Range: 'NY exp X.X%' label (TextItem)
         self._nyer_mark_pool = []     # NY Expected Range: early/late break triangle markers (TextItem)
         self._nyrb_ranges = []; self._nyrb_data_sig = None   # cached detect() output (recompute only on data change)
-        self._rev15_marks = []; self._rev15_sig = None       # 15m reversal-candle detector cache (m10_reversal15)
+        self._revpt_marks = []; self._revpt_sig = None       # Reversal Point detector cache (m10_reversal, ALL tf)
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
         self._mom_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
@@ -1314,11 +1314,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._mom_sig = None; self._mom_drawn = False
         self._mom_entries = []
         self._mom_ln_pool = []; self._mom_lnlbl_pool = []; self._mom_lines_user = {}
-        # 1h Reversal overlay (m10_reversal, 1h only) — red lozenge ABOVE tops / green lozenge BELOW bottoms;
-        # gold ring on the eff-agg exhaustion-blow-off tier. DESCRIPTIVE (candle shape), not a proven edge.
-        self._rev_sph = None                     # ScatterPlotItem of red/green lozenges
-        self._rev_ring = None                    # ScatterPlotItem — gold halo on the eff-agg blow-off (STRONG) tier
-        self._rev_sig = None; self._rev_drawn = False
         # 5m Absorption S/R overlay (m10_engulf5m, 5m only) — triangle L/S badges (engulf green/red/gold + absorb2 blue/orange); click -> entry/TP/SL lines
         self._e5m_sph = None                     # ScatterPlotItem of triangle badges
         self._e5m_lbl_pool = []                  # (colour-only badges)
@@ -2243,9 +2238,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if not on:
                 self._clear_easy1h()                # off -> tear the triangles down now
         elif key == "m10_reversal":
-            self._rev_sig = None; self._sel_sig = None   # 1h Reversal toggled -> re-run the overlay draw
+            self._revpt_sig = None                       # Reversal Point toggled -> re-run the overlay draw
             if not on:
-                self._clear_reversal()              # off -> tear the lozenges down now
+                self._hide_reversal_point()              # off -> tear the markers down now
         elif key in ("m10_sr", "m10_sr_area"):
             self._sr_sig = None; self._sel_sig = None    # Support/Resistance (or its Area sub-toggle) -> re-run the draw
             if key == "m10_sr" and not on:
@@ -5192,36 +5187,36 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _it.setVisible(False)
 
     # ------------------------------------------------------------------
-    # 15m REVERSAL CANDLES (hamburger m10_reversal15) — flag bars matching the reversal anatomy (app/reversal15m_detect,
-    # calibrated in study/reversal_candle_15m.py): a LOCAL EXTREME candle with a WIDE range + REJECTION WICK + CLOSE-BACK.
-    # green ▲ below a potential swing LOW / red ▼ above a potential swing HIGH. 15m ONLY. Descriptive candidate (~50%
-    # precision vs the ZigZag pivots, regime-dependent) — an eyeball tell, NOT a proven edge. Two scatter items, cached.
+    # REVERSAL POINT (hamburger m10_reversal) — ALL timeframes (1m..4h). Fires ON the current candle (app/reversal_detect,
+    # early/predictive, validated 15m/1h/4h): fresh local extreme + hammer close + rejection wick + delta steps in.
+    # green ▲ below a swing LOW / red ▼ above a swing HIGH; STRONG (bigger) = choppy approach + capitulation flush.
+    # ~37-41% precision at hitting a real reversal (2x the ~18% base), regime-stable — an eyeball tell, NOT a proven edge.
     # ------------------------------------------------------------------
-    def _hide_reversal15m(self) -> None:
-        for _k in ("rev15_g", "rev15_r"):
+    def _hide_reversal_point(self) -> None:
+        for _k in ("revpt_g", "revpt_r"):
             if _k in self._scan_handles:
                 self._scan_handles[_k].setVisible(False)
 
-    def _draw_reversal15m(self, buckets, x, vx0, vx1, vy0, vy1) -> None:
-        if not self.menu.layer_state("m10_reversal15") or self._tf != "15m" or not buckets:
-            self._hide_reversal15m(); return
+    def _draw_reversal_point(self, buckets, x, vx0, vx1, vy0, vy1) -> None:
+        if not self.menu.layer_state("m10_reversal") or not buckets:
+            self._hide_reversal_point(); return
         n = len(buckets)
         _dsig = (n, float(buckets[-1].get("end_time", 0.0) or 0.0), float(buckets[-1].get("close", 0.0) or 0.0))
-        if _dsig != self._rev15_sig:                          # recompute the detector only when the data changes
+        if _dsig != self._revpt_sig:                          # recompute the detector only when the data changes
             try:
-                from app import reversal15m_detect
-                self._rev15_marks = reversal15m_detect.detect(buckets)
+                from app import reversal_detect
+                self._revpt_marks = reversal_detect.detect(buckets, skip_last=False)
             except Exception:
-                self._rev15_marks = []
-            self._rev15_sig = _dsig
-        if "rev15_g" not in self._scan_handles:
-            self._scan_handles["rev15_g"] = self._add_scanner_item(
+                self._revpt_marks = []
+            self._revpt_sig = _dsig
+        if "revpt_g" not in self._scan_handles:
+            self._scan_handles["revpt_g"] = self._add_scanner_item(
                 pg.ScatterPlotItem(symbol="t1", pen=pg.mkPen(18, 88, 48, 210), brush=pg.mkBrush(60, 220, 120, 235)))   # ▲ swing low
-            self._scan_handles["rev15_r"] = self._add_scanner_item(
+            self._scan_handles["revpt_r"] = self._add_scanner_item(
                 pg.ScatterPlotItem(symbol="t", pen=pg.mkPen(92, 20, 26, 210), brush=pg.mkBrush(240, 70, 82, 235)))     # ▼ swing high
         pad = max((vy1 - vy0) * 0.012, 1e-9)
         gx = []; gy = []; gs = []; rx = []; ry = []; rs = []
-        for m in self._rev15_marks:
+        for m in self._revpt_marks:
             i = int(m["i"])
             if i >= n or x[i] < vx0 - 1.0 or x[i] > vx1 + 1.0:  # cull to the viewport
                 continue
@@ -5230,9 +5225,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 gx.append(x[i]); gy.append(float(m["price"]) - pad); gs.append(sz)
             else:
                 rx.append(x[i]); ry.append(float(m["price"]) + pad); rs.append(sz)
-        self._scan_handles["rev15_g"].setData(x=gx, y=gy, size=gs)
-        self._scan_handles["rev15_r"].setData(x=rx, y=ry, size=rs)
-        self._scan_handles["rev15_g"].setVisible(True); self._scan_handles["rev15_r"].setVisible(True)
+        self._scan_handles["revpt_g"].setData(x=gx, y=gy, size=gs)
+        self._scan_handles["revpt_r"].setData(x=rx, y=ry, size=rs)
+        self._scan_handles["revpt_g"].setVisible(True); self._scan_handles["revpt_r"].setVisible(True)
 
     def _draw_4h_zone(self, buckets) -> None:
         """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median), ZONE ('Z': buy/sell wick bands), and ABNORMAL-ORDER
@@ -6579,65 +6574,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _draw_mom_lines(self) -> None:
         self._trade_lines(self._mom_entries, self._mom_lines_user, self._mom_ln_pool, self._mom_lnlbl_pool, 30)
 
-    # 1h REVERSAL overlay (hamburger m10_reversal, 1h ONLY) — DESCRIPTIVE reversal-candle marker, self-gated, fail-safe.
-    # Red lozenge ABOVE a TOP-reversal candle (up->down rejection) / green lozenge BELOW a BOTTOM one, from the causal
-    # wide-range-rejection shape (app/reversal_detect, built off study/reversal_candle_1h). Gold ring = the eff-agg
-    # exhaustion blow-off (STRONG) tier. Marks candle SHAPE — NOT a proven edge (study/reversal_detect_validate: no
-    # tradeable forward move on 1h); an eyeball tool. No trade lines.
-    def _clear_reversal(self) -> None:
-        if self._rev_sph is not None:
-            self._rev_sph.setVisible(False)
-        if self._rev_ring is not None:
-            self._rev_ring.setVisible(False)
-        self._rev_sig = None; self._rev_drawn = False
-
-    def _draw_reversal(self, filtered) -> None:
-        """Red/green reversal-candle lozenges (app/reversal_detect), 1h ONLY. Causal shape marker: red ABOVE a top,
-        green BELOW a bottom; gold ring on the eff-agg exhaustion-blow-off tier. Self-gated, fail-safe."""
-        if (not self.menu.layer_state("m10_reversal") or self.scanner_mode != "bucket_canvas"
-                or self._tf != "1h"):
-            self._clear_reversal(); return
-        n = len(filtered)
-        if n == 0:
-            self._clear_reversal(); return
-        _sig = (n, filtered[-1].get("end_time"), filtered[-1].get("close"))
-        if _sig == self._rev_sig and self._rev_drawn:
-            return
-        self._rev_sig = _sig
-        try:
-            from app import reversal_detect
-            fires = reversal_detect.detect(filtered, skip_last=False)
-        except Exception:
-            self._clear_reversal(); return
-        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
-        GRN, RED, GOLD = (40, 220, 100), (240, 60, 78), (255, 200, 40)
-        if self._rev_sph is None:
-            self._rev_sph = pg.ScatterPlotItem(pxMode=True, size=15, symbol="d")   # lozenge / diamond
-            self._rev_sph.setZValue(32); self.plot.addItem(self._rev_sph, ignoreBounds=True)
-        if self._rev_ring is None:
-            self._rev_ring = pg.ScatterPlotItem(pxMode=True, symbol="o", size=23, brush=pg.mkBrush(0, 0, 0, 0))
-            self._rev_ring.setZValue(31); self.plot.addItem(self._rev_ring, ignoreBounds=True)
-        _fi = n - 1                                              # forming (unconfirmed) bucket -> faded preview
-        spots = []; rings = []
-        for e in fires:
-            i = e["i"]
-            if i < 0 or i >= n:
-                continue
-            side = e["side"]
-            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            y = (hi + pad) if side < 0 else (lo - pad)           # TOP -> red ABOVE / BOTTOM -> green BELOW
-            col = RED if side < 0 else GRN
-            _al = _PREVIEW_ALPHA if i == _fi else 255
-            _pen_rgb = [int(cc * 0.55) for cc in col] + [_al]
-            spots.append({"pos": (i, y), "symbol": "d", "brush": pg.mkBrush(*col, _al),
-                          "pen": pg.mkPen(*_pen_rgb, width=1.2), "size": 15})
-            if e.get("strong"):                                  # eff-agg exhaustion blow-off -> gold ring highlight
-                rings.append({"pos": (i, y), "symbol": "o", "size": 23, "brush": pg.mkBrush(0, 0, 0, 0),
-                              "pen": pg.mkPen(*GOLD, _al, width=1.6)})
-        self._rev_sph.setData(spots); self._rev_sph.setVisible(True)
-        self._rev_ring.setData(rings); self._rev_ring.setVisible(True)
-        self._rev_drawn = True
-
     # 5m ABSORPTION S/R overlay (hamburger m10_engulf5m, 5m ONLY) — EYEBALL candidate, self-gated, fail-safe.
     # ALL signals are TRIANGLES (up = long, down = short) — continuation bias only, no reversals. Badge tiers:
     # GREEN/RED (engulf |A|>=1), GOLD (engulf |A|>=2), BLUE/ORANGE (absorb2 two-candle absorption sequence).
@@ -7910,17 +7846,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self.scanner_mode == "bucket_canvas" and (self.menu.layer_state("m10_engulfsr")
                     or self.menu.layer_state("m10_momentum") or self.menu.layer_state("m10_engulf5m")
                     or self.menu.layer_state("m10_breakout5m") or self.menu.layer_state("m10_engulf1m")
-                    or self.menu.layer_state("m10_reversal") or self.menu.layer_state("m10_easy1h")
+                    or self.menu.layer_state("m10_easy1h")
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")):
                 _pf, _, _ = self._build_scanner_buckets()
                 try:
                     self._draw_engulfsr(_pf or [])  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
                 except Exception:
                     self._clear_engulfsr()
-                try:
-                    self._draw_reversal(_pf or [])  # 1h Reversal overlay (1h) — self-gated, fail-safe
-                except Exception:
-                    self._clear_reversal()
                 try:
                     self._draw_momentum(_pf or [])  # 15m Engulfing S/R overlay (15m) — self-gated, fail-safe
                 except Exception:
@@ -8012,10 +7944,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_engulfsr(filtered)  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
             except Exception:
                 self._clear_engulfsr()
-            try:
-                self._draw_reversal(filtered)  # 1h Reversal overlay (1h) — self-gated, fail-safe
-            except Exception:
-                self._clear_reversal()
             try:
                 self._draw_momentum(filtered)  # 15m Momentum overlay (15m) — self-gated, fail-safe
             except Exception:
@@ -12111,9 +12039,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             self._hide_ny_erange()
         try:
-            self._draw_reversal15m(buckets, x, vx0, vx1, vy0, vy1)  # 15m reversal-candle triangles (m10_reversal15)
+            self._draw_reversal_point(buckets, x, vx0, vx1, vy0, vy1)  # Reversal Point triangles, ALL tf (m10_reversal)
         except Exception:
-            self._hide_reversal15m()
+            self._hide_reversal_point()
 
         # --- Keltner Channel: EMA(close) basis ± ATR band. LIGHT GRAY upper/lower (match the POC baseline);
         #     the EMA MIDDLE line is HIDDEN (operator pref — the POC baseline is the center reference). ---
