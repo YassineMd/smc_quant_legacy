@@ -26,10 +26,12 @@ LB = 6                  # candle 3 must be the extreme over the last LB bars (a 
 CIR = 0.55              # candle 3 closes in the favourable CIR of its OWN range (hammer / rejection close)
 WICK_MIN = 0.25         # candle 3 rejection wick as a fraction of its range
 DS = 3.0                # delta shift: candle-3 delta% minus the mean of the 2 approach candles (buyers/sellers step in)
-# STRONG (bigger) tier = the approach into the extreme was CHOPPY (<= this many consecutive same-direction candles),
-# not a straight-down/up crash. Robust both tf + both years: choppy approach reverses ~41% vs a straight run ~33%
-# (base ~17%). study/reversal_longwindow_15m.py. (The old tighter cir/wick/ds 'strong' did not lift precision.)
+# STRONG (bigger) tier = (a) CHOPPY approach into the extreme (<= STRONG_RUN_MAX consecutive same-dir candles, not a
+# straight crash) AND (b) a CAPITULATION flush — >= STRONG_SELLCONC% of the candle's SELLING (bottom) / BUYING (top)
+# dumped in the extreme third (footprint). Both robust across tf + years (study/reversal_longwindow_15m + reversal_footprint):
+# hammer ~37% -> +run_down ~40% -> +sellconc ~44% (44/45 both yrs). (The footprint's other reads were redundant w/ the hammer.)
 STRONG_RUN_MAX = 2
+STRONG_SELLCONC = 40.0
 RUN_CAP = 6             # look back at most this far for the streak
 
 
@@ -57,6 +59,27 @@ def _h(b): return _f(b.get("high", 0.0))
 def _l(b): return _f(b.get("low", 0.0))
 
 
+def _conc(b, hi, lo, down):
+    """Capitulation flush from the footprint: fraction (%) of SELL vol in the bottom third (down) / BUY vol in the
+    top third (up). High => the losing side dumped INTO the extreme and got absorbed. 0 if no footprint."""
+    lv = b.get("levels") or {}
+    rng = hi - lo
+    if not lv or rng <= 0:
+        return 0.0
+    thr = (lo + rng / 3.0) if down else (hi - rng / 3.0)
+    seg = tot = 0.0
+    for ps, vv in lv.items():
+        try:
+            p = float(ps)
+        except (TypeError, ValueError):
+            continue
+        v = _f(vv.get("s")) if down else _f(vv.get("b"))
+        tot += v
+        if (p <= thr) if down else (p >= thr):
+            seg += v
+    return (seg / tot * 100.0) if tot > 0 else 0.0
+
+
 def detect(buckets):
     n = len(buckets)
     if n < LB + 3:
@@ -79,10 +102,10 @@ def detect(buckets):
             uw = (H[i] - max(O[i], C[i])) / rng                  # upper wick fraction
             ds = DP[i] - (DP[i - 2] + DP[i - 1]) / 2.0           # flow shift at candle 3 vs the 2 approach candles
             if L[i] <= min(L[i - LB:i]) and cir >= CIR and lw >= WICK_MIN and C[i] > O[i] and ds >= DS:        # BOTTOM
-                strong = _run(C, O, i, True) <= STRONG_RUN_MAX                # choppy down-approach, not a straight crash
+                strong = _run(C, O, i, True) <= STRONG_RUN_MAX and _conc(buckets[i], H[i], L[i], True) >= STRONG_SELLCONC
                 out.append({"i": i, "side": "bottom", "price": L[i], "strong": strong})
             elif H[i] >= max(H[i - LB:i]) and (H[i] - C[i]) / rng >= CIR and uw >= WICK_MIN and C[i] < O[i] and ds <= -DS:  # TOP
-                strong = _run(C, O, i, False) <= STRONG_RUN_MAX
+                strong = _run(C, O, i, False) <= STRONG_RUN_MAX and _conc(buckets[i], H[i], L[i], False) >= STRONG_SELLCONC
                 out.append({"i": i, "side": "top", "price": H[i], "strong": strong})
         return out
     except Exception:
