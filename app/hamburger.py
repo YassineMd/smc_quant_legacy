@@ -113,7 +113,7 @@ _M10_INDICATORS = [
     ("m10_vwap", "VWAP", False, True),                     # daily-anchored (UTC-midnight reset) volume-weighted avg price — BLUE line
     ("m10_swinglvn", "Price & CVD Swings", False, True),   # ALL tf: ZigZag swing lines + swing absorb-A + retracement verdict; LVN zones sub-toggle
     ("m10_reversal", "Reversal Point (R/G ▲▼)", False, True),   # ALL tf: early/predictive swing reversal (candle-3 hammer + choppy approach + capitulation); green ▲ swing-low / red ▼ swing-high; strong = bigger
-    ("m10_absorblvl", "Absorption S/R (red/green)", False, True),   # EYEBALL-ONLY: levels where aggression got absorbed — buy-absorbed high = resistance (red) / sell-absorbed low = support (green); clustered = brighter. NOT a signal — rejects == a random line (p=0.39)
+    ("m10_absorblvl", "Order-Flow Walls (red/green)", False, True),   # EYEBALL-ONLY: absorption + aggression walls — resistance (red) at highs where buyers were absorbed / sellers dumped; support (green) at lows where sellers were absorbed / buyers lifted; clustered = brighter. Barely a signal — ~+3pp over a random line, not tradeable
     ("m10_obs", "Order Blocks", False, True),             # default OFF — toggle with Order Blocks + Iceberg via 'o'
     ("m10_structure", "Market Structure — scalp ZigZag", False, True),   # fine ZigZag (ZIGZAG_PCT, app/structure.py)
     ("m10_structure_swing", "Market Structure — swing ZigZag", False, True),   # coarse ZigZag (+ its sensitivity slider)

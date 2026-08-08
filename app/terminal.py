@@ -5245,11 +5245,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scan_handles["revpt_gold"].setVisible(True)
 
     # ------------------------------------------------------------------
-    # ABSORPTION S/R LEVELS (hamburger m10_absorblvl) — EYEBALL-ONLY zones where aggression got ABSORBED
-    # (app/absorption_level_detect): buy-absorbed high = RESISTANCE (red) / sell-absorbed low = SUPPORT (green);
-    # clustered (repeated) levels drawn brighter; a level runs until price closes through it. ⚠ NOT a signal —
-    # these reject NO more than a random line (study/absorption_levels: aligned 63.9% == placebo 63.4%, p=0.39).
-    # Absorption DESCRIBES a reversal that already happened; it does not predict the next.
+    # ORDER-FLOW WALLS (hamburger m10_absorblvl) — EYEBALL-ONLY zones where strong aggression met its limit
+    # (app/absorption_level_detect): ABSORPTION (aggressor failed at the extreme) + AGGRESSION (aggressor moved from an
+    # origin/order-block). RESISTANCE (red) at highs / SUPPORT (green) at lows; clustered levels brighter; a level runs
+    # until price closes through it. ⚠ barely a signal — study/wall_levels: absorption 64.1% == placebo 63.4% (null);
+    # aggression 66.3% but dir-shuffle 65.0% (only ~1.3pp directional) — +3pp on a 63% geom base, NOT tradeable.
     # ------------------------------------------------------------------
     def _absorblvl_box(self, used, side, count):              # pooled red/green S/R zone (behind candles)
         if used >= len(self._absorblvl_box_pool):
