@@ -5251,16 +5251,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # until price closes through it. ⚠ barely a signal — study/wall_levels: absorption 64.1% == placebo 63.4% (null);
     # aggression 66.3% but dir-shuffle 65.0% (only ~1.3pp directional) — +3pp on a 63% geom base, NOT tradeable.
     # ------------------------------------------------------------------
-    def _absorblvl_box(self, used, side, count):              # pooled red/green S/R zone (behind candles)
+    def _absorblvl_box(self, used, side, strength):           # pooled red/green S/R zone; strength -> opacity + border
         if used >= len(self._absorblvl_box_pool):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-6)
             self.vb.addItem(_rc, ignoreBounds=True); self._absorblvl_box_pool.append(_rc)
         _rc = self._absorblvl_box_pool[used]
         rgb = (230, 70, 80) if side == "R" else (60, 200, 120)     # resistance red / support green
-        if count >= 2:                                             # repeated absorption = brighter + bordered
-            _rc.setBrush(pg.mkBrush(*rgb, min(140, 60 + count * 30))); _rc.setPen(pg.mkPen(*rgb, 220, width=1.0))
+        _rc.setBrush(pg.mkBrush(*rgb, int(22 + strength * 120)))   # big ejection / few hits = more opaque
+        if strength >= 0.35:                                       # a strong wall gets a bright border
+            _rc.setPen(pg.mkPen(*rgb, min(235, 120 + int(strength * 130)), width=1.0))
         else:
-            _rc.setBrush(pg.mkBrush(*rgb, 28)); _rc.setPen(pg.mkPen(None))
+            _rc.setPen(pg.mkPen(None))
         return _rc
 
     def _hide_absorb_levels(self) -> None:
@@ -5287,8 +5288,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             xl = x[i0]; xr = x[i1]
             if xr < vx0 - 1.0 or xl > vx1 + 1.0:               # cull to the viewport
                 continue
-            price = float(m["price"]); band = max(price * 0.0006, 1e-9)   # thin horizontal S/R zone
-            _rc = self._absorblvl_box(ub, m["side"], int(m.get("count", 1))); ub += 1
+            s = float(m.get("strength", 0.0))
+            if s < 0.30:                                       # weak / consumed (small ejection or hit into oblivion) -> hide
+                continue
+            price = float(m["price"]); band = max(price * (0.0003 + s * 0.0007), 1e-9)   # stronger wall = thicker zone
+            _rc = self._absorblvl_box(ub, m["side"], s); ub += 1
             _rc.setRect(xl, price - band, max(1e-9, xr - xl), 2.0 * band); _rc.setVisible(True)
         for _it in self._absorblvl_box_pool[ub:]:
             _it.setVisible(False)
