@@ -18,7 +18,7 @@ Calibrated PRECISION ~37% (2x the 17% base) at hitting an actual reversal — re
 in REAL TIME on the candle itself. Early detection is inherently ~37% (most fresh-low hammers still break down) —
 a heads-up marker, NOT a proven edge. Fail-safe: [] on any error.
 
-detect(buckets) -> [{i, side('top'|'bottom'), price, strong}]  (i = candle 3 = the pivot candle; the forming last bar is skipped).
+detect(buckets) -> [{i, side('top'|'bottom'), price, strong}]  (i = candle 3 = the pivot candle = the CURRENT candle, no lag).
 """
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def detect(buckets):
             if cv > 0:
                 DP[i] = (_f(buckets[i].get("buy_vol")) - _f(buckets[i].get("sell_vol"))) / cv * 100.0
         out = []
-        for i in range(LB, n - 1):                              # skip the forming last bar; fire on the last CLOSED candle
+        for i in range(LB, n):                                  # include the CURRENT candle — fires the moment it closes, no 1-bar lag (matches the 1h detector)
             rng = H[i] - L[i]
             if rng <= 0 or O[i] <= 0:
                 continue
