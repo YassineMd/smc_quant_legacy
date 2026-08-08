@@ -473,9 +473,22 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_svl_subtoggles(sec)          # RCLI sub-toggles: LVA zones / swing lines
             if key == "m10_session":
                 self._build_session_subtoggles(sec)      # Session sub-toggle: VP lines (VAH/VAL/POC/LVN) on/off
+            if key == "m10_vwap":
+                self._build_vwap_subtoggles(sec)         # VWAP sub-toggles: ±1σ / ±2σ / ±3σ std-dev bands
             if key == "m10_stats":
                 self._build_stats_substats(sec)          # per-stat on/off for the Mode-10 stats box
         return sec
+
+    def _build_vwap_subtoggles(self, section) -> None:
+        """VWAP σ-band sub-toggles: ±1σ / ±2σ / ±3σ volume-weighted std-dev channels around the VWAP. Each an m10_
+        key (persists + reads via layer_state); the master m10_vwap gates the whole indicator (bands ride it)."""
+        for key, label in (("m10_vwap_sd1", "· ±1σ band"), ("m10_vwap_sd2", "· ±2σ band"), ("m10_vwap_sd3", "· ±3σ band")):
+            cb = QtWidgets.QCheckBox(label)
+            cb.setChecked(False)                             # default OFF
+            cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
+            self.layer_checks[key] = cb
+            section.addWidget(cb)
 
     def _build_session_subtoggles(self, section) -> None:
         """Session Filter sub-toggle: 'VP lines' ON -> draw the per-session VAH/VAL + buy/sell-POC + LVN volume-profile

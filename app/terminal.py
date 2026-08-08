@@ -1304,6 +1304,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._nyer_box_pool = []      # NY Expected Range: forecast band (QGraphicsRectItem)
         self._nyer_line_pool = []     # NY Expected Range: dashed expected hi/lo edges (PlotCurveItem)
         self._nyer_lbl_pool = []      # NY Expected Range: 'NY exp X.X%' label (TextItem)
+        self._nyer_mark_pool = []     # NY Expected Range: early/late break triangle markers (TextItem)
         self._nyrb_ranges = []; self._nyrb_data_sig = None   # cached detect() output (recompute only on data change)
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
@@ -4942,6 +4943,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     NY_ER_A, NY_ER_B, NY_ER_MEAN = 0.03017, 0.2656, 0.04287
     NY_ER_CLIP = (0.015, 0.12)                            # clamp the forecast to a sane 1.5%–12% band
     NY_ER_RGB = (150, 120, 235)                           # violet — distinct from the green NY session box
+    # Early-break detector: an EARLY break of the band (first touch beyond, in a bucket starting <= 15:00 UTC / by
+    # ~4pm Morocco = the 2-5pm window) = trend-day tell (continues, +0.4-0.9%/trade in-sample, both-year sign);
+    # a LATE break exhausts/fades. Early = solid bright edge + ▲/▼; late = muted △/▽ ("don't chase"). In-sample edge
+    # is regime-dependent (2025-heavy) + OOS-unconfirmed (low-vol window) — an eyeball tell, not a proven trade.
+    NY_ER_EARLY_MAX_H = 15                                # break bucket start-hour <= this (UTC) = EARLY
+    NY_ER_UP_RGB, NY_ER_DN_RGB = (64, 224, 140), (240, 84, 110)   # early-break signal colour: green up / red down
 
     def _sess_rect(self, used, rgb):                           # pooled translucent session box (behind candles)
         if used >= len(self._sess_rect_pool):
@@ -5081,15 +5088,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.plot.addItem(_t, ignoreBounds=True); self._nyer_lbl_pool.append(_t)
         return self._nyer_lbl_pool[used]
 
+    def _nyer_mark(self, used):                               # pooled break marker (▲/▼ early, △/▽ late)
+        if used >= len(self._nyer_mark_pool):
+            _t = pg.TextItem(anchor=(0.5, 0.5)); _t.setZValue(16)
+            _t.textItem.setFont(QtGui.QFont("Consolas", 12))
+            self.plot.addItem(_t, ignoreBounds=True); self._nyer_mark_pool.append(_t)
+        return self._nyer_mark_pool[used]
+
     def _hide_ny_erange(self) -> None:
-        for _p in (self._nyer_box_pool + self._nyer_line_pool + self._nyer_lbl_pool):
+        for _p in (self._nyer_box_pool + self._nyer_line_pool + self._nyer_lbl_pool + self._nyer_mark_pool):
             _p.setVisible(False)
 
     def _draw_ny_erange(self, buckets, x, vx0, vx1) -> None:
         """NY Expected Range (m10_ny_erange): forecast today's NY session range from YESTERDAY's NY range
         (ER = A + B·yest_range, clamped). A violet band NY_open × (1 ± ER/2) spans each day's 13-21 UTC session so
         the operator sees the expected envelope as NY opens. Per UTC day, culled to the viewport. Falls back to the
-        mean when yesterday's NY session isn't in the loaded window (label suffixed '(avg)')."""
+        mean when yesterday's NY session isn't in the loaded window (label suffixed '(avg)').
+        EARLY-BREAK detector: the first touch beyond the band, if it lands in a bucket starting <= NY_ER_EARLY_MAX_H
+        UTC (~4pm Morocco), lights that edge SOLID+bright with a ▲/▼ (trend-day tell — continues); a later break gets
+        a muted △/▽ ('· late' — exhaustion/fade). See the class-constant note for the evidence + caveats."""
         if not self.menu.layer_state("m10_ny_erange") or not buckets:
             self._hide_ny_erange(); return
         ny = {}                                               # date-ordinal -> NY session (open + hi/lo span + x extent)
@@ -5106,10 +5123,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             do = t.toordinal(); r = ny.get(do)
             if r is None:                                     # first NY bucket of the day = session OPEN
                 o = float(b.get("open", b.get("open_price", 0.0)) or 0.0)
-                ny[do] = {"o": o, "hi": hi, "lo": lo, "i0": i, "i1": i}
+                ny[do] = {"o": o, "hi": hi, "lo": lo, "i0": i, "i1": i, "bars": [(i, t.hour, hi, lo)]}
             else:
                 r["hi"] = max(r["hi"], hi); r["lo"] = min(r["lo"], lo); r["i1"] = i
-        ub = ul = ut = 0
+                r["bars"].append((i, t.hour, hi, lo))
+        ub = ul = ut = um = 0
         for do in sorted(ny):
             cur = ny[do]; o = cur["o"]
             if o <= 0:
@@ -5124,21 +5142,52 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             else:
                 er = self.NY_ER_MEAN; fb = True
             exp_hi = o * (1.0 + er / 2.0); exp_lo = o * (1.0 - er / 2.0)
+            # first break of the band (touch beyond) + whether it is EARLY (bucket start-hour <= cutoff)
+            brk_side = None; brk_j = None; brk_early = False
+            for (_j, _hh, _bh, _bl) in cur["bars"]:
+                if _bh >= exp_hi:
+                    brk_side = "up"; brk_j = _j; brk_early = _hh <= self.NY_ER_EARLY_MAX_H; break
+                if _bl <= exp_lo:
+                    brk_side = "down"; brk_j = _j; brk_early = _hh <= self.NY_ER_EARLY_MAX_H; break
             self._nyer_box(ub).setRect(xl, exp_lo, max(1e-9, xr - xl), max(1e-9, exp_hi - exp_lo))
             self._nyer_box_pool[ub].setVisible(True); ub += 1
-            for _y in (exp_hi, exp_lo):                       # dashed expected high / low edges
-                _pn = pg.mkPen(*self.NY_ER_RGB, 185, width=1.1); _pn.setCosmetic(True); _pn.setDashPattern([5.0, 4.0])
+            for _y in (exp_hi, exp_lo):                       # edges: broken side lights up SOLID+bright on an EARLY break
+                _broken = (brk_side == "up" and _y == exp_hi) or (brk_side == "down" and _y == exp_lo)
+                if brk_early and _broken:
+                    _c = self.NY_ER_UP_RGB if _y == exp_hi else self.NY_ER_DN_RGB
+                    _pn = pg.mkPen(*_c, 240, width=2.0); _pn.setCosmetic(True)
+                else:
+                    _pn = pg.mkPen(*self.NY_ER_RGB, 185, width=1.1); _pn.setCosmetic(True); _pn.setDashPattern([5.0, 4.0])
                 _ln = self._nyer_line(ul); ul += 1
                 _ln.setData([xl, xr], [_y, _y]); _ln.setPen(_pn); _ln.setVisible(True)
+            if brk_side is not None and brk_j is not None and 0 <= brk_j < len(x):   # break marker at the break bucket
+                if brk_early:
+                    _g, _mc = ("▲", self.NY_ER_UP_RGB) if brk_side == "up" else ("▼", self.NY_ER_DN_RGB)
+                else:
+                    _g, _mc = ("△" if brk_side == "up" else "▽"), (150, 150, 162)     # late = muted (fade zone)
+                _mk = self._nyer_mark(um); um += 1
+                _mk.textItem.setFont(QtGui.QFont("Consolas", 17 if brk_early else 11))   # early = bigger ▲/▼
+                _mk.setColor(pg.mkColor(*_mc)); _mk.setText(_g)
+                _mk.setPos(x[brk_j], exp_hi if brk_side == "up" else exp_lo); _mk.setVisible(True)
+            if brk_early and brk_side == "up":
+                _tag, _lc = "  ▲ EARLY", self.NY_ER_UP_RGB
+            elif brk_early and brk_side == "down":
+                _tag, _lc = "  ▼ EARLY", self.NY_ER_DN_RGB
+            elif brk_side is not None:
+                _tag, _lc = "  · late", (150, 150, 162)
+            else:
+                _tag, _lc = "", self.NY_ER_RGB
             _lb = self._nyer_lbl(ut); ut += 1
-            _lb.setColor(pg.mkColor(*self.NY_ER_RGB))
-            _lb.setText("NY exp %.1f%%%s" % (er * 100.0, "  (avg)" if fb else ""))
+            _lb.setColor(pg.mkColor(*_lc))
+            _lb.setText("NY exp %.1f%%%s%s" % (er * 100.0, "  (avg)" if fb else "", _tag))
             _lb.setPos(xl, exp_hi); _lb.setVisible(True)
         for _it in self._nyer_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._nyer_line_pool[ul:]:
             _it.setVisible(False)
         for _it in self._nyer_lbl_pool[ut:]:
+            _it.setVisible(False)
+        for _it in self._nyer_mark_pool[um:]:
             _it.setVisible(False)
 
     def _draw_4h_zone(self, buckets) -> None:
@@ -12034,43 +12083,57 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scan_handles["kc_upper"].setVisible(_kc_on and not self._hide_candles)   # Ctrl+H also hides it
         self._scan_handles["kc_lower"].setVisible(_kc_on and not self._hide_candles)
 
-        # --- VWAP (m10_vwap): daily-anchored (re-zeroes each UTC midnight, like the CVD pane), typical price
-        #     (H+L+C)/3 weighted by bucket volume. Two-tone by SLOPE: BLUE where VWAP rises, MAGENTA where it
-        #     falls. One shared y-array drawn by two curves with per-segment `connect` masks — the up-curve draws
-        #     only rising segments, the down-curve only falling ones, so turns join seamlessly (shared vertices)
-        #     and a lone down-bar between ups can't get overpainted. Cheap O(N) walk over the frame's buckets. ---
+        # --- VWAP (m10_vwap) + σ-bands (m10_vwap_sd1/2/3): daily-anchored (re-zeroes each UTC midnight), typical
+        #     price (H+L+C)/3 weighted by bucket volume. Main line two-tone by SLOPE (BLUE rising / MAGENTA falling)
+        #     via per-segment `connect` masks that also BREAK at the UTC-day boundary (each day = its own anchor, no
+        #     diagonal across the reset). Bands = VWAP ± k·σ where σ is the volume-weighted std of the typical price
+        #     from the VWAP; bands are sub-toggles OF the VWAP (only shown when m10_vwap is on). O(N) per frame. ---
+        _vwap_on = self.menu.layer_state("m10_vwap")
+        _sd_on = [self.menu.layer_state("m10_vwap_sd%d" % _k) for _k in (1, 2, 3)]
         if "vwap_up" not in self._scan_handles:
             self._scan_handles["vwap_up"] = self._add_scanner_item(
                 pg.PlotCurveItem(pen=pg.mkPen((54, 138, 255), width=1.6)))    # rising -> blue
             self._scan_handles["vwap_dn"] = self._add_scanner_item(
                 pg.PlotCurveItem(pen=pg.mkPen((240, 70, 210), width=1.6)))    # falling -> magenta
-        _vwap_on = self.menu.layer_state("m10_vwap")
+            for _k, _al in ((1, 175), (2, 130), (3, 95)):                     # σ-band pens: soft blue, dashed, fainter outward
+                for _sfx in ("u", "l"):
+                    _bp = pg.mkPen(96, 156, 236, _al, width=1.0); _bp.setDashPattern([4.0, 4.0])
+                    self._scan_handles["vwap_sd%d%s" % (_k, _sfx)] = self._add_scanner_item(pg.PlotCurveItem(pen=_bp))
         if _vwap_on:
             _vh, _vl, _vc = arr["highs"], arr["lows"], arr["closes"]
-            _vwap = []; _cpv = 0.0; _cv = 0.0; _vday = None
+            _vwap = []; _sd = []; _days = []; _cpv = _cv = _cpv2 = 0.0; _vday = None
             for _i, _b in enumerate(buckets):
                 _d = int(float(_b.get("start_time", 0.0)) // 86400.0)       # UTC day (epoch is UTC-based)
                 if _vday is not None and _d != _vday:
-                    _cpv = 0.0; _cv = 0.0                                    # new UTC day -> re-anchor VWAP
-                _vday = _d
+                    _cpv = _cv = _cpv2 = 0.0                                 # new UTC day -> re-anchor VWAP + σ
+                _vday = _d; _days.append(_d)
                 _vol = float(_b.get("buy_vol", 0.0)) + float(_b.get("sell_vol", 0.0))
                 _tp = (float(_vh[_i]) + float(_vl[_i]) + float(_vc[_i])) / 3.0
-                _cpv += _tp * _vol; _cv += _vol
-                _vwap.append(_cpv / _cv if _cv > 0 else _tp)
-            # per-segment slope mask: conn[i]=1 connects point i -> i+1. Rising segments go to the blue curve,
-            # falling to the magenta; both share the SAME finite y-array so transition vertices align exactly.
-            _n = len(_vwap)
-            _vy = np.asarray(_vwap, dtype=float)
-            _up_c = np.zeros(_n, dtype=np.int32); _dn_c = np.zeros(_n, dtype=np.int32)
+                _cpv += _tp * _vol; _cv += _vol; _cpv2 += _tp * _tp * _vol
+                _vw = _cpv / _cv if _cv > 0 else _tp
+                _vwap.append(_vw)
+                _var = (_cpv2 / _cv - _vw * _vw) if _cv > 0 else 0.0        # volume-weighted variance about the VWAP
+                _sd.append(math.sqrt(_var) if _var > 0 else 0.0)
+            _n = len(_vwap); _vy = np.asarray(_vwap, dtype=float); _sda = np.asarray(_sd, dtype=float)
+            # main-line slope masks + a day-break mask; conn[i]=1 connects point i -> i+1 (same UTC day only)
+            _up_c = np.zeros(_n, dtype=np.int32); _dn_c = np.zeros(_n, dtype=np.int32); _dayc = np.zeros(_n, dtype=np.int32)
             for _i in range(1, _n):
-                if _vwap[_i] >= _vwap[_i - 1]:
-                    _up_c[_i - 1] = 1
-                else:
-                    _dn_c[_i - 1] = 1
+                if _days[_i] == _days[_i - 1]:
+                    (_up_c if _vwap[_i] >= _vwap[_i - 1] else _dn_c)[_i - 1] = 1
+            for _i in range(_n - 1):
+                _dayc[_i] = 1 if _days[_i] == _days[_i + 1] else 0
             self._scan_handles["vwap_up"].setData(x, _vy, connect=_up_c)
             self._scan_handles["vwap_dn"].setData(x, _vy, connect=_dn_c)
+            for _k in (1, 2, 3):
+                if _sd_on[_k - 1]:
+                    self._scan_handles["vwap_sd%du" % _k].setData(x, _vy + _k * _sda, connect=_dayc)
+                    self._scan_handles["vwap_sd%dl" % _k].setData(x, _vy - _k * _sda, connect=_dayc)
         self._scan_handles["vwap_up"].setVisible(_vwap_on and not self._hide_candles)
         self._scan_handles["vwap_dn"].setVisible(_vwap_on and not self._hide_candles)
+        for _k in (1, 2, 3):
+            _bv = _vwap_on and _sd_on[_k - 1] and not self._hide_candles     # bands ride the VWAP master toggle
+            self._scan_handles["vwap_sd%du" % _k].setVisible(_bv)
+            self._scan_handles["vwap_sd%dl" % _k].setVisible(_bv)
 
         # per-bucket trailing-30 BER/SER baseline (buyer_er/seller_er mean) — used by the imbalance lines + the
         # footprint number highlight (both inside _render_candle_marks) AND the hover readout below, so compute once.
