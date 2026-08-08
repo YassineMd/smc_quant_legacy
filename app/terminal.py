@@ -5251,17 +5251,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # until price closes through it. ⚠ barely a signal — study/wall_levels: absorption 64.1% == placebo 63.4% (null);
     # aggression 66.3% but dir-shuffle 65.0% (only ~1.3pp directional) — +3pp on a 63% geom base, NOT tradeable.
     # ------------------------------------------------------------------
-    def _absorblvl_box(self, used, side, strength):           # pooled red/green S/R zone; strength -> opacity + border
+    def _absorblvl_box(self, used, side, strength, src):      # opacity = strength; BORDER only on confluence (mix)
         if used >= len(self._absorblvl_box_pool):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-6)
             self.vb.addItem(_rc, ignoreBounds=True); self._absorblvl_box_pool.append(_rc)
         _rc = self._absorblvl_box_pool[used]
         rgb = (230, 70, 80) if side == "R" else (60, 200, 120)     # resistance red / support green
         _rc.setBrush(pg.mkBrush(*rgb, int(22 + strength * 120)))   # big ejection / few hits = more opaque
-        if strength >= 0.35:                                       # a strong wall gets a bright border
-            _rc.setPen(pg.mkPen(*rgb, min(235, 120 + int(strength * 130)), width=1.0))
+        if src == "mix":                                           # BOTH absorption + aggression at this level -> border
+            _rc.setPen(pg.mkPen(*rgb, min(235, 150 + int(strength * 90)), width=1.4))
         else:
-            _rc.setPen(pg.mkPen(None))
+            _rc.setPen(pg.mkPen(None))                             # pure absorption / pure aggression -> no border
         return _rc
 
     def _hide_absorb_levels(self) -> None:
@@ -5292,7 +5292,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if s < 0.12:                                       # only hide near-spent walls (tiny ejection / hit to death)
                 continue
             price = float(m["price"]); band = max(price * (0.0003 + s * 0.0007), 1e-9)   # stronger wall = thicker zone
-            _rc = self._absorblvl_box(ub, m["side"], s); ub += 1
+            _rc = self._absorblvl_box(ub, m["side"], s, m.get("src", "")); ub += 1
             _rc.setRect(xl, price - band, max(1e-9, xr - xl), 2.0 * band); _rc.setVisible(True)
         for _it in self._absorblvl_box_pool[ub:]:
             _it.setVisible(False)
