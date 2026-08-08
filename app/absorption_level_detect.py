@@ -29,7 +29,13 @@ BODY_BIG = 0.60    # |close-open|/range >= this = decisive move (origin / order-
 EPS = 0.0015       # touch / break tolerance (0.15%)
 DECAY = 0.6        # strength multiplier applied per return-touch (each test weakens the wall)
 EJ_WIN = 10        # the ejection = favourable excursion within this many bars of formation (the INITIAL rejection)
-REF_EJ = 0.010     # ejection that maps to full strength 1.0 (1.0%)
+# GEOMETRY is VOLATILITY-RELATIVE (timeframe-invariant): band / radar / ejection scale with the local candle range
+# (vpct = rolling-mean candle-range % over ATR_WIN bars), NOT a fixed % of price — else on 1h/4h the radar is tiny vs
+# a candle and every wall breaks instantly. Coefficients tuned to reproduce the 15m geometry (vpct ~0.003 there).
+ATR_WIN = 50       # bars for the rolling volatility unit
+BAND_MIN = 0.10    # wall half-height as a fraction of the local candle range (weak wall)
+BAND_RANGE = 0.233 # ... + this * base (strong wall) -> band = vpct * (0.10..0.333) of price
+EJ_ATR_MULT = 3.3  # ejection = this * the local candle range -> full strength 1.0
 
 
 def _f(x) -> float:
@@ -63,6 +69,12 @@ def detect(buckets, skip_last=False):
             cv = _f(b.get("curr_vol"))
             if cv > 0:
                 DP[i] = (_f(b.get("buy_vol")) - _f(b.get("sell_vol"))) / cv * 100.0
+        vpct = [0.0] * n; _s = 0.0                          # rolling-mean candle-range % (the volatility unit)
+        for i in range(n):
+            _s += (H[i] - L[i]) / C[i] if C[i] > 0 else 0.0
+            if i >= ATR_WIN:
+                _s -= (H[i - ATR_WIN] - L[i - ATR_WIN]) / C[i - ATR_WIN] if C[i - ATR_WIN] > 0 else 0.0
+            vpct[i] = _s / min(i + 1, ATR_WIN)
         hi_n = (n - 1) if skip_last else n
         active = []; done = []            # wall: {P, side, src, i0, ej, inzone, ever_left, runs, broken, i1}
         for i in range(hi_n):
@@ -73,7 +85,8 @@ def detect(buckets, skip_last=False):
                     fav = (P - L[i]) / P if w["side"] == "R" else (H[i] - P) / P
                     if fav > w["ej"]:
                         w["ej"] = fav
-                band = P * (0.0003 + min(1.0, w["ej"] / REF_EJ) * 0.0007)
+                base = min(1.0, w["ej"] / (EJ_ATR_MULT * w["v0"])) if w["v0"] > 0 else 0.0
+                band = P * w["v0"] * (BAND_MIN + base * BAND_RANGE)   # volatility-relative -> timeframe-invariant
                 r_lo = P - 3.0 * band; r_hi = P + 3.0 * band     # radar area = wall + one wall-height above & below
                 if (w["side"] == "R" and C[i] > r_hi) or (w["side"] == "S" and C[i] < r_lo):
                     w["i1"] = i; w["broken"] = True; done.append(w); continue   # BODY CLOSES beyond the RADAR -> broken
@@ -96,17 +109,17 @@ def detect(buckets, skip_last=False):
                     if w["side"] == side and abs(w["P"] - price) <= price * EPS * 2:
                         near = w; break
                 if near is None:                            # a fresh wall (else it is just a re-touch of an active one)
-                    active.append({"P": price, "side": side, "src": src, "i0": i, "ej": 0.0,
+                    active.append({"P": price, "side": side, "src": src, "i0": i, "ej": 0.0, "v0": vpct[i],
                                    "inzone": True, "ever_left": False, "runs": [], "broken": False, "i1": None})
                 elif near["src"] != src:
                     near["src"] = "mix"
         out = []
         for w in done + active:
             i0 = w["i0"]; i1 = w["i1"] if w["broken"] else (n - 1); P = w["P"]
-            base = min(1.0, w["ej"] / REF_EJ)               # ejection strength sets the geometry (band / radar)
+            base = min(1.0, w["ej"] / (EJ_ATR_MULT * w["v0"])) if w["v0"] > 0 else 0.0   # ejection sets the geometry
             hits = len(w["runs"])                           # each radar re-visit is a hit
             strength = base * (DECAY ** hits)               # decays with hits -> opacity
-            band = P * (0.0003 + base * 0.0007)
+            band = P * w["v0"] * (BAND_MIN + base * BAND_RANGE)   # volatility-relative band (timeframe-invariant)
             runs = [(r[0], min(r[1], i1)) for r in w["runs"] if r[0] <= i1]
             out.append({"price": P, "side": w["side"], "src": w["src"], "i0": i0, "i1": i1,
                         "strength": strength, "hits": hits, "band": band, "radar_runs": runs})

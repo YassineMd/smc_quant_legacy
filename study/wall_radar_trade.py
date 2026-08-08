@@ -98,10 +98,11 @@ def run(tf="15m"):
     report("HI-vol -> BREAK bet (edge)", hi, lambda e: edge_trade(e, True))
     report("LO-vol -> HOLD bet (edge)", lo, lambda e: edge_trade(e, False))
     report("ALL entries -> HOLD bet (edge)", E, lambda e: edge_trade(e, False))     # base: walls mostly hold
-    for D in (0.004, 0.006):
+    for D in (0.006, 0.010):
         print("   [B] SYMMETRIC +/-%.1f%% exits" % (D * 100))
-        report("HI-vol -> BREAK bet", hi, lambda e: sym_trade(e, True, D))
-        report("LO-vol -> HOLD bet", lo, lambda e: sym_trade(e, False, D))
+        report("HI-vol -> BREAK bet", hi, lambda e, D=D: sym_trade(e, True, D))
+        report("LO-vol -> HOLD bet", lo, lambda e, D=D: sym_trade(e, False, D))
 
 
-run("15m")
+for _tf in ("15m", "1h", "4h"):
+    run(_tf)
