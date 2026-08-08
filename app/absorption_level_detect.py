@@ -6,9 +6,9 @@ A wall = where strong one-sided aggression (|net-delta%| >= T) meets its limit. 
   AGGRESSION (big body -> aggressor moved FROM a base, leaving an origin / order block):
      sell-aggression -> HIGH = RESISTANCE (red) ;  buy-aggression -> LOW = SUPPORT (green)
 
-STRENGTH (drawn as opacity + thickness) = how far the wall EJECTED price (the favourable excursion after it formed),
-DECAYED 0.6x per return-touch (each test consumes its liquidity). LIFETIME = the MARKET decides: a wall lives from
-where it formed until price CLOSES through it — no arbitrary age-out. Causal per-bar simulation.
+STRENGTH (drawn as opacity) = how far the wall EJECTED price (the favourable excursion after it formed), DECAYED 0.6x
+per radar re-visit (each test consumes its liquidity). LIFETIME = the MARKET decides: a wall lives until a candle BODY
+CLOSES beyond its RADAR (not merely through the wall) — no arbitrary age-out. Causal per-bar simulation.
 
 ⚠ DESCRIPTIVE ONLY — barely a signal. study/wall_levels.py (vs a random-line placebo, 15m): ABSORPTION 64.1% ==
 placebo 63.4% (null); AGGRESSION 66.3% but the direction-shuffle also hits 65.0%, so only ~1.3pp is truly directional
@@ -64,20 +64,28 @@ def detect(buckets, skip_last=False):
             if cv > 0:
                 DP[i] = (_f(b.get("buy_vol")) - _f(b.get("sell_vol"))) / cv * 100.0
         hi_n = (n - 1) if skip_last else n
-        active = []; done = []                              # walls: {P, side, src, i0, hits, inzone, broken, i1}
+        active = []; done = []            # wall: {P, side, src, i0, ej, inzone, ever_left, runs, broken, i1}
         for i in range(hi_n):
             still = []
             for w in active:
                 P = w["P"]
-                if w["side"] == "R" and C[i] > P * (1 + EPS):       # MARKET breaks it (close through)
-                    w["i1"] = i; w["broken"] = True; done.append(w); continue
-                if w["side"] == "S" and C[i] < P * (1 - EPS):
-                    w["i1"] = i; w["broken"] = True; done.append(w); continue
-                inzone = (H[i] >= P * (1 - EPS)) if w["side"] == "R" else (L[i] <= P * (1 + EPS))
-                if inzone and not w["inzone"] and i - w["i0"] > 1:  # price RETURNED to test the wall = a hit
-                    w["hits"] += 1; w["inzone"] = True
-                elif not inzone:
-                    w["inzone"] = False
+                if i - w["i0"] <= EJ_WIN:                         # formation ejection (freezes after EJ_WIN bars)
+                    fav = (P - L[i]) / P if w["side"] == "R" else (H[i] - P) / P
+                    if fav > w["ej"]:
+                        w["ej"] = fav
+                band = P * (0.0003 + min(1.0, w["ej"] / REF_EJ) * 0.0007)
+                r_lo = P - 3.0 * band; r_hi = P + 3.0 * band     # radar area = wall + one wall-height above & below
+                if (w["side"] == "R" and C[i] > r_hi) or (w["side"] == "S" and C[i] < r_lo):
+                    w["i1"] = i; w["broken"] = True; done.append(w); continue   # BODY CLOSES beyond the RADAR -> broken
+                inside = (L[i] <= r_hi and H[i] >= r_lo)          # radar visit tracking
+                if inside:
+                    if not w["inzone"] and w["ever_left"]:        # fresh re-entry -> a new visit run (a "hit")
+                        w["runs"].append([i, i])
+                    if w["ever_left"] and w["runs"]:
+                        w["runs"][-1][1] = i                      # extend the open run while price stays inside
+                    w["inzone"] = True
+                else:
+                    w["inzone"] = False; w["ever_left"] = True
                 still.append(w)
             active = still
             hit = _wall_at(i, O, C, H, L, DP)
@@ -88,38 +96,20 @@ def detect(buckets, skip_last=False):
                     if w["side"] == side and abs(w["P"] - price) <= price * EPS * 2:
                         near = w; break
                 if near is None:                            # a fresh wall (else it is just a re-touch of an active one)
-                    active.append({"P": price, "side": side, "src": src, "i0": i,
-                                   "hits": 0, "inzone": True, "broken": False, "i1": None})
+                    active.append({"P": price, "side": side, "src": src, "i0": i, "ej": 0.0,
+                                   "inzone": True, "ever_left": False, "runs": [], "broken": False, "i1": None})
                 elif near["src"] != src:
                     near["src"] = "mix"
         out = []
         for w in done + active:
             i0 = w["i0"]; i1 = w["i1"] if w["broken"] else (n - 1); P = w["P"]
-            k1 = min(i1, i0 + EJ_WIN, n - 1)                # INITIAL rejection: excursion within EJ_WIN bars of birth
-            ej = 0.0
-            for k in range(i0 + 1, k1 + 1):
-                fav = (P - L[k]) / P if w["side"] == "R" else (H[k] - P) / P
-                if fav > ej:
-                    ej = fav
-            strength = min(1.0, ej / REF_EJ) * (DECAY ** w["hits"])
-            band = P * (0.0003 + strength * 0.0007)         # half-height of the wall zone (visual, matches the terminal)
-            r_lo = P - 3.0 * band; r_hi = P + 3.0 * band     # radar area = wall + one wall-height above + below
-            # RADAR visit-runs: each contiguous stretch where a bar RE-ENTERS the radar area (price left, then returned)
-            runs = []; in_r = False; ever_left = False; rs = 0; counts = False
-            for k in range(i0, i1 + 1):
-                if L[k] <= r_hi and H[k] >= r_lo:
-                    if not in_r:
-                        in_r = True; rs = k; counts = ever_left    # a run counts only if price had left the area first
-                else:
-                    ever_left = True
-                    if in_r:
-                        in_r = False
-                        if counts:
-                            runs.append((rs, k - 1))
-            if in_r and counts:
-                runs.append((rs, i1))
+            base = min(1.0, w["ej"] / REF_EJ)               # ejection strength sets the geometry (band / radar)
+            hits = len(w["runs"])                           # each radar re-visit is a hit
+            strength = base * (DECAY ** hits)               # decays with hits -> opacity
+            band = P * (0.0003 + base * 0.0007)
+            runs = [(r[0], min(r[1], i1)) for r in w["runs"] if r[0] <= i1]
             out.append({"price": P, "side": w["side"], "src": w["src"], "i0": i0, "i1": i1,
-                        "strength": strength, "hits": w["hits"], "band": band, "radar_runs": runs})
+                        "strength": strength, "hits": hits, "band": band, "radar_runs": runs})
         return out
     except Exception:
         return []
