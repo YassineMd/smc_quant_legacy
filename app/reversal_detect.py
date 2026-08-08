@@ -13,10 +13,11 @@ What predicts a reversal at candle 3's close (candidate = fresh LB-bar extreme; 
   side 'bottom'  green ▲ BELOW a swing low  — fresh low + closes in the upper CIR of its range + lower wick + turned
                                               bullish + buyers step in (delta-shift up).
   side 'top'     red   ▼ ABOVE a swing high — mirror.
-  STRONG (bigger): (a) CHOPPY approach (run_down<=2, not a straight crash) AND (b) CAPITULATION flush (sellconc>=40%).
+  STRONG (bigger): candle 3 also ENGULFS the prior candle (classic body-engulf — its body swallows the opposite-
+                   coloured prior body). Lifts precision both years on every tf; beats the old run+sellconc tier on 1h/4h.
 
-Calibrated PRECISION ~37-41% (2x the ~18% base), regime-STABLE both years; strong tier ~43-45%. Early detection is
-inherently ~40% (most fresh-low hammers still break down) — a heads-up marker, NOT a proven edge. Fail-safe: [].
+Calibrated PRECISION ~37-41% (2x the ~18% base), regime-STABLE both years; strong (engulf) tier ~43-52%. Early
+detection is inherently ~40% (most fresh-low hammers still break down) — a heads-up marker, NOT a proven edge. Fail-safe: [].
 
 detect(buckets, skip_last=True) -> [{i, side('top'|'bottom'), price, strong}]  (i = candle 3 = the pivot candle).
 """
@@ -28,13 +29,9 @@ LB = 6                  # candle 3 must be the extreme over the last LB bars (a 
 CIR = 0.55              # candle 3 closes in the favourable CIR of its OWN range (hammer / rejection close)
 WICK_MIN = 0.25         # candle 3 rejection wick as a fraction of its range
 DS = 3.0                # delta shift: candle-3 delta% minus the mean of the 2 approach candles (buyers/sellers step in)
-# GOLD tier = (a) CHOPPY approach into the extreme (<= STRONG_RUN_MAX consecutive same-dir candles, not a straight
-# crash) AND (b) a CAPITULATION flush — >= STRONG_SELLCONC% of the candle's SELLING (bottom) / BUYING (top) dumped in
-# the extreme third (footprint). Both robust across tf + years (study/reversal_longwindow_15m + reversal_footprint):
-# hammer 37-39% -> +run_down 40-42% -> +sellconc ~44% both tf. (The footprint's other reads were redundant w/ the hammer.)
-STRONG_RUN_MAX = 2
-STRONG_SELLCONC = 40.0
-RUN_CAP = 6             # look back at most this far for the streak
+# STRONG tier = candle 3 also ENGULFS the prior candle (classic body-engulf: opposite-coloured prior candle, c3 body
+# swallows the prior body). study/reversal_engulf.py: lifts precision both years on every tf (hammer 15m 36->43% /
+# 1h 39->49% / 4h 42->52%) and beats the old run_down<=2 & sellconc>=40 footprint tier on 1h/4h (where it added ~0).
 
 
 def _f(x) -> float:
@@ -44,36 +41,12 @@ def _f(x) -> float:
         return 0.0
 
 
-def _run(C, O, i, down, cap=RUN_CAP):
-    """Consecutive same-direction candles ending at i-1 (the streak INTO the extreme), capped at `cap`."""
-    r = 0
-    for k in range(i - 1, max(-1, i - 1 - cap), -1):
-        if (C[k] < O[k]) if down else (C[k] > O[k]):
-            r += 1
-        else:
-            break
-    return r
-
-
-def _conc(b, hi, lo, down):
-    """Capitulation flush from the footprint: fraction (%) of SELL vol in the bottom third (down) / BUY vol in the
-    top third (up). High => the losing side dumped INTO the extreme and got absorbed. 0 if no footprint."""
-    lv = b.get("levels") or {}
-    rng = hi - lo
-    if not lv or rng <= 0:
-        return 0.0
-    thr = (lo + rng / 3.0) if down else (hi - rng / 3.0)
-    seg = tot = 0.0
-    for ps, vv in lv.items():
-        try:
-            p = float(ps)
-        except (TypeError, ValueError):
-            continue
-        v = _f(vv.get("s")) if down else _f(vv.get("b"))
-        tot += v
-        if (p <= thr) if down else (p >= thr):
-            seg += v
-    return (seg / tot * 100.0) if tot > 0 else 0.0
+def _engulf(O, C, i, down):
+    """Classic body-engulf: candle i's body swallows the OPPOSITE-coloured prior candle's body (bullish engulf at a
+    bottom / bearish engulf at a top). The one incremental filter that lifts precision both years on every tf."""
+    if down:
+        return C[i - 1] < O[i - 1] and O[i] <= C[i - 1] and C[i] >= O[i - 1]
+    return C[i - 1] > O[i - 1] and O[i] >= C[i - 1] and C[i] <= O[i - 1]
 
 
 def detect(buckets, skip_last=True):
@@ -98,11 +71,9 @@ def detect(buckets, skip_last=True):
             uw = (H[i] - max(O[i], C[i])) / rng                  # upper wick fraction
             ds = DP[i] - (DP[i - 2] + DP[i - 1]) / 2.0           # flow shift at candle 3 vs the 2 approach candles
             if L[i] <= min(L[i - LB:i]) and cir >= CIR and lw >= WICK_MIN and C[i] > O[i] and ds >= DS:       # BOTTOM
-                strong = _run(C, O, i, True) <= STRONG_RUN_MAX and _conc(buckets[i], H[i], L[i], True) >= STRONG_SELLCONC
-                out.append({"i": i, "side": "bottom", "price": L[i], "strong": strong})
+                out.append({"i": i, "side": "bottom", "price": L[i], "strong": _engulf(O, C, i, True)})
             elif H[i] >= max(H[i - LB:i]) and (H[i] - C[i]) / rng >= CIR and uw >= WICK_MIN and C[i] < O[i] and ds <= -DS:  # TOP
-                strong = _run(C, O, i, False) <= STRONG_RUN_MAX and _conc(buckets[i], H[i], L[i], False) >= STRONG_SELLCONC
-                out.append({"i": i, "side": "top", "price": H[i], "strong": strong})
+                out.append({"i": i, "side": "top", "price": H[i], "strong": _engulf(O, C, i, False)})
         return out
     except Exception:
         return []
