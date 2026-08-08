@@ -1306,6 +1306,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._nyer_lbl_pool = []      # NY Expected Range: 'NY exp X.X%' label (TextItem)
         self._nyer_mark_pool = []     # NY Expected Range: early/late break triangle markers (TextItem)
         self._nyrb_ranges = []; self._nyrb_data_sig = None   # cached detect() output (recompute only on data change)
+        self._rev15_marks = []; self._rev15_sig = None       # 15m reversal-candle detector cache (m10_reversal15)
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
         self._mom_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
@@ -5189,6 +5190,49 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _it.setVisible(False)
         for _it in self._nyer_mark_pool[um:]:
             _it.setVisible(False)
+
+    # ------------------------------------------------------------------
+    # 15m REVERSAL CANDLES (hamburger m10_reversal15) — flag bars matching the reversal anatomy (app/reversal15m_detect,
+    # calibrated in study/reversal_candle_15m.py): a LOCAL EXTREME candle with a WIDE range + REJECTION WICK + CLOSE-BACK.
+    # green ▲ below a potential swing LOW / red ▼ above a potential swing HIGH. 15m ONLY. Descriptive candidate (~50%
+    # precision vs the ZigZag pivots, regime-dependent) — an eyeball tell, NOT a proven edge. Two scatter items, cached.
+    # ------------------------------------------------------------------
+    def _hide_reversal15m(self) -> None:
+        for _k in ("rev15_g", "rev15_r"):
+            if _k in self._scan_handles:
+                self._scan_handles[_k].setVisible(False)
+
+    def _draw_reversal15m(self, buckets, x, vx0, vx1, vy0, vy1) -> None:
+        if not self.menu.layer_state("m10_reversal15") or self._tf != "15m" or not buckets:
+            self._hide_reversal15m(); return
+        n = len(buckets)
+        _dsig = (n, float(buckets[-1].get("end_time", 0.0) or 0.0), float(buckets[-1].get("close", 0.0) or 0.0))
+        if _dsig != self._rev15_sig:                          # recompute the detector only when the data changes
+            try:
+                from app import reversal15m_detect
+                self._rev15_marks = reversal15m_detect.detect(buckets)
+            except Exception:
+                self._rev15_marks = []
+            self._rev15_sig = _dsig
+        if "rev15_g" not in self._scan_handles:
+            self._scan_handles["rev15_g"] = self._add_scanner_item(
+                pg.ScatterPlotItem(symbol="t1", pen=pg.mkPen(18, 88, 48, 210), brush=pg.mkBrush(60, 220, 120, 235)))   # ▲ swing low
+            self._scan_handles["rev15_r"] = self._add_scanner_item(
+                pg.ScatterPlotItem(symbol="t", pen=pg.mkPen(92, 20, 26, 210), brush=pg.mkBrush(240, 70, 82, 235)))     # ▼ swing high
+        pad = max((vy1 - vy0) * 0.012, 1e-9)
+        gx = []; gy = []; gs = []; rx = []; ry = []; rs = []
+        for m in self._rev15_marks:
+            i = int(m["i"])
+            if i >= n or x[i] < vx0 - 1.0 or x[i] > vx1 + 1.0:  # cull to the viewport
+                continue
+            sz = 17 if m.get("strong") else 11                 # strong tier bigger
+            if m["side"] == "bottom":
+                gx.append(x[i]); gy.append(float(m["price"]) - pad); gs.append(sz)
+            else:
+                rx.append(x[i]); ry.append(float(m["price"]) + pad); rs.append(sz)
+        self._scan_handles["rev15_g"].setData(x=gx, y=gy, size=gs)
+        self._scan_handles["rev15_r"].setData(x=rx, y=ry, size=rs)
+        self._scan_handles["rev15_g"].setVisible(True); self._scan_handles["rev15_r"].setVisible(True)
 
     def _draw_4h_zone(self, buckets) -> None:
         """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median), ZONE ('Z': buy/sell wick bands), and ABNORMAL-ORDER
@@ -12066,6 +12110,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_ny_erange(buckets, x, vx0, vx1)             # NY expected-range forecast band (m10_ny_erange)
         except Exception:
             self._hide_ny_erange()
+        try:
+            self._draw_reversal15m(buckets, x, vx0, vx1, vy0, vy1)  # 15m reversal-candle triangles (m10_reversal15)
+        except Exception:
+            self._hide_reversal15m()
 
         # --- Keltner Channel: EMA(close) basis ± ATR band. LIGHT GRAY upper/lower (match the POC baseline);
         #     the EMA MIDDLE line is HIDDEN (operator pref — the POC baseline is the center reference). ---

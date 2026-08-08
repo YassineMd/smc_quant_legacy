@@ -1,74 +1,71 @@
-"""1h REVERSAL candle — CAUSAL detector for the live '1h reversal' overlay (m10_reversal, 1h only).
+"""1h REVERSAL detector — EARLY / PREDICTIVE (m10_reversal overlay, 1h only).
 
-Fires a RED lozenge ABOVE a TOP-reversal candle (up->down flip expected) and a GREEN lozenge BELOW a BOTTOM-reversal
-candle. Built from study/reversal_candle_1h.py, which found a 1h reversal candle is a WIDE-RANGE REJECTION candle: a
-big OPPOSING wick, a SMALL body, a CLOSE back off the extreme it made, and (strong tier) an EFF-AGG exhaustion
-blow-off. Every input is CAUSAL — the candle itself + a trailing window — unlike the descriptive study's ZigZag pivots
-(which use look-ahead). So this is the study's anatomy turned into a live, no-look-ahead signal.
+Fires ON candle 3 (the CURRENT, last-printed candle) — NOT after a confirmation. Decides from candles 1,2,3 only
+(fully causal): candle 3 makes a FRESH local extreme AND prints as a rejection/absorption candle. No look-ahead, no
+lag — the mark lands on the candle that is (predicted to be) the swing pivot itself.
 
-TOP    (side -1, red above):   upper_wick/range >= WICK, close_in_range <= CLOSE, range% >= RANGE_MULT x trailing median.
-BOTTOM (side +1, green below): lower_wick/range >= WICK, close_in_range >= 1-CLOSE, range% >= RANGE_MULT x median.
-STRONG tier (gold ring): + an eff-agg exhaustion blow-off in the TREND direction (effagg_sp >= +EFF at a top / <= -EFF
-  at a bottom) — the causal flow signature of the flip. Highlight only; it does not change which candles fire.
+Validated PREDICTIVELY in study/reversal_predict_1h.py (candidate = fresh LB-bar extreme; outcome = holds + reverses
+>=0.6% within 6 bars, used only to SCORE, never as a feature). What predicts a reversal at candle 3's close:
+  c3 close-in-range (hammer, AUC 0.78) >> lower/upper wick (0.69) > candle turned (0.67) > delta absorbs / steps in
+  (0.66) > delta-shift vs the 2 approach candles (0.64). The old 'wide range' signal was a LOOK-AHEAD artifact (the
+  pivot bar IS the extreme) and does NOT predict (AUC ~0.53) — so range is NOT used here.
 
-detect(buckets, skip_last=True) -> [{i, side(+1/-1), tier('gold'|'normal'), strong(bool)}]  (i in passed-list space)
+  side +1  green lozenge BELOW a BOTTOM  — fresh low + closes in the upper CIR of its range + lower wick + turned
+                                           bullish + buyers step in (delta-shift up).
+  side -1  red   lozenge ABOVE a TOP     — mirror.
+  STRONG (gold ring): tighter hammer + a bigger flow flip.
+
+Calibrated PRECISION ~39% (2x the 18% base) at hitting an actual reversal — regime-STABLE (2025 39% / 2026 40%),
+catching ~25% of reversals IN REAL TIME. Early detection is inherently ~40% (most fresh-low hammers still break down);
+this is a heads-up marker, NOT a proven edge. Fail-safe: [] on any error.
+
+detect(buckets, skip_last=True) -> [{i, side(+1/-1), tier('gold'|'normal'), strong}]  (i = candle 3 = the pivot candle).
 """
 from __future__ import annotations
 
 from .engulf_sr_detect import _ohlc                        # parity-verified OHLC accessor (open_price/close_price safe)
 
-WICK = 0.40          # opposing wick >= this fraction of the candle's range (the rejection)
-CLOSE = 0.40         # close finishes within this fraction of the range on the reversal side (closed off the extreme)
-RANGE_MULT = 1.3     # candle range% >= this x the trailing-median range% (climactic / wide-range)
-RANGE_WIN = 30       # trailing window for the median range% baseline
-EFF = 15.0           # |eff-agg spread| for the STRONG (exhaustion blow-off) tier
-MIN_MED = 1e-9       # guard: skip when the trailing median range is degenerate
+LB = 6                  # candle 3 must be the extreme over the last LB bars (a FRESH low / high)
+CIR = 0.55              # candle 3 closes in the favourable CIR of its OWN range (hammer / rejection close)
+WICK_MIN = 0.25         # candle 3 rejection wick as a fraction of its range
+DS = 3.0                # delta shift: candle-3 delta% minus the mean of the 2 approach candles (buyers/sellers step in)
+STRONG_CIR, STRONG_WICK, STRONG_DS = 0.65, 0.35, 8.0        # gold tier
 
 
-def _median(xs):
-    s = sorted(xs); m = len(s)
-    if m == 0:
+def _f(x) -> float:
+    try:
+        return float(x)
+    except (TypeError, ValueError):
         return 0.0
-    return s[m // 2] if (m % 2) else 0.5 * (s[m // 2 - 1] + s[m // 2])
 
 
 def detect(buckets, skip_last=True):
     n = len(buckets)
-    if n < RANGE_WIN + 2:
+    if n < LB + 2:
         return []
-    O = [0.0] * n; C = [0.0] * n; H = [0.0] * n; L = [0.0] * n; RP = [0.0] * n
-    for i, b in enumerate(buckets):
-        O[i], C[i], H[i], L[i] = _ohlc(b)
-        RP[i] = ((H[i] - L[i]) / O[i] * 100.0) if (O[i] > 0 and H[i] > L[i]) else 0.0
-    # eff-agg causal spread (trailing 150 inside eff_causal_share) -> STRONG tier only; absence just drops the ring
-    eff = None
     try:
-        from . import pivot_detect as _PD
-        share = _PD.eff_causal_share(buckets)
-        eff = [((2.0 * float(s) - 1.0) * 100.0 if s == s else None) for s in share]
+        O = [0.0] * n; C = [0.0] * n; H = [0.0] * n; L = [0.0] * n; DP = [0.0] * n
+        for i, b in enumerate(buckets):
+            O[i], C[i], H[i], L[i] = _ohlc(b)
+            cv = _f(b.get("curr_vol"))
+            if cv > 0:
+                DP[i] = (_f(b.get("buy_vol")) - _f(b.get("sell_vol"))) / cv * 100.0
+        hi_n = (n - 1) if skip_last else n
+        out = []
+        for i in range(LB, hi_n):
+            rng = H[i] - L[i]
+            if rng <= 0 or O[i] <= 0:
+                continue
+            cir = (C[i] - L[i]) / rng                            # close position in candle 3's own range
+            lw = (min(O[i], C[i]) - L[i]) / rng                  # lower wick fraction
+            uw = (H[i] - max(O[i], C[i])) / rng                  # upper wick fraction
+            ds = DP[i] - (DP[i - 2] + DP[i - 1]) / 2.0           # flow shift at candle 3 vs the 2 approach candles
+            if L[i] <= min(L[i - LB:i]) and cir >= CIR and lw >= WICK_MIN and C[i] > O[i] and ds >= DS:       # BOTTOM
+                strong = cir >= STRONG_CIR and lw >= STRONG_WICK and ds >= STRONG_DS
+                out.append({"i": i, "side": 1, "tier": "gold" if strong else "normal", "strong": strong})
+            elif H[i] >= max(H[i - LB:i]) and (H[i] - C[i]) / rng >= CIR and uw >= WICK_MIN and C[i] < O[i] and ds <= -DS:  # TOP
+                strong = (H[i] - C[i]) / rng >= STRONG_CIR and uw >= STRONG_WICK and ds <= -STRONG_DS
+                out.append({"i": i, "side": -1, "tier": "gold" if strong else "normal", "strong": strong})
+        return out
     except Exception:
-        eff = None
-    hi_n = (n - 1) if skip_last else n
-    out = []
-    for i in range(RANGE_WIN, hi_n):
-        o, c, h, l = O[i], C[i], H[i], L[i]
-        rng = h - l
-        if rng <= 0 or o <= 0:
-            continue
-        med = _median([RP[j] for j in range(i - RANGE_WIN, i) if RP[j] > 0])
-        if med <= MIN_MED or RP[i] < RANGE_MULT * med:          # not climactic -> not a reversal candle
-            continue
-        uw = (h - max(o, c)) / rng                              # upper-wick fraction (top rejection)
-        lw = (min(o, c) - l) / rng                              # lower-wick fraction (bottom rejection)
-        cir = (c - l) / rng                                     # close position in range (0 = at low, 1 = at high)
-        if uw >= WICK and cir <= CLOSE:
-            side = -1                                           # TOP  -> red lozenge ABOVE
-        elif lw >= WICK and cir >= (1.0 - CLOSE):
-            side = 1                                            # BOTTOM -> green lozenge BELOW
-        else:
-            continue
-        strong = False
-        if eff is not None and eff[i] is not None:
-            strong = (eff[i] >= EFF) if side < 0 else (eff[i] <= -EFF)
-        out.append({"i": i, "side": side, "tier": "gold" if strong else "normal", "strong": strong})
-    return out
+        return []

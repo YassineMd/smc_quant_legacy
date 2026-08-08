@@ -112,6 +112,7 @@ _M10_INDICATORS = [
     ("m10_poc_baseline", "POC Baseline", True, True),      # gray dashed POC-center EMA line; was always-on, now toggleable
     ("m10_vwap", "VWAP", False, True),                     # daily-anchored (UTC-midnight reset) volume-weighted avg price — BLUE line
     ("m10_swinglvn", "Price & CVD Swings", False, True),   # ALL tf: ZigZag swing lines + swing absorb-A + retracement verdict; LVN zones sub-toggle
+    ("m10_reversal15", "15m Reversal Candles (R/G ▲▼)", False, True),   # 15m ONLY: reversal-candle anatomy (wide-range rejection at a local extreme); green ▲ swing-low / red ▼ swing-high
     ("m10_obs", "Order Blocks", False, True),             # default OFF — toggle with Order Blocks + Iceberg via 'o'
     ("m10_structure", "Market Structure — scalp ZigZag", False, True),   # fine ZigZag (ZIGZAG_PCT, app/structure.py)
     ("m10_structure_swing", "Market Structure — swing ZigZag", False, True),   # coarse ZigZag (+ its sensitivity slider)
