@@ -5289,7 +5289,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if xr < vx0 - 1.0 or xl > vx1 + 1.0:               # cull to the viewport
                 continue
             s = float(m.get("strength", 0.0))
-            if s < 0.30:                                       # weak / consumed (small ejection or hit into oblivion) -> hide
+            if s < 0.12:                                       # only hide near-spent walls (tiny ejection / hit to death)
                 continue
             price = float(m["price"]); band = max(price * (0.0003 + s * 0.0007), 1e-9)   # stronger wall = thicker zone
             _rc = self._absorblvl_box(ub, m["side"], s); ub += 1

@@ -20,8 +20,8 @@ from __future__ import annotations
 
 from .engulf_sr_detect import _ohlc
 
-T = 50.0            # |net-delta%| = STRONG one-sided aggression (75/25 split) — selective so only real walls print
-#                     (the study validated the phenomenon at T=20; the overlay uses 50 for a clean ~handful of levels)
+T = 20.0            # |net-delta%| = one-sided aggression that can build a wall (do NOT gate hard here — significance is
+#                     judged by EJECTION strength downstream, not by how one-sided the candle was)
 BODY_SMALL = 0.35  # |close-open|/range <= this = tiny body (absorbed at the extreme)
 BODY_BIG = 0.60    # |close-open|/range >= this = decisive move (origin / order-block wall)
 EPS = 0.0015       # touch / break tolerance (0.15%)
