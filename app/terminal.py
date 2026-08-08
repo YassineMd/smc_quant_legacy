@@ -1311,7 +1311,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._absorblvl_box_pool = []                            # QGraphicsRectItem pool — red/green absorption S/R zones
         self._absorblvl_lbl_pool = []                            # TextItem pool — "Ab"/"Ag" tags on borderless walls
         self._radar_zone_pool = []                               # QGraphicsRectItem — purple radar zones (upper+lower)
-        self._radar_border_pool = []                             # QGraphicsRectItem — orange radar-area border
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
         self._mom_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
@@ -5282,17 +5281,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(150, 90, 200, 80))
         return _rc
 
-    def _radar_border(self, used):                           # pooled orange border around the whole radar area
-        if used >= len(self._radar_border_pool):
-            _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-7)
-            self.vb.addItem(_rc, ignoreBounds=True); self._radar_border_pool.append(_rc)
-        _rc = self._radar_border_pool[used]
-        _rc.setPen(pg.mkPen(255, 150, 40, 235, width=1.5)); _rc.setBrush(pg.mkBrush(None))
-        return _rc
-
     def _hide_absorb_levels(self) -> None:
-        for _p in (self._absorblvl_box_pool + self._absorblvl_lbl_pool
-                   + self._radar_zone_pool + self._radar_border_pool):
+        for _p in (self._absorblvl_box_pool + self._absorblvl_lbl_pool + self._radar_zone_pool):
             _p.setVisible(False)
 
     def _draw_absorb_levels(self, buckets, x, vx0, vx1) -> None:
@@ -5307,12 +5297,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 self._absorblvl_marks = []
             self._absorblvl_sig = _dsig
-        from app.engulf_sr_detect import _ohlc as _ohlc_last
-        try:
-            _o, _c, cur_h, cur_l = _ohlc_last(buckets[-1])     # latest bar range -> radar activation
-        except Exception:
-            cur_h = cur_l = 0.0
-        ub = 0; ul = 0; uz = 0; ob = 0
+        ub = 0; ul = 0; uz = 0
         for m in self._absorblvl_marks:
             i0 = int(m["i0"]); i1 = min(int(m["i1"]), n - 1)
             if i0 < 0 or i0 >= n or i1 < i0:
@@ -5324,7 +5309,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if s < 0.12:                                       # only hide near-spent walls (tiny ejection / hit to death)
                 continue
             src = m.get("src", "")
-            price = float(m["price"]); band = max(price * (0.0003 + s * 0.0007), 1e-9)   # stronger wall = thicker zone
+            price = float(m["price"]); band = max(float(m.get("band", price * 0.0006)), 1e-9)   # wall half-height
             _rc = self._absorblvl_box(ub, m["side"], s, src); ub += 1
             _rc.setRect(xl, price - band, max(1e-9, xr - xl), 2.0 * band); _rc.setVisible(True)
             if src in ("abs", "agg") and xl >= vx0 - 1.0:      # tag pure walls at their START (mix has a border instead)
@@ -5332,23 +5317,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _lb = self._absorblvl_lbl(ul); ul += 1
                 _lb.setColor(pg.mkColor(*rgb)); _lb.setText("Ab" if src == "abs" else "Ag")
                 _lb.setPos(xl, price); _lb.setVisible(True)
-            # RADAR: upper + lower zones (each = wall height) + orange border; lights up PURPLE when price enters it.
-            if int(m["i1"]) >= n - 1:                          # only ALIVE walls (unbroken) carry a radar
-                r_lo = price - 3.0 * band; r_hi = price + 3.0 * band
-                if cur_l <= r_hi and cur_h >= r_lo:            # latest bar overlaps the radar area -> ACTIVATED
-                    _uz = self._radar_zone(uz); uz += 1
-                    _uz.setRect(xl, price + band, max(1e-9, xr - xl), 2.0 * band); _uz.setVisible(True)   # upper zone
-                    _dz = self._radar_zone(uz); uz += 1
-                    _dz.setRect(xl, r_lo, max(1e-9, xr - xl), 2.0 * band); _dz.setVisible(True)           # lower zone
-                    _bd = self._radar_border(ob); ob += 1
-                    _bd.setRect(xl, r_lo, max(1e-9, xr - xl), 6.0 * band); _bd.setVisible(True)           # orange border
+            # RADAR: purple upper+lower zones (each = wall height) over each candle-run that RE-ENTERED the radar area.
+            for _run in m.get("radar_runs", ()):               # width ~ the candles inside + a little padding
+                rk0 = max(0, int(_run[0])); rk1 = min(int(_run[1]), n - 1)
+                if rk1 < rk0:
+                    continue
+                rxl = x[rk0] - 0.6; rxr = x[rk1] + 0.6
+                if rxr < vx0 - 1.0 or rxl > vx1 + 1.0:
+                    continue
+                _uz = self._radar_zone(uz); uz += 1
+                _uz.setRect(rxl, price + band, max(1e-9, rxr - rxl), 2.0 * band); _uz.setVisible(True)       # upper zone
+                _dz = self._radar_zone(uz); uz += 1
+                _dz.setRect(rxl, price - 3.0 * band, max(1e-9, rxr - rxl), 2.0 * band); _dz.setVisible(True)  # lower zone
         for _it in self._absorblvl_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._absorblvl_lbl_pool[ul:]:
             _it.setVisible(False)
         for _it in self._radar_zone_pool[uz:]:
-            _it.setVisible(False)
-        for _it in self._radar_border_pool[ob:]:
             _it.setVisible(False)
 
     def _draw_4h_zone(self, buckets) -> None:

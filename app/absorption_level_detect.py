@@ -14,7 +14,9 @@ where it formed until price CLOSES through it — no arbitrary age-out. Causal p
 placebo 63.4% (null); AGGRESSION 66.3% but the direction-shuffle also hits 65.0%, so only ~1.3pp is truly directional
 and +3pp on a 63% geometric base does NOT clear the fee. Reads structure; does not predict. Fail-safe: [].
 
-detect(buckets, skip_last=False) -> [{price, side('R'|'S'), src('abs'|'agg'|'mix'), i0, i1, strength(0..1), hits}].
+detect(buckets, skip_last=False) ->
+  [{price, side('R'|'S'), src('abs'|'agg'|'mix'), i0, i1, strength(0..1), hits, band, radar_runs:[(k0,k1),..]}].
+radar_runs = candle spans where price RE-ENTERED the radar area (= the wall + one wall-height above & below).
 """
 from __future__ import annotations
 
@@ -100,8 +102,24 @@ def detect(buckets, skip_last=False):
                 if fav > ej:
                     ej = fav
             strength = min(1.0, ej / REF_EJ) * (DECAY ** w["hits"])
-            out.append({"price": P, "side": w["side"], "src": w["src"], "i0": i0,
-                        "i1": i1, "strength": strength, "hits": w["hits"]})
+            band = P * (0.0003 + strength * 0.0007)         # half-height of the wall zone (visual, matches the terminal)
+            r_lo = P - 3.0 * band; r_hi = P + 3.0 * band     # radar area = wall + one wall-height above + below
+            # RADAR visit-runs: each contiguous stretch where a bar RE-ENTERS the radar area (price left, then returned)
+            runs = []; in_r = False; ever_left = False; rs = 0; counts = False
+            for k in range(i0, i1 + 1):
+                if L[k] <= r_hi and H[k] >= r_lo:
+                    if not in_r:
+                        in_r = True; rs = k; counts = ever_left    # a run counts only if price had left the area first
+                else:
+                    ever_left = True
+                    if in_r:
+                        in_r = False
+                        if counts:
+                            runs.append((rs, k - 1))
+            if in_r and counts:
+                runs.append((rs, i1))
+            out.append({"price": P, "side": w["side"], "src": w["src"], "i0": i0, "i1": i1,
+                        "strength": strength, "hits": w["hits"], "band": band, "radar_runs": runs})
         return out
     except Exception:
         return []
