@@ -1309,6 +1309,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._revpt_marks = []; self._revpt_sig = None       # Reversal Point detector cache (m10_reversal, ALL tf)
         self._absorblvl_marks = []; self._absorblvl_sig = None   # Absorption S/R detector cache (m10_absorblvl)
         self._absorblvl_box_pool = []                            # QGraphicsRectItem pool — red/green absorption S/R zones
+        self._absorblvl_lbl_pool = []                            # TextItem pool — "Ab"/"Ag" tags on borderless walls
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
         self._mom_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
@@ -5264,8 +5265,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _rc.setPen(pg.mkPen(None))                             # pure absorption / pure aggression -> no border
         return _rc
 
+    def _absorblvl_lbl(self, used):                           # pooled "Ab"/"Ag" tag at a borderless wall's start
+        if used >= len(self._absorblvl_lbl_pool):
+            _t = pg.TextItem(anchor=(0, 0.5)); _t.setZValue(16)
+            _t.textItem.setFont(QtGui.QFont("Consolas", 8))
+            self.plot.addItem(_t, ignoreBounds=True); self._absorblvl_lbl_pool.append(_t)
+        return self._absorblvl_lbl_pool[used]
+
     def _hide_absorb_levels(self) -> None:
         for _p in self._absorblvl_box_pool:
+            _p.setVisible(False)
+        for _p in self._absorblvl_lbl_pool:
             _p.setVisible(False)
 
     def _draw_absorb_levels(self, buckets, x, vx0, vx1) -> None:
@@ -5280,7 +5290,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 self._absorblvl_marks = []
             self._absorblvl_sig = _dsig
-        ub = 0
+        ub = 0; ul = 0
         for m in self._absorblvl_marks:
             i0 = int(m["i0"]); i1 = min(int(m["i1"]), n - 1)
             if i0 < 0 or i0 >= n or i1 < i0:
@@ -5291,10 +5301,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             s = float(m.get("strength", 0.0))
             if s < 0.12:                                       # only hide near-spent walls (tiny ejection / hit to death)
                 continue
+            src = m.get("src", "")
             price = float(m["price"]); band = max(price * (0.0003 + s * 0.0007), 1e-9)   # stronger wall = thicker zone
-            _rc = self._absorblvl_box(ub, m["side"], s, m.get("src", "")); ub += 1
+            _rc = self._absorblvl_box(ub, m["side"], s, src); ub += 1
             _rc.setRect(xl, price - band, max(1e-9, xr - xl), 2.0 * band); _rc.setVisible(True)
+            if src in ("abs", "agg") and xl >= vx0 - 1.0:      # tag pure walls at their START (mix has a border instead)
+                rgb = (235, 90, 100) if m["side"] == "R" else (80, 220, 140)
+                _lb = self._absorblvl_lbl(ul); ul += 1
+                _lb.setColor(pg.mkColor(*rgb)); _lb.setText("Ab" if src == "abs" else "Ag")
+                _lb.setPos(xl, price); _lb.setVisible(True)
         for _it in self._absorblvl_box_pool[ub:]:
+            _it.setVisible(False)
+        for _it in self._absorblvl_lbl_pool[ul:]:
             _it.setVisible(False)
 
     def _draw_4h_zone(self, buckets) -> None:
