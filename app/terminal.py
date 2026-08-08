@@ -1307,6 +1307,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._nyer_mark_pool = []     # NY Expected Range: early/late break triangle markers (TextItem)
         self._nyrb_ranges = []; self._nyrb_data_sig = None   # cached detect() output (recompute only on data change)
         self._revpt_marks = []; self._revpt_sig = None       # Reversal Point detector cache (m10_reversal, ALL tf)
+        self._sessbub_marks = []; self._sessbub_sig = None   # Bubble@Level detector cache (m10_sessbub, yellow areas)
+        self._sessbub_box_pool = []                          # QGraphicsRectItem pool — yellow confirming-bubble areas
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
         self._mom_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
@@ -2241,6 +2243,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._revpt_sig = None                       # Reversal Point toggled -> re-run the overlay draw
             if not on:
                 self._hide_reversal_point()              # off -> tear the markers down now
+        elif key == "m10_sessbub":
+            self._sessbub_sig = None                     # Bubble@Level toggled -> re-run the overlay draw
+            if not on:
+                self._hide_session_bubble()              # off -> tear the yellow areas down now
         elif key in ("m10_sr", "m10_sr_area"):
             self._sr_sig = None; self._sel_sig = None    # Support/Resistance (or its Area sub-toggle) -> re-run the draw
             if key == "m10_sr" and not on:
@@ -5237,6 +5243,55 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scan_handles["revpt_gold"].setData(x=orx, y=ory, size=30)
         self._scan_handles["revpt_g"].setVisible(True); self._scan_handles["revpt_r"].setVisible(True)
         self._scan_handles["revpt_gold"].setVisible(True)
+
+    # ------------------------------------------------------------------
+    # BUBBLE @ LEVEL (hamburger m10_sessbub) — EYEBALL-ONLY yellow areas on the "confirming bubble at a prior-session
+    # level" events (app/session_bubble_detect): a London/NY candle that reaches a Tokyo(/pre-NY London) high/low/POC
+    # with net-delta confirming the reject side. ⚠ NOT a signal — the ~88% rejection is reward:risk GEOMETRY, not edge
+    # (study/delta_momentum_trade). This just lets you SEE the events the stat is built on.
+    # ------------------------------------------------------------------
+    def _sessbub_box(self, used):                             # pooled yellow area (behind candles)
+        if used >= len(self._sessbub_box_pool):
+            _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-6)
+            self.vb.addItem(_rc, ignoreBounds=True); self._sessbub_box_pool.append(_rc)
+        _rc = self._sessbub_box_pool[used]
+        _rc.setPen(pg.mkPen(255, 214, 40, 200, width=1.2)); _rc.setBrush(pg.mkBrush(255, 214, 40, 60))
+        return _rc
+
+    def _hide_session_bubble(self) -> None:
+        for _p in self._sessbub_box_pool:
+            _p.setVisible(False)
+
+    def _draw_session_bubble(self, buckets, x, vx0, vx1) -> None:
+        if not self.menu.layer_state("m10_sessbub") or not buckets:
+            self._hide_session_bubble(); return
+        n = len(buckets)
+        _dsig = (n, float(buckets[-1].get("end_time", 0.0) or 0.0), float(buckets[-1].get("close", 0.0) or 0.0))
+        if _dsig != self._sessbub_sig:                        # recompute the detector only when the data changes
+            try:
+                from app import session_bubble_detect
+                self._sessbub_marks = session_bubble_detect.detect(buckets, skip_last=False)
+            except Exception:
+                self._sessbub_marks = []
+            self._sessbub_sig = _dsig
+        from app.engulf_sr_detect import _ohlc
+        ub = 0
+        for m in self._sessbub_marks:
+            i = int(m["i"])
+            if i >= n or x[i] < vx0 - 2.0 or x[i] > vx1 + 2.0:  # cull to the viewport
+                continue
+            lvl = float(m["level"])
+            try:
+                _o, _c, _h, _l = _ohlc(buckets[i])
+            except Exception:
+                continue
+            if _h <= 0 or _l <= 0:
+                continue
+            y0 = min(_l, lvl); y1 = max(_h, lvl)               # the event candle's range, extended to the tested level
+            _rc = self._sessbub_box(ub); ub += 1
+            _rc.setRect(x[i] - 0.5, y0, 1.0, max(1e-9, y1 - y0)); _rc.setVisible(True)
+        for _it in self._sessbub_box_pool[ub:]:
+            _it.setVisible(False)
 
     def _draw_4h_zone(self, buckets) -> None:
         """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median), ZONE ('Z': buy/sell wick bands), and ABNORMAL-ORDER
@@ -12051,6 +12106,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_reversal_point(buckets, x, vx0, vx1, vy0, vy1)  # Reversal Point triangles, ALL tf (m10_reversal)
         except Exception:
             self._hide_reversal_point()
+        try:
+            self._draw_session_bubble(buckets, x, vx0, vx1)       # Bubble@Level yellow areas (m10_sessbub, eyeball-only)
+        except Exception:
+            self._hide_session_bubble()
 
         # --- Keltner Channel: EMA(close) basis ± ATR band. LIGHT GRAY upper/lower (match the POC baseline);
         #     the EMA MIDDLE line is HIDDEN (operator pref — the POC baseline is the center reference). ---
