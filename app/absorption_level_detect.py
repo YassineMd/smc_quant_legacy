@@ -9,17 +9,17 @@ A wall = where strong one-sided aggression (|net-delta%| >= T) meets its limit. 
   per-level absorption / order-block NODE from b.levels), not the raw high/low; ABSORPTION additionally requires the
   aggressor's TAKER volume CONCENTRATED (>=CONC) in that extreme region -> footprint-CONFIRMED, not just tiny-body.
 
-No STRENGTH / opacity concept — every drawn wall is UNIFORM (the ejection·decay 'strength' + its opacity gradient,
-draw-floor and % label were removed 2026-08-09; the formation ejection survives ONLY as an input to the band geometry
-and P(resist)). LIFETIME = the MARKET decides: a wall lives until a candle BODY CLOSES beyond its RADAR (not merely
-through the wall) — no arbitrary age-out; a mitigated wall is dropped 90 bars after its break. Causal per-bar sim.
+STRENGTH (drawn as opacity) = simply how far the wall EJECTED price (favourable excursion after formation, volatility-
+normalized, 0..1). NO decay — a wall does NOT lose strength when tested. LIFETIME = the MARKET decides: a wall lives
+until a candle BODY CLOSES beyond its RADAR (not merely through the wall) — no arbitrary age-out; a mitigated wall is
+dropped 90 bars after its break. The hamburger slider hides walls below a chosen strength. Causal per-bar sim.
 
 ⚠ DESCRIPTIVE ONLY — barely a signal. study/wall_levels.py (vs a random-line placebo, 15m): ABSORPTION 64.1% ==
 placebo 63.4% (null); AGGRESSION 66.3% but the direction-shuffle also hits 65.0%, so only ~1.3pp is truly directional
 and +3pp on a 63% geometric base does NOT clear the fee. Reads structure; does not predict. Fail-safe: [].
 
 detect(buckets, skip_last=False) ->
-  [{price, side('R'|'S'), src('abs'|'agg'|'mix'), i0, i1, broken, hits, band, radar_runs:[(k0,k1,P_resist),..]}].
+  [{price, side('R'|'S'), src('abs'|'agg'|'mix'), i0, i1, broken, strength(0..1), hits, band, radar_runs:[(k0,k1,P_resist),..]}].
 radar_runs = candle spans where price RE-ENTERED the radar area (= the wall + one wall-height above & below).
 """
 from __future__ import annotations
@@ -32,9 +32,8 @@ T = 20.0            # |net-delta%| = one-sided aggression that can build a wall 
 #                     judged by EJECTION strength downstream, not by how one-sided the candle was)
 BODY_SMALL = 0.35  # |close-open|/range <= this = tiny body (absorbed at the extreme)
 BODY_BIG = 0.60    # |close-open|/range >= this = decisive move (origin / order-block wall)
-AGG_MODE = 1       # 0 = ABSORPTION-only. 1 = absorption + MIX: aggression is detected internally so it can upgrade an
-#                    absorption level to 'mix' (ab+ag CONFLUENCE) BOTH orders, but PURE-aggression walls are NOT drawn
-#                    (they dominated ~8:1 and cluttered). 2 = FULL: also draw pure-aggression / order-block walls.
+AGG_MODE = 2       # 0 = ABSORPTION-only. 1 = absorption + MIX (ab+ag confluence) only. 2 = FULL: absorption +
+#                    aggression + mix. Use the hamburger strength slider to declutter.
 EXT_FRAC = 0.34    # FOOTPRINT: the candle's "extreme region" = this fraction of the range at the failing/origin end
 CONC = 0.40        # FOOTPRINT: >= this share of the aggressor's TAKER volume must sit in the extreme region (absorption)
 EPS = 0.0015       # touch / break tolerance (0.15%)
@@ -220,8 +219,9 @@ def detect(buckets, skip_last=False):
             if AGG_MODE == 1 and w["src"] == "agg":         # mix-mode: pure-aggression walls upgrade to mix or are dropped
                 continue
             i0 = w["i0"]; i1 = w["i1"] if w["broken"] else (n - 1); P = w["P"]
-            base = min(1.0, w["ej"] / (EJ_ATR_MULT * w["v0"])) if w["v0"] > 0 else 0.0   # FORMATION ejection -> band + P(resist) ONLY
+            base = min(1.0, w["ej"] / (EJ_ATR_MULT * w["v0"])) if w["v0"] > 0 else 0.0   # ejection: how far the wall shoved price
             hits = len(w["runs"])                           # each radar re-visit is a hit
+            strength = base                                 # STRENGTH = ejection, plain. No decay, no losing it on a test.
             band = P * w["v0"] * (BAND_MIN + base * BAND_RANGE)   # volatility-relative radar (formation ejection)
             r_lo = P - 3.0 * band; r_hi = P + 3.0 * band
             runs = []                                            # (k0, k1, P_resist%) — odds the wall holds this visit
@@ -248,7 +248,7 @@ def detect(buckets, skip_last=False):
                 runs.append((rk0, rk1, round(_p_resist(vr, pen, clpos, body, base), 1)))
             out.append({"price": P, "side": w["side"], "src": w["src"], "i0": i0, "i1": i1,
                         "broken": bool(w["broken"]),            # authoritative: mitigated iff a body closed beyond the radar
-                        "hits": hits, "band": band, "radar_runs": runs,
+                        "strength": strength, "hits": hits, "band": band, "radar_runs": runs,
                         "base_src": w.get("base_src", w["src"]), "mix_bar": w.get("mix_bar", -1)})
         return out
     except Exception:
