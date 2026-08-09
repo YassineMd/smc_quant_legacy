@@ -5278,12 +5278,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.plot.addItem(_t, ignoreBounds=True); self._absorblvl_lbl_pool.append(_t)
         return self._absorblvl_lbl_pool[used]
 
-    def _radar_zone(self, used):                              # pooled purple radar zone (upper / lower) — shown = ACTIVATED
+    def _radar_zone(self, used, alpha=40):                    # pooled purple radar zone; alpha = wall strength (P_resist)
         if used >= len(self._radar_zone_pool):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-7)
             self.vb.addItem(_rc, ignoreBounds=True); self._radar_zone_pool.append(_rc)
         _rc = self._radar_zone_pool[used]
-        _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(150, 90, 200, 80))
+        _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(150, 90, 200, int(alpha)))
         return _rc
 
     def _radar_hover(self, pt) -> None:
@@ -5356,12 +5356,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 rxl = x[rk0] - 0.6; rxr = x[rk1] + 0.6
                 if rxr < vx0 - 1.0 or rxl > vx1 + 1.0:
                     continue
-                _uz = self._radar_zone(uz); uz += 1
+                pr = float(_run[2]) if len(_run) >= 3 else 70.0    # P(resist): stronger wall -> more opaque radar
+                za = int(min(60, max(10, 10 + max(0.0, pr - 55.0) * 1.18)))   # 55%->10 ... 96%->~58 (toned down from 80)
+                _uz = self._radar_zone(uz, za); uz += 1
                 _uz.setRect(rxl, price + band, max(1e-9, rxr - rxl), 2.0 * band); _uz.setVisible(True)       # upper zone
-                _dz = self._radar_zone(uz); uz += 1
+                _dz = self._radar_zone(uz, za); uz += 1
                 _dz.setRect(rxl, price - 3.0 * band, max(1e-9, rxr - rxl), 2.0 * band); _dz.setVisible(True)  # lower zone
                 if len(_run) >= 3:                             # record for the hover tooltip: P(resist) this visit
-                    self._radar_hover_zones.append((rxl, rxr, price - 3.0 * band, price + 3.0 * band, float(_run[2]), m["side"]))
+                    self._radar_hover_zones.append((rxl, rxr, price - 3.0 * band, price + 3.0 * band, pr, m["side"]))
         for _it in self._absorblvl_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._absorblvl_lbl_pool[ul:]:
