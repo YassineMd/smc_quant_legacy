@@ -149,10 +149,11 @@ def detect(buckets, skip_last=False):
                     if w["side"] == side and abs(w["P"] - price) <= price * EPS * 2:
                         near = w; break
                 if near is None:                            # a fresh wall (else it is just a re-touch of an active one)
-                    active.append({"P": price, "side": side, "src": src, "i0": i, "ej": 0.0, "v0": vpct[i],
-                                   "inzone": True, "ever_left": False, "runs": [], "broken": False, "i1": None})
-                elif near["src"] != src:
-                    near["src"] = "mix"
+                    active.append({"P": price, "side": side, "src": src, "base_src": src, "mix_bar": -1,
+                                   "i0": i, "ej": 0.0, "v0": vpct[i], "inzone": True, "ever_left": False,
+                                   "runs": [], "broken": False, "i1": None})
+                elif near["src"] != "mix" and near["src"] != src:
+                    near["src"] = "mix"; near["mix_bar"] = i   # bar it BECAME mix (for causal src checks)
         out = []
         for w in done + active:
             i0 = w["i0"]; i1 = w["i1"] if w["broken"] else (n - 1); P = w["P"]
@@ -173,7 +174,8 @@ def detect(buckets, skip_last=False):
                 vr = (bx / bars) / rm if (rm > 0 and bars > 0) else 0.0
                 runs.append((rk0, rk1, round(_p_resist(vr), 1)))
             out.append({"price": P, "side": w["side"], "src": w["src"], "i0": i0, "i1": i1,
-                        "strength": strength, "hits": hits, "band": band, "radar_runs": runs})
+                        "strength": strength, "hits": hits, "band": band, "radar_runs": runs,
+                        "base_src": w.get("base_src", w["src"]), "mix_bar": w.get("mix_bar", -1)})
         return out
     except Exception:
         return []
