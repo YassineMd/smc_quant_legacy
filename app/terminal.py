@@ -5354,6 +5354,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             i0 = int(m["i0"]); i1 = min(int(m["i1"]), n - 1)
             if i0 < 0 or i0 >= n or i1 < i0:
                 continue
+            if i1 < n - 1 and (n - 1) - i1 > 90:               # MITIGATED wall (broke at i1): drop 90 bars past the break
+                continue
             xl = x[i0]; xr = x[i1]
             if xr < vx0 - 1.0 or xl > vx1 + 1.0:               # cull to the viewport
                 continue
