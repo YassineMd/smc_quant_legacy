@@ -1311,6 +1311,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._absorblvl_box_pool = []                            # QGraphicsRectItem pool — red/green absorption S/R zones
         self._absorblvl_lbl_pool = []                            # TextItem pool — "Ab"/"Ag" tags on borderless walls
         self._radar_zone_pool = []                               # QGraphicsRectItem — purple radar zones (upper+lower)
+        self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side) for hover hit-testing
+        self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
         self._mom_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
@@ -3200,6 +3202,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.hm_vol_tip.hide()
             self.dom_tooltip.hide()
             self.panel_tooltip.hide()
+            if self._radar_hover_tip is not None:
+                self._radar_hover_tip.hide()
             self._svl_hovering = False
             if not (self.scanner_mode == "bucket_canvas" and self.menu.layer_state("m10_swinglvn")
                     and self.menu.layer_state("m10_svl_zigzag") and self.menu.layer_state("m10_svl_lock")):
@@ -3226,6 +3230,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.cvd_hline.hide(); self.cvd_tag.hide()        # cursor is over the price pane -> no CVD y readout
         if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
             self.fp_panel.show_price_line(pt.y())
+        self._radar_hover(pt)                                 # Order-Flow Walls radar -> P(resist) odds on hover
         # X-axis time readout at the crosshair (heatmap mode only; x = epoch seconds)
         if self.scanner_mode == "depth_heatmap":
             try:
@@ -5281,9 +5286,35 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(150, 90, 200, 80))
         return _rc
 
+    def _radar_hover(self, pt) -> None:
+        """Hover a wall's radar area -> calibrated odds the wall HOLDS this visit (P(resist) from box-volume intensity;
+        study/wall_radar_calib.py). DESCRIPTIVE only — light volume ~ almost-certain hold, heavy volume ~ coin flip."""
+        if not self._radar_hover_zones or not self.menu.layer_state("m10_absorblvl"):
+            if self._radar_hover_tip is not None:
+                self._radar_hover_tip.hide()
+            return
+        x = pt.x(); y = pt.y()
+        for (xl, xr, ylo, yhi, pr, side) in self._radar_hover_zones:
+            if xl <= x <= xr and ylo <= y <= yhi:
+                if self._radar_hover_tip is None:
+                    self._radar_hover_tip = pg.TextItem(anchor=(0, 1), color=(255, 210, 70),
+                                                        fill=pg.mkBrush(18, 18, 24, 235), border=pg.mkPen(255, 210, 70, 170))
+                    self._radar_hover_tip.setZValue(65)
+                    self._radar_hover_tip.textItem.setFont(QtGui.QFont("Consolas", 9))
+                    self.plot.addItem(self._radar_hover_tip, ignoreBounds=True)
+                kind = "resistance" if side == "R" else "support"
+                self._radar_hover_tip.setText(" %s holds %.0f%%  ·  break %.0f%% " % (kind, pr, 100.0 - pr))
+                self._radar_hover_tip.setPos(x, y)
+                self._radar_hover_tip.show()
+                return
+        if self._radar_hover_tip is not None:
+            self._radar_hover_tip.hide()
+
     def _hide_absorb_levels(self) -> None:
         for _p in (self._absorblvl_box_pool + self._absorblvl_lbl_pool + self._radar_zone_pool):
             _p.setVisible(False)
+        if self._radar_hover_tip is not None:
+            self._radar_hover_tip.hide()
 
     def _draw_absorb_levels(self, buckets, x, vx0, vx1) -> None:
         if not self.menu.layer_state("m10_absorblvl") or not buckets:
@@ -5297,7 +5328,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 self._absorblvl_marks = []
             self._absorblvl_sig = _dsig
-        ub = 0; ul = 0; uz = 0
+        ub = 0; ul = 0; uz = 0; self._radar_hover_zones = []
         for m in self._absorblvl_marks:
             i0 = int(m["i0"]); i1 = min(int(m["i1"]), n - 1)
             if i0 < 0 or i0 >= n or i1 < i0:
@@ -5329,6 +5360,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _uz.setRect(rxl, price + band, max(1e-9, rxr - rxl), 2.0 * band); _uz.setVisible(True)       # upper zone
                 _dz = self._radar_zone(uz); uz += 1
                 _dz.setRect(rxl, price - 3.0 * band, max(1e-9, rxr - rxl), 2.0 * band); _dz.setVisible(True)  # lower zone
+                if len(_run) >= 3:                             # record for the hover tooltip: P(resist) this visit
+                    self._radar_hover_zones.append((rxl, rxr, price - 3.0 * band, price + 3.0 * band, float(_run[2]), m["side"]))
         for _it in self._absorblvl_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._absorblvl_lbl_pool[ul:]:
