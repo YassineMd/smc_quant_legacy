@@ -214,13 +214,28 @@ def detect(buckets, skip_last=False):
         out = []
         for w in done + active:
             i0 = w["i0"]; i1 = w["i1"] if w["broken"] else (n - 1); P = w["P"]
-            base = min(1.0, w["ej"] / (EJ_ATR_MULT * w["v0"])) if w["v0"] > 0 else 0.0   # ejection sets the geometry
+            base = min(1.0, w["ej"] / (EJ_ATR_MULT * w["v0"])) if w["v0"] > 0 else 0.0   # FORMATION ejection -> geometry + P(resist)
             hits = len(w["runs"])                           # each radar re-visit is a hit
-            # do NOT pre-decay for the visit price is CURRENTLY making (inzone) — else a wall vanishes the instant
-            # price enters its radar to test it. The decay for this visit lands only once it completes.
-            eff = hits - 1 if (not w["broken"] and w.get("inzone") and hits >= 1) else hits
-            strength = base * (DECAY ** eff)                # decays with COMPLETED hits -> opacity
-            band = P * w["v0"] * (BAND_MIN + base * BAND_RANGE)   # volatility-relative band (timeframe-invariant)
+            # STRENGTH (opacity): start at the FORMATION ejection, then walk each completed DEFENCE — a re-test that
+            # ejects price at least as hard REFRESHES strength UP to that ejection; a WEAKER defence DECAYS it (0.6x).
+            # So "it ejected even more after the test" now RAISES strength (the user's fix), while genuinely weakening
+            # walls still dim/declutter. In-progress visit (not yet ejected) never dims it. Wall dies on a break (i1).
+            # study/wall_reeject_15m.py (39% of re-tests eject harder than formation) + wall_strength_pr.py (blanket
+            # per-hit decay carries no hold-info).
+            strength = base
+            for _r in w["runs"]:
+                a = _r[1] + 1
+                if a >= n:
+                    continue                                # in-progress visit not yet ejected -> don't dim
+                fav = 0.0
+                for k in range(a, min(n, a + EJ_WIN + 1)):
+                    f = (P - L[k]) / P if w["side"] == "R" else (H[k] - P) / P
+                    if f > fav:
+                        fav = f
+                v0k = vpct[a]
+                ejn = min(1.0, fav / (EJ_ATR_MULT * v0k)) if v0k > 0 else 0.0
+                strength = ejn if ejn >= strength else strength * DECAY   # refresh on a stronger defence, decay on a weaker
+            band = P * w["v0"] * (BAND_MIN + base * BAND_RANGE)   # geometry stays a FORMATION property (stable radar)
             r_lo = P - 3.0 * band; r_hi = P + 3.0 * band
             runs = []                                            # (k0, k1, P_resist%) — odds the wall holds this visit
             for r in w["runs"]:
