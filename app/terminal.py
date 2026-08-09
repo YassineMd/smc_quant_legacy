@@ -1267,6 +1267,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _lsf = QtGui.QFont("Consolas", 9); self._liq_status.textItem.setFont(_lsf)
         self._liq_status.setZValue(33); self.plot.addItem(self._liq_status, ignoreBounds=True)
         self._liq_status.setVisible(False); self._liq_status_txt = None
+        self._regime_hud = pg.TextItem(anchor=(0, 0))            # WALL REGIME read — top-left corner HUD (m10_regime)
+        self._regime_hud.textItem.setFont(QtGui.QFont("Consolas", 9))
+        self._regime_hud.setZValue(34); self.plot.addItem(self._regime_hud, ignoreBounds=True)
+        self._regime_hud.setVisible(False)
         self._sel_hi_t = None       # end_time of the selection's right edge (the scrub 'as-of' point) — set each
                                     # time the selection draws; the 4h zone reads it in causal mode so it, too, shows
                                     # the wick that was live AS OF the edge instead of the newest 4h bucket.
@@ -5324,12 +5328,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._radar_hover_tip is not None:
             self._radar_hover_tip.hide()
 
-    def _draw_absorb_levels(self, buckets, x, vx0, vx1) -> None:
-        if not self.menu.layer_state("m10_absorblvl") or not buckets:
-            self._hide_absorb_levels(); return
-        n = len(buckets)
-        _dsig = (n, float(buckets[-1].get("end_time", 0.0) or 0.0), float(buckets[-1].get("close", 0.0) or 0.0),
-                 round(float(buckets[-1].get("curr_vol", 0.0) or 0.0), 1))   # recompute as the live bar's VOLUME develops
+    def _absorb_marks(self, buckets):
+        """Order-Flow Wall marks for `buckets`, recomputed only when the live bar changes. Shared by the wall overlay
+        AND the wall-regime HUD so detect() runs at most once per frame regardless of which layer(s) are on."""
+        if not buckets:
+            return []
+        _dsig = (len(buckets), float(buckets[-1].get("end_time", 0.0) or 0.0),
+                 float(buckets[-1].get("close", 0.0) or 0.0), round(float(buckets[-1].get("curr_vol", 0.0) or 0.0), 1))
         if _dsig != self._absorblvl_sig:                      # recompute the detector only when the data changes
             try:
                 from app import absorption_level_detect
@@ -5337,6 +5342,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 self._absorblvl_marks = []
             self._absorblvl_sig = _dsig
+        return self._absorblvl_marks
+
+    def _draw_absorb_levels(self, buckets, x, vx0, vx1) -> None:
+        if not self.menu.layer_state("m10_absorblvl") or not buckets:
+            self._hide_absorb_levels(); return
+        n = len(buckets)
+        self._absorb_marks(buckets)                           # refresh the shared cache (self._absorblvl_marks)
         ub = 0; ul = 0; up = 0; uz = 0; self._radar_hover_zones = []
         for m in self._absorblvl_marks:
             i0 = int(m["i0"]); i1 = min(int(m["i1"]), n - 1)
@@ -5391,6 +5403,41 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._radar_hover(self.vb.mapSceneToView(self._last_hover_pos))
             except Exception:
                 pass
+
+    def _draw_regime(self, buckets, vx0, vy1) -> None:
+        """WALL REGIME READ — top-left HUD: trend/range + directional bias from wall creation & mitigation over the last
+        ~96 bars (app/wall_regime_detect). DESCRIPTIVE + COINCIDENT (reads the regime we're IN; does NOT lead — study
+        wall_regime_lead.py). Reuses the shared wall marks (no extra detect())."""
+        if not self.menu.layer_state("m10_regime") or not buckets:
+            self._regime_hud.setVisible(False); return
+        from app import wall_regime_detect
+        r = wall_regime_detect.regime_read(self._absorb_marks(buckets), len(buckets))
+        self._regime_hud.setHtml(self._regime_html(r))
+        self._regime_hud.setPos(vx0, vy1)
+        self._regime_hud.setVisible(True)
+
+    @staticmethod
+    def _regime_html(r) -> str:
+        gray, gold, green, red, dim = "#9aa0aa", "#f1c40f", "#2ecc71", "#e74c3c", "#5a6170"
+        if not r.get("ready"):
+            return ("<div style='background:#12151c;padding:3px 6px'>"
+                    "<span style='color:%s;font-size:9px;letter-spacing:1px'>WALL REGIME</span><br>"
+                    "<span style='color:%s'>&mdash; warming up &mdash;</span></div>" % (dim, gray))
+        reg = r["regime"]; rc = gold if reg == "TREND" else (gray if reg == "RANGE" else "#8e9bbf")
+        bdir = r["bias_dir"]; bc = green if bdir > 0 else (red if bdir < 0 else gray)
+        arrow = "▲" if bdir > 0 else ("▼" if bdir < 0 else "–")
+        return (
+            "<div style='background:#12151c;padding:3px 7px;line-height:1.35'>"
+            "<span style='color:%s;font-size:9px;letter-spacing:1px'>WALL REGIME "
+            "<span style='color:%s'>&middot; last %d bars &middot; coincident</span></span><br>"
+            "<span style='color:%s;font-weight:bold'>%s</span>"
+            "<span style='color:%s'>&nbsp;&nbsp;1-sided %.0f%%</span><br>"
+            "<span style='color:%s;font-weight:bold'>%s %s</span>"
+            "<span style='color:%s'>&nbsp;&nbsp;new R:S %d:%d</span><br>"
+            "<span style='color:%s;font-size:9px'>breaks R:S %d:%d &middot; age %.0f</span></div>"
+            % (gray, dim, r["window"], rc, reg, dim, 100.0 * r["brk_asym"],
+               bc, arrow, r["bias"], dim, r["Rc"], r["Sc"],
+               dim, r["Rb"], r["Sb"], r["avg_age"]))
 
     def _draw_4h_zone(self, buckets) -> None:
         """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median), ZONE ('Z': buy/sell wick bands), and ABNORMAL-ORDER
@@ -12209,6 +12256,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_absorb_levels(buckets, x, vx0, vx1)        # Absorption S/R zones (m10_absorblvl, eyeball-only)
         except Exception:
             self._hide_absorb_levels()
+        try:
+            self._draw_regime(buckets, vx0, vy1)                  # Wall Regime read HUD (m10_regime, coincident)
+        except Exception:
+            self._regime_hud.setVisible(False)
 
         # --- Keltner Channel: EMA(close) basis ± ATR band. LIGHT GRAY upper/lower (match the POC baseline);
         #     the EMA MIDDLE line is HIDDEN (operator pref — the POC baseline is the center reference). ---
