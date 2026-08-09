@@ -1315,6 +1315,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._absorblvl_marks = []; self._absorblvl_sig = None   # Absorption S/R detector cache (m10_absorblvl)
         self._absorblvl_box_pool = []                            # QGraphicsRectItem pool — red/green absorption S/R zones
         self._absorblvl_lbl_pool = []                            # TextItem pool — "Ab"/"Ag" tags on borderless walls
+        self._absorblvl_pct_pool = []                            # TextItem pool — strength-% tag at each wall's right edge
         self._radar_zone_pool = []                               # QGraphicsRectItem — purple radar zones (upper+lower)
         self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side) for hover hit-testing
         self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
@@ -5294,6 +5295,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.plot.addItem(_t, ignoreBounds=True); self._absorblvl_lbl_pool.append(_t)
         return self._absorblvl_lbl_pool[used]
 
+    def _absorblvl_pct(self, used):                           # pooled strength-% tag at a wall's EXTREME-RIGHT edge
+        if used >= len(self._absorblvl_pct_pool):
+            _t = pg.TextItem(anchor=(1, 0.5)); _t.setZValue(16)      # right-aligned -> text ends flush at xr
+            _t.textItem.setFont(QtGui.QFont("Consolas", 8))
+            self.plot.addItem(_t, ignoreBounds=True); self._absorblvl_pct_pool.append(_t)
+        return self._absorblvl_pct_pool[used]
+
     def _radar_zone(self, used, alpha=40):                    # pooled purple radar zone; alpha = wall strength (P_resist)
         if used >= len(self._radar_zone_pool):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-7)
@@ -5327,7 +5335,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._radar_hover_tip.hide()
 
     def _hide_absorb_levels(self) -> None:
-        for _p in (self._absorblvl_box_pool + self._absorblvl_lbl_pool + self._radar_zone_pool):
+        for _p in (self._absorblvl_box_pool + self._absorblvl_lbl_pool + self._absorblvl_pct_pool + self._radar_zone_pool):
             _p.setVisible(False)
         if self._radar_hover_tip is not None:
             self._radar_hover_tip.hide()
@@ -5353,7 +5361,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hide_absorb_levels(); return
         n = len(buckets)
         self._absorb_marks(buckets)                           # refresh the shared cache (self._absorblvl_marks)
-        ub = 0; ul = 0; uz = 0; self._radar_hover_zones = []
+        ub = 0; ul = 0; up = 0; uz = 0; self._radar_hover_zones = []
         for m in self._absorblvl_marks:
             i0 = int(m["i0"]); i1 = min(int(m["i1"]), n - 1)
             if i0 < 0 or i0 >= n or i1 < i0:
@@ -5370,6 +5378,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             price = float(m["price"]); band = max(float(m.get("band", price * 0.0006)), 1e-9)   # wall half-height
             _rc = self._absorblvl_box(ub, m["side"], s, src); ub += 1
             _rc.setRect(xl, price - band, max(1e-9, xr - xl), 2.0 * band); _rc.setVisible(True)
+            if vx0 - 1.0 <= xr <= vx1 + 1.0:                   # STRENGTH % at the wall's extreme-right edge
+                prgb = ((255, 165, 40) if m["side"] == "R" else (80, 255, 90)) if src == "mix" else \
+                       ((235, 90, 100) if m["side"] == "R" else (80, 220, 140))
+                _pl = self._absorblvl_pct(up); up += 1
+                _pl.setColor(pg.mkColor(*prgb)); _pl.setText("%d%%" % int(round(s * 100.0)))
+                _pl.setPos(xr, price); _pl.setVisible(True)
             if xl >= vx0 - 1.0:                                # tag each wall at its START
                 if src == "mix":                               # Ab+Ag confluence -> NEON tag
                     rgb = (255, 165, 40) if m["side"] == "R" else (80, 255, 90); txt = "Ab+Ag"
@@ -5402,6 +5416,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _it in self._absorblvl_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._absorblvl_lbl_pool[ul:]:
+            _it.setVisible(False)
+        for _it in self._absorblvl_pct_pool[up:]:
             _it.setVisible(False)
         for _it in self._radar_zone_pool[uz:]:
             _it.setVisible(False)
