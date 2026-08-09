@@ -1267,7 +1267,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _lsf = QtGui.QFont("Consolas", 9); self._liq_status.textItem.setFont(_lsf)
         self._liq_status.setZValue(33); self.plot.addItem(self._liq_status, ignoreBounds=True)
         self._liq_status.setVisible(False); self._liq_status_txt = None
-        self._regime_hud = pg.TextItem(anchor=(0, 0))            # WALL REGIME read — top-left corner HUD (m10_regime)
+        self._regime_hud = pg.TextItem(anchor=(1, 1))            # WALL REGIME read — BOTTOM-RIGHT HUD (rides m10_absorblvl)
         self._regime_hud.textItem.setFont(QtGui.QFont("Consolas", 9))
         self._regime_hud.setZValue(34); self.plot.addItem(self._regime_hud, ignoreBounds=True)
         self._regime_hud.setVisible(False)
@@ -5404,30 +5404,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
 
-    def _draw_regime(self, buckets, vx0, vy1) -> None:
-        """WALL REGIME READ — top-left HUD: trend/range + directional bias from wall creation & mitigation over the last
-        ~96 bars (app/wall_regime_detect). DESCRIPTIVE + COINCIDENT (reads the regime we're IN; does NOT lead — study
-        wall_regime_lead.py). Reuses the shared wall marks (no extra detect())."""
-        if not self.menu.layer_state("m10_regime") or not buckets:
+    def _draw_regime(self, buckets, vx1, vy0) -> None:
+        """WALL REGIME READ — BOTTOM-RIGHT HUD, part of the Order-Flow Walls layer (m10_absorblvl): trend/range +
+        directional bias from wall creation & mitigation over the last ~96 bars (app/wall_regime_detect). DESCRIPTIVE +
+        COINCIDENT (reads the regime we're IN; does NOT lead — study wall_regime_lead.py). Reuses the shared wall
+        marks (no extra detect())."""
+        if not self.menu.layer_state("m10_absorblvl") or not buckets:
             self._regime_hud.setVisible(False); return
         from app import wall_regime_detect
         r = wall_regime_detect.regime_read(self._absorb_marks(buckets), len(buckets))
         self._regime_hud.setHtml(self._regime_html(r))
-        self._regime_hud.setPos(vx0, vy1)
+        self._regime_hud.setPos(vx1, vy0)                     # bottom-right of the view (anchor=(1,1))
         self._regime_hud.setVisible(True)
 
     @staticmethod
     def _regime_html(r) -> str:
         gray, gold, green, red, dim = "#9aa0aa", "#f1c40f", "#2ecc71", "#e74c3c", "#5a6170"
         if not r.get("ready"):
-            return ("<div style='background:#12151c;padding:3px 6px'>"
+            return ("<div style='background:#12151c;padding:3px 6px;text-align:right'>"
                     "<span style='color:%s;font-size:9px;letter-spacing:1px'>WALL REGIME</span><br>"
                     "<span style='color:%s'>&mdash; warming up &mdash;</span></div>" % (dim, gray))
         reg = r["regime"]; rc = gold if reg == "TREND" else (gray if reg == "RANGE" else "#8e9bbf")
         bdir = r["bias_dir"]; bc = green if bdir > 0 else (red if bdir < 0 else gray)
         arrow = "▲" if bdir > 0 else ("▼" if bdir < 0 else "–")
         return (
-            "<div style='background:#12151c;padding:3px 7px;line-height:1.35'>"
+            "<div style='background:#12151c;padding:3px 7px;line-height:1.35;text-align:right'>"
             "<span style='color:%s;font-size:9px;letter-spacing:1px'>WALL REGIME "
             "<span style='color:%s'>&middot; last %d bars &middot; coincident</span></span><br>"
             "<span style='color:%s;font-weight:bold'>%s</span>"
@@ -12257,7 +12258,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             self._hide_absorb_levels()
         try:
-            self._draw_regime(buckets, vx0, vy1)                  # Wall Regime read HUD (m10_regime, coincident)
+            self._draw_regime(buckets, vx1, vy0)                  # Wall Regime HUD, bottom-right (rides m10_absorblvl)
         except Exception:
             self._regime_hud.setVisible(False)
 
