@@ -5,6 +5,9 @@ A wall = where strong one-sided aggression (|net-delta%| >= T) meets its limit. 
      buy-absorbed  -> HIGH = RESISTANCE (red) ;  sell-absorbed -> LOW = SUPPORT (green)
   AGGRESSION (big body -> aggressor moved FROM a base, leaving an origin / order block):
      sell-aggression -> HIGH = RESISTANCE (red) ;  buy-aggression -> LOW = SUPPORT (green)
+  FOOTPRINT-ANCHORED (2026-08-09): the wall sits at the HEAVIEST-VOLUME price level in the extreme/origin region (the
+  per-level absorption / order-block NODE from b.levels), not the raw high/low; ABSORPTION additionally requires the
+  aggressor's TAKER volume CONCENTRATED (>=CONC) in that extreme region -> footprint-CONFIRMED, not just tiny-body.
 
 STRENGTH (drawn as opacity) = how far the wall EJECTED price (the favourable excursion after it formed), DECAYED 0.6x
 per radar re-visit (each test consumes its liquidity). LIFETIME = the MARKET decides: a wall lives until a candle BODY
@@ -28,6 +31,8 @@ T = 20.0            # |net-delta%| = one-sided aggression that can build a wall 
 #                     judged by EJECTION strength downstream, not by how one-sided the candle was)
 BODY_SMALL = 0.35  # |close-open|/range <= this = tiny body (absorbed at the extreme)
 BODY_BIG = 0.60    # |close-open|/range >= this = decisive move (origin / order-block wall)
+EXT_FRAC = 0.34    # FOOTPRINT: the candle's "extreme region" = this fraction of the range at the failing/origin end
+CONC = 0.40        # FOOTPRINT: >= this share of the aggressor's TAKER volume must sit in the extreme region (absorption)
 EPS = 0.0015       # touch / break tolerance (0.15%)
 DECAY = 0.6        # strength multiplier applied per return-touch (each test weakens the wall)
 EJ_WIN = 10        # the ejection = favourable excursion within this many bars of formation (the INITIAL rejection)
@@ -90,17 +95,64 @@ def _median(vals):
     return s[m // 2] if m % 2 else (s[m // 2 - 1] + s[m // 2]) / 2.0
 
 
-def _wall_at(i, O, C, H, L, DP):
-    """Return (price, side, src) if candle i births a wall, else None."""
+def _levels(b):
+    """per-price taker footprint -> sorted [(price, buy, sell), ...] ascending; [] if none."""
+    out = []
+    for p, vv in (b.get("levels") or {}).items():
+        try:
+            pr = float(p)
+        except (TypeError, ValueError):
+            continue
+        out.append((pr, _f(vv.get("b")), _f(vv.get("s"))))
+    out.sort()
+    return out
+
+
+def _vol_node(rows):
+    """price level carrying the most TOTAL taker volume among rows (the absorption / origin node); None if empty."""
+    best = None; bv = -1.0
+    for pr, b, s in rows:
+        if b + s > bv:
+            bv = b + s; best = pr
+    return best
+
+
+def _wall_at(i, O, C, H, L, DP, buckets):
+    """Return (price, side, src) if candle i births a wall, else None. FOOTPRINT-ANCHORED: the absorption/aggression is
+    confirmed from the per-level taker flow at the candle's extreme, and the wall sits at the HEAVIEST-VOLUME level
+    there (the absorption / origin node), not the raw high/low. Falls back to the raw extreme when no footprint."""
     rng = H[i] - L[i]
-    if rng <= 0 or O[i] <= 0 or abs(DP[i]) < T:
+    if rng <= 0 or O[i] <= 0 or abs(DP[i]) < T:             # aggregate one-sided aggression gate (net taker delta)
         return None
     body = abs(C[i] - O[i]) / rng
-    if body <= BODY_SMALL:                                  # ABSORPTION — wall AT the failed extreme
-        return (H[i], "R", "abs") if DP[i] > 0 else (L[i], "S", "abs")
-    if body >= BODY_BIG and ((DP[i] > 0) == (C[i] > O[i])):  # AGGRESSION — wall at the move's ORIGIN
-        return (L[i], "S", "agg") if DP[i] > 0 else (H[i], "R", "agg")
-    return None
+    is_abs = body <= BODY_SMALL
+    is_agg = body >= BODY_BIG and ((DP[i] > 0) == (C[i] > O[i]))
+    if not (is_abs or is_agg):
+        return None
+    buy = DP[i] > 0                                         # net aggressor: buyers (>0) or sellers (<0)
+    rows = _levels(buckets[i])
+    if is_abs:                                             # ABSORPTION — aggressor FAILED at the extreme -> wall there
+        side = "R" if buy else "S"                        # buy-absorbed HIGH=resistance / sell-absorbed LOW=support
+        if not rows:
+            return (H[i] if buy else L[i], side, "abs")   # no footprint -> raw extreme
+        if buy:
+            reg = [r for r in rows if r[0] >= H[i] - EXT_FRAC * rng]   # TOP region
+            agg = sum(r[1] for r in rows); regagg = sum(r[1] for r in reg)   # BUY taker share up top
+        else:
+            reg = [r for r in rows if r[0] <= L[i] + EXT_FRAC * rng]   # BOTTOM region
+            agg = sum(r[2] for r in rows); regagg = sum(r[2] for r in reg)   # SELL taker share down low
+        if agg <= 0 or (regagg / agg) < CONC:             # aggressor NOT concentrated at the failing extreme -> no wall
+            return None
+        node = _vol_node(reg)
+        return (node if node is not None else (H[i] if buy else L[i]), side, "abs")
+    # AGGRESSION — decisive move -> wall at its ORIGIN (base), anchored to the base's volume node.
+    side = "S" if buy else "R"                            # buy-agg LOW=support / sell-agg HIGH=resistance
+    if not rows:
+        return (L[i] if buy else H[i], side, "agg")
+    reg = ([r for r in rows if r[0] <= L[i] + EXT_FRAC * rng] if buy
+           else [r for r in rows if r[0] >= H[i] - EXT_FRAC * rng])
+    node = _vol_node(reg)
+    return (node if node is not None else (L[i] if buy else H[i]), side, "agg")
 
 
 def detect(buckets, skip_last=False):
@@ -146,7 +198,7 @@ def detect(buckets, skip_last=False):
                     w["inzone"] = False; w["ever_left"] = True
                 still.append(w)
             active = still
-            hit = _wall_at(i, O, C, H, L, DP)
+            hit = _wall_at(i, O, C, H, L, DP, buckets)
             if hit is not None:
                 price, side, src = hit
                 near = None
