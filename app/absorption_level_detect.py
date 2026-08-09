@@ -159,7 +159,10 @@ def detect(buckets, skip_last=False):
             i0 = w["i0"]; i1 = w["i1"] if w["broken"] else (n - 1); P = w["P"]
             base = min(1.0, w["ej"] / (EJ_ATR_MULT * w["v0"])) if w["v0"] > 0 else 0.0   # ejection sets the geometry
             hits = len(w["runs"])                           # each radar re-visit is a hit
-            strength = base * (DECAY ** hits)               # decays with hits -> opacity
+            # do NOT pre-decay for the visit price is CURRENTLY making (inzone) — else a wall vanishes the instant
+            # price enters its radar to test it. The decay for this visit lands only once it completes.
+            eff = hits - 1 if (not w["broken"] and w.get("inzone") and hits >= 1) else hits
+            strength = base * (DECAY ** eff)                # decays with COMPLETED hits -> opacity
             band = P * w["v0"] * (BAND_MIN + base * BAND_RANGE)   # volatility-relative band (timeframe-invariant)
             r_lo = P - 3.0 * band; r_hi = P + 3.0 * band
             runs = []                                            # (k0, k1, P_resist%) — odds the wall holds this visit
