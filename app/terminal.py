@@ -1211,6 +1211,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._struct_pct_pool_sw = []                            # swing % -change sub-label pool (below each HH/HL/LH/LL)
         self._struct_pct_sw = []                                 # cached per-swing % move from the previous swing
         self._swing_pct = structure.ZIGZAG_SWING_PCT             # swing-ZigZag threshold %, live-set by the hamburger slider
+        self._wall_floor = 0.12                                  # Order-Flow Walls min-strength draw floor (hamburger slider)
         self._kc_scale = float(config.KELTNER_SCALE_DEFAULT)     # 1m-KC smooth-approx effective-TF scale (hamburger slider; 1.0 = native)
         _cbp = pg.mkPen((70, 200, 255), width=1.3, style=QtCore.Qt.DashLine); _cbp.setCosmetic(True)   # CHoCH bull
         _crp = pg.mkPen((255, 120, 90), width=1.3, style=QtCore.Qt.DashLine); _crp.setCosmetic(True)   # CHoCH bear
@@ -1719,6 +1720,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.drawbar = DrawingToolbar(self)
         self.menu = FloatingOverlayMenu(self)
         self.menu.set_swing_pct(self._swing_pct)   # sync the swing slider to the restored/default sensitivity
+        self.menu.set_wall_floor(self._wall_floor)  # sync the wall-strength floor slider to the restored/default value
         self.menu.set_kc_scale(self._kc_scale)     # sync the Keltner-scale slider to the restored/default value
         self.menu.set_tf(self._tf)                 # point the tf selector at the restored/default timeframe
         self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {config.TF_SECONDS.get(self._tf, 60) // 60}×")
@@ -1952,6 +1954,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.scan_time_changed.connect(self._on_scan_time_changed)
         self.menu.replayToggled.connect(self._on_replay_toggled)
         self.menu.swingSensitivityChanged.connect(self._on_swing_sensitivity)   # swing-ZigZag threshold slider
+        self.menu.wallFloorChanged.connect(self._on_wall_floor)                  # Order-Flow Walls min-strength floor
         self.menu.keltnerScaleChanged.connect(self._on_kc_scale)   # 1m-KC smooth-approx effective-TF scale slider
         self.menu.candleModeChanged.connect(self._on_candle_mode)  # Candle Mode dropdown (mirrors 'W')
         self.menu.vpModeChanged.connect(self._on_vp_mode)          # Volume Profile Mode dropdown
@@ -4521,6 +4524,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None
         self._draw_scanner()
 
+    def _on_wall_floor(self, floor: float) -> None:
+        """Hamburger Order-Flow Walls slider moved — set the min-strength DRAW floor (display-only; no re-detect),
+        persist, and repaint now."""
+        self._wall_floor = float(floor)
+        self._save_ui_state()
+        self._last_scanner_sig = None
+        self._draw_scanner()
+
     def _on_kc_scale(self, scale: float) -> None:
         """Hamburger Keltner-scale slider moved — set the smooth-approx effective-TF scale (KC EMA/ATR period ×scale,
         band ×sqrt(scale); POC-baseline EMA period ×scale). KC + baseline live in the #3 closed-bucket cache, so
@@ -5360,7 +5371,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if xr < vx0 - 1.0 or xl > vx1 + 1.0:               # cull to the viewport
                 continue
             s = float(m.get("strength", 0.0))
-            if s < 0.12:                                       # only hide near-spent walls (tiny ejection / hit to death)
+            if s < self._wall_floor:                            # min-strength draw floor (hamburger slider, default 0.12)
                 continue
             src = m.get("src", "")
             price = float(m["price"]); band = max(float(m.get("band", price * 0.0006)), 1e-9)   # wall half-height
@@ -5620,6 +5631,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "eff_sides": list(self.eff_slider.sides()),
                 "replay_edge_t": self._replay_saved_edge_t,               # last replay cursor -> resume here on toggle-on
                 "swing_pct": self._swing_pct,                             # swing-ZigZag sensitivity slider (%)
+                "wall_floor": self._wall_floor,                           # Order-Flow Walls min-strength draw floor
                 "kc_scale": self._kc_scale,                               # 1m-KC smooth-approx effective-TF scale slider
                 "tf": self._tf,                                           # last chart timeframe -> reopen on it
                 "ob_unmitig_only": self._ob_unmitig_only,                 # 'o' cycle stage-2: unmitigated OBs only
@@ -5689,6 +5701,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _sp = s.get("swing_pct")                              # restore the swing-ZigZag sensitivity (the menu slider is
         if isinstance(_sp, (int, float)):                     # synced to this right after the menu is built — see __init__)
             self._swing_pct = float(_sp)
+        _wf = s.get("wall_floor")                             # restore the Order-Flow Walls min-strength draw floor
+        if isinstance(_wf, (int, float)):
+            self._wall_floor = max(0.05, min(0.60, float(_wf)))
         _kcs = s.get("kc_scale")                              # restore the Keltner smooth-approx scale (menu slider synced after build)
         if isinstance(_kcs, (int, float)):
             self._kc_scale = max(1.0, min(float(config.KELTNER_SCALE_MAX), float(_kcs)))
