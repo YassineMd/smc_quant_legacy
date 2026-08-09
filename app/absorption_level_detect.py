@@ -193,6 +193,7 @@ def detect(buckets, skip_last=False):
                     pen = clpos = body = 0.0
                 runs.append((rk0, rk1, round(_p_resist(vr, pen, clpos, body, base), 1)))
             out.append({"price": P, "side": w["side"], "src": w["src"], "i0": i0, "i1": i1,
+                        "broken": bool(w["broken"]),            # authoritative: mitigated iff a body closed beyond the radar
                         "strength": strength, "hits": hits, "band": band, "radar_runs": runs,
                         "base_src": w.get("base_src", w["src"]), "mix_bar": w.get("mix_bar", -1)})
         return out
