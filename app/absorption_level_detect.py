@@ -20,6 +20,8 @@ radar_runs = candle spans where price RE-ENTERED the radar area (= the wall + on
 """
 from __future__ import annotations
 
+from math import log1p as _log1p, exp as _exp
+
 from .engulf_sr_detect import _ohlc
 
 T = 20.0            # |net-delta%| = one-sided aggression that can build a wall (do NOT gate hard here — significance is
@@ -45,35 +47,24 @@ def _f(x) -> float:
         return 0.0
 
 
-# P(RESIST) = f(volume intensity vr, entry PENETRATION pen). 2-factor grid, calibrated on the CAUSAL-strength visit
-# set and OOS-validated (study/wall_2factor.py: pen adds +0.015 AUC both train->test directions; base vr AUC 0.689).
-# LIGHT volume + SHALLOW entry -> the wall almost always holds; HEAVY volume OR a DEEP entry (price punched to the wall
-# on arrival) -> break. vr = box-vol/bar / rolling-median curr_vol. pen = entry candle depth into the radar (0..1).
-# DESCRIPTIVE odds — NOT a trade signal (the directional trade is dead, study/wall_radar_holdout.py).
-_CAL_VR = (0.20, 0.55, 0.90, 1.50)        # volume-intensity band centres
-_CAL_PEN = (0.22, 0.57, 0.85)             # entry-penetration band centres (0 = grazed outer edge, 1 = at the wall)
-_CAL_PR = ((94.0, 74.0, 63.0, 57.0),      # shallow entry
-           (66.0, 58.0, 59.0, 52.0),      # mid
-           (11.0, 32.0, 39.0, 42.0))      # deep entry
+# P(RESIST) = 4-factor logistic on log1p(volume-intensity vr), entry PENETRATION pen, entry CLOSE-position clpos,
+# and entry BODY (oriented toward the break edge). Replaces the old 2-factor (vr,pen) bilinear grid — folds in the
+# entry close-position + body (study/wall_entry_close.py, study/wall_pr_fit.py). OOS AUC(resist) 0.731/0.725 vs
+# 0.711/0.701 for the 2-factor (+0.02 both train->test directions); full-sample 0.727. Fit on the causal multi-bar
+# visit set, both years (10124 visits, base RESIST 70.6%); deciles calibrated (slightly conservative at the extremes).
+# vr = box-vol/bar / rolling-median curr_vol. pen/clpos/body measured on the entry candle (all causal at render time).
+# NOTE b_pen is POSITIVE: given the CLOSE position, a higher HIGH = a bigger rejection wick -> slightly more resist
+# (pen = clpos + wick; the CLOSE carries the break signal, the wick is the poke-and-reject). Where price CLOSES in the
+# radar is the clean predictor, not how deep the high poked. DESCRIPTIVE odds — NOT a trade signal.
+_PR_COEF = (2.74336, -2.22622, 0.56783, -2.04030, -0.66903)   # (b0, ln1p(vr), pen, clpos, body)
 
 
-def _interp(val, grid):
-    if val <= grid[0]:
-        return 0, 0, 0.0
-    if val >= grid[-1]:
-        return len(grid) - 1, len(grid) - 1, 0.0
-    for i in range(len(grid) - 1):
-        if val < grid[i + 1]:
-            return i, i + 1, (val - grid[i]) / (grid[i + 1] - grid[i])
-    return len(grid) - 1, len(grid) - 1, 0.0
-
-
-def _p_resist(vr, pen):                                       # bilinear over the (penetration, volume) grid
-    pi0, pi1, pt = _interp(pen, _CAL_PEN)
-    vi0, vi1, vt = _interp(vr, _CAL_VR)
-    a = _CAL_PR[pi0][vi0] * (1 - vt) + _CAL_PR[pi0][vi1] * vt
-    b = _CAL_PR[pi1][vi0] * (1 - vt) + _CAL_PR[pi1][vi1] * vt
-    return a * (1 - pt) + b * pt
+def _p_resist(vr, pen, clpos, body):                          # 4-factor logistic -> P(resist) in %
+    b = -1.0 if body < -1.0 else (2.0 if body > 2.0 else body)   # guard rare tiny-span body outliers
+    z = (_PR_COEF[0] + _PR_COEF[1] * _log1p(vr if vr > 0.0 else 0.0) + _PR_COEF[2] * pen
+         + _PR_COEF[3] * clpos + _PR_COEF[4] * b)
+    z = 30.0 if z > 30.0 else (-30.0 if z < -30.0 else z)     # overflow guard
+    return 100.0 / (1.0 + _exp(-z))
 
 
 def _box_vol_lv(b, r_lo, r_hi):
@@ -187,10 +178,18 @@ def detect(buckets, skip_last=False):
                     bx += _box_vol_lv(buckets[k], r_lo, r_hi)
                 rm = _median([c for c in CV[max(0, rk0 - 200):rk0] if c > 0])
                 vr = (bx / bars) / rm if (rm > 0 and bars > 0) else 0.0
-                span = r_hi - r_lo                            # entry PENETRATION into the radar (0..1)
-                pen = ((H[rk0] - r_lo) if w["side"] == "R" else (r_hi - L[rk0])) / span if span > 0 else 0.0
-                pen = 0.0 if pen < 0.0 else (1.0 if pen > 1.0 else pen)
-                runs.append((rk0, rk1, round(_p_resist(vr, pen), 1)))
+                span = r_hi - r_lo                            # entry candle geometry within the radar (0..1)
+                if span > 0:
+                    isR = w["side"] == "R"
+                    pen = (H[rk0] - r_lo) if isR else (r_hi - L[rk0])        # depth the HIGH poked in
+                    pen = pen / span
+                    pen = 0.0 if pen < 0.0 else (1.0 if pen > 1.0 else pen)
+                    clpos = ((C[rk0] - r_lo) if isR else (r_hi - C[rk0])) / span   # where it CLOSED (clean penetration)
+                    clpos = 0.0 if clpos < 0.0 else (1.0 if clpos > 1.0 else clpos)
+                    body = (C[rk0] - O[rk0]) * (1.0 if isR else -1.0) / span       # body oriented toward the break edge
+                else:
+                    pen = clpos = body = 0.0
+                runs.append((rk0, rk1, round(_p_resist(vr, pen, clpos, body), 1)))
             out.append({"price": P, "side": w["side"], "src": w["src"], "i0": i0, "i1": i1,
                         "strength": strength, "hits": hits, "band": band, "radar_runs": runs,
                         "base_src": w.get("base_src", w["src"]), "mix_bar": w.get("mix_bar", -1)})
