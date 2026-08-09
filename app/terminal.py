@@ -5279,12 +5279,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-6)
             self.vb.addItem(_rc, ignoreBounds=True); self._absorblvl_box_pool.append(_rc)
         _rc = self._absorblvl_box_pool[used]
-        rgb = (230, 70, 80) if side == "R" else (60, 200, 120)     # resistance red / support green
-        _rc.setBrush(pg.mkBrush(*rgb, int(22 + strength * 120)))   # big ejection / few hits = more opaque
-        if src == "mix":                                           # BOTH absorption + aggression at this level -> border
-            _rc.setPen(pg.mkPen(*rgb, min(235, 150 + int(strength * 90)), width=1.4))
+        if src == "mix":                                           # BOTH absorption + aggression (Ab+Ag) -> NEON + border
+            rgb = (255, 150, 20) if side == "R" else (57, 255, 20)     # neon orange resistance / neon green support
+            _rc.setBrush(pg.mkBrush(*rgb, int(30 + strength * 120)))
+            _rc.setPen(pg.mkPen(*rgb, min(255, 175 + int(strength * 80)), width=1.6))
         else:
-            _rc.setPen(pg.mkPen(None))                             # pure absorption / pure aggression -> no border
+            rgb = (230, 70, 80) if side == "R" else (60, 200, 120)    # absorption: resistance red / support green
+            _rc.setBrush(pg.mkBrush(*rgb, int(22 + strength * 120)))  # big ejection / few hits = more opaque
+            _rc.setPen(pg.mkPen(None))                                # pure absorption -> no border
         return _rc
 
     def _absorblvl_lbl(self, used):                           # pooled "Ab"/"Ag" tag at a borderless wall's start
@@ -5382,11 +5384,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _pl = self._absorblvl_pct(up); up += 1
                 _pl.setColor(pg.mkColor(*prgb)); _pl.setText("%d%%" % int(round(s * 100.0)))
                 _pl.setPos(xr, price); _pl.setVisible(True)
-            if src in ("abs", "agg") and xl >= vx0 - 1.0:      # tag pure walls at their START (mix has a border instead)
-                rgb = (235, 90, 100) if m["side"] == "R" else (80, 220, 140)
-                _lb = self._absorblvl_lbl(ul); ul += 1
-                _lb.setColor(pg.mkColor(*rgb)); _lb.setText("Ab" if src == "abs" else "Ag")
-                _lb.setPos(xl, price); _lb.setVisible(True)
+            if xl >= vx0 - 1.0:                                # tag each wall at its START
+                if src == "mix":                               # Ab+Ag confluence -> NEON tag
+                    rgb = (255, 165, 40) if m["side"] == "R" else (80, 255, 90); txt = "Ab+Ag"
+                elif src == "abs":
+                    rgb = (235, 90, 100) if m["side"] == "R" else (80, 220, 140); txt = "Ab"
+                elif src == "agg":
+                    rgb = (235, 90, 100) if m["side"] == "R" else (80, 220, 140); txt = "Ag"
+                else:
+                    txt = None
+                if txt:
+                    _lb = self._absorblvl_lbl(ul); ul += 1
+                    _lb.setColor(pg.mkColor(*rgb)); _lb.setText(txt)
+                    _lb.setPos(xl, price); _lb.setVisible(True)
             # RADAR: purple upper+lower zones (each = wall height) over each candle-run that RE-ENTERED the radar area.
             for _run in m.get("radar_runs", ()):               # width ~ the candles inside + a little padding
                 rk0 = max(0, int(_run[0])); rk1 = min(int(_run[1]), n - 1)
