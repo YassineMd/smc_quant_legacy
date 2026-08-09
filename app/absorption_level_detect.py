@@ -31,6 +31,8 @@ T = 20.0            # |net-delta%| = one-sided aggression that can build a wall 
 #                     judged by EJECTION strength downstream, not by how one-sided the candle was)
 BODY_SMALL = 0.35  # |close-open|/range <= this = tiny body (absorbed at the extreme)
 BODY_BIG = 0.60    # |close-open|/range >= this = decisive move (origin / order-block wall)
+USE_AGGRESSION = False   # aggression-origin walls OFF by user pref (they dominated ~8:1 and cluttered the chart) —
+#                          ABSORPTION-ONLY walls. Flip True to re-enable the aggression/order-block walls.
 EXT_FRAC = 0.34    # FOOTPRINT: the candle's "extreme region" = this fraction of the range at the failing/origin end
 CONC = 0.40        # FOOTPRINT: >= this share of the aggressor's TAKER volume must sit in the extreme region (absorption)
 EPS = 0.0015       # touch / break tolerance (0.15%)
@@ -126,7 +128,7 @@ def _wall_at(i, O, C, H, L, DP, buckets):
         return None
     body = abs(C[i] - O[i]) / rng
     is_abs = body <= BODY_SMALL
-    is_agg = body >= BODY_BIG and ((DP[i] > 0) == (C[i] > O[i]))
+    is_agg = USE_AGGRESSION and body >= BODY_BIG and ((DP[i] > 0) == (C[i] > O[i]))
     if not (is_abs or is_agg):
         return None
     buy = DP[i] > 0                                         # net aggressor: buyers (>0) or sellers (<0)
