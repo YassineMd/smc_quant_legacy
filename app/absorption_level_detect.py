@@ -9,8 +9,9 @@ A wall = where strong one-sided aggression (|net-delta%| >= T) meets its limit. 
   per-level absorption / order-block NODE from b.levels), not the raw high/low; ABSORPTION additionally requires the
   aggressor's TAKER volume CONCENTRATED (>=CONC) in that extreme region -> footprint-CONFIRMED, not just tiny-body.
 
-STRENGTH (drawn as opacity) = simply how far the wall EJECTED price (favourable excursion after formation, volatility-
-normalized, 0..1). NO decay — a wall does NOT lose strength when tested. LIFETIME = the MARKET decides: a wall lives
+STRENGTH (drawn as opacity) = how far the wall EJECTED price (favourable excursion after formation, 0..1) REINFORCED
+by how many SAME-SIDE walls formed AFTER it and near it in price (its zone thickened) — never decays, never lost on a
+test; opposite-side walls ignored. LIFETIME = the MARKET decides: a wall lives
 until a candle BODY CLOSES beyond its RADAR (not merely through the wall) — no arbitrary age-out; a mitigated wall is
 dropped 90 bars after its break. The hamburger slider hides walls below a chosen strength. Causal per-bar sim.
 
@@ -24,6 +25,7 @@ radar_runs = candle spans where price RE-ENTERED the radar area (= the wall + on
 """
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from math import log1p as _log1p, exp as _exp
 
 from .engulf_sr_detect import _ohlc
@@ -46,6 +48,8 @@ ATR_WIN = 50       # bars for the rolling volatility unit
 BAND_MIN = 0.10    # wall half-height as a fraction of the local candle range (weak wall)
 BAND_RANGE = 0.233 # ... + this * base (strong wall) -> band = vpct * (0.10..0.333) of price
 EJ_ATR_MULT = 3.3  # ejection = this * the local candle range -> full strength 1.0
+ZONE_PROX_BANDS = 5.0  # a same-side wall REINFORCES this one if it formed AFTER it within this many band-heights (its zone)
+REINF_K = 8.0      # reinforcement half-saturation: zone-count == this -> strength halfway from ejection to 1.0
 
 
 def _f(x) -> float:
@@ -250,6 +254,21 @@ def detect(buckets, skip_last=False):
                         "broken": bool(w["broken"]),            # authoritative: mitigated iff a body closed beyond the radar
                         "strength": strength, "hits": hits, "band": band, "radar_runs": runs,
                         "base_src": w.get("base_src", w["src"]), "mix_bar": w.get("mix_bar", -1)})
+        # STRENGTH reinforcement: a wall is STRONGER the more SAME-SIDE walls formed AFTER it AND near it in price (its
+        # zone thickened). Ejection is the base; the zone-count fills the gap toward 1.0 (saturating, half at REINF_K).
+        # NO decay, and OPPOSITE-side walls are ignored. zone = |price gap| <= ZONE_PROX_BANDS * the wall's own band.
+        by_side = {}
+        for a in out:
+            by_side.setdefault(a["side"], []).append(a)
+        for lst in by_side.values():                        # per side: price-sorted -> binary-search the zone window
+            lst.sort(key=lambda x: x["price"])
+            prices = [x["price"] for x in lst]
+            for a in lst:
+                d = ZONE_PROX_BANDS * a["band"]
+                lo = bisect_left(prices, a["price"] - d); hi = bisect_right(prices, a["price"] + d)
+                zc = sum(1 for j in range(lo, hi) if lst[j]["i0"] > a["i0"])   # same-side walls formed AFTER, in-zone
+                if zc:
+                    a["strength"] = a["strength"] + (1.0 - a["strength"]) * zc / (zc + REINF_K)
         return out
     except Exception:
         return []
