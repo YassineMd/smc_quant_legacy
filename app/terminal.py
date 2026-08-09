@@ -1211,7 +1211,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._struct_pct_pool_sw = []                            # swing % -change sub-label pool (below each HH/HL/LH/LL)
         self._struct_pct_sw = []                                 # cached per-swing % move from the previous swing
         self._swing_pct = structure.ZIGZAG_SWING_PCT             # swing-ZigZag threshold %, live-set by the hamburger slider
-        self._wall_floor = 0.12                                  # Order-Flow Walls min-strength draw floor (hamburger slider)
         self._kc_scale = float(config.KELTNER_SCALE_DEFAULT)     # 1m-KC smooth-approx effective-TF scale (hamburger slider; 1.0 = native)
         _cbp = pg.mkPen((70, 200, 255), width=1.3, style=QtCore.Qt.DashLine); _cbp.setCosmetic(True)   # CHoCH bull
         _crp = pg.mkPen((255, 120, 90), width=1.3, style=QtCore.Qt.DashLine); _crp.setCosmetic(True)   # CHoCH bear
@@ -1315,7 +1314,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._absorblvl_marks = []; self._absorblvl_sig = None   # Absorption S/R detector cache (m10_absorblvl)
         self._absorblvl_box_pool = []                            # QGraphicsRectItem pool — red/green absorption S/R zones
         self._absorblvl_lbl_pool = []                            # TextItem pool — "Ab"/"Ag" tags on borderless walls
-        self._absorblvl_pct_pool = []                            # TextItem pool — strength-% tag at each wall's right edge
         self._radar_zone_pool = []                               # QGraphicsRectItem — purple radar zones (upper+lower)
         self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side) for hover hit-testing
         self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
@@ -1720,7 +1718,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.drawbar = DrawingToolbar(self)
         self.menu = FloatingOverlayMenu(self)
         self.menu.set_swing_pct(self._swing_pct)   # sync the swing slider to the restored/default sensitivity
-        self.menu.set_wall_floor(self._wall_floor)  # sync the wall-strength floor slider to the restored/default value
         self.menu.set_kc_scale(self._kc_scale)     # sync the Keltner-scale slider to the restored/default value
         self.menu.set_tf(self._tf)                 # point the tf selector at the restored/default timeframe
         self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {config.TF_SECONDS.get(self._tf, 60) // 60}×")
@@ -1954,7 +1951,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.scan_time_changed.connect(self._on_scan_time_changed)
         self.menu.replayToggled.connect(self._on_replay_toggled)
         self.menu.swingSensitivityChanged.connect(self._on_swing_sensitivity)   # swing-ZigZag threshold slider
-        self.menu.wallFloorChanged.connect(self._on_wall_floor)                  # Order-Flow Walls min-strength floor
         self.menu.keltnerScaleChanged.connect(self._on_kc_scale)   # 1m-KC smooth-approx effective-TF scale slider
         self.menu.candleModeChanged.connect(self._on_candle_mode)  # Candle Mode dropdown (mirrors 'W')
         self.menu.vpModeChanged.connect(self._on_vp_mode)          # Volume Profile Mode dropdown
@@ -4524,14 +4520,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None
         self._draw_scanner()
 
-    def _on_wall_floor(self, floor: float) -> None:
-        """Hamburger Order-Flow Walls slider moved — set the min-strength DRAW floor (display-only; no re-detect),
-        persist, and repaint now."""
-        self._wall_floor = float(floor)
-        self._save_ui_state()
-        self._last_scanner_sig = None
-        self._draw_scanner()
-
     def _on_kc_scale(self, scale: float) -> None:
         """Hamburger Keltner-scale slider moved — set the smooth-approx effective-TF scale (KC EMA/ATR period ×scale,
         band ×sqrt(scale); POC-baseline EMA period ×scale). KC + baseline live in the #3 closed-bucket cache, so
@@ -5274,19 +5262,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # until price closes through it. ⚠ barely a signal — study/wall_levels: absorption 64.1% == placebo 63.4% (null);
     # aggression 66.3% but dir-shuffle 65.0% (only ~1.3pp directional) — +3pp on a 63% geom base, NOT tradeable.
     # ------------------------------------------------------------------
-    def _absorblvl_box(self, used, side, strength, src):      # opacity = strength; BORDER only on confluence (mix)
+    def _absorblvl_box(self, used, side, src):                # UNIFORM opacity (no strength); BORDER only on confluence (mix)
         if used >= len(self._absorblvl_box_pool):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-6)
             self.vb.addItem(_rc, ignoreBounds=True); self._absorblvl_box_pool.append(_rc)
         _rc = self._absorblvl_box_pool[used]
         if src == "mix":                                           # BOTH absorption + aggression (Ab+Ag) -> NEON + border
             rgb = (255, 150, 20) if side == "R" else (57, 255, 20)     # neon orange resistance / neon green support
-            _rc.setBrush(pg.mkBrush(*rgb, int(30 + strength * 120)))
-            _rc.setPen(pg.mkPen(*rgb, min(255, 175 + int(strength * 80)), width=1.6))
+            _rc.setBrush(pg.mkBrush(*rgb, 105))
+            _rc.setPen(pg.mkPen(*rgb, 235, width=1.6))
         else:
             rgb = (230, 70, 80) if side == "R" else (60, 200, 120)    # absorption: resistance red / support green
-            _rc.setBrush(pg.mkBrush(*rgb, int(22 + strength * 120)))  # big ejection / few hits = more opaque
-            _rc.setPen(pg.mkPen(None))                                # pure absorption -> no border
+            _rc.setBrush(pg.mkBrush(*rgb, 95))
+            _rc.setPen(pg.mkPen(None))
         return _rc
 
     def _absorblvl_lbl(self, used):                           # pooled "Ab"/"Ag" tag at a borderless wall's start
@@ -5295,13 +5283,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _t.textItem.setFont(QtGui.QFont("Consolas", 8))
             self.plot.addItem(_t, ignoreBounds=True); self._absorblvl_lbl_pool.append(_t)
         return self._absorblvl_lbl_pool[used]
-
-    def _absorblvl_pct(self, used):                           # pooled strength-% tag at a wall's EXTREME-RIGHT edge
-        if used >= len(self._absorblvl_pct_pool):
-            _t = pg.TextItem(anchor=(1, 0.5)); _t.setZValue(16)      # right-aligned -> text ends flush at xr
-            _t.textItem.setFont(QtGui.QFont("Consolas", 8))
-            self.plot.addItem(_t, ignoreBounds=True); self._absorblvl_pct_pool.append(_t)
-        return self._absorblvl_pct_pool[used]
 
     def _radar_zone(self, used, alpha=40):                    # pooled purple radar zone; alpha = wall strength (P_resist)
         if used >= len(self._radar_zone_pool):
@@ -5336,7 +5317,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._radar_hover_tip.hide()
 
     def _hide_absorb_levels(self) -> None:
-        for _p in (self._absorblvl_box_pool + self._absorblvl_lbl_pool + self._absorblvl_pct_pool + self._radar_zone_pool):
+        for _p in (self._absorblvl_box_pool + self._absorblvl_lbl_pool + self._radar_zone_pool):
             _p.setVisible(False)
         if self._radar_hover_tip is not None:
             self._radar_hover_tip.hide()
@@ -5362,7 +5343,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hide_absorb_levels(); return
         n = len(buckets)
         self._absorb_marks(buckets)                           # refresh the shared cache (self._absorblvl_marks)
-        ub = 0; ul = 0; up = 0; uz = 0; self._radar_hover_zones = []
+        ub = 0; ul = 0; uz = 0; self._radar_hover_zones = []
         for m in self._absorblvl_marks:
             i0 = int(m["i0"]); i1 = min(int(m["i1"]), n - 1)
             if i0 < 0 or i0 >= n or i1 < i0:
@@ -5372,18 +5353,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             xl = x[i0]; xr = x[i1]
             if xr < vx0 - 1.0 or xl > vx1 + 1.0:               # cull to the viewport
                 continue
-            s = float(m.get("strength", 0.0))
-            if s < self._wall_floor:                            # min-strength draw floor (hamburger slider, default 0.12)
-                continue
             src = m.get("src", "")
             price = float(m["price"]); band = max(float(m.get("band", price * 0.0006)), 1e-9)   # wall half-height
-            _rc = self._absorblvl_box(ub, m["side"], s, src); ub += 1
+            _rc = self._absorblvl_box(ub, m["side"], src); ub += 1
             _rc.setRect(xl, price - band, max(1e-9, xr - xl), 2.0 * band); _rc.setVisible(True)
-            if vx0 - 1.0 <= xr <= vx1 + 1.0:                   # STRENGTH % at the wall's extreme-right edge (all walls)
-                prgb = (235, 90, 100) if m["side"] == "R" else (80, 220, 140)
-                _pl = self._absorblvl_pct(up); up += 1
-                _pl.setColor(pg.mkColor(*prgb)); _pl.setText("%d%%" % int(round(s * 100.0)))
-                _pl.setPos(xr, price); _pl.setVisible(True)
             if xl >= vx0 - 1.0:                                # tag each wall at its START
                 if src == "mix":                               # Ab+Ag confluence -> NEON tag
                     rgb = (255, 165, 40) if m["side"] == "R" else (80, 255, 90); txt = "Ab+Ag"
@@ -5416,8 +5389,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _it in self._absorblvl_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._absorblvl_lbl_pool[ul:]:
-            _it.setVisible(False)
-        for _it in self._absorblvl_pct_pool[up:]:
             _it.setVisible(False)
         for _it in self._radar_zone_pool[uz:]:
             _it.setVisible(False)
@@ -5641,7 +5612,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "eff_sides": list(self.eff_slider.sides()),
                 "replay_edge_t": self._replay_saved_edge_t,               # last replay cursor -> resume here on toggle-on
                 "swing_pct": self._swing_pct,                             # swing-ZigZag sensitivity slider (%)
-                "wall_floor": self._wall_floor,                           # Order-Flow Walls min-strength draw floor
                 "kc_scale": self._kc_scale,                               # 1m-KC smooth-approx effective-TF scale slider
                 "tf": self._tf,                                           # last chart timeframe -> reopen on it
                 "ob_unmitig_only": self._ob_unmitig_only,                 # 'o' cycle stage-2: unmitigated OBs only
@@ -5711,9 +5681,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _sp = s.get("swing_pct")                              # restore the swing-ZigZag sensitivity (the menu slider is
         if isinstance(_sp, (int, float)):                     # synced to this right after the menu is built — see __init__)
             self._swing_pct = float(_sp)
-        _wf = s.get("wall_floor")                             # restore the Order-Flow Walls min-strength draw floor
-        if isinstance(_wf, (int, float)):
-            self._wall_floor = max(0.05, min(0.60, float(_wf)))
         _kcs = s.get("kc_scale")                              # restore the Keltner smooth-approx scale (menu slider synced after build)
         if isinstance(_kcs, (int, float)):
             self._kc_scale = max(1.0, min(float(config.KELTNER_SCALE_MAX), float(_kcs)))

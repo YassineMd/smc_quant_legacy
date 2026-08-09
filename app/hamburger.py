@@ -250,7 +250,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     scan_time_changed = QtCore.Signal()   # user moved the scanner "Zero Point"
     replayToggled = QtCore.Signal(bool)   # Replay Mode on/off (default OFF; chart replays from the Start Date)
     swingSensitivityChanged = QtCore.Signal(float)   # swing-ZigZag threshold slider, in PERCENT
-    wallFloorChanged = QtCore.Signal(float)          # Order-Flow Walls min-strength draw floor (0.05..0.60)
     keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
     candleModeChanged = QtCore.Signal(int)   # candle render mode 0..5 (also cycled by 'W')
     vpModeChanged = QtCore.Signal(int)       # volume-profile render mode 0..8 (selection VP + 4h 'V' + prev-day VP)
@@ -469,8 +468,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             sec.addWidget(cb)
             if key == "m10_structure_swing":
                 self._build_swing_slider(sec)            # sensitivity slider directly under its toggle
-            if key == "m10_absorblvl":
-                self._build_wallfloor_slider(sec)        # min-strength draw floor directly under the Walls toggle
             if key == "m10_sr":
                 self._build_sr_subtoggles(sec)           # S/R sub-toggle: Area (bands) vs lines-only
             if key == "m10_swinglvn":
@@ -558,40 +555,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             section.addWidget(cb)
 
     # ------------------------------------------------------------------
-    def _build_wallfloor_slider(self, section) -> None:
-        """Compact slider under 'Order-Flow Walls': the MIN wall STRENGTH to draw — a pure display filter (no
-        re-detection). Higher = FEWER walls (only strong-ejection ones); lower = MORE (incl. weaker / re-tested).
-        Persists via terminal_ui.json; the terminal syncs it after load."""
-        w = QtWidgets.QWidget()
-        lay = QtWidgets.QVBoxLayout(w); lay.setContentsMargins(26, 1, 8, 5); lay.setSpacing(2)
-        self.wallfloor_lbl = QtWidgets.QLabel()
-        self.wallfloor_lbl.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:10px;")
-        lay.addWidget(self.wallfloor_lbl)
-        self.wallfloor_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self.wallfloor_slider.setRange(5, 60)            # 0.05 .. 0.60 strength, in 0.01 steps
-        self.wallfloor_slider.setValue(12)               # default = the old hard floor (0.12)
-        self.wallfloor_slider.setFixedHeight(16)
-        self.wallfloor_slider.valueChanged.connect(self._on_wallfloor_slider)
-        lay.addWidget(self.wallfloor_slider)
-        section.addWidget(w)
-        self._render_wallfloor_lbl()
-
-    def _on_wallfloor_slider(self, _v: int) -> None:
-        self._render_wallfloor_lbl()
-        self.wallFloorChanged.emit(self.wall_floor())
-
-    def _render_wallfloor_lbl(self) -> None:
-        self.wallfloor_lbl.setText("Wall strength >= %.2f  (higher = fewer)" % self.wall_floor())
-
-    def wall_floor(self) -> float:
-        return self.wallfloor_slider.value() / 100.0
-
-    def set_wall_floor(self, v: float) -> None:
-        self.wallfloor_slider.blockSignals(True)
-        self.wallfloor_slider.setValue(int(round(max(0.05, min(0.60, float(v))) * 100)))
-        self.wallfloor_slider.blockSignals(False)
-        self._render_wallfloor_lbl()
-
     def _build_swing_slider(self, section) -> None:
         """Compact slider under the 'swing ZigZag' toggle (placed in `section`): live-adjust the swing sensitivity
         (percent retrace that confirms a leg). Lower = more/smaller swings, higher = only major turns."""
