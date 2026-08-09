@@ -47,22 +47,24 @@ def _f(x) -> float:
         return 0.0
 
 
-# P(RESIST) = 4-factor logistic on log1p(volume-intensity vr), entry PENETRATION pen, entry CLOSE-position clpos,
-# and entry BODY (oriented toward the break edge). Replaces the old 2-factor (vr,pen) bilinear grid — folds in the
-# entry close-position + body (study/wall_entry_close.py, study/wall_pr_fit.py). OOS AUC(resist) 0.731/0.725 vs
-# 0.711/0.701 for the 2-factor (+0.02 both train->test directions); full-sample 0.727. Fit on the causal multi-bar
-# visit set, both years (10124 visits, base RESIST 70.6%); deciles calibrated (slightly conservative at the extremes).
-# vr = box-vol/bar / rolling-median curr_vol. pen/clpos/body measured on the entry candle (all causal at render time).
-# NOTE b_pen is POSITIVE: given the CLOSE position, a higher HIGH = a bigger rejection wick -> slightly more resist
-# (pen = clpos + wick; the CLOSE carries the break signal, the wick is the poke-and-reject). Where price CLOSES in the
-# radar is the clean predictor, not how deep the high poked. DESCRIPTIVE odds — NOT a trade signal.
-_PR_COEF = (2.74336, -2.22622, 0.56783, -2.04030, -0.66903)   # (b0, ln1p(vr), pen, clpos, body)
+# P(RESIST) = 5-factor logistic on log1p(volume-intensity vr), entry PENETRATION pen, entry CLOSE-position clpos,
+# entry BODY (toward the break edge), and EJECTION base (formation shove, 0..1). Evolved from the 2-factor (vr,pen)
+# bilinear grid -> +close-position/body (study/wall_entry_close.py) -> +ejection (study/wall_strength_pr.py,
+# study/wall_pr_fit5.py). OOS AUC(resist) 0.741/0.740 (4-factor was 0.731/0.725; 2-factor 0.711/0.701); full-sample
+# 0.741. Fit on the causal multi-bar visit set both years (10124 visits, base RESIST 70.6%); deciles calibrated
+# (slightly conservative at the extremes). vr = box-vol/bar / rolling-median curr_vol; pen/clpos/body from the entry
+# candle; ej = the wall's formation ejection (the same value used for opacity) — all causal at render time. NOTE b_pen
+# is POSITIVE: given the CLOSE, a higher HIGH = bigger rejection wick -> more resist (pen = clpos + wick; the CLOSE
+# carries the break signal). Prior-visit DECAY is NULL for hold-prob (opacity only), so only the ejection enters here.
+# DESCRIPTIVE odds — NOT a trade signal.
+_PR_COEF = (1.44776, -2.69445, 1.06722, -2.11646, -0.71343, 1.80385)   # (b0, ln1p(vr), pen, clpos, body, ej)
 
 
-def _p_resist(vr, pen, clpos, body):                          # 4-factor logistic -> P(resist) in %
+def _p_resist(vr, pen, clpos, body, ej):                      # 5-factor logistic -> P(resist) in %
     b = -1.0 if body < -1.0 else (2.0 if body > 2.0 else body)   # guard rare tiny-span body outliers
+    e = 0.0 if ej < 0.0 else (1.0 if ej > 1.0 else ej)           # ejection base is bounded [0,1]
     z = (_PR_COEF[0] + _PR_COEF[1] * _log1p(vr if vr > 0.0 else 0.0) + _PR_COEF[2] * pen
-         + _PR_COEF[3] * clpos + _PR_COEF[4] * b)
+         + _PR_COEF[3] * clpos + _PR_COEF[4] * b + _PR_COEF[5] * e)
     z = 30.0 if z > 30.0 else (-30.0 if z < -30.0 else z)     # overflow guard
     return 100.0 / (1.0 + _exp(-z))
 
@@ -189,7 +191,7 @@ def detect(buckets, skip_last=False):
                     body = (C[rk0] - O[rk0]) * (1.0 if isR else -1.0) / span       # body oriented toward the break edge
                 else:
                     pen = clpos = body = 0.0
-                runs.append((rk0, rk1, round(_p_resist(vr, pen, clpos, body), 1)))
+                runs.append((rk0, rk1, round(_p_resist(vr, pen, clpos, body, base), 1)))
             out.append({"price": P, "side": w["side"], "src": w["src"], "i0": i0, "i1": i1,
                         "strength": strength, "hits": hits, "band": band, "radar_runs": runs,
                         "base_src": w.get("base_src", w["src"]), "mix_bar": w.get("mix_bar", -1)})
