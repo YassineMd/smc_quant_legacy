@@ -5320,7 +5320,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.menu.layer_state("m10_absorblvl") or not buckets:
             self._hide_absorb_levels(); return
         n = len(buckets)
-        _dsig = (n, float(buckets[-1].get("end_time", 0.0) or 0.0), float(buckets[-1].get("close", 0.0) or 0.0))
+        _dsig = (n, float(buckets[-1].get("end_time", 0.0) or 0.0), float(buckets[-1].get("close", 0.0) or 0.0),
+                 round(float(buckets[-1].get("curr_vol", 0.0) or 0.0), 1))   # recompute as the live bar's VOLUME develops
         if _dsig != self._absorblvl_sig:                      # recompute the detector only when the data changes
             try:
                 from app import absorption_level_detect
@@ -5370,6 +5371,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _it.setVisible(False)
         for _it in self._radar_zone_pool[uz:]:
             _it.setVisible(False)
+        if self._last_hover_pos is not None:                  # re-fire the hover so the odds tooltip tracks a STILL cursor
+            try:
+                self._radar_hover(self.vb.mapSceneToView(self._last_hover_pos))
+            except Exception:
+                pass
 
     def _draw_4h_zone(self, buckets) -> None:
         """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median), ZONE ('Z': buy/sell wick bands), and ABNORMAL-ORDER
