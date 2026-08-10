@@ -206,10 +206,11 @@ class BucketFootprintItem(pg.GraphicsObject):
                         continue
                     lo_all = price if lo_all is None else min(lo_all, price)
                     hi_all = price if hi_all is None else max(hi_all, price)
-                    _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, crazy=_is_crazy(_i, tot))
+                    _cz = _is_crazy(_i, tot)
+                    _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, crazy=_cz)
                     if label_bubbles:
                         txt = f"{tot / 1000.0:.1f}K" if tot >= 1000 else f"{tot:.0f}"
-                        bub_specs.append((xi, price, txt, _FP_BUB_LBL))
+                        bub_specs.append((xi, price, txt, _FP_BLACK if _cz else _FP_BUB_LBL))   # BLACK on the bright crazy fill
         # (Imbalance lines are drawn by a SEPARATE always-on layer in the terminal — independent of the
         # footprint toggle — so only the black-on-neon number highlight lives here.)
         p.end()
