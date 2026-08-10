@@ -110,7 +110,8 @@ class BucketFootprintItem(pg.GraphicsObject):
 
     def update_data(self, x: list, levels_list: list, ber30s: list, ser30s: list,
                     x0: float, x1: float, width: float, px_per_x: float, px_per_y: float,
-                    show_num_layer: bool = True, show_bub_layer: bool = True) -> None:
+                    show_num_layer: bool = True, show_bub_layer: bool = True,
+                    show_bub_vol: bool = False) -> None:
         self.picture = QtGui.QPicture()
         p = QtGui.QPainter(self.picture)
         px_per_x = max(1e-9, px_per_x); px_per_y = max(1e-9, px_per_y)
@@ -173,10 +174,10 @@ class BucketFootprintItem(pg.GraphicsObject):
                     elif show_bub_layer:            # cap-overflow level falls back to a bubble (only if bubbles on)
                         _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y)
         elif show_bubbles:
-            # TOP-3 levels by TOTAL volume (buy+sell) per bucket -- the significant nodes only. Zoomed IN enough
-            # (a bucket column >= BUBBLE_LABEL_MIN_PX_PER_X wide) each bubble also prints its total-volume VALUE,
-            # centred; zoomed out it's the bubble alone.
-            label_bubbles = px_per_x >= BUBBLE_LABEL_MIN_PX_PER_X
+            # TOP-3 levels by TOTAL volume (buy+sell) per bucket -- the significant nodes only. With the volume-label
+            # stage on ('b' cycle stage 2) AND zoomed IN enough (a bucket column >= BUBBLE_LABEL_MIN_PX_PER_X wide),
+            # each bubble also prints its total-volume VALUE, centred; otherwise it's the bubble alone.
+            label_bubbles = show_bub_vol and px_per_x >= BUBBLE_LABEL_MIN_PX_PER_X
             for _i, xi, levels in visible:
                 top3 = sorted(levels.items(),
                               key=lambda kv: kv[1].get("b", 0.0) + kv[1].get("s", 0.0),
