@@ -20,8 +20,8 @@ from __future__ import annotations
 
 WIN = 30            # look back over the last N candles to define "normal" (per the user; adapts with the tape)
 MIN_N = 15          # need at least this many candles-with-a-bubble in the window to judge (robust stats need a sample)
-MAD_K = 2.0         # CRAZY tier = >= this many robust-sigma (1.4826*MAD) above the median = a statistical outlier
-BIG_K = 1.0         # BIG tier = >= this (but < MAD_K) sigma -> a big-but-not-crazy absorbed bubble
+MAD_K = 2.0         # CRAZY tier = >= this many robust-sigma (1.4826*MAD) above the median = a statistical outlier;
+#                     everything else absorbed at a wall = BIG (no lower floor)
 RADAR_MULT = 3.0    # wall radar = price +/- this * band (matches the overlay's radar)
 _MAD_SCALE = 1.4826 # MAD -> sigma-equivalent for a normal distribution
 
@@ -115,16 +115,13 @@ def detect(buckets, walls, skip_last=False):
             if len(base) < MIN_N:
                 continue
             med, sigma = _center_scale(base)
-            if sigma > 0:                                    # robust z-score
+            if sigma > 0:                                    # robust z-score vs the last WIN candles' top bubbles
                 z = (tot - med) / sigma
             else:                                            # degenerate spread -> 2x-median fallback
                 z = float("inf") if (med > 0 and tot >= 2.0 * med) else 0.0
-            if z >= MAD_K:                                    # tier by size
-                tier = "crazy"
-            elif z >= BIG_K:
-                tier = "big"
-            else:
-                continue                                     # too small for either tier
+            # CRAZY = a statistical outlier (z >= MAD_K). Everything else that is absorbed at a wall = BIG (no lower
+            # floor). The candle's TOP bubble is the candidate, so a candle is crazy XOR big -> crazy takes precedence.
+            tier = "crazy" if z >= MAD_K else "big"
             hit = None                                       # the bubble must land in an ACTIVE wall's radar
             for w in walls:
                 if w["i0"] <= i <= min(int(w["i1"]), n - 1):
