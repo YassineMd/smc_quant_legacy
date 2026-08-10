@@ -59,22 +59,27 @@ def detail_visible(n_vis: float) -> bool:
     return n_vis <= MAX_BUBBLE_BUCKETS
 
 
-_CRAZY_BUY = (0, 255, 110)     # a CRAZY-volume bubble (statistical outlier) -> neon GREEN (buy) ...
-_CRAZY_SELL = (190, 70, 255)   # ... / neon PURPLE (sell) — the SAME neon green/purple as the heatmap bubbles
+_CRAZY_BUY = (20, 255, 120)    # a CRAZY-volume bubble (statistical outlier) -> ELECTRIC GREEN (buy) ...
+_CRAZY_SELL = (205, 60, 255)   # ... / ELECTRIC PURPLE (sell) — bright + opaque + ringed so they grab the eye
 
 
 def _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, crazy=False):
-    """Pixel-round volume bubble at (xi, price); radius ~ volume fraction, color = buy/sell
-    dominance. A CRAZY-volume bubble (`crazy=True`) is CYAN(buy)/MAGENTA(sell) instead of green/red.
-    Shared by the numbers-overflow fallback and the top-3 bubble regime."""
+    """Pixel-round volume bubble at (xi, price); radius ~ volume fraction, color = buy/sell dominance.
+    A CRAZY-volume bubble (`crazy=True`) pops: bigger, near-opaque, ELECTRIC green(buy)/purple(sell) with a
+    brighter glow ring, so it instantly draws the eye. Shared by the overflow fallback + the top-3 regime."""
     frac = tot / max_vol
     r_px = 2.5 + 11.0 * frac
     if crazy:
         rgb = _CRAZY_BUY if buy >= sell else _CRAZY_SELL
+        r_px *= 1.45                                          # bigger, so the eye jumps to it
+        col = QtGui.QColor(*rgb); col.setAlphaF(min(1.0, 0.78 + 0.22 * frac))   # near-opaque electric fill
+        ring = QtGui.QColor(min(255, rgb[0] + 55), min(255, rgb[1] + 55), min(255, rgb[2] + 55))
+        _pen = QtGui.QPen(ring); _pen.setCosmetic(True); _pen.setWidthF(1.8)    # brighter glow ring
+        p.setBrush(QtGui.QBrush(col)); p.setPen(_pen)
     else:
         rgb = config.RGB_GREEN_STD if buy >= sell else config.RGB_RED_STD
-    col = QtGui.QColor(*rgb); col.setAlphaF(0.30 + 0.55 * frac)
-    p.setBrush(QtGui.QBrush(col)); p.setPen(QtCore.Qt.NoPen)
+        col = QtGui.QColor(*rgb); col.setAlphaF(0.30 + 0.55 * frac)
+        p.setBrush(QtGui.QBrush(col)); p.setPen(QtCore.Qt.NoPen)
     p.drawEllipse(QtCore.QPointF(xi, price), r_px / px_per_x, r_px / px_per_y)
 
 
