@@ -9874,6 +9874,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # the swing-line CVD-mirror items lived on the CVD pane (a child of the just-deleted splitter_v) — null
             # them too, so the next hover recreates them on the rebuilt pane instead of touching a deleted C++ object.
             self._svl_cvd_line = None; self._svl_cvd_dots = None
+            # the CVD pane ITSELF was a child of the just-deleted splitter_v, so its plot + crosshair/badge items are
+            # gone C++-side too — null every Python ref (else _on_mouse_move / _on_cvd_mouse_move hit 'C++ object
+            # already deleted' on the next hover after leaving Mode 10). _ensure_canvas_panes rebuilds them all.
+            self.cvd_plot = None; self.cvd_vb = None; self._cvd_proxy = None
+            self.cvd_vline = None; self.cvd_hline = None; self.cvd_tag = None
 
     def _sync_kinetic_vb(self) -> None:
         """Keep the Mode 4 secondary price ViewBox glued to the main viewport.
