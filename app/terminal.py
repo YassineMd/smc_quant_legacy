@@ -10254,10 +10254,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self.hm_follow:
             (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
             w = vx1 - vx0
+            self._hm_prev_w = w                          # so the next manual gesture diffs against the live width
             now_s = time.time()
             lead = w * HM_FOLLOW_LEAD_FRAC               # blank gutter to the RIGHT of 'now' (live edge at ~85%)
-            self.vb.setXRange(now_s - w + lead, now_s + lead, padding=0.0)
-            self._hm_prev_w = w                          # so the next manual gesture diffs against the live width
+            tgt1 = now_s + lead
+            # SMOOTHNESS: only actually pan when the shift is >= ~1px on screen. At most heatmap zooms the per-frame
+            # drift (one 50ms tick over a minutes-to-1h window) is a tiny FRACTION of a pixel, yet every setXRange
+            # forces a full-viewport SOFTWARE repaint of the ~560k-cell image + every bubble (BoundingRectViewport,
+            # no GL). Pushing sub-pixel pans at 20Hz just burns the GUI thread and makes the whole view stutter;
+            # gating to >=1px is visually identical (a sub-pixel move isn't drawable) but collapses the repaint rate
+            # when zoomed out (zoomed in, the drift IS >=1px so it still pans every frame).
+            px_per_s = (self.vb.width() or 1000) / max(1e-9, w)
+            if abs(tgt1 - vx1) * px_per_s >= 0.75:
+                self.vb.setXRange(tgt1 - w, tgt1, padding=0.0)
             # Y-follow: keep the user's zoom HEIGHT, pan to keep the live mid-price inside the middle 50% (pan once
             # it enters the top/bottom 25% band) — mirrors the candle-canvas double-click follow. On an actual pan,
             # kick the debounced lazy-load so depth is re-requested for the newly-visible band (else it'd be blank).
