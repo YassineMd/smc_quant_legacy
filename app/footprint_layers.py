@@ -124,7 +124,8 @@ class BucketFootprintItem(pg.GraphicsObject):
     def update_data(self, x: list, levels_list: list, ber30s: list, ser30s: list,
                     x0: float, x1: float, width: float, px_per_x: float, px_per_y: float,
                     show_num_layer: bool = True, show_bub_layer: bool = True,
-                    show_bub_vol: bool = False, crazy_thr: "list | None" = None) -> None:
+                    show_bub_vol: bool = False, crazy_thr: "list | None" = None,
+                    crazy_only: bool = False) -> None:
         self.picture = QtGui.QPicture()
         p = QtGui.QPainter(self.picture)
         px_per_x = max(1e-9, px_per_x); px_per_y = max(1e-9, px_per_y)
@@ -189,12 +190,15 @@ class BucketFootprintItem(pg.GraphicsObject):
                                            _FP_BLACK if sell_imb else _FP_NEON_SELL,
                                            _FP_NEON_SELL if sell_imb else None))
                     elif show_bub_layer:            # cap-overflow level falls back to a bubble (only if bubbles on)
-                        _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, crazy=_is_crazy(i, tot))
+                        _ocz = _is_crazy(i, tot)
+                        if not (crazy_only and not _ocz):   # crazy-only stage: only crazy overflow bubbles
+                            _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, crazy=_ocz)
         elif show_bubbles:
             # TOP-3 levels by TOTAL volume (buy+sell) per bucket -- the significant nodes only. With the volume-label
             # stage on ('b' cycle stage 2) AND zoomed IN enough (a bucket column >= BUBBLE_LABEL_MIN_PX_PER_X wide),
             # each bubble also prints its total-volume VALUE, centred; otherwise it's the bubble alone.
-            label_bubbles = show_bub_vol and px_per_x >= BUBBLE_LABEL_MIN_PX_PER_X
+            # crazy-only stage always labels (few bubbles, no clutter); otherwise labels ride the zoom-legibility floor
+            label_bubbles = show_bub_vol and (crazy_only or px_per_x >= BUBBLE_LABEL_MIN_PX_PER_X)
             for _i, xi, levels in visible:
                 top3 = sorted(levels.items(),
                               key=lambda kv: kv[1].get("b", 0.0) + kv[1].get("s", 0.0),
@@ -204,9 +208,11 @@ class BucketFootprintItem(pg.GraphicsObject):
                     tot = buy + sell
                     if tot <= 0:
                         continue
+                    _cz = _is_crazy(_i, tot)
+                    if crazy_only and not _cz:            # stage 3: hide every non-crazy bubble
+                        continue
                     lo_all = price if lo_all is None else min(lo_all, price)
                     hi_all = price if hi_all is None else max(hi_all, price)
-                    _cz = _is_crazy(_i, tot)
                     _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, crazy=_cz)
                     if label_bubbles:
                         txt = f"{tot / 1000.0:.1f}K" if tot >= 1000 else f"{tot:.0f}"

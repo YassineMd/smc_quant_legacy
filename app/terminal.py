@@ -1213,6 +1213,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._swing_pct = structure.ZIGZAG_SWING_PCT             # swing-ZigZag threshold %, live-set by the hamburger slider
         self._wall_floor = 0.12                                  # Order-Flow Walls min-strength draw floor (hamburger slider)
         self._bub_vol = False                                    # Candle-Bubbles 'b' cycle stage-2: also print the volume value
+        self._bub_crazy_only = False                             # Candle-Bubbles 'b' cycle stage-3: show ONLY the crazy bubbles
         self._kc_scale = float(config.KELTNER_SCALE_DEFAULT)     # 1m-KC smooth-approx effective-TF scale (hamburger slider; 1.0 = native)
         _cbp = pg.mkPen((70, 200, 255), width=1.3, style=QtCore.Qt.DashLine); _cbp.setCosmetic(True)   # CHoCH bull
         _crp = pg.mkPen((255, 120, 90), width=1.3, style=QtCore.Qt.DashLine); _crp.setCosmetic(True)   # CHoCH bear
@@ -5665,6 +5666,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "tf": self._tf,                                           # last chart timeframe -> reopen on it
                 "ob_unmitig_only": self._ob_unmitig_only,                 # 'o' cycle stage-2: unmitigated OBs only
                 "bub_vol": self._bub_vol,                                 # 'b' cycle stage-2: bubbles + volume value
+                "bub_crazy_only": self._bub_crazy_only,                   # 'b' cycle stage-3: only the crazy bubbles
             }
             # EVERY hamburger toggle (Sub-Widgets + Mode 10 Overlays), keyed by its menu key, so a reopened
             # session restores the exact menu the user left (POC, footprint, alerts, … all sticky).
@@ -5742,6 +5744,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._kc_scale = max(1.0, min(float(config.KELTNER_SCALE_MAX), float(_kcs)))
         self._ob_unmitig_only = bool(s.get("ob_unmitig_only", self._ob_unmitig_only))   # 'o' cycle stage-2 filter
         self._bub_vol = bool(s.get("bub_vol", self._bub_vol))   # 'b' cycle stage-2: bubbles + volume value
+        self._bub_crazy_only = bool(s.get("bub_crazy_only", self._bub_crazy_only))   # 'b' cycle stage-3: only crazy
 
     def _set_ob_ice(self, on: bool) -> None:
         """Flip the Order Blocks + Absorption/Iceberg menu checkboxes together (emits layerToggled -> show/hide)."""
@@ -10582,21 +10585,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._cycle_bucket_bubbles()
 
     def _cycle_bucket_bubbles(self) -> None:
-        """'b' — 3-stage cycle for the Mode-10 Candle Bubbles:
-        OFF -> bubbles ONLY -> bubbles + VOLUME value -> OFF.
-        Stages 1<->2 keep the layer ON and just flip the volume-label flag (a repaint, no checkbox re-emit). The
-        volume value still respects the zoom-legibility floor, so it only prints once a bucket column is wide enough."""
+        """'b' — 4-stage cycle for the Mode-10 Candle Bubbles:
+        OFF -> ALL bubbles -> ALL bubbles + VOLUME value -> ONLY the CRAZY bubbles + value -> OFF.
+        Stages 1<->2<->3 keep the layer ON and just flip the vol/crazy-only flags (a repaint, no checkbox re-emit).
+        The volume value respects the zoom-legibility floor for ALL bubbles, but is always shown in crazy-only."""
         cb = self.menu.layer_checks.get("m10_bubbles")
         on = cb.isChecked() if cb is not None else False
-        if not on:                              # stage 1: bubbles only
-            self._bub_vol = False
+        if not on:                              # stage 1: all bubbles, no value
+            self._bub_vol = False; self._bub_crazy_only = False
             if cb is not None:
                 cb.setChecked(True)             # emits layerToggled -> redraw
-        elif not self._bub_vol:                 # stage 2: bubbles + volume value
-            self._bub_vol = True
-            self._last_scanner_sig = None; self._draw_scanner()   # flag changed but checkbox stays on -> force repaint
-        else:                                   # stage 3: off
-            self._bub_vol = False
+        elif not self._bub_vol:                 # stage 2: all bubbles + value
+            self._bub_vol = True; self._bub_crazy_only = False
+            self._last_scanner_sig = None; self._draw_scanner()   # flags changed but checkbox stays on -> force repaint
+        elif not self._bub_crazy_only:          # stage 3: ONLY the crazy bubbles + value
+            self._bub_crazy_only = True
+            self._last_scanner_sig = None; self._draw_scanner()
+        else:                                   # stage 4: off
+            self._bub_vol = False; self._bub_crazy_only = False
             if cb is not None:
                 cb.setChecked(False)
         self._save_ui_state()
@@ -12338,7 +12344,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _crazy_thr = None
             fp_item.update_data(x, levels_list, ber30s, ser30s,
                                 vx0, vx1, 0.8, px_per_x, px_per_y, _fp_on, _bub_on,
-                                _bub_on and self._bub_vol, _crazy_thr)   # vx0/vx1: viewport cull; last two = vol-label + crazy-thr
+                                _bub_on and self._bub_vol, _crazy_thr,
+                                _bub_on and self._bub_crazy_only)   # last three = vol-label, crazy-thr, crazy-ONLY
         elif "bc_fp" in handles:               # both layers off -> hide the ladder (popup has no _set_scanner_overlay hook)
             handles["bc_fp"].setVisible(False)
 
