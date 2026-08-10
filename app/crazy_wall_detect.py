@@ -143,8 +143,10 @@ def detect(buckets, walls, skip_last=False):
             else:
                 if not (side == "buy" and close < price):     # need a crazy BUY that failed to close above resistance
                     continue
+            _wp = _f(hit.get("price")); _wb = _f(hit.get("band"))   # matched wall's radar (for downstream strategies)
             out.append({"i": i, "price": price, "side": side, "vol": tot,
-                        "z": z, "kind": "Ab", "wall_side": wside, "tier": tier})
+                        "z": z, "kind": "Ab", "wall_side": wside, "tier": tier,
+                        "wlo": _wp - RADAR_MULT * _wb, "whi": _wp + RADAR_MULT * _wb, "wi1": int(hit.get("i1", i))})
         return out
     except Exception:
         return []
