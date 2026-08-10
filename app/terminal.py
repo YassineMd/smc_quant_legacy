@@ -6802,9 +6802,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue
             b = filtered[i]
             hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            buy = (h["side"] == "buy")
-            y = (lo - pad) if buy else (hi + pad)             # buy star BELOW the low, sell star ABOVE the high
-            rgb = (70, 235, 120) if buy else (240, 70, 90)
+            support = (h["wall_side"] == "S")                 # buy wall absorbed sellers (support held) -> bullish
+            y = (lo - pad) if support else (hi + pad)         # support -> GREEN below the low; resistance -> RED above the high
+            rgb = (70, 235, 120) if support else (240, 70, 90)
             _t = self._crazy_badge(u); u += 1
             _t.setColor(pg.mkColor(*rgb)); _t.setText("✪")
             _t.setPos(i, y); _t.setVisible(True)

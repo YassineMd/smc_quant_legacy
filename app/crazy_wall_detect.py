@@ -20,7 +20,7 @@ from __future__ import annotations
 
 WIN = 30            # look back over the last N candles to define "normal" (per the user; adapts with the tape)
 MIN_N = 15          # need at least this many candles-with-a-bubble in the window to judge (robust stats need a sample)
-MAD_K = 2.5         # CRAZY = >= this many robust-sigma (1.4826*MAD) above the median = a statistical outlier
+MAD_K = 2.0         # CRAZY = >= this many robust-sigma (1.4826*MAD) above the median = a statistical outlier
 RADAR_MULT = 3.0    # wall radar = price +/- this * band (matches the overlay's radar)
 _MAD_SCALE = 1.4826 # MAD -> sigma-equivalent for a normal distribution
 
@@ -133,15 +133,18 @@ def detect(buckets, walls, skip_last=False):
             side = "buy" if buy >= sell else "sell"
             close = _f(buckets[i].get("close", buckets[i].get("close_price")))
             wside = hit.get("side", "R"); wp = _f(hit.get("price"))
-            # Absorption = the aggression OPPOSITE the wall's hold direction failed to close through it:
-            #   support (S): a big SELL that still closed >= the wall -> absorbed; else aggression
-            #   resistance (R): a big BUY that still closed <= the wall -> absorbed; else aggression
+            # ABSORPTION ONLY — the crazy aggression hit the wall but FAILED to close through it:
+            #   BUY wall (S, support):   crazy SELL that still closed >= the wall (didn't close below) -> support held
+            #   SELL wall (R, resistance): crazy BUY that still closed <= the wall (didn't close above) -> resistance held
+            # (aggression that DID break through, or a bubble on the wall's own side, is NOT flagged.)
             if wside == "S":
-                kind = "Ab" if (side == "sell" and close >= wp) else "Ag"
+                if not (side == "sell" and close >= wp):
+                    continue
             else:
-                kind = "Ab" if (side == "buy" and close <= wp) else "Ag"
+                if not (side == "buy" and close <= wp):
+                    continue
             out.append({"i": i, "price": price, "side": side, "vol": tot,
-                        "z": z, "kind": kind, "wall_side": wside})
+                        "z": z, "kind": "Ab", "wall_side": wside})
         return out
     except Exception:
         return []
