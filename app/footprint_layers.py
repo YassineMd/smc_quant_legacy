@@ -59,12 +59,20 @@ def detail_visible(n_vis: float) -> bool:
     return n_vis <= MAX_BUBBLE_BUCKETS
 
 
-def _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y):
+_CRAZY_BUY = (0, 230, 255)     # a CRAZY-volume bubble (statistical outlier) -> CYAN (buy) ...
+_CRAZY_SELL = (255, 0, 230)    # ... / MAGENTA (sell), vs the normal green/red
+
+
+def _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, crazy=False):
     """Pixel-round volume bubble at (xi, price); radius ~ volume fraction, color = buy/sell
-    dominance. Shared by the numbers-overflow fallback and the top-3 bubble regime."""
+    dominance. A CRAZY-volume bubble (`crazy=True`) is CYAN(buy)/MAGENTA(sell) instead of green/red.
+    Shared by the numbers-overflow fallback and the top-3 bubble regime."""
     frac = tot / max_vol
     r_px = 2.5 + 11.0 * frac
-    rgb = config.RGB_GREEN_STD if buy >= sell else config.RGB_RED_STD
+    if crazy:
+        rgb = _CRAZY_BUY if buy >= sell else _CRAZY_SELL
+    else:
+        rgb = config.RGB_GREEN_STD if buy >= sell else config.RGB_RED_STD
     col = QtGui.QColor(*rgb); col.setAlphaF(0.30 + 0.55 * frac)
     p.setBrush(QtGui.QBrush(col)); p.setPen(QtCore.Qt.NoPen)
     p.drawEllipse(QtCore.QPointF(xi, price), r_px / px_per_x, r_px / px_per_y)
@@ -111,12 +119,16 @@ class BucketFootprintItem(pg.GraphicsObject):
     def update_data(self, x: list, levels_list: list, ber30s: list, ser30s: list,
                     x0: float, x1: float, width: float, px_per_x: float, px_per_y: float,
                     show_num_layer: bool = True, show_bub_layer: bool = True,
-                    show_bub_vol: bool = False) -> None:
+                    show_bub_vol: bool = False, crazy_thr: "list | None" = None) -> None:
         self.picture = QtGui.QPicture()
         p = QtGui.QPainter(self.picture)
         px_per_x = max(1e-9, px_per_x); px_per_y = max(1e-9, px_per_y)
         half = width / 2.0
         buy_specs, sell_specs, bub_specs = [], [], []
+
+        def _is_crazy(idx, tot):                             # crazy VOLUME bubble (statistical outlier) -> cyan/magenta
+            return (crazy_thr is not None and 0 <= idx < len(crazy_thr)
+                    and crazy_thr[idx] is not None and tot >= crazy_thr[idx])
 
         # FIX 1 -- cull to the visible X viewport (the x0/x1 pattern) so the bubble scale
         # AND the 600-label budget serve only the ON-SCREEN buckets. Root fix: the live edge
@@ -172,7 +184,7 @@ class BucketFootprintItem(pg.GraphicsObject):
                                            _FP_BLACK if sell_imb else _FP_NEON_SELL,
                                            _FP_NEON_SELL if sell_imb else None))
                     elif show_bub_layer:            # cap-overflow level falls back to a bubble (only if bubbles on)
-                        _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y)
+                        _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, crazy=_is_crazy(i, tot))
         elif show_bubbles:
             # TOP-3 levels by TOTAL volume (buy+sell) per bucket -- the significant nodes only. With the volume-label
             # stage on ('b' cycle stage 2) AND zoomed IN enough (a bucket column >= BUBBLE_LABEL_MIN_PX_PER_X wide),
@@ -189,7 +201,7 @@ class BucketFootprintItem(pg.GraphicsObject):
                         continue
                     lo_all = price if lo_all is None else min(lo_all, price)
                     hi_all = price if hi_all is None else max(hi_all, price)
-                    _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y)
+                    _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, crazy=_is_crazy(_i, tot))
                     if label_bubbles:
                         txt = f"{tot / 1000.0:.1f}K" if tot >= 1000 else f"{tot:.0f}"
                         bub_specs.append((xi, price, txt, _FP_BUB_LBL))

@@ -62,6 +62,41 @@ def _bubbles(b):
     return lv[:3]
 
 
+def _top1(b) -> float:
+    """The heaviest single footprint level's volume in a bucket (0 if no footprint)."""
+    best = 0.0
+    for _p, vv in (b.get("levels") or {}).items():
+        t = _f(vv.get("b")) + _f(vv.get("s"))
+        if t > best:
+            best = t
+    return best
+
+
+def crazy_thresholds(buckets):
+    """WALL-INDEPENDENT per-bucket CRAZY-VOLUME threshold: the volume above which a footprint bubble is a
+    >= MAD_K robust-sigma outlier vs the PAST WIN candles' TOP bubbles (median + MAD_K*1.4826*MAD). None where
+    there isn't enough history. Same statistic as detect(), minus the wall gate — used to recolour the Candle
+    Bubbles cyan(buy)/magenta(sell). A bubble is crazy iff its total volume >= thresholds[i]."""
+    n = len(buckets)
+    out = [None] * n
+    if n < WIN + 1:
+        return out
+    try:
+        top1 = [_top1(b) for b in buckets]
+        for i in range(WIN, n):
+            base = [top1[j] for j in range(i - WIN, i) if top1[j] > 0]
+            if len(base) < MIN_N:
+                continue
+            med, sigma = _center_scale(base)
+            if sigma > 0:
+                out[i] = med + MAD_K * sigma
+            elif med > 0:
+                out[i] = 2.0 * med
+        return out
+    except Exception:
+        return out
+
+
 def detect(buckets, walls, skip_last=False):
     n = len(buckets)
     if n < WIN + 2 or not walls:

@@ -12329,9 +12329,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 handles["bc_fp"] = fp_item
             fp_item.setVisible(True)
             levels_list = [b.get("levels", {}) for b in buckets]
+            _crazy_thr = None                                 # per-bucket crazy-VOLUME threshold -> cyan/magenta bubbles
+            if _bub_on:
+                try:
+                    from app import crazy_wall_detect
+                    _crazy_thr = crazy_wall_detect.crazy_thresholds(buckets)   # wall-INDEPENDENT statistical outlier
+                except Exception:
+                    _crazy_thr = None
             fp_item.update_data(x, levels_list, ber30s, ser30s,
                                 vx0, vx1, 0.8, px_per_x, px_per_y, _fp_on, _bub_on,
-                                _bub_on and self._bub_vol)   # vx0/vx1: viewport cull; last = bubbles+volume ('b' stage 2)
+                                _bub_on and self._bub_vol, _crazy_thr)   # vx0/vx1: viewport cull; last two = vol-label + crazy-thr
         elif "bc_fp" in handles:               # both layers off -> hide the ladder (popup has no _set_scanner_overlay hook)
             handles["bc_fp"].setVisible(False)
 
