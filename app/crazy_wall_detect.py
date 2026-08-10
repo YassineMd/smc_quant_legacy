@@ -20,7 +20,7 @@ from __future__ import annotations
 
 WIN = 30            # look back over the last N candles to define "normal" (per the user; adapts with the tape)
 MIN_N = 15          # need at least this many candles-with-a-bubble in the window to judge (robust stats need a sample)
-MAD_K = 3.0         # CRAZY = >= this many robust-sigma (1.4826*MAD) above the median = a statistical outlier
+MAD_K = 2.5         # CRAZY = >= this many robust-sigma (1.4826*MAD) above the median = a statistical outlier
 RADAR_MULT = 3.0    # wall radar = price +/- this * band (matches the overlay's radar)
 _MAD_SCALE = 1.4826 # MAD -> sigma-equivalent for a normal distribution
 
