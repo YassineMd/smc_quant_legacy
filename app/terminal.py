@@ -1581,18 +1581,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Phase 3: executed-trade bubbles overlay — buy (green) / sell (red) ScatterPlotItems, size by total
         # cell qty, sat by net side. Own cache + delivery buffer (never on snapshot()); pxMode so bubbles are a
         # fixed px size regardless of zoom.
-        _HM_BLUE = (0, 180, 255); _HM_ORANGE = (255, 145, 0)    # ICEBERG bubbles: buy=ELECTRIC blue, sell=orange
         # tip=None disables pyqtgraph's built-in "x/y/data" hover box; our own sigHovered pill replaces it.
         self.hm_bubbles_buy = pg.ScatterPlotItem(pxMode=True, pen=None, tip=None,
                                                  brush=pg.mkBrush(*_HM_GREEN, 170), hoverable=True)
         self.hm_bubbles_sell = pg.ScatterPlotItem(pxMode=True, pen=None, tip=None,
                                                   brush=pg.mkBrush(*_HM_PURPLE, 170), hoverable=True)
-        # Iceberg bubbles: a cell sitting on an active absorption/iceberg level is recolored (its qty rode a
-        # refilling wall) — ELECTRIC BLUE for a BUY iceberg (bid wall), ORANGE for a SELL iceberg (ask wall).
+        # Large-order bubbles (a cell holding a single taker trade >= the live large cutoff) still ride on top, but
+        # keep the plain net-side colours — simple GREEN (buy) / PURPLE (sell), no orange/blue special-casing.
         self.hm_bubbles_ice_buy = pg.ScatterPlotItem(pxMode=True, pen=None, tip=None,
-                                                     brush=pg.mkBrush(*_HM_BLUE, 210), hoverable=True)
+                                                     brush=pg.mkBrush(*_HM_GREEN, 170), hoverable=True)
         self.hm_bubbles_ice_sell = pg.ScatterPlotItem(pxMode=True, pen=None, tip=None,
-                                                      brush=pg.mkBrush(*_HM_ORANGE, 210), hoverable=True)
+                                                      brush=pg.mkBrush(*_HM_PURPLE, 170), hoverable=True)
         for _b in (self.hm_bubbles_buy, self.hm_bubbles_sell,
                    self.hm_bubbles_ice_buy, self.hm_bubbles_ice_sell):
             _b.setZValue(18); _b.setVisible(False); self.plot.addItem(_b, ignoreBounds=True)
@@ -1601,7 +1600,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # per-scatter hover-pill color (BLACK text on the matching neon fill)
         self._hm_bubble_pill = {
             self.hm_bubbles_buy: (0, 255, 110), self.hm_bubbles_sell: (190, 70, 255),
-            self.hm_bubbles_ice_buy: (0, 180, 255), self.hm_bubbles_ice_sell: (255, 145, 0)}
+            self.hm_bubbles_ice_buy: (0, 255, 110), self.hm_bubbles_ice_sell: (190, 70, 255)}
         # hover readout: the cell's total volume, BLACK text on the scatter's neon pill (set per-hover)
         self.hm_bubble_tip = pg.TextItem(color="#000000", anchor=(0.5, 1.4), fill=pg.mkBrush(*_HM_GREEN, 235))
         self.hm_bubble_tip.textItem.setFont(_ptf); self.hm_bubble_tip.setZValue(22)
@@ -9421,45 +9420,50 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._replay_remember()           # persist the new position (debounced) so a restart resumes here
             self._scanner_bucket_sig = None; self._last_scanner_sig = None
             prev_n = self._scanner_frame_n                        # frame length BEFORE the re-render (for the follow delta)
-            (pvx0, pvx1), _ = self.vb.viewRange()                # the user's current X framing, captured pre-render
+            (pvx0, pvx1), (pvy0, pvy1) = self.vb.viewRange()     # the user's current X+Y framing, captured pre-render
             self._on_timer()
-            self._replay_follow(prev_n, pvx0, pvx1)              # scroll WITH the cursor, keeping the user's exact framing
+            self._replay_follow(prev_n, pvx0, pvx1, pvy0, pvy1)  # scroll WITH the cursor, keeping the user's exact framing
             self._tick_subcandles_replay()                      # follow the edge in any open 1m-detail window
 
-    def _replay_follow(self, prev_n: int, pvx0: float, pvx1: float) -> None:
-        """After a Left/Right replay step, move the view WITH the cursor while preserving EXACTLY how the user framed
-        the window — the newest candle keeps its same offset from the right edge and the same zoom width (X), and the
-        view pans up/down only when that candle would otherwise fall OUTSIDE the current vertical window (Y), keeping
-        the user's zoom height. Each axis is handled only when its live-follow is unlocked; a still-locked axis was
-        already positioned by _roll_to_live_edge, so it's skipped here."""
+    def _replay_follow(self, prev_n: int, pvx0: float, pvx1: float, pvy0: float, pvy1: float) -> None:
+        """After a Left/Right replay step, TRACK the newest candle while KEEPING the user's zoom on BOTH axes.
+        X slides so the newest candle holds its exact offset from the right edge (same width). Y pans only when the
+        newest candle enters the TOP or BOTTOM 25% band of the window, re-seating it just inside that band — so the
+        price stays in the middle 50% as you step — while preserving the user's zoom height. Runs on EVERY replay
+        step regardless of the follow-lock, and UNLOCKS both axes afterwards so the live-edge roll (which fits the
+        whole window) can't stomp this keep-zoom framing on the next redraw. `pvx*/pvy*` = the view range captured
+        PRE-render, i.e. the user's zoom before _roll_to_live_edge may have refit it this frame."""
         if not self._replay_on or self.scanner_mode != "bucket_canvas":
             return
         new_n = self._scanner_frame_n
         if new_n <= 0:
             return
         # --- X: keep the newest candle's exact horizontal placement (its offset from the right edge + the width) ---
-        if not self._follow_x and prev_n > 0:
+        if prev_n > 0:
             width = pvx1 - pvx0
             if width > 0:
                 off_right = pvx1 - (prev_n - 1)                  # gap the user left to the right of the cursor
                 vx1 = (new_n - 1) + off_right                    # re-anchor to the newest candle's current index
                 self.vb.setXRange(vx1 - width, vx1, padding=0)   # programmatic -> won't trip the manual-unlock
-        # --- Y: pan vertically ONLY if the newest candle left the window; preserve the user's zoom height ---
-        if not self._follow_y and self._scanner_last_low is not None and self._scanner_last_high is not None:
-            (_, (vy0, vy1)) = self.vb.viewRange(); h = vy1 - vy0
+        # --- Y: keep the user's zoom HEIGHT; pan when the newest candle enters the top/bottom 25% band ---
+        if self._scanner_last_low is not None and self._scanner_last_high is not None:
+            h = pvy1 - pvy0
             lo = self._scanner_last_low; hi = self._scanner_last_high
             if h > 0:
-                if (hi - lo) > h:                                # candle taller than the view -> centre it
+                if (hi - lo) > 0.5 * h:                          # candle taller than the middle 50% -> centre it
                     mid = 0.5 * (hi + lo)
                     self.vb.setYRange(mid - 0.5 * h, mid + 0.5 * h, padding=0)
                 else:
-                    m = 0.08 * h; dy = 0.0
-                    if hi > vy1:                                 # poked above the top -> pan up
-                        dy = hi - vy1 + m
-                    elif lo < vy0:                               # poked below the bottom -> pan down
-                        dy = lo - vy0 - m
-                    if dy != 0.0:
-                        self.vb.setYRange(vy0 + dy, vy1 + dy, padding=0)
+                    band = 0.25 * h                              # top/bottom 25% trigger zones
+                    top = pvy1 - band; bot = pvy0 + band
+                    dy = 0.0
+                    if hi > top:                                 # entered the TOP 25% -> pan up to the band edge
+                        dy = hi - top
+                    elif lo < bot:                               # entered the BOTTOM 25% -> pan down
+                        dy = lo - bot
+                    self.vb.setYRange(pvy0 + dy, pvy1 + dy, padding=0)   # dy==0 -> restore the pre-render height
+        # in replay, keep-zoom tracking OWNS the view -> unlock so the live-edge roll won't refit the whole window
+        self._follow_x = False; self._follow_y = False
         # Propagate the price X onto the stacked panes (CVD + VPIN/lower) so they follow the cursor in LOCKSTEP.
         # The per-frame X-mirror lives in _scan_bucket_canvas, but in replay that render is cursor-sig-gated and
         # does NOT re-run after this follow scroll, so without this the CVD/VPIN panes lag a step behind the price.
@@ -9626,9 +9630,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         self._scanner_bucket_sig = None; self._last_scanner_sig = None   # partial frame -> force rebuild + redraw
         prev_n = self._scanner_frame_n
-        (pvx0, pvx1), _ = self.vb.viewRange()
+        (pvx0, pvx1), (pvy0, pvy1) = self.vb.viewRange()
         self._on_timer()
-        self._replay_follow(prev_n, pvx0, pvx1)
+        self._replay_follow(prev_n, pvx0, pvx1, pvy0, pvy1)
         self._tick_subcandles_replay()                          # grow the open 1m-detail window with the micro-step
 
     # ------------------------------------------------------------------
@@ -10334,10 +10338,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _hm_render_bubbles(self, vx0: float, vx1: float) -> None:
         """Phase 3: aggregate the visible trades into the heatmap's cells and paint the bubbles — diameter
-        ∝ √(total cell qty), scaled so the biggest visible cell ≈ MAX_PX (clamped). Cells holding a LARGE
-        market order (a single taker trade >= the live large cutoff) are recolored (electric blue large BUY /
-        orange large SELL); the rest split green (net buy) / purple (net sell). pxMode keeps bubbles a fixed
-        size through zoom."""
+        ∝ √(total cell qty), scaled so the biggest visible cell ≈ MAX_PX (clamped). All bubbles use the plain
+        net-side colours — green (net buy) / purple (net sell); cells holding a LARGE market order (a single taker
+        trade >= the live large cutoff) ride on a separate on-top scatter but share those colours. pxMode keeps
+        bubbles a fixed size through zoom."""
         scatters = (self.hm_bubbles_buy, self.hm_bubbles_sell,
                     self.hm_bubbles_ice_buy, self.hm_bubbles_ice_sell)
         if not self.hm_bubbles_on or self.hm_band is None or not len(self.hm_tb_cache.ts):
