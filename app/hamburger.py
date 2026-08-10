@@ -106,7 +106,7 @@ _M10_LAYERS = [
 
 # "Indicator" — structure / zones / separators.
 _M10_INDICATORS = [
-    ("m10_crazywall", "Crazy Wall Ag/Ab (✪)", False, True),   # ALL tf: OUTLIER volume bubble at a wall/radar -> green(buy)/red(sell) star badge (Ab absorbed / Ag aggression)
+    ("m10_crazywall", "Crazy Wall Absorption", False, True),   # ALL tf: OUTLIER volume bubble absorbed at a wall (opposite-side crazy vol rejected) -> green(support)/red(resistance) ✪
     ("m10_engulf1m", "Absorption Candle indicator", False, True),   # ALL tf: absorption-tiered losanges (cyan/magenta engulf |A|>=2, blue/orange same-side pair, green/red engulf |A|>=1)
     ("m10_sr", "Support & Resistance", False, True),      # neon-blue support / neon-red resistance (pivot fractals)
     ("m10_keltner", "Keltner Channel", True, True),        # EMA(close)±ATR band (light gray); was always-on, now toggleable

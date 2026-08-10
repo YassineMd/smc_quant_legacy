@@ -130,19 +130,18 @@ def detect(buckets, walls, skip_last=False):
                         hit = w; break
             if hit is None:
                 continue
-            side = "buy" if buy >= sell else "sell"           # bubble's dominant taker (output/hover only, NOT a filter)
+            side = "buy" if buy >= sell else "sell"           # the crazy bubble's dominant taker side
             close = _f(buckets[i].get("close", buckets[i].get("close_price")))
             wside = hit.get("side", "R")
-            # ABSORPTION — the crazy bubble at the wall was rejected, so price closed STRICTLY THROUGH it in the
-            # wall's favour (closing AT the bubble is NOT a rejection -> no fire). WALL side sets the direction; the
-            # bubble's own taker side is irrelevant (a bullish candle can still leave a sell-dominant node, etc.):
-            #   BUY wall (S, support):     price closed ABOVE the bubble (close > bubble price) -> held -> GREEN below
-            #   SELL wall (R, resistance): price closed BELOW the bubble (close < bubble price) -> held -> RED above
+            # TRUE ABSORPTION ONLY — the crazy aggression must be the OPPOSITE side of the wall AND get rejected
+            # (price closed STRICTLY THROUGH the bubble in the wall's favour; closing AT it is not a rejection):
+            #   BUY wall (S, support):     a crazy SELL absorbed -> price closed ABOVE the bubble -> held -> GREEN below
+            #   SELL wall (R, resistance): a crazy BUY  absorbed -> price closed BELOW the bubble -> held -> RED above
             if wside == "S":
-                if close <= price:                            # closed at/below the bubble -> not rejected -> skip
+                if not (side == "sell" and close > price):    # need a crazy SELL that failed to close below support
                     continue
             else:
-                if close >= price:                            # closed at/above the bubble -> not rejected -> skip
+                if not (side == "buy" and close < price):     # need a crazy BUY that failed to close above resistance
                     continue
             out.append({"i": i, "price": price, "side": side, "vol": tot,
                         "z": z, "kind": "Ab", "wall_side": wside})
