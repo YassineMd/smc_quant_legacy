@@ -4,7 +4,7 @@
 After a Big/Crazy Wall-Absorption (app.crazy_wall_detect.detect), scan forward up to K candles WHILE price is still
 inside that event's radar (wlo..whi, and not past the wall's active window wi1). The FIRST candle that is BOTH:
 
-    * an EASY absorption:  A = absorption(buckets, j)[0] < ABSR_MAX (-0.75)  -- price ran far on little effort, AND
+    * an EASY-leaning absorption:  A = absorption(buckets, j)[0] < ABSR_MAX (-0.5) -- the tooltip "Absorb R" value, AND
     * a TAPE / CANDLE DIVERGENCE -- the candle CLOSES in the WALL-HOLD direction while the TAPE's dominant side is
       AGAINST it (the absorbed/trapped side is still aggressing on the tape):
         SUPPORT wall (S) -> LONG : bullish candle (close>open) AND Tape-S > Tape-B  -> gold UP badge below the low
@@ -22,7 +22,8 @@ from_events(buckets, events)             -> same, but reuses already-computed cr
 """
 from __future__ import annotations
 
-ABSR_MAX = -0.75    # entry candle must be an EASY absorption (A below this) -- price ran far on thin effort
+ABSR_MAX = -0.5     # entry candle: A (the tooltip "Absorb R" value) below this. Lowered -0.75->-0.5 (2026-08-11,
+#                     user): an A=-0.68 "proportional"-leaning-easy candle should still qualify as a divergence entry
 K = 24              # scan at most this many candles past the wall-absorption event for the divergence candle
 
 

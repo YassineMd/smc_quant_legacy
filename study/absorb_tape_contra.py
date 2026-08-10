@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """User strategy: after a BIG/CRAZY Wall-Absorption, take a later candle UNDER THE SAME RADAR that is a tape/candle
 DIVERGENCE, trade in the wall-absorption direction (support->LONG, resistance->SHORT). Entry candle j (>event, same
-radar, j<=wi1): absR(j) < -0.75 AND the candle closes in the wall-hold direction while the tape leans AGAINST it
+radar, j<=wi1): absR(j) < -0.5 AND the candle closes in the wall-hold direction while the tape leans AGAINST it
 (LONG: bullish & TapeS>TapeB ; SHORT: bearish & TapeB>TapeS). Entry = close of j. 15m, both recon yr. The ENTRY
 CANDIDATES are fixed; we SWEEP SL/TP. Non-overlapping, barrier first-passage, 0.04% RT.
 [CORRECTED 2026-08-10 from a live screenshot: the prior version had the candle filter MIRROR-FLIPPED (LONG:bearish /
@@ -14,7 +14,7 @@ from study.archive_loader import load_archive
 from study.candle_bias_1h import _f
 from app import absorption_level_detect as AL, crazy_wall_detect as CW, absorption as ABS
 
-ABSR_MAX = -0.75; K = 24; HORIZON = 192; FEE = 0.0004; SL_PAD = 0.001
+ABSR_MAX = -0.5; K = 24; HORIZON = 192; FEE = 0.0004; SL_PAD = 0.001   # A cutoff lowered -0.75->-0.5 (2026-08-11)
 print("loading + detecting + absR ...", flush=True)
 A = sorted(load_archive("15m", root="study/recon_archive")[1], key=lambda b: _f(b.get("start_time", 0)))
 n = len(A)
