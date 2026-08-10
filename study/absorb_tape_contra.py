@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """User strategy: after a BIG/CRAZY Wall-Absorption, take a later candle UNDER THE SAME RADAR that is a tape/candle
 DIVERGENCE, trade in the wall-absorption direction (support->LONG, resistance->SHORT). Entry candle j (>event, same
-radar, j<=wi1): absR(j) < -0.75 AND tape contradicts the candle (LONG: bearish & TapeB>TapeS ; SHORT: bullish &
-TapeS>TapeB). Entry = close of j. 15m, both recon yr. The ENTRY CANDIDATES are fixed; we SWEEP SL/TP to see if the
-edge monetises (the radar-edge SL was too wide vs the 0.2% TP). Non-overlapping, barrier first-passage, 0.04% RT."""
+radar, j<=wi1): absR(j) < -0.75 AND the candle closes in the wall-hold direction while the tape leans AGAINST it
+(LONG: bullish & TapeS>TapeB ; SHORT: bearish & TapeB>TapeS). Entry = close of j. 15m, both recon yr. The ENTRY
+CANDIDATES are fixed; we SWEEP SL/TP. Non-overlapping, barrier first-passage, 0.04% RT.
+[CORRECTED 2026-08-10 from a live screenshot: the prior version had the candle filter MIRROR-FLIPPED (LONG:bearish /
+SHORT:bullish) -> its 64%@wide-SL / -44%@1:1 result tested DIFFERENT bars and is VOID. Numbers below are the RE-RUN.]"""
 import os, sys
 os.chdir(r"C:\Users\Yassine Mdouari\Desktop\Coding\12. Trading Indicators\smc_quant_legacy")
 sys.path.insert(0, os.getcwd())
@@ -43,7 +45,8 @@ for e in events:
         if aR is None or aR >= ABSR_MAX:
             continue
         tb, ts = tape(A[j])
-        ok = (C[j] < O[j] and tb > ts) if d > 0 else (C[j] > O[j] and ts > tb)
+        # candle closes in the WALL-HOLD dir, tape's dominant side AGAINST it: S->LONG bullish+TapeS>TapeB ; R->SHORT bearish+TapeB>TapeS
+        ok = (C[j] > O[j] and ts > tb) if d > 0 else (C[j] < O[j] and tb > ts)
         if not ok:
             continue
         if j not in seen:

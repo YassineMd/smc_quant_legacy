@@ -5,16 +5,17 @@ After a Big/Crazy Wall-Absorption (app.crazy_wall_detect.detect), scan forward u
 inside that event's radar (wlo..whi, and not past the wall's active window wi1). The FIRST candle that is BOTH:
 
     * an EASY absorption:  A = absorption(buckets, j)[0] < ABSR_MAX (-0.75)  -- price ran far on little effort, AND
-    * a TAPE / CANDLE DIVERGENCE (the tape leans AGAINST the candle body):
-        SUPPORT wall (S) -> LONG : bearish candle (close<open) AND Tape-B > Tape-S  -> gold UP badge below the low
-        RESIST  wall (R) -> SHORT: bullish candle (close>open) AND Tape-S > Tape-B  -> gold DOWN badge above the high
+    * a TAPE / CANDLE DIVERGENCE -- the candle CLOSES in the WALL-HOLD direction while the TAPE's dominant side is
+      AGAINST it (the absorbed/trapped side is still aggressing on the tape):
+        SUPPORT wall (S) -> LONG : bullish candle (close>open) AND Tape-S > Tape-B  -> gold UP badge below the low
+        RESIST  wall (R) -> SHORT: bearish candle (close<open) AND Tape-B > Tape-S  -> gold DOWN badge above the high
 
 is labelled. One label per event (dedup by bar). Tape-B/Tape-S = per-print buy/sell size per second (sz_cb/sz_cs
 over the bucket duration).
 
-DESCRIPTIVE label only. The setup's own direction is ANTI-predictive: study/absorb_tape_contra.py shows the exact
-entries win 64% ONLY because of a wide radar-edge SL, and just 44% at a fair 1:1 SL (both recon years) -- so this
-marks the candles for the eye, it does NOT assert an edge.
+DESCRIPTIVE label only (direction UNTESTED). NOTE: study/absorb_tape_contra.py's earlier -44%@1:1 "anti-predictive"
+verdict tested a MIRROR-FLIPPED candle filter (support<->bearish / resist<->bullish -- a bug caught 2026-08-10 from a
+live screenshot), i.e. a DIFFERENT set of bars, so it does NOT apply to this corrected rule. Re-test pending.
 
 detect(buckets, walls, skip_last=False) -> [{i, side('long'|'short'), wlo, whi}]  (self-contained; runs CW.detect)
 from_events(buckets, events)             -> same, but reuses already-computed crazy_wall_detect events (terminal).
@@ -65,8 +66,10 @@ def from_events(buckets, events):
                     continue
                 o = _f(buckets[j].get("open", buckets[j].get("open_price")))
                 tb, ts = _tape(buckets[j])
-                # tape must CONTRADICT the candle body (divergence), in the wall-hold direction:
-                ok = (c < o and tb > ts) if d > 0 else (c > o and ts > tb)
+                # candle closes in the WALL-HOLD direction, tape's dominant side AGAINST it (the divergence):
+                #   support (S, d>0) -> LONG : bullish (close>open) + Tape-S > Tape-B
+                #   resist  (R, d<0) -> SHORT: bearish (close<open) + Tape-B > Tape-S
+                ok = (c > o and ts > tb) if d > 0 else (c < o and tb > ts)
                 if not ok:
                     continue
                 if j not in seen:
