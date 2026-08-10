@@ -1327,6 +1327,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._mom_sig = None; self._mom_drawn = False
         self._mom_entries = []
         self._mom_ln_pool = []; self._mom_lnlbl_pool = []; self._mom_lines_user = {}
+        # Crazy Wall Ag/Ab (m10_crazywall) — ✪ star badge on outlier volume bubbles sitting at a wall/radar
+        self._crazy_pool = []; self._crazy_sig = None
         # 5m Absorption S/R overlay (m10_engulf5m, 5m only) — triangle L/S badges (engulf green/red/gold + absorb2 blue/orange); click -> entry/TP/SL lines
         self._e5m_sph = None                     # ScatterPlotItem of triangle badges
         self._e5m_lbl_pool = []                  # (colour-only badges)
@@ -2249,6 +2251,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._mom_sig = None; self._sel_sig = None   # 15m Momentum toggled -> re-run the overlay draw
             if not on:
                 self._clear_momentum()              # off -> tear the squares down now
+        elif key == "m10_crazywall":
+            self._crazy_sig = None; self._sel_sig = None   # Crazy Wall toggled -> re-run the overlay draw
+            if not on:
+                self._clear_crazy_wall()            # off -> tear the stars down now
         elif key == "m10_easy1h":
             self._ez_sig = None; self._sel_sig = None    # 1h Easy 0.5% toggled -> re-run the overlay draw
             if not on:
@@ -6751,6 +6757,55 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for j in range(ut, len(lpool)):
             lpool[j].setVisible(False)
 
+    # CRAZY WALL Ag/Ab overlay (hamburger m10_crazywall, ALL tf) — ✪ star badge on an OUTLIER volume bubble sitting
+    # at a wall/radar S/R. GREEN = buy-dominant bubble, RED = sell-dominant. DESCRIPTIVE (app/crazy_wall_detect).
+    def _crazy_badge(self, used):
+        """Pooled ✪ star TextItem (centred on the bubble), dark chip behind it so it reads over any bubble colour."""
+        if used >= len(self._crazy_pool):
+            _t = pg.TextItem(anchor=(0.5, 0.5), fill=pg.mkBrush(10, 10, 14, 175))
+            _t.setZValue(34)                                   # above the footprint bubbles + their K-labels
+            _cf = QtGui.QFont("Segoe UI Symbol", 15); _cf.setBold(True)   # a font that carries the ✪ dingbat on Win
+            _t.textItem.setFont(_cf)
+            self.plot.addItem(_t, ignoreBounds=True); self._crazy_pool.append(_t)
+        return self._crazy_pool[used]
+
+    def _clear_crazy_wall(self) -> None:
+        for _t in self._crazy_pool:
+            _t.setVisible(False)
+        self._crazy_sig = None
+
+    def _draw_crazy_wall(self, filtered) -> None:
+        """✪ badge on each crazy (outlier) volume bubble that lands in a wall/radar zone. Reuses the shared wall-marks
+        cache (index-aligned: `filtered` is the same _build_scanner_buckets frame the wall overlay runs on). Sig-gated
+        on the live edge so it only re-detects when the frame changes. Colour = the bubble's dominant taker side."""
+        if not self.menu.layer_state("m10_crazywall") or self.scanner_mode != "bucket_canvas":
+            self._clear_crazy_wall(); return
+        n = len(filtered)
+        if n < 2:
+            self._clear_crazy_wall(); return
+        _sig = (n, filtered[-1].get("end_time"), filtered[-1].get("close"))
+        if _sig == self._crazy_sig:
+            return
+        self._crazy_sig = _sig
+        marks = self._absorb_marks(filtered)                  # walls index-aligned with `filtered`
+        try:
+            from app import crazy_wall_detect
+            hits = crazy_wall_detect.detect(filtered, marks, skip_last=False)
+        except Exception:
+            self._clear_crazy_wall(); return
+        (vx0, vx1), _ = self.vb.viewRange()
+        u = 0
+        for h in hits:
+            i = int(h["i"])
+            if i < 0 or i >= n or i < vx0 - 1.0 or i > vx1 + 1.0:   # cull to viewport
+                continue
+            rgb = (70, 235, 120) if h["side"] == "buy" else (240, 70, 90)
+            _t = self._crazy_badge(u); u += 1
+            _t.setColor(pg.mkColor(*rgb)); _t.setText("✪")
+            _t.setPos(i, float(h["price"])); _t.setVisible(True)
+        for _t in self._crazy_pool[u:]:
+            _t.setVisible(False)
+
     # 15m MOMENTUM overlay (hamburger m10_momentum, 15m ONLY) — FORWARD CANDIDATE, self-gated, fail-safe.
     # LOSANGE (diamond) L/S badge: green up long / red down short; BLUE = at-S/R confluence (TP 1:2) — the positive subset.
     # Engulfing breakout in the last-mitigation S/R regime; TP bumps to 1:2 when the signal sits AT a same-side S/R zone.
@@ -8102,7 +8157,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self.scanner_mode == "bucket_canvas" and (self.menu.layer_state("m10_engulfsr")
                     or self.menu.layer_state("m10_momentum") or self.menu.layer_state("m10_engulf5m")
                     or self.menu.layer_state("m10_breakout5m") or self.menu.layer_state("m10_engulf1m")
-                    or self.menu.layer_state("m10_easy1h")
+                    or self.menu.layer_state("m10_easy1h") or self.menu.layer_state("m10_crazywall")
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")):
                 _pf, _, _ = self._build_scanner_buckets()
                 try:
@@ -8137,9 +8192,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_swinglvn(_pf or [])  # Recent-swing Low-Volume Area (all tf) — self-gated, fail-safe
                 except Exception:
                     self._clear_swinglvn()
+                try:
+                    self._draw_crazy_wall(_pf or [])  # Crazy Wall Ag/Ab (all tf) — self-gated, fail-safe
+                except Exception:
+                    self._clear_crazy_wall()
             else:
                 self._clear_engulfsr(); self._clear_momentum(); self._clear_engulf5m()
                 self._clear_breakout5m(); self._clear_engulf1m(); self._clear_sr(); self._clear_swinglvn()
+                self._clear_crazy_wall()
                 self._clear_easy1h()
             return
         filtered, _x, _a = self._build_scanner_buckets()
@@ -8228,6 +8288,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_swinglvn(filtered)  # Recent-swing Low-Volume Area (all tf) — self-gated, fail-safe
             except Exception:
                 self._clear_swinglvn()
+            try:
+                self._draw_crazy_wall(filtered)  # Crazy Wall Ag/Ab (all tf) — self-gated, fail-safe
+            except Exception:
+                self._clear_crazy_wall()
             try:
                 self._draw_selection_vp(filtered, lo_i, hi_i)   # 'h'-card Volume-Profile-over-selection overlay
             except Exception:
