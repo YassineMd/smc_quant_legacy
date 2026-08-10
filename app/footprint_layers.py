@@ -24,6 +24,8 @@ _FP_TEXT_CAP = 600              # bound detailed footprint labels
 DETAIL_PX_PER_TICK = 12.0      # show side-by-side rows once a tick row is this tall
 MAX_DETAIL_BUCKETS = 20        # NUMBERS (full per-level ladder) only in a tight study view
 MAX_BUBBLE_BUCKETS = 200       # TOP-3 bubbles up to here (3 x buckets <= 600 ellipses); wider -> none
+BUBBLE_LABEL_MIN_PX_PER_X = 24.0   # print the bubble's volume value once a bucket column is this wide (zoomed-in); wider-out -> bubble only
+_FP_BUB_LBL = QtGui.QColor(240, 240, 240)   # bubble volume value: near-white, centred on the bubble
 
 # Footprint NUMBER colors: neon green (buy) / neon red (sell). An IMBALANCED level (a side's volume
 # >= FOOTPRINT_IMB_ER_MULT x the bucket's 30b E/R) inverts to BLACK text on a neon background (carried as
@@ -94,16 +96,17 @@ class BucketFootprintItem(pg.GraphicsObject):
         self._rect = QtCore.QRectF()
         self.buy_pool = TextPool(anchor=(0, 0.5), font_size=11, bold=True, z=22)
         self.sell_pool = TextPool(anchor=(1, 0.5), font_size=11, bold=True, z=22)
+        self.bub_pool = TextPool(anchor=(0.5, 0.5), font_size=8, bold=True, z=23)   # volume value centred on a bubble (zoomed-in only)
 
     def attach_text(self, plot) -> None:
-        self.buy_pool.attach(plot); self.sell_pool.attach(plot)
+        self.buy_pool.attach(plot); self.sell_pool.attach(plot); self.bub_pool.attach(plot)
 
     def clear_text(self, plot) -> None:
-        self.buy_pool.clear(plot); self.sell_pool.clear(plot)
+        self.buy_pool.clear(plot); self.sell_pool.clear(plot); self.bub_pool.clear(plot)
 
     def setVisible(self, v: bool) -> None:  # noqa: N802
         super().setVisible(v)
-        self.buy_pool.set_enabled(v); self.sell_pool.set_enabled(v)
+        self.buy_pool.set_enabled(v); self.sell_pool.set_enabled(v); self.bub_pool.set_enabled(v)
 
     def update_data(self, x: list, levels_list: list, ber30s: list, ser30s: list,
                     x0: float, x1: float, width: float, px_per_x: float, px_per_y: float,
@@ -112,7 +115,7 @@ class BucketFootprintItem(pg.GraphicsObject):
         p = QtGui.QPainter(self.picture)
         px_per_x = max(1e-9, px_per_x); px_per_y = max(1e-9, px_per_y)
         half = width / 2.0
-        buy_specs, sell_specs = [], []
+        buy_specs, sell_specs, bub_specs = [], [], []
 
         # FIX 1 -- cull to the visible X viewport (the x0/x1 pattern) so the bubble scale
         # AND the 600-label budget serve only the ON-SCREEN buckets. Root fix: the live edge
@@ -170,7 +173,10 @@ class BucketFootprintItem(pg.GraphicsObject):
                     elif show_bub_layer:            # cap-overflow level falls back to a bubble (only if bubbles on)
                         _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y)
         elif show_bubbles:
-            # TOP-3 levels by TOTAL volume (buy+sell) per bucket -- the significant nodes only.
+            # TOP-3 levels by TOTAL volume (buy+sell) per bucket -- the significant nodes only. Zoomed IN enough
+            # (a bucket column >= BUBBLE_LABEL_MIN_PX_PER_X wide) each bubble also prints its total-volume VALUE,
+            # centred; zoomed out it's the bubble alone.
+            label_bubbles = px_per_x >= BUBBLE_LABEL_MIN_PX_PER_X
             for _i, xi, levels in visible:
                 top3 = sorted(levels.items(),
                               key=lambda kv: kv[1].get("b", 0.0) + kv[1].get("s", 0.0),
@@ -183,10 +189,13 @@ class BucketFootprintItem(pg.GraphicsObject):
                     lo_all = price if lo_all is None else min(lo_all, price)
                     hi_all = price if hi_all is None else max(hi_all, price)
                     _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y)
+                    if label_bubbles:
+                        txt = f"{tot / 1000.0:.1f}K" if tot >= 1000 else f"{tot:.0f}"
+                        bub_specs.append((xi, price, txt, _FP_BUB_LBL))
         # (Imbalance lines are drawn by a SEPARATE always-on layer in the terminal — independent of the
         # footprint toggle — so only the black-on-neon number highlight lives here.)
         p.end()
-        self.buy_pool.update(buy_specs); self.sell_pool.update(sell_specs)
+        self.buy_pool.update(buy_specs); self.sell_pool.update(sell_specs); self.bub_pool.update(bub_specs)
         if lo_all is None:
             lo_all, hi_all = 0.0, 1.0
         bx0 = (float(x[0]) - half) if x else 0.0
