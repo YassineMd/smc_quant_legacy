@@ -106,7 +106,7 @@ _M10_LAYERS = [
 
 # "Indicator" — structure / zones / separators.
 _M10_INDICATORS = [
-    ("m10_crazywall", "Crazy Wall Absorption", False, True),   # ALL tf: OUTLIER volume bubble absorbed at a wall (opposite-side crazy vol rejected) -> green(support)/red(resistance) ✪
+    ("m10_crazywall", "Wall Absorption", False, True),   # ALL tf: opposite-side volume bubble absorbed+rejected at a wall; Crazy(✪ outlier) + Big(★ non-crazy) sub-tiers, green(support)/red(resistance)
     ("m10_engulf1m", "Absorption Candle indicator", False, True),   # ALL tf: absorption-tiered losanges (cyan/magenta engulf |A|>=2, blue/orange same-side pair, green/red engulf |A|>=1)
     ("m10_sr", "Support & Resistance", False, True),      # neon-blue support / neon-red resistance (pivot fractals)
     ("m10_keltner", "Keltner Channel", True, True),        # EMA(close)±ATR band (light gray); was always-on, now toggleable
@@ -474,6 +474,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_swing_slider(sec)            # sensitivity slider directly under its toggle
             if key == "m10_absorblvl":
                 self._build_wallfloor_slider(sec)        # strength draw floor directly under the Walls toggle
+            if key == "m10_crazywall":
+                self._build_wallabs_subtoggles(sec)      # Wall Absorption sub-tiers: Crazy (✪) / Big (★)
             if key == "m10_sr":
                 self._build_sr_subtoggles(sec)           # S/R sub-toggle: Area (bands) vs lines-only
             if key == "m10_swinglvn":
@@ -485,6 +487,17 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             if key == "m10_stats":
                 self._build_stats_substats(sec)          # per-stat on/off for the Mode-10 stats box
         return sec
+
+    def _build_wallabs_subtoggles(self, section) -> None:
+        """Wall Absorption sub-tiers: Crazy (✪ = statistical-outlier bubble) and Big (★ = big-but-not-crazy). Each an
+        m10_ key (persists + reads via layer_state); the master m10_crazywall gates the whole indicator."""
+        for key, label, default in (("m10_wallabs_crazy", "· Crazy (✪)", True), ("m10_wallabs_big", "· Big (★)", False)):
+            cb = QtWidgets.QCheckBox(label)
+            cb.setChecked(default)
+            cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
+            self.layer_checks[key] = cb
+            section.addWidget(cb)
 
     def _build_vwap_subtoggles(self, section) -> None:
         """VWAP σ-band sub-toggles: ±1σ / ±2σ / ±3σ volume-weighted std-dev channels around the VWAP. Each an m10_

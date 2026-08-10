@@ -2252,10 +2252,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._mom_sig = None; self._sel_sig = None   # 15m Momentum toggled -> re-run the overlay draw
             if not on:
                 self._clear_momentum()              # off -> tear the squares down now
-        elif key == "m10_crazywall":
-            self._crazy_sig = None; self._sel_sig = None   # Crazy Wall toggled -> re-run the overlay draw
-            if not on:
-                self._clear_crazy_wall()            # off -> tear the stars down now
+        elif key in ("m10_crazywall", "m10_wallabs_crazy", "m10_wallabs_big"):
+            self._crazy_sig = None; self._sel_sig = None   # Wall Absorption (master or a sub-tier) toggled -> redraw
+            if key == "m10_crazywall" and not on:
+                self._clear_crazy_wall()            # master off -> tear the stars down now
         elif key == "m10_easy1h":
             self._ez_sig = None; self._sel_sig = None    # 1h Easy 0.5% toggled -> re-run the overlay draw
             if not on:
@@ -6783,10 +6783,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         on the live edge so it only re-detects when the frame changes. Colour = the bubble's dominant taker side."""
         if not self.menu.layer_state("m10_crazywall") or self.scanner_mode != "bucket_canvas":
             self._clear_crazy_wall(); return
+        show_crazy = self.menu.layer_state("m10_wallabs_crazy")   # ✪ outlier tier
+        show_big = self.menu.layer_state("m10_wallabs_big")       # ★ big-but-not-crazy tier
         n = len(filtered)
-        if n < 2:
+        if n < 2 or not (show_crazy or show_big):
             self._clear_crazy_wall(); return
-        _sig = (n, filtered[-1].get("end_time"), filtered[-1].get("close"))
+        _sig = (n, filtered[-1].get("end_time"), filtered[-1].get("close"), show_crazy, show_big)
         if _sig == self._crazy_sig:
             return
         self._crazy_sig = _sig
@@ -6800,6 +6802,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         pad = max((vy1 - vy0) * 0.045, 1e-9)                   # gap between the badge and the candle wick
         u = 0
         for h in hits:
+            tier = h.get("tier", "crazy")                     # 'crazy' -> ✪ / 'big' -> ★, each gated by its sub-toggle
+            if (tier == "crazy" and not show_crazy) or (tier == "big" and not show_big):
+                continue
             i = int(h["i"])
             if i < 0 or i >= n or i < vx0 - 1.0 or i > vx1 + 1.0:   # cull to viewport
                 continue
@@ -6809,7 +6814,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             y = (lo - pad) if support else (hi + pad)         # support -> GREEN below the low; resistance -> RED above the high
             rgb = (70, 235, 120) if support else (240, 70, 90)
             _t = self._crazy_badge(u); u += 1
-            _t.setColor(pg.mkColor(*rgb)); _t.setText("✪")
+            _t.setColor(pg.mkColor(*rgb)); _t.setText("✪" if tier == "crazy" else "★")
             _t.setPos(i, y); _t.setVisible(True)
         for _t in self._crazy_pool[u:]:
             _t.setVisible(False)
