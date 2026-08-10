@@ -5278,14 +5278,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-6)
             self.vb.addItem(_rc, ignoreBounds=True); self._absorblvl_box_pool.append(_rc)
         _rc = self._absorblvl_box_pool[used]
-        if src == "mix":                                           # BOTH absorption + aggression (Ab+Ag) -> NEON + border
-            rgb = (255, 150, 20) if side == "R" else (57, 255, 20)     # neon orange resistance / neon green support
-            _rc.setBrush(pg.mkBrush(*rgb, int(30 + strength * 120)))
-            _rc.setPen(pg.mkPen(*rgb, min(255, 175 + int(strength * 80)), width=1.6))
+        rgb = (230, 126, 34) if side == "R" else (45, 120, 210)   # SELL/resistance ORANGE · BUY/support BLUE
+        _rc.setBrush(pg.mkBrush(*rgb, int(30 + strength * 120)))   # bigger ejection / higher rank -> more opaque
+        if src == "mix":                                          # Ab+Ag confluence -> GOLD border to stand out
+            _rc.setPen(pg.mkPen(255, 215, 70, 240, width=1.8))
         else:
-            rgb = (230, 70, 80) if side == "R" else (60, 200, 120)    # absorption: resistance red / support green
-            _rc.setBrush(pg.mkBrush(*rgb, int(22 + strength * 120)))  # bigger ejection -> more opaque
-            _rc.setPen(pg.mkPen(None))
+            _rc.setPen(pg.mkPen(rgb[0], rgb[1], rgb[2], min(255, 165 + int(strength * 80)), width=1.3))
         return _rc
 
     def _absorblvl_lbl(self, used):                           # pooled "Ab"/"Ag" tag at a borderless wall's start
@@ -5397,24 +5395,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _lb = self._absorblvl_lbl(ul); ul += 1
                     _lb.setColor(pg.mkColor(*rgb)); _lb.setText(txt)
                     _lb.setPos(xl, price); _lb.setVisible(True)
-            # RADAR: purple upper+lower zones (each = wall height) over each candle-run that RE-ENTERED the radar area.
-            for _run in m.get("radar_runs", ()):               # width ~ the candles inside + a little padding
+            # NO radar bands drawn — just record P(resist) hover over the WALL box (its own +/-band strip) at each
+            # candle-run where price RE-ENTERED the radar, so hovering the orange/blue area shows the hold/break odds.
+            for _run in m.get("radar_runs", ()):
+                if len(_run) < 3:
+                    continue
                 rk0 = max(0, int(_run[0])); rk1 = min(int(_run[1]), n - 1)
                 if rk1 < rk0:
                     continue
                 rxl = x[rk0] - 0.6; rxr = x[rk1] + 0.6
                 if rxr < vx0 - 1.0 or rxl > vx1 + 1.0:
                     continue
-                pr = float(_run[2]) if len(_run) >= 3 else 70.0    # P(resist): stronger hold -> more opaque radar
-                za = int(min(135, max(55, 55 + max(0.0, pr - 55.0) * 1.7)))   # darker fill for a higher-P(resist) hold
-                drgb = ((120, 66, 12) if m["side"] == "R" else (24, 120, 14)) if src == "mix" else \
-                       ((110, 26, 34) if m["side"] == "R" else (22, 86, 50))   # DARK shade of the wall's own colour
-                _uz = self._radar_zone(uz, drgb, za); uz += 1
-                _uz.setRect(rxl, price + band, max(1e-9, rxr - rxl), 2.0 * band); _uz.setVisible(True)       # upper zone
-                _dz = self._radar_zone(uz, drgb, za); uz += 1
-                _dz.setRect(rxl, price - 3.0 * band, max(1e-9, rxr - rxl), 2.0 * band); _dz.setVisible(True)  # lower zone
-                if len(_run) >= 3:                             # record for the hover tooltip: P(resist) this visit
-                    self._radar_hover_zones.append((rxl, rxr, price - 3.0 * band, price + 3.0 * band, pr, m["side"]))
+                self._radar_hover_zones.append((rxl, rxr, price - band, price + band, float(_run[2]), m["side"]))
         for _it in self._absorblvl_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._absorblvl_lbl_pool[ul:]:
