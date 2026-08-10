@@ -1316,7 +1316,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._absorblvl_box_pool = []                            # QGraphicsRectItem pool — red/green absorption S/R zones
         self._absorblvl_lbl_pool = []                            # TextItem pool — "Ab"/"Ag" tags on borderless walls
         self._absorblvl_pct_pool = []                            # TextItem pool — strength-% tag at each wall's right edge
-        self._radar_zone_pool = []                               # QGraphicsRectItem — purple radar zones (upper+lower)
+        self._radar_zone_pool = []                               # QGraphicsRectItem — dark-wall-shade radar zones (upper+lower)
         self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side) for hover hit-testing
         self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
@@ -5302,12 +5302,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.plot.addItem(_t, ignoreBounds=True); self._absorblvl_pct_pool.append(_t)
         return self._absorblvl_pct_pool[used]
 
-    def _radar_zone(self, used, alpha=40):                    # pooled purple radar zone; alpha = wall strength (P_resist)
+    def _radar_zone(self, used, rgb, alpha):                  # pooled radar zone — a DARK shade of the wall's own colour
         if used >= len(self._radar_zone_pool):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-7)
             self.vb.addItem(_rc, ignoreBounds=True); self._radar_zone_pool.append(_rc)
         _rc = self._radar_zone_pool[used]
-        _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(150, 90, 200, int(alpha)))
+        _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], int(alpha)))
         return _rc
 
     def _radar_hover(self, pt) -> None:
@@ -5405,11 +5405,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 rxl = x[rk0] - 0.6; rxr = x[rk1] + 0.6
                 if rxr < vx0 - 1.0 or rxl > vx1 + 1.0:
                     continue
-                pr = float(_run[2]) if len(_run) >= 3 else 70.0    # P(resist): stronger wall -> more opaque radar
-                za = int(min(60, max(10, 10 + max(0.0, pr - 55.0) * 1.18)))   # 55%->10 ... 96%->~58 (toned down from 80)
-                _uz = self._radar_zone(uz, za); uz += 1
+                pr = float(_run[2]) if len(_run) >= 3 else 70.0    # P(resist): stronger hold -> more opaque radar
+                za = int(min(135, max(55, 55 + max(0.0, pr - 55.0) * 1.7)))   # darker fill for a higher-P(resist) hold
+                drgb = ((120, 66, 12) if m["side"] == "R" else (24, 120, 14)) if src == "mix" else \
+                       ((110, 26, 34) if m["side"] == "R" else (22, 86, 50))   # DARK shade of the wall's own colour
+                _uz = self._radar_zone(uz, drgb, za); uz += 1
                 _uz.setRect(rxl, price + band, max(1e-9, rxr - rxl), 2.0 * band); _uz.setVisible(True)       # upper zone
-                _dz = self._radar_zone(uz, za); uz += 1
+                _dz = self._radar_zone(uz, drgb, za); uz += 1
                 _dz.setRect(rxl, price - 3.0 * band, max(1e-9, rxr - rxl), 2.0 * band); _dz.setVisible(True)  # lower zone
                 if len(_run) >= 3:                             # record for the hover tooltip: P(resist) this visit
                     self._radar_hover_zones.append((rxl, rxr, price - 3.0 * band, price + 3.0 * band, pr, m["side"]))
