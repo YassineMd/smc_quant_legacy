@@ -10256,6 +10256,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.drawer.cancel()                              # opening the heatmap auto-toggles OFF any armed draw tool
         self.axis_bottom.set_scanner_active(False)        # time labels, not bucket ordinals
         self.hm_cache = HeatmapCache(); self.hm_levels = None; self.hm_pending = "reset"; self.hm_last_view = None
+        self.hm_band = None            # cleared until we get a live price -> lets _scan_depth_heatmap retry init
         self._hm_sizes = None; self.hm_manual = False; self.hm_follow = True; self._hm_prev_w = None
         self.hm_contrast.set_values(config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
         self.hm_contrast.adjustSize()                     # size to its full content (floating child) before placing
@@ -10297,6 +10298,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _scan_depth_heatmap(self) -> None:
         """Per-frame heatmap update — ONLY dispatched while this mode is active. Drains the delivery buffer
         (the ~MB grid, never via snapshot()), updates the cache, renorms contrast, re-renders on change/view."""
+        if self.hm_band is None:            # init never completed (opened before the first live price) -> retry now
+            self._hm_enter()                # _hm_enter sets hm_band + requests depth ONCE latest_price > 0
+            if self.hm_band is None:
+                return                       # still no price -> wait for the next frame (self-heals on connect)
         _ver, window, livecols = self.worker.depth_heatmap_state()
         changed = False
         if window is not None:
