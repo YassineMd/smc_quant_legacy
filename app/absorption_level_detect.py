@@ -48,8 +48,8 @@ ATR_WIN = 50       # bars for the rolling volatility unit
 BAND_MIN = 0.10    # wall half-height as a fraction of the local candle range (weak wall)
 BAND_RANGE = 0.233 # ... + this * base (strong wall) -> band = vpct * (0.10..0.333) of price
 EJ_ATR_MULT = 3.3  # ejection = this * the local candle range -> full strength 1.0
-ZONE_PROX_BANDS = 5.0  # a same-side wall REINFORCES this one if it formed AFTER it within this many band-heights (its zone)
-REINF_K = 8.0      # reinforcement half-saturation: zone-count == this -> strength halfway from ejection to 1.0
+REINF_K = 8.0      # strength half-saturation: with this many same-side walls created after it, a wall is halfway to full
+STR_FLOOR = 0.15   # the MOST-RECENT same-side wall (0 walls after it) gets this strength (still visible / weakest)
 
 
 def _f(x) -> float:
@@ -254,21 +254,19 @@ def detect(buckets, skip_last=False):
                         "broken": bool(w["broken"]),            # authoritative: mitigated iff a body closed beyond the radar
                         "strength": strength, "hits": hits, "band": band, "radar_runs": runs,
                         "base_src": w.get("base_src", w["src"]), "mix_bar": w.get("mix_bar", -1)})
-        # STRENGTH reinforcement: a wall is STRONGER the more SAME-SIDE walls formed AFTER it AND near it in price (its
-        # zone thickened). Ejection is the base; the zone-count fills the gap toward 1.0 (saturating, half at REINF_K).
-        # NO decay, and OPPOSITE-side walls are ignored. zone = |price gap| <= ZONE_PROX_BANDS * the wall's own band.
+        # STRENGTH = pure AGE-RANK among SAME-SIDE walls: strength rises with how many same-side walls were created
+        # AFTER it, so the FIRST-created is the STRONGEST and the MOST-RECENT the WEAKEST — a strict hierarchy that a
+        # test never changes and opposite-side walls never touch. (Ejection can't drive brightness AND keep the order
+        # strict, so it no longer sets opacity — it still sets the band geometry + P(resist).)
         by_side = {}
         for a in out:
             by_side.setdefault(a["side"], []).append(a)
-        for lst in by_side.values():                        # per side: price-sorted -> binary-search the zone window
-            lst.sort(key=lambda x: x["price"])
-            prices = [x["price"] for x in lst]
-            for a in lst:
-                d = ZONE_PROX_BANDS * a["band"]
-                lo = bisect_left(prices, a["price"] - d); hi = bisect_right(prices, a["price"] + d)
-                zc = sum(1 for j in range(lo, hi) if lst[j]["i0"] > a["i0"])   # same-side walls formed AFTER, in-zone
-                if zc:
-                    a["strength"] = a["strength"] + (1.0 - a["strength"]) * zc / (zc + REINF_K)
+        for lst in by_side.values():
+            lst.sort(key=lambda x: x["i0"])                 # oldest first
+            m = len(lst)
+            for rank, a in enumerate(lst):
+                cnt = m - 1 - rank                          # same-side walls created AFTER it (oldest -> most -> strongest)
+                a["strength"] = STR_FLOOR + (1.0 - STR_FLOOR) * cnt / (cnt + REINF_K)
         return out
     except Exception:
         return []
