@@ -1721,6 +1721,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu = FloatingOverlayMenu(self)
         self.menu.set_swing_pct(self._swing_pct)   # sync the swing slider to the restored/default sensitivity
         self.menu.set_wall_floor(self._wall_floor)  # sync the wall-strength floor slider to the restored/default value
+        self.menu.set_bubble_vol(self.hm_bubble_min)  # sync the heatmap bubble-volume slider to the restored/default value
         self.menu.set_kc_scale(self._kc_scale)     # sync the Keltner-scale slider to the restored/default value
         self.menu.set_tf(self._tf)                 # point the tf selector at the restored/default timeframe
         self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {config.TF_SECONDS.get(self._tf, 60) // 60}×")
@@ -1955,6 +1956,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.replayToggled.connect(self._on_replay_toggled)
         self.menu.swingSensitivityChanged.connect(self._on_swing_sensitivity)   # swing-ZigZag threshold slider
         self.menu.wallFloorChanged.connect(self._on_wall_floor)                  # Order-Flow Walls min-strength floor
+        self.menu.bubbleVolChanged.connect(self._on_bubble_vol)                  # Heatmap trade-bubble min-volume filter
         self.menu.keltnerScaleChanged.connect(self._on_kc_scale)   # 1m-KC smooth-approx effective-TF scale slider
         self.menu.candleModeChanged.connect(self._on_candle_mode)  # Candle Mode dropdown (mirrors 'W')
         self.menu.vpModeChanged.connect(self._on_vp_mode)          # Volume Profile Mode dropdown
@@ -4531,6 +4533,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None
         self._draw_scanner()
 
+    def _on_bubble_vol(self, v: float) -> None:
+        """Hamburger Heatmap bubble-volume slider moved — only draw trade bubbles whose aggregated cell volume is
+        >= v (SOL). Re-aggregates the bubbles immediately (display filter, no re-request); also lightens the render."""
+        self.hm_bubble_min = float(v)
+        if self.scanner_mode == "depth_heatmap":
+            (vx0, vx1), _ = self.vb.viewRange()
+            self._hm_render_bubbles(vx0, vx1)
+        self._save_ui_state()
+
     def _on_kc_scale(self, scale: float) -> None:
         """Hamburger Keltner-scale slider moved — set the smooth-approx effective-TF scale (KC EMA/ATR period ×scale,
         band ×sqrt(scale); POC-baseline EMA period ×scale). KC + baseline live in the #3 closed-bucket cache, so
@@ -5643,6 +5654,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "replay_edge_t": self._replay_saved_edge_t,               # last replay cursor -> resume here on toggle-on
                 "swing_pct": self._swing_pct,                             # swing-ZigZag sensitivity slider (%)
                 "wall_floor": self._wall_floor,                           # Order-Flow Walls min-strength draw floor
+                "bubble_vol": self.hm_bubble_min,                         # Heatmap trade-bubble min-volume filter (SOL)
                 "kc_scale": self._kc_scale,                               # 1m-KC smooth-approx effective-TF scale slider
                 "tf": self._tf,                                           # last chart timeframe -> reopen on it
                 "ob_unmitig_only": self._ob_unmitig_only,                 # 'o' cycle stage-2: unmitigated OBs only
@@ -5716,6 +5728,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _wf = s.get("wall_floor")                             # restore the Order-Flow Walls min-strength draw floor
         if isinstance(_wf, (int, float)):
             self._wall_floor = max(0.05, min(0.90, float(_wf)))
+        _bv = s.get("bubble_vol")                             # restore the Heatmap trade-bubble min-volume filter (SOL)
+        if isinstance(_bv, (int, float)):
+            self.hm_bubble_min = max(0.0, min(1000.0, float(_bv)))
         _kcs = s.get("kc_scale")                              # restore the Keltner smooth-approx scale (menu slider synced after build)
         if isinstance(_kcs, (int, float)):
             self._kc_scale = max(1.0, min(float(config.KELTNER_SCALE_MAX), float(_kcs)))

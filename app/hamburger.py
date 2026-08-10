@@ -251,6 +251,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     replayToggled = QtCore.Signal(bool)   # Replay Mode on/off (default OFF; chart replays from the Start Date)
     swingSensitivityChanged = QtCore.Signal(float)   # swing-ZigZag threshold slider, in PERCENT
     wallFloorChanged = QtCore.Signal(float)          # Order-Flow Walls min-strength draw floor (0.05..0.90)
+    bubbleVolChanged = QtCore.Signal(float)          # Heatmap trade-bubble min volume filter (SOL; 0 = show all)
     keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
     candleModeChanged = QtCore.Signal(int)   # candle render mode 0..5 (also cycled by 'W')
     vpModeChanged = QtCore.Signal(int)       # volume-profile render mode 0..8 (selection VP + 4h 'V' + prev-day VP)
@@ -370,6 +371,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.scanner_combo.currentIndexChanged.connect(
             lambda _i: self.scannerChanged.emit(self.scanner_combo.currentData()))
         root.addWidget(self.scanner_combo)
+        self._build_bubblevol_slider(root)               # Heatmap: min trade-bubble volume filter (SOL)
 
         # --- scanner "Zero Point" anchor (Phase 1) ---
         root.addWidget(self._header("Scan Start Time"))
@@ -590,6 +592,39 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.wallfloor_slider.setValue(int(round(max(0.05, min(0.90, float(v))) * 100)))
         self.wallfloor_slider.blockSignals(False)
         self._render_wallfloor_lbl()
+
+    def _build_bubblevol_slider(self, root) -> None:
+        """Slider under 'Scanner Mode' (Heatmap): show only trade bubbles whose aggregated cell volume is >= the
+        value (in SOL). Higher = fewer/bigger bubbles only; 0 = show all. Also lightens the render. Persists."""
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w); lay.setContentsMargins(2, 1, 8, 5); lay.setSpacing(2)
+        self.bubblevol_lbl = QtWidgets.QLabel()
+        self.bubblevol_lbl.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:10px;")
+        lay.addWidget(self.bubblevol_lbl)
+        self.bubblevol_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.bubblevol_slider.setRange(0, 1000)          # 0 .. 1000 SOL aggregated cell volume, 1-SOL steps
+        self.bubblevol_slider.setValue(0)                # default 0 = show all
+        self.bubblevol_slider.setFixedHeight(16)
+        self.bubblevol_slider.valueChanged.connect(self._on_bubblevol_slider)
+        lay.addWidget(self.bubblevol_slider)
+        root.addWidget(w)
+        self._render_bubblevol_lbl()
+
+    def _on_bubblevol_slider(self, _v: int) -> None:
+        self._render_bubblevol_lbl()
+        self.bubbleVolChanged.emit(self.bubble_vol())
+
+    def _render_bubblevol_lbl(self) -> None:
+        self.bubblevol_lbl.setText("Heatmap bubble vol >= %d SOL  (higher = fewer)" % int(self.bubble_vol()))
+
+    def bubble_vol(self) -> float:
+        return float(self.bubblevol_slider.value())
+
+    def set_bubble_vol(self, v: float) -> None:
+        self.bubblevol_slider.blockSignals(True)
+        self.bubblevol_slider.setValue(int(round(max(0.0, min(1000.0, float(v))))))
+        self.bubblevol_slider.blockSignals(False)
+        self._render_bubblevol_lbl()
 
     def _build_swing_slider(self, section) -> None:
         """Compact slider under the 'swing ZigZag' toggle (placed in `section`): live-adjust the swing sensitivity
