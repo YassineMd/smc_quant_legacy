@@ -130,18 +130,19 @@ def detect(buckets, walls, skip_last=False):
                         hit = w; break
             if hit is None:
                 continue
-            side = "buy" if buy >= sell else "sell"
+            side = "buy" if buy >= sell else "sell"           # bubble's dominant taker (output/hover only, NOT a filter)
             close = _f(buckets[i].get("close", buckets[i].get("close_price")))
             wside = hit.get("side", "R")
-            # ABSORPTION ONLY — the crazy aggression FAILED to close through the BUBBLE's OWN price level:
-            #   BUY wall (S, support):   crazy SELL that still closed >= the bubble price (didn't close BELOW it) -> held
-            #   SELL wall (R, resistance): crazy BUY that still closed <= the bubble price (didn't close ABOVE it) -> held
-            # (if price closed through the bubble, the aggression broke it -> NOT absorbed -> not flagged.)
+            # ABSORPTION — the crazy bubble at the wall was rejected, so price closed STRICTLY THROUGH it in the
+            # wall's favour (closing AT the bubble is NOT a rejection -> no fire). WALL side sets the direction; the
+            # bubble's own taker side is irrelevant (a bullish candle can still leave a sell-dominant node, etc.):
+            #   BUY wall (S, support):     price closed ABOVE the bubble (close > bubble price) -> held -> GREEN below
+            #   SELL wall (R, resistance): price closed BELOW the bubble (close < bubble price) -> held -> RED above
             if wside == "S":
-                if not (side == "sell" and close >= price):
+                if close <= price:                            # closed at/below the bubble -> not rejected -> skip
                     continue
             else:
-                if not (side == "buy" and close <= price):
+                if close >= price:                            # closed at/above the bubble -> not rejected -> skip
                     continue
             out.append({"i": i, "price": price, "side": side, "vol": tot,
                         "z": z, "kind": "Ab", "wall_side": wside})
