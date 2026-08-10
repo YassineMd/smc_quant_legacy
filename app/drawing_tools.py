@@ -416,9 +416,9 @@ class PositionBracket(QtCore.QObject):
         t2 = self.target2_line.value()
         rr = self.rr
         _f = "font-size:13px"
-        # SL/TP show the PRICE-distance % (in the position's FAVOUR) minus the 0.1% round-trip fee — NOT
-        # leveraged, NOT the $ PnL. e.g. SL 0.2% away -> -0.30% ; TP 0.5% away -> +0.40%. Break-even line = the
-        # price where that % crosses 0 (entry nudged by the fee).
+        # SL/TP show the PRICE-distance % (in the position's FAVOUR) minus the round-trip fee — NOT leveraged, NOT
+        # the $ PnL. At 0.02% maker/side that's ~0.04% RT: SL 0.2% away -> -0.24% ; TP 0.5% away -> +0.46%.
+        # Break-even line = the price where that % crosses 0 (entry nudged by the round-trip fee).
         sl_pct = self._pct_net(s)
         tp_pct = self._pct_net(t)
         self.be_line.setValue(self._acct.breakeven(e, self._side) if self._acct is not None else e)
@@ -445,12 +445,12 @@ class PositionBracket(QtCore.QObject):
 
     def _pct_net(self, level: float) -> float:
         """Price change % of ``level`` vs entry in the position's FAVOUR direction, minus the round-trip fee %
-        (0.1% at 0.05%/side). SL comes out negative, TP positive; at the entry price it is exactly -fee (-0.1%).
+        (~0.04% at 0.02%/side maker). SL comes out negative, TP positive; at the entry price it is exactly -fee.
         This is a PRICE %, NOT leveraged and NOT the $ PnL."""
         e = self.entry_line.value()
         if e <= 0:
             return 0.0
-        fee_pct = (self._acct.fee_rate * 200.0) if self._acct is not None else 0.1
+        fee_pct = (self._acct.fee_rate * 200.0) if self._acct is not None else 0.04
         return (level - e) / e * 100.0 * self._side - fee_pct
 
     def _render_entry(self, price: float = None) -> None:
@@ -1343,15 +1343,17 @@ class DrawingController(QtCore.QObject):
         return bracket   # the sim is armed LAZILY in on_price (after the caller finalises bracket.uid)
 
     def place_market(self, kind, price, x, risk_pct=0.005):
-        """Programmatic MARKET entry (Buy/Sell buttons): a default position anchored at bar `x`, entry = `price`
-        (the live price), default stop `risk_pct` away, TP = the _make_bracket default. Mirrors a mouse-drawn
-        position exactly (entry=None path) so the sim arms + fills at market on the next fed tick. Fail-safe: None."""
+        """Programmatic MAKER-LIMIT entry (Buy/Sell buttons): the entry sits 1 TICK off the live price — a BUY 1
+        tick BELOW market, a SELL 1 tick ABOVE — so it fills as a maker (the sim's PENDING state waits for price to
+        cross the line, i.e. the market comes to the order). Default stop `risk_pct` off the entry, TP = the
+        _make_bracket default. Fail-safe: None."""
         try:
             p = float(price)
             if p <= 0.0 or kind not in ("long", "short"):
                 return None
-            stop_p = p * (1.0 - risk_pct) if kind == "long" else p * (1.0 + risk_pct)
-            return self._make_bracket(kind, [float(x), p], [float(x) + 8.0, stop_p])
+            entry = (p - config.TICK_SIZE) if kind == "long" else (p + config.TICK_SIZE)   # maker limit, 1 tick off
+            stop_p = entry * (1.0 - risk_pct) if kind == "long" else entry * (1.0 + risk_pct)
+            return self._make_bracket(kind, [float(x), entry], [float(x) + 8.0, stop_p])
         except Exception:
             return None
 

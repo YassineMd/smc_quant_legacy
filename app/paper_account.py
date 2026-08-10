@@ -3,8 +3,9 @@
 Account model (the user's spec): $200,000 start balance; each trade risks 10% of the CURRENT balance as
 MARGIN and applies 10x LEVERAGE, so notional exposure = margin * 10 (a fresh $200k account trades $200k of
 SOL on $20k margin). The balance COMPOUNDS as simulated trades close and persists to
-data/paper_account.json. Fees: Binance USDT-M taker 0.05% per side, charged on notional at entry AND exit
-(realistic + conservative — TP would usually be a cheaper maker fill, so this never over-states the edge).
+data/paper_account.json. Fees: Binance USDT-M MAKER 0.02% per side, charged on notional at entry AND exit —
+entries are placed as a limit 1 tick off market (Buy/Sell), and exits are treated as limit fills too, so both
+legs are maker. Round-trip cost is ~0.04% (was 0.10% taker); the break-even line reflects this.
 
 All money math lives here (pure, headless-testable); the PositionBracket renders it and the terminal feeds
 it the live price each frame.
@@ -19,7 +20,7 @@ from . import config
 START_BALANCE = 200000.0
 RISK_FRAC = 0.10          # MARGIN per trade = this * balance
 LEVERAGE = 10.0
-FEE_RATE = 0.0005         # 0.05% taker, charged per side (entry + exit)
+FEE_RATE = 0.0002         # 0.02% MAKER, charged per side (limit entry + limit exit) -> ~0.04% round trip
 
 
 class PaperAccount:
