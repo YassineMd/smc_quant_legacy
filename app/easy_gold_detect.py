@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """EASY GOLD — labels the tape/candle DIVERGENCE candle that follows a Wall-Absorption, under the SAME radar.
 
-After a Big/Crazy Wall-Absorption (app.crazy_wall_detect.detect), scan forward up to K candles WHILE price is still
-inside that event's radar (wlo..whi, and not past the wall's active window wi1). The FIRST candle that is BOTH:
+After a Big/Crazy Wall-Absorption (app.crazy_wall_detect.detect), scan forward WHILE the wall/radar is still active
+(candles ei+1 .. wi1, price inside wlo..whi). EVERY candle that is BOTH:
 
     * an EASY-leaning absorption:  A = absorption(buckets, j)[0] < ABSR_MAX (-0.5) -- the tooltip "Absorb R" value, AND
     * a TAPE / CANDLE DIVERGENCE -- the candle CLOSES in the WALL-HOLD direction while the TAPE's dominant side is
@@ -10,8 +10,9 @@ inside that event's radar (wlo..whi, and not past the wall's active window wi1).
         SUPPORT wall (S) -> LONG : bullish candle (close>open) AND Tape-S > Tape-B  -> gold UP badge below the low
         RESIST  wall (R) -> SHORT: bearish candle (close<open) AND Tape-B > Tape-S  -> gold DOWN badge above the high
 
-is labelled. One label per event (dedup by bar). Tape-B/Tape-S = per-print buy/sell size per second (sz_cb/sz_cs
-over the bucket duration).
+is labelled -- NOT just the first (2026-08-11: the user pointed at a valid LONG that was skipped because an earlier
+candle had already taken that event's single label; a descriptive label must mark them ALL). Dedup by bar so one gold
+badge per candle. Tape-B/Tape-S = per-print buy/sell size per second (sz_cb/sz_cs over the bucket duration).
 
 DESCRIPTIVE label only (direction UNTESTED). NOTE: study/absorb_tape_contra.py's earlier -44%@1:1 "anti-predictive"
 verdict tested a MIRROR-FLIPPED candle filter (support<->bearish / resist<->bullish -- a bug caught 2026-08-10 from a
@@ -22,9 +23,9 @@ from_events(buckets, events)             -> same, but reuses already-computed cr
 """
 from __future__ import annotations
 
-ABSR_MAX = -0.5     # entry candle: A (the tooltip "Absorb R" value) below this. Lowered -0.75->-0.5 (2026-08-11,
-#                     user): an A=-0.68 "proportional"-leaning-easy candle should still qualify as a divergence entry
-K = 24              # scan at most this many candles past the wall-absorption event for the divergence candle
+ABSR_MAX = -0.5     # candle: A (the tooltip "Absorb R" value) below this. Lowered -0.75->-0.5 (2026-08-11, user):
+#                     an A=-0.68 "proportional"-leaning-easy candle should still qualify as a divergence candle.
+#                     The forward scan is bounded by the wall's ACTIVE window (wi1), not an arbitrary bar count.
 
 
 def _f(x) -> float:
@@ -58,12 +59,12 @@ def from_events(buckets, events):
                 continue
             wi1 = int(e.get("wi1", ei))
             d = 1 if e.get("wall_side", "R") == "S" else -1        # S -> LONG (support held) / R -> SHORT
-            for j in range(ei + 1, min(n, ei + 1 + K, wi1 + 1)):    # forward, still under this radar
+            for j in range(ei + 1, min(n, wi1 + 1)):               # EVERY candle while the wall/radar stays active
                 c = _f(buckets[j].get("close", buckets[j].get("close_price")))
                 if not (wlo <= c <= whi):
                     continue
                 A = ABS.absorption(buckets, j)[0]
-                if A is None or A >= ABSR_MAX:                      # need an EASY absorption candle
+                if A is None or A >= ABSR_MAX:                      # need an EASY-leaning absorption candle
                     continue
                 o = _f(buckets[j].get("open", buckets[j].get("open_price")))
                 tb, ts = _tape(buckets[j])
@@ -73,10 +74,10 @@ def from_events(buckets, events):
                 ok = (c > o and ts > tb) if d > 0 else (c < o and tb > ts)
                 if not ok:
                     continue
-                if j not in seen:
+                if j not in seen:                                  # one gold badge per candle (dedup across events)
                     out.append({"i": j, "side": "long" if d > 0 else "short", "wlo": wlo, "whi": whi})
                     seen.add(j)
-                break                                              # first qualifying candle per event only
+                # NO break -> label EVERY qualifying divergence candle in the active radar, not just the first
         out.sort(key=lambda g: g["i"])
         return out
     except Exception:
