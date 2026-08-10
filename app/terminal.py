@@ -5273,19 +5273,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # until price closes through it. ⚠ barely a signal — study/wall_levels: absorption 64.1% == placebo 63.4% (null);
     # aggression 66.3% but dir-shuffle 65.0% (only ~1.3pp directional) — +3pp on a 63% geom base, NOT tradeable.
     # ------------------------------------------------------------------
-    def _absorblvl_box(self, used, side, strength, src):      # opacity = strength (ejection); BORDER only on confluence (mix)
+    def _absorblvl_box(self, used, side, strength, src):      # opacity = strength (ejection); fill only, NO border
         if used >= len(self._absorblvl_box_pool):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-6)
             self.vb.addItem(_rc, ignoreBounds=True); self._absorblvl_box_pool.append(_rc)
         _rc = self._absorblvl_box_pool[used]
-        if src == "mix":                                          # Ab+Ag confluence -> NEON + border
-            rgb = (255, 150, 20) if side == "R" else (57, 255, 20)
+        if src == "mix":                                          # Ab+Ag confluence -> PURPLE sell / GREEN buy
+            rgb = (150, 65, 235) if side == "R" else (75, 225, 40)
             _rc.setBrush(pg.mkBrush(*rgb, int(30 + strength * 120)))
-            _rc.setPen(pg.mkPen(*rgb, min(255, 175 + int(strength * 80)), width=1.6))
         else:
             rgb = (230, 70, 80) if side == "R" else (60, 200, 120)   # resistance RED / support GREEN
             _rc.setBrush(pg.mkBrush(*rgb, int(22 + strength * 120)))
-            _rc.setPen(pg.mkPen(None))
+        _rc.setPen(pg.mkPen(None))
         return _rc
 
     def _absorblvl_lbl(self, used):                           # pooled "Ab"/"Ag" tag at a borderless wall's start
@@ -5302,12 +5301,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.plot.addItem(_t, ignoreBounds=True); self._absorblvl_pct_pool.append(_t)
         return self._absorblvl_pct_pool[used]
 
-    def _radar_zone(self, used, rgb, alpha):                  # ORANGE/BLUE visit highlight OVER the wall core (+border)
+    def _radar_zone(self, used, rgb, alpha):                  # ORANGE/BLUE visit highlight OVER the wall core (fill only, NO border)
         if used >= len(self._radar_zone_pool):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-5)   # ABOVE the red/green wall box (z=-6)
             self.vb.addItem(_rc, ignoreBounds=True); self._radar_zone_pool.append(_rc)
         _rc = self._radar_zone_pool[used]
-        _rc.setPen(pg.mkPen(rgb[0], rgb[1], rgb[2], 235, width=1.2)); _rc.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], int(alpha)))
+        _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], int(alpha)))
         return _rc
 
     def _radar_hover(self, pt) -> None:
