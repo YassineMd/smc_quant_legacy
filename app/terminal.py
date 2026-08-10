@@ -6760,11 +6760,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # CRAZY WALL Ag/Ab overlay (hamburger m10_crazywall, ALL tf) — ✪ star badge on an OUTLIER volume bubble sitting
     # at a wall/radar S/R. GREEN = buy-dominant bubble, RED = sell-dominant. DESCRIPTIVE (app/crazy_wall_detect).
     def _crazy_badge(self, used):
-        """Pooled ✪ star TextItem (centred on the bubble), dark chip behind it so it reads over any bubble colour."""
+        """Pooled ✪ star TextItem — icon only (no background), placed above/below the candle."""
         if used >= len(self._crazy_pool):
-            _t = pg.TextItem(anchor=(0.5, 0.5), fill=pg.mkBrush(10, 10, 14, 175))
+            _t = pg.TextItem(anchor=(0.5, 0.5))                # no fill -> just the glyph
             _t.setZValue(34)                                   # above the footprint bubbles + their K-labels
-            _cf = QtGui.QFont("Segoe UI Symbol", 15); _cf.setBold(True)   # a font that carries the ✪ dingbat on Win
+            _cf = QtGui.QFont("Segoe UI Symbol", 16); _cf.setBold(True)   # a font that carries the ✪ dingbat on Win
             _t.textItem.setFont(_cf)
             self.plot.addItem(_t, ignoreBounds=True); self._crazy_pool.append(_t)
         return self._crazy_pool[used]
@@ -6793,16 +6793,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             hits = crazy_wall_detect.detect(filtered, marks, skip_last=False)
         except Exception:
             self._clear_crazy_wall(); return
-        (vx0, vx1), _ = self.vb.viewRange()
+        (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
+        pad = max((vy1 - vy0) * 0.045, 1e-9)                   # gap between the badge and the candle wick
         u = 0
         for h in hits:
             i = int(h["i"])
             if i < 0 or i >= n or i < vx0 - 1.0 or i > vx1 + 1.0:   # cull to viewport
                 continue
-            rgb = (70, 235, 120) if h["side"] == "buy" else (240, 70, 90)
+            b = filtered[i]
+            hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            buy = (h["side"] == "buy")
+            y = (lo - pad) if buy else (hi + pad)             # buy star BELOW the low, sell star ABOVE the high
+            rgb = (70, 235, 120) if buy else (240, 70, 90)
             _t = self._crazy_badge(u); u += 1
             _t.setColor(pg.mkColor(*rgb)); _t.setText("✪")
-            _t.setPos(i, float(h["price"])); _t.setVisible(True)
+            _t.setPos(i, y); _t.setVisible(True)
         for _t in self._crazy_pool[u:]:
             _t.setVisible(False)
 
