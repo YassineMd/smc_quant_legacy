@@ -132,16 +132,16 @@ def detect(buckets, walls, skip_last=False):
                 continue
             side = "buy" if buy >= sell else "sell"
             close = _f(buckets[i].get("close", buckets[i].get("close_price")))
-            wside = hit.get("side", "R"); wp = _f(hit.get("price"))
-            # ABSORPTION ONLY — the crazy aggression hit the wall but FAILED to close through it:
-            #   BUY wall (S, support):   crazy SELL that still closed >= the wall (didn't close below) -> support held
-            #   SELL wall (R, resistance): crazy BUY that still closed <= the wall (didn't close above) -> resistance held
-            # (aggression that DID break through, or a bubble on the wall's own side, is NOT flagged.)
+            wside = hit.get("side", "R")
+            # ABSORPTION ONLY — the crazy aggression FAILED to close through the BUBBLE's OWN price level:
+            #   BUY wall (S, support):   crazy SELL that still closed >= the bubble price (didn't close BELOW it) -> held
+            #   SELL wall (R, resistance): crazy BUY that still closed <= the bubble price (didn't close ABOVE it) -> held
+            # (if price closed through the bubble, the aggression broke it -> NOT absorbed -> not flagged.)
             if wside == "S":
-                if not (side == "sell" and close >= wp):
+                if not (side == "sell" and close >= price):
                     continue
             else:
-                if not (side == "buy" and close <= wp):
+                if not (side == "buy" and close <= price):
                     continue
             out.append({"i": i, "price": price, "side": side, "vol": tot,
                         "z": z, "kind": "Ab", "wall_side": wside})
