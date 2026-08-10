@@ -5278,12 +5278,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-6)
             self.vb.addItem(_rc, ignoreBounds=True); self._absorblvl_box_pool.append(_rc)
         _rc = self._absorblvl_box_pool[used]
-        rgb = (230, 126, 34) if side == "R" else (45, 120, 210)   # SELL/resistance ORANGE · BUY/support BLUE
-        _rc.setBrush(pg.mkBrush(*rgb, int(30 + strength * 120)))   # bigger ejection / higher rank -> more opaque
-        if src == "mix":                                          # Ab+Ag confluence -> GOLD border to stand out
-            _rc.setPen(pg.mkPen(255, 215, 70, 240, width=1.8))
+        if src == "mix":                                          # Ab+Ag confluence -> NEON + border
+            rgb = (255, 150, 20) if side == "R" else (57, 255, 20)
+            _rc.setBrush(pg.mkBrush(*rgb, int(30 + strength * 120)))
+            _rc.setPen(pg.mkPen(*rgb, min(255, 175 + int(strength * 80)), width=1.6))
         else:
-            _rc.setPen(pg.mkPen(rgb[0], rgb[1], rgb[2], min(255, 165 + int(strength * 80)), width=1.3))
+            rgb = (230, 70, 80) if side == "R" else (60, 200, 120)   # resistance RED / support GREEN
+            _rc.setBrush(pg.mkBrush(*rgb, int(22 + strength * 120)))
+            _rc.setPen(pg.mkPen(None))
         return _rc
 
     def _absorblvl_lbl(self, used):                           # pooled "Ab"/"Ag" tag at a borderless wall's start
@@ -5300,12 +5302,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.plot.addItem(_t, ignoreBounds=True); self._absorblvl_pct_pool.append(_t)
         return self._absorblvl_pct_pool[used]
 
-    def _radar_zone(self, used, rgb, alpha):                  # pooled radar zone — a DARK shade of the wall's own colour
+    def _radar_zone(self, used, rgb, alpha):                  # ORANGE/BLUE visit highlight OVER the wall core (+border)
         if used >= len(self._radar_zone_pool):
-            _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-7)
+            _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-5)   # ABOVE the red/green wall box (z=-6)
             self.vb.addItem(_rc, ignoreBounds=True); self._radar_zone_pool.append(_rc)
         _rc = self._radar_zone_pool[used]
-        _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], int(alpha)))
+        _rc.setPen(pg.mkPen(rgb[0], rgb[1], rgb[2], 235, width=1.2)); _rc.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], int(alpha)))
         return _rc
 
     def _radar_hover(self, pt) -> None:
@@ -5395,8 +5397,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _lb = self._absorblvl_lbl(ul); ul += 1
                     _lb.setColor(pg.mkColor(*rgb)); _lb.setText(txt)
                     _lb.setPos(xl, price); _lb.setVisible(True)
-            # NO radar bands drawn — just record P(resist) hover over the WALL box (its own +/-band strip) at each
-            # candle-run where price RE-ENTERED the radar, so hovering the orange/blue area shows the hold/break odds.
+            # ORANGE(sell)/BLUE(buy) highlight over the WALL CORE (its own +/-band strip) at each candle-run where price
+            # RE-ENTERED the radar — the wall itself stays red/green; only this "in the zone" part recolours. No radar
+            # bands. Hover it -> hold/break odds.
             for _run in m.get("radar_runs", ()):
                 if len(_run) < 3:
                     continue
@@ -5406,7 +5409,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 rxl = x[rk0] - 0.6; rxr = x[rk1] + 0.6
                 if rxr < vx0 - 1.0 or rxl > vx1 + 1.0:
                     continue
-                self._radar_hover_zones.append((rxl, rxr, price - band, price + band, float(_run[2]), m["side"]))
+                pr = float(_run[2])
+                orgb = (235, 140, 30) if m["side"] == "R" else (45, 125, 220)   # sell orange / buy blue
+                za = int(min(150, max(85, 85 + max(0.0, pr - 55.0) * 1.5)))      # opacity ~ P(resist)
+                _hz = self._radar_zone(uz, orgb, za); uz += 1
+                _hz.setRect(rxl, price - band, max(1e-9, rxr - rxl), 2.0 * band); _hz.setVisible(True)
+                self._radar_hover_zones.append((rxl, rxr, price - band, price + band, pr, m["side"]))
         for _it in self._absorblvl_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._absorblvl_lbl_pool[ul:]:
