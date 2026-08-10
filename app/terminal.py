@@ -2585,8 +2585,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
         if self.scanner_mode == "depth_heatmap":
-            self.hm_follow = True              # double-click anywhere -> re-lock onto the live edge (the next
-            return                             # frame snaps X to [now-w, now]; the cache already holds it)
+            self.hm_follow = True              # double-click anywhere -> re-lock onto the live edge: next frame snaps
+            return                             # X to [now-w, now] AND tracks the live price on Y (keeping the zoom)
         if self.scanner_mode == "bucket_canvas":
             sp = ev.scenePos()
             if self.plot.getAxis("bottom").sceneBoundingRect().contains(sp):
@@ -10249,12 +10249,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # SMOOTH SCROLL: advance the view to track 'now' EVERY frame (cheap GPU pan of the existing image —
         # no setImage). This is decoupled from the image rebuild below, which fires only on a data change.
         if self.hm_follow:
-            (vx0, vx1), _ = self.vb.viewRange()
+            (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
             w = vx1 - vx0
             now_s = time.time()
             lead = w * HM_FOLLOW_LEAD_FRAC               # blank gutter to the RIGHT of 'now' (live edge at ~85%)
             self.vb.setXRange(now_s - w + lead, now_s + lead, padding=0.0)
             self._hm_prev_w = w                          # so the next manual gesture diffs against the live width
+            # Y-follow: keep the user's zoom HEIGHT, pan to keep the live mid-price inside the middle 50% (pan once
+            # it enters the top/bottom 25% band) — mirrors the candle-canvas double-click follow. On an actual pan,
+            # kick the debounced lazy-load so depth is re-requested for the newly-visible band (else it'd be blank).
+            if self.hm_cache.bbo and (vy1 - vy0) > 0:
+                _tb = self.hm_cache.bbo[-1]
+                mid = 0.5 * (float(_tb[1]) + float(_tb[2]))
+                if mid > 0:
+                    band = 0.25 * (vy1 - vy0); dy = 0.0
+                    if mid > vy1 - band:
+                        dy = mid - (vy1 - band)          # entered the TOP 25% -> pan up
+                    elif mid < vy0 + band:
+                        dy = mid - (vy0 + band)          # entered the BOTTOM 25% -> pan down
+                    if dy != 0.0:
+                        self.vb.setYRange(vy0 + dy, vy1 + dy, padding=0.0)
+                        self._hm_debounce.start()
         view = self.vb.viewRange()
         vkey = (tuple(view[0]), tuple(view[1]))
         view_moved = vkey != self.hm_last_view
