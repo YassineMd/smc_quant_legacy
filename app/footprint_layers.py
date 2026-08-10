@@ -59,8 +59,8 @@ def detail_visible(n_vis: float) -> bool:
     return n_vis <= MAX_BUBBLE_BUCKETS
 
 
-_CRAZY_BUY = (0, 230, 255)     # a CRAZY-volume bubble (statistical outlier) -> CYAN (buy) ...
-_CRAZY_SELL = (255, 0, 230)    # ... / MAGENTA (sell), vs the normal green/red
+_CRAZY_BUY = (0, 255, 110)     # a CRAZY-volume bubble (statistical outlier) -> neon GREEN (buy) ...
+_CRAZY_SELL = (190, 70, 255)   # ... / neon PURPLE (sell) — the SAME neon green/purple as the heatmap bubbles
 
 
 def _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, crazy=False):
