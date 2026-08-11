@@ -1,31 +1,30 @@
 # -*- coding: utf-8 -*-
-"""EASY GOLD — labels the tape/candle DIVERGENCE candle that follows a Wall-Absorption, under the SAME radar.
+"""EASY GOLD — labels EVERY tape/candle DIVERGENCE candle sitting in an ACTIVE wall's radar, on the wall's side.
 
-After a Big/Crazy Wall-Absorption (app.crazy_wall_detect.detect), scan forward WHILE the wall/radar is still active
-(candles ei+1 .. wi1, price inside wlo..whi). EVERY candle that is BOTH:
+For each Order-Flow Wall (app.absorption_level_detect.detect mark: price / band / side / i0 / i1), scan the bars the
+wall is active (i0..i1) and label EVERY candle whose CLOSE is inside the wall's radar (price +/- RADAR_MULT*band)
+that is BOTH:
 
     * an EASY-leaning absorption:  A = absorption(buckets, j)[0] < ABSR_MAX (-0.5) -- the tooltip "Absorb R" value, AND
     * a TAPE / CANDLE DIVERGENCE -- the candle CLOSES in the WALL-HOLD direction while the TAPE's dominant side is
-      AGAINST it (the absorbed/trapped side is still aggressing on the tape):
+      AGAINST it (the trapped side still aggressing on the tape):
         SUPPORT wall (S) -> LONG : bullish candle (close>open) AND Tape-S > Tape-B  -> gold UP badge below the low
         RESIST  wall (R) -> SHORT: bearish candle (close<open) AND Tape-B > Tape-S  -> gold DOWN badge above the high
 
-is labelled -- NOT just the first (2026-08-11: the user pointed at a valid LONG that was skipped because an earlier
-candle had already taken that event's single label; a descriptive label must mark them ALL). Dedup by bar so one gold
-badge per candle. Tape-B/Tape-S = per-print buy/sell size per second (sz_cb/sz_cs over the bucket duration).
+NO Big/Crazy absorption precursor is required (2026-08-11, user: "label every Easy Gold that happens on a wall
+whether there is a Big/Crazy absorption or not"). It is simply an Easy-Gold divergence candle ON a wall. Dedup by
+bar -> one gold badge per candle. Tape-B/Tape-S = per-print buy/sell size per second (sz_cb/sz_cs over the duration).
 
-DESCRIPTIVE label only (direction UNTESTED). NOTE: study/absorb_tape_contra.py's earlier -44%@1:1 "anti-predictive"
-verdict tested a MIRROR-FLIPPED candle filter (support<->bearish / resist<->bullish -- a bug caught 2026-08-10 from a
-live screenshot), i.e. a DIFFERENT set of bars, so it does NOT apply to this corrected rule. Re-test pending.
+DESCRIPTIVE label only (direction UNTESTED). NOTE: study/absorb_tape_contra.py's -44%@1:1 verdict tested a
+mirror-flipped, absorption-gated set of bars -> VOID for this rule; re-test pending on this walls-based universe.
 
-detect(buckets, walls, skip_last=False) -> [{i, side('long'|'short'), wlo, whi}]  (self-contained; runs CW.detect)
-from_events(buckets, events)             -> same, but reuses already-computed crazy_wall_detect events (terminal).
+from_walls(buckets, walls) -> [{i, side('long'|'short'), wlo, whi}]   (walls = absorption_level_detect.detect marks)
+detect(buckets, walls, skip_last=False) -> same (headless/study alias).
 """
 from __future__ import annotations
 
-ABSR_MAX = -0.5     # candle: A (the tooltip "Absorb R" value) below this. Lowered -0.75->-0.5 (2026-08-11, user):
-#                     an A=-0.68 "proportional"-leaning-easy candle should still qualify as a divergence candle.
-#                     The forward scan is bounded by the wall's ACTIVE window (wi1), not an arbitrary bar count.
+ABSR_MAX = -0.5     # candle: A (the tooltip "Absorb R" value) below this. Lowered -0.75->-0.5 (2026-08-11, user).
+RADAR_MULT = 3.0    # wall radar = price +/- this * band -- MUST match crazy_wall_detect.RADAR_MULT (the ✪/★ zone)
 
 
 def _f(x) -> float:
@@ -41,30 +40,38 @@ def _tape(b):
     return sum(b.get("sz_cb") or []) / dur, sum(b.get("sz_cs") or []) / dur
 
 
-def from_events(buckets, events):
-    """Label the divergence candle for each Wall-Absorption event. `events` = crazy_wall_detect.detect() output
-    (each carries i / wall_side / wlo / whi / wi1). Dedup by bar so two events can't double-label one candle."""
+def from_walls(buckets, walls):
+    """Label every Easy-Gold divergence candle sitting in any active wall's radar. `walls` =
+    absorption_level_detect.detect() marks (price/band/side/i0/i1). Dedup by bar -> one badge per candle."""
     from app import absorption as ABS
     n = len(buckets)
-    if n < 2 or not events:
+    if n < 2 or not walls:
         return []
     try:
         out = []
         seen = set()
-        for e in events:
-            ei = int(e.get("i", -1))
-            wlo = e.get("wlo")
-            whi = e.get("whi")
-            if ei < 0 or wlo is None or whi is None:
+        acache = {}                                            # A per bar, reused across overlapping wall radars
+        for w in walls:
+            band = _f(w.get("band")); wp = _f(w.get("price"))
+            if band <= 0 or wp <= 0:
                 continue
-            wi1 = int(e.get("wi1", ei))
-            d = 1 if e.get("wall_side", "R") == "S" else -1        # S -> LONG (support held) / R -> SHORT
-            for j in range(ei + 1, min(n, wi1 + 1)):               # EVERY candle while the wall/radar stays active
-                c = _f(buckets[j].get("close", buckets[j].get("close_price")))
-                if not (wlo <= c <= whi):
+            wlo = wp - RADAR_MULT * band
+            whi = wp + RADAR_MULT * band
+            d = 1 if w.get("side", "R") == "S" else -1         # S -> LONG (support) / R -> SHORT (resistance)
+            i0 = max(1, int(w.get("i0", 1)))
+            i1 = min(n - 1, int(w.get("i1", n - 1)))            # active window (i1 = last bar while unbroken)
+            for j in range(i0, i1 + 1):
+                if j in seen:                                  # already carries a badge (from an earlier wall)
                     continue
-                A = ABS.absorption(buckets, j)[0]
-                if A is None or A >= ABSR_MAX:                      # need an EASY-leaning absorption candle
+                c = _f(buckets[j].get("close", buckets[j].get("close_price")))
+                if not (wlo <= c <= whi):                      # close must sit inside THIS wall's radar
+                    continue
+                A = acache.get(j)
+                if A is None:
+                    _a = ABS.absorption(buckets, j)[0]
+                    A = _a if _a is not None else 999.0        # None (thin history) -> a sentinel that fails < cutoff
+                    acache[j] = A
+                if A >= ABSR_MAX:                              # need an EASY-leaning absorption candle
                     continue
                 o = _f(buckets[j].get("open", buckets[j].get("open_price")))
                 tb, ts = _tape(buckets[j])
@@ -74,10 +81,8 @@ def from_events(buckets, events):
                 ok = (c > o and ts > tb) if d > 0 else (c < o and tb > ts)
                 if not ok:
                     continue
-                if j not in seen:                                  # one gold badge per candle (dedup across events)
-                    out.append({"i": j, "side": "long" if d > 0 else "short", "wlo": wlo, "whi": whi})
-                    seen.add(j)
-                # NO break -> label EVERY qualifying divergence candle in the active radar, not just the first
+                out.append({"i": j, "side": "long" if d > 0 else "short", "wlo": wlo, "whi": whi})
+                seen.add(j)
         out.sort(key=lambda g: g["i"])
         return out
     except Exception:
@@ -85,10 +90,6 @@ def from_events(buckets, events):
 
 
 def detect(buckets, walls, skip_last=False):
-    """Self-contained: run the Wall-Absorption detector, then label each event's divergence candle. For study /
-    headless use. `walls` = app.absorption_level_detect.detect() marks."""
-    try:
-        from app import crazy_wall_detect as CW
-        return from_events(buckets, CW.detect(buckets, walls, skip_last=skip_last))
-    except Exception:
-        return []
+    """Headless/study alias. `walls` = app.absorption_level_detect.detect() marks. skip_last is accepted for
+    signature parity with the other detectors but unused (labels are per-candle, not edge-gated)."""
+    return from_walls(buckets, walls)

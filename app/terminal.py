@@ -6809,14 +6809,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         self._crazy_sig = _sig
         marks = self._absorb_marks(filtered)                  # walls index-aligned with `filtered`
-        try:
-            from app import crazy_wall_detect
-            hits = crazy_wall_detect.detect(filtered, marks, skip_last=False)
-        except Exception:
-            self._clear_crazy_wall(); return
+        hits = []
+        if show_crazy or show_big:                            # CW pass only needed for the ✪/★ tiers
+            try:
+                from app import crazy_wall_detect
+                hits = crazy_wall_detect.detect(filtered, marks, skip_last=False)
+            except Exception:
+                self._clear_crazy_wall(); return
         (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
         pad = max((vy1 - vy0) * 0.045, 1e-9)                   # gap between the badge and the candle wick
-        self._draw_easy_gold(filtered, hits, show_eg, vx0, vx1, pad)   # gold labels ride the SAME wall events
+        self._draw_easy_gold(filtered, marks, show_eg, vx0, vx1, pad)   # gold labels ride the wall MARKS (no CW gate)
         u = 0
         for h in hits:
             tier = h.get("tier", "crazy")                     # 'crazy' -> ✪ / 'big' -> ★, each gated by its sub-toggle
@@ -6836,11 +6838,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _t in self._crazy_pool[u:]:
             _t.setVisible(False)
 
-    def _draw_easy_gold(self, filtered, hits, show, vx0, vx1, pad) -> None:
-        """EASY GOLD sub-tier (m10_wallabs_easygold): a gold shogi-piece on the tape/candle-DIVERGENCE candle that
-        follows a Wall-Absorption under the same radar (app/easy_gold_detect). ⛊ (down) = short setup at a resistance
-        wall (above the high); ☗ (up) = long setup at a support wall (below the low). Reuses the already-computed
-        `hits` (the Wall-Absorption events) so it costs no extra wall/CW pass. DESCRIPTIVE label only."""
+    def _draw_easy_gold(self, filtered, marks, show, vx0, vx1, pad) -> None:
+        """EASY GOLD sub-tier (m10_wallabs_easygold): a gold shogi-piece on EVERY tape/candle-DIVERGENCE candle that
+        sits in an active wall's radar, on the wall's side (app/easy_gold_detect.from_walls — NO absorption precursor).
+        ⛊ (down) = short at a resistance wall (above the high); ☗ (up) = long at a support wall (below the low).
+        Reuses the shared wall-marks cache (`marks`) so it costs no extra wall pass. DESCRIPTIVE label only."""
         n = len(filtered)
         if not show or n < 2:
             for _t in self._easygold_pool:
@@ -6848,7 +6850,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         try:
             from app import easy_gold_detect
-            egs = easy_gold_detect.from_events(filtered, hits)
+            egs = easy_gold_detect.from_walls(filtered, marks)
         except Exception:
             for _t in self._easygold_pool:
                 _t.setVisible(False)
