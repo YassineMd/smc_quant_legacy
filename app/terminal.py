@@ -6787,12 +6787,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return self._easygold_pool[used]
 
     def _pureagg_badge(self, used):
-        """Pooled ▋ block TextItem — icon only, above/below the candle. Colour (green long / red short) set per hit."""
+        """Pooled GOLD ▍ block TextItem — icon only, above/below the candle."""
         if used >= len(self._pureagg_pool):
             _t = pg.TextItem(anchor=(0.5, 0.5))
             _t.setZValue(34)
             _cf = QtGui.QFont("Segoe UI Symbol", 16); _cf.setBold(True)
             _t.textItem.setFont(_cf)
+            _t.setColor(pg.mkColor(255, 195, 40))              # gold (long/short both gold; position encodes side)
             self.plot.addItem(_t, ignoreBounds=True); self._pureagg_pool.append(_t)
         return self._pureagg_pool[used]
 
@@ -6886,10 +6887,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _t.setVisible(False)
 
     def _draw_pure_agg(self, filtered, marks, show, vx0, vx1, pad) -> None:
-        """PURE AGGRESSION sub-tier (m10_wallabs_pureagg): a green/red ▋ on EVERY one-sided-aggression candle that
-        sits in a same-side active wall's radar (app/pure_aggression_detect.from_walls). GREEN ▋ below the low = a
-        bullish candle whose bubbles are ALL GREEN at a buy wall (support); RED ▋ above the high = a bearish candle
-        whose bubbles are ALL RED at a sell wall (resistance). Mirror of Easy Gold. DESCRIPTIVE label only."""
+        """PURE AGGRESSION sub-tier (m10_wallabs_pureagg): a GOLD ▍ on EVERY one-sided-aggression candle that sits in
+        a same-side active wall's radar (app/pure_aggression_detect.from_walls). Below the low = a bullish candle,
+        bubbles ALL GREEN, Tape-S>Tape-B, at a buy wall (support); above the high = a bearish candle, bubbles ALL RED,
+        Tape-B>Tape-S, at a sell wall (resistance). DESCRIPTIVE label only."""
         n = len(filtered)
         if not show or n < 2:
             for _t in self._pureagg_pool:
@@ -6910,11 +6911,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue
             b = filtered[i]
             hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            longside = (g["side"] == "long")                  # support/bullish -> green below; resistance/bearish -> red above
+            longside = (g["side"] == "long")                  # support/bullish -> below the low; resistance/bearish -> above the high
             y = (lo - pad2) if longside else (hi + pad2)
             _t = self._pureagg_badge(u); u += 1
-            _t.setColor(pg.mkColor(70, 235, 120) if longside else pg.mkColor(240, 70, 90))
-            _t.setText("▋")
+            _t.setText("▍")
             _t.setPos(i, y); _t.setVisible(True)
         for _t in self._pureagg_pool[u:]:
             _t.setVisible(False)

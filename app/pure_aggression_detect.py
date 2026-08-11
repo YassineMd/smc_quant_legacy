@@ -5,13 +5,15 @@ For each Order-Flow Wall (app.absorption_level_detect.detect mark: price / band 
 wall is active (i0..i1) and label EVERY candle whose RANGE (low..high) OVERLAPS the wall's radar (price +/-
 RADAR_MULT*band) -- i.e. the candle TRADED at the wall -- that is a ONE-SIDED aggression print:
 
-    BUY wall (S, support):     BULLISH candle (close>open) AND every top-3 bubble is GREEN (buy >= sell)  -> green |
-    SELL wall (R, resistance): BEARISH candle (close<open) AND every top-3 bubble is RED   (sell > buy)   -> red   |
+    BUY wall (S, support):     BULLISH candle (close>open) AND every top-3 bubble GREEN (buy>=sell) AND Tape-S>Tape-B
+    SELL wall (R, resistance): BEARISH candle (close<open) AND every top-3 bubble RED   (sell>buy)  AND Tape-B>Tape-S
+
+both -> a GOLD ▍ badge (below the low for long / above the high for short).
 
 "Bubbles" = the drawn top-3 footprint levels by total volume; green iff buy >= sell, red iff sell > buy (exactly the
-footprint_layers colouring). This is PURE AGGRESSION -- no absorption, no divergence: at a support wall buyers own
-every heavy level and close it up; at a resistance wall sellers own every level and close it down. (Contrast Easy
-Gold, where the TAPE leans AGAINST the candle.) Dedup by bar -> one badge per candle.
+footprint_layers colouring). The heavy VOLUME levels all sit one side (bubbles agree with the candle) while the tape
+PRINT-RATE leans the other way (Tape filter) -- one-sided aggression at the levels that absorbed the opposing tape.
+Dedup by bar -> one badge per candle. Tape-B/Tape-S = per-print buy/sell size per second (sz_cb/sz_cs over duration).
 
 DESCRIPTIVE label only.
 
@@ -28,6 +30,12 @@ def _f(x) -> float:
         return float(x)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _tape(b):
+    """(Tape-B, Tape-S) = buy/sell print-size per second over the bucket's duration (0 if no per-print sizes)."""
+    dur = max(1.0, _f(b.get("end_time")) - _f(b.get("start_time")))
+    return sum(b.get("sz_cb") or []) / dur, sum(b.get("sz_cs") or []) / dur
 
 
 def from_walls(buckets, walls):
@@ -64,12 +72,13 @@ def from_walls(buckets, walls):
                     bubs = _bubbles(b); bcache[j] = bubs
                 if not bubs:                              # no footprint bubbles -> no aggression read
                     continue
-                if s == "S":                              # buy wall -> BULLISH candle + every bubble GREEN (buy>=sell)
-                    if not (c > o and all(buy >= sell for (_p, _t, buy, sell) in bubs)):
+                tb, ts = _tape(b)
+                if s == "S":                              # buy wall -> BULLISH + all bubbles GREEN + Tape-S > Tape-B
+                    if not (c > o and ts > tb and all(buy >= sell for (_p, _t, buy, sell) in bubs)):
                         continue
                     side = "long"
-                else:                                     # sell wall -> BEARISH candle + every bubble RED (sell>buy)
-                    if not (c < o and all(sell > buy for (_p, _t, buy, sell) in bubs)):
+                else:                                     # sell wall -> BEARISH + all bubbles RED + Tape-B > Tape-S
+                    if not (c < o and tb > ts and all(sell > buy for (_p, _t, buy, sell) in bubs)):
                         continue
                     side = "short"
                 out.append({"i": j, "side": side, "wlo": wlo, "whi": whi})

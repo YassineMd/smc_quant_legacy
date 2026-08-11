@@ -490,12 +490,12 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def _build_wallabs_subtoggles(self, section) -> None:
         """Wall Absorption sub-tiers: Crazy (✪ = statistical-outlier bubble), Big (★ = big-but-not-crazy), Easy Gold
-        (⛊/☗ = gold label on the tape/candle-divergence candle in a wall radar), and Pure Aggression (▋ = green/red
-        label on a one-sided-aggression candle whose bubbles ALL agree with it, at a same-side wall). Each an m10_ key
+        (⛊/☗ = gold label on the tape/candle-divergence candle in a wall radar), and Pure Aggression (gold ▍ =
+        label on a one-sided-aggression candle whose bubbles ALL agree with it + tape leans against it, same-side wall). Each an m10_ key
         (persists + reads via layer_state); the master m10_crazywall gates the whole indicator."""
         for key, label, default in (("m10_wallabs_crazy", "· Crazy (✪)", True), ("m10_wallabs_big", "· Big (★)", False),
                                     ("m10_wallabs_easygold", "· Easy Gold (⛊)", False),
-                                    ("m10_wallabs_pureagg", "· Pure Aggression (▋)", False)):
+                                    ("m10_wallabs_pureagg", "· Pure Aggression (▍)", False)):
             cb = QtWidgets.QCheckBox(label)
             cb.setChecked(default)
             cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
