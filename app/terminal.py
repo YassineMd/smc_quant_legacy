@@ -5325,19 +5325,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return _rc
 
     def _tape_rotation(self, side, rk0, rk1):
-        """Live TAPE readout for a radar visit. Defender = the wall's own side (buy wall S -> buyers Tape-B; sell wall
-        R -> sellers Tape-S). Returns (defender_label, share_start%, share_now%, n_defend, n_absorbed) or None.
-        (1) ROTATION = the defender's share of the tape, first-half -> second-half (rising = imbalance rotating to the
-            defender = winning the tape war; study/radar_hold_joint.py def_share slope AUC .72-.74).
-        (2) ABSORPTION tally per candle (side-independent): 'buyers absorbed sellers' = sellers aggressive
-            (Tape-S>Tape-B) but the candle closed UP (their selling absorbed); 'sellers absorbed buyers' = buyers
-            aggressive (Tape-B>Tape-S) but the candle closed DOWN (their buying absorbed). Candles where the aggressor
-            won cleanly count for neither. (study/radar_hold_badsign.py: the absorbed-against-the-defender variant is a
-            .70-AUC coincident descriptor.) Both COINCIDENT — a readout of the hold/break happening, NOT a forecast."""
+        """Live TAPE readout for a radar visit. Returns (buyshare_start%, buyshare_now%, n_ba_s, n_sa_b) or None.
+        (1) buy-share of the tape, first-half -> second-half (sell-share = 100 - buy-share); shows each side's tape
+            trend over the visit (study/radar_hold_joint.py: the defender-share slope is a .72-.74-AUC descriptor).
+        (2) ABSORPTION tally per candle: n_ba_s 'buyers absorbed sellers' = sellers aggressive (Tape-S>Tape-B) but the
+            candle closed UP (their selling absorbed); n_sa_b 'sellers absorbed buyers' = buyers aggressive but the
+            candle closed DOWN. Aggressor-won-cleanly candles count for neither (study/radar_hold_badsign.py: a
+            .70-AUC coincident descriptor). Both COINCIDENT — a readout of the hold/break happening, NOT a forecast."""
         buckets = self._radar_hover_buckets
         if not buckets:
             return None
-        shares = []; n_ba_s = 0; n_sa_b = 0                             # buyers-absorbed-sellers / sellers-absorbed-buyers
+        buyshare = []; n_ba_s = 0; n_sa_b = 0                           # buyers-absorbed-sellers / sellers-absorbed-buyers
         for k in range(max(0, rk0), min(rk1, len(buckets) - 1) + 1):
             b = buckets[k]
             dur = max(1.0, float(b.get("end_time", 0.0) or 0.0) - float(b.get("start_time", 0.0) or 0.0))
@@ -5345,20 +5343,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             tot = tb + ts
             if tot <= 0:
                 continue
-            shares.append((tb if side == "S" else ts) / tot)            # defender share of the total tape
+            buyshare.append(tb / tot)                                   # buy-share of the total tape (sell = 1 - this)
             o = float(b.get("open", b.get("open_price", 0.0)) or 0.0); c = float(b.get("close", b.get("close_price", 0.0)) or 0.0)
             if ts > tb and c > o:                                       # sellers pressed, price rose -> buyers absorbed sellers
                 n_ba_s += 1
             elif tb > ts and c < o:                                     # buyers pressed, price fell  -> sellers absorbed buyers
                 n_sa_b += 1
-        if not shares:
+        if not buyshare:
             return None
-        if len(shares) >= 2:
-            mid = len(shares) // 2
-            s0 = sum(shares[:mid]) / mid; s1 = sum(shares[mid:]) / (len(shares) - mid)
+        if len(buyshare) >= 2:
+            mid = len(buyshare) // 2
+            b0 = sum(buyshare[:mid]) / mid; b1 = sum(buyshare[mid:]) / (len(buyshare) - mid)
         else:
-            s0 = s1 = shares[0]
-        return ("buyers" if side == "S" else "sellers", s0 * 100.0, s1 * 100.0, n_ba_s, n_sa_b)
+            b0 = b1 = buyshare[0]
+        return (b0 * 100.0, b1 * 100.0, n_ba_s, n_sa_b)
 
     def _radar_hover(self, pt) -> None:
         """Hover a wall's radar area -> calibrated odds the wall HOLDS this visit (P(resist) from box-volume intensity;
@@ -5380,14 +5378,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self.plot.addItem(self._radar_hover_tip, ignoreBounds=True)
                 kind = "resistance" if side == "R" else "support"
                 txt = " %s  #%d  ·  holds %.0f%%  ·  break %.0f%% " % (kind, num, pr, 100.0 - pr)
-                rot = self._tape_rotation(side, int(rk0), int(rk1))     # live tape-imbalance rotation + absorption tally
+                rot = self._tape_rotation(side, int(rk0), int(rk1))     # buy-share trend + absorption tally
                 if rot is not None:
-                    _lab, _s0, _s1, _nba, _nsa = rot
-                    _arr = "↑" if _s1 > _s0 + 2.0 else ("↓" if _s1 < _s0 - 2.0 else "→")
-                    txt += "\n tape %s %.0f%%→%.0f%% %s " % (_lab, _s0, _s1, _arr)
-                    if _nba + _nsa > 0:                                  # candles where one side's aggression was absorbed
-                        txt += "\n Buyers absorbed  %d sellers " % _nba
-                        txt += "\n Sellers absorbed %d buyers " % _nsa
+                    _b0, _b1, _nba, _nsa = rot                          # buy-share start/now; sell-share = 100 - buy
+                    txt += "\n Buyers absorbed  %d sellers • tape buyers %.0f%%→%.0f%% " % (_nba, _b0, _b1)
+                    txt += "\n Sellers absorbed %d buyers • tape sellers %.0f%%→%.0f%% " % (_nsa, 100.0 - _b0, 100.0 - _b1)
                 self._radar_hover_tip.setText(txt)
                 self._radar_hover_tip.setPos(x, y)
                 self._radar_hover_tip.show()
