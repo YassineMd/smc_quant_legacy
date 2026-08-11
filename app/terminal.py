@@ -1319,7 +1319,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._absorblvl_lbl_pool = []                            # TextItem pool — "Ab"/"Ag" tags on borderless walls
         self._absorblvl_pct_pool = []                            # TextItem pool — strength-% tag at each wall's right edge
         self._radar_zone_pool = []                               # QGraphicsRectItem — dark-wall-shade radar zones (upper+lower)
-        self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side) for hover hit-testing
+        self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side,visit#) for hover hit-testing
         self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
@@ -5331,7 +5331,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._radar_hover_tip.hide()
             return
         x = pt.x(); y = pt.y()
-        for (xl, xr, ylo, yhi, pr, side) in self._radar_hover_zones:
+        for (xl, xr, ylo, yhi, pr, side, num) in self._radar_hover_zones:
             if xl <= x <= xr and ylo <= y <= yhi:
                 if self._radar_hover_tip is None:
                     self._radar_hover_tip = pg.TextItem(anchor=(0, 1), color=(255, 210, 70),
@@ -5340,7 +5340,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._radar_hover_tip.textItem.setFont(QtGui.QFont("Consolas", 9))
                     self.plot.addItem(self._radar_hover_tip, ignoreBounds=True)
                 kind = "resistance" if side == "R" else "support"
-                self._radar_hover_tip.setText(" %s holds %.0f%%  ·  break %.0f%% " % (kind, pr, 100.0 - pr))
+                self._radar_hover_tip.setText(" %s  #%d  ·  holds %.0f%%  ·  break %.0f%% " % (kind, num, pr, 100.0 - pr))
                 self._radar_hover_tip.setPos(x, y)
                 self._radar_hover_tip.show()
                 return
@@ -5413,21 +5413,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # ORANGE(sell)/BLUE(buy) highlight over the WALL CORE (its own +/-band strip) at each candle-run where price
             # RE-ENTERED the radar — the wall itself stays red/green; only this "in the zone" part recolours. No radar
             # bands. Hover it -> hold/break odds.
-            for _run in m.get("radar_runs", ()):
-                if len(_run) < 3:
-                    continue
+            _runs = sorted((r for r in m.get("radar_runs", ()) if len(r) >= 3), key=lambda r: r[0])
+            for _rnum, _run in enumerate(_runs, start=1):        # number each radar ACTIVATION of THIS wall by visit order
                 rk0 = max(0, int(_run[0])); rk1 = min(int(_run[1]), n - 1)
                 if rk1 < rk0:
                     continue
                 rxl = x[rk0] - 0.6; rxr = x[rk1] + 0.6
-                if rxr < vx0 - 1.0 or rxl > vx1 + 1.0:
+                if rxr < vx0 - 1.0 or rxl > vx1 + 1.0:           # cull to viewport (the number stays visit-ordered regardless)
                     continue
                 pr = float(_run[2])
                 orgb = (235, 140, 30) if m["side"] == "R" else (45, 125, 220)   # sell orange / buy blue
                 za = int(min(150, max(85, 85 + max(0.0, pr - 55.0) * 1.5)))      # opacity ~ P(resist)
                 _hz = self._radar_zone(uz, orgb, za); uz += 1
                 _hz.setRect(rxl, price - band, max(1e-9, rxr - rxl), 2.0 * band); _hz.setVisible(True)
-                self._radar_hover_zones.append((rxl, rxr, price - band, price + band, pr, m["side"]))
+                self._radar_hover_zones.append((rxl, rxr, price - band, price + band, pr, m["side"], _rnum))
         for _it in self._absorblvl_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._absorblvl_lbl_pool[ul:]:
