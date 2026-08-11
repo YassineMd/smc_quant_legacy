@@ -5325,27 +5325,41 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return _rc
 
     def _tape_rotation(self, side, rk0, rk1):
-        """Live TAPE-ROTATION readout for a radar visit: the DEFENDER's share of the tape, first-half -> second-half.
-        Defender = the wall's own side (buy wall S -> buyers Tape-B; sell wall R -> sellers Tape-S). A RISING share
-        = the tape imbalance rotating toward the defender = the wall winning the tape war (the descriptive signature
-        of a hold in progress; study/radar_hold_joint.py: def_share slope AUC .72-.74 — but COINCIDENT, a readout of
-        the hold happening, NOT a forecast). Returns (defender_label, share_start%, share_now%) or None."""
+        """Live TAPE readout for a radar visit. Defender = the wall's own side (buy wall S -> buyers Tape-B; sell wall
+        R -> sellers Tape-S). Returns (defender_label, share_start%, share_now%, n_defend, n_absorbed) or None.
+        (1) ROTATION = the defender's share of the tape, first-half -> second-half (rising = imbalance rotating to the
+            defender = winning the tape war; study/radar_hold_joint.py def_share slope AUC .72-.74).
+        (2) DEFEND/ABSORBED tally over the defender-tape-DOMINANT candles: 'defend' = body WITH the defender, 'absorbed'
+            = body AGAINST (bearish@support / bullish@resist) — the user's 'bad sign' (aggression absorbed;
+            study/radar_hold_badsign.py net good-bad AUC .70). Both COINCIDENT — a readout of the hold/break happening,
+            NOT a forecast."""
         buckets = self._radar_hover_buckets
         if not buckets:
             return None
-        shares = []
+        shares = []; n_def = 0; n_abs = 0
         for k in range(max(0, rk0), min(rk1, len(buckets) - 1) + 1):
             b = buckets[k]
             dur = max(1.0, float(b.get("end_time", 0.0) or 0.0) - float(b.get("start_time", 0.0) or 0.0))
             tb = sum(b.get("sz_cb") or []) / dur; ts = sum(b.get("sz_cs") or []) / dur
-            dfd = tb if side == "S" else ts; tot = tb + ts               # defender share of the total tape
-            if tot > 0:
-                shares.append(dfd / tot)
-        if len(shares) < 2:
+            tot = tb + ts
+            if tot <= 0:
+                continue
+            shares.append((tb if side == "S" else ts) / tot)            # defender share of the total tape
+            defdom = (tb > ts) if side == "S" else (ts > tb)            # defender pressing on the tape?
+            if defdom:
+                o = float(b.get("open", b.get("open_price", 0.0)) or 0.0); c = float(b.get("close", b.get("close_price", 0.0)) or 0.0)
+                if (c < o) if side == "S" else (c > o):                 # body AGAINST the defender (toward break) = absorbed
+                    n_abs += 1
+                elif (c > o) if side == "S" else (c < o):               # body WITH the defender = defended
+                    n_def += 1
+        if not shares:
             return None
-        mid = len(shares) // 2
-        s0 = sum(shares[:mid]) / mid; s1 = sum(shares[mid:]) / (len(shares) - mid)
-        return ("buyers" if side == "S" else "sellers", s0 * 100.0, s1 * 100.0)
+        if len(shares) >= 2:
+            mid = len(shares) // 2
+            s0 = sum(shares[:mid]) / mid; s1 = sum(shares[mid:]) / (len(shares) - mid)
+        else:
+            s0 = s1 = shares[0]
+        return ("buyers" if side == "S" else "sellers", s0 * 100.0, s1 * 100.0, n_def, n_abs)
 
     def _radar_hover(self, pt) -> None:
         """Hover a wall's radar area -> calibrated odds the wall HOLDS this visit (P(resist) from box-volume intensity;
@@ -5367,11 +5381,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self.plot.addItem(self._radar_hover_tip, ignoreBounds=True)
                 kind = "resistance" if side == "R" else "support"
                 txt = " %s  #%d  ·  holds %.0f%%  ·  break %.0f%% " % (kind, num, pr, 100.0 - pr)
-                rot = self._tape_rotation(side, int(rk0), int(rk1))     # live tape-imbalance rotation over the visit
+                rot = self._tape_rotation(side, int(rk0), int(rk1))     # live tape-imbalance rotation + defend/absorbed tally
                 if rot is not None:
-                    _lab, _s0, _s1 = rot
+                    _lab, _s0, _s1, _nd, _na = rot
                     _arr = "↑" if _s1 > _s0 + 2.0 else ("↓" if _s1 < _s0 - 2.0 else "→")
                     txt += "\n tape %s %.0f%%→%.0f%% %s " % (_lab, _s0, _s1, _arr)
+                    if _nd + _na > 0:                                    # candles where the defender pressed the tape
+                        txt += "\n candles  %d defend · %d absorbed " % (_nd, _na)
                 self._radar_hover_tip.setText(txt)
                 self._radar_hover_tip.setPos(x, y)
                 self._radar_hover_tip.show()
