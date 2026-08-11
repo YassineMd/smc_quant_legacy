@@ -1319,7 +1319,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._absorblvl_lbl_pool = []                            # TextItem pool — "Ab"/"Ag" tags on borderless walls
         self._absorblvl_pct_pool = []                            # TextItem pool — strength-% tag at each wall's right edge
         self._radar_zone_pool = []                               # QGraphicsRectItem — dark-wall-shade radar zones (upper+lower)
-        self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side,visit#) for hover hit-testing
+        self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side,visit#,rk0,rk1) for hover hit-testing
+        self._radar_hover_buckets = None                         # frame ref for the live tape-rotation readout on hover
         self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
@@ -5323,15 +5324,40 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], int(alpha)))
         return _rc
 
+    def _tape_rotation(self, side, rk0, rk1):
+        """Live TAPE-ROTATION readout for a radar visit: the DEFENDER's share of the tape, first-half -> second-half.
+        Defender = the wall's own side (buy wall S -> buyers Tape-B; sell wall R -> sellers Tape-S). A RISING share
+        = the tape imbalance rotating toward the defender = the wall winning the tape war (the descriptive signature
+        of a hold in progress; study/radar_hold_joint.py: def_share slope AUC .72-.74 — but COINCIDENT, a readout of
+        the hold happening, NOT a forecast). Returns (defender_label, share_start%, share_now%) or None."""
+        buckets = self._radar_hover_buckets
+        if not buckets:
+            return None
+        shares = []
+        for k in range(max(0, rk0), min(rk1, len(buckets) - 1) + 1):
+            b = buckets[k]
+            dur = max(1.0, float(b.get("end_time", 0.0) or 0.0) - float(b.get("start_time", 0.0) or 0.0))
+            tb = sum(b.get("sz_cb") or []) / dur; ts = sum(b.get("sz_cs") or []) / dur
+            dfd = tb if side == "S" else ts; tot = tb + ts               # defender share of the total tape
+            if tot > 0:
+                shares.append(dfd / tot)
+        if len(shares) < 2:
+            return None
+        mid = len(shares) // 2
+        s0 = sum(shares[:mid]) / mid; s1 = sum(shares[mid:]) / (len(shares) - mid)
+        return ("buyers" if side == "S" else "sellers", s0 * 100.0, s1 * 100.0)
+
     def _radar_hover(self, pt) -> None:
         """Hover a wall's radar area -> calibrated odds the wall HOLDS this visit (P(resist) from box-volume intensity;
-        study/wall_radar_calib.py). DESCRIPTIVE only — light volume ~ almost-certain hold, heavy volume ~ coin flip."""
+        study/wall_radar_calib.py). DESCRIPTIVE only — light volume ~ almost-certain hold, heavy volume ~ coin flip.
+        Adds a live TAPE-ROTATION line: the defender's tape share start->now over the visit (rising = imbalance
+        rotating to the wall's side; a readout of the hold in progress, not a forecast). See `_tape_rotation`."""
         if not self._radar_hover_zones or not self.menu.layer_state("m10_absorblvl"):
             if self._radar_hover_tip is not None:
                 self._radar_hover_tip.hide()
             return
         x = pt.x(); y = pt.y()
-        for (xl, xr, ylo, yhi, pr, side, num) in self._radar_hover_zones:
+        for (xl, xr, ylo, yhi, pr, side, num, rk0, rk1) in self._radar_hover_zones:
             if xl <= x <= xr and ylo <= y <= yhi:
                 if self._radar_hover_tip is None:
                     self._radar_hover_tip = pg.TextItem(anchor=(0, 1), color=(255, 210, 70),
@@ -5340,7 +5366,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._radar_hover_tip.textItem.setFont(QtGui.QFont("Consolas", 9))
                     self.plot.addItem(self._radar_hover_tip, ignoreBounds=True)
                 kind = "resistance" if side == "R" else "support"
-                self._radar_hover_tip.setText(" %s  #%d  ·  holds %.0f%%  ·  break %.0f%% " % (kind, num, pr, 100.0 - pr))
+                txt = " %s  #%d  ·  holds %.0f%%  ·  break %.0f%% " % (kind, num, pr, 100.0 - pr)
+                rot = self._tape_rotation(side, int(rk0), int(rk1))     # live tape-imbalance rotation over the visit
+                if rot is not None:
+                    _lab, _s0, _s1 = rot
+                    _arr = "↑" if _s1 > _s0 + 2.0 else ("↓" if _s1 < _s0 - 2.0 else "→")
+                    txt += "\n tape %s %.0f%%→%.0f%% %s " % (_lab, _s0, _s1, _arr)
+                self._radar_hover_tip.setText(txt)
                 self._radar_hover_tip.setPos(x, y)
                 self._radar_hover_tip.show()
                 return
@@ -5374,6 +5406,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hide_absorb_levels(); return
         n = len(buckets)
         self._absorb_marks(buckets)                           # refresh the shared cache (self._absorblvl_marks)
+        self._radar_hover_buckets = buckets                   # frame the hover tape-rotation readout reads from
         ub = 0; ul = 0; up = 0; uz = 0; self._radar_hover_zones = []
         for m in self._absorblvl_marks:
             i0 = int(m["i0"]); i1 = min(int(m["i1"]), n - 1)
@@ -5426,7 +5459,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 za = int(min(150, max(85, 85 + max(0.0, pr - 55.0) * 1.5)))      # opacity ~ P(resist)
                 _hz = self._radar_zone(uz, orgb, za); uz += 1
                 _hz.setRect(rxl, price - band, max(1e-9, rxr - rxl), 2.0 * band); _hz.setVisible(True)
-                self._radar_hover_zones.append((rxl, rxr, price - band, price + band, pr, m["side"], _rnum))
+                self._radar_hover_zones.append((rxl, rxr, price - band, price + band, pr, m["side"], _rnum, rk0, rk1))
         for _it in self._absorblvl_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._absorblvl_lbl_pool[ul:]:
