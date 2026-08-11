@@ -1331,6 +1331,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Crazy Wall Ag/Ab (m10_crazywall) — ✪ star badge on outlier volume bubbles sitting at a wall/radar
         self._crazy_pool = []; self._crazy_sig = None
         self._easygold_pool = []      # Easy Gold sub-tier (m10_wallabs_easygold) — gold ⛊/☗ on the divergence candle
+        self._pureagg_pool = []       # Pure Aggression sub-tier (m10_wallabs_pureagg) — green/red ▋ on the one-sided candle
         # 5m Absorption S/R overlay (m10_engulf5m, 5m only) — triangle L/S badges (engulf green/red/gold + absorb2 blue/orange); click -> entry/TP/SL lines
         self._e5m_sph = None                     # ScatterPlotItem of triangle badges
         self._e5m_lbl_pool = []                  # (colour-only badges)
@@ -2253,7 +2254,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._mom_sig = None; self._sel_sig = None   # 15m Momentum toggled -> re-run the overlay draw
             if not on:
                 self._clear_momentum()              # off -> tear the squares down now
-        elif key in ("m10_crazywall", "m10_wallabs_crazy", "m10_wallabs_big", "m10_wallabs_easygold"):
+        elif key in ("m10_crazywall", "m10_wallabs_crazy", "m10_wallabs_big", "m10_wallabs_easygold", "m10_wallabs_pureagg"):
             self._crazy_sig = None; self._sel_sig = None   # Wall Absorption (master or a sub-tier) toggled -> redraw
             if key == "m10_crazywall" and not on:
                 self._clear_crazy_wall()            # master off -> tear the stars down now
@@ -6785,10 +6786,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.plot.addItem(_t, ignoreBounds=True); self._easygold_pool.append(_t)
         return self._easygold_pool[used]
 
+    def _pureagg_badge(self, used):
+        """Pooled ▋ block TextItem — icon only, above/below the candle. Colour (green long / red short) set per hit."""
+        if used >= len(self._pureagg_pool):
+            _t = pg.TextItem(anchor=(0.5, 0.5))
+            _t.setZValue(34)
+            _cf = QtGui.QFont("Segoe UI Symbol", 16); _cf.setBold(True)
+            _t.textItem.setFont(_cf)
+            self.plot.addItem(_t, ignoreBounds=True); self._pureagg_pool.append(_t)
+        return self._pureagg_pool[used]
+
     def _clear_crazy_wall(self) -> None:
         for _t in self._crazy_pool:
             _t.setVisible(False)
         for _t in self._easygold_pool:
+            _t.setVisible(False)
+        for _t in self._pureagg_pool:
             _t.setVisible(False)
         self._crazy_sig = None
 
@@ -6801,10 +6814,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         show_crazy = self.menu.layer_state("m10_wallabs_crazy")   # ✪ outlier tier
         show_big = self.menu.layer_state("m10_wallabs_big")       # ★ big-but-not-crazy tier
         show_eg = self.menu.layer_state("m10_wallabs_easygold")   # ⛊/☗ gold divergence-candle label
+        show_pa = self.menu.layer_state("m10_wallabs_pureagg")    # ▋ green/red one-sided-aggression label
         n = len(filtered)
-        if n < 2 or not (show_crazy or show_big or show_eg):
+        if n < 2 or not (show_crazy or show_big or show_eg or show_pa):
             self._clear_crazy_wall(); return
-        _sig = (n, filtered[-1].get("end_time"), filtered[-1].get("close"), show_crazy, show_big, show_eg)
+        _sig = (n, filtered[-1].get("end_time"), filtered[-1].get("close"), show_crazy, show_big, show_eg, show_pa)
         if _sig == self._crazy_sig:
             return
         self._crazy_sig = _sig
@@ -6819,6 +6833,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
         pad = max((vy1 - vy0) * 0.045, 1e-9)                   # gap between the badge and the candle wick
         self._draw_easy_gold(filtered, marks, show_eg, vx0, vx1, pad)   # gold labels ride the wall MARKS (no CW gate)
+        self._draw_pure_agg(filtered, marks, show_pa, vx0, vx1, pad)    # ▋ one-sided-aggression labels (wall MARKS)
         u = 0
         for h in hits:
             tier = h.get("tier", "crazy")                     # 'crazy' -> ✪ / 'big' -> ★, each gated by its sub-toggle
@@ -6868,6 +6883,40 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _t.setText("☗" if longside else "⛊")              # ☗ points up (long) / ⛊ turned, points down (short)
             _t.setPos(i, y); _t.setVisible(True)
         for _t in self._easygold_pool[u:]:
+            _t.setVisible(False)
+
+    def _draw_pure_agg(self, filtered, marks, show, vx0, vx1, pad) -> None:
+        """PURE AGGRESSION sub-tier (m10_wallabs_pureagg): a green/red ▋ on EVERY one-sided-aggression candle that
+        sits in a same-side active wall's radar (app/pure_aggression_detect.from_walls). GREEN ▋ below the low = a
+        bullish candle whose bubbles are ALL GREEN at a buy wall (support); RED ▋ above the high = a bearish candle
+        whose bubbles are ALL RED at a sell wall (resistance). Mirror of Easy Gold. DESCRIPTIVE label only."""
+        n = len(filtered)
+        if not show or n < 2:
+            for _t in self._pureagg_pool:
+                _t.setVisible(False)
+            return
+        try:
+            from app import pure_aggression_detect
+            pas = pure_aggression_detect.from_walls(filtered, marks)
+        except Exception:
+            for _t in self._pureagg_pool:
+                _t.setVisible(False)
+            return
+        pad2 = pad * 1.9                                       # sit a touch further out than the Easy Gold badge
+        u = 0
+        for g in pas:
+            i = int(g["i"])
+            if i < 0 or i >= n or i < vx0 - 1.0 or i > vx1 + 1.0:   # cull to viewport
+                continue
+            b = filtered[i]
+            hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            longside = (g["side"] == "long")                  # support/bullish -> green below; resistance/bearish -> red above
+            y = (lo - pad2) if longside else (hi + pad2)
+            _t = self._pureagg_badge(u); u += 1
+            _t.setColor(pg.mkColor(70, 235, 120) if longside else pg.mkColor(240, 70, 90))
+            _t.setText("▋")
+            _t.setPos(i, y); _t.setVisible(True)
+        for _t in self._pureagg_pool[u:]:
             _t.setVisible(False)
 
     # 15m MOMENTUM overlay (hamburger m10_momentum, 15m ONLY) — FORWARD CANDIDATE, self-gated, fail-safe.
