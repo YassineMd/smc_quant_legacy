@@ -81,6 +81,27 @@ def _p_resist(vr, pen, clpos, body, ej):                      # 5-factor logisti
     return 100.0 / (1.0 + _exp(-z))
 
 
+# RECALIBRATION — the raw _p_resist logistic RANKS well (AUC .74) but its mid-range PROBABILITY LABELS run ~15-23pp
+# HOT (study/radar_hold_calibration.py: over 55,883 5m visits a stated 77% actually holds ~57%). This monotone map
+# (raw% -> empirical hold%, isotonic knots, study/wall_pr_recalibrate.py) makes the DISPLAYED odds honest: 77->56,
+# 85->72, 90->89, 95->99. Fit on recon 5m both years, OOS-verified (fit-2025 predicts 2026 hold rate within ~1.7pp).
+_RECAL_X = (0.0, 35.2, 50.8, 58.3, 63.5, 67.6, 71.0, 73.8, 76.3, 78.4, 80.4, 82.4, 84.2, 86.0, 87.7, 89.3, 90.8, 92.2, 93.5, 94.8, 96.3, 100.0)
+_RECAL_Y = (0.0, 24.3, 32.1, 38.9, 41.6, 43.8, 48.7, 51.3, 54.8, 58.6, 61.5, 66.1, 70.4, 75.1, 81.7, 86.1, 92.8, 96.4, 98.0, 99.1, 99.4, 100.0)
+
+
+def _recal(pr):
+    """Map a raw P(resist)% through the empirical hold curve so the displayed odds match the true hold rate
+    (piecewise-linear, clamped at the ends). Monotone -> the ranking / AUC are unchanged, only the labels."""
+    if pr <= _RECAL_X[0]:
+        return _RECAL_Y[0]
+    if pr >= _RECAL_X[-1]:
+        return _RECAL_Y[-1]
+    j = bisect_right(_RECAL_X, pr)
+    x0, x1 = _RECAL_X[j - 1], _RECAL_X[j]
+    y0, y1 = _RECAL_Y[j - 1], _RECAL_Y[j]
+    return y0 + (y1 - y0) * (pr - x0) / (x1 - x0) if x1 > x0 else y0
+
+
 def _box_vol_lv(b, r_lo, r_hi):
     """Footprint volume (buy+sell) at levels inside the radar [r_lo, r_hi]."""
     tot = 0.0
@@ -249,7 +270,7 @@ def detect(buckets, skip_last=False):
                     body = (C[rk0] - O[rk0]) * (1.0 if isR else -1.0) / span       # body oriented toward the break edge
                 else:
                     pen = clpos = body = 0.0
-                runs.append((rk0, rk1, round(_p_resist(vr, pen, clpos, body, base), 1)))
+                runs.append((rk0, rk1, round(_recal(_p_resist(vr, pen, clpos, body, base)), 1)))   # CALIBRATED hold% (honest odds)
             out.append({"price": P, "side": w["side"], "src": w["src"], "i0": i0, "i1": i1,
                         "broken": bool(w["broken"]),            # authoritative: mitigated iff a body closed beyond the radar
                         "strength": strength, "hits": hits, "band": band, "radar_runs": runs,
