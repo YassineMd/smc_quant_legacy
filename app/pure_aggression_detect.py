@@ -5,10 +5,11 @@ For each Order-Flow Wall (app.absorption_level_detect.detect mark: price / band 
 wall is active (i0..i1) and label EVERY candle whose RANGE (low..high) OVERLAPS the wall's radar (price +/-
 RADAR_MULT*band) -- i.e. the candle TRADED at the wall -- that is a ONE-SIDED aggression print:
 
-    BUY wall (S, support):     BULLISH candle (close>open) AND every top-3 bubble GREEN (buy>=sell) AND Tape-S>Tape-B
-    SELL wall (R, resistance): BEARISH candle (close<open) AND every top-3 bubble RED   (sell>buy)  AND Tape-B>Tape-S
+    BUY wall (S):  BULLISH candle (close>open) AND every top-3 bubble GREEN (buy>=sell) AND Tape-S>Tape-B AND A<0
+    SELL wall (R): BEARISH candle (close<open) AND every top-3 bubble RED   (sell>buy)  AND Tape-B>Tape-S AND A<0
 
-both -> a GOLD ▍ badge (below the low for long / above the high for short).
+both -> a GOLD ▍ badge (below the low for long / above the high for short). A = absorption()[0] = the tooltip
+"Absorb R" value (oriented, positive = absorbed); A<0 keeps only candles NOT on the absorbed side.
 
 "Bubbles" = the drawn top-3 footprint levels by total volume; green iff buy >= sell, red iff sell > buy (exactly the
 footprint_layers colouring). The heavy VOLUME levels all sit one side (bubbles agree with the candle) while the tape
@@ -42,6 +43,7 @@ def from_walls(buckets, walls):
     """Label every one-sided-aggression candle sitting in a same-side active wall's radar. `walls` =
     absorption_level_detect.detect() marks. Dedup by bar -> one badge per candle."""
     from app.crazy_wall_detect import _bubbles          # the drawn top-3 footprint levels [(price, tot, buy, sell)]
+    from app import absorption as ABS                    # A = the tooltip "Absorb R" value (oriented, +=absorbed)
     n = len(buckets)
     if n < 2 or not walls:
         return []
@@ -49,6 +51,7 @@ def from_walls(buckets, walls):
         out = []
         seen = set()
         bcache = {}                                       # top-3 bubbles per bar, reused across overlapping walls
+        acache = {}                                       # A per bar, reused across overlapping wall radars
         for w in walls:
             band = _f(w.get("band")); wp = _f(w.get("price"))
             if band <= 0 or wp <= 0:
@@ -71,6 +74,13 @@ def from_walls(buckets, walls):
                 if bubs is None:
                     bubs = _bubbles(b); bcache[j] = bubs
                 if not bubs:                              # no footprint bubbles -> no aggression read
+                    continue
+                A = acache.get(j)
+                if A is None:
+                    _a = ABS.absorption(buckets, j)[0]
+                    A = _a if _a is not None else 999.0    # None (thin history) -> a sentinel that fails A < 0
+                    acache[j] = A
+                if A >= 0:                                # Absorb R must be NEGATIVE (not on the absorbed side)
                     continue
                 tb, ts = _tape(b)
                 if s == "S":                              # buy wall -> BULLISH + all bubbles GREEN + Tape-S > Tape-B
