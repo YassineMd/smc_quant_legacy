@@ -1322,6 +1322,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side,visit#,rk0,rk1) for hover hit-testing
         self._radar_hover_buckets = None                         # frame ref for the live tape-rotation readout on hover
         self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
+        self._radar_hover_lines = None                           # [top, bottom] dashed edges of the hovered radar zone
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._mom_sph = None                     # ScatterPlotItem of square badges
         self._mom_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
@@ -5366,6 +5367,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self._radar_hover_zones or not self.menu.layer_state("m10_absorblvl"):
             if self._radar_hover_tip is not None:
                 self._radar_hover_tip.hide()
+            self._radar_hide_edges()
             return
         x = pt.x(); y = pt.y()
         for (xl, xr, ylo, yhi, pr, side, num, rk0, rk1) in self._radar_hover_zones:
@@ -5381,20 +5383,41 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 rot = self._tape_rotation(side, int(rk0), int(rk1))     # buy-share trend + absorption tally
                 if rot is not None:
                     _b0, _b1, _nba, _nsa = rot                          # buy-share start/now; sell-share = 100 - buy
-                    txt += "\n Buyers absorbed  %d sellers • tape buyers %.0f%%→%.0f%% " % (_nba, _b0, _b1)
-                    txt += "\n Sellers absorbed %d buyers • tape sellers %.0f%%→%.0f%% " % (_nsa, 100.0 - _b0, 100.0 - _b1)
+                    txt += "\n Buyers absorbed  %d sellers • tape buyers %.0f%%→%.0f%% (%+.0f%%) " % (_nba, _b0, _b1, _b1 - _b0)
+                    txt += "\n Sellers absorbed %d buyers • tape sellers %.0f%%→%.0f%% (%+.0f%%) " % (_nsa, 100.0 - _b0, 100.0 - _b1, _b0 - _b1)
                 self._radar_hover_tip.setText(txt)
                 self._radar_hover_tip.setPos(x, y)
                 self._radar_hover_tip.show()
+                self._radar_show_edges(yhi, ylo, side)                  # dashed top/bottom of the hovered radar, in its colour
                 return
         if self._radar_hover_tip is not None:
             self._radar_hover_tip.hide()
+        self._radar_hide_edges()
+
+    def _radar_show_edges(self, yhi, ylo, side) -> None:
+        """Two dashed horizontal lines at the hovered radar zone's top (yhi) and bottom (ylo), in the radar's colour
+        (sell/R orange, buy/S blue). InfiniteLines -> auto-span the viewport."""
+        if self._radar_hover_lines is None:
+            self._radar_hover_lines = []
+            for _ in range(2):
+                _ln = pg.InfiniteLine(angle=0, movable=False); _ln.setZValue(64)
+                self.plot.addItem(_ln, ignoreBounds=True); self._radar_hover_lines.append(_ln)
+        col = (235, 140, 30) if side == "R" else (45, 125, 220)
+        _pn = pg.mkPen(*col, 220, width=1.1); _pn.setCosmetic(True); _pn.setDashPattern([5.0, 4.0])
+        for _ln, _yv in zip(self._radar_hover_lines, (yhi, ylo)):
+            _ln.setPen(_pn); _ln.setPos(float(_yv)); _ln.setVisible(True)
+
+    def _radar_hide_edges(self) -> None:
+        if self._radar_hover_lines:
+            for _ln in self._radar_hover_lines:
+                _ln.setVisible(False)
 
     def _hide_absorb_levels(self) -> None:
         for _p in (self._absorblvl_box_pool + self._absorblvl_lbl_pool + self._absorblvl_pct_pool + self._radar_zone_pool):
             _p.setVisible(False)
         if self._radar_hover_tip is not None:
             self._radar_hover_tip.hide()
+        self._radar_hide_edges()
 
     def _absorb_marks(self, buckets):
         """Order-Flow Wall marks for `buckets`, recomputed only when the live bar changes. Shared by the wall overlay
