@@ -123,7 +123,7 @@ _M10_INDICATORS = [
     ("m10_4hsep", "4h Bucket Separators", True, True),          # dashed vline at each completed 4h bucket's start
     ("m10_prevday_vp", "Prev. Day VP", False, True),            # per-previous-UTC-day Volume Profile (style = 'Volume Profile Mode' dropdown)
     ("m10_session", "Session Filter", False, True),            # per-UTC-day Tokyo/London/New-York boxes: range + avg (VWAP) + high/low
-    ("m10_ny_erange", "NY Expected Range", False, True),       # forecast today's NY range from YESTERDAY's NY range (day-over-day vol persistence, r=0.33)
+    ("m10_erange", "Expected Range", False, True),             # per-session dashed range envelope from YESTERDAY's same-session range (NY/Tokyo/London/Whole Day sub-toggles)
     ("m10_breakout5m", "5m Breakout", False, True),             # 5m ONLY: green/red 'Br' badges on S/R-breakout (mitigation) candles
 ]
 
@@ -484,6 +484,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_session_subtoggles(sec)      # Session sub-toggle: VP lines (VAH/VAL/POC/LVN) on/off
             if key == "m10_vwap":
                 self._build_vwap_subtoggles(sec)         # VWAP sub-toggles: ±1σ / ±2σ / ±3σ std-dev bands
+            if key == "m10_erange":
+                self._build_erange_subtoggles(sec)       # Expected Range sub-toggles: NY / Tokyo / London / Whole Day
             if key == "m10_stats":
                 self._build_stats_substats(sec)          # per-stat on/off for the Mode-10 stats box
         return sec
@@ -496,6 +498,21 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         for key, label, default in (("m10_wallabs_crazy", "· Crazy (✪)", True), ("m10_wallabs_big", "· Big (★)", False),
                                     ("m10_wallabs_easygold", "· Easy Gold (⛊)", False),
                                     ("m10_wallabs_pureagg", "· Pure Aggression (▍)", False)):
+            cb = QtWidgets.QCheckBox(label)
+            cb.setChecked(default)
+            cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
+            self.layer_checks[key] = cb
+            section.addWidget(cb)
+
+    def _build_erange_subtoggles(self, section) -> None:
+        """Expected Range sub-toggles: one DASHED high/low range envelope per session (NY / Tokyo / London / Whole Day),
+        each forecasting that session's range from yesterday's same-session range. Each an m10_ key (persists + reads
+        via layer_state); the master m10_erange gates the whole indicator. NY default ON (preserves the old behaviour)."""
+        for key, label, default in (("m10_erange_ny", "· NY Session", True),
+                                    ("m10_erange_tokyo", "· Tokyo Session", False),
+                                    ("m10_erange_london", "· London Session", False),
+                                    ("m10_erange_wholeday", "· Whole Day", False)):
             cb = QtWidgets.QCheckBox(label)
             cb.setChecked(default)
             cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level

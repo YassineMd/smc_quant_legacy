@@ -4981,18 +4981,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                  ("London", 8, 13, (240, 158, 58)),      # ends at the NY open (13:00 UTC) -> no London/NY overlap
                  ("New York", 13, 21, (58, 190, 122)))
 
-    # NY Expected-Range forecast (m10_ny_erange): today's NY range% ≈ A + B·(yesterday's NY range%). Winsorized OLS
-    # over 534 recon days (lag-1 range autocorr r=0.33; OOS MAE 1.58% beats use-the-mean 2.03%). NY range = (high-low)
-    # over the 13-21 UTC session. Band = NY_open × (1 ± ER/2), spanning that day's NY session; per UTC day.
-    NY_ER_A, NY_ER_B, NY_ER_MEAN = 0.03017, 0.2656, 0.04287
-    NY_ER_CLIP = (0.015, 0.12)                            # clamp the forecast to a sane 1.5%–12% band
-    NY_ER_RGB = (150, 120, 235)                           # violet — distinct from the green NY session box
-    # Early-break detector: an EARLY break of the band (first touch beyond, in a bucket starting <= 15:00 UTC / by
-    # ~4pm Morocco = the 2-5pm window) = trend-day tell (continues, +0.4-0.9%/trade in-sample, both-year sign);
-    # a LATE break exhausts/fades. Early = solid bright edge + ▲/▼; late = muted △/▽ ("don't chase"). In-sample edge
-    # is regime-dependent (2025-heavy) + OOS-unconfirmed (low-vol window) — an eyeball tell, not a proven trade.
-    NY_ER_EARLY_MAX_H = 15                                # break bucket start-hour <= this (UTC) = EARLY
-    NY_ER_UP_RGB, NY_ER_DN_RGB = (64, 224, 140), (240, 84, 110)   # early-break signal colour: green up / red down
+    # EXPECTED RANGE (hamburger m10_erange) — per SESSION, forecast today's session RANGE from YESTERDAY's same-session
+    # range (day-over-day volatility persistence; study/session_range_persistence.py: lag-1 autocorr Tokyo .28 / London
+    # .31 / NY .35 / WholeDay .29, positive BOTH years, OOS-positive). ER = clamp(A + B·yest_rangeFrac); band =
+    # sessOpen × (1 ± ER/2), DASHED high/low edges only (NO fill), spanning that session per UTC day. This is a
+    # WIDTH/volatility envelope — direction is NOT forecast (session direction has no day-over-day memory).
+    #   (sub-key, name, h0, h1[excl, UTC], A, B, MEAN_fallback, CLIP_lo, CLIP_hi, RGB)  — coeffs = winsorized OLS, recon 1h
+    _ERANGE = (
+        ("m10_erange_ny",       "NY",     13, 21, 0.03015, 0.3470, 0.04703, 0.0144, 0.1392, (150, 120, 235)),   # violet
+        ("m10_erange_tokyo",    "Tokyo",   0,  8, 0.02245, 0.3488, 0.03524, 0.0112, 0.1067, (96, 140, 226)),    # blue
+        ("m10_erange_london",   "London",  8, 16, 0.02679, 0.3306, 0.04059, 0.0140, 0.1099, (240, 158, 58)),    # orange
+        ("m10_erange_wholeday", "Day",     0, 24, 0.04517, 0.3295, 0.06862, 0.0244, 0.1970, (175, 180, 192)),   # gray
+    )
 
     def _sess_rect(self, used, rgb):                           # pooled translucent session box (behind candles)
         if used >= len(self._sess_rect_pool):
@@ -5106,17 +5106,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _t.setVisible(False)
 
     # ------------------------------------------------------------------
-    # NY EXPECTED RANGE (hamburger m10_ny_erange) — forecast today's NY session range from YESTERDAY's NY range.
-    # Day-over-day volatility persistence (lag-1 range autocorr r=0.33, OOS-validated): a WIDE NY yesterday begets a
-    # wide NY today. Drawn as a violet band NY_open × (1 ± ER/2) spanning the 13-21 UTC session, per UTC day.
-    # Direction is NOT forecast (session direction has no day-over-day memory) — this is a width/volatility envelope.
+    # EXPECTED RANGE (hamburger m10_erange) — per-session dashed range envelope from YESTERDAY's same-session range.
+    # Day-over-day volatility persistence (study/session_range_persistence.py): a WIDE session yesterday begets a wide
+    # same session today (Tokyo/London/NY/Whole-Day, positive both years). Pooled line/label helpers below (the box +
+    # mark pools are legacy — unused in the dashed-lines-only design). Direction is NOT forecast — a width envelope.
     # ------------------------------------------------------------------
-    def _nyer_box(self, used):                                # pooled forecast band (behind candles)
+    def _nyer_box(self, used):                                # pooled forecast band (LEGACY — unused, no-fill design)
         if used >= len(self._nyer_box_pool):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-7)
             self.vb.addItem(_rc, ignoreBounds=True); self._nyer_box_pool.append(_rc)
         _rc = self._nyer_box_pool[used]
-        _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(*self.NY_ER_RGB, 22))
+        _rc.setPen(pg.mkPen(None)); _rc.setBrush(pg.mkBrush(150, 120, 235, 22))   # (unused in the dashed-lines design)
         return _rc
 
     def _nyer_line(self, used):                               # pooled dashed expected hi/lo edge
@@ -5139,99 +5139,68 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.plot.addItem(_t, ignoreBounds=True); self._nyer_mark_pool.append(_t)
         return self._nyer_mark_pool[used]
 
-    def _hide_ny_erange(self) -> None:
+    def _hide_erange(self) -> None:
         for _p in (self._nyer_box_pool + self._nyer_line_pool + self._nyer_lbl_pool + self._nyer_mark_pool):
             _p.setVisible(False)
 
-    def _draw_ny_erange(self, buckets, x, vx0, vx1) -> None:
-        """NY Expected Range (m10_ny_erange): forecast today's NY session range from YESTERDAY's NY range
-        (ER = A + B·yest_range, clamped). A violet band NY_open × (1 ± ER/2) spans each day's 13-21 UTC session so
-        the operator sees the expected envelope as NY opens. Per UTC day, culled to the viewport. Falls back to the
-        mean when yesterday's NY session isn't in the loaded window (label suffixed '(avg)').
-        EARLY-BREAK detector: the first touch beyond the band, if it lands in a bucket starting <= NY_ER_EARLY_MAX_H
-        UTC (~4pm Morocco), lights that edge SOLID+bright with a ▲/▼ (trend-day tell — continues); a later break gets
-        a muted △/▽ ('· late' — exhaustion/fade). See the class-constant note for the evidence + caveats."""
-        if not self.menu.layer_state("m10_ny_erange") or not buckets:
-            self._hide_ny_erange(); return
-        ny = {}                                               # date-ordinal -> NY session (open + hi/lo span + x extent)
+    def _draw_erange(self, buckets, x, vx0, vx1) -> None:
+        """EXPECTED RANGE (m10_erange): for each enabled session sub-toggle (NY / Tokyo / London / Whole Day), a DASHED
+        high/low envelope = sessOpen × (1 ± ER/2), where ER = clamp(A + B·yesterday's same-session range fraction).
+        Dashed edges only, NO fill; per UTC day, culled to the viewport. Falls back to the session MEAN when yesterday's
+        session isn't in the loaded window (label suffixed '(avg)'). Width/volatility forecast — direction NOT predicted.
+        See the _ERANGE table + study/session_range_persistence.py."""
+        if not self.menu.layer_state("m10_erange") or not buckets:
+            self._hide_erange(); return
+        active = [c for c in self._ERANGE if self.menu.layer_state(c[0])]
+        if not active:
+            self._hide_erange(); return
+        n = len(buckets)
+        hrs = [-1] * n; dords = [-1] * n; opn = [0.0] * n; his = [0.0] * n; los = [0.0] * n
         for i, b in enumerate(buckets):
             st = float(b.get("start_time", 0.0) or 0.0)
-            if st <= 0:
-                continue
-            t = datetime.utcfromtimestamp(st)
-            if not (13 <= t.hour < 21):
-                continue
-            hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            if hi <= 0 or lo <= 0:
-                continue
-            do = t.toordinal(); r = ny.get(do)
-            if r is None:                                     # first NY bucket of the day = session OPEN
-                o = float(b.get("open", b.get("open_price", 0.0)) or 0.0)
-                ny[do] = {"o": o, "hi": hi, "lo": lo, "i0": i, "i1": i, "bars": [(i, t.hour, hi, lo)]}
-            else:
-                r["hi"] = max(r["hi"], hi); r["lo"] = min(r["lo"], lo); r["i1"] = i
-                r["bars"].append((i, t.hour, hi, lo))
-        ub = ul = ut = um = 0
-        for do in sorted(ny):
-            cur = ny[do]; o = cur["o"]
-            if o <= 0:
-                continue
-            xl = x[cur["i0"]] - 0.5; xr = x[cur["i1"]] + 0.5
-            if xr < vx0 - 1.0 or xl > vx1 + 1.0:              # cull to the visible viewport
-                continue
-            prev = ny.get(do - 1)                             # YESTERDAY's NY session
-            if prev is not None and prev["o"] > 0:
-                yr = (prev["hi"] - prev["lo"]) / prev["o"]
-                er = min(self.NY_ER_CLIP[1], max(self.NY_ER_CLIP[0], self.NY_ER_A + self.NY_ER_B * yr)); fb = False
-            else:
-                er = self.NY_ER_MEAN; fb = True
-            exp_hi = o * (1.0 + er / 2.0); exp_lo = o * (1.0 - er / 2.0)
-            # first break of the band (touch beyond) + whether it is EARLY (bucket start-hour <= cutoff)
-            brk_side = None; brk_j = None; brk_early = False
-            for (_j, _hh, _bh, _bl) in cur["bars"]:
-                if _bh >= exp_hi:
-                    brk_side = "up"; brk_j = _j; brk_early = _hh <= self.NY_ER_EARLY_MAX_H; break
-                if _bl <= exp_lo:
-                    brk_side = "down"; brk_j = _j; brk_early = _hh <= self.NY_ER_EARLY_MAX_H; break
-            self._nyer_box(ub).setRect(xl, exp_lo, max(1e-9, xr - xl), max(1e-9, exp_hi - exp_lo))
-            self._nyer_box_pool[ub].setVisible(True); ub += 1
-            for _y in (exp_hi, exp_lo):                       # edges: broken side lights up SOLID+bright on an EARLY break
-                _broken = (brk_side == "up" and _y == exp_hi) or (brk_side == "down" and _y == exp_lo)
-                if brk_early and _broken:
-                    _c = self.NY_ER_UP_RGB if _y == exp_hi else self.NY_ER_DN_RGB
-                    _pn = pg.mkPen(*_c, 240, width=2.0); _pn.setCosmetic(True)
+            if st > 0:
+                t = datetime.utcfromtimestamp(st); hrs[i] = t.hour; dords[i] = t.toordinal()
+            his[i] = float(b.get("high", 0.0) or 0.0); los[i] = float(b.get("low", 0.0) or 0.0)
+            opn[i] = float(b.get("open", b.get("open_price", 0.0)) or 0.0)
+        ul = ut = 0
+        for (key, name, h0, h1, A, B, MN, clo, chi, rgb) in active:
+            sess = {}                                          # date-ordinal -> {o, hi, lo, i0, i1}
+            for i in range(n):
+                if hrs[i] < 0 or not (h0 <= hrs[i] < h1) or his[i] <= 0 or los[i] <= 0:
+                    continue
+                r = sess.get(dords[i])
+                if r is None:                                  # first session bucket of the day = session OPEN
+                    sess[dords[i]] = {"o": opn[i], "hi": his[i], "lo": los[i], "i0": i, "i1": i}
                 else:
-                    _pn = pg.mkPen(*self.NY_ER_RGB, 185, width=1.1); _pn.setCosmetic(True); _pn.setDashPattern([5.0, 4.0])
-                _ln = self._nyer_line(ul); ul += 1
-                _ln.setData([xl, xr], [_y, _y]); _ln.setPen(_pn); _ln.setVisible(True)
-            if brk_side is not None and brk_j is not None and 0 <= brk_j < len(x):   # break marker at the break bucket
-                if brk_early:
-                    _g, _mc = ("▲", self.NY_ER_UP_RGB) if brk_side == "up" else ("▼", self.NY_ER_DN_RGB)
+                    r["hi"] = max(r["hi"], his[i]); r["lo"] = min(r["lo"], los[i]); r["i1"] = i
+            sdays = sorted(sess)
+            for k, do in enumerate(sdays):
+                cur = sess[do]; o = cur["o"]
+                if o <= 0:
+                    continue
+                xl = x[cur["i0"]] - 0.5; xr = x[cur["i1"]] + 0.5
+                if xr < vx0 - 1.0 or xl > vx1 + 1.0:           # cull to the viewport
+                    continue
+                prev = sess[sdays[k - 1]] if k > 0 else None   # the previous available (trading) day's same session
+                if prev is not None and prev["o"] > 0:
+                    yr = (prev["hi"] - prev["lo"]) / prev["o"]
+                    er = min(chi, max(clo, A + B * yr)); fb = False
                 else:
-                    _g, _mc = ("△" if brk_side == "up" else "▽"), (150, 150, 162)     # late = muted (fade zone)
-                _mk = self._nyer_mark(um); um += 1
-                _mk.textItem.setFont(QtGui.QFont("Consolas", 17 if brk_early else 11))   # early = bigger ▲/▼
-                _mk.setColor(pg.mkColor(*_mc)); _mk.setText(_g)
-                _mk.setPos(x[brk_j], exp_hi if brk_side == "up" else exp_lo); _mk.setVisible(True)
-            if brk_early and brk_side == "up":
-                _tag, _lc = "  ▲ EARLY", self.NY_ER_UP_RGB
-            elif brk_early and brk_side == "down":
-                _tag, _lc = "  ▼ EARLY", self.NY_ER_DN_RGB
-            elif brk_side is not None:
-                _tag, _lc = "  · late", (150, 150, 162)
-            else:
-                _tag, _lc = "", self.NY_ER_RGB
-            _lb = self._nyer_lbl(ut); ut += 1
-            _lb.setColor(pg.mkColor(*_lc))
-            _lb.setText("NY exp %.1f%%%s%s" % (er * 100.0, "  (avg)" if fb else "", _tag))
-            _lb.setPos(xl, exp_hi); _lb.setVisible(True)
-        for _it in self._nyer_box_pool[ub:]:
-            _it.setVisible(False)
+                    er = MN; fb = True
+                exp_hi = o * (1.0 + er / 2.0); exp_lo = o * (1.0 - er / 2.0)
+                for _y in (exp_hi, exp_lo):                    # dashed high/low edge (no fill)
+                    _pn = pg.mkPen(*rgb, 205, width=1.2); _pn.setCosmetic(True); _pn.setDashPattern([5.0, 4.0])
+                    _ln = self._nyer_line(ul); ul += 1
+                    _ln.setData([xl, xr], [_y, _y]); _ln.setPen(_pn); _ln.setVisible(True)
+                _lb = self._nyer_lbl(ut); ut += 1
+                _lb.setColor(pg.mkColor(*rgb))
+                _lb.setText("%s exp %.1f%%%s" % (name, er * 100.0, "  (avg)" if fb else ""))
+                _lb.setPos(xl, exp_hi); _lb.setVisible(True)
         for _it in self._nyer_line_pool[ul:]:
             _it.setVisible(False)
         for _it in self._nyer_lbl_pool[ut:]:
             _it.setVisible(False)
-        for _it in self._nyer_mark_pool[um:]:
+        for _it in (self._nyer_box_pool + self._nyer_mark_pool):   # no fill + no break markers in this design
             _it.setVisible(False)
 
     # ------------------------------------------------------------------
@@ -9987,7 +9956,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._hide_4h_zone()       # hide the 4h buy/sell wick bands when leaving Mode 10
         self._hide_prevday_vp()    # hide the per-previous-day Volume Profiles when leaving Mode 10
         self._hide_session()       # hide the per-session boxes when leaving Mode 10
-        self._hide_ny_erange()     # hide the NY expected-range band too
+        self._hide_erange()        # hide the per-session Expected-Range envelopes too
         self._hide_eff_cycles(); self._hide_abs_cycles()   # hide the P2 + P1 HM sub-panels when leaving Mode 10
         # 1. sweep every tracked scanner item off the plot
         for item in self.active_scanner_items:
@@ -12539,9 +12508,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             self._clear_nyrb()
         try:
-            self._draw_ny_erange(buckets, x, vx0, vx1)             # NY expected-range forecast band (m10_ny_erange)
+            self._draw_erange(buckets, x, vx0, vx1)                # per-session Expected-Range envelopes (m10_erange)
         except Exception:
-            self._hide_ny_erange()
+            self._hide_erange()
         try:
             self._draw_reversal_point(buckets, x, vx0, vx1, vy0, vy1)  # Reversal Point triangles, ALL tf (m10_reversal)
         except Exception:
