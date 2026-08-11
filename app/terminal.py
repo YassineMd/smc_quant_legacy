@@ -1319,7 +1319,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._absorblvl_lbl_pool = []                            # TextItem pool — "Ab"/"Ag" tags on borderless walls
         self._absorblvl_pct_pool = []                            # TextItem pool — strength-% tag at each wall's right edge
         self._radar_zone_pool = []                               # QGraphicsRectItem — dark-wall-shade radar zones (upper+lower)
-        self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side,visit#,rk0,rk1) for hover hit-testing
+        self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side,visit#,rk0,rk1,radar_lo,radar_hi) for hover
         self._radar_hover_buckets = None                         # frame ref for the live tape-rotation readout on hover
         self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
         self._radar_hover_lines = None                           # [top, bottom] dashed edges of the hovered radar zone
@@ -5370,7 +5370,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._radar_hide_edges()
             return
         x = pt.x(); y = pt.y()
-        for (xl, xr, ylo, yhi, pr, side, num, rk0, rk1) in self._radar_hover_zones:
+        for (xl, xr, ylo, yhi, pr, side, num, rk0, rk1, r_lo, r_hi) in self._radar_hover_zones:
             if xl <= x <= xr and ylo <= y <= yhi:
                 if self._radar_hover_tip is None:
                     self._radar_hover_tip = pg.TextItem(anchor=(0, 1), color=(255, 210, 70),
@@ -5388,24 +5388,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._radar_hover_tip.setText(txt)
                 self._radar_hover_tip.setPos(x, y)
                 self._radar_hover_tip.show()
-                self._radar_show_edges(yhi, ylo, side)                  # dashed top/bottom of the hovered radar, in its colour
+                self._radar_show_edges(xl, xr, r_hi, r_lo, side)        # dashed RADAR top/bottom (±3·band) over the visit width
                 return
         if self._radar_hover_tip is not None:
             self._radar_hover_tip.hide()
         self._radar_hide_edges()
 
-    def _radar_show_edges(self, yhi, ylo, side) -> None:
-        """Two dashed horizontal lines at the hovered radar zone's top (yhi) and bottom (ylo), in the radar's colour
-        (sell/R orange, buy/S blue). InfiniteLines -> auto-span the viewport."""
+    def _radar_show_edges(self, xl, xr, r_hi, r_lo, side) -> None:
+        """Two dashed lines at the hovered RADAR's top (price+3·band) and bottom (price-3·band), spanning the VISIT's
+        x-width [xl, xr], in the radar's colour (sell/R orange, buy/S blue)."""
         if self._radar_hover_lines is None:
             self._radar_hover_lines = []
             for _ in range(2):
-                _ln = pg.InfiniteLine(angle=0, movable=False); _ln.setZValue(64)
+                _ln = pg.PlotCurveItem(); _ln.setZValue(64)
                 self.plot.addItem(_ln, ignoreBounds=True); self._radar_hover_lines.append(_ln)
         col = (235, 140, 30) if side == "R" else (45, 125, 220)
-        _pn = pg.mkPen(*col, 220, width=1.1); _pn.setCosmetic(True); _pn.setDashPattern([5.0, 4.0])
-        for _ln, _yv in zip(self._radar_hover_lines, (yhi, ylo)):
-            _ln.setPen(_pn); _ln.setPos(float(_yv)); _ln.setVisible(True)
+        _pn = pg.mkPen(*col, 230, width=1.2); _pn.setCosmetic(True); _pn.setDashPattern([5.0, 4.0])
+        for _ln, _yv in zip(self._radar_hover_lines, (r_hi, r_lo)):
+            _ln.setData([xl, xr], [_yv, _yv]); _ln.setPen(_pn); _ln.setVisible(True)
 
     def _radar_hide_edges(self) -> None:
         if self._radar_hover_lines:
@@ -5493,7 +5493,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 za = int(min(150, max(85, 85 + max(0.0, pr - 55.0) * 1.5)))      # opacity ~ P(resist)
                 _hz = self._radar_zone(uz, orgb, za); uz += 1
                 _hz.setRect(rxl, price - band, max(1e-9, rxr - rxl), 2.0 * band); _hz.setVisible(True)
-                self._radar_hover_zones.append((rxl, rxr, price - band, price + band, pr, m["side"], _rnum, rk0, rk1))
+                self._radar_hover_zones.append((rxl, rxr, price - band, price + band, pr, m["side"], _rnum, rk0, rk1,
+                                                price - 3.0 * band, price + 3.0 * band))   # +radar bounds (±3·band) for the hover edges
         for _it in self._absorblvl_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._absorblvl_lbl_pool[ul:]:
