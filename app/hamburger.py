@@ -372,7 +372,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.scanner_combo.currentIndexChanged.connect(
             lambda _i: self.scannerChanged.emit(self.scanner_combo.currentData()))
         root.addWidget(self.scanner_combo)
-        self._build_bubblevol_slider(root)               # Heatmap: min trade-bubble volume filter (SOL)
+        self._build_heatmap_section(root)                # 'Heatmap' dropdown (contrast + bubble vol) — Heatmap-mode only
 
         # --- scanner "Zero Point" anchor (Phase 1) ---
         root.addWidget(self._header("Scan Start Time"))
@@ -628,9 +628,21 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.wallfloor_slider.blockSignals(False)
         self._render_wallfloor_lbl()
 
+    def _build_heatmap_section(self, root) -> None:
+        """The 'Heatmap' dropdown: a CollapsibleSection holding the Liquidity-Contrast cutoff sliders (moved off the
+        chart) + the trade-bubble volume filter. Hidden unless the Heatmap scanner mode is active — the terminal
+        toggles `heatmap_sec` visibility on _hm_enter / _hm_exit."""
+        from .stats_overlay import HeatmapContrastBar
+        self.heatmap_sec = CollapsibleSection("Heatmap", expanded=True)
+        self.hm_contrast = HeatmapContrastBar(self, config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
+        self.heatmap_sec.addWidget(self.hm_contrast)     # Liquidity Contrast (lower/upper cutoff + Reset)
+        self._build_bubblevol_slider(self.heatmap_sec)   # trade-bubble min-volume filter (SOL)
+        root.addWidget(self.heatmap_sec)
+        self.heatmap_sec.setVisible(False)               # shown only in Heatmap mode (driven by the terminal)
+
     def _build_bubblevol_slider(self, root) -> None:
-        """Slider under 'Scanner Mode' (Heatmap): show only trade bubbles whose aggregated cell volume is >= the
-        value (in SOL). Higher = fewer/bigger bubbles only; 0 = show all. Also lightens the render. Persists."""
+        """Trade-bubble volume filter (inside the Heatmap dropdown): show only trade bubbles whose aggregated cell
+        volume is >= the value (in SOL). Higher = fewer/bigger bubbles only; 0 = show all. Also lightens the render. Persists."""
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w); lay.setContentsMargins(2, 1, 8, 5); lay.setSpacing(2)
         self.bubblevol_lbl = QtWidgets.QLabel()

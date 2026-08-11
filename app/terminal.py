@@ -57,7 +57,7 @@ from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visibl
 from .hamburger import FloatingOverlayMenu, HamburgerButton, scale_label
 from .pipe_client import PipeClientWorker
 from .session_perf import MemTracer, SessionProfiler, rss_mb
-from .stats_overlay import AbsorptionZoneSlider, EffAggZoneSlider, HeatmapContrastBar, StatsOverlay
+from .stats_overlay import AbsorptionZoneSlider, EffAggZoneSlider, StatsOverlay   # HeatmapContrastBar now lives in the hamburger 'Heatmap' dropdown
 
 _OPEN_WINDOWS: List["MinimalTerminalWindow"] = []
 _TUNNEL: "Optional[SSHTunnelManager]" = None   # set in main(); the refresh button relaunches a dead tunnel
@@ -1619,10 +1619,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.hm_levels: "Optional[tuple]" = None   # (lo,hi) raw-size cutoffs (auto p20/p99 + 60s renorm)
         self._hm_sizes = None                       # sorted nonzero sizes of the loaded grid (pctile->size map)
         self.hm_manual = False                     # True once the user drags a cutoff slider (auto-renorm pauses)
-        self.hm_contrast = HeatmapContrastBar(self, config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
-        self.hm_contrast.changed.connect(self._hm_contrast_changed)
-        self.hm_contrast.reset_clicked.connect(self._hm_contrast_reset)
-        self.hm_contrast.hide()
+        # Liquidity-Contrast controls now live in the hamburger 'Heatmap' dropdown (self.menu.hm_contrast); wired below.
         self.hm_renorm_t = 0.0
         self.hm_band: "Optional[tuple]" = None      # (ylo,yhi) currently loaded price band
         self.hm_floor_ms = 0                         # hard left-time boundary (Scan Start) — no data before it
@@ -1962,6 +1959,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.swingSensitivityChanged.connect(self._on_swing_sensitivity)   # swing-ZigZag threshold slider
         self.menu.wallFloorChanged.connect(self._on_wall_floor)                  # Order-Flow Walls min-strength floor
         self.menu.bubbleVolChanged.connect(self._on_bubble_vol)                  # Heatmap trade-bubble min-volume filter
+        self.menu.hm_contrast.changed.connect(self._hm_contrast_changed)         # Heatmap Liquidity-Contrast cutoffs (hamburger-hosted)
+        self.menu.hm_contrast.reset_clicked.connect(self._hm_contrast_reset)     # Heatmap 'Reset -> auto'
         self.menu.keltnerScaleChanged.connect(self._on_kc_scale)   # 1m-KC smooth-approx effective-TF scale slider
         self.menu.candleModeChanged.connect(self._on_candle_mode)  # Candle Mode dropdown (mirrors 'W')
         self.menu.vpModeChanged.connect(self._on_vp_mode)          # Volume Profile Mode dropdown
@@ -10358,9 +10357,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.hm_cache = HeatmapCache(); self.hm_levels = None; self.hm_pending = "reset"; self.hm_last_view = None
         self.hm_band = None            # cleared until we get a live price -> lets _scan_depth_heatmap retry init
         self._hm_sizes = None; self.hm_manual = False; self.hm_follow = True; self._hm_prev_w = None
-        self.hm_contrast.set_values(config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
-        self.hm_contrast.adjustSize()                     # size to its full content (floating child) before placing
-        self.hm_contrast.move(10, 10); self.hm_contrast.show(); self.hm_contrast.raise_()   # extreme top-left, small pad
+        self.menu.hm_contrast.set_values(config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)   # reset cutoffs on (re)enter
+        if getattr(self.menu, "heatmap_sec", None) is not None:
+            self.menu.heatmap_sec.setVisible(True)        # reveal the hamburger 'Heatmap' dropdown in heatmap mode
         snap = self._last_snap or self.worker.snapshot()
         mid = snap.get("latest_price") or 0.0
         if mid <= 0:
@@ -10389,7 +10388,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                    self.hm_bubbles_ice_buy, self.hm_bubbles_ice_sell, self.hm_bubble_tip, self.hm_vol_tip):
             it.setVisible(False)
         self.hm_tb_cache = TradeBubbleCache(); self.hm_pending_tb = None
-        self.hm_contrast.hide()
+        if getattr(self.menu, "heatmap_sec", None) is not None:
+            self.menu.heatmap_sec.setVisible(False)       # hide the hamburger 'Heatmap' dropdown when leaving heatmap mode
         self.cob.set_palette(config.RGBA_COB_BID, config.RGBA_COB_ASK)   # restore default ladder colors for other modes
         self.cob.bars.bin_h = config.DOM_BIN_STEP
         self.hm_cache = HeatmapCache(); self.hm_levels = None; self.hm_band = None; self.hm_pending = None
@@ -10764,7 +10764,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _hm_contrast_reset(self) -> None:
         """'Reset → auto': drop the manual override, snap the sliders to p20/p99, re-enable the 60s renorm."""
         self.hm_manual = False
-        self.hm_contrast.set_values(config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
+        self.menu.hm_contrast.set_values(config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
         self._hm_resample()
         self.hm_levels = self._hm_levels_from_pct(config.HEATMAP_LO_PCT, config.HEATMAP_HI_PCT)
         self.hm_renorm_t = time.time()
