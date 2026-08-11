@@ -27,7 +27,7 @@ from study.candle_bias_1h import _f
 from app import absorption_level_detect as AL
 
 MINBARS = 5
-TF = "5m"
+TF = sys.argv[1] if len(sys.argv) > 1 else "5m"      # `python study/radar_visit_tape.py 1m` to switch timeframe
 A = sorted(load_archive(TF, root="study/recon_archive")[1], key=lambda b: _f(b.get("start_time", 0)))
 n = len(A)
 YR = [datetime.fromtimestamp(_f(b.get("start_time")), tz=timezone.utc).year for b in A]
