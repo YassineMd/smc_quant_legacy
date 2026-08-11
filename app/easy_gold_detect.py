@@ -2,8 +2,10 @@
 """EASY GOLD — labels EVERY tape/candle DIVERGENCE candle sitting in an ACTIVE wall's radar, on the wall's side.
 
 For each Order-Flow Wall (app.absorption_level_detect.detect mark: price / band / side / i0 / i1), scan the bars the
-wall is active (i0..i1) and label EVERY candle whose CLOSE is inside the wall's radar (price +/- RADAR_MULT*band)
-that is BOTH:
+wall is active (i0..i1) and label EVERY candle whose RANGE (low..high) OVERLAPS the wall's radar (price +/-
+RADAR_MULT*band) -- i.e. the candle TRADED at the wall. (Gating on the CLOSE is wrong: a support bounce / resistance
+rejection closes in the wall-hold direction, which is often OUTSIDE the radar, so it would be missed.) That candle is
+labelled when it is BOTH:
 
     * an EASY-leaning absorption:  A = absorption(buckets, j)[0] < ABSR_MAX (-0.5) -- the tooltip "Absorb R" value, AND
     * a TAPE / CANDLE DIVERGENCE -- the candle CLOSES in the WALL-HOLD direction while the TAPE's dominant side is
@@ -63,8 +65,9 @@ def from_walls(buckets, walls):
             for j in range(i0, i1 + 1):
                 if j in seen:                                  # already carries a badge (from an earlier wall)
                     continue
-                c = _f(buckets[j].get("close", buckets[j].get("close_price")))
-                if not (wlo <= c <= whi):                      # close must sit inside THIS wall's radar
+                b = buckets[j]
+                lo = _f(b.get("low")); hi = _f(b.get("high"))
+                if hi <= 0 or lo <= 0 or lo > whi or hi < wlo:  # candle range must OVERLAP the radar (traded at wall)
                     continue
                 A = acache.get(j)
                 if A is None:
@@ -73,8 +76,9 @@ def from_walls(buckets, walls):
                     acache[j] = A
                 if A >= ABSR_MAX:                              # need an EASY-leaning absorption candle
                     continue
-                o = _f(buckets[j].get("open", buckets[j].get("open_price")))
-                tb, ts = _tape(buckets[j])
+                o = _f(b.get("open", b.get("open_price")))
+                c = _f(b.get("close", b.get("close_price")))
+                tb, ts = _tape(b)
                 # candle closes in the WALL-HOLD direction, tape's dominant side AGAINST it (the divergence):
                 #   support (S, d>0) -> LONG : bullish (close>open) + Tape-S > Tape-B
                 #   resist  (R, d<0) -> SHORT: bearish (close<open) + Tape-B > Tape-S
