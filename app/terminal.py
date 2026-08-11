@@ -1324,6 +1324,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
         self._radar_hover_lines = None                           # [top, bottom] dashed edges of the hovered radar zone
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
+        self._wstrat_sph = None; self._wstrat_sig = None   # Wall Strategy (m10_wallstrat, 5m) — green ▲ / red ▼ triangles
         self._mom_sph = None                     # ScatterPlotItem of square badges
         self._mom_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
         self._mom_lbl_pool = []                  # (unused; colour-only badges, kept for pool symmetry)
@@ -2255,6 +2256,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._mom_sig = None; self._sel_sig = None   # 15m Momentum toggled -> re-run the overlay draw
             if not on:
                 self._clear_momentum()              # off -> tear the squares down now
+        elif key == "m10_wallstrat":
+            self._wstrat_sig = None; self._sel_sig = None   # Wall Strategy toggled -> re-run the overlay draw
+            if not on:
+                self._clear_wall_strategy()         # off -> tear the triangles down now
         elif key in ("m10_crazywall", "m10_wallabs_crazy", "m10_wallabs_big", "m10_wallabs_easygold", "m10_wallabs_pureagg"):
             self._crazy_sig = None; self._sel_sig = None   # Wall Absorption (master or a sub-tier) toggled -> redraw
             if key == "m10_crazywall" and not on:
@@ -6984,6 +6989,49 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # LOSANGE (diamond) L/S badge: green up long / red down short; BLUE = at-S/R confluence (TP 1:2) — the positive subset.
     # Engulfing breakout in the last-mitigation S/R regime; TP bumps to 1:2 when the signal sits AT a same-side S/R zone.
     # Click a badge -> its entry/TP/SL trade lines. NOT a proven edge (see app/momentum_detect docstring).
+    def _clear_wall_strategy(self) -> None:
+        if self._wstrat_sph is not None:
+            self._wstrat_sph.setVisible(False)
+        self._wstrat_sig = None
+
+    def _draw_wall_strategy(self, filtered) -> None:
+        """WALL STRATEGY (m10_wallstrat, 5m ONLY): a green ▲ LONG at a buy wall / red ▼ SHORT at a sell wall when the
+        radar visit has >=1 Big/Crazy absorption, the visit's absorption tally favours the wall side, and an Easy Gold
+        OR Pure Aggression signal fires in that direction (app/wall_strategy_detect). Self-gated, fail-safe. NOT backtested."""
+        if (not self.menu.layer_state("m10_wallstrat") or self.scanner_mode != "bucket_canvas" or self._tf != "5m"):
+            self._clear_wall_strategy(); return
+        n = len(filtered)
+        if n < 2:
+            self._clear_wall_strategy(); return
+        _sig = (n, filtered[-1].get("end_time"), filtered[-1].get("close"))
+        if _sig == self._wstrat_sig:
+            return
+        self._wstrat_sig = _sig
+        marks = self._absorb_marks(filtered)                            # walls index-aligned with `filtered`
+        try:
+            from app import wall_strategy_detect
+            entries = wall_strategy_detect.detect(filtered, marks, skip_last=False)
+        except Exception:
+            self._clear_wall_strategy(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        if self._wstrat_sph is None:
+            self._wstrat_sph = pg.ScatterPlotItem(pxMode=True, size=18)  # per-spot triangle t1(▲ long) / t(▼ short)
+            self._wstrat_sph.setZValue(33); self.plot.addItem(self._wstrat_sph, ignoreBounds=True)
+        GRN, RED = (40, 220, 100), (240, 60, 78)
+        spots = []
+        for e in entries:
+            i = int(e["i"])
+            if i < 0 or i >= n:
+                continue
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            longside = (e["side"] == "long")
+            y = (lo - pad) if longside else (hi + pad)                  # ▲ below the low (long) / ▼ above the high (short)
+            col = GRN if longside else RED
+            spots.append({"pos": (i, y), "symbol": "t1" if longside else "t",
+                          "brush": pg.mkBrush(*col, 255),
+                          "pen": pg.mkPen(*[int(c * 0.5) for c in col], 255, width=1.2), "size": 18})
+        self._wstrat_sph.setData(spots); self._wstrat_sph.setVisible(True)
+
     def _clear_momentum(self) -> None:
         if self._mom_sph is not None:
             self._mom_sph.setVisible(False)
@@ -8351,6 +8399,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 except Exception:
                     self._clear_engulf5m()
                 try:
+                    self._draw_wall_strategy(_pf or [])  # Wall Strategy (5m) — self-gated, fail-safe
+                except Exception:
+                    self._clear_wall_strategy()
+                try:
                     self._draw_breakout5m(_pf or [])  # 5m Breakout indicator (5m) — self-gated, fail-safe
                 except Exception:
                     self._clear_breakout5m()
@@ -8374,7 +8426,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._clear_engulfsr(); self._clear_momentum(); self._clear_engulf5m()
                 self._clear_breakout5m(); self._clear_engulf1m(); self._clear_sr(); self._clear_swinglvn()
                 self._clear_crazy_wall()
-                self._clear_easy1h()
+                self._clear_easy1h(); self._clear_wall_strategy()
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
@@ -8446,6 +8498,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_engulf5m(filtered)  # 5m Absorption S/R overlay (5m) — self-gated, fail-safe
             except Exception:
                 self._clear_engulf5m()
+            try:
+                self._draw_wall_strategy(filtered)  # Wall Strategy (5m) — self-gated, fail-safe
+            except Exception:
+                self._clear_wall_strategy()
             try:
                 self._draw_breakout5m(filtered)  # 5m Breakout indicator (5m) — self-gated, fail-safe
             except Exception:
