@@ -5147,7 +5147,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """EXPECTED RANGE (m10_erange): for each enabled session sub-toggle (NY / Tokyo / London / Whole Day), a DASHED
         high/low envelope = sessOpen × (1 ± ER/2), where ER = clamp(A + B·yesterday's same-session range fraction).
         Dashed edges only, NO fill; per UTC day, culled to the viewport. Falls back to the session MEAN when yesterday's
-        session isn't in the loaded window (label suffixed '(avg)'). Width/volatility forecast — direction NOT predicted.
+        session isn't in the loaded window (label suffixed '(avg)'). Each session detects its OWN first break of its OWN
+        band: an EARLY break (first HALF of the session window) = bright ▲/▼ (green up / red down) + '▲/▼ EARLY'; a LATE
+        break = muted △/▽ + '· late'. Width/volatility forecast — direction NOT predicted.
         See the _ERANGE table + study/session_range_persistence.py."""
         if not self.menu.layer_state("m10_erange") or not buckets:
             self._hide_erange(); return
@@ -5162,17 +5164,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 t = datetime.utcfromtimestamp(st); hrs[i] = t.hour; dords[i] = t.toordinal()
             his[i] = float(b.get("high", 0.0) or 0.0); los[i] = float(b.get("low", 0.0) or 0.0)
             opn[i] = float(b.get("open", b.get("open_price", 0.0)) or 0.0)
-        ul = ut = 0
+        _UP, _DN, _MUTE = (64, 224, 140), (240, 84, 110), (150, 150, 162)   # break colours: green up / red down / muted late
+        ul = ut = um = 0
         for (key, name, h0, h1, A, B, MN, clo, chi, rgb) in active:
-            sess = {}                                          # date-ordinal -> {o, hi, lo, i0, i1}
+            sess = {}                                          # date-ordinal -> {o, hi, lo, i0, i1, bars:[(i,hour,hi,lo)]}
             for i in range(n):
                 if hrs[i] < 0 or not (h0 <= hrs[i] < h1) or his[i] <= 0 or los[i] <= 0:
                     continue
                 r = sess.get(dords[i])
                 if r is None:                                  # first session bucket of the day = session OPEN
-                    sess[dords[i]] = {"o": opn[i], "hi": his[i], "lo": los[i], "i0": i, "i1": i}
+                    sess[dords[i]] = {"o": opn[i], "hi": his[i], "lo": los[i], "i0": i, "i1": i,
+                                      "bars": [(i, hrs[i], his[i], los[i])]}
                 else:
                     r["hi"] = max(r["hi"], his[i]); r["lo"] = min(r["lo"], los[i]); r["i1"] = i
+                    r["bars"].append((i, hrs[i], his[i], los[i]))
+            mid = h0 + (h1 - h0) / 2.0                          # first HALF of the session window = an EARLY break
             sdays = sorted(sess)
             for k, do in enumerate(sdays):
                 cur = sess[do]; o = cur["o"]
@@ -5188,19 +5194,39 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 else:
                     er = MN; fb = True
                 exp_hi = o * (1.0 + er / 2.0); exp_lo = o * (1.0 - er / 2.0)
+                # FIRST break of THIS session's band + whether it lands in the session's first half (EARLY)
+                brk_side = None; brk_i = None; brk_early = False
+                for (_j, _hh, _bh, _bl) in cur["bars"]:
+                    if _bh >= exp_hi:
+                        brk_side = "up"; brk_i = _j; brk_early = _hh < mid; break
+                    if _bl <= exp_lo:
+                        brk_side = "down"; brk_i = _j; brk_early = _hh < mid; break
                 for _y in (exp_hi, exp_lo):                    # dashed high/low edge (no fill)
                     _pn = pg.mkPen(*rgb, 205, width=1.2); _pn.setCosmetic(True); _pn.setDashPattern([5.0, 4.0])
                     _ln = self._nyer_line(ul); ul += 1
                     _ln.setData([xl, xr], [_y, _y]); _ln.setPen(_pn); _ln.setVisible(True)
+                if brk_side is not None and brk_i is not None and 0 <= brk_i < len(x):   # ▲/▼ (early) or △/▽ (late)
+                    if brk_early:
+                        _g, _mc, _sz = ("▲" if brk_side == "up" else "▼"), (_UP if brk_side == "up" else _DN), 16
+                    else:
+                        _g, _mc, _sz = ("△" if brk_side == "up" else "▽"), _MUTE, 11
+                    _mk = self._nyer_mark(um); um += 1
+                    _mk.textItem.setFont(QtGui.QFont("Consolas", _sz))
+                    _mk.setColor(pg.mkColor(*_mc)); _mk.setText(_g)
+                    _mk.setPos(x[brk_i], exp_hi if brk_side == "up" else exp_lo); _mk.setVisible(True)
+                _tag = ("  ▲ EARLY" if brk_side == "up" else "  ▼ EARLY") if brk_early else (
+                    "  · late" if brk_side is not None else "")
                 _lb = self._nyer_lbl(ut); ut += 1
-                _lb.setColor(pg.mkColor(*rgb))
-                _lb.setText("%s exp %.1f%%%s" % (name, er * 100.0, "  (avg)" if fb else ""))
+                _lb.setColor(pg.mkColor(*rgb))                 # label stays SESSION colour (identity); marker carries the direction
+                _lb.setText("%s exp %.1f%%%s%s" % (name, er * 100.0, "  (avg)" if fb else "", _tag))
                 _lb.setPos(xl, exp_hi); _lb.setVisible(True)
         for _it in self._nyer_line_pool[ul:]:
             _it.setVisible(False)
         for _it in self._nyer_lbl_pool[ut:]:
             _it.setVisible(False)
-        for _it in (self._nyer_box_pool + self._nyer_mark_pool):   # no fill + no break markers in this design
+        for _it in self._nyer_mark_pool[um:]:                  # unused break markers
+            _it.setVisible(False)
+        for _it in self._nyer_box_pool:                        # no fill in this design
             _it.setVisible(False)
 
     # ------------------------------------------------------------------
