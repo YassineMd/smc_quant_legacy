@@ -5301,10 +5301,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _rc = self._absorblvl_box_pool[used]
         if src == "mix":                                          # Ab+Ag confluence -> PURPLE sell / GREEN buy
             rgb = (150, 65, 235) if side == "R" else (75, 225, 40)
-            _rc.setBrush(pg.mkBrush(*rgb, int(30 + strength * 120)))
+            _rc.setBrush(pg.mkBrush(*rgb, int(15 + strength * 60)))   # lowered opacity (was 30 + s*120)
         else:
             rgb = (230, 70, 80) if side == "R" else (60, 200, 120)   # resistance RED / support GREEN
-            _rc.setBrush(pg.mkBrush(*rgb, int(22 + strength * 120)))
+            _rc.setBrush(pg.mkBrush(*rgb, int(11 + strength * 60)))   # lowered opacity (was 22 + s*120)
         _rc.setPen(pg.mkPen(None))
         return _rc
 
