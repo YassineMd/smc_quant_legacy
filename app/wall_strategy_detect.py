@@ -6,8 +6,9 @@
         sellers-absorbed-buyers; SELL wall (resistance): the mirror (sellers-absorbed-buyers > buyers-absorbed-sellers);
         (a candle 'buyers absorbed sellers' = sellers aggressive Tape-S>Tape-B but closed UP; mirror for the other) ]
   AND
-  (3) an entry fires in the wall's direction: an Easy Gold OR Pure Aggression signal (long at a buy wall / short at a
-      sell wall) on a candle within the visit.
+  (3) an entry fires in the wall's direction on a candle within the visit — an Easy Gold OR Pure Aggression signal,
+      OR a strong-easy candle (absorption A < -1) moving in the position direction (bullish at a buy wall / bearish
+      at a sell wall).
 -> BUY wall -> LONG (green ▲); SELL wall -> SHORT (red ▼), placed on that entry candle. First trigger per visit.
 
 DESCRIPTIVE marker for eyeballing the setup (NOT backtested yet). detect(buckets, walls) -> [{i, side('long'|'short'), wall_side}].
@@ -33,7 +34,7 @@ def detect(buckets, walls, skip_last=False):
     if n < 2 or not walls:
         return []
     try:
-        from app import crazy_wall_detect as CW, easy_gold_detect as EG, pure_aggression_detect as PA
+        from app import crazy_wall_detect as CW, easy_gold_detect as EG, pure_aggression_detect as PA, absorption as ABS
         events = CW.detect(buckets, walls, skip_last=skip_last)          # Big/Crazy absorptions (i, wall_side, tier)
         abs_S = sorted(int(e["i"]) for e in events if e.get("wall_side") == "S")
         abs_R = sorted(int(e["i"]) for e in events if e.get("wall_side") == "R")
@@ -63,8 +64,17 @@ def detect(buckets, walls, skip_last=False):
                 tally_ok = (n_ba_s > n_sa_b) if side == "S" else (n_sa_b > n_ba_s)
                 if not (has_abs or tally_ok):                            # (1) OR (2)
                     continue
-                for j in range(rk0, rk1 + 1):                            # (3) first Easy-Gold/Pure-Aggression entry in the wall's dir
-                    if j in want and j not in seen:
+                for j in range(rk0, rk1 + 1):                            # (3) first entry in the wall's dir: EG / PA / (A<-1 in-dir)
+                    if j in seen:
+                        continue
+                    trig = j in want                                    # Easy Gold OR Pure Aggression
+                    if not trig:
+                        A = ABS.absorption(buckets, j)[0]               # OR a strong-easy candle in the position direction
+                        if A is not None and A < -1.0:
+                            bj = buckets[j]
+                            _o = _f(bj.get("open", bj.get("open_price"))); _c = _f(bj.get("close", bj.get("close_price")))
+                            trig = (_c > _o) if side == "S" else (_c < _o)
+                    if trig:
                         out.append({"i": j, "side": "long" if side == "S" else "short", "wall_side": side})
                         seen.add(j)
                         break
