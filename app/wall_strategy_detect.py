@@ -28,11 +28,12 @@ def _tape(b):
     return sum(b.get("sz_cb") or []) / dur, sum(b.get("sz_cs") or []) / dur
 
 
-def detect(buckets, walls, skip_last=False, entry_absorbr=True, cond_or=True, require_def_fade=False):
+def detect(buckets, walls, skip_last=False, entry_absorbr=True, cond_or=True, require_def_fade=False, entry_pa=True):
     """`walls` = app.absorption_level_detect.detect() marks. Returns first-per-visit entry triggers.
-    entry_absorbr=False drops the (absorption A<-1 in-direction) entry, leaving only Easy Gold / Pure Aggression.
-    cond_or=False makes (1)&(2) an AND (both required) instead of OR. require_def_fade=True adds: the DEFENDER's tape
-    rate (buyers@buy wall / sellers@sell wall) must have DECREASED over the visit (2nd-half mean < 1st-half mean)."""
+    entry_absorbr=False drops the (absorption A<-1 in-direction) entry; entry_pa=False drops Pure Aggression -> with
+    both False the entry is Easy Gold ONLY. cond_or=False makes (1)&(2) an AND (both required) instead of OR.
+    require_def_fade=True adds: the DEFENDER's tape rate (buyers@buy wall / sellers@sell wall) must have DECREASED
+    over the visit (2nd-half mean < 1st-half mean)."""
     n = len(buckets)
     if n < 2 or not walls:
         return []
@@ -41,8 +42,11 @@ def detect(buckets, walls, skip_last=False, entry_absorbr=True, cond_or=True, re
         events = CW.detect(buckets, walls, skip_last=skip_last)          # Big/Crazy absorptions (i, wall_side, tier)
         abs_S = sorted(int(e["i"]) for e in events if e.get("wall_side") == "S")
         abs_R = sorted(int(e["i"]) for e in events if e.get("wall_side") == "R")
-        entry_long = set(); entry_short = set()                          # Easy Gold OR Pure Aggression, by direction
-        for g in EG.from_walls(buckets, walls) + PA.from_walls(buckets, walls):
+        entry_long = set(); entry_short = set()                          # Easy Gold (+ Pure Aggression if entry_pa)
+        _srcs = list(EG.from_walls(buckets, walls))
+        if entry_pa:
+            _srcs += list(PA.from_walls(buckets, walls))
+        for g in _srcs:
             (entry_long if g.get("side") == "long" else entry_short).add(int(g["i"]))
         out = []; seen = set()
         for w in walls:
