@@ -5495,11 +5495,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # 'Match Reward/eff' (m10_wall_match). Two modes:
         #  - NO alignment: keep ONLY the 3 walls closest to an UNMITIGATED, SAME-SIDE Reward-Switch zone (support S <->
         #    buy zone / resistance R <-> sell zone, strength-slider-filtered), by |wall price - zone mid|.
-        #  - Today AND Last-30 reward/eff AGREE on a side: show ALL dominant-side walls, PLUS the 3 STRONGEST walls of
-        #    the NON-dominant side (context). Off -> all walls draw as before.
+        #  - the FLOW consolidation (median of [20,30,50,75], >=3/4 windows agreeing) clearly leans a side: show ALL
+        #    dominant-side walls, PLUS the 3 STRONGEST walls of the NON-dominant side (context). Off -> all walls draw.
         _keep_ids = None; _keep_side = None
         if self.menu.layer_state("m10_wall_match"):
-            _keep_side = self._reward_alignment(buckets)         # 'S'/'R' -> dominant side; None -> 3-closest
+            _keep_side = self._reward_flow_side(buckets)         # FLOW side 'S'/'R' -> dominant side; None -> 3-closest
             if _keep_side is not None:                           # ALIGNED: 3 strongest NON-dominant walls (in _keep_ids)
                 _other = "R" if _keep_side == "S" else "S"
                 _os = []
@@ -5707,38 +5707,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._reward_hud.setPos(vx0, vy0)                         # bottom-left of the view (anchor=(0,1))
         self._reward_hud.setVisible(True)
 
-    def _reward_alignment(self, buckets):
-        """'S' if BOTH the Today and Last-30 reward/eff windows are buy-dominant (buy share > 50), 'R' if BOTH are
-        sell-dominant, else None. Same windows as the Reward/effort table (day-of-latest-bucket UTC 'today', trailing
-        30). The 'Match Reward/eff' filter uses this: when the two windows agree it shows ALL same-side walls (all buy
-        walls on a buy/buy read, all sell walls on a sell/sell read) instead of the 3-closest selection."""
-        from datetime import datetime, timezone
+    def _reward_flow_side(self, buckets):
+        """Dominant side of the FLOW consolidation (median of the [20,30,50,75] reward/eff windows — the same read as
+        the table's FLOW headline). Returns 'S' when buyers lead (-> show support/buy walls), 'R' when sellers lead
+        (-> resistance/sell walls), or None when FLOW is SPLIT (<=2 of the 4 windows agree with the median side) so
+        the 'Match Reward/eff' filter falls back to the 3-closest selection. Bar-based, so it is TF-universal."""
         from app import reward_eff
         n = len(buckets)
         if n < 2:
             return None
-        last_t = float(buckets[-1].get("start_time", 0.0) or 0.0)
-        if last_t <= 0:
+        ws = []
+        for w in (20, 30, 50, 75):
+            s, ok = reward_eff.share(buckets, n - w, n - 1)
+            if ok:
+                ws.append(s)
+        if len(ws) < 3:
             return None
-        starts = getattr(self, "_reward_starts", None)
-        if not starts or len(starts) != n:
-            starts = [float(b.get("start_time", 0.0) or 0.0) for b in buckets]
-        if getattr(self, "_tf", "5m") == "4h":                   # match the table: 4h day=6 bars whipsaws -> weekly anchor
-            wk0 = float((int(last_t + 259200) // 604800) * 604800 - 259200)
-            i_a = bisect.bisect_left(starts, wk0)
-        else:
-            ref = datetime.fromtimestamp(last_t, tz=timezone.utc)
-            today0 = ref.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-            i_a = bisect.bisect_left(starts, today0)
-        anch_share, anch_ok = reward_eff.share(buckets, i_a, n - 1)   # Today (or This week on 4h)
-        last30_share, last30_ok = reward_eff.share(buckets, n - 30, n - 1)
-        if not (anch_ok and last30_ok):
+        sw = sorted(ws); m = len(sw)
+        med = sw[m // 2] if (m % 2) else 0.5 * (sw[m // 2 - 1] + sw[m // 2])
+        if med == 50.0:
             return None
-        if anch_share > 50.0 and last30_share > 50.0:
-            return "S"                                           # both buy-dominant -> all support/buy walls
-        if anch_share < 50.0 and last30_share < 50.0:
-            return "R"                                           # both sell-dominant -> all resistance/sell walls
-        return None
+        buy = med > 50.0
+        agree = sum(1 for s in ws if (s > 50.0) == buy)         # how many of the 4 windows agree with the FLOW side
+        if agree < 3:                                           # FLOW split -> undecided -> 3-closest fallback
+            return None
+        return "S" if buy else "R"                              # clear FLOW -> show that side's walls
 
     def _rwsw_zone(self, used, col):
         """Pooled horizontal reward-switch ZONE (QGraphicsRectItem on the viewbox, grown lazily). `col`=(r,g,b)."""
