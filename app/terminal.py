@@ -1323,6 +1323,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._radar_hover_buckets = None                         # frame ref for the live tape-rotation readout on hover
         self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
         self._radar_hover_lines = None                           # [top, bottom] dashed edges of the hovered radar zone
+        self._walls_muted = []                                   # 'm' hide/show: which wall overlays we last hid (to restore)
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._wstrat_sph = None; self._wstrat_sig = None   # Wall Strategy (m10_wallstrat, 5m) — green ▲ / red ▼ triangles
         self._mom_sph = None                     # ScatterPlotItem of square badges
@@ -1847,6 +1848,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         activated=lambda: self.menu.layer_checks["m10_candle_va"].toggle())
         # 'o' = Order Blocks + Absorption/Iceberg overlays TOGETHER (both hidden by default)
         QtGui.QShortcut(QtGui.QKeySequence("O"), self, activated=self._toggle_ob_iceberg)
+        # 'm' = hide/show the Order-Flow Walls + Wall Absorption overlays together (mute/unmute)
+        QtGui.QShortcut(QtGui.QKeySequence("M"), self, activated=self._toggle_walls_mute)
         # 'y' = show/hide the STATE verdict + debug lines in BOTH stats boxes (hidden by default)
         QtGui.QShortcut(QtGui.QKeySequence("Y"), self, activated=self._toggle_states)
         # 'v' = abnormal-velocity DIAMONDS (the 2px border is always on); drawing-cancel moved to Escape
@@ -5819,6 +5822,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for cb in (self.menu.layer_checks.get("m10_obs"), self.menu.layer_checks.get("m10_icebergs")):
             if cb is not None and cb.isChecked() != on:
                 cb.setChecked(on)
+
+    def _toggle_walls_mute(self) -> None:
+        """'m' — hide/show the Order-Flow Walls (m10_absorblvl) + Wall Absorption (m10_crazywall) overlays together.
+        Records which are currently ON, turns those OFF; the next press restores exactly those (so a layer that was
+        OFF — e.g. Wall Absorption when it isn't toggled on — stays off, never gets switched on by 'm')."""
+        keys = ("m10_absorblvl", "m10_crazywall")
+        on_now = [k for k in keys if self.menu.layer_state(k)]
+        if on_now:                                  # something is showing -> hide it (remember what for the restore)
+            self._walls_muted = on_now
+            for k in on_now:
+                cb = self.menu.layer_checks.get(k)
+                if cb is not None:
+                    cb.setChecked(False)            # flips the menu + runs the normal teardown via layerToggled
+        else:                                       # nothing showing -> restore exactly what we last hid
+            for k in (self._walls_muted or []):
+                cb = self.menu.layer_checks.get(k)
+                if cb is not None:
+                    cb.setChecked(True)
+            self._walls_muted = []
 
     def _toggle_ob_iceberg(self) -> None:
         """'o' — 3-stage cycle for Order Blocks + Absorption/Iceberg:
