@@ -11,6 +11,7 @@ from study.candle_bias_1h import _f
 from app import absorption_level_detect as AL, wall_strategy_detect as WS
 
 FEE = 0.0004; RR = 1.2; SL_PAD = 0.001; HORIZON = 288      # 288 5m bars = 1 day cap
+ENTRY_ABSORBR = "egpa" not in sys.argv                     # `... egpa` -> Easy Gold / Pure Aggression entry ONLY (no A<-1)
 A = sorted(load_archive("5m", root="study/recon_archive")[1], key=lambda b: _f(b.get("start_time", 0)))
 n = len(A)
 C = np.array([_f(b.get("close", b.get("close_price"))) for b in A])
@@ -23,7 +24,7 @@ sigs = {}                                                  # global bar -> (side
 c0 = 0
 while c0 < n:
     c1 = min(n, c0 + CH); S = A[c0:c1]
-    for s in WS.detect(S, AL.detect(S)):
+    for s in WS.detect(S, AL.detect(S), entry_absorbr=ENTRY_ABSORBR):
         gi = int(s["i"]) + c0
         if gi not in sigs:
             sigs[gi] = (s["side"], float(s["r_lo"]), float(s["r_hi"]))
@@ -75,7 +76,8 @@ def rep(tag, R):
           % (tag, N, 100 * w / max(1, w + l), w, l, t, net, net / N, (bal - 1) * 100, mdd * 100), flush=True)
 
 
-print("\nWALL STRATEGY  5m  entry=close  SL=radar±0.1%%  TP=1:1.2  (barrier, non-overlap, 0.04%% RT):", flush=True)
+print("\nWALL STRATEGY  5m  entry=%s  SL=radar±0.1%%  TP=1:1.2  (barrier, non-overlap, 0.04%% RT):"
+      % ("EG/PA + A<-1" if ENTRY_ABSORBR else "EG/PA ONLY"), flush=True)
 for tag, yf in (("BOTH", None), ("2025", 2025), ("2026", 2026)):
     rep(tag, [x for x in res if (yf is None or x[0] == yf)])
 print("  --- by side (both yr) ---", flush=True)

@@ -28,8 +28,9 @@ def _tape(b):
     return sum(b.get("sz_cb") or []) / dur, sum(b.get("sz_cs") or []) / dur
 
 
-def detect(buckets, walls, skip_last=False):
-    """`walls` = app.absorption_level_detect.detect() marks. Returns first-per-visit entry triggers."""
+def detect(buckets, walls, skip_last=False, entry_absorbr=True):
+    """`walls` = app.absorption_level_detect.detect() marks. Returns first-per-visit entry triggers.
+    entry_absorbr=False drops the (absorption A<-1 in-direction) entry, leaving only Easy Gold / Pure Aggression."""
     n = len(buckets)
     if n < 2 or not walls:
         return []
@@ -70,7 +71,7 @@ def detect(buckets, walls, skip_last=False):
                     if j in seen:
                         continue
                     trig = j in want                                    # Easy Gold OR Pure Aggression
-                    if not trig:
+                    if not trig and entry_absorbr:
                         A = ABS.absorption(buckets, j)[0]               # OR a strong-easy candle in the position direction
                         if A is not None and A < -1.0:
                             bj = buckets[j]
