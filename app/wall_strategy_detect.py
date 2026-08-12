@@ -44,6 +44,8 @@ def detect(buckets, walls, skip_last=False):
         out = []; seen = set()
         for w in walls:
             side = w.get("side", "R")                                    # S = buy wall/support (LONG) / R = sell wall/resistance (SHORT)
+            _p = _f(w.get("price")); _bd = _f(w.get("band"))
+            r_lo = _p - 3.0 * _bd; r_hi = _p + 3.0 * _bd                 # radar bounds (for a structural SL just beyond them)
             absbars = abs_S if side == "S" else abs_R
             want = entry_long if side == "S" else entry_short
             for r in w.get("radar_runs", ()):
@@ -75,7 +77,8 @@ def detect(buckets, walls, skip_last=False):
                             _o = _f(bj.get("open", bj.get("open_price"))); _c = _f(bj.get("close", bj.get("close_price")))
                             trig = (_c > _o) if side == "S" else (_c < _o)
                     if trig:
-                        out.append({"i": j, "side": "long" if side == "S" else "short", "wall_side": side})
+                        out.append({"i": j, "side": "long" if side == "S" else "short", "wall_side": side,
+                                    "r_lo": r_lo, "r_hi": r_hi})
                         seen.add(j)
                         break
         out.sort(key=lambda e: e["i"])
