@@ -10,11 +10,14 @@ from study.archive_loader import load_archive
 from study.candle_bias_1h import _f
 from app import absorption_level_detect as AL, wall_strategy_detect as WS
 
-FEE = 0.0004; RR = 1.2; SL_PAD = 0.001; HORIZON = 288      # 288 5m bars = 1 day cap
+FEE = 0.0004; RR = 1.2; SL_PAD = 0.001
 ENTRY_ABSORBR = "egpa" not in sys.argv                     # `... egpa` -> Easy Gold / Pure Aggression entry ONLY (no A<-1)
 COND_OR = "and" not in sys.argv                            # `... and` -> (1) AND (2) instead of OR
 DEF_FADE = "deffade" in sys.argv                           # `... deffade` -> require the defender tape to have decreased
-A = sorted(load_archive("5m", root="study/recon_archive")[1], key=lambda b: _f(b.get("start_time", 0)))
+TF = "15m" if "15m" in sys.argv else "5m"                  # `... 15m` -> 15m walls/entries
+TP_FIXED = 0.003 if "tp03" in sys.argv else None           # `... tp03` -> fixed 0.3% TP (else 1:1.2 RR × risk)
+HORIZON = 96 if TF == "15m" else 288                       # ~1 day cap
+A = sorted(load_archive(TF, root="study/recon_archive")[1], key=lambda b: _f(b.get("start_time", 0)))
 n = len(A)
 C = np.array([_f(b.get("close", b.get("close_price"))) for b in A])
 H = np.array([_f(b.get("high")) for b in A]); L = np.array([_f(b.get("low")) for b in A])
@@ -48,12 +51,12 @@ for gi in order:
         sl = r_lo * (1.0 - SL_PAD); risk = entry - sl; sgn = 1.0
         if risk <= 0:
             continue
-        tp = entry + RR * risk
+        tp = entry * (1.0 + TP_FIXED) if TP_FIXED else entry + RR * risk
     else:
         sl = r_hi * (1.0 + SL_PAD); risk = sl - entry; sgn = -1.0
         if risk <= 0:
             continue
-        tp = entry - RR * risk
+        tp = entry * (1.0 - TP_FIXED) if TP_FIXED else entry - RR * risk
     out = None; xi = min(n - 1, gi + HORIZON)
     for k in range(gi + 1, min(n, gi + 1 + HORIZON)):
         hit_sl = (L[k] <= sl) if side == "long" else (H[k] >= sl)
@@ -78,9 +81,9 @@ def rep(tag, R):
           % (tag, N, 100 * w / max(1, w + l), w, l, t, net, net / N, (bal - 1) * 100, mdd * 100), flush=True)
 
 
-print("\nWALL STRATEGY  5m  cond=%s  entry=%s%s  SL=radar±0.1%%  TP=1:1.2  (barrier, non-overlap, 0.04%% RT):"
-      % ("(1)OR(2)" if COND_OR else "(1)AND(2)", "EG/PA+A<-1" if ENTRY_ABSORBR else "EG/PA",
-         " +defTapeFade" if DEF_FADE else ""), flush=True)
+print("\nWALL STRATEGY  %s  cond=%s  entry=%s%s  SL=radar±0.1%%  TP=%s  (barrier, non-overlap, 0.04%% RT):"
+      % (TF, "(1)OR(2)" if COND_OR else "(1)AND(2)", "EG/PA+A<-1" if ENTRY_ABSORBR else "EG/PA",
+         " +defTapeFade" if DEF_FADE else "", ("0.3%%" if TP_FIXED else "1:1.2")), flush=True)
 for tag, yf in (("BOTH", None), ("2025", 2025), ("2026", 2026)):
     rep(tag, [x for x in res if (yf is None or x[0] == yf)])
 print("  --- by side (both yr) ---", flush=True)
