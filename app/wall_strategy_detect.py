@@ -28,9 +28,11 @@ def _tape(b):
     return sum(b.get("sz_cb") or []) / dur, sum(b.get("sz_cs") or []) / dur
 
 
-def detect(buckets, walls, skip_last=False, entry_absorbr=True):
+def detect(buckets, walls, skip_last=False, entry_absorbr=True, cond_or=True, require_def_fade=False):
     """`walls` = app.absorption_level_detect.detect() marks. Returns first-per-visit entry triggers.
-    entry_absorbr=False drops the (absorption A<-1 in-direction) entry, leaving only Easy Gold / Pure Aggression."""
+    entry_absorbr=False drops the (absorption A<-1 in-direction) entry, leaving only Easy Gold / Pure Aggression.
+    cond_or=False makes (1)&(2) an AND (both required) instead of OR. require_def_fade=True adds: the DEFENDER's tape
+    rate (buyers@buy wall / sellers@sell wall) must have DECREASED over the visit (2nd-half mean < 1st-half mean)."""
     n = len(buckets)
     if n < 2 or not walls:
         return []
@@ -65,8 +67,16 @@ def detect(buckets, walls, skip_last=False, entry_absorbr=True):
                     elif tb > ts and c < o:
                         n_sa_b += 1
                 tally_ok = (n_ba_s > n_sa_b) if side == "S" else (n_sa_b > n_ba_s)
-                if not (has_abs or tally_ok):                            # (1) OR (2)
+                if not ((has_abs or tally_ok) if cond_or else (has_abs and tally_ok)):   # (1) OR/AND (2)
                     continue
+                if require_def_fade:                                     # defender tape rate must DECREASE over the visit
+                    Ln = rk1 - rk0 + 1
+                    if Ln < 2:
+                        continue
+                    dr = [(_tape(buckets[k])[0] if side == "S" else _tape(buckets[k])[1]) for k in range(rk0, rk1 + 1)]
+                    m = Ln // 2
+                    if sum(dr[m:]) / (Ln - m) >= sum(dr[:m]) / m:        # 2nd-half mean >= 1st-half -> not decreased
+                        continue
                 for j in range(rk0, rk1 + 1):                            # (3) first entry in the wall's dir: EG / PA / (A<-1 in-dir)
                     if j in seen:
                         continue
