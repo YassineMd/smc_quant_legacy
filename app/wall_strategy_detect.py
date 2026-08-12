@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""WALL STRATEGY — a 5m confluence entry marker. On a wall/radar VISIT that meets ALL of:
-  (1) contains >= 1 Big or Crazy Wall-Absorption (app.crazy_wall_detect), same side as the wall;
-  (2) its absorption tally over the visit favours the wall's side — BUY wall (support): buyers-absorbed-sellers >
-      sellers-absorbed-buyers; SELL wall (resistance): the mirror (sellers-absorbed-buyers > buyers-absorbed-sellers);
-      (a candle 'buyers absorbed sellers' = sellers aggressive Tape-S>Tape-B but closed UP; mirror for the other);
+"""WALL STRATEGY — a 5m confluence entry marker. On a wall/radar VISIT that meets:
+  [ (1) contains >= 1 Big or Crazy Wall-Absorption (app.crazy_wall_detect), same side as the wall
+    OR
+    (2) its absorption tally over the visit favours the wall's side — BUY wall (support): buyers-absorbed-sellers >
+        sellers-absorbed-buyers; SELL wall (resistance): the mirror (sellers-absorbed-buyers > buyers-absorbed-sellers);
+        (a candle 'buyers absorbed sellers' = sellers aggressive Tape-S>Tape-B but closed UP; mirror for the other) ]
+  AND
   (3) an entry fires in the wall's direction: an Easy Gold OR Pure Aggression signal (long at a buy wall / short at a
       sell wall) on a candle within the visit.
 -> BUY wall -> LONG (green ▲); SELL wall -> SHORT (red ▼), placed on that entry candle. First trigger per visit.
@@ -49,8 +51,7 @@ def detect(buckets, walls, skip_last=False):
                 rk0 = int(r[0]); rk1 = min(int(r[1]), n - 1)
                 if rk1 < rk0:
                     continue
-                if not any(rk0 <= a <= rk1 for a in absbars):            # (1) >= 1 same-side Big/Crazy absorption in the visit
-                    continue
+                has_abs = any(rk0 <= a <= rk1 for a in absbars)         # (1) >= 1 same-side Big/Crazy absorption in the visit
                 n_ba_s = 0; n_sa_b = 0                                   # (2) absorption tally over the visit
                 for k in range(rk0, rk1 + 1):
                     b = buckets[k]; tb, ts = _tape(b)
@@ -59,7 +60,8 @@ def detect(buckets, walls, skip_last=False):
                         n_ba_s += 1
                     elif tb > ts and c < o:
                         n_sa_b += 1
-                if (n_ba_s <= n_sa_b) if side == "S" else (n_sa_b <= n_ba_s):
+                tally_ok = (n_ba_s > n_sa_b) if side == "S" else (n_sa_b > n_ba_s)
+                if not (has_abs or tally_ok):                            # (1) OR (2)
                     continue
                 for j in range(rk0, rk1 + 1):                            # (3) first Easy-Gold/Pure-Aggression entry in the wall's dir
                     if j in want and j not in seen:
