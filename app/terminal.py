@@ -5492,42 +5492,62 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         n = len(buckets)
         self._absorb_marks(buckets)                           # refresh the shared cache (self._absorblvl_marks)
         self._radar_hover_buckets = buckets                   # frame the hover tape-rotation readout reads from
-        # 'Match Reward/eff' (m10_wall_match): keep ONLY the 3 walls closest to an UNMITIGATED, SAME-SIDE Reward-Switch
-        # zone (support wall S <-> buy zone / resistance wall R <-> sell zone), strength-slider-filtered. Distance =
-        # |wall price - zone mid|. Ranked across all drawable walls; the top 3 survive. Off -> all walls draw as before.
-        # OVERRIDE: when the Today and Last-30 reward/eff windows AGREE on a side, show ALL same-side walls instead.
+        # 'Match Reward/eff' (m10_wall_match). Two modes:
+        #  - NO alignment: keep ONLY the 3 walls closest to an UNMITIGATED, SAME-SIDE Reward-Switch zone (support S <->
+        #    buy zone / resistance R <-> sell zone, strength-slider-filtered), by |wall price - zone mid|.
+        #  - Today AND Last-30 reward/eff AGREE on a side: show ALL dominant-side walls, PLUS the 3 STRONGEST walls of
+        #    the NON-dominant side (context). Off -> all walls draw as before.
         _keep_ids = None; _keep_side = None
         if self.menu.layer_state("m10_wall_match"):
-            _keep_side = self._reward_alignment(buckets)         # 'S'/'R' -> all same-side walls; None -> 3-closest
-        if self.menu.layer_state("m10_wall_match") and _keep_side is None:   # no alignment -> 3-closest same-side unmitigated
-            _rthr = float(getattr(self, "_reward_strength", 0.0))
-            _buy_mids = []; _sell_mids = []
-            for (_ei, _eside, _est, _eylo, _eyhi, _emit) in self._reward_switch_events(buckets):
-                if _emit is not None or _est < _rthr:          # UNMITIGATED + passes the switch-strength slider
-                    continue
-                (_buy_mids if _eside == "buy" else _sell_mids).append(0.5 * (_eylo + _eyhi))
-            _cand = []
-            for _mi, _m in enumerate(self._absorblvl_marks):   # rank only walls that would actually draw (same base gates)
-                _i0 = int(_m["i0"]); _i1 = min(int(_m["i1"]), n - 1)
-                if _i0 < 0 or _i0 >= n or _i1 < _i0:
-                    continue
-                if _m.get("broken") and (n - 1) - _i1 > 90:
-                    continue
-                if float(_m.get("strength", 0.0)) < self._wall_floor:
-                    continue
-                _mids = _buy_mids if _m.get("side", "R") == "S" else _sell_mids   # SAME-SIDE switch zones only
-                if not _mids:
-                    continue
-                _p = float(_m["price"])
-                _cand.append((min(abs(_p - _mm) for _mm in _mids), _mi))
-            _cand.sort(key=lambda t: t[0])
-            _keep_ids = set(_mi for _d, _mi in _cand[:3])       # the 3 closest
+            _keep_side = self._reward_alignment(buckets)         # 'S'/'R' -> dominant side; None -> 3-closest
+            if _keep_side is not None:                           # ALIGNED: 3 strongest NON-dominant walls (in _keep_ids)
+                _other = "R" if _keep_side == "S" else "S"
+                _os = []
+                for _mi, _m in enumerate(self._absorblvl_marks):
+                    _i0 = int(_m["i0"]); _i1 = min(int(_m["i1"]), n - 1)
+                    if _i0 < 0 or _i0 >= n or _i1 < _i0:
+                        continue
+                    if _m.get("broken") and (n - 1) - _i1 > 90:
+                        continue
+                    if _m.get("side", "R") != _other:
+                        continue
+                    _st = float(_m.get("strength", 0.0))
+                    if _st < self._wall_floor:
+                        continue
+                    _os.append((_st, _i1, _mi))                  # strength, then recency (wall strength saturates ~0.97)
+                _os.sort(key=lambda t: (-t[0], -t[1]))
+                _keep_ids = set(t[2] for t in _os[:3])           # 3 strongest (ties -> most recent) of the non-dominant side
+            else:                                                # NO alignment: 3 closest same-side unmitigated-zone walls
+                _rthr = float(getattr(self, "_reward_strength", 0.0))
+                _buy_mids = []; _sell_mids = []
+                for (_ei, _eside, _est, _eylo, _eyhi, _emit) in self._reward_switch_events(buckets):
+                    if _emit is not None or _est < _rthr:        # UNMITIGATED + passes the switch-strength slider
+                        continue
+                    (_buy_mids if _eside == "buy" else _sell_mids).append(0.5 * (_eylo + _eyhi))
+                _cand = []
+                for _mi, _m in enumerate(self._absorblvl_marks): # rank only walls that would actually draw (same base gates)
+                    _i0 = int(_m["i0"]); _i1 = min(int(_m["i1"]), n - 1)
+                    if _i0 < 0 or _i0 >= n or _i1 < _i0:
+                        continue
+                    if _m.get("broken") and (n - 1) - _i1 > 90:
+                        continue
+                    if float(_m.get("strength", 0.0)) < self._wall_floor:
+                        continue
+                    _mids = _buy_mids if _m.get("side", "R") == "S" else _sell_mids   # SAME-SIDE switch zones only
+                    if not _mids:
+                        continue
+                    _p = float(_m["price"])
+                    _cand.append((min(abs(_p - _mm) for _mm in _mids), _mi))
+                _cand.sort(key=lambda t: t[0])
+                _keep_ids = set(_mi for _d, _mi in _cand[:3])    # the 3 closest
         ub = 0; ul = 0; up = 0; uz = 0; self._radar_hover_zones = []
         for _mid_idx, m in enumerate(self._absorblvl_marks):
-            if _keep_side is not None and m.get("side", "R") != _keep_side:   # Match: Today+Last-30 agree -> same-side only
-                continue
-            if _keep_ids is not None and _mid_idx not in _keep_ids:   # Match Reward/eff: only the 3 closest survive
-                continue
+            if _keep_side is not None:                          # aligned: all dominant-side + 3 strongest non-dominant
+                if m.get("side", "R") != _keep_side and _mid_idx not in _keep_ids:
+                    continue
+            elif _keep_ids is not None:                         # not aligned: only the 3 closest same-side survive
+                if _mid_idx not in _keep_ids:
+                    continue
             i0 = int(m["i0"]); i1 = min(int(m["i1"]), n - 1)
             if i0 < 0 or i0 >= n or i1 < i0:
                 continue
@@ -5647,19 +5667,43 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._reward_starts = [float(b.get("start_time", 0.0) or 0.0) for b in buckets]
             self._reward_starts_sig = sig
         starts = self._reward_starts
+        # PER-TF adaptive rows (reward_eff_forward study: the reliable band is 20-100 BARS, not a fixed clock/N).
+        tf = getattr(self, "_tf", "5m")
+        _tfmin = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}.get(tf, 5)
+        _wins = {"1m": (20, 30, 50, 75), "5m": (20, 30, 50, 75), "15m": (10, 20, 30, 50),
+                 "1h": (10, 20, 30, 50), "4h": (20, 30, 50, 75)}.get(tf, (10, 20, 30, 50))
         rows = []
-        if last_t > 0:                                            # day-of-latest-bucket UTC boundaries (works live + replay)
-            ref = datetime.fromtimestamp(last_t, tz=timezone.utc)
-            today0 = ref.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-            i_today = bisect.bisect_left(starts, today0)
-            i_yest = bisect.bisect_left(starts, today0 - 86400.0)
-            rows.append(("Yesterday", reward_eff.share(buckets, i_yest, i_today - 1)))
-            rows.append(("Today", reward_eff.share(buckets, i_today, n - 1)))
+        if last_t > 0:
+            if tf == "4h":                                       # day = only 6 4h-bars -> whipsaws; use weekly anchors
+                wk0 = float((int(last_t + 259200) // 604800) * 604800 - 259200)   # Mon 00:00 UTC of this week
+                i_tw = bisect.bisect_left(starts, wk0)
+                i_lw = bisect.bisect_left(starts, wk0 - 604800.0)
+                rows.append(("Last week", "", reward_eff.share(buckets, i_lw, i_tw - 1)))
+                rows.append(("This week", "", reward_eff.share(buckets, i_tw, n - 1)))
+            else:                                                # day-of-latest-bucket UTC boundaries (works live + replay)
+                ref = datetime.fromtimestamp(last_t, tz=timezone.utc)
+                today0 = ref.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+                i_today = bisect.bisect_left(starts, today0)
+                i_yest = bisect.bisect_left(starts, today0 - 86400.0)
+                rows.append(("Yesterday", "", reward_eff.share(buckets, i_yest, i_today - 1)))
+                rows.append(("Today", "", reward_eff.share(buckets, i_today, n - 1)))
         else:
-            rows.append(("Yesterday", (50.0, False)))
-            rows.append(("Today", (50.0, False)))
-        rows.append(("Last 30", reward_eff.share(buckets, n - 30, n - 1)))
-        self._reward_hud.setHtml(self._reward_html(rows))
+            rows.append((("Last week" if tf == "4h" else "Yesterday"), "", (50.0, False)))
+            rows.append((("This week" if tf == "4h" else "Today"), "", (50.0, False)))
+        for W in sorted(_wins, reverse=True):                    # rolling windows, longest->shortest, clock-labelled
+            rows.append(("Last %d" % W, self._fmt_dur(W * _tfmin), reward_eff.share(buckets, n - W, n - 1)))
+        # FLOW headline = MEDIAN of the [20,30,50,75] reward/eff windows (per study: highest ensemble agreement on
+        # EVERY TF, ~0.83-0.86), independent of which rows are displayed, + how many of the 4 agree (confidence).
+        _fw = [reward_eff.share(buckets, n - w, n - 1) for w in (20, 30, 50, 75)]
+        _ws = [s for (s, ok) in _fw if ok]
+        headline = None
+        if _ws:
+            _sw = sorted(_ws); _m = len(_sw)
+            _med = _sw[_m // 2] if (_m % 2) else 0.5 * (_sw[_m // 2 - 1] + _sw[_m // 2])
+            _buy = _med >= 50.0
+            _agree = sum(1 for _s in _ws if (_s >= 50.0) == _buy)
+            headline = (_med, _agree, len(_ws))
+        self._reward_hud.setHtml(self._reward_html(rows, headline))
         self._reward_hud.setPos(vx0, vy0)                         # bottom-left of the view (anchor=(0,1))
         self._reward_hud.setVisible(True)
 
@@ -5679,16 +5723,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         starts = getattr(self, "_reward_starts", None)
         if not starts or len(starts) != n:
             starts = [float(b.get("start_time", 0.0) or 0.0) for b in buckets]
-        ref = datetime.fromtimestamp(last_t, tz=timezone.utc)
-        today0 = ref.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        i_today = bisect.bisect_left(starts, today0)
-        today_share, today_ok = reward_eff.share(buckets, i_today, n - 1)
+        if getattr(self, "_tf", "5m") == "4h":                   # match the table: 4h day=6 bars whipsaws -> weekly anchor
+            wk0 = float((int(last_t + 259200) // 604800) * 604800 - 259200)
+            i_a = bisect.bisect_left(starts, wk0)
+        else:
+            ref = datetime.fromtimestamp(last_t, tz=timezone.utc)
+            today0 = ref.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            i_a = bisect.bisect_left(starts, today0)
+        anch_share, anch_ok = reward_eff.share(buckets, i_a, n - 1)   # Today (or This week on 4h)
         last30_share, last30_ok = reward_eff.share(buckets, n - 30, n - 1)
-        if not (today_ok and last30_ok):
+        if not (anch_ok and last30_ok):
             return None
-        if today_share > 50.0 and last30_share > 50.0:
+        if anch_share > 50.0 and last30_share > 50.0:
             return "S"                                           # both buy-dominant -> all support/buy walls
-        if today_share < 50.0 and last30_share < 50.0:
+        if anch_share < 50.0 and last30_share < 50.0:
             return "R"                                           # both sell-dominant -> all resistance/sell walls
         return None
 
@@ -5785,24 +5833,69 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._rwsw_lbl_pool[j].setVisible(False)
 
     @staticmethod
-    def _reward_html(rows) -> str:
-        gray, green, red, dim = "#9aa0aa", "#2ecc71", "#e74c3c", "#5a6170"
+    @staticmethod
+    def _fmt_dur(mins) -> str:
+        """Compact clock label for a window: minutes < 1h, hours < 1d, else days (drops a trailing .0)."""
+        if mins < 60:
+            return "%dm" % int(round(mins))
+        if mins < 1440:
+            h = mins / 60.0
+            return ("%dh" % int(round(h))) if abs(h - round(h)) < 1e-9 else ("%.1fh" % h)
+        dd = mins / 1440.0
+        return ("%dd" % int(round(dd))) if abs(dd - round(dd)) < 1e-9 else ("%.1fd" % dd)
+
+    @staticmethod
+    def _reward_html(rows, headline=None) -> str:
+        gray, dim = "#9aa0aa", "#5a6170"
+        # DOMINANT side coloured by TIER (thresholds from the recon dominance study, pooled: ~p75 / ~p90). Non-dominant
+        # side stays gray. basic = dominant simply > other; strong = bold ELECTRIC; very strong = bold CYAN(buy)/ORANGE(sell).
+        GRN, RED = "#2ecc71", "#e74c3c"                    # basic
+        EGRN, ERED = "#39ff14", "#ff1744"                  # strong (electric)
+        CYAN, ORNG = "#00e5ff", "#ff9d00"                  # very strong
+        T_STRONG, T_VSTRONG = 62.0, 70.0
+
+        def tiercol(dompct, is_buy):
+            if dompct >= T_VSTRONG:
+                return (CYAN if is_buy else ORNG), "font-weight:bold;"
+            if dompct >= T_STRONG:
+                return (EGRN if is_buy else ERED), "font-weight:bold;"
+            return (GRN if is_buy else RED), ""
+
+        def cell(pct, is_dom, is_buy, lbl):
+            if not is_dom:
+                return "<span style='color:%s'>%s %.0f%%</span>" % (gray, lbl, pct)
+            col, bold = tiercol(pct, is_buy)
+            return "<span style='color:%s;%s'>%s %.0f%%</span>" % (col, bold, lbl, pct)
+
+        # FLOW headline = the single most-reliable read (median of the 4 rolling windows; recon: highest ensemble
+        # agreement 0.86, robust to the noisy Last-10). N/N = how many windows agree on the side = confidence at a glance.
+        flow = ""
+        if headline is not None:
+            med, agree, tot = headline
+            is_buy = med >= 50.0
+            dompct = med if is_buy else 100.0 - med
+            col, bold = tiercol(dompct, is_buy)
+            flow = ("<div style='margin:1px 0 3px 0'>"
+                    "<span style='color:%s;font-size:9px;letter-spacing:1px'>FLOW&nbsp;&nbsp;</span>"
+                    "<span style='color:%s;%sfont-size:13px'>%s %.0f%%</span>"
+                    "<span style='color:%s;font-size:9px'>&nbsp;&nbsp;%d/%d agree</span></div>"
+                    % (gray, col, bold, "buyers" if is_buy else "sellers", dompct, dim, agree, tot))
+
         body = []
-        for label, (bsh, ok) in rows:
+        for label, sub, (bsh, ok) in rows:
             if not ok:
                 cells = "<span style='color:%s'>&mdash;</span>" % dim
             else:
                 ssh = 100.0 - bsh
-                bc = green if bsh >= 55 else gray
-                sc = red if ssh >= 55 else gray
-                cells = ("<span style='color:%s'>buy %.0f%%</span>"
-                         "<span style='color:%s'>&nbsp;&middot;&nbsp;</span>"
-                         "<span style='color:%s'>sell %.0f%%</span>" % (bc, bsh, dim, sc, ssh))
-            body.append("<span style='color:%s'>%-9s</span>&nbsp;&nbsp;%s" % (dim, label, cells))
+                cells = (cell(bsh, bsh > 50.0, True, "buy")
+                         + "<span style='color:%s'>&nbsp;&middot;&nbsp;</span>" % dim
+                         + cell(ssh, ssh > 50.0, False, "sell"))
+            subc = ("<span style='color:%s'>%-5s</span>" % (dim, sub)) if sub else ("<span>%-5s</span>" % "")
+            body.append("<span style='color:%s'>%-9s</span>%s&nbsp;&nbsp;%s" % (dim, label, subc, cells))
         return ("<div style='background:#12151c;padding:3px 7px;line-height:1.35;text-align:left'>"
                 "<span style='color:%s;font-size:9px;letter-spacing:1px'>REWARD / EFFORT "
-                "<span style='color:%s'>&middot; buy vs sell &middot; coincident</span></span><br>%s</div>"
-                % (gray, dim, "<br>".join(body)))
+                "<span style='color:%s'>&middot; buy vs sell &middot; coincident</span></span>%s<br>%s</div>"
+                % (gray, dim, flow, "<br>".join(body)))
 
     def _draw_4h_zone(self, buckets) -> None:
         """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median), ZONE ('Z': buy/sell wick bands), and ABNORMAL-ORDER
