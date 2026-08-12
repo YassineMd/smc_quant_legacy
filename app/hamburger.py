@@ -114,7 +114,8 @@ _M10_INDICATORS = [
     ("m10_vwap", "VWAP", False, True),                     # daily-anchored (UTC-midnight reset) volume-weighted avg price — BLUE line
     ("m10_swinglvn", "Price & CVD Swings", False, True),   # ALL tf: ZigZag swing lines + swing absorb-A + retracement verdict; LVN zones sub-toggle
     ("m10_reversal", "Reversal Point (R/G ▲▼)", False, True),   # ALL tf: early/predictive swing reversal (candle-3 hammer + choppy approach + capitulation); green ▲ swing-low / red ▼ swing-high; strong = bigger
-    ("m10_absorblvl", "Order-Flow Walls (red/green)", False, True),   # EYEBALL-ONLY: absorption + aggression walls — resistance (red) at highs where buyers were absorbed / sellers dumped; support (green) at lows where sellers were absorbed / buyers lifted; clustered = brighter. Barely a signal — ~+3pp over a random line, not tradeable. Includes the bottom-right Wall Regime HUD (TREND/RANGE + bias, coincident)
+    ("m10_absorblvl", "Order-Flow Walls (red/green)", False, True),   # EYEBALL-ONLY: absorption + aggression walls — resistance (red) at highs where buyers were absorbed / sellers dumped; support (green) at lows where sellers were absorbed / buyers lifted; clustered = brighter. Barely a signal — ~+3pp over a random line, not tradeable. Includes the bottom-right Wall Regime HUD (TREND/RANGE + bias, coincident) — sub-toggle 'Regime table'
+    ("m10_reward", "Reward / effort (table)", False, True),   # BOTTOM-LEFT HUD: buy vs sell share of reward-per-effort (reward = price moved that side's way, effort = its taker vol) for yesterday / today / last 30 candles / current candle. DESCRIPTIVE + COINCIDENT
     ("m10_obs", "Order Blocks", False, True),             # default OFF — toggle with Order Blocks + Iceberg via 'o'
     ("m10_structure", "Market Structure — scalp ZigZag", False, True),   # fine ZigZag (ZIGZAG_PCT, app/structure.py)
     ("m10_structure_swing", "Market Structure — swing ZigZag", False, True),   # coarse ZigZag (+ its sensitivity slider)
@@ -253,6 +254,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     replayToggled = QtCore.Signal(bool)   # Replay Mode on/off (default OFF; chart replays from the Start Date)
     swingSensitivityChanged = QtCore.Signal(float)   # swing-ZigZag threshold slider, in PERCENT
     wallFloorChanged = QtCore.Signal(float)          # Order-Flow Walls min-strength draw floor (0.05..0.90)
+    rewardStrengthChanged = QtCore.Signal(float)     # Reward-switch zones min-strength filter (0..70)
     bubbleVolChanged = QtCore.Signal(float)          # Heatmap trade-bubble min volume filter (SOL; 0 = show all)
     keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
     candleModeChanged = QtCore.Signal(int)   # candle render mode 0..5 (also cycled by 'W')
@@ -475,6 +477,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_swing_slider(sec)            # sensitivity slider directly under its toggle
             if key == "m10_absorblvl":
                 self._build_wallfloor_slider(sec)        # strength draw floor directly under the Walls toggle
+                self._build_wall_regime_subtoggle(sec)   # bottom-right Wall Regime table on/off
+                self._build_wall_match_subtoggle(sec)    # keep only walls near a Reward-Switch zone
             if key == "m10_crazywall":
                 self._build_wallabs_subtoggles(sec)      # Wall Absorption sub-tiers: Crazy (✪) / Big (★)
             if key == "m10_sr":
@@ -487,9 +491,79 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_vwap_subtoggles(sec)         # VWAP sub-toggles: ±1σ / ±2σ / ±3σ std-dev bands
             if key == "m10_erange":
                 self._build_erange_subtoggles(sec)       # Expected Range sub-toggles: NY / Tokyo / London / Whole Day
+            if key == "m10_reward":
+                self._build_reward_subtoggle(sec)        # Reward/effort sub-toggle: horizontal zones where the rewarded side flips
+                self._build_reward_strength_slider(sec)  # + a strength filter for those zones
             if key == "m10_stats":
                 self._build_stats_substats(sec)          # per-stat on/off for the Mode-10 stats box
         return sec
+
+    def _build_reward_subtoggle(self, section) -> None:
+        """Reward/effort sub-toggle: draw a horizontal ZONE on the chart where the rolling reward-per-effort side FLIPS
+        — a GREEN band (support) where buyers take over (sellers stopped being rewarded, buyers started), a RED band
+        (resistance) for the mirror, each extending forward like an S/R zone. Rides the master m10_reward; an m10_ key
+        (persists + reads via layer_state). Default OFF (extra to the table)."""
+        cb = QtWidgets.QCheckBox("· Reward-switch zones")
+        cb.setChecked(False)                             # default OFF
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.toggled.connect(lambda on, k="m10_reward_switch": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_reward_switch"] = cb
+        section.addWidget(cb)
+
+    def _build_reward_strength_slider(self, section) -> None:
+        """Slider under the Reward-switch zones sub-toggle: hide zones whose STRENGTH (depth of the regime being
+        reversed) is below the value. Higher = fewer (only the switches that overturned a strongly one-sided tape).
+        Display-only filter, no re-detection. Persists via terminal_ui.json."""
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w); lay.setContentsMargins(26, 1, 8, 5); lay.setSpacing(2)
+        self.rwstr_lbl = QtWidgets.QLabel()
+        self.rwstr_lbl.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:10px;")
+        lay.addWidget(self.rwstr_lbl)
+        self.rwstr_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.rwstr_slider.setRange(0, 70)                # 0 = show all .. 70 = only the strongest reversals
+        self.rwstr_slider.setValue(0)
+        self.rwstr_slider.setFixedHeight(16)
+        self.rwstr_slider.valueChanged.connect(self._on_rwstr_slider)
+        lay.addWidget(self.rwstr_slider)
+        section.addWidget(w)
+        self._render_rwstr_lbl()
+
+    def _on_rwstr_slider(self, _v: int) -> None:
+        self._render_rwstr_lbl()
+        self.rewardStrengthChanged.emit(self.reward_strength())
+
+    def _render_rwstr_lbl(self) -> None:
+        self.rwstr_lbl.setText("Switch strength >= %d  (higher = fewer)" % int(self.reward_strength()))
+
+    def reward_strength(self) -> float:
+        return float(self.rwstr_slider.value())
+
+    def set_reward_strength(self, v: float) -> None:
+        self.rwstr_slider.blockSignals(True)
+        self.rwstr_slider.setValue(int(round(max(0.0, min(70.0, float(v))))))
+        self.rwstr_slider.blockSignals(False)
+        self._render_rwstr_lbl()
+
+    def _build_wall_match_subtoggle(self, section) -> None:
+        """Toggle under Order-Flow Walls: keep only walls whose price zone overlaps a Reward-Switch zone (confluence
+        filter, honours the switch strength slider). Rides m10_absorblvl; an m10_ key (persists + reads via
+        layer_state). Default OFF (shows all walls)."""
+        cb = QtWidgets.QCheckBox("· Match Reward/eff")
+        cb.setChecked(False)                             # default OFF
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.toggled.connect(lambda on, k="m10_wall_match": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_wall_match"] = cb
+        section.addWidget(cb)
+
+    def _build_wall_regime_subtoggle(self, section) -> None:
+        """Toggle for the bottom-right WALL REGIME table (TREND/RANGE + bias, coincident). Rides the Order-Flow
+        Walls layer (m10_absorblvl); default ON so the table shows exactly as before until the user hides it."""
+        cb = QtWidgets.QCheckBox("· Regime table")
+        cb.setChecked(True)                              # default ON — preserves the current behaviour
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.toggled.connect(lambda on, k="m10_wall_regime": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_wall_regime"] = cb
+        section.addWidget(cb)
 
     def _build_wallabs_subtoggles(self, section) -> None:
         """Wall Absorption sub-tiers: Crazy (✪ = statistical-outlier bubble), Big (★ = big-but-not-crazy), Easy Gold
@@ -551,7 +625,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         # their own keys here. Nothing from either box is left without a toggle.
         for key, label in (("st_ohlc", "· OHLC"), ("st_poc", "· Elapsed/POC"), ("st_volume", "· Volume"),
                            ("st_buysell", "· Buy/Sell"), ("st_delta", "· Delta"), ("st_deltaud", "· Δ↑ / Δ↓"),
-                           ("st_daccel", "· Δ-accel"), ("st_absorb", "· Absorb R"), ("st_ease", "· Ease"),
+                           ("st_daccel", "· Δ-accel"), ("st_absorb", "· Absorb R"), ("st_reward", "· Reward/eff"),
+                           ("st_ease", "· Ease"),
                            ("st_halfdom", "· ½dom"), ("st_rhalves", "· R h1/h2"), ("st_dp", "· ΔP"),
                            ("st_oi", "· OI Δ"), ("st_costtick", "· Cost/tick"), ("st_vel", "· Buy/Sell-vel"),
                            ("st_tape", "· Tape B/S"), ("st_ker", "· KER"), ("st_movmag", "· Mov.Magnitude"),

@@ -1212,6 +1212,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._struct_pct_sw = []                                 # cached per-swing % move from the previous swing
         self._swing_pct = structure.ZIGZAG_SWING_PCT             # swing-ZigZag threshold %, live-set by the hamburger slider
         self._wall_floor = 0.12                                  # Order-Flow Walls min-strength draw floor (hamburger slider)
+        self._reward_strength = 0.0                              # Reward-switch zones min-strength filter (hamburger slider; 0 = all)
         self._bub_vol = False                                    # Candle-Bubbles 'b' cycle stage-2: also print the volume value
         self._bub_crazy_only = False                             # Candle-Bubbles 'b' cycle stage-3: show ONLY the crazy bubbles
         self._kc_scale = float(config.KELTNER_SCALE_DEFAULT)     # 1m-KC smooth-approx effective-TF scale (hamburger slider; 1.0 = native)
@@ -1274,6 +1275,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._regime_hud.textItem.setFont(QtGui.QFont("Consolas", 9))
         self._regime_hud.setZValue(34); self.plot.addItem(self._regime_hud, ignoreBounds=True)
         self._regime_hud.setVisible(False)
+        self._reward_hud = pg.TextItem(anchor=(0, 1))            # REWARD/EFFORT read — BOTTOM-LEFT HUD (m10_reward)
+        self._reward_hud.textItem.setFont(QtGui.QFont("Consolas", 9))
+        self._reward_hud.setZValue(34); self.plot.addItem(self._reward_hud, ignoreBounds=True)
+        self._reward_hud.setVisible(False)
+        self._reward_starts = []                                 # cached bucket start_times for the day-boundary bisect
+        self._reward_starts_sig = None
         self._sel_hi_t = None       # end_time of the selection's right edge (the scrub 'as-of' point) — set each
                                     # time the selection draws; the 4h zone reads it in causal mode so it, too, shows
                                     # the wick that was live AS OF the edge instead of the newest 4h bucket.
@@ -1326,6 +1333,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._walls_muted = []                                   # 'm' hide/show: which wall overlays we last hid (to restore)
         # 15m Momentum overlay (m10_momentum, 15m only) — square L/S badges; click -> entry/TP/SL trade lines
         self._wstrat_sph = None; self._wstrat_sig = None   # Wall Strategy (m10_wallstrat, 5m) — green ▲ / red ▼ triangles
+        self._rwsw_zone_pool = []                          # Reward-switch ZONES (m10_reward_switch): pooled horizontal QGraphicsRectItem bands
+        self._rwsw_lbl_pool = []                           # + a small side tag per zone
+        self._rwsw_sig = None; self._rwsw_events = []      # cached flips (re-detect only on data change)
         self._mom_sph = None                     # ScatterPlotItem of square badges
         self._mom_ring = None                    # ScatterPlotItem — hollow halo on FLOW-ALIGNED badges (highlight only)
         self._mom_lbl_pool = []                  # (unused; colour-only badges, kept for pool symmetry)
@@ -1727,6 +1737,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu = FloatingOverlayMenu(self)
         self.menu.set_swing_pct(self._swing_pct)   # sync the swing slider to the restored/default sensitivity
         self.menu.set_wall_floor(self._wall_floor)  # sync the wall-strength floor slider to the restored/default value
+        self.menu.set_reward_strength(self._reward_strength)  # sync the reward-switch strength slider likewise
         self.menu.set_bubble_vol(self.hm_bubble_min)  # sync the heatmap bubble-volume slider to the restored/default value
         self.menu.set_kc_scale(self._kc_scale)     # sync the Keltner-scale slider to the restored/default value
         self.menu.set_tf(self._tf)                 # point the tf selector at the restored/default timeframe
@@ -1964,6 +1975,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.replayToggled.connect(self._on_replay_toggled)
         self.menu.swingSensitivityChanged.connect(self._on_swing_sensitivity)   # swing-ZigZag threshold slider
         self.menu.wallFloorChanged.connect(self._on_wall_floor)                  # Order-Flow Walls min-strength floor
+        self.menu.rewardStrengthChanged.connect(self._on_reward_strength)        # Reward-switch zones min-strength filter
         self.menu.bubbleVolChanged.connect(self._on_bubble_vol)                  # Heatmap trade-bubble min-volume filter
         self.menu.hm_contrast.changed.connect(self._hm_contrast_changed)         # Heatmap Liquidity-Contrast cutoffs (hamburger-hosted)
         self.menu.hm_contrast.reset_clicked.connect(self._hm_contrast_reset)     # Heatmap 'Reset -> auto'
@@ -2083,6 +2095,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.depthwall_item.setVisible(False)
         self.stats.hide()
         self.cob.hide()
+        self._regime_hud.setVisible(False)   # bottom-right Wall Regime table — Mode-10 only; redrawn on re-entry
+        self._reward_hud.setVisible(False)   # bottom-left Reward/effort table — Mode-10 only; redrawn on re-entry
+        self._hide_reward_switches()         # reward-switch flip marks — Mode-10 only; redrawn on re-entry
 
     def _change_tf(self, tf: str) -> None:
         self._tf = tf
@@ -2279,6 +2294,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._absorblvl_sig = None                   # Absorption S/R toggled -> re-run the overlay draw
             if not on:
                 self._hide_absorb_levels()               # off -> tear the zones down now
+                self._regime_hud.setVisible(False)       # ... and its bottom-right Regime table (rides the same layer)
+        elif key == "m10_wall_regime":
+            if not on:
+                self._regime_hud.setVisible(False)       # Regime table off -> hide the bottom-right HUD now
+        elif key == "m10_reward":
+            if not on:
+                self._reward_hud.setVisible(False)       # Reward/effort off -> hide the bottom-left HUD now
+                self._hide_reward_switches()             # ... and its reward-switch flip marks (ride the same master)
+        elif key == "m10_reward_switch":
+            if not on:
+                self._hide_reward_switches()             # Reward-switch marks off -> tear the flip lines/flags down now
         elif key in ("m10_sr", "m10_sr_area"):
             self._sr_sig = None; self._sel_sig = None    # Support/Resistance (or its Area sub-toggle) -> re-run the draw
             if key == "m10_sr" and not on:
@@ -3683,6 +3709,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         def vc(name):
             return vclr[name] if (name in top2 and vmag[name] > 0) else gray
+        # WHO'S REWARDED FOR EFFORT — rolling reward-per-effort per side over the last 20 buckets. Reward = price move
+        # TOWARD a side (up -> buyers / down -> sellers); effort = that side's taker VOLUME. The higher reward-per-unit-
+        # effort side is being PAID for its aggression; the other is being ABSORBED. DESCRIPTIVE (coincident, not a lead).
+        from app import reward_eff as _rwmod
+        _bsh, _rwok = _rwmod.share(buckets, idx - 19, idx)       # 20-bucket window, BUY share of reward-per-effort
+        _ssh = 100.0 - _bsh
+        _rew_html = ("Reward/eff %s · %s"
+                     % (span("buy %.0f%%" % _bsh, g if (_rwok and _bsh >= 55) else gray),
+                        span("sell %.0f%%" % _ssh, r if (_rwok and _ssh >= 55) else gray)))
         # Per-stat toggles (hamburger: Candles > Stats Box). _add gates a row by its st_ key (default ON when
         # unregistered); _sec defers a section header so an all-off section drops its header too.
         lines = []; _psec = [None]
@@ -3707,6 +3742,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _add("st_delta", f"Delta {span(sk(delta)+f' ({dpct:+.0f}%)', g if delta >= 0 else r)}")
         _add("st_daccel", span("Δ-accel " + _da2_s, _da2_col))
         _add("st_absorb", span("Absorb R " + _absR_s, _absR_col))
+        _add("st_reward", _rew_html)               # who's getting rewarded for their effort (rolling reward-per-effort)
         _add("st_ease", _ease_row)
         _add("st_1meff", _eff1_row)
         _add("st_rhalves", span("R h1/h2 " + _absH_s, _absH_col))
@@ -4547,6 +4583,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _on_wall_floor(self, floor: float) -> None:
         """Hamburger Order-Flow Walls slider moved — set the min-strength DRAW floor (display-only), persist, repaint."""
         self._wall_floor = float(floor)
+        self._save_ui_state()
+        self._last_scanner_sig = None
+        self._draw_scanner()
+
+    def _on_reward_strength(self, v: float) -> None:
+        """Hamburger Reward-switch zones slider moved — hide zones below this strength (display-only), persist, repaint."""
+        self._reward_strength = float(v)
         self._save_ui_state()
         self._last_scanner_sig = None
         self._draw_scanner()
@@ -5449,8 +5492,42 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         n = len(buckets)
         self._absorb_marks(buckets)                           # refresh the shared cache (self._absorblvl_marks)
         self._radar_hover_buckets = buckets                   # frame the hover tape-rotation readout reads from
+        # 'Match Reward/eff' (m10_wall_match): keep ONLY the 3 walls closest to an UNMITIGATED, SAME-SIDE Reward-Switch
+        # zone (support wall S <-> buy zone / resistance wall R <-> sell zone), strength-slider-filtered. Distance =
+        # |wall price - zone mid|. Ranked across all drawable walls; the top 3 survive. Off -> all walls draw as before.
+        # OVERRIDE: when the Today and Last-30 reward/eff windows AGREE on a side, show ALL same-side walls instead.
+        _keep_ids = None; _keep_side = None
+        if self.menu.layer_state("m10_wall_match"):
+            _keep_side = self._reward_alignment(buckets)         # 'S'/'R' -> all same-side walls; None -> 3-closest
+        if self.menu.layer_state("m10_wall_match") and _keep_side is None:   # no alignment -> 3-closest same-side unmitigated
+            _rthr = float(getattr(self, "_reward_strength", 0.0))
+            _buy_mids = []; _sell_mids = []
+            for (_ei, _eside, _est, _eylo, _eyhi, _emit) in self._reward_switch_events(buckets):
+                if _emit is not None or _est < _rthr:          # UNMITIGATED + passes the switch-strength slider
+                    continue
+                (_buy_mids if _eside == "buy" else _sell_mids).append(0.5 * (_eylo + _eyhi))
+            _cand = []
+            for _mi, _m in enumerate(self._absorblvl_marks):   # rank only walls that would actually draw (same base gates)
+                _i0 = int(_m["i0"]); _i1 = min(int(_m["i1"]), n - 1)
+                if _i0 < 0 or _i0 >= n or _i1 < _i0:
+                    continue
+                if _m.get("broken") and (n - 1) - _i1 > 90:
+                    continue
+                if float(_m.get("strength", 0.0)) < self._wall_floor:
+                    continue
+                _mids = _buy_mids if _m.get("side", "R") == "S" else _sell_mids   # SAME-SIDE switch zones only
+                if not _mids:
+                    continue
+                _p = float(_m["price"])
+                _cand.append((min(abs(_p - _mm) for _mm in _mids), _mi))
+            _cand.sort(key=lambda t: t[0])
+            _keep_ids = set(_mi for _d, _mi in _cand[:3])       # the 3 closest
         ub = 0; ul = 0; up = 0; uz = 0; self._radar_hover_zones = []
-        for m in self._absorblvl_marks:
+        for _mid_idx, m in enumerate(self._absorblvl_marks):
+            if _keep_side is not None and m.get("side", "R") != _keep_side:   # Match: Today+Last-30 agree -> same-side only
+                continue
+            if _keep_ids is not None and _mid_idx not in _keep_ids:   # Match Reward/eff: only the 3 closest survive
+                continue
             i0 = int(m["i0"]); i1 = min(int(m["i1"]), n - 1)
             if i0 < 0 or i0 >= n or i1 < i0:
                 continue
@@ -5522,7 +5599,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         directional bias from wall creation & mitigation over the last ~96 bars (app/wall_regime_detect). DESCRIPTIVE +
         COINCIDENT (reads the regime we're IN; does NOT lead — study wall_regime_lead.py). Reuses the shared wall
         marks (no extra detect())."""
-        if not self.menu.layer_state("m10_absorblvl") or not buckets:
+        if not self.menu.layer_state("m10_absorblvl") or not self.menu.layer_state("m10_wall_regime") or not buckets:
             self._regime_hud.setVisible(False); return
         from app import wall_regime_detect
         r = wall_regime_detect.regime_read(self._absorb_marks(buckets), len(buckets))
@@ -5552,6 +5629,180 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             % (gray, dim, r["window"], rc, reg, dim, 100.0 * r["brk_asym"],
                bc, arrow, r["bias"], dim, r["Rc"], r["Sc"],
                dim, r["Rb"], r["Sb"], r["avg_age"]))
+
+    def _draw_reward(self, buckets, vx0, vy0) -> None:
+        """REWARD / EFFORT read — BOTTOM-LEFT HUD (m10_reward). For each window (yesterday / today / last 30 candles /
+        current candle) shows the BUY vs SELL share of reward-per-effort: reward = price that moved a side's way,
+        effort = that side's taker volume. buy>sell => buyers are being PAID for their aggression, sellers ABSORBED
+        (and the mirror). DESCRIPTIVE + COINCIDENT — reads who is winning the exchange, NOT a forecast."""
+        if not self.menu.layer_state("m10_reward") or not buckets:
+            self._reward_hud.setVisible(False); return
+        from datetime import datetime, timezone
+        from app import reward_eff
+        n = len(buckets)
+        last_t = float(buckets[-1].get("start_time", 0.0) or 0.0)
+        # Cache the start_times so the day-boundary bisect doesn't rebuild an n-length list every frame.
+        sig = (n, float(buckets[0].get("start_time", 0.0) or 0.0), last_t)
+        if sig != self._reward_starts_sig:
+            self._reward_starts = [float(b.get("start_time", 0.0) or 0.0) for b in buckets]
+            self._reward_starts_sig = sig
+        starts = self._reward_starts
+        rows = []
+        if last_t > 0:                                            # day-of-latest-bucket UTC boundaries (works live + replay)
+            ref = datetime.fromtimestamp(last_t, tz=timezone.utc)
+            today0 = ref.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            i_today = bisect.bisect_left(starts, today0)
+            i_yest = bisect.bisect_left(starts, today0 - 86400.0)
+            rows.append(("Yesterday", reward_eff.share(buckets, i_yest, i_today - 1)))
+            rows.append(("Today", reward_eff.share(buckets, i_today, n - 1)))
+        else:
+            rows.append(("Yesterday", (50.0, False)))
+            rows.append(("Today", (50.0, False)))
+        rows.append(("Last 30", reward_eff.share(buckets, n - 30, n - 1)))
+        self._reward_hud.setHtml(self._reward_html(rows))
+        self._reward_hud.setPos(vx0, vy0)                         # bottom-left of the view (anchor=(0,1))
+        self._reward_hud.setVisible(True)
+
+    def _reward_alignment(self, buckets):
+        """'S' if BOTH the Today and Last-30 reward/eff windows are buy-dominant (buy share > 50), 'R' if BOTH are
+        sell-dominant, else None. Same windows as the Reward/effort table (day-of-latest-bucket UTC 'today', trailing
+        30). The 'Match Reward/eff' filter uses this: when the two windows agree it shows ALL same-side walls (all buy
+        walls on a buy/buy read, all sell walls on a sell/sell read) instead of the 3-closest selection."""
+        from datetime import datetime, timezone
+        from app import reward_eff
+        n = len(buckets)
+        if n < 2:
+            return None
+        last_t = float(buckets[-1].get("start_time", 0.0) or 0.0)
+        if last_t <= 0:
+            return None
+        starts = getattr(self, "_reward_starts", None)
+        if not starts or len(starts) != n:
+            starts = [float(b.get("start_time", 0.0) or 0.0) for b in buckets]
+        ref = datetime.fromtimestamp(last_t, tz=timezone.utc)
+        today0 = ref.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        i_today = bisect.bisect_left(starts, today0)
+        today_share, today_ok = reward_eff.share(buckets, i_today, n - 1)
+        last30_share, last30_ok = reward_eff.share(buckets, n - 30, n - 1)
+        if not (today_ok and last30_ok):
+            return None
+        if today_share > 50.0 and last30_share > 50.0:
+            return "S"                                           # both buy-dominant -> all support/buy walls
+        if today_share < 50.0 and last30_share < 50.0:
+            return "R"                                           # both sell-dominant -> all resistance/sell walls
+        return None
+
+    def _rwsw_zone(self, used, col):
+        """Pooled horizontal reward-switch ZONE (QGraphicsRectItem on the viewbox, grown lazily). `col`=(r,g,b)."""
+        if used >= len(self._rwsw_zone_pool):
+            _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-7)   # above the wall boxes (-6), below candles
+            self.vb.addItem(_rc, ignoreBounds=True); self._rwsw_zone_pool.append(_rc)
+        _rc = self._rwsw_zone_pool[used]
+        _rc.setBrush(pg.mkBrush(*col, 34))                          # translucent fill
+        _rc.setPen(pg.mkPen(*col, 130, width=1.0))                  # thin edge so stacked zones stay legible
+        return _rc
+
+    def _rwsw_lbl(self, used):
+        if used >= len(self._rwsw_lbl_pool):
+            _t = pg.TextItem(anchor=(0, 0.5)); _t.setZValue(16)
+            _t.textItem.setFont(QtGui.QFont("Consolas", 8))
+            self.plot.addItem(_t, ignoreBounds=True); self._rwsw_lbl_pool.append(_t)
+        return self._rwsw_lbl_pool[used]
+
+    def _hide_reward_switches(self) -> None:
+        for _rc in self._rwsw_zone_pool:
+            _rc.setVisible(False)
+        for _t in self._rwsw_lbl_pool:
+            _t.setVisible(False)
+
+    def _reward_switch_events(self, buckets):
+        """Cached reward-switch flips with band + mitigation: [(i, side, strength, ylo, yhi, mit)]. Re-detected only
+        on a data change. Shared by the zone renderer (_draw_reward_switches) and the 'Match Reward/eff' wall filter,
+        so both read the SAME flips within a frame regardless of draw order."""
+        n = len(buckets)
+        if n < 2:
+            self._rwsw_events = []; return self._rwsw_events
+        sig = (n, buckets[-1].get("end_time"), buckets[-1].get("close"))
+        if sig != self._rwsw_sig:
+            from app import reward_eff
+            closes = [float(bk.get("close", bk.get("close_price", 0.0)) or 0.0) for bk in buckets]
+            ev = []
+            for i, side, strength in reward_eff.switches(buckets):
+                b = buckets[i]
+                hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+                if hi <= 0.0 or lo <= 0.0:
+                    continue
+                mid = 0.5 * (hi + lo); half = max(0.5 * (hi - lo), mid * 0.00025)   # floor so a tiny candle still shows
+                ylo = mid - half; yhi = mid + half
+                mit = None                                       # first candle whose BODY CLOSE breaks through the band
+                if side == "buy":
+                    for k in range(i + 1, n):
+                        if closes[k] < ylo:
+                            mit = k; break
+                else:
+                    for k in range(i + 1, n):
+                        if closes[k] > yhi:
+                            mit = k; break
+                ev.append((i, side, strength, ylo, yhi, mit))
+            self._rwsw_events = ev; self._rwsw_sig = sig
+        return self._rwsw_events
+
+    def _draw_reward_switches(self, buckets, x, vx0, vx1, vy0, vy1) -> None:
+        """REWARD-SWITCH ZONES (sub-toggle m10_reward_switch, under the Reward/effort indicator): a horizontal band at
+        each candle where the rolling reward-per-effort side FLIPS. GREEN = buyers took over (sellers stopped being
+        rewarded, buyers started) -> support; RED = the mirror -> resistance. Band = the flip candle's high-low, and it
+        runs forward until MITIGATED — a candle whose BODY CLOSE breaks through ends it (green: a close below the band /
+        red: a close above), else it extends to the present. The hamburger strength slider hides weak switches (strength
+        = depth of the regime being reversed). DESCRIPTIVE + COINCIDENT (app.reward_eff.switches)."""
+        if (not self.menu.layer_state("m10_reward") or not self.menu.layer_state("m10_reward_switch") or not buckets):
+            self._hide_reward_switches(); return
+        n = len(buckets)
+        if n < 2:
+            self._hide_reward_switches(); return
+        self._reward_switch_events(buckets)                     # refresh the shared flip cache (self._rwsw_events)
+        GRN, RED = (40, 210, 110), (240, 70, 85)
+        thr = float(getattr(self, "_reward_strength", 0.0))     # hamburger strength slider (0 = show all)
+        x_last = (x[n - 1] + 0.5) if (n - 1) < len(x) else float(n)   # un-mitigated zones run to the present
+        uz = 0
+        for i, side, strength, ylo, yhi, mit in (self._rwsw_events or []):
+            if i < 0 or i >= n or strength < thr:               # strength filter
+                continue
+            xl = x[i] if i < len(x) else i
+            xr = (x[mit] if mit < len(x) else float(mit)) if mit is not None else x_last
+            if xl > vx1 + 1.0 or xr < vx0 - 1.0:
+                continue                                         # cull fully off-screen zones
+            col = GRN if side == "buy" else RED
+            _rc = self._rwsw_zone(uz, col)
+            _rc.setRect(xl, ylo, max(1e-9, xr - xl), max(1e-9, yhi - ylo)); _rc.setVisible(True)
+            _t = self._rwsw_lbl(uz)                              # side tag at the zone's left edge
+            _t.setHtml("<span style='color:rgb(%d,%d,%d)'>%s</span>" % (col[0], col[1], col[2],
+                       "buyers ▲" if side == "buy" else "sellers ▼"))
+            _t.setPos(xl, yhi); _t.setVisible(True)
+            uz += 1
+        for j in range(uz, len(self._rwsw_zone_pool)):
+            self._rwsw_zone_pool[j].setVisible(False)
+        for j in range(uz, len(self._rwsw_lbl_pool)):
+            self._rwsw_lbl_pool[j].setVisible(False)
+
+    @staticmethod
+    def _reward_html(rows) -> str:
+        gray, green, red, dim = "#9aa0aa", "#2ecc71", "#e74c3c", "#5a6170"
+        body = []
+        for label, (bsh, ok) in rows:
+            if not ok:
+                cells = "<span style='color:%s'>&mdash;</span>" % dim
+            else:
+                ssh = 100.0 - bsh
+                bc = green if bsh >= 55 else gray
+                sc = red if ssh >= 55 else gray
+                cells = ("<span style='color:%s'>buy %.0f%%</span>"
+                         "<span style='color:%s'>&nbsp;&middot;&nbsp;</span>"
+                         "<span style='color:%s'>sell %.0f%%</span>" % (bc, bsh, dim, sc, ssh))
+            body.append("<span style='color:%s'>%-9s</span>&nbsp;&nbsp;%s" % (dim, label, cells))
+        return ("<div style='background:#12151c;padding:3px 7px;line-height:1.35;text-align:left'>"
+                "<span style='color:%s;font-size:9px;letter-spacing:1px'>REWARD / EFFORT "
+                "<span style='color:%s'>&middot; buy vs sell &middot; coincident</span></span><br>%s</div>"
+                % (gray, dim, "<br>".join(body)))
 
     def _draw_4h_zone(self, buckets) -> None:
         """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median), ZONE ('Z': buy/sell wick bands), and ABNORMAL-ORDER
@@ -5732,6 +5983,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "replay_edge_t": self._replay_saved_edge_t,               # last replay cursor -> resume here on toggle-on
                 "swing_pct": self._swing_pct,                             # swing-ZigZag sensitivity slider (%)
                 "wall_floor": self._wall_floor,                           # Order-Flow Walls min-strength draw floor
+                "reward_strength": self._reward_strength,                 # Reward-switch zones min-strength filter
                 "bubble_vol": self.hm_bubble_min,                         # Heatmap trade-bubble min-volume filter (SOL)
                 "kc_scale": self._kc_scale,                               # 1m-KC smooth-approx effective-TF scale slider
                 "tf": self._tf,                                           # last chart timeframe -> reopen on it
@@ -5807,6 +6059,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _wf = s.get("wall_floor")                             # restore the Order-Flow Walls min-strength draw floor
         if isinstance(_wf, (int, float)):
             self._wall_floor = max(0.05, min(0.90, float(_wf)))
+        _rs = s.get("reward_strength")                       # restore the Reward-switch zones min-strength filter
+        if isinstance(_rs, (int, float)):
+            self._reward_strength = max(0.0, min(70.0, float(_rs)))
         _bv = s.get("bubble_vol")                             # restore the Heatmap trade-bubble min-volume filter (SOL)
         if isinstance(_bv, (int, float)):
             self.hm_bubble_min = max(0.0, min(1000.0, float(_bv)))
@@ -12694,6 +12949,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_regime(buckets, vx1, vy0)                  # Wall Regime HUD, bottom-right (rides m10_absorblvl)
         except Exception:
             self._regime_hud.setVisible(False)
+        try:
+            self._draw_reward(buckets, vx0, vy0)                  # Reward/effort HUD, bottom-left (m10_reward)
+        except Exception:
+            self._reward_hud.setVisible(False)
+        try:
+            self._draw_reward_switches(buckets, x, vx0, vx1, vy0, vy1)   # reward-side flip marks (m10_reward_switch)
+        except Exception:
+            self._hide_reward_switches()
 
         # --- Keltner Channel: EMA(close) basis ± ATR band. LIGHT GRAY upper/lower (match the POC baseline);
         #     the EMA MIDDLE line is HIDDEN (operator pref — the POC baseline is the center reference). ---
