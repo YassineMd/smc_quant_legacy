@@ -40,8 +40,9 @@ def bias_roll(i):
     return -1 if s > r else (1 if r > s else 0)
 
 
-def run(tp, sl):
+def run(tp, sl, max_per_session=2):
     cur = 0; stopped = False; have_biaswall = False; last2 = []; ou = -1; res = []; ntrig = ntrade = 0
+    day_count = defaultdict(int)
     for i in range(n):
         for s in brk_at.get(i, ()):                       # BREAKS at bar i
             b = bias_roll(i);  cur = b if b != 0 else cur
@@ -61,7 +62,10 @@ def run(tp, sl):
             b = bias_roll(i);  d = b if b != 0 else cur
             if stopped or d == 0 or i <= ou or i + 1 >= n:
                 continue
-            ntrade += 1
+            day = DT[i].date()
+            if day_count[day] >= max_per_session:          # cap trades per NY session (UTC day)
+                continue
+            ntrade += 1; day_count[day] += 1
             E = C[i]; tpx = E * (1 + d * tp); slx = E * (1 - d * sl); out = None; xi = min(n - 1, i + 192)
             for k in range(i + 1, min(n, i + 193)):
                 hs = (Ll[k] <= slx) if d > 0 else (Hh[k] >= slx); ht = (Hh[k] >= tpx) if d > 0 else (Ll[k] <= tpx)
@@ -82,7 +86,7 @@ def rep(tag, res):
         print("   %-24s [%s] n=%4d win=%5.1f%% net=%+7.2f%% comp=%+6.1f%% DD=%.1f%%" % (tag, yl, N, 100 * w / N, net, (bal - 1) * 100, mdd * 100), flush=True)
 
 
-for tp, sl in ((0.005, 0.005), (0.010, 0.010), (0.015, 0.015), (0.003, 0.025)):
-    res, ntrig, ntrade = run(tp, sl)
-    print("=== SM break-bias  TP%.1f%%/SL%.1f%%   (of %d NY star, %d passed the state machine) ===" % (tp * 100, sl * 100, ntrig, ntrade), flush=True)
-    rep("SM tp%.1f/sl%.1f" % (tp * 100, sl * 100), res)
+for tp, sl in ((0.003, 0.015),):
+    res, ntrig, ntrade = run(tp, sl, max_per_session=2)
+    print("=== SM break-bias  TP%.1f%%/SL%.1f%%  max2/NYsession  (of %d NY star, %d traded) ===" % (tp * 100, sl * 100, ntrig, ntrade), flush=True)
+    rep("SM tp%.1f/sl%.1f max2" % (tp * 100, sl * 100), res)

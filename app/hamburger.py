@@ -138,8 +138,8 @@ _M10_CANDLES = [
 _M10_STRATEGIES = [
     ("m10_mmx_sound", "\U0001F514", False, True),                       # bell icon — audible confirmation when enabled
     ("m10_engulfsr", "1h Engulf S/R Reversal (L / S triangles)", False, True),  # 1h: engulf at VA/S/R zone; fwd candidate
-    ("m10_momentum", "15m Engulfing S/R (L / S losanges)", False, True),  # 15m: last-mit engulf; gold/blue tiers, tier-dependent skew
-    ("m10_engulf5m", "5m Absorption S/R", False, True),  # 5m: continuation bias only, all triangles; engulf green/red/gold + absorb2 blue/orange
+    ("m10_momentum", "15m Engulfing Wall (L / S losanges)", False, True),  # 15m: engulf rejection off a wall's radar (bounce)
+    ("m10_engulf5m", "5m Absorption Wall", False, True),  # 5m: absorption/engulf rejection off a wall's radar (bounce); engulf green/red/gold + absorb2 blue/orange
     ("m10_easy1h", "1h Easy 0.5% (L / S triangles)", False, True),  # 1h: absorption+vw+swing scale-out; neon green/purple; fwd candidate
     ("m10_nyrangebreak", "NY Range-break (brB / brS · 1h·15m)", False, True),  # 1h/15m: 2-5pm range box + first close-break label; SHORT side alpha in-sample (P=0.003)
     ("m10_wallstrat", "Wall Strategy (L / S triangles)", False, True),  # 5m: wall visit w/ Big|Crazy absorption + favourable tally + Easy Gold/Pure Aggression entry; NOT backtested

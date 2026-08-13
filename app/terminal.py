@@ -1348,7 +1348,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._crazy_pool = []; self._crazy_sig = None
         self._easygold_pool = []      # Easy Gold sub-tier (m10_wallabs_easygold) — gold ⛊/☗ on the divergence candle
         self._pureagg_pool = []       # Pure Aggression sub-tier (m10_wallabs_pureagg) — green/red ▋ on the one-sided candle
-        # 5m Absorption S/R overlay (m10_engulf5m, 5m only) — triangle L/S badges (engulf green/red/gold + absorb2 blue/orange); click -> entry/TP/SL lines
+        # 5m Absorption Wall overlay (m10_engulf5m, 5m only) — triangle L/S badges (engulf green/red/gold + absorb2 blue/orange); click -> entry/TP/SL lines
         self._e5m_sph = None                     # ScatterPlotItem of triangle badges
         self._e5m_lbl_pool = []                  # (colour-only badges)
         self._e5m_sig = None; self._e5m_drawn = False
@@ -7456,14 +7456,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._mom_sig = None; self._mom_drawn = False
 
     def _draw_momentum(self, filtered) -> None:
-        """Square L/S badges for the 15m Momentum candidate (app/momentum_detect). Needs S/R + prev-day VA + structure-
-        bias context, so the shared warm-up prefix is prepended and indices shifted back (like Engulf/15mReasy). 15m ONLY."""
+        """Losange L/S badges for the 15m ENGULFING WALL candidate (app/momentum_detect): a strong engulf REJECTION
+        off an Order-Flow WALL's radar area (support wall -> long bounce / resistance wall -> short). Reuses the shared
+        wall marks (same frame the walls overlay runs on); no warm prefix / S/R. 15m ONLY. Self-gated, fail-safe."""
         if (not self.menu.layer_state("m10_momentum") or self.scanner_mode != "bucket_canvas"
                 or self._tf != "15m"):
             self._clear_momentum(); return
         n = len(filtered)
-        warm = getattr(self, "_mmx_warm", None) or []                # shared prefix (S/R + prev-day VA + bias context)
-        _off = len(warm)
+        _off = 0                                                     # WALL version detects over `filtered` directly (no warm prefix)
         _forming = bool(getattr(self, "_mmx_last_forming", True))
         _sig = (n, _off, _forming, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
         if _sig == self._mom_sig and self._mom_drawn:
@@ -7472,7 +7472,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _fi = (n - 1) if _forming else -1                            # forming (unconfirmed) bucket -> faded preview
         try:
             from app import momentum_detect
-            entries = momentum_detect.detect(list(warm) + list(filtered), skip_last=False)
+            entries = momentum_detect.detect(filtered, self._absorb_marks(filtered), skip_last=False)
         except Exception:
             self._clear_momentum(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
@@ -7520,11 +7520,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _draw_mom_lines(self) -> None:
         self._trade_lines(self._mom_entries, self._mom_lines_user, self._mom_ln_pool, self._mom_lnlbl_pool, 30)
 
-    # 5m ABSORPTION S/R overlay (hamburger m10_engulf5m, 5m ONLY) — EYEBALL candidate, self-gated, fail-safe.
-    # ALL signals are TRIANGLES (up = long, down = short) — continuation bias only, no reversals. Badge tiers:
-    # GREEN/RED (engulf |A|>=1), GOLD (engulf |A|>=2), BLUE/ORANGE (absorb2 two-candle absorption sequence).
+    # 5m ABSORPTION WALL overlay (hamburger m10_engulf5m, 5m ONLY) — EYEBALL candidate, self-gated, fail-safe.
+    # ALL signals are TRIANGLES (up = long, down = short) — a bounce/defend off a wall's radar, no reversals. Badge
+    # tiers: GREEN/RED (engulf |A|>=1), GOLD (engulf |A|>=2), BLUE/ORANGE (absorb2 two-candle absorption sequence).
     # A 1m-FINISH RING (green/red or gold) rings the badge when the 5m candle finishes strong on the 1m tape.
-    # SL 0.1% beyond the widest of prev/entry candle; TP 1:1.5 (1:2 on VA+SR confluence). Click a badge -> its
+    # SL 0.1% beyond the widest of prev/entry candle; TP 1:1.5 (1:2 on GOLD). Click a badge -> its
     # entry/TP/SL trade lines (exclusive). NOT a proven edge (see app/engulf5m_detect docstring).
     def _clear_engulf5m(self) -> None:
         if self._e5m_sph is not None:
@@ -7581,8 +7581,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.svl_bias_badge.setVisible(True)
 
     def _draw_engulf5m(self, filtered) -> None:
-        """Triangle L/S badges for the 5m ABSORPTION S/R candidate (app/engulf5m_detect + app/absorb2_detect). Needs
-        S/R + prev-day VA + structure context, so the shared warm-up prefix is prepended and indices shifted back.
+        """Triangle L/S badges for the 5m ABSORPTION WALL candidate (app/engulf5m_detect + app/absorb2_detect). Needs
+        WALL / radar context (bounce off a wall), so the shared warm-up prefix is prepended and indices shifted back.
         Engulf -> green/red or gold triangle; absorb2 sequence -> blue/orange triangle; 1m-finish ring on top. 5m ONLY."""
         if (not self.menu.layer_state("m10_engulf5m") or self.scanner_mode != "bucket_canvas"
                 or self._tf != "5m"):
@@ -7599,17 +7599,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         buck = list(warm) + list(filtered)
         try:
             from app import engulf5m_detect, absorb2_detect, absorption as _absm
-            from app.engulf_sr_detect import _daily_va as _dva
-            _levels = self._shared_5m_levels(buck)                              # shared: ONE S/R (also reused by breakout)
-            self._e5m_bias = engulf5m_detect.current_bias(buck, _levels)        # LONG/SHORT bias badge (reuses this S/R pass)
-            _absorp = []                                                         # + ONE absorption pass (engulf/absorb2/spheres)
+            from app import absorption_level_detect as _wallmod
+            _walls = _wallmod.detect(buck, skip_last=False)                     # Order-Flow WALLS (radar context; replaces S/R)
+            self._e5m_bias = engulf5m_detect.current_bias(buck, _walls)         # LONG/SHORT lean from the nearest wall radar
+            _absorp = []                                                         # ONE shared absorption pass (engulf + absorb2)
             for _k in range(len(buck)):
                 try:
                     _absorp.append(_absm.absorption(buck, _k)[0])
                 except Exception:
                     _absorp.append(None)
-            _dayva = _dva(buck)
-            entries = engulf5m_detect.detect(buck, skip_last=False, levels=_levels, absorp=_absorp, dayva=_dayva)
+            entries = engulf5m_detect.detect(buck, walls=_walls, skip_last=False, absorp=_absorp)
         except Exception:
             self._clear_engulf5m(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
@@ -7637,7 +7636,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # so they inherit the 1m-finish ring + click-to-trade-lines. Deduped vs an engulf badge already on the bar.
         eng_bars = {bi for bi, _bs, _by in badge_pos}
         try:
-            ab = absorb2_detect.detect(buck, skip_last=False, levels=_levels, absorp=_absorp, dayva=_dayva)
+            ab = absorb2_detect.detect(buck, walls=_walls, skip_last=False, absorp=_absorp)
         except Exception:
             ab = []
         BLU, ORG = (0, 153, 255), (255, 140, 0)

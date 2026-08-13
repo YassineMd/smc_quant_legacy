@@ -1,37 +1,29 @@
-"""15m ENGULFING S/R — engulf breakout in the last-mitigation S/R regime — LIVE terminal overlay (15m ONLY).
-(display name "15m Engulfing S/R"; internal keys stay m10_momentum / momentum_detect / _mom_*.)
+"""15m ENGULFING WALL — a strong engulf REJECTION off an Order-Flow WALL's radar area — LIVE overlay (15m ONLY).
+(display name "15m Engulfing Wall"; internal keys stay m10_momentum / momentum_detect / _mom_*.)
 
-A momentum/continuation breakout: when the S/R structure last broke UP (a resistance was mitigated) take longs; when
-it last broke DOWN (a support was mitigated) take shorts. Fire on a strong engulfing candle in that direction. The
-S/R indicator is used ONLY for the regime (last mitigation), the two "don't fire into the opposite zone" guards, and a
-TP bump when the signal sits AT a same-side zone. No candle-1 condition, no "at S/R" entry requirement, no VA.
+REWORKED 2026-08-13 (user): no longer S/R-dependent — the context is now WALLS / radar area. A BOUNCE/defend setup:
+inside a BUY wall (support) radar a bullish engulf rejects UP -> LONG; inside a SELL wall (resistance) radar a bearish
+engulf rejects DOWN -> SHORT. The candle criteria (engulf + easy absorption + non-doji + aligned skew) are unchanged;
+only the S/R regime/confluence/guards are replaced by "is this candle in a same-side wall's radar visit".
 
 LONG (SHORT mirrors):
-  regime = last mitigated S/R zone is a RESISTANCE (short: a SUPPORT).
+  context = the signal candle sits inside a SUPPORT wall's radar visit (absorption_level_detect radar_runs).
   c2 = bullish ENGULFING (body engulfs c1) that is non-doji, body > UPPER wick, easy [absorption A<=-0.3 OR
-       (A_h2 < -0.5 AND A < 0) i.e. the 2nd half was easy], close > prev candle's BODY top (max open/close).
-       SHORT: bearish engulf, body > LOWER wick, same easy gate, close < prev candle's BODY bottom (min open/close).
-  SKEW is TIER-DEPENDENT (from the aligned/anti study): GOLD or BLUE need aligned skew (LONG skew>0 / SHORT skew<0);
-  the NORMAL tier needs ANTI-aligned skew (LONG skew<0 / SHORT skew>0).
-GUARD (S/R indicator only): skip a bar where a support zone overlaps a resistance zone.
-BADGE tiers (disjoint, priority gold > blue > US > normal): GOLD = very-easy c2 (A<=-2); BLUE = at-S/R confluence
-  (LONG touching a support / SHORT touching a resistance); US = a normal-tier candle meeting the edge pocket
-  (VPIN>0.14 & OI-opening & UTC hour>=13) -> NEON green(long)/red(short); else plain green(long)/red(short).
-EXIT: SL 0.1% beyond the PREVIOUS candle's extreme (c1 low for long / c1 high for short). TP 1:1.2 — bumped to 1:2 for
-  GOLD or BLUE badges. Entry = c2 close.
+       (A_h2 < -0.5 AND A < 0)], close > prev candle's BODY top, and buy-skewed footprint (skew>0) — aligned bounce.
+       SHORT: at a RESISTANCE wall's radar, bearish engulf, body > LOWER wick, close < prev BODY bottom, skew<0.
+BADGE tiers (disjoint, priority gold > US > normal): GOLD = very-easy c2 (A<=-2, TP 1:2); US = a normal-tier candle
+  meeting the edge pocket (VPIN>0.14 & OI-opening & UTC hour>=13) -> NEON; else plain green(long)/red(short).
+EXIT: SL 0.1% beyond the PREVIOUS candle's extreme. TP 1:1.2 — bumped to 1:2 for GOLD. Entry = c2 close.
 
-Parity-matched to study/absorb_engulf_lastmit_15m.py (body_break=True, opp_guard=False, ab2=-0.3). ⚠ IN-PROGRESS operator
-variant — the full mechanical rule loses; the at-S/R CONFLUENCE (blue, TP 1:2) is the net-positive subset (~PF 1.28 near
-this threshold). Shipped for live eyeballing / iteration, NOT a proven edge.
-
-detect(buckets, skip_last=True) -> [{i, side(+1/-1), entry, sl, tp, src('SR' if at-zone confluence else ''), relaxed(bool)}]
-  (relaxed == confluence == the 1:2-TP trades; i in passed-list space).
+detect(buckets, walls=None, skip_last=True) -> [{i, side(+1/-1), entry, sl, tp, src('WALL'), tier, relaxed(bool),
+  flow, flow_align}]. `walls` = absorption_level_detect.detect() marks (detected internally if None). i in passed-list
+  space. ⚠ IN-PROGRESS operator variant — for live eyeballing / iteration, NOT a proven edge (not backtested).
 """
 from __future__ import annotations
 
 import datetime as _dt
 
-from . import support_resistance as _sr
+from . import absorption_level_detect as _al
 from . import absorption as _absorption
 from .footprint_panel import profile_skewness
 from .engulf_sr_detect import _ohlc                        # reuse the parity-verified OHLC accessor
@@ -41,8 +33,7 @@ R2_EASY = -0.5       # OR-branch: 2nd-half absorption A_h2 < this (easy second h
 GOLD_A = -2.0        # c2 absorption A <= this = a VERY-easy move -> GOLD badge + 1:2 TP
 SL_PAD = 0.001       # structural stop 0.1% beyond the previous candle's extreme
 RR = 1.2             # base reward:risk
-RR_CONF = 2.0        # gold (A<=-2) OR at-S/R confluence -> 1:2
-K = _sr.SR_PIVOT_K
+RR_CONF = 2.0        # gold (A<=-2) -> 1:2
 VPIN_THR = 0.14      # US tier: signal-candle VPIN (|delta|/vol) > this (= normal-tier median)
 US_HOUR = 13         # US tier: UTC hour >= this (US session)
 FLOW_K = 12          # trailing flow window (buckets, ~3h on 15m) — RING when this flow ALIGNS with the trade side
@@ -67,9 +58,9 @@ def _us_pocket(b) -> bool:
     return st > 0 and _dt.datetime.utcfromtimestamp(st).hour >= US_HOUR
 
 
-def detect(buckets, skip_last=True):
+def detect(buckets, walls=None, skip_last=True):
     n = len(buckets)
-    if n < 2 * K + 2:
+    if n < 3:
         return []
     O = [0.0] * n; C = [0.0] * n; H = [0.0] * n; Lo = [0.0] * n
     for i, b in enumerate(buckets):
@@ -84,47 +75,37 @@ def detect(buckets, skip_last=True):
         a = max(0, i - FLOW_K + 1); bs = bvp[i + 1] - bvp[a]; ss = svp[i + 1] - svp[a]
         return (bs - ss) / (bs + ss) if (bs + ss) > 0 else 0.0
 
-    levels = _sr.detect(buckets, K)
-    SUP = [x for x in levels if x["kind"] == "S"]; RES = [x for x in levels if x["kind"] == "R"]
-
-    # ---- last-mitigation regime: +1 after a RESISTANCE mitigation, -1 after a SUPPORT mitigation, 0 before any
-    mits = []
-    for x in RES:
-        if x["i1"] is not None:
-            mits.append((x["i1"], 1))
-    for x in SUP:
-        if x["i1"] is not None:
-            mits.append((x["i1"], -1))
-    mits.sort()
-    bias = [0] * n; state = 0; mi = 0
-    for i in range(n):
-        while mi < len(mits) and mits[mi][0] <= i:
-            state = mits[mi][1]; mi += 1
-        bias[i] = state
+    # WALL / RADAR context (replaces S/R): which candles sit INSIDE a SUPPORT (S) / RESISTANCE (R) wall's radar
+    # visit. `walls` = app.absorption_level_detect.detect() marks (radar_runs carry the visit windows); detected
+    # here if not supplied by the caller.
+    if walls is None:
+        try:
+            walls = _al.detect(buckets, skip_last=False)
+        except Exception:
+            walls = []
+    sup_radar = [False] * n; res_radar = [False] * n
+    for w in (walls or []):
+        _s = w.get("side")
+        for r in w.get("radar_runs", ()):
+            if len(r) < 2:
+                continue
+            rk0 = max(0, int(r[0])); rk1 = min(n - 1, int(r[1]))
+            for k in range(rk0, rk1 + 1):
+                if _s == "S":
+                    sup_radar[k] = True
+                elif _s == "R":
+                    res_radar[k] = True
 
     def nd(i):
         b = abs(C[i] - O[i]); return b > (H[i] - max(O[i], C[i])) and b > (min(O[i], C[i]) - Lo[i])
-
-    def active(levs, i):
-        return [x for x in levs if x["i0"] + K <= i and (x["i1"] is None or x["i1"] > i)]
-
-    def touches(i, levs):
-        for x in active(levs, i):
-            i0 = x["i0"]; zlo = min(Lo[i0], H[i0]); zhi = max(Lo[i0], H[i0])
-            if (Lo[i] <= zhi and H[i] >= zlo) or (zlo <= O[i] <= zhi):
-                return True
-        return False
-
-    def overlap(i):
-        sup = [(min(Lo[x["i0"]], H[x["i0"]]), max(Lo[x["i0"]], H[x["i0"]])) for x in active(SUP, i)]
-        res = [(min(Lo[x["i0"]], H[x["i0"]]), max(Lo[x["i0"]], H[x["i0"]])) for x in active(RES, i)]
-        return any(slo <= rhi and shi >= rlo for slo, shi in sup for rlo, rhi in res)
 
     out = []
     for i in range(1, (n - 1) if skip_last else n):
         o, c, h, l = O[i], C[i], H[i], Lo[i]
         rng = h - l
-        if o <= 0 or c <= 0 or rng <= 0 or not nd(i) or overlap(i):
+        if o <= 0 or c <= 0 or rng <= 0 or not nd(i):
+            continue
+        if not (sup_radar[i] or res_radar[i]):               # must sit AT a wall's radar area (else no signal)
             continue
         try:
             a2 = _absorption.absorption(buckets, i)[0]
@@ -142,19 +123,16 @@ def detect(buckets, skip_last=True):
         sk = profile_skewness(buckets[i].get("levels"))
         if sk is None:
             continue
-        body = abs(c - o); side = 0; conf = False
+        body = abs(c - o); side = 0
         pbhi = max(O[i - 1], C[i - 1]); pblo = min(O[i - 1], C[i - 1])   # previous candle's BODY top / bottom
-        gold = a2 <= GOLD_A                                  # very-easy c2 -> GOLD tier (priority over blue)
-        # LONG: regime up, bullish engulf breakout closing above prev BODY, body > upper wick
-        if (bias[i] == 1 and c > o and c > pbhi and o <= pblo and body > (h - max(o, c))):
-            conf = touches(i, SUP)                           # at a support zone -> BLUE
-            if (sk > 0) if (gold or conf) else (sk < 0):     # gold/blue: skew>0 (aligned); normal: skew<0 (anti)
-                side = 1
-        # SHORT: regime down, bearish engulf breakout closing below prev BODY, body > lower wick
-        elif (bias[i] == -1 and c < o and c < pblo and o >= pbhi and body > (min(o, c) - l)):
-            conf = touches(i, RES)                           # at a resistance zone -> BLUE
-            if (sk < 0) if (gold or conf) else (sk > 0):     # gold/blue: skew<0 (aligned); normal: skew>0 (anti)
-                side = -1
+        gold = a2 <= GOLD_A                                  # very-easy c2 -> GOLD tier + 1:2 TP
+        # LONG: a SUPPORT wall DEFENDS -> a bullish engulf REJECTION off it (body engulfs prev, body > upper wick,
+        # buy-skewed footprint aligned with the bounce).
+        if sup_radar[i] and c > o and c > pbhi and o <= pblo and body > (h - max(o, c)) and sk > 0:
+            side = 1
+        # SHORT: a RESISTANCE wall DEFENDS -> a bearish engulf REJECTION off it (body > lower wick, sell-skewed).
+        elif res_radar[i] and c < o and c < pblo and o >= pbhi and body > (min(o, c) - l) and sk < 0:
+            side = -1
         if side == 0:
             continue
         ext = Lo[i - 1] if side > 0 else H[i - 1]             # SL 0.1% beyond the PREVIOUS candle's extreme
@@ -162,15 +140,10 @@ def detect(buckets, skip_last=True):
         if (side > 0 and sl >= c) or (side < 0 and sl <= c):
             continue                                          # degenerate stop
         sld = (c - sl) if side > 0 else (sl - c)
-        rr = RR_CONF if (gold or conf) else RR               # gold OR confluence -> 1:2
-        if gold:
-            tier = "gold"
-        elif conf:
-            tier = "conf"
-        else:                                                # normal-tier subset that meets the US-pocket edge -> US tier
-            tier = "us" if _us_pocket(buckets[i]) else "normal"
+        rr = RR_CONF if gold else RR                          # gold -> 1:2, else 1:1.2
+        tier = "gold" if gold else ("us" if _us_pocket(buckets[i]) else "normal")
         fl = _flow(i)
         out.append(dict(i=i, side=side, entry=c, sl=sl, tp=c + rr * sld * side,
-                        src=("SR" if conf else ""), tier=tier, relaxed=(tier != "normal"),
+                        src="WALL", tier=tier, relaxed=(tier != "normal"),
                         flow=fl, flow_align=((fl > 0) if side > 0 else (fl < 0))))
     return out
