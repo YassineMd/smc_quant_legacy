@@ -98,6 +98,34 @@ def crazy_thresholds(buckets):
         return out
 
 
+BIG_K = 0.5         # BIG (middle) bubble tier = >= this many robust-sigma above the median, below CRAZY's MAD_K=2.0
+#                     (recon 5m: ~85% normal / ~9% BIG / ~6% crazy — a proper middle band, more common than crazy)
+
+
+def bubble_thresholds(buckets):
+    """Per-bucket (big_thr, crazy_thr) for the 3-TIER candle bubbles: normal < big_thr <= BIG < crazy_thr <= CRAZY.
+    big = median + BIG_K*sigma / crazy = median + MAD_K*sigma (robust z-score over the last WIN candles' top bubbles).
+    None where there isn't enough history. Superset of crazy_thresholds() — the 2nd element is the SAME crazy level."""
+    n = len(buckets)
+    out = [None] * n
+    if n < WIN + 1:
+        return out
+    try:
+        top1 = [_top1(b) for b in buckets]
+        for i in range(WIN, n):
+            base = [top1[j] for j in range(i - WIN, i) if top1[j] > 0]
+            if len(base) < MIN_N:
+                continue
+            med, sigma = _center_scale(base)
+            if sigma > 0:
+                out[i] = (med + BIG_K * sigma, med + MAD_K * sigma)
+            elif med > 0:
+                out[i] = (1.5 * med, 2.0 * med)
+        return out
+    except Exception:
+        return out
+
+
 def detect(buckets, walls, skip_last=False):
     n = len(buckets)
     if n < WIN + 2 or not walls:

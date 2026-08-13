@@ -59,24 +59,33 @@ def detail_visible(n_vis: float) -> bool:
     return n_vis <= MAX_BUBBLE_BUCKETS
 
 
-_CRAZY_BUY = (20, 255, 120)    # a CRAZY-volume bubble (statistical outlier) -> ELECTRIC GREEN (buy) ...
-_CRAZY_SELL = (205, 60, 255)   # ... / ELECTRIC PURPLE (sell) — bright + opaque + ringed so they grab the eye
+_CRAZY_BUY = (20, 255, 120)    # tier 2 CRAZY (statistical outlier) -> ELECTRIC GREEN (buy) ...
+_CRAZY_SELL = (205, 60, 255)   # ... / ELECTRIC PURPLE (sell) — bright + opaque + glow ring, grabs the eye
+#                                tier 1 BIG reuses these as a STROKE around a normal green/red fill (see _draw_bubble)
 
 
-def _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, crazy=False):
-    """Pixel-round volume bubble at (xi, price); radius ~ volume fraction, color = buy/sell dominance.
-    A CRAZY-volume bubble (`crazy=True`) pops: bigger, near-opaque, ELECTRIC green(buy)/purple(sell) with a
-    brighter glow ring, so it instantly draws the eye. Shared by the overflow fallback + the top-3 regime."""
+def _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, tier=0):
+    """Pixel-round volume bubble at (xi, price); radius ~ volume fraction, colour = buy/sell dominance.
+    THREE TIERS: 0 NORMAL (faint std green/red, no ring) -> 1 BIG (SAME green/red fill + an ELECTRIC green(buy)/
+    purple(sell) STROKE, x1.2 — bigger than normal, smaller than crazy) -> 2 CRAZY (electric FILL, near-opaque,
+    bright glow ring, x1.45). The gradient makes an ELEVATED bubble stand out before it's a full outlier."""
     frac = tot / max_vol
     r_px = 2.5 + 11.0 * frac
-    if crazy:
+    if tier >= 2:                                            # CRAZY — electric fill, near-opaque, glow ring, biggest
         rgb = _CRAZY_BUY if buy >= sell else _CRAZY_SELL
-        r_px *= 1.45                                          # bigger, so the eye jumps to it
-        col = QtGui.QColor(*rgb); col.setAlphaF(min(1.0, 0.78 + 0.22 * frac))   # near-opaque electric fill
+        r_px *= 1.45
+        col = QtGui.QColor(*rgb); col.setAlphaF(min(1.0, 0.78 + 0.22 * frac))
         ring = QtGui.QColor(min(255, rgb[0] + 55), min(255, rgb[1] + 55), min(255, rgb[2] + 55))
-        _pen = QtGui.QPen(ring); _pen.setCosmetic(True); _pen.setWidthF(1.8)    # brighter glow ring
+        _pen = QtGui.QPen(ring); _pen.setCosmetic(True); _pen.setWidthF(1.8)
         p.setBrush(QtGui.QBrush(col)); p.setPen(_pen)
-    else:
+    elif tier == 1:                                          # BIG — normal green/red fill + ELECTRIC stroke, x1.2
+        rgb = config.RGB_GREEN_STD if buy >= sell else config.RGB_RED_STD
+        stroke = _CRAZY_BUY if buy >= sell else _CRAZY_SELL   # electric green(buy) / purple(sell) outline
+        r_px *= 1.2
+        col = QtGui.QColor(*rgb); col.setAlphaF(0.30 + 0.55 * frac)   # SAME fill as a normal bubble
+        _pen = QtGui.QPen(QtGui.QColor(*stroke)); _pen.setCosmetic(True); _pen.setWidthF(1.6)
+        p.setBrush(QtGui.QBrush(col)); p.setPen(_pen)
+    else:                                                   # NORMAL — faint std green/red, no ring
         rgb = config.RGB_GREEN_STD if buy >= sell else config.RGB_RED_STD
         col = QtGui.QColor(*rgb); col.setAlphaF(0.30 + 0.55 * frac)
         p.setBrush(QtGui.QBrush(col)); p.setPen(QtCore.Qt.NoPen)
@@ -132,9 +141,12 @@ class BucketFootprintItem(pg.GraphicsObject):
         half = width / 2.0
         buy_specs, sell_specs, bub_specs = [], [], []
 
-        def _is_crazy(idx, tot):                             # crazy VOLUME bubble (statistical outlier) -> cyan/magenta
-            return (crazy_thr is not None and 0 <= idx < len(crazy_thr)
-                    and crazy_thr[idx] is not None and tot >= crazy_thr[idx])
+        def _tier(idx, tot):                                 # 0 NORMAL / 1 BIG / 2 CRAZY. crazy_thr[idx] is (big,crazy)
+            if crazy_thr is None or not (0 <= idx < len(crazy_thr)) or crazy_thr[idx] is None:
+                return 0
+            _t = crazy_thr[idx]
+            _big, _crz = _t if isinstance(_t, tuple) else (_t, _t)   # legacy float caller -> crazy-only (no BIG tier)
+            return 2 if tot >= _crz else (1 if tot >= _big else 0)
 
         # FIX 1 -- cull to the visible X viewport (the x0/x1 pattern) so the bubble scale
         # AND the 600-label budget serve only the ON-SCREEN buckets. Root fix: the live edge
@@ -190,9 +202,9 @@ class BucketFootprintItem(pg.GraphicsObject):
                                            _FP_BLACK if sell_imb else _FP_NEON_SELL,
                                            _FP_NEON_SELL if sell_imb else None))
                     elif show_bub_layer:            # cap-overflow level falls back to a bubble (only if bubbles on)
-                        _ocz = _is_crazy(i, tot)
-                        if not (crazy_only and not _ocz):   # crazy-only stage: only crazy overflow bubbles
-                            _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, crazy=_ocz)
+                        _ot = _tier(i, tot)
+                        if not (crazy_only and _ot < 2):    # crazy-only stage: only crazy overflow bubbles
+                            _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, tier=_ot)
         elif show_bubbles:
             # TOP-3 levels by TOTAL volume (buy+sell) per bucket -- the significant nodes only. With the volume-label
             # stage on ('b' cycle stage 2) AND zoomed IN enough (a bucket column >= BUBBLE_LABEL_MIN_PX_PER_X wide),
@@ -208,15 +220,15 @@ class BucketFootprintItem(pg.GraphicsObject):
                     tot = buy + sell
                     if tot <= 0:
                         continue
-                    _cz = _is_crazy(_i, tot)
-                    if crazy_only and not _cz:            # stage 3: hide every non-crazy bubble
+                    _t = _tier(_i, tot)
+                    if crazy_only and _t < 2:             # stage 3: hide every non-crazy bubble
                         continue
                     lo_all = price if lo_all is None else min(lo_all, price)
                     hi_all = price if hi_all is None else max(hi_all, price)
-                    _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, crazy=_cz)
+                    _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, tier=_t)
                     if label_bubbles:
                         txt = f"{tot / 1000.0:.1f}K" if tot >= 1000 else f"{tot:.0f}"
-                        bub_specs.append((xi, price, txt, _FP_BLACK if _cz else _FP_BUB_LBL))   # BLACK on the bright crazy fill
+                        bub_specs.append((xi, price, txt, _FP_BLACK if _t >= 1 else _FP_BUB_LBL))   # BLACK on the BIG + crazy fills
         # (Imbalance lines are drawn by a SEPARATE always-on layer in the terminal — independent of the
         # footprint toggle — so only the black-on-neon number highlight lives here.)
         p.end()

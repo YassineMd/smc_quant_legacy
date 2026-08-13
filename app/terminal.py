@@ -374,7 +374,7 @@ class SubCandleWindow(QtWidgets.QDialog):
         self._left = pg.PlotWidget(axisItems={"right": PriceAxis(orientation="right"),
                                               "bottom": _SubTimeAxis(orientation="bottom")})
         self._left.setBackground("#141414"); self._left.showAxis("right"); self._left.hideAxis("left")
-        self._left.setMenuEnabled(False); self._left.showGrid(x=True, y=True, alpha=0.12)
+        self._left.setMenuEnabled(False); self._left.showGrid(x=False, y=False)
         self._left.getAxis("right").setPen(pg.mkPen("#dcdcdc")); self._left.getAxis("right").setTextPen(pg.mkPen("#dcdcdc"))
         self._left.getAxis("bottom").setPen(pg.mkPen("#dcdcdc")); self._left.getAxis("bottom").setTextPen(pg.mkPen("#dcdcdc"))
         self._item = None                                # legacy simple candle item (fallback only)
@@ -879,7 +879,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.plot = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"),
                                              "right": PriceAxis(orientation="right")})
         self.plot.showAxis("right"); self.plot.hideAxis("left")
-        self.plot.showGrid(x=True, y=True, alpha=0.12)
+        self.plot.showGrid(x=False, y=False)               # no background grid lines
         self.plot.setMenuEnabled(False)
         # Group C fix: the crosshair (60Hz, full-span, antialiased InfiniteLine) trails
         # under the PlotWidget's default MinimalViewportUpdate + CacheBackground — the
@@ -11476,7 +11476,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             a.setPen(ax_pen)
             a.setTextPen(txt_pen)
         # faint grid: white-ish on dark, gray on light (alpha ~30/255)
-        self.plot.showGrid(x=True, y=True, alpha=0.12)
+        self.plot.showGrid(x=False, y=False)               # no background grid lines
 
     @staticmethod
     def _fmt_k(v: float) -> str:
@@ -12168,7 +12168,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _ax in ("bottom", "right"):
             self.lower_plot.getAxis(_ax).setPen(pg.mkPen("#dcdcdc", width=1))
             self.lower_plot.getAxis(_ax).setTextPen(pg.mkPen("#dcdcdc"))
-        self.lower_plot.showGrid(x=True, y=True, alpha=0.12)
+        self.lower_plot.showGrid(x=False, y=False)
         self.lower_plot.setMenuEnabled(False)
         self.lower_plot.setViewportUpdateMode(   # Group C: same anti-trail policy as the main pane
             QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
@@ -12207,7 +12207,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _ax in ("bottom", "right"):
             self.cvd_plot.getAxis(_ax).setPen(pg.mkPen("#dcdcdc", width=1))
             self.cvd_plot.getAxis(_ax).setTextPen(pg.mkPen("#dcdcdc"))
-        self.cvd_plot.showGrid(x=True, y=True, alpha=0.12)
+        self.cvd_plot.showGrid(x=False, y=False)
         self.cvd_plot.setMenuEnabled(False)
         self.cvd_plot.setViewportUpdateMode(
             QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
@@ -12995,7 +12995,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if _bub_on:
                 try:
                     from app import crazy_wall_detect
-                    _crazy_thr = crazy_wall_detect.crazy_thresholds(buckets)   # wall-INDEPENDENT statistical outlier
+                    _crazy_thr = crazy_wall_detect.bubble_thresholds(buckets)  # per-bucket (BIG, CRAZY) tier thresholds
                 except Exception:
                     _crazy_thr = None
             fp_item.update_data(x, levels_list, ber30s, ser30s,
