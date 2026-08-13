@@ -13067,14 +13067,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_structure(buckets, x, vx0, vx1, vy0, vy1)   # HH/HL/LH/LL swing labels (m10_structure)
         except Exception:
             self._clear_structure()
-        try:
-            self._draw_choch(buckets, x, vx0, vx1)                 # Change-of-Character dashed lines (m10_choch)
-        except Exception:
-            self._clear_choch()
-        try:
-            self._draw_4h_zone(buckets)                            # 4h buy/sell wick zones (m10_4hzone)
-        except Exception:
-            self._hide_4h_zone()
+        # CHoCH (m10_choch), 4h Buy/Sell Zones (m10_4hzone) + 4h Bucket Separators (m10_4hsep) REMOVED 2026-08-13
+        # (user request). Detectors/renderers (_draw_choch/_draw_4h_zone/_z4_sep) remain but are no longer dispatched.
         try:
             self._draw_prevday_vp(buckets)                         # per-previous-UTC-day Volume Profile (m10_prevday_vp)
         except Exception:

@@ -119,9 +119,6 @@ _M10_INDICATORS = [
     ("m10_obs", "Order Blocks", False, True),             # default OFF — toggle with Order Blocks + Iceberg via 'o'
     ("m10_structure", "Market Structure — scalp ZigZag", False, True),   # fine ZigZag (ZIGZAG_PCT, app/structure.py)
     ("m10_structure_swing", "Market Structure — swing ZigZag", False, True),   # coarse ZigZag (+ its sensitivity slider)
-    ("m10_choch", "Change of Character (CHoCH)", False, True),   # dashed break-lines on the scalp ZigZag
-    ("m10_4hzone", "4h Buy/Sell Zones (wicks)", False, True),   # last completed 4h bucket buyer/seller wick bands
-    ("m10_4hsep", "4h Bucket Separators", True, True),          # dashed vline at each completed 4h bucket's start
     ("m10_prevday_vp", "Prev. Day VP", False, True),            # per-previous-UTC-day Volume Profile (style = 'Volume Profile Mode' dropdown)
     ("m10_session", "Session Filter", False, True),            # per-UTC-day Tokyo/London/New-York boxes: range + avg (VWAP) + high/low
     ("m10_erange", "Expected Range", False, True),             # per-session dashed range envelope from YESTERDAY's same-session range (NY/Tokyo/London/Whole Day sub-toggles)
