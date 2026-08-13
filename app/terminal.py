@@ -5410,6 +5410,45 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             b0 = b1 = buyshare[0]
         return (b0 * 100.0, b1 * 100.0, n_ba_s, n_sa_b)
 
+    def _reff_rotation(self, side, rk0, rk1):
+        """Live DEFENDER reward/eff readout for a radar visit: the reward-per-effort share of the DEFENDING side
+        (buyers at a support / sellers at a resistance), first-half -> second-half of the visit. On a HOLD it surges
+        (~40%->~67% as the presser is absorbed); on a BREAK it stays pinned (~40%). Returns (def0%, def1%) or None.
+        COINCIDENT descriptor (study/radar_reward_eff.py: whole-visit AUC .88 but early-only ~.55 and +0.00 incremental
+        over the entry P(resist) — a narrator of the hold in progress, NOT a forecast)."""
+        buckets = self._radar_hover_buckets
+        if not buckets:
+            return None
+        a = max(0, rk0); b = min(rk1, len(buckets) - 1)
+        if b <= a:
+            return None
+        up = []; dn = []; bv = []; sv = []
+        for k in range(a, b + 1):
+            bk = buckets[k]
+            o = float(bk.get("open", bk.get("open_price", 0.0)) or 0.0)
+            c = float(bk.get("close", bk.get("close_price", 0.0)) or 0.0)
+            dp = (c - o) / o if o > 0 else 0.0
+            up.append(dp if dp > 0 else 0.0); dn.append(-dp if dp < 0 else 0.0)
+            bv.append(float(bk.get("buy_vol", 0.0) or 0.0)); sv.append(float(bk.get("sell_vol", 0.0) or 0.0))
+        m = len(up)
+        if m < 2:
+            return None
+        half = m // 2
+
+        def _share(lo, hi):                                            # reward/eff DEFENDER share over candles [lo,hi)
+            eb = sum(bv[lo:hi]); es = sum(sv[lo:hi])
+            rb = (sum(up[lo:hi]) / eb) if eb > 0 else 0.0
+            rs = (sum(dn[lo:hi]) / es) if es > 0 else 0.0
+            t = rb + rs
+            if t <= 0:
+                return None
+            buy = 100.0 * rb / t
+            return buy if side == "S" else (100.0 - buy)               # S: buyers defend / R: sellers defend
+        d0 = _share(0, half); d1 = _share(half, m)
+        if d0 is None or d1 is None:
+            return None
+        return (d0, d1)
+
     def _radar_hover(self, pt) -> None:
         """Hover a wall's radar area -> calibrated odds the wall HOLDS this visit (P(resist) from box-volume intensity;
         study/wall_radar_calib.py). DESCRIPTIVE only — light volume ~ almost-certain hold, heavy volume ~ coin flip.
@@ -5436,6 +5475,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _b0, _b1, _nba, _nsa = rot                          # buy-share start/now; sell-share = 100 - buy
                     txt += "\n Buyers absorbed  %d sellers • tape buyers %.0f%%→%.0f%% (%+.0f%%) " % (_nba, _b0, _b1, _b1 - _b0)
                     txt += "\n Sellers absorbed %d buyers • tape sellers %.0f%%→%.0f%% (%+.0f%%) " % (_nsa, 100.0 - _b0, 100.0 - _b1, _b0 - _b1)
+                reff = self._reff_rotation(side, int(rk0), int(rk1))     # DEFENDER reward-per-effort share, start->now
+                if reff is not None:
+                    _d0, _d1 = reff
+                    txt += "\n %s reward/eff %.0f%%→%.0f%% (%+.0f%%) " % (("Buyers" if side == "S" else "Sellers"), _d0, _d1, _d1 - _d0)
                 self._radar_hover_tip.setText(txt)
                 self._radar_hover_tip.setPos(x, y)
                 self._radar_hover_tip.show()
