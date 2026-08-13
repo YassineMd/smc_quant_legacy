@@ -1002,6 +1002,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.cob_col = None            # Mode 10 COB column (cob + spacer), height-matched to the price pane
         self._cob_want = False         # user's COB-toggle intent (drives cob_col visibility in Mode 10)
         self._cvd_want = False         # user's CVD-pane intent (drives cvd_plot visibility in Mode 10; persisted)
+        self._vpin_want = False        # lower VPIN pane intent — DEFAULT OFF (heavy 10k-bar/flow paint; persisted)
         self._fp_want = False          # user's Live-Footprint-pane intent (right-docked, Mode 10 only)
         self._fp_sig = None            # last forming-bucket signature -> skip redundant footprint re-renders
         self._syncing_split = False    # reentrancy guard for the linked splitter-divider sync
@@ -2361,6 +2362,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if on:                       # reveal it at a usable height (it collapses to 0 when hidden)
                     self._show_cvd_pane()
             self._last_scanner_sig = None    # force a redraw so the pane fills immediately
+        elif key == "vpin_pane":
+            self._vpin_want = on             # lower VPIN pane: hidden -> its 10k bars/flow are never built or painted
+            if self.lower_plot is not None:
+                self.lower_plot.setVisible(on)
+            self._last_scanner_sig = None    # force a redraw so the pane render skips/resumes immediately
         elif key == "audio":
             self.alerts.audio.set_armed(on)
         elif key == "market_pos":
@@ -12240,6 +12246,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.splitter_v.addWidget(self.cvd_plot)
 
         self.splitter_v.addWidget(self.lower_plot)
+        self.lower_plot.setMinimumHeight(0)
+        self.lower_plot.setVisible(self._vpin_want)        # honor the hamburger toggle (default OFF -> collapsed, no paint)
         self.splitter_v.setStretchFactor(0, 3)   # 75% upper price space
         self.splitter_v.setStretchFactor(1, 1)   # CVD
         self.splitter_v.setStretchFactor(2, 1)   # 25% lower toxicity space
@@ -13015,8 +13023,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # adaptive VPIN brushes — CAUSAL per-bucket tier (each bar judged against ONLY its own trailing window),
         # so a bar's colour FREEZES when it closes and never repaints as the recent distribution drifts later.
         vtiers, vtoxics = arr["vtiers"], arr["vtoxics"]   # incremental VPIN tiers cached in _compute_bucket_arrays (was a full per-redraw re-tier)
-        _vbr = {t: pg.mkBrush(h) for t, h in _VPIN_TIER_HEX.items()}
-        vbrushes = [_vbr[t] for t in vtiers]
+        if self._vpin_want:                               # only build the 10k per-bar brushes when the VPIN pane is shown
+            _vbr = {t: pg.mkBrush(h) for t, h in _VPIN_TIER_HEX.items()}
+            vbrushes = [_vbr[t] for t in vtiers]
+        else:
+            vbrushes = []
         wick_pens = arr["pens"]   # per-candle flow-colored wick/border pens
 
         # Abnormal-velocity flag — a bucket whose velocity (curr_vol/dur) is >= VEL_ABN_RATIO x its
@@ -13284,41 +13295,43 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             vabn_item.setVisible(False)
 
-        # --- lower pane: VPIN heatmap + ADAPTIVE risk line (live toxic cutpoint) on lower_plot ---
-        if "bc_vpin" not in self._scan_handles:
-            self._scan_handles["bc_vpin"] = pg.BarGraphItem(
-                x=x, height=vpin_arr, width=0.8, brushes=vbrushes, pen=None)
-            self.lower_plot.addItem(self._scan_handles["bc_vpin"])
-            line = pg.PlotDataItem(pen=pg.mkPen("#ff073a", style=QtCore.Qt.DashLine, width=2))
-            self.lower_plot.addItem(line)
-            self._scan_handles["bc_vpin_line"] = line
-        else:
-            self._scan_handles["bc_vpin"].setOpts(x=x, height=vpin_arr, width=0.8,
-                                                  brushes=vbrushes, pen=None)
-        self._set_vpin_line("bc_vpin_line", x, vtoxics)
+        # --- lower pane: VPIN heatmap + toxic line + signed FLOW line — WHOLE block SKIPPED when the pane is hidden
+        #     (default). This is where the ~35ms/frame paint lived: 10k BarGraphItem bars + an O(N) flow rebuild +
+        #     10k-point curves, every frame. Hidden -> nothing is built or painted. Toggle: Sub-Widgets > VPIN Pane. ---
+        if self._vpin_want:
+            if "bc_vpin" not in self._scan_handles:
+                self._scan_handles["bc_vpin"] = pg.BarGraphItem(
+                    x=x, height=vpin_arr, width=0.8, brushes=vbrushes, pen=None)
+                self.lower_plot.addItem(self._scan_handles["bc_vpin"])
+                line = pg.PlotDataItem(pen=pg.mkPen("#ff073a", style=QtCore.Qt.DashLine, width=2))
+                self.lower_plot.addItem(line)
+                self._scan_handles["bc_vpin_line"] = line
+            else:
+                self._scan_handles["bc_vpin"].setOpts(x=x, height=vpin_arr, width=0.8,
+                                                      brushes=vbrushes, pen=None)
+            self._set_vpin_line("bc_vpin_line", x, vtoxics)
 
-        # --- lower pane: signed trailing-FLOW line (order imbalance), 0.5-centred on the VPIN scale ---
-        # 0.5 = balanced; ABOVE mid = net BUY flow (longs earn the align RING), BELOW = net SELL flow (shorts).
-        # Uses the SAME trailing window the engulf overlays ring with (15m: 12 incl / 1h: 3 pre-signal; else 8),
-        # so this cyan line reads as "why that badge is / isn't ringed". Signed RSV in [-1,1] -> 0.5+0.5*RSV in [0,1].
-        _fk, _fx = {"15m": (12, False), "1h": (3, True)}.get(self._tf, (8, False))
-        _pb = [0.0] * (len(buckets) + 1); _psv = [0.0] * (len(buckets) + 1)
-        for _i, _b in enumerate(buckets):
-            _pb[_i + 1] = _pb[_i] + float(_b.get("buy_vol", 0.0) or 0.0)
-            _psv[_i + 1] = _psv[_i] + float(_b.get("sell_vol", 0.0) or 0.0)
-        flow_y = []
-        for _i in range(len(buckets)):
-            _hi = _i if _fx else _i + 1
-            _a = max(0, _hi - _fk); _bs = _pb[_hi] - _pb[_a]; _ss = _psv[_hi] - _psv[_a]
-            flow_y.append((0.5 + 0.5 * ((_bs - _ss) / (_bs + _ss))) if (_bs + _ss) > 0 else 0.5)
-        if "bc_flow" not in self._scan_handles:
-            _mid = pg.InfiniteLine(pos=0.5, angle=0, pen=pg.mkPen("#555555", style=QtCore.Qt.DotLine, width=1))
-            _mid.setZValue(5); self.lower_plot.addItem(_mid, ignoreBounds=True)
-            self._scan_handles["bc_flow_mid"] = _mid
-            _fl = pg.PlotDataItem(pen=pg.mkPen("#00e5ff", width=1.6))
-            _fl.setZValue(21); self.lower_plot.addItem(_fl)
-            self._scan_handles["bc_flow"] = _fl
-        self._scan_handles["bc_flow"].setData(x=list(x), y=flow_y)
+            # 0.5 = balanced; ABOVE mid = net BUY flow (longs earn the align RING), BELOW = net SELL flow (shorts).
+            # Uses the SAME trailing window the engulf overlays ring with (15m: 12 incl / 1h: 3 pre-signal; else 8),
+            # so this cyan line reads as "why that badge is / isn't ringed". Signed RSV in [-1,1] -> 0.5+0.5*RSV in [0,1].
+            _fk, _fx = {"15m": (12, False), "1h": (3, True)}.get(self._tf, (8, False))
+            _pb = [0.0] * (len(buckets) + 1); _psv = [0.0] * (len(buckets) + 1)
+            for _i, _b in enumerate(buckets):
+                _pb[_i + 1] = _pb[_i] + float(_b.get("buy_vol", 0.0) or 0.0)
+                _psv[_i + 1] = _psv[_i] + float(_b.get("sell_vol", 0.0) or 0.0)
+            flow_y = []
+            for _i in range(len(buckets)):
+                _hi = _i if _fx else _i + 1
+                _a = max(0, _hi - _fk); _bs = _pb[_hi] - _pb[_a]; _ss = _psv[_hi] - _psv[_a]
+                flow_y.append((0.5 + 0.5 * ((_bs - _ss) / (_bs + _ss))) if (_bs + _ss) > 0 else 0.5)
+            if "bc_flow" not in self._scan_handles:
+                _mid = pg.InfiniteLine(pos=0.5, angle=0, pen=pg.mkPen("#555555", style=QtCore.Qt.DotLine, width=1))
+                _mid.setZValue(5); self.lower_plot.addItem(_mid, ignoreBounds=True)
+                self._scan_handles["bc_flow_mid"] = _mid
+                _fl = pg.PlotDataItem(pen=pg.mkPen("#00e5ff", width=1.6))
+                _fl.setZValue(21); self.lower_plot.addItem(_fl)
+                self._scan_handles["bc_flow"] = _fl
+            self._scan_handles["bc_flow"].setData(x=list(x), y=flow_y)
 
         # --- view-follow (replaces the one-shot fit). A mode/tf/Zero-Point re-arm
         # (_scanner_needs_autofit) re-locks BOTH axes + drops us on the live edge, consuming
