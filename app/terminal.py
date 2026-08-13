@@ -965,6 +965,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._arch_pull_active: bool = False
         self._arch_pull_last: float = 0.0     # wall time of the last GCS fetch (time-gated, one rsync grabs all of GCS)
         self._last_scanner_sig: Optional[tuple] = None   # render-skip gate (Phase 7 perf)
+        self._nosel_sig: Optional[tuple] = None          # no-selection overlay batch skip-gate (redraw only on bar-close/toggle)
         self._scanner_needs_autofit: bool = True         # one-shot Y/X fit (frees manual zoom)
         # View-follow (Mode 10), per-axis lock model. follow_x / follow_y track each axis to
         # the live edge independently; _follow_last_n drives the per-tick/per-close cadence.
@@ -8786,8 +8787,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     or self.menu.layer_state("m10_momentum") or self.menu.layer_state("m10_engulf5m")
                     or self.menu.layer_state("m10_breakout5m") or self.menu.layer_state("m10_engulf1m")
                     or self.menu.layer_state("m10_easy1h") or self.menu.layer_state("m10_crazywall")
-                    or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")):
+                    or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")
+                    or self.menu.layer_state("m10_wallstrat")):
                 _pf, _, _ = self._build_scanner_buckets()
+                # These overlays depend only on CLOSED bars + toggles/knobs, not the live curr_vol. Without a
+                # selection this ran EVERY timer tick (~13 Hz) -> the dominant frame cost (session_perf.log). Skip
+                # the whole batch when nothing that affects it changed; redraw on a new bar, a toggle, or a knob.
+                _nsig = (len(_pf), float(_pf[-1].get("start_time", 0.0)) if _pf else 0.0,
+                         tuple(cb.isChecked() for cb in self.menu.layer_checks.values()),
+                         round(self.menu.swing_pct(), 4), round(getattr(self, "_wall_floor", 0.0), 4),
+                         round(getattr(self, "_reward_strength", 0.0), 2))
+                if _nsig == self._nosel_sig:
+                    return                              # unchanged since last bar-close -> keep last frame's overlays
+                self._nosel_sig = _nsig
                 try:
                     self._draw_engulfsr(_pf or [])  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
                 except Exception:
@@ -8833,6 +8845,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._clear_breakout5m(); self._clear_engulf1m(); self._clear_sr(); self._clear_swinglvn()
                 self._clear_crazy_wall()
                 self._clear_easy1h(); self._clear_wall_strategy()
+                self._nosel_sig = None                 # nothing drawn -> force a redraw when an indicator returns
             return
         filtered, _x, _a = self._build_scanner_buckets()
         if not filtered:
