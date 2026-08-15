@@ -3,7 +3,8 @@ the 2026-08-15 study line; see study/wall_breakout_*.py).
 
 SETUP: a wall's radar visit RESISTS, then a bar BREAKS OUT of the radar in the DEFENSE direction — its open is INSIDE
 the radar [radar_lo, radar_hi] (radar = wall price +/- 3*band) and its close is BEYOND the defended extreme (UP through
-radar_hi for a support S / buy wall; DOWN through radar_lo for a resistance R / sell wall), after a visit of >= 3 bars.
+radar_hi for a support S / buy wall; DOWN through radar_lo for a resistance R / sell wall), after a visit of >= 1 bar
+(MINVISIT; the old >=3 gate was found unnecessary — a 1-bar visit is as tradeable, see study/wall_radarrun_visitlen.py).
 Price then tends to RUN in TIERS of radar-lengths (L = radar_hi - radar_lo): recon base ~75% reach 1x, ~51% 2x, ~40% 3x,
 and the tier-to-tier continuation RISES (~67% 1->2 up to ~80%+ 4->5). Net-positive BOTH recon years across every exit
 scheme on 1h/15m/5m after fees; survives causal base-rate + causal-geometry P&L. Best on 1h/15m (1m/5m ~ sub-fee).
@@ -23,7 +24,8 @@ from . import absorption_level_detect as _al
 from .engulf_sr_detect import _ohlc
 
 RADAR_MULT = float(getattr(_al, "RADAR_MULT", 3.0))
-MINVISIT = 3           # a real wall test: the radar visit must be at least this many bars before the breakout
+MINVISIT = 1           # radar-visit bars before the breakout; lowered 3->1 2026-08-15 (visit=1/2 are as tradeable as
+                       #   >=3 both recon years on 1h+30m -> ~2x the signals, same edge; study/wall_radarrun_visitlen.py)
 NTIERS = 3             # tiered targets 1x / 2x / 3x radar-lengths
 
 
