@@ -479,6 +479,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_wall_regime_subtoggle(sec)   # bottom-right Wall Regime table on/off
                 self._build_wall_match_subtoggle(sec)    # keep only walls near a Reward-Switch zone
                 self._build_wall_4h_subtoggle(sec)       # overlay the 4h absorption walls (neon violet/green)
+                self._build_wall_1h_subtoggle(sec)       # overlay the 1h absorption walls (orange/blue), lower tfs
+                self._build_wall_hidecur_subtoggle(sec)  # hide current-tf walls -> higher-timeframe-only view
             if key == "m10_crazywall":
                 self._build_wallabs_subtoggles(sec)      # Wall Absorption sub-tiers: Crazy (✪) / Big (★)
             if key == "m10_sr":
@@ -593,6 +595,29 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
         cb.toggled.connect(lambda on, k="m10_absorblvl_4h": self.layerToggled.emit(k, on))
         self.layer_checks["m10_absorblvl_4h"] = cb
+        section.addWidget(cb)
+
+    def _build_wall_1h_subtoggle(self, section) -> None:
+        """Toggle under Order-Flow Walls: overlay the higher-timeframe (1h) absorption walls on the current chart as
+        ORANGE(resistance)/BLUE(support) bands (bold core = wall ±band; radar ±3·band shows as dashed lines on hover) —
+        so 1h structure is visible while trading a lower tf. Only draws on tfs BELOW 1h (redundant on 1h/4h). Rides
+        m10_absorblvl; an m10_ key (persists + reads via layer_state). Default OFF."""
+        cb = QtWidgets.QCheckBox("· 1h Walls (orange/blue)")
+        cb.setChecked(False)                             # default OFF
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.toggled.connect(lambda on, k="m10_absorblvl_1h": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_absorblvl_1h"] = cb
+        section.addWidget(cb)
+
+    def _build_wall_hidecur_subtoggle(self, section) -> None:
+        """Toggle under Order-Flow Walls: HIDE the current-timeframe wall bands so only the higher-timeframe (1h/4h)
+        wall overlays show — open a lower tf and see just the HTF structure. Rides m10_absorblvl; an m10_ key (persists +
+        reads via layer_state). Default OFF (current-tf walls shown)."""
+        cb = QtWidgets.QCheckBox("· Hide current-tf walls")
+        cb.setChecked(False)                             # default OFF
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.toggled.connect(lambda on, k="m10_absorblvl_hidecur": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_absorblvl_hidecur"] = cb
         section.addWidget(cb)
 
     def _build_wall_regime_subtoggle(self, section) -> None:

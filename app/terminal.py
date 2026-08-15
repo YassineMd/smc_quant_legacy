@@ -1328,9 +1328,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._absorblvl_lbl_pool = []                            # TextItem pool — "Ab"/"Ag" tags on borderless walls
         self._absorblvl_pct_pool = []                            # TextItem pool — strength-% tag at each wall's right edge
         self._radar_zone_pool = []                               # QGraphicsRectItem — dark-wall-shade radar zones (upper+lower)
-        self._wall4h_box_pool = []; self._wall4h_lbl_pool = []   # 4h WALLS overlay (m10_absorblvl_4h): neon violet(R)/green(S) wall core
-        self._wall4h_marks = None; self._wall4h_sig = None       # cached 4h AL.detect (re-run only on a 4h-data change)
-        self._wall4h_hover_zones = []                            # (xl,xr,ylo,yhi,radar_lo,radar_hi,side) -> dashed radar edges on hover
+        self._HTF_COLORS = {"4h": {"R": (190, 60, 255), "S": (60, 255, 130)},   # 4h Walls: neon violet(R)/green(S)
+                            "1h": {"R": (255, 150, 20), "S": (40, 140, 255)}}    # 1h Walls: orange(R)/blue(S)
+        self._TF_RANK = {"1m": 0, "5m": 1, "15m": 2, "30m": 3, "1h": 4, "4h": 5}  # HTF walls draw only on tfs BELOW them
+        self._htf_box_pool = {"1h": [], "4h": []}                # HTF wall overlay cores (m10_absorblvl_1h / m10_absorblvl_4h)
+        self._htf_marks = {"1h": None, "4h": None}; self._htf_sig = {"1h": None, "4h": None}  # cached AL.detect per htf
+        self._htf_hover_zones = {"1h": [], "4h": []}             # per-htf (xl,xr,ylo,yhi,radar_lo,radar_hi,side) -> dashed radar edges on hover
         self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side,visit#,rk0,rk1,radar_lo,radar_hi) for hover
         self._radar_hover_buckets = None                         # frame ref for the live tape-rotation readout on hover
         self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
@@ -2308,11 +2311,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if not on:
                 self._hide_absorb_levels()               # off -> tear the zones down now
                 self._regime_hud.setVisible(False)       # ... and its bottom-right Regime table (rides the same layer)
-                self._hide_4h_walls()                    # ... and the 4h-walls sub-overlay (rides the same master)
-        elif key == "m10_absorblvl_4h":
-            self._wall4h_sig = None                      # 4h Walls toggled -> re-detect + redraw on the next frame
+                self._hide_htf_walls()                   # ... and BOTH htf-walls sub-overlays (ride the same master)
+        elif key in ("m10_absorblvl_1h", "m10_absorblvl_4h"):
+            _h = "1h" if key.endswith("_1h") else "4h"
+            self._htf_sig[_h] = None                     # HTF Walls toggled -> re-detect + redraw on the next frame
             if not on:
-                self._hide_4h_walls()                    # off -> tear the neon 4h bands down now
+                self._hide_htf_walls(_h)                 # off -> tear those (orange/blue or neon) bands down now
+        elif key == "m10_absorblvl_hidecur":
+            self._absorblvl_sig = None                   # hide/show current-tf walls -> re-run the current-tf draw
+            if on:
+                self._hide_absorb_levels(); self._radar_hover_zones = []   # hide now + drop stale current-tf hover
         elif key == "m10_wall_regime":
             if not on:
                 self._regime_hud.setVisible(False)       # Regime table off -> hide the bottom-right HUD now
@@ -5572,13 +5580,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._radar_hover_tip.show()
                 self._radar_show_edges(xl, xr, r_hi, r_lo, side)        # dashed RADAR top/bottom (±3·band) over the visit width
                 return
-        if self.menu.layer_state("m10_absorblvl_4h"):             # 4h wall core -> dashed 4h radar extremes (no odds tip)
-            for (hxl, hxr, hylo, hyhi, hrlo, hrhi, hside) in (self._wall4h_hover_zones or []):
+        for _htf in ("4h", "1h"):                                 # HTF wall core -> dashed htf radar extremes (no odds tip)
+            if not self.menu.layer_state("m10_absorblvl_" + _htf):
+                continue
+            for (hxl, hxr, hylo, hyhi, hrlo, hrhi, hside) in (self._htf_hover_zones[_htf] or []):
                 if hxl <= x <= hxr and hylo <= y <= hyhi:
                     if self._radar_hover_tip is not None:
                         self._radar_hover_tip.hide()
                     self._radar_show_edges(hxl, hxr, hrhi, hrlo, hside,
-                                           col=(190, 60, 255) if hside == "R" else (60, 255, 130))
+                                           col=self._HTF_COLORS[_htf]["R" if hside == "R" else "S"])
                     return
         if self._radar_hover_tip is not None:
             self._radar_hover_tip.hide()
@@ -5626,95 +5636,91 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._absorblvl_sig = _dsig
         return self._absorblvl_marks
 
-    def _wall4h_box(self, used, side):
-        """Pooled bold neon rect for a 4h wall CORE (±band): violet(R)/green(S), high opacity + border, so the HTF wall
-        reads over the current-tf wall zones (z -6). Its radar extremes (±3·band) show as dashed lines on hover."""
-        if used >= len(self._wall4h_box_pool):
+    def _htf_box(self, htf, used, side):
+        """Pooled bold rect for a higher-timeframe wall CORE (±band): per-htf colour (4h neon violet/green, 1h
+        orange/blue), high opacity + border, z=-4 so the HTF wall reads over the current-tf wall zones. Its radar
+        extremes (±3·band) show as dashed lines on hover."""
+        pool = self._htf_box_pool[htf]
+        if used >= len(pool):
             _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-4)
-            self.vb.addItem(_rc, ignoreBounds=True); self._wall4h_box_pool.append(_rc)
-        _rc = self._wall4h_box_pool[used]
-        rgb = (190, 60, 255) if side == "R" else (60, 255, 130)
+            self.vb.addItem(_rc, ignoreBounds=True); pool.append(_rc)
+        _rc = pool[used]
+        rgb = self._HTF_COLORS[htf]["R" if side == "R" else "S"]
         _rc.setBrush(pg.mkBrush(*rgb, 90)); _rc.setPen(pg.mkPen(*rgb, 230, width=1.4))
         return _rc
 
-    def _wall4h_lbl(self, used):
-        if used >= len(self._wall4h_lbl_pool):
-            _t = pg.TextItem(anchor=(0.0, 1.0)); _t.setZValue(35)
-            _fn = QtGui.QFont("Consolas", 8); _fn.setBold(True); _t.textItem.setFont(_fn)
-            self.plot.addItem(_t, ignoreBounds=True); self._wall4h_lbl_pool.append(_t)
-        return self._wall4h_lbl_pool[used]
+    def _hide_htf_walls(self, htf=None) -> None:
+        for h in ((htf,) if htf else ("1h", "4h")):
+            for _it in self._htf_box_pool[h]:
+                _it.setVisible(False)
+            self._htf_hover_zones[h] = []
 
-    def _hide_4h_walls(self) -> None:
-        for _it in self._wall4h_box_pool:
-            _it.setVisible(False)
-        for _it in self._wall4h_lbl_pool:
-            _it.setVisible(False)
-        self._wall4h_hover_zones = []
-
-    def _draw_4h_walls(self, buckets) -> None:
-        """4h WALLS overlay (sub-toggle m10_absorblvl_4h, under Order-Flow Walls): the higher-timeframe 4h absorption
-        walls drawn on the CURRENT chart as NEON violet(resistance)/green(support) bands — the bold core = the wall
-        (±band), the faint band = its radar (±3·band) — so HTF structure is visible at any tf. 4h source: recon_replay
-        in a recon-era replay, else the dedicated live 4h worker (+ daemon-archive fallback). AL.detect cached, re-run
-        only when the 4h data changes."""
-        if (not self.menu.layer_state("m10_absorblvl") or not self.menu.layer_state("m10_absorblvl_4h")
-                or self.scanner_mode != "bucket_canvas" or not buckets):
-            self._hide_4h_walls(); return
+    def _draw_htf_walls(self, htf, buckets) -> None:
+        """Higher-timeframe WALLS overlay (sub-toggles m10_absorblvl_1h / m10_absorblvl_4h, under Order-Flow Walls):
+        the htf absorption walls drawn on the CURRENT chart as coloured bands (4h neon violet/green, 1h orange/blue) —
+        the bold core = the wall (±band); its radar (±3·band) shows as dashed lines on hover. Only drawn on tfs BELOW
+        the htf (a 1h overlay is redundant on 1h). htf source: recon_replay in a recon-era replay, else the live worker
+        (dedicated worker_4h for 4h / lazy _sub_worker for 1h) + daemon-archive fallback. AL.detect cached per htf."""
+        if (not self.menu.layer_state("m10_absorblvl") or not self.menu.layer_state("m10_absorblvl_" + htf)
+                or self.scanner_mode != "bucket_canvas" or not buckets
+                or self._TF_RANK.get(self._tf, 99) >= self._TF_RANK[htf]):     # only on lower tfs
+            self._hide_htf_walls(htf); return
         starts = [float(b.get("start_time", 0.0) or 0.0) for b in buckets]
         now_t = starts[-1] if starts else 0.0
         from app import recon_replay
-        if now_t and now_t < recon_replay.CUTOFF:                 # REPLAY in the recon era -> recon 4h
-            cb4 = recon_replay.window_by_time("4h", (starts[0] if starts else 0.0) - 45 * 86400, now_t)
-        else:                                                     # LIVE -> the 4h worker (+ daemon-archive fallback)
-            snap4 = self.worker_4h.snapshot() if getattr(self, "worker_4h", None) else None
-            cb4 = (snap4 or {}).get("closed_buckets") or []
-            if not cb4 and archive.available("4h"):
+        if now_t and now_t < recon_replay.CUTOFF:                 # REPLAY in the recon era -> recon htf
+            cbH = recon_replay.window_by_time(htf, (starts[0] if starts else 0.0) - 45 * 86400, now_t)
+        else:                                                     # LIVE -> the htf worker (+ daemon-archive fallback)
+            wk = self.worker_4h if htf == "4h" else self._sub_worker("1h")
+            snap = wk.snapshot() if wk else None
+            cbH = (snap or {}).get("closed_buckets") or []
+            if not cbH and archive.available(htf):
                 try:
-                    d = archive._load("4h"); cb4 = [d[k] for k in sorted(d)]
+                    d = archive._load(htf); cbH = [d[k] for k in sorted(d)]
                 except Exception:
-                    cb4 = []
-        if len(cb4) < 4:
-            self._hide_4h_walls(); return
-        sig = (len(cb4), float(cb4[-1].get("start_time", 0.0) or 0.0), int(now_t < recon_replay.CUTOFF))
-        if sig != self._wall4h_sig:
+                    cbH = []
+        if len(cbH) < 4:
+            self._hide_htf_walls(htf); return
+        sig = (len(cbH), float(cbH[-1].get("start_time", 0.0) or 0.0), int(now_t < recon_replay.CUTOFF))
+        if sig != self._htf_sig[htf]:
             from app import absorption_level_detect as _al
             try:
-                self._wall4h_marks = _al.detect(cb4, skip_last=False)
+                self._htf_marks[htf] = _al.detect(cbH, skip_last=False)
             except Exception:
-                self._wall4h_marks = []
-            self._wall4h_sig = sig
-        cbst = [float(b.get("start_time", 0.0) or 0.0) for b in cb4]
-        n = len(buckets); n4 = len(cb4)
+                self._htf_marks[htf] = []
+            self._htf_sig[htf] = sig
+        cbst = [float(b.get("start_time", 0.0) or 0.0) for b in cbH]
+        n = len(buckets); nH = len(cbH)
         (_vx0, _vx1), _ = self.vb.viewRange()
 
         def _xt(t):
             return max(0, min(bisect.bisect_left(starts, t), n - 1))
-        ub = ul = 0; self._wall4h_hover_zones = []
-        for m in (self._wall4h_marks or []):
+        ub = 0; self._htf_hover_zones[htf] = []
+        for m in (self._htf_marks[htf] or []):
             side = m.get("side"); P = float(m.get("price") or 0.0); band = float(m.get("band") or 0.0)
             if side not in ("R", "S") or P <= 0 or band <= 0:
                 continue
             broken = bool(m.get("broken"))
-            i0 = int(m.get("i0", 0)); i1 = int(m.get("i1")) if (broken and m.get("i1") is not None) else (n4 - 1)
-            if broken and (n4 - 1) - i1 > 6:                      # drop 4h walls broken more than ~1 day (6 4h-bars) ago
+            i0 = int(m.get("i0", 0)); i1 = int(m.get("i1")) if (broken and m.get("i1") is not None) else (nH - 1)
+            if broken and (nH - 1) - i1 > 6:                      # drop htf walls broken more than ~6 htf-bars ago
                 continue
-            i0 = max(0, min(i0, n4 - 1)); i1 = max(i0, min(i1, n4 - 1))
+            i0 = max(0, min(i0, nH - 1)); i1 = max(i0, min(i1, nH - 1))
             if cbst[i0] > (starts[-1] if starts else 0.0):        # wall formed AFTER this frame's window -> not in view
                 continue
             xl = _xt(cbst[i0]); xr = (n - 1) if not broken else _xt(cbst[i1])
             if xr - xl < 1.5 or xr < _vx0 - 1.0 or xl > _vx1 + 1.0:   # skip degenerate x-span (vertical slivers) + off-screen
                 continue
-            _rc = self._wall4h_box(ub, side); ub += 1             # wall core (±band) — bold neon + border, NO "4h" label
+            _rc = self._htf_box(htf, ub, side); ub += 1           # wall core (±band) — bold colour + border
             _rc.setRect(xl, P - band, max(1e-9, xr - xl), 2.0 * band); _rc.setVisible(True)
-            self._wall4h_hover_zones.append((xl, xr, P - band, P + band, P - 3.0 * band, P + 3.0 * band, side))
-        for _it in self._wall4h_box_pool[ub:]:
-            _it.setVisible(False)
-        for _it in self._wall4h_lbl_pool[ul:]:
+            self._htf_hover_zones[htf].append((xl, xr, P - band, P + band, P - 3.0 * band, P + 3.0 * band, side))
+        for _it in self._htf_box_pool[htf][ub:]:
             _it.setVisible(False)
 
     def _draw_absorb_levels(self, buckets, x, vx0, vx1) -> None:
         if not self.menu.layer_state("m10_absorblvl") or not buckets:
             self._hide_absorb_levels(); return
+        if self.menu.layer_state("m10_absorblvl_hidecur"):    # 'HTF only' -> hide current-tf wall bands (htf overlays still draw)
+            self._hide_absorb_levels(); self._radar_hover_zones = []; return
         n = len(buckets)
         self._absorb_marks(buckets)                           # refresh the shared cache (self._absorblvl_marks)
         self._radar_hover_buckets = buckets                   # frame the hover tape-rotation readout reads from
@@ -13476,9 +13482,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             self._hide_absorb_levels()
         try:
-            self._draw_4h_walls(buckets)                          # 4h WALLS overlay (m10_absorblvl_4h) — neon HTF walls
+            self._draw_htf_walls("4h", buckets)                   # 4h WALLS overlay (m10_absorblvl_4h) — neon violet/green
+            self._draw_htf_walls("1h", buckets)                   # 1h WALLS overlay (m10_absorblvl_1h) — orange/blue, lower tfs only
         except Exception:
-            self._hide_4h_walls()
+            self._hide_htf_walls()
         try:
             self._draw_regime(buckets, vx1, vy0)                  # Wall Regime HUD, bottom-right (rides m10_absorblvl)
         except Exception:
