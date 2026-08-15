@@ -495,6 +495,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_reward_strength_slider(sec)  # + a strength filter for those zones
             if key == "m10_radarrun":
                 self._build_radarrun_subtoggle(sec)      # Radar Runner sub-toggle: high-conviction order-flow filter (gold ring)
+                self._build_radarrun_absorb_subtoggle(sec)  # + 'absorbed only' filter (A>=0, drop the easy fizzles)
             if key == "m10_stats":
                 self._build_stats_substats(sec)          # per-stat on/off for the Mode-10 stats box
         return sec
@@ -510,6 +511,19 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
         cb.toggled.connect(lambda on, k="m10_radarrun_hc": self.layerToggled.emit(k, on))
         self.layer_checks["m10_radarrun_hc"] = cb
+        section.addWidget(cb)
+
+    def _build_radarrun_absorb_subtoggle(self, section) -> None:
+        """Radar Runner sub-toggle: show ONLY breakouts whose bar was ABSORBED (Absorption R A >= 0) -- i.e. price
+        fought its way out of the radar through opposing volume, NOT an easy unopposed drift. ⚠ Underpowered tilt:
+        'avoid the very-easy breakout' is robust on 5m/15m, and 'absorbed is best' is clean on 5m (both yrs) but flat
+        on 15m-2026 / noisy on 1h -- a fewer-trades VIEW, not a proven upgrade (study/wall_breakout_absorb*.py).
+        m10_radarrun_abs, default OFF; composes with the high-conviction toggle (both apply)."""
+        cb = QtWidgets.QCheckBox("· Absorbed only (A≥0, drop easy)")
+        cb.setChecked(False)
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.toggled.connect(lambda on, k="m10_radarrun_abs": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_radarrun_abs"] = cb
         section.addWidget(cb)
 
     def _build_reward_subtoggle(self, section) -> None:

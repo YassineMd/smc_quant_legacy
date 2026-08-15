@@ -7233,6 +7233,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             return False
 
+    def _rr_absorbed(self, buckets, i) -> bool:
+        """ABSORBED-breakout flag (frozen at fire): the breakout bar's Absorption R (A) >= 0 -- it fought out through
+        opposing volume, not an easy unopposed drift. ⚠ Tilt only ('avoid the easy fizzle' robust on 5m/15m, absorbed
+        clean on 5m; study/wall_breakout_absorb*.py)."""
+        try:
+            from app import absorption
+            a = absorption.absorption(buckets, i)[0]
+            return bool(a is not None and a >= 0.0)
+        except Exception:
+            return False
+
     def _draw_radarrun(self, filtered) -> None:
         if (not self.menu.layer_state("m10_radarrun") or self.scanner_mode != "bucket_canvas"
                 or self._tf not in ("5m", "15m", "1h")):
@@ -7240,7 +7251,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         n = len(filtered)
         _forming = bool(getattr(self, "_mmx_last_forming", True))
         _hc = self.menu.layer_state("m10_radarrun_hc")           # sub-toggle: show ONLY high-conviction breakouts
-        _sig = (n, _forming, _hc, self._tf, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        _ab = self.menu.layer_state("m10_radarrun_abs")          # sub-toggle: show ONLY absorbed (A>=0) breakouts
+        _sig = (n, _forming, _hc, _ab, self._tf, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
         if _sig == self._rr_sig and self._rr_drawn:
             return
         self._rr_sig = _sig
@@ -7258,7 +7270,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if et > 0 and et not in self._rr_fired:
                     self._rr_fired[et] = {"side": int(e["side"]), "entry": e.get("entry", 0.0), "sl": e.get("sl", 0.0),
                                           "tp1": e.get("tp1", 0.0), "tp2": e.get("tp2", 0.0), "tp3": e.get("tp3", 0.0),
-                                          "hc": self._rr_conviction(filtered, i, int(e["side"]))}   # conviction frozen at fire
+                                          "hc": self._rr_conviction(filtered, i, int(e["side"])),   # frozen at fire
+                                          "absorbed": self._rr_absorbed(filtered, i)}
         if len(self._rr_fired) > 2000:                            # bound memory: keep the 2000 most recent
             for _old in sorted(self._rr_fired)[:len(self._rr_fired) - 2000]:
                 del self._rr_fired[_old]
@@ -7278,6 +7291,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue
             hc = bool(ev.get("hc"))
             if _hc and not hc:                                   # 'High conviction only' sub-toggle -> hide the rest
+                continue
+            if _ab and not ev.get("absorbed"):                   # 'Absorbed only' sub-toggle -> hide the easy (A<0) breaks
                 continue
             side = ev["side"]
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
