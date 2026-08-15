@@ -2644,7 +2644,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not ev.double():
             return
         # Ctrl + double-click a candle on 5m/15m/1h/4h -> pop-up: 1m detail chart of that bucket + its footprint pane
-        if (self.scanner_mode == "bucket_canvas" and self._tf in ("5m", "15m", "1h", "4h")
+        if (self.scanner_mode == "bucket_canvas" and self._tf in ("5m", "15m", "30m", "1h", "4h")
                 and (QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ControlModifier)):
             try:
                 pt = self.vb.mapSceneToView(ev.scenePos())
@@ -2694,7 +2694,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if cs <= 0.0:
             return
         _live = (not self._replay_on) and (idx == len(filtered) - 1)   # clicked the LIVE forming candle?
-        _tfs = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}.get(self._tf, 900)
+        _tfs = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400}.get(self._tf, 900)
         if ce <= cs or ce - cs > _tfs + 1:                             # missing/oversized end -> bound to ONE parent candle
             ce = cs + _tfs                                             # (was +24h: over-fetched every sub-candle since cs)
         try:
@@ -2849,7 +2849,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         cs = float(b.get("start_time", 0.0) or 0.0); ce = float(b.get("end_time", 0.0) or 0.0)
         if cs <= 0.0:
             return
-        _tfs = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}.get(self._tf, 900)
+        _tfs = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400}.get(self._tf, 900)
         _ce = ce if (cs < ce <= cs + _tfs + 1) else cs + _tfs   # bound to ONE parent candle (was +24h -> over-fetched 5m/15m)
         micro_active = bool(self._micro_k > 0 and self._micro_subs and self._micro_edge == self._replay_edge_t)
         _micro_tf_cur = getattr(self, "_micro_subs_tf", None) or "1m"   # the tf the micro-reveal is stepping in
@@ -2994,7 +2994,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         ce = float(getattr(w, "_ce", 0.0) or 0.0)
         if cs <= 0.0:
             return
-        _tfs = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}.get(self._tf, 900)
+        _tfs = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400}.get(self._tf, 900)
         if ce <= cs or ce - cs > _tfs + 1:                   # bound to ONE parent candle (was +24h -> over-fetched)
             ce = cs + _tfs
         tf = getattr(w, "_sub_tf", "1m")
@@ -5792,7 +5792,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         starts = self._reward_starts
         # PER-TF adaptive rows (reward_eff_forward study: the reliable band is 20-100 BARS, not a fixed clock/N).
         tf = getattr(self, "_tf", "5m")
-        _tfmin = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}.get(tf, 5)
+        _tfmin = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240}.get(tf, 5)
         _wins = {"1m": (20, 30, 50, 75), "5m": (20, 30, 50, 75), "15m": (10, 20, 30, 50),
                  "1h": (10, 20, 30, 50), "4h": (20, 30, 50, 75)}.get(tf, (10, 20, 30, 50))
         _base = reward_eff.strength_baseline(buckets, n - 1)     # ONE recent-norm baseline (vol + rate) -> rows comparable
@@ -7246,7 +7246,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _draw_radarrun(self, filtered) -> None:
         if (not self.menu.layer_state("m10_radarrun") or self.scanner_mode != "bucket_canvas"
-                or self._tf not in ("1m", "5m", "15m", "1h")):
+                or self._tf not in ("1m", "5m", "15m", "30m", "1h")):
             self._clear_radarrun(); return
         n = len(filtered)
         _forming = bool(getattr(self, "_mmx_last_forming", True))

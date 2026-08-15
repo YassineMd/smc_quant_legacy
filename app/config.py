@@ -108,15 +108,16 @@ OI_VW_FLOOR_FRAC = 0.1          # floor Vw at this fraction of the MEDIAN engine
                                 # rule 0.6/1) so a dead-volume patch can't collapse the cap to 0
 
 # ---------------------------------------------------------------------------
-# Timeframes (spec §7.2.1 — exactly five)
+# Timeframes (30m added 2026-08-15 for the Radar Runner — see study/RADARRUN_30M_LIVE_PLAN.md)
 # ---------------------------------------------------------------------------
-TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h"]
+TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h"]
 DEFAULT_TF = "1h"   # cold-start timeframe. A saved terminal_ui.json "tf" overrides this (see _load_ui_state).
 
 TF_SECONDS = {
     "1m": 60,
     "5m": 300,
     "15m": 900,
+    "30m": 1800,
     "1h": 3600,
     "4h": 14400,
 }
@@ -126,6 +127,7 @@ TF_PANDAS_FREQ = {
     "1m": "1min",
     "5m": "5min",
     "15m": "15min",
+    "30m": "30min",
     "1h": "1h",
     "4h": "4h",
 }
