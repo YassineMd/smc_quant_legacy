@@ -478,6 +478,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_wallfloor_slider(sec)        # strength draw floor directly under the Walls toggle
                 self._build_wall_regime_subtoggle(sec)   # bottom-right Wall Regime table on/off
                 self._build_wall_match_subtoggle(sec)    # keep only walls near a Reward-Switch zone
+                self._build_wall_4h_subtoggle(sec)       # overlay the 4h absorption walls (neon violet/green)
             if key == "m10_crazywall":
                 self._build_wallabs_subtoggles(sec)      # Wall Absorption sub-tiers: Crazy (✪) / Big (★)
             if key == "m10_sr":
@@ -581,6 +582,17 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
         cb.toggled.connect(lambda on, k="m10_wall_match": self.layerToggled.emit(k, on))
         self.layer_checks["m10_wall_match"] = cb
+        section.addWidget(cb)
+
+    def _build_wall_4h_subtoggle(self, section) -> None:
+        """Toggle under Order-Flow Walls: overlay the higher-timeframe (4h) absorption walls on the current chart as
+        NEON violet(resistance)/green(support) bands (bold core = wall ±band, faint = radar ±3·band) — so the HTF
+        structure is visible at any tf. Rides m10_absorblvl; an m10_ key (persists + reads via layer_state). Default OFF."""
+        cb = QtWidgets.QCheckBox("· 4h Walls (neon)")
+        cb.setChecked(False)                             # default OFF
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.toggled.connect(lambda on, k="m10_absorblvl_4h": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_absorblvl_4h"] = cb
         section.addWidget(cb)
 
     def _build_wall_regime_subtoggle(self, section) -> None:

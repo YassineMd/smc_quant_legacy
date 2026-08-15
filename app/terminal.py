@@ -1328,6 +1328,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._absorblvl_lbl_pool = []                            # TextItem pool — "Ab"/"Ag" tags on borderless walls
         self._absorblvl_pct_pool = []                            # TextItem pool — strength-% tag at each wall's right edge
         self._radar_zone_pool = []                               # QGraphicsRectItem — dark-wall-shade radar zones (upper+lower)
+        self._wall4h_box_pool = []; self._wall4h_lbl_pool = []   # 4h WALLS overlay (m10_absorblvl_4h): neon violet(R)/green(S) core+radar
+        self._wall4h_marks = None; self._wall4h_sig = None       # cached 4h AL.detect (re-run only on a 4h-data change)
         self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side,visit#,rk0,rk1,radar_lo,radar_hi) for hover
         self._radar_hover_buckets = None                         # frame ref for the live tape-rotation readout on hover
         self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
@@ -2305,6 +2307,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if not on:
                 self._hide_absorb_levels()               # off -> tear the zones down now
                 self._regime_hud.setVisible(False)       # ... and its bottom-right Regime table (rides the same layer)
+                self._hide_4h_walls()                    # ... and the 4h-walls sub-overlay (rides the same master)
+        elif key == "m10_absorblvl_4h":
+            self._wall4h_sig = None                      # 4h Walls toggled -> re-detect + redraw on the next frame
+            if not on:
+                self._hide_4h_walls()                    # off -> tear the neon 4h bands down now
         elif key == "m10_wall_regime":
             if not on:
                 self._regime_hud.setVisible(False)       # Regime table off -> hide the bottom-right HUD now
@@ -5608,6 +5615,99 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._absorblvl_marks = []
             self._absorblvl_sig = _dsig
         return self._absorblvl_marks
+
+    def _wall4h_box(self, used, side, is_radar):
+        """Pooled neon rect for a 4h wall — violet(R)/green(S); faint fill for the radar (±3·band), bold fill+border for
+        the wall core (±band). Higher z than the current-tf wall zones (-6) so the HTF structure reads over them."""
+        if used >= len(self._wall4h_box_pool):
+            _rc = QtWidgets.QGraphicsRectItem()
+            self.vb.addItem(_rc, ignoreBounds=True); self._wall4h_box_pool.append(_rc)
+        _rc = self._wall4h_box_pool[used]; _rc.setZValue(-5 if is_radar else -4)
+        rgb = (190, 60, 255) if side == "R" else (60, 255, 130)
+        if is_radar:
+            _rc.setBrush(pg.mkBrush(*rgb, 24)); _rc.setPen(pg.mkPen(None))
+        else:
+            _rc.setBrush(pg.mkBrush(*rgb, 90)); _rc.setPen(pg.mkPen(*rgb, 230, width=1.4))
+        return _rc
+
+    def _wall4h_lbl(self, used):
+        if used >= len(self._wall4h_lbl_pool):
+            _t = pg.TextItem(anchor=(0.0, 1.0)); _t.setZValue(35)
+            _fn = QtGui.QFont("Consolas", 8); _fn.setBold(True); _t.textItem.setFont(_fn)
+            self.plot.addItem(_t, ignoreBounds=True); self._wall4h_lbl_pool.append(_t)
+        return self._wall4h_lbl_pool[used]
+
+    def _hide_4h_walls(self) -> None:
+        for _it in self._wall4h_box_pool:
+            _it.setVisible(False)
+        for _it in self._wall4h_lbl_pool:
+            _it.setVisible(False)
+
+    def _draw_4h_walls(self, buckets) -> None:
+        """4h WALLS overlay (sub-toggle m10_absorblvl_4h, under Order-Flow Walls): the higher-timeframe 4h absorption
+        walls drawn on the CURRENT chart as NEON violet(resistance)/green(support) bands — the bold core = the wall
+        (±band), the faint band = its radar (±3·band) — so HTF structure is visible at any tf. 4h source: recon_replay
+        in a recon-era replay, else the dedicated live 4h worker (+ daemon-archive fallback). AL.detect cached, re-run
+        only when the 4h data changes."""
+        if (not self.menu.layer_state("m10_absorblvl") or not self.menu.layer_state("m10_absorblvl_4h")
+                or self.scanner_mode != "bucket_canvas" or not buckets):
+            self._hide_4h_walls(); return
+        starts = [float(b.get("start_time", 0.0) or 0.0) for b in buckets]
+        now_t = starts[-1] if starts else 0.0
+        from app import recon_replay
+        if now_t and now_t < recon_replay.CUTOFF:                 # REPLAY in the recon era -> recon 4h
+            cb4 = recon_replay.window_by_time("4h", (starts[0] if starts else 0.0) - 45 * 86400, now_t)
+        else:                                                     # LIVE -> the 4h worker (+ daemon-archive fallback)
+            snap4 = self.worker_4h.snapshot() if getattr(self, "worker_4h", None) else None
+            cb4 = (snap4 or {}).get("closed_buckets") or []
+            if not cb4 and archive.available("4h"):
+                try:
+                    d = archive._load("4h"); cb4 = [d[k] for k in sorted(d)]
+                except Exception:
+                    cb4 = []
+        if len(cb4) < 4:
+            self._hide_4h_walls(); return
+        sig = (len(cb4), float(cb4[-1].get("start_time", 0.0) or 0.0), int(now_t < recon_replay.CUTOFF))
+        if sig != self._wall4h_sig:
+            from app import absorption_level_detect as _al
+            try:
+                self._wall4h_marks = _al.detect(cb4, skip_last=False)
+            except Exception:
+                self._wall4h_marks = []
+            self._wall4h_sig = sig
+        cbst = [float(b.get("start_time", 0.0) or 0.0) for b in cb4]
+        n = len(buckets); n4 = len(cb4)
+        (_vx0, _vx1), _ = self.vb.viewRange()
+
+        def _xt(t):
+            return max(0, min(bisect.bisect_left(starts, t), n - 1))
+        ub = ul = 0
+        for m in (self._wall4h_marks or []):
+            side = m.get("side"); P = float(m.get("price") or 0.0); band = float(m.get("band") or 0.0)
+            if side not in ("R", "S") or P <= 0 or band <= 0:
+                continue
+            broken = bool(m.get("broken"))
+            i0 = int(m.get("i0", 0)); i1 = int(m.get("i1")) if (broken and m.get("i1") is not None) else (n4 - 1)
+            if broken and (n4 - 1) - i1 > 6:                      # drop 4h walls broken more than ~1 day (6 4h-bars) ago
+                continue
+            i0 = max(0, min(i0, n4 - 1)); i1 = max(i0, min(i1, n4 - 1))
+            xl = _xt(cbst[i0]); xr = (n - 1) if not broken else _xt(cbst[i1])
+            if xr <= xl:
+                xr = min(n - 1, xl + 1)
+            if xr < _vx0 - 1.0 or xl > _vx1 + 1.0:
+                continue
+            _rr = self._wall4h_box(ub, side, True); ub += 1       # radar band (±3·band), faint
+            _rr.setRect(xl, P - 3.0 * band, max(1e-9, xr - xl), 6.0 * band); _rr.setVisible(True)
+            _rc = self._wall4h_box(ub, side, False); ub += 1      # wall core (±band), bold neon + border
+            _rc.setRect(xl, P - band, max(1e-9, xr - xl), 2.0 * band); _rc.setVisible(True)
+            if xl >= _vx0 - 1.0:
+                _lb = self._wall4h_lbl(ul); ul += 1
+                _lb.setColor(pg.mkColor(190, 60, 255) if side == "R" else pg.mkColor(60, 255, 130))
+                _lb.setText("4h"); _lb.setPos(xl, P + band); _lb.setVisible(True)
+        for _it in self._wall4h_box_pool[ub:]:
+            _it.setVisible(False)
+        for _it in self._wall4h_lbl_pool[ul:]:
+            _it.setVisible(False)
 
     def _draw_absorb_levels(self, buckets, x, vx0, vx1) -> None:
         if not self.menu.layer_state("m10_absorblvl") or not buckets:
@@ -13372,6 +13472,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_absorb_levels(buckets, x, vx0, vx1)        # Absorption S/R zones (m10_absorblvl, eyeball-only)
         except Exception:
             self._hide_absorb_levels()
+        try:
+            self._draw_4h_walls(buckets)                          # 4h WALLS overlay (m10_absorblvl_4h) — neon HTF walls
+        except Exception:
+            self._hide_4h_walls()
         try:
             self._draw_regime(buckets, vx1, vy0)                  # Wall Regime HUD, bottom-right (rides m10_absorblvl)
         except Exception:
