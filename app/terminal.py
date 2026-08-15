@@ -3725,6 +3725,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _rew_html = ("Reward/eff %s · %s"
                      % (span("buy %.0f%%" % _bsh, g if (_rwok and _bsh >= 55) else gray),
                         span("sell %.0f%%" % _ssh, r if (_rwok and _ssh >= 55) else gray)))
+        # PER-CANDLE STRENGTH — each side's EFFORT (z-score of THIS candle's taker volume vs the trailing baseline) x
+        # this candle's efficiency lean (its close direction). The winner shows DOMINANT colour when it moved on real
+        # volume; the loser is flagged AMBER "abs" when it brought heavy volume the OTHER way but got ABSORBED (price
+        # still closed against it) — the per-bar absorption tell. DESCRIPTIVE / coincident.
+        _stc = _rwmod.strength(buckets, idx, idx)
+        _str_html = ""
+        if _stc.get("ok"):
+            def _sq(_sd, _base):
+                _q = _sd["quad"]
+                _col = _base if _q == "dominant" else ("#f5a623" if _q == "absorbed" else gray)
+                return span("%+.1fσ%s" % (_sd["effort_z"], " abs" if _q == "absorbed" else ""), _col)
+            _tmp = _stc.get("tempo", "")                     # fast (impulsive) vs slow (grind) fill of THIS candle
+            _ttag = (" · " + span("⚡ impulsive", "#ffd24a")) if _tmp == "impulsive" \
+                else (" · " + span("grind", gray)) if _tmp == "grind" else ""
+            _str_html = "Strength %s · %s%s" % (span("buy ", gray) + _sq(_stc["buy"], g),
+                                                span("sell ", gray) + _sq(_stc["sell"], r), _ttag)
         # Per-stat toggles (hamburger: Candles > Stats Box). _add gates a row by its st_ key (default ON when
         # unregistered); _sec defers a section header so an all-off section drops its header too.
         lines = []; _psec = [None]
@@ -3750,6 +3766,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _add("st_daccel", span("Δ-accel " + _da2_s, _da2_col))
         _add("st_absorb", span("Absorb R " + _absR_s, _absR_col))
         _add("st_reward", _rew_html)               # who's getting rewarded for their effort (rolling reward-per-effort)
+        if _str_html:
+            _add("st_strength", _str_html)         # per-candle EFFORT z per side + absorbed flag (reward_eff.strength)
         _add("st_ease", _ease_row)
         _add("st_1meff", _eff1_row)
         _add("st_rhalves", span("R h1/h2 " + _absH_s, _absH_col))
@@ -5456,6 +5474,33 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return None
         return (d0, d1)
 
+    def _strength_rotation(self, side, rk0, rk1):
+        """Live DEFENDER STRENGTH development over a radar visit: the defending side's EFFORT intensity
+        (reward_eff.strength effort_z = max(size, speed) z-score vs the trailing baseline), first-half -> second-half,
+        plus the 2nd-half TEMPO (impulsive=speed-led / grind=size-led). Complements the reward/eff line (efficiency):
+        it shows whether the DEFENCE is RAMPING (effort surging into the wall) or FADING as the visit develops.
+        Returns (effort0, effort1, tempo) or None. COINCIDENT descriptor."""
+        buckets = self._radar_hover_buckets
+        if not buckets:
+            return None
+        a = max(0, rk0); b = min(rk1, len(buckets) - 1)
+        if b - a < 2:                                                  # need a few candles to split first/second half
+            return None
+        from app import reward_eff
+        base = reward_eff.strength_baseline(buckets, b)                # trailing recent norm ending at the visit's last bar
+        if not base or base.get("vol") is None:
+            return None
+        mid = a + (b - a) // 2
+        s0 = reward_eff.strength(buckets, a, mid, base=base)
+        s1 = reward_eff.strength(buckets, mid, b, base=base)
+        if not s0["ok"] or not s1["ok"]:
+            return None
+        key = "buy" if side == "S" else "sell"                        # S: buyers defend / R: sellers defend
+        d0 = s0[key]; d1 = s1[key]; tempo = ""
+        if d1["effort_z"] >= reward_eff.STR_EFFORT_HI:
+            tempo = "impulsive" if d1["speed_z"] >= d1["size_z"] else "grind"
+        return (d0["effort_z"], d1["effort_z"], tempo)
+
     def _radar_hover(self, pt) -> None:
         """Hover a wall's radar area -> calibrated odds the wall HOLDS this visit (P(resist) from box-volume intensity;
         study/wall_radar_calib.py). DESCRIPTIVE only — light volume ~ almost-certain hold, heavy volume ~ coin flip.
@@ -5486,6 +5531,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if reff is not None:
                     _d0, _d1 = reff
                     txt += "\n %s reward/eff %.0f%%→%.0f%% (%+.0f%%) " % (("Buyers" if side == "S" else "Sellers"), _d0, _d1, _d1 - _d0)
+                strn = self._strength_rotation(side, int(rk0), int(rk1))  # DEFENDER strength (effort intensity), start->now
+                if strn is not None:
+                    _s0, _s1, _tmp = strn
+                    _tt = (" impulsive" if _tmp == "impulsive" else " grind" if _tmp == "grind" else "")
+                    txt += "\n %s strength %+.1fσ→%+.1fσ (%+.1f)%s " % (
+                        ("Buyers" if side == "S" else "Sellers"), _s0, _s1, _s1 - _s0, _tt)
                 self._radar_hover_tip.setText(txt)
                 self._radar_hover_tip.setPos(x, y)
                 self._radar_hover_tip.show()
@@ -5722,26 +5773,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _tfmin = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}.get(tf, 5)
         _wins = {"1m": (20, 30, 50, 75), "5m": (20, 30, 50, 75), "15m": (10, 20, 30, 50),
                  "1h": (10, 20, 30, 50), "4h": (20, 30, 50, 75)}.get(tf, (10, 20, 30, 50))
+        _base = reward_eff.strength_baseline(buckets, n - 1)     # ONE recent-norm baseline (vol + rate) -> rows comparable
         rows = []
+
+        def _row(label, sub, i0, i1):                            # (label, sub, share, strength) — strength shares _base
+            rows.append((label, sub, reward_eff.share(buckets, i0, i1),
+                         reward_eff.strength(buckets, i0, i1, base=_base)))
         if last_t > 0:
             if tf == "4h":                                       # day = only 6 4h-bars -> whipsaws; use weekly anchors
                 wk0 = float((int(last_t + 259200) // 604800) * 604800 - 259200)   # Mon 00:00 UTC of this week
                 i_tw = bisect.bisect_left(starts, wk0)
                 i_lw = bisect.bisect_left(starts, wk0 - 604800.0)
-                rows.append(("Last week", "", reward_eff.share(buckets, i_lw, i_tw - 1)))
-                rows.append(("This week", "", reward_eff.share(buckets, i_tw, n - 1)))
+                _row("Last week", "", i_lw, i_tw - 1)
+                _row("This week", "", i_tw, n - 1)
             else:                                                # day-of-latest-bucket UTC boundaries (works live + replay)
                 ref = datetime.fromtimestamp(last_t, tz=timezone.utc)
                 today0 = ref.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
                 i_today = bisect.bisect_left(starts, today0)
                 i_yest = bisect.bisect_left(starts, today0 - 86400.0)
-                rows.append(("Yesterday", "", reward_eff.share(buckets, i_yest, i_today - 1)))
-                rows.append(("Today", "", reward_eff.share(buckets, i_today, n - 1)))
+                _row("Yesterday", "", i_yest, i_today - 1)
+                _row("Today", "", i_today, n - 1)
         else:
-            rows.append((("Last week" if tf == "4h" else "Yesterday"), "", (50.0, False)))
-            rows.append((("This week" if tf == "4h" else "Today"), "", (50.0, False)))
+            rows.append((("Last week" if tf == "4h" else "Yesterday"), "", (50.0, False), None))
+            rows.append((("This week" if tf == "4h" else "Today"), "", (50.0, False), None))
         for W in sorted(_wins, reverse=True):                    # rolling windows, longest->shortest, clock-labelled
-            rows.append(("Last %d" % W, self._fmt_dur(W * _tfmin), reward_eff.share(buckets, n - W, n - 1)))
+            _row("Last %d" % W, self._fmt_dur(W * _tfmin), n - W, n - 1)
         # FLOW headline = MEDIAN of the [20,30,50,75] reward/eff windows (per study: highest ensemble agreement on
         # EVERY TF, ~0.83-0.86), independent of which rows are displayed, + how many of the 4 agree (confidence).
         _fw = [reward_eff.share(buckets, n - w, n - 1) for w in (20, 30, 50, 75)]
@@ -5753,7 +5809,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _buy = _med >= 50.0
             _agree = sum(1 for _s in _ws if (_s >= 50.0) == _buy)
             headline = (_med, _agree, len(_ws))
-        self._reward_hud.setHtml(self._reward_html(rows, headline))
+        _Wmax = max(_wins)                                       # headline STRENGTH over the longest table window
+        _str = reward_eff.strength(buckets, n - _Wmax, n - 1, base=_base)   # effort z-score x reward/eff lean -> quadrant
+        self._reward_hud.setHtml(self._reward_html(rows, headline, _str))
         self._reward_hud.setPos(vx0, vy0)                         # bottom-left of the view (anchor=(0,1))
         self._reward_hud.setVisible(True)
 
@@ -5888,7 +5946,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return ("%dd" % int(round(dd))) if abs(dd - round(dd)) < 1e-9 else ("%.1fd" % dd)
 
     @staticmethod
-    def _reward_html(rows, headline=None) -> str:
+    def _reward_html(rows, headline=None, strength=None) -> str:
         gray, dim = "#9aa0aa", "#5a6170"
         # DOMINANT side coloured by TIER (thresholds from the recon dominance study, pooled: ~p75 / ~p90). Non-dominant
         # side stays gray. basic = dominant simply > other; strong = bold ELECTRIC; very strong = bold CYAN(buy)/ORANGE(sell).
@@ -5924,21 +5982,60 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     "<span style='color:%s;font-size:9px'>&nbsp;&nbsp;%d/%d agree</span></div>"
                     % (gray, col, bold, "buyers" if is_buy else "sellers", dompct, dim, agree, tot))
 
+        # STRENGTH line = what the SHARE throws away: each side's participation (effort z-score vs baseline) crossed
+        # with its efficiency lean -> the tape's quadrant. Lead (efficient) side coloured DOMINANT (electric, forceful)
+        # or easy (basic, unopposed); the other side flagged AMBER "absorbed" when it's pushing hard but out-efficiency'd.
+        AMBER = "#f5a623"; SPEED_CLR = "#ffd24a"        # amber = absorbed loser; gold-yellow = impulsive (fast) lead
+        strong = ""
+        if strength is not None and strength.get("ok"):
+            lead_buy = strength["lead"] == "buy"
+            ld = strength["buy"] if lead_buy else strength["sell"]
+            ot = strength["sell"] if lead_buy else strength["buy"]
+            lname = "buyers" if lead_buy else "sellers"; oname = "sellers" if lead_buy else "buyers"
+            if ld["quad"] == "dominant":
+                lcol = EGRN if lead_buy else ERED; qtag = "DOMINANT"
+            else:
+                lcol = GRN if lead_buy else RED; qtag = "easy"
+            _tempo = strength.get("tempo", "")               # speed of the lead side: fast (impulsive) vs slow (grind)
+            ttag = ("<span style='color:%s'>&nbsp;&#9889;impulsive</span>" % SPEED_CLR) if _tempo == "impulsive" \
+                else ("<span style='color:%s'>&nbsp;grind</span>" % dim) if _tempo == "grind" else ""
+            ocol = AMBER if ot["quad"] == "absorbed" else dim
+            otag = " absorbed" if ot["quad"] == "absorbed" else ""
+            strong = ("<div style='margin:1px 0 3px 0'>"
+                      "<span style='color:%s;font-size:9px;letter-spacing:1px'>STRENGTH&nbsp;&nbsp;</span>"
+                      "<span style='color:%s;font-weight:bold;font-size:12px'>%s %+.1f&sigma; %s</span>%s"
+                      "<span style='color:%s;font-size:9px'>&nbsp;&middot;&nbsp;</span>"
+                      "<span style='color:%s;font-size:11px'>%s %+.1f&sigma;%s</span></div>"
+                      % (gray, lcol, lname, ld["effort_z"], qtag, ttag, dim, ocol, oname, ot["effort_z"], otag))
+
+        def strmark(st):                                    # compact per-row STRENGTH tag: lead side's effort z (electric
+            if not st or not st.get("ok"):                  # if DOMINANT / basic if easy) + amber dot when other absorbed
+                return ""
+            lb = st["lead"] == "buy"
+            ld = st["buy"] if lb else st["sell"]; ot = st["sell"] if lb else st["buy"]
+            lcol = (EGRN if lb else ERED) if ld["quad"] == "dominant" else (GRN if lb else RED)
+            m = "<span style='color:%s'>%+.1f&sigma;</span>" % (lcol, ld["effort_z"])
+            if st.get("tempo") == "impulsive":
+                m += "<span style='color:%s'>&#9889;</span>" % SPEED_CLR    # fast fill (impulsive)
+            if ot["quad"] == "absorbed":
+                m += "<span style='color:%s'>&nbsp;&deg;</span>" % AMBER    # loser pushing hard but out-efficiency'd
+            return "<span style='color:%s'>&nbsp;&nbsp;</span>" % dim + m
+
         body = []
-        for label, sub, (bsh, ok) in rows:
+        for label, sub, (bsh, ok), rstr in rows:
             if not ok:
                 cells = "<span style='color:%s'>&mdash;</span>" % dim
             else:
                 ssh = 100.0 - bsh
                 cells = (cell(bsh, bsh > 50.0, True, "buy")
                          + "<span style='color:%s'>&nbsp;&middot;&nbsp;</span>" % dim
-                         + cell(ssh, ssh > 50.0, False, "sell"))
+                         + cell(ssh, ssh > 50.0, False, "sell") + strmark(rstr))
             subc = ("<span style='color:%s'>%-5s</span>" % (dim, sub)) if sub else ("<span>%-5s</span>" % "")
             body.append("<span style='color:%s'>%-9s</span>%s&nbsp;&nbsp;%s" % (dim, label, subc, cells))
         return ("<div style='background:#12151c;padding:3px 7px;line-height:1.35;text-align:left'>"
                 "<span style='color:%s;font-size:9px;letter-spacing:1px'>REWARD / EFFORT "
-                "<span style='color:%s'>&middot; buy vs sell &middot; coincident</span></span>%s<br>%s</div>"
-                % (gray, dim, flow, "<br>".join(body)))
+                "<span style='color:%s'>&middot; buy vs sell &middot; coincident</span></span>%s%s<br>%s</div>"
+                % (gray, dim, flow, strong, "<br>".join(body)))
 
     def _draw_4h_zone(self, buckets) -> None:
         """Per-4h-bucket VOLUME-PROFILE ('V': VAH/VAL/POC/median), ZONE ('Z': buy/sell wick bands), and ABNORMAL-ORDER
