@@ -141,6 +141,7 @@ _M10_STRATEGIES = [
     ("m10_momentum", "15m Engulfing Wall (L / S losanges)", False, True),  # 15m: engulf rejection off a wall's radar (bounce)
     ("m10_engulf5m", "5m Absorption Wall", False, True),  # 5m: absorption/engulf rejection off a wall's radar (bounce); engulf green/red/gold + absorb2 blue/orange
     ("m10_easy1h", "1h Easy 0.5% (L / S triangles)", False, True),  # 1h: absorption+vw+swing scale-out; neon green/purple; fwd candidate
+    ("m10_radarrun", "★ Radar Runner (L / S pentagons · 5m·15m·1h)", False, True),  # resisted-wall radar BREAKOUT + tiered TP1/2/3; the one recon-validated edge (net+ both yrs, causal-checked)
     ("m10_nyrangebreak", "NY Range-break (brB / brS · 1h·15m)", False, True),  # 1h/15m: 2-5pm range box + first close-break label; SHORT side alpha in-sample (P=0.003)
     ("m10_wallstrat", "Wall Strategy (L / S triangles)", False, True),  # 5m: wall visit w/ Big|Crazy absorption + favourable tally + Easy Gold/Pure Aggression entry; NOT backtested
 ]
@@ -492,9 +493,24 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             if key == "m10_reward":
                 self._build_reward_subtoggle(sec)        # Reward/effort sub-toggle: horizontal zones where the rewarded side flips
                 self._build_reward_strength_slider(sec)  # + a strength filter for those zones
+            if key == "m10_radarrun":
+                self._build_radarrun_subtoggle(sec)      # Radar Runner sub-toggle: high-conviction order-flow filter (gold ring)
             if key == "m10_stats":
                 self._build_stats_substats(sec)          # per-stat on/off for the Mode-10 stats box
         return sec
+
+    def _build_radarrun_subtoggle(self, section) -> None:
+        """Radar Runner sub-toggle: show ONLY 'high-conviction' breakouts — the breakout bar's STRENGTH is forceful
+        (effort z >= 0.5) AND the recent reward/eff (last 50, aligned to the break) favours it. High-conviction
+        breakouts always get a GOLD RING; this toggle HIDES the rest. ⚠ Underpowered tilt: it lifts win% on 1h but is
+        flat/mixed on 5m/15m (higher n) -- a fewer-trades/higher-conviction VIEW, not a proven upgrade
+        (study/wall_breakout_filtered.py). m10_radarrun_hc, default OFF."""
+        cb = QtWidgets.QCheckBox("· High conviction only (order-flow)")
+        cb.setChecked(False)                             # default OFF (the gold rings show either way)
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.toggled.connect(lambda on, k="m10_radarrun_hc": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_radarrun_hc"] = cb
+        section.addWidget(cb)
 
     def _build_reward_subtoggle(self, section) -> None:
         """Reward/effort sub-toggle: draw a horizontal ZONE on the chart where the rolling reward-per-effort side FLIPS

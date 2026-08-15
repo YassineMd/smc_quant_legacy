@@ -1354,6 +1354,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._e5m_sig = None; self._e5m_drawn = False
         self._e5m_entries = []
         self._e5m_ln_pool = []; self._e5m_lnlbl_pool = []; self._e5m_lines_user = {}
+        # Radar Runner overlay (m10_radarrun, 5m/15m/1h) — resisted-wall radar BREAKOUT; the one recon-validated edge.
+        # Pentagon L/S badge at the breakout bar; click -> entry/SL + tiered TP1/TP2/TP3 lines. (app/radar_breakout_detect)
+        self._rr_sph = None; self._rr_ring = None              # pentagon badges + a GOLD ring on high-conviction ones
+        self._rr_sig = None; self._rr_drawn = False
+        self._rr_entries = []
+        self._rr_ln_pool = []; self._rr_lnlbl_pool = []; self._rr_lines_user = {}
+        self._rr_fired = {}; self._rr_fired_tf = None          # PERSIST fired breakouts by bar end_time -> frozen event;
+        #                                                        a confirmed breakout never un-fires when the walls re-detect
         # '5m Breakout' indicator (m10_breakout5m) — squared 'Br' badges on S/R-breakout (mitigation) candles, 5m ONLY.
         self._brk5m_grn_pool = []                # green 'Br' TextItems (up-break / resistance mitigated), grown lazily
         self._brk5m_red_pool = []                # red 'Br' TextItems (down-break / support mitigated), grown lazily
@@ -2554,6 +2562,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if best is not None:
                     _on = not self._ez_lines_user.get(best, False)   # exclusive: this position only, hide all others
                     self._solo_trade_lines(self._ez_lines_user, best, _on); ev.accept(); return
+            except Exception:
+                pass
+        if (not ev.double() and self.scanner_mode == "bucket_canvas"
+                and self._rr_entries and self.menu.layer_state("m10_radarrun")):
+            try:                               # click a Radar Runner pentagon -> toggle its entry/SL/TP1/TP2/TP3 lines
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
+                best = None; bestdx = 2.5
+                for _en in self._rr_entries:
+                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[8]) <= ytol:   # yb at index 8 (tuple carries tp3)
+                        best = _en[0]; bestdx = abs(xc - _en[1])
+                if best is not None:
+                    _on = not self._rr_lines_user.get(best, False)   # exclusive: this position only, hide all others
+                    self._solo_trade_lines(self._rr_lines_user, best, _on); ev.accept(); return
             except Exception:
                 pass
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
@@ -7179,6 +7201,143 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for j in range(ut, len(lpool)):
             lpool[j].setVisible(False)
 
+    # RADAR RUNNER overlay (hamburger m10_radarrun, 5m/15m/1h) — a RESISTED wall's radar BREAKOUT: the one recon-
+    # validated edge (study/wall_breakout_*). Pentagon L/S badge in the breakout direction at the breakout bar; click ->
+    # entry (white) / SL = opposite radar extreme (red) / tiered TP1/TP2/TP3 = broken extreme +/- N*radar-length (greens).
+    # Best on 1h/15m (1m/5m sub-fee). NOT yet live-proven — recon-only (see app/radar_breakout_detect docstring).
+    def _clear_radarrun(self) -> None:
+        if self._rr_sph is not None:
+            self._rr_sph.setVisible(False)
+        if self._rr_ring is not None:
+            self._rr_ring.setVisible(False)
+        for _it in self._rr_ln_pool + self._rr_lnlbl_pool:
+            _it.setVisible(False)
+        self._rr_sig = None; self._rr_drawn = False
+
+    def _rr_conviction(self, buckets, i, side) -> bool:
+        """HIGH-CONVICTION flag for a Radar Runner breakout (computed ONCE, at fire time): the breakout bar's STRENGTH
+        is forceful (effort z >= STR_EFFORT_HI, aligned to the break) AND the recent reward/eff (last 50, aligned)
+        favours it. ⚠ Order-flow tilt only -- lifts win% on 1h but flat on 5m/15m (study/wall_breakout_filtered.py)."""
+        try:
+            from app import reward_eff
+            up = side > 0
+            base = reward_eff.strength_baseline(buckets, i)
+            bo = 0.0
+            if base and base.get("vol"):
+                st = reward_eff.strength(buckets, i, i, base=base)
+                if st.get("ok"):
+                    bo = st["buy" if up else "sell"]["effort_z"]
+            sh, ok = reward_eff.share(buckets, i - 49, i)
+            rf = (sh if up else 100.0 - sh) if ok else 50.0
+            return bool(bo >= reward_eff.STR_EFFORT_HI and rf > 50.0)
+        except Exception:
+            return False
+
+    def _draw_radarrun(self, filtered) -> None:
+        if (not self.menu.layer_state("m10_radarrun") or self.scanner_mode != "bucket_canvas"
+                or self._tf not in ("5m", "15m", "1h")):
+            self._clear_radarrun(); return
+        n = len(filtered)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        _hc = self.menu.layer_state("m10_radarrun_hc")           # sub-toggle: show ONLY high-conviction breakouts
+        _sig = (n, _forming, _hc, self._tf, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if _sig == self._rr_sig and self._rr_drawn:
+            return
+        self._rr_sig = _sig
+        try:                                                     # skip the last bar ONLY while it is still FORMING; the
+            from app import radar_breakout_detect                 # instant the breakout bar CLOSES it fires (no wait for a
+            entries = radar_breakout_detect.detect(filtered, skip_last=_forming)   # next bar). Forming bar skipped -> no flicker.
+        except Exception:
+            self._clear_radarrun(); return
+        if self._tf != self._rr_fired_tf:                         # reset the persisted set on a timeframe switch
+            self._rr_fired = {}; self._rr_fired_tf = self._tf
+        for e in entries:                                         # PERSIST: freeze each NEW breakout by its bar end_time (a
+            i = int(e["i"])                                       # stable id across scroll + wall re-detection). Once fired,
+            if 0 <= i < n:                                        # a confirmed breakout is NEVER removed when walls re-shape.
+                et = float(filtered[i].get("end_time", 0.0) or 0.0)
+                if et > 0 and et not in self._rr_fired:
+                    self._rr_fired[et] = {"side": int(e["side"]), "entry": e.get("entry", 0.0), "sl": e.get("sl", 0.0),
+                                          "tp1": e.get("tp1", 0.0), "tp2": e.get("tp2", 0.0), "tp3": e.get("tp3", 0.0),
+                                          "hc": self._rr_conviction(filtered, i, int(e["side"]))}   # conviction frozen at fire
+        if len(self._rr_fired) > 2000:                            # bound memory: keep the 2000 most recent
+            for _old in sorted(self._rr_fired)[:len(self._rr_fired) - 2000]:
+                del self._rr_fired[_old]
+        et2i = {float(filtered[j].get("end_time", 0.0) or 0.0): j for j in range(n)}   # end_time -> CURRENT index this frame
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        GRN, RED = (40, 230, 120), (240, 70, 90)                     # green = up-breakout (support) / red = down (resistance)
+        if self._rr_sph is None:
+            self._rr_sph = pg.ScatterPlotItem(pxMode=True, size=20, symbol="p")   # pentagon — distinct from the triangle strategies
+            self._rr_sph.setZValue(33); self.plot.addItem(self._rr_sph, ignoreBounds=True)
+        if self._rr_ring is None:
+            self._rr_ring = pg.ScatterPlotItem(pxMode=True, size=28, symbol="o", brush=pg.mkBrush(0, 0, 0, 0))
+            self._rr_ring.setZValue(32); self.plot.addItem(self._rr_ring, ignoreBounds=True)
+        spots = []; ring_spots = []; self._rr_entries = []
+        for et, ev in self._rr_fired.items():                    # draw EVERY persisted signal whose bar is on-screen now
+            i = et2i.get(et)
+            if i is None:                                        # its bar scrolled out of the loaded window -> keep, don't draw
+                continue
+            hc = bool(ev.get("hc"))
+            if _hc and not hc:                                   # 'High conviction only' sub-toggle -> hide the rest
+                continue
+            side = ev["side"]
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (hi + pad) if side > 0 else (lo - pad)               # badge in the BREAKOUT direction (above=up / below=down)
+            self._rr_entries.append(("rr%d" % i, i, side, ev["entry"], ev["sl"], ev["tp1"], ev["tp2"], ev["tp3"], y))
+            col = GRN if side > 0 else RED
+            _pen_rgb = [int(c * 0.55) for c in col] + [255]
+            spots.append({"pos": (i, y), "symbol": "p", "brush": pg.mkBrush(*col, 255),
+                          "pen": pg.mkPen(*_pen_rgb, width=1.4), "size": 20})
+            if hc:                                               # GOLD RING = high conviction (breakout strength + reward/eff aligned)
+                ring_spots.append({"pos": (i, y), "symbol": "o", "size": 28, "brush": pg.mkBrush(0, 0, 0, 0),
+                                   "pen": pg.mkPen(255, 195, 40, 255, width=2.0)})
+        self._rr_sph.setData(spots); self._rr_sph.setVisible(True)
+        self._rr_ring.setData(ring_spots); self._rr_ring.setVisible(True)
+        self._rr_drawn = True
+        self._trline_buckets = filtered                             # click a badge -> entry/SL/TP1/TP2/TP3 trade lines
+        self._draw_rr_lines()
+
+    def _draw_rr_lines(self) -> None:
+        """Entry (white) / SL (red) / TP1/TP2/TP3 (green shades) dashed lines for the toggled-ON Radar Runner badge.
+        Lines run from the breakout bar to the first touch of SL or the top tier (TP3) in the visible frame."""
+        buckets = self._trline_buckets; n = len(buckets)
+        user = self._rr_lines_user; cpool = self._rr_ln_pool; lpool = self._rr_lnlbl_pool
+        WHITE = (236, 238, 244)
+        ul = ut = 0
+        for key, x, side, entry, sl, tp1, tp2, tp3, yb in self._rr_entries:
+            if not user.get(key, False) or entry <= 0 or x < 0 or x >= n:
+                continue
+            exit_x = n - 1
+            for j in range(x + 1, n):
+                bb = buckets[j]; hh = float(bb.get("high", 0.0) or 0.0); ll = float(bb.get("low", 0.0) or 0.0)
+                if hh <= 0 or ll <= 0:
+                    continue
+                if ((hh >= tp3) if side > 0 else (ll <= tp3)) or ((ll <= sl) if side > 0 else (hh >= sl)):
+                    exit_x = j; break
+            rb = max(x + 1, exit_x)
+            for lvl, col, w, tag in ((sl, (255, 90, 90), 1.5, "sl"),
+                                     (tp1, (40, 210, 90), 1.4, "tp"),
+                                     (tp2, (80, 235, 120), 1.4, "tp"),
+                                     (tp3, (140, 255, 170), 1.4, "tp"),
+                                     (entry, WHITE, 1.9, "entry")):
+                if ul >= len(cpool):
+                    _ln = pg.PlotCurveItem(); _ln.setZValue(29)
+                    self.plot.addItem(_ln, ignoreBounds=True); cpool.append(_ln)
+                _ln = cpool[ul]; ul += 1
+                _pen = pg.mkPen(*col, width=w, style=QtCore.Qt.DashLine); _pen.setCosmetic(True)
+                _ln.setPen(_pen); _ln.setData([x, rb], [lvl, lvl]); _ln.setVisible(True)
+                if ut >= len(lpool):
+                    _tl = pg.TextItem(anchor=(0.0, 0.5)); _tl.setZValue(36)
+                    _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True); _tl.textItem.setFont(_tf)
+                    self.plot.addItem(_tl, ignoreBounds=True); lpool.append(_tl)
+                _tl = lpool[ut]; ut += 1
+                _tl.setText(("%.2f" % entry) if tag == "entry"
+                            else ("%.2f (%+.2f%%)" % (lvl, side * (lvl - entry) / entry * 100.0)))
+                _tl.setColor(col); _tl.setPos(rb, lvl); _tl.setVisible(True)
+        for j in range(ul, len(cpool)):
+            cpool[j].setVisible(False)
+        for j in range(ut, len(lpool)):
+            lpool[j].setVisible(False)
+
     # NY RANGE-BREAK overlay (hamburger m10_nyrangebreak, 1h + 15m) — self-gated, fail-safe. Drawn in the main candle
     # renderer beside the session boxes, so it culls to the viewport and follows pans. Draws the NY 2-5pm (13-16 UTC)
     # range as a faint neutral box + dashed rhi/rlo edges projected to the break, and marks the first 1h close beyond
@@ -8545,7 +8704,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         badge's (1h / 15m / 5m Engulf S/R), so only ONE position is on the chart at a time. Clicking the already-shown
         badge turns it OFF (nothing shown). Called by every strategy badge click."""
         for d in (self._eng_lines_user, self._mom_lines_user, self._e5m_lines_user, self._ez_lines_user,
-                  self._nyrb_lines_user):
+                  self._nyrb_lines_user, self._rr_lines_user):
             d.clear()                          # drop every currently-shown position (this + all other overlays)
         if turn_on:
             active_user[key] = True            # ...then light up only the just-clicked one
@@ -8901,7 +9060,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     or self.menu.layer_state("m10_breakout5m") or self.menu.layer_state("m10_engulf1m")
                     or self.menu.layer_state("m10_easy1h") or self.menu.layer_state("m10_crazywall")
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")
-                    or self.menu.layer_state("m10_wallstrat")):
+                    or self.menu.layer_state("m10_wallstrat") or self.menu.layer_state("m10_radarrun")):
                 _pf = _pf0                          # already built above; the top gate decided this frame needs a redraw
                 try:
                     self._draw_engulfsr(_pf or [])  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
@@ -8919,6 +9078,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_engulf5m(_pf or [])  # 5m Absorption S/R overlay (5m) — self-gated, fail-safe
                 except Exception:
                     self._clear_engulf5m()
+                try:
+                    self._draw_radarrun(_pf or [])  # Radar Runner (5m/15m/1h) — self-gated, fail-safe
+                except Exception:
+                    self._clear_radarrun()
                 try:
                     self._draw_wall_strategy(_pf or [])  # Wall Strategy (5m) — self-gated, fail-safe
                 except Exception:
@@ -9020,6 +9183,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_engulf5m(filtered)  # 5m Absorption S/R overlay (5m) — self-gated, fail-safe
             except Exception:
                 self._clear_engulf5m()
+            try:
+                self._draw_radarrun(filtered)  # Radar Runner (5m/15m/1h) — self-gated, fail-safe
+            except Exception:
+                self._clear_radarrun()
             try:
                 self._draw_wall_strategy(filtered)  # Wall Strategy (5m) — self-gated, fail-safe
             except Exception:
