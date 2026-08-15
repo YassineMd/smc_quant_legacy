@@ -1355,7 +1355,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._e5m_entries = []
         self._e5m_ln_pool = []; self._e5m_lnlbl_pool = []; self._e5m_lines_user = {}
         # Radar Runner overlay (m10_radarrun, 5m/15m/1h) — resisted-wall radar BREAKOUT; the one recon-validated edge.
-        # Pentagon L/S badge at the breakout bar; click -> entry/SL + tiered TP1/TP2/TP3 lines. (app/radar_breakout_detect)
+        # L/S triangle badge at the breakout bar; click -> entry/SL/TP tradeable-bracket lines. (app/radar_breakout_detect)
         self._rr_sph = None; self._rr_ring = None              # pentagon badges + a GOLD ring on high-conviction ones
         self._rr_sig = None; self._rr_drawn = False
         self._rr_entries = []
@@ -2566,12 +2566,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 pass
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
                 and self._rr_entries and self.menu.layer_state("m10_radarrun")):
-            try:                               # click a Radar Runner pentagon -> toggle its entry/SL/TP1/TP2/TP3 lines
+            try:                               # click a Radar Runner badge -> toggle its entry/SL/TP trade lines
                 pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
                 (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
                 best = None; bestdx = 2.5
                 for _en in self._rr_entries:
-                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[8]) <= ytol:   # yb at index 8 (tuple carries tp3)
+                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:   # yb at index 6 (entry/sl/tp tuple)
                         best = _en[0]; bestdx = abs(xc - _en[1])
                 if best is not None:
                     _on = not self._rr_lines_user.get(best, False)   # exclusive: this position only, hide all others
@@ -7258,7 +7258,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._rr_sig = _sig
         try:                                                     # skip the last bar ONLY while it is still FORMING; the
             from app import radar_breakout_detect                 # instant the breakout bar CLOSES it fires (no wait for a
-            entries = radar_breakout_detect.detect(filtered, skip_last=_forming)   # next bar). Forming bar skipped -> no flicker.
+            _slbuf = 0.002 if self._tf == "1h" else 0.003         # forward-optimized candle-SL buffer: 1h 0.2% / 30m+ 0.3%
+            entries = radar_breakout_detect.detect(filtered, skip_last=_forming, sl_buf=_slbuf, tp_frac=0.005)   # forming bar skipped -> no flicker
         except Exception:
             self._clear_radarrun(); return
         if self._tf != self._rr_fired_tf:                         # reset the persisted set on a timeframe switch
@@ -7268,8 +7269,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if 0 <= i < n:                                        # a confirmed breakout is NEVER removed when walls re-shape.
                 et = float(filtered[i].get("end_time", 0.0) or 0.0)
                 if et > 0 and et not in self._rr_fired:
-                    self._rr_fired[et] = {"side": int(e["side"]), "entry": e.get("entry", 0.0), "sl": e.get("sl", 0.0),
-                                          "tp1": e.get("tp1", 0.0), "tp2": e.get("tp2", 0.0), "tp3": e.get("tp3", 0.0),
+                    self._rr_fired[et] = {"side": int(e["side"]), "entry": e.get("entry", 0.0),
+                                          "sl": e.get("sl_trade", e.get("sl", 0.0)),   # tradeable candle-capped SL
+                                          "tp": e.get("tp_trade", 0.0),                # fixed quick TP (0.5%)
                                           "hc": self._rr_conviction(filtered, i, int(e["side"])),   # frozen at fire
                                           "absorbed": self._rr_absorbed(filtered, i)}
         if len(self._rr_fired) > 2000:                            # bound memory: keep the 2000 most recent
@@ -7297,7 +7299,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             side = ev["side"]
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
             y = (lo - pad) if side > 0 else (hi + pad)               # LONG ▲ BELOW the candle / SHORT ▼ ABOVE it
-            self._rr_entries.append(("rr%d" % i, i, side, ev["entry"], ev["sl"], ev["tp1"], ev["tp2"], ev["tp3"], y))
+            self._rr_entries.append(("rr%d" % i, i, side, ev["entry"], ev["sl"], ev["tp"], y))
             col = GRN if side > 0 else RED
             _pen_rgb = [int(c * 0.55) for c in col] + [255]
             spots.append({"pos": (i, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
@@ -7308,17 +7310,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._rr_sph.setData(spots); self._rr_sph.setVisible(True)
         self._rr_ring.setData(ring_spots); self._rr_ring.setVisible(True)
         self._rr_drawn = True
-        self._trline_buckets = filtered                             # click a badge -> entry/SL/TP1/TP2/TP3 trade lines
+        self._trline_buckets = filtered                             # click a badge -> entry/SL/TP trade lines
         self._draw_rr_lines()
 
     def _draw_rr_lines(self) -> None:
-        """Entry (white) / SL (red) / TP1/TP2/TP3 (green shades) dashed lines for the toggled-ON Radar Runner badge.
-        Lines run from the breakout bar to the first touch of SL or the top tier (TP3) in the visible frame."""
+        """Entry (white) / SL (red) / TP (green) dashed lines for the toggled-ON Radar Runner badge — the shipped
+        tradeable bracket (candle-capped SL + fixed 0.5% TP). Lines run from the breakout bar to the first SL/TP touch."""
         buckets = self._trline_buckets; n = len(buckets)
         user = self._rr_lines_user; cpool = self._rr_ln_pool; lpool = self._rr_lnlbl_pool
         WHITE = (236, 238, 244)
         ul = ut = 0
-        for key, x, side, entry, sl, tp1, tp2, tp3, yb in self._rr_entries:
+        for key, x, side, entry, sl, tp, yb in self._rr_entries:
             if not user.get(key, False) or entry <= 0 or x < 0 or x >= n:
                 continue
             exit_x = n - 1
@@ -7326,13 +7328,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 bb = buckets[j]; hh = float(bb.get("high", 0.0) or 0.0); ll = float(bb.get("low", 0.0) or 0.0)
                 if hh <= 0 or ll <= 0:
                     continue
-                if ((hh >= tp3) if side > 0 else (ll <= tp3)) or ((ll <= sl) if side > 0 else (hh >= sl)):
+                if ((hh >= tp) if side > 0 else (ll <= tp)) or ((ll <= sl) if side > 0 else (hh >= sl)):
                     exit_x = j; break
             rb = max(x + 1, exit_x)
             for lvl, col, w, tag in ((sl, (255, 90, 90), 1.5, "sl"),
-                                     (tp1, (40, 210, 90), 1.4, "tp"),
-                                     (tp2, (80, 235, 120), 1.4, "tp"),
-                                     (tp3, (140, 255, 170), 1.4, "tp"),
+                                     (tp, (40, 210, 90), 1.5, "tp"),
                                      (entry, WHITE, 1.9, "entry")):
                 if ul >= len(cpool):
                     _ln = pg.PlotCurveItem(); _ln.setZValue(29)

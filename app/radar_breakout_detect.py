@@ -8,13 +8,15 @@ Price then tends to RUN in TIERS of radar-lengths (L = radar_hi - radar_lo): rec
 and the tier-to-tier continuation RISES (~67% 1->2 up to ~80%+ 4->5). Net-positive BOTH recon years across every exit
 scheme on 1h/15m/5m after fees; survives causal base-rate + causal-geometry P&L. Best on 1h/15m (1m/5m ~ sub-fee).
 
-EXIT PLAN emitted per signal: SL = the OPPOSITE radar extreme; tiered targets TP1/TP2/TP3 = broken_extreme +/- N*L.
-Backtest-favoured management: scale 1/3 out at each tier + stop->breakeven after TP1, OR hold and trail the stop by tier.
+EXIT PLAN emitted per signal — TWO sets: (1) the shipped TRADEABLE bracket `sl_trade`/`tp_trade` = a candle-anchored SL
+(sl_buf below the signal candle's low / above its high, capped at the radar extreme) + a fixed quick TP (tp_frac) — this
+is what the badge click draws (forward-optimized: ~full expectancy, ~40% smaller tail, passes the prop-firm MC). (2)
+Legacy structural `sl` (opposite radar extreme) + tiered `tp1/tp2/tp3` = broken_extreme +/- N*L, kept for reference.
 
-detect(buckets, walls=None, skip_last=True) -> [{i, side(+1/-1), entry, sl, tp1, tp2, tp3, targets, band, price,
-  radar_lo, radar_hi, pen, wall_side('S'|'R'), p_resist}].  `walls` = app.absorption_level_detect.detect() marks
-  (detected internally if None). i is in the passed-list index space. Causal (each event uses only bars up to its own k).
-  NOT yet live-proven — recon-validated only (recon-vs-live wall fidelity + breakout-bar slippage are the open gates)."""
+detect(buckets, walls=None, skip_last=True, sl_buf=0.003, tp_frac=0.005) -> [{i, side(+1/-1), entry, sl_trade, tp_trade,
+  sl, tp1, tp2, tp3, targets, band, price, radar_lo, radar_hi, pen, wall_side('S'|'R'), p_resist}]. `sl_buf` per-tf
+  (0.002 on 1h / 0.003 on 30m+); `walls` = app.absorption_level_detect.detect() (internal if None). i is in the passed-
+  list index space. Causal. NOT yet live-proven — recon-validated only (recon-vs-live fidelity + slippage are open)."""
 from __future__ import annotations
 
 from . import absorption_level_detect as _al
@@ -25,13 +27,13 @@ MINVISIT = 3           # a real wall test: the radar visit must be at least this
 NTIERS = 3             # tiered targets 1x / 2x / 3x radar-lengths
 
 
-def detect(buckets, walls=None, skip_last=True):
+def detect(buckets, walls=None, skip_last=True, sl_buf=0.003, tp_frac=0.005):
     n = len(buckets)
     if n < 4:
         return []
-    O = [0.0] * n; C = [0.0] * n
+    O = [0.0] * n; C = [0.0] * n; HI = [0.0] * n; LO = [0.0] * n
     for i, b in enumerate(buckets):
-        O[i], C[i], _h, _l = _ohlc(b)
+        O[i], C[i], HI[i], LO[i] = _ohlc(b)
     if walls is None:
         try:
             walls = _al.detect(buckets, skip_last=False)
@@ -59,12 +61,16 @@ def detect(buckets, walls=None, skip_last=True):
                 seen.add((k, side))
                 s = 1 if side == "S" else -1; L = rhi - rlo
                 brk = rhi if side == "S" else rlo                       # the extreme it broke through
-                sl = rlo if side == "S" else rhi                        # SL = opposite extreme
-                tgt = [brk + s * (N * L) for N in range(1, NTIERS + 1)]  # tiered targets
+                sl = rlo if side == "S" else rhi                        # legacy structural SL = opposite extreme
+                tgt = [brk + s * (N * L) for N in range(1, NTIERS + 1)]  # legacy tiered targets
+                # TRADEABLE bracket (forward-optimized; what the badge click draws): candle-anchored SL capped at the
+                # radar extreme (sl_buf below the signal candle low / above its high) + a fixed quick TP (tp_frac).
+                sl_trade = max(LO[k] * (1.0 - sl_buf), rlo) if s > 0 else min(HI[k] * (1.0 + sl_buf), rhi)
+                tp_trade = C[k] * (1.0 + s * tp_frac)
                 pen = (C[k] - rhi) / band if side == "S" else (rlo - C[k]) / band
-                out.append(dict(i=k, side=s, entry=C[k], sl=sl, tp1=tgt[0], tp2=tgt[1], tp3=tgt[2],
-                                targets=tgt, band=band, price=P, radar_lo=rlo, radar_hi=rhi,
-                                pen=pen, wall_side=side, p_resist=pr))
+                out.append(dict(i=k, side=s, entry=C[k], sl_trade=sl_trade, tp_trade=tp_trade, sl=sl,
+                                tp1=tgt[0], tp2=tgt[1], tp3=tgt[2], targets=tgt, band=band, price=P,
+                                radar_lo=rlo, radar_hi=rhi, pen=pen, wall_side=side, p_resist=pr))
                 break
     out.sort(key=lambda e: e["i"])
     return out
