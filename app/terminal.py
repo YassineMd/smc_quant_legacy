@@ -5699,18 +5699,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if broken and (n4 - 1) - i1 > 6:                      # drop 4h walls broken more than ~1 day (6 4h-bars) ago
                 continue
             i0 = max(0, min(i0, n4 - 1)); i1 = max(i0, min(i1, n4 - 1))
-            xl = _xt(cbst[i0]); xr = (n - 1) if not broken else _xt(cbst[i1])
-            if xr <= xl:
-                xr = min(n - 1, xl + 1)
-            if xr < _vx0 - 1.0 or xl > _vx1 + 1.0:
+            if cbst[i0] > (starts[-1] if starts else 0.0):        # wall formed AFTER this frame's window -> not in view
                 continue
-            _rc = self._wall4h_box(ub, side); ub += 1             # wall core (±band) only — bold neon + border
+            xl = _xt(cbst[i0]); xr = (n - 1) if not broken else _xt(cbst[i1])
+            if xr - xl < 1.5 or xr < _vx0 - 1.0 or xl > _vx1 + 1.0:   # skip degenerate x-span (vertical slivers) + off-screen
+                continue
+            _rc = self._wall4h_box(ub, side); ub += 1             # wall core (±band) — bold neon + border, NO "4h" label
             _rc.setRect(xl, P - band, max(1e-9, xr - xl), 2.0 * band); _rc.setVisible(True)
             self._wall4h_hover_zones.append((xl, xr, P - band, P + band, P - 3.0 * band, P + 3.0 * band, side))
-            if xl >= _vx0 - 1.0:
-                _lb = self._wall4h_lbl(ul); ul += 1
-                _lb.setColor(pg.mkColor(190, 60, 255) if side == "R" else pg.mkColor(60, 255, 130))
-                _lb.setText("4h"); _lb.setPos(xl, P + band); _lb.setVisible(True)
         for _it in self._wall4h_box_pool[ub:]:
             _it.setVisible(False)
         for _it in self._wall4h_lbl_pool[ul:]:
