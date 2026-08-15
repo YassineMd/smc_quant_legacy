@@ -1328,8 +1328,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._absorblvl_lbl_pool = []                            # TextItem pool — "Ab"/"Ag" tags on borderless walls
         self._absorblvl_pct_pool = []                            # TextItem pool — strength-% tag at each wall's right edge
         self._radar_zone_pool = []                               # QGraphicsRectItem — dark-wall-shade radar zones (upper+lower)
-        self._wall4h_box_pool = []; self._wall4h_lbl_pool = []   # 4h WALLS overlay (m10_absorblvl_4h): neon violet(R)/green(S) core+radar
+        self._wall4h_box_pool = []; self._wall4h_lbl_pool = []   # 4h WALLS overlay (m10_absorblvl_4h): neon violet(R)/green(S) wall core
         self._wall4h_marks = None; self._wall4h_sig = None       # cached 4h AL.detect (re-run only on a 4h-data change)
+        self._wall4h_hover_zones = []                            # (xl,xr,ylo,yhi,radar_lo,radar_hi,side) -> dashed radar edges on hover
         self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side,visit#,rk0,rk1,radar_lo,radar_hi) for hover
         self._radar_hover_buckets = None                         # frame ref for the live tape-rotation readout on hover
         self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
@@ -5535,13 +5536,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         study/wall_radar_calib.py). DESCRIPTIVE only — light volume ~ almost-certain hold, heavy volume ~ coin flip.
         Adds a live TAPE-ROTATION line: the defender's tape share start->now over the visit (rising = imbalance
         rotating to the wall's side; a readout of the hold in progress, not a forecast). See `_tape_rotation`."""
-        if not self._radar_hover_zones or not self.menu.layer_state("m10_absorblvl"):
+        if not self.menu.layer_state("m10_absorblvl"):
             if self._radar_hover_tip is not None:
                 self._radar_hover_tip.hide()
             self._radar_hide_edges()
             return
         x = pt.x(); y = pt.y()
-        for (xl, xr, ylo, yhi, pr, side, num, rk0, rk1, r_lo, r_hi) in self._radar_hover_zones:
+        for (xl, xr, ylo, yhi, pr, side, num, rk0, rk1, r_lo, r_hi) in (self._radar_hover_zones or []):
             if xl <= x <= xr and ylo <= y <= yhi:
                 if self._radar_hover_tip is None:
                     self._radar_hover_tip = pg.TextItem(anchor=(0, 1), color=(255, 210, 70),
@@ -5571,19 +5572,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._radar_hover_tip.show()
                 self._radar_show_edges(xl, xr, r_hi, r_lo, side)        # dashed RADAR top/bottom (±3·band) over the visit width
                 return
+        if self.menu.layer_state("m10_absorblvl_4h"):             # 4h wall core -> dashed 4h radar extremes (no odds tip)
+            for (hxl, hxr, hylo, hyhi, hrlo, hrhi, hside) in (self._wall4h_hover_zones or []):
+                if hxl <= x <= hxr and hylo <= y <= hyhi:
+                    if self._radar_hover_tip is not None:
+                        self._radar_hover_tip.hide()
+                    self._radar_show_edges(hxl, hxr, hrhi, hrlo, hside,
+                                           col=(190, 60, 255) if hside == "R" else (60, 255, 130))
+                    return
         if self._radar_hover_tip is not None:
             self._radar_hover_tip.hide()
         self._radar_hide_edges()
 
-    def _radar_show_edges(self, xl, xr, r_hi, r_lo, side) -> None:
-        """Two dashed lines at the hovered RADAR's top (price+3·band) and bottom (price-3·band), spanning the VISIT's
-        x-width [xl, xr], in the radar's colour (sell/R orange, buy/S blue)."""
+    def _radar_show_edges(self, xl, xr, r_hi, r_lo, side, col=None) -> None:
+        """Two dashed lines at the hovered RADAR's top (price+3·band) and bottom (price-3·band), spanning [xl, xr].
+        Default colour = the radar's (sell/R orange, buy/S blue); `col` overrides it (e.g. the 4h-wall neon)."""
         if self._radar_hover_lines is None:
             self._radar_hover_lines = []
             for _ in range(2):
                 _ln = pg.PlotCurveItem(); _ln.setZValue(64)
                 self.plot.addItem(_ln, ignoreBounds=True); self._radar_hover_lines.append(_ln)
-        col = (235, 140, 30) if side == "R" else (45, 125, 220)
+        if col is None:
+            col = (235, 140, 30) if side == "R" else (45, 125, 220)
         _pn = pg.mkPen(*col, 230, width=1.2); _pn.setCosmetic(True); _pn.setDashPattern([5.0, 4.0])
         for _ln, _yv in zip(self._radar_hover_lines, (r_hi, r_lo)):
             _ln.setData([xl, xr], [_yv, _yv]); _ln.setPen(_pn); _ln.setVisible(True)
@@ -5616,18 +5626,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._absorblvl_sig = _dsig
         return self._absorblvl_marks
 
-    def _wall4h_box(self, used, side, is_radar):
-        """Pooled neon rect for a 4h wall — violet(R)/green(S); faint fill for the radar (±3·band), bold fill+border for
-        the wall core (±band). Higher z than the current-tf wall zones (-6) so the HTF structure reads over them."""
+    def _wall4h_box(self, used, side):
+        """Pooled bold neon rect for a 4h wall CORE (±band): violet(R)/green(S), high opacity + border, so the HTF wall
+        reads over the current-tf wall zones (z -6). Its radar extremes (±3·band) show as dashed lines on hover."""
         if used >= len(self._wall4h_box_pool):
-            _rc = QtWidgets.QGraphicsRectItem()
+            _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-4)
             self.vb.addItem(_rc, ignoreBounds=True); self._wall4h_box_pool.append(_rc)
-        _rc = self._wall4h_box_pool[used]; _rc.setZValue(-5 if is_radar else -4)
+        _rc = self._wall4h_box_pool[used]
         rgb = (190, 60, 255) if side == "R" else (60, 255, 130)
-        if is_radar:
-            _rc.setBrush(pg.mkBrush(*rgb, 24)); _rc.setPen(pg.mkPen(None))
-        else:
-            _rc.setBrush(pg.mkBrush(*rgb, 90)); _rc.setPen(pg.mkPen(*rgb, 230, width=1.4))
+        _rc.setBrush(pg.mkBrush(*rgb, 90)); _rc.setPen(pg.mkPen(*rgb, 230, width=1.4))
         return _rc
 
     def _wall4h_lbl(self, used):
@@ -5642,6 +5649,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _it.setVisible(False)
         for _it in self._wall4h_lbl_pool:
             _it.setVisible(False)
+        self._wall4h_hover_zones = []
 
     def _draw_4h_walls(self, buckets) -> None:
         """4h WALLS overlay (sub-toggle m10_absorblvl_4h, under Order-Flow Walls): the higher-timeframe 4h absorption
@@ -5681,7 +5689,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         def _xt(t):
             return max(0, min(bisect.bisect_left(starts, t), n - 1))
-        ub = ul = 0
+        ub = ul = 0; self._wall4h_hover_zones = []
         for m in (self._wall4h_marks or []):
             side = m.get("side"); P = float(m.get("price") or 0.0); band = float(m.get("band") or 0.0)
             if side not in ("R", "S") or P <= 0 or band <= 0:
@@ -5696,10 +5704,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 xr = min(n - 1, xl + 1)
             if xr < _vx0 - 1.0 or xl > _vx1 + 1.0:
                 continue
-            _rr = self._wall4h_box(ub, side, True); ub += 1       # radar band (±3·band), faint
-            _rr.setRect(xl, P - 3.0 * band, max(1e-9, xr - xl), 6.0 * band); _rr.setVisible(True)
-            _rc = self._wall4h_box(ub, side, False); ub += 1      # wall core (±band), bold neon + border
+            _rc = self._wall4h_box(ub, side); ub += 1             # wall core (±band) only — bold neon + border
             _rc.setRect(xl, P - band, max(1e-9, xr - xl), 2.0 * band); _rc.setVisible(True)
+            self._wall4h_hover_zones.append((xl, xr, P - band, P + band, P - 3.0 * band, P + 3.0 * band, side))
             if xl >= _vx0 - 1.0:
                 _lb = self._wall4h_lbl(ul); ul += 1
                 _lb.setColor(pg.mkColor(190, 60, 255) if side == "R" else pg.mkColor(60, 255, 130))
