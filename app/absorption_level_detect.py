@@ -183,7 +183,7 @@ def _wall_at(i, O, C, H, L, DP, buckets):
     return (node if node is not None else (L[i] if buy else H[i]), side, "agg")
 
 
-def detect(buckets, skip_last=False):
+def detect(buckets, skip_last=False, radar_mult=3.0):
     n = len(buckets)
     if n < 4:
         return []
@@ -212,7 +212,7 @@ def detect(buckets, skip_last=False):
                         w["ej"] = fav
                 base = min(1.0, w["ej"] / (EJ_ATR_MULT * w["v0"])) if w["v0"] > 0 else 0.0
                 band = P * w["v0"] * (BAND_MIN + base * BAND_RANGE)   # volatility-relative -> timeframe-invariant
-                r_lo = P - 3.0 * band; r_hi = P + 3.0 * band     # radar area = wall + one wall-height above & below
+                r_lo = P - radar_mult * band; r_hi = P + radar_mult * band     # radar area = wall + one wall-height above & below
                 if (w["side"] == "R" and C[i] > r_hi) or (w["side"] == "S" and C[i] < r_lo):
                     w["i1"] = i; w["broken"] = True; done.append(w); continue   # BODY CLOSES beyond the RADAR -> broken
                 inside = (L[i] <= r_hi and H[i] >= r_lo)          # radar visit tracking
@@ -248,7 +248,7 @@ def detect(buckets, skip_last=False):
             hits = len(w["runs"])                           # each radar re-visit is a hit
             strength = base                                 # STRENGTH = ejection, plain. No decay, no losing it on a test.
             band = P * w["v0"] * (BAND_MIN + base * BAND_RANGE)   # volatility-relative radar (formation ejection)
-            r_lo = P - 3.0 * band; r_hi = P + 3.0 * band
+            r_lo = P - radar_mult * band; r_hi = P + radar_mult * band
             runs = []                                            # (k0, k1, P_resist%) — odds the wall holds this visit
             for r in w["runs"]:
                 if r[0] > i1:
