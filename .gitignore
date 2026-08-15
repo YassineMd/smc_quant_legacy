@@ -10,6 +10,12 @@ study/archive_data/
 # --- Local pre-daemon reconstruction (2025-01..2026-06-19; built from Binance tape, kept out of git) ---
 study/recon_archive/
 
+# --- Study run artifacts (regenerable: stdout logs + cached numpy arrays) ---
+study/_*.out
+study/_*.err
+study/*.npz
+/audit_extract.txt
+
 # --- Python bytecode caches ---
 __pycache__/
 *.pyc

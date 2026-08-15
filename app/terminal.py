@@ -7246,7 +7246,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _draw_radarrun(self, filtered) -> None:
         if (not self.menu.layer_state("m10_radarrun") or self.scanner_mode != "bucket_canvas"
-                or self._tf not in ("5m", "15m", "1h")):
+                or self._tf not in ("1m", "5m", "15m", "1h")):
             self._clear_radarrun(); return
         n = len(filtered)
         _forming = bool(getattr(self, "_mmx_last_forming", True))
@@ -7279,7 +7279,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
         GRN, RED = (40, 230, 120), (240, 70, 90)                     # green = up-breakout (support) / red = down (resistance)
         if self._rr_sph is None:
-            self._rr_sph = pg.ScatterPlotItem(pxMode=True, size=20, symbol="p")   # pentagon — distinct from the triangle strategies
+            self._rr_sph = pg.ScatterPlotItem(pxMode=True, size=20, symbol="t1")   # triangle L/S: green ▲ up / red ▼ down
             self._rr_sph.setZValue(33); self.plot.addItem(self._rr_sph, ignoreBounds=True)
         if self._rr_ring is None:
             self._rr_ring = pg.ScatterPlotItem(pxMode=True, size=28, symbol="o", brush=pg.mkBrush(0, 0, 0, 0))
@@ -7296,11 +7296,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue
             side = ev["side"]
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            y = (hi + pad) if side > 0 else (lo - pad)               # badge in the BREAKOUT direction (above=up / below=down)
+            y = (lo - pad) if side > 0 else (hi + pad)               # LONG ▲ BELOW the candle / SHORT ▼ ABOVE it
             self._rr_entries.append(("rr%d" % i, i, side, ev["entry"], ev["sl"], ev["tp1"], ev["tp2"], ev["tp3"], y))
             col = GRN if side > 0 else RED
             _pen_rgb = [int(c * 0.55) for c in col] + [255]
-            spots.append({"pos": (i, y), "symbol": "p", "brush": pg.mkBrush(*col, 255),
+            spots.append({"pos": (i, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
                           "pen": pg.mkPen(*_pen_rgb, width=1.4), "size": 20})
             if hc:                                               # GOLD RING = high conviction (breakout strength + reward/eff aligned)
                 ring_spots.append({"pos": (i, y), "symbol": "o", "size": 28, "brush": pg.mkBrush(0, 0, 0, 0),
