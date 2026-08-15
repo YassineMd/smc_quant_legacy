@@ -8723,7 +8723,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             d.clear()                          # drop every currently-shown position (this + all other overlays)
         if turn_on:
             active_user[key] = True            # ...then light up only the just-clicked one
-        self._draw_eng_lines(); self._draw_mom_lines(); self._draw_e5m_lines(); self._draw_ez_lines(); self._draw_nyrb_lines()
+        self._draw_eng_lines(); self._draw_mom_lines(); self._draw_e5m_lines(); self._draw_ez_lines()
+        self._draw_nyrb_lines(); self._draw_rr_lines()   # RR was omitted -> its lines only redrew on the next live frame
 
     def _trade_lines(self, entries, user, cpool, lpool, zline) -> None:
         """Shared renderer: for each toggled-ON entry draw ENTRY (white dashed, price tag) + TP (green) + SL (red)
