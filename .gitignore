@@ -15,6 +15,7 @@ study/_*.out
 study/_*.err
 study/*.npz
 /audit_extract.txt
+study/out/radarrun_forward_ledger.csv   # regenerated each run from the live cold-archive
 
 # --- Python bytecode caches ---
 __pycache__/
