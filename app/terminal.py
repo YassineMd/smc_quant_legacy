@@ -1330,6 +1330,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._radar_zone_pool = []                               # QGraphicsRectItem — dark-wall-shade radar zones (upper+lower)
         self._HTF_COLORS = {"4h": {"R": (190, 60, 255), "S": (60, 255, 130)},   # 4h Walls: neon violet(R)/green(S)
                             "1h": {"R": (255, 150, 20), "S": (40, 140, 255)}}    # 1h Walls: orange(R)/blue(S)
+        # HTF Radar Runner SIGNAL colours — match the htf walls EXCEPT the 4h long: cyan (not the wall's green) so it
+        # reads distinct from the current-tf green long triangle. Short = wall colour; 1h = 1h wall colours.
+        self._HTF_SIG_COLORS = {"4h": {"R": (190, 60, 255), "S": (0, 230, 235)},   # 4h signals: violet short / CYAN long
+                                "1h": {"R": (255, 150, 20), "S": (40, 140, 255)}}   # 1h signals: orange short / blue long
         self._TF_RANK = {"1m": 0, "5m": 1, "15m": 2, "30m": 3, "1h": 4, "4h": 5}  # HTF walls draw only on tfs BELOW them
         self._htf_box_pool = {"1h": [], "4h": []}                # HTF wall overlay cores (m10_absorblvl_1h / m10_absorblvl_4h)
         self._htf_marks = {"1h": None, "4h": None}; self._htf_sig = {"1h": None, "4h": None}  # cached AL.detect per htf
@@ -1368,6 +1372,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._rr_ln_pool = []; self._rr_lnlbl_pool = []; self._rr_lines_user = {}
         self._rr_fired = {}; self._rr_fired_tf = None          # PERSIST fired breakouts by bar end_time -> frozen event;
         #                                                        a confirmed breakout never un-fires when the walls re-detect
+        self._rr_htf_sph = {}                                  # HTF Radar Runner SIGNALS (m10_radarrun_1h/_4h): per-htf ScatterPlotItem
+        self._rr_htf_sig = {}; self._rr_htf_marks = {}         # cached detect() per htf, re-run only on an htf-data change
         # '5m Breakout' indicator (m10_breakout5m) — squared 'Br' badges on S/R-breakout (mitigation) candles, 5m ONLY.
         self._brk5m_grn_pool = []                # green 'Br' TextItems (up-break / resistance mitigated), grown lazily
         self._brk5m_red_pool = []                # red 'Br' TextItems (down-break / support mitigated), grown lazily
@@ -2302,6 +2308,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._ez_sig = None; self._sel_sig = None    # 1h Easy 0.5% toggled -> re-run the overlay draw
             if not on:
                 self._clear_easy1h()                # off -> tear the triangles down now
+        elif key in ("m10_radarrun_1h", "m10_radarrun_4h"):
+            _h = "1h" if key.endswith("_1h") else "4h"
+            self._rr_htf_sig[_h] = None                  # HTF Radar Runner signals toggled -> re-detect + redraw next frame
+            if not on:
+                self._clear_htf_radarrun(_h)             # off -> tear those htf badges down now
         elif key == "m10_reversal":
             self._revpt_sig = None                       # Reversal Point toggled -> re-run the overlay draw
             if not on:
@@ -3918,8 +3929,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _toggle_hide_candles(self) -> None:
         """Ctrl+H — hide/show the candle glyphs so the volume profile / zones can be read without the candle 'noise'.
-        Hides the candles, the Keltner Channel, the abnormal-order lines AND the gray POC baseline; VP, zones,
-        POC dots and the other overlays stay."""
+        Hides the candles, the Keltner Channel, the abnormal-order lines, the gray POC baseline AND every Strategies-
+        section overlay (Radar Runner + its htf signals, Engulf S/R, 15m Engulf Wall, 5m Absorption, 1h Easy, NY
+        Range-break, Wall Strategy); VP, zones, POC dots and the descriptive indicators stay."""
         self._hide_candles = not self._hide_candles
         self._save_ui_state()
         self._last_scanner_sig = None
@@ -5655,6 +5667,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _it.setVisible(False)
             self._htf_hover_zones[h] = []
 
+    def _htf_source_buckets(self, htf, win_start_t, now_t):
+        """Closed buckets of `htf` for the HTF overlays (walls / Radar Runner signals): recon_replay in a recon-era
+        replay, else the live htf worker (dedicated worker_4h for 4h / lazy _sub_worker for 1h) + daemon-archive
+        fallback. Shared by _draw_htf_walls and _draw_htf_radarrun so both read the SAME htf source."""
+        from app import recon_replay
+        if now_t and now_t < recon_replay.CUTOFF:                 # REPLAY in the recon era -> recon htf
+            return recon_replay.window_by_time(htf, win_start_t - 45 * 86400, now_t) or []
+        wk = self.worker_4h if htf == "4h" else self._sub_worker("1h")   # LIVE -> htf worker (+ daemon-archive fallback)
+        cbH = ((wk.snapshot() if wk else None) or {}).get("closed_buckets") or []
+        if not cbH and archive.available(htf):
+            try:
+                d = archive._load(htf); cbH = [d[k] for k in sorted(d)]
+            except Exception:
+                cbH = []
+        return cbH
+
     def _draw_htf_walls(self, htf, buckets) -> None:
         """Higher-timeframe WALLS overlay (sub-toggles m10_absorblvl_1h / m10_absorblvl_4h, under Order-Flow Walls):
         the htf absorption walls drawn on the CURRENT chart as coloured bands (4h neon violet/green, 1h orange/blue) —
@@ -5668,17 +5696,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         starts = [float(b.get("start_time", 0.0) or 0.0) for b in buckets]
         now_t = starts[-1] if starts else 0.0
         from app import recon_replay
-        if now_t and now_t < recon_replay.CUTOFF:                 # REPLAY in the recon era -> recon htf
-            cbH = recon_replay.window_by_time(htf, (starts[0] if starts else 0.0) - 45 * 86400, now_t)
-        else:                                                     # LIVE -> the htf worker (+ daemon-archive fallback)
-            wk = self.worker_4h if htf == "4h" else self._sub_worker("1h")
-            snap = wk.snapshot() if wk else None
-            cbH = (snap or {}).get("closed_buckets") or []
-            if not cbH and archive.available(htf):
-                try:
-                    d = archive._load(htf); cbH = [d[k] for k in sorted(d)]
-                except Exception:
-                    cbH = []
+        cbH = self._htf_source_buckets(htf, starts[0] if starts else 0.0, now_t)
         if len(cbH) < 4:
             self._hide_htf_walls(htf); return
         sig = (len(cbH), float(cbH[-1].get("start_time", 0.0) or 0.0), int(now_t < recon_replay.CUTOFF))
@@ -7159,7 +7177,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Triangle L/S badges for the 1h Engulf S/R Reversal candidate (app/engulf_sr_detect). Needs S/R + prev-day VA
         context, so the shared warm-up prefix is prepended and indices shifted back (like DA2/MMXSKEW/15mReasy). 1h ONLY."""
         if (not self.menu.layer_state("m10_engulfsr") or self.scanner_mode != "bucket_canvas"
-                or self._tf != "1h"):
+                or self._tf != "1h" or self._hide_candles):   # Ctrl+H hides strategies
             self._clear_engulfsr(); return
         n = len(filtered)
         warm = getattr(self, "_mmx_warm", None) or []                # shared prefix (S/R + prev-day VA context)
@@ -7231,7 +7249,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Neon triangle L/S badges for the 1h Easy 0.5% candidate (app/easy1h_detect). 1h ONLY. Absorption badge +
         vw>=1 + absR<=-0.3, take candle side (swing filter applied by eye, not here). Click a badge -> entry/SL/TP1/TP2."""
         if (not self.menu.layer_state("m10_easy1h") or self.scanner_mode != "bucket_canvas"
-                or self._tf != "1h"):
+                or self._tf != "1h" or self._hide_candles):   # Ctrl+H hides strategies
             self._clear_easy1h(); return
         n = len(filtered)
         _forming = bool(getattr(self, "_mmx_last_forming", True))
@@ -7358,7 +7376,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _draw_radarrun(self, filtered) -> None:
         if (not self.menu.layer_state("m10_radarrun") or self.scanner_mode != "bucket_canvas"
-                or self._tf not in ("1m", "5m", "15m", "30m", "1h")):
+                or self._tf not in ("1m", "5m", "15m", "30m", "1h") or self._hide_candles):   # Ctrl+H hides strategies
             self._clear_radarrun(); return
         n = len(filtered)
         _forming = bool(getattr(self, "_mmx_last_forming", True))
@@ -7465,6 +7483,66 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for j in range(ut, len(lpool)):
             lpool[j].setVisible(False)
 
+    # HTF RADAR RUNNER signals (sub-toggles m10_radarrun_1h / m10_radarrun_4h): the Radar Runner breakout badges from a
+    # HIGHER timeframe drawn on the current LOWER-tf chart, coloured to MATCH that htf's walls (4h neon violet/green,
+    # 1h orange/blue; long = support colour, short = resistance colour). Badges only (no click bracket). Placed at the
+    # current-tf bar where the htf bar CLOSED. Only on tfs BELOW the htf; htf source shared with the htf walls.
+    def _clear_htf_radarrun(self, htf=None) -> None:
+        for _h in ((htf,) if htf else ("1h", "4h")):
+            _sph = self._rr_htf_sph.get(_h)
+            if _sph is not None:
+                _sph.setVisible(False)
+
+    def _draw_htf_radarrun(self, htf, buckets) -> None:
+        key = "m10_radarrun_" + htf
+        if (not self.menu.layer_state("m10_radarrun") or not self.menu.layer_state(key)
+                or self.scanner_mode != "bucket_canvas" or self._hide_candles or not buckets
+                or self._TF_RANK.get(self._tf, 99) >= self._TF_RANK[htf]):     # only on tfs BELOW the htf
+            self._clear_htf_radarrun(htf); return
+        starts = [float(b.get("start_time", 0.0) or 0.0) for b in buckets]
+        now_t = starts[-1] if starts else 0.0
+        cbH = self._htf_source_buckets(htf, starts[0] if starts else 0.0, now_t)
+        if len(cbH) < 4:
+            self._clear_htf_radarrun(htf); return
+        from app import recon_replay
+        sig = (len(cbH), float(cbH[-1].get("start_time", 0.0) or 0.0), int(now_t < recon_replay.CUTOFF))
+        if sig != self._rr_htf_sig.get(htf):                     # re-detect only when the htf data changes
+            try:
+                from app import radar_breakout_detect
+                _slb = 0.002 if htf == "1h" else 0.003
+                self._rr_htf_marks[htf] = radar_breakout_detect.detect(cbH, skip_last=True, sl_buf=_slb, tp_frac=0.005)
+            except Exception:
+                self._rr_htf_marks[htf] = []
+            self._rr_htf_sig[htf] = sig
+        marks = self._rr_htf_marks.get(htf) or []
+        n = len(buckets); nH = len(cbH)
+        (_vx0, _vx1), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        cols = self._HTF_SIG_COLORS[htf]                         # long = S colour (4h long = cyan), short = R colour
+        _sph = self._rr_htf_sph.get(htf)
+        if _sph is None:
+            _sph = pg.ScatterPlotItem(pxMode=True); _sph.setZValue(33)
+            self.plot.addItem(_sph, ignoreBounds=True); self._rr_htf_sph[htf] = _sph
+        spots = []
+        for e in marks:
+            i = int(e.get("i", -1)); side = int(e.get("side", 0))
+            if not (0 <= i < nH) or side == 0:
+                continue
+            hb = cbH[i]; et = float(hb.get("end_time", hb.get("start_time", 0.0)) or 0.0)
+            if et <= 0 or (starts and et < starts[0]):           # no time / predates the loaded lower-tf window -> skip
+                continue
+            x = bisect.bisect_left(starts, et)                   # place at the current-tf bar where the htf bar CLOSED
+            if x >= n:
+                x = n - 1
+            if x < _vx0 - 1.0 or x > _vx1 + 1.0:                 # off-screen -> skip
+                continue
+            hi = float(hb.get("high", 0.0) or 0.0); lo = float(hb.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)           # LONG ▲ below the htf bar / SHORT ▼ above it
+            col = cols["S"] if side > 0 else cols["R"]
+            _pen_rgb = [int(c * 0.55) for c in col] + [255]
+            spots.append({"pos": (x, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
+                          "pen": pg.mkPen(*_pen_rgb, width=1.5), "size": 22})
+        _sph.setData(spots); _sph.setVisible(True)
+
     # NY RANGE-BREAK overlay (hamburger m10_nyrangebreak, 1h + 15m) — self-gated, fail-safe. Drawn in the main candle
     # renderer beside the session boxes, so it culls to the viewport and follows pans. Draws the NY 2-5pm (13-16 UTC)
     # range as a faint neutral box + dashed rhi/rlo edges projected to the break, and marks the first 1h close beyond
@@ -7507,7 +7585,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """NY 2-5pm range box + rhi/rlo edges + brB/brS break label (app/ny_rangebreak_detect). 1h + 15m, culled to the
         viewport. Range = raw body edges (box hugs the candle bodies on both tf). Cached by data-signature so panning
         only re-positions the pooled items."""
-        if not self.menu.layer_state("m10_nyrangebreak") or self._tf not in ("1h", "15m") or not buckets:
+        if (not self.menu.layer_state("m10_nyrangebreak") or self._tf not in ("1h", "15m") or not buckets
+                or self._hide_candles):   # Ctrl+H hides strategies
             self._clear_nyrb(); return
         n = len(buckets)
         _forming = bool(getattr(self, "_mmx_last_forming", True))
@@ -7794,7 +7873,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """WALL STRATEGY (m10_wallstrat, 5m ONLY): a green ▲ LONG at a buy wall / red ▼ SHORT at a sell wall when the
         radar visit has >=1 Big/Crazy absorption, the visit's absorption tally favours the wall side, and an Easy Gold
         OR Pure Aggression signal fires in that direction (app/wall_strategy_detect). Self-gated, fail-safe. NOT backtested."""
-        if (not self.menu.layer_state("m10_wallstrat") or self.scanner_mode != "bucket_canvas" or self._tf != "5m"):
+        if (not self.menu.layer_state("m10_wallstrat") or self.scanner_mode != "bucket_canvas" or self._tf != "5m"
+                or self._hide_candles):   # Ctrl+H hides strategies
             self._clear_wall_strategy(); return
         n = len(filtered)
         if n < 2:
@@ -7843,7 +7923,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         off an Order-Flow WALL's radar area (support wall -> long bounce / resistance wall -> short). Reuses the shared
         wall marks (same frame the walls overlay runs on); no warm prefix / S/R. 15m ONLY. Self-gated, fail-safe."""
         if (not self.menu.layer_state("m10_momentum") or self.scanner_mode != "bucket_canvas"
-                or self._tf != "15m"):
+                or self._tf != "15m" or self._hide_candles):   # Ctrl+H hides strategies
             self._clear_momentum(); return
         n = len(filtered)
         _off = 0                                                     # WALL version detects over `filtered` directly (no warm prefix)
@@ -7968,7 +8048,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         WALL / radar context (bounce off a wall), so the shared warm-up prefix is prepended and indices shifted back.
         Engulf -> green/red or gold triangle; absorb2 sequence -> blue/orange triangle; 1m-finish ring on top. 5m ONLY."""
         if (not self.menu.layer_state("m10_engulf5m") or self.scanner_mode != "bucket_canvas"
-                or self._tf != "5m"):
+                or self._tf != "5m" or self._hide_candles):   # Ctrl+H hides strategies
             self._clear_engulf5m(); return
         n = len(filtered)
         warm = getattr(self, "_mmx_warm", None) or []
@@ -9211,6 +9291,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 except Exception:
                     self._clear_radarrun()
                 try:
+                    self._draw_htf_radarrun("4h", _pf or [])  # 4h Radar Runner signals on lower tfs — self-gated
+                    self._draw_htf_radarrun("1h", _pf or [])  # 1h Radar Runner signals on lower tfs — self-gated
+                except Exception:
+                    self._clear_htf_radarrun()
+                try:
                     self._draw_wall_strategy(_pf or [])  # Wall Strategy (5m) — self-gated, fail-safe
                 except Exception:
                     self._clear_wall_strategy()
@@ -9315,6 +9400,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_radarrun(filtered)  # Radar Runner (5m/15m/1h) — self-gated, fail-safe
             except Exception:
                 self._clear_radarrun()
+            try:
+                self._draw_htf_radarrun("4h", filtered)  # 4h Radar Runner signals on lower tfs — self-gated
+                self._draw_htf_radarrun("1h", filtered)  # 1h Radar Runner signals on lower tfs — self-gated
+            except Exception:
+                self._clear_htf_radarrun()
             try:
                 self._draw_wall_strategy(filtered)  # Wall Strategy (5m) — self-gated, fail-safe
             except Exception:

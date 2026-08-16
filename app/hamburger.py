@@ -503,6 +503,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             if key == "m10_radarrun":
                 self._build_radarrun_subtoggle(sec)      # Radar Runner sub-toggle: high-conviction order-flow filter (gold ring)
                 self._build_radarrun_absorb_subtoggle(sec)  # + 'absorbed only' filter (A>=0, drop the easy fizzles)
+                self._build_radarrun_htf_subtoggles(sec)  # + 1h / 4h signals on lower tfs (colour-matched to the htf walls)
             if key == "m10_stats":
                 self._build_stats_substats(sec)          # per-stat on/off for the Mode-10 stats box
         return sec
@@ -532,6 +533,20 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         cb.toggled.connect(lambda on, k="m10_radarrun_abs": self.layerToggled.emit(k, on))
         self.layer_checks["m10_radarrun_abs"] = cb
         section.addWidget(cb)
+
+    def _build_radarrun_htf_subtoggles(self, section) -> None:
+        """Radar Runner sub-toggles: overlay the HIGHER-timeframe Radar Runner SIGNALS on the current lower-tf chart —
+        1h signals (on 1m/5m/15m/30m) and 4h signals (on 1m/5m/15m/30m/1h) — each coloured to MATCH that htf's walls
+        (4h neon violet/green, 1h orange/blue), so an htf breakout is visible while you trade a lower tf. Each an m10_
+        key (persists + reads via layer_state); default OFF. Badge only (no click bracket)."""
+        for key, label in (("m10_radarrun_1h", "· 1h Signals (on lower tfs)"),
+                           ("m10_radarrun_4h", "· 4h Signals (on lower tfs)")):
+            cb = QtWidgets.QCheckBox(label)
+            cb.setChecked(False)                             # default OFF
+            cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
+            self.layer_checks[key] = cb
+            section.addWidget(cb)
 
     def _build_reward_subtoggle(self, section) -> None:
         """Reward/effort sub-toggle: draw a horizontal ZONE on the chart where the rolling reward-per-effort side FLIPS
