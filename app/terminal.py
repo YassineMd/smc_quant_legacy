@@ -5689,8 +5689,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return self._absorblvl_marks
 
     def _htf_box(self, htf, used, side):
-        """Pooled bold rect for a higher-timeframe wall CORE (±band): per-htf colour (4h neon violet/green, 1h
-        orange/blue), high opacity + border, z=-4 so the HTF wall reads over the current-tf wall zones. Its radar
+        """Pooled rect for a higher-timeframe wall CORE (±band): per-htf colour (4h neon violet/green, 1h
+        orange/blue), FILL ONLY (no border), z=-4 so the HTF wall reads over the current-tf wall zones. Its radar
         extremes (±3·band) show as dashed lines on hover."""
         pool = self._htf_box_pool[htf]
         if used >= len(pool):
@@ -5698,7 +5698,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.vb.addItem(_rc, ignoreBounds=True); pool.append(_rc)
         _rc = pool[used]
         rgb = self._HTF_COLORS[htf]["R" if side == "R" else "S"]
-        _rc.setBrush(pg.mkBrush(*rgb, 90)); _rc.setPen(pg.mkPen(*rgb, 230, width=1.4))
+        _rc.setBrush(pg.mkBrush(*rgb, 110)); _rc.setPen(pg.mkPen(None))   # fill only, no border (slightly bumped so it still reads)
         return _rc
 
     def _hide_htf_walls(self, htf=None) -> None:
