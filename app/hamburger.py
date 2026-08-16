@@ -111,6 +111,7 @@ _M10_INDICATORS = [
     ("m10_sr", "Support & Resistance", False, True),      # neon-blue support / neon-red resistance (pivot fractals)
     ("m10_keltner", "Keltner Channel", True, True),        # EMA(close)±ATR band (light gray); was always-on, now toggleable
     ("m10_poc_baseline", "POC Baseline", True, True),      # gray dashed POC-center EMA line; was always-on, now toggleable
+    ("m10_daysep", "Day Separators (dashed)", True, True),   # default ON: dashed gray-blue vline at every UTC-midnight day boundary (all tf)
     ("m10_vwap", "VWAP", False, True),                     # daily-anchored (UTC-midnight reset) volume-weighted avg price — BLUE line
     ("m10_swinglvn", "Price & CVD Swings", False, True),   # ALL tf: ZigZag swing lines + swing absorb-A + retracement verdict; LVN zones sub-toggle
     ("m10_reversal", "Reversal Point (R/G ▲▼)", False, True),   # ALL tf: early/predictive swing reversal (candle-3 hammer + choppy approach + capitulation); green ▲ swing-low / red ▼ swing-high; strong = bigger

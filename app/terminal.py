@@ -1266,6 +1266,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._pvp_hist_pool = []      # per-day VP histograms (horizontal BarGraphItems)
         self._pvp_line_pool = []      # per-day POC/VAH/VAL/median/LVN level lines (PlotCurveItems)
         self._pvp_sep_pool = []       # per-day UTC-midnight separators (dashed vlines)
+        self._daysep_pool = []; self._daysep_sig = None   # DAY SEPARATORS (m10_daysep, default ON): dashed UTC-midnight vlines, all tf
         self._sess_rect_pool = []     # Session Filter: per-session translucent boxes (QGraphicsRectItem)
         self._sess_line_pool = []     # Session Filter: dashed high / low / avg(VWAP) lines (PlotCurveItem)
         self._sess_lbl_pool = []      # Session Filter: 'Range / Avg / name' labels (TextItem)
@@ -2360,6 +2361,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif key == "m10_prevday_vp":
             if not on:                              # per-prev-day VP -> hide now (draw-gate re-adds on ON)
                 self._hide_prevday_vp()
+        elif key == "m10_daysep":
+            self._daysep_sig = None                 # Day Separators toggled -> re-place on the next frame
+            if not on:
+                self._hide_day_separators()         # off -> tear the vlines down now
         elif key == "m10_session":
             if not on:                              # session boxes -> hide now (draw-gate re-adds on ON)
                 self._hide_session()
@@ -5000,6 +5005,41 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _c.setVisible(False)
         for _s in self._pvp_sep_pool:
             _s.setVisible(False)
+
+    # DAY SEPARATORS (m10_daysep, default ON) — a dashed vertical line at every UTC-midnight day boundary on the bucket
+    # canvas, ALL tf. SAME style as the Prev-Day-VP separators (gray-blue, dashed [2,6], z=13). Cached per frame.
+    def _daysep_line(self, used):
+        if used >= len(self._daysep_pool):
+            _pn = pg.mkPen(color=(150, 158, 175, 120), width=1); _pn.setCosmetic(True)
+            _pn.setDashPattern([2.0, 6.0])
+            _ln = pg.InfiniteLine(angle=90, movable=False, pen=_pn); _ln.setZValue(13)
+            self.plot.addItem(_ln, ignoreBounds=True); self._daysep_pool.append(_ln)
+        return self._daysep_pool[used]
+
+    def _hide_day_separators(self) -> None:
+        for _l in self._daysep_pool:
+            _l.setVisible(False)
+        self._daysep_sig = None
+
+    def _draw_day_separators(self, buckets) -> None:
+        """Dashed vertical line at every UTC-midnight day boundary (the first bucket of each new UTC day), bucket canvas,
+        ALL tf. Same style as the Prev-Day-VP separators. Default ON (m10_daysep); cached by frame signature."""
+        if not self.menu.layer_state("m10_daysep") or self.scanner_mode != "bucket_canvas" or not buckets:
+            self._hide_day_separators(); return
+        n = len(buckets)
+        sig = (n, float(buckets[0].get("start_time", 0.0) or 0.0), float(buckets[-1].get("start_time", 0.0) or 0.0))
+        if sig == self._daysep_sig:
+            return                                        # same frame -> pooled lines already placed
+        self._daysep_sig = sig
+        us = 0; prev_day = None
+        for i, b in enumerate(buckets):
+            d = int(float(b.get("start_time", 0.0) or 0.0) // 86400.0)   # UTC day index (epoch is UTC-based)
+            if prev_day is not None and d != prev_day and i > 0:         # day changed -> boundary at this bucket's left edge
+                _ln = self._daysep_line(us); us += 1
+                _ln.setValue(float(i)); _ln.setVisible(True)
+            prev_day = d
+        for _l in self._daysep_pool[us:]:                 # hide leftovers from a denser previous frame
+            _l.setVisible(False)
 
     @staticmethod
     def _pvp_force_agg(day_bkts):
@@ -13554,6 +13594,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_prevday_vp(buckets)                         # per-previous-UTC-day Volume Profile (m10_prevday_vp)
         except Exception:
             self._hide_prevday_vp()
+        try:
+            self._draw_day_separators(buckets)                     # dashed UTC-midnight day separators (m10_daysep, default ON)
+        except Exception:
+            self._hide_day_separators()
         try:
             self._draw_session(buckets, x, vx0, vx1)               # per-session Tokyo/London/NY boxes (m10_session)
         except Exception:
