@@ -181,7 +181,11 @@ CANDLE_MODE_LABELS = ["Normal candles", "Whisker bars", "Footprint", "Delta", "F
 # "VP Zones" (8) is line-only: the Price&CVD-Swings VA Zones — buy-POC green / sell-POC red / LVN purple, plus
 # VAH/VAL white solid, no histogram.
 VP_MODE_LABELS = ["Basic", "Force", "Split Basic", "Split Basic Delta", "Split Force", "Split Force Delta",
-                  "Basic Bulls", "Basic Bears", "VP Zones"]
+                  "Basic Bulls", "Basic Bears", "VP Zones", "Basic Delta"]
+# Dropdown DISPLAY order (mode VALUES, not positions). "Basic Delta" (9) is a right-only net-delta histogram, so it is
+# shown with the other right-only delta modes (Bulls/Bears) instead of last. Appending 9 to the label list keeps every
+# existing index — and the persisted _vp_mode — stable; the combo carries the VALUE as userData, so order != value.
+VP_MODE_ORDER = [0, 1, 2, 3, 4, 5, 9, 6, 7, 8]
 
 
 class _WheelSlider(QtWidgets.QSlider):
@@ -358,8 +362,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         # --- volume-profile render mode (drives BOTH the Mode-10 selection VP and the 4h 'V' overlay) ---
         root.addWidget(self._header("Volume Profile Mode"))
         self.vp_combo = QtWidgets.QComboBox()
-        for i, lbl in enumerate(VP_MODE_LABELS):
-            self.vp_combo.addItem(lbl, i)
+        for m in VP_MODE_ORDER:
+            self.vp_combo.addItem(VP_MODE_LABELS[m], m)          # userData = mode VALUE (display order != value)
         self.vp_combo.setToolTip("How volume profiles are drawn — applies to the Mode-10 selection VP and the 4h 'V' overlay.")
         self.vp_combo.currentIndexChanged.connect(
             lambda _i: self.vpModeChanged.emit(int(self.vp_combo.currentData())))
@@ -869,7 +873,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     def set_vp_mode(self, m: int) -> None:
         """Sync the Volume-Profile-Mode dropdown to `m` WITHOUT emitting (on restore)."""
         self.vp_combo.blockSignals(True)
-        self.vp_combo.setCurrentIndex(int(m) % self.vp_combo.count())
+        _i = self.vp_combo.findData(int(m))                      # select by mode VALUE (display order != value)
+        self.vp_combo.setCurrentIndex(_i if _i >= 0 else 0)
         self.vp_combo.blockSignals(False)
 
     # ------------------------------------------------------------------

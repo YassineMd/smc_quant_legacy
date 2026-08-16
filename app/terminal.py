@@ -1698,7 +1698,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # PANEL 0 ('0') — a SMOOTHED twin of Panel 9: each line = (current + locked)/2. Identical items/colors.
         self.show_panel0 = True
         self._candle_mode = 0            # 'W' cycle: 0 normal>1 whisker>2 footprint>3 delta>4 force>5 delta-force (persisted)
-        self._vp_mode = 1                # volume-profile mode 0..8 (default 1 = Force; 8 = VP Zones VA-zone lines; persisted)
+        self._vp_mode = 1                # volume-profile mode 0..9 (default 1 = Force; 8 = VP Zones lines, 9 = Basic Delta; persisted)
         self._hide_candles = False       # Ctrl+H — hide the candle glyphs (see the VP / zones without candle noise; persisted)
         _gp0_hi = pg.mkPen("#ff9800", width=0.8); _gp0_hi.setCosmetic(True); _gp0_hi.setDashPattern([5.0, 10.0])
         _gp0_lo = pg.mkPen("#ff9800", width=0.8); _gp0_lo.setCosmetic(True); _gp0_lo.setDashPattern([5.0, 10.0])
@@ -3927,7 +3927,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _on_vp_mode(self, m: int) -> None:
         """Hamburger 'Volume Profile Mode' dropdown changed -> re-render the selection VP + the 4h 'V' overlay."""
-        self._vp_mode = int(m) % 9       # 9 VP modes (0..8; 8 = VP Zones, line-only)
+        self._vp_mode = int(m) % 10      # 10 VP modes (0..9; 8 = VP Zones line-only, 9 = Basic Delta)
         self._save_ui_state()
         self._sel_sig = None                         # force the Mode-10 selection VP to redraw
         if self._z4_last_buckets:                    # re-render the 4h V overlay immediately
@@ -6402,7 +6402,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._candle_mode = int(_cm) % 6
         _vm = s.get("vp_mode")
         if isinstance(_vm, (int, float)):
-            self._vp_mode = int(_vm) % 9
+            self._vp_mode = int(_vm) % 10
         self._hide_candles = bool(s.get("hide_candles", self._hide_candles))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
         for _k, _v in (s.get("phase") or {}).items():
@@ -6608,8 +6608,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         right / sell red left), 3 Split Basic Delta (net delta signed), 4 Split Force (opL green+clS cyan right /
         opS red+clL magenta left), 5 Split Force Delta (net delta signed, dominant-force colour), 6 Basic Bulls
         (right, net-BUY delta only = bull-dominant price zones, green), 7 Basic Bears (right, net-SELL delta only
-        = bear-dominant zones, red). 6 & 7 share the max|delta| scale so the two are directly comparable.
-        Mode 8 (VP Zones) is line-only (the caller draws the VA-zone lines instead) -> no histogram bars here."""
+        = bear-dominant zones, red). 6 & 7 share the max|delta| scale so the two are directly comparable. 9 Basic
+        Delta (right, |net delta| bar, green buy / red sell = Bulls+Bears combined; the un-split sibling of 3, on the
+        max|delta| scale). Mode 8 (VP Zones) is line-only (the caller draws the VA-zone lines instead) -> no bars here."""
         x0s = []; ws = []; ys = []; hs = []; brs = []
         if mode == 8:
             return x0s, ws, ys, hs, brs
@@ -6625,9 +6626,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             lv.append((pr, oL, oS, cL, cS, buy, sell, tot, buy - sell, max(range(4), key=lambda k: a[k])))
         if not lv:
             return x0s, ws, ys, hs, brs
-        if mode in (0, 1, 6, 7):                               # RIGHT-only histograms
-            if mode in (6, 7):                                 # delta-filtered basic: one side's NET-dominant zones,
-                vmax = max(abs(r[8]) for r in lv) or 1.0       # shared max|delta| scale -> the two are comparable
+        if mode in (0, 1, 6, 7, 9):                            # RIGHT-only histograms
+            if mode in (6, 7, 9):                              # delta modes (Bulls/Bears/Basic Delta): NET delta,
+                vmax = max(abs(r[8]) for r in lv) or 1.0       # shared max|delta| scale -> all directly comparable
             else:                                              # 0 basic / 1 force -> TOTAL volume
                 vmax = max(r[7] for r in lv) or 1.0
             sc = (0.40 * span) / vmax
@@ -6636,6 +6637,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _add(x0, d * sc, pr, self._VP_GREEN)       # d<=0 -> width<=0 -> skipped by _add (not bull-dominant)
                 elif mode == 7:                                # BEARS: only net-sell levels (d<0), red bar = |delta|
                     _add(x0, -d * sc, pr, self._VP_RED)        # d>=0 -> width<=0 -> skipped by _add (not bear-dominant)
+                elif mode == 9:                                # BASIC DELTA: right-only |net delta|, green buy / red sell
+                    _add(x0, abs(d) * sc, pr, self._VP_GREEN if d >= 0 else self._VP_RED)
                 else:
                     col = (self._VP_GREEN if buy >= sell else self._VP_RED) if mode == 0 else self._VP_FCOL[dom]
                     _add(x0, tot * sc, pr, col)
