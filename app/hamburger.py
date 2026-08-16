@@ -145,6 +145,7 @@ _M10_STRATEGIES = [
     ("m10_radarrun", "★ Radar Runner (L / S triangles · 1m·5m·15m·1h)", False, True),  # resisted-wall radar BREAKOUT + tiered TP1/2/3; the one recon-validated edge (net+ both yrs, causal-checked). ⚠ 1m sub-fee/eyeball-only
     ("m10_nyrangebreak", "NY Range-break (brB / brS · 1h·15m)", False, True),  # 1h/15m: 2-5pm range box + first close-break label; SHORT side alpha in-sample (P=0.003)
     ("m10_wallstrat", "Wall Strategy (L / S triangles)", False, True),  # 5m: wall visit w/ Big|Crazy absorption + favourable tally + Easy Gold/Pure Aggression entry; NOT backtested
+    ("m10_kcovershoot", "KC Overshoot 2nd-Entry (L / S triangles)", False, True),  # ALL tf: close beyond a Keltner extreme -> pullback (re-enter band) -> 1st entry (skip) -> 2nd entry = continuation signal; overshoot diamond + 1st-entry ring + 2nd-entry triangle. UNTESTED
 ]
 
 # Order-flow scanner — the authoritative 10-mode bucket architecture (time chart removed, Phase B).

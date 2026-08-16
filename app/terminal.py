@@ -1375,6 +1375,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         #                                                        a confirmed breakout never un-fires when the walls re-detect
         self._rr_htf_sph = {}                                  # HTF Radar Runner SIGNALS (m10_radarrun_1h/_4h): per-htf ScatterPlotItem
         self._rr_htf_sig = {}; self._rr_htf_marks = {}         # cached detect() per htf, re-run only on an htf-data change
+        self._kco_sph = None; self._kco_ctx = None             # KC Overshoot 2nd-Entry (m10_kcovershoot): signal triangles + context marks
+        self._kco_sig = None                                   # cache sig (closed-bar detect -> re-run only on a data change)
         # '5m Breakout' indicator (m10_breakout5m) — squared 'Br' badges on S/R-breakout (mitigation) candles, 5m ONLY.
         self._brk5m_grn_pool = []                # green 'Br' TextItems (up-break / resistance mitigated), grown lazily
         self._brk5m_red_pool = []                # red 'Br' TextItems (down-break / support mitigated), grown lazily
@@ -2314,6 +2316,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._rr_htf_sig[_h] = None                  # HTF Radar Runner signals toggled -> re-detect + redraw next frame
             if not on:
                 self._clear_htf_radarrun(_h)             # off -> tear those htf badges down now
+        elif key == "m10_kcovershoot":
+            self._kco_sig = None                         # KC Overshoot 2nd-Entry toggled -> re-detect + redraw next frame
+            if not on:
+                self._clear_kc_overshoot()               # off -> tear the marks down now
         elif key == "m10_reversal":
             self._revpt_sig = None                       # Reversal Point toggled -> re-run the overlay draw
             if not on:
@@ -7583,6 +7589,60 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                           "pen": pg.mkPen(*_pen_rgb, width=1.5), "size": 22})
         _sph.setData(spots); _sph.setVisible(True)
 
+    # KC OVERSHOOT 2nd-ENTRY overlay (m10_kcovershoot, ALL tf) — a close beyond a Keltner extreme -> pullback (re-enter
+    # band) -> 1st entry (skip) -> 2nd entry = the continuation signal (app/kc_overshoot_detect). Marks: overshoot
+    # diamond + 1st-entry hollow ring + 2nd-entry FILLED triangle (the trade). Green ▲ long / red ▼ short.
+    def _clear_kc_overshoot(self) -> None:
+        if self._kco_sph is not None:
+            self._kco_sph.setVisible(False)
+        if self._kco_ctx is not None:
+            self._kco_ctx.setVisible(False)
+        self._kco_sig = None
+
+    def _draw_kc_overshoot(self, filtered) -> None:
+        if (not self.menu.layer_state("m10_kcovershoot") or self.scanner_mode != "bucket_canvas"
+                or self._hide_candles or not filtered):                    # a Strategy overlay -> Ctrl+H hides it too
+            self._clear_kc_overshoot(); return
+        n = len(filtered)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        sig = (n, _forming, self._tf, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        if sig == self._kco_sig:
+            return
+        self._kco_sig = sig
+        try:
+            from app import kc_overshoot_detect
+            events = kc_overshoot_detect.detect(filtered, skip_last=_forming)
+        except Exception:
+            self._clear_kc_overshoot(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.04, 1e-9)
+        GRN, RED = (40, 230, 120), (240, 70, 90)
+        if self._kco_sph is None:
+            self._kco_sph = pg.ScatterPlotItem(pxMode=True); self._kco_sph.setZValue(33)
+            self.plot.addItem(self._kco_sph, ignoreBounds=True)
+        if self._kco_ctx is None:
+            self._kco_ctx = pg.ScatterPlotItem(pxMode=True); self._kco_ctx.setZValue(32)
+            self.plot.addItem(self._kco_ctx, ignoreBounds=True)
+        spots = []; ctx = []
+        for e in events:
+            side = int(e.get("side", 0)); i2 = int(e.get("i_e2", -1)); i1 = int(e.get("i_e1", -1)); io = int(e.get("i_over", -1))
+            if side == 0 or not (0 <= i2 < n):
+                continue
+            col = GRN if side > 0 else RED; _pen_rgb = [int(c * 0.55) for c in col] + [255]
+            b2 = filtered[i2]; hi2 = float(b2.get("high", 0.0) or 0.0); lo2 = float(b2.get("low", 0.0) or 0.0)
+            y2 = (lo2 - pad) if side > 0 else (hi2 + pad)              # LONG ▲ below / SHORT ▼ above the 2nd-entry bar
+            spots.append({"pos": (i2, y2), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
+                          "pen": pg.mkPen(*_pen_rgb, width=1.4), "size": 20})
+            if 0 <= i1 < n:                                            # 1st entry -> hollow ring (context, NOT traded)
+                b1 = filtered[i1]
+                y1 = (float(b1.get("low", 0.0) or 0.0) - pad) if side > 0 else (float(b1.get("high", 0.0) or 0.0) + pad)
+                ctx.append({"pos": (i1, y1), "symbol": "o", "brush": pg.mkBrush(0, 0, 0, 0),
+                            "pen": pg.mkPen(*col, 200, width=1.3), "size": 11})
+            if 0 <= io < n:                                            # overshoot bar -> small diamond at its close
+                ctx.append({"pos": (io, float(filtered[io].get("close", 0.0) or 0.0)), "symbol": "d",
+                            "brush": pg.mkBrush(*col, 150), "pen": pg.mkPen(*col, 190, width=1.0), "size": 8})
+        self._kco_sph.setData(spots); self._kco_sph.setVisible(True)
+        self._kco_ctx.setData(ctx); self._kco_ctx.setVisible(True)
+
     # NY RANGE-BREAK overlay (hamburger m10_nyrangebreak, 1h + 15m) — self-gated, fail-safe. Drawn in the main candle
     # renderer beside the session boxes, so it culls to the viewport and follows pans. Draws the NY 2-5pm (13-16 UTC)
     # range as a faint neutral box + dashed rhi/rlo edges projected to the break, and marks the first 1h close beyond
@@ -9308,7 +9368,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     or self.menu.layer_state("m10_breakout5m") or self.menu.layer_state("m10_engulf1m")
                     or self.menu.layer_state("m10_easy1h") or self.menu.layer_state("m10_crazywall")
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")
-                    or self.menu.layer_state("m10_wallstrat") or self.menu.layer_state("m10_radarrun")):
+                    or self.menu.layer_state("m10_wallstrat") or self.menu.layer_state("m10_radarrun")
+                    or self.menu.layer_state("m10_kcovershoot")):
                 _pf = _pf0                          # already built above; the top gate decided this frame needs a redraw
                 try:
                     self._draw_engulfsr(_pf or [])  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
@@ -9335,6 +9396,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_htf_radarrun("1h", _pf or [])  # 1h Radar Runner signals on lower tfs — self-gated
                 except Exception:
                     self._clear_htf_radarrun()
+                try:
+                    self._draw_kc_overshoot(_pf or [])  # KC Overshoot 2nd-Entry (all tf) — self-gated, fail-safe
+                except Exception:
+                    self._clear_kc_overshoot()
                 try:
                     self._draw_wall_strategy(_pf or [])  # Wall Strategy (5m) — self-gated, fail-safe
                 except Exception:
@@ -9445,6 +9510,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_htf_radarrun("1h", filtered)  # 1h Radar Runner signals on lower tfs — self-gated
             except Exception:
                 self._clear_htf_radarrun()
+            try:
+                self._draw_kc_overshoot(filtered)  # KC Overshoot 2nd-Entry (all tf) — self-gated, fail-safe
+            except Exception:
+                self._clear_kc_overshoot()
             try:
                 self._draw_wall_strategy(filtered)  # Wall Strategy (5m) — self-gated, fail-safe
             except Exception:
