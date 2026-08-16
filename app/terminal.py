@@ -10755,7 +10755,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _replay_follow(self, prev_n: int, pvx0: float, pvx1: float, pvy0: float, pvy1: float) -> None:
         """After a Left/Right replay step, TRACK the newest candle while KEEPING the user's zoom on BOTH axes.
-        X slides so the newest candle holds its exact offset from the right edge (same width). Y pans only when the
+        X: anchored at the window start -> GROW (the first candle stays put, the chart accumulates); zoomed/scrolled in
+        -> slide so the newest candle holds its offset from the right edge (same width). Y pans only when the
         newest candle enters the TOP or BOTTOM 25% band of the window, re-seating it just inside that band — so the
         price stays in the middle 50% as you step — while preserving the user's zoom height. Runs on EVERY replay
         step regardless of the follow-lock, and UNLOCKS both axes afterwards so the live-edge roll (which fits the
@@ -10766,13 +10767,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         new_n = self._scanner_frame_n
         if new_n <= 0:
             return
-        # --- X: keep the newest candle's exact horizontal placement (its offset from the right edge + the width) ---
+        # --- X: reveal the newest candle. If the user is anchored at the window START, GROW (keep the first candle put
+        #     so a Right step ACCUMULATES instead of dropping the leftmost); if they have zoomed/scrolled in, hold their
+        #     width and follow the newest (the prior behaviour). ---
         if prev_n > 0:
             width = pvx1 - pvx0
             if width > 0:
                 off_right = pvx1 - (prev_n - 1)                  # gap the user left to the right of the cursor
-                vx1 = (new_n - 1) + off_right                    # re-anchor to the newest candle's current index
-                self.vb.setXRange(vx1 - width, vx1, padding=0)   # programmatic -> won't trip the manual-unlock
+                vx1 = (new_n - 1) + off_right                    # newest candle's current index + the same right gap
+                if pvx0 <= 1.0:                                  # at the first candle -> keep it, just extend the right edge
+                    self.vb.setXRange(pvx0, vx1, padding=0)      # GROW: left edge stays, chart widens with each new bar
+                else:
+                    self.vb.setXRange(vx1 - width, vx1, padding=0)   # zoomed/scrolled in -> keep width, track the newest
         # --- Y: keep the user's zoom HEIGHT; pan when the newest candle enters the top/bottom 25% band ---
         if self._scanner_last_low is not None and self._scanner_last_high is not None:
             h = pvy1 - pvy0
