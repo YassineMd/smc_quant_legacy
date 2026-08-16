@@ -12,7 +12,7 @@ reward zones recalculate live as any line is dragged, color-graded teal/orange/
 red by ratio (spec §8.3).
 
 Other tools: Trend Line, Extended Ray, Horizontal, Vertical, Rectangle, Ellipse,
-Measure %, Eraser, Delete All.
+Zone (infinite rectangle — extends right), Eraser, Delete All.
 """
 
 from __future__ import annotations
@@ -29,10 +29,10 @@ from . import config
 from .chart_widgets import RoundedTextItem
 
 TOOLS = ["select", "magic_select", "trend", "ray", "hline", "vline", "rect", "ellipse",
-         "measure", "long", "short", "eraser", "delete_all", "undo", "redo"]
+         "zone", "long", "short", "eraser", "delete_all", "undo", "redo"]
 _LABELS = {
     "select": "↖️", "magic_select": "🪄", "trend": "📏", "ray": "↗️", "hline": "➖", "vline": "｜",
-    "rect": "🔲", "ellipse": "⭕", "measure": "📐", "long": "📈", "short": "📉",
+    "rect": "🔲", "ellipse": "⭕", "zone": "🟦", "long": "📈", "short": "📉",
     "eraser": "🧽", "delete_all": "🗑️", "undo": "↩️", "redo": "↪️",
 }
 _TOOLTIPS = {
@@ -40,14 +40,14 @@ _TOOLTIPS = {
     "magic_select": "Magic Selection — box a Mode-10 region for aggregated stats",
     "trend": "Trend Line", "ray": "Extended Ray",
     "hline": "Horizontal Line", "vline": "Vertical Line", "rect": "Rectangle",
-    "ellipse": "Ellipse", "measure": "Measure %", "long": "Long Position",
+    "ellipse": "Ellipse", "zone": "Zone — infinite rectangle (extends right)", "long": "Long Position",
     "short": "Short Position", "eraser": "Eraser", "delete_all": "Delete All",
     "undo": "Undo — restore the last draw / move / delete (Ctrl+Z is the Selection VP)",
     "redo": "Redo the undone step",
 }
 # One-shot ACTIONS, not drawing modes: they fire and must never stay latched like a tool.
 _ACTION_TOOLS = {"delete_all", "undo", "redo"}
-_SHAPE_TWO_POINT = {"trend", "ray", "rect", "ellipse", "measure"}
+_SHAPE_TWO_POINT = {"trend", "ray", "rect", "ellipse", "zone"}
 _POSITION_TOOLS = {"long", "short"}
 _PRESET_COLORS = ["#ffffff", "#000000", "#2962ff", "#e74c3c", "#1abc9c", "#f1c40f", "#9b59b6", "#ff7f0e"]
 _DRAW_FILE = os.path.join(config.DATA_DIR, "drawings.json")
@@ -131,8 +131,8 @@ class DrawnShape(pg.GraphicsObject):
                 pen.setStyle(QtCore.Qt.DashLine)
             p.setPen(pen)
         p.setFont(QtGui.QFont("Consolas", 8))
-        # interior fill for closed shapes (rect/ellipse); outline-only when opacity is 0
-        if self.kind in ("rect", "ellipse") and self.fill_opacity > 0:
+        # interior fill for closed shapes (rect/ellipse/zone); outline-only when opacity is 0
+        if self.kind in ("rect", "ellipse", "zone") and self.fill_opacity > 0:
             fc = QtGui.QColor(self.fill_color); fc.setAlphaF(self.fill_opacity)
             p.setBrush(fc)
         else:
@@ -149,17 +149,17 @@ class DrawnShape(pg.GraphicsObject):
                 x1 = x0 + (x1 - x0) * 1e6
                 y1 = y0 + slope * (x1 - x0)
                 p.drawLine(QtCore.QPointF(x0, y0), QtCore.QPointF(x1, y1))
-            elif self.kind in ("trend", "measure"):
+            elif self.kind == "trend":
                 p.drawLine(QtCore.QPointF(x0, y0), QtCore.QPointF(self.pts[1][0], self.pts[1][1]))
-                if self.kind == "measure":
-                    dp = self.pts[1][1] - y0
-                    pct = (dp / y0 * 100) if y0 else 0.0
-                    p.drawText(QtCore.QPointF(self.pts[1][0], self.pts[1][1]), f"{dp:+.2f} ({pct:+.2f}%)")
-                elif self._pct_label is not None:   # trend: always-POSITIVE % change in a fixed-size child label
+                if self._pct_label is not None:   # trend: always-POSITIVE % change in a fixed-size child label
                     pct = (abs(self.pts[1][1] - y0) / y0 * 100) if y0 else 0.0
                     self._pct_label.setColor(self.color)
                     self._pct_label.setText(f"{pct:.2f}%")
                     self._pct_label.setPos(self.pts[1][0], self.pts[1][1])
+            elif self.kind == "zone":            # INFINITE-RIGHT rectangle: the price band [ylo, yhi] from the drawn
+                xl = min(x0, self.pts[1][0])     # left edge extended to +inf (border on left/top/bottom; right off-screen)
+                ylo = min(y0, self.pts[1][1]); yhi = max(y0, self.pts[1][1])
+                p.drawRect(QtCore.QRectF(xl, ylo, 1e7, yhi - ylo))
             elif self.kind == "rect":
                 p.drawRect(QtCore.QRectF(x0, y0, self.pts[1][0] - x0, self.pts[1][1] - y0))
             elif self.kind == "ellipse":
@@ -172,6 +172,8 @@ class DrawnShape(pg.GraphicsObject):
             _sl = (self.pts[1][1] - self.pts[0][1]) / (self.pts[1][0] - self.pts[0][0])
             _xe = self.pts[0][0] + (self.pts[1][0] - self.pts[0][0]) * 1e6
             xs.append(_xe); ys.append(self.pts[0][1] + _sl * (_xe - self.pts[0][0]))
+        if self.kind == "zone" and len(self.pts) >= 2:       # culling rect must cover the infinite-right fill (else the
+            xs.append(min(self.pts[0][0], self.pts[1][0]) + 1e7)   # zone vanishes when panned right past the drawn box
         self._rect = QtCore.QRectF(min(xs), min(ys), max(1.0, max(xs) - min(xs)),
                                    max(1e-6, max(ys) - min(ys)))
         self.prepareGeometryChange(); self.update()
@@ -191,11 +193,14 @@ class DrawnShape(pg.GraphicsObject):
         if self.kind == "rect":
             return (min(x0, x1) - tol_x <= x <= max(x0, x1) + tol_x
                     and min(y0, y1) - tol_y <= y <= max(y0, y1) + tol_y)
+        if self.kind == "zone":                           # infinite-right: in the price band AND at/right of the left edge
+            return (x >= min(x0, x1) - tol_x
+                    and min(y0, y1) - tol_y <= y <= max(y0, y1) + tol_y)
         if self.kind == "ellipse":
             cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
             rx = abs(x1 - x0) / 2.0 + tol_x; ry = abs(y1 - y0) / 2.0 + tol_y
             return ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1.0
-        # trend / measure / ray: distance to the segment in TOLERANCE-normalized space (so the
+        # trend / ray: distance to the segment in TOLERANCE-normalized space (so the
         # hit band is tol_x wide horizontally and tol_y vertically regardless of zoom/aspect)
         ax, ay = (x - x0) / tol_x, (y - y0) / tol_y
         bx, by = (x1 - x0) / tol_x, (y1 - y0) / tol_y
@@ -714,7 +719,7 @@ class ShapeEditPanel(QtWidgets.QFrame):
 
     def bind(self, shape: "DrawnShape") -> None:
         self.target = shape
-        fillable = shape.kind in ("rect", "ellipse")     # fill + 0-border only for closed shapes
+        fillable = shape.kind in ("rect", "ellipse", "zone")   # fill + 0-border for closed shapes + the infinite zone
         self.spin.blockSignals(True)
         self.spin.setMinimum(0 if fillable else 1)        # rect/ellipse may have NO border (width 0)
         self.spin.setValue(shape.width)
@@ -796,7 +801,7 @@ class ShapeEditPanel(QtWidgets.QFrame):
 class ShapeHandles(QtCore.QObject):
     """Draggable dot handles for the selected :class:`DrawnShape`. Per kind:
     rect -> 4 corners + 4 edge-midpoints (corners = diagonal resize, edges = one side);
-    ellipse -> center (move) + corner (resize); trend/ray/measure -> 2 endpoints;
+    ellipse -> center (move) + corner (resize); trend/ray/zone -> 2 endpoints;
     h/v-line -> 1 position handle. Drag updates the shape live; persists on release."""
 
     changed = QtCore.Signal()   # emitted on drag-release -> controller persists
@@ -847,7 +852,7 @@ class ShapeHandles(QtCore.QObject):
         if len(s.pts) < 2:
             return []
         (x0, y0), (x1, y1) = s.pts[0], s.pts[1]
-        if k in ("trend", "ray", "measure"):
+        if k in ("trend", "ray", "zone"):
             return [(x0, y0, "p0"), (x1, y1, "p1")]
         if k == "ellipse":
             return [((x0 + x1) / 2.0, (y0 + y1) / 2.0, "center"), (x1, y1, "corner")]
@@ -1211,6 +1216,9 @@ class DrawingController(QtCore.QObject):
         if kind == "rect":
             return DrawnShape(kind, pts, color="#ffffff", width=0,
                               fill_color="#ffffff", fill_opacity=0.1)
+        if kind == "zone":                               # infinite-right zone: translucent blue band + thin border
+            return DrawnShape(kind, pts, color="#2962ff", width=1,
+                              fill_color="#2962ff", fill_opacity=0.15)
         return DrawnShape(kind, pts)
 
     def _new_two_point(self, kind: str, pts: list) -> "DrawnShape":
