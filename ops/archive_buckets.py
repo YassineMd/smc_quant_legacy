@@ -39,7 +39,10 @@ DB_DEFAULT = "/home/yassine.mdouari/OrderFlowPlatform/data/history.db"
 GCS_DEFAULT = "gs://smc-quant-archive/solusdt"        # <-- CREATE this bucket + grant the VM SA access
 STATE_DEFAULT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "archive_state.json")
 STAGE_DIR = "/tmp/bucket_archive"                      # local staging before upload (cleaned after)
-TFS = ["1m", "5m", "15m", "1h", "4h"]
+TFS = ["1m", "5m", "15m", "30m", "1h", "4h"]   # 30m added 2026-08-17: it was the ONLY tradeable tf without a cold-archive,
+#                                                so it lacked the deep immutable history the others have -> its walls could
+#                                                re-shape on reload and Radar Runner signals REPAINTED. Archiving it makes
+#                                                30m as stable as 15m/1h (needs a deploy + it accumulates going forward).
 MAX_ROWS_PER_CHUNK = 20000                             # keep a single gz chunk bounded
 
 

@@ -1373,6 +1373,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._rr_ln_pool = []; self._rr_lnlbl_pool = []; self._rr_lines_user = {}
         self._rr_fired = {}; self._rr_fired_tf = None          # PERSIST fired breakouts by bar end_time -> frozen event;
         #                                                        a confirmed breakout never un-fires when the walls re-detect
+        self._rr_audio_seeded = False                          # entry-sound seed: never blast the backlog on first draw / tf-switch
         self._rr_htf_sph = {}                                  # HTF Radar Runner SIGNALS (m10_radarrun_1h/_4h): per-htf ScatterPlotItem
         self._rr_htf_sig = {}; self._rr_htf_marks = {}         # cached detect() per htf, re-run only on an htf-data change
         self._kco_sph = None; self._kco_ctx = None             # KC Overshoot 2nd-Entry (m10_kcovershoot): signal triangles + context marks
@@ -7420,6 +7421,68 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             return False
 
+    def _rr_sound_new(self, new_edge, hc_only, ab_only) -> None:
+        """Beep the instant a NEW Radar Runner breakout freezes on the just-closed live-edge bucket. Shares the one
+        'entry sound' toggle (m10_mmx_sound) + live-only gate with the engulf strategies, and honours the hc/absorbed
+        display sub-toggles so you HEAR exactly the badges you SEE. Buy (up-break) = high pitch, sell (down) = low; a
+        high-conviction breakout gets the distinctive double bell."""
+        if not new_edge or not self.menu.layer_state("m10_mmx_sound"):
+            return
+        if self._replay_on or self._in_recon_replay():
+            return                                   # live-only, matching the engulf entry sound
+        for side, ev in new_edge:
+            if hc_only and not ev.get("hc"):
+                continue                             # 'High conviction only' is on and this one isn't -> not drawn, not heard
+            if ab_only and not ev.get("absorbed"):
+                continue                             # 'Absorbed only' is on and this one isn't -> not drawn, not heard
+            self._mmx_beep(side > 0, bool(ev.get("hc")))
+            return                                   # one bell per new close is enough
+
+    @staticmethod
+    def _rr_persist_path():
+        import os
+        from . import config
+        return os.path.join(config.DATA_DIR, "radarrun_fired.json")
+
+    def _rr_persist_load(self, tf):
+        """Restore CONFIRMED Radar Runner signals for `tf` from disk -> a badge that once fired is shown again on every
+        reload, no matter how the live re-detection window behaves. Keyed by bar end_time. Fail-safe: {} on any error."""
+        try:
+            import json
+            with open(self._rr_persist_path(), "r", encoding="utf-8") as f:
+                alld = json.load(f)
+            return {float(k): v for k, v in (alld.get(tf, {}) or {}).items()}
+        except Exception:
+            return {}
+
+    def _rr_persist_save(self, tf):
+        """Union the current fired set into the on-disk store (a persisted badge is NEVER dropped) and write atomically.
+        Bounded to the 5000 most-recent per tf. Fail-safe: silent no-op on any error (never breaks the render path)."""
+        try:
+            import json, os
+            from . import config
+            config.ensure_data_dir()
+            p = self._rr_persist_path(); alld = {}
+            if os.path.exists(p):
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        alld = json.load(f)
+                except Exception:
+                    alld = {}
+            cur = alld.get(tf, {}) or {}
+            for et, meta in self._rr_fired.items():
+                cur[repr(float(et))] = meta                      # union; the live value wins
+            if len(cur) > 5000:
+                for _old in sorted(cur, key=lambda s: float(s))[:len(cur) - 5000]:
+                    del cur[_old]
+            alld[tf] = cur
+            tmp = p + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(alld, f)
+            os.replace(tmp, p)
+        except Exception:
+            pass
+
     def _draw_radarrun(self, filtered) -> None:
         if (not self.menu.layer_state("m10_radarrun") or self.scanner_mode != "bucket_canvas"
                 or self._tf not in ("1m", "5m", "15m", "30m", "1h") or self._hide_candles):   # Ctrl+H hides strategies
@@ -7428,20 +7491,35 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _forming = bool(getattr(self, "_mmx_last_forming", True))
         _hc = self.menu.layer_state("m10_radarrun_hc")           # sub-toggle: show ONLY high-conviction breakouts
         _ab = self.menu.layer_state("m10_radarrun_abs")          # sub-toggle: show ONLY absorbed (A>=0) breakouts
-        _sig = (n, _forming, _hc, _ab, self._tf, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
+        # REPAINT FIX (2026-08-17): a defending wall can be 500+ bars old, and the wall sim is causal from the START of
+        # the data it sees. If we detect over only the visible scan window, a signal VANISHES on reload whenever the new
+        # window starts after its wall formed. Prepend the FULL pre-window history so the signal set is identical no
+        # matter how far back the window shows (proven 0% repaint over the full daemon set, study/radarrun_repaint_*.py).
+        warm = getattr(self, "_rr_warm", None) or []
+        _off = len(warm)
+        # Gate on the last CLOSED bar's end_time (signals only fire on closed bars) -- NOT the ticking forming close, so
+        # the full-history detect re-runs once per bar-close, not every live frame (a net perf WIN vs the old window scan).
+        _ce = filtered[-2] if (_forming and n >= 2) else (filtered[-1] if n else None)
+        _cet = float(_ce.get("end_time", 0.0) or 0.0) if _ce else 0.0
+        _sig = (n, _off, _forming, _hc, _ab, self._tf, _cet)
         if _sig == self._rr_sig and self._rr_drawn:
             return
         self._rr_sig = _sig
         try:                                                     # skip the last bar ONLY while it is still FORMING; the
             from app import radar_breakout_detect                 # instant the breakout bar CLOSES it fires (no wait for a
             _slbuf = 0.002 if self._tf == "1h" else 0.003         # forward-optimized candle-SL buffer: 1h 0.2% / 30m+ 0.3%
-            entries = radar_breakout_detect.detect(filtered, skip_last=_forming, sl_buf=_slbuf, tp_frac=0.005)   # forming bar skipped -> no flicker
+            entries = radar_breakout_detect.detect(list(warm) + list(filtered), skip_last=_forming,
+                                                   sl_buf=_slbuf, tp_frac=0.005)   # walls over FULL history; forming bar skipped
         except Exception:
             self._clear_radarrun(); return
-        if self._tf != self._rr_fired_tf:                         # reset the persisted set on a timeframe switch
-            self._rr_fired = {}; self._rr_fired_tf = self._tf
+        if self._tf != self._rr_fired_tf:                         # on a timeframe switch, LOAD the persisted confirmed set
+            self._rr_fired = self._rr_persist_load(self._tf)      # (once a badge fires it is saved to disk -> never lost on
+            self._rr_fired_tf = self._tf                          #  reload, regardless of how re-detection behaves)
+            self._rr_audio_seeded = False                         # re-seed silently on the new tf -> only NEW live prints beep
+        _edge_i = (n - 2) if _forming else (n - 1)               # the just-closed live-edge bucket detect can score
+        _new_edge = []; _any_new = False                         # NEW breakouts landing on that edge -> candidates to sound
         for e in entries:                                         # PERSIST: freeze each NEW breakout by its bar end_time (a
-            i = int(e["i"])                                       # stable id across scroll + wall re-detection). Once fired,
+            i = int(e["i"]) - _off                                # detect ran over warm+filtered -> shift back to filtered space
             if 0 <= i < n:                                        # a confirmed breakout is NEVER removed when walls re-shape.
                 et = float(filtered[i].get("end_time", 0.0) or 0.0)
                 if et > 0 and et not in self._rr_fired:
@@ -7450,9 +7528,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                           "tp": e.get("tp_trade", 0.0),                # fixed quick TP (0.5%)
                                           "hc": self._rr_conviction(filtered, i, int(e["side"])),   # frozen at fire
                                           "absorbed": self._rr_absorbed(filtered, i)}
-        if len(self._rr_fired) > 2000:                            # bound memory: keep the 2000 most recent
-            for _old in sorted(self._rr_fired)[:len(self._rr_fired) - 2000]:
+                    _any_new = True
+                    if i == _edge_i:                              # fired on the just-closed live-edge bar (not a scroll-in)
+                        _new_edge.append((int(e["side"]), self._rr_fired[et]))
+        if len(self._rr_fired) > 5000:                            # bound memory: keep the 5000 most recent
+            for _old in sorted(self._rr_fired)[:len(self._rr_fired) - 5000]:
                 del self._rr_fired[_old]
+        if _any_new:                                              # a genuinely new confirmed badge -> persist to disk now
+            self._rr_persist_save(self._tf)
+        if not self._rr_audio_seeded:                             # first population = silent seed (never blast the backlog)
+            self._rr_audio_seeded = True
+        else:
+            self._rr_sound_new(_new_edge, _hc, _ab)              # beep the instant a NEW live-edge breakout freezes
         et2i = {float(filtered[j].get("end_time", 0.0) or 0.0): j for j in range(n)}   # end_time -> CURRENT index this frame
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
         GRN, RED = (40, 230, 120), (240, 70, 90)                     # green = up-breakout (support) / red = down (resistance)
@@ -11413,6 +11500,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _mmxw = 200
         self._mmx_warm = (closed_list[max(0, _rk - _mmxw):_rk] if _replay
                           else combined[max(0, anchor_idx - _mmxw):anchor_idx])
+        # RADAR RUNNER warm-up: the FULL pre-window history (walls can be arbitrarily old). warm + filtered == the whole
+        # loaded/causal history, so a Radar Runner signal is identical regardless of how far back the scan window starts
+        # -> it can never repaint/vanish on reload. Cheap: a slice reference; the detect it feeds is gated to run per close.
+        self._rr_warm = (closed_list[:_rk] if _replay else combined[:anchor_idx])
         # Does the window END on a still-forming bucket? Only when the live active was actually appended —
         # REPLAY never appends one, and the stale-dup guard skips it for ~1 frame after every close. Passing
         # skip_last=True in those cases would suppress the badge on the newest CLOSED bucket (in replay, the
