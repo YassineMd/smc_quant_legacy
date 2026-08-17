@@ -22,12 +22,17 @@ import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ARCHIVE_DIR = os.path.join(HERE, "archive_data")
+DEGENERATE_TV = 6000.0     # target_vol at/below this on a non-1m tf = a daemon COLD-BOOT bucket (seeded at the flat 5000
+#                            default before calibration). A ~11.5h window on 2026-06-20 produced ~2618 such degenerate
+#                            1h/4h buckets. 1m's real size IS ~5000, so it is exempt. Fixed at source (build_engine_registry
+#                            tf-scaled seed); this drops the historical junk so backtests aren't contaminated.
 
 
-def load_archive(tf: str, root: str = ARCHIVE_DIR):
+def load_archive(tf: str, root: str = ARCHIVE_DIR, drop_degenerate: bool = True):
     """(bids, raws, gaps) for one tf from the local archive mirror. ``raws`` are the bucket data dicts
     (feed to app.persistence._bucket_from_dict, exactly like load_local_tape's output). ``gaps`` are
-    (a, b) bid pairs where b != a+1 — a missed-archiver window shows up here, never silently."""
+    (a, b) bid pairs where b != a+1 — a missed-archiver window shows up here, never silently.
+    ``drop_degenerate`` (default on) removes the cold-boot junk buckets (see DEGENERATE_TV); pass False for the raw feed."""
     by_bid: dict[int, dict] = {}
     pattern = os.path.join(root, tf, "%s_*.jsonl.gz" % tf)
     for fn in sorted(glob.glob(pattern)):
@@ -38,7 +43,15 @@ def load_archive(tf: str, root: str = ARCHIVE_DIR):
                     continue
                 r = json.loads(line)
                 # later chunks win on any (id) overlap; data is stored as a JSON string, parsed once here.
-                by_bid[int(r["bid"])] = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+                d = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+                if drop_degenerate and tf != "1m":
+                    try:
+                        tv = float(d.get("target_vol") or 0.0)
+                    except (TypeError, ValueError):
+                        tv = 0.0
+                    if 0.0 < tv <= DEGENERATE_TV:            # cold-boot junk on a non-1m tf -> skip
+                        continue
+                by_bid[int(r["bid"])] = d
     bids = sorted(by_bid)
     gaps = [(a, b) for a, b in zip(bids, bids[1:]) if b != a + 1]
     return bids, [by_bid[b] for b in bids], gaps
