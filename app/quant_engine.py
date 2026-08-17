@@ -845,4 +845,9 @@ def rank_obs(obs: List[dict]) -> List[dict]:
 # Per-timeframe engine registry (main.py:193)
 # ---------------------------------------------------------------------------
 def build_engine_registry() -> Dict[str, QuantEngine]:
-    return {tf: QuantEngine() for tf in config.TIMEFRAMES}
+    # Cold-boot default is tf-SCALED, mirroring _resize_engines (target_vol[tf] = anchor * tf_seconds/60). A flat 5000
+    # for every tf made a fresh start size 1h/4h buckets at 5000 volume (should be ~300k / ~1.2M) until >=10 one-minute
+    # candles let calibration take over -> the first ~11h of 1h/4h buckets closed DEGENERATE (tiny) on 2026-06-20's cold
+    # boot. Scaling the seed keeps them roughly right-sized from bucket #1; calibration still overrides once data exists.
+    return {tf: QuantEngine(config.DEFAULT_TARGET_VOL * config.TF_SECONDS.get(tf, 60) / 60.0)
+            for tf in config.TIMEFRAMES}
