@@ -31,7 +31,7 @@ from . import config, persistence
 from .depth_store import DepthStore, bin_live_book
 from .feeds import MarketDataCore
 from .protocol import (CatchupChunkPacket, DepthColumnPacket, DepthWindowPacket,
-                       TradeBatchPacket, TradesWindowPacket)
+                       TimeCandlesPacket, TradeBatchPacket, TradesWindowPacket)
 
 
 @dataclass
@@ -156,6 +156,10 @@ class DaemonServer:
             asyncio.create_task(self._send_trades_window(client, params))
         elif action == "depth_window_stop":
             client.heatmap = None   # leave the heatmap mode -> stop live-column pushes
+        elif action == "get_time_candles":
+            tf = cmd.get("tf")
+            if tf in config.TIMEFRAMES:
+                asyncio.create_task(self._send_time_candles(client, tf))
 
     # ------------------------------------------------------------------
     async def _send_catchup(self, client: _Client, tf: str, since=None) -> None:
@@ -188,6 +192,22 @@ class DaemonServer:
                 self._enqueue(client, line)
         except Exception as e:
             print(f"CATCHUP SEND ERROR ({tf}): {e}")
+
+    async def _send_time_candles(self, client: _Client, tf: str) -> None:
+        """Ship the current gap-filled CLOCK candles for ``tf`` (Binance-exact OHLC + aggTrade footprint) as chunked
+        TIME_CANDLES frames -- the answer to a ``get_time_candles`` request. ADDITIVE + read-only: never touches the
+        volume-bucket catchup/stream path. ``asyncio.sleep(0)`` between chunks yields so live ticks keep flowing."""
+        try:
+            candles = self.core.catchup_time_candles(tf)
+            size = config.CATCHUP_CHUNK_SIZE
+            if not candles:
+                self._enqueue(client, TimeCandlesPacket(tf=tf, seq=0, candles=[]).to_line())
+                return
+            for seq, i in enumerate(range(0, len(candles), size)):
+                self._enqueue(client, TimeCandlesPacket(tf=tf, seq=seq, candles=candles[i:i + size]).to_line())
+                await asyncio.sleep(0)
+        except Exception as e:
+            print(f"TIME-CANDLES SEND ERROR ({tf}): {e}")
 
     # ------------------------------------------------------------------
     # Phase 2a: heatmap window (off-loop build) + live-column push

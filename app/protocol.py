@@ -39,6 +39,7 @@ TYPE_DEPTH_COL = "DEPTH_COL"         # Phase 2a: one live heatmap column (right-
 TYPE_TRADES_WINDOW = "TRADES_WINDOW"  # Phase 3: executed-trade bubbles window (raw trades in [t0,t1]×[ylo,yhi])
 TYPE_TRADE_BATCH = "TRADE_BATCH"      # Phase 3: live executed trades since the last batch (pulse cadence)
 TYPE_LIQSWEEP = "LIQ_SWEEP"           # live 15m Tier-A liquidity sweep (tf-agnostic, broadcast_all)
+TYPE_TIME_CANDLES = "TIME_CANDLES"    # answer to get_time_candles: gap-filled CLOCK candles (Binance OHLC + footprint)
 
 NEWLINE = "\n"
 
@@ -193,6 +194,20 @@ class CatchupEndPacket:
     active_bucket: "BucketSnapshot" = field(default_factory=dict)
     vpin: float = 0.0
     type: str = TYPE_CATCHUP_END
+
+    def to_line(self) -> str:
+        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+
+
+@dataclass
+class TimeCandlesPacket:
+    """Answer to a ``get_time_candles`` request: a batch of gap-filled CLOCK candles for ``tf`` (bucket-shaped dicts —
+    OHLC + levels + buy/sell + start/end). ``seq`` is the 0-based chunk ordinal; the client just extends its cache."""
+
+    tf: str
+    seq: int = 0
+    candles: List[dict] = field(default_factory=list)
+    type: str = TYPE_TIME_CANDLES
 
     def to_line(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
@@ -411,6 +426,9 @@ _PARSERS = {
     ),
     TYPE_LIQSWEEP: lambda d: LiqSweepPacket(
         ts=d["ts"], side=d["side"], level=d["level"], idx=d.get("idx", 0),
+    ),
+    TYPE_TIME_CANDLES: lambda d: TimeCandlesPacket(
+        tf=d["tf"], seq=d.get("seq", 0), candles=d.get("candles", []),
     ),
 }
 

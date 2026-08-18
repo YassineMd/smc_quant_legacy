@@ -60,11 +60,45 @@ def load_tape(path):
     return trades
 
 
+def fetch_live_candles(tf, host=None, port=None, window=1.5):
+    """Fetch gap-filled clock candles for `tf` from a RUNNING daemon (get_time_candles over the IPC socket / SSH
+    tunnel). Reads for `window`s, collecting TIME_CANDLES frames (ignores other broadcasts). [] on any error."""
+    import socket, time
+    from app import protocol as _p
+    host = host or config.IPC_HOST; port = port or config.IPC_PORT
+    try:
+        s = socket.create_connection((host, port), timeout=3.0)
+    except OSError as e:
+        print("  live: cannot connect %s:%d (%s) -- is the daemon / SSH tunnel up?" % (host, port, e)); return []
+    try:
+        s.sendall((_p.json.dumps({"action": "get_time_candles", "tf": tf}) + "\n").encode())
+        s.settimeout(window); buf = b""; out = []; deadline = time.monotonic() + window
+        while time.monotonic() < deadline:
+            try:
+                chunk = s.recv(65536)
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                pkt = _p.parse_line(line.decode("utf-8", "ignore"))
+                if isinstance(pkt, _p.TimeCandlesPacket) and pkt.tf == tf:
+                    out.extend(pkt.candles)
+        return out
+    finally:
+        try:
+            s.close()
+        except OSError:
+            pass
+
+
 class Viewer(QtWidgets.QMainWindow):
-    def __init__(self, trades):
+    def __init__(self, trades=None, live=False):
         super().__init__()
-        self.trades = trades; self.tf = "1m"; self.mode = "footprint"
-        self.setWindowTitle("Time-candle viewer (spike)")
+        self.trades = trades or []; self.live = live; self.tf = "1m"; self.mode = "footprint"
+        self.setWindowTitle("Time-candle viewer (spike)" + (" - LIVE" if live else ""))
         self.resize(1200, 720)
         bar = QtWidgets.QToolBar(); self.addToolBar(bar)
         for tf in ("1m", "5m", "15m"):
@@ -80,6 +114,8 @@ class Viewer(QtWidgets.QMainWindow):
         self.candle = BucketCandleItem(); self.foot = FootprintCandleItem()
         self.plot.addItem(self.candle); self.plot.addItem(self.foot)
         self.setCentralWidget(self.plot)
+        if live:                                                       # keep a live chart fresh (re-fetch every 2s)
+            self._timer = QtCore.QTimer(self); self._timer.timeout.connect(self._render); self._timer.start(2000)
         self._render()
 
     def _set_tf(self, tf):
@@ -90,9 +126,9 @@ class Viewer(QtWidgets.QMainWindow):
 
     def _render(self):
         secs = config.TF_SECONDS[self.tf]
-        candles = build_time_candles(self.trades, secs)
+        candles = fetch_live_candles(self.tf) if self.live else build_time_candles(self.trades, secs)
         if not candles:
-            self._lbl.setText("  no candles"); return
+            self._lbl.setText("  no candles" + ("  (live: no daemon data / tunnel?)" if self.live else "")); return
         n = len(candles)
         x = list(range(n))                                             # x = INDEX (pyqtgraph-safe; the terminal does the same)
         o = [c["open_price"] for c in candles]; h = [c["high"] for c in candles]
@@ -115,11 +151,17 @@ class Viewer(QtWidgets.QMainWindow):
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else None
+    args = sys.argv[1:]
+    if "--live" in args:                                              # fetch from the running daemon (needs the SSH tunnel)
+        print("LIVE: fetching clock candles from daemon %s:%d (SSH tunnel must be up)" % (config.IPC_HOST, config.IPC_PORT))
+        app = QtWidgets.QApplication(sys.argv)
+        v = Viewer(live=True); v.show()
+        sys.exit(app.exec())
+    path = next((a for a in args if not a.startswith("-")), None)
     if not path:
         cands = sorted(glob.glob(os.path.join(config.PROJECT_DIR, "data", "aggtrade_tape_*.jsonl")))
         if not cands:
-            print("No aggTrade tape found in data/. Pass a path: python scripts/time_candle_view.py <tape.jsonl>")
+            print("No aggTrade tape found in data/. Pass a path, or --live for the daemon.")
             return
         path = cands[-1]
     trades = load_tape(path)
