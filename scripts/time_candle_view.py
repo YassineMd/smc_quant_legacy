@@ -16,10 +16,32 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PySide6 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
 from app import config
-from app.chart_widgets import BucketCandleItem, FootprintCandleItem, LocalTimeAxis, PriceAxis
+from app.chart_widgets import BucketCandleItem, FootprintCandleItem, PriceAxis, _MONO
 from app.time_candles import build_time_candles
+from datetime import datetime, timezone
 
-_UP = QtGui.QColor(38, 166, 91); _DN = QtGui.QColor(224, 73, 72)
+_UP = QtGui.QColor(38, 166, 154); _DN = QtGui.QColor(239, 83, 80)
+
+
+class TimeIndexAxis(pg.AxisItem):
+    """Candles are drawn at x = INDEX (0..N-1) -- pyqtgraph is unstable at raw-timestamp magnitudes, so the terminal
+    renders at index x too. Because candles are GAP-FILLED (one per interval), index k maps LINEARLY to clock time
+    (t0 + k*tf), so this prints the true UTC clock at each tick: an honest time axis on an index coordinate."""
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k); self.setTickFont(_MONO); self._t0 = 0.0; self._tf = 60
+
+    def set_map(self, t0, tf_secs):
+        self._t0 = float(t0); self._tf = int(tf_secs); self.picture = None; self.update()
+
+    def tickStrings(self, values, scale, spacing):
+        out = []
+        for v in values:
+            try:
+                d = datetime.fromtimestamp(self._t0 + v * self._tf, tz=timezone.utc)
+                out.append(d.strftime("%H:%M" if self._tf < 3600 else "%m-%d %H:%M"))
+            except (OSError, ValueError, OverflowError):
+                out.append("")
+        return out
 
 
 def load_tape(path):
@@ -51,11 +73,10 @@ class Viewer(QtWidgets.QMainWindow):
         self._mode_act = bar.addAction("candle / footprint")
         self._mode_act.triggered.connect(self._toggle_mode)
         self._lbl = QtWidgets.QLabel("  "); bar.addWidget(self._lbl)
-        self.plot = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"),
+        self.plot = pg.PlotWidget(axisItems={"bottom": TimeIndexAxis(orientation="bottom"),
                                               "right": PriceAxis(orientation="right")})
         self.plot.showGrid(x=True, y=True, alpha=0.15)
         self.plot.showAxis("right"); self.plot.hideAxis("left")
-        self.plot.getAxis("bottom").set_scanner_active(False)          # chronological (real clock) labels
         self.candle = BucketCandleItem(); self.foot = FootprintCandleItem()
         self.plot.addItem(self.candle); self.plot.addItem(self.foot)
         self.setCentralWidget(self.plot)
@@ -72,21 +93,21 @@ class Viewer(QtWidgets.QMainWindow):
         candles = build_time_candles(self.trades, secs)
         if not candles:
             self._lbl.setText("  no candles"); return
-        x = [c["start_time"] for c in candles]
+        n = len(candles)
+        x = list(range(n))                                             # x = INDEX (pyqtgraph-safe; the terminal does the same)
         o = [c["open_price"] for c in candles]; h = [c["high"] for c in candles]
         lo = [c["low"] for c in candles]; cl = [c["close_price"] for c in candles]
-        width = secs * 0.72                                            # candle width in SECONDS (x is unix seconds)
-        brushes = [QtGui.QBrush(_UP if cl[i] >= o[i] else _DN) for i in range(len(x))]
-        pens = [QtGui.QPen(QtGui.QColor(90, 90, 90)) for _ in x]
+        brushes = [pg.mkBrush(_UP if cl[i] >= o[i] else _DN) for i in range(n)]
+        pens = [pg.mkPen(90, 90, 90) for _ in range(n)]
         levels = [c["levels"] for c in candles]
+        self.plot.getAxis("bottom").set_map(candles[0]["start_time"], secs)   # index -> true UTC clock labels
         if self.mode == "candle":
-            self.candle.update_data(x, o, h, lo, cl, brushes, pens, width)
+            self.candle.update_data(x, o, h, lo, cl, brushes, pens, 0.72)
             self.foot.update_data([], [], [], [])
         else:
-            self.foot.update_data(x, levels, h, lo, mult=1.5, width=width)
-            self.candle.update_data([], [], [], [], [], [], [], width)
-        pad = width
-        self.plot.setXRange(x[0] - pad, x[-1] + pad, padding=0)
+            self.foot.update_data(x, levels, h, lo, mult=1.5, width=0.72)
+            self.candle.update_data([], [], [], [], [], [], [], 0.72)
+        self.plot.setXRange(-1, n, padding=0)
         self.plot.setYRange(min(lo), max(h), padding=0.08)
         real = sum(1 for c in candles if not c.get("empty"))
         self._lbl.setText("  %s · %s · %d candles (%d real, %d gap-filled)" % (
