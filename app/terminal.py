@@ -7546,8 +7546,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:                                                     # skip the last bar ONLY while it is still FORMING; the
             from app import radar_breakout_detect                 # instant the breakout bar CLOSES it fires (no wait for a
             _slbuf = 0.002 if self._tf == "1h" else 0.003         # forward-optimized candle-SL buffer: 1h 0.2% / 30m+ 0.3%
-            entries = radar_breakout_detect.detect(list(warm) + list(filtered), skip_last=_forming,
+            _bset = list(warm) + list(filtered)
+            entries = radar_breakout_detect.detect(_bset, skip_last=_forming,
                                                    sl_buf=_slbuf, tp_frac=0.005)   # walls over FULL history; forming bar skipped
+            # 5m TIME-candle absorpR gate: only fire breakouts with absorption-R >= config.RR_ABSORPR_MIN at the
+            # breakout bar (OOS-validated on 5m clock candles: maxDD 21%->6%, marginal->PASS). 5m TIME only -- bucket
+            # scale + every other tf are unchanged. A signal whose absorpR can't be computed is KEPT (never silently hidden).
+            if self._chart_source == "time" and self._tf == "5m" and entries:
+                from app import absorption as _absmod
+                _kept = []
+                for _e in entries:
+                    try:
+                        _aR = _absmod.absorption(_bset, int(_e["i"]))[0]
+                    except Exception:
+                        _aR = None
+                    if _aR is None or _aR >= config.RR_ABSORPR_MIN:
+                        _kept.append(_e)
+                entries = _kept
         except Exception:
             self._clear_radarrun(); return
         if self._tf != self._rr_fired_tf:                         # on a timeframe switch, LOAD the persisted confirmed set

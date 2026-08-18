@@ -182,6 +182,11 @@ HEATMAP_BUBBLE_MAX_PX = 34      # largest bubble diameter (px)
 FOOTPRINT_CAP = 10000           # main.py:291 — retention threshold per timeframe (on disk)
 FOOTPRINT_MEM_CAP = 300         # per-tf footprint nodes kept in RAM (>=2h for recalibrate)
 TIME_ENGINE_CAP = 800           # per-tf CLOCK-candle buckets kept in RAM by the clock engines (full-fidelity time chart)
+# 5m CLOCK Radar Runner filter: only fire breakouts whose absorption-R at the breakout bar is >= this. OOS-validated
+# on 5m time candles (study/radarrun_absorpR_band_oos.py + radarrun_15m_absorpR_prop.py): cuts maxDD 21%->6% and flips
+# the 5m prop verdict marginal->PASS (99/95/89% @R0.5/0.75/1.0), keeping ~1/3 of signals (4.7 trd/day). Applied ONLY to
+# 5m in TIME mode; bucket-scale RR and other timeframes are unchanged.
+RR_ABSORPR_MIN = -0.25
 REHYDRATE_LIMIT = 1440          # main.py:248 — last 24h of entries per tf (legacy replay)
 SAVE_INTERVAL_SECS = 15         # main.py:286 — periodic footprint flush (legacy JSON)
 SYNC_INTERVAL_SECS = 10         # async SQLite upsert cadence (replaces JSON flush)
