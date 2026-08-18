@@ -38,7 +38,7 @@ from . import config
 from .protocol import (CatchupEndPacket, CatchupPacket, CatchupStartPacket,
                        LiqSweepPacket, LiquidationPacket, ObPacket, PulsePacket, TickPacket)
 from .aggtrade import OiAttributor, candle_open, median_target_vol, trade_to_tick
-from .quant_engine import (QuantEngine, build_engine_registry, calc_absorption,
+from .quant_engine import (ClockEngine, QuantEngine, build_engine_registry, calc_absorption,
                            calc_quant_obs, rank_obs)
 
 # Recent observed candles shipped in a CATCHUP footprint payload (bounds frame size).
@@ -105,6 +105,11 @@ class MarketDataCore:
         self._ob_pool_disabled = False
         self._ob_pool_fails = 0
         self.engines: Dict[str, QuantEngine] = build_engine_registry()
+        # CLOCK-candle engines (full-fidelity time chart): one per tf, fed the SAME tick stream as the volume engines
+        # but closing on clock boundaries -> complete BucketSnapshot dicts (real opL/opS, buyer/seller-ER, cvd, ticks,
+        # levels, POC) for get_time_candles. Bounded RAM (TIME_ENGINE_CAP/tf); rebuilt live from ticks after a restart.
+        self.clock_engines: Dict[str, ClockEngine] = {
+            tf: ClockEngine(config.TF_SECONDS[tf], tf) for tf in config.TIMEFRAMES}
         self.session = _make_session()
 
         self.latest_live_price: float | None = None
@@ -203,16 +208,22 @@ class MarketDataCore:
         return [b.full_snapshot() for b in self.engines[tf].closed_buckets]
 
     def catchup_time_candles(self, tf: str) -> list:
-        """CLOCK (time) candles for `tf` from the footprint nodes -> gap-filled, bucket-shaped dicts (same fields the
-        client renders volume buckets with). OHLC is the EXACT Binance kline framing; the per-price-level footprint is
-        the aggTrade node. Recent window only (FOOTPRINT_MEM_CAP nodes per tf). ADDITIVE + read-only: it touches neither
-        the volume-bucket engines nor any existing serving path. Fail-safe: [] on any error."""
+        """FULL-FIDELITY CLOCK (time) candles for `tf` from the dedicated CLOCK ENGINE -> gap-filled complete
+        BucketSnapshot dicts (open/high/low/close + opL/opS/clL/clS, buyer_er/seller_er, cvd wicks, up/dn ticks,
+        per-price levels, POC) — every field the terminal renders for a VOLUME bucket, computed identically, only
+        closed on clock boundaries. Recent window only (TIME_ENGINE_CAP buckets/tf), rebuilt from ticks after a
+        restart. ADDITIVE + read-only w.r.t. the volume-bucket engines. Fail-safe: [] on any error."""
         try:
-            from .time_candles import candles_from_footprint_nodes
+            from .time_candles import gapfill_wire
             secs = config.TF_SECONDS.get(tf)
-            if not secs:
+            ce = self.clock_engines.get(tf)
+            if not secs or ce is None:
                 return []
-            return candles_from_footprint_nodes(self.footprints_db.get(tf) or {}, secs)
+            out = [b.full_snapshot() for b in ce.closed_buckets]
+            ab = ce.active_bucket
+            if ab.start_time is not None and ab.curr_vol > 0:      # append the live forming clock candle
+                out.append(ab.live_snapshot(time.time(), ce.avg_velocity))
+            return gapfill_wire(out, secs)
         except Exception:
             return []
 
@@ -516,6 +527,17 @@ class MarketDataCore:
                 tick_time=targs.tick_time,
                 size_bin=_sb,
             )
+            # CLOCK engine: same tick, clock-boundary close -> full-fidelity time candles (its own bucket levels;
+            # footprints_dict is unused by process_tick, so pass an empty throwaway). Guarded: a clock-engine fault
+            # must never disturb the live volume-bucket path.
+            ce = self.clock_engines.get(tf_key)
+            if ce is not None:
+                try:
+                    ce.process_tick(price=targs.price, vol=targs.vol, taker_buy=targs.taker_buy,
+                                    delta_oi=share, footprints_dict={},
+                                    tick_time=targs.tick_time, size_bin=_sb)
+                except Exception:
+                    pass
             # Detect closes by the MONOTONIC total_closed delta, NOT by len(closed_buckets) growth:
             # closed_buckets is capped (append+pop), so its length stops growing at CLOSED_BUCKETS_CAP and
             # the old `len() > last` check silently stopped firing once the cap was reached — freezing the

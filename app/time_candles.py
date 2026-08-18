@@ -121,7 +121,12 @@ def to_bucket_wire(c: dict) -> dict:
         vs the bucket body's 4-colour open/close encoding. clL/clS stay 0 (unknown, not faked).
       * Every other engine scalar (buyer_er, seller_er, vpin inputs, cvd wicks, delta_h1, up/dn_ticks, liq_*, churn,
         vol_mult) is an HONEST ZERO/None: the daemon does not compute it for a clock candle. Overlays that need it draw
-        nothing (they are try/except-guarded) rather than showing a fabricated value."""
+        nothing (they are try/except-guarded) rather than showing a fabricated value.
+
+    PASSTHROUGH: when the daemon runs the CLOCK ENGINE (full-fidelity path) it already ships complete volume-bucket
+    dicts (real opL/opS + buyer_er, etc.) — detected here and returned unchanged, so no real scalar is clobbered."""
+    if "opL" in c and ("buyer_er" in c or "cvd_hi" in c):   # already a full clock-engine bucket -> keep every real scalar
+        return c
     bv = float(c.get("buy_vol", 0.0)); sv = float(c.get("sell_vol", 0.0))
     op = float(c.get("open_price", c.get("open", 0.0)))
     cl = float(c.get("close_price", c.get("close", op)))
@@ -138,6 +143,37 @@ def to_bucket_wire(c: dict) -> dict:
         "up_ticks": 0.0, "dn_ticks": 0.0, "liq_short": 0.0, "liq_long": 0.0,
         "target_vol": 0.0, "empty": bool(c.get("empty", False)),
     }
+
+
+def _empty_wire(t0: int, tf_secs: int, prev_close: float) -> dict:
+    """A flat, zero-volume clock candle (bucket wire schema) for an interval with no trades."""
+    p = float(prev_close)
+    return {"start_time": float(t0), "end_time": float(t0 + tf_secs),
+            "open": p, "high": p, "low": p, "close": p, "poc_price": p,
+            "buy_vol": 0.0, "sell_vol": 0.0, "curr_vol": 0.0, "target_vol": 0.0,
+            "opL": 0.0, "opS": 0.0, "clL": 0.0, "clS": 0.0, "churn": 0.0,
+            "cvd_hi": 0.0, "cvd_lo": 0.0, "delta_h1": None, "price_h1": None,
+            "up_ticks": 0.0, "dn_ticks": 0.0, "liq_short": 0.0, "liq_long": 0.0,
+            "levels": {}, "empty": True}
+
+
+def gapfill_wire(wire: list, tf_secs: int) -> list:
+    """Insert a flat empty candle for every missing interval in an ascending run of bucket-wire dicts (the clock
+    engine only emits buckets for intervals that had trades). Guarantees start_time = t0 + index*tf EXACTLY, so the
+    index axis is an honest linear proxy for clock time and a real data gap shows as a flat run, never compressed."""
+    if not wire:
+        return []
+    wire = sorted(wire, key=lambda w: w.get("start_time", 0.0))
+    by = {int(w["start_time"]): w for w in wire}
+    out = []; prev = wire[0].get("open", wire[0].get("close", 0.0))
+    t = int(wire[0]["start_time"]); last = int(wire[-1]["start_time"])
+    while t <= last:
+        if t in by:
+            out.append(by[t]); prev = by[t].get("close", prev)
+        else:
+            out.append(_empty_wire(t, tf_secs, prev))
+        t += tf_secs
+    return out
 
 
 def parity(trades: Iterable[dict], candles: list) -> dict:

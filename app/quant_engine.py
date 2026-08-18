@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from typing import Dict, List
 
 from . import config
+from .aggtrade import candle_open
 from .protocol import BucketSnapshot
 
 # DIVERGES FROM LEGACY (Step 1, rule 0.6/2): velocity warm-up gate. vel_ratio
@@ -477,6 +478,67 @@ class QuantEngine:
         # steady); a volume burst clusters closes and stalls the socket drain. target_vol still
         # adapts on the periodic cadence; the new bucket spawns with its latest value.
         self.active_bucket = QuantBucket(self.target_vol, current_time)
+
+
+class ClockEngine(QuantEngine):
+    """A QuantEngine whose buckets close on CLOCK boundaries (candle_open + tf) instead of a volume target.
+
+    This is what makes a TIME candle FULL-fidelity: every scalar the volume-bucket render/overlays read — opL/opS/clL/
+    clS from OI, buyer_er/seller_er, cvd wicks, up/dn ticks, per-price levels, POC, velocity — is computed by the
+    INHERITED ``_add_to_bucket`` / ``_close_active_bucket``, identically to a volume bucket. Only the close TRIGGER
+    changes: a tick that lands in a new clock interval closes the current bucket (stamped at its interval boundary)
+    and opens the next, aligned to ``candle_open``. The whole trade always lands in exactly ONE interval, so there is
+    no volume-split loop.
+
+    ``target_vol`` here is a rolling estimate of recent clock-candle volume, used ONLY where the parent needs a volume
+    scale that has no exact clock analogue: the ``vpin`` denominator (the terminal recomputes vpin itself from
+    buy/sell/curr_vol, so the engine value is unused for the heatmap) and the da2 50%-of-volume mark (``delta_h1`` —
+    inexact for a clock candle because the halfway point is only known at close; it feeds only the largely-retired
+    MMXSKEW line). Everything else is exact."""
+
+    def __init__(self, tf_secs: int, tf_key: str, cap: int | None = None):
+        super().__init__(target_vol=config.DEFAULT_TARGET_VOL)
+        self.tf_secs = int(tf_secs)
+        self.tf_key = tf_key
+        self._cap = int(cap) if cap else config.TIME_ENGINE_CAP
+        self._cur_k: int | None = None      # the active bucket's clock-interval open (epoch seconds)
+        self._vol_ema = float(config.DEFAULT_TARGET_VOL)   # rolling clock-volume estimate (da2 mark / vpin denom)
+
+    def process_tick(self, price, vol, taker_buy, delta_oi, footprints_dict,
+                     liquidations=None, tick_time=None, size_bin=None):
+        if tick_time is None:
+            tick_time = time.time()
+        if vol <= 0:
+            return
+        self.last_tick_time = tick_time
+        k = candle_open(int(tick_time * 1000), self.tf_secs)   # this tick's interval open (epoch seconds)
+        if self._cur_k is None:                                # first tick ever -> seed the interval
+            self._cur_k = k
+            self.active_bucket.start_time = float(k)
+        elif k != self._cur_k:                                 # crossed into a new interval -> close + reopen
+            # Close the CURRENT bucket at its own interval boundary (start + tf). Intervals with NO trades between
+            # _cur_k and k are simply absent from closed_buckets; catchup_time_candles gap-fills them for the chart.
+            self._close_active_bucket(float(self._cur_k + self.tf_secs), footprints_dict)
+            # roll the clock-volume estimate off the bucket just closed, then re-scale the fresh bucket's target_vol
+            if self.closed_buckets and self.closed_buckets[-1].curr_vol > 0:
+                self._vol_ema = 0.9 * self._vol_ema + 0.1 * self.closed_buckets[-1].curr_vol
+                self.target_vol = max(1.0, self._vol_ema)
+                self.active_bucket.target_vol = self.target_vol
+            while len(self.closed_buckets) > self._cap:        # tighter RAM cap than the volume engines (recent window)
+                self.closed_buckets.pop(0)
+            self._cur_k = k
+            self.active_bucket.start_time = float(k)
+        b_ratio = taker_buy / vol
+        s_ratio = (vol - taker_buy) / vol
+        oi_mag = min(abs(delta_oi), vol)
+        churn = vol - oi_mag
+        opL_r = (oi_mag * b_ratio / vol) if delta_oi > 0 else 0.0
+        opS_r = (oi_mag * s_ratio / vol) if delta_oi > 0 else 0.0
+        clL_r = (oi_mag * s_ratio / vol) if delta_oi < 0 else 0.0
+        clS_r = (oi_mag * b_ratio / vol) if delta_oi < 0 else 0.0
+        churn_r = churn / vol
+        self._add_to_bucket(price, vol, b_ratio, s_ratio, opL_r, opS_r, clL_r, clS_r, churn_r,
+                            liquidations, size_bin, vol)
 
 
 # ---------------------------------------------------------------------------

@@ -131,8 +131,8 @@ class Viewer(QtWidgets.QMainWindow):
             self._lbl.setText("  no candles" + ("  (live: no daemon data / tunnel?)" if self.live else "")); return
         n = len(candles)
         x = list(range(n))                                             # x = INDEX (pyqtgraph-safe; the terminal does the same)
-        o = [c["open_price"] for c in candles]; h = [c["high"] for c in candles]
-        lo = [c["low"] for c in candles]; cl = [c["close_price"] for c in candles]
+        o = [c.get("open", c.get("open_price")) for c in candles]; h = [c["high"] for c in candles]
+        lo = [c["low"] for c in candles]; cl = [c.get("close", c.get("close_price")) for c in candles]
         brushes = [pg.mkBrush(_UP if cl[i] >= o[i] else _DN) for i in range(n)]
         pens = [pg.mkPen(90, 90, 90) for _ in range(n)]
         levels = [c["levels"] for c in candles]
