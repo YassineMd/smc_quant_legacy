@@ -51,8 +51,8 @@ def sim_trail(side, entry, sl0, tiers, ph, pl, pc):
     return (side * (pc[-1] - entry) / entry if len(pc) else 0.0), len(ph)
 
 
-def study(tf):
-    A = sorted(load_archive(tf, root="study/recon_archive")[1], key=lambda b: _f(b.get("start_time", 0)))
+def study(tf, root="study/recon_archive"):
+    A = sorted(load_archive(tf, root=root)[1], key=lambda b: _f(b.get("start_time", 0)))
     n = len(A)
     O = np.array([_f(b.get("open", b.get("open_price"))) for b in A])
     C = np.array([_f(b.get("close", b.get("close_price"))) for b in A])
@@ -127,8 +127,11 @@ def study(tf):
 
 
 if __name__ == "__main__":
-    for tf in (sys.argv[1:] or ["15m", "1h", "5m"]):
+    # --clock -> run against study/clock_archive (time candles); else the volume recon_archive (default)
+    _root = "study/clock_archive" if "--clock" in sys.argv else "study/recon_archive"
+    _tfs = [a for a in sys.argv[1:] if not a.startswith("-")]
+    for tf in (_tfs or ["15m", "1h", "5m"]):
         try:
-            study(tf)
+            study(tf, root=_root)
         except Exception as e:
             import traceback; print("TF %s FAILED: %r" % (tf, e)); traceback.print_exc()
