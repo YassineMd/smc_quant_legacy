@@ -101,7 +101,7 @@ class Viewer(QtWidgets.QMainWindow):
         self.setWindowTitle("Time-candle viewer (spike)" + (" - LIVE" if live else ""))
         self.resize(1200, 720)
         bar = QtWidgets.QToolBar(); self.addToolBar(bar)
-        for tf in ("1m", "5m", "15m"):
+        for tf in config.TIMEFRAMES:                                   # 1m/5m/15m/30m/1h/4h — every daemon-served tf
             a = bar.addAction(tf); a.triggered.connect(lambda _=False, t=tf: self._set_tf(t))
         bar.addSeparator()
         self._mode_act = bar.addAction("candle / footprint")
