@@ -75,6 +75,39 @@ def build_time_candles(trades: Iterable[dict], tf_secs: int, gap_fill: bool = Tr
     return out
 
 
+def candles_from_footprint_nodes(nodes: dict, tf_secs: int) -> list:
+    """Serve the daemon's footprint nodes as gap-filled clock candles. Each node carries OHLC from the Binance kline
+    framing (open/high/low/close, EXACT) + per-price-level footprint from the aggTrade path. Nodes without OHLC (kline
+    not yet framed, i.e. the sub-second forming edge) are skipped. Same bucket-shaped output as build_time_candles."""
+    keyed = {}
+    for ut, n in (nodes or {}).items():
+        try:
+            t = int(ut)
+        except (TypeError, ValueError):
+            continue
+        if "open" not in n:                                   # kline framing hasn't landed yet -> not a servable candle
+            continue
+        lv = n.get("levels") or {}
+        bv = sum(float(v.get("b", 0.0)) for v in lv.values())
+        sv = sum(float(v.get("s", 0.0)) for v in lv.values())
+        keyed[t] = {"start_time": float(t), "end_time": float(t + tf_secs),
+                    "open_price": float(n["open"]), "close_price": float(n["close"]),
+                    "high": float(n["high"]), "low": float(n["low"]),
+                    "buy_vol": bv, "sell_vol": sv, "curr_vol": bv + sv, "target_vol": 0.0,
+                    "poc_price": float(n["close"]), "n_trades": 0, "empty": False,
+                    "levels": {p: {"b": float(v.get("b", 0.0)), "s": float(v.get("s", 0.0))} for p, v in lv.items()}}
+    if not keyed:
+        return []
+    ks = sorted(keyed); out = []; prev = keyed[ks[0]]["open_price"]; t = ks[0]
+    while t <= ks[-1]:
+        if t in keyed:
+            out.append(keyed[t]); prev = keyed[t]["close_price"]
+        else:
+            out.append(_new(t, tf_secs, prev, empty=True))
+        t += tf_secs
+    return out
+
+
 def parity(trades: Iterable[dict], candles: list) -> dict:
     """Exact accounting identity check. Returns honesty % (100 = perfect) + worst per-candle footprint discrepancy.
     (A) tape total == candle buy/sell totals; (B) each candle's footprint levels sum to its buy/sell totals."""

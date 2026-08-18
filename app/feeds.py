@@ -202,6 +202,20 @@ class MarketDataCore:
             tf = config.DEFAULT_TF
         return [b.full_snapshot() for b in self.engines[tf].closed_buckets]
 
+    def catchup_time_candles(self, tf: str) -> list:
+        """CLOCK (time) candles for `tf` from the footprint nodes -> gap-filled, bucket-shaped dicts (same fields the
+        client renders volume buckets with). OHLC is the EXACT Binance kline framing; the per-price-level footprint is
+        the aggTrade node. Recent window only (FOOTPRINT_MEM_CAP nodes per tf). ADDITIVE + read-only: it touches neither
+        the volume-bucket engines nor any existing serving path. Fail-safe: [] on any error."""
+        try:
+            from .time_candles import candles_from_footprint_nodes
+            secs = config.TF_SECONDS.get(tf)
+            if not secs:
+                return []
+            return candles_from_footprint_nodes(self.footprints_db.get(tf) or {}, secs)
+        except Exception:
+            return []
+
     def catchup_delta(self, tf: str, since):
         """How many buckets to ship as a DELTA to a client whose cached last-bucket DB-id is ``since``.
 
@@ -436,6 +450,7 @@ class MarketDataCore:
         fp["lastTakerBuy"] = curr_taker_buy
         fp["oi_close"] = self.pulse_state.get("oi", 0.0)
         fp["close"] = close_price           # candle close -> absorption close-through invalidation
+        fp["open"] = float(k["o"]); fp["high"] = float(k["h"]); fp["low"] = float(k["l"])   # OHLC framing for TIME candles (exact Binance)
         self.latest_live_price = close_price
 
         candle = {
