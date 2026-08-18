@@ -57,6 +57,7 @@ from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visibl
 from .hamburger import FloatingOverlayMenu, HamburgerButton, scale_label
 from .pipe_client import PipeClientWorker
 from .session_perf import MemTracer, SessionProfiler, rss_mb
+from .time_feed import TimeCandleFeed
 from .stats_overlay import AbsorptionZoneSlider, EffAggZoneSlider, StatsOverlay   # HeatmapContrastBar now lives in the hamburger 'Heatmap' dropdown
 
 _OPEN_WINDOWS: List["MinimalTerminalWindow"] = []
@@ -986,6 +987,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Handles for the heavy modes' extra scene objects (built in Phase 5/6,
         # torn down here). Pre-declared so teardown checks are always safe.
         self.axis_bottom = self.plot.getAxis("bottom")
+        # CHART SOURCE (hamburger 'Chart Source'): "bucket" = live volume buckets (default, unchanged) | "time" =
+        # clock candles polled from the daemon (app.time_feed). Same window, same render — only the source + x-axis
+        # differ. The feed thread is created lazily on first switch to Time mode and torn down on switch back.
+        self._chart_source = "bucket"
+        self._time_feed: "TimeCandleFeed | None" = None
         self.vb_kinetic_price = None   # Mode 4 secondary linked price ViewBox
         self.vb_pulse_churn = None     # Modes 7/8 secondary churn-scale ViewBox
         self.lower_plot = None         # Mode 10 lower VPIN sub-pane
@@ -2007,6 +2013,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.hm_contrast.reset_clicked.connect(self._hm_contrast_reset)     # Heatmap 'Reset -> auto'
         self.menu.keltnerScaleChanged.connect(self._on_kc_scale)   # 1m-KC smooth-approx effective-TF scale slider
         self.menu.candleModeChanged.connect(self._on_candle_mode)  # Candle Mode dropdown (mirrors 'W')
+        self.menu.chartSourceChanged.connect(self._set_chart_source)  # Chart Source: Volume Buckets <-> Time Candles
         self.menu.vpModeChanged.connect(self._on_vp_mode)          # Volume Profile Mode dropdown
         self.menu.scan_time_edit.set_range_provider(self._data_date_range)   # calendar: disable no-data days
 
@@ -2127,6 +2134,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _change_tf(self, tf: str) -> None:
         self._tf = tf
+        if self._chart_source == "time" and self._time_feed is not None:
+            self._time_feed.set_tf(tf)    # Time mode: retarget the clock-candle poller to the new timeframe
         self._save_ui_state()             # remember it — a reopened session starts on this timeframe
         self._audio_seeded = False        # new tf -> re-seed; don't read out its backlog
         self._announced_obs = set(); self._announced_icebergs = set()
@@ -2155,6 +2164,35 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.scan_time_edit.blockSignals(True)             # the tf-switch redraw reads the new anchor
             self.menu.scan_time_edit.setDateTime(target_dt)
             self.menu.scan_time_edit.blockSignals(False)
+
+    def _set_chart_source(self, src: str) -> None:
+        """Hamburger 'Chart Source' -> switch the SAME chart window between volume buckets and clock candles.
+
+        Time mode lazily spins up the clock-candle poller (app.time_feed) for the current tf and swaps the x-axis to
+        real clock labels; Bucket mode tears the poller down and restores the native bucket-index axis. Every render
+        signature is invalidated so the next frame repaints cleanly from the new source. The live bucket worker keeps
+        streaming throughout (untouched), so switching back is instant and the trading path is never interrupted."""
+        if src not in ("bucket", "time") or src == self._chart_source:
+            return
+        self._chart_source = src
+        if src == "time":
+            if self._time_feed is None:
+                self._time_feed = TimeCandleFeed(self._tf)
+                self._time_feed.start()
+            else:
+                self._time_feed.set_tf(self._tf)
+        else:
+            self.axis_bottom.clear_time_candle_map()    # restore the bucket-ordinal 'Idx: N' axis
+            if self._time_feed is not None:
+                self._time_feed.stop()                  # stop polling the daemon while in Bucket mode
+                self._time_feed = None
+        # force a clean repaint from the new source (mirror _refresh's signature reset)
+        self._last_snap = None
+        self._sig_candles = self._sig_obs = self._sig_fp = None
+        self._scanner_bucket_sig = self._last_scanner_sig = None
+        self._scanner_bucket_cache = None
+        self._m10_cc = None                             # #3 compute cache is source-specific -> drop it
+        self._autoranged = False; self._scanner_needs_autofit = True   # refit once to the new series
 
     def _drawing_scan_floor(self, tf: str):
         """Earliest saved-drawing anchor for `tf` as a Unix epoch, pulled back a tf-sized margin so
@@ -10343,9 +10381,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return []
 
     # ------------------------------------------------------------------
+    def _effective_snapshot(self) -> dict:
+        """The per-frame data source. Bucket mode -> the live volume-bucket worker (default, byte-for-byte unchanged).
+        Time mode -> the clock-candle poller's snapshot (identically shaped by app.time_feed). Returning the time
+        snapshot even while it's still empty (first ~1.5s after switching) is deliberate: it shows a clean 'no data
+        yet' frame rather than flashing volume buckets. Falls back to the worker only if the feed is somehow absent."""
+        if self._chart_source == "time":
+            return self._time_feed.snapshot() if self._time_feed is not None else self.worker.snapshot()
+        return self.worker.snapshot()
+
+    # ------------------------------------------------------------------
     def _on_timer(self) -> None:
         _pc = time.perf_counter; _t0 = _pc()                 # session profiler: frame total (negligible)
-        snap = self.worker.snapshot()
+        snap = self._effective_snapshot()
         self._last_snap = snap
         # position-tool paper-trade sim: LIVE account fed the live tick, REPLAY account fed the playback path
         try:
@@ -11348,6 +11396,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (The spec says "four arrays"; there are three documented returns —
         ``anchor_idx`` is a scalar pointer, not an array. Implemented as listed.)
         """
+        if self._chart_source == "time":
+            return self._build_time_scanner_buckets()   # clock candles: self-contained (no bucket archive/recon splice)
         # REPLAY fast-path: the frame is fully determined by the cursor (clip is <= cursor and the archive is stable),
         # so if the cursor hasn't moved just return the cache — skipping the archive walk + ~11k-element concat + clip
         # that otherwise run EVERY frame here via the always-on selection refresh. A step/date change nulls the sig, so
@@ -11527,6 +11577,47 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # re-entrant _build_scanner_buckets (selectionChanged -> stats refresh) hits the cache, not a rebuild.
         if getattr(self, "drawer", None) is not None:
             self.drawer.set_idx_frame(self._global_idx_offset, len(filtered), self.worker.tf, filtered)
+        return result
+
+    def _build_time_scanner_buckets(self) -> "tuple[list[dict], list[int], int]":
+        """CLOCK-CANDLE build path (Chart Source = Time). Self-contained on purpose: the daemon serves a complete,
+        gap-filled clock series for the tf, so there is NO cold-archive prepend and NO recon-replay (those splice
+        VOLUME-bucket history, which must never mix into a clock series). Mirrors the live branch of
+        _build_scanner_buckets: append the forming edge, filter to the Zero-Point anchor, cache by signature, keep
+        drawings glued to bucket indices. Warm-up prefixes for the bucket-only strategy overlays are left empty."""
+        snap = self._last_snap or (self._time_feed.snapshot() if self._time_feed is not None else {})
+        closed_list: list[dict] = list(snap.get("closed_buckets", []) or [])
+        active: dict = snap.get("active_bucket") or {}
+        anchor_unix = self.menu.scan_start_unix()
+        combined: list[dict] = list(closed_list)
+        _forming = False
+        if active and active.get("curr_vol", 0.0) > 0:      # append the live forming edge unless it's a stale dup
+            last = closed_list[-1] if closed_list else None
+            if not (last is not None and active.get("start_time") == last.get("start_time")
+                    and active.get("curr_vol") == last.get("curr_vol")):
+                combined.append(active); _forming = True
+        sig = ("time", len(combined), round(active.get("curr_vol", 0.0), 1), anchor_unix, self._tf)
+        if sig == self._scanner_bucket_sig and self._scanner_bucket_cache is not None:
+            return self._scanner_bucket_cache
+        anchor_idx: Optional[int] = None
+        filtered: list[dict] = []
+        for i, b in enumerate(combined):
+            if float(b.get("start_time", 0.0)) >= anchor_unix:
+                if anchor_idx is None:
+                    anchor_idx = i
+                filtered.append(b)
+        if anchor_idx is None:
+            anchor_idx = len(combined)
+        self._mmx_warm = []                                  # bucket-only strategies: no clock-candle history semantics
+        self._rr_warm = combined[:anchor_idx]
+        self._mmx_last_forming = bool(_forming)
+        self._global_idx_offset = 0                          # clock candles: cosmetic Idx base (no history.db id)
+        x_indices: list[int] = list(range(len(filtered)))
+        result = (filtered, x_indices, anchor_idx)
+        self._scanner_bucket_sig = sig
+        self._scanner_bucket_cache = result
+        if getattr(self, "drawer", None) is not None:
+            self.drawer.set_idx_frame(self._global_idx_offset, len(filtered), self._tf, filtered)
         return result
 
     # ------------------------------------------------------------------
@@ -13696,6 +13787,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Mode 10 — neon-graded bucket candles + gray baseline (upper pane)
         synchronized with a rolling-50 VPIN toxicity heatmap (lower pane)."""
         self._ensure_canvas_panes()
+        if self._chart_source == "time" and buckets:   # clock candles: label the index axis with the true UTC-local clock
+            self.axis_bottom.set_time_candle_map(float(buckets[0].get("start_time", 0.0)),
+                                                 config.TF_SECONDS.get(self._tf, 60))
         self._update_live_price_label(buckets, x)   # dashed live-price line + right-edge price/fill% pill (green/red)
         # #3 static closed-bucket compute cache: closed buckets are immutable, so their
         # OHLC/poc/brush + baseline EMA + rolling-50 VPIN rows are computed ONCE
@@ -14202,6 +14296,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.worker_1m.stop()
         except Exception:
             pass
+        if getattr(self, "_time_feed", None) is not None:   # clock-candle poller (only alive while in Time mode)
+            try:
+                self._time_feed.stop()
+            except Exception:
+                pass
         for _sw in (getattr(self, "_sub_workers", None) or {}).values():   # lazily-created 5m/15m sub-popup workers
             try:
                 _sw.stop()

@@ -263,6 +263,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
     candleModeChanged = QtCore.Signal(int)   # candle render mode 0..5 (also cycled by 'W')
     vpModeChanged = QtCore.Signal(int)       # volume-profile render mode 0..8 (selection VP + 4h 'V' + prev-day VP)
+    chartSourceChanged = QtCore.Signal(str)  # chart data source: "bucket" (volume buckets) | "time" (clock candles)
     helpRequested = QtCore.Signal()       # the top-right '?' — show the keyboard-shortcuts cheatsheet
 
     PANEL_WIDTH = 308
@@ -350,6 +351,33 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                     return
         self.set_tf = _set_tf
         root.addWidget(self.tf_combo)
+
+        # --- CHART SOURCE: Volume Buckets <-> Time Candles. Same window, same footprint/bubbles/stats — only the
+        # data source (clock vs volume) and the x-axis (clock time vs bucket index) differ. The Bucket Scale combo
+        # above doubles as the tf selector for BOTH: on 5m it's the 5x volume scale in Bucket mode, and 5-minute
+        # clock candles in Time mode. (Time candles: exact OHLC/footprint/bubbles/VPIN; engine-only overlays are
+        # blank because the daemon computes them for volume buckets only.) ---
+        root.addWidget(self._header("Chart Source"))
+        self.source_combo = QtWidgets.QComboBox()
+        self.source_combo.addItem("Volume Buckets", "bucket")
+        self.source_combo.addItem("Time Candles", "time")
+        self.source_combo.setCurrentIndex(0)
+        self.source_combo.setToolTip(
+            "Volume Buckets = the native order-flow chart (default). Time Candles = clock 1m/5m/15m/30m/1h/4h with the "
+            "SAME footprint/bubbles/stats on a TIME x-axis. The Bucket Scale above picks the timeframe for both.")
+        self.source_combo.currentIndexChanged.connect(
+            lambda _i: self.chartSourceChanged.emit(self.source_combo.currentData()))
+
+        def _set_chart_source(src: str) -> None:
+            """Sync the selector to `src` WITHOUT emitting (session restore); mirrors set_tf."""
+            for _i in range(self.source_combo.count()):
+                if self.source_combo.itemData(_i) == src:
+                    _b = self.source_combo.blockSignals(True)
+                    self.source_combo.setCurrentIndex(_i)
+                    self.source_combo.blockSignals(_b)
+                    return
+        self.set_chart_source = _set_chart_source
+        root.addWidget(self.source_combo)
 
         # --- candle render mode (mirrors the 'W' key cycle; either changes the other) ---
         root.addWidget(self._header("Candle Mode"))

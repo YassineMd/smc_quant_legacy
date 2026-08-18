@@ -153,6 +153,7 @@ class LocalTimeAxis(pg.AxisItem):
         super().__init__(*args, **kwargs)
         self.setTickFont(_MONO)
         self._scanner_active = False   # bucket-index mode vs chronological mode
+        self._tc_map = None            # TIME-CANDLE mode: (t0, tf_secs) mapping x=index -> real clock (None = off)
 
     def set_scanner_active(self, on: bool) -> None:
         """Toggle between bucket-ordinal labels and chronological time labels.
@@ -165,7 +166,34 @@ class LocalTimeAxis(pg.AxisItem):
             self.picture = None
             self.update()
 
+    def set_time_candle_map(self, t0: float, tf_secs: int) -> None:
+        """TIME-CANDLE mode: candles are drawn at x = INDEX (0..N-1), but because clock candles are GAP-FILLED
+        (one per interval) index k maps LINEARLY to clock time t0 + k*tf. Store that map so the ticks print the
+        true host-local clock on an index coordinate. Overrides the scanner 'Idx: N' labels while set."""
+        m = (float(t0), int(tf_secs))
+        if self._tc_map != m:
+            self._tc_map = m
+            self.picture = None
+            self.update()
+
+    def clear_time_candle_map(self) -> None:
+        if self._tc_map is not None:
+            self._tc_map = None
+            self.picture = None
+            self.update()
+
     def tickStrings(self, values, scale, spacing):
+        # Time-candle mode: x is a bucket INDEX; map index -> clock via the stored (t0, tf).
+        if self._tc_map is not None:
+            t0, tf = self._tc_map
+            out = []
+            for v in values:
+                try:
+                    dt = datetime.fromtimestamp(t0 + v * tf)
+                    out.append(dt.strftime("%m-%d %H:%M" if tf >= 3600 else "%H:%M"))
+                except (OSError, ValueError, OverflowError):
+                    out.append("")
+            return out
         # Scanner active: pure bucket-ordinal axis (Idx: N), no timestamps.
         if self._scanner_active:
             return [f"Idx: {int(round(v))}" for v in values]

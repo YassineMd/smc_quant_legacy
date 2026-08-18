@@ -108,6 +108,38 @@ def candles_from_footprint_nodes(nodes: dict, tf_secs: int) -> list:
     return out
 
 
+def to_bucket_wire(c: dict) -> dict:
+    """Normalize a served clock candle (open_price/close_price shape) to the EXACT volume-bucket wire schema
+    (quant_engine._assemble) so the terminal's bucket render/footprint/stats/overlays consume it UNCHANGED.
+
+    HONESTY of the mapped fields:
+      * OHLC / buy_vol / sell_vol / curr_vol / levels / poc_price -> REAL (Binance-exact OHLC, tape-faithful footprint).
+      * opL/opS <- buy_vol/sell_vol: the candle BODY brush is `_neon_v2_brush(opL,opS,clL,clS,...)`. A clock candle has
+        no open/close-long/short *intent* decomposition (the daemon computes that only for volume buckets), so we drive
+        the body from NET TAKER FLOW instead: buy_vol -> opL (green when buying dominated), sell_vol -> opS (red when
+        selling did); conviction opacity = |buy-sell|/curr_vol. Real, measured, directional — just 2-colour (green/red)
+        vs the bucket body's 4-colour open/close encoding. clL/clS stay 0 (unknown, not faked).
+      * Every other engine scalar (buyer_er, seller_er, vpin inputs, cvd wicks, delta_h1, up/dn_ticks, liq_*, churn,
+        vol_mult) is an HONEST ZERO/None: the daemon does not compute it for a clock candle. Overlays that need it draw
+        nothing (they are try/except-guarded) rather than showing a fabricated value."""
+    bv = float(c.get("buy_vol", 0.0)); sv = float(c.get("sell_vol", 0.0))
+    op = float(c.get("open_price", c.get("open", 0.0)))
+    cl = float(c.get("close_price", c.get("close", op)))
+    return {
+        "start_time": float(c.get("start_time", 0.0)), "end_time": float(c.get("end_time", 0.0)),
+        "open": op, "high": float(c.get("high", op)), "low": float(c.get("low", op)), "close": cl,
+        "poc_price": float(c.get("poc_price", cl)),
+        "buy_vol": bv, "sell_vol": sv, "curr_vol": float(c.get("curr_vol", bv + sv)),
+        "levels": {p: {"b": float(v.get("b", 0.0)), "s": float(v.get("s", 0.0))}
+                   for p, v in (c.get("levels") or {}).items()},
+        "opL": bv, "opS": sv, "clL": 0.0, "clS": 0.0,          # body = net-flow dominance (see docstring)
+        "buyer_er": 0.0, "seller_er": 0.0, "vol_mult": 0.0, "churn": 0.0,   # engine-only -> honest zeros
+        "cvd_hi": 0.0, "cvd_lo": 0.0, "delta_h1": None, "price_h1": None,
+        "up_ticks": 0.0, "dn_ticks": 0.0, "liq_short": 0.0, "liq_long": 0.0,
+        "target_vol": 0.0, "empty": bool(c.get("empty", False)),
+    }
+
+
 def parity(trades: Iterable[dict], candles: list) -> dict:
     """Exact accounting identity check. Returns honesty % (100 = perfect) + worst per-candle footprint discrepancy.
     (A) tape total == candle buy/sell totals; (B) each candle's footprint levels sum to its buy/sell totals."""
