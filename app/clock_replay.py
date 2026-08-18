@@ -15,7 +15,6 @@ import json
 import os
 
 from . import config
-from .persistence import _bucket_from_dict
 
 _ROOT = os.path.join(config.PROJECT_DIR, "study", "clock_archive")
 
@@ -78,7 +77,10 @@ def _load_chunk(path: str) -> "list[dict]":
                 data = json.loads(line)["data"]
                 if isinstance(data, str):
                     data = json.loads(data)
-                out.append(_bucket_from_dict(data).full_snapshot())
+                out.append(data)                      # already a complete wire (full_snapshot) dict — clock_recon
+                #                                       writes wire field names (open/close), NOT the persistence
+                #                                       open_price/close_price _bucket_from_dict expects, so returning
+                #                                       it raw is both correct AND avoids that lossy round-trip.
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         out = []
     if len(_chunk_cache) >= _CHUNK_CACHE_MAX:
