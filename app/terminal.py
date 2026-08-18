@@ -10845,6 +10845,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _replay_snap_to_bucket(self, t: float) -> float:
         """Snap a wall time to the newest CLOSED bucket end_time <= t, so the cursor sits on a real bar edge. In the
         pre-daemon (reconstruction) era, snap against the RECON buckets instead of the daemon's live window."""
+        if self._chart_source == "time":                    # TIME mode: snap against the historical clock archive
+            from app import clock_replay
+            if clock_replay.available(self._tf):
+                win = clock_replay.window_by_time(self._tf, float(t) - self._replay_lookback_secs(), float(t))
+                cand = [float(b.get("end_time", 0.0)) for b in win if float(b.get("end_time", 0.0)) <= t]
+                if cand:
+                    return cand[-1]
+                latest = clock_replay.latest_start(self._tf)   # cursor past the archive -> land on its last candle
+                return float(latest) if latest else float(t)
+            snap = self._last_snap or (self._time_feed.snapshot() if self._time_feed is not None else None)
+            cand = [float(b.get("end_time", 0.0)) for b in ((snap or {}).get("closed_buckets") or [])
+                    if float(b.get("end_time", 0.0)) <= t]
+            return cand[-1] if cand else float(t)
         if self._replay_on and float(t) < recon_replay.CUTOFF and getattr(self, "worker", None) \
                 and recon_replay.available(self.worker.tf):
             win = recon_replay.window_by_time(self.worker.tf, float(t) - self._replay_lookback_secs(), float(t))
@@ -10866,8 +10879,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # step through the FULL available sequence — the loaded cold-archive window PLUS the live closed buckets —
         # so an archive-region replay advances bar-by-bar instead of jumping to (or stalling at) the live buffer.
         # RECON track: step ONLY over the reconstruction window (no daemon live buckets) -> a hard wall at 2026-06-20.
-        if self._in_recon_replay():
-            seq = list(self._arch_win or [])
+        if self._chart_source == "time" or self._in_recon_replay():
+            seq = list(self._arch_win or [])                 # TIME mode / recon: step ONLY over the loaded clock/recon window
         else:
             seq = list(self._arch_win or []) + list(snap.get("closed_buckets") or [])
         ets = sorted({float(b.get("end_time", 0.0)) for b in seq})
@@ -11585,6 +11598,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         VOLUME-bucket history, which must never mix into a clock series). Mirrors the live branch of
         _build_scanner_buckets: append the forming edge, filter to the Zero-Point anchor, cache by signature, keep
         drawings glued to bucket indices. Warm-up prefixes for the bucket-only strategy overlays are left empty."""
+        if self._replay_on and self._replay_edge_t is not None:
+            return self._build_time_replay_buckets()         # REPLAY: source clock candles from the clock_archive
         snap = self._last_snap or (self._time_feed.snapshot() if self._time_feed is not None else {})
         closed_list: list[dict] = list(snap.get("closed_buckets", []) or [])
         active: dict = snap.get("active_bucket") or {}
@@ -11614,6 +11629,49 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._global_idx_offset = 0                          # clock candles: cosmetic Idx base (no history.db id)
         x_indices: list[int] = list(range(len(filtered)))
         result = (filtered, x_indices, anchor_idx)
+        self._scanner_bucket_sig = sig
+        self._scanner_bucket_cache = result
+        if getattr(self, "drawer", None) is not None:
+            self.drawer.set_idx_frame(self._global_idx_offset, len(filtered), self._tf, filtered)
+        return result
+
+    def _build_time_replay_buckets(self) -> "tuple[list[dict], list[int], int]":
+        """TIME-mode REPLAY: the frame is a FROZEN causal clip of the historical clock_archive, ending on the cursor.
+        Mirrors the volume recon-replay clip (fixed left edge = replay-start - span, so Right-arrow GROWS the window
+        instead of sliding it), but sources clock candles from app.clock_replay. `_arch_win` is set to the full loaded
+        window so _advance_replay steps over it. Fail-safe: an empty/missing archive yields an empty frame."""
+        from app import clock_replay
+        edge = float(self._replay_edge_t)
+        start = float(self._replay_start_t if self._replay_start_t is not None else edge)
+        lo = min(start - self._replay_span_secs(), edge - self._replay_lookback_secs())
+        hi = edge + self._replay_span_secs()
+        win = clock_replay.window_by_time(self._tf, lo, hi)
+        self._arch_win = win; self._arch_win_key = None          # _advance_replay steps over this clock window
+        sig = ("time-replay", edge, len(win), self._tf, self.menu.scan_start_unix())
+        if sig == self._scanner_bucket_sig and self._scanner_bucket_cache is not None:
+            return self._scanner_bucket_cache
+        m = 0                                                    # candles CLOSED at/before the cursor (causal)
+        for b in win:
+            if float(b.get("end_time", 0.0)) <= edge:
+                m += 1
+            else:
+                break
+        left_t = start - self._replay_span_secs()                # FIXED left edge (does not move with the cursor)
+        _lo = 0
+        for b in win[:m]:
+            if float(b.get("start_time", 0.0)) < left_t:
+                _lo += 1
+            else:
+                break
+        keep = min(max(m - _lo, min(m, config.REPLAY_MIN_BUCKETS)), config.REPLAY_WINDOW)
+        _rk = m - keep
+        filtered = win[_rk:m]
+        self._mmx_warm = []
+        self._rr_warm = win[:_rk]                                # full pre-window history for Radar Runner warm-up
+        self._mmx_last_forming = False                           # replay: no live forming edge
+        self._global_idx_offset = 0
+        x_indices: list[int] = list(range(len(filtered)))
+        result = (filtered, x_indices, _rk)
         self._scanner_bucket_sig = sig
         self._scanner_bucket_cache = result
         if getattr(self, "drawer", None) is not None:

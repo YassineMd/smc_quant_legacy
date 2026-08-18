@@ -223,6 +223,22 @@ class MarketDataCore:
             ab = ce.active_bucket
             if ab.start_time is not None and ab.curr_vol > 0:      # append the live forming clock candle
                 out.append(ab.live_snapshot(time.time(), ce.avg_velocity))
+            # AUTHORITATIVE OHLC: override open/high/low/close from the kline-framed footprint nodes (Binance-exact,
+            # same source the recon uses) wherever a node exists (the recent FOOTPRINT_MEM_CAP window); footprint /
+            # volume / OI / cvd / ticks stay engine-derived. Keeps live OHLC == the klines every chart shows.
+            fp = self.footprints_db.get(tf) or {}
+            kln = {}
+            for ut, n in fp.items():
+                if isinstance(n, dict) and "open" in n:
+                    try:
+                        kln[int(ut)] = n
+                    except (TypeError, ValueError):
+                        pass
+            for c in out:
+                n = kln.get(int(c.get("start_time", 0)))
+                if n is not None:
+                    c["open"] = float(n["open"]); c["high"] = float(n["high"])
+                    c["low"] = float(n["low"]); c["close"] = float(n["close"])
             return gapfill_wire(out, secs)
         except Exception:
             return []

@@ -503,6 +503,7 @@ class ClockEngine(QuantEngine):
         self._cap = int(cap) if cap else config.TIME_ENGINE_CAP
         self._cur_k: int | None = None      # the active bucket's clock-interval open (epoch seconds)
         self._vol_ema = float(config.DEFAULT_TARGET_VOL)   # rolling clock-volume estimate (da2 mark / vpin denom)
+        self._on_close = None               # optional sink(QuantBucket) fired at each close (recon writer); None live
 
     def process_tick(self, price, vol, taker_buy, delta_oi, footprints_dict,
                      liquidations=None, tick_time=None, size_bin=None):
@@ -519,9 +520,12 @@ class ClockEngine(QuantEngine):
             # Close the CURRENT bucket at its own interval boundary (start + tf). Intervals with NO trades between
             # _cur_k and k are simply absent from closed_buckets; catchup_time_candles gap-fills them for the chart.
             self._close_active_bucket(float(self._cur_k + self.tf_secs), footprints_dict)
+            just = self.closed_buckets[-1]
+            if self._on_close is not None:                     # recon: stream the just-closed candle to disk immediately
+                self._on_close(just)
             # roll the clock-volume estimate off the bucket just closed, then re-scale the fresh bucket's target_vol
-            if self.closed_buckets and self.closed_buckets[-1].curr_vol > 0:
-                self._vol_ema = 0.9 * self._vol_ema + 0.1 * self.closed_buckets[-1].curr_vol
+            if just.curr_vol > 0:
+                self._vol_ema = 0.9 * self._vol_ema + 0.1 * just.curr_vol
                 self.target_vol = max(1.0, self._vol_ema)
                 self.active_bucket.target_vol = self.target_vol
             while len(self.closed_buckets) > self._cap:        # tighter RAM cap than the volume engines (recent window)
