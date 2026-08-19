@@ -22,15 +22,24 @@ import numpy as np
 from . import config, protocol
 from .time_candles import to_bucket_wire
 
-POLL_SECS = 1.5              # re-request cadence (the forming clock candle advances continuously server-side)
-_RECV_WINDOW = 2.0           # seconds to collect the chunked reply per poll
+POLL_SECS = 0.5              # re-request cadence (was 1.5 — clock candles were lagging the live bucket stream by ~3.5s)
+_RECV_WINDOW = 3.0           # HARD cap on collecting one chunked reply (safety only; idle-detection ends it far sooner)
+_FIRST_BYTE_TIMEOUT = 2.0    # wait up to this for the daemon's FIRST frame (it may be (re)building the candle set)
+_IDLE_TIMEOUT = 0.30         # once frames are flowing, THIS much silence = reply complete -> return at once (the daemon
+#                              never closes the socket or sends an end-marker, so idle-gap is how we know it's done)
 _CONNECT_TIMEOUT = 3.0
 
 
 def fetch_time_candles(tf: str, host: Optional[str] = None, port: Optional[int] = None,
                        window: float = _RECV_WINDOW) -> Optional[List[dict]]:
     """One request/response: return the daemon's gap-filled clock candles for ``tf`` (served open_price/close_price
-    shape), or None on any socket error (so the caller can distinguish "no connection" from "connected, empty")."""
+    shape), or None on any socket error (so the caller can distinguish "no connection" from "connected, empty").
+
+    The daemon streams the reply as chunked TimeCandlesPacket frames but does NOT close the socket or send an
+    end-marker. So we wait generously for the FIRST frame, then switch to a SHORT idle timeout: the first `recv` that
+    returns nothing for `_IDLE_TIMEOUT` means the (complete) reply has stopped arriving -> return immediately instead
+    of burning the whole window. This cut per-poll fetch time from ~2.0s to ~0.3s (the old flat-window wait was the
+    bulk of the clock-vs-bucket lag)."""
     host = host or config.IPC_HOST
     port = port or config.IPC_PORT
     try:
@@ -39,15 +48,16 @@ def fetch_time_candles(tf: str, host: Optional[str] = None, port: Optional[int] 
         return None
     try:
         s.sendall((protocol.json.dumps({"action": "get_time_candles", "tf": tf}) + "\n").encode())
-        s.settimeout(window)
         buf = b""; out: List[dict] = []; deadline = time.monotonic() + window
+        s.settimeout(_FIRST_BYTE_TIMEOUT)                 # generous wait for the daemon's first frame...
         while time.monotonic() < deadline:
             try:
                 chunk = s.recv(65536)
             except socket.timeout:
-                break
+                break                                     # idle gap -> the (complete) reply has stopped arriving
             if not chunk:
-                break
+                break                                     # daemon closed the socket -> done
+            s.settimeout(_IDLE_TIMEOUT)                   # ...then a SHORT idle timeout so end-of-reply is caught fast
             buf += chunk
             while b"\n" in buf:
                 line, buf = buf.split(b"\n", 1)
