@@ -761,7 +761,10 @@ class BucketCandleItem(pg.GraphicsObject):
             # (separate, z6) sits at center. DIVERGES FROM the ranged doji below.
             if abs(hh - ll) < config.TICK_SIZE / 2.0:
                 p.setPen(self._flat_pen)
-                p.drawLine(QtCore.QPointF(xi - half, ll), QtCore.QPointF(xi + half, ll))
+                # Span the FULL interval (not just the body width) so a run of no-trade (flat) candles — common on 1m
+                # clock candles in a quiet stretch — connects into a CONTINUOUS carry-forward line instead of
+                # disconnected ticks that read as "gaps".
+                p.drawLine(QtCore.QPointF(xi - 0.5, ll), QtCore.QPointF(xi + 0.5, ll))
                 continue
             # body bounds first, so the wicks stop AT the body (no line through the fill).
             top, bot = max(oo, cc), min(oo, cc)
