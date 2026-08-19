@@ -18,8 +18,10 @@ zero contention. There is no offline/mock/replay path (Purge Protocol §10.1.4).
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import multiprocessing
+import os
 import statistics
 import time
 from collections import deque
@@ -110,6 +112,11 @@ class MarketDataCore:
         # levels, POC) for get_time_candles. Bounded RAM (TIME_ENGINE_CAP/tf); rebuilt live from ticks after a restart.
         self.clock_engines: Dict[str, ClockEngine] = {
             tf: ClockEngine(config.TF_SECONDS[tf], tf) for tf in config.TIMEFRAMES}
+        # CLOCK-candle PERSISTENCE: closed clock candles are saved to disk + reloaded so a daemon restart does NOT wipe
+        # clock history (they'd otherwise cold-boot empty; 15m/30m take days to refill). {tf: {start_time_int: wire}}.
+        self._tc_store: Dict[str, Dict[int, dict]] = {}
+        self._tc_loaded: bool = False          # lazy load-once guard (on the first get_time_candles)
+        self._tc_last_save: float = 0.0         # save throttle
         self.session = _make_session()
 
         self.latest_live_price: float | None = None
@@ -219,6 +226,7 @@ class MarketDataCore:
             ce = self.clock_engines.get(tf)
             if not secs or ce is None:
                 return []
+            self._tc_load()                                        # lazy (once): load persisted store + footprint seed
             # AUTHORITATIVE OHLC: override open/high/low/close from the kline-framed footprint nodes (Binance-exact,
             # same source the recon uses); footprint / volume / OI / cvd / ticks stay engine-derived.
             fp = self.footprints_db.get(tf) or {}
@@ -237,33 +245,83 @@ class MarketDataCore:
                     c["low"] = float(n["low"]); c["close"] = float(n["close"])
                 return c
 
-            # PERF: rebuilding all ~800 closed full_snapshots every request cost ~5s under multi-window poll load and
-            # blanked/gapped the clients. Closed candles are IMMUTABLE -> cache each (keyed by start_time), build once,
-            # reuse forever. Only a newly-closed candle is ever built. (Prune keeps the cache near the engine window.)
-            tfcache = getattr(self, "_tc_cache", None)
-            if tfcache is None:
-                tfcache = self._tc_cache = {}
-            cc = tfcache.setdefault(tf, {})
-            base = []
-            for b in ce.closed_buckets:
+            # PERSISTENT store = source of truth for CLOSED clock candles. Saved to disk + reloaded, so a daemon restart
+            # NO LONGER wipes clock history (the whole point of this feature). Closed candles are immutable -> each is
+            # built ONCE (as the engine closes it) and kept; a restart repopulates from disk (+ footprint seed for a
+            # first/empty run). This also killed the ~5s latency: rebuilding all ~800 full_snapshots per request had
+            # blanked/gapped the clients under multi-window poll load.
+            store = self._tc_store.setdefault(tf, {})
+            for b in ce.closed_buckets:                            # fold the engine's newly-closed candles into the store
                 stk = int(b.start_time) if b.start_time is not None else None
-                w = cc.get(stk)
-                if w is None:
-                    w = _ovr(b.full_snapshot())
-                    if stk is not None:
-                        cc[stk] = w
-                base.append(w)
-            if len(cc) > 2 * len(ce.closed_buckets) + 64:          # prune dropped-out intervals (cap-trim window slide)
-                keep = {int(b.start_time) for b in ce.closed_buckets if b.start_time is not None}
-                for k in [k for k in cc if k not in keep]:
-                    del cc[k]
-            out = list(base)                                       # copy so the forming append never mutates the cache
+                if stk is not None and stk not in store:
+                    store[stk] = _ovr(b.full_snapshot())
+            cap = int(getattr(config, "TIME_ENGINE_CAP", 800))
+            if len(store) > cap:                                   # keep the most-recent `cap` intervals
+                for k in sorted(store)[:len(store) - cap]:
+                    del store[k]
+            out = [store[k] for k in sorted(store)]
             ab = ce.active_bucket
             if ab.start_time is not None and ab.curr_vol > 0:      # forming candle: keep the LIVE tick OHLC (NOT kline-
                 out.append(ab.live_snapshot(time.time(), ce.avg_velocity))   # overridden -> close is fresher than the ~1-2s kline)
             return gapfill_wire(out, secs)
         except Exception:
             return []
+
+    # ------------------------------------------------------------------
+    # Clock-candle PERSISTENCE: closed clock candles survive a daemon restart (else they cold-boot empty and take
+    # hours/days to refill — 15m/30m are unusable for a long time). Store = {tf: {start_time_int: wire}}. Saved gzipped
+    # to data/time_candles.json.gz on a throttle (sync loop) + on shutdown; loaded once on the first serve.
+    # ------------------------------------------------------------------
+    def _tc_path(self) -> str:
+        return os.path.join(config.DATA_DIR, "time_candles.json.gz")
+
+    def _tc_load(self) -> None:
+        if getattr(self, "_tc_loaded", False):
+            return
+        self._tc_loaded = True
+        try:                                                       # 1) reload the persisted store (prior runs)
+            p = self._tc_path()
+            if os.path.exists(p):
+                with gzip.open(p, "rt", encoding="utf-8") as f:
+                    data = json.load(f) or {}
+                for tf, cands in data.items():
+                    if tf in config.TF_SECONDS and isinstance(cands, dict):
+                        self._tc_store[tf] = {int(k): v for k, v in cands.items()}
+                print(f"CLOCK-CANDLES: loaded {sum(len(v) for v in self._tc_store.values())} persisted candles.")
+        except Exception as e:
+            print(f"CLOCK-CANDLE LOAD ERROR: {e}")
+        try:                                                       # 2) seed missing intervals from kline footprints so a
+            from .time_candles import candles_from_footprint_nodes, to_bucket_wire   # first/empty run isn't blank
+            for tf in config.TIMEFRAMES:
+                secs = config.TF_SECONDS.get(tf)
+                if not secs:
+                    continue
+                store = self._tc_store.setdefault(tf, {})
+                for c in candles_from_footprint_nodes(self.footprints_db.get(tf) or {}, secs):
+                    stk = int(c.get("start_time", 0) or 0)
+                    if stk and stk not in store:
+                        store[stk] = to_bucket_wire(c)
+        except Exception as e:
+            print(f"CLOCK-CANDLE SEED ERROR: {e}")
+
+    def _tc_save(self, force: bool = False) -> None:
+        """Persist the clock-candle store (throttled ~60s; force=True on shutdown). Atomic replace; fully guarded."""
+        try:
+            now = time.time()
+            if not force and now - getattr(self, "_tc_last_save", 0.0) < 60.0:
+                return
+            self._tc_last_save = now
+            if not self._tc_store:
+                return
+            # dict(store) is an atomic (GIL-held) snapshot -> safe to run off the event loop while catchup_time_candles
+            # (on the loop) may be adding a newly-closed candle; no "dict changed size during iteration".
+            data = {tf: {str(k): v for k, v in dict(store).items()} for tf, store in list(self._tc_store.items()) if store}
+            p = self._tc_path(); tmp = p + ".tmp"
+            with gzip.open(tmp, "wt", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp, p)                                     # atomic swap (never a torn file)
+        except Exception as e:
+            print(f"CLOCK-CANDLE SAVE ERROR: {e}")
 
     def catchup_delta(self, tf: str, since):
         """How many buckets to ship as a DELTA to a client whose cached last-bucket DB-id is ``since``.

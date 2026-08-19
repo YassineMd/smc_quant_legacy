@@ -320,6 +320,11 @@ def main() -> None:
             server.core.shutdown_ob_pool()   # tear the spawn pool down cleanly (no semaphore warnings); bounded
         except Exception as e:
             print(f"OB POOL SHUTDOWN ERROR: {e}")
+        try:
+            server.core._tc_save(force=True)   # final clock-candle flush -> a restart preserves clock history
+            print("CLOCK-CANDLES FLUSHED.")
+        except Exception as e:
+            print(f"CLOCK-CANDLE FINAL SAVE ERROR: {e}")
         server.store.close(server.core)
         if server.depth_store is not None:
             server.depth_store.close()

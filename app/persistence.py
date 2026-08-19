@@ -527,6 +527,10 @@ class HistoryStore:
             ok = await loop.run_in_executor(None, self._write, payload)
             if ok:
                 self._cursor.update(new_cursors)
+            try:
+                await loop.run_in_executor(None, core._tc_save)   # persist clock candles off-loop (self-throttled ~60s)
+            except Exception as e:
+                print(f"CLOCK-CANDLE SYNC ERROR: {e}")
 
     def close(self, core=None) -> None:
         """Final synchronous flush (best-effort) + close the connection."""
