@@ -10484,6 +10484,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     # ------------------------------------------------------------------
     def _on_timer(self) -> None:
+        # MULTI-WINDOW CPU: throttle the paint loop when THIS window isn't the focused one, so several open charts
+        # (bucket + clock) don't each burn 20Hz of CPU. Data threads keep running -> focusing a background window
+        # catches it up within a frame. The active window is always full-rate. Fail-safe (any error -> render normally).
+        try:
+            _skipn = max(1, int(getattr(config, "GUI_BG_FRAME_SKIP", 1)))
+            if _skipn > 1 and not self.isActiveWindow():
+                self._bg_skip = (getattr(self, "_bg_skip", 0) + 1) % _skipn
+                if self._bg_skip != 0:
+                    return
+            else:
+                self._bg_skip = 0
+        except Exception:
+            pass
         _pc = time.perf_counter; _t0 = _pc()                 # session profiler: frame total (negligible)
         snap = self._effective_snapshot()
         self._last_snap = snap

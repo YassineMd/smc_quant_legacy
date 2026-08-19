@@ -228,6 +228,11 @@ DOM_LEVELS = 200                # main.py:881 — sorted depth levels per side
 # GUI timing (spec §1.4.2, §9.2.3)
 # ---------------------------------------------------------------------------
 GUI_TIMER_MS = 50               # 20Hz master redraw loop
+# Multi-window CPU relief: a chart window that is NOT the focused one repaints only every Nth frame (data threads keep
+# running; only the paint throttles). With several charts open (e.g. 1m/30m bucket + 15m/30m clock) rendering them all
+# at 20Hz saturates CPU. N=3 -> background windows paint ~6.7Hz (still smooth to glance at); raise for more relief, set
+# 1 to disable. The FOCUSED window is always full 20Hz.
+GUI_BG_FRAME_SKIP = 3
 SESSION_PERF = True             # terminal-side session profiler: ~10s CSV row to data/session_perf.log
 SESSION_PERF_SECS = 10.0        # profiler flush cadence (progressive-lag instrumentation; negligible overhead)
 # tracemalloc LEAK HUNT -> data/session_memtrace.log. DIAGNOSTIC and DEFAULT OFF: with millions of live JSON objects
