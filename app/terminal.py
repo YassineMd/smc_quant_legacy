@@ -7551,7 +7551,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _slbuf = 0.002 if self._tf == "1h" else 0.003         # forward-optimized candle-SL buffer: 1h 0.2% / 30m+ 0.3%
             _bset = list(warm) + list(filtered)
             entries = radar_breakout_detect.detect(_bset, skip_last=_forming,
-                                                   sl_buf=_slbuf, tp_frac=config.RR_TP_FRAC)   # walls over FULL history; forming bar skipped (TP = 0.3% prop-validated)
+                                                   sl_buf=_slbuf, tp_frac=config.RR_TP_FRAC)   # walls over FULL history; forming bar skipped (TP = config.RR_TP_FRAC, 0.25%)
             # 5m TIME-candle absorpR gate: only fire breakouts with absorption-R >= config.RR_ABSORPR_MIN at the
             # breakout bar (OOS-validated on 5m clock candles: maxDD 21%->6%, marginal->PASS). 5m TIME only -- bucket
             # scale + every other tf are unchanged. A signal whose absorpR can't be computed is KEPT (never silently hidden).
@@ -7634,7 +7634,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _draw_rr_lines(self) -> None:
         """Entry (white) / SL (red) / TP (green) dashed lines for the toggled-ON Radar Runner badge — the tradeable
-        bracket (candle-capped SL + fixed config.RR_TP_FRAC TP = 0.3%). A SIZE readout at the entry line prints the
+        bracket (candle-capped SL + fixed config.RR_TP_FRAC TP = 0.25%). A SIZE readout at the entry line prints the
         OPTIMAL risk-based position (risk 0.4% = $800; the size flexes with the stop so the $ loss is capped regardless
         of stop width). Lines run from the breakout bar to the first SL/TP touch."""
         buckets = self._trline_buckets; n = len(buckets)
@@ -7644,7 +7644,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for key, x, side, entry, sl, _tp_frozen, yb in self._rr_entries:
             if not user.get(key, False) or entry <= 0 or x < 0 or x >= n:
                 continue
-            tp = entry * (1.0 + side * config.RR_TP_FRAC)         # TP from the CURRENT config (0.3%), not the frozen 0.5%
+            tp = entry * (1.0 + side * config.RR_TP_FRAC)         # TP from the CURRENT config (0.25%), not the frozen 0.5%
             exit_x = n - 1
             for j in range(x + 1, n):
                 bb = buckets[j]; hh = float(bb.get("high", 0.0) or 0.0); ll = float(bb.get("low", 0.0) or 0.0)

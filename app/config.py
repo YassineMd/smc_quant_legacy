@@ -188,10 +188,12 @@ TIME_ENGINE_CAP = 800           # per-tf CLOCK-candle buckets kept in RAM by the
 # 5m in TIME mode; bucket-scale RR and other timeframes are unchanged.
 RR_ABSORPR_MIN = -0.25
 # Radar Runner tradeable bracket + OPTIMAL (risk-based) position sizing. Validated on the HyroTrader 1-Step $200k
-# prop eval (study/radarrun_hyro_two_rules.py): TP 0.3% + risk a FLAT 0.4% of the account per trade, sizing the
-# position so hitting the candle-capped SL loses exactly that (loss capped regardless of stop width). 100% pass, ~26d
-# median, p99 DD 3.6% under Hyro's 6%-max/3-4%-daily TRAILING limits. Margin = notional/leverage = (risk$/stop-dist)/lev.
-RR_TP_FRAC = 0.003              # fixed take-profit distance of the RR bracket (was 0.5%; 0.3% = the prop-validated TP)
+# prop eval (study/radarrun_hyro_two_rules.py + radarrun_hyro_manual_capture.py): risk a FLAT 0.4% of the account per
+# trade, sizing the position so hitting the candle-capped SL loses exactly that (loss capped regardless of stop width).
+# 100% pass under Hyro's 6%-max/3-4%-daily TRAILING limits. Margin = notional/leverage = (risk$/stop-dist)/lev.
+# TP = 0.25% chosen for MANUAL trading: highest practical win rate (91.5%) + LOWEST drawdown (p99 3.1%), clears in
+# ~1-1.5 months. (0.3% is faster ~26d but slightly higher DD/lower win; 0.2% wins 93.4% but too slow to catch by hand.)
+RR_TP_FRAC = 0.0025             # fixed take-profit distance of the RR bracket (was 0.5%; 0.25% = best for manual trading)
 RR_ACCOUNT_BALANCE = 200000.0   # prop account size; risk$ = this * RR_RISK_FRAC. Bump once FUNDED to compound risk.
 RR_RISK_FRAC = 0.004            # risk per trade = this * RR_ACCOUNT_BALANCE (0.4% = $800 on $200k) — the OPTIMAL flat risk
 RR_LEVERAGE = 10.0              # exchange leverage; sets margin = notional/leverage. Does NOT change the $ risked.
