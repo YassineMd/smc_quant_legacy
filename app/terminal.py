@@ -9492,7 +9492,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # bar-close / toggle / knob change — not every 20Hz tick. This is the mostly-idle common case. (Entering a
             # selection sets _nosel_sig=None, so teardown re-runs this once.)
             _pf0, _, _ = self._build_scanner_buckets()
+            # A strategy signal fires only when the last bar CLOSES. If a bar closes but its successor bucket has taken
+            # no volume yet (common on 30m and in quiet tape), len(_pf0) AND the last start_time are unchanged and ONLY
+            # _mmx_last_forming flips True->False. Without it in the signature the whole overlay batch (incl. Radar
+            # Runner) was skipped on that transition, so a breakout on the just-closed bar did NOT fire until new volume
+            # bumped the count OR a NEW window forced a fresh detect. Key on the forming state (and the last CLOSED bar's
+            # end_time) so every close re-runs detection immediately. (1m hid this — its successor takes volume at once.)
+            _last_closed_et = 0.0
+            if _pf0:
+                _lb = _pf0[-1] if not bool(getattr(self, "_mmx_last_forming", True)) else (_pf0[-2] if len(_pf0) >= 2 else None)
+                _last_closed_et = float((_lb or {}).get("end_time", 0.0) or 0.0)
             _nsig = ("nosel", len(_pf0), float(_pf0[-1].get("start_time", 0.0)) if _pf0 else 0.0,
+                     bool(getattr(self, "_mmx_last_forming", True)), _last_closed_et,
                      tuple(cb.isChecked() for cb in self.menu.layer_checks.values()),
                      round(self.menu.swing_pct(), 4), round(getattr(self, "_wall_floor", 0.0), 4),
                      round(getattr(self, "_reward_strength", 0.0), 2))
