@@ -22,8 +22,8 @@ import numpy as np
 from . import config, protocol
 from .time_candles import to_bucket_wire
 
-POLL_SECS = 1.0              # re-request cadence. 0.5 x 4 windows overloaded the daemon (~5s responses); the 20Hz price
-#                              fold gives smoothness between polls, so the poll only needs to keep the CANDLES current.
+POLL_SECS = 1.5              # re-request cadence. 0.5 x 4 windows overloaded the (uncached) daemon to ~5s responses; the
+#                              20Hz price fold gives smoothness between polls, so the poll only refreshes candle STRUCTURE.
 _RECV_WINDOW = 9.0           # HARD cap on collecting one chunked reply (safety only; idle-detection ends it far sooner)
 _FIRST_BYTE_TIMEOUT = 6.0    # wait up to this for the daemon's FIRST frame. Under multi-window load the daemon can take
 #                              ~5s to build the candle set; a short timeout here made polls FAIL -> blank/gappy chart.
