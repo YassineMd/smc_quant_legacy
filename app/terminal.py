@@ -10439,8 +10439,48 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         snapshot even while it's still empty (first ~1.5s after switching) is deliberate: it shows a clean 'no data
         yet' frame rather than flashing volume buckets. Falls back to the worker only if the feed is somehow absent."""
         if self._chart_source == "time":
-            return self._time_feed.snapshot() if self._time_feed is not None else self.worker.snapshot()
+            tsnap = self._time_feed.snapshot() if self._time_feed is not None else self.worker.snapshot()
+            return self._fold_live_price(tsnap)
         return self.worker.snapshot()
+
+    def _fold_live_price(self, tsnap: dict) -> dict:
+        """20Hz SYNC: patch the FORMING clock candle's price (close/high/low) + latest_price with the LIVE bucket-worker
+        price every frame, so the forming candle tracks real time BETWEEN the ~0.5s clock polls. The poll still owns the
+        footprint / volume / stats / closed candles; only the forming candle's live price is folded (same SOLUSDT tape —
+        the bucket worker keeps streaming in Time mode). COPIES before mutating (never touches the feed's cached dict);
+        only folds a genuine CURRENT forming interval; live-only (skips replay); fully fail-safe."""
+        try:
+            if self._replay_on or not tsnap:
+                return tsnap
+            ab = tsnap.get("active_bucket") or {}
+            st = ab.get("start_time")
+            if not ab or st is None or tsnap.get("forming_time") is None:
+                return tsnap
+            tfsec = config.TF_SECONDS.get(self._tf, 0)
+            now = time.time()
+            if not (tfsec and float(st) <= now < float(st) + tfsec):   # only the CURRENT (still-forming) interval
+                return tsnap
+            lp = float((self.worker.snapshot() or {}).get("latest_price") or 0.0) if self.worker is not None else 0.0
+            if lp <= 0.0:
+                return tsnap
+            snap = dict(tsnap)                                          # shallow copy — leave the feed's snapshot intact
+            snap["latest_price"] = lp
+            nb = dict(ab)                                                # copy the forming bucket, then extend to live px
+            nb["close"] = lp
+            _hi = float(nb.get("high") or 0.0); _lo = float(nb.get("low") or 0.0)
+            nb["high"] = max(_hi, lp) if _hi > 0 else lp
+            nb["low"] = min(_lo, lp) if _lo > 0 else lp
+            snap["active_bucket"] = nb
+            oh = snap.get("ohlcv")                                       # keep the parallel OHLCV array consistent (last row = forming)
+            if oh is not None and getattr(oh, "shape", None) is not None and len(oh) >= 1 and oh.shape[1] >= 5:
+                oh = oh.copy()
+                oh[-1, 3] = lp                                          # close
+                oh[-1, 1] = max(float(oh[-1, 1]), lp)                   # high
+                oh[-1, 2] = min(float(oh[-1, 2]), lp) if float(oh[-1, 2]) > 0 else lp   # low
+                snap["ohlcv"] = oh
+            return snap
+        except Exception:
+            return tsnap                                                # fail-safe: never break the render path
 
     # ------------------------------------------------------------------
     def _on_timer(self) -> None:
@@ -11663,7 +11703,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if not (last is not None and active.get("start_time") == last.get("start_time")
                     and active.get("curr_vol") == last.get("curr_vol")):
                 combined.append(active); _forming = True
-        sig = ("time", len(combined), round(active.get("curr_vol", 0.0), 1), anchor_unix, self._tf)
+        sig = ("time", len(combined), round(active.get("curr_vol", 0.0), 1),
+               round(float(active.get("close", 0.0) or 0.0), 2),   # live folded close -> rebuild filtered on price move (20Hz)
+               anchor_unix, self._tf)
         if sig == self._scanner_bucket_sig and self._scanner_bucket_cache is not None:
             return self._scanner_bucket_cache
         anchor_idx: Optional[int] = None
@@ -11761,7 +11803,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             abs_sig = tuple((m.get("id"), m.get("active"), m.get("end"),
                              round(float(m.get("kappa", 0.0)), 2), m.get("price"))
                             for m in sorted(snap.get("absorptions", []), key=lambda m: m.get("id", "")))
-            current_sig = (len(closed), active.get("curr_vol", 0.0),
+            # TIME mode: the forming clock candle's live px is folded in each frame (_fold_live_price); key on it so the
+            # candle redraws at frame rate (20Hz), not just poll rate (~0.5s). 0.0 in bucket mode -> no behaviour change.
+            _live_close = round(float(active.get("close", 0.0) or 0.0), 2) if self._chart_source == "time" else 0.0
+            current_sig = (len(closed), active.get("curr_vol", 0.0), _live_close,
                            self.menu.scan_start_unix(), self.scanner_mode, abs_sig)
         if current_sig == self._last_scanner_sig:
             return   # nothing changed — skip the heavy recompute
