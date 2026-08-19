@@ -11806,7 +11806,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # TIME mode: the forming clock candle's live px is folded in each frame (_fold_live_price); key on it so the
             # candle redraws at frame rate (20Hz), not just poll rate (~0.5s). 0.0 in bucket mode -> no behaviour change.
             _live_close = round(float(active.get("close", 0.0) or 0.0), 2) if self._chart_source == "time" else 0.0
-            current_sig = (len(closed), active.get("curr_vol", 0.0), _live_close,
+            # TIME mode: also key on the whole second so the close-COUNTDOWN badge keeps ticking during a static-price
+            # stretch (bucket mode has no countdown -> 0, unchanged). Cheap: 1 redraw/sec on top of the price-driven ones.
+            _cd_tick = int(time.time()) if self._chart_source == "time" else 0
+            current_sig = (len(closed), active.get("curr_vol", 0.0), _live_close, _cd_tick,
                            self.menu.scan_start_unix(), self.scanner_mode, abs_sig)
         if current_sig == self._last_scanner_sig:
             return   # nothing changed — skip the heavy recompute
@@ -12426,6 +12429,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         cv = ab.get("curr_vol", 0.0)
         return (cv / tv * 100.0) if tv > 0 else 0.0
 
+    @staticmethod
+    def _fmt_countdown(secs: float) -> str:
+        """MM:SS (or H:MM:SS past an hour) time-to-close for a clock candle — the TradingView-style badge sub-line."""
+        s = int(max(0.0, secs)); h, s = divmod(s, 3600); m, s = divmod(s, 60)
+        return "%d:%02d:%02d" % (h, m, s) if h > 0 else "%d:%02d" % (m, s)
+
     def _update_live_price_label(self, buckets: list, x: list) -> None:
         """Dashed line at the live (forming) bucket's close + a right-edge price-over-fill% pill, GREEN when that
         bucket is bullish / RED when bearish — the same badge as the 1m-detail popup. Called from _scan_bucket_canvas
@@ -12438,14 +12447,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._live_px = None; self._live_pline.hide(); self._live_plabel.hide(); return
         px = float(px); self._live_px = px
         o = float(b.get("open", b.get("open_price", px)) or px)
-        fill = max(0.0, min(100.0, self._active_fill_pct()))
+        # BUCKET candles close on VOLUME -> the sub-line shows fill% (curr_vol/target_vol = when the bucket completes).
+        # CLOCK candles close on TIME -> fill% is meaningless; show the COUNTDOWN to close instead (TradingView-style).
+        if self._chart_source == "time":
+            _tfsec = config.TF_SECONDS.get(self._tf, 0)
+            _st = float(b.get("start_time", 0.0) or 0.0)
+            _rem = max(0.0, min(float(_tfsec), (_st + _tfsec) - time.time())) if _tfsec else 0.0
+            sub = self._fmt_countdown(_rem)
+        else:
+            sub = "%.0f%%" % max(0.0, min(100.0, self._active_fill_pct()))
         col = "#28e65a" if px >= o else "#ef4444"            # green when bullish, red when bearish
         self._live_pline.setPos(px); self._live_pline.show()
         self._live_plabel.setHtml(
             "<div style='font-family:Consolas;text-align:center;line-height:1.06'>"
             "<span style='font-size:14px;font-weight:800;color:#eef2f8'>%.*f</span><br>"
-            "<span style='font-size:12px;font-weight:800;color:%s'>%.0f%%</span></div>"
-            % (config.PRICE_DECIMALS, px, col, fill))
+            "<span style='font-size:12px;font-weight:800;color:%s'>%s</span></div>"
+            % (config.PRICE_DECIMALS, px, col, sub))
         self._live_plabel.border = pg.mkPen(col, width=1.3)  # pill outline green (bull) / red (bear)
         self._live_plabel.show()
         self._reposition_live_price_label(); self._live_plabel.update()
