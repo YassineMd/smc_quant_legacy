@@ -40,6 +40,7 @@ class _Client:
     writer: asyncio.StreamWriter
     tf: Optional[str] = None   # no subscription until the client sends set_tf
     heatmap: Optional[tuple] = None   # Phase 2a: (ylo, yhi, ybins) while the heatmap mode is open, else None
+    time_tf: Optional[str] = None   # CLOCK-candle push subscription (sub_time) — independent of the bucket `tf`
 
 
 class DaemonServer:
@@ -48,7 +49,7 @@ class DaemonServer:
         self.store = persistence.HistoryStore()
         self.footprints_db = self.store.bootstrap()
         self.core = MarketDataCore(self.footprints_db, self.broadcast_tf, self.broadcast_all,
-                                   self.tf_has_subscribers)
+                                   self.tf_has_subscribers, self.broadcast_time, self.time_tf_has_subscribers)
         # Phase 1: SEPARATE depth.db store — own connection/sync/prune, decoupled from the bucket history.
         self.depth_store = DepthStore() if config.DEPTH_CAPTURE_ENABLED else None
 
@@ -80,6 +81,16 @@ class DaemonServer:
         """True if any connected client is subscribed to ``tf`` — lets the core skip the heavy per-tf
         recompute/serialize for timeframes nobody is watching (the live-price-lag fix)."""
         return any(client.tf == tf for client in self.clients.values())
+
+    def broadcast_time(self, tf: str, line: str) -> None:
+        """Deliver a CLOCK-candle push frame only to clients subscribed to that tf via sub_time."""
+        for client in list(self.clients.values()):
+            if client.time_tf == tf:
+                self._enqueue(client, line)
+
+    def time_tf_has_subscribers(self, tf: str) -> bool:
+        """True if any client wants clock candles for ``tf`` -> the core only builds/pushes clock edges when watched."""
+        return any(client.time_tf == tf for client in self.clients.values())
 
     # ------------------------------------------------------------------
     # Per-client lifecycle
@@ -160,6 +171,16 @@ class DaemonServer:
             tf = cmd.get("tf")
             if tf in config.TIMEFRAMES:
                 asyncio.create_task(self._send_time_candles(client, tf))
+        elif action == "sub_time":
+            # CLOCK-candle live stream: send the full set ONCE, then the live-edge loop PUSHES the forming candle +
+            # new closes to this client -> real-time clock candles (no polling). time_tf is independent of bucket tf.
+            tf = cmd.get("tf")
+            if tf in config.TIMEFRAMES:
+                client.time_tf = tf
+                self.core.mark_time_pushed(tf)   # client gets the full set below -> only push NEW closes after it
+                asyncio.create_task(self._send_time_candles(client, tf))
+        elif action == "unsub_time":
+            client.time_tf = None
 
     # ------------------------------------------------------------------
     async def _send_catchup(self, client: _Client, tf: str, since=None) -> None:

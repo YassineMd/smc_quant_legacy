@@ -93,10 +93,17 @@ class MarketDataCore:
     def __init__(self, footprints_db: Dict[str, dict],
                  broadcast_tf: Callable[[str, str], None],
                  broadcast_all: Callable[[str], None],
-                 tf_has_subscribers: Optional[Callable[[str], bool]] = None):
+                 tf_has_subscribers: Optional[Callable[[str], bool]] = None,
+                 broadcast_time: Optional[Callable[[str, str], None]] = None,
+                 time_tf_has_subscribers: Optional[Callable[[str], bool]] = None):
         self.footprints_db = footprints_db
         self.broadcast_tf = broadcast_tf
         self.broadcast_all = broadcast_all
+        # CLOCK-candle PUSH (real-time parity with volume buckets): the daemon PUSHES the forming clock candle + any
+        # new closes to TIME-subscribed clients on the live-edge loop, so clock candles no longer lag behind a poll.
+        self.broadcast_time: Callable[[str, str], None] = broadcast_time or (lambda _tf, _l: None)
+        self._time_subbed: Callable[[str], bool] = time_tf_has_subscribers or (lambda _tf: False)
+        self._time_push_n: Dict[str, int] = {}          # tf -> last closed-count we pushed (init lazily; no backfill)
         # Only DO per-tf work (OB rescan + serialize the forming footprint/OB matrix) for timeframes a client
         # is actually subscribed to. Without this the loop recomputes + serializes ALL 5 tfs every cycle —
         # the 1h/4h forming footprints are huge — starving the broadcast loop for seconds (the live-price lag).
@@ -1045,6 +1052,73 @@ class MarketDataCore:
             )
             self.broadcast_tf(tf_key, tick.to_line())
 
+    def _time_wire_closed(self, tf: str, b, kln: dict) -> "Optional[dict]":
+        """Build (once) + store a CLOSED clock candle's wire, kline-OHLC-overridden. Shares the persistent store."""
+        stk = int(b.start_time) if b.start_time is not None else None
+        if stk is None:
+            return None
+        store = self._tc_store.setdefault(tf, {})
+        w = store.get(stk)
+        if w is None:
+            w = b.full_snapshot()
+            node = kln.get(stk)
+            if node is not None:
+                w["open"] = float(node["open"]); w["high"] = float(node["high"])
+                w["low"] = float(node["low"]); w["close"] = float(node["close"])
+            store[stk] = w
+        return w
+
+    def mark_time_pushed(self, tf: str) -> None:
+        """On a fresh sub_time the client just received the full catch-up, so start the delta cursor at the current
+        close-count -> the live-edge loop only pushes candles that close AFTER the subscribe (no giant re-push)."""
+        try:
+            ce = self.clock_engines.get(tf)
+            if ce is not None:
+                self._time_push_n[tf] = len(ce.closed_buckets)
+        except Exception:
+            pass
+
+    def _broadcast_time_edge(self) -> None:
+        """Push each TIME-subscribed tf's forming clock candle (every pulse) + any newly-CLOSED candle (when it closes)
+        — small delta frames, so clock candles are PUSHED real-time (no poll lag). On-loop like the bucket edge; the
+        one-time full set still comes from sub_time/get_time_candles. Fully guarded (a fault never breaks bucket push)."""
+        from .protocol import TimeCandlesPacket
+        now = time.time()
+        for tf in config.TIMEFRAMES:
+            if not self._time_subbed(tf):
+                continue
+            ce = self.clock_engines.get(tf)
+            if ce is None:
+                continue
+            try:
+                self._tc_load()
+                fp = self.footprints_db.get(tf) or {}
+                kln = {}
+                for ut, node in fp.items():
+                    if isinstance(node, dict) and "open" in node:
+                        try:
+                            kln[int(ut)] = node
+                        except (TypeError, ValueError):
+                            pass
+                push = []
+                ncur = len(ce.closed_buckets)
+                last = self._time_push_n.get(tf)
+                if last is None:                              # first pulse for this tf -> no backfill (client has catchup)
+                    last = self._time_push_n[tf] = ncur
+                if ncur > last:                               # candle(s) closed since last pulse -> push them
+                    for b in list(ce.closed_buckets)[last:ncur]:
+                        w = self._time_wire_closed(tf, b, kln)
+                        if w is not None:
+                            push.append(w)
+                    self._time_push_n[tf] = ncur
+                ab = ce.active_bucket                          # + always the live forming candle
+                if ab.start_time is not None and ab.curr_vol > 0:
+                    push.append(ab.live_snapshot(now, ce.avg_velocity))
+                if push:
+                    self.broadcast_time(tf, TimeCandlesPacket(tf=tf, seq=0, candles=push).to_line())
+            except Exception:
+                continue
+
     async def live_edge_loop(self) -> None:
         """Broadcast the forming edge every LIVE_EDGE_SECS, decoupled from trade rate (19.3b)."""
         while True:
@@ -1053,6 +1127,10 @@ class MarketDataCore:
                 self._broadcast_live_edge()
             except Exception as e:
                 print(f"LIVE EDGE ERROR: {e}")
+            try:
+                self._broadcast_time_edge()      # PUSH clock candles to time-subscribers (real-time, no poll)
+            except Exception as e:
+                print(f"TIME EDGE ERROR: {e}")
 
     # ------------------------------------------------------------------
     def start_tasks(self) -> list[asyncio.Task]:

@@ -1,14 +1,15 @@
 """Terminal-side CLOCK-CANDLE feed — the Time half of the Bucket<->Time chart toggle.
 
-Unlike ``PipeClientWorker`` (a persistent push stream of volume buckets), clock candles are served on demand:
-the daemon answers ``{"action":"get_time_candles","tf":tf}`` with chunked ``TimeCandlesPacket`` frames. This
-background thread POLLS that request every ``POLL_SECS`` for the active tf and folds the reply into a snapshot that is
-byte-shaped EXACTLY like ``PipeClientWorker.snapshot()`` (same keys) — so the terminal's render, footprint, stats and
-overlays consume it with zero changes; only the source (clock vs volume) and the x-axis (time vs bucket index) differ.
+PUSH stream (real-time parity with volume buckets): ``TimeCandleFeed`` keeps ONE socket open, ``sub_time``-subscribes
+to the active tf, receives the one-time full catch-up + then the daemon's live-edge PUSHES (the forming clock candle
+every ~150ms + any new close), merges them by start_time, gap-fills locally, and shapes a snapshot byte-identical to
+``PipeClientWorker.snapshot()`` — so the terminal's render/footprint/stats/overlays consume it unchanged; only the
+source (clock vs volume) and x-axis (time vs bucket index) differ. This replaced the old poll model whose
+request/response round-trip lagged the clock candles seconds behind the pushed buckets.
 
-Each served candle is normalized to the volume-bucket wire schema by ``time_candles.to_bucket_wire`` (OHLC/footprint
-REAL; body colour = net taker flow; engine-only scalars honest-zeroed). The GUI thread only ever calls
-:meth:`snapshot`, which copies the cache under a lock and releases it immediately — same contract as the bucket worker.
+``fetch_time_candles`` (one-shot poll of ``get_time_candles``) is kept for tooling/diagnostics. Each served candle is
+normalized to the volume-bucket wire schema by ``time_candles.to_bucket_wire`` (OHLC/footprint REAL; body colour = net
+taker flow; engine-only scalars honest-zeroed). The GUI thread only ever calls :meth:`snapshot` (copies under a lock).
 """
 from __future__ import annotations
 
@@ -110,17 +111,36 @@ def build_snapshot(served: List[dict], tf: str, connected: bool) -> dict:
     }
 
 
+_RECV_TICK = 0.5            # recv timeout -> loop to check stop / tf-change + periodic rebuild (forming countdown)
+_CANDLE_CAP = 1000         # keep the most-recent N clock candles in the merge store
+
+
+def _snapshot_from_cands(cands: dict, tf: str, connected: bool) -> dict:
+    """Gap-fill the merged (real, non-empty) clock candles locally + shape into a PipeClientWorker.snapshot()-identical
+    dict. The client owns the gap-fill so the tiny live-edge PUSH frames need only carry real candles."""
+    if not cands:
+        return build_snapshot([], tf, connected)
+    from .time_candles import gapfill_wire
+    ordered = [cands[k] for k in sorted(cands)]
+    wire = [to_bucket_wire(c) for c in ordered]
+    filled = gapfill_wire(wire, config.TF_SECONDS.get(tf, 60))
+    return build_snapshot(filled, tf, connected)
+
+
 class TimeCandleFeed(threading.Thread):
-    """Background poller. ``start()`` begins polling the active tf; ``snapshot()`` returns the latest shaped snapshot
-    (thread-safe); ``set_tf()`` retargets + triggers an immediate refetch; ``stop()`` ends the thread. A Thread cannot
-    be restarted, so the terminal creates a fresh instance each time Time mode is (re)entered."""
+    """Persistent CLOCK-candle PUSH stream (real-time parity with volume buckets). It ``sub_time``-subscribes on a kept-
+    open socket, receives the one-time full set + then the daemon's live-edge PUSHES (forming candle every ~150ms + any
+    new close), merges them by start_time, and rebuilds a PipeClientWorker.snapshot()-identical dict. No polling ->
+    no request/response lag. ``snapshot()`` is thread-safe; ``set_tf()`` retargets (loop reconnects with the new
+    sub_time); ``stop()`` ends the thread. A Thread can't restart, so the terminal makes a fresh one per Time entry."""
 
     def __init__(self, tf: str = config.DEFAULT_TF):
         super().__init__(daemon=True)
         self._lock = threading.Lock()
         self._stop = threading.Event()
-        self._wake = threading.Event()          # set_tf / start -> refetch now instead of waiting out POLL_SECS
         self._tf = tf
+        self._cands: dict = {}                  # {start_time_int: raw served candle} — merged catch-up + live pushes
+        self._connected = False
         self._snap = build_snapshot([], tf, connected=False)
 
     # -- GUI thread ----------------------------------------------------
@@ -134,9 +154,9 @@ class TimeCandleFeed(threading.Thread):
         with self._lock:
             if tf == self._tf:
                 return
-            self._tf = tf
-            self._snap = build_snapshot([], tf, connected=False)   # drop stale-tf candles immediately
-        self._wake.set()
+            self._tf = tf                       # the stream loop sees tf changed -> drops this sub, reconnects + re-subs
+            self._cands = {}
+            self._snap = build_snapshot([], tf, connected=False)
 
     @property
     def tf(self) -> str:
@@ -144,19 +164,77 @@ class TimeCandleFeed(threading.Thread):
             return self._tf
 
     def stop(self) -> None:
-        self._stop.set(); self._wake.set()
+        self._stop.set()
 
     # -- worker thread -------------------------------------------------
+    def _merge(self, candles) -> None:
+        with self._lock:
+            for c in candles:
+                if c.get("empty"):              # gap-fill flats are regenerated locally on rebuild -> don't store
+                    continue
+                try:
+                    stk = int(c.get("start_time", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if stk:
+                    self._cands[stk] = c        # a close overwrites the same start_time's forming entry -> finalizes it
+            if len(self._cands) > _CANDLE_CAP:
+                for k in sorted(self._cands)[:len(self._cands) - _CANDLE_CAP]:
+                    del self._cands[k]
+
+    def _rebuild(self) -> None:
+        with self._lock:
+            cands = dict(self._cands); tf = self._tf; connected = self._connected
+        snap = _snapshot_from_cands(cands, tf, connected)
+        with self._lock:
+            if tf == self._tf:                  # don't clobber a snapshot for a tf we already switched away from
+                self._snap = snap
+
     def run(self) -> None:
         while not self._stop.is_set():
-            tf = self.tf
-            served = fetch_time_candles(tf)
-            if not self._stop.is_set() and tf == self.tf:          # ignore a reply for a tf we just switched away from
-                if served:                                         # KEEP the last good snapshot on an empty/timeout reply:
-                    with self._lock:                               # a slow/overloaded daemon must never BLANK the chart
-                        self._snap = build_snapshot(served, tf, connected=True)   # (that was the visible clock-candle gap)
-                elif served is None:                               # connection lost -> flag disconnected, keep the candles
-                    with self._lock:
-                        self._snap = dict(self._snap, connected=False)
-            self._wake.wait(POLL_SECS)
-            self._wake.clear()
+            try:
+                self._stream_once()
+            except Exception:
+                pass
+            with self._lock:
+                self._connected = False
+            if not self._stop.is_set():
+                time.sleep(0.5)                 # brief backoff before reconnect
+
+    def _stream_once(self) -> None:
+        tf = self.tf
+        try:
+            s = socket.create_connection((config.IPC_HOST, config.IPC_PORT), timeout=_CONNECT_TIMEOUT)
+        except OSError:
+            return
+        try:
+            s.sendall((protocol.json.dumps({"action": "sub_time", "tf": tf}) + "\n").encode())
+            s.settimeout(_RECV_TICK)
+            with self._lock:
+                self._connected = True
+            buf = b""
+            while not self._stop.is_set() and tf == self.tf:
+                try:
+                    chunk = s.recv(65536)
+                except socket.timeout:
+                    self._rebuild()             # no frame this tick -> still refresh (forming countdown / connected)
+                    continue
+                if not chunk:
+                    break                       # daemon closed the socket -> reconnect
+                buf += chunk
+                got = False
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    try:
+                        pkt = protocol.parse_line(line.decode("utf-8", "ignore"))
+                    except Exception:
+                        continue
+                    if isinstance(pkt, protocol.TimeCandlesPacket) and pkt.tf == tf:
+                        self._merge(pkt.candles); got = True
+                if got:
+                    self._rebuild()
+        finally:
+            try:
+                s.close()
+            except OSError:
+                pass
