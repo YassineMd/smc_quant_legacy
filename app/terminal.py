@@ -10465,20 +10465,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             else:
                 lp, _wrk_et = 0.0, 0.0
             lp = float(lp or 0.0)
-            # DIAGNOSTIC (shown on the clock badge, TEMP): worker price, worker-vs-poll lag, poll close, which price won.
-            _poll_et = float(ab.get("end_time") or 0.0)
-            _pollclose = float(ab.get("close") or ab.get("close_price") or 0.0)
-            _lag = (_poll_et - _wrk_et) if (_poll_et > 0.0 and _wrk_et > 0.0) else -1.0
             if lp <= 0.0:
-                self._fold_diag = (0.0, _lag, round(_pollclose, 2), "nowrk"); return tsnap
-            # Trust the LOCAL bucket-worker price only if it isn't LAGGING the daemon poll. Under multi-window CPU load
+                return tsnap
+            # Trust the LOCAL bucket-worker price only if it isn't LAGGING the daemon feed. Under multi-window CPU load
             # this window's worker thread can fall behind the tick stream; folding its stale price would make the clock
-            # candle LAG the (daemon-fresh) poll instead of tracking it. active_bucket.end_time is the daemon's ~"now"
-            # send-stamp on BOTH the worker's last tick and the poll snapshot -> comparing them is CLOCK-SKEW-FREE. If the
-            # worker's last tick is >1.5s older than the poll, defer: keep the fresh poll price, don't fold a stale one.
+            # candle LAG the (fresh) pushed forming candle instead of tracking it. active_bucket.end_time is the daemon's
+            # ~"now" send-stamp on BOTH the worker's last tick and the pushed candle -> comparing them is CLOCK-SKEW-FREE.
+            # If the worker's last tick is >1.5s older than the pushed candle, defer: keep the fresh pushed price.
+            _poll_et = float(ab.get("end_time") or 0.0)
             if _poll_et > 0.0 and _wrk_et > 0.0 and _wrk_et < _poll_et - 1.5:
-                self._fold_diag = (round(lp, 2), round(_lag, 1), round(_pollclose, 2), "poll"); return tsnap
-            self._fold_diag = (round(lp, 2), round(_lag, 1), round(_pollclose, 2), "wrk")
+                return tsnap
             snap = dict(tsnap)                                          # shallow copy — leave the feed's snapshot intact
             snap["latest_price"] = lp
             nb = dict(ab)                                                # copy the forming bucket, then extend to live px
@@ -12486,20 +12482,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             sub = "%.0f%%" % max(0.0, min(100.0, self._active_fill_pct()))
         col = "#28e65a" if px >= o else "#ef4444"            # green when bullish, red when bearish
-        # TEMP DIAGNOSTIC (clock only): a tiny 3rd line exposing where a stale clock price comes from —
-        # w<worker price> Δ<worker-vs-poll lag>s p<poll close> →<src used>. Compare w/p to the BUCKET price.
-        _diag = ""
-        if self._chart_source == "time":
-            fd = getattr(self, "_fold_diag", None)
-            if fd:
-                _diag = ("<br><span style='font-size:9px;font-weight:700;color:#9aa4b2'>w%.2f Δ%.1fs p%.2f&rarr;%s</span>"
-                         % (fd[0], fd[1], fd[2], fd[3]))
         self._live_pline.setPos(px); self._live_pline.show()
         self._live_plabel.setHtml(
             "<div style='font-family:Consolas;text-align:center;line-height:1.06'>"
             "<span style='font-size:14px;font-weight:800;color:#eef2f8'>%.*f</span><br>"
-            "<span style='font-size:12px;font-weight:800;color:%s'>%s</span>%s</div>"
-            % (config.PRICE_DECIMALS, px, col, sub, _diag))
+            "<span style='font-size:12px;font-weight:800;color:%s'>%s</span></div>"
+            % (config.PRICE_DECIMALS, px, col, sub))
         self._live_plabel.border = pg.mkPen(col, width=1.3)  # pill outline green (bull) / red (bear)
         self._live_plabel.show()
         self._reposition_live_price_label(); self._live_plabel.update()
