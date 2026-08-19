@@ -22,9 +22,11 @@ import numpy as np
 from . import config, protocol
 from .time_candles import to_bucket_wire
 
-POLL_SECS = 0.5              # re-request cadence (was 1.5 — clock candles were lagging the live bucket stream by ~3.5s)
-_RECV_WINDOW = 3.0           # HARD cap on collecting one chunked reply (safety only; idle-detection ends it far sooner)
-_FIRST_BYTE_TIMEOUT = 2.0    # wait up to this for the daemon's FIRST frame (it may be (re)building the candle set)
+POLL_SECS = 1.0              # re-request cadence. 0.5 x 4 windows overloaded the daemon (~5s responses); the 20Hz price
+#                              fold gives smoothness between polls, so the poll only needs to keep the CANDLES current.
+_RECV_WINDOW = 9.0           # HARD cap on collecting one chunked reply (safety only; idle-detection ends it far sooner)
+_FIRST_BYTE_TIMEOUT = 6.0    # wait up to this for the daemon's FIRST frame. Under multi-window load the daemon can take
+#                              ~5s to build the candle set; a short timeout here made polls FAIL -> blank/gappy chart.
 _IDLE_TIMEOUT = 0.30         # once frames are flowing, THIS much silence = reply complete -> return at once (the daemon
 #                              never closes the socket or sends an end-marker, so idle-gap is how we know it's done)
 _CONNECT_TIMEOUT = 3.0
@@ -150,8 +152,11 @@ class TimeCandleFeed(threading.Thread):
             tf = self.tf
             served = fetch_time_candles(tf)
             if not self._stop.is_set() and tf == self.tf:          # ignore a reply for a tf we just switched away from
-                snap = build_snapshot(served or [], tf, connected=(served is not None))
-                with self._lock:
-                    self._snap = snap
+                if served:                                         # KEEP the last good snapshot on an empty/timeout reply:
+                    with self._lock:                               # a slow/overloaded daemon must never BLANK the chart
+                        self._snap = build_snapshot(served, tf, connected=True)   # (that was the visible clock-candle gap)
+                elif served is None:                               # connection lost -> flag disconnected, keep the candles
+                    with self._lock:
+                        self._snap = dict(self._snap, connected=False)
             self._wake.wait(POLL_SECS)
             self._wake.clear()

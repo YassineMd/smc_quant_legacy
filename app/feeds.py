@@ -219,13 +219,8 @@ class MarketDataCore:
             ce = self.clock_engines.get(tf)
             if not secs or ce is None:
                 return []
-            out = [b.full_snapshot() for b in ce.closed_buckets]
-            ab = ce.active_bucket
-            if ab.start_time is not None and ab.curr_vol > 0:      # append the live forming clock candle
-                out.append(ab.live_snapshot(time.time(), ce.avg_velocity))
             # AUTHORITATIVE OHLC: override open/high/low/close from the kline-framed footprint nodes (Binance-exact,
-            # same source the recon uses) wherever a node exists (the recent FOOTPRINT_MEM_CAP window); footprint /
-            # volume / OI / cvd / ticks stay engine-derived. Keeps live OHLC == the klines every chart shows.
+            # same source the recon uses); footprint / volume / OI / cvd / ticks stay engine-derived.
             fp = self.footprints_db.get(tf) or {}
             kln = {}
             for ut, n in fp.items():
@@ -234,11 +229,38 @@ class MarketDataCore:
                         kln[int(ut)] = n
                     except (TypeError, ValueError):
                         pass
-            for c in out:
+
+            def _ovr(c):                                           # kline OHLC override for a CLOSED candle (Binance-exact)
                 n = kln.get(int(c.get("start_time", 0)))
                 if n is not None:
                     c["open"] = float(n["open"]); c["high"] = float(n["high"])
                     c["low"] = float(n["low"]); c["close"] = float(n["close"])
+                return c
+
+            # PERF: rebuilding all ~800 closed full_snapshots every request cost ~5s under multi-window poll load and
+            # blanked/gapped the clients. Closed candles are IMMUTABLE -> cache each (keyed by start_time), build once,
+            # reuse forever. Only a newly-closed candle is ever built. (Prune keeps the cache near the engine window.)
+            tfcache = getattr(self, "_tc_cache", None)
+            if tfcache is None:
+                tfcache = self._tc_cache = {}
+            cc = tfcache.setdefault(tf, {})
+            base = []
+            for b in ce.closed_buckets:
+                stk = int(b.start_time) if b.start_time is not None else None
+                w = cc.get(stk)
+                if w is None:
+                    w = _ovr(b.full_snapshot())
+                    if stk is not None:
+                        cc[stk] = w
+                base.append(w)
+            if len(cc) > 2 * len(ce.closed_buckets) + 64:          # prune dropped-out intervals (cap-trim window slide)
+                keep = {int(b.start_time) for b in ce.closed_buckets if b.start_time is not None}
+                for k in [k for k in cc if k not in keep]:
+                    del cc[k]
+            out = list(base)                                       # copy so the forming append never mutates the cache
+            ab = ce.active_bucket
+            if ab.start_time is not None and ab.curr_vol > 0:      # forming candle: keep the LIVE tick OHLC (NOT kline-
+                out.append(ab.live_snapshot(time.time(), ce.avg_velocity))   # overridden -> close is fresher than the ~1-2s kline)
             return gapfill_wire(out, secs)
         except Exception:
             return []
