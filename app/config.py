@@ -187,6 +187,14 @@ TIME_ENGINE_CAP = 800           # per-tf CLOCK-candle buckets kept in RAM by the
 # the 5m prop verdict marginal->PASS (99/95/89% @R0.5/0.75/1.0), keeping ~1/3 of signals (4.7 trd/day). Applied ONLY to
 # 5m in TIME mode; bucket-scale RR and other timeframes are unchanged.
 RR_ABSORPR_MIN = -0.25
+# Radar Runner tradeable bracket + OPTIMAL (risk-based) position sizing. Validated on the HyroTrader 1-Step $200k
+# prop eval (study/radarrun_hyro_two_rules.py): TP 0.3% + risk a FLAT 0.4% of the account per trade, sizing the
+# position so hitting the candle-capped SL loses exactly that (loss capped regardless of stop width). 100% pass, ~26d
+# median, p99 DD 3.6% under Hyro's 6%-max/3-4%-daily TRAILING limits. Margin = notional/leverage = (risk$/stop-dist)/lev.
+RR_TP_FRAC = 0.003              # fixed take-profit distance of the RR bracket (was 0.5%; 0.3% = the prop-validated TP)
+RR_ACCOUNT_BALANCE = 200000.0   # prop account size; risk$ = this * RR_RISK_FRAC. Bump once FUNDED to compound risk.
+RR_RISK_FRAC = 0.004            # risk per trade = this * RR_ACCOUNT_BALANCE (0.4% = $800 on $200k) — the OPTIMAL flat risk
+RR_LEVERAGE = 10.0              # exchange leverage; sets margin = notional/leverage. Does NOT change the $ risked.
 REHYDRATE_LIMIT = 1440          # main.py:248 — last 24h of entries per tf (legacy replay)
 SAVE_INTERVAL_SECS = 15         # main.py:286 — periodic footprint flush (legacy JSON)
 SYNC_INTERVAL_SECS = 10         # async SQLite upsert cadence (replaces JSON flush)

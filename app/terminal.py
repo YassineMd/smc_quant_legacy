@@ -1377,6 +1377,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._rr_sig = None; self._rr_drawn = False
         self._rr_entries = []
         self._rr_ln_pool = []; self._rr_lnlbl_pool = []; self._rr_lines_user = {}
+        self._rr_size_lbl = None                               # OPTIMAL position-size readout at the entry line (one active bracket)
         self._rr_fired = {}; self._rr_fired_tf = None          # PERSIST fired breakouts by bar end_time -> frozen event;
         #                                                        a confirmed breakout never un-fires when the walls re-detect
         self._rr_audio_seeded = False                          # entry-sound seed: never blast the backlog on first draw / tf-switch
@@ -7427,6 +7428,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._rr_ring.setVisible(False)
         for _it in self._rr_ln_pool + self._rr_lnlbl_pool:
             _it.setVisible(False)
+        if self._rr_size_lbl is not None:
+            self._rr_size_lbl.setVisible(False)
         self._rr_sig = None; self._rr_drawn = False
 
     def _rr_conviction(self, buckets, i, side) -> bool:
@@ -7548,7 +7551,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _slbuf = 0.002 if self._tf == "1h" else 0.003         # forward-optimized candle-SL buffer: 1h 0.2% / 30m+ 0.3%
             _bset = list(warm) + list(filtered)
             entries = radar_breakout_detect.detect(_bset, skip_last=_forming,
-                                                   sl_buf=_slbuf, tp_frac=0.005)   # walls over FULL history; forming bar skipped
+                                                   sl_buf=_slbuf, tp_frac=config.RR_TP_FRAC)   # walls over FULL history; forming bar skipped (TP = 0.3% prop-validated)
             # 5m TIME-candle absorpR gate: only fire breakouts with absorption-R >= config.RR_ABSORPR_MIN at the
             # breakout bar (OOS-validated on 5m clock candles: maxDD 21%->6%, marginal->PASS). 5m TIME only -- bucket
             # scale + every other tf are unchanged. A signal whose absorpR can't be computed is KEPT (never silently hidden).
@@ -7630,15 +7633,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._draw_rr_lines()
 
     def _draw_rr_lines(self) -> None:
-        """Entry (white) / SL (red) / TP (green) dashed lines for the toggled-ON Radar Runner badge — the shipped
-        tradeable bracket (candle-capped SL + fixed 0.5% TP). Lines run from the breakout bar to the first SL/TP touch."""
+        """Entry (white) / SL (red) / TP (green) dashed lines for the toggled-ON Radar Runner badge — the tradeable
+        bracket (candle-capped SL + fixed config.RR_TP_FRAC TP = 0.3%). A SIZE readout at the entry line prints the
+        OPTIMAL risk-based position (risk 0.4% = $800; the size flexes with the stop so the $ loss is capped regardless
+        of stop width). Lines run from the breakout bar to the first SL/TP touch."""
         buckets = self._trline_buckets; n = len(buckets)
         user = self._rr_lines_user; cpool = self._rr_ln_pool; lpool = self._rr_lnlbl_pool
         WHITE = (236, 238, 244)
-        ul = ut = 0
-        for key, x, side, entry, sl, tp, yb in self._rr_entries:
+        ul = ut = 0; _size_shown = False
+        for key, x, side, entry, sl, _tp_frozen, yb in self._rr_entries:
             if not user.get(key, False) or entry <= 0 or x < 0 or x >= n:
                 continue
+            tp = entry * (1.0 + side * config.RR_TP_FRAC)         # TP from the CURRENT config (0.3%), not the frozen 0.5%
             exit_x = n - 1
             for j in range(x + 1, n):
                 bb = buckets[j]; hh = float(bb.get("high", 0.0) or 0.0); ll = float(bb.get("low", 0.0) or 0.0)
@@ -7664,10 +7670,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _tl.setText(("%.2f" % entry) if tag == "entry"
                             else ("%.2f (%+.2f%%)" % (lvl, side * (lvl - entry) / entry * 100.0)))
                 _tl.setColor(col); _tl.setPos(rb, lvl); _tl.setVisible(True)
+            # OPTIMAL (risk-based) position-size readout at the entry line — margin = (risk$ / stop-dist) / leverage, so
+            # the $ loss at the candle-capped SL is capped at RR_RISK_FRAC of the account no matter how wide the stop.
+            _sd = abs(entry - sl) / entry
+            if _sd > 0:
+                _risk = config.RR_ACCOUNT_BALANCE * config.RR_RISK_FRAC
+                _notional = _risk / _sd; _margin = _notional / config.RR_LEVERAGE
+                _qty = _notional / entry; _tpusd = _notional * config.RR_TP_FRAC
+                _mpct = 100.0 * _margin / config.RR_ACCOUNT_BALANCE if config.RR_ACCOUNT_BALANCE > 0 else 0.0
+                if self._rr_size_lbl is None:
+                    _szl = pg.TextItem(anchor=(0.0, 1.15)); _szl.setZValue(37)
+                    _szf = QtGui.QFont("Consolas", 9); _szf.setBold(True); _szl.textItem.setFont(_szf)
+                    self.plot.addItem(_szl, ignoreBounds=True); self._rr_size_lbl = _szl
+                self._rr_size_lbl.setText(
+                    "SIZE  risk $%s   margin $%s (%.1f%%)   notional $%s   %.1f SOL   TP +$%s / SL -$%s"
+                    % ("{:,.0f}".format(_risk), "{:,.0f}".format(_margin), _mpct, "{:,.0f}".format(_notional),
+                       _qty, "{:,.0f}".format(_tpusd), "{:,.0f}".format(_risk)))
+                self._rr_size_lbl.setColor((120, 220, 245)); self._rr_size_lbl.setPos(x, entry)
+                self._rr_size_lbl.setVisible(True); _size_shown = True
         for j in range(ul, len(cpool)):
             cpool[j].setVisible(False)
         for j in range(ut, len(lpool)):
             lpool[j].setVisible(False)
+        if self._rr_size_lbl is not None and not _size_shown:
+            self._rr_size_lbl.setVisible(False)
 
     # HTF RADAR RUNNER signals (sub-toggles m10_radarrun_1h / m10_radarrun_4h): the Radar Runner breakout badges from a
     # HIGHER timeframe drawn on the current LOWER-tf chart, coloured to MATCH that htf's walls (4h neon violet/green,
