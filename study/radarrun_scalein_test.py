@@ -131,17 +131,16 @@ def main():
     # ---- PART 2: scale-in P&L ----
     CONFIGS = [
         ("BASELINE (no adds)", []),
+        ("+0.5 @0.1 (single)", [(0.001, 0.5)]),
+        ("+0.5 @0.2 (single)", [(0.002, 0.5)]),
+        ("+0.25 @0.1 (single)", [(0.001, 0.25)]),
+        ("+0.25 @0.2 (single)", [(0.002, 0.25)]),
         ("USER +0.5@0.1 +0.5@0.2", [(0.001, 0.5), (0.002, 0.5)]),
-        ("+1.0@0.1 +1.0@0.2", [(0.001, 1.0), (0.002, 1.0)]),
-        ("+0.25@0.1 +0.25@0.2", [(0.001, 0.25), (0.002, 0.25)]),
-        ("+0.5@0.15 +0.5@0.3", [(0.0015, 0.5), (0.003, 0.5)]),
-        ("+1.0@0.1 (single)", [(0.001, 1.0)]),
-        ("+1.0@0.2 (single)", [(0.002, 1.0)]),
     ]
     print("\nPART 2 - SCALE-IN P&L  (base sized so SL = $800; adds are extra notional; r = net/$800)\n", flush=True)
-    print("  %-24s | mean r  | worst r | pass%%@100 (fails) med/p90 DDp99 | pass%%@70cap med/p90 DDp99"
+    print("  %-24s | mean r  | worst r | ret/DD | pass%%@100 (fails) med/p90 DDp99 | pass%%@70cap med/p90 DDp99"
           % "config", flush=True)
-    print("  " + "-" * 118, flush=True)
+    print("  " + "-" * 126, flush=True)
     for name, adds in CONFIGS:
         pooled = []
         for n, *_ in SRCS:
@@ -150,8 +149,9 @@ def main():
         rs = np.array([z[1] for z in pooled])
         days = day_blocks(pooled)
         m100 = mc(days, 1.0); m70 = mc(days, 0.7)
-        print("  %-24s | %+.3f  | %+.2f   | %5.1f%% (%4d) %3.0f/%3.0f %.1f%%   | %5.1f%% %3.0f/%3.0f %.1f%%"
-              % (name, rs.mean(), rs.min(), m100["p"], m100["fails"], m100["med"], m100["p90"], m100["dd99"],
+        eff = 100.0 * rs.mean() / m100["dd99"] if m100["dd99"] > 0 else 0.0   # return per unit drawdown (edge, not leverage)
+        print("  %-24s | %+.3f  | %+.2f   | %5.2f  | %5.1f%% (%4d) %3.0f/%3.0f %.1f%%   | %5.1f%% %3.0f/%3.0f %.1f%%"
+              % (name, rs.mean(), rs.min(), eff, m100["p"], m100["fails"], m100["med"], m100["p90"], m100["dd99"],
                  m70["p"], m70["med"], m70["p90"], m70["dd99"]), flush=True)
 
 
