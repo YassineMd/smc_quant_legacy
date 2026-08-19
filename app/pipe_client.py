@@ -551,6 +551,13 @@ class PipeClientWorker(threading.Thread):
     # ------------------------------------------------------------------
     # GUI-thread snapshot (lock held briefly, then released)
     # ------------------------------------------------------------------
+    def live_price(self) -> "tuple[float, float]":
+        """CHEAP live-price read for the clock-candle fold: (latest_price, active_bucket.end_time) under a brief lock,
+        WITHOUT building the full snapshot() dict (which copies candles/buckets/OBs and is far too heavy to call at
+        20Hz just for a price). end_time is the daemon's ~now send-stamp -> lets the caller detect a lagging worker."""
+        with self.data_lock:
+            return float(self.latest_price or 0.0), float((self.active_bucket or {}).get("end_time", 0.0) or 0.0)
+
     def snapshot(self) -> dict:
         """Return a self-consistent copy of the cache for one render frame.
 

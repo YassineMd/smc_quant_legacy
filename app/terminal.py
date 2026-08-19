@@ -10460,8 +10460,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             now = time.time()
             if not (tfsec and float(st) <= now < float(st) + tfsec):   # only the CURRENT (still-forming) interval
                 return tsnap
-            lp = float((self.worker.snapshot() or {}).get("latest_price") or 0.0) if self.worker is not None else 0.0
+            if self.worker is not None:
+                lp, _wrk_et = self.worker.live_price()                  # CHEAP read (avoids a 20Hz full-snapshot build)
+            else:
+                lp, _wrk_et = 0.0, 0.0
+            lp = float(lp or 0.0)
             if lp <= 0.0:
+                return tsnap
+            # Trust the LOCAL bucket-worker price only if it isn't LAGGING the daemon poll. Under multi-window CPU load
+            # this window's worker thread can fall behind the tick stream; folding its stale price would make the clock
+            # candle LAG the (daemon-fresh) poll instead of tracking it. active_bucket.end_time is the daemon's ~"now"
+            # send-stamp on BOTH the worker's last tick and the poll snapshot -> comparing them is CLOCK-SKEW-FREE. If the
+            # worker's last tick is >1.5s older than the poll, defer: keep the fresh poll price, don't fold a stale one.
+            _poll_et = float(ab.get("end_time") or 0.0)
+            if _poll_et > 0.0 and _wrk_et > 0.0 and _wrk_et < _poll_et - 1.5:
                 return tsnap
             snap = dict(tsnap)                                          # shallow copy — leave the feed's snapshot intact
             snap["latest_price"] = lp
