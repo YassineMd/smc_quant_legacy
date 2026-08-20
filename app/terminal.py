@@ -1386,6 +1386,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Radar Wick-Breakout LABEL (m10_radarwick, 5m/15m/30m/1h) — the powerful breakouts detect() skips: body already
         # BEYOND the radar, only the wick retests it. Cyan diamonds, eyeball-first (no persist/audio/click). (detect_wick)
         self._rw_sph = None; self._rw_sig = None; self._rw_drawn = False
+        self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
         # Radar Runner PROVISIONAL forming-bar preview (hollow badge on the still-forming candle; confirmed detect() keeps
         # or drops it on close). Walls cached at each bar-close -> the forming bar is re-checked every frame (O(walls)).
         self._rr_prov_sph = None; self._rr_walls = None; self._rr_walls_off = 0; self._rr_walls_slbuf = 0.003
@@ -2653,12 +2654,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
-                and self._rr_entries and self.menu.layer_state("m10_radarrun")):
-            try:                               # click a Radar Runner badge -> toggle its entry/SL/TP trade lines
+                and (self._rr_entries or getattr(self, "_dia_entries", []))
+                and (self.menu.layer_state("m10_radarrun") or self.menu.layer_state("m10_radarwick"))):
+            try:                               # click a Radar Runner triangle OR a tradeable diamond -> toggle its bracket
                 pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
                 (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
                 best = None; bestdx = 2.5
-                for _en in self._rr_entries:
+                for _en in (self._rr_entries + getattr(self, "_dia_entries", [])):
                     if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:   # yb at index 6 (entry/sl/tp tuple)
                         best = _en[0]; bestdx = abs(xc - _en[1])
                 if best is not None:
@@ -7442,6 +7444,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._rr_size_lbl.setVisible(False)
         if getattr(self, "_rr_prov_sph", None) is not None:
             self._rr_prov_sph.setVisible(False)                  # forming-bar provisional preview rides the master layer
+        self._rr_entries = []                                    # drop RR bracket entries so none linger when only the diamond is on
         self._rr_sig = None; self._rr_drawn = False
 
     def _rr_conviction(self, buckets, i, side) -> bool:
@@ -7657,7 +7660,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         user = self._rr_lines_user; cpool = self._rr_ln_pool; lpool = self._rr_lnlbl_pool
         WHITE = (236, 238, 244); _fee = getattr(config, "RR_MAKER_RT", 0.0004)
         ul = ut = 0; _size_shown = False
-        for key, x, side, entry, sl, _tp_frozen, yb in self._rr_entries:
+        for key, x, side, entry, sl, _tp_frozen, yb in (self._rr_entries + getattr(self, "_dia_entries", [])):
             if not user.get(key, False) or entry <= 0 or x < 0 or x >= n:
                 continue
             tp1 = entry * (1.0 + side * config.RR_TP1_FRAC)      # 50% off here (nets ~0.2%)
@@ -7723,12 +7726,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._rr_size_lbl.setVisible(False)
 
     # RADAR WICK-BREAKOUT label (m10_radarwick, 5m/15m/30m/1h) — the POWERFUL breakouts the Radar Runner SKIPS because the
-    # candle opens ALREADY BEYOND the radar (body outside) and only its WICK retests it. Cyan diamond at the breakout bar,
-    # LABEL-ONLY (eyeball-first: no persistence, no audio, no click-to-trade). Shares the Radar Runner full-history warm-up
-    # (self._rr_warm) so a mark never repaints when the scroll window starts after its wall formed. (app/radar_breakout_detect)
+    # candle opens ALREADY BEYOND the radar (body outside) and only its WICK retests it. Cyan diamond at the breakout bar.
+    # TRADEABLE (SD+big-wick subset): click a diamond -> the SAME scale-out bracket as the RR (candle-SL + TP1/TP2 + size),
+    # via _dia_entries fed into _draw_rr_lines. Shares the Radar Runner full-history warm-up (self._rr_warm) so a mark never
+    # repaints when the scroll window starts after its wall formed. No disk-persist/audio yet. (app/radar_breakout_detect)
     def _clear_radarwick(self) -> None:
         if self._rw_sph is not None:
             self._rw_sph.setVisible(False)
+        self._dia_entries = []                                   # drop tradeable-diamond bracket entries when the layer is off
         self._rw_sig = None; self._rw_drawn = False
 
     def _draw_radarwick(self, filtered) -> None:
@@ -7747,17 +7752,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             from app import radar_breakout_detect
             _bset = list(warm) + list(filtered)                  # walls over FULL history (same warm-up as Radar Runner)
-            # same_dir=True: only BULLISH bars on a buy wall / BEARISH on a sell wall (validated 2026-08-20 — the
-            # counter-directional bars diluted the signal; dropping them ~doubles the OOS edge). study/radarwick_samedir.py
-            cands = radar_breakout_detect.detect_wick(_bset, skip_last=_forming, same_dir=True)
+            # TRADEABLE diamond = SD (same_dir: bullish bar on a buy wall / bearish on a sell wall) + BIG wick (>=0.5) --
+            # the validated additive subset that speeds the RR pass at flat DD (study/radarwick_combined_scaleout.py).
+            cands = radar_breakout_detect.detect_wick(_bset, skip_last=_forming, same_dir=True, wick_min=0.5)
         except Exception:
             self._clear_radarwick(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        _slbuf = 0.002 if self._tf == "1h" else 0.003            # candle-SL buffer, same as the Radar Runner bracket
         CY = (60, 220, 235)                                      # cyan diamond
         if self._rw_sph is None:
             self._rw_sph = pg.ScatterPlotItem(pxMode=True, size=16, symbol="d")
             self._rw_sph.setZValue(34); self.plot.addItem(self._rw_sph, ignoreBounds=True)
-        spots = []
+        spots = []; self._dia_entries = []                       # rebuild the tradeable-diamond click->bracket entries
         for e in cands:
             i = int(e["i"]) - _off                               # detect ran over warm+filtered -> shift to filtered space
             if not (0 <= i < n):
@@ -7767,8 +7773,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             y = (lo - pad) if side > 0 else (hi + pad)           # ♦ BELOW the candle for an up-break / ABOVE for a down-break
             spots.append({"pos": (i, y), "symbol": "d", "brush": pg.mkBrush(*CY, 235),
                           "pen": pg.mkPen(20, 95, 110, 255, width=1.3), "size": 16})
+            # TRADEABLE: click -> the SAME scale-out bracket as the RR (candle-capped SL + TP1/TP2 + size). entry = breakout close.
+            entry = float(e.get("entry", b.get("close", 0.0)) or 0.0)
+            rlo = float(e.get("radar_lo", 0.0) or 0.0); rhi = float(e.get("radar_hi", 0.0) or 0.0)
+            if entry > 0 and rlo > 0 and rhi > 0:
+                sl = max(lo * (1 - _slbuf), rlo) if side > 0 else min(hi * (1 + _slbuf), rhi)
+                self._dia_entries.append(("dia%d" % i, i, side, entry, sl, 0.0, y))
         self._rw_sph.setData(spots); self._rw_sph.setVisible(True)
         self._rw_drawn = True
+        self._trline_buckets = filtered                         # click a diamond -> scale-out bracket lines (shared machinery)
+        self._draw_rr_lines()
 
     # RADAR RUNNER PROVISIONAL forming-bar preview (rides the master m10_radarrun layer). Shows a HOLLOW badge on the STILL-
     # FORMING candle the instant it currently qualifies (open inside radar + live close beyond the extreme + visit>=1), then
