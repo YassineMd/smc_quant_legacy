@@ -34,14 +34,16 @@ def load_dets():
     return dets
 
 
-def eval_cfg(dets, cap):
-    tr = []
+def eval_cfg(dets, cap, skip_over=None):
+    tr = []; skipped = 0
     for (sigs, Hi, Lo, C, ST, n) in dets:
         last = -1
         for (k, s, entry, csl, dist, ts) in sigs:
             if k <= last:
                 continue
             cdist = abs(entry - csl) / entry
+            if skip_over is not None and cdist > skip_over:      # AVOID wide-stop trades entirely (keep the natural stop on the rest)
+                skipped += 1; continue
             eff = cdist if cap is None else min(cdist, cap)
             if eff <= 0:
                 continue
@@ -110,8 +112,9 @@ def report(title, tr):
 def main():
     print("RadarRun 30m-clock + 30m-bucket ONLY | net TP0.2%% (gross 0.24%%, maker 0.04%%RT no-slip) | NOTIONAL 10%%x10 | LIMIT-ENTRY assumes-fill | HyroTrader $200k | IN-SAMPLE\n", flush=True)
     dets = load_dets()
-    report("CANDLE stop (~1%) + notional  [as asked]", eval_cfg(dets, None))
-    report("0.5%-CAP stop + notional  [survivable-notional variant, for contrast]", eval_cfg(dets, 0.005))
+    report("CANDLE stop, ALL trades", eval_cfg(dets, None))
+    report("CANDLE stop, SKIP trades with SL>1%  [avoid wide stops]", eval_cfg(dets, None, skip_over=0.01))
+    report("0.5%-CAP stop  [tighten instead of skip, for contrast]", eval_cfg(dets, 0.005))
 
 
 if __name__ == "__main__":
