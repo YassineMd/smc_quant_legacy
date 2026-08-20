@@ -81,15 +81,17 @@ def main():
     print("\n### ITEM 6 (worst trade at TP0.30) ### worst single-trade net %+.3f%%  (R %+.2f, stop-dist %.3f%%)"
           % (worst[1] * 100, worst[2], worst[3] * 100), flush=True)
 
-    print("\n### ITEM 8 — win-rate haircut at TP 0.30% (flip random wins -> stop-loss) ###", flush=True)
-    print("  haircut  win%   expectancy/trade%   R0.3: pass / med-d / DDp99      R0.4: pass / med-d / DDp99", flush=True)
-    for pp in (0, 3, 5, 8):
-        triples = haircut(p30, pp, seed=1000 + pp)
-        nets = np.array([t[1] for t in triples]) * 100.0
-        m3 = prop(triples, 0.3); m4 = prop(triples, 0.4)
-        print("  -%dpp     %5.1f%%   %+.4f%%           %5.1f%% / %4.0f / %4.1f%%          %5.1f%% / %4.0f / %4.1f%%"
-              % (pp, 100.0 * (nets > 0).mean(), nets.mean(),
-                 m3["p"], m3["d50"], m3["dd99"], m4["p"], m4["d50"], m4["dd99"]), flush=True)
+    for tp_hc in (0.0025, 0.003):
+        phc = pool(dets, tp_hc)
+        print("\n### ITEM 8 — win-rate haircut at TP %.2f%% (flip random wins -> stop-loss) ###" % (tp_hc * 100), flush=True)
+        print("  haircut  win%   expectancy/trade%   R0.3: pass / med-d / DDp99      R0.4: pass / med-d / DDp99", flush=True)
+        for pp in (0, 3, 5, 8):
+            triples = haircut(phc, pp, seed=1000 + pp)
+            nets = np.array([t[1] for t in triples]) * 100.0
+            m3 = prop(triples, 0.3); m4 = prop(triples, 0.4)
+            print("  -%dpp     %5.1f%%   %+.4f%%           %5.1f%% / %4.0f / %4.1f%%          %5.1f%% / %4.0f / %4.1f%%"
+                  % (pp, 100.0 * (nets > 0).mean(), nets.mean(),
+                     m3["p"], m3["d50"], m3["dd99"], m4["p"], m4["d50"], m4["dd99"]), flush=True)
 
 
 if __name__ == "__main__":
