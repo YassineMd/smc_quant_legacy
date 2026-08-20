@@ -1383,6 +1383,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._rr_audio_seeded = False                          # entry-sound seed: never blast the backlog on first draw / tf-switch
         self._rr_htf_sph = {}                                  # HTF Radar Runner SIGNALS (m10_radarrun_1h/_4h): per-htf ScatterPlotItem
         self._rr_htf_sig = {}; self._rr_htf_marks = {}         # cached detect() per htf, re-run only on an htf-data change
+        # Radar Wick-Breakout LABEL (m10_radarwick, 5m/15m/30m/1h) — the powerful breakouts detect() skips: body already
+        # BEYOND the radar, only the wick retests it. Cyan diamonds, eyeball-first (no persist/audio/click). (detect_wick)
+        self._rw_sph = None; self._rw_sig = None; self._rw_drawn = False
         self._kco_sph = None; self._kco_ctx = None             # KC Overshoot 2nd-Entry (m10_kcovershoot): signal triangles + context marks
         self._kco_sig = None                                   # cache sig (closed-bar detect -> re-run only on a data change)
         # '5m Breakout' indicator (m10_breakout5m) — squared 'Br' badges on S/R-breakout (mitigation) candles, 5m ONLY.
@@ -2356,6 +2359,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._rr_htf_sig[_h] = None                  # HTF Radar Runner signals toggled -> re-detect + redraw next frame
             if not on:
                 self._clear_htf_radarrun(_h)             # off -> tear those htf badges down now
+        elif key == "m10_radarwick":
+            self._rw_sig = None; self._sel_sig = None    # Radar Wick-Breakout label toggled -> re-detect + redraw next frame
+            if not on:
+                self._clear_radarwick()                  # off -> tear the cyan diamonds down now
         elif key == "m10_kcovershoot":
             self._kco_sig = None                         # KC Overshoot 2nd-Entry toggled -> re-detect + redraw next frame
             if not on:
@@ -7695,6 +7702,52 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._rr_size_lbl is not None and not _size_shown:
             self._rr_size_lbl.setVisible(False)
 
+    # RADAR WICK-BREAKOUT label (m10_radarwick, 5m/15m/30m/1h) — the POWERFUL breakouts the Radar Runner SKIPS because the
+    # candle opens ALREADY BEYOND the radar (body outside) and only its WICK retests it. Cyan diamond at the breakout bar,
+    # LABEL-ONLY (eyeball-first: no persistence, no audio, no click-to-trade). Shares the Radar Runner full-history warm-up
+    # (self._rr_warm) so a mark never repaints when the scroll window starts after its wall formed. (app/radar_breakout_detect)
+    def _clear_radarwick(self) -> None:
+        if self._rw_sph is not None:
+            self._rw_sph.setVisible(False)
+        self._rw_sig = None; self._rw_drawn = False
+
+    def _draw_radarwick(self, filtered) -> None:
+        if (not self.menu.layer_state("m10_radarwick") or self.scanner_mode != "bucket_canvas"
+                or self._tf not in ("5m", "15m", "30m", "1h") or self._hide_candles):   # Ctrl+H hides strategies
+            self._clear_radarwick(); return
+        n = len(filtered)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        warm = getattr(self, "_rr_warm", None) or []; _off = len(warm)
+        _ce = filtered[-2] if (_forming and n >= 2) else (filtered[-1] if n else None)
+        _cet = float(_ce.get("end_time", 0.0) or 0.0) if _ce else 0.0
+        _sig = (n, _off, _forming, self._tf, _cet)
+        if _sig == self._rw_sig and self._rw_drawn:
+            return                                               # closed-bar detect -> re-run only once per bar-close
+        self._rw_sig = _sig
+        try:
+            from app import radar_breakout_detect
+            _bset = list(warm) + list(filtered)                  # walls over FULL history (same warm-up as Radar Runner)
+            cands = radar_breakout_detect.detect_wick(_bset, skip_last=_forming)
+        except Exception:
+            self._clear_radarwick(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        CY = (60, 220, 235)                                      # cyan diamond
+        if self._rw_sph is None:
+            self._rw_sph = pg.ScatterPlotItem(pxMode=True, size=16, symbol="d")
+            self._rw_sph.setZValue(34); self.plot.addItem(self._rw_sph, ignoreBounds=True)
+        spots = []
+        for e in cands:
+            i = int(e["i"]) - _off                               # detect ran over warm+filtered -> shift to filtered space
+            if not (0 <= i < n):
+                continue
+            side = int(e["side"])
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)           # ♦ BELOW the candle for an up-break / ABOVE for a down-break
+            spots.append({"pos": (i, y), "symbol": "d", "brush": pg.mkBrush(*CY, 235),
+                          "pen": pg.mkPen(20, 95, 110, 255, width=1.3), "size": 16})
+        self._rw_sph.setData(spots); self._rw_sph.setVisible(True)
+        self._rw_drawn = True
+
     # HTF RADAR RUNNER signals (sub-toggles m10_radarrun_1h / m10_radarrun_4h): the Radar Runner breakout badges from a
     # HIGHER timeframe drawn on the current LOWER-tf chart, coloured to MATCH that htf's walls (4h neon violet/green,
     # 1h orange/blue; long = support colour, short = resistance colour). Badges only (no click bracket). Placed at the
@@ -9546,7 +9599,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     or self.menu.layer_state("m10_easy1h") or self.menu.layer_state("m10_crazywall")
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")
                     or self.menu.layer_state("m10_wallstrat") or self.menu.layer_state("m10_radarrun")
-                    or self.menu.layer_state("m10_kcovershoot")):
+                    or self.menu.layer_state("m10_radarwick") or self.menu.layer_state("m10_kcovershoot")):
                 _pf = _pf0                          # already built above; the top gate decided this frame needs a redraw
                 try:
                     self._draw_engulfsr(_pf or [])  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
@@ -9568,6 +9621,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_radarrun(_pf or [])  # Radar Runner (5m/15m/1h) — self-gated, fail-safe
                 except Exception:
                     self._clear_radarrun()
+                try:
+                    self._draw_radarwick(_pf or [])  # Radar Wick-Breakout label (cyan ♦) — self-gated, fail-safe
+                except Exception:
+                    self._clear_radarwick()
                 try:
                     self._draw_htf_radarrun("4h", _pf or [])  # 4h Radar Runner signals on lower tfs — self-gated
                     self._draw_htf_radarrun("1h", _pf or [])  # 1h Radar Runner signals on lower tfs — self-gated
@@ -9682,6 +9739,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_radarrun(filtered)  # Radar Runner (5m/15m/1h) — self-gated, fail-safe
             except Exception:
                 self._clear_radarrun()
+            try:
+                self._draw_radarwick(filtered)  # Radar Wick-Breakout label (cyan ♦) — self-gated, fail-safe
+            except Exception:
+                self._clear_radarwick()
             try:
                 self._draw_htf_radarrun("4h", filtered)  # 4h Radar Runner signals on lower tfs — self-gated
                 self._draw_htf_radarrun("1h", filtered)  # 1h Radar Runner signals on lower tfs — self-gated

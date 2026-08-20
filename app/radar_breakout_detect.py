@@ -76,3 +76,59 @@ def detect(buckets, walls=None, skip_last=True, sl_buf=0.003, tp_frac=0.005):
                 break
     out.sort(key=lambda e: e["i"])
     return out
+
+
+def detect_wick(buckets, walls=None, skip_last=True, wick_min=0.0):
+    """WICK-BREAKOUT candidates that the main detect() SKIPS at its open-inside gate — the POWERFUL momentum candle whose
+    BODY is already BEYOND the radar and only its WICK reaches back into it (user obs 2026-08-20; LABEL only, cyan diamond,
+    NOT yet validated). Same wall/radar/resisted-visit machinery as detect(), same [b, b+2] breakout window, but instead of
+    'open INSIDE the radar' it requires the open ALREADY BEYOND the defended extreme + a wick that dips back into the radar:
+      support/S (up-break): O>radar_hi AND C>radar_hi (body above radar) AND low<=radar_hi (lower wick into the radar);
+      resistance/R (down-break): O<radar_lo AND C<radar_lo (body below) AND high>=radar_lo (upper wick into the radar).
+    Disjoint from detect() by construction (detect() needs open INSIDE; this needs open BEYOND). `wick_min` = min fraction of
+    the candle range the retest-wick must span (0.0 = show every geometric qualifier for eyeballing). Causal. Returns
+    [{i, side(+1/-1), entry, radar_lo, radar_hi, price, band, wall_side('S'|'R'), pen, wick}]."""
+    n = len(buckets)
+    if n < 4:
+        return []
+    O = [0.0] * n; C = [0.0] * n; HI = [0.0] * n; LO = [0.0] * n
+    for i, b in enumerate(buckets):
+        O[i], C[i], HI[i], LO[i] = _ohlc(b)
+    if walls is None:
+        try:
+            walls = _al.detect(buckets, skip_last=False)
+        except Exception:
+            walls = []
+    hi_n = (n - 1) if skip_last else n
+    seen = set(); out = []
+    for w in (walls or []):
+        side = w.get("side"); P = float(w.get("price") or 0.0); band = float(w.get("band") or 0.0)
+        if band <= 0 or P <= 0 or side not in ("S", "R"):
+            continue
+        rlo = P - RADAR_MULT * band; rhi = P + RADAR_MULT * band
+        for r in w.get("radar_runs", ()):
+            if len(r) < 2:
+                continue
+            a = int(r[0]); b = int(r[1]); pr = float(r[2]) if len(r) > 2 else 50.0
+            for k in range(b, min(b + 2, hi_n - 1) + 1):
+                if k < 1 or k >= hi_n:
+                    continue
+                rng = HI[k] - LO[k]
+                if rng <= 0:
+                    continue
+                if side == "S":                                  # body ABOVE the radar, lower wick dips back into it, closes up
+                    ok = O[k] > rhi and C[k] > rhi and LO[k] <= rhi
+                    wick = (min(O[k], C[k]) - LO[k]) / rng
+                else:                                            # body BELOW the radar, upper wick pokes back into it, closes down
+                    ok = O[k] < rlo and C[k] < rlo and HI[k] >= rlo
+                    wick = (HI[k] - max(O[k], C[k])) / rng
+                if not ok or wick < wick_min or (k - a) < MINVISIT or (k, side) in seen:
+                    continue
+                seen.add((k, side))
+                s = 1 if side == "S" else -1
+                pen = (C[k] - rhi) / band if side == "S" else (rlo - C[k]) / band
+                out.append(dict(i=k, side=s, entry=C[k], band=band, price=P, radar_lo=rlo, radar_hi=rhi,
+                                pen=pen, wall_side=side, p_resist=pr, wick=wick))
+                break
+    out.sort(key=lambda e: e["i"])
+    return out
