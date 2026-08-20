@@ -1387,6 +1387,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # BEYOND the radar, only the wick retests it. Cyan diamonds, eyeball-first (no persist/audio/click). (detect_wick)
         self._rw_sph = None; self._rw_sig = None; self._rw_drawn = False
         self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
+        self._dia_fired = set(); self._dia_audio_seeded = False; self._dia_fired_tf = None   # diamond entry-BEEP: seen end_times + silent-seed guard
         # Radar Runner PROVISIONAL forming-bar preview (hollow badge on the still-forming candle; confirmed detect() keeps
         # or drops it on close). Walls cached at each bar-close -> the forming bar is re-checked every frame (O(walls)).
         self._rr_prov_sph = None; self._rr_walls = None; self._rr_walls_off = 0; self._rr_walls_slbuf = 0.003
@@ -7763,6 +7764,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._rw_sph is None:
             self._rw_sph = pg.ScatterPlotItem(pxMode=True, size=16, symbol="d")
             self._rw_sph.setZValue(34); self.plot.addItem(self._rw_sph, ignoreBounds=True)
+        if self._tf != self._dia_fired_tf:                       # tf switch -> re-seed the beep tracker silently (no backlog blast)
+            self._dia_fired = set(); self._dia_audio_seeded = False; self._dia_fired_tf = self._tf
+        _edge_i = (n - 2) if _forming else (n - 1)               # the just-closed live-edge bar a NEW diamond can land on
+        _new_edge = []
         spots = []; self._dia_entries = []                       # rebuild the tradeable-diamond click->bracket entries
         for e in cands:
             i = int(e["i"]) - _off                               # detect ran over warm+filtered -> shift to filtered space
@@ -7770,6 +7775,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue
             side = int(e["side"])
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            _et = float(b.get("end_time", 0.0) or 0.0)           # BEEP: a diamond whose bar end_time is new -> a fresh fire
+            if _et > 0 and _et not in self._dia_fired:
+                self._dia_fired.add(_et)
+                if i == _edge_i:
+                    _new_edge.append(side)
             y = (lo - pad) if side > 0 else (hi + pad)           # ♦ BELOW the candle for an up-break / ABOVE for a down-break
             spots.append({"pos": (i, y), "symbol": "d", "brush": pg.mkBrush(*CY, 235),
                           "pen": pg.mkPen(20, 95, 110, 255, width=1.3), "size": 16})
@@ -7781,8 +7791,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._dia_entries.append(("dia%d" % i, i, side, entry, sl, 0.0, y))
         self._rw_sph.setData(spots); self._rw_sph.setVisible(True)
         self._rw_drawn = True
+        if len(self._dia_fired) > 5000:                          # bound memory: keep the 5000 most-recent seen end_times
+            for _old in sorted(self._dia_fired)[:len(self._dia_fired) - 5000]:
+                self._dia_fired.discard(_old)
+        if not self._dia_audio_seeded:                           # first population / tf-switch = silent seed (never blast the backlog)
+            self._dia_audio_seeded = True
+        else:
+            self._dia_sound_new(_new_edge)                       # beep the instant a NEW live-edge diamond prints
         self._trline_buckets = filtered                         # click a diamond -> scale-out bracket lines (shared machinery)
         self._draw_rr_lines()
+
+    def _dia_sound_new(self, new_edge) -> None:
+        """Beep the instant a NEW tradeable diamond freezes on the just-closed live-edge bar. Shares the one 'entry sound'
+        toggle (m10_mmx_sound) + live-only gate with the RR / engulf strategies. DISTINCT from the RR bell: a rising
+        TRIPLE-tick (buy = higher octave, sell = lower) so a diamond is audibly different from a Radar Runner breakout."""
+        if not new_edge or not self.menu.layer_state("m10_mmx_sound"):
+            return
+        if self._replay_on or self._in_recon_replay():
+            return                                               # live-only, matching the RR entry sound
+        buy = new_edge[0] > 0
+        self._play_tones([(1175 if buy else 587, 90), (1568 if buy else 784, 90), (2093 if buy else 1047, 120)])
 
     # RADAR RUNNER PROVISIONAL forming-bar preview (rides the master m10_radarrun layer). Shows a HOLLOW badge on the STILL-
     # FORMING candle the instant it currently qualifies (open inside radar + live close beyond the extreme + visit>=1), then
