@@ -7648,28 +7648,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._draw_rr_lines()
 
     def _draw_rr_lines(self) -> None:
-        """Entry (white) / SL (red) / TP (green) dashed lines for the toggled-ON Radar Runner badge — the tradeable
-        bracket (candle-capped SL + fixed config.RR_TP_FRAC TP = 0.25%). A SIZE readout at the entry line prints the
-        OPTIMAL risk-based position (risk 0.4% = $800; the size flexes with the stop so the $ loss is capped regardless
-        of stop width). Lines run from the breakout bar to the first SL/TP touch."""
+        """Entry (white) / SL (red) / TP1 + TP2 (green) dashed lines for the toggled-ON Radar Runner badge — the TWO-TARGET
+        SCALE-OUT bracket: 50% off at TP1 (config.RR_TP1_FRAC, nets ~0.2%) + 50% at TP2 (RR_TP2_FRAC, nets ~0.4%), candle-
+        capped SL, move stop -> BREAKEVEN after TP1 (study/radarrun_scaleout.py: best notional config). A SIZE readout at
+        the entry line prints the risk-based position (risk 0.4% = $800, flexes with the stop) + the per-tranche $ targets.
+        Lines run from the breakout bar to the first TP2/SL touch."""
         buckets = self._trline_buckets; n = len(buckets)
         user = self._rr_lines_user; cpool = self._rr_ln_pool; lpool = self._rr_lnlbl_pool
-        WHITE = (236, 238, 244)
+        WHITE = (236, 238, 244); _fee = getattr(config, "RR_MAKER_RT", 0.0004)
         ul = ut = 0; _size_shown = False
         for key, x, side, entry, sl, _tp_frozen, yb in self._rr_entries:
             if not user.get(key, False) or entry <= 0 or x < 0 or x >= n:
                 continue
-            tp = entry * (1.0 + side * config.RR_TP_FRAC)         # TP from the CURRENT config (0.25%), not the frozen 0.5%
+            tp1 = entry * (1.0 + side * config.RR_TP1_FRAC)      # 50% off here (nets ~0.2%)
+            tp2 = entry * (1.0 + side * config.RR_TP2_FRAC)      # 50% off here (nets ~0.4%); stop -> BE after TP1
             exit_x = n - 1
             for j in range(x + 1, n):
                 bb = buckets[j]; hh = float(bb.get("high", 0.0) or 0.0); ll = float(bb.get("low", 0.0) or 0.0)
                 if hh <= 0 or ll <= 0:
                     continue
-                if ((hh >= tp) if side > 0 else (ll <= tp)) or ((ll <= sl) if side > 0 else (hh >= sl)):
+                if ((hh >= tp2) if side > 0 else (ll <= tp2)) or ((ll <= sl) if side > 0 else (hh >= sl)):
                     exit_x = j; break
             rb = max(x + 1, exit_x)
             for lvl, col, w, tag in ((sl, (255, 90, 90), 1.5, "sl"),
-                                     (tp, (40, 210, 90), 1.5, "tp"),
+                                     (tp1, (40, 210, 90), 1.5, "tp1"),
+                                     (tp2, (90, 235, 150), 1.7, "tp2"),
                                      (entry, WHITE, 1.9, "entry")):
                 if ul >= len(cpool):
                     _ln = pg.PlotCurveItem(); _ln.setZValue(29)
@@ -7682,25 +7685,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True); _tl.textItem.setFont(_tf)
                     self.plot.addItem(_tl, ignoreBounds=True); lpool.append(_tl)
                 _tl = lpool[ut]; ut += 1
-                _tl.setText(("%.2f" % entry) if tag == "entry"
-                            else ("%.2f (%+.2f%%)" % (lvl, side * (lvl - entry) / entry * 100.0)))
-                _tl.setColor(col); _tl.setPos(rb, lvl); _tl.setVisible(True)
-            # OPTIMAL (risk-based) position-size readout at the entry line — margin = (risk$ / stop-dist) / leverage, so
-            # the $ loss at the candle-capped SL is capped at RR_RISK_FRAC of the account no matter how wide the stop.
+                _netpct = (side * (lvl - entry) / entry - _fee) * 100.0   # net-of-maker-fee move for the TP labels
+                if tag == "entry":
+                    _txt = "%.2f" % entry
+                elif tag == "tp1":
+                    _txt = "TP1 50%%  %.2f  (%+.2f%% net)" % (lvl, _netpct)
+                elif tag == "tp2":
+                    _txt = "TP2 50%%  %.2f  (%+.2f%% net)" % (lvl, _netpct)
+                else:
+                    _txt = "SL  %.2f  (%+.2f%%)  -> BE after TP1" % (lvl, side * (lvl - entry) / entry * 100.0)
+                _tl.setText(_txt); _tl.setColor(col); _tl.setPos(rb, lvl); _tl.setVisible(True)
+            # risk-based position-size readout at the entry line — margin = (risk$ / stop-dist) / leverage (loss capped at
+            # RR_RISK_FRAC regardless of stop width) + the per-tranche $ (50% at TP1 net / 50% at TP2 net).
             _sd = abs(entry - sl) / entry
             if _sd > 0:
                 _risk = config.RR_ACCOUNT_BALANCE * config.RR_RISK_FRAC
                 _notional = _risk / _sd; _margin = _notional / config.RR_LEVERAGE
-                _qty = _notional / entry; _tpusd = _notional * config.RR_TP_FRAC
+                _qty = _notional / entry
+                _tp1usd = _notional * 0.5 * (config.RR_TP1_FRAC - _fee)     # 50% tranche, net of maker RT
+                _tp2usd = _notional * 0.5 * (config.RR_TP2_FRAC - _fee)     # 50% tranche, net
                 _mpct = 100.0 * _margin / config.RR_ACCOUNT_BALANCE if config.RR_ACCOUNT_BALANCE > 0 else 0.0
                 if self._rr_size_lbl is None:
                     _szl = pg.TextItem(anchor=(0.0, 1.15)); _szl.setZValue(37)
                     _szf = QtGui.QFont("Consolas", 9); _szf.setBold(True); _szl.textItem.setFont(_szf)
                     self.plot.addItem(_szl, ignoreBounds=True); self._rr_size_lbl = _szl
                 self._rr_size_lbl.setText(
-                    "SIZE  risk $%s   margin $%s (%.1f%%)   notional $%s   %.1f SOL   TP +$%s / SL -$%s"
+                    "SIZE  risk $%s   margin $%s (%.1f%%)   notional $%s   %.1f SOL   |  TP1 50%%=+$%s / TP2 50%%=+$%s / SL -$%s"
                     % ("{:,.0f}".format(_risk), "{:,.0f}".format(_margin), _mpct, "{:,.0f}".format(_notional),
-                       _qty, "{:,.0f}".format(_tpusd), "{:,.0f}".format(_risk)))
+                       _qty, "{:,.0f}".format(_tp1usd), "{:,.0f}".format(_tp2usd), "{:,.0f}".format(_risk)))
                 self._rr_size_lbl.setColor((120, 220, 245)); self._rr_size_lbl.setPos(x, entry)
                 self._rr_size_lbl.setVisible(True); _size_shown = True
         for j in range(ul, len(cpool)):

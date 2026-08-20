@@ -194,6 +194,11 @@ RR_ABSORPR_MIN = -0.25
 # TP = 0.25% chosen for MANUAL trading: highest practical win rate (91.5%) + LOWEST drawdown (p99 3.1%), clears in
 # ~1-1.5 months. (0.3% is faster ~26d but slightly higher DD/lower win; 0.2% wins 93.4% but too slow to catch by hand.)
 RR_TP_FRAC = 0.0025             # fixed take-profit distance of the RR bracket (was 0.5%; 0.25% = best for manual trading)
+# TWO-TARGET SCALE-OUT (badge click): 50% off at TP1, 50% at TP2 (GROSS price fractions; maker RT ~0.04% -> nets 0.2%/0.4%).
+# Backtest (study/radarrun_scaleout.py, 30c+30bkt notional): stop->BE after TP1 = 100% pass, ~13d, DDp99 3.9% (best notional cfg).
+RR_TP1_FRAC = 0.0024            # TP1 gross (nets ~0.20% after 0.04% maker RT) — take 50%
+RR_TP2_FRAC = 0.0044            # TP2 gross (nets ~0.40%) — take the other 50%; move stop to BE after TP1
+RR_MAKER_RT = 0.0004            # maker round-trip (0.02%+0.02%) used only to show NET on the TP labels
 RR_ACCOUNT_BALANCE = 200000.0   # prop account size; risk$ = this * RR_RISK_FRAC. Bump once FUNDED to compound risk.
 RR_RISK_FRAC = 0.004            # risk per trade = this * RR_ACCOUNT_BALANCE (0.4% = $800 on $200k) — the OPTIMAL flat risk
 RR_LEVERAGE = 10.0              # exchange leverage; sets margin = notional/leverage. Does NOT change the $ risked.
