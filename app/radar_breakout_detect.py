@@ -78,7 +78,7 @@ def detect(buckets, walls=None, skip_last=True, sl_buf=0.003, tp_frac=0.005):
     return out
 
 
-def detect_wick(buckets, walls=None, skip_last=True, wick_min=0.0):
+def detect_wick(buckets, walls=None, skip_last=True, wick_min=0.0, same_dir=False):
     """WICK-BREAKOUT candidates that the main detect() SKIPS at its open-inside gate — the POWERFUL momentum candle whose
     BODY is already BEYOND the radar and only its WICK reaches back into it (user obs 2026-08-20; LABEL only, cyan diamond,
     NOT yet validated). Same wall/radar/resisted-visit machinery as detect(), same [b, b+2] breakout window, but instead of
@@ -86,8 +86,11 @@ def detect_wick(buckets, walls=None, skip_last=True, wick_min=0.0):
       support/S (up-break): O>radar_hi AND C>radar_hi (body above radar) AND low<=radar_hi (lower wick into the radar);
       resistance/R (down-break): O<radar_lo AND C<radar_lo (body below) AND high>=radar_lo (upper wick into the radar).
     Disjoint from detect() by construction (detect() needs open INSIDE; this needs open BEYOND). `wick_min` = min fraction of
-    the candle range the retest-wick must span (0.0 = show every geometric qualifier for eyeballing). Causal. Returns
-    [{i, side(+1/-1), entry, radar_lo, radar_hi, price, band, wall_side('S'|'R'), pen, wick}]."""
+    the candle range the retest-wick must span (0.0 = show every geometric qualifier for eyeballing). `same_dir` (user
+    2026-08-20): also require the BAR itself to point the breakout way — BULLISH (close>open) on a support/buy wall, BEARISH
+    (close<open) on a resistance/sell wall — dropping counter-directional bars (a red bar above a buy wall / green below a
+    sell wall) that diluted the raw signal. Causal. Returns [{i, side(+1/-1), entry, radar_lo, radar_hi, price, band,
+    wall_side('S'|'R'), pen, wick, bull}]."""
     n = len(buckets)
     if n < 4:
         return []
@@ -116,19 +119,24 @@ def detect_wick(buckets, walls=None, skip_last=True, wick_min=0.0):
                 rng = HI[k] - LO[k]
                 if rng <= 0:
                     continue
+                bull = C[k] > O[k]
                 if side == "S":                                  # body ABOVE the radar, lower wick dips back into it, closes up
                     ok = O[k] > rhi and C[k] > rhi and LO[k] <= rhi
                     wick = (min(O[k], C[k]) - LO[k]) / rng
+                    if same_dir and not bull:                    # buy wall -> require a BULLISH bar (drop red bars above it)
+                        ok = False
                 else:                                            # body BELOW the radar, upper wick pokes back into it, closes down
                     ok = O[k] < rlo and C[k] < rlo and HI[k] >= rlo
                     wick = (HI[k] - max(O[k], C[k])) / rng
+                    if same_dir and bull:                        # sell wall -> require a BEARISH bar (drop green bars below it)
+                        ok = False
                 if not ok or wick < wick_min or (k - a) < MINVISIT or (k, side) in seen:
                     continue
                 seen.add((k, side))
                 s = 1 if side == "S" else -1
                 pen = (C[k] - rhi) / band if side == "S" else (rlo - C[k]) / band
                 out.append(dict(i=k, side=s, entry=C[k], band=band, price=P, radar_lo=rlo, radar_hi=rhi,
-                                pen=pen, wall_side=side, p_resist=pr, wick=wick))
+                                pen=pen, wall_side=side, p_resist=pr, wick=wick, bull=bull))
                 break
     out.sort(key=lambda e: e["i"])
     return out

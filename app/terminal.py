@@ -7727,7 +7727,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             from app import radar_breakout_detect
             _bset = list(warm) + list(filtered)                  # walls over FULL history (same warm-up as Radar Runner)
-            cands = radar_breakout_detect.detect_wick(_bset, skip_last=_forming)
+            # same_dir=True: only BULLISH bars on a buy wall / BEARISH on a sell wall (validated 2026-08-20 — the
+            # counter-directional bars diluted the signal; dropping them ~doubles the OOS edge). study/radarwick_samedir.py
+            cands = radar_breakout_detect.detect_wick(_bset, skip_last=_forming, same_dir=True)
         except Exception:
             self._clear_radarwick(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
