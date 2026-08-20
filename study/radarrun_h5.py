@@ -35,15 +35,18 @@ def stat(rows):
 
 
 def haircut_triples(rows, pp, seed):
+    """flip pp%% of wins to losses; a flipped win draws a loss from THIS config's OWN realized loss distribution (so the
+    combined config's time-stop-capped losses are represented faithfully, not replaced by full candle stops)."""
     rng = random.Random(seed)
-    wins = [i for i, t in enumerate(rows) if t[3]]     # t=(ts,net,eff,is_win,outc,src,side)
+    losses = [(t[1], t[1] / t[2]) for t in rows if not t[3]]   # (net, r) of this config's real losing trades
+    wins = [i for i, t in enumerate(rows) if t[3]]             # t=(ts,net,eff,is_win,outc,src,side)
     k = min(int(round(pp / 100.0 * len(rows))), len(wins))
     flip = set(rng.sample(wins, k))
     out = []
     for i, t in enumerate(rows):
         ts, net, eff = t[0], t[1], t[2]
-        if i in flip:
-            net = -eff - FEE - 2 * SLIP; r = net / eff
+        if i in flip and losses:
+            net, r = rng.choice(losses)               # this "win" was actually a loss in this config's own profile
         else:
             r = net / eff
         out.append((ts, net, r))
