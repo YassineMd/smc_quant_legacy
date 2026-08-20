@@ -78,6 +78,41 @@ def detect(buckets, walls=None, skip_last=True, sl_buf=0.003, tp_frac=0.005):
     return out
 
 
+def detect_forming(forming, k, walls, sl_buf=0.003, tp_frac=0.005):
+    """PROVISIONAL Radar Runner check for a still-FORMING bar (live preview; the confirmed detect() decides on close).
+    `forming` = (open, close, high, low) of the forming bar; `k` = its index in the SAME space as `walls`' radar_runs (the
+    bset the walls were detected over); `walls` = a precomputed app.absorption_level_detect.detect() output (pass the CACHED
+    set so this is O(walls) per frame, no wall re-detection). Returns a signal dict shaped like detect()'s (with sl_trade/
+    tp_trade) if the forming bar CURRENTLY qualifies — open INSIDE the radar, live close BEYOND the defended extreme, visit
+    >= MINVISIT — else None. Recompute per live frame as the close moves; NOT persisted (ephemeral until the bar closes)."""
+    O, C, HI, LO = forming
+    if not walls or O <= 0 or C <= 0:
+        return None
+    for w in walls:
+        side = w.get("side"); P = float(w.get("price") or 0.0); band = float(w.get("band") or 0.0)
+        if band <= 0 or P <= 0 or side not in ("S", "R"):
+            continue
+        rlo = P - RADAR_MULT * band; rhi = P + RADAR_MULT * band
+        if not (rlo <= O <= rhi):                                # open must be INSIDE the radar (same gate as detect())
+            continue
+        broke = (C > rhi) if side == "S" else (C < rlo)          # live close beyond the defended extreme
+        if not broke:
+            continue
+        for r in w.get("radar_runs", ()):
+            if len(r) < 2:
+                continue
+            a = int(r[0]); b = int(r[1])
+            if b <= k <= b + 2 and (k - a) >= MINVISIT:          # forming bar at / just after the visit end
+                s = 1 if side == "S" else -1
+                sl_trade = max(LO * (1.0 - sl_buf), rlo) if s > 0 else min(HI * (1.0 + sl_buf), rhi)
+                tp_trade = C * (1.0 + s * tp_frac)
+                pen = (C - rhi) / band if side == "S" else (rlo - C) / band
+                return dict(i=k, side=s, entry=C, sl_trade=sl_trade, tp_trade=tp_trade, radar_lo=rlo, radar_hi=rhi,
+                            pen=pen, wall_side=side, price=P, band=band,
+                            p_resist=float(r[2]) if len(r) > 2 else 50.0)
+    return None
+
+
 def detect_wick(buckets, walls=None, skip_last=True, wick_min=0.0, same_dir=False):
     """WICK-BREAKOUT candidates that the main detect() SKIPS at its open-inside gate — the POWERFUL momentum candle whose
     BODY is already BEYOND the radar and only its WICK reaches back into it (user obs 2026-08-20; LABEL only, cyan diamond,

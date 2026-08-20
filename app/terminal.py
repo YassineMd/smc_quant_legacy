@@ -1386,6 +1386,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Radar Wick-Breakout LABEL (m10_radarwick, 5m/15m/30m/1h) — the powerful breakouts detect() skips: body already
         # BEYOND the radar, only the wick retests it. Cyan diamonds, eyeball-first (no persist/audio/click). (detect_wick)
         self._rw_sph = None; self._rw_sig = None; self._rw_drawn = False
+        # Radar Runner PROVISIONAL forming-bar preview (hollow badge on the still-forming candle; confirmed detect() keeps
+        # or drops it on close). Walls cached at each bar-close -> the forming bar is re-checked every frame (O(walls)).
+        self._rr_prov_sph = None; self._rr_walls = None; self._rr_walls_off = 0; self._rr_walls_slbuf = 0.003
         self._kco_sph = None; self._kco_ctx = None             # KC Overshoot 2nd-Entry (m10_kcovershoot): signal triangles + context marks
         self._kco_sig = None                                   # cache sig (closed-bar detect -> re-run only on a data change)
         # '5m Breakout' indicator (m10_breakout5m) — squared 'Br' badges on S/R-breakout (mitigation) candles, 5m ONLY.
@@ -7437,6 +7440,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _it.setVisible(False)
         if self._rr_size_lbl is not None:
             self._rr_size_lbl.setVisible(False)
+        if getattr(self, "_rr_prov_sph", None) is not None:
+            self._rr_prov_sph.setVisible(False)                  # forming-bar provisional preview rides the master layer
         self._rr_sig = None; self._rr_drawn = False
 
     def _rr_conviction(self, buckets, i, side) -> bool:
@@ -7555,9 +7560,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._rr_sig = _sig
         try:                                                     # skip the last bar ONLY while it is still FORMING; the
             from app import radar_breakout_detect                 # instant the breakout bar CLOSES it fires (no wait for a
+            from app import absorption_level_detect as _al_rr      # compute walls ONCE, reuse for the forming-bar preview
             _slbuf = 0.002 if self._tf == "1h" else 0.003         # forward-optimized candle-SL buffer: 1h 0.2% / 30m+ 0.3%
             _bset = list(warm) + list(filtered)
-            entries = radar_breakout_detect.detect(_bset, skip_last=_forming,
+            _rr_walls = _al_rr.detect(_bset, skip_last=False)      # walls over FULL history (cached for the provisional preview)
+            self._rr_walls = _rr_walls; self._rr_walls_off = _off; self._rr_walls_slbuf = _slbuf
+            entries = radar_breakout_detect.detect(_bset, walls=_rr_walls, skip_last=_forming,
                                                    sl_buf=_slbuf, tp_frac=config.RR_TP_FRAC)   # walls over FULL history; forming bar skipped (TP = config.RR_TP_FRAC, 0.25%)
             # 5m TIME-candle absorpR gate: only fire breakouts with absorption-R >= config.RR_ABSORPR_MIN at the
             # breakout bar (OOS-validated on 5m clock candles: maxDD 21%->6%, marginal->PASS). 5m TIME only -- bucket
@@ -7749,6 +7757,48 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                           "pen": pg.mkPen(20, 95, 110, 255, width=1.3), "size": 16})
         self._rw_sph.setData(spots); self._rw_sph.setVisible(True)
         self._rw_drawn = True
+
+    # RADAR RUNNER PROVISIONAL forming-bar preview (rides the master m10_radarrun layer). Shows a HOLLOW badge on the STILL-
+    # FORMING candle the instant it currently qualifies (open inside radar + live close beyond the extreme + visit>=1), then
+    # on close the confirmed detect() either freezes it as a solid badge or it simply drops. Recomputed every frame from the
+    # walls cached at the last bar-close (O(walls), no re-detection); ephemeral, never persisted / no audio / no click.
+    def _clear_radarrun_forming(self) -> None:
+        if self._rr_prov_sph is not None:
+            self._rr_prov_sph.setVisible(False)
+
+    def _draw_radarrun_forming(self, filtered) -> None:
+        if (not self.menu.layer_state("m10_radarrun") or self.scanner_mode != "bucket_canvas"
+                or self._tf not in ("1m", "5m", "15m", "30m", "1h") or self._hide_candles):
+            self._clear_radarrun_forming(); return
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        walls = getattr(self, "_rr_walls", None); n = len(filtered)
+        if not _forming or not walls or n < 1:                    # only ever on the live forming bar
+            self._clear_radarrun_forming(); return
+        try:
+            from app import radar_breakout_detect
+            from app.engulf_sr_detect import _ohlc
+            _off = int(getattr(self, "_rr_walls_off", 0)); k = _off + n - 1   # forming bar index in the cached walls' space
+            fb = filtered[-1]; O, C, HI, LO = _ohlc(fb)
+            prov = radar_breakout_detect.detect_forming((O, C, HI, LO), k, walls,
+                                                        sl_buf=float(getattr(self, "_rr_walls_slbuf", 0.003)),
+                                                        tp_frac=config.RR_TP_FRAC)
+        except Exception:
+            self._clear_radarrun_forming(); return
+        if prov is None:                                          # not currently eligible -> hide (may re-appear as price moves)
+            self._clear_radarrun_forming(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        side = int(prov["side"]); idx = n - 1
+        hi = float(fb.get("high", 0.0) or 0.0); lo = float(fb.get("low", 0.0) or 0.0)
+        y = (lo - pad) if side > 0 else (hi + pad)               # ▲ below the forming candle (up) / ▼ above (down)
+        col = (40, 230, 120) if side > 0 else (240, 70, 90)
+        if self._rr_prov_sph is None:
+            self._rr_prov_sph = pg.ScatterPlotItem(pxMode=True)
+            self._rr_prov_sph.setZValue(31); self.plot.addItem(self._rr_prov_sph, ignoreBounds=True)
+        # HOLLOW badge (faint fill + bright outline) = PROVISIONAL / pending the bar close (vs the solid confirmed triangle)
+        self._rr_prov_sph.setData([{"pos": (idx, y), "symbol": "t1" if side > 0 else "t",
+                                    "brush": pg.mkBrush(col[0], col[1], col[2], 55),
+                                    "pen": pg.mkPen(col[0], col[1], col[2], 255, width=2.2), "size": 22}])
+        self._rr_prov_sph.setVisible(True)
 
     # HTF RADAR RUNNER signals (sub-toggles m10_radarrun_1h / m10_radarrun_4h): the Radar Runner breakout badges from a
     # HIGHER timeframe drawn on the current LOWER-tf chart, coloured to MATCH that htf's walls (4h neon violet/green,
@@ -9624,6 +9674,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 except Exception:
                     self._clear_radarrun()
                 try:
+                    self._draw_radarrun_forming(_pf or [])  # forming-bar PROVISIONAL preview — self-gated, fail-safe
+                except Exception:
+                    self._clear_radarrun_forming()
+                try:
                     self._draw_radarwick(_pf or [])  # Radar Wick-Breakout label (cyan ♦) — self-gated, fail-safe
                 except Exception:
                     self._clear_radarwick()
@@ -9741,6 +9795,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_radarrun(filtered)  # Radar Runner (5m/15m/1h) — self-gated, fail-safe
             except Exception:
                 self._clear_radarrun()
+            try:
+                self._draw_radarrun_forming(filtered)  # forming-bar PROVISIONAL preview — self-gated, fail-safe
+            except Exception:
+                self._clear_radarrun_forming()
             try:
                 self._draw_radarwick(filtered)  # Radar Wick-Breakout label (cyan ♦) — self-gated, fail-safe
             except Exception:
