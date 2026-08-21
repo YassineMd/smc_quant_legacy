@@ -95,7 +95,7 @@ def line(nm, tr):
 
 def main():
     print("9am-bar FADE on 30m + 1h CLOCK | TP 0.2%% net, SL past Tokyo(00-9am) range | weekdays | native clock candles\n", flush=True)
-    for tf in ("30m", "1h"):
+    for tf in ("5m", "30m", "1h"):
         D = load(tf)
         print("==== %s CLOCK ====" % tf, flush=True)
         for H in (8, 9):
