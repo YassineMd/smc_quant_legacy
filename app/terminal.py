@@ -1327,7 +1327,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # 09:00 Fade overlay (m10_9amfade, 5m CLOCK only) — triangle badge + click -> entry/SL/TP. app/nine_am_fade_detect.
         self._9am_marks = None; self._9am_sigs = []; self._9am_sig = None   # scatter + detect cache
         self._9am_entries = []; self._9am_lines_user = {}
-        self._9am_ln_pool = []; self._9am_lnlbl_pool = []
+        self._9am_ln_pool = []; self._9am_lnlbl_pool = []; self._9am_tag_pool = []   # '9F' identity tags
         self._nyer_box_pool = []      # NY Expected Range: forecast band (QGraphicsRectItem)
         self._nyer_line_pool = []     # NY Expected Range: dashed expected hi/lo edges (PlotCurveItem)
         self._nyer_lbl_pool = []      # NY Expected Range: 'NY exp X.X%' label (TextItem)
@@ -8153,10 +8153,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # 09:00 FADE overlay (hamburger m10_9amfade, 5m CLOCK only) — FADE the 09:00 UTC bar (bull->short/bear->long), enter
     # 09:05, SL 0.8%, TP 0.5x the Tokyo(00-09) range. Green ▲ (long, below the entry bar) / red ▼ (short, above). Click a
     # triangle -> its entry/SL/TP dashed lines (net %). Robustness-cleared recon candidate; NOT live-confirmed. app/nine_am_fade_detect.
+    def _9am_tag(self, used):
+        """Pooled '9F' identity tag (Consolas bold) — marks a triangle as the 09:00 Fade, distinct from the RR triangles."""
+        if used >= len(self._9am_tag_pool):
+            _t = pg.TextItem(anchor=(0.5, 0.5)); _t.setZValue(34)
+            _f = QtGui.QFont("Consolas", 8); _f.setBold(True); _t.textItem.setFont(_f)
+            self.plot.addItem(_t, ignoreBounds=True); self._9am_tag_pool.append(_t)
+        return self._9am_tag_pool[used]
+
     def _clear_9amfade(self) -> None:
         if self._9am_marks is not None:
             self._9am_marks.setVisible(False)
-        for _it in (self._9am_ln_pool + self._9am_lnlbl_pool):
+        for _it in (self._9am_ln_pool + self._9am_lnlbl_pool + self._9am_tag_pool):
             _it.setVisible(False)
         self._9am_entries = []; self._9am_sig = None
 
@@ -8180,7 +8188,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._9am_marks is None:
             self._9am_marks = pg.ScatterPlotItem(pxMode=True, size=20)   # triangle L/S: green ▲ up / red ▼ down
             self._9am_marks.setZValue(33); self.plot.addItem(self._9am_marks, ignoreBounds=True)
-        spots = []; self._9am_entries = []
+        spots = []; self._9am_entries = []; ut = 0
         for e in self._9am_sigs:
             i = int(e["i"])
             if i < 0 or i >= n:
@@ -8194,8 +8202,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             col = GRN if side > 0 else RED
             spots.append({"pos": (xi, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
                           "pen": pg.mkPen(*[int(c * 0.55) for c in col], 255, width=1.4), "size": 20})
+            _tag = self._9am_tag(ut); ut += 1                    # '9F' tag beyond the triangle -> distinct from RR
+            _tag.setText("9F", color=col); _tag.setPos(xi, (y - pad * 1.4) if side > 0 else (y + pad * 1.4)); _tag.setVisible(True)
             self._9am_entries.append(("9am%d" % i, xi, i, side, float(e["entry"]), float(e["sl"]), float(e["tp"]), y))
         self._9am_marks.setData(spots); self._9am_marks.setVisible(True)
+        for _it in self._9am_tag_pool[ut:]:
+            _it.setVisible(False)
         self._trline_buckets = buckets                           # click a triangle -> entry/SL/TP lines
         self._draw_9amfade_lines()
 
