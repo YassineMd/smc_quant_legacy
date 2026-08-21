@@ -145,6 +145,7 @@ _M10_STRATEGIES = [
     ("m10_radarrun", "★ Radar Runner (L / S triangles · 1m·5m·15m·1h)", False, True),  # resisted-wall radar BREAKOUT + tiered TP1/2/3; the one recon-validated edge (net+ both yrs, causal-checked). ⚠ 1m sub-fee/eyeball-only
     ("m10_radarwick", "★ Radar Diamond (cyan ♦ · click→scale-out · 5m·15m·30m·1h)", False, True),  # TRADEABLE SD+big-wick breakouts the RR skips (body beyond radar, wick retests); click → TP1/TP2 scale-out bracket; validated additive to RR
     ("m10_nyrangebreak", "NY Range-break (brB / brS · 1h·15m)", False, True),  # 1h/15m: 2-5pm range box + first close-break label; SHORT side alpha in-sample (P=0.003)
+    ("m10_9amfade", "★ 09:00 Fade (L / S triangles · 5m clock)", False, True),  # 5m clock: FADE the 09:00 UTC bar (bull→short/bear→long), enter 09:05, SL 0.8%, TP 0.5× Tokyo range; robustness-cleared recon candidate (~61% prop pass), NOT live-confirmed. click → entry/SL/TP
     ("m10_wallstrat", "Wall Strategy (L / S triangles)", False, True),  # 5m: wall visit w/ Big|Crazy absorption + favourable tally + Easy Gold/Pure Aggression entry; NOT backtested
     ("m10_kcovershoot", "KC Overshoot 2nd-Entry (L / S triangles)", False, True),  # ALL tf: close beyond a Keltner extreme -> pullback (re-enter band) -> 1st entry (skip) -> 2nd entry = continuation signal; overshoot diamond + 1st-entry ring + 2nd-entry triangle. UNTESTED
 ]

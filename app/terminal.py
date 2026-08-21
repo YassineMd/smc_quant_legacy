@@ -1324,6 +1324,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._nyrb_prob_pool = []                # TextItem — 'brB x% - brS y%' break-side probability readout
         self._nyrb_entries = []                  # click a badge -> its entry/SL/TP lines (+ strength% at entry)
         self._nyrb_ln_pool = []; self._nyrb_lnlbl_pool = []; self._nyrb_lines_user = {}
+        # 09:00 Fade overlay (m10_9amfade, 5m CLOCK only) — triangle badge + click -> entry/SL/TP. app/nine_am_fade_detect.
+        self._9am_marks = None; self._9am_sigs = []; self._9am_sig = None   # scatter + detect cache
+        self._9am_entries = []; self._9am_lines_user = {}
+        self._9am_ln_pool = []; self._9am_lnlbl_pool = []
         self._nyer_box_pool = []      # NY Expected Range: forecast band (QGraphicsRectItem)
         self._nyer_line_pool = []     # NY Expected Range: dashed expected hi/lo edges (PlotCurveItem)
         self._nyer_lbl_pool = []      # NY Expected Range: 'NY exp X.X%' label (TextItem)
@@ -2430,6 +2434,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._nyrb_data_sig = None              # NY Range-break toggled -> force a re-detect on the next repaint
             if not on:
                 self._clear_nyrb()                  # off -> tear the range box + brB/brS badges down now
+        elif key == "m10_9amfade":
+            self._9am_sig = None                    # 09:00 Fade toggled -> force a re-detect on the next repaint
+            if not on:
+                self._clear_9amfade()               # off -> tear the triangles + trade lines down now
         elif key == "m10_breakout5m":
             self._brk5m_sig = None; self._sel_sig = None   # 5m Breakout toggled -> re-run the overlay draw
             if not on:
@@ -2681,6 +2689,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if best is not None:
                     _on = not self._nyrb_lines_user.get(best, False)
                     self._solo_trade_lines(self._nyrb_lines_user, best, _on); ev.accept(); return
+            except Exception:
+                pass
+        if (not ev.double() and self.scanner_mode == "bucket_canvas"
+                and self._9am_entries and self.menu.layer_state("m10_9amfade")):
+            try:                               # click a 09:00 Fade triangle -> toggle its entry/SL/TP lines
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
+                best = None; bestdx = 2.5
+                for _en in self._9am_entries:
+                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[7]) <= ytol:   # xvis at idx1, yb at idx7
+                        best = _en[0]; bestdx = abs(xc - _en[1])
+                if best is not None:
+                    _on = not self._9am_lines_user.get(best, False)
+                    self._solo_trade_lines(self._9am_lines_user, best, _on); ev.accept(); return
             except Exception:
                 pass
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
@@ -8128,6 +8150,102 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for j in range(ut, len(lpool)):
             lpool[j].setVisible(False)
 
+    # 09:00 FADE overlay (hamburger m10_9amfade, 5m CLOCK only) — FADE the 09:00 UTC bar (bull->short/bear->long), enter
+    # 09:05, SL 0.8%, TP 0.5x the Tokyo(00-09) range. Green ▲ (long, below the entry bar) / red ▼ (short, above). Click a
+    # triangle -> its entry/SL/TP dashed lines (net %). Robustness-cleared recon candidate; NOT live-confirmed. app/nine_am_fade_detect.
+    def _clear_9amfade(self) -> None:
+        if self._9am_marks is not None:
+            self._9am_marks.setVisible(False)
+        for _it in (self._9am_ln_pool + self._9am_lnlbl_pool):
+            _it.setVisible(False)
+        self._9am_entries = []; self._9am_sig = None
+
+    def _draw_9amfade(self, buckets, x, vx0, vx1, vy0, vy1) -> None:
+        """09:00 Fade triangle badges (app/nine_am_fade_detect). 5m CLOCK only, culled to the viewport, cached by
+        data-signature. Click a triangle -> _draw_9amfade_lines draws its entry/SL/TP."""
+        if (not self.menu.layer_state("m10_9amfade") or self._tf != "5m"
+                or getattr(self, "_chart_source", "bucket") != "time" or self._hide_candles or not buckets):
+            self._clear_9amfade(); return
+        n = len(buckets)
+        _dsig = (n, float(buckets[-1].get("end_time", 0.0) or 0.0), float(buckets[-1].get("close", 0.0) or 0.0))
+        if _dsig != self._9am_sig:                               # recompute only when the data changed
+            try:
+                from app import nine_am_fade_detect
+                self._9am_sigs = nine_am_fade_detect.detect(buckets)
+            except Exception:
+                self._9am_sigs = []
+            self._9am_sig = _dsig
+        pad = max((vy1 - vy0) * 0.05, 1e-9)
+        GRN, RED = (40, 230, 120), (240, 70, 90)
+        if self._9am_marks is None:
+            self._9am_marks = pg.ScatterPlotItem(pxMode=True, size=20)   # triangle L/S: green ▲ up / red ▼ down
+            self._9am_marks.setZValue(33); self.plot.addItem(self._9am_marks, ignoreBounds=True)
+        spots = []; self._9am_entries = []
+        for e in self._9am_sigs:
+            i = int(e["i"])
+            if i < 0 or i >= n:
+                continue
+            xi = x[i] if i < len(x) else i
+            if xi < vx0 - 2.0 or xi > vx1 + 2.0:                 # cull to the visible viewport
+                continue
+            side = int(e["side"]); b = buckets[i]
+            hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)           # LONG ▲ BELOW the entry bar / SHORT ▼ ABOVE it
+            col = GRN if side > 0 else RED
+            spots.append({"pos": (xi, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
+                          "pen": pg.mkPen(*[int(c * 0.55) for c in col], 255, width=1.4), "size": 20})
+            self._9am_entries.append(("9am%d" % i, xi, i, side, float(e["entry"]), float(e["sl"]), float(e["tp"]), y))
+        self._9am_marks.setData(spots); self._9am_marks.setVisible(True)
+        self._trline_buckets = buckets                           # click a triangle -> entry/SL/TP lines
+        self._draw_9amfade_lines()
+
+    def _draw_9amfade_lines(self) -> None:
+        """Entry (white) / SL (red) / TP (green) dashed lines for a clicked 09:00 Fade triangle. Lines run from the entry
+        bar to the first TP/SL touch (capped at the end of the entry's UTC day)."""
+        buckets = getattr(self, "_trline_buckets", None) or []; n = len(buckets)
+        user = self._9am_lines_user; cpool = self._9am_ln_pool; lpool = self._9am_lnlbl_pool
+        WHITE = (236, 238, 244); ul = ut = 0
+        for key, xv, bidx, side, entry, sl, tp, yb in self._9am_entries:
+            if not user.get(key, False) or entry <= 0 or bidx < 0 or bidx >= n:
+                continue
+            _cap = bidx                                          # cap the lines to the END of the entry's UTC day
+            try:
+                _bday = datetime.utcfromtimestamp(float(buckets[bidx].get("start_time", 0.0) or 0.0)).date()
+                for j in range(bidx + 1, n):
+                    if datetime.utcfromtimestamp(float(buckets[j].get("start_time", 0.0) or 0.0)).date() != _bday:
+                        break
+                    _cap = j
+            except Exception:
+                _cap = min(n - 1, bidx + 200)
+            exit_x = _cap
+            for j in range(bidx + 1, _cap + 1):                  # stop at the first TP/SL touch
+                b = buckets[j]; hh = float(b.get("high", 0.0) or 0.0); ll = float(b.get("low", 0.0) or 0.0)
+                if hh <= 0 or ll <= 0:
+                    continue
+                if ((hh >= tp) if side > 0 else (ll <= tp)) or ((ll <= sl) if side > 0 else (hh >= sl)):
+                    exit_x = j; break
+            rb = max(xv + 1.0, float(exit_x))
+            for lvl, col, w, tag in ((sl, (255, 90, 90), 1.5, "sl"), (tp, (40, 230, 90), 1.5, "tp"), (entry, WHITE, 1.9, "entry")):
+                if ul >= len(cpool):
+                    _ln = pg.PlotCurveItem(); _ln.setZValue(29); self.plot.addItem(_ln, ignoreBounds=True); cpool.append(_ln)
+                _ln = cpool[ul]; ul += 1
+                _pen = pg.mkPen(*col, width=w, style=QtCore.Qt.DashLine); _pen.setCosmetic(True)
+                _ln.setPen(_pen); _ln.setData([xv, rb], [lvl, lvl]); _ln.setVisible(True)
+                if ut >= len(lpool):
+                    _tl = pg.TextItem(anchor=(0.0, 0.5)); _tl.setZValue(36)
+                    _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True); _tl.textItem.setFont(_tf)
+                    self.plot.addItem(_tl, ignoreBounds=True); lpool.append(_tl)
+                _tl = lpool[ut]; ut += 1
+                if tag == "entry":
+                    _tl.setText("%s  %.3f" % ("LONG" if side > 0 else "SHORT", entry))
+                else:
+                    _tl.setText("%s %.3f (%+.2f%%)" % (tag.upper(), lvl, side * (lvl - entry) / entry * 100.0))
+                _tl.setColor(col); _tl.setPos(rb, lvl); _tl.setVisible(True)
+        for j in range(ul, len(cpool)):
+            cpool[j].setVisible(False)
+        for j in range(ut, len(lpool)):
+            lpool[j].setVisible(False)
+
     # CRAZY WALL Ag/Ab overlay (hamburger m10_crazywall, ALL tf) — ✪ star badge on an OUTLIER volume bubble sitting
     # at a wall/radar S/R. GREEN = buy-dominant bubble, RED = sell-dominant. DESCRIPTIVE (app/crazy_wall_detect).
     def _crazy_badge(self, used):
@@ -9336,12 +9454,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         badge's (1h / 15m / 5m Engulf S/R), so only ONE position is on the chart at a time. Clicking the already-shown
         badge turns it OFF (nothing shown). Called by every strategy badge click."""
         for d in (self._eng_lines_user, self._mom_lines_user, self._e5m_lines_user, self._ez_lines_user,
-                  self._nyrb_lines_user, self._rr_lines_user):
+                  self._nyrb_lines_user, self._rr_lines_user, self._9am_lines_user):
             d.clear()                          # drop every currently-shown position (this + all other overlays)
         if turn_on:
             active_user[key] = True            # ...then light up only the just-clicked one
         self._draw_eng_lines(); self._draw_mom_lines(); self._draw_e5m_lines(); self._draw_ez_lines()
-        self._draw_nyrb_lines(); self._draw_rr_lines()   # RR was omitted -> its lines only redrew on the next live frame
+        self._draw_nyrb_lines(); self._draw_rr_lines(); self._draw_9amfade_lines()
 
     def _trade_lines(self, entries, user, cpool, lpool, zline) -> None:
         """Shared renderer: for each toggled-ON entry draw ENTRY (white dashed, price tag) + TP (green) + SL (red)
@@ -14238,6 +14356,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_nyrb(buckets, x, vx0, vx1, vy0, vy1)        # 1h NY Range-break box + brB/brS badges (m10_nyrangebreak)
         except Exception:
             self._clear_nyrb()
+        try:
+            self._draw_9amfade(buckets, x, vx0, vx1, vy0, vy1)     # 09:00 Fade triangles, 5m clock (m10_9amfade)
+        except Exception:
+            self._clear_9amfade()
         try:
             self._draw_erange(buckets, x, vx0, vx1)                # per-session Expected-Range envelopes (m10_erange)
         except Exception:
