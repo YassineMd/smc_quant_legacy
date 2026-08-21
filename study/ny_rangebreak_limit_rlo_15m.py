@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import numpy as np
 from study.archive_loader import load_archive
 from study.candle_bias_1h import _f
+from study.ny_rangebreak_poc_prop import mc, day_blocks
 FEE, SLIP, SL_PAD, TP_THR, TP_LOW, TP_HIGH, TPFIX = 0.0004, 0.0003, 0.001, 2.85, 2.0, 0.5, 0.004
 R_HRS = {13, 14, 15}; B_HRS = {16, 17, 18, 19, 20}; MAXHOLD = 48 * 3600
 ROOT, TF = "study/clock_archive", "15m"
@@ -100,13 +101,14 @@ def cell(tr, yr=None):
 
 
 def line(nm, tr, nb, nf, tpd, sld):
-    print("  %-34s fill%3.0f%% TPd%.2f%% SLd%.2f%% RR%.2f | ALL %s | IS %s | OOS %s"
-          % (nm, 100.0 * nf / max(1, nb), tpd, sld, (tpd / sld if sld else 0), cell(tr), cell(tr, 2025), cell(tr, 2026)), flush=True)
+    m = mc(day_blocks([(t[0], t[2]) for t in tr])[0])             # R0.4 HyroTrader prop-MC on the R-multiples
+    print("  %-34s fill%3.0f%% RR%.2f | %s | R0.4 pass %5.1f%% med %3.0fd DDp99 %4.1f%% worst %4.1f%%"
+          % (nm, 100.0 * nf / max(1, nb), (tpd / sld if sld else 0), cell(tr), m["p"], m["med"], m["dd99"], m["worst"]), flush=True)
 
 
 def main():
     print("NY SHORT break — LIMIT@rlo vs break-close, fixed-0.4%%-from-close TP vs adaptive TP | clock 15m | 2-day hold | IN-SAMPLE", flush=True)
-    print("TPd/SLd = avg TP/SL distance from ENTRY %%; RR = TPd/SLd; exp = per-unit net %%; avgR = net / stop-distance.\n", flush=True)
+    print("RR = TP/SL dist; exp = per-unit net %%; avgR = net/stop-dist. Prop-MC = HyroTrader $200k R0.4 (target10/max6/daily4).\n", flush=True)
     for mode, nm in (("A", "break-close + ADAPTIVE TP (validated)"), ("B", "break-close + fixed 0.4% TP"),
                      ("C", "LIMIT@rlo + fixed 0.4% TP  (USER)"), ("D", "LIMIT@rlo + ADAPTIVE TP")):
         tr, nb, nf, tpd, sld = run(mode)
