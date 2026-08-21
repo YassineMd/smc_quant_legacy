@@ -2363,6 +2363,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._ez_sig = None; self._sel_sig = None    # 1h Easy 0.5% toggled -> re-run the overlay draw
             if not on:
                 self._clear_easy1h()                # off -> tear the triangles down now
+        elif key == "m10_radarrun":
+            self._rr_sig = None; self._sel_sig = None    # Radar Runner MASTER toggled -> re-detect + redraw
+            if not on:                                   # off -> tear badges + forming preview + HTF sub-overlays down NOW
+                self._clear_radarrun(); self._clear_radarrun_forming(); self._clear_htf_radarrun()
         elif key in ("m10_radarrun_1h", "m10_radarrun_4h"):
             _h = "1h" if key.endswith("_1h") else "4h"
             self._rr_htf_sig[_h] = None                  # HTF Radar Runner signals toggled -> re-detect + redraw next frame
