@@ -105,21 +105,24 @@ def line(nm, tr):
 
 def main():
     D = load()
-    print("9am-bar FADE -> TP 0.2%% net, SL past Tokyo(00-9am) high/low | weekdays | clock 15m\n", flush=True)
-    tr, dh, dn = run(8, "1h", True, "day", D)
-    print("== PRIMARY: 9am=08:00 UTC, 1h bar, FADE, hold->EoD ==", flush=True)
-    print("  fade directional hit (EoD move matches faded side) = %.1f%% (vs 50%%, n=%d)" % (100 * dh, dn), flush=True)
-    line("FADE 9am(08 1h)", tr)
-    twith, dhw, _ = run(8, "1h", False, "day", D)
-    line("WITH 9am(08 1h)", twith)
-    print("\n== variants (all FADE, hold->EoD) ==", flush=True)
+    print("9am-bar FADE -> TP 0.2%% net, SL past Tokyo(00-9am) high/low | weekdays | ALL DATA = 15m CLOCK, 9am bar = 15m bar\n", flush=True)
+    print("== PRIMARY: 15m-CLOCK 9am bar, FADE, hold->EoD ==", flush=True)
     for H in (8, 9):
-        for btf in ("1h", "15m"):
-            t2, _, _ = run(H, btf, True, "day", D)
-            line("fade 9am=%02d:00 %s" % (H, btf), t2)
-    print("\n== primary FADE, hold 2-day ==", flush=True)
-    t3, _, _ = run(8, "1h", True, "2d", D)
-    line("fade 9am(08 1h) 2d", t3)
+        trf, dhf, dnf = run(H, "15m", True, "day", D)
+        trw, dhw, _ = run(H, "15m", False, "day", D)
+        lab = "09:00 UTC (=9am UTC)" if H == 9 else "08:00 UTC (=9am Morocco)"
+        print("  -- 9am = %s --" % lab, flush=True)
+        print("     FADE directional hit (EoD move matches faded side) = %.1f%% (vs 50%%, n=%d)" % (100 * dhf, dnf), flush=True)
+        line("FADE 9am=%02d:00 15m" % H, trf)
+        line("WITH 9am=%02d:00 15m" % H, trw)
+    print("\n== 15m 9am bar, FADE, hold=2-day ==", flush=True)
+    for H in (8, 9):
+        t3, _, _ = run(H, "15m", True, "2d", D)
+        line("fade 9am=%02d:00 15m 2d" % H, t3)
+    print("\n== (reference) 1h 9am bar ==", flush=True)
+    for H in (8, 9):
+        t4, _, _ = run(H, "1h", True, "day", D)
+        line("fade 9am=%02d:00 1h" % H, t4)
 
 
 if __name__ == "__main__":
