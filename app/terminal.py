@@ -1339,6 +1339,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._absorblvl_lbl_pool = []                            # TextItem pool — "Ab"/"Ag" tags on borderless walls
         self._absorblvl_pct_pool = []                            # TextItem pool — strength-% tag at each wall's right edge
         self._radar_zone_pool = []                               # QGraphicsRectItem — dark-wall-shade radar zones (upper+lower)
+        self._nowickwall_marks = []; self._nowickwall_sig = None  # No-Wick Bar Wall detector cache (m10_nowickwall)
+        self._nowickwall_box_pool = []                           # QGraphicsRectItem pool — full-candle green/red walls (no radar)
         self._HTF_COLORS = {"4h": {"R": (190, 60, 255), "S": (60, 255, 130)},   # 4h Walls: neon violet(R)/green(S)
                             "1h": {"R": (255, 150, 20), "S": (40, 140, 255)}}    # 1h Walls: orange(R)/blue(S)
         # HTF Radar Runner SIGNAL colours — match the htf walls EXCEPT the 4h long: cyan (not the wall's green) so it
@@ -2390,6 +2392,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._hide_absorb_levels()               # off -> tear the zones down now
                 self._regime_hud.setVisible(False)       # ... and its bottom-right Regime table (rides the same layer)
                 self._hide_htf_walls()                   # ... and BOTH htf-walls sub-overlays (ride the same master)
+        elif key == "m10_nowickwall":
+            self._nowickwall_sig = None                  # No-Wick Bar Wall toggled -> re-run the overlay draw
+            if not on:
+                self._hide_nowick_wall()                 # off -> tear the full-candle walls down now
         elif key in ("m10_absorblvl_1h", "m10_absorblvl_4h"):
             _h = "1h" if key.endswith("_1h") else "4h"
             self._htf_sig[_h] = None                     # HTF Walls toggled -> re-detect + redraw on the next frame
@@ -5988,6 +5994,54 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._radar_hover(self.vb.mapSceneToView(self._last_hover_pos))
             except Exception:
                 pass
+
+    # NO-WICK BAR WALL overlay (m10_nowickwall, ALL tf) — same green/red wall design as the Order-Flow Walls but the band
+    # is the ENTIRE candle (low..high) and there is NO radar area. Bullish bar with no lower wick -> support (green);
+    # bearish bar with no upper wick -> resistance (red). Projected from formation until a body closes beyond (mitigated).
+    def _nowickwall_box(self, used, side):
+        if used >= len(self._nowickwall_box_pool):
+            _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-6)
+            self.vb.addItem(_rc, ignoreBounds=True); self._nowickwall_box_pool.append(_rc)
+        _rc = self._nowickwall_box_pool[used]
+        rgb = (230, 70, 80) if side == "R" else (60, 200, 120)   # resistance RED / support GREEN (Order-Flow-Wall palette)
+        _rc.setBrush(pg.mkBrush(*rgb, 42)); _rc.setPen(pg.mkPen(None))   # fill only, no border, no radar
+        return _rc
+
+    def _hide_nowick_wall(self) -> None:
+        for _it in self._nowickwall_box_pool:
+            _it.setVisible(False)
+
+    def _draw_nowick_wall(self, buckets, x, vx0, vx1) -> None:
+        """Full-candle green/red no-wick walls (app/nowick_wall_detect). ALL tf, cached by data-sig, culled to viewport."""
+        if not self.menu.layer_state("m10_nowickwall") or not buckets:
+            self._hide_nowick_wall(); return
+        n = len(buckets)
+        _dsig = (n, float(buckets[-1].get("end_time", 0.0) or 0.0), float(buckets[-1].get("close", 0.0) or 0.0))
+        if _dsig != self._nowickwall_sig:                        # recompute the detector only when the data changed
+            try:
+                from app import nowick_wall_detect
+                self._nowickwall_marks = nowick_wall_detect.detect(buckets, skip_last=False)
+            except Exception:
+                self._nowickwall_marks = []
+            self._nowickwall_sig = _dsig
+        DROP_AFTER = 40                                          # a mitigated wall fades out this many bars past its break
+        ub = 0
+        for m in self._nowickwall_marks:
+            i0 = int(m["i0"]); i1 = min(int(m["i1"]), n - 1)
+            if i0 < 0 or i0 >= n or i1 < i0:
+                continue
+            if m.get("broken") and (n - 1) - i1 > DROP_AFTER:
+                continue
+            xl = x[i0] if i0 < len(x) else i0; xr = x[i1] if i1 < len(x) else i1
+            if xr < vx0 - 1.0 or xl > vx1 + 1.0:                 # cull to the visible viewport
+                continue
+            lo = float(m["lo"]); hi = float(m["hi"])
+            if hi <= lo:
+                continue
+            _rc = self._nowickwall_box(ub, m["side"]); ub += 1
+            _rc.setRect(xl, lo, max(1e-9, xr - xl), hi - lo); _rc.setVisible(True)   # band = the ENTIRE candle height
+        for _it in self._nowickwall_box_pool[ub:]:
+            _it.setVisible(False)
 
     def _draw_regime(self, buckets, vx1, vy0) -> None:
         """WALL REGIME READ — BOTTOM-RIGHT HUD, part of the Order-Flow Walls layer (m10_absorblvl): trend/range +
@@ -14388,6 +14442,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_absorb_levels(buckets, x, vx0, vx1)        # Absorption S/R zones (m10_absorblvl, eyeball-only)
         except Exception:
             self._hide_absorb_levels()
+        try:
+            self._draw_nowick_wall(buckets, x, vx0, vx1)          # No-Wick Bar Wall full-candle zones (m10_nowickwall)
+        except Exception:
+            self._hide_nowick_wall()
         try:
             self._draw_htf_walls("4h", buckets)                   # 4h WALLS overlay (m10_absorblvl_4h) — neon violet/green
             self._draw_htf_walls("1h", buckets)                   # 1h WALLS overlay (m10_absorblvl_1h) — orange/blue, lower tfs only
