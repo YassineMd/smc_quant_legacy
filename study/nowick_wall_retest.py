@@ -10,7 +10,7 @@ import numpy as np
 from study.archive_loader import load_archive
 from study.candle_bias_1h import _f
 from study.ny_rangebreak_poc_prop import mc, day_blocks
-FEE, SLIP, WICK_TOL, TP_RATIO, FILLWIN, HOLD = 0.0004, 0.0003, 0.001, 0.5, 12, 48
+FEE, SLIP, WICK_TOL, TP_RATIO, FILLWIN, HOLD = 0.0004, 0.0003, 0.001, 1.0, 12, 48
 GRID = [("study/clock_archive", tf) for tf in ("5m", "15m", "30m", "1h", "4h")] + \
        [("study/recon_archive", tf) for tf in ("5m", "15m", "1h", "4h")]
 
