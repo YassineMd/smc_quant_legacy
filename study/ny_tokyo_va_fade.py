@@ -121,12 +121,12 @@ def main():
     print("  ALL %s | IS %s | OOS %s | R0.4 pass %.1f%% DDp99 %.1f%%"
           % (stat(tr), stat([t for t in tr if t[1] == 2025]), stat([t for t in tr if t[1] == 2026]), m["p"], m["dd99"]), flush=True)
     print("  short-only %s | long-only %s" % (stat([t for t in tr if t[4] < 0]), stat([t for t in tr if t[4] > 0])), flush=True)
-    print("\n== TP sweep (is 0.5%% too tight?) ==", flush=True)
-    for tpf in (0.005, 0.008, 0.012, 0.016, 0.020):
-        t2 = build(D5, D1, tpf)
+    print("\n== TP sweep (net TP; tp_frac = net + maker FEE) ==", flush=True)
+    for netf in (0.002, 0.003, 0.004, 0.005, 0.008, 0.012):
+        t2 = build(D5, D1, netf + FEE)                               # gross move so net@TP = netf
         m2 = mc(day_blocks([(t[0], t[2] / t[3]) for t in t2])[0]) if t2 else dict(p=0)
-        print("  TP %.1f%%  ALL %s | IS %s | OOS %s | pass %.1f%%"
-              % (tpf * 100, stat(t2), stat([t for t in t2 if t[1] == 2025]), stat([t for t in t2 if t[1] == 2026]), m2["p"]), flush=True)
+        print("  net TP %.1f%%  ALL %s | IS %s | OOS %s | pass %.1f%%"
+              % (netf * 100, stat(t2), stat([t for t in t2 if t[1] == 2025]), stat([t for t in t2 if t[1] == 2026]), m2["p"]), flush=True)
 
 
 if __name__ == "__main__":
