@@ -112,6 +112,12 @@ _VPIN_TIER_HEX = {vpin_adaptive.TOXIC: "#ff073a", vpin_adaptive.WARN: "#f1c40f",
 # CVD candles: teal = the session's cumulative delta ADVANCED over this bucket, red = it retreated.
 _CVD_GREEN = (38, 166, 154)
 _CVD_RED = (239, 83, 80)
+# Volume-pane trailing PERCENTILE-RANK grading (user 2026-08-23): each bar is ranked against the previous VOL_PCT_WIN
+# bars of the PLOTTED series; rank >= STRONG -> full colour, <= WEAK -> dimmed, in between muted. The trailing P80/P20
+# thresholds are drawn as dashed lines so the bands are visible. Descriptive readability only (no directional edge).
+VOL_PCT_WIN = 50
+VOL_PCT_STRONG = 0.80
+VOL_PCT_WEAK = 0.20
 # DIVERGENCE borders (fill unchanged — only the outline): effort disagreed with result on that bucket.
 _CVD_DIV_UP = (255, 140, 0)    # orange — CVD candle GREEN but the bucket candle RED (net buying, price fell)
 _CVD_DIV_DN = (0, 153, 255)    # electric blue — CVD candle RED but the bucket candle GREEN (net selling, price rose)
@@ -1012,6 +1018,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.vol_plot = None
         self._vol_bar = None           # pg.BarGraphItem (primary / OUTER bar; re-opts each frame)
         self._vol_bar2 = None          # second BarGraphItem — the INNER (smaller-side) bar of BUY/SELL nesting
+        self._vol_pct = True           # 'Pct' toggle: trailing percentile-rank grading (strong/normal/weak) + P80/P20 lines; persisted
+        self._vol_p80 = None           # dashed trailing-P80 threshold line (strong)
+        self._vol_p20 = None           # dashed trailing-P20 threshold line (weak)
+        self._vol_pct_cb = None        # the 'Pct' QCheckBox (child of vol_plot, left of the mode dropdown)
         self._vol_qt = None            # lazy {green/red QBrush + QPen} for the volume bars
         self._vol_combo = None         # top-right BASIC/DELTA dropdown (child of vol_plot)
         self._vol_combo_sig = None     # cached (w,h) so the combo repositions only when the pane resizes
@@ -6641,7 +6651,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "ls_mode": self._ls_mode, "panel9": self.show_panel9, "panel0": self.show_panel0,
                 "candle_mode": self._candle_mode,
                 "vp_mode": self._vp_mode,
-                "vol_mode": self._vol_mode,                              # Volume pane dropdown: 'basic' | 'delta'
+                "vol_mode": self._vol_mode,                              # Volume pane dropdown: basic|delta|buy|sell|buysell
+                "vol_pct": self._vol_pct,                                # Volume pane 'Pct' grading toggle
                 "hide_candles": self._hide_candles,
                 "phase_table": self.show_phase_table,
                 "phase": {k: bool(v) for k, v in self.show_phase.items()},
@@ -6703,6 +6714,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _vm = s.get("vol_mode")                               # Volume pane dropdown mode
         if _vm in ("basic", "delta", "buy", "sell", "buysell"):
             self._vol_mode = _vm
+        self._vol_pct = bool(s.get("vol_pct", self._vol_pct))  # Volume pane 'Pct' grading toggle
         self._saved_toggles = dict(s.get("toggles") or {})   # applied to the menu checkboxes in _apply_saved_toggles
         _cm = s.get("candle_mode")                            # 0 normal / 1 whisker / 2 footprint (back-compat: old "whisker" bool)
         if _cm is None:
@@ -11971,6 +11983,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.vol_plot = None; self.vol_vb = None; self._vol_proxy = None; self._vol_bar = None; self._vol_bar2 = None
             self.vol_vline = None; self.vol_hline = None; self.vol_tag = None
             self._vol_combo = None; self._vol_combo_sig = None; self._vol_vals = None
+            self._vol_p80 = None; self._vol_p20 = None; self._vol_pct_cb = None   # threshold lines + 'Pct' toggle died with the pane
 
     def _sync_kinetic_vb(self) -> None:
         """Keep the Mode 4 secondary price ViewBox glued to the main viewport.
@@ -13762,6 +13775,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._vol_combo.currentIndexChanged.connect(self._on_vol_mode_changed)
         self._vol_combo.setCursor(QtCore.Qt.PointingHandCursor)
         self._vol_combo.raise_(); self._vol_combo.show()
+        # 'Pct' toggle (sits LEFT of the dropdown): trailing percentile-rank grading + dashed P80/P20 threshold lines
+        self._vol_pct_cb = QtWidgets.QCheckBox("Pct", self.vol_plot)
+        self._vol_pct_cb.setChecked(bool(self._vol_pct))
+        self._vol_pct_cb.setStyleSheet("QCheckBox{ color:#dcdcdc; font:bold 10px 'Consolas'; background:#20242c;"
+                                       " border:1px solid #3a4150; border-radius:3px; padding:1px 5px; }")
+        self._vol_pct_cb.setToolTip("Trailing percentile rank over the last %d bars of the plotted series: >= P%d full colour = STRONG, "
+                                    "<= P%d dimmed = WEAK, between = muted. Dashed lines = the trailing P%d / P%d thresholds."
+                                    % (VOL_PCT_WIN, int(VOL_PCT_STRONG * 100), int(VOL_PCT_WEAK * 100),
+                                       int(VOL_PCT_STRONG * 100), int(VOL_PCT_WEAK * 100)))
+        self._vol_pct_cb.toggled.connect(self._on_vol_pct_toggled)
+        self._vol_pct_cb.setCursor(QtCore.Qt.PointingHandCursor)
+        self._vol_pct_cb.raise_(); self._vol_pct_cb.show()
         self._vol_combo_sig = None                          # force a reposition on the first render frame
         self.splitter_v.addWidget(self.vol_plot)
 
@@ -14005,6 +14030,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self._loading_ui:
             self._save_ui_state()
 
+    def _on_vol_pct_toggled(self, on: bool) -> None:
+        """'Pct' toggle -> trailing percentile-rank grading + P80/P20 threshold lines on/off; redraw + persist."""
+        self._vol_pct = bool(on)
+        self._last_scanner_sig = None
+        if not self._loading_ui:
+            self._save_ui_state()
+
     def _position_vol_combo(self) -> None:
         """Park the BASIC/DELTA dropdown in the pane's TOP-RIGHT corner (clear of the right price axis). Cheap; only
         called when the pane's pixel size actually changed (sig-gated in the render block)."""
@@ -14019,6 +14051,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         x = max(0, self.vol_plot.width() - self._vol_combo.width() - _axw - 6)
         self._vol_combo.move(x, 4)
         self._vol_combo.raise_()
+        if self._vol_pct_cb is not None:                    # 'Pct' toggle hugs the dropdown's left edge
+            self._vol_pct_cb.adjustSize()
+            self._vol_pct_cb.move(max(0, x - self._vol_pct_cb.width() - 6), 4)
+            self._vol_pct_cb.raise_()
 
     def _vol_pan_to_bar(self, top) -> None:
         """Keep the user's Volume-pane zoom HEIGHT; pan vertically only if the newest bar's top would fall outside
@@ -15092,9 +15128,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         #   BUY      = buy_vol, all green.       SELL = sell_vol, all red.
         #   BUY/SELL = NESTED on the same bar — the larger side full-width behind, the smaller inside it on top. ---
         if self.vol_plot is not None and self._vol_want and self.vol_plot.isVisible():
-            if self._vol_qt is None:
-                self._vol_qt = {"gb": pg.mkBrush(*_CVD_GREEN), "rb": pg.mkBrush(*_CVD_RED),
-                                "gp": pg.mkPen(*_CVD_GREEN), "rp": pg.mkPen(*_CVD_RED)}
+            if self._vol_qt is None:                          # palette x 3 strength tiers: 2 strong / 1 normal / 0 weak
+                def _mk(rgb, a):
+                    return {"b": pg.mkBrush(*rgb, a), "p": pg.mkPen(*rgb, min(255, a + 40))}
+                self._vol_qt = {("g", 2): _mk(_CVD_GREEN, 255), ("g", 1): _mk(_CVD_GREEN, 120), ("g", 0): _mk(_CVD_GREEN, 55),
+                                ("r", 2): _mk(_CVD_RED, 255), ("r", 1): _mk(_CVD_RED, 120), ("r", 0): _mk(_CVD_RED, 55)}
             _q = self._vol_qt; _vm = self._vol_mode
             if self._vol_bar is None:
                 self._vol_bar = pg.BarGraphItem(x=[0], height=[0], width=0.8, y0=0.0)
@@ -15102,36 +15140,65 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self._vol_bar2 is None:
                 self._vol_bar2 = pg.BarGraphItem(x=[0], height=[0], width=0.38, y0=0.0)
                 self.vol_plot.addItem(self._vol_bar2); self._vol_bar2.setVisible(False)
+            if self._vol_p80 is None:                         # dashed trailing P80 (strong) / P20 (weak) threshold lines
+                _lp = pg.mkPen(200, 200, 210, 150, width=1, style=QtCore.Qt.DashLine); _lp.setCosmetic(True)
+                self._vol_p80 = pg.PlotCurveItem(pen=_lp); self._vol_p80.setZValue(12)
+                self.vol_plot.addItem(self._vol_p80, ignoreBounds=True)
+                _lp2 = pg.mkPen(140, 140, 150, 120, width=1, style=QtCore.Qt.DashLine); _lp2.setCosmetic(True)
+                self._vol_p20 = pg.PlotCurveItem(pen=_lp2); self._vol_p20.setZValue(12)
+                self.vol_plot.addItem(self._vol_p20, ignoreBounds=True)
             _bv = [float(_b.get("buy_vol", 0.0) or 0.0) for _b in buckets]
             _sv = [float(_b.get("sell_vol", 0.0) or 0.0) for _b in buckets]
+            # 1) the plotted series + per-bar colour side
             if _vm == "buysell":
-                # NESTED buy/sell (user 2026-08-22): both on the SAME bar — the larger side full-width behind,
-                # the smaller side drawn INSIDE it (narrower, on top). Green = buy, red = sell, same 0 baseline.
-                _big = [a >= b for a, b in zip(_bv, _sv)]         # True -> buy is the outer bar
-                self._vol_bar.setOpts(x=x, height=[max(a, b) for a, b in zip(_bv, _sv)], width=0.8, y0=0.0,
-                                      brushes=[_q["gb"] if u else _q["rb"] for u in _big],
-                                      pens=[_q["gp"] if u else _q["rp"] for u in _big])
+                _big = [a >= b for a, b in zip(_bv, _sv)]         # True -> buy is the OUTER bar
+                _vals = [max(a, b) for a, b in zip(_bv, _sv)]     # Y-fit + ranking basis = the outer bar
+                _ups = _big
+            elif _vm == "delta":
+                _d = [a - b for a, b in zip(_bv, _sv)]
+                _vals = [abs(v) for v in _d]; _ups = [v >= 0.0 for v in _d]
+            elif _vm == "buy":
+                _vals = _bv; _ups = [True] * len(x)
+            elif _vm == "sell":
+                _vals = _sv; _ups = [False] * len(x)
+            else:                                                 # basic
+                _vals = [float(_b.get("curr_vol", 0.0) or 0.0) for _b in buckets]
+                _ups = [closes[_i] >= opens[_i] for _i in range(len(x))]
+            # 2) trailing PERCENTILE RANK of each bar vs its previous VOL_PCT_WIN-1 bars (causal, vectorised):
+            #    rank >= STRONG -> tier 2 (full colour), <= WEAK -> tier 0 (dimmed), else tier 1 (muted).
+            _vv = np.asarray(_vals, dtype=float); _p80 = _p20 = None
+            if self._vol_pct and len(_vv) > 1:
+                _N = VOL_PCT_WIN
+                _win = np.lib.stride_tricks.sliding_window_view(np.concatenate([np.full(_N - 1, np.nan), _vv]), _N)
+                _valid = (~np.isnan(_win)).sum(1)
+                _rank = np.where(_valid > 1, (_win < _vv[:, None]).sum(1) / np.maximum(_valid - 1, 1), 0.5)
+                _tier = np.where(_rank >= VOL_PCT_STRONG, 2, np.where(_rank <= VOL_PCT_WEAK, 0, 1))
+                with np.errstate(all="ignore"):
+                    _p80 = np.nanquantile(_win, VOL_PCT_STRONG, axis=1)
+                    _p20 = np.nanquantile(_win, VOL_PCT_WEAK, axis=1)
+            else:
+                _tier = np.full(len(_vv), 2)
+            _col = ["g" if _u else "r" for _u in _ups]
+            _brs = [_q[(c, int(t))]["b"] for c, t in zip(_col, _tier)]
+            _pns = [_q[(c, int(t))]["p"] for c, t in zip(_col, _tier)]
+            # 3) draw
+            if _vm == "buysell":
+                # NESTED buy/sell (user 2026-08-22): larger side full-width behind, smaller side INSIDE it on top
+                _icol = ["r" if _u else "g" for _u in _ups]      # inner bar = the opposite side
+                self._vol_bar.setOpts(x=x, height=_vals, width=0.8, y0=0.0, brushes=_brs, pens=_pns)
                 self._vol_bar2.setOpts(x=x, height=[min(a, b) for a, b in zip(_bv, _sv)], width=0.44, y0=0.0,
-                                       brushes=[_q["rb"] if u else _q["gb"] for u in _big],
-                                       pens=[_q["rp"] if u else _q["gp"] for u in _big])
+                                       brushes=[_q[(c, int(t))]["b"] for c, t in zip(_icol, _tier)],
+                                       pens=[_q[(c, int(t))]["p"] for c, t in zip(_icol, _tier)])
                 self._vol_bar2.setVisible(True)
-                _vals = [max(a, b) for a, b in zip(_bv, _sv)]     # Y-fit basis = the outer bar
             else:
                 self._vol_bar2.setVisible(False)
-                if _vm == "delta":
-                    _d = [a - b for a, b in zip(_bv, _sv)]
-                    _vals = [abs(v) for v in _d]
-                    _ups = [v >= 0.0 for v in _d]
-                elif _vm == "buy":
-                    _vals = _bv; _ups = [True] * len(x)
-                elif _vm == "sell":
-                    _vals = _sv; _ups = [False] * len(x)
-                else:                                             # basic
-                    _vals = [float(_b.get("curr_vol", 0.0) or 0.0) for _b in buckets]
-                    _ups = [closes[_i] >= opens[_i] for _i in range(len(x))]
-                self._vol_bar.setOpts(x=x, height=_vals, width=0.8, y0=0.0,
-                                      brushes=[_q["gb"] if _u else _q["rb"] for _u in _ups],
-                                      pens=[_q["gp"] if _u else _q["rp"] for _u in _ups])
+                self._vol_bar.setOpts(x=x, height=_vals, width=0.8, y0=0.0, brushes=_brs, pens=_pns)
+            if _p80 is not None:
+                _xa = np.asarray(x, dtype=float)
+                self._vol_p80.setData(_xa, _p80); self._vol_p20.setData(_xa, _p20)
+                self._vol_p80.setVisible(True); self._vol_p20.setVisible(True)
+            else:
+                self._vol_p80.setVisible(False); self._vol_p20.setVisible(False)
             self._vol_vals = _vals
             self._fit_vol_y(_vals)
             _vsig = (self.vol_plot.width(), self.vol_plot.height())   # reposition the dropdown only on a resize
