@@ -4,7 +4,8 @@
 A wall is born at a NO-WICK bar:
   BULLISH bar with NO LOWER wick (open == low)  -> SUPPORT (green),    zone = [low, high] of that candle.
   BEARISH bar with NO UPPER wick (open == high) -> RESISTANCE (red),   zone = [low, high] of that candle.
-"No wick" = that side's wick <= WICK_TOL of the candle range (5%, so effectively-zero wicks count). The wall projects
+"No wick" = that side's wick is EXACTLY zero (<= 0.1% of range, robust to float noise; any visible wick is excluded).
+The wall projects
 forward from its formation bar until a later candle BODY CLOSES beyond the zone (support: close < low; resistance:
 close > high) = MITIGATED; the draw layer drops a mitigated wall a few bars after the break. DESCRIPTIVE / eyeball only.
 
@@ -13,7 +14,9 @@ index in the passed list). Fail-safe: [] on any error.
 """
 from __future__ import annotations
 
-WICK_TOL = 0.05      # "no wick" = the relevant side's wick <= this fraction of the candle range
+WICK_TOL = 0.001     # STRICT "no wick" = the relevant side's wick <= 0.1% of the candle range (= exact zero in the data;
+#                      the data has a clean gap — wicks are either exactly 0 or > 0.1% of range — so this is truly no-wick,
+#                      just robust to sub-tick float noise. Any visible wick is excluded.
 
 
 def _o(b):
