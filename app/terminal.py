@@ -1005,9 +1005,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cvd_highs = None
         self._cvd_closes = None        # per-bar CVD close -> mirror a hovered swing (start/end) onto the CVD pane
         # --- Volume sub-pane (Mode 10, sits between the CVD and VPIN panes): a per-bar volume histogram with a
-        # top-right BASIC/DELTA dropdown. BASIC = total bucket volume (curr_vol); DELTA = signed buy-sell delta.
+        # top-right mode dropdown. BASIC = total curr_vol (hue = candle direction) · DELTA = |buy-sell| MAGNITUDE from
+        # the single 0 baseline, sign shown by COLOUR only (green net-buy / red net-sell — no up/down split) ·
+        # BUY = buy_vol (green) · SELL = sell_vol (red) · BUY/SELL = grouped green|red pairs per bar, same baseline.
         self.vol_plot = None
-        self._vol_bar = None           # pg.BarGraphItem (one item, re-opts each frame)
+        self._vol_bar = None           # pg.BarGraphItem (primary; re-opts each frame)
+        self._vol_bar2 = None          # second BarGraphItem — the red half of the BUY/SELL grouped pairs
         self._vol_qt = None            # lazy {green/red QBrush + QPen} for the volume bars
         self._vol_combo = None         # top-right BASIC/DELTA dropdown (child of vol_plot)
         self._vol_combo_sig = None     # cached (w,h) so the combo repositions only when the pane resizes
@@ -6697,7 +6700,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_panel0 = bool(s.get("panel0", self.show_panel0))
         self.show_liq = bool(s.get("liq_labels", self.show_liq))
         _vm = s.get("vol_mode")                               # Volume pane dropdown mode
-        if _vm in ("basic", "delta"):
+        if _vm in ("basic", "delta", "buy", "sell", "buysell"):
             self._vol_mode = _vm
         self._saved_toggles = dict(s.get("toggles") or {})   # applied to the menu checkboxes in _apply_saved_toggles
         _cm = s.get("candle_mode")                            # 0 normal / 1 whisker / 2 footprint (back-compat: old "whisker" bool)
@@ -11964,7 +11967,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.cvd_vline = None; self.cvd_hline = None; self.cvd_tag = None
             # the Volume pane + its bar item + dropdown were CHILDREN of the just-deleted splitter_v -> null every ref
             # (the combo's C++ side goes with the pane); _ensure_canvas_panes rebuilds them all on the next Mode-10 entry.
-            self.vol_plot = None; self.vol_vb = None; self._vol_proxy = None; self._vol_bar = None
+            self.vol_plot = None; self.vol_vb = None; self._vol_proxy = None; self._vol_bar = None; self._vol_bar2 = None
             self.vol_vline = None; self.vol_hline = None; self.vol_tag = None
             self._vol_combo = None; self._vol_combo_sig = None; self._vol_vals = None
 
@@ -13748,8 +13751,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.vol_plot.scene().sigMouseClicked.connect(self._on_vol_click)   # double-click -> auto-adjust
         # top-right BASIC/DELTA dropdown, parented to the pane's viewport so it floats over the plot
         self._vol_combo = QtWidgets.QComboBox(self.vol_plot)
-        self._vol_combo.addItems(["Basic", "Delta"])
-        self._vol_combo.setCurrentIndex(0 if self._vol_mode == "basic" else 1)
+        self._vol_combo.addItems(["Basic", "Delta", "Buy", "Sell", "Buy/Sell"])
+        _vmodes = ("basic", "delta", "buy", "sell", "buysell")
+        self._vol_combo.setCurrentIndex(_vmodes.index(self._vol_mode) if self._vol_mode in _vmodes else 0)
         self._vol_combo.setStyleSheet(
             "QComboBox{ background:#20242c; color:#dcdcdc; border:1px solid #3a4150; border-radius:3px;"
             " padding:1px 6px; font:bold 10px 'Consolas'; } QComboBox::drop-down{ border:0; width:14px; }"
@@ -13992,8 +13996,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._vol_follow_y = False
 
     def _on_vol_mode_changed(self, idx: int) -> None:
-        """BASIC/DELTA dropdown changed -> switch what the histogram plots and force a redraw + Y re-fit."""
-        self._vol_mode = "delta" if idx == 1 else "basic"
+        """Volume-mode dropdown changed -> switch what the histogram plots and force a redraw + Y re-fit."""
+        _vmodes = ("basic", "delta", "buy", "sell", "buysell")
+        self._vol_mode = _vmodes[idx] if 0 <= idx < len(_vmodes) else "basic"
         self._vol_follow_y = True                    # a mode flip changes the scale entirely -> re-fit
         self._last_scanner_sig = None
         if not self._loading_ui:
@@ -15079,27 +15084,48 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._cvd_lows = _cl; self._cvd_highs = _ch       # visible-window CVD Y re-fit in _replay_follow
             self._cvd_closes = _cc           # per-bar CVD close -> hovered-swing mirror onto the CVD pane
 
-        # --- VOLUME sub-pane: per-bar histogram. BASIC = total bucket volume (hue = the candle's direction);
-        # DELTA = signed buy-sell (green above 0, red below). Same fill palette as the CVD pane. ---
+        # --- VOLUME sub-pane: per-bar histogram, five modes (top-right dropdown). Every mode draws UP from the
+        # SAME 0 baseline — the sign/side is carried by COLOUR, never by direction (user 2026-08-22):
+        #   BASIC    = total curr_vol, hue = the candle's direction.
+        #   DELTA    = |buy-sell| magnitude, green when net-buying / red when net-selling (no up/down split).
+        #   BUY      = buy_vol, all green.       SELL = sell_vol, all red.
+        #   BUY/SELL = grouped pairs per bar — green buy bar left, red sell bar right, side by side. ---
         if self.vol_plot is not None and self._vol_want and self.vol_plot.isVisible():
             if self._vol_qt is None:
                 self._vol_qt = {"gb": pg.mkBrush(*_CVD_GREEN), "rb": pg.mkBrush(*_CVD_RED),
                                 "gp": pg.mkPen(*_CVD_GREEN), "rp": pg.mkPen(*_CVD_RED)}
-            _q = self._vol_qt; _delta = self._vol_mode == "delta"
-            _vals = []; _brs = []; _pns = []
-            for _i, _b in enumerate(buckets):
-                if _delta:
-                    _v = float(_b.get("buy_vol", 0.0) or 0.0) - float(_b.get("sell_vol", 0.0) or 0.0)
-                    _up = _v >= 0.0
-                else:
-                    _v = float(_b.get("curr_vol", 0.0) or 0.0)
-                    _up = closes[_i] >= opens[_i]          # BASIC bar hue = the clock candle's direction
-                _vals.append(_v)
-                _brs.append(_q["gb"] if _up else _q["rb"]); _pns.append(_q["gp"] if _up else _q["rp"])
+            _q = self._vol_qt; _vm = self._vol_mode
             if self._vol_bar is None:
                 self._vol_bar = pg.BarGraphItem(x=[0], height=[0], width=0.8, y0=0.0)
                 self.vol_plot.addItem(self._vol_bar)
-            self._vol_bar.setOpts(x=x, height=_vals, width=0.8, y0=0.0, brushes=_brs, pens=_pns)
+            if self._vol_bar2 is None:
+                self._vol_bar2 = pg.BarGraphItem(x=[0], height=[0], width=0.38, y0=0.0)
+                self.vol_plot.addItem(self._vol_bar2); self._vol_bar2.setVisible(False)
+            _bv = [float(_b.get("buy_vol", 0.0) or 0.0) for _b in buckets]
+            _sv = [float(_b.get("sell_vol", 0.0) or 0.0) for _b in buckets]
+            if _vm == "buysell":
+                self._vol_bar.setOpts(x=[_xx - 0.21 for _xx in x], height=_bv, width=0.38, y0=0.0,
+                                      brushes=[_q["gb"]] * len(x), pens=[_q["gp"]] * len(x))
+                self._vol_bar2.setOpts(x=[_xx + 0.21 for _xx in x], height=_sv, width=0.38, y0=0.0,
+                                       brushes=[_q["rb"]] * len(x), pens=[_q["rp"]] * len(x))
+                self._vol_bar2.setVisible(True)
+                _vals = [max(a, b) for a, b in zip(_bv, _sv)]     # Y-fit basis = the taller of each pair
+            else:
+                self._vol_bar2.setVisible(False)
+                if _vm == "delta":
+                    _d = [a - b for a, b in zip(_bv, _sv)]
+                    _vals = [abs(v) for v in _d]
+                    _ups = [v >= 0.0 for v in _d]
+                elif _vm == "buy":
+                    _vals = _bv; _ups = [True] * len(x)
+                elif _vm == "sell":
+                    _vals = _sv; _ups = [False] * len(x)
+                else:                                             # basic
+                    _vals = [float(_b.get("curr_vol", 0.0) or 0.0) for _b in buckets]
+                    _ups = [closes[_i] >= opens[_i] for _i in range(len(x))]
+                self._vol_bar.setOpts(x=x, height=_vals, width=0.8, y0=0.0,
+                                      brushes=[_q["gb"] if _u else _q["rb"] for _u in _ups],
+                                      pens=[_q["gp"] if _u else _q["rp"] for _u in _ups])
             self._vol_vals = _vals
             self._fit_vol_y(_vals)
             _vsig = (self.vol_plot.width(), self.vol_plot.height())   # reposition the dropdown only on a resize

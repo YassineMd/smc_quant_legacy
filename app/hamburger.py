@@ -469,7 +469,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("cob", "Order Book DOM Ladder"),
                            ("fp_pane", "Live Footprint Pane"),   # right-docked forming-candle footprint (Mode 10)
                            ("cvd_pane", "CVD Pane (1D anchored)"),   # cumulative volume delta, resets each UTC midnight
-                           ("vol_pane", "Volume Pane (Basic / Delta)"),  # per-bar volume histogram; top-right dropdown picks basic|delta
+                           ("vol_pane", "Volume Pane (Basic/Delta/Buy/Sell)"),  # per-bar histogram; top-right dropdown: basic|delta|buy|sell|buy+sell
                            ("vpin_pane", "VPIN Pane"),               # lower VPIN toxicity heatmap + flow line (default OFF — heavy paint)
                            ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:
