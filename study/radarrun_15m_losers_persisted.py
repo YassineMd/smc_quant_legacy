@@ -15,6 +15,16 @@ from study.candle_bias_1h import _f
 
 LOCAL = timezone(timedelta(hours=1))
 TF = sys.argv[1] if len(sys.argv) > 1 else "15m"     # timeframe key into radarrun_fired.json (15m/30m/1h/5m)
+TF_MIN = {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240}
+
+
+def src_of(t):
+    """CLOCK vs BUCKET from the fire's end_time. Clock candles close on an exact tf-minute boundary at whole seconds;
+    volume buckets close at arbitrary (sub-second) times. The persisted file mixes both under one tf key depending on
+    which chart SOURCE the user was viewing when each badge fired, so we recover it geometrically."""
+    dt = datetime.fromtimestamp(t, tz=timezone.utc)
+    whole = abs(t - round(t)) < 0.02
+    return "CLK" if (whole and dt.second == 0 and dt.minute % TF_MIN.get(TF, 15) == 0) else "BKT"
 
 
 def resolve_1m(side, entry, sl, tp, t_open, T1, H1, L1):
@@ -50,28 +60,33 @@ def main():
     _1mend = datetime.fromtimestamp(T1[-1], tz=timezone.utc)
     del A1
     for r in rows:
+        r["src"] = src_of(r["t"])
         r["outc"], r["m"] = resolve_1m(r["s"], r["entry"], r["sl"], r["tp"], r["t"], T1, H1, L1)
-    resolved = [r for r in rows if r["outc"] in ("TP", "SL", "AMB")]
-    nocov = [r for r in rows if r["outc"] == "NOCOV"]
-    losers = [r for r in resolved if r["outc"] in ("SL", "AMB")]
-    wins = [r for r in resolved if r["outc"] == "TP"]
     span_lo = datetime.fromtimestamp(rows[0]["t"], tz=timezone.utc); span_hi = datetime.fromtimestamp(rows[-1]["t"], tz=timezone.utc)
     print("=" * 100, flush=True)
-    print("terminal fired %d %s badges  (span %s .. %s)" % (len(rows), TF, span_lo.strftime("%Y-%m-%d"), span_hi.strftime("%Y-%m-%d")), flush=True)
-    print("  1m-resolved: %d  (win %d = %.1f%%, LOSERS %d)   no-1m-coverage: %d  (fires after %s — daemon-live, 1m archive ends there)"
-          % (len(resolved), len(wins), 100 * len(wins) / max(1, len(resolved)), len(losers), len(nocov), _1mend.strftime("%Y-%m-%d")), flush=True)
-    print("  losers by year: " + "   ".join("%d: %d" % (Y, sum(1 for r in losers if r["y"] == Y)) for Y in (2025, 2026)), flush=True)
-    print("-" * 100, flush=True)
-    print("  %-3s | %-16s | %-11s | %-5s | %-9s | %-9s | %-9s | %s" % ("#", "FIRE UTC (end)", "local+1", "side", "entry", "SL", "TP", "res"), flush=True)
-    for i, r in enumerate(sorted(losers, key=lambda r: r["t"]), 1):
-        fu = datetime.fromtimestamp(r["t"], tz=timezone.utc); fl = datetime.fromtimestamp(r["t"], tz=LOCAL)
-        tag = "1m-amb" if r["outc"] == "AMB" else "SL"
-        print("  %-3d | %-16s | %-11s | %-5s | %9.3f | %9.3f | %9.3f | %s" % (i, fu.strftime("%Y-%m-%d %H:%M"),
-              fl.strftime("%m-%d %H:%M"), "LONG" if r["s"] > 0 else "SHORT", r["entry"], r["sl"], r["tp"], tag), flush=True)
-    if nocov:
-        print("\n  (%d fires past the 1m archive — not yet classifiable here: %s .. %s)"
-              % (len(nocov), datetime.fromtimestamp(nocov[0]["t"], tz=timezone.utc).strftime("%Y-%m-%d"),
-                 datetime.fromtimestamp(nocov[-1]["t"], tz=timezone.utc).strftime("%Y-%m-%d")), flush=True)
+    print("terminal fired %d %s badges  (span %s .. %s)  |  CLOCK=%d  BUCKET=%d  (split by end-time alignment)"
+          % (len(rows), TF, span_lo.strftime("%Y-%m-%d"), span_hi.strftime("%Y-%m-%d"),
+             sum(1 for r in rows if r["src"] == "CLK"), sum(1 for r in rows if r["src"] == "BKT")), flush=True)
+    for SRC, name in (("CLK", "CLOCK"), ("BKT", "BUCKET (volume-paced)")):
+        sub = [r for r in rows if r["src"] == SRC]
+        resolved = [r for r in sub if r["outc"] in ("TP", "SL", "AMB")]
+        nocov = [r for r in sub if r["outc"] == "NOCOV"]
+        losers = sorted([r for r in resolved if r["outc"] in ("SL", "AMB")], key=lambda r: r["t"])
+        wins = [r for r in resolved if r["outc"] == "TP"]
+        print("\n" + "#" * 100, flush=True)
+        print("## %s %s — fired=%d  |  1m-resolved=%d (win %.1f%%, LOSERS %d)  |  no-1m-cov=%d (fires past %s)"
+              % (TF, name, len(sub), len(resolved), 100 * len(wins) / max(1, len(resolved)), len(losers),
+                 len(nocov), _1mend.strftime("%Y-%m-%d")), flush=True)
+        print("   losers by year: " + "   ".join("%d: %d" % (Y, sum(1 for r in losers if r["y"] == Y)) for Y in (2025, 2026)), flush=True)
+        print("-" * 100, flush=True)
+        print("   %-3s | %-16s | %-11s | %-5s | %-9s | %-9s | %-9s | %s" % ("#", "FIRE UTC (end)", "local+1", "side", "entry", "SL", "TP", "res"), flush=True)
+        for i, r in enumerate(losers, 1):
+            fu = datetime.fromtimestamp(r["t"], tz=timezone.utc); fl = datetime.fromtimestamp(r["t"], tz=LOCAL)
+            tag = "1m-amb" if r["outc"] == "AMB" else "SL"
+            print("   %-3d | %-16s | %-11s | %-5s | %9.3f | %9.3f | %9.3f | %s" % (i, fu.strftime("%Y-%m-%d %H:%M"),
+                  fl.strftime("%m-%d %H:%M"), "LONG" if r["s"] > 0 else "SHORT", r["entry"], r["sl"], r["tp"], tag), flush=True)
+        if nocov:
+            print("   (%d %s fires past the 1m archive — not classifiable offline)" % (len(nocov), name), flush=True)
 
 
 if __name__ == "__main__":
