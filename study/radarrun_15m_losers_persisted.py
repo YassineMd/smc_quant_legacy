@@ -14,7 +14,7 @@ from study.archive_loader import load_archive
 from study.candle_bias_1h import _f
 
 LOCAL = timezone(timedelta(hours=1))
-TF = "15m"
+TF = sys.argv[1] if len(sys.argv) > 1 else "15m"     # timeframe key into radarrun_fired.json (15m/30m/1h/5m)
 
 
 def resolve_1m(side, entry, sl, tp, t_open, T1, H1, L1):
@@ -36,7 +36,7 @@ def resolve_1m(side, entry, sl, tp, t_open, T1, H1, L1):
 
 
 def main():
-    print("RADAR RUNNER 15m — HONEST losers from the TERMINAL'S OWN fired record (data/radarrun_fired.json), 1m-resolved\n", flush=True)
+    print("RADAR RUNNER %s — HONEST losers from the TERMINAL'S OWN fired record (data/radarrun_fired.json), 1m-resolved\n" % TF, flush=True)
     fired = json.load(open(os.path.join(config.DATA_DIR, "radarrun_fired.json")))[TF]
     rows = []
     for k, v in fired.items():
@@ -57,7 +57,7 @@ def main():
     wins = [r for r in resolved if r["outc"] == "TP"]
     span_lo = datetime.fromtimestamp(rows[0]["t"], tz=timezone.utc); span_hi = datetime.fromtimestamp(rows[-1]["t"], tz=timezone.utc)
     print("=" * 100, flush=True)
-    print("terminal fired %d 15m badges  (span %s .. %s)" % (len(rows), span_lo.strftime("%Y-%m-%d"), span_hi.strftime("%Y-%m-%d")), flush=True)
+    print("terminal fired %d %s badges  (span %s .. %s)" % (len(rows), TF, span_lo.strftime("%Y-%m-%d"), span_hi.strftime("%Y-%m-%d")), flush=True)
     print("  1m-resolved: %d  (win %d = %.1f%%, LOSERS %d)   no-1m-coverage: %d  (fires after %s — daemon-live, 1m archive ends there)"
           % (len(resolved), len(wins), 100 * len(wins) / max(1, len(resolved)), len(losers), len(nocov), _1mend.strftime("%Y-%m-%d")), flush=True)
     print("  losers by year: " + "   ".join("%d: %d" % (Y, sum(1 for r in losers if r["y"] == Y)) for Y in (2025, 2026)), flush=True)
