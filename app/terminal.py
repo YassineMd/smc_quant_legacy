@@ -6032,8 +6032,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._nowickwall_entries = []
 
     def _draw_nowick_wall(self, buckets, x, vx0, vx1) -> None:
-        """Full-candle green/red no-wick walls + a clickable ▲/▼ badge at each wall's base -> click for entry/SL/TP lines
-        (SL = a FULL candle beyond, TP = 0.5x = the candle midpoint, RR 0.5). app/nowick_wall_detect. ALL tf, culled."""
+        """Full-candle green/red no-wick walls + a clickable ▲/▼ badge -> click for entry/SL/TP lines. Entry = the no-wick
+        candle's CLOSE; SL = a FULL candle length beyond; TP = 0.5x that (RR 0.5). app/nowick_wall_detect. ALL tf, culled."""
         if not self.menu.layer_state("m10_nowickwall") or not buckets:
             self._hide_nowick_wall(); return
         n = len(buckets)
@@ -6067,9 +6067,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _rc = self._nowickwall_box(ub, m["side"]); ub += 1
             _rc.setRect(xl, lo, max(1e-9, xr - xl), hi - lo); _rc.setVisible(True)   # band = the ENTIRE candle height
             side = 1 if m["side"] == "S" else -1
-            clen = hi - lo; entry = lo if side > 0 else hi         # entry = the wall base (the no-wick open)
-            sl = entry - side * clen                               # SL = a FULL candle beyond the entry
-            tp = entry + side * 0.5 * clen                         # TP = 0.5x  (= the candle midpoint), RR 0.5
+            _b0 = buckets[i0]; close = float(_b0.get("close", _b0.get("close_price", 0.0)) or 0.0)
+            clen = hi - lo; entry = close                          # entry = the CLOSE of the no-wick candle
+            sl = entry - side * clen                               # SL = a FULL candle length beyond the entry
+            tp = entry + side * 0.5 * clen                         # TP = 0.5x the candle length (RR 0.5)
             yb = (lo - pad) if side > 0 else (hi + pad)
             col = GRN if side > 0 else RED
             spots.append({"pos": (xl, yb), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
@@ -6082,8 +6083,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._draw_nowickwall_lines()
 
     def _draw_nowickwall_lines(self) -> None:
-        """Entry(white)/SL(red)/TP(green) dashed lines for a clicked No-Wick Wall badge (SL = full candle, TP = 0.5x = mid).
-        Lines run from the wall bar to the first TP/SL touch (net % labelled)."""
+        """Entry(white)/SL(red)/TP(green) dashed lines for a clicked No-Wick Wall badge. Entry = candle close; SL = a full
+        candle length beyond; TP = 0.5x that. Lines run from the wall bar to the first TP/SL touch (net % labelled)."""
         buckets = getattr(self, "_trline_buckets", None) or []; n = len(buckets)
         user = self._nowickwall_lines_user; cpool = self._nowickwall_ln_pool; lpool = self._nowickwall_lnlbl_pool
         WHITE = (236, 238, 244); ul = ut = 0
