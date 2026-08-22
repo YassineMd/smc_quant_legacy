@@ -1004,6 +1004,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cvd_lows = None          # per-bar CVD low/high arrays -> AUTO-FIT-mode replay-step window rescale
         self._cvd_highs = None
         self._cvd_closes = None        # per-bar CVD close -> mirror a hovered swing (start/end) onto the CVD pane
+        # --- Volume sub-pane (Mode 10, sits between the CVD and VPIN panes): a per-bar volume histogram with a
+        # top-right BASIC/DELTA dropdown. BASIC = total bucket volume (curr_vol); DELTA = signed buy-sell delta.
+        self.vol_plot = None
+        self._vol_bar = None           # pg.BarGraphItem (one item, re-opts each frame)
+        self._vol_qt = None            # lazy {green/red QBrush + QPen} for the volume bars
+        self._vol_combo = None         # top-right BASIC/DELTA dropdown (child of vol_plot)
+        self._vol_combo_sig = None     # cached (w,h) so the combo repositions only when the pane resizes
+        self._vol_want = False         # user's Volume-pane intent (drives vol_plot visibility in Mode 10; persisted)
+        self._vol_mode = "basic"       # "basic" (total volume) | "delta" (buy-sell); persisted, set by the dropdown
+        self._vol_follow_y = True      # Volume Y auto-fits its visible bars; a Y-scroll hands the user control
+        self._vol_vals = None          # per-bar plotted value (window Y re-fit in _replay_follow)
+        self.vol_vline = None; self.vol_hline = None; self.vol_tag = None; self.vol_vb = None; self._vol_proxy = None
         self.splitter_v = None         # Mode 10 vertical splitter (upper/lower panes)
         self.cob_col = None            # Mode 10 COB column (cob + spacer), height-matched to the price pane
         self._cob_want = False         # user's COB-toggle intent (drives cob_col visibility in Mode 10)
@@ -2481,6 +2493,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if on:                       # reveal it at a usable height (it collapses to 0 when hidden)
                     self._show_cvd_pane()
             self._last_scanner_sig = None    # force a redraw so the pane fills immediately
+        elif key == "vol_pane":
+            self._vol_want = on              # Volume histogram pane (basic/delta) — hidden collapses to 0, never painted
+            if self.vol_plot is not None:
+                self.vol_plot.setVisible(on)
+                if on:                       # reveal it at a usable height (it collapses to 0 when hidden)
+                    self._show_vol_pane()
+            self._last_scanner_sig = None    # force a redraw so the pane fills immediately
         elif key == "vpin_pane":
             self._vpin_want = on             # lower VPIN pane: hidden -> its 10k bars/flow are never built or painted
             if self.lower_plot is not None:
@@ -3451,6 +3470,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self, "cvd_vline", None) is not None:      # ... and into the CVD pane
             self.cvd_vline.setPos(pt.x())
             self.cvd_hline.hide(); self.cvd_tag.hide()        # cursor is over the price pane -> no CVD y readout
+        if getattr(self, "vol_vline", None) is not None:      # ... and into the Volume pane
+            self.vol_vline.setPos(pt.x())
+            self.vol_hline.hide(); self.vol_tag.hide()
         if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
             self.fp_panel.show_price_line(pt.y())
         self._radar_hover(pt)                                 # Order-Flow Walls radar -> P(resist) odds on hover
@@ -3534,9 +3556,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.lower_vline.setPos(pt.x()); self.lower_hline.setPos(pt.y()); self.lower_hline.show()
         self.vline.setPos(pt.x())              # shared vertical crosshair -> mirror the X into the price pane
         self.hline.hide(); self.price_tag.hide()   # cursor isn't over the price pane -> no price-y readout there
-        if getattr(self, "cvd_vline", None) is not None:   # ... and into the CVD pane (all three share the X line)
+        if getattr(self, "cvd_vline", None) is not None:   # ... and into the CVD pane (all share the X line)
             self.cvd_vline.setPos(pt.x())
             self.cvd_hline.hide(); self.cvd_tag.hide()
+        if getattr(self, "vol_vline", None) is not None:   # ... and into the Volume pane
+            self.vol_vline.setPos(pt.x())
+            self.vol_hline.hide(); self.vol_tag.hide()
         self.vpin_tag.setText(f"{pt.y():.3f}")     # VPIN is 0..1 -> 3 decimals; sits on the pane's right axis
         self.vpin_tag.setPos(self.lower_vb.viewRange()[0][1], pt.y())
         self.vpin_tag.show()
@@ -6612,6 +6637,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "ls_mode": self._ls_mode, "panel9": self.show_panel9, "panel0": self.show_panel0,
                 "candle_mode": self._candle_mode,
                 "vp_mode": self._vp_mode,
+                "vol_mode": self._vol_mode,                              # Volume pane dropdown: 'basic' | 'delta'
                 "hide_candles": self._hide_candles,
                 "phase_table": self.show_phase_table,
                 "phase": {k: bool(v) for k, v in self.show_phase.items()},
@@ -6670,6 +6696,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_panel9 = bool(s.get("panel9", self.show_panel9))
         self.show_panel0 = bool(s.get("panel0", self.show_panel0))
         self.show_liq = bool(s.get("liq_labels", self.show_liq))
+        _vm = s.get("vol_mode")                               # Volume pane dropdown mode
+        if _vm in ("basic", "delta"):
+            self._vol_mode = _vm
         self._saved_toggles = dict(s.get("toggles") or {})   # applied to the menu checkboxes in _apply_saved_toggles
         _cm = s.get("candle_mode")                            # 0 normal / 1 whisker / 2 footprint (back-compat: old "whisker" bool)
         if _cm is None:
@@ -11527,6 +11556,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if _chi > _clo:
                         _pad = (_chi - _clo) * 0.08
                         _cvb.setYRange(_clo - _pad, _chi + _pad, padding=0)
+        if getattr(self, "vol_plot", None) is not None and self.vol_plot.isVisible():
+            self.vol_plot.getViewBox().setXRange(mxr[0], mxr[1], padding=0)
+            if not self._vol_follow_y:                            # same X-follow + Y-track contract as the CVD pane
+                self._vol_pan_to_bar(self._vol_vals[-1] if self._vol_vals else None)
+            elif self._vol_vals:
+                _w0 = max(0, int(math.floor(mxr[0]))); _w1 = min(len(self._vol_vals), int(math.ceil(mxr[1])) + 1)
+                if _w1 <= _w0:
+                    _w0, _w1 = 0, len(self._vol_vals)
+                _win = self._vol_vals[_w0:_w1]
+                if _win:
+                    _vhi = max(_win); _vlo = min(0.0, min(_win))
+                    if _vhi > _vlo:
+                        _vp = (_vhi - _vlo) * 0.08
+                        self.vol_plot.getViewBox().setYRange(_vlo - (_vp if _vlo < 0 else 0.0), _vhi + _vp, padding=0)
         self._follow_prev_range = self.vb.viewRange()            # keep the mouse-diff baseline current
 
     def _toggle_replay_autoplay(self) -> None:
@@ -11919,6 +11962,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # already deleted' on the next hover after leaving Mode 10). _ensure_canvas_panes rebuilds them all.
             self.cvd_plot = None; self.cvd_vb = None; self._cvd_proxy = None
             self.cvd_vline = None; self.cvd_hline = None; self.cvd_tag = None
+            # the Volume pane + its bar item + dropdown were CHILDREN of the just-deleted splitter_v -> null every ref
+            # (the combo's C++ side goes with the pane); _ensure_canvas_panes rebuilds them all on the next Mode-10 entry.
+            self.vol_plot = None; self.vol_vb = None; self._vol_proxy = None; self._vol_bar = None
+            self.vol_vline = None; self.vol_hline = None; self.vol_tag = None
+            self._vol_combo = None; self._vol_combo_sig = None; self._vol_vals = None
 
     def _sync_kinetic_vb(self) -> None:
         """Keep the Mode 4 secondary price ViewBox glued to the main viewport.
@@ -13661,12 +13709,64 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.cvd_plot.scene().sigMouseClicked.connect(self._on_cvd_click)   # double-click -> auto-adjust
         self.splitter_v.addWidget(self.cvd_plot)
 
+        # --- VOLUME sub-pane: a per-bar volume HISTOGRAM, same construction/feel as the CVD pane. X is mirrored
+        # from the price pane every frame (lock-step); Y is the user's (auto-fit to the visible bars until a Y-scroll
+        # hands them control). A top-right dropdown flips BASIC (total curr_vol) <-> DELTA (signed buy-sell).
+        self.vol_plot = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom")})
+        self.vol_plot.setBackground("#141414")
+        self.vol_plot.showAxis("right"); self.vol_plot.hideAxis("left")
+        for _ax in ("bottom", "right"):
+            self.vol_plot.getAxis(_ax).setPen(pg.mkPen("#dcdcdc", width=1))
+            self.vol_plot.getAxis(_ax).setTextPen(pg.mkPen("#dcdcdc"))
+        self.vol_plot.showGrid(x=False, y=False)
+        self.vol_plot.setMenuEnabled(False)
+        self.vol_plot.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        self.vol_plot.getAxis("bottom").set_scanner_active(True)
+        _vvb = self.vol_plot.getViewBox()
+        _vvb.setMouseEnabled(x=True, y=True)
+        _vvb.disableAutoRange()                            # Y fit explicitly each frame (see _fit_vol_y)
+        _vvb.sigRangeChangedManually.connect(self._on_vol_manual_range)
+        _vz = pg.InfiniteLine(angle=0, movable=False,      # zero baseline (the delta histogram straddles it)
+                              pen=pg.mkPen((150, 150, 150, 120), width=1, style=QtCore.Qt.DashLine))
+        _vz.setValue(0.0); _vz.setZValue(5)
+        self.vol_plot.addItem(_vz, ignoreBounds=True)
+        _vxc = pg.mkPen(color=(170, 170, 170, 150), width=1); _vxc.setCosmetic(True); _vxc.setDashPattern([4.0, 8.0])
+        self.vol_vline = pg.InfiniteLine(angle=90, movable=False, pen=_vxc)
+        self.vol_hline = pg.InfiniteLine(angle=0, movable=False, pen=_vxc)
+        self.vol_vline.setZValue(15); self.vol_hline.setZValue(15)
+        self.vol_plot.addItem(self.vol_vline, ignoreBounds=True)
+        self.vol_plot.addItem(self.vol_hline, ignoreBounds=True)
+        self.vol_hline.hide()
+        self.vol_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        _vtf2 = QtGui.QFont("Consolas", 9); _vtf2.setBold(True)
+        self.vol_tag.textItem.setFont(_vtf2); self.vol_tag.setZValue(16)
+        self.vol_plot.addItem(self.vol_tag, ignoreBounds=True); self.vol_tag.hide()
+        self.vol_vb = _vvb
+        self._vol_proxy = pg.SignalProxy(self.vol_plot.scene().sigMouseMoved, rateLimit=60, slot=self._on_vol_mouse_move)
+        self.vol_plot.setMinimumHeight(0)
+        self.vol_plot.setVisible(self._vol_want)           # honor the hamburger toggle
+        self.vol_plot.scene().sigMouseClicked.connect(self._on_vol_click)   # double-click -> auto-adjust
+        # top-right BASIC/DELTA dropdown, parented to the pane's viewport so it floats over the plot
+        self._vol_combo = QtWidgets.QComboBox(self.vol_plot)
+        self._vol_combo.addItems(["Basic", "Delta"])
+        self._vol_combo.setCurrentIndex(0 if self._vol_mode == "basic" else 1)
+        self._vol_combo.setStyleSheet(
+            "QComboBox{ background:#20242c; color:#dcdcdc; border:1px solid #3a4150; border-radius:3px;"
+            " padding:1px 6px; font:bold 10px 'Consolas'; } QComboBox::drop-down{ border:0; width:14px; }"
+            " QComboBox QAbstractItemView{ background:#20242c; color:#dcdcdc; selection-background-color:#3a4150; }")
+        self._vol_combo.currentIndexChanged.connect(self._on_vol_mode_changed)
+        self._vol_combo.setCursor(QtCore.Qt.PointingHandCursor)
+        self._vol_combo.raise_(); self._vol_combo.show()
+        self._vol_combo_sig = None                          # force a reposition on the first render frame
+        self.splitter_v.addWidget(self.vol_plot)
+
         self.splitter_v.addWidget(self.lower_plot)
         self.lower_plot.setMinimumHeight(0)
         self.lower_plot.setVisible(self._vpin_want)        # honor the hamburger toggle (default OFF -> collapsed, no paint)
         self.splitter_v.setStretchFactor(0, 3)   # 75% upper price space
         self.splitter_v.setStretchFactor(1, 1)   # CVD
-        self.splitter_v.setStretchFactor(2, 1)   # 25% lower toxicity space
+        self.splitter_v.setStretchFactor(2, 1)   # Volume
+        self.splitter_v.setStretchFactor(3, 1)   # 25% lower toxicity space
 
         # re-inject the vertical splitter into the horizontal splitter at index 0
         self.splitter.insertWidget(0, self.splitter_v)
@@ -13682,7 +13782,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.cob_col.setMaximumWidth(self.cob.maximumWidth())
         self.cob.setParent(None)
         self.cob_col.addWidget(self.cob)
-        # One dead strip PER lower sub-pane (CVD + VPIN): cob_col must keep the SAME section count as
+        # One dead strip PER lower sub-pane (CVD + Volume + VPIN): cob_col must keep the SAME section count as
         # splitter_v, because _sync_pane_split mirrors sizes between them wholesale.
         def _spacer():
             w = QtWidgets.QWidget()
@@ -13690,10 +13790,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _p = w.palette(); _p.setColor(QtGui.QPalette.Window, QtGui.QColor("#141414")); w.setPalette(_p)
             return w
         self.cob_col.addWidget(_spacer())                        # beside the CVD pane
+        self.cob_col.addWidget(_spacer())                        # beside the Volume pane
         self.cob_col.addWidget(_spacer())                        # beside the VPIN pane
         self.cob_col.setStretchFactor(0, 3)   # COB matches the price pane's 75%
         self.cob_col.setStretchFactor(1, 1)   # spacer matches the CVD pane
-        self.cob_col.setStretchFactor(2, 1)   # spacer matches the VPIN pane's 25%
+        self.cob_col.setStretchFactor(2, 1)   # spacer matches the Volume pane
+        self.cob_col.setStretchFactor(3, 1)   # spacer matches the VPIN pane's 25%
         self.splitter.insertWidget(1, self.cob_col)
         self.cob.setVisible(True)                       # gated by cob_col's visibility below
         self.cob_col.setVisible(self._cob_want)         # honor the user's COB toggle
@@ -13708,6 +13810,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(0, self._collapse_vpin_pane)
         if self._cvd_want:      # restored ON from the saved toggles (which apply BEFORE the panes exist)
             QtCore.QTimer.singleShot(0, self._show_cvd_pane)   # queued AFTER the collapse -> gets its slice
+        if self._vol_want:      # same restore path for the Volume pane
+            QtCore.QTimer.singleShot(0, self._show_vol_pane)
 
         # Horizontal lock is enforced deterministically every frame in
         # _scan_bucket_canvas (mirror main X -> lower X). We deliberately do NOT
@@ -13722,9 +13826,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         linked vertical splitters (price/VPIN and COB/spacer) set together so their dividers stay aligned."""
         if self.splitter_v is None:
             return
-        self.splitter_v.setSizes([10_000, 0, 0])
+        self.splitter_v.setSizes([10_000, 0, 0, 0])          # [price, cvd, vol, vpin] — all lower panes collapsed
         if self.cob_col is not None:
-            self.cob_col.setSizes([10_000, 0, 0])
+            self.cob_col.setSizes([10_000, 0, 0, 0])
 
     def _on_cvd_manual_range(self, *args) -> None:
         """The user zoomed/panned the CVD pane by hand -> stop auto-fitting its Y (they own it now). A
@@ -13792,6 +13896,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self, "lower_vline", None) is not None:      # ... and the VPIN pane
             self.lower_vline.setPos(pt.x())
             self.lower_hline.hide(); self.vpin_tag.hide()
+        if getattr(self, "vol_vline", None) is not None:        # ... and the Volume pane
+            self.vol_vline.setPos(pt.x())
+            self.vol_hline.hide(); self.vol_tag.hide()
         self.cvd_tag.setText(f"{pt.y():,.0f}")   # CVD is a volume total -> thousands-separated, no decimals
         self.cvd_tag.setPos(self.cvd_vb.viewRange()[0][1], pt.y())
         self.cvd_tag.show()
@@ -13803,13 +13910,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if idx != 1 or self.splitter_v is None or self.cvd_plot is None or not self.cvd_plot.isVisible():
             return
         sz = self.splitter_v.sizes()
-        if len(sz) < 3:
+        if len(sz) < 4:
             return
         avail = sz[0] + sz[1]
         if avail <= 0:
             return
         half = avail // 2
-        new = [half, avail - half, sz[2]]
+        new = [half, avail - half, sz[2], sz[3]]            # keep the vol + vpin slices as-is
         self.splitter_v.setSizes(new)
         if self.cob_col is not None:
             self.cob_col.setSizes(new)          # keep the COB divider glued to the price-pane bottom
@@ -13856,14 +13963,136 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self.splitter_v is None:
             return
         sz = self.splitter_v.sizes()
-        if len(sz) < 3 or sz[1] > 0:
+        if len(sz) < 4 or sz[1] > 0:
             return                                   # already open (or not built yet) -> don't fight the user
         total = sum(sz) or 10_000
         want = max(120, int(total * 0.25))           # ~25% of the stack, floored so it is always usable
-        sz = [max(0, sz[0] - want), want, sz[2]]
+        sz = [max(0, sz[0] - want), want, sz[2], sz[3]]
         self.splitter_v.setSizes(sz)
         if self.cob_col is not None:
             self.cob_col.setSizes(sz)
+
+    def _show_vol_pane(self) -> None:
+        """Give the Volume pane a usable slice when toggled ON (it sits collapsed at 0 until then). Grows ONLY the
+        Volume section (index 2); price keeps the rest and the CVD/VPIN dividers stay where the user put them."""
+        if self.splitter_v is None:
+            return
+        sz = self.splitter_v.sizes()
+        if len(sz) < 4 or sz[2] > 0:
+            return                                   # already open (or not built yet) -> don't fight the user
+        total = sum(sz) or 10_000
+        want = max(120, int(total * 0.25))
+        sz = [max(0, sz[0] - want), sz[1], want, sz[3]]
+        self.splitter_v.setSizes(sz)
+        if self.cob_col is not None:
+            self.cob_col.setSizes(sz)
+
+    def _on_vol_manual_range(self, *args) -> None:
+        """User zoomed/panned the Volume pane by hand -> stop auto-fitting its Y (they own it). Double-click re-arms."""
+        self._vol_follow_y = False
+
+    def _on_vol_mode_changed(self, idx: int) -> None:
+        """BASIC/DELTA dropdown changed -> switch what the histogram plots and force a redraw + Y re-fit."""
+        self._vol_mode = "delta" if idx == 1 else "basic"
+        self._vol_follow_y = True                    # a mode flip changes the scale entirely -> re-fit
+        self._last_scanner_sig = None
+        if not self._loading_ui:
+            self._save_ui_state()
+
+    def _position_vol_combo(self) -> None:
+        """Park the BASIC/DELTA dropdown in the pane's TOP-RIGHT corner (clear of the right price axis). Cheap; only
+        called when the pane's pixel size actually changed (sig-gated in the render block)."""
+        if self._vol_combo is None or self.vol_plot is None:
+            return
+        self._vol_combo.adjustSize()
+        _axw = 0
+        try:
+            _axw = int(self.vol_plot.getAxis("right").width())
+        except Exception:
+            _axw = 34
+        x = max(0, self.vol_plot.width() - self._vol_combo.width() - _axw - 6)
+        self._vol_combo.move(x, 4)
+        self._vol_combo.raise_()
+
+    def _vol_pan_to_bar(self, top) -> None:
+        """Keep the user's Volume-pane zoom HEIGHT; pan vertically only if the newest bar's top would fall outside
+        the current window. Mirrors _cvd_pan_to_candle; runs once the user owns the Volume Y (_vol_follow_y False)."""
+        if getattr(self, "vol_vb", None) is None or top is None:
+            return
+        (_, (vy0, vy1)) = self.vol_vb.viewRange(); vh = vy1 - vy0
+        if vh <= 0:
+            return
+        m = 0.08 * vh; dy = 0.0
+        if top > vy1:
+            dy = top - vy1 + m
+        elif top < vy0:
+            dy = top - vy0 - m
+        if dy != 0.0:
+            self.vol_vb.setYRange(vy0 + dy, vy1 + dy, padding=0)
+
+    def _fit_vol_y(self, vals: list) -> None:
+        """Fit the Volume pane's Y to the bars ACTUALLY VISIBLE in X (explicit, like the CVD/scanner fits). BASIC bars
+        start at 0; DELTA straddles 0, so the floor is min(0, ...). Once the user owns the Y, keep their zoom and just
+        track the newest bar instead of rescaling."""
+        n = len(vals)
+        if n == 0 or getattr(self, "vol_vb", None) is None:
+            return
+        if not self._vol_follow_y:                   # user owns the Y -> fixed zoom, pan to the newest bar
+            self._vol_pan_to_bar(vals[-1])
+            return
+        _vx0, _vx1 = self.vol_vb.viewRange()[0]
+        w0 = max(0, int(math.floor(_vx0))); w1 = min(n, int(math.ceil(_vx1)) + 1)
+        if w1 <= w0:
+            w0, w1 = 0, n
+        win = vals[w0:w1]
+        hi = max(win) if win else 1.0
+        lo = min(0.0, min(win) if win else 0.0)      # BASIC: lo=0; DELTA: below-zero bars pull it negative
+        if not (hi > lo):
+            hi = lo + 1.0
+        pad = (hi - lo) * FOLLOW_PAD_FRAC
+        self.vol_vb.setYRange(lo - (pad if lo < 0 else 0.0), hi + pad, padding=0)
+
+    def _on_vol_mouse_move(self, evt) -> None:
+        """Cursor over the Volume pane: drive its OWN crosshair (x+y) + a right-axis value badge, and push the SHARED
+        vertical crosshair into the price/CVD/VPIN panes so all line up. Mirrors _on_cvd_mouse_move."""
+        if getattr(self, "vol_vb", None) is None or self.vol_plot is None or not self.vol_plot.isVisible():
+            return
+        pos = evt[0]
+        if not self.vol_plot.sceneBoundingRect().contains(pos):
+            self.vol_tag.hide()
+            return
+        pt = self.vol_vb.mapSceneToView(pos)
+        self.vol_vline.setPos(pt.x()); self.vol_hline.setPos(pt.y()); self.vol_hline.show()
+        self.vline.setPos(pt.x()); self.hline.hide(); self.price_tag.hide()
+        if getattr(self, "cvd_vline", None) is not None:
+            self.cvd_vline.setPos(pt.x()); self.cvd_hline.hide(); self.cvd_tag.hide()
+        if getattr(self, "lower_vline", None) is not None:
+            self.lower_vline.setPos(pt.x()); self.lower_hline.hide(); self.vpin_tag.hide()
+        self.vol_tag.setText(f"{pt.y():,.0f}")
+        self.vol_tag.setPos(self.vol_vb.viewRange()[0][1], pt.y())
+        self.vol_tag.show()
+
+    def _on_vol_click(self, ev) -> None:
+        """Double-click the Volume pane -> auto-adjust (same per-axis semantics as the CVD/price panes: X re-locks the
+        shared follow, Y re-arms the auto-fit, the body does both)."""
+        if self.vol_plot is None or not ev.double():
+            return
+        sp = ev.scenePos()
+        on_x = self.vol_plot.getAxis("bottom").sceneBoundingRect().contains(sp)
+        on_y = self.vol_plot.getAxis("right").sceneBoundingRect().contains(sp)
+
+        def _fit_y():
+            self._vol_follow_y = True; self._last_scanner_sig = None
+
+        def _lock_x():
+            self._follow_x = True; self._follow_last_n = -1; self._last_scanner_sig = None
+        if on_x:
+            _lock_x()
+        elif on_y:
+            _fit_y()
+        else:
+            _fit_y(); _lock_x()
+        ev.accept()
 
     def _neon_v2_brush(self, opL: float, opS: float, clL: float, clS: float,
                        curr_vol: float, vel_ratio: float) -> "pg.QtGui.QBrush":
@@ -14850,12 +15079,42 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._cvd_lows = _cl; self._cvd_highs = _ch       # visible-window CVD Y re-fit in _replay_follow
             self._cvd_closes = _cc           # per-bar CVD close -> hovered-swing mirror onto the CVD pane
 
+        # --- VOLUME sub-pane: per-bar histogram. BASIC = total bucket volume (hue = the candle's direction);
+        # DELTA = signed buy-sell (green above 0, red below). Same fill palette as the CVD pane. ---
+        if self.vol_plot is not None and self._vol_want and self.vol_plot.isVisible():
+            if self._vol_qt is None:
+                self._vol_qt = {"gb": pg.mkBrush(*_CVD_GREEN), "rb": pg.mkBrush(*_CVD_RED),
+                                "gp": pg.mkPen(*_CVD_GREEN), "rp": pg.mkPen(*_CVD_RED)}
+            _q = self._vol_qt; _delta = self._vol_mode == "delta"
+            _vals = []; _brs = []; _pns = []
+            for _i, _b in enumerate(buckets):
+                if _delta:
+                    _v = float(_b.get("buy_vol", 0.0) or 0.0) - float(_b.get("sell_vol", 0.0) or 0.0)
+                    _up = _v >= 0.0
+                else:
+                    _v = float(_b.get("curr_vol", 0.0) or 0.0)
+                    _up = closes[_i] >= opens[_i]          # BASIC bar hue = the clock candle's direction
+                _vals.append(_v)
+                _brs.append(_q["gb"] if _up else _q["rb"]); _pns.append(_q["gp"] if _up else _q["rp"])
+            if self._vol_bar is None:
+                self._vol_bar = pg.BarGraphItem(x=[0], height=[0], width=0.8, y0=0.0)
+                self.vol_plot.addItem(self._vol_bar)
+            self._vol_bar.setOpts(x=x, height=_vals, width=0.8, y0=0.0, brushes=_brs, pens=_pns)
+            self._vol_vals = _vals
+            self._fit_vol_y(_vals)
+            _vsig = (self.vol_plot.width(), self.vol_plot.height())   # reposition the dropdown only on a resize
+            if _vsig != self._vol_combo_sig:
+                self._vol_combo_sig = _vsig
+                self._position_vol_combo()
+
         # Deterministic horizontal lock: mirror the main X range onto the lower
         # panes every frame so the stacked panes stay in pixel-perfect lock-step.
         main_xr = self.plot.getViewBox().viewRange()[0]
         self.lower_plot.getViewBox().setXRange(main_xr[0], main_xr[1], padding=0)
         if self.cvd_plot is not None and self.cvd_plot.isVisible():
             self.cvd_plot.getViewBox().setXRange(main_xr[0], main_xr[1], padding=0)
+        if self.vol_plot is not None and self.vol_plot.isVisible():
+            self.vol_plot.getViewBox().setXRange(main_xr[0], main_xr[1], padding=0)
 
         # Live footprint side pane: redraw the FORMING candle's developing footprint (sig-cached on its
         # curr_vol + level count, so it only re-renders when the live bucket actually changed).
