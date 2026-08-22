@@ -1341,6 +1341,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._radar_zone_pool = []                               # QGraphicsRectItem — dark-wall-shade radar zones (upper+lower)
         self._nowickwall_marks = []; self._nowickwall_sig = None  # No-Wick Bar Wall detector cache (m10_nowickwall)
         self._nowickwall_box_pool = []                           # QGraphicsRectItem pool — full-candle green/red walls (no radar)
+        self._nowickwall_sph = None                              # clickable ▲/▼ badge scatter at each wall's entry
+        self._nowickwall_entries = []; self._nowickwall_lines_user = {}
+        self._nowickwall_ln_pool = []; self._nowickwall_lnlbl_pool = []   # entry/SL/TP dashed lines + labels
         self._HTF_COLORS = {"4h": {"R": (190, 60, 255), "S": (60, 255, 130)},   # 4h Walls: neon violet(R)/green(S)
                             "1h": {"R": (255, 150, 20), "S": (40, 140, 255)}}    # 1h Walls: orange(R)/blue(S)
         # HTF Radar Runner SIGNAL colours — match the htf walls EXCEPT the 4h long: cyan (not the wall's green) so it
@@ -2713,6 +2716,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if best is not None:
                     _on = not self._9am_lines_user.get(best, False)
                     self._solo_trade_lines(self._9am_lines_user, best, _on); ev.accept(); return
+            except Exception:
+                pass
+        if (not ev.double() and self.scanner_mode == "bucket_canvas"
+                and self._nowickwall_entries and self.menu.layer_state("m10_nowickwall")):
+            try:                               # click a No-Wick Wall ▲/▼ badge -> toggle its entry/SL/TP lines
+                pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
+                (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.04
+                best = None; bestdx = 2.5
+                for _en in self._nowickwall_entries:
+                    if abs(xc - _en[1]) <= bestdx and abs(yc - _en[7]) <= ytol:   # xvis at idx1, yb at idx7
+                        best = _en[0]; bestdx = abs(xc - _en[1])
+                if best is not None:
+                    _on = not self._nowickwall_lines_user.get(best, False)
+                    self._solo_trade_lines(self._nowickwall_lines_user, best, _on); ev.accept(); return
             except Exception:
                 pass
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
@@ -6008,11 +6025,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return _rc
 
     def _hide_nowick_wall(self) -> None:
-        for _it in self._nowickwall_box_pool:
+        for _it in (self._nowickwall_box_pool + self._nowickwall_ln_pool + self._nowickwall_lnlbl_pool):
             _it.setVisible(False)
+        if self._nowickwall_sph is not None:
+            self._nowickwall_sph.setVisible(False)
+        self._nowickwall_entries = []
 
     def _draw_nowick_wall(self, buckets, x, vx0, vx1) -> None:
-        """Full-candle green/red no-wick walls (app/nowick_wall_detect). ALL tf, cached by data-sig, culled to viewport."""
+        """Full-candle green/red no-wick walls + a clickable ▲/▼ badge at each wall's base -> click for entry/SL/TP lines
+        (SL = a FULL candle beyond, TP = 0.5x = the candle midpoint, RR 0.5). app/nowick_wall_detect. ALL tf, culled."""
         if not self.menu.layer_state("m10_nowickwall") or not buckets:
             self._hide_nowick_wall(); return
         n = len(buckets)
@@ -6024,8 +6045,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 self._nowickwall_marks = []
             self._nowickwall_sig = _dsig
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.02, 1e-9)
+        GRN, RED = (60, 200, 120), (230, 70, 80)
+        if self._nowickwall_sph is None:
+            self._nowickwall_sph = pg.ScatterPlotItem(pxMode=True, size=13); self._nowickwall_sph.setZValue(33)
+            self.plot.addItem(self._nowickwall_sph, ignoreBounds=True)
         DROP_AFTER = 40                                          # a mitigated wall fades out this many bars past its break
-        ub = 0
+        ub = 0; spots = []; self._nowickwall_entries = []
         for m in self._nowickwall_marks:
             i0 = int(m["i0"]); i1 = min(int(m["i1"]), n - 1)
             if i0 < 0 or i0 >= n or i1 < i0:
@@ -6040,8 +6066,59 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue
             _rc = self._nowickwall_box(ub, m["side"]); ub += 1
             _rc.setRect(xl, lo, max(1e-9, xr - xl), hi - lo); _rc.setVisible(True)   # band = the ENTIRE candle height
+            side = 1 if m["side"] == "S" else -1
+            clen = hi - lo; entry = lo if side > 0 else hi         # entry = the wall base (the no-wick open)
+            sl = entry - side * clen                               # SL = a FULL candle beyond the entry
+            tp = entry + side * 0.5 * clen                         # TP = 0.5x  (= the candle midpoint), RR 0.5
+            yb = (lo - pad) if side > 0 else (hi + pad)
+            col = GRN if side > 0 else RED
+            spots.append({"pos": (xl, yb), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
+                          "pen": pg.mkPen(*[int(c * 0.55) for c in col], 255, width=1.2), "size": 13})
+            self._nowickwall_entries.append(("nww%d" % i0, xl, i0, side, entry, sl, tp, yb))
         for _it in self._nowickwall_box_pool[ub:]:
             _it.setVisible(False)
+        self._nowickwall_sph.setData(spots); self._nowickwall_sph.setVisible(True)
+        self._trline_buckets = buckets                            # click a badge -> entry/SL/TP lines
+        self._draw_nowickwall_lines()
+
+    def _draw_nowickwall_lines(self) -> None:
+        """Entry(white)/SL(red)/TP(green) dashed lines for a clicked No-Wick Wall badge (SL = full candle, TP = 0.5x = mid).
+        Lines run from the wall bar to the first TP/SL touch (net % labelled)."""
+        buckets = getattr(self, "_trline_buckets", None) or []; n = len(buckets)
+        user = self._nowickwall_lines_user; cpool = self._nowickwall_ln_pool; lpool = self._nowickwall_lnlbl_pool
+        WHITE = (236, 238, 244); ul = ut = 0
+        for key, xv, bidx, side, entry, sl, tp, yb in self._nowickwall_entries:
+            if not user.get(key, False) or entry <= 0 or bidx < 0 or bidx >= n:
+                continue
+            exit_x = bidx
+            for j in range(bidx + 1, min(bidx + 80, n)):          # stop at the first TP/SL touch (cap 80 bars)
+                b = buckets[j]; hh = float(b.get("high", 0.0) or 0.0); ll = float(b.get("low", 0.0) or 0.0)
+                exit_x = j
+                if hh <= 0 or ll <= 0:
+                    continue
+                if ((hh >= tp) if side > 0 else (ll <= tp)) or ((ll <= sl) if side > 0 else (hh >= sl)):
+                    break
+            rb = max(xv + 1.0, float(exit_x))
+            for lvl, col, w, tag in ((sl, (255, 90, 90), 1.5, "sl"), (tp, (40, 230, 90), 1.5, "tp"), (entry, WHITE, 1.9, "entry")):
+                if ul >= len(cpool):
+                    _ln = pg.PlotCurveItem(); _ln.setZValue(29); self.plot.addItem(_ln, ignoreBounds=True); cpool.append(_ln)
+                _ln = cpool[ul]; ul += 1
+                _pen = pg.mkPen(*col, width=w, style=QtCore.Qt.DashLine); _pen.setCosmetic(True)
+                _ln.setPen(_pen); _ln.setData([xv, rb], [lvl, lvl]); _ln.setVisible(True)
+                if ut >= len(lpool):
+                    _tl = pg.TextItem(anchor=(0.0, 0.5)); _tl.setZValue(36)
+                    _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True); _tl.textItem.setFont(_tf)
+                    self.plot.addItem(_tl, ignoreBounds=True); lpool.append(_tl)
+                _tl = lpool[ut]; ut += 1
+                if tag == "entry":
+                    _tl.setText("%s  %.4f" % ("LONG" if side > 0 else "SHORT", entry))
+                else:
+                    _tl.setText("%s %.4f (%+.2f%%)" % (tag.upper(), lvl, side * (lvl - entry) / entry * 100.0))
+                _tl.setColor(col); _tl.setPos(rb, lvl); _tl.setVisible(True)
+        for j in range(ul, len(cpool)):
+            cpool[j].setVisible(False)
+        for j in range(ut, len(lpool)):
+            lpool[j].setVisible(False)
 
     def _draw_regime(self, buckets, vx1, vy0) -> None:
         """WALL REGIME READ — BOTTOM-RIGHT HUD, part of the Order-Flow Walls layer (m10_absorblvl): trend/range +
@@ -9524,12 +9601,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         badge's (1h / 15m / 5m Engulf S/R), so only ONE position is on the chart at a time. Clicking the already-shown
         badge turns it OFF (nothing shown). Called by every strategy badge click."""
         for d in (self._eng_lines_user, self._mom_lines_user, self._e5m_lines_user, self._ez_lines_user,
-                  self._nyrb_lines_user, self._rr_lines_user, self._9am_lines_user):
+                  self._nyrb_lines_user, self._rr_lines_user, self._9am_lines_user, self._nowickwall_lines_user):
             d.clear()                          # drop every currently-shown position (this + all other overlays)
         if turn_on:
             active_user[key] = True            # ...then light up only the just-clicked one
         self._draw_eng_lines(); self._draw_mom_lines(); self._draw_e5m_lines(); self._draw_ez_lines()
-        self._draw_nyrb_lines(); self._draw_rr_lines(); self._draw_9amfade_lines()
+        self._draw_nyrb_lines(); self._draw_rr_lines(); self._draw_9amfade_lines(); self._draw_nowickwall_lines()
 
     def _trade_lines(self, entries, user, cpool, lpool, zline) -> None:
         """Shared renderer: for each toggled-ON entry draw ENTRY (white dashed, price tag) + TP (green) + SL (red)
