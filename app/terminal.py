@@ -1007,10 +1007,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # --- Volume sub-pane (Mode 10, sits between the CVD and VPIN panes): a per-bar volume histogram with a
         # top-right mode dropdown. BASIC = total curr_vol (hue = candle direction) · DELTA = |buy-sell| MAGNITUDE from
         # the single 0 baseline, sign shown by COLOUR only (green net-buy / red net-sell — no up/down split) ·
-        # BUY = buy_vol (green) · SELL = sell_vol (red) · BUY/SELL = grouped green|red pairs per bar, same baseline.
+        # BUY = buy_vol (green) · SELL = sell_vol (red) · BUY/SELL = NESTED on the same bar (larger side full-width
+        # behind, smaller side inside it on top), same 0 baseline.
         self.vol_plot = None
-        self._vol_bar = None           # pg.BarGraphItem (primary; re-opts each frame)
-        self._vol_bar2 = None          # second BarGraphItem — the red half of the BUY/SELL grouped pairs
+        self._vol_bar = None           # pg.BarGraphItem (primary / OUTER bar; re-opts each frame)
+        self._vol_bar2 = None          # second BarGraphItem — the INNER (smaller-side) bar of BUY/SELL nesting
         self._vol_qt = None            # lazy {green/red QBrush + QPen} for the volume bars
         self._vol_combo = None         # top-right BASIC/DELTA dropdown (child of vol_plot)
         self._vol_combo_sig = None     # cached (w,h) so the combo repositions only when the pane resizes
@@ -15089,7 +15090,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         #   BASIC    = total curr_vol, hue = the candle's direction.
         #   DELTA    = |buy-sell| magnitude, green when net-buying / red when net-selling (no up/down split).
         #   BUY      = buy_vol, all green.       SELL = sell_vol, all red.
-        #   BUY/SELL = grouped pairs per bar — green buy bar left, red sell bar right, side by side. ---
+        #   BUY/SELL = NESTED on the same bar — the larger side full-width behind, the smaller inside it on top. ---
         if self.vol_plot is not None and self._vol_want and self.vol_plot.isVisible():
             if self._vol_qt is None:
                 self._vol_qt = {"gb": pg.mkBrush(*_CVD_GREEN), "rb": pg.mkBrush(*_CVD_RED),
@@ -15104,12 +15105,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _bv = [float(_b.get("buy_vol", 0.0) or 0.0) for _b in buckets]
             _sv = [float(_b.get("sell_vol", 0.0) or 0.0) for _b in buckets]
             if _vm == "buysell":
-                self._vol_bar.setOpts(x=[_xx - 0.21 for _xx in x], height=_bv, width=0.38, y0=0.0,
-                                      brushes=[_q["gb"]] * len(x), pens=[_q["gp"]] * len(x))
-                self._vol_bar2.setOpts(x=[_xx + 0.21 for _xx in x], height=_sv, width=0.38, y0=0.0,
-                                       brushes=[_q["rb"]] * len(x), pens=[_q["rp"]] * len(x))
+                # NESTED buy/sell (user 2026-08-22): both on the SAME bar — the larger side full-width behind,
+                # the smaller side drawn INSIDE it (narrower, on top). Green = buy, red = sell, same 0 baseline.
+                _big = [a >= b for a, b in zip(_bv, _sv)]         # True -> buy is the outer bar
+                self._vol_bar.setOpts(x=x, height=[max(a, b) for a, b in zip(_bv, _sv)], width=0.8, y0=0.0,
+                                      brushes=[_q["gb"] if u else _q["rb"] for u in _big],
+                                      pens=[_q["gp"] if u else _q["rp"] for u in _big])
+                self._vol_bar2.setOpts(x=x, height=[min(a, b) for a, b in zip(_bv, _sv)], width=0.44, y0=0.0,
+                                       brushes=[_q["rb"] if u else _q["gb"] for u in _big],
+                                       pens=[_q["rp"] if u else _q["gp"] for u in _big])
                 self._vol_bar2.setVisible(True)
-                _vals = [max(a, b) for a, b in zip(_bv, _sv)]     # Y-fit basis = the taller of each pair
+                _vals = [max(a, b) for a, b in zip(_bv, _sv)]     # Y-fit basis = the outer bar
             else:
                 self._vol_bar2.setVisible(False)
                 if _vm == "delta":
