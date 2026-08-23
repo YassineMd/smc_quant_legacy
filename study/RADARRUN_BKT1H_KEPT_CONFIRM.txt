@@ -1,0 +1,24 @@
+== A. BUCKET 1h (recon), 1-MINUTE first-touch, non-overlap on 1m exits ==
+  ALL                    0.5% net n=1772  W1248  L524   win  70.4%  avg +0.023%  R +0.012  DD  10.5%  prop  32.6% | 25 +0.035% 26 +0.002%  (unresolved 0)
+  ALL                    RR 1:1   n=1366  W738   L628   win  54.0%  avg +0.002%  R -0.011  DD  15.3%  prop  15.4% | 25 -0.008% 26 +0.021%  (unresolved 0)
+  S strong-in-favour     0.5% net n=515   W380   L135   win  73.8%  avg +0.037%  R +0.025  DD   4.6%  prop  18.4% | 25 +0.053% 26 +0.011%  (unresolved 0)
+  S strong-in-favour     RR 1:1   n=470   W271   L199   win  57.7%  avg +0.110%  R +0.075  DD   5.1%  prop  58.6% | 25 +0.080% 26 +0.159%  (unresolved 0)
+  S & kept>=70%          0.5% net n=432   W323   L109   win  74.8%  avg +0.042%  R +0.022  DD   4.2%  prop  10.7% | 25 +0.040% 26 +0.045%  (unresolved 0)
+  S & kept>=70%          RR 1:1   n=396   W229   L167   win  57.8%  avg +0.126%  R +0.082  DD   5.3%  prop  56.9% | 25 +0.052% 26 +0.245%  (unresolved 0)
+  S & kept>=90%          0.5% net n=247   W194   L53    win  78.5%  avg +0.104%  R +0.058  DD   2.2%  prop   6.9% | 25 +0.076% 26 +0.148%  (unresolved 0)
+  S & kept>=90%          RR 1:1   n=235   W143   L92    win  60.9%  avg +0.222%  R +0.149  DD   3.2%  prop  61.7% | 25 +0.157% 26 +0.332%  (unresolved 0)
+  kept>=90% (no delta)   0.5% net n=738   W540   L198   win  73.2%  avg +0.030%  R +0.010  DD   4.3%  prop  19.5% | 25 +0.021% 26 +0.045%  (unresolved 0)
+  kept>=90% (no delta)   RR 1:1   n=633   W337   L296   win  53.2%  avg +0.008%  R -0.014  DD   9.4%  prop  13.4% | 25 -0.020% 26 +0.052%  (unresolved 0)
+
+== B. DAEMON 1h OUT-OF-SAMPLE (union replay, daemon-1m first-touch) ==
+daemon 1h buckets 2424 (2026-06-21 .. 2026-08-17), union badges 302
+  ALL                    0.5% net n=167   W98    L69    win  58.7%  avg -0.065%  R -0.073  DD   6.8%  prop   1.1% | 25 +nan% 26 -0.065%  (unresolved 0)
+  ALL                    RR 1:1   n=150   W73    L77    win  48.7%  avg -0.150%  R -0.157  DD  11.0%  prop   0.3% | 25 +nan% 26 -0.150%  (unresolved 0)
+  S strong-in-favour     0.5% net n=48    W30    L18    win  62.5%  avg -0.020%  R -0.098  DD   4.5%  prop   0.4% | 25 +nan% 26 -0.020%  (unresolved 0)
+  S strong-in-favour     RR 1:1   n=44    W19    L25    win  43.2%  avg -0.165%  R -0.252  DD   6.0%  prop   0.0% | 25 +nan% 26 -0.165%  (unresolved 0)
+  S & kept>=70%          0.5% net n=45    W29    L16    win  64.4%  avg +0.008%  R -0.068  DD   3.8%  prop   1.0% | 25 +nan% 26 +0.008%  (unresolved 0)
+  S & kept>=70%          RR 1:1   n=41    W19    L22    win  46.3%  avg -0.113%  R -0.182  DD   4.4%  prop   0.0% | 25 +nan% 26 -0.113%  (unresolved 0)
+  S & kept>=90%          0.5% net n=25    W16    L9     win  64.0%  avg -0.011%  R -0.081  DD   2.4%  prop   0.1% | 25 +nan% 26 -0.011%  (unresolved 0)
+  S & kept>=90%          RR 1:1   n=24    W11    L13    win  45.8%  avg -0.133%  R -0.191  DD   2.8%  prop   0.0% | 25 +nan% 26 -0.133%  (unresolved 0)
+  kept>=90% (no delta)   0.5% net n=79    W48    L31    win  60.8%  avg -0.054%  R -0.083  DD   6.2%  prop   0.6% | 25 +nan% 26 -0.054%  (unresolved 0)
+  kept>=90% (no delta)   RR 1:1   n=76    W37    L39    win  48.7%  avg -0.117%  R -0.141  DD   6.7%  prop   0.4% | 25 +nan% 26 -0.117%  (unresolved 0)
