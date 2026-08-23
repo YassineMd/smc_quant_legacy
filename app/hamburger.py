@@ -743,7 +743,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         # their own keys here. Nothing from either box is left without a toggle.
         for key, label in (("st_ohlc", "· OHLC"), ("st_poc", "· Elapsed/POC"), ("st_volume", "· Volume"),
                            ("st_buysell", "· Buy/Sell"), ("st_delta", "· Delta"), ("st_deltaud", "· Δ↑ / Δ↓"),
-                           ("st_daccel", "· Δ-accel"), ("st_absorb", "· Absorb R"), ("st_reward", "· Reward/eff"),
+                           ("st_daccel", "· Δ-accel"), ("st_absorb", "· Absorb R"), ("st_effres", "· Eff/Res (effort→result)"),
+                           ("st_reward", "· Reward/eff"),
                            ("st_strength", "· Strength"), ("st_ease", "· Ease"),
                            ("st_halfdom", "· ½dom"), ("st_rhalves", "· R h1/h2"), ("st_dp", "· ΔP"),
                            ("st_oi", "· OI Δ"), ("st_costtick", "· Cost/tick"), ("st_vel", "· Buy/Sell-vel"),

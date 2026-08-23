@@ -3968,6 +3968,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _add("st_delta", f"Delta {span(sk(delta)+f' ({dpct:+.0f}%)', g if delta >= 0 else r)}")
         _add("st_daccel", span("Δ-accel " + _da2_s, _da2_col))
         _add("st_absorb", span("Absorb R " + _absR_s, _absR_col))
+        # EFFORT -> RESULT (user 2026-08-23): how many ticks this bar's net delta actually bought vs what that much delta
+        # normally buys (trailing median ticks/delta), + the excursion it reached before rejection. Puts a MAGNITUDE on the
+        # absorption that Absorb R / the Strength 'abs' tag only flag. Orange ABSORBED / blue EASY. Descriptive only.
+        try:
+            from app import effort_result as _erm
+            _er = _erm.compute(buckets, idx)
+        except Exception:
+            _er = None
+        if _er is not None:
+            _ecol = "#c8701a" if _er["label"] == "ABSORBED" else ("#4da3ff" if _er["label"] == "EASY" else gray)
+            _res_s = span("%+dt" % round(_er["result_t"]), g if _er["result_t"] >= 0 else r)
+            _eff_s = (span("%.2f× normal" % _er["eff"], _ecol) if _er["eff"] is not None else span("baseline n/a", gray))
+            _lab_s = (" · " + span(_er["label"], _ecol)) if _er["label"] in ("ABSORBED", "EASY") else ""
+            _ret_s = (" · kept %.0f%%" % (100.0 * _er["retention"])) if (_er["retention"] is not None and _er["exc_t"] > 0) else ""
+            _add("st_effres", "Eff/Res %s ← %dt exc on %s Δ · %s%s%s"
+                 % (_res_s, round(_er["exc_t"]), MinimalTerminalWindow._fmt_kmb(abs(_er["delta"])), _eff_s, _lab_s, span(_ret_s, gray)))
         _add("st_reward", _rew_html)               # who's getting rewarded for their effort (rolling reward-per-effort)
         if _str_html:
             _add("st_strength", _str_html)         # per-candle EFFORT z per side + absorbed flag (reward_eff.strength)
@@ -14076,6 +14092,41 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if dy != 0.0:
             self.vol_vb.setYRange(vy0 + dy, vy1 + dy, padding=0)
 
+    def _vol_effres_on(self) -> bool:
+        """The 'Eff/Res' stats-box toggle (hamburger > Candles > Stats Box) also gates the hollow ABSORBED delta bars."""
+        _cb = getattr(self, "menu", None) and self.menu.layer_checks.get("st_effres")
+        return _cb is None or _cb.isChecked()
+
+    def _vol_hollow_mask(self, bk: list):
+        """Vectorised app.effort_result over a bucket slice: True where the bar's |delta| is meaningful AND its efficiency
+        (signed ticks moved / expected ticks for that delta, expected = trailing-30 median ticks-per-delta x |delta|) is
+        <= ABSORBED_MAX. Same maths as effort_result.compute, rolling-median via sort (no nanmedian — perf)."""
+        from app import effort_result as _erm
+        n = len(bk)
+        if n == 0:
+            return np.zeros(0, dtype=bool)
+        o = np.array([float(b.get("open", b.get("open_price", 0.0)) or 0.0) for b in bk])
+        c = np.array([float(b.get("close", b.get("close_price", 0.0)) or 0.0) for b in bk])
+        dl = np.array([float(b.get("buy_vol", 0.0) or 0.0) - float(b.get("sell_vol", 0.0) or 0.0) for b in bk])
+        vol = np.array([float(b.get("curr_vol", 0.0) or 0.0) for b in bk])
+        ad = np.abs(dl); ok = (vol > 0) & (ad >= _erm.MIN_DELTA_FRAC * vol) & (o > 0)
+        body_t = np.abs(c - o) / _erm.TICK
+        ratio = np.where(ok, body_t / np.maximum(ad, 1e-9), np.nan)
+        W = _erm.WIN                                          # baseline = previous W bars (EXCLUSIVE of the bar itself)
+        prev = np.concatenate([np.full(W, np.nan), ratio[:-1]]) if n > 1 else np.full(W + n - 1, np.nan)
+        win = np.lib.stride_tricks.sliding_window_view(prev, W)[:n]
+        srt = np.sort(win, axis=1); valid = (~np.isnan(win)).sum(1)   # NaN sorts LAST -> first `valid` entries are real
+        ri = np.arange(n)
+        lo_i = np.minimum(np.maximum((valid - 1) // 2, 0), W - 1)      # odd v: both == middle; even v: the two middles
+        hi_i = np.minimum(np.maximum(valid // 2, 0), W - 1)
+        med = 0.5 * (srt[ri, lo_i] + srt[ri, hi_i])
+        has = valid >= _erm.MIN_OBS
+        side = np.sign(dl); result_t = side * (c - o) / _erm.TICK
+        expected = med * ad
+        with np.errstate(all="ignore"):
+            eff = np.where(has & (expected > 0), result_t / np.where(expected > 0, expected, 1.0), np.nan)
+        return ok & has & np.isfinite(eff) & (eff <= _erm.ABSORBED_MAX)
+
     def _fit_vol_y(self, vals: list, off: int = 0) -> None:
         """Fit the Volume pane's Y to the bars ACTUALLY VISIBLE in X (explicit, like the CVD/scanner fits). `vals` is
         the render SLICE whose index 0 is global bar `off` (the render culls to the visible window). Bars draw up from
@@ -15136,7 +15187,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 def _mk(rgb, a):
                     return {"b": pg.mkBrush(*rgb, a), "p": pg.mkPen(*rgb, min(255, a + 40))}
                 self._vol_qt = {("g", 2): _mk(_CVD_GREEN, 255), ("g", 1): _mk(_CVD_GREEN, 120), ("g", 0): _mk(_CVD_GREEN, 55),
-                                ("r", 2): _mk(_CVD_RED, 255), ("r", 1): _mk(_CVD_RED, 120), ("r", 0): _mk(_CVD_RED, 55)}
+                                ("r", 2): _mk(_CVD_RED, 255), ("r", 1): _mk(_CVD_RED, 120), ("r", 0): _mk(_CVD_RED, 55),
+                                "hollow": pg.mkBrush(0, 0, 0, 0),                       # ABSORBED delta bars: outline only
+                                "hg": pg.mkPen(*_CVD_GREEN, 255, width=1.4), "hr": pg.mkPen(*_CVD_RED, 255, width=1.4)}
             _q = self._vol_qt; _vm = self._vol_mode
             # Bars are drawn with the terminal's own BucketCandleItem (a bar == a candle with open=low=0, high=close=
             # height): plain QPicture rects + built-in viewport cull, the same fast path as the price/CVD panes.
@@ -15199,12 +15252,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _p80 = _qline(VOL_PCT_STRONG); _p20 = _qline(VOL_PCT_WEAK)
             else:
                 _tier = np.full(len(_vv), 2)
+            # 2b) HOLLOW low-efficiency delta bars (user 2026-08-23): a big delta that bought little price = ABSORBED ->
+            #     outline only, so "strong delta, weak result" is visible at a glance. Same definition as the stats-box
+            #     Eff/Res row (app.effort_result), gated by the same st_effres toggle. Delta mode only.
+            _hol = self._vol_hollow_mask(_bk) if (_vm == "delta" and self._vol_effres_on()) else None
             # 3) draw ONLY the visible part of the slice
             _o = _w0 - _s0                                        # first VISIBLE bar within the slice
             _xv = x[_w0:_w1]; _hv = _vals[_o:]; _tv = _tier[_o:]; _uv = _ups[_o:]
             _col = ["g" if _u else "r" for _u in _uv]
-            _brs = [_q[(c, int(t))]["b"] for c, t in zip(_col, _tv)]
-            _pns = [_q[(c, int(t))]["p"] for c, t in zip(_col, _tv)]
+            if _hol is None:
+                _brs = [_q[(c, int(t))]["b"] for c, t in zip(_col, _tv)]
+                _pns = [_q[(c, int(t))]["p"] for c, t in zip(_col, _tv)]
+            else:
+                _hv_ = _hol[_o:]
+                _brs = [_q["hollow"] if hh else _q[(c, int(t))]["b"] for c, t, hh in zip(_col, _tv, _hv_)]
+                _pns = [_q["h" + c] if hh else _q[(c, int(t))]["p"] for c, t, hh in zip(_col, _tv, _hv_)]
             _z = [0.0] * len(_xv)                                 # bars rise from the 0 baseline: open = low = 0
             if _vm == "buysell":
                 # NESTED buy/sell (user 2026-08-22): larger side full-width behind, smaller side INSIDE it on top
