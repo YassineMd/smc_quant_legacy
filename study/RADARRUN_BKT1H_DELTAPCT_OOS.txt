@@ -1,0 +1,15 @@
+DAEMON 1h buckets: 2424  (2026-06-21 .. 2026-08-17)  — OUT-OF-SAMPLE vs the recon-based candidate
+union badges: 302  (69s)
+DELTA>=P80 filtered: 71 (24%)
+
+daemon 1m buckets for resolution: 117736  (2026-06-28 .. 2026-08-17)
+
+== OOS results (daemon-1m first-touch, conservative ties, non-overlap) ==
+  RR 1:1    DELTA>=P80 : n=48    W20    L28    win  41.7%  avg -0.221%  R -0.283  DD   6.6%  prop   0.0% | 25 +nan% 26 -0.221%  (unresolved 0)
+  RR 1:1.2  DELTA>=P80 : n=48    W20    L28    win  41.7%  avg -0.148%  R -0.200  DD   5.5%  prop   0.0% | 25 +nan% 26 -0.148%  (unresolved 0)
+  RR 1:1.5  DELTA>=P80 : n=43    W18    L25    win  41.9%  avg -0.030%  R -0.066  DD   3.9%  prop   6.1% | 25 +nan% 26 -0.030%  (unresolved 0)
+  RR 1:2    DELTA>=P80 : n=37    W11    L26    win  29.7%  avg -0.154%  R -0.221  DD   6.5%  prop   1.1% | 25 +nan% 26 -0.154%  (unresolved 0)
+  0.4% net  DELTA>=P80 : n=51    W32    L19    win  62.7%  avg -0.088%  R -0.154  DD   3.8%  prop   0.0% | 25 +nan% 26 -0.088%  (unresolved 0)
+  0.5% net  DELTA>=P80 : n=51    W30    L21    win  58.8%  avg -0.079%  R -0.149  DD   4.5%  prop   0.0% | 25 +nan% 26 -0.079%  (unresolved 0)
+  RR 1:1    ALL control: n=150   W72    L78    win  48.0%  avg -0.160%  R -0.170  DD  11.0%  prop   0.2% | 25 +nan% 26 -0.160%  (unresolved 0)
+  RR 1:1.2  ALL control: n=136   W63    L73    win  46.3%  avg -0.123%  R -0.111  DD   9.8%  prop   2.0% | 25 +nan% 26 -0.123%  (unresolved 0)
