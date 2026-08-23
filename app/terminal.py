@@ -15138,11 +15138,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._vol_qt = {("g", 2): _mk(_CVD_GREEN, 255), ("g", 1): _mk(_CVD_GREEN, 120), ("g", 0): _mk(_CVD_GREEN, 55),
                                 ("r", 2): _mk(_CVD_RED, 255), ("r", 1): _mk(_CVD_RED, 120), ("r", 0): _mk(_CVD_RED, 55)}
             _q = self._vol_qt; _vm = self._vol_mode
+            # Bars are drawn with the terminal's own BucketCandleItem (a bar == a candle with open=low=0, high=close=
+            # height): plain QPicture rects + built-in viewport cull, the same fast path as the price/CVD panes.
+            # pg.BarGraphItem was ~0.5 ms PER BAR (QPainterPath accumulation) -> 5.4 s/frame on a 10k window.
             if self._vol_bar is None:
-                self._vol_bar = pg.BarGraphItem(x=[0], height=[0], width=0.8, y0=0.0)
+                self._vol_bar = BucketCandleItem()
                 self.vol_plot.addItem(self._vol_bar)
             if self._vol_bar2 is None:
-                self._vol_bar2 = pg.BarGraphItem(x=[0], height=[0], width=0.38, y0=0.0)
+                self._vol_bar2 = BucketCandleItem()
                 self.vol_plot.addItem(self._vol_bar2); self._vol_bar2.setVisible(False)
             if self._vol_p80 is None:                         # dashed trailing P80 (strong) / P20 (weak) threshold lines
                 _lp = pg.mkPen(200, 200, 210, 150, width=1, style=QtCore.Qt.DashLine); _lp.setCosmetic(True)
@@ -15186,9 +15189,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _valid = (~np.isnan(_win)).sum(1)
                 _rank = np.where(_valid > 1, (_win < _vv[:, None]).sum(1) / np.maximum(_valid - 1, 1), 0.5)
                 _tier = np.where(_rank >= VOL_PCT_STRONG, 2, np.where(_rank <= VOL_PCT_WEAK, 0, 1))
-                with np.errstate(all="ignore"):
-                    _p80 = np.nanquantile(_win, VOL_PCT_STRONG, axis=1)
-                    _p20 = np.nanquantile(_win, VOL_PCT_WEAK, axis=1)
+                # Threshold lines: sort-based linear-interpolated quantiles (== np.nanquantile to float precision) —
+                # nanquantile itself cost ~190 ms/frame here vs ~1 ms for this (PERF, user 2026-08-23). NaN sorts LAST.
+                _srt = np.sort(_win, axis=1); _ri = np.arange(len(_vv))
+                def _qline(qf):
+                    _pos = qf * (_valid - 1); _lo = np.floor(_pos).astype(int); _hi = np.minimum(_lo + 1, VOL_PCT_WIN - 1)
+                    _fr = _pos - _lo
+                    return _srt[_ri, _lo] * (1.0 - _fr) + _srt[_ri, np.where(_fr > 0, _hi, _lo)] * _fr
+                _p80 = _qline(VOL_PCT_STRONG); _p20 = _qline(VOL_PCT_WEAK)
             else:
                 _tier = np.full(len(_vv), 2)
             # 3) draw ONLY the visible part of the slice
@@ -15197,17 +15205,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _col = ["g" if _u else "r" for _u in _uv]
             _brs = [_q[(c, int(t))]["b"] for c, t in zip(_col, _tv)]
             _pns = [_q[(c, int(t))]["p"] for c, t in zip(_col, _tv)]
+            _z = [0.0] * len(_xv)                                 # bars rise from the 0 baseline: open = low = 0
             if _vm == "buysell":
                 # NESTED buy/sell (user 2026-08-22): larger side full-width behind, smaller side INSIDE it on top
                 _icol = ["r" if _u else "g" for _u in _uv]       # inner bar = the opposite side
-                self._vol_bar.setOpts(x=_xv, height=_hv, width=0.8, y0=0.0, brushes=_brs, pens=_pns)
-                self._vol_bar2.setOpts(x=_xv, height=[min(a, b) for a, b in zip(_bv[_o:], _sv[_o:])], width=0.44, y0=0.0,
-                                       brushes=[_q[(c, int(t))]["b"] for c, t in zip(_icol, _tv)],
-                                       pens=[_q[(c, int(t))]["p"] for c, t in zip(_icol, _tv)])
+                _iv = [min(a, b) for a, b in zip(_bv[_o:], _sv[_o:])]
+                self._vol_bar.update_data(_xv, _z, _hv, _z, _hv, _brs, _pns, 0.8, vx0, vx1)
+                self._vol_bar2.update_data(_xv, _z, _iv, _z, _iv,
+                                           [_q[(c, int(t))]["b"] for c, t in zip(_icol, _tv)],
+                                           [_q[(c, int(t))]["p"] for c, t in zip(_icol, _tv)], 0.44, vx0, vx1)
                 self._vol_bar2.setVisible(True)
             else:
                 self._vol_bar2.setVisible(False)
-                self._vol_bar.setOpts(x=_xv, height=_hv, width=0.8, y0=0.0, brushes=_brs, pens=_pns)
+                self._vol_bar.update_data(_xv, _z, _hv, _z, _hv, _brs, _pns, 0.8, vx0, vx1)
             if _p80 is not None:
                 _xa = np.asarray(_xv, dtype=float)
                 self._vol_p80.setData(_xa, _p80[_o:]); self._vol_p20.setData(_xa, _p20[_o:])
