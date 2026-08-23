@@ -1,0 +1,25 @@
+BUCKET 1h — CONFIRMATION of DELTA>=P80 x RR cells | badges 2307
+
+== A. DISJOINT delta-rank bands (bar-level screen), single TP ==
+  RR 1:1:
+    rank [0.0,0.2): n=321   W177   L144   win  55.1%  avg -0.026%  R -0.007  DD   7.2%  prop   7.8% | 25 -0.053% 26 +0.012%
+    rank [0.2,0.5): n=507   W296   L211   win  58.4%  avg +0.076%  R +0.060  DD   7.5%  prop  51.0% | 25 +0.157% 26 -0.039%
+    rank [0.5,0.8): n=646   W332   L314   win  51.4%  avg -0.067%  R -0.068  DD  23.9%  prop   1.9% | 25 -0.110% 26 -0.001%
+    rank [0.8,1.0): n=474   W272   L202   win  57.4%  avg +0.103%  R +0.068  DD   6.0%  prop  54.7% | 25 +0.070% 26 +0.158%
+  RR 1:1.2:
+    rank [0.0,0.2): n=317   W156   L161   win  49.2%  avg -0.066%  R -0.029  DD  10.2%  prop   6.3% | 25 -0.106% 26 -0.011%
+    rank [0.2,0.5): n=484   W250   L234   win  51.7%  avg +0.050%  R +0.026  DD   9.3%  prop  29.2% | 25 +0.104% 26 -0.026%
+    rank [0.5,0.8): n=620   W290   L330   win  46.8%  avg -0.067%  R -0.068  DD  24.0%  prop   3.0% | 25 -0.107% 26 -0.005%
+    rank [0.8,1.0): n=456   W242   L214   win  53.1%  avg +0.106%  R +0.088  DD   5.3%  prop  61.4% | 25 +0.062% 26 +0.182%
+
+== B. CIRCULAR-SHIFT PLACEBO (bar-level), RR 1:1: misaligned delta-rank filter, same selection rule ==
+  REAL filtered avg +0.103%  |  placebo null: mean +0.012%  p50 +0.011%  p95 +0.091%  max +0.130%  |  p(null >= real) = 0.030  (200 shifts)
+
+== C. 1-MINUTE first-touch confirmation (conservative ties), non-overlap on 1m exits ==
+  RR 1:1    DELTA>=P80 : n=476   W274   L202   win  57.6%  avg +0.106%  R +0.072  DD   5.2%  prop  57.4% | 25 +0.073% 26 +0.162%  DD99(MC) 6.4%  med-days 212  (unresolved 0)
+  RR 1:1.2  DELTA>=P80 : n=456   W244   L212   win  53.5%  avg +0.121%  R +0.098  DD   4.3%  prop  66.1% | 25 +0.065% 26 +0.216%  DD99(MC) 6.4%  med-days 184  (unresolved 0)
+  RR 1:1.5  DELTA>=P80 : n=431   W200   L231   win  46.4%  avg +0.082%  R +0.078  DD   5.5%  prop  50.0% | 25 +0.044% 26 +0.150%  DD99(MC) 6.4%  med-days 173  (unresolved 0)
+  RR 1:2    DELTA>=P80 : n=399   W151   L248   win  37.8%  avg +0.053%  R +0.051  DD   7.9%  prop  34.2% | 25 +0.057% 26 +0.046%  DD99(MC) 6.4%  med-days 150  (unresolved 0)
+  0.4% net  DELTA>=P80 : n=542   W422   L120   win  77.9%  avg +0.042%  R +0.021  DD   6.0%  prop  13.4% | 25 +0.070% 26 -0.004%  DD99(MC) 6.4%  med-days 309  (unresolved 0)
+  0.5% net  DELTA>=P80 : n=521   W383   L138   win  73.5%  avg +0.035%  R +0.021  DD   4.9%  prop  15.8% | 25 +0.050% 26 +0.011%  DD99(MC) 6.4%  med-days 300  (unresolved 0)
+  RR 1:1    ALL control: n=1366  W738   L628   win  54.0%  avg +0.002%  R -0.011  DD  15.3%  prop  15.4% | 25 -0.008% 26 +0.021%  (unresolved 0)
