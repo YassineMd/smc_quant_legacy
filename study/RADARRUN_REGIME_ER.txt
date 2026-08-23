@@ -1,0 +1,84 @@
+PRE-REGISTERED: RadarRun x trailing 5-day Kaufman ER | in-era disjoint terciles | 1m first-touch | one taken() sequence
+
+==============================================================================================================
+BUCKET 15m | taken n=8248  (20s)
+    2025      n=5858  ER terciles q=0.019 / 0.044:
+      LO(chop)  n=1953 | RR1:1 win 53.3% avg -0.034% | 0.5%net win 61.6% avg -0.035%
+      MID       n=1952 | RR1:1 win 51.7% avg -0.059% | 0.5%net win 60.5% avg -0.054%
+      HI(trend) n=1953 | RR1:1 win 55.4% avg +0.004% | 0.5%net win 66.6% avg -0.004%
+      HI-LO (RR1:1): +0.039%  <-- trend better
+    2026rec   n=2390  ER terciles q=0.017 / 0.041:
+      LO(chop)  n=797  | RR1:1 win 51.8% avg -0.059% | 0.5%net win 57.6% avg -0.038%
+      MID       n=796  | RR1:1 win 54.6% avg -0.025% | 0.5%net win 60.7% avg -0.016%
+      HI(trend) n=797  | RR1:1 win 56.0% avg +0.007% | 0.5%net win 64.0% avg +0.005%
+      HI-LO (RR1:1): +0.066%  <-- trend better
+==============================================================================================================
+CLOCK 15m | taken n=4071  (12s)
+    2025      n=2898  ER terciles q=0.026 / 0.060:
+      LO(chop)  n=966  | RR1:1 win 52.1% avg -0.044% | 0.5%net win 62.8% avg -0.036%
+      MID       n=966  | RR1:1 win 53.2% avg -0.037% | 0.5%net win 65.4% avg +0.001%
+      HI(trend) n=966  | RR1:1 win 54.0% avg -0.006% | 0.5%net win 65.5% avg -0.009%
+      HI-LO (RR1:1): +0.038%  <-- trend better
+    2026rec   n=1173  ER terciles q=0.024 / 0.056:
+      LO(chop)  n=391  | RR1:1 win 51.2% avg -0.078% | 0.5%net win 59.6% avg -0.055%
+      MID       n=391  | RR1:1 win 49.4% avg -0.079% | 0.5%net win 58.1% avg -0.060%
+      HI(trend) n=391  | RR1:1 win 55.5% avg +0.002% | 0.5%net win 67.0% avg +0.028%
+      HI-LO (RR1:1): +0.081%  <-- trend better
+==============================================================================================================
+BUCKET 30m | taken n=4246  (9s)
+    2025      n=2949  ER terciles q=0.029 / 0.067:
+      LO(chop)  n=983  | RR1:1 win 52.5% avg -0.036% | 0.5%net win 69.5% avg -0.000%
+      MID       n=983  | RR1:1 win 54.7% avg +0.021% | 0.5%net win 70.6% avg +0.006%
+      HI(trend) n=983  | RR1:1 win 53.2% avg -0.002% | 0.5%net win 71.7% avg -0.000%
+      HI-LO (RR1:1): +0.034%  <-- trend better
+    2026rec   n=1297  ER terciles q=0.026 / 0.063:
+      LO(chop)  n=432  | RR1:1 win 55.1% avg +0.005% | 0.5%net win 68.8% avg +0.028%
+      MID       n=432  | RR1:1 win 53.5% avg -0.007% | 0.5%net win 64.4% avg -0.037%
+      HI(trend) n=433  | RR1:1 win 57.3% avg +0.048% | 0.5%net win 69.3% avg +0.012%
+      HI-LO (RR1:1): +0.043%  <-- trend better
+==============================================================================================================
+CLOCK 30m | taken n=1424  (8s)
+    2025      n=982  ER terciles q=0.036 / 0.086:
+      LO(chop)  n=327  | RR1:1 win 56.3% avg +0.069% | 0.5%net win 67.9% avg -0.037%
+      MID       n=327  | RR1:1 win 59.3% avg +0.122% | 0.5%net win 71.9% avg +0.051%
+      HI(trend) n=328  | RR1:1 win 54.0% avg -0.039% | 0.5%net win 69.8% avg -0.013%
+      HI-LO (RR1:1): -0.109%  <-- CHOP better (inverts)
+    2026rec   n=442  ER terciles q=0.035 / 0.087:
+      LO(chop)  n=147  | RR1:1 win 56.5% avg +0.017% | 0.5%net win 66.7% avg -0.013%
+      MID       n=147  | RR1:1 win 43.5% avg -0.213% | 0.5%net win 60.5% avg -0.106%
+      HI(trend) n=148  | RR1:1 win 56.1% avg +0.067% | 0.5%net win 70.9% avg +0.075%
+      HI-LO (RR1:1): +0.050%  <-- trend better
+==============================================================================================================
+BUCKET 1h | taken n=1772  (6s)
+    2025      n=1139  ER terciles q=0.037 / 0.089:
+      LO(chop)  n=380  | RR1:1 win 55.0% avg -0.018% | 0.5%net win 74.7% avg +0.089%
+      MID       n=379  | RR1:1 win 58.0% avg +0.064% | 0.5%net win 72.6% avg +0.013%
+      HI(trend) n=380  | RR1:1 win 53.2% avg +0.049% | 0.5%net win 71.1% avg +0.002%
+      HI-LO (RR1:1): +0.067%  <-- trend better
+    2026rec   n=633  ER terciles q=0.034 / 0.082:
+      LO(chop)  n=211  | RR1:1 win 56.9% avg +0.075% | 0.5%net win 66.8% avg +0.025%
+      MID       n=211  | RR1:1 win 48.3% avg -0.105% | 0.5%net win 61.6% avg -0.059%
+      HI(trend) n=211  | RR1:1 win 56.4% avg +0.040% | 0.5%net win 70.1% avg +0.039%
+      HI-LO (RR1:1): -0.035%  <-- CHOP better (inverts)
+==============================================================================================================
+DAEMON 30m era (true OOS window)
+    daemon    n=304  ER terciles q=0.027 / 0.049:
+      LO(chop)  n=101  | RR1:1 win 57.4% avg +0.030% | 0.5%net win 66.3% avg +0.043%
+      MID       n=101  | RR1:1 win 54.5% avg -0.050% | 0.5%net win 65.3% avg +0.016%
+      HI(trend) n=102  | RR1:1 win 49.0% avg -0.115% | 0.5%net win 55.9% avg -0.107%
+      HI-LO (RR1:1): -0.145%  <-- CHOP better (inverts)
+
+==============================================================================================================
+PRE-REGISTERED VERDICT — HI-LO (RR1:1) per combo x era (claim holds only if positive across eras incl. daemon):
+  bucket  15m  2025     +0.039%
+  bucket  15m  2026rec  +0.066%
+  clock   15m  2025     +0.038%
+  clock   15m  2026rec  +0.081%
+  bucket  30m  2025     +0.034%
+  bucket  30m  2026rec  +0.043%
+  clock   30m  2025     -0.109%
+  clock   30m  2026rec  +0.050%
+  bucket  1h   2025     +0.067%
+  bucket  1h   2026rec  -0.035%
+  bucket  30m  daemon   -0.145%
+  positive 8 / 11
