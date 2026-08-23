@@ -1,0 +1,120 @@
+Eff/Res as a Radar Runner winner/loser separator | WIN = 0.5%% net TP before candle SL | eff signed toward the BREAKOUT side
+
+========================================================================================================================
+BUCKET 15m | n=8087 | base win 61.6% | 2025 n=5734 win 62.4% avg -0.036% | 2026 n=2353 win 59.6% avg -0.028%  (15s)
+  AUC eff  2025 0.503  2026 0.513  
+  AUC ret  2025 0.521  2026 0.538  
+  bands (eff toward the break):
+    ABSORBED  2025 n=202  win 61.4% avg +0.044% | 2026 n=84   win 47.6% avg -0.089%
+    normal    2025 n=2543 win 62.1% avg -0.034% | 2026 n=969  win 59.8% avg -0.013%
+    EASY      2025 n=2989 win 62.8% avg -0.044% | 2026 n=1300 win 60.2% avg -0.036%
+    n/a       2025 n=0 | 2026 n=0
+  size-STRATIFIED (sld%% tercile x eff band), pooled years — win%% (n):
+    sld tercile ABSORBED             normal               EASY                
+    LO          54.7% (n225)         53.7% (n1269)        53.6% (n1202)      
+    MID         65.0% (n40)          59.8% (n1199)        60.8% (n1456)      
+    HI          71.4% (n21)          72.7% (n1044)        69.3% (n1631)      
+  as a FILTER (vs ALL):
+    ALL            2025 n=5734 win 62.4% avg -0.036% | 2026 n=2353 win 59.6% avg -0.028%
+    drop ABSORBED  2025 n=5532 win 62.5% avg -0.039% | 2026 n=2269 win 60.0% avg -0.026%
+    EASY only      2025 n=2989 win 62.8% avg -0.044% | 2026 n=1300 win 60.2% avg -0.036%
+    eff>=1 only    2025 n=4136 win 62.9% avg -0.043% | 2026 n=1712 win 59.9% avg -0.038%
+========================================================================================================================
+CLOCK 15m | n=4028 | base win 63.5% | 2025 n=2870 win 64.3% avg -0.018% | 2026 n=1158 win 61.7% avg -0.028%  (9s)
+  AUC eff  2025 0.490  2026 0.503  
+  AUC ret  2025 0.543  2026 0.538  <-- CONSISTENT
+  bands (eff toward the break):
+    ABSORBED  2025 n=131  win 52.7% avg -0.097% | 2026 n=33   win 66.7% avg +0.053%
+    normal    2025 n=1437 win 67.2% avg +0.022% | 2026 n=568  win 60.9% avg -0.032%
+    EASY      2025 n=1302 win 62.2% avg -0.056% | 2026 n=557  win 62.1% avg -0.028%
+    n/a       2025 n=0 | 2026 n=0
+  size-STRATIFIED (sld%% tercile x eff band), pooled years — win%% (n):
+    sld tercile ABSORBED             normal               EASY                
+    LO          50.5% (n103)         53.3% (n647)         51.8% (n593)       
+    MID         64.3% (n42)          65.2% (n664)         62.3% (n636)       
+    HI          63.2% (n19)          76.9% (n694)         71.9% (n630)       
+  as a FILTER (vs ALL):
+    ALL            2025 n=2870 win 64.3% avg -0.018% | 2026 n=1158 win 61.7% avg -0.028%
+    drop ABSORBED  2025 n=2739 win 64.8% avg -0.015% | 2026 n=1125 win 61.5% avg -0.030%
+    EASY only      2025 n=1302 win 62.2% avg -0.056% | 2026 n=557  win 62.1% avg -0.028%
+    eff>=1 only    2025 n=1866 win 64.5% avg -0.026% | 2026 n=783  win 63.2% avg -0.013%
+========================================================================================================================
+BUCKET 30m | n=4187 | base win 69.3% | 2025 n=2913 win 70.4% avg -0.001% | 2026 n=1274 win 66.8% avg -0.006%  (9s)
+  AUC eff  2025 0.512  2026 0.529  
+  AUC ret  2025 0.533  2026 0.547  <-- CONSISTENT
+  bands (eff toward the break):
+    ABSORBED  2025 n=82   win 59.8% avg -0.032% | 2026 n=39   win 53.8% avg -0.080%
+    normal    2025 n=1378 win 70.6% avg +0.016% | 2026 n=568  win 66.2% avg -0.000%
+    EASY      2025 n=1453 win 70.8% avg -0.015% | 2026 n=667  win 68.1% avg -0.007%
+    n/a       2025 n=0 | 2026 n=0
+  size-STRATIFIED (sld%% tercile x eff band), pooled years — win%% (n):
+    sld tercile ABSORBED             normal               EASY                
+    LO          54.8% (n93)          61.3% (n737)         59.4% (n566)       
+    MID         56.2% (n16)          71.9% (n672)         70.0% (n707)       
+    HI            -- (n12)           77.1% (n537)         77.0% (n847)       
+  as a FILTER (vs ALL):
+    ALL            2025 n=2913 win 70.4% avg -0.001% | 2026 n=1274 win 66.8% avg -0.006%
+    drop ABSORBED  2025 n=2831 win 70.7% avg -0.000% | 2026 n=1235 win 67.2% avg -0.004%
+    EASY only      2025 n=1453 win 70.8% avg -0.015% | 2026 n=667  win 68.1% avg -0.007%
+    eff>=1 only    2025 n=2061 win 71.5% avg +0.001% | 2026 n=932  win 67.6% avg -0.010%
+========================================================================================================================
+CLOCK 30m | n=1415 | base win 68.6% | 2025 n=975  win 69.7% avg -0.001% | 2026 n=440  win 65.9% avg -0.018%  (6s)
+  AUC eff  2025 0.496  2026 0.503  
+  AUC ret  2025 0.519  2026 0.549  
+  bands (eff toward the break):
+    ABSORBED  2025 n=29   win 65.5% avg +0.026% | 2026 n=14   win 57.1% avg -0.039%
+    normal    2025 n=475  win 70.5% avg +0.004% | 2026 n=198  win 67.2% avg +0.011%
+    EASY      2025 n=471  win 69.2% avg -0.008% | 2026 n=228  win 65.4% avg -0.042%
+    n/a       2025 n=0 | 2026 n=0
+  size-STRATIFIED (sld%% tercile x eff band), pooled years — win%% (n):
+    sld tercile ABSORBED             normal               EASY                
+    LO          57.1% (n28)          58.2% (n220)         56.2% (n224)       
+    MID           -- (n9)            74.1% (n239)         66.8% (n223)       
+    HI            -- (n6)            76.2% (n214)         79.4% (n252)       
+  as a FILTER (vs ALL):
+    ALL            2025 n=975  win 69.7% avg -0.001% | 2026 n=440  win 65.9% avg -0.018%
+    drop ABSORBED  2025 n=946  win 69.9% avg -0.002% | 2026 n=426  win 66.2% avg -0.017%
+    EASY only      2025 n=471  win 69.2% avg -0.008% | 2026 n=228  win 65.4% avg -0.042%
+    eff>=1 only    2025 n=686  win 70.1% avg -0.005% | 2026 n=323  win 68.4% avg +0.015%
+========================================================================================================================
+BUCKET 1h | n=1756 | base win 70.0% | 2025 n=1133 win 72.4% avg +0.027% | 2026 n=623  win 65.8% avg -0.004%  (6s)
+  AUC eff  2025 0.504  2026 0.501  
+  AUC ret  2025 0.530  2026 0.568  
+  bands (eff toward the break):
+    ABSORBED  2025 n=27   win 70.4% avg +0.070% | 2026 n=15   win 80.0% avg +0.209%
+    normal    2025 n=543  win 71.8% avg +0.039% | 2026 n=288  win 63.2% avg -0.030%
+    EASY      2025 n=563  win 73.0% avg +0.013% | 2026 n=320  win 67.5% avg +0.010%
+    n/a       2025 n=0 | 2026 n=0
+  size-STRATIFIED (sld%% tercile x eff band), pooled years — win%% (n):
+    sld tercile ABSORBED             normal               EASY                
+    LO          75.0% (n32)          59.6% (n312)         61.4% (n241)       
+    MID           -- (n7)            66.7% (n291)         66.2% (n287)       
+    HI            -- (n3)            84.2% (n228)         81.4% (n355)       
+  as a FILTER (vs ALL):
+    ALL            2025 n=1133 win 72.4% avg +0.027% | 2026 n=623  win 65.8% avg -0.004%
+    drop ABSORBED  2025 n=1106 win 72.4% avg +0.026% | 2026 n=608  win 65.5% avg -0.009%
+    EASY only      2025 n=563  win 73.0% avg +0.013% | 2026 n=320  win 67.5% avg +0.010%
+    eff>=1 only    2025 n=787  win 72.8% avg +0.018% | 2026 n=450  win 66.4% avg +0.001%
+========================================================================================================================
+CLOCK 1h | n=210 | base win 60.5% | 2025 n=157  win 60.5% avg -0.243% | 2026 n=53   win 60.4% avg -0.029%  (4s)
+  AUC eff  2025 0.524  2026 0.537  
+  AUC ret  2025 0.527  2026 0.783  
+  bands (eff toward the break):
+    ABSORBED  2025 n=7    win 57.1% avg -0.028% | 2026 n=2    win  0.0% avg -0.741%
+    normal    2025 n=81   win 58.0% avg -0.311% | 2026 n=23   win 60.9% avg -0.024%
+    EASY      2025 n=69   win 63.8% avg -0.185% | 2026 n=28   win 64.3% avg +0.017%
+    n/a       2025 n=0 | 2026 n=0
+  size-STRATIFIED (sld%% tercile x eff band), pooled years — win%% (n):
+    sld tercile ABSORBED             normal               EASY                
+    LO            -- (n5)            48.5% (n33)          59.4% (n32)        
+    MID           -- (n3)            71.4% (n35)          56.2% (n32)        
+    HI            -- (n1)            55.6% (n36)          75.8% (n33)        
+  as a FILTER (vs ALL):
+    ALL            2025 n=157  win 60.5% avg -0.243% | 2026 n=53   win 60.4% avg -0.029%
+    drop ABSORBED  2025 n=150  win 60.7% avg -0.253% | 2026 n=51   win 62.7% avg -0.001%
+    EASY only      2025 n=69   win 63.8% avg -0.185% | 2026 n=28   win 64.3% avg +0.017%
+    eff>=1 only    2025 n=112  win 61.6% avg -0.247% | 2026 n=38   win 65.8% avg +0.037%
+
+========================================================================================================================
+CROSS-COMBO TALLY (consistent both years):
+  ret  2/6  clock 15m(+)  bucket 30m(+)
