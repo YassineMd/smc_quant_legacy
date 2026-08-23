@@ -12727,9 +12727,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _cycle_bucket_bubbles(self) -> None:
         """'b' — 4-stage cycle for the Mode-10 Candle Bubbles:
-        OFF -> ALL bubbles -> ALL bubbles + VOLUME value -> ONLY the CRAZY bubbles + value -> OFF.
+        OFF -> ALL bubbles -> ALL bubbles + VOLUME value -> BIG + CRAZY bubbles only (+ value) -> OFF.
+        (Three tiers exist: normal / big / crazy — the filtered stage drops only the NORMAL tier; user 2026-08-23
+        wanted the medium ★ BIG tier visible there too, not just the crazy outliers.)
         Stages 1<->2<->3 keep the layer ON and just flip the vol/crazy-only flags (a repaint, no checkbox re-emit).
-        The volume value respects the zoom-legibility floor for ALL bubbles, but is always shown in crazy-only."""
+        The volume value respects the zoom-legibility floor for ALL bubbles, but is always shown in the filtered stage."""
         cb = self.menu.layer_checks.get("m10_bubbles")
         on = cb.isChecked() if cb is not None else False
         if not on:                              # stage 1: all bubbles, no value
@@ -12739,7 +12741,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif not self._bub_vol:                 # stage 2: all bubbles + value
             self._bub_vol = True; self._bub_crazy_only = False
             self._last_scanner_sig = None; self._draw_scanner()   # flags changed but checkbox stays on -> force repaint
-        elif not self._bub_crazy_only:          # stage 3: ONLY the crazy bubbles + value
+        elif not self._bub_crazy_only:          # stage 3: BIG + CRAZY bubbles only (+ value) — normal tier hidden
             self._bub_crazy_only = True
             self._last_scanner_sig = None; self._draw_scanner()
         else:                                   # stage 4: off

@@ -203,7 +203,7 @@ class BucketFootprintItem(pg.GraphicsObject):
                                            _FP_NEON_SELL if sell_imb else None))
                     elif show_bub_layer:            # cap-overflow level falls back to a bubble (only if bubbles on)
                         _ot = _tier(i, tot)
-                        if not (crazy_only and _ot < 2):    # crazy-only stage: only crazy overflow bubbles
+                        if not (crazy_only and _ot < 1):    # 'b' stage 3: BIG + CRAZY overflow bubbles (user 2026-08-23: medium tier too)
                             _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, tier=_ot)
         elif show_bubbles:
             # TOP-3 levels by TOTAL volume (buy+sell) per bucket -- the significant nodes only. With the volume-label
@@ -221,7 +221,7 @@ class BucketFootprintItem(pg.GraphicsObject):
                     if tot <= 0:
                         continue
                     _t = _tier(_i, tot)
-                    if crazy_only and _t < 2:             # stage 3: hide every non-crazy bubble
+                    if crazy_only and _t < 1:             # stage 3: hide only the NORMAL tier — BIG (★) + CRAZY kept (user 2026-08-23)
                         continue
                     lo_all = price if lo_all is None else min(lo_all, price)
                     hi_all = price if hi_all is None else max(hi_all, price)
