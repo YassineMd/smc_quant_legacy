@@ -1,0 +1,144 @@
+Eff/Res x DELTA>=P80 on Radar Runner | WIN = 0.5%% net TP before candle SL | eff toward the break
+
+========================================================================================================================
+BUCKET 15m | all n=8087 win 61.6% | STRONG-delta n=1978 (24%) win 63.8%  (14s)
+  (1) AUC(eff) INSIDE strong-delta: 2025 0.529  2026 0.531  
+      eff bands inside strong-delta:
+        ABSORBED  2025 n=87   win 60.9% tp.5 +0.019% rr1 +0.049% | 2026 n=39   win 41.0% tp.5 -0.189% rr1 -0.174%
+        normal    2025 n=1125 win 64.4% tp.5 -0.036% rr1 -0.025% | 2026 n=434  win 61.8% tp.5 -0.017% rr1 -0.049%
+        EASY      2025 n=194  win 70.1% tp.5 -0.001% rr1 +0.052% | 2026 n=99   win 65.7% tp.5 -0.028% rr1 -0.106%
+  (2) delta-band x eff-band grid, pooled — win%% (n):
+      delta \ eff  ABSORBED           normal             EASY              
+      weak<P20        -- (n1)          54.8% (n42)        61.4% (n1299)    
+      mid           59.7% (n159)       59.8% (n1911)      61.6% (n2697)    
+      STRONG>=P80   54.8% (n126)       63.6% (n1559)      68.6% (n293)     
+  (3) FILTERS vs ALL:
+      ALL              2025 n=5734 win 62.4% tp.5 -0.036% rr1 -0.035% | 2026 n=2353 win 59.6% tp.5 -0.028% rr1 -0.043%
+      DELTA>=P80       2025 n=1406 win 64.9% tp.5 -0.028% rr1 -0.009% | 2026 n=572  win 61.0% tp.5 -0.030% rr1 -0.068%
+      D>=P80 & eff>=1  2025 n=595  win 67.4% tp.5 -0.031% rr1 -0.003% | 2026 n=245  win 60.0% tp.5 -0.082% rr1 -0.115%
+      D>=P80 & EASY    2025 n=194  win 70.1% tp.5 -0.001% rr1 +0.052% | 2026 n=99   win 65.7% tp.5 -0.028% rr1 -0.106%
+      D>=P80 & !ABS    2025 n=1319 win 65.2% tp.5 -0.031% rr1 -0.013% | 2026 n=533  win 62.5% tp.5 -0.019% rr1 -0.060%
+      D>=P80 & ABS     2025 n=87   win 60.9% tp.5 +0.019% rr1 +0.049% | 2026 n=39   win 41.0% tp.5 -0.189% rr1 -0.174%
+  (4) size-stratified INSIDE strong-delta (sld tercile x eff band), pooled — win%% (n):
+      LO            53.4% (n103)       53.7% (n521)       57.1% (n35)      
+      MID             -- (n13)         64.2% (n565)       55.6% (n81)      
+      HI              -- (n10)         73.8% (n473)       76.8% (n177)     
+========================================================================================================================
+CLOCK 15m | all n=4025 win 63.5% | STRONG-delta n=1335 (33%) win 68.0%  (10s)
+  (1) AUC(eff) INSIDE strong-delta: 2025 0.556  2026 0.589  <-- CONSISTENT
+      eff bands inside strong-delta:
+        ABSORBED  2025 n=84   win 53.6% tp.5 -0.118% rr1 -0.126% | 2026 n=24   win 58.3% tp.5 -0.055% rr1 -0.233%
+        normal    2025 n=748  win 71.7% tp.5 +0.043% rr1 +0.039% | 2026 n=300  win 63.7% tp.5 -0.038% rr1 -0.125%
+        EASY      2025 n=109  win 63.3% tp.5 -0.176% rr1 -0.304% | 2026 n=70   win 75.7% tp.5 +0.082% rr1 +0.210%
+  (2) delta-band x eff-band grid, pooled — win%% (n):
+      delta \ eff  ABSORBED           normal             EASY              
+      weak<P20        -- (n1)          47.1% (n17)        58.1% (n511)     
+      mid           56.4% (n55)        61.3% (n938)       63.1% (n1168)    
+      STRONG>=P80   54.6% (n108)       69.4% (n1048)      68.2% (n179)     
+  (3) FILTERS vs ALL:
+      ALL              2025 n=2867 win 64.3% tp.5 -0.019% rr1 -0.033% | 2026 n=1158 win 61.7% tp.5 -0.028% rr1 -0.052%
+      DELTA>=P80       2025 n=941  win 69.1% tp.5 +0.003% rr1 -0.015% | 2026 n=394  win 65.5% tp.5 -0.018% rr1 -0.072%
+      D>=P80 & eff>=1  2025 n=327  win 71.9% tp.5 -0.011% rr1 -0.028% | 2026 n=168  win 74.4% tp.5 +0.084% rr1 +0.027%
+      D>=P80 & EASY    2025 n=109  win 63.3% tp.5 -0.176% rr1 -0.304% | 2026 n=70   win 75.7% tp.5 +0.082% rr1 +0.210%
+      D>=P80 & !ABS    2025 n=857  win 70.6% tp.5 +0.015% rr1 -0.004% | 2026 n=370  win 65.9% tp.5 -0.015% rr1 -0.062%
+      D>=P80 & ABS     2025 n=84   win 53.6% tp.5 -0.118% rr1 -0.126% | 2026 n=24   win 58.3% tp.5 -0.055% rr1 -0.233%
+  (4) size-stratified INSIDE strong-delta (sld tercile x eff band), pooled — win%% (n):
+      LO            55.4% (n83)        57.2% (n346)       37.5% (n16)      
+      MID           44.4% (n18)        70.4% (n382)       60.0% (n45)      
+      HI              -- (n7)          81.2% (n320)       75.4% (n118)     
+========================================================================================================================
+BUCKET 30m | all n=4187 win 69.3% | STRONG-delta n=1067 (25%) win 71.6%  (8s)
+  (1) AUC(eff) INSIDE strong-delta: 2025 0.555  2026 0.572  <-- CONSISTENT
+      eff bands inside strong-delta:
+        ABSORBED  2025 n=26   win 61.5% tp.5 -0.028% rr1 -0.002% | 2026 n=14   win 57.1% tp.5 -0.104% rr1 -0.256%
+        normal    2025 n=626  win 71.9% tp.5 -0.003% rr1 -0.016% | 2026 n=257  win 69.6% tp.5 +0.012% rr1 -0.048%
+        EASY      2025 n=93   win 75.3% tp.5 -0.046% rr1 -0.047% | 2026 n=51   win 80.4% tp.5 +0.116% rr1 +0.052%
+  (2) delta-band x eff-band grid, pooled — win%% (n):
+      delta \ eff  ABSORBED           normal             EASY              
+      weak<P20        -- (n3)          51.9% (n27)        69.3% (n610)     
+      mid           56.4% (n78)        68.1% (n1036)      69.5% (n1366)    
+      STRONG>=P80   60.0% (n40)        71.2% (n883)       77.1% (n144)     
+  (3) FILTERS vs ALL:
+      ALL              2025 n=2913 win 70.4% tp.5 -0.001% rr1 -0.009% | 2026 n=1274 win 66.8% tp.5 -0.006% rr1 -0.000%
+      DELTA>=P80       2025 n=745  win 71.9% tp.5 -0.009% rr1 -0.020% | 2026 n=322  win 70.8% tp.5 +0.023% rr1 -0.041%
+      D>=P80 & eff>=1  2025 n=313  win 75.4% tp.5 -0.001% rr1 +0.003% | 2026 n=144  win 72.9% tp.5 +0.009% rr1 -0.049%
+      D>=P80 & EASY    2025 n=93   win 75.3% tp.5 -0.046% rr1 -0.047% | 2026 n=51   win 80.4% tp.5 +0.116% rr1 +0.052%
+      D>=P80 & !ABS    2025 n=719  win 72.3% tp.5 -0.008% rr1 -0.020% | 2026 n=308  win 71.4% tp.5 +0.029% rr1 -0.031%
+      D>=P80 & ABS     2025 n=26   win 61.5% tp.5 -0.028% rr1 -0.002% | 2026 n=14   win 57.1% tp.5 -0.104% rr1 -0.256%
+  (4) size-stratified INSIDE strong-delta (sld tercile x eff band), pooled — win%% (n):
+      LO            53.6% (n28)        66.4% (n321)         -- (n7)        
+      MID             -- (n8)          70.1% (n311)       83.3% (n36)      
+      HI              -- (n4)          78.9% (n251)       77.2% (n101)     
+========================================================================================================================
+CLOCK 30m | all n=1414 win 68.6% | STRONG-delta n=442 (31%) win 74.2%  (6s)
+  (1) AUC(eff) INSIDE strong-delta: 2025 0.501  2026 0.612  
+      eff bands inside strong-delta:
+        ABSORBED  2025 n=13   win 61.5% tp.5 -0.096% rr1 +0.104% | 2026 n=9    win 66.7% tp.5 +0.028% rr1 -0.037%
+        normal    2025 n=241  win 75.5% tp.5 +0.009% rr1 +0.147% | 2026 n=104  win 73.1% tp.5 +0.063% rr1 -0.109%
+        EASY      2025 n=43   win 72.1% tp.5 -0.068% rr1 +0.053% | 2026 n=32   win 78.1% tp.5 -0.118% rr1 +0.012%
+  (2) delta-band x eff-band grid, pooled — win%% (n):
+      delta \ eff  ABSORBED           normal             EASY              
+      weak<P20        -- (n0)            -- (n10)         57.8% (n166)     
+      mid           61.9% (n21)        65.0% (n317)       70.5% (n458)     
+      STRONG>=P80   63.6% (n22)        74.8% (n345)       74.7% (n75)      
+  (3) FILTERS vs ALL:
+      ALL              2025 n=974  win 69.8% tp.5 -0.000% rr1 +0.051% | 2026 n=440  win 65.9% tp.5 -0.018% rr1 -0.040%
+      DELTA>=P80       2025 n=297  win 74.4% tp.5 -0.006% rr1 +0.131% | 2026 n=145  win 73.8% tp.5 +0.021% rr1 -0.078%
+      D>=P80 & eff>=1  2025 n=130  win 73.8% tp.5 -0.060% rr1 +0.062% | 2026 n=72   win 83.3% tp.5 +0.110% rr1 -0.038%
+      D>=P80 & EASY    2025 n=43   win 72.1% tp.5 -0.068% rr1 +0.053% | 2026 n=32   win 78.1% tp.5 -0.118% rr1 +0.012%
+      D>=P80 & !ABS    2025 n=284  win 75.0% tp.5 -0.002% rr1 +0.132% | 2026 n=136  win 74.3% tp.5 +0.020% rr1 -0.081%
+      D>=P80 & ABS     2025 n=13   win 61.5% tp.5 -0.096% rr1 +0.104% | 2026 n=9    win 66.7% tp.5 +0.028% rr1 -0.037%
+  (4) size-stratified INSIDE strong-delta (sld tercile x eff band), pooled — win%% (n):
+      LO              -- (n14)         71.8% (n124)         -- (n9)        
+      MID             -- (n6)          78.3% (n120)       61.9% (n21)      
+      HI              -- (n2)          74.3% (n101)       86.7% (n45)      
+========================================================================================================================
+BUCKET 1h | all n=1756 win 70.0% | STRONG-delta n=469 (27%) win 75.5%  (6s)
+  (1) AUC(eff) INSIDE strong-delta: 2025 0.490  2026 0.578  
+      eff bands inside strong-delta:
+        ABSORBED  2025 n=12   win 83.3% tp.5 +0.145% rr1 +0.002% | 2026 n=5    win 40.0% tp.5 -0.314% rr1 -0.107%
+        normal    2025 n=250  win 76.8% tp.5 +0.065% rr1 +0.138% | 2026 n=124  win 72.6% tp.5 +0.041% rr1 +0.111%
+        EASY      2025 n=44   win 77.3% tp.5 -0.027% rr1 -0.153% | 2026 n=34   win 76.5% tp.5 +0.092% rr1 +0.337%
+  (2) delta-band x eff-band grid, pooled — win%% (n):
+      delta \ eff  ABSORBED           normal             EASY              
+      weak<P20        -- (n1)            -- (n9)          64.2% (n240)     
+      mid           75.0% (n24)        63.4% (n448)       73.1% (n565)     
+      STRONG>=P80   70.6% (n17)        75.4% (n374)       76.9% (n78)      
+  (3) FILTERS vs ALL:
+      ALL              2025 n=1133 win 72.4% tp.5 +0.027% rr1 +0.029% | 2026 n=623  win 65.8% tp.5 -0.004% rr1 -0.007%
+      DELTA>=P80       2025 n=306  win 77.1% tp.5 +0.055% rr1 +0.091% | 2026 n=163  win 72.4% tp.5 +0.041% rr1 +0.152%
+      D>=P80 & eff>=1  2025 n=118  win 75.4% tp.5 -0.016% rr1 +0.019% | 2026 n=75   win 77.3% tp.5 +0.099% rr1 +0.340%
+      D>=P80 & EASY    2025 n=44   win 77.3% tp.5 -0.027% rr1 -0.153% | 2026 n=34   win 76.5% tp.5 +0.092% rr1 +0.337%
+      D>=P80 & !ABS    2025 n=294  win 76.9% tp.5 +0.051% rr1 +0.094% | 2026 n=158  win 73.4% tp.5 +0.052% rr1 +0.160%
+      D>=P80 & ABS     2025 n=12   win 83.3% tp.5 +0.145% rr1 +0.002% | 2026 n=5    win 40.0% tp.5 -0.314% rr1 -0.107%
+  (4) size-stratified INSIDE strong-delta (sld tercile x eff band), pooled — win%% (n):
+      LO            73.3% (n15)        65.6% (n131)         -- (n10)       
+      MID             -- (n0)          82.4% (n131)       80.0% (n25)      
+      HI              -- (n2)          78.6% (n112)       86.0% (n43)      
+========================================================================================================================
+CLOCK 1h | all n=210 win 60.5% | STRONG-delta n=61 (29%) win 59.0%  (4s)
+  (1) AUC(eff) INSIDE strong-delta: 2025 0.471  2026 nan  
+      eff bands inside strong-delta:
+        ABSORBED  2025 n=3    win 66.7% tp.5 -0.032% rr1 -0.692% | 2026 n=1    win  0.0% tp.5 -0.936% rr1 -0.936%
+        normal    2025 n=40   win 55.0% tp.5 -0.516% rr1 -0.406% | 2026 n=11   win 72.7% tp.5 +0.101% rr1 -0.103%
+        EASY      2025 n=5    win 60.0% tp.5 -0.471% rr1 +2.465% | 2026 n=1    win 100.0% tp.5 +0.470% rr1 +1.503%
+  (2) delta-band x eff-band grid, pooled — win%% (n):
+      delta \ eff  ABSORBED           normal             EASY              
+      weak<P20        -- (n0)            -- (n0)          48.1% (n27)      
+      mid             -- (n5)          58.5% (n53)        70.3% (n64)      
+      STRONG>=P80     -- (n4)          58.8% (n51)          -- (n6)        
+  (3) FILTERS vs ALL:
+      ALL              2025 n=157  win 60.5% tp.5 -0.243% rr1 -0.161% | 2026 n=53   win 60.4% tp.5 -0.029% rr1 -0.009%
+      DELTA>=P80       2025 n=48   win 56.2% tp.5 -0.481% rr1 -0.125% | 2026 n=13   win 69.2% tp.5 +0.050% rr1 -0.043%
+      D>=P80 & eff>=1  2025 n=27   win 55.6% tp.5 -0.588% rr1 +0.072% | 2026 n=5    win 100.0% tp.5 +0.470% rr1 +0.769%
+      D>=P80 & EASY    2025 n=5    win 60.0% tp.5 -0.471% rr1 +2.465% | 2026 n=1    win 100.0% tp.5 +0.470% rr1 +1.503%
+      D>=P80 & !ABS    2025 n=45   win 55.6% tp.5 -0.511% rr1 -0.087% | 2026 n=12   win 75.0% tp.5 +0.132% rr1 +0.031%
+      D>=P80 & ABS     2025 n=3    win 66.7% tp.5 -0.032% rr1 -0.692% | 2026 n=1    win  0.0% tp.5 -0.936% rr1 -0.936%
+  (4) size-stratified INSIDE strong-delta (sld tercile x eff band), pooled — win%% (n):
+      LO              -- (n3)          58.8% (n17)          -- (n0)        
+      MID             -- (n0)          66.7% (n18)          -- (n2)        
+      HI              -- (n1)          50.0% (n16)          -- (n4)        
+
+========================================================================================================================
+CROSS-COMBO TALLY (AUC(eff) inside strong-delta, consistent both years):
+  eff|strong 2/6  clock 15m(+)  bucket 30m(+)
