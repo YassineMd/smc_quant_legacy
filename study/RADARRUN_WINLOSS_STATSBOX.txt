@@ -1,0 +1,277 @@
+RADAR RUNNER winner/loser autopsy | WIN = reaches 0.5%% net TP before candle SL | stats-box features at breakout bar, signed by side
+
+======================================================================================================================
+BUCKET 15m | taken n=8087 (EOD dropped 0) | win(0.5% TP) 61.6% | 2025 n=5734 win 62.4% | 2026 n=2353 win 59.6%  (29s)
+  feature (signed by side)     AUC25   AUC26  consistent?
+  sld%                         0.592   0.594  <-- CONSISTENT
+  st_movmag mov_signed         0.587   0.584  <-- CONSISTENT
+  rng_pct(z)                   0.586   0.580  <-- CONSISTENT
+  rng%                         0.586   0.580  <-- CONSISTENT
+  st_absorb absorpR            0.481   0.461  
+  st_strength str_zdiff        0.524   0.533  
+  st_ohlc   body               0.523   0.530  
+  body                         0.523   0.530  
+  st_reward rew_share          0.521   0.529  
+  wick_against                 0.482   0.477  
+  close_pos                    0.518   0.522  
+  side_long                    0.483   0.484  
+  st_ease   ease_imb           0.509   0.525  
+  st_openpos net_open%         0.484   0.486  
+    sld% terciles (q=0.640 / 0.853):
+       2025: LO 54%/-0.040%(n1614)   MID 61%/-0.042%(n1973)   HI 70%/-0.029%(n2147)
+       2026: LO 54%/-0.031%(n1082)   MID 59%/-0.060%(n722)   HI 72%/+0.017%(n549)
+    st_movmag mov_signed terciles (q=12.545 / 32.196):
+       2025: LO 54%/-0.039%(n1641)   MID 61%/-0.039%(n1967)   HI 70%/-0.032%(n2126)
+       2026: LO 55%/-0.019%(n1055)   MID 58%/-0.071%(n728)   HI 71%/+0.008%(n570)
+    rng_pct(z) terciles (q=0.431 / 0.659):
+       2025: LO 54%/-0.046%(n1643)   MID 61%/-0.043%(n1980)   HI 70%/-0.023%(n2111)
+       2026: LO 54%/-0.034%(n1053)   MID 59%/-0.055%(n715)   HI 71%/+0.015%(n585)
+    rng% terciles (q=0.431 / 0.659):
+       2025: LO 54%/-0.046%(n1643)   MID 61%/-0.043%(n1980)   HI 70%/-0.023%(n2111)
+       2026: LO 54%/-0.034%(n1053)   MID 59%/-0.055%(n715)   HI 71%/+0.015%(n585)
+======================================================================================================================
+CLOCK 15m | taken n=4028 (EOD dropped 1) | win(0.5% TP) 63.5% | 2025 n=2870 win 64.3% | 2026 n=1158 win 61.7%  (18s)
+  feature (signed by side)     AUC25   AUC26  consistent?
+  sld%                         0.621   0.600  <-- CONSISTENT
+  st_movmag mov_signed         0.616   0.591  <-- CONSISTENT
+  rng_pct(z)                   0.607   0.584  <-- CONSISTENT
+  rng%                         0.607   0.584  <-- CONSISTENT
+  st_effagg ea_net             0.585   0.564  <-- CONSISTENT
+  st_strength str_zdiff        0.557   0.543  <-- CONSISTENT
+  vol_rel                      0.544   0.548  <-- CONSISTENT
+  close_pos                    0.548   0.540  <-- CONSISTENT
+  wick_against                 0.452   0.461  <-- CONSISTENT
+  st_ker    ker_diff           0.451   0.463  <-- CONSISTENT
+  st_ohlc   body               0.539   0.542  <-- CONSISTENT
+  body                         0.539   0.542  <-- CONSISTENT
+  st_daccel da2                0.533   0.536  <-- CONSISTENT
+  st_skew   skew               0.536   0.533  <-- CONSISTENT
+    sld% terciles (q=0.672 / 0.917):
+       2025: LO 52%/-0.074%(n858)   MID 64%/-0.016%(n976)   HI 75%/+0.025%(n1036)
+       2026: LO 53%/-0.047%(n485)   MID 63%/-0.036%(n366)   HI 74%/+0.013%(n307)
+    st_movmag mov_signed terciles (q=14.430 / 40.261):
+       2025: LO 53%/-0.068%(n866)   MID 64%/-0.027%(n977)   HI 75%/+0.031%(n1027)
+       2026: LO 55%/-0.034%(n477)   MID 61%/-0.049%(n365)   HI 73%/+0.008%(n316)
+    rng_pct(z) terciles (q=0.499 / 0.785):
+       2025: LO 55%/-0.050%(n875)   MID 63%/-0.031%(n981)   HI 74%/+0.021%(n1014)
+       2026: LO 56%/-0.016%(n468)   MID 61%/-0.052%(n361)   HI 71%/-0.017%(n329)
+    rng% terciles (q=0.499 / 0.785):
+       2025: LO 55%/-0.050%(n875)   MID 63%/-0.031%(n981)   HI 74%/+0.021%(n1014)
+       2026: LO 56%/-0.016%(n468)   MID 61%/-0.052%(n361)   HI 71%/-0.017%(n329)
+    st_effagg ea_net terciles (q=67930.017 / 145796.000):
+       2025: LO 58%/-0.044%(n957)   MID 61%/-0.051%(n970)   HI 74%/+0.041%(n943)
+       2026: LO 56%/-0.035%(n386)   MID 58%/-0.062%(n372)   HI 70%/+0.012%(n400)
+    st_strength str_zdiff terciles (q=0.246 / 0.759):
+       2025: LO 60%/-0.049%(n947)   MID 64%/-0.019%(n992)   HI 69%/+0.014%(n931)
+       2026: LO 57%/-0.068%(n396)   MID 61%/-0.007%(n350)   HI 67%/-0.006%(n412)
+    vol_rel terciles (q=0.934 / 1.638):
+       2025: LO 60%/-0.029%(n968)   MID 64%/-0.019%(n983)   HI 69%/-0.007%(n919)
+       2026: LO 59%/-0.022%(n375)   MID 60%/-0.051%(n359)   HI 66%/-0.012%(n424)
+    close_pos terciles (q=0.745 / 0.890):
+       2025: LO 59%/-0.040%(n916)   MID 65%/-0.011%(n958)   HI 68%/-0.006%(n996)
+       2026: LO 57%/-0.045%(n427)   MID 63%/-0.040%(n384)   HI 66%/+0.008%(n347)
+    wick_against terciles (q=0.110 / 0.255):
+       2025: LO 68%/-0.006%(n996)   MID 65%/-0.011%(n958)   HI 59%/-0.040%(n916)
+       2026: LO 66%/+0.008%(n347)   MID 63%/-0.040%(n384)   HI 57%/-0.045%(n427)
+    st_ker    ker_diff terciles (q=0.001 / 0.003):
+       2025: LO 69%/+0.023%(n831)   MID 64%/-0.023%(n1020)   HI 60%/-0.048%(n1019)
+       2026: LO 65%/-0.006%(n512)   MID 59%/-0.046%(n322)   HI 59%/-0.043%(n324)
+    st_ohlc   body terciles (q=0.519 / 0.722):
+       2025: LO 61%/-0.020%(n943)   MID 64%/-0.027%(n976)   HI 68%/-0.008%(n951)
+       2026: LO 59%/-0.023%(n400)   MID 61%/-0.032%(n366)   HI 65%/-0.027%(n392)
+    body terciles (q=0.519 / 0.722):
+       2025: LO 61%/-0.020%(n943)   MID 64%/-0.027%(n976)   HI 68%/-0.008%(n951)
+       2026: LO 59%/-0.023%(n400)   MID 61%/-0.032%(n366)   HI 65%/-0.027%(n392)
+    st_daccel da2 terciles (q=-0.061 / 0.050):
+       2025: LO 61%/-0.036%(n848)   MID 65%/-0.019%(n907)   HI 68%/-0.003%(n889)
+       2026: LO 60%/-0.029%(n379)   MID 64%/-0.015%(n319)   HI 67%/-0.004%(n338)
+    st_skew   skew terciles (q=0.052 / 0.464):
+       2025: LO 61%/-0.049%(n948)   MID 64%/-0.027%(n971)   HI 68%/+0.022%(n951)
+       2026: LO 61%/-0.031%(n395)   MID 58%/-0.067%(n371)   HI 66%/+0.014%(n392)
+    st_absorb absorpR terciles (q=-0.742 / -0.131):
+       2025: LO 69%/-0.001%(n931)   MID 61%/-0.038%(n984)   HI 63%/-0.015%(n955)
+       2026: LO 66%/-0.016%(n412)   MID 59%/-0.030%(n358)   HI 59%/-0.037%(n388)
+======================================================================================================================
+BUCKET 30m | taken n=4187 (EOD dropped 0) | win(0.5% TP) 69.3% | 2025 n=2913 win 70.4% | 2026 n=1274 win 66.8%  (17s)
+  feature (signed by side)     AUC25   AUC26  consistent?
+  sld%                         0.590   0.611  <-- CONSISTENT
+  st_movmag mov_signed         0.589   0.607  <-- CONSISTENT
+  rng_pct(z)                   0.582   0.607  <-- CONSISTENT
+  rng%                         0.582   0.607  <-- CONSISTENT
+  st_ease   ease_imb           0.556   0.585  <-- CONSISTENT
+  st_ohlc   body               0.539   0.558  <-- CONSISTENT
+  body                         0.539   0.558  <-- CONSISTENT
+  st_absorb absorpR            0.477   0.439  
+  wick_against                 0.463   0.457  <-- CONSISTENT
+  close_pos                    0.536   0.543  <-- CONSISTENT
+  vol_rel                      0.521   0.542  
+  st_closepos net_close%       0.486   0.454  
+  st_strength str_zdiff        0.517   0.531  
+  st_delta  delta%             0.509   0.535  
+    sld% terciles (q=0.858 / 1.128):
+       2025: LO 60%/-0.044%(n824)   MID 72%/+0.037%(n961)   HI 77%/-0.002%(n1128)
+       2026: LO 60%/-0.023%(n572)   MID 68%/-0.030%(n434)   HI 79%/+0.068%(n268)
+    st_movmag mov_signed terciles (q=31.407 / 68.838):
+       2025: LO 60%/-0.039%(n819)   MID 72%/+0.032%(n975)   HI 76%/-0.002%(n1119)
+       2026: LO 60%/-0.029%(n577)   MID 69%/-0.006%(n420)   HI 78%/+0.042%(n277)
+    rng_pct(z) terciles (q=0.686 / 0.959):
+       2025: LO 61%/-0.033%(n807)   MID 72%/+0.033%(n976)   HI 76%/-0.007%(n1130)
+       2026: LO 59%/-0.052%(n589)   MID 70%/+0.028%(n419)   HI 77%/+0.042%(n266)
+    rng% terciles (q=0.686 / 0.959):
+       2025: LO 61%/-0.033%(n807)   MID 72%/+0.033%(n976)   HI 76%/-0.007%(n1130)
+       2026: LO 59%/-0.052%(n589)   MID 70%/+0.028%(n419)   HI 77%/+0.042%(n266)
+    st_ease   ease_imb terciles (q=0.013 / 0.022):
+       2025: LO 65%/-0.018%(n856)   MID 71%/+0.006%(n980)   HI 75%/+0.006%(n1077)
+       2026: LO 60%/-0.042%(n540)   MID 69%/+0.001%(n415)   HI 76%/+0.046%(n319)
+    st_ohlc   body terciles (q=0.571 / 0.775):
+       2025: LO 67%/-0.001%(n958)   MID 71%/+0.005%(n960)   HI 73%/-0.006%(n995)
+       2026: LO 61%/-0.030%(n438)   MID 68%/-0.005%(n435)   HI 72%/+0.020%(n401)
+    body terciles (q=0.571 / 0.775):
+       2025: LO 67%/-0.001%(n958)   MID 71%/+0.005%(n960)   HI 73%/-0.006%(n995)
+       2026: LO 61%/-0.030%(n438)   MID 68%/-0.005%(n435)   HI 72%/+0.020%(n401)
+    wick_against terciles (q=0.055 / 0.190):
+       2025: LO 73%/-0.008%(n988)   MID 71%/-0.003%(n993)   HI 67%/+0.009%(n932)
+       2026: LO 70%/-0.011%(n408)   MID 69%/-0.003%(n402)   HI 63%/-0.005%(n464)
+    close_pos terciles (q=0.810 / 0.945):
+       2025: LO 67%/+0.009%(n932)   MID 71%/-0.003%(n993)   HI 73%/-0.008%(n988)
+       2026: LO 63%/-0.005%(n464)   MID 69%/-0.003%(n402)   HI 70%/-0.011%(n408)
+======================================================================================================================
+CLOCK 30m | taken n=1415 (EOD dropped 0) | win(0.5% TP) 68.6% | 2025 n=975 win 69.7% | 2026 n=440 win 65.9%  (10s)
+  feature (signed by side)     AUC25   AUC26  consistent?
+  rng_pct(z)                   0.607   0.664  <-- CONSISTENT
+  rng%                         0.607   0.664  <-- CONSISTENT
+  sld%                         0.594   0.663  <-- CONSISTENT
+  st_movmag mov_signed         0.595   0.662  <-- CONSISTENT
+  st_effagg ea_net             0.573   0.642  <-- CONSISTENT
+  vol_rel                      0.562   0.593  <-- CONSISTENT
+  st_ease   ease_imb           0.531   0.615  <-- CONSISTENT
+  st_absorb absorpR            0.465   0.392  <-- CONSISTENT
+  st_strength str_zdiff        0.554   0.579  <-- CONSISTENT
+  st_skew   skew               0.546   0.585  <-- CONSISTENT
+  st_ohlc   body               0.519   0.586  
+  body                         0.519   0.586  
+  st_reward rew_share          0.528   0.567  
+  st_ker    ker_diff           0.454   0.453  <-- CONSISTENT
+    rng_pct(z) terciles (q=0.662 / 1.055):
+       2025: LO 59%/-0.044%(n286)   MID 71%/+0.034%(n332)   HI 77%/+0.001%(n357)
+       2026: LO 52%/-0.098%(n186)   MID 72%/+0.051%(n139)   HI 81%/+0.029%(n115)
+    rng% terciles (q=0.662 / 1.055):
+       2025: LO 59%/-0.044%(n286)   MID 71%/+0.034%(n332)   HI 77%/+0.001%(n357)
+       2026: LO 52%/-0.098%(n186)   MID 72%/+0.051%(n139)   HI 81%/+0.029%(n115)
+    sld% terciles (q=0.791 / 1.135):
+       2025: LO 61%/+0.000%(n283)   MID 70%/+0.023%(n338)   HI 76%/-0.026%(n354)
+       2026: LO 51%/-0.105%(n189)   MID 71%/+0.037%(n133)   HI 83%/+0.059%(n118)
+    st_movmag mov_signed terciles (q=25.172 / 71.148):
+       2025: LO 61%/-0.002%(n288)   MID 70%/+0.013%(n332)   HI 77%/-0.014%(n355)
+       2026: LO 52%/-0.101%(n184)   MID 71%/+0.041%(n139)   HI 82%/+0.044%(n117)
+    st_effagg ea_net terciles (q=129154.923 / 271975.780):
+       2025: LO 64%/-0.021%(n328)   MID 70%/+0.022%(n326)   HI 76%/-0.004%(n321)
+       2026: LO 50%/-0.133%(n144)   MID 67%/+0.015%(n145)   HI 80%/+0.061%(n151)
+    vol_rel terciles (q=0.939 / 1.600):
+       2025: LO 64%/-0.017%(n317)   MID 69%/-0.002%(n354)   HI 76%/+0.016%(n304)
+       2026: LO 59%/-0.030%(n155)   MID 60%/-0.074%(n117)   HI 76%/+0.033%(n168)
+    st_ease   ease_imb terciles (q=0.010 / 0.016):
+       2025: LO 68%/+0.011%(n275)   MID 69%/-0.016%(n304)   HI 72%/+0.002%(n396)
+       2026: LO 58%/-0.057%(n197)   MID 68%/-0.050%(n167)   HI 80%/+0.155%(n76)
+    st_absorb absorpR terciles (q=-0.720 / -0.141):
+       2025: LO 73%/+0.009%(n322)   MID 68%/-0.033%(n309)   HI 68%/+0.018%(n344)
+       2026: LO 75%/+0.023%(n150)   MID 68%/+0.043%(n162)   HI 53%/-0.142%(n128)
+    st_strength str_zdiff terciles (q=0.204 / 0.585):
+       2025: LO 65%/-0.029%(n326)   MID 70%/+0.020%(n327)   HI 75%/+0.006%(n322)
+       2026: LO 60%/-0.053%(n146)   MID 64%/-0.010%(n144)   HI 74%/+0.009%(n150)
+    st_skew   skew terciles (q=0.032 / 0.431):
+       2025: LO 65%/-0.052%(n315)   MID 71%/-0.001%(n343)   HI 73%/+0.050%(n317)
+       2026: LO 58%/-0.086%(n157)   MID 66%/-0.053%(n128)   HI 74%/+0.080%(n155)
+    st_ker    ker_diff terciles (q=0.001 / 0.002):
+       2025: LO 75%/+0.015%(n298)   MID 68%/-0.014%(n322)   HI 67%/-0.003%(n355)
+       2026: LO 70%/-0.014%(n174)   MID 65%/-0.002%(n149)   HI 61%/-0.044%(n117)
+    st_effaggsp ea_spread terciles (q=-20.654 / 17.597):
+       2025: LO 66%/-0.045%(n323)   MID 72%/+0.032%(n326)   HI 71%/+0.009%(n326)
+       2026: LO 58%/-0.117%(n149)   MID 72%/+0.095%(n145)   HI 68%/-0.029%(n146)
+======================================================================================================================
+BUCKET 1h | taken n=1756 (EOD dropped 0) | win(0.5% TP) 70.0% | 2025 n=1133 win 72.4% | 2026 n=623 win 65.8%  (10s)
+  feature (signed by side)     AUC25   AUC26  consistent?
+  sld%                         0.602   0.657  <-- CONSISTENT
+  st_movmag mov_signed         0.599   0.658  <-- CONSISTENT
+  rng_pct(z)                   0.580   0.648  <-- CONSISTENT
+  rng%                         0.580   0.648  <-- CONSISTENT
+  wick_against                 0.457   0.435  <-- CONSISTENT
+  close_pos                    0.542   0.565  <-- CONSISTENT
+  st_ease   ease_imb           0.515   0.571  
+  st_absorb absorpR            0.477   0.439  
+  st_strength str_zdiff        0.534   0.549  <-- CONSISTENT
+  st_reward rew_share          0.512   0.560  
+  st_deltaud vertical          0.455   0.480  
+  st_ohlc   body               0.514   0.549  
+  body                         0.514   0.549  
+  st_delta  delta%             0.518   0.533  
+    sld% terciles (q=0.830 / 1.184):
+       2025: LO 67%/+0.071%(n311)   MID 66%/-0.053%(n379)   HI 81%/+0.063%(n443)
+       2026: LO 54%/-0.072%(n274)   MID 67%/-0.043%(n206)   HI 86%/+0.185%(n143)
+    st_movmag mov_signed terciles (q=39.703 / 97.077):
+       2025: LO 67%/+0.071%(n314)   MID 66%/-0.053%(n377)   HI 81%/+0.063%(n442)
+       2026: LO 54%/-0.078%(n271)   MID 68%/-0.030%(n208)   HI 85%/+0.175%(n144)
+    rng_pct(z) terciles (q=0.786 / 1.170):
+       2025: LO 64%/+0.018%(n304)   MID 72%/+0.030%(n387)   HI 79%/+0.030%(n442)
+       2026: LO 56%/-0.060%(n281)   MID 69%/-0.014%(n198)   HI 81%/+0.122%(n144)
+    rng% terciles (q=0.786 / 1.170):
+       2025: LO 64%/+0.018%(n304)   MID 72%/+0.030%(n387)   HI 79%/+0.030%(n442)
+       2026: LO 56%/-0.060%(n281)   MID 69%/-0.014%(n198)   HI 81%/+0.122%(n144)
+    wick_against terciles (q=0.064 / 0.203):
+       2025: LO 74%/+0.006%(n378)   MID 75%/+0.048%(n376)   HI 68%/+0.026%(n379)
+       2026: LO 71%/+0.055%(n207)   MID 68%/+0.002%(n209)   HI 58%/-0.068%(n207)
+    close_pos terciles (q=0.797 / 0.936):
+       2025: LO 69%/+0.028%(n378)   MID 75%/+0.044%(n376)   HI 74%/+0.008%(n379)
+       2026: LO 58%/-0.068%(n207)   MID 68%/+0.002%(n209)   HI 71%/+0.055%(n207)
+    st_strength str_zdiff terciles (q=0.230 / 0.683):
+       2025: LO 71%/+0.049%(n371)   MID 71%/-0.000%(n398)   HI 75%/+0.033%(n364)
+       2026: LO 61%/-0.026%(n214)   MID 68%/+0.025%(n187)   HI 68%/-0.006%(n222)
+======================================================================================================================
+CLOCK 1h | taken n=210 (EOD dropped 0) | win(0.5% TP) 60.5% | 2025 n=157 win 60.5% | 2026 n=53 win 60.4%  (5s)
+  feature (signed by side)     AUC25   AUC26  consistent?
+  close_pos                    0.563   0.775  <-- CONSISTENT
+  wick_against                 0.437   0.225  <-- CONSISTENT
+  st_movmag mov_signed         0.529   0.774  
+  sld%                         0.523   0.777  
+  st_ohlc   body               0.508   0.772  
+  body                         0.508   0.772  
+  st_ease   ease_imb           0.526   0.747  
+  st_absorb absorpR            0.488   0.317  
+  rng_pct(z)                   0.510   0.652  
+  rng%                         0.510   0.652  
+  st_effagg ea_net             0.480   0.679  
+  st_skew   skew               0.513   0.625  
+  st_closepos net_close%       0.583   0.549  <-- CONSISTENT
+  st_effaggsp ea_spread        0.528   0.603  
+    close_pos terciles (q=0.720 / 0.870):
+       2025: LO 53%/-0.216%(n47)   MID 60%/-0.255%(n53)   HI 67%/-0.254%(n57)
+       2026: LO 30%/-0.389%(n23)   MID 82%/+0.242%(n17)   HI 85%/+0.252%(n13)
+    wick_against terciles (q=0.130 / 0.280):
+       2025: LO 67%/-0.254%(n57)   MID 60%/-0.255%(n53)   HI 53%/-0.216%(n47)
+       2026: LO 85%/+0.252%(n13)   MID 82%/+0.242%(n17)   HI 30%/-0.389%(n23)
+    st_closepos net_close% terciles (q=-0.007 / -0.001):
+       2025: LO 60%/-0.158%(n52)   MID 48%/-0.492%(n50)   HI 73%/-0.097%(n55)
+       2026: LO 61%/-0.073%(n18)   MID 65%/+0.045%(n20)   HI 53%/-0.075%(n15)
+    st_reward rew_share terciles (q=-5.099 / 3.690):
+       2025: LO 53%/-0.384%(n57)   MID 67%/-0.129%(n49)   HI 63%/-0.195%(n51)
+       2026: LO 46%/-0.179%(n13)   MID 71%/+0.095%(n21)   HI 58%/-0.064%(n19)
+
+======================================================================================================================
+CROSS-COMBO TALLY — features CONSISTENT (both years) on >= 4 of 6 combos, with direction (+ = higher value -> more winners):
+  st_movmag mov_signed       5/6  bucket 15m(+)  clock 15m(+)  bucket 30m(+)  clock 30m(+)  bucket 1h(+)
+  rng_pct(z)                 5/6  bucket 15m(+)  clock 15m(+)  bucket 30m(+)  clock 30m(+)  bucket 1h(+)
+  sld%                       5/6  bucket 15m(+)  clock 15m(+)  bucket 30m(+)  clock 30m(+)  bucket 1h(+)
+  rng%                       5/6  bucket 15m(+)  clock 15m(+)  bucket 30m(+)  clock 30m(+)  bucket 1h(+)
+  close_pos                  4/6  clock 15m(+)  bucket 30m(+)  bucket 1h(+)  clock 1h(+)
+  wick_against               4/6  clock 15m(-)  bucket 30m(-)  bucket 1h(-)  clock 1h(-)
+
+  (features consistent on 2-3 combos:)
+  st_strength str_zdiff      3/6  clock 15m(+)  clock 30m(+)  bucket 1h(+)
+  st_skew   skew             2/6  clock 15m(+)  clock 30m(+)
+  st_ohlc   body             2/6  clock 15m(+)  bucket 30m(+)
+  st_ker    ker_diff         2/6  clock 15m(-)  clock 30m(-)
+  vol_rel                    2/6  clock 15m(+)  clock 30m(+)
+  st_absorb absorpR          2/6  clock 15m(-)  clock 30m(-)
+  st_effagg ea_net           2/6  clock 15m(+)  clock 30m(+)
+  body                       2/6  clock 15m(+)  bucket 30m(+)
+  st_ease   ease_imb         2/6  bucket 30m(+)  clock 30m(+)
