@@ -1028,7 +1028,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._vol_want = False         # user's Volume-pane intent (drives vol_plot visibility in Mode 10; persisted)
         self._vol_mode = "basic"       # "basic" (total volume) | "delta" (buy-sell); persisted, set by the dropdown
         self._vol_follow_y = True      # Volume Y auto-fits its visible bars; a Y-scroll hands the user control
-        self._vol_vals = None          # per-bar plotted value (window Y re-fit in _replay_follow)
+        self._vol_vals = None          # plotted values of the CULLED render slice (window Y re-fit in _replay_follow)
+        self._vol_vals_off = 0         # global bar index of _vol_vals[0] (the render culls to the visible window)
+        self._vol_last = None          # newest bar's plotted value (pan-to-bar when the user owns the Y)
         self.vol_vline = None; self.vol_hline = None; self.vol_tag = None; self.vol_vb = None; self._vol_proxy = None
         self.splitter_v = None         # Mode 10 vertical splitter (upper/lower panes)
         self.cob_col = None            # Mode 10 COB column (cob + spacer), height-matched to the price pane
@@ -11575,9 +11577,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self, "vol_plot", None) is not None and self.vol_plot.isVisible():
             self.vol_plot.getViewBox().setXRange(mxr[0], mxr[1], padding=0)
             if not self._vol_follow_y:                            # same X-follow + Y-track contract as the CVD pane
-                self._vol_pan_to_bar(self._vol_vals[-1] if self._vol_vals else None)
+                self._vol_pan_to_bar(self._vol_last)
             elif self._vol_vals:
-                _w0 = max(0, int(math.floor(mxr[0]))); _w1 = min(len(self._vol_vals), int(math.ceil(mxr[1])) + 1)
+                _off = getattr(self, "_vol_vals_off", 0)          # _vol_vals is the culled render slice (index 0 == bar _off)
+                _w0 = max(0, int(math.floor(mxr[0])) - _off); _w1 = min(len(self._vol_vals), int(math.ceil(mxr[1])) + 1 - _off)
                 if _w1 <= _w0:
                     _w0, _w1 = 0, len(self._vol_vals)
                 _win = self._vol_vals[_w0:_w1]
@@ -11984,6 +11987,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.vol_vline = None; self.vol_hline = None; self.vol_tag = None
             self._vol_combo = None; self._vol_combo_sig = None; self._vol_vals = None
             self._vol_p80 = None; self._vol_p20 = None; self._vol_pct_cb = None   # threshold lines + 'Pct' toggle died with the pane
+            self._vol_last = None; self._vol_vals_off = 0
 
     def _sync_kinetic_vb(self) -> None:
         """Keep the Mode 4 secondary price ViewBox glued to the main viewport.
@@ -14072,18 +14076,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if dy != 0.0:
             self.vol_vb.setYRange(vy0 + dy, vy1 + dy, padding=0)
 
-    def _fit_vol_y(self, vals: list) -> None:
-        """Fit the Volume pane's Y to the bars ACTUALLY VISIBLE in X (explicit, like the CVD/scanner fits). BASIC bars
-        start at 0; DELTA straddles 0, so the floor is min(0, ...). Once the user owns the Y, keep their zoom and just
-        track the newest bar instead of rescaling."""
+    def _fit_vol_y(self, vals: list, off: int = 0) -> None:
+        """Fit the Volume pane's Y to the bars ACTUALLY VISIBLE in X (explicit, like the CVD/scanner fits). `vals` is
+        the render SLICE whose index 0 is global bar `off` (the render culls to the visible window). Bars draw up from
+        0 so the floor is 0. Once the user owns the Y, keep their zoom and just track the newest bar instead."""
         n = len(vals)
         if n == 0 or getattr(self, "vol_vb", None) is None:
             return
         if not self._vol_follow_y:                   # user owns the Y -> fixed zoom, pan to the newest bar
-            self._vol_pan_to_bar(vals[-1])
+            self._vol_pan_to_bar(self._vol_last)
             return
         _vx0, _vx1 = self.vol_vb.viewRange()[0]
-        w0 = max(0, int(math.floor(_vx0))); w1 = min(n, int(math.ceil(_vx1)) + 1)
+        w0 = max(0, int(math.floor(_vx0)) - off); w1 = min(n, int(math.ceil(_vx1)) + 1 - off)
         if w1 <= w0:
             w0, w1 = 0, n
         win = vals[w0:w1]
@@ -15147,23 +15151,32 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _lp2 = pg.mkPen(140, 140, 150, 120, width=1, style=QtCore.Qt.DashLine); _lp2.setCosmetic(True)
                 self._vol_p20 = pg.PlotCurveItem(pen=_lp2); self._vol_p20.setZValue(12)
                 self.vol_plot.addItem(self._vol_p20, ignoreBounds=True)
-            _bv = [float(_b.get("buy_vol", 0.0) or 0.0) for _b in buckets]
-            _sv = [float(_b.get("sell_vol", 0.0) or 0.0) for _b in buckets]
-            # 1) the plotted series + per-bar colour side
+            # PERF (user 2026-08-23 "terminal slow since the volume pane"): this block runs on every re-render (every
+            # live tick). Like the CVD pane's update_data(.., vx0, vx1), work ONLY on the bars VISIBLE in X (+ a small
+            # margin, + VOL_PCT_WIN-1 bars of history for the ranking) — never the whole ~10k-bar loaded window. A pan /
+            # zoom forces a re-render (view-range change resets the scanner sig), so culling is exact.
+            _n = len(x)
+            _w0 = max(0, int(math.floor(vx0)) - 2); _w1 = min(_n, int(math.ceil(vx1)) + 3)
+            if _w1 <= _w0:
+                _w0, _w1 = max(0, _n - 300), _n
+            _s0 = max(0, _w0 - (VOL_PCT_WIN - 1))                # ranking history for the first visible bar
+            _bk = buckets[_s0:_w1]
+            _bv = [float(_b.get("buy_vol", 0.0) or 0.0) for _b in _bk]
+            _sv = [float(_b.get("sell_vol", 0.0) or 0.0) for _b in _bk]
+            # 1) the plotted series + per-bar colour side (slice space: index 0 == global bar _s0)
             if _vm == "buysell":
-                _big = [a >= b for a, b in zip(_bv, _sv)]         # True -> buy is the OUTER bar
-                _vals = [max(a, b) for a, b in zip(_bv, _sv)]     # Y-fit + ranking basis = the outer bar
-                _ups = _big
+                _ups = [a >= b for a, b in zip(_bv, _sv)]        # True -> buy is the OUTER bar
+                _vals = [max(a, b) for a, b in zip(_bv, _sv)]    # Y-fit + ranking basis = the outer bar
             elif _vm == "delta":
                 _d = [a - b for a, b in zip(_bv, _sv)]
                 _vals = [abs(v) for v in _d]; _ups = [v >= 0.0 for v in _d]
             elif _vm == "buy":
-                _vals = _bv; _ups = [True] * len(x)
+                _vals = _bv; _ups = [True] * len(_bk)
             elif _vm == "sell":
-                _vals = _sv; _ups = [False] * len(x)
+                _vals = _sv; _ups = [False] * len(_bk)
             else:                                                 # basic
-                _vals = [float(_b.get("curr_vol", 0.0) or 0.0) for _b in buckets]
-                _ups = [closes[_i] >= opens[_i] for _i in range(len(x))]
+                _vals = [float(_b.get("curr_vol", 0.0) or 0.0) for _b in _bk]
+                _ups = [closes[_i] >= opens[_i] for _i in range(_s0, _w1)]
             # 2) trailing PERCENTILE RANK of each bar vs its previous VOL_PCT_WIN-1 bars (causal, vectorised):
             #    rank >= STRONG -> tier 2 (full colour), <= WEAK -> tier 0 (dimmed), else tier 1 (muted).
             _vv = np.asarray(_vals, dtype=float); _p80 = _p20 = None
@@ -15178,29 +15191,32 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _p20 = np.nanquantile(_win, VOL_PCT_WEAK, axis=1)
             else:
                 _tier = np.full(len(_vv), 2)
-            _col = ["g" if _u else "r" for _u in _ups]
-            _brs = [_q[(c, int(t))]["b"] for c, t in zip(_col, _tier)]
-            _pns = [_q[(c, int(t))]["p"] for c, t in zip(_col, _tier)]
-            # 3) draw
+            # 3) draw ONLY the visible part of the slice
+            _o = _w0 - _s0                                        # first VISIBLE bar within the slice
+            _xv = x[_w0:_w1]; _hv = _vals[_o:]; _tv = _tier[_o:]; _uv = _ups[_o:]
+            _col = ["g" if _u else "r" for _u in _uv]
+            _brs = [_q[(c, int(t))]["b"] for c, t in zip(_col, _tv)]
+            _pns = [_q[(c, int(t))]["p"] for c, t in zip(_col, _tv)]
             if _vm == "buysell":
                 # NESTED buy/sell (user 2026-08-22): larger side full-width behind, smaller side INSIDE it on top
-                _icol = ["r" if _u else "g" for _u in _ups]      # inner bar = the opposite side
-                self._vol_bar.setOpts(x=x, height=_vals, width=0.8, y0=0.0, brushes=_brs, pens=_pns)
-                self._vol_bar2.setOpts(x=x, height=[min(a, b) for a, b in zip(_bv, _sv)], width=0.44, y0=0.0,
-                                       brushes=[_q[(c, int(t))]["b"] for c, t in zip(_icol, _tier)],
-                                       pens=[_q[(c, int(t))]["p"] for c, t in zip(_icol, _tier)])
+                _icol = ["r" if _u else "g" for _u in _uv]       # inner bar = the opposite side
+                self._vol_bar.setOpts(x=_xv, height=_hv, width=0.8, y0=0.0, brushes=_brs, pens=_pns)
+                self._vol_bar2.setOpts(x=_xv, height=[min(a, b) for a, b in zip(_bv[_o:], _sv[_o:])], width=0.44, y0=0.0,
+                                       brushes=[_q[(c, int(t))]["b"] for c, t in zip(_icol, _tv)],
+                                       pens=[_q[(c, int(t))]["p"] for c, t in zip(_icol, _tv)])
                 self._vol_bar2.setVisible(True)
             else:
                 self._vol_bar2.setVisible(False)
-                self._vol_bar.setOpts(x=x, height=_vals, width=0.8, y0=0.0, brushes=_brs, pens=_pns)
+                self._vol_bar.setOpts(x=_xv, height=_hv, width=0.8, y0=0.0, brushes=_brs, pens=_pns)
             if _p80 is not None:
-                _xa = np.asarray(x, dtype=float)
-                self._vol_p80.setData(_xa, _p80); self._vol_p20.setData(_xa, _p20)
+                _xa = np.asarray(_xv, dtype=float)
+                self._vol_p80.setData(_xa, _p80[_o:]); self._vol_p20.setData(_xa, _p20[_o:])
                 self._vol_p80.setVisible(True); self._vol_p20.setVisible(True)
             else:
                 self._vol_p80.setVisible(False); self._vol_p20.setVisible(False)
-            self._vol_vals = _vals
-            self._fit_vol_y(_vals)
+            self._vol_vals = _vals; self._vol_vals_off = _s0      # slice + its global offset (replay-follow Y re-fit)
+            self._vol_last = _vals[-1] if (_w1 == _n and _vals) else self._vol_last   # newest bar's value (pan-to-bar)
+            self._fit_vol_y(_vals, _s0)
             _vsig = (self.vol_plot.width(), self.vol_plot.height())   # reposition the dropdown only on a resize
             if _vsig != self._vol_combo_sig:
                 self._vol_combo_sig = _vsig
