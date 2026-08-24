@@ -4,9 +4,10 @@ wall, red ▼ when strong net SELLING lands on a 30m RESISTANCE (sell) wall — 
 wall it trades into, and holding what it bought.
 
 STRONG is the Volume pane's own 'Pct' definition, replicated to the letter (terminal VOL_PCT_* constants):
-|delta| ranked against a trailing window of itself + its previous 49 bars; rank = share of the OTHER window
-bars strictly below it (NaN-padded early bars shrink the window; <2 valid bars -> neutral 0.5); STRONG = rank
->= 0.80. KEPT is the Eff/Res module's `retention` (effort_result.compute), replicated to the letter:
+the series value ranked against a trailing window of itself + its previous 49 bars; rank = share of the OTHER
+window bars strictly below it (NaN-padded early bars shrink the window; <2 valid bars -> neutral 0.5); STRONG
+= rank >= 0.80. BOTH pane series must be strong (user 2026-08-24): |delta| (Delta mode) AND curr_vol (Basic
+mode) each >= P80 of their own trailing-50. KEPT is the Eff/Res module's `retention` (effort_result.compute), replicated to the letter:
 side·(close-open) / excursion-in-the-delta-direction ((high-open) net buying / (open-low) net selling); the
 signal requires retention >= KEPT_MIN (0.80) — no excursion / opposite-close candles are suppressed (user
 2026-08-24, on top of the delta filter). Walls are the SAME `absorption_level_detect.detect()` marks the 30m
@@ -64,6 +65,11 @@ def detect(candles: list, walls: list, wall_starts: list,
     d = np.array([float(c.get("buy_vol", 0.0) or 0.0) - float(c.get("sell_vol", 0.0) or 0.0)
                   for c in candles])
     rank = strong_rank(np.abs(d), win)
+    v = np.array([float(c.get("curr_vol", 0.0) or 0.0) or
+                  (float(c.get("buy_vol", 0.0) or 0.0) + float(c.get("sell_vol", 0.0) or 0.0))
+                  for c in candles])
+    vrank = strong_rank(v, win)                      # the pane's BASIC series (total volume) must ALSO be strong
+    #                                                  (user 2026-08-24: strong delta AND strong volume, both P80)
     nH = len(wall_starts)
     zones = []                                       # (side, radar_lo, radar_hi, birth_t, death_t)
     for m in walls:
@@ -87,7 +93,7 @@ def detect(candles: list, walls: list, wall_starts: list,
         return []
     out = []
     for i in range(n):
-        if rank[i] < strong or d[i] == 0.0:
+        if rank[i] < strong or vrank[i] < strong or d[i] == 0.0:
             continue
         c = candles[i]
         t = float(c.get("start_time", 0.0) or 0.0)
@@ -100,7 +106,7 @@ def detect(candles: list, walls: list, wall_starts: list,
         want = "S" if d[i] > 0 else "R"              # strong buying belongs on a buy (support) wall, selling on a sell wall
         for (side, rlo, rhi, birth, death) in zones:
             if side == want and birth <= t < death and lo <= rhi and hi >= rlo:
-                out.append({"i": i, "side": 1 if d[i] > 0 else -1,
-                            "delta": float(d[i]), "rank": float(rank[i]), "kept": float(kept)})
+                out.append({"i": i, "side": 1 if d[i] > 0 else -1, "delta": float(d[i]),
+                            "rank": float(rank[i]), "vrank": float(vrank[i]), "kept": float(kept)})
                 break
     return out
