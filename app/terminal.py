@@ -10996,7 +10996,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 return tsnap
             tfsec = config.TF_SECONDS.get(self._tf, 0)
             now = time.time()
-            if not (tfsec and float(st) <= now < float(st) + tfsec):   # only the CURRENT (still-forming) interval
+            if not tfsec or float(st) > now:
                 return tsnap
             if self.worker is not None:
                 lp, _wrk_et = self.worker.live_price()                  # CHEAP read (avoids a 20Hz full-snapshot build)
@@ -11005,6 +11005,35 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             lp = float(lp or 0.0)
             if lp <= 0.0:
                 return tsnap
+            if float(st) + tfsec <= now:
+                # FEED IS STALE — its forming candle belongs to a PAST interval (pushes dropped/stalled). The old guard
+                # returned the stale snapshot here, freezing the clock chart at the stale price exactly when tracking
+                # mattered most (user bug 2026-08-24: live-price gap vs the bucket window + next open != prev close).
+                # SYNTHESIZE the current forming interval from the live worker price: the stale ex-forming candle
+                # becomes a provisional close; open = its last close, OHLC seeded from it + live px. The feed's
+                # staleness watchdog / 60s resync back-fills the REAL candles within seconds; this keeps the live
+                # edge moving meanwhile. (Axis labels may be off by any still-missing intervals until the heal.)
+                cur0 = float(int(now // tfsec) * tfsec)
+                prev_close = float(ab.get("close") or 0.0) or lp
+                nb = {"start_time": cur0, "end_time": now, "open": prev_close, "close": lp,
+                      "high": max(prev_close, lp), "low": min(prev_close, lp),
+                      "buy_vol": 0.0, "sell_vol": 0.0, "curr_vol": 0.0, "target_vol": 0.0,
+                      "poc_price": lp, "levels": {}}
+                snap = dict(tsnap)
+                snap["latest_price"] = lp
+                snap["forming_time"] = int(cur0)
+                snap["closed_buckets"] = list(tsnap.get("closed_buckets") or []) + [dict(ab)]
+                snap["total_closed"] = len(snap["closed_buckets"])
+                snap["active_bucket"] = nb
+                oh = snap.get("ohlcv"); tms = snap.get("times")
+                try:
+                    if oh is not None and getattr(oh, "shape", None) is not None and oh.shape[0] >= 1 and oh.shape[1] >= 5:
+                        snap["ohlcv"] = np.vstack([oh, [nb["open"], nb["high"], nb["low"], nb["close"], 0.0]])
+                    if tms is not None and getattr(tms, "shape", None) is not None:
+                        snap["times"] = np.append(tms, cur0)
+                except Exception:
+                    pass
+                return snap
             # Trust the LOCAL bucket-worker price only if it isn't LAGGING the daemon feed. Under multi-window CPU load
             # this window's worker thread can fall behind the tick stream; folding its stale price would make the clock
             # candle LAG the (fresh) pushed forming candle instead of tracking it. active_bucket.end_time is the daemon's

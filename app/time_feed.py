@@ -113,6 +113,13 @@ def build_snapshot(served: List[dict], tf: str, connected: bool) -> dict:
 
 _RECV_TICK = 0.5            # recv timeout -> loop to check stop / tf-change + periodic rebuild (forming countdown)
 _CANDLE_CAP = 1000         # keep the most-recent N clock candles in the merge store
+_STALE_RECONNECT = 4.0     # no frame for this long while "connected" -> assume a stalled/half-open stream and force a
+#                            reconnect (fresh sub_time = full catch-up, which HEALS dropped/missing candles). The daemon
+#                            pushes the forming candle every pulse, so >4s of silence is never normal on a live tape.
+_RESYNC_SECS = 60.0        # belt-and-braces: even while frames flow, one-shot re-fetch + merge every this often — a
+#                            close frame silently dropped by the daemon's bounded queue is otherwise NEVER re-sent
+#                            (global advance-only cursor), leaving a stale partial candle (open != prev close) or a
+#                            missing candle until the next reconnect. (User bug report 2026-08-24.)
 
 
 def _snapshot_from_cands(cands: dict, tf: str, connected: bool) -> dict:
@@ -213,7 +220,19 @@ class TimeCandleFeed(threading.Thread):
             with self._lock:
                 self._connected = True
             buf = b""
+            last_frame = time.monotonic(); next_resync = time.monotonic() + _RESYNC_SECS
             while not self._stop.is_set() and tf == self.tf:
+                now_m = time.monotonic()
+                if now_m - last_frame > _STALE_RECONNECT:
+                    break                       # stalled/half-open stream -> reconnect; the fresh catch-up heals gaps
+                if now_m >= next_resync:        # periodic heal for silently-dropped close frames (never re-pushed)
+                    next_resync = now_m + _RESYNC_SECS
+                    try:
+                        served = fetch_time_candles(tf)
+                        if served:
+                            self._merge(served); self._rebuild()
+                    except Exception:
+                        pass
                 try:
                     chunk = s.recv(65536)
                 except socket.timeout:
@@ -232,6 +251,7 @@ class TimeCandleFeed(threading.Thread):
                     if isinstance(pkt, protocol.TimeCandlesPacket) and pkt.tf == tf:
                         self._merge(pkt.candles); got = True
                 if got:
+                    last_frame = time.monotonic()
                     self._rebuild()
         finally:
             try:

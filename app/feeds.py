@@ -1111,6 +1111,17 @@ class MarketDataCore:
                         if w is not None:
                             push.append(w)
                     self._time_push_n[tf] = ncur
+                elif ncur >= 1:
+                    # RE-PUSH heal (2026-08-24): a close frame dropped by a client's bounded send queue is otherwise
+                    # NEVER re-sent (advance-only cursor) -> that client keeps a stale partial candle forever (its next
+                    # open != prev close) or misses the candle outright. Re-pushing the freshest close for a few
+                    # seconds after it closed is IDEMPOTENT (clients merge by start_time) and heals a drop in ~1 pulse.
+                    b = list(ce.closed_buckets)[-1]
+                    _st = float(getattr(b, "start_time", 0) or 0)
+                    if _st and (now - (_st + config.TF_SECONDS.get(tf, 60))) < 12.0:
+                        w = self._time_wire_closed(tf, b, kln)
+                        if w is not None:
+                            push.append(w)
                 ab = ce.active_bucket                          # + always the live forming candle
                 if ab.start_time is not None and ab.curr_vol > 0:
                     push.append(ab.live_snapshot(now, ce.avg_velocity))
