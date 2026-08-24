@@ -86,7 +86,7 @@ def project_walls(candles: list, signals: list) -> list:
         return []
 
 
-def detect(candles: list, walls: list, wall_starts: list, wall_tf_secs: float = 1800.0,
+def detect(candles: list, walls: list, wall_starts: list,
            band_mult: float = BAND_MULT, win: int = WIN, strong: float = STRONG,
            kept_min: float = KEPT_MIN) -> list:
     """Signals over CLOSED clock candles (1m or 5m). `walls` = absorption_level_detect.detect() marks over the
@@ -110,7 +110,10 @@ def detect(candles: list, walls: list, wall_starts: list, wall_tf_secs: float = 
         birth = float(wall_starts[i0])
         i1 = m.get("i1")
         if bool(m.get("broken")) and i1 is not None and 0 <= int(i1) < nH:
-            death = float(wall_starts[int(i1)]) + wall_tf_secs   # dies with its close-through bucket
+            death = float(wall_starts[int(i1)])  # signals STOP when the close-through bucket STARTS — the drawn
+            #                                      band's right edge is exactly there, so badge <=> inside the
+            #                                      visible band. The old +1800s grace let a fire land 26min into
+            #                                      an already-breaking wall, PAST the band's end (user 2026-08-24).
         else:
             death = float("inf")
         zones.append((side, P - band_mult * band, P + band_mult * band, birth, death))
