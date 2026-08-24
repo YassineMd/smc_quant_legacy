@@ -10152,7 +10152,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     or self.menu.layer_state("m10_easy1h") or self.menu.layer_state("m10_crazywall")
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")
                     or self.menu.layer_state("m10_wallstrat") or self.menu.layer_state("m10_radarrun")
-                    or self.menu.layer_state("m10_radarwick") or self.menu.layer_state("m10_kcovershoot")):
+                    or self.menu.layer_state("m10_radarwick") or self.menu.layer_state("m10_kcovershoot")
+                    or self.menu.layer_state("m10_wallsurge")):
                 _pf = _pf0                          # already built above; the top gate decided this frame needs a redraw
                 try:
                     self._draw_engulfsr(_pf or [])  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
