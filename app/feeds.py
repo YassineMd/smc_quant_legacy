@@ -438,10 +438,17 @@ class MarketDataCore:
             print(f"CLOCK-CANDLES REST-HEAL: {healed} stale OHLC fixed, {created} downtime candles created.")
 
     def _tc_save(self, force: bool = False) -> None:
-        """Persist the clock-candle store (throttled ~60s; force=True on shutdown). Atomic replace; fully guarded."""
+        """Persist the clock-candle store (throttled; force=True on shutdown). Atomic replace; fully guarded.
+        ⚠ Throttle 60s -> 600s (2026-08-24): the REST heal fills the store to cap (~800 candles x 6 tfs), so one
+        gzip-JSON dump now takes tens of seconds of GIL-heavy encode — at a 60s cadence the save thread ran nearly
+        BACK-TO-BACK (py-spy: ~70% of a 30s window inside _tc_save), starving the event loop -> periodic live-push
+        stalls -> client watchdog reconnect churn (user bug: 'sends live data, then blocks'). A 600s cadence cuts
+        the duty cycle ~10x; the crash-loss window it opens is benign because the boot REST heal rebuilds any
+        missing candle OHLC-exact (only sub-10-min footprint detail could be lost on a hard kill; clean shutdown
+        still force-saves). Saves that take >5s are logged so a regression is visible in the journal."""
         try:
             now = time.time()
-            if not force and now - getattr(self, "_tc_last_save", 0.0) < 60.0:
+            if not force and now - getattr(self, "_tc_last_save", 0.0) < 600.0:
                 return
             self._tc_last_save = now
             if not self._tc_store:
@@ -450,9 +457,13 @@ class MarketDataCore:
             # (on the loop) may be adding a newly-closed candle; no "dict changed size during iteration".
             data = {tf: {str(k): v for k, v in dict(store).items()} for tf, store in list(self._tc_store.items()) if store}
             p = self._tc_path(); tmp = p + ".tmp"
+            t0 = time.monotonic()
             with gzip.open(tmp, "wt", encoding="utf-8") as f:
                 json.dump(data, f)
             os.replace(tmp, p)                                     # atomic swap (never a torn file)
+            el = time.monotonic() - t0
+            if el > 5.0:
+                print(f"CLOCK-CANDLE SAVE took {el:.1f}s ({sum(len(v) for v in data.values())} candles)")
         except Exception as e:
             print(f"CLOCK-CANDLE SAVE ERROR: {e}")
 
