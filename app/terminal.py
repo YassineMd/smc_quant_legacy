@@ -5902,7 +5902,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.vb.addItem(_rc, ignoreBounds=True); pool.append(_rc)
         _rc = pool[used]
         rgb = self._HTF_COLORS[htf]["R" if side == "R" else "S"]
-        _rc.setBrush(pg.mkBrush(*rgb, 110)); _rc.setPen(pg.mkPen(None))   # fill only, no border (slightly bumped so it still reads)
+        _alpha = 55 if htf == "30m" else 110       # 30m bands at HALF opacity (user 2026-08-24: they crowd the lower tfs)
+        _rc.setBrush(pg.mkBrush(*rgb, _alpha)); _rc.setPen(pg.mkPen(None))   # fill only, no border
         return _rc
 
     def _hide_htf_walls(self, htf=None) -> None:
