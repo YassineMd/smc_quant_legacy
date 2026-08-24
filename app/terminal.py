@@ -1373,15 +1373,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._nowickwall_entries = []; self._nowickwall_lines_user = {}
         self._nowickwall_ln_pool = []; self._nowickwall_lnlbl_pool = []   # entry/SL/TP dashed lines + labels
         self._HTF_COLORS = {"4h": {"R": (190, 60, 255), "S": (60, 255, 130)},   # 4h Walls: neon violet(R)/green(S)
-                            "1h": {"R": (255, 150, 20), "S": (40, 140, 255)}}    # 1h Walls: orange(R)/blue(S)
+                            "1h": {"R": (255, 150, 20), "S": (40, 140, 255)},    # 1h Walls: orange(R)/blue(S)
+                            "30m": {"R": (255, 70, 160), "S": (0, 220, 190)}}    # 30m Walls: pink(R)/teal(S) (user 2026-08-24)
         # HTF Radar Runner SIGNAL colours — match the htf walls EXCEPT the 4h long: cyan (not the wall's green) so it
         # reads distinct from the current-tf green long triangle. Short = wall colour; 1h = 1h wall colours.
         self._HTF_SIG_COLORS = {"4h": {"R": (190, 60, 255), "S": (0, 230, 235)},   # 4h signals: violet short / CYAN long
                                 "1h": {"R": (255, 150, 20), "S": (40, 140, 255)}}   # 1h signals: orange short / blue long
         self._TF_RANK = {"1m": 0, "5m": 1, "15m": 2, "30m": 3, "1h": 4, "4h": 5}  # HTF walls draw only on tfs BELOW them
-        self._htf_box_pool = {"1h": [], "4h": []}                # HTF wall overlay cores (m10_absorblvl_1h / m10_absorblvl_4h)
-        self._htf_marks = {"1h": None, "4h": None}; self._htf_sig = {"1h": None, "4h": None}  # cached AL.detect per htf
-        self._htf_hover_zones = {"1h": [], "4h": []}             # per-htf (xl,xr,ylo,yhi,radar_lo,radar_hi,side) -> dashed radar edges on hover
+        self._htf_box_pool = {"30m": [], "1h": [], "4h": []}     # HTF wall overlay cores (m10_absorblvl_30m/_1h/_4h)
+        self._htf_marks = {"30m": None, "1h": None, "4h": None}; self._htf_sig = {"30m": None, "1h": None, "4h": None}  # cached AL.detect per htf
+        self._htf_hover_zones = {"30m": [], "1h": [], "4h": []}  # per-htf (xl,xr,ylo,yhi,radar_lo,radar_hi,side) -> dashed radar edges on hover
         self._radar_hover_zones = []                             # (xl,xr,ylo,yhi,P_resist,side,visit#,rk0,rk1,radar_lo,radar_hi) for hover
         self._radar_hover_buckets = None                         # frame ref for the live tape-rotation readout on hover
         self._radar_hover_tip = None                             # TextItem: "wall holds N%" shown on radar hover
@@ -5825,7 +5826,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._radar_hover_tip.show()
                 self._radar_show_edges(xl, xr, r_hi, r_lo, side)        # dashed RADAR top/bottom (±3·band) over the visit width
                 return
-        for _htf in ("4h", "1h"):                                 # HTF wall core -> dashed htf radar extremes (no odds tip)
+        for _htf in ("4h", "1h", "30m"):                          # HTF wall core -> dashed htf radar extremes (no odds tip)
             if not self.menu.layer_state("m10_absorblvl_" + _htf):
                 continue
             for (hxl, hxr, hylo, hyhi, hrlo, hrhi, hside) in (self._htf_hover_zones[_htf] or []):
@@ -5895,7 +5896,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return _rc
 
     def _hide_htf_walls(self, htf=None) -> None:
-        for h in ((htf,) if htf else ("1h", "4h")):
+        for h in ((htf,) if htf else ("30m", "1h", "4h")):
             for _it in self._htf_box_pool[h]:
                 _it.setVisible(False)
             self._htf_hover_zones[h] = []
@@ -5907,7 +5908,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         from app import recon_replay
         if now_t and now_t < recon_replay.CUTOFF:                 # REPLAY in the recon era -> recon htf
             return recon_replay.window_by_time(htf, win_start_t - 45 * 86400, now_t) or []
-        wk = self.worker_4h if htf == "4h" else self._sub_worker("1h")   # LIVE -> htf worker (+ daemon-archive fallback)
+        wk = self.worker_4h if htf == "4h" else self._sub_worker(htf)    # LIVE -> that htf's own worker (was hardcoded "1h",
+        #                                                                  which would have fed 30m walls with 1h buckets)
         cbH = ((wk.snapshot() if wk else None) or {}).get("closed_buckets") or []
         if not cbH and archive.available(htf):
             try:
@@ -5917,11 +5919,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return cbH
 
     def _draw_htf_walls(self, htf, buckets) -> None:
-        """Higher-timeframe WALLS overlay (sub-toggles m10_absorblvl_1h / m10_absorblvl_4h, under Order-Flow Walls):
-        the htf absorption walls drawn on the CURRENT chart as coloured bands (4h neon violet/green, 1h orange/blue) —
-        the bold core = the wall (±band); its radar (±3·band) shows as dashed lines on hover. Only drawn on tfs BELOW
-        the htf (a 1h overlay is redundant on 1h). htf source: recon_replay in a recon-era replay, else the live worker
-        (dedicated worker_4h for 4h / lazy _sub_worker for 1h) + daemon-archive fallback. AL.detect cached per htf."""
+        """Higher-timeframe WALLS overlay (sub-toggles m10_absorblvl_30m/_1h/_4h, under Order-Flow Walls): the htf
+        absorption walls drawn on the CURRENT chart as coloured bands (4h neon violet/green, 1h orange/blue, 30m
+        pink/teal) — the bold core = the wall (±band); its radar (±3·band) shows as dashed lines on hover. Only drawn
+        on tfs BELOW the htf. htf source: recon_replay in a recon-era replay, else that htf's OWN live worker
+        (worker_4h / lazy _sub_worker(htf)) + daemon-archive fallback — ALWAYS volume buckets, never clock candles,
+        regardless of the chart source (user guarantee 2026-08-24). AL.detect cached per htf."""
         if (not self.menu.layer_state("m10_absorblvl") or not self.menu.layer_state("m10_absorblvl_" + htf)
                 or self.scanner_mode != "bucket_canvas" or not buckets
                 or self._TF_RANK.get(self._tf, 99) >= self._TF_RANK[htf]):     # only on lower tfs
@@ -14883,6 +14886,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             self._draw_htf_walls("4h", buckets)                   # 4h WALLS overlay (m10_absorblvl_4h) — neon violet/green
             self._draw_htf_walls("1h", buckets)                   # 1h WALLS overlay (m10_absorblvl_1h) — orange/blue, lower tfs only
+            self._draw_htf_walls("30m", buckets)                  # 30m WALLS overlay (m10_absorblvl_30m) — pink/teal, on 1m/5m/15m
         except Exception:
             self._hide_htf_walls()
         try:

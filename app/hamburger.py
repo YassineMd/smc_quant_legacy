@@ -518,6 +518,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_wall_match_subtoggle(sec)    # keep only walls near a Reward-Switch zone
                 self._build_wall_4h_subtoggle(sec)       # overlay the 4h absorption walls (neon violet/green)
                 self._build_wall_1h_subtoggle(sec)       # overlay the 1h absorption walls (orange/blue), lower tfs
+                self._build_wall_30m_subtoggle(sec)      # overlay the 30m absorption walls (pink/teal), 1m/5m/15m only
                 self._build_wall_hidecur_subtoggle(sec)  # hide current-tf walls -> higher-timeframe-only view
             if key == "m10_crazywall":
                 self._build_wallabs_subtoggles(sec)      # Wall Absorption sub-tiers: Crazy (✪) / Big (★)
@@ -660,6 +661,19 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
         cb.toggled.connect(lambda on, k="m10_absorblvl_1h": self.layerToggled.emit(k, on))
         self.layer_checks["m10_absorblvl_1h"] = cb
+        section.addWidget(cb)
+
+    def _build_wall_30m_subtoggle(self, section) -> None:
+        """Toggle under Order-Flow Walls: overlay the higher-timeframe (30m) absorption walls on the current chart as
+        PINK(resistance)/TEAL(support) bands (bold core = wall ±band; radar ±3·band dashed on hover) — 30m structure
+        visible while trading 1m/5m/15m. Only draws on tfs BELOW 30m. Source is ALWAYS 30m VOLUME BUCKETS (recon replay /
+        daemon worker / daemon archive), never clock candles — same guarantee as the 1h/4h overlays (user 2026-08-24).
+        Rides m10_absorblvl; an m10_ key (persists + reads via layer_state). Default OFF."""
+        cb = QtWidgets.QCheckBox("· 30m Walls (pink/teal)")
+        cb.setChecked(False)                             # default OFF
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.toggled.connect(lambda on, k="m10_absorblvl_30m": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_absorblvl_30m"] = cb
         section.addWidget(cb)
 
     def _build_wall_hidecur_subtoggle(self, section) -> None:
