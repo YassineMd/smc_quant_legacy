@@ -320,9 +320,20 @@ class MarketDataCore:
             print(f"CLOCK-CANDLE SEED ERROR: {e}")
         try:                                                       # 3) official-kline REST heal (background; see method)
             import threading
-            threading.Thread(target=self._tc_rest_heal, daemon=True).start()
+            threading.Thread(target=self._tc_rest_heal_loop, daemon=True).start()
         except Exception as e:
             print(f"CLOCK-CANDLE REST-HEAL ERROR: {e}")
+
+    def _tc_rest_heal_loop(self) -> None:
+        """Boot heal + HOURLY re-heal. Boot covers restart scars; the periodic pass covers the one leak boot can't:
+        a brief upstream kline-websocket gap leaves that minute's node non-final (wire-observed 2026-08-24: one live
+        candle settled $0.02 off official after an ~18s push stall). 6 tiny REST calls/hour; atomic swaps -> safe."""
+        while True:
+            try:
+                self._tc_rest_heal()
+            except Exception as e:
+                print(f"CLOCK-CANDLE REST-HEAL ERROR: {e}")
+            time.sleep(3600.0)
 
     def _tc_rest_heal(self) -> None:
         """BOOT HEAL from OFFICIAL Binance klines (REST, background thread; 2026-08-24). The kline pipeline is
