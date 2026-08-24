@@ -62,10 +62,12 @@ def day_va(buckets, day):
     return (prices[lo], prices[poc], prices[hi])
 
 
-def compass_read(buckets, wall_marks, va_cache=None):
+def compass_read(buckets, wall_marks, va_cache=None, px=None):
     """The full table read for the LAST closed bucket. Fail-safe: {'ready': False} when there is no prev-day VP.
     `va_cache` ({date: va}) memoizes the prev-day VP — a finished day's profile is immutable, so the O(window)
-    day_va scan runs once per day instead of once per call (terminal perf rule: never O(window) per frame)."""
+    day_va scan runs once per day instead of once per call (terminal perf rule: never O(window) per frame).
+    `px` overrides the price the VALUE state is read at (the chart's own last close when `buckets` is the fixed
+    30m source and the chart is on another tf)."""
     try:
         if not buckets:
             return {"ready": False}
@@ -74,7 +76,8 @@ def compass_read(buckets, wall_marks, va_cache=None):
         def _st(i):                                  # lazy start_time — the old full list comp was 10k _f calls
             return _f(buckets[i], "start_time")      # (~30ms/recompute) to read ~5 values (profiled 2026-08-25)
         today = _day(_st(n - 1))
-        px = _f(buckets[-1], "close", "close_price")
+        if px is None:
+            px = _f(buckets[-1], "close", "close_price")
         pday = today - timedelta(days=1)
         if va_cache is not None and pday in va_cache:
             va = va_cache[pday]

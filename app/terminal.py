@@ -6274,23 +6274,41 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _draw_daycompass(self, buckets, vx0, vy0, vy1) -> None:
         """DAY COMPASS — BOTTOM-LEFT bias table (m10_daycompass): price vs YESTERDAY's value area + TODAY's wall
-        ledger -> one needle (UP BIAS / DOWN BIAS / ROTATION / MIXED). app/day_compass; wall marks = the shared
-        current-tf wall cache (same set the chart draws). DESCRIPTIVE + COINCIDENT — the pre-registered RadarRun
-        conditioning study (study/radarrun_daybias_30m.py) is the referee; no predictive claim. Stacks ABOVE the
-        Reward/effort HUD when both are on."""
+        ledger -> one needle (UP BIAS / DOWN BIAS / ROTATION / MIXED). app/day_compass. BOTH axes read the 30m
+        BUCKET series on every chart tf/source (clock included) via _htf_source_buckets — study-identical
+        (radarrun_daybias_30m.py); only the price the value state is read at is the chart's last close. The
+        study's verdict: DESCRIPTIVE + COINCIDENT, alignment INVERTS on daemon OOS — no predictive claim.
+        Stacks ABOVE the Reward/effort HUD when both are on."""
         if not self.menu.layer_state("m10_daycompass") or not buckets:
             self._compass_hud.setVisible(False); return
         from app import day_compass
-        # PERF (2026-08-25): sig on len + last END TIME ONLY — the first cut also keyed on the LIVE close, which
-        # ticks every frame, so the O(window) compass_read (full prev-day VP scan) ran at 20Hz and froze the
-        # terminal. Now: recompute once per bar close; prev-day VAs memoized (immutable once the day is over);
-        # setHtml only when the read actually changed.
-        _sig = (len(buckets), float(buckets[-1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source)
+        # SOURCE GUARANTEE (user 2026-08-25): the compass reads the 30m BUCKET series on EVERY chart tf and
+        # source (clock included) — same `_htf_source_buckets` guarantee as the 30m walls overlay, and identical
+        # to the pre-registered study (radarrun_daybias_30m.py: 30m buckets for both axes). Only the PRICE the
+        # value state is read at comes from the chart (its last closed bar).
+        # PERF (2026-08-25): sig on lengths + last END TIME only — the first cut keyed on the LIVE close, which
+        # ticks every frame, so the O(window) compass_read ran at 20Hz and froze the terminal. Recompute once per
+        # chart bar close / 30m close; prev-day VAs memoized (immutable); setHtml only when the read changed.
+        starts = [float(buckets[0].get("start_time", 0.0) or 0.0), float(buckets[-1].get("start_time", 0.0) or 0.0)]
+        cbH = self._htf_source_buckets("30m", starts[0], starts[1])
+        if len(cbH) < 4:
+            self._compass_hud.setVisible(False); return
+        _sig = (len(buckets), float(buckets[-1].get("end_time", 0.0) or 0.0),
+                len(cbH), float(cbH[-1].get("start_time", 0.0) or 0.0), self._tf, self._chart_source)
         if _sig != self._compass_sig:
             if not hasattr(self, "_compass_va_cache"):
                 self._compass_va_cache = {}
-            self._compass_read = day_compass.compass_read(buckets, self._absorb_marks(buckets),
-                                                          va_cache=self._compass_va_cache)
+            _msig = (len(cbH), float(cbH[-1].get("start_time", 0.0) or 0.0))
+            if _msig != getattr(self, "_compass_msig", None):    # 30m walls: refresh once per 30m close
+                from app import absorption_level_detect as _al
+                try:
+                    self._compass_marks = _al.detect(cbH, skip_last=False)
+                except Exception:
+                    self._compass_marks = []
+                self._compass_msig = _msig
+            _px = float(buckets[-1].get("close", buckets[-1].get("close_price", 0.0)) or 0.0)
+            self._compass_read = day_compass.compass_read(cbH, self._compass_marks,
+                                                          va_cache=self._compass_va_cache, px=_px)
             self._compass_sig = _sig
             self._compass_hud.setHtml(self._compass_html(self._compass_read or {"ready": False}))
         y = vy0 + (0.17 * (vy1 - vy0) if self._reward_hud.isVisible() else 0.0)
