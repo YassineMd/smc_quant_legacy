@@ -246,10 +246,13 @@ class MarketDataCore:
                         pass
 
             def _ovr(c):                                           # kline OHLC override for a CLOSED candle (Binance-exact)
-                n = kln.get(int(c.get("start_time", 0)))
-                if n is not None:
-                    c["open"] = float(n["open"]); c["high"] = float(n["high"])
-                    c["low"] = float(n["low"]); c["close"] = float(n["close"])
+                try:
+                    n = kln.get(int(c.get("start_time", 0)))
+                    if n is not None:
+                        c["open"] = float(n["open"]); c["high"] = float(n["high"])
+                        c["low"] = float(n["low"]); c["close"] = float(n["close"])
+                except (TypeError, ValueError, KeyError):
+                    pass                                           # one bad node must not blank the whole serve
                 return c
 
             # PERSISTENT store = source of truth for CLOSED clock candles. Saved to disk + reloaded, so a daemon restart
@@ -261,7 +264,12 @@ class MarketDataCore:
             for b in ce.closed_buckets:                            # fold the engine's newly-closed candles into the store
                 stk = int(b.start_time) if b.start_time is not None else None
                 if stk is not None and stk not in store:
-                    store[stk] = _ovr(b.full_snapshot())
+                    store[stk] = b.full_snapshot()
+            for c in store.values():                               # RE-APPLY the kline override on EVERY serve (2026-08-24):
+                _ovr(c)                                            # the push path stores a candle ~150ms after close, BEFORE
+            #                                                        Binance's final kline exists; build-once froze that stale
+            #                                                        close forever (visible open != prev-close gaps). Mutating
+            #                                                        the stored dicts heals push-path + persisted entries too.
             cap = int(getattr(config, "TIME_ENGINE_CAP", 800))
             if len(store) > cap:                                   # keep the most-recent `cap` intervals
                 for k in sorted(store)[:len(store) - cap]:
@@ -1053,7 +1061,12 @@ class MarketDataCore:
             self.broadcast_tf(tf_key, tick.to_line())
 
     def _time_wire_closed(self, tf: str, b, kln: dict) -> "Optional[dict]":
-        """Build (once) + store a CLOSED clock candle's wire, kline-OHLC-overridden. Shares the persistent store."""
+        """Build + store a CLOSED clock candle's wire, kline-OHLC-overridden. Shares the persistent store.
+        ⚠ The override is RE-APPLIED on every call (2026-08-24): the first build happens ~150ms after the close,
+        BEFORE Binance's final kline for that minute exists — the old build-once cache froze the ENGINE close forever
+        (engine closes run a few ticks stale vs the official kline), so every next candle visibly gapped its open vs
+        the stale prev close (wire-measured: our closes 95.61/95.62 vs Binance 95.64/95.66 while opens matched).
+        Re-applying is idempotent and per-key cheap; the 12s re-push then delivers the corrected close to clients."""
         stk = int(b.start_time) if b.start_time is not None else None
         if stk is None:
             return None
@@ -1061,11 +1074,14 @@ class MarketDataCore:
         w = store.get(stk)
         if w is None:
             w = b.full_snapshot()
-            node = kln.get(stk)
-            if node is not None:
+            store[stk] = w
+        node = kln.get(stk)
+        if node is not None:
+            try:
                 w["open"] = float(node["open"]); w["high"] = float(node["high"])
                 w["low"] = float(node["low"]); w["close"] = float(node["close"])
-            store[stk] = w
+            except (TypeError, ValueError, KeyError):
+                pass
         return w
 
     def mark_time_pushed(self, tf: str) -> None:
