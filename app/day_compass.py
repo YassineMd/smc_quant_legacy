@@ -62,30 +62,40 @@ def day_va(buckets, day):
     return (prices[lo], prices[poc], prices[hi])
 
 
-def compass_read(buckets, wall_marks):
-    """The full table read for the LAST closed bucket. Fail-safe: {'ready': False} when there is no prev-day VP."""
+def compass_read(buckets, wall_marks, va_cache=None):
+    """The full table read for the LAST closed bucket. Fail-safe: {'ready': False} when there is no prev-day VP.
+    `va_cache` ({date: va}) memoizes the prev-day VP — a finished day's profile is immutable, so the O(window)
+    day_va scan runs once per day instead of once per call (terminal perf rule: never O(window) per frame)."""
     try:
         if not buckets:
             return {"ready": False}
-        st = [_f(b, "start_time") for b in buckets]
-        today = _day(st[-1])
+        n = len(buckets)
+
+        def _st(i):                                  # lazy start_time — the old full list comp was 10k _f calls
+            return _f(buckets[i], "start_time")      # (~30ms/recompute) to read ~5 values (profiled 2026-08-25)
+        today = _day(_st(n - 1))
         px = _f(buckets[-1], "close", "close_price")
-        va = day_va(buckets, today - timedelta(days=1))
+        pday = today - timedelta(days=1)
+        if va_cache is not None and pday in va_cache:
+            va = va_cache[pday]
+        else:
+            va = day_va(buckets, pday)
+            if va_cache is not None and va is not None:
+                va_cache[pday] = va
         astate = None
         if va is not None and px > 0:
             val, poc, vah = va
             astate = "ABOVE" if px > vah else ("BELOW" if px < val else "INSIDE")
         cs = cr = ms = mr = 0
-        n = len(buckets)
         for m in (wall_marks or []):
             side = m.get("side")
             if side not in ("S", "R"):
                 continue
             i0 = int(m.get("i0", 0))
-            if 0 <= i0 < n and _day(st[i0]) == today:
+            if 0 <= i0 < n and _day(_st(i0)) == today:
                 cs += side == "S"; cr += side == "R"
             i1 = m.get("i1")
-            if bool(m.get("broken")) and i1 is not None and 0 <= int(i1) < n and _day(st[int(i1)]) == today:
+            if bool(m.get("broken")) and i1 is not None and 0 <= int(i1) < n and _day(_st(int(i1))) == today:
                 ms += side == "S"; mr += side == "R"
         bias = (cs - ms) - (cr - mr)
         bstate = "UP" if bias > 0 else ("DOWN" if bias < 0 else "NEUT")

@@ -6281,13 +6281,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self.menu.layer_state("m10_daycompass") or not buckets:
             self._compass_hud.setVisible(False); return
         from app import day_compass
-        _sig = (len(buckets), float(buckets[-1].get("end_time", 0.0) or 0.0),
-                round(float(buckets[-1].get("close", buckets[-1].get("close_price", 0.0)) or 0.0), 2))
+        # PERF (2026-08-25): sig on len + last END TIME ONLY — the first cut also keyed on the LIVE close, which
+        # ticks every frame, so the O(window) compass_read (full prev-day VP scan) ran at 20Hz and froze the
+        # terminal. Now: recompute once per bar close; prev-day VAs memoized (immutable once the day is over);
+        # setHtml only when the read actually changed.
+        _sig = (len(buckets), float(buckets[-1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source)
         if _sig != self._compass_sig:
-            self._compass_read = day_compass.compass_read(buckets, self._absorb_marks(buckets))
+            if not hasattr(self, "_compass_va_cache"):
+                self._compass_va_cache = {}
+            self._compass_read = day_compass.compass_read(buckets, self._absorb_marks(buckets),
+                                                          va_cache=self._compass_va_cache)
             self._compass_sig = _sig
-        r = getattr(self, "_compass_read", None) or {"ready": False}
-        self._compass_hud.setHtml(self._compass_html(r))
+            self._compass_hud.setHtml(self._compass_html(self._compass_read or {"ready": False}))
         y = vy0 + (0.17 * (vy1 - vy0) if self._reward_hud.isVisible() else 0.0)
         self._compass_hud.setPos(vx0, y)
         self._compass_hud.setVisible(True)
