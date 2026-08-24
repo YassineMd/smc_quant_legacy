@@ -1761,7 +1761,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_panel0 = True
         self._candle_mode = 0            # 'W' cycle: 0 normal>1 whisker>2 footprint>3 delta>4 force>5 delta-force (persisted)
         self._vp_mode = 1                # volume-profile mode 0..9 (default 1 = Force; 8 = VP Zones lines, 9 = Basic Delta; persisted)
-        self._hide_candles = False       # Ctrl+H — hide the candle glyphs (see the VP / zones without candle noise; persisted)
+        self._hide_candles = False       # Ctrl+Shift+H — hide the candle glyphs (see the VP / zones without candle noise; persisted)
+        self._hideall_stash = None       # Ctrl+H DECLUTTER stash: {layer_key: was_checked} while hidden, None when not stashed
         _gp0_hi = pg.mkPen("#ff9800", width=0.8); _gp0_hi.setCosmetic(True); _gp0_hi.setDashPattern([5.0, 10.0])
         _gp0_lo = pg.mkPen("#ff9800", width=0.8); _gp0_lo.setCosmetic(True); _gp0_lo.setDashPattern([5.0, 10.0])
         self.bc_p0_zero = pg.PlotDataItem(pen=pg.mkPen("#555555", width=1, style=QtCore.Qt.DashLine))
@@ -1926,7 +1927,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("P"), self,
                         activated=lambda: self.menu.layer_checks["m10_poc"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Z"), self, activated=self._toggle_sel_vp)  # selection Volume Profile on/off
-        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+H"), self, activated=self._toggle_hide_candles)  # hide candle glyphs (VP/zones only)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+H"), self, activated=self._toggle_hide_overlays)  # DECLUTTER: stash strategies + walls + bubbles; again = restore
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Shift+H"), self, activated=self._toggle_hide_candles)  # hide candle glyphs (VP/zones only; was Ctrl+H)
         QtGui.QShortcut(QtGui.QKeySequence("L"), self,
                         activated=lambda: self.menu.layer_checks["m10_liq"].toggle())
         QtGui.QShortcut(QtGui.QKeySequence("F"), self,
@@ -4097,8 +4099,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None   # force the sig-gated scanner redraw to repaint immediately
         self._draw_scanner()
 
+    def _toggle_hide_overlays(self) -> None:
+        """Ctrl+H — one-key DECLUTTER (user 2026-08-24): hide every Strategies-section badge layer + the Order-Flow
+        Walls + the Candle Bubbles; press again to restore EXACTLY the set that was showing before. Works through the
+        hamburger checkboxes (setChecked emits layerToggled -> each layer's normal clear/redraw path runs), so the
+        b-cycle stage flags etc. survive untouched. Stash is SESSION-only: closing while hidden simply persists the
+        hidden toggles (the normal rule). The sound toggle (m10_mmx_sound) is deliberately NOT touched."""
+        from app.hamburger import _M10_STRATEGIES
+        keys = [k for (k, _l, _d, _e) in _M10_STRATEGIES if k != "m10_mmx_sound"] + ["m10_absorblvl", "m10_bubbles"]
+        checks = self.menu.layer_checks
+        if self._hideall_stash is None:                       # HIDE: remember what was on, then switch it all off
+            stash = {}
+            for k in keys:
+                cb = checks.get(k)
+                if cb is not None and cb.isEnabled():
+                    stash[k] = cb.isChecked()
+                    if cb.isChecked():
+                        cb.setChecked(False)
+            self._hideall_stash = stash
+        else:                                                 # RESTORE: exactly the pre-hide set
+            for k, was in self._hideall_stash.items():
+                cb = checks.get(k)
+                if cb is not None and was and not cb.isChecked():
+                    cb.setChecked(True)
+            self._hideall_stash = None
+        self._last_scanner_sig = None                         # force the next frame to repaint the new layer set
+
     def _toggle_hide_candles(self) -> None:
-        """Ctrl+H — hide/show the candle glyphs so the volume profile / zones can be read without the candle 'noise'.
+        """Ctrl+Shift+H (was Ctrl+H) — hide/show the candle glyphs so the volume profile / zones can be read without the candle 'noise'.
         Hides the candles, the Keltner Channel, the abnormal-order lines, the gray POC baseline AND every Strategies-
         section overlay (Radar Runner + its htf signals, Engulf S/R, 15m Engulf Wall, 5m Absorption, 1h Easy, NY
         Range-break, Wall Strategy); VP, zones, POC dots and the descriptive indicators stay."""
