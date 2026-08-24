@@ -1430,7 +1430,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # cache so it works even while the 30m walls overlay itself is toggled off. (app/wallsurge_detect)
         self._ws_sph = None; self._ws_sig = None; self._ws_drawn = False
         self._ws_marks = []; self._ws_msig = None
-        self._ws_box_pool = []                                   # signal-wall rect pool (full-candle bands, nowick style)
         self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
         self._dia_fired = set(); self._dia_audio_seeded = False; self._dia_fired_tf = None   # diamond entry-BEEP: seen end_times + silent-seed guard
         # Radar Runner PROVISIONAL forming-bar preview (hollow badge on the still-forming candle; confirmed detect() keeps
@@ -8081,21 +8080,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # held SELLING on a 30m resistance wall -> red ▼ above it (Radar-Runner glyphs).
     # Walls come from the same bucket-sourced AL.detect the 30m HTF walls overlay draws, cached independently so the
     # badges work with that overlay hidden. Descriptive/eyeball layer — no tested edge. (app/wallsurge_detect)
-    def _ws_box(self, used, side):
-        """Pooled rect for a Wall Surge SIGNAL WALL — full-candle band, No-Wick-Wall palette/design (no radar)."""
-        if used >= len(self._ws_box_pool):
-            _rc = QtWidgets.QGraphicsRectItem(); _rc.setZValue(-6)
-            self.vb.addItem(_rc, ignoreBounds=True); self._ws_box_pool.append(_rc)
-        _rc = self._ws_box_pool[used]
-        rgb = (230, 70, 80) if side == "R" else (60, 200, 120)   # resistance RED / support GREEN
-        _rc.setBrush(pg.mkBrush(*rgb, 42)); _rc.setPen(pg.mkPen(None))
-        return _rc
-
     def _clear_wallsurge(self) -> None:
         if self._ws_sph is not None:
             self._ws_sph.setVisible(False)
-        for _it in self._ws_box_pool:
-            _it.setVisible(False)
         self._ws_sig = None; self._ws_drawn = False
 
     def _draw_wallsurge(self, filtered) -> None:
@@ -8151,23 +8138,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             spots.append({"pos": (i, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
                           "pen": pg.mkPen(*_pen_rgb, width=1.4), "size": 20})
         self._ws_sph.setData(spots); self._ws_sph.setVisible(True)
-        # SIGNAL WALLS (user 2026-08-24): each fire births a full-candle-height wall projected until a body close
-        # beyond the zone mitigates it — same design/palette as the No-Wick Bar Wall. Unbroken walls run to the
-        # live edge (incl. the forming bar); mitigated ones fade out DROP_AFTER bars past their break.
-        DROP_AFTER = 40
-        ub = 0
-        for m2 in wallsurge_detect.project_walls(closed, marks):
-            i0 = int(m2["i0"]); broken = bool(m2.get("broken"))
-            xr = int(m2["i1"]) if broken else (n - 1)            # live wall -> extend to the forming bar
-            if broken and (len(closed) - 1) - int(m2["i1"]) > DROP_AFTER:
-                continue
-            wlo = float(m2["lo"]); whi = float(m2["hi"])
-            if whi <= wlo or xr <= i0:
-                continue
-            _rc = self._ws_box(ub, m2["side"]); ub += 1
-            _rc.setRect(i0, wlo, max(1e-9, xr - i0), whi - wlo); _rc.setVisible(True)
-        for _it in self._ws_box_pool[ub:]:
-            _it.setVisible(False)
         self._ws_drawn = True
 
     def _dia_sound_new(self, new_edge) -> None:

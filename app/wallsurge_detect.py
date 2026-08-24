@@ -52,40 +52,6 @@ def strong_rank(vals: np.ndarray, win: int = WIN) -> np.ndarray:
     return np.where(valid > 1, (w < v[:, None]).sum(1) / np.maximum(valid - 1, 1), 0.5)
 
 
-def project_walls(candles: list, signals: list) -> list:
-    """SIGNAL WALLS (user 2026-08-24): every Wall Surge fire births a wall spanning the signal candle's FULL
-    height (low..high) — a green ▲ births a SUPPORT wall, a red ▼ a RESISTANCE wall — projected forward until a
-    later candle BODY-CLOSES beyond the zone (support: close < lo; resistance: close > hi) = MITIGATED. Same
-    design + mark shape as the No-Wick Bar Wall (app/nowick_wall_detect): [{i0, i1, side('S'|'R'), lo, hi,
-    broken}], i1 = mitigation bar for a broken wall / last evaluated bar for a live one. Fail-safe: []."""
-    n = len(candles)
-    if n == 0 or not signals:
-        return []
-    try:
-        out = []
-        for e in signals:
-            i0 = int(e.get("i", -1))
-            if not (0 <= i0 < n):
-                continue
-            c0 = candles[i0]
-            lo = float(c0.get("low", 0.0) or 0.0); hi = float(c0.get("high", 0.0) or 0.0)
-            if hi <= lo:
-                continue
-            side = "S" if int(e.get("side", 0)) > 0 else "R"
-            w = {"i0": i0, "i1": n - 1, "side": side, "lo": lo, "hi": hi, "broken": False}
-            for j in range(i0 + 1, n):                 # the birth candle can never mitigate its own wall
-                cl = float(candles[j].get("close", candles[j].get("close_price", 0.0)) or 0.0)
-                if cl <= 0.0:
-                    continue
-                if (cl < lo) if side == "S" else (cl > hi):
-                    w["i1"] = j; w["broken"] = True
-                    break
-            out.append(w)
-        return out
-    except Exception:
-        return []
-
-
 def detect(candles: list, walls: list, wall_starts: list,
            band_mult: float = BAND_MULT, win: int = WIN, strong: float = STRONG,
            kept_min: float = KEPT_MIN) -> list:
