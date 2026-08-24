@@ -304,6 +304,7 @@ class PipeClientWorker(threading.Thread):
                 self.request_timeframe(self.tf)
 
                 buffer = b""
+                last_rx = time.monotonic()
                 while not self._stop.is_set():
                     self._flush_outgoing(sock)
                     if (self.closed_buckets and not self._catchup_loading
@@ -314,9 +315,17 @@ class PipeClientWorker(threading.Thread):
                     except socket.timeout:
                         if self._force_reconnect.is_set():
                             break                  # manual refresh -> drop + reconnect (fallback path)
+                        if time.monotonic() - last_rx > 15.0:
+                            break                  # STALENESS WATCHDOG (2026-08-24): a wedged-but-open socket (half-
+                        #                            open SSH tunnel, hung daemon) kept this loop "connected" but
+                        #                            silent FOREVER — frozen price, no reconnect (user's pinned-window
+                        #                            bug). The daemon pushes the live edge every ~150ms, so 15s of
+                        #                            silence = dead; drop -> reconnect -> (delta) catch-up heals.
+                        #                            Mirrors time_feed._STALE_RECONNECT, proven there.
                         continue
                     if not data:
                         break  # daemon closed
+                    last_rx = time.monotonic()
                     buffer += data
                     if self._cu_active:
                         self._cu_bytes += len(data)
