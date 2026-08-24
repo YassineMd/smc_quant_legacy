@@ -10300,6 +10300,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 self._clear_radarwick()
             try:
+                self._draw_wallsurge(filtered)  # Wall Surge (▲▼ strong Δ+kept @ 30m wall, 1m/5m clock) — self-gated
+            except Exception:
+                self._clear_wallsurge()
+            try:
                 self._draw_htf_radarrun("4h", filtered)  # 4h Radar Runner signals on lower tfs — self-gated
                 self._draw_htf_radarrun("1h", filtered)  # 1h Radar Runner signals on lower tfs — self-gated
                 self._draw_htf_radarrun("30m", filtered)  # 30m Radar Runner signals on 1m/5m/15m — self-gated
