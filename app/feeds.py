@@ -377,6 +377,10 @@ class MarketDataCore:
                 if stk + secs > now:                               # forming interval -> the live engine owns it
                     continue
                 w = new.get(stk)
+                if w is not None and w.get("empty"):               # seed-stored gap-fill FLAT (no kline node at boot):
+                    w = None                                       # treat as a hole -> REPLACE with the real kline
+                #                                                    candle, else the "missing candle" stays a flat
+                #                                                    with healed-but-invisible OHLC (probe 2026-08-24)
                 if w is not None:                                  # stored -> official OHLC wins
                     try:
                         if (abs(float(w.get("open", 0.0)) - o) > 1e-9 or abs(float(w.get("high", 0.0)) - h) > 1e-9
