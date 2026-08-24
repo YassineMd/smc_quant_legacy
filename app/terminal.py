@@ -1425,6 +1425,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Radar Wick-Breakout LABEL (m10_radarwick, 5m/15m/30m/1h) — the powerful breakouts detect() skips: body already
         # BEYOND the radar, only the wick retests it. Cyan diamonds, eyeball-first (no persist/audio/click). (detect_wick)
         self._rw_sph = None; self._rw_sig = None; self._rw_drawn = False
+        # WALL SURGE (m10_wallsurge, 1m clock only) — pane-STRONG |delta| candle inside a same-side 30m wall/radar
+        # area (green ▲ strong buying on a support wall / red ▼ strong selling on a resistance wall). Own 30m-wall
+        # cache so it works even while the 30m walls overlay itself is toggled off. (app/wallsurge_detect)
+        self._ws_sph = None; self._ws_sig = None; self._ws_drawn = False
+        self._ws_marks = []; self._ws_msig = None
         self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
         self._dia_fired = set(); self._dia_audio_seeded = False; self._dia_fired_tf = None   # diamond entry-BEEP: seen end_times + silent-seed guard
         # Radar Runner PROVISIONAL forming-bar preview (hollow badge on the still-forming candle; confirmed detect() keeps
@@ -2413,6 +2418,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._rw_sig = None; self._sel_sig = None    # Radar Wick-Breakout label toggled -> re-detect + redraw next frame
             if not on:
                 self._clear_radarwick()                  # off -> tear the cyan diamonds down now
+        elif key == "m10_wallsurge":
+            self._ws_sig = None                          # Wall Surge toggled -> re-detect + redraw next frame
+            if not on:
+                self._clear_wallsurge()                  # off -> tear the triangles down now
         elif key == "m10_kcovershoot":
             self._kco_sig = None                         # KC Overshoot 2nd-Entry toggled -> re-detect + redraw next frame
             if not on:
@@ -8054,6 +8063,70 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._trline_buckets = filtered                         # click a diamond -> scale-out bracket lines (shared machinery)
         self._draw_rr_lines()
 
+    # WALL SURGE (m10_wallsurge, 1m CLOCK only) — pane-STRONG |delta| (Volume pane 'Pct' definition: trailing-50
+    # rank >= P80) on a candle inside a SAME-SIDE 30m wall/radar area: strong net BUYING on a 30m support wall ->
+    # green ▲ below the candle, strong net SELLING on a 30m resistance wall -> red ▼ above it (Radar-Runner glyphs).
+    # Walls come from the same bucket-sourced AL.detect the 30m HTF walls overlay draws, cached independently so the
+    # badges work with that overlay hidden. Descriptive/eyeball layer — no tested edge. (app/wallsurge_detect)
+    def _clear_wallsurge(self) -> None:
+        if self._ws_sph is not None:
+            self._ws_sph.setVisible(False)
+        self._ws_sig = None; self._ws_drawn = False
+
+    def _draw_wallsurge(self, filtered) -> None:
+        if (not self.menu.layer_state("m10_wallsurge") or self.scanner_mode != "bucket_canvas"
+                or self._chart_source != "time" or self._tf != "1m" or self._hide_candles):   # 1m CLOCK only; Ctrl+H hides
+            self._clear_wallsurge(); return
+        n = len(filtered)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        closed = filtered[:-1] if (_forming and n) else filtered      # signals evaluate CLOSED candles only
+        if len(closed) < 2:
+            self._clear_wallsurge(); return
+        starts = [float(b.get("start_time", 0.0) or 0.0) for b in closed]
+        now_t = starts[-1] if starts else 0.0
+        cbH = self._htf_source_buckets("30m", starts[0] if starts else 0.0, now_t)
+        if len(cbH) < 4:
+            self._clear_wallsurge(); return
+        _msig = (len(cbH), float(cbH[-1].get("start_time", 0.0) or 0.0))
+        if _msig != self._ws_msig:                                    # 30m walls: refresh once per 30m close
+            from app import absorption_level_detect as _al
+            try:
+                self._ws_marks = _al.detect(cbH, skip_last=False)
+            except Exception:
+                self._ws_marks = []
+            self._ws_msig = _msig
+        _cet = float(closed[-1].get("end_time", 0.0) or 0.0)
+        _sig = (len(closed), _cet, _msig)
+        if _sig == self._ws_sig and self._ws_drawn:
+            return                                                    # re-detect only on a new 1m close / wall refresh
+        self._ws_sig = _sig
+        try:
+            from app import wallsurge_detect
+            cbst = [float(b.get("start_time", 0.0) or 0.0) for b in cbH]
+            marks = wallsurge_detect.detect(closed, self._ws_marks, cbst,
+                                            win=VOL_PCT_WIN, strong=VOL_PCT_STRONG)
+        except Exception:
+            self._clear_wallsurge(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        GRN, RED = (40, 230, 120), (240, 70, 90)                     # Radar-Runner triangle colours
+        if self._ws_sph is None:
+            self._ws_sph = pg.ScatterPlotItem(pxMode=True, size=20, symbol="t1")
+            self._ws_sph.setZValue(33); self.plot.addItem(self._ws_sph, ignoreBounds=True)
+        spots = []
+        for e in marks:
+            i = int(e["i"])
+            if not (0 <= i < len(closed)):
+                continue
+            side = int(e["side"])
+            b = closed[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)               # ▲ BELOW the candle (buy) / ▼ ABOVE it (sell)
+            col = GRN if side > 0 else RED
+            _pen_rgb = [int(c * 0.55) for c in col] + [255]
+            spots.append({"pos": (i, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
+                          "pen": pg.mkPen(*_pen_rgb, width=1.4), "size": 20})
+        self._ws_sph.setData(spots); self._ws_sph.setVisible(True)
+        self._ws_drawn = True
+
     def _dia_sound_new(self, new_edge) -> None:
         """Beep the instant a NEW tradeable diamond freezes on the just-closed live-edge bar. Shares the one 'entry sound'
         toggle (m10_mmx_sound) + live-only gate with the RR / engulf strategies. DISTINCT from the RR bell: a rising
@@ -10096,6 +10169,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_radarwick(_pf or [])  # Radar Wick-Breakout label (cyan ♦) — self-gated, fail-safe
                 except Exception:
                     self._clear_radarwick()
+                try:
+                    self._draw_wallsurge(_pf or [])  # Wall Surge (▲▼ strong Δ @ 30m wall, 1m clock) — self-gated, fail-safe
+                except Exception:
+                    self._clear_wallsurge()
                 try:
                     self._draw_htf_radarrun("4h", _pf or [])  # 4h Radar Runner signals on lower tfs — self-gated
                     self._draw_htf_radarrun("1h", _pf or [])  # 1h Radar Runner signals on lower tfs — self-gated
