@@ -11005,6 +11005,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             lp = float(lp or 0.0)
             if lp <= 0.0:
                 return tsnap
+            if now - float(_wrk_et or 0.0) > 5.0:
+                # WORKER STALE (dead socket / reconnecting — e.g. deploy.ps1 killed the SSH tunnel): its last price is
+                # FROZEN, and folding it would corrupt the fresh pushed forming candle every frame (measured
+                # 2026-08-24: daemon Binance-exact + live, window pinned at the dead worker's price). _wrk_et is the
+                # daemon's ~now send-stamp, so absolute staleness is detectable; the pushed time stream is then the
+                # freshest source -> return it untouched (its own watchdog/resync heal it). This also gates the
+                # synthesis below — synthesizing from a stale price would manufacture a wrong candle. When the worker
+                # IS fresh the fold stays UNCONDITIONAL (the 42bcef5 lesson: the time stream is the laggy one).
+                return tsnap
             if float(st) + tfsec <= now:
                 # FEED IS STALE — its forming candle belongs to a PAST interval (pushes dropped/stalled). The old guard
                 # returned the stale snapshot here, freezing the clock chart at the stale price exactly when tracking
