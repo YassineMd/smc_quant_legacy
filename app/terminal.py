@@ -2599,6 +2599,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 cb.blockSignals(True); cb.setChecked(target); cb.blockSignals(False)   # draw-gate applies it next frame
         finally:
             self._loading_ui = False
+        # CHART SOURCE persists too (2026-08-24): it silently reset to Volume Buckets on every relaunch, so clock-
+        # only overlays (Wall Surge) "vanished" after a restart until the user re-picked Time Candles by hand.
+        # menu.set_chart_source only syncs the combo (blockSignals, session-restore style) -> ALSO call the
+        # terminal switch directly; deferred so it runs after init settles.
+        if getattr(self, "_saved_chart_source", None) == "time":
+            QtCore.QTimer.singleShot(0, lambda: (self.menu.set_chart_source("time"),
+                                                 self._set_chart_source("time")))
 
     def _show_shortcuts(self) -> None:
         """Top-right '?' in the menu — a grouped, styled cheatsheet of every keyboard shortcut. Built once."""
@@ -6727,6 +6734,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "bubble_vol": self.hm_bubble_min,                         # Heatmap trade-bubble min-volume filter (SOL)
                 "kc_scale": self._kc_scale,                               # 1m-KC smooth-approx effective-TF scale slider
                 "tf": self._tf,                                           # last chart timeframe -> reopen on it
+                "chart_source": self._chart_source,                       # bucket|time -> reopen on the same source
                 "ob_unmitig_only": self._ob_unmitig_only,                 # 'o' cycle stage-2: unmitigated OBs only
                 "bub_vol": self._bub_vol,                                 # 'b' cycle stage-2: bubbles + volume value
                 "bub_crazy_only": self._bub_crazy_only,                   # 'b' cycle stage-3: only the crazy bubbles
@@ -6797,6 +6805,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _sl.set_sides(bool(_sd[0]), bool(_sd[1]))
         _ret = s.get("replay_edge_t")                         # remembered replay position (restored on next toggle-on)
         self._replay_saved_edge_t = float(_ret) if isinstance(_ret, (int, float)) else None
+        _cs = s.get("chart_source")                           # bucket|time -> re-applied in _apply_saved_toggles
+        self._saved_chart_source = _cs if _cs in ("bucket", "time") else None
         _sp = s.get("swing_pct")                              # restore the swing-ZigZag sensitivity (the menu slider is
         if isinstance(_sp, (int, float)):                     # synced to this right after the menu is built — see __init__)
             self._swing_pct = float(_sp)
