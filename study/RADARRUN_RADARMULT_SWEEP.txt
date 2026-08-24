@@ -1,0 +1,40 @@
+RADAR_MULT sweep — 30m bucket | pre-registered {1.5, 2.0, 3.0, 4.0} | union replay per mult | 1m first-touch | non-overlap
+
+======================================================================================================================
+RADAR_MULT 1.5 | RECON badges 3400 | mean stop 0.876% (p25 0.638 / p75 1.035)  (2068s)
+  recon  0.5% net n=2723  W1676  L1047  win  61.5%  avg -0.062%  R -0.092  DD 103.9%  prop   0.1% | 25 -0.063% 26 -0.059%
+  recon  RR 1:1   n=2393  W1212  L1181  win  50.6%  avg -0.068%  R -0.096  DD  94.5%  prop   0.8% | 25 -0.069% 26 -0.066%
+  DAEMON badges 445 | mean stop 0.587%
+  daemon 0.5% net n=230   W130   L100   win  56.5%  avg -0.019%  R -0.031  DD   6.5%  prop   8.8% | 25 +nan% 26 -0.019%
+  daemon RR 1:1   n=224   W133   L91    win  59.4%  avg +0.031%  R +0.021  DD   4.5%  prop  31.4% | 25 +nan% 26 +0.031%
+======================================================================================================================
+RADAR_MULT 2.0 | RECON badges 4301 | mean stop 0.949% (p25 0.715 / p75 1.103)  (2405s)
+  recon  0.5% net n=3235  W2094  L1141  win  64.7%  avg -0.052%  R -0.067  DD  92.6%  prop   0.4% | 25 -0.056% 26 -0.044%
+  recon  RR 1:1   n=2617  W1322  L1295  win  50.5%  avg -0.075%  R -0.087  DD  95.8%  prop   1.2% | 25 -0.072% 26 -0.082%
+  DAEMON badges 597 | mean stop 0.664%
+  daemon 0.5% net n=275   W164   L111   win  59.6%  avg -0.021%  R -0.034  DD   6.1%  prop   7.5% | 25 +nan% 26 -0.021%
+  daemon RR 1:1   n=245   W135   L110   win  55.1%  avg -0.026%  R -0.034  DD   5.9%  prop   9.2% | 25 +nan% 26 -0.026%
+======================================================================================================================
+RADAR_MULT 3.0 | RECON badges 6090 | mean stop 0.995% (p25 0.751 / p75 1.151)  (0s)
+  recon  0.5% net n=4246  W2957  L1289  win  69.6%  avg +0.002%  R -0.003  DD  30.3%  prop  16.3% | 25 +0.002% 26 +0.001%
+  recon  RR 1:1   n=3055  W1642  L1413  win  53.7%  avg -0.006%  R -0.014  DD  44.5%  prop  13.4% | 25 -0.016% 26 +0.015%
+  DAEMON badges 790 | mean stop 0.728%
+  daemon 0.5% net n=305   W190   L115   win  62.3%  avg -0.020%  R -0.021  DD   6.2%  prop   4.6% | 25 +nan% 26 -0.020%
+  daemon RR 1:1   n=260   W140   L120   win  53.8%  avg -0.041%  R -0.047  DD   8.4%  prop   3.9% | 25 +nan% 26 -0.041%
+======================================================================================================================
+RADAR_MULT 4.0 | RECON badges 7372 | mean stop 0.996% (p25 0.758 / p75 1.155)  (3687s)
+  recon  0.5% net n=4943  W3502  L1441  win  70.8%  avg +0.016%  R +0.016  DD  16.7%  prop  37.1% | 25 +0.015% 26 +0.017%
+  recon  RR 1:1   n=3368  W1886  L1482  win  56.0%  avg +0.041%  R +0.032  DD  14.8%  prop  42.3% | 25 +0.042% 26 +0.037%
+  DAEMON badges 1023 | mean stop 0.747%
+  daemon 0.5% net n=374   W235   L139   win  62.8%  avg -0.013%  R -0.023  DD   8.2%  prop   7.5% | 25 +nan% 26 -0.013%
+  daemon RR 1:1   n=292   W163   L129   win  55.8%  avg +0.016%  R -0.002  DD   9.1%  prop  19.7% | 25 +nan% 26 +0.016%
+
+======================================================================================================================
+VERDICT (2026-08-24, pre-registered grid {1.5,2.0,3.0,4.0}, no iteration beyond it):
+- RECON is MONOTONE in mult (bigger radar band -> later/rarer breakouts, wider stops, +21%..+117% badges):
+  m4.0 is the only positive row (0.5% net +0.016%, RR1:1 +0.041%, both years positive, prop 37-42%).
+- DAEMON OOS does NOT reproduce the ordering: 0.5% net NEGATIVE at ALL four mults (-0.013..-0.021%).
+  RR1:1 positives: m1.5 +0.031% (n=224, t~0.8) and m4.0 +0.016% (n=292, t~0.4, R -0.002) — small, insignificant,
+  and m1.5 is the WORST recon row -> the in-sample ordering scrambles OOS = noise, not structure.
+- FAILED: no radar_mult in the grid yields a forward edge. Keep display mult 3.0; no geometry change.
+Harness: canonical union-persist replay per mult (stride 1, W=2000) + 1m first-touch, non-overlap, fees+slip.
