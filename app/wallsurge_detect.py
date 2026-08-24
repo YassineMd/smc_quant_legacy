@@ -1,5 +1,5 @@
 """WALL SURGE (m10_wallsurge) — 1m + 5m CLOCK charts: a STRONG volume-delta candle that KEPT its move,
-printing inside a same-side 30m wall/radar area. Green ▲ when strong net BUYING lands on a 30m SUPPORT (buy)
+printing inside a same-side 30m wall CORE (P ± band — NOT the radar area). Green ▲ when strong net BUYING lands on a 30m SUPPORT (buy)
 wall, red ▼ when strong net SELLING lands on a 30m RESISTANCE (sell) wall — aggressive flow agreeing with the
 wall it trades into, and holding what it bought.
 
@@ -10,7 +10,7 @@ bars strictly below it (NaN-padded early bars shrink the window; <2 valid bars -
 side·(close-open) / excursion-in-the-delta-direction ((high-open) net buying / (open-low) net selling); the
 signal requires retention >= KEPT_MIN (0.80) — no excursion / opposite-close candles are suppressed (user
 2026-08-24, on top of the delta filter). Walls are the SAME `absorption_level_detect.detect()` marks the 30m
-HTF walls overlay draws (bucket-sourced), radar area = price ± radar_mult·band; a wall counts while DISPLAY-
+HTF walls overlay draws (bucket-sourced), zone = price ± band_mult·band (1.0 = the drawn wall CORE); a wall counts while DISPLAY-
 alive: from its formation bucket (i0) until the end of its close-through bucket (i1) — display-aligned like
 the overlay/hover, which means the birth bucket itself is not strictly causal. Signals evaluate CLOSED candles
 only. Descriptive/eyeball layer — NO tested edge is claimed.
@@ -22,7 +22,8 @@ import numpy as np
 WIN = 50            # trailing rank window — MUST match terminal.VOL_PCT_WIN (pane parity)
 STRONG = 0.80       # rank threshold      — MUST match terminal.VOL_PCT_STRONG
 KEPT_MIN = 0.80     # Eff/Res retention floor — candle must KEEP >= this share of its delta-direction excursion
-RADAR_MULT = 3.0    # wall radar half-width in bands — matches absorption_level_detect's display default
+BAND_MULT = 1.0     # wall zone half-width in bands: 1.0 = the wall CORE (P ± band) only — NOT the radar area
+#                     (user 2026-08-24: fire only INSIDE the 30m wall; was 3.0 = radar)
 
 
 def retention(c: dict, delta: float):
@@ -86,7 +87,7 @@ def project_walls(candles: list, signals: list) -> list:
 
 
 def detect(candles: list, walls: list, wall_starts: list, wall_tf_secs: float = 1800.0,
-           radar_mult: float = RADAR_MULT, win: int = WIN, strong: float = STRONG,
+           band_mult: float = BAND_MULT, win: int = WIN, strong: float = STRONG,
            kept_min: float = KEPT_MIN) -> list:
     """Signals over CLOSED clock candles (1m or 5m). `walls` = absorption_level_detect.detect() marks over the
     30m bucket history whose start_times are `wall_starts` (same inputs as the 30m HTF walls overlay, so a
@@ -112,7 +113,7 @@ def detect(candles: list, walls: list, wall_starts: list, wall_tf_secs: float = 
             death = float(wall_starts[int(i1)]) + wall_tf_secs   # dies with its close-through bucket
         else:
             death = float("inf")
-        zones.append((side, P - radar_mult * band, P + radar_mult * band, birth, death))
+        zones.append((side, P - band_mult * band, P + band_mult * band, birth, death))
     if not zones:
         return []
     out = []
