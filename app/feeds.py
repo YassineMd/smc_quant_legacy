@@ -169,7 +169,7 @@ class MarketDataCore:
         if tf not in self.engines:
             tf = config.DEFAULT_TF
         engine = self.engines[tf]
-        order_blocks = rank_obs(calc_quant_obs(engine, tf))
+        order_blocks, marks = self._catchup_obs_marks(tf)
         # Full bucket vectors for the scanner's history + the live pulsing edge.
         closed = [b.full_snapshot() for b in engine.closed_buckets]
         active = engine.active_bucket.live_snapshot(time.time(), engine.avg_velocity)
@@ -184,11 +184,33 @@ class MarketDataCore:
             closed_buckets=closed,
             active_bucket=active,
             order_blocks=order_blocks,
-            absorptions=self._absorption_marks(tf),
+            absorptions=marks,
             footprints=footprints,
             vpin=engine.vpin,
             total_closed=engine.total_closed,
         )
+
+    def _catchup_obs_marks(self, tf: str) -> "tuple[list, list]":
+        """OB matrix + absorption marks for catch-up frames, CACHED per tf on the engine's closed-bucket count.
+        The catch-up builders ran BOTH computations synchronously ON THE LOOP for EVERY request — after a daemon
+        restart invalidates every client's delta cursor, a multi-window terminal reconnect (18 sockets, 2026-08-24)
+        queued a full recompute over up to CLOSED_BUCKETS_CAP buckets PER SOCKET; with the client staleness watchdog
+        re-requesting every 15s, the loop pinned at ~92% CPU inside calc_absorption and NEW connections starved
+        forever (py-spy-proven: MainThread active in quant_engine.py:852 <- catchup_start). Both results change only
+        when a bucket closes -> key on total_closed: the first request after a close pays once, every other socket
+        reuses the cached pair."""
+        eng = self.engines[tf]
+        key = int(eng.total_closed)
+        cache = getattr(self, "_catchup_ob_cache", None)
+        if cache is None:
+            cache = self._catchup_ob_cache = {}
+        hit = cache.get(tf)
+        if hit is not None and hit[0] == key:
+            return hit[1], hit[2]
+        obs = rank_obs(calc_quant_obs(eng, tf))
+        marks = self._absorption_marks(tf)
+        cache[tf] = (key, obs, marks)
+        return obs, marks
 
     # ------------------------------------------------------------------
     # Chunked CATCHUP builders (the daemon orchestrates START -> CHUNKs -> END)
@@ -204,13 +226,13 @@ class MarketDataCore:
         if tf not in self.engines:
             tf = config.DEFAULT_TF
         engine = self.engines[tf]
-        order_blocks = rank_obs(calc_quant_obs(engine, tf))
+        order_blocks, marks = self._catchup_obs_marks(tf)          # cached per closed-count (see _catchup_obs_marks)
         tf_db = self.footprints_db.get(tf, {})
         recent_keys = sorted(tf_db.keys(), key=lambda x: int(x))[-CATCHUP_FOOTPRINT_LIMIT:]
         footprints = {k: tf_db[k] for k in recent_keys}
         return CatchupStartPacket(
             tf=tf, target_vol=engine.target_vol, order_blocks=order_blocks,
-            absorptions=self._absorption_marks(tf),
+            absorptions=marks,
             footprints=footprints, total_buckets=len(engine.closed_buckets),
             total_closed=engine.total_closed, delta=delta)
 

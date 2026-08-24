@@ -305,6 +305,7 @@ class PipeClientWorker(threading.Thread):
 
                 buffer = b""
                 last_rx = time.monotonic()
+                got_any = False
                 while not self._stop.is_set():
                     self._flush_outgoing(sock)
                     if (self.closed_buckets and not self._catchup_loading
@@ -315,17 +316,22 @@ class PipeClientWorker(threading.Thread):
                     except socket.timeout:
                         if self._force_reconnect.is_set():
                             break                  # manual refresh -> drop + reconnect (fallback path)
-                        if time.monotonic() - last_rx > 15.0:
+                        if time.monotonic() - last_rx > (15.0 if got_any else 120.0):
                             break                  # STALENESS WATCHDOG (2026-08-24): a wedged-but-open socket (half-
                         #                            open SSH tunnel, hung daemon) kept this loop "connected" but
                         #                            silent FOREVER — frozen price, no reconnect (user's pinned-window
                         #                            bug). The daemon pushes the live edge every ~150ms, so 15s of
                         #                            silence = dead; drop -> reconnect -> (delta) catch-up heals.
-                        #                            Mirrors time_feed._STALE_RECONNECT, proven there.
+                        #                            ⚠ GRACE until the FIRST bytes of a connection (120s): a cold
+                        #                            full catch-up start after a daemon restart is legitimately slow
+                        #                            (OB+absorption build); a 15s cutoff there made every window
+                        #                            drop + re-request in lockstep — a thundering herd that pinned
+                        #                            the daemon loop at ~92% CPU forever (py-spy-proven 2026-08-24).
                         continue
                     if not data:
                         break  # daemon closed
                     last_rx = time.monotonic()
+                    got_any = True
                     buffer += data
                     if self._cu_active:
                         self._cu_bytes += len(data)
