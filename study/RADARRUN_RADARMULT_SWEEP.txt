@@ -38,3 +38,10 @@ VERDICT (2026-08-24, pre-registered grid {1.5,2.0,3.0,4.0}, no iteration beyond 
   and m1.5 is the WORST recon row -> the in-sample ordering scrambles OOS = noise, not structure.
 - FAILED: no radar_mult in the grid yields a forward edge. Keep display mult 3.0; no geometry change.
 Harness: canonical union-persist replay per mult (stride 1, W=2000) + 1m first-touch, non-overlap, fees+slip.
+
+======================================================================================================================
+ADDENDUM (2026-08-24): 0.2% + 0.4% net TP per mult (cached unions, same 1m harness) — study/radarrun_radarmult_tp02.py
+0.2% net win rates: recon 77.0 / 79.9 / 82.8 / 83.5%, daemon 73.4 / 76.5 / 78.2 / 79.8% (mult 1.5/2/3/4).
+ALL EIGHT 0.2% cells NEGATIVE (recon -0.032..-0.074%, daemon -0.029..-0.042%): win rate rises with mult but never
+clears the fee wall (0.2% TP vs 0.6-1.0% stops needs ~77-83% BE) — the tight-TP trap, uniformly worst of the ladder.
+0.4% net: recon m4.0 +0.001% (flat) and daemon m1.5 +0.005% (n=256) are the only non-negative cells — noise.
