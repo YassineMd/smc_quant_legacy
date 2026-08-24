@@ -113,9 +113,10 @@ def build_snapshot(served: List[dict], tf: str, connected: bool) -> dict:
 
 _RECV_TICK = 0.5            # recv timeout -> loop to check stop / tf-change + periodic rebuild (forming countdown)
 _CANDLE_CAP = 1000         # keep the most-recent N clock candles in the merge store
-_STALE_RECONNECT = 4.0     # no frame for this long while "connected" -> assume a stalled/half-open stream and force a
-#                            reconnect (fresh sub_time = full catch-up, which HEALS dropped/missing candles). The daemon
-#                            pushes the forming candle every pulse, so >4s of silence is never normal on a live tape.
+_STALE_RECONNECT = 15.0    # no frame for this long while "connected" -> assume a stalled/half-open stream and force a
+#                            reconnect (fresh sub_time = full catch-up, which HEALS dropped/missing candles). ⚠ was 4.0,
+#                            which sat exactly AT the daemon's stalled ~4.5s burst cadence (pre-_KLN fix) -> reconnect
+#                            churn. 15s only fires on a genuinely dead stream; the live price rides the worker fold.
 _RESYNC_SECS = 60.0        # belt-and-braces: even while frames flow, one-shot re-fetch + merge every this often — a
 #                            close frame silently dropped by the daemon's bounded queue is otherwise NEVER re-sent
 #                            (global advance-only cursor), leaving a stale partial candle (open != prev close) or a

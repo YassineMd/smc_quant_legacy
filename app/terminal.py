@@ -11034,14 +11034,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 except Exception:
                     pass
                 return snap
-            # Trust the LOCAL bucket-worker price only if it isn't LAGGING the daemon feed. Under multi-window CPU load
-            # this window's worker thread can fall behind the tick stream; folding its stale price would make the clock
-            # candle LAG the (fresh) pushed forming candle instead of tracking it. active_bucket.end_time is the daemon's
-            # ~"now" send-stamp on BOTH the worker's last tick and the pushed candle -> comparing them is CLOCK-SKEW-FREE.
-            # If the worker's last tick is >1.5s older than the pushed candle, defer: keep the fresh pushed price.
-            _poll_et = float(ab.get("end_time") or 0.0)
-            if _poll_et > 0.0 and _wrk_et > 0.0 and _wrk_et < _poll_et - 1.5:
-                return tsnap
+            # ALWAYS fold the worker's live price (deferral REMOVED 2026-08-24). The old guard kept the "fresh pushed
+            # price" whenever the worker stamp looked older — but wire measurement showed the TIME stream is the one
+            # that lags (burst cadence), so the deferral froze the clock chart at the stale pushed close, which is
+            # exactly the persistent gap the user reported. Both windows read the SAME worker tape, so folding it
+            # unconditionally makes a clock-vs-bucket live-price gap impossible by construction.
             snap = dict(tsnap)                                          # shallow copy — leave the feed's snapshot intact
             snap["latest_price"] = lp
             nb = dict(ab)                                                # copy the forming bucket, then extend to live px

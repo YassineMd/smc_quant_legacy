@@ -1093,13 +1093,21 @@ class MarketDataCore:
             try:
                 self._tc_load()
                 fp = self.footprints_db.get(tf) or {}
-                kln = {}
-                for ut, node in fp.items():
-                    if isinstance(node, dict) and "open" in node:
-                        try:
-                            kln[int(ut)] = node
-                        except (TypeError, ValueError):
-                            pass
+
+                class _KLN:
+                    """Lazy per-key view over footprints_db. The old code built a FULL {int(ut): node} dict from the
+                    entire footprints DB EVERY pulse PER tf — an O(DB) cost on the 0.15s live-edge loop that stalled
+                    it to a ~4.5s burst cadence (measured on the wire 2026-08-24; the clock-chart lag root cause).
+                    _time_wire_closed only ever looks up ONE key, so resolve per key instead."""
+                    def __init__(self, _fp):
+                        self._fp = _fp
+
+                    def get(self, stk):
+                        node = self._fp.get(str(stk))
+                        if node is None:
+                            node = self._fp.get(stk)
+                        return node if (isinstance(node, dict) and "open" in node) else None
+                kln = _KLN(fp)
                 push = []
                 ncur = len(ce.closed_buckets)
                 last = self._time_push_n.get(tf)
