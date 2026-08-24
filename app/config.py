@@ -31,7 +31,12 @@ BUCKET_MEDIAN_CANDLES = 1.0     # bucket-sizing knob: target_vol[1m] = this many
                                 # burst-immune (1m vol is ~2x right-skewed, so the old mean-based
                                 # optimizer chased bursts). 1.0 = "one bucket ~ one median 1m candle"
                                 # (matches the old level -> no disruption); raise=coarser, lower=finer.
-CLOSED_BUCKETS_CAP = 10000      # cloud retention cap — buckets/tf kept in RAM + DB + catch-up
+CLOSED_BUCKETS_CAP = 10000      # TERMINAL-side in-RAM scrollback cap (the client PC has RAM to spare)
+DAEMON_BUCKETS_CAP = 4000       # DAEMON retention — buckets/tf kept in RAM + DB + catch-up. Split from the terminal
+#                                 cap 2026-08-24 (e2-small RAM headroom): the engines' 10k full-footprint buckets/tf
+#                                 were the largest RAM sink (~300-500MB) and made full catch-ups 2.5x heavier. Deep
+#                                 history is safe elsewhere: GCS cold archive (6h cron; prune only deletes rows the
+#                                 archive already holds) + the terminal's local pkl bucket caches.
 RECALIB_WINDOW_SECS = 7200      # main.py:132 — 2-hour sliding recalibration frame
 RECOMPUTE_SECS = 5              # 19.4 — periodic recalibrate + OB rescan cadence (off the per-close hot path)
 VELOCITY_LOOKBACK = 20          # main.py:46 — rolling_velocity deque maxlen

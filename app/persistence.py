@@ -482,7 +482,7 @@ class HistoryStore:
                     cur.execute(
                         "DELETE FROM closed_buckets WHERE tf=? AND id NOT IN "
                         "(SELECT id FROM closed_buckets WHERE tf=? ORDER BY id DESC LIMIT ?)",
-                        (tf, tf, config.CLOSED_BUCKETS_CAP))
+                        (tf, tf, config.DAEMON_BUCKETS_CAP))
 
                     cur.execute("DELETE FROM order_blocks WHERE tf=?", (tf,))
                     if t["ob_rows"]:

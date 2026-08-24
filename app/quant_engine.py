@@ -461,7 +461,7 @@ class QuantEngine:
 
         self.closed_buckets.append(b)
         self.total_closed += 1          # count the close HERE, at the append (the real close site), so it
-        if len(self.closed_buckets) > config.CLOSED_BUCKETS_CAP:   # can't drift from the cap-trim below
+        if len(self.closed_buckets) > config.DAEMON_BUCKETS_CAP:   # can't drift from the cap-trim below
             self.closed_buckets.pop(0)
 
         # --- ADDITION: roll the VPIN queue (spec §3.4.1) ------------------
