@@ -316,17 +316,22 @@ class PipeClientWorker(threading.Thread):
                     except socket.timeout:
                         if self._force_reconnect.is_set():
                             break                  # manual refresh -> drop + reconnect (fallback path)
-                        if time.monotonic() - last_rx > (15.0 if got_any else 120.0):
+                        if time.monotonic() - last_rx > (15.0 if (got_any and not self._catchup_loading) else 120.0):
                             break                  # STALENESS WATCHDOG (2026-08-24): a wedged-but-open socket (half-
                         #                            open SSH tunnel, hung daemon) kept this loop "connected" but
                         #                            silent FOREVER — frozen price, no reconnect (user's pinned-window
                         #                            bug). The daemon pushes the live edge every ~150ms, so 15s of
                         #                            silence = dead; drop -> reconnect -> (delta) catch-up heals.
-                        #                            ⚠ GRACE until the FIRST bytes of a connection (120s): a cold
-                        #                            full catch-up start after a daemon restart is legitimately slow
-                        #                            (OB+absorption build); a 15s cutoff there made every window
-                        #                            drop + re-request in lockstep — a thundering herd that pinned
-                        #                            the daemon loop at ~92% CPU forever (py-spy-proven 2026-08-24).
+                        #                            ⚠ GRACE (120s) until the FIRST bytes of a connection AND while a
+                        #                            chunked catch-up streams (_catchup_loading): a cold catch-up
+                        #                            start is legitimately slow (OB+absorption build), and with
+                        #                            several windows' 10k-bucket catch-ups interleaving on the
+                        #                            daemon loop a client can wait >15s between ITS chunks — a 15s
+                        #                            cutoff in either phase makes every window abort + re-request
+                        #                            in lockstep, a self-sustaining thundering herd that pinned the
+                        #                            daemon at ~92-108% CPU (py-spy-proven TWICE 2026-08-24: first
+                        #                            in catchup_start/calc_absorption, then in _send_catchup
+                        #                            serialization after the first grace only covered first-bytes).
                         continue
                     if not data:
                         break  # daemon closed
