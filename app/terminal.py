@@ -1317,6 +1317,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._reward_hud.setZValue(34); self.plot.addItem(self._reward_hud, ignoreBounds=True)
         self._reward_hud.setVisible(False)
         self._reward_starts = []                                 # cached bucket start_times for the day-boundary bisect
+        self._compass_hud = pg.TextItem(anchor=(0, 1))           # DAY COMPASS bias table — BOTTOM-LEFT HUD (m10_daycompass)
+        self._compass_hud.textItem.setFont(QtGui.QFont("Consolas", 9))
+        self._compass_hud.setZValue(34); self.plot.addItem(self._compass_hud, ignoreBounds=True)
+        self._compass_hud.setVisible(False)
+        self._compass_sig = None                                 # recompute the read once per bar close
         self._reward_starts_sig = None
         self._sel_hi_t = None       # end_time of the selection's right edge (the scrub 'as-of' point) — set each
                                     # time the selection draws; the 4h zone reads it in causal mode so it, too, shows
@@ -2456,6 +2461,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if not on:
                 self._reward_hud.setVisible(False)       # Reward/effort off -> hide the bottom-left HUD now
                 self._hide_reward_switches()             # ... and its reward-switch flip marks (ride the same master)
+        elif key == "m10_daycompass":
+            self._compass_sig = None                     # Day Compass toggled -> recompute next frame
+            if not on:
+                self._compass_hud.setVisible(False)      # off -> hide the bias table now
         elif key == "m10_reward_switch":
             if not on:
                 self._hide_reward_switches()             # Reward-switch marks off -> tear the flip lines/flags down now
@@ -6262,6 +6271,51 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             % (gray, dim, r["window"], rc, reg, dim, 100.0 * r["brk_asym"],
                bc, arrow, r["bias"], dim, r["Rc"], r["Sc"],
                dim, r["Rb"], r["Sb"], r["avg_age"]))
+
+    def _draw_daycompass(self, buckets, vx0, vy0, vy1) -> None:
+        """DAY COMPASS — BOTTOM-LEFT bias table (m10_daycompass): price vs YESTERDAY's value area + TODAY's wall
+        ledger -> one needle (UP BIAS / DOWN BIAS / ROTATION / MIXED). app/day_compass; wall marks = the shared
+        current-tf wall cache (same set the chart draws). DESCRIPTIVE + COINCIDENT — the pre-registered RadarRun
+        conditioning study (study/radarrun_daybias_30m.py) is the referee; no predictive claim. Stacks ABOVE the
+        Reward/effort HUD when both are on."""
+        if not self.menu.layer_state("m10_daycompass") or not buckets:
+            self._compass_hud.setVisible(False); return
+        from app import day_compass
+        _sig = (len(buckets), float(buckets[-1].get("end_time", 0.0) or 0.0),
+                round(float(buckets[-1].get("close", buckets[-1].get("close_price", 0.0)) or 0.0), 2))
+        if _sig != self._compass_sig:
+            self._compass_read = day_compass.compass_read(buckets, self._absorb_marks(buckets))
+            self._compass_sig = _sig
+        r = getattr(self, "_compass_read", None) or {"ready": False}
+        self._compass_hud.setHtml(self._compass_html(r))
+        y = vy0 + (0.17 * (vy1 - vy0) if self._reward_hud.isVisible() else 0.0)
+        self._compass_hud.setPos(vx0, y)
+        self._compass_hud.setVisible(True)
+
+    @staticmethod
+    def _compass_html(r) -> str:
+        gray, green, red, dim, gold = "#9aa0aa", "#2ecc71", "#e74c3c", "#5a6170", "#f1c40f"
+        if not r.get("ready"):
+            return ("<div style='background:#12151c;padding:3px 6px'>"
+                    "<span style='color:%s;font-size:9px;letter-spacing:1px'>DAY COMPASS</span><br>"
+                    "<span style='color:%s'>&mdash; no prev-day profile &mdash;</span></div>" % (dim, gray))
+        val, poc, vah = r["va"]
+        ac = green if r["astate"] == "ABOVE" else (red if r["astate"] == "BELOW" else gray)
+        bc = green if r["bias"] > 0 else (red if r["bias"] < 0 else gray)
+        nd = r["needle"]
+        nc = green if nd == "UP BIAS" else (red if nd == "DOWN BIAS" else (gray if nd == "ROTATION" else gold))
+        arrow = "▲" if r["bias"] > 0 else ("▼" if r["bias"] < 0 else "–")
+        return (
+            "<div style='background:#12151c;padding:3px 7px;line-height:1.35'>"
+            "<span style='color:%s;font-size:9px;letter-spacing:1px'>DAY COMPASS "
+            "<span style='color:%s'>&middot; coincident</span></span><br>"
+            "<span style='color:%s'>value</span> <span style='color:%s;font-weight:bold'>%s</span>"
+            "<span style='color:%s'>&nbsp;VA %.2f&middot;%.2f&middot;%.2f</span><br>"
+            "<span style='color:%s'>walls</span> <span style='color:%s;font-weight:bold'>%s %+d</span>"
+            "<span style='color:%s'>&nbsp;new S:R %d:%d &middot; hit S:R %d:%d</span><br>"
+            "<span style='color:%s;font-weight:bold'>%s</span></div>"
+            % (gray, dim, dim, ac, r["astate"], dim, val, poc, vah,
+               dim, bc, arrow, r["bias"], dim, r["cs"], r["cr"], r["ms"], r["mr"], nc, nd))
 
     def _draw_reward(self, buckets, vx0, vy0) -> None:
         """REWARD / EFFORT read — BOTTOM-LEFT HUD (m10_reward). For each window (yesterday / today / last 30 candles /
@@ -15030,6 +15084,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_reward(buckets, vx0, vy0)                  # Reward/effort HUD, bottom-left (m10_reward)
         except Exception:
             self._reward_hud.setVisible(False)
+        try:
+            self._draw_daycompass(buckets, vx0, vy0, vy1)         # Day Compass bias table, bottom-left (m10_daycompass)
+        except Exception:
+            self._compass_hud.setVisible(False)
         try:
             self._draw_reward_switches(buckets, x, vx0, vx1, vy0, vy1)   # reward-side flip marks (m10_reward_switch)
         except Exception:
