@@ -8063,9 +8063,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._trline_buckets = filtered                         # click a diamond -> scale-out bracket lines (shared machinery)
         self._draw_rr_lines()
 
-    # WALL SURGE (m10_wallsurge, 1m CLOCK only) — pane-STRONG |delta| (Volume pane 'Pct' definition: trailing-50
-    # rank >= P80) on a candle inside a SAME-SIDE 30m wall/radar area: strong net BUYING on a 30m support wall ->
-    # green ▲ below the candle, strong net SELLING on a 30m resistance wall -> red ▼ above it (Radar-Runner glyphs).
+    # WALL SURGE (m10_wallsurge, 1m/5m CLOCK only) — pane-STRONG |delta| (Volume pane 'Pct' definition: trailing-50
+    # rank >= P80) AND Eff/Res retention >= 80% (the candle KEPT its delta-direction excursion) on a candle inside a
+    # SAME-SIDE 30m wall/radar area: strong held BUYING on a 30m support wall -> green ▲ below the candle, strong
+    # held SELLING on a 30m resistance wall -> red ▼ above it (Radar-Runner glyphs).
     # Walls come from the same bucket-sourced AL.detect the 30m HTF walls overlay draws, cached independently so the
     # badges work with that overlay hidden. Descriptive/eyeball layer — no tested edge. (app/wallsurge_detect)
     def _clear_wallsurge(self) -> None:
@@ -8075,7 +8076,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _draw_wallsurge(self, filtered) -> None:
         if (not self.menu.layer_state("m10_wallsurge") or self.scanner_mode != "bucket_canvas"
-                or self._chart_source != "time" or self._tf != "1m" or self._hide_candles):   # 1m CLOCK only; Ctrl+H hides
+                or self._chart_source != "time" or self._tf not in ("1m", "5m")   # 1m/5m CLOCK only; Ctrl+H hides
+                or self._hide_candles):
             self._clear_wallsurge(); return
         n = len(filtered)
         _forming = bool(getattr(self, "_mmx_last_forming", True))

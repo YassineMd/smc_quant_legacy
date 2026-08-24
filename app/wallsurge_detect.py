@@ -1,15 +1,19 @@
-"""WALL SURGE (m10_wallsurge) — 1m CLOCK chart only: a STRONG volume-delta candle printing inside a same-side
-30m wall/radar area. Green ▲ when strong net BUYING lands on a 30m SUPPORT (buy) wall, red ▼ when strong net
-SELLING lands on a 30m RESISTANCE (sell) wall — aggressive flow agreeing with the wall it trades into.
+"""WALL SURGE (m10_wallsurge) — 1m + 5m CLOCK charts: a STRONG volume-delta candle that KEPT its move,
+printing inside a same-side 30m wall/radar area. Green ▲ when strong net BUYING lands on a 30m SUPPORT (buy)
+wall, red ▼ when strong net SELLING lands on a 30m RESISTANCE (sell) wall — aggressive flow agreeing with the
+wall it trades into, and holding what it bought.
 
 STRONG is the Volume pane's own 'Pct' definition, replicated to the letter (terminal VOL_PCT_* constants):
 |delta| ranked against a trailing window of itself + its previous 49 bars; rank = share of the OTHER window
 bars strictly below it (NaN-padded early bars shrink the window; <2 valid bars -> neutral 0.5); STRONG = rank
->= 0.80. Walls are the SAME `absorption_level_detect.detect()` marks the 30m HTF walls overlay draws (bucket-
-sourced), radar area = price ± radar_mult·band; a wall counts while DISPLAY-alive: from its formation bucket
-(i0) until the end of its close-through bucket (i1) — display-aligned like the overlay/hover, which means the
-birth bucket itself is not strictly causal. Signals evaluate CLOSED candles only. Descriptive/eyeball layer —
-NO tested edge is claimed.
+>= 0.80. KEPT is the Eff/Res module's `retention` (effort_result.compute), replicated to the letter:
+side·(close-open) / excursion-in-the-delta-direction ((high-open) net buying / (open-low) net selling); the
+signal requires retention >= KEPT_MIN (0.80) — no excursion / opposite-close candles are suppressed (user
+2026-08-24, on top of the delta filter). Walls are the SAME `absorption_level_detect.detect()` marks the 30m
+HTF walls overlay draws (bucket-sourced), radar area = price ± radar_mult·band; a wall counts while DISPLAY-
+alive: from its formation bucket (i0) until the end of its close-through bucket (i1) — display-aligned like
+the overlay/hover, which means the birth bucket itself is not strictly causal. Signals evaluate CLOSED candles
+only. Descriptive/eyeball layer — NO tested edge is claimed.
 """
 from __future__ import annotations
 
@@ -17,7 +21,24 @@ import numpy as np
 
 WIN = 50            # trailing rank window — MUST match terminal.VOL_PCT_WIN (pane parity)
 STRONG = 0.80       # rank threshold      — MUST match terminal.VOL_PCT_STRONG
+KEPT_MIN = 0.80     # Eff/Res retention floor — candle must KEEP >= this share of its delta-direction excursion
 RADAR_MULT = 3.0    # wall radar half-width in bands — matches absorption_level_detect's display default
+
+
+def retention(c: dict, delta: float):
+    """Eff/Res `retention` for one candle, formula-identical to app.effort_result.compute (ticks cancel):
+    side·(close-open) / ((high-open) if net buying else (open-low)). None when there is no excursion in the
+    delta direction (parity-tested against effort_result.compute)."""
+    o = float(c.get("open", c.get("open_price", 0.0)) or 0.0)
+    cl = float(c.get("close", c.get("close_price", 0.0)) or 0.0)
+    h = float(c.get("high", 0.0) or 0.0); l = float(c.get("low", 0.0) or 0.0)
+    if o <= 0.0 or cl <= 0.0 or delta == 0.0:
+        return None
+    side = 1 if delta > 0 else -1
+    exc = (h - o) if side > 0 else (o - l)
+    if exc <= 0.0:
+        return None
+    return side * (cl - o) / exc
 
 
 def strong_rank(vals: np.ndarray, win: int = WIN) -> np.ndarray:
@@ -31,10 +52,11 @@ def strong_rank(vals: np.ndarray, win: int = WIN) -> np.ndarray:
 
 
 def detect(candles: list, walls: list, wall_starts: list, wall_tf_secs: float = 1800.0,
-           radar_mult: float = RADAR_MULT, win: int = WIN, strong: float = STRONG) -> list:
-    """Signals over CLOSED 1m clock candles. `walls` = absorption_level_detect.detect() marks over the 30m
-    bucket history whose start_times are `wall_starts` (same inputs as the 30m HTF walls overlay, so a badge
-    always sits inside a band the user can see). Returns [{i, side(+1/-1), delta, rank}]."""
+           radar_mult: float = RADAR_MULT, win: int = WIN, strong: float = STRONG,
+           kept_min: float = KEPT_MIN) -> list:
+    """Signals over CLOSED clock candles (1m or 5m). `walls` = absorption_level_detect.detect() marks over the
+    30m bucket history whose start_times are `wall_starts` (same inputs as the 30m HTF walls overlay, so a
+    badge always sits inside a band the user can see). Returns [{i, side(+1/-1), delta, rank, kept}]."""
     n = len(candles)
     if n < 2 or not walls or not wall_starts:
         return []
@@ -68,10 +90,13 @@ def detect(candles: list, walls: list, wall_starts: list, wall_tf_secs: float = 
         lo = float(c.get("low", 0.0) or 0.0); hi = float(c.get("high", 0.0) or 0.0)
         if hi <= 0.0 or t <= 0.0:
             continue
+        kept = retention(c, float(d[i]))             # Eff/Res retention gate ON TOP of the delta gate (user 2026-08-24)
+        if kept is None or kept < kept_min:
+            continue
         want = "S" if d[i] > 0 else "R"              # strong buying belongs on a buy (support) wall, selling on a sell wall
         for (side, rlo, rhi, birth, death) in zones:
             if side == want and birth <= t < death and lo <= rhi and hi >= rlo:
                 out.append({"i": i, "side": 1 if d[i] > 0 else -1,
-                            "delta": float(d[i]), "rank": float(rank[i])})
+                            "delta": float(d[i]), "rank": float(rank[i]), "kept": float(kept)})
                 break
     return out
