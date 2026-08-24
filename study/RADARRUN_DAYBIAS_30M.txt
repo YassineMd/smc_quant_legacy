@@ -1,0 +1,78 @@
+DAY-BIAS x RADAR RUNNER 30m BUCKET — canonical harness | pre-registered states (see header) | 1m first-touch | non-overlap
+
+========================================================================================================================
+RECON 2025-01 .. 2026-06 (in-sample era)
+  (A-state UNKNOWN, no prev-day VP: 0 fires — excluded from A cells)
+  ALL              0.5% net n=4246  W2957  L1289  win  69.6%  avg +0.002%  R -0.003  DD  30.3%  prop  16.3% | 25 +0.002% 26 +0.001%
+  ALL              RR 1:1   n=3055  W1642  L1413  win  53.7%  avg -0.006%  R -0.014  DD  44.5%  prop  13.4% | 25 -0.016% 26 +0.015%
+  A ABOVE value    0.5% net n=1341  W901   L440   win  67.2%  avg -0.023%  R -0.035  DD  27.6%  prop   2.0% | 25 -0.020% 26 -0.030%
+  A ABOVE value    RR 1:1   n=1028  W534   L494   win  51.9%  avg -0.037%  R -0.054  DD  31.0%  prop   1.9% | 25 -0.044% 26 -0.020%
+  A INSIDE value   0.5% net n=1547  W1094  L453   win  70.7%  avg +0.016%  R +0.019  DD   7.2%  prop  41.5% | 25 +0.019% 26 +0.009%
+  A INSIDE value   RR 1:1   n=1147  W630   L517   win  54.9%  avg -0.001%  R +0.010  DD  17.2%  prop  25.0% | 25 -0.007% 26 +0.013%
+  A BELOW value    0.5% net n=1476  W1045  L431   win  70.8%  avg +0.010%  R +0.007  DD  10.6%  prop  27.1% | 25 +0.012% 26 +0.004%
+  A BELOW value    RR 1:1   n=1096  W601   L495   win  54.8%  avg +0.025%  R +0.009  DD  16.7%  prop  25.6% | 25 -0.004% 26 +0.084%
+  B ledger UP      0.5% net n=1669  W1146  L523   win  68.7%  avg -0.007%  R -0.012  DD  18.9%  prop  10.0% | 25 -0.005% 26 -0.013%
+  B ledger UP      RR 1:1   n=1277  W682   L595   win  53.4%  avg -0.015%  R -0.023  DD  23.6%  prop  10.6% | 25 -0.017% 26 -0.012%
+  B ledger NEUT    0.5% net n=776   W531   L245   win  68.4%  avg -0.008%  R -0.023  DD  14.0%  prop   4.8% | 25 -0.010% 26 -0.003%
+  B ledger NEUT    RR 1:1   n=646   W346   L300   win  53.6%  avg +0.016%  R -0.019  DD  14.1%  prop  11.5% | 25 +0.037% 26 -0.021%
+  B ledger DOWN    0.5% net n=1913  W1348  L565   win  70.5%  avg +0.008%  R +0.007  DD  10.9%  prop  27.3% | 25 +0.013% 26 -0.005%
+  B ledger DOWN    RR 1:1   n=1431  W780   L651   win  54.5%  avg +0.001%  R +0.002  DD  16.8%  prop  20.9% | 25 -0.024% 26 +0.051%
+  ALIGNED value    0.5% net n=1555  W1078  L477   win  69.3%  avg -0.012%  R -0.011  DD  19.2%  prop  12.3% | 25 -0.005% 26 -0.025%
+  ALIGNED value    RR 1:1   n=1271  W685   L586   win  53.9%  avg -0.011%  R -0.011  DD  23.5%  prop  15.5% | 25 -0.020% 26 +0.007%
+  AGAINST value    0.5% net n=1613  W1090  L523   win  67.6%  avg -0.013%  R -0.025  DD  29.7%  prop   5.3% | 25 -0.011% 26 -0.016%
+  AGAINST value    RR 1:1   n=1329  W690   L639   win  51.9%  avg -0.036%  R -0.055  DD  32.7%  prop   2.8% | 25 -0.043% 26 -0.022%
+  ALIGNED ledger   0.5% net n=1954  W1331  L623   win  68.1%  avg -0.028%  R -0.028  DD  26.9%  prop   4.4% | 25 -0.013% 26 -0.059%
+  ALIGNED ledger   RR 1:1   n=1601  W853   L748   win  53.3%  avg -0.021%  R -0.024  DD  30.2%  prop  11.6% | 25 -0.020% 26 -0.025%
+  AGAINST ledger   0.5% net n=2088  W1447  L641   win  69.3%  avg +0.008%  R +0.002  DD  21.4%  prop  21.7% | 25 +0.003% 26 +0.018%
+  AGAINST ledger   RR 1:1   n=1703  W907   L796   win  53.3%  avg -0.023%  R -0.027  DD  28.9%  prop   8.2% | 25 -0.031% 26 -0.007%
+  ALIGNED BOTH     0.5% net n=1246  W859   L387   win  68.9%  avg -0.017%  R -0.018  DD  20.7%  prop   8.7% | 25 -0.004% 26 -0.045%
+  ALIGNED BOTH     RR 1:1   n=1019  W547   L472   win  53.7%  avg -0.017%  R -0.016  DD  20.5%  prop  13.9% | 25 -0.023% 26 -0.007%
+  AGAINST BOTH     0.5% net n=1260  W863   L397   win  68.5%  avg +0.003%  R -0.010  DD  19.0%  prop  12.1% | 25 -0.002% 26 +0.014%
+  AGAINST BOTH     RR 1:1   n=1035  W543   L492   win  52.5%  avg -0.029%  R -0.045  DD  26.1%  prop   4.2% | 25 -0.045% 26 +0.002%
+========================================================================================================================
+DAEMON 30m (TRUE OOS, 2026-06-20 ..)
+  (A-state UNKNOWN, no prev-day VP: 2 fires — excluded from A cells)
+  ALL              0.5% net n=305   W190   L115   win  62.3%  avg -0.020%  R -0.021  DD   6.2%  prop   4.6% | 25 +nan% 26 -0.020%
+  ALL              RR 1:1   n=260   W140   L120   win  53.8%  avg -0.041%  R -0.047  DD   8.4%  prop   3.9% | 25 +nan% 26 -0.041%
+  A ABOVE value    0.5% net n=102   W62    L40    win  60.8%  avg -0.045%  R -0.058  DD   4.0%  prop   1.0% | 25 +nan% 26 -0.045%
+  A ABOVE value    RR 1:1   n=86    W52    L34    win  60.5%  avg +0.066%  R +0.088  DD   3.8%  prop  73.8% | 25 +nan% 26 +0.066%
+  A INSIDE value   0.5% net n=125   W81    L44    win  64.8%  avg +0.013%  R +0.023  DD   4.3%  prop  38.1% | 25 +nan% 26 +0.013%
+  A INSIDE value   RR 1:1   n=109   W60    L49    win  55.0%  avg -0.011%  R -0.019  DD   5.5%  prop   9.3% | 25 +nan% 26 -0.011%
+  A BELOW value    0.5% net n=109   W66    L43    win  60.6%  avg -0.015%  R -0.023  DD   4.1%  prop   5.1% | 25 +nan% 26 -0.015%
+  A BELOW value    RR 1:1   n=90    W40    L50    win  44.4%  avg -0.200%  R -0.255  DD   9.7%  prop   0.0% | 25 +nan% 26 -0.200%
+  B ledger UP      0.5% net n=135   W82    L53    win  60.7%  avg -0.031%  R -0.057  DD   6.0%  prop   0.5% | 25 +nan% 26 -0.031%
+  B ledger UP      RR 1:1   n=116   W63    L53    win  54.3%  avg -0.028%  R -0.041  DD   5.8%  prop   2.9% | 25 +nan% 26 -0.028%
+  B ledger NEUT    0.5% net n=55    W33    L22    win  60.0%  avg -0.046%  R -0.061  DD   1.8%  prop   0.6% | 25 +nan% 26 -0.046%
+  B ledger NEUT    RR 1:1   n=51    W29    L22    win  56.9%  avg +0.027%  R +0.014  DD   2.6%  prop  22.4% | 25 +nan% 26 +0.027%
+  B ledger DOWN    0.5% net n=145   W90    L55    win  62.1%  avg -0.015%  R -0.012  DD   3.4%  prop   8.9% | 25 +nan% 26 -0.015%
+  B ledger DOWN    RR 1:1   n=129   W64    L65    win  49.6%  avg -0.113%  R -0.137  DD   8.6%  prop   0.0% | 25 +nan% 26 -0.113%
+  ALIGNED value    0.5% net n=119   W70    L49    win  58.8%  avg -0.038%  R -0.068  DD   5.2%  prop   1.1% | 25 +nan% 26 -0.038%
+  ALIGNED value    RR 1:1   n=109   W57    L52    win  52.3%  avg -0.060%  R -0.089  DD   6.6%  prop   1.0% | 25 +nan% 26 -0.060%
+  AGAINST value    0.5% net n=135   W83    L52    win  61.5%  avg -0.024%  R -0.028  DD   6.6%  prop   7.4% | 25 +nan% 26 -0.024%
+  AGAINST value    RR 1:1   n=121   W67    L54    win  55.4%  avg -0.027%  R -0.020  DD   7.1%  prop  12.2% | 25 +nan% 26 -0.027%
+  ALIGNED ledger   0.5% net n=158   W90    L68    win  57.0%  avg -0.071%  R -0.109  DD   7.6%  prop   0.0% | 25 +nan% 26 -0.071%
+  ALIGNED ledger   RR 1:1   n=148   W72    L76    win  48.6%  avg -0.107%  R -0.160  DD   9.4%  prop   0.0% | 25 +nan% 26 -0.107%
+  AGAINST ledger   0.5% net n=193   W119   L74    win  61.7%  avg -0.021%  R -0.025  DD   8.1%  prop   6.0% | 25 +nan% 26 -0.021%
+  AGAINST ledger   RR 1:1   n=176   W97    L79    win  55.1%  avg -0.032%  R -0.024  DD   7.9%  prop   7.1% | 25 +nan% 26 -0.032%
+  ALIGNED BOTH     0.5% net n=96    W56    L40    win  58.3%  avg -0.040%  R -0.069  DD   4.0%  prop   0.9% | 25 +nan% 26 -0.040%
+  ALIGNED BOTH     RR 1:1   n=89    W46    L43    win  51.7%  avg -0.067%  R -0.103  DD   5.2%  prop   0.4% | 25 +nan% 26 -0.067%
+  AGAINST BOTH     0.5% net n=115   W69    L46    win  60.0%  avg -0.046%  R -0.047  DD   6.1%  prop   1.8% | 25 +nan% 26 -0.046%
+  AGAINST BOTH     RR 1:1   n=105   W57    L48    win  54.3%  avg -0.049%  R -0.043  DD   6.6%  prop   3.1% | 25 +nan% 26 -0.049%
+
+done in 1043s
+
+======================================================================================================================
+VERDICT (2026-08-25, pre-registered cells, no iteration):
+- The natural trading hypothesis â€” trades ALIGNED with the day bias beat AGAINST â€” is REJECTED, and on the decisive
+  daemon OOS it points the WRONG WAY on both axes: ALIGNED ledger -0.071/-0.107% vs AGAINST ledger -0.021/-0.032%;
+  ALIGNED value -0.038/-0.060% vs AGAINST value -0.024/-0.027%. Recon already hinted the inversion at 0.5%
+  (ALIGNED ledger -0.028% vs AGAINST +0.008%).
+- In-sample state orderings INVERT forward: recon's best state (BELOW value, RR +0.025%) is the daemon's WORST
+  (RR -0.200%, win 44%); the daemon's one positive cell (ABOVE value RR 1:1 +0.066%, n=86, prop 74%) flips sign at
+  the 0.5% exit in the SAME state (-0.045%) and was recon's WORST state â€” textbook noise, not structure.
+- FAILED as a RadarRun conditioning signal â€” the 7th order-flow/context family to show in-sample texture and
+  invert or vanish on daemon OOS. The Day Compass HUD keeps its DESCRIPTIVE + COINCIDENT label; no predictive
+  claim is licensed. Next honest step for day-bias remains the discretionary ledger: stamp paper trades with the
+  compass state and test whether the USER's trades separate â€” a question no batch study can answer.
+Harness: canonical union fire sets + 1m first-touch, non-overlap, fees+slip; states pre-registered in
+study/radarrun_daybias_30m.py before any result was seen.
