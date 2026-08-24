@@ -574,7 +574,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         1h signals (on 1m/5m/15m/30m) and 4h signals (on 1m/5m/15m/30m/1h) — each coloured to MATCH that htf's walls
         (4h neon violet/green, 1h orange/blue), so an htf breakout is visible while you trade a lower tf. Each an m10_
         key (persists + reads via layer_state); default OFF. Badge only (no click bracket)."""
-        for key, label in (("m10_radarrun_1h", "· 1h Signals (on lower tfs)"),
+        for key, label in (("m10_radarrun_30m", "· 30m Signals (on lower tfs)"),
+                           ("m10_radarrun_1h", "· 1h Signals (on lower tfs)"),
                            ("m10_radarrun_4h", "· 4h Signals (on lower tfs)")):
             cb = QtWidgets.QCheckBox(label)
             cb.setChecked(False)                             # default OFF

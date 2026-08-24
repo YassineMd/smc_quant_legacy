@@ -1378,7 +1378,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # HTF Radar Runner SIGNAL colours — match the htf walls EXCEPT the 4h long: cyan (not the wall's green) so it
         # reads distinct from the current-tf green long triangle. Short = wall colour; 1h = 1h wall colours.
         self._HTF_SIG_COLORS = {"4h": {"R": (190, 60, 255), "S": (0, 230, 235)},   # 4h signals: violet short / CYAN long
-                                "1h": {"R": (255, 150, 20), "S": (40, 140, 255)}}   # 1h signals: orange short / blue long
+                                "1h": {"R": (255, 150, 20), "S": (40, 140, 255)},   # 1h signals: orange short / blue long
+                                "30m": {"R": (255, 70, 160), "S": (0, 220, 190)}}   # 30m signals: pink short / teal long (= 30m walls)
         self._TF_RANK = {"1m": 0, "5m": 1, "15m": 2, "30m": 3, "1h": 4, "4h": 5}  # HTF walls draw only on tfs BELOW them
         self._htf_box_pool = {"30m": [], "1h": [], "4h": []}     # HTF wall overlay cores (m10_absorblvl_30m/_1h/_4h)
         self._htf_marks = {"30m": None, "1h": None, "4h": None}; self._htf_sig = {"30m": None, "1h": None, "4h": None}  # cached AL.detect per htf
@@ -2403,8 +2404,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._rr_sig = None; self._sel_sig = None    # Radar Runner MASTER toggled -> re-detect + redraw
             if not on:                                   # off -> tear badges + forming preview + HTF sub-overlays down NOW
                 self._clear_radarrun(); self._clear_radarrun_forming(); self._clear_htf_radarrun()
-        elif key in ("m10_radarrun_1h", "m10_radarrun_4h"):
-            _h = "1h" if key.endswith("_1h") else "4h"
+        elif key in ("m10_radarrun_1h", "m10_radarrun_4h", "m10_radarrun_30m"):
+            _h = key.rsplit("_", 1)[1]                   # "1h" / "4h" / "30m"
             self._rr_htf_sig[_h] = None                  # HTF Radar Runner signals toggled -> re-detect + redraw next frame
             if not on:
                 self._clear_htf_radarrun(_h)             # off -> tear those htf badges down now
@@ -8111,7 +8112,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # 1h orange/blue; long = support colour, short = resistance colour). Badges only (no click bracket). Placed at the
     # current-tf bar where the htf bar CLOSED. Only on tfs BELOW the htf; htf source shared with the htf walls.
     def _clear_htf_radarrun(self, htf=None) -> None:
-        for _h in ((htf,) if htf else ("1h", "4h")):
+        for _h in ((htf,) if htf else ("30m", "1h", "4h")):
             _sph = self._rr_htf_sph.get(_h)
             if _sph is not None:
                 _sph.setVisible(False)
@@ -10098,6 +10099,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 try:
                     self._draw_htf_radarrun("4h", _pf or [])  # 4h Radar Runner signals on lower tfs — self-gated
                     self._draw_htf_radarrun("1h", _pf or [])  # 1h Radar Runner signals on lower tfs — self-gated
+                    self._draw_htf_radarrun("30m", _pf or [])  # 30m Radar Runner signals on 1m/5m/15m — self-gated
                 except Exception:
                     self._clear_htf_radarrun()
                 try:
@@ -10220,6 +10222,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             try:
                 self._draw_htf_radarrun("4h", filtered)  # 4h Radar Runner signals on lower tfs — self-gated
                 self._draw_htf_radarrun("1h", filtered)  # 1h Radar Runner signals on lower tfs — self-gated
+                self._draw_htf_radarrun("30m", filtered)  # 30m Radar Runner signals on 1m/5m/15m — self-gated
             except Exception:
                 self._clear_htf_radarrun()
             try:
