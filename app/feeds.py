@@ -318,6 +318,87 @@ class MarketDataCore:
                         store[stk] = to_bucket_wire(c)
         except Exception as e:
             print(f"CLOCK-CANDLE SEED ERROR: {e}")
+        try:                                                       # 3) official-kline REST heal (background; see method)
+            import threading
+            threading.Thread(target=self._tc_rest_heal, daemon=True).start()
+        except Exception as e:
+            print(f"CLOCK-CANDLE REST-HEAL ERROR: {e}")
+
+    def _tc_rest_heal(self) -> None:
+        """BOOT HEAL from OFFICIAL Binance klines (REST, background thread; 2026-08-24). The kline pipeline is
+        live-websocket-only, so a daemon restart leaves scars the stream can never repair: (a) intervals fully inside
+        the downtime have NO kline node -> the footprint seed leaves holes (user-visible MISSING clock candles);
+        (b) the last pre-shutdown candle keeps its last STREAMED, non-final kline -> one stale close per restart;
+        (c) closes persisted before the re-apply fix are stale on disk. One request per tf covers the whole retained
+        window (cap 800 < 1000-row REST limit): stored candles get official OHLC, downtime holes become honest
+        kline-only candles (real OHLC + taker-buy/sell volume; footprint/engine scalars stay honest-zero). The
+        matching footprints_db node's OHLC is corrected too — else the serve-time _ovr/_KLN re-apply would re-stale
+        the boundary candle from the old node (nodes are only UPDATED, never created: kline-only nodes must not leak
+        into the volume-bucket/persistence paths). Runs OFF the event loop; every visible write is ONE atomic dict
+        swap (no torn/concurrent-resize reads on the serving side); a close folded into the old store dict during the
+        tiny copy->swap window is re-folded from ce.closed_buckets on the next serve. Fail-safe per tf: any error
+        (offline, rate-limit, bad row) leaves that tf exactly as it was."""
+        cap = int(getattr(config, "TIME_ENGINE_CAP", 800))
+        healed = created = 0
+        for tf in config.TIMEFRAMES:
+            secs = config.TF_SECONDS.get(tf)
+            if not secs:
+                continue
+            try:
+                r = requests.get(config.REST_KLINES, timeout=6,
+                                 params={"symbol": config.SYMBOL, "interval": tf, "limit": min(1000, cap + 5)})
+                rows = r.json()
+                if not isinstance(rows, list):
+                    continue                                       # error payload (rate-limit dict etc.)
+            except Exception:
+                continue
+            cur = self._tc_store.get(tf) or {}
+            new = dict(cur)
+            fp = self.footprints_db.get(tf) or {}
+            now = time.time()
+            for row in rows:
+                try:
+                    stk = int(row[0]) // 1000
+                    o, h, l, c, v, tb = (float(row[1]), float(row[2]), float(row[3]),
+                                         float(row[4]), float(row[5]), float(row[9]))
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if stk + secs > now:                               # forming interval -> the live engine owns it
+                    continue
+                w = new.get(stk)
+                if w is not None:                                  # stored -> official OHLC wins
+                    try:
+                        if (abs(float(w.get("open", 0.0)) - o) > 1e-9 or abs(float(w.get("high", 0.0)) - h) > 1e-9
+                                or abs(float(w.get("low", 0.0)) - l) > 1e-9
+                                or abs(float(w.get("close", 0.0)) - c) > 1e-9):
+                            nw = dict(w)
+                            nw["open"] = o; nw["high"] = h; nw["low"] = l; nw["close"] = c
+                            new[stk] = nw
+                            healed += 1
+                    except (TypeError, ValueError):
+                        pass
+                else:                                              # downtime hole -> honest kline-only candle
+                    from .time_candles import to_bucket_wire
+                    new[stk] = to_bucket_wire({
+                        "start_time": float(stk), "end_time": float(stk + secs),
+                        "open_price": o, "close_price": c, "high": h, "low": l,
+                        "buy_vol": tb, "sell_vol": max(v - tb, 0.0), "curr_vol": v,
+                        "poc_price": c, "n_trades": 0, "empty": False, "levels": {}})
+                    created += 1
+                key = str(stk) if str(stk) in fp else (stk if stk in fp else None)
+                nd = fp.get(key) if key is not None else None
+                if isinstance(nd, dict) and "open" in nd:          # keep the _ovr source consistent with the heal
+                    try:
+                        if (abs(float(nd["open"]) - o) > 1e-9 or abs(float(nd["high"]) - h) > 1e-9
+                                or abs(float(nd["low"]) - l) > 1e-9 or abs(float(nd["close"]) - c) > 1e-9):
+                            nn = dict(nd)
+                            nn["open"] = o; nn["high"] = h; nn["low"] = l; nn["close"] = c
+                            fp[key] = nn                           # ONE atomic swap per node
+                    except (TypeError, ValueError, KeyError):
+                        pass
+            self._tc_store[tf] = new                               # ONE atomic swap per tf
+        if healed or created:
+            print(f"CLOCK-CANDLES REST-HEAL: {healed} stale OHLC fixed, {created} downtime candles created.")
 
     def _tc_save(self, force: bool = False) -> None:
         """Persist the clock-candle store (throttled ~60s; force=True on shutdown). Atomic replace; fully guarded."""
