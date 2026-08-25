@@ -1,10 +1,11 @@
-"""LONG WICK rejection (m10_longwick) — red/green DIAMOND badges, ALL chart tfs/sources (user 2026-08-25).
+"""LONG WICK rejection (m10_longwick) — red/green DIAMOND badges, ALL chart tfs/sources (user 2026-08-25;
+geometry v2 2026-08-25: the off-side wick constraint is a single 2x DOMINANCE rule).
 
-  RED ♦ (above the candle)  — at a SELL (R) wall: BEARISH bar whose UPPER wick is bigger than the body AND
-                              bigger than the lower wick, with the lower wick smaller than the body (or absent)
+  RED ♦ (above the candle)  — at a SELL (R) wall: BEARISH bar, UPPER wick > body AND upper wick >= 2x the
+                              lower wick (the lower wick may be any size, even > body, as long as it's doubled)
                               — an upper-wick rejection into resistance.
-  GREEN ♦ (below the candle) — mirror at a BUY (S) wall: BULLISH bar, lower wick > body and > upper wick,
-                              upper wick < body (or absent) — a lower-wick rejection into support.
+  GREEN ♦ (below the candle) — mirror at a BUY (S) wall: BULLISH bar, lower wick > body AND lower wick >= 2x
+                              the upper wick.
 
 Walls = the CURRENT-tf Order-Flow Wall marks the chart draws (shared _absorb_marks cache; indices into the
 same bucket list). A wall counts while alive at that bar: born (i0 <= i) and not yet at its break bar
@@ -51,9 +52,9 @@ def detect(candles: list, walls: list, skip_last: bool = True) -> list:
             uw = h - max(o, c); lw = min(o, c) - l
             if body <= 0.0:
                 continue
-            if c < o and uw > body and uw > lw and lw < body:
+            if c < o and uw > body and uw >= 2.0 * lw:
                 want, side = "R", -1                 # upper-wick rejection into resistance -> red ♦
-            elif c > o and lw > body and lw > uw and uw < body:
+            elif c > o and lw > body and lw >= 2.0 * uw:
                 want, side = "S", 1                  # lower-wick rejection into support -> green ♦
             else:
                 continue
