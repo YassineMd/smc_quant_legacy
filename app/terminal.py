@@ -1434,7 +1434,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # area (green ▲ strong buying on a support wall / red ▼ strong selling on a resistance wall). Own 30m-wall
         # cache so it works even while the 30m walls overlay itself is toggled off. (app/wallsurge_detect)
         self._ws_sph = None; self._ws_sig = None; self._ws_drawn = False
-        self._ws_marks = []; self._ws_msig = None
+        self._ws_marks = {}; self._ws_msig = {}                  # per-htf ("30m"/"1h") wall-mark caches
         self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
         self._dia_fired = set(); self._dia_audio_seeded = False; self._dia_fired_tf = None   # diamond entry-BEEP: seen end_times + silent-seed guard
         # Radar Runner PROVISIONAL forming-bar preview (hollow badge on the still-forming candle; confirmed detect() keeps
@@ -8174,27 +8174,40 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._clear_wallsurge(); return
         starts = [float(b.get("start_time", 0.0) or 0.0) for b in closed]
         now_t = starts[-1] if starts else 0.0
-        cbH = self._htf_source_buckets("30m", starts[0] if starts else 0.0, now_t)
-        if len(cbH) < 4:
+        # WALL SOURCES: 30m AND 1h BUCKET walls (user 2026-08-25) — both via the bucket-only _htf_source_buckets
+        # guarantee; each htf's marks cached on its own (len, last-start) sig, refreshed once per htf close.
+        if not isinstance(self._ws_marks, dict):
+            self._ws_marks = {}; self._ws_msig = {}
+        srcs = {}
+        for _h in ("30m", "1h"):
+            cbH = self._htf_source_buckets(_h, starts[0] if starts else 0.0, now_t)
+            if len(cbH) < 4:
+                continue
+            _m = (len(cbH), float(cbH[-1].get("start_time", 0.0) or 0.0))
+            if _m != self._ws_msig.get(_h):
+                from app import absorption_level_detect as _al
+                try:
+                    self._ws_marks[_h] = _al.detect(cbH, skip_last=False)
+                except Exception:
+                    self._ws_marks[_h] = []
+                self._ws_msig[_h] = _m
+            srcs[_h] = ([float(b.get("start_time", 0.0) or 0.0) for b in cbH], self._ws_msig[_h])
+        if not srcs:
             self._clear_wallsurge(); return
-        _msig = (len(cbH), float(cbH[-1].get("start_time", 0.0) or 0.0))
-        if _msig != self._ws_msig:                                    # 30m walls: refresh once per 30m close
-            from app import absorption_level_detect as _al
-            try:
-                self._ws_marks = _al.detect(cbH, skip_last=False)
-            except Exception:
-                self._ws_marks = []
-            self._ws_msig = _msig
         _cet = float(closed[-1].get("end_time", 0.0) or 0.0)
-        _sig = (len(closed), _cet, _msig)
+        _sig = (len(closed), _cet, tuple(sorted((h, m) for h, (_, m) in srcs.items())))
         if _sig == self._ws_sig and self._ws_drawn:
-            return                                                    # re-detect only on a new 1m close / wall refresh
+            return                                                    # re-detect only on a new close / wall refresh
         self._ws_sig = _sig
         try:
             from app import wallsurge_detect
-            cbst = [float(b.get("start_time", 0.0) or 0.0) for b in cbH]
-            marks = wallsurge_detect.detect(closed, self._ws_marks, cbst,
-                                            win=VOL_PCT_WIN, strong=VOL_PCT_STRONG)
+            marks = []; _seen = set()
+            for _h, (cbst, _m) in srcs.items():                       # per-htf detect, merged; dedupe (i, side, type)
+                for e in wallsurge_detect.detect(closed, self._ws_marks.get(_h) or [], cbst,
+                                                 win=VOL_PCT_WIN, strong=VOL_PCT_STRONG):
+                    k = (e["i"], e["side"], e.get("type"))
+                    if k not in _seen:
+                        _seen.add(k); marks.append(e)
         except Exception:
             self._clear_wallsurge(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
