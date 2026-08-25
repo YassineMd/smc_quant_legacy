@@ -1,0 +1,101 @@
+LONG WICK @ WALL — 15m + 1h BUCKET HONEST TEST | same pre-registration as the 30m run
+
+========================================================================================================================
+BUCKET 15m — RECON 2025-01 .. 2026-06 (per-year split in rows)
+  geometry candidates: 10447 / 83759 bars
+  ALL   0.2% net  n=4071  W2602  L1469  win  63.9%  avg -0.091%  R -0.210  DD 341.8%  prop   0.0% | 25 -0.097% 26 -0.080%
+  ALL   0.25% net n=3972  W2377  L1595  win  59.8%  avg -0.091%  R -0.212  DD 337.2%  prop   0.0% | 25 -0.095% 26 -0.084%
+  ALL   0.3% net  n=3896  W2178  L1718  win  55.9%  avg -0.096%  R -0.221  DD 343.9%  prop   0.0% | 25 -0.098% 26 -0.091%
+  ALL   0.4% net  n=3779  W1903  L1876  win  50.4%  avg -0.095%  R -0.217  DD 328.8%  prop   0.0% | 25 -0.096% 26 -0.093%
+  ALL   0.5% net  n=3645  W1643  L2002  win  45.1%  avg -0.101%  R -0.236  DD 345.3%  prop   0.0% | 25 -0.097% 26 -0.109%
+  ALL   RR 1:1    n=3741  W1816  L1925  win  48.5%  avg -0.101%  R -0.230  DD 344.8%  prop   0.0% | 25 -0.099% 26 -0.105%
+  LONG  0.2% net  n=1963  W1221  L742   win  62.2%  avg -0.099%  R -0.236  DD 185.1%  prop   0.0% | 25 -0.100% 26 -0.098%
+  LONG  0.25% net n=1936  W1123  L813   win  58.0%  avg -0.100%  R -0.242  DD 187.7%  prop   0.0% | 25 -0.099% 26 -0.101%
+  LONG  0.3% net  n=1918  W1040  L878   win  54.2%  avg -0.102%  R -0.250  DD 192.1%  prop   0.0% | 25 -0.102% 26 -0.102%
+  LONG  0.4% net  n=1881  W918   L963   win  48.8%  avg -0.101%  R -0.242  DD 182.8%  prop   0.0% | 25 -0.098% 26 -0.106%
+  LONG  0.5% net  n=1845  W795   L1050  win  43.1%  avg -0.111%  R -0.277  DD 205.7%  prop   0.0% | 25 -0.100% 26 -0.133%
+  LONG  RR 1:1    n=1878  W889   L989   win  47.3%  avg -0.100%  R -0.259  DD 195.2%  prop   0.0% | 25 -0.086% 26 -0.126%
+  SHORT 0.2% net  n=2228  W1454  L774   win  65.3%  avg -0.085%  R -0.187  DD 168.0%  prop   0.0% | 25 -0.094% 26 -0.066%
+  SHORT 0.25% net n=2197  W1349  L848   win  61.4%  avg -0.082%  R -0.183  DD 161.5%  prop   0.0% | 25 -0.088% 26 -0.070%
+  SHORT 0.3% net  n=2166  W1243  L923   win  57.4%  avg -0.088%  R -0.190  DD 166.4%  prop   0.0% | 25 -0.092% 26 -0.081%
+  SHORT 0.4% net  n=2132  W1101  L1031  win  51.6%  avg -0.087%  R -0.188  DD 164.9%  prop   0.0% | 25 -0.089% 26 -0.082%
+  SHORT 0.5% net  n=2089  W975   L1114  win  46.7%  avg -0.088%  R -0.192  DD 167.5%  prop   0.1% | 25 -0.090% 26 -0.084%
+  SHORT RR 1:1    n=2119  W1059  L1060  win  50.0%  avg -0.100%  R -0.198  DD 172.7%  prop   0.0% | 25 -0.105% 26 -0.088%
+------------------------------------------------------------------------------------------------------------------------
+BUCKET 15m — DAEMON (TRUE OOS, 2026-06-20 ..)
+  geometry candidates: 1158 / 9708 bars
+  ALL   0.2% net  n=302   W158   L144   win  52.3%  avg -0.111%  R -0.373  DD  45.7%  prop   0.0% | 25 +nan% 26 -0.111%
+  ALL   0.25% net n=297   W141   L156   win  47.5%  avg -0.118%  R -0.388  DD  46.8%  prop   0.0% | 25 +nan% 26 -0.118%
+  ALL   0.3% net  n=292   W132   L160   win  45.2%  avg -0.111%  R -0.363  DD  42.7%  prop   0.0% | 25 +nan% 26 -0.111%
+  ALL   0.4% net  n=281   W118   L163   win  42.0%  avg -0.092%  R -0.308  DD  35.4%  prop   0.0% | 25 +nan% 26 -0.092%
+  ALL   0.5% net  n=269   W101   L168   win  37.5%  avg -0.093%  R -0.307  DD  34.4%  prop   0.0% | 25 +nan% 26 -0.093%
+  ALL   RR 1:1    n=290   W129   L161   win  44.5%  avg -0.121%  R -0.390  DD  45.3%  prop   0.0% | 25 +nan% 26 -0.121%
+  LONG  0.2% net  n=158   W88    L70    win  55.7%  avg -0.085%  R -0.300  DD  19.0%  prop   0.0% | 25 +nan% 26 -0.085%
+  LONG  0.25% net n=155   W77    L78    win  49.7%  avg -0.101%  R -0.329  DD  20.4%  prop   0.0% | 25 +nan% 26 -0.101%
+  LONG  0.3% net  n=154   W73    L81    win  47.4%  avg -0.092%  R -0.304  DD  18.9%  prop   0.0% | 25 +nan% 26 -0.092%
+  LONG  0.4% net  n=149   W61    L88    win  40.9%  avg -0.093%  R -0.321  DD  19.3%  prop   0.0% | 25 +nan% 26 -0.093%
+  LONG  0.5% net  n=148   W56    L92    win  37.8%  avg -0.082%  R -0.277  DD  17.0%  prop   0.1% | 25 +nan% 26 -0.082%
+  LONG  RR 1:1    n=152   W72    L80    win  47.4%  avg -0.105%  R -0.336  DD  20.6%  prop   0.0% | 25 +nan% 26 -0.105%
+  SHORT 0.2% net  n=166   W85    L81    win  51.2%  avg -0.122%  R -0.399  DD  27.3%  prop   0.0% | 25 +nan% 26 -0.122%
+  SHORT 0.25% net n=165   W80    L85    win  48.5%  avg -0.113%  R -0.379  DD  26.1%  prop   0.0% | 25 +nan% 26 -0.113%
+  SHORT 0.3% net  n=164   W71    L93    win  43.3%  avg -0.128%  R -0.415  DD  27.9%  prop   0.0% | 25 +nan% 26 -0.128%
+  SHORT 0.4% net  n=161   W66    L95    win  41.0%  avg -0.106%  R -0.339  DD  23.1%  prop   0.0% | 25 +nan% 26 -0.106%
+  SHORT 0.5% net  n=155   W57    L98    win  36.8%  avg -0.105%  R -0.345  DD  23.2%  prop   0.0% | 25 +nan% 26 -0.105%
+  SHORT RR 1:1    n=164   W71    L93    win  43.3%  avg -0.122%  R -0.409  DD  27.9%  prop   0.0% | 25 +nan% 26 -0.122%
+========================================================================================================================
+BUCKET 1h — RECON 2025-01 .. 2026-06 (per-year split in rows)
+  geometry candidates: 2669 / 20915 bars
+  ALL   0.2% net  n=617   W458   L159   win  74.2%  avg -0.087%  R -0.122  DD  31.3%  prop   0.0% | 25 -0.106% 26 -0.058%
+  ALL   0.25% net n=609   W434   L175   win  71.3%  avg -0.085%  R -0.115  DD  29.5%  prop   0.0% | 25 -0.093% 26 -0.072%
+  ALL   0.3% net  n=601   W414   L187   win  68.9%  avg -0.076%  R -0.102  DD  26.5%  prop   0.0% | 25 -0.092% 26 -0.050%
+  ALL   0.4% net  n=591   W371   L220   win  62.8%  avg -0.085%  R -0.113  DD  28.9%  prop   0.0% | 25 -0.097% 26 -0.067%
+  ALL   0.5% net  n=575   W333   L242   win  57.9%  avg -0.089%  R -0.119  DD  29.5%  prop   0.0% | 25 -0.101% 26 -0.069%
+  ALL   RR 1:1    n=563   W280   L283   win  49.7%  avg -0.096%  R -0.129  DD  30.4%  prop   0.1% | 25 -0.086% 26 -0.113%
+  LONG  0.2% net  n=262   W191   L71    win  72.9%  avg -0.108%  R -0.134  DD  15.2%  prop   0.0% | 25 -0.134% 26 -0.073%
+  LONG  0.25% net n=261   W181   L80    win  69.3%  avg -0.108%  R -0.136  DD  15.6%  prop   0.0% | 25 -0.128% 26 -0.082%
+  LONG  0.3% net  n=257   W168   L89    win  65.4%  avg -0.119%  R -0.149  DD  16.3%  prop   0.0% | 25 -0.152% 26 -0.073%
+  LONG  0.4% net  n=254   W152   L102   win  59.8%  avg -0.115%  R -0.156  DD  16.6%  prop   0.0% | 25 -0.128% 26 -0.096%
+  LONG  0.5% net  n=249   W139   L110   win  55.8%  avg -0.110%  R -0.149  DD  16.2%  prop   0.0% | 25 -0.139% 26 -0.070%
+  LONG  RR 1:1    n=244   W116   L128   win  47.5%  avg -0.132%  R -0.178  DD  18.1%  prop   0.0% | 25 -0.119% 26 -0.148%
+  SHORT 0.2% net  n=361   W272   L89    win  75.3%  avg -0.069%  R -0.111  DD  17.0%  prop   0.0% | 25 -0.083% 26 -0.046%
+  SHORT 0.25% net n=356   W260   L96    win  73.0%  avg -0.063%  R -0.092  DD  15.2%  prop   0.0% | 25 -0.065% 26 -0.058%
+  SHORT 0.3% net  n=353   W252   L101   win  71.4%  avg -0.043%  R -0.068  DD  12.7%  prop   0.0% | 25 -0.050% 26 -0.029%
+  SHORT 0.4% net  n=346   W225   L121   win  65.0%  avg -0.059%  R -0.078  DD  14.3%  prop   0.1% | 25 -0.071% 26 -0.040%
+  SHORT 0.5% net  n=339   W201   L138   win  59.3%  avg -0.070%  R -0.098  DD  15.7%  prop   0.0% | 25 -0.073% 26 -0.066%
+  SHORT RR 1:1    n=335   W172   L163   win  51.3%  avg -0.069%  R -0.095  DD  16.7%  prop   0.5% | 25 -0.065% 26 -0.076%
+------------------------------------------------------------------------------------------------------------------------
+BUCKET 1h — DAEMON (TRUE OOS, 2026-06-20 ..)
+  geometry candidates: 299 / 2424 bars
+  ALL   0.2% net  n=98    W72    L26    win  73.5%  avg -0.033%  R -0.084  DD   6.2%  prop   0.1% | 25 +nan% 26 -0.033%
+  ALL   0.25% net n=95    W66    L29    win  69.5%  avg -0.033%  R -0.084  DD   6.0%  prop   0.0% | 25 +nan% 26 -0.033%
+  ALL   0.3% net  n=93    W60    L33    win  64.5%  avg -0.046%  R -0.101  DD   6.2%  prop   0.0% | 25 +nan% 26 -0.046%
+  ALL   0.4% net  n=91    W56    L35    win  61.5%  avg -0.023%  R -0.024  DD   4.7%  prop   9.8% | 25 +nan% 26 -0.023%
+  ALL   0.5% net  n=88    W45    L43    win  51.1%  avg -0.094%  R -0.104  DD   6.3%  prop   0.8% | 25 +nan% 26 -0.094%
+  ALL   RR 1:1    n=91    W48    L43    win  52.7%  avg -0.078%  R -0.114  DD   6.5%  prop   0.1% | 25 +nan% 26 -0.078%
+  LONG  0.2% net  n=47    W33    L14    win  70.2%  avg -0.065%  R -0.111  DD   3.4%  prop   0.0% | 25 +nan% 26 -0.065%
+  LONG  0.25% net n=47    W31    L16    win  66.0%  avg -0.079%  R -0.100  DD   3.7%  prop   0.0% | 25 +nan% 26 -0.079%
+  LONG  0.3% net  n=47    W29    L18    win  61.7%  avg -0.081%  R -0.106  DD   3.0%  prop   0.1% | 25 +nan% 26 -0.081%
+  LONG  0.4% net  n=45    W26    L19    win  57.8%  avg -0.067%  R -0.040  DD   2.4%  prop   3.9% | 25 +nan% 26 -0.067%
+  LONG  0.5% net  n=44    W22    L22    win  50.0%  avg -0.097%  R -0.079  DD   3.4%  prop   1.1% | 25 +nan% 26 -0.097%
+  LONG  RR 1:1    n=46    W24    L22    win  52.2%  avg -0.110%  R -0.135  DD   3.4%  prop   0.1% | 25 +nan% 26 -0.110%
+  SHORT 0.2% net  n=55    W41    L14    win  74.5%  avg -0.016%  R -0.084  DD   3.3%  prop   0.1% | 25 +nan% 26 -0.016%
+  SHORT 0.25% net n=53    W38    L15    win  71.7%  avg +0.002%  R -0.072  DD   2.9%  prop   0.2% | 25 +nan% 26 +0.002%
+  SHORT 0.3% net  n=53    W35    L18    win  66.0%  avg -0.024%  R -0.095  DD   3.5%  prop   0.1% | 25 +nan% 26 -0.024%
+  SHORT 0.4% net  n=52    W33    L19    win  63.5%  avg +0.002%  R -0.022  DD   2.8%  prop   9.8% | 25 +nan% 26 +0.002%
+  SHORT 0.5% net  n=50    W26    L24    win  52.0%  avg -0.086%  R -0.127  DD   3.8%  prop   0.9% | 25 +nan% 26 -0.086%
+  SHORT RR 1:1    n=52    W28    L24    win  53.8%  avg -0.054%  R -0.089  DD   3.2%  prop   1.2% | 25 +nan% 26 -0.054%
+
+done in 2151s
+
+======================================================================================================================
+VERDICT (2026-08-25, identical pre-registration to the 30m run): FAILED on 15m AND 1h â€” the family is closed on
+all three tested timeframes (108 cells total incl. the 30m run):
+- 15m: WORSE than 30m â€” every cell negative in both eras (recon -0.082..-0.111%, daemon -0.082..-0.128%), win
+  rates lower across the ladder (the ~0.07% fee wall eats proportionally more of 15m moves). Prop 0%.
+- 1h: least bad but still NEGATIVE EVERYWHERE in recon (ALL cells, BOTH years, -0.043..-0.132%); daemon has two
+  +0.002% (= zero) cells (SHORT 0.25%/0.4% net, n=52-53) whose recon counterparts are -0.06% â€” noise, not a
+  candidate. Prop <=10% at best.
+- Combined with the 30m run: 108/108 cells at-or-below zero across recon-2025, recon-2026 and daemon. The
+  wick-rejection-at-wall ENTRY does not clear costs at any tested tf or exit. Indicator remains EYEBALL-ONLY.
+Harness: shipped longwick_detect per bar close on trailing-2000 walls, entry close, SL 0.1% beyond the extreme,
+1m first-touch, non-overlap, fees+slip, prop MC.
