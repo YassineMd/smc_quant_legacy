@@ -1,0 +1,98 @@
+SESSION OPEN-DRIFT -> BIAS � 15m bucket | drift@1h/2h from session open | shuffle null | pre-registered
+
+======================================================================================================================
+RECON 2025
+  Tokyo   +1h ALL   n=363 | hit 60.9% (null 60.8) | contS -0.066% (null -0.011) | contD -0.286% (null +0.025)
+  Tokyo   +1h CLEAR n=164 | hit 67.1% (null 67.4) | contS -0.223% (null +0.041) | contD -0.561% (null +0.050)
+  Tokyo   +1h UP    n=182 | hit 67.0% (null 66.8) | contS +0.083% (null +0.070) | contD -0.273% (null -0.010)
+  Tokyo   +1h DOWN  n=181 | hit 54.7% (null 54.6) | contS -0.216% (null -0.095) | contD -0.299% (null +0.062)
+  Tokyo   +2h ALL   n=365 | hit 69.6% (null 66.5) | contS -0.111% (null -0.022) | contD -0.139% (null +0.044)
+  Tokyo   +2h CLEAR n=216 | hit 75.9% (null 73.7) | contS -0.111% (null -0.004) | contD -0.289% (null -0.010)
+  Tokyo   +2h UP    n=204 | hit 73.0% (null 71.8) | contS -0.020% (null +0.058) | contD -0.147% (null +0.010)
+  Tokyo   +2h DOWN  n=161 | hit 65.2% (null 60.7) | contS -0.225% (null -0.109) | contD -0.129% (null +0.082)
+  London  +1h ALL   n=363 | hit 59.5% (null 62.0) | contS -0.126% (null -0.099) | contD -0.156% (null -0.118)
+  London  +1h CLEAR n=136 | hit 65.4% (null 70.7) | contS -0.314% (null -0.155) | contD -0.189% (null -0.222)
+  London  +1h UP    n=176 | hit 61.4% (null 63.6) | contS -0.139% (null -0.091) | contD -0.304% (null -0.242)
+  London  +1h DOWN  n=187 | hit 57.8% (null 60.3) | contS -0.113% (null -0.107) | contD -0.016% (null +0.005)
+  London  +2h ALL   n=364 | hit 66.8% (null 68.9) | contS -0.088% (null -0.089) | contD -0.280% (null -0.170)
+  London  +2h CLEAR n=203 | hit 73.4% (null 77.6) | contS -0.217% (null -0.139) | contD -0.293% (null -0.264)
+  London  +2h UP    n=179 | hit 68.7% (null 70.8) | contS -0.080% (null -0.076) | contD -0.411% (null -0.293)
+  London  +2h DOWN  n=185 | hit 64.9% (null 67.0) | contS -0.096% (null -0.101) | contD -0.153% (null -0.049)
+  NY      +1h ALL   n=364 | hit 53.8% (null 60.6) | contS -0.375% (null +0.026) | contD -0.454% (null +0.028)
+  NY      +1h CLEAR n=198 | hit 61.1% (null 66.4) | contS -0.260% (null +0.093) | contD -0.357% (null +0.110)
+  NY      +1h UP    n=180 | hit 48.9% (null 55.9) | contS -0.495% (null -0.107) | contD -0.559% (null -0.089)
+  NY      +1h DOWN  n=184 | hit 58.7% (null 64.8) | contS -0.259% (null +0.147) | contD -0.351% (null +0.135)
+  NY      +2h ALL   n=365 | hit 67.4% (null 65.1) | contS +0.020% (null +0.019) | contD +0.047% (null +0.007)
+  NY      +2h CLEAR n=243 | hit 70.8% (null 71.1) | contS -0.058% (null +0.068) | contD -0.062% (null +0.063)
+  NY      +2h UP    n=166 | hit 63.9% (null 60.6) | contS -0.076% (null -0.100) | contD -0.032% (null -0.097)
+  NY      +2h DOWN  n=199 | hit 70.4% (null 69.3) | contS +0.101% (null +0.129) | contD +0.113% (null +0.104)
+======================================================================================================================
+RECON 2026
+  Tokyo   +1h ALL   n=169 | hit 60.4% (null 59.4) | contS -0.088% (null -0.122) | contD -0.110% (null -0.071)
+  Tokyo   +1h CLEAR n= 46 | hit 76.1% (null 67.9) | contS +0.032% (null -0.209) | contD +0.437% (null -0.150)
+  Tokyo   +1h UP    n= 97 | hit 56.7% (null 57.2) | contS -0.267% (null -0.269) | contD -0.394% (null -0.343)
+  Tokyo   +1h DOWN  n= 72 | hit 65.3% (null 61.4) | contS +0.154% (null +0.014) | contD +0.272% (null +0.181)
+  Tokyo   +2h ALL   n=167 | hit 68.9% (null 63.5) | contS -0.136% (null -0.245) | contD -0.061% (null -0.154)
+  Tokyo   +2h CLEAR n= 76 | hit 81.6% (null 72.2) | contS -0.236% (null -0.372) | contD +0.434% (null -0.180)
+  Tokyo   +2h UP    n= 90 | hit 65.6% (null 61.1) | contS -0.306% (null -0.379) | contD -0.268% (null -0.403)
+  Tokyo   +2h DOWN  n= 77 | hit 72.7% (null 65.9) | contS +0.062% (null -0.112) | contD +0.180% (null +0.094)
+  London  +1h ALL   n=169 | hit 67.5% (null 61.4) | contS +0.086% (null -0.073) | contD +0.204% (null -0.046)
+  London  +1h CLEAR n= 42 | hit 81.0% (null 69.8) | contS +0.041% (null -0.138) | contD +0.042% (null -0.024)
+  London  +1h UP    n= 81 | hit 67.9% (null 60.9) | contS -0.004% (null -0.143) | contD +0.088% (null -0.147)
+  London  +1h DOWN  n= 88 | hit 67.0% (null 61.8) | contS +0.168% (null -0.005) | contD +0.311% (null +0.049)
+  London  +2h ALL   n=168 | hit 70.8% (null 67.4) | contS -0.113% (null -0.082) | contD -0.148% (null -0.049)
+  London  +2h CLEAR n= 78 | hit 87.2% (null 78.9) | contS -0.000% (null -0.098) | contD +0.354% (null +0.040)
+  London  +2h UP    n= 93 | hit 67.7% (null 66.7) | contS -0.195% (null -0.140) | contD -0.270% (null -0.130)
+  London  +2h DOWN  n= 75 | hit 74.7% (null 68.1) | contS -0.011% (null -0.027) | contD +0.004% (null +0.029)
+  NY      +1h ALL   n=167 | hit 64.1% (null 60.9) | contS +0.050% (null +0.013) | contD +0.050% (null +0.033)
+  NY      +1h CLEAR n= 65 | hit 75.4% (null 67.3) | contS +0.162% (null +0.058) | contD +0.305% (null +0.047)
+  NY      +1h UP    n= 75 | hit 66.7% (null 62.0) | contS +0.182% (null +0.039) | contD +0.118% (null +0.002)
+  NY      +1h DOWN  n= 92 | hit 62.0% (null 59.8) | contS -0.057% (null -0.012) | contD -0.006% (null +0.063)
+  NY      +2h ALL   n=169 | hit 72.2% (null 66.2) | contS +0.123% (null -0.016) | contD +0.187% (null -0.041)
+  NY      +2h CLEAR n=100 | hit 85.0% (null 71.5) | contS +0.426% (null -0.019) | contD +0.423% (null -0.058)
+  NY      +2h UP    n= 79 | hit 74.7% (null 66.4) | contS +0.270% (null -0.011) | contD +0.279% (null -0.087)
+  NY      +2h DOWN  n= 90 | hit 70.0% (null 66.0) | contS -0.006% (null -0.021) | contD +0.106% (null +0.009)
+======================================================================================================================
+DAEMON (2026-06-20 ..)
+  Tokyo   +1h ALL   n= 57 | hit 57.9% (null 60.6) | contS +0.130% (null -0.082) | contD +0.409% (null -0.054)
+  Tokyo   +1h CLEAR n= 16 | hit 75.0% (null 72.5) | contS -0.083% (null -0.045) | contD +0.047% (null +0.100)
+  Tokyo   +1h UP    n= 32 | hit 59.4% (null 62.5) | contS +0.208% (null +0.025) | contD +0.438% (null +0.029)
+  Tokyo   +1h DOWN  n= 25 | hit 56.0% (null 58.7) | contS +0.031% (null -0.184) | contD +0.371% (null -0.134)
+  Tokyo   +2h ALL   n= 58 | hit 62.1% (null 64.3) | contS -0.158% (null -0.092) | contD +0.437% (null +0.005)
+  Tokyo   +2h CLEAR n= 24 | hit 70.8% (null 75.9) | contS -0.463% (null -0.159) | contD -0.061% (null -0.066)
+  Tokyo   +2h UP    n= 31 | hit 64.5% (null 65.6) | contS -0.061% (null -0.010) | contD +0.476% (null +0.064)
+  Tokyo   +2h DOWN  n= 27 | hit 59.3% (null 62.9) | contS -0.269% (null -0.179) | contD +0.391% (null -0.057)
+  London  +1h ALL   n= 57 | hit 59.6% (null 59.6) | contS +0.138% (null -0.058) | contD +0.057% (null -0.150)
+  London  +1h UP    n= 28 | hit 60.7% (null 60.6) | contS +0.154% (null -0.119) | contD +0.114% (null -0.172)
+  London  +1h DOWN  n= 29 | hit 58.6% (null 58.6) | contS +0.123% (null +0.001) | contD +0.001% (null -0.128)
+  London  +2h ALL   n= 58 | hit 75.9% (null 64.7) | contS +0.126% (null -0.053) | contD +0.138% (null -0.214)
+  London  +2h CLEAR n= 18 | hit 83.3% (null 79.2) | contS +0.043% (null -0.047) | contD -0.333% (null -0.417)
+  London  +2h UP    n= 26 | hit 80.8% (null 65.8) | contS +0.187% (null -0.088) | contD +0.248% (null -0.214)
+  London  +2h DOWN  n= 32 | hit 71.9% (null 63.6) | contS +0.076% (null -0.019) | contD +0.048% (null -0.215)
+  NY      +1h ALL   n= 58 | hit 63.8% (null 57.0) | contS -0.144% (null -0.241) | contD -0.307% (null -0.228)
+  NY      +1h CLEAR n= 20 | hit 70.0% (null 65.3) | contS -0.248% (null -0.380) | contD -0.329% (null -0.377)
+  NY      +1h UP    n= 40 | hit 65.0% (null 63.8) | contS -0.037% (null -0.099) | contD -0.232% (null -0.195)
+  NY      +1h DOWN  n= 18 | hit 61.1% (null 50.1) | contS -0.383% (null -0.387) | contD -0.474% (null -0.261)
+  NY      +2h ALL   n= 57 | hit 73.7% (null 65.4) | contS -0.102% (null -0.215) | contD -0.168% (null -0.196)
+  NY      +2h CLEAR n= 30 | hit 83.3% (null 71.4) | contS -0.109% (null -0.387) | contD -0.251% (null -0.403)
+  NY      +2h UP    n= 35 | hit 74.3% (null 70.8) | contS -0.013% (null -0.092) | contD -0.155% (null -0.176)
+  NY      +2h DOWN  n= 22 | hit 72.7% (null 59.3) | contS -0.244% (null -0.355) | contD -0.190% (null -0.219)
+
+done in 27s
+
+======================================================================================================================
+VERDICT (2026-08-25, pre-registered, descriptive): NULL as a bias signal — and a textbook lesson in the artifact.
+- The impressive HIT rates (60-87%) are the PART-WHOLE artifact: the shuffled null runs 60-79% too, because by the
+  checkpoint part of the day's move is already banked; "session closes on the drift side" is mostly bookkeeping,
+  not forecast. Only real-minus-null and the FROM-CHECKPOINT continuation count.
+- CONTINUATION (from the checkpoint price) FLIPS REGIME BY ERA — the fatal pattern:
+    2025: FADE — early drift reverses (NY+1h contS -0.375% vs null +0.026; Tokyo CLEAR -0.223 vs +0.041).
+    2026 recon: FOLLOW — NY+2h CLEAR contS +0.426% vs null -0.019 (hit 85.0 vs 71.5).
+    daemon: hit beats null in NY/London +2h (+8-13pp) but continuation is NEGATIVE-to-flat in absolute terms
+    (NY+2h CLEAR contS -0.109%) — the hit edge is banked drift, not future movement.
+- No cell is sign-consistent across the three eras at a magnitude clearing the ~0.07% fee wall.
+- Consistent with the program's meta-result: SOL 15m has no stable session momentum/anti-momentum; early-session
+  DIRECTION information does not exist in a usable form (IB-breach NULL, formation->NY NULL, Judas INVERTED,
+  day-bias INVERTED). What survives is LEVEL PERSISTENCE, not direction.
+Method: drift at +1h/+2h from session open vs 20 within-session order shuffles (same total drift, random path);
+outcomes causal from the checkpoint price; CLEAR = |drift| >= 0.5% fixed.
