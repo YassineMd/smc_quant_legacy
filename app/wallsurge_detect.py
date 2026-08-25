@@ -1,7 +1,10 @@
-"""WALL SURGE (m10_wallsurge) — 1m + 5m CLOCK charts: a STRONG volume-delta candle that KEPT its move,
-printing inside a same-side 30m wall CORE (P ± band — NOT the radar area). Green ▲ when strong net BUYING lands on a 30m SUPPORT (buy)
-wall, red ▼ when strong net SELLING lands on a 30m RESISTANCE (sell) wall — aggressive flow agreeing with the
-wall it trades into, and holding what it bought.
+"""WALL SURGE (m10_wallsurge) — 1m + 5m CLOCK charts: STRONG-flow candles at a 30m wall CORE (P ± band — NOT
+the radar area). TWO classes, one glyph set (green ▲ bullish below / red ▼ bearish above):
+  SURGE  — the aggressor WINS at its own wall: strong net BUYING that KEPT its move on a SUPPORT wall (▲) /
+           strong net SELLING that kept on a RESISTANCE wall (▼).
+  ABSORB — the aggressor LOSES at the opposing wall (user 2026-08-25): strong net SELLING into a SUPPORT wall
+           but the candle CLOSES GREEN (sellers absorbed -> ▲) / strong net BUYING into a RESISTANCE wall but
+           the candle CLOSES RED (buyers absorbed -> ▼). The wall's side is the signal direction.
 
 STRONG is the Volume pane's own 'Pct' definition, replicated to the letter (terminal VOL_PCT_* constants):
 the series value ranked against a trailing window of itself + its previous 49 bars; rank = share of the OTHER
@@ -98,15 +101,33 @@ def detect(candles: list, walls: list, wall_starts: list,
         c = candles[i]
         t = float(c.get("start_time", 0.0) or 0.0)
         lo = float(c.get("low", 0.0) or 0.0); hi = float(c.get("high", 0.0) or 0.0)
-        if hi <= 0.0 or t <= 0.0:
+        o = float(c.get("open", c.get("open_price", 0.0)) or 0.0)
+        cl = float(c.get("close", c.get("close_price", 0.0)) or 0.0)
+        if hi <= 0.0 or t <= 0.0 or o <= 0.0 or cl <= 0.0:
             continue
-        kept = retention(c, float(d[i]))             # Eff/Res retention gate ON TOP of the delta gate (user 2026-08-24)
-        if kept is None or kept < kept_min:
+        kept = retention(c, float(d[i]))
+        # TWO signal classes, mutually exclusive by construction (user 2026-08-25):
+        #   SURGE  — the aggressor WINS at its own wall: delta agrees with the wall side and the candle KEPT
+        #            >= kept_min of its delta-direction excursion (close far WITH the delta).
+        #   ABSORB — the aggressor LOSES at the opposing wall: strong delta INTO the wall but the candle
+        #            CLOSES AGAINST it (strong selling at a buy wall, green close -> bullish ▲; strong buying
+        #            at a sell wall, red close -> bearish ▼). The wall's side IS the signal direction.
+        surge_ok = kept is not None and kept >= kept_min
+        absorb_ok = (cl > o) if d[i] < 0 else (cl < o)
+        if not (surge_ok or absorb_ok):
             continue
-        want = "S" if d[i] > 0 else "R"              # strong buying belongs on a buy (support) wall, selling on a sell wall
+        surge_wall = "S" if d[i] > 0 else "R"
+        absorb_wall = "S" if d[i] < 0 else "R"
         for (side, rlo, rhi, birth, death) in zones:
-            if side == want and birth <= t < death and lo <= rhi and hi >= rlo:
-                out.append({"i": i, "side": 1 if d[i] > 0 else -1, "delta": float(d[i]),
+            if not (birth <= t < death and lo <= rhi and hi >= rlo):
+                continue
+            if surge_ok and side == surge_wall:
+                out.append({"i": i, "side": 1 if d[i] > 0 else -1, "type": "surge", "delta": float(d[i]),
                             "rank": float(rank[i]), "vrank": float(vrank[i]), "kept": float(kept)})
+                break
+            if absorb_ok and side == absorb_wall:
+                out.append({"i": i, "side": 1 if side == "S" else -1, "type": "absorb", "delta": float(d[i]),
+                            "rank": float(rank[i]), "vrank": float(vrank[i]),
+                            "kept": float(kept) if kept is not None else None})
                 break
     return out
