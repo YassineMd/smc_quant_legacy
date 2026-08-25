@@ -1,0 +1,58 @@
+LONG WICK COMBO � 30m BUCKET HONEST TEST | shipped detect_combo (wall-free, causal) | SL 0.1% beyond extreme | 1m first-touch | non-overlap | fees+slip
+
+========================================================================================================================
+RECON 2025-01 .. 2026-06 (per-year split in rows)
+  signals: 3104 / 37231 bars
+  ALL   0.2% net  n=2952  W2156  L796   win  73.0%  avg -0.083%  R -0.129  DD 151.7%  prop   0.0% | 25 -0.081% 26 -0.087%
+  ALL   0.25% net n=2898  W2001  L897   win  69.0%  avg -0.086%  R -0.135  DD 156.0%  prop   0.0% | 25 -0.088% 26 -0.081%
+  ALL   0.3% net  n=2859  W1874  L985   win  65.5%  avg -0.090%  R -0.139  DD 158.1%  prop   0.0% | 25 -0.092% 26 -0.086%
+  ALL   0.4% net  n=2766  W1647  L1119  win  59.5%  avg -0.096%  R -0.145  DD 161.1%  prop   0.0% | 25 -0.098% 26 -0.090%
+  ALL   0.5% net  n=2701  W1496  L1205  win  55.4%  avg -0.089%  R -0.137  DD 148.6%  prop   0.0% | 25 -0.091% 26 -0.084%
+  ALL   RR 1:1    n=2603  W1267  L1336  win  48.7%  avg -0.111%  R -0.158  DD 166.6%  prop   0.0% | 25 -0.111% 26 -0.112%
+  LONG  0.2% net  n=1493  W1071  L422   win  71.7%  avg -0.093%  R -0.146  DD  87.8%  prop   0.0% | 25 -0.080% 26 -0.123%
+  LONG  0.25% net n=1476  W1002  L474   win  67.9%  avg -0.095%  R -0.151  DD  89.3%  prop   0.0% | 25 -0.085% 26 -0.120%
+  LONG  0.3% net  n=1462  W936   L526   win  64.0%  avg -0.101%  R -0.162  DD  94.9%  prop   0.0% | 25 -0.091% 26 -0.126%
+  LONG  0.4% net  n=1424  W824   L600   win  57.9%  avg -0.110%  R -0.171  DD  98.0%  prop   0.0% | 25 -0.107% 26 -0.117%
+  LONG  0.5% net  n=1405  W756   L649   win  53.8%  avg -0.102%  R -0.163  DD  92.3%  prop   0.0% | 25 -0.096% 26 -0.117%
+  LONG  RR 1:1    n=1367  W648   L719   win  47.4%  avg -0.130%  R -0.186  DD 103.2%  prop   0.0% | 25 -0.130% 26 -0.130%
+  SHORT 0.2% net  n=1497  W1111  L386   win  74.2%  avg -0.073%  R -0.113  DD  67.3%  prop   0.0% | 25 -0.082% 26 -0.053%
+  SHORT 0.25% net n=1471  W1029  L442   win  70.0%  avg -0.077%  R -0.123  DD  72.6%  prop   0.0% | 25 -0.090% 26 -0.047%
+  SHORT 0.3% net  n=1457  W974   L483   win  66.8%  avg -0.079%  R -0.119  DD  70.6%  prop   0.0% | 25 -0.091% 26 -0.052%
+  SHORT 0.4% net  n=1424  W862   L562   win  60.5%  avg -0.087%  R -0.130  DD  74.5%  prop   0.0% | 25 -0.091% 26 -0.078%
+  SHORT 0.5% net  n=1397  W786   L611   win  56.3%  avg -0.082%  R -0.122  DD  69.2%  prop   0.0% | 25 -0.087% 26 -0.068%
+  SHORT RR 1:1    n=1373  W675   L698   win  49.2%  avg -0.102%  R -0.147  DD  81.6%  prop   0.1% | 25 -0.095% 26 -0.119%
+========================================================================================================================
+DAEMON 30m (TRUE OOS, 2026-06-20 ..)
+  signals: 355 / 4548 bars
+  ALL   0.2% net  n=256   W165   L91    win  64.5%  avg -0.083%  R -0.183  DD  19.2%  prop   0.0% | 25 +nan% 26 -0.083%
+  ALL   0.25% net n=247   W148   L99    win  59.9%  avg -0.087%  R -0.189  DD  19.4%  prop   0.0% | 25 +nan% 26 -0.087%
+  ALL   0.3% net  n=243   W133   L110   win  54.7%  avg -0.099%  R -0.220  DD  22.5%  prop   0.0% | 25 +nan% 26 -0.099%
+  ALL   0.4% net  n=235   W103   L132   win  43.8%  avg -0.144%  R -0.322  DD  30.5%  prop   0.0% | 25 +nan% 26 -0.144%
+  ALL   0.5% net  n=226   W93    L133   win  41.2%  avg -0.127%  R -0.282  DD  26.6%  prop   0.0% | 25 +nan% 26 -0.127%
+  ALL   RR 1:1    n=235   W110   L125   win  46.8%  avg -0.132%  R -0.269  DD  26.6%  prop   0.0% | 25 +nan% 26 -0.132%
+  LONG  0.2% net  n=116   W78    L38    win  67.2%  avg -0.059%  R -0.130  DD   6.6%  prop   0.0% | 25 +nan% 26 -0.059%
+  LONG  0.25% net n=115   W72    L43    win  62.6%  avg -0.063%  R -0.128  DD   7.1%  prop   0.0% | 25 +nan% 26 -0.063%
+  LONG  0.3% net  n=114   W65    L49    win  57.0%  avg -0.076%  R -0.160  DD   8.5%  prop   0.0% | 25 +nan% 26 -0.076%
+  LONG  0.4% net  n=113   W48    L65    win  42.5%  avg -0.148%  R -0.336  DD  15.0%  prop   0.0% | 25 +nan% 26 -0.148%
+  LONG  0.5% net  n=111   W43    L68    win  38.7%  avg -0.144%  R -0.320  DD  14.9%  prop   0.0% | 25 +nan% 26 -0.144%
+  LONG  RR 1:1    n=113   W54    L59    win  47.8%  avg -0.120%  R -0.255  DD  11.8%  prop   0.0% | 25 +nan% 26 -0.120%
+  SHORT 0.2% net  n=146   W91    L55    win  62.3%  avg -0.098%  R -0.226  DD  13.9%  prop   0.0% | 25 +nan% 26 -0.098%
+  SHORT 0.25% net n=143   W83    L60    win  58.0%  avg -0.104%  R -0.223  DD  13.7%  prop   0.0% | 25 +nan% 26 -0.104%
+  SHORT 0.3% net  n=141   W75    L66    win  53.2%  avg -0.114%  R -0.256  DD  15.2%  prop   0.0% | 25 +nan% 26 -0.114%
+  SHORT 0.4% net  n=137   W64    L73    win  46.7%  avg -0.122%  R -0.265  DD  15.9%  prop   0.0% | 25 +nan% 26 -0.122%
+  SHORT 0.5% net  n=130   W56    L74    win  43.1%  avg -0.115%  R -0.254  DD  14.3%  prop   0.0% | 25 +nan% 26 -0.115%
+  SHORT RR 1:1    n=142   W67    L75    win  47.2%  avg -0.130%  R -0.263  DD  16.4%  prop   0.0% | 25 +nan% 26 -0.130%
+
+done in 209s
+
+======================================================================================================================
+VERDICT (2026-08-25, pre-registered): FAILED — all 36 cells negative in both eras, same as the whole wick family.
+- Recon: -0.073..-0.130%/trade, BOTH years negative in every row, n≈2600-3000 (tight CIs — this is not noise).
+  Daemon OOS: -0.059..-0.148%. Prop 0.0% everywhere. No side asymmetry.
+- The win ladder (73% @0.2% -> 47-49% @RR 1:1) is again pure bracket shape. Notably this variant is a
+  CONTINUATION signal (with the prior bar, after a failed counter-push) while the wall-bound Long Wick is a
+  REJECTION signal — both fail identically: the wick pattern carries no direction on SOL 30m in either framing.
+- Wick family final ledger: 180/180 cells at-or-below zero (v1 15m/30m/1h + v2 30m + combo 30m). Gold ♦ stays
+  an eyeball layer.
+Harness: shipped detect_combo (wall-free, causal 2-bar), entry wick-bar close, SL 0.1% beyond its extreme,
+1m first-touch, non-overlap, fees+slip, prop MC.
