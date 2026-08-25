@@ -5928,6 +5928,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _it.setVisible(False)
             self._htf_hover_zones[h] = []
 
+    @staticmethod
+    def _session_start_unix(now_t):
+        """Start of the CURRENT canonical session containing `now_t` (the m10_session windows: Tokyo 00 /
+        London 08 / New York 13 UTC; 21:00-24:00 counts as extended NY). Used by the '· This session's walls
+        only' filter (m10_absorblvl_sess)."""
+        from datetime import datetime as _dt, timezone as _tz
+        d = _dt.fromtimestamp(float(now_t), _tz.utc)
+        h = 13 if d.hour >= 13 else (8 if d.hour >= 8 else 0)
+        return d.replace(hour=h, minute=0, second=0, microsecond=0).timestamp()
+
     def _htf_source_buckets(self, htf, win_start_t, now_t):
         """Closed buckets of `htf` for the HTF overlays (walls / Radar Runner signals): recon_replay in a recon-era
         replay, else the live htf worker (dedicated worker_4h for 4h / lazy _sub_worker for 1h) + daemon-archive
@@ -5976,11 +5986,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         def _xt(t):
             return max(0, min(bisect.bisect_left(starts, t), n - 1))
+        _sess_cut = None                                        # session filter applies to the HTF bands too
+        if self.menu.layer_state("m10_absorblvl_sess") and now_t > 0:
+            _sess_cut = self._session_start_unix(now_t)
         ub = 0; self._htf_hover_zones[htf] = []
         for m in (self._htf_marks[htf] or []):
             side = m.get("side"); P = float(m.get("price") or 0.0); band = float(m.get("band") or 0.0)
             if side not in ("R", "S") or P <= 0 or band <= 0:
                 continue
+            if _sess_cut is not None:
+                _bi0 = int(m.get("i0", 0))
+                if 0 <= _bi0 < nH and cbst[_bi0] < _sess_cut:
+                    continue                                    # born before this session -> hidden
             broken = bool(m.get("broken"))
             i0 = int(m.get("i0", 0)); i1 = int(m.get("i1")) if (broken and m.get("i1") is not None) else (nH - 1)
             if broken and (nH - 1) - i1 > 6:                      # drop htf walls broken more than ~6 htf-bars ago
@@ -6053,6 +6070,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _cand.append((min(abs(_p - _mm) for _mm in _mids), _mi))
                 _cand.sort(key=lambda t: t[0])
                 _keep_ids = set(_mi for _d, _mi in _cand[:3])    # the 3 closest
+        _sess_cut = None                                        # '· This session's walls only' (m10_absorblvl_sess):
+        if self.menu.layer_state("m10_absorblvl_sess"):         # keep only walls BORN in the current canonical session
+            _nt = float(buckets[-1].get("start_time", 0.0) or 0.0)
+            _sess_cut = self._session_start_unix(_nt) if _nt > 0 else None
         ub = 0; ul = 0; up = 0; uz = 0; self._radar_hover_zones = []
         for _mid_idx, m in enumerate(self._absorblvl_marks):
             if _keep_side is not None:                          # aligned: all dominant-side + 3 strongest non-dominant
@@ -6064,6 +6085,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             i0 = int(m["i0"]); i1 = min(int(m["i1"]), n - 1)
             if i0 < 0 or i0 >= n or i1 < i0:
                 continue
+            if _sess_cut is not None and float(buckets[i0].get("start_time", 0.0) or 0.0) < _sess_cut:
+                continue                                        # born before this session -> hidden by the session filter
             if m.get("broken") and (n - 1) - i1 > 90:          # MITIGATED wall only (authoritative flag): drop 90 bars
                 continue                                        # past the break. Active walls (broken=False) never drop.
             xl = x[i0]; xr = x[i1]

@@ -522,6 +522,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_wall_1h_subtoggle(sec)       # overlay the 1h absorption walls (orange/blue), lower tfs
                 self._build_wall_30m_subtoggle(sec)      # overlay the 30m absorption walls (pink/teal), 1m/5m/15m only
                 self._build_wall_hidecur_subtoggle(sec)  # hide current-tf walls -> higher-timeframe-only view
+                self._build_wall_sess_subtoggle(sec)     # only walls BORN in the current session (Tokyo/London/NY)
             if key == "m10_crazywall":
                 self._build_wallabs_subtoggles(sec)      # Wall Absorption sub-tiers: Crazy (✪) / Big (★)
             if key == "m10_sr":
@@ -688,6 +689,20 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
         cb.toggled.connect(lambda on, k="m10_absorblvl_hidecur": self.layerToggled.emit(k, on))
         self.layer_checks["m10_absorblvl_hidecur"] = cb
+        section.addWidget(cb)
+
+    def _build_wall_sess_subtoggle(self, section) -> None:
+        """Toggle under Order-Flow Walls: show ONLY walls BORN in the CURRENT canonical session (Tokyo 00-08 /
+        London 08-13 / New York 13-24 UTC — the m10_session windows; post-21:00 counts as extended NY). Applies to
+        the current-tf bands AND the 30m/1h/4h HTF overlays. Rides m10_absorblvl; an m10_ key (persists + reads via
+        layer_state). Default OFF (all walls shown)."""
+        cb = QtWidgets.QCheckBox("· This session's walls only")
+        cb.setChecked(False)                             # default OFF
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.setToolTip("Show only walls created since the current session opened (Tokyo 00:00 / London 08:00 / "
+                      "New York 13:00 UTC; after 21:00 counts as extended NY). Earlier walls are hidden, not deleted.")
+        cb.toggled.connect(lambda on, k="m10_absorblvl_sess": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_absorblvl_sess"] = cb
         section.addWidget(cb)
 
     def _build_wall_regime_subtoggle(self, section) -> None:
