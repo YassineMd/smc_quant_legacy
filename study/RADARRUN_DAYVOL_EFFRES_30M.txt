@@ -1,0 +1,80 @@
+DAY VOLUME x DAY EFF/RES x RADAR RUNNER 30m BUCKET — canonical harness | pre-registered (see header)
+
+========================================================================================================================
+RECON 2025-01 .. 2026-06 (in-sample era)
+  (V UNKNOWN: 47 | E n/a: 3181 — excluded from their cells)
+  ALL                      0.5% net n=4246  W2957  L1289  win  69.6%  avg +0.002%  R -0.003  DD  30.3%  prop  16.3% | 25 +0.002% 26 +0.001%
+  ALL                      RR 1:1   n=3055  W1642  L1413  win  53.7%  avg -0.006%  R -0.014  DD  44.5%  prop  13.4% | 25 -0.016% 26 +0.015%
+  V HIGH                   0.5% net n=1556  W1093  L463   win  70.2%  avg -0.019%  R -0.015  DD  19.3%  prop   7.5% | 25 -0.020% 26 -0.017%
+  V HIGH                   RR 1:1   n=1164  W613   L551   win  52.7%  avg -0.020%  R -0.030  DD  30.1%  prop   7.5% | 25 -0.007% 26 -0.051%
+  V MID                    0.5% net n=2186  W1503  L683   win  68.8%  avg +0.000%  R -0.009  DD  21.0%  prop  12.9% | 25 -0.001% 26 +0.003%
+  V MID                    RR 1:1   n=1620  W864   L756   win  53.3%  avg -0.016%  R -0.025  DD  36.5%  prop   9.8% | 25 -0.048% 26 +0.052%
+  V LOW                    0.5% net n=615   W428   L187   win  69.6%  avg +0.047%  R +0.032  DD   9.4%  prop  34.6% | 25 +0.077% 26 -0.016%
+  V LOW                    RR 1:1   n=488   W271   L217   win  55.5%  avg +0.018%  R +0.011  DD   8.2%  prop  18.3% | 25 +0.041% 26 -0.030%
+  E ABSORBED               0.5% net n=640   W439   L201   win  68.6%  avg -0.001%  R -0.017  DD  11.1%  prop   6.2% | 25 -0.008% 26 +0.020%
+  E ABSORBED               RR 1:1   n=492   W274   L218   win  55.7%  avg +0.045%  R +0.025  DD  12.1%  prop  29.8% | 25 +0.023% 26 +0.114%
+  E NORMAL                 0.5% net n=660   W481   L179   win  72.9%  avg +0.044%  R +0.045  DD   5.3%  prop  56.3% | 25 +0.033% 26 +0.063%
+  E NORMAL                 RR 1:1   n=522   W303   L219   win  58.0%  avg +0.095%  R +0.075  DD   5.3%  prop  65.1% | 25 +0.093% 26 +0.097%
+  E EASY                   0.5% net n=913   W651   L262   win  71.3%  avg +0.011%  R +0.019  DD   6.3%  prop  35.8% | 25 +0.022% 26 -0.033%
+  E EASY                   RR 1:1   n=701   W382   L319   win  54.5%  avg -0.005%  R +0.003  DD  14.4%  prop  20.6% | 25 -0.037% 26 +0.112%
+  WITH-FLOW                0.5% net n=2616  W1808  L808   win  69.1%  avg -0.008%  R -0.012  DD  23.8%  prop  11.2% | 25 -0.006% 26 -0.011%
+  WITH-FLOW                RR 1:1   n=2076  W1131  L945   win  54.5%  avg +0.011%  R -0.000  DD  31.2%  prop  20.3% | 25 +0.005% 26 +0.024%
+  AGAINST-FLOW             0.5% net n=2221  W1527  L694   win  68.8%  avg -0.002%  R -0.006  DD  16.9%  prop  15.1% | 25 +0.003% 26 -0.011%
+  AGAINST-FLOW             RR 1:1   n=1796  W942   L854   win  52.4%  avg -0.043%  R -0.043  DD  37.0%  prop   5.1% | 25 -0.043% 26 -0.043%
+  WITH-FLOW & EASY         0.5% net n=522   W372   L150   win  71.3%  avg +0.006%  R +0.009  DD   3.7%  prop  12.7% | 25 +0.019% 26 -0.046%
+  WITH-FLOW & EASY         RR 1:1   n=439   W242   L197   win  55.1%  avg +0.012%  R +0.018  DD   6.6%  prop  23.2% | 25 -0.002% 26 +0.063%
+  WITH-FLOW & ABSORBED     0.5% net n=426   W290   L136   win  68.1%  avg +0.008%  R -0.014  DD  10.0%  prop   5.3% | 25 -0.004% 26 +0.045%
+  WITH-FLOW & ABSORBED     RR 1:1   n=353   W192   L161   win  54.4%  avg +0.030%  R -0.008  DD  11.1%  prop  12.1% | 25 -0.023% 26 +0.192%
+  AGAINST-FLOW & EASY      0.5% net n=481   W339   L142   win  70.5%  avg +0.006%  R +0.024  DD   6.2%  prop  20.3% | 25 +0.005% 26 +0.012%
+  AGAINST-FLOW & EASY      RR 1:1   n=403   W214   L189   win  53.1%  avg -0.048%  R -0.029  DD  12.3%  prop   3.6% | 25 -0.054% 26 -0.027%
+  AGAINST-FLOW & ABSORBED  0.5% net n=292   W200   L92    win  68.5%  avg -0.022%  R -0.016  DD   4.7%  prop   1.0% | 25 -0.008% 26 -0.053%
+  AGAINST-FLOW & ABSORBED  RR 1:1   n=239   W130   L109   win  54.4%  avg -0.021%  R +0.001  DD   5.3%  prop   6.7% | 25 +0.039% 26 -0.153%
+========================================================================================================================
+DAEMON 30m (TRUE OOS, 2026-06-20 ..)
+  (V UNKNOWN: 84 | E n/a: 471 — excluded from their cells)
+  ALL                      0.5% net n=305   W190   L115   win  62.3%  avg -0.020%  R -0.021  DD   6.2%  prop   4.6% | 25 +nan% 26 -0.020%
+  ALL                      RR 1:1   n=260   W140   L120   win  53.8%  avg -0.041%  R -0.047  DD   8.4%  prop   3.9% | 25 +nan% 26 -0.041%
+  V HIGH                   0.5% net n=63    W32    L31    win  50.8%  avg -0.176%  R -0.257  DD   6.8%  prop   0.0% | 25 +nan% 26 -0.176%
+  V HIGH                   RR 1:1   n=58    W23    L35    win  39.7%  avg -0.254%  R -0.335  DD   7.6%  prop   0.0% | 25 +nan% 26 -0.254%
+  V MID                    0.5% net n=182   W113   L69    win  62.1%  avg -0.014%  R -0.019  DD   4.4%  prop   6.7% | 25 +nan% 26 -0.014%
+  V MID                    RR 1:1   n=164   W84    L80    win  51.2%  avg -0.070%  R -0.101  DD   9.6%  prop   1.0% | 25 +nan% 26 -0.070%
+  V LOW                    0.5% net n=80    W50    L30    win  62.5%  avg -0.001%  R +0.012  DD   2.5%  prop  26.8% | 25 +nan% 26 -0.001%
+  V LOW                    RR 1:1   n=72    W40    L32    win  55.6%  avg -0.021%  R -0.018  DD   3.3%  prop  10.0% | 25 +nan% 26 -0.021%
+  E ABSORBED               0.5% net n=50    W31    L19    win  62.0%  avg +0.009%  R +0.023  DD   2.8%  prop  35.0% | 25 +nan% 26 +0.009%
+  E ABSORBED               RR 1:1   n=50    W30    L20    win  60.0%  avg +0.052%  R +0.068  DD   3.0%  prop  59.6% | 25 +nan% 26 +0.052%
+  E NORMAL                 0.5% net n=54    W33    L21    win  61.1%  avg +0.012%  R -0.013  DD   3.9%  prop  13.7% | 25 +nan% 26 +0.012%
+  E NORMAL                 RR 1:1   n=52    W31    L21    win  59.6%  avg +0.078%  R +0.050  DD   3.8%  prop  52.0% | 25 +nan% 26 +0.078%
+  E EASY                   0.5% net n=47    W26    L21    win  55.3%  avg -0.059%  R -0.120  DD   2.8%  prop   0.0% | 25 +nan% 26 -0.059%
+  E EASY                   RR 1:1   n=44    W24    L20    win  54.5%  avg -0.007%  R -0.053  DD   2.5%  prop   2.3% | 25 +nan% 26 -0.007%
+  WITH-FLOW                0.5% net n=182   W112   L70    win  61.5%  avg -0.023%  R -0.034  DD   4.2%  prop   4.3% | 25 +nan% 26 -0.023%
+  WITH-FLOW                RR 1:1   n=167   W87    L80    win  52.1%  avg -0.063%  R -0.082  DD   6.8%  prop   1.4% | 25 +nan% 26 -0.063%
+  AGAINST-FLOW             0.5% net n=213   W127   L86    win  59.6%  avg -0.048%  R -0.057  DD   9.2%  prop   1.0% | 25 +nan% 26 -0.048%
+  AGAINST-FLOW             RR 1:1   n=190   W104   L86    win  54.7%  avg -0.031%  R -0.031  DD   8.0%  prop   9.5% | 25 +nan% 26 -0.031%
+  WITH-FLOW & EASY         0.5% net n=26    W18    L8     win  69.2%  avg +0.081%  R +0.167  DD   1.2%  prop  97.3% | 25 +nan% 26 +0.081%
+  WITH-FLOW & EASY         RR 1:1   n=23    W16    L7     win  69.6%  avg +0.165%  R +0.260  DD   1.0%  prop 100.0% | 25 +nan% 26 +0.165%
+  WITH-FLOW & ABSORBED     0.5% net n=27    W16    L11    win  59.3%  avg -0.007%  R -0.039  DD   2.9%  prop   4.2% | 25 +nan% 26 -0.007%
+  WITH-FLOW & ABSORBED     RR 1:1   n=27    W15    L12    win  55.6%  avg +0.004%  R -0.025  DD   3.1%  prop   8.6% | 25 +nan% 26 +0.004%
+  AGAINST-FLOW & EASY      0.5% net n=36    W15    L21    win  41.7%  avg -0.224%  R -0.372  DD   5.6%  prop   0.0% | 25 +nan% 26 -0.224%
+  AGAINST-FLOW & EASY      RR 1:1   n=36    W15    L21    win  41.7%  avg -0.184%  R -0.315  DD   5.3%  prop   0.0% | 25 +nan% 26 -0.184%
+  AGAINST-FLOW & ABSORBED  0.5% net n=39    W22    L17    win  56.4%  avg -0.053%  R -0.071  DD   1.9%  prop   0.1% | 25 +nan% 26 -0.053%
+  AGAINST-FLOW & ABSORBED  RR 1:1   n=38    W21    L17    win  55.3%  avg -0.017%  R -0.033  DD   2.1%  prop   6.3% | 25 +nan% 26 -0.017%
+
+done in 376s
+
+======================================================================================================================
+VERDICT (2026-08-25, pre-registered cells, no iteration):
+- NO tradeable positive edge: recon's positive cells do not replicate (V LOW +0.047% -> daemon -0.001%; E NORMAL is a
+  middle-bin winner, daemon +0.078% RR n=52 t~0.75 n.s.; WITH-FLOW & EASY daemon +0.165%/prop 100% is n=23 anecdote).
+- BUT two AVOIDANCE flags are SIGN-CONSISTENT across eras â€” a first in 8 conditioning families:
+    V HIGH (today's cum volume >= P80 vs same time-of-day, trailing 20d): recon -0.019/-0.020% -> daemon
+      -0.176/-0.254% (win 40-51%, n=58-63). High-activity days are TOXIC for the mechanical RadarRun.
+    AGAINST-FLOW & EASY (fading a day-flow that is being PAID): recon -0.048% RR -> daemon -0.184/-0.224%
+      (win 42%, n=36). Do not fade a working flow.
+  Caveat: 13 cells x 2 exits pre-registered â€” some sign agreement arises by chance; treat as avoidance CONTEXT,
+  not a signal. Pattern matches the standing meta-result: day context DESCRIBES the regime, it does not pay.
+- Day-scale Eff/Res axis has POOR COVERAGE (75% of recon fires E=n/a: most days' |net delta| < 2% of day volume,
+  so the trailing baseline rarely qualifies) â€” weak as a Compass row without a NEW definition (would need a fresh
+  pre-registration; not iterated here).
+- Compass recommendation: today's RELATIVE VOLUME row (HIGH/MID/LOW vs 20d same-elapsed) is honest, well-covered
+  context whose HIGH state flagged historically toxic conditions; day-eff/res row NOT recommended as specified.
+Harness: canonical union sets + 1m first-touch, non-overlap, fees+slip; states frozen in the script header.
