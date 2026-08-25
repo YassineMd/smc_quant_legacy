@@ -5526,14 +5526,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _lb.setAnchor((0, 0))                  # anchors are per-use: the drift tag below flips to (0,1)
                         _lb.setColor(pg.mkColor(*rgb)); _lb.setText(name)
                         _lb.setPos(x0, float(val) if val is not None else float(vah)); _lb.setVisible(True)
-                        # DRIFT TAG on top of the session (user 2026-08-25): first-bar POC vs the session extremes —
-                        # 'Low Drift' when POC-to-LOW distance > POC-to-HIGH (the session extended BELOW its opening
-                        # value); 'High Drift' = mirror. Ties/invalid -> no tag. Live session = range-so-far (honest).
+                        # DRIFT TAG on top of the session (user 2026-08-25; corrected 2026-08-26: measured against
+                        # the FIRST BAR's own high/low, not the session extremes — the tag is determined by the
+                        # session's opening bar and FIXED from its close): 'Low Drift' when the first bar's POC is
+                        # farther from that bar's LOW than from its HIGH (value formed high, the low side rejected);
+                        # 'High Drift' = mirror. Ties/invalid -> no tag.
+                        _h1b = float(seg[0].get("high", 0.0) or 0.0); _l1b = float(seg[0].get("low", 0.0) or 0.0)
                         _p1 = float(seg[0].get("poc_price", 0.0) or 0.0)
                         if _p1 <= 0.0:
-                            _p1 = 0.5 * (float(seg[0].get("high", 0.0) or 0.0) + float(seg[0].get("low", 0.0) or 0.0))
-                        if _shi > _slo > 0 and _p1 > 0:
-                            _dl = _p1 - _slo; _dh = _shi - _p1
+                            _p1 = 0.5 * (_h1b + _l1b)
+                        if _h1b > _l1b > 0 and _p1 > 0:
+                            _dl = _p1 - _l1b; _dh = _h1b - _p1
                             _txt = "Low Drift" if _dl > _dh else ("High Drift" if _dh > _dl else None)
                             if _txt:
                                 _db = self._sess_lbl(ut); ut += 1
