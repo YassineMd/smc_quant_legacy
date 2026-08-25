@@ -1,0 +1,62 @@
+SESSION ONE-SIDE FIX � 15m bucket | far-side-from-price rule vs shuffle null | pre-registered (header)
+
+==============================================================================================================
+RECON 2025
+  Tokyo   n=365 | FIRST-side fix p25/med/p75: 0.06/0.13/0.27 (=00:28/01:04/02:10) | null med 0.16 -> real-null -0.03
+    FAR-SIDE holds tol10% @ 15/20/25/30/40/50 : real  41  53  63  69  74  81 | null  42  48  55  60  69  77
+      (ref lowholds  35  41  46  51  58  65 | highholds  29  35  41  47  58  65)
+    FAR-SIDE holds strict @ 15/20/25/30/40/50 : real  39  50  59  64  71  79 | null  38  44  49  54  64  73
+  London  n=365 | FIRST-side fix p25/med/p75: 0.08/0.19/0.33 (=08:24/08:56/09:39) | null med 0.18 -> real-null +0.01
+    FAR-SIDE holds tol10% @ 15/20/25/30/40/50 : real  37  44  48  56  67  77 | null  39  47  53  59  68  77
+      (ref lowholds  27  34  38  43  51  59 | highholds  25  29  37  42  51  57)
+    FAR-SIDE holds strict @ 15/20/25/30/40/50 : real  34  40  44  52  63  72 | null  35  42  48  53  63  72
+  NY      n=365 | FIRST-side fix p25/med/p75: 0.07/0.14/0.25 (=13:35/14:06/15:00) | null med 0.16 -> real-null -0.03
+    FAR-SIDE holds tol10% @ 15/20/25/30/40/50 : real  44  54  61  68  78  82 | null  41  48  55  59  70  78
+      (ref lowholds  28  35  41  46  53  62 | highholds  35  42  47  53  62  68)
+    FAR-SIDE holds strict @ 15/20/25/30/40/50 : real  39  50  57  65  76  80 | null  37  43  50  54  65  73
+==============================================================================================================
+RECON 2026
+  Tokyo   n=170 | FIRST-side fix p25/med/p75: 0.05/0.14/0.31 (=00:26/01:07/02:30) | null med 0.19 -> real-null -0.05
+    FAR-SIDE holds tol10% @ 15/20/25/30/40/50 : real  42  52  54  59  66  76 | null  36  44  51  55  67  77
+      (ref lowholds  26  33  39  43  48  58 | highholds  38  44  46  54  63  71)
+    FAR-SIDE holds strict @ 15/20/25/30/40/50 : real  38  48  51  56  62  74 | null  31  39  45  49  61  71
+  London  n=170 | FIRST-side fix p25/med/p75: 0.06/0.16/0.34 (=08:19/08:49/09:42) | null med 0.18 -> real-null -0.02
+    FAR-SIDE holds tol10% @ 15/20/25/30/40/50 : real  35  44  51  59  66  74 | null  37  45  51  57  67  77
+      (ref lowholds  23  31  35  40  47  54 | highholds  28  32  38  46  59  65)
+    FAR-SIDE holds strict @ 15/20/25/30/40/50 : real  35  43  48  56  62  71 | null  33  40  47  51  61  72
+  NY      n=170 | FIRST-side fix p25/med/p75: 0.06/0.12/0.21 (=13:29/13:59/14:41) | null med 0.17 -> real-null -0.04
+    FAR-SIDE holds tol10% @ 15/20/25/30/40/50 : real  46  59  68  73  80  87 | null  41  48  53  59  69  77
+      (ref lowholds  33  43  51  58  64  71 | highholds  34  41  45  50  59  65)
+    FAR-SIDE holds strict @ 15/20/25/30/40/50 : real  42  55  64  69  76  84 | null  37  43  48  53  63  72
+==============================================================================================================
+DAEMON (2026-06-20 ..)
+  Tokyo   n=58 | FIRST-side fix p25/med/p75: 0.06/0.16/0.31 (=00:30/01:15/02:29) | null med 0.17 -> real-null -0.01
+    FAR-SIDE holds tol10% @ 15/20/25/30/40/50 : real  38  47  53  62  67  83 | null  40  46  52  59  69  77
+      (ref lowholds  29  38  43  50  55  66 | highholds  29  33  45  47  62  72)
+    FAR-SIDE holds strict @ 15/20/25/30/40/50 : real  36  43  48  57  62  76 | null  36  42  47  53  64  72
+  London  n=58 | FIRST-side fix p25/med/p75: 0.06/0.15/0.33 (=08:17/08:45/09:38) | null med 0.18 -> real-null -0.03
+    FAR-SIDE holds tol10% @ 15/20/25/30/40/50 : real  45  50  57  62  67  78 | null  38  47  52  59  70  79
+      (ref lowholds  29  33  40  43  52  60 | highholds  33  38  41  43  47  53)
+    FAR-SIDE holds strict @ 15/20/25/30/40/50 : real  41  47  52  57  62  74 | null  34  42  46  52  63  72
+  NY      n=58 | FIRST-side fix p25/med/p75: 0.06/0.11/0.20 (=13:30/13:54/14:38) | null med 0.20 -> real-null -0.08
+    FAR-SIDE holds tol10% @ 15/20/25/30/40/50 : real  50  48  67  69  81  86 | null  35  44  50  57  64  75
+      (ref lowholds  43  53  59  60  66  76 | highholds  31  34  41  50  67  74)
+    FAR-SIDE holds strict @ 15/20/25/30/40/50 : real  47  47  66  66  79  81 | null  32  39  44  52  59  69
+
+done in 27s
+
+======================================================================================================================
+VERDICT (2026-08-25, descriptive, pre-registered; NO tradeability claim):
+- FIRST-side fix TIMING is NOT structure: one extreme is set by ~13-19% of the session in real AND shuffled data
+  alike (real-null -0.01..-0.08 everywhere) — any random walk pins one side early; nothing to lean on there.
+- The structure is in the FAR-SIDE HOLD RATE, and only in NY:
+    NY (13-21Z): at 25-30% elapsed (~14:55-15:25 UTC) the extreme FARTHER from price holds to the close
+      ~67-73% (tol10) vs null ~53-59 -> +12..+17pp in RECON-2026 and DAEMON (2025 was +6..+9pp; strengthening).
+      Strict tolerances show the same picture. Causal rule (uses only checkpoint info).
+    TOKYO: a whisper (+3..+9pp recon, ~0 daemon) — not reliable. LONDON: zero to negative — pure discovery,
+      consistent with the parent study.
+- Practical read: within the first ~1.5-2.5h of NY, the far-side session extreme is respected roughly 2/3-3/4 of
+  the time, about 12-17pp more than buffer geometry alone explains. That is the earliest meaningful anchor these
+  two studies surface. Any trade idea on it goes through the canonical honest gates first.
+Method: parent study's data/instances/nulls; far side = extreme farther from close@checkpoint (vs range-so-far
+midpoint); 20 within-session order shuffles evaluated under the SAME rule.
