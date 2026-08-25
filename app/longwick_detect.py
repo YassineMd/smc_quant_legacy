@@ -59,6 +59,46 @@ def detect_combo(candles: list, skip_last: bool = True) -> list:
         return []
 
 
+def detect_reclaim(candles: list, skip_last: bool = True) -> list:
+    """WICK RECLAIM (m10_longwick_reclaim, cyan/magenta ♦, user 2026-08-25) — 2-bar rejection-then-reclaim
+    pair, NOT bound to walls. LONG (cyan ♦ below bar 2, side +1):
+      bar 1: BULLISH close with a long UPPER wick (v2 geometry: uw > body, uw >= 2x lw) — probed higher,
+             rejected, yet closed green;
+      bar 2: BULLISH close with a long LOWER wick (lw > body, lw >= 2x uw) whose CLOSE is ABOVE bar 1's body
+             top (max(o1,c1)) — the lower value was rejected and the previously-refused upper area got
+             filled/closed: bulls took back control.
+    SHORT mirror (magenta ♦ above, side -1): bearish long-lower-wick bar, then a bearish long-upper-wick bar
+    closing BELOW bar 1's body bottom. Returns [{i, side}] with i = bar 2. Fail-safe: []."""
+    n = len(candles)
+    if n < 2:
+        return []
+    try:
+        hi_n = (n - 1) if skip_last else n
+        out = []
+        for i in range(1, hi_n):
+            b1 = candles[i - 1]; b2 = candles[i]
+            o1 = _f(b1, "open", "open_price"); c1 = _f(b1, "close", "close_price")
+            h1 = _f(b1, "high"); l1 = _f(b1, "low")
+            o2 = _f(b2, "open", "open_price"); c2 = _f(b2, "close", "close_price")
+            h2 = _f(b2, "high"); l2 = _f(b2, "low")
+            if min(o1, c1, o2, c2) <= 0.0 or h1 <= l1 or h2 <= l2:
+                continue
+            body1 = abs(c1 - o1); body2 = abs(c2 - o2)
+            if body1 <= 0.0 or body2 <= 0.0:
+                continue
+            uw1 = h1 - max(o1, c1); lw1 = min(o1, c1) - l1
+            uw2 = h2 - max(o2, c2); lw2 = min(o2, c2) - l2
+            if (c1 > o1 and uw1 > body1 and uw1 >= 2.0 * lw1
+                    and c2 > o2 and lw2 > body2 and lw2 >= 2.0 * uw2 and c2 > max(o1, c1)):
+                out.append({"i": i, "side": 1})
+            elif (c1 < o1 and lw1 > body1 and lw1 >= 2.0 * uw1
+                    and c2 < o2 and uw2 > body2 and uw2 >= 2.0 * lw2 and c2 < min(o1, c1)):
+                out.append({"i": i, "side": -1})
+        return out
+    except Exception:
+        return []
+
+
 def detect(candles: list, walls: list, skip_last: bool = True) -> list:
     """[{i, side(+1 green/-1 red)}] over CLOSED candles. Fail-safe: []."""
     n = len(candles)
