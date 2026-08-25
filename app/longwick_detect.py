@@ -60,15 +60,14 @@ def detect_combo(candles: list, skip_last: bool = True) -> list:
 
 
 def detect_reclaim(candles: list, skip_last: bool = True) -> list:
-    """WICK RECLAIM (m10_longwick_reclaim, cyan/magenta ♦, user 2026-08-25) — 2-bar rejection-then-reclaim
-    pair, NOT bound to walls. LONG (cyan ♦ below bar 2, side +1):
-      bar 1: BULLISH close with a long UPPER wick (v2 geometry: uw > body, uw >= 2x lw) — probed higher,
-             rejected, yet closed green;
-      bar 2: BULLISH close with a long LOWER wick (lw > body, lw >= 2x uw) whose CLOSE is ABOVE bar 1's body
-             top (max(o1,c1)) — the lower value was rejected and the previously-refused upper area got
-             filled/closed: bulls took back control.
-    SHORT mirror (magenta ♦ above, side -1): bearish long-lower-wick bar, then a bearish long-upper-wick bar
-    closing BELOW bar 1's body bottom. Returns [{i, side}] with i = bar 2. Fail-safe: []."""
+    """WICK RECLAIM (m10_longwick_reclaim, cyan/magenta ♦; SIMPLIFIED per user 2026-08-25 — the earlier
+    v2-geometry version pointed at the wrong bars). NOT bound to walls.
+    LONG (cyan ♦ below bar 2, side +1): TWO CONSECUTIVE BULLISH bars where
+      bar 1's UPPER wick >= 1/3 of its candle range, and
+      bar 2's LOWER wick >= 1/3 of its candle range AND bar 2 CLOSES ABOVE bar 1's HIGH.
+    SHORT mirror (magenta ♦ above, side -1): two bearish bars, bar 1 lower wick >= 1/3 of its range,
+    bar 2 upper wick >= 1/3 of its range and closing BELOW bar 1's LOW.
+    Returns [{i, side}] with i = bar 2. Fail-safe: []."""
     n = len(candles)
     if n < 2:
         return []
@@ -83,16 +82,12 @@ def detect_reclaim(candles: list, skip_last: bool = True) -> list:
             h2 = _f(b2, "high"); l2 = _f(b2, "low")
             if min(o1, c1, o2, c2) <= 0.0 or h1 <= l1 or h2 <= l2:
                 continue
-            body1 = abs(c1 - o1); body2 = abs(c2 - o2)
-            if body1 <= 0.0 or body2 <= 0.0:
-                continue
+            r1 = h1 - l1; r2 = h2 - l2
             uw1 = h1 - max(o1, c1); lw1 = min(o1, c1) - l1
             uw2 = h2 - max(o2, c2); lw2 = min(o2, c2) - l2
-            if (c1 > o1 and uw1 > body1 and uw1 >= 2.0 * lw1
-                    and c2 > o2 and lw2 > body2 and lw2 >= 2.0 * uw2 and c2 > max(o1, c1)):
+            if c1 > o1 and c2 > o2 and uw1 >= r1 / 3.0 and lw2 >= r2 / 3.0 and c2 > h1:
                 out.append({"i": i, "side": 1})
-            elif (c1 < o1 and lw1 > body1 and lw1 >= 2.0 * uw1
-                    and c2 < o2 and uw2 > body2 and uw2 >= 2.0 * lw2 and c2 < min(o1, c1)):
+            elif c1 < o1 and c2 < o2 and lw1 >= r1 / 3.0 and uw2 >= r2 / 3.0 and c2 < l1:
                 out.append({"i": i, "side": -1})
         return out
     except Exception:
