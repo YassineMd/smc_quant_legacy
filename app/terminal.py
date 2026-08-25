@@ -5219,6 +5219,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return self._pvp_sep_pool[used]
 
     def _hide_prevday_vp(self) -> None:
+        self._pvp_sig = None                          # hidden -> a re-toggle must rebuild (the sig gate would skip)
         for _h in self._pvp_hist_pool:
             _h.setVisible(False)
         for _c in self._pvp_line_pool:
@@ -5291,6 +5292,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (midnight..23:59), matching the daily-VA study + the Binance daily roll. Display-only — touches no buckets."""
         if not self.menu.layer_state("m10_prevday_vp") or not buckets:
             self._hide_prevday_vp(); return
+        # PERF (2026-08-25, py-spy on the live terminal): this draw had NO cache gate — every 20Hz frame re-scanned
+        # the window into days, re-aggregated every prev day's FULL footprint and rebuilt every histogram brush
+        # (~200-500ms/frame on a 1m clock chart = the 'terminal super slow' report). Prev days are IMMUTABLE ->
+        # (1) whole draw sig-gated on (n, first/last start, vp_mode): rebuild once per bar close / window shift /
+        # mode change, items persist between; (2) each completed day's aggregation cached by (date, bucket-count).
+        _sig = (len(buckets), float(buckets[0].get("start_time", 0.0) or 0.0),
+                float(buckets[-1].get("start_time", 0.0) or 0.0), self._vp_mode)
+        if _sig == getattr(self, "_pvp_sig", None):
+            return                                    # unchanged -> the drawn items are already correct
+        self._pvp_sig = _sig
+        if not hasattr(self, "_pvp_day_cache"):
+            self._pvp_day_cache = {}
         # contiguous index range per UTC calendar day (buckets are time-ordered -> each date is one run)
         days = []
         cur = None
@@ -5305,7 +5318,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         uh = ul = us = 0
         for _d, i0, i1 in days[:-1]:                  # EXCLUDE the last (current / most-recent) day
             seg = buckets[i0:i1 + 1]
-            agg = self._pvp_force_agg(seg)
+            _ck = (_d, i1 - i0 + 1)
+            agg = self._pvp_day_cache.get(_ck)
+            if agg is None:
+                agg = self._pvp_force_agg(seg)
+                self._pvp_day_cache[_ck] = agg
+                if len(self._pvp_day_cache) > 64:     # bound: keep it a small rolling cache
+                    self._pvp_day_cache.pop(next(iter(self._pvp_day_cache)))
             rows = sorted(((float(ps), a) for ps, a in agg.items()), key=lambda t: t[0])
             if len(rows) >= 2 and max((sum(a) for _, a in rows), default=0.0) > 0:
                 prices = [p for p, _ in rows]
