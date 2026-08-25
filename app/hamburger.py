@@ -125,6 +125,7 @@ _M10_INDICATORS = [
     ("m10_prevday_vp", "Prev. Day VP", False, True),            # per-previous-UTC-day Volume Profile (style = 'Volume Profile Mode' dropdown)
     ("m10_session", "Session Filter", False, True),            # per-UTC-day Tokyo/London/New-York boxes: range + avg (VWAP) + high/low
     ("m10_erange", "Expected Range", False, True),             # per-session dashed range envelope from YESTERDAY's same-session range (NY/Tokyo/London/Whole Day sub-toggles)
+    ("m10_nyanchor", "★ NY Anchor (far-side hold · 15:00→21:00 UTC)", False, True),   # from 15:00Z ONE amber line at the NY-session extreme FARTHER from price — holds to the close ~67-73% (+12-17pp over the shuffle null, recent eras; study/session_side_fix_15m). 18:30Z→ both extremes (range typically complete). DESCRIPTIVE level persistence, NOT an entry signal; side can flip if price crosses the session midpoint
     ("m10_breakout5m", "5m Breakout", False, True),             # 5m ONLY: green/red 'Br' badges on S/R-breakout (mitigation) candles
 ]
 

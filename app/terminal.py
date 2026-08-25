@@ -1361,6 +1361,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._9am_marks = None; self._9am_sigs = []; self._9am_sig = None   # scatter + detect cache
         self._9am_entries = []; self._9am_lines_user = {}
         self._9am_ln_pool = []; self._9am_lnlbl_pool = []; self._9am_tag_pool = []   # '9F' identity tags
+        self._nya_line_pool = []      # NY ANCHOR (m10_nyanchor): far-side hold line(s) + label (session studies)
+        self._nya_lbl_pool = []
+        self._nya_sig = None; self._nya_read = {"state": "OFF"}
         self._nyer_box_pool = []      # NY Expected Range: forecast band (QGraphicsRectItem)
         self._nyer_line_pool = []     # NY Expected Range: dashed expected hi/lo edges (PlotCurveItem)
         self._nyer_lbl_pool = []      # NY Expected Range: 'NY exp X.X%' label (TextItem)
@@ -2465,6 +2468,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._compass_sig = None                     # Day Compass toggled -> recompute next frame
             if not on:
                 self._compass_hud.setVisible(False)      # off -> hide the bias table now
+        elif key == "m10_nyanchor":
+            self._nya_sig = None                         # NY Anchor toggled -> recompute next frame
+            if not on:
+                self._hide_nyanchor()                    # off -> hide the line(s) now
         elif key == "m10_reward_switch":
             if not on:
                 self._hide_reward_switches()             # Reward-switch marks off -> tear the flip lines/flags down now
@@ -5547,6 +5554,61 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _hide_erange(self) -> None:
         for _p in (self._nyer_box_pool + self._nyer_line_pool + self._nyer_lbl_pool + self._nyer_mark_pool):
+            _p.setVisible(False)
+
+    # NY ANCHOR (m10_nyanchor) — the far-side hold level from the session studies (app/ny_anchor): 15:00-18:30Z one
+    # amber line at the extreme FARTHER from price (holds to the NY close ~67-73%, +12-17pp over the shuffle null in
+    # the recent eras); 18:30-21:00Z both extremes (the range is typically complete). DESCRIPTIVE — not a signal.
+    def _hide_nyanchor(self) -> None:
+        for _p in (self._nya_line_pool + self._nya_lbl_pool):
+            _p.setVisible(False)
+        self._nya_sig = None
+
+    def _nya_line(self, used):
+        if used >= len(self._nya_line_pool):
+            _ln = pg.PlotCurveItem(); _ln.setZValue(15)
+            self.plot.addItem(_ln, ignoreBounds=True); self._nya_line_pool.append(_ln)
+        return self._nya_line_pool[used]
+
+    def _nya_lbl(self, used):
+        if used >= len(self._nya_lbl_pool):
+            _t = pg.TextItem(anchor=(1.0, 1.0)); _t.setZValue(16)
+            _t.textItem.setFont(QtGui.QFont("Consolas", 9, QtGui.QFont.Bold))
+            self.plot.addItem(_t, ignoreBounds=True); self._nya_lbl_pool.append(_t)
+        return self._nya_lbl_pool[used]
+
+    def _draw_nyanchor(self, buckets, x, vx0, vx1) -> None:
+        if not self.menu.layer_state("m10_nyanchor") or not buckets:
+            self._hide_nyanchor(); return
+        from app import ny_anchor
+        _sig = (len(buckets), float(buckets[-1].get("end_time", 0.0) or 0.0))
+        if _sig != self._nya_sig:                                 # read changes on bar close only (perf rule)
+            _n_closed = len(buckets) - 1 if bool(getattr(self, "_mmx_last_forming", True)) and len(buckets) > 1 else len(buckets)
+            self._nya_read = ny_anchor.anchor_read(buckets[:_n_closed])
+            self._nya_sig = _sig
+        r = self._nya_read or {"state": "OFF"}
+        if r.get("state") not in ("ANCHOR", "BOX"):
+            self._hide_nyanchor(); self._nya_sig = _sig; return
+        n = len(buckets)
+        xl = x[min(int(r["i0"]), n - 1)]; xr = x[n - 1] + 1.0
+        AMBER = (255, 195, 40)
+        lines = [(r["lo"] if r["far"] == "L" else r["hi"],
+                  "NY anchor · holds ~70%")] if r["state"] == "ANCHOR" else \
+                [(r["hi"], "NY range · set"), (r["lo"], None)]
+        ul = ut = 0
+        for lvl, txt in lines:
+            _ln = self._nya_line(ul); ul += 1
+            _pen = pg.mkPen(*AMBER, 230, width=2.2,
+                            style=QtCore.Qt.SolidLine if r["state"] == "ANCHOR" else QtCore.Qt.DashLine)
+            _pen.setCosmetic(True)
+            _ln.setPen(_pen); _ln.setData([xl, xr], [lvl, lvl]); _ln.setVisible(True)
+            if txt:
+                _tl = self._nya_lbl(ut); ut += 1
+                _tl.setColor(pg.mkColor(*AMBER)); _tl.setText(txt)
+                _tl.setPos(xr, lvl); _tl.setVisible(True)
+        for _p in self._nya_line_pool[ul:]:
+            _p.setVisible(False)
+        for _p in self._nya_lbl_pool[ut:]:
             _p.setVisible(False)
 
     def _draw_erange(self, buckets, x, vx0, vx1) -> None:
@@ -15136,6 +15198,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_erange(buckets, x, vx0, vx1)                # per-session Expected-Range envelopes (m10_erange)
         except Exception:
             self._hide_erange()
+        try:
+            self._draw_nyanchor(buckets, x, vx0, vx1)              # NY Anchor far-side hold line (m10_nyanchor)
+        except Exception:
+            self._hide_nyanchor()
         try:
             self._draw_reversal_point(buckets, x, vx0, vx1, vy0, vy1)  # Reversal Point triangles, ALL tf (m10_reversal)
         except Exception:
