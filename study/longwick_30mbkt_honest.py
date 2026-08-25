@@ -43,9 +43,9 @@ def _geom_candidates(A):
         body = abs(c - o); uw = h - max(o, c); lw = min(o, c) - l
         if body <= 0:
             continue
-        if c < o and uw > body and uw > lw and lw < body:
+        if c < o and uw > body and uw >= 2.0 * lw:       # v2 geometry (968730b): 2x dominance, off-wick unconstrained
             out.append((i, -1))
-        elif c > o and lw > body and lw > uw and uw < body:
+        elif c > o and lw > body and lw >= 2.0 * uw:
             out.append((i, 1))
     return out
 
