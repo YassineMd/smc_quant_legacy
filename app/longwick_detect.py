@@ -25,6 +25,38 @@ def _f(b, k, alt=None):
         return 0.0
 
 
+def detect_combo(candles: list, skip_last: bool = True) -> list:
+    """LONG WICK COMBO (m10_longwick_combo, gold ♦, user 2026-08-25) — 2-bar continuation-failure pair, NOT
+    bound to walls: a BEARISH bar followed by a LONG-UPPER-WICK BEARISH bar (v2 wick geometry: upper wick >
+    body AND >= 2x the lower wick) — buyers pushed higher and completely failed -> gold ♦ ABOVE bar 2 (side
+    -1). Mirror for longs: bullish bar then long-LOWER-wick bullish bar -> gold ♦ BELOW (side +1).
+    Returns [{i, side}] with i = the second (wick) bar. Fail-safe: []."""
+    n = len(candles)
+    if n < 2:
+        return []
+    try:
+        hi_n = (n - 1) if skip_last else n
+        out = []
+        for i in range(1, hi_n):
+            b1 = candles[i - 1]; b2 = candles[i]
+            o1 = _f(b1, "open", "open_price"); c1 = _f(b1, "close", "close_price")
+            o2 = _f(b2, "open", "open_price"); c2 = _f(b2, "close", "close_price")
+            h2 = _f(b2, "high"); l2 = _f(b2, "low")
+            if min(o1, c1, o2, c2) <= 0.0 or h2 <= l2:
+                continue
+            body2 = abs(c2 - o2)
+            if body2 <= 0.0:
+                continue
+            uw2 = h2 - max(o2, c2); lw2 = min(o2, c2) - l2
+            if c1 < o1 and c2 < o2 and uw2 > body2 and uw2 >= 2.0 * lw2:
+                out.append({"i": i, "side": -1})
+            elif c1 > o1 and c2 > o2 and lw2 > body2 and lw2 >= 2.0 * uw2:
+                out.append({"i": i, "side": 1})
+        return out
+    except Exception:
+        return []
+
+
 def detect(candles: list, walls: list, skip_last: bool = True) -> list:
     """[{i, side(+1 green/-1 red)}] over CLOSED candles. Fail-safe: []."""
     n = len(candles)

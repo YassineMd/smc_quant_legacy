@@ -1439,6 +1439,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ws_sph = None; self._ws_sig = None; self._ws_drawn = False
         self._ws_marks = {}; self._ws_msig = {}                  # per-htf ("30m"/"1h") wall-mark caches
         self._lwk_sph = None; self._lwk_sig = None               # LONG WICK rejection ♦ (m10_longwick, all tf)
+        self._lwc_sph = None; self._lwc_sig = None               # LONG WICK COMBO gold ♦ (m10_longwick_combo, no walls)
         self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
         self._dia_fired = set(); self._dia_audio_seeded = False; self._dia_fired_tf = None   # diamond entry-BEEP: seen end_times + silent-seed guard
         # Radar Runner PROVISIONAL forming-bar preview (hollow badge on the still-forming candle; confirmed detect() keeps
@@ -2435,6 +2436,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._lwk_sig = None                         # Long Wick toggled -> re-detect + redraw next frame
             if not on:
                 self._clear_longwick()                   # off -> tear the diamonds down now
+        elif key == "m10_longwick_combo":
+            self._lwc_sig = None                         # Long Wick Combo toggled -> re-detect + redraw next frame
+            if not on:
+                self._clear_longwick_combo()             # off -> tear the gold diamonds down now
         elif key == "m10_kcovershoot":
             self._kco_sig = None                         # KC Overshoot 2nd-Entry toggled -> re-detect + redraw next frame
             if not on:
@@ -8313,6 +8318,47 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                           "pen": pg.mkPen(*[int(cc * 0.5) for cc in col], 255, width=1.2), "size": 15})
         self._lwk_sph.setData(spots); self._lwk_sph.setVisible(True)
 
+    # LONG WICK COMBO (m10_longwick_combo, ALL tf/source, NO wall binding) — gold ♦: a bearish bar followed by a
+    # long-UPPER-wick bearish bar (v2 wick geometry) = buyers pushed and completely failed (♦ above); mirrored
+    # bullish pair -> ♦ below. app/longwick_detect.detect_combo. Descriptive/eyeball.
+    def _clear_longwick_combo(self) -> None:
+        if self._lwc_sph is not None:
+            self._lwc_sph.setVisible(False)
+        self._lwc_sig = None
+
+    def _draw_longwick_combo(self, filtered) -> None:
+        if (not self.menu.layer_state("m10_longwick_combo") or self.scanner_mode != "bucket_canvas"
+                or self._hide_candles or not filtered):
+            self._clear_longwick_combo(); return
+        n = len(filtered)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        _ce = filtered[-2] if (_forming and n >= 2) else filtered[-1]
+        _sig = (n, _forming, float(_ce.get("end_time", 0.0) or 0.0), self._tf, self._chart_source)
+        if _sig == self._lwc_sig and self._lwc_sph is not None and self._lwc_sph.isVisible():
+            return                                                # re-detect once per bar close
+        self._lwc_sig = _sig
+        try:
+            from app import longwick_detect
+            marks = longwick_detect.detect_combo(filtered, skip_last=_forming)
+        except Exception:
+            self._clear_longwick_combo(); return
+        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
+        GOLD = (255, 195, 40)
+        if self._lwc_sph is None:
+            self._lwc_sph = pg.ScatterPlotItem(pxMode=True, size=15, symbol="d")
+            self._lwc_sph.setZValue(34); self.plot.addItem(self._lwc_sph, ignoreBounds=True)
+        spots = []
+        for e in marks:
+            i = int(e["i"])
+            if not (0 <= i < n):
+                continue
+            side = int(e["side"])
+            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
+            y = (lo - pad) if side > 0 else (hi + pad)             # gold ♦ BELOW bullish pair / ABOVE bearish pair
+            spots.append({"pos": (i, y), "symbol": "d", "brush": pg.mkBrush(*GOLD, 245),
+                          "pen": pg.mkPen(140, 100, 10, 255, width=1.2), "size": 15})
+        self._lwc_sph.setData(spots); self._lwc_sph.setVisible(True)
+
     def _draw_wallsurge(self, filtered) -> None:
         if (not self.menu.layer_state("m10_wallsurge") or self.scanner_mode != "bucket_canvas"
                 or self._chart_source != "time" or self._tf not in ("1m", "5m")   # 1m/5m CLOCK only; Ctrl+H hides
@@ -10394,7 +10440,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")
                     or self.menu.layer_state("m10_wallstrat") or self.menu.layer_state("m10_radarrun")
                     or self.menu.layer_state("m10_radarwick") or self.menu.layer_state("m10_kcovershoot")
-                    or self.menu.layer_state("m10_wallsurge") or self.menu.layer_state("m10_longwick")):
+                    or self.menu.layer_state("m10_wallsurge") or self.menu.layer_state("m10_longwick")
+                    or self.menu.layer_state("m10_longwick_combo")):
                 _pf = _pf0                          # already built above; the top gate decided this frame needs a redraw
                 try:
                     self._draw_engulfsr(_pf or [])  # 1h Engulf S/R Reversal overlay (1h) — self-gated, fail-safe
@@ -10432,6 +10479,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_longwick(_pf or [])   # Long Wick rejection ♦ (all tf) — self-gated, fail-safe
                 except Exception:
                     self._clear_longwick()
+                try:
+                    self._draw_longwick_combo(_pf or [])  # Long Wick Combo gold ♦ (no walls) — self-gated, fail-safe
+                except Exception:
+                    self._clear_longwick_combo()
                 try:
                     self._draw_htf_radarrun("4h", _pf or [])  # 4h Radar Runner signals on lower tfs — self-gated
                     self._draw_htf_radarrun("1h", _pf or [])  # 1h Radar Runner signals on lower tfs — self-gated
@@ -10563,6 +10614,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_longwick(filtered)   # Long Wick rejection ♦ (all tf) — self-gated, fail-safe
             except Exception:
                 self._clear_longwick()
+            try:
+                self._draw_longwick_combo(filtered)  # Long Wick Combo gold ♦ (no walls) — self-gated, fail-safe
+            except Exception:
+                self._clear_longwick_combo()
             try:
                 self._draw_htf_radarrun("4h", filtered)  # 4h Radar Runner signals on lower tfs — self-gated
                 self._draw_htf_radarrun("1h", filtered)  # 1h Radar Runner signals on lower tfs — self-gated
