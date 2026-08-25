@@ -26,12 +26,12 @@ def _f(b, k, alt=None):
 
 
 def detect_combo(candles: list, skip_last: bool = True) -> list:
-    """LONG WICK COMBO (m10_longwick_combo, gold ♦, user 2026-08-25; +breakout-close condition same day) —
-    2-bar continuation-failure pair, NOT bound to walls: a BEARISH bar followed by a LONG-UPPER-WICK BEARISH
-    bar (v2 wick geometry: upper wick > body AND >= 2x the lower wick) whose CLOSE is BELOW the previous
-    candle's LOW — buyers pushed higher, completely failed, and the bar still broke down -> gold ♦ ABOVE bar 2
-    (side -1). Mirror for longs: bullish bar, long-LOWER-wick bullish bar closing ABOVE the previous candle's
-    HIGH -> gold ♦ BELOW (side +1). Returns [{i, side}] with i = the second (wick) bar. Fail-safe: []."""
+    """LONG WICK COMBO (m10_longwick_combo, gold ♦, user 2026-08-25; breakout-close condition added then
+    REMOVED same day — honest test showed it cut ~40% of signals for a noise-level in-sample win-rate tick that
+    inverted OOS) — 2-bar continuation-failure pair, NOT bound to walls: a BEARISH bar followed by a
+    LONG-UPPER-WICK BEARISH bar (v2 wick geometry: upper wick > body AND >= 2x the lower wick) — buyers pushed
+    higher and completely failed -> gold ♦ ABOVE bar 2 (side -1). Mirror for longs: bullish bar then
+    long-LOWER-wick bullish bar -> gold ♦ BELOW (side +1). Returns [{i, side}]. Fail-safe: []."""
     n = len(candles)
     if n < 2:
         return []
@@ -50,10 +50,10 @@ def detect_combo(candles: list, skip_last: bool = True) -> list:
             if body2 <= 0.0:
                 continue
             uw2 = h2 - max(o2, c2); lw2 = min(o2, c2) - l2
-            if c1 < o1 and c2 < o2 and uw2 > body2 and uw2 >= 2.0 * lw2 and c2 < l1:
-                out.append({"i": i, "side": -1})      # close BROKE the prev low despite the buyers' push
-            elif c1 > o1 and c2 > o2 and lw2 > body2 and lw2 >= 2.0 * uw2 and c2 > h1:
-                out.append({"i": i, "side": 1})       # close BROKE the prev high despite the sellers' push
+            if c1 < o1 and c2 < o2 and uw2 > body2 and uw2 >= 2.0 * lw2:
+                out.append({"i": i, "side": -1})
+            elif c1 > o1 and c2 > o2 and lw2 > body2 and lw2 >= 2.0 * uw2:
+                out.append({"i": i, "side": 1})
         return out
     except Exception:
         return []
