@@ -1,0 +1,43 @@
+SESSION DRIFT x RADAR RUNNER 30m BUCKET � canonical harness | drift causal at the fire bar | pre-registered
+
+========================================================================================================================
+RECON 2025-01 .. 2026-06 (per-year split in rows)
+  (no session / tie: 595 fires excluded from conditioned cells)
+  ALL            0.5% net n=4246  W2957  L1289  win  69.6%  avg +0.002%  R -0.003  DD  30.3%  prop  16.3% | 25 +0.002% 26 +0.001%
+  ALL            RR 1:1   n=3055  W1642  L1413  win  53.7%  avg -0.006%  R -0.014  DD  44.5%  prop  13.4% | 25 -0.016% 26 +0.015%
+  WITH-DRIFT     0.5% net n=1984  W1379  L605   win  69.5%  avg +0.001%  R +0.003  DD  17.6%  prop  22.5% | 25 +0.009% 26 -0.013%
+  WITH-DRIFT     RR 1:1   n=1647  W888   L759   win  53.9%  avg -0.010%  R -0.013  DD  24.1%  prop  15.0% | 25 -0.018% 26 +0.006%
+  AGAINST-DRIFT  0.5% net n=2467  W1669  L798   win  67.7%  avg -0.019%  R -0.027  DD  40.9%  prop   4.3% | 25 -0.015% 26 -0.026%
+  AGAINST-DRIFT  RR 1:1   n=1977  W1026  L951   win  51.9%  avg -0.046%  R -0.054  DD  59.3%  prop   3.3% | 25 -0.040% 26 -0.059%
+  WITH-LONG      0.5% net n=831   W563   L268   win  67.7%  avg -0.015%  R -0.024  DD  14.2%  prop   5.0% | 25 +0.007% 26 -0.051%
+  WITH-LONG      RR 1:1   n=719   W377   L342   win  52.4%  avg -0.030%  R -0.044  DD  17.0%  prop   5.6% | 25 -0.003% 26 -0.073%
+  WITH-SHORT     0.5% net n=1181  W834   L347   win  70.6%  avg +0.013%  R +0.021  DD  11.7%  prop  40.2% | 25 +0.010% 26 +0.020%
+  WITH-SHORT     RR 1:1   n=990   W544   L446   win  54.9%  avg +0.007%  R +0.009  DD  20.2%  prop  24.3% | 25 -0.021% 26 +0.069%
+========================================================================================================================
+DAEMON 30m (TRUE OOS, 2026-06-20 ..)
+  (no session / tie: 83 fires excluded from conditioned cells)
+  ALL            0.5% net n=305   W190   L115   win  62.3%  avg -0.020%  R -0.021  DD   6.2%  prop   4.6% | 25 +nan% 26 -0.020%
+  ALL            RR 1:1   n=260   W140   L120   win  53.8%  avg -0.041%  R -0.047  DD   8.4%  prop   3.9% | 25 +nan% 26 -0.041%
+  WITH-DRIFT     0.5% net n=150   W79    L71    win  52.7%  avg -0.149%  R -0.196  DD  13.0%  prop   0.0% | 25 +nan% 26 -0.149%
+  WITH-DRIFT     RR 1:1   n=132   W58    L74    win  43.9%  avg -0.201%  R -0.247  DD  13.5%  prop   0.0% | 25 +nan% 26 -0.201%
+  AGAINST-DRIFT  0.5% net n=206   W132   L74    win  64.1%  avg +0.009%  R +0.030  DD   4.8%  prop  46.4% | 25 +nan% 26 +0.009%
+  AGAINST-DRIFT  RR 1:1   n=187   W106   L81    win  56.7%  avg +0.001%  R +0.008  DD   4.6%  prop  26.2% | 25 +nan% 26 +0.001%
+  WITH-LONG      0.5% net n=92    W47    L45    win  51.1%  avg -0.156%  R -0.221  DD   9.7%  prop   0.0% | 25 +nan% 26 -0.156%
+  WITH-LONG      RR 1:1   n=84    W38    L46    win  45.2%  avg -0.158%  R -0.224  DD   9.1%  prop   0.0% | 25 +nan% 26 -0.158%
+  WITH-SHORT     0.5% net n=69    W37    L32    win  53.6%  avg -0.141%  R -0.187  DD   5.7%  prop   0.0% | 25 +nan% 26 -0.141%
+  WITH-SHORT     RR 1:1   n=65    W28    L37    win  43.1%  avg -0.232%  R -0.268  DD   7.3%  prop   0.0% | 25 +nan% 26 -0.232%
+
+done in 160s
+
+======================================================================================================================
+VERDICT (2026-08-25, pre-registered): FAILED — and INVERTED on the daemon era, the 9th conditioning family to die.
+- Recon showed the seductive right-sign separation: WITH-DRIFT +0.001/-0.010% vs AGAINST -0.019/-0.046%; best
+  cell WITH-SHORT +0.013% (prop 40%).
+- DAEMON OOS flips it exactly: WITH-DRIFT -0.149/-0.201% (win 44-53%, prop 0) vs AGAINST-DRIFT +0.009/+0.001%
+  (win 57-64%, prop 26-46%). Recon's best cell (WITH-SHORT) is daemon's WORST (-0.141/-0.232%). Taking only
+  with-drift positions — the tested rule — would have been the single worst filter in the OOS era.
+- Consistent with the flagged structural concern: with-drift ~= "breakout in the direction the session already
+  traveled" (the fire extends its own side of the range), a cousin of WITH-FLOW, which the daemon era also
+  punished. The session tag remains honest DESCRIPTIVE context; it does not license direction.
+Harness: cached union fire sets, drift causal at the fire bar (range-so-far vs first-session-bar POC), 1m
+first-touch, non-overlap, fees+slip, prop MC.
