@@ -1,0 +1,59 @@
+LONG WICK @ WALL � 30m BUCKET HONEST TEST | shipped detector, trailing-2000 walls | SL 0.1% beyond extreme | 1m first-touch | non-overlap | fees+slip
+
+========================================================================================================================
+RECON 2025-01 .. 2026-06 (per-year split in rows)
+  geometry candidates: 4857 / 37231 bars
+  ALL   0.2% net  n=1565  W1126  L439   win  71.9%  avg -0.091%  R -0.146  DD  92.2%  prop   0.0% | 25 -0.100% 26 -0.073%
+  ALL   0.25% net n=1537  W1038  L499   win  67.5%  avg -0.097%  R -0.161  DD  99.5%  prop   0.0% | 25 -0.108% 26 -0.075%
+  ALL   0.3% net  n=1511  W970   L541   win  64.2%  avg -0.102%  R -0.164  DD  99.8%  prop   0.0% | 25 -0.107% 26 -0.092%
+  ALL   0.4% net  n=1475  W857   L618   win  58.1%  avg -0.111%  R -0.176  DD 104.9%  prop   0.0% | 25 -0.123% 26 -0.087%
+  ALL   0.5% net  n=1436  W764   L672   win  53.2%  avg -0.116%  R -0.182  DD 106.4%  prop   0.0% | 25 -0.132% 26 -0.082%
+  ALL   RR 1:1    n=1397  W645   L752   win  46.2%  avg -0.141%  R -0.211  DD 120.0%  prop   0.0% | 25 -0.159% 26 -0.105%
+  LONG  0.2% net  n=697   W495   L202   win  71.0%  avg -0.098%  R -0.158  DD  44.4%  prop   0.0% | 25 -0.102% 26 -0.090%
+  LONG  0.25% net n=688   W456   L232   win  66.3%  avg -0.107%  R -0.178  DD  48.7%  prop   0.0% | 25 -0.116% 26 -0.091%
+  LONG  0.3% net  n=678   W421   L257   win  62.1%  avg -0.118%  R -0.196  DD  52.8%  prop   0.0% | 25 -0.124% 26 -0.106%
+  LONG  0.4% net  n=666   W380   L286   win  57.1%  avg -0.117%  R -0.192  DD  50.9%  prop   0.0% | 25 -0.133% 26 -0.085%
+  LONG  0.5% net  n=656   W342   L314   win  52.1%  avg -0.121%  R -0.201  DD  52.8%  prop   0.0% | 25 -0.137% 26 -0.091%
+  LONG  RR 1:1    n=644   W292   L352   win  45.3%  avg -0.131%  R -0.229  DD  59.2%  prop   0.0% | 25 -0.141% 26 -0.112%
+  SHORT 0.2% net  n=880   W638   L242   win  72.5%  avg -0.086%  R -0.139  DD  50.1%  prop   0.0% | 25 -0.098% 26 -0.062%
+  SHORT 0.25% net n=873   W599   L274   win  68.6%  avg -0.087%  R -0.145  DD  52.0%  prop   0.0% | 25 -0.097% 26 -0.064%
+  SHORT 0.3% net  n=864   W566   L298   win  65.5%  avg -0.090%  R -0.143  DD  51.2%  prop   0.0% | 25 -0.092% 26 -0.086%
+  SHORT 0.4% net  n=852   W500   L352   win  58.7%  avg -0.107%  R -0.165  DD  58.7%  prop   0.0% | 25 -0.112% 26 -0.097%
+  SHORT 0.5% net  n=839   W455   L384   win  54.2%  avg -0.106%  R -0.160  DD  58.1%  prop   0.0% | 25 -0.120% 26 -0.078%
+  SHORT RR 1:1    n=825   W392   L433   win  47.5%  avg -0.135%  R -0.183  DD  64.5%  prop   0.0% | 25 -0.151% 26 -0.102%
+========================================================================================================================
+DAEMON 30m (TRUE OOS, 2026-06-20 ..)
+  geometry candidates: 537 / 4548 bars
+  ALL   0.2% net  n=155   W95    L60    win  61.3%  avg -0.110%  R -0.237  DD  14.3%  prop   0.0% | 25 +nan% 26 -0.110%
+  ALL   0.25% net n=149   W88    L61    win  59.1%  avg -0.102%  R -0.199  DD  12.4%  prop   0.0% | 25 +nan% 26 -0.102%
+  ALL   0.3% net  n=147   W79    L68    win  53.7%  avg -0.118%  R -0.226  DD  13.6%  prop   0.0% | 25 +nan% 26 -0.118%
+  ALL   0.4% net  n=140   W65    L75    win  46.4%  avg -0.124%  R -0.266  DD  14.7%  prop   0.0% | 25 +nan% 26 -0.124%
+  ALL   0.5% net  n=136   W58    L78    win  42.6%  avg -0.116%  R -0.264  DD  14.3%  prop   0.0% | 25 +nan% 26 -0.116%
+  ALL   RR 1:1    n=142   W67    L75    win  47.2%  avg -0.128%  R -0.260  DD  15.0%  prop   0.0% | 25 +nan% 26 -0.128%
+  LONG  0.2% net  n=77    W48    L29    win  62.3%  avg -0.093%  R -0.209  DD   8.3%  prop   0.0% | 25 +nan% 26 -0.093%
+  LONG  0.25% net n=76    W45    L31    win  59.2%  avg -0.093%  R -0.180  DD   8.5%  prop   0.0% | 25 +nan% 26 -0.093%
+  LONG  0.3% net  n=76    W42    L34    win  55.3%  avg -0.101%  R -0.173  DD   8.8%  prop   0.0% | 25 +nan% 26 -0.101%
+  LONG  0.4% net  n=75    W37    L38    win  49.3%  avg -0.092%  R -0.175  DD   8.8%  prop   0.2% | 25 +nan% 26 -0.092%
+  LONG  0.5% net  n=74    W34    L40    win  45.9%  avg -0.078%  R -0.124  DD   9.0%  prop   2.1% | 25 +nan% 26 -0.078%
+  LONG  RR 1:1    n=75    W38    L37    win  50.7%  avg -0.098%  R -0.192  DD   8.5%  prop   0.0% | 25 +nan% 26 -0.098%
+  SHORT 0.2% net  n=84    W50    L34    win  59.5%  avg -0.127%  R -0.276  DD   9.5%  prop   0.0% | 25 +nan% 26 -0.127%
+  SHORT 0.25% net n=82    W48    L34    win  58.5%  avg -0.105%  R -0.222  DD   7.6%  prop   0.0% | 25 +nan% 26 -0.105%
+  SHORT 0.3% net  n=81    W42    L39    win  51.9%  avg -0.128%  R -0.289  DD   9.7%  prop   0.0% | 25 +nan% 26 -0.128%
+  SHORT 0.4% net  n=78    W35    L43    win  44.9%  avg -0.135%  R -0.332  DD  10.9%  prop   0.0% | 25 +nan% 26 -0.135%
+  SHORT 0.5% net  n=75    W32    L43    win  42.7%  avg -0.115%  R -0.301  DD  11.1%  prop   0.0% | 25 +nan% 26 -0.115%
+  SHORT RR 1:1    n=79    W36    L43    win  45.6%  avg -0.138%  R -0.293  DD  10.5%  prop   0.0% | 25 +nan% 26 -0.138%
+
+done in 711s
+
+======================================================================================================================
+VERDICT (2026-08-25, pre-registered, canonical harness): FAILED — NET-NEGATIVE AT EVERY EXIT IN BOTH ERAS.
+- All 36 cells (ALL/LONG/SHORT x 6 exits x recon+daemon) lose: recon avg -0.086..-0.159%/trade (both years
+  negative in every row), daemon OOS -0.078..-0.138%. Prop first-pass ~0% everywhere.
+- The win-rate ladder (72% @0.2% TP -> 46% @RR 1:1) is the mechanical tight-TP/wide-SL shape: the SL sits beyond
+  the rejection wick (typical 0.5-0.9% distance), so small TPs win often and still lose money; at RR 1:1 the win
+  rate is 45-51% vs the >52% needed after fees — the rejection wick does NOT resolve away from the wall.
+- No usable side asymmetry (SHORT marginally better in recon, marginally worse on daemon = noise).
+- The indicator stays an EYEBALL layer; this entry/bracket family is closed. Consistent with the wall program's
+  record: wall-visit rejection entries have never cleared costs (wall_failbreak, wall-strategy, engulf walls).
+Harness: shipped longwick_detect per bar close on trailing-2000 walls (repaint-proof), entry close, SL 0.1%
+beyond the extreme, 1m first-touch, non-overlap, fees 0.04% RT + 0.03% slip/leg, prop MC.
