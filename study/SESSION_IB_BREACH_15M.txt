@@ -1,0 +1,83 @@
+SESSION IB BREACH � 15m bucket | IB=first 60/30min | close-breach -> session direction | shuffle null | pre-registered
+
+======================================================================================================================
+RECON 2025
+  Tokyo   IB60 ALL  n=357 | sustained 53.5% (null 54.8) | cont -0.110% (null -0.012) | dbl 42.3% (null 43.4) | med breach t=0.18 | no-breach 5
+  Tokyo   IB60 UP   n=191 | sustained 57.6% (null 59.4) | cont -0.026% (null +0.066) | dbl 39.3% (null 39.1) | med breach t=0.19
+  Tokyo   IB60 DOWN n=166 | sustained 48.8% (null 50.0) | cont -0.207% (null -0.095) | dbl 45.8% (null 48.0) | med breach t=0.17
+  Tokyo   IB30 ALL  n=269 | sustained 54.3% (null 54.3) | cont -0.088% (null -0.037) | dbl 57.6% (null 58.2) | med breach t=0.09 | no-breach 0
+  Tokyo   IB30 UP   n=135 | sustained 60.7% (null 60.0) | cont +0.057% (null +0.064) | dbl 51.9% (null 53.9) | med breach t=0.09
+  Tokyo   IB30 DOWN n=134 | sustained 47.8% (null 48.5) | cont -0.235% (null -0.141) | dbl 63.4% (null 62.6) | med breach t=0.10
+  London  IB60 ALL  n=353 | sustained 52.4% (null 50.8) | cont -0.103% (null -0.104) | dbl 35.1% (null 30.3) | med breach t=0.29 | no-breach 11
+  London  IB60 UP   n=173 | sustained 56.1% (null 51.0) | cont -0.142% (null -0.093) | dbl 32.4% (null 29.4) | med breach t=0.28
+  London  IB60 DOWN n=180 | sustained 48.9% (null 50.6) | cont -0.066% (null -0.115) | dbl 37.8% (null 31.2) | med breach t=0.29
+  London  IB30 ALL  n=249 | sustained 49.0% (null 50.5) | cont -0.232% (null -0.118) | dbl 50.6% (null 48.2) | med breach t=0.15 | no-breach 0
+  London  IB30 UP   n=119 | sustained 49.6% (null 51.7) | cont -0.227% (null -0.114) | dbl 50.4% (null 48.1) | med breach t=0.16
+  London  IB30 DOWN n=130 | sustained 48.5% (null 49.3) | cont -0.237% (null -0.122) | dbl 50.8% (null 48.3) | med breach t=0.15
+  NY      IB60 ALL  n=362 | sustained 53.0% (null 51.4) | cont -0.035% (null -0.022) | dbl 43.6% (null 46.0) | med breach t=0.17 | no-breach 3
+  NY      IB60 UP   n=162 | sustained 46.9% (null 46.1) | cont -0.087% (null -0.157) | dbl 45.1% (null 50.4) | med breach t=0.17
+  NY      IB60 DOWN n=200 | sustained 58.0% (null 56.5) | cont +0.007% (null +0.105) | dbl 42.5% (null 41.9) | med breach t=0.17
+  NY      IB30 ALL  n=251 | sustained 51.4% (null 53.1) | cont -0.223% (null +0.072) | dbl 62.5% (null 59.4) | med breach t=0.08 | no-breach 0
+  NY      IB30 UP   n=117 | sustained 44.4% (null 47.6) | cont -0.420% (null -0.075) | dbl 65.0% (null 62.9) | med breach t=0.08
+  NY      IB30 DOWN n=134 | sustained 57.5% (null 58.4) | cont -0.051% (null +0.211) | dbl 60.4% (null 56.0) | med breach t=0.08
+======================================================================================================================
+RECON 2026
+  Tokyo   IB60 ALL  n=165 | sustained 50.3% (null 48.2) | cont -0.031% (null -0.254) | dbl 42.4% (null 48.9) | med breach t=0.17 | no-breach 4
+  Tokyo   IB60 UP   n= 83 | sustained 42.2% (null 43.9) | cont -0.219% (null -0.394) | dbl 51.8% (null 51.4) | med breach t=0.17
+  Tokyo   IB60 DOWN n= 82 | sustained 58.5% (null 52.0) | cont +0.158% (null -0.128) | dbl 32.9% (null 46.6) | med breach t=0.18
+  Tokyo   IB30 ALL  n=116 | sustained 54.3% (null 51.0) | cont -0.044% (null -0.223) | dbl 57.8% (null 63.9) | med breach t=0.10 | no-breach 2
+  Tokyo   IB30 UP   n= 59 | sustained 55.9% (null 47.5) | cont -0.083% (null -0.377) | dbl 59.3% (null 66.7) | med breach t=0.09
+  Tokyo   IB30 DOWN n= 57 | sustained 52.6% (null 54.4) | cont -0.004% (null -0.076) | dbl 56.1% (null 61.2) | med breach t=0.10
+  London  IB60 ALL  n=161 | sustained 45.3% (null 49.2) | cont -0.200% (null -0.117) | dbl 38.5% (null 31.3) | med breach t=0.30 | no-breach 6
+  London  IB60 UP   n= 86 | sustained 41.9% (null 47.2) | cont -0.278% (null -0.183) | dbl 44.2% (null 31.6) | med breach t=0.28
+  London  IB60 DOWN n= 75 | sustained 49.3% (null 51.1) | cont -0.112% (null -0.054) | dbl 32.0% (null 31.0) | med breach t=0.32
+  London  IB30 ALL  n=118 | sustained 54.2% (null 50.5) | cont -0.060% (null -0.094) | dbl 47.5% (null 48.9) | med breach t=0.15 | no-breach 1
+  London  IB30 UP   n= 55 | sustained 50.9% (null 48.5) | cont -0.087% (null -0.188) | dbl 45.5% (null 49.8) | med breach t=0.16
+  London  IB30 DOWN n= 63 | sustained 57.1% (null 52.4) | cont -0.036% (null -0.007) | dbl 49.2% (null 48.1) | med breach t=0.14
+  NY      IB60 ALL  n=168 | sustained 57.7% (null 53.8) | cont +0.123% (null -0.050) | dbl 39.3% (null 44.9) | med breach t=0.17 | no-breach 2
+  NY      IB60 UP   n= 79 | sustained 64.6% (null 56.2) | cont +0.266% (null -0.027) | dbl 39.2% (null 44.7) | med breach t=0.17
+  NY      IB60 DOWN n= 89 | sustained 51.7% (null 51.4) | cont -0.005% (null -0.073) | dbl 39.3% (null 45.2) | med breach t=0.17
+  NY      IB30 ALL  n=129 | sustained 48.8% (null 53.6) | cont -0.165% (null -0.083) | dbl 58.1% (null 59.7) | med breach t=0.08 | no-breach 1
+  NY      IB30 UP   n= 48 | sustained 52.1% (null 55.6) | cont -0.328% (null -0.046) | dbl 54.2% (null 59.2) | med breach t=0.10
+  NY      IB30 DOWN n= 81 | sustained 46.9% (null 51.7) | cont -0.068% (null -0.118) | dbl 60.5% (null 60.2) | med breach t=0.08
+======================================================================================================================
+DAEMON (2026-06-20 ..)
+  Tokyo   IB60 ALL  n= 58 | sustained 58.6% (null 49.9) | cont -0.077% (null -0.152) | dbl 48.3% (null 49.1) | med breach t=0.16 | no-breach 0
+  Tokyo   IB60 UP   n= 33 | sustained 54.5% (null 51.4) | cont -0.017% (null -0.071) | dbl 48.5% (null 48.1) | med breach t=0.18
+  Tokyo   IB60 DOWN n= 25 | sustained 64.0% (null 48.3) | cont -0.157% (null -0.237) | dbl 48.0% (null 50.3) | med breach t=0.15
+  Tokyo   IB30 ALL  n= 50 | sustained 50.0% (null 50.5) | cont +0.000% (null -0.141) | dbl 56.0% (null 63.7) | med breach t=0.10 | no-breach 0
+  Tokyo   IB30 UP   n= 22 | sustained 50.0% (null 50.8) | cont +0.020% (null -0.060) | dbl 50.0% (null 61.3) | med breach t=0.12
+  Tokyo   IB30 DOWN n= 28 | sustained 50.0% (null 50.3) | cont -0.015% (null -0.226) | dbl 60.7% (null 66.3) | med breach t=0.08
+  London  IB60 ALL  n= 55 | sustained 47.3% (null 48.5) | cont +0.050% (null -0.004) | dbl 32.7% (null 30.9) | med breach t=0.27 | no-breach 3
+  London  IB60 UP   n= 25 | sustained 44.0% (null 45.9) | cont +0.109% (null -0.040) | dbl 28.0% (null 31.6) | med breach t=0.28
+  London  IB60 DOWN n= 30 | sustained 50.0% (null 50.7) | cont +0.001% (null +0.024) | dbl 36.7% (null 30.4) | med breach t=0.27
+  London  IB30 ALL  n= 45 | sustained 42.2% (null 50.9) | cont +0.059% (null -0.020) | dbl 57.8% (null 47.7) | med breach t=0.14 | no-breach 2
+  London  IB30 UP   n= 22 | sustained 45.5% (null 49.4) | cont +0.146% (null -0.065) | dbl 63.6% (null 50.2) | med breach t=0.15
+  London  IB30 DOWN n= 23 | sustained 39.1% (null 52.2) | cont -0.024% (null +0.019) | dbl 52.2% (null 45.5) | med breach t=0.14
+  NY      IB60 ALL  n= 56 | sustained 48.2% (null 48.1) | cont -0.206% (null -0.227) | dbl 42.9% (null 47.5) | med breach t=0.17 | no-breach 2
+  NY      IB60 UP   n= 30 | sustained 50.0% (null 52.6) | cont -0.088% (null -0.107) | dbl 40.0% (null 42.8) | med breach t=0.16
+  NY      IB60 DOWN n= 26 | sustained 46.2% (null 43.3) | cont -0.343% (null -0.352) | dbl 46.2% (null 52.3) | med breach t=0.17
+  NY      IB30 ALL  n= 49 | sustained 53.1% (null 48.3) | cont -0.325% (null -0.228) | dbl 67.3% (null 62.6) | med breach t=0.08 | no-breach 0
+  NY      IB30 UP   n= 27 | sustained 59.3% (null 54.7) | cont -0.123% (null -0.100) | dbl 70.4% (null 58.2) | med breach t=0.08
+  NY      IB30 DOWN n= 22 | sustained 45.5% (null 41.4) | cont -0.573% (null -0.366) | dbl 63.6% (null 67.4) | med breach t=0.07
+
+done in 22s
+
+======================================================================================================================
+VERDICT (2026-08-25, pre-registered, descriptive): the IB-breach does NOT determine session bias on SOL 15m. NULL.
+- SUSTAINED (session closes beyond the breached edge): real 42-64% vs shuffled null 43-60% — gaps are small and
+  SIGN-FLIP across eras in every cell (e.g. NY IB60 UP: +0.8pp 2025, +8.4pp 2026, -2.6pp daemon; Tokyo IB60 DOWN:
+  -1.2 / +6.5 / +15.7pp but daemon n=25). No cell is era-consistent.
+- CONTINUATION from the breach close to the session close: ~zero-to-NEGATIVE nearly everywhere in real terms, and
+  vs the null it flips sign era-to-era (2025 real BELOW null in most cells — a fade whisper; 2026 ABOVE in NY —
+  a follow whisper; daemon ≈ null). Nothing survives both years, and every magnitude sits at or under the
+  ~0.07%/RT fee wall anyway.
+- DOUBLE-BREAKS are common: with IB30 the OTHER edge also breaks 48-67% of the time — the "areas" frequently do
+  not even define a one-sided day. IB60 dbl ~32-48%.
+- Consistent with priors: session-formation->NY NULL, London Judas swing INVERTED; the NY 13:00-14:00 IB is NOT
+  the NY 2-5pm box (the one box-break that ever survived OOS — different, later structure).
+- AMT reading: on this market the initial balance is real GEOMETRY but its breach carries no reliable directional
+  information at the 15m scale. The session structure that DID survive nulls is level persistence (range-fix /
+  far-side hold), not breach direction.
+Method: IB = first 60/30min H/L, breach = first CLOSE beyond, outcomes causal from the breach close; null = 20
+within-session order shuffles under the identical rule; eras separate.
