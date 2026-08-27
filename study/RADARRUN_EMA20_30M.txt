@@ -1,0 +1,61 @@
+EMA20 x RADAR RUNNER 30m BUCKET � canonical harness | long>EMA / short<EMA at the fire close | pre-registered
+
+========================================================================================================================
+RECON 2025-01 .. 2026-06 (per-year split in rows)
+  ALL          0.2% net  n=5285  W4378  L907   win  82.8%  avg -0.039%  R -0.040  DD  85.3%  prop   0.0% | 25 -0.042% 26 -0.032%
+  ALL          0.4% net  n=4575  W3374  L1201  win  73.7%  avg -0.006%  R -0.008  DD  36.0%  prop  11.1% | 25 -0.009% 26 -0.000%
+  ALL          RR 1:0.5  n=4361  W3134  L1227  win  71.9%  avg +0.002%  R -0.007  DD  36.2%  prop  12.6% | 25 +0.000% 26 +0.005%
+  ALL          RR 1:1    n=3055  W1642  L1413  win  53.7%  avg -0.006%  R -0.014  DD  44.5%  prop  13.4% | 25 -0.016% 26 +0.015%
+  WITH-EMA     0.2% net  n=2994  W2489  L505   win  83.1%  avg -0.043%  R -0.042  DD  53.8%  prop   0.0% | 25 -0.046% 26 -0.038%
+  WITH-EMA     0.4% net  n=2680  W1999  L681   win  74.6%  avg -0.008%  R -0.007  DD  20.6%  prop  13.1% | 25 -0.009% 26 -0.007%
+  WITH-EMA     RR 1:0.5  n=2584  W1860  L724   win  72.0%  avg +0.007%  R -0.001  DD  20.6%  prop  18.5% | 25 +0.007% 26 +0.005%
+  WITH-EMA     RR 1:1    n=1972  W1097  L875   win  55.6%  avg +0.042%  R +0.028  DD  19.0%  prop  36.6% | 25 +0.048% 26 +0.031%
+  AGAINST-EMA  0.2% net  n=2575  W2107  L468   win  81.8%  avg -0.039%  R -0.041  DD  43.3%  prop   0.1% | 25 -0.039% 26 -0.037%
+  AGAINST-EMA  0.4% net  n=2330  W1659  L671   win  71.2%  avg -0.019%  R -0.022  DD  28.3%  prop   4.8% | 25 -0.019% 26 -0.019%
+  AGAINST-EMA  RR 1:0.5  n=2317  W1641  L676   win  70.8%  avg -0.020%  R -0.030  DD  31.0%  prop   1.7% | 25 -0.016% 26 -0.029%
+  AGAINST-EMA  RR 1:1    n=1953  W1011  L942   win  51.8%  avg -0.061%  R -0.062  DD  53.6%  prop   2.2% | 25 -0.066% 26 -0.051%
+  WITH-LONG    0.2% net  n=1339  W1129  L210   win  84.3%  avg -0.027%  R -0.025  DD  16.8%  prop   0.1% | 25 -0.010% 26 -0.055%
+  WITH-LONG    0.4% net  n=1212  W902   L310   win  74.4%  avg -0.011%  R -0.004  DD   7.3%  prop  13.4% | 25 +0.006% 26 -0.041%
+  WITH-LONG    RR 1:0.5  n=1185  W850   L335   win  71.7%  avg +0.000%  R -0.006  DD  12.4%  prop  13.3% | 25 +0.028% 26 -0.047%
+  WITH-LONG    RR 1:1    n=956   W519   L437   win  54.3%  avg +0.013%  R +0.000  DD  11.2%  prop  20.0% | 25 +0.068% 26 -0.080%
+  WITH-SHORT   0.2% net  n=1824  W1497  L327   win  82.1%  avg -0.055%  R -0.056  DD  44.1%  prop   0.0% | 25 -0.069% 26 -0.024%
+  WITH-SHORT   0.4% net  n=1671  W1239  L432   win  74.1%  avg -0.011%  R -0.014  DD  18.5%  prop   8.4% | 25 -0.021% 26 +0.011%
+  WITH-SHORT   RR 1:0.5  n=1626  W1164  L462   win  71.6%  avg +0.002%  R -0.008  DD  19.8%  prop  12.9% | 25 -0.010% 26 +0.027%
+  WITH-SHORT   RR 1:1    n=1305  W725   L580   win  55.6%  avg +0.038%  R +0.026  DD  23.2%  prop  34.8% | 25 +0.007% 26 +0.103%
+========================================================================================================================
+DAEMON 30m (TRUE OOS, 2026-06-20 ..)
+  ALL          0.2% net  n=459   W359   L100   win  78.2%  avg -0.040%  R -0.057  DD  12.3%  prop   0.0% | 25 +nan% 26 -0.040%
+  ALL          0.4% net  n=337   W223   L114   win  66.2%  avg -0.031%  R -0.043  DD   8.3%  prop   0.8% | 25 +nan% 26 -0.031%
+  ALL          RR 1:0.5  n=374   W259   L115   win  69.3%  avg -0.065%  R -0.079  DD  13.0%  prop   0.0% | 25 +nan% 26 -0.065%
+  ALL          RR 1:1    n=260   W140   L120   win  53.8%  avg -0.041%  R -0.047  DD   8.4%  prop   3.9% | 25 +nan% 26 -0.041%
+  WITH-EMA     0.2% net  n=246   W184   L62    win  74.8%  avg -0.084%  R -0.110  DD  11.4%  prop   0.0% | 25 +nan% 26 -0.084%
+  WITH-EMA     0.4% net  n=198   W123   L75    win  62.1%  avg -0.093%  R -0.117  DD   9.5%  prop   0.0% | 25 +nan% 26 -0.093%
+  WITH-EMA     RR 1:0.5  n=207   W139   L68    win  67.1%  avg -0.090%  R -0.109  DD   9.5%  prop   0.0% | 25 +nan% 26 -0.090%
+  WITH-EMA     RR 1:1    n=165   W81    L84    win  49.1%  avg -0.121%  R -0.141  DD   9.6%  prop   0.1% | 25 +nan% 26 -0.121%
+  AGAINST-EMA  0.2% net  n=262   W211   L51    win  80.5%  avg -0.004%  R -0.014  DD   5.3%  prop   4.4% | 25 +nan% 26 -0.004%
+  AGAINST-EMA  0.4% net  n=217   W148   L69    win  68.2%  avg +0.017%  R +0.013  DD   4.9%  prop  32.3% | 25 +nan% 26 +0.017%
+  AGAINST-EMA  RR 1:0.5  n=243   W177   L66    win  72.8%  avg -0.024%  R -0.030  DD   7.5%  prop   2.4% | 25 +nan% 26 -0.024%
+  AGAINST-EMA  RR 1:1    n=192   W114   L78    win  59.4%  avg +0.039%  R +0.057  DD   5.5%  prop  58.5% | 25 +nan% 26 +0.039%
+  WITH-LONG    0.2% net  n=132   W94    L38    win  71.2%  avg -0.109%  R -0.164  DD  10.0%  prop   0.0% | 25 +nan% 26 -0.109%
+  WITH-LONG    0.4% net  n=114   W68    L46    win  59.6%  avg -0.111%  R -0.164  DD   8.3%  prop   0.0% | 25 +nan% 26 -0.111%
+  WITH-LONG    RR 1:0.5  n=118   W73    L45    win  61.9%  avg -0.126%  R -0.189  DD   9.4%  prop   0.0% | 25 +nan% 26 -0.126%
+  WITH-LONG    RR 1:1    n=97    W48    L49    win  49.5%  avg -0.079%  R -0.130  DD   6.9%  prop   0.0% | 25 +nan% 26 -0.079%
+  WITH-SHORT   0.2% net  n=154   W119   L35    win  77.3%  avg -0.059%  R -0.074  DD   5.5%  prop   0.0% | 25 +nan% 26 -0.059%
+  WITH-SHORT   0.4% net  n=124   W75    L49    win  60.5%  avg -0.121%  R -0.134  DD   7.1%  prop   0.0% | 25 +nan% 26 -0.121%
+  WITH-SHORT   RR 1:0.5  n=135   W92    L43    win  68.1%  avg -0.092%  R -0.095  DD   6.1%  prop   0.0% | 25 +nan% 26 -0.092%
+  WITH-SHORT   RR 1:1    n=111   W52    L59    win  46.8%  avg -0.171%  R -0.186  DD   9.0%  prop   0.0% | 25 +nan% 26 -0.171%
+
+done in 270s
+
+======================================================================================================================
+VERDICT (2026-08-26, pre-registered): FAILED — the most dramatic era-INVERSION of the ten conditioning families.
+- Recon: the best in-sample separation any RadarRun filter has produced — WITH-EMA RR 1:1 +0.042%/trade with BOTH
+  years positive (+0.048/+0.031, prop 37%) vs AGAINST -0.061%. It even passes the year-split gate.
+- DAEMON OOS flips it exactly: WITH-EMA RR 1:1 -0.121% (win 49.1%, prop 0; every WITH cell -0.08..-0.17%) vs
+  AGAINST-EMA +0.039% RR 1:1 (win 59.4%, prop 58.5%) and +0.017% at 0.4%. Trading WITH the 20-EMA side was the
+  worst available rule in the OOS era; its exact opposite was the best.
+- Pattern: "with the recent move" in ANY costume (flow, drift, EMA side) inverts on the daemon era. A filter that
+  passes both recon years and still inverts forward is the strongest warning this program has produced against
+  trusting in-sample separations — daemon OOS remains the only gate that matters.
+Harness: cached union fire sets, causal EMA(20, adjust=False) at the fire close, 1m first-touch, non-overlap,
+fees+slip, prop MC.
