@@ -4250,7 +4250,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _on_vp_mode(self, m: int) -> None:
         """Hamburger 'Volume Profile Mode' dropdown changed -> re-render the selection VP + the 4h 'V' overlay."""
-        self._vp_mode = int(m) % 10      # 10 VP modes (0..9; 8 = VP Zones line-only, 9 = Basic Delta)
+        self._vp_mode = int(m) % 11      # 11 VP modes (0..10; 8 = VP Zones line-only, 10 = Trend Style)
         self._save_ui_state()
         self._sel_sig = None                         # force the Mode-10 selection VP to redraw
         if self._z4_last_buckets:                    # re-render the 4h V overlay immediately
@@ -6981,10 +6981,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _pmin = float(_vols[_a5:_b5v + 1].min())
                             _lvns = [_j6 for _j6 in range(_a5, _b5v + 1)
                                      if _vols[_j6] == _pmin and _j6 != _p5]
+
+                            # OUTSIDE LVNs (user 2026-08-28): min non-zero bin(s) ABOVE the VAH and BELOW the VAL
+                            def _mins6(_r6):
+                                _nz6 = [_j6 for _j6 in _r6 if _vols[_j6] > 0]
+                                if not _nz6:
+                                    return []
+                                _mn6 = min(_vols[_j6] for _j6 in _nz6)
+                                return [_j6 for _j6 in _nz6 if _vols[_j6] == _mn6]
+                            _lvns_out = _mins6(range(_b5v + 1, _NB)) + _mins6(range(0, _a5))
                         else:
-                            _lvns = []
-                        self._ema_vp_cache = (_ssig, _cen, _vols, _hb, _sp0, _sp1, _valp, _vahp, _lvns)
-                    _, _cen, _vols, _hb, _sp0c, _sp1c, _valp, _vahp, _lvns = self._ema_vp_cache
+                            _lvns = []; _lvns_out = []
+                        self._ema_vp_cache = (_ssig, _cen, _vols, _hb, _sp0, _sp1, _valp, _vahp, _lvns, _lvns_out)
+                    _, _cen, _vols, _hb, _sp0c, _sp1c, _valp, _vahp, _lvns, _lvns_out = self._ema_vp_cache
                     _vmax = float(_vols.max()) if _cen is not None and len(_vols) else 0.0
                     if _cen is None or _vmax <= 0:
                         self._hide_ema_vp()
@@ -6998,10 +7007,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             self._ema_vp_item.setZValue(-5)
                             self.plot.addItem(self._ema_vp_item, ignoreBounds=True)
                         _poc = int(np.argmax(_vols))
-                        _lvset = set(_lvns or [])
+                        _lvset = set(_lvns or []); _lvoset = set(_lvns_out or [])
                         _brs = [pg.mkBrush(250, 180, 60, 150) if _j5 == _poc
-                                else (pg.mkBrush(178, 70, 255, 160) if _j5 in _lvset   # LVN: electric purple
-                                      else pg.mkBrush(150, 158, 175, 70))
+                                else (pg.mkBrush(178, 70, 255, 160) if _j5 in _lvset   # in-VA LVN: electric purple
+                                      else (pg.mkBrush(205, 150, 255, 125) if _j5 in _lvoset   # outside: lighter purple
+                                            else pg.mkBrush(150, 158, 175, 70)))
                                 for _j5 in range(len(_vols))]
                         self._ema_vp_item.setOpts(x0=_vx1v - _wid, x1=np.full(len(_vols), _vx1v),
                                                   y=_cen, height=_hb * 0.92, pen=None, brushes=_brs)
@@ -7550,7 +7560,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._candle_mode = int(_cm) % 6
         _vm = s.get("vp_mode")
         if isinstance(_vm, (int, float)):
-            self._vp_mode = int(_vm) % 10
+            self._vp_mode = int(_vm) % 11
         self._hide_candles = bool(s.get("hide_candles", self._hide_candles))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
         for _k, _v in (s.get("phase") or {}).items():
@@ -7760,7 +7770,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (right, net-BUY delta only = bull-dominant price zones, green), 7 Basic Bears (right, net-SELL delta only
         = bear-dominant zones, red). 6 & 7 share the max|delta| scale so the two are directly comparable. 9 Basic
         Delta (right, |net delta| bar, green buy / red sell = Bulls+Bears combined; the un-split sibling of 3, on the
-        max|delta| scale). Mode 8 (VP Zones) is line-only (the caller draws the VA-zone lines instead) -> no bars here."""
+        max|delta| scale). Mode 8 (VP Zones) is line-only (the caller draws the VA-zone lines instead) -> no bars here.
+        10 Trend Style (right, TOTAL volume): the ema_trendvp design — gray bars, amber POC, electric-purple
+        LVN inside the 70% VA, lighter purple min-volume bins above VAH / below VAL, slim blue-gray VAH/VAL rows."""
         x0s = []; ws = []; ys = []; hs = []; brs = []
         if mode == 8:
             return x0s, ws, ys, hs, brs
@@ -7775,6 +7787,40 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             buy = oL + cS; sell = oS + cL; tot = oL + oS + cL + cS
             lv.append((pr, oL, oS, cL, cS, buy, sell, tot, buy - sell, max(range(4), key=lambda k: a[k])))
         if not lv:
+            return x0s, ws, ys, hs, brs
+        if mode == 10:                                         # TREND STYLE — the ema_trendvp palette on the level rows
+            tots = [r[7] for r in lv]
+            vmax = max(tots) or 1.0
+            sc = (0.40 * span) / vmax
+            tot_all = sum(tots) or 1.0
+            p0 = max(range(len(lv)), key=lambda k: tots[k])
+            a5, b5 = p0, p0
+            acc = tots[p0]
+            while acc < 0.70 * tot_all and (a5 > 0 or b5 < len(lv) - 1):
+                up = tots[b5 + 1] if b5 < len(lv) - 1 else -1.0
+                dn = tots[a5 - 1] if a5 > 0 else -1.0
+                if up >= dn:
+                    b5 += 1; acc += max(0.0, up)
+                else:
+                    a5 -= 1; acc += max(0.0, dn)
+            vmin_in = min(tots[a5:b5 + 1])
+            lv_in = {j for j in range(a5, b5 + 1) if tots[j] == vmin_in and j != p0}
+
+            def _mins(rng):
+                nz = [j for j in rng if tots[j] > 0]
+                if not nz:
+                    return set()
+                mn = min(tots[j] for j in nz)
+                return {j for j in nz if tots[j] == mn}
+            lv_out = _mins(range(b5 + 1, len(lv))) | _mins(range(0, a5))
+            for j, r in enumerate(lv):
+                col = ((250, 180, 60, 150) if j == p0
+                       else ((178, 70, 255, 160) if j in lv_in
+                             else ((205, 150, 255, 125) if j in lv_out else (150, 158, 175, 70))))
+                _add(x0, tots[j] * sc, r[0], col)
+            for _vb in (a5, b5):                               # slim VAH/VAL boundary rows (blue-gray)
+                x0s.append(x0); ws.append(0.40 * span); ys.append(lv[_vb][0])
+                hs.append(thick * 0.28); brs.append(pg.mkBrush(170, 185, 210, 150))
             return x0s, ws, ys, hs, brs
         if mode in (0, 1, 6, 7, 9):                            # RIGHT-only histograms
             if mode in (6, 7, 9):                              # delta modes (Bulls/Bears/Basic Delta): NET delta,

@@ -192,11 +192,12 @@ CANDLE_MODE_LABELS = ["Normal candles", "Whisker bars", "Footprint", "Delta", "F
 # "VP Zones" (8) is line-only: the Price&CVD-Swings VA Zones — buy-POC green / sell-POC red / LVN purple, plus
 # VAH/VAL white solid, no histogram.
 VP_MODE_LABELS = ["Basic", "Force", "Split Basic", "Split Basic Delta", "Split Force", "Split Force Delta",
-                  "Basic Bulls", "Basic Bears", "VP Zones", "Basic Delta"]
+                  "Basic Bulls", "Basic Bears", "VP Zones", "Basic Delta",
+                  "Trend Style"]                              # 10: the ema_trendvp design (amber POC / purple LVNs / VA rows)
 # Dropdown DISPLAY order (mode VALUES, not positions). "Basic Delta" (9) is a right-only net-delta histogram, so it is
 # shown with the other right-only delta modes (Bulls/Bears) instead of last. Appending 9 to the label list keeps every
 # existing index — and the persisted _vp_mode — stable; the combo carries the VALUE as userData, so order != value.
-VP_MODE_ORDER = [0, 1, 2, 3, 4, 5, 9, 6, 7, 8]
+VP_MODE_ORDER = [0, 1, 2, 3, 4, 5, 9, 6, 7, 8, 10]
 
 
 class _WheelSlider(QtWidgets.QSlider):
