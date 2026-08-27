@@ -6982,18 +6982,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _lvns = [_j6 for _j6 in range(_a5, _b5v + 1)
                                      if _vols[_j6] == _pmin and _j6 != _p5]
 
-                            # OUTSIDE LVNs (user 2026-08-28): min non-zero bin(s) ABOVE the VAH and BELOW the VAL
-                            def _mins6(_r6):
+                            # OUTSIDE POCs (user 2026-08-28): max-volume bin(s) ABOVE the VAH and BELOW the VAL
+                            def _maxs6(_r6):
                                 _nz6 = [_j6 for _j6 in _r6 if _vols[_j6] > 0]
                                 if not _nz6:
                                     return []
-                                _mn6 = min(_vols[_j6] for _j6 in _nz6)
-                                return [_j6 for _j6 in _nz6 if _vols[_j6] == _mn6]
-                            _lvns_out = _mins6(range(_b5v + 1, _NB)) + _mins6(range(0, _a5))
+                                _mx6 = max(_vols[_j6] for _j6 in _nz6)
+                                return [_j6 for _j6 in _nz6 if _vols[_j6] == _mx6]
+                            _pocs_out = _maxs6(range(_b5v + 1, _NB)) + _maxs6(range(0, _a5))
                         else:
-                            _lvns = []; _lvns_out = []
-                        self._ema_vp_cache = (_ssig, _cen, _vols, _hb, _sp0, _sp1, _valp, _vahp, _lvns, _lvns_out)
-                    _, _cen, _vols, _hb, _sp0c, _sp1c, _valp, _vahp, _lvns, _lvns_out = self._ema_vp_cache
+                            _lvns = []; _pocs_out = []
+                        self._ema_vp_cache = (_ssig, _cen, _vols, _hb, _sp0, _sp1, _valp, _vahp, _lvns, _pocs_out)
+                    _, _cen, _vols, _hb, _sp0c, _sp1c, _valp, _vahp, _lvns, _pocs_out = self._ema_vp_cache
                     _vmax = float(_vols.max()) if _cen is not None and len(_vols) else 0.0
                     if _cen is None or _vmax <= 0:
                         self._hide_ema_vp()
@@ -7007,10 +7007,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             self._ema_vp_item.setZValue(-5)
                             self.plot.addItem(self._ema_vp_item, ignoreBounds=True)
                         _poc = int(np.argmax(_vols))
-                        _lvset = set(_lvns or []); _lvoset = set(_lvns_out or [])
+                        _lvset = set(_lvns or []); _opset = set(_pocs_out or [])
                         _brs = [pg.mkBrush(250, 180, 60, 150) if _j5 == _poc
                                 else (pg.mkBrush(178, 70, 255, 160) if _j5 in _lvset   # in-VA LVN: electric purple
-                                      else (pg.mkBrush(205, 150, 255, 125) if _j5 in _lvoset   # outside: lighter purple
+                                      else (pg.mkBrush(250, 205, 120, 125) if _j5 in _opset   # outside POCs: light amber
                                             else pg.mkBrush(150, 158, 175, 70)))
                                 for _j5 in range(len(_vols))]
                         self._ema_vp_item.setOpts(x0=_vx1v - _wid, x1=np.full(len(_vols), _vx1v),
@@ -7772,7 +7772,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         Delta (right, |net delta| bar, green buy / red sell = Bulls+Bears combined; the un-split sibling of 3, on the
         max|delta| scale). Mode 8 (VP Zones) is line-only (the caller draws the VA-zone lines instead) -> no bars here.
         10 Trend Style (right, TOTAL volume): the ema_trendvp design — gray bars, amber POC, electric-purple
-        LVN inside the 70% VA, lighter purple min-volume bins above VAH / below VAL, slim blue-gray VAH/VAL rows."""
+        LVN inside the 70% VA, light-amber POC of the region above the VAH / below the VAL, slim blue-gray
+        VAH/VAL rows."""
         x0s = []; ws = []; ys = []; hs = []; brs = []
         if mode == 8:
             return x0s, ws, ys, hs, brs
@@ -7806,17 +7807,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             vmin_in = min(tots[a5:b5 + 1])
             lv_in = {j for j in range(a5, b5 + 1) if tots[j] == vmin_in and j != p0}
 
-            def _mins(rng):
+            def _maxs(rng):                                    # outside POCs: max-volume bin above VAH / below VAL
                 nz = [j for j in rng if tots[j] > 0]
                 if not nz:
                     return set()
-                mn = min(tots[j] for j in nz)
-                return {j for j in nz if tots[j] == mn}
-            lv_out = _mins(range(b5 + 1, len(lv))) | _mins(range(0, a5))
+                mx = max(tots[j] for j in nz)
+                return {j for j in nz if tots[j] == mx}
+            poc_out = _maxs(range(b5 + 1, len(lv))) | _maxs(range(0, a5))
             for j, r in enumerate(lv):
                 col = ((250, 180, 60, 150) if j == p0
                        else ((178, 70, 255, 160) if j in lv_in
-                             else ((205, 150, 255, 125) if j in lv_out else (150, 158, 175, 70))))
+                             else ((250, 205, 120, 125) if j in poc_out else (150, 158, 175, 70))))
                 _add(x0, tots[j] * sc, r[0], col)
             for _vb in (a5, b5):                               # slim VAH/VAL boundary rows (blue-gray)
                 x0s.append(x0); ws.append(0.40 * span); ys.append(lv[_vb][0])
