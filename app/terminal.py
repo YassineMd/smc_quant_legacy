@@ -6751,21 +6751,40 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             if self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig:
                 _seq = sorted([(int(_i2), "g") for _i2 in _g] + [(int(_i2), "r") for _i2 in _r])
-                _lo_info = _hi_info = None
+                _bulls = []; _bears = []                      # finished segments: (start vline, end vline, extreme)
                 for _k3 in range(len(_seq) - 1):
                     _b0, _c0 = _seq[_k3]; _b1, _c1 = _seq[_k3 + 1]
-                    if _c0 == "r" and _c1 == "g":             # finished BEAR segment -> its low
+                    if _c0 == "g" and _c1 == "r":             # finished BULL segment -> its high
+                        _hi = max(float(buckets[_j2].get("high", 0.0) or 0.0) for _j2 in range(_b0, _b1 + 1))
+                        if _hi > 0:
+                            _bulls.append((_b0, _b1, _hi))
+                    elif _c0 == "r" and _c1 == "g":           # finished BEAR segment -> its low
                         _lo = min((float(buckets[_j2].get("low", 0.0) or 0.0) or float("inf"))
                                   for _j2 in range(_b0, _b1 + 1))
                         if _lo != float("inf"):
-                            _lo_info = (_b0, _lo)
-                    elif _c0 == "g" and _c1 == "r":           # finished BULL segment -> its high
-                        _hi = max(float(buckets[_j2].get("high", 0.0) or 0.0) for _j2 in range(_b0, _b1 + 1))
-                        if _hi > 0:
-                            _hi_info = (_b0, _hi)
-                self._ema_lvl_cache = (_ssig, _lo_info, _hi_info)
-            _, _lo_info, _hi_info = self._ema_lvl_cache
-            for _sd2, _info, _rgb3 in (("lo", _lo_info, (40, 230, 120)), ("hi", _hi_info, (240, 70, 90))):
+                            _bears.append((_b0, _b1, _lo))
+                _hi_info = (_bulls[-1][0], _bulls[-1][2]) if _bulls else None
+                _lo_info = (_bears[-1][0], _bears[-1][2]) if _bears else None
+                # PREVIOUS extremes: drawn from their own vline but ENDING where they were superseded — the
+                # opposite-colour vline that completed the NEWER same-side segment (user 2026-08-27).
+                _hip = (_bulls[-2][0], _bulls[-1][1], _bulls[-2][2]) if len(_bulls) >= 2 else None
+                _lop = (_bears[-2][0], _bears[-1][1], _bears[-2][2]) if len(_bears) >= 2 else None
+                # BIAS vs the two preceding trends: higher high AND higher low -> BULLISH; lower high AND
+                # lower low -> BEARISH; anything in between -> RANGING.
+                _bias = None
+                if _hip is not None and _lop is not None:
+                    if _bulls[-1][2] > _bulls[-2][2] and _bears[-1][2] > _bears[-2][2]:
+                        _bias = "BULLISH"
+                    elif _bulls[-1][2] < _bulls[-2][2] and _bears[-1][2] < _bears[-2][2]:
+                        _bias = "BEARISH"
+                    else:
+                        _bias = "RANGING"
+                self._ema_lvl_cache = (_ssig, _lo_info, _hi_info, _lop, _hip, _bias)
+            _, _lo_info, _hi_info, _lop, _hip, _bias = self._ema_lvl_cache
+            for _sd2, _info, _rgb3, _al3 in (("lo", _lo_info, (40, 230, 120), 235),
+                                             ("hi", _hi_info, (240, 70, 90), 235),
+                                             ("lo_prev", _lop, (40, 230, 120), 150),
+                                             ("hi_prev", _hip, (240, 70, 90), 150)):
                 _it3 = self._ema_lvl_items.get(_sd2)
                 if _info is None:
                     if _it3 is not None:
@@ -6773,12 +6792,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     continue
                 if _it3 is None:
                     _it3 = pg.PlotCurveItem()
-                    _pn3 = pg.mkPen(*_rgb3, 235, width=1.4); _pn3.setCosmetic(True)
+                    _pn3 = pg.mkPen(_rgb3[0], _rgb3[1], _rgb3[2], _al3, width=1.4); _pn3.setCosmetic(True)
                     _it3.setPen(_pn3); _it3.setZValue(15)
                     self.plot.addItem(_it3, ignoreBounds=True)
                     self._ema_lvl_items[_sd2] = _it3
-                _it3.setData([float(x[_info[0]]), float(x[n - 1])], [_info[1], _info[1]])
+                _xr = float(x[n - 1]) if len(_info) == 2 else float(x[_info[1]])   # prev lines FREEZE at supersession
+                _it3.setData([float(x[_info[0]]), _xr], [_info[-1], _info[-1]])
                 _it3.setVisible(True)
+            _lb3 = self._ema_lvl_items.get("lbl")             # bias tag at the live edge, structure midpoint
+            if _bias is None:
+                if _lb3 is not None:
+                    _lb3.setVisible(False)
+            else:
+                if _lb3 is None:
+                    _lb3 = pg.TextItem(anchor=(0, 0.5)); _lb3.setZValue(16)
+                    self.plot.addItem(_lb3, ignoreBounds=True)
+                    self._ema_lvl_items["lbl"] = _lb3
+                if getattr(self, "_ema_lvl_lbltxt", None) != _bias:
+                    _col3 = ((40, 230, 120) if _bias == "BULLISH"
+                             else ((240, 70, 90) if _bias == "BEARISH" else (170, 175, 185)))
+                    _lb3.setText(_bias); _lb3.setColor(pg.mkColor(_col3[0], _col3[1], _col3[2], 235))
+                    self._ema_lvl_lbltxt = _bias
+                _lb3.setPos(float(x[n - 1]) + 0.8, 0.5 * (_hi_info[1] + _lo_info[1]))
+                _lb3.setVisible(True)
 
     def _draw_reward(self, buckets, vx0, vy0) -> None:
         """REWARD / EFFORT read — BOTTOM-LEFT HUD (m10_reward). For each window (yesterday / today / last 30 candles /

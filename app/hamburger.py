@@ -482,7 +482,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("ema100", "100 EMA Line"),               # 100-period EMA (purple line; same engine)
                            ("ema_ext", "High/Low Lines + readout"),  # per toggled EMA: dotted lines at the p-bar window's high/low + SIGNED dist-to-EMA readout (hi / lo / net delta) at the live edge
                            ("ema_stack", "Stack Flip Lines"),        # dashed vline per 20/50-cross regime, delta-validated: prints at the FIRST bar where both 20/50 HL deltas match the bias (green up: both>0 / red down: both<0) — at the cross or later when the deltas confirm (100 EMA omitted)
-                           ("ema_trendlvl", "Trend Extreme Lines"),  # solid hlines: GREEN at the last finished bear segment's LOW / RED at the last finished bull segment's HIGH, each from its flip vline to the live candle
+                           ("ema_trendlvl", "Trend Extreme Lines"),  # solid hlines: GREEN last-bear LOW / RED last-bull HIGH to the live candle + dimmer PREVIOUS pair frozen at supersession + structure bias tag (HH+HL BULLISH / LH+LL BEARISH / else RANGING)
                            ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:
             _ema_grp = key in ("ema20", "ema50", "ema100", "ema_ext", "ema_stack", "ema_trendlvl")
