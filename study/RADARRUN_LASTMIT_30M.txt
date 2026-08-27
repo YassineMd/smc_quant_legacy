@@ -1,0 +1,50 @@
+LAST-MITIGATED S/R x RADAR RUNNER 30m BUCKET — canonical harness | broken R -> long only / broken S -> short only | pre-registered
+
+========================================================================================================================
+RECON 2025-01 .. 2026-06 (per-year split in rows)
+  (no mitigation yet / ambiguous: 7 fires excluded from conditioned cells)
+  ALL          0.2% net  n=5285  W4378  L907   win  82.8%  avg -0.039%  R -0.040  DD  85.3%  prop   0.0% | 25 -0.042% 26 -0.032%
+  ALL          0.4% net  n=4575  W3374  L1201  win  73.7%  avg -0.006%  R -0.008  DD  36.0%  prop  11.1% | 25 -0.009% 26 -0.000%
+  ALL          RR 1:0.5  n=4361  W3134  L1227  win  71.9%  avg +0.002%  R -0.007  DD  36.2%  prop  12.6% | 25 +0.000% 26 +0.005%
+  ALL          RR 1:1    n=3055  W1642  L1413  win  53.7%  avg -0.006%  R -0.014  DD  44.5%  prop  13.4% | 25 -0.016% 26 +0.015%
+  WITH-MIT     0.2% net  n=2548  W2100  L448   win  82.4%  avg -0.042%  R -0.046  DD  49.8%  prop   0.0% | 25 -0.044% 26 -0.037%
+  WITH-MIT     0.4% net  n=2306  W1695  L611   win  73.5%  avg -0.008%  R -0.012  DD  21.4%  prop  10.2% | 25 -0.011% 26 -0.000%
+  WITH-MIT     RR 1:0.5  n=2270  W1629  L641   win  71.8%  avg +0.003%  R -0.009  DD  22.8%  prop  11.9% | 25 +0.003% 26 +0.004%
+  WITH-MIT     RR 1:1    n=1772  W971   L801   win  54.8%  avg +0.019%  R +0.005  DD  23.0%  prop  22.9% | 25 +0.007% 26 +0.042%
+  AGAINST-MIT  0.2% net  n=3138  W2597  L541   win  82.8%  avg -0.039%  R -0.037  DD  50.0%  prop   0.0% | 25 -0.040% 26 -0.035%
+  AGAINST-MIT  0.4% net  n=2788  W2025  L763   win  72.6%  avg -0.019%  R -0.016  DD  24.1%  prop   6.9% | 25 -0.016% 26 -0.027%
+  AGAINST-MIT  RR 1:0.5  n=2698  W1919  L779   win  71.1%  avg -0.015%  R -0.019  DD  29.9%  prop   5.0% | 25 -0.008% 26 -0.029%
+  AGAINST-MIT  RR 1:1    n=2068  W1072  L996   win  51.8%  avg -0.054%  R -0.054  DD  51.9%  prop   3.0% | 25 -0.040% 26 -0.083%
+  WITH-LONG    0.2% net  n=1065  W888   L177   win  83.4%  avg -0.024%  R -0.030  DD  15.1%  prop   0.0% | 25 -0.012% 26 -0.046%
+  WITH-LONG    0.4% net  n=961   W705   L256   win  73.4%  avg -0.001%  R -0.007  DD   7.0%  prop  10.8% | 25 +0.015% 26 -0.029%
+  WITH-LONG    RR 1:0.5  n=954   W691   L263   win  72.4%  avg +0.018%  R -0.001  DD   7.6%  prop  14.8% | 25 +0.039% 26 -0.021%
+  WITH-LONG    RR 1:1    n=768   W419   L349   win  54.6%  avg +0.023%  R -0.001  DD   8.4%  prop  19.9% | 25 +0.040% 26 -0.006%
+  WITH-SHORT   0.2% net  n=1484  W1212  L272   win  81.7%  avg -0.055%  R -0.057  DD  36.1%  prop   0.0% | 25 -0.068% 26 -0.031%
+  WITH-SHORT   0.4% net  n=1348  W991   L357   win  73.5%  avg -0.013%  R -0.016  DD  18.2%  prop   7.2% | 25 -0.030% 26 +0.023%
+  WITH-SHORT   RR 1:0.5  n=1319  W939   L380   win  71.2%  avg -0.008%  R -0.017  DD  18.7%  prop   7.1% | 25 -0.024% 26 +0.025%
+  WITH-SHORT   RR 1:1    n=1011  W558   L453   win  55.2%  avg +0.021%  R +0.014  DD  18.9%  prop  27.5% | 25 -0.014% 26 +0.091%
+========================================================================================================================
+DAEMON 30m (TRUE OOS, 2026-06-20 ..)
+  (no mitigation yet / ambiguous: 5 fires excluded from conditioned cells)
+  ALL          0.2% net  n=459   W359   L100   win  78.2%  avg -0.040%  R -0.057  DD  12.3%  prop   0.0% | 25 +nan% 26 -0.040%
+  ALL          0.4% net  n=337   W223   L114   win  66.2%  avg -0.031%  R -0.043  DD   8.3%  prop   0.8% | 25 +nan% 26 -0.031%
+  ALL          RR 1:0.5  n=374   W259   L115   win  69.3%  avg -0.065%  R -0.079  DD  13.0%  prop   0.0% | 25 +nan% 26 -0.065%
+  ALL          RR 1:1    n=260   W140   L120   win  53.8%  avg -0.041%  R -0.047  DD   8.4%  prop   3.9% | 25 +nan% 26 -0.041%
+  WITH-MIT     0.2% net  n=224   W173   L51    win  77.2%  avg -0.042%  R -0.070  DD   6.8%  prop   0.0% | 25 +nan% 26 -0.042%
+  WITH-MIT     0.4% net  n=174   W109   L65    win  62.6%  avg -0.062%  R -0.100  DD   7.3%  prop   0.0% | 25 +nan% 26 -0.062%
+  WITH-MIT     RR 1:0.5  n=196   W136   L60    win  69.4%  avg -0.053%  R -0.082  DD   6.8%  prop   0.0% | 25 +nan% 26 -0.053%
+  WITH-MIT     RR 1:1    n=156   W80    L76    win  51.3%  avg -0.070%  R -0.102  DD   7.8%  prop   0.1% | 25 +nan% 26 -0.070%
+  AGAINST-MIT  0.2% net  n=306   W240   L66    win  78.4%  avg -0.039%  R -0.052  DD   9.0%  prop   0.0% | 25 +nan% 26 -0.039%
+  AGAINST-MIT  0.4% net  n=246   W164   L82    win  66.7%  avg -0.027%  R -0.028  DD   8.9%  prop   5.4% | 25 +nan% 26 -0.027%
+  AGAINST-MIT  RR 1:0.5  n=269   W187   L82    win  69.5%  avg -0.068%  R -0.073  DD  10.7%  prop   0.1% | 25 +nan% 26 -0.068%
+  AGAINST-MIT  RR 1:1    n=199   W109   L90    win  54.8%  avg -0.031%  R -0.027  DD   7.1%  prop   8.6% | 25 +nan% 26 -0.031%
+  WITH-LONG    0.2% net  n=115   W85    L30    win  73.9%  avg -0.067%  R -0.122  DD   6.2%  prop   0.0% | 25 +nan% 26 -0.067%
+  WITH-LONG    0.4% net  n=96    W61    L35    win  63.5%  avg -0.038%  R -0.093  DD   4.0%  prop   0.0% | 25 +nan% 26 -0.038%
+  WITH-LONG    RR 1:0.5  n=100   W67    L33    win  67.0%  avg -0.063%  R -0.117  DD   5.0%  prop   0.0% | 25 +nan% 26 -0.063%
+  WITH-LONG    RR 1:1    n=84    W45    L39    win  53.6%  avg -0.005%  R -0.058  DD   4.5%  prop   1.1% | 25 +nan% 26 -0.005%
+  WITH-SHORT   0.2% net  n=112   W90    L22    win  80.4%  avg -0.016%  R -0.021  DD   3.2%  prop   1.4% | 25 +nan% 26 -0.016%
+  WITH-SHORT   0.4% net  n=81    W50    L31    win  61.7%  avg -0.083%  R -0.108  DD   3.9%  prop   0.0% | 25 +nan% 26 -0.083%
+  WITH-SHORT   RR 1:0.5  n=99    W71    L28    win  71.7%  avg -0.039%  R -0.049  DD   3.1%  prop   0.2% | 25 +nan% 26 -0.039%
+  WITH-SHORT   RR 1:1    n=75    W37    L38    win  49.3%  avg -0.128%  R -0.140  DD   5.7%  prop   0.0% | 25 +nan% 26 -0.128%
+
+done in 287s
