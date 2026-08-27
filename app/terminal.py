@@ -7962,9 +7962,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             levels = [_va[1], _va[0], _poc, _q[1], bar_quantiles.lvn(lvl)]   # VAH, VAL, POC, median, LVN (line-colour order)
         except Exception:
             levels = [None, None, None, None, None]
-        for _li7, (_ln, _y) in enumerate(zip(self.bc_sel_vp_lines, levels)):
-            if self._vp_mode == 10 and _li7 in (0, 1, 4):     # GRAY VP carries its own VA dashes + LVN bin ->
-                _ln.setVisible(False); continue               # drop the red VAH / green VAL / purple LVN lines
+        for _ln, _y in zip(self.bc_sel_vp_lines, levels):
+            if self._vp_mode == 10:                           # GRAY VP: NO extra level lines at all (its own
+                _ln.setVisible(False); continue               # dashes + coloured bins carry everything)
             if _y is not None and _y == _y:
                 _ln.setData([float(lo_i), float(hi_i)], [float(_y), float(_y)]); _ln.setVisible(True)
             else:
