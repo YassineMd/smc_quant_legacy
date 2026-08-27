@@ -478,6 +478,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("vol_pane", "Volume Pane (Basic/Delta/Buy/Sell)"),  # per-bar histogram; top-right dropdown: basic|delta|buy|sell|buy+sell
                            ("vpin_pane", "VPIN Pane"),               # lower VPIN toxicity heatmap + flow line (default OFF — heavy paint)
                            ("ema20", "20 EMA Line"),                 # 20-period EMA of closes on the chart series (amber line; live-extended on the forming bar)
+                           ("ema50", "50 EMA Line"),                 # 50-period EMA (blue line; same engine)
+                           ("ema100", "100 EMA Line"),               # 100-period EMA (purple line; same engine)
                            ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:
             cb = QtWidgets.QCheckBox(label)
