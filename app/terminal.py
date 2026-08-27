@@ -6628,8 +6628,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._ema_ext_lbls[key] = _lb2
                 if self._ema_ext_lblsig.get(key) != _sig:
                     e0 = float(y[m - 1])
-                    up = "↑%.2f%%" % ((hi_p - e0) / e0 * 100.0) if hi_p is not None else "↑—"
-                    dn = "↓%.2f%%" % ((e0 - lo_p) / e0 * 100.0) if lo_p is not None else "↓—"
+                    up = "↑%+.2f%%" % ((hi_p - e0) / e0 * 100.0) if hi_p is not None else "↑—"
+                    dn = "↓%+.2f%%" % ((lo_p - e0) / e0 * 100.0) if lo_p is not None else "↓—"
                     dl = ("Δ%.2f%%" % ((hi_p - lo_p) / e0 * 100.0)
                           if (hi_p is not None and lo_p is not None) else "Δ—")
                     _lb2.setText("%s  %s  %s" % (up, dn, dl))
