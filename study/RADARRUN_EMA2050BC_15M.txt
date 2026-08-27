@@ -1,0 +1,56 @@
+EMA20 + EMA50-ALIGN + BREAKOUT-CLOSE x RADAR RUNNER 15m BUCKET — canonical harness | long: C>E20, C>prev high, E20>E50 / short mirror | pre-registered
+
+========================================================================================================================
+RECON 2025-01 .. 2026-06 (per-year split in rows)
+  ALL        0.2% net  n=12229 W9517  L2712  win  77.8%  avg -0.048%  R -0.067  DD 330.0%  prop   0.0% | 25 -0.053% 26 -0.036%
+  ALL        0.4% net  n=9232  W6159  L3073  win  66.7%  avg -0.033%  R -0.046  DD 175.5%  prop   2.1% | 25 -0.038% 26 -0.022%
+  ALL        RR 1:0.5  n=10277 W7234  L3043  win  70.4%  avg -0.039%  R -0.060  DD 248.5%  prop   0.3% | 25 -0.040% 26 -0.035%
+  ALL        RR 1:1    n=6622  W3562  L3060  win  53.8%  avg -0.026%  R -0.045  DD 123.7%  prop   5.9% | 25 -0.020% 26 -0.042%
+  EMA+BC     0.2% net  n=5906  W4627  L1279  win  78.3%  avg -0.051%  R -0.067  DD 160.0%  prop   0.0% | 25 -0.057% 26 -0.040%
+  EMA+BC     0.4% net  n=4813  W3260  L1553  win  67.7%  avg -0.033%  R -0.041  DD  82.9%  prop   1.7% | 25 -0.032% 26 -0.035%
+  EMA+BC     RR 1:0.5  n=5180  W3654  L1526  win  70.5%  avg -0.035%  R -0.051  DD 109.0%  prop   0.4% | 25 -0.035% 26 -0.034%
+  EMA+BC     RR 1:1    n=3828  W2036  L1792  win  53.2%  avg -0.030%  R -0.051  DD  91.1%  prop   4.5% | 25 -0.022% 26 -0.046%
+  STK-ONLY   0.2% net  n=6590  W5164  L1426  win  78.4%  avg -0.038%  R -0.056  DD 149.5%  prop   0.0% | 25 -0.041% 26 -0.031%
+  STK-ONLY   0.4% net  n=5415  W3613  L1802  win  66.7%  avg -0.023%  R -0.036  DD  82.3%  prop   3.3% | 25 -0.028% 26 -0.012%
+  STK-ONLY   RR 1:0.5  n=6000  W4308  L1692  win  71.8%  avg -0.025%  R -0.042  DD 103.9%  prop   1.1% | 25 -0.026% 26 -0.022%
+  STK-ONLY   RR 1:1    n=4450  W2443  L2007  win  54.9%  avg -0.011%  R -0.028  DD  57.5%  prop   9.4% | 25 -0.014% 26 -0.005%
+  FULL       0.2% net  n=3623  W2851  L772   win  78.7%  avg -0.045%  R -0.060  DD  88.6%  prop   0.0% | 25 -0.045% 26 -0.043%
+  FULL       0.4% net  n=3149  W2135  L1014  win  67.8%  avg -0.026%  R -0.034  DD  49.2%  prop   3.0% | 25 -0.025% 26 -0.028%
+  FULL       RR 1:0.5  n=3351  W2398  L953   win  71.6%  avg -0.025%  R -0.038  DD  57.1%  prop   1.0% | 25 -0.021% 26 -0.033%
+  FULL       RR 1:1    n=2721  W1473  L1248  win  54.1%  avg -0.016%  R -0.035  DD  44.1%  prop   6.5% | 25 -0.004% 26 -0.040%
+  FULL-LONG  0.2% net  n=1652  W1283  L369   win  77.7%  avg -0.048%  R -0.072  DD  47.7%  prop   0.0% | 25 -0.040% 26 -0.063%
+  FULL-LONG  0.4% net  n=1463  W967   L496   win  66.1%  avg -0.037%  R -0.056  DD  34.1%  prop   0.4% | 25 -0.028% 26 -0.054%
+  FULL-LONG  RR 1:0.5  n=1547  W1089  L458   win  70.4%  avg -0.037%  R -0.059  DD  37.6%  prop   0.2% | 25 -0.020% 26 -0.067%
+  FULL-LONG  RR 1:1    n=1286  W672   L614   win  52.3%  avg -0.043%  R -0.077  DD  41.1%  prop   1.3% | 25 -0.018% 26 -0.086%
+  FULL-SHORT 0.2% net  n=1989  W1582  L407   win  79.5%  avg -0.042%  R -0.050  DD  46.0%  prop   0.1% | 25 -0.050% 26 -0.026%
+  FULL-SHORT 0.4% net  n=1707  W1180  L527   win  69.1%  avg -0.017%  R -0.016  DD  25.4%  prop   9.8% | 25 -0.023% 26 -0.006%
+  FULL-SHORT RR 1:0.5  n=1824  W1325  L499   win  72.6%  avg -0.015%  R -0.020  DD  27.4%  prop   5.9% | 25 -0.021% 26 -0.001%
+  FULL-SHORT RR 1:1    n=1464  W819   L645   win  55.9%  avg +0.008%  R +0.004  DD  20.7%  prop  22.7% | 25 +0.008% 26 +0.009%
+========================================================================================================================
+DAEMON 15m (TRUE OOS, 2026-06-20 ..)
+  ALL        0.2% net  n=837   W602   L235   win  71.9%  avg -0.052%  R -0.116  DD  39.1%  prop   0.0% | 25 +nan% 26 -0.052%
+  ALL        0.4% net  n=583   W334   L249   win  57.3%  avg -0.063%  R -0.123  DD  30.6%  prop   0.1% | 25 +nan% 26 -0.063%
+  ALL        RR 1:0.5  n=768   W531   L237   win  69.1%  avg -0.060%  R -0.122  DD  37.2%  prop   0.0% | 25 +nan% 26 -0.060%
+  ALL        RR 1:1    n=519   W286   L233   win  55.1%  avg -0.026%  R -0.069  DD  19.1%  prop   2.3% | 25 +nan% 26 -0.026%
+  EMA+BC     0.2% net  n=417   W301   L116   win  72.2%  avg -0.060%  R -0.111  DD  18.6%  prop   0.0% | 25 +nan% 26 -0.060%
+  EMA+BC     0.4% net  n=317   W188   L129   win  59.3%  avg -0.063%  R -0.100  DD  13.3%  prop   0.2% | 25 +nan% 26 -0.063%
+  EMA+BC     RR 1:0.5  n=386   W262   L124   win  67.9%  avg -0.085%  R -0.135  DD  20.9%  prop   0.0% | 25 +nan% 26 -0.085%
+  EMA+BC     RR 1:1    n=283   W145   L138   win  51.2%  avg -0.099%  R -0.135  DD  16.4%  prop   0.2% | 25 +nan% 26 -0.099%
+  STK-ONLY   0.2% net  n=453   W325   L128   win  71.7%  avg -0.044%  R -0.107  DD  20.4%  prop   0.0% | 25 +nan% 26 -0.044%
+  STK-ONLY   0.4% net  n=365   W208   L157   win  57.0%  avg -0.050%  R -0.121  DD  21.0%  prop   0.0% | 25 +nan% 26 -0.050%
+  STK-ONLY   RR 1:0.5  n=441   W306   L135   win  69.4%  avg -0.056%  R -0.128  DD  23.8%  prop   0.0% | 25 +nan% 26 -0.056%
+  STK-ONLY   RR 1:1    n=328   W178   L150   win  54.3%  avg -0.041%  R -0.094  DD  17.7%  prop   0.1% | 25 +nan% 26 -0.041%
+  FULL       0.2% net  n=253   W190   L63    win  75.1%  avg -0.028%  R -0.059  DD   6.5%  prop   0.0% | 25 +nan% 26 -0.028%
+  FULL       0.4% net  n=218   W134   L84    win  61.5%  avg -0.024%  R -0.048  DD   6.9%  prop   3.4% | 25 +nan% 26 -0.024%
+  FULL       RR 1:0.5  n=246   W176   L70    win  71.5%  avg -0.046%  R -0.085  DD   8.4%  prop   0.0% | 25 +nan% 26 -0.046%
+  FULL       RR 1:1    n=198   W107   L91    win  54.0%  avg -0.057%  R -0.086  DD   8.2%  prop   1.2% | 25 +nan% 26 -0.057%
+  FULL-LONG  0.2% net  n=118   W84    L34    win  71.2%  avg -0.050%  R -0.112  DD   5.6%  prop   0.0% | 25 +nan% 26 -0.050%
+  FULL-LONG  0.4% net  n=101   W58    L43    win  57.4%  avg -0.051%  R -0.112  DD   5.4%  prop   1.0% | 25 +nan% 26 -0.051%
+  FULL-LONG  RR 1:0.5  n=114   W77    L37    win  67.5%  avg -0.084%  R -0.158  DD   7.4%  prop   0.0% | 25 +nan% 26 -0.084%
+  FULL-LONG  RR 1:1    n=95    W49    L46    win  51.6%  avg -0.080%  R -0.146  DD   6.7%  prop   0.2% | 25 +nan% 26 -0.080%
+  FULL-SHORT 0.2% net  n=138   W109   L29    win  79.0%  avg -0.004%  R -0.005  DD   2.4%  prop   4.5% | 25 +nan% 26 -0.004%
+  FULL-SHORT 0.4% net  n=120   W79    L41    win  65.8%  avg +0.008%  R +0.027  DD   2.4%  prop  46.0% | 25 +nan% 26 +0.008%
+  FULL-SHORT RR 1:0.5  n=135   W102   L33    win  75.6%  avg -0.010%  R -0.013  DD   2.7%  prop   1.7% | 25 +nan% 26 -0.010%
+  FULL-SHORT RR 1:1    n=106   W60    L46    win  56.6%  avg -0.035%  R -0.024  DD   4.0%  prop   8.5% | 25 +nan% 26 -0.035%
+
+done in 284s
