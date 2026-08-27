@@ -6791,12 +6791,43 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _bias = "BULLISH"
                 elif _lo_info is not None and all(0.0 < _c2 < _lo_info[1] for _c2 in _C20):
                     _bias = "BEARISH"
-                self._ema_lvl_cache = (_ssig, _lo_info, _hi_info, _lop, _hip, _bias)
-            _, _lo_info, _hi_info, _lop, _hip, _bias = self._ema_lvl_cache
-            for _sd2, _info, _rgb3, _al3 in (("lo", _lo_info, (40, 230, 120), 235),
-                                             ("hi", _hi_info, (240, 70, 90), 235),
-                                             ("lo_prev", _lop, (40, 230, 120), 150),
-                                             ("hi_prev", _hip, (240, 70, 90), 150)):
+                # PREVIOUS bias (user 2026-08-27): the value before the most recent bias CHANGE, derived
+                # from HISTORY (reload-safe): re-walk the closed bars with the levels/structure/override
+                # as-of each bar and remember the last transition.
+                _events = sorted([(_b1, "hi", _v) for (_b0, _b1, _v) in _bulls]
+                                 + [(_b1, "lo", _v) for (_b0, _b1, _v) in _bears])
+                _C_all = [float(buckets[_j2].get("close", buckets[_j2].get("close_price", 0.0)) or 0.0)
+                          for _j2 in range(m)]
+                _hiL = _loL = None; _bh = []; _bl = []; _ei = 0
+                _prevbias = None; _curb = None
+                for _i2 in range(50, m):
+                    while _ei < len(_events) and _events[_ei][0] <= _i2:
+                        _eb, _ek, _ev = _events[_ei]; _ei += 1
+                        if _ek == "hi":
+                            _bh.append(_ev); _hiL = _ev
+                        else:
+                            _bl.append(_ev); _loL = _ev
+                    _b3 = None
+                    if len(_bh) >= 2 and len(_bl) >= 2:
+                        if _bh[-1] > _bh[-2] and _bl[-1] > _bl[-2]:
+                            _b3 = "BULLISH"
+                        elif _bh[-1] < _bh[-2] and _bl[-1] < _bl[-2]:
+                            _b3 = "BEARISH"
+                        else:
+                            _b3 = "RANGING"
+                    if _i2 >= 69:
+                        if _hiL is not None and all(_C_all[_j3] > _hiL for _j3 in range(_i2 - 19, _i2 + 1)):
+                            _b3 = "BULLISH"
+                        elif _loL is not None and all(0.0 < _C_all[_j3] < _loL for _j3 in range(_i2 - 19, _i2 + 1)):
+                            _b3 = "BEARISH"
+                    if _b3 is not None and _b3 != _curb:
+                        _prevbias = _curb; _curb = _b3
+                self._ema_lvl_cache = (_ssig, _lo_info, _hi_info, _lop, _hip, _bias, _prevbias)
+            _, _lo_info, _hi_info, _lop, _hip, _bias, _prevbias = self._ema_lvl_cache
+            for _sd2, _info, _rgb3, _al3, _w3 in (("lo", _lo_info, (40, 230, 120), 235, 2.2),
+                                                  ("hi", _hi_info, (240, 70, 90), 235, 2.2),
+                                                  ("lo_prev", _lop, (40, 230, 120), 150, 1.2),
+                                                  ("hi_prev", _hip, (240, 70, 90), 150, 1.2)):
                 _it3 = self._ema_lvl_items.get(_sd2)
                 if _info is None:
                     if _it3 is not None:
@@ -6804,7 +6835,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     continue
                 if _it3 is None:
                     _it3 = pg.PlotCurveItem()
-                    _pn3 = pg.mkPen(_rgb3[0], _rgb3[1], _rgb3[2], _al3, width=1.4); _pn3.setCosmetic(True)
+                    _pn3 = pg.mkPen(_rgb3[0], _rgb3[1], _rgb3[2], _al3, width=_w3); _pn3.setCosmetic(True)
                     _it3.setPen(_pn3); _it3.setZValue(15)
                     self.plot.addItem(_it3, ignoreBounds=True)
                     self._ema_lvl_items[_sd2] = _it3
@@ -6812,12 +6843,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _it3.setData([float(x[_info[0]]), _xr], [_info[-1], _info[-1]])
                 _it3.setVisible(True)
             _lb3 = self._ema_lvl_items.get("lbl")             # bias tag at the live edge, structure midpoint
+            _lbp = self._ema_lvl_items.get("lbl_prev")        # + the PREVIOUS bias stacked just below it
             if _bias is None:
                 if _lb3 is not None:
                     _lb3.setVisible(False)
+                if _lbp is not None:
+                    _lbp.setVisible(False)
             else:
                 if _lb3 is None:
-                    _lb3 = pg.TextItem(anchor=(0, 0.5)); _lb3.setZValue(16)
+                    _lb3 = pg.TextItem(anchor=(0, 1.0)); _lb3.setZValue(16)
                     self.plot.addItem(_lb3, ignoreBounds=True)
                     self._ema_lvl_items["lbl"] = _lb3
                 if getattr(self, "_ema_lvl_lbltxt", None) != _bias:
@@ -6831,6 +6865,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _ymid3 = (_hi_info or _lo_info)[1]
                 _lb3.setPos(float(x[n - 1]) + 0.8, _ymid3)
                 _lb3.setVisible(True)
+                if _prevbias is None:
+                    if _lbp is not None:
+                        _lbp.setVisible(False)
+                else:
+                    if _lbp is None:
+                        _lbp = pg.TextItem(anchor=(0, 0.0)); _lbp.setZValue(16)
+                        self.plot.addItem(_lbp, ignoreBounds=True)
+                        self._ema_lvl_items["lbl_prev"] = _lbp
+                    if getattr(self, "_ema_lvl_lblptxt", None) != _prevbias:
+                        _colp = ((40, 230, 120) if _prevbias == "BULLISH"
+                                 else ((240, 70, 90) if _prevbias == "BEARISH" else (170, 175, 185)))
+                        _lbp.setText("prev " + _prevbias)
+                        _lbp.setColor(pg.mkColor(_colp[0], _colp[1], _colp[2], 160))
+                        self._ema_lvl_lblptxt = _prevbias
+                    _lbp.setPos(float(x[n - 1]) + 0.8, _ymid3)
+                    _lbp.setVisible(True)
 
     def _draw_reward(self, buckets, vx0, vy0) -> None:
         """REWARD / EFFORT read — BOTTOM-LEFT HUD (m10_reward). For each window (yesterday / today / last 30 candles /
