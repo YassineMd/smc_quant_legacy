@@ -6710,12 +6710,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _g = []; _r = []
             _state = "g" if _bull[50] else ("r" if _bear[50] else None)   # regime already running at warmup end
             _pend = _state is not None
+            _reg0 = 50 if _pend else -1                       # regime start (initial regime: conservatively bar 50)
             _last_col = None                                  # printed lines must ALTERNATE colours (user
             for _i in range(50, m):                           # 2026-08-27: consecutive same-colour lines = one)
                 if _bull[_i] and not _bull[_i - 1]:           # up-cross -> new long regime, validation pending
-                    _state = "g"; _pend = True
+                    _state = "g"; _pend = True; _reg0 = _i
                 elif _bear[_i] and not _bear[_i - 1]:         # down-cross -> new short regime, validation pending
-                    _state = "r"; _pend = True
+                    _state = "r"; _pend = True; _reg0 = _i
+                if _pend and _i - _reg0 < 19:                 # MIN-AGE qualifier (user 2026-08-27): a regime must
+                    continue                                  # be >= 20 bars old before its line can qualify
                 if _pend and _state == "g" and _bull[_i] and _valid(_i, True):
                     if _last_col != "g":                      # first of a same-colour run prints, the rest suppressed
                         _g.append(int(_i)); _last_col = "g"
