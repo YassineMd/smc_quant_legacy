@@ -6934,8 +6934,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                             continue
                                         if not (_plo <= _pf4 <= _phi):
                                             continue
-                                        _vv = (sum(float(_q) for _q in _pvv) if isinstance(_pvv, (list, tuple))
-                                               else float(_pvv or 0.0))
+                                        try:
+                                            if isinstance(_pvv, dict):    # LIVE format: {"b": buy, "s": sell}
+                                                _vv = (float(_pvv.get("b", 0.0) or 0.0)
+                                                       + float(_pvv.get("s", 0.0) or 0.0))
+                                            elif isinstance(_pvv, (list, tuple)):
+                                                _vv = sum(float(_q or 0.0) for _q in _pvv)
+                                            else:
+                                                _vv = float(_pvv or 0.0)
+                                        except (TypeError, ValueError):
+                                            continue
                                         _vols[min(_NB - 1, int((_pf4 - _plo) / _hb))] += abs(_vv)
                                 else:                          # no footprint -> spread the bar volume over its range
                                     _v4 = float(_b4.get("buy_vol", 0.0) or 0.0) + float(_b4.get("sell_vol", 0.0) or 0.0)
