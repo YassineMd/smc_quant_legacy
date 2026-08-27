@@ -481,7 +481,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("ema50", "50 EMA Line"),                 # 50-period EMA (blue line; same engine)
                            ("ema100", "100 EMA Line"),               # 100-period EMA (purple line; same engine)
                            ("ema_ext", "High/Low Lines + readout"),  # per toggled EMA: dotted lines at the p-bar window's high/low + SIGNED dist-to-EMA readout (hi / lo / net delta) at the live edge
-                           ("ema_stack", "Stack Flip Lines"),        # dashed vline at the 20/50 EMA cross: green 20>50 begins / red 50>20 begins (transitions only; 100 EMA omitted by user preference)
+                           ("ema_stack", "Stack Flip Lines"),        # dashed vline at the 20/50 EMA cross, delta-validated: green (up-cross) only if BOTH 20/50 HL deltas POSITIVE, red (down-cross) only if both NEGATIVE (100 EMA omitted)
                            ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:
             _ema_grp = key in ("ema20", "ema50", "ema100", "ema_ext", "ema_stack")

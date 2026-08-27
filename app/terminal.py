@@ -6651,8 +6651,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # 'Stack Flip Lines' (sub-toggle 'ema_stack'): a dashed VERTICAL line (day-separator style) at every
         # closed bar where the 20/50 EMA relation FLIPS — GREEN when EMA20 crosses above EMA50, RED when it
         # crosses below (transitions only, so the lines mark the trend CHANGE, not the whole regime). The
-        # 100 EMA is deliberately OMITTED (user 2026-08-27). Independent of the individual EMA line toggles;
-        # first flips only from bar 50 on (slowest-EMA warmup).
+        # 100 EMA is deliberately OMITTED (user 2026-08-27). VALIDITY GATE (user 2026-08-27): a flip draws
+        # only if BOTH the EMA20 and EMA50 HL deltas (the ema_ext readout's signed net at that bar) MATCH
+        # its bias — GREEN (long bias) needs both deltas POSITIVE, RED (short bias) needs both NEGATIVE.
+        # Independent of the individual EMA line toggles; first flips only from bar 50 on (slowest-EMA warmup).
         _scb = self.menu.sub_checks.get("ema_stack")
         if _scb is None or not _scb.isChecked() or m < 51:
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
@@ -6672,8 +6674,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _E[_p] = _y
             _bull = _E[20] > _E[50]
             _bear = _E[50] > _E[20]
-            _g = [int(_i) for _i in range(50, m) if _bull[_i] and not _bull[_i - 1]]
-            _r = [int(_i) for _i in range(50, m) if _bear[_i] and not _bear[_i - 1]]
+
+            def _hl_delta(_bi, _p, _Ey):
+                _hp = _hi2 = _lp = _li2 = None
+                for _k2 in range(max(0, _bi - _p + 1), _bi + 1):
+                    _b2 = buckets[_k2]
+                    _h2 = float(_b2.get("high", 0.0) or 0.0); _l2 = float(_b2.get("low", 0.0) or 0.0)
+                    if _h2 > 0 and (_hp is None or _h2 >= _hp):
+                        _hp, _hi2 = _h2, _k2
+                    if _l2 > 0 and (_lp is None or _l2 <= _lp):
+                        _lp, _li2 = _l2, _k2
+                if _hp is None or _lp is None or _Ey[_hi2] <= 0 or _Ey[_li2] <= 0:
+                    return None
+                return (_hp - _Ey[_hi2]) / _Ey[_hi2] + (_lp - _Ey[_li2]) / _Ey[_li2]
+
+            def _valid(_bi, _up):                             # GREEN: both deltas > 0 / RED: both deltas < 0
+                _d20 = _hl_delta(_bi, 20, _E[20]); _d50 = _hl_delta(_bi, 50, _E[50])
+                if _d20 is None or _d50 is None:
+                    return False
+                return (_d20 > 0.0 and _d50 > 0.0) if _up else (_d20 < 0.0 and _d50 < 0.0)
+            _g = [int(_i) for _i in range(50, m) if _bull[_i] and not _bull[_i - 1] and _valid(_i, True)]
+            _r = [int(_i) for _i in range(50, m) if _bear[_i] and not _bear[_i - 1] and _valid(_i, False)]
             self._ema_stk_cache = (_ssig, _g, _r)
         _, _g, _r = self._ema_stk_cache
         for _kind, _xs2, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
