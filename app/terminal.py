@@ -8200,6 +8200,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _forming = bool(getattr(self, "_mmx_last_forming", True))
         _hc = self.menu.layer_state("m10_radarrun_hc")           # sub-toggle: show ONLY high-conviction breakouts
         _ab = self.menu.layer_state("m10_radarrun_abs")          # sub-toggle: show ONLY absorbed (A>=0) breakouts
+        _hld = self.menu.layer_state("m10_radarrun_hld")         # sub-toggle: keep only EMA-HL-delta-ALIGNED badges
         # REPAINT FIX (2026-08-17): a defending wall can be 500+ bars old, and the wall sim is causal from the START of
         # the data it sees. If we detect over only the visible scan window, a signal VANISHES on reload whenever the new
         # window starts after its wall formed. Prepend the FULL pre-window history so the signal set is identical no
@@ -8210,7 +8211,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # the full-history detect re-runs once per bar-close, not every live frame (a net perf WIN vs the old window scan).
         _ce = filtered[-2] if (_forming and n >= 2) else (filtered[-1] if n else None)
         _cet = float(_ce.get("end_time", 0.0) or 0.0) if _ce else 0.0
-        _sig = (n, _off, _forming, _hc, _ab, self._tf, _cet)
+        _sig = (n, _off, _forming, _hc, _ab, _hld, self._tf, _cet)
         if _sig == self._rr_sig and self._rr_drawn:
             return
         self._rr_sig = _sig
@@ -8239,6 +8240,36 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 entries = _kept
         except Exception:
             self._clear_radarrun(); return
+        # 'Filter EMA HL delta' (m10_radarrun_hld): keep only badges whose side agrees with the ema_ext
+        # readout's SIGNED NET delta at the badge's bar — 20-bar window incl. the bar, window high/low each
+        # measured vertically to the chart-identical EMA20 AT its own bar; LONG iff delta>0 / SHORT iff
+        # delta<0. ⚠ Honest test FAILED/INVERTED OOS (study/radarrun_hldelta.py) — an eyeball VIEW only.
+        # A badge whose delta can't be computed (fewer than 20 bars) is KEPT, never silently hidden.
+        _hldE = _hldH = _hldL = None
+        if _hld and n:
+            a20 = 2.0 / 21.0
+            _hldE = np.empty(n); _hldH = np.empty(n); _hldL = np.empty(n)
+            _prev = float(filtered[0].get("close", filtered[0].get("close_price", 0.0)) or 0.0)
+            _hldE[0] = _prev
+            for _j, _b in enumerate(filtered):
+                _hldH[_j] = float(_b.get("high", 0.0) or 0.0); _hldL[_j] = float(_b.get("low", 0.0) or 0.0)
+                if _j:
+                    _c = float(_b.get("close", _b.get("close_price", 0.0)) or 0.0) or _prev
+                    _prev = _hldE[_j] = a20 * _c + (1.0 - a20) * _hldE[_j - 1]
+
+        def _hld_ok(i, side):
+            if _hldE is None or i < 19:
+                return True                                       # can't compute -> KEEP
+            hi_p = hi_i = lo_p = lo_i = None
+            for j in range(i - 19, i + 1):
+                if _hldH[j] > 0 and (hi_p is None or _hldH[j] >= hi_p):
+                    hi_p, hi_i = _hldH[j], j
+                if _hldL[j] > 0 and (lo_p is None or _hldL[j] <= lo_p):
+                    lo_p, lo_i = _hldL[j], j
+            if hi_p is None or lo_p is None or _hldE[hi_i] <= 0 or _hldE[lo_i] <= 0:
+                return True
+            d = (hi_p - _hldE[hi_i]) / _hldE[hi_i] + (lo_p - _hldE[lo_i]) / _hldE[lo_i]
+            return (d > 0) if side > 0 else (d < 0)
         if self._tf != self._rr_fired_tf:                         # on a timeframe switch, LOAD the persisted confirmed set
             self._rr_fired = self._rr_persist_load(self._tf)      # (once a badge fires it is saved to disk -> never lost on
             self._rr_fired_tf = self._tf                          #  reload, regardless of how re-detection behaves)
@@ -8266,7 +8297,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self._rr_audio_seeded:                             # first population = silent seed (never blast the backlog)
             self._rr_audio_seeded = True
         else:
-            self._rr_sound_new(_new_edge, _hc, _ab)              # beep the instant a NEW live-edge breakout freezes
+            self._rr_sound_new([_x for _x in _new_edge if (not _hld) or _hld_ok(_edge_i, _x[0])],
+                               _hc, _ab)                         # beep the instant a NEW live-edge breakout freezes
+            #                                                      (a delta-filtered badge stays silent too)
         et2i = {float(filtered[j].get("end_time", 0.0) or 0.0): j for j in range(n)}   # end_time -> CURRENT index this frame
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
         GRN, RED = (40, 230, 120), (240, 70, 90)                     # green = up-breakout (support) / red = down (resistance)
@@ -8287,6 +8320,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if _ab and not ev.get("absorbed"):                   # 'Absorbed only' sub-toggle -> hide the easy (A<0) breaks
                 continue
             side = ev["side"]
+            if _hld and not _hld_ok(i, side):                    # 'Filter EMA HL delta' -> only delta-aligned badges
+                continue
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
             y = (lo - pad) if side > 0 else (hi + pad)               # LONG ▲ BELOW the candle / SHORT ▼ ABOVE it
             self._rr_entries.append(("rr%d" % i, i, side, ev["entry"], ev["sl"], ev["tp"], y))
