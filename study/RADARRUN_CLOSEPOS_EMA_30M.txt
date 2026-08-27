@@ -1,0 +1,36 @@
+CLOSE-POSITION x EMA-SIDE cross-tab — 30m Radar Runner | descriptive follow-up
+
+====================================================================================================
+RECON 2025-01 .. 2026-06 (reference)
+  -- 0.2% net (n=5285) --
+     LOW <0.45      WITH-EMA  n=2193 win  83.0%  avg -0.044%
+     LOW <0.45      AGAINST   n=66   win  86.4%  avg +0.007%
+     MID 0.45-0.80  WITH-EMA  n=676  win  84.2%  avg -0.035%
+     MID 0.45-0.80  AGAINST   n=1791 win  82.5%  avg -0.038%
+     EDGE >0.80     WITH-EMA  n=1    win 100.0%  avg +0.170%
+     EDGE >0.80     AGAINST   n=558  win  81.2%  avg -0.031%
+  -- RR 1:1 (n=3055) --
+     LOW <0.45      WITH-EMA  n=1146 win  56.6%  avg +0.074%
+     LOW <0.45      AGAINST   n=27   win  44.4%  avg -0.140%
+     MID 0.45-0.80  WITH-EMA  n=347  win  53.0%  avg -0.041%
+     MID 0.45-0.80  AGAINST   n=1093 win  51.9%  avg -0.054%
+     EDGE >0.80     WITH-EMA  n=1    win 100.0%  avg +0.643%
+     EDGE >0.80     AGAINST   n=441  win  51.9%  avg -0.063%
+====================================================================================================
+DAEMON (TRUE OOS, 2026-06-20 ..)
+  -- 0.2% net (n=459) --
+     LOW <0.45      WITH-EMA  n=172  win  72.7%  avg -0.108%
+     LOW <0.45      AGAINST   n=6    win 100.0%  avg +0.170%
+     MID 0.45-0.80  WITH-EMA  n=45   win  84.4%  avg +0.010%
+     MID 0.45-0.80  AGAINST   n=169  win  82.8%  avg +0.007%
+     EDGE >0.80     WITH-EMA  n=0
+     EDGE >0.80     AGAINST   n=67   win  74.6%  avg -0.039%
+  -- RR 1:1 (n=260) --
+     LOW <0.45      WITH-EMA  n=84   win  45.2%  avg -0.165%
+     LOW <0.45      AGAINST   n=1    win   0.0%  avg -1.047%
+     MID 0.45-0.80  WITH-EMA  n=24   win  54.2%  avg -0.045%
+     MID 0.45-0.80  AGAINST   n=96   win  61.5%  avg +0.075%
+     EDGE >0.80     WITH-EMA  n=0
+     EDGE >0.80     AGAINST   n=55   win  54.5%  avg -0.034%
+
+done in 105s
