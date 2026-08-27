@@ -1449,6 +1449,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_stk_cache = None                               # (sig, green bar idxs, red bar idxs) — per bar close
         self._ema_lvl_items = {}                                 # 'ema_trendlvl': 'hi' red / 'lo' green solid hlines
         self._ema_lvl_cache = None                               # (sig, lo_info, hi_info) — per bar close
+        self._ema_vp_item = None                                 # 'ema_trendvp': right-side VP of the extreme-lines span
+        self._ema_vp_cache = None                                # (sig, bin centers, bin vols, bin height)
         self._lwc_sph = None; self._lwc_sig = None               # LW FAILED PUSH gold ♦ (m10_longwick_combo, no walls)
         self._lwr_sph = None; self._lwr_sig = None               # LW WICK RECLAIM cyan/magenta ♦ (m10_longwick_reclaim)
         self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
@@ -2559,7 +2561,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
-        if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_stack", "ema_trendlvl"):
+        if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_stack", "ema_trendlvl", "ema_trendvp"):
             if key == "ema_stack":
                 self._ema_stk_cache = None           # stack-flip lines toggled -> recompute next frame
                 if not on:
@@ -2570,6 +2572,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if not on:
                     for _it in self._ema_lvl_items.values():
                         _it.setVisible(False)
+            elif key == "ema_trendvp":
+                self._ema_vp_cache = None            # trend VP toggled -> recompute next frame
+                if not on and self._ema_vp_item is not None:
+                    self._ema_vp_item.setVisible(False)
             elif key == "ema_ext":
                 self._ema_ext_cache.clear(); self._ema_ext_lblsig.clear()   # extremes toggled -> recompute next frame
                 if not on:
@@ -6666,13 +6672,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # per regime at most. Independent of the EMA line toggles; from bar 50 on (slowest-EMA warmup).
         _scb = self.menu.sub_checks.get("ema_stack")
         _lcb = self.menu.sub_checks.get("ema_trendlvl")
+        _vcb = self.menu.sub_checks.get("ema_trendvp")
         _stk_on = _scb is not None and _scb.isChecked()
         _lvl_on = _lcb is not None and _lcb.isChecked()       # 'Trend Extreme Lines' need the flips too
-        if (not _stk_on and not _lvl_on) or m < 51:
+        _vp_on = _vcb is not None and _vcb.isChecked()        # ... and so does the Trend VP (span anchors)
+        if (not _stk_on and not _lvl_on and not _vp_on) or m < 51:
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
+            if self._ema_vp_item is not None:
+                self._ema_vp_item.setVisible(False)
             return
         _ssig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source)
         if self._ema_stk_cache is None or self._ema_stk_cache[0] != _ssig:
@@ -6748,9 +6758,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # green line) marks its LOWEST low with a solid GREEN hline; the last finished bull segment (green ->
         # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar
         # on the left to the live candle on the right.
-        if not _lvl_on:
+        if not _lvl_on and not _vp_on:
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
+            if self._ema_vp_item is not None:
+                self._ema_vp_item.setVisible(False)
         else:
             if self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig:
                 _seq = sorted([(int(_i2), "g") for _i2 in _g] + [(int(_i2), "r") for _i2 in _r])
@@ -6824,6 +6836,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _prevbias = _curb; _curb = _b3
                 self._ema_lvl_cache = (_ssig, _lo_info, _hi_info, _lop, _hip, _bias, _prevbias)
             _, _lo_info, _hi_info, _lop, _hip, _bias, _prevbias = self._ema_lvl_cache
+            _vp_hi, _vp_lo = _hi_info, _lo_info               # VP span anchors, kept before the display gate
+            if not _lvl_on:                                   # levels computed only for the VP -> lines/tags hidden
+                _lo_info = _hi_info = _lop = _hip = None; _bias = None
             for _sd2, _info, _rgb3, _al3, _w3 in (("lo", _lo_info, (40, 230, 120), 235, 2.2),
                                                   ("hi", _hi_info, (240, 70, 90), 235, 2.2),
                                                   ("lo_prev", _lop, (40, 230, 120), 150, 1.2),
@@ -6881,6 +6896,77 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         self._ema_lvl_lblptxt = _prevbias
                     _lbp.setPos(float(x[n - 1]) + 0.8, _ymid3)
                     _lbp.setVisible(True)
+            # 'Trend Extremes VP' (sub-toggle 'ema_trendvp'): right-anchored volume profile over the SPAN the
+            # Trend Extreme lines cover — from the older current anchor vline to the last CLOSED bar. Per-bar
+            # footprint 'levels' when present, else the bar's volume spread uniformly over its range. Bins
+            # cached per bar close; only the viewport mapping is per-frame. POC bin amber, z behind candles.
+            if not _vp_on:
+                if self._ema_vp_item is not None:
+                    self._ema_vp_item.setVisible(False)
+            else:
+                _anch = [_a4[0] for _a4 in (_vp_hi, _vp_lo) if _a4 is not None]
+                if not _anch:
+                    if self._ema_vp_item is not None:
+                        self._ema_vp_item.setVisible(False)
+                else:
+                    if self._ema_vp_cache is None or self._ema_vp_cache[0] != _ssig:
+                        _w0 = min(_anch); _NB = 40
+                        _plo = float("inf"); _phi = 0.0
+                        for _j4 in range(_w0, m):
+                            _h4 = float(buckets[_j4].get("high", 0.0) or 0.0)
+                            _l4 = float(buckets[_j4].get("low", 0.0) or 0.0)
+                            if _h4 > 0:
+                                _phi = max(_phi, _h4)
+                            if _l4 > 0:
+                                _plo = min(_plo, _l4)
+                        _vols = np.zeros(_NB); _cen = None; _hb = 0.0
+                        if _phi > _plo:
+                            _hb = (_phi - _plo) / _NB
+                            _cen = _plo + (np.arange(_NB) + 0.5) * _hb
+                            for _j4 in range(_w0, m):
+                                _b4 = buckets[_j4]
+                                _lvs = _b4.get("levels") or {}
+                                if _lvs:
+                                    for _ps, _pvv in _lvs.items():
+                                        try:
+                                            _pf4 = float(_ps)
+                                        except (TypeError, ValueError):
+                                            continue
+                                        if not (_plo <= _pf4 <= _phi):
+                                            continue
+                                        _vv = (sum(float(_q) for _q in _pvv) if isinstance(_pvv, (list, tuple))
+                                               else float(_pvv or 0.0))
+                                        _vols[min(_NB - 1, int((_pf4 - _plo) / _hb))] += abs(_vv)
+                                else:                          # no footprint -> spread the bar volume over its range
+                                    _v4 = float(_b4.get("buy_vol", 0.0) or 0.0) + float(_b4.get("sell_vol", 0.0) or 0.0)
+                                    if _v4 <= 0:
+                                        _v4 = float(_b4.get("volume", 0.0) or 0.0)
+                                    _h4 = float(_b4.get("high", 0.0) or 0.0); _l4 = float(_b4.get("low", 0.0) or 0.0)
+                                    if _v4 <= 0 or _h4 <= 0 or _l4 <= 0:
+                                        continue
+                                    _j0 = max(0, min(_NB - 1, int((_l4 - _plo) / _hb)))
+                                    _j1 = max(0, min(_NB - 1, int((_h4 - _plo) / _hb)))
+                                    _vols[_j0:_j1 + 1] += _v4 / (_j1 - _j0 + 1)
+                        self._ema_vp_cache = (_ssig, _cen, _vols, _hb)
+                    _, _cen, _vols, _hb = self._ema_vp_cache
+                    _vmax = float(_vols.max()) if _cen is not None and len(_vols) else 0.0
+                    if _cen is None or _vmax <= 0:
+                        if self._ema_vp_item is not None:
+                            self._ema_vp_item.setVisible(False)
+                    else:
+                        (_vx0v, _vx1v), _ = self.vb.viewRange()
+                        _wid = _vols / _vmax * (0.16 * (_vx1v - _vx0v))
+                        if self._ema_vp_item is None:
+                            self._ema_vp_item = pg.BarGraphItem(x0=[0.0], x1=[1.0], y=[0.0], height=1.0,
+                                                                pen=None, brush=(150, 158, 175, 70))
+                            self._ema_vp_item.setZValue(-5)
+                            self.plot.addItem(self._ema_vp_item, ignoreBounds=True)
+                        _poc = int(np.argmax(_vols))
+                        _brs = [pg.mkBrush(250, 180, 60, 150) if _j5 == _poc else pg.mkBrush(150, 158, 175, 70)
+                                for _j5 in range(len(_vols))]
+                        self._ema_vp_item.setOpts(x0=_vx1v - _wid, x1=np.full(len(_vols), _vx1v),
+                                                  y=_cen, height=_hb * 0.92, pen=None, brushes=_brs)
+                        self._ema_vp_item.setVisible(True)
 
     def _draw_reward(self, buckets, vx0, vy0) -> None:
         """REWARD / EFFORT read — BOTTOM-LEFT HUD (m10_reward). For each window (yesterday / today / last 30 candles /
@@ -15943,6 +16029,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _pl.setVisible(False)
             for _it in self._ema_lvl_items.values():
                 _it.setVisible(False)
+            if self._ema_vp_item is not None:
+                self._ema_vp_item.setVisible(False)
         try:
             self._draw_reversal_point(buckets, x, vx0, vx1, vy0, vy1)  # Reversal Point triangles, ALL tf (m10_reversal)
         except Exception:
