@@ -6576,9 +6576,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             item.setData(xs[p - 1:], ys[p - 1:])
             item.setVisible(True)
             # 'EMA High/Low Lines' (sub-toggle 'ema_ext'): per toggled EMA, in its own p-bar window of CLOSED
-            # bars, a dotted line at the HIGHEST high above the EMA and one at the LOWEST low below it — each
-            # anchored at the extreme's bar and extended to the live edge, in the parent EMA's colour. A side
-            # with no qualifying bar (e.g. every low above the EMA after a jump) draws nothing.
+            # bars, a dotted line at the window's HIGHEST high and one at its LOWEST low (unconditional — no
+            # EMA-side filter; user correction 2026-08-27), each anchored at the extreme's bar and extended to
+            # the live edge in the parent EMA's colour. The readout distances are SIGNED vs the EMA, so the low
+            # reads positive when the whole window trades above the EMA.
             if not _ext_on:
                 for _sd in ("hi", "lo"):
                     _it2 = self._ema_ext_items.get((key, _sd))
@@ -6594,9 +6595,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 for i in range(max(0, m - p), m):
                     b = buckets[i]
                     h = float(b.get("high", 0.0) or 0.0); l = float(b.get("low", 0.0) or 0.0)
-                    if h > y[i] and (hi_p is None or h >= hi_p):     # ties -> the most recent extreme
+                    if h > 0.0 and (hi_p is None or h >= hi_p):      # window max high (ties -> most recent)
                         hi_p, hi_i = h, i
-                    if 0.0 < l < y[i] and (lo_p is None or l <= lo_p):
+                    if l > 0.0 and (lo_p is None or l <= lo_p):      # window min low (ties -> most recent)
                         lo_p, lo_i = l, i
                 self._ema_ext_cache[key] = (_sig, hi_p, hi_i, lo_p, lo_i)
             _, hi_p, hi_i, lo_p, lo_i = self._ema_ext_cache[key]
