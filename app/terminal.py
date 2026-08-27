@@ -6984,7 +6984,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         self._hide_ema_vp()
                     else:
                         (_vx0v, _vx1v), _ = self.vb.viewRange()
-                        _wid = _vols / _vmax * (0.16 * (_vx1v - _vx0v))
+                        _mw6 = 0.16 * (_vx1v - _vx0v)
+                        _wid = _vols / _vmax * _mw6
                         if self._ema_vp_item is None:
                             self._ema_vp_item = pg.BarGraphItem(x0=[0.0], x1=[1.0], y=[0.0], height=1.0,
                                                                 pen=None, brush=(150, 158, 175, 70))
@@ -6996,7 +6997,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         self._ema_vp_item.setOpts(x0=_vx1v - _wid, x1=np.full(len(_vols), _vx1v),
                                                   y=_cen, height=_hb * 0.92, pen=None, brushes=_brs)
                         self._ema_vp_item.setVisible(True)
-                        # VAH / VAL: dashed lines across the profile's window (anchor vline -> live candle)
+                        # VAH / VAL: dashed lines ON the right-side profile band itself (user 2026-08-27)
                         for _k6, _pv6 in (("vah", _vahp), ("val", _valp)):
                             _it6 = self._ema_vp_va.get(_k6)
                             if _pv6 is None:
@@ -7010,7 +7011,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                 _it6.setPen(_pn6); _it6.setZValue(14)
                                 self.plot.addItem(_it6, ignoreBounds=True)
                                 self._ema_vp_va[_k6] = _it6
-                            _it6.setData([float(x[_sp0c]), float(x[_sp1c])], [_pv6, _pv6])
+                            _it6.setData([_vx1v - _mw6, _vx1v], [_pv6, _pv6])
                             _it6.setVisible(True)
 
     def _draw_reward(self, buckets, vx0, vy0) -> None:
