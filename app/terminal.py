@@ -1439,6 +1439,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ws_sph = None; self._ws_sig = None; self._ws_drawn = False
         self._ws_marks = {}; self._ws_msig = {}                  # per-htf ("30m"/"1h") wall-mark caches
         self._lwk_sph = None; self._lwk_sig = None               # LONG WICK rejection ♦ (m10_longwick, all tf)
+        self._ema20_line = None                                  # 20 EMA sub-widget: amber PlotCurveItem
+        self._ema20_sig = None; self._ema20_y = None             # closed-bar EMA cache (recomputed once per bar close)
         self._lwc_sph = None; self._lwc_sig = None               # LW FAILED PUSH gold ♦ (m10_longwick_combo, no walls)
         self._lwr_sph = None; self._lwr_sig = None               # LW WICK RECLAIM cyan/magenta ♦ (m10_longwick_reclaim)
         self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
@@ -2534,7 +2536,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
-        if key == "drawing":
+        if key == "ema20":
+            self._ema20_sig = None                   # 20 EMA toggled -> recompute next frame
+            if not on and self._ema20_line is not None:
+                self._ema20_line.setVisible(False)
+            self._last_scanner_sig = None            # force a repaint so the line appears/vanishes at once
+        elif key == "drawing":
             self.drawbar.setVisible(on)
             if not on:
                 self.drawer.cancel()
@@ -6476,6 +6483,47 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             "<span style='color:%s;font-weight:bold'>%s</span></div>"
             % (gray, dim, dim, ac, r["astate"], dim, val, poc, vah,
                dim, bc, arrow, r["bias"], dim, r["cs"], r["cr"], r["ms"], r["mr"], nc, nd))
+
+    def _draw_ema20(self, buckets, x) -> None:
+        """20 EMA sub-widget ('ema20', Sub-Widgets): EMA(20) of closes over the loaded chart series (bucket or
+        clock), amber line, drawn from bar 20 on (the seed warmup is hidden). PERF rule: the closed-bar EMA is
+        cached and recomputed once per bar close; each frame only live-extends the last point with the forming
+        close."""
+        cb = self.menu.sub_checks.get("ema20")
+        if cb is None or not cb.isChecked() or not buckets or len(buckets) < 21:
+            if self._ema20_line is not None:
+                self._ema20_line.setVisible(False)
+            return
+        n = len(buckets)
+        _forming = bool(getattr(self, "_mmx_last_forming", True))
+        m = n - 1 if (_forming and n > 1) else n              # CLOSED bars
+        _sig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source)
+        if _sig != self._ema20_sig:
+            a = 2.0 / 21.0
+            y = np.empty(m)
+            prev = float(buckets[0].get("close", buckets[0].get("close_price", 0.0)) or 0.0)
+            y[0] = prev
+            for i in range(1, m):
+                c = float(buckets[i].get("close", buckets[i].get("close_price", 0.0)) or 0.0) or prev
+                prev = y[i] = a * c + (1.0 - a) * y[i - 1]
+            self._ema20_y = y
+            self._ema20_sig = _sig
+        y = self._ema20_y
+        if y is None or len(y) < 20:
+            return
+        if self._ema20_line is None:
+            self._ema20_line = pg.PlotCurveItem()
+            _pn = pg.mkPen(250, 180, 60, 230, width=1.5); _pn.setCosmetic(True)
+            self._ema20_line.setPen(_pn); self._ema20_line.setZValue(12)
+            self.plot.addItem(self._ema20_line, ignoreBounds=True)
+        xs = np.asarray(x[:m], dtype=float); ys = y
+        if _forming and n > 1:                                # live-extend onto the forming bar each frame
+            cf = float(buckets[-1].get("close", buckets[-1].get("close_price", 0.0)) or 0.0)
+            if cf > 0:
+                xs = np.append(xs, float(x[n - 1]))
+                ys = np.append(y, (2.0 / 21.0) * cf + (19.0 / 21.0) * y[-1])
+        self._ema20_line.setData(xs[19:], ys[19:])
+        self._ema20_line.setVisible(True)
 
     def _draw_reward(self, buckets, vx0, vy0) -> None:
         """REWARD / EFFORT read — BOTTOM-LEFT HUD (m10_reward). For each window (yesterday / today / last 30 candles /
@@ -15386,6 +15434,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_nyanchor(buckets, x, vx0, vx1)              # NY Anchor far-side hold line (m10_nyanchor)
         except Exception:
             self._hide_nyanchor()
+        try:
+            self._draw_ema20(buckets, x)                           # 20 EMA line (Sub-Widgets 'ema20')
+        except Exception:
+            if self._ema20_line is not None:
+                self._ema20_line.setVisible(False)
         try:
             self._draw_reversal_point(buckets, x, vx0, vx1, vy0, vy1)  # Reversal Point triangles, ALL tf (m10_reversal)
         except Exception:
