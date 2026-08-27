@@ -481,9 +481,10 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("ema50", "50 EMA Line"),                 # 50-period EMA (blue line; same engine)
                            ("ema100", "100 EMA Line"),               # 100-period EMA (purple line; same engine)
                            ("ema_ext", "High/Low Lines + readout"),  # per toggled EMA: dotted lines at the p-bar window's high/low + SIGNED dist-to-EMA readout (hi / lo / net delta) at the live edge
+                           ("ema_stack", "Stack Flip Lines"),        # dashed vline where the stack COMPLETES: green 20>50>100 / red 100>50>20 (transitions only)
                            ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:
-            _ema_grp = key in ("ema20", "ema50", "ema100", "ema_ext")
+            _ema_grp = key in ("ema20", "ema50", "ema100", "ema_ext", "ema_stack")
             if key == "ema20":                       # group header — the EMA entries render as indented sub-toggles
                 _hdr = QtWidgets.QLabel("EMA")
                 _hdr.setStyleSheet("color:#8b93a3; font-size:10px; padding-left:2px; padding-top:3px;")

@@ -1445,6 +1445,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_ext_cache = {}                                 # key -> (sig, hi_p, hi_i, lo_p, lo_i) — per bar close
         self._ema_ext_lbls = {}                                  # key -> TextItem readout at the live edge (dist hi/lo + HL delta)
         self._ema_ext_lblsig = {}                                # key -> sig of the last-rendered readout text
+        self._ema_stk_pool = {"g": [], "r": []}                  # 'ema_stack' flip lines: pooled dashed vlines (green/red)
+        self._ema_stk_cache = None                               # (sig, green bar idxs, red bar idxs) — per bar close
         self._lwc_sph = None; self._lwc_sig = None               # LW FAILED PUSH gold ♦ (m10_longwick_combo, no walls)
         self._lwr_sph = None; self._lwr_sig = None               # LW WICK RECLAIM cyan/magenta ♦ (m10_longwick_reclaim)
         self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
@@ -2555,8 +2557,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
-        if key in ("ema20", "ema50", "ema100", "ema_ext"):
-            if key == "ema_ext":
+        if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_stack"):
+            if key == "ema_stack":
+                self._ema_stk_cache = None           # stack-flip lines toggled -> recompute next frame
+                if not on:
+                    for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
+                        _pl.setVisible(False)
+            elif key == "ema_ext":
                 self._ema_ext_cache.clear(); self._ema_ext_lblsig.clear()   # extremes toggled -> recompute next frame
                 if not on:
                     for _it in self._ema_ext_items.values():
@@ -6641,6 +6648,44 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._ema_ext_lblsig[key] = _sig
                 _lb2.setPos(float(x[n - 1]) + 0.8, float(ys[-1]))
                 _lb2.setVisible(True)
+        # 'Stack Flip Lines' (sub-toggle 'ema_stack'): a dashed VERTICAL line (day-separator style) at every
+        # closed bar where the EMA stack COMPLETES an alignment — GREEN when 20>50>100 begins, RED when
+        # 100>50>20 begins (transitions only, so the lines mark the trend CHANGE, not the whole regime).
+        # Independent of the individual EMA line toggles; first flips only from bar 100 on (full warmup).
+        _scb = self.menu.sub_checks.get("ema_stack")
+        if _scb is None or not _scb.isChecked() or m < 101:
+            for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
+                _pl.setVisible(False)
+            return
+        _ssig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source)
+        if self._ema_stk_cache is None or self._ema_stk_cache[0] != _ssig:
+            _E = {}
+            for _p in (20, 50, 100):
+                _a = 2.0 / (_p + 1.0)
+                _y = np.empty(m)
+                _prev = float(buckets[0].get("close", buckets[0].get("close_price", 0.0)) or 0.0)
+                _y[0] = _prev
+                for _i in range(1, m):
+                    _c = float(buckets[_i].get("close", buckets[_i].get("close_price", 0.0)) or 0.0) or _prev
+                    _prev = _y[_i] = _a * _c + (1.0 - _a) * _y[_i - 1]
+                _E[_p] = _y
+            _bull = (_E[20] > _E[50]) & (_E[50] > _E[100])
+            _bear = (_E[100] > _E[50]) & (_E[50] > _E[20])
+            _g = [int(_i) for _i in range(100, m) if _bull[_i] and not _bull[_i - 1]]
+            _r = [int(_i) for _i in range(100, m) if _bear[_i] and not _bear[_i - 1]]
+            self._ema_stk_cache = (_ssig, _g, _r)
+        _, _g, _r = self._ema_stk_cache
+        for _kind, _xs2, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
+            pool = self._ema_stk_pool[_kind]
+            for _j, _xi in enumerate(_xs2):
+                if _j >= len(pool):
+                    _pn2 = pg.mkPen(color=(_rgb2[0], _rgb2[1], _rgb2[2], 170), width=1); _pn2.setCosmetic(True)
+                    _pn2.setDashPattern([2.0, 6.0])
+                    _ln = pg.InfiniteLine(angle=90, movable=False, pen=_pn2); _ln.setZValue(14)
+                    self.plot.addItem(_ln, ignoreBounds=True); pool.append(_ln)
+                pool[_j].setValue(float(_xi)); pool[_j].setVisible(True)
+            for _pl in pool[len(_xs2):]:
+                _pl.setVisible(False)
 
     def _draw_reward(self, buckets, vx0, vy0) -> None:
         """REWARD / EFFORT read — BOTTOM-LEFT HUD (m10_reward). For each window (yesterday / today / last 30 candles /
@@ -15699,6 +15744,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _it.setVisible(False)
             for _it in self._ema_ext_lbls.values():
                 _it.setVisible(False)
+            for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
+                _pl.setVisible(False)
         try:
             self._draw_reversal_point(buckets, x, vx0, vx1, vy0, vy1)  # Reversal Point triangles, ALL tf (m10_reversal)
         except Exception:
