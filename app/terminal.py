@@ -1447,6 +1447,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_ext_lblsig = {}                                # key -> sig of the last-rendered readout text
         self._ema_stk_pool = {"g": [], "r": []}                  # 'ema_stack' flip lines: pooled dashed vlines (green/red)
         self._ema_stk_cache = None                               # (sig, green bar idxs, red bar idxs) — per bar close
+        self._ema_lvl_items = {}                                 # 'ema_trendlvl': 'hi' red / 'lo' green solid hlines
+        self._ema_lvl_cache = None                               # (sig, lo_info, hi_info) — per bar close
         self._lwc_sph = None; self._lwc_sig = None               # LW FAILED PUSH gold ♦ (m10_longwick_combo, no walls)
         self._lwr_sph = None; self._lwr_sig = None               # LW WICK RECLAIM cyan/magenta ♦ (m10_longwick_reclaim)
         self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
@@ -2557,12 +2559,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
-        if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_stack"):
+        if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_stack", "ema_trendlvl"):
             if key == "ema_stack":
                 self._ema_stk_cache = None           # stack-flip lines toggled -> recompute next frame
                 if not on:
                     for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                         _pl.setVisible(False)
+            elif key == "ema_trendlvl":
+                self._ema_lvl_cache = None           # trend extreme lines toggled -> recompute next frame
+                if not on:
+                    for _it in self._ema_lvl_items.values():
+                        _it.setVisible(False)
             elif key == "ema_ext":
                 self._ema_ext_cache.clear(); self._ema_ext_lblsig.clear()   # extremes toggled -> recompute next frame
                 if not on:
@@ -6658,9 +6665,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # bar they first do (user report: cross first, deltas confirmed after -> line was missing). One line
         # per regime at most. Independent of the EMA line toggles; from bar 50 on (slowest-EMA warmup).
         _scb = self.menu.sub_checks.get("ema_stack")
-        if _scb is None or not _scb.isChecked() or m < 51:
+        _lcb = self.menu.sub_checks.get("ema_trendlvl")
+        _stk_on = _scb is not None and _scb.isChecked()
+        _lvl_on = _lcb is not None and _lcb.isChecked()       # 'Trend Extreme Lines' need the flips too
+        if (not _stk_on and not _lvl_on) or m < 51:
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
+            for _it3 in self._ema_lvl_items.values():
+                _it3.setVisible(False)
             return
         _ssig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source)
         if self._ema_stk_cache is None or self._ema_stk_cache[0] != _ssig:
@@ -6714,17 +6726,59 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _pend = False
             self._ema_stk_cache = (_ssig, _g, _r)
         _, _g, _r = self._ema_stk_cache
-        for _kind, _xs2, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
-            pool = self._ema_stk_pool[_kind]
-            for _j, _xi in enumerate(_xs2):
-                if _j >= len(pool):
-                    _pn2 = pg.mkPen(color=(_rgb2[0], _rgb2[1], _rgb2[2], 170), width=1); _pn2.setCosmetic(True)
-                    _pn2.setDashPattern([2.0, 6.0])
-                    _ln = pg.InfiniteLine(angle=90, movable=False, pen=_pn2); _ln.setZValue(14)
-                    self.plot.addItem(_ln, ignoreBounds=True); pool.append(_ln)
-                pool[_j].setValue(float(_xi)); pool[_j].setVisible(True)
-            for _pl in pool[len(_xs2):]:
+        if not _stk_on:                                       # vlines off, but the levels below may still draw
+            for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
+        else:
+            for _kind, _xs2, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
+                pool = self._ema_stk_pool[_kind]
+                for _j, _xi in enumerate(_xs2):
+                    if _j >= len(pool):
+                        _pn2 = pg.mkPen(color=(_rgb2[0], _rgb2[1], _rgb2[2], 170), width=1); _pn2.setCosmetic(True)
+                        _pn2.setDashPattern([2.0, 6.0])
+                        _ln = pg.InfiniteLine(angle=90, movable=False, pen=_pn2); _ln.setZValue(14)
+                        self.plot.addItem(_ln, ignoreBounds=True); pool.append(_ln)
+                    pool[_j].setValue(float(_xi)); pool[_j].setVisible(True)
+                for _pl in pool[len(_xs2):]:
+                    _pl.setVisible(False)
+        # 'Trend Extreme Lines' (sub-toggle 'ema_trendlvl'): the LAST FINISHED bear segment (red line -> next
+        # green line) marks its LOWEST low with a solid GREEN hline; the last finished bull segment (green ->
+        # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar
+        # on the left to the live candle on the right.
+        if not _lvl_on:
+            for _it3 in self._ema_lvl_items.values():
+                _it3.setVisible(False)
+        else:
+            if self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig:
+                _seq = sorted([(int(_i2), "g") for _i2 in _g] + [(int(_i2), "r") for _i2 in _r])
+                _lo_info = _hi_info = None
+                for _k3 in range(len(_seq) - 1):
+                    _b0, _c0 = _seq[_k3]; _b1, _c1 = _seq[_k3 + 1]
+                    if _c0 == "r" and _c1 == "g":             # finished BEAR segment -> its low
+                        _lo = min((float(buckets[_j2].get("low", 0.0) or 0.0) or float("inf"))
+                                  for _j2 in range(_b0, _b1 + 1))
+                        if _lo != float("inf"):
+                            _lo_info = (_b0, _lo)
+                    elif _c0 == "g" and _c1 == "r":           # finished BULL segment -> its high
+                        _hi = max(float(buckets[_j2].get("high", 0.0) or 0.0) for _j2 in range(_b0, _b1 + 1))
+                        if _hi > 0:
+                            _hi_info = (_b0, _hi)
+                self._ema_lvl_cache = (_ssig, _lo_info, _hi_info)
+            _, _lo_info, _hi_info = self._ema_lvl_cache
+            for _sd2, _info, _rgb3 in (("lo", _lo_info, (40, 230, 120)), ("hi", _hi_info, (240, 70, 90))):
+                _it3 = self._ema_lvl_items.get(_sd2)
+                if _info is None:
+                    if _it3 is not None:
+                        _it3.setVisible(False)
+                    continue
+                if _it3 is None:
+                    _it3 = pg.PlotCurveItem()
+                    _pn3 = pg.mkPen(*_rgb3, 235, width=1.4); _pn3.setCosmetic(True)
+                    _it3.setPen(_pn3); _it3.setZValue(15)
+                    self.plot.addItem(_it3, ignoreBounds=True)
+                    self._ema_lvl_items[_sd2] = _it3
+                _it3.setData([float(x[_info[0]]), float(x[n - 1])], [_info[1], _info[1]])
+                _it3.setVisible(True)
 
     def _draw_reward(self, buckets, vx0, vy0) -> None:
         """REWARD / EFFORT read — BOTTOM-LEFT HUD (m10_reward). For each window (yesterday / today / last 30 candles /
@@ -15785,6 +15839,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _it.setVisible(False)
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
+            for _it in self._ema_lvl_items.values():
+                _it.setVisible(False)
         try:
             self._draw_reversal_point(buckets, x, vx0, vx1, vy0, vy1)  # Reversal Point triangles, ALL tf (m10_reversal)
         except Exception:
