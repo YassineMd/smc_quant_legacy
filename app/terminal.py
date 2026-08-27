@@ -1102,6 +1102,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             " color:#d2d7df; font-family:Consolas; font-size:11px; padding:6px 8px; spacing:7px;}")
         self.sel_vp_chk.toggled.connect(self._on_sel_vp_toggled)
         self.sel_vp_chk.hide()
+        # BACKGROUND-VEIL slider card (below the VP checkbox): opacity of a chart-background-coloured rect
+        # over the SELECTION that sits ABOVE the chart content (candles / indicators / EMA ...), so scaling
+        # it up visually isolates the selection VP (which is raised above the veil while it is active).
+        self.sel_bg_val = 0
+        self.sel_bg_card = QtWidgets.QWidget(self)
+        self.sel_bg_card.setFixedWidth(210)
+        self.sel_bg_card.setAttribute(QtCore.Qt.WA_StyledBackground, True)
+        self.sel_bg_card.setStyleSheet(
+            "QWidget{background:rgba(17,19,26,235); border:1px solid #2a2e39; border-radius:5px;}")
+        _bgl = QtWidgets.QVBoxLayout(self.sel_bg_card); _bgl.setContentsMargins(8, 6, 8, 6); _bgl.setSpacing(3)
+        self._sel_bg_lbl = QtWidgets.QLabel("Background veil: 0%")
+        self._sel_bg_lbl.setStyleSheet(
+            "color:#d2d7df; font-family:Consolas; font-size:11px; background:transparent; border:none;")
+        _bgl.addWidget(self._sel_bg_lbl)
+        self.sel_bg_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.sel_bg_slider.setRange(0, 100); self.sel_bg_slider.setValue(0)
+        self.sel_bg_slider.valueChanged.connect(self._on_sel_bg)
+        _bgl.addWidget(self.sel_bg_slider)
+        self.sel_bg_card.hide()
+        self._sel_bg_rect = QtWidgets.QGraphicsRectItem()
+        self._sel_bg_rect.setPen(pg.mkPen(None))
+        self._sel_bg_rect.setZValue(48)                      # above chart content; below crosshair/price line (55)
+        self.vb.addItem(self._sel_bg_rect, ignoreBounds=True)
+        self._sel_bg_rect.setVisible(False)
         # Volume-profile-over-selection chart items: force-coloured horizontal histogram + POC/VAH/VAL/median lines.
         self.bc_sel_vp = pg.BarGraphItem(x0=[0.0], width=[0.0], y=[0.0], height=[0.0], pen=None)
         self.bc_sel_vp.setZValue(2); self.plot.addItem(self.bc_sel_vp, ignoreBounds=True); self.bc_sel_vp.setVisible(False)
@@ -7488,6 +7512,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "ls_mode": self._ls_mode, "panel9": self.show_panel9, "panel0": self.show_panel0,
                 "candle_mode": self._candle_mode,
                 "vp_mode": self._vp_mode,
+                "sel_bg": self.sel_bg_val,                               # selection background-veil opacity (%)
                 "vol_mode": self._vol_mode,                              # Volume pane dropdown: basic|delta|buy|sell|buysell
                 "vol_pct": self._vol_pct,                                # Volume pane 'Pct' grading toggle
                 "hide_candles": self._hide_candles,
@@ -7561,6 +7586,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _vm = s.get("vp_mode")
         if isinstance(_vm, (int, float)):
             self._vp_mode = int(_vm) % 11
+        _sb = s.get("sel_bg")
+        if isinstance(_sb, (int, float)):
+            self.sel_bg_slider.setValue(max(0, min(100, int(_sb))))   # handler restores z-values + label
         self._hide_candles = bool(s.get("hide_candles", self._hide_candles))
         self.show_phase_table = bool(s.get("phase_table", self.show_phase_table))
         for _k, _v in (s.get("phase") or {}).items():
@@ -7698,6 +7726,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _on_sel_vp_toggled), so the checkbox stays in sync and it works even while that box is hidden."""
         self.sel_vp_chk.setChecked(not self.sel_vp_chk.isChecked())
 
+    def _chart_bg_color(self):
+        """The chart's actual background colour (for the selection veil); falls back to near-black."""
+        try:
+            c = self.plot.backgroundBrush().color()
+            if c.isValid() and c.alpha() > 0:
+                return QtGui.QColor(c)
+        except Exception:
+            pass
+        return QtGui.QColor(0, 0, 0)
+
+    def _on_sel_bg(self, v: int) -> None:
+        """'h'-card Background-veil slider — 0 = off; >0 = a chart-background-coloured rect over the selection
+        at that opacity, ABOVE the chart content; the selection VP items ride above the veil while active."""
+        self.sel_bg_val = int(v)
+        self._sel_bg_lbl.setText("Background veil: %d%%" % self.sel_bg_val)
+        _z = 49 if self.sel_bg_val > 0 else 2                # veil active -> raise the selection VP above it
+        self.bc_sel_vp.setZValue(_z)
+        for _ln in self.bc_sel_vp_lines:
+            _ln.setZValue(_z + 1)
+        for _ln in self.bc_sel_va.values():
+            _ln.setZValue(_z + 1)
+        if self.sel_bg_val <= 0:
+            self._sel_bg_rect.setVisible(False)
+
     @staticmethod
     def _sel_vp_hist(sel):
         """Per-price {price_str: [opL, opS, clL, clS]} over the selected buckets — the SAME 1m-force split as the
@@ -7721,8 +7773,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return agg
 
     def _hide_sel_ctrls(self) -> None:
-        """Hide the 'h'-box controls group (VP checkbox + the two zone/force sliders)."""
-        self.sel_vp_chk.hide(); self.zone_slider.hide(); self.eff_slider.hide()
+        """Hide the 'h'-box controls group (VP checkbox + veil slider + the two zone/force sliders)."""
+        self.sel_vp_chk.hide(); self.sel_bg_card.hide(); self.zone_slider.hide(); self.eff_slider.hide()
 
     def _hide_selection_vp(self) -> None:
         self.bc_sel_vp.setVisible(False)
@@ -7910,7 +7962,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             levels = [_va[1], _va[0], _poc, _q[1], bar_quantiles.lvn(lvl)]   # VAH, VAL, POC, median, LVN (line-colour order)
         except Exception:
             levels = [None, None, None, None, None]
-        for _ln, _y in zip(self.bc_sel_vp_lines, levels):
+        for _li7, (_ln, _y) in enumerate(zip(self.bc_sel_vp_lines, levels)):
+            if self._vp_mode == 10 and _li7 in (0, 1, 4):     # GRAY VP carries its own VA dashes + LVN bin ->
+                _ln.setVisible(False); continue               # drop the red VAH / green VAL / purple LVN lines
             if _y is not None and _y == _y:
                 _ln.setData([float(lo_i), float(hi_i)], [float(_y), float(_y)]); _ln.setVisible(True)
             else:
@@ -8291,6 +8345,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         and CHEAP, so it runs every frame (even when the heavy compute is skipped) — keeps the box glued to the
         selection while the chart pans / follows the live edge."""
         x0, y0, x1, y1 = rect
+        # BACKGROUND VEIL (sel_bg_slider): chart-background-coloured rect over the selection, above the chart
+        # content — independent of the 'h' box, like the VP overlay; geometry refreshed here every frame.
+        if self.sel_bg_val > 0:
+            _cbg = self._chart_bg_color()
+            _cbg.setAlpha(max(0, min(255, int(255 * self.sel_bg_val / 100.0))))
+            self._sel_bg_rect.setBrush(pg.mkBrush(_cbg))
+            self._sel_bg_rect.setRect(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+            self._sel_bg_rect.setVisible(True)
+        else:
+            self._sel_bg_rect.setVisible(False)
 
         def to_self(dx, dy):
             sc = self.vb.mapViewToScene(QtCore.QPointF(float(dx), float(dy)))
@@ -8310,13 +8374,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             gap = 8
             ch = self.sel_vp_chk.sizeHint().height()
             sh = self.zone_slider.sizeHint().height()
-            self.sel_vp_chk.adjustSize(); self.zone_slider.adjustSize(); self.eff_slider.adjustSize()
-            total = ch + gap + sh + gap + sh
+            bh = self.sel_bg_card.sizeHint().height()
+            self.sel_vp_chk.adjustSize(); self.sel_bg_card.adjustSize()
+            self.zone_slider.adjustSize(); self.eff_slider.adjustSize()
+            total = ch + gap + bh + gap + sh + gap + sh
             top_y = by + self.sel_stats.height() + gap
             if top_y + total > self.height():
                 top_y = max(0, by - gap - total)
-            for _w, _wy in ((self.sel_vp_chk, top_y), (self.zone_slider, top_y + ch + gap),
-                            (self.eff_slider, top_y + ch + gap + sh + gap)):
+            for _w, _wy in ((self.sel_vp_chk, top_y),
+                            (self.sel_bg_card, top_y + ch + gap),           # veil slider DIRECTLY below the VP toggle
+                            (self.zone_slider, top_y + ch + gap + bh + gap),
+                            (self.eff_slider, top_y + ch + gap + bh + gap + sh + gap)):
                 _w.move(bx, _wy); _w.show(); _w.raise_()
                 if self.menu.isVisible():
                     _w.stackUnder(self.menu)
@@ -11216,6 +11284,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.sel_stats.hide()
             self._hide_sel_ctrls()
             self._hide_selection_vp()
+            self._sel_bg_rect.setVisible(False)     # no selection -> the background veil goes too
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
@@ -11343,6 +11412,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.sel_stats.hide()
             self._hide_sel_ctrls()
             self._hide_selection_vp()
+            self._sel_bg_rect.setVisible(False)     # no selection -> the background veil goes too
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
@@ -11482,6 +11552,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.sel_stats.hide()
             self._hide_sel_ctrls()
             self._hide_selection_vp()
+            self._sel_bg_rect.setVisible(False)     # no selection -> the background veil goes too
             self._hide_flip()
             self.bc_absorp_zones.setVisible(False)
             self.bc_eff_zones.setVisible(False)
