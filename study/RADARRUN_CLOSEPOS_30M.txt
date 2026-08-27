@@ -1,0 +1,52 @@
+CLOSE POSITION in the 20-bar HL window vs WINNER/LOSER — 30m Radar Runner | native SL | descriptive | pre-registered
+
+==============================================================================================================
+RECON 2025-01 .. 2026-06
+  -- 0.2% net (n=5285, win 82.8%) --
+     WINNERS n=4378  fav mean 0.484  med 0.508  share fav>0.5  51.0%
+     LOSERS  n=907   fav mean 0.504  med 0.516  share fav>0.5  52.0%
+     FAV QUINTILES (disjoint; 1 = close at the hypothesised good edge):
+       Q1 [0.000 .. 0.230]: n=1057  win  85.2%  avg -0.022%
+       Q2 [0.230 .. 0.426]: n=1057  win  82.0%  avg -0.052%
+       Q3 [0.426 .. 0.590]: n=1057  win  82.4%  avg -0.051%
+       Q4 [0.590 .. 0.738]: n=1057  win  82.2%  avg -0.044%
+       Q5 [0.738 .. 0.976]: n=1057  win  82.3%  avg -0.024%
+     LONG  terciles: T1 n=763 win 84.7% avg -0.022% | T2 n=763 win 83.9% avg -0.030% | T3 n=764 win 81.2% avg -0.037%
+     SHORT terciles: T1 n=998 win 84.4% avg -0.029% | T2 n=998 win 80.5% avg -0.075% | T3 n=999 win 82.8% avg -0.032%
+  -- RR 1:1 (n=3055, win 53.7%) --
+     WINNERS n=1642  fav mean 0.502  med 0.546  share fav>0.5  54.6%
+     LOSERS  n=1413  fav mean 0.526  med 0.571  share fav>0.5  58.2%
+     FAV QUINTILES (disjoint; 1 = close at the hypothesised good edge):
+       Q1 [0.000 .. 0.237]: n=611   win  58.1%  avg +0.103%
+       Q2 [0.237 .. 0.465]: n=611   win  55.2%  avg +0.043%
+       Q3 [0.466 .. 0.643]: n=611   win  49.4%  avg -0.101%
+       Q4 [0.643 .. 0.766]: n=611   win  53.4%  avg -0.034%
+       Q5 [0.766 .. 0.976]: n=611   win  52.7%  avg -0.042%
+     LONG  terciles: T1 n=441 win 56.9% avg +0.098% | T2 n=441 win 52.6% avg -0.047% | T3 n=442 win 49.3% avg -0.080%
+     SHORT terciles: T1 n=577 win 57.5% avg +0.082% | T2 n=577 win 50.1% avg -0.083% | T3 n=577 win 55.5% avg -0.009%
+==============================================================================================================
+DAEMON (TRUE OOS, 2026-06-20 ..)
+  -- 0.2% net (n=459, win 78.2%) --
+     WINNERS n=359   fav mean 0.531  med 0.565  share fav>0.5  57.9%
+     LOSERS  n=100   fav mean 0.497  med 0.512  share fav>0.5  51.0%
+     FAV QUINTILES (disjoint; 1 = close at the hypothesised good edge):
+       Q1 [0.000 .. 0.285]: n=92    win  75.0%  avg -0.107%
+       Q2 [0.286 .. 0.461]: n=92    win  72.8%  avg -0.082%
+       Q3 [0.462 .. 0.632]: n=91    win  82.4%  avg -0.006%
+       Q4 [0.635 .. 0.759]: n=92    win  83.7%  avg +0.019%
+       Q5 [0.762 .. 0.948]: n=92    win  77.2%  avg -0.026%
+     LONG  terciles: T1 n=80 win 70.0% avg -0.121% | T2 n=80 win 78.8% avg -0.035% | T3 n=80 win 76.2% avg -0.040%
+     SHORT terciles: T1 n=73 win 76.7% avg -0.095% | T2 n=73 win 87.7% avg +0.057% | T3 n=73 win 80.8% avg -0.001%
+  -- RR 1:1 (n=260, win 53.8%) --
+     WINNERS n=140   fav mean 0.597  med 0.664  share fav>0.5  70.7%
+     LOSERS  n=120   fav mean 0.518  med 0.544  share fav>0.5  53.3%
+     FAV QUINTILES (disjoint; 1 = close at the hypothesised good edge):
+       Q1 [0.000 .. 0.321]: n=52    win  42.3%  avg -0.218%
+       Q2 [0.327 .. 0.529]: n=52    win  48.1%  avg -0.119%
+       Q3 [0.529 .. 0.692]: n=52    win  61.5%  avg +0.074%
+       Q4 [0.694 .. 0.802]: n=52    win  63.5%  avg +0.106%
+       Q5 [0.802 .. 0.948]: n=52    win  53.8%  avg -0.047%
+     LONG  terciles: T1 n=46 win 47.8% avg -0.106% | T2 n=45 win 60.0% avg +0.044% | T3 n=46 win 54.3% avg -0.037%
+     SHORT terciles: T1 n=41 win 39.0% avg -0.298% | T2 n=41 win 58.5% avg +0.038% | T3 n=41 win 63.4% avg +0.112%
+
+done in 123s
