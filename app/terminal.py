@@ -6698,15 +6698,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _g = []; _r = []
             _state = "g" if _bull[50] else ("r" if _bear[50] else None)   # regime already running at warmup end
             _pend = _state is not None
-            for _i in range(50, m):
+            _last_col = None                                  # printed lines must ALTERNATE colours (user
+            for _i in range(50, m):                           # 2026-08-27: consecutive same-colour lines = one)
                 if _bull[_i] and not _bull[_i - 1]:           # up-cross -> new long regime, validation pending
                     _state = "g"; _pend = True
                 elif _bear[_i] and not _bear[_i - 1]:         # down-cross -> new short regime, validation pending
                     _state = "r"; _pend = True
                 if _pend and _state == "g" and _bull[_i] and _valid(_i, True):
-                    _g.append(int(_i)); _pend = False         # first bar of the regime with both deltas positive
+                    if _last_col != "g":                      # first of a same-colour run prints, the rest suppressed
+                        _g.append(int(_i)); _last_col = "g"
+                    _pend = False
                 elif _pend and _state == "r" and _bear[_i] and _valid(_i, False):
-                    _r.append(int(_i)); _pend = False         # first bar with both deltas negative
+                    if _last_col != "r":
+                        _r.append(int(_i)); _last_col = "r"
+                    _pend = False
             self._ema_stk_cache = (_ssig, _g, _r)
         _, _g, _r = self._ema_stk_cache
         for _kind, _xs2, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
