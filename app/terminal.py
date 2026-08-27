@@ -6628,13 +6628,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self.plot.addItem(_lb2, ignoreBounds=True)
                     self._ema_ext_lbls[key] = _lb2
                 if self._ema_ext_lblsig.get(key) != _sig:
-                    e0 = float(y[m - 1])
-                    up = "↑%+.2f%%" % ((hi_p - e0) / e0 * 100.0) if hi_p is not None else "↑—"
-                    dn = "↓%+.2f%%" % ((lo_p - e0) / e0 * 100.0) if lo_p is not None else "↓—"
+                    # each distance is measured VERTICALLY from the extreme point to the EMA AT THAT BAR
+                    # (user correction 2026-08-27: "from the highest point directly to the EMA line"), signed.
+                    _u = ((hi_p - y[hi_i]) / y[hi_i] * 100.0) if hi_p is not None else None
+                    _d = ((lo_p - y[lo_i]) / y[lo_i] * 100.0) if lo_p is not None else None
+                    up = "↑%+.2f%%" % _u if _u is not None else "↑—"
+                    dn = "↓%+.2f%%" % _d if _d is not None else "↓—"
                     # HL delta = SIGNED NET of the two distances (↑ + ↓): negative when the low extreme sits
-                    # farther below the EMA than the high sits above it.
-                    dl = ("Δ%+.2f%%" % ((hi_p - e0) / e0 * 100.0 + (lo_p - e0) / e0 * 100.0)
-                          if (hi_p is not None and lo_p is not None) else "Δ—")
+                    # farther below its EMA than the high sits above its own.
+                    dl = ("Δ%+.2f%%" % (_u + _d)) if (_u is not None and _d is not None) else "Δ—"
                     _lb2.setText("%s  %s  %s" % (up, dn, dl))
                     self._ema_ext_lblsig[key] = _sig
                 _lb2.setPos(float(x[n - 1]) + 0.8, float(ys[-1]))
