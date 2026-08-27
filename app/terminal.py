@@ -6782,6 +6782,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _bias = "BEARISH"
                     else:
                         _bias = "RANGING"
+                # BREAKOUT OVERRIDE (user 2026-08-27): price printing 20 consecutive CLOSED bars ABOVE the
+                # high extreme line -> BULLISH regardless of structure; 20 below the low line -> BEARISH.
+                # Works even before two full cycles exist (only needs the current line).
+                _C20 = [float(buckets[_j2].get("close", buckets[_j2].get("close_price", 0.0)) or 0.0)
+                        for _j2 in range(m - 20, m)]
+                if _hi_info is not None and all(_c2 > _hi_info[1] for _c2 in _C20):
+                    _bias = "BULLISH"
+                elif _lo_info is not None and all(0.0 < _c2 < _lo_info[1] for _c2 in _C20):
+                    _bias = "BEARISH"
                 self._ema_lvl_cache = (_ssig, _lo_info, _hi_info, _lop, _hip, _bias)
             _, _lo_info, _hi_info, _lop, _hip, _bias = self._ema_lvl_cache
             for _sd2, _info, _rgb3, _al3 in (("lo", _lo_info, (40, 230, 120), 235),
@@ -6816,7 +6825,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                              else ((240, 70, 90) if _bias == "BEARISH" else (170, 175, 185)))
                     _lb3.setText(_bias); _lb3.setColor(pg.mkColor(_col3[0], _col3[1], _col3[2], 235))
                     self._ema_lvl_lbltxt = _bias
-                _lb3.setPos(float(x[n - 1]) + 0.8, 0.5 * (_hi_info[1] + _lo_info[1]))
+                if _hi_info is not None and _lo_info is not None:
+                    _ymid3 = 0.5 * (_hi_info[1] + _lo_info[1])
+                else:
+                    _ymid3 = (_hi_info or _lo_info)[1]
+                _lb3.setPos(float(x[n - 1]) + 0.8, _ymid3)
                 _lb3.setVisible(True)
 
     def _draw_reward(self, buckets, vx0, vy0) -> None:
