@@ -7771,9 +7771,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         = bear-dominant zones, red). 6 & 7 share the max|delta| scale so the two are directly comparable. 9 Basic
         Delta (right, |net delta| bar, green buy / red sell = Bulls+Bears combined; the un-split sibling of 3, on the
         max|delta| scale). Mode 8 (VP Zones) is line-only (the caller draws the VA-zone lines instead) -> no bars here.
-        10 Trend Style (right, TOTAL volume): the ema_trendvp design — gray bars, amber POC, electric-purple
-        LVN inside the 70% VA, light-amber POC of the region above the VAH / below the VAL, slim blue-gray
-        VAH/VAL rows."""
+        10 Gray VP (right, TOTAL volume): EXACT replica of the ema_trendvp design — 40 uniform price bins
+        (fat bars, 0.92 bin fill), gray bars, amber POC, electric-purple LVN inside the 70% VA, light-amber
+        POC of the region above the VAH / below the VAL, dashed blue-gray VAH/VAL lines (emulated with short
+        dash-bars so every caller gets them without a line item)."""
         x0s = []; ws = []; ys = []; hs = []; brs = []
         if mode == 8:
             return x0s, ws, ys, hs, brs
@@ -7789,39 +7790,50 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             lv.append((pr, oL, oS, cL, cS, buy, sell, tot, buy - sell, max(range(4), key=lambda k: a[k])))
         if not lv:
             return x0s, ws, ys, hs, brs
-        if mode == 10:                                         # TREND STYLE — the ema_trendvp palette on the level rows
-            tots = [r[7] for r in lv]
-            vmax = max(tots) or 1.0
+        if mode == 10:                                         # GRAY VP — exact ema_trendvp replica (40 fat bins)
+            NB = 40
+            pmin = min(r[0] for r in lv); pmax = max(r[0] for r in lv)
+            if pmax <= pmin:
+                return x0s, ws, ys, hs, brs
+            hb = (pmax - pmin) / NB
+            vols = [0.0] * NB
+            for r in lv:
+                vols[min(NB - 1, int((r[0] - pmin) / hb))] += r[7]
+            vmax = max(vols) or 1.0
             sc = (0.40 * span) / vmax
-            tot_all = sum(tots) or 1.0
-            p0 = max(range(len(lv)), key=lambda k: tots[k])
-            a5, b5 = p0, p0
-            acc = tots[p0]
-            while acc < 0.70 * tot_all and (a5 > 0 or b5 < len(lv) - 1):
-                up = tots[b5 + 1] if b5 < len(lv) - 1 else -1.0
-                dn = tots[a5 - 1] if a5 > 0 else -1.0
+            tot_all = sum(vols) or 1.0
+            p0 = max(range(NB), key=lambda k: vols[k])
+            a5 = b5 = p0; acc = vols[p0]
+            while acc < 0.70 * tot_all and (a5 > 0 or b5 < NB - 1):
+                up = vols[b5 + 1] if b5 < NB - 1 else -1.0
+                dn = vols[a5 - 1] if a5 > 0 else -1.0
                 if up >= dn:
                     b5 += 1; acc += max(0.0, up)
                 else:
                     a5 -= 1; acc += max(0.0, dn)
-            vmin_in = min(tots[a5:b5 + 1])
-            lv_in = {j for j in range(a5, b5 + 1) if tots[j] == vmin_in and j != p0}
+            vmin_in = min(vols[a5:b5 + 1])
+            lv_in = {j for j in range(a5, b5 + 1) if vols[j] == vmin_in and j != p0}
 
             def _maxs(rng):                                    # outside POCs: max-volume bin above VAH / below VAL
-                nz = [j for j in rng if tots[j] > 0]
+                nz = [j for j in rng if vols[j] > 0]
                 if not nz:
                     return set()
-                mx = max(tots[j] for j in nz)
-                return {j for j in nz if tots[j] == mx}
-            poc_out = _maxs(range(b5 + 1, len(lv))) | _maxs(range(0, a5))
-            for j, r in enumerate(lv):
+                mx = max(vols[j] for j in nz)
+                return {j for j in nz if vols[j] == mx}
+            poc_out = _maxs(range(b5 + 1, NB)) | _maxs(range(0, a5))
+            for j in range(NB):
+                if vols[j] <= 0:
+                    continue
                 col = ((250, 180, 60, 150) if j == p0
                        else ((178, 70, 255, 160) if j in lv_in
                              else ((250, 205, 120, 125) if j in poc_out else (150, 158, 175, 70))))
-                _add(x0, tots[j] * sc, r[0], col)
-            for _vb in (a5, b5):                               # slim VAH/VAL boundary rows (blue-gray)
-                x0s.append(x0); ws.append(0.40 * span); ys.append(lv[_vb][0])
-                hs.append(thick * 0.28); brs.append(pg.mkBrush(170, 185, 210, 150))
+                x0s.append(x0); ws.append(vols[j] * sc); ys.append(pmin + (j + 0.5) * hb)
+                hs.append(hb * 0.92); brs.append(pg.mkBrush(*col))
+            dw = (0.40 * span) / 23.0                          # VAH/VAL: dashed lines emulated with 12 dash-bars
+            for pv in (pmin + a5 * hb, pmin + (b5 + 1) * hb):  # VAL then VAH (VA outer edges, ema-VP identical)
+                for k in range(12):
+                    x0s.append(x0 + 2.0 * k * dw); ws.append(dw); ys.append(pv)
+                    hs.append(hb * 0.10); brs.append(pg.mkBrush(170, 185, 210, 200))
             return x0s, ws, ys, hs, brs
         if mode in (0, 1, 6, 7, 9):                            # RIGHT-only histograms
             if mode in (6, 7, 9):                              # delta modes (Bulls/Bears/Basic Delta): NET delta,

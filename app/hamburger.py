@@ -193,7 +193,7 @@ CANDLE_MODE_LABELS = ["Normal candles", "Whisker bars", "Footprint", "Delta", "F
 # VAH/VAL white solid, no histogram.
 VP_MODE_LABELS = ["Basic", "Force", "Split Basic", "Split Basic Delta", "Split Force", "Split Force Delta",
                   "Basic Bulls", "Basic Bears", "VP Zones", "Basic Delta",
-                  "Trend Style"]                              # 10: the ema_trendvp design (amber POC / purple LVNs / VA rows)
+                  "Gray VP"]                                  # 10: exact replica of the ema_trendvp design (40 fat bins, amber POC / purple in-VA LVN / light-amber outside POCs / dashed VAH-VAL)
 # Dropdown DISPLAY order (mode VALUES, not positions). "Basic Delta" (9) is a right-only net-delta histogram, so it is
 # shown with the other right-only delta modes (Bulls/Bears) instead of last. Appending 9 to the label list keeps every
 # existing index — and the persisted _vp_mode — stable; the combo carries the VALUE as userData, so order != value.
