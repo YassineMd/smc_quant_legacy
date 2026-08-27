@@ -6651,10 +6651,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # 'Stack Flip Lines' (sub-toggle 'ema_stack'): a dashed VERTICAL line (day-separator style) at every
         # closed bar where the 20/50 EMA relation FLIPS — GREEN when EMA20 crosses above EMA50, RED when it
         # crosses below (transitions only, so the lines mark the trend CHANGE, not the whole regime). The
-        # 100 EMA is deliberately OMITTED (user 2026-08-27). VALIDITY GATE (user 2026-08-27): a flip draws
-        # only if BOTH the EMA20 and EMA50 HL deltas (the ema_ext readout's signed net at that bar) MATCH
-        # its bias — GREEN (long bias) needs both deltas POSITIVE, RED (short bias) needs both NEGATIVE.
-        # Independent of the individual EMA line toggles; first flips only from bar 50 on (slowest-EMA warmup).
+        # 100 EMA is deliberately OMITTED (user 2026-08-27). VALIDITY GATE (user 2026-08-27, fixed same day):
+        # the line prints at the FIRST bar of the regime where BOTH the EMA20 and EMA50 HL deltas (the
+        # ema_ext readout's signed net at that bar) MATCH its bias — GREEN (long) needs both POSITIVE, RED
+        # (short) both NEGATIVE. If the deltas don't match at the cross itself, the line appears LATER, the
+        # bar they first do (user report: cross first, deltas confirmed after -> line was missing). One line
+        # per regime at most. Independent of the EMA line toggles; from bar 50 on (slowest-EMA warmup).
         _scb = self.menu.sub_checks.get("ema_stack")
         if _scb is None or not _scb.isChecked() or m < 51:
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
@@ -6693,8 +6695,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if _d20 is None or _d50 is None:
                     return False
                 return (_d20 > 0.0 and _d50 > 0.0) if _up else (_d20 < 0.0 and _d50 < 0.0)
-            _g = [int(_i) for _i in range(50, m) if _bull[_i] and not _bull[_i - 1] and _valid(_i, True)]
-            _r = [int(_i) for _i in range(50, m) if _bear[_i] and not _bear[_i - 1] and _valid(_i, False)]
+            _g = []; _r = []
+            _state = "g" if _bull[50] else ("r" if _bear[50] else None)   # regime already running at warmup end
+            _pend = _state is not None
+            for _i in range(50, m):
+                if _bull[_i] and not _bull[_i - 1]:           # up-cross -> new long regime, validation pending
+                    _state = "g"; _pend = True
+                elif _bear[_i] and not _bear[_i - 1]:         # down-cross -> new short regime, validation pending
+                    _state = "r"; _pend = True
+                if _pend and _state == "g" and _bull[_i] and _valid(_i, True):
+                    _g.append(int(_i)); _pend = False         # first bar of the regime with both deltas positive
+                elif _pend and _state == "r" and _bear[_i] and _valid(_i, False):
+                    _r.append(int(_i)); _pend = False         # first bar with both deltas negative
             self._ema_stk_cache = (_ssig, _g, _r)
         _, _g, _r = self._ema_stk_cache
         for _kind, _xs2, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
