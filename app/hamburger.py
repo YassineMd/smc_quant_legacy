@@ -480,10 +480,17 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("ema20", "20 EMA Line"),                 # 20-period EMA of closes on the chart series (amber line; live-extended on the forming bar)
                            ("ema50", "50 EMA Line"),                 # 50-period EMA (blue line; same engine)
                            ("ema100", "100 EMA Line"),               # 100-period EMA (purple line; same engine)
-                           ("ema_ext", "EMA High/Low Lines"),        # per toggled EMA: dotted lines at the highest high above / lowest low below the EMA within its own p-bar window
+                           ("ema_ext", "High/Low Lines + readout"),  # per toggled EMA: dotted extreme lines in its p-bar window + dist-to-high/low + HL delta text at the live edge
                            ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:
-            cb = QtWidgets.QCheckBox(label)
+            _ema_grp = key in ("ema20", "ema50", "ema100", "ema_ext")
+            if key == "ema20":                       # group header — the EMA entries render as indented sub-toggles
+                _hdr = QtWidgets.QLabel("EMA")
+                _hdr.setStyleSheet("color:#8b93a3; font-size:10px; padding-left:2px; padding-top:3px;")
+                self.sub_section.addWidget(_hdr)
+            cb = QtWidgets.QCheckBox(("· " + label) if _ema_grp else label)
+            if _ema_grp:
+                cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")
             # First-launch DEFAULT (before connect): Vector Drawing ON, OB/Iceberg Alert OFF.
             # Persistence (terminal saved toggles) overrides this on every later launch.
             cb.setChecked(key == "drawing")

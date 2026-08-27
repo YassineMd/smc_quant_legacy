@@ -1443,6 +1443,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_cache = {}                                     # key -> (sig, closed-bar EMA array) — per bar close
         self._ema_ext_items = {}                                 # 'ema_ext' extremes: (key, 'hi'|'lo') -> dotted line
         self._ema_ext_cache = {}                                 # key -> (sig, hi_p, hi_i, lo_p, lo_i) — per bar close
+        self._ema_ext_lbls = {}                                  # key -> TextItem readout at the live edge (dist hi/lo + HL delta)
+        self._ema_ext_lblsig = {}                                # key -> sig of the last-rendered readout text
         self._lwc_sph = None; self._lwc_sig = None               # LW FAILED PUSH gold ♦ (m10_longwick_combo, no walls)
         self._lwr_sph = None; self._lwr_sig = None               # LW WICK RECLAIM cyan/magenta ♦ (m10_longwick_reclaim)
         self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
@@ -2555,20 +2557,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _toggle_subwidget(self, key: str, on: bool) -> None:
         if key in ("ema20", "ema50", "ema100", "ema_ext"):
             if key == "ema_ext":
-                self._ema_ext_cache.clear()          # extremes toggled -> recompute next frame
+                self._ema_ext_cache.clear(); self._ema_ext_lblsig.clear()   # extremes toggled -> recompute next frame
                 if not on:
                     for _it in self._ema_ext_items.values():
                         _it.setVisible(False)
+                    for _it in self._ema_ext_lbls.values():
+                        _it.setVisible(False)
             else:
                 self._ema_cache.pop(key, None)       # EMA toggled -> recompute next frame
-                self._ema_ext_cache.pop(key, None)
+                self._ema_ext_cache.pop(key, None); self._ema_ext_lblsig.pop(key, None)
                 if not on:
                     if key in self._ema_items:
                         self._ema_items[key].setVisible(False)
-                    for _sd in ("hi", "lo"):         # ... its extreme lines ride the parent EMA
+                    for _sd in ("hi", "lo"):         # ... its extreme lines + readout ride the parent EMA
                         _it = self._ema_ext_items.get((key, _sd))
                         if _it is not None:
                             _it.setVisible(False)
+                    _lb = self._ema_ext_lbls.get(key)
+                    if _lb is not None:
+                        _lb.setVisible(False)
             self._last_scanner_sig = None            # force a repaint so the lines appear/vanish at once
         elif key == "drawing":
             self.drawbar.setVisible(on)
@@ -6537,6 +6544,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _it2 = self._ema_ext_items.get((key, _sd))
                     if _it2 is not None:
                         _it2.setVisible(False)
+                _lb2 = self._ema_ext_lbls.get(key)
+                if _lb2 is not None:
+                    _lb2.setVisible(False)
                 continue
             _sig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source)
             _hit = self._ema_cache.get(key)
@@ -6574,6 +6584,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _it2 = self._ema_ext_items.get((key, _sd))
                     if _it2 is not None:
                         _it2.setVisible(False)
+                _lb2 = self._ema_ext_lbls.get(key)
+                if _lb2 is not None:
+                    _lb2.setVisible(False)
                 continue
             _hit2 = self._ema_ext_cache.get(key)
             if _hit2 is None or _hit2[0] != _sig:
@@ -6601,6 +6614,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._ema_ext_items[(key, _sd)] = _it2
                 _it2.setData([float(x[_iv]), float(x[n - 1])], [_pv, _pv])
                 _it2.setVisible(True)
+            # readout in front of the EMA line's live end: EMA->high dist, EMA->low dist, HL delta (% of the
+            # closed EMA value; a missing side shows an em-dash). Text re-renders once per bar close only.
+            _lb2 = self._ema_ext_lbls.get(key)
+            if hi_p is None and lo_p is None:
+                if _lb2 is not None:
+                    _lb2.setVisible(False)
+            else:
+                if _lb2 is None:
+                    _lb2 = pg.TextItem(anchor=(0, 0.5)); _lb2.setZValue(13)
+                    _lb2.setColor(pg.mkColor(*rgb, 235))
+                    self.plot.addItem(_lb2, ignoreBounds=True)
+                    self._ema_ext_lbls[key] = _lb2
+                if self._ema_ext_lblsig.get(key) != _sig:
+                    e0 = float(y[m - 1])
+                    up = "↑%.2f%%" % ((hi_p - e0) / e0 * 100.0) if hi_p is not None else "↑—"
+                    dn = "↓%.2f%%" % ((e0 - lo_p) / e0 * 100.0) if lo_p is not None else "↓—"
+                    dl = ("Δ%.2f%%" % ((hi_p - lo_p) / e0 * 100.0)
+                          if (hi_p is not None and lo_p is not None) else "Δ—")
+                    _lb2.setText("%s  %s  %s" % (up, dn, dl))
+                    self._ema_ext_lblsig[key] = _sig
+                _lb2.setPos(float(x[n - 1]) + 0.8, float(ys[-1]))
+                _lb2.setVisible(True)
 
     def _draw_reward(self, buckets, vx0, vy0) -> None:
         """REWARD / EFFORT read — BOTTOM-LEFT HUD (m10_reward). For each window (yesterday / today / last 30 candles /
@@ -15621,6 +15656,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _it in self._ema_items.values():
                 _it.setVisible(False)
             for _it in self._ema_ext_items.values():
+                _it.setVisible(False)
+            for _it in self._ema_ext_lbls.values():
                 _it.setVisible(False)
         try:
             self._draw_reversal_point(buckets, x, vx0, vx1, vy0, vy1)  # Reversal Point triangles, ALL tf (m10_reversal)
