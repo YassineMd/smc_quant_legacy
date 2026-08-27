@@ -1,0 +1,48 @@
+EMA STACK x RADAR RUNNER 30m BUCKET — canonical harness | long: C>E20>E50>E100 / short mirror | pre-registered
+
+========================================================================================================================
+RECON 2025-01 .. 2026-06 (per-year split in rows)
+  ALL          0.2% net  n=5285  W4378  L907   win  82.8%  avg -0.039%  R -0.040  DD  85.3%  prop   0.0% | 25 -0.042% 26 -0.032%
+  ALL          0.4% net  n=4575  W3374  L1201  win  73.7%  avg -0.006%  R -0.008  DD  36.0%  prop  11.1% | 25 -0.009% 26 -0.000%
+  ALL          RR 1:0.5  n=4361  W3134  L1227  win  71.9%  avg +0.002%  R -0.007  DD  36.2%  prop  12.6% | 25 +0.000% 26 +0.005%
+  ALL          RR 1:1    n=3055  W1642  L1413  win  53.7%  avg -0.006%  R -0.014  DD  44.5%  prop  13.4% | 25 -0.016% 26 +0.015%
+  STACK        0.2% net  n=1567  W1305  L262   win  83.3%  avg -0.037%  R -0.038  DD  27.2%  prop   0.0% | 25 -0.035% 26 -0.043%
+  STACK        0.4% net  n=1425  W1068  L357   win  74.9%  avg +0.002%  R +0.003  DD  12.4%  prop  22.2% | 25 -0.000% 26 +0.007%
+  STACK        RR 1:0.5  n=1405  W1017  L388   win  72.4%  avg +0.009%  R +0.003  DD  15.0%  prop  22.0% | 25 +0.008% 26 +0.012%
+  STACK        RR 1:1    n=1106  W620   L486   win  56.1%  avg +0.048%  R +0.034  DD  15.5%  prop  39.4% | 25 +0.037% 26 +0.070%
+  AGAINST-STK  0.2% net  n=1478  W1220  L258   win  82.5%  avg -0.030%  R -0.033  DD  20.4%  prop   0.2% | 25 -0.026% 26 -0.040%
+  AGAINST-STK  0.4% net  n=1331  W958   L373   win  72.0%  avg -0.012%  R -0.012  DD  12.6%  prop   9.7% | 25 -0.009% 26 -0.017%
+  AGAINST-STK  RR 1:0.5  n=1323  W943   L380   win  71.3%  avg -0.011%  R -0.021  DD  13.7%  prop   4.0% | 25 -0.005% 26 -0.026%
+  AGAINST-STK  RR 1:1    n=1115  W569   L546   win  51.0%  avg -0.072%  R -0.075  DD  36.1%  prop   1.2% | 25 -0.084% 26 -0.044%
+  STACK-LONG   0.2% net  n=642   W533   L109   win  83.0%  avg -0.031%  R -0.037  DD  12.9%  prop   0.0% | 25 +0.003% 26 -0.091%
+  STACK-LONG   0.4% net  n=579   W423   L156   win  73.1%  avg -0.013%  R -0.012  DD   8.2%  prop   3.3% | 25 +0.006% 26 -0.047%
+  STACK-LONG   RR 1:0.5  n=577   W414   L163   win  71.8%  avg +0.001%  R -0.010  DD   8.9%  prop   3.6% | 25 +0.031% 26 -0.053%
+  STACK-LONG   RR 1:1    n=463   W249   L214   win  53.8%  avg +0.008%  R -0.015  DD  10.7%  prop   9.5% | 25 +0.042% 26 -0.056%
+  STACK-SHORT  0.2% net  n=925   W772   L153   win  83.5%  avg -0.042%  R -0.039  DD  17.1%  prop   0.0% | 25 -0.060% 26 -0.008%
+  STACK-SHORT  0.4% net  n=846   W645   L201   win  76.2%  avg +0.012%  R +0.014  DD   7.4%  prop  25.1% | 25 -0.004% 26 +0.047%
+  STACK-SHORT  RR 1:0.5  n=828   W603   L225   win  72.8%  avg +0.015%  R +0.012  DD  10.2%  prop  24.1% | 25 -0.007% 26 +0.062%
+  STACK-SHORT  RR 1:1    n=643   W371   L272   win  57.7%  avg +0.077%  R +0.070  DD  13.9%  prop  59.4% | 25 +0.033% 26 +0.170%
+========================================================================================================================
+DAEMON 30m (TRUE OOS, 2026-06-20 ..)
+  ALL          0.2% net  n=459   W359   L100   win  78.2%  avg -0.040%  R -0.057  DD  12.3%  prop   0.0% | 25 +nan% 26 -0.040%
+  ALL          0.4% net  n=337   W223   L114   win  66.2%  avg -0.031%  R -0.043  DD   8.3%  prop   0.8% | 25 +nan% 26 -0.031%
+  ALL          RR 1:0.5  n=374   W259   L115   win  69.3%  avg -0.065%  R -0.079  DD  13.0%  prop   0.0% | 25 +nan% 26 -0.065%
+  ALL          RR 1:1    n=260   W140   L120   win  53.8%  avg -0.041%  R -0.047  DD   8.4%  prop   3.9% | 25 +nan% 26 -0.041%
+  STACK        0.2% net  n=123   W97    L26    win  78.9%  avg -0.030%  R -0.048  DD   4.5%  prop   0.1% | 25 +nan% 26 -0.030%
+  STACK        0.4% net  n=100   W61    L39    win  61.0%  avg -0.093%  R -0.123  DD   4.7%  prop   0.0% | 25 +nan% 26 -0.093%
+  STACK        RR 1:0.5  n=108   W73    L35    win  67.6%  avg -0.087%  R -0.109  DD   4.9%  prop   0.0% | 25 +nan% 26 -0.087%
+  STACK        RR 1:1    n=87    W43    L44    win  49.4%  avg -0.127%  R -0.140  DD   4.4%  prop   0.0% | 25 +nan% 26 -0.127%
+  AGAINST-STK  0.2% net  n=153   W125   L28    win  81.7%  avg +0.006%  R +0.001  DD   3.2%  prop  17.1% | 25 +nan% 26 +0.006%
+  AGAINST-STK  0.4% net  n=121   W83    L38    win  68.6%  avg +0.014%  R +0.020  DD   3.8%  prop  37.3% | 25 +nan% 26 +0.014%
+  AGAINST-STK  RR 1:0.5  n=136   W98    L38    win  72.1%  avg -0.038%  R -0.040  DD   5.3%  prop   0.8% | 25 +nan% 26 -0.038%
+  AGAINST-STK  RR 1:1    n=104   W65    L39    win  62.5%  avg +0.073%  R +0.122  DD   4.3%  prop  90.0% | 25 +nan% 26 +0.073%
+  STACK-LONG   0.2% net  n=60    W45    L15    win  75.0%  avg -0.059%  R -0.116  DD   4.0%  prop   0.0% | 25 +nan% 26 -0.059%
+  STACK-LONG   0.4% net  n=52    W33    L19    win  63.5%  avg -0.045%  R -0.113  DD   2.7%  prop   0.0% | 25 +nan% 26 -0.045%
+  STACK-LONG   RR 1:0.5  n=52    W34    L18    win  65.4%  avg -0.082%  R -0.135  DD   3.3%  prop   0.0% | 25 +nan% 26 -0.082%
+  STACK-LONG   RR 1:1    n=40    W21    L19    win  52.5%  avg -0.019%  R -0.072  DD   2.3%  prop   0.3% | 25 +nan% 26 -0.019%
+  STACK-SHORT  0.2% net  n=65    W54    L11    win  83.1%  avg +0.004%  R +0.023  DD   2.0%  prop  19.2% | 25 +nan% 26 +0.004%
+  STACK-SHORT  0.4% net  n=50    W30    L20    win  60.0%  avg -0.125%  R -0.110  DD   3.3%  prop   0.0% | 25 +nan% 26 -0.125%
+  STACK-SHORT  RR 1:0.5  n=58    W41    L17    win  70.7%  avg -0.077%  R -0.067  DD   2.9%  prop   0.1% | 25 +nan% 26 -0.077%
+  STACK-SHORT  RR 1:1    n=48    W23    L25    win  47.9%  avg -0.195%  R -0.174  DD   3.8%  prop   0.0% | 25 +nan% 26 -0.195%
+
+done in 312s
