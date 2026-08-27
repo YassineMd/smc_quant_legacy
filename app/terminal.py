@@ -1450,7 +1450,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_lvl_items = {}                                 # 'ema_trendlvl': 'hi' red / 'lo' green solid hlines
         self._ema_lvl_cache = None                               # (sig, lo_info, hi_info) — per bar close
         self._ema_vp_item = None                                 # 'ema_trendvp': right-side VP of the extreme-lines span
-        self._ema_vp_cache = None                                # (sig, bin centers, bin vols, bin height)
+        self._ema_vp_cache = None                                # (sig, centers, vols, hbin, w0, VAL, VAH)
+        self._ema_vp_va = {}                                     # 'vah'/'val' dashed 70%-value-area lines
         self._lwc_sph = None; self._lwc_sig = None               # LW FAILED PUSH gold ♦ (m10_longwick_combo, no walls)
         self._lwr_sph = None; self._lwr_sig = None               # LW WICK RECLAIM cyan/magenta ♦ (m10_longwick_reclaim)
         self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
@@ -2574,8 +2575,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _it.setVisible(False)
             elif key == "ema_trendvp":
                 self._ema_vp_cache = None            # trend VP toggled -> recompute next frame
-                if not on and self._ema_vp_item is not None:
-                    self._ema_vp_item.setVisible(False)
+                if not on:
+                    self._hide_ema_vp()
             elif key == "ema_ext":
                 self._ema_ext_cache.clear(); self._ema_ext_lblsig.clear()   # extremes toggled -> recompute next frame
                 if not on:
@@ -6540,6 +6541,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             % (gray, dim, dim, ac, r["astate"], dim, val, poc, vah,
                dim, bc, arrow, r["bias"], dim, r["cs"], r["cr"], r["ms"], r["mr"], nc, nd))
 
+    def _hide_ema_vp(self) -> None:
+        if self._ema_vp_item is not None:
+            self._ema_vp_item.setVisible(False)
+        for _it in self._ema_vp_va.values():
+            _it.setVisible(False)
+
     _EMAS = (("ema20", 20, (250, 180, 60)),                   # amber
              ("ema50", 50, (90, 170, 255)),                   # blue
              ("ema100", 100, (200, 120, 255)))                # purple
@@ -6681,8 +6688,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _pl.setVisible(False)
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
-            if self._ema_vp_item is not None:
-                self._ema_vp_item.setVisible(False)
+            self._hide_ema_vp()
             return
         _ssig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source)
         if self._ema_stk_cache is None or self._ema_stk_cache[0] != _ssig:
@@ -6761,8 +6767,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not _lvl_on and not _vp_on:
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
-            if self._ema_vp_item is not None:
-                self._ema_vp_item.setVisible(False)
+            self._hide_ema_vp()
         else:
             if self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig:
                 _seq = sorted([(int(_i2), "g") for _i2 in _g] + [(int(_i2), "r") for _i2 in _r])
@@ -6834,9 +6839,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _b3 = "BEARISH"
                     if _b3 is not None and _b3 != _curb:
                         _prevbias = _curb; _curb = _b3
-                self._ema_lvl_cache = (_ssig, _lo_info, _hi_info, _lop, _hip, _bias, _prevbias)
-            _, _lo_info, _hi_info, _lop, _hip, _bias, _prevbias = self._ema_lvl_cache
-            _vp_hi, _vp_lo = _hi_info, _lo_info               # VP span anchors, kept before the display gate
+                # VP SPAN (user 2026-08-27): the LAST TWO FINISHED trends only — older segment's opening
+                # vline .. newer segment's closing vline; the ONGOING trend is excluded, so the profile
+                # stays FIXED until a segment completes.
+                _seg5 = [_s5 for _s5 in ((_bulls[-1] if _bulls else None), (_bears[-1] if _bears else None))
+                         if _s5 is not None]
+                _vp_span = (min(_s5[0] for _s5 in _seg5), max(_s5[1] for _s5 in _seg5)) if _seg5 else None
+                self._ema_lvl_cache = (_ssig, _lo_info, _hi_info, _lop, _hip, _bias, _prevbias, _vp_span)
+            _, _lo_info, _hi_info, _lop, _hip, _bias, _prevbias, _vp_span = self._ema_lvl_cache
             if not _lvl_on:                                   # levels computed only for the VP -> lines/tags hidden
                 _lo_info = _hi_info = _lop = _hip = None; _bias = None
             for _sd2, _info, _rgb3, _al3, _w3 in (("lo", _lo_info, (40, 230, 120), 235, 2.2),
@@ -6901,18 +6911,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # footprint 'levels' when present, else the bar's volume spread uniformly over its range. Bins
             # cached per bar close; only the viewport mapping is per-frame. POC bin amber, z behind candles.
             if not _vp_on:
-                if self._ema_vp_item is not None:
-                    self._ema_vp_item.setVisible(False)
+                self._hide_ema_vp()
             else:
-                _anch = [_a4[0] for _a4 in (_vp_hi, _vp_lo) if _a4 is not None]
-                if not _anch:
-                    if self._ema_vp_item is not None:
-                        self._ema_vp_item.setVisible(False)
+                if _vp_span is None:
+                    self._hide_ema_vp()
                 else:
                     if self._ema_vp_cache is None or self._ema_vp_cache[0] != _ssig:
-                        _w0 = min(_anch); _NB = 40
+                        _sp0, _sp1 = _vp_span; _NB = 40
                         _plo = float("inf"); _phi = 0.0
-                        for _j4 in range(_w0, m):
+                        for _j4 in range(_sp0, _sp1 + 1):
                             _h4 = float(buckets[_j4].get("high", 0.0) or 0.0)
                             _l4 = float(buckets[_j4].get("low", 0.0) or 0.0)
                             if _h4 > 0:
@@ -6923,7 +6930,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         if _phi > _plo:
                             _hb = (_phi - _plo) / _NB
                             _cen = _plo + (np.arange(_NB) + 0.5) * _hb
-                            for _j4 in range(_w0, m):
+                            for _j4 in range(_sp0, _sp1 + 1):
                                 _b4 = buckets[_j4]
                                 _lvs = _b4.get("levels") or {}
                                 if _lvs:
@@ -6955,12 +6962,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                     _j0 = max(0, min(_NB - 1, int((_l4 - _plo) / _hb)))
                                     _j1 = max(0, min(_NB - 1, int((_h4 - _plo) / _hb)))
                                     _vols[_j0:_j1 + 1] += _v4 / (_j1 - _j0 + 1)
-                        self._ema_vp_cache = (_ssig, _cen, _vols, _hb)
-                    _, _cen, _vols, _hb = self._ema_vp_cache
+                        # 70% VALUE AREA around the POC (standard greedy expansion): VAL/VAH = outer edges
+                        _valp = _vahp = None
+                        _tot5 = float(_vols.sum())
+                        if _cen is not None and _tot5 > 0:
+                            _p5 = int(np.argmax(_vols)); _a5 = _b5v = _p5
+                            _acc5 = float(_vols[_p5])
+                            while _acc5 < 0.70 * _tot5 and (_a5 > 0 or _b5v < _NB - 1):
+                                _up5 = float(_vols[_b5v + 1]) if _b5v < _NB - 1 else -1.0
+                                _dn5 = float(_vols[_a5 - 1]) if _a5 > 0 else -1.0
+                                if _up5 >= _dn5:
+                                    _b5v += 1; _acc5 += max(0.0, _up5)
+                                else:
+                                    _a5 -= 1; _acc5 += max(0.0, _dn5)
+                            _valp = _plo + _a5 * _hb
+                            _vahp = _plo + (_b5v + 1) * _hb
+                        self._ema_vp_cache = (_ssig, _cen, _vols, _hb, _sp0, _sp1, _valp, _vahp)
+                    _, _cen, _vols, _hb, _sp0c, _sp1c, _valp, _vahp = self._ema_vp_cache
                     _vmax = float(_vols.max()) if _cen is not None and len(_vols) else 0.0
                     if _cen is None or _vmax <= 0:
-                        if self._ema_vp_item is not None:
-                            self._ema_vp_item.setVisible(False)
+                        self._hide_ema_vp()
                     else:
                         (_vx0v, _vx1v), _ = self.vb.viewRange()
                         _wid = _vols / _vmax * (0.16 * (_vx1v - _vx0v))
@@ -6975,6 +6996,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         self._ema_vp_item.setOpts(x0=_vx1v - _wid, x1=np.full(len(_vols), _vx1v),
                                                   y=_cen, height=_hb * 0.92, pen=None, brushes=_brs)
                         self._ema_vp_item.setVisible(True)
+                        # VAH / VAL: dashed lines across the profile's window (anchor vline -> live candle)
+                        for _k6, _pv6 in (("vah", _vahp), ("val", _valp)):
+                            _it6 = self._ema_vp_va.get(_k6)
+                            if _pv6 is None:
+                                if _it6 is not None:
+                                    _it6.setVisible(False)
+                                continue
+                            if _it6 is None:
+                                _it6 = pg.PlotCurveItem()
+                                _pn6 = pg.mkPen(170, 185, 210, 200, width=1.1, style=QtCore.Qt.DashLine)
+                                _pn6.setCosmetic(True)
+                                _it6.setPen(_pn6); _it6.setZValue(14)
+                                self.plot.addItem(_it6, ignoreBounds=True)
+                                self._ema_vp_va[_k6] = _it6
+                            _it6.setData([float(x[_sp0c]), float(x[_sp1c])], [_pv6, _pv6])
+                            _it6.setVisible(True)
 
     def _draw_reward(self, buckets, vx0, vy0) -> None:
         """REWARD / EFFORT read — BOTTOM-LEFT HUD (m10_reward). For each window (yesterday / today / last 30 candles /
@@ -16037,8 +16074,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _pl.setVisible(False)
             for _it in self._ema_lvl_items.values():
                 _it.setVisible(False)
-            if self._ema_vp_item is not None:
-                self._ema_vp_item.setVisible(False)
+            self._hide_ema_vp()
         try:
             self._draw_reversal_point(buckets, x, vx0, vx1, vy0, vy1)  # Reversal Point triangles, ALL tf (m10_reversal)
         except Exception:
