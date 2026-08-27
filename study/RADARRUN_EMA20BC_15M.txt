@@ -1,0 +1,74 @@
+EMA20 + BREAKOUT-CLOSE x RADAR RUNNER 15m BUCKET — canonical harness | long: C>E20 AND C>prev high / short mirror | pre-registered
+
+    daemon 15m chunk 1/17  badges 66
+    daemon 15m chunk 2/17  badges 161
+    daemon 15m chunk 3/17  badges 234
+    daemon 15m chunk 4/17  badges 331
+    daemon 15m chunk 5/17  badges 470
+    daemon 15m chunk 6/17  badges 582
+    daemon 15m chunk 7/17  badges 698
+    daemon 15m chunk 8/17  badges 815
+    daemon 15m chunk 9/17  badges 951
+    daemon 15m chunk 10/17  badges 1083
+    daemon 15m chunk 11/17  badges 1209
+    daemon 15m chunk 12/17  badges 1329
+    daemon 15m chunk 13/17  badges 1502
+    daemon 15m chunk 14/17  badges 1632
+    daemon 15m chunk 15/17  badges 1808
+    daemon 15m chunk 16/17  badges 1933
+    daemon 15m chunk 17/17  badges 1950
+  daemon 15m union: 1950 fires  (345s)
+========================================================================================================================
+RECON 2025-01 .. 2026-06 (per-year split in rows)
+  ALL        0.2% net  n=12229 W9517  L2712  win  77.8%  avg -0.048%  R -0.067  DD 330.0%  prop   0.0% | 25 -0.053% 26 -0.036%
+  ALL        0.4% net  n=9232  W6159  L3073  win  66.7%  avg -0.033%  R -0.046  DD 175.5%  prop   2.1% | 25 -0.038% 26 -0.022%
+  ALL        RR 1:0.5  n=10277 W7234  L3043  win  70.4%  avg -0.039%  R -0.060  DD 248.5%  prop   0.3% | 25 -0.040% 26 -0.035%
+  ALL        RR 1:1    n=6622  W3562  L3060  win  53.8%  avg -0.026%  R -0.045  DD 123.7%  prop   5.9% | 25 -0.020% 26 -0.042%
+  EMA-ONLY   0.2% net  n=7491  W5872  L1619  win  78.4%  avg -0.045%  R -0.062  DD 188.7%  prop   0.0% | 25 -0.051% 26 -0.032%
+  EMA-ONLY   0.4% net  n=5945  W4003  L1942  win  67.3%  avg -0.029%  R -0.040  DD  96.2%  prop   2.6% | 25 -0.035% 26 -0.016%
+  EMA-ONLY   RR 1:0.5  n=6536  W4660  L1876  win  71.3%  avg -0.028%  R -0.044  DD 118.9%  prop   0.9% | 25 -0.031% 26 -0.022%
+  EMA-ONLY   RR 1:1    n=4636  W2493  L2143  win  53.8%  avg -0.024%  R -0.044  DD  90.3%  prop   5.5% | 25 -0.020% 26 -0.032%
+  BC-ONLY    0.2% net  n=8690  W6806  L1884  win  78.3%  avg -0.050%  R -0.066  DD 231.4%  prop   0.0% | 25 -0.055% 26 -0.041%
+  BC-ONLY    0.4% net  n=6845  W4611  L2234  win  67.4%  avg -0.036%  R -0.047  DD 133.6%  prop   1.6% | 25 -0.040% 26 -0.027%
+  BC-ONLY    RR 1:0.5  n=7470  W5246  L2224  win  70.2%  avg -0.040%  R -0.057  DD 176.0%  prop   0.3% | 25 -0.042% 26 -0.035%
+  BC-ONLY    RR 1:1    n=5087  W2731  L2356  win  53.7%  avg -0.027%  R -0.041  DD  93.3%  prop   6.7% | 25 -0.020% 26 -0.042%
+  EMA+BC     0.2% net  n=5906  W4627  L1279  win  78.3%  avg -0.051%  R -0.067  DD 160.0%  prop   0.0% | 25 -0.057% 26 -0.040%
+  EMA+BC     0.4% net  n=4813  W3260  L1553  win  67.7%  avg -0.033%  R -0.041  DD  82.9%  prop   1.7% | 25 -0.032% 26 -0.035%
+  EMA+BC     RR 1:0.5  n=5180  W3654  L1526  win  70.5%  avg -0.035%  R -0.051  DD 109.0%  prop   0.4% | 25 -0.035% 26 -0.034%
+  EMA+BC     RR 1:1    n=3828  W2036  L1792  win  53.2%  avg -0.030%  R -0.051  DD  91.1%  prop   4.5% | 25 -0.022% 26 -0.046%
+  E+B-LONG   0.2% net  n=3079  W2345  L734   win  76.2%  avg -0.067%  R -0.096  DD 118.1%  prop   0.0% | 25 -0.062% 26 -0.074%
+  E+B-LONG   0.4% net  n=2672  W1733  L939   win  64.9%  avg -0.058%  R -0.084  DD  90.7%  prop   0.1% | 25 -0.041% 26 -0.089%
+  E+B-LONG   RR 1:0.5  n=2841  W1947  L894   win  68.5%  avg -0.056%  R -0.086  DD  98.3%  prop   0.0% | 25 -0.039% 26 -0.085%
+  E+B-LONG   RR 1:1    n=2286  W1162  L1124  win  50.8%  avg -0.065%  R -0.103  DD  95.4%  prop   0.6% | 25 -0.037% 26 -0.115%
+  E+B-SHORT  0.2% net  n=3550  W2811  L739   win  79.2%  avg -0.042%  R -0.053  DD  77.9%  prop   0.0% | 25 -0.051% 26 -0.024%
+  E+B-SHORT  0.4% net  n=2984  W2033  L951   win  68.1%  avg -0.025%  R -0.029  DD  49.9%  prop   5.2% | 25 -0.031% 26 -0.012%
+  E+B-SHORT  RR 1:0.5  n=3227  W2317  L910   win  71.8%  avg -0.025%  R -0.034  DD  58.3%  prop   2.1% | 25 -0.033% 26 -0.008%
+  E+B-SHORT  RR 1:1    n=2538  W1379  L1159  win  54.3%  avg -0.016%  R -0.029  DD  46.9%  prop   8.8% | 25 -0.019% 26 -0.010%
+========================================================================================================================
+DAEMON 15m (TRUE OOS, 2026-06-20 ..)
+  ALL        0.2% net  n=837   W602   L235   win  71.9%  avg -0.052%  R -0.116  DD  39.1%  prop   0.0% | 25 +nan% 26 -0.052%
+  ALL        0.4% net  n=583   W334   L249   win  57.3%  avg -0.063%  R -0.123  DD  30.6%  prop   0.1% | 25 +nan% 26 -0.063%
+  ALL        RR 1:0.5  n=768   W531   L237   win  69.1%  avg -0.060%  R -0.122  DD  37.2%  prop   0.0% | 25 +nan% 26 -0.060%
+  ALL        RR 1:1    n=519   W286   L233   win  55.1%  avg -0.026%  R -0.069  DD  19.1%  prop   2.3% | 25 +nan% 26 -0.026%
+  EMA-ONLY   0.2% net  n=522   W371   L151   win  71.1%  avg -0.058%  R -0.129  DD  26.8%  prop   0.0% | 25 +nan% 26 -0.058%
+  EMA-ONLY   0.4% net  n=393   W228   L165   win  58.0%  avg -0.059%  R -0.119  DD  19.0%  prop   0.1% | 25 +nan% 26 -0.059%
+  EMA-ONLY   RR 1:0.5  n=485   W329   L156   win  67.8%  avg -0.075%  R -0.143  DD  27.7%  prop   0.0% | 25 +nan% 26 -0.075%
+  EMA-ONLY   RR 1:1    n=355   W173   L182   win  48.7%  avg -0.112%  R -0.197  DD  28.2%  prop   0.0% | 25 +nan% 26 -0.112%
+  BC-ONLY    0.2% net  n=614   W444   L170   win  72.3%  avg -0.057%  R -0.113  DD  27.8%  prop   0.0% | 25 +nan% 26 -0.057%
+  BC-ONLY    0.4% net  n=448   W258   L190   win  57.6%  avg -0.072%  R -0.131  DD  24.9%  prop   0.0% | 25 +nan% 26 -0.072%
+  BC-ONLY    RR 1:0.5  n=560   W390   L170   win  69.6%  avg -0.063%  R -0.107  DD  24.2%  prop   0.0% | 25 +nan% 26 -0.063%
+  BC-ONLY    RR 1:1    n=393   W210   L183   win  53.4%  avg -0.051%  R -0.095  DD  16.5%  prop   1.3% | 25 +nan% 26 -0.051%
+  EMA+BC     0.2% net  n=417   W301   L116   win  72.2%  avg -0.060%  R -0.111  DD  18.6%  prop   0.0% | 25 +nan% 26 -0.060%
+  EMA+BC     0.4% net  n=317   W188   L129   win  59.3%  avg -0.063%  R -0.100  DD  13.3%  prop   0.2% | 25 +nan% 26 -0.063%
+  EMA+BC     RR 1:0.5  n=386   W262   L124   win  67.9%  avg -0.085%  R -0.135  DD  20.9%  prop   0.0% | 25 +nan% 26 -0.085%
+  EMA+BC     RR 1:1    n=283   W145   L138   win  51.2%  avg -0.099%  R -0.135  DD  16.4%  prop   0.2% | 25 +nan% 26 -0.099%
+  E+B-LONG   0.2% net  n=226   W162   L64    win  71.7%  avg -0.065%  R -0.104  DD   9.5%  prop   0.0% | 25 +nan% 26 -0.065%
+  E+B-LONG   0.4% net  n=188   W113   L75    win  60.1%  avg -0.048%  R -0.059  DD   6.2%  prop   2.0% | 25 +nan% 26 -0.048%
+  E+B-LONG   RR 1:0.5  n=215   W146   L69    win  67.9%  avg -0.087%  R -0.138  DD  12.0%  prop   0.0% | 25 +nan% 26 -0.087%
+  E+B-LONG   RR 1:1    n=179   W94    L85    win  52.5%  avg -0.088%  R -0.113  DD   8.7%  prop   0.3% | 25 +nan% 26 -0.088%
+  E+B-SHORT  0.2% net  n=260   W196   L64    win  75.4%  avg -0.035%  R -0.070  DD   8.6%  prop   0.0% | 25 +nan% 26 -0.035%
+  E+B-SHORT  0.4% net  n=212   W131   L81    win  61.8%  avg -0.035%  R -0.064  DD   7.0%  prop   0.9% | 25 +nan% 26 -0.035%
+  E+B-SHORT  RR 1:0.5  n=242   W172   L70    win  71.1%  avg -0.054%  R -0.080  DD   8.9%  prop   0.0% | 25 +nan% 26 -0.054%
+  E+B-SHORT  RR 1:1    n=189   W103   L86    win  54.5%  avg -0.048%  R -0.063  DD   7.4%  prop   2.6% | 25 +nan% 26 -0.048%
+
+done in 584s
