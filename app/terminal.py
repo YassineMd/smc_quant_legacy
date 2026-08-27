@@ -6649,18 +6649,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _lb2.setPos(float(x[n - 1]) + 0.8, float(ys[-1]))
                 _lb2.setVisible(True)
         # 'Stack Flip Lines' (sub-toggle 'ema_stack'): a dashed VERTICAL line (day-separator style) at every
-        # closed bar where the EMA stack COMPLETES an alignment — GREEN when 20>50>100 begins, RED when
-        # 100>50>20 begins (transitions only, so the lines mark the trend CHANGE, not the whole regime).
-        # Independent of the individual EMA line toggles; first flips only from bar 100 on (full warmup).
+        # closed bar where the 20/50 EMA relation FLIPS — GREEN when EMA20 crosses above EMA50, RED when it
+        # crosses below (transitions only, so the lines mark the trend CHANGE, not the whole regime). The
+        # 100 EMA is deliberately OMITTED (user 2026-08-27). Independent of the individual EMA line toggles;
+        # first flips only from bar 50 on (slowest-EMA warmup).
         _scb = self.menu.sub_checks.get("ema_stack")
-        if _scb is None or not _scb.isChecked() or m < 101:
+        if _scb is None or not _scb.isChecked() or m < 51:
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
             return
         _ssig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source)
         if self._ema_stk_cache is None or self._ema_stk_cache[0] != _ssig:
             _E = {}
-            for _p in (20, 50, 100):
+            for _p in (20, 50):
                 _a = 2.0 / (_p + 1.0)
                 _y = np.empty(m)
                 _prev = float(buckets[0].get("close", buckets[0].get("close_price", 0.0)) or 0.0)
@@ -6669,10 +6670,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _c = float(buckets[_i].get("close", buckets[_i].get("close_price", 0.0)) or 0.0) or _prev
                     _prev = _y[_i] = _a * _c + (1.0 - _a) * _y[_i - 1]
                 _E[_p] = _y
-            _bull = (_E[20] > _E[50]) & (_E[50] > _E[100])
-            _bear = (_E[100] > _E[50]) & (_E[50] > _E[20])
-            _g = [int(_i) for _i in range(100, m) if _bull[_i] and not _bull[_i - 1]]
-            _r = [int(_i) for _i in range(100, m) if _bear[_i] and not _bear[_i - 1]]
+            _bull = _E[20] > _E[50]
+            _bear = _E[50] > _E[20]
+            _g = [int(_i) for _i in range(50, m) if _bull[_i] and not _bull[_i - 1]]
+            _r = [int(_i) for _i in range(50, m) if _bear[_i] and not _bear[_i - 1]]
             self._ema_stk_cache = (_ssig, _g, _r)
         _, _g, _r = self._ema_stk_cache
         for _kind, _xs2, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
