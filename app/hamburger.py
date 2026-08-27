@@ -801,15 +801,20 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             section.addWidget(cb)
 
     def _build_sr_subtoggles(self, section) -> None:
-        """Support & Resistance sub-toggle: 'Area' ON -> ACTIVE levels draw as filled zones (bands); OFF -> every
-        level (active + mitigated) draws as a plain LINE. An m10_ key, so it persists + reads via layer_state; the
-        master m10_sr still gates the whole indicator."""
-        cb = QtWidgets.QCheckBox("· Area")
-        cb.setChecked(True)                              # default ON -> the current banded look
-        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
-        cb.toggled.connect(lambda on, k="m10_sr_area": self.layerToggled.emit(k, on))
-        self.layer_checks["m10_sr_area"] = cb
-        section.addWidget(cb)
+        """Support & Resistance sub-toggles: 'Area' ON -> ACTIVE levels draw as filled zones (bands); OFF -> every
+        level (active + mitigated) draws as a plain LINE. '1h S/R' / '4h S/R' overlay that higher timeframe's
+        pivot-fractal S/R levels on the current chart as DASHED neon lines tagged '1h'/'4h' at the live edge
+        (active levels only; draws only on tfs BELOW the htf; htf source = volume buckets, same guarantee as the
+        HTF walls). All m10_ keys, so they persist + read via layer_state; the master m10_sr still gates all."""
+        for key, label, default in (("m10_sr_area", "· Area", True),
+                                     ("m10_sr_1h", "· 1h S/R (dashed · lower tfs)", False),
+                                     ("m10_sr_4h", "· 4h S/R (dash-dot · lower tfs)", False)):
+            cb = QtWidgets.QCheckBox(label)
+            cb.setChecked(default)
+            cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
+            self.layer_checks[key] = cb
+            section.addWidget(cb)
 
     def _build_svl_subtoggles(self, section) -> None:
         """RCLI (Recent Swing LVA) sub-toggles under its master toggle — the LVA zones and the swing lines,

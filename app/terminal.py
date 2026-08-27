@@ -1482,6 +1482,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._sr_act_items = None                # dict (kind, tier) -> PlotCurveItem — ACTIVE levels as lines (Area OFF), full opacity
         self._sr_rects = None                    # pool of QGraphicsRectItem — ACTIVE levels drawn as filled bands
         self._sr_sig = None; self._sr_drawn = False
+        # HTF S/R overlay (sub-toggles m10_sr_1h / m10_sr_4h under Support & Resistance): that htf's ACTIVE
+        # pivot-fractal levels as DASHED neon lines on the current (lower-tf) chart, tagged '1h'/'4h'.
+        self._hsr_items = {}                     # (htf, kind, tier) -> dashed PlotCurveItem (lazy)
+        self._hsr_lbls = {"1h": [], "4h": []}    # per-htf pools of '1h'/'4h' TextItem tags at the live edge
+        self._hsr_sig = {"1h": None, "4h": None}; self._hsr_marks = {"1h": None, "4h": None}   # cached detect per htf
+        self._hsr_dsig = {"1h": None, "4h": None}   # per-htf DRAW sig (chart n + last start) — geometry once per bar
         # RECENT-SWING LOW-VOLUME AREA indicator (hamburger m10_swinglvn) — every still-UNMITIGATED swing-leg LVN ZONE
         # (electric-purple) forecasting S/R (up-leg = support / down-leg = resistance); a zone persists until broken.
         self._svl_slots = None                   # list of per-zone dicts of pg items (lazy-built, one slot per live zone)
@@ -2496,6 +2502,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._sr_sig = None; self._sel_sig = None    # Support/Resistance (or its Area sub-toggle) -> re-run the draw
             if key == "m10_sr" and not on:
                 self._clear_sr()                    # master off -> tear the S/R down now (Area toggle just re-draws)
+                self._hide_htf_sr()                 # ... and BOTH htf-S/R sub-overlays (ride the same master)
+        elif key in ("m10_sr_1h", "m10_sr_4h"):
+            _h = "1h" if key.endswith("_1h") else "4h"
+            self._hsr_sig[_h] = None; self._hsr_dsig[_h] = None   # HTF S/R toggled -> re-detect + redraw next frame
+            if not on:
+                self._hide_htf_sr(_h)                    # off -> tear those dashed levels down now
         elif key in ("m10_swinglvn", "m10_svl_zones", "m10_svl_lines", "m10_svl_zigzag", "m10_svl_bias"):
             self._svl_sig = None; self._sel_sig = None   # RCLI (master or a sub-toggle) changed -> re-run the draw
             if not self.menu.layer_state("m10_swinglvn"):
@@ -9645,6 +9657,94 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._sr_rects[j].setVisible(False)
         self._sr_drawn = True
 
+    def _hide_htf_sr(self, htf=None) -> None:
+        hs = (htf,) if htf else ("1h", "4h")
+        for key, _it in self._hsr_items.items():
+            if key[0] in hs:
+                _it.setVisible(False)
+        for h in hs:
+            for _lb in self._hsr_lbls[h]:
+                _lb.setVisible(False)
+            self._hsr_dsig[h] = None                             # any hide -> full redraw on the next draw call
+
+    def _draw_htf_sr(self, htf, buckets) -> None:
+        """Higher-timeframe SUPPORT & RESISTANCE overlay (sub-toggles m10_sr_1h / m10_sr_4h, under Support &
+        Resistance): the htf pivot-fractal S/R levels (app/support_resistance on that htf's BUCKET series — same
+        _htf_source_buckets guarantee as the HTF walls: recon replay / live htf worker / daemon archive, never
+        clock candles) drawn on the CURRENT chart as DASHED neon lines (1h dash, 4h dash-dot; same neon red/blue
+        + rejection-tier thickness as the base indicator) tagged '1h'/'4h' at the live edge. ACTIVE (unbroken on
+        htf closes) levels only, lines-only regardless of the Area sub-toggle — mitigated htf history / htf
+        pivot-candle bands would crowd a lower-tf chart. Only on tfs BELOW the htf; rides the m10_sr master;
+        detect cached per htf close."""
+        if (not self.menu.layer_state("m10_sr") or not self.menu.layer_state("m10_sr_" + htf)
+                or self.scanner_mode != "bucket_canvas" or not buckets
+                or self._TF_RANK.get(self._tf, 99) >= self._TF_RANK[htf]):
+            self._hide_htf_sr(htf); return
+        # PERF: geometry only moves when the chart series advances (a new bar / window slide) — levels are
+        # k-bar-confirmed htf pivots, so picking up a fresh htf close on the NEXT chart bar is fine. Per-frame
+        # steady state = this one tuple compare.
+        dsig = (len(buckets), float(buckets[-1].get("start_time", 0.0) or 0.0), self._tf)
+        if dsig == self._hsr_dsig[htf]:
+            return
+        from app import recon_replay
+        from app import support_resistance as _srm
+        starts = [float(b.get("start_time", 0.0) or 0.0) for b in buckets]
+        n = len(buckets); now_t = starts[-1] if starts else 0.0
+        cbH = self._htf_source_buckets(htf, starts[0] if starts else 0.0, now_t)
+        cbH = cbH[-1500:]                                        # bound the detect cost (62d of 1h / 250d of 4h)
+        if len(cbH) < 2 * _srm.SR_PIVOT_K + 1:
+            self._hide_htf_sr(htf); return
+        sig = (len(cbH), float(cbH[-1].get("start_time", 0.0) or 0.0), int(now_t < recon_replay.CUTOFF))
+        if sig != self._hsr_sig[htf]:
+            try:
+                lvs = [lv for lv in _srm.detect(cbH) if lv["i1"] is None]     # ACTIVE (unbroken) only
+                if len(lvs) > _srm.SR_MAX_LEVELS:                             # keep the most-recent N pivots
+                    lvs = sorted(lvs, key=lambda z: z["i0"])[-_srm.SR_MAX_LEVELS:]
+                self._hsr_marks[htf] = lvs
+            except Exception:
+                self._hsr_marks[htf] = []
+            self._hsr_sig[htf] = sig
+        cbst = [float(b.get("start_time", 0.0) or 0.0) for b in cbH]
+        RES, SUP = (255, 42, 58), (0, 168, 255)                  # same neon red/blue as the base S/R
+        widths = _srm.SR_TIER_WIDTHS; nt = len(widths)
+        _nan = float("nan")
+
+        def _xt(t):
+            return max(0, min(bisect.bisect_left(starts, t), n - 1))
+        buf = {}                                                 # (kind, tier) -> (xs, ys), NaN-separated
+        lb_used = 0
+        for lv in (self._hsr_marks[htf] or []):
+            price = float(lv.get("price") or 0.0); i0 = int(lv.get("i0", 0))
+            if price <= 0 or not (0 <= i0 < len(cbst)) or cbst[i0] > now_t:   # pivot after this window -> not in view
+                continue
+            t = min(nt - 1, max(0, int(lv.get("tier", 0))))
+            xs, ys = buf.setdefault((lv["kind"], t), ([], []))
+            xs += [_xt(cbst[i0]), n - 1, _nan]; ys += [price, price, _nan]
+            rgb = RES if lv["kind"] == "R" else SUP
+            pool = self._hsr_lbls[htf]
+            if lb_used >= len(pool):
+                _lb = pg.TextItem(text=htf, anchor=(0, 0.5)); _lb.setZValue(25)
+                self.plot.addItem(_lb, ignoreBounds=True); pool.append(_lb)
+            _lb = pool[lb_used]; lb_used += 1
+            _lb.setColor(pg.mkColor(*rgb, 220)); _lb.setPos(n - 1 + 0.6, price); _lb.setVisible(True)
+        _style = QtCore.Qt.DashLine if htf == "1h" else QtCore.Qt.DashDotLine
+        for key in buf:
+            if (htf,) + key not in self._hsr_items:
+                _it = pg.PlotCurveItem(connect="finite"); _it.setZValue(24)
+                rgb = RES if key[0] == "R" else SUP
+                _pn = pg.mkPen(*rgb, 235, width=widths[key[1]], style=_style); _pn.setCosmetic(True)
+                _it.setPen(_pn)
+                self.plot.addItem(_it, ignoreBounds=True)
+                self._hsr_items[(htf,) + key] = _it
+        for key, _it in self._hsr_items.items():
+            if key[0] != htf:
+                continue
+            xs, ys = buf.get(key[1:], ((), ()))
+            _it.setData(list(xs), list(ys)); _it.setVisible(bool(xs))
+        for _lb in self._hsr_lbls[htf][lb_used:]:
+            _lb.setVisible(False)
+        self._hsr_dsig[htf] = dsig
+
     # RECENT-SWING LOW-VOLUME AREA (hamburger m10_swinglvn) — self-gated, fail-safe, ALL timeframes.
     # Draws EVERY still-unmitigated swing-leg zone: each up-leg (green) -> LVN support [LVN_below_VAL, min(LVN,median)];
     # each down-leg (red) -> LVN resistance [max(LVN,median), LVN_above_VAH]. LVN = electric-purple dashed; zone = faint
@@ -15463,6 +15563,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_htf_walls("30m", buckets)                  # 30m WALLS overlay (m10_absorblvl_30m) — pink/teal, on 1m/5m/15m
         except Exception:
             self._hide_htf_walls()
+        try:
+            self._draw_htf_sr("4h", buckets)                      # 4h S/R overlay (m10_sr_4h) — dash-dot neon lines, lower tfs only
+            self._draw_htf_sr("1h", buckets)                      # 1h S/R overlay (m10_sr_1h) — dashed neon lines, lower tfs only
+        except Exception:
+            self._hide_htf_sr()
         try:
             self._draw_regime(buckets, vx1, vy0)                  # Wall Regime HUD, bottom-right (rides m10_absorblvl)
         except Exception:
