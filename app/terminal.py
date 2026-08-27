@@ -2498,14 +2498,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif key == "m10_reward_switch":
             if not on:
                 self._hide_reward_switches()             # Reward-switch marks off -> tear the flip lines/flags down now
-        elif key in ("m10_sr", "m10_sr_area"):
-            self._sr_sig = None; self._sel_sig = None    # Support/Resistance (or its Area sub-toggle) -> re-run the draw
+        elif key in ("m10_sr", "m10_sr_area", "m10_sr_match"):
+            self._sr_sig = None; self._sel_sig = None    # Support/Resistance (or its Area/Match sub-toggle) -> re-run the draw
             if key == "m10_sr" and not on:
-                self._clear_sr()                    # master off -> tear the S/R down now (Area toggle just re-draws)
+                self._clear_sr()                    # master off -> tear the S/R down now (Area/Match toggle just re-draws)
                 self._hide_htf_sr()                 # ... and BOTH htf-S/R sub-overlays (ride the same master)
         elif key in ("m10_sr_1h", "m10_sr_4h"):
             _h = "1h" if key.endswith("_1h") else "4h"
             self._hsr_sig[_h] = None; self._hsr_dsig[_h] = None   # HTF S/R toggled -> re-detect + redraw next frame
+            self._sr_sig = None; self._sel_sig = None    # ... and re-filter the current-tf draw (Match reads these htfs)
             if not on:
                 self._hide_htf_sr(_h)                    # off -> tear those dashed levels down now
         elif key in ("m10_swinglvn", "m10_svl_zones", "m10_svl_lines", "m10_svl_zigzag", "m10_svl_bias"):
@@ -9568,7 +9569,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if n < 3:
             self._clear_sr(); return
         _area = bool(self.menu.layer_state("m10_sr_area"))           # 'Area' sub-toggle: bands (on) vs lines-only (off)
-        _sig = (n, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0, _area)
+        # 'Match' sub-toggle (m10_sr_match): keep only current-tf levels whose PRICE sits inside an enabled HTF
+        # S/R level's widened zone [zlo, zhi] (active htf levels from the m10_sr_1h/_4h overlays, kind-agnostic —
+        # S/R flip roles). _mzs None = Match inert (off, or no htf sub-toggle enabled/eligible on this tf).
+        _mzs = None
+        if self.menu.layer_state("m10_sr_match"):
+            for _h in ("1h", "4h"):
+                if (self.menu.layer_state("m10_sr_" + _h)
+                        and self._TF_RANK.get(self._tf, 99) < self._TF_RANK[_h]):
+                    if _mzs is None:
+                        _mzs = []
+                    for _hl in (self._hsr_marks[_h] or []):
+                        _mzs.append((float(_hl.get("zlo", 0.0) or 0.0), float(_hl.get("zhi", 0.0) or 0.0)))
+        _sig = (n, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0, _area,
+                tuple(_mzs) if _mzs is not None else None)
         if _sig == self._sr_sig and self._sr_drawn:
             return
         self._sr_sig = _sig
@@ -9577,6 +9591,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             levels = _srm.detect(list(filtered), zone_mitigation=(self._tf == "5m"))   # 5m: break past the WIDENED edge
         except Exception:
             self._clear_sr(); return
+        if _mzs is not None:                                          # Match: keep htf-confluent levels only
+            levels = [lv for lv in levels if any(zl <= lv["price"] <= zh for (zl, zh) in _mzs)]
         if len(levels) > _srm.SR_MAX_LEVELS:                          # keep the most-recent N (by pivot index)
             levels = sorted(levels, key=lambda z: z["i0"])[-_srm.SR_MAX_LEVELS:]
         RES, SUP = (255, 42, 58), (0, 168, 255)                      # neon red / neon blue

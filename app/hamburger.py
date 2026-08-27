@@ -808,7 +808,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         HTF walls). All m10_ keys, so they persist + read via layer_state; the master m10_sr still gates all."""
         for key, label, default in (("m10_sr_area", "· Area", True),
                                      ("m10_sr_1h", "· 1h S/R (dashed · lower tfs)", False),
-                                     ("m10_sr_4h", "· 4h S/R (dash-dot · lower tfs)", False)):
+                                     ("m10_sr_4h", "· 4h S/R (dash-dot · lower tfs)", False),
+                                     ("m10_sr_match", "· Match (only levels at HTF S/R)", False)):
             cb = QtWidgets.QCheckBox(label)
             cb.setChecked(default)
             cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
