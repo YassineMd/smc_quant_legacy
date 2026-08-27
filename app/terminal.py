@@ -6977,8 +6977,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                     _a5 -= 1; _acc5 += max(0.0, _dn5)
                             _valp = _plo + _a5 * _hb
                             _vahp = _plo + (_b5v + 1) * _hb
-                        self._ema_vp_cache = (_ssig, _cen, _vols, _hb, _sp0, _sp1, _valp, _vahp)
-                    _, _cen, _vols, _hb, _sp0c, _sp1c, _valp, _vahp = self._ema_vp_cache
+                            # LVN: the minimum-volume bin(s) INSIDE the value area (ties all marked; POC excluded)
+                            _pmin = float(_vols[_a5:_b5v + 1].min())
+                            _lvns = [_j6 for _j6 in range(_a5, _b5v + 1)
+                                     if _vols[_j6] == _pmin and _j6 != _p5]
+                        else:
+                            _lvns = []
+                        self._ema_vp_cache = (_ssig, _cen, _vols, _hb, _sp0, _sp1, _valp, _vahp, _lvns)
+                    _, _cen, _vols, _hb, _sp0c, _sp1c, _valp, _vahp, _lvns = self._ema_vp_cache
                     _vmax = float(_vols.max()) if _cen is not None and len(_vols) else 0.0
                     if _cen is None or _vmax <= 0:
                         self._hide_ema_vp()
@@ -6992,7 +6998,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             self._ema_vp_item.setZValue(-5)
                             self.plot.addItem(self._ema_vp_item, ignoreBounds=True)
                         _poc = int(np.argmax(_vols))
-                        _brs = [pg.mkBrush(250, 180, 60, 150) if _j5 == _poc else pg.mkBrush(150, 158, 175, 70)
+                        _lvset = set(_lvns or [])
+                        _brs = [pg.mkBrush(250, 180, 60, 150) if _j5 == _poc
+                                else (pg.mkBrush(178, 70, 255, 160) if _j5 in _lvset   # LVN: electric purple
+                                      else pg.mkBrush(150, 158, 175, 70))
                                 for _j5 in range(len(_vols))]
                         self._ema_vp_item.setOpts(x0=_vx1v - _wid, x1=np.full(len(_vols), _vx1v),
                                                   y=_cen, height=_hb * 0.92, pen=None, brushes=_brs)
