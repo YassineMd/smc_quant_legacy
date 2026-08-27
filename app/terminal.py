@@ -2498,11 +2498,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif key == "m10_reward_switch":
             if not on:
                 self._hide_reward_switches()             # Reward-switch marks off -> tear the flip lines/flags down now
-        elif key in ("m10_sr", "m10_sr_area", "m10_sr_match"):
-            self._sr_sig = None; self._sel_sig = None    # Support/Resistance (or its Area/Match sub-toggle) -> re-run the draw
+        elif key in ("m10_sr", "m10_sr_area", "m10_sr_match", "m10_sr_showcur"):
+            self._sr_sig = None; self._sel_sig = None    # Support/Resistance (or a sub-toggle) -> re-run the draw
             if key == "m10_sr" and not on:
                 self._clear_sr()                    # master off -> tear the S/R down now (Area/Match toggle just re-draws)
                 self._hide_htf_sr()                 # ... and BOTH htf-S/R sub-overlays (ride the same master)
+            elif key == "m10_sr_showcur" and not on:
+                self._clear_sr()                    # 'Show current-tf' off -> hide the current-tf levels now (HTF stays)
         elif key in ("m10_sr_1h", "m10_sr_4h"):
             _h = "1h" if key.endswith("_1h") else "4h"
             self._hsr_sig[_h] = None; self._hsr_dsig[_h] = None   # HTF S/R toggled -> re-detect + redraw next frame
@@ -9563,7 +9565,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         low-opacity, BORDERLESS, and a touch stronger per rejection tier. Once a level is MITIGATED (a candle closed
         through it) the band converts to a plain LINE, so the two read differently. Any timeframe; closed-only
         detection (a forming bucket can't be a confirmed pivot)."""
-        if not self.menu.layer_state("m10_sr") or self.scanner_mode != "bucket_canvas":
+        if (not self.menu.layer_state("m10_sr") or self.scanner_mode != "bucket_canvas"
+                or not self.menu.layer_state("m10_sr_showcur")):   # 'Show current-tf S/R' off -> HTF overlays only
             self._clear_sr(); return
         n = len(filtered)
         if n < 3:

@@ -807,6 +807,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         (active levels only; draws only on tfs BELOW the htf; htf source = volume buckets, same guarantee as the
         HTF walls). All m10_ keys, so they persist + read via layer_state; the master m10_sr still gates all."""
         for key, label, default in (("m10_sr_area", "· Area", True),
+                                     ("m10_sr_showcur", "· Show current-tf S/R", True),
                                      ("m10_sr_1h", "· 1h S/R (dashed · lower tfs)", False),
                                      ("m10_sr_4h", "· 4h S/R (dash-dot · lower tfs)", False),
                                      ("m10_sr_match", "· Match (only levels at HTF S/R)", False)):
