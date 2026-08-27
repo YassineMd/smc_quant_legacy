@@ -480,6 +480,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("ema20", "20 EMA Line"),                 # 20-period EMA of closes on the chart series (amber line; live-extended on the forming bar)
                            ("ema50", "50 EMA Line"),                 # 50-period EMA (blue line; same engine)
                            ("ema100", "100 EMA Line"),               # 100-period EMA (purple line; same engine)
+                           ("ema_ext", "EMA High/Low Lines"),        # per toggled EMA: dotted lines at the highest high above / lowest low below the EMA within its own p-bar window
                            ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:
             cb = QtWidgets.QCheckBox(label)

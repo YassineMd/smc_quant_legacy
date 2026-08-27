@@ -1441,6 +1441,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._lwk_sph = None; self._lwk_sig = None               # LONG WICK rejection ♦ (m10_longwick, all tf)
         self._ema_items = {}                                     # EMA sub-widgets: key -> PlotCurveItem (20/50/100)
         self._ema_cache = {}                                     # key -> (sig, closed-bar EMA array) — per bar close
+        self._ema_ext_items = {}                                 # 'ema_ext' extremes: (key, 'hi'|'lo') -> dotted line
+        self._ema_ext_cache = {}                                 # key -> (sig, hi_p, hi_i, lo_p, lo_i) — per bar close
         self._lwc_sph = None; self._lwc_sig = None               # LW FAILED PUSH gold ♦ (m10_longwick_combo, no walls)
         self._lwr_sph = None; self._lwr_sig = None               # LW WICK RECLAIM cyan/magenta ♦ (m10_longwick_reclaim)
         self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
@@ -2551,11 +2553,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
-        if key in ("ema20", "ema50", "ema100"):
-            self._ema_cache.pop(key, None)           # EMA toggled -> recompute next frame
-            if not on and key in self._ema_items:
-                self._ema_items[key].setVisible(False)
-            self._last_scanner_sig = None            # force a repaint so the line appears/vanishes at once
+        if key in ("ema20", "ema50", "ema100", "ema_ext"):
+            if key == "ema_ext":
+                self._ema_ext_cache.clear()          # extremes toggled -> recompute next frame
+                if not on:
+                    for _it in self._ema_ext_items.values():
+                        _it.setVisible(False)
+            else:
+                self._ema_cache.pop(key, None)       # EMA toggled -> recompute next frame
+                self._ema_ext_cache.pop(key, None)
+                if not on:
+                    if key in self._ema_items:
+                        self._ema_items[key].setVisible(False)
+                    for _sd in ("hi", "lo"):         # ... its extreme lines ride the parent EMA
+                        _it = self._ema_ext_items.get((key, _sd))
+                        if _it is not None:
+                            _it.setVisible(False)
+            self._last_scanner_sig = None            # force a repaint so the lines appear/vanish at once
         elif key == "drawing":
             self.drawbar.setVisible(on)
             if not on:
@@ -6511,12 +6525,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         n = len(buckets)
         _forming = bool(getattr(self, "_mmx_last_forming", True))
         m = (n - 1) if (_forming and n > 1) else n            # CLOSED bars
+        _extcb = self.menu.sub_checks.get("ema_ext")          # 'EMA High/Low Lines' sub-toggle (rides each EMA)
+        _ext_on = _extcb is not None and _extcb.isChecked()
         for key, p, rgb in self._EMAS:
             cb = self.menu.sub_checks.get(key)
             item = self._ema_items.get(key)
             if cb is None or not cb.isChecked() or m < p + 1:
                 if item is not None:
                     item.setVisible(False)
+                for _sd in ("hi", "lo"):
+                    _it2 = self._ema_ext_items.get((key, _sd))
+                    if _it2 is not None:
+                        _it2.setVisible(False)
                 continue
             _sig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source)
             _hit = self._ema_cache.get(key)
@@ -6545,6 +6565,42 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     ys = np.append(y, a * cf + (1.0 - a) * y[-1])
             item.setData(xs[p - 1:], ys[p - 1:])
             item.setVisible(True)
+            # 'EMA High/Low Lines' (sub-toggle 'ema_ext'): per toggled EMA, in its own p-bar window of CLOSED
+            # bars, a dotted line at the HIGHEST high above the EMA and one at the LOWEST low below it — each
+            # anchored at the extreme's bar and extended to the live edge, in the parent EMA's colour. A side
+            # with no qualifying bar (e.g. every low above the EMA after a jump) draws nothing.
+            if not _ext_on:
+                for _sd in ("hi", "lo"):
+                    _it2 = self._ema_ext_items.get((key, _sd))
+                    if _it2 is not None:
+                        _it2.setVisible(False)
+                continue
+            _hit2 = self._ema_ext_cache.get(key)
+            if _hit2 is None or _hit2[0] != _sig:
+                hi_p = hi_i = lo_p = lo_i = None
+                for i in range(max(0, m - p), m):
+                    b = buckets[i]
+                    h = float(b.get("high", 0.0) or 0.0); l = float(b.get("low", 0.0) or 0.0)
+                    if h > y[i] and (hi_p is None or h >= hi_p):     # ties -> the most recent extreme
+                        hi_p, hi_i = h, i
+                    if 0.0 < l < y[i] and (lo_p is None or l <= lo_p):
+                        lo_p, lo_i = l, i
+                self._ema_ext_cache[key] = (_sig, hi_p, hi_i, lo_p, lo_i)
+            _, hi_p, hi_i, lo_p, lo_i = self._ema_ext_cache[key]
+            for _sd, _pv, _iv in (("hi", hi_p, hi_i), ("lo", lo_p, lo_i)):
+                _it2 = self._ema_ext_items.get((key, _sd))
+                if _pv is None:
+                    if _it2 is not None:
+                        _it2.setVisible(False)
+                    continue
+                if _it2 is None:
+                    _it2 = pg.PlotCurveItem()
+                    _pn2 = pg.mkPen(*rgb, 200, width=1.0, style=QtCore.Qt.DotLine); _pn2.setCosmetic(True)
+                    _it2.setPen(_pn2); _it2.setZValue(11)
+                    self.plot.addItem(_it2, ignoreBounds=True)
+                    self._ema_ext_items[(key, _sd)] = _it2
+                _it2.setData([float(x[_iv]), float(x[n - 1])], [_pv, _pv])
+                _it2.setVisible(True)
 
     def _draw_reward(self, buckets, vx0, vy0) -> None:
         """REWARD / EFFORT read — BOTTOM-LEFT HUD (m10_reward). For each window (yesterday / today / last 30 candles /
@@ -15563,6 +15619,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._draw_emas(buckets, x)                            # EMA lines (Sub-Widgets 'ema20'/'ema50'/'ema100')
         except Exception:
             for _it in self._ema_items.values():
+                _it.setVisible(False)
+            for _it in self._ema_ext_items.values():
                 _it.setVisible(False)
         try:
             self._draw_reversal_point(buckets, x, vx0, vx1, vy0, vy1)  # Reversal Point triangles, ALL tf (m10_reversal)
