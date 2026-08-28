@@ -6891,6 +6891,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _xr = float(x[n - 1]) if len(_info) == 2 else float(x[_info[1]])   # prev lines FREEZE at supersession
                 _it3.setData([float(x[_info[0]]), _xr], [_info[-1], _info[-1]])
                 _it3.setVisible(True)
+            # THIRDS (user 2026-08-28): split the CURRENT band (low extreme -> high extreme) into 3 equal
+            # 33.33% zones with two dashed gray dividers, spanning the band's window (older anchor -> live
+            # candle). Hidden whenever either current extreme is missing.
+            _th_ok = _lo_info is not None and _hi_info is not None
+            for _kt, _ft in (("d33", 1.0 / 3.0), ("d66", 2.0 / 3.0)):
+                _itt = self._ema_lvl_items.get(_kt)
+                if not _th_ok:
+                    if _itt is not None:
+                        _itt.setVisible(False)
+                    continue
+                if _itt is None:
+                    _itt = pg.PlotCurveItem()
+                    _pnt = pg.mkPen(150, 158, 175, 175, width=1.0, style=QtCore.Qt.DashLine)
+                    _pnt.setCosmetic(True)
+                    _itt.setPen(_pnt); _itt.setZValue(14)
+                    self.plot.addItem(_itt, ignoreBounds=True)
+                    self._ema_lvl_items[_kt] = _itt
+                _yt = _lo_info[1] + (_hi_info[1] - _lo_info[1]) * _ft
+                _itt.setData([float(x[min(_lo_info[0], _hi_info[0])]), float(x[n - 1])], [_yt, _yt])
+                _itt.setVisible(True)
             _lb3 = self._ema_lvl_items.get("lbl")             # bias tag at the live edge, structure midpoint
             _lbp = self._ema_lvl_items.get("lbl_prev")        # + the PREVIOUS bias stacked just below it
             if _bias is None:
