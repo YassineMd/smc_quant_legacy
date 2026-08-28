@@ -1471,6 +1471,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_ext_lblsig = {}                                # key -> sig of the last-rendered readout text
         self._ema_stk_pool = {"g": [], "r": []}                  # 'ema_stack' flip lines: pooled dashed vlines (green/red)
         self._ema_stk_cache = None                               # (sig, green bar idxs, red bar idxs) — per bar close
+        self._ema_poc_items = {}                                 # 'ema_poc': per-zone POC line + tag
+        self._ema_poc_cache = None                               # (sig, {band: {zone: (price, vol)}})
         self._ema_wall_items = {}                                # 'ema_walls': per-zone strongest-wall band + tag
         self._ema_wall_cache = None                              # (sig, {zone: mark}) — detect once per bar close
         self._ema_lvl_vl = {}                                    # segment-START vlines behind each extreme line
@@ -2612,7 +2614,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
         if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
-                   "ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls", "ema_walls_prev"):
+                   "ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls", "ema_walls_prev",
+                   "ema_poc", "ema_poc_prev"):
             if key == "ema_hlread":                  # readout text only; the HL lines are unaffected
                 if not on:
                     for _it in self._ema_ext_lbls.values():
@@ -2637,6 +2640,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._ema_wall_cache = None          # zone walls toggled -> re-detect next frame
                 if not on:
                     self._hide_ema_walls()
+            elif key in ("ema_poc", "ema_poc_prev"):
+                self._ema_poc_cache = None           # zone POCs toggled -> recompute next frame
+                if not on:
+                    self._hide_ema_pocs()
             elif key == "ema_ext":
                 self._ema_ext_cache.clear(); self._ema_ext_lblsig.clear()   # extremes toggled -> recompute next frame
                 if not on:
@@ -6601,6 +6608,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             % (gray, dim, dim, ac, r["astate"], dim, val, poc, vah,
                dim, bc, arrow, r["bias"], dim, r["cs"], r["cr"], r["ms"], r["mr"], nc, nd))
 
+    def _hide_ema_pocs(self) -> None:
+        for _d in self._ema_poc_items.values():
+            _d["ln"].setVisible(False); _d["lbl"].setVisible(False)
+
     def _hide_ema_walls(self) -> None:
         for _d in self._ema_wall_items.values():
             _d["rect"].setVisible(False); _d["lbl"].setVisible(False)
@@ -6795,14 +6806,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _wl_on = _wcb is not None and _wcb.isChecked()        # ... and the per-zone order walls (current band)
         _wpcb = self.menu.sub_checks.get("ema_walls_prev")
         _wlp_on = _wpcb is not None and _wpcb.isChecked()     # ... and the same for the PRECEDING band
-        if (not _stk_on and not _lvl_on and not _vp_on and not _wl_on and not _wlp_on) or m < 51:
+        _pccb = self.menu.sub_checks.get("ema_poc")
+        _pc_on = _pccb is not None and _pccb.isChecked()      # ... and the per-zone POCs
+        _pcpcb = self.menu.sub_checks.get("ema_poc_prev")
+        _pcp_on = _pcpcb is not None and _pcpcb.isChecked()
+        if ((not _stk_on and not _lvl_on and not _vp_on and not _wl_on and not _wlp_on
+             and not _pc_on and not _pcp_on) or m < 51):
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
             for _it3 in self._ema_lvl_vl.values():
                 _it3.setVisible(False)
-            self._hide_ema_vp(); self._hide_ema_walls()
+            self._hide_ema_vp(); self._hide_ema_walls(); self._hide_ema_pocs()
             return
         # ANALYSIS SERIES (user report 2026-08-28: "the algo should be able to extract previous data ... even
         # if it's not showing on the screen"): the flips / extremes / bias are computed over the pre-window
@@ -6920,12 +6936,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # green line) marks its LOWEST low with a solid GREEN hline; the last finished bull segment (green ->
         # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar
         # on the left to the live candle on the right.
-        if not _lvl_on and not _vp_on and not _wl_on and not _wlp_on:
+        if (not _lvl_on and not _vp_on and not _wl_on and not _wlp_on
+                and not _pc_on and not _pcp_on):
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
             for _it3 in self._ema_lvl_vl.values():
                 _it3.setVisible(False)
-            self._hide_ema_vp(); self._hide_ema_walls()
+            self._hide_ema_vp(); self._hide_ema_walls(); self._hide_ema_pocs()
         else:
             if self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig:
                 _seq = sorted([(int(_i2), "g") for _i2 in _g] + [(int(_i2), "r") for _i2 in _r])
@@ -7192,12 +7209,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             self.vb.addItem(_rc7, ignoreBounds=True)
                             _lb7 = pg.TextItem(anchor=(0, 0.5)); _lb7.setZValue(16)
                             self.plot.addItem(_lb7, ignoreBounds=True)
-                            _slot = {"rect": _rc7, "lbl": _lb7, "txt": None, "br": None}
+                            _slot = {"rect": _rc7, "lbl": _lb7, "txt": None, "br": None, "geo": None}
                         self._ema_wall_items[_kk7] = _slot
                         _rgb7 = (40, 230, 120) if _mk7.get("side") == "S" else (240, 70, 90)
                         _p7 = float(_mk7.get("price") or 0.0); _bd7 = float(_mk7.get("band") or 0.0) or (_p7 * 5e-4)
                         _x07 = _wx(int(_mk7.get("i0", 0)) + int(_mk7.get("_off7", 0))); _x17 = float(x[n - 1])
-                        _slot["rect"].setRect(_x07, _p7 - _bd7, max(1e-9, _x17 - _x07), 2.0 * _bd7)
+                        _geo7 = (_x07, _p7, _bd7, _x17)
+                        if _slot.get("geo") != _geo7:
+                            _slot["rect"].setRect(_x07, _p7 - _bd7, max(1e-9, _x17 - _x07), 2.0 * _bd7)
+                            _slot["geo"] = _geo7
                         if _slot.get("br") != (_rgb7, _al7):
                             _slot["rect"].setBrush(pg.mkBrush(_rgb7[0], _rgb7[1], _rgb7[2], _al7))
                             _slot["br"] = (_rgb7, _al7)
@@ -7210,6 +7230,93 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _slot["txt"] = _txt7
                         _slot["lbl"].setPos(_x07 + 0.4, _p7)
                         _slot["lbl"].setVisible(True)
+            # 'POC' (sub-toggles 'ema_poc' / 'ema_poc_prev'): the POINT OF CONTROL of each zone -- the single
+            # most-traded price inside EXPENSIVE / EQUILIBRIUM / CHEAP -- measured over that band's own pair of
+            # finished trends. Amber line at the price, dimmer + 'prev' for the preceding band.
+            if (not _pc_on and not _pcp_on) or not _th_ok or _vp_span is None:
+                self._hide_ema_pocs()
+            else:
+                if self._ema_poc_cache is None or self._ema_poc_cache[0] != _ssig:
+                    _psets = {"cur": {}, "prev": {}}
+                    try:
+                        _pspecs = [("cur", float(_lo_info[1]), float(_hi_info[1]), _vp_span)]
+                        if _hip is not None and _lop is not None:
+                            _pspecs.append(("prev", float(_lop[2]), float(_hip[2]),
+                                            (min(_hip[0], _lop[0]), max(_hip[1], _lop[1]))))
+                        for _sk8, _blo8, _bhi8, (_s0p, _s1p) in _pspecs:
+                            if _bhi8 <= _blo8:
+                                continue
+                            _prof8 = {}                        # price -> traded volume over that span
+                            for _j8 in range(max(0, _s0p), min(_M, _s1p + 1)):
+                                _b8 = _ana[_j8]
+                                _lv8 = _b8.get("levels") or {}
+                                if _lv8:
+                                    for _ps8, _vv8 in _lv8.items():
+                                        try:
+                                            _pf8 = float(_ps8)
+                                        except (TypeError, ValueError):
+                                            continue
+                                        if isinstance(_vv8, dict):
+                                            _v8 = float(_vv8.get("b", 0.0) or 0.0) + float(_vv8.get("s", 0.0) or 0.0)
+                                        elif isinstance(_vv8, (list, tuple)):
+                                            _v8 = sum(float(_q8 or 0.0) for _q8 in _vv8)
+                                        else:
+                                            _v8 = float(_vv8 or 0.0)
+                                        if _v8:
+                                            _prof8[_pf8] = _prof8.get(_pf8, 0.0) + abs(_v8)
+                                else:                          # no footprint -> the bar's own volume at its mid
+                                    _v8 = (float(_b8.get("buy_vol", 0.0) or 0.0)
+                                           + float(_b8.get("sell_vol", 0.0) or 0.0)) or float(_b8.get("volume", 0.0) or 0.0)
+                                    _h8 = float(_b8.get("high", 0.0) or 0.0); _l8 = float(_b8.get("low", 0.0) or 0.0)
+                                    if _v8 > 0 and _h8 > 0 and _l8 > 0:
+                                        _pm8 = 0.5 * (_h8 + _l8)
+                                        _prof8[_pm8] = _prof8.get(_pm8, 0.0) + _v8
+                            _r8 = _bhi8 - _blo8
+                            _zedges = (("cheap", _blo8, _blo8 + _r8 / 3.0),
+                                       ("eq", _blo8 + _r8 / 3.0, _blo8 + 2.0 * _r8 / 3.0),
+                                       ("exp", _blo8 + 2.0 * _r8 / 3.0, _bhi8))
+                            _zp8 = _psets[_sk8]
+                            for _zn8, _z08, _z18 in _zedges:
+                                _bp8 = None; _bv8 = 0.0
+                                for _pf8, _v8 in _prof8.items():
+                                    if _z08 <= _pf8 <= _z18 and _v8 > _bv8:
+                                        _bv8 = _v8; _bp8 = _pf8
+                                if _bp8 is not None:
+                                    _zp8[_zn8] = (_bp8, _bv8, _s0p)
+                    except Exception:
+                        _psets = {"cur": {}, "prev": {}}
+                    self._ema_poc_cache = (_ssig, _psets)
+                _psets = self._ema_poc_cache[1]
+                for _sk8, _on8, _al8, _pre8 in (("cur", _pc_on, 235, ""), ("prev", _pcp_on, 150, "prev ")):
+                    for _zn8, _zt8 in (("exp", "EXPENSIVE"), ("eq", "EQUILIBRIUM"), ("cheap", "CHEAP")):
+                        _kk8 = _sk8 + "_" + _zn8
+                        _slot8 = self._ema_poc_items.get(_kk8)
+                        _got8 = _psets.get(_sk8, {}).get(_zn8) if _on8 else None
+                        if _got8 is None:
+                            if _slot8 is not None:
+                                _slot8["ln"].setVisible(False); _slot8["lbl"].setVisible(False)
+                            continue
+                        if _slot8 is None:
+                            _ln8 = pg.PlotCurveItem()
+                            _pn8 = pg.mkPen(250, 180, 60, _al8, width=1.4); _pn8.setCosmetic(True)
+                            _ln8.setPen(_pn8); _ln8.setZValue(15)
+                            self.plot.addItem(_ln8, ignoreBounds=True)
+                            _lb8 = pg.TextItem(anchor=(0, 0.5)); _lb8.setZValue(16)
+                            _lb8.setColor(pg.mkColor(250, 180, 60, _al8))
+                            self.plot.addItem(_lb8, ignoreBounds=True)
+                            _slot8 = {"ln": _ln8, "lbl": _lb8, "txt": None, "geo": None}
+                            self._ema_poc_items[_kk8] = _slot8
+                        _pp8, _pv8, _ps0 = _got8
+                        _x08 = _wx(int(_ps0)); _x18 = float(x[n - 1])
+                        _geo8 = (_x08, _x18, _pp8)
+                        if _slot8.get("geo") != _geo8:        # setData rebuilds the path: only when it moves
+                            _slot8["ln"].setData([_x08, _x18], [_pp8, _pp8]); _slot8["geo"] = _geo8
+                        _slot8["ln"].setVisible(True)
+                        _tx8 = "%sPOC %s" % (_pre8, _zt8)
+                        if _slot8.get("txt") != _tx8:
+                            _slot8["lbl"].setText(_tx8); _slot8["txt"] = _tx8
+                        _slot8["lbl"].setPos(_x08 + 0.4, _pp8)
+                        _slot8["lbl"].setVisible(True)
             # 'Trend Extremes VP' (sub-toggle 'ema_trendvp'): right-anchored volume profile over the SPAN the
             # Trend Extreme lines cover — from the older current anchor vline to the last CLOSED bar. Per-bar
             # footprint 'levels' when present, else the bar's volume spread uniformly over its range. Bins
@@ -16506,7 +16613,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _pl.setVisible(False)
             for _it in self._ema_lvl_items.values():
                 _it.setVisible(False)
-            self._hide_ema_vp(); self._hide_ema_walls()
+            self._hide_ema_vp(); self._hide_ema_walls(); self._hide_ema_pocs()
         try:
             self._draw_reversal_point(buckets, x, vx0, vx1, vy0, vy1)  # Reversal Point triangles, ALL tf (m10_reversal)
         except Exception:

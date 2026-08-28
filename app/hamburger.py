@@ -487,18 +487,21 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("ema_trendlvl", "Trend Extreme Lines"),  # solid hlines: GREEN last-bear LOW / RED last-bull HIGH to the live candle + dimmer PREVIOUS pair frozen at supersession + bias tag (HH+HL BULLISH / LH+LL BEARISH / else RANGING; OVERRIDE: 20 closes above the high line = BULLISH / below the low line = BEARISH + two dashed gray dividers splitting the current band into 3 equal 33.33% zones)
                            ("ema_walls", "Current Band"),           # strongest current-tf wall per third of the CURRENT extreme band
                            ("ema_walls_prev", "Previous Band"),     # ... and the same for the PRECEDING pair of trends
+                           ("ema_poc", "Current Band"),             # POC of each zone over the current pair of trends
+                           ("ema_poc_prev", "Previous Band"),       # ... and over the preceding pair
                            ("ema_trendvp", "Trend Extremes VP (right)"),   # right-anchored VP over the last two FINISHED trends; amber POC + purple in-VA LVN + light-amber POCs above VAH/below VAL + dashed VAH/VAL on the band
                            ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:
-            _wall_grp = key in ("ema_walls", "ema_walls_prev")   # nested one level under their own header
+            _wall_grp = key in ("ema_walls", "ema_walls_prev",   # nested one level under their own headers
+                                "ema_poc", "ema_poc_prev")
             _ema_grp = _wall_grp or key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
                                             "ema_stack", "ema_trendlvl", "ema_trendvp")
             if key == "ema20":                       # group header — the EMA entries render as indented sub-toggles
                 _hdr = QtWidgets.QLabel("EMA")
                 _hdr.setStyleSheet("color:#8b93a3; font-size:10px; padding-left:2px; padding-top:3px;")
                 self.sub_section.addWidget(_hdr)
-            if key == "ema_walls":                   # nested sub-group header inside EMA
-                _hdr2 = QtWidgets.QLabel("Extreme Lines Order Walls")
+            if key in ("ema_walls", "ema_poc"):      # nested sub-group headers inside EMA
+                _hdr2 = QtWidgets.QLabel("Extreme Lines Order Walls" if key == "ema_walls" else "POC")
                 _hdr2.setStyleSheet("color:#8b93a3; font-size:10px; padding-left:18px; padding-top:2px;")
                 self.sub_section.addWidget(_hdr2)
             cb = QtWidgets.QCheckBox(("· " + label) if _ema_grp else label)
