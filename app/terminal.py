@@ -6973,6 +6973,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._ema_stk_cache = (_ssig, _g, _r, _ft)
         _, _g, _r, _ftimes = self._ema_stk_cache
         self._ema_flip_times = _ftimes
+        # PINNED: everything the structure draws is bounded to the pinned segment -- it STARTS at the pinned
+        # vline and ENDS at the next one, so the levels read as of that moment sit exactly over the trend
+        # that followed (user 2026-08-28). Unpinned, each item keeps its own anchor and runs to the live edge.
+        _LX = None; _RX = float(x[n - 1])
+        if self._ema_pin_t:
+            _pt0 = float(self._ema_pin_t); _pin_i = None; _nxt_i = None
+            for _k5, _t5 in sorted(_ftimes.items(), key=lambda _kv: _kv[1]):
+                if _pin_i is None and abs(_t5 - _pt0) < 0.5:
+                    _pin_i = _k5
+                elif _pin_i is not None and _nxt_i is None and _t5 > _pt0 + 0.5:
+                    _nxt_i = _k5
+            if _pin_i is not None:
+                _LX = _wx(_pin_i)
+                if _nxt_i is not None:
+                    _RX = _wx(_nxt_i)
         if not _stk_on:                                       # vlines off, but the levels below may still draw
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
@@ -7128,8 +7143,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _it3.setPen(_pn3); _it3.setZValue(15)
                     self.plot.addItem(_it3, ignoreBounds=True)
                     self._ema_lvl_items[_sd2] = _it3
-                _xl3 = _wx(_info[0])
-                _xr = float(x[n - 1]) if len(_info) == 2 else _wx(_info[1])   # prev lines FREEZE at supersession
+                _xl3 = _LX if _LX is not None else _wx(_info[0])
+                _xr = _RX if (_LX is not None or len(_info) == 2) else _wx(_info[1])   # prev FREEZE at supersession
                 if len(_info) == 3:
                     # A frozen line whose whole span predates the frame maps to [0, 0] and renders NOTHING
                     # (Qt still reports it visible) -- that is the "preceding trend is missing" report of
@@ -7178,7 +7193,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self.plot.addItem(_itt, ignoreBounds=True)
                     self._ema_lvl_items[_kt] = _itt
                 _yt = _lo_info[1] + (_hi_info[1] - _lo_info[1]) * _ft
-                _itt.setData([_wx(min(_lo_info[0], _hi_info[0])), float(x[n - 1])], [_yt, _yt])
+                _itt.setData([_LX if _LX is not None else _wx(min(_lo_info[0], _hi_info[0])), _RX], [_yt, _yt])
                 _itt.setVisible(True)
             _lb3 = self._ema_lvl_items.get("lbl")             # bias tag at the live edge, structure midpoint
             _lbp = self._ema_lvl_items.get("lbl_prev")        # + the PREVIOUS bias stacked just below it
@@ -7304,7 +7319,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         self._ema_wall_items[_kk7] = _slot
                         _rgb7 = (40, 230, 120) if _mk7.get("side") == "S" else (240, 70, 90)
                         _p7 = float(_mk7.get("price") or 0.0); _bd7 = float(_mk7.get("band") or 0.0) or (_p7 * 5e-4)
-                        _x07 = _wx(int(_mk7.get("i0", 0)) + int(_mk7.get("_off7", 0))); _x17 = float(x[n - 1])
+                        _x07 = _LX if _LX is not None else _wx(int(_mk7.get("i0", 0)) + int(_mk7.get("_off7", 0)))
+                        _x17 = _RX
                         _geo7 = (_x07, _p7, _bd7, _x17)
                         if _wln_on:                           # 'To Lines': the wall's MIDDLE price, no band
                             _slot["rect"].setVisible(False)
@@ -7416,7 +7432,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _slot8 = {"ln": _ln8, "lbl": _lb8, "txt": None, "geo": None}
                             self._ema_poc_items[_kk8] = _slot8
                         _pp8, _pv8, _ps0 = _got8
-                        _x08 = _wx(int(_ps0)); _x18 = float(x[n - 1])
+                        _x08 = _LX if _LX is not None else _wx(int(_ps0)); _x18 = _RX
                         _geo8 = (_x08, _x18, _pp8)
                         if _slot8.get("geo") != _geo8:        # setData rebuilds the path: only when it moves
                             _slot8["ln"].setData([_x08, _x18], [_pp8, _pp8]); _slot8["geo"] = _geo8
@@ -7453,7 +7469,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if _hi6 - _lo6 <= 0:                      # a single marker -> use its own band so it stays visible
                     _bd6 = max(_b for _p, _b, _i in _px6) or (_lo6 * 5e-4)
                     _lo6 -= _bd6; _hi6 += _bd6
-                _x06 = _wx(min(_i for _p, _b, _i in _px6)); _x16 = float(x[n - 1])
+                _x06 = _LX if _LX is not None else _wx(min(_i for _p, _b, _i in _px6)); _x16 = _RX
                 if _sl6 is None:
                     _rc6 = QtWidgets.QGraphicsRectItem(); _rc6.setPen(pg.mkPen(None)); _rc6.setZValue(-6)
                     self.vb.addItem(_rc6, ignoreBounds=True)
