@@ -6977,8 +6977,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _it3.setPen(_pn3); _it3.setZValue(15)
                     self.plot.addItem(_it3, ignoreBounds=True)
                     self._ema_lvl_items[_sd2] = _it3
+                _xl3 = _wx(_info[0])
                 _xr = float(x[n - 1]) if len(_info) == 2 else _wx(_info[1])   # prev lines FREEZE at supersession
-                _it3.setData([_wx(_info[0]), _xr], [_info[-1], _info[-1]])
+                if len(_info) == 3:
+                    # A frozen line whose whole span predates the frame maps to [0, 0] and renders NOTHING
+                    # (Qt still reports it visible) -- that is the "preceding trend is missing" report of
+                    # 2026-08-28. Give it a short stub at the left edge so the inherited LEVEL stays readable.
+                    _mins3 = max(1.0, 0.04 * float(max(1, n - 1)))
+                    if _xr - _xl3 < _mins3:
+                        _xr = _xl3 + _mins3
+                _it3.setData([_xl3, _xr], [_info[-1], _info[-1]])
                 _it3.setVisible(True)
             # SEGMENT-START MARKERS (user 2026-08-28: "show the trend start that constitutes these lines"):
             # a dashed vline at the bar each drawn extreme line's trend BEGAN -- green for a bull segment
