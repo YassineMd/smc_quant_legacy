@@ -7083,7 +7083,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _C_all = np.array([float(_ana[_j2].get("close", _ana[_j2].get("close_price", 0.0)) or 0.0)
                                    for _j2 in range(_M)], dtype=float)
                 _hiL = _loL = None; _bh = []; _bl = []; _ei = 0
-                _prevbias = None; _curb = None
+                _prevbias = None; _curb = None; _bseq = []
                 for _i2 in range(50, _M):
                     while _ei < len(_events) and _events[_ei][0] <= _i2:
                         _eb, _ek, _ev = _events[_ei]; _ei += 1
@@ -7106,9 +7106,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         elif _loL is not None and float(_w20.min()) > 0.0 and float(_w20.max()) < _loL:
                             _b3 = "BEARISH"
                     if _b3 is not None and _b3 != _curb:
-                        _prevbias = _curb; _curb = _b3
-                _bias = _curb if _curb is not None else (
+                        _curb = _b3; _bseq.append(_b3)
+
+                def _bs_lbl(_k4):
+                    """Label for the bias state at _bseq[_k4]. A RANGING with the SAME determined trend on BOTH
+                    sides is not a regime change at all -- it is that trend's RETRACEMENT (user 2026-08-29).
+                    Only a state whose SUCCESSOR is known can be relabelled, so the live one never is: calling a
+                    ranging a retracement before the trend actually resumes would be a prediction, not a read."""
+                    _s4 = _bseq[_k4]
+                    if (_s4 == "RANGING" and 0 < _k4 < len(_bseq) - 1
+                            and _bseq[_k4 - 1] == _bseq[_k4 + 1] and _bseq[_k4 - 1] in ("BULLISH", "BEARISH")):
+                        return _bseq[_k4 - 1] + " RETRACEMENT"
+                    return _s4
+                _bias = _bs_lbl(len(_bseq) - 1) if _bseq else (
                     "RANGING" if (_hi_info is not None and _lo_info is not None) else None)
+                _prevbias = _bs_lbl(len(_bseq) - 2) if len(_bseq) >= 2 else None
+                self._ema_bias_seq = list(_bseq)          # the full ordered bias history behind the two tags
                 # VP SPAN (user 2026-08-27): the LAST TWO FINISHED trends only — older segment's opening
                 # vline .. newer segment's closing vline; the ONGOING trend is excluded, so the profile
                 # stays FIXED until a segment completes.
@@ -7210,27 +7223,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self.plot.addItem(_lb3, ignoreBounds=True)
                     self._ema_lvl_items["lbl"] = _lb3
                 if getattr(self, "_ema_lvl_lbltxt", None) != _bias:
-                    _col3 = ((40, 230, 120) if _bias == "BULLISH"
-                             else ((240, 70, 90) if _bias == "BEARISH" else (170, 175, 185)))
+                    _col3 = ((40, 230, 120) if _bias.startswith("BULL")     # ... RETRACEMENT keeps its trend colour
+                             else ((240, 70, 90) if _bias.startswith("BEAR") else (170, 175, 185)))
                     _lb3.setText(_bias); _lb3.setColor(pg.mkColor(_col3[0], _col3[1], _col3[2], 235))
                     self._ema_lvl_lbltxt = _bias
-                if _hi_info is not None and _lo_info is not None:
-                    _ymid3 = 0.5 * (_hi_info[1] + _lo_info[1])
-                else:
-                    _ymid3 = (_hi_info or _lo_info)[1]
+                _ylow3 = (_lo_info or _hi_info)[1]        # the tag hangs BELOW the LOW extreme line (user 2026-08-29)
                 # KEEP IT ON SCREEN (user report 2026-08-28: the tag vanished when panned away from the live
-                # edge). Sit just past the last candle while that is in view; otherwise clamp to the
-                # viewport's right edge (right-anchored so the text never spills), and clamp y into view.
+                # edge). Sit just past the structure's right end while that is in view; otherwise clamp to the
+                # viewport's right edge (right-anchored so the text never spills), and clamp y so BOTH stacked
+                # lines stay inside. One text line is measured in PIXELS -> data units, so the two never
+                # overlap on a short pane.
                 (_tvx0, _tvx1), (_tvy0, _tvy1) = self.vb.viewRange()
-                _mx3 = 0.012 * (_tvx1 - _tvx0); _my3 = 0.06 * (_tvy1 - _tvy0)
-                _xpref = float(x[n - 1]) + 0.8
+                _mx3 = 0.012 * (_tvx1 - _tvx0)
+                try:
+                    _lh3 = 15.0 * float(self.vb.viewPixelSize()[1])
+                except Exception:
+                    _lh3 = 0.030 * (_tvy1 - _tvy0)
+                _xpref = _RX + 0.8
                 if _xpref <= _tvx1 - _mx3:
                     _xtag, _ax3 = _xpref, 0.0
                 else:
                     _xtag, _ax3 = _tvx1 - _mx3, 1.0
-                _ytag = min(max(_ymid3, _tvy0 + _my3), _tvy1 - _my3)
+                _ytag = min(max(_ylow3 - 0.35 * _lh3, _tvy0 + 2.1 * _lh3), _tvy1 - 0.2 * _lh3)
                 if getattr(self, "_ema_lvl_lblax", None) != _ax3:
-                    _lb3.setAnchor((_ax3, 1.0)); self._ema_lvl_lblax = _ax3
+                    _lb3.setAnchor((_ax3, 0.0)); self._ema_lvl_lblax = _ax3
                 _lb3.setPos(_xtag, _ytag)
                 _lb3.setVisible(True)
                 if _prevbias is None:
@@ -7242,14 +7258,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         self.plot.addItem(_lbp, ignoreBounds=True)
                         self._ema_lvl_items["lbl_prev"] = _lbp
                     if getattr(self, "_ema_lvl_lblptxt", None) != _prevbias:
-                        _colp = ((40, 230, 120) if _prevbias == "BULLISH"
-                                 else ((240, 70, 90) if _prevbias == "BEARISH" else (170, 175, 185)))
+                        _colp = ((40, 230, 120) if _prevbias.startswith("BULL")
+                                 else ((240, 70, 90) if _prevbias.startswith("BEAR") else (170, 175, 185)))
                         _lbp.setText("prev " + _prevbias)
                         _lbp.setColor(pg.mkColor(_colp[0], _colp[1], _colp[2], 160))
                         self._ema_lvl_lblptxt = _prevbias
                     if getattr(self, "_ema_lvl_lblpax", None) != _ax3:
                         _lbp.setAnchor((_ax3, 0.0)); self._ema_lvl_lblpax = _ax3
-                    _lbp.setPos(_xtag, _ytag)
+                    _lbp.setPos(_xtag, _ytag - _lh3)      # stacked one line under the current bias
                     _lbp.setVisible(True)
             # 'Extreme Lines Order Walls' (sub-toggle 'ema_walls'): split the current band into its three
             # zones -- upper EXPENSIVE / middle EQUILIBRIUM / lower CHEAP -- and show the STRONGEST order
