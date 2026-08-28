@@ -6967,13 +6967,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if _last_col != "r":
                         _r.append(int(_i)); _last_col = "r"
                     _pend = False
-            self._ema_stk_cache = (_ssig, _g, _r)
-        _, _g, _r = self._ema_stk_cache
+            # flip -> bar TIME, captured HERE because _ana is only the full analysis series on a recompute;
+            # the per-frame draw path must never index it (that was an IndexError on cache hits).
+            _ft = {int(_i4): float(_ana[_i4].get("start_time", 0.0) or 0.0) for _i4 in (_g + _r)}
+            self._ema_stk_cache = (_ssig, _g, _r, _ft)
+        _, _g, _r, _ftimes = self._ema_stk_cache
+        self._ema_flip_times = _ftimes
         if not _stk_on:                                       # vlines off, but the levels below may still draw
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
         else:
-            self._ema_flip_hits = []; self._ema_flip_times = {}
+            self._ema_flip_hits = []
             for _kind, _xs2a, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
                 pool = self._ema_stk_pool[_kind]
                 _pairs2 = [(_xi - _off, _xi) for _xi in _xs2a if _xi >= _off]   # older-than-window: counted, not drawn
@@ -6987,9 +6991,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     pool[_j].setValue(float(_xi)); pool[_j].setVisible(True)
                     _ai2 = _pairs2[_j][1]
                     self._ema_flip_hits.append((float(_xi), int(_ai2)))
-                    self._ema_flip_times[int(_ai2)] = float(_ana[_ai2].get("start_time", 0.0) or 0.0)
                     _pin2 = bool(self._ema_pin_t) and abs(
-                        float(_ana[_ai2].get("start_time", 0.0) or 0.0) - float(self._ema_pin_t)) < 0.5
+                        float(_ftimes.get(int(_ai2), 0.0)) - float(self._ema_pin_t)) < 0.5
                     if getattr(pool[_j], "_ema_pinned", None) != _pin2:   # pinned -> SOLID, otherwise dashed
                         _pn3 = pg.mkPen(color=(_rgb2[0], _rgb2[1], _rgb2[2], 235 if _pin2 else 170),
                                         width=1.8 if _pin2 else 1)
@@ -7016,7 +7019,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if self._ema_pin_t:            # PINNED: everything after that flip is ignored, so the pinned
                     _pt = float(self._ema_pin_t)   # trend counts as the running one and the pair before it as
                     _seq = [_t7 for _t7 in _seq    # "current" -- i.e. the past trend and the one preceding it
-                            if float(_ana[_t7[0]].get("start_time", 0.0) or 0.0) <= _pt]
+                            if float(_ftimes.get(_t7[0], 0.0)) <= _pt]
                 _bulls = []; _bears = []                      # finished segments: (start vline, end vline, extreme)
                 for _k3 in range(len(_seq) - 1):
                     _b0, _c0 = _seq[_k3]; _b1, _c1 = _seq[_k3 + 1]
