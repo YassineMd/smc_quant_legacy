@@ -1469,6 +1469,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_ext_cache = {}                                 # key -> (sig, hi_p, hi_i, lo_p, lo_i) — per bar close
         self._ema_ext_lbls = {}                                  # key -> TextItem readout at the live edge (dist hi/lo + HL delta)
         self._ema_ext_lblsig = {}                                # key -> sig of the last-rendered readout text
+        self._ema_pin_t = None                                   # PINNED flip line (bar start_time) -> treat it as
+        self._ema_flip_hits = []                                 #   "now"; [(window_x, analysis_idx)] for click tests
         self._ema_stk_pool = {"g": [], "r": []}                  # 'ema_stack' flip lines: pooled dashed vlines (green/red)
         self._ema_stk_cache = None                               # (sig, green bar idxs, red bar idxs) — per bar close
         self._ema_poc_items = {}                                 # 'ema_poc': per-zone POC line + tag
@@ -2829,11 +2831,43 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._shortcuts_dlg = dlg
         dlg.show(); dlg.raise_(); dlg.activateWindow()
 
+    def _ema_click_flip(self, ev) -> bool:
+        """Single-click on a Stack-Flip vline toggles its PIN: pinned draws SOLID and is treated as 'now', so
+        the Trend Extreme Lines show the trend that ended there and the one before it. Clicking it again (or
+        clicking another) moves/clears the pin. Returns True when the click was consumed."""
+        if ev.double() or self.scanner_mode != "bucket_canvas" or not self._ema_flip_hits:
+            return False
+        _cb = self.menu.sub_checks.get("ema_stack")
+        if _cb is None or not _cb.isChecked():
+            return False
+        try:
+            pt = self.vb.mapSceneToView(ev.scenePos()); xc = pt.x()
+            (_vx0, _vx1), _ = self.vb.viewRange()
+            _tol = max(1.2, 0.006 * (_vx1 - _vx0))            # a couple of bars, or ~0.6% of the view
+            _best = None; _bd = _tol
+            for _xw, _ai in self._ema_flip_hits:
+                if abs(xc - _xw) <= _bd:
+                    _bd = abs(xc - _xw); _best = _ai
+            if _best is None:
+                return False
+            _bk = getattr(self, "_ema_flip_times", {}).get(_best)
+            if _bk is None:
+                return False
+            self._ema_pin_t = None if (self._ema_pin_t and abs(self._ema_pin_t - _bk) < 0.5) else _bk
+            self._ema_stk_cache = None; self._ema_lvl_cache = None       # re-derive the structure from the pin
+            self._ema_vp_cache = None; self._ema_wall_cache = None; self._ema_poc_cache = None
+            self._last_scanner_sig = None                                # repaint now
+            return True
+        except Exception:
+            return False
+
     def _on_scene_click(self, ev) -> None:
         """Double-click handling. Mode 10: per-axis follow LOCK — double-clicking the X axis
         locks X, the Y axis locks Y, the plot body locks both (snap to full follow). The
         bottom/right axis strips are distinct scene rects, so the hit-test is unambiguous.
         Every other mode keeps the reset + auto-fit (fix #10, TradingView parity)."""
+        if self._ema_click_flip(ev):                 # SINGLE click on a Stack-Flip vline -> pin / unpin it
+            ev.accept(); return
         # SINGLE click on a 4h V/Z button (just above the x-axis) toggles that bucket's volume-profile / zone overlay.
         if (not ev.double() and self.scanner_mode == "bucket_canvas" and self._z4_btn_hits):
             try:
@@ -6841,6 +6875,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self, "_ema_depth_key", None) != (self._tf, self._chart_source):
             self._ema_depth_key = (self._tf, self._chart_source)
             self._ema_depth_want = self._EMA_MIN_ANA
+            self._ema_pin_t = None                            # the pinned flip belonged to the old series
         _warm = getattr(self, "_rr_warm", None) or []
         # Take as much of the warm prefix as the target needs -- it is ALREADY IN MEMORY, so this is a list
         # slice, while the deep pull below hits the cold archive (~600 ms the first time). Reaching for disk
@@ -6855,7 +6890,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_deep_full = bool(_dwant) and len(_deep) >= _dwant   # archive had at least as much as asked
         _off = len(_deep) + _wn
         _M = _off + m                                         # closed bars in ANALYSIS space
-        _ssig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source, _off)
+        _ssig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source, _off,
+                 self._ema_pin_t)
         # _ana MUST be rebuilt whenever ANY consumer of it is stale. Missing the wall/POC/VP caches here let
         # a sub-toggle (which clears only its own cache) recompute against the BARE window: the analysis-space
         # span indices then matched nothing, so an EMPTY result got cached -- and since these are keyed on the
@@ -6937,9 +6973,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
         else:
+            self._ema_flip_hits = []; self._ema_flip_times = {}
             for _kind, _xs2a, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
                 pool = self._ema_stk_pool[_kind]
-                _xs2 = [_xi - _off for _xi in _xs2a if _xi >= _off]   # older-than-window flips: counted, not drawn
+                _pairs2 = [(_xi - _off, _xi) for _xi in _xs2a if _xi >= _off]   # older-than-window: counted, not drawn
+                _xs2 = [_p2[0] for _p2 in _pairs2]
                 for _j, _xi in enumerate(_xs2):
                     if _j >= len(pool):
                         _pn2 = pg.mkPen(color=(_rgb2[0], _rgb2[1], _rgb2[2], 170), width=1); _pn2.setCosmetic(True)
@@ -6947,6 +6985,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _ln = pg.InfiniteLine(angle=90, movable=False, pen=_pn2); _ln.setZValue(14)
                         self.plot.addItem(_ln, ignoreBounds=True); pool.append(_ln)
                     pool[_j].setValue(float(_xi)); pool[_j].setVisible(True)
+                    _ai2 = _pairs2[_j][1]
+                    self._ema_flip_hits.append((float(_xi), int(_ai2)))
+                    self._ema_flip_times[int(_ai2)] = float(_ana[_ai2].get("start_time", 0.0) or 0.0)
+                    _pin2 = bool(self._ema_pin_t) and abs(
+                        float(_ana[_ai2].get("start_time", 0.0) or 0.0) - float(self._ema_pin_t)) < 0.5
+                    if getattr(pool[_j], "_ema_pinned", None) != _pin2:   # pinned -> SOLID, otherwise dashed
+                        _pn3 = pg.mkPen(color=(_rgb2[0], _rgb2[1], _rgb2[2], 235 if _pin2 else 170),
+                                        width=1.8 if _pin2 else 1)
+                        _pn3.setCosmetic(True)
+                        if not _pin2:
+                            _pn3.setDashPattern([2.0, 6.0])
+                        pool[_j].setPen(_pn3); pool[_j]._ema_pinned = _pin2
                 for _pl in pool[len(_xs2):]:
                     _pl.setVisible(False)
         # 'Trend Extreme Lines' (sub-toggle 'ema_trendlvl'): the LAST FINISHED bear segment (red line -> next
@@ -6963,6 +7013,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             if self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig:
                 _seq = sorted([(int(_i2), "g") for _i2 in _g] + [(int(_i2), "r") for _i2 in _r])
+                if self._ema_pin_t:            # PINNED: everything after that flip is ignored, so the pinned
+                    _pt = float(self._ema_pin_t)   # trend counts as the running one and the pair before it as
+                    _seq = [_t7 for _t7 in _seq    # "current" -- i.e. the past trend and the one preceding it
+                            if float(_ana[_t7[0]].get("start_time", 0.0) or 0.0) <= _pt]
                 _bulls = []; _bears = []                      # finished segments: (start vline, end vline, extreme)
                 for _k3 in range(len(_seq) - 1):
                     _b0, _c0 = _seq[_k3]; _b1, _c1 = _seq[_k3 + 1]
