@@ -2159,11 +2159,33 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return -24 * 3600
         return self._base_scan_secs(tf)
 
+    def _ema_win_floor(self):
+        """Earliest bar time the Trend Extreme Lines need ON SCREEN, or None. The levels are computed from
+        deep history, so without this the frame could show the LINES over empty space -- the candles that
+        formed those trends were never loaded (user 2026-08-28). Returning a time here lets the bucket
+        builders reach PAST the chart's days-to-show setting, which is exactly the requested override.
+        Only active while the toggle is on; capped by the callers."""
+        try:
+            _cb = self.menu.sub_checks.get("ema_trendlvl")
+            if _cb is None or not _cb.isChecked():
+                return None
+        except Exception:
+            return None
+        _t = getattr(self, "_ema_need_back_t", None)
+        return float(_t) if _t else None
+
     def _replay_span_secs(self) -> int:
         """Replay window WIDTH for the current tf = the per-tf BASE span (7d on 1h/4h, 5d on 15m, 3d on 5m, 24h on
         1m — see _base_scan_secs), NOT the narrower normal-mode default, so a replay loads the same days it would
-        live. Left edge = replay-start - this. Drives BOTH the daemon and the recon (non-daemon) replay tracks."""
-        return -self._base_scan_secs(self.worker.tf)
+        live. Left edge = replay-start - this. Drives BOTH the daemon and the recon (non-daemon) replay tracks.
+        WIDENED on demand so the Trend Extreme Lines' own candles are inside the clip (_ema_win_floor)."""
+        _span = -self._base_scan_secs(self.worker.tf)
+        _f = self._ema_win_floor()
+        if _f is not None and self._replay_start_t:
+            _need = float(self._replay_start_t) - _f
+            if _need > _span:
+                _span = int(min(_need, 90 * 24 * 3600))       # cap the auto-widening at 90 days
+        return _span
 
     def _replay_lookback_secs(self) -> int:
         """How far the cold-archive is asked to reach before the replay cursor — always >= the replay span (+1d
@@ -6904,6 +6926,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _bears.append((_b0, _b1, _lo))
                 _hi_info = (_bulls[-1][0], _bulls[-1][2]) if _bulls else None
                 _lo_info = (_bears[-1][0], _bears[-1][2]) if _bears else None
+                # Oldest bar any DRAWN level depends on -> the window floor. Changing it invalidates the
+                # scanner frame ONCE so the builder re-cuts with the wider reach (no cache-sig surgery).
+                _segs6 = list(_bulls[-2:]) + list(_bears[-2:])
+                if _segs6:
+                    _i6 = min(_s6[0] for _s6 in _segs6)
+                    if 0 <= _i6 < len(_ana):
+                        _f6 = float(_ana[_i6].get("start_time", 0.0) or 0.0)
+                        if _f6 and _f6 != getattr(self, "_ema_need_back_t", None):
+                            self._ema_need_back_t = _f6
+                            self._scanner_bucket_sig = None
                 # Not enough finished segments to compare? Go DEEPER next frame (the sig carries _off, so the
                 # bigger pull re-triggers this whole block). Stops growing at the ceiling, or as soon as the
                 # archive stops returning everything asked for -- so it never spins on missing history.
@@ -13575,6 +13607,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         closed_list: list[dict] = snap.get("closed_buckets", []) or []
         active: dict = snap.get("active_bucket") or {}
         anchor_unix = self.menu.scan_start_unix()
+        _ef = self._ema_win_floor()                            # Trend Extreme Lines override the days-to-show
+        if _ef is not None and _ef < anchor_unix:
+            anchor_unix = int(max(_ef, anchor_unix - 90 * 24 * 3600))
         total_closed = int(snap.get("total_closed", 0) or 0)   # DB-id of closed_list[-1] (0 = pre-redeploy daemon)
         _replay = self._replay_on and self._replay_edge_t is not None
         if _replay:                                            # REPLAY: reach cold-archive context BEFORE the cursor
@@ -13755,6 +13790,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         closed_list: list[dict] = list(snap.get("closed_buckets", []) or [])
         active: dict = snap.get("active_bucket") or {}
         anchor_unix = self.menu.scan_start_unix()
+        _ef = self._ema_win_floor()                            # Trend Extreme Lines override the days-to-show
+        if _ef is not None and _ef < anchor_unix:
+            anchor_unix = int(max(_ef, anchor_unix - 90 * 24 * 3600))
         combined: list[dict] = list(closed_list)
         _forming = False
         if active and active.get("curr_vol", 0.0) > 0:      # append the live forming edge unless it's a stale dup
