@@ -6847,9 +6847,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _M = _off + m                                         # closed bars in ANALYSIS space
         _ssig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source, _off)
         _need = ((self._ema_stk_cache is None or self._ema_stk_cache[0] != _ssig)
-                 or ((_lvl_on or _vp_on)
-                     and (self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig))
-                 or (_vp_on and (self._ema_vp_cache is None or self._ema_vp_cache[0] != _ssig)))
+                 or ((_lvl_on or _vp_on or _wl_on or _wlp_on or _pc_on or _pcp_on)
+                     and (self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig)))
         _ana = ((list(_deep) + list(_warm[len(_warm) - _wn:]) + list(buckets[:m]))
                 if _off else buckets) if _need else buckets
 
@@ -7026,6 +7025,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _vp_span = (min(_s5[0] for _s5 in _seg5), max(_s5[1] for _s5 in _seg5)) if _seg5 else None
                 self._ema_lvl_cache = (_ssig, _lo_info, _hi_info, _lop, _hip, _bias, _prevbias, _vp_span)
             _, _lo_info, _hi_info, _lop, _hip, _bias, _prevbias, _vp_span = self._ema_lvl_cache
+            # FROZEN-STRUCTURE KEY: the VP bins, the zone walls and the zone POCs depend ONLY on the two
+            # finished-trend spans and their band prices -- all frozen until a trend COMPLETES. Keying them on
+            # _ssig recomputed every BAR CLOSE for nothing; that was the live "takes so long" cost.
+            _frz = (_off, _vp_span,
+                    (round(_lo_info[1], 8), round(_hi_info[1], 8)) if (_lo_info and _hi_info) else None,
+                    (_lop, _hip), self._tf, self._chart_source)
             if not _lvl_on:                                   # levels computed only for the VP -> lines/tags hidden
                 _lo_info = _hi_info = _lop = _hip = None; _bias = None
             for _sd2, _info, _rgb3, _al3, _w3 in (("lo", _lo_info, (40, 230, 120), 235, 2.2),
@@ -7156,7 +7161,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if (not _wl_on and not _wlp_on) or not _th_ok or _vp_span is None:
                 self._hide_ema_walls()
             else:
-                if self._ema_wall_cache is None or self._ema_wall_cache[0] != _ssig:
+                if self._ema_wall_cache is None or self._ema_wall_cache[0] != _frz:
                     _sets = {"cur": {}, "prev": {}}
                     try:
                         from app import absorption_level_detect as _alw
@@ -7193,7 +7198,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                         break
                     except Exception:
                         _sets = {"cur": {}, "prev": {}}
-                    self._ema_wall_cache = (_ssig, _sets)
+                    self._ema_wall_cache = (_frz, _sets)
                 _sets = self._ema_wall_cache[1]
                 for _sk7, _on7, _al7, _pre7 in (("cur", _wl_on, 70, ""), ("prev", _wlp_on, 40, "prev ")):
                     for _zn, _ztxt in (("exp", "EXPENSIVE"), ("eq", "EQUILIBRIUM"), ("cheap", "CHEAP")):
@@ -7236,7 +7241,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if (not _pc_on and not _pcp_on) or not _th_ok or _vp_span is None:
                 self._hide_ema_pocs()
             else:
-                if self._ema_poc_cache is None or self._ema_poc_cache[0] != _ssig:
+                if self._ema_poc_cache is None or self._ema_poc_cache[0] != _frz:
                     _psets = {"cur": {}, "prev": {}}
                     try:
                         _pspecs = [("cur", float(_lo_info[1]), float(_hi_info[1]), _vp_span)]
@@ -7285,7 +7290,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                     _zp8[_zn8] = (_bp8, _bv8, _s0p)
                     except Exception:
                         _psets = {"cur": {}, "prev": {}}
-                    self._ema_poc_cache = (_ssig, _psets)
+                    self._ema_poc_cache = (_frz, _psets)
                 _psets = self._ema_poc_cache[1]
                 for _sk8, _on8, _al8, _pre8 in (("cur", _pc_on, 235, ""), ("prev", _pcp_on, 150, "prev ")):
                     for _zn8, _zt8 in (("exp", "EXPENSIVE"), ("eq", "EQUILIBRIUM"), ("cheap", "CHEAP")):
@@ -7327,7 +7332,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if _vp_span is None:
                     self._hide_ema_vp()
                 else:
-                    if self._ema_vp_cache is None or self._ema_vp_cache[0] != _ssig:
+                    if self._ema_vp_cache is None or self._ema_vp_cache[0] != _frz:
                         _sp0, _sp1 = _vp_span; _NB = 40
                         _plo = float("inf"); _phi = 0.0
                         for _j4 in range(_sp0, _sp1 + 1):
@@ -7403,7 +7408,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _pocs_out = _maxs6(range(_b5v + 1, _NB)) + _maxs6(range(0, _a5))
                         else:
                             _lvns = []; _pocs_out = []
-                        self._ema_vp_cache = (_ssig, _cen, _vols, _hb, _sp0, _sp1, _valp, _vahp, _lvns, _pocs_out)
+                        self._ema_vp_cache = (_frz, _cen, _vols, _hb, _sp0, _sp1, _valp, _vahp, _lvns, _pocs_out)
                     _, _cen, _vols, _hb, _sp0c, _sp1c, _valp, _vahp, _lvns, _pocs_out = self._ema_vp_cache
                     _vmax = float(_vols.max()) if _cen is not None and len(_vols) else 0.0
                     if _cen is None or _vmax <= 0:
