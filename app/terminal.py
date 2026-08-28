@@ -6579,7 +6579,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _it in self._ema_vp_va.values():
             _it.setVisible(False)
 
-    _EMA_MIN_ANA = 1500      # bars of history the bias walk needs before it can settle on a determined read
+    _EMA_MIN_ANA = 2500      # starting depth for the bias walk (grows on demand, see _ema_depth_want)
+    _EMA_MAX_ANA = 12000     # hard ceiling for that growth (cost guard; ~110 ms per bar close at the cap)
 
     def _ema_deep_hist(self, first_t, want):
         """Bars strictly BEFORE `first_t` on the CURRENT tf/source, pulled straight from the replay chunks /
@@ -6772,12 +6773,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # history PLUS the window (the same warm prefix the Radar Runner uses to avoid repaint), so structure
         # that scrolled off the left still counts. Analysis indices are offset by _off; drawing maps them back
         # (_wx) and vlines older than the window are used but not drawn.
+        # DEPTH TARGET — deliberately independent of the chart's "days to show" window (user 2026-08-28:
+        # the levels must not be truncated by the display limit). Starts at _EMA_MIN_ANA and GROWS below
+        # whenever the structure still cannot be resolved and the archive can actually feed more.
+        if getattr(self, "_ema_depth_key", None) != (self._tf, self._chart_source):
+            self._ema_depth_key = (self._tf, self._chart_source)
+            self._ema_depth_want = self._EMA_MIN_ANA
         _warm = getattr(self, "_rr_warm", None) or []
         _wn = min(len(_warm), 2000)
         _deep = []                                            # pulled ONLY when the frame is too short
-        if _wn + m < self._EMA_MIN_ANA:
+        _dwant = 0
+        if _wn + m < self._ema_depth_want:
             _ft = float((_warm[len(_warm) - _wn] if _wn else buckets[0]).get("start_time", 0.0) or 0.0)
-            _deep = self._ema_deep_hist(_ft, self._EMA_MIN_ANA - (_wn + m))
+            _dwant = self._ema_depth_want - (_wn + m)
+            _deep = self._ema_deep_hist(_ft, _dwant)
+        self._ema_deep_full = bool(_dwant) and len(_deep) >= _dwant   # archive had at least as much as asked
         _off = len(_deep) + _wn
         _M = _off + m                                         # closed bars in ANALYSIS space
         _ssig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source, _off)
@@ -6894,6 +6904,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _bears.append((_b0, _b1, _lo))
                 _hi_info = (_bulls[-1][0], _bulls[-1][2]) if _bulls else None
                 _lo_info = (_bears[-1][0], _bears[-1][2]) if _bears else None
+                # Not enough finished segments to compare? Go DEEPER next frame (the sig carries _off, so the
+                # bigger pull re-triggers this whole block). Stops growing at the ceiling, or as soon as the
+                # archive stops returning everything asked for -- so it never spins on missing history.
+                if ((len(_bulls) < 2 or len(_bears) < 2) and getattr(self, "_ema_deep_full", False)
+                        and self._ema_depth_want < self._EMA_MAX_ANA):
+                    self._ema_depth_want = min(self._EMA_MAX_ANA, self._ema_depth_want * 2)
                 # PREVIOUS extremes: drawn from their own vline but ENDING where they were superseded — the
                 # opposite-colour vline that completed the NEWER same-side segment (user 2026-08-27).
                 _hip = (_bulls[-2][0], _bulls[-1][1], _bulls[-2][2]) if len(_bulls) >= 2 else None
