@@ -1471,6 +1471,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_ext_lblsig = {}                                # key -> sig of the last-rendered readout text
         self._ema_stk_pool = {"g": [], "r": []}                  # 'ema_stack' flip lines: pooled dashed vlines (green/red)
         self._ema_stk_cache = None                               # (sig, green bar idxs, red bar idxs) — per bar close
+        self._ema_lvl_vl = {}                                    # segment-START vlines behind each extreme line
         self._ema_lvl_items = {}                                 # 'ema_trendlvl': 'hi' red / 'lo' green solid hlines
         self._ema_lvl_cache = None                               # (sig, lo_info, hi_info) — per bar close
         self._ema_vp_item = None                                 # 'ema_trendvp': right-side VP of the extreme-lines span
@@ -2601,6 +2602,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._ema_lvl_cache = None           # trend extreme lines toggled -> recompute next frame
                 if not on:
                     for _it in self._ema_lvl_items.values():
+                        _it.setVisible(False)
+                    for _it in self._ema_lvl_vl.values():
                         _it.setVisible(False)
             elif key == "ema_trendvp":
                 self._ema_vp_cache = None            # trend VP toggled -> recompute next frame
@@ -6760,6 +6763,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _pl.setVisible(False)
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
+            for _it3 in self._ema_lvl_vl.values():
+                _it3.setVisible(False)
             self._hide_ema_vp()
             return
         # ANALYSIS SERIES (user report 2026-08-28: "the algo should be able to extract previous data ... even
@@ -6869,6 +6874,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not _lvl_on and not _vp_on:
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
+            for _it3 in self._ema_lvl_vl.values():
+                _it3.setVisible(False)
             self._hide_ema_vp()
         else:
             if self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig:
@@ -6957,6 +6964,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _xr = float(x[n - 1]) if len(_info) == 2 else _wx(_info[1])   # prev lines FREEZE at supersession
                 _it3.setData([_wx(_info[0]), _xr], [_info[-1], _info[-1]])
                 _it3.setVisible(True)
+            # SEGMENT-START MARKERS (user 2026-08-28: "show the trend start that constitutes these lines"):
+            # a dashed vline at the bar each drawn extreme line's trend BEGAN -- green for a bull segment
+            # (its high is the red line), red for a bear segment. Anchors that predate the window clamp to
+            # the left edge, so a level inherited from off-screen history still shows where it came from.
+            # Skipped when the Stack Flip Lines toggle already drew that exact flip (no double-draw).
+            for _vk, _vinfo, _vrgb in (("hi", _hi_info, (40, 230, 120)), ("lo", _lo_info, (240, 70, 90)),
+                                       ("hi_prev", _hip, (40, 230, 120)), ("lo_prev", _lop, (240, 70, 90))):
+                _vit = self._ema_lvl_vl.get(_vk)
+                _vshow = _vinfo is not None and not (_stk_on and _vinfo[0] >= _off)
+                if not _vshow:
+                    if _vit is not None:
+                        _vit.setVisible(False)
+                    continue
+                if _vit is None:
+                    _vpn = pg.mkPen(color=(_vrgb[0], _vrgb[1], _vrgb[2], 170), width=1)
+                    _vpn.setCosmetic(True); _vpn.setDashPattern([2.0, 6.0])
+                    _vit = pg.InfiniteLine(angle=90, movable=False, pen=_vpn); _vit.setZValue(14)
+                    self.plot.addItem(_vit, ignoreBounds=True)
+                    self._ema_lvl_vl[_vk] = _vit
+                _vit.setValue(float(max(0, min(n - 1, _vinfo[0] - _off))))
+                _vit.setVisible(True)
             # THIRDS (user 2026-08-28): split the CURRENT band (low extreme -> high extreme) into 3 equal
             # 33.33% zones with two dashed gray dividers, spanning the band's window (older anchor -> live
             # candle). Hidden whenever either current extreme is missing.
