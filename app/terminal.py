@@ -6816,8 +6816,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._ema_depth_key = (self._tf, self._chart_source)
             self._ema_depth_want = self._EMA_MIN_ANA
         _warm = getattr(self, "_rr_warm", None) or []
-        _wn = min(len(_warm), 2000)
-        _deep = []                                            # pulled ONLY when the frame is too short
+        # Take as much of the warm prefix as the target needs -- it is ALREADY IN MEMORY, so this is a list
+        # slice, while the deep pull below hits the cold archive (~600 ms the first time). Reaching for disk
+        # to cover a shortfall the warm prefix could already fill was the live start-up stall (2026-08-28).
+        _wn = min(len(_warm), max(0, min(self._EMA_MAX_ANA, self._ema_depth_want) - m))
+        _deep = []                                            # pulled ONLY when the frame is STILL too short
         _dwant = 0
         if _wn + m < self._ema_depth_want:
             _ft = float((_warm[len(_warm) - _wn] if _wn else buckets[0]).get("start_time", 0.0) or 0.0)
@@ -7107,7 +7110,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 else:
                     _xtag, _ax3 = _tvx1 - _mx3, 1.0
                 _ytag = min(max(_ymid3, _tvy0 + _my3), _tvy1 - _my3)
-                _lb3.setAnchor((_ax3, 1.0))
+                if getattr(self, "_ema_lvl_lblax", None) != _ax3:
+                    _lb3.setAnchor((_ax3, 1.0)); self._ema_lvl_lblax = _ax3
                 _lb3.setPos(_xtag, _ytag)
                 _lb3.setVisible(True)
                 if _prevbias is None:
@@ -7124,7 +7128,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _lbp.setText("prev " + _prevbias)
                         _lbp.setColor(pg.mkColor(_colp[0], _colp[1], _colp[2], 160))
                         self._ema_lvl_lblptxt = _prevbias
-                    _lbp.setAnchor((_ax3, 0.0))
+                    if getattr(self, "_ema_lvl_lblpax", None) != _ax3:
+                        _lbp.setAnchor((_ax3, 0.0)); self._ema_lvl_lblpax = _ax3
                     _lbp.setPos(_xtag, _ytag)
                     _lbp.setVisible(True)
             # 'Extreme Lines Order Walls' (sub-toggle 'ema_walls'): split the current band into its three
@@ -7138,11 +7143,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _sets = {"cur": {}, "prev": {}}
                     try:
                         from app import absorption_level_detect as _alw
-                        _marks7 = _alw.detect(_ana[:_M], skip_last=False) or []   # ONE detect, filtered per band
                         _specs = [("cur", float(_lo_info[1]), float(_hi_info[1]), _vp_span)]
                         if _hip is not None and _lop is not None:                 # the PRECEDING pair of trends
                             _specs.append(("prev", float(_lop[2]), float(_hip[2]),
                                            (min(_hip[0], _lop[0]), max(_hip[1], _lop[1]))))
+                        # PERF: a candidate must be BORN inside one of those spans, so detect over just that
+                        # stretch (+ lead-in for walls to form) instead of the whole analysis series -- on
+                        # real level-dense buckets the full-series detect cost ~200 ms per bar close.
+                        _wl_lo = max(0, min(_sp7[3][0] for _sp7 in _specs) - 300)
+                        _marks7 = _alw.detect(_ana[_wl_lo:_M], skip_last=False) or []
                         for _sk7, _blo7, _bhi7, (_s0w, _s1w) in _specs:
                             if _bhi7 <= _blo7:
                                 continue
@@ -7152,7 +7161,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                       ("exp", _blo7 + 2.0 * _r7 / 3.0, _bhi7))
                             _zw = _sets[_sk7]
                             for _mk7 in _marks7:
-                                _i7 = int(_mk7.get("i0", -1))
+                                _i7 = int(_mk7.get("i0", -1)) + _wl_lo      # slice index -> analysis index
                                 if not (_s0w <= _i7 <= _s1w):  # born outside THAT pair of trends -> skip
                                     continue
                                 _p7 = float(_mk7.get("price") or 0.0)
@@ -7162,6 +7171,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                     if _z0 <= _p7 <= _z1:
                                         _cur = _zw.get(_zn)
                                         if _cur is None or float(_mk7.get("strength") or 0.0) > float(_cur.get("strength") or 0.0):
+                                            _mk7["_off7"] = _wl_lo         # slice offset, for drawing
                                             _zw[_zn] = _mk7
                                         break
                     except Exception:
@@ -7182,15 +7192,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             self.vb.addItem(_rc7, ignoreBounds=True)
                             _lb7 = pg.TextItem(anchor=(0, 0.5)); _lb7.setZValue(16)
                             self.plot.addItem(_lb7, ignoreBounds=True)
-                            _slot = {"rect": _rc7, "lbl": _lb7}; self._ema_wall_items[_kk7] = _slot
+                            _slot = {"rect": _rc7, "lbl": _lb7, "txt": None, "br": None}
+                        self._ema_wall_items[_kk7] = _slot
                         _rgb7 = (40, 230, 120) if _mk7.get("side") == "S" else (240, 70, 90)
                         _p7 = float(_mk7.get("price") or 0.0); _bd7 = float(_mk7.get("band") or 0.0) or (_p7 * 5e-4)
-                        _x07 = _wx(int(_mk7.get("i0", 0))); _x17 = float(x[n - 1])
+                        _x07 = _wx(int(_mk7.get("i0", 0)) + int(_mk7.get("_off7", 0))); _x17 = float(x[n - 1])
                         _slot["rect"].setRect(_x07, _p7 - _bd7, max(1e-9, _x17 - _x07), 2.0 * _bd7)
-                        _slot["rect"].setBrush(pg.mkBrush(_rgb7[0], _rgb7[1], _rgb7[2], _al7))
+                        if _slot.get("br") != (_rgb7, _al7):
+                            _slot["rect"].setBrush(pg.mkBrush(_rgb7[0], _rgb7[1], _rgb7[2], _al7))
+                            _slot["br"] = (_rgb7, _al7)
                         _slot["rect"].setVisible(True)
-                        _slot["lbl"].setText("%s%s  %.2f" % (_pre7, _ztxt, float(_mk7.get("strength") or 0.0)))
-                        _slot["lbl"].setColor(pg.mkColor(_rgb7[0], _rgb7[1], _rgb7[2], 220 if not _pre7 else 150))
+                        _txt7 = "%s%s  %.2f" % (_pre7, _ztxt, float(_mk7.get("strength") or 0.0))
+                        if _slot.get("txt") != _txt7:         # setText/setColor re-layout the glyphs: once only
+                            _slot["lbl"].setText(_txt7)
+                            _slot["lbl"].setColor(pg.mkColor(_rgb7[0], _rgb7[1], _rgb7[2],
+                                                             220 if not _pre7 else 150))
+                            _slot["txt"] = _txt7
                         _slot["lbl"].setPos(_x07 + 0.4, _p7)
                         _slot["lbl"].setVisible(True)
             # 'Trend Extremes VP' (sub-toggle 'ema_trendvp'): right-anchored volume profile over the SPAN the
@@ -7293,15 +7310,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                                                 pen=None, brush=(150, 158, 175, 70))
                             self._ema_vp_item.setZValue(-5)
                             self.plot.addItem(self._ema_vp_item, ignoreBounds=True)
+                        _vkey = (id(_vols), round(_vx1v, 6), round(_mw6, 6))
+                        if getattr(self, "_ema_vp_lastkey", None) == _vkey:
+                            _skip_vp = True                   # nothing moved -> leave the picture alone
+                        else:
+                            self._ema_vp_lastkey = _vkey; _skip_vp = False
                         _poc = int(np.argmax(_vols))
                         _lvset = set(_lvns or []); _opset = set(_pocs_out or [])
-                        _brs = [pg.mkBrush(250, 180, 60, 150) if _j5 == _poc
+                        _brs = [] if _skip_vp else [pg.mkBrush(250, 180, 60, 150) if _j5 == _poc
                                 else (pg.mkBrush(178, 70, 255, 160) if _j5 in _lvset   # in-VA LVN: electric purple
                                       else (pg.mkBrush(250, 205, 120, 125) if _j5 in _opset   # outside POCs: light amber
                                             else pg.mkBrush(150, 158, 175, 70)))
                                 for _j5 in range(len(_vols))]
-                        self._ema_vp_item.setOpts(x0=_vx1v - _wid, x1=np.full(len(_vols), _vx1v),
-                                                  y=_cen, height=_hb * 0.92, pen=None, brushes=_brs)
+                        if not _skip_vp:                  # setOpts rebuilds every brush + the QPicture
+                            self._ema_vp_item.setOpts(x0=_vx1v - _wid, x1=np.full(len(_vols), _vx1v),
+                                                      y=_cen, height=_hb * 0.92, pen=None, brushes=_brs)
                         self._ema_vp_item.setVisible(True)
                         # VAH / VAL: dashed lines ON the right-side profile band itself (user 2026-08-27)
                         for _k6, _pv6 in (("vah", _vahp), ("val", _valp)):
