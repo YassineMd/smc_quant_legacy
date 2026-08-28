@@ -9456,10 +9456,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             y = (lo - pad) if side > 0 else (hi + pad)               # LONG ▲ BELOW the candle / SHORT ▼ ABOVE it
             self._rr_entries.append(("rr%d" % i, i, side, ev["entry"], ev["sl"], ev["tp"], y))
             col = GRN if side > 0 else RED
-            _pen_rgb = [int(c * 0.55) for c in col] + [255]
-            spots.append({"pos": (i, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
-                          "pen": pg.mkPen(*_pen_rgb, width=1.4), "size": 20})
             _fail = bool(_failed.get(i))
+            _al9 = 70 if _fail else 255                          # a FAILED badge FADES back -- the live ones stay solid
+            _pen_rgb = [int(c * 0.55) for c in col] + [110 if _fail else 255]
+            spots.append({"pos": (i, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, _al9),
+                          "pen": pg.mkPen(*_pen_rgb, width=1.4), "size": 20})
             if hc:                                               # GOLD RING = high conviction (breakout strength + reward/eff aligned)
                 ring_spots.append({"pos": (i, y), "symbol": "o", "size": 34 if _fail else 28,   # step out when crossed
                                    "brush": pg.mkBrush(0, 0, 0, 0),
@@ -9467,9 +9468,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if _fail:                                            # FAILED = stopped out before it ever reached the 0.2% TP
                 fail_spots.append({"pos": (i, y), "symbol": "o", "size": 28, "brush": pg.mkBrush(0, 0, 0, 0),
                                    "pen": pg.mkPen(255, 70, 70, 255, width=2.0)})
-                fail_spots.append({"pos": (i, y), "symbol": "x", "size": 14,
-                                   "brush": pg.mkBrush(255, 150, 40, 255),
-                                   "pen": pg.mkPen(255, 150, 40, 255, width=1.8)})
+                fail_spots.append({"pos": (i, y), "symbol": "x", "size": 14,   # BLACK cross, RED border
+                                   "brush": pg.mkBrush(10, 12, 16, 255),
+                                   "pen": pg.mkPen(255, 70, 70, 255, width=1.8)})
         self._rr_sph.setData(spots); self._rr_sph.setVisible(True)
         self._rr_ring.setData(ring_spots); self._rr_ring.setVisible(True)
         self._rr_fail_sph.setData(fail_spots); self._rr_fail_sph.setVisible(True)
@@ -9950,15 +9951,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             hi = float(hb.get("high", 0.0) or 0.0); lo = float(hb.get("low", 0.0) or 0.0)
             y = (lo - pad) if side > 0 else (hi + pad)           # LONG ▲ below the htf bar / SHORT ▼ above it
             col = cols["S"] if side > 0 else cols["R"]
-            _pen_rgb = [int(c * 0.55) for c in col] + [255]
-            spots.append({"pos": (x, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
+            _hf9 = bool(_hfail.get(i))                          # stopped out before the 0.2% TP, resolved on HTF candles
+            _pen_rgb = [int(c * 0.55) for c in col] + [110 if _hf9 else 255]
+            spots.append({"pos": (x, y), "symbol": "t1" if side > 0 else "t",
+                          "brush": pg.mkBrush(*col, 70 if _hf9 else 255),   # FAILED -> faded triangle
                           "pen": pg.mkPen(*_pen_rgb, width=1.5), "size": 22})
-            if _hfail.get(i):                                   # stopped out before the 0.2% TP, resolved on HTF candles
+            if _hf9:
                 fspots.append({"pos": (x, y), "symbol": "o", "size": 30, "brush": pg.mkBrush(0, 0, 0, 0),
                                "pen": pg.mkPen(255, 70, 70, 255, width=2.0)})
-                fspots.append({"pos": (x, y), "symbol": "x", "size": 15,
-                               "brush": pg.mkBrush(255, 150, 40, 255),
-                               "pen": pg.mkPen(255, 150, 40, 255, width=1.8)})
+                fspots.append({"pos": (x, y), "symbol": "x", "size": 15,   # BLACK cross, RED border
+                               "brush": pg.mkBrush(10, 12, 16, 255),
+                               "pen": pg.mkPen(255, 70, 70, 255, width=1.8)})
         _sph.setData(spots); _sph.setVisible(True)
         _hfsp.setData(fspots); _hfsp.setVisible(True)
 
