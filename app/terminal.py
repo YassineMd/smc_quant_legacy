@@ -1473,6 +1473,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_stk_cache = None                               # (sig, green bar idxs, red bar idxs) — per bar close
         self._ema_poc_items = {}                                 # 'ema_poc': per-zone POC line + tag
         self._ema_poc_cache = None                               # (sig, {band: {zone: (price, vol)}})
+        self._ema_wmrg_items = {}                                # 'ema_walls_merge': one AREA per zone
         self._ema_wall_items = {}                                # 'ema_walls': per-zone strongest-wall band + tag
         self._ema_wall_cache = None                              # (sig, {zone: mark}) — detect once per bar close
         self._ema_lvl_vl = {}                                    # segment-START vlines behind each extreme line
@@ -2615,7 +2616,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _toggle_subwidget(self, key: str, on: bool) -> None:
         if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
                    "ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls", "ema_walls_prev",
-                   "ema_walls_line",
+                   "ema_walls_line", "ema_walls_merge",
                    "ema_poc", "ema_poc_prev"):
             if key == "ema_hlread":                  # readout text only; the HL lines are unaffected
                 if not on:
@@ -2637,7 +2638,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._ema_vp_cache = None            # trend VP toggled -> recompute next frame
                 if not on:
                     self._hide_ema_vp()
-            elif key in ("ema_walls", "ema_walls_prev", "ema_walls_line"):
+            elif key in ("ema_walls", "ema_walls_prev", "ema_walls_line", "ema_walls_merge"):
                 self._ema_wall_cache = None          # zone walls toggled -> re-detect next frame
                 if not on:
                     self._hide_ema_walls()
@@ -6614,6 +6615,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _d["ln"].setVisible(False); _d["lbl"].setVisible(False)
 
     def _hide_ema_walls(self) -> None:
+        for _d in self._ema_wmrg_items.values():
+            _d["rect"].setVisible(False); _d["lbl"].setVisible(False)
         for _d in self._ema_wall_items.values():
             _d["rect"].setVisible(False); _d["lbl"].setVisible(False)
             if _d.get("ln") is not None:
@@ -6811,6 +6814,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _wlp_on = _wpcb is not None and _wpcb.isChecked()     # ... and the same for the PRECEDING band
         _wlncb = self.menu.sub_checks.get("ema_walls_line")
         _wln_on = _wlncb is not None and _wlncb.isChecked()   # 'To Lines': draw each wall as its MIDDLE line
+        _wmgcb = self.menu.sub_checks.get("ema_walls_merge")
+        _wmg_on = _wmgcb is not None and _wmgcb.isChecked()   # 'Merged Lines': one AREA per zone instead
         _pccb = self.menu.sub_checks.get("ema_poc")
         _pc_on = _pccb is not None and _pccb.isChecked()      # ... and the per-zone POCs
         _pcpcb = self.menu.sub_checks.get("ema_poc_prev")
@@ -7213,7 +7218,51 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _sets = {"cur": {}, "prev": {}}
                     self._ema_wall_cache = (_frz, _sets)
                 _sets = self._ema_wall_cache[1]
-                for _sk7, _on7, _al7, _pre7 in (("cur", _wl_on, 70, ""), ("prev", _wlp_on, 40, "prev ")):
+                # 'Merged Lines': collapse each zone's walls (current + previous) into ONE area spanning
+                # them -- CHEAP green / EQUILIBRIUM gray / EXPENSIVE red -- replacing the per-band drawing.
+                for _zn6, _zt6, _rgb6 in (("exp", "EXPENSIVE", (240, 70, 90)),
+                                          ("eq", "EQUILIBRIUM", (150, 158, 175)),
+                                          ("cheap", "CHEAP", (40, 230, 120))):
+                    _sl6 = self._ema_wmrg_items.get(_zn6)
+                    _px6 = []
+                    if _wmg_on:
+                        for _sk6, _on6 in (("cur", _wl_on), ("prev", _wlp_on)):
+                            _m6 = _sets.get(_sk6, {}).get(_zn6) if _on6 else None
+                            if _m6 is not None:
+                                _px6.append((float(_m6.get("price") or 0.0),
+                                             float(_m6.get("band") or 0.0),
+                                             int(_m6.get("i0", 0)) + int(_m6.get("_off7", 0))))
+                    if not _px6:
+                        if _sl6 is not None:
+                            _sl6["rect"].setVisible(False); _sl6["lbl"].setVisible(False)
+                        continue
+                    _lo6 = min(_p for _p, _b, _i in _px6); _hi6 = max(_p for _p, _b, _i in _px6)
+                    if _hi6 - _lo6 <= 0:                      # a single line -> give the area the wall's own band
+                        _bd6 = max(_b for _p, _b, _i in _px6) or (_lo6 * 5e-4)
+                        _lo6 -= _bd6; _hi6 += _bd6
+                    _x06 = _wx(min(_i for _p, _b, _i in _px6)); _x16 = float(x[n - 1])
+                    if _sl6 is None:
+                        _rc6 = QtWidgets.QGraphicsRectItem(); _rc6.setPen(pg.mkPen(None)); _rc6.setZValue(-6)
+                        self.vb.addItem(_rc6, ignoreBounds=True)
+                        _lb6 = pg.TextItem(anchor=(0, 0.5)); _lb6.setZValue(16)
+                        self.plot.addItem(_lb6, ignoreBounds=True)
+                        _sl6 = {"rect": _rc6, "lbl": _lb6, "txt": None, "geo": None, "br": None}
+                        self._ema_wmrg_items[_zn6] = _sl6
+                    _geo6 = (_x06, _lo6, _hi6, _x16)
+                    if _sl6.get("geo") != _geo6:
+                        _sl6["rect"].setRect(_x06, _lo6, max(1e-9, _x16 - _x06), max(1e-9, _hi6 - _lo6))
+                        _sl6["geo"] = _geo6
+                    if _sl6.get("br") != _rgb6:
+                        _sl6["rect"].setBrush(pg.mkBrush(_rgb6[0], _rgb6[1], _rgb6[2], 70))
+                        _sl6["lbl"].setColor(pg.mkColor(_rgb6[0], _rgb6[1], _rgb6[2], 225))
+                        _sl6["br"] = _rgb6
+                    _sl6["rect"].setVisible(True)
+                    if _sl6.get("txt") != _zt6:
+                        _sl6["lbl"].setText(_zt6); _sl6["txt"] = _zt6
+                    _sl6["lbl"].setPos(_x06 + 0.4, 0.5 * (_lo6 + _hi6))
+                    _sl6["lbl"].setVisible(True)
+                for _sk7, _on7, _al7, _pre7 in (("cur", _wl_on and not _wmg_on, 70, ""),
+                                                ("prev", _wlp_on and not _wmg_on, 40, "prev ")):
                     for _zn, _ztxt in (("exp", "EXPENSIVE"), ("eq", "EQUILIBRIUM"), ("cheap", "CHEAP")):
                         _kk7 = _sk7 + "_" + _zn
                         _slot = self._ema_wall_items.get(_kk7)
