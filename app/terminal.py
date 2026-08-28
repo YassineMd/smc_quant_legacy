@@ -7167,7 +7167,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         from app import absorption_level_detect as _alw
                         _specs = [("cur", float(_lo_info[1]), float(_hi_info[1]), _vp_span)]
                         if _hip is not None and _lop is not None:                 # the PRECEDING pair of trends
-                            _specs.append(("prev", float(_lop[2]), float(_hip[2]),
+                            _specs.append(("prev", float(_lo_info[1]), float(_hi_info[1]),   # CURRENT zones
                                            (min(_hip[0], _lop[0]), max(_hip[1], _lop[1]))))
                         # PERF: a candidate must be BORN inside one of those spans, so detect over just that
                         # stretch (+ lead-in for walls to form) instead of the whole analysis series -- on
@@ -7244,9 +7244,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if self._ema_poc_cache is None or self._ema_poc_cache[0] != _frz:
                     _psets = {"cur": {}, "prev": {}}
                     try:
+                        # NOTE (user 2026-08-28): the PREVIOUS set uses its own TIME span but is zoned by the
+                        # CURRENT band, so "prev EQUILIBRIUM" always means today's equilibrium area. Zoning it
+                        # by the old band let a prev-equilibrium POC land inside the current cheap area.
                         _pspecs = [("cur", float(_lo_info[1]), float(_hi_info[1]), _vp_span)]
                         if _hip is not None and _lop is not None:
-                            _pspecs.append(("prev", float(_lop[2]), float(_hip[2]),
+                            _pspecs.append(("prev", float(_lo_info[1]), float(_hi_info[1]),
                                             (min(_hip[0], _lop[0]), max(_hip[1], _lop[1]))))
                         for _sk8, _blo8, _bhi8, (_s0p, _s1p) in _pspecs:
                             if _bhi8 <= _blo8:
