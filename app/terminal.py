@@ -6714,30 +6714,52 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _it3.setVisible(False)
             self._hide_ema_vp()
             return
-        _ssig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source)
+        # ANALYSIS SERIES (user report 2026-08-28: "the algo should be able to extract previous data ... even
+        # if it's not showing on the screen"): the flips / extremes / bias are computed over the pre-window
+        # history PLUS the window (the same warm prefix the Radar Runner uses to avoid repaint), so structure
+        # that scrolled off the left still counts. Analysis indices are offset by _off; drawing maps them back
+        # (_wx) and vlines older than the window are used but not drawn.
+        _off = min(len(getattr(self, "_rr_warm", None) or []), 2000)
+        _M = _off + m                                         # closed bars in ANALYSIS space
+        _ssig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source, _off)
+        _need = ((self._ema_stk_cache is None or self._ema_stk_cache[0] != _ssig)
+                 or ((_lvl_on or _vp_on)
+                     and (self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig))
+                 or (_vp_on and (self._ema_vp_cache is None or self._ema_vp_cache[0] != _ssig)))
+        _ana = ((list(self._rr_warm[-_off:]) + list(buckets[:m])) if _off else buckets) if _need else buckets
+
+        def _wx(_i5):                                         # analysis index -> window x (clamped at the left)
+            return float(x[max(0, min(n - 1, _i5 - _off))])
         if self._ema_stk_cache is None or self._ema_stk_cache[0] != _ssig:
             _E = {}
             for _p in (20, 50):
                 _a = 2.0 / (_p + 1.0)
-                _y = np.empty(m)
-                _prev = float(buckets[0].get("close", buckets[0].get("close_price", 0.0)) or 0.0)
+                _y = np.empty(_M)
+                _prev = float(_ana[0].get("close", _ana[0].get("close_price", 0.0)) or 0.0)
                 _y[0] = _prev
-                for _i in range(1, m):
-                    _c = float(buckets[_i].get("close", buckets[_i].get("close_price", 0.0)) or 0.0) or _prev
+                for _i in range(1, _M):
+                    _c = float(_ana[_i].get("close", _ana[_i].get("close_price", 0.0)) or 0.0) or _prev
                     _prev = _y[_i] = _a * _c + (1.0 - _a) * _y[_i - 1]
                 _E[_p] = _y
             _bull = _E[20] > _E[50]
             _bear = _E[50] > _E[20]
 
+            # PERF: pull highs/lows into plain LISTS once, so each window scan is list indexing instead
+            # of ~70 dict lookups per candidate bar (with a 2000-bar warm prefix that was the dominant
+            # cost of the per-bar-close recompute). Deliberately NOT numpy here: these windows are 20-50
+            # elements and the tie rule needs the LAST extreme, whose reversed-view argmin/argmax hits a
+            # negative-stride slow path far slower than the loop it replaces (profiled 2026-08-28).
+            _Ha = [float(_b2.get("high", 0.0) or 0.0) for _b2 in _ana[:_M]]
+            _La = [float(_b2.get("low", 0.0) or 0.0) for _b2 in _ana[:_M]]
+
             def _hl_delta(_bi, _p, _Ey):
                 _hp = _hi2 = _lp = _li2 = None
                 for _k2 in range(max(0, _bi - _p + 1), _bi + 1):
-                    _b2 = buckets[_k2]
-                    _h2 = float(_b2.get("high", 0.0) or 0.0); _l2 = float(_b2.get("low", 0.0) or 0.0)
+                    _h2 = _Ha[_k2]; _l2 = _La[_k2]
                     if _h2 > 0 and (_hp is None or _h2 >= _hp):
-                        _hp, _hi2 = _h2, _k2
+                        _hp = _h2; _hi2 = _k2
                     if _l2 > 0 and (_lp is None or _l2 <= _lp):
-                        _lp, _li2 = _l2, _k2
+                        _lp = _l2; _li2 = _k2
                 if _hp is None or _lp is None or _Ey[_hi2] <= 0 or _Ey[_li2] <= 0:
                     return None
                 return (_hp - _Ey[_hi2]) / _Ey[_hi2] + (_lp - _Ey[_li2]) / _Ey[_li2]
@@ -6752,7 +6774,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _pend = _state is not None
             _reg0 = 50 if _pend else -1                       # regime start (initial regime: conservatively bar 50)
             _last_col = None                                  # printed lines must ALTERNATE colours (user
-            for _i in range(50, m):                           # 2026-08-27: consecutive same-colour lines = one)
+            for _i in range(50, _M):                          # 2026-08-27: consecutive same-colour lines = one)
                 if _bull[_i] and not _bull[_i - 1]:           # up-cross -> new long regime, validation pending
                     _state = "g"; _pend = True; _reg0 = _i
                 elif _bear[_i] and not _bear[_i - 1]:         # down-cross -> new short regime, validation pending
@@ -6773,8 +6795,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
         else:
-            for _kind, _xs2, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
+            for _kind, _xs2a, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
                 pool = self._ema_stk_pool[_kind]
+                _xs2 = [_xi - _off for _xi in _xs2a if _xi >= _off]   # older-than-window flips: counted, not drawn
                 for _j, _xi in enumerate(_xs2):
                     if _j >= len(pool):
                         _pn2 = pg.mkPen(color=(_rgb2[0], _rgb2[1], _rgb2[2], 170), width=1); _pn2.setCosmetic(True)
@@ -6799,11 +6822,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 for _k3 in range(len(_seq) - 1):
                     _b0, _c0 = _seq[_k3]; _b1, _c1 = _seq[_k3 + 1]
                     if _c0 == "g" and _c1 == "r":             # finished BULL segment -> its high
-                        _hi = max(float(buckets[_j2].get("high", 0.0) or 0.0) for _j2 in range(_b0, _b1 + 1))
+                        _hi = max(float(_ana[_j2].get("high", 0.0) or 0.0) for _j2 in range(_b0, _b1 + 1))
                         if _hi > 0:
                             _bulls.append((_b0, _b1, _hi))
                     elif _c0 == "r" and _c1 == "g":           # finished BEAR segment -> its low
-                        _lo = min((float(buckets[_j2].get("low", 0.0) or 0.0) or float("inf"))
+                        _lo = min((float(_ana[_j2].get("low", 0.0) or 0.0) or float("inf"))
                                   for _j2 in range(_b0, _b1 + 1))
                         if _lo != float("inf"):
                             _bears.append((_b0, _b1, _lo))
@@ -6815,54 +6838,42 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _lop = (_bears[-2][0], _bears[-1][1], _bears[-2][2]) if len(_bears) >= 2 else None
                 # BIAS vs the two preceding trends: higher high AND higher low -> BULLISH; lower high AND
                 # lower low -> BEARISH; anything in between -> RANGING.
-                # A current band is enough to show a read: default RANGING ("no CONFIRMED trend"), upgraded
-                # to BULLISH/BEARISH only when BOTH extremes advanced the same way. Previously the tag stayed
-                # BLANK until four finished segments existed; validated flips are rare, so it was invisible
-                # for long stretches (user report 2026-08-28).
-                _bias = "RANGING" if (_hi_info is not None and _lo_info is not None) else None
-                if _hip is not None and _lop is not None:
-                    if _bulls[-1][2] > _bulls[-2][2] and _bears[-1][2] > _bears[-2][2]:
-                        _bias = "BULLISH"
-                    elif _bulls[-1][2] < _bulls[-2][2] and _bears[-1][2] < _bears[-2][2]:
-                        _bias = "BEARISH"
-                # BREAKOUT OVERRIDE (user 2026-08-27): price printing 20 consecutive CLOSED bars ABOVE the
-                # high extreme line -> BULLISH regardless of structure; 20 below the low line -> BEARISH.
-                # Works even before two full cycles exist (only needs the current line).
-                _C20 = [float(buckets[_j2].get("close", buckets[_j2].get("close_price", 0.0)) or 0.0)
-                        for _j2 in range(m - 20, m)]
-                if _hi_info is not None and all(_c2 > _hi_info[1] for _c2 in _C20):
-                    _bias = "BULLISH"
-                elif _lo_info is not None and all(0.0 < _c2 < _lo_info[1] for _c2 in _C20):
-                    _bias = "BEARISH"
-                # PREVIOUS bias (user 2026-08-27): the value before the most recent bias CHANGE, derived
-                # from HISTORY (reload-safe): re-walk the closed bars with the levels/structure/override
-                # as-of each bar and remember the last transition.
+                # BIAS + PREVIOUS BIAS come from ONE causal walk over the analysis series, so the tag and
+                # its history can never disagree. A state is recorded ONLY when DETERMINED (two full cycles
+                # to compare, or the 20-close breakout override); "not enough data yet" stays UNKNOWN rather
+                # than being called RANGING -- that bootstrap RANGING is what used to end up in the prev tag
+                # (user report 2026-08-28).
                 _events = sorted([(_b1, "hi", _v) for (_b0, _b1, _v) in _bulls]
                                  + [(_b1, "lo", _v) for (_b0, _b1, _v) in _bears])
-                _C_all = [float(buckets[_j2].get("close", buckets[_j2].get("close_price", 0.0)) or 0.0)
-                          for _j2 in range(m)]
+                _C_all = np.array([float(_ana[_j2].get("close", _ana[_j2].get("close_price", 0.0)) or 0.0)
+                                   for _j2 in range(_M)], dtype=float)
                 _hiL = _loL = None; _bh = []; _bl = []; _ei = 0
                 _prevbias = None; _curb = None
-                for _i2 in range(50, m):
+                for _i2 in range(50, _M):
                     while _ei < len(_events) and _events[_ei][0] <= _i2:
                         _eb, _ek, _ev = _events[_ei]; _ei += 1
                         if _ek == "hi":
                             _bh.append(_ev); _hiL = _ev
                         else:
                             _bl.append(_ev); _loL = _ev
-                    _b3 = "RANGING" if (_hiL is not None and _loL is not None) else None
-                    if len(_bh) >= 2 and len(_bl) >= 2:
+                    _b3 = None
+                    if len(_bh) >= 2 and len(_bl) >= 2:       # DETERMINED: higher-high+higher-low / mirror
                         if _bh[-1] > _bh[-2] and _bl[-1] > _bl[-2]:
                             _b3 = "BULLISH"
                         elif _bh[-1] < _bh[-2] and _bl[-1] < _bl[-2]:
                             _b3 = "BEARISH"
+                        else:
+                            _b3 = "RANGING"
                     if _i2 >= 69:
-                        if _hiL is not None and all(_C_all[_j3] > _hiL for _j3 in range(_i2 - 19, _i2 + 1)):
+                        _w20 = _C_all[_i2 - 19:_i2 + 1]
+                        if _hiL is not None and float(_w20.min()) > _hiL:
                             _b3 = "BULLISH"
-                        elif _loL is not None and all(0.0 < _C_all[_j3] < _loL for _j3 in range(_i2 - 19, _i2 + 1)):
+                        elif _loL is not None and float(_w20.min()) > 0.0 and float(_w20.max()) < _loL:
                             _b3 = "BEARISH"
                     if _b3 is not None and _b3 != _curb:
                         _prevbias = _curb; _curb = _b3
+                _bias = _curb if _curb is not None else (
+                    "RANGING" if (_hi_info is not None and _lo_info is not None) else None)
                 # VP SPAN (user 2026-08-27): the LAST TWO FINISHED trends only — older segment's opening
                 # vline .. newer segment's closing vline; the ONGOING trend is excluded, so the profile
                 # stays FIXED until a segment completes.
@@ -6888,8 +6899,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _it3.setPen(_pn3); _it3.setZValue(15)
                     self.plot.addItem(_it3, ignoreBounds=True)
                     self._ema_lvl_items[_sd2] = _it3
-                _xr = float(x[n - 1]) if len(_info) == 2 else float(x[_info[1]])   # prev lines FREEZE at supersession
-                _it3.setData([float(x[_info[0]]), _xr], [_info[-1], _info[-1]])
+                _xr = float(x[n - 1]) if len(_info) == 2 else _wx(_info[1])   # prev lines FREEZE at supersession
+                _it3.setData([_wx(_info[0]), _xr], [_info[-1], _info[-1]])
                 _it3.setVisible(True)
             # THIRDS (user 2026-08-28): split the CURRENT band (low extreme -> high extreme) into 3 equal
             # 33.33% zones with two dashed gray dividers, spanning the band's window (older anchor -> live
@@ -6909,7 +6920,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self.plot.addItem(_itt, ignoreBounds=True)
                     self._ema_lvl_items[_kt] = _itt
                 _yt = _lo_info[1] + (_hi_info[1] - _lo_info[1]) * _ft
-                _itt.setData([float(x[min(_lo_info[0], _hi_info[0])]), float(x[n - 1])], [_yt, _yt])
+                _itt.setData([_wx(min(_lo_info[0], _hi_info[0])), float(x[n - 1])], [_yt, _yt])
                 _itt.setVisible(True)
             _lb3 = self._ema_lvl_items.get("lbl")             # bias tag at the live edge, structure midpoint
             _lbp = self._ema_lvl_items.get("lbl_prev")        # + the PREVIOUS bias stacked just below it
@@ -6977,8 +6988,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _sp0, _sp1 = _vp_span; _NB = 40
                         _plo = float("inf"); _phi = 0.0
                         for _j4 in range(_sp0, _sp1 + 1):
-                            _h4 = float(buckets[_j4].get("high", 0.0) or 0.0)
-                            _l4 = float(buckets[_j4].get("low", 0.0) or 0.0)
+                            _h4 = float(_ana[_j4].get("high", 0.0) or 0.0)
+                            _l4 = float(_ana[_j4].get("low", 0.0) or 0.0)
                             if _h4 > 0:
                                 _phi = max(_phi, _h4)
                             if _l4 > 0:
@@ -6988,7 +6999,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _hb = (_phi - _plo) / _NB
                             _cen = _plo + (np.arange(_NB) + 0.5) * _hb
                             for _j4 in range(_sp0, _sp1 + 1):
-                                _b4 = buckets[_j4]
+                                _b4 = _ana[_j4]
                                 _lvs = _b4.get("levels") or {}
                                 if _lvs:
                                     for _ps, _pvv in _lvs.items():
