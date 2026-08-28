@@ -2615,6 +2615,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _toggle_subwidget(self, key: str, on: bool) -> None:
         if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
                    "ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls", "ema_walls_prev",
+                   "ema_walls_line",
                    "ema_poc", "ema_poc_prev"):
             if key == "ema_hlread":                  # readout text only; the HL lines are unaffected
                 if not on:
@@ -2636,7 +2637,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._ema_vp_cache = None            # trend VP toggled -> recompute next frame
                 if not on:
                     self._hide_ema_vp()
-            elif key in ("ema_walls", "ema_walls_prev"):
+            elif key in ("ema_walls", "ema_walls_prev", "ema_walls_line"):
                 self._ema_wall_cache = None          # zone walls toggled -> re-detect next frame
                 if not on:
                     self._hide_ema_walls()
@@ -6615,6 +6616,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _hide_ema_walls(self) -> None:
         for _d in self._ema_wall_items.values():
             _d["rect"].setVisible(False); _d["lbl"].setVisible(False)
+            if _d.get("ln") is not None:
+                _d["ln"].setVisible(False)
 
     def _hide_ema_vp(self) -> None:
         if self._ema_vp_item is not None:
@@ -6806,6 +6809,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _wl_on = _wcb is not None and _wcb.isChecked()        # ... and the per-zone order walls (current band)
         _wpcb = self.menu.sub_checks.get("ema_walls_prev")
         _wlp_on = _wpcb is not None and _wpcb.isChecked()     # ... and the same for the PRECEDING band
+        _wlncb = self.menu.sub_checks.get("ema_walls_line")
+        _wln_on = _wlncb is not None and _wlncb.isChecked()   # 'To Lines': draw each wall as its MIDDLE line
         _pccb = self.menu.sub_checks.get("ema_poc")
         _pc_on = _pccb is not None and _pccb.isChecked()      # ... and the per-zone POCs
         _pcpcb = self.menu.sub_checks.get("ema_poc_prev")
@@ -7208,25 +7213,45 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         if _mk7 is None:
                             if _slot is not None:
                                 _slot["rect"].setVisible(False); _slot["lbl"].setVisible(False)
+                                if _slot.get("ln") is not None:
+                                    _slot["ln"].setVisible(False)
                             continue
+                        if _slot is not None and _slot.get("form") != _wln_on:
+                            _slot["geo"] = None; _slot["form"] = _wln_on   # form flipped -> re-push geometry
                         if _slot is None:
                             _rc7 = QtWidgets.QGraphicsRectItem(); _rc7.setPen(pg.mkPen(None)); _rc7.setZValue(-6)
                             self.vb.addItem(_rc7, ignoreBounds=True)
                             _lb7 = pg.TextItem(anchor=(0, 0.5)); _lb7.setZValue(16)
                             self.plot.addItem(_lb7, ignoreBounds=True)
-                            _slot = {"rect": _rc7, "lbl": _lb7, "txt": None, "br": None, "geo": None}
+                            _slot = {"rect": _rc7, "lbl": _lb7, "ln": None,
+                                 "txt": None, "br": None, "geo": None, "lpen": None}
                         self._ema_wall_items[_kk7] = _slot
                         _rgb7 = (40, 230, 120) if _mk7.get("side") == "S" else (240, 70, 90)
                         _p7 = float(_mk7.get("price") or 0.0); _bd7 = float(_mk7.get("band") or 0.0) or (_p7 * 5e-4)
                         _x07 = _wx(int(_mk7.get("i0", 0)) + int(_mk7.get("_off7", 0))); _x17 = float(x[n - 1])
                         _geo7 = (_x07, _p7, _bd7, _x17)
-                        if _slot.get("geo") != _geo7:
-                            _slot["rect"].setRect(_x07, _p7 - _bd7, max(1e-9, _x17 - _x07), 2.0 * _bd7)
-                            _slot["geo"] = _geo7
-                        if _slot.get("br") != (_rgb7, _al7):
-                            _slot["rect"].setBrush(pg.mkBrush(_rgb7[0], _rgb7[1], _rgb7[2], _al7))
-                            _slot["br"] = (_rgb7, _al7)
-                        _slot["rect"].setVisible(True)
+                        if _wln_on:                           # 'To Lines': the wall's MIDDLE price, no band
+                            _slot["rect"].setVisible(False)
+                            if _slot.get("ln") is None:
+                                _ln7 = pg.PlotCurveItem(); _ln7.setZValue(15)
+                                self.plot.addItem(_ln7, ignoreBounds=True); _slot["ln"] = _ln7
+                            _lp7 = (_rgb7, _al7)
+                            if _slot.get("lpen") != _lp7:
+                                _pnl7 = pg.mkPen(_rgb7[0], _rgb7[1], _rgb7[2], min(255, _al7 + 165), width=1.6)
+                                _pnl7.setCosmetic(True); _slot["ln"].setPen(_pnl7); _slot["lpen"] = _lp7
+                            if _slot.get("geo") != _geo7:
+                                _slot["ln"].setData([_x07, _x17], [_p7, _p7]); _slot["geo"] = _geo7
+                            _slot["ln"].setVisible(True)
+                        else:
+                            if _slot.get("ln") is not None:
+                                _slot["ln"].setVisible(False)
+                            if _slot.get("geo") != _geo7:
+                                _slot["rect"].setRect(_x07, _p7 - _bd7, max(1e-9, _x17 - _x07), 2.0 * _bd7)
+                                _slot["geo"] = _geo7
+                            if _slot.get("br") != (_rgb7, _al7):
+                                _slot["rect"].setBrush(pg.mkBrush(_rgb7[0], _rgb7[1], _rgb7[2], _al7))
+                                _slot["br"] = (_rgb7, _al7)
+                            _slot["rect"].setVisible(True)
                         _txt7 = "%s%s  %.2f" % (_pre7, _ztxt, float(_mk7.get("strength") or 0.0))
                         if _slot.get("txt") != _txt7:         # setText/setColor re-layout the glyphs: once only
                             _slot["lbl"].setText(_txt7)
