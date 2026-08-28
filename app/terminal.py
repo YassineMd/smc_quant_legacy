@@ -6975,6 +6975,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._ema_stk_cache = (_ssig, _g, _r, _ft)
         _, _g, _r, _ftimes = self._ema_stk_cache
         self._ema_flip_times = _ftimes
+        _STK_GRAY = (150, 158, 175)                 # a leg that swept BOTH extremes is neither -> gray vline
+
+        def _stk_pen(_ln9, _rgb9, _pin9):
+            """The ONE place a flip line's pen is decided: colour (green / red / gray) x pinned (solid / dashed).
+            Keyed so an unchanged line is never re-penned -- this runs for every visible flip, every frame."""
+            _k9 = (tuple(_rgb9), bool(_pin9))
+            if getattr(_ln9, "_ema_pen_key", None) == _k9:
+                return
+            _pn9 = pg.mkPen(color=(_rgb9[0], _rgb9[1], _rgb9[2], 235 if _pin9 else 170),
+                            width=1.8 if _pin9 else 1)
+            _pn9.setCosmetic(True)
+            if not _pin9:
+                _pn9.setDashPattern([2.0, 6.0])
+            _ln9.setPen(_pn9); _ln9._ema_pen_key = _k9
         # PINNED: everything the structure draws is bounded to the pinned segment -- it STARTS at the pinned
         # vline and ENDS at the next one, so the levels read as of that moment sit exactly over the trend
         # that followed (user 2026-08-28). Unpinned, each item keeps its own anchor and runs to the live edge.
@@ -6997,7 +7011,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._ema_flip_hits = []
             for _kind, _xs2a, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
                 pool = self._ema_stk_pool[_kind]
-                _pairs2 = [(_xi - _off, _xi) for _xi in _xs2a if _xi >= _off]   # older-than-window: counted, not drawn
+                _hid2 = getattr(self, "_ema_hide_set", None) or ()      # 2nd+ line of a RANGING run -> not printed
+                _pairs2 = [(_xi - _off, _xi) for _xi in _xs2a
+                           if _xi >= _off and int(_xi) not in _hid2]   # older-than-window: counted, not drawn
                 _xs2 = [_p2[0] for _p2 in _pairs2]
                 for _j, _xi in enumerate(_xs2):
                     if _j >= len(pool):
@@ -7010,13 +7026,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._ema_flip_hits.append((float(_xi), int(_ai2)))
                     _pin2 = bool(self._ema_pin_t) and abs(
                         float(_ftimes.get(int(_ai2), 0.0)) - float(self._ema_pin_t)) < 0.5
-                    if getattr(pool[_j], "_ema_pinned", None) != _pin2:   # pinned -> SOLID, otherwise dashed
-                        _pn3 = pg.mkPen(color=(_rgb2[0], _rgb2[1], _rgb2[2], 235 if _pin2 else 170),
-                                        width=1.8 if _pin2 else 1)
-                        _pn3.setCosmetic(True)
-                        if not _pin2:
-                            _pn3.setDashPattern([2.0, 6.0])
-                        pool[_j].setPen(_pn3); pool[_j]._ema_pinned = _pin2
+                    pool[_j]._ema_pinned = _pin2                          # pinned -> SOLID, otherwise dashed
+                    _gs2 = getattr(self, "_ema_gray_set", None) or ()
+                    _stk_pen(pool[_j], _STK_GRAY if int(_ai2) in _gs2 else _rgb2, _pin2)
                 for _pl in pool[len(_xs2):]:
                     _pl.setVisible(False)
         # 'Trend Extreme Lines' (sub-toggle 'ema_trendlvl'): the LAST FINISHED bear segment (red line -> next
@@ -7078,19 +7090,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 # to compare, or the 20-close breakout override); "not enough data yet" stays UNKNOWN rather
                 # than being called RANGING -- that bootstrap RANGING is what used to end up in the prev tag
                 # (user report 2026-08-28).
-                _events = sorted([(_b1, "hi", _v) for (_b0, _b1, _v) in _bulls]
-                                 + [(_b1, "lo", _v) for (_b0, _b1, _v) in _bears])
+                _events = sorted([(_b1, "hi", _v, _b0) for (_b0, _b1, _v) in _bulls]
+                                 + [(_b1, "lo", _v, _b0) for (_b0, _b1, _v) in _bears])
                 _C_all = np.array([float(_ana[_j2].get("close", _ana[_j2].get("close_price", 0.0)) or 0.0)
                                    for _j2 in range(_M)], dtype=float)
-                _hiL = _loL = None; _bh = []; _bl = []; _ei = 0
-                _prevbias = None; _curb = None; _bseq = []
+                _hiL = _loL = None; _hiS = _loS = None; _bh = []; _bl = []; _ei = 0
+                _prevbias = None; _curb = None; _bseq = []; _bmeta = []
                 for _i2 in range(50, _M):
                     while _ei < len(_events) and _events[_ei][0] <= _i2:
-                        _eb, _ek, _ev = _events[_ei]; _ei += 1
+                        _eb, _ek, _ev, _es = _events[_ei]; _ei += 1
                         if _ek == "hi":
-                            _bh.append(_ev); _hiL = _ev
+                            _bh.append(_ev); _hiL = _ev; _hiS = _es
                         else:
-                            _bl.append(_ev); _loL = _ev
+                            _bl.append(_ev); _loL = _ev; _loS = _es
                     _b3 = None
                     if len(_bh) >= 2 and len(_bl) >= 2:       # DETERMINED: higher-high+higher-low / mirror
                         if _bh[-1] > _bh[-2] and _bl[-1] > _bl[-2]:
@@ -7107,21 +7119,119 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _b3 = "BEARISH"
                     if _b3 is not None and _b3 != _curb:
                         _curb = _b3; _bseq.append(_b3)
+                        _bmeta.append((_i2,                                   # bar the state began at
+                                       _bh[-2] if len(_bh) >= 2 else None,    # upper extreme line PRECEDING it
+                                       _bl[-2] if len(_bl) >= 2 else None,    # lower extreme line PRECEDING it
+                                       _hiS, _loS))                           # opening flip of each newest leg
+
+                def _touched(_a5, _b5, _lvl, _up):
+                    """Did ANY WICK in bars [_a5, _b5) reach _lvl? (_up: a high at/above it, else a low at/below.)"""
+                    for _j5 in range(max(0, int(_a5)), min(_M, int(_b5))):
+                        if _up:
+                            _v5 = float(_ana[_j5].get("high", 0.0) or 0.0)
+                            if _v5 > 0.0 and _v5 >= _lvl:
+                                return True
+                        else:
+                            _v5 = float(_ana[_j5].get("low", 0.0) or 0.0)
+                            if 0.0 < _v5 <= _lvl:
+                                return True
+                    return False
 
                 def _bs_lbl(_k4):
                     """Label for the bias state at _bseq[_k4]. A RANGING with the SAME determined trend on BOTH
                     sides is not a regime change at all -- it is that trend's RETRACEMENT (user 2026-08-29).
                     Only a state whose SUCCESSOR is known can be relabelled, so the live one never is: calling a
-                    ranging a retracement before the trend actually resumes would be a prediction, not a read."""
+                    ranging a retracement before the trend actually resumes would be a prediction, not a read.
+
+                    ... UNLESS the pullback reached back to the extreme line PRECEDING it -- a bearish
+                    retracement whose rally touches, even by a wick, the upper extreme line that stood before
+                    it (or a bullish one dipping to its previous lower line) has broken the structure it was
+                    supposed to be retracing, so it stays RANGING (user 2026-08-29). The scan opens at the
+                    pullback leg's own flip, so the move that TRIGGERED the ranging is inside the window."""
                     _s4 = _bseq[_k4]
-                    if (_s4 == "RANGING" and 0 < _k4 < len(_bseq) - 1
+                    if not (_s4 == "RANGING" and 0 < _k4 < len(_bseq) - 1
                             and _bseq[_k4 - 1] == _bseq[_k4 + 1] and _bseq[_k4 - 1] in ("BULLISH", "BEARISH")):
-                        return _bseq[_k4 - 1] + " RETRACEMENT"
-                    return _s4
+                        return _s4
+                    _dir4 = _bseq[_k4 - 1]
+                    _st4, _pu4, _pl4, _hs4, _ls4 = _bmeta[_k4]
+                    _en4 = _bmeta[_k4 + 1][0]
+                    if _dir4 == "BEARISH":                                # pullback = the RALLY leg -> upper line
+                        _lv4, _lg4, _up4 = _pu4, _hs4, True
+                    else:                                                 # pullback = the DIP leg -> lower line
+                        _lv4, _lg4, _up4 = _pl4, _ls4, False
+                    if _lv4 is not None and _touched(min(_lg4, _st4) if _lg4 is not None else _st4,
+                                                     _en4, _lv4, _up4):
+                        return "RANGING"
+                    return _dir4 + " RETRACEMENT"
                 _bias = _bs_lbl(len(_bseq) - 1) if _bseq else (
                     "RANGING" if (_hi_info is not None and _lo_info is not None) else None)
                 _prevbias = _bs_lbl(len(_bseq) - 2) if len(_bseq) >= 2 else None
+                # THE RUNNING LEG OVERRULES THE LABEL (user 2026-08-29): a structure cannot be called BULLISH
+                # while the vertical line in force is RED, nor BEARISH while it is GREEN -- the leg on screen is
+                # going the other way, so what we are watching is that trend being RETRACED. It stays a
+                # retracement only while it HOLDS the extreme line that stood before the leg opened; the moment
+                # a wick takes that line out the structure is broken and it is RANGING. Unlike the historical
+                # relabelling this needs no successor -- the running leg is a fact, not a forecast.
+                # PER-LEG RANGING: a leg that takes out BOTH extreme lines standing when it opened is not a leg
+                # in either direction -- it is a RANGE, and its vertical line goes GRAY (user 2026-08-29). Two or
+                # more CONSECUTIVE ranging legs are ONE range, so only the first of the run prints -- the same
+                # collapse the flips already do for a same-colour run. (Drawing only: the segments the extreme
+                # lines are built from are left exactly as they were.)
+                _grays = set(); _ghide = set(); _run8 = False
+                _bp8 = _lp8 = 0
+                for _q8 in range(len(_seq)):
+                    _b8 = int(_seq[_q8][0])
+                    _e8 = int(_seq[_q8 + 1][0]) if _q8 + 1 < len(_seq) else _M
+                    while _bp8 < len(_bulls) and _bulls[_bp8][1] <= _b8:      # extremes STANDING when the leg opened
+                        _bp8 += 1
+                    while _lp8 < len(_bears) and _bears[_lp8][1] <= _b8:
+                        _lp8 += 1
+                    _hv8 = _bulls[_bp8 - 1][2] if _bp8 else None
+                    _lv8 = _bears[_lp8 - 1][2] if _lp8 else None
+                    _isr8 = (_hv8 is not None and _lv8 is not None
+                             and _touched(_b8, _e8, _hv8, True) and _touched(_b8, _e8, _lv8, False))
+                    if _isr8:
+                        _grays.add(_b8)
+                        if _run8:
+                            _ghide.add(_b8)                       # 2nd+ of a consecutive run -> one line for all
+                    _run8 = _isr8
+                self._ema_gray_set = _grays - _ghide; self._ema_hide_set = _ghide
+                if _bias is not None and _seq:
+                    _legb, _legc = _seq[-1]                      # bar + colour of the flip that opened the live leg
+                    _lege = _M
+                    if self._ema_pin_t:                          # PINNED: the leg ends at the next flip, not at live
+                        _nx8 = [_t8 for _t8 in sorted([int(_i8) for _i8 in _g] + [int(_i8) for _i8 in _r])
+                                if _t8 > _legb]
+                        _lege = _nx8[0] if _nx8 else _M
+                    if int(_legb) in _grays:
+                        _bias = "RANGING"                        # the running leg swept the whole structure
+                    elif _bias == "BULLISH" and _legc == "r" and _lo_info is not None:
+                        _bias = ("RANGING" if _touched(_legb, _lege, _lo_info[1], False)
+                                 else "BULLISH RETRACEMENT")     # a red leg inside a bullish structure
+                    elif _bias == "BEARISH" and _legc == "g" and _hi_info is not None:
+                        _bias = ("RANGING" if _touched(_legb, _lege, _hi_info[1], True)
+                                 else "BEARISH RETRACEMENT")     # a green leg inside a bearish structure
                 self._ema_bias_seq = list(_bseq)          # the full ordered bias history behind the two tags
+                self._ema_bias_meta = list(_bmeta)        # ... and what each state was judged against
+                if (self._ema_gray_set, self._ema_hide_set) != getattr(self, "_ema_gray_drawn", None):
+                    # The stack block drew this frame BEFORE the structure was known, so re-colour / un-print
+                    # the affected flips NOW rather than a recompute late. Steady-state frames cost nothing:
+                    # the stack block reads the same sets and _stk_pen is keyed.
+                    self._ema_gray_drawn = (set(self._ema_gray_set), set(self._ema_hide_set))
+                    _hx9 = {round(float(_i9 - _off), 3) for _i9 in self._ema_hide_set}
+                    _gx9 = {round(float(_i9 - _off), 3) for _i9 in self._ema_gray_set}
+                    for _kd9, _rg9 in (("g", (40, 230, 120)), ("r", (240, 70, 90))):
+                        for _ln8 in self._ema_stk_pool.get(_kd9, ()):
+                            if not _ln8.isVisible():
+                                continue
+                            _v9 = round(float(_ln8.value()), 3)
+                            if _v9 in _hx9:
+                                _ln8.setVisible(False); continue
+                            _stk_pen(_ln8, _STK_GRAY if _v9 in _gx9 else _rg9,
+                                     bool(getattr(_ln8, "_ema_pinned", False)))
+                    if _hx9:
+                        self._ema_flip_hits = [_h9 for _h9 in self._ema_flip_hits
+                                               if round(float(_h9[0]), 3) not in _hx9]
                 # VP SPAN (user 2026-08-27): the LAST TWO FINISHED trends only — older segment's opening
                 # vline .. newer segment's closing vline; the ONGOING trend is excluded, so the profile
                 # stays FIXED until a segment completes.
