@@ -7193,14 +7193,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             if _t8 > int(_seq[-1][0])]
                     _lege = _nx8[0] if _nx8 else _M
 
-                def _full_lbl(_k, _eov=None):
-                    """The FINAL label for structural state _bseq[_k], applying EVERY rule the current tag gets,
-                    so 'prev' can never disagree with 'current' (user 2026-08-29: prev read BULLISH over a
-                    stretch that was plainly a RANGE -- because prev was taken straight from the raw HH/HL walk
-                    and never saw the running-leg / gray reclassification). Base = the sandwiched-retracement
-                    read; then the leg in force at the state's END overrules -- swept both extremes -> RANGING
-                    (gray); a leg fighting the structure -> RETRACEMENT while it holds the opposing extreme,
-                    RANGING once a wick breaks it."""
+                def _full_seq(_k, _eov=None):
+                    """The FINAL label(s) for structural state _bseq[_k], applying EVERY rule the current tag
+                    gets, so 'prev' can never disagree with 'current'. Base = the sandwiched-retracement read;
+                    then the leg in force at the state's END overrules -- swept both extremes -> RANGING (gray);
+                    a leg fighting the structure -> RETRACEMENT while it holds the opposing extreme, RANGING once
+                    a wick breaks it.
+
+                    A trend whose running leg is a COUNTER-trend retracement emits BOTH the trend AND the
+                    retracement -- so the trend stays visible as the previous state (user 2026-08-29 screenshot:
+                    a bull trend being retraced read 'prev RANGING' because the whole state had collapsed into
+                    its retracement label and prev skipped back past the trend). The current tag is still the
+                    LAST element, so it is unchanged; only the trend re-appears just before it."""
                     _base = _bs_lbl(_k)
                     _ek = _eov if _eov is not None else (
                         _bmeta[_k + 1][0] if _k + 1 < len(_bseq) else _M)
@@ -7209,10 +7213,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         if _fb < _ek:
                             _run = (int(_fb), _fc)
                     if _run is None:
-                        return _base
+                        return [_base]
                     _rb, _rc = _run
                     if _rb in _grays:                              # the leg swept the whole structure
-                        return "RANGING"
+                        return ["RANGING"]
                     _hv = _lv = None                              # extreme lines standing when that leg opened
                     for _bb in _bulls:
                         if _bb[1] <= _rb:
@@ -7220,15 +7224,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     for _br in _bears:
                         if _br[1] <= _rb:
                             _lv = _br[2]
-                    if _base == "BULLISH" and _rc == "r" and _lv is not None:
-                        return "RANGING" if _touched(_rb, _ek, _lv, False) else "BULLISH RETRACEMENT"
-                    if _base == "BEARISH" and _rc == "g" and _hv is not None:
-                        return "RANGING" if _touched(_rb, _ek, _hv, True) else "BEARISH RETRACEMENT"
-                    return _base
+                    if _base == "BULLISH" and _rc == "r" and _lv is not None:   # a red leg inside a bull trend
+                        return ["BULLISH", "RANGING" if _touched(_rb, _ek, _lv, False) else "BULLISH RETRACEMENT"]
+                    if _base == "BEARISH" and _rc == "g" and _hv is not None:   # a green leg inside a bear trend
+                        return ["BEARISH", "RANGING" if _touched(_rb, _ek, _hv, True) else "BEARISH RETRACEMENT"]
+                    return [_base]
 
                 if _bseq:
-                    _labels = [_full_lbl(_k, _lege if _k == len(_bseq) - 1 else None)
-                               for _k in range(len(_bseq))]
+                    _labels = []
+                    for _k in range(len(_bseq)):
+                        _labels.extend(_full_seq(_k, _lege if _k == len(_bseq) - 1 else None))
                     _collapsed = []                              # CONSECUTIVE equal labels are one state -> prev
                     for _lb9 in _labels:                          # is the previous DISTINCT one, gray runs included
                         if not _collapsed or _collapsed[-1] != _lb9:
