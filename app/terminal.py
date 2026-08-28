@@ -6821,7 +6821,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _pcpcb = self.menu.sub_checks.get("ema_poc_prev")
         _pcp_on = _pcpcb is not None and _pcpcb.isChecked()
         if ((not _stk_on and not _lvl_on and not _vp_on and not _wl_on and not _wlp_on
-             and not _pc_on and not _pcp_on) or m < 51):
+             and not _pc_on and not _pcp_on and not _wmg_on) or m < 51):
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
             for _it3 in self._ema_lvl_items.values():
@@ -6862,10 +6862,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # frozen structure, the empty result STUCK instead of self-healing at the next bar close. That is the
         # "click it and everything vanishes" report (2026-08-28).
         _need = ((self._ema_stk_cache is None or self._ema_stk_cache[0] != _ssig)
-                 or ((_lvl_on or _vp_on or _wl_on or _wlp_on or _pc_on or _pcp_on)
+                 or ((_lvl_on or _vp_on or _wl_on or _wlp_on or _pc_on or _pcp_on or _wmg_on)
                      and (self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig))
-                 or ((_wl_on or _wlp_on) and self._ema_wall_cache is None)
-                 or ((_pc_on or _pcp_on) and self._ema_poc_cache is None)
+                 or ((_wl_on or _wlp_on or _wmg_on) and self._ema_wall_cache is None)
+                 or ((_pc_on or _pcp_on or _wmg_on) and self._ema_poc_cache is None)
                  or (_vp_on and self._ema_vp_cache is None))
         _ana = ((list(_deep) + list(_warm[len(_warm) - _wn:]) + list(buckets[:m]))
                 if _off else buckets) if _need else buckets
@@ -6954,7 +6954,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar
         # on the left to the live candle on the right.
         if (not _lvl_on and not _vp_on and not _wl_on and not _wlp_on
-                and not _pc_on and not _pcp_on):
+                and not _pc_on and not _pcp_on and not _wmg_on):
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
             for _it3 in self._ema_lvl_vl.values():
@@ -7049,6 +7049,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _frz = (_off, _vp_span,
                     (round(_lo_info[1], 8), round(_hi_info[1], 8)) if (_lo_info and _hi_info) else None,
                     (_lop, _hip), self._tf, self._chart_source)
+            # The band data feeds the walls / POCs / merged areas as well, so keep a copy: the reset below
+            # only silences the level LINES + tags. Nulling it outright starved every other consumer, which
+            # is why 'Merged Lines' on its own drew nothing (user 2026-08-28).
+            _bLO, _bHI, _bLOP, _bHIP = _lo_info, _hi_info, _lop, _hip
+            _th_data = _bLO is not None and _bHI is not None
             if not _lvl_on:                                   # levels computed only for the VP -> lines/tags hidden
                 _lo_info = _hi_info = _lop = _hip = None; _bias = None
             for _sd2, _info, _rgb3, _al3, _w3 in (("lo", _lo_info, (40, 230, 120), 235, 2.2),
@@ -7176,17 +7181,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # zones -- upper EXPENSIVE / middle EQUILIBRIUM / lower CHEAP -- and show the STRONGEST order
             # wall of the CURRENT tf inside each, one per zone. Walls are searched ONLY inside the last two
             # FINISHED trends (the same frozen span the VP uses); the running trend is excluded by design.
-            if (not _wl_on and not _wlp_on) or not _th_ok or _vp_span is None:
+            if (not _wl_on and not _wlp_on and not _wmg_on) or not _th_data or _vp_span is None:
                 self._hide_ema_walls()
             else:
                 if self._ema_wall_cache is None or self._ema_wall_cache[0] != _frz:
                     _sets = {"cur": {}, "prev": {}}
                     try:
                         from app import absorption_level_detect as _alw
-                        _specs = [("cur", float(_lo_info[1]), float(_hi_info[1]), _vp_span)]
-                        if _hip is not None and _lop is not None:                 # the PRECEDING pair of trends
-                            _specs.append(("prev", float(_lo_info[1]), float(_hi_info[1]),   # CURRENT zones
-                                           (min(_hip[0], _lop[0]), max(_hip[1], _lop[1]))))
+                        _specs = [("cur", float(_bLO[1]), float(_bHI[1]), _vp_span)]
+                        if _bHIP is not None and _bLOP is not None:               # the PRECEDING pair of trends
+                            _specs.append(("prev", float(_bLO[1]), float(_bHI[1]),   # CURRENT zones
+                                           (min(_bHIP[0], _bLOP[0]), max(_bHIP[1], _bLOP[1]))))
                         # PERF: a candidate must be BORN inside one of those spans, so detect over just that
                         # stretch (+ lead-in for walls to form) instead of the whole analysis series -- on
                         # real level-dense buckets the full-series detect cost ~200 ms per bar close.
@@ -7277,7 +7282,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # 'POC' (sub-toggles 'ema_poc' / 'ema_poc_prev'): the POINT OF CONTROL of each zone -- the single
             # most-traded price inside EXPENSIVE / EQUILIBRIUM / CHEAP -- measured over that band's own pair of
             # finished trends. Amber line at the price, dimmer + 'prev' for the preceding band.
-            if (not _pc_on and not _pcp_on and not _wmg_on) or not _th_ok or _vp_span is None:
+            if (not _pc_on and not _pcp_on and not _wmg_on) or not _th_data or _vp_span is None:
                 self._hide_ema_pocs()
             else:
                 if self._ema_poc_cache is None or self._ema_poc_cache[0] != _frz:
@@ -7286,10 +7291,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         # NOTE (user 2026-08-28): the PREVIOUS set uses its own TIME span but is zoned by the
                         # CURRENT band, so "prev EQUILIBRIUM" always means today's equilibrium area. Zoning it
                         # by the old band let a prev-equilibrium POC land inside the current cheap area.
-                        _pspecs = [("cur", float(_lo_info[1]), float(_hi_info[1]), _vp_span)]
-                        if _hip is not None and _lop is not None:
-                            _pspecs.append(("prev", float(_lo_info[1]), float(_hi_info[1]),
-                                            (min(_hip[0], _lop[0]), max(_hip[1], _lop[1]))))
+                        _pspecs = [("cur", float(_bLO[1]), float(_bHI[1]), _vp_span)]
+                        if _bHIP is not None and _bLOP is not None:
+                            _pspecs.append(("prev", float(_bLO[1]), float(_bHI[1]),
+                                            (min(_bHIP[0], _bLOP[0]), max(_bHIP[1], _bLOP[1]))))
                         for _sk8, _blo8, _bhi8, (_s0p, _s1p) in _pspecs:
                             if _bhi8 <= _blo8:
                                 continue
@@ -7338,7 +7343,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     for _zn8, _zt8 in (("exp", "EXPENSIVE"), ("eq", "EQUILIBRIUM"), ("cheap", "CHEAP")):
                         _kk8 = _sk8 + "_" + _zn8
                         _slot8 = self._ema_poc_items.get(_kk8)
-                        _got8 = _psets.get(_sk8, {}).get(_zn8) if _on8 else None
+                        _got8 = _psets.get(_sk8, {}).get(_zn8) if (_on8 and not _wmg_on) else None
                         if _got8 is None:
                             if _slot8 is not None:
                                 _slot8["ln"].setVisible(False); _slot8["lbl"].setVisible(False)
@@ -7375,9 +7380,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _sl6 = self._ema_wmrg_items.get(_zn6)
                 _px6 = []
                 if _wmg_on:
-                    for _sk6, _on6 in (("cur", _wl_on), ("prev", _wlp_on)):
-                        if not _on6:
-                            continue
+                    for _sk6 in ("cur", "prev"):          # merge is self-sufficient: both bands, always
                         _m6 = _msets.get(_sk6, {}).get(_zn6)
                         if _m6 is not None:
                             _px6.append((float(_m6.get("price") or 0.0), float(_m6.get("band") or 0.0),
