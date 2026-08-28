@@ -6851,9 +6851,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _off = len(_deep) + _wn
         _M = _off + m                                         # closed bars in ANALYSIS space
         _ssig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source, _off)
+        # _ana MUST be rebuilt whenever ANY consumer of it is stale. Missing the wall/POC/VP caches here let
+        # a sub-toggle (which clears only its own cache) recompute against the BARE window: the analysis-space
+        # span indices then matched nothing, so an EMPTY result got cached -- and since these are keyed on the
+        # frozen structure, the empty result STUCK instead of self-healing at the next bar close. That is the
+        # "click it and everything vanishes" report (2026-08-28).
         _need = ((self._ema_stk_cache is None or self._ema_stk_cache[0] != _ssig)
                  or ((_lvl_on or _vp_on or _wl_on or _wlp_on or _pc_on or _pcp_on)
-                     and (self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig)))
+                     and (self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig))
+                 or ((_wl_on or _wlp_on) and self._ema_wall_cache is None)
+                 or ((_pc_on or _pcp_on) and self._ema_poc_cache is None)
+                 or (_vp_on and self._ema_vp_cache is None))
         _ana = ((list(_deep) + list(_warm[len(_warm) - _wn:]) + list(buckets[:m]))
                 if _off else buckets) if _need else buckets
 
