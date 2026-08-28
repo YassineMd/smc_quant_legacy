@@ -2612,7 +2612,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
         if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
-                   "ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls"):
+                   "ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls", "ema_walls_prev"):
             if key == "ema_hlread":                  # readout text only; the HL lines are unaffected
                 if not on:
                     for _it in self._ema_ext_lbls.values():
@@ -2633,7 +2633,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._ema_vp_cache = None            # trend VP toggled -> recompute next frame
                 if not on:
                     self._hide_ema_vp()
-            elif key == "ema_walls":
+            elif key in ("ema_walls", "ema_walls_prev"):
                 self._ema_wall_cache = None          # zone walls toggled -> re-detect next frame
                 if not on:
                     self._hide_ema_walls()
@@ -6792,8 +6792,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _lvl_on = _lcb is not None and _lcb.isChecked()       # 'Trend Extreme Lines' need the flips too
         _vp_on = _vcb is not None and _vcb.isChecked()        # ... and so does the Trend VP (span anchors)
         _wcb = self.menu.sub_checks.get("ema_walls")
-        _wl_on = _wcb is not None and _wcb.isChecked()        # ... and the per-zone order walls
-        if (not _stk_on and not _lvl_on and not _vp_on and not _wl_on) or m < 51:
+        _wl_on = _wcb is not None and _wcb.isChecked()        # ... and the per-zone order walls (current band)
+        _wpcb = self.menu.sub_checks.get("ema_walls_prev")
+        _wlp_on = _wpcb is not None and _wpcb.isChecked()     # ... and the same for the PRECEDING band
+        if (not _stk_on and not _lvl_on and not _vp_on and not _wl_on and not _wlp_on) or m < 51:
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
             for _it3 in self._ema_lvl_items.values():
@@ -6915,7 +6917,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # green line) marks its LOWEST low with a solid GREEN hline; the last finished bull segment (green ->
         # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar
         # on the left to the live candle on the right.
-        if not _lvl_on and not _vp_on and not _wl_on:
+        if not _lvl_on and not _vp_on and not _wl_on and not _wlp_on:
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
             for _it3 in self._ema_lvl_vl.values():
@@ -7129,58 +7131,68 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # zones -- upper EXPENSIVE / middle EQUILIBRIUM / lower CHEAP -- and show the STRONGEST order
             # wall of the CURRENT tf inside each, one per zone. Walls are searched ONLY inside the last two
             # FINISHED trends (the same frozen span the VP uses); the running trend is excluded by design.
-            if not _wl_on or not _th_ok or _vp_span is None:
+            if (not _wl_on and not _wlp_on) or not _th_ok or _vp_span is None:
                 self._hide_ema_walls()
             else:
                 if self._ema_wall_cache is None or self._ema_wall_cache[0] != _ssig:
-                    _zw = {}
+                    _sets = {"cur": {}, "prev": {}}
                     try:
                         from app import absorption_level_detect as _alw
-                        _sp0w, _sp1w = _vp_span
-                        _lo7 = float(_lo_info[1]); _hi7 = float(_hi_info[1]); _r7 = _hi7 - _lo7
-                        _edges = (("cheap", _lo7, _lo7 + _r7 / 3.0),
-                                  ("eq", _lo7 + _r7 / 3.0, _lo7 + 2.0 * _r7 / 3.0),
-                                  ("exp", _lo7 + 2.0 * _r7 / 3.0, _hi7))
-                        for _mk7 in (_alw.detect(_ana[:_M], skip_last=False) or []):
-                            _i7 = int(_mk7.get("i0", -1))
-                            if not (_sp0w <= _i7 <= _sp1w):    # born outside the two finished trends -> skip
+                        _marks7 = _alw.detect(_ana[:_M], skip_last=False) or []   # ONE detect, filtered per band
+                        _specs = [("cur", float(_lo_info[1]), float(_hi_info[1]), _vp_span)]
+                        if _hip is not None and _lop is not None:                 # the PRECEDING pair of trends
+                            _specs.append(("prev", float(_lop[2]), float(_hip[2]),
+                                           (min(_hip[0], _lop[0]), max(_hip[1], _lop[1]))))
+                        for _sk7, _blo7, _bhi7, (_s0w, _s1w) in _specs:
+                            if _bhi7 <= _blo7:
                                 continue
-                            _p7 = float(_mk7.get("price") or 0.0)
-                            if _p7 <= 0:
-                                continue
-                            for _zn, _z0, _z1 in _edges:
-                                if _z0 <= _p7 <= _z1:
-                                    _cur = _zw.get(_zn)
-                                    if _cur is None or float(_mk7.get("strength") or 0.0) > float(_cur.get("strength") or 0.0):
-                                        _zw[_zn] = _mk7
-                                    break
+                            _r7 = _bhi7 - _blo7
+                            _edges = (("cheap", _blo7, _blo7 + _r7 / 3.0),
+                                      ("eq", _blo7 + _r7 / 3.0, _blo7 + 2.0 * _r7 / 3.0),
+                                      ("exp", _blo7 + 2.0 * _r7 / 3.0, _bhi7))
+                            _zw = _sets[_sk7]
+                            for _mk7 in _marks7:
+                                _i7 = int(_mk7.get("i0", -1))
+                                if not (_s0w <= _i7 <= _s1w):  # born outside THAT pair of trends -> skip
+                                    continue
+                                _p7 = float(_mk7.get("price") or 0.0)
+                                if _p7 <= 0:
+                                    continue
+                                for _zn, _z0, _z1 in _edges:
+                                    if _z0 <= _p7 <= _z1:
+                                        _cur = _zw.get(_zn)
+                                        if _cur is None or float(_mk7.get("strength") or 0.0) > float(_cur.get("strength") or 0.0):
+                                            _zw[_zn] = _mk7
+                                        break
                     except Exception:
-                        _zw = {}
-                    self._ema_wall_cache = (_ssig, _zw)
-                _zw = self._ema_wall_cache[1]
-                for _zn, _ztxt in (("exp", "EXPENSIVE"), ("eq", "EQUILIBRIUM"), ("cheap", "CHEAP")):
-                    _slot = self._ema_wall_items.get(_zn)
-                    _mk7 = _zw.get(_zn)
-                    if _mk7 is None:
-                        if _slot is not None:
-                            _slot["rect"].setVisible(False); _slot["lbl"].setVisible(False)
-                        continue
-                    if _slot is None:
-                        _rc7 = QtWidgets.QGraphicsRectItem(); _rc7.setPen(pg.mkPen(None)); _rc7.setZValue(-6)
-                        self.vb.addItem(_rc7, ignoreBounds=True)
-                        _lb7 = pg.TextItem(anchor=(0, 0.5)); _lb7.setZValue(16)
-                        self.plot.addItem(_lb7, ignoreBounds=True)
-                        _slot = {"rect": _rc7, "lbl": _lb7}; self._ema_wall_items[_zn] = _slot
-                    _rgb7 = (40, 230, 120) if _mk7.get("side") == "S" else (240, 70, 90)
-                    _p7 = float(_mk7.get("price") or 0.0); _bd7 = float(_mk7.get("band") or 0.0) or (_p7 * 5e-4)
-                    _x07 = _wx(int(_mk7.get("i0", 0))); _x17 = float(x[n - 1])
-                    _slot["rect"].setRect(_x07, _p7 - _bd7, max(1e-9, _x17 - _x07), 2.0 * _bd7)
-                    _slot["rect"].setBrush(pg.mkBrush(_rgb7[0], _rgb7[1], _rgb7[2], 70))
-                    _slot["rect"].setVisible(True)
-                    _slot["lbl"].setText("%s  %.2f" % (_ztxt, float(_mk7.get("strength") or 0.0)))
-                    _slot["lbl"].setColor(pg.mkColor(_rgb7[0], _rgb7[1], _rgb7[2], 220))
-                    _slot["lbl"].setPos(_x07 + 0.4, _p7)
-                    _slot["lbl"].setVisible(True)
+                        _sets = {"cur": {}, "prev": {}}
+                    self._ema_wall_cache = (_ssig, _sets)
+                _sets = self._ema_wall_cache[1]
+                for _sk7, _on7, _al7, _pre7 in (("cur", _wl_on, 70, ""), ("prev", _wlp_on, 40, "prev ")):
+                    for _zn, _ztxt in (("exp", "EXPENSIVE"), ("eq", "EQUILIBRIUM"), ("cheap", "CHEAP")):
+                        _kk7 = _sk7 + "_" + _zn
+                        _slot = self._ema_wall_items.get(_kk7)
+                        _mk7 = _sets.get(_sk7, {}).get(_zn) if _on7 else None
+                        if _mk7 is None:
+                            if _slot is not None:
+                                _slot["rect"].setVisible(False); _slot["lbl"].setVisible(False)
+                            continue
+                        if _slot is None:
+                            _rc7 = QtWidgets.QGraphicsRectItem(); _rc7.setPen(pg.mkPen(None)); _rc7.setZValue(-6)
+                            self.vb.addItem(_rc7, ignoreBounds=True)
+                            _lb7 = pg.TextItem(anchor=(0, 0.5)); _lb7.setZValue(16)
+                            self.plot.addItem(_lb7, ignoreBounds=True)
+                            _slot = {"rect": _rc7, "lbl": _lb7}; self._ema_wall_items[_kk7] = _slot
+                        _rgb7 = (40, 230, 120) if _mk7.get("side") == "S" else (240, 70, 90)
+                        _p7 = float(_mk7.get("price") or 0.0); _bd7 = float(_mk7.get("band") or 0.0) or (_p7 * 5e-4)
+                        _x07 = _wx(int(_mk7.get("i0", 0))); _x17 = float(x[n - 1])
+                        _slot["rect"].setRect(_x07, _p7 - _bd7, max(1e-9, _x17 - _x07), 2.0 * _bd7)
+                        _slot["rect"].setBrush(pg.mkBrush(_rgb7[0], _rgb7[1], _rgb7[2], _al7))
+                        _slot["rect"].setVisible(True)
+                        _slot["lbl"].setText("%s%s  %.2f" % (_pre7, _ztxt, float(_mk7.get("strength") or 0.0)))
+                        _slot["lbl"].setColor(pg.mkColor(_rgb7[0], _rgb7[1], _rgb7[2], 220 if not _pre7 else 150))
+                        _slot["lbl"].setPos(_x07 + 0.4, _p7)
+                        _slot["lbl"].setVisible(True)
             # 'Trend Extremes VP' (sub-toggle 'ema_trendvp'): right-anchored volume profile over the SPAN the
             # Trend Extreme lines cover — from the older current anchor vline to the last CLOSED bar. Per-bar
             # footprint 'levels' when present, else the bar's volume spread uniformly over its range. Bins
