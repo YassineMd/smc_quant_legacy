@@ -7218,49 +7218,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _sets = {"cur": {}, "prev": {}}
                     self._ema_wall_cache = (_frz, _sets)
                 _sets = self._ema_wall_cache[1]
-                # 'Merged Lines': collapse each zone's walls (current + previous) into ONE area spanning
-                # them -- CHEAP green / EQUILIBRIUM gray / EXPENSIVE red -- replacing the per-band drawing.
-                for _zn6, _zt6, _rgb6 in (("exp", "EXPENSIVE", (240, 70, 90)),
-                                          ("eq", "EQUILIBRIUM", (150, 158, 175)),
-                                          ("cheap", "CHEAP", (40, 230, 120))):
-                    _sl6 = self._ema_wmrg_items.get(_zn6)
-                    _px6 = []
-                    if _wmg_on:
-                        for _sk6, _on6 in (("cur", _wl_on), ("prev", _wlp_on)):
-                            _m6 = _sets.get(_sk6, {}).get(_zn6) if _on6 else None
-                            if _m6 is not None:
-                                _px6.append((float(_m6.get("price") or 0.0),
-                                             float(_m6.get("band") or 0.0),
-                                             int(_m6.get("i0", 0)) + int(_m6.get("_off7", 0))))
-                    if not _px6:
-                        if _sl6 is not None:
-                            _sl6["rect"].setVisible(False); _sl6["lbl"].setVisible(False)
-                        continue
-                    _lo6 = min(_p for _p, _b, _i in _px6); _hi6 = max(_p for _p, _b, _i in _px6)
-                    if _hi6 - _lo6 <= 0:                      # a single line -> give the area the wall's own band
-                        _bd6 = max(_b for _p, _b, _i in _px6) or (_lo6 * 5e-4)
-                        _lo6 -= _bd6; _hi6 += _bd6
-                    _x06 = _wx(min(_i for _p, _b, _i in _px6)); _x16 = float(x[n - 1])
-                    if _sl6 is None:
-                        _rc6 = QtWidgets.QGraphicsRectItem(); _rc6.setPen(pg.mkPen(None)); _rc6.setZValue(-6)
-                        self.vb.addItem(_rc6, ignoreBounds=True)
-                        _lb6 = pg.TextItem(anchor=(0, 0.5)); _lb6.setZValue(16)
-                        self.plot.addItem(_lb6, ignoreBounds=True)
-                        _sl6 = {"rect": _rc6, "lbl": _lb6, "txt": None, "geo": None, "br": None}
-                        self._ema_wmrg_items[_zn6] = _sl6
-                    _geo6 = (_x06, _lo6, _hi6, _x16)
-                    if _sl6.get("geo") != _geo6:
-                        _sl6["rect"].setRect(_x06, _lo6, max(1e-9, _x16 - _x06), max(1e-9, _hi6 - _lo6))
-                        _sl6["geo"] = _geo6
-                    if _sl6.get("br") != _rgb6:
-                        _sl6["rect"].setBrush(pg.mkBrush(_rgb6[0], _rgb6[1], _rgb6[2], 70))
-                        _sl6["lbl"].setColor(pg.mkColor(_rgb6[0], _rgb6[1], _rgb6[2], 225))
-                        _sl6["br"] = _rgb6
-                    _sl6["rect"].setVisible(True)
-                    if _sl6.get("txt") != _zt6:
-                        _sl6["lbl"].setText(_zt6); _sl6["txt"] = _zt6
-                    _sl6["lbl"].setPos(_x06 + 0.4, 0.5 * (_lo6 + _hi6))
-                    _sl6["lbl"].setVisible(True)
                 for _sk7, _on7, _al7, _pre7 in (("cur", _wl_on and not _wmg_on, 70, ""),
                                                 ("prev", _wlp_on and not _wmg_on, 40, "prev ")):
                     for _zn, _ztxt in (("exp", "EXPENSIVE"), ("eq", "EQUILIBRIUM"), ("cheap", "CHEAP")):
@@ -7320,7 +7277,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # 'POC' (sub-toggles 'ema_poc' / 'ema_poc_prev'): the POINT OF CONTROL of each zone -- the single
             # most-traded price inside EXPENSIVE / EQUILIBRIUM / CHEAP -- measured over that band's own pair of
             # finished trends. Amber line at the price, dimmer + 'prev' for the preceding band.
-            if (not _pc_on and not _pcp_on) or not _th_ok or _vp_span is None:
+            if (not _pc_on and not _pcp_on and not _wmg_on) or not _th_ok or _vp_span is None:
                 self._hide_ema_pocs()
             else:
                 if self._ema_poc_cache is None or self._ema_poc_cache[0] != _frz:
@@ -7407,6 +7364,56 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _slot8["lbl"].setText(_tx8); _slot8["txt"] = _tx8
                         _slot8["lbl"].setPos(_x08 + 0.4, _pp8)
                         _slot8["lbl"].setVisible(True)
+            # 'Merged Lines': collapse each zone's markers into ONE area -- the walls AND the POCs of the
+            # bands that are enabled -- CHEAP green / EQUILIBRIUM gray / EXPENSIVE red. Replaces the
+            # per-band wall drawing; the POC lines keep their own toggles.
+            _msets = self._ema_wall_cache[1] if self._ema_wall_cache else {}
+            _mpocs = self._ema_poc_cache[1] if self._ema_poc_cache else {}
+            for _zn6, _zt6, _rgb6 in (("exp", "EXPENSIVE", (240, 70, 90)),
+                                      ("eq", "EQUILIBRIUM", (150, 158, 175)),
+                                      ("cheap", "CHEAP", (40, 230, 120))):
+                _sl6 = self._ema_wmrg_items.get(_zn6)
+                _px6 = []
+                if _wmg_on:
+                    for _sk6, _on6 in (("cur", _wl_on), ("prev", _wlp_on)):
+                        if not _on6:
+                            continue
+                        _m6 = _msets.get(_sk6, {}).get(_zn6)
+                        if _m6 is not None:
+                            _px6.append((float(_m6.get("price") or 0.0), float(_m6.get("band") or 0.0),
+                                         int(_m6.get("i0", 0)) + int(_m6.get("_off7", 0))))
+                        _q6 = _mpocs.get(_sk6, {}).get(_zn6)      # the zone POC joins the merge
+                        if _q6 is not None:
+                            _px6.append((float(_q6[0]), 0.0, int(_q6[2])))
+                if not _px6:
+                    if _sl6 is not None:
+                        _sl6["rect"].setVisible(False); _sl6["lbl"].setVisible(False)
+                    continue
+                _lo6 = min(_p for _p, _b, _i in _px6); _hi6 = max(_p for _p, _b, _i in _px6)
+                if _hi6 - _lo6 <= 0:                      # a single marker -> use its own band so it stays visible
+                    _bd6 = max(_b for _p, _b, _i in _px6) or (_lo6 * 5e-4)
+                    _lo6 -= _bd6; _hi6 += _bd6
+                _x06 = _wx(min(_i for _p, _b, _i in _px6)); _x16 = float(x[n - 1])
+                if _sl6 is None:
+                    _rc6 = QtWidgets.QGraphicsRectItem(); _rc6.setPen(pg.mkPen(None)); _rc6.setZValue(-6)
+                    self.vb.addItem(_rc6, ignoreBounds=True)
+                    _lb6 = pg.TextItem(anchor=(0, 0.5)); _lb6.setZValue(16)
+                    self.plot.addItem(_lb6, ignoreBounds=True)
+                    _sl6 = {"rect": _rc6, "lbl": _lb6, "txt": None, "geo": None, "br": None}
+                    self._ema_wmrg_items[_zn6] = _sl6
+                _geo6 = (_x06, _lo6, _hi6, _x16)
+                if _sl6.get("geo") != _geo6:
+                    _sl6["rect"].setRect(_x06, _lo6, max(1e-9, _x16 - _x06), max(1e-9, _hi6 - _lo6))
+                    _sl6["geo"] = _geo6
+                if _sl6.get("br") != _rgb6:
+                    _sl6["rect"].setBrush(pg.mkBrush(_rgb6[0], _rgb6[1], _rgb6[2], 70))
+                    _sl6["lbl"].setColor(pg.mkColor(_rgb6[0], _rgb6[1], _rgb6[2], 225))
+                    _sl6["br"] = _rgb6
+                _sl6["rect"].setVisible(True)
+                if _sl6.get("txt") != _zt6:
+                    _sl6["lbl"].setText(_zt6); _sl6["txt"] = _zt6
+                _sl6["lbl"].setPos(_x06 + 0.4, 0.5 * (_lo6 + _hi6))
+                _sl6["lbl"].setVisible(True)
             # 'Trend Extremes VP' (sub-toggle 'ema_trendvp'): right-anchored volume profile over the SPAN the
             # Trend Extreme lines cover — from the older current anchor vline to the last CLOSED bar. Per-bar
             # footprint 'levels' when present, else the bar's volume spread uniformly over its range. Bins
