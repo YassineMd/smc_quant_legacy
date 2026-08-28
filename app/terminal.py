@@ -2586,8 +2586,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
-        if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_stack", "ema_trendlvl", "ema_trendvp"):
-            if key == "ema_stack":
+        if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
+                   "ema_stack", "ema_trendlvl", "ema_trendvp"):
+            if key == "ema_hlread":                  # readout text only; the HL lines are unaffected
+                if not on:
+                    for _it in self._ema_ext_lbls.values():
+                        _it.setVisible(False)
+            elif key == "ema_stack":
                 self._ema_stk_cache = None           # stack-flip lines toggled -> recompute next frame
                 if not on:
                     for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
@@ -6571,6 +6576,47 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _it in self._ema_vp_va.values():
             _it.setVisible(False)
 
+    _EMA_MIN_ANA = 1500      # bars of history the bias walk needs before it can settle on a determined read
+
+    def _ema_deep_hist(self, first_t, want):
+        """Bars strictly BEFORE `first_t` on the CURRENT tf/source, pulled straight from the replay chunks /
+        cold archive so the trend bias can settle even when the loaded frame holds far less than the walk
+        needs — a REPLAY clip or a short scan window would otherwise leave it undecidable (user 2026-08-28).
+        Deliberately bypasses the display cap: this data is never drawn, only analysed. Cached per
+        (tf, source, first_t, want); returns [] when nothing is available (never raises)."""
+        if want <= 0 or not first_t:
+            return []
+        _key = (self._tf, self._chart_source, float(first_t), int(want))
+        _hit = getattr(self, "_ema_deep", None)
+        if _hit is not None and _hit[0] == _key:
+            return _hit[1]
+        _sec = float(config.TF_SECONDS.get(self._tf, 60) or 60)
+        _lo = first_t - max(want * 4, 200) * _sec          # generous span (volume buckets are irregular in time)
+        _bars = []
+        try:
+            if self._chart_source == "time":
+                from app import clock_replay as _crp
+                _e0 = _crp.earliest_start(self._tf) if _crp.available(self._tf) else None
+                if _e0 is not None and first_t > _e0:      # cheap extent check: scanning chunk files for a
+                    _bars = _crp.window_by_time(self._tf, _lo, first_t) or []   # range with no data costs ~2s
+            else:
+                from app import recon_replay as _rrp
+                if first_t < _rrp.CUTOFF and _rrp.available(self._tf):
+                    _e0 = _rrp.earliest_start(self._tf)
+                    if _e0 is not None and first_t > _e0:
+                        _bars = _rrp.window_by_time(self._tf, _lo, first_t) or []
+                if not _bars and archive.available(self._tf):
+                    _e1 = archive.earliest_start(self._tf)   # _load is module-cached, but skip the scan when
+                    if _e1 is None or first_t > _e1:         # the archive starts after what we are asking for
+                        _d = archive._load(self._tf)
+                        _bars = [_d[_k] for _k in sorted(_d)]
+        except Exception:
+            _bars = []
+        _bars = [_b for _b in _bars
+                 if 0.0 < float(_b.get("start_time", 0.0) or 0.0) < first_t][-want:]
+        self._ema_deep = (_key, _bars)
+        return _bars
+
     _EMAS = (("ema20", 20, (250, 180, 60)),                   # amber
              ("ema50", 50, (90, 170, 255)),                   # blue
              ("ema100", 100, (200, 120, 255)))                # purple
@@ -6585,6 +6631,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         m = (n - 1) if (_forming and n > 1) else n            # CLOSED bars
         _extcb = self.menu.sub_checks.get("ema_ext")          # 'EMA High/Low Lines' sub-toggle (rides each EMA)
         _ext_on = _extcb is not None and _extcb.isChecked()
+        _rdcb = self.menu.sub_checks.get("ema_hlread")        # readout text on/off (the LINES stay either way)
+        _rd_on = _rdcb is None or _rdcb.isChecked()
         for key, p, rgb in self._EMAS:
             cb = self.menu.sub_checks.get(key)
             item = self._ema_items.get(key)
@@ -6669,7 +6717,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # readout in front of the EMA line's live end: EMA->high dist, EMA->low dist, HL delta (% of the
             # closed EMA value; a missing side shows an em-dash). Text re-renders once per bar close only.
             _lb2 = self._ema_ext_lbls.get(key)
-            if hi_p is None and lo_p is None:
+            if (not _rd_on) or (hi_p is None and lo_p is None):
                 if _lb2 is not None:
                     _lb2.setVisible(False)
             else:
@@ -6719,14 +6767,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # history PLUS the window (the same warm prefix the Radar Runner uses to avoid repaint), so structure
         # that scrolled off the left still counts. Analysis indices are offset by _off; drawing maps them back
         # (_wx) and vlines older than the window are used but not drawn.
-        _off = min(len(getattr(self, "_rr_warm", None) or []), 2000)
+        _warm = getattr(self, "_rr_warm", None) or []
+        _wn = min(len(_warm), 2000)
+        _deep = []                                            # pulled ONLY when the frame is too short
+        if _wn + m < self._EMA_MIN_ANA:
+            _ft = float((_warm[len(_warm) - _wn] if _wn else buckets[0]).get("start_time", 0.0) or 0.0)
+            _deep = self._ema_deep_hist(_ft, self._EMA_MIN_ANA - (_wn + m))
+        _off = len(_deep) + _wn
         _M = _off + m                                         # closed bars in ANALYSIS space
         _ssig = (m, float(buckets[m - 1].get("end_time", 0.0) or 0.0), self._tf, self._chart_source, _off)
         _need = ((self._ema_stk_cache is None or self._ema_stk_cache[0] != _ssig)
                  or ((_lvl_on or _vp_on)
                      and (self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig))
                  or (_vp_on and (self._ema_vp_cache is None or self._ema_vp_cache[0] != _ssig)))
-        _ana = ((list(self._rr_warm[-_off:]) + list(buckets[:m])) if _off else buckets) if _need else buckets
+        _ana = ((list(_deep) + list(_warm[len(_warm) - _wn:]) + list(buckets[:m]))
+                if _off else buckets) if _need else buckets
 
         def _wx(_i5):                                         # analysis index -> window x (clamped at the left)
             return float(x[max(0, min(n - 1, _i5 - _off))])

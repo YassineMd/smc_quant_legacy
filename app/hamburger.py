@@ -482,12 +482,14 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("ema50", "50 EMA Line"),                 # 50-period EMA (blue line; same engine)
                            ("ema100", "100 EMA Line"),               # 100-period EMA (purple line; same engine)
                            ("ema_ext", "High/Low Lines + readout"),  # per toggled EMA: dotted lines at the p-bar window's high/low + SIGNED dist-to-EMA readout (hi / lo / net delta) at the live edge
+                           ("ema_hlread", "HL delta readout"),      # the up/down/delta text next to each EMA (lines stay)
                            ("ema_stack", "Stack Flip Lines"),        # dashed vline per 20/50-cross regime, delta-validated: prints at the FIRST bar where both 20/50 HL deltas match the bias (green up: both>0 / red down: both<0) — at the cross or later when the deltas confirm (100 EMA omitted)
                            ("ema_trendlvl", "Trend Extreme Lines"),  # solid hlines: GREEN last-bear LOW / RED last-bull HIGH to the live candle + dimmer PREVIOUS pair frozen at supersession + bias tag (HH+HL BULLISH / LH+LL BEARISH / else RANGING; OVERRIDE: 20 closes above the high line = BULLISH / below the low line = BEARISH + two dashed gray dividers splitting the current band into 3 equal 33.33% zones)
                            ("ema_trendvp", "Trend Extremes VP (right)"),   # right-anchored VP over the last two FINISHED trends; amber POC + purple in-VA LVN + light-amber POCs above VAH/below VAL + dashed VAH/VAL on the band
                            ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:
-            _ema_grp = key in ("ema20", "ema50", "ema100", "ema_ext", "ema_stack", "ema_trendlvl", "ema_trendvp")
+            _ema_grp = key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
+                               "ema_stack", "ema_trendlvl", "ema_trendvp")
             if key == "ema20":                       # group header — the EMA entries render as indented sub-toggles
                 _hdr = QtWidgets.QLabel("EMA")
                 _hdr.setStyleSheet("color:#8b93a3; font-size:10px; padding-left:2px; padding-top:3px;")
@@ -497,7 +499,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")
             # First-launch DEFAULT (before connect): Vector Drawing ON, OB/Iceberg Alert OFF.
             # Persistence (terminal saved toggles) overrides this on every later launch.
-            cb.setChecked(key == "drawing")
+            cb.setChecked(key in ("drawing", "ema_hlread"))   # readout defaults ON (it was always drawn before)
             cb.toggled.connect(lambda on, k=key: self.subWidgetToggled.emit(k, on))
             self.sub_checks[key] = cb
             self.sub_section.addWidget(cb)
