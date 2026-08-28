@@ -1471,6 +1471,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_ext_lblsig = {}                                # key -> sig of the last-rendered readout text
         self._ema_stk_pool = {"g": [], "r": []}                  # 'ema_stack' flip lines: pooled dashed vlines (green/red)
         self._ema_stk_cache = None                               # (sig, green bar idxs, red bar idxs) — per bar close
+        self._ema_wall_items = {}                                # 'ema_walls': per-zone strongest-wall band + tag
+        self._ema_wall_cache = None                              # (sig, {zone: mark}) — detect once per bar close
         self._ema_lvl_vl = {}                                    # segment-START vlines behind each extreme line
         self._ema_lvl_items = {}                                 # 'ema_trendlvl': 'hi' red / 'lo' green solid hlines
         self._ema_lvl_cache = None                               # (sig, lo_info, hi_info) — per bar close
@@ -2610,7 +2612,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
         if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
-                   "ema_stack", "ema_trendlvl", "ema_trendvp"):
+                   "ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls"):
             if key == "ema_hlread":                  # readout text only; the HL lines are unaffected
                 if not on:
                     for _it in self._ema_ext_lbls.values():
@@ -2631,6 +2633,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._ema_vp_cache = None            # trend VP toggled -> recompute next frame
                 if not on:
                     self._hide_ema_vp()
+            elif key == "ema_walls":
+                self._ema_wall_cache = None          # zone walls toggled -> re-detect next frame
+                if not on:
+                    self._hide_ema_walls()
             elif key == "ema_ext":
                 self._ema_ext_cache.clear(); self._ema_ext_lblsig.clear()   # extremes toggled -> recompute next frame
                 if not on:
@@ -6595,6 +6601,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             % (gray, dim, dim, ac, r["astate"], dim, val, poc, vah,
                dim, bc, arrow, r["bias"], dim, r["cs"], r["cr"], r["ms"], r["mr"], nc, nd))
 
+    def _hide_ema_walls(self) -> None:
+        for _d in self._ema_wall_items.values():
+            _d["rect"].setVisible(False); _d["lbl"].setVisible(False)
+
     def _hide_ema_vp(self) -> None:
         if self._ema_vp_item is not None:
             self._ema_vp_item.setVisible(False)
@@ -6781,14 +6791,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _stk_on = _scb is not None and _scb.isChecked()
         _lvl_on = _lcb is not None and _lcb.isChecked()       # 'Trend Extreme Lines' need the flips too
         _vp_on = _vcb is not None and _vcb.isChecked()        # ... and so does the Trend VP (span anchors)
-        if (not _stk_on and not _lvl_on and not _vp_on) or m < 51:
+        _wcb = self.menu.sub_checks.get("ema_walls")
+        _wl_on = _wcb is not None and _wcb.isChecked()        # ... and the per-zone order walls
+        if (not _stk_on and not _lvl_on and not _vp_on and not _wl_on) or m < 51:
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
             for _it3 in self._ema_lvl_vl.values():
                 _it3.setVisible(False)
-            self._hide_ema_vp()
+            self._hide_ema_vp(); self._hide_ema_walls()
             return
         # ANALYSIS SERIES (user report 2026-08-28: "the algo should be able to extract previous data ... even
         # if it's not showing on the screen"): the flips / extremes / bias are computed over the pre-window
@@ -6903,12 +6915,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # green line) marks its LOWEST low with a solid GREEN hline; the last finished bull segment (green ->
         # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar
         # on the left to the live candle on the right.
-        if not _lvl_on and not _vp_on:
+        if not _lvl_on and not _vp_on and not _wl_on:
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
             for _it3 in self._ema_lvl_vl.values():
                 _it3.setVisible(False)
-            self._hide_ema_vp()
+            self._hide_ema_vp(); self._hide_ema_walls()
         else:
             if self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig:
                 _seq = sorted([(int(_i2), "g") for _i2 in _g] + [(int(_i2), "r") for _i2 in _r])
@@ -7113,6 +7125,62 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _lbp.setAnchor((_ax3, 0.0))
                     _lbp.setPos(_xtag, _ytag)
                     _lbp.setVisible(True)
+            # 'Extreme Lines Order Walls' (sub-toggle 'ema_walls'): split the current band into its three
+            # zones -- upper EXPENSIVE / middle EQUILIBRIUM / lower CHEAP -- and show the STRONGEST order
+            # wall of the CURRENT tf inside each, one per zone. Walls are searched ONLY inside the last two
+            # FINISHED trends (the same frozen span the VP uses); the running trend is excluded by design.
+            if not _wl_on or not _th_ok or _vp_span is None:
+                self._hide_ema_walls()
+            else:
+                if self._ema_wall_cache is None or self._ema_wall_cache[0] != _ssig:
+                    _zw = {}
+                    try:
+                        from app import absorption_level_detect as _alw
+                        _sp0w, _sp1w = _vp_span
+                        _lo7 = float(_lo_info[1]); _hi7 = float(_hi_info[1]); _r7 = _hi7 - _lo7
+                        _edges = (("cheap", _lo7, _lo7 + _r7 / 3.0),
+                                  ("eq", _lo7 + _r7 / 3.0, _lo7 + 2.0 * _r7 / 3.0),
+                                  ("exp", _lo7 + 2.0 * _r7 / 3.0, _hi7))
+                        for _mk7 in (_alw.detect(_ana[:_M], skip_last=False) or []):
+                            _i7 = int(_mk7.get("i0", -1))
+                            if not (_sp0w <= _i7 <= _sp1w):    # born outside the two finished trends -> skip
+                                continue
+                            _p7 = float(_mk7.get("price") or 0.0)
+                            if _p7 <= 0:
+                                continue
+                            for _zn, _z0, _z1 in _edges:
+                                if _z0 <= _p7 <= _z1:
+                                    _cur = _zw.get(_zn)
+                                    if _cur is None or float(_mk7.get("strength") or 0.0) > float(_cur.get("strength") or 0.0):
+                                        _zw[_zn] = _mk7
+                                    break
+                    except Exception:
+                        _zw = {}
+                    self._ema_wall_cache = (_ssig, _zw)
+                _zw = self._ema_wall_cache[1]
+                for _zn, _ztxt in (("exp", "EXPENSIVE"), ("eq", "EQUILIBRIUM"), ("cheap", "CHEAP")):
+                    _slot = self._ema_wall_items.get(_zn)
+                    _mk7 = _zw.get(_zn)
+                    if _mk7 is None:
+                        if _slot is not None:
+                            _slot["rect"].setVisible(False); _slot["lbl"].setVisible(False)
+                        continue
+                    if _slot is None:
+                        _rc7 = QtWidgets.QGraphicsRectItem(); _rc7.setPen(pg.mkPen(None)); _rc7.setZValue(-6)
+                        self.vb.addItem(_rc7, ignoreBounds=True)
+                        _lb7 = pg.TextItem(anchor=(0, 0.5)); _lb7.setZValue(16)
+                        self.plot.addItem(_lb7, ignoreBounds=True)
+                        _slot = {"rect": _rc7, "lbl": _lb7}; self._ema_wall_items[_zn] = _slot
+                    _rgb7 = (40, 230, 120) if _mk7.get("side") == "S" else (240, 70, 90)
+                    _p7 = float(_mk7.get("price") or 0.0); _bd7 = float(_mk7.get("band") or 0.0) or (_p7 * 5e-4)
+                    _x07 = _wx(int(_mk7.get("i0", 0))); _x17 = float(x[n - 1])
+                    _slot["rect"].setRect(_x07, _p7 - _bd7, max(1e-9, _x17 - _x07), 2.0 * _bd7)
+                    _slot["rect"].setBrush(pg.mkBrush(_rgb7[0], _rgb7[1], _rgb7[2], 70))
+                    _slot["rect"].setVisible(True)
+                    _slot["lbl"].setText("%s  %.2f" % (_ztxt, float(_mk7.get("strength") or 0.0)))
+                    _slot["lbl"].setColor(pg.mkColor(_rgb7[0], _rgb7[1], _rgb7[2], 220))
+                    _slot["lbl"].setPos(_x07 + 0.4, _p7)
+                    _slot["lbl"].setVisible(True)
             # 'Trend Extremes VP' (sub-toggle 'ema_trendvp'): right-anchored volume profile over the SPAN the
             # Trend Extreme lines cover — from the older current anchor vline to the last CLOSED bar. Per-bar
             # footprint 'levels' when present, else the bar's volume spread uniformly over its range. Bins
@@ -16403,7 +16471,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _pl.setVisible(False)
             for _it in self._ema_lvl_items.values():
                 _it.setVisible(False)
-            self._hide_ema_vp()
+            self._hide_ema_vp(); self._hide_ema_walls()
         try:
             self._draw_reversal_point(buckets, x, vx0, vx1, vy0, vy1)  # Reversal Point triangles, ALL tf (m10_reversal)
         except Exception:
