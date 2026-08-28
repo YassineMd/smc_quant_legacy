@@ -6815,14 +6815,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _lop = (_bears[-2][0], _bears[-1][1], _bears[-2][2]) if len(_bears) >= 2 else None
                 # BIAS vs the two preceding trends: higher high AND higher low -> BULLISH; lower high AND
                 # lower low -> BEARISH; anything in between -> RANGING.
-                _bias = None
+                # A current band is enough to show a read: default RANGING ("no CONFIRMED trend"), upgraded
+                # to BULLISH/BEARISH only when BOTH extremes advanced the same way. Previously the tag stayed
+                # BLANK until four finished segments existed; validated flips are rare, so it was invisible
+                # for long stretches (user report 2026-08-28).
+                _bias = "RANGING" if (_hi_info is not None and _lo_info is not None) else None
                 if _hip is not None and _lop is not None:
                     if _bulls[-1][2] > _bulls[-2][2] and _bears[-1][2] > _bears[-2][2]:
                         _bias = "BULLISH"
                     elif _bulls[-1][2] < _bulls[-2][2] and _bears[-1][2] < _bears[-2][2]:
                         _bias = "BEARISH"
-                    else:
-                        _bias = "RANGING"
                 # BREAKOUT OVERRIDE (user 2026-08-27): price printing 20 consecutive CLOSED bars ABOVE the
                 # high extreme line -> BULLISH regardless of structure; 20 below the low line -> BEARISH.
                 # Works even before two full cycles exist (only needs the current line).
@@ -6848,14 +6850,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _bh.append(_ev); _hiL = _ev
                         else:
                             _bl.append(_ev); _loL = _ev
-                    _b3 = None
+                    _b3 = "RANGING" if (_hiL is not None and _loL is not None) else None
                     if len(_bh) >= 2 and len(_bl) >= 2:
                         if _bh[-1] > _bh[-2] and _bl[-1] > _bl[-2]:
                             _b3 = "BULLISH"
                         elif _bh[-1] < _bh[-2] and _bl[-1] < _bl[-2]:
                             _b3 = "BEARISH"
-                        else:
-                            _b3 = "RANGING"
                     if _i2 >= 69:
                         if _hiL is not None and all(_C_all[_j3] > _hiL for _j3 in range(_i2 - 19, _i2 + 1)):
                             _b3 = "BULLISH"
@@ -6932,7 +6932,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _ymid3 = 0.5 * (_hi_info[1] + _lo_info[1])
                 else:
                     _ymid3 = (_hi_info or _lo_info)[1]
-                _lb3.setPos(float(x[n - 1]) + 0.8, _ymid3)
+                # KEEP IT ON SCREEN (user report 2026-08-28: the tag vanished when panned away from the live
+                # edge). Sit just past the last candle while that is in view; otherwise clamp to the
+                # viewport's right edge (right-anchored so the text never spills), and clamp y into view.
+                (_tvx0, _tvx1), (_tvy0, _tvy1) = self.vb.viewRange()
+                _mx3 = 0.012 * (_tvx1 - _tvx0); _my3 = 0.06 * (_tvy1 - _tvy0)
+                _xpref = float(x[n - 1]) + 0.8
+                if _xpref <= _tvx1 - _mx3:
+                    _xtag, _ax3 = _xpref, 0.0
+                else:
+                    _xtag, _ax3 = _tvx1 - _mx3, 1.0
+                _ytag = min(max(_ymid3, _tvy0 + _my3), _tvy1 - _my3)
+                _lb3.setAnchor((_ax3, 1.0))
+                _lb3.setPos(_xtag, _ytag)
                 _lb3.setVisible(True)
                 if _prevbias is None:
                     if _lbp is not None:
@@ -6948,7 +6960,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _lbp.setText("prev " + _prevbias)
                         _lbp.setColor(pg.mkColor(_colp[0], _colp[1], _colp[2], 160))
                         self._ema_lvl_lblptxt = _prevbias
-                    _lbp.setPos(float(x[n - 1]) + 0.8, _ymid3)
+                    _lbp.setAnchor((_ax3, 0.0))
+                    _lbp.setPos(_xtag, _ytag)
                     _lbp.setVisible(True)
             # 'Trend Extremes VP' (sub-toggle 'ema_trendvp'): right-anchored volume profile over the SPAN the
             # Trend Extreme lines cover — from the older current anchor vline to the last CLOSED bar. Per-bar
