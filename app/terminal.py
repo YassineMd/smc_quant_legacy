@@ -1445,6 +1445,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Radar Runner overlay (m10_radarrun, 5m/15m/1h) — resisted-wall radar BREAKOUT; the one recon-validated edge.
         # L/S triangle badge at the breakout bar; click -> entry/SL/TP tradeable-bracket lines. (app/radar_breakout_detect)
         self._rr_sph = None; self._rr_ring = None              # pentagon badges + a GOLD ring on high-conviction ones
+        self._rr_fail_sph = None                               # FAILED badges: red ring + orange cross (stopped out < 0.2% TP)
+        self._rr_htf_fail = {}                                 # ... the same mark for the HTF signal badges, per htf
         self._rr_sig = None; self._rr_drawn = False
         self._rr_entries = []
         self._rr_ln_pool = []; self._rr_lnlbl_pool = []; self._rr_lines_user = {}
@@ -9165,6 +9167,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._rr_sph.setVisible(False)
         if self._rr_ring is not None:
             self._rr_ring.setVisible(False)
+        if getattr(self, "_rr_fail_sph", None) is not None:
+            self._rr_fail_sph.setVisible(False)
         for _it in self._rr_ln_pool + self._rr_lnlbl_pool:
             _it.setVisible(False)
         if self._rr_size_lbl is not None:
@@ -9265,6 +9269,50 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             os.replace(tmp, p)
         except Exception:
             pass
+
+    @staticmethod
+    def _rr_fail_flags(bars, sigs):
+        """FAILED signals -> {bar index: True}. A Radar Runner is FAILED when it was STOPPED OUT before it ever
+        reached the +0.2%-net take-profit (config.RR_TP1_FRAC gross = the badge's own TP1 line) -- i.e. the frozen
+        candle-capped SL is touched first, walking FORWARD from the breakout bar on the chart's own candles.
+
+        `sigs` = [(index, side, entry, sl)] with the values FROZEN at fire time (the same bracket the badge draws).
+        Three states, only the first of which is labelled:
+          FAILED       SL touched, the 0.2% TP never was
+          not failed   the TP came first  -- or the trade is still running with neither touched (too recent)
+          UNPROVABLE   a single candle touched BOTH levels: the order inside that bar is unknowable from bar data
+                       (never guessed -- bar-level SL-first manufactures false losers on a tight-TP/wide-SL bracket;
+                       measured 0/318 on 30m and 1/211 on 1h, so this costs essentially nothing)
+        Resolution reads ONLY the bars the frame already holds, so in replay it stops dead at the cursor and a mark
+        can never peek past it."""
+        out = {}
+        n = len(bars)
+        if not sigs or n < 2:
+            return out
+        i0 = max(0, min(int(_s0[0]) for _s0 in sigs))
+        HI = [0.0] * n; LO = [0.0] * n
+        for j in range(i0, n):
+            _b0 = bars[j]
+            HI[j] = float(_b0.get("high", 0.0) or 0.0); LO[j] = float(_b0.get("low", 0.0) or 0.0)
+        _tpf = config.RR_TP1_FRAC
+        for (i, side, entry, sl) in sigs:
+            i = int(i); side = int(side); entry = float(entry or 0.0); sl = float(sl or 0.0)
+            if entry <= 0 or sl <= 0 or side == 0 or not (0 <= i < n):
+                continue
+            tp = entry * (1.0 + side * _tpf)
+            for j in range(i + 1, n):                            # entry is the breakout bar's CLOSE -> resolve from the next
+                hh = HI[j]; ll = LO[j]
+                if hh <= 0 or ll <= 0:
+                    continue
+                _slh = (ll <= sl) if side > 0 else (hh >= sl)
+                _tph = (hh >= tp) if side > 0 else (ll <= tp)
+                if _slh and _tph:
+                    break                                        # both in one candle -> unprovable, leave it unlabelled
+                if _slh:
+                    out[i] = True; break                         # stopped out BEFORE the 0.2% TP -> FAILED
+                if _tph:
+                    break                                        # reached the 0.2% TP first -> not a failure
+        return out
 
     def _draw_radarrun(self, filtered) -> None:
         if (not self.menu.layer_state("m10_radarrun") or self.scanner_mode != "bucket_canvas"
@@ -9383,7 +9431,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._rr_ring is None:
             self._rr_ring = pg.ScatterPlotItem(pxMode=True, size=28, symbol="o", brush=pg.mkBrush(0, 0, 0, 0))
             self._rr_ring.setZValue(32); self.plot.addItem(self._rr_ring, ignoreBounds=True)
-        spots = []; ring_spots = []; self._rr_entries = []
+        if self._rr_fail_sph is None:                            # FAILED mark: red ring + orange cross, one scatter
+            self._rr_fail_sph = pg.ScatterPlotItem(pxMode=True)
+            self._rr_fail_sph.setZValue(34); self.plot.addItem(self._rr_fail_sph, ignoreBounds=True)
+        _fsigs = [(_i9, int(_ev9.get("side", 0)), float(_ev9.get("entry", 0.0) or 0.0),
+                   float(_ev9.get("sl", 0.0) or 0.0))
+                  for _et9, _ev9 in self._rr_fired.items()
+                  for _i9 in (et2i.get(_et9),) if _i9 is not None]
+        _failed = self._rr_fail_flags(filtered, _fsigs)          # stopped out before the +0.2%-net TP
+        spots = []; ring_spots = []; fail_spots = []; self._rr_entries = []
         for et, ev in self._rr_fired.items():                    # draw EVERY persisted signal whose bar is on-screen now
             i = et2i.get(et)
             if i is None:                                        # its bar scrolled out of the loaded window -> keep, don't draw
@@ -9403,11 +9459,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _pen_rgb = [int(c * 0.55) for c in col] + [255]
             spots.append({"pos": (i, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
                           "pen": pg.mkPen(*_pen_rgb, width=1.4), "size": 20})
+            _fail = bool(_failed.get(i))
             if hc:                                               # GOLD RING = high conviction (breakout strength + reward/eff aligned)
-                ring_spots.append({"pos": (i, y), "symbol": "o", "size": 28, "brush": pg.mkBrush(0, 0, 0, 0),
+                ring_spots.append({"pos": (i, y), "symbol": "o", "size": 34 if _fail else 28,   # step out when crossed
+                                   "brush": pg.mkBrush(0, 0, 0, 0),
                                    "pen": pg.mkPen(255, 195, 40, 255, width=2.0)})
+            if _fail:                                            # FAILED = stopped out before it ever reached the 0.2% TP
+                fail_spots.append({"pos": (i, y), "symbol": "o", "size": 28, "brush": pg.mkBrush(0, 0, 0, 0),
+                                   "pen": pg.mkPen(255, 70, 70, 255, width=2.0)})
+                fail_spots.append({"pos": (i, y), "symbol": "x", "size": 14,
+                                   "brush": pg.mkBrush(255, 150, 40, 255),
+                                   "pen": pg.mkPen(255, 150, 40, 255, width=1.8)})
         self._rr_sph.setData(spots); self._rr_sph.setVisible(True)
         self._rr_ring.setData(ring_spots); self._rr_ring.setVisible(True)
+        self._rr_fail_sph.setData(fail_spots); self._rr_fail_sph.setVisible(True)
         self._rr_drawn = True
         self._trline_buckets = filtered                             # click a badge -> entry/SL/TP trade lines
         self._draw_rr_lines()
@@ -9829,6 +9894,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _sph = self._rr_htf_sph.get(_h)
             if _sph is not None:
                 _sph.setVisible(False)
+            _fsp = self._rr_htf_fail.get(_h)
+            if _fsp is not None:
+                _fsp.setVisible(False)
 
     def _draw_htf_radarrun(self, htf, buckets) -> None:
         key = "m10_radarrun_" + htf
@@ -9859,7 +9927,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if _sph is None:
             _sph = pg.ScatterPlotItem(pxMode=True); _sph.setZValue(33)
             self.plot.addItem(_sph, ignoreBounds=True); self._rr_htf_sph[htf] = _sph
-        spots = []
+        _hfsp = self._rr_htf_fail.get(htf)
+        if _hfsp is None:
+            _hfsp = pg.ScatterPlotItem(pxMode=True); _hfsp.setZValue(34)
+            self.plot.addItem(_hfsp, ignoreBounds=True); self._rr_htf_fail[htf] = _hfsp
+        _hfail = self._rr_fail_flags(cbH, [(int(_e9.get("i", -1)), int(_e9.get("side", 0)),
+                                            float(_e9.get("entry", 0.0) or 0.0),
+                                            float(_e9.get("sl_trade", 0.0) or 0.0)) for _e9 in marks])
+        spots = []; fspots = []
         for e in marks:
             i = int(e.get("i", -1)); side = int(e.get("side", 0))
             if not (0 <= i < nH) or side == 0:
@@ -9878,7 +9953,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _pen_rgb = [int(c * 0.55) for c in col] + [255]
             spots.append({"pos": (x, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, 255),
                           "pen": pg.mkPen(*_pen_rgb, width=1.5), "size": 22})
+            if _hfail.get(i):                                   # stopped out before the 0.2% TP, resolved on HTF candles
+                fspots.append({"pos": (x, y), "symbol": "o", "size": 30, "brush": pg.mkBrush(0, 0, 0, 0),
+                               "pen": pg.mkPen(255, 70, 70, 255, width=2.0)})
+                fspots.append({"pos": (x, y), "symbol": "x", "size": 15,
+                               "brush": pg.mkBrush(255, 150, 40, 255),
+                               "pen": pg.mkPen(255, 150, 40, 255, width=1.8)})
         _sph.setData(spots); _sph.setVisible(True)
+        _hfsp.setData(fspots); _hfsp.setVisible(True)
 
     # KC OVERSHOOT 2nd-ENTRY overlay (m10_kcovershoot, ALL tf) — a close beyond a Keltner extreme -> pullback (re-enter
     # band) -> 1st entry (skip) -> 2nd entry = the continuation signal (app/kc_overshoot_detect). Marks: overshoot
