@@ -7138,16 +7138,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     return False
 
                 def _bs_lbl(_k4):
-                    """Label for the bias state at _bseq[_k4]. A RANGING with the SAME determined trend on BOTH
-                    sides is not a regime change at all -- it is that trend's RETRACEMENT (user 2026-08-29).
-                    Only a state whose SUCCESSOR is known can be relabelled, so the live one never is: calling a
-                    ranging a retracement before the trend actually resumes would be a prediction, not a read.
-
-                    ... UNLESS the pullback reached back to the extreme line PRECEDING it -- a bearish
-                    retracement whose rally touches, even by a wick, the upper extreme line that stood before
-                    it (or a bullish one dipping to its previous lower line) has broken the structure it was
-                    supposed to be retracing, so it stays RANGING (user 2026-08-29). The scan opens at the
-                    pullback leg's own flip, so the move that TRIGGERED the ranging is inside the window."""
+                    """Base label for structural state _bseq[_k4]. A RANGING with the SAME determined trend on
+                    BOTH sides is not a regime change -- it is that trend's RETRACEMENT (user 2026-08-29) --
+                    UNLESS its pullback reached back, even by a wick, to the extreme line PRECEDING it, which
+                    breaks the structure and keeps it RANGING. Only a state whose SUCCESSOR is known can be
+                    relabelled here, so this alone never fires on the live state; the running-leg pass below is
+                    what handles the live one (a fact, not a forecast)."""
                     _s4 = _bseq[_k4]
                     if not (_s4 == "RANGING" and 0 < _k4 < len(_bseq) - 1
                             and _bseq[_k4 - 1] == _bseq[_k4 + 1] and _bseq[_k4 - 1] in ("BULLISH", "BEARISH")):
@@ -7163,20 +7159,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                                      _en4, _lv4, _up4):
                         return "RANGING"
                     return _dir4 + " RETRACEMENT"
-                _bias = _bs_lbl(len(_bseq) - 1) if _bseq else (
-                    "RANGING" if (_hi_info is not None and _lo_info is not None) else None)
-                _prevbias = _bs_lbl(len(_bseq) - 2) if len(_bseq) >= 2 else None
-                # THE RUNNING LEG OVERRULES THE LABEL (user 2026-08-29): a structure cannot be called BULLISH
-                # while the vertical line in force is RED, nor BEARISH while it is GREEN -- the leg on screen is
-                # going the other way, so what we are watching is that trend being RETRACED. It stays a
-                # retracement only while it HOLDS the extreme line that stood before the leg opened; the moment
-                # a wick takes that line out the structure is broken and it is RANGING. Unlike the historical
-                # relabelling this needs no successor -- the running leg is a fact, not a forecast.
+
                 # PER-LEG RANGING: a leg that takes out BOTH extreme lines standing when it opened is not a leg
-                # in either direction -- it is a RANGE, and its vertical line goes GRAY (user 2026-08-29). Two or
-                # more CONSECUTIVE ranging legs are ONE range, so only the first of the run prints -- the same
-                # collapse the flips already do for a same-colour run. (Drawing only: the segments the extreme
-                # lines are built from are left exactly as they were.)
+                # in either direction -- it is a RANGE, and its vertical line goes GRAY (user 2026-08-29). Two
+                # or more CONSECUTIVE ranging legs are ONE range, so only the first of the run prints -- the
+                # same collapse the flips already do for a same-colour run. (Drawing only: the segments the
+                # extreme lines are built from are left exactly as they were.)
                 _grays = set(); _ghide = set(); _run8 = False
                 _bp8 = _lp8 = 0
                 for _q8 in range(len(_seq)):
@@ -7196,23 +7184,63 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _ghide.add(_b8)                       # 2nd+ of a consecutive run -> one line for all
                     _run8 = _isr8
                 self._ema_gray_set = _grays - _ghide; self._ema_hide_set = _ghide
-                if _bias is not None and _seq:
-                    _legb, _legc = _seq[-1]                      # bar + colour of the flip that opened the live leg
-                    _lege = _M
-                    if self._ema_pin_t:                          # PINNED: the leg ends at the next flip, not at live
-                        _nx8 = [_t8 for _t8 in sorted([int(_i8) for _i8 in _g] + [int(_i8) for _i8 in _r])
-                                if _t8 > _legb]
-                        _lege = _nx8[0] if _nx8 else _M
-                    if int(_legb) in _grays:
-                        _bias = "RANGING"                        # the running leg swept the whole structure
-                    elif _bias == "BULLISH" and _legc == "r" and _lo_info is not None:
-                        _bias = ("RANGING" if _touched(_legb, _lege, _lo_info[1], False)
-                                 else "BULLISH RETRACEMENT")     # a red leg inside a bullish structure
-                    elif _bias == "BEARISH" and _legc == "g" and _hi_info is not None:
-                        _bias = ("RANGING" if _touched(_legb, _lege, _hi_info[1], True)
-                                 else "BEARISH RETRACEMENT")     # a green leg inside a bearish structure
+
+                # The running leg the LIVE state is watching (its wick window ends at the next flip when pinned,
+                # otherwise at the live edge).
+                _lege = _M
+                if self._ema_pin_t and _seq:
+                    _nx8 = [_t8 for _t8 in sorted([int(_i8) for _i8 in _g] + [int(_i8) for _i8 in _r])
+                            if _t8 > int(_seq[-1][0])]
+                    _lege = _nx8[0] if _nx8 else _M
+
+                def _full_lbl(_k, _eov=None):
+                    """The FINAL label for structural state _bseq[_k], applying EVERY rule the current tag gets,
+                    so 'prev' can never disagree with 'current' (user 2026-08-29: prev read BULLISH over a
+                    stretch that was plainly a RANGE -- because prev was taken straight from the raw HH/HL walk
+                    and never saw the running-leg / gray reclassification). Base = the sandwiched-retracement
+                    read; then the leg in force at the state's END overrules -- swept both extremes -> RANGING
+                    (gray); a leg fighting the structure -> RETRACEMENT while it holds the opposing extreme,
+                    RANGING once a wick breaks it."""
+                    _base = _bs_lbl(_k)
+                    _ek = _eov if _eov is not None else (
+                        _bmeta[_k + 1][0] if _k + 1 < len(_bseq) else _M)
+                    _run = None
+                    for _fb, _fc in _seq:                          # the flip in force at the state's end
+                        if _fb < _ek:
+                            _run = (int(_fb), _fc)
+                    if _run is None:
+                        return _base
+                    _rb, _rc = _run
+                    if _rb in _grays:                              # the leg swept the whole structure
+                        return "RANGING"
+                    _hv = _lv = None                              # extreme lines standing when that leg opened
+                    for _bb in _bulls:
+                        if _bb[1] <= _rb:
+                            _hv = _bb[2]
+                    for _br in _bears:
+                        if _br[1] <= _rb:
+                            _lv = _br[2]
+                    if _base == "BULLISH" and _rc == "r" and _lv is not None:
+                        return "RANGING" if _touched(_rb, _ek, _lv, False) else "BULLISH RETRACEMENT"
+                    if _base == "BEARISH" and _rc == "g" and _hv is not None:
+                        return "RANGING" if _touched(_rb, _ek, _hv, True) else "BEARISH RETRACEMENT"
+                    return _base
+
+                if _bseq:
+                    _labels = [_full_lbl(_k, _lege if _k == len(_bseq) - 1 else None)
+                               for _k in range(len(_bseq))]
+                    _collapsed = []                              # CONSECUTIVE equal labels are one state -> prev
+                    for _lb9 in _labels:                          # is the previous DISTINCT one, gray runs included
+                        if not _collapsed or _collapsed[-1] != _lb9:
+                            _collapsed.append(_lb9)
+                    _bias = _collapsed[-1]
+                    _prevbias = _collapsed[-2] if len(_collapsed) >= 2 else None
+                else:
+                    _bias = "RANGING" if (_hi_info is not None and _lo_info is not None) else None
+                    _prevbias = None; _collapsed = [_bias] if _bias else []
                 self._ema_bias_seq = list(_bseq)          # the full ordered bias history behind the two tags
                 self._ema_bias_meta = list(_bmeta)        # ... and what each state was judged against
+                self._ema_bias_labels = list(_collapsed)  # ... fully reclassified + collapsed (current is last)
                 if (self._ema_gray_set, self._ema_hide_set) != getattr(self, "_ema_gray_drawn", None):
                     # The stack block drew this frame BEFORE the structure was known, so re-colour / un-print
                     # the affected flips NOW rather than a recompute late. Steady-state frames cost nothing:
