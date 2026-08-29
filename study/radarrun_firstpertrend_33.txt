@@ -1,0 +1,24 @@
+RADAR RUNNER 30m — first fire per clean-trend vline — SL 3% / TP 3% (1:1 RR, break-even 51.4%) — HONEST
+harness: study/radarrun_firstpertrend_30m.py  (RR_SL=0.03 RR_TP=0.03)  | canonical union fires | causal bias+state | 1m first-touch | non-overlap
+
+RADAR RUNNER 30m — FIRST fire per clean-trend vline  |  SL 3% / TP 3% fixed  (RR 1:1.00, break-even win 51.4%)  |  1m first-touch
+====================================================================================================
+
+ALIGNED (long in bull / short in bear):
+   n=143  win  50.3%  avg -0.064%  tot -9.1%  prop  0.9%  (7 dropped overlap)
+        2025 n=104  win 48.1% -0.201%   2026 n=39   win 56.4% +0.302%
+
+NATIVE (signal's own side):
+   n=147  win  49.0%  avg -0.147%  tot -21.5%  prop  0.6%  (7 dropped overlap)
+        2025 n=108  win 50.0% -0.085%   2026 n=39   win 46.2% -0.317%
+
+baseline ALL clean-trend aligned fires (not first-per-state):
+   n=405  win  53.1%  avg +0.101%  tot +40.9%  prop 30.6%  (1241 dropped overlap)
+        2025 n=292  win 52.1% +0.039%   2026 n=113  win 55.8% +0.262%
+   LONG  (bull): n=166  win  50.0%  avg -0.085%  tot -14.1%  prop  1.1%  (493 dropped overlap)
+        2025 n=127  win 52.8% +0.081%   2026 n=39   win 41.0% -0.626%
+   SHORT (bear): n=246  win  55.7%  avg +0.258%  tot +63.5%  prop 38.6%  (741 dropped overlap)
+        2025 n=172  win 52.3% +0.055%   2026 n=74   win 63.5% +0.730%
+
+VERDICT (user rule = first-per-state ALIGNED): NOT tradeable. win 50.3% < 51.4% break-even -> avg -0.064%, tot -9.1%, prop 0.9%. 2025 neg, 2026 pos (n=39) = noise.
+The BASELINE (all clean-trend aligned) looked +0.101% but the SIDE SPLIT kills it: LONG negative (-0.085%, 2026 long -0.626%); SHORT positive (+0.258%) but 2026-carried (+0.730% vs 2025 +0.055%). One-sided + single-year = composition noise, NOT a lead.

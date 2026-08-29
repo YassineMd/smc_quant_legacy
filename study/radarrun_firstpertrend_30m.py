@@ -25,7 +25,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIRES = os.path.join(ROOT, "study", "out", "rr30mbkt_live_fires_union.json")
 BCACHE = os.path.join(ROOT, "study", "out", "rr30mbkt_biasstate_at_fire.json")
 FEE, SLIP, CAPMIN, WIN = 0.0004, 0.0003, 20000, 336
-SL_FRAC, TP_FRAC = 0.03, 0.01
+SL_FRAC = float(os.environ.get("RR_SL", "0.03"))       # fixed SL / TP fractions (env-overridable)
+TP_FRAC = float(os.environ.get("RR_TP", "0.01"))
 TREND = {"BULLISH", "BEARISH"}
 
 
@@ -145,8 +146,10 @@ def main():
                 % (d["n"], d["win"], d["avg"], d["tot"], d["prop"], d["drop"],
                    d["n25"], d["w25"], d["y25"], d["n26"], d["w26"], d["y26"]))
 
+    _be = (SL_FRAC + FEE + 2 * SLIP) / ((TP_FRAC - FEE - SLIP) + (SL_FRAC + FEE + 2 * SLIP))
     print("\n" + "=" * 100)
-    print("RADAR RUNNER 30m — FIRST fire per clean-trend vline  |  SL 3%% / TP 1%% fixed  |  1m first-touch")
+    print("RADAR RUNNER 30m — FIRST fire per clean-trend vline  |  SL %.0f%% / TP %.0f%% fixed  (RR 1:%.2f, break-even win %.1f%%)  |  1m first-touch"
+          % (SL_FRAC * 100, TP_FRAC * 100, TP_FRAC / SL_FRAC, _be * 100))
     print("=" * 100)
     print("\nALIGNED (long in bull / short in bear):\n   %s" % fmt(evaluate(aligned)))
     print("\nNATIVE (signal's own side):\n   %s" % fmt(evaluate(native)))
@@ -155,6 +158,8 @@ def main():
                        and ((bs[int(f[0])][0] == "BULLISH" and f[2] > 0) or (bs[int(f[0])][0] == "BEARISH" and f[2] < 0))],
                       key=lambda f: f[1])
     print("\nbaseline ALL clean-trend aligned fires (not first-per-state):\n   %s" % fmt(evaluate(allalign)))
+    print("   LONG  (bull): %s" % fmt(evaluate([f for f in allalign if f[2] > 0])))
+    print("   SHORT (bear): %s" % fmt(evaluate([f for f in allalign if f[2] < 0])))
 
 
 if __name__ == "__main__":
