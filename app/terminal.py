@@ -6907,7 +6907,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _pcpcb = self.menu.sub_checks.get("ema_poc_prev")
         _pcp_on = _pcpcb is not None and _pcpcb.isChecked()
         if ((not _stk_on and not _lvl_on and not _vp_on and not _wl_on and not _wlp_on
-             and not _pc_on and not _pcp_on and not _wmg_on) or m < 51):
+             and not _pc_on and not _pcp_on and not _wmg_on and not _wln_on) or m < 51):
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
             for _it3 in self._ema_lvl_items.values():
@@ -6950,9 +6950,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # frozen structure, the empty result STUCK instead of self-healing at the next bar close. That is the
         # "click it and everything vanishes" report (2026-08-28).
         _need = ((self._ema_stk_cache is None or self._ema_stk_cache[0] != _ssig)
-                 or ((_lvl_on or _vp_on or _wl_on or _wlp_on or _pc_on or _pcp_on or _wmg_on)
+                 or ((_lvl_on or _vp_on or _wl_on or _wlp_on or _pc_on or _pcp_on or _wmg_on or _wln_on)
                      and (self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig))
-                 or ((_wl_on or _wlp_on or _wmg_on) and self._ema_wall_cache is None)
+                 or ((_wl_on or _wlp_on or _wmg_on or _wln_on) and self._ema_wall_cache is None)
                  or ((_pc_on or _pcp_on or _wmg_on) and self._ema_poc_cache is None)
                  or (_vp_on and self._ema_vp_cache is None))
         _ana = ((list(_deep) + list(_warm[len(_warm) - _wn:]) + list(buckets[:m]))
@@ -7113,7 +7113,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar
         # on the left to the live candle on the right.
         if (not _lvl_on and not _vp_on and not _wl_on and not _wlp_on
-                and not _pc_on and not _pcp_on and not _wmg_on):
+                and not _pc_on and not _pcp_on and not _wmg_on and not _wln_on):
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
             for _it3 in self._ema_lvl_vl.values():
@@ -7518,7 +7518,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # zones -- upper EXPENSIVE / middle EQUILIBRIUM / lower CHEAP -- and show the STRONGEST order
             # wall of the CURRENT tf inside each, one per zone. Walls are searched ONLY inside the last two
             # FINISHED trends (the same frozen span the VP uses); the running trend is excluded by design.
-            if (not _wl_on and not _wlp_on and not _wmg_on) or not _th_data or _vp_span is None:
+            if (not _wl_on and not _wlp_on and not _wmg_on and not _wln_on) or not _th_data or _vp_span is None:
                 self._hide_ema_walls()
             else:
                 if self._ema_wall_cache is None or self._ema_wall_cache[0] != _frz:
@@ -7560,8 +7560,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _sets = {"cur": {}, "prev": {}}
                     self._ema_wall_cache = (_frz, _sets)
                 _sets = self._ema_wall_cache[1]
-                for _sk7, _on7, _al7, _pre7 in (("cur", _wl_on and not _wmg_on, 70, ""),
-                                                ("prev", _wlp_on and not _wmg_on, 40, "prev ")):
+                for _sk7, _on7, _al7, _pre7 in (("cur", _wl_on or _wln_on, 70, ""),
+                                                ("prev", _wlp_on, 40, "prev ")):
                     for _zn, _ztxt in (("exp", "EXPENSIVE"), ("eq", "EQUILIBRIUM"), ("cheap", "CHEAP")):
                         _kk7 = _sk7 + "_" + _zn
                         _slot = self._ema_wall_items.get(_kk7)
