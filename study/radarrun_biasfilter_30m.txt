@@ -1,0 +1,39 @@
+RADAR RUNNER 30m BUCKET — EMA-BIAS FILTER — HONEST TEST (all 9 gates)
+harness: study/radarrun_biasfilter_30m.py  | canonical union fires (171/171 validated) | 1m first-touch | non-overlap taken | causal bias (data<=k)
+filter: LONG iff bias in {BULLISH,BULLISH RETRACEMENT} AND ema20>ema50 ; SHORT iff bias in {BEARISH,BEARISH RETRACEMENT} AND ema20<ema50
+keeps 1287/6090 (21.1%)  long 508  short 779
+
+RADAR RUNNER 30m BUCKET — EMA-BIAS FILTER vs ALL control  |  canonical union fires, 1m first-touch
+============================================================================================================
+
+0.2% net 
+   ALL    : n=5285  win  82.8%  avg -0.039%  prop  0.0%   | 2025 n=3573 -0.042%  2026 n=1712 -0.032%
+   FILTER : n=1213  win  81.6%  avg -0.059%  prop  0.0%   | 2025 n=765  -0.070%  2026 n=448  -0.040%
+
+0.4% net 
+   ALL    : n=4575  win  73.7%  avg -0.006%  prop 11.1%   | 2025 n=3143 -0.009%  2026 n=1432 -0.000%
+   FILTER : n=1104  win  71.5%  avg -0.048%  prop  0.6%   | 2025 n=714  -0.058%  2026 n=390  -0.029%
+
+0.5% net 
+   ALL    : n=4246  win  69.6%  avg +0.002%  prop 16.3%   | 2025 n=2949 +0.002%  2026 n=1297 +0.001%
+   FILTER : n=1052  win  67.3%  avg -0.047%  prop  2.4%   | 2025 n=687  -0.062%  2026 n=365  -0.017%
+
+RR 1:1   
+   ALL    : n=3055  win  53.7%  avg -0.006%  prop 13.4%   | 2025 n=2107 -0.016%  2026 n=948  +0.015%
+   FILTER : n=881   win  53.0%  avg -0.028%  prop  8.9%   | 2025 n=565  -0.066%  2026 n=316  +0.040%
+
+RR 1:1.5 
+   ALL    : n=2435  win  43.7%  avg +0.008%  prop 20.2%   | 2025 n=1697 -0.003%  2026 n=738  +0.034%
+   FILTER : n=753   win  43.3%  avg -0.000%  prop 18.1%   | 2025 n=488  -0.048%  2026 n=265  +0.088%
+
+RR 1:2   
+   ALL    : n=2027  win  36.0%  avg -0.015%  prop 16.7%   | 2025 n=1406 -0.010%  2026 n=621  -0.024%
+   FILTER : n=655   win  36.9%  avg +0.021%  prop 24.5%   | 2025 n=434  -0.040%  2026 n=221  +0.140%
+
+-- bias breakdown at RR 1:1 (side-aligned bias only, EMA condition applied) --
+   BULLISH only (long)   : n=322   win  50.6%  avg -0.078%  prop  0.6%   | 2025 n=212  -0.065%  2026 n=110  -0.105%
+   BULLISH RETR (long)   : n=39    win  56.4%  avg +0.054%  prop  0.0%   | 2025 n=20   +0.333%  2026 n=19   -0.240%
+   BEARISH only (short)  : n=482   win  53.9%  avg -0.011%  prop 14.3%   | 2025 n=307  -0.095%  2026 n=175  +0.136%
+   BEARISH RETR (short)  : n=45    win  53.3%  avg +0.010%  prop  0.0%   | 2025 n=29   -0.162%  2026 n=16   +0.320%
+
+VERDICT: NOT TRADEABLE. Filter is WORSE than the ALL control at 5/6 exits; the one exception (RR1:2 +0.021 vs -0.015) is 2026-only (2025 n=434 -0.040%, 2026 n=221 +0.140%). Retracement sub-buckets n=39/45 with year-flipped signs = noise. The bias filter selects the LOSING subset -> the market fades trend-aligned RadarRun fires.
