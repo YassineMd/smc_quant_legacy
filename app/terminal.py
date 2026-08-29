@@ -1473,7 +1473,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_ext_lblsig = {}                                # key -> sig of the last-rendered readout text
         self._ema_pin_t = None                                   # PINNED flip line (bar start_time) -> treat it as
         self._ema_flip_hits = []                                 #   "now"; [(window_x, analysis_idx)] for click tests
-        self._ema_stk_pool = {"g": [], "r": []}                  # 'ema_stack' flip lines: pooled dashed vlines (green/red)
+        self._ema_stk_pool = {"g": [], "r": []}                  # 'ema_stack' flip lines: pooled dashed vlines
+        self._ema_flip_col = {}                                  # flip bar -> BIAS colour (green/red/gray); merged = hidden
         self._ema_stk_cache = None                               # (sig, green bar idxs, red bar idxs) — per bar close
         self._ema_poc_items = {}                                 # 'ema_poc': per-zone POC line + tag
         self._ema_poc_cache = None                               # (sig, {band: {zone: (price, vol)}})
@@ -7103,8 +7104,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _pin2 = bool(self._ema_pin_t) and abs(
                         float(_ftimes.get(int(_ai2), 0.0)) - float(self._ema_pin_t)) < 0.5
                     pool[_j]._ema_pinned = _pin2                          # pinned -> SOLID, otherwise dashed
-                    _gs2 = getattr(self, "_ema_gray_set", None) or ()
-                    _stk_pen(pool[_j], _STK_GRAY if int(_ai2) in _gs2 else _rgb2, _pin2)
+                    _col2 = getattr(self, "_ema_flip_col", None) or {}     # colour by BIAS (green/red/gray),
+                    _stk_pen(pool[_j], _col2.get(int(_ai2), _rgb2), _pin2)  #   fixup below applies the fresh map
                 for _pl in pool[len(_xs2):]:
                     _pl.setVisible(False)
         # 'Trend Extreme Lines' (sub-toggle 'ema_trendlvl'): the LAST FINISHED bear segment (red line -> next
@@ -7259,7 +7260,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         if _run8:
                             _ghide.add(_b8)                       # 2nd+ of a consecutive run -> one line for all
                     _run8 = _isr8
-                self._ema_gray_set = _grays - _ghide; self._ema_hide_set = _ghide
+                # (_grays / _ghide stay LOCAL now: they only feed _leg_lbl's both-extremes -> RANGING; the
+                #  drawn vline COLOUR + merge come from the per-leg bias labels below, one line per bias STATE.)
 
                 # The running leg the LIVE state is watching (its wick window ends at the next flip when pinned,
                 # otherwise at the live edge).
@@ -7307,10 +7309,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     return _base                                  # RANGING, or a sandwiched 'X RETRACEMENT'
 
                 _labels = []
+                # A flip line is COLOURED by its leg's bias -- BULLISH/-RETRACEMENT green, BEARISH/-RETRACEMENT
+                # red, RANGING gray (user 2026-08-29) -- and a run of the SAME label collapses to ONE line (the
+                # 2nd+ hidden). A retracement keeps its OWN line beside its trend (a different label), so it stays
+                # clickable and 'prev' still reads it. The DRAWN lines therefore map 1:1 onto the collapsed bias
+                # states, which is exactly what keeps "prev == the line you click" true.
+                _ncol = {}; _nhide = set(); _prevlbl = None
                 for _i in range(len(_seq)):                        # one label per leg (== pinning that flip)
+                    _fb9 = int(_seq[_i][0])
                     _lb9 = _leg_lbl(_i, _lege if _i == len(_seq) - 1 else int(_seq[_i + 1][0]))
-                    if _lb9 is not None:
-                        _labels.append(_lb9)
+                    if _lb9 is None:
+                        continue
+                    _labels.append(_lb9)
+                    _ncol[_fb9] = ((40, 230, 120) if _lb9.startswith("BULL")
+                                   else ((240, 70, 90) if _lb9.startswith("BEAR") else _STK_GRAY))
+                    if _lb9 == _prevlbl:                           # only a TRULY-IDENTICAL consecutive state merges
+                        _nhide.add(_fb9)
+                    _prevlbl = _lb9
+                self._ema_flip_col = _ncol
+                self._ema_hide_set = _nhide
+                self._ema_gray_set = {_f for _f, _c in _ncol.items() if _c == _STK_GRAY}   # RANGING lines (for tests)
                 _collapsed = []                                    # CONSECUTIVE equal labels are one state -> prev
                 for _lb9 in _labels:                              # the previous DISTINCT one; every entry is a FLIP,
                     if not _collapsed or _collapsed[-1] != _lb9:  # so 'prev' is always exactly what clicking shows
@@ -7333,13 +7351,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._ema_bias_seq = list(_bseq)          # the full ordered bias history behind the two tags
                 self._ema_bias_meta = list(_bmeta)        # ... and what each state was judged against
                 self._ema_bias_labels = list(_collapsed)  # ... fully reclassified + collapsed (current is last)
-                if (self._ema_gray_set, self._ema_hide_set) != getattr(self, "_ema_gray_drawn", None):
-                    # The stack block drew this frame BEFORE the structure was known, so re-colour / un-print
-                    # the affected flips NOW rather than a recompute late. Steady-state frames cost nothing:
-                    # the stack block reads the same sets and _stk_pen is keyed.
-                    self._ema_gray_drawn = (set(self._ema_gray_set), set(self._ema_hide_set))
+                if (self._ema_flip_col, self._ema_hide_set) != getattr(self, "_ema_col_drawn", None):
+                    # The stack block drew this frame BEFORE the labels were known (cross colour, prev hide set),
+                    # so re-colour by BIAS + un-print the merged lines NOW rather than a recompute late. Steady
+                    # state costs nothing: the stack block reads the same maps and _stk_pen is keyed.
+                    self._ema_col_drawn = (dict(self._ema_flip_col), set(self._ema_hide_set))
                     _hx9 = {round(_fxw(_i9), 3) for _i9 in self._ema_hide_set}
-                    _gx9 = {round(_fxw(_i9), 3) for _i9 in self._ema_gray_set}
+                    _cx9 = {round(_fxw(_i9), 3): _rgbc for _i9, _rgbc in self._ema_flip_col.items()}
                     for _kd9, _rg9 in (("g", (40, 230, 120)), ("r", (240, 70, 90))):
                         for _ln8 in self._ema_stk_pool.get(_kd9, ()):
                             if not _ln8.isVisible():
@@ -7347,8 +7365,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _v9 = round(float(_ln8.value()), 3)
                             if _v9 in _hx9:
                                 _ln8.setVisible(False); continue
-                            _stk_pen(_ln8, _STK_GRAY if _v9 in _gx9 else _rg9,
-                                     bool(getattr(_ln8, "_ema_pinned", False)))
+                            _stk_pen(_ln8, _cx9.get(_v9, _rg9), bool(getattr(_ln8, "_ema_pinned", False)))
                     if _hx9:
                         self._ema_flip_hits = [_h9 for _h9 in self._ema_flip_hits
                                                if round(float(_h9[0]), 3) not in _hx9]
