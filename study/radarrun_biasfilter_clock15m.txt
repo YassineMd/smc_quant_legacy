@@ -1,0 +1,38 @@
+RADAR RUNNER 15m CLOCK — EMA-bias + Mov.Magnitude>15 filter — HONEST TEST (9 gates)
+harness: study/radarrun_biasfilter_clock15m.py | union clock-15m fires (gate1) | causal bias+ema (data<=k) | mov_magn(signal candle) | 1m CLOCK first-touch | non-overlap
+filter: LONG bias in {BULLISH,BULL RETR} & ema20>ema50 & MovMag>15 ; SHORT mirror.  keeps 736 (long 337 short 399)
+
+RADAR RUNNER 15m CLOCK — bias+EMA+MovMag>15  vs  bias+EMA  vs  ALL  |  union fires, 1m clock first-touch
+================================================================================================================
+
+0.2% net 
+   ALL        : n=5641 win  79.6%  avg -0.035%  prop  0.0%   | 2025 n=3956 -0.033%  2026 n=1685 -0.041%
+   bias+EMA    : n=1164 win  79.0%  avg -0.041%  prop  0.0%   | 2025 n=785  -0.041%  2026 n=379  -0.039%
+   +MovMag>15  : n=701  win  82.6%  avg -0.039%  prop  0.0%   | 2025 n=491  -0.034%  2026 n=210  -0.050%
+
+0.4% net 
+   ALL        : n=4470 win  68.4%  avg -0.021%  prop  2.1%   | 2025 n=3165 -0.019%  2026 n=1305 -0.025%
+   bias+EMA    : n=1004 win  67.7%  avg -0.031%  prop  1.4%   | 2025 n=671  -0.030%  2026 n=333  -0.032%
+   +MovMag>15  : n=660  win  71.5%  avg -0.035%  prop  0.7%   | 2025 n=458  -0.031%  2026 n=202  -0.043%
+
+0.5% net 
+   ALL        : n=4072 win  63.7%  avg -0.019%  prop  3.4%   | 2025 n=2898 -0.015%  2026 n=1174 -0.029%
+   bias+EMA    : n=943  win  62.1%  avg -0.042%  prop  1.0%   | 2025 n=632  -0.046%  2026 n=311  -0.035%
+   +MovMag>15  : n=643  win  66.9%  avg -0.036%  prop  1.2%   | 2025 n=448  -0.031%  2026 n=195  -0.048%
+
+RR 1:1   
+   ALL        : n=3118 win  52.1%  avg -0.046%  prop  2.0%   | 2025 n=2210 -0.034%  2026 n=908  -0.077%
+   bias+EMA    : n=808  win  54.0%  avg -0.022%  prop  7.8%   | 2025 n=537  -0.015%  2026 n=271  -0.034%
+   +MovMag>15  : n=540  win  53.7%  avg -0.013%  prop 12.5%   | 2025 n=378  +0.014%  2026 n=162  -0.075%
+
+RR 1:1.5 
+   ALL        : n=2443 win  42.1%  avg -0.041%  prop  5.8%   | 2025 n=1719 -0.030%  2026 n=724  -0.066%
+   bias+EMA    : n=704  win  44.2%  avg -0.013%  prop 16.7%   | 2025 n=475  -0.014%  2026 n=229  -0.010%
+   +MovMag>15  : n=492  win  43.1%  avg -0.013%  prop 16.6%   | 2025 n=343  +0.007%  2026 n=149  -0.060%
+
+RR 1:2   
+   ALL        : n=2039 win  35.5%  avg -0.024%  prop 10.7%   | 2025 n=1437 -0.026%  2026 n=602  -0.019%
+   bias+EMA    : n=647  win  37.9%  avg +0.004%  prop 24.5%   | 2025 n=439  +0.031%  2026 n=208  -0.054%
+   +MovMag>15  : n=450  win  36.4%  avg -0.009%  prop 20.6%   | 2025 n=311  +0.042%  2026 n=139  -0.124%
+
+VERDICT: NOT TRADEABLE. Full filter net-negative at ALL six TPs (avg -0.009..-0.039%, prop <=20.6%). Mov.Magnitude>15 adds nothing (wash vs bias+EMA, never flips a cell positive). The least-bad RR cells have OPPOSITE-SIGN year splits (RR1:2 2025 +0.042% / 2026 -0.124%) = composition noise. Mirror of the 30m-bucket bias-filter (there 2026-carried, here 2025-carried) -- same non-robustness.
