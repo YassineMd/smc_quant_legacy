@@ -6959,6 +6959,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         def _wx(_i5):                                         # analysis index -> window x (clamped at the left)
             return float(x[max(0, min(n - 1, _i5 - _off))])
+
+        def _wxf(_fv):                                        # FRACTIONAL analysis x -> window x (interpolated, clamped)
+            _c = float(_fv) - _off
+            if _c <= 0.0:
+                return float(x[0])
+            if _c >= n - 1:
+                return float(x[n - 1])
+            _lo = int(_c); _fr = _c - _lo
+            return float(x[_lo]) + _fr * (float(x[_lo + 1]) - float(x[_lo]))
+
+        def _fxw(_ai):                                        # a flip's analysis idx -> its EXACT EMA20/50-cross window x
+            return _wxf(_fx.get(int(_ai), float(_ai)))
         if self._ema_stk_cache is None or self._ema_stk_cache[0] != _ssig:
             _E = {}
             for _p in (20, 50):
@@ -6998,7 +7010,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if _d20 is None or _d50 is None:
                     return False
                 return (_d20 > 0.0 and _d50 > 0.0) if _up else (_d20 < 0.0 and _d50 < 0.0)
-            _g = []; _r = []
+            def _cross_fx(_c):
+                """Sub-bar x of the EMA20/50 crossing that OPENED regime _c: linear-interpolate between _c-1 and
+                _c where the sign of (E20-E50) flips. A regime already running at warm-up (no sign change at _c)
+                keeps the bar itself."""
+                _c = int(_c)
+                if _c <= 0 or _c >= _M:
+                    return float(_c)
+                _dp = _E[20][_c - 1] - _E[50][_c - 1]
+                _dc = _E[20][_c] - _E[50][_c]
+                if (_dp > 0.0) == (_dc > 0.0):
+                    return float(_c)
+                _den = _dp - _dc
+                if _den == 0.0:
+                    return float(_c)
+                return (_c - 1) + min(1.0, max(0.0, _dp / _den))
+            _g = []; _r = []; _fx = {}       # confirmed flips anchor at the CROSS bar; _fx = its exact crossing x
             _state = "g" if _bull[50] else ("r" if _bear[50] else None)   # regime already running at warmup end
             _pend = _state is not None
             _reg0 = 50 if _pend else -1                       # regime start (initial regime: conservatively bar 50)
@@ -7012,17 +7039,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     continue                                  # be >= 20 bars old before its line can qualify
                 if _pend and _state == "g" and _bull[_i] and _valid(_i, True):
                     if _last_col != "g":                      # first of a same-colour run prints, the rest suppressed
-                        _g.append(int(_i)); _last_col = "g"
-                    _pend = False
+                        _g.append(int(_reg0)); _fx[int(_reg0)] = _cross_fx(_reg0); _last_col = "g"
+                    _pend = False                             # CONFIRMED at _i, but the line prints back at the CROSS
                 elif _pend and _state == "r" and _bear[_i] and _valid(_i, False):
                     if _last_col != "r":
-                        _r.append(int(_i)); _last_col = "r"
+                        _r.append(int(_reg0)); _fx[int(_reg0)] = _cross_fx(_reg0); _last_col = "r"
                     _pend = False
             # flip -> bar TIME, captured HERE because _ana is only the full analysis series on a recompute;
             # the per-frame draw path must never index it (that was an IndexError on cache hits).
             _ft = {int(_i4): float(_ana[_i4].get("start_time", 0.0) or 0.0) for _i4 in (_g + _r)}
-            self._ema_stk_cache = (_ssig, _g, _r, _ft)
-        _, _g, _r, _ftimes = self._ema_stk_cache
+            self._ema_stk_cache = (_ssig, _g, _r, _ft, _fx)
+        _, _g, _r, _ftimes, _fx = self._ema_stk_cache
         self._ema_flip_times = _ftimes
         _STK_GRAY = (150, 158, 175)                 # a leg that swept BOTH extremes is neither -> gray vline
 
@@ -7050,9 +7077,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 elif _pin_i is not None and _nxt_i is None and _t5 > _pt0 + 0.5:
                     _nxt_i = _k5
             if _pin_i is not None:
-                _LX = _wx(_pin_i)
+                _LX = _fxw(_pin_i)
                 if _nxt_i is not None:
-                    _RX = _wx(_nxt_i)
+                    _RX = _fxw(_nxt_i)
         if not _stk_on:                                       # vlines off, but the levels below may still draw
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
@@ -7061,8 +7088,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _kind, _xs2a, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
                 pool = self._ema_stk_pool[_kind]
                 _hid2 = getattr(self, "_ema_hide_set", None) or ()      # 2nd+ line of a RANGING run -> not printed
-                _pairs2 = [(_xi - _off, _xi) for _xi in _xs2a
-                           if _xi >= _off and int(_xi) not in _hid2]   # older-than-window: counted, not drawn
+                _pairs2 = [(_fxw(_xi), _xi) for _xi in _xs2a
+                           if _xi >= _off and int(_xi) not in _hid2]   # drawn at the EXACT cross; older-than-window skipped
                 _xs2 = [_p2[0] for _p2 in _pairs2]
                 for _j, _xi in enumerate(_xs2):
                     if _j >= len(pool):
@@ -7311,8 +7338,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     # the affected flips NOW rather than a recompute late. Steady-state frames cost nothing:
                     # the stack block reads the same sets and _stk_pen is keyed.
                     self._ema_gray_drawn = (set(self._ema_gray_set), set(self._ema_hide_set))
-                    _hx9 = {round(float(_i9 - _off), 3) for _i9 in self._ema_hide_set}
-                    _gx9 = {round(float(_i9 - _off), 3) for _i9 in self._ema_gray_set}
+                    _hx9 = {round(_fxw(_i9), 3) for _i9 in self._ema_hide_set}
+                    _gx9 = {round(_fxw(_i9), 3) for _i9 in self._ema_gray_set}
                     for _kd9, _rg9 in (("g", (40, 230, 120)), ("r", (240, 70, 90))):
                         for _ln8 in self._ema_stk_pool.get(_kd9, ()):
                             if not _ln8.isVisible():
@@ -7361,8 +7388,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _it3.setPen(_pn3); _it3.setZValue(15)
                     self.plot.addItem(_it3, ignoreBounds=True)
                     self._ema_lvl_items[_sd2] = _it3
-                _xl3 = _LX if _LX is not None else _wx(_info[0])
-                _xr = _RX if (_LX is not None or len(_info) == 2) else _wx(_info[1])   # prev FREEZE at supersession
+                _xl3 = _LX if _LX is not None else _fxw(_info[0])
+                _xr = _RX if (_LX is not None or len(_info) == 2) else _fxw(_info[1])   # prev FREEZE at supersession
                 if len(_info) == 3:
                     # A frozen line whose whole span predates the frame maps to [0, 0] and renders NOTHING
                     # (Qt still reports it visible) -- that is the "preceding trend is missing" report of
@@ -7411,7 +7438,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self.plot.addItem(_itt, ignoreBounds=True)
                     self._ema_lvl_items[_kt] = _itt
                 _yt = _lo_info[1] + (_hi_info[1] - _lo_info[1]) * _ft
-                _itt.setData([_LX if _LX is not None else _wx(min(_lo_info[0], _hi_info[0])), _RX], [_yt, _yt])
+                _itt.setData([_LX if _LX is not None else _fxw(min(_lo_info[0], _hi_info[0])), _RX], [_yt, _yt])
                 _itt.setVisible(True)
             _lb3 = self._ema_lvl_items.get("lbl")             # bias tag at the live edge, structure midpoint
             _lbp = self._ema_lvl_items.get("lbl_prev")        # + the PREVIOUS bias stacked just below it
