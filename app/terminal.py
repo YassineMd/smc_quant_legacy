@@ -1520,6 +1520,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._e5m_ring = None                    # ScatterPlotItem — gold halo on STRONG-1m-FINISH 5m engulf signals
         self._sr5m_cache = None                  # per-frame (sig, levels): ONE zone-mitig S/R pass shared engulf+absorb2+breakout
         self._trline_buckets = []                # visible frame buckets for the shared trade-line exit walk
+        self._bc_last_buckets = []               # the frame most recently drawn (index<->time map for a pin's keep-view)
+        self._ema_keep_view = None               # (t_left, t_right, y0, y1): restore this exact view after a pin recompute
         # SUPPORT & RESISTANCE indicator (hamburger m10_sr) — neon-red resistance / neon-blue support, extended
         # until a candle closes through the level. Line THICKNESS = rejection strength (one curve per width tier,
         # segments NaN-separated), so a level thickens as price gets thrown back off it.
@@ -2833,6 +2835,41 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._shortcuts_dlg = dlg
         dlg.show(); dlg.raise_(); dlg.activateWindow()
 
+    @staticmethod
+    def _bkt_time_at(buckets, idx):
+        """The start_time a fractional bar INDEX maps to (linear within a gap, extrapolated by the edge step
+        outside the data). Lets a pin remember its view by TIME so a window that then prepends candles doesn't
+        drag the chart -- indices shift, times don't."""
+        n = len(buckets)
+        if n == 0:
+            return None
+        _st = lambda _i: float(buckets[max(0, min(n - 1, _i))].get("start_time", 0.0) or 0.0)
+        if idx <= 0:
+            _step = (_st(1) - _st(0)) if n > 1 else 0.0
+            return _st(0) + idx * _step
+        if idx >= n - 1:
+            _step = (_st(n - 1) - _st(n - 2)) if n > 1 else 0.0
+            return _st(n - 1) + (idx - (n - 1)) * _step
+        _lo = int(math.floor(idx)); _fr = idx - _lo
+        return _st(_lo) + _fr * (_st(_lo + 1) - _st(_lo))
+
+    @staticmethod
+    def _bkt_x_at(buckets, t):
+        """The fractional bar INDEX a start_time maps to -- inverse of _bkt_time_at, on the NEW frame."""
+        n = len(buckets)
+        if n == 0:
+            return None
+        _starts = [float(b.get("start_time", 0.0) or 0.0) for b in buckets]
+        if t <= _starts[0]:
+            _step = (_starts[1] - _starts[0]) if n > 1 else 1.0
+            return (t - _starts[0]) / _step if _step else 0.0
+        if t >= _starts[-1]:
+            _step = (_starts[-1] - _starts[-2]) if n > 1 else 1.0
+            return (n - 1) + ((t - _starts[-1]) / _step if _step else 0.0)
+        _j = bisect.bisect_right(_starts, t) - 1
+        _span = _starts[_j + 1] - _starts[_j]
+        return _j + ((t - _starts[_j]) / _span if _span else 0.0)
+
     def _ema_click_flip(self, ev) -> bool:
         """Single-click on a Stack-Flip vline toggles its PIN: pinned draws SOLID and is treated as 'now', so
         the Trend Extreme Lines show the trend that ended there and the one before it. Clicking it again (or
@@ -2856,6 +2893,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if _bk is None:
                 return False
             self._ema_pin_t = None if (self._ema_pin_t and abs(self._ema_pin_t - _bk) < 0.5) else _bk
+            # A pin toggle re-derives the structure, which may widen the loaded window (older candles get
+            # prepended) and shift every index -> the chart would appear to jump. Remember the EXACT view by
+            # TIME (x) + price (y) so the redraw can put it back: clicking a line must not move the chart (user).
+            try:
+                (_kvx0, _kvx1), (_kvy0, _kvy1) = self.vb.viewRange()
+                _kbk = getattr(self, "_bc_last_buckets", None)
+                if _kbk:
+                    _tl = self._bkt_time_at(_kbk, _kvx0); _tr = self._bkt_time_at(_kbk, _kvx1)
+                    if _tl is not None and _tr is not None:
+                        self._ema_keep_view = (_tl, _tr, _kvy0, _kvy1)
+            except Exception:
+                self._ema_keep_view = None
             self._ema_stk_cache = None; self._ema_lvl_cache = None       # re-derive the structure from the pin
             self._ema_vp_cache = None; self._ema_wall_cache = None; self._ema_poc_cache = None
             self._last_scanner_sig = None                                # repaint now
@@ -16937,6 +16986,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Mode 10 — neon-graded bucket candles + gray baseline (upper pane)
         synchronized with a rolling-50 VPIN toxicity heatmap (lower pane)."""
         self._ensure_canvas_panes()
+        self._bc_last_buckets = buckets                 # index<->time map for a pin's keep-view restore
         if self._chart_source == "time" and buckets:   # clock candles: label the index axis with the true UTC-local clock
             self.axis_bottom.set_time_candle_map(float(buckets[0].get("start_time", 0.0)),
                                                  config.TF_SECONDS.get(self._tf, 60))
@@ -17319,6 +17369,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._scanner_needs_autofit = False
         if self._follow_x or self._follow_y:
             self._roll_to_live_edge(len(x), lows, highs)
+        # A pin toggle must NOT move the chart: restore the exact time-window (x) + price band (y) captured
+        # before the recompute, so any prepended candles shift under a STATIONARY view instead of dragging it.
+        _kv = getattr(self, "_ema_keep_view", None)
+        if _kv is not None:
+            self._ema_keep_view = None
+            try:
+                _nx0 = self._bkt_x_at(buckets, _kv[0]); _nx1 = self._bkt_x_at(buckets, _kv[1])
+                if _nx0 is not None and _nx1 is not None and _nx1 - _nx0 > 1e-6:
+                    self.vb.setXRange(_nx0, _nx1, padding=0)
+                    self.vb.setYRange(_kv[2], _kv[3], padding=0)
+                    self._follow_x = self._follow_y = False   # the view is now exactly where the user left it
+            except Exception:
+                pass
         self.lower_plot.getViewBox().setYRange(0.0, 1.05, padding=0)
         self._follow_prev_range = self.vb.viewRange()
         # If the view JUMPED this frame (autofit / replay cursor move / mode switch), the candles were culled to the
