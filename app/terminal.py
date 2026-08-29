@@ -1456,9 +1456,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._rr_audio_seeded = False                          # entry-sound seed: never blast the backlog on first draw / tf-switch
         self._rr_htf_sph = {}                                  # HTF Radar Runner SIGNALS (m10_radarrun_1h/_4h): per-htf ScatterPlotItem
         self._rr_htf_sig = {}; self._rr_htf_marks = {}         # cached detect() per htf, re-run only on an htf-data change
-        # Radar Wick-Breakout LABEL (m10_radarwick, 5m/15m/30m/1h) — the powerful breakouts detect() skips: body already
-        # BEYOND the radar, only the wick retests it. Cyan diamonds, eyeball-first (no persist/audio/click). (detect_wick)
-        self._rw_sph = None; self._rw_sig = None; self._rw_drawn = False
+        # Radar DIAMOND (wick-breakout) — MERGED into the Radar Runner (2026-08-29): detect_wick fires the breakouts
+        # detect() skips (body already BEYOND the radar, only the wick retests it). Now persisted / filtered / drawn as a
+        # cyan ♦ inside _draw_radarrun's own fired set; no separate toggle, no separate scatter.
         # WALL SURGE (m10_wallsurge, 1m clock only) — pane-STRONG |delta| candle inside a same-side 30m wall/radar
         # area (green ▲ strong buying on a support wall / red ▼ strong selling on a resistance wall). Own 30m-wall
         # cache so it works even while the 30m walls overlay itself is toggled off. (app/wallsurge_detect)
@@ -1489,8 +1489,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_vp_va = {}                                     # 'vah'/'val' dashed 70%-value-area lines
         self._lwc_sph = None; self._lwc_sig = None               # LW FAILED PUSH gold ♦ (m10_longwick_combo, no walls)
         self._lwr_sph = None; self._lwr_sig = None               # LW WICK RECLAIM cyan/magenta ♦ (m10_longwick_reclaim)
-        self._dia_entries = []                                 # TRADEABLE diamond (SD+big-wick) click->scale-out bracket entries (share _draw_rr_lines)
-        self._dia_fired = set(); self._dia_audio_seeded = False; self._dia_fired_tf = None   # diamond entry-BEEP: seen end_times + silent-seed guard
         # Radar Runner PROVISIONAL forming-bar preview (hollow badge on the still-forming candle; confirmed detect() keeps
         # or drops it on close). Walls cached at each bar-close -> the forming bar is re-checked every frame (O(walls)).
         self._rr_prov_sph = None; self._rr_walls = None; self._rr_walls_off = 0; self._rr_walls_slbuf = 0.003
@@ -2503,10 +2501,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._rr_htf_sig[_h] = None                  # HTF Radar Runner signals toggled -> re-detect + redraw next frame
             if not on:
                 self._clear_htf_radarrun(_h)             # off -> tear those htf badges down now
-        elif key == "m10_radarwick":
-            self._rw_sig = None; self._sel_sig = None    # Radar Wick-Breakout label toggled -> re-detect + redraw next frame
-            if not on:
-                self._clear_radarwick()                  # off -> tear the cyan diamonds down now
         elif key == "m10_wallsurge":
             self._ws_sig = None                          # Wall Surge toggled -> re-detect + redraw next frame
             if not on:
@@ -2981,13 +2975,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
         if (not ev.double() and self.scanner_mode == "bucket_canvas"
-                and (self._rr_entries or getattr(self, "_dia_entries", []))
-                and (self.menu.layer_state("m10_radarrun") or self.menu.layer_state("m10_radarwick"))):
+                and self._rr_entries
+                and self.menu.layer_state("m10_radarrun")):
             try:                               # click a Radar Runner triangle OR a tradeable diamond -> toggle its bracket
                 pt = self.vb.mapSceneToView(ev.scenePos()); xc, yc = pt.x(), pt.y()
                 (_a, _b), (vy0, vy1) = self.vb.viewRange(); ytol = (vy1 - vy0) * 0.05
                 best = None; bestdx = 2.5
-                for _en in (self._rr_entries + getattr(self, "_dia_entries", [])):
+                for _en in self._rr_entries:
                     if abs(xc - _en[1]) <= bestdx and abs(yc - _en[6]) <= ytol:   # yb at index 6 (entry/sl/tp tuple)
                         best = _en[0]; bestdx = abs(xc - _en[1])
                 if best is not None:
@@ -9628,6 +9622,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if _aR is None or _aR >= config.RR_ABSORPR_MIN:
                         _kept.append(_e)
                 entries = _kept
+            # MERGED (user 2026-08-29): the RADAR DIAMOND -- wick-breakouts the RR skips (body already BEYOND the
+            # radar, only the wick retests it) -- is now the SAME signal set. Folded into `entries` so it persists,
+            # filters (hc / absorbed / HL-delta / bubble) and gets the FAILED mark exactly like a triangle; drawn as
+            # a cyan diamond. TRADEABLE SD + big-wick subset (study/radarwick_combined_scaleout.py). No separate toggle.
+            for _we in radar_breakout_detect.detect_wick(_bset, skip_last=_forming, same_dir=True, wick_min=0.5):
+                _wi = int(_we.get("i", -1))
+                if not (0 <= _wi < len(_bset)):
+                    continue
+                _wb = _bset[_wi]; _went = float(_we.get("entry", _wb.get("close", 0.0)) or 0.0)
+                _wrlo = float(_we.get("radar_lo", 0.0) or 0.0); _wrhi = float(_we.get("radar_hi", 0.0) or 0.0)
+                if _went <= 0 or _wrlo <= 0 or _wrhi <= 0:
+                    continue
+                _ws = int(_we.get("side", 0))
+                _wlo = float(_wb.get("low", 0.0) or 0.0); _whi = float(_wb.get("high", 0.0) or 0.0)
+                _wsl = max(_wlo * (1 - _slbuf), _wrlo) if _ws > 0 else min(_whi * (1 + _slbuf), _wrhi)
+                entries.append(dict(i=_wi, side=_ws, entry=_went, sl_trade=_wsl, sl=_wsl,
+                                    tp_trade=_went * (1.0 + _ws * config.RR_TP_FRAC), wick=True))
         except Exception:
             self._clear_radarrun(); return
         # 'Filter EMA HL delta' (m10_radarrun_hld): keep only badges whose side agrees with the ema_ext
@@ -9710,7 +9721,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                           "sl": e.get("sl_trade", e.get("sl", 0.0)),   # tradeable candle-capped SL
                                           "tp": e.get("tp_trade", 0.0),                # fixed quick TP (0.5%)
                                           "hc": self._rr_conviction(filtered, i, int(e["side"])),   # frozen at fire
-                                          "absorbed": self._rr_absorbed(filtered, i)}
+                                          "absorbed": self._rr_absorbed(filtered, i),
+                                          "kind": "wick" if e.get("wick") else "run"}   # ♦ wick-break vs ▲ regular
                     _any_new = True
                     if i == _edge_i:                              # fired on the just-closed live-edge bar (not a scroll-in)
                         _new_edge.append((int(e["side"]), self._rr_fired[et]))
@@ -9765,9 +9777,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             col = GRN if side > 0 else RED
             _fail = bool(_failed.get(i))
             _al9 = 70 if _fail else 255                          # a FAILED badge FADES back -- the live ones stay solid
-            _pen_rgb = [int(c * 0.55) for c in col] + [110 if _fail else 255]
-            spots.append({"pos": (i, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, _al9),
-                          "pen": pg.mkPen(*_pen_rgb, width=1.4), "size": 20})
+            if ev.get("kind") == "wick":                         # ♦ the merged RADAR DIAMOND (wick-breakout) -- cyan
+                spots.append({"pos": (i, y), "symbol": "d", "brush": pg.mkBrush(60, 220, 235, _al9),
+                              "pen": pg.mkPen(20, 95, 110, 110 if _fail else 255, width=1.3), "size": 16})
+            else:                                                # ▲/▼ the regular breakout triangle
+                _pen_rgb = [int(c * 0.55) for c in col] + [110 if _fail else 255]
+                spots.append({"pos": (i, y), "symbol": "t1" if side > 0 else "t", "brush": pg.mkBrush(*col, _al9),
+                              "pen": pg.mkPen(*_pen_rgb, width=1.4), "size": 20})
             if hc:                                               # GOLD RING = high conviction (breakout strength + reward/eff aligned)
                 ring_spots.append({"pos": (i, y), "symbol": "o", "size": 34 if _fail else 28,   # step out when crossed
                                    "brush": pg.mkBrush(0, 0, 0, 0),
@@ -9795,7 +9811,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         user = self._rr_lines_user; cpool = self._rr_ln_pool; lpool = self._rr_lnlbl_pool
         WHITE = (236, 238, 244); _fee = getattr(config, "RR_MAKER_RT", 0.0004)
         ul = ut = 0; _size_shown = False
-        for key, x, side, entry, sl, _tp_frozen, yb in (self._rr_entries + getattr(self, "_dia_entries", [])):
+        for key, x, side, entry, sl, _tp_frozen, yb in self._rr_entries:
             if not user.get(key, False) or entry <= 0 or x < 0 or x >= n:
                 continue
             tp1 = entry * (1.0 + side * config.RR_TP1_FRAC)      # 50% off here (nets ~0.2%)
@@ -9859,81 +9875,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             lpool[j].setVisible(False)
         if self._rr_size_lbl is not None and not _size_shown:
             self._rr_size_lbl.setVisible(False)
-
-    # RADAR WICK-BREAKOUT label (m10_radarwick, 5m/15m/30m/1h) — the POWERFUL breakouts the Radar Runner SKIPS because the
-    # candle opens ALREADY BEYOND the radar (body outside) and only its WICK retests it. Cyan diamond at the breakout bar.
-    # TRADEABLE (SD+big-wick subset): click a diamond -> the SAME scale-out bracket as the RR (candle-SL + TP1/TP2 + size),
-    # via _dia_entries fed into _draw_rr_lines. Shares the Radar Runner full-history warm-up (self._rr_warm) so a mark never
-    # repaints when the scroll window starts after its wall formed. No disk-persist/audio yet. (app/radar_breakout_detect)
-    def _clear_radarwick(self) -> None:
-        if self._rw_sph is not None:
-            self._rw_sph.setVisible(False)
-        self._dia_entries = []                                   # drop tradeable-diamond bracket entries when the layer is off
-        self._rw_sig = None; self._rw_drawn = False
-
-    def _draw_radarwick(self, filtered) -> None:
-        if (not self.menu.layer_state("m10_radarwick") or self.scanner_mode != "bucket_canvas"
-                or self._tf not in ("5m", "15m", "30m", "1h") or self._hide_candles):   # Ctrl+H hides strategies
-            self._clear_radarwick(); return
-        n = len(filtered)
-        _forming = bool(getattr(self, "_mmx_last_forming", True))
-        warm = getattr(self, "_rr_warm", None) or []; _off = len(warm)
-        _ce = filtered[-2] if (_forming and n >= 2) else (filtered[-1] if n else None)
-        _cet = float(_ce.get("end_time", 0.0) or 0.0) if _ce else 0.0
-        _sig = (n, _off, _forming, self._tf, _cet)
-        if _sig == self._rw_sig and self._rw_drawn:
-            return                                               # closed-bar detect -> re-run only once per bar-close
-        self._rw_sig = _sig
-        try:
-            from app import radar_breakout_detect
-            _bset = list(warm) + list(filtered)                  # walls over FULL history (same warm-up as Radar Runner)
-            # TRADEABLE diamond = SD (same_dir: bullish bar on a buy wall / bearish on a sell wall) + BIG wick (>=0.5) --
-            # the validated additive subset that speeds the RR pass at flat DD (study/radarwick_combined_scaleout.py).
-            cands = radar_breakout_detect.detect_wick(_bset, skip_last=_forming, same_dir=True, wick_min=0.5)
-        except Exception:
-            self._clear_radarwick(); return
-        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
-        _slbuf = 0.002 if self._tf == "1h" else 0.003            # candle-SL buffer, same as the Radar Runner bracket
-        CY = (60, 220, 235)                                      # cyan diamond
-        if self._rw_sph is None:
-            self._rw_sph = pg.ScatterPlotItem(pxMode=True, size=16, symbol="d")
-            self._rw_sph.setZValue(34); self.plot.addItem(self._rw_sph, ignoreBounds=True)
-        if self._tf != self._dia_fired_tf:                       # tf switch -> re-seed the beep tracker silently (no backlog blast)
-            self._dia_fired = set(); self._dia_audio_seeded = False; self._dia_fired_tf = self._tf
-        _edge_i = (n - 2) if _forming else (n - 1)               # the just-closed live-edge bar a NEW diamond can land on
-        _new_edge = []
-        spots = []; self._dia_entries = []                       # rebuild the tradeable-diamond click->bracket entries
-        for e in cands:
-            i = int(e["i"]) - _off                               # detect ran over warm+filtered -> shift to filtered space
-            if not (0 <= i < n):
-                continue
-            side = int(e["side"])
-            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            _et = float(b.get("end_time", 0.0) or 0.0)           # BEEP: a diamond whose bar end_time is new -> a fresh fire
-            if _et > 0 and _et not in self._dia_fired:
-                self._dia_fired.add(_et)
-                if i == _edge_i:
-                    _new_edge.append(side)
-            y = (lo - pad) if side > 0 else (hi + pad)           # ♦ BELOW the candle for an up-break / ABOVE for a down-break
-            spots.append({"pos": (i, y), "symbol": "d", "brush": pg.mkBrush(*CY, 235),
-                          "pen": pg.mkPen(20, 95, 110, 255, width=1.3), "size": 16})
-            # TRADEABLE: click -> the SAME scale-out bracket as the RR (candle-capped SL + TP1/TP2 + size). entry = breakout close.
-            entry = float(e.get("entry", b.get("close", 0.0)) or 0.0)
-            rlo = float(e.get("radar_lo", 0.0) or 0.0); rhi = float(e.get("radar_hi", 0.0) or 0.0)
-            if entry > 0 and rlo > 0 and rhi > 0:
-                sl = max(lo * (1 - _slbuf), rlo) if side > 0 else min(hi * (1 + _slbuf), rhi)
-                self._dia_entries.append(("dia%d" % i, i, side, entry, sl, 0.0, y))
-        self._rw_sph.setData(spots); self._rw_sph.setVisible(True)
-        self._rw_drawn = True
-        if len(self._dia_fired) > 5000:                          # bound memory: keep the 5000 most-recent seen end_times
-            for _old in sorted(self._dia_fired)[:len(self._dia_fired) - 5000]:
-                self._dia_fired.discard(_old)
-        if not self._dia_audio_seeded:                           # first population / tf-switch = silent seed (never blast the backlog)
-            self._dia_audio_seeded = True
-        else:
-            self._dia_sound_new(_new_edge)                       # beep the instant a NEW live-edge diamond prints
-        self._trline_buckets = filtered                         # click a diamond -> scale-out bracket lines (shared machinery)
-        self._draw_rr_lines()
 
     # WALL SURGE (m10_wallsurge, 1m/5m CLOCK only) — pane-STRONG |delta| (Volume pane 'Pct' definition: trailing-50
     # rank >= P80) AND Eff/Res retention >= 80% (the candle KEPT its delta-direction excursion) on a candle inside a
@@ -10139,17 +10080,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                           "pen": pg.mkPen(*_pen_rgb, width=1.4), "size": 20})
         self._ws_sph.setData(spots); self._ws_sph.setVisible(True)
         self._ws_drawn = True
-
-    def _dia_sound_new(self, new_edge) -> None:
-        """Beep the instant a NEW tradeable diamond freezes on the just-closed live-edge bar. Shares the one 'entry sound'
-        toggle (m10_mmx_sound) + live-only gate with the RR / engulf strategies. DISTINCT from the RR bell: a rising
-        TRIPLE-tick (buy = higher octave, sell = lower) so a diamond is audibly different from a Radar Runner breakout."""
-        if not new_edge or not self.menu.layer_state("m10_mmx_sound"):
-            return
-        if self._replay_on or self._in_recon_replay():
-            return                                               # live-only, matching the RR entry sound
-        buy = new_edge[0] > 0
-        self._play_tones([(1175 if buy else 587, 90), (1568 if buy else 784, 90), (2093 if buy else 1047, 120)])
 
     # RADAR RUNNER PROVISIONAL forming-bar preview (rides the master m10_radarrun layer). Shows a HOLLOW badge on the STILL-
     # FORMING candle the instant it currently qualifies (open inside radar + live close beyond the extreme + visit>=1), then
@@ -12276,7 +12206,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     or self.menu.layer_state("m10_easy1h") or self.menu.layer_state("m10_crazywall")
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")
                     or self.menu.layer_state("m10_wallstrat") or self.menu.layer_state("m10_radarrun")
-                    or self.menu.layer_state("m10_radarwick") or self.menu.layer_state("m10_kcovershoot")
+                    or self.menu.layer_state("m10_kcovershoot")
                     or self.menu.layer_state("m10_wallsurge") or self.menu.layer_state("m10_longwick")
                     or self.menu.layer_state("m10_longwick_combo") or self.menu.layer_state("m10_longwick_reclaim")):
                 _pf = _pf0                          # already built above; the top gate decided this frame needs a redraw
@@ -12304,10 +12234,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_radarrun_forming(_pf or [])  # forming-bar PROVISIONAL preview — self-gated, fail-safe
                 except Exception:
                     self._clear_radarrun_forming()
-                try:
-                    self._draw_radarwick(_pf or [])  # Radar Wick-Breakout label (cyan ♦) — self-gated, fail-safe
-                except Exception:
-                    self._clear_radarwick()
                 try:
                     self._draw_wallsurge(_pf or [])  # Wall Surge (▲▼ strong Δ @ 30m wall, 1m clock) — self-gated, fail-safe
                 except Exception:
@@ -12444,10 +12370,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_radarrun_forming(filtered)  # forming-bar PROVISIONAL preview — self-gated, fail-safe
             except Exception:
                 self._clear_radarrun_forming()
-            try:
-                self._draw_radarwick(filtered)  # Radar Wick-Breakout label (cyan ♦) — self-gated, fail-safe
-            except Exception:
-                self._clear_radarwick()
             try:
                 self._draw_wallsurge(filtered)  # Wall Surge (▲▼ strong Δ+kept @ 30m wall, 1m/5m clock) — self-gated
             except Exception:
