@@ -576,6 +576,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_radarrun_subtoggle(sec)      # Radar Runner sub-toggle: high-conviction order-flow filter (gold ring)
                 self._build_radarrun_absorb_subtoggle(sec)  # + 'absorbed only' filter (A>=0, drop the easy fizzles)
                 self._build_radarrun_hld_subtoggle(sec)  # + 'Filter EMA HL delta' (long iff delta>0 / short iff delta<0)
+                self._build_radarrun_bubble_subtoggle(sec)  # + 'Bubble filter' (clean wick + a big/medium bubble the right side)
                 self._build_radarrun_htf_subtoggles(sec)  # + 1h / 4h signals on lower tfs (colour-matched to the htf walls)
             if key == "m10_stats":
                 self._build_stats_substats(sec)          # per-stat on/off for the Mode-10 stats box
@@ -619,6 +620,21 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
         cb.toggled.connect(lambda on, k="m10_radarrun_hld": self.layerToggled.emit(k, on))
         self.layer_checks["m10_radarrun_hld"] = cb
+        section.addWidget(cb)
+
+    def _build_radarrun_bubble_subtoggle(self, section) -> None:
+        """Radar Runner sub-toggle: keep only badges whose SIGNAL CANDLE has clean order-flow bubbles on the trade
+        side. A footprint 'bubble' = one of the candle's top-3 volume-by-price levels; big/MEDIUM = its volume is
+        at least the candle's BIG tier (>= median + 0.5 robust-sigma over the last 30 candles' top bubbles). LONG
+        keeps a badge only if the candle has NO bubble (any size) in its UPPER wick AND at least one big/medium
+        bubble at or below the close (buy OR sell side); SHORT mirrors (clean LOWER wick, big/medium at/above the
+        close). A candle with no footprint / too little history to tier is KEPT. m10_radarrun_bub, default OFF;
+        composes with the other filters (all apply)."""
+        cb = QtWidgets.QCheckBox("· Bubble filter (clean wick + big/med)")
+        cb.setChecked(False)
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.toggled.connect(lambda on, k="m10_radarrun_bub": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_radarrun_bub"] = cb
         section.addWidget(cb)
 
     def _build_radarrun_htf_subtoggles(self, section) -> None:

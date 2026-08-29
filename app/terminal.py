@@ -9586,6 +9586,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _hc = self.menu.layer_state("m10_radarrun_hc")           # sub-toggle: show ONLY high-conviction breakouts
         _ab = self.menu.layer_state("m10_radarrun_abs")          # sub-toggle: show ONLY absorbed (A>=0) breakouts
         _hld = self.menu.layer_state("m10_radarrun_hld")         # sub-toggle: keep only EMA-HL-delta-ALIGNED badges
+        _bub = self.menu.layer_state("m10_radarrun_bub")         # sub-toggle: BUBBLE filter (clean wick + big/med bubble)
         # REPAINT FIX (2026-08-17): a defending wall can be 500+ bars old, and the wall sim is causal from the START of
         # the data it sees. If we detect over only the visible scan window, a signal VANISHES on reload whenever the new
         # window starts after its wall formed. Prepend the FULL pre-window history so the signal set is identical no
@@ -9596,15 +9597,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # the full-history detect re-runs once per bar-close, not every live frame (a net perf WIN vs the old window scan).
         _ce = filtered[-2] if (_forming and n >= 2) else (filtered[-1] if n else None)
         _cet = float(_ce.get("end_time", 0.0) or 0.0) if _ce else 0.0
-        _sig = (n, _off, _forming, _hc, _ab, _hld, self._tf, _cet)
+        _sig = (n, _off, _forming, _hc, _ab, _hld, _bub, self._tf, _cet)
         if _sig == self._rr_sig and self._rr_drawn:
             return
         self._rr_sig = _sig
+        _bubthr = None; _cw = None
         try:                                                     # skip the last bar ONLY while it is still FORMING; the
             from app import radar_breakout_detect                 # instant the breakout bar CLOSES it fires (no wait for a
             from app import absorption_level_detect as _al_rr      # compute walls ONCE, reuse for the forming-bar preview
             _slbuf = 0.002 if self._tf == "1h" else 0.003         # forward-optimized candle-SL buffer: 1h 0.2% / 30m+ 0.3%
             _bset = list(warm) + list(filtered)
+            if _bub:                                             # BUBBLE filter: per-candle (big_thr, crazy_thr) over the
+                from app import crazy_wall_detect as _cw          # last 30 candles' top footprint bubbles (causal, robust z)
+                _bubthr = _cw.bubble_thresholds(_bset)
             _rr_walls = _al_rr.detect(_bset, skip_last=False)      # walls over FULL history (cached for the provisional preview)
             self._rr_walls = _rr_walls; self._rr_walls_off = _off; self._rr_walls_slbuf = _slbuf
             entries = radar_breakout_detect.detect(_bset, walls=_rr_walls, skip_last=_forming,
@@ -9641,6 +9646,41 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if _j:
                     _c = float(_b.get("close", _b.get("close_price", 0.0)) or 0.0) or _prev
                     _prev = _hldE[_j] = a20 * _c + (1.0 - a20) * _hldE[_j - 1]
+
+        def _bub_ok(i, side):
+            """BUBBLE filter (m10_radarrun_bub): a footprint 'bubble' = one of the candle's TOP-3 volume-by-price
+            levels; big/MEDIUM = its volume >= the candle's BIG threshold (>= median + 0.5 robust-sigma over the
+            last 30 candles' top bubbles -- app.crazy_wall_detect). A LONG badge keeps only if the signal candle
+            has NO bubble (any size) in its UPPER wick AND at least one big/medium bubble at or below the close
+            (price closed above it); a SHORT mirrors (clean LOWER wick, big/medium at/above the close). Can't be
+            tiered (too little history) or no footprint -> KEEP, never silently hidden (user 2026-08-29)."""
+            if _bubthr is None or _cw is None or not (0 <= _off + i < len(_bubthr)):
+                return True
+            _th = _bubthr[_off + i]
+            if _th is None:
+                return True
+            _bigT = _th[0]
+            _b = filtered[i]
+            _o = float(_b.get("open", 0.0) or 0.0); _c = float(_b.get("close", _b.get("close_price", 0.0)) or 0.0)
+            if _o <= 0 or _c <= 0:
+                return True
+            _btop = max(_o, _c); _bbot = min(_o, _c)
+            _bubs = _cw._bubbles(_b)                              # top-3 (price, total, buy, sell)
+            if not _bubs:
+                return False                                     # no bubble at all -> no big/medium one
+            _big = False
+            for _pr, _tot, _bu, _se in _bubs:
+                if side > 0:                                     # BULLISH: upper wick must be clean, big/med <= close
+                    if _pr > _btop:
+                        return False
+                    if _tot >= _bigT and _pr <= _c:
+                        _big = True
+                else:                                            # BEARISH: lower wick must be clean, big/med >= close
+                    if _pr < _bbot:
+                        return False
+                    if _tot >= _bigT and _pr >= _c:
+                        _big = True
+            return _big
 
         def _hld_ok(i, side):
             if _hldE is None or i < 19:
@@ -9682,7 +9722,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not self._rr_audio_seeded:                             # first population = silent seed (never blast the backlog)
             self._rr_audio_seeded = True
         else:
-            self._rr_sound_new([_x for _x in _new_edge if (not _hld) or _hld_ok(_edge_i, _x[0])],
+            self._rr_sound_new([_x for _x in _new_edge
+                                if ((not _hld) or _hld_ok(_edge_i, _x[0]))
+                                and ((not _bub) or _bub_ok(_edge_i, _x[0]))],
                                _hc, _ab)                         # beep the instant a NEW live-edge breakout freezes
             #                                                      (a delta-filtered badge stays silent too)
         et2i = {float(filtered[j].get("end_time", 0.0) or 0.0): j for j in range(n)}   # end_time -> CURRENT index this frame
@@ -9714,6 +9756,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue
             side = ev["side"]
             if _hld and not _hld_ok(i, side):                    # 'Filter EMA HL delta' -> only delta-aligned badges
+                continue
+            if _bub and not _bub_ok(i, side):                    # 'Bubble filter' -> clean wick + big/medium bubble
                 continue
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
             y = (lo - pad) if side > 0 else (hi + pad)               # LONG ▲ BELOW the candle / SHORT ▼ ABOVE it
