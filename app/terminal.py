@@ -7193,56 +7193,67 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             if _t8 > int(_seq[-1][0])]
                     _lege = _nx8[0] if _nx8 else _M
 
-                def _full_seq(_k, _eov=None):
-                    """The FINAL label(s) for structural state _bseq[_k], applying EVERY rule the current tag
-                    gets, so 'prev' can never disagree with 'current'. Base = the sandwiched-retracement read;
-                    then the leg in force at the state's END overrules -- swept both extremes -> RANGING (gray);
-                    a leg fighting the structure -> RETRACEMENT while it holds the opposing extreme, RANGING once
-                    a wick breaks it.
-
-                    A trend whose running leg is a COUNTER-trend retracement emits BOTH the trend AND the
-                    retracement -- so the trend stays visible as the previous state (user 2026-08-29 screenshot:
-                    a bull trend being retraced read 'prev RANGING' because the whole state had collapsed into
-                    its retracement label and prev skipped back past the trend). The current tag is still the
-                    LAST element, so it is unchanged; only the trend re-appears just before it."""
+                def _leg_lbl(_i, _nwin):
+                    """The label for the LEG opened by flip _seq[_i], read exactly as PINNING that flip reads it
+                    (user 2026-08-29: 'prev' must say what you see when you click the line). The structure is
+                    taken AS OF the leg's own bar; then the leg's colour overrules -- a leg fighting the structure
+                    is that trend's RETRACEMENT while it holds the opposing extreme, RANGING once a wick breaks
+                    it, RANGING (gray) if it swept both. Labelling PER LEG rather than per structural state is
+                    what makes it agree with the pin: a retracement leg BURIED inside a trend (which the old
+                    per-state read collapsed away, so prev skipped back past it) now appears in its own right."""
+                    _fb, _fc = _seq[_i]; _fb = int(_fb)
+                    _k = -1
+                    for _kk in range(len(_bmeta)):                 # structural state in force at the leg's bar
+                        if _bmeta[_kk][0] <= _fb:
+                            _k = _kk
+                        else:
+                            break
+                    if _k < 0:
+                        return None                               # before any determined structure
                     _base = _bs_lbl(_k)
-                    _ek = _eov if _eov is not None else (
-                        _bmeta[_k + 1][0] if _k + 1 < len(_bseq) else _M)
-                    _run = None
-                    for _fb, _fc in _seq:                          # the flip in force at the state's end
-                        if _fb < _ek:
-                            _run = (int(_fb), _fc)
-                    if _run is None:
-                        return [_base]
-                    _rb, _rc = _run
-                    if _rb in _grays:                              # the leg swept the whole structure
-                        return ["RANGING"]
-                    _hv = _lv = None                              # extreme lines standing when that leg opened
+                    if _fb in _grays:                             # the leg swept the whole structure
+                        return "RANGING"
+                    _hv = _lv = None                              # extreme lines standing when the leg opened
                     for _bb in _bulls:
-                        if _bb[1] <= _rb:
+                        if _bb[1] <= _fb:
                             _hv = _bb[2]
                     for _br in _bears:
-                        if _br[1] <= _rb:
+                        if _br[1] <= _fb:
                             _lv = _br[2]
-                    if _base == "BULLISH" and _rc == "r" and _lv is not None:   # a red leg inside a bull trend
-                        return ["BULLISH", "RANGING" if _touched(_rb, _ek, _lv, False) else "BULLISH RETRACEMENT"]
-                    if _base == "BEARISH" and _rc == "g" and _hv is not None:   # a green leg inside a bear trend
-                        return ["BEARISH", "RANGING" if _touched(_rb, _ek, _hv, True) else "BEARISH RETRACEMENT"]
-                    return [_base]
+                    if _base == "BULLISH":
+                        if _fc == "g" or _lv is None:             # green up-leg = the trend itself
+                            return "BULLISH"
+                        return "RANGING" if _touched(_fb, _nwin, _lv, False) else "BULLISH RETRACEMENT"
+                    if _base == "BEARISH":
+                        if _fc == "r" or _hv is None:             # red down-leg = the trend itself
+                            return "BEARISH"
+                        return "RANGING" if _touched(_fb, _nwin, _hv, True) else "BEARISH RETRACEMENT"
+                    return _base                                  # RANGING, or a sandwiched 'X RETRACEMENT'
 
-                if _bseq:
-                    _labels = []
-                    for _k in range(len(_bseq)):
-                        _labels.extend(_full_seq(_k, _lege if _k == len(_bseq) - 1 else None))
-                    _collapsed = []                              # CONSECUTIVE equal labels are one state -> prev
-                    for _lb9 in _labels:                          # is the previous DISTINCT one, gray runs included
-                        if not _collapsed or _collapsed[-1] != _lb9:
-                            _collapsed.append(_lb9)
+                _labels = []
+                for _i in range(len(_seq)):                        # one label per leg (== pinning that flip)
+                    _lb9 = _leg_lbl(_i, _lege if _i == len(_seq) - 1 else int(_seq[_i + 1][0]))
+                    if _lb9 is not None:
+                        _labels.append(_lb9)
+                _collapsed = []                                    # CONSECUTIVE equal labels are one state -> prev
+                for _lb9 in _labels:                              # the previous DISTINCT one; every entry is a FLIP,
+                    if not _collapsed or _collapsed[-1] != _lb9:  # so 'prev' is always exactly what clicking shows
+                        _collapsed.append(_lb9)
+                # BREAKOUT OVERRIDE past the LAST flip: '20 closes beyond the extreme' (user rule) can turn the
+                # live structure at a bar that is NOT a flip. It has no flip to ride and you cannot pin a non-flip
+                # bar, so it only ever replaces the CURRENT tag -- never 'prev', which stays a clickable flip.
+                _bo = _bs_lbl(len(_bseq) - 1) if _bseq else None
+                _brk = _bo is not None and _seq and _bmeta[-1][0] > int(_seq[-1][0])
+                if _brk and _bo != (_collapsed[-1] if _collapsed else None):
+                    _bias = _bo
+                    _prevbias = _collapsed[-1] if _collapsed else None
+                elif _collapsed:
                     _bias = _collapsed[-1]
                     _prevbias = _collapsed[-2] if len(_collapsed) >= 2 else None
                 else:
-                    _bias = "RANGING" if (_hi_info is not None and _lo_info is not None) else None
-                    _prevbias = None; _collapsed = [_bias] if _bias else []
+                    _bias = _bo if _bo is not None else (
+                        "RANGING" if (_hi_info is not None and _lo_info is not None) else None)
+                    _prevbias = None
                 self._ema_bias_seq = list(_bseq)          # the full ordered bias history behind the two tags
                 self._ema_bias_meta = list(_bmeta)        # ... and what each state was judged against
                 self._ema_bias_labels = list(_collapsed)  # ... fully reclassified + collapsed (current is last)
