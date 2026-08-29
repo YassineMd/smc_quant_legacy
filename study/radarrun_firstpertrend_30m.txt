@@ -1,0 +1,21 @@
+RADAR RUNNER 30m — FIRST fire per clean-trend vline, SL 3% / TP 1% fixed — HONEST TEST (9 gates)
+harness: study/radarrun_firstpertrend_30m.py | canonical union fires | causal bias+state (data<=k) | 1m first-touch | non-overlap taken
+rule: keep fires printed while bias is CLEAN BULLISH/BEARISH (exclude retracements+ranging); take the FIRST fire per vline (state); SL 3% TP 1% fixed.
+break-even win rate for SL3/TP1 (after fees) = 76.9%
+
+RADAR RUNNER 30m — FIRST fire per clean-trend vline  |  SL 3%% / TP 1%% fixed  |  1m first-touch
+====================================================================================================
+
+ALIGNED (long in bull / short in bear):
+   n=148  win  73.0%  avg -0.159%  tot -23.6%  prop  0.0%  (2 dropped overlap)
+        2025 n=108  win 69.4% -0.301%   2026 n=40   win 82.5% +0.225%
+
+NATIVE (signal's own side):
+   n=151  win  72.8%  avg -0.164%  tot -24.8%  prop  0.0%  (3 dropped overlap)
+        2025 n=111  win 70.3% -0.268%   2026 n=40   win 80.0% +0.124%
+
+baseline ALL clean-trend aligned fires (not first-per-state):
+   n=702  win  75.9%  avg -0.040%  tot -28.2%  prop  1.7%  (944 dropped overlap)
+        2025 n=493  win 75.3% -0.067%   2026 n=209  win 77.5% +0.024%
+
+VERDICT: NOT TRADEABLE. SL3/TP1 needs 76.9% win to break even; strategy gets 73.0% (ALIGNED) -> avg -0.159%/trade, tot -23.6%, prop 0%. 2025 (n=108) win 69.4% -0.301%; only the small 2026 slice (n=40) clears break-even at 82.5% +0.225% = composition noise. first-per-state (avg -0.159%) is WORSE than all clean-trend fires (avg -0.040%) -> the first signal after a vline is not special.
