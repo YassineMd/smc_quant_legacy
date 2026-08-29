@@ -2871,8 +2871,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         clicking another) moves/clears the pin. Returns True when the click was consumed."""
         if ev.double() or self.scanner_mode != "bucket_canvas" or not self._ema_flip_hits:
             return False
-        _cb = self.menu.sub_checks.get("ema_stack")
-        if _cb is None or not _cb.isChecked():
+        _sc = self.menu.sub_checks     # the pin drives the Trend Extreme structure -> allow it whenever ANY of
+        if not any((_sc.get(_k) is not None and _sc[_k].isChecked()) for _k in   # those layers is shown (vlines
+                   ("ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls",      # need not be toggled on), user)
+                    "ema_walls_prev", "ema_walls_line", "ema_walls_merge", "ema_poc", "ema_poc_prev")):
             return False
         try:
             pt = self.vb.mapSceneToView(ev.scenePos()); xc = pt.x()
@@ -6909,6 +6911,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _it3 in self._ema_lvl_vl.values():
                 _it3.setVisible(False)
             self._hide_ema_vp(); self._hide_ema_walls(); self._hide_ema_pocs()
+            self._ema_flip_hits = []                       # nothing computed -> nothing to click
             return
         # ANALYSIS SERIES (user report 2026-08-28: "the algo should be able to extract previous data ... even
         # if it's not showing on the screen"): the flips / extremes / bias are computed over the pre-window
@@ -7075,33 +7078,33 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _LX = _fxw(_pin_i)
                 if _nxt_i is not None:
                     _RX = _fxw(_nxt_i)
-        if not _stk_on:                                       # vlines off, but the levels below may still draw
-            for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
+        # HITS are rebuilt every frame the structure is computed -- so the PIN click works even when the
+        # Stack-Flip vlines are toggled OFF (the pin drives the Trend Extreme structure, user 2026-08-30).
+        # Toggle off -> the lines are hidden EXCEPT a pinned one, which stays SOLID as the pin's marker.
+        self._ema_flip_hits = []
+        _hid2 = getattr(self, "_ema_hide_set", None) or ()          # 2nd+ line of a same-label run -> not clickable
+        for _kind, _xs2a, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
+            pool = self._ema_stk_pool[_kind]
+            _pairs2 = [(_fxw(_xi), _xi) for _xi in _xs2a
+                       if _xi >= _off and int(_xi) not in _hid2]   # at the EXACT cross; older-than-window skipped
+            _xs2 = [_p2[0] for _p2 in _pairs2]
+            for _j, _xi in enumerate(_xs2):
+                if _j >= len(pool):
+                    _pn2 = pg.mkPen(color=(_rgb2[0], _rgb2[1], _rgb2[2], 170), width=1); _pn2.setCosmetic(True)
+                    _pn2.setDashPattern([2.0, 6.0])
+                    _ln = pg.InfiniteLine(angle=90, movable=False, pen=_pn2); _ln.setZValue(14)
+                    self.plot.addItem(_ln, ignoreBounds=True); pool.append(_ln)
+                _ai2 = _pairs2[_j][1]
+                self._ema_flip_hits.append((float(_xi), int(_ai2)))
+                _pin2 = bool(self._ema_pin_t) and abs(
+                    float(_ftimes.get(int(_ai2), 0.0)) - float(self._ema_pin_t)) < 0.5
+                pool[_j].setValue(float(_xi))
+                pool[_j].setVisible(_stk_on or _pin2)                # toggle off -> only the pinned line shows
+                pool[_j]._ema_pinned = _pin2                          # pinned -> SOLID, otherwise dashed
+                _col2 = getattr(self, "_ema_flip_col", None) or {}     # colour by BIAS (green/red/gray),
+                _stk_pen(pool[_j], _col2.get(int(_ai2), _rgb2), _pin2)  #   fixup below applies the fresh map
+            for _pl in pool[len(_xs2):]:
                 _pl.setVisible(False)
-        else:
-            self._ema_flip_hits = []
-            for _kind, _xs2a, _rgb2 in (("g", _g, (40, 230, 120)), ("r", _r, (240, 70, 90))):
-                pool = self._ema_stk_pool[_kind]
-                _hid2 = getattr(self, "_ema_hide_set", None) or ()      # 2nd+ line of a RANGING run -> not printed
-                _pairs2 = [(_fxw(_xi), _xi) for _xi in _xs2a
-                           if _xi >= _off and int(_xi) not in _hid2]   # drawn at the EXACT cross; older-than-window skipped
-                _xs2 = [_p2[0] for _p2 in _pairs2]
-                for _j, _xi in enumerate(_xs2):
-                    if _j >= len(pool):
-                        _pn2 = pg.mkPen(color=(_rgb2[0], _rgb2[1], _rgb2[2], 170), width=1); _pn2.setCosmetic(True)
-                        _pn2.setDashPattern([2.0, 6.0])
-                        _ln = pg.InfiniteLine(angle=90, movable=False, pen=_pn2); _ln.setZValue(14)
-                        self.plot.addItem(_ln, ignoreBounds=True); pool.append(_ln)
-                    pool[_j].setValue(float(_xi)); pool[_j].setVisible(True)
-                    _ai2 = _pairs2[_j][1]
-                    self._ema_flip_hits.append((float(_xi), int(_ai2)))
-                    _pin2 = bool(self._ema_pin_t) and abs(
-                        float(_ftimes.get(int(_ai2), 0.0)) - float(self._ema_pin_t)) < 0.5
-                    pool[_j]._ema_pinned = _pin2                          # pinned -> SOLID, otherwise dashed
-                    _col2 = getattr(self, "_ema_flip_col", None) or {}     # colour by BIAS (green/red/gray),
-                    _stk_pen(pool[_j], _col2.get(int(_ai2), _rgb2), _pin2)  #   fixup below applies the fresh map
-                for _pl in pool[len(_xs2):]:
-                    _pl.setVisible(False)
         # 'Trend Extreme Lines' (sub-toggle 'ema_trendlvl'): the LAST FINISHED bear segment (red line -> next
         # green line) marks its LOWEST low with a solid GREEN hline; the last finished bull segment (green ->
         # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar
