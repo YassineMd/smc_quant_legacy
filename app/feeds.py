@@ -332,6 +332,30 @@ class MarketDataCore:
                 print(f"CLOCK-CANDLES: loaded {sum(len(v) for v in self._tc_store.values())} persisted candles.")
         except Exception as e:
             print(f"CLOCK-CANDLE LOAD ERROR: {e}")
+        try:                                                       # 1b) merge the Vision-backfill SIDECAR (ops/backfill_
+            import os as _os                                        #     footprints_vision.py heals deep gaps OFFLINE and
+            sp = os.path.join(config.DATA_DIR, "tc_backfill_healed.json.gz")   # writes here; merged at boot, then removed)
+            if os.path.exists(sp):
+                with gzip.open(sp, "rt", encoding="utf-8") as f:
+                    healed = json.load(f) or {}
+                nmerged = 0
+                for tf, cands in healed.items():
+                    if tf not in config.TF_SECONDS or not isinstance(cands, dict):
+                        continue
+                    store = self._tc_store.setdefault(tf, {})
+                    for k, w in cands.items():
+                        stk = int(k)
+                        cur = store.get(stk)
+                        if cur is None or not (cur.get("levels") or {}):   # only fill gaps, never clobber real data
+                            if cur:                                        # keep the stored official OHLC
+                                for fld in ("open", "high", "low", "close"):
+                                    if cur.get(fld) is not None:
+                                        w[fld] = cur[fld]
+                            store[stk] = w; nmerged += 1
+                _os.remove(sp)
+                print(f"CLOCK-FOOTPRINT SIDECAR: merged {nmerged} Vision-backfilled candles.")
+        except Exception as e:
+            print(f"CLOCK-FOOTPRINT SIDECAR ERROR: {e}")
         try:                                                       # 2) seed missing intervals from kline footprints so a
             from .time_candles import candles_from_footprint_nodes, to_bucket_wire   # first/empty run isn't blank
             for tf in config.TIMEFRAMES:
@@ -350,6 +374,11 @@ class MarketDataCore:
             threading.Thread(target=self._tc_rest_heal_loop, daemon=True).start()
         except Exception as e:
             print(f"CLOCK-CANDLE REST-HEAL ERROR: {e}")
+        try:                                                       # 4) FOOTPRINT backfill from aggTrades REST (background)
+            import threading
+            threading.Thread(target=self._tc_backfill_loop, daemon=True).start()
+        except Exception as e:
+            print(f"CLOCK-FOOTPRINT BACKFILL ERROR: {e}")
 
     def _tc_rest_heal_loop(self) -> None:
         """Boot heal + HOURLY re-heal. Boot covers restart scars; the periodic pass covers the one leak boot can't:
@@ -360,6 +389,44 @@ class MarketDataCore:
                 self._tc_rest_heal()
             except Exception as e:
                 print(f"CLOCK-CANDLE REST-HEAL ERROR: {e}")
+            time.sleep(3600.0)
+
+    def _tc_backfill_loop(self) -> None:
+        """FOOTPRINT backfill (app/aggtrade_backfill): rebuild missing clock-candle footprints from the Binance
+        aggTrades REST tape — the pre-recording-fix backlog (measured 2026-08-31: ~90% of stored candles were
+        kline-only) plus any future daemon-downtime gap. One budgeted pass per hour, newest 4h-block first;
+        candles heal only when their whole span was fetched; official kline OHLC preserved. Off the event loop;
+        the store mutates via per-key assignment (GIL-atomic, the kline-heal pattern) and the periodic save
+        persists healed candles automatically. Fail-safe: any error ends the pass, never the daemon."""
+        time.sleep(120.0)                                  # let boot + the kline heal settle first
+        while True:
+            try:
+                if getattr(config, "TC_BACKFILL_ENABLED", True):
+                    from . import aggtrade_backfill as _ab
+                    _pace = float(getattr(config, "TC_BACKFILL_PACE_S", 1.0))
+
+                    def _get(params):
+                        try:
+                            time.sleep(_pace)
+                            p = dict(params); p["symbol"] = config.SYMBOL
+                            r = requests.get(_ab.AGG_URL, params=p, timeout=10)
+                            if r.status_code in (418, 429):
+                                print("CLOCK-FOOTPRINT BACKFILL: rate-limited, backing off"); time.sleep(90.0)
+                                return None
+                            rows = r.json()
+                            return rows if isinstance(rows, list) else None
+                        except Exception:
+                            return None
+                    st = _ab.heal_pass({tf: self._tc_store.get(tf) or {} for tf in config.TIMEFRAMES},
+                                       tf_secs=dict(config.TF_SECONDS), http_get=_get,
+                                       budget=int(getattr(config, "TC_BACKFILL_REQ_PER_PASS", 600)),
+                                       min_start=time.time() - 2 * 86400 + 1800)   # REST horizon = 2 days (-4166)
+                    if st.get("healed_total") or st.get("requests"):
+                        print("CLOCK-FOOTPRINT BACKFILL: healed %s (+%d no-tape, %d vol-mismatch) in %d req / %d blocks; ~%d in-horizon gaps left, %d beyond the 2d REST horizon (Vision job)"
+                              % (st["healed"], st["no_tape"], st["vol_mismatch"], st["requests"], st["blocks"],
+                                 st["gaps_left"], st.get("unreachable", 0)))
+            except Exception as e:
+                print(f"CLOCK-FOOTPRINT BACKFILL ERROR: {e}")
             time.sleep(3600.0)
 
     def _tc_rest_heal(self) -> None:

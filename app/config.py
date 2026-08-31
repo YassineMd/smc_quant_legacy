@@ -194,6 +194,13 @@ TIME_STORE_CAP = {"1m": 4320, "5m": 2016, "15m": 1344, "30m": 1344, "1h": 1080, 
 #                 4h raised 540->1500 (250d) 2026-08-31: the VM store ALREADY held 834 4h candles (~139d);
 #                 a 540 cap would have trimmed ~49 days of recorded history on the first fold.
 TIME_SERVE_CAP = 2000           # newest clock candles shipped per get_time_candles serve (frame-size guard)
+# FOOTPRINT BACKFILL from aggTrades REST (2026-08-31, app/aggtrade_backfill): heal stored clock candles that
+# have OHLC but no footprint (the pre-recording-fix backlog + any future daemon-downtime gap). Newest-first,
+# hard request budget per hourly pass -> converges over days without hammering (weight 20/req, ~1 req/s pace
+# = ~1200 weight/min vs the 2400/min futures limit shared with klines/OI/depth).
+TC_BACKFILL_ENABLED = True
+TC_BACKFILL_REQ_PER_PASS = 600  # aggTrades requests per hourly pass (each <= 1000 trades)
+TC_BACKFILL_PACE_S = 1.0        # sleep between requests
 # 5m CLOCK Radar Runner filter: only fire breakouts whose absorption-R at the breakout bar is >= this. OOS-validated
 # on 5m time candles (study/radarrun_absorpR_band_oos.py + radarrun_15m_absorpR_prop.py): cuts maxDD 21%->6% and flips
 # the 5m prop verdict marginal->PASS (99/95/89% @R0.5/0.75/1.0), keeping ~1/3 of signals (4.7 trd/day). Applied ONLY to
