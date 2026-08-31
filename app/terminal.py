@@ -155,12 +155,14 @@ def _bigbar_symbol():
         pth = QtGui.QPainterPath()
         pth.addEllipse(-0.32, -0.55, 0.64, 0.64)
         pth.addRect(-0.45, 0.18, 0.9, 0.16)
-    br = pth.boundingRect()
+    pth.setFillRule(QtCore.Qt.WindingFill)            # FILLED badge (user 2026-08-31): glyph counters/holes
+    br = pth.boundingRect()                           # fill too instead of rendering as an outlined losange
     m = max(br.width(), br.height()) or 1.0
     tr = QtGui.QTransform()
     tr.scale(1.0 / m, 1.0 / m)
     tr.translate(-br.center().x(), -br.center().y())
     _BB_SYM = tr.map(pth)
+    _BB_SYM.setFillRule(QtCore.Qt.WindingFill)        # QTransform.map returns a NEW path -> re-apply
     return _BB_SYM
 
 
@@ -9915,8 +9917,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._rr_size_lbl is not None and not _size_shown:
             self._rr_size_lbl.setVisible(False)
 
-    # BIG BAR (m10_bigbar, TIME/clock candles only, all tf) — ꕻ on candles whose SIZE (high-low, wicks included)
-    # is STRICTLY above the P{BIGBAR_SIZE_PCTL} (default P90) of the sizes across the last four FINISHED
+    # BIG BAR (m10_bigbar, TIME/clock candles only, all tf) — ꕻ on candles whose BODY (|close-open|, wicks EXCLUDED)
+    # is STRICTLY above the P{BIGBAR_SIZE_PCTL} (default P80) of the bodies across the last four FINISHED
     # EMA-trend segments (the last 2 up + 2 down moves, cross->cross — the E/E/C reference window, rank-based so
     # one monster candle can't starve the marks). Thresholds are CAUSAL (a segment counts only from its closing flip's CONFIRMATION,
     # the Stack-Flip rules) so a mark never repaints. Green ꕻ below a bullish big candle / red ꕻ above a bearish
@@ -9965,8 +9967,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             else:                                                # flat close (rare) -> gray, above
                 y = hi + pad; col = (150, 158, 175)
             spots.append({"pos": (i, y), "symbol": _sym, "size": 18,
-                          "brush": pg.mkBrush(col[0], col[1], col[2], 235),
-                          "pen": pg.mkPen(col[0] // 2, col[1] // 2, col[2] // 2, 255, width=1.0)})
+                          "brush": pg.mkBrush(col[0], col[1], col[2], 255),   # solid fill (user: filled badge)
+                          "pen": pg.mkPen(col[0], col[1], col[2], 255, width=1.2)})   # same-colour pen -> reads as ONE solid mark
         self._bb_sph.setData(spots); self._bb_sph.setVisible(True)
         self._bb_drawn = True
 

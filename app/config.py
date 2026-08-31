@@ -202,11 +202,11 @@ TC_BACKFILL_ENABLED = True
 TC_BACKFILL_REQ_PER_PASS = 600  # aggTrades requests per hourly pass (each <= 1000 trades)
 TC_BACKFILL_PACE_S = 1.0        # sleep between requests
 
-# ꕻ Big Bar (m10_bigbar): a Time candle is BIG when its size (high-low) is STRICTLY above this percentile of
-# the candle sizes across the last 4 finished EMA-trend segments (rank-based -> outlier-immune; the first
-# top-third-of-range rule printed ~1% of candles because one monster stretched the range). P90 ~= 33-41
-# marks per 336-bar screen on 5m/15m/30m clock (measured 2026-08-31). Raise for fewer, lower for more.
-BIGBAR_SIZE_PCTL = 90.0
+# ꕻ Big Bar (m10_bigbar): a Time candle is BIG when its BODY (|close-open| — wicks deliberately excluded:
+# a big wick on a small body must NOT qualify) is STRICTLY above this percentile of the candle BODIES across
+# the last 4 finished EMA-trend segments (rank-based -> outlier-immune). P80 ~= 65-72 marks per 336-bar
+# screen on 5m/15m/30m clock (measured 2026-08-31). Raise for fewer, lower for more.
+BIGBAR_SIZE_PCTL = 80.0
 # 5m CLOCK Radar Runner filter: only fire breakouts whose absorption-R at the breakout bar is >= this. OOS-validated
 # on 5m time candles (study/radarrun_absorpR_band_oos.py + radarrun_15m_absorpR_prop.py): cuts maxDD 21%->6% and flips
 # the 5m prop verdict marginal->PASS (99/95/89% @R0.5/0.75/1.0), keeping ~1/3 of signals (4.7 trd/day). Applied ONLY to

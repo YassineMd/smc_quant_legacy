@@ -1,17 +1,18 @@
-"""BIG BAR (Time candles) — ꕻ on candles whose SIZE is in the top decile (P90, configurable) of the sizes
-seen across the last FOUR finished EMA-trend segments (user 2026-08-30; threshold re-based 2026-08-31).
+"""BIG BAR (Time candles) — ꕻ on candles whose BODY is in the top quintile (P80, configurable) of the bodies
+seen across the last FOUR finished EMA-trend segments (user 2026-08-30; body-only + P80 2026-08-31).
 
 The reference window is EXACTLY the one the Expensive/Equilibrium/Cheap bands use: the 2 preceding up + down
 moves and the pair before them — i.e. the last 2 finished BULL and last 2 finished BEAR segments of the
 EMA20/50 Stack-Flip walk (cross -> cross), with the same qualification rules the terminal's flip lines use
 (cross + regime >= 20 bars old + HL-delta validation on both windows + same-colour dedupe).
 
-BIG = candle size (high - low, wicks included) STRICTLY ABOVE the P`pctl` (default P90 = top ~10% by rank)
-of the sizes of every candle inside the 4 reference segments. Rank-based on purpose (2026-08-31): the first
-cut used "top third of the size RANGE [smin, smax]" — the literal E/E/C mechanism — but candle sizes are
-heavily right-skewed, so ONE monster candle in the reference window stretched the range and pushed the
-threshold to P96-99 of actual sizes: ~1% of candles printed (user: "only printing one"). A percentile is
-immune to that outlier; the comparison is STRICT so a degenerate all-equal-size window marks nothing.
+BIG = candle BODY (|close - open| — the dominant feature; WICKS ARE DELIBERATELY EXCLUDED, user 2026-08-31:
+"we might have a big candle with a big body and a bigger wick, it shouldn't be taken into consideration")
+STRICTLY ABOVE the P`pctl` (default P80 = top ~20% by rank) of the BODIES of every candle inside the 4
+reference segments. Rank-based on purpose: the first cut used "top third of the size RANGE" — the literal
+E/E/C mechanism — but candle sizes are heavily right-skewed, so ONE monster stretched the range and pushed
+the threshold to P96-99 of actual sizes (~1% printed). A percentile is immune to that outlier; the comparison
+is STRICT so a degenerate all-equal-body window marks nothing.
 
 CAUSAL BY CONSTRUCTION: a finished segment enters the reference set only at the bar its CLOSING flip is
 CONFIRMED (>= 19 bars after the cross), so at any bar the threshold uses only segments that were already
@@ -19,7 +20,7 @@ known — a mark never repaints when a later trend completes. Candles printed be
 never marked. The reference candles themselves are never self-judged (their segments close before the
 threshold exists).
 
-detect(candles, skip_last=True, pctl=90.0) -> [{i, side(+1 bull / -1 bear / 0 flat), size, thr}]
+detect(candles, skip_last=True, pctl=80.0) -> [{i, side(+1 bull / -1 bear / 0 flat), size(body), thr}]
 Pure OHLC in / marks out — no Qt, reusable by studies.
 """
 from __future__ import annotations
@@ -40,7 +41,7 @@ def _pctl(sorted_vals: list, p: float) -> float:
     return sorted_vals[k]
 
 
-def detect(candles: list, skip_last: bool = True, pctl: float = 90.0) -> "list[dict]":
+def detect(candles: list, skip_last: bool = True, pctl: float = 80.0) -> "list[dict]":
     n = len(candles)
     if n < 120:
         return []
@@ -119,12 +120,12 @@ def detect(candles: list, skip_last: bool = True, pctl: float = 90.0) -> "list[d
             idxs = set()
             for (b0, b1) in bulls[-2:] + bears[-2:]:
                 idxs.update(range(max(0, b0), min(n, b1 + 1)))
-            szs = sorted(H[k] - L[k] for k in idxs if H[k] > 0 and L[k] > 0 and H[k] - L[k] >= 0)
+            szs = sorted(abs(C[k] - O[k]) for k in idxs if C[k] > 0 and O[k] > 0)   # BODY only, wicks excluded
             thr = _pctl(szs, pctl) if len(szs) >= 20 else None    # rank-based: outlier-immune
             dirty = False
-        if thr is None or H[j] <= 0 or L[j] <= 0:
+        if thr is None or C[j] <= 0 or O[j] <= 0:
             continue
-        sz = H[j] - L[j]
+        sz = abs(C[j] - O[j])                            # BODY only — a big wick alone never qualifies
         if sz > 0 and sz > thr:                          # STRICT: an all-equal window marks nothing
             side = 1 if C[j] > O[j] else (-1 if C[j] < O[j] else 0)
             out.append(dict(i=j, side=side, size=sz, thr=thr))
