@@ -285,18 +285,23 @@ class MarketDataCore:
             store = self._tc_store.setdefault(tf, {})
             for b in ce.closed_buckets:                            # fold the engine's newly-closed candles into the store
                 stk = int(b.start_time) if b.start_time is not None else None
-                if stk is not None and stk not in store:
-                    store[stk] = b.full_snapshot()
-            for c in store.values():                               # RE-APPLY the kline override on EVERY serve (2026-08-24):
-                _ovr(c)                                            # the push path stores a candle ~150ms after close, BEFORE
-            #                                                        Binance's final kline exists; build-once froze that stale
-            #                                                        close forever (visible open != prev-close gaps). Mutating
-            #                                                        the stored dicts heals push-path + persisted entries too.
-            cap = int(getattr(config, "TIME_ENGINE_CAP", 800))
+                if stk is None:
+                    continue
+                _cur9 = store.get(stk)
+                if _cur9 is None or (not _cur9.get("levels") and getattr(b, "levels", None)):
+                    store[stk] = b.full_snapshot()                 # new close — or UPGRADE a kline-only seed (no levels)
+            cap = self._tc_store_cap(tf)                           # RECORDING depth (TIME_STORE_CAP), not the RAM ring
             if len(store) > cap:                                   # keep the most-recent `cap` intervals
                 for k in sorted(store)[:len(store) - cap]:
                     del store[k]
-            out = [store[k] for k in sorted(store)]
+            keys = sorted(store)[-int(getattr(config, "TIME_SERVE_CAP", 2000)):]   # ship the NEWEST window only
+            for k in keys:                                         # RE-APPLY the kline override on EVERY serve (2026-08-24):
+                _ovr(store[k])                                     # the push path stores a candle ~150ms after close, BEFORE
+            #                                                        Binance's final kline exists; build-once froze that stale
+            #                                                        close forever (visible open != prev-close gaps). Mutating
+            #                                                        the stored dicts heals push-path + persisted entries too
+            #                                                        (scoped to the served window — the store can be 10x now).
+            out = [store[k] for k in keys]
             ab = ce.active_bucket
             if ab.start_time is not None and ab.curr_vol > 0:      # forming candle: keep the LIVE tick OHLC (NOT kline-
                 out.append(ab.live_snapshot(time.time(), ce.avg_velocity))   # overridden -> close is fresher than the ~1-2s kline)
@@ -466,6 +471,67 @@ class MarketDataCore:
                 print(f"CLOCK-CANDLE SAVE took {el:.1f}s ({sum(len(v) for v in data.values())} candles)")
         except Exception as e:
             print(f"CLOCK-CANDLE SAVE ERROR: {e}")
+
+    def _tc_store_cap(self, tf: str) -> int:
+        caps = getattr(config, "TIME_STORE_CAP", None) or {}
+        try:
+            return int(caps.get(tf, getattr(config, "TIME_ENGINE_CAP", 800)))
+        except (TypeError, ValueError, AttributeError):
+            return int(getattr(config, "TIME_ENGINE_CAP", 800))
+
+    def _tc_fold_all(self) -> None:
+        """RECORD every closed clock candle into the persistent store for ALL tfs, subscriber or not.
+
+        THE BUG THIS FIXES (user 2026-08-30, 'does not record the footprint when the terminal is off'): closed
+        clock candles were folded into the store ONLY on client-driven paths — the get_time_candles serve and
+        the push loop, which skips every unsubscribed tf. With no terminal connected nothing folded, the
+        800-deep engine ring overflowed, and any terminal-off stretch longer than the ring (1m ~13h, 5m ~2.8d)
+        lost its FOOTPRINTS forever — the REST heal restores OHLC only. This fold runs on tc_persist_loop
+        regardless of clients; idempotent per candle (keyed by start_time). A stored kline-only seed (empty
+        levels) is UPGRADED when the engine holds the real footprint candle for that interval."""
+        self._tc_load()
+        for tf, ce in self.clock_engines.items():
+            try:
+                store = self._tc_store.setdefault(tf, {})
+                for b in list(ce.closed_buckets):
+                    stk = int(b.start_time) if b.start_time is not None else None
+                    if stk is None:
+                        continue
+                    cur = store.get(stk)
+                    if cur is None or (not cur.get("levels") and getattr(b, "levels", None)):
+                        store[stk] = b.full_snapshot()
+                cap = self._tc_store_cap(tf)
+                if len(store) > cap:
+                    for k in sorted(store)[:len(store) - cap]:
+                        del store[k]
+            except Exception:
+                continue
+
+    async def tc_persist_loop(self) -> None:
+        """Fold closed clock candles into the store every minute and SAVE it on the 600s throttle — the periodic
+        save the _tc_save docstring always assumed but which was never wired (it only ran at clean shutdown, so a
+        crash/oom-kill lost the whole store since boot). The gzip dump runs OFF the event loop (single-flight) —
+        _tc_save snapshots the store atomically under the GIL, so this is documented-safe off-loop."""
+        import threading
+        while True:
+            await asyncio.sleep(60.0)
+            try:
+                self._tc_fold_all()
+            except Exception as e:
+                print(f"CLOCK-CANDLE FOLD ERROR: {e}")
+            try:
+                if (time.time() - getattr(self, "_tc_last_save", 0.0) >= 600.0
+                        and not getattr(self, "_tc_save_busy", False)):
+                    self._tc_save_busy = True
+
+                    def _run():
+                        try:
+                            self._tc_save()
+                        finally:
+                            self._tc_save_busy = False
+                    threading.Thread(target=_run, daemon=True).start()
+            except Exception as e:
+                print(f"CLOCK-CANDLE SAVE-KICK ERROR: {e}")
 
     def catchup_delta(self, tf: str, since):
         """How many buckets to ship as a DELTA to a client whose cached last-bucket DB-id is ``since``.
@@ -1201,8 +1267,8 @@ class MarketDataCore:
             return None
         store = self._tc_store.setdefault(tf, {})
         w = store.get(stk)
-        if w is None:
-            w = b.full_snapshot()
+        if w is None or (not w.get("levels") and getattr(b, "levels", None)):
+            w = b.full_snapshot()                                  # new close — or UPGRADE a kline-only seed (no levels)
             store[stk] = w
         node = kln.get(stk)
         if node is not None:
@@ -1307,6 +1373,7 @@ class MarketDataCore:
             asyncio.create_task(self.pulse_broadcast_loop()),
             asyncio.create_task(self.recompute_loop()),
             asyncio.create_task(self.live_edge_loop()),
+            asyncio.create_task(self.tc_persist_loop()),   # RECORD clock candles with no client attached (2026-08-30)
             asyncio.create_task(self.warm_ob_pool()),   # Step A: spawn the OB worker at boot (off critical path)
         ]
         if config.DEPTH_CAPTURE_ENABLED:   # Phase 1: full-book anchor cadence (the DepthStore sync loop is
