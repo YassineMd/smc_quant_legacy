@@ -9916,9 +9916,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._rr_size_lbl.setVisible(False)
 
     # BIG BAR (m10_bigbar, TIME/clock candles only, all tf) — ꕻ on candles whose SIZE (high-low, wicks included)
-    # lands in the TOP THIRD of the sizes across the last four FINISHED EMA-trend segments (the last 2 up + 2 down
-    # moves, cross->cross — the exact window the Expensive/Equilibrium/Cheap bands use, applied to size via the
-    # same thirds mechanism). Thresholds are CAUSAL (a segment counts only from its closing flip's CONFIRMATION,
+    # is STRICTLY above the P{BIGBAR_SIZE_PCTL} (default P90) of the sizes across the last four FINISHED
+    # EMA-trend segments (the last 2 up + 2 down moves, cross->cross — the E/E/C reference window, rank-based so
+    # one monster candle can't starve the marks). Thresholds are CAUSAL (a segment counts only from its closing flip's CONFIRMATION,
     # the Stack-Flip rules) so a mark never repaints. Green ꕻ below a bullish big candle / red ꕻ above a bearish
     # one / gray for a flat close. (app/bigbar_detect)
     def _clear_bigbar(self) -> None:
@@ -9942,7 +9942,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._bb_sig = _sig
         try:
             from app import bigbar_detect
-            marks = bigbar_detect.detect(list(_warm) + list(filtered), skip_last=_forming)
+            marks = bigbar_detect.detect(list(_warm) + list(filtered), skip_last=_forming,
+                                         pctl=float(getattr(config, "BIGBAR_SIZE_PCTL", 90.0)))
         except Exception:
             self._clear_bigbar(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)

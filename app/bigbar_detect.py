@@ -1,15 +1,17 @@
-"""BIG BAR (Time candles) — ꕻ on candles whose SIZE is in the TOP THIRD of the sizes seen across the last
-FOUR finished EMA-trend segments (user 2026-08-30).
+"""BIG BAR (Time candles) — ꕻ on candles whose SIZE is in the top decile (P90, configurable) of the sizes
+seen across the last FOUR finished EMA-trend segments (user 2026-08-30; threshold re-based 2026-08-31).
 
 The reference window is EXACTLY the one the Expensive/Equilibrium/Cheap bands use: the 2 preceding up + down
 moves and the pair before them — i.e. the last 2 finished BULL and last 2 finished BEAR segments of the
 EMA20/50 Stack-Flip walk (cross -> cross), with the same qualification rules the terminal's flip lines use
 (cross + regime >= 20 bars old + HL-delta validation on both windows + same-colour dedupe).
 
-The E/E/C bands split the PRICE band between the trend extremes into equal thirds; this applies the same
-mechanism to candle SIZE (high - low, wicks included, matching the extremes the bands themselves are built
-from): over every candle inside the 4 reference segments, the size band [smin, smax] is split into thirds and
-a later candle is BIG when its size lands in the TOP third (>= smin + 2/3*(smax - smin)).
+BIG = candle size (high - low, wicks included) STRICTLY ABOVE the P`pctl` (default P90 = top ~10% by rank)
+of the sizes of every candle inside the 4 reference segments. Rank-based on purpose (2026-08-31): the first
+cut used "top third of the size RANGE [smin, smax]" — the literal E/E/C mechanism — but candle sizes are
+heavily right-skewed, so ONE monster candle in the reference window stretched the range and pushed the
+threshold to P96-99 of actual sizes: ~1% of candles printed (user: "only printing one"). A percentile is
+immune to that outlier; the comparison is STRICT so a degenerate all-equal-size window marks nothing.
 
 CAUSAL BY CONSTRUCTION: a finished segment enters the reference set only at the bar its CLOSING flip is
 CONFIRMED (>= 19 bars after the cross), so at any bar the threshold uses only segments that were already
@@ -17,7 +19,7 @@ known — a mark never repaints when a later trend completes. Candles printed be
 never marked. The reference candles themselves are never self-judged (their segments close before the
 threshold exists).
 
-detect(candles, skip_last=True) -> [{i, side(+1 bull / -1 bear / 0 flat), size, thr}]
+detect(candles, skip_last=True, pctl=90.0) -> [{i, side(+1 bull / -1 bear / 0 flat), size, thr}]
 Pure OHLC in / marks out — no Qt, reusable by studies.
 """
 from __future__ import annotations
@@ -30,7 +32,15 @@ def _f(x) -> float:
         return 0.0
 
 
-def detect(candles: list, skip_last: bool = True) -> "list[dict]":
+def _pctl(sorted_vals: list, p: float) -> float:
+    """Nearest-rank percentile of an ASCENDING list (no interpolation — exact, test-mirrored)."""
+    import math
+    n = len(sorted_vals)
+    k = max(0, min(n - 1, int(math.ceil(p / 100.0 * n)) - 1))
+    return sorted_vals[k]
+
+
+def detect(candles: list, skip_last: bool = True, pctl: float = 90.0) -> "list[dict]":
     n = len(candles)
     if n < 120:
         return []
@@ -97,7 +107,7 @@ def detect(candles: list, skip_last: bool = True) -> "list[dict]":
                 flips.append((reg0, "r")); last_col = "r"
             pend = False
 
-    # causal judging pass: consume segment-known events in bar order; threshold = TOP THIRD of the size band
+    # causal judging pass: consume segment-known events in bar order; threshold = P`pctl` of the candle sizes
     # over the last 2 bull + 2 bear known segments (recomputed only when the reference set changes).
     out = []; ei = 0; bulls = []; bears = []; thr = None; dirty = False
     hi_n = (n - 1) if skip_last else n
@@ -109,24 +119,13 @@ def detect(candles: list, skip_last: bool = True) -> "list[dict]":
             idxs = set()
             for (b0, b1) in bulls[-2:] + bears[-2:]:
                 idxs.update(range(max(0, b0), min(n, b1 + 1)))
-            smin = smax = None
-            for k in idxs:
-                if H[k] <= 0 or L[k] <= 0:
-                    continue
-                sz = H[k] - L[k]
-                if sz < 0:
-                    continue
-                if smin is None or sz < smin:
-                    smin = sz
-                if smax is None or sz > smax:
-                    smax = sz
-            thr = (smin + (2.0 / 3.0) * (smax - smin)) if (smin is not None and smax is not None
-                                                           and smax > smin) else None
+            szs = sorted(H[k] - L[k] for k in idxs if H[k] > 0 and L[k] > 0 and H[k] - L[k] >= 0)
+            thr = _pctl(szs, pctl) if len(szs) >= 20 else None    # rank-based: outlier-immune
             dirty = False
         if thr is None or H[j] <= 0 or L[j] <= 0:
             continue
         sz = H[j] - L[j]
-        if sz > 0 and sz >= thr:
+        if sz > 0 and sz > thr:                          # STRICT: an all-equal window marks nothing
             side = 1 if C[j] > O[j] else (-1 if C[j] < O[j] else 0)
             out.append(dict(i=j, side=side, size=sz, thr=thr))
     return out
