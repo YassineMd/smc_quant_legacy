@@ -190,7 +190,9 @@ TIME_ENGINE_CAP = 800           # per-tf CLOCK-candle buckets kept in RAM by the
 # CLOCK-candle RECORDING depth (2026-08-30): the persistent footprint store per tf — decoupled from the small
 # engine RAM ring above, because the store is what survives when NO terminal is connected. 3d/7d/14d/28d/45d/90d.
 # Sizing: avg wire JSON 1m~1.5KB .. 1h~6.4KB (measured on the clock archive) -> full store ~40MB gz / ~150MB RAM.
-TIME_STORE_CAP = {"1m": 4320, "5m": 2016, "15m": 1344, "30m": 1344, "1h": 1080, "4h": 540}
+TIME_STORE_CAP = {"1m": 4320, "5m": 2016, "15m": 1344, "30m": 1344, "1h": 1080, "4h": 1500}
+#                 4h raised 540->1500 (250d) 2026-08-31: the VM store ALREADY held 834 4h candles (~139d);
+#                 a 540 cap would have trimmed ~49 days of recorded history on the first fold.
 TIME_SERVE_CAP = 2000           # newest clock candles shipped per get_time_candles serve (frame-size guard)
 # 5m CLOCK Radar Runner filter: only fire breakouts whose absorption-R at the breakout bar is >= this. OOS-validated
 # on 5m time candles (study/radarrun_absorpR_band_oos.py + radarrun_15m_absorpR_prop.py): cuts maxDD 21%->6% and flips
