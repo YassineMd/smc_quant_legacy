@@ -17818,6 +17818,11 @@ class SSHTunnelManager:
 
 
 def main() -> None:
+    # Windows ships legacy RASTER fonts (8514oem/Fixedsys/System/Terminal) that DirectWrite
+    # cannot wrap; Qt probes them during stock-font/fallback enumeration and logs a scary
+    # "CreateFontFaceFromHDC() failed" warning, then falls back to GDI. Purely cosmetic —
+    # no app font (Consolas / Segoe UI Symbol) is affected — so keep the console clean.
+    QtCore.QLoggingCategory.setFilterRules("qt.qpa.fonts.warning=false")
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
 
     # Bring the SSH tunnel up BEFORE the first window so the worker thread connects
