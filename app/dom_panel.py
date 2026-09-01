@@ -183,6 +183,11 @@ class _DomCanvas(QtWidgets.QWidget):
             self._area_delete_at(ev.position().y())
             ev.accept()
             return
+        if ev.button() == QtCore.Qt.LeftButton:    # plain double-click = re-center on the current price
+            self._drag = None                      # drop the pan the double-click's press armed (its old
+            self._p.recenter()                     # anchor would undo the recenter on a stray move)
+            ev.accept()
+            return
         super().mouseDoubleClickEvent(ev)
 
     def leaveEvent(self, ev) -> None:              # cursor off the ladder -> highlight fully removed
