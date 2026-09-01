@@ -135,37 +135,6 @@ CVD_RE_EFFORT_FLOOR = 1.0      # never credit effort as weaker than this x norma
                                # LOWER these two -> more electric flags (RATIO is the sensitivity knob).
 
 
-_BB_SYM = None
-
-
-def _bigbar_symbol():
-    """The Big-Bar marker ꕻ as a reusable ScatterPlotItem symbol: the glyph rendered ONCE to a unit-box
-    QPainterPath (Ebrima ships with Windows and covers Vai; fall through to a dome+base approximation if no
-    installed face has the glyph). pxMode scatter scales it by the spot size."""
-    global _BB_SYM
-    if _BB_SYM is not None:
-        return _BB_SYM
-    pth = None
-    for fam in ("Ebrima", "Segoe UI Symbol", "Segoe UI", "Arial"):
-        f = QtGui.QFont(fam); f.setPointSizeF(20.0)
-        p2 = QtGui.QPainterPath(); p2.addText(0.0, 0.0, f, "ꕻ")
-        if p2.elementCount() > 0:
-            pth = p2; break
-    if pth is None:                                   # no face has the glyph -> a dome-on-base blob stand-in
-        pth = QtGui.QPainterPath()
-        pth.addEllipse(-0.32, -0.55, 0.64, 0.64)
-        pth.addRect(-0.45, 0.18, 0.9, 0.16)
-    pth.setFillRule(QtCore.Qt.WindingFill)            # FILLED badge (user 2026-08-31): glyph counters/holes
-    br = pth.boundingRect()                           # fill too instead of rendering as an outlined losange
-    m = max(br.width(), br.height()) or 1.0
-    tr = QtGui.QTransform()
-    tr.scale(1.0 / m, 1.0 / m)
-    tr.translate(-br.center().x(), -br.center().y())
-    _BB_SYM = tr.map(pth)
-    _BB_SYM.setFillRule(QtCore.Qt.WindingFill)        # QTransform.map returns a NEW path -> re-apply
-    return _BB_SYM
-
-
 class _ClickHandle(QtWidgets.QSplitterHandle):
     """Splitter divider that also reports a plain CLICK. Dragging is untouched: the click only fires when the
     mouse never actually moved between press and release, so the two gestures can never collide."""
@@ -1487,9 +1456,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._rr_audio_seeded = False                          # entry-sound seed: never blast the backlog on first draw / tf-switch
         self._rr_htf_sph = {}                                  # HTF Radar Runner SIGNALS (m10_radarrun_1h/_4h): per-htf ScatterPlotItem
         self._rr_htf_sig = {}; self._rr_htf_marks = {}         # cached detect() per htf, re-run only on an htf-data change
-        # BIG BAR (m10_bigbar, TIME candles only) — ꕻ on candles whose size is in the TOP THIRD of the sizes
-        # across the last four FINISHED EMA-trend segments (the E/E/C window applied to SIZE). (app/bigbar_detect)
-        self._bb_sph = None; self._bb_sig = None; self._bb_drawn = False
         # Radar DIAMOND (wick-breakout) — MERGED into the Radar Runner (2026-08-29): detect_wick fires the breakouts
         # detect() skips (body already BEYOND the radar, only the wick retests it). Now persisted / filtered / drawn as a
         # cyan ♦ inside _draw_radarrun's own fired set; no separate toggle, no separate scatter.
@@ -2530,10 +2496,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._rr_sig = None; self._sel_sig = None    # Radar Runner MASTER toggled -> re-detect + redraw
             if not on:                                   # off -> tear badges + forming preview + HTF sub-overlays down NOW
                 self._clear_radarrun(); self._clear_radarrun_forming(); self._clear_htf_radarrun()
-        elif key == "m10_bigbar":
-            self._bb_sig = None                          # Big Bar toggled -> re-detect + redraw next frame
-            if not on:
-                self._clear_bigbar()                     # off -> tear the ꕻ marks down now
         elif key in ("m10_radarrun_1h", "m10_radarrun_4h", "m10_radarrun_30m"):
             _h = key.rsplit("_", 1)[1]                   # "1h" / "4h" / "30m"
             self._rr_htf_sig[_h] = None                  # HTF Radar Runner signals toggled -> re-detect + redraw next frame
@@ -9917,113 +9879,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._rr_size_lbl is not None and not _size_shown:
             self._rr_size_lbl.setVisible(False)
 
-    # BIG BAR (m10_bigbar, TIME/clock candles only, all tf) — ꕻ on candles whose BODY' (bull: close-low / bear: high-close — the origin wick IS body)
-    # is STRICTLY above the P{BIGBAR_SIZE_PCTL} (default P80) of the body' across the last four FINISHED
-    # EMA-trend segments (the last 2 up + 2 down moves, cross->cross — the E/E/C reference window, rank-based so
-    # one monster candle can't starve the marks). Thresholds are CAUSAL (a segment counts only from its closing flip's CONFIRMATION,
-    # the Stack-Flip rules) so a mark never repaints. Green ꕻ below a bullish big candle / red ꕻ above a bearish
-    # one / gray for a flat close. (app/bigbar_detect)
-    def _clear_bigbar(self) -> None:
-        if self._bb_sph is not None:
-            self._bb_sph.setVisible(False)
-        self._bb_sig = None; self._bb_drawn = False
-
-    def _draw_bigbar(self, filtered) -> None:
-        if (not self.menu.layer_state("m10_bigbar") or self.scanner_mode != "bucket_canvas"
-                or self._chart_source != "time" or self._hide_candles):    # TIME candles only; Ctrl+H hides strategies
-            self._clear_bigbar(); return
-        n = len(filtered)
-        _forming = bool(getattr(self, "_mmx_last_forming", True))
-        warm = getattr(self, "_rr_warm", None) or []
-        # DEAD-ZONE FIX (user 2026-08-31, "the previous candles don't fire"): the detector needs ~500-600 bars
-        # of history before its first threshold exists (4 confirmed trends). If the pre-window history is
-        # shorter than that, the warm-up eats the LEFT of the screen. Pull deeper candles from the clock
-        # replay/archive (the EMA suite's own helper, cached per (tf, source, first_t, want)) so the analysis
-        # reaches ~2500 bars BEFORE the first visible candle whenever that history exists on disk.
-        _deep = []
-        if len(warm) < 2500:
-            try:
-                _fb0 = (warm[0] if warm else (filtered[0] if filtered else None))
-                _ft0 = float(_fb0.get("start_time", 0.0) or 0.0) if _fb0 else 0.0
-                if _ft0:
-                    _want = 2500 - len(warm)
-                    _want = ((_want + 499) // 500) * 500   # round UP to 500s: _ema_deep_hist caches per
-                    _deep = self._ema_deep_hist(_ft0, _want) or []   # (tf,src,t,want) -> stable key, no per-close re-scan
-            except Exception:
-                _deep = []
-        _warm = (list(_deep) + list(warm))[-6000:]               # trailing history is plenty for 4 trend segments
-        _off = len(_warm)
-        _bub = self.menu.layer_state("m10_bigbar_bub")           # sub-toggle: BUBBLE filter (same rule as the RR's)
-        _ce = filtered[-2] if (_forming and n >= 2) else (filtered[-1] if n else None)
-        _cet = float(_ce.get("end_time", 0.0) or 0.0) if _ce else 0.0
-        _sig = (n, _off, _forming, _bub, self._tf, _cet)
-        if _sig == self._bb_sig and self._bb_drawn:
-            return                                               # closed-bar detect -> re-run only once per bar-close
-        self._bb_sig = _sig
-        try:
-            from app import bigbar_detect
-            _bset = list(_warm) + list(filtered)
-            marks = bigbar_detect.detect(_bset, skip_last=_forming,
-                                         pctl=float(getattr(config, "BIGBAR_SIZE_PCTL", 80.0)),
-                                         wick_max=float(getattr(config, "BIGBAR_WICK_MAX", 0.30)))
-            if _bub and marks:                                    # 'Bubble filter' — the RR rule on the BIG candle:
-                from app import crazy_wall_detect as _cw          # clean close-side wick of bubbles (any size) + at
-                _bthr = _cw.bubble_thresholds(_bset)              # least one big/medium bubble on the close's side.
-                _kept = []                                        # Can't tier / no footprint -> KEEP (never hidden).
-                for _e in marks:
-                    _mi = int(_e["i"]); _th = _bthr[_mi] if 0 <= _mi < len(_bthr) else None
-                    if _th is None:
-                        _kept.append(_e); continue
-                    _b9 = _bset[_mi]
-                    _o9 = float(_b9.get("open", 0.0) or 0.0)
-                    _c9 = float(_b9.get("close", _b9.get("close_price", 0.0)) or 0.0)
-                    if _o9 <= 0 or _c9 <= 0:
-                        _kept.append(_e); continue
-                    _bt9 = max(_o9, _c9); _bb9 = min(_o9, _c9)
-                    _bubs = _cw._bubbles(_b9)
-                    if not _bubs:
-                        continue                                  # no bubble at all -> no big/medium one
-                    _okb = None; _big9 = False
-                    for _pr, _tot, _bu, _se in _bubs:
-                        if _e["side"] > 0:                        # BULLISH: upper wick clean, big/med <= close
-                            if _pr > _bt9:
-                                _okb = False; break
-                            if _tot >= _th[0] and _pr <= _c9:
-                                _big9 = True
-                        else:                                     # BEARISH: lower wick clean, big/med >= close
-                            if _pr < _bb9:
-                                _okb = False; break
-                            if _tot >= _th[0] and _pr >= _c9:
-                                _big9 = True
-                    if _okb is None and _big9:
-                        _kept.append(_e)
-                marks = _kept
-        except Exception:
-            self._clear_bigbar(); return
-        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
-        if self._bb_sph is None:
-            self._bb_sph = pg.ScatterPlotItem(pxMode=True, size=18)
-            self._bb_sph.setZValue(33); self.plot.addItem(self._bb_sph, ignoreBounds=True)
-        _sym = _bigbar_symbol()
-        spots = []
-        for e in marks:
-            i = int(e["i"]) - _off
-            if not (0 <= i < n):
-                continue
-            side = int(e["side"])
-            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            if side > 0:                                         # bullish big candle -> GREEN ꕻ below it
-                y = lo - pad; col = (40, 230, 120)
-            elif side < 0:                                       # bearish -> RED ꕻ above it
-                y = hi + pad; col = (240, 70, 90)
-            else:                                                # flat close (rare) -> gray, above
-                y = hi + pad; col = (150, 158, 175)
-            spots.append({"pos": (i, y), "symbol": _sym, "size": 18,
-                          "brush": pg.mkBrush(col[0], col[1], col[2], 255),   # solid fill (user: filled badge)
-                          "pen": pg.mkPen(col[0], col[1], col[2], 255, width=1.2)})   # same-colour pen -> reads as ONE solid mark
-        self._bb_sph.setData(spots); self._bb_sph.setVisible(True)
-        self._bb_drawn = True
-
     # WALL SURGE (m10_wallsurge, 1m/5m CLOCK only) — pane-STRONG |delta| (Volume pane 'Pct' definition: trailing-50
     # rank >= P80) AND Eff/Res retention >= 80% (the candle KEPT its delta-direction excursion) on a candle inside a
     # SAME-SIDE 30m wall/radar area: strong held BUYING on a 30m support wall -> green ▲ below the candle, strong
@@ -12354,7 +12209,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     or self.menu.layer_state("m10_easy1h") or self.menu.layer_state("m10_crazywall")
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")
                     or self.menu.layer_state("m10_wallstrat") or self.menu.layer_state("m10_radarrun")
-                    or self.menu.layer_state("m10_kcovershoot") or self.menu.layer_state("m10_bigbar")
+                    or self.menu.layer_state("m10_kcovershoot")
                     or self.menu.layer_state("m10_wallsurge") or self.menu.layer_state("m10_longwick")
                     or self.menu.layer_state("m10_longwick_combo") or self.menu.layer_state("m10_longwick_reclaim")):
                 _pf = _pf0                          # already built above; the top gate decided this frame needs a redraw
@@ -12382,10 +12237,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_radarrun_forming(_pf or [])  # forming-bar PROVISIONAL preview — self-gated, fail-safe
                 except Exception:
                     self._clear_radarrun_forming()
-                try:
-                    self._draw_bigbar(_pf or [])    # Big Bar ꕻ (Time candles) — self-gated, fail-safe
-                except Exception:
-                    self._clear_bigbar()
                 try:
                     self._draw_wallsurge(_pf or [])  # Wall Surge (▲▼ strong Δ @ 30m wall, 1m clock) — self-gated, fail-safe
                 except Exception:
@@ -12522,10 +12373,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_radarrun_forming(filtered)  # forming-bar PROVISIONAL preview — self-gated, fail-safe
             except Exception:
                 self._clear_radarrun_forming()
-            try:
-                self._draw_bigbar(filtered)     # Big Bar ꕻ (Time candles) — self-gated, fail-safe
-            except Exception:
-                self._clear_bigbar()
             try:
                 self._draw_wallsurge(filtered)  # Wall Surge (▲▼ strong Δ+kept @ 30m wall, 1m/5m clock) — self-gated
             except Exception:

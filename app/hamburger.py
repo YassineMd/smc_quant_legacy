@@ -146,7 +146,6 @@ _M10_STRATEGIES = [
     ("m10_engulf5m", "5m Absorption Wall", False, True),  # 5m: absorption/engulf rejection off a wall's radar (bounce); engulf green/red/gold + absorb2 blue/orange
     ("m10_easy1h", "1h Easy 0.5% (L / S triangles)", False, True),  # 1h: absorption+vw+swing scale-out; neon green/purple; fwd candidate
     ("m10_radarrun", "★ Radar Runner (L / S triangles · 1m·5m·15m·1h)", False, True),  # resisted-wall radar BREAKOUT + tiered TP1/2/3; the one recon-validated edge (net+ both yrs, causal-checked). ⚠ 1m sub-fee/eyeball-only
-    ("m10_bigbar", "ꕻ Big Bar (Time candles · green L / red S)", False, True),  # candle BODY' (bull close-low / bear high-close) > P80 (config.BIGBAR_SIZE_PCTL) of the last 4 finished EMA-trend segments' body', close-side wick <= 30% of body' (BIGBAR_WICK_MAX); causal at flip confirmation; clock/time source only, all tf
     ("m10_wallsurge", "Wall Surge (▲▼ · surge + absorb @ 30m·1h wall · 1m·5m clock)", False, True),
     ("m10_longwick", "Long Wick (♦ · wick rejection @ wall · all tf)", False, True),
     ("m10_longwick_combo", "LW · Failed Push (gold ♦ · 2-bar + break · no wall · all tf)", False, True),  # gold ♦ ABOVE a BEARISH bar + long-UPPER-wick BEARISH bar (v2 wick geometry) CLOSING BELOW the prev bar's low — buyers pushed, completely failed, bar still broke down; mirrored bullish pair closing ABOVE the prev high -> gold ♦ BELOW. NOT bound to walls. Descriptive/eyeball (both variants honest-tested: no mechanical edge)
@@ -578,8 +577,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_radarrun_hld_subtoggle(sec)  # + 'Filter EMA HL delta' (long iff delta>0 / short iff delta<0)
                 self._build_radarrun_bubble_subtoggle(sec)  # + 'Bubble filter' (clean wick + a big/medium bubble the right side)
                 self._build_radarrun_htf_subtoggles(sec)  # + 1h / 4h signals on lower tfs (colour-matched to the htf walls)
-            if key == "m10_bigbar":
-                self._build_bigbar_bubble_subtoggle(sec)  # + 'Bubble filter' (clean wick + a big/medium bubble the right side)
             if key == "m10_stats":
                 self._build_stats_substats(sec)          # per-stat on/off for the Mode-10 stats box
         return sec
@@ -637,20 +634,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
         cb.toggled.connect(lambda on, k="m10_radarrun_bub": self.layerToggled.emit(k, on))
         self.layer_checks["m10_radarrun_bub"] = cb
-        section.addWidget(cb)
-
-    def _build_bigbar_bubble_subtoggle(self, section) -> None:
-        """Big Bar sub-toggle: the SAME bubble filter as the Radar Runner's (m10_radarrun_bub). A footprint
-        'bubble' = one of the big candle's top-3 volume-by-price levels; big/MEDIUM = its volume is at least
-        the candle's BIG tier (>= median + 0.5 robust-sigma over the last 30 candles' top bubbles). A BULLISH
-        big candle keeps its ꕻ only if the candle has NO bubble (any size) in its UPPER wick AND at least one
-        big/medium bubble at or below the close; BEARISH mirrors (clean LOWER wick, big/medium at/above the
-        close). No footprint / too little history to tier -> KEPT. m10_bigbar_bub, default OFF."""
-        cb = QtWidgets.QCheckBox("· Bubble filter (clean wick + big/med)")
-        cb.setChecked(False)
-        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
-        cb.toggled.connect(lambda on, k="m10_bigbar_bub": self.layerToggled.emit(k, on))
-        self.layer_checks["m10_bigbar_bub"] = cb
         section.addWidget(cb)
 
     def _build_radarrun_htf_subtoggles(self, section) -> None:
