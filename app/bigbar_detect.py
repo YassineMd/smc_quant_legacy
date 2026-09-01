@@ -9,7 +9,8 @@ EMA20/50 Stack-Flip walk (cross -> cross), with the same qualification rules the
 BIG = candle BODY (|close - open| — the dominant feature; WICKS ARE DELIBERATELY EXCLUDED, user 2026-08-31:
 "we might have a big candle with a big body and a bigger wick, it shouldn't be taken into consideration")
 STRICTLY ABOVE the P`pctl` (default P80 = top ~20% by rank) of the BODIES of every candle inside the 4
-reference segments. Rank-based on purpose: the first cut used "top third of the size RANGE" — the literal
+reference segments, AND body >= `body_frac` (default 70%) of the candle's whole range — the body must DOMINATE
+the candle, so a big body drowned in even bigger wicks never qualifies (user 2026-08-31). Rank-based on purpose: the first cut used "top third of the size RANGE" — the literal
 E/E/C mechanism — but candle sizes are heavily right-skewed, so ONE monster stretched the range and pushed
 the threshold to P96-99 of actual sizes (~1% printed). A percentile is immune to that outlier; the comparison
 is STRICT so a degenerate all-equal-body window marks nothing.
@@ -20,7 +21,7 @@ known — a mark never repaints when a later trend completes. Candles printed be
 never marked. The reference candles themselves are never self-judged (their segments close before the
 threshold exists).
 
-detect(candles, skip_last=True, pctl=80.0) -> [{i, side(+1 bull / -1 bear / 0 flat), size(body), thr}]
+detect(candles, skip_last=True, pctl=80.0, body_frac=0.70) -> [{i, side, size(body), thr}]
 Pure OHLC in / marks out — no Qt, reusable by studies.
 """
 from __future__ import annotations
@@ -41,7 +42,8 @@ def _pctl(sorted_vals: list, p: float) -> float:
     return sorted_vals[k]
 
 
-def detect(candles: list, skip_last: bool = True, pctl: float = 80.0) -> "list[dict]":
+def detect(candles: list, skip_last: bool = True, pctl: float = 80.0,
+           body_frac: float = 0.70) -> "list[dict]":
     n = len(candles)
     if n < 120:
         return []
@@ -126,6 +128,11 @@ def detect(candles: list, skip_last: bool = True, pctl: float = 80.0) -> "list[d
         if thr is None or C[j] <= 0 or O[j] <= 0:
             continue
         sz = abs(C[j] - O[j])                            # BODY only — a big wick alone never qualifies
+        rng = H[j] - L[j]
+        if rng > 0 and sz < body_frac * rng:
+            continue                                     # BODY-DOMINANCE gate (user 2026-08-31): the body must
+        #                                                  be >= 70% of the whole candle — a big body drowned in
+        #                                                  bigger wicks is not a Big Candle.
         if sz > 0 and sz > thr:                          # STRICT: an all-equal window marks nothing
             side = 1 if C[j] > O[j] else (-1 if C[j] < O[j] else 0)
             out.append(dict(i=j, side=side, size=sz, thr=thr))

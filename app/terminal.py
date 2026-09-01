@@ -9934,7 +9934,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._clear_bigbar(); return
         n = len(filtered)
         _forming = bool(getattr(self, "_mmx_last_forming", True))
-        _warm = (getattr(self, "_rr_warm", None) or [])[-6000:]  # trailing history is plenty for 4 trend segments
+        warm = getattr(self, "_rr_warm", None) or []
+        # DEAD-ZONE FIX (user 2026-08-31, "the previous candles don't fire"): the detector needs ~500-600 bars
+        # of history before its first threshold exists (4 confirmed trends). If the pre-window history is
+        # shorter than that, the warm-up eats the LEFT of the screen. Pull deeper candles from the clock
+        # replay/archive (the EMA suite's own helper, cached per (tf, source, first_t, want)) so the analysis
+        # reaches ~2500 bars BEFORE the first visible candle whenever that history exists on disk.
+        _deep = []
+        if len(warm) < 2500:
+            try:
+                _fb0 = (warm[0] if warm else (filtered[0] if filtered else None))
+                _ft0 = float(_fb0.get("start_time", 0.0) or 0.0) if _fb0 else 0.0
+                if _ft0:
+                    _want = 2500 - len(warm)
+                    _want = ((_want + 499) // 500) * 500   # round UP to 500s: _ema_deep_hist caches per
+                    _deep = self._ema_deep_hist(_ft0, _want) or []   # (tf,src,t,want) -> stable key, no per-close re-scan
+            except Exception:
+                _deep = []
+        _warm = (list(_deep) + list(warm))[-6000:]               # trailing history is plenty for 4 trend segments
         _off = len(_warm)
         _ce = filtered[-2] if (_forming and n >= 2) else (filtered[-1] if n else None)
         _cet = float(_ce.get("end_time", 0.0) or 0.0) if _ce else 0.0
@@ -9945,7 +9962,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             from app import bigbar_detect
             marks = bigbar_detect.detect(list(_warm) + list(filtered), skip_last=_forming,
-                                         pctl=float(getattr(config, "BIGBAR_SIZE_PCTL", 90.0)))
+                                         pctl=float(getattr(config, "BIGBAR_SIZE_PCTL", 80.0)),
+                                         body_frac=float(getattr(config, "BIGBAR_BODY_FRAC", 0.70)))
         except Exception:
             self._clear_bigbar(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)

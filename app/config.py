@@ -207,6 +207,8 @@ TC_BACKFILL_PACE_S = 1.0        # sleep between requests
 # the last 4 finished EMA-trend segments (rank-based -> outlier-immune). P80 ~= 65-72 marks per 336-bar
 # screen on 5m/15m/30m clock (measured 2026-08-31). Raise for fewer, lower for more.
 BIGBAR_SIZE_PCTL = 80.0
+BIGBAR_BODY_FRAC = 0.70         # ... AND the body must be >= this fraction of the candle's whole range
+#                                 (body-dominance: a big body drowned in bigger wicks never qualifies)
 # 5m CLOCK Radar Runner filter: only fire breakouts whose absorption-R at the breakout bar is >= this. OOS-validated
 # on 5m time candles (study/radarrun_absorpR_band_oos.py + radarrun_15m_absorpR_prop.py): cuts maxDD 21%->6% and flips
 # the 5m prop verdict marginal->PASS (99/95/89% @R0.5/0.75/1.0), keeping ~1/3 of signals (4.7 trd/day). Applied ONLY to
