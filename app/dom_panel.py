@@ -382,28 +382,20 @@ class _DomCanvas(QtWidgets.QWidget):
             b = top_bin - i
             ry = y0 + i * _ROW_H
             price = b * g
-            is_edge = b in (best_bid_bin, best_ask_bin)
-            if b == last_bin and P._last_side is not None:      # last-trade chip, side-colored
+            # ONLY the current (last-traded) level is highlighted (user 2026-09-01): bold on a solid
+            # red/green background by aggressor side. Best bid/ask get no emphasis, no spread line.
+            is_last = b == last_bin and P._last_side is not None
+            if is_last:
                 chip = QtGui.QColor(_BUY if P._last_side else _SELL)
-                chip.setAlpha(60)
+                chip.setAlpha(175)
                 path = QtGui.QPainterPath()
                 path.addRoundedRect(QtCore.QRectF(c_price0 + 3, ry + 1.5, price_w - 6, _ROW_H - 3), 3.0, 3.0)
                 p.fillPath(path, chip)
-            p.setPen(_TXT if is_edge else _DIM_TXT)
-            p.setFont(self._font_b if is_edge else self._font)
+            p.setPen(QtGui.QColor(255, 255, 255) if is_last else _DIM_TXT)
+            p.setFont(self._font_b if is_last else self._font)
             p.drawText(QtCore.QRect(c_price0, ry, price_w, _ROW_H), QtCore.Qt.AlignCenter,
                        f"{price:,.2f}")
         p.setFont(self._font)
-
-        # spread marker: dashed BRIGHT-GRAY line on the ask/bid boundary, line ONLY — no text label
-        # (user 2026-09-01). Skipped when grouping merges best bid/ask into one row.
-        if best_bid_bin is not None and best_ask_bin is not None and bids and asks:
-            i_ask = top_bin - best_ask_bin           # best-ask row index (bid row sits below: bigger i)
-            i_bid = top_bin - best_bid_bin
-            if i_bid > i_ask and -1 <= i_ask and i_bid <= n_rows:
-                ymid = y0 + ((i_ask + 1 + i_bid) * _ROW_H) // 2
-                p.setPen(QtGui.QPen(QtGui.QColor(225, 230, 240, 220), 1, QtCore.Qt.DashLine))
-                p.drawLine(c_sold0 - 20, ymid, c_bought0 + traded_w + 20, ymid)
 
         # Ctrl+drag AREAS: translucent bands over the marked levels (price-anchored -> they pan and
         # regroup WITH their levels). The in-progress drag renders the same way as a live preview.
