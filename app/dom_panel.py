@@ -357,7 +357,7 @@ class _DomCanvas(QtWidgets.QWidget):
                 p.setFont(self._font)
 
             # SOLD $ / BOUGHT $ — the PLAYER readout (user 2026-09-01), window-scoped, in USDT.
-            # MIN SIZE at ALL:   "823K (12)"        = level's total usd + trade count
+            # MIN SIZE at ALL:   "823K"             = level's total usd, nothing else (user: no "()")
             # MIN SIZE filtered: "1.5M (45%, 3)"    = usd of trades >= min, its share of the level's
             #                                          total usd that side, and how many such trades.
             # Levels with no qualifying trade show nothing; the column max is bolded.
@@ -370,7 +370,7 @@ class _DomCanvas(QtWidgets.QWidget):
                         _pct = _fsu / _tsu * 100.0 if _tsu > 0 else 0.0
                         _txt = f"{_kfmt(_fsu)} ({_pct:.0f}%, {_cs})"
                     else:
-                        _txt = f"{_kfmt(_tsu)} ({_cs})"
+                        _txt = _kfmt(_tsu)
                     hot = _fsu >= max_fs > 0
                     col = QtGui.QColor(_SELL)
                     col.setAlpha(235 if hot else 150)
@@ -383,7 +383,7 @@ class _DomCanvas(QtWidgets.QWidget):
                         _pct = _fbu / _tbu * 100.0 if _tbu > 0 else 0.0
                         _txt = f"{_kfmt(_fbu)} ({_pct:.0f}%, {_cb})"
                     else:
-                        _txt = f"{_kfmt(_tbu)} ({_cb})"
+                        _txt = _kfmt(_tbu)
                     hot = _fbu >= max_fb > 0
                     col = QtGui.QColor(_BUY)
                     col.setAlpha(235 if hot else 150)
