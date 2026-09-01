@@ -146,7 +146,7 @@ _M10_STRATEGIES = [
     ("m10_engulf5m", "5m Absorption Wall", False, True),  # 5m: absorption/engulf rejection off a wall's radar (bounce); engulf green/red/gold + absorb2 blue/orange
     ("m10_easy1h", "1h Easy 0.5% (L / S triangles)", False, True),  # 1h: absorption+vw+swing scale-out; neon green/purple; fwd candidate
     ("m10_radarrun", "★ Radar Runner (L / S triangles · 1m·5m·15m·1h)", False, True),  # resisted-wall radar BREAKOUT + tiered TP1/2/3; the one recon-validated edge (net+ both yrs, causal-checked). ⚠ 1m sub-fee/eyeball-only
-    ("m10_bigbar", "ꕻ Big Bar (Time candles · green L / red S)", False, True),  # candle BODY (wicks excluded) > P80 (config.BIGBAR_SIZE_PCTL) of the last 4 finished EMA-trend segments' bodies (rank-based, causal at flip confirmation); clock/time source only, all tf
+    ("m10_bigbar", "ꕻ Big Bar (Time candles · green L / red S)", False, True),  # candle BODY' (bull close-low / bear high-close) > P80 (config.BIGBAR_SIZE_PCTL) of the last 4 finished EMA-trend segments' body', close-side wick <= 30% of body' (BIGBAR_WICK_MAX); causal at flip confirmation; clock/time source only, all tf
     ("m10_wallsurge", "Wall Surge (▲▼ · surge + absorb @ 30m·1h wall · 1m·5m clock)", False, True),
     ("m10_longwick", "Long Wick (♦ · wick rejection @ wall · all tf)", False, True),
     ("m10_longwick_combo", "LW · Failed Push (gold ♦ · 2-bar + break · no wall · all tf)", False, True),  # gold ♦ ABOVE a BEARISH bar + long-UPPER-wick BEARISH bar (v2 wick geometry) CLOSING BELOW the prev bar's low — buyers pushed, completely failed, bar still broke down; mirrored bullish pair closing ABOVE the prev high -> gold ♦ BELOW. NOT bound to walls. Descriptive/eyeball (both variants honest-tested: no mechanical edge)

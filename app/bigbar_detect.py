@@ -1,16 +1,23 @@
-"""BIG BAR (Time candles) — ꕻ on candles whose BODY is in the top quintile (P80, configurable) of the bodies
-seen across the last FOUR finished EMA-trend segments (user 2026-08-30; body-only + P80 2026-08-31).
+"""BIG BAR (Time candles) — ꕻ on candles whose BODY' (close-to-adverse-extreme; see below) is in the top
+quintile (P80, configurable) of the last FOUR finished EMA-trend segments (user 2026-08-30; body' v3 2026-08-31).
 
 The reference window is EXACTLY the one the Expensive/Equilibrium/Cheap bands use: the 2 preceding up + down
 moves and the pair before them — i.e. the last 2 finished BULL and last 2 finished BEAR segments of the
 EMA20/50 Stack-Flip walk (cross -> cross), with the same qualification rules the terminal's flip lines use
 (cross + regime >= 20 bars old + HL-delta validation on both windows + same-colour dedupe).
 
-BIG = candle BODY (|close - open| — the dominant feature; WICKS ARE DELIBERATELY EXCLUDED, user 2026-08-31:
-"we might have a big candle with a big body and a bigger wick, it shouldn't be taken into consideration")
-STRICTLY ABOVE the P`pctl` (default P80 = top ~20% by rank) of the BODIES of every candle inside the 4
-reference segments, AND body >= `body_frac` (default 70%) of the candle's whole range — the body must DOMINATE
-the candle, so a big body drowned in even bigger wicks never qualifies (user 2026-08-31). Rank-based on purpose: the first cut used "top third of the size RANGE" — the literal
+BODY definition (user 2026-08-31, v3): the ORIGIN-side wick belongs to the body — the move is measured from
+the adverse extreme to the close (the same ref convention as Mov.Magnitude):
+    bullish (close > open):  body' = close - low    (body + lower wick)
+    bearish (close < open):  body' = high - close   (body + upper wick)
+Flat candles (close == open) have no direction -> never judged, never in the reference population.
+
+BIG = body' STRICTLY ABOVE the P`pctl` (default P80 by rank) of the body' of every directional candle inside
+the 4 reference segments, AND the CLOSE-side wick (the rejection beyond the close) <= `wick_max` (default 30%)
+of body':
+    bullish: upper wick (high - close) <= wick_max * body'
+    bearish: lower wick (close - low)  <= wick_max * body'
+A candle whose close was pushed back by more than 30% of its own move is not a conviction bar. Rank-based on purpose: the first cut used "top third of the size RANGE" — the literal
 E/E/C mechanism — but candle sizes are heavily right-skewed, so ONE monster stretched the range and pushed
 the threshold to P96-99 of actual sizes (~1% printed). A percentile is immune to that outlier; the comparison
 is STRICT so a degenerate all-equal-body window marks nothing.
@@ -21,7 +28,7 @@ known — a mark never repaints when a later trend completes. Candles printed be
 never marked. The reference candles themselves are never self-judged (their segments close before the
 threshold exists).
 
-detect(candles, skip_last=True, pctl=80.0, body_frac=0.70) -> [{i, side, size(body), thr}]
+detect(candles, skip_last=True, pctl=80.0, wick_max=0.30) -> [{i, side, size(body'), thr}]
 Pure OHLC in / marks out — no Qt, reusable by studies.
 """
 from __future__ import annotations
@@ -43,7 +50,7 @@ def _pctl(sorted_vals: list, p: float) -> float:
 
 
 def detect(candles: list, skip_last: bool = True, pctl: float = 80.0,
-           body_frac: float = 0.70) -> "list[dict]":
+           wick_max: float = 0.30) -> "list[dict]":
     n = len(candles)
     if n < 120:
         return []
@@ -122,18 +129,24 @@ def detect(candles: list, skip_last: bool = True, pctl: float = 80.0,
             idxs = set()
             for (b0, b1) in bulls[-2:] + bears[-2:]:
                 idxs.update(range(max(0, b0), min(n, b1 + 1)))
-            szs = sorted(abs(C[k] - O[k]) for k in idxs if C[k] > 0 and O[k] > 0)   # BODY only, wicks excluded
+            szs = sorted((C[k] - L[k]) if C[k] > O[k] else (H[k] - C[k])          # body' = close to the
+                         for k in idxs                                            # ADVERSE extreme (origin
+                         if C[k] > 0 and O[k] > 0 and H[k] > 0 and L[k] > 0       # wick counts as body)
+                         and C[k] != O[k])                                        # flats have no direction
             thr = _pctl(szs, pctl) if len(szs) >= 20 else None    # rank-based: outlier-immune
             dirty = False
-        if thr is None or C[j] <= 0 or O[j] <= 0:
-            continue
-        sz = abs(C[j] - O[j])                            # BODY only — a big wick alone never qualifies
-        rng = H[j] - L[j]
-        if rng > 0 and sz < body_frac * rng:
-            continue                                     # BODY-DOMINANCE gate (user 2026-08-31): the body must
-        #                                                  be >= 70% of the whole candle — a big body drowned in
-        #                                                  bigger wicks is not a Big Candle.
-        if sz > 0 and sz > thr:                          # STRICT: an all-equal window marks nothing
-            side = 1 if C[j] > O[j] else (-1 if C[j] < O[j] else 0)
+        if thr is None or C[j] <= 0 or O[j] <= 0 or H[j] <= 0 or L[j] <= 0 or C[j] == O[j]:
+            continue                                     # flats have no direction -> never judged
+        if C[j] > O[j]:                                  # bullish: body' = close - low (lower wick IS body)
+            sz = C[j] - L[j]
+            wick = max(0.0, H[j] - C[j])                 # the CLOSE-side rejection (upper wick)
+            side = 1
+        else:                                            # bearish: body' = high - close (upper wick IS body)
+            sz = H[j] - C[j]
+            wick = max(0.0, C[j] - L[j])                 # the CLOSE-side rejection (lower wick)
+            side = -1
+        if sz <= 0 or wick > wick_max * sz:
+            continue                                     # rejected: the close was pushed back by > 30% of the move
+        if sz > thr:                                     # STRICT: an all-equal window marks nothing
             out.append(dict(i=j, side=side, size=sz, thr=thr))
     return out
