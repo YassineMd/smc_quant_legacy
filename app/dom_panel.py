@@ -60,6 +60,8 @@ class _DomCanvas(QtWidgets.QWidget):
         super().__init__(panel)
         self._p = panel
         self.setMinimumHeight(160)
+        self.setMouseTracking(True)                # hover row highlight needs button-less move events
+        self._hover_y = None                       # cursor y inside the canvas; None = cursor off-canvas
         self._font = QtGui.QFont("Consolas", 9)
         fb = QtGui.QFont("Consolas", 9)
         fb.setBold(True)
@@ -98,12 +100,19 @@ class _DomCanvas(QtWidgets.QWidget):
 
     def mouseMoveEvent(self, ev) -> None:
         self._drag_to(ev.position().y())
+        self._hover_y = ev.position().y()          # hover row highlight follows the cursor
+        self.update()
         ev.accept()
 
     def mouseReleaseEvent(self, ev) -> None:
         self._drag_end()
         self.unsetCursor()
         ev.accept()
+
+    def leaveEvent(self, ev) -> None:              # cursor off the ladder -> highlight fully removed
+        self._hover_y = None
+        self.update()
+        super().leaveEvent(ev)
 
     # ------------------------------------------------------------------
     def paintEvent(self, _ev) -> None:
@@ -319,6 +328,16 @@ class _DomCanvas(QtWidgets.QWidget):
                 ymid = y0 + ((i_ask + 1 + i_bid) * _ROW_H) // 2
                 p.setPen(QtGui.QPen(QtGui.QColor(225, 230, 240, 220), 1, QtCore.Qt.DashLine))
                 p.drawLine(c_sold0 - 20, ymid, c_bought0 + traded_w + 20, ymid)
+
+        # hover row highlight (user 2026-09-01): thin light-gray box around the FULL row under the
+        # cursor; _hover_y is None the moment the cursor leaves the canvas -> nothing drawn.
+        if self._hover_y is not None and self._hover_y >= y0:
+            i = int((self._hover_y - y0) // _ROW_H)
+            if 0 <= i < n_rows:
+                ry = y0 + i * _ROW_H
+                p.setPen(QtGui.QPen(QtGui.QColor(200, 208, 220, 150), 1))
+                p.setBrush(QtCore.Qt.NoBrush)
+                p.drawRoundedRect(QtCore.QRectF(pad - 4, ry + 0.5, w - 2 * pad + 8, _ROW_H - 1.5), 3.0, 3.0)
         p.end()
 
 
