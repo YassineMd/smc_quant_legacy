@@ -161,6 +161,7 @@ _M10_STRATEGIES = [
 SCANNER_MODES = [
     "bucket_canvas",   # Mode 10 — the only candle surface + default on open (A5)
     "depth_heatmap",   # Phase 2b — Bookmap-style resting-liquidity heatmap (own canvas, scanner-gated); 2nd in the list
+    "trades",          # Binance-style live Market Trades tape (time/price/amount USD + MIN SIZE filter); own widget
     "open_pos",
     "close_pos",
     "exhaustion",
@@ -183,6 +184,7 @@ SCANNER_LABELS = {
     "effort_result": "Effort vs Result",
     "bucket_canvas": "Bucket Candlestick Canvas",
     "depth_heatmap": "Heatmap",
+    "trades": "Trades",
 }
 
 # Candle render modes (index = _candle_mode; also cycled by 'W').

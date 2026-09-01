@@ -171,6 +171,8 @@ DEPTH_RETENTION_HOURS = 72      # HARD time-based prune (governs depth_deltas + 
                                 # so the Pull detector has real forward depth+tape history to test against.
                                 # Disk: depth.db ~101MB@6h -> ~1.2GB@72h projected (linear); / has 5.1GB free.
 DEPTH_BUFFER_CAP = 200000       # max buffered records per stream (drop-oldest) so a stalled write can't grow RAM
+TAPE_BACKFILL_SECS = 300        # Trades scanner mode: history window requested on entry (raw aggTrades from
+                                # trade_tape; ~5 min fills the table instantly without a heavy tunnel transfer)
 # Phase 2b — terminal heatmap render (the daemon serves raw sizes; these shape the request + local contrast)
 HEATMAP_YBINS = 400             # price bins (Y resolution) requested per window
 HEATMAP_BAND_PCT = 2.0          # price band shown = +- this % of mid (the visible Y range)

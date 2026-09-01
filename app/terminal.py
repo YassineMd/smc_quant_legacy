@@ -52,6 +52,7 @@ from .chart_widgets import (
 )
 from .cob_panel import CobPanel
 from .footprint_panel import FootprintPanel, profile_skewness, skew_read, skew_color, vp_lines_from_levels
+from .trades_tape import TradesTapePanel
 from .drawing_tools import DrawingController, DrawingToolbar
 from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visible
 from .hamburger import FloatingOverlayMenu, HamburgerButton, scale_label
@@ -902,14 +903,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         self.cob = CobPanel()
         self.fp_panel = FootprintPanel()   # live forming-candle footprint side pane ('Live Footprint' toggle, Mode 10)
+        self.trades_panel = TradesTapePanel()   # scanner mode "trades" — live Market Trades tape (replaces the plot)
+        self.trades_panel.minUsdChanged.connect(
+            lambda _u: None if self._loading_ui else self._save_ui_state())   # slider sticks across sessions
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.splitter.setHandleWidth(6)
         self.splitter.addWidget(self.plot)
         self.splitter.addWidget(self.cob)
         self.splitter.addWidget(self.fp_panel)   # rightmost; rides the Mode-10 reparenting, gated by _fp_want + mode
+        self.splitter.addWidget(self.trades_panel)
         self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(3, 1)     # trades tape takes the plot's space when it swaps in
         self.cob.hide()
         self.fp_panel.hide()
+        self.trades_panel.hide()
+        self._tape_resub_t = 0.0                 # last live-batch (re)subscribe — re-armed every 10s in trades mode
         # footprint pane hover -> its own crosshair + mirror the price into the chart (shared like the VPIN pane)
         self._fp_proxy = pg.SignalProxy(self.fp_panel.scene().sigMouseMoved,
                                         rateLimit=60, slot=self._on_fp_mouse_move)
@@ -2214,6 +2222,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.clear_scanner_canvas()   # teardown first
         if prev_mode == "depth_heatmap":
             self._hm_exit()           # Phase 2b: tear down the heatmap (unsubscribe live push, free grid)
+        if prev_mode == "trades" and mode != "trades":
+            self._tape_exit()         # trades tape: unsubscribe the live batches, swap the plot back in
         # §6.2 — index-space drawings are session-only + index-anchored. Keep them in memory for the
         # whole session: SHOW on Mode 10, HIDE on the metric scanners (where a price-anchored shape is
         # off-axis), restore on return — so drawings survive every mode switch AND scan-time change.
@@ -2259,6 +2269,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             cob_cb = self.menu.sub_checks.get("cob")   # keep the menu checkbox in sync (no re-emit)
             if cob_cb is not None and not cob_cb.isChecked():
                 cob_cb.blockSignals(True); cob_cb.setChecked(True); cob_cb.blockSignals(False)
+        if mode == "trades":
+            self._tape_enter()   # swap the tape in + subscribe the live batches (after the generic setup)
         self._update_fp_pane_visibility()   # live-footprint pane rides Mode 10 only
         self._on_timer()   # immediate first draw from the current Zero Point
 
@@ -2762,6 +2774,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     continue                                 # Phase-3 placeholder — nothing to restore
                 target = bool(saved.get(key, cb.isChecked()))
                 cb.blockSignals(True); cb.setChecked(target); cb.blockSignals(False)   # draw-gate applies it next frame
+            self.trades_panel.set_min_usd(float(getattr(self, "_tape_min_saved", 0.0)))   # Trades tape MIN SIZE
         finally:
             self._loading_ui = False
         # CHART SOURCE persists too (2026-08-24): it silently reset to Volume Buckets on every relaunch, so clock-
@@ -8354,6 +8367,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "swing_pct": self._swing_pct,                             # swing-ZigZag sensitivity slider (%)
                 "wall_floor": self._wall_floor,                           # Order-Flow Walls min-strength draw floor
                 "reward_strength": self._reward_strength,                 # Reward-switch zones min-strength filter
+                "tape_min_usd": float(getattr(self.trades_panel, "min_usd", 0.0)),   # Trades tape MIN SIZE slider
                 "bubble_vol": self.hm_bubble_min,                         # Heatmap trade-bubble min-volume filter (SOL)
                 "kc_scale": self._kc_scale,                               # 1m-KC smooth-approx effective-TF scale slider
                 "tf": self._tf,                                           # last chart timeframe -> reopen on it
@@ -8395,6 +8409,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.show_eff_hm = bool(s.get("eff_hm", self.show_eff_hm))
         self.show_er_strip = bool(s.get("er", self.show_er_strip))
         self.show_exh_strip = bool(s.get("exh", self.show_exh_strip))
+        try:
+            self._tape_min_saved = float(s.get("tape_min_usd", 0.0) or 0.0)   # applied in _apply_saved_toggles
+        except (TypeError, ValueError):
+            self._tape_min_saved = 0.0
         _lm = s.get("ls_mode")
         if _lm is None:                                       # migrate the old boolean: True (both) -> 2, else 0
             _lm = 2 if s.get("largesmall") else 0
@@ -14584,6 +14602,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self.scanner_mode == "depth_heatmap":
             self._scan_depth_heatmap()   # time-driven, its own canvas — bypass the bucket pipeline entirely
             return
+        if self.scanner_mode == "trades":
+            self._scan_trades_tape()     # live tape, its own widget — bypass the bucket pipeline entirely
+            return
         snap = self._last_snap or self.worker.snapshot()
         closed = snap.get("closed_buckets", []) or []
         active = snap.get("active_bucket") or {}
@@ -14676,6 +14697,65 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.cob.bars.bin_h = config.DOM_BIN_STEP
         self.hm_cache = HeatmapCache(); self.hm_levels = None; self.hm_band = None; self.hm_pending = None
         self._hm_sizes = None
+
+    # ------------------------------------------------------------------
+    # Scanner mode "trades" — live Market Trades tape (Binance-style)
+    # ------------------------------------------------------------------
+    def _tape_enter(self) -> None:
+        """Enter trades mode: swap the tape widget in for the plot and arm the live feed. The live trade
+        batches ride the daemon's existing heatmap subscription (client.heatmap), armed here with a
+        DEGENERATE depth_window (1s x 1 col x 1 bin) — the 1-bin depth columns it also triggers are a few
+        bytes per pulse into a bounded client deque nobody reads. Zero daemon-side changes needed."""
+        self.plot.setVisible(False)
+        self.trades_panel.setVisible(True)
+        self._tape_last_paint = 0.0
+        self._tape_conn_was = bool(self.worker.connected)
+        self._tape_subscribe(backfill=True)
+
+    def _tape_exit(self) -> None:
+        """Leave trades mode: stop the live push (also clears the client-side trade buffers) and swap the
+        plot back in. The tape's raw deque is deliberately kept — re-entry is instant, the cap bounds it."""
+        self.worker.stop_depth_window()
+        self.trades_panel.setVisible(False)
+        self.plot.setVisible(True)
+
+    def _tape_subscribe(self, backfill: bool) -> None:
+        """(Re-)arm the live-batch subscription; with backfill, also request the recent history window.
+        Re-sent every 10s from _scan_trades_tape because the daemon's subscription is per-CONNECTION —
+        this is what survives a tunnel/daemon reconnect (re-arming an armed client is a no-op)."""
+        t1 = int(time.time() * 1000)
+        self.worker.request_depth_window(t1 - 1000, t1, 1, 0.0, 1e9, 1)
+        if backfill:
+            self.worker.request_trades_window(t1 - int(config.TAPE_BACKFILL_SECS) * 1000, t1, 0.0, 1e9)
+        self._tape_resub_t = time.time()
+
+    def _scan_trades_tape(self) -> None:
+        """Per-frame (50ms loop): drain the worker's trade buffers into the panel. Repaint on new data
+        and at least 1/s regardless (keeps the 60s pressure strip decaying through a quiet stretch)."""
+        conn = bool(self.worker.connected)
+        if conn and not getattr(self, "_tape_conn_was", True):
+            # RECONNECT detected (False -> True): the daemon-side subscription died with the old socket
+            # and _flush_outgoing silently drops lines onto a dead one — re-arm NOW and re-backfill from
+            # scratch (reset keeps the tape duplicate-free; the missed gap is re-served by the window).
+            self.trades_panel.reset()
+            self._tape_subscribe(backfill=True)
+        self._tape_conn_was = conn
+        _tv, tw, tbatches = self.worker.trades_state()
+        changed = False
+        for tbp in tbatches:
+            if self.trades_panel.ingest_live(*decode_trades(tbp.ts_b64, tbp.price_b64,
+                                                            tbp.qty_b64, tbp.side_b64)):
+                changed = True
+        if tw is not None:
+            if self.trades_panel.ingest_window(*decode_trades(tw.ts_b64, tw.price_b64,
+                                                              tw.qty_b64, tw.side_b64)):
+                changed = True
+        now = time.time()
+        if now - self._tape_resub_t > 10.0:
+            self._tape_subscribe(backfill=False)
+        if changed or now - getattr(self, "_tape_last_paint", 0.0) > 1.0:
+            self._tape_last_paint = now
+            self.trades_panel.canvas.update()
 
     def _scan_depth_heatmap(self) -> None:
         """Per-frame heatmap update — ONLY dispatched while this mode is active. Drains the delivery buffer
