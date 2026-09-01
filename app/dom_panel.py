@@ -23,6 +23,8 @@ import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import config
+from .trades_tape import _slider_to_usd, _usd_to_slider, _fmt_usd   # the SAME log MIN SIZE mapping
+#                                                                     as the Trades scanner mode
 
 # ── palette (shared design language with the Trades tape) ───────────────────────────────────
 _BG       = QtGui.QColor(10, 13, 18)
@@ -239,7 +241,7 @@ class _DomCanvas(QtWidgets.QWidget):
 
         # ── column geometry: [BID | SOLD | PRICE | BOUGHT | ASK | VP(right)] ───────────────
         g = P.group
-        traded_w = 62
+        traded_w = 118                             # fits "1.5M (45%, 12)" — the player-filter readout
         price_w = 92
         vp_w = max(120, int(w * 0.20))
         c_vp0 = w - pad - vp_w                     # VP zone, far right (gray)
@@ -257,11 +259,11 @@ class _DomCanvas(QtWidgets.QWidget):
         p.setPen(_HDR_TXT)
         p.drawText(QtCore.QRect(pad, y0, span, _HDR_H), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, "BIDS")
         p.drawText(QtCore.QRect(c_sold0, y0, traded_w, _HDR_H), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
-                   "SOLD")
+                   "SOLD $")
         p.drawText(QtCore.QRect(c_price0, y0, price_w, _HDR_H), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
                    "PRICE")
         p.drawText(QtCore.QRect(c_bought0, y0, traded_w, _HDR_H), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
-                   "BOUGHT")
+                   "BOUGHT $")
         p.drawText(QtCore.QRect(c_ask0, y0, 120, _HDR_H), QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, "ASKS")
         p.drawText(QtCore.QRect(c_vp0, y0, vp_w, _HDR_H), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
                    f"VOLUME · {P.vp_label()}")
@@ -299,12 +301,14 @@ class _DomCanvas(QtWidgets.QWidget):
             ask_bins[b] = ask_bins.get(b, 0.0) + q
         vp = P.vp_bins(g, top_bin - n_rows + 1, top_bin)   # {bin: (boughtQ, soldQ)}
 
+        stats = P.trade_stats(g, top_bin - n_rows + 1, top_bin, P.min_usd)   # SOLD/BOUGHT $ readouts
+
         vis_b = [bid_bins.get(top_bin - i, 0.0) for i in range(n_rows)]
         vis_a = [ask_bins.get(top_bin - i, 0.0) for i in range(n_rows)]
         max_sz = max(max(vis_b, default=0.0), max(vis_a, default=0.0)) or 1.0
         max_vp = max((bq + sq for bq, sq in vp.values()), default=0.0) or 1.0
-        max_bought = max((v[0] for v in vp.values()), default=0.0)
-        max_sold = max((v[1] for v in vp.values()), default=0.0)
+        max_fb = max((v[2] for v in stats.values()), default=0.0)     # column-max FILTERED usd -> bolded
+        max_fs = max((v[3] for v in stats.values()), default=0.0)
         nz = sorted([v for v in vis_b + vis_a if v > 0])
         p90 = nz[int(len(nz) * 0.9)] if nz else float("inf")   # wall emphasis threshold (visible P90)
         poc_bin = max(vp, key=lambda b: vp[b][0] + vp[b][1]) if vp else None
@@ -352,28 +356,46 @@ class _DomCanvas(QtWidgets.QWidget):
                            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, _kfmt(q))
                 p.setFont(self._font)
 
-            # SOLD / BOUGHT (executed taker volumes at this price, window-scoped; column max bolded)
-            bq, sq = vp.get(b, (0.0, 0.0))
-            if sq > 0:
-                hot = sq >= max_sold and max_sold > 0
-                col = QtGui.QColor(_SELL)
-                col.setAlpha(235 if hot else 150)
-                p.setPen(col)
-                p.setFont(self._font_b if hot else self._font)
-                p.drawText(QtCore.QRect(c_sold0, ry, traded_w - 4, _ROW_H),
-                           QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, _kfmt(sq))
-            if bq > 0:
-                hot = bq >= max_bought and max_bought > 0
-                col = QtGui.QColor(_BUY)
-                col.setAlpha(235 if hot else 150)
-                p.setPen(col)
-                p.setFont(self._font_b if hot else self._font)
-                p.drawText(QtCore.QRect(c_bought0 + 4, ry, traded_w - 4, _ROW_H),
-                           QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, _kfmt(bq))
+            # SOLD $ / BOUGHT $ — the PLAYER readout (user 2026-09-01), window-scoped, in USDT.
+            # MIN SIZE at ALL:   "823K (12)"        = level's total usd + trade count
+            # MIN SIZE filtered: "1.5M (45%, 3)"    = usd of trades >= min, its share of the level's
+            #                                          total usd that side, and how many such trades.
+            # Levels with no qualifying trade show nothing; the column max is bolded.
+            stt = stats.get(b)
+            if stt is not None:
+                _tbu, _tsu, _fbu, _fsu, _cb, _cs = stt
+                _fon = P.min_usd > 0
+                if (_cs > 0) if _fon else (_tsu > 0):
+                    if _fon:
+                        _pct = _fsu / _tsu * 100.0 if _tsu > 0 else 0.0
+                        _txt = f"{_kfmt(_fsu)} ({_pct:.0f}%, {_cs})"
+                    else:
+                        _txt = f"{_kfmt(_tsu)} ({_cs})"
+                    hot = _fsu >= max_fs > 0
+                    col = QtGui.QColor(_SELL)
+                    col.setAlpha(235 if hot else 150)
+                    p.setPen(col)
+                    p.setFont(self._font_b if hot else self._font)
+                    p.drawText(QtCore.QRect(c_sold0, ry, traded_w - 4, _ROW_H),
+                               QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, _txt)
+                if (_cb > 0) if _fon else (_tbu > 0):
+                    if _fon:
+                        _pct = _fbu / _tbu * 100.0 if _tbu > 0 else 0.0
+                        _txt = f"{_kfmt(_fbu)} ({_pct:.0f}%, {_cb})"
+                    else:
+                        _txt = f"{_kfmt(_tbu)} ({_cb})"
+                    hot = _fbu >= max_fb > 0
+                    col = QtGui.QColor(_BUY)
+                    col.setAlpha(235 if hot else 150)
+                    p.setPen(col)
+                    p.setFont(self._font_b if hot else self._font)
+                    p.drawText(QtCore.QRect(c_bought0 + 4, ry, traded_w - 4, _ROW_H),
+                               QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, _txt)
             p.setFont(self._font)
 
-            # VP (far right, neutral GRAY — total executed volume; POC row gold). REVERSED (user
-            # 2026-09-01): bars anchor on the RIGHT edge and grow LEFT, label to the left of the tip.
+            # VP (far right, neutral GRAY — total executed volume in SOL; POC row gold). REVERSED
+            # (user 2026-09-01): bars anchor on the RIGHT edge and grow LEFT, label left of the tip.
+            bq, sq = vp.get(b, (0.0, 0.0))
             if bq + sq > 0:
                 bw_ = (bq + sq) / max_vp * (vp_w - 44)
                 p.setPen(QtCore.Qt.NoPen)
@@ -454,6 +476,7 @@ class DomPanel(QtWidgets.QWidget):
         super().__init__()
         self.group: float = _GROUPS[0]
         self.vp_secs: int = 3600                   # default 1H (NOT _VP_SECS[-1] — 6H exists now)
+        self.min_usd: float = 0.0                  # MIN SIZE player filter (USD/trade) for SOLD/BOUGHT
         self._anchor_px: float | None = None       # ladder anchor PRICE; None = center on next paint.
         #                                            Set once, then FIXED — the ladder never auto-scrolls;
         #                                            price-based so it survives a GROUP change in place.
@@ -518,6 +541,28 @@ class DomPanel(QtWidgets.QWidget):
             self._vp_btns.append(b)
             lay.addWidget(b)
 
+        lay.addSpacing(10)
+        lay.addWidget(cap("MIN SIZE"))
+        self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.slider.setRange(0, 1000)
+        self.slider.setValue(0)
+        self.slider.setFixedWidth(170)
+        self.slider.setStyleSheet("""
+            QSlider { border:none; }
+            QSlider::groove:horizontal { height:4px; border-radius:2px; background:#1d2632; }
+            QSlider::sub-page:horizontal { height:4px; border-radius:2px;
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #2ebd85, stop:1 #f0b90b); }
+            QSlider::handle:horizontal { width:14px; height:14px; margin:-5px 0; border-radius:8px;
+                background:#e6ecf4; border:2px solid #f0b90b; }
+        """)
+        self.slider.valueChanged.connect(self._on_min_slider)
+        lay.addWidget(self.slider)
+        self.min_lbl = QtWidgets.QLabel("ALL")
+        self.min_lbl.setFixedWidth(76)
+        self.min_lbl.setStyleSheet("color:#f0b90b; font-family:Consolas; font-size:11px;"
+                                   "font-weight:bold; border:none;")
+        lay.addWidget(self.min_lbl)
+
         lay.addStretch(1)
         self.pill = QtWidgets.QPushButton("⟲ CENTER")
         self.pill.setCursor(QtCore.Qt.PointingHandCursor)
@@ -552,6 +597,16 @@ class DomPanel(QtWidgets.QWidget):
         self.vp_secs = int(secs)
         for b, (sv, _l) in zip(self._vp_btns, _VP_SECS):
             b.blockSignals(True); b.setChecked(sv == secs); b.blockSignals(False)
+        self.canvas.update()
+        self.settingsChanged.emit()
+
+    def set_min_usd(self, usd: float) -> None:
+        """Programmatic restore (saved UI state) — moves the slider, which re-derives everything."""
+        self.slider.setValue(_usd_to_slider(usd))
+
+    def _on_min_slider(self, v: int) -> None:
+        self.min_usd = _slider_to_usd(v)
+        self.min_lbl.setText("ALL" if self.min_usd <= 0 else f"≥ {_fmt_usd(self.min_usd)}")
         self.canvas.update()
         self.settingsChanged.emit()
 
@@ -651,6 +706,46 @@ class DomPanel(QtWidgets.QWidget):
 
     def mark_dirty(self) -> None:
         self._cat = None                           # time moved on -> re-prune on the next frame
+
+    def trade_stats(self, g: float, lo_bin: int, hi_bin: int, min_usd: float) -> dict:
+        """Per-level PLAYER stats over the selected window for the SOLD/BOUGHT columns, in USDT:
+        {group-bin: (tot_buy_usd, tot_sell_usd, flt_buy_usd, flt_sell_usd, cnt_buy, cnt_sell)} where
+        flt_*/cnt_* cover only trades whose OWN size is >= min_usd (min_usd=0 -> everything counts).
+        A SOL trade's exact price IS its tick (tick 0.01), so usd = qty * tickbin * TICK is exact."""
+        ts, tk, bq, sq = self._trades_cat()
+        if not len(ts):
+            return {}
+        i0 = np.searchsorted(ts, time.time() - self.vp_secs)
+        if i0 >= len(ts):
+            return {}
+        ticks_per = max(1, int(round(g / _TICK)))
+        tk2 = tk[i0:]
+        gb = tk2 // ticks_per
+        m = (gb >= lo_bin) & (gb <= hi_bin)
+        if not m.any():
+            return {}
+        px = tk2[m] * _TICK
+        ub = bq[i0:][m] * px                       # per-trade USD, buy rows (0 on sell rows)
+        us = sq[i0:][m] * px
+        off = (gb[m] - lo_bin).astype(np.int64)
+        n = hi_bin - lo_bin + 1
+        tot_b = np.bincount(off, weights=ub, minlength=n)
+        tot_s = np.bincount(off, weights=us, minlength=n)
+        if min_usd > 0:
+            big = (ub + us) >= min_usd             # one side is always 0 -> this IS the trade's size
+            flt_b = np.bincount(off[big], weights=ub[big], minlength=n)
+            flt_s = np.bincount(off[big], weights=us[big], minlength=n)
+            cnt_b = np.bincount(off[big & (ub > 0)], minlength=n)
+            cnt_s = np.bincount(off[big & (us > 0)], minlength=n)
+        else:
+            flt_b, flt_s = tot_b, tot_s
+            cnt_b = np.bincount(off[ub > 0], minlength=n)
+            cnt_s = np.bincount(off[us > 0], minlength=n)
+        out = {}
+        for j in np.nonzero(tot_b + tot_s)[0]:
+            out[int(lo_bin + j)] = (float(tot_b[j]), float(tot_s[j]), float(flt_b[j]),
+                                    float(flt_s[j]), int(cnt_b[j]), int(cnt_s[j]))
+        return out
 
     def vp_bins(self, g: float, lo_bin: int, hi_bin: int) -> dict:
         """{group-bin: (boughtQ, soldQ)} for the visible rows over the selected window — feeds the

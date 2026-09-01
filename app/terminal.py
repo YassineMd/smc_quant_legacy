@@ -2786,9 +2786,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 target = bool(saved.get(key, cb.isChecked()))
                 cb.blockSignals(True); cb.setChecked(target); cb.blockSignals(False)   # draw-gate applies it next frame
             self.trades_panel.set_min_usd(float(getattr(self, "_tape_min_saved", 0.0)))   # Trades tape MIN SIZE
-            _dg, _dv = getattr(self, "_dom_saved", (0.01, 3600))                          # DOM ladder settings
+            _dg, _dv, _dm = getattr(self, "_dom_saved", (0.01, 3600, 0.0))                # DOM ladder settings
             self.dom_panel.set_group(_dg if _dg in (0.01, 0.02, 0.05, 0.10) else 0.01)
             self.dom_panel.set_vp_secs(_dv if _dv in (300, 900, 3600, 7200, 14400, 21600) else 3600)
+            self.dom_panel.set_min_usd(max(0.0, _dm))                                     # player MIN SIZE
         finally:
             self._loading_ui = False
         # CHART SOURCE persists too (2026-08-24): it silently reset to Volume Buckets on every relaunch, so clock-
@@ -8384,6 +8385,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "tape_min_usd": float(getattr(self.trades_panel, "min_usd", 0.0)),   # Trades tape MIN SIZE slider
                 "dom_group": float(getattr(self.dom_panel, "group", 0.01)),          # DOM ladder tick grouping
                 "dom_vp_secs": int(getattr(self.dom_panel, "vp_secs", 3600)),        # DOM VP window
+                "dom_min_usd": float(getattr(self.dom_panel, "min_usd", 0.0)),       # DOM player MIN SIZE filter
                 "bubble_vol": self.hm_bubble_min,                         # Heatmap trade-bubble min-volume filter (SOL)
                 "kc_scale": self._kc_scale,                               # 1m-KC smooth-approx effective-TF scale slider
                 "tf": self._tf,                                           # last chart timeframe -> reopen on it
@@ -8431,9 +8433,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._tape_min_saved = 0.0
         try:
             self._dom_saved = (float(s.get("dom_group", 0.01) or 0.01),       # applied in _apply_saved_toggles
-                               int(s.get("dom_vp_secs", 3600) or 3600))
+                               int(s.get("dom_vp_secs", 3600) or 3600),
+                               float(s.get("dom_min_usd", 0.0) or 0.0))
         except (TypeError, ValueError):
-            self._dom_saved = (0.01, 3600)
+            self._dom_saved = (0.01, 3600, 0.0)
         _lm = s.get("ls_mode")
         if _lm is None:                                       # migrate the old boolean: True (both) -> 2, else 0
             _lm = 2 if s.get("largesmall") else 0
