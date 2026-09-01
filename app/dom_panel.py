@@ -62,6 +62,8 @@ class _DomCanvas(QtWidgets.QWidget):
         self.setMinimumHeight(160)
         self.setMouseTracking(True)                # hover row highlight needs button-less move events
         self._hover_y = None                       # cursor y inside the canvas; None = cursor off-canvas
+        self._drag = None                          # pan drag state (press y, anchor price)
+        self._area_drag = None                     # Ctrl+drag area-in-progress [y_press, y_now]
         self._font = QtGui.QFont("Consolas", 9)
         fb = QtGui.QFont("Consolas", 9)
         fb.setBold(True)
@@ -75,6 +77,64 @@ class _DomCanvas(QtWidgets.QWidget):
         # wheel UP pans the ladder to HIGHER prices; the ladder is manual-only (no auto-follow)
         self._p.pan_by(3 if ev.angleDelta().y() > 0 else -3)
         ev.accept()
+
+    # ── Ctrl+drag AREAS (user 2026-09-01): mark a band of levels; Ctrl+double-click deletes ──
+    def _geom(self):
+        """(y0, n_rows, top_bin, g) of the CURRENT ladder rows — same math as paintEvent; None pre-paint."""
+        P = self._p
+        if P._anchor_px is None:
+            return None
+        g = P.group
+        tpg = max(1, int(round(g / _TICK)))
+        y0 = _STRIP_H + _HDR_H
+        n_rows = max(1, (self.height() - y0) // _ROW_H)
+        return y0, n_rows, int(round(P._anchor_px / _TICK)) // tpg + n_rows // 2, g
+
+    def _band_from_ys(self, ya: float, yb: float):
+        """Snap two canvas ys to whole rows -> (lo_price, hi_price) covering every level dragged over."""
+        geo = self._geom()
+        if geo is None:
+            return None
+        y0, _n, top_bin, g = geo
+        b1 = top_bin - int((ya - y0) // _ROW_H)
+        b2 = top_bin - int((yb - y0) // _ROW_H)
+        lo, hi = min(b1, b2), max(b1, b2)
+        return (lo * g, (hi + 1) * g)              # PRICE-anchored: pans/regroups leave it on its levels
+
+    def _area_begin(self, y: float) -> None:
+        self._area_drag = [y, y]
+        self.update()
+
+    def _area_update(self, y: float) -> None:
+        if getattr(self, "_area_drag", None) is not None:
+            self._area_drag[1] = y
+            self.update()
+
+    def _area_commit(self) -> None:
+        ad = getattr(self, "_area_drag", None)
+        self._area_drag = None
+        if ad is None or abs(ad[1] - ad[0]) < 3:   # zero-movement Ctrl+click is NOT an area — keeps the
+            self.update()                          # Ctrl+double-click delete from first minting a band
+            return
+        band = self._band_from_ys(ad[0], ad[1])
+        if band is not None:
+            self._p._areas.append(band)
+        self.update()
+
+    def _area_delete_at(self, y: float) -> bool:
+        """Delete the most recent area covering the clicked level. True if one was removed."""
+        geo = self._geom()
+        if geo is None:
+            return False
+        y0, _n, top_bin, g = geo
+        px = (top_bin - (y - y0) / _ROW_H + 0.5) * g          # continuous price at the click
+        for k in range(len(self._p._areas) - 1, -1, -1):
+            lo, hi = self._p._areas[k]
+            if lo <= px < hi:
+                del self._p._areas[k]
+                self.update()
+                return True
+        return False
 
     # click-and-drag panning (user 2026-09-01): grab the ladder and pull — dragging DOWN pulls the
     # content down, so higher prices scroll into view (same direction convention as the wheel).
@@ -94,20 +154,36 @@ class _DomCanvas(QtWidgets.QWidget):
 
     def mousePressEvent(self, ev) -> None:
         if ev.button() == QtCore.Qt.LeftButton:
-            self._drag_start(ev.position().y())
-            self.setCursor(QtCore.Qt.ClosedHandCursor)
+            if ev.modifiers() & QtCore.Qt.ControlModifier:
+                self._area_begin(ev.position().y())        # Ctrl+drag = mark an area, no panning
+                self.setCursor(QtCore.Qt.CrossCursor)
+            else:
+                self._drag_start(ev.position().y())
+                self.setCursor(QtCore.Qt.ClosedHandCursor)
             ev.accept()
 
     def mouseMoveEvent(self, ev) -> None:
-        self._drag_to(ev.position().y())
+        if getattr(self, "_area_drag", None) is not None:
+            self._area_update(ev.position().y())
+        else:
+            self._drag_to(ev.position().y())
         self._hover_y = ev.position().y()          # hover row highlight follows the cursor
         self.update()
         ev.accept()
 
     def mouseReleaseEvent(self, ev) -> None:
+        self._area_commit()
         self._drag_end()
         self.unsetCursor()
         ev.accept()
+
+    def mouseDoubleClickEvent(self, ev) -> None:
+        if ev.button() == QtCore.Qt.LeftButton and (ev.modifiers() & QtCore.Qt.ControlModifier):
+            self._area_drag = None                 # the double-click's press armed a zero-drag; drop it
+            self._area_delete_at(ev.position().y())
+            ev.accept()
+            return
+        super().mouseDoubleClickEvent(ev)
 
     def leaveEvent(self, ev) -> None:              # cursor off the ladder -> highlight fully removed
         self._hover_y = None
@@ -329,6 +405,27 @@ class _DomCanvas(QtWidgets.QWidget):
                 p.setPen(QtGui.QPen(QtGui.QColor(225, 230, 240, 220), 1, QtCore.Qt.DashLine))
                 p.drawLine(c_sold0 - 20, ymid, c_bought0 + traded_w + 20, ymid)
 
+        # Ctrl+drag AREAS: translucent bands over the marked levels (price-anchored -> they pan and
+        # regroup WITH their levels). The in-progress drag renders the same way as a live preview.
+        bands = list(P._areas)
+        ad = getattr(self, "_area_drag", None)
+        if ad is not None and abs(ad[1] - ad[0]) >= 3:
+            bp = self._band_from_ys(ad[0], ad[1])
+            if bp is not None:
+                bands.append(bp)
+        for lo, hi in bands:
+            ytop = y0 + (top_bin + 1 - hi / g) * _ROW_H       # y of the band's top edge (hi is exclusive)
+            ybot = y0 + (top_bin + 1 - lo / g) * _ROW_H
+            ytop_c = max(float(y0), ytop)
+            ybot_c = min(float(y0 + n_rows * _ROW_H), ybot)
+            if ybot_c <= ytop_c:
+                continue                                       # panned fully out of view
+            p.setPen(QtGui.QPen(QtGui.QColor(225, 230, 240, 130), 1))
+            p.setBrush(QtGui.QColor(200, 210, 225, 26))
+            p.drawRoundedRect(QtCore.QRectF(pad - 4, ytop_c + 0.5, w - 2 * pad + 8,
+                                            ybot_c - ytop_c - 1.0), 3.0, 3.0)
+            p.setBrush(QtCore.Qt.NoBrush)
+
         # hover row highlight (user 2026-09-01): thin light-gray box around the FULL row under the
         # cursor; _hover_y is None the moment the cursor leaves the canvas -> nothing drawn.
         if self._hover_y is not None and self._hover_y >= y0:
@@ -353,6 +450,8 @@ class DomPanel(QtWidgets.QWidget):
         self._anchor_px: float | None = None       # ladder anchor PRICE; None = center on next paint.
         #                                            Set once, then FIXED — the ladder never auto-scrolls;
         #                                            price-based so it survives a GROUP change in place.
+        self._areas: list = []                     # Ctrl+drag level bands [(lo_price, hi_price)); session-
+        #                                            lifetime user annotations — reset() deliberately keeps them
         self._bids: list = []                      # [(price, qty)] best-first, parsed floats
         self._asks: list = []
         self._mid: float = 0.0
