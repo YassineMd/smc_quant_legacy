@@ -8,10 +8,11 @@ selected window — numbers beside the price, max-per-column bolded. The VP colu
 RIGHT, neutral GRAY (user 2026-09-01: no buy/sell split), POC row gold. Book walls (>= P90 of
 visible levels) render brighter + bold. A book-imbalance strip (whole 200-level book, SOL) sits
 on top. GROUP re-bins 0.01/0.02/0.05/0.10 (trades stored at TICK resolution — regroup is free,
-and the ladder HOLDS its price position). The ladder NEVER auto-scrolls: it centers ONCE on
-entry, then stays put while price moves through it — wheel OR click-drag pans, the ⟲ CENTER
-pill re-centers on demand (user 2026-09-01). The VP histogram is REVERSED: right-anchored,
-growing left. Sizes are SOL; the last trade tags its row with a side chip.
+and the ladder HOLDS its price position). Centering (entry / ⟲ CENTER / double-click) arms
+FOLLOW: the ladder stays put while the live price is on-screen and snaps back to center only
+when price crosses the visible extremes; ANY manual pan (wheel or click-drag) disarms follow
+until the next centering (user 2026-09-01). The VP histogram is REVERSED: right-anchored,
+growing left. Sizes are SOL; the last trade highlights its price cell (bold, red/green bg).
 """
 
 from __future__ import annotations
@@ -147,6 +148,7 @@ class _DomCanvas(QtWidgets.QWidget):
             return
         y0, a0 = self._drag
         self._p._anchor_px = a0 + ((y - y0) / _ROW_H) * self._p.group
+        self._p._follow = False                    # going off-center deactivates auto-follow
         self.update()
 
     def _drag_end(self) -> None:
@@ -270,12 +272,20 @@ class _DomCanvas(QtWidgets.QWidget):
         # ── rows: bin the book + traded volumes to the current group ───────────────────────
         mid = P._mid if P._mid > 0 else (bids[0][0] + asks[0][0]) / 2.0 if (bids and asks) else \
             (bids[0][0] if bids else asks[0][0])
-        if P._anchor_px is None:
-            P._anchor_px = mid                     # center ONCE (entry / ⟲ CENTER) — never auto-follow
         n_rows = max(1, (h - y0) // _ROW_H)
         # ALL binning happens in integer TICK space then floors to the group — price/g floats off-by-one
         # at the 4th decimal (235.67//0.01 -> 23566), int ticks never do. A bin = [b*g, b*g+g).
         tpg = max(1, int(round(g / _TICK)))
+        if P._anchor_px is None:
+            P._anchor_px = mid                     # center ONCE (entry / ⟲ CENTER / double-click)
+        elif P._follow:
+            # FOLLOW (user 2026-09-01): armed by centering, disarmed by any manual pan. The ladder
+            # stays put while the live price is on-screen; the moment it crosses the visible
+            # upper/lower extreme, snap back to center on it.
+            _tb = int(round(P._anchor_px / _TICK)) // tpg + n_rows // 2
+            _mb = int(round(mid / _TICK)) // tpg
+            if _mb > _tb or _mb < _tb - n_rows + 1:
+                P._anchor_px = mid
         center_bin = int(round(P._anchor_px / _TICK)) // tpg
         top_bin = center_bin + n_rows // 2
 
@@ -449,6 +459,8 @@ class DomPanel(QtWidgets.QWidget):
         #                                            price-based so it survives a GROUP change in place.
         self._areas: list = []                     # Ctrl+drag level bands [(lo_price, hi_price)); session-
         #                                            lifetime user annotations — reset() deliberately keeps them
+        self._follow: bool = True                  # armed by centering: re-center when the live price leaves
+        #                                            the visible rows; ANY manual pan (wheel/drag) disarms it
         self._bids: list = []                      # [(price, qty)] best-first, parsed floats
         self._asks: list = []
         self._mid: float = 0.0
@@ -548,10 +560,12 @@ class DomPanel(QtWidgets.QWidget):
         if base <= 0:
             return
         self._anchor_px = base + rows * self.group
+        self._follow = False                        # going off-center deactivates auto-follow
         self.canvas.update()
 
     def recenter(self) -> None:
         self._anchor_px = None                      # next paint pins the anchor to the CURRENT mid
+        self._follow = True                         # ...and re-arms beyond-the-extremes auto-follow
         self.canvas.update()
 
     # ── book + trades ingestion ────────────────────────────────────────────────────────────
@@ -614,6 +628,7 @@ class DomPanel(QtWidgets.QWidget):
         self._bids = []
         self._asks = []
         self._anchor_px = None
+        self._follow = True
         self.canvas.update()
 
     def _trades_cat(self):
