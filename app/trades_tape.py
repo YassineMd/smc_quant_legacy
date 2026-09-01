@@ -273,6 +273,8 @@ class TradesTapePanel(QtWidgets.QWidget):
         self.pill.setFixedHeight(24)
         self.pill.clicked.connect(self.resume_live)
         lay.addWidget(self.pill)
+        lay.addSpacing(112)                       # keep clear of the window's floating 🔄🔔☰ buttons
+        #                                           (three 32px icons overlay the top-right corner)
         self._style_pill(live=True)
 
         root.addWidget(bar)

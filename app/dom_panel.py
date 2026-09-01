@@ -403,6 +403,8 @@ class DomPanel(QtWidgets.QWidget):
             "QPushButton:hover { background:rgba(240,185,11,0.22); }")
         self.pill.clicked.connect(self.recenter)
         lay.addWidget(self.pill)
+        lay.addSpacing(112)                        # keep clear of the window's floating 🔄🔔☰ buttons
+        #                                            (three 32px icons overlay the top-right corner)
 
         root.addWidget(bar)
         self.canvas = _DomCanvas(self)
