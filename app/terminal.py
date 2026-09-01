@@ -2788,7 +2788,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.trades_panel.set_min_usd(float(getattr(self, "_tape_min_saved", 0.0)))   # Trades tape MIN SIZE
             _dg, _dv = getattr(self, "_dom_saved", (0.01, 3600))                          # DOM ladder settings
             self.dom_panel.set_group(_dg if _dg in (0.01, 0.02, 0.05, 0.10) else 0.01)
-            self.dom_panel.set_vp_secs(_dv if _dv in (300, 900, 3600) else 3600)
+            self.dom_panel.set_vp_secs(_dv if _dv in (300, 900, 3600, 7200, 14400, 21600) else 3600)
         finally:
             self._loading_ui = False
         # CHART SOURCE persists too (2026-08-24): it silently reset to Volume Buckets on every relaunch, so clock-

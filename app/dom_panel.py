@@ -41,7 +41,7 @@ _WAIT_TXT = QtGui.QColor(120, 130, 148, 160)
 _ROW_H, _HDR_H, _STRIP_H = 18, 24, 34
 _TICK = 0.01                       # storage resolution: trades histogrammed at 1 tick, regroup-free
 _GROUPS = (0.01, 0.02, 0.05, 0.10)
-_VP_SECS = ((300, "5M"), (900, "15M"), (3600, "1H"))
+_VP_SECS = ((300, "5M"), (900, "15M"), (3600, "1H"), (7200, "2H"), (14400, "4H"), (21600, "6H"))
 _PRUNE_SLACK = 300.0               # keep trades a bit past the largest VP window before dropping
 
 
@@ -349,7 +349,7 @@ class DomPanel(QtWidgets.QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.group: float = _GROUPS[0]
-        self.vp_secs: int = _VP_SECS[-1][0]
+        self.vp_secs: int = 3600                   # default 1H (NOT _VP_SECS[-1] — 6H exists now)
         self._anchor_px: float | None = None       # ladder anchor PRICE; None = center on next paint.
         #                                            Set once, then FIXED — the ladder never auto-scrolls;
         #                                            price-based so it survives a GROUP change in place.
