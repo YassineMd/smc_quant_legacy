@@ -9,8 +9,9 @@ RIGHT, neutral GRAY (user 2026-09-01: no buy/sell split), POC row gold. Book wal
 visible levels) render brighter + bold. A book-imbalance strip (whole 200-level book, SOL) sits
 on top. GROUP re-bins 0.01/0.02/0.05/0.10 (trades stored at TICK resolution — regroup is free,
 and the ladder HOLDS its price position). The ladder NEVER auto-scrolls: it centers ONCE on
-entry, then stays put while price moves through it — wheel pans, the ⟲ CENTER pill re-centers
-on demand (user 2026-09-01). Sizes are SOL; the last trade tags its row with a side chip.
+entry, then stays put while price moves through it — wheel OR click-drag pans, the ⟲ CENTER
+pill re-centers on demand (user 2026-09-01). The VP histogram is REVERSED: right-anchored,
+growing left. Sizes are SOL; the last trade tags its row with a side chip.
 """
 
 from __future__ import annotations
@@ -71,6 +72,37 @@ class _DomCanvas(QtWidgets.QWidget):
     def wheelEvent(self, ev) -> None:
         # wheel UP pans the ladder to HIGHER prices; the ladder is manual-only (no auto-follow)
         self._p.pan_by(3 if ev.angleDelta().y() > 0 else -3)
+        ev.accept()
+
+    # click-and-drag panning (user 2026-09-01): grab the ladder and pull — dragging DOWN pulls the
+    # content down, so higher prices scroll into view (same direction convention as the wheel).
+    def _drag_start(self, y: float) -> None:
+        base = self._p._anchor_px if self._p._anchor_px is not None else (self._p._mid or 0.0)
+        self._drag = (y, base) if base > 0 else None
+
+    def _drag_to(self, y: float) -> None:
+        if getattr(self, "_drag", None) is None:
+            return
+        y0, a0 = self._drag
+        self._p._anchor_px = a0 + ((y - y0) / _ROW_H) * self._p.group
+        self.update()
+
+    def _drag_end(self) -> None:
+        self._drag = None
+
+    def mousePressEvent(self, ev) -> None:
+        if ev.button() == QtCore.Qt.LeftButton:
+            self._drag_start(ev.position().y())
+            self.setCursor(QtCore.Qt.ClosedHandCursor)
+            ev.accept()
+
+    def mouseMoveEvent(self, ev) -> None:
+        self._drag_to(ev.position().y())
+        ev.accept()
+
+    def mouseReleaseEvent(self, ev) -> None:
+        self._drag_end()
+        self.unsetCursor()
         ev.accept()
 
     # ------------------------------------------------------------------
@@ -139,7 +171,7 @@ class _DomCanvas(QtWidgets.QWidget):
         p.drawText(QtCore.QRect(c_bought0, y0, traded_w, _HDR_H), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
                    "BOUGHT")
         p.drawText(QtCore.QRect(c_ask0, y0, 120, _HDR_H), QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, "ASKS")
-        p.drawText(QtCore.QRect(c_vp0, y0, vp_w, _HDR_H), QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+        p.drawText(QtCore.QRect(c_vp0, y0, vp_w, _HDR_H), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
                    f"VOLUME · {P.vp_label()}")
         p.setPen(QtGui.QPen(_RULE, 1))
         p.drawLine(pad, y0 + _HDR_H - 1, w - pad, y0 + _HDR_H - 1)
@@ -240,7 +272,8 @@ class _DomCanvas(QtWidgets.QWidget):
                            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, _kfmt(bq))
             p.setFont(self._font)
 
-            # VP (far right, neutral GRAY — total executed volume; POC row gold)
+            # VP (far right, neutral GRAY — total executed volume; POC row gold). REVERSED (user
+            # 2026-09-01): bars anchor on the RIGHT edge and grow LEFT, label to the left of the tip.
             if bq + sq > 0:
                 bw_ = (bq + sq) / max_vp * (vp_w - 44)
                 p.setPen(QtCore.Qt.NoPen)
@@ -250,11 +283,11 @@ class _DomCanvas(QtWidgets.QWidget):
                 else:
                     col = QtGui.QColor(_VP_GRAY)
                     col.setAlpha(90)
-                p.fillRect(QtCore.QRectF(c_vp0, ry + 3.5, max(1.5, bw_), _ROW_H - 7), col)
+                p.fillRect(QtCore.QRectF(w - pad - max(1.5, bw_), ry + 3.5, max(1.5, bw_), _ROW_H - 7), col)
                 p.setPen(_GOLD if b == poc_bin else _DIM_TXT)
                 p.setFont(self._font_b if b == poc_bin else self._font)
-                p.drawText(QtCore.QRectF(c_vp0 + bw_ + 5, ry, vp_w - bw_ - 5, _ROW_H),
-                           QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, _kfmt(bq + sq))
+                p.drawText(QtCore.QRectF(c_vp0, ry, vp_w - bw_ - 9, _ROW_H),
+                           QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, _kfmt(bq + sq))
                 p.setFont(self._font)
 
         # ── price column LAST so chips overlay the grid cleanly ────────────────────────────
@@ -277,19 +310,15 @@ class _DomCanvas(QtWidgets.QWidget):
                        f"{price:,.2f}")
         p.setFont(self._font)
 
-        # spread marker: dashed gold line on the ask/bid boundary (skipped when grouping merges them)
+        # spread marker: dashed BRIGHT-GRAY line on the ask/bid boundary, line ONLY — no text label
+        # (user 2026-09-01). Skipped when grouping merges best bid/ask into one row.
         if best_bid_bin is not None and best_ask_bin is not None and bids and asks:
-            spread = asks[0][0] - bids[0][0]
             i_ask = top_bin - best_ask_bin           # best-ask row index (bid row sits below: bigger i)
             i_bid = top_bin - best_bid_bin
             if i_bid > i_ask and -1 <= i_ask and i_bid <= n_rows:
                 ymid = y0 + ((i_ask + 1 + i_bid) * _ROW_H) // 2
-                p.setPen(QtGui.QPen(_GOLD, 1, QtCore.Qt.DashLine))
+                p.setPen(QtGui.QPen(QtGui.QColor(225, 230, 240, 220), 1, QtCore.Qt.DashLine))
                 p.drawLine(c_sold0 - 20, ymid, c_bought0 + traded_w + 20, ymid)
-                p.setFont(self._font_hdr)
-                p.setPen(_GOLD)
-                p.drawText(QtCore.QRect(c_bought0 + traded_w + 24, ymid - 8, 130, 16),
-                           QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, f"SPREAD {spread:.2f}")
         p.end()
 
 
