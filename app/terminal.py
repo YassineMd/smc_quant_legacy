@@ -9953,17 +9953,51 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _deep = []
         _warm = (list(_deep) + list(warm))[-6000:]               # trailing history is plenty for 4 trend segments
         _off = len(_warm)
+        _bub = self.menu.layer_state("m10_bigbar_bub")           # sub-toggle: BUBBLE filter (same rule as the RR's)
         _ce = filtered[-2] if (_forming and n >= 2) else (filtered[-1] if n else None)
         _cet = float(_ce.get("end_time", 0.0) or 0.0) if _ce else 0.0
-        _sig = (n, _off, _forming, self._tf, _cet)
+        _sig = (n, _off, _forming, _bub, self._tf, _cet)
         if _sig == self._bb_sig and self._bb_drawn:
             return                                               # closed-bar detect -> re-run only once per bar-close
         self._bb_sig = _sig
         try:
             from app import bigbar_detect
-            marks = bigbar_detect.detect(list(_warm) + list(filtered), skip_last=_forming,
+            _bset = list(_warm) + list(filtered)
+            marks = bigbar_detect.detect(_bset, skip_last=_forming,
                                          pctl=float(getattr(config, "BIGBAR_SIZE_PCTL", 80.0)),
                                          wick_max=float(getattr(config, "BIGBAR_WICK_MAX", 0.30)))
+            if _bub and marks:                                    # 'Bubble filter' — the RR rule on the BIG candle:
+                from app import crazy_wall_detect as _cw          # clean close-side wick of bubbles (any size) + at
+                _bthr = _cw.bubble_thresholds(_bset)              # least one big/medium bubble on the close's side.
+                _kept = []                                        # Can't tier / no footprint -> KEEP (never hidden).
+                for _e in marks:
+                    _mi = int(_e["i"]); _th = _bthr[_mi] if 0 <= _mi < len(_bthr) else None
+                    if _th is None:
+                        _kept.append(_e); continue
+                    _b9 = _bset[_mi]
+                    _o9 = float(_b9.get("open", 0.0) or 0.0)
+                    _c9 = float(_b9.get("close", _b9.get("close_price", 0.0)) or 0.0)
+                    if _o9 <= 0 or _c9 <= 0:
+                        _kept.append(_e); continue
+                    _bt9 = max(_o9, _c9); _bb9 = min(_o9, _c9)
+                    _bubs = _cw._bubbles(_b9)
+                    if not _bubs:
+                        continue                                  # no bubble at all -> no big/medium one
+                    _okb = None; _big9 = False
+                    for _pr, _tot, _bu, _se in _bubs:
+                        if _e["side"] > 0:                        # BULLISH: upper wick clean, big/med <= close
+                            if _pr > _bt9:
+                                _okb = False; break
+                            if _tot >= _th[0] and _pr <= _c9:
+                                _big9 = True
+                        else:                                     # BEARISH: lower wick clean, big/med >= close
+                            if _pr < _bb9:
+                                _okb = False; break
+                            if _tot >= _th[0] and _pr >= _c9:
+                                _big9 = True
+                    if _okb is None and _big9:
+                        _kept.append(_e)
+                marks = _kept
         except Exception:
             self._clear_bigbar(); return
         (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
