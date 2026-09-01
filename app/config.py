@@ -173,6 +173,8 @@ DEPTH_RETENTION_HOURS = 72      # HARD time-based prune (governs depth_deltas + 
 DEPTH_BUFFER_CAP = 200000       # max buffered records per stream (drop-oldest) so a stalled write can't grow RAM
 TAPE_BACKFILL_SECS = 300        # Trades scanner mode: history window requested on entry (raw aggTrades from
                                 # trade_tape; ~5 min fills the table instantly without a heavy tunnel transfer)
+DOM_VP_BACKFILL_SECS = 3600     # DOM scanner mode: executed-trade history for the ladder's Volume Profile —
+                                # 1h covers every VP window choice (5M/15M/1H filter locally, no re-requests)
 # Phase 2b — terminal heatmap render (the daemon serves raw sizes; these shape the request + local contrast)
 HEATMAP_YBINS = 400             # price bins (Y resolution) requested per window
 HEATMAP_BAND_PCT = 2.0          # price band shown = +- this % of mid (the visible Y range)

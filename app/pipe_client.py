@@ -252,6 +252,13 @@ class PipeClientWorker(threading.Thread):
             self._hm_cols.clear()
             return self._hm_ver, w, cols
 
+    def depth_book(self):
+        """Cheap book accessor for the DOM ladder: (bids, asks, latest_price) from the last PULSE —
+        independent of the chart source (the TIME feed's identically-shaped snapshot has no depth, so
+        the DOM must never read the book off _effective_snapshot())."""
+        with self.data_lock:
+            return list(self.depth["bids"]), list(self.depth["asks"]), self.latest_price
+
     def trades_state(self):
         """Phase 3 bubbles accessor (heatmap mode only, consume-once): ``(version, window_or_None,
         [live_batches])``; clears the delivered window + drains the live batches. The trade arrays stay HERE,

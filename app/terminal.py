@@ -53,6 +53,7 @@ from .chart_widgets import (
 from .cob_panel import CobPanel
 from .footprint_panel import FootprintPanel, profile_skewness, skew_read, skew_color, vp_lines_from_levels
 from .trades_tape import TradesTapePanel
+from .dom_panel import DomPanel
 from .drawing_tools import DrawingController, DrawingToolbar
 from .footprint_layers import BucketFootprintItem, DepthWallLayer, detail_visible
 from .hamburger import FloatingOverlayMenu, HamburgerButton, scale_label
@@ -912,12 +913,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.splitter.addWidget(self.cob)
         self.splitter.addWidget(self.fp_panel)   # rightmost; rides the Mode-10 reparenting, gated by _fp_want + mode
         self.splitter.addWidget(self.trades_panel)
+        self.dom_panel = DomPanel()              # scanner mode "dom" — DOM ladder + VP (replaces the plot)
+        self.dom_panel.settingsChanged.connect(
+            lambda: None if self._loading_ui else self._save_ui_state())   # GROUP + VP window stick
+        self.splitter.addWidget(self.dom_panel)
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(3, 1)     # trades tape takes the plot's space when it swaps in
+        self.splitter.setStretchFactor(4, 1)     # DOM ladder likewise
         self.cob.hide()
         self.fp_panel.hide()
         self.trades_panel.hide()
-        self._tape_resub_t = 0.0                 # last live-batch (re)subscribe — re-armed every 10s in trades mode
+        self.dom_panel.hide()
+        self._tape_resub_t = 0.0                 # last live-batch (re)subscribe — re-armed every 10s in trades/dom mode
         # footprint pane hover -> its own crosshair + mirror the price into the chart (shared like the VPIN pane)
         self._fp_proxy = pg.SignalProxy(self.fp_panel.scene().sigMouseMoved,
                                         rateLimit=60, slot=self._on_fp_mouse_move)
@@ -2224,6 +2231,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hm_exit()           # Phase 2b: tear down the heatmap (unsubscribe live push, free grid)
         if prev_mode == "trades" and mode != "trades":
             self._tape_exit()         # trades tape: unsubscribe the live batches, swap the plot back in
+        if prev_mode == "dom" and mode != "dom":
+            self._dom_exit()          # DOM ladder: unsubscribe, swap the plot back in
         # §6.2 — index-space drawings are session-only + index-anchored. Keep them in memory for the
         # whole session: SHOW on Mode 10, HIDE on the metric scanners (where a price-anchored shape is
         # off-axis), restore on return — so drawings survive every mode switch AND scan-time change.
@@ -2271,6 +2280,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 cob_cb.blockSignals(True); cob_cb.setChecked(True); cob_cb.blockSignals(False)
         if mode == "trades":
             self._tape_enter()   # swap the tape in + subscribe the live batches (after the generic setup)
+        if mode == "dom":
+            self._dom_enter()    # swap the DOM ladder in + subscribe (book rides the always-on pulses)
         self._update_fp_pane_visibility()   # live-footprint pane rides Mode 10 only
         self._on_timer()   # immediate first draw from the current Zero Point
 
@@ -2775,6 +2786,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 target = bool(saved.get(key, cb.isChecked()))
                 cb.blockSignals(True); cb.setChecked(target); cb.blockSignals(False)   # draw-gate applies it next frame
             self.trades_panel.set_min_usd(float(getattr(self, "_tape_min_saved", 0.0)))   # Trades tape MIN SIZE
+            _dg, _dv = getattr(self, "_dom_saved", (0.01, 3600))                          # DOM ladder settings
+            self.dom_panel.set_group(_dg if _dg in (0.01, 0.02, 0.05, 0.10) else 0.01)
+            self.dom_panel.set_vp_secs(_dv if _dv in (300, 900, 3600) else 3600)
         finally:
             self._loading_ui = False
         # CHART SOURCE persists too (2026-08-24): it silently reset to Volume Buckets on every relaunch, so clock-
@@ -8368,6 +8382,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "wall_floor": self._wall_floor,                           # Order-Flow Walls min-strength draw floor
                 "reward_strength": self._reward_strength,                 # Reward-switch zones min-strength filter
                 "tape_min_usd": float(getattr(self.trades_panel, "min_usd", 0.0)),   # Trades tape MIN SIZE slider
+                "dom_group": float(getattr(self.dom_panel, "group", 0.01)),          # DOM ladder tick grouping
+                "dom_vp_secs": int(getattr(self.dom_panel, "vp_secs", 3600)),        # DOM VP window
                 "bubble_vol": self.hm_bubble_min,                         # Heatmap trade-bubble min-volume filter (SOL)
                 "kc_scale": self._kc_scale,                               # 1m-KC smooth-approx effective-TF scale slider
                 "tf": self._tf,                                           # last chart timeframe -> reopen on it
@@ -8413,6 +8429,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._tape_min_saved = float(s.get("tape_min_usd", 0.0) or 0.0)   # applied in _apply_saved_toggles
         except (TypeError, ValueError):
             self._tape_min_saved = 0.0
+        try:
+            self._dom_saved = (float(s.get("dom_group", 0.01) or 0.01),       # applied in _apply_saved_toggles
+                               int(s.get("dom_vp_secs", 3600) or 3600))
+        except (TypeError, ValueError):
+            self._dom_saved = (0.01, 3600)
         _lm = s.get("ls_mode")
         if _lm is None:                                       # migrate the old boolean: True (both) -> 2, else 0
             _lm = 2 if s.get("largesmall") else 0
@@ -14605,6 +14626,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self.scanner_mode == "trades":
             self._scan_trades_tape()     # live tape, its own widget — bypass the bucket pipeline entirely
             return
+        if self.scanner_mode == "dom":
+            self._scan_dom()             # DOM ladder + VP, its own widget — bypass the bucket pipeline
+            return
         snap = self._last_snap or self.worker.snapshot()
         closed = snap.get("closed_buckets", []) or []
         active = snap.get("active_bucket") or {}
@@ -14756,6 +14780,62 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if changed or now - getattr(self, "_tape_last_paint", 0.0) > 1.0:
             self._tape_last_paint = now
             self.trades_panel.canvas.update()
+
+    # ------------------------------------------------------------------
+    # Scanner mode "dom" — DeepChart-style DOM ladder + Volume Profile
+    # ------------------------------------------------------------------
+    def _dom_enter(self) -> None:
+        """Enter DOM mode: swap the ladder in for the plot. The BOOK rides the always-on 0.4s pulses
+        (snapshot()['depth'], top 200 levels/side) — only the VP's executed trades need arming, via the
+        same degenerate depth_window subscription the Trades mode uses, with a 1h backfill window."""
+        self.plot.setVisible(False)
+        self.dom_panel.setVisible(True)
+        self._dom_last_paint = 0.0
+        self._tape_conn_was = bool(self.worker.connected)
+        self._dom_subscribe(backfill=True)
+
+    def _dom_exit(self) -> None:
+        """Leave DOM mode: stop the live push and swap the plot back in. Trades are kept (bounded by
+        the VP prune) so re-entry keeps its profile; the book refills on the next pulse anyway."""
+        self.worker.stop_depth_window()
+        self.dom_panel.setVisible(False)
+        self.plot.setVisible(True)
+
+    def _dom_subscribe(self, backfill: bool) -> None:
+        """(Re-)arm the live trade batches; with backfill, request the VP history window (1h — every VP
+        window choice filters inside it locally, so no re-requests on a VP toggle)."""
+        t1 = int(time.time() * 1000)
+        self.worker.request_depth_window(t1 - 1000, t1, 1, 0.0, 1e9, 1)
+        if backfill:
+            self.worker.request_trades_window(t1 - int(config.DOM_VP_BACKFILL_SECS) * 1000, t1, 0.0, 1e9)
+        self._tape_resub_t = time.time()
+
+    def _scan_dom(self) -> None:
+        """Per-frame: book from the latest snapshot, trades drained into the VP store, ~0.4s repaints.
+        Same reconnect healing as the Trades mode (shared _tape_resub_t / _tape_conn_was)."""
+        conn = bool(self.worker.connected)
+        if conn and not getattr(self, "_tape_conn_was", True):
+            self.dom_panel.reset()
+            self._dom_subscribe(backfill=True)
+        self._tape_conn_was = conn
+        _tv, tw, tbatches = self.worker.trades_state()
+        for tbp in tbatches:
+            self.dom_panel.ingest_live(*decode_trades(tbp.ts_b64, tbp.price_b64,
+                                                      tbp.qty_b64, tbp.side_b64))
+        if tw is not None:
+            self.dom_panel.ingest_window(*decode_trades(tw.ts_b64, tw.price_b64,
+                                                        tw.qty_b64, tw.side_b64))
+        now = time.time()
+        if now - self._tape_resub_t > 10.0:
+            self._dom_subscribe(backfill=False)
+        if now - getattr(self, "_dom_last_paint", 0.0) > 0.35:   # book pulses land every 0.4s
+            # book straight off the worker — NEVER via _effective_snapshot(): the TIME chart source's
+            # identically-shaped snapshot carries no "depth", which would blank the ladder there.
+            _bids, _asks, _lp = self.worker.depth_book()
+            self.dom_panel.set_book(_bids, _asks, float(_lp or 0.0))
+            self.dom_panel.mark_dirty()                          # re-prune the VP windows to 'now'
+            self._dom_last_paint = now
+            self.dom_panel.canvas.update()
 
     def _scan_depth_heatmap(self) -> None:
         """Per-frame heatmap update — ONLY dispatched while this mode is active. Drains the delivery buffer
