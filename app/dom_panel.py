@@ -1,15 +1,16 @@
 """DOM scanner mode — DeepChart-style Depth-of-Market ladder + Volume Profile (no trading sim).
 
-Full-pane price ladder, newest book every 0.4s pulse (top 200 levels/side ride snapshot()["depth"]):
-    [ VOLUME PROFILE | BID SIZE | PRICE | ASK SIZE ]
-Asks stack above the spread (red, growing right), bids below (green, growing left) — both anchored
-on the center price column. The VP column aggregates EXECUTED trades (the same live tape feed the
-Trades mode uses) into the ladder's rows over a selectable window (5M/15M/1H), buy/sell split, POC
-row gold-flagged. Book walls (>= P90 of visible levels) render brighter + bold. A book-imbalance
-strip (whole 200-level book, both sides, SOL) sits on top. GROUP buttons re-bin the ladder
-(0.01/0.02/0.05/0.10); trades are stored at TICK resolution so regrouping is free. The ladder
-auto-centers on mid each frame; wheel-scrolling freezes it (pill: CENTERED -> FREE, click to snap
-back). Sizes are SOL; the last trade tags its row with a side-colored chip.
+Full-pane price ladder, newest book every 0.4s pulse (top 200 levels/side off the PULSE):
+    [ BID SIZE | SOLD | PRICE | BOUGHT | ASK SIZE | VOLUME PROFILE ]
+Asks stack above the spread (red, growing right), bids below (green, growing left). SOLD/BOUGHT
+(DeepChart's B.T/A.T) are the EXECUTED taker sell / taker buy volumes at each price over the
+selected window — numbers beside the price, max-per-column bolded. The VP column sits on the
+RIGHT, neutral GRAY (user 2026-09-01: no buy/sell split), POC row gold. Book walls (>= P90 of
+visible levels) render brighter + bold. A book-imbalance strip (whole 200-level book, SOL) sits
+on top. GROUP re-bins 0.01/0.02/0.05/0.10 (trades stored at TICK resolution — regroup is free,
+and the ladder HOLDS its price position). The ladder NEVER auto-scrolls: it centers ONCE on
+entry, then stays put while price moves through it — wheel pans, the ⟲ CENTER pill re-centers
+on demand (user 2026-09-01). Sizes are SOL; the last trade tags its row with a side chip.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ _DIM_TXT  = QtGui.QColor(212, 220, 232, 120)
 _BUY      = QtGui.QColor(46, 189, 133)
 _SELL     = QtGui.QColor(246, 70, 93)
 _GOLD     = QtGui.QColor(240, 185, 11)
+_VP_GRAY  = QtGui.QColor(150, 160, 175)
 _WAIT_TXT = QtGui.QColor(120, 130, 148, 160)
 
 _ROW_H, _HDR_H, _STRIP_H = 18, 24, 34
@@ -67,7 +69,7 @@ class _DomCanvas(QtWidgets.QWidget):
         self._font_hdr = fh
 
     def wheelEvent(self, ev) -> None:
-        # wheel UP pans the ladder to HIGHER prices; any offset freezes auto-centering
+        # wheel UP pans the ladder to HIGHER prices; the ladder is manual-only (no auto-follow)
         self._p.pan_by(3 if ev.angleDelta().y() > 0 else -3)
         ev.accept()
 
@@ -79,7 +81,7 @@ class _DomCanvas(QtWidgets.QWidget):
         pad = 12
         P = self._p
 
-        bids, asks = P._bids, P._asks              # [(price, qty)] parsed, best-first
+        bids, asks = P._bids, P._asks              # [(price, qty)] best-first, parsed floats
         if not bids and not asks:
             p.setFont(self._font)
             p.setPen(_WAIT_TXT)
@@ -111,38 +113,48 @@ class _DomCanvas(QtWidgets.QWidget):
                        f"{ta / tot * 100:.0f}%  {_kfmt(ta)} ASKS")
         y0 += _STRIP_H
 
-        # ── column geometry ────────────────────────────────────────────────────────────────
+        # ── column geometry: [BID | SOLD | PRICE | BOUGHT | ASK | VP(right)] ───────────────
         g = P.group
+        traded_w = 62
         price_w = 92
-        vp_w = max(120, int(w * 0.22))
-        c_vp0 = pad
-        c_price0 = (w - price_w) // 2
-        c_bid1 = c_price0 - 6                       # bid bars grow LEFT from here
-        c_ask0 = c_price0 + price_w + 6             # ask bars grow RIGHT from here
-        bid_span = c_bid1 - (c_vp0 + vp_w + 10)
-        ask_span = (w - pad) - c_ask0
+        vp_w = max(120, int(w * 0.20))
+        c_vp0 = w - pad - vp_w                     # VP zone, far right (gray)
+        span = max(60, (c_vp0 - 2 * traded_w - price_w - 2 * pad - 40) // 2)
+        c_bid1 = pad + span                        # bid bars grow LEFT from here
+        c_sold0 = c_bid1 + 10
+        c_price0 = c_sold0 + traded_w + 4
+        c_bought0 = c_price0 + price_w + 4
+        c_ask0 = c_bought0 + traded_w + 10         # ask bars grow RIGHT from here
+        ask_span = max(60, c_vp0 - 14 - c_ask0)
+        bid_span = span
 
         # ── header ─────────────────────────────────────────────────────────────────────────
         p.setFont(self._font_hdr)
         p.setPen(_HDR_TXT)
-        p.drawText(QtCore.QRect(c_vp0, y0, vp_w, _HDR_H), QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
-                   f"VOLUME · {P.vp_label()}")
-        p.drawText(QtCore.QRect(c_bid1 - 120, y0, 120, _HDR_H), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, "BIDS")
+        p.drawText(QtCore.QRect(pad, y0, span, _HDR_H), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, "BIDS")
+        p.drawText(QtCore.QRect(c_sold0, y0, traded_w, _HDR_H), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
+                   "SOLD")
         p.drawText(QtCore.QRect(c_price0, y0, price_w, _HDR_H), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
                    "PRICE")
+        p.drawText(QtCore.QRect(c_bought0, y0, traded_w, _HDR_H), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
+                   "BOUGHT")
         p.drawText(QtCore.QRect(c_ask0, y0, 120, _HDR_H), QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, "ASKS")
+        p.drawText(QtCore.QRect(c_vp0, y0, vp_w, _HDR_H), QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+                   f"VOLUME · {P.vp_label()}")
         p.setPen(QtGui.QPen(_RULE, 1))
         p.drawLine(pad, y0 + _HDR_H - 1, w - pad, y0 + _HDR_H - 1)
         y0 += _HDR_H
 
-        # ── rows: bin the book + VP to the current group ───────────────────────────────────
+        # ── rows: bin the book + traded volumes to the current group ───────────────────────
         mid = P._mid if P._mid > 0 else (bids[0][0] + asks[0][0]) / 2.0 if (bids and asks) else \
             (bids[0][0] if bids else asks[0][0])
+        if P._anchor_px is None:
+            P._anchor_px = mid                     # center ONCE (entry / ⟲ CENTER) — never auto-follow
         n_rows = max(1, (h - y0) // _ROW_H)
         # ALL binning happens in integer TICK space then floors to the group — price/g floats off-by-one
         # at the 4th decimal (235.67//0.01 -> 23566), int ticks never do. A bin = [b*g, b*g+g).
         tpg = max(1, int(round(g / _TICK)))
-        center_bin = (int(round(mid / _TICK)) // tpg) + P._pan
+        center_bin = int(round(P._anchor_px / _TICK)) // tpg
         top_bin = center_bin + n_rows // 2
 
         bid_bins: dict = {}
@@ -153,12 +165,14 @@ class _DomCanvas(QtWidgets.QWidget):
         for pr, q in asks:
             b = int(round(pr / _TICK)) // tpg
             ask_bins[b] = ask_bins.get(b, 0.0) + q
-        vp = P.vp_bins(g, top_bin - n_rows + 1, top_bin)   # {bin: (buyQ, sellQ)}
+        vp = P.vp_bins(g, top_bin - n_rows + 1, top_bin)   # {bin: (boughtQ, soldQ)}
 
         vis_b = [bid_bins.get(top_bin - i, 0.0) for i in range(n_rows)]
         vis_a = [ask_bins.get(top_bin - i, 0.0) for i in range(n_rows)]
         max_sz = max(max(vis_b, default=0.0), max(vis_a, default=0.0)) or 1.0
         max_vp = max((bq + sq for bq, sq in vp.values()), default=0.0) or 1.0
+        max_bought = max((v[0] for v in vp.values()), default=0.0)
+        max_sold = max((v[1] for v in vp.values()), default=0.0)
         nz = sorted([v for v in vis_b + vis_a if v > 0])
         p90 = nz[int(len(nz) * 0.9)] if nz else float("inf")   # wall emphasis threshold (visible P90)
         poc_bin = max(vp, key=lambda b: vp[b][0] + vp[b][1]) if vp else None
@@ -174,27 +188,7 @@ class _DomCanvas(QtWidgets.QWidget):
             p.setPen(QtGui.QPen(_GRID, 1))
             p.drawLine(pad, ry + _ROW_H - 1, w - pad, ry + _ROW_H - 1)
 
-            # VP (buy then sell segments, left-anchored) + POC gold flag
-            bq, sq = vp.get(b, (0.0, 0.0))
-            if bq + sq > 0:
-                bw_ = (bq + sq) / max_vp * (vp_w - 34)
-                buy_w = bw_ * (bq / (bq + sq))
-                p.setPen(QtCore.Qt.NoPen)
-                bcol = QtGui.QColor(_BUY); bcol.setAlpha(120)
-                scol = QtGui.QColor(_SELL); scol.setAlpha(120)
-                p.fillRect(QtCore.QRectF(c_vp0, ry + 3.5, buy_w, _ROW_H - 7), bcol)
-                p.fillRect(QtCore.QRectF(c_vp0 + buy_w, ry + 3.5, bw_ - buy_w, _ROW_H - 7), scol)
-                if b == poc_bin:
-                    p.fillRect(QtCore.QRectF(c_vp0 - 4, ry + 2, 3, _ROW_H - 4), _GOLD)
-                    p.setPen(_GOLD)
-                else:
-                    p.setPen(_DIM_TXT)
-                p.setFont(self._font_b if b == poc_bin else self._font)
-                p.drawText(QtCore.QRectF(c_vp0 + bw_ + 5, ry, vp_w - bw_ - 5, _ROW_H),
-                           QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, _kfmt(bq + sq))
-                p.setFont(self._font)
-
-            # BID bar (grows left from the price column)
+            # BID bar (grows left from the SOLD column)
             q = vis_b[i]
             if q > 0 and (best_bid_bin is None or b <= best_bid_bin):
                 bw_ = q / max_sz * bid_span
@@ -210,7 +204,7 @@ class _DomCanvas(QtWidgets.QWidget):
                            QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, _kfmt(q))
                 p.setFont(self._font)
 
-            # ASK bar (grows right from the price column)
+            # ASK bar (grows right from the BOUGHT column)
             q = vis_a[i]
             if q > 0 and (best_ask_bin is None or b >= best_ask_bin):
                 bw_ = q / max_sz * ask_span
@@ -224,6 +218,43 @@ class _DomCanvas(QtWidgets.QWidget):
                 p.setFont(self._font_b if q >= p90 else self._font)
                 p.drawText(QtCore.QRectF(c_ask0 + 6, ry, ask_span - 6, _ROW_H),
                            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, _kfmt(q))
+                p.setFont(self._font)
+
+            # SOLD / BOUGHT (executed taker volumes at this price, window-scoped; column max bolded)
+            bq, sq = vp.get(b, (0.0, 0.0))
+            if sq > 0:
+                hot = sq >= max_sold and max_sold > 0
+                col = QtGui.QColor(_SELL)
+                col.setAlpha(235 if hot else 150)
+                p.setPen(col)
+                p.setFont(self._font_b if hot else self._font)
+                p.drawText(QtCore.QRect(c_sold0, ry, traded_w - 4, _ROW_H),
+                           QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, _kfmt(sq))
+            if bq > 0:
+                hot = bq >= max_bought and max_bought > 0
+                col = QtGui.QColor(_BUY)
+                col.setAlpha(235 if hot else 150)
+                p.setPen(col)
+                p.setFont(self._font_b if hot else self._font)
+                p.drawText(QtCore.QRect(c_bought0 + 4, ry, traded_w - 4, _ROW_H),
+                           QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, _kfmt(bq))
+            p.setFont(self._font)
+
+            # VP (far right, neutral GRAY — total executed volume; POC row gold)
+            if bq + sq > 0:
+                bw_ = (bq + sq) / max_vp * (vp_w - 44)
+                p.setPen(QtCore.Qt.NoPen)
+                if b == poc_bin:
+                    col = QtGui.QColor(_GOLD)
+                    col.setAlpha(200)
+                else:
+                    col = QtGui.QColor(_VP_GRAY)
+                    col.setAlpha(90)
+                p.fillRect(QtCore.QRectF(c_vp0, ry + 3.5, max(1.5, bw_), _ROW_H - 7), col)
+                p.setPen(_GOLD if b == poc_bin else _DIM_TXT)
+                p.setFont(self._font_b if b == poc_bin else self._font)
+                p.drawText(QtCore.QRectF(c_vp0 + bw_ + 5, ry, vp_w - bw_ - 5, _ROW_H),
+                           QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, _kfmt(bq + sq))
                 p.setFont(self._font)
 
         # ── price column LAST so chips overlay the grid cleanly ────────────────────────────
@@ -254,16 +285,16 @@ class _DomCanvas(QtWidgets.QWidget):
             if i_bid > i_ask and -1 <= i_ask and i_bid <= n_rows:
                 ymid = y0 + ((i_ask + 1 + i_bid) * _ROW_H) // 2
                 p.setPen(QtGui.QPen(_GOLD, 1, QtCore.Qt.DashLine))
-                p.drawLine(c_price0 - 40, ymid, c_price0 + price_w + 40, ymid)
+                p.drawLine(c_sold0 - 20, ymid, c_bought0 + traded_w + 20, ymid)
                 p.setFont(self._font_hdr)
                 p.setPen(_GOLD)
-                p.drawText(QtCore.QRect(c_price0 + price_w + 44, ymid - 8, 150, 16),
+                p.drawText(QtCore.QRect(c_bought0 + traded_w + 24, ymid - 8, 130, 16),
                            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, f"SPREAD {spread:.2f}")
         p.end()
 
 
 class DomPanel(QtWidgets.QWidget):
-    """Toolbar (GROUP + VP window + CENTERED pill) over the painted DOM ladder."""
+    """Toolbar (GROUP + VP window + ⟲ CENTER pill) over the painted DOM ladder."""
 
     settingsChanged = QtCore.Signal()
 
@@ -271,7 +302,9 @@ class DomPanel(QtWidgets.QWidget):
         super().__init__()
         self.group: float = _GROUPS[0]
         self.vp_secs: int = _VP_SECS[-1][0]
-        self._pan: int = 0                         # bins panned off-center (0 = auto-center)
+        self._anchor_px: float | None = None       # ladder anchor PRICE; None = center on next paint.
+        #                                            Set once, then FIXED — the ladder never auto-scrolls;
+        #                                            price-based so it survives a GROUP change in place.
         self._bids: list = []                      # [(price, qty)] best-first, parsed floats
         self._asks: list = []
         self._mid: float = 0.0
@@ -330,12 +363,17 @@ class DomPanel(QtWidgets.QWidget):
             lay.addWidget(b)
 
         lay.addStretch(1)
-        self.pill = QtWidgets.QPushButton("◎ CENTERED")
+        self.pill = QtWidgets.QPushButton("⟲ CENTER")
         self.pill.setCursor(QtCore.Qt.PointingHandCursor)
         self.pill.setFixedHeight(24)
+        self.pill.setToolTip("Re-center the ladder on the current price (it never follows on its own)")
+        self.pill.setStyleSheet(
+            "QPushButton { color:#f0b90b; background:rgba(240,185,11,0.10); border:1px solid"
+            " rgba(240,185,11,0.45); border-radius:12px; padding:0 14px; font-family:Consolas;"
+            " font-size:10px; font-weight:bold; }"
+            "QPushButton:hover { background:rgba(240,185,11,0.22); }")
         self.pill.clicked.connect(self.recenter)
         lay.addWidget(self.pill)
-        self._style_pill(centered=True)
 
         root.addWidget(bar)
         self.canvas = _DomCanvas(self)
@@ -346,11 +384,9 @@ class DomPanel(QtWidgets.QWidget):
         return next(lbl for s, lbl in _VP_SECS if s == self.vp_secs)
 
     def set_group(self, g: float) -> None:
-        self.group = g
+        self.group = g                              # the price anchor is group-independent: no jump
         for b, gv in zip(self._grp_btns, _GROUPS):
             b.blockSignals(True); b.setChecked(abs(gv - g) < 1e-9); b.blockSignals(False)
-        self._pan = 0
-        self._style_pill(centered=True)
         self.canvas.update()
         self.settingsChanged.emit()
 
@@ -361,33 +397,20 @@ class DomPanel(QtWidgets.QWidget):
         self.canvas.update()
         self.settingsChanged.emit()
 
-    def pan_by(self, bins: int) -> None:
-        self._pan += bins
-        self._style_pill(centered=self._pan == 0)
+    def pan_by(self, rows: int) -> None:
+        base = self._anchor_px if self._anchor_px is not None else (self._mid or 0.0)
+        if base <= 0:
+            return
+        self._anchor_px = base + rows * self.group
         self.canvas.update()
 
     def recenter(self) -> None:
-        self._pan = 0
-        self._style_pill(centered=True)
+        self._anchor_px = None                      # next paint pins the anchor to the CURRENT mid
         self.canvas.update()
-
-    def _style_pill(self, centered: bool) -> None:
-        if centered:
-            self.pill.setText("◎ CENTERED")
-            self.pill.setStyleSheet(
-                "QPushButton { color:#2ebd85; background:rgba(46,189,133,0.10); border:1px solid"
-                " rgba(46,189,133,0.45); border-radius:12px; padding:0 14px; font-family:Consolas;"
-                " font-size:10px; font-weight:bold; }")
-        else:
-            self.pill.setText("⏸ FREE — click to center")
-            self.pill.setStyleSheet(
-                "QPushButton { color:#f0b90b; background:rgba(240,185,11,0.10); border:1px solid"
-                " rgba(240,185,11,0.45); border-radius:12px; padding:0 14px; font-family:Consolas;"
-                " font-size:10px; font-weight:bold; }")
 
     # ── book + trades ingestion ────────────────────────────────────────────────────────────
     def set_book(self, bids, asks, mid: float) -> None:
-        """Per-pulse book: [[price, qty] as str] best-first (snapshot()['depth'])."""
+        """Per-pulse book: [[price, qty] as str] best-first (worker.depth_book())."""
         try:
             self._bids = [(float(pr), float(q)) for pr, q in bids]
             self._asks = [(float(pr), float(q)) for pr, q in asks]
@@ -444,6 +467,7 @@ class DomPanel(QtWidgets.QWidget):
         self._live_t0 = 0.0
         self._bids = []
         self._asks = []
+        self._anchor_px = None
         self.canvas.update()
 
     def _trades_cat(self):
@@ -468,7 +492,8 @@ class DomPanel(QtWidgets.QWidget):
         self._cat = None                           # time moved on -> re-prune on the next frame
 
     def vp_bins(self, g: float, lo_bin: int, hi_bin: int) -> dict:
-        """{group-bin: (buyQ, sellQ)} for the visible rows over the selected window."""
+        """{group-bin: (boughtQ, soldQ)} for the visible rows over the selected window — feeds the
+        BOUGHT/SOLD columns and the gray VP (total)."""
         ts, tk, bq, sq = self._trades_cat()
         if not len(ts):
             return {}
