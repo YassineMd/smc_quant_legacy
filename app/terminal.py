@@ -72,6 +72,7 @@ _DEFAULT_START_WINDOWS = ["1m:time", "15m:time", "dom", "trades"]
 
 
 _SHARED_HELPERS: dict = {}     # ONE process-wide helper worker per feed ("4h" zones / "1m" detail)
+_HELPERS_DEFER = {"on": False}  # boot: hold helper subscriptions until every window's own catch-up is done
 
 
 def _shared_helper(tf: str, lite: bool) -> "PipeClientWorker":
@@ -81,10 +82,10 @@ def _shared_helper(tf: str, lite: bool) -> "PipeClientWorker":
     asks; stopped only when the LAST window closes."""
     w = _SHARED_HELPERS.get(tf)
     if w is None or not w.is_alive():
-        w = PipeClientWorker(tf=tf, lite=lite)
+        w = PipeClientWorker(tf=tf, lite=lite or _HELPERS_DEFER["on"])
         w.start()
         _SHARED_HELPERS[tf] = w
-    elif not lite and getattr(w, "lite", False):
+    elif not lite and getattr(w, "lite", False) and not _HELPERS_DEFER["on"]:
         w.request_timeframe(tf)               # a full window arrived -> subscribe the shared feed now
     return w
 
@@ -17930,31 +17931,47 @@ def _spawn_start_windows(parsed: list) -> None:
     windows usable in seconds and the daemon responsive throughout; lite (DOM/Trades) windows
     have no catch-up at all, so they gate only on 'connected'."""
     pending = list(parsed)
+    _HELPERS_DEFER["on"] = True    # helpers boot LITE and subscribe AFTER the windows (one at a time)
 
-    def _next() -> None:
-        if not pending:
-            return
-        _tf, _src, _scan = pending.pop(0)
-        win = spawn_window(_tf, source=_src, scanner=_scan)
-        if not pending:
-            return
+    def _wait_worker(w, then, cap: float = 45.0) -> None:
+        """Poll until `w` has COMPLETED a catch-up since its thread started (the disk cache seeds
+        closed_buckets instantly, which is how the old gate passed early and let every catch-up
+        fire in parallel — the boot storm the sequential spawn was built to prevent)."""
         t0 = time.time()
 
-        def _ready() -> None:
-            w = win.worker
+        def _tick() -> None:
             waited = time.time() - t0
             if not w.connected:
                 done = waited > 6.0            # no daemon reachable -> don't serialize the wait
             elif getattr(w, "lite", False):
                 done = True                    # lite = nothing to catch up
             else:
-                done = (bool(w.closed_buckets) and not w._catchup_loading) or waited > 45.0
+                done = getattr(w, "_catchup_done", 0) > 0 or waited > cap
             if done:
-                _next()
+                then()
             else:
-                QtCore.QTimer.singleShot(400, _ready)
+                QtCore.QTimer.singleShot(400, _tick)
 
-        QtCore.QTimer.singleShot(400, _ready)
+        QtCore.QTimer.singleShot(400, _tick)
+
+    def _finish_helpers() -> None:
+        """All windows are up: now subscribe the shared 4h + 1m helper feeds, still one at a time."""
+        def _sub(tf_h, then):
+            w = _SHARED_HELPERS.get(tf_h)
+            if w is None or not getattr(w, "lite", False):
+                then()
+                return
+            w.request_timeframe(tf_h)
+            _wait_worker(w, then)
+        _sub("4h", lambda: _sub("1m", lambda: _HELPERS_DEFER.__setitem__("on", False)))
+
+    def _next() -> None:
+        if not pending:
+            _finish_helpers()
+            return
+        _tf, _src, _scan = pending.pop(0)
+        win = spawn_window(_tf, source=_src, scanner=_scan)
+        _wait_worker(win.worker, _next)
 
     _next()
 

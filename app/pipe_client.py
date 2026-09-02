@@ -72,6 +72,9 @@ class PipeClientWorker(threading.Thread):
         self._outgoing: deque[str] = deque()
         self._want_baseline = False             # set by the owning window: fetch the REST kline baseline
         #                                         at thread start (OFF the GUI thread — 2026-09-02)
+        self._catchup_done = 0                  # completed catch-ups since thread start — the boot spawner
+        #                                         gates on THIS (closed_buckets fills from the DISK cache
+        #                                         instantly, so it can't tell 'delta pending' from 'done')
 
         # --- cache (guarded by data_lock) ---
         self.tf = tf
@@ -467,6 +470,7 @@ class PipeClientWorker(threading.Thread):
         if isinstance(pkt, protocol.CatchupEndPacket):
             if pkt.tf != self.tf:
                 return
+            self._catchup_done += 1
             active = dict(pkt.active_bucket)
             _cu = False
             _bad_delta = False
