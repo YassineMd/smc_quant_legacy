@@ -364,12 +364,13 @@ class _DomCanvas(QtWidgets.QWidget):
             # MIN SIZE filtered: "7.0K (45%, 3)" = the level's TOTAL usd that side (INVARIANT —
             #                     the filter never changes it), then the share contributed by
             #                     trades >= min and how many such trades (these two vary).
-            # Rows with volume always show; the biggest FILTERED contribution is bolded.
+            # Rows with no QUALIFYING trade hide entirely (user 2026-09-02: no '(0%, 0)' noise);
+            # the biggest FILTERED contribution is bolded.
             if _fon:
                 stt = stats.get(b)
                 if stt is not None:
                     _tbu, _tsu, _fbu, _fsu, _cb, _cs = stt
-                    if _tsu > 0:
+                    if _tsu > 0 and _cs > 0:
                         _pct = _fsu / _tsu * 100.0
                         hot = _fsu >= max_fs > 0
                         col = QtGui.QColor(_SELL)
@@ -379,7 +380,7 @@ class _DomCanvas(QtWidgets.QWidget):
                         p.drawText(QtCore.QRect(c_sold0, ry, traded_w - 4, _ROW_H),
                                    QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
                                    f"{_kfmt(_tsu)} ({_pct:.0f}%, {_cs})")
-                    if _tbu > 0:
+                    if _tbu > 0 and _cb > 0:
                         _pct = _fbu / _tbu * 100.0
                         hot = _fbu >= max_fb > 0
                         col = QtGui.QColor(_BUY)
