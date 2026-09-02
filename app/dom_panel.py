@@ -311,12 +311,12 @@ class _DomCanvas(QtWidgets.QWidget):
         max_sz = max(max(vis_b, default=0.0), max(vis_a, default=0.0)) or 1.0
         max_vp = max((bq + sq for bq, sq in vp.values()), default=0.0) or 1.0
         # SOLD/BOUGHT emphasis: same rule as the VP gold (user 2026-09-02) — per-SIDE nearest-rank
-        # P70 over the WHOLE window's levels, never the visible rows (scroll can't re-crown anything).
+        # P90 over the WHOLE window's levels, never the visible rows (scroll can't re-crown anything).
         thr_b, thr_s = P.side_gold_thresholds(g, P.min_usd)
         lvn_thr = P.vp_lvn_threshold(g)                # LVN = bottom decile of the same population
         nz = sorted([v for v in vis_b + vis_a if v > 0])
         p90 = nz[int(len(nz) * 0.9)] if nz else float("inf")   # wall emphasis threshold (visible P90)
-        # VP gold = levels >= P70 of the WHOLE window's per-level volumes (user 2026-09-02): the old
+        # VP gold = levels >= P90 of the WHOLE window's per-level volumes (user 2026-09-02): the old
         # single POC was elected among the VISIBLE rows only, so scrolling re-crowned it constantly.
         gold_thr = P.vp_gold_threshold(g)
 
@@ -369,7 +369,7 @@ class _DomCanvas(QtWidgets.QWidget):
             #                     the filter never changes it), then the share contributed by
             #                     trades >= min and how many such trades (these two vary).
             # Rows with no QUALIFYING trade hide entirely (user 2026-09-02: no '(0%, 0)' noise);
-            # P70+ levels (whole-window, per side) are bolded.
+            # P90+ levels (whole-window, per side) are bolded.
             if _fon:
                 stt = stats.get(b)
                 if stt is not None:
@@ -741,10 +741,12 @@ class DomPanel(QtWidgets.QWidget):
         # latest_price rides the never-subscribed bucket stream and stays FROZEN at the boot price —
         # double-click "center" then snapped to a stale level (user 2026-09-02). The pulse book is
         # always fresh; the passed mid is only the empty-book fallback.
-        if self._bids and self._asks:
+        if self._bids and self._asks and self._bids[0][0] < self._asks[0][0]:
             self._mid = (self._bids[0][0] + self._asks[0][0]) / 2.0
-        elif mid and mid > 0:
-            self._mid = float(mid)
+        elif self._last_px > 0:
+            self._mid = self._last_px            # CROSSED/one-sided book (daemon lost depth diffs,
+        elif mid and mid > 0:                    # 2026-09-02) -> the tape is the truth; never center
+            self._mid = float(mid)               # on a garbage mid
 
     def _pack(self, ts, pr, qt, sd):
         tick = np.rint(np.asarray(pr, dtype=np.float64) / _TICK).astype(np.int64)
@@ -863,7 +865,7 @@ class DomPanel(QtWidgets.QWidget):
         return out
 
     def side_gold_thresholds(self, g: float, min_usd: float):
-        """(bought_thr, sold_thr): per-SIDE nearest-rank P70 of per-level values across the WHOLE
+        """(bought_thr, sold_thr): per-SIDE nearest-rank P90 of per-level values across the WHOLE
         selected window — the SOLD/BOUGHT bolding rule (same spirit as vp_gold_threshold; user
         2026-09-02). min_usd == 0 -> SOL volumes (the ALL display); filtered -> USD of trades >= min
         only (matching what the cells show). inf when a side has nothing -> nothing bolds."""
@@ -888,18 +890,18 @@ class DomPanel(QtWidgets.QWidget):
             return float("inf"), float("inf")
         _uniq, inv = np.unique(gb, return_inverse=True)
 
-        def _p70(w):
+        def _p90(w):
             tot = np.bincount(inv, weights=w)
             nzv = np.sort(tot[tot > 0.0])
             if not len(nzv):
                 return float("inf")
-            k = min(len(nzv) - 1, max(0, int(np.ceil(0.70 * len(nzv))) - 1))
+            k = min(len(nzv) - 1, max(0, int(np.ceil(0.90 * len(nzv))) - 1))
             return float(nzv[k])
 
-        return _p70(vb_r), _p70(vs_r)
+        return _p90(vb_r), _p90(vs_r)
 
     def vp_gold_threshold(self, g: float) -> float:
-        """The VP's GOLD threshold: nearest-rank P70 of per-level total volumes across the WHOLE
+        """The VP's GOLD threshold: nearest-rank P90 of per-level total volumes across the WHOLE
         selected window at the current grouping — view-independent (never re-elected by scrolling;
         user 2026-09-02). Nearest-rank, not mean/range — level volumes are fat-tailed."""
         ts, tk, bq, sq = self._trades_cat()
@@ -916,7 +918,7 @@ class DomPanel(QtWidgets.QWidget):
         nzv = np.sort(tot[tot > 0.0])
         if not len(nzv):
             return float("inf")
-        k = min(len(nzv) - 1, max(0, int(np.ceil(0.70 * len(nzv))) - 1))
+        k = min(len(nzv) - 1, max(0, int(np.ceil(0.90 * len(nzv))) - 1))
         return float(nzv[k])
 
     def vp_lvn_threshold(self, g: float) -> float:

@@ -1103,22 +1103,31 @@ class MarketDataCore:
     # ------------------------------------------------------------------
     async def public_stream(self) -> None:
         ob = self.pulse_state["local_ob"]
-        try:
-            res = self.session.get(config.REST_DEPTH, timeout=5)
-            res.raise_for_status()
-            data = res.json()
-        except Exception:
-            data = {"lastUpdateId": 0, "bids": [], "asks": []}
 
-        ob["lastUpdateId"] = data.get("lastUpdateId", 0)
-        ob["bids"] = {float(b[0]): float(b[1]) for b in data.get("bids", [])}
-        ob["asks"] = {float(a[0]): float(a[1]) for a in data.get("asks", [])}
+        def _resync() -> None:
+            """Fresh REST anchor, replacing the book WHOLESALE. Binance's depth-sync rule: diffs lost
+            across a disconnect are unrecoverable, so resuming diffs on the stale book leaves frozen —
+            even CROSSED — sides (wire-observed 2026-09-02: best ask stuck $0.36 UNDER the best bid
+            after the day's stall-driven ws drops; the DOM centered on the garbage mid). Runs in an
+            executor on reconnects (requests would block the loop); dict swaps are GIL-atomic."""
+            try:
+                res = self.session.get(config.REST_DEPTH, timeout=5)
+                res.raise_for_status()
+                data = res.json()
+            except Exception:
+                return
+            ob["lastUpdateId"] = data.get("lastUpdateId", 0)
+            ob["bids"] = {float(b[0]): float(b[1]) for b in data.get("bids", [])}
+            ob["asks"] = {float(a[0]): float(a[1]) for a in data.get("asks", [])}
+
+        _resync()
         self._last_depth_u = ob["lastUpdateId"]   # Phase 1: anchor reference for the first snapshot
 
         while True:
             ws = None
             try:
                 ws = await websockets.connect(config.WS_DEPTH)
+                await asyncio.get_event_loop().run_in_executor(None, _resync)   # re-anchor EVERY (re)connect
                 if config.DEPTH_CAPTURE_ENABLED:
                     self._capture_depth_snapshot(ob)   # anchor on every (re)connect — no un-anchored gap
                 while True:
@@ -1139,6 +1148,10 @@ class MarketDataCore:
                             ob["asks"][p] = q
                     if config.DEPTH_CAPTURE_ENABLED:
                         self._capture_depth_diff(msg, ob)   # tee AFTER applying — lossless per-diff record
+                    if ob["bids"] and ob["asks"] and max(ob["bids"]) >= min(ob["asks"]):
+                        # crossed local book = diffs were lost -> drop the socket; the reconnect re-anchors
+                        print("DEPTH: crossed local book detected -> full REST resync")
+                        raise RuntimeError("crossed local book")
             except Exception:
                 await asyncio.sleep(2)
             finally:
