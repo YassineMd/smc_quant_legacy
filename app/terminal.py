@@ -71,6 +71,24 @@ _TUNNEL: "Optional[SSHTunnelManager]" = None   # set in main(); the refresh butt
 _DEFAULT_START_WINDOWS = ["1m:time", "15m:time", "dom", "trades"]
 
 
+_SHARED_HELPERS: dict = {}     # ONE process-wide helper worker per feed ("4h" zones / "1m" detail)
+
+
+def _shared_helper(tf: str, lite: bool) -> "PipeClientWorker":
+    """Shared helper feed, one per tf for the WHOLE process. Before this every window spawned its
+    own 4h + 1m helper pair — opening a 5th window meant three more catch-ups whose GIL-heavy
+    parses froze all open windows (user 2026-09-02). Un-lited the first time a non-lite window
+    asks; stopped only when the LAST window closes."""
+    w = _SHARED_HELPERS.get(tf)
+    if w is None or not w.is_alive():
+        w = PipeClientWorker(tf=tf, lite=lite)
+        w.start()
+        _SHARED_HELPERS[tf] = w
+    elif not lite and getattr(w, "lite", False):
+        w.request_timeframe(tf)               # a full window arrived -> subscribe the shared feed now
+    return w
+
+
 def _parse_start_spec(spec: str):
     """One launch spec -> (tf, source, scanner) for spawn_window, or None if it's junk."""
     from .hamburger import SCANNER_MODES
@@ -2101,16 +2119,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # loaded the 1h baseline + subscribed 1h while the UI/overlays read 5m -> the chart showed 1h-labelled-5m
         # until a manual tf switch forced request_timeframe. Seed both from self._tf so they agree on open.
         self.worker = PipeClientWorker(tf=self._tf, lite=self._lite_start)
-        self.worker.load_baseline(self._tf)
-        self.worker.start()
+        self.worker._want_baseline = True   # baseline REST now fetched INSIDE the worker thread — the
+        self.worker.start()                 # blocking call here froze every open window during construction
         # SECOND lightweight worker subscribed to the LIVE 4h stream (the daemon streams every timeframe) — feeds
         # the 4h buy/sell wick zones so they update automatically, no manual archive pull. No baseline needed.
-        self.worker_4h = PipeClientWorker(tf="4h", lite=self._lite_start)
-        self.worker_4h.start()
+        self.worker_4h = _shared_helper("4h", self._lite_start)   # SHARED process-wide (2026-09-02)
         # THIRD worker on the LIVE 1m stream -> feeds the Ctrl+double-click "1m detail" popup for buckets too fresh
         # to be in the cold archive yet (same live source as opening the 1m chart). No baseline; live catch-up only.
-        self.worker_1m = PipeClientWorker(tf="1m", lite=self._lite_start)
-        self.worker_1m.start()
+        self.worker_1m = _shared_helper("1m", self._lite_start)   # SHARED process-wide (2026-09-02)
 
         # --- 20Hz master loop ---
         self.timer = QtCore.QTimer(self)
@@ -17884,14 +17900,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.timer.stop()
         self._conn_timer.stop()
         self.worker.stop()
-        try:
-            self.worker_4h.stop()
-        except Exception:
-            pass
-        try:
-            self.worker_1m.stop()
-        except Exception:
-            pass
+        if len(_OPEN_WINDOWS) <= 1:            # the shared 4h/1m helpers live until the LAST window closes
+            for _hw in list(_SHARED_HELPERS.values()):
+                try:
+                    _hw.stop()
+                except Exception:
+                    pass
+            _SHARED_HELPERS.clear()
         if getattr(self, "_time_feed", None) is not None:   # clock-candle poller (only alive while in Time mode)
             try:
                 self._time_feed.stop()

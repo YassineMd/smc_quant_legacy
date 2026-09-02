@@ -70,6 +70,8 @@ class PipeClientWorker(threading.Thread):
         self._send_lock = threading.Lock()
         self._stop = threading.Event()
         self._outgoing: deque[str] = deque()
+        self._want_baseline = False             # set by the owning window: fetch the REST kline baseline
+        #                                         at thread start (OFF the GUI thread — 2026-09-02)
 
         # --- cache (guarded by data_lock) ---
         self.tf = tf
@@ -304,6 +306,11 @@ class PipeClientWorker(threading.Thread):
     # Thread body
     # ------------------------------------------------------------------
     def run(self) -> None:
+        if self._want_baseline and not self.candles:
+            try:
+                self.load_baseline(self.tf)     # blocking REST — on the WORKER thread, never the GUI's
+            except Exception:
+                pass
         while not self._stop.is_set():
             sock = None
             try:
