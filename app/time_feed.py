@@ -28,8 +28,11 @@ POLL_SECS = 1.5              # re-request cadence. 0.5 x 4 windows overloaded th
 _RECV_WINDOW = 9.0           # HARD cap on collecting one chunked reply (safety only; idle-detection ends it far sooner)
 _FIRST_BYTE_TIMEOUT = 6.0    # wait up to this for the daemon's FIRST frame. Under multi-window load the daemon can take
 #                              ~5s to build the candle set; a short timeout here made polls FAIL -> blank/gappy chart.
-_IDLE_TIMEOUT = 0.30         # once frames are flowing, THIS much silence = reply complete -> return at once (the daemon
-#                              never closes the socket or sends an end-marker, so idle-gap is how we know it's done)
+_IDLE_TIMEOUT = 1.50         # once frames are flowing, THIS much silence = reply complete -> return at once (the daemon
+#                              never closes the socket or sends an end-marker, so idle-gap is how we know it's done).
+#                              2026-09-02: 0.30 -> 1.50 — under multi-window boot load the daemon sends the set in
+#                              BURSTS with >0.3s gaps; the short idle cut the resync's reply mid-set, so the merge
+#                              was partial and a missing-candle gap never healed. Runs on the feed thread only.
 _CONNECT_TIMEOUT = 3.0
 
 
@@ -190,6 +193,16 @@ class TimeCandleFeed(threading.Thread):
                 for k in sorted(self._cands)[:len(self._cands) - _CANDLE_CAP]:
                     del self._cands[k]
 
+    def _gap_in_store(self) -> bool:
+        """A REAL candle is missing between the stored oldest..newest (the forming last one excluded) —
+        pull the next resync forward instead of waiting the full minute (boot-load drops, user 2026-09-02)."""
+        with self._lock:
+            keys = sorted(self._cands)
+            tfs = config.TF_SECONDS.get(self._tf, 60)
+        if len(keys) < 3:
+            return False
+        return any(b2 - a2 > tfs for a2, b2 in zip(keys[:-2], keys[1:-1]))
+
     def _rebuild(self) -> None:
         with self._lock:
             cands = dict(self._cands); tf = self._tf; connected = self._connected
@@ -254,6 +267,8 @@ class TimeCandleFeed(threading.Thread):
                 if got:
                     last_frame = time.monotonic()
                     self._rebuild()
+                    if self._gap_in_store():                      # hole in the closed candles -> heal in ~3s,
+                        next_resync = min(next_resync, time.monotonic() + 3.0)   # not at the 60s cadence
         finally:
             try:
                 s.close()

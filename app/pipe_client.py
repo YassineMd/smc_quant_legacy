@@ -60,8 +60,12 @@ def fetch_baseline_candles(tf: str) -> "OrderedDict[int, list]":
 
 
 class PipeClientWorker(threading.Thread):
-    def __init__(self, tf: str = config.DEFAULT_TF):
+    def __init__(self, tf: str = config.DEFAULT_TF, lite: bool = False):
         super().__init__(daemon=True)
+        self.lite = lite                        # lite = NO bucket subscription/catch-up on connect. Scanner-only
+        #                                         windows (DOM/Trades) need just the pulses + trades feed — a full
+        #                                         12-connection boot was saturating the daemon for minutes (user
+        #                                         2026-09-02). request_timeframe() un-lites on first real use.
         self.data_lock = threading.Lock()       # master thread synchronization lock
         self._send_lock = threading.Lock()
         self._stop = threading.Event()
@@ -159,6 +163,7 @@ class PipeClientWorker(threading.Thread):
         # Only KEEP the in-memory base if the last catch-up actually COMPLETED — a partial window
         # (interrupted mid-stream) has closed_buckets that lag _total_closed, so trusting it + asking
         # since=_total_closed would leave a silent gap. If in doubt, reseed from disk / full-catch-up.
+        self.lite = False                     # an explicit subscription ends lite mode for good
         reconnect_same = (tf == self.tf and bool(self.closed_buckets) and not self._catchup_loading)
         entry = None
         if not reconnect_same:
@@ -308,8 +313,10 @@ class PipeClientWorker(threading.Thread):
                     self.connected = True
                     self._sock = sock              # expose for refresh()'s force-drop
                 self._force_reconnect.clear()      # fresh connection -> arm a future refresh
-                # announce our timeframe to the daemon on connect
-                self.request_timeframe(self.tf)
+                # announce our timeframe to the daemon on connect (lite workers stay silent: pulses
+                # and the subscribed feeds flow to every client; buckets only on explicit request)
+                if not self.lite:
+                    self.request_timeframe(self.tf)
 
                 buffer = b""
                 last_rx = time.monotonic()

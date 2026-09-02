@@ -888,8 +888,10 @@ class SubCandleWindow(QtWidgets.QDialog):
 
 
 class MinimalTerminalWindow(QtWidgets.QMainWindow):
-    def __init__(self, tf: str = config.DEFAULT_TF):
+    def __init__(self, tf: str = config.DEFAULT_TF, lite_worker: bool = False):
         super().__init__()
+        self._lite_start = bool(lite_worker)   # scanner-only start window (DOM/Trades): all three workers
+        #                                        boot LITE (no bucket catch-ups); un-lited on mode switch
         self.setWindowTitle(f"Order Flow Terminal — {config.SYMBOL} {config.TF_SECONDS.get(tf, 60) // 60}×")
         self._title_scale = None   # last-rendered title scale portion (flicker-free updates)
         self.resize(1280, 760)
@@ -2098,16 +2100,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # overridden self._tf with the persisted tf (e.g. a session saved on 5m). Using `tf` here (= DEFAULT_TF, 1h)
         # loaded the 1h baseline + subscribed 1h while the UI/overlays read 5m -> the chart showed 1h-labelled-5m
         # until a manual tf switch forced request_timeframe. Seed both from self._tf so they agree on open.
-        self.worker = PipeClientWorker(tf=self._tf)
+        self.worker = PipeClientWorker(tf=self._tf, lite=self._lite_start)
         self.worker.load_baseline(self._tf)
         self.worker.start()
         # SECOND lightweight worker subscribed to the LIVE 4h stream (the daemon streams every timeframe) — feeds
         # the 4h buy/sell wick zones so they update automatically, no manual archive pull. No baseline needed.
-        self.worker_4h = PipeClientWorker(tf="4h")
+        self.worker_4h = PipeClientWorker(tf="4h", lite=self._lite_start)
         self.worker_4h.start()
         # THIRD worker on the LIVE 1m stream -> feeds the Ctrl+double-click "1m detail" popup for buckets too fresh
         # to be in the cold archive yet (same live source as opening the 1m chart). No baseline; live catch-up only.
-        self.worker_1m = PipeClientWorker(tf="1m")
+        self.worker_1m = PipeClientWorker(tf="1m", lite=self._lite_start)
         self.worker_1m.start()
 
         # --- 20Hz master loop ---
@@ -2254,6 +2256,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._tape_exit()         # trades tape: unsubscribe the live batches, swap the plot back in
         if prev_mode == "dom" and mode != "dom":
             self._dom_exit()          # DOM ladder: unsubscribe, swap the plot back in
+        if mode not in ("dom", "trades") and getattr(self.worker, "lite", False) and not initial:
+            # a LITE scanner start-window switched to a bucket-consuming mode: subscribe everything
+            # now (deltas via the shared per-tf caches — the boot skipped these on purpose)
+            self.worker.request_timeframe(self.worker.tf)
+            self.worker_4h.request_timeframe("4h")
+            self.worker_1m.request_timeframe("1m")
         # §6.2 — index-space drawings are session-only + index-anchored. Keep them in memory for the
         # whole session: SHOW on Mode 10, HIDE on the metric scanners (where a price-anchored shape is
         # off-axis), restore on return — so drawings survive every mode switch AND scan-time change.
@@ -17899,13 +17907,52 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         super().closeEvent(event)
 
 
+def _spawn_start_windows(parsed: list) -> None:
+    """Open the launch list SEQUENTIALLY: the next window spawns only once the previous one's
+    catch-up has finished (or a cap expires). Spawning all at once fired 12 daemon connections
+    with interleaved catch-ups — the daemon loop thrashed for minutes and its live clock-candle
+    pushes starved, leaving missing 1m bars (user 2026-09-02). Sequential keeps the first
+    windows usable in seconds and the daemon responsive throughout; lite (DOM/Trades) windows
+    have no catch-up at all, so they gate only on 'connected'."""
+    pending = list(parsed)
+
+    def _next() -> None:
+        if not pending:
+            return
+        _tf, _src, _scan = pending.pop(0)
+        win = spawn_window(_tf, source=_src, scanner=_scan)
+        if not pending:
+            return
+        t0 = time.time()
+
+        def _ready() -> None:
+            w = win.worker
+            waited = time.time() - t0
+            if not w.connected:
+                done = waited > 6.0            # no daemon reachable -> don't serialize the wait
+            elif getattr(w, "lite", False):
+                done = True                    # lite = nothing to catch up
+            else:
+                done = (bool(w.closed_buckets) and not w._catchup_loading) or waited > 45.0
+            if done:
+                _next()
+            else:
+                QtCore.QTimer.singleShot(400, _ready)
+
+        QtCore.QTimer.singleShot(400, _ready)
+
+    _next()
+
+
 def spawn_window(tf: str = config.DEFAULT_TF, source: str = None,
                  scanner: str = None) -> "MinimalTerminalWindow":
     """Open one terminal window, optionally FORCING its timeframe, chart source and scanner mode
     (the "Window on Start" launcher) — explicit args override whatever terminal_ui.json restored."""
-    win = MinimalTerminalWindow(tf=tf)
+    _lite = scanner in ("dom", "trades")
+    win = MinimalTerminalWindow(tf=tf, lite_worker=_lite)
     _OPEN_WINDOWS.append(win)
-    if tf in config.TF_SECONDS and win._tf != tf:   # _load_ui_state restores the SAVED tf — reforce ours
+    if not _lite and tf in config.TF_SECONDS and win._tf != tf:   # _load_ui_state restores the SAVED tf —
+        #                       reforce ours (skipped on lite scanner windows: _change_tf would subscribe)
         win.menu.set_tf(tf)
         win._change_tf(tf)
     if source in ("bucket", "time"):
@@ -18076,8 +18123,7 @@ def main() -> None:
         parsed = [p for p in (_parse_start_spec(str(x)) for x in specs) if p is not None]
         if not parsed:
             parsed = [(config.DEFAULT_TF, None, None)]
-        for _tf, _src, _scan in parsed:
-            spawn_window(_tf, source=_src, scanner=_scan)
+        _spawn_start_windows(parsed)
         exit_code = app.exec()
     finally:
         tunnel.stop()
