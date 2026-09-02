@@ -40,6 +40,7 @@ _BUY      = QtGui.QColor(46, 189, 133)
 _SELL     = QtGui.QColor(246, 70, 93)
 _GOLD     = QtGui.QColor(240, 185, 11)
 _VP_GRAY  = QtGui.QColor(150, 160, 175)
+_LVN      = QtGui.QColor(168, 110, 240)    # Low-Volume Node — the app-wide LVN purple
 _WAIT_TXT = QtGui.QColor(120, 130, 148, 160)
 
 _ROW_H, _HDR_H, _STRIP_H = 18, 24, 34
@@ -309,10 +310,10 @@ class _DomCanvas(QtWidgets.QWidget):
         vis_a = [ask_bins.get(top_bin - i, 0.0) for i in range(n_rows)]
         max_sz = max(max(vis_b, default=0.0), max(vis_a, default=0.0)) or 1.0
         max_vp = max((bq + sq for bq, sq in vp.values()), default=0.0) or 1.0
-        max_fb = max((v[2] for v in stats.values()), default=0.0)     # column-max FILTERED usd -> bolded
-        max_fs = max((v[3] for v in stats.values()), default=0.0)
-        max_vb = max((v[0] for v in vp.values()), default=0.0)        # column-max SOL (the ALL display)
-        max_vs = max((v[1] for v in vp.values()), default=0.0)
+        # SOLD/BOUGHT emphasis: same rule as the VP gold (user 2026-09-02) — per-SIDE nearest-rank
+        # P70 over the WHOLE window's levels, never the visible rows (scroll can't re-crown anything).
+        thr_b, thr_s = P.side_gold_thresholds(g, P.min_usd)
+        lvn_thr = P.vp_lvn_threshold(g)                # LVN = bottom decile of the same population
         nz = sorted([v for v in vis_b + vis_a if v > 0])
         p90 = nz[int(len(nz) * 0.9)] if nz else float("inf")   # wall emphasis threshold (visible P90)
         # VP gold = levels >= P70 of the WHOLE window's per-level volumes (user 2026-09-02): the old
@@ -368,14 +369,14 @@ class _DomCanvas(QtWidgets.QWidget):
             #                     the filter never changes it), then the share contributed by
             #                     trades >= min and how many such trades (these two vary).
             # Rows with no QUALIFYING trade hide entirely (user 2026-09-02: no '(0%, 0)' noise);
-            # the biggest FILTERED contribution is bolded.
+            # P70+ levels (whole-window, per side) are bolded.
             if _fon:
                 stt = stats.get(b)
                 if stt is not None:
                     _tbu, _tsu, _fbu, _fsu, _cb, _cs = stt
                     if _tsu > 0 and _cs > 0:
                         _pct = _fsu / _tsu * 100.0
-                        hot = _fsu >= max_fs > 0
+                        hot = _fsu >= thr_s
                         col = QtGui.QColor(_SELL)
                         col.setAlpha(235 if hot else 150)
                         p.setPen(col)
@@ -385,7 +386,7 @@ class _DomCanvas(QtWidgets.QWidget):
                                    f"{_kfmt(_tsu)} ({_pct:.0f}%, {_cs})")
                     if _tbu > 0 and _cb > 0:
                         _pct = _fbu / _tbu * 100.0
-                        hot = _fbu >= max_fb > 0
+                        hot = _fbu >= thr_b
                         col = QtGui.QColor(_BUY)
                         col.setAlpha(235 if hot else 150)
                         p.setPen(col)
@@ -396,7 +397,7 @@ class _DomCanvas(QtWidgets.QWidget):
             else:
                 _vb, _vs = vp.get(b, (0.0, 0.0))               # ALL -> the SOL volumes, straight up
                 if _vs > 0:
-                    hot = _vs >= max_vs > 0
+                    hot = _vs >= thr_s
                     col = QtGui.QColor(_SELL)
                     col.setAlpha(235 if hot else 150)
                     p.setPen(col)
@@ -404,7 +405,7 @@ class _DomCanvas(QtWidgets.QWidget):
                     p.drawText(QtCore.QRect(c_sold0, ry, traded_w - 4, _ROW_H),
                                QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, _kfmt(_vs))
                 if _vb > 0:
-                    hot = _vb >= max_vb > 0
+                    hot = _vb >= thr_b
                     col = QtGui.QColor(_BUY)
                     col.setAlpha(235 if hot else 150)
                     p.setPen(col)
@@ -420,15 +421,19 @@ class _DomCanvas(QtWidgets.QWidget):
                 bw_ = (bq + sq) / max_vp * (vp_w - 44)
                 p.setPen(QtCore.Qt.NoPen)
                 _gold = (bq + sq) >= gold_thr
+                _lvn = (not _gold) and (bq + sq) <= lvn_thr   # gold wins a tiny-n overlap
                 if _gold:
                     col = QtGui.QColor(_GOLD)
                     col.setAlpha(200)
+                elif _lvn:
+                    col = QtGui.QColor(_LVN)
+                    col.setAlpha(150)
                 else:
                     col = QtGui.QColor(_VP_GRAY)
                     col.setAlpha(90)
                 p.fillRect(QtCore.QRectF(w - pad - max(1.5, bw_), ry + 3.5, max(1.5, bw_), _ROW_H - 7), col)
-                p.setPen(_GOLD if _gold else _DIM_TXT)
-                p.setFont(self._font_b if _gold else self._font)
+                p.setPen(_GOLD if _gold else (_LVN if _lvn else _DIM_TXT))
+                p.setFont(self._font_b if (_gold or _lvn) else self._font)
                 p.drawText(QtCore.QRectF(c_vp0, ry, vp_w - bw_ - 9, _ROW_H),
                            QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, _kfmt(bq + sq))
                 p.setFont(self._font)
@@ -857,6 +862,42 @@ class DomPanel(QtWidgets.QWidget):
                                     float(flt_s[j]), int(cnt_b[j]), int(cnt_s[j]))
         return out
 
+    def side_gold_thresholds(self, g: float, min_usd: float):
+        """(bought_thr, sold_thr): per-SIDE nearest-rank P70 of per-level values across the WHOLE
+        selected window — the SOLD/BOUGHT bolding rule (same spirit as vp_gold_threshold; user
+        2026-09-02). min_usd == 0 -> SOL volumes (the ALL display); filtered -> USD of trades >= min
+        only (matching what the cells show). inf when a side has nothing -> nothing bolds."""
+        ts, tk, bq, sq = self._trades_cat()
+        if not len(ts):
+            return float("inf"), float("inf")
+        i0 = np.searchsorted(ts, self._vp_cutoff())
+        if i0 >= len(ts):
+            return float("inf"), float("inf")
+        ticks_per = max(1, int(round(g / _TICK)))
+        gb = tk[i0:] // ticks_per
+        if min_usd > 0:
+            px = tk[i0:] * _TICK
+            vb_r = bq[i0:] * px
+            vs_r = sq[i0:] * px
+            big = (vb_r + vs_r) >= min_usd
+            gb, vb_r, vs_r = gb[big], vb_r[big], vs_r[big]
+        else:
+            vb_r = bq[i0:]
+            vs_r = sq[i0:]
+        if not len(gb):
+            return float("inf"), float("inf")
+        _uniq, inv = np.unique(gb, return_inverse=True)
+
+        def _p70(w):
+            tot = np.bincount(inv, weights=w)
+            nzv = np.sort(tot[tot > 0.0])
+            if not len(nzv):
+                return float("inf")
+            k = min(len(nzv) - 1, max(0, int(np.ceil(0.70 * len(nzv))) - 1))
+            return float(nzv[k])
+
+        return _p70(vb_r), _p70(vs_r)
+
     def vp_gold_threshold(self, g: float) -> float:
         """The VP's GOLD threshold: nearest-rank P70 of per-level total volumes across the WHOLE
         selected window at the current grouping — view-independent (never re-elected by scrolling;
@@ -876,6 +917,27 @@ class DomPanel(QtWidgets.QWidget):
         if not len(nzv):
             return float("inf")
         k = min(len(nzv) - 1, max(0, int(np.ceil(0.70 * len(nzv))) - 1))
+        return float(nzv[k])
+
+    def vp_lvn_threshold(self, g: float) -> float:
+        """LVN threshold: nearest-rank BOTTOM-decile cut (the P90 rule mirrored — user 2026-09-02)
+        of per-level total volumes across the WHOLE window. Levels with volume <= this render
+        purple; view-independent like the gold rule. -inf when there is nothing to rank."""
+        ts, tk, bq, sq = self._trades_cat()
+        if not len(ts):
+            return float("-inf")
+        i0 = np.searchsorted(ts, self._vp_cutoff())
+        if i0 >= len(ts):
+            return float("-inf")
+        ticks_per = max(1, int(round(g / _TICK)))
+        gb = tk[i0:] // ticks_per
+        vol = bq[i0:] + sq[i0:]
+        _uniq, inv = np.unique(gb, return_inverse=True)
+        tot = np.bincount(inv, weights=vol)
+        nzv = np.sort(tot[tot > 0.0])
+        if len(nzv) < 3:
+            return float("-inf")                      # too few levels to call anything "low"
+        k = min(len(nzv) - 1, max(0, int(np.ceil(0.10 * len(nzv))) - 1))
         return float(nzv[k])
 
     def vp_bins(self, g: float, lo_bin: int, hi_bin: int) -> dict:
