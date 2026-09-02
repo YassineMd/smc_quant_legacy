@@ -153,6 +153,7 @@ _M10_STRATEGIES = [
     ("m10_nyrangebreak", "NY Range-break (brB / brS · 1h·15m)", False, True),  # 1h/15m: 2-5pm range box + first close-break label; SHORT side alpha in-sample (P=0.003)
     ("m10_9amfade", "★ 09:00-UTC Fade · 5m clock (= 10:00 local, UTC+1)", False, True),  # 5m clock: FADE the 09:00 UTC bar (bull→short/bear→long), enter 09:05 UTC, SL 0.8%, TP 0.5× Tokyo range. ⚠ 09:00 UTC = 10:00 on a UTC+1 (Morocco) chart — the badge on the 10:00-local bar IS the validated 09:00-UTC edge (08:00 UTC / local-9am was tested = null). Robustness-cleared recon candidate (~61% prop pass), NOT live-confirmed. click → entry/SL/TP
     ("m10_wallstrat", "Wall Strategy (L / S triangles)", False, True),  # 5m: wall visit w/ Big|Crazy absorption + favourable tally + Easy Gold/Pure Aggression entry; NOT backtested
+    ("m10_bigbody", "Big Body (body > last 5 bodies)", False, True),   # square badge; simplest size rule (2026-09-03)
     ("m10_kcovershoot", "KC Overshoot 2nd-Entry (L / S triangles)", False, True),  # ALL tf: close beyond a Keltner extreme -> pullback (re-enter band) -> 1st entry (skip) -> 2nd entry = continuation signal; overshoot diamond + 1st-entry ring + 2nd-entry triangle. UNTESTED
 ]
 
