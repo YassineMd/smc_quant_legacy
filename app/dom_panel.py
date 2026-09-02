@@ -315,7 +315,9 @@ class _DomCanvas(QtWidgets.QWidget):
         max_vs = max((v[1] for v in vp.values()), default=0.0)
         nz = sorted([v for v in vis_b + vis_a if v > 0])
         p90 = nz[int(len(nz) * 0.9)] if nz else float("inf")   # wall emphasis threshold (visible P90)
-        poc_bin = max(vp, key=lambda b: vp[b][0] + vp[b][1]) if vp else None
+        # VP gold = levels >= P70 of the WHOLE window's per-level volumes (user 2026-09-02): the old
+        # single POC was elected among the VISIBLE rows only, so scrolling re-crowned it constantly.
+        gold_thr = P.vp_gold_threshold(g)
 
         best_bid_bin = int(round(bids[0][0] / _TICK)) // tpg if bids else None
         best_ask_bin = int(round(asks[0][0] / _TICK)) // tpg if asks else None
@@ -417,15 +419,16 @@ class _DomCanvas(QtWidgets.QWidget):
             if bq + sq > 0:
                 bw_ = (bq + sq) / max_vp * (vp_w - 44)
                 p.setPen(QtCore.Qt.NoPen)
-                if b == poc_bin:
+                _gold = (bq + sq) >= gold_thr
+                if _gold:
                     col = QtGui.QColor(_GOLD)
                     col.setAlpha(200)
                 else:
                     col = QtGui.QColor(_VP_GRAY)
                     col.setAlpha(90)
                 p.fillRect(QtCore.QRectF(w - pad - max(1.5, bw_), ry + 3.5, max(1.5, bw_), _ROW_H - 7), col)
-                p.setPen(_GOLD if b == poc_bin else _DIM_TXT)
-                p.setFont(self._font_b if b == poc_bin else self._font)
+                p.setPen(_GOLD if _gold else _DIM_TXT)
+                p.setFont(self._font_b if _gold else self._font)
                 p.drawText(QtCore.QRectF(c_vp0, ry, vp_w - bw_ - 9, _ROW_H),
                            QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, _kfmt(bq + sq))
                 p.setFont(self._font)
@@ -853,6 +856,27 @@ class DomPanel(QtWidgets.QWidget):
             out[int(lo_bin + j)] = (float(tot_b[j]), float(tot_s[j]), float(flt_b[j]),
                                     float(flt_s[j]), int(cnt_b[j]), int(cnt_s[j]))
         return out
+
+    def vp_gold_threshold(self, g: float) -> float:
+        """The VP's GOLD threshold: nearest-rank P70 of per-level total volumes across the WHOLE
+        selected window at the current grouping — view-independent (never re-elected by scrolling;
+        user 2026-09-02). Nearest-rank, not mean/range — level volumes are fat-tailed."""
+        ts, tk, bq, sq = self._trades_cat()
+        if not len(ts):
+            return float("inf")
+        i0 = np.searchsorted(ts, self._vp_cutoff())
+        if i0 >= len(ts):
+            return float("inf")
+        ticks_per = max(1, int(round(g / _TICK)))
+        gb = tk[i0:] // ticks_per
+        vol = bq[i0:] + sq[i0:]
+        _uniq, inv = np.unique(gb, return_inverse=True)
+        tot = np.bincount(inv, weights=vol)
+        nzv = np.sort(tot[tot > 0.0])
+        if not len(nzv):
+            return float("inf")
+        k = min(len(nzv) - 1, max(0, int(np.ceil(0.70 * len(nzv))) - 1))
+        return float(nzv[k])
 
     def vp_bins(self, g: float, lo_bin: int, hi_bin: int) -> dict:
         """{group-bin: (boughtQ, soldQ)} for the visible rows over the selected window — feeds the
