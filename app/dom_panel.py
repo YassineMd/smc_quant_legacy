@@ -258,12 +258,13 @@ class _DomCanvas(QtWidgets.QWidget):
         p.setFont(self._font_hdr)
         p.setPen(_HDR_TXT)
         p.drawText(QtCore.QRect(pad, y0, span, _HDR_H), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, "BIDS")
+        _fon = P.min_usd > 0                       # filter ON -> USD player readouts; ALL -> plain SOL
         p.drawText(QtCore.QRect(c_sold0, y0, traded_w, _HDR_H), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
-                   "SOLD $")
+                   "SOLD $" if _fon else "SOLD")
         p.drawText(QtCore.QRect(c_price0, y0, price_w, _HDR_H), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
                    "PRICE")
         p.drawText(QtCore.QRect(c_bought0, y0, traded_w, _HDR_H), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
-                   "BOUGHT $")
+                   "BOUGHT $" if _fon else "BOUGHT")
         p.drawText(QtCore.QRect(c_ask0, y0, 120, _HDR_H), QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, "ASKS")
         p.drawText(QtCore.QRect(c_vp0, y0, vp_w, _HDR_H), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
                    f"VOLUME · {P.vp_label()}")
@@ -301,7 +302,7 @@ class _DomCanvas(QtWidgets.QWidget):
             ask_bins[b] = ask_bins.get(b, 0.0) + q
         vp = P.vp_bins(g, top_bin - n_rows + 1, top_bin)   # {bin: (boughtQ, soldQ)}
 
-        stats = P.trade_stats(g, top_bin - n_rows + 1, top_bin, P.min_usd)   # SOLD/BOUGHT $ readouts
+        stats = P.trade_stats(g, top_bin - n_rows + 1, top_bin, P.min_usd) if _fon else {}
 
         vis_b = [bid_bins.get(top_bin - i, 0.0) for i in range(n_rows)]
         vis_a = [ask_bins.get(top_bin - i, 0.0) for i in range(n_rows)]
@@ -309,6 +310,8 @@ class _DomCanvas(QtWidgets.QWidget):
         max_vp = max((bq + sq for bq, sq in vp.values()), default=0.0) or 1.0
         max_fb = max((v[2] for v in stats.values()), default=0.0)     # column-max FILTERED usd -> bolded
         max_fs = max((v[3] for v in stats.values()), default=0.0)
+        max_vb = max((v[0] for v in vp.values()), default=0.0)        # column-max SOL (the ALL display)
+        max_vs = max((v[1] for v in vp.values()), default=0.0)
         nz = sorted([v for v in vis_b + vis_a if v > 0])
         p90 = nz[int(len(nz) * 0.9)] if nz else float("inf")   # wall emphasis threshold (visible P90)
         poc_bin = max(vp, key=lambda b: vp[b][0] + vp[b][1]) if vp else None
@@ -356,41 +359,53 @@ class _DomCanvas(QtWidgets.QWidget):
                            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, _kfmt(q))
                 p.setFont(self._font)
 
-            # SOLD $ / BOUGHT $ — the PLAYER readout (user 2026-09-01), window-scoped, in USDT.
-            # MIN SIZE at ALL:   "823K"             = level's total usd, nothing else (user: no "()")
-            # MIN SIZE filtered: "1.5M (45%, 3)"    = usd of trades >= min, its share of the level's
-            #                                          total usd that side, and how many such trades.
+            # SOLD / BOUGHT — window-scoped per level (user 2026-09-01).
+            # MIN SIZE at ALL:   plain SOL volume, nothing else (no usd, no parentheses)
+            # MIN SIZE filtered: "1.5M (45%, 3)" = usd of trades >= min, its share of the level's
+            #                                       total usd that side, and how many such trades.
             # Levels with no qualifying trade show nothing; the column max is bolded.
-            stt = stats.get(b)
-            if stt is not None:
-                _tbu, _tsu, _fbu, _fsu, _cb, _cs = stt
-                _fon = P.min_usd > 0
-                if (_cs > 0) if _fon else (_tsu > 0):
-                    if _fon:
+            if _fon:
+                stt = stats.get(b)
+                if stt is not None:
+                    _tbu, _tsu, _fbu, _fsu, _cb, _cs = stt
+                    if _cs > 0:
                         _pct = _fsu / _tsu * 100.0 if _tsu > 0 else 0.0
-                        _txt = f"{_kfmt(_fsu)} ({_pct:.0f}%, {_cs})"
-                    else:
-                        _txt = _kfmt(_tsu)
-                    hot = _fsu >= max_fs > 0
+                        hot = _fsu >= max_fs > 0
+                        col = QtGui.QColor(_SELL)
+                        col.setAlpha(235 if hot else 150)
+                        p.setPen(col)
+                        p.setFont(self._font_b if hot else self._font)
+                        p.drawText(QtCore.QRect(c_sold0, ry, traded_w - 4, _ROW_H),
+                                   QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
+                                   f"{_kfmt(_fsu)} ({_pct:.0f}%, {_cs})")
+                    if _cb > 0:
+                        _pct = _fbu / _tbu * 100.0 if _tbu > 0 else 0.0
+                        hot = _fbu >= max_fb > 0
+                        col = QtGui.QColor(_BUY)
+                        col.setAlpha(235 if hot else 150)
+                        p.setPen(col)
+                        p.setFont(self._font_b if hot else self._font)
+                        p.drawText(QtCore.QRect(c_bought0 + 4, ry, traded_w - 4, _ROW_H),
+                                   QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+                                   f"{_kfmt(_fbu)} ({_pct:.0f}%, {_cb})")
+            else:
+                _vb, _vs = vp.get(b, (0.0, 0.0))               # ALL -> the SOL volumes, straight up
+                if _vs > 0:
+                    hot = _vs >= max_vs > 0
                     col = QtGui.QColor(_SELL)
                     col.setAlpha(235 if hot else 150)
                     p.setPen(col)
                     p.setFont(self._font_b if hot else self._font)
                     p.drawText(QtCore.QRect(c_sold0, ry, traded_w - 4, _ROW_H),
-                               QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, _txt)
-                if (_cb > 0) if _fon else (_tbu > 0):
-                    if _fon:
-                        _pct = _fbu / _tbu * 100.0 if _tbu > 0 else 0.0
-                        _txt = f"{_kfmt(_fbu)} ({_pct:.0f}%, {_cb})"
-                    else:
-                        _txt = _kfmt(_tbu)
-                    hot = _fbu >= max_fb > 0
+                               QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, _kfmt(_vs))
+                if _vb > 0:
+                    hot = _vb >= max_vb > 0
                     col = QtGui.QColor(_BUY)
                     col.setAlpha(235 if hot else 150)
                     p.setPen(col)
                     p.setFont(self._font_b if hot else self._font)
                     p.drawText(QtCore.QRect(c_bought0 + 4, ry, traded_w - 4, _ROW_H),
-                               QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, _txt)
+                               QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, _kfmt(_vb))
             p.setFont(self._font)
 
             # VP (far right, neutral GRAY — total executed volume in SOL; POC row gold). REVERSED
