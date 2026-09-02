@@ -65,6 +65,24 @@ from .stats_overlay import AbsorptionZoneSlider, EffAggZoneSlider, StatsOverlay 
 _OPEN_WINDOWS: List["MinimalTerminalWindow"] = []
 _TUNNEL: "Optional[SSHTunnelManager]" = None   # set in main(); the refresh button relaunches a dead tunnel
 
+# "Window on Start" (user 2026-09-01): the ordered launch list, editable in the hamburger and
+# persisted as terminal_ui.json "start_windows". Spec vocabulary: "TF:time" (clock chart),
+# "TF:bucket" (volume-bucket chart), or a scanner-mode key ("dom", "trades", "depth_heatmap", ...).
+_DEFAULT_START_WINDOWS = ["1m:time", "15m:time", "dom", "trades"]
+
+
+def _parse_start_spec(spec: str):
+    """One launch spec -> (tf, source, scanner) for spawn_window, or None if it's junk."""
+    from .hamburger import SCANNER_MODES
+    if ":" in spec:
+        tf, _, src = spec.partition(":")
+        if tf in config.TF_SECONDS and src in ("time", "bucket"):
+            return tf, src, None
+        return None
+    if spec in SCANNER_MODES and spec != "bucket_canvas":
+        return config.DEFAULT_TF, None, spec
+    return None
+
 
 # Step-5 exhaustion knobs + _exh_z_mult / _exhaustion_mults now live in app/region_state.py
 # (re-imported above, _exhaustion_mults under its original name, so call sites are unchanged and
@@ -2150,6 +2168,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.keltnerScaleChanged.connect(self._on_kc_scale)   # 1m-KC smooth-approx effective-TF scale slider
         self.menu.candleModeChanged.connect(self._on_candle_mode)  # Candle Mode dropdown (mirrors 'W')
         self.menu.chartSourceChanged.connect(self._set_chart_source)  # Chart Source: Volume Buckets <-> Time Candles
+        self.menu.startWindowsChanged.connect(
+            lambda _l: None if self._loading_ui else self._save_ui_state())   # Window on Start list sticks
         self.menu.vpModeChanged.connect(self._on_vp_mode)          # Volume Profile Mode dropdown
         self.menu.scan_time_edit.set_range_provider(self._data_date_range)   # calendar: disable no-data days
 
@@ -2791,6 +2811,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.dom_panel.set_group(_dg if _dg in (0.01, 0.02, 0.05, 0.10) else 0.01)
             self.dom_panel.set_vp_secs(_dv if _dv in (300, 900, 3600, 7200, 14400, 21600) else 3600)
             self.dom_panel.set_min_usd(max(0.0, _dm))                                     # player MIN SIZE
+            self.menu.set_start_windows(getattr(self, "_saved_start_windows", None)
+                                        or list(_DEFAULT_START_WINDOWS))                  # Window on Start
         finally:
             self._loading_ui = False
         # CHART SOURCE persists too (2026-08-24): it silently reset to Volume Buckets on every relaunch, so clock-
@@ -8387,6 +8409,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "dom_group": float(getattr(self.dom_panel, "group", 0.01)),          # DOM ladder tick grouping
                 "dom_vp_secs": int(getattr(self.dom_panel, "vp_secs", 3600)),        # DOM VP window
                 "dom_min_usd": float(getattr(self.dom_panel, "min_usd", 0.0)),       # DOM player MIN SIZE filter
+                "start_windows": self.menu.start_windows(),                          # ordered launch list
                 "bubble_vol": self.hm_bubble_min,                         # Heatmap trade-bubble min-volume filter (SOL)
                 "kc_scale": self._kc_scale,                               # 1m-KC smooth-approx effective-TF scale slider
                 "tf": self._tf,                                           # last chart timeframe -> reopen on it
@@ -8438,6 +8461,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                float(s.get("dom_min_usd", 0.0) or 0.0))
         except (TypeError, ValueError):
             self._dom_saved = (0.01, 3600, 0.0)
+        _sw = s.get("start_windows")
+        self._saved_start_windows = [str(x) for x in _sw] if isinstance(_sw, list) else None
         _lm = s.get("ls_mode")
         if _lm is None:                                       # migrate the old boolean: True (both) -> 2, else 0
             _lm = 2 if s.get("largesmall") else 0
@@ -17874,9 +17899,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         super().closeEvent(event)
 
 
-def spawn_window(tf: str = config.DEFAULT_TF) -> "MinimalTerminalWindow":
+def spawn_window(tf: str = config.DEFAULT_TF, source: str = None,
+                 scanner: str = None) -> "MinimalTerminalWindow":
+    """Open one terminal window, optionally FORCING its timeframe, chart source and scanner mode
+    (the "Window on Start" launcher) — explicit args override whatever terminal_ui.json restored."""
     win = MinimalTerminalWindow(tf=tf)
     _OPEN_WINDOWS.append(win)
+    if tf in config.TF_SECONDS and win._tf != tf:   # _load_ui_state restores the SAVED tf — reforce ours
+        win.menu.set_tf(tf)
+        win._change_tf(tf)
+    if source in ("bucket", "time"):
+        # queued AFTER the saved-chart-source singleShot _apply_saved_toggles may have posted,
+        # so the explicit source always wins the event-loop race.
+        QtCore.QTimer.singleShot(0, lambda: (win.menu.set_chart_source(source),
+                                             win._set_chart_source(source)))
+    if scanner:
+        for _i in range(win.menu.scanner_combo.count()):
+            if win.menu.scanner_combo.itemData(_i) == scanner:
+                _b = win.menu.scanner_combo.blockSignals(True)
+                win.menu.scanner_combo.setCurrentIndex(_i)
+                win.menu.scanner_combo.blockSignals(_b)
+                break
+        win._set_scanner(scanner)
     win.show()
     return win
 
@@ -18018,7 +18062,22 @@ def main() -> None:
 
     exit_code = 0
     try:
-        spawn_window(config.DEFAULT_TF)
+        # "Window on Start": open the saved ordered launch list (default: 1m clock, 15m clock,
+        # DOM, Trades — user 2026-09-01). Junk entries are skipped; an empty result falls back
+        # to the classic single default window.
+        specs = None
+        try:
+            with open(os.path.join(config.DATA_DIR, "terminal_ui.json"), encoding="utf-8") as f:
+                specs = json.load(f).get("start_windows")
+        except Exception:
+            pass
+        if not isinstance(specs, list) or not specs:
+            specs = list(_DEFAULT_START_WINDOWS)
+        parsed = [p for p in (_parse_start_spec(str(x)) for x in specs) if p is not None]
+        if not parsed:
+            parsed = [(config.DEFAULT_TF, None, None)]
+        for _tf, _src, _scan in parsed:
+            spawn_window(_tf, source=_src, scanner=_scan)
         exit_code = app.exec()
     finally:
         tunnel.stop()

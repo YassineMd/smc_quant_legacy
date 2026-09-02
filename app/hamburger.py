@@ -252,6 +252,15 @@ class CollapsibleSection(QtWidgets.QWidget):
         self.body_lay.addLayout(lay)
 
 
+# "Window on Start" vocabulary: every openable window kind. Chart windows = a timeframe on either
+# source ("1m:time" = 1m clock candles, "5m:bucket" = 5m volume buckets); scanner windows = a
+# window opened straight into that scanner mode (bucket_canvas IS the chart, so it's not listed).
+_START_WINDOW_CHOICES = (
+    [(f"{tf}:time", f"{tf} clock") for tf in config.TIMEFRAMES]
+    + [(f"{tf}:bucket", f"{tf} bucket") for tf in config.TIMEFRAMES]
+    + [(k, SCANNER_LABELS[k]) for k in SCANNER_MODES if k != "bucket_canvas"])
+
+
 class HamburgerButton(QtWidgets.QPushButton):
     def __init__(self, parent: QtWidgets.QWidget):
         super().__init__("☰", parent)
@@ -277,6 +286,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     candleModeChanged = QtCore.Signal(int)   # candle render mode 0..5 (also cycled by 'W')
     vpModeChanged = QtCore.Signal(int)       # volume-profile render mode 0..8 (selection VP + 4h 'V' + prev-day VP)
     chartSourceChanged = QtCore.Signal(str)  # chart data source: "bucket" (volume buckets) | "time" (clock candles)
+    startWindowsChanged = QtCore.Signal(list)   # ORDERED "Window on Start" selection (check order = open order)
     helpRequested = QtCore.Signal()       # the top-right '?' — show the keyboard-shortcuts cheatsheet
 
     PANEL_WIDTH = 308
@@ -421,6 +431,37 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             lambda _i: self.scannerChanged.emit(self.scanner_combo.currentData()))
         root.addWidget(self.scanner_combo)
         self._build_heatmap_section(root)                # 'Heatmap' dropdown (contrast + bubble vol) — Heatmap-mode only
+
+        # --- Window on Start (user 2026-09-01): ORDERED multi-select of the windows the terminal
+        # opens on launch. The order you CHECK them in = the order they open in. Collapsed by
+        # default; the summary line always shows the current sequence. Persisted in terminal_ui. ---
+        root.addWidget(self._header("Window on Start"))
+        self._sw_order: list = []
+        self._sw_checks: dict = {}
+        self._sw_btn = QtWidgets.QPushButton("▸ choose windows…")
+        self._sw_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self._sw_btn.setStyleSheet("QPushButton { color:#aeb4c0; background:#161b24; border:1px solid"
+                                   " #242c3a; border-radius:6px; padding:3px 10px; text-align:left;"
+                                   " font-size:11px; }")
+        root.addWidget(self._sw_btn)
+        self._sw_body = QtWidgets.QWidget()
+        _swl = QtWidgets.QVBoxLayout(self._sw_body)
+        _swl.setContentsMargins(6, 2, 0, 2)
+        _swl.setSpacing(2)
+        for key, label in _START_WINDOW_CHOICES:
+            cb = QtWidgets.QCheckBox(label)
+            cb.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+            cb.toggled.connect(lambda on, k=key: self._sw_toggled(k, on))
+            self._sw_checks[key] = cb
+            _swl.addWidget(cb)
+        self._sw_body.setVisible(False)
+        root.addWidget(self._sw_body)
+        self._sw_summary = QtWidgets.QLabel("")
+        self._sw_summary.setWordWrap(True)
+        self._sw_summary.setStyleSheet("color:#7a8496; font-size:10px; padding:0 2px;")
+        root.addWidget(self._sw_summary)
+        self._sw_btn.clicked.connect(self._sw_toggle_body)
+        self._sw_refresh()
 
         # --- scanner "Zero Point" anchor (Phase 1) ---
         root.addWidget(self._header("Scan Start Time"))
@@ -929,6 +970,42 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.wallfloor_slider.setValue(int(round(max(0.05, min(0.90, float(v))) * 100)))
         self.wallfloor_slider.blockSignals(False)
         self._render_wallfloor_lbl()
+
+    # ── "Window on Start" (ordered multi-select) ────────────────────────────────────────────
+    def _sw_toggle_body(self) -> None:
+        vis = not self._sw_body.isVisible()
+        self._sw_body.setVisible(vis)
+        self._sw_btn.setText(("▾ " if vis else "▸ ") + "choose windows…")
+
+    def _sw_toggled(self, key: str, on: bool) -> None:
+        if on and key not in self._sw_order:
+            self._sw_order.append(key)             # check order IS the open order
+        elif not on and key in self._sw_order:
+            self._sw_order.remove(key)
+        self._sw_refresh()
+        self.startWindowsChanged.emit(list(self._sw_order))
+
+    def _sw_refresh(self) -> None:
+        lbl = dict(_START_WINDOW_CHOICES)
+        if self._sw_order:
+            self._sw_summary.setText("opens:  " + "  →  ".join(
+                f"{i + 1}. {lbl.get(k, k)}" for i, k in enumerate(self._sw_order)))
+        else:
+            self._sw_summary.setText("opens: one default window")
+
+    def start_windows(self) -> list:
+        """The ordered launch list (spec keys) — persisted by the terminal in terminal_ui.json."""
+        return list(self._sw_order)
+
+    def set_start_windows(self, keys) -> None:
+        """Silent session-restore (mirrors set_tf): set checks + ORDER without emitting."""
+        valid = [k for k in (keys or []) if k in self._sw_checks]
+        self._sw_order = list(valid)
+        for k, cb in self._sw_checks.items():
+            cb.blockSignals(True)
+            cb.setChecked(k in valid)
+            cb.blockSignals(False)
+        self._sw_refresh()
 
     def _build_heatmap_section(self, root) -> None:
         """The 'Heatmap' dropdown: a CollapsibleSection holding the Liquidity-Contrast cutoff sliders (moved off the
