@@ -20,6 +20,8 @@ from datetime import datetime
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from .size_dist import ClickableLabel, SizeDistPopup   # MIN SIZE caption -> size distribution
+
 # ── palette (Binance-inspired, tuned to the terminal's dark scanner theme) ──────────────────
 _BG       = QtGui.QColor(10, 13, 18)
 _BG_TOOL  = "#0e1218"
@@ -228,6 +230,7 @@ class TradesTapePanel(QtWidgets.QWidget):
         self._live_t0: float = 0.0                   # ts of the first LIVE trade (window rows dedupe against it)
         self.min_usd: float = 0.0
         self._scroll: int = 0                        # rows scrolled back (0 = follow live)
+        self._dist = None                            # lazily-built size-distribution popup
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -241,9 +244,12 @@ class TradesTapePanel(QtWidgets.QWidget):
         lay.setContentsMargins(14, 0, 14, 0)
         lay.setSpacing(12)
 
-        cap = QtWidgets.QLabel("MIN SIZE")
+        cap = ClickableLabel("MIN SIZE")               # click -> aggressor size-distribution popup
         cap.setStyleSheet("color:#7a8496; font-family:Consolas; font-size:9px; font-weight:bold;"
-                          "letter-spacing:1px; border:none;")
+                          "letter-spacing:1px; border:none; text-decoration:underline;")
+        cap.setCursor(QtCore.Qt.PointingHandCursor)
+        cap.setToolTip("Click: buyer/seller aggressor size distribution (click the curve to set the filter)")
+        cap.clicked.connect(self._open_size_dist)
         lay.addWidget(cap)
 
         self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
@@ -318,6 +324,29 @@ class TradesTapePanel(QtWidgets.QWidget):
         self._raw.extend(older)
         self._raw.extend(live)
         return True
+
+    def size_samples(self):
+        """(usd, is_buy) per retained trade — feeds the size-distribution popup."""
+        import numpy as np
+        raw = list(self._raw)
+        if not raw:
+            return np.empty(0), np.empty(0, dtype=bool)
+        arr = np.array([(p * q, s) for _t, p, q, s in raw], dtype=np.float64)
+        return arr[:, 0], arr[:, 1] > 0
+
+    def _dist_scope(self) -> str:
+        raw = self._raw
+        if not raw:
+            return "Trades · (empty)"
+        return "Trades · last %.0f min" % max(1.0, (raw[-1][0] - raw[0][0]) / 60000.0)
+
+    def _open_size_dist(self) -> None:
+        if self._dist is None:
+            self._dist = SizeDistPopup(self.size_samples, self._dist_scope,
+                                       lambda: self.min_usd, self.set_min_usd, parent=self.window())
+        self._dist.show()
+        self._dist.raise_()
+        self._dist.activateWindow()
 
     def reset(self) -> None:
         """Full wipe (daemon/tunnel reconnect recovery): the live subscription died with the old

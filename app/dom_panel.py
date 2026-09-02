@@ -23,6 +23,7 @@ import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import config
+from .size_dist import ClickableLabel, SizeDistPopup   # MIN SIZE caption -> size distribution
 from .trades_tape import _slider_to_usd, _usd_to_slider, _fmt_usd   # the SAME log MIN SIZE mapping
 #                                                                     as the Trades scanner mode
 
@@ -498,6 +499,7 @@ class DomPanel(QtWidgets.QWidget):
         self.vp_secs: int = 3600                   # default 1H (NOT _VP_SECS[-1] — 6H exists now)
         self.vp_custom_t0 = None                   # custom VP start (epoch s); None = preset window
         self.min_usd: float = 0.0                  # MIN SIZE player filter (USD/trade) for SOLD/BOUGHT
+        self._dist = None                          # lazily-built aggressor size-distribution popup
         self._anchor_px: float | None = None       # ladder anchor PRICE; None = center on next paint.
         #                                            Set once, then FIXED — the ladder never auto-scrolls;
         #                                            price-based so it survives a GROUP change in place.
@@ -581,7 +583,13 @@ class DomPanel(QtWidgets.QWidget):
         lay.addWidget(self.vp_custom_edit)
 
         lay.addSpacing(10)
-        lay.addWidget(cap("MIN SIZE"))
+        _ms = ClickableLabel("MIN SIZE")               # click -> aggressor size-distribution popup
+        _ms.setStyleSheet("color:#7a8496; font-family:Consolas; font-size:9px; font-weight:bold;"
+                          "letter-spacing:1px; border:none; text-decoration:underline;")
+        _ms.setCursor(QtCore.Qt.PointingHandCursor)
+        _ms.setToolTip("Click: buyer/seller aggressor size distribution (click the curve to set the filter)")
+        _ms.clicked.connect(self._open_size_dist)
+        lay.addWidget(_ms)
         self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.slider.setRange(0, 1000)
         self.slider.setValue(0)
@@ -671,6 +679,24 @@ class DomPanel(QtWidgets.QWidget):
     def _apply_custom_edit(self) -> None:
         if self.vp_combo.currentData() == -1:       # debounced picker change while on Custom…
             self.set_vp_custom(self.vp_custom_edit.dateTime().toSecsSinceEpoch())
+
+    def size_samples(self):
+        """(usd, is_buy) per trade over the CURRENT VP window — feeds the size-distribution popup.
+        A SOL trade's price IS its tick, so usd = qty * tickbin * TICK is exact."""
+        ts, tk, bq, sq = self._trades_cat()
+        if not len(ts):
+            return np.empty(0), np.empty(0, dtype=bool)
+        i0 = np.searchsorted(ts, self._vp_cutoff())
+        px = tk[i0:] * _TICK
+        return (bq[i0:] + sq[i0:]) * px, bq[i0:] > 0
+
+    def _open_size_dist(self) -> None:
+        if self._dist is None:
+            self._dist = SizeDistPopup(self.size_samples, lambda: f"DOM · {self.vp_label()}",
+                                       lambda: self.min_usd, self.set_min_usd, parent=self.window())
+        self._dist.show()
+        self._dist.raise_()
+        self._dist.activateWindow()
 
     def set_min_usd(self, usd: float) -> None:
         """Programmatic restore (saved UI state) — moves the slider, which re-derives everything."""
