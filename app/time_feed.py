@@ -19,6 +19,7 @@ import time
 from typing import List, Optional
 
 import numpy as np
+import requests
 
 from . import config, protocol
 from .time_candles import to_bucket_wire
@@ -152,6 +153,7 @@ class TimeCandleFeed(threading.Thread):
         self._tf = tf
         self._cands: dict = {}                  # {start_time_int: raw served candle} — merged catch-up + live pushes
         self._connected = False
+        self._last_kheal = 0.0                  # rate limit on the Binance-kline gap fallback (20s)
         self._snap = build_snapshot([], tf, connected=False)
 
     # -- GUI thread ----------------------------------------------------
@@ -194,14 +196,63 @@ class TimeCandleFeed(threading.Thread):
                     del self._cands[k]
 
     def _gap_in_store(self) -> bool:
-        """A REAL candle is missing between the stored oldest..newest (the forming last one excluded) —
-        pull the next resync forward instead of waiting the full minute (boot-load drops, user 2026-09-02)."""
+        """A REAL candle is missing between the stored oldest..newest (the forming last one excluded)."""
+        return bool(self._missing_closed(limit=1))
+
+    def _missing_closed(self, limit: int = 500) -> list:
+        """start_times of CLOSED candles missing from the store (the forming last one excluded). These are
+        minutes the daemon itself lost (its aggTrade stream stalls under catch-up load and it then serves
+        empty:true placeholders, which _merge deliberately skips) — a daemon resync can never fill them."""
         with self._lock:
             keys = sorted(self._cands)
             tfs = config.TF_SECONDS.get(self._tf, 60)
-        if len(keys) < 3:
+        out = []
+        for a2, b2 in zip(keys[:-2], keys[1:-1]):
+            t = a2 + tfs
+            while t < b2 and len(out) < limit:
+                out.append(t)
+                t += tfs
+            if len(out) >= limit:
+                break
+        return out
+
+    def _heal_from_klines(self) -> bool:
+        """Fill missing closed candles straight from Binance REST klines (user 2026-09-02: bars must never
+        be missing). Real OHLC + buy/sell volume split (kline field 9 = taker-buy base) — only the
+        FOOTPRINT stays empty until the daemon's own hourly aggTrades healer restores it, at which point
+        the 60s resync overwrites these rows with the daemon's full version. Never touches stored keys."""
+        miss = self._missing_closed()
+        if not miss:
             return False
-        return any(b2 - a2 > tfs for a2, b2 in zip(keys[:-2], keys[1:-1]))
+        tf = self.tf
+        tfs = config.TF_SECONDS.get(tf, 60)
+        try:
+            res = requests.get(config.REST_KLINES, params={
+                "symbol": config.SYMBOL, "interval": tf, "limit": 1000,
+                "startTime": int(min(miss) * 1000), "endTime": int((max(miss) + tfs) * 1000)}, timeout=6)
+            res.raise_for_status()
+            rows = res.json()
+        except Exception:
+            return False
+        missset = set(int(t) for t in miss)
+        healed = []
+        for k in rows:
+            try:
+                st = int(k[0]) // 1000
+                if st not in missset:
+                    continue                     # never overwrite anything the daemon really served
+                vol = float(k[5]); tb = float(k[9])
+                healed.append({
+                    "start_time": float(st), "end_time": float(st + tfs),
+                    "open": float(k[1]), "high": float(k[2]), "low": float(k[3]), "close": float(k[4]),
+                    "poc_price": float(k[4]), "buy_vol": tb, "sell_vol": max(0.0, vol - tb),
+                    "curr_vol": vol, "levels": {}, "kline_heal": True})
+            except (TypeError, ValueError, IndexError):
+                continue
+        if healed:
+            self._merge(healed)
+            self._rebuild()
+        return bool(healed)
 
     def _rebuild(self) -> None:
         with self._lock:
@@ -267,8 +318,16 @@ class TimeCandleFeed(threading.Thread):
                 if got:
                     last_frame = time.monotonic()
                     self._rebuild()
-                    if self._gap_in_store():                      # hole in the closed candles -> heal in ~3s,
-                        next_resync = min(next_resync, time.monotonic() + 3.0)   # not at the 60s cadence
+                    # a hole in the closed candles is a minute the DAEMON lost — its serve carries only an
+                    # empty placeholder there, so re-fetching from it can never help. Heal from Binance
+                    # klines instead (rate-limited; the daemon's hourly healer restores the footprint later).
+                    nowk = time.monotonic()
+                    if nowk - self._last_kheal > 20.0 and self._gap_in_store():
+                        self._last_kheal = nowk
+                        try:
+                            self._heal_from_klines()
+                        except Exception:
+                            pass
         finally:
             try:
                 s.close()

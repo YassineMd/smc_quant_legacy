@@ -383,13 +383,16 @@ class MarketDataCore:
     def _tc_rest_heal_loop(self) -> None:
         """Boot heal + HOURLY re-heal. Boot covers restart scars; the periodic pass covers the one leak boot can't:
         a brief upstream kline-websocket gap leaves that minute's node non-final (wire-observed 2026-08-24: one live
-        candle settled $0.02 off official after an ~18s push stall). 6 tiny REST calls/hour; atomic swaps -> safe."""
+        candle settled $0.02 off official after an ~18s push stall). 6 tiny REST calls per pass; atomic swaps.
+        2026-09-02: hourly -> every 10 min, so live-loss scars (empty candles from a stalled loop) heal fast —
+        the terminal's own kline fallback bridges display in the meantime, but the STORE should not stay
+        wounded for an hour. 36 REST calls/hour is still negligible."""
         while True:
             try:
                 self._tc_rest_heal()
             except Exception as e:
                 print(f"CLOCK-CANDLE REST-HEAL ERROR: {e}")
-            time.sleep(3600.0)
+            time.sleep(600.0)
 
     def _tc_backfill_loop(self) -> None:
         """FOOTPRINT backfill (app/aggtrade_backfill): rebuild missing clock-candle footprints from the Binance
@@ -525,6 +528,44 @@ class MarketDataCore:
             self._tc_last_save = now
             if not self._tc_store:
                 return
+            # ── BGSAVE (2026-09-02): the store grew to ~9.8k footprint candles and this dump took 2-4 MINUTES
+            # of GIL on the shared-core VM — the event loop starved, the aggTrade/depth websockets timed out
+            # (journal: 'SAVE took 220.5s' + 'keepalive ping timeout'), whole minutes of trades were LOST
+            # (empty 1m candles) and the pulse book froze mid-save. Redis-style fix: fork() a child that
+            # serializes its copy-on-write snapshot and hard-exits — the parent pays ~nothing. The in-process
+            # path remains for shutdown (force=True must complete before exit) and fork-less platforms. ──
+            if not force and hasattr(os, "fork"):
+                prev = getattr(self, "_tc_save_pid", 0)
+                if prev:
+                    try:
+                        done, _st = os.waitpid(prev, os.WNOHANG)   # reap the previous BGSAVE child
+                        if done == 0:
+                            return                                 # still writing -> skip this round (no overlap)
+                    except ChildProcessError:
+                        pass
+                    self._tc_save_pid = 0
+                pid = os.fork()
+                if pid > 0:
+                    self._tc_save_pid = pid                        # parent: instant return, zero GIL spent
+                    return
+                # CHILD: frozen COW snapshot. No locks/prints/asyncio — raw os.write + hard _exit only
+                # (inherited locks may be held by threads that don't exist here; cleanup must not run).
+                try:
+                    data = {tf: {str(k): v for k, v in store.items()}
+                            for tf, store in self._tc_store.items() if store}
+                    p = self._tc_path(); tmp = p + f".tmp{os.getpid()}"
+                    t0 = time.monotonic()
+                    with gzip.open(tmp, "wt", encoding="utf-8") as f:
+                        json.dump(data, f)
+                    os.replace(tmp, p)                             # atomic swap (never a torn file)
+                    el = time.monotonic() - t0
+                    if el > 5.0:
+                        os.write(1, (f"CLOCK-CANDLE BGSAVE took {el:.1f}s "
+                                     f"({sum(len(v) for v in data.values())} candles)\n").encode())
+                except BaseException:
+                    pass
+                finally:
+                    os._exit(0)
             # dict(store) is an atomic (GIL-held) snapshot -> safe to run off the event loop while catchup_time_candles
             # (on the loop) may be adding a newly-closed candle; no "dict changed size during iteration".
             data = {tf: {str(k): v for k, v in dict(store).items()} for tf, store in list(self._tc_store.items()) if store}
