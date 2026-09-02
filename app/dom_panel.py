@@ -703,7 +703,13 @@ class DomPanel(QtWidgets.QWidget):
             self._asks = [(float(pr), float(q)) for pr, q in asks]
         except (TypeError, ValueError):
             return
-        if mid and mid > 0:
+        # mid from the BOOK, not the passed latest_price: on a LITE worker (DOM/Trades start windows)
+        # latest_price rides the never-subscribed bucket stream and stays FROZEN at the boot price —
+        # double-click "center" then snapped to a stale level (user 2026-09-02). The pulse book is
+        # always fresh; the passed mid is only the empty-book fallback.
+        if self._bids and self._asks:
+            self._mid = (self._bids[0][0] + self._asks[0][0]) / 2.0
+        elif mid and mid > 0:
             self._mid = float(mid)
 
     def _pack(self, ts, pr, qt, sd):
