@@ -361,15 +361,16 @@ class _DomCanvas(QtWidgets.QWidget):
 
             # SOLD / BOUGHT — window-scoped per level (user 2026-09-01).
             # MIN SIZE at ALL:   plain SOL volume, nothing else (no usd, no parentheses)
-            # MIN SIZE filtered: "1.5M (45%, 3)" = usd of trades >= min, its share of the level's
-            #                                       total usd that side, and how many such trades.
-            # Levels with no qualifying trade show nothing; the column max is bolded.
+            # MIN SIZE filtered: "7.0K (45%, 3)" = the level's TOTAL usd that side (INVARIANT —
+            #                     the filter never changes it), then the share contributed by
+            #                     trades >= min and how many such trades (these two vary).
+            # Rows with volume always show; the biggest FILTERED contribution is bolded.
             if _fon:
                 stt = stats.get(b)
                 if stt is not None:
                     _tbu, _tsu, _fbu, _fsu, _cb, _cs = stt
-                    if _cs > 0:
-                        _pct = _fsu / _tsu * 100.0 if _tsu > 0 else 0.0
+                    if _tsu > 0:
+                        _pct = _fsu / _tsu * 100.0
                         hot = _fsu >= max_fs > 0
                         col = QtGui.QColor(_SELL)
                         col.setAlpha(235 if hot else 150)
@@ -377,9 +378,9 @@ class _DomCanvas(QtWidgets.QWidget):
                         p.setFont(self._font_b if hot else self._font)
                         p.drawText(QtCore.QRect(c_sold0, ry, traded_w - 4, _ROW_H),
                                    QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
-                                   f"{_kfmt(_fsu)} ({_pct:.0f}%, {_cs})")
-                    if _cb > 0:
-                        _pct = _fbu / _tbu * 100.0 if _tbu > 0 else 0.0
+                                   f"{_kfmt(_tsu)} ({_pct:.0f}%, {_cs})")
+                    if _tbu > 0:
+                        _pct = _fbu / _tbu * 100.0
                         hot = _fbu >= max_fb > 0
                         col = QtGui.QColor(_BUY)
                         col.setAlpha(235 if hot else 150)
@@ -387,7 +388,7 @@ class _DomCanvas(QtWidgets.QWidget):
                         p.setFont(self._font_b if hot else self._font)
                         p.drawText(QtCore.QRect(c_bought0 + 4, ry, traded_w - 4, _ROW_H),
                                    QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
-                                   f"{_kfmt(_fbu)} ({_pct:.0f}%, {_cb})")
+                                   f"{_kfmt(_tbu)} ({_pct:.0f}%, {_cb})")
             else:
                 _vb, _vs = vp.get(b, (0.0, 0.0))               # ALL -> the SOL volumes, straight up
                 if _vs > 0:
