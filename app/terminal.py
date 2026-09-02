@@ -916,6 +916,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.dom_panel = DomPanel()              # scanner mode "dom" — DOM ladder + VP (replaces the plot)
         self.dom_panel.settingsChanged.connect(
             lambda: None if self._loading_ui else self._save_ui_state())   # GROUP + VP window stick
+        self.dom_panel.customVpRequested.connect(self._dom_custom_vp)      # custom start -> deep tape fetch
         self.splitter.addWidget(self.dom_panel)
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(3, 1)     # trades tape takes the plot's space when it swaps in
@@ -14767,13 +14768,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.trades_panel.reset()
             self._tape_subscribe(backfill=True)
         self._tape_conn_was = conn
-        _tv, tw, tbatches = self.worker.trades_state()
+        _tv, tws, tbatches = self.worker.trades_state()
         changed = False
         for tbp in tbatches:
             if self.trades_panel.ingest_live(*decode_trades(tbp.ts_b64, tbp.price_b64,
                                                             tbp.qty_b64, tbp.side_b64)):
                 changed = True
-        if tw is not None:
+        for tw in (tws or ()):
             if self.trades_panel.ingest_window(*decode_trades(tw.ts_b64, tw.price_b64,
                                                               tw.qty_b64, tw.side_b64)):
                 changed = True
@@ -14813,6 +14814,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.worker.request_trades_window(t1 - int(config.DOM_VP_BACKFILL_SECS) * 1000, t1, 0.0, 1e9)
         self._tape_resub_t = time.time()
 
+    def _dom_custom_vp(self, t0: float) -> None:
+        """Custom VP start picked in the DOM: fetch the tape history OLDER than what the panel already
+        holds, down to the picked time (clamped to the daemon's 72h trade_tape retention). The reply
+        lands as a TradesWindowPacket -> ingest_window prepends it (rows >= live_t0 are cut, so an
+        overlap with the existing store is harmless)."""
+        t0 = max(float(t0), time.time() - config.DEPTH_RETENTION_HOURS * 3600 + 60)
+        try:
+            ts = self.dom_panel._trades_cat()[0]
+            oldest_ms = int((float(ts[0]) if len(ts) else time.time()) * 1000)
+        except Exception:
+            oldest_ms = int(time.time() * 1000)
+        t0_ms = int(t0 * 1000)
+        if t0_ms < oldest_ms - 1000:
+            self.worker.request_trades_window(t0_ms, oldest_ms - 1, 0.0, 1e9)
+
     def _scan_dom(self) -> None:
         """Per-frame: book from the latest snapshot, trades drained into the VP store, ~0.4s repaints.
         Same reconnect healing as the Trades mode (shared _tape_resub_t / _tape_conn_was)."""
@@ -14820,12 +14836,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if conn and not getattr(self, "_tape_conn_was", True):
             self.dom_panel.reset()
             self._dom_subscribe(backfill=True)
+            if self.dom_panel.vp_custom_t0 is not None:      # a custom start older than the 6h backfill
+                self._dom_custom_vp(self.dom_panel.vp_custom_t0)   # needs its deep span re-fetched too
         self._tape_conn_was = conn
-        _tv, tw, tbatches = self.worker.trades_state()
+        _tv, tws, tbatches = self.worker.trades_state()
         for tbp in tbatches:
             self.dom_panel.ingest_live(*decode_trades(tbp.ts_b64, tbp.price_b64,
                                                       tbp.qty_b64, tbp.side_b64))
-        if tw is not None:
+        for tw in (tws or ()):
             self.dom_panel.ingest_window(*decode_trades(tw.ts_b64, tw.price_b64,
                                                         tw.qty_b64, tw.side_b64))
         now = time.time()
@@ -14868,8 +14886,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 changed = True
         # Phase 3 bubbles: drain the trades delivery buffer (consume-once, never on snapshot()) -> bubble cache
         if self.hm_bubbles_on:
-            _tv, tw, tbatches = self.worker.trades_state()
-            if tw is not None:
+            _tv, tws, tbatches = self.worker.trades_state()
+            for tw in (tws or ()):
                 tt = decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64)
                 if self.hm_pending_tb == "prepend" and len(self.hm_tb_cache.ts):
                     self.hm_tb_cache.prepend_older(*tt)

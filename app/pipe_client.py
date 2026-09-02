@@ -123,7 +123,9 @@ class PipeClientWorker(threading.Thread):
         self._hm_ver = 0                       # bumps on any heatmap frame -> lets the mode self-gate
         # Phase 3 bubbles delivery buffer (guarded by data_lock) — same isolation: the trade arrays live HERE,
         # handed to the heatmap mode only via trades_state(), NEVER on the 20Hz snapshot().
-        self._tb_window = None                 # last TradesWindowPacket (consumed once)
+        self._tb_windows: deque = deque(maxlen=8)   # pending TradesWindowPackets — a LIST:
+        #                                  the DOM's entry backfill + custom-start deep fetch can
+        #                                  land in one drain interval; a single slot lost one
         self._tb_batches: deque = deque(maxlen=512)   # pending live TradeBatchPackets (drained each access)
         self._tb_ver = 0
 
@@ -238,7 +240,7 @@ class PipeClientWorker(threading.Thread):
         with self.data_lock:
             self._hm_window = None
             self._hm_cols.clear()
-            self._tb_window = None
+            self._tb_windows.clear()
             self._tb_batches.clear()
 
     def depth_heatmap_state(self):
@@ -260,15 +262,14 @@ class PipeClientWorker(threading.Thread):
             return list(self.depth["bids"]), list(self.depth["asks"]), self.latest_price
 
     def trades_state(self):
-        """Phase 3 bubbles accessor (heatmap mode only, consume-once): ``(version, window_or_None,
-        [live_batches])``; clears the delivered window + drains the live batches. The trade arrays stay HERE,
-        never on snapshot()."""
+        """Trades accessor (heatmap/trades/dom modes, consume-once): ``(version, [windows],
+        [live_batches])``; drains both queues. The trade arrays stay HERE, never on snapshot()."""
         with self.data_lock:
-            w = self._tb_window
-            self._tb_window = None
+            ws = list(self._tb_windows)
+            self._tb_windows.clear()
             batches = list(self._tb_batches)
             self._tb_batches.clear()
-            return self._tb_ver, w, batches
+            return self._tb_ver, ws, batches
 
     def stop(self) -> None:
         self._stop.set()
@@ -562,7 +563,7 @@ class PipeClientWorker(threading.Thread):
                 self._hm_cols.append(pkt)
                 self._hm_ver += 1
             elif isinstance(pkt, protocol.TradesWindowPacket):
-                self._tb_window = pkt          # raw trade arrays stay in the delivery buffer (NOT snapshot())
+                self._tb_windows.append(pkt)   # raw trade arrays stay in the delivery buffer (NOT snapshot())
                 self._tb_ver += 1
             elif isinstance(pkt, protocol.TradeBatchPacket):
                 self._tb_batches.append(pkt)

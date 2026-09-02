@@ -468,14 +468,18 @@ class _DomCanvas(QtWidgets.QWidget):
 
 
 class DomPanel(QtWidgets.QWidget):
-    """Toolbar (GROUP + VP window + ⟲ CENTER pill) over the painted DOM ladder."""
+    """Toolbar (GROUP + VP dropdowns, MIN SIZE slider) over the painted DOM ladder. No center
+    button — double-click re-centers (user 2026-09-01)."""
 
     settingsChanged = QtCore.Signal()
+    customVpRequested = QtCore.Signal(float)       # custom VP start (epoch s) — the terminal fetches
+    #                                                any tape history older than what's already stored
 
     def __init__(self) -> None:
         super().__init__()
         self.group: float = _GROUPS[0]
         self.vp_secs: int = 3600                   # default 1H (NOT _VP_SECS[-1] — 6H exists now)
+        self.vp_custom_t0 = None                   # custom VP start (epoch s); None = preset window
         self.min_usd: float = 0.0                  # MIN SIZE player filter (USD/trade) for SOLD/BOUGHT
         self._anchor_px: float | None = None       # ladder anchor PRICE; None = center on next paint.
         #                                            Set once, then FIXED — the ladder never auto-scrolls;
@@ -511,35 +515,53 @@ class DomPanel(QtWidgets.QWidget):
                             "letter-spacing:1px; border:none;")
             return c
 
-        _SEG = ("QPushButton { color:#aeb4c0; background:#161b24; border:1px solid #242c3a;"
-                " border-radius:10px; padding:2px 10px; font-family:Consolas; font-size:10px;"
-                " font-weight:bold; }"
-                "QPushButton:checked { color:#0e1218; background:#f0b90b; border-color:#f0b90b; }")
+        _COMBO = ("QComboBox { color:#e6ecf4; background:#161b24; border:1px solid #242c3a;"
+                  " border-radius:10px; padding:2px 10px; font-family:Consolas; font-size:10px;"
+                  " font-weight:bold; } QComboBox::drop-down { border:none; width:16px; }"
+                  " QComboBox QAbstractItemView { color:#e6ecf4; background:#161b24;"
+                  " border:1px solid #242c3a; selection-background-color:#f0b90b;"
+                  " selection-color:#0e1218; font-family:Consolas; font-size:10px; }")
 
         lay.addWidget(cap("GROUP"))
-        self._grp_btns = []
+        self.grp_combo = QtWidgets.QComboBox()
         for gv in _GROUPS:
-            b = QtWidgets.QPushButton(f"{gv:.2f}")
-            b.setCheckable(True)
-            b.setChecked(gv == self.group)
-            b.setCursor(QtCore.Qt.PointingHandCursor)
-            b.setStyleSheet(_SEG)
-            b.clicked.connect(lambda _c=False, v=gv: self.set_group(v))
-            self._grp_btns.append(b)
-            lay.addWidget(b)
+            self.grp_combo.addItem(f"{gv:.2f}", gv)
+        self.grp_combo.setCurrentIndex(0)
+        self.grp_combo.setCursor(QtCore.Qt.PointingHandCursor)
+        self.grp_combo.setStyleSheet(_COMBO)
+        self.grp_combo.currentIndexChanged.connect(
+            lambda i: self.set_group(self.grp_combo.itemData(i)))
+        lay.addWidget(self.grp_combo)
 
         lay.addSpacing(10)
         lay.addWidget(cap("VP"))
-        self._vp_btns = []
+        self.vp_combo = QtWidgets.QComboBox()
         for secs, label in _VP_SECS:
-            b = QtWidgets.QPushButton(label)
-            b.setCheckable(True)
-            b.setChecked(secs == self.vp_secs)
-            b.setCursor(QtCore.Qt.PointingHandCursor)
-            b.setStyleSheet(_SEG)
-            b.clicked.connect(lambda _c=False, v=secs: self.set_vp_secs(v))
-            self._vp_btns.append(b)
-            lay.addWidget(b)
+            self.vp_combo.addItem(label, secs)
+        self.vp_combo.addItem("Custom…", -1)       # VP measured from a user-picked date+hour to now
+        self.vp_combo.setCurrentIndex(2)           # 1H default
+        self.vp_combo.setCursor(QtCore.Qt.PointingHandCursor)
+        self.vp_combo.setStyleSheet(_COMBO)
+        self.vp_combo.currentIndexChanged.connect(self._on_vp_combo)
+        lay.addWidget(self.vp_combo)
+
+        # custom-start picker — visible only while the VP combo is on "Custom…"
+        self.vp_custom_edit = QtWidgets.QDateTimeEdit(
+            QtCore.QDateTime.currentDateTime().addSecs(-3600))
+        self.vp_custom_edit.setDisplayFormat("dd/MM HH:mm")
+        self.vp_custom_edit.setCalendarPopup(True)
+        self.vp_custom_edit.setStyleSheet(
+            "QDateTimeEdit { color:#f0b90b; background:#161b24; border:1px solid #242c3a;"
+            " border-radius:10px; padding:2px 8px; font-family:Consolas; font-size:10px;"
+            " font-weight:bold; }")
+        self.vp_custom_edit.setVisible(False)
+        self._custom_debounce = QtCore.QTimer(self)      # spinning the hour arrows fires per step —
+        self._custom_debounce.setSingleShot(True)        # debounce so deep-history fetches don't spam
+        self._custom_debounce.setInterval(600)
+        self._custom_debounce.timeout.connect(self._apply_custom_edit)
+        self.vp_custom_edit.dateTimeChanged.connect(
+            lambda _dt: self._custom_debounce.start())
+        lay.addWidget(self.vp_custom_edit)
 
         lay.addSpacing(10)
         lay.addWidget(cap("MIN SIZE"))
@@ -563,20 +585,7 @@ class DomPanel(QtWidgets.QWidget):
                                    "font-weight:bold; border:none;")
         lay.addWidget(self.min_lbl)
 
-        lay.addStretch(1)
-        self.pill = QtWidgets.QPushButton("⟲ CENTER")
-        self.pill.setCursor(QtCore.Qt.PointingHandCursor)
-        self.pill.setFixedHeight(24)
-        self.pill.setToolTip("Re-center the ladder on the current price (it never follows on its own)")
-        self.pill.setStyleSheet(
-            "QPushButton { color:#f0b90b; background:rgba(240,185,11,0.10); border:1px solid"
-            " rgba(240,185,11,0.45); border-radius:12px; padding:0 14px; font-family:Consolas;"
-            " font-size:10px; font-weight:bold; }"
-            "QPushButton:hover { background:rgba(240,185,11,0.22); }")
-        self.pill.clicked.connect(self.recenter)
-        lay.addWidget(self.pill)
-        lay.addSpacing(112)                        # keep clear of the window's floating 🔄🔔☰ buttons
-        #                                            (three 32px icons overlay the top-right corner)
+        lay.addStretch(1)                          # no CENTER button — double-click re-centers
 
         root.addWidget(bar)
         self.canvas = _DomCanvas(self)
@@ -584,21 +593,67 @@ class DomPanel(QtWidgets.QWidget):
 
     # ── settings ───────────────────────────────────────────────────────────────────────────
     def vp_label(self) -> str:
+        if self.vp_custom_t0 is not None:          # (arrow OUTSIDE strftime — Windows' locale codec
+            return time.strftime("%d/%m %H:%M", time.localtime(self.vp_custom_t0)) + " →"
         return next(lbl for s, lbl in _VP_SECS if s == self.vp_secs)
+
+    def _vp_cutoff(self) -> float:
+        """The VP/player window's left edge (epoch s): a preset trails 'now'; custom is a fixed start."""
+        if self.vp_custom_t0 is not None:
+            return self.vp_custom_t0
+        return time.time() - self.vp_secs
 
     def set_group(self, g: float) -> None:
         self.group = g                              # the price anchor is group-independent: no jump
-        for b, gv in zip(self._grp_btns, _GROUPS):
-            b.blockSignals(True); b.setChecked(abs(gv - g) < 1e-9); b.blockSignals(False)
+        for i in range(self.grp_combo.count()):
+            if abs(self.grp_combo.itemData(i) - g) < 1e-9:
+                self.grp_combo.blockSignals(True)
+                self.grp_combo.setCurrentIndex(i)
+                self.grp_combo.blockSignals(False)
+                break
         self.canvas.update()
         self.settingsChanged.emit()
 
     def set_vp_secs(self, secs: int) -> None:
         self.vp_secs = int(secs)
-        for b, (sv, _l) in zip(self._vp_btns, _VP_SECS):
-            b.blockSignals(True); b.setChecked(sv == secs); b.blockSignals(False)
+        self.vp_custom_t0 = None                    # a preset always clears the custom start
+        for i in range(self.vp_combo.count()):
+            if self.vp_combo.itemData(i) == secs:
+                self.vp_combo.blockSignals(True)
+                self.vp_combo.setCurrentIndex(i)
+                self.vp_combo.blockSignals(False)
+                break
+        self.vp_custom_edit.setVisible(False)
         self.canvas.update()
         self.settingsChanged.emit()
+
+    def set_vp_custom(self, t0: float) -> None:
+        """VP/player window from a user-picked date+hour to now. Emits customVpRequested so the
+        terminal can fetch tape history older than what's already stored (72h retention cap)."""
+        t0 = min(float(t0), time.time() - 60.0)     # a future start would be an empty window
+        self.vp_custom_t0 = t0
+        self.vp_combo.blockSignals(True)
+        self.vp_combo.setCurrentIndex(self.vp_combo.count() - 1)   # "Custom…"
+        self.vp_combo.blockSignals(False)
+        self.vp_custom_edit.blockSignals(True)
+        self.vp_custom_edit.setDateTime(QtCore.QDateTime.fromSecsSinceEpoch(int(t0)))
+        self.vp_custom_edit.blockSignals(False)
+        self.vp_custom_edit.setVisible(True)
+        self._cat = None                            # the prune horizon just moved — rebuild
+        self.canvas.update()
+        self.settingsChanged.emit()
+        self.customVpRequested.emit(t0)
+
+    def _on_vp_combo(self, i: int) -> None:
+        data = self.vp_combo.itemData(i)
+        if data == -1:
+            self.set_vp_custom(self.vp_custom_edit.dateTime().toSecsSinceEpoch())
+        else:
+            self.set_vp_secs(int(data))
+
+    def _apply_custom_edit(self) -> None:
+        if self.vp_combo.currentData() == -1:       # debounced picker change while on Custom…
+            self.set_vp_custom(self.vp_custom_edit.dateTime().toSecsSinceEpoch())
 
     def set_min_usd(self, usd: float) -> None:
         """Programmatic restore (saved UI state) — moves the slider, which re-derives everything."""
@@ -696,7 +751,10 @@ class DomPanel(QtWidgets.QWidget):
                 tk = np.concatenate([c[1] for c in self._chunks])
                 bq = np.concatenate([c[2] for c in self._chunks])
                 sq = np.concatenate([c[3] for c in self._chunks])
-                lo = np.searchsorted(ts, time.time() - _VP_SECS[-1][0] - _PRUNE_SLACK)
+                _hz = time.time() - _VP_SECS[-1][0] - _PRUNE_SLACK
+                if self.vp_custom_t0 is not None:        # a custom start older than 6h needs its data kept
+                    _hz = min(_hz, self.vp_custom_t0 - _PRUNE_SLACK)
+                lo = np.searchsorted(ts, _hz)
                 if lo > 0:
                     ts, tk, bq, sq = ts[lo:], tk[lo:], bq[lo:], sq[lo:]
                 self._cat = (ts, tk, bq, sq)
@@ -715,7 +773,7 @@ class DomPanel(QtWidgets.QWidget):
         ts, tk, bq, sq = self._trades_cat()
         if not len(ts):
             return {}
-        i0 = np.searchsorted(ts, time.time() - self.vp_secs)
+        i0 = np.searchsorted(ts, self._vp_cutoff())
         if i0 >= len(ts):
             return {}
         ticks_per = max(1, int(round(g / _TICK)))
@@ -753,7 +811,7 @@ class DomPanel(QtWidgets.QWidget):
         ts, tk, bq, sq = self._trades_cat()
         if not len(ts):
             return {}
-        i0 = np.searchsorted(ts, time.time() - self.vp_secs)
+        i0 = np.searchsorted(ts, self._vp_cutoff())
         if i0 >= len(ts):
             return {}
         ticks_per = max(1, int(round(g / _TICK)))
