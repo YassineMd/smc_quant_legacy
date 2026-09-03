@@ -1556,9 +1556,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # 'Absorption Candle indicator' (m10_engulf1m) — absorption-tiered losanges, ALL timeframes.
         self._e1m_sph = None                     # ScatterPlotItem — cyan/magenta (engulf |A|>=2) + blue/orange (same-side pair) + green/red (engulf |A|>=1)
         self._e1m_sig = None; self._e1m_drawn = False
-        # BIG BODY (m10_bigbody): square badge on a candle whose body > EACH of the last 5 bodies
-        self._bby_sph = None
-        self._bby_sig = None; self._bby_drawn = False
         # 5m ENGULF strategy BIAS badge — bottom-left corner, "LONG"/"SHORT" from the S/R structure
         # (engulf5m_detect.current_bias). Shown only with m10_engulf5m on, 5m, Mode 10.
         self._e5m_bias = None                    # 'long' / 'short' / None, recomputed in _draw_engulf5m
@@ -11085,48 +11082,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _t in pool[len(positions):]:
             _t.setVisible(False)
 
-    def _clear_bigbody(self) -> None:
-        if self._bby_sph is not None:
-            self._bby_sph.setVisible(False)
-        self._bby_sig = None; self._bby_drawn = False
-
-    def _draw_bigbody(self, filtered) -> None:
-        """BIG BODY (app/big_body_detect): a filled SQUARE on candles whose body is strictly bigger
-        than each of the last 5 bodies — green below a bullish bar, red above a bearish one. The
-        simplest size rule, per the user 2026-09-03 (NOT the removed percentile ꕻ Big Bar). Causal,
-        forming bar excluded by the detector-side hi bound (sig re-runs once per bar close).
-        Self-gated, fail-safe, ALL timeframes + both chart sources."""
-        if not self.menu.layer_state("m10_bigbody") or self.scanner_mode != "bucket_canvas":
-            self._clear_bigbody(); return
-        n = len(filtered)
-        _sig = (n, filtered[-1].get("end_time") if n else 0, filtered[-1].get("close") if n else 0)
-        if _sig == self._bby_sig and self._bby_drawn:
-            return
-        self._bby_sig = _sig
-        try:
-            from app import big_body_detect
-            marks = big_body_detect.detect(filtered, skip_last=True)
-        except Exception:
-            self._clear_bigbody(); return
-        GRN, RED = (40, 220, 100), (240, 60, 78)
-        (_a, _b), (vy0, vy1) = self.vb.viewRange(); pad = max((vy1 - vy0) * 0.05, 1e-9)
-        spots = []
-        for m in marks:
-            i = m["i"]
-            if i < 0 or i >= n:
-                continue
-            b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
-            col = GRN if m["side"] > 0 else RED
-            y = (lo - pad) if m["side"] > 0 else (hi + pad)
-            _pen = pg.mkPen(int(col[0] * 0.55), int(col[1] * 0.55), int(col[2] * 0.55), 235, width=1.1)
-            spots.append({"pos": (i, y), "symbol": "s", "size": 10,
-                          "brush": pg.mkBrush(*col, 220), "pen": _pen})
-        if self._bby_sph is None:
-            self._bby_sph = pg.ScatterPlotItem(pxMode=True, symbol="s", size=10)
-            self._bby_sph.setZValue(30); self.plot.addItem(self._bby_sph, ignoreBounds=True)
-        self._bby_sph.setData(spots); self._bby_sph.setVisible(True)
-        self._bby_drawn = True
-
     def _clear_engulf1m(self) -> None:
         if self._e1m_sph is not None:
             self._e1m_sph.setVisible(False)
@@ -12347,7 +12302,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     or self.menu.layer_state("m10_easy1h") or self.menu.layer_state("m10_crazywall")
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")
                     or self.menu.layer_state("m10_wallstrat") or self.menu.layer_state("m10_radarrun")
-                    or self.menu.layer_state("m10_kcovershoot") or self.menu.layer_state("m10_bigbody")
+                    or self.menu.layer_state("m10_kcovershoot")
                     or self.menu.layer_state("m10_wallsurge") or self.menu.layer_state("m10_longwick")
                     or self.menu.layer_state("m10_longwick_combo") or self.menu.layer_state("m10_longwick_reclaim")):
                 _pf = _pf0                          # already built above; the top gate decided this frame needs a redraw
@@ -12414,10 +12369,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 except Exception:
                     self._clear_engulf1m()
                 try:
-                    self._draw_bigbody(_pf or [])   # Big Body squares (all tf) — self-gated, fail-safe
-                except Exception:
-                    self._clear_bigbody()
-                try:
                     self._draw_sr(_pf or [])        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
                 except Exception:
                     self._clear_sr()
@@ -12431,7 +12382,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._clear_crazy_wall()
             else:
                 self._clear_engulfsr(); self._clear_momentum(); self._clear_engulf5m()
-                self._clear_breakout5m(); self._clear_engulf1m(); self._clear_bigbody(); self._clear_sr(); self._clear_swinglvn()
+                self._clear_breakout5m(); self._clear_engulf1m(); self._clear_sr(); self._clear_swinglvn()
                 self._clear_crazy_wall()
                 self._clear_easy1h(); self._clear_wall_strategy()
             return
@@ -12553,10 +12504,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_engulf1m(filtered)  # Absorption Candle indicator (all tf) — self-gated, fail-safe
             except Exception:
                 self._clear_engulf1m()
-            try:
-                self._draw_bigbody(filtered)   # Big Body squares (all tf) — self-gated, fail-safe
-            except Exception:
-                self._clear_bigbody()
             try:
                 self._draw_sr(filtered)        # SUPPORT & RESISTANCE indicator — self-gated, fail-safe
             except Exception:

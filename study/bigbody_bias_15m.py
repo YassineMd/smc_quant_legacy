@@ -26,8 +26,29 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import big_body_detect as bb
 from app import crazy_wall_detect as cw
+
+
+class bb:                                          # the indicator was REMOVED 2026-09-03 after this
+    """Inlined Big Body rule (body strictly > each of the last 5 bodies) so the study stays
+    reproducible — app/big_body_detect.py was deleted with the indicator (null/fade result)."""
+
+    @staticmethod
+    def detect(bars, skip_last=True, lookback=5):
+        from app.engulf_sr_detect import _ohlc as _oh
+        n = len(bars)
+        hi = n - 1 if skip_last else n
+        bodies = []
+        for i in range(n):
+            o, c, _h, _l = _oh(bars[i])
+            bodies.append(abs(c - o))
+        out = []
+        for i in range(lookback, hi):
+            bdy = bodies[i]
+            if bdy > 0.0 and all(bdy > bodies[i - j] for j in range(1, lookback + 1)):
+                o, c, _h, _l = _oh(bars[i])
+                out.append({"i": i, "side": 1 if c >= o else -1})
+        return out
 from app.engulf_sr_detect import _ohlc
 from study.archive_loader import load_archive
 
