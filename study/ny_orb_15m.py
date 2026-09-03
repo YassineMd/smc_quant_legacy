@@ -46,7 +46,7 @@ def by_day_15m(raws15):
     return {k: sorted(v) for k, v in d.items()}
 
 
-def run_cell(d15, d1, anchor_sod, cutoff_sod):
+def run_cell(d15, d1, anchor_sod, cutoff_sod, tp_mode="rr1"):
     trades = []
     for day, bars in sorted(d15.items()):
         rows1 = d1.get(day)
@@ -77,7 +77,10 @@ def run_cell(d15, d1, anchor_sod, cutoff_sod):
         if (side > 0 and sl >= entry) or (side < 0 and sl <= entry):
             continue
         risk = abs(entry - sl)
-        tp = entry + risk if side > 0 else entry - risk
+        if tp_mode == "rr1":
+            tp = entry + risk if side > 0 else entry - risk
+        else:                                               # fixed % TP (user follow-up: 0.3%)
+            tp = entry * (1 + tp_mode / 100.0) if side > 0 else entry * (1 - tp_mode / 100.0)
         net = None
         for (st, o, c, h, l) in rows1:
             if (st % 86400) < (t_entry % 86400):
@@ -87,7 +90,7 @@ def run_cell(d15, d1, anchor_sod, cutoff_sod):
             if sl_hit:                                      # ambiguity -> against
                 net = -risk / entry * 100 - COST; break
             if tp_hit:
-                net = risk / entry * 100 - COST; break
+                net = abs(tp - entry) / entry * 100 - COST; break
         if net is None:
             px = rows1[-1][2]
             net = ((px - entry) / entry if side > 0 else (entry - px) / entry) * 100 - COST
@@ -128,7 +131,8 @@ def main():
         d1 = {k: v for k, v in d1_all.items() if sel(k)}
         print("\n=== %s ===  sessions=%d" % (label, len(d1)))
         for tag, a_sod, cut in cells:
-            report(tag, run_cell(d15, d1, a_sod, cut))
+            report(tag + " RR1:1", run_cell(d15, d1, a_sod, cut))
+            report(tag + " TP0.3", run_cell(d15, d1, a_sod, cut, tp_mode=0.3))
 
 
 if __name__ == "__main__":
