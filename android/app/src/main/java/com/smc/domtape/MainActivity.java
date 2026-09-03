@@ -32,10 +32,10 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         TradeStore store = new TradeStore();
-        dom = new DomPanel(this, store);
+        feed = new FeedClient(store);
+        dom = new DomPanel(this, store, feed);
         tape = new TapePanel(this, store);
         setContentView(new SplitPane(this, dom, tape));
-        feed = new FeedClient(store);
         feed.start();
     }
 

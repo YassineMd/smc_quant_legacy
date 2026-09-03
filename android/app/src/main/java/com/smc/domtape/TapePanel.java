@@ -14,14 +14,16 @@ import android.widget.TextView;
  * Trades tape panel: toolbar (MIN SIZE log slider + LIVE/PAUSED pill) over the painted tape —
  * the Android port of trades_tape.TradesTapePanel.
  */
-public class TapePanel extends LinearLayout implements TapeView.Host {
+public class TapePanel extends LinearLayout implements TapeView.Host, SizeDistDialog.Owner {
 
     private final TradeStore store;
     private final TapeView canvas;
     private final TextView valLbl, pill;
+    private final SeekBar slider;
     private final SharedPreferences prefs;
     private double minUsd;
     private int scroll;                            // rows scrolled back (0 = follow live)
+    private SizeDistDialog dist;
 
     public TapePanel(Context ctx, TradeStore store) {
         super(ctx);
@@ -43,9 +45,12 @@ public class TapePanel extends LinearLayout implements TapeView.Host {
         rule.setBackgroundColor(Ui.RULE);
         addView(rule, new LayoutParams(LayoutParams.MATCH_PARENT, (int) Ui.dp(ctx, 1)));
 
-        bar.addView(Ui.caption(ctx, "MIN SIZE"));
+        TextView msCap = Ui.caption(ctx, "MIN SIZE");
+        msCap.setPaintFlags(msCap.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
+        msCap.setOnClickListener(v -> openSizeDist());
+        bar.addView(msCap);
 
-        SeekBar slider = new SeekBar(ctx);
+        slider = new SeekBar(ctx);
         slider.setMax(Ui.SLIDER_STEPS);
         slider.setProgress(Ui.usdToSlider(minUsd));
         slider.getProgressDrawable().setTint(Ui.GOLD);
@@ -119,6 +124,35 @@ public class TapePanel extends LinearLayout implements TapeView.Host {
         scroll = 0;
         applyLabels();
         canvas.invalidate();
+    }
+
+    private void openSizeDist() {
+        if (dist == null) dist = new SizeDistDialog(getContext(), this);
+        dist.show();
+    }
+
+    // ── SizeDistDialog.Owner ────────────────────────────────────────────────────────────────
+    @Override
+    public TradeStore.SizeSamples samples() {
+        return store.sizeSamples(0);               // the whole retained tape, like the terminal
+    }
+
+    @Override
+    public String scope() {
+        long a = store.oldestTs(), b = store.latestTs();
+        if (a <= 0 || b <= a) return "Trades · (empty)";
+        return String.format(java.util.Locale.US, "Trades · last %.0f min",
+                Math.max(1.0, (b - a) / 60000.0));
+    }
+
+    @Override
+    public double getMin() {
+        return minUsd;
+    }
+
+    @Override
+    public void setMin(double usd) {
+        slider.setProgress(Ui.usdToSlider(usd));   // moves the slider, which re-derives everything
     }
 
     // ── TapeView.Host ───────────────────────────────────────────────────────────────────────

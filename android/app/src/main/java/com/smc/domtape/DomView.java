@@ -9,6 +9,7 @@ import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Locale;
 
@@ -48,6 +49,13 @@ public class DomView extends View {
     private Double anchorPx = null;                // ladder anchor PRICE; null = center on next draw
     private boolean follow = true;                 // armed by centering, disarmed by any manual pan
     private float dragLastY = -1;
+    private Float hoverY = null;                   // stylus/mouse hover row highlight; null = off-canvas
+    private final ArrayList<double[]> areas = new ArrayList<>();   // [loPrice, hiPrice) level bands
+    private float[] areaDrag = null;               // in-progress band [yPress, yNow] (long-press + drag)
+    // geometry of the LAST drawn frame (interaction helpers share the paint math)
+    private float gY0;
+    private int gNRows;
+    private long gTopBin;
 
     public DomView(Context ctx, Host host) {
         super(ctx);
@@ -67,10 +75,57 @@ public class DomView extends View {
         gestures = new GestureDetector(ctx, new GestureDetector.SimpleOnGestureListener() {
             @Override
             public boolean onDoubleTap(MotionEvent e) {
-                recenter();
+                if (!deleteAreaAt(e.getY())) recenter();   // double-tap ON a band deletes it; else re-center
                 return true;
             }
+
+            @Override
+            public void onLongPress(MotionEvent e) {       // hold-then-drag = mark a band of levels
+                if (anchorPx == null) return;
+                areaDrag = new float[]{e.getY(), e.getY()};
+                dragLastY = -1;                            // the long-press claims this gesture from panning
+                performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                invalidate();
+            }
         });
+    }
+
+    // ── level bands (the terminal's Ctrl+drag areas, touch edition) ─────────────────────────
+    /** Snap two canvas ys to whole rows -> [loPrice, hiPrice) covering every level dragged over. */
+    private double[] bandFromYs(float ya, float yb) {
+        if (anchorPx == null || gNRows <= 0) return null;
+        double g = host.group();
+        long b1 = gTopBin - (long) Math.floor((ya - gY0) / rowH);
+        long b2 = gTopBin - (long) Math.floor((yb - gY0) / rowH);
+        long lo = Math.min(b1, b2), hi = Math.max(b1, b2);
+        return new double[]{lo * g, (hi + 1) * g};         // PRICE-anchored: pans/regroups keep it on its levels
+    }
+
+    /** Delete the most recent band covering the tapped level. True if one was removed. */
+    private boolean deleteAreaAt(float y) {
+        if (anchorPx == null || gNRows <= 0) return false;
+        double g = host.group();
+        double px = (gTopBin - (y - gY0) / rowH + 0.5) * g;
+        for (int k = areas.size() - 1; k >= 0; k--) {
+            if (areas.get(k)[0] <= px && px < areas.get(k)[1]) {
+                areas.remove(k);
+                invalidate();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void commitArea() {
+        float[] ad = areaDrag;
+        areaDrag = null;
+        if (ad == null || Math.abs(ad[1] - ad[0]) < Ui.dp(getContext(), 3)) {
+            invalidate();                                  // a still long-press is NOT a band
+            return;
+        }
+        double[] band = bandFromYs(ad[0], ad[1]);
+        if (band != null) areas.add(band);
+        invalidate();
     }
 
     public void recenter() {
@@ -87,7 +142,10 @@ public class DomView extends View {
                 dragLastY = ev.getY();
                 return true;
             case MotionEvent.ACTION_MOVE:
-                if (dragLastY >= 0 && anchorPx != null) {
+                if (areaDrag != null) {            // band-in-progress: extend, never pan
+                    areaDrag[1] = ev.getY();
+                    invalidate();
+                } else if (dragLastY >= 0 && anchorPx != null) {
                     float dy = ev.getY() - dragLastY;
                     dragLastY = ev.getY();
                     if (dy != 0) {                 // dragging DOWN pulls content down -> higher prices
@@ -99,10 +157,19 @@ public class DomView extends View {
                 return true;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
+                if (areaDrag != null) commitArea();
                 dragLastY = -1;
                 return true;
         }
         return super.onTouchEvent(ev);
+    }
+
+    @Override
+    public boolean onHoverEvent(MotionEvent ev) {  // stylus/mouse hover -> terminal's row highlight
+        if (ev.getActionMasked() == MotionEvent.ACTION_HOVER_EXIT) hoverY = null;
+        else hoverY = ev.getY();
+        invalidate();
+        return true;
     }
 
     private float centerY(float top, Paint p) {
@@ -199,6 +266,9 @@ public class DomView extends View {
         long centerBin = Math.floorDiv(Math.round(anchorPx / TICK), tpg);
         long topBin = centerBin + nRows / 2;
         long loBin = topBin - nRows + 1;
+        gY0 = y0;                                  // share the frame's geometry with the touch helpers
+        gNRows = nRows;
+        gTopBin = topBin;
 
         HashMap<Long, Double> bidBins = new HashMap<>(), askBins = new HashMap<>();
         for (double[] lv : bids) {
@@ -364,6 +434,38 @@ public class DomView extends View {
             tp.setColor(isLast ? 0xFFFFFFFF : Ui.DIM_TXT);
             tp.setTextAlign(Paint.Align.CENTER);
             c.drawText(String.format(Locale.US, "%,.2f", price), cPrice0 + priceW / 2f, centerY(ry, tp), tp);
+        }
+
+        // level bands (hold+drag areas): translucent, price-anchored — pan/regroup keeps them on
+        // their levels; the in-progress drag renders the same way as a live preview
+        ArrayList<double[]> bands = new ArrayList<>(areas);
+        if (areaDrag != null && Math.abs(areaDrag[1] - areaDrag[0]) >= Ui.dp(getContext(), 3)) {
+            double[] bp = bandFromYs(areaDrag[0], areaDrag[1]);
+            if (bp != null) bands.add(bp);
+        }
+        stroke.setStyle(Paint.Style.STROKE);
+        for (double[] band : bands) {
+            float yTop = (float) (y0 + (topBin + 1 - band[1] / g) * rowH);
+            float yBot = (float) (y0 + (topBin + 1 - band[0] / g) * rowH);
+            float yt = Math.max(y0, yTop), yb = Math.min(y0 + nRows * rowH, yBot);
+            if (yb <= yt) continue;                // panned fully out of view
+            fill.setColor(0x1AC8D2E1);             // rgba(200,210,225,26)
+            c.drawRoundRect(new RectF(pad - 4, yt + 0.5f, w - pad + 4, yb - 1f), 3, 3, fill);
+            stroke.setColor(0x82E1E6F0);           // rgba(225,230,240,130)
+            stroke.setStrokeWidth(1);
+            c.drawRoundRect(new RectF(pad - 4, yt + 0.5f, w - pad + 4, yb - 1f), 3, 3, stroke);
+        }
+
+        // stylus-hover row highlight: thin light-gray box around the FULL row under the pointer;
+        // cleared the moment the pointer leaves the canvas — same rule as the terminal
+        if (hoverY != null && hoverY >= y0) {
+            int i = (int) ((hoverY - y0) / rowH);
+            if (i >= 0 && i < nRows) {
+                float ry = y0 + i * rowH;
+                stroke.setColor(0x96C8D0DC);       // rgba(200,208,220,150)
+                stroke.setStrokeWidth(1);
+                c.drawRoundRect(new RectF(pad - 4, ry + 0.5f, w - pad + 4, ry + rowH - 1.5f), 3, 3, stroke);
+            }
         }
     }
 }

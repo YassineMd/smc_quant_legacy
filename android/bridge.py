@@ -51,6 +51,7 @@ class TradeStore:
 
     def __init__(self):
         self.lock = threading.Lock()
+        self.keep_t0_ms = None                     # deep-fetch floor (custom VP): prune keeps >= this
         self.ts = np.empty(0, np.float64)          # epoch ms
         self.px = np.empty(0, np.float64)
         self.q = np.empty(0, np.float64)
@@ -73,6 +74,8 @@ class TradeStore:
                 self.ts = np.concatenate([self.ts, ts]); self.px = np.concatenate([self.px, px])
                 self.q = np.concatenate([self.q, q]); self.sd = np.concatenate([self.sd, sd])
             cut = (time.time() - STORE_SECS) * 1000.0
+            if self.keep_t0_ms is not None:        # a custom VP start older than 6h keeps its data
+                cut = min(cut, self.keep_t0_ms - 300_000.0)
             i = int(np.searchsorted(self.ts, cut))
             if i > 0:
                 self.ts = self.ts[i:]; self.px = self.px[i:]; self.q = self.q[i:]; self.sd = self.sd[i:]
@@ -148,6 +151,45 @@ class Bridge:
                     self.broadcast(json.dumps({"t": "thr", "v": thr}) + "\n")
             time.sleep(0.1)
 
+    def deep_fetch(self, t0_ms: int) -> None:
+        """Custom-VP history: fetch the tape OLDER than what the store holds, down to t0 (clamped to
+        the daemon's 72h retention) — the tablet's _dom_custom_vp. The reply broadcasts as a tw."""
+        t0_ms = max(int(t0_ms), int((time.time() - config.DEPTH_RETENTION_HOURS * 3600 + 60) * 1000))
+        with self.store.lock:
+            self.store.keep_t0_ms = (t0_ms if self.store.keep_t0_ms is None
+                                     else min(self.store.keep_t0_ms, t0_ms))
+            oldest = int(self.store.ts[0]) if len(self.store.ts) else int(time.time() * 1000)
+        if t0_ms < oldest - 1000:
+            self.worker.request_trades_window(t0_ms, oldest - 1, 0.0, 1e9)
+            print("bridge: deep fetch %d .. %d" % (t0_ms, oldest - 1), flush=True)
+
+    def _client_reader(self, c: socket.socket) -> None:
+        """Per-client control channel: newline JSON requests from the tablet."""
+        buf = b""
+        try:
+            while True:
+                d = c.recv(4096)
+                if not d:
+                    break
+                buf += d
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    try:
+                        m = json.loads(line)
+                    except Exception:
+                        continue
+                    if m.get("t") == "fetch":
+                        self.deep_fetch(int(m.get("t0", 0)))
+        except OSError:
+            pass
+        with self.clients_lock:
+            if c in self.clients:
+                self.clients.remove(c)
+        try:
+            c.close()
+        except OSError:
+            pass
+
     # ---- tablet side ----------------------------------------------------
     def broadcast(self, line: str) -> None:
         data = line.encode("utf-8")
@@ -187,6 +229,7 @@ class Bridge:
                 continue
             with self.clients_lock:
                 self.clients.append(c)
+            threading.Thread(target=self._client_reader, args=(c,), daemon=True).start()
             print("bridge: client %s connected (store %d trades)" % (addr[0], len(self.store.ts)),
                   flush=True)
 

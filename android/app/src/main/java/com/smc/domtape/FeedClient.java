@@ -5,6 +5,7 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
@@ -21,6 +22,7 @@ public class FeedClient extends Thread {
 
     public final TradeStore store;
     private volatile boolean stopFlag;
+    private volatile OutputStream out;             // live socket's write side (control requests)
 
     public FeedClient(TradeStore store) {
         super("feed-client");
@@ -40,6 +42,7 @@ public class FeedClient extends Thread {
                 s.connect(new InetSocketAddress("127.0.0.1", 8765), 4000);
                 s.setTcpNoDelay(true);
                 s.setSoTimeout(15000);              // bridge pushes books every 0.4s — silence = dead
+                out = s.getOutputStream();
                 store.setConnected(true);
                 BufferedReader in = new BufferedReader(
                         new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8), 1 << 16);
@@ -50,6 +53,7 @@ public class FeedClient extends Thread {
             } catch (Exception ignored) {
                 // fall through to reconnect
             }
+            out = null;
             store.setConnected(false);
             if (!stopFlag) {
                 try {
@@ -58,6 +62,21 @@ public class FeedClient extends Thread {
                     // loop re-checks stopFlag
                 }
             }
+        }
+    }
+
+    /** Custom-VP deep fetch: ask the bridge for tape history down to t0 (epoch ms). Best-effort. */
+    public void requestFetch(long t0Ms) {
+        OutputStream o = out;
+        if (o == null) return;
+        try {
+            byte[] req = ("{\"t\":\"fetch\",\"t0\":" + t0Ms + "}\n").getBytes(StandardCharsets.UTF_8);
+            synchronized (this) {
+                o.write(req);
+                o.flush();
+            }
+        } catch (Exception ignored) {
+            // reconnect loop will heal; the user can re-pick the custom start
         }
     }
 

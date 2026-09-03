@@ -23,6 +23,7 @@ public class TradeStore {
     private double[] sellQ = new double[1 << 14];
     private int n = 0;
     private long liveT0Ms = 0;
+    private long customKeepMs = 0;                 // custom-VP start (epoch ms); 0 = presets only
 
     private double[][] bids = new double[0][];     // [price, qty] best-first
     private double[][] asks = new double[0][];
@@ -67,7 +68,10 @@ public class TradeStore {
     }
 
     public synchronized void ingestWindow(FeedClient.Trades tr) {
+        // dedupe against BOTH the live edge and what's already stored: a deep fetch (custom VP)
+        // arrives after the 6h backfill, so anything at/after the store's oldest row is a repeat
         long cut = liveT0Ms == 0 ? Long.MAX_VALUE : liveT0Ms;
+        if (n > 0) cut = Math.min(cut, tsMs[0]);
         int keep = 0;
         while (keep < tr.tsMs.length && tr.tsMs[keep] < cut) keep++;
         if (keep == 0) return;
@@ -125,6 +129,7 @@ public class TradeStore {
 
     private void prune() {
         long cut = System.currentTimeMillis() - WINDOW_MS;
+        if (customKeepMs > 0) cut = Math.min(cut, customKeepMs - 300_000);
         int lo = lowerBound(cut);
         if (lo > 20000) {                          // amortized: shift only when a big slab is stale
             System.arraycopy(tsMs, lo, tsMs, 0, n - lo);
@@ -149,6 +154,42 @@ public class TradeStore {
     public synchronized void reset() {
         n = 0;
         liveT0Ms = 0;
+    }
+
+    public synchronized void setCustomKeep(long t0Ms) {
+        customKeepMs = t0Ms;                       // 0 clears (presets prune at the 6h horizon again)
+    }
+
+    public synchronized long oldestTs() {
+        return n > 0 ? tsMs[0] : 0;
+    }
+
+    public synchronized long latestTs() {
+        return n > 0 ? tsMs[n - 1] : 0;
+    }
+
+    /** Per-trade (usd, isBuy) samples since cutoffMs (0 = everything) — the size-dist popup feed. */
+    public static final class SizeSamples {
+        public final double[] usd;
+        public final boolean[] buy;
+
+        SizeSamples(double[] usd, boolean[] buy) {
+            this.usd = usd;
+            this.buy = buy;
+        }
+    }
+
+    public synchronized SizeSamples sizeSamples(long cutoffMs) {
+        int i0 = cutoffMs > 0 ? lowerBound(cutoffMs) : 0;
+        int m = n - i0;
+        double[] usd = new double[Math.max(0, m)];
+        boolean[] buy = new boolean[Math.max(0, m)];
+        for (int i = 0; i < m; i++) {
+            int j = i0 + i;
+            usd[i] = tick[j] * TICK * (buyQ[j] + sellQ[j]);
+            buy[i] = buyQ[j] > 0;
+        }
+        return new SizeSamples(usd, buy);
     }
 
     // ── book / price reads (UI thread) ──────────────────────────────────────────────────────
