@@ -209,8 +209,8 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
 
     public void tick() {
         if (!p50Done && !userAdjusted && store.tradeCount() >= 500) {
-            p50Done = true;                        // every launch starts at the tape's P50 size
-            setMin(store.medianUsd());
+            p50Done = true;                        // launch default: the 50%-of-volume size split
+            setMin(store.volumeHalfUsd());
         }
         canvas.invalidate();
     }

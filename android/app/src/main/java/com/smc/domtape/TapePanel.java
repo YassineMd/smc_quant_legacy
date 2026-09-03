@@ -121,8 +121,8 @@ public class TapePanel extends LinearLayout implements TapeView.Host, SizeDistDi
 
     public void tick() {
         if (!p50Done && !userAdjusted && store.tradeCount() >= 500) {
-            p50Done = true;                        // every launch starts at the tape's P50 size
-            setMin(store.medianUsd());
+            p50Done = true;                        // launch default: the 50%-of-volume size split
+            setMin(store.volumeHalfUsd());
         }
         canvas.invalidate();
     }

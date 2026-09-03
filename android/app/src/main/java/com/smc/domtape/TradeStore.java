@@ -179,13 +179,26 @@ public class TradeStore {
         }
     }
 
-    /** Median (P50) USD trade size over the whole retained tape — the MIN SIZE launch default. */
-    public synchronized double medianUsd() {
+    /**
+     * The MIN SIZE launch default: the trade size at which trades AT-OR-ABOVE it carry 50% of the
+     * tape's total USD volume (volume-weighted split — NOT the median trade, which sits far lower
+     * on a fat-tailed tape). Sort ascending, walk from the biggest down until half the volume is in.
+     */
+    public synchronized double volumeHalfUsd() {
         if (n == 0) return 0.0;
         double[] usd = new double[n];
-        for (int i = 0; i < n; i++) usd[i] = tick[i] * TICK * (buyQ[i] + sellQ[i]);
+        double total = 0;
+        for (int i = 0; i < n; i++) {
+            usd[i] = tick[i] * TICK * (buyQ[i] + sellQ[i]);
+            total += usd[i];
+        }
         java.util.Arrays.sort(usd);
-        return usd[n / 2];
+        double acc = 0;
+        for (int i = n - 1; i >= 0; i--) {
+            acc += usd[i];
+            if (acc >= total / 2.0) return usd[i];
+        }
+        return usd[0];
     }
 
     public synchronized SizeSamples sizeSamples(long cutoffMs) {
