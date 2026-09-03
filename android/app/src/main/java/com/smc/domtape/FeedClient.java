@@ -4,6 +4,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -12,11 +13,15 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.zip.InflaterInputStream;
 
 /**
- * Background thread reading newline-delimited JSON from the PC bridge (android/bridge.py) at
- * 127.0.0.1:8765 — reached through the USB cable via `adb reverse tcp:8765 tcp:8765`.
- * Folds everything into the shared {@link TradeStore}; reconnects forever on any error.
+ * Background thread reading newline-delimited JSON from the feed bridge (android/bridge.py).
+ * Two paths, tried in order, forever:
+ *   1. USB — 127.0.0.1:8765 through `adb reverse` to the PC bridge (plain stream).
+ *   2. VM  — BuildConfig.VM_HOST:8765 over Wi-Fi/4G to the bridge next to the daemon
+ *      (token auth first line, then the server side of the stream is one zlib stream).
+ * Folds everything into the shared {@link TradeStore}; client->server stays plain on both.
  */
 public class FeedClient extends Thread {
 
@@ -37,27 +42,41 @@ public class FeedClient extends Thread {
 
     @Override
     public void run() {
+        boolean haveVm = !BuildConfig.VM_HOST.isEmpty();
+        int which = 0;                              // 0 = USB, 1 = VM; USB gets first shot each cycle
         while (!stopFlag) {
+            boolean vm = haveVm && which == 1;
             try (Socket s = new Socket()) {
-                s.connect(new InetSocketAddress("127.0.0.1", 8765), 4000);
+                s.connect(new InetSocketAddress(vm ? BuildConfig.VM_HOST : "127.0.0.1", 8765),
+                        vm ? 6000 : 2500);
                 s.setTcpNoDelay(true);
                 s.setSoTimeout(15000);              // bridge pushes books every 0.4s — silence = dead
                 out = s.getOutputStream();
-                store.setConnected(true);
+                InputStream raw = s.getInputStream();
+                if (vm) {                           // authenticate, then everything downstream is zlib
+                    byte[] auth = ("{\"t\":\"auth\",\"k\":\"" + BuildConfig.FEED_TOKEN
+                            + "\",\"z\":1}\n").getBytes(StandardCharsets.UTF_8);
+                    out.write(auth);
+                    out.flush();
+                    raw = new InflaterInputStream(raw);
+                }
+                store.reset();                      // reconnect heal: the fresh tw rebuilds the whole
+                store.setConnected(true);           // store (duplicate- and gap-free by construction)
                 BufferedReader in = new BufferedReader(
-                        new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8), 1 << 16);
+                        new InputStreamReader(raw, StandardCharsets.UTF_8), 1 << 16);
                 String line;
                 while (!stopFlag && (line = in.readLine()) != null) {
                     handle(line);
                 }
             } catch (Exception ignored) {
-                // fall through to reconnect
+                // fall through to the other path
             }
             out = null;
             store.setConnected(false);
             if (!stopFlag) {
+                which = haveVm ? (which + 1) % 2 : 0;
                 try {
-                    Thread.sleep(1500);
+                    Thread.sleep(which == 0 ? 1200 : 300);   // quick USB->VM handoff, calmer cycles
                 } catch (InterruptedException e) {
                     // loop re-checks stopFlag
                 }

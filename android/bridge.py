@@ -1,12 +1,19 @@
-"""Tablet bridge: re-serves the daemon feed (via the SSH tunnel) as JSON lines for the Android app.
+"""Tablet bridge: re-serves the daemon feed as JSON lines for the Android app.
 
 Reuses the terminal's tested ``PipeClientWorker`` (plain thread, no Qt) exactly like the DOM/Trades
 scanner modes do: a degenerate depth_window subscribe (1s x 1col x 1bin) arms the live TradeBatch
 pushes, a trades_window request backfills the VP history, and the 0.4s pulses carry the book.
 
-Listens on 127.0.0.1:8765. The tablet reaches it through the USB cable:
-    adb reverse tcp:8765 tcp:8765
-so the app just connects to 127.0.0.1:8765 on-device. No LAN/firewall config.
+Two deployments, one file:
+  PC (USB path):   python android/bridge.py
+                   listens on 127.0.0.1:8765; tablet reaches it via `adb reverse tcp:8765 tcp:8765`.
+  VM (Wi-Fi/4G):   python android/bridge.py --listen 0.0.0.0 --auth <token> --compress
+                   runs next to the daemon (systemd `smcbridge`); the app connects to the VM's
+                   public IP. --auth requires the client's FIRST line to be
+                   {"t":"auth","k":"<token>","z":1} within 6s (else the socket closes); with
+                   --compress and z=1 every server->client byte after that is ONE zlib stream
+                   (Z_SYNC_FLUSH per send — java.util.zip.Inflater-friendly). Client->server
+                   stays plain either way.
 
 Wire (newline-delimited JSON, one object per line):
   -> {"t":"hello","sym":"SOLUSDT","tick":0.01,"now":<epoch_s>}
@@ -14,11 +21,11 @@ Wire (newline-delimited JSON, one object per line):
   -> {"t":"tb","n":N,"ts":b64,"px":b64,"q":b64,"sd":b64}   live batch (same arrays)
   -> {"t":"book","px":<last>,"b":[[p,q]..],"a":[[p,q]..]}  ~0.4s, top-200 per side (floats)
   -> {"t":"thr","v":[p50,p90,p95,p99,p99.5]}               rolling trade-size percentiles (contracts)
-
-Run:  python android/bridge.py   (needs the SSH tunnel on :9999 up, same as the terminal)
+  <- {"t":"fetch","t0":ms}                                  custom-VP deep-history request
 """
 from __future__ import annotations
 
+import argparse
 import base64
 import json
 import os
@@ -26,20 +33,31 @@ import socket
 import sys
 import threading
 import time
+import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
 from app import config
-from app.heatmap import decode_trades
 from app.pipe_client import PipeClientWorker
 
-LISTEN_HOST = "127.0.0.1"
-LISTEN_PORT = 8765
+
+def decode_trades(ts_b64: str, price_b64: str, qty_b64: str, side_b64: str):
+    """app.heatmap.decode_trades, inlined: that module drags Qt imports the headless VM lacks."""
+    ts = np.frombuffer(base64.b64decode(ts_b64 or ""), dtype="<i8")
+    pr = np.frombuffer(base64.b64decode(price_b64 or ""), dtype="<f8")
+    qt = np.frombuffer(base64.b64decode(qty_b64 or ""), dtype="<f8")
+    sd = np.frombuffer(base64.b64decode(side_b64 or ""), dtype="u1")
+    n = min(len(ts), len(pr), len(qt), len(sd))
+    return (ts[:n].astype(np.float64), pr[:n].astype(np.float64),
+            qt[:n].astype(np.float64), sd[:n].copy())
+
 BOOK_PERIOD = 0.4
 RESUB_SECS = 10.0
-STORE_SECS = config.DOM_VP_BACKFILL_SECS          # rolling in-bridge tape (6h) for instant client joins
+# getattr fallbacks: the VM runs the daemon-era config.py, which predates these terminal constants
+STORE_SECS = getattr(config, "DOM_VP_BACKFILL_SECS", 21600)   # rolling in-bridge tape (6h)
+RETENTION_H = getattr(config, "DEPTH_RETENTION_HOURS", 72)    # daemon trade_tape retention
 
 
 def b64(a: np.ndarray) -> str:
@@ -88,15 +106,34 @@ class TradeStore:
                                "sd": b64(self.sd.astype("u1"))}) + "\n"
 
 
+class Client:
+    """One connected tablet: socket + optional per-client zlib stream, sends serialized by a lock."""
+
+    def __init__(self, sock: socket.socket, compress: bool):
+        self.sock = sock
+        self.lock = threading.Lock()
+        self.comp = zlib.compressobj() if compress else None
+
+    def send(self, line: str) -> None:
+        data = line.encode("utf-8")
+        with self.lock:
+            if self.comp is not None:
+                data = self.comp.compress(data) + self.comp.flush(zlib.Z_SYNC_FLUSH)
+            self.sock.sendall(data)
+
+
 class Bridge:
-    def __init__(self):
+    def __init__(self, listen: str, port: int, auth: str | None, compress: bool):
+        self.listen = listen
+        self.port = port
+        self.auth = auth
+        self.compress = compress
         self.worker = PipeClientWorker(lite=True)
         self.store = TradeStore()
-        self.clients: list[socket.socket] = []
+        self.clients: list[Client] = []
         self.clients_lock = threading.Lock()
         self._last_resub = 0.0
         self._conn_was = False
-        self._seeded = False
 
     # ---- daemon side ----------------------------------------------------
     def _subscribe(self, backfill: bool) -> None:
@@ -110,6 +147,18 @@ class Bridge:
             self.worker.request_trades_window(t0, t1, 0.0, 1e9)
         self._last_resub = time.time()
 
+    def deep_fetch(self, t0_ms: int) -> None:
+        """Custom-VP history: fetch the tape OLDER than what the store holds, down to t0 (clamped to
+        the daemon's 72h retention) — the tablet's _dom_custom_vp. The reply broadcasts as a tw."""
+        t0_ms = max(int(t0_ms), int((time.time() - RETENTION_H * 3600 + 60) * 1000))
+        with self.store.lock:
+            self.store.keep_t0_ms = (t0_ms if self.store.keep_t0_ms is None
+                                     else min(self.store.keep_t0_ms, t0_ms))
+            oldest = int(self.store.ts[0]) if len(self.store.ts) else int(time.time() * 1000)
+        if t0_ms < oldest - 1000:
+            self.worker.request_trades_window(t0_ms, oldest - 1, 0.0, 1e9)
+            print("bridge: deep fetch %d .. %d" % (t0_ms, oldest - 1), flush=True)
+
     def pump(self) -> None:
         """Main loop: heal subscriptions, drain trades, broadcast book + batches."""
         next_book = 0.0
@@ -117,7 +166,6 @@ class Bridge:
             conn = bool(self.worker.connected)
             if conn and not self._conn_was:
                 self._subscribe(backfill=True)      # fresh socket -> re-arm + gap re-fetch
-                self._seeded = True
             self._conn_was = conn
             if conn and time.time() - self._last_resub > RESUB_SECS:
                 self._subscribe(backfill=False)     # keep-alive re-arm (no-op daemon-side if armed)
@@ -151,24 +199,71 @@ class Bridge:
                     self.broadcast(json.dumps({"t": "thr", "v": thr}) + "\n")
             time.sleep(0.1)
 
-    def deep_fetch(self, t0_ms: int) -> None:
-        """Custom-VP history: fetch the tape OLDER than what the store holds, down to t0 (clamped to
-        the daemon's 72h retention) — the tablet's _dom_custom_vp. The reply broadcasts as a tw."""
-        t0_ms = max(int(t0_ms), int((time.time() - config.DEPTH_RETENTION_HOURS * 3600 + 60) * 1000))
-        with self.store.lock:
-            self.store.keep_t0_ms = (t0_ms if self.store.keep_t0_ms is None
-                                     else min(self.store.keep_t0_ms, t0_ms))
-            oldest = int(self.store.ts[0]) if len(self.store.ts) else int(time.time() * 1000)
-        if t0_ms < oldest - 1000:
-            self.worker.request_trades_window(t0_ms, oldest - 1, 0.0, 1e9)
-            print("bridge: deep fetch %d .. %d" % (t0_ms, oldest - 1), flush=True)
+    # ---- tablet side ----------------------------------------------------
+    def broadcast(self, line: str) -> None:
+        with self.clients_lock:
+            targets = list(self.clients)
+        dead = []
+        for c in targets:
+            try:
+                c.send(line)
+            except OSError:
+                dead.append(c)
+        if dead:
+            with self.clients_lock:
+                for c in dead:
+                    if c in self.clients:
+                        self.clients.remove(c)
+                    try:
+                        c.sock.close()
+                    except OSError:
+                        pass
 
-    def _client_reader(self, c: socket.socket) -> None:
-        """Per-client control channel: newline JSON requests from the tablet."""
-        buf = b""
+    def _drop(self, cl: Client) -> None:
+        with self.clients_lock:
+            if cl in self.clients:
+                self.clients.remove(cl)
         try:
-            while True:
-                d = c.recv(4096)
+            cl.sock.close()
+        except OSError:
+            pass
+
+    def _client_handler(self, sock: socket.socket, addr) -> None:
+        """Per-connection: (auth handshake ->) hello + backfill -> register -> read control lines."""
+        buf = b""
+        compress = False
+        try:
+            if self.auth:
+                sock.settimeout(6.0)               # unauthenticated sockets don't get to linger
+                while b"\n" not in buf:
+                    d = sock.recv(4096)
+                    if not d or len(buf) > 4096:
+                        raise OSError("auth eof")
+                    buf += d
+                line, buf = buf.split(b"\n", 1)
+                m = json.loads(line)
+                if m.get("t") != "auth" or str(m.get("k", "")) != self.auth:
+                    print("bridge: bad auth from %s" % addr[0], flush=True)
+                    raise OSError("bad auth")
+                compress = self.compress and bool(m.get("z"))
+                sock.settimeout(None)
+            cl = Client(sock, compress)
+            cl.send(json.dumps({"t": "hello", "sym": config.SYMBOL, "tick": config.TICK_SIZE,
+                                "now": time.time()}) + "\n")
+            cl.send(self.store.window_msg())        # instant full VP backfill from RAM
+            with self.clients_lock:
+                self.clients.append(cl)
+            print("bridge: client %s connected (store %d trades%s)"
+                  % (addr[0], len(self.store.ts), ", zlib" if compress else ""), flush=True)
+        except (OSError, ValueError, json.JSONDecodeError):
+            try:
+                sock.close()
+            except OSError:
+                pass
+            return
+        try:
+            while True:                             # control channel (plain text both deployments)
+                d = sock.recv(4096)
                 if not d:
                     break
                 buf += d
@@ -176,66 +271,36 @@ class Bridge:
                     line, buf = buf.split(b"\n", 1)
                     try:
                         m = json.loads(line)
-                    except Exception:
+                    except ValueError:
                         continue
                     if m.get("t") == "fetch":
                         self.deep_fetch(int(m.get("t0", 0)))
         except OSError:
             pass
-        with self.clients_lock:
-            if c in self.clients:
-                self.clients.remove(c)
-        try:
-            c.close()
-        except OSError:
-            pass
-
-    # ---- tablet side ----------------------------------------------------
-    def broadcast(self, line: str) -> None:
-        data = line.encode("utf-8")
-        with self.clients_lock:
-            dead = []
-            for c in self.clients:
-                try:
-                    c.sendall(data)
-                except OSError:
-                    dead.append(c)
-            for c in dead:
-                self.clients.remove(c)
-                try:
-                    c.close()
-                except OSError:
-                    pass
+        self._drop(cl)
 
     def serve(self) -> None:
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind((LISTEN_HOST, LISTEN_PORT))
-        srv.listen(4)
-        print("bridge: listening on %s:%d" % (LISTEN_HOST, LISTEN_PORT), flush=True)
+        srv.bind((self.listen, self.port))
+        srv.listen(8)
+        print("bridge: listening on %s:%d%s%s" % (self.listen, self.port,
+                                                  " (auth)" if self.auth else "",
+                                                  " (zlib offered)" if self.compress else ""), flush=True)
         while True:
             c, addr = srv.accept()
             c.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            try:
-                hello = json.dumps({"t": "hello", "sym": config.SYMBOL, "tick": config.TICK_SIZE,
-                                    "now": time.time()}) + "\n"
-                c.sendall(hello.encode("utf-8"))
-                c.sendall(self.store.window_msg().encode("utf-8"))   # instant full VP backfill from RAM
-            except OSError:
-                try:
-                    c.close()
-                except OSError:
-                    pass
-                continue
-            with self.clients_lock:
-                self.clients.append(c)
-            threading.Thread(target=self._client_reader, args=(c,), daemon=True).start()
-            print("bridge: client %s connected (store %d trades)" % (addr[0], len(self.store.ts)),
-                  flush=True)
+            threading.Thread(target=self._client_handler, args=(c, addr), daemon=True).start()
 
 
 def main() -> None:
-    br = Bridge()
+    ap = argparse.ArgumentParser(description="SMC tablet feed bridge")
+    ap.add_argument("--listen", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--auth", default=None, help="require this token in the client's first line")
+    ap.add_argument("--compress", action="store_true", help="offer zlib downstream (client opts in)")
+    args = ap.parse_args()
+    br = Bridge(args.listen, args.port, args.auth, args.compress)
     br.worker.start()
     threading.Thread(target=br.serve, daemon=True).start()
     try:

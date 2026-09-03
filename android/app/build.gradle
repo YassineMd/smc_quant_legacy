@@ -2,6 +2,11 @@ plugins {
     id 'com.android.application'
 }
 
+// VM fallback endpoint + auth token live in local.properties (gitignored — never in the repo)
+def lp = new Properties()
+def lpFile = rootProject.file('local.properties')
+if (lpFile.exists()) lpFile.withInputStream { lp.load(it) }
+
 android {
     namespace 'com.smc.domtape'
     compileSdk 33
@@ -12,6 +17,8 @@ android {
         targetSdk 33
         versionCode 1
         versionName "0.1"
+        buildConfigField "String", "VM_HOST", "\"${lp.getProperty('feed.vmhost', '')}\""
+        buildConfigField "String", "FEED_TOKEN", "\"${lp.getProperty('feed.token', '')}\""
     }
     buildTypes {
         release {

@@ -41,6 +41,7 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
     private SizeDistDialog dist;
     private boolean p50Done;                       // launch default applied (MIN SIZE = tape P50)
     private boolean userAdjusted;                  // the user moved the slider this session
+    private long lastDeepReq;                      // custom-VP self-heal rate limit (path switches)
 
     public DomPanel(Context ctx, TradeStore store, FeedClient feed) {
         super(ctx);
@@ -211,6 +212,15 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
         if (!p50Done && !userAdjusted && store.tradeCount() >= 500) {
             p50Done = true;                        // launch default: the 50%-of-volume size split
             setMin(store.volumeHalfUsd());
+        }
+        // custom-VP self-heal: a reconnect (USB<->VM handoff) rebuilds the store at the 6h horizon,
+        // losing deeper history — re-request it while the custom start isn't covered (30s rate cap)
+        long oldest = store.oldestTs();
+        if (customT0Ms > 0 && store.isConnected() && oldest > 0 && oldest > customT0Ms + 60_000
+                && System.currentTimeMillis() - lastDeepReq > 30_000) {
+            lastDeepReq = System.currentTimeMillis();
+            store.setCustomKeep(customT0Ms);
+            feed.requestFetch(customT0Ms);
         }
         canvas.invalidate();
     }
