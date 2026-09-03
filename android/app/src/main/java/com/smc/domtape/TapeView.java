@@ -72,12 +72,12 @@ public class TapeView extends View {
                 return true;
             case MotionEvent.ACTION_MOVE:
                 if (dragY >= 0) {
-                    dragAccum += ev.getY() - dragY;      // drag DOWN walks back toward live (list convention)
-                    dragY = ev.getY();
+                    dragAccum += dragY - ev.getY();      // content follows the finger: swipe UP digs
+                    dragY = ev.getY();                   // into OLDER trades, swipe DOWN returns to live
                     int rows = (int) (dragAccum / rowH);
                     if (rows != 0) {
                         dragAccum -= rows * rowH;
-                        host.scrollBy(rows);             // + = older (content pulled down)
+                        host.scrollBy(rows);             // + = older
                         invalidate();
                     }
                 }
