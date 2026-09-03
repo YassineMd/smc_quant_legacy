@@ -24,6 +24,8 @@ public class TapePanel extends LinearLayout implements TapeView.Host, SizeDistDi
     private double minUsd;
     private int scroll;                            // rows scrolled back (0 = follow live)
     private SizeDistDialog dist;
+    private boolean p50Done;                       // launch default applied (MIN SIZE = tape P50)
+    private boolean userAdjusted;                  // the user moved the slider this session
 
     public TapePanel(Context ctx, TradeStore store) {
         super(ctx);
@@ -85,6 +87,7 @@ public class TapePanel extends LinearLayout implements TapeView.Host, SizeDistDi
         slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar sb, int v, boolean fromUser) {
+                if (fromUser) userAdjusted = true; // a manual move wins over the P50 launch default
                 minUsd = Ui.sliderToUsd(v);
                 scroll = 0;                        // a new filter re-anchors to the live edge
                 applyLabels();
@@ -117,6 +120,10 @@ public class TapePanel extends LinearLayout implements TapeView.Host, SizeDistDi
     }
 
     public void tick() {
+        if (!p50Done && !userAdjusted && store.tradeCount() >= 500) {
+            p50Done = true;                        // every launch starts at the tape's P50 size
+            setMin(store.medianUsd());
+        }
         canvas.invalidate();
     }
 

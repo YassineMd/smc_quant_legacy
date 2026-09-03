@@ -39,6 +39,8 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
     private long customT0Ms = 0;                    // custom VP start (epoch ms); 0 = preset window
     private double minUsd;
     private SizeDistDialog dist;
+    private boolean p50Done;                       // launch default applied (MIN SIZE = tape P50)
+    private boolean userAdjusted;                  // the user moved the slider this session
 
     public DomPanel(Context ctx, TradeStore store, FeedClient feed) {
         super(ctx);
@@ -110,6 +112,7 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
         slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar sb, int v, boolean fromUser) {
+                if (fromUser) userAdjusted = true; // a manual move wins over the P50 launch default
                 minUsd = Ui.sliderToUsd(v);
                 prefs.edit().putFloat("dom_min_usd", (float) minUsd).apply();
                 applyLabels();
@@ -205,6 +208,10 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
     }
 
     public void tick() {
+        if (!p50Done && !userAdjusted && store.tradeCount() >= 500) {
+            p50Done = true;                        // every launch starts at the tape's P50 size
+            setMin(store.medianUsd());
+        }
         canvas.invalidate();
     }
 

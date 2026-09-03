@@ -179,6 +179,15 @@ public class TradeStore {
         }
     }
 
+    /** Median (P50) USD trade size over the whole retained tape — the MIN SIZE launch default. */
+    public synchronized double medianUsd() {
+        if (n == 0) return 0.0;
+        double[] usd = new double[n];
+        for (int i = 0; i < n; i++) usd[i] = tick[i] * TICK * (buyQ[i] + sellQ[i]);
+        java.util.Arrays.sort(usd);
+        return usd[n / 2];
+    }
+
     public synchronized SizeSamples sizeSamples(long cutoffMs) {
         int i0 = cutoffMs > 0 ? lowerBound(cutoffMs) : 0;
         int m = n - i0;

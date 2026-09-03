@@ -236,15 +236,15 @@ public class DomView extends View {
         float hy = y0 + hdrH / 2f - (textH.descent() + textH.ascent()) / 2f;
         textH.setColor(Ui.HDR_TXT);
         textH.setTextAlign(Paint.Align.RIGHT);
-        c.drawText("BIDS", pad + span, hy, textH);
+        c.drawText(fon ? "BIDS $" : "BIDS", pad + span, hy, textH);
         textH.setTextAlign(Paint.Align.CENTER);
         c.drawText(fon ? "SOLD $" : "SOLD", cSold0 + tradedW / 2f, hy, textH);
         c.drawText("PRICE", cPrice0 + priceW / 2f, hy, textH);
         c.drawText(fon ? "BOUGHT $" : "BOUGHT", cBought0 + tradedW / 2f, hy, textH);
         textH.setTextAlign(Paint.Align.LEFT);
-        c.drawText("ASKS", cAsk0, hy, textH);
+        c.drawText(fon ? "ASKS $" : "ASKS", cAsk0, hy, textH);
         textH.setTextAlign(Paint.Align.RIGHT);
-        c.drawText("VOLUME · " + host.vpLabel(), w - pad, hy, textH);
+        c.drawText((fon ? "VOLUME $ · " : "VOLUME · ") + host.vpLabel(), w - pad, hy, textH);
         stroke.setStyle(Paint.Style.STROKE);
         stroke.setColor(Ui.RULE);
         stroke.setStrokeWidth(1);
@@ -340,7 +340,8 @@ public class DomView extends View {
                 Paint tp = q >= p90 ? textB : text;
                 tp.setColor(q >= p90 ? Ui.TXT : Ui.DIM_TXT);
                 tp.setTextAlign(Paint.Align.RIGHT);
-                c.drawText(Ui.kfmt(q), cBid1 - Ui.dp(getContext(), 6), centerY(ry, tp), tp);
+                c.drawText(fon ? Ui.fmtUsd(q * b * g) : Ui.kfmt(q),   // filter ON -> resting size in $
+                        cBid1 - Ui.dp(getContext(), 6), centerY(ry, tp), tp);
             }
             // ASK bar (grows right from the BOUGHT column)
             q = visA[i];
@@ -351,7 +352,8 @@ public class DomView extends View {
                 Paint tp = q >= p90 ? textB : text;
                 tp.setColor(q >= p90 ? Ui.TXT : Ui.DIM_TXT);
                 tp.setTextAlign(Paint.Align.LEFT);
-                c.drawText(Ui.kfmt(q), cAsk0 + Ui.dp(getContext(), 6), centerY(ry, tp), tp);
+                c.drawText(fon ? Ui.fmtUsd(q * b * g) : Ui.kfmt(q),   // filter ON -> resting size in $
+                        cAsk0 + Ui.dp(getContext(), 6), centerY(ry, tp), tp);
             }
 
             // SOLD / BOUGHT — filtered: "7.0K (45%, 3)" (total invariant); ALL: plain SOL volume
@@ -413,7 +415,8 @@ public class DomView extends View {
                 Paint tp = (goldRow || lvnRow) ? textB : text;
                 tp.setColor(goldRow ? Ui.GOLD : (lvnRow ? Ui.LVN : Ui.DIM_TXT));
                 tp.setTextAlign(Paint.Align.RIGHT);
-                c.drawText(Ui.kfmt(tv), w - pad - bx - Ui.dp(getContext(), 9), centerY(ry, tp), tp);
+                c.drawText(fon ? Ui.fmtUsd(tv * b * g) : Ui.kfmt(tv), // filter ON -> level volume in $
+                        w - pad - bx - Ui.dp(getContext(), 9), centerY(ry, tp), tp);
             }
         }
 
