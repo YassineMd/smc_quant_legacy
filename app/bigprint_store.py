@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "study", "bigprint_archive")
 SYMBOL = "SOLUSDT"
+CACHE_FLOOR_USD = 0.0                             # studies may raise this before loading (RAM: months cache only >= it)
 _cache: "dict[str, tuple[float, list]]" = {}      # month -> (mtime, [(ts_s, price, usd, side), ...])
 
 
@@ -40,6 +41,8 @@ def _load_month(month: str) -> list:
         with gzip.open(path, "rt", encoding="utf-8") as g:
             for ln in g:
                 r = json.loads(ln)
+                if float(r["u"]) < CACHE_FLOOR_USD:
+                    continue
                 rows.append((float(r["t"]) / 1000.0, float(r["p"]), float(r["u"]), int(r["s"])))
     except Exception:
         rows = []
