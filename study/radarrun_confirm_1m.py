@@ -22,7 +22,7 @@ import numpy as np
 from study.radarrun_pullback_1m import (_f, resolve, report_cell, CACHE_30, W1, SLBUF, EXITS, OUT)
 from study.radarrun_pullback_1mbkt_ema import CLOCK_NPZ, cor_cache, select_trades
 
-SEED = 20260904
+SEED = int(os.environ.get("RR_SEED", "20260904"))   # override for fresh replication draws
 N_DAYS = 8
 CONF_CAP = 600                    # max 1m closes replayed per parent bucket (10h; buckets are ~30m)
 CACHE_TR1 = os.path.join(OUT, "rr_pullback_trades.json")
@@ -129,6 +129,9 @@ def main():
     print("-" * 132, flush=True)
 
     # ── B) full-data pullback entries, SL swapped to the parent badge SL ───────────────────
+    if os.environ.get("RR_SKIP_B"):
+        print("done in %.0fs" % (time.time() - t0), flush=True)
+        return
     psl = {round(f[1], 2): (f[3], f[4]) for f in f30}          # parent et -> (entry, sl)
     print("\nB) PULLBACK ENTRY + PARENT SL — FULL 18mo, 30m bucket parent (from caches)", flush=True)
     variants = []
