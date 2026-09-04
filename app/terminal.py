@@ -6898,15 +6898,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return out
 
     @staticmethod
-    def _ema_mark_zones(ana, j_last, marks):
+    def _ema_mark_zones(ana, j_last, marks, zone_kinds=("poc", "poc_hi", "poc_lo")):
         """ZONE per mark (user 2026-09-04: "keep the line; the zone becomes the BODY of the last candle whose body
-        crosses the line"): walking BACK from ana[j_last] (the flip line's bar -- the newest bar the profile knew),
-        the first candle with min(open, close) <= price <= max(open, close) gives (body low, body high).
+        crosses the line"): walking BACK from ana[j_last], the first candle with min(open, close) <= price <=
+        max(open, close) gives (body low, body high). Only `zone_kinds` get a zone -- the LVN stays a line.
         Returns [(price, kind, zlo, zhi)] -- zlo/zhi None when no candle body ever crossed that price."""
         out = []
         j_last = min(len(ana) - 1, int(j_last))
-        for p, kind in marks:
+        for m in marks:
+            p, kind = m[0], m[1]
             zlo = zhi = None
+            if kind not in zone_kinds:
+                out.append((p, kind, None, None)); continue
             for j in range(j_last, -1, -1):
                 b = ana[j]
                 o = float(b.get("open", b.get("open_price", 0.0)) or 0.0)
@@ -7404,11 +7407,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             continue                                                # no finished trend yet -> no VP
                         _sp7 = (min(_s[0] for _s in _sg7), max(_s[1] for _s in _sg7))   # == the side VP's _vp_span
                         _k7 = (float(_ftimes.get(_sp7[0], 0.0)), float(_ftimes.get(_a7, 0.0)))
-                        if _k7 not in _done:                                        # marks + their candle-body ZONES
-                            _done[_k7] = self._ema_mark_zones(_ana, _sp7[1], self._ema_span_vp(_ana, _sp7[0], _sp7[1]))
-                        _mk7 = _done[_k7]
-                        if _mk7:
-                            _segs.append((int(_a7), (int(_b7) if _b7 is not None else None), list(_mk7)))
+                        if _k7 not in _done:                                        # marks (prices) frozen per line
+                            _done[_k7] = self._ema_span_vp(_ana, _sp7[0], _sp7[1])
+                        if _done[_k7]:
+                            _segs.append((int(_a7), int(_b7), list(_done[_k7])))
+                    # ZONES (user 2026-09-04): POC marks only -- the LVN stays a line. Zone = the BODY of the LAST
+                    # candle whose body crossed the price, searched BACK from the segment's last bar; for the most
+                    # recent drawn segment (the previous trend) from the NEWEST closed bar instead, so it keeps
+                    # updating while the current/forming trend runs even though the level belongs to the previous
+                    # trend. Cheap (the scan stops at the first crossing), so it is redone at every bar close.
+                    for _q, (_a7, _b7, _mk7) in enumerate(_segs):
+                        _j7 = (_M - 1) if _q == len(_segs) - 1 else (int(_b7) - 1)
+                        _segs[_q] = (_a7, _b7, self._ema_mark_zones(_ana, _j7, _mk7))
                     if len(_done) > 6000:                     # bound: drop the oldest
                         for _k7 in sorted(_done)[:len(_done) - 6000]:
                             del _done[_k7]
@@ -7441,7 +7451,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if _sl7.get("kind") != _kd7:              # re-pen only when the pooled slot changes role
                         _pn7 = pg.mkPen(_rgba7[0], _rgba7[1], _rgba7[2], _rgba7[3], width=_w7); _pn7.setCosmetic(True)
                         _sl7["ln"].setPen(_pn7); _sl7["kind"] = _kd7
-                        _sl7["rect"].setBrush(pg.mkBrush(_rgba7[0], _rgba7[1], _rgba7[2], 55))
+                        _sl7["rect"].setBrush(pg.mkBrush(_rgba7[0], _rgba7[1], _rgba7[2], 34))   # faint (user: lower)
                     _geo7 = (_x07, _x17, _p7)
                     if _sl7.get("geo") != _geo7:              # setData rebuilds the path: only when it moves
                         _sl7["ln"].setData([_x07, _x17], [_p7, _p7]); _sl7["geo"] = _geo7
