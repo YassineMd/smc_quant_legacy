@@ -538,7 +538,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("ema_walls_merge", "Merged Lines"),     # one AREA per zone spanning that zone's walls (cheap green / eq gray / expensive red) of trends
                            ("ema_poc", "Current Band"),             # POC of each zone over the current pair of trends
                            ("ema_poc_prev", "Previous Band"),       # ... and over the preceding pair
-                           ("ema_poc_line", "POC per line"),        # amber POC hline per Stack-Flip segment: from a vertical line to the next (open one -> live edge)
+                           ("ema_poc_line", "POC per line"),        # per Stack-Flip segment (vertical line -> next; open one -> live edge): the Trend-VP marks as hlines — amber POC, light-amber POC above VAH / below VAL, purple in-VA LVN
                            ("ema_trendvp", "Trend Extremes VP (right)"),   # right-anchored VP over the last two FINISHED trends; amber POC + purple in-VA LVN + light-amber POCs above VAH/below VAL + dashed VAH/VAL on the band
                            ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:

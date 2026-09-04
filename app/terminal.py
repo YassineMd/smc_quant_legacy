@@ -6810,42 +6810,86 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _d["ln"].setVisible(False); _d["lbl"].setVisible(False)
 
     @staticmethod
-    def _ema_span_poc(ana, j0, j1):
-        """POINT OF CONTROL of the bars ana[j0..j1] (inclusive): the single most-traded price. Per-bar footprint
-        'levels' when present (buy+sell per price), else the bar's volume at its mid -- the same rule as the zone
-        POCs. Returns the price, or None when the span holds no volume."""
-        _prof = {}
-        for _j in range(max(0, int(j0)), min(len(ana), int(j1) + 1)):
+    def _ema_span_vp(ana, j0, j1, nb=40):
+        """Volume-profile MARKS of the bars ana[j0..j1] (inclusive) -- the EXACT Trend-Extremes-VP rule: `nb`
+        uniform price bins over the span's high/low (per-bar footprint 'levels' when present, else the bar's volume
+        spread over its range), 70% value area by greedy expansion around the POC, then
+            poc   : the max-volume bin                               (amber)
+            lvn   : the min-volume bin(s) INSIDE the value area, POC excluded, all ties   (electric purple)
+            poc_hi: the max-volume bin(s) ABOVE the VAH, ties        (light amber)
+            poc_lo: the max-volume bin(s) BELOW the VAL, ties        (light amber)
+        Returns [(price, kind)] with bin-CENTRE prices, or [] when the span holds no volume."""
+        j0 = max(0, int(j0)); j1 = min(len(ana) - 1, int(j1))
+        if j1 < j0:
+            return []
+        _plo = float("inf"); _phi = 0.0
+        for _j in range(j0, j1 + 1):
+            _h = float(ana[_j].get("high", 0.0) or 0.0); _l = float(ana[_j].get("low", 0.0) or 0.0)
+            if _h > 0:
+                _phi = max(_phi, _h)
+            if _l > 0:
+                _plo = min(_plo, _l)
+        if not (_phi > _plo):
+            return []
+        _hb = (_phi - _plo) / nb
+        _vols = np.zeros(nb)
+        for _j in range(j0, j1 + 1):
             _b = ana[_j]
-            _lv = _b.get("levels") or {}
-            if _lv:
-                for _ps, _vv in _lv.items():
+            _lvs = _b.get("levels") or {}
+            if _lvs:
+                for _ps, _pvv in _lvs.items():
                     try:
                         _pf = float(_ps)
                     except (TypeError, ValueError):
                         continue
-                    if isinstance(_vv, dict):
-                        _v = float(_vv.get("b", 0.0) or 0.0) + float(_vv.get("s", 0.0) or 0.0)
-                    elif isinstance(_vv, (list, tuple)):
-                        _v = sum(float(_q or 0.0) for _q in _vv)
-                    else:
-                        _v = float(_vv or 0.0)
-                    if _v:
-                        _prof[_pf] = _prof.get(_pf, 0.0) + abs(_v)
+                    if not (_plo <= _pf <= _phi):
+                        continue
+                    try:
+                        if isinstance(_pvv, dict):
+                            _vv = float(_pvv.get("b", 0.0) or 0.0) + float(_pvv.get("s", 0.0) or 0.0)
+                        elif isinstance(_pvv, (list, tuple)):
+                            _vv = sum(float(_q or 0.0) for _q in _pvv)
+                        else:
+                            _vv = float(_pvv or 0.0)
+                    except (TypeError, ValueError):
+                        continue
+                    _vols[min(nb - 1, int((_pf - _plo) / _hb))] += abs(_vv)
             else:
-                _v = ((float(_b.get("buy_vol", 0.0) or 0.0) + float(_b.get("sell_vol", 0.0) or 0.0))
-                      or float(_b.get("volume", 0.0) or 0.0))
+                _v = float(_b.get("buy_vol", 0.0) or 0.0) + float(_b.get("sell_vol", 0.0) or 0.0)
+                if _v <= 0:
+                    _v = float(_b.get("volume", 0.0) or 0.0)
                 _h = float(_b.get("high", 0.0) or 0.0); _l = float(_b.get("low", 0.0) or 0.0)
-                if _v > 0 and _h > 0 and _l > 0:
-                    _pm = 0.5 * (_h + _l)
-                    _prof[_pm] = _prof.get(_pm, 0.0) + _v
-        if not _prof:
-            return None
-        _bp = None; _bv = 0.0
-        for _pf, _v in _prof.items():                     # ties -> the LOWER price (deterministic)
-            if _v > _bv or (_v == _bv and _bp is not None and _pf < _bp):
-                _bv = _v; _bp = _pf
-        return _bp
+                if _v <= 0 or _h <= 0 or _l <= 0:
+                    continue
+                _i0 = max(0, min(nb - 1, int((_l - _plo) / _hb)))
+                _i1 = max(0, min(nb - 1, int((_h - _plo) / _hb)))
+                _vols[_i0:_i1 + 1] += _v / (_i1 - _i0 + 1)
+        _tot = float(_vols.sum())
+        if _tot <= 0:
+            return []
+        _p = int(np.argmax(_vols)); _a = _bv = _p
+        _acc = float(_vols[_p])
+        while _acc < 0.70 * _tot and (_a > 0 or _bv < nb - 1):
+            _up = float(_vols[_bv + 1]) if _bv < nb - 1 else -1.0
+            _dn = float(_vols[_a - 1]) if _a > 0 else -1.0
+            if _up >= _dn:
+                _bv += 1; _acc += max(0.0, _up)
+            else:
+                _a -= 1; _acc += max(0.0, _dn)
+        _cen = lambda _i: _plo + (_i + 0.5) * _hb
+        out = [(_cen(_p), "poc")]
+        _pmin = float(_vols[_a:_bv + 1].min())
+        out += [(_cen(_i), "lvn") for _i in range(_a, _bv + 1) if _vols[_i] == _pmin and _i != _p]
+
+        def _maxs(_r):
+            _nz = [_i for _i in _r if _vols[_i] > 0]
+            if not _nz:
+                return []
+            _mx = max(_vols[_i] for _i in _nz)
+            return [_i for _i in _nz if _vols[_i] == _mx]
+        out += [(_cen(_i), "poc_hi") for _i in _maxs(range(_bv + 1, nb))]
+        out += [(_cen(_i), "poc_lo") for _i in _maxs(range(0, _a))]
+        return out
 
     def _hide_ema_walls(self) -> None:
         for _d in self._ema_wmrg_items.values():
@@ -7259,12 +7303,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _stk_pen(pool[_j], _col2.get(int(_ai2), _rgb2), _pin2)  #   fixup below applies the fresh map
             for _pl in pool[len(_xs2):]:
                 _pl.setVisible(False)
-        # 'POC per line' (sub-toggle 'ema_poc_line', user 2026-09-04): the POINT OF CONTROL of EACH regime
+        # 'POC per line' (sub-toggle 'ema_poc_line', user 2026-09-04): the Trend-Extremes-VP MARKS of EACH regime
         # segment -- from a Stack-Flip vertical line to the NEXT one (the open segment runs to the live edge) --
-        # drawn as an amber hline spanning exactly that segment, tagged with its price. Same POC rule as the zone
-        # POCs (_ema_span_poc). Finished segments are profiled ONCE (keyed by their two flip times, kept across
-        # recomputes); only the OPEN segment is re-profiled at each bar close. Segments follow the DRAWN lines
-        # (a suppressed same-colour line is not a boundary). Independent of the pin.
+        # drawn as hlines spanning exactly that segment: amber POC, light-amber POC above the VAH and POC below
+        # the VAL, electric-purple in-VA LVN (user: "we have 3 POCs ... also add the LVN"). Same 40-bin / 70%-VA
+        # rule as the right-side Trend VP (_ema_span_vp). Finished segments are profiled ONCE (keyed by their two
+        # flip times, kept across recomputes); only the OPEN segment is re-profiled at each bar close. Segments
+        # follow the DRAWN lines (a suppressed same-colour line is not a boundary). Independent of the pin.
         if not _pl_on:
             self._hide_ema_pocl()
         else:
@@ -7278,46 +7323,51 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         if _b7 is not None:
                             _k7 = (float(_ftimes.get(_a7, 0.0)), float(_ftimes.get(_b7, 0.0)))
                             if _k7 not in _done:
-                                _done[_k7] = self._ema_span_poc(_ana, _a7, _b7 - 1)
-                            _p7 = _done[_k7]
+                                _done[_k7] = self._ema_span_vp(_ana, _a7, _b7 - 1)
+                            _mk7 = _done[_k7]
                         else:
-                            _p7 = self._ema_span_poc(_ana, _a7, _M - 1)
-                        if _p7 is not None:
-                            _segs.append((int(_a7), (int(_b7) if _b7 is not None else None), float(_p7)))
+                            _mk7 = self._ema_span_vp(_ana, _a7, _M - 1)
+                        if _mk7:
+                            _segs.append((int(_a7), (int(_b7) if _b7 is not None else None), list(_mk7)))
                     if len(_done) > 6000:                     # bound: drop the oldest finished segments
                         for _k7 in sorted(_done)[:len(_done) - 6000]:
                             del _done[_k7]
                 except Exception:
                     _segs = []
                 self._ema_pocl_cache = (_ssig, _segs)
-            _AMB7 = (250, 180, 60)
+            _STY7 = {"poc": ((250, 180, 60, 235), 1.4, "POC"),          # amber           = value-area POC
+                     "poc_hi": ((250, 205, 120, 200), 1.1, "POC▲"),     # light amber     = POC above the VAH
+                     "poc_lo": ((250, 205, 120, 200), 1.1, "POC▼"),     # light amber     = POC below the VAL
+                     "lvn": ((178, 70, 255, 225), 1.2, "LVN")}          # electric purple = in-VA low-volume node
             _vis7 = 0
-            for _a7, _b7, _p7 in self._ema_pocl_cache[1]:
+            for _a7, _b7, _mk7 in self._ema_pocl_cache[1]:
                 if _b7 is not None and _b7 < _off:
                     continue                                  # whole segment older than the window -> not drawn
                 _x07 = _fxw(_a7)                              # exact cross x (clamped at the left edge)
                 _x17 = _fxw(_b7) if _b7 is not None else float(x[n - 1])
                 if _x17 <= _x07:
                     continue
-                if _vis7 >= len(self._ema_pocl_items):
-                    _ln7 = pg.PlotCurveItem()
-                    _pn7 = pg.mkPen(_AMB7[0], _AMB7[1], _AMB7[2], 235, width=1.4); _pn7.setCosmetic(True)
-                    _ln7.setPen(_pn7); _ln7.setZValue(15)
-                    self.plot.addItem(_ln7, ignoreBounds=True)
-                    _lb7 = pg.TextItem(anchor=(0, 0.5)); _lb7.setZValue(16)
-                    _lb7.setColor(pg.mkColor(_AMB7[0], _AMB7[1], _AMB7[2], 235))
-                    self.plot.addItem(_lb7, ignoreBounds=True)
-                    self._ema_pocl_items.append({"ln": _ln7, "lbl": _lb7, "geo": None, "txt": None})
-                _sl7 = self._ema_pocl_items[_vis7]; _vis7 += 1
-                _geo7 = (_x07, _x17, _p7)
-                if _sl7.get("geo") != _geo7:                  # setData rebuilds the path: only when it moves
-                    _sl7["ln"].setData([_x07, _x17], [_p7, _p7]); _sl7["geo"] = _geo7
-                _sl7["ln"].setVisible(True)
-                _tx7 = "POC %.2f" % _p7
-                if _sl7.get("txt") != _tx7:
-                    _sl7["lbl"].setText(_tx7); _sl7["txt"] = _tx7
-                _sl7["lbl"].setPos(_x07 + 0.4, _p7)
-                _sl7["lbl"].setVisible(True)
+                for _p7, _kd7 in _mk7:
+                    _rgba7, _w7, _tag7 = _STY7.get(_kd7, _STY7["poc"])
+                    if _vis7 >= len(self._ema_pocl_items):
+                        _ln7 = pg.PlotCurveItem(); _ln7.setZValue(15)
+                        self.plot.addItem(_ln7, ignoreBounds=True)
+                        _lb7 = pg.TextItem(anchor=(0, 0.5)); _lb7.setZValue(16)
+                        self.plot.addItem(_lb7, ignoreBounds=True)
+                        self._ema_pocl_items.append({"ln": _ln7, "lbl": _lb7, "geo": None, "txt": None, "kind": None})
+                    _sl7 = self._ema_pocl_items[_vis7]; _vis7 += 1
+                    if _sl7.get("kind") != _kd7:              # re-pen only when the pooled slot changes role
+                        _pn7 = pg.mkPen(_rgba7[0], _rgba7[1], _rgba7[2], _rgba7[3], width=_w7); _pn7.setCosmetic(True)
+                        _sl7["ln"].setPen(_pn7); _sl7["lbl"].setColor(pg.mkColor(*_rgba7)); _sl7["kind"] = _kd7
+                    _geo7 = (_x07, _x17, _p7)
+                    if _sl7.get("geo") != _geo7:              # setData rebuilds the path: only when it moves
+                        _sl7["ln"].setData([_x07, _x17], [_p7, _p7]); _sl7["geo"] = _geo7
+                    _sl7["ln"].setVisible(True)
+                    _tx7 = "%s %.2f" % (_tag7, _p7)
+                    if _sl7.get("txt") != _tx7:
+                        _sl7["lbl"].setText(_tx7); _sl7["txt"] = _tx7
+                    _sl7["lbl"].setPos(_x07 + 0.4, _p7)
+                    _sl7["lbl"].setVisible(True)
             for _sl7 in self._ema_pocl_items[_vis7:]:
                 _sl7["ln"].setVisible(False); _sl7["lbl"].setVisible(False)
         # 'Trend Extreme Lines' (sub-toggle 'ema_trendlvl'): the LAST FINISHED bear segment (red line -> next
