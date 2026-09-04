@@ -1543,6 +1543,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_stk_pool = {"g": [], "r": []}                  # 'ema_stack' flip lines: pooled dashed vlines
         self._ema_flip_col = {}                                  # flip bar -> BIAS colour (green/red/gray); merged = hidden
         self._ema_stk_cache = None                               # (sig, green bar idxs, red bar idxs) — per bar close
+        self._ema_stk_forming = None                             # (cross bar, "g"/"r") of the newest UNCONFIRMED regime
+        self._ema_stk_frm_ln = None                              # its dotted vline (lazy)
         self._ema_poc_items = {}                                 # 'ema_poc': per-zone POC line + tag
         self._ema_poc_cache = None                               # (sig, {band: {zone: (price, vol)}})
         self._ema_pocl_items = []                                # 'ema_poc_line': pooled per-segment POC hline + tag
@@ -2725,6 +2727,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if not on:
                     for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                         _pl.setVisible(False)
+                    if self._ema_stk_frm_ln is not None:
+                        self._ema_stk_frm_ln.setVisible(False)
             elif key == "ema_trendlvl":
                 self._ema_lvl_cache = None           # trend extreme lines toggled -> recompute next frame
                 if not on:
@@ -6807,7 +6811,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _hide_ema_pocl(self) -> None:
         for _d in self._ema_pocl_items:
-            _d["ln"].setVisible(False); _d["lbl"].setVisible(False)
+            _d["ln"].setVisible(False)
 
     @staticmethod
     def _ema_span_vp(ana, j0, j1, nb=40):
@@ -7108,6 +7112,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _it3 in self._ema_lvl_vl.values():
                 _it3.setVisible(False)
             self._hide_ema_vp(); self._hide_ema_walls(); self._hide_ema_pocs(); self._hide_ema_pocl()
+            if self._ema_stk_frm_ln is not None:
+                self._ema_stk_frm_ln.setVisible(False)
             self._ema_flip_hits = []                       # nothing computed -> nothing to click
             return
         # ANALYSIS SERIES (user report 2026-08-28: "the algo should be able to extract previous data ... even
@@ -7244,6 +7250,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # flip -> bar TIME, captured HERE because _ana is only the full analysis series on a recompute;
             # the per-frame draw path must never index it (that was an IndexError on cache hits).
             _ft = {int(_i4): float(_ana[_i4].get("start_time", 0.0) or 0.0) for _i4 in (_g + _r)}
+            # CURRENT / FORMING trend (user 2026-09-04): the newest EMA20/50 cross whose regime is NOT yet confirmed
+            # (too young, or the HL deltas have not matched its bias yet) has no printed line -- remember it so the
+            # stack block can draw a dotted vline at its exact cross and the per-line POCs can stop there.
+            _frm = (int(_reg0), _state) if (_pend and _state is not None and int(_reg0) > 50) else None
+            if _frm is not None:
+                _fx[int(_reg0)] = _cross_fx(_reg0)
+            self._ema_stk_forming = _frm
             self._ema_stk_cache = (_ssig, _g, _r, _ft, _fx)
         _, _g, _r, _ftimes, _fx = self._ema_stk_cache
         self._ema_flip_times = _ftimes
@@ -7303,6 +7316,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _stk_pen(pool[_j], _col2.get(int(_ai2), _rgb2), _pin2)  #   fixup below applies the fresh map
             for _pl in pool[len(_xs2):]:
                 _pl.setVisible(False)
+        # CURRENT / FORMING trend vline (user 2026-09-04): a DOTTED, dimmer line at the exact EMA20/50 cross that
+        # opened the newest, not-yet-confirmed regime (green up-cross / red down-cross). It rides the Stack-Flip
+        # toggle, is never clickable (nothing is confirmed there yet) and disappears the moment the regime prints
+        # its real line or flips back.
+        _frm = getattr(self, "_ema_stk_forming", None)
+        if self._ema_stk_frm_ln is None:
+            _pnf = pg.mkPen(color=(150, 158, 175, 120), width=1); _pnf.setCosmetic(True)
+            _pnf.setDashPattern([1.0, 4.0])
+            self._ema_stk_frm_ln = pg.InfiniteLine(angle=90, movable=False, pen=_pnf)
+            self._ema_stk_frm_ln.setZValue(13)
+            self.plot.addItem(self._ema_stk_frm_ln, ignoreBounds=True)
+        if _stk_on and _frm is not None and int(_frm[0]) >= _off:
+            _rgbf = (40, 230, 120) if _frm[1] == "g" else (240, 70, 90)
+            if getattr(self._ema_stk_frm_ln, "_ema_pen_key", None) != _rgbf:
+                _pnf = pg.mkPen(color=(_rgbf[0], _rgbf[1], _rgbf[2], 130), width=1); _pnf.setCosmetic(True)
+                _pnf.setDashPattern([1.0, 4.0])
+                self._ema_stk_frm_ln.setPen(_pnf); self._ema_stk_frm_ln._ema_pen_key = _rgbf
+            self._ema_stk_frm_ln.setValue(_fxw(int(_frm[0])))
+            self._ema_stk_frm_ln.setVisible(True)
+        else:
+            self._ema_stk_frm_ln.setVisible(False)
         # 'POC per line' (sub-toggle 'ema_poc_line', user 2026-09-04): for EACH drawn Stack-Flip vertical line, the
         # Trend-Extremes-VP MARKS exactly as the right-side VP shows them when you CLICK (pin) that line -- amber POC,
         # light-amber POC above the VAH / below the VAL, electric-purple in-VA LVN -- drawn as hlines over the
@@ -7321,8 +7355,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _seq7 = sorted([(int(_i7), "g") for _i7 in _g] + [(int(_i7), "r") for _i7 in _r])
                     _fl = [_ai7 for _ai7, _c7 in _seq7 if _ai7 not in _hid2]        # the DRAWN (clickable) lines
                     _done = self._ema_pocl_done
+                    # The CURRENT / forming trend gets NO lines (user 2026-09-04): the last confirmed line's marks
+                    # stop at the forming cross when one exists, and the open segment is never drawn (its marks
+                    # are what the unpinned side VP already shows).
+                    _frm7 = getattr(self, "_ema_stk_forming", None)
+                    _frm0 = int(_frm7[0]) if (_frm7 is not None and _fl and int(_frm7[0]) > _fl[-1]) else None
                     for _q, _a7 in enumerate(_fl):
-                        _b7 = _fl[_q + 1] if _q + 1 < len(_fl) else None
+                        _b7 = _fl[_q + 1] if _q + 1 < len(_fl) else _frm0
+                        if _b7 is None:
+                            continue                                                # open segment -> not drawn
                         _sq7 = [_f7 for _f7 in _seq7 if _f7[0] <= _a7]              # as-of the line == the pin cut
                         _bl7 = _br7 = None                                          # last finished bull / bear
                         for _k7 in range(len(_sq7) - 1):
@@ -7359,29 +7400,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _x17 = _fxw(_b7) if _b7 is not None else float(x[n - 1])
                 if _x17 <= _x07:
                     continue
-                for _p7, _kd7 in _mk7:
+                for _p7, _kd7 in _mk7:                        # NO text tags (user 2026-09-04): colour says which
                     _rgba7, _w7, _tag7 = _STY7.get(_kd7, _STY7["poc"])
                     if _vis7 >= len(self._ema_pocl_items):
                         _ln7 = pg.PlotCurveItem(); _ln7.setZValue(15)
                         self.plot.addItem(_ln7, ignoreBounds=True)
-                        _lb7 = pg.TextItem(anchor=(0, 0.5)); _lb7.setZValue(16)
-                        self.plot.addItem(_lb7, ignoreBounds=True)
-                        self._ema_pocl_items.append({"ln": _ln7, "lbl": _lb7, "geo": None, "txt": None, "kind": None})
+                        self._ema_pocl_items.append({"ln": _ln7, "geo": None, "kind": None})
                     _sl7 = self._ema_pocl_items[_vis7]; _vis7 += 1
                     if _sl7.get("kind") != _kd7:              # re-pen only when the pooled slot changes role
                         _pn7 = pg.mkPen(_rgba7[0], _rgba7[1], _rgba7[2], _rgba7[3], width=_w7); _pn7.setCosmetic(True)
-                        _sl7["ln"].setPen(_pn7); _sl7["lbl"].setColor(pg.mkColor(*_rgba7)); _sl7["kind"] = _kd7
+                        _sl7["ln"].setPen(_pn7); _sl7["kind"] = _kd7
                     _geo7 = (_x07, _x17, _p7)
                     if _sl7.get("geo") != _geo7:              # setData rebuilds the path: only when it moves
                         _sl7["ln"].setData([_x07, _x17], [_p7, _p7]); _sl7["geo"] = _geo7
                     _sl7["ln"].setVisible(True)
-                    _tx7 = "%s %.2f" % (_tag7, _p7)
-                    if _sl7.get("txt") != _tx7:
-                        _sl7["lbl"].setText(_tx7); _sl7["txt"] = _tx7
-                    _sl7["lbl"].setPos(_x07 + 0.4, _p7)
-                    _sl7["lbl"].setVisible(True)
             for _sl7 in self._ema_pocl_items[_vis7:]:
-                _sl7["ln"].setVisible(False); _sl7["lbl"].setVisible(False)
+                _sl7["ln"].setVisible(False)
         # 'Trend Extreme Lines' (sub-toggle 'ema_trendlvl'): the LAST FINISHED bear segment (red line -> next
         # green line) marks its LOWEST low with a solid GREEN hline; the last finished bull segment (green ->
         # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar
