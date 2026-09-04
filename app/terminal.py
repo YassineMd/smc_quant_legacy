@@ -7303,33 +7303,45 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _stk_pen(pool[_j], _col2.get(int(_ai2), _rgb2), _pin2)  #   fixup below applies the fresh map
             for _pl in pool[len(_xs2):]:
                 _pl.setVisible(False)
-        # 'POC per line' (sub-toggle 'ema_poc_line', user 2026-09-04): the Trend-Extremes-VP MARKS of EACH regime
-        # segment -- from a Stack-Flip vertical line to the NEXT one (the open segment runs to the live edge) --
-        # drawn as hlines spanning exactly that segment: amber POC, light-amber POC above the VAH and POC below
-        # the VAL, electric-purple in-VA LVN (user: "we have 3 POCs ... also add the LVN"). Same 40-bin / 70%-VA
-        # rule as the right-side Trend VP (_ema_span_vp). Finished segments are profiled ONCE (keyed by their two
-        # flip times, kept across recomputes); only the OPEN segment is re-profiled at each bar close. Segments
-        # follow the DRAWN lines (a suppressed same-colour line is not a boundary). Independent of the pin.
+        # 'POC per line' (sub-toggle 'ema_poc_line', user 2026-09-04): for EACH drawn Stack-Flip vertical line, the
+        # Trend-Extremes-VP MARKS exactly as the right-side VP shows them when you CLICK (pin) that line -- amber POC,
+        # light-amber POC above the VAH / below the VAL, electric-purple in-VA LVN -- drawn as hlines over the
+        # segment that FOLLOWS the line (to the next drawn line; the last one to the live edge). The pinned side VP
+        # profiles the last TWO FINISHED trends as of the pinned line (the pair of segments ending AT it), so that is
+        # the span profiled here too (user 2026-09-04: "the lines must be the POC/LVN of the side VP when I click the
+        # line"); same 40-bin / 70%-VA rule (_ema_span_vp), same inclusive analysis span, same flip set (the pin
+        # truncates ALL confirmed flips, merged ones included). Each line's marks are frozen once (keyed by the span's
+        # two flip times) and never change afterwards -- they are the levels KNOWN when the line printed.
         if not _pl_on:
             self._hide_ema_pocl()
         else:
             if self._ema_pocl_cache is None or self._ema_pocl_cache[0] != _ssig:
                 _segs = []
                 try:
-                    _fl = sorted(int(_q) for _q in (_g + _r) if int(_q) not in _hid2)
+                    _seq7 = sorted([(int(_i7), "g") for _i7 in _g] + [(int(_i7), "r") for _i7 in _r])
+                    _fl = [_ai7 for _ai7, _c7 in _seq7 if _ai7 not in _hid2]        # the DRAWN (clickable) lines
                     _done = self._ema_pocl_done
                     for _q, _a7 in enumerate(_fl):
                         _b7 = _fl[_q + 1] if _q + 1 < len(_fl) else None
-                        if _b7 is not None:
-                            _k7 = (float(_ftimes.get(_a7, 0.0)), float(_ftimes.get(_b7, 0.0)))
-                            if _k7 not in _done:
-                                _done[_k7] = self._ema_span_vp(_ana, _a7, _b7 - 1)
-                            _mk7 = _done[_k7]
-                        else:
-                            _mk7 = self._ema_span_vp(_ana, _a7, _M - 1)
+                        _sq7 = [_f7 for _f7 in _seq7 if _f7[0] <= _a7]              # as-of the line == the pin cut
+                        _bl7 = _br7 = None                                          # last finished bull / bear
+                        for _k7 in range(len(_sq7) - 1):
+                            (_s0, _c0), (_s1, _c1) = _sq7[_k7], _sq7[_k7 + 1]
+                            if _c0 == "g" and _c1 == "r":
+                                _bl7 = (_s0, _s1)
+                            elif _c0 == "r" and _c1 == "g":
+                                _br7 = (_s0, _s1)
+                        _sg7 = [_s for _s in (_bl7, _br7) if _s is not None]
+                        if not _sg7:
+                            continue                                                # no finished trend yet -> no VP
+                        _sp7 = (min(_s[0] for _s in _sg7), max(_s[1] for _s in _sg7))   # == the side VP's _vp_span
+                        _k7 = (float(_ftimes.get(_sp7[0], 0.0)), float(_ftimes.get(_a7, 0.0)))
+                        if _k7 not in _done:
+                            _done[_k7] = self._ema_span_vp(_ana, _sp7[0], _sp7[1])
+                        _mk7 = _done[_k7]
                         if _mk7:
                             _segs.append((int(_a7), (int(_b7) if _b7 is not None else None), list(_mk7)))
-                    if len(_done) > 6000:                     # bound: drop the oldest finished segments
+                    if len(_done) > 6000:                     # bound: drop the oldest
                         for _k7 in sorted(_done)[:len(_done) - 6000]:
                             del _done[_k7]
                 except Exception:
