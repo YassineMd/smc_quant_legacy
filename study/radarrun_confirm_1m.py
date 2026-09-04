@@ -23,7 +23,9 @@ from study.radarrun_pullback_1m import (_f, resolve, report_cell, CACHE_30, W1, 
 from study.radarrun_pullback_1mbkt_ema import CLOCK_NPZ, cor_cache, select_trades
 
 SEED = int(os.environ.get("RR_SEED", "20260904"))   # override for fresh replication draws
-N_DAYS = int(os.environ.get("RR_NDAYS", "8"))       # sampled days per year
+_nd = os.environ.get("RR_NDAYS", "8")               # days per year; "a,b" = 2025,2026 split
+N_DAYS_Y = {2025: int(_nd.split(",")[0]), 2026: int(_nd.split(",")[-1])}
+N_DAYS = N_DAYS_Y[2025]                             # legacy alias (label lines)
 NY_ONLY = bool(os.environ.get("RR_NY"))             # keep only fires in the NY session 13-21 UTC
 CONF_CAP = 600                    # max 1m closes replayed per parent bucket (10h; buckets are ~30m)
 CACHE_TR1 = os.path.join(OUT, "rr_pullback_trades.json")
@@ -31,6 +33,50 @@ CACHE_TR1 = os.path.join(OUT, "rr_pullback_trades.json")
 
 def day_of(t):
     return datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def eec_zones(C, H, L, warm=60):
+    """Per-bar E/E/C zone codes, the pivot-study convention (study/pivot_eec_15m.py): legs =
+    EMA20/50 cross segments; band live at a bar = last COMPLETED bull leg HIGH / bear leg LOW
+    before that bar's leg; thirds of [L,H]. Codes: -1 unknown, 0 beyond-dn, 1 cheap, 2 equilib,
+    3 expensive, 4 beyond-up, 5 inverted. Causal: a leg's own extreme is never in its band."""
+    n = len(C)
+    e20 = np.empty(n); e50 = np.empty(n)
+    e20[0] = e50[0] = C[0]
+    a20, a50 = 2.0 / 21.0, 2.0 / 51.0
+    for i in range(1, n):
+        e20[i] = a20 * C[i] + (1.0 - a20) * e20[i - 1]
+        e50[i] = a50 * C[i] + (1.0 - a50) * e50[i - 1]
+    zones = np.full(n, -1, dtype=np.int8)
+    legs = []
+    cur = st_ = None
+    for i in range(warm, n):
+        d = 1 if e20[i] > e50[i] else (-1 if e20[i] < e50[i] else 0)
+        if d == 0:
+            continue
+        if cur is None:
+            cur, st_ = d, i
+        elif d != cur:
+            legs.append((cur, st_, i - 1))
+            cur, st_ = d, i
+    if cur is not None:
+        legs.append((cur, st_, n - 1))              # open leg: its band is complete, its extreme is not
+    lb_hi = lb_lo = None
+    for (d, a_, b2) in legs:
+        if lb_hi is not None and lb_lo is not None:
+            seg = C[a_:b2 + 1]
+            if lb_hi <= lb_lo:
+                zones[a_:b2 + 1] = 5
+            else:
+                t = (seg - lb_lo) / (lb_hi - lb_lo)
+                zones[a_:b2 + 1] = np.where(seg < lb_lo, 0, np.where(seg > lb_hi, 4,
+                                            np.where(t < 1 / 3, 1, np.where(t < 2 / 3, 2, 3))))
+        ext = H[a_:b2 + 1].max() if d > 0 else L[a_:b2 + 1].min()
+        if d > 0:
+            lb_hi = ext
+        else:
+            lb_lo = ext
+    return zones
 
 
 def main():
@@ -59,7 +105,10 @@ def main():
     days_by_year = {2025: sorted({d for f in f30 if (d := day_of(f[1]))[:4] == "2025" and _eligible(d)}),
                     2026: sorted({d for f in f30 if (d := day_of(f[1]))[:4] == "2026" and _eligible(d)})}
     rng = random.Random(SEED)
-    if os.environ.get("RR_WEEKS"):
+    if os.environ.get("RR_FULL"):
+        sample_days = sorted(days_by_year[2025] + days_by_year[2026])
+        print("FULL RUN: all %d eligible days (no sampling)" % len(sample_days), flush=True)
+    elif os.environ.get("RR_WEEKS"):
         # one session per DISTINCT ISO week (user 2026-09-04): guarantees non-consecutive sessions
         # (adjacent weeks' weekdays are >= 3 days apart) and spreads regimes across the year
         sample_days = []
@@ -67,11 +116,12 @@ def main():
             by_week = {}
             for d in days_by_year[yr]:
                 by_week.setdefault(datetime.strptime(d, "%Y-%m-%d").isocalendar()[:2], []).append(d)
-            weeks = rng.sample(sorted(by_week), min(N_DAYS, len(by_week)))
+            weeks = rng.sample(sorted(by_week), min(N_DAYS_Y[yr], len(by_week)))
             sample_days += [rng.choice(by_week[w]) for w in weeks]
         sample_days = sorted(sample_days)
     else:
-        sample_days = sorted(rng.sample(days_by_year[2025], N_DAYS) + rng.sample(days_by_year[2026], N_DAYS))
+        sample_days = sorted(rng.sample(days_by_year[2025], N_DAYS_Y[2025])
+                             + rng.sample(days_by_year[2026], N_DAYS_Y[2026]))
     print("sampled days: %s" % ", ".join(sample_days), flush=True)
     sel = [f for f in f30 if day_of(f[1]) in set(sample_days)]
     if NY_ONLY:                                     # NY session = 13:00-21:00 UTC (project standard)
@@ -80,12 +130,19 @@ def main():
     print("parents on sampled days: %d (of %d)\n" % (len(sel), len(f30)), flush=True)
 
     # ── A) confirmation replay inside each parent bar's time span ──────────────────────────
+    pz_map = {}                                    # parent badge bar -> its 30m-scale E/E/C zone
     if parent_kind == "15mclk":
         starts = {int(b_): et - 900.0 for (b_, et, s, e, sl) in sel}   # clock bar: span is exact
     else:
         A30 = sorted(load_archive("30m", root="study/recon_archive")[1],
                      key=lambda b: _f(b.get("start_time", 0)))
         starts = {int(b_): _f(A30[b_].get("start_time")) for (b_, et, s, e, sl) in sel}
+        if os.environ.get("RR_PZONE"):             # parent-scale band: zones over the WHOLE 30m series
+            C30 = np.array([_f(b.get("close", b.get("close_price"))) for b in A30])
+            H30 = np.array([_f(b.get("high")) for b in A30])
+            L30 = np.array([_f(b.get("low")) for b in A30])
+            z30 = eec_zones(C30, H30, L30)
+            pz_map = {int(b_): int(z30[int(b_)]) for (b_, et, s, e, sl) in sel}
         del A30
     A1 = sorted(load_archive("1m", root="study/clock_archive")[1],
                 key=lambda b: _f(b.get("start_time", 0)))
@@ -105,45 +162,26 @@ def main():
     # Codes: -1 unknown, 0 beyond-dn, 1 cheap, 2 equilib, 3 expensive, 4 beyond-up, 5 inverted.
     zone1m = None
     if os.environ.get("RR_C1ZONE"):
-        a50 = 2.0 / 51.0
-        e50a = np.empty(len(C1))
-        e50a[0] = C1[0]
-        for _i in range(1, len(C1)):
-            e50a[_i] = a50 * C1[_i] + (1.0 - a50) * e50a[_i - 1]
-        zone1m = np.full(len(C1), -1, dtype=np.int8)
-        legs = []
-        cur = st_ = None
-        for _i in range(60, len(C1)):
-            d = 1 if ema20[_i] > e50a[_i] else (-1 if ema20[_i] < e50a[_i] else 0)
-            if d == 0:
-                continue
-            if cur is None:
-                cur, st_ = d, _i
-            elif d != cur:
-                legs.append((cur, st_, _i - 1))
-                cur, st_ = d, _i
-        if cur is not None:
-            legs.append((cur, st_, len(C1) - 1))    # open leg: its band is complete, its extreme is not
-        lb_hi = lb_lo = None
-        for (d, a_, b2) in legs:
-            if lb_hi is not None and lb_lo is not None:
-                seg = C1[a_:b2 + 1]
-                if lb_hi <= lb_lo:
-                    zone1m[a_:b2 + 1] = 5
-                else:
-                    t = (seg - lb_lo) / (lb_hi - lb_lo)
-                    zone1m[a_:b2 + 1] = np.where(seg < lb_lo, 0, np.where(seg > lb_hi, 4,
-                                                 np.where(t < 1 / 3, 1, np.where(t < 2 / 3, 2, 3))))
-            ext = H1[a_:b2 + 1].max() if d > 0 else L1[a_:b2 + 1].min()
-            if d > 0:
-                lb_hi = ext
-            else:
-                lb_lo = ext
+        zone1m = eec_zones(C1, H1, L1)
 
     trades_A = []
     n_conf = 0
     detects = 0
+    ckpt = os.path.join(OUT, "rr_confirm_full.ckpt") if os.environ.get("RR_FULL") else None
+    cfg_tag = "%s|%s|%d" % (SEED, parent_kind, len(sel))
+    start_i = 0
+    if ckpt and os.path.exists(ckpt):
+        _st = json.load(open(ckpt))
+        if _st.get("tag") == cfg_tag:              # kill-safe: an hour of replay resumes, never redoes
+            trades_A = _st["trades"]
+            n_conf = _st["nc"]
+            start_i = _st["done"]
+            print("RESUME from checkpoint: %d/%d parents" % (start_i, len(sel)), flush=True)
     for pi, (b_, et, s, e, sl) in enumerate(sel):
+        if pi < start_i:
+            continue
+        if ckpt and pi > start_i and pi % 200 == 0:
+            json.dump({"tag": cfg_tag, "done": pi, "nc": n_conf, "trades": trades_A}, open(ckpt, "w"))
         st = starts[int(b_)]
         j0 = int(np.searchsorted(T1S, st - 0.5))
         confirmed = False
@@ -178,11 +216,16 @@ def main():
             conf_zone = -1
         n_conf += int(confirmed)
         trades_A.append(dict(t=et, s=int(s), e=float(e), sl=float(sl), conf=confirmed,
-                             csl=conf_sl, cema=conf_ema, cz=conf_zone))
+                             csl=conf_sl, cema=conf_ema, cz=conf_zone,
+                             pz=pz_map.get(int(b_), -1)))
         if pi % 40 == 0:
             print("  parent %d/%d (detects %d, %.0fs)" % (pi, len(sel), detects, time.time() - t0),
                   flush=True)
     del A1
+    if ckpt:
+        json.dump(trades_A, open(os.path.join(OUT, "rr_confirm_full_trades.json"), "w"))
+        if os.path.exists(ckpt):
+            os.remove(ckpt)                        # final trade table cached -> re-grouping is instant
     print("confirmed: %d/%d parents (%.0f%%)\n" % (n_conf, len(sel), 100 * n_conf / max(1, len(sel))),
           flush=True)
 
@@ -207,6 +250,15 @@ def main():
                                                   or (x["s"] > 0 and x["cz"] in (0, 1)))),
             ("C+Z-ANTI", lambda x: x["conf"] and ((x["s"] > 0 and x["cz"] in (3, 4))
                                                   or (x["s"] < 0 and x["cz"] in (0, 1))))]
+    if os.environ.get("RR_PZONE"):                 # parent fired BEYOND its own band extreme, with-side
+        _zn2 = {0: "bey-dn", 1: "cheap", 2: "equilib", 3: "expensive", 4: "bey-up", 5: "invert", -1: "n/a"}
+        from collections import Counter
+        print("parent zones: %s" % dict(Counter(_zn2[x["pz"]] for x in trades_A)), flush=True)
+        _pbey = lambda x: (x["s"] < 0 and x["pz"] == 0) or (x["s"] > 0 and x["pz"] == 4)
+        _zhyp = lambda x: (x["s"] < 0 and x["cz"] == 3) or (x["s"] > 0 and x["cz"] == 1)
+        groups[2:2] = [("P-BEY", _pbey),
+                       ("C+PBEY", lambda x: x["conf"] and _pbey(x)),
+                       ("C+PBEY+Z", lambda x: x["conf"] and _pbey(x) and _zhyp(x))]
     if os.environ.get("RR_SPLIT1H"):               # does AVOIDING the NY first hour (13-14 UTC) add?
         _h1 = lambda x: 13 * 3600 <= (x["t"] % 86400) < 14 * 3600
         groups[2:2] = [("C-SKIP1H", lambda x: x["conf"] and not _h1(x)),
