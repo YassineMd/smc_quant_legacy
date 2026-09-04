@@ -59,7 +59,19 @@ def main():
     days_by_year = {2025: sorted({d for f in f30 if (d := day_of(f[1]))[:4] == "2025" and _eligible(d)}),
                     2026: sorted({d for f in f30 if (d := day_of(f[1]))[:4] == "2026" and _eligible(d)})}
     rng = random.Random(SEED)
-    sample_days = sorted(rng.sample(days_by_year[2025], N_DAYS) + rng.sample(days_by_year[2026], N_DAYS))
+    if os.environ.get("RR_WEEKS"):
+        # one session per DISTINCT ISO week (user 2026-09-04): guarantees non-consecutive sessions
+        # (adjacent weeks' weekdays are >= 3 days apart) and spreads regimes across the year
+        sample_days = []
+        for yr in (2025, 2026):
+            by_week = {}
+            for d in days_by_year[yr]:
+                by_week.setdefault(datetime.strptime(d, "%Y-%m-%d").isocalendar()[:2], []).append(d)
+            weeks = rng.sample(sorted(by_week), min(N_DAYS, len(by_week)))
+            sample_days += [rng.choice(by_week[w]) for w in weeks]
+        sample_days = sorted(sample_days)
+    else:
+        sample_days = sorted(rng.sample(days_by_year[2025], N_DAYS) + rng.sample(days_by_year[2026], N_DAYS))
     print("sampled days: %s" % ", ".join(sample_days), flush=True)
     sel = [f for f in f30 if day_of(f[1]) in set(sample_days)]
     if NY_ONLY:                                     # NY session = 13:00-21:00 UTC (project standard)
@@ -137,6 +149,11 @@ def main():
     if os.environ.get("RR_C1EMA"):                 # split the confirmed set by the 1m EMA20 side gate
         groups[2:2] = [("C+EMA-OK", lambda x: x["conf"] and x["cema"] is True),
                        ("C+EMA-NO", lambda x: x["conf"] and x["cema"] is False)]
+    if os.environ.get("RR_SPLIT1H"):               # does AVOIDING the NY first hour (13-14 UTC) add?
+        _h1 = lambda x: 13 * 3600 <= (x["t"] % 86400) < 14 * 3600
+        groups[2:2] = [("C-SKIP1H", lambda x: x["conf"] and not _h1(x)),
+                       ("C-1STH", lambda x: x["conf"] and _h1(x)),
+                       ("A-SKIP1H", lambda x: not _h1(x))]
     for sub_tag, selr in groups:
         subset = [x for x in trades_A if selr(x)]
         for ename, kind, val in EXITS:
