@@ -134,7 +134,7 @@ class BucketFootprintItem(pg.GraphicsObject):
                     x0: float, x1: float, width: float, px_per_x: float, px_per_y: float,
                     show_num_layer: bool = True, show_bub_layer: bool = True,
                     show_bub_vol: bool = False, crazy_thr: "list | None" = None,
-                    crazy_only: bool = False) -> None:
+                    crazy_only: bool = False, min_usd: float = 0.0) -> None:
         self.picture = QtGui.QPicture()
         p = QtGui.QPainter(self.picture)
         px_per_x = max(1e-9, px_per_x); px_per_y = max(1e-9, px_per_y)
@@ -202,6 +202,8 @@ class BucketFootprintItem(pg.GraphicsObject):
                                            _FP_BLACK if sell_imb else _FP_NEON_SELL,
                                            _FP_NEON_SELL if sell_imb else None))
                     elif show_bub_layer:            # cap-overflow level falls back to a bubble (only if bubbles on)
+                        if min_usd > 0 and tot * price < min_usd:
+                            continue                # bubble MIN SIZE (USD) — display filter, user 2026-09-04
                         _ot = _tier(i, tot)
                         if not (crazy_only and _ot < 1):    # 'b' stage 3: BIG + CRAZY overflow bubbles (user 2026-08-23: medium tier too)
                             _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, tier=_ot)
@@ -220,6 +222,8 @@ class BucketFootprintItem(pg.GraphicsObject):
                     tot = buy + sell
                     if tot <= 0:
                         continue
+                    if min_usd > 0 and tot * price < min_usd:
+                        continue                          # bubble MIN SIZE (USD) — display filter, user 2026-09-04
                     _t = _tier(_i, tot)
                     if crazy_only and _t < 1:             # stage 3: hide only the NORMAL tier — BIG (★) + CRAZY kept (user 2026-08-23)
                         continue
@@ -227,7 +231,9 @@ class BucketFootprintItem(pg.GraphicsObject):
                     hi_all = price if hi_all is None else max(hi_all, price)
                     _draw_bubble(p, xi, price, tot, buy, sell, max_vol, px_per_x, px_per_y, tier=_t)
                     if label_bubbles:
-                        txt = f"{tot / 1000.0:.1f}K" if tot >= 1000 else f"{tot:.0f}"
+                        _usd = tot * price                # value in USD (user 2026-09-04: was SOL volume)
+                        txt = (f"${_usd / 1e6:.2f}M" if _usd >= 1e6
+                               else (f"${_usd / 1e3:.0f}K" if _usd >= 1e3 else f"${_usd:.0f}"))
                         bub_specs.append((xi, price, txt, _FP_BLACK if _t >= 1 else _FP_BUB_LBL))   # BLACK on the BIG + crazy fills
         # (Imbalance lines are drawn by a SEPARATE always-on layer in the terminal — independent of the
         # footprint toggle — so only the black-on-neon number highlight lives here.)

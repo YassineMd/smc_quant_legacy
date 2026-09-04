@@ -282,6 +282,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     wallFloorChanged = QtCore.Signal(float)          # Order-Flow Walls min-strength draw floor (0.05..0.90)
     rewardStrengthChanged = QtCore.Signal(float)     # Reward-switch zones min-strength filter (0..70)
     bubbleVolChanged = QtCore.Signal(float)          # Heatmap trade-bubble min volume filter (SOL; 0 = show all)
+    bubbleMinUsdChanged = QtCore.Signal(float)       # Candle-Bubbles MIN SIZE filter (USD/level; 0 = show all)
     keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
     candleModeChanged = QtCore.Signal(int)   # candle render mode 0..5 (also cycled by 'W')
     vpModeChanged = QtCore.Signal(int)       # volume-profile render mode 0..8 (selection VP + 4h 'V' + prev-day VP)
@@ -592,6 +593,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             sec.addWidget(cb)
             if key == "m10_structure_swing":
                 self._build_swing_slider(sec)            # sensitivity slider directly under its toggle
+            if key == "m10_bubbles":
+                self._build_bubble_min_slider(sec)       # MIN SIZE (USD) filter directly under Candle Bubbles
             if key == "m10_absorblvl":
                 self._build_wallfloor_slider(sec)        # strength draw floor directly under the Walls toggle
                 self._build_wall_regime_subtoggle(sec)   # bottom-right Wall Regime table on/off
@@ -954,6 +957,76 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             section.addWidget(cb)
 
     # ------------------------------------------------------------------
+    _BUB_USD_LO, _BUB_USD_HI = 100.0, 10_000_000.0   # Candle-Bubbles MIN SIZE log domain ($100 .. $10M)
+
+    @staticmethod
+    def _bub_fmt_usd(a: float) -> str:
+        if a >= 1_000_000:
+            return "$%.2fM" % (a / 1_000_000)
+        if a >= 1_000:
+            return "$%.0fK" % (a / 1_000)
+        return "$%.0f" % a
+
+    def _build_bubble_min_slider(self, section) -> None:
+        """MIN SIZE slider under 'Candle Bubbles' (user 2026-09-04) — the DOM/Trades MIN SIZE, for
+        bubbles: hide bubbles whose LEVEL VALUE (volume x level price, USD) is below the floor.
+        Log $100..$10M, position 0 = ALL. Pure display filter; bubble labels print USD too."""
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QHBoxLayout(w)
+        lay.setContentsMargins(26, 1, 8, 5)
+        lay.setSpacing(8)
+        cap = QtWidgets.QLabel("MIN SIZE")
+        cap.setStyleSheet("color:#7a8496; font-family:Consolas; font-size:9px; font-weight:bold;"
+                          "letter-spacing:1px; background:transparent;")
+        lay.addWidget(cap)
+        self.bubmin_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.bubmin_slider.setRange(0, 1000)
+        self.bubmin_slider.setValue(0)
+        self.bubmin_slider.setFixedWidth(150)
+        self.bubmin_slider.setStyleSheet("""
+            QSlider { border:none; background:transparent; }
+            QSlider::groove:horizontal { height:4px; border-radius:2px; background:#1d2632; }
+            QSlider::sub-page:horizontal { height:4px; border-radius:2px;
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #2ebd85, stop:1 #f0b90b); }
+            QSlider::handle:horizontal { width:14px; height:14px; margin:-5px 0; border-radius:8px;
+                background:#e6ecf4; border:2px solid #f0b90b; }
+        """)
+        self.bubmin_slider.valueChanged.connect(self._on_bubmin_slider)
+        lay.addWidget(self.bubmin_slider)
+        self.bubmin_lbl = QtWidgets.QLabel("ALL")
+        self.bubmin_lbl.setStyleSheet("color:#f0b90b; font-family:Consolas; font-size:10px;"
+                                      "font-weight:bold; background:transparent;")
+        lay.addWidget(self.bubmin_lbl)
+        lay.addStretch(1)
+        section.addWidget(w)
+
+    def _on_bubmin_slider(self, _v: int) -> None:
+        usd = self.bubble_min_usd()
+        self.bubmin_lbl.setText("ALL" if usd <= 0 else "≥ " + self._bub_fmt_usd(usd))
+        self.bubbleMinUsdChanged.emit(usd)
+
+    def bubble_min_usd(self) -> float:
+        v = self.bubmin_slider.value()
+        if v <= 0:
+            return 0.0
+        t = v / 1000.0
+        return 10.0 ** (math.log10(self._BUB_USD_LO)
+                        + t * (math.log10(self._BUB_USD_HI) - math.log10(self._BUB_USD_LO)))
+
+    def set_bubble_min_usd(self, usd: float) -> None:
+        if usd <= 0:
+            v = 0
+        else:
+            c = max(self._BUB_USD_LO, min(self._BUB_USD_HI, float(usd)))
+            t = ((math.log10(c) - math.log10(self._BUB_USD_LO))
+                 / (math.log10(self._BUB_USD_HI) - math.log10(self._BUB_USD_LO)))
+            v = int(round(t * 1000))
+        self.bubmin_slider.blockSignals(True)
+        self.bubmin_slider.setValue(v)
+        self.bubmin_slider.blockSignals(False)
+        usd2 = self.bubble_min_usd()
+        self.bubmin_lbl.setText("ALL" if usd2 <= 0 else "≥ " + self._bub_fmt_usd(usd2))
+
     def _build_wallfloor_slider(self, section) -> None:
         """Slider under 'Order-Flow Walls': hide walls whose STRENGTH (ejection) is below the value. Pure display
         filter, no re-detection. Higher = fewer (only strong-ejection walls); lower = more. Persists via terminal_ui.json."""

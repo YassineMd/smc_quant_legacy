@@ -1945,6 +1945,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu = FloatingOverlayMenu(self)
         self.menu.set_swing_pct(self._swing_pct)   # sync the swing slider to the restored/default sensitivity
         self.menu.set_wall_floor(self._wall_floor)  # sync the wall-strength floor slider to the restored/default value
+        self.menu.set_bubble_min_usd(getattr(self, "_bub_min_saved", 0.0))   # Candle-Bubbles MIN SIZE restore
         self.menu.set_reward_strength(self._reward_strength)  # sync the reward-switch strength slider likewise
         self.menu.set_bubble_vol(self.hm_bubble_min)  # sync the heatmap bubble-volume slider to the restored/default value
         self.menu.set_kc_scale(self._kc_scale)     # sync the Keltner-scale slider to the restored/default value
@@ -2184,6 +2185,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.wallFloorChanged.connect(self._on_wall_floor)                  # Order-Flow Walls min-strength floor
         self.menu.rewardStrengthChanged.connect(self._on_reward_strength)        # Reward-switch zones min-strength filter
         self.menu.bubbleVolChanged.connect(self._on_bubble_vol)                  # Heatmap trade-bubble min-volume filter
+        self.menu.bubbleMinUsdChanged.connect(lambda _v: self._save_ui_state())  # Candle-Bubbles MIN SIZE (repaint is per-frame)
         self.menu.hm_contrast.changed.connect(self._hm_contrast_changed)         # Heatmap Liquidity-Contrast cutoffs (hamburger-hosted)
         self.menu.hm_contrast.reset_clicked.connect(self._hm_contrast_reset)     # Heatmap 'Reset -> auto'
         self.menu.keltnerScaleChanged.connect(self._on_kc_scale)   # 1m-KC smooth-approx effective-TF scale slider
@@ -8444,6 +8446,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "ob_unmitig_only": self._ob_unmitig_only,                 # 'o' cycle stage-2: unmitigated OBs only
                 "bub_vol": self._bub_vol,                                 # 'b' cycle stage-2: bubbles + volume value
                 "bub_crazy_only": self._bub_crazy_only,                   # 'b' cycle stage-3: only the crazy bubbles
+                "bub_min_usd": float(self.menu.bubble_min_usd()),         # Candle-Bubbles MIN SIZE (USD/level)
             }
             # EVERY hamburger toggle (Sub-Widgets + Mode 10 Overlays), keyed by its menu key, so a reopened
             # session restores the exact menu the user left (POC, footprint, alerts, … all sticky).
@@ -8546,6 +8549,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ob_unmitig_only = bool(s.get("ob_unmitig_only", self._ob_unmitig_only))   # 'o' cycle stage-2 filter
         self._bub_vol = bool(s.get("bub_vol", self._bub_vol))   # 'b' cycle stage-2: bubbles + volume value
         self._bub_crazy_only = bool(s.get("bub_crazy_only", self._bub_crazy_only))   # 'b' cycle stage-3: only crazy
+        self._bub_min_saved = float(s.get("bub_min_usd", 0.0) or 0.0)     # Candle-Bubbles MIN SIZE, applied post-menu
 
     def _set_ob_ice(self, on: bool) -> None:
         """Flip the Order Blocks + Absorption/Iceberg menu checkboxes together (emits layerToggled -> show/hide)."""
@@ -17279,7 +17283,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             fp_item.update_data(x, levels_list, ber30s, ser30s,
                                 vx0, vx1, 0.8, px_per_x, px_per_y, _fp_on, _bub_on,
                                 _bub_on and self._bub_vol, _crazy_thr,
-                                _bub_on and self._bub_crazy_only)   # last three = vol-label, crazy-thr, crazy-ONLY
+                                _bub_on and self._bub_crazy_only,   # vol-label, crazy-thr, crazy-ONLY
+                                min_usd=(self.menu.bubble_min_usd() if _bub_on else 0.0))
         elif "bc_fp" in handles:               # both layers off -> hide the ladder (popup has no _set_scanner_overlay hook)
             handles["bc_fp"].setVisible(False)
 
