@@ -69,11 +69,13 @@ def main():
         st = starts[int(b_)]
         j0 = int(np.searchsorted(T1S, st - 0.5))
         confirmed = False
+        conf_sl = None                             # the FIRST confirming 1m badge's own sl_trade
         seen = set()
         for j in range(j0, min(len(T1S), j0 + CONF_CAP)):
             if T1S[j] + 60.0 > et + 1e-6:          # 1m bar must CLOSE by the parent's close (causal)
                 break
             lo = max(0, j - W1)
+            hits = []
             for g in RB.detect(A1[lo:j + 1], skip_last=False, sl_buf=SLBUF,
                                tp_frac=config.RR_TP_FRAC):
                 bb = lo + int(g["i"])
@@ -82,12 +84,15 @@ def main():
                     continue                       # union: first appearance only, badge inside span
                 seen.add(key)
                 if g["side"] == s:
-                    confirmed = True
+                    hits.append((bb, float(g["sl_trade"])))
             detects += 1
-            if confirmed:
+            if hits and not confirmed:
+                confirmed = True
+                conf_sl = min(hits)[1]             # earliest confirming badge at this appearance
                 break
         n_conf += int(confirmed)
-        trades_A.append(dict(t=et, s=int(s), e=float(e), sl=float(sl), conf=confirmed))
+        trades_A.append(dict(t=et, s=int(s), e=float(e), sl=float(sl), conf=confirmed,
+                             csl=conf_sl))
         if pi % 40 == 0:
             print("  parent %d/%d (detects %d, %.0fs)" % (pi, len(sel), detects, time.time() - t0),
                   flush=True)
@@ -105,6 +110,23 @@ def main():
         for ename, kind, val in EXITS:
             report_cell("A %s" % sub_tag, ename, subset, T1S, H1, L1, C1, kind, val, mc, day_blocks)
         print("-" * 132, flush=True)
+
+    # A2 (user 2026-09-04): same CONFIRMED trades, SL moved to the confirming 1m badge's own stop
+    # ("like the terminal's 1m badge"). Entry/time unchanged (parent close); degenerate stops
+    # (child SL on the wrong side of the parent entry) skipped + counted.
+    a2 = []
+    dropped = 0
+    for x in trades_A:
+        if not x["conf"] or x["csl"] is None:
+            continue
+        if (x["s"] > 0 and x["csl"] >= x["e"]) or (x["s"] < 0 and x["csl"] <= x["e"]):
+            dropped += 1
+            continue
+        a2.append(dict(t=x["t"], s=x["s"], e=x["e"], sl=x["csl"]))
+    print("A2 CONFIRMED with the 1m badge SL (dropped %d degenerate stops):" % dropped, flush=True)
+    for ename, kind, val in EXITS:
+        report_cell("A2 1mSL", ename, a2, T1S, H1, L1, C1, kind, val, mc, day_blocks)
+    print("-" * 132, flush=True)
 
     # ── B) full-data pullback entries, SL swapped to the parent badge SL ───────────────────
     psl = {round(f[1], 2): (f[3], f[4]) for f in f30}          # parent et -> (entry, sl)
