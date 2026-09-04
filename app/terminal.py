@@ -9615,7 +9615,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return self._c1m_mtime
         rec = self._rr_persist_load("1m")
         rows = sorted((et, int(ev.get("side", 0))) for et, ev in rec.items()
-                      if abs(et - round(et)) < 0.02 and int(round(et)) % 60 == 0)
+                      if abs(et - round(et)) < 0.02 and int(round(et)) % 60 == 0
+                      and ev.get("kind") != "wick")   # triangles only — the diamond (wick-break) was
+        #                                               never part of the tested confirmation rule
         self._c1m_ets = np.array([r[0] for r in rows], dtype=np.float64)
         self._c1m_sides = [r[1] for r in rows]
         self._c1m_mtime = mt
