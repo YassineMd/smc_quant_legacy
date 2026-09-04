@@ -40,7 +40,13 @@ def main():
     print("RADAR RUNNER 1m-CONFIRM — A) sampled confirmation screen (8+8 days) | "
           "B) full-data pullback with parent SL\n", flush=True)
 
-    f30 = json.load(open(CACHE_30))               # (b, et, side, entry, sl)
+    parent_kind = os.environ.get("RR_PARENT", "30mbkt")   # "30mbkt" | "15mclk"
+    if parent_kind == "15mclk":
+        from study.radarrun_pullback_1m import fires_15m_clock as _f15c
+        f30 = _f15c()                              # (b, et, side, entry, sl) — 15m CLOCK union
+        print("parent = 15m CLOCK union (%d badges)" % len(f30), flush=True)
+    else:
+        f30 = json.load(open(CACHE_30))           # (b, et, side, entry, sl)
     z = np.load(CLOCK_NPZ)
     T1S, H1, L1, C1 = z["t"], z["h"], z["l"], z["c"]
 
@@ -53,11 +59,14 @@ def main():
     sel = [f for f in f30 if day_of(f[1]) in set(sample_days)]
     print("parents on sampled days: %d (of %d)\n" % (len(sel), len(f30)), flush=True)
 
-    # ── A) confirmation replay inside each parent bucket's time span ───────────────────────
-    A30 = sorted(load_archive("30m", root="study/recon_archive")[1],
-                 key=lambda b: _f(b.get("start_time", 0)))
-    starts = {int(b_): _f(A30[b_].get("start_time")) for (b_, et, s, e, sl) in sel}
-    del A30
+    # ── A) confirmation replay inside each parent bar's time span ──────────────────────────
+    if parent_kind == "15mclk":
+        starts = {int(b_): et - 900.0 for (b_, et, s, e, sl) in sel}   # clock bar: span is exact
+    else:
+        A30 = sorted(load_archive("30m", root="study/recon_archive")[1],
+                     key=lambda b: _f(b.get("start_time", 0)))
+        starts = {int(b_): _f(A30[b_].get("start_time")) for (b_, et, s, e, sl) in sel}
+        del A30
     A1 = sorted(load_archive("1m", root="study/clock_archive")[1],
                 key=lambda b: _f(b.get("start_time", 0)))
     print("1m clock dicts loaded (%.0fs)" % (time.time() - t0), flush=True)
