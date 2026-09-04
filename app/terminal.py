@@ -1545,6 +1545,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_stk_cache = None                               # (sig, green bar idxs, red bar idxs) — per bar close
         self._ema_poc_items = {}                                 # 'ema_poc': per-zone POC line + tag
         self._ema_poc_cache = None                               # (sig, {band: {zone: (price, vol)}})
+        self._ema_pocl_items = []                                # 'ema_poc_line': pooled per-segment POC hline + tag
+        self._ema_pocl_cache = None                              # (sig, [(flip ai, next flip ai|None, poc)]) per close
+        self._ema_pocl_done = {}                                 # (flip t0, flip t1) -> POC of a FINISHED segment (once)
         self._ema_wmrg_items = {}                                # 'ema_walls_merge': one AREA per zone
         self._ema_wall_items = {}                                # 'ema_walls': per-zone strongest-wall band + tag
         self._ema_wall_cache = None                              # (sig, {zone: mark}) — detect once per bar close
@@ -2712,7 +2715,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
                    "ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls", "ema_walls_prev",
                    "ema_walls_line", "ema_walls_merge",
-                   "ema_poc", "ema_poc_prev"):
+                   "ema_poc", "ema_poc_prev", "ema_poc_line"):
             if key == "ema_hlread":                  # readout text only; the HL lines are unaffected
                 if not on:
                     for _it in self._ema_ext_lbls.values():
@@ -2741,6 +2744,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._ema_poc_cache = None           # zone POCs toggled -> recompute next frame
                 if not on:
                     self._hide_ema_pocs()
+            elif key == "ema_poc_line":
+                self._ema_pocl_cache = None          # per-segment POCs toggled -> recompute next frame
+                if not on:
+                    self._hide_ema_pocl()
             elif key == "ema_ext":
                 self._ema_ext_cache.clear(); self._ema_ext_lblsig.clear()   # extremes toggled -> recompute next frame
                 if not on:
@@ -2975,7 +2982,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _sc = self.menu.sub_checks     # the pin drives the Trend Extreme structure -> allow it whenever ANY of
         if not any((_sc.get(_k) is not None and _sc[_k].isChecked()) for _k in   # those layers is shown (vlines
                    ("ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls",      # need not be toggled on), user)
-                    "ema_walls_prev", "ema_walls_line", "ema_walls_merge", "ema_poc", "ema_poc_prev")):
+                    "ema_walls_prev", "ema_walls_line", "ema_walls_merge", "ema_poc", "ema_poc_prev",
+                    "ema_poc_line")):
             return False
         try:
             pt = self.vb.mapSceneToView(ev.scenePos()); xc = pt.x()
@@ -6797,6 +6805,48 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _d in self._ema_poc_items.values():
             _d["ln"].setVisible(False); _d["lbl"].setVisible(False)
 
+    def _hide_ema_pocl(self) -> None:
+        for _d in self._ema_pocl_items:
+            _d["ln"].setVisible(False); _d["lbl"].setVisible(False)
+
+    @staticmethod
+    def _ema_span_poc(ana, j0, j1):
+        """POINT OF CONTROL of the bars ana[j0..j1] (inclusive): the single most-traded price. Per-bar footprint
+        'levels' when present (buy+sell per price), else the bar's volume at its mid -- the same rule as the zone
+        POCs. Returns the price, or None when the span holds no volume."""
+        _prof = {}
+        for _j in range(max(0, int(j0)), min(len(ana), int(j1) + 1)):
+            _b = ana[_j]
+            _lv = _b.get("levels") or {}
+            if _lv:
+                for _ps, _vv in _lv.items():
+                    try:
+                        _pf = float(_ps)
+                    except (TypeError, ValueError):
+                        continue
+                    if isinstance(_vv, dict):
+                        _v = float(_vv.get("b", 0.0) or 0.0) + float(_vv.get("s", 0.0) or 0.0)
+                    elif isinstance(_vv, (list, tuple)):
+                        _v = sum(float(_q or 0.0) for _q in _vv)
+                    else:
+                        _v = float(_vv or 0.0)
+                    if _v:
+                        _prof[_pf] = _prof.get(_pf, 0.0) + abs(_v)
+            else:
+                _v = ((float(_b.get("buy_vol", 0.0) or 0.0) + float(_b.get("sell_vol", 0.0) or 0.0))
+                      or float(_b.get("volume", 0.0) or 0.0))
+                _h = float(_b.get("high", 0.0) or 0.0); _l = float(_b.get("low", 0.0) or 0.0)
+                if _v > 0 and _h > 0 and _l > 0:
+                    _pm = 0.5 * (_h + _l)
+                    _prof[_pm] = _prof.get(_pm, 0.0) + _v
+        if not _prof:
+            return None
+        _bp = None; _bv = 0.0
+        for _pf, _v in _prof.items():                     # ties -> the LOWER price (deterministic)
+            if _v > _bv or (_v == _bv and _bp is not None and _pf < _bp):
+                _bv = _v; _bp = _pf
+        return _bp
+
     def _hide_ema_walls(self) -> None:
         for _d in self._ema_wmrg_items.values():
             _d["rect"].setVisible(False); _d["lbl"].setVisible(False)
@@ -7003,15 +7053,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _pc_on = _pccb is not None and _pccb.isChecked()      # ... and the per-zone POCs
         _pcpcb = self.menu.sub_checks.get("ema_poc_prev")
         _pcp_on = _pcpcb is not None and _pcpcb.isChecked()
+        _plcb = self.menu.sub_checks.get("ema_poc_line")
+        _pl_on = _plcb is not None and _plcb.isChecked()      # 'POC per line': one POC hline per flip segment
         if ((not _stk_on and not _lvl_on and not _vp_on and not _wl_on and not _wlp_on
-             and not _pc_on and not _pcp_on and not _wmg_on and not _wln_on) or m < 51):
+             and not _pc_on and not _pcp_on and not _wmg_on and not _wln_on and not _pl_on) or m < 51):
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
             for _it3 in self._ema_lvl_items.values():
                 _it3.setVisible(False)
             for _it3 in self._ema_lvl_vl.values():
                 _it3.setVisible(False)
-            self._hide_ema_vp(); self._hide_ema_walls(); self._hide_ema_pocs()
+            self._hide_ema_vp(); self._hide_ema_walls(); self._hide_ema_pocs(); self._hide_ema_pocl()
             self._ema_flip_hits = []                       # nothing computed -> nothing to click
             return
         # ANALYSIS SERIES (user report 2026-08-28: "the algo should be able to extract previous data ... even
@@ -7052,7 +7104,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                      and (self._ema_lvl_cache is None or self._ema_lvl_cache[0] != _ssig))
                  or ((_wl_on or _wlp_on or _wmg_on or _wln_on) and self._ema_wall_cache is None)
                  or ((_pc_on or _pcp_on or _wmg_on) and self._ema_poc_cache is None)
-                 or (_vp_on and self._ema_vp_cache is None))
+                 or (_vp_on and self._ema_vp_cache is None)
+                 or (_pl_on and (self._ema_pocl_cache is None or self._ema_pocl_cache[0] != _ssig)))
         _ana = ((list(_deep) + list(_warm[len(_warm) - _wn:]) + list(buckets[:m]))
                 if _off else buckets) if _need else buckets
 
@@ -7206,6 +7259,67 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _stk_pen(pool[_j], _col2.get(int(_ai2), _rgb2), _pin2)  #   fixup below applies the fresh map
             for _pl in pool[len(_xs2):]:
                 _pl.setVisible(False)
+        # 'POC per line' (sub-toggle 'ema_poc_line', user 2026-09-04): the POINT OF CONTROL of EACH regime
+        # segment -- from a Stack-Flip vertical line to the NEXT one (the open segment runs to the live edge) --
+        # drawn as an amber hline spanning exactly that segment, tagged with its price. Same POC rule as the zone
+        # POCs (_ema_span_poc). Finished segments are profiled ONCE (keyed by their two flip times, kept across
+        # recomputes); only the OPEN segment is re-profiled at each bar close. Segments follow the DRAWN lines
+        # (a suppressed same-colour line is not a boundary). Independent of the pin.
+        if not _pl_on:
+            self._hide_ema_pocl()
+        else:
+            if self._ema_pocl_cache is None or self._ema_pocl_cache[0] != _ssig:
+                _segs = []
+                try:
+                    _fl = sorted(int(_q) for _q in (_g + _r) if int(_q) not in _hid2)
+                    _done = self._ema_pocl_done
+                    for _q, _a7 in enumerate(_fl):
+                        _b7 = _fl[_q + 1] if _q + 1 < len(_fl) else None
+                        if _b7 is not None:
+                            _k7 = (float(_ftimes.get(_a7, 0.0)), float(_ftimes.get(_b7, 0.0)))
+                            if _k7 not in _done:
+                                _done[_k7] = self._ema_span_poc(_ana, _a7, _b7 - 1)
+                            _p7 = _done[_k7]
+                        else:
+                            _p7 = self._ema_span_poc(_ana, _a7, _M - 1)
+                        if _p7 is not None:
+                            _segs.append((int(_a7), (int(_b7) if _b7 is not None else None), float(_p7)))
+                    if len(_done) > 6000:                     # bound: drop the oldest finished segments
+                        for _k7 in sorted(_done)[:len(_done) - 6000]:
+                            del _done[_k7]
+                except Exception:
+                    _segs = []
+                self._ema_pocl_cache = (_ssig, _segs)
+            _AMB7 = (250, 180, 60)
+            _vis7 = 0
+            for _a7, _b7, _p7 in self._ema_pocl_cache[1]:
+                if _b7 is not None and _b7 < _off:
+                    continue                                  # whole segment older than the window -> not drawn
+                _x07 = _fxw(_a7)                              # exact cross x (clamped at the left edge)
+                _x17 = _fxw(_b7) if _b7 is not None else float(x[n - 1])
+                if _x17 <= _x07:
+                    continue
+                if _vis7 >= len(self._ema_pocl_items):
+                    _ln7 = pg.PlotCurveItem()
+                    _pn7 = pg.mkPen(_AMB7[0], _AMB7[1], _AMB7[2], 235, width=1.4); _pn7.setCosmetic(True)
+                    _ln7.setPen(_pn7); _ln7.setZValue(15)
+                    self.plot.addItem(_ln7, ignoreBounds=True)
+                    _lb7 = pg.TextItem(anchor=(0, 0.5)); _lb7.setZValue(16)
+                    _lb7.setColor(pg.mkColor(_AMB7[0], _AMB7[1], _AMB7[2], 235))
+                    self.plot.addItem(_lb7, ignoreBounds=True)
+                    self._ema_pocl_items.append({"ln": _ln7, "lbl": _lb7, "geo": None, "txt": None})
+                _sl7 = self._ema_pocl_items[_vis7]; _vis7 += 1
+                _geo7 = (_x07, _x17, _p7)
+                if _sl7.get("geo") != _geo7:                  # setData rebuilds the path: only when it moves
+                    _sl7["ln"].setData([_x07, _x17], [_p7, _p7]); _sl7["geo"] = _geo7
+                _sl7["ln"].setVisible(True)
+                _tx7 = "POC %.2f" % _p7
+                if _sl7.get("txt") != _tx7:
+                    _sl7["lbl"].setText(_tx7); _sl7["txt"] = _tx7
+                _sl7["lbl"].setPos(_x07 + 0.4, _p7)
+                _sl7["lbl"].setVisible(True)
+            for _sl7 in self._ema_pocl_items[_vis7:]:
+                _sl7["ln"].setVisible(False); _sl7["lbl"].setVisible(False)
         # 'Trend Extreme Lines' (sub-toggle 'ema_trendlvl'): the LAST FINISHED bear segment (red line -> next
         # green line) marks its LOWEST low with a solid GREEN hline; the last finished bull segment (green ->
         # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar

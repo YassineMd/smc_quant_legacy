@@ -538,11 +538,12 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("ema_walls_merge", "Merged Lines"),     # one AREA per zone spanning that zone's walls (cheap green / eq gray / expensive red) of trends
                            ("ema_poc", "Current Band"),             # POC of each zone over the current pair of trends
                            ("ema_poc_prev", "Previous Band"),       # ... and over the preceding pair
+                           ("ema_poc_line", "POC per line"),        # amber POC hline per Stack-Flip segment: from a vertical line to the next (open one -> live edge)
                            ("ema_trendvp", "Trend Extremes VP (right)"),   # right-anchored VP over the last two FINISHED trends; amber POC + purple in-VA LVN + light-amber POCs above VAH/below VAL + dashed VAH/VAL on the band
                            ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:
             _wall_grp = key in ("ema_walls", "ema_walls_prev",   # nested one level under their own headers
-                                "ema_walls_line", "ema_walls_merge", "ema_poc", "ema_poc_prev")
+                                "ema_walls_line", "ema_walls_merge", "ema_poc", "ema_poc_prev", "ema_poc_line")
             _ema_grp = _wall_grp or key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
                                             "ema_stack", "ema_trendlvl", "ema_trendvp")
             if key == "ema20":                       # group header — the EMA entries render as indented sub-toggles
