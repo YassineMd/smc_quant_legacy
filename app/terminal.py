@@ -1517,6 +1517,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._c1m_mtime = 0.0; self._c1m_check = 0.0           # (from radarrun_fired.json, mtime-cached, ~3s re-stat)
         self._rr_fired = {}; self._rr_fired_tf = None          # PERSIST fired breakouts by bar end_time -> frozen event;
         #                                                        a confirmed breakout never un-fires when the walls re-detect
+        self._rr_causal_proc = None; self._rr_causal_job = None   # CAUSAL HISTORY backfill (app/radarrun_causal): the
+        self._rr_causal_cov = None; self._rr_causal_cov_dirty = False   # background QProcess + job meta; coverage sets per
+        self._rr_causal_last = 0.0; self._rr_causal_lbl = None    # tf|source (closes already replayed), disk-backed
         self._rr_audio_seeded = False                          # entry-sound seed: never blast the backlog on first draw / tf-switch
         self._rr_htf_sph = {}                                  # HTF Radar Runner SIGNALS (m10_radarrun_1h/_4h): per-htf ScatterPlotItem
         self._rr_htf_sig = {}; self._rr_htf_marks = {}         # cached detect() per htf, re-run only on an htf-data change
@@ -9696,32 +9699,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _rr_conviction(self, buckets, i, side) -> bool:
         """HIGH-CONVICTION flag for a Radar Runner breakout (computed ONCE, at fire time): the breakout bar's STRENGTH
         is forceful (effort z >= STR_EFFORT_HI, aligned to the break) AND the recent reward/eff (last 50, aligned)
-        favours it. ⚠ Order-flow tilt only -- lifts win% on 1h but flat on 5m/15m (study/wall_breakout_filtered.py)."""
-        try:
-            from app import reward_eff
-            up = side > 0
-            base = reward_eff.strength_baseline(buckets, i)
-            bo = 0.0
-            if base and base.get("vol"):
-                st = reward_eff.strength(buckets, i, i, base=base)
-                if st.get("ok"):
-                    bo = st["buy" if up else "sell"]["effort_z"]
-            sh, ok = reward_eff.share(buckets, i - 49, i)
-            rf = (sh if up else 100.0 - sh) if ok else 50.0
-            return bool(bo >= reward_eff.STR_EFFORT_HI and rf > 50.0)
-        except Exception:
-            return False
+        favours it. ⚠ Order-flow tilt only -- lifts win% on 1h but flat on 5m/15m (study/wall_breakout_filtered.py).
+        Logic lives in app.radarrun_causal.conviction so the causal history backfill freezes the IDENTICAL flag."""
+        from . import radarrun_causal as _rrc
+        return _rrc.conviction(buckets, i, side)
 
     def _rr_absorbed(self, buckets, i) -> bool:
         """ABSORBED-breakout flag (frozen at fire): the breakout bar's Absorption R (A) >= 0 -- it fought out through
         opposing volume, not an easy unopposed drift. ⚠ Tilt only ('avoid the easy fizzle' robust on 5m/15m, absorbed
-        clean on 5m; study/wall_breakout_absorb*.py)."""
-        try:
-            from app import absorption
-            a = absorption.absorption(buckets, i)[0]
-            return bool(a is not None and a >= 0.0)
-        except Exception:
-            return False
+        clean on 5m; study/wall_breakout_absorb*.py). Logic lives in app.radarrun_causal.absorbed (shared with the
+        causal history backfill)."""
+        from . import radarrun_causal as _rrc
+        return _rrc.absorbed(buckets, i)
 
     def _rr_sound_new(self, new_edge, hc_only, ab_only) -> None:
         """Beep the instant a NEW Radar Runner breakout freezes on the just-closed live-edge bucket. Shares the one
@@ -9800,8 +9789,246 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             cur = alld.get(tf, {}) or {}
             for et, meta in self._rr_fired.items():
                 cur[repr(float(et))] = meta                      # union; the live value wins
-            if len(cur) > 5000:
-                for _old in sorted(cur, key=lambda s: float(s))[:len(cur) - 5000]:
+            _cap = int(getattr(config, "RR_FIRED_MAX", 20000))
+            if len(cur) > _cap:
+                for _old in sorted(cur, key=lambda s: float(s))[:len(cur) - _cap]:
+                    del cur[_old]
+            alld[tf] = cur
+            tmp = p + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(alld, f)
+            os.replace(tmp, p)
+        except Exception:
+            pass
+
+    # ── CAUSAL HISTORY BACKFILL (app/radarrun_causal.py, 2026-09-04) ──────────────────────────────────────────
+    # The batch detect the chart draws from is hindsight: the wall layer re-evaluates with later bars and erases
+    # ~69% of the badges that fired at a bar's close (proven, Jul-Aug 2026 30m: 837 at-close fires, 281 survive).
+    # Live, the persist step above freezes each fire the instant it appears, so LIVE is right; history the terminal
+    # never watched live (replay, reload, other tf, terminal closed) only showed the hindsight third. Fix: replay
+    # the per-close detection over uncovered history in a lowest-priority background PROCESS and union the fires
+    # into the persisted record (drawn by the existing path). Coverage per tf|source is tracked on disk: every
+    # close is computed once, ever. Never touches the UI thread beyond a ~0.1 s pickle per job.
+    @staticmethod
+    def _rr_causal_cov_path():
+        import os
+        from . import config
+        return os.path.join(config.DATA_DIR, "radarrun_causal_cov.json")
+
+    def _rr_causal_key(self) -> str:
+        return "%s|%s" % (self._tf, getattr(self, "_chart_source", "bucket"))
+
+    def _rr_causal_cov_load(self) -> dict:
+        if self._rr_causal_cov is None:
+            self._rr_causal_cov = {}
+            try:
+                import json
+                with open(self._rr_causal_cov_path(), "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                self._rr_causal_cov = {k: set(float(x) for x in v) for k, v in (raw or {}).items()}
+            except Exception:
+                pass
+        return self._rr_causal_cov
+
+    def _rr_causal_cov_save(self) -> None:
+        """Atomic write of the coverage sets (bounded to the 60k most recent closes per key). Fail-safe."""
+        try:
+            import json, os
+            from . import config
+            config.ensure_data_dir()
+            cov = self._rr_causal_cov_load()
+            out = {}
+            for k, s in cov.items():
+                v = sorted(s)
+                out[k] = v[-60000:]
+            p = self._rr_causal_cov_path(); tmp = p + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(out, f)
+            os.replace(tmp, p)
+            self._rr_causal_cov_dirty = False
+        except Exception:
+            pass
+
+    def _rr_causal_status(self, text) -> None:
+        """Tiny bottom-left progress note (no blur, no modal): shown while a backfill job runs, hidden after."""
+        try:
+            if text is None:
+                if self._rr_causal_lbl is not None:
+                    self._rr_causal_lbl.hide()
+                return
+            if self._rr_causal_lbl is None:
+                self._rr_causal_lbl = QtWidgets.QLabel("", self)
+                self._rr_causal_lbl.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+                self._rr_causal_lbl.setStyleSheet("color:#8fa6bf; background:rgba(12,16,24,170); padding:2px 8px; "
+                                                  "border-radius:4px; font-size:11px;")
+            self._rr_causal_lbl.setText(text); self._rr_causal_lbl.adjustSize()
+            self._rr_causal_lbl.move(10, max(0, self.height() - self._rr_causal_lbl.height() - 8))
+            self._rr_causal_lbl.raise_(); self._rr_causal_lbl.show()
+        except Exception:
+            pass
+
+    def _rr_causal_cancel(self) -> None:
+        """Kill a running backfill job (tf/source switch, shutdown). Its partial work is simply redone later."""
+        proc = self._rr_causal_proc
+        self._rr_causal_proc = None; self._rr_causal_job = None
+        if proc is not None:
+            try:
+                proc.finished.disconnect()
+            except Exception:
+                pass
+            try:
+                proc.kill(); proc.waitForFinished(300)
+            except Exception:
+                pass
+        self._rr_causal_status(None)
+
+    def _rr_causal_tick(self, bset, forming: bool) -> None:
+        """Per-close hook from _draw_radarrun. (1) The frame's own detect over bars <= the last closed bar IS the
+        causal evaluation of that close -> mark it covered. (2) If closed history with >= RR_CAUSAL_MIN_WARM bars of
+        context is still uncovered, launch ONE background job over the most recent uncovered chunk."""
+        import os, sys, time as _t, pickle
+        from . import config
+        if not getattr(config, "RR_CAUSAL_ON", True):
+            return
+        key = self._rr_causal_key()
+        if self._rr_causal_job is not None and self._rr_causal_job.get("key") != key:
+            self._rr_causal_cancel()                             # tf/source changed under a running job -> drop it
+        n = len(bset)
+        last_closed = (n - 2) if forming else (n - 1)
+        if last_closed < 0:
+            return
+        cov = self._rr_causal_cov_load().setdefault(key, set())
+        et_last = float(bset[last_closed].get("end_time", 0.0) or 0.0)
+        if et_last > 0 and et_last not in cov:
+            cov.add(et_last); self._rr_causal_cov_dirty = True
+        now = _t.monotonic()
+        if self._rr_causal_cov_dirty and now - self._rr_causal_last > 30.0 and self._rr_causal_proc is None:
+            self._rr_causal_cov_save()                           # cheap debounce; also saved on every job merge
+        if self._rr_causal_proc is not None or now - self._rr_causal_last < 2.0:
+            return
+        k0 = int(getattr(config, "RR_CAUSAL_MIN_WARM", 300))
+        todo = [k for k in range(k0, last_closed) if float(bset[k].get("end_time", 0.0) or 0.0) not in cov]
+        if not todo:
+            return
+        self._rr_causal_last = now
+        chunk = int(getattr(config, "RR_CAUSAL_CHUNK", 400))
+        k_to = todo[-1]; k_from = todo[max(0, len(todo) - chunk)]   # newest uncovered span first
+        warm = int(getattr(config, "RR_CAUSAL_WARM", 2000))
+        base = max(0, k_from - warm)
+        try:
+            config.ensure_data_dir()
+            in_path = os.path.join(config.DATA_DIR, "rr_causal_in.pkl")
+            out_path = os.path.join(config.DATA_DIR, "rr_causal_out.json")
+            if os.path.exists(out_path):
+                os.remove(out_path)
+            with open(in_path, "wb") as f:
+                pickle.dump({"buckets": bset[base:k_to + 1], "warm": warm,
+                             "seen": [float(x) for x in self._rr_fired.keys()]}, f, protocol=pickle.HIGHEST_PROTOCOL)
+            proc = QtCore.QProcess()
+            proc.setProgram(sys.executable)
+            proc.setArguments(["-m", "app.radarrun_causal", in_path, out_path, str(self._tf),
+                               str(k_from - base), str(k_to - base)])
+            proc.setWorkingDirectory(config.PROJECT_DIR)
+            proc.readyReadStandardOutput.connect(self._on_rr_causal_progress)
+            proc.finished.connect(self._on_rr_causal_done)
+            proc.errorOccurred.connect(lambda _e: self._on_rr_causal_done(-1, None))
+            self._rr_causal_job = {"key": key, "tf": self._tf, "out": out_path, "base": base, "bset": bset,
+                                   "ets": [float(bset[k].get("end_time", 0.0) or 0.0) for k in range(k_from, k_to + 1)],
+                                   "n": k_to - k_from + 1, "left": len(todo) - (k_to - k_from + 1)}
+            self._rr_causal_proc = proc
+            proc.start()
+            self._rr_causal_status("Radar Runner · replaying %d closes causally (%d more pending)…"
+                                   % (self._rr_causal_job["n"], self._rr_causal_job["left"]))
+        except Exception:
+            self._rr_causal_cancel()
+
+    def _on_rr_causal_progress(self) -> None:
+        try:
+            proc = self._rr_causal_proc; job = self._rr_causal_job
+            if proc is None or job is None:
+                return
+            txt = bytes(proc.readAllStandardOutput()).decode("utf-8", "ignore")
+            for ln in txt.splitlines():
+                if ln.startswith("PROG "):
+                    k, a, b = (int(x) for x in ln.split()[1:4])
+                    self._rr_causal_status("Radar Runner · replaying closes causally %d/%d (%d more pending)…"
+                                           % (k - a + 1, b - a + 1, job["left"]))
+        except Exception:
+            pass
+
+    def _on_rr_causal_done(self, code: int = 0, status=None) -> None:
+        """Job finished: union the frozen fires (hc/absorbed/kind computed in the child with the shared helpers) into
+        the persisted record of the job's tf, mark its closes covered, repaint if that tf|source is still on screen.
+        Idempotent (finished + errorOccurred can both fire)."""
+        proc = self._rr_causal_proc; job = self._rr_causal_job
+        if proc is None or job is None:
+            return
+        self._rr_causal_proc = None; self._rr_causal_job = None
+        self._rr_causal_status(None)
+        try:
+            proc.deleteLater()
+        except Exception:
+            pass
+        if code != 0:
+            self._rr_causal_last = __import__("time").monotonic() + 60.0    # back off a minute before retrying
+            return
+        try:
+            import json, os
+            with open(job["out"], "r", encoding="utf-8") as f:
+                res = json.load(f)
+            fires = res.get("fires", []) or []
+            entries = {}
+            for r in fires:
+                et = float(r.get("et", 0.0) or 0.0)
+                if et <= 0:
+                    continue
+                entries[et] = {"side": int(r["side"]), "entry": float(r.get("entry", 0.0) or 0.0),
+                               "sl": float(r.get("sl", 0.0) or 0.0), "tp": float(r.get("tp", 0.0) or 0.0),
+                               "hc": bool(r.get("hc")), "absorbed": bool(r.get("absorbed")),
+                               "kind": r.get("kind", "run"), "bf": 1}      # bf = frozen by the causal backfill
+            same = (job["key"] == self._rr_causal_key() and self._rr_fired_tf == job["tf"])
+            if same:
+                for et, ev in entries.items():
+                    if et not in self._rr_fired:
+                        self._rr_fired[et] = ev
+                self._rr_persist_save(job["tf"])
+            else:
+                self._rr_persist_union_file(job["tf"], entries)
+            cov = self._rr_causal_cov_load().setdefault(job["key"], set())
+            cov.update(e for e in job["ets"] if e > 0)
+            self._rr_causal_cov_save()
+            try:
+                os.remove(job["out"])
+            except Exception:
+                pass
+            if same:
+                self._rr_sig = None; self._rr_drawn = False     # repaint with the recovered badges (+ next chunk)
+                self._on_timer()
+        except Exception:
+            pass
+
+    def _rr_persist_union_file(self, tf, entries: dict) -> None:
+        """Union `entries` {end_time: meta} into the on-disk record of `tf` WITHOUT touching the in-memory set of the
+        tf on screen (used when a job lands after a tf switch). Existing entries win. Fail-safe."""
+        try:
+            import json, os
+            from . import config
+            config.ensure_data_dir()
+            p = self._rr_persist_path(); alld = {}
+            if os.path.exists(p):
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        alld = json.load(f)
+                except Exception:
+                    alld = {}
+            cur = alld.get(tf, {}) or {}
+            have = set(float(k) for k in cur.keys())
+            for et, meta in entries.items():
+                if float(et) not in have:
+                    cur[repr(float(et))] = meta
+            _cap = int(getattr(config, "RR_FIRED_MAX", 20000))
+            if len(cur) > _cap:
+                for _old in sorted(cur, key=lambda s: float(s))[:len(cur) - _cap]:
                     del cur[_old]
             alld[tf] = cur
             tmp = p + ".tmp"
@@ -10036,11 +10263,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _any_new = True
                     if i == _edge_i:                              # fired on the just-closed live-edge bar (not a scroll-in)
                         _new_edge.append((int(e["side"]), self._rr_fired[et]))
-        if len(self._rr_fired) > 5000:                            # bound memory: keep the 5000 most recent
-            for _old in sorted(self._rr_fired)[:len(self._rr_fired) - 5000]:
+        _fmax = int(getattr(config, "RR_FIRED_MAX", 20000))
+        if len(self._rr_fired) > _fmax:                           # bound memory: keep the most recent RR_FIRED_MAX
+            for _old in sorted(self._rr_fired)[:len(self._rr_fired) - _fmax]:
                 del self._rr_fired[_old]
         if _any_new:                                              # a genuinely new confirmed badge -> persist to disk now
             self._rr_persist_save(self._tf)
+        try:                                                      # CAUSAL HISTORY: mark this close covered; backfill the
+            self._rr_causal_tick(_bset, _forming)                 # rest of the loaded history in a background process
+        except Exception:
+            pass
         if not self._rr_audio_seeded:                             # first population = silent seed (never blast the backlog)
             self._rr_audio_seeded = True
         else:
@@ -18123,6 +18355,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:                                   # final SYNCHRONOUS drawing save — covers a close/shutdown
             self.drawer._save_idx()            # landing inside the 400ms debounce window
             self.drawer._save()
+        except Exception:
+            pass
+        try:                                   # kill a running causal-backfill child + flush its coverage set
+            self._rr_causal_cancel()
+            if self._rr_causal_cov_dirty:
+                self._rr_causal_cov_save()
         except Exception:
             pass
         try:

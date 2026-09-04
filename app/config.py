@@ -235,6 +235,15 @@ RR_MAKER_RT = 0.0004            # maker round-trip (0.02%+0.02%) used only to sh
 RR_ACCOUNT_BALANCE = 200000.0   # prop account size; risk$ = this * RR_RISK_FRAC. Bump once FUNDED to compound risk.
 RR_RISK_FRAC = 0.004            # risk per trade = this * RR_ACCOUNT_BALANCE (0.4% = $800 on $200k) — the OPTIMAL flat risk
 RR_LEVERAGE = 10.0              # exchange leverage; sets margin = notional/leverage. Does NOT change the $ risked.
+# CAUSAL HISTORY REPLAY (app/radarrun_causal.py, 2026-09-04): the batch detect the chart draws from is NOT causal — the
+# wall layer re-evaluates with later bars and erases ~69% of at-close 30m fires at the NEXT bar. History the terminal
+# never watched live is therefore re-detected close-by-close in a lowest-priority background process and unioned into
+# the persisted fired record, so replay/reload show what the live chart showed at each bar's close.
+RR_CAUSAL_ON = True             # master switch for the background causal backfill
+RR_CAUSAL_WARM = 2000           # trailing bars each per-close detect sees (== the canonical study harness window)
+RR_CAUSAL_MIN_WARM = 300        # earliest close (index into the loaded history) that gets replayed: less context = unfaithful
+RR_CAUSAL_CHUNK = 400           # closes per background job (~0.2 s/close on 30m); results land progressively
+RR_FIRED_MAX = 20000            # persisted fires kept per tf (was 5000; the backfill needs room for 18 months of 30m)
 REHYDRATE_LIMIT = 1440          # main.py:248 — last 24h of entries per tf (legacy replay)
 SAVE_INTERVAL_SECS = 15         # main.py:286 — periodic footprint flush (legacy JSON)
 SYNC_INTERVAL_SECS = 10         # async SQLite upsert cadence (replaces JSON flush)
