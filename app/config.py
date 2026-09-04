@@ -173,6 +173,14 @@ DEPTH_RETENTION_HOURS = 72      # HARD time-based prune (governs depth_deltas + 
 DEPTH_BUFFER_CAP = 200000       # max buffered records per stream (drop-oldest) so a stalled write can't grow RAM
 TAPE_BACKFILL_SECS = 300        # Trades scanner mode: history window requested on entry (raw aggTrades from
                                 # trade_tape; ~5 min fills the table instantly without a heavy tunnel transfer)
+# Big Player Levels overlay (m10_bigplayer, user 2026-09-04): a SINGLE executed print >= BIGPLAYER_MIN_USD draws a
+# horizontal level at its price from its bar, BIGPLAYER_LINE_BARS wide, USD amount labelled at the right end.
+# Individual tape prints (aggTrade), NOT the per-level candle bubbles. Trades >= BIGPLAYER_STORE_FLOOR_USD are
+# retained so the slider can move without a re-backfill. Most recent BIGPLAYER_MAX_LINES drawn.
+BIGPLAYER_MIN_USD = 500_000.0
+BIGPLAYER_STORE_FLOOR_USD = 50_000.0
+BIGPLAYER_LINE_BARS = 20
+BIGPLAYER_MAX_LINES = 80
 DOM_VP_BACKFILL_SECS = 21600    # DOM scanner mode: executed-trade history for the ladder's Volume Profile —
                                 # 6h covers every VP window choice (5M..6H filter locally, no re-requests).
                                 # ~60-80k trades ≈ 3MB b64 one-shot on entry (well under trade_tape's 72h)

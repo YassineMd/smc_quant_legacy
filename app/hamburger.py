@@ -106,6 +106,7 @@ _M10_LAYERS = [
 
 # "Indicator" — structure / zones / separators.
 _M10_INDICATORS = [
+    ("m10_bigplayer", "Big Player Levels (single print ≥ $500K)", False, True),   # tape prints, NOT bubbles: level line + $ at right end
     ("m10_crazywall", "Wall Absorption", False, True),   # ALL tf: opposite-side volume bubble absorbed+rejected at a wall; Crazy(✪ outlier) + Big(★ non-crazy) sub-tiers, green(support)/red(resistance)
     ("m10_engulf1m", "Absorption Candle indicator", False, True),   # ALL tf: absorption-tiered losanges (cyan/magenta engulf |A|>=2, blue/orange same-side pair, green/red engulf |A|>=1)
     ("m10_sr", "Support & Resistance", False, True),      # neon-blue support / neon-red resistance (pivot fractals)
@@ -283,6 +284,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     rewardStrengthChanged = QtCore.Signal(float)     # Reward-switch zones min-strength filter (0..70)
     bubbleVolChanged = QtCore.Signal(float)          # Heatmap trade-bubble min volume filter (SOL; 0 = show all)
     bubbleMinUsdChanged = QtCore.Signal(float)       # Candle-Bubbles MIN SIZE filter (USD/level; 0 = show all)
+    bigPlayerMinUsdChanged = QtCore.Signal(float)    # Big Player Levels: single-print USD threshold
     keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
     candleModeChanged = QtCore.Signal(int)   # candle render mode 0..5 (also cycled by 'W')
     vpModeChanged = QtCore.Signal(int)       # volume-profile render mode 0..8 (selection VP + 4h 'V' + prev-day VP)
@@ -595,6 +597,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_swing_slider(sec)            # sensitivity slider directly under its toggle
             if key == "m10_bubbles":
                 self._build_bubble_min_slider(sec)       # MIN SIZE (USD) filter directly under Candle Bubbles
+            if key == "m10_bigplayer":
+                self._build_bigplayer_slider(sec)        # single-print USD threshold under Big Player Levels
             if key == "m10_absorblvl":
                 self._build_wallfloor_slider(sec)        # strength draw floor directly under the Walls toggle
                 self._build_wall_regime_subtoggle(sec)   # bottom-right Wall Regime table on/off
@@ -1026,6 +1030,59 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.bubmin_slider.blockSignals(False)
         usd2 = self.bubble_min_usd()
         self.bubmin_lbl.setText("ALL" if usd2 <= 0 else "≥ " + self._bub_fmt_usd(usd2))
+
+    _BP_USD_LO, _BP_USD_HI = 50_000.0, 10_000_000.0  # Big Player threshold log domain ($50K .. $10M)
+
+    def _build_bigplayer_slider(self, section) -> None:
+        """Threshold slider under 'Big Player Levels' (user 2026-09-04): a SINGLE tape print counts as a big
+        player when its USD value (price x qty) is >= this. Log $50K..$10M, default $500K (the user's
+        definition). Display filter over the retained >= $50K prints — no re-backfill on change."""
+        from . import config
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QHBoxLayout(w)
+        lay.setContentsMargins(26, 1, 8, 5)
+        lay.setSpacing(8)
+        cap = QtWidgets.QLabel("MIN PRINT")
+        cap.setStyleSheet("color:#7a8496; font-family:Consolas; font-size:9px; font-weight:bold;"
+                          "letter-spacing:1px; background:transparent;")
+        lay.addWidget(cap)
+        self.bp_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.bp_slider.setRange(0, 1000)
+        self.bp_slider.setFixedWidth(150)
+        self.bp_slider.setStyleSheet("""
+            QSlider { border:none; background:transparent; }
+            QSlider::groove:horizontal { height:4px; border-radius:2px; background:#1d2632; }
+            QSlider::sub-page:horizontal { height:4px; border-radius:2px;
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #2ebd85, stop:1 #f0b90b); }
+            QSlider::handle:horizontal { width:14px; height:14px; margin:-5px 0; border-radius:8px;
+                background:#e6ecf4; border:2px solid #f0b90b; }
+        """)
+        lay.addWidget(self.bp_slider)
+        self.bp_lbl = QtWidgets.QLabel()
+        self.bp_lbl.setStyleSheet("color:#f0b90b; font-family:Consolas; font-size:10px;"
+                                  "font-weight:bold; background:transparent;")
+        lay.addWidget(self.bp_lbl)
+        lay.addStretch(1)
+        section.addWidget(w)
+        self.set_big_player_min_usd(config.BIGPLAYER_MIN_USD)   # default = the user's $500K definition
+        self.bp_slider.valueChanged.connect(self._on_bp_slider)
+
+    def _on_bp_slider(self, _v: int) -> None:
+        self.bp_lbl.setText("≥ " + self._bub_fmt_usd(self.big_player_min_usd()))
+        self.bigPlayerMinUsdChanged.emit(self.big_player_min_usd())
+
+    def big_player_min_usd(self) -> float:
+        t = self.bp_slider.value() / 1000.0
+        return 10.0 ** (math.log10(self._BP_USD_LO) + t * (math.log10(self._BP_USD_HI) - math.log10(self._BP_USD_LO)))
+
+    def set_big_player_min_usd(self, usd: float) -> None:
+        c = max(self._BP_USD_LO, min(self._BP_USD_HI, float(usd or self._BP_USD_LO)))
+        t = ((math.log10(c) - math.log10(self._BP_USD_LO))
+             / (math.log10(self._BP_USD_HI) - math.log10(self._BP_USD_LO)))
+        self.bp_slider.blockSignals(True)
+        self.bp_slider.setValue(int(round(t * 1000)))
+        self.bp_slider.blockSignals(False)
+        self.bp_lbl.setText("≥ " + self._bub_fmt_usd(self.big_player_min_usd()))
 
     def _build_wallfloor_slider(self, section) -> None:
         """Slider under 'Order-Flow Walls': hide walls whose STRENGTH (ejection) is below the value. Pure display

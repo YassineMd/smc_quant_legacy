@@ -25,6 +25,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections import deque
 from datetime import datetime
 from typing import List, Optional
 
@@ -1506,6 +1507,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._rr_entries = []
         self._rr_ln_pool = []; self._rr_lnlbl_pool = []; self._rr_lines_user = {}
         self._rr_size_lbl = None                               # OPTIMAL position-size readout at the entry line (one active bracket)
+        self._bp_trades = deque(maxlen=20000)                   # Big Player Levels: (ts_s, price, usd, side) prints >= store floor
+        self._bp_live_t0 = 0.0                                  # first LIVE print ts (window rows dedupe against it)
+        self._bp_sub_t = 0.0; self._bp_need_backfill = True     # tape subscription re-arm clock / backfill pending
+        self._bp_conn_was = True
+        self._bp_buy = None; self._bp_sell = None; self._bp_lbls = []   # plot items (lazy)
+        self._bp_sig = None
         self._c1m_ets = None; self._c1m_sides = None           # '1m confirm' sub-toggle: sorted 1m-clock fire times/sides
         self._c1m_mtime = 0.0; self._c1m_check = 0.0           # (from radarrun_fired.json, mtime-cached, ~3s re-stat)
         self._rr_fired = {}; self._rr_fired_tf = None          # PERSIST fired breakouts by bar end_time -> frozen event;
@@ -1946,6 +1953,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.set_swing_pct(self._swing_pct)   # sync the swing slider to the restored/default sensitivity
         self.menu.set_wall_floor(self._wall_floor)  # sync the wall-strength floor slider to the restored/default value
         self.menu.set_bubble_min_usd(getattr(self, "_bub_min_saved", 0.0))   # Candle-Bubbles MIN SIZE restore
+        if getattr(self, "_bp_min_saved", 0.0) > 0:
+            self.menu.set_big_player_min_usd(self._bp_min_saved)           # Big Player threshold restore
         self.menu.set_reward_strength(self._reward_strength)  # sync the reward-switch strength slider likewise
         self.menu.set_bubble_vol(self.hm_bubble_min)  # sync the heatmap bubble-volume slider to the restored/default value
         self.menu.set_kc_scale(self._kc_scale)     # sync the Keltner-scale slider to the restored/default value
@@ -2186,6 +2195,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.rewardStrengthChanged.connect(self._on_reward_strength)        # Reward-switch zones min-strength filter
         self.menu.bubbleVolChanged.connect(self._on_bubble_vol)                  # Heatmap trade-bubble min-volume filter
         self.menu.bubbleMinUsdChanged.connect(lambda _v: self._save_ui_state())  # Candle-Bubbles MIN SIZE (repaint is per-frame)
+        self.menu.bigPlayerMinUsdChanged.connect(self._on_bigplayer_min)          # Big Player threshold -> redraw + persist
         self.menu.hm_contrast.changed.connect(self._hm_contrast_changed)         # Heatmap Liquidity-Contrast cutoffs (hamburger-hosted)
         self.menu.hm_contrast.reset_clicked.connect(self._hm_contrast_reset)     # Heatmap 'Reset -> auto'
         self.menu.keltnerScaleChanged.connect(self._on_kc_scale)   # 1m-KC smooth-approx effective-TF scale slider
@@ -2565,6 +2575,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._ez_sig = None; self._sel_sig = None    # 1h Easy 0.5% toggled -> re-run the overlay draw
             if not on:
                 self._clear_easy1h()                # off -> tear the triangles down now
+        elif key == "m10_bigplayer":
+            self._bp_sig = None; self._sel_sig = None    # Big Player Levels toggled
+            if on:
+                self._bp_need_backfill = True            # (re)subscribe + 6h backfill on the next frame
+            else:
+                self._clear_bigplayer()
+                if self.scanner_mode not in ("dom", "trades"):
+                    self.worker.stop_depth_window()      # release the tape pushes (DOM/Trades own theirs)
         elif key == "m10_radarrun":
             self._rr_sig = None; self._sel_sig = None    # Radar Runner MASTER toggled -> re-detect + redraw
             if not on:                                   # off -> tear badges + forming preview + HTF sub-overlays down NOW
@@ -8447,6 +8465,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "bub_vol": self._bub_vol,                                 # 'b' cycle stage-2: bubbles + volume value
                 "bub_crazy_only": self._bub_crazy_only,                   # 'b' cycle stage-3: only the crazy bubbles
                 "bub_min_usd": float(self.menu.bubble_min_usd()),         # Candle-Bubbles MIN SIZE (USD/level)
+                "bigplayer_min_usd": float(self.menu.big_player_min_usd()),   # Big Player single-print threshold
             }
             # EVERY hamburger toggle (Sub-Widgets + Mode 10 Overlays), keyed by its menu key, so a reopened
             # session restores the exact menu the user left (POC, footprint, alerts, … all sticky).
@@ -8550,6 +8569,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._bub_vol = bool(s.get("bub_vol", self._bub_vol))   # 'b' cycle stage-2: bubbles + volume value
         self._bub_crazy_only = bool(s.get("bub_crazy_only", self._bub_crazy_only))   # 'b' cycle stage-3: only crazy
         self._bub_min_saved = float(s.get("bub_min_usd", 0.0) or 0.0)     # Candle-Bubbles MIN SIZE, applied post-menu
+        self._bp_min_saved = float(s.get("bigplayer_min_usd", 0.0) or 0.0)   # Big Player threshold (0 = config default)
 
     def _set_ob_ice(self, on: bool) -> None:
         """Flip the Order Blocks + Absorption/Iceberg menu checkboxes together (emits layerToggled -> show/hide)."""
@@ -9521,6 +9541,115 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # validated edge (study/wall_breakout_*). Pentagon L/S badge in the breakout direction at the breakout bar; click ->
     # entry (white) / SL = opposite radar extreme (red) / tiered TP1/TP2/TP3 = broken extreme +/- N*radar-length (greens).
     # Best on 1h/15m (1m/5m sub-fee). NOT yet live-proven — recon-only (see app/radar_breakout_detect docstring).
+    # ------------------------------------------------------------------------------------------
+    # BIG PLAYER LEVELS (m10_bigplayer, user 2026-09-04): a SINGLE executed tape print >= the threshold
+    # (default $500K) draws a horizontal level at its price, from its bar, BIGPLAYER_LINE_BARS wide, the
+    # USD amount at the RIGHT end. Individual aggTrade prints off the live tape feed -- NOT the per-level
+    # candle bubbles. Feed = the DOM/Trades mechanism (degenerate depth_window subscribe + 6h window
+    # backfill), drained every frame; prints >= BIGPLAYER_STORE_FLOOR_USD retained so the slider filters
+    # without re-fetching. Green = taker buy, red = taker sell.
+    # ------------------------------------------------------------------------------------------
+    def _on_bigplayer_min(self, _usd: float) -> None:
+        self._bp_sig = None; self._sel_sig = None                # threshold moved -> redraw from the retained prints
+        self._save_ui_state()
+
+    def _bp_subscribe(self, backfill: bool) -> None:
+        t1 = int(time.time() * 1000)
+        self.worker.request_depth_window(t1 - 1000, t1, 1, 0.0, 1e9, 1)
+        if backfill:
+            self.worker.request_trades_window(t1 - int(config.DOM_VP_BACKFILL_SECS) * 1000, t1, 0.0, 1e9)
+        self._bp_sub_t = time.time()
+
+    def _bp_feed(self) -> None:
+        """Per-frame: keep the tape subscription armed, drain the worker's trade buffers, keep big prints."""
+        conn = bool(self.worker.connected)
+        if (conn and not self._bp_conn_was) or (conn and self._bp_need_backfill):
+            self._bp_trades.clear(); self._bp_live_t0 = 0.0     # reconnect / first enable -> clean re-backfill
+            self._bp_subscribe(backfill=True)
+            self._bp_need_backfill = False
+        self._bp_conn_was = conn
+        if conn and time.time() - self._bp_sub_t > 10.0:
+            self._bp_subscribe(backfill=False)                  # subscription is per-connection: re-arm
+        _tv, tws, tbatches = self.worker.trades_state()
+        floor = config.BIGPLAYER_STORE_FLOOR_USD
+        changed = False
+        for tbp in tbatches:
+            ts, pr, qt, sd = decode_trades(tbp.ts_b64, tbp.price_b64, tbp.qty_b64, tbp.side_b64)
+            for i in range(len(ts)):
+                t = float(ts[i]) / 1000.0
+                if self._bp_live_t0 == 0.0:
+                    if self._bp_trades and t <= self._bp_trades[-1][0]:
+                        continue                                # <=1-pulse overlap with a window that landed first
+                    self._bp_live_t0 = t
+                usd = float(pr[i]) * float(qt[i])
+                if usd >= floor:
+                    self._bp_trades.append((t, float(pr[i]), usd, int(sd[i]))); changed = True
+        for tw in (tws or ()):
+            ts, pr, qt, sd = decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64)
+            cut = self._bp_live_t0 or float("inf")
+            older = [(float(ts[i]) / 1000.0, float(pr[i]), float(pr[i]) * float(qt[i]), int(sd[i]))
+                     for i in range(len(ts)) if float(ts[i]) / 1000.0 < cut and float(pr[i]) * float(qt[i]) >= floor]
+            if older:
+                live = [r for r in self._bp_trades if r[0] >= cut]
+                self._bp_trades.clear(); self._bp_trades.extend(older); self._bp_trades.extend(live)
+                changed = True
+        if changed:
+            self._bp_sig = None                                 # new prints -> redraw on the next overlay pass
+
+    def _draw_bigplayer(self, filtered) -> None:
+        if (not self.menu.layer_state("m10_bigplayer") or self.scanner_mode != "bucket_canvas"
+                or self._hide_candles):
+            self._clear_bigplayer(); return
+        n = len(filtered)
+        thr = float(self.menu.big_player_min_usd())
+        last_t = self._bp_trades[-1][0] if self._bp_trades else 0.0
+        _sig = (n, len(self._bp_trades), last_t, thr, self._tf,
+                float(filtered[-1].get("end_time", 0.0) or 0.0) if n else 0.0)
+        if _sig == self._bp_sig:
+            return
+        self._bp_sig = _sig
+        if self._bp_buy is None:
+            self._bp_buy = pg.PlotCurveItem(pen=pg.mkPen((40, 230, 120, 220), width=2), connect="pairs")
+            self._bp_sell = pg.PlotCurveItem(pen=pg.mkPen((240, 70, 90, 220), width=2), connect="pairs")
+            for _it in (self._bp_buy, self._bp_sell):
+                _it.setZValue(31); self.plot.addItem(_it, ignoreBounds=True)
+        if not n or not self._bp_trades:
+            self._bp_buy.setData([], []); self._bp_sell.setData([], [])
+            for _l in self._bp_lbls:
+                _l.setVisible(False)
+            return
+        from .trades_tape import _fmt_usd
+        ets = np.array([float(b.get("end_time", 0.0) or 0.0) for b in filtered])
+        L = int(config.BIGPLAYER_LINE_BARS)
+        rows = [r for r in self._bp_trades if r[2] >= thr and ets[0] > 0 and r[0] <= ets[-1] + 1e-6]
+        rows = rows[-int(config.BIGPLAYER_MAX_LINES):]
+        bx = []; by = []; sx = []; sy = []; labels = []
+        for (t, price, usd, side) in rows:
+            i = int(np.searchsorted(ets, t))                    # the bar whose end >= the print time
+            if i >= n:
+                continue
+            x0, x1 = float(i), float(i + L)
+            (bx if side > 0 else sx).extend([x0, x1]); (by if side > 0 else sy).extend([price, price])
+            labels.append((x1, price, _fmt_usd(usd), side))
+        self._bp_buy.setData(bx, by); self._bp_sell.setData(sx, sy)
+        while len(self._bp_lbls) < len(labels):
+            _t = pg.TextItem(anchor=(0, 0.5)); _t.setZValue(32); self.plot.addItem(_t, ignoreBounds=True)
+            self._bp_lbls.append(_t)
+        for k, _l in enumerate(self._bp_lbls):
+            if k < len(labels):
+                x1, price, txt, side = labels[k]
+                _l.setText(txt, color=(40, 230, 120) if side > 0 else (240, 70, 90))
+                _l.setPos(x1, price); _l.setVisible(True)
+            else:
+                _l.setVisible(False)
+
+    def _clear_bigplayer(self) -> None:
+        if self._bp_buy is not None:
+            self._bp_buy.setData([], []); self._bp_sell.setData([], [])
+        for _l in self._bp_lbls:
+            _l.setVisible(False)
+        self._bp_sig = None
+
     def _clear_radarrun(self) -> None:
         if self._rr_sph is not None:
             self._rr_sph.setVisible(False)
@@ -12363,7 +12492,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     or self.menu.layer_state("m10_easy1h") or self.menu.layer_state("m10_crazywall")
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")
                     or self.menu.layer_state("m10_wallstrat") or self.menu.layer_state("m10_radarrun")
-                    or self.menu.layer_state("m10_kcovershoot")
+                    or self.menu.layer_state("m10_kcovershoot") or self.menu.layer_state("m10_bigplayer")
                     or self.menu.layer_state("m10_wallsurge") or self.menu.layer_state("m10_longwick")
                     or self.menu.layer_state("m10_longwick_combo") or self.menu.layer_state("m10_longwick_reclaim")):
                 _pf = _pf0                          # already built above; the top gate decided this frame needs a redraw
@@ -12387,6 +12516,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_radarrun(_pf or [])  # Radar Runner (5m/15m/1h) — self-gated, fail-safe
                 except Exception:
                     self._clear_radarrun()
+                try:
+                    self._draw_bigplayer(_pf or [])  # Big Player Levels (tape prints) — self-gated, fail-safe
+                except Exception:
+                    self._clear_bigplayer()
                 try:
                     self._draw_radarrun_forming(_pf or [])  # forming-bar PROVISIONAL preview — self-gated, fail-safe
                 except Exception:
@@ -12523,6 +12656,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._draw_radarrun(filtered)  # Radar Runner (5m/15m/1h) — self-gated, fail-safe
             except Exception:
                 self._clear_radarrun()
+            try:
+                self._draw_bigplayer(filtered)  # Big Player Levels (tape prints) — self-gated, fail-safe
+            except Exception:
+                self._clear_bigplayer()
             try:
                 self._draw_radarrun_forming(filtered)  # forming-bar PROVISIONAL preview — self-gated, fail-safe
             except Exception:
@@ -14744,6 +14881,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self.scanner_mode == "dom":
             self._scan_dom()             # DOM ladder + VP, its own widget — bypass the bucket pipeline
             return
+        if self.menu.layer_state("m10_bigplayer"):
+            try:
+                self._bp_feed()          # Big Player Levels: keep the tape feed armed + drained every frame
+            except Exception:
+                pass
         snap = self._last_snap or self.worker.snapshot()
         closed = snap.get("closed_buckets", []) or []
         active = snap.get("active_bucket") or {}
