@@ -7509,12 +7509,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if _sl7.get("geo") != _geo7:              # setData rebuilds the path: only when it moves
                         _sl7["ln"].setData([_x07, _x17], [_p7, _p7]); _sl7["geo"] = _geo7
                     _sl7["ln"].setVisible(True)
-                    # ZONE STEPS: one faint rect per step, from the step's candle (its left edge) to the next step
-                    for _i7, (_j7, _zlo7, _zhi7) in enumerate(_st7):
-                        _sx0 = _x07 if (_i7 == 0 and int(_j7) <= _a7) else max(_x07, _wx(int(_j7)) - 0.5)
-                        _sx1 = (max(_x07, _wx(int(_st7[_i7 + 1][0])) - 0.5)) if _i7 + 1 < len(_st7) else _zx17
+                    # ZONE: ONE faint rect over the whole band = the FINAL / most recent shape (the last crossing
+                    # candle's body). The step history is computed but not drawn (user 2026-09-04: no evolution).
+                    for (_j7, _zlo7, _zhi7) in _st7[-1:]:
+                        _sx0 = _x07; _sx1 = _zx17
                         if _sx1 <= _sx0 or _zhi7 <= _zlo7:
-                            continue                          # older than the window / degenerate -> nothing to draw
+                            continue                          # degenerate -> nothing to draw
                         if _rv7 >= len(self._ema_pocl_rects):
                             _rc7 = QtWidgets.QGraphicsRectItem(); _rc7.setPen(pg.mkPen(None)); _rc7.setZValue(-6)
                             self.vb.addItem(_rc7, ignoreBounds=True)
@@ -7576,9 +7576,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if _sl8.get("geo") != _geo8:
                         _sl8["ln"].setData([_xc0, _xc1], [_p8, _p8]); _sl8["geo"] = _geo8
                     _sl8["ln"].setVisible(True)
-                    for _i8, (_j8, _zlo8, _zhi8) in enumerate(_st8):
-                        _sx0 = _xc0 if (_i8 == 0 and int(_j8) <= _ac) else max(_xc0, _wx(int(_j8)) - 0.5)
-                        _sx1 = (max(_xc0, _wx(int(_st8[_i8 + 1][0])) - 0.5)) if _i8 + 1 < len(_st8) else _xc1
+                    for (_j8, _zlo8, _zhi8) in _st8[-1:]:     # ONE rect = the final shape (no evolution)
+                        _sx0 = _xc0; _sx1 = _xc1
                         if _sx1 <= _sx0 or _zhi8 <= _zlo8:
                             continue
                         if _rc >= len(self._ema_poclc_rects):
