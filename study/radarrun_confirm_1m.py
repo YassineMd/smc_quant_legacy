@@ -23,7 +23,8 @@ from study.radarrun_pullback_1m import (_f, resolve, report_cell, CACHE_30, W1, 
 from study.radarrun_pullback_1mbkt_ema import CLOCK_NPZ, cor_cache, select_trades
 
 SEED = int(os.environ.get("RR_SEED", "20260904"))   # override for fresh replication draws
-N_DAYS = 8
+N_DAYS = int(os.environ.get("RR_NDAYS", "8"))       # sampled days per year
+NY_ONLY = bool(os.environ.get("RR_NY"))             # keep only fires in the NY session 13-21 UTC
 CONF_CAP = 600                    # max 1m closes replayed per parent bucket (10h; buckets are ~30m)
 CACHE_TR1 = os.path.join(OUT, "rr_pullback_trades.json")
 
@@ -51,12 +52,19 @@ def main():
     T1S, H1, L1, C1 = z["t"], z["h"], z["l"], z["c"]
 
     # ── day sampling (seeded, pre-registered) ──────────────────────────────────────────────
-    days_by_year = {2025: sorted({day_of(f[1]) for f in f30 if day_of(f[1])[:4] == "2025"}),
-                    2026: sorted({day_of(f[1]) for f in f30 if day_of(f[1])[:4] == "2026"})}
+    def _eligible(d):
+        if not NY_ONLY:
+            return True                            # crypto trades 7d; only the NY cut is weekday-only
+        return datetime.strptime(d, "%Y-%m-%d").weekday() < 5   # a weekend "NY session" isn't one
+    days_by_year = {2025: sorted({d for f in f30 if (d := day_of(f[1]))[:4] == "2025" and _eligible(d)}),
+                    2026: sorted({d for f in f30 if (d := day_of(f[1]))[:4] == "2026" and _eligible(d)})}
     rng = random.Random(SEED)
     sample_days = sorted(rng.sample(days_by_year[2025], N_DAYS) + rng.sample(days_by_year[2026], N_DAYS))
     print("sampled days: %s" % ", ".join(sample_days), flush=True)
     sel = [f for f in f30 if day_of(f[1]) in set(sample_days)]
+    if NY_ONLY:                                     # NY session = 13:00-21:00 UTC (project standard)
+        sel = [f for f in sel if 13 * 3600 <= (f[1] % 86400) < 21 * 3600]
+        print("NY-session filter ON (13-21 UTC)", flush=True)
     print("parents on sampled days: %d (of %d)\n" % (len(sel), len(f30)), flush=True)
 
     # ── A) confirmation replay inside each parent bar's time span ──────────────────────────
@@ -71,6 +79,14 @@ def main():
                 key=lambda b: _f(b.get("start_time", 0)))
     print("1m clock dicts loaded (%.0fs)" % (time.time() - t0), flush=True)
 
+    # 1m EMA20 (causal, continuous over the whole clock series) — gates the CONFIRMING candle when
+    # RR_C1EMA is set: long confirm must CLOSE above its own EMA20, short below (user 2026-09-04).
+    ema20 = np.empty(len(C1))
+    ema20[0] = C1[0]
+    a20 = 2.0 / 21.0
+    for _i in range(1, len(C1)):
+        ema20[_i] = a20 * C1[_i] + (1.0 - a20) * ema20[_i - 1]
+
     trades_A = []
     n_conf = 0
     detects = 0
@@ -79,6 +95,7 @@ def main():
         j0 = int(np.searchsorted(T1S, st - 0.5))
         confirmed = False
         conf_sl = None                             # the FIRST confirming 1m badge's own sl_trade
+        conf_ema = None                            # that badge's close-vs-EMA20 side agreement
         seen = set()
         for j in range(j0, min(len(T1S), j0 + CONF_CAP)):
             if T1S[j] + 60.0 > et + 1e-6:          # 1m bar must CLOSE by the parent's close (causal)
@@ -97,11 +114,13 @@ def main():
             detects += 1
             if hits and not confirmed:
                 confirmed = True
-                conf_sl = min(hits)[1]             # earliest confirming badge at this appearance
+                bb0, conf_sl = min(hits)           # earliest confirming badge at this appearance
+                conf_ema = bool((s > 0 and C1[bb0] > ema20[bb0])
+                                or (s < 0 and C1[bb0] < ema20[bb0]))
                 break
         n_conf += int(confirmed)
         trades_A.append(dict(t=et, s=int(s), e=float(e), sl=float(sl), conf=confirmed,
-                             csl=conf_sl))
+                             csl=conf_sl, cema=conf_ema))
         if pi % 40 == 0:
             print("  parent %d/%d (detects %d, %.0fs)" % (pi, len(sel), detects, time.time() - t0),
                   flush=True)
@@ -112,9 +131,13 @@ def main():
     print("=" * 132, flush=True)
     print("A) CONFIRMATION SCREEN — 30m bucket badge bracket (parent entry+SL), SAMPLED %d days "
           "(SEED %d) — noise band ~±0.15%%/trade at this n" % (2 * N_DAYS, SEED), flush=True)
-    for sub_tag, selr in (("ALL", lambda x: True),
-                          ("CONFIRMED", lambda x: x["conf"]),
-                          ("UNCONF", lambda x: not x["conf"])):
+    groups = [("ALL", lambda x: True),
+              ("CONFIRMED", lambda x: x["conf"]),
+              ("UNCONF", lambda x: not x["conf"])]
+    if os.environ.get("RR_C1EMA"):                 # split the confirmed set by the 1m EMA20 side gate
+        groups[2:2] = [("C+EMA-OK", lambda x: x["conf"] and x["cema"] is True),
+                       ("C+EMA-NO", lambda x: x["conf"] and x["cema"] is False)]
+    for sub_tag, selr in groups:
         subset = [x for x in trades_A if selr(x)]
         for ename, kind, val in EXITS:
             report_cell("A %s" % sub_tag, ename, subset, T1S, H1, L1, C1, kind, val, mc, day_blocks)
