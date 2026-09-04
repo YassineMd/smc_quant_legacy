@@ -9622,12 +9622,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         ets = np.array([float(b.get("end_time", 0.0) or 0.0) for b in filtered])
         L = int(config.BIGPLAYER_LINE_BARS)
         rows = [r for r in self._bp_trades if r[2] >= thr and ets[0] > 0 and r[0] <= ets[-1] + 1e-6]
-        rows = rows[-int(config.BIGPLAYER_MAX_LINES):]
-        bx = []; by = []; sx = []; sy = []; labels = []
+        # MERGE (user 2026-09-04): several big prints on the SAME bar at the SAME price, same side
+        # (a buyer and a seller at one level are opposite players) -> ONE level, amounts summed.
+        merged = {}                                             # (bar, price, side) -> summed usd
         for (t, price, usd, side) in rows:
             i = int(np.searchsorted(ets, t))                    # the bar whose end >= the print time
             if i >= n:
                 continue
+            key = (i, round(price, 4), int(side > 0))
+            merged[key] = merged.get(key, 0.0) + usd
+        levels = sorted(merged.items())[-int(config.BIGPLAYER_MAX_LINES):]   # most recent bars last
+        bx = []; by = []; sx = []; sy = []; labels = []
+        for (i, price, side), usd in levels:
             x0, x1 = float(i), float(i + L)
             (bx if side > 0 else sx).extend([x0, x1]); (by if side > 0 else sy).extend([price, price])
             labels.append((x1, price, _fmt_usd(usd), side))
