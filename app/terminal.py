@@ -1547,7 +1547,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_stk_frm_ln = None                              # its dotted vline (lazy)
         self._ema_poc_items = {}                                 # 'ema_poc': per-zone POC line + tag
         self._ema_poc_cache = None                               # (sig, {band: {zone: (price, vol)}})
-        self._ema_pocl_items = []                                # 'ema_poc_line': pooled per-segment POC hline + tag
+        self._ema_pocl_items = []                                # 'ema_poc_line': pooled per-segment POC hlines
+        self._ema_pocl_rects = []                                # ... and their ZONE STEP rects (evolution bands)
         self._ema_pocl_cache = None                              # (sig, [(flip ai, next flip ai|None, poc)]) per close
         self._ema_pocl_done = {}                                 # (flip t0, flip t1) -> POC of a FINISHED segment (once)
         self._ema_wmrg_items = {}                                # 'ema_walls_merge': one AREA per zone
@@ -6812,8 +6813,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _hide_ema_pocl(self) -> None:
         for _d in self._ema_pocl_items:
             _d["ln"].setVisible(False)
-            if _d.get("rect") is not None:
-                _d["rect"].setVisible(False)
+        for _d in self._ema_pocl_rects:
+            _d["rect"].setVisible(False)
 
     @staticmethod
     def _ema_span_vp(ana, j0, j1, nb=40):
@@ -6922,6 +6923,37 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     break
             out.append((p, kind, zlo, zhi))
         return out
+
+    @staticmethod
+    def _ema_zone_steps(ana, price, j0, j1):
+        """EVOLUTION of a POC zone over ana[j0..j1] (user 2026-09-04: "see how it evolved into its final shape").
+        Step 0 = the zone as it stood at j0 (the last candle body crossing `price` at or before j0); then a NEW step
+        at every later bar whose body crosses the price (the zone becomes that body from that bar on). Returns
+        [(bar, zlo, zhi)] in time order -- the last entry is the final / most recent shape. Empty when no candle
+        body ever crossed the price."""
+        n = len(ana)
+        if n == 0:
+            return []
+        j0 = max(0, min(n - 1, int(j0))); j1 = max(j0, min(n - 1, int(j1)))
+
+        def _body(j):
+            b = ana[j]
+            o = float(b.get("open", b.get("open_price", 0.0)) or 0.0)
+            c = float(b.get("close", b.get("close_price", 0.0)) or 0.0)
+            if o <= 0 or c <= 0:
+                return None
+            return (o, c) if o <= c else (c, o)
+        steps = []
+        for j in range(j0, -1, -1):                       # the zone carried INTO the segment
+            bd = _body(j)
+            if bd is not None and bd[0] <= price <= bd[1]:
+                steps.append((j0, bd[0], bd[1]))
+                break
+        for j in range(j0 + 1, j1 + 1):                   # every later crossing reshapes it
+            bd = _body(j)
+            if bd is not None and bd[0] <= price <= bd[1]:
+                steps.append((j, bd[0], bd[1]))
+        return steps
 
     def _hide_ema_walls(self) -> None:
         for _d in self._ema_wmrg_items.values():
@@ -7416,9 +7448,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     # recent drawn segment (the previous trend) from the NEWEST closed bar instead, so it keeps
                     # updating while the current/forming trend runs even though the level belongs to the previous
                     # trend. Cheap (the scan stops at the first crossing), so it is redone at every bar close.
+                    # EVOLUTION (user 2026-09-04): not one rectangle but the STEPS the zone went through --
+                    # step 0 = the zone as it stood at the line, a new step at every later crossing candle.
                     for _q, (_a7, _b7, _mk7) in enumerate(_segs):
                         _j7 = (_M - 1) if _q == len(_segs) - 1 else (int(_b7) - 1)
-                        _segs[_q] = (_a7, _b7, self._ema_mark_zones(_ana, _j7, _mk7))
+                        _segs[_q] = (_a7, _b7, [(_m[0], _m[1],
+                                                 (self._ema_zone_steps(_ana, _m[0], _a7, _j7)
+                                                  if _m[1] in ("poc", "poc_hi", "poc_lo") else []))
+                                                for _m in _mk7])
                     if len(_done) > 6000:                     # bound: drop the oldest
                         for _k7 in sorted(_done)[:len(_done) - 6000]:
                             del _done[_k7]
@@ -7429,42 +7466,54 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                      "poc_hi": ((250, 205, 120, 200), 1.1, "POC▲"),     # light amber     = POC above the VAH
                      "poc_lo": ((250, 205, 120, 200), 1.1, "POC▼"),     # light amber     = POC below the VAL
                      "lvn": ((178, 70, 255, 225), 1.2, "LVN")}          # electric purple = in-VA low-volume node
-            _vis7 = 0
-            for _a7, _b7, _mk7 in self._ema_pocl_cache[1]:
+            _vis7 = 0; _rv7 = 0
+            _segs7 = self._ema_pocl_cache[1]
+            for _q7, (_a7, _b7, _mk7) in enumerate(_segs7):
                 if _b7 is not None and _b7 < _off:
                     continue                                  # whole segment older than the window -> not drawn
                 _x07 = _fxw(_a7)                              # exact cross x (clamped at the left edge)
                 _x17 = _fxw(_b7) if _b7 is not None else float(x[n - 1])
                 if _x17 <= _x07:
                     continue
+                # the previous trend's ZONE runs on through the current trend (it keeps updating there); its LINE stops
+                _zx17 = float(x[n - 1]) if _q7 == len(_segs7) - 1 else _x17
                 for _m7 in _mk7:                              # NO text tags (user 2026-09-04): colour says which
                     _p7, _kd7 = _m7[0], _m7[1]
-                    _zlo7, _zhi7 = (_m7[2], _m7[3]) if len(_m7) >= 4 else (None, None)
+                    _st7 = _m7[2] if (len(_m7) >= 3 and isinstance(_m7[2], list)) else []
                     _rgba7, _w7, _tag7 = _STY7.get(_kd7, _STY7["poc"])
                     if _vis7 >= len(self._ema_pocl_items):
                         _ln7 = pg.PlotCurveItem(); _ln7.setZValue(15)
                         self.plot.addItem(_ln7, ignoreBounds=True)
-                        _rc7 = QtWidgets.QGraphicsRectItem(); _rc7.setPen(pg.mkPen(None)); _rc7.setZValue(-6)
-                        self.vb.addItem(_rc7, ignoreBounds=True)   # ZONE: the crossing candle's BODY, behind candles
-                        self._ema_pocl_items.append({"ln": _ln7, "rect": _rc7, "geo": None, "zgeo": None, "kind": None})
+                        self._ema_pocl_items.append({"ln": _ln7, "geo": None, "kind": None})
                     _sl7 = self._ema_pocl_items[_vis7]; _vis7 += 1
                     if _sl7.get("kind") != _kd7:              # re-pen only when the pooled slot changes role
                         _pn7 = pg.mkPen(_rgba7[0], _rgba7[1], _rgba7[2], _rgba7[3], width=_w7); _pn7.setCosmetic(True)
                         _sl7["ln"].setPen(_pn7); _sl7["kind"] = _kd7
-                        _sl7["rect"].setBrush(pg.mkBrush(_rgba7[0], _rgba7[1], _rgba7[2], 34))   # faint (user: lower)
                     _geo7 = (_x07, _x17, _p7)
                     if _sl7.get("geo") != _geo7:              # setData rebuilds the path: only when it moves
                         _sl7["ln"].setData([_x07, _x17], [_p7, _p7]); _sl7["geo"] = _geo7
                     _sl7["ln"].setVisible(True)
-                    if _zlo7 is not None and _zhi7 is not None and _zhi7 > _zlo7:
-                        _zg7 = (_x07, _x17, _zlo7, _zhi7)
-                        if _sl7.get("zgeo") != _zg7:
-                            _sl7["rect"].setRect(_x07, _zlo7, max(1e-9, _x17 - _x07), _zhi7 - _zlo7); _sl7["zgeo"] = _zg7
-                        _sl7["rect"].setVisible(True)
-                    else:
-                        _sl7["rect"].setVisible(False)        # no candle body ever crossed this price -> line only
+                    # ZONE STEPS: one faint rect per step, from the step's candle (its left edge) to the next step
+                    for _i7, (_j7, _zlo7, _zhi7) in enumerate(_st7):
+                        _sx0 = _x07 if (_i7 == 0 and int(_j7) <= _a7) else max(_x07, _wx(int(_j7)) - 0.5)
+                        _sx1 = (max(_x07, _wx(int(_st7[_i7 + 1][0])) - 0.5)) if _i7 + 1 < len(_st7) else _zx17
+                        if _sx1 <= _sx0 or _zhi7 <= _zlo7:
+                            continue                          # older than the window / degenerate -> nothing to draw
+                        if _rv7 >= len(self._ema_pocl_rects):
+                            _rc7 = QtWidgets.QGraphicsRectItem(); _rc7.setPen(pg.mkPen(None)); _rc7.setZValue(-6)
+                            self.vb.addItem(_rc7, ignoreBounds=True)
+                            self._ema_pocl_rects.append({"rect": _rc7, "geo": None, "kind": None})
+                        _rs7 = self._ema_pocl_rects[_rv7]; _rv7 += 1
+                        if _rs7.get("kind") != _kd7:
+                            _rs7["rect"].setBrush(pg.mkBrush(_rgba7[0], _rgba7[1], _rgba7[2], 34)); _rs7["kind"] = _kd7
+                        _zg7 = (_sx0, _sx1, _zlo7, _zhi7)
+                        if _rs7.get("geo") != _zg7:
+                            _rs7["rect"].setRect(_sx0, _zlo7, max(1e-9, _sx1 - _sx0), _zhi7 - _zlo7); _rs7["geo"] = _zg7
+                        _rs7["rect"].setVisible(True)
             for _sl7 in self._ema_pocl_items[_vis7:]:
-                _sl7["ln"].setVisible(False); _sl7["rect"].setVisible(False)
+                _sl7["ln"].setVisible(False)
+            for _rs7 in self._ema_pocl_rects[_rv7:]:
+                _rs7["rect"].setVisible(False)
         # 'Trend Extreme Lines' (sub-toggle 'ema_trendlvl'): the LAST FINISHED bear segment (red line -> next
         # green line) marks its LOWEST low with a solid GREEN hline; the last finished bull segment (green ->
         # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar
