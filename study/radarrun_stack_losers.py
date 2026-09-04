@@ -17,6 +17,10 @@ from app import bigprint_store
 bigprint_store.CACHE_FLOOR_USD = BP_USD
 ZONE = {0: "beyond-dn", 1: "cheap", 2: "equilib", 3: "expensive", 4: "beyond-up", 5: "inverted", -1: "n/a"}
 LOCAL = timedelta(hours=1)                         # user's clock (UTC+1)
+H24 = bool(os.environ.get("RR_24H"))               # RR_24H=1 -> the 24h/7d run (study/radarrun_stack_full24h.py)
+F_RECON = "rr_confirm_full24h_trades.json" if H24 else "rr_confirm_full_trades.json"
+F_OOS = "rr_confirm_daemon_oos24h_trades.json" if H24 else "rr_confirm_daemon_oos_trades.json"
+F_CSV = "rr_stack_losers_24h.csv" if H24 else "rr_stack_losers.csv"
 
 
 def fmt(t, local=False):
@@ -24,12 +28,17 @@ def fmt(t, local=False):
     return d.strftime("%Y-%m-%d %H:%M")
 
 
+def ny_weekday(et):
+    d = datetime.fromtimestamp(et, tz=timezone.utc)
+    return d.weekday() < 5 and 13 * 3600 <= (et % 86400) < 21 * 3600
+
+
 def main():
     from study.archive_loader import load_archive
     stack = CELLS[4][1]
     rows = []
     # ---- recon
-    tr = json.load(open(os.path.join(OUT, "rr_confirm_full_trades.json")))
+    tr = json.load(open(os.path.join(OUT, F_RECON)))
     f30 = json.load(open(CACHE_30))
     A30 = sorted(load_archive("30m", root="study/recon_archive")[1], key=lambda b: _f(b.get("start_time", 0)))
     span = {round(et, 2): (_f(A30[b].get("start_time")), et) for (b, et, s, e, sl) in f30}
@@ -38,7 +47,7 @@ def main():
     z = np.load(CLOCK_NPZ)
     arr_r = (z["t"], z["h"], z["l"], z["c"])
     # ---- daemon OOS
-    trd = json.load(open(os.path.join(OUT, "rr_confirm_daemon_oos_trades.json")))
+    trd = json.load(open(os.path.join(OUT, F_OOS)))
     fd = json.load(open(CACHE_D30))
     A30d = sorted(load_archive("30m", drop_degenerate=True)[1], key=lambda b: _f(b.get("start_time", 0)))
     A30d = [b for b in A30d if _f(b.get("start_time")) < SEP1]
@@ -70,27 +79,30 @@ def main():
             opp = sorted((p for p in prints if p[3] == opp_side), key=lambda p: -p[2])
             tp = x["e"] * (1 + x["s"] * 1.5 * risk)
             outcome = "SL" if net < -risk * 0.9 else ("TP" if net > 0 else "EOD/other")
+            net02, _ = resolve(x["s"], x["e"], x["sl"], x["t"], "fix", 0.0024, T1S, H1, L1, C1)   # same trade, 0.2% exit (info)
             rows.append(dict(period=period, badge_utc=fmt(x["t"]), badge_local=fmt(x["t"], True),
-                             bucket_start_utc=fmt(st), side="LONG" if x["s"] > 0 else "SHORT",
+                             bucket_start_utc=fmt(st), ny_weekday=int(ny_weekday(x["t"])),
+                             side="LONG" if x["s"] > 0 else "SHORT",
                              entry=round(x["e"], 2), sl=round(x["sl"], 2), tp15=round(tp, 2),
                              risk_pct=round(risk * 100, 3), net_pct=round(net * 100, 3), outcome=outcome,
+                             net02_pct=round(net02 * 100, 3),
                              exit_utc=fmt(tx), confirm_zone=ZONE.get(int(x.get("cz", -1)), "n/a"),
                              whales=len(opp),
                              top_whale="$%.0fK @ %.2f %s" % (opp[0][2] / 1e3, opp[0][1], fmt(opp[0][0])[11:]) if opp else ""))
-    path = os.path.join(OUT, "rr_stack_losers.csv")
+    path = os.path.join(OUT, F_CSV)
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader(); w.writerows(rows)
     n = len(rows); nl = sum(1 for r in rows if r["net_pct"] < -0.02); nw = sum(1 for r in rows if r["net_pct"] > 0.02)
-    print("STACK @ RR1:1.5 — taken %d | winners %d | losers %d | avg %+.3f%%  (all rows -> %s)\n"
-          % (n, nw, nl, sum(r["net_pct"] for r in rows) / max(1, n), path))
-    print("%-7s %-16s %-16s %-5s %8s %8s %8s %7s %-9s %-10s %s" % (
-        "period", "badge UTC", "badge local+1", "side", "entry", "SL", "TP1.5", "net%", "outcome", "zone", "top opposing whale"))
+    print("STACK @ RR1:1.5 (%s) — taken %d | winners %d | losers %d | avg %+.3f%%  (all rows -> %s)\n"
+          % ("24h/7d" if H24 else "weekday NY", n, nw, nl, sum(r["net_pct"] for r in rows) / max(1, n), path))
+    print("%-7s %-16s %-16s %-3s %-5s %8s %8s %8s %7s %7s %-10s %s" % (
+        "period", "badge UTC", "badge local+1", "NY", "side", "entry", "SL", "TP1.5", "net%", "net0.2%", "zone", "top opposing whale"))
     for r in rows:
         if r["net_pct"] < -0.02:
-            print("%-7s %-16s %-16s %-5s %8.2f %8.2f %8.2f %+7.3f %-9s %-10s %s" % (
-                r["period"], r["badge_utc"], r["badge_local"], r["side"], r["entry"], r["sl"], r["tp15"],
-                r["net_pct"], r["outcome"], r["confirm_zone"], r["top_whale"]))
+            print("%-7s %-16s %-16s %-3s %-5s %8.2f %8.2f %8.2f %+7.3f %+7.3f %-10s %s" % (
+                r["period"], r["badge_utc"], r["badge_local"], "NY" if r["ny_weekday"] else "-", r["side"],
+                r["entry"], r["sl"], r["tp15"], r["net_pct"], r["net02_pct"], r["confirm_zone"], r["top_whale"]))
 
 
 if __name__ == "__main__":
