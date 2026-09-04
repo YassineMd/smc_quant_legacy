@@ -1549,6 +1549,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_poc_cache = None                               # (sig, {band: {zone: (price, vol)}})
         self._ema_pocl_items = []                                # 'ema_poc_line': pooled per-segment POC hlines
         self._ema_pocl_rects = []                                # ... and their ZONE STEP rects (evolution bands)
+        self._ema_poclc_items = []; self._ema_poclc_rects = []   # 'ema_poc_line_cur': CURRENT-trend marks (dashed) + zones
+        self._ema_poclc_cache = None                             # (sig, start ai, [(price, kind, steps)]) per close
         self._ema_pocl_cache = None                              # (sig, [(flip ai, next flip ai|None, poc)]) per close
         self._ema_pocl_done = {}                                 # (flip t0, flip t1) -> POC of a FINISHED segment (once)
         self._ema_wmrg_items = {}                                # 'ema_walls_merge': one AREA per zone
@@ -2718,7 +2720,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
                    "ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls", "ema_walls_prev",
                    "ema_walls_line", "ema_walls_merge",
-                   "ema_poc", "ema_poc_prev", "ema_poc_line"):
+                   "ema_poc", "ema_poc_prev", "ema_poc_line", "ema_poc_line_cur"):
             if key == "ema_hlread":                  # readout text only; the HL lines are unaffected
                 if not on:
                     for _it in self._ema_ext_lbls.values():
@@ -2753,6 +2755,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._ema_pocl_cache = None          # per-segment POCs toggled -> recompute next frame
                 if not on:
                     self._hide_ema_pocl()
+            elif key == "ema_poc_line_cur":
+                self._ema_poclc_cache = None         # current-trend marks toggled -> recompute next frame
+                if not on:
+                    self._hide_ema_poclc()
             elif key == "ema_ext":
                 self._ema_ext_cache.clear(); self._ema_ext_lblsig.clear()   # extremes toggled -> recompute next frame
                 if not on:
@@ -2988,7 +2994,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not any((_sc.get(_k) is not None and _sc[_k].isChecked()) for _k in   # those layers is shown (vlines
                    ("ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls",      # need not be toggled on), user)
                     "ema_walls_prev", "ema_walls_line", "ema_walls_merge", "ema_poc", "ema_poc_prev",
-                    "ema_poc_line")):
+                    "ema_poc_line", "ema_poc_line_cur")):
             return False
         try:
             pt = self.vb.mapSceneToView(ev.scenePos()); xc = pt.x()
@@ -6816,6 +6822,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _d in self._ema_pocl_rects:
             _d["rect"].setVisible(False)
 
+    def _hide_ema_poclc(self) -> None:
+        for _d in self._ema_poclc_items:
+            _d["ln"].setVisible(False)
+        for _d in self._ema_poclc_rects:
+            _d["rect"].setVisible(False)
+
     @staticmethod
     def _ema_span_vp(ana, j0, j1, nb=40):
         """Volume-profile MARKS of the bars ana[j0..j1] (inclusive) -- the EXACT Trend-Extremes-VP rule: `nb`
@@ -7163,8 +7175,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _pcp_on = _pcpcb is not None and _pcpcb.isChecked()
         _plcb = self.menu.sub_checks.get("ema_poc_line")
         _pl_on = _plcb is not None and _plcb.isChecked()      # 'POC per line': one POC hline per flip segment
+        _plccb = self.menu.sub_checks.get("ema_poc_line_cur")
+        _plc_on = _plccb is not None and _plccb.isChecked()   # 'Current trend': the marks of the CURRENT trend only
         if ((not _stk_on and not _lvl_on and not _vp_on and not _wl_on and not _wlp_on
-             and not _pc_on and not _pcp_on and not _wmg_on and not _wln_on and not _pl_on) or m < 51):
+             and not _pc_on and not _pcp_on and not _wmg_on and not _wln_on and not _pl_on and not _plc_on) or m < 51):
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
             for _it3 in self._ema_lvl_items.values():
@@ -7172,6 +7186,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _it3 in self._ema_lvl_vl.values():
                 _it3.setVisible(False)
             self._hide_ema_vp(); self._hide_ema_walls(); self._hide_ema_pocs(); self._hide_ema_pocl()
+            self._hide_ema_poclc()
             if self._ema_stk_frm_ln is not None:
                 self._ema_stk_frm_ln.setVisible(False)
             self._ema_flip_hits = []                       # nothing computed -> nothing to click
@@ -7215,7 +7230,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                  or ((_wl_on or _wlp_on or _wmg_on or _wln_on) and self._ema_wall_cache is None)
                  or ((_pc_on or _pcp_on or _wmg_on) and self._ema_poc_cache is None)
                  or (_vp_on and self._ema_vp_cache is None)
-                 or (_pl_on and (self._ema_pocl_cache is None or self._ema_pocl_cache[0] != _ssig)))
+                 or (_pl_on and (self._ema_pocl_cache is None or self._ema_pocl_cache[0] != _ssig))
+                 or (_plc_on and (self._ema_poclc_cache is None or self._ema_poclc_cache[0] != _ssig)))
         _ana = ((list(_deep) + list(_warm[len(_warm) - _wn:]) + list(buckets[:m]))
                 if _off else buckets) if _need else buckets
 
@@ -7370,7 +7386,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _pin2 = bool(self._ema_pin_t) and abs(
                     float(_ftimes.get(int(_ai2), 0.0)) - float(self._ema_pin_t)) < 0.5
                 pool[_j].setValue(float(_xi))
-                pool[_j].setVisible(_stk_on or _pl_on or _pin2)      # toggle off -> only the pinned line shows;
+                pool[_j].setVisible(_stk_on or _pl_on or _plc_on or _pin2)   # toggle off -> only the pinned line shows;
                 #                                                      'POC per line' ON -> its boundary lines show
                 #                                                      (user 2026-09-04: the current trend's vline)
                 pool[_j]._ema_pinned = _pin2                          # pinned -> SOLID, otherwise dashed
@@ -7389,7 +7405,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._ema_stk_frm_ln = pg.InfiniteLine(angle=90, movable=False, pen=_pnf)
             self._ema_stk_frm_ln.setZValue(13)
             self.plot.addItem(self._ema_stk_frm_ln, ignoreBounds=True)
-        if (_stk_on or _pl_on) and _frm is not None and int(_frm[0]) >= _off:
+        if (_stk_on or _pl_on or _plc_on) and _frm is not None and int(_frm[0]) >= _off:
             _rgbf = (40, 230, 120) if _frm[1] == "g" else (240, 70, 90)
             if getattr(self._ema_stk_frm_ln, "_ema_pen_key", None) != _rgbf:
                 _pnf = pg.mkPen(color=(_rgbf[0], _rgbf[1], _rgbf[2], 130), width=1); _pnf.setCosmetic(True)
@@ -7514,6 +7530,72 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _sl7["ln"].setVisible(False)
             for _rs7 in self._ema_pocl_rects[_rv7:]:
                 _rs7["rect"].setVisible(False)
+        # 'Current trend' (sub-toggle 'ema_poc_line_cur', user 2026-09-04): the SAME four marks, profiled over ONLY
+        # the current/forming trend -- from its start (the forming cross when one exists, else the newest drawn
+        # vertical line) to the last CLOSED candle -- drawn DASHED from that start to the live edge and re-profiled
+        # at every close (this profile grows with the trend). POC zones = the same stepped evolution over that span.
+        if not _plc_on:
+            self._hide_ema_poclc()
+        else:
+            if self._ema_poclc_cache is None or self._ema_poclc_cache[0] != _ssig:
+                _ac = None; _mkc = []
+                try:
+                    _flc = [int(_q) for _q in sorted(int(_i8) for _i8 in (_g + _r)) if int(_q) not in _hid2]
+                    _frmc = getattr(self, "_ema_stk_forming", None)
+                    if _frmc is not None and (not _flc or int(_frmc[0]) > _flc[-1]):
+                        _ac = int(_frmc[0])
+                    elif _flc:
+                        _ac = _flc[-1]
+                    if _ac is not None and _M - 1 > _ac:
+                        _mkc = [(_p8, _kd8, (self._ema_zone_steps(_ana, _p8, _ac, _M - 1)
+                                             if _kd8 in ("poc", "poc_hi", "poc_lo") else []))
+                                for _p8, _kd8 in self._ema_span_vp(_ana, _ac, _M - 1)]
+                except Exception:
+                    _ac = None; _mkc = []
+                self._ema_poclc_cache = (_ssig, _ac, _mkc)
+            _, _ac, _mkc = self._ema_poclc_cache
+            _STYC = {"poc": ((250, 180, 60, 235), 1.4), "poc_hi": ((250, 205, 120, 200), 1.1),
+                     "poc_lo": ((250, 205, 120, 200), 1.1), "lvn": ((178, 70, 255, 225), 1.2)}
+            _vc = 0; _rc = 0
+            if _ac is not None and _mkc:
+                _xc0 = _fxw(_ac); _xc1 = float(x[n - 1])
+                for _p8, _kd8, _st8 in _mkc:
+                    if _xc1 <= _xc0:
+                        break
+                    _rgba8, _w8 = _STYC.get(_kd8, _STYC["poc"])
+                    if _vc >= len(self._ema_poclc_items):
+                        _ln8 = pg.PlotCurveItem(); _ln8.setZValue(15)
+                        self.plot.addItem(_ln8, ignoreBounds=True)
+                        self._ema_poclc_items.append({"ln": _ln8, "geo": None, "kind": None})
+                    _sl8 = self._ema_poclc_items[_vc]; _vc += 1
+                    if _sl8.get("kind") != _kd8:
+                        _pn8 = pg.mkPen(_rgba8[0], _rgba8[1], _rgba8[2], _rgba8[3], width=_w8); _pn8.setCosmetic(True)
+                        _pn8.setDashPattern([6.0, 4.0])       # DASHED = live, re-profiled every close
+                        _sl8["ln"].setPen(_pn8); _sl8["kind"] = _kd8
+                    _geo8 = (_xc0, _xc1, _p8)
+                    if _sl8.get("geo") != _geo8:
+                        _sl8["ln"].setData([_xc0, _xc1], [_p8, _p8]); _sl8["geo"] = _geo8
+                    _sl8["ln"].setVisible(True)
+                    for _i8, (_j8, _zlo8, _zhi8) in enumerate(_st8):
+                        _sx0 = _xc0 if (_i8 == 0 and int(_j8) <= _ac) else max(_xc0, _wx(int(_j8)) - 0.5)
+                        _sx1 = (max(_xc0, _wx(int(_st8[_i8 + 1][0])) - 0.5)) if _i8 + 1 < len(_st8) else _xc1
+                        if _sx1 <= _sx0 or _zhi8 <= _zlo8:
+                            continue
+                        if _rc >= len(self._ema_poclc_rects):
+                            _rc8 = QtWidgets.QGraphicsRectItem(); _rc8.setPen(pg.mkPen(None)); _rc8.setZValue(-6)
+                            self.vb.addItem(_rc8, ignoreBounds=True)
+                            self._ema_poclc_rects.append({"rect": _rc8, "geo": None, "kind": None})
+                        _rs8 = self._ema_poclc_rects[_rc]; _rc += 1
+                        if _rs8.get("kind") != _kd8:
+                            _rs8["rect"].setBrush(pg.mkBrush(_rgba8[0], _rgba8[1], _rgba8[2], 34)); _rs8["kind"] = _kd8
+                        _zg8 = (_sx0, _sx1, _zlo8, _zhi8)
+                        if _rs8.get("geo") != _zg8:
+                            _rs8["rect"].setRect(_sx0, _zlo8, max(1e-9, _sx1 - _sx0), _zhi8 - _zlo8); _rs8["geo"] = _zg8
+                        _rs8["rect"].setVisible(True)
+            for _sl8 in self._ema_poclc_items[_vc:]:
+                _sl8["ln"].setVisible(False)
+            for _rs8 in self._ema_poclc_rects[_rc:]:
+                _rs8["rect"].setVisible(False)
         # 'Trend Extreme Lines' (sub-toggle 'ema_trendlvl'): the LAST FINISHED bear segment (red line -> next
         # green line) marks its LOWEST low with a solid GREEN hline; the last finished bull segment (green ->
         # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar
