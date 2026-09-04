@@ -7460,14 +7460,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         if _done[_k7]:
                             _segs.append((int(_a7), int(_b7), list(_done[_k7])))
                     # ZONES (user 2026-09-04): POC marks only -- the LVN stays a line. Zone = the BODY of the LAST
-                    # candle whose body crossed the price, searched BACK from the segment's last bar; for the most
-                    # recent drawn segment (the previous trend) from the NEWEST closed bar instead, so it keeps
-                    # updating while the current/forming trend runs even though the level belongs to the previous
-                    # trend. Cheap (the scan stops at the first crossing), so it is redone at every bar close.
-                    # EVOLUTION (user 2026-09-04): not one rectangle but the STEPS the zone went through --
-                    # step 0 = the zone as it stood at the line, a new step at every later crossing candle.
+                    # candle whose body crossed the price, searched BACK from the segment's OWN last bar -- every
+                    # segment, the previous trend included: a zone is frozen when its trend ends and never reshaped
+                    # by the current/forming trend's candles (user 2026-09-04, dropped). Only the final shape is
+                    # drawn (the step history is computed, not shown).
                     for _q, (_a7, _b7, _mk7) in enumerate(_segs):
-                        _j7 = (_M - 1) if _q == len(_segs) - 1 else (int(_b7) - 1)
+                        _j7 = int(_b7) - 1
                         _segs[_q] = (_a7, _b7, [(_m[0], _m[1],
                                                  (self._ema_zone_steps(_ana, _m[0], _a7, _j7)
                                                   if _m[1] in ("poc", "poc_hi", "poc_lo") else []))
@@ -7491,8 +7489,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _x17 = _fxw(_b7) if _b7 is not None else float(x[n - 1])
                 if _x17 <= _x07:
                     continue
-                # the previous trend's ZONE runs on through the current trend (it keeps updating there); its LINE stops
-                _zx17 = float(x[n - 1]) if _q7 == len(_segs7) - 1 else _x17
+                _zx17 = _x17                                  # the zone spans exactly what its line spans
                 for _m7 in _mk7:                              # NO text tags (user 2026-09-04): colour says which
                     _p7, _kd7 = _m7[0], _m7[1]
                     _st7 = _m7[2] if (len(_m7) >= 3 and isinstance(_m7[2], list)) else []
