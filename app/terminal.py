@@ -9543,11 +9543,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # Best on 1h/15m (1m/5m sub-fee). NOT yet live-proven — recon-only (see app/radar_breakout_detect docstring).
     # ------------------------------------------------------------------------------------------
     # BIG PLAYER LEVELS (m10_bigplayer, user 2026-09-04): a SINGLE executed tape print >= the threshold
-    # (default $500K) draws a horizontal level at its price, from its bar, BIGPLAYER_LINE_BARS wide, the
-    # USD amount at the RIGHT end. Individual aggTrade prints off the live tape feed -- NOT the per-level
-    # candle bubbles. Feed = the DOM/Trades mechanism (degenerate depth_window subscribe + 6h window
-    # backfill), drained every frame; prints >= BIGPLAYER_STORE_FLOOR_USD retained so the slider filters
-    # without re-fetching. Green = taker buy, red = taker sell.
+    # (default $500K) draws a BUBBLE at its bar + price, diameter growing with the print's USD size, the
+    # amount centred on it; same bar + price + side prints merge into one summed bubble. Individual
+    # aggTrade prints off the live tape feed -- NOT the per-level candle bubbles. Feed = the DOM/Trades
+    # mechanism (degenerate depth_window subscribe + 6h window backfill), drained every frame; prints
+    # >= BIGPLAYER_STORE_FLOOR_USD retained so the slider filters without re-fetching; bars older than
+    # the live store read study/bigprint_archive (replay). Green = taker buy, red = taker sell.
     # ------------------------------------------------------------------------------------------
     def _on_bigplayer_min(self, _usd: float) -> None:
         self._bp_sig = None; self._sel_sig = None                # threshold moved -> redraw from the retained prints
@@ -9608,19 +9609,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if _sig == self._bp_sig:
             return
         self._bp_sig = _sig
-        if self._bp_buy is None:
-            self._bp_buy = pg.PlotCurveItem(pen=pg.mkPen((40, 230, 120, 220), width=2), connect="pairs")
-            self._bp_sell = pg.PlotCurveItem(pen=pg.mkPen((240, 70, 90, 220), width=2), connect="pairs")
+        if self._bp_buy is None:                                # BUBBLES (user 2026-09-04: was fixed-width lines)
+            self._bp_buy = pg.ScatterPlotItem(pxMode=True, symbol="o", pen=pg.mkPen((40, 230, 120, 235), width=1.5),
+                                              brush=pg.mkBrush(40, 230, 120, 120))
+            self._bp_sell = pg.ScatterPlotItem(pxMode=True, symbol="o", pen=pg.mkPen((240, 70, 90, 235), width=1.5),
+                                               brush=pg.mkBrush(240, 70, 90, 120))
             for _it in (self._bp_buy, self._bp_sell):
                 _it.setZValue(31); self.plot.addItem(_it, ignoreBounds=True)
         if not n:
-            self._bp_buy.setData([], []); self._bp_sell.setData([], [])
+            self._bp_buy.setData(x=[], y=[]); self._bp_sell.setData(x=[], y=[])
             for _l in self._bp_lbls:
                 _l.setVisible(False)
             return
         from .trades_tape import _fmt_usd
         ets = np.array([float(b.get("end_time", 0.0) or 0.0) for b in filtered])
-        L = int(config.BIGPLAYER_LINE_BARS)
         rows = [r for r in self._bp_trades if r[2] >= thr and ets[0] > 0 and r[0] <= ets[-1] + 1e-6]
         # REPLAY / deep history: bars older than the live tape store (6h backfill) come from the big-print
         # ARCHIVE (study/bigprint_archive, Binance dumps). Archive rows strictly BEFORE the live store's
@@ -9640,26 +9642,37 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             key = (i, round(price, 4), int(side > 0))
             merged[key] = merged.get(key, 0.0) + usd
         levels = sorted(merged.items())[-int(config.BIGPLAYER_MAX_LINES):]   # most recent bars last
-        bx = []; by = []; sx = []; sy = []; labels = []
+        bx = []; by = []; bs = []; sx = []; sy = []; ss = []; labels = []
         for (i, price, side), usd in levels:
-            x0, x1 = float(i), float(i + L)
-            (bx if side > 0 else sx).extend([x0, x1]); (by if side > 0 else sy).extend([price, price])
-            labels.append((x1, price, _fmt_usd(usd), side))
-        self._bp_buy.setData(bx, by); self._bp_sell.setData(sx, sy)
+            px = self._bp_bubble_px(usd, thr)                  # radius grows with the print's USD size
+            if side > 0:
+                bx.append(float(i)); by.append(price); bs.append(px)
+            else:
+                sx.append(float(i)); sy.append(price); ss.append(px)
+            labels.append((float(i), price, _fmt_usd(usd)))
+        self._bp_buy.setData(x=bx, y=by, size=bs); self._bp_sell.setData(x=sx, y=sy, size=ss)
         while len(self._bp_lbls) < len(labels):
-            _t = pg.TextItem(anchor=(0, 0.5)); _t.setZValue(32); self.plot.addItem(_t, ignoreBounds=True)
+            _t = pg.TextItem(anchor=(0.5, 0.5)); _t.setZValue(32); self.plot.addItem(_t, ignoreBounds=True)
             self._bp_lbls.append(_t)
         for k, _l in enumerate(self._bp_lbls):
             if k < len(labels):
-                x1, price, txt, side = labels[k]
-                _l.setText(txt, color=(40, 230, 120) if side > 0 else (240, 70, 90))
-                _l.setPos(x1, price); _l.setVisible(True)
+                x, price, txt = labels[k]
+                _l.setText(txt, color=(240, 244, 250))         # amount centred on the bubble
+                _l.setPos(x, price); _l.setVisible(True)
             else:
                 _l.setVisible(False)
 
+    @staticmethod
+    def _bp_bubble_px(usd: float, thr: float) -> float:
+        """Bubble diameter in px: the threshold print is the smallest bubble, growing with log(size) —
+        $500K -> 12px, $1M -> ~19px, $5M -> ~34px, capped at 46px so a mega-print never hides the chart."""
+        import math
+        r = 12.0 + 22.0 * math.log10(max(usd, thr) / max(thr, 1.0))
+        return max(10.0, min(46.0, r))
+
     def _clear_bigplayer(self) -> None:
         if self._bp_buy is not None:
-            self._bp_buy.setData([], []); self._bp_sell.setData([], [])
+            self._bp_buy.setData(x=[], y=[]); self._bp_sell.setData(x=[], y=[])
         for _l in self._bp_lbls:
             _l.setVisible(False)
         self._bp_sig = None
