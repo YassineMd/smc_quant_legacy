@@ -7335,7 +7335,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _pin2 = bool(self._ema_pin_t) and abs(
                     float(_ftimes.get(int(_ai2), 0.0)) - float(self._ema_pin_t)) < 0.5
                 pool[_j].setValue(float(_xi))
-                pool[_j].setVisible(_stk_on or _pin2)                # toggle off -> only the pinned line shows
+                pool[_j].setVisible(_stk_on or _pl_on or _pin2)      # toggle off -> only the pinned line shows;
+                #                                                      'POC per line' ON -> its boundary lines show
+                #                                                      (user 2026-09-04: the current trend's vline)
                 pool[_j]._ema_pinned = _pin2                          # pinned -> SOLID, otherwise dashed
                 _col2 = getattr(self, "_ema_flip_col", None) or {}     # colour by BIAS (green/red/gray),
                 _stk_pen(pool[_j], _col2.get(int(_ai2), _rgb2), _pin2)  #   fixup below applies the fresh map
@@ -7352,7 +7354,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._ema_stk_frm_ln = pg.InfiniteLine(angle=90, movable=False, pen=_pnf)
             self._ema_stk_frm_ln.setZValue(13)
             self.plot.addItem(self._ema_stk_frm_ln, ignoreBounds=True)
-        if _stk_on and _frm is not None and int(_frm[0]) >= _off:
+        if (_stk_on or _pl_on) and _frm is not None and int(_frm[0]) >= _off:
             _rgbf = (40, 230, 120) if _frm[1] == "g" else (240, 70, 90)
             if getattr(self._ema_stk_frm_ln, "_ema_pen_key", None) != _rgbf:
                 _pnf = pg.mkPen(color=(_rgbf[0], _rgbf[1], _rgbf[2], 130), width=1); _pnf.setCosmetic(True)
