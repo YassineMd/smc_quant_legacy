@@ -7538,12 +7538,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hide_ema_poclc()
         else:
             if self._ema_poclc_cache is None or self._ema_poclc_cache[0] != _ssig:
-                _ac = None; _mkc = []
+                _ac = None; _mkc = []; _acf = False
                 try:
                     _flc = [int(_q) for _q in sorted(int(_i8) for _i8 in (_g + _r)) if int(_q) not in _hid2]
                     _frmc = getattr(self, "_ema_stk_forming", None)
                     if _frmc is not None and (not _flc or int(_frmc[0]) > _flc[-1]):
-                        _ac = int(_frmc[0])
+                        _ac = int(_frmc[0]); _acf = True      # start = the UNCONFIRMED (forming) cross
                     elif _flc:
                         _ac = _flc[-1]
                     if _ac is not None and _M - 1 > _ac:
@@ -7552,8 +7552,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                 for _p8, _kd8 in self._ema_span_vp(_ana, _ac, _M - 1)]
                 except Exception:
                     _ac = None; _mkc = []
-                self._ema_poclc_cache = (_ssig, _ac, _mkc)
-            _, _ac, _mkc = self._ema_poclc_cache
+                self._ema_poclc_cache = (_ssig, _ac, _mkc, _acf)
+            _, _ac, _mkc, _acf = self._ema_poclc_cache
             _STYC = {"poc": ((250, 180, 60, 235), 1.4), "poc_hi": ((250, 205, 120, 200), 1.1),
                      "poc_lo": ((250, 205, 120, 200), 1.1), "lvn": ((178, 70, 255, 225), 1.2)}
             _vc = 0; _rc = 0
@@ -7576,7 +7576,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if _sl8.get("geo") != _geo8:
                         _sl8["ln"].setData([_xc0, _xc1], [_p8, _p8]); _sl8["geo"] = _geo8
                     _sl8["ln"].setVisible(True)
-                    for (_j8, _zlo8, _zhi8) in _st8[-1:]:     # ONE rect = the final shape (no evolution)
+                    # ZONES only once the trend's vertical line is CONFIRMED (user 2026-09-04): while the start is
+                    # the dotted forming cross the lines show but no zone is drawn.
+                    for (_j8, _zlo8, _zhi8) in ([] if _acf else _st8[-1:]):   # ONE rect = the final shape
                         _sx0 = _xc0; _sx1 = _xc1
                         if _sx1 <= _sx0 or _zhi8 <= _zlo8:
                             continue
