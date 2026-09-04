@@ -621,6 +621,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_radarrun_absorb_subtoggle(sec)  # + 'absorbed only' filter (A>=0, drop the easy fizzles)
                 self._build_radarrun_hld_subtoggle(sec)  # + 'Filter EMA HL delta' (long iff delta>0 / short iff delta<0)
                 self._build_radarrun_bubble_subtoggle(sec)  # + 'Bubble filter' (clean wick + a big/medium bubble the right side)
+                self._build_radarrun_c1m_subtoggle(sec)  # + '1m confirm' (same-side 1m clock RR fired inside the signal bar)
                 self._build_radarrun_htf_subtoggles(sec)  # + 1h / 4h signals on lower tfs (colour-matched to the htf walls)
             if key == "m10_stats":
                 self._build_stats_substats(sec)          # per-stat on/off for the Mode-10 stats box
@@ -679,6 +680,21 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
         cb.toggled.connect(lambda on, k="m10_radarrun_bub": self.layerToggled.emit(k, on))
         self.layer_checks["m10_radarrun_bub"] = cb
+        section.addWidget(cb)
+
+    def _build_radarrun_c1m_subtoggle(self, section) -> None:
+        """Radar Runner sub-toggle: keep only badges CONFIRMED by the 1m clock — a SAME-SIDE 1m-clock Radar
+        Runner fire recorded INSIDE the signal bar's own time span (known by the bar's close, causal). Reads
+        the 1m entries of data/radarrun_fired.json, so a 1m CLOCK window must be running to accumulate
+        confirmations; bars outside the 1m record's coverage are KEPT (never hidden for missing data).
+        ⚠ Status: REPLICATED SCREEN CANDIDATE on weekday NY sessions (+0.18/+0.21%/trade at RR1:1.5 on two
+        independent 30-day draws, study/radarrun_confirm_1m.py) — full-data + daemon OOS gates NOT yet run;
+        an eyeball VIEW, not a validated edge. m10_radarrun_c1m, default OFF; composes with the others."""
+        cb = QtWidgets.QCheckBox("· 1m confirm (1m clock RR inside bar)")
+        cb.setChecked(False)
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")   # indented, sub-level
+        cb.toggled.connect(lambda on, k="m10_radarrun_c1m": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_radarrun_c1m"] = cb
         section.addWidget(cb)
 
     def _build_radarrun_htf_subtoggles(self, section) -> None:

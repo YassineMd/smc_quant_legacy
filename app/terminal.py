@@ -1506,6 +1506,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._rr_entries = []
         self._rr_ln_pool = []; self._rr_lnlbl_pool = []; self._rr_lines_user = {}
         self._rr_size_lbl = None                               # OPTIMAL position-size readout at the entry line (one active bracket)
+        self._c1m_ets = None; self._c1m_sides = None           # '1m confirm' sub-toggle: sorted 1m-clock fire times/sides
+        self._c1m_mtime = 0.0; self._c1m_check = 0.0           # (from radarrun_fired.json, mtime-cached, ~3s re-stat)
         self._rr_fired = {}; self._rr_fired_tf = None          # PERSIST fired breakouts by bar end_time -> frozen event;
         #                                                        a confirmed breakout never un-fires when the walls re-detect
         self._rr_audio_seeded = False                          # entry-sound seed: never blast the backlog on first draw / tf-switch
@@ -9595,6 +9597,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             return {}
 
+    def _c1m_refresh(self):
+        """Snapshot the 1m-CLOCK fires from radarrun_fired.json for the '1m confirm' sub-toggle.
+        Rate-limited: stat the file at most every ~3s, reparse only when its mtime moved. Keeps only
+        minute-aligned end_times (the 1m record can also hold 1m-BUCKET fires, which end mid-minute —
+        the confirm rule is the CLOCK child). Returns the record's mtime (a change stamp for _sig)."""
+        import os, time as _t
+        now = _t.monotonic()
+        if now - self._c1m_check < 3.0:
+            return self._c1m_mtime
+        self._c1m_check = now
+        try:
+            mt = os.path.getmtime(self._rr_persist_path())
+        except OSError:
+            return self._c1m_mtime
+        if mt == self._c1m_mtime and self._c1m_ets is not None:
+            return self._c1m_mtime
+        rec = self._rr_persist_load("1m")
+        rows = sorted((et, int(ev.get("side", 0))) for et, ev in rec.items()
+                      if abs(et - round(et)) < 0.02 and int(round(et)) % 60 == 0)
+        self._c1m_ets = np.array([r[0] for r in rows], dtype=np.float64)
+        self._c1m_sides = [r[1] for r in rows]
+        self._c1m_mtime = mt
+        return mt
+
     def _rr_persist_save(self, tf):
         """Union the current fired set into the on-disk store (a persisted badge is NEVER dropped) and write atomically.
         Bounded to the 5000 most-recent per tf. Fail-safe: silent no-op on any error (never breaks the render path)."""
@@ -9677,6 +9703,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _ab = self.menu.layer_state("m10_radarrun_abs")          # sub-toggle: show ONLY absorbed (A>=0) breakouts
         _hld = self.menu.layer_state("m10_radarrun_hld")         # sub-toggle: keep only EMA-HL-delta-ALIGNED badges
         _bub = self.menu.layer_state("m10_radarrun_bub")         # sub-toggle: BUBBLE filter (clean wick + big/med bubble)
+        _c1m = (self.menu.layer_state("m10_radarrun_c1m")        # sub-toggle: 1m-clock confirm INSIDE the signal bar
+                and self._tf != "1m")                            # (on the 1m chart itself the rule is vacuous)
         # REPAINT FIX (2026-08-17): a defending wall can be 500+ bars old, and the wall sim is causal from the START of
         # the data it sees. If we detect over only the visible scan window, a signal VANISHES on reload whenever the new
         # window starts after its wall formed. Prepend the FULL pre-window history so the signal set is identical no
@@ -9687,7 +9715,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # the full-history detect re-runs once per bar-close, not every live frame (a net perf WIN vs the old window scan).
         _ce = filtered[-2] if (_forming and n >= 2) else (filtered[-1] if n else None)
         _cet = float(_ce.get("end_time", 0.0) or 0.0) if _ce else 0.0
-        _sig = (n, _off, _forming, _hc, _ab, _hld, _bub, self._tf, _cet)
+        _c1m_mt = self._c1m_refresh() if _c1m else 0.0           # 1m fired-record snapshot (mtime = change stamp)
+        _sig = (n, _off, _forming, _hc, _ab, _hld, _bub, _c1m, _c1m_mt, self._tf, _cet)
         if _sig == self._rr_sig and self._rr_drawn:
             return
         self._rr_sig = _sig
@@ -9789,6 +9818,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _big = True
             return _big
 
+        def _c1m_ok(i, side):
+            """'1m confirm' (m10_radarrun_c1m): keep a badge only when a SAME-SIDE 1m-CLOCK Radar Runner fire
+            is recorded INSIDE the badge bar's own time span (start, end] — the replicated-screen candidate rule
+            (study/radarrun_confirm_1m.py; causal: the 1m fire closed before the badge bar did). Reads the 1m
+            entries of radarrun_fired.json via _c1m_refresh(). A bar OUTSIDE the 1m record's coverage is KEPT
+            (missing data is never silently hidden); inside coverage, no matching fire -> hidden."""
+            ets, sides = self._c1m_ets, self._c1m_sides
+            if ets is None or not len(ets):
+                return True                                       # no 1m record at all -> keep everything
+            b = filtered[i]
+            et = float(b.get("end_time", 0.0) or 0.0)
+            st = float(b.get("start_time", 0.0) or 0.0)
+            if et <= 0 or st <= 0 or st >= et:
+                return True                                       # can't place the span -> KEEP
+            if et < ets[0] or st > ets[-1]:
+                return True                                       # span outside record coverage -> KEEP
+            lo = int(np.searchsorted(ets, st, side="right"))      # fires with st < et1 <= et
+            hi = int(np.searchsorted(ets, et, side="right"))
+            for j in range(lo, hi):
+                if sides[j] == side:
+                    return True
+            return False
+
         def _hld_ok(i, side):
             if _hldE is None or i < 19:
                 return True                                       # can't compute -> KEEP
@@ -9832,7 +9884,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:
             self._rr_sound_new([_x for _x in _new_edge
                                 if ((not _hld) or _hld_ok(_edge_i, _x[0]))
-                                and ((not _bub) or _bub_ok(_edge_i, _x[0]))],
+                                and ((not _bub) or _bub_ok(_edge_i, _x[0]))
+                                and ((not _c1m) or _c1m_ok(_edge_i, _x[0]))],
                                _hc, _ab)                         # beep the instant a NEW live-edge breakout freezes
             #                                                      (a delta-filtered badge stays silent too)
         et2i = {float(filtered[j].get("end_time", 0.0) or 0.0): j for j in range(n)}   # end_time -> CURRENT index this frame
@@ -9866,6 +9919,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if _hld and not _hld_ok(i, side):                    # 'Filter EMA HL delta' -> only delta-aligned badges
                 continue
             if _bub and not _bub_ok(i, side):                    # 'Bubble filter' -> clean wick + big/medium bubble
+                continue
+            if _c1m and not _c1m_ok(i, side):                    # '1m confirm' -> same-side 1m fire inside the bar
                 continue
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
             y = (lo - pad) if side > 0 else (hi + pad)               # LONG ▲ BELOW the candle / SHORT ▼ ABOVE it
