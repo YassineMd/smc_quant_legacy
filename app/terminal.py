@@ -6812,6 +6812,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _hide_ema_pocl(self) -> None:
         for _d in self._ema_pocl_items:
             _d["ln"].setVisible(False)
+            if _d.get("rect") is not None:
+                _d["rect"].setVisible(False)
 
     @staticmethod
     def _ema_span_vp(ana, j0, j1, nb=40):
@@ -6893,6 +6895,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return [_i for _i in _nz if _vols[_i] == _mx]
         out += [(_cen(_i), "poc_hi") for _i in _maxs(range(_bv + 1, nb))]
         out += [(_cen(_i), "poc_lo") for _i in _maxs(range(0, _a))]
+        return out
+
+    @staticmethod
+    def _ema_mark_zones(ana, j_last, marks):
+        """ZONE per mark (user 2026-09-04: "keep the line; the zone becomes the BODY of the last candle whose body
+        crosses the line"): walking BACK from ana[j_last] (the flip line's bar -- the newest bar the profile knew),
+        the first candle with min(open, close) <= price <= max(open, close) gives (body low, body high).
+        Returns [(price, kind, zlo, zhi)] -- zlo/zhi None when no candle body ever crossed that price."""
+        out = []
+        j_last = min(len(ana) - 1, int(j_last))
+        for p, kind in marks:
+            zlo = zhi = None
+            for j in range(j_last, -1, -1):
+                b = ana[j]
+                o = float(b.get("open", b.get("open_price", 0.0)) or 0.0)
+                c = float(b.get("close", b.get("close_price", 0.0)) or 0.0)
+                if o <= 0 or c <= 0:
+                    continue
+                lo, hi = (o, c) if o <= c else (c, o)
+                if lo <= p <= hi:
+                    zlo, zhi = lo, hi
+                    break
+            out.append((p, kind, zlo, zhi))
         return out
 
     def _hide_ema_walls(self) -> None:
@@ -7377,8 +7402,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             continue                                                # no finished trend yet -> no VP
                         _sp7 = (min(_s[0] for _s in _sg7), max(_s[1] for _s in _sg7))   # == the side VP's _vp_span
                         _k7 = (float(_ftimes.get(_sp7[0], 0.0)), float(_ftimes.get(_a7, 0.0)))
-                        if _k7 not in _done:
-                            _done[_k7] = self._ema_span_vp(_ana, _sp7[0], _sp7[1])
+                        if _k7 not in _done:                                        # marks + their candle-body ZONES
+                            _done[_k7] = self._ema_mark_zones(_ana, _sp7[1], self._ema_span_vp(_ana, _sp7[0], _sp7[1]))
                         _mk7 = _done[_k7]
                         if _mk7:
                             _segs.append((int(_a7), (int(_b7) if _b7 is not None else None), list(_mk7)))
@@ -7400,22 +7425,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _x17 = _fxw(_b7) if _b7 is not None else float(x[n - 1])
                 if _x17 <= _x07:
                     continue
-                for _p7, _kd7 in _mk7:                        # NO text tags (user 2026-09-04): colour says which
+                for _m7 in _mk7:                              # NO text tags (user 2026-09-04): colour says which
+                    _p7, _kd7 = _m7[0], _m7[1]
+                    _zlo7, _zhi7 = (_m7[2], _m7[3]) if len(_m7) >= 4 else (None, None)
                     _rgba7, _w7, _tag7 = _STY7.get(_kd7, _STY7["poc"])
                     if _vis7 >= len(self._ema_pocl_items):
                         _ln7 = pg.PlotCurveItem(); _ln7.setZValue(15)
                         self.plot.addItem(_ln7, ignoreBounds=True)
-                        self._ema_pocl_items.append({"ln": _ln7, "geo": None, "kind": None})
+                        _rc7 = QtWidgets.QGraphicsRectItem(); _rc7.setPen(pg.mkPen(None)); _rc7.setZValue(-6)
+                        self.vb.addItem(_rc7, ignoreBounds=True)   # ZONE: the crossing candle's BODY, behind candles
+                        self._ema_pocl_items.append({"ln": _ln7, "rect": _rc7, "geo": None, "zgeo": None, "kind": None})
                     _sl7 = self._ema_pocl_items[_vis7]; _vis7 += 1
                     if _sl7.get("kind") != _kd7:              # re-pen only when the pooled slot changes role
                         _pn7 = pg.mkPen(_rgba7[0], _rgba7[1], _rgba7[2], _rgba7[3], width=_w7); _pn7.setCosmetic(True)
                         _sl7["ln"].setPen(_pn7); _sl7["kind"] = _kd7
+                        _sl7["rect"].setBrush(pg.mkBrush(_rgba7[0], _rgba7[1], _rgba7[2], 55))
                     _geo7 = (_x07, _x17, _p7)
                     if _sl7.get("geo") != _geo7:              # setData rebuilds the path: only when it moves
                         _sl7["ln"].setData([_x07, _x17], [_p7, _p7]); _sl7["geo"] = _geo7
                     _sl7["ln"].setVisible(True)
+                    if _zlo7 is not None and _zhi7 is not None and _zhi7 > _zlo7:
+                        _zg7 = (_x07, _x17, _zlo7, _zhi7)
+                        if _sl7.get("zgeo") != _zg7:
+                            _sl7["rect"].setRect(_x07, _zlo7, max(1e-9, _x17 - _x07), _zhi7 - _zlo7); _sl7["zgeo"] = _zg7
+                        _sl7["rect"].setVisible(True)
+                    else:
+                        _sl7["rect"].setVisible(False)        # no candle body ever crossed this price -> line only
             for _sl7 in self._ema_pocl_items[_vis7:]:
-                _sl7["ln"].setVisible(False)
+                _sl7["ln"].setVisible(False); _sl7["rect"].setVisible(False)
         # 'Trend Extreme Lines' (sub-toggle 'ema_trendlvl'): the LAST FINISHED bear segment (red line -> next
         # green line) marks its LOWEST low with a solid GREEN hline; the last finished bull segment (green ->
         # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar
