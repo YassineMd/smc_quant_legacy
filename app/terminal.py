@@ -9613,7 +9613,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._bp_sell = pg.PlotCurveItem(pen=pg.mkPen((240, 70, 90, 220), width=2), connect="pairs")
             for _it in (self._bp_buy, self._bp_sell):
                 _it.setZValue(31); self.plot.addItem(_it, ignoreBounds=True)
-        if not n or not self._bp_trades:
+        if not n:
             self._bp_buy.setData([], []); self._bp_sell.setData([], [])
             for _l in self._bp_lbls:
                 _l.setVisible(False)
@@ -9622,6 +9622,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         ets = np.array([float(b.get("end_time", 0.0) or 0.0) for b in filtered])
         L = int(config.BIGPLAYER_LINE_BARS)
         rows = [r for r in self._bp_trades if r[2] >= thr and ets[0] > 0 and r[0] <= ets[-1] + 1e-6]
+        # REPLAY / deep history: bars older than the live tape store (6h backfill) come from the big-print
+        # ARCHIVE (study/bigprint_archive, Binance dumps). Archive rows strictly BEFORE the live store's
+        # oldest print, so the two sources never double-count the same whale.
+        live_start = self._bp_trades[0][0] if self._bp_trades else float("inf")
+        if ets[0] > 0 and ets[0] < live_start:
+            from . import bigprint_store
+            arch = bigprint_store.load_prints(ets[0] - 1.0, min(float(ets[-1]), live_start) - 1e-6, thr)
+            rows = [r for r in arch if r[0] < live_start] + rows
         # MERGE (user 2026-09-04): several big prints on the SAME bar at the SAME price, same side
         # (a buyer and a seller at one level are opposite players) -> ONE level, amounts summed.
         merged = {}                                             # (bar, price, side) -> summed usd
