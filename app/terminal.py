@@ -7585,7 +7585,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _labels.append(_lb9)
                     _ncol[_fb9] = ((40, 230, 120) if _lb9.startswith("BULL")
                                    else ((240, 70, 90) if _lb9.startswith("BEAR") else _STK_GRAY))
-                    if _lb9 == _prevlbl:                           # only a TRULY-IDENTICAL consecutive state merges
+                    # Only a TRULY-IDENTICAL consecutive TREND state merges. RANGING never merges (user
+                    # 2026-09-04): consecutive legs alternate direction by construction, so two RANGING legs are a
+                    # down-leg and an up-leg -- not "the same trend" -- and collapsing them hid the flip between a
+                    # downtrend and the uptrend that followed (the per-segment POCs then spanned both).
+                    if _lb9 == _prevlbl and _lb9 != "RANGING":
                         _nhide.add(_fb9)
                     _prevlbl = _lb9
                 self._ema_flip_col = _ncol
@@ -7593,8 +7597,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._ema_gray_set = {_f for _f, _c in _ncol.items() if _c == _STK_GRAY}   # RANGING lines (for tests)
                 _collapsed = []                                    # CONSECUTIVE equal labels are one state -> prev
                 for _lb9 in _labels:                              # the previous DISTINCT one; every entry is a FLIP,
-                    if not _collapsed or _collapsed[-1] != _lb9:  # so 'prev' is always exactly what clicking shows
-                        _collapsed.append(_lb9)
+                    if not _collapsed or _collapsed[-1] != _lb9 or _lb9 == "RANGING":   # so 'prev' is always exactly
+                        _collapsed.append(_lb9)                   # what clicking shows (RANGING legs stay 1:1 with their lines)
                 # BREAKOUT OVERRIDE past the LAST flip: '20 closes beyond the extreme' (user rule) can turn the
                 # live structure at a bar that is NOT a flip. It has no flip to ride and you cannot pin a non-flip
                 # bar, so it only ever replaces the CURRENT tag -- never 'prev', which stays a clickable flip.
