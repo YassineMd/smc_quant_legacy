@@ -99,6 +99,47 @@ def main():
     for _i in range(1, len(C1)):
         ema20[_i] = a20 * C1[_i] + (1.0 - a20) * ema20[_i - 1]
 
+    # 1m E/E/C zone (RR_C1ZONE): the pivot-study band convention (study/pivot_eec_15m.py) on the
+    # 1m clock — legs = EMA20/50 cross segments; band live at a bar = last COMPLETED bull leg HIGH
+    # / bear leg LOW before that bar's leg; thirds -> cheap/equilib/expensive (+beyond, inverted).
+    # Codes: -1 unknown, 0 beyond-dn, 1 cheap, 2 equilib, 3 expensive, 4 beyond-up, 5 inverted.
+    zone1m = None
+    if os.environ.get("RR_C1ZONE"):
+        a50 = 2.0 / 51.0
+        e50a = np.empty(len(C1))
+        e50a[0] = C1[0]
+        for _i in range(1, len(C1)):
+            e50a[_i] = a50 * C1[_i] + (1.0 - a50) * e50a[_i - 1]
+        zone1m = np.full(len(C1), -1, dtype=np.int8)
+        legs = []
+        cur = st_ = None
+        for _i in range(60, len(C1)):
+            d = 1 if ema20[_i] > e50a[_i] else (-1 if ema20[_i] < e50a[_i] else 0)
+            if d == 0:
+                continue
+            if cur is None:
+                cur, st_ = d, _i
+            elif d != cur:
+                legs.append((cur, st_, _i - 1))
+                cur, st_ = d, _i
+        if cur is not None:
+            legs.append((cur, st_, len(C1) - 1))    # open leg: its band is complete, its extreme is not
+        lb_hi = lb_lo = None
+        for (d, a_, b2) in legs:
+            if lb_hi is not None and lb_lo is not None:
+                seg = C1[a_:b2 + 1]
+                if lb_hi <= lb_lo:
+                    zone1m[a_:b2 + 1] = 5
+                else:
+                    t = (seg - lb_lo) / (lb_hi - lb_lo)
+                    zone1m[a_:b2 + 1] = np.where(seg < lb_lo, 0, np.where(seg > lb_hi, 4,
+                                                 np.where(t < 1 / 3, 1, np.where(t < 2 / 3, 2, 3))))
+            ext = H1[a_:b2 + 1].max() if d > 0 else L1[a_:b2 + 1].min()
+            if d > 0:
+                lb_hi = ext
+            else:
+                lb_lo = ext
+
     trades_A = []
     n_conf = 0
     detects = 0
@@ -129,10 +170,15 @@ def main():
                 bb0, conf_sl = min(hits)           # earliest confirming badge at this appearance
                 conf_ema = bool((s > 0 and C1[bb0] > ema20[bb0])
                                 or (s < 0 and C1[bb0] < ema20[bb0]))
+                conf_zone = int(zone1m[bb0]) if zone1m is not None else -1
                 break
+        else:
+            conf_zone = -1
+        if not confirmed:
+            conf_zone = -1
         n_conf += int(confirmed)
         trades_A.append(dict(t=et, s=int(s), e=float(e), sl=float(sl), conf=confirmed,
-                             csl=conf_sl, cema=conf_ema))
+                             csl=conf_sl, cema=conf_ema, cz=conf_zone))
         if pi % 40 == 0:
             print("  parent %d/%d (detects %d, %.0fs)" % (pi, len(sel), detects, time.time() - t0),
                   flush=True)
@@ -149,6 +195,18 @@ def main():
     if os.environ.get("RR_C1EMA"):                 # split the confirmed set by the 1m EMA20 side gate
         groups[2:2] = [("C+EMA-OK", lambda x: x["conf"] and x["cema"] is True),
                        ("C+EMA-NO", lambda x: x["conf"] and x["cema"] is False)]
+    if os.environ.get("RR_C1ZONE"):                # E/E/C zone of the CONFIRMING candle (user hypothesis:
+        _zn = {0: "bey-dn", 1: "cheap", 2: "equilib", 3: "expensive", 4: "bey-up", 5: "invert", -1: "n/a"}
+        from collections import Counter
+        _zc = Counter(_zn[x["cz"]] for x in trades_A if x["conf"])
+        print("confirm zones: %s" % dict(_zc), flush=True)      # short-in-EXPENSIVE / long-in-CHEAP better)
+        groups[2:2] = [
+            ("C+Z-HYP", lambda x: x["conf"] and ((x["s"] < 0 and x["cz"] == 3)
+                                                 or (x["s"] > 0 and x["cz"] == 1))),
+            ("C+Z-HYPw", lambda x: x["conf"] and ((x["s"] < 0 and x["cz"] in (3, 4))
+                                                  or (x["s"] > 0 and x["cz"] in (0, 1)))),
+            ("C+Z-ANTI", lambda x: x["conf"] and ((x["s"] > 0 and x["cz"] in (3, 4))
+                                                  or (x["s"] < 0 and x["cz"] in (0, 1))))]
     if os.environ.get("RR_SPLIT1H"):               # does AVOIDING the NY first hour (13-14 UTC) add?
         _h1 = lambda x: 13 * 3600 <= (x["t"] % 86400) < 14 * 3600
         groups[2:2] = [("C-SKIP1H", lambda x: x["conf"] and not _h1(x)),
