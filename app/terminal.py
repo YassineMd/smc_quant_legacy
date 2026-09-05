@@ -6984,7 +6984,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return out
 
     @staticmethod
-    def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=5, same_tol=0.0015, C=None, turn_min=0.0035, leg_min=0.01):
+    def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=5, same_tol=0.0015, C=None, turn_min=0.0035, leg_min=0.01,
+                          green_min=0.01):
         """The level-to-level PATH of price over bars j0..j1 as the user's hand-drawn boxes (2026-09-05), built in
         the strict order RED > YELLOW > BLUE > GREEN.
         `levels` = [(lo, hi, kind, avail_from_bar[, seg[, until[, dest_only]]])] -- rung LINES (lo == hi), each known
@@ -7271,8 +7272,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     # GREEN = the CONTINUATION (user 2026-09-05: "after the blue box we need the green"): it starts
                     # right after the blue -- the bars after a valid retest ARE the green phase, whatever price does
                     # in the meantime (a stall at R, a dip through R's line) -- and it CLOSES on the FIRST touch of
-                    # the farthest zone beyond S reached before a real pullback (past half the way from that zone
-                    # back to S, at least turn_min deep). Until then it is an OPEN box to the live edge, its rung =
+                    # the farthest zone reached in the move's direction before a REAL reversal (past half the way
+                    # back from that zone and at least green_min deep) or price back THROUGH the blue's level.
+                    # Until a zone is reached it is an OPEN box to the live edge, its rung =
                     # S (the zone it has to cross). Bullish sequence (red = support, S = resistance): blue down,
                     # green UP; bearish: the mirror.
                     oi = _newest(gB, b1, (bT, je)); op = 0.5 * (levels[oi][0] + levels[oi][1])
@@ -7289,21 +7291,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                 gs[gq] = i
                         if not gs:
                             continue
-                        if gT is not None and gB in gs:
-                            break                         # back at the blue's level after a zone: the green is over
                         _px = lambda x: 0.5 * (levels[gs[x]][0] + levels[gs[x]][1])
                         cand = []; turn = False
                         for x in gs:
                             pk = _px(x); d = (pk - op) * side
+                            if gT is not None and d < -same_tol * abs(op):
+                                turn = True; break        # back THROUGH the blue's level after a zone: the green
+                                                          # is over (a pullback that stays on this side of it is a
+                                                          # pause, however deep -- user 2026-09-05/06, twice)
                             if dest[x] and any(not dest[y] and abs(_px(y) - pk) <= same_tol * abs(pk) for y in gs):
                                 continue                  # an old level at a current zone's price: that one counts
                             if d > farT and d >= turn_min * abs(op):
                                 cand.append((d, x))       # a zone farther from O in the move's direction: on it goes
-                            elif (gT is not None and x != gT and farT >= leg_min * abs(op) and d < 0.5 * farT
-                                  and farT - d >= turn_min * abs(op)):
-                                turn = True               # a real pullback from the zone reached: the turn (a leg
-                                                          # under leg_min has not gone anywhere yet -- user's
-                                                          # 03-12 case: the dip after 85.85 before the run to 87.3)
+                            elif (gT is not None and x != gT and d < 0.5 * farT
+                                  and farT - d >= green_min * abs(op)):
+                                turn = True               # a REAL reversal: past half the way back from the zone
+                                                          # reached AND at least green_min (1%) deep -- shallower
+                                                          # pullbacks are pauses (user: 60% of a 1.4% leg, 74% of
+                                                          # a 0.67% leg both kept going)
                         if turn:
                             break
                         if cand:
@@ -8402,12 +8407,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                               for _j9 in range(_jj0, _M)],
                                      "boxes": [(_b[0], _b[1], round(_b[2], 4), round(_b[3], 4), _b[4],
                                                 [(round(_r[0], 4), _r[2], _r[3]) for _r in _b[5]]) for _b in _bx9]}
-                            with open(os.path.join(_cfg.DATA_DIR, "ladder_last.json"), "w", encoding="utf-8") as _fh:
+                            with open(os.environ.get("LADDER_DUMP") or os.path.join(_cfg.DATA_DIR, "ladder_last.json"),
+                                      "w", encoding="utf-8") as _fh:   # LADDER_DUMP: a test harness's own file
                                 _js.dump(_dump, _fh)
                         except Exception:
                             pass
                 except Exception:
                     _bx9 = []
+                    if os.environ.get("LADDER_DEBUG"):
+                        import traceback; traceback.print_exc()
                 self._ema_lbox_cache = (_ssig, _bx9)
             _LBC9 = {"visit": (240, 70, 90), "break": (250, 205, 60), "retest": (60, 140, 255), "cont": (40, 230, 160)}
             _vb9 = 0
