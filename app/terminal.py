@@ -7101,31 +7101,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             yhi = max(float(H[j]) for j in range(x0, x1 + 1))
             return ylo, yhi
 
-        def _seq_visits(b, live_at, gR, ignore_R_until, keep_dest=None):
-            """Stays after bar b, with the rungs live at j OR frozen at `live_at` (the sequence's rung set); R is
-            ignored up to `ignore_R_until` (the departing bars' wicks). Yields [group, first, last]."""
-            cur = None
-            for j in range(b + 1, j1e + 1):
-                tj = touch.get(j)
-                if not tj:
-                    continue
-                tg = sorted({gq for gq, i in tj if _livef(levels[i], j, live_at)
-                             and (not dest[i] or gq == keep_dest)   # old levels: only the sequence's own S
-                             and not (gq == gR and j <= ignore_R_until)})
-                if not tg:
-                    continue
-                if cur is not None and cur[0] in tg:
-                    cur[2] = j
-                    continue
-                if cur is not None:
-                    yield cur
-                    cp0 = _mid(cur[0])
-                    gsel = max(tg, key=lambda x: (levels[_newest(x, j, live_at)][3], abs(_mid(x) - cp0)))
-                else:
-                    gsel = max(tg, key=lambda x: (levels[_newest(x, j, live_at)][3], abs(_mid(x) - _mid(gR))))
-                cur = [gsel, j, j]
-            if cur is not None:
-                yield cur
         for iv, (g, a, b) in enumerate(vis):
             if b - a + 1 < min_visit:
                 continue
@@ -7170,6 +7145,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         dk = _gp(x, j, bT) - cp; sd = 1 if dk > 0 else -1
                         if dest[x] and abs(dk) <= same_tol * abs(cp):
                             continue                      # an old level at R's own price: not a destination
+                        if dest[x] and any(not dest[y] and y != g and abs(_gp(y, j, bT) - (cp + dk)) <= same_tol * abs(cp)
+                                           for y in gs):
+                            continue                      # an old level at a current zone's price: that one counts
                         if side and sd != side:
                             cand = None; break            # a rung on the other side of R: the move is over
                         if abs(dk) > far:
@@ -7199,26 +7177,62 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # detection simply resumes -- when any close goes beyond the red box's far extreme: bearish (S below
             # R) above the red box's HIGH, bullish below its LOW. Its rung = the level it retraced to.
             bear = side < 0
+            # BLUE = the RETEST (user 2026-09-05, "apply the same to the blue box"): from the bar after the LAST
+            # touch of S back toward R -- through the current zones, R itself and (once past the first current zone
+            # on the way) the older lines' levels -- to the LAST candle that touched the zone closest to R it
+            # reached before the retest REVERSES: a candle that closes beyond the extreme of the last candle that
+            # touched that zone, away from R (bearish sequence, S below R: below its low; bullish: above its
+            # high). Back at S after retracing, or a zone on the far side of R, ends it too. S and R stay frozen
+            # for the sequence. VOID -- skipped, the red/yellow detection simply resumes -- when any close goes
+            # beyond the red box's far extreme (bearish: above its HIGH; bullish: below its LOW). Its rung = the
+            # zone it retraced to (R when it got there).
             r_ext = (max(float(H[j]) for j in range(a, bT + 1)) if bear
                      else min(float(L[j]) for j in range(a, bT + 1) if float(L[j]) > 0))
-            back = []; near = far
-            for v in _seq_visits(s_end, (bT, je), g, b, keep_dest=gS):
-                gk, ak, bk = v
-                pk = _gp(gk, bk, (bT, je))
-                dk = 0.0 if gk == g else abs(pk - cp)
-                if gk != g and dest[gk] and dk <= same_tol * abs(cp):
-                    gk = g; dk = 0.0                      # an old level at R's own price = R
-                sk = 0 if gk == g else (1 if pk - cp > 0 else -1)
-                if sk and sk != side:
-                    break                                 # a rung on the far side of R: not a retracement
-                if not back and gk == gS:
-                    s_end = bk; continue                  # still bouncing at S: the blue starts after it
-                if dk < near:
-                    back.append(v); near = dk             # closer to R than anything reached so far
-                else:
-                    break                                 # away from R again: the retracement is over
-            if back:
-                b0, b1 = s_end + 1, back[-1][2]
+            gB = None; near = far; last_b = None; cur_b = False
+            for j in range(s_end + 1, j1e + 1):
+                tj = touch.get(j)
+                gs = {gq for gq, i in (tj or ()) if _livef(levels[i], j, (bT, je))}
+                if gs:
+                    if gS in gs:
+                        if gB is None:
+                            s_end = j; continue           # still bouncing at S: the blue starts after it
+                        break                             # back at S after retracing: the retest is over
+                    cur_here = any(not dest[x] for x in gs)
+                    cand = []; beyond = False
+                    for x in gs:
+                        pk = _gp(x, j, (bT, je))
+                        dk = 0.0 if x == g else abs(pk - cp)
+                        if x != g and dest[x] and dk <= same_tol * abs(cp):
+                            x = g; dk = 0.0               # an old level at R's own price = R
+                        sk = 0 if x == g else (1 if pk - cp > 0 else -1)
+                        if sk and sk != side:
+                            if dest[x]:
+                                continue                  # an old level beyond R: the VOID rule judges that side
+                            cand = None; break            # a current zone on the far side of R: not a retest
+                        if dk > far and sk == side:
+                            beyond = True; continue       # on BEYOND S: the move continued -> no retest
+                        if dest[x] and any(not dest[y] and y != g and abs(_gp(y, j, (bT, je)) - pk) <= same_tol * abs(pk)
+                                           for y in gs):
+                            continue                      # an old level at a current zone's price: that one counts
+                        if dest[x] and not cur_b and not cur_here:
+                            continue                      # old levels count only past the first current zone
+                        if dk < near:
+                            cand.append((dk, x))
+                    if cand is None or beyond:
+                        break
+                    if cand:
+                        near, gB = min(cand); last_b = j
+                        cur_b = cur_b or any(not dest[x] for _, x in cand)
+                        continue                          # a zone CLOSER to R reached: the retest goes on
+                    if gB is not None and gB in gs:
+                        last_b = j; continue              # the zone touched again
+                if gB is None:
+                    continue
+                cj = float(C[j]) if C is not None else 0.0
+                if cj > 0 and ((cj < float(L[last_b])) if bear else (cj > float(H[last_b]))):
+                    break                                 # REVERSAL candle -> the retest ended at the last touch
+            if gB is not None:
+                b0, b1 = s_end + 1, last_b
                 void = False
                 if C is not None:
                     for j in range(je + 1, b1 + 1):
@@ -7227,7 +7241,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             void = True; break            # closed beyond the red box's extreme -> sequence void
                 if not void and b1 >= b0:
                     ylo, yhi = _span(b0, b1)
-                    out.append((b0, b1, ylo, yhi, "retest", [levels[_newest(back[-1][0], b1, (bT, je))]]))   # BLUE
+                    out.append((b0, b1, ylo, yhi, "retest", [levels[_newest(gB, b1, (bT, je))]]))   # BLUE
                     used_spans.append((b0, b1))
             if s_end > je:
                 used_spans.append((je + 1, s_end))        # the bouncing at S belongs to this sequence too
