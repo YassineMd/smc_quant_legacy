@@ -7158,8 +7158,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         continue                          # an old level at a current zone's price: that one counts
                     if side and sd != side:
                         turn = True; break                # a zone on the other side of R: the move is over
-                    if abs(dk) > far:
-                        cand.append((abs(dk), sd, x))
+                    if abs(dk) > far and abs(dk) >= turn_min * abs(cp):
+                        cand.append((abs(dk), sd, x))     # (a zone within turn_min of R is not a destination)
                     elif (gS is not None and x != gS and abs(dk) < 0.5 * far
                           and far - abs(dk) >= turn_min * abs(cp)):
                         turn = True                       # a REAL pullback: past half the way back to R and at
@@ -7208,7 +7208,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     continue
                 _px = lambda x: 0.5 * (levels[gs[x]][0] + levels[gs[x]][1])
                 cur_here = any(not dest[x] for x in gs)
-                cand = []; turn = False
+                qual = gB is not None and far - near >= max(0.5 * far, turn_min * abs(cp))   # a REAL retest so far
+                cand = []; turn = False                   # (under 50%: the walk goes on -- user's 9-hour blue)
                 for x in gs:
                     pk = _px(x)
                     dk = 0.0 if x == g else abs(pk - cp)
@@ -7220,9 +7221,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             continue                      # an old level beyond R: the VOID rule judges that side
                         turn = True; break                # a current zone on the far side of R: the retest is over
                     if x == gS:
-                        if gB is None:
-                            continue                      # still bouncing at S (inside the blue)
-                        turn = True; break                # back at S after retracing: the retest is over
+                        if not qual:
+                            continue                      # still bouncing at S (a shallow dip so far is a pause)
+                        turn = True; break                # back at S after a real retest: the retest is over
                     if dest[x] and any(not dest[y] and y != g and abs(_px(y) - pk) <= same_tol * abs(pk)
                                        for y in gs):
                         continue                          # an old level at a current zone's price: that one counts
@@ -7232,7 +7233,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         cand.append((dk, x))
                     elif dk > far and sk == side:
                         turn = True                       # on BEYOND S: the move continued -> no retest from here
-                    elif gB is not None and x != gB and not dest[x] and dk - near >= turn_min * abs(cp):
+                    elif qual and x != gB and not dest[x] and dk - near >= turn_min * abs(cp):
                         turn = True                       # a current zone farther from R than the one reached
                 if turn:
                     break
@@ -7244,6 +7245,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if _dbg:
                 print("      blue: gB=%s lb=%s near=%.4f" % (("%.4f" % _gp(gB, lb, (bT, je))) if gB is not None else None, lb, near))
             qual = gB is not None and far - near >= max(0.5 * far, turn_min * abs(cp))
+            if _dbg:
+                print("      blue walk: gB=%s lb=%s retrace=%.0f%% qual=%s" % (
+                    ("%.4f" % _gp(gB, lb, (bT, je))) if gB is not None else None, lb,
+                    (100.0 * (far - near) / far) if (gB is not None and far) else 0.0, qual))
             if gB is not None and not qual:               # a retrace short of 50%: NOT a blue (user 2026-09-05,
                 if _dbg:                                  # "it has to, otherwise it doesn't count") -- a pause of
                     print("      blue: retrace %.0f%% < 50%% -> does not count" % (100.0 * (far - near) / far if far else 0.0))
@@ -7251,55 +7256,51 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     used_spans.append((je + 1, lb))
             if qual:
                 b0, b1 = je + 1, lb
-                # VOID (user 2026-09-05): the sequence is void -- no blue, no green, the red/yellow detection simply
-                # resumes -- when a close goes beyond the red box's far extreme (bearish sequence, S below R: above
-                # its HIGH; bullish: below its LOW) or THROUGH R by turn_min, during the retest or after it before
-                # any continuation beyond S ("red > yellow > blue > green": a retest R does not hold is no retest).
+                # VOID (user 2026-09-05, locked): ONLY a close beyond the red box's far extreme -- bearish sequence
+                # (S below R): above the red box's HIGH; bullish: below its LOW -- during the retest or during the
+                # green phase before any zone beyond S is reached. Then no blue, no green: the red/yellow detection
+                # simply resumes (the one exception to the order). Dipping through R's line is NOT a void.
                 void = False
                 if C is not None:
                     for j in range(je + 1, b1 + 1):
                         cj = float(C[j])
-                        if cj > 0 and (((cj > r_ext) if bear else (cj < r_ext)) or (cj - cp) * side < -turn_min * abs(cp)):
-                            void = True; break            # closed beyond the red box's extreme / through R
-                gT = None; ft = None; lt = None
+                        if cj > 0 and ((cj > r_ext) if bear else (cj < r_ext)):
+                            void = True; break            # closed beyond the red box's extreme -> sequence void
+                gT = None; ft = None; lt = None; gend = None
                 if not void and b1 >= b0:
-                    # GREEN = the CONTINUATION (user 2026-09-05): right after the blue the move resumes in the
-                    # yellow's direction, through S to the next zone(s) beyond it -- from the bar after the blue's
-                    # last bar to the FIRST touch of the farthest zone beyond S reached before a real turn: back
-                    # at the blue's level O, or a pullback past half the way from that zone back to S (at least
-                    # turn_min deep). No zone beyond S reached -> no green (the retest held). A close through R
-                    # (or a zone beyond R on the far side) BEFORE any zone beyond S voids the blue: R broke, the
-                    # retest failed. Its rung = the zone reached. Bullish sequence (red = support, S =
-                    # resistance): blue down, green UP; bearish: the mirror.
+                    # GREEN = the CONTINUATION (user 2026-09-05: "after the blue box we need the green"): it starts
+                    # right after the blue -- the bars after a valid retest ARE the green phase, whatever price does
+                    # in the meantime (a stall at R, a dip through R's line) -- and it CLOSES on the FIRST touch of
+                    # the farthest zone beyond S reached before a real pullback (past half the way from that zone
+                    # back to S, at least turn_min deep). Until then it is an OPEN box to the live edge, its rung =
+                    # S (the zone it has to cross). Bullish sequence (red = support, S = resistance): blue down,
+                    # green UP; bearish: the mirror.
                     oi = _newest(gB, b1, (bT, je)); op = 0.5 * (levels[oi][0] + levels[oi][1])
                     dS = (_gp(gS, je, bT) - op) * side    # O -> S, positive in the yellow's direction
-                    farT = dS; broke = False
+                    farT = 0.0                            # the farthest zone beyond O (in the move's direction) so far
                     for j in range(b1 + 1, j1e + 1):
-                        cj = float(C[j]) if C is not None else 0.0
-                        if cj > 0 and (cj - cp) * side < -turn_min * abs(cp):
-                            broke = True; break           # closed THROUGH R: the retest failed
+                        if gT is None and C is not None:
+                            cj = float(C[j])
+                            if cj > 0 and ((cj > r_ext) if bear else (cj < r_ext)):
+                                void = True; break        # closed beyond the red box's extreme: sequence void
                         gs = {}
                         for gq, i in (touch.get(j) or ()):
                             if _livef(levels[i], j, (bT, je)) and (gq not in gs or (levels[i][3], i) > (levels[gs[gq]][3], gs[gq])):
                                 gs[gq] = i
                         if not gs:
                             continue
-                        if gB in gs:
-                            break                         # back at the blue's level: the continuation is over
                         _px = lambda x: 0.5 * (levels[gs[x]][0] + levels[gs[x]][1])
                         cand = []; turn = False
                         for x in gs:
                             pk = _px(x); d = (pk - op) * side
-                            if (pk - cp) * side < -turn_min * abs(cp):
-                                broke = True; break       # a zone beyond R on the far side: the retest failed
                             if dest[x] and any(not dest[y] and abs(_px(y) - pk) <= same_tol * abs(pk) for y in gs):
                                 continue                  # an old level at a current zone's price: that one counts
-                            if d > farT:
-                                cand.append((d, x))       # a zone BEYOND S (and beyond what was reached): on it goes
-                            elif (gT is not None and x != gT and d < dS + 0.5 * (farT - dS)
+                            if d > farT and d >= turn_min * abs(op):
+                                cand.append((d, x))       # a zone farther from O in the move's direction: on it goes
+                            elif (gT is not None and x != gT and d < 0.5 * farT
                                   and farT - d >= turn_min * abs(op)):
                                 turn = True               # a real pullback from the zone reached: the turn
-                        if broke or turn:
+                        if turn:
                             break
                         if cand:
                             farT, gN = max(cand)
@@ -7308,22 +7309,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             lt = j
                         elif gT is not None and gT in gs:
                             lt = j
-                    if broke and gT is None:
-                        void = True                       # R broke before any continuation: no retest happened
+                    if not void:
+                        gend = ft if gT is not None else j1e   # closed at the zone beyond S, else OPEN to the edge
                 if _dbg:
-                    print("      blue %s: gB=%.4f lb=%s | green: gT=%s ft=%s lt=%s" % (
+                    print("      blue %s: gB=%.4f lb=%s | green: gT=%s ft=%s lt=%s end=%s" % (
                         "VOID" if void else "ok", _gp(gB, lb, (bT, je)), lb,
-                        ("%.4f" % _gp(gT, ft, (bT, je))) if gT is not None else None, ft, lt))
+                        ("%.4f" % _gp(gT, ft, (bT, je))) if gT is not None else None, ft, lt, gend))
                 if not void and b1 >= b0:
                     ylo, yhi = _span(b0, b1)
                     out.append((b0, b1, ylo, yhi, "retest", [levels[_newest(gB, b1, (bT, je))]]))   # BLUE
                     used_spans.append((b0, b1))
-                    if gT is not None:
-                        t0 = b1 + 1
-                        ylo, yhi = _span(t0, ft)
-                        out.append((t0, ft, ylo, yhi, "cont", [levels[_newest(gT, ft, (bT, je))]]))   # GREEN
-                        used_spans.append((t0, ft))
-                        if lt is not None and lt > ft:
+                    t0 = b1 + 1
+                    if gend is not None and gend >= t0:
+                        ylo, yhi = _span(t0, gend)
+                        rg = levels[_newest(gT, ft, (bT, je))] if gT is not None else levels[_newest(gS, je, bT)]
+                        out.append((t0, gend, ylo, yhi, "cont", [rg]))   # GREEN (open: rung = S, the zone to cross)
+                        used_spans.append((t0, gend))
+                        if gT is not None and lt is not None and lt > ft:
                             used_spans.append((ft + 1, lt))   # the bouncing at the zone reached
             if ls is not None and ls > je:
                 used_spans.append((je + 1, ls))           # the bouncing at S belongs to this sequence
