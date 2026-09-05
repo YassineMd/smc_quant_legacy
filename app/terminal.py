@@ -7893,6 +7893,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _LBC9 = {"visit": (240, 70, 90), "break": (250, 205, 60), "retest": (60, 140, 255), "cont": (40, 230, 160)}
             _vb9 = 0
             for _x0, _x1, _ylo, _yhi, _kd in self._ema_lbox_cache[1]:
+                if _kd != "visit":
+                    continue                                  # STEP 1 (user 2026-09-05): the RED box only for now
                 _wx0 = _wx(int(_x0)) - 0.5; _wx1 = _wx(int(_x1)) + 0.5
                 if _wx1 <= _wx0 or _yhi <= _ylo:
                     continue
