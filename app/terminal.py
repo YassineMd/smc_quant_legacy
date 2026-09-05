@@ -1551,6 +1551,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_pocl_rects = []                                # ... and their ZONE STEP rects (evolution bands)
         self._ema_poclc_items = []; self._ema_poclc_rects = []   # 'ema_poc_line_cur': CURRENT-trend marks (dashed) + zones
         self._ema_poclc_cache = None                             # (sig, start ai, [(price, kind, steps)]) per close
+        self._ema_lbox_items = []                                # 'ema_lvl_boxes': pooled outline boxes (ladder path)
+        self._ema_lbox_cache = None                              # (sig, [(x0 ai, x1 ai, ylo, yhi, kind)]) per close
         self._ema_pocl_cache = None                              # (sig, [(flip ai, next flip ai|None, poc)]) per close
         self._ema_pocl_done = {}                                 # (flip t0, flip t1) -> POC of a FINISHED segment (once)
         self._ema_wmrg_items = {}                                # 'ema_walls_merge': one AREA per zone
@@ -2720,7 +2722,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
                    "ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls", "ema_walls_prev",
                    "ema_walls_line", "ema_walls_merge",
-                   "ema_poc", "ema_poc_prev", "ema_poc_line", "ema_poc_line_cur"):
+                   "ema_poc", "ema_poc_prev", "ema_poc_line", "ema_poc_line_cur", "ema_lvl_boxes"):
             if key == "ema_hlread":                  # readout text only; the HL lines are unaffected
                 if not on:
                     for _it in self._ema_ext_lbls.values():
@@ -2759,6 +2761,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._ema_poclc_cache = None         # current-trend marks toggled -> recompute next frame
                 if not on:
                     self._hide_ema_poclc()
+            elif key == "ema_lvl_boxes":
+                self._ema_lbox_cache = None          # ladder boxes toggled -> recompute next frame
+                if not on:
+                    self._hide_ema_lbox()
             elif key == "ema_ext":
                 self._ema_ext_cache.clear(); self._ema_ext_lblsig.clear()   # extremes toggled -> recompute next frame
                 if not on:
@@ -2994,7 +3000,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not any((_sc.get(_k) is not None and _sc[_k].isChecked()) for _k in   # those layers is shown (vlines
                    ("ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls",      # need not be toggled on), user)
                     "ema_walls_prev", "ema_walls_line", "ema_walls_merge", "ema_poc", "ema_poc_prev",
-                    "ema_poc_line", "ema_poc_line_cur")):
+                    "ema_poc_line", "ema_poc_line_cur", "ema_lvl_boxes")):
             return False
         try:
             pt = self.vb.mapSceneToView(ev.scenePos()); xc = pt.x()
@@ -6828,6 +6834,77 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _d in self._ema_poclc_rects:
             _d["rect"].setVisible(False)
 
+    def _hide_ema_lbox(self) -> None:
+        for _d in self._ema_lbox_items:
+            _d["rect"].setVisible(False)
+
+    @staticmethod
+    def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=3):
+        """The level-to-level PATH of price over bars j0..j1 (user 2026-09-05: the hand-drawn boxes).
+        `levels` = [(lo, hi, kind, avail_from_bar)]; H/L indexable by bar. A VISIT = the bars from the first to the
+        last touch of one level (range overlap) with no OTHER level touched in between; a TRANSITION = the bars
+        from a visit's last bar to the next visit's first bar. Kinds:
+            "visit"  a visit of >= min_visit bars (price sitting at a rung)
+            "break"  first move away from a rung to another rung in a NEW direction
+            "retest" the move back to the rung visited just before
+            "cont"   a further move in the break direction (straight on, or after a retest)
+        Consecutive same-direction break/cont moves through brief (< min_visit) touches merge into one box.
+        Returns [(x0, x1, ylo, yhi, kind)] with bar indices and the enclosed bars' low/high."""
+        def _mid(i):
+            return 0.5 * (levels[i][0] + levels[i][1])
+        vis = []                                          # [level idx, first bar, last bar]
+        for j in range(max(0, int(j0)), int(j1) + 1):
+            h, l = float(H[j]), float(L[j])
+            if h <= 0 or l <= 0:
+                continue
+            t = [i for i, (lo, hi, kd, fb) in enumerate(levels) if fb <= j and l <= hi and h >= lo]
+            if not t:
+                continue
+            if vis and vis[-1][0] in t:
+                vis[-1][2] = j
+                continue
+            if vis:                                       # a big bar can run through several rungs: take the farthest
+                cp = _mid(vis[-1][0])
+                ni = max(t, key=lambda i: abs(_mid(i) - cp))
+            else:
+                ni = t[0]
+            vis.append([ni, j, j])
+        tr = []                                           # [kind, x0, x1, dir]
+        bias = 0                                          # direction of the last break (the bias the path carries)
+        for k in range(len(vis) - 1):
+            va, vb = vis[k], vis[k + 1]
+            d = 1 if _mid(vb[0]) > _mid(va[0]) else -1
+            if bias == 0:
+                kind = "break"; bias = d                  # first move: a break, sets the bias
+            elif d == bias:
+                kind = "cont"                             # with the bias: continuation (straight on or after a retest)
+            elif k >= 1 and vb[0] == vis[k - 1][0]:
+                kind = "retest"                           # against the bias, back to the rung just left
+            else:
+                kind = "break"; bias = d                  # against the bias to a FARTHER rung: the bias flips
+            tr.append([kind, va[2], vb[1], d])
+        mg = []
+        for t9 in tr:
+            if (mg and t9[0] == "cont" and mg[-1][0] in ("break", "cont") and mg[-1][3] == t9[3]
+                    and (t9[1] - mg[-1][2]) < min_visit - 1):
+                mg[-1][2] = t9[2]                         # merge: the touch in between was brief
+            else:
+                mg.append(list(t9))
+        out = []
+        for kind, x0, x1, d in mg:
+            if x1 <= x0:
+                continue
+            ylo = min(float(L[j]) for j in range(x0, x1 + 1) if float(L[j]) > 0)
+            yhi = max(float(H[j]) for j in range(x0, x1 + 1))
+            out.append((x0, x1, ylo, yhi, kind))
+        for li, a, b in vis:
+            if b - a + 1 >= min_visit:
+                ylo = min(float(L[j]) for j in range(a, b + 1) if float(L[j]) > 0)
+                yhi = max(float(H[j]) for j in range(a, b + 1))
+                out.append((a, b, ylo, yhi, "visit"))
+        out.sort(key=lambda o: (o[0], o[1]))
+        return out
+
     @staticmethod
     def _ema_span_vp(ana, j0, j1, nb=40):
         """Volume-profile MARKS of the bars ana[j0..j1] (inclusive) -- the EXACT Trend-Extremes-VP rule: `nb`
@@ -7178,8 +7255,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _pl_on = _plcb is not None and _plcb.isChecked()      # 'POC per line': one POC hline per flip segment
         _plccb = self.menu.sub_checks.get("ema_poc_line_cur")
         _plc_on = _plccb is not None and _plccb.isChecked()   # 'Current trend': the marks of the CURRENT trend only
+        _lbcb = self.menu.sub_checks.get("ema_lvl_boxes")
+        _lb_on = _lbcb is not None and _lbcb.isChecked()      # 'Ladder boxes': the level-to-level path boxes
         if ((not _stk_on and not _lvl_on and not _vp_on and not _wl_on and not _wlp_on
-             and not _pc_on and not _pcp_on and not _wmg_on and not _wln_on and not _pl_on and not _plc_on) or m < 51):
+             and not _pc_on and not _pcp_on and not _wmg_on and not _wln_on and not _pl_on and not _plc_on
+             and not _lb_on) or m < 51):
             for _pl in self._ema_stk_pool["g"] + self._ema_stk_pool["r"]:
                 _pl.setVisible(False)
             for _it3 in self._ema_lvl_items.values():
@@ -7187,7 +7267,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             for _it3 in self._ema_lvl_vl.values():
                 _it3.setVisible(False)
             self._hide_ema_vp(); self._hide_ema_walls(); self._hide_ema_pocs(); self._hide_ema_pocl()
-            self._hide_ema_poclc()
+            self._hide_ema_poclc(); self._hide_ema_lbox()
             if self._ema_stk_frm_ln is not None:
                 self._ema_stk_frm_ln.setVisible(False)
             self._ema_flip_hits = []                       # nothing computed -> nothing to click
@@ -7231,8 +7311,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                  or ((_wl_on or _wlp_on or _wmg_on or _wln_on) and self._ema_wall_cache is None)
                  or ((_pc_on or _pcp_on or _wmg_on) and self._ema_poc_cache is None)
                  or (_vp_on and self._ema_vp_cache is None)
-                 or ((_pl_on or _plc_on) and (self._ema_pocl_cache is None or self._ema_pocl_cache[0] != _ssig))
-                 or (_plc_on and (self._ema_poclc_cache is None or self._ema_poclc_cache[0] != _ssig)))
+                 or ((_pl_on or _plc_on or _lb_on) and (self._ema_pocl_cache is None or self._ema_pocl_cache[0] != _ssig))
+                 or (_plc_on and (self._ema_poclc_cache is None or self._ema_poclc_cache[0] != _ssig))
+                 or (_lb_on and (self._ema_lbox_cache is None or self._ema_lbox_cache[0] != _ssig)))
         _ana = ((list(_deep) + list(_warm[len(_warm) - _wn:]) + list(buckets[:m]))
                 if _off else buckets) if _need else buckets
 
@@ -7425,7 +7506,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # line"); same 40-bin / 70%-VA rule (_ema_span_vp), same inclusive analysis span, same flip set (the pin
         # truncates ALL confirmed flips, merged ones included). Each line's marks are frozen once (keyed by the span's
         # two flip times) and never change afterwards -- they are the levels KNOWN when the line printed.
-        if not _pl_on and not _plc_on:                   # the segment cache also feeds 'Current trend' (targets)
+        if not _pl_on and not _plc_on and not _lb_on:    # the segment cache also feeds 'Current trend' + 'Ladder boxes'
             self._hide_ema_pocl()
         else:
             if self._ema_pocl_cache is None or self._ema_pocl_cache[0] != _ssig:
@@ -7784,6 +7865,52 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _sl8["ln"].setVisible(False)
             for _rs8 in self._ema_poclc_rects[_rc:]:
                 _rs8["rect"].setVisible(False)
+        # 'Ladder boxes' (sub-toggle 'ema_lvl_boxes', user 2026-09-05): the level-to-level PATH of price drawn as the
+        # outline boxes the user draws by hand. Rungs = every older segment's POC / POC▲ / POC▼ / LVN LINE prices
+        # from 'POC per line' -- lines only, never the zone bodies (user 2026-09-05); a rung exists from the bar its
+        # segment ended and stays a rung whether touched or not (a level IS a level because of the volume that made it).
+        # RED = sitting at a rung (>= 3 bars), YELLOW = break to another rung in a new direction, BLUE = retest of the
+        # rung just left, GREEN = continuation past the touched rung. Descriptive / eyeball aid (_ema_ladder_boxes).
+        if not _lb_on:
+            self._hide_ema_lbox()
+        else:
+            if self._ema_lbox_cache is None or self._ema_lbox_cache[0] != _ssig:
+                _bx9 = []
+                try:
+                    _lv9 = []                                     # rungs = the POC / LVN LINE prices only (user:
+                    for _a9, _b9, _mk9 in (self._ema_pocl_cache[1] if self._ema_pocl_cache is not None else []):
+                        for _m9 in _mk9:                          #  "not the entire zones"); a touch = the bar's
+                            _lv9.append((float(_m9[0]), float(_m9[0]), _m9[1], int(_b9)))   # range contains the line
+                    if _lv9 and _M - 1 > _off:
+                        _H9 = [0.0] * _M; _L9 = [0.0] * _M
+                        for _j9 in range(_off, _M):
+                            _H9[_j9] = float(_ana[_j9].get("high", 0.0) or 0.0)
+                            _L9[_j9] = float(_ana[_j9].get("low", 0.0) or 0.0)
+                        _bx9 = self._ema_ladder_boxes(_lv9, _H9, _L9, _off, _M - 1)
+                except Exception:
+                    _bx9 = []
+                self._ema_lbox_cache = (_ssig, _bx9)
+            _LBC9 = {"visit": (240, 70, 90), "break": (250, 205, 60), "retest": (60, 140, 255), "cont": (40, 230, 160)}
+            _vb9 = 0
+            for _x0, _x1, _ylo, _yhi, _kd in self._ema_lbox_cache[1]:
+                _wx0 = _wx(int(_x0)) - 0.5; _wx1 = _wx(int(_x1)) + 0.5
+                if _wx1 <= _wx0 or _yhi <= _ylo:
+                    continue
+                if _vb9 >= len(self._ema_lbox_items):
+                    _rb9 = QtWidgets.QGraphicsRectItem(); _rb9.setBrush(pg.mkBrush(None)); _rb9.setZValue(16)
+                    self.vb.addItem(_rb9, ignoreBounds=True)
+                    self._ema_lbox_items.append({"rect": _rb9, "geo": None, "kind": None})
+                _sb9 = self._ema_lbox_items[_vb9]; _vb9 += 1
+                if _sb9.get("kind") != _kd:
+                    _rgb9 = _LBC9.get(_kd, (200, 200, 200))
+                    _pn9 = pg.mkPen(_rgb9[0], _rgb9[1], _rgb9[2], 230, width=1.6); _pn9.setCosmetic(True)
+                    _sb9["rect"].setPen(_pn9); _sb9["kind"] = _kd
+                _geo9 = (_wx0, _wx1, _ylo, _yhi)
+                if _sb9.get("geo") != _geo9:
+                    _sb9["rect"].setRect(_wx0, _ylo, _wx1 - _wx0, _yhi - _ylo); _sb9["geo"] = _geo9
+                _sb9["rect"].setVisible(True)
+            for _sb9 in self._ema_lbox_items[_vb9:]:
+                _sb9["rect"].setVisible(False)
         # 'Trend Extreme Lines' (sub-toggle 'ema_trendlvl'): the LAST FINISHED bear segment (red line -> next
         # green line) marks its LOWEST low with a solid GREEN hline; the last finished bull segment (green ->
         # next red) marks its HIGHEST high with a solid RED hline. Each line runs from ITS vertical line's bar
