@@ -7568,9 +7568,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                 for _p8, _kd8 in self._ema_span_vp(_ana, _spc[0], _spc[1])]
                         # EXTREME-LINE ZONES (user 2026-09-04): the Trend Extreme lines -- the last finished BULL
                         # segment's HIGH (red) / last finished BEAR segment's LOW (green), read exactly as the
-                        # 'Trend Extreme Lines' layer reads them (pin included) -- become a zone when a bar OF THE
-                        # CURRENT TREND crosses them with its body: zone = the LAST such candle's body (same rule
-                        # as the POC zones; bars before the trend's start never count).
+                        # 'Trend Extreme Lines' layer reads them (pin included) -- become a zone when a bar AFTER the
+                        # segment that set them crosses them with its body: zone = the LAST such candle's body, the
+                        # same rule as the POC zones. (The segment's own bars cannot cross their own extreme; the
+                        # crossing bar may sit before the newest vertical line -- user screenshot 2026-09-04.)
+                        # Search window ends at the newest closed bar, or at the pinned segment's end when pinned.
+                        _jend = _M - 1
+                        if self._ema_pin_t:
+                            _nx9 = [_ai9 for _ai9, _t9 in _ftimes.items() if _t9 > float(self._ema_pin_t) + 0.5]
+                            if _nx9:
+                                _jend = min(_jend, min(_nx9) - 1)
                         _exz = []
                         for _sgx, _kx in ((_blc, "ext_hi"), (_brc, "ext_lo")):
                             if _sgx is None:
@@ -7583,8 +7590,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                           for _j9 in range(_s0x, _s1x + 1))
                             if not (_px > 0) or _px == float("inf"):
                                 continue
-                            _zx = self._ema_mark_zones(_ana, _M - 1, [(_px, _kx)], zone_kinds=(_kx,), j_stop=_ac)[0]
-                            _exz.append((_kx, float(_px), _zx[2], _zx[3]))
+                            _zx = self._ema_mark_zones(_ana, _jend, [(_px, _kx)], zone_kinds=(_kx,), j_stop=_s1x + 1)[0]
+                            _exz.append((_kx, float(_px), _zx[2], _zx[3], _s0x))
                         _ext = _exz
                 except Exception:
                     _ac = None; _mkc = []; _ext = []
@@ -7629,14 +7636,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         if _rs8.get("geo") != _zg8:
                             _rs8["rect"].setRect(_sx0, _zlo8, max(1e-9, _sx1 - _sx0), _zhi8 - _zlo8); _rs8["geo"] = _zg8
                         _rs8["rect"].setVisible(True)
-            # EXTREME-LINE ZONES: red (high line) / green (low line) faint rects over the current trend, only when a
-            # current-trend bar crossed the line, and only once the trend's vertical line is confirmed.
-            if _ac is not None and _ext and not _acf:
-                _xc0 = _fxw(_ac); _xc1 = float(x[n - 1])
+            # EXTREME-LINE ZONES: red (high line) / green (low line) faint rects spanning exactly what the Trend
+            # Extreme line spans (its segment-start vline -> live edge, or the pinned segment), only when a bar
+            # after the segment that set the line crossed it. Not gated on the current line's confirmation.
+            if _ac is not None and _ext:
                 _EXC = {"ext_hi": (240, 70, 90), "ext_lo": (40, 230, 120)}
-                for _kx, _px, _zlo9, _zhi9 in _ext:
+                for _kx, _px, _zlo9, _zhi9, _s0x in _ext:
+                    _xc0 = _LX if _LX is not None else _fxw(int(_s0x)); _xc1 = _RX
                     if _zlo9 is None or _zhi9 is None or _zhi9 <= _zlo9 or _xc1 <= _xc0:
-                        continue                              # no current-trend bar crossed it -> line only
+                        continue                              # no bar crossed it since it was set -> line only
                     if _rc >= len(self._ema_poclc_rects):
                         _rc9 = QtWidgets.QGraphicsRectItem(); _rc9.setPen(pg.mkPen(None)); _rc9.setZValue(-6)
                         self.vb.addItem(_rc9, ignoreBounds=True)
