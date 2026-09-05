@@ -6985,43 +6985,52 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             ylo, yhi = _span(a, b)
             out.append((a, b, ylo, yhi, "visit", [levels[_newest(g, b)]]))   # RED: exactly ONE rung = R
             cp = _mid(g)
-            hit = None
-            for j in range(b + 1, j1e + 1):               # YELLOW: the first touch of a DIFFERENT rung group
-                h, l = float(H[j]), float(L[j])
-                if h <= 0 or l <= 0:
-                    continue
-                tg = sorted({grp[i] for i, lv in enumerate(levels)
-                             if grp[i] != g and _live(lv, j) and l <= lv[1] and h >= lv[0]})
-                if tg:
-                    hit = (j, max(tg, key=lambda x: (abs(_mid(x) - cp), levels[_newest(x, j)][3])))
-                    break
-            if hit is None:
-                continue
-            j, g2 = hit
-            # the yellow runs to the LAST touch of the reached rung when the visit there is short (< min_visit,
-            # no red box of its own -- user's drawing 2026-09-05); a real stall there is its own red box, so
-            # the yellow stops at its first touch
-            i2 = next((k for k in range(iv + 1, len(vis)) if vis[k][0] == g2 and vis[k][1] == j), None)
-            v2 = vis[i2] if i2 is not None else None
-            short = v2 is not None and (v2[2] - v2[1] + 1 < min_visit)
-            je = v2[2] if short else j
+            # YELLOW = the MOVE away from R (user 2026-09-05: "the move went down to the LVN" past a POC it only
+            # crossed): follow the stays after the red box while each is a SHORT pass-through (< min_visit) of a
+            # rung progressively FARTHER from R on the same side; the move ends at the farthest rung's last touch,
+            # and THAT rung is S. A real stall on the way ends the yellow at its first touch (the stall is the next
+            # sequence's red box); a stay at a rung not farther than the last one is the turn back (retest begins).
+            path = []; far = 0.0; side = 0; stalled = None; k = iv + 1
+            while k < len(vis):
+                gk, ak, bk = vis[k]
+                if gk == g:
+                    break                                 # back at R
+                dk = _mid(gk) - cp; sd = 1 if dk > 0 else -1
+                if side and sd != side:
+                    break                                 # the other side of R: not this move
+                if abs(dk) <= far:
+                    break                                 # closer than the last rung reached -> the move has ended
+                if bk - ak + 1 >= min_visit:
+                    stalled = k; break                    # a real stall there
+                path.append(k); far = abs(dk); side = sd; k += 1
             x0 = b + 1                                    # NO OVERLAP: the yellow starts on the bar AFTER the red box
+            if stalled is not None:                       # yellow -> the stall's first touch; S = the stalled rung
+                je = vis[stalled][1]
+                if je >= x0:
+                    ylo, yhi = _span(x0, je)
+                    out.append((x0, je, ylo, yhi, "break", [levels[_newest(vis[stalled][0], je)]]))
+                continue                                  # the stall is a NEW sequence: no blue for this one
+            if not path:
+                continue                                  # nothing reached yet (forming) / turned straight back
+            gS = vis[path[-1]][0]; je = vis[path[-1]][2]  # S = the farthest rung reached, to its LAST touch
             if je < x0:
                 continue
             ylo, yhi = _span(x0, je)
-            out.append((x0, je, ylo, yhi, "break", [levels[_newest(g2, je)]]))   # YELLOW: its rung = S
-            if not short:
-                continue                                  # S stalls -> that stall is the next sequence's red box
-            s_end = v2[2]; blue = None
-            for k in range(i2 + 1, len(vis)):             # BLUE: scan the stays after the yellow's touch of S
+            out.append((x0, je, ylo, yhi, "break", [levels[_newest(gS, je)]]))   # YELLOW: its rung = S
+            # BLUE: from the bar after the last touch of S to the last touch of R in the retest stay. On the way
+            # back, short re-touches of S (start moves later) and short crossings of the rungs the move went
+            # through are allowed; a stall, or a rung outside that corridor, voids the sequence.
+            corridor = {vis[p][0] for p in path}
+            s_end = je; blue = None
+            while k < len(vis):
                 gk, ak, bk = vis[k]
-                if gk == g2:
-                    if bk - ak + 1 >= min_visit:
-                        break                             # a real stall at S -> the sequence is void (new red there)
-                    s_end = bk; continue                  # a short bounce off S: the blue starts after it
-                if gk == g:                               # the RETEST of R: blue = last S touch + 1 .. last R touch
-                    blue = (s_end + 1, bk); consumed.add(k)
-                break                                     # (a third rung before the retest -> void)
+                if gk == g:
+                    blue = (s_end + 1, bk); consumed.add(k); break
+                if gk in corridor and bk - ak + 1 < min_visit:
+                    if gk == gS:
+                        s_end = bk                        # bounced off S again: the blue starts after it
+                    k += 1; continue
+                break
             if blue is not None and blue[1] >= blue[0]:
                 ylo, yhi = _span(blue[0], blue[1])
                 out.append((blue[0], blue[1], ylo, yhi, "retest", [levels[_newest(g, blue[1])]]))   # BLUE: rung = R
