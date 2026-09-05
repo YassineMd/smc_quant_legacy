@@ -6995,8 +6995,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         group touched in between (bars touching nothing may sit inside). A bar that touches the anchor AND a farther
         rung still belongs to the stay; the farther rung does NOT extend it (the drop after the last anchor touch is
         the yellow, not the red). Box = those bars' high/low.
-        YELLOW ("break"): from the red box's LAST bar to the FIRST later bar touching a DIFFERENT group -- the touch of
-        the next rung confirms the break (a big bar through several: the farthest). No touch yet -> no yellow.
+        YELLOW ("break"): from the bar after the red box's last bar to the FIRST touch of the level where the move
+        ENDS (the farthest rung reached before price turns back toward R; rungs crossed on the way and pauses do
+        not end it). No rung reached yet -> no yellow. BLUE ("retest"): after the LAST touch of that level, the
+        retracement toward R. Strict order RED > YELLOW > BLUE: a stay inside a yellow/blue never starts a sequence.
         Returns [(x0, x1, ylo, yhi, kind, [rung])] -- exactly ONE rung per box (the group's newest known member)."""
         n = len(levels)
         fam = ["lvn" if levels[i][2] == "lvn" else "poc" for i in range(n)]
@@ -7023,16 +7025,33 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         def _live(lv, j):                                 # rung ACTIVE at bar j: known, and not yet superseded
             return lv[3] <= j and (len(lv) < 6 or j < lv[5])      # (lo, hi, kind, from[, seg[, until]])
 
+        def _livef(lv, j, live_at=None):                  # live at j, or frozen at any of the live_at bar(s)
+            if _live(lv, j):
+                return True
+            if live_at is None:
+                return False
+            return any(_live(lv, q) for q in (live_at if isinstance(live_at, (tuple, list)) else (live_at,)))
+
         def _newest(g, j, live_at=None):                  # the group's most recent rung active at bar j
-            c = [i for i in members[g]                    # (or frozen at live_at: a sequence keeps its rung set)
-                 if _live(levels[i], j) or (live_at is not None and _live(levels[i], live_at))]
+            c = [i for i in members[g] if _livef(levels[i], j, live_at)]   # (or frozen: a sequence keeps its rungs)
             return max(c, key=lambda i: (levels[i][3], i)) if c else g
-        vis = []                                          # [group, first bar, last bar]
-        for j in range(max(0, int(j0)), int(j1) + 1):
+        # PERF: the rungs each bar's range contains, computed ONCE (liveness is filtered per use) -- the global scan
+        # and every sequence's bar walk then look at a handful of rungs per bar instead of all of them.
+        jA = max(0, int(j0)); jB = int(j1)
+        touch = {}
+        for j in range(jA, jB + 1):
             h, l = float(H[j]), float(L[j])
             if h <= 0 or l <= 0:
                 continue
-            tg = sorted({grp[i] for i, lv in enumerate(levels) if _live(lv, j) and l <= lv[1] and h >= lv[0]})
+            tj = [(grp[i], i) for i, lv in enumerate(levels) if l <= lv[1] and h >= lv[0]]
+            if tj:
+                touch[j] = tj
+        vis = []                                          # [group, first bar, last bar]
+        for j in range(jA, jB + 1):
+            tj = touch.get(j)
+            if not tj:
+                continue
+            tg = sorted({gq for gq, i in tj if _live(levels[i], j)})
             if not tg:
                 continue
             if vis and vis[-1][0] in tg:                  # still touching the anchor rung -> the stay goes on
@@ -7057,9 +7076,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # vertical line printing during the move does not change what the move is measured against.
         # RED ends before the DEPARTING bar(s): a trailing bar whose close sits > 2x farther from R than any other
         # bar of the stall belongs to the move (user: "the yellow box takes the big red bar from the red box").
-        # YELLOW = the MOVE away from R: through short pass-through visits of rungs progressively farther from R on
-        # the same side, to the farthest rung's last touch (S = where the move ENDED, e.g. the LVN past a crossed
-        # POC); a stall on the way does NOT end it (user 2026-09-05: never a red right after a yellow).
+        # YELLOW = the move away from R, to the FIRST touch of the farthest rung it reaches before turning back
+        # (rungs crossed on the way / pauses do not end it). Never a red right after it.
         # BLUE = the retest: from the bar after the last touch of S to the last touch of R in the retest stay
         # (blue whatever its length, never red; carries R). On the way back, short re-touches of S / short crossings
         # of the move's corridor are allowed; a stall, or a rung outside the corridor, voids the sequence.
@@ -7080,12 +7098,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             ignored up to `ignore_R_until` (the departing bars' wicks). Yields [group, first, last]."""
             cur = None
             for j in range(b + 1, j1e + 1):
-                h, l = float(H[j]), float(L[j])
-                if h <= 0 or l <= 0:
+                tj = touch.get(j)
+                if not tj:
                     continue
-                tg = sorted({grp[i] for i, lv in enumerate(levels)
-                             if (_live(lv, j) or _live(lv, live_at)) and l <= lv[1] and h >= lv[0]
-                             and not (grp[i] == gR and j <= ignore_R_until)})
+                tg = sorted({gq for gq, i in tj if _livef(levels[i], j, live_at)
+                             and not (gq == gR and j <= ignore_R_until)})
                 if not tg:
                     continue
                 if cur is not None and cur[0] in tg:
@@ -7118,45 +7135,42 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             ylo, yhi = _span(a, bT)
             out.append((a, bT, ylo, yhi, "visit", [levels[_newest(g, bT)]]))   # RED: exactly ONE rung = R
             cp = _mid(g)
-            it = _seq_visits(bT, bT, g, b)
-            path = []; far = 0.0; side = 0; turn = None
-            for v in it:                                  # the MOVE: visits (short or long -- a stall on the way is
-                gk, ak, bk = v                            # NOT a new red, the order is red > yellow > blue) of rungs
-                if gk == g:                               # progressively farther from R on the same side
-                    turn = v; break                       # back at R
+            # YELLOW (user 2026-09-05, final): from the bar after the red box's last R touch to the FIRST touch of
+            # the level where the MOVE ENDS -- the farthest rung reached before price turns back toward R. A rung
+            # touched on the way and passed does not end it ("it first touched the most recent LVN but went
+            # beyond it to the older LVN"), nor does a pause on the way (never a red right after a yellow). The
+            # turn = a visit of a rung not farther than the last one reached (R itself included) or of a rung on
+            # the other side of R. S = that farthest rung; the bars bouncing at S after its first touch belong to
+            # the sequence but to no box.
+            x0 = bT + 1                                   # NO OVERLAP: the yellow starts on the bar AFTER the red box
+            path = []; far = 0.0; side = 0
+            for v in _seq_visits(bT, bT, g, b):
+                gk, ak, bk = v
+                if gk == g:
+                    break                                 # back at R: the move is over
                 dk = _mid(gk) - cp; sd = 1 if dk > 0 else -1
                 if side and sd != side:
-                    turn = v; break                       # the other side of R: not this move
+                    break                                 # the other side of R: not this move
                 if abs(dk) <= far:
-                    turn = v; break                       # closer than the last rung reached -> the move has ended
+                    break                                 # not farther than the last rung reached -> the turn
                 path.append(v); far = abs(dk); side = sd
-            x0 = bT + 1                                   # NO OVERLAP: the yellow starts on the bar AFTER the red box
             if not path:
                 continue                                  # nothing reached yet (forming) / turned straight back
-            gS = path[-1][0]; je = path[-1][2]            # S = the farthest rung reached, to its LAST touch
-            if je < x0:
-                continue
+            gS, je, s_end = path[-1]                      # S = the farthest rung; the yellow ends on its FIRST touch
             ylo, yhi = _span(x0, je)
             out.append((x0, je, ylo, yhi, "break", [levels[_newest(gS, je, bT)]]))   # YELLOW: its rung = S
             used_spans.append((x0, je))
-            # BLUE = the RETRACEMENT (user 2026-09-05): from the bar after the last touch of S back TOWARD R through
+            # BLUE = the RETRACEMENT (user 2026-09-05): from the bar after the LAST touch of S back TOWARD R through
             # rungs progressively closer to R -- any POC / LVN between S and R, or R itself -- to the last touch of
-            # the closest one reached; it ends when price turns away from R again. Hovering at the retraced level is
-            # part of it (no stall rule). It is VOID -- skipped, the red/yellow detection simply resumes -- when any
-            # close goes beyond the red box's far extreme: bearish (S below R) above the red box's HIGH, bullish
-            # below its LOW. Its rung = the level it retraced to.
+            # the closest one reached; it ends when price turns away from R again. S and R stay frozen for the
+            # sequence (rungs live at the red's end or at the S touch). It is VOID -- skipped, the red/yellow
+            # detection simply resumes -- when any close goes beyond the red box's far extreme: bearish (S below
+            # R) above the red box's HIGH, bullish below its LOW. Its rung = the level it retraced to.
             bear = side < 0
             r_ext = (max(float(H[j]) for j in range(a, bT + 1)) if bear
                      else min(float(L[j]) for j in range(a, bT + 1) if float(L[j]) > 0))
-            s_end = je; back = []; near = far
-            pend = [turn] if turn is not None else []
-
-            def _rest():                                  # lazily: stop walking the bars once the blue is settled
-                for v0 in pend:
-                    yield v0
-                for v0 in it:
-                    yield v0
-            for v in _rest():
+            back = []; near = far
+            for v in _seq_visits(s_end, (bT, je), g, b):
                 gk, ak, bk = v
                 dk = 0.0 if gk == g else abs(_mid(gk) - cp)
                 sk = 0 if gk == g else (1 if _mid(gk) - cp > 0 else -1)
@@ -7178,13 +7192,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             void = True; break            # closed beyond the red box's extreme -> sequence void
                 if not void and b1 >= b0:
                     ylo, yhi = _span(b0, b1)
-                    out.append((b0, b1, ylo, yhi, "retest", [levels[_newest(back[-1][0], b1, bT)]]))   # BLUE
+                    out.append((b0, b1, ylo, yhi, "retest", [levels[_newest(back[-1][0], b1, (bT, je))]]))   # BLUE
                     used_spans.append((b0, b1))
+            if s_end > je:
+                used_spans.append((je + 1, s_end))        # the bouncing at S belongs to this sequence too
         # NO OVERLAP at the other end either: when the reached rung is a real stall (its own red box), the yellow
         # ends on the confirming touch and that red box starts on the NEXT bar. And the retest stay is the BLUE box:
         # a red box (from the global scan) overlapping a blue or a yellow is dropped.
         yends = {o[1] for o in out if o[4] == "break"}
-        spans = [(o[0], o[1]) for o in out if o[4] in ("break", "retest")]
+        spans = list(used_spans)                          # yellow + bouncing-at-S + blue of every sequence
         adj = []
         for (a, b, ylo, yhi, kind, rg) in out:
             if kind == "visit":
