@@ -6933,15 +6933,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         def _mid(g):
             return 0.5 * (levels[g][0] + levels[g][1])
 
-        def _newest(g, j):                                # the group's most recent rung known at bar j
-            c = [i for i in members[g] if levels[i][3] <= j]
+        def _live(lv, j):                                 # rung ACTIVE at bar j: known, and not yet superseded
+            return lv[3] <= j and (len(lv) < 6 or j < lv[5])      # (lo, hi, kind, from[, seg[, until]])
+
+        def _newest(g, j):                                # the group's most recent rung active at bar j
+            c = [i for i in members[g] if _live(levels[i], j)]
             return max(c, key=lambda i: (levels[i][3], i)) if c else g
         vis = []                                          # [group, first bar, last bar]
         for j in range(max(0, int(j0)), int(j1) + 1):
             h, l = float(H[j]), float(L[j])
             if h <= 0 or l <= 0:
                 continue
-            tg = sorted({grp[i] for i, lv in enumerate(levels) if lv[3] <= j and l <= lv[1] and h >= lv[0]})
+            tg = sorted({grp[i] for i, lv in enumerate(levels) if _live(lv, j) and l <= lv[1] and h >= lv[0]})
             if not tg:
                 continue
             if vis and vis[-1][0] in tg:                  # still touching the anchor rung -> the stay goes on
@@ -6980,7 +6983,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if h <= 0 or l <= 0:
                     continue
                 tg = sorted({grp[i] for i, lv in enumerate(levels)
-                             if grp[i] != g and lv[3] <= j and l <= lv[1] and h >= lv[0]})
+                             if grp[i] != g and _live(lv, j) and l <= lv[1] and h >= lv[0]})
                 if tg:
                     hit = (j, max(tg, key=lambda x: (abs(_mid(x) - cp), levels[_newest(x, j)][3])))
                     break
@@ -7963,11 +7966,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self._ema_lbox_cache is None or self._ema_lbox_cache[0] != _ssig:
                 _bx9 = []
                 try:
-                    _lv9 = []                                     # rungs = the POC / LVN LINE prices only (user:
+                    # RUNGS = the CURRENT lines only (user 2026-09-05: "the most recent / current POC and LVN --
+                    # previous POC / LVN zones must not count"): each segment's marks are rungs ONLY over that
+                    # segment (from its vertical line to the next one), then they are superseded by the next
+                    # segment's marks; over the current trend the dashed 'Current trend' marks are the rungs.
+                    _lv9 = []                                     # (lo, hi, kind, from, seg, until)
                     for _a9, _b9, _mk9 in (self._ema_pocl_cache[1] if self._ema_pocl_cache is not None else []):
-                        for _m9 in _mk9:                          #  "not the entire zones"); a touch = the bar's
-                            _lv9.append((float(_m9[0]), float(_m9[0]), _m9[1], int(_a9),    # range contains the line;
-                                         (int(_a9), int(_b9))))                            # known from ITS line (as-of)
+                        for _m9 in _mk9:                          # lines only, a touch = the bar's range contains it
+                            _lv9.append((float(_m9[0]), float(_m9[0]), _m9[1], int(_a9), (int(_a9), int(_b9)), int(_b9)))
                     # + the CURRENT trend's marks (the dashed 'Current trend' lines = the side VP as of now): the most
                     # recent rungs of all (user 2026-09-05: "in the screenshot it's the dashed line"). Taken from the
                     # 'Current trend' cache when fresh, else computed here the same way (start = forming cross, else
@@ -7999,7 +8005,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _mkx = list(self._ema_span_vp(_ana, _spx[0], _spx[1]))
                     if _acx is not None:
                         for _p8, _kd8 in _mkx:
-                            _lv9.append((float(_p8), float(_p8), _kd8, int(_acx), (int(_acx), int(_M - 1))))
+                            _lv9.append((float(_p8), float(_p8), _kd8, int(_acx), (int(_acx), int(_M - 1)), int(_M)))
                     if _lv9 and _M - 1 > _off:
                         _H9 = [0.0] * _M; _L9 = [0.0] * _M
                         for _j9 in range(_off, _M):
