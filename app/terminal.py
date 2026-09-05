@@ -7243,7 +7243,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     lb = j                                # the zone touched again
             if _dbg:
                 print("      blue: gB=%s lb=%s near=%.4f" % (("%.4f" % _gp(gB, lb, (bT, je))) if gB is not None else None, lb, near))
-            if gB is not None:
+            qual = gB is not None and far - near >= max(0.5 * far, turn_min * abs(cp))
+            if gB is not None and not qual:               # a retrace short of 50%: NOT a blue (user 2026-09-05,
+                if _dbg:                                  # "it has to, otherwise it doesn't count") -- a pause of
+                    print("      blue: retrace %.0f%% < 50%% -> does not count" % (100.0 * (far - near) / far if far else 0.0))
+                if lb is not None and lb > je:            # the still-open sequence, so no red forms there either
+                    used_spans.append((je + 1, lb))
+            if qual:
                 b0, b1 = je + 1, lb
                 void = False
                 if C is not None:
