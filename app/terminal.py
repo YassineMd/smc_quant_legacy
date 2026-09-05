@@ -6911,19 +6911,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return out
 
     @staticmethod
-    def _ema_mark_zones(ana, j_last, marks, zone_kinds=("poc", "poc_hi", "poc_lo")):
+    def _ema_mark_zones(ana, j_last, marks, zone_kinds=("poc", "poc_hi", "poc_lo"), j_stop=0):
         """ZONE per mark (user 2026-09-04: "keep the line; the zone becomes the BODY of the last candle whose body
-        crosses the line"): walking BACK from ana[j_last], the first candle with min(open, close) <= price <=
-        max(open, close) gives (body low, body high). Only `zone_kinds` get a zone -- the LVN stays a line.
-        Returns [(price, kind, zlo, zhi)] -- zlo/zhi None when no candle body ever crossed that price."""
+        crosses the line"): walking BACK from ana[j_last] down to ana[j_stop], the first candle with
+        min(open, close) <= price <= max(open, close) gives (body low, body high). Only `zone_kinds` get a zone --
+        the LVN stays a line. Returns [(price, kind, zlo, zhi)] -- zlo/zhi None when no candle body in the range
+        crossed that price."""
         out = []
-        j_last = min(len(ana) - 1, int(j_last))
+        j_last = min(len(ana) - 1, int(j_last)); j_stop = max(0, int(j_stop))
         for m in marks:
             p, kind = m[0], m[1]
             zlo = zhi = None
             if kind not in zone_kinds:
                 out.append((p, kind, None, None)); continue
-            for j in range(j_last, -1, -1):
+            for j in range(j_last, j_stop - 1, -1):
                 b = ana[j]
                 o = float(b.get("open", b.get("open_price", 0.0)) or 0.0)
                 c = float(b.get("close", b.get("close_price", 0.0)) or 0.0)
@@ -7536,7 +7537,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hide_ema_poclc()
         else:
             if self._ema_poclc_cache is None or self._ema_poclc_cache[0] != _ssig:
-                _ac = None; _mkc = []; _acf = False
+                _ac = None; _mkc = []; _acf = False; _ext = []
                 try:
                     _flc = [int(_q) for _q in sorted(int(_i8) for _i8 in (_g + _r)) if int(_q) not in _hid2]
                     _frmc = getattr(self, "_ema_stk_forming", None)
@@ -7565,10 +7566,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _mkc = [(_p8, _kd8, (self._ema_zone_steps(_ana, _p8, _ac, _M - 1)
                                              if _kd8 in ("poc", "poc_hi", "poc_lo") else []))
                                 for _p8, _kd8 in self._ema_span_vp(_ana, _spc[0], _spc[1])]
+                        # EXTREME-LINE ZONES (user 2026-09-04): the Trend Extreme lines -- the last finished BULL
+                        # segment's HIGH (red) / last finished BEAR segment's LOW (green), read exactly as the
+                        # 'Trend Extreme Lines' layer reads them (pin included) -- become a zone when a bar OF THE
+                        # CURRENT TREND crosses them with its body: zone = the LAST such candle's body (same rule
+                        # as the POC zones; bars before the trend's start never count).
+                        _exz = []
+                        for _sgx, _kx in ((_blc, "ext_hi"), (_brc, "ext_lo")):
+                            if _sgx is None:
+                                continue
+                            _s0x, _s1x = int(_sgx[0]), int(_sgx[1])
+                            if _kx == "ext_hi":
+                                _px = max(float(_ana[_j9].get("high", 0.0) or 0.0) for _j9 in range(_s0x, _s1x + 1))
+                            else:
+                                _px = min((float(_ana[_j9].get("low", 0.0) or 0.0) or float("inf"))
+                                          for _j9 in range(_s0x, _s1x + 1))
+                            if not (_px > 0) or _px == float("inf"):
+                                continue
+                            _zx = self._ema_mark_zones(_ana, _M - 1, [(_px, _kx)], zone_kinds=(_kx,), j_stop=_ac)[0]
+                            _exz.append((_kx, float(_px), _zx[2], _zx[3]))
+                        _ext = _exz
                 except Exception:
-                    _ac = None; _mkc = []
-                self._ema_poclc_cache = (_ssig, _ac, _mkc, _acf)
-            _, _ac, _mkc, _acf = self._ema_poclc_cache
+                    _ac = None; _mkc = []; _ext = []
+                self._ema_poclc_cache = (_ssig, _ac, _mkc, _acf, _ext)
+            _, _ac, _mkc, _acf, _ext = self._ema_poclc_cache
             _STYC = {"poc": ((250, 180, 60, 235), 1.4), "poc_hi": ((250, 205, 120, 200), 1.1),
                      "poc_lo": ((250, 205, 120, 200), 1.1), "lvn": ((178, 70, 255, 225), 1.2)}
             _vc = 0; _rc = 0
@@ -7608,6 +7629,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         if _rs8.get("geo") != _zg8:
                             _rs8["rect"].setRect(_sx0, _zlo8, max(1e-9, _sx1 - _sx0), _zhi8 - _zlo8); _rs8["geo"] = _zg8
                         _rs8["rect"].setVisible(True)
+            # EXTREME-LINE ZONES: red (high line) / green (low line) faint rects over the current trend, only when a
+            # current-trend bar crossed the line, and only once the trend's vertical line is confirmed.
+            if _ac is not None and _ext and not _acf:
+                _xc0 = _fxw(_ac); _xc1 = float(x[n - 1])
+                _EXC = {"ext_hi": (240, 70, 90), "ext_lo": (40, 230, 120)}
+                for _kx, _px, _zlo9, _zhi9 in _ext:
+                    if _zlo9 is None or _zhi9 is None or _zhi9 <= _zlo9 or _xc1 <= _xc0:
+                        continue                              # no current-trend bar crossed it -> line only
+                    if _rc >= len(self._ema_poclc_rects):
+                        _rc9 = QtWidgets.QGraphicsRectItem(); _rc9.setPen(pg.mkPen(None)); _rc9.setZValue(-6)
+                        self.vb.addItem(_rc9, ignoreBounds=True)
+                        self._ema_poclc_rects.append({"rect": _rc9, "geo": None, "kind": None})
+                    _rs9 = self._ema_poclc_rects[_rc]; _rc += 1
+                    if _rs9.get("kind") != _kx:
+                        _rgb9 = _EXC[_kx]
+                        _rs9["rect"].setBrush(pg.mkBrush(_rgb9[0], _rgb9[1], _rgb9[2], 34)); _rs9["kind"] = _kx
+                    _zg9 = (_xc0, _xc1, _zlo9, _zhi9)
+                    if _rs9.get("geo") != _zg9:
+                        _rs9["rect"].setRect(_xc0, _zlo9, max(1e-9, _xc1 - _xc0), _zhi9 - _zlo9); _rs9["geo"] = _zg9
+                    _rs9["rect"].setVisible(True)
             for _sl8 in self._ema_poclc_items[_vc:]:
                 _sl8["ln"].setVisible(False)
             for _rs8 in self._ema_poclc_rects[_rc:]:
