@@ -6897,11 +6897,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             ylo = min(float(L[j]) for j in range(x0, x1 + 1) if float(L[j]) > 0)
             yhi = max(float(H[j]) for j in range(x0, x1 + 1))
             out.append((x0, x1, ylo, yhi, kind))
-        for li, a, b in vis:
-            if b - a + 1 >= min_visit:
-                ylo = min(float(L[j]) for j in range(a, b + 1) if float(L[j]) > 0)
-                yhi = max(float(H[j]) for j in range(a, b + 1))
-                out.append((a, b, ylo, yhi, "visit"))
+        mv = []                                           # qualifying visits; CONSECUTIVE ones merge (user 2026-09-05:
+        for li, a, b in vis:                              # "two or more consecutive red boxes -> one"): a stay at the
+            if b - a + 1 < min_visit:                     # next rung that begins within (min_visit - 1) bars of the
+                continue                                  # previous stay ending joins it, chaining for 3+
+            if mv and (a - mv[-1][1] - 1) < min_visit:
+                mv[-1][1] = b
+            else:
+                mv.append([a, b])
+        for a, b in mv:
+            ylo = min(float(L[j]) for j in range(a, b + 1) if float(L[j]) > 0)
+            yhi = max(float(H[j]) for j in range(a, b + 1))
+            out.append((a, b, ylo, yhi, "visit"))
         out.sort(key=lambda o: (o[0], o[1]))
         return out
 
