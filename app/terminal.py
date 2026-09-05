@@ -1556,6 +1556,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_lbox_hl = []; self._ema_lbox_hover = None      # hover: bold rung line(s) of the hovered red box
         self._ema_pocl_cache = None                              # (sig, [(flip ai, next flip ai|None, poc)]) per close
         self._ema_pocl_done = {}                                 # (flip t0, flip t1) -> POC of a FINISHED segment (once)
+        self._ema_asof_done = {}                                 # (tf, src, flip t) -> (marks, hiP, loP) as of that flip (ladder, frozen)
+        self._ema_tgt_done = {}                                  # (tf, src, flip t, dir) -> target rungs projected in that span (frozen)
         self._ema_wmrg_items = {}                                # 'ema_walls_merge': one AREA per zone
         self._ema_wall_items = {}                                # 'ema_walls': per-zone strongest-wall band + tag
         self._ema_wall_cache = None                              # (sig, {zone: mark}) — detect once per bar close
@@ -6900,6 +6902,87 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _h in self._ema_lbox_hl[_n:]:
             _h["ln"].setVisible(False)
 
+    def _ema_untouched_targets(self, pzc, ana, M, ac, hiP, loP, sqc, blc, brc, direction=None, tgt_max=4):
+        """UNTOUCHED TARGETS (user 2026-09-04): once price is beyond an extreme line, the OLDER segments' marks lying
+        beyond that line in the break direction that price never revisited BEFORE the current trend (bars < ac) are
+        where it is heading. A POC (any of the three) qualifies through its ZONE (no bar after the crossing candle
+        traded into the body), an LVN as a LINE (no bar since its line touched the price), and any OLDER extreme
+        line (a finished segment's high / low other than the current pair, wick-touch counts). Nearest to the
+        extreme first, at most tgt_max, duplicates by level dropped. direction: +1 above hiP, -1 below loP, None =
+        from the last close. Returns [(price, kind, zlo, zhi)]."""
+        cl = float(ana[M - 1].get("close", ana[M - 1].get("close_price", 0.0)) or 0.0)
+        d = direction if direction is not None else (
+            1 if (hiP is not None and cl > hiP) else (-1 if (loP is not None and cl < loP) else 0))
+        if not d or not pzc:
+            return []
+        ref = hiP if d > 0 else loP
+        if ref is None:
+            return []
+        ac = max(0, int(ac))
+        cand = []
+        for a9, b9, mk9 in pzc:
+            for m9 in mk9:
+                p9, k9 = float(m9[0]), m9[1]
+                if k9 == "lvn":
+                    if (d > 0 and p9 <= ref) or (d < 0 and p9 >= ref):
+                        continue
+                    j0z = int(a9); zlo = zhi = None
+                else:
+                    if len(m9) < 3 or not m9[2]:
+                        continue                                    # POC that no candle body ever crossed
+                    jz, zlo, zhi = int(m9[2][-1][0]), float(m9[2][-1][1]), float(m9[2][-1][2])
+                    if (d > 0 and zlo <= ref) or (d < 0 and zhi >= ref):
+                        continue
+                    j0z = jz + 1
+                tlo = zlo if zlo is not None else p9
+                thi = zhi if zhi is not None else p9
+                touched = False
+                for j in range(max(0, j0z), ac):
+                    bb = ana[j]
+                    h = float(bb.get("high", 0.0) or 0.0); l = float(bb.get("low", 0.0) or 0.0)
+                    if h > 0 and l > 0 and l <= thi and h >= tlo:
+                        touched = True; break
+                if touched:
+                    continue
+                cand.append((abs(tlo - ref) if d > 0 else abs(thi - ref), p9, k9, zlo, zhi))
+        for k8 in range(len(sqc) - 1):                                  # older EXTREME lines
+            (s0, c0), (s1, c1) = sqc[k8], sqc[k8 + 1]
+            if c0 == "g" and c1 == "r":
+                kx = "ext_hi"
+            elif c0 == "r" and c1 == "g":
+                kx = "ext_lo"
+            else:
+                continue
+            if (s0, s1) in (blc, brc):
+                continue                                                # the current extreme pair itself
+            if kx == "ext_hi":
+                p8 = max(float(ana[j].get("high", 0.0) or 0.0) for j in range(int(s0), int(s1) + 1))
+            else:
+                p8 = min((float(ana[j].get("low", 0.0) or 0.0) or float("inf")) for j in range(int(s0), int(s1) + 1))
+            if not (p8 > 0) or p8 == float("inf"):
+                continue
+            if (d > 0 and p8 <= ref) or (d < 0 and p8 >= ref):
+                continue
+            touched = False
+            for j in range(int(s1) + 1, ac):
+                bb = ana[j]
+                h = float(bb.get("high", 0.0) or 0.0); l = float(bb.get("low", 0.0) or 0.0)
+                if h > 0 and l > 0 and l <= p8 <= h:
+                    touched = True; break
+            if touched:
+                continue
+            cand.append((abs(p8 - ref), p8, kx, None, None))
+        cand.sort(key=lambda c: c[0])
+        seen = set(); out = []
+        for d9, p9, k9, zlo, zhi in cand:
+            key = (round(zlo if zlo is not None else p9, 6), round(zhi if zhi is not None else p9, 6))
+            if key in seen:
+                continue
+            seen.add(key); out.append((p9, k9, zlo, zhi))
+            if len(out) >= tgt_max:
+                break
+        return out
+
     @staticmethod
     def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=5, same_tol=0.0015, C=None):
         """The level-to-level PATH of price over bars j0..j1 as the user's hand-drawn boxes (2026-09-05), built in
@@ -7602,12 +7685,40 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if _den == 0.0:
                     return float(_c)
                 return (_c - 1) + min(1.0, max(0.0, _dp / _den))
-            _g = []; _r = []; _fx = {}       # confirmed flips anchor at the CROSS bar; _fx = its exact crossing x
+            _g = []; _r = []; _fx = {}; _fconf = {}   # confirmed flips anchor at the CROSS bar; _fx = its exact crossing x;
+            #                                          _fconf = the bar the regime got CONFIRMED at (when the line PRINTED)
             _state = "g" if _bull[50] else ("r" if _bear[50] else None)   # regime already running at warmup end
             _pend = _state is not None
             _reg0 = 50 if _pend else -1                       # regime start (initial regime: conservatively bar 50)
             _last_col = None                                  # printed lines must ALTERNATE colours (user
-            for _i in range(50, _M):                          # 2026-08-27: consecutive same-colour lines = one)
+            _i0 = 50                                          # 2026-08-27: consecutive same-colour lines = one)
+            # FLIP LEDGER (user 2026-09-05, causal): a flip confirmed at an earlier recompute is FROZEN -- its
+            # cross bar, colour and confirmation bar never change afterwards, whatever the analysis series' start
+            # does (it slides bar by bar in replay and once the window is full, and the EMA warm-up + the 'initial
+            # regime at bar 50' + the same-colour suppression made the whole flip pattern cascade -> boxes and
+            # levels rewritten by the next candle). The walk resumes from the newest frozen flip's confirmation
+            # with the state it left behind; a ledger flip older than the series' start is dropped; time running
+            # backwards (replay restarted) or a tf / source change resets the ledger.
+            _led = getattr(self, "_ema_flip_ledger", None)
+            _lkey = (self._tf, self._chart_source)
+            _tend = float(_ana[_M - 1].get("start_time", 0.0) or 0.0)
+            if _led is not None and (_led.get("key") != _lkey or float(_led.get("t_last", 0.0)) > _tend + 1e-6):
+                _led = None
+            if _led is not None and _led.get("flips"):
+                _tix = {}
+                for _j in range(_M):
+                    _tix.setdefault(float(_ana[_j].get("start_time", 0.0) or 0.0), _j)
+                _tl = _led["flips"][-1]
+                if float(_tl[0]) in _tix and float(_tl[2]) in _tix:
+                    for _tc, _col, _tcf in _led["flips"]:
+                        _jc = _tix.get(float(_tc)); _jf = _tix.get(float(_tcf))
+                        if _jc is None or _jf is None or _jf < _jc:
+                            continue                          # older than the series' start -> dropped
+                        (_g if _col == "g" else _r).append(int(_jc))
+                        _fx[int(_jc)] = _cross_fx(_jc); _fconf[int(_jc)] = int(_jf)
+                    _reg0 = int(_tix[float(_tl[0])]); _state = _tl[1]; _last_col = _tl[1]; _pend = False
+                    _i0 = int(_tix[float(_tl[2])]) + 1
+            for _i in range(_i0, _M):
                 if _bull[_i] and not _bull[_i - 1]:           # up-cross -> new long regime, validation pending
                     _state = "g"; _pend = True; _reg0 = _i
                 elif _bear[_i] and not _bear[_i - 1]:         # down-cross -> new short regime, validation pending
@@ -7616,11 +7727,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     continue                                  # be >= 20 bars old before its line can qualify
                 if _pend and _state == "g" and _bull[_i] and _valid(_i, True):
                     if _last_col != "g":                      # first of a same-colour run prints, the rest suppressed
-                        _g.append(int(_reg0)); _fx[int(_reg0)] = _cross_fx(_reg0); _last_col = "g"
+                        _g.append(int(_reg0)); _fx[int(_reg0)] = _cross_fx(_reg0); _last_col = "g"; _fconf[int(_reg0)] = int(_i)
                     _pend = False                             # CONFIRMED at _i, but the line prints back at the CROSS
                 elif _pend and _state == "r" and _bear[_i] and _valid(_i, False):
                     if _last_col != "r":
-                        _r.append(int(_reg0)); _fx[int(_reg0)] = _cross_fx(_reg0); _last_col = "r"
+                        _r.append(int(_reg0)); _fx[int(_reg0)] = _cross_fx(_reg0); _last_col = "r"; _fconf[int(_reg0)] = int(_i)
                     _pend = False
             # flip -> bar TIME, captured HERE because _ana is only the full analysis series on a recompute;
             # the per-frame draw path must never index it (that was an IndexError on cache hits).
@@ -7632,6 +7743,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if _frm is not None:
                 _fx[int(_reg0)] = _cross_fx(_reg0)
             self._ema_stk_forming = _frm
+            self._ema_flip_conf = dict(_fconf)      # flip cross bar -> its confirmation bar (causal timeline)
+            self._ema_flip_ledger = {"key": _lkey, "t_last": _tend, "flips": [
+                (float(_ana[_q].get("start_time", 0.0) or 0.0), _cq,
+                 float(_ana[_fconf[_q]].get("start_time", 0.0) or 0.0))
+                for _q, _cq in sorted([(int(_q), "g") for _q in _g] + [(int(_q), "r") for _q in _r]) if _q in _fconf]}
             self._ema_stk_cache = (_ssig, _g, _r, _ft, _fx)
         _, _g, _r, _ftimes, _fx = self._ema_stk_cache
         self._ema_flip_times = _ftimes
@@ -7891,94 +8007,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _zx = self._ema_mark_zones(_ana, _jend, [(_px, _kx)], zone_kinds=(_kx,), j_stop=_s1x + 1)[0]
                             _exz.append((_kx, float(_px), _zx[2], _zx[3], _s0x))
                         _ext = _exz
-                        # UNTOUCHED TARGETS (user 2026-09-04): once the current trend's last CLOSE is beyond an
-                        # extreme line, the OLDER segments' marks lying beyond that line in the break direction that
-                        # price never revisited are where it is heading -> project them over the current trend.
-                        # A POC (any of the three) qualifies through its ZONE (no bar after the crossing candle
-                        # traded into the body); an LVN qualifies as a LINE (no bar since its line touched the price).
-                        # Nearest to the extreme first, at most _TGT_MAX (mixed kinds, duplicates by level dropped).
-                        _TGT_MAX = 4
-                        _cl9 = float(_ana[_M - 1].get("close", _ana[_M - 1].get("close_price", 0.0)) or 0.0)
+                        # UNTOUCHED TARGETS (user 2026-09-04) -> _ema_untouched_targets (shared with the ladder)
                         _hiP = next((_e[1] for _e in _exz if _e[0] == "ext_hi"), None)
                         _loP = next((_e[1] for _e in _exz if _e[0] == "ext_lo"), None)
-                        _dir9 = 1 if (_hiP is not None and _cl9 > _hiP) else (-1 if (_loP is not None and _cl9 < _loP) else 0)
                         _pzc = (self._ema_pocl_cache[1] if (self._ema_pocl_cache is not None
                                                             and self._ema_pocl_cache[0] == _ssig) else [])
-                        if _dir9 and _pzc and _cl9 > 0:
-                            _ref9 = _hiP if _dir9 > 0 else _loP
-                            _cand9 = []
-                            for _a9, _b9, _mk9 in _pzc:
-                                for _m9 in _mk9:
-                                    _p9, _k9 = float(_m9[0]), _m9[1]
-                                    if _k9 == "lvn":
-                                        if (_dir9 > 0 and _p9 <= _ref9) or (_dir9 < 0 and _p9 >= _ref9):
-                                            continue
-                                        _j0z = int(_a9); _zlo9 = _zhi9 = None
-                                    else:
-                                        if not _m9[2]:
-                                            continue                    # POC that no candle body ever crossed
-                                        _jz, _zlo9, _zhi9 = int(_m9[2][-1][0]), float(_m9[2][-1][1]), float(_m9[2][-1][2])
-                                        if (_dir9 > 0 and _zlo9 <= _ref9) or (_dir9 < 0 and _zhi9 >= _ref9):
-                                            continue
-                                        _j0z = _jz + 1
-                                    _tlo9 = _zlo9 if _zlo9 is not None else _p9
-                                    _thi9 = _zhi9 if _zhi9 is not None else _p9
-                                    # "untouched" = never revisited BEFORE the current trend started (user screenshot
-                                    # 2026-09-04): the current trend running INTO a target must not drop it -- that
-                                    # is exactly when you want to see it.
-                                    _touch9 = False
-                                    for _j9 in range(max(0, _j0z), max(0, int(_ac))):
-                                        _bb9 = _ana[_j9]
-                                        _h9 = float(_bb9.get("high", 0.0) or 0.0); _l9 = float(_bb9.get("low", 0.0) or 0.0)
-                                        if _h9 > 0 and _l9 > 0 and _l9 <= _thi9 and _h9 >= _tlo9:
-                                            _touch9 = True; break
-                                    if _touch9:
-                                        continue
-                                    _cand9.append((abs(_tlo9 - _ref9) if _dir9 > 0 else abs(_thi9 - _ref9),
-                                                   _p9, _k9, _zlo9, _zhi9))
-                            # OLDER EXTREME LINES too (user 2026-09-04: "it could also be a lower or higher extreme
-                            # line"): every finished segment's HIGH (bull) / LOW (bear) other than the current pair,
-                            # beyond the broken extreme in the break direction and never touched (wick included)
-                            # since its segment ended -> projected as a line in the extreme's colour.
-                            for _k8 in range(len(_sqc) - 1):
-                                (_s0, _c0), (_s1, _c1) = _sqc[_k8], _sqc[_k8 + 1]
-                                if _c0 == "g" and _c1 == "r":
-                                    _kx8 = "ext_hi"
-                                elif _c0 == "r" and _c1 == "g":
-                                    _kx8 = "ext_lo"
-                                else:
-                                    continue
-                                if (_s0, _s1) in (_blc, _brc):
-                                    continue                    # the current extreme pair itself
-                                if _kx8 == "ext_hi":
-                                    _p8 = max(float(_ana[_j9].get("high", 0.0) or 0.0) for _j9 in range(int(_s0), int(_s1) + 1))
-                                else:
-                                    _p8 = min((float(_ana[_j9].get("low", 0.0) or 0.0) or float("inf"))
-                                              for _j9 in range(int(_s0), int(_s1) + 1))
-                                if not (_p8 > 0) or _p8 == float("inf"):
-                                    continue
-                                if (_dir9 > 0 and _p8 <= _ref9) or (_dir9 < 0 and _p8 >= _ref9):
-                                    continue
-                                _touch8 = False
-                                for _j9 in range(int(_s1) + 1, max(0, int(_ac))):   # before the current trend only
-                                    _bb9 = _ana[_j9]
-                                    _h9 = float(_bb9.get("high", 0.0) or 0.0); _l9 = float(_bb9.get("low", 0.0) or 0.0)
-                                    if _h9 > 0 and _l9 > 0 and _l9 <= _p8 <= _h9:
-                                        _touch8 = True; break
-                                if _touch8:
-                                    continue
-                                _cand9.append((abs(_p8 - _ref9), _p8, _kx8, None, None))
-                            _cand9.sort(key=lambda _c: _c[0])
-                            _seen9 = set()
-                            for _d9, _p9, _k9, _zlo9, _zhi9 in _cand9:
-                                _key9 = (round(_zlo9 if _zlo9 is not None else _p9, 6),
-                                         round(_zhi9 if _zhi9 is not None else _p9, 6))
-                                if _key9 in _seen9:
-                                    continue
-                                _seen9.add(_key9)
-                                _tgt.append((_p9, _k9, _zlo9, _zhi9))
-                                if len(_tgt) >= _TGT_MAX:
-                                    break
+                        _tgt = self._ema_untouched_targets(_pzc, _ana, _M, _ac, _hiP, _loP, _sqc, _blc, _brc)
                 except Exception:
                     _ac = None; _mkc = []; _ext = []; _tgt = []
                 self._ema_poclc_cache = (_ssig, _ac, _mkc, _acf, _ext, _tgt)
@@ -8096,28 +8130,82 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self._ema_lbox_cache is None or self._ema_lbox_cache[0] != _ssig:
                 _bx9 = []
                 try:
-                    # RUNGS = the CURRENT lines only (user 2026-09-05: "the most recent / current POC and LVN --
-                    # previous POC / LVN zones must not count"): each segment's marks are rungs ONLY over that
-                    # segment (from its vertical line to the next one), then they are superseded by the next
-                    # segment's marks; over the current trend the dashed 'Current trend' marks are the rungs.
+                    # RUNGS -- a CAUSAL timeline (user 2026-09-05: adding a candle must never rewrite earlier
+                    # boxes). Every CONFIRMED flip (a drawn line or a merged / hidden one) is an event: from the bar
+                    # the flip got CONFIRMED (when its line printed) until the next flip's confirmation, the rungs
+                    # are the side VP's marks AS OF that flip (== 'POC per line' for a drawn line, == the dashed
+                    # 'Current trend' marks / the side VP as shown for the newest flip). The FORMING (unconfirmed)
+                    # cross never cuts anything. Within each span the projected UNTOUCHED TARGETS beyond the
+                    # extremes as of that flip (older FINISHED segments only, no look-ahead) are rungs from the
+                    # first close beyond the extreme to the span's end. Lines only (never zone bodies); a touch =
+                    # the bar's range contains the line.
                     _lv9 = []                                     # (lo, hi, kind, from, seg, until)
-                    for _a9, _b9, _mk9 in (self._ema_pocl_cache[1] if self._ema_pocl_cache is not None else []):
-                        for _m9 in _mk9:                          # lines only, a touch = the bar's range contains it
-                            _lv9.append((float(_m9[0]), float(_m9[0]), _m9[1], int(_a9), (int(_a9), int(_b9)), int(_b9)))
-                    # + over the CURRENT trend: the dashed 'Current trend' marks (the side VP as of now) AND the
-                    # projected UNTOUCHED TARGETS (older POC / LVN / extreme lines drawn over the current trend once
-                    # price is beyond an extreme) -- user 2026-09-05 (ladder_last.json): the "LVN" price moved to
-                    # was a projected target, so targets are rungs too. Both come from the 'Current trend' cache,
-                    # which is computed whenever the ladder is on.
-                    _acx = None; _mkx = []
-                    if (self._ema_poclc_cache is not None and self._ema_poclc_cache[0] == _ssig
-                            and self._ema_poclc_cache[1] is not None):
-                        _acx = int(self._ema_poclc_cache[1])
-                        _mkx = [(_m[0], _m[1]) for _m in self._ema_poclc_cache[2]]
-                        _mkx += [(_t[0], _t[1]) for _t in (self._ema_poclc_cache[5] or [])]   # targets (p, kind, ..)
-                    if _acx is not None:
-                        for _p8, _kd8 in _mkx:
-                            _lv9.append((float(_p8), float(_p8), _kd8, int(_acx), (int(_acx), int(_M - 1)), int(_M)))
+                    _conf9 = getattr(self, "_ema_flip_conf", None) or {}
+                    _seq9 = sorted([(int(_i8), "g") for _i8 in _g] + [(int(_i8), "r") for _i8 in _r])
+                    if self._ema_pin_t:
+                        _seq9 = [_f8 for _f8 in _seq9 if float(_ftimes.get(_f8[0], 0.0)) <= float(self._ema_pin_t)]
+                    _pzc9 = self._ema_pocl_cache[1] if self._ema_pocl_cache is not None else []
+
+                    def _asof9(_Fk):                              # (marks, hiP, loP, flips<=_Fk, bl, br) as of _Fk
+                        _sq = [_f8 for _f8 in _seq9 if _f8[0] <= _Fk]
+                        _bl = _br = None
+                        for _k in range(len(_sq) - 1):
+                            (_s0, _c0), (_s1, _c1) = _sq[_k], _sq[_k + 1]
+                            if _c0 == "g" and _c1 == "r":
+                                _bl = (_s0, _s1)
+                            elif _c0 == "r" and _c1 == "g":
+                                _br = (_s0, _s1)
+                        _ka = (self._tf, self._chart_source, float(_ftimes.get(_Fk, 0.0)))
+                        if _ka in self._ema_asof_done:           # FROZEN once known (the series' start slides:
+                            _mk, _hp, _lp = self._ema_asof_done[_ka]   # the oldest pair falling off must not
+                            return _mk, _hp, _lp, _sq, _bl, _br    # rewrite what this flip's marks were)
+                        _sg = [_s for _s in (_bl, _br) if _s is not None]
+                        if not _sg:
+                            return [], None, None, _sq, _bl, _br
+                        _sp = (min(_s[0] for _s in _sg), max(_s[1] for _s in _sg))
+                        _kk = (float(_ftimes.get(_sp[0], 0.0)), float(_ftimes.get(_Fk, 0.0)))
+                        if _kk not in self._ema_pocl_done:        # same key as 'POC per line' -> shared cache
+                            self._ema_pocl_done[_kk] = self._ema_span_vp(_ana, _sp[0], _sp[1])
+                        _mk = [(_m[0], _m[1]) for _m in self._ema_pocl_done[_kk]]
+                        _hp = _lp = None                          # the Trend Extreme lines as of the flip
+                        if _bl is not None:
+                            _hp = max(float(_ana[_j9].get("high", 0.0) or 0.0) for _j9 in range(int(_bl[0]), int(_bl[1]) + 1))
+                        if _br is not None:
+                            _lp = min((float(_ana[_j9].get("low", 0.0) or 0.0) or float("inf"))
+                                      for _j9 in range(int(_br[0]), int(_br[1]) + 1))
+                            if _lp == float("inf"):
+                                _lp = None
+                        self._ema_asof_done[_ka] = (list(_mk), _hp, _lp)
+                        return _mk, _hp, _lp, _sq, _bl, _br
+                    _fl9 = [_f8[0] for _f8 in _seq9]
+                    for _q9, _Fk in enumerate(_fl9):
+                        _ck = max(_Fk, int(_conf9.get(_Fk, _Fk)))          # when this flip got CONFIRMED
+                        _nk = _fl9[_q9 + 1] if _q9 + 1 < len(_fl9) else None
+                        _uk = max(_nk, int(_conf9.get(_nk, _nk))) if _nk is not None else _M   # ... superseded
+                        if _uk <= _ck or _uk <= _off:
+                            continue
+                        _mk, _hiP9, _loP9, _sq9, _bl9, _br9 = _asof9(_Fk)
+                        _sg9 = (int(_Fk), int(_nk if _nk is not None else _M - 1))
+                        for _p8, _kd8 in _mk:
+                            _lv9.append((float(_p8), float(_p8), _kd8, int(_ck), _sg9, int(_uk)))
+                        for _d9, _ref9 in ((1, _hiP9), (-1, _loP9)):
+                            if _ref9 is None or not (_ref9 > 0):
+                                continue
+                            _jb = None
+                            for _j9 in range(int(_ck), min(int(_uk), _M)):   # NOT clamped at the window start
+                                _c9 = float(_ana[_j9].get("close", _ana[_j9].get("close_price", 0.0)) or 0.0)
+                                if _c9 > 0 and ((_c9 > _ref9) if _d9 > 0 else (_c9 < _ref9)):
+                                    _jb = _j9; break
+                            if _jb is None:
+                                continue                          # never closed beyond that extreme in the span
+                            _kt = (self._tf, self._chart_source, float(_ftimes.get(_Fk, 0.0)), _d9)
+                            if _kt not in self._ema_tgt_done:     # FROZEN at the first close beyond (causal):
+                                _pzo9 = [_s9 for _s9 in _pzc9 if int(_s9[1]) <= int(_Fk)]   # finished before the flip
+                                self._ema_tgt_done[_kt] = [
+                                    (float(_p8), _kd8) for _p8, _kd8, _zlo8, _zhi8 in self._ema_untouched_targets(
+                                        _pzo9, _ana, _M, _Fk, _hiP9, _loP9, _sq9, _bl9, _br9, direction=_d9)]
+                            for _p8, _kd8 in self._ema_tgt_done[_kt]:
+                                _lv9.append((float(_p8), float(_p8), _kd8, int(_jb), _sg9, int(_uk)))
                     if _lv9 and _M - 1 > _off:
                         _H9 = [0.0] * _M; _L9 = [0.0] * _M; _C9 = [0.0] * _M
                         for _j9 in range(_off, _M):
@@ -8131,7 +8219,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _cfg.ensure_data_dir()            # can be read back exactly
                             _jj0 = max(_off, _M - 150)
                             _dump = {"tf": self._tf, "src": self._chart_source, "off": _off, "M": _M,
-                                     "cur_start": _acx, "cur_marks": [(round(float(_p8), 4), _kd8) for _p8, _kd8 in _mkx],
+                                     "cur_start": (_fl9[-1] if _fl9 else None), "conf": {str(_k): _v for _k, _v in _conf9.items()},
                                      "rungs": [(round(_r[0], 4), _r[2], _r[3], _r[5]) for _r in _lv9],
                                      "bars": [(_j9, round(_H9[_j9], 4), round(_L9[_j9], 4),
                                                [_ri for _ri, _r in enumerate(_lv9)
@@ -8160,8 +8248,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self.vb.addItem(_rb9, ignoreBounds=True)
                     self._ema_lbox_items.append({"rect": _rb9, "geo": None, "kind": None, "rungs": []})
                 _sb9 = self._ema_lbox_items[_vb9]; _vb9 += 1
-                # the rung LINE(S) this box sits at, in window coords (their segment span) -> hover highlight
-                _sb9["rungs"] = [(_fxw(int(_rg9[4][0])), _fxw(int(_rg9[4][1])), float(_rg9[0]), _rg9[2])
+                # the rung LINE(S) this box sits at, in window coords -> hover highlight: from the rung's vertical
+                # line to the bar it stopped counting at (the next line's CONFIRMATION, causal timeline), so the
+                # bold line always reaches the box that sits on it
+                _sb9["rungs"] = [(_fxw(int(_rg9[4][0])),
+                                  _fxw(min(int(_M - 1), max(int(_rg9[4][1]), int(_rg9[5]) - 1 if len(_rg9) > 5 else 0))),
+                                  float(_rg9[0]), _rg9[2])
                                  for _rg9 in (_bx9[5] if len(_bx9) > 5 else []) if len(_rg9) >= 5]
                 if _sb9.get("kind") != _kd:
                     _rgb9 = _LBC9.get(_kd, (200, 200, 200))
