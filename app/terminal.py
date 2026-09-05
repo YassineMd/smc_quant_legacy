@@ -1552,7 +1552,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_poclc_items = []; self._ema_poclc_rects = []   # 'ema_poc_line_cur': CURRENT-trend marks (dashed) + zones
         self._ema_poclc_cache = None                             # (sig, start ai, [(price, kind, steps)]) per close
         self._ema_lbox_items = []                                # 'ema_lvl_boxes': pooled outline boxes (ladder path)
-        self._ema_lbox_cache = None                              # (sig, [(x0 ai, x1 ai, ylo, yhi, kind)]) per close
+        self._ema_lbox_cache = None                              # (sig, [(x0 ai, x1 ai, ylo, yhi, kind, rungs)]) per close
+        self._ema_lbox_hl = []; self._ema_lbox_hover = None      # hover: bold rung line(s) of the hovered red box
         self._ema_pocl_cache = None                              # (sig, [(flip ai, next flip ai|None, poc)]) per close
         self._ema_pocl_done = {}                                 # (flip t0, flip t1) -> POC of a FINISHED segment (once)
         self._ema_wmrg_items = {}                                # 'ema_walls_merge': one AREA per zone
@@ -3859,6 +3860,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     and self.menu.layer_state("m10_svl_zigzag") and self.menu.layer_state("m10_svl_lock")):
                 self._svl_hover_hide()       # Lock off -> drop the box; Lock on -> _svl_lock_tick keeps it pinned
             self._last_hover_pos = None      # left the plot -> stop the hover re-fire
+            try:
+                self._lbox_hover(None)       # ladder-box rung highlight off
+            except Exception:
+                pass
             if self.scanner_mode == "bucket_canvas":
                 self._show_forming_stats()   # keep the live candle's readout on by default
             else:
@@ -3884,6 +3889,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
             self.fp_panel.show_price_line(pt.y())
         self._radar_hover(pt)                                 # Order-Flow Walls radar -> P(resist) odds on hover
+        try:
+            self._lbox_hover(pt)                              # ladder box edge -> highlight its POC / LVN line
+        except Exception:
+            pass
         # X-axis time readout at the crosshair (heatmap mode only; x = epoch seconds)
         if self.scanner_mode == "depth_heatmap":
             try:
@@ -6837,6 +6846,59 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _hide_ema_lbox(self) -> None:
         for _d in self._ema_lbox_items:
             _d["rect"].setVisible(False)
+        self._lbox_hover(None)
+
+    def _lbox_hover(self, pt) -> None:
+        """Hovering a RED ladder box's EDGE highlights the POC / LVN line(s) the box sits at (user 2026-09-05): a
+        BOLD line in the mark's colour over that rung's segment span. `pt` = cursor in view coords, None = leave."""
+        _hit = None
+        if pt is not None and self._ema_lbox_items:
+            try:
+                _psx, _psy = self.vb.viewPixelSize()
+            except Exception:
+                _psx = _psy = 0.0
+            _tx = 6.0 * max(_psx, 1e-9); _ty = 6.0 * max(_psy, 1e-9)
+            _x, _y = float(pt.x()), float(pt.y())
+            _best = None
+            for _d in self._ema_lbox_items:               # the box whose EDGE is nearest the cursor (in pixels)
+                if not _d["rect"].isVisible() or not _d.get("rungs") or _d.get("geo") is None:
+                    continue
+                _wx0, _wx1, _ylo, _yhi = _d["geo"]
+                _inx = (_wx0 - _tx) <= _x <= (_wx1 + _tx); _iny = (_ylo - _ty) <= _y <= (_yhi + _ty)
+                _dv = min(abs(_x - _wx0), abs(_x - _wx1)) / _tx if _iny else 9e9
+                _dh = min(abs(_y - _ylo), abs(_y - _yhi)) / _ty if _inx else 9e9
+                _dd = min(_dv, _dh)
+                if _dd <= 1.0 and (_best is None or _dd < _best):
+                    _best = _dd; _hit = _d
+        _rungs = (_hit.get("rungs") or []) if _hit is not None else []
+        _key = (tuple(_rungs), tuple(_hit.get("geo") or ()) if _hit is not None else ())
+        if _key == getattr(self, "_ema_lbox_hover", None):
+            return                                        # unchanged -> nothing to redraw
+        self._ema_lbox_hover = _key
+        _COL = {"poc": (250, 180, 60), "poc_hi": (250, 205, 120), "poc_lo": (250, 205, 120), "lvn": (178, 70, 255)}
+        try:
+            (_vx0, _vx1), _ = self.vb.viewRange()
+        except Exception:
+            _vx0 = _vx1 = 0.0
+        _n = 0
+        for _rx0, _rx1, _p, _kd in _rungs[:6]:
+            if _rx1 - _rx0 < 1.0:                         # the rung's segment predates the window (span collapsed
+                _rx0 = float(_vx0)                        # at the left edge): run the line from the view's left edge
+                _rx1 = max(float(_hit["geo"][1]), _rx0 + 1.0)   # into the hovered box so the price still reads
+            if _rx1 <= _rx0:
+                continue
+            if _n >= len(self._ema_lbox_hl):
+                _hl = pg.PlotCurveItem(); _hl.setZValue(30)
+                self.plot.addItem(_hl, ignoreBounds=True)
+                self._ema_lbox_hl.append({"ln": _hl, "kind": None})
+            _h = self._ema_lbox_hl[_n]; _n += 1
+            if _h.get("kind") != _kd:
+                _c = _COL.get(_kd, (250, 180, 60))
+                _pn = pg.mkPen(_c[0], _c[1], _c[2], 255, width=3.4); _pn.setCosmetic(True)
+                _h["ln"].setPen(_pn); _h["kind"] = _kd
+            _h["ln"].setData([_rx0, _rx1], [_p, _p]); _h["ln"].setVisible(True)
+        for _h in self._ema_lbox_hl[_n:]:
+            _h["ln"].setVisible(False)
 
     @staticmethod
     def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=3):
@@ -6857,7 +6919,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             h, l = float(H[j]), float(L[j])
             if h <= 0 or l <= 0:
                 continue
-            t = [i for i, (lo, hi, kd, fb) in enumerate(levels) if fb <= j and l <= hi and h >= lo]
+            t = [i for i, lv in enumerate(levels) if lv[3] <= j and l <= lv[1] and h >= lv[0]]   # (lo, hi, kind, from[, seg])
             if not t:
                 continue
             if vis and vis[-1][0] in t:
@@ -6890,25 +6952,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 mg[-1][2] = t9[2]                         # merge: the touch in between was brief
             else:
                 mg.append(list(t9))
-        out = []
-        for kind, x0, x1, d in mg:
+        out = []                                          # (x0, x1, ylo, yhi, kind, rungs) -- rungs = the level
+        for kind, x0, x1, d in mg:                        # tuples a VISIT box sits at (empty for transitions)
             if x1 <= x0:
                 continue
             ylo = min(float(L[j]) for j in range(x0, x1 + 1) if float(L[j]) > 0)
             yhi = max(float(H[j]) for j in range(x0, x1 + 1))
-            out.append((x0, x1, ylo, yhi, kind))
+            out.append((x0, x1, ylo, yhi, kind, []))
         mv = []                                           # qualifying visits; CONSECUTIVE ones merge (user 2026-09-05:
         for li, a, b in vis:                              # "two or more consecutive red boxes -> one"): a stay at the
             if b - a + 1 < min_visit:                     # next rung that begins within (min_visit - 1) bars of the
                 continue                                  # previous stay ending joins it, chaining for 3+
             if mv and (a - mv[-1][1] - 1) < min_visit:
-                mv[-1][1] = b
+                mv[-1][1] = b; mv[-1][2].append(li)
             else:
-                mv.append([a, b])
-        for a, b in mv:
+                mv.append([a, b, [li]])
+        for a, b, lis in mv:
             ylo = min(float(L[j]) for j in range(a, b + 1) if float(L[j]) > 0)
             yhi = max(float(H[j]) for j in range(a, b + 1))
-            out.append((a, b, ylo, yhi, "visit"))
+            out.append((a, b, ylo, yhi, "visit", [levels[i] for i in lis]))
         out.sort(key=lambda o: (o[0], o[1]))
         return out
 
@@ -7887,7 +7949,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _lv9 = []                                     # rungs = the POC / LVN LINE prices only (user:
                     for _a9, _b9, _mk9 in (self._ema_pocl_cache[1] if self._ema_pocl_cache is not None else []):
                         for _m9 in _mk9:                          #  "not the entire zones"); a touch = the bar's
-                            _lv9.append((float(_m9[0]), float(_m9[0]), _m9[1], int(_b9)))   # range contains the line
+                            _lv9.append((float(_m9[0]), float(_m9[0]), _m9[1], int(_b9),    # range contains the line
+                                         (int(_a9), int(_b9))))                            # + its segment (hover highlight)
                     if _lv9 and _M - 1 > _off:
                         _H9 = [0.0] * _M; _L9 = [0.0] * _M
                         for _j9 in range(_off, _M):
@@ -7899,7 +7962,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._ema_lbox_cache = (_ssig, _bx9)
             _LBC9 = {"visit": (240, 70, 90), "break": (250, 205, 60), "retest": (60, 140, 255), "cont": (40, 230, 160)}
             _vb9 = 0
-            for _x0, _x1, _ylo, _yhi, _kd in self._ema_lbox_cache[1]:
+            for _bx9 in self._ema_lbox_cache[1]:
+                _x0, _x1, _ylo, _yhi, _kd = _bx9[:5]
                 if _kd != "visit":
                     continue                                  # STEP 1 (user 2026-09-05): the RED box only for now
                 _wx0 = _wx(int(_x0)) - 0.5; _wx1 = _wx(int(_x1)) + 0.5
@@ -7908,8 +7972,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if _vb9 >= len(self._ema_lbox_items):
                     _rb9 = QtWidgets.QGraphicsRectItem(); _rb9.setBrush(pg.mkBrush(None)); _rb9.setZValue(16)
                     self.vb.addItem(_rb9, ignoreBounds=True)
-                    self._ema_lbox_items.append({"rect": _rb9, "geo": None, "kind": None})
+                    self._ema_lbox_items.append({"rect": _rb9, "geo": None, "kind": None, "rungs": []})
                 _sb9 = self._ema_lbox_items[_vb9]; _vb9 += 1
+                # the rung LINE(S) this box sits at, in window coords (their segment span) -> hover highlight
+                _sb9["rungs"] = [(_fxw(int(_rg9[4][0])), _fxw(int(_rg9[4][1])), float(_rg9[0]), _rg9[2])
+                                 for _rg9 in (_bx9[5] if len(_bx9) > 5 else []) if len(_rg9) >= 5]
                 if _sb9.get("kind") != _kd:
                     _rgb9 = _LBC9.get(_kd, (200, 200, 200))
                     _pn9 = pg.mkPen(_rgb9[0], _rgb9[1], _rgb9[2], 230, width=1.6); _pn9.setCosmetic(True)
