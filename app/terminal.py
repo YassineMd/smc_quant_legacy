@@ -7635,6 +7635,38 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                         continue
                                     _cand9.append((abs(_tlo9 - _ref9) if _dir9 > 0 else abs(_thi9 - _ref9),
                                                    _p9, _k9, _zlo9, _zhi9))
+                            # OLDER EXTREME LINES too (user 2026-09-04: "it could also be a lower or higher extreme
+                            # line"): every finished segment's HIGH (bull) / LOW (bear) other than the current pair,
+                            # beyond the broken extreme in the break direction and never touched (wick included)
+                            # since its segment ended -> projected as a line in the extreme's colour.
+                            for _k8 in range(len(_sqc) - 1):
+                                (_s0, _c0), (_s1, _c1) = _sqc[_k8], _sqc[_k8 + 1]
+                                if _c0 == "g" and _c1 == "r":
+                                    _kx8 = "ext_hi"
+                                elif _c0 == "r" and _c1 == "g":
+                                    _kx8 = "ext_lo"
+                                else:
+                                    continue
+                                if (_s0, _s1) in (_blc, _brc):
+                                    continue                    # the current extreme pair itself
+                                if _kx8 == "ext_hi":
+                                    _p8 = max(float(_ana[_j9].get("high", 0.0) or 0.0) for _j9 in range(int(_s0), int(_s1) + 1))
+                                else:
+                                    _p8 = min((float(_ana[_j9].get("low", 0.0) or 0.0) or float("inf"))
+                                              for _j9 in range(int(_s0), int(_s1) + 1))
+                                if not (_p8 > 0) or _p8 == float("inf"):
+                                    continue
+                                if (_dir9 > 0 and _p8 <= _ref9) or (_dir9 < 0 and _p8 >= _ref9):
+                                    continue
+                                _touch8 = False
+                                for _j9 in range(int(_s1) + 1, _M):
+                                    _bb9 = _ana[_j9]
+                                    _h9 = float(_bb9.get("high", 0.0) or 0.0); _l9 = float(_bb9.get("low", 0.0) or 0.0)
+                                    if _h9 > 0 and _l9 > 0 and _l9 <= _p8 <= _h9:
+                                        _touch8 = True; break
+                                if _touch8:
+                                    continue
+                                _cand9.append((abs(_p8 - _ref9), _p8, _kx8, None, None))
                             _cand9.sort(key=lambda _c: _c[0])
                             _seen9 = set()
                             for _d9, _p9, _k9, _zlo9, _zhi9 in _cand9:
@@ -7651,7 +7683,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._ema_poclc_cache = (_ssig, _ac, _mkc, _acf, _ext, _tgt)
             _, _ac, _mkc, _acf, _ext, _tgt = self._ema_poclc_cache
             _STYC = {"poc": ((250, 180, 60, 235), 1.4), "poc_hi": ((250, 205, 120, 200), 1.1),
-                     "poc_lo": ((250, 205, 120, 200), 1.1), "lvn": ((178, 70, 255, 225), 1.2)}
+                     "poc_lo": ((250, 205, 120, 200), 1.1), "lvn": ((178, 70, 255, 225), 1.2),
+                     "ext_hi": ((240, 70, 90, 235), 1.4), "ext_lo": ((40, 230, 120, 235), 1.4)}   # older extremes (targets)
             _vc = 0; _rc = 0
             if _ac is not None and _mkc:
                 _xc0 = _fxw(_ac); _xc1 = float(x[n - 1])
