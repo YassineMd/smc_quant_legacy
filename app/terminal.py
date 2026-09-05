@@ -6995,10 +6995,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         group touched in between (bars touching nothing may sit inside). A bar that touches the anchor AND a farther
         rung still belongs to the stay; the farther rung does NOT extend it (the drop after the last anchor touch is
         the yellow, not the red). Box = those bars' high/low.
-        YELLOW ("break"): from the bar after the red box's last bar to the FIRST touch of the level where the move
-        ENDS (the farthest rung reached before price turns back toward R; rungs crossed on the way and pauses do
-        not end it). No rung reached yet -> no yellow. BLUE ("retest"): after the LAST touch of that level, the
-        retracement toward R. Strict order RED > YELLOW > BLUE: a stay inside a yellow/blue never starts a sequence.
+        YELLOW ("break"): from the bar after the red box's last bar to the LAST touch of the farthest rung reached
+        before the move REVERSES (a candle closing beyond the extreme of the last candle that touched that rung),
+        or before price is back at R. No rung reached yet -> no yellow. BLUE ("retest"): after the LAST touch of
+        that rung, the retracement toward R. Strict order RED > YELLOW > BLUE: a stay inside a yellow/blue never
+        starts a sequence.
         Returns [(x0, x1, ylo, yhi, kind, [rung])] -- exactly ONE rung per box (the group's newest known member)."""
         n = len(levels)
         fam = ["lvn" if levels[i][2] == "lvn" else "poc" for i in range(n)]
@@ -7076,8 +7077,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # vertical line printing during the move does not change what the move is measured against.
         # RED ends before the DEPARTING bar(s): a trailing bar whose close sits > 2x farther from R than any other
         # bar of the stall belongs to the move (user: "the yellow box takes the big red bar from the red box").
-        # YELLOW = the move away from R, to the FIRST touch of the farthest rung it reaches before turning back
-        # (rungs crossed on the way / pauses do not end it). Never a red right after it.
+        # YELLOW = the move away from R, to the LAST touch of the farthest rung it reaches before a REVERSAL candle
+        # (rungs crossed on the way / pauses / drifts that never close beyond the touch candle do not end it).
         # BLUE = the retest: from the bar after the last touch of S to the last touch of R in the retest stay
         # (blue whatever its length, never red; carries R). On the way back, short re-touches of S / short crossings
         # of the move's corridor are allowed; a stall, or a rung outside the corridor, voids the sequence.
@@ -7135,28 +7136,46 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             ylo, yhi = _span(a, bT)
             out.append((a, bT, ylo, yhi, "visit", [levels[_newest(g, bT)]]))   # RED: exactly ONE rung = R
             cp = _mid(g)
-            # YELLOW (user 2026-09-05, final): from the bar after the red box's last R touch to the FIRST touch of
-            # the level where the MOVE ENDS -- the farthest rung reached before price turns back toward R. A rung
-            # touched on the way and passed does not end it ("it first touched the most recent LVN but went
-            # beyond it to the older LVN"), nor does a pause on the way (never a red right after a yellow). The
-            # turn = a visit of a rung not farther than the last one reached (R itself included) or of a rung on
-            # the other side of R. S = that farthest rung; the bars bouncing at S after its first touch belong to
-            # the sequence but to no box.
+            # YELLOW (user 2026-09-05, final): from the bar after the red box's last R touch to the LAST candle that
+            # touched the FARTHEST zone reached before the move REVERSES. Reversal = a candle that CLOSES beyond the
+            # extreme of the last candle that touched that zone (down move: above its high; up move: below its
+            # low) -- "the price did not reverse after the LVN because no candle closed above the last candle that
+            # touched it, it continued down to a farther zone: that is the one to take". A zone touched and passed
+            # on the way, a pause, or a drift back that never closes beyond that candle do not end the move; price
+            # back at R (or a rung on the other side of R) does. The bars between the yellow's end and the blue's
+            # start belong to the sequence but to no box.
             x0 = bT + 1                                   # NO OVERLAP: the yellow starts on the bar AFTER the red box
-            path = []; far = 0.0; side = 0
-            for v in _seq_visits(bT, bT, g, b):
-                gk, ak, bk = v
-                if gk == g:
-                    break                                 # back at R: the move is over
-                dk = _mid(gk) - cp; sd = 1 if dk > 0 else -1
-                if side and sd != side:
-                    break                                 # the other side of R: not this move
-                if abs(dk) <= far:
-                    break                                 # not farther than the last rung reached -> the turn
-                path.append(v); far = abs(dk); side = sd
-            if not path:
+            gS = None; far = 0.0; side = 0; last_t = None
+            for j in range(x0, j1e + 1):
+                tj = touch.get(j)
+                gs = {gq for gq, i in (tj or ()) if _livef(levels[i], j, bT)}
+                if gs:
+                    if g in gs and j > b:
+                        break                             # back at R: the move is over
+                    cand = []
+                    for x in gs:
+                        if x == g:
+                            continue
+                        dk = _mid(x) - cp; sd = 1 if dk > 0 else -1
+                        if side and sd != side:
+                            cand = None; break            # a rung on the other side of R: the move is over
+                        if abs(dk) > far:
+                            cand.append((abs(dk), sd, x))
+                    if cand is None:
+                        break
+                    if cand:
+                        far, side, gS = max(cand); last_t = j
+                        continue                          # a FARTHER zone reached: the move goes on
+                    if gS is not None and gS in gs:
+                        last_t = j; continue              # the zone touched again
+                if gS is None:
+                    continue
+                cj = float(C[j]) if C is not None else 0.0
+                if cj > 0 and ((cj > float(H[last_t])) if side < 0 else (cj < float(L[last_t]))):
+                    break                                 # REVERSAL candle -> the move ended at the last touch
+            if gS is None:
                 continue                                  # nothing reached yet (forming) / turned straight back
-            gS, je, s_end = path[-1]                      # S = the farthest rung; the yellow ends on its FIRST touch
+            je = s_end = last_t                           # S = the farthest zone; the yellow ends on its LAST touch
             ylo, yhi = _span(x0, je)
             out.append((x0, je, ylo, yhi, "break", [levels[_newest(gS, je, bT)]]))   # YELLOW: its rung = S
             used_spans.append((x0, je))
@@ -8197,6 +8216,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _sg9 = (int(_Fk), int(_nk if _nk is not None else _M - 1))
                         for _p8, _kd8 in _mk:
                             _lv9.append((float(_p8), float(_p8), _kd8, int(_ck), _sg9, int(_uk)))
+                        if _nk is None:                   # the OPEN segment: a label-HIDDEN confirmed flip after
+                            for _Fh in [_f8[0] for _f8 in _seq9 if int(_f8[0]) > int(_Fk)]:   # the last drawn line
+                                _mkh = _asof9(_Fh)[0]     # draws no line, but the dashed 'Current trend' marks ARE
+                                for _p8, _kd8 in _mkh:    # as of it (the side VP as shown) -> zones from its cross
+                                    _lv9.append((float(_p8), float(_p8), _kd8, int(_Fh), (int(_Fh), int(_M - 1)), int(_M)))
                         for _d9, _ref9 in ((1, _hiP9), (-1, _loP9)):
                             if _ref9 is None or not (_ref9 > 0):
                                 continue
