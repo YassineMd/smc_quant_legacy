@@ -6914,7 +6914,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         Returns [(x0, x1, ylo, yhi, kind)] with bar indices and the enclosed bars' low/high."""
         def _mid(i):
             return 0.5 * (levels[i][0] + levels[i][1])
-        vis = []                                          # [level idx, first bar, last bar]
+        vis = []                                          # [primary rung, first bar, last bar, ALL rungs touched]
         for j in range(max(0, int(j0)), int(j1) + 1):
             h, l = float(H[j]), float(L[j])
             if h <= 0 or l <= 0:
@@ -6922,15 +6922,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             t = [i for i, lv in enumerate(levels) if lv[3] <= j and l <= lv[1] and h >= lv[0]]   # (lo, hi, kind, from[, seg])
             if not t:
                 continue
-            if vis and vis[-1][0] in t:
-                vis[-1][2] = j
+            if vis and (set(t) & vis[-1][3]):             # still at (any rung of) the current stay
+                vis[-1][2] = j; vis[-1][3].update(t)
                 continue
-            if vis:                                       # a big bar can run through several rungs: take the farthest
-                cp = _mid(vis[-1][0])
-                ni = max(t, key=lambda i: abs(_mid(i) - cp))
+            if vis:                                       # a big bar can run through several rungs: take the farthest;
+                cp = _mid(vis[-1][0])                     # ties -> the most RECENT rung (user 2026-09-05)
+                ni = max(t, key=lambda i: (abs(_mid(i) - cp), levels[i][3]))
             else:
-                ni = t[0]
-            vis.append([ni, j, j])
+                ni = max(t, key=lambda i: levels[i][3])   # first stay: the most recent rung
+            vis.append([ni, j, j, set(t)])
+
+        def _recent(s):                                   # a stay's affiliation = the MOST RECENT rung it touched
+            return max(s, key=lambda i: (levels[i][3], i))
         # The boxes follow a STRICT ORDER (user 2026-09-05): RED > YELLOW > BLUE > GREEN.
         #   RED    ("visit") = a stay of >= min_visit bars at a rung; CONSECUTIVE stays (the next rung reached within
         #                     min_visit - 1 bars) merge into one box, chaining for 3+.
@@ -6938,14 +6941,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         #                     box's rungs -- the touch of the next rung is what confirms the break (user's definition:
         #                     "price moves from a POC to a different POC or LVN"). No touch yet -> no yellow (forming).
         #   BLUE / GREEN follow in the next steps.
-        mv = []
-        for li, a, b in vis:
+        mv = []                                           # [first, last, [touched-set per stay]]
+        for li, a, b, ts in vis:
             if b - a + 1 < min_visit:
                 continue
             if mv and (a - mv[-1][1] - 1) < min_visit:
-                mv[-1][1] = b; mv[-1][2].append(li)
+                mv[-1][1] = b; mv[-1][2].append(set(ts))
             else:
-                mv.append([a, b, [li]])
+                mv.append([a, b, [set(ts)]])
         out = []                                          # (x0, x1, ylo, yhi, kind, rungs)
         j1e = int(j1)
 
@@ -6953,11 +6956,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             ylo = min(float(L[j]) for j in range(x0, x1 + 1) if float(L[j]) > 0)
             yhi = max(float(H[j]) for j in range(x0, x1 + 1))
             return ylo, yhi
-        for a, b, lis in mv:
+        for a, b, stays in mv:
             ylo, yhi = _span(a, b)
-            out.append((a, b, ylo, yhi, "visit", [levels[i] for i in lis]))
-            rs = set(lis)
-            cp = sum(_mid(i) for i in lis) / len(lis)
+            aff = []                                      # one rung per stay: the most recent it touched (priority to
+            for s in stays:                               # the current line over older ones at the same level)
+                r = _recent(s)
+                if r not in aff:
+                    aff.append(r)
+            out.append((a, b, ylo, yhi, "visit", [levels[i] for i in aff]))
+            rs = set().union(*stays)                      # EVERY rung the box touched: none of them can end its yellow
+            cp = sum(_mid(i) for i in aff) / len(aff)
             hit = None
             for j in range(b + 1, j1e + 1):               # YELLOW: the first touch of a rung outside the red box
                 h, l = float(H[j]), float(L[j])
