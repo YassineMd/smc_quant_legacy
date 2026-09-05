@@ -6931,46 +6931,46 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             else:
                 ni = t[0]
             vis.append([ni, j, j])
-        tr = []                                           # [kind, x0, x1, dir]
-        bias = 0                                          # direction of the last break (the bias the path carries)
-        for k in range(len(vis) - 1):
-            va, vb = vis[k], vis[k + 1]
-            d = 1 if _mid(vb[0]) > _mid(va[0]) else -1
-            if bias == 0:
-                kind = "break"; bias = d                  # first move: a break, sets the bias
-            elif d == bias:
-                kind = "cont"                             # with the bias: continuation (straight on or after a retest)
-            elif k >= 1 and vb[0] == vis[k - 1][0]:
-                kind = "retest"                           # against the bias, back to the rung just left
-            else:
-                kind = "break"; bias = d                  # against the bias to a FARTHER rung: the bias flips
-            tr.append([kind, va[2], vb[1], d])
-        mg = []
-        for t9 in tr:
-            if (mg and t9[0] == "cont" and mg[-1][0] in ("break", "cont") and mg[-1][3] == t9[3]
-                    and (t9[1] - mg[-1][2]) < min_visit - 1):
-                mg[-1][2] = t9[2]                         # merge: the touch in between was brief
-            else:
-                mg.append(list(t9))
-        out = []                                          # (x0, x1, ylo, yhi, kind, rungs) -- rungs = the level
-        for kind, x0, x1, d in mg:                        # tuples a VISIT box sits at (empty for transitions)
-            if x1 <= x0:
+        # The boxes follow a STRICT ORDER (user 2026-09-05): RED > YELLOW > BLUE > GREEN.
+        #   RED    ("visit") = a stay of >= min_visit bars at a rung; CONSECUTIVE stays (the next rung reached within
+        #                     min_visit - 1 bars) merge into one box, chaining for 3+.
+        #   YELLOW ("break") = from the red box's LAST bar to the FIRST later bar that touches a rung OUTSIDE that
+        #                     box's rungs -- the touch of the next rung is what confirms the break (user's definition:
+        #                     "price moves from a POC to a different POC or LVN"). No touch yet -> no yellow (forming).
+        #   BLUE / GREEN follow in the next steps.
+        mv = []
+        for li, a, b in vis:
+            if b - a + 1 < min_visit:
                 continue
-            ylo = min(float(L[j]) for j in range(x0, x1 + 1) if float(L[j]) > 0)
-            yhi = max(float(H[j]) for j in range(x0, x1 + 1))
-            out.append((x0, x1, ylo, yhi, kind, []))
-        mv = []                                           # qualifying visits; CONSECUTIVE ones merge (user 2026-09-05:
-        for li, a, b in vis:                              # "two or more consecutive red boxes -> one"): a stay at the
-            if b - a + 1 < min_visit:                     # next rung that begins within (min_visit - 1) bars of the
-                continue                                  # previous stay ending joins it, chaining for 3+
             if mv and (a - mv[-1][1] - 1) < min_visit:
                 mv[-1][1] = b; mv[-1][2].append(li)
             else:
                 mv.append([a, b, [li]])
+        out = []                                          # (x0, x1, ylo, yhi, kind, rungs)
+        j1e = int(j1)
+
+        def _span(x0, x1):
+            ylo = min(float(L[j]) for j in range(x0, x1 + 1) if float(L[j]) > 0)
+            yhi = max(float(H[j]) for j in range(x0, x1 + 1))
+            return ylo, yhi
         for a, b, lis in mv:
-            ylo = min(float(L[j]) for j in range(a, b + 1) if float(L[j]) > 0)
-            yhi = max(float(H[j]) for j in range(a, b + 1))
+            ylo, yhi = _span(a, b)
             out.append((a, b, ylo, yhi, "visit", [levels[i] for i in lis]))
+            rs = set(lis)
+            cp = sum(_mid(i) for i in lis) / len(lis)
+            hit = None
+            for j in range(b + 1, j1e + 1):               # YELLOW: the first touch of a rung outside the red box
+                h, l = float(H[j]), float(L[j])
+                if h <= 0 or l <= 0:
+                    continue
+                t = [i for i, lv in enumerate(levels) if i not in rs and lv[3] <= j and l <= lv[1] and h >= lv[0]]
+                if t:
+                    hit = (j, max(t, key=lambda i: abs(_mid(i) - cp)))   # a big bar through several: the farthest
+                    break
+            if hit is not None:
+                j, li2 = hit
+                ylo, yhi = _span(b, j)
+                out.append((b, j, ylo, yhi, "break", [levels[li2]]))
         out.sort(key=lambda o: (o[0], o[1]))
         return out
 
@@ -7964,8 +7964,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _vb9 = 0
             for _bx9 in self._ema_lbox_cache[1]:
                 _x0, _x1, _ylo, _yhi, _kd = _bx9[:5]
-                if _kd != "visit":
-                    continue                                  # STEP 1 (user 2026-09-05): the RED box only for now
+                if _kd not in ("visit", "break"):
+                    continue                                  # STEPS 1-2 (user 2026-09-05): RED + YELLOW so far
                 _wx0 = _wx(int(_x0)) - 0.5; _wx1 = _wx(int(_x1)) + 0.5
                 if _wx1 <= _wx0 or _yhi <= _ylo:
                     continue
