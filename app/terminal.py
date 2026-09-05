@@ -2104,6 +2104,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("G"), self, activated=self._toggle_heatmap_grey)
         # 'b' = bubbles toggle, context-aware: heatmap trade-bubbles in the heatmap, else Mode-10 Candle Bubbles
         QtGui.QShortcut(QtGui.QKeySequence("B"), self, activated=self._toggle_bubbles)
+        # Shift+B = Big Player Levels (m10_bigplayer) on/off, exactly like its menu checkbox (user 2026-09-06)
+        QtGui.QShortcut(QtGui.QKeySequence("Shift+B"), self, activated=self._toggle_bigplayer)
         # 'h' = show/hide the Mode-10 Magic-Selection stats box (chart overlays like the flip line stay)
         QtGui.QShortcut(QtGui.QKeySequence("H"), self, activated=self._toggle_sel_stats)
         # Mode-10 selection panels, STACKED below the box in this order: 1 ABSORPTION, 2 EFF-AGG, 3 E/R, 4 EXHAUSTION
@@ -16912,6 +16914,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._toggle_heatmap_bubbles()
         elif self.scanner_mode == "bucket_canvas":
             self._cycle_bucket_bubbles()
+
+    def _toggle_bigplayer(self) -> None:
+        """Shift+B -- Big Player Levels (m10_bigplayer) on/off, exactly as clicking its menu checkbox: the
+        checkbox emits layerToggled, so the layer handler (re)subscribes + backfills, or clears the levels."""
+        cb = self.menu.layer_checks.get("m10_bigplayer")
+        if cb is not None:
+            cb.setChecked(not cb.isChecked())
 
     def _cycle_bucket_bubbles(self) -> None:
         """'b' — 4-stage cycle for the Mode-10 Candle Bubbles:
