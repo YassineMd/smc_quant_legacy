@@ -6901,39 +6901,58 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _h["ln"].setVisible(False)
 
     @staticmethod
-    def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=3):
-        """The level-to-level PATH of price over bars j0..j1 (user 2026-09-05: the hand-drawn boxes).
-        `levels` = [(lo, hi, kind, avail_from_bar)]; H/L indexable by bar. A VISIT = the bars from the first to the
-        last touch of one level (range overlap) with no OTHER level touched in between; a TRANSITION = the bars
-        from a visit's last bar to the next visit's first bar. Kinds:
-            "visit"  a visit of >= min_visit bars (price sitting at a rung)
-            "break"  first move away from a rung to another rung in a NEW direction
-            "retest" the move back to the rung visited just before
-            "cont"   a further move in the break direction (straight on, or after a retest)
-        Consecutive same-direction break/cont moves through brief (< min_visit) touches merge into one box.
-        Returns [(x0, x1, ylo, yhi, kind)] with bar indices and the enclosed bars' low/high."""
-        def _mid(i):
-            return 0.5 * (levels[i][0] + levels[i][1])
-        vis = []                                          # [primary rung, first bar, last bar, ALL rungs touched]
+    def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=3, same_tol=0.0015):
+        """The level-to-level PATH of price over bars j0..j1 as the user's hand-drawn boxes (2026-09-05), built in
+        the strict order RED > YELLOW > BLUE > GREEN.
+        `levels` = [(lo, hi, kind, avail_from_bar[, seg])] -- rung LINES (lo == hi), each known from avail_from_bar.
+        SAME-LEVEL GROUPS: an older rung of the same family (POC-family / LVN) within `same_tol` of a more recent one
+        is the SAME line (the profile re-drawn by a later segment): the group is ONE rung and its newest member known
+        at a bar is the one shown (priority to the most recent / current line).
+        RED ("visit"): a stay of >= min_visit bars at ONE group -- from its first touch to its LAST touch, no other
+        group touched in between (bars touching nothing may sit inside). A bar that touches the anchor AND a farther
+        rung still belongs to the stay; the farther rung does NOT extend it (the drop after the last anchor touch is
+        the yellow, not the red). Box = those bars' high/low.
+        YELLOW ("break"): from the red box's LAST bar to the FIRST later bar touching a DIFFERENT group -- the touch of
+        the next rung confirms the break (a big bar through several: the farthest). No touch yet -> no yellow.
+        Returns [(x0, x1, ylo, yhi, kind, [rung])] -- exactly ONE rung per box (the group's newest known member)."""
+        n = len(levels)
+        fam = ["lvn" if levels[i][2] == "lvn" else "poc" for i in range(n)]
+        order = sorted(range(n), key=lambda i: (-int(levels[i][3]), -i))   # most recent first
+        grp = [-1] * n; heads = []                        # group id = index of its most recent rung
+        for i in order:
+            p = 0.5 * (levels[i][0] + levels[i][1])
+            for hI in heads:
+                if fam[hI] == fam[i] and abs(0.5 * (levels[hI][0] + levels[hI][1]) - p) <= same_tol * abs(p):
+                    grp[i] = hI; break
+            if grp[i] < 0:
+                grp[i] = i; heads.append(i)
+        members = {}
+        for i in range(n):
+            members.setdefault(grp[i], []).append(i)
+
+        def _mid(g):
+            return 0.5 * (levels[g][0] + levels[g][1])
+
+        def _newest(g, j):                                # the group's most recent rung known at bar j
+            c = [i for i in members[g] if levels[i][3] <= j]
+            return max(c, key=lambda i: (levels[i][3], i)) if c else g
+        vis = []                                          # [group, first bar, last bar]
         for j in range(max(0, int(j0)), int(j1) + 1):
             h, l = float(H[j]), float(L[j])
             if h <= 0 or l <= 0:
                 continue
-            t = [i for i, lv in enumerate(levels) if lv[3] <= j and l <= lv[1] and h >= lv[0]]   # (lo, hi, kind, from[, seg])
-            if not t:
+            tg = sorted({grp[i] for i, lv in enumerate(levels) if lv[3] <= j and l <= lv[1] and h >= lv[0]})
+            if not tg:
                 continue
-            if vis and (set(t) & vis[-1][3]):             # still at (any rung of) the current stay
-                vis[-1][2] = j; vis[-1][3].update(t)
+            if vis and vis[-1][0] in tg:                  # still touching the anchor rung -> the stay goes on
+                vis[-1][2] = j
                 continue
-            if vis:                                       # a big bar can run through several rungs: take the farthest;
-                cp = _mid(vis[-1][0])                     # ties -> the most RECENT rung (user 2026-09-05)
-                ni = max(t, key=lambda i: (abs(_mid(i) - cp), levels[i][3]))
+            if vis:                                       # new stay: the most recent group; ties -> the farthest
+                cp = _mid(vis[-1][0])                     # (a big bar can run through several rungs)
+                g = max(tg, key=lambda x: (levels[_newest(x, j)][3], abs(_mid(x) - cp)))
             else:
-                ni = max(t, key=lambda i: levels[i][3])   # first stay: the most recent rung
-            vis.append([ni, j, j, set(t)])
-
-        def _recent(s):                                   # a stay's affiliation = the MOST RECENT rung it touched
-            return max(s, key=lambda i: (levels[i][3], i))
+                g = max(tg, key=lambda x: levels[_newest(x, j)][3])
+            vis.append([g, j, j])
         # The boxes follow a STRICT ORDER (user 2026-09-05): RED > YELLOW > BLUE > GREEN.
         #   RED    ("visit") = a stay of >= min_visit bars at a rung; CONSECUTIVE stays (the next rung reached within
         #                     min_visit - 1 bars) merge into one box, chaining for 3+.
@@ -6941,35 +6960,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         #                     box's rungs -- the touch of the next rung is what confirms the break (user's definition:
         #                     "price moves from a POC to a different POC or LVN"). No touch yet -> no yellow (forming).
         #   BLUE / GREEN follow in the next steps.
-        # One RED box per qualifying stay. (The old "merge consecutive red boxes" rule is gone, user 2026-09-05: a
-        # stay is no longer split by sibling lines at the same level, so a second stay that starts right after the
-        # first means price moved to a DIFFERENT rung -- that move is the yellow box, it must not be swallowed.)
-        mv = [(a, b, set(ts)) for li, a, b, ts in vis if b - a + 1 >= min_visit]
-        out = []                                          # (x0, x1, ylo, yhi, kind, rungs)
+        # One RED box per qualifying stay (no merging: a second stay right after the first means price moved to a
+        # DIFFERENT rung -- that move is the yellow box, it must not be swallowed; user 2026-09-05).
+        mv = [(g, a, b) for g, a, b in vis if b - a + 1 >= min_visit]
+        out = []                                          # (x0, x1, ylo, yhi, kind, [rung])
         j1e = int(j1)
 
         def _span(x0, x1):
             ylo = min(float(L[j]) for j in range(x0, x1 + 1) if float(L[j]) > 0)
             yhi = max(float(H[j]) for j in range(x0, x1 + 1))
             return ylo, yhi
-        for a, b, rs in mv:
+        for g, a, b in mv:
             ylo, yhi = _span(a, b)
-            aff = _recent(rs)                             # EXACTLY ONE rung per box: the most recent one it touched
-            out.append((a, b, ylo, yhi, "visit", [levels[aff]]))
-            cp = _mid(aff)                                # (rs = every rung the box touched: none can end its yellow)
+            out.append((a, b, ylo, yhi, "visit", [levels[_newest(g, b)]]))   # exactly ONE rung: the current line
+            cp = _mid(g)
             hit = None
-            for j in range(b + 1, j1e + 1):               # YELLOW: the first touch of a rung outside the red box
+            for j in range(b + 1, j1e + 1):               # YELLOW: the first touch of a DIFFERENT rung group
                 h, l = float(H[j]), float(L[j])
                 if h <= 0 or l <= 0:
                     continue
-                t = [i for i, lv in enumerate(levels) if i not in rs and lv[3] <= j and l <= lv[1] and h >= lv[0]]
-                if t:
-                    hit = (j, max(t, key=lambda i: abs(_mid(i) - cp)))   # a big bar through several: the farthest
+                tg = sorted({grp[i] for i, lv in enumerate(levels)
+                             if grp[i] != g and lv[3] <= j and l <= lv[1] and h >= lv[0]})
+                if tg:
+                    hit = (j, max(tg, key=lambda x: (abs(_mid(x) - cp), levels[_newest(x, j)][3])))
                     break
             if hit is not None:
-                j, li2 = hit
+                j, g2 = hit
                 ylo, yhi = _span(b, j)
-                out.append((b, j, ylo, yhi, "break", [levels[li2]]))
+                out.append((b, j, ylo, yhi, "break", [levels[_newest(g2, j)]]))
         out.sort(key=lambda o: (o[0], o[1]))
         return out
 
