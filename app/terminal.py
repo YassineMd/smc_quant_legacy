@@ -6941,14 +6941,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         #                     box's rungs -- the touch of the next rung is what confirms the break (user's definition:
         #                     "price moves from a POC to a different POC or LVN"). No touch yet -> no yellow (forming).
         #   BLUE / GREEN follow in the next steps.
-        mv = []                                           # [first, last, [touched-set per stay]]
-        for li, a, b, ts in vis:
-            if b - a + 1 < min_visit:
-                continue
-            if mv and (a - mv[-1][1] - 1) < min_visit:
-                mv[-1][1] = b; mv[-1][2].append(set(ts))
-            else:
-                mv.append([a, b, [set(ts)]])
+        # One RED box per qualifying stay. (The old "merge consecutive red boxes" rule is gone, user 2026-09-05: a
+        # stay is no longer split by sibling lines at the same level, so a second stay that starts right after the
+        # first means price moved to a DIFFERENT rung -- that move is the yellow box, it must not be swallowed.)
+        mv = [(a, b, set(ts)) for li, a, b, ts in vis if b - a + 1 >= min_visit]
         out = []                                          # (x0, x1, ylo, yhi, kind, rungs)
         j1e = int(j1)
 
@@ -6956,16 +6952,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             ylo = min(float(L[j]) for j in range(x0, x1 + 1) if float(L[j]) > 0)
             yhi = max(float(H[j]) for j in range(x0, x1 + 1))
             return ylo, yhi
-        for a, b, stays in mv:
+        for a, b, rs in mv:
             ylo, yhi = _span(a, b)
-            aff = []                                      # one rung per stay: the most recent it touched (priority to
-            for s in stays:                               # the current line over older ones at the same level)
-                r = _recent(s)
-                if r not in aff:
-                    aff.append(r)
-            out.append((a, b, ylo, yhi, "visit", [levels[i] for i in aff]))
-            rs = set().union(*stays)                      # EVERY rung the box touched: none of them can end its yellow
-            cp = sum(_mid(i) for i in aff) / len(aff)
+            aff = _recent(rs)                             # EXACTLY ONE rung per box: the most recent one it touched
+            out.append((a, b, ylo, yhi, "visit", [levels[aff]]))
+            cp = _mid(aff)                                # (rs = every rung the box touched: none can end its yellow)
             hit = None
             for j in range(b + 1, j1e + 1):               # YELLOW: the first touch of a rung outside the red box
                 h, l = float(H[j]), float(L[j])
