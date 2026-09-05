@@ -7787,7 +7787,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _fx[int(_reg0)] = _cross_fx(_reg0)
             self._ema_stk_forming = _frm
             self._ema_flip_conf = dict(_fconf)      # flip cross bar -> its confirmation bar (causal timeline)
-            self._ema_flip_ledger = {"key": _lkey, "t_last": _tend, "flips": [
+            self._ema_flip_ledger = {"key": _lkey, "t_last": _tend,
+                                     "dest": ((_led.get("dest") if _led is not None else None) or {}), "flips": [
                 (float(_ana[_q].get("start_time", 0.0) or 0.0), _cq,
                  float(_ana[_fconf[_q]].get("start_time", 0.0) or 0.0))
                 for _q, _cq in sorted([(int(_q), "g") for _q in _g] + [(int(_q), "r") for _q in _r]) if _q in _fconf]}
@@ -8222,6 +8223,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         self._ema_asof_done[_ka] = (list(_mk), _hp, _lp)
                         return _mk, _hp, _lp, _sq, _bl, _br
                     _fl9 = [_f8[0] for _f8 in _seq9 if int(_f8[0]) not in _hid2]   # the DRAWN lines
+                    _dl9 = (getattr(self, "_ema_flip_ledger", None) or {}).setdefault("dest", {})
                     for _q9, _Fk in enumerate(_fl9):
                         _ck = int(_Fk)                                     # from the bar the line is drawn at
                         _nk = _fl9[_q9 + 1] if _q9 + 1 < len(_fl9) else None
@@ -8233,9 +8235,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         for _p8, _kd8 in _mk:
                             _lv9.append((float(_p8), float(_p8), _kd8, int(_ck), _sg9, int(_uk)))
                             if _nk is not None:           # PREVIOUS ZONES (user 2026-09-05): once superseded, a
-                                _lv9.append((float(_p8), float(_p8), _kd8, int(_uk), _sg9, int(_M), True))
-                                # ... line's marks remain DESTINATIONS a move can run to (yellow) or retrace
-                                # through (blue) -- never a place where a red stall forms (dest-only flag)
+                                _dl9.setdefault((round(float(_p8), 6), _kd8, float(_ftimes.get(_nk, 0.0))),
+                                                float(_ftimes.get(_Fk, 0.0)))
+                                # ... line's marks remain DESTINATIONS a move can run to (yellow) -- never a
+                                # place where a red stall forms (dest-only flag). Recorded in the session's
+                                # DEST LEDGER so they survive their line falling out of the analysis window.
                         if _nk is None:                   # the OPEN segment: a label-HIDDEN confirmed flip after
                             for _Fh in [_f8[0] for _f8 in _seq9 if int(_f8[0]) > int(_Fk)]:   # the last drawn line
                                 _mkh = _asof9(_Fh)[0]     # draws no line, but the dashed 'Current trend' marks ARE
@@ -8259,6 +8263,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                         _pzo9, _ana, _M, _Fk, _hiP9, _loP9, _sq9, _bl9, _br9, direction=_d9)]
                             for _p8, _kd8 in self._ema_tgt_done[_kt]:
                                 _lv9.append((float(_p8), float(_p8), _kd8, int(_jb), _sg9, int(_uk)))
+                    if _dl9:                                      # the DEST LEDGER -> destination-only rungs
+                        _tix9 = {}
+                        for _j9 in range(_M):
+                            _tix9.setdefault(float(_ana[_j9].get("start_time", 0.0) or 0.0), _j9)
+                        _t09 = float(_ana[0].get("start_time", 0.0) or 0.0)
+                        for (_p8, _kd8, _tf8), _tl8 in sorted(_dl9.items(), key=lambda kv: (kv[0][2], kv[0][0], kv[0][1])):
+                            _fr8 = _tix9.get(_tf8)
+                            if _fr8 is None:
+                                if _tf8 > _t09:
+                                    continue              # a time not in this series (should not happen)
+                                _fr8 = 0                  # superseded before the series starts: live from bar 0
+                            _ls8 = _tix9.get(_tl8, 0)
+                            _lv9.append((float(_p8), float(_p8), _kd8, int(_fr8), (int(_ls8), int(_fr8)), int(_M), True))
                     if _lv9 and _M - 1 > _off:
                         # over the WHOLE analysis series, not just the display window: a sequence that began before
                         # the window's first bar would otherwise be invisible and the stalls inside its yellow would
