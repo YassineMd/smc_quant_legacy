@@ -6994,8 +6994,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 # the yellow stops at its first touch
                 v2 = next((v for v in vis if v[0] == g2 and v[1] == j), None)
                 je = v2[2] if (v2 is not None and v2[2] - v2[1] + 1 < min_visit) else j
-                ylo, yhi = _span(b, je)
-                out.append((b, je, ylo, yhi, "break", [levels[_newest(g2, je)]]))
+                x0 = b + 1                                # NO OVERLAP (user 2026-09-05): the yellow starts on the bar
+                if je < x0:                               # AFTER the red box's last bar; the boxes meet edge to edge
+                    continue
+                ylo, yhi = _span(x0, je)
+                out.append((x0, je, ylo, yhi, "break", [levels[_newest(g2, je)]]))
+        # NO OVERLAP at the other end either: when the reached rung is a real stall (its own red box), the yellow
+        # ends on the confirming touch and that red box starts on the NEXT bar (the stall's first touch stays with
+        # the yellow; the red keeps its rung and the rest of its bars).
+        yends = {o[1] for o in out if o[4] == "break"}
+        adj = []
+        for (a, b, ylo, yhi, kind, rg) in out:
+            if kind == "visit" and a in yends and b > a:
+                a += 1; ylo, yhi = _span(a, b)
+            adj.append((a, b, ylo, yhi, kind, rg))
+        out = adj
         out.sort(key=lambda o: (o[0], o[1]))
         return out
 
