@@ -6984,7 +6984,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return out
 
     @staticmethod
-    def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=5, same_tol=0.0015, C=None, turn_min=0.0035):
+    def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=5, same_tol=0.0015, C=None, turn_min=0.0035, leg_min=0.01):
         """The level-to-level PATH of price over bars j0..j1 as the user's hand-drawn boxes (2026-09-05), built in
         the strict order RED > YELLOW > BLUE > GREEN.
         `levels` = [(lo, hi, kind, avail_from_bar[, seg[, until[, dest_only]]])] -- rung LINES (lo == hi), each known
@@ -7160,7 +7160,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         turn = True; break                # a zone on the other side of R: the move is over
                     if abs(dk) > far and abs(dk) >= turn_min * abs(cp):
                         cand.append((abs(dk), sd, x))     # (a zone within turn_min of R is not a destination)
-                    elif (gS is not None and x != gS and abs(dk) < 0.5 * far
+                    elif (gS is not None and x != gS and far >= leg_min * abs(cp) and abs(dk) < 0.5 * far
                           and far - abs(dk) >= turn_min * abs(cp)):
                         turn = True                       # a REAL pullback: past half the way back to R and at
                                                           # least turn_min deep -- a shallow dip to a nearer zone
@@ -7289,6 +7289,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                 gs[gq] = i
                         if not gs:
                             continue
+                        if gT is not None and gB in gs:
+                            break                         # back at the blue's level after a zone: the green is over
                         _px = lambda x: 0.5 * (levels[gs[x]][0] + levels[gs[x]][1])
                         cand = []; turn = False
                         for x in gs:
@@ -7297,9 +7299,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                 continue                  # an old level at a current zone's price: that one counts
                             if d > farT and d >= turn_min * abs(op):
                                 cand.append((d, x))       # a zone farther from O in the move's direction: on it goes
-                            elif (gT is not None and x != gT and d < 0.5 * farT
+                            elif (gT is not None and x != gT and farT >= leg_min * abs(op) and d < 0.5 * farT
                                   and farT - d >= turn_min * abs(op)):
-                                turn = True               # a real pullback from the zone reached: the turn
+                                turn = True               # a real pullback from the zone reached: the turn (a leg
+                                                          # under leg_min has not gone anywhere yet -- user's
+                                                          # 03-12 case: the dip after 85.85 before the run to 87.3)
                         if turn:
                             break
                         if cand:
