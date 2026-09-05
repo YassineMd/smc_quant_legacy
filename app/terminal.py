@@ -7064,8 +7064,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue
             ylo, yhi = _span(x0, je)
             out.append((x0, je, ylo, yhi, "break", [levels[_newest(gS, je, bT)]]))   # YELLOW: its rung = S
-            corridor = {v[0] for v in path}
-            s_end = je; blue = None
+            # BLUE = the RETRACEMENT (user 2026-09-05): from the bar after the last touch of S back TOWARD R through
+            # rungs progressively closer to R -- any POC / LVN between S and R, or R itself -- to the last touch of
+            # the closest one reached; it ends when price turns away from R again. Hovering at the retraced level is
+            # part of it (no stall rule). It is VOID -- skipped, the red/yellow detection simply resumes -- when any
+            # close goes beyond the red box's far extreme: bearish (S below R) above the red box's HIGH, bullish
+            # below its LOW. Its rung = the level it retraced to.
+            bear = side < 0
+            r_ext = (max(float(H[j]) for j in range(a, bT + 1)) if bear
+                     else min(float(L[j]) for j in range(a, bT + 1) if float(L[j]) > 0))
+            s_end = je; back = []; near = far
             pend = [turn] if turn is not None else []
 
             def _rest():                                  # lazily: stop walking the bars once the blue is settled
@@ -7075,17 +7083,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     yield v0
             for v in _rest():
                 gk, ak, bk = v
-                if gk == g:
-                    blue = (s_end + 1, bk); break
-                if gk in corridor and bk - ak + 1 < min_visit:
-                    if gk == gS:
-                        s_end = bk                        # bounced off S again: the blue starts after it
-                    continue
-                break
-            if blue is not None and blue[1] >= blue[0]:
-                ylo, yhi = _span(blue[0], blue[1])
-                out.append((blue[0], blue[1], ylo, yhi, "retest", [levels[_newest(g, blue[1], bT)]]))   # BLUE: rung = R
-                blue_spans.append((blue[0], blue[1]))
+                dk = 0.0 if gk == g else abs(_mid(gk) - cp)
+                sk = 0 if gk == g else (1 if _mid(gk) - cp > 0 else -1)
+                if sk and sk != side:
+                    break                                 # a rung on the far side of R: not a retracement
+                if not back and gk == gS:
+                    s_end = bk; continue                  # still bouncing at S: the blue starts after it
+                if dk < near:
+                    back.append(v); near = dk             # closer to R than anything reached so far
+                else:
+                    break                                 # away from R again: the retracement is over
+            if back:
+                b0, b1 = s_end + 1, back[-1][2]
+                void = False
+                if C is not None:
+                    for j in range(je + 1, b1 + 1):
+                        cj = float(C[j])
+                        if cj > 0 and ((cj > r_ext) if bear else (cj < r_ext)):
+                            void = True; break            # closed beyond the red box's extreme -> sequence void
+                if not void and b1 >= b0:
+                    ylo, yhi = _span(b0, b1)
+                    out.append((b0, b1, ylo, yhi, "retest", [levels[_newest(back[-1][0], b1, bT)]]))   # BLUE
+                    blue_spans.append((b0, b1))
         # NO OVERLAP at the other end either: when the reached rung is a real stall (its own red box), the yellow
         # ends on the confirming touch and that red box starts on the NEXT bar. And the retest stay is the BLUE box:
         # a red box (from the global scan) overlapping a blue or a yellow is dropped.
