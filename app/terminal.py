@@ -7625,8 +7625,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                         _j0z = _jz + 1
                                     _tlo9 = _zlo9 if _zlo9 is not None else _p9
                                     _thi9 = _zhi9 if _zhi9 is not None else _p9
+                                    # "untouched" = never revisited BEFORE the current trend started (user screenshot
+                                    # 2026-09-04): the current trend running INTO a target must not drop it -- that
+                                    # is exactly when you want to see it.
                                     _touch9 = False
-                                    for _j9 in range(max(0, _j0z), _M):
+                                    for _j9 in range(max(0, _j0z), max(0, int(_ac))):
                                         _bb9 = _ana[_j9]
                                         _h9 = float(_bb9.get("high", 0.0) or 0.0); _l9 = float(_bb9.get("low", 0.0) or 0.0)
                                         if _h9 > 0 and _l9 > 0 and _l9 <= _thi9 and _h9 >= _tlo9:
@@ -7659,7 +7662,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                 if (_dir9 > 0 and _p8 <= _ref9) or (_dir9 < 0 and _p8 >= _ref9):
                                     continue
                                 _touch8 = False
-                                for _j9 in range(int(_s1) + 1, _M):
+                                for _j9 in range(int(_s1) + 1, max(0, int(_ac))):   # before the current trend only
                                     _bb9 = _ana[_j9]
                                     _h9 = float(_bb9.get("high", 0.0) or 0.0); _l9 = float(_bb9.get("low", 0.0) or 0.0)
                                     if _h9 > 0 and _l9 > 0 and _l9 <= _p8 <= _h9:
