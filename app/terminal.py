@@ -2106,6 +2106,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("B"), self, activated=self._toggle_bubbles)
         # Shift+B = Big Player Levels (m10_bigplayer) on/off, exactly like its menu checkbox (user 2026-09-06)
         QtGui.QShortcut(QtGui.QKeySequence("Shift+B"), self, activated=self._toggle_bigplayer)
+        # Shift+Z = EMA > POC > 'Zones' on/off (zone rects <-> lines only); plain Z is the 4h overlays' off switch
+        QtGui.QShortcut(QtGui.QKeySequence("Shift+Z"), self, activated=self._toggle_zone_mode)
         # 'h' = show/hide the Mode-10 Magic-Selection stats box (chart overlays like the flip line stay)
         QtGui.QShortcut(QtGui.QKeySequence("H"), self, activated=self._toggle_sel_stats)
         # Mode-10 selection panels, STACKED below the box in this order: 1 ABSORPTION, 2 EFF-AGG, 3 E/R, 4 EXHAUSTION
@@ -16919,6 +16921,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Shift+B -- Big Player Levels (m10_bigplayer) on/off, exactly as clicking its menu checkbox: the
         checkbox emits layerToggled, so the layer handler (re)subscribes + backfills, or clears the levels."""
         cb = self.menu.layer_checks.get("m10_bigplayer")
+        if cb is not None:
+            cb.setChecked(not cb.isChecked())
+
+    def _toggle_zone_mode(self) -> None:
+        """Shift+Z -- the EMA > POC > 'Zones' sub-toggle (ema_zone_mode) on/off, exactly as clicking it: the
+        checkbox emits subWidgetToggled -> _toggle_subwidget (rects hidden at once when off, redrawn next frame)."""
+        cb = self.menu.sub_checks.get("ema_zone_mode")
         if cb is not None:
             cb.setChecked(not cb.isChecked())
 
