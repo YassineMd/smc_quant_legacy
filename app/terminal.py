@@ -6987,7 +6987,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=5, same_tol=0.0015, C=None):
         """The level-to-level PATH of price over bars j0..j1 as the user's hand-drawn boxes (2026-09-05), built in
         the strict order RED > YELLOW > BLUE > GREEN.
-        `levels` = [(lo, hi, kind, avail_from_bar[, seg])] -- rung LINES (lo == hi), each known from avail_from_bar.
+        `levels` = [(lo, hi, kind, avail_from_bar[, seg[, until[, dest_only]]])] -- rung LINES (lo == hi), each known
+        from avail_from_bar; dest_only = an older line's mark: a destination for the yellow / blue, never a red.
         SAME-LEVEL GROUPS: an older rung of the same family (POC-family / LVN) within `same_tol` of a more recent one
         is the SAME line (the profile re-drawn by a later segment): the group is ONE rung and its newest member known
         at a bar is the one shown (priority to the most recent / current line). Grouped oldest-first (causal).
@@ -7003,6 +7004,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         Returns [(x0, x1, ylo, yhi, kind, [rung])] -- exactly ONE rung per box (the group's newest known member)."""
         n = len(levels)
         fam = ["lvn" if levels[i][2] == "lvn" else "poc" for i in range(n)]
+        dest = [len(levels[i]) > 6 and bool(levels[i][6]) for i in range(n)]   # destination-only (older lines)
         # CAUSAL grouping (user 2026-09-05, stability): rungs are grouped OLDEST FIRST -- a rung joins the group
         # whose most recent member (so far) is within tolerance, so a rung created later can never regroup the
         # rungs that were known before it (grouping newest-first let a new line's POC re-form boxes two days back).
@@ -7012,8 +7014,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             p = 0.5 * (levels[i][0] + levels[i][1])
             for hI in heads:
                 q = 0.5 * (levels[last[hI]][0] + levels[last[hI]][1])
-                if fam[hI] == fam[i] and abs(q - p) <= same_tol * abs(p):
-                    grp[i] = hI; last[hI] = i; break
+                if fam[hI] == fam[i] and dest[hI] == dest[i] and abs(q - p) <= same_tol * abs(p):
+                    grp[i] = hI; last[hI] = i; break      # (dest-only copies group only among themselves: an old
+                                                          # level 0.1% off R must not read as "back at R")
             if grp[i] < 0:
                 grp[i] = i; heads.append(i); last[i] = i
         members = {}
@@ -7036,6 +7039,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         def _newest(g, j, live_at=None):                  # the group's most recent rung active at bar j
             c = [i for i in members[g] if _livef(levels[i], j, live_at)]   # (or frozen: a sequence keeps its rungs)
             return max(c, key=lambda i: (levels[i][3], i)) if c else g
+
+        def _gp(g, j, live_at=None):                      # the group's price AS SHOWN at bar j = its newest live
+            i = _newest(g, j, live_at)                    # member (the head may have drifted 0.15% away)
+            return 0.5 * (levels[i][0] + levels[i][1])
         # PERF: the rungs each bar's range contains, computed ONCE (liveness is filtered per use) -- the global scan
         # and every sequence's bar walk then look at a handful of rungs per bar instead of all of them.
         jA = max(0, int(j0)); jB = int(j1)
@@ -7052,11 +7059,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             tj = touch.get(j)
             if not tj:
                 continue
-            tg = sorted({gq for gq, i in tj if _live(levels[i], j)})
-            if not tg:
-                continue
-            if vis and vis[-1][0] in tg:                  # still touching the anchor rung -> the stay goes on
-                vis[-1][2] = j
+            tg = sorted({gq for gq, i in tj if _live(levels[i], j) and not dest[i]})   # reds: CURRENT rungs only
+            if not tg:                                    # (an old level is never where a red forms; touching one
+                continue                                  # is a gap bar -- a move to an old zone BEYOND the current
+            if vis and vis[-1][0] in tg:                  # zone touches the current zone on its way and ends the
+                vis[-1][2] = j                            # stay there; old levels closer than that are noise)
                 continue
             if vis:                                       # new stay: the most recent group; ties -> the farthest
                 cp = _mid(vis[-1][0])                     # (a big bar can run through several rungs)
@@ -7094,7 +7101,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             yhi = max(float(H[j]) for j in range(x0, x1 + 1))
             return ylo, yhi
 
-        def _seq_visits(b, live_at, gR, ignore_R_until):
+        def _seq_visits(b, live_at, gR, ignore_R_until, keep_dest=None):
             """Stays after bar b, with the rungs live at j OR frozen at `live_at` (the sequence's rung set); R is
             ignored up to `ignore_R_until` (the departing bars' wicks). Yields [group, first, last]."""
             cur = None
@@ -7103,6 +7110,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if not tj:
                     continue
                 tg = sorted({gq for gq, i in tj if _livef(levels[i], j, live_at)
+                             and (not dest[i] or gq == keep_dest)   # old levels: only the sequence's own S
                              and not (gq == gR and j <= ignore_R_until)})
                 if not tg:
                     continue
@@ -7135,7 +7143,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         break
             ylo, yhi = _span(a, bT)
             out.append((a, bT, ylo, yhi, "visit", [levels[_newest(g, bT)]]))   # RED: exactly ONE rung = R
-            cp = _mid(g)
+            cp = _gp(g, bT, bT)                           # R = the level the red box shows
             # YELLOW (user 2026-09-05, final): from the bar after the red box's last R touch to the LAST candle that
             # touched the FARTHEST zone reached before the move REVERSES. Reversal = a candle that CLOSES beyond the
             # extreme of the last candle that touched that zone (down move: above its high; up move: below its
@@ -7152,11 +7160,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if gs:
                     if g in gs and j > b:
                         break                             # back at R: the move is over
+                    cur_here = any(not dest[x] for x in gs if x != g)
                     cand = []
                     for x in gs:
                         if x == g:
                             continue
-                        dk = _mid(x) - cp; sd = 1 if dk > 0 else -1
+                        if dest[x] and gS is None and not cur_here:
+                            continue                      # old levels count only BEYOND the first current zone
+                        dk = _gp(x, j, bT) - cp; sd = 1 if dk > 0 else -1
+                        if dest[x] and abs(dk) <= same_tol * abs(cp):
+                            continue                      # an old level at R's own price: not a destination
                         if side and sd != side:
                             cand = None; break            # a rung on the other side of R: the move is over
                         if abs(dk) > far:
@@ -7189,10 +7202,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             r_ext = (max(float(H[j]) for j in range(a, bT + 1)) if bear
                      else min(float(L[j]) for j in range(a, bT + 1) if float(L[j]) > 0))
             back = []; near = far
-            for v in _seq_visits(s_end, (bT, je), g, b):
+            for v in _seq_visits(s_end, (bT, je), g, b, keep_dest=gS):
                 gk, ak, bk = v
-                dk = 0.0 if gk == g else abs(_mid(gk) - cp)
-                sk = 0 if gk == g else (1 if _mid(gk) - cp > 0 else -1)
+                pk = _gp(gk, bk, (bT, je))
+                dk = 0.0 if gk == g else abs(pk - cp)
+                if gk != g and dest[gk] and dk <= same_tol * abs(cp):
+                    gk = g; dk = 0.0                      # an old level at R's own price = R
+                sk = 0 if gk == g else (1 if pk - cp > 0 else -1)
                 if sk and sk != side:
                     break                                 # a rung on the far side of R: not a retracement
                 if not back and gk == gS:
@@ -8216,6 +8232,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _sg9 = (int(_Fk), int(_nk if _nk is not None else _M - 1))
                         for _p8, _kd8 in _mk:
                             _lv9.append((float(_p8), float(_p8), _kd8, int(_ck), _sg9, int(_uk)))
+                            if _nk is not None:           # PREVIOUS ZONES (user 2026-09-05): once superseded, a
+                                _lv9.append((float(_p8), float(_p8), _kd8, int(_uk), _sg9, int(_M), True))
+                                # ... line's marks remain DESTINATIONS a move can run to (yellow) or retrace
+                                # through (blue) -- never a place where a red stall forms (dest-only flag)
                         if _nk is None:                   # the OPEN segment: a label-HIDDEN confirmed flip after
                             for _Fh in [_f8[0] for _f8 in _seq9 if int(_f8[0]) > int(_Fk)]:   # the last drawn line
                                 _mkh = _asof9(_Fh)[0]     # draws no line, but the dashed 'Current trend' marks ARE
