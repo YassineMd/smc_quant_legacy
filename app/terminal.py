@@ -8012,6 +8012,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _H9[_j9] = float(_ana[_j9].get("high", 0.0) or 0.0)
                             _L9[_j9] = float(_ana[_j9].get("low", 0.0) or 0.0)
                         _bx9 = self._ema_ladder_boxes(_lv9, _H9, _L9, _off, _M - 1)
+                        try:                                  # DIAGNOSTIC dump (tiny, once per close): the rungs, the
+                            import json as _js                # last 150 bars' ranges + touched rungs, and the boxes --
+                            from . import config as _cfg      # data/ladder_last.json, so a "the algo missed X" report
+                            _cfg.ensure_data_dir()            # can be read back exactly
+                            _jj0 = max(_off, _M - 150)
+                            _dump = {"tf": self._tf, "src": self._chart_source, "off": _off, "M": _M,
+                                     "cur_start": _acx, "cur_marks": [(round(float(_p8), 4), _kd8) for _p8, _kd8 in _mkx],
+                                     "rungs": [(round(_r[0], 4), _r[2], _r[3], _r[5]) for _r in _lv9],
+                                     "bars": [(_j9, round(_H9[_j9], 4), round(_L9[_j9], 4),
+                                               [_ri for _ri, _r in enumerate(_lv9)
+                                                if _r[3] <= _j9 < _r[5] and _L9[_j9] <= _r[1] and _H9[_j9] >= _r[0]])
+                                              for _j9 in range(_jj0, _M)],
+                                     "boxes": [(_b[0], _b[1], round(_b[2], 4), round(_b[3], 4), _b[4],
+                                                [(round(_r[0], 4), _r[2], _r[3]) for _r in _b[5]]) for _b in _bx9]}
+                            with open(os.path.join(_cfg.DATA_DIR, "ladder_last.json"), "w", encoding="utf-8") as _fh:
+                                _js.dump(_dump, _fh)
+                        except Exception:
+                            pass
                 except Exception:
                     _bx9 = []
                 self._ema_lbox_cache = (_ssig, _bx9)
