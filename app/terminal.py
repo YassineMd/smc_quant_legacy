@@ -7231,7 +7231,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                  or ((_wl_on or _wlp_on or _wmg_on or _wln_on) and self._ema_wall_cache is None)
                  or ((_pc_on or _pcp_on or _wmg_on) and self._ema_poc_cache is None)
                  or (_vp_on and self._ema_vp_cache is None)
-                 or (_pl_on and (self._ema_pocl_cache is None or self._ema_pocl_cache[0] != _ssig))
+                 or ((_pl_on or _plc_on) and (self._ema_pocl_cache is None or self._ema_pocl_cache[0] != _ssig))
                  or (_plc_on and (self._ema_poclc_cache is None or self._ema_poclc_cache[0] != _ssig)))
         _ana = ((list(_deep) + list(_warm[len(_warm) - _wn:]) + list(buckets[:m]))
                 if _off else buckets) if _need else buckets
@@ -7425,7 +7425,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # line"); same 40-bin / 70%-VA rule (_ema_span_vp), same inclusive analysis span, same flip set (the pin
         # truncates ALL confirmed flips, merged ones included). Each line's marks are frozen once (keyed by the span's
         # two flip times) and never change afterwards -- they are the levels KNOWN when the line printed.
-        if not _pl_on:
+        if not _pl_on and not _plc_on:                   # the segment cache also feeds 'Current trend' (targets)
             self._hide_ema_pocl()
         else:
             if self._ema_pocl_cache is None or self._ema_pocl_cache[0] != _ssig:
@@ -7482,7 +7482,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                      "poc_lo": ((250, 205, 120, 200), 1.1, "POC▼"),     # light amber     = POC below the VAL
                      "lvn": ((178, 70, 255, 225), 1.2, "LVN")}          # electric purple = in-VA low-volume node
             _vis7 = 0; _rv7 = 0
-            _segs7 = self._ema_pocl_cache[1]
+            _segs7 = self._ema_pocl_cache[1] if _pl_on else []   # cache built for 'Current trend' too; drawn only when ON
             for _q7, (_a7, _b7, _mk7) in enumerate(_segs7):
                 if _b7 is not None and _b7 < _off:
                     continue                                  # whole segment older than the window -> not drawn
@@ -7537,7 +7537,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._hide_ema_poclc()
         else:
             if self._ema_poclc_cache is None or self._ema_poclc_cache[0] != _ssig:
-                _ac = None; _mkc = []; _acf = False; _ext = []
+                _ac = None; _mkc = []; _acf = False; _ext = []; _tgt = []
                 try:
                     _flc = [int(_q) for _q in sorted(int(_i8) for _i8 in (_g + _r)) if int(_q) not in _hid2]
                     _frmc = getattr(self, "_ema_stk_forming", None)
@@ -7593,10 +7593,63 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _zx = self._ema_mark_zones(_ana, _jend, [(_px, _kx)], zone_kinds=(_kx,), j_stop=_s1x + 1)[0]
                             _exz.append((_kx, float(_px), _zx[2], _zx[3], _s0x))
                         _ext = _exz
+                        # UNTOUCHED TARGETS (user 2026-09-04): once the current trend's last CLOSE is beyond an
+                        # extreme line, the OLDER segments' marks lying beyond that line in the break direction that
+                        # price never revisited are where it is heading -> project them over the current trend.
+                        # A POC (any of the three) qualifies through its ZONE (no bar after the crossing candle
+                        # traded into the body); an LVN qualifies as a LINE (no bar since its line touched the price).
+                        # Nearest to the extreme first, at most _TGT_MAX (mixed kinds, duplicates by level dropped).
+                        _TGT_MAX = 4
+                        _cl9 = float(_ana[_M - 1].get("close", _ana[_M - 1].get("close_price", 0.0)) or 0.0)
+                        _hiP = next((_e[1] for _e in _exz if _e[0] == "ext_hi"), None)
+                        _loP = next((_e[1] for _e in _exz if _e[0] == "ext_lo"), None)
+                        _dir9 = 1 if (_hiP is not None and _cl9 > _hiP) else (-1 if (_loP is not None and _cl9 < _loP) else 0)
+                        _pzc = (self._ema_pocl_cache[1] if (self._ema_pocl_cache is not None
+                                                            and self._ema_pocl_cache[0] == _ssig) else [])
+                        if _dir9 and _pzc and _cl9 > 0:
+                            _ref9 = _hiP if _dir9 > 0 else _loP
+                            _cand9 = []
+                            for _a9, _b9, _mk9 in _pzc:
+                                for _m9 in _mk9:
+                                    _p9, _k9 = float(_m9[0]), _m9[1]
+                                    if _k9 == "lvn":
+                                        if (_dir9 > 0 and _p9 <= _ref9) or (_dir9 < 0 and _p9 >= _ref9):
+                                            continue
+                                        _j0z = int(_a9); _zlo9 = _zhi9 = None
+                                    else:
+                                        if not _m9[2]:
+                                            continue                    # POC that no candle body ever crossed
+                                        _jz, _zlo9, _zhi9 = int(_m9[2][-1][0]), float(_m9[2][-1][1]), float(_m9[2][-1][2])
+                                        if (_dir9 > 0 and _zlo9 <= _ref9) or (_dir9 < 0 and _zhi9 >= _ref9):
+                                            continue
+                                        _j0z = _jz + 1
+                                    _tlo9 = _zlo9 if _zlo9 is not None else _p9
+                                    _thi9 = _zhi9 if _zhi9 is not None else _p9
+                                    _touch9 = False
+                                    for _j9 in range(max(0, _j0z), _M):
+                                        _bb9 = _ana[_j9]
+                                        _h9 = float(_bb9.get("high", 0.0) or 0.0); _l9 = float(_bb9.get("low", 0.0) or 0.0)
+                                        if _h9 > 0 and _l9 > 0 and _l9 <= _thi9 and _h9 >= _tlo9:
+                                            _touch9 = True; break
+                                    if _touch9:
+                                        continue
+                                    _cand9.append((abs(_tlo9 - _ref9) if _dir9 > 0 else abs(_thi9 - _ref9),
+                                                   _p9, _k9, _zlo9, _zhi9))
+                            _cand9.sort(key=lambda _c: _c[0])
+                            _seen9 = set()
+                            for _d9, _p9, _k9, _zlo9, _zhi9 in _cand9:
+                                _key9 = (round(_zlo9 if _zlo9 is not None else _p9, 6),
+                                         round(_zhi9 if _zhi9 is not None else _p9, 6))
+                                if _key9 in _seen9:
+                                    continue
+                                _seen9.add(_key9)
+                                _tgt.append((_p9, _k9, _zlo9, _zhi9))
+                                if len(_tgt) >= _TGT_MAX:
+                                    break
                 except Exception:
-                    _ac = None; _mkc = []; _ext = []
-                self._ema_poclc_cache = (_ssig, _ac, _mkc, _acf, _ext)
-            _, _ac, _mkc, _acf, _ext = self._ema_poclc_cache
+                    _ac = None; _mkc = []; _ext = []; _tgt = []
+                self._ema_poclc_cache = (_ssig, _ac, _mkc, _acf, _ext, _tgt)
+            _, _ac, _mkc, _acf, _ext, _tgt = self._ema_poclc_cache
             _STYC = {"poc": ((250, 180, 60, 235), 1.4), "poc_hi": ((250, 205, 120, 200), 1.1),
                      "poc_lo": ((250, 205, 120, 200), 1.1), "lvn": ((178, 70, 255, 225), 1.2)}
             _vc = 0; _rc = 0
@@ -7636,6 +7689,40 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         if _rs8.get("geo") != _zg8:
                             _rs8["rect"].setRect(_sx0, _zlo8, max(1e-9, _sx1 - _sx0), _zhi8 - _zlo8); _rs8["geo"] = _zg8
                         _rs8["rect"].setVisible(True)
+            # UNTOUCHED TARGETS: projected over the current trend (its start -> live edge) -- a POC as its zone + a
+            # dashed line, an LVN as a dashed purple line. Same colours as the marks they come from.
+            if _ac is not None and _tgt:
+                _xt0 = _fxw(_ac); _xt1 = float(x[n - 1])
+                for _p9, _k9, _zlo9, _zhi9 in _tgt:
+                    if _xt1 <= _xt0:
+                        break
+                    _rgba9, _w9 = _STYC.get(_k9, _STYC["poc"])
+                    if _vc >= len(self._ema_poclc_items):
+                        _ln9 = pg.PlotCurveItem(); _ln9.setZValue(15)
+                        self.plot.addItem(_ln9, ignoreBounds=True)
+                        self._ema_poclc_items.append({"ln": _ln9, "geo": None, "kind": None})
+                    _sl9 = self._ema_poclc_items[_vc]; _vc += 1
+                    _tk9 = "tgt_" + _k9
+                    if _sl9.get("kind") != _tk9:
+                        _pn9 = pg.mkPen(_rgba9[0], _rgba9[1], _rgba9[2], _rgba9[3], width=_w9); _pn9.setCosmetic(True)
+                        _pn9.setDashPattern([2.0, 3.0])       # short dashes = a projected TARGET, not a live mark
+                        _sl9["ln"].setPen(_pn9); _sl9["kind"] = _tk9
+                    _geo9 = (_xt0, _xt1, _p9)
+                    if _sl9.get("geo") != _geo9:
+                        _sl9["ln"].setData([_xt0, _xt1], [_p9, _p9]); _sl9["geo"] = _geo9
+                    _sl9["ln"].setVisible(True)
+                    if _zlo9 is not None and _zhi9 is not None and _zhi9 > _zlo9:
+                        if _rc >= len(self._ema_poclc_rects):
+                            _rc9 = QtWidgets.QGraphicsRectItem(); _rc9.setPen(pg.mkPen(None)); _rc9.setZValue(-6)
+                            self.vb.addItem(_rc9, ignoreBounds=True)
+                            self._ema_poclc_rects.append({"rect": _rc9, "geo": None, "kind": None})
+                        _rs9 = self._ema_poclc_rects[_rc]; _rc += 1
+                        if _rs9.get("kind") != _tk9:
+                            _rs9["rect"].setBrush(pg.mkBrush(_rgba9[0], _rgba9[1], _rgba9[2], 34)); _rs9["kind"] = _tk9
+                        _zg9 = (_xt0, _xt1, _zlo9, _zhi9)
+                        if _rs9.get("geo") != _zg9:
+                            _rs9["rect"].setRect(_xt0, _zlo9, max(1e-9, _xt1 - _xt0), _zhi9 - _zlo9); _rs9["geo"] = _zg9
+                        _rs9["rect"].setVisible(True)
             # EXTREME-LINE ZONES: red (high line) / green (low line) faint rects spanning exactly what the Trend
             # Extreme line spans (its segment-start vline -> live edge, or the pinned segment), only when a bar
             # after the segment that set the line crossed it. Not gated on the current line's confirmation.
