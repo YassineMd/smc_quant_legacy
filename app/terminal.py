@@ -7957,8 +7957,40 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _lv9 = []                                     # rungs = the POC / LVN LINE prices only (user:
                     for _a9, _b9, _mk9 in (self._ema_pocl_cache[1] if self._ema_pocl_cache is not None else []):
                         for _m9 in _mk9:                          #  "not the entire zones"); a touch = the bar's
-                            _lv9.append((float(_m9[0]), float(_m9[0]), _m9[1], int(_b9),    # range contains the line
-                                         (int(_a9), int(_b9))))                            # + its segment (hover highlight)
+                            _lv9.append((float(_m9[0]), float(_m9[0]), _m9[1], int(_a9),    # range contains the line;
+                                         (int(_a9), int(_b9))))                            # known from ITS line (as-of)
+                    # + the CURRENT trend's marks (the dashed 'Current trend' lines = the side VP as of now): the most
+                    # recent rungs of all (user 2026-09-05: "in the screenshot it's the dashed line"). Taken from the
+                    # 'Current trend' cache when fresh, else computed here the same way (start = forming cross, else
+                    # the newest drawn line; span = last finished bull + bear among all flips, pin-aware).
+                    _acx = None; _mkx = []
+                    if (_plc_on and self._ema_poclc_cache is not None and self._ema_poclc_cache[0] == _ssig
+                            and self._ema_poclc_cache[1] is not None):
+                        _acx = int(self._ema_poclc_cache[1]); _mkx = [(_m[0], _m[1]) for _m in self._ema_poclc_cache[2]]
+                    else:
+                        _flx = [int(_q) for _q in sorted(int(_i8) for _i8 in (_g + _r)) if int(_q) not in _hid2]
+                        _frx = getattr(self, "_ema_stk_forming", None)
+                        if _frx is not None and (not _flx or int(_frx[0]) > _flx[-1]):
+                            _acx = int(_frx[0])
+                        elif _flx:
+                            _acx = _flx[-1]
+                        _sqx = sorted([(int(_i8), "g") for _i8 in _g] + [(int(_i8), "r") for _i8 in _r])
+                        if self._ema_pin_t:
+                            _sqx = [_f8 for _f8 in _sqx if float(_ftimes.get(_f8[0], 0.0)) <= float(self._ema_pin_t)]
+                        _blx = _brx = None
+                        for _k8 in range(len(_sqx) - 1):
+                            (_s0, _c0), (_s1, _c1) = _sqx[_k8], _sqx[_k8 + 1]
+                            if _c0 == "g" and _c1 == "r":
+                                _blx = (_s0, _s1)
+                            elif _c0 == "r" and _c1 == "g":
+                                _brx = (_s0, _s1)
+                        _sgx = [_s for _s in (_blx, _brx) if _s is not None]
+                        if _acx is not None and _sgx and _M - 1 > _acx:
+                            _spx = (min(_s[0] for _s in _sgx), max(_s[1] for _s in _sgx))
+                            _mkx = list(self._ema_span_vp(_ana, _spx[0], _spx[1]))
+                    if _acx is not None:
+                        for _p8, _kd8 in _mkx:
+                            _lv9.append((float(_p8), float(_p8), _kd8, int(_acx), (int(_acx), int(_M - 1))))
                     if _lv9 and _M - 1 > _off:
                         _H9 = [0.0] * _M; _L9 = [0.0] * _M
                         for _j9 in range(_off, _M):
