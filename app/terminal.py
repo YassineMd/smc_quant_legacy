@@ -6963,19 +6963,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         #                     box's rungs -- the touch of the next rung is what confirms the break (user's definition:
         #                     "price moves from a POC to a different POC or LVN"). No touch yet -> no yellow (forming).
         #   BLUE / GREEN follow in the next steps.
-        # One RED box per qualifying stay (no merging: a second stay right after the first means price moved to a
-        # DIFFERENT rung -- that move is the yellow box, it must not be swallowed; user 2026-09-05).
-        mv = [(g, a, b) for g, a, b in vis if b - a + 1 >= min_visit]
+        # SEQUENCES, in the strict order RED > YELLOW > BLUE (> GREEN, next step). One red box per qualifying stay
+        # (no merging: a second stay right after the first means price moved to a DIFFERENT rung -- that move is
+        # the yellow box). The red box's rung = the sequence's resistance/support R; the yellow's rung = the
+        # level reached S. BLUE (the retest, user 2026-09-05): "from the last candle that touched the yellow
+        # zone to the last candle that touches the red zone" -- from the bar after the LAST touch of S (a short
+        # bounce off S before the retest only moves that start later) to the LAST touch of R in the retest stay.
+        # The retest stay is the blue box, never a red one (whatever its length), and it carries R. A stall at S,
+        # or a visit to a third rung before the retest, voids the sequence (a stall starts its own red one).
         out = []                                          # (x0, x1, ylo, yhi, kind, [rung])
         j1e = int(j1)
+        consumed = set()                                  # visit indices used up as a sequence's retest
 
         def _span(x0, x1):
             ylo = min(float(L[j]) for j in range(x0, x1 + 1) if float(L[j]) > 0)
             yhi = max(float(H[j]) for j in range(x0, x1 + 1))
             return ylo, yhi
-        for g, a, b in mv:
+        for iv, (g, a, b) in enumerate(vis):
+            if b - a + 1 < min_visit or iv in consumed:
+                continue
             ylo, yhi = _span(a, b)
-            out.append((a, b, ylo, yhi, "visit", [levels[_newest(g, b)]]))   # exactly ONE rung: the current line
+            out.append((a, b, ylo, yhi, "visit", [levels[_newest(g, b)]]))   # RED: exactly ONE rung = R
             cp = _mid(g)
             hit = None
             for j in range(b + 1, j1e + 1):               # YELLOW: the first touch of a DIFFERENT rung group
@@ -6987,18 +6995,36 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if tg:
                     hit = (j, max(tg, key=lambda x: (abs(_mid(x) - cp), levels[_newest(x, j)][3])))
                     break
-            if hit is not None:
-                j, g2 = hit
-                # the yellow runs to the LAST touch of the reached rung when the visit there is short (< min_visit,
-                # no red box of its own -- user's drawing 2026-09-05); a real stall there is its own red box, so
-                # the yellow stops at its first touch
-                v2 = next((v for v in vis if v[0] == g2 and v[1] == j), None)
-                je = v2[2] if (v2 is not None and v2[2] - v2[1] + 1 < min_visit) else j
-                x0 = b + 1                                # NO OVERLAP (user 2026-09-05): the yellow starts on the bar
-                if je < x0:                               # AFTER the red box's last bar; the boxes meet edge to edge
-                    continue
-                ylo, yhi = _span(x0, je)
-                out.append((x0, je, ylo, yhi, "break", [levels[_newest(g2, je)]]))
+            if hit is None:
+                continue
+            j, g2 = hit
+            # the yellow runs to the LAST touch of the reached rung when the visit there is short (< min_visit,
+            # no red box of its own -- user's drawing 2026-09-05); a real stall there is its own red box, so
+            # the yellow stops at its first touch
+            i2 = next((k for k in range(iv + 1, len(vis)) if vis[k][0] == g2 and vis[k][1] == j), None)
+            v2 = vis[i2] if i2 is not None else None
+            short = v2 is not None and (v2[2] - v2[1] + 1 < min_visit)
+            je = v2[2] if short else j
+            x0 = b + 1                                    # NO OVERLAP: the yellow starts on the bar AFTER the red box
+            if je < x0:
+                continue
+            ylo, yhi = _span(x0, je)
+            out.append((x0, je, ylo, yhi, "break", [levels[_newest(g2, je)]]))   # YELLOW: its rung = S
+            if not short:
+                continue                                  # S stalls -> that stall is the next sequence's red box
+            s_end = v2[2]; blue = None
+            for k in range(i2 + 1, len(vis)):             # BLUE: scan the stays after the yellow's touch of S
+                gk, ak, bk = vis[k]
+                if gk == g2:
+                    if bk - ak + 1 >= min_visit:
+                        break                             # a real stall at S -> the sequence is void (new red there)
+                    s_end = bk; continue                  # a short bounce off S: the blue starts after it
+                if gk == g:                               # the RETEST of R: blue = last S touch + 1 .. last R touch
+                    blue = (s_end + 1, bk); consumed.add(k)
+                break                                     # (a third rung before the retest -> void)
+            if blue is not None and blue[1] >= blue[0]:
+                ylo, yhi = _span(blue[0], blue[1])
+                out.append((blue[0], blue[1], ylo, yhi, "retest", [levels[_newest(g, blue[1])]]))   # BLUE: rung = R
         # NO OVERLAP at the other end either: when the reached rung is a real stall (its own red box), the yellow
         # ends on the confirming touch and that red box starts on the NEXT bar (the stall's first touch stays with
         # the yellow; the red keeps its rung and the rest of its bars).
@@ -8039,8 +8065,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _vb9 = 0
             for _bx9 in self._ema_lbox_cache[1]:
                 _x0, _x1, _ylo, _yhi, _kd = _bx9[:5]
-                if _kd not in ("visit", "break"):
-                    continue                                  # STEPS 1-2 (user 2026-09-05): RED + YELLOW so far
+                if _kd not in ("visit", "break", "retest"):
+                    continue                                  # STEPS 1-3 (user 2026-09-05): RED + YELLOW + BLUE so far
                 _wx0 = _wx(int(_x0)) - 0.5; _wx1 = _wx(int(_x1)) + 0.5
                 if _wx1 <= _wx0 or _yhi <= _ylo:
                     continue
