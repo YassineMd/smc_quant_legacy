@@ -540,13 +540,14 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("ema_poc_prev", "Previous Band"),       # ... and over the preceding pair
                            ("ema_poc_line", "POC per line"),        # per drawn Stack-Flip line: the side Trend-VP marks AS OF that line (what pinning it shows: amber POC, light-amber POC above VAH / below VAL, purple in-VA LVN) drawn over the segment that follows (to the next line; last one -> live edge)
                            ("ema_poc_line_cur", "Current trend"),   # the SIDE VP's marks (right-side Trend VP, as shown / as pinned) drawn dashed over the current/forming trend from its start (forming cross, else the newest vertical line) to the live edge; POC zones = latest crossing candle body, only once the line is confirmed
+                           ("ema_zone_mode", "Zones"),              # ZONE MODE (user 2026-09-06): draw the POC zones (last crossing candle body) and the higher/lower extreme-line zones as faint rects; OFF = lines only
                            ("ema_lvl_boxes", "Ladder boxes"),       # the level-to-level PATH as outline boxes: RED sitting at a rung, YELLOW break to another rung, BLUE retest of the rung just left, GREEN continuation past the touched rung (rungs = older POC + LVN LINES, not zones)
                            ("ema_trendvp", "Trend Extremes VP (right)"),   # right-anchored VP over the last two FINISHED trends; amber POC + purple in-VA LVN + light-amber POCs above VAH/below VAL + dashed VAH/VAL on the band
                            ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:
             _wall_grp = key in ("ema_walls", "ema_walls_prev",   # nested one level under their own headers
                                 "ema_walls_line", "ema_walls_merge", "ema_poc", "ema_poc_prev", "ema_poc_line",
-                                "ema_poc_line_cur", "ema_lvl_boxes")
+                                "ema_poc_line_cur", "ema_zone_mode", "ema_lvl_boxes")
             _ema_grp = _wall_grp or key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
                                             "ema_stack", "ema_trendlvl", "ema_trendvp")
             if key == "ema20":                       # group header — the EMA entries render as indented sub-toggles
@@ -563,7 +564,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                                  % (30 if _wall_grp else 18))
             # First-launch DEFAULT (before connect): Vector Drawing ON, OB/Iceberg Alert OFF.
             # Persistence (terminal saved toggles) overrides this on every later launch.
-            cb.setChecked(key in ("drawing", "ema_hlread"))   # readout defaults ON (it was always drawn before)
+            cb.setChecked(key in ("drawing", "ema_hlread", "ema_zone_mode"))   # readout + zones default ON (always drawn before)
             cb.toggled.connect(lambda on, k=key: self.subWidgetToggled.emit(k, on))
             self.sub_checks[key] = cb
             self.sub_section.addWidget(cb)

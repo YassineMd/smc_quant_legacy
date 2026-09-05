@@ -2725,8 +2725,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
                    "ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls", "ema_walls_prev",
                    "ema_walls_line", "ema_walls_merge",
-                   "ema_poc", "ema_poc_prev", "ema_poc_line", "ema_poc_line_cur", "ema_lvl_boxes"):
-            if key == "ema_hlread":                  # readout text only; the HL lines are unaffected
+                   "ema_poc", "ema_poc_prev", "ema_poc_line", "ema_poc_line_cur", "ema_lvl_boxes", "ema_zone_mode"):
+            if key == "ema_zone_mode":               # ZONE MODE: rects only -- the lines are unaffected, the next
+                if not on:                           # frame redraws them from the caches with the flag re-read
+                    for _rs in self._ema_pocl_rects + self._ema_poclc_rects:
+                        _rs["rect"].setVisible(False)
+            elif key == "ema_hlread":                # readout text only; the HL lines are unaffected
                 if not on:
                     for _it in self._ema_ext_lbls.values():
                         _it.setVisible(False)
@@ -7702,6 +7706,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _plc_on = _plccb is not None and _plccb.isChecked()   # 'Current trend': the marks of the CURRENT trend only
         _lbcb = self.menu.sub_checks.get("ema_lvl_boxes")
         _lb_on = _lbcb is not None and _lbcb.isChecked()      # 'Ladder boxes': the level-to-level path boxes
+        _zmcb = self.menu.sub_checks.get("ema_zone_mode")
+        _zm_on = _zmcb is None or _zmcb.isChecked()           # 'Zones' (user 2026-09-06): POC + extreme-line ZONE rects
         if ((not _stk_on and not _lvl_on and not _vp_on and not _wl_on and not _wlp_on
              and not _pc_on and not _pcp_on and not _wmg_on and not _wln_on and not _pl_on and not _plc_on
              and not _lb_on) or m < 51):
@@ -8069,7 +8075,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _sl7["ln"].setVisible(True)
                     # ZONE: ONE faint rect over the whole band = the FINAL / most recent shape (the last crossing
                     # candle's body). The step history is computed but not drawn (user 2026-09-04: no evolution).
-                    for (_j7, _zlo7, _zhi7) in _st7[-1:]:
+                    for (_j7, _zlo7, _zhi7) in (_st7[-1:] if _zm_on else []):   # zone mode only
                         _sx0 = _x07; _sx1 = _zx17
                         if _sx1 <= _sx0 or _zhi7 <= _zlo7:
                             continue                          # degenerate -> nothing to draw
@@ -8190,7 +8196,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _sl8["ln"].setVisible(True)
                     # ZONES only once the trend's vertical line is CONFIRMED (user 2026-09-04): while the start is
                     # the dotted forming cross the lines show but no zone is drawn.
-                    for (_j8, _zlo8, _zhi8) in ([] if _acf else _st8[-1:]):   # ONE rect = the final shape
+                    for (_j8, _zlo8, _zhi8) in ([] if (_acf or not _zm_on) else _st8[-1:]):   # ONE rect = the final shape
                         _sx0 = _xc0; _sx1 = _xc1
                         if _sx1 <= _sx0 or _zhi8 <= _zlo8:
                             continue
@@ -8227,7 +8233,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     if _sl9.get("geo") != _geo9:
                         _sl9["ln"].setData([_xt0, _xt1], [_p9, _p9]); _sl9["geo"] = _geo9
                     _sl9["ln"].setVisible(True)
-                    if _zlo9 is not None and _zhi9 is not None and _zhi9 > _zlo9:
+                    if _zm_on and _zlo9 is not None and _zhi9 is not None and _zhi9 > _zlo9:   # zone mode only
                         if _rc >= len(self._ema_poclc_rects):
                             _rc9 = QtWidgets.QGraphicsRectItem(); _rc9.setPen(pg.mkPen(None)); _rc9.setZValue(-6)
                             self.vb.addItem(_rc9, ignoreBounds=True)
@@ -8242,8 +8248,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # EXTREME-LINE ZONES: red (high line) / green (low line) faint rects spanning exactly what the Trend
             # Extreme line spans (its segment-start vline -> live edge, or the pinned segment), only when a bar
             # after the segment that set the line crossed it. Not gated on the current line's confirmation.
-            if _ac is not None and _ext:
-                _EXC = {"ext_hi": (240, 70, 90), "ext_lo": (40, 230, 120)}
+            if _zm_on and _ac is not None and _ext:       # zone mode only (the extreme LINES themselves are the
+                _EXC = {"ext_hi": (240, 70, 90), "ext_lo": (40, 230, 120)}   # 'Trend Extreme Lines' layer)
                 for _kx, _px, _zlo9, _zhi9, _s0x in _ext:
                     _xc0 = _LX if _LX is not None else _fxw(int(_s0x)); _xc1 = _RX
                     if _zlo9 is None or _zhi9 is None or _zhi9 <= _zlo9 or _xc1 <= _xc0:
