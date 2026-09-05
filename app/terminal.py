@@ -7251,27 +7251,33 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     used_spans.append((je + 1, lb))
             if qual:
                 b0, b1 = je + 1, lb
+                # VOID (user 2026-09-05): the sequence is void -- no blue, no green, the red/yellow detection simply
+                # resumes -- when a close goes beyond the red box's far extreme (bearish sequence, S below R: above
+                # its HIGH; bullish: below its LOW) or THROUGH R by turn_min, during the retest or after it before
+                # any continuation beyond S ("red > yellow > blue > green": a retest R does not hold is no retest).
                 void = False
                 if C is not None:
                     for j in range(je + 1, b1 + 1):
                         cj = float(C[j])
-                        if cj > 0 and ((cj > r_ext) if bear else (cj < r_ext)):
-                            void = True; break            # closed beyond the red box's extreme -> sequence void
+                        if cj > 0 and (((cj > r_ext) if bear else (cj < r_ext)) or (cj - cp) * side < -turn_min * abs(cp)):
+                            void = True; break            # closed beyond the red box's extreme / through R
+                gT = None; ft = None; lt = None
                 if not void and b1 >= b0:
-                    ylo, yhi = _span(b0, b1)
-                    out.append((b0, b1, ylo, yhi, "retest", [levels[_newest(gB, b1, (bT, je))]]))   # BLUE
-                    used_spans.append((b0, b1))
                     # GREEN = the CONTINUATION (user 2026-09-05): right after the blue the move resumes in the
                     # yellow's direction, through S to the next zone(s) beyond it -- from the bar after the blue's
                     # last bar to the FIRST touch of the farthest zone beyond S reached before a real turn: back
-                    # at the blue's level O, a pullback past half the way from that zone back to S (at least
-                    # turn_min deep), or the other side of O. No zone beyond S reached -> no green (the retest
-                    # held). Its rung = the zone reached. Bullish sequence (red = support, S = resistance): blue
-                    # down, green UP; bearish: the mirror.
+                    # at the blue's level O, or a pullback past half the way from that zone back to S (at least
+                    # turn_min deep). No zone beyond S reached -> no green (the retest held). A close through R
+                    # (or a zone beyond R on the far side) BEFORE any zone beyond S voids the blue: R broke, the
+                    # retest failed. Its rung = the zone reached. Bullish sequence (red = support, S =
+                    # resistance): blue down, green UP; bearish: the mirror.
                     oi = _newest(gB, b1, (bT, je)); op = 0.5 * (levels[oi][0] + levels[oi][1])
                     dS = (_gp(gS, je, bT) - op) * side    # O -> S, positive in the yellow's direction
-                    gT = None; farT = dS; ft = None; lt = None
+                    farT = dS; broke = False
                     for j in range(b1 + 1, j1e + 1):
+                        cj = float(C[j]) if C is not None else 0.0
+                        if cj > 0 and (cj - cp) * side < -turn_min * abs(cp):
+                            broke = True; break           # closed THROUGH R: the retest failed
                         gs = {}
                         for gq, i in (touch.get(j) or ()):
                             if _livef(levels[i], j, (bT, je)) and (gq not in gs or (levels[i][3], i) > (levels[gs[gq]][3], gs[gq])):
@@ -7284,8 +7290,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         cand = []; turn = False
                         for x in gs:
                             pk = _px(x); d = (pk - op) * side
-                            if d < -turn_min * abs(op):
-                                turn = True; break        # the other side of the blue's level: over
+                            if (pk - cp) * side < -turn_min * abs(cp):
+                                broke = True; break       # a zone beyond R on the far side: the retest failed
                             if dest[x] and any(not dest[y] and abs(_px(y) - pk) <= same_tol * abs(pk) for y in gs):
                                 continue                  # an old level at a current zone's price: that one counts
                             if d > farT:
@@ -7293,7 +7299,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             elif (gT is not None and x != gT and d < dS + 0.5 * (farT - dS)
                                   and farT - d >= turn_min * abs(op)):
                                 turn = True               # a real pullback from the zone reached: the turn
-                        if turn:
+                        if broke or turn:
                             break
                         if cand:
                             farT, gN = max(cand)
@@ -7302,8 +7308,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             lt = j
                         elif gT is not None and gT in gs:
                             lt = j
-                    if _dbg:
-                        print("      green: gT=%s ft=%s lt=%s" % (("%.4f" % _gp(gT, ft, (bT, je))) if gT is not None else None, ft, lt))
+                    if broke and gT is None:
+                        void = True                       # R broke before any continuation: no retest happened
+                if _dbg:
+                    print("      blue %s: gB=%.4f lb=%s | green: gT=%s ft=%s lt=%s" % (
+                        "VOID" if void else "ok", _gp(gB, lb, (bT, je)), lb,
+                        ("%.4f" % _gp(gT, ft, (bT, je))) if gT is not None else None, ft, lt))
+                if not void and b1 >= b0:
+                    ylo, yhi = _span(b0, b1)
+                    out.append((b0, b1, ylo, yhi, "retest", [levels[_newest(gB, b1, (bT, je))]]))   # BLUE
+                    used_spans.append((b0, b1))
                     if gT is not None:
                         t0 = b1 + 1
                         ylo, yhi = _span(t0, ft)
