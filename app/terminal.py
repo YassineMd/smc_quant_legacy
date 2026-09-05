@@ -7527,10 +7527,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _sl7["ln"].setVisible(False)
             for _rs7 in self._ema_pocl_rects[_rv7:]:
                 _rs7["rect"].setVisible(False)
-        # 'Current trend' (sub-toggle 'ema_poc_line_cur', user 2026-09-04): the SAME four marks, profiled over ONLY
-        # the current/forming trend -- from its start (the forming cross when one exists, else the newest drawn
-        # vertical line) to the last CLOSED candle -- drawn DASHED from that start to the live edge and re-profiled
-        # at every close (this profile grows with the trend). POC zones = the same stepped evolution over that span.
+        # 'Current trend' (sub-toggle 'ema_poc_line_cur', user 2026-09-04): the four marks of the SIDE VP (the
+        # right-side Trend Extremes VP as it stands now, or as pinned) drawn DASHED over the current/forming trend --
+        # from its start (the forming cross when one exists, else the newest drawn vertical line) to the live edge --
+        # with the POC zones = the latest candle body crossing each POC (updated every close; zones only once the
+        # trend's vertical line is confirmed).
         if not _plc_on:
             self._hide_ema_poclc()
         else:
@@ -7543,10 +7544,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _ac = int(_frmc[0]); _acf = True      # start = the UNCONFIRMED (forming) cross
                     elif _flc:
                         _ac = _flc[-1]
-                    if _ac is not None and _M - 1 > _ac:
+                    # The marks are the SIDE VP's (user 2026-09-04: "the current forming trend should show me the
+                    # POC zones of the VP I see on the right"): its span = the last finished bull + last finished
+                    # bear segments among ALL confirmed flips (<= the pinned line when pinned) -- the very span the
+                    # right-side Trend VP profiles. Zones = the latest candle body crossing each POC, up to the
+                    # newest closed bar (they follow the current trend; the line-confirmed gate still applies).
+                    _sqc = sorted([(int(_i8), "g") for _i8 in _g] + [(int(_i8), "r") for _i8 in _r])
+                    if self._ema_pin_t:
+                        _sqc = [_f8 for _f8 in _sqc if float(_ftimes.get(_f8[0], 0.0)) <= float(self._ema_pin_t)]
+                    _blc = _brc = None
+                    for _k8 in range(len(_sqc) - 1):
+                        (_s0, _c0), (_s1, _c1) = _sqc[_k8], _sqc[_k8 + 1]
+                        if _c0 == "g" and _c1 == "r":
+                            _blc = (_s0, _s1)
+                        elif _c0 == "r" and _c1 == "g":
+                            _brc = (_s0, _s1)
+                    _sgc = [_s for _s in (_blc, _brc) if _s is not None]
+                    if _ac is not None and _sgc and _M - 1 > _ac:
+                        _spc = (min(_s[0] for _s in _sgc), max(_s[1] for _s in _sgc))   # == the side VP's _vp_span
                         _mkc = [(_p8, _kd8, (self._ema_zone_steps(_ana, _p8, _ac, _M - 1)
                                              if _kd8 in ("poc", "poc_hi", "poc_lo") else []))
-                                for _p8, _kd8 in self._ema_span_vp(_ana, _ac, _M - 1)]
+                                for _p8, _kd8 in self._ema_span_vp(_ana, _spc[0], _spc[1])]
                 except Exception:
                     _ac = None; _mkc = []
                 self._ema_poclc_cache = (_ssig, _ac, _mkc, _acf)

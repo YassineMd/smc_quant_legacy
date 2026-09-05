@@ -539,7 +539,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                            ("ema_poc", "Current Band"),             # POC of each zone over the current pair of trends
                            ("ema_poc_prev", "Previous Band"),       # ... and over the preceding pair
                            ("ema_poc_line", "POC per line"),        # per drawn Stack-Flip line: the side Trend-VP marks AS OF that line (what pinning it shows: amber POC, light-amber POC above VAH / below VAL, purple in-VA LVN) drawn over the segment that follows (to the next line; last one -> live edge)
-                           ("ema_poc_line_cur", "Current trend"),   # the same marks over ONLY the current/forming trend: from its start (forming cross, else the newest vertical line) to the last closed candle, dashed, re-profiled every close
+                           ("ema_poc_line_cur", "Current trend"),   # the SIDE VP's marks (right-side Trend VP, as shown / as pinned) drawn dashed over the current/forming trend from its start (forming cross, else the newest vertical line) to the live edge; POC zones = latest crossing candle body, only once the line is confirmed
                            ("ema_trendvp", "Trend Extremes VP (right)"),   # right-anchored VP over the last two FINISHED trends; amber POC + purple in-VA LVN + light-amber POCs above VAH/below VAL + dashed VAH/VAL on the band
                            ("market_pos", "Market Position"),        # Buy/Sell buttons at chart bottom -> default sim market entry
                            ("audio", "OB/Iceberg Alert")]:
