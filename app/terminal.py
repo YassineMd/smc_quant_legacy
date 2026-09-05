@@ -6996,8 +6996,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         BEFORE the last candle that touched R. YELLOW ("break"): from that last R-touch candle to the FIRST touch of
         the farthest zone reached before the price turns back (touches R, a current zone closer than that zone, or
         the other side of R). BLUE ("retest"): right after the yellow, back toward R, to the last touch of the zone
-        closest to R reached before price heads back toward S. Strict order RED > YELLOW > BLUE: a stay inside a
-        yellow/blue never starts a sequence.
+        closest to R reached before price heads back toward S. GREEN ("cont"): right after the blue, in the yellow's
+        direction through S to the first touch of the farthest zone beyond S reached before a real turn. Strict order
+        RED > YELLOW > BLUE > GREEN: a stay inside any of them never starts a sequence.
         Returns [(x0, x1, ylo, yhi, kind, [rung])] -- exactly ONE rung per box (the group's newest known member)."""
         n = len(levels)
         fam = ["lvn" if levels[i][2] == "lvn" else "poc" for i in range(n)]
@@ -7254,6 +7255,56 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     ylo, yhi = _span(b0, b1)
                     out.append((b0, b1, ylo, yhi, "retest", [levels[_newest(gB, b1, (bT, je))]]))   # BLUE
                     used_spans.append((b0, b1))
+                    # GREEN = the CONTINUATION (user 2026-09-05): right after the blue the move resumes in the
+                    # yellow's direction, through S to the next zone(s) beyond it -- from the bar after the blue's
+                    # last bar to the FIRST touch of the farthest zone beyond S reached before a real turn: back
+                    # at the blue's level O, a pullback past half the way from that zone back to S (at least
+                    # turn_min deep), or the other side of O. No zone beyond S reached -> no green (the retest
+                    # held). Its rung = the zone reached. Bullish sequence (red = support, S = resistance): blue
+                    # down, green UP; bearish: the mirror.
+                    oi = _newest(gB, b1, (bT, je)); op = 0.5 * (levels[oi][0] + levels[oi][1])
+                    dS = (_gp(gS, je, bT) - op) * side    # O -> S, positive in the yellow's direction
+                    gT = None; farT = dS; ft = None; lt = None
+                    for j in range(b1 + 1, j1e + 1):
+                        gs = {}
+                        for gq, i in (touch.get(j) or ()):
+                            if _livef(levels[i], j, (bT, je)) and (gq not in gs or (levels[i][3], i) > (levels[gs[gq]][3], gs[gq])):
+                                gs[gq] = i
+                        if not gs:
+                            continue
+                        if gB in gs:
+                            break                         # back at the blue's level: the continuation is over
+                        _px = lambda x: 0.5 * (levels[gs[x]][0] + levels[gs[x]][1])
+                        cand = []; turn = False
+                        for x in gs:
+                            pk = _px(x); d = (pk - op) * side
+                            if d < -turn_min * abs(op):
+                                turn = True; break        # the other side of the blue's level: over
+                            if dest[x] and any(not dest[y] and abs(_px(y) - pk) <= same_tol * abs(pk) for y in gs):
+                                continue                  # an old level at a current zone's price: that one counts
+                            if d > farT:
+                                cand.append((d, x))       # a zone BEYOND S (and beyond what was reached): on it goes
+                            elif (gT is not None and x != gT and d < dS + 0.5 * (farT - dS)
+                                  and farT - d >= turn_min * abs(op)):
+                                turn = True               # a real pullback from the zone reached: the turn
+                        if turn:
+                            break
+                        if cand:
+                            farT, gN = max(cand)
+                            if gN != gT:
+                                gT = gN; ft = j           # a FARTHER zone beyond S: the continuation goes on
+                            lt = j
+                        elif gT is not None and gT in gs:
+                            lt = j
+                    if _dbg:
+                        print("      green: gT=%s ft=%s lt=%s" % (("%.4f" % _gp(gT, ft, (bT, je))) if gT is not None else None, ft, lt))
+                    if gT is not None:
+                        t0 = b1 + 1
+                        ylo, yhi = _span(t0, ft)
+                        out.append((t0, ft, ylo, yhi, "cont", [levels[_newest(gT, ft, (bT, je))]]))   # GREEN
+                        used_spans.append((t0, ft))
+                        if lt is not None and lt > ft:
+                            used_spans.append((ft + 1, lt))   # the bouncing at the zone reached
             if ls is not None and ls > je:
                 used_spans.append((je + 1, ls))           # the bouncing at S belongs to this sequence
         # NO OVERLAP at the other end either: when the reached rung is a real stall (its own red box), the yellow
@@ -8336,8 +8387,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _vb9 = 0
             for _bx9 in self._ema_lbox_cache[1]:
                 _x0, _x1, _ylo, _yhi, _kd = _bx9[:5]
-                if _kd not in ("visit", "break", "retest"):
-                    continue                                  # STEPS 1-3 (user 2026-09-05): RED + YELLOW + BLUE so far
+                if _kd not in ("visit", "break", "retest", "cont"):
+                    continue                                  # RED + YELLOW + BLUE + GREEN
                 if int(_x1) < _off:
                     continue                                  # ended before the window (a straddling box is clamped)
                 _wx0 = _wx(int(_x0)) - 0.5; _wx1 = _wx(int(_x1)) + 0.5
