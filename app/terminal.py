@@ -6984,7 +6984,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return out
 
     @staticmethod
-    def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=5, same_tol=0.0015, C=None):
+    def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=5, same_tol=0.0015, C=None, turn_min=0.0035):
         """The level-to-level PATH of price over bars j0..j1 as the user's hand-drawn boxes (2026-09-05), built in
         the strict order RED > YELLOW > BLUE > GREEN.
         `levels` = [(lo, hi, kind, avail_from_bar[, seg[, until[, dest_only]]])] -- rung LINES (lo == hi), each known
@@ -6992,15 +6992,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         SAME-LEVEL GROUPS: an older rung of the same family (POC-family / LVN) within `same_tol` of a more recent one
         is the SAME line (the profile re-drawn by a later segment): the group is ONE rung and its newest member known
         at a bar is the one shown (priority to the most recent / current line). Grouped oldest-first (causal).
-        RED ("visit"): a stay of >= min_visit bars at ONE group -- from its first touch to its LAST touch, no other
-        group touched in between (bars touching nothing may sit inside). A bar that touches the anchor AND a farther
-        rung still belongs to the stay; the farther rung does NOT extend it (the drop after the last anchor touch is
-        the yellow, not the red). Box = those bars' high/low.
-        YELLOW ("break"): from the bar after the red box's last bar to the LAST touch of the farthest rung reached
-        before the move REVERSES (a candle closing beyond the extreme of the last candle that touched that rung),
-        or before price is back at R. No rung reached yet -> no yellow. BLUE ("retest"): after the LAST touch of
-        that rung, the retracement toward R. Strict order RED > YELLOW > BLUE: a stay inside a yellow/blue never
-        starts a sequence.
+        RED ("visit"): a stay of >= min_visit bars at ONE group (bars touching nothing may sit inside); the box ends
+        BEFORE the last candle that touched R. YELLOW ("break"): from that last R-touch candle to the FIRST touch of
+        the farthest zone reached before the price turns back (touches R, a current zone closer than that zone, or
+        the other side of R). BLUE ("retest"): right after the yellow, back toward R, to the last touch of the zone
+        closest to R reached before price heads back toward S. Strict order RED > YELLOW > BLUE: a stay inside a
+        yellow/blue never starts a sequence.
         Returns [(x0, x1, ylo, yhi, kind, [rung])] -- exactly ONE rung per box (the group's newest known member)."""
         n = len(levels)
         fam = ["lvn" if levels[i][2] == "lvn" else "poc" for i in range(n)]
@@ -7101,13 +7098,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             yhi = max(float(H[j]) for j in range(x0, x1 + 1))
             return ylo, yhi
 
+        _dbg = bool(os.environ.get("LADDER_DEBUG"))       # LADDER_DEBUG=1 -> one line per sequence on stdout
         for iv, (g, a, b) in enumerate(vis):
             if b - a + 1 < min_visit:
                 continue
             if any(a <= s1 and b >= s0 for s0, s1 in used_spans):
+                if _dbg:
+                    print("  seq stay %d-%d @%.4f SKIPPED (inside %s)" % (a, b, _gp(g, b), [s for s in used_spans if a <= s[1] and b >= s[0]]))
                 continue                                  # inside an earlier sequence's yellow / blue: not a new red
             pR = float(levels[_newest(g, b)][0])
-            bT = b                                        # trim the DEPARTING bar(s) off the red box's end
+            # RED ends BEFORE the last candle that touched R (user 2026-09-05, locked: that candle opens the
+            # yellow); the DEPARTING-bar trim (trailing bars whose close is > 2x farther from R than any other
+            # stall bar) can take more.
+            bT = b - 1
             if C is not None:
                 while bT - a + 1 > min_visit:
                     dl = abs(float(C[bT]) - pR)
@@ -7119,120 +7122,128 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             ylo, yhi = _span(a, bT)
             out.append((a, bT, ylo, yhi, "visit", [levels[_newest(g, bT)]]))   # RED: exactly ONE rung = R
             cp = _gp(g, bT, bT)                           # R = the level the red box shows
-            # YELLOW (user 2026-09-05, final): from the bar after the red box's last R touch to the LAST candle that
-            # touched the FARTHEST zone reached before the move REVERSES. Reversal = a candle that CLOSES beyond the
-            # extreme of the last candle that touched that zone (down move: above its high; up move: below its
-            # low) -- "the price did not reverse after the LVN because no candle closed above the last candle that
-            # touched it, it continued down to a farther zone: that is the one to take". A zone touched and passed
-            # on the way, a pause, or a drift back that never closes beyond that candle do not end the move; price
-            # back at R (or a rung on the other side of R) does. The bars between the yellow's end and the blue's
-            # start belong to the sequence but to no box.
-            x0 = bT + 1                                   # NO OVERLAP: the yellow starts on the bar AFTER the red box
-            gS = None; far = 0.0; side = 0; last_t = None
+            # YELLOW (user 2026-09-05, locked): from the LAST candle that touched R to the FIRST touch of the
+            # farthest zone the move reaches before it turns back -- the turn = a touch of R, a REAL pullback (a
+            # zone closer to R than half the way back, at least turn_min of price deep) or the other side of R. A
+            # zone passed on the way, a pause, a shallow dip to a nearer zone do not end the move (user: the move
+            # "kept going up and found resistance at a higher, older POC -- that POC is S"). Old levels count once the move is
+            # past the first current zone; an old level at R's / a current zone's price defers to it.
+            x0 = bT + 1
+            gS = None; far = 0.0; side = 0; fs = None; ls = None
             for j in range(x0, j1e + 1):
-                tj = touch.get(j)
-                gs = {gq for gq, i in (tj or ()) if _livef(levels[i], j, bT)}
-                if gs:
-                    if g in gs and j > b:
-                        break                             # back at R: the move is over
-                    cur_here = any(not dest[x] for x in gs if x != g)
-                    cand = []
-                    for x in gs:
-                        if x == g:
-                            continue
-                        if dest[x] and gS is None and not cur_here:
-                            continue                      # old levels count only BEYOND the first current zone
-                        dk = _gp(x, j, bT) - cp; sd = 1 if dk > 0 else -1
-                        if dest[x] and abs(dk) <= same_tol * abs(cp):
-                            continue                      # an old level at R's own price: not a destination
-                        if dest[x] and any(not dest[y] and y != g and abs(_gp(y, j, bT) - (cp + dk)) <= same_tol * abs(cp)
-                                           for y in gs):
-                            continue                      # an old level at a current zone's price: that one counts
-                        if side and sd != side:
-                            cand = None; break            # a rung on the other side of R: the move is over
-                        if abs(dk) > far:
-                            cand.append((abs(dk), sd, x))
-                    if cand is None:
-                        break
-                    if cand:
-                        far, side, gS = max(cand); last_t = j
-                        continue                          # a FARTHER zone reached: the move goes on
-                    if gS is not None and gS in gs:
-                        last_t = j; continue              # the zone touched again
-                if gS is None:
+                gs = {}                                   # group -> the touched member shown (its newest); the
+                for gq, i in (touch.get(j) or ()):        # price judged is the one actually TOUCHED, never the
+                    if _livef(levels[i], j, bT) and (gq not in gs or (levels[i][3], i) > (levels[gs[gq]][3], gs[gq])):
+                        gs[gq] = i                        # group's representative (chained old levels drift)
+                if not gs:
                     continue
-                cj = float(C[j]) if C is not None else 0.0
-                if cj > 0 and ((cj > float(H[last_t])) if side < 0 else (cj < float(L[last_t]))):
-                    break                                 # REVERSAL candle -> the move ended at the last touch
+                if g in gs and j > b:
+                    break                                 # back at R: the move is over
+                _px = lambda x: 0.5 * (levels[gs[x]][0] + levels[gs[x]][1])
+                cur_here = any(not dest[x] for x in gs if x != g)
+                cand = []; turn = False
+                for x in gs:
+                    if x == g:
+                        continue
+                    if dest[x] and gS is None and not cur_here:
+                        continue                          # old levels count only BEYOND the first current zone
+                    pk = _px(x); dk = pk - cp; sd = 1 if dk > 0 else -1
+                    if dest[x] and abs(dk) <= same_tol * abs(cp):
+                        if j > b:
+                            turn = True; break            # an old level at R's own price = back at R
+                        continue
+                    if dest[x] and any(not dest[y] and y != g and abs(_px(y) - pk) <= same_tol * abs(pk)
+                                       for y in gs):
+                        continue                          # an old level at a current zone's price: that one counts
+                    if side and sd != side:
+                        turn = True; break                # a zone on the other side of R: the move is over
+                    if abs(dk) > far:
+                        cand.append((abs(dk), sd, x))
+                    elif (gS is not None and x != gS and abs(dk) < 0.5 * far
+                          and far - abs(dk) >= turn_min * abs(cp)):
+                        turn = True                       # a REAL pullback: past half the way back to R and at
+                                                          # least turn_min deep -- a shallow dip to a nearer zone
+                                                          # (user's 03-11 case) or a wiggle right above R is a pause
+                if _dbg and os.environ.get("LADDER_TRACE") == str(a):
+                    print("      j=%d gs=%s cand=%s turn=%s gS=%s far=%.4f" % (
+                        j, [("%.4f" % _px(x), "d" if dest[x] else "c", "R" if x == g else "") for x in sorted(gs)],
+                        [("%.4f" % c[0], c[2]) for c in cand], turn, gS, far))
+                if turn:
+                    break
+                if cand:
+                    far, side, gN = max(cand)
+                    if gN != gS:
+                        gS = gN; fs = j                   # a FARTHER zone: the move goes on, S moves there
+                    ls = j
+                elif gS is not None and gS in gs:
+                    ls = j                                # S touched again
+            if _dbg:
+                print("  seq red %d-%d (stay to %d) R=%.4f -> S=%s fs=%s ls=%s far=%.4f side=%d" % (
+                    a, bT, b, cp, ("%.4f" % _gp(gS, fs, bT)) if gS is not None else None, fs, ls, far, side))
             if gS is None:
                 continue                                  # nothing reached yet (forming) / turned straight back
-            je = s_end = last_t                           # S = the farthest zone; the yellow ends on its LAST touch
+            je = fs                                       # the yellow ends on the FIRST touch of S
             ylo, yhi = _span(x0, je)
             out.append((x0, je, ylo, yhi, "break", [levels[_newest(gS, je, bT)]]))   # YELLOW: its rung = S
             used_spans.append((x0, je))
-            # BLUE = the RETRACEMENT (user 2026-09-05): from the bar after the LAST touch of S back TOWARD R through
-            # rungs progressively closer to R -- any POC / LVN between S and R, or R itself -- to the last touch of
-            # the closest one reached; it ends when price turns away from R again. S and R stay frozen for the
-            # sequence (rungs live at the red's end or at the S touch). It is VOID -- skipped, the red/yellow
-            # detection simply resumes -- when any close goes beyond the red box's far extreme: bearish (S below
-            # R) above the red box's HIGH, bullish below its LOW. Its rung = the level it retraced to.
+            # BLUE (user 2026-09-05, locked): starts RIGHT AFTER the yellow -- the bouncing at S is inside it --
+            # and runs back toward R through the current zones, R itself and (past the first current zone on the
+            # way) the older lines' levels, to the LAST touch of the zone closest to R it reached before the price
+            # heads back toward S (a touch of S, or of a current zone farther from R than that zone). A current
+            # zone on the far side of R ends it too; old levels beyond R are left to the VOID rule: a close beyond
+            # the red box's far extreme (bearish sequence, S below R: above its HIGH; bullish: below its LOW)
+            # voids the sequence -- no blue, the red/yellow detection resumes. Its rung = the zone it retraced
+            # to (R when reached).
             bear = side < 0
-            # BLUE = the RETEST (user 2026-09-05, "apply the same to the blue box"): from the bar after the LAST
-            # touch of S back toward R -- through the current zones, R itself and (once past the first current zone
-            # on the way) the older lines' levels -- to the LAST candle that touched the zone closest to R it
-            # reached before the retest REVERSES: a candle that closes beyond the extreme of the last candle that
-            # touched that zone, away from R (bearish sequence, S below R: below its low; bullish: above its
-            # high). Back at S after retracing, or a zone on the far side of R, ends it too. S and R stay frozen
-            # for the sequence. VOID -- skipped, the red/yellow detection simply resumes -- when any close goes
-            # beyond the red box's far extreme (bearish: above its HIGH; bullish: below its LOW). Its rung = the
-            # zone it retraced to (R when it got there).
             r_ext = (max(float(H[j]) for j in range(a, bT + 1)) if bear
                      else min(float(L[j]) for j in range(a, bT + 1) if float(L[j]) > 0))
-            gB = None; near = far; last_b = None; cur_b = False
-            for j in range(s_end + 1, j1e + 1):
-                tj = touch.get(j)
-                gs = {gq for gq, i in (tj or ()) if _livef(levels[i], j, (bT, je))}
-                if gs:
-                    if gS in gs:
-                        if gB is None:
-                            s_end = j; continue           # still bouncing at S: the blue starts after it
-                        break                             # back at S after retracing: the retest is over
-                    cur_here = any(not dest[x] for x in gs)
-                    cand = []; beyond = False
-                    for x in gs:
-                        pk = _gp(x, j, (bT, je))
-                        dk = 0.0 if x == g else abs(pk - cp)
-                        if x != g and dest[x] and dk <= same_tol * abs(cp):
-                            x = g; dk = 0.0               # an old level at R's own price = R
-                        sk = 0 if x == g else (1 if pk - cp > 0 else -1)
-                        if sk and sk != side:
-                            if dest[x]:
-                                continue                  # an old level beyond R: the VOID rule judges that side
-                            cand = None; break            # a current zone on the far side of R: not a retest
-                        if dk > far and sk == side:
-                            beyond = True; continue       # on BEYOND S: the move continued -> no retest
-                        if dest[x] and any(not dest[y] and y != g and abs(_gp(y, j, (bT, je)) - pk) <= same_tol * abs(pk)
-                                           for y in gs):
-                            continue                      # an old level at a current zone's price: that one counts
-                        if dest[x] and not cur_b and not cur_here:
-                            continue                      # old levels count only past the first current zone
-                        if dk < near:
-                            cand.append((dk, x))
-                    if cand is None or beyond:
-                        break
-                    if cand:
-                        near, gB = min(cand); last_b = j
-                        cur_b = cur_b or any(not dest[x] for _, x in cand)
-                        continue                          # a zone CLOSER to R reached: the retest goes on
-                    if gB is not None and gB in gs:
-                        last_b = j; continue              # the zone touched again
-                if gB is None:
+            gB = None; near = far; lb = None; cur_b = False
+            for j in range(je + 1, j1e + 1):
+                gs = {}
+                for gq, i in (touch.get(j) or ()):
+                    if _livef(levels[i], j, (bT, je)) and (gq not in gs or (levels[i][3], i) > (levels[gs[gq]][3], gs[gq])):
+                        gs[gq] = i                        # group -> the touched member (see the yellow walk)
+                if not gs:
                     continue
-                cj = float(C[j]) if C is not None else 0.0
-                if cj > 0 and ((cj < float(L[last_b])) if bear else (cj > float(H[last_b]))):
-                    break                                 # REVERSAL candle -> the retest ended at the last touch
+                _px = lambda x: 0.5 * (levels[gs[x]][0] + levels[gs[x]][1])
+                cur_here = any(not dest[x] for x in gs)
+                cand = []; turn = False
+                for x in gs:
+                    pk = _px(x)
+                    dk = 0.0 if x == g else abs(pk - cp)
+                    if x != g and dest[x] and dk <= same_tol * abs(cp):
+                        x = g; dk = 0.0                   # an old level at R's own price = R
+                    sk = 0 if x == g else (1 if pk - cp > 0 else -1)
+                    if sk and sk != side:
+                        if dest[x]:
+                            continue                      # an old level beyond R: the VOID rule judges that side
+                        turn = True; break                # a current zone on the far side of R: the retest is over
+                    if x == gS:
+                        if gB is None:
+                            continue                      # still bouncing at S (inside the blue)
+                        turn = True; break                # back at S after retracing: the retest is over
+                    if dest[x] and any(not dest[y] and y != g and abs(_px(y) - pk) <= same_tol * abs(pk)
+                                       for y in gs):
+                        continue                          # an old level at a current zone's price: that one counts
+                    if dest[x] and not cur_b and not cur_here:
+                        continue                          # old levels count only past the first current zone
+                    if dk < near:
+                        cand.append((dk, x))
+                    elif dk > far and sk == side:
+                        turn = True                       # on BEYOND S: the move continued -> no retest from here
+                    elif gB is not None and x != gB and not dest[x] and dk - near >= turn_min * abs(cp):
+                        turn = True                       # a current zone farther from R than the one reached
+                if turn:
+                    break
+                if cand:
+                    near, gB = min(cand); lb = j
+                    cur_b = cur_b or any(not dest[x] for _, x in cand)
+                elif gB is not None and gB in gs:
+                    lb = j                                # the zone touched again
+            if _dbg:
+                print("      blue: gB=%s lb=%s near=%.4f" % (("%.4f" % _gp(gB, lb, (bT, je))) if gB is not None else None, lb, near))
             if gB is not None:
-                b0, b1 = s_end + 1, last_b
+                b0, b1 = je + 1, lb
                 void = False
                 if C is not None:
                     for j in range(je + 1, b1 + 1):
@@ -7243,8 +7254,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     ylo, yhi = _span(b0, b1)
                     out.append((b0, b1, ylo, yhi, "retest", [levels[_newest(gB, b1, (bT, je))]]))   # BLUE
                     used_spans.append((b0, b1))
-            if s_end > je:
-                used_spans.append((je + 1, s_end))        # the bouncing at S belongs to this sequence too
+            if ls is not None and ls > je:
+                used_spans.append((je + 1, ls))           # the bouncing at S belongs to this sequence
         # NO OVERLAP at the other end either: when the reached rung is a real stall (its own red box), the yellow
         # ends on the confirming touch and that red box starts on the NEXT bar. And the retest stay is the BLUE box:
         # a red box (from the global scan) overlapping a blue or a yellow is dropped.
