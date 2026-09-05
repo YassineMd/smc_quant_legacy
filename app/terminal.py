@@ -6901,7 +6901,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _h["ln"].setVisible(False)
 
     @staticmethod
-    def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=5, same_tol=0.0015):
+    def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=5, same_tol=0.0015, C=None):
         """The level-to-level PATH of price over bars j0..j1 as the user's hand-drawn boxes (2026-09-05), built in
         the strict order RED > YELLOW > BLUE > GREEN.
         `levels` = [(lo, hi, kind, avail_from_bar[, seg])] -- rung LINES (lo == hi), each known from avail_from_bar.
@@ -6936,8 +6936,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         def _live(lv, j):                                 # rung ACTIVE at bar j: known, and not yet superseded
             return lv[3] <= j and (len(lv) < 6 or j < lv[5])      # (lo, hi, kind, from[, seg[, until]])
 
-        def _newest(g, j):                                # the group's most recent rung active at bar j
-            c = [i for i in members[g] if _live(levels[i], j)]
+        def _newest(g, j, live_at=None):                  # the group's most recent rung active at bar j
+            c = [i for i in members[g]                    # (or frozen at live_at: a sequence keeps its rung set)
+                 if _live(levels[i], j) or (live_at is not None and _live(levels[i], live_at))]
             return max(c, key=lambda i: (levels[i][3], i)) if c else g
         vis = []                                          # [group, first bar, last bar]
         for j in range(max(0, int(j0)), int(j1) + 1):
@@ -6963,85 +6964,140 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         #                     box's rungs -- the touch of the next rung is what confirms the break (user's definition:
         #                     "price moves from a POC to a different POC or LVN"). No touch yet -> no yellow (forming).
         #   BLUE / GREEN follow in the next steps.
-        # SEQUENCES, in the strict order RED > YELLOW > BLUE (> GREEN, next step). One red box per qualifying stay
-        # (no merging: a second stay right after the first means price moved to a DIFFERENT rung -- that move is
-        # the yellow box). The red box's rung = the sequence's resistance/support R; the yellow's rung = the
-        # level reached S. BLUE (the retest, user 2026-09-05): "from the last candle that touched the yellow
-        # zone to the last candle that touches the red zone" -- from the bar after the LAST touch of S (a short
-        # bounce off S before the retest only moves that start later) to the LAST touch of R in the retest stay.
-        # The retest stay is the blue box, never a red one (whatever its length), and it carries R. A stall at S,
-        # or a visit to a third rung before the retest, voids the sequence (a stall starts its own red one).
+        # SEQUENCES, in the strict order RED > YELLOW > BLUE (> GREEN, next step). One red box per qualifying stay.
+        # The red box's rung = the sequence's resistance/support R; the yellow's rung = the level reached S; both
+        # stay FIXED for the sequence (user 2026-09-05): the rung set is FROZEN at the red box's end -- a new
+        # vertical line printing during the move does not change what the move is measured against.
+        # RED ends before the DEPARTING bar(s): a trailing bar whose close sits > 2x farther from R than any other
+        # bar of the stall belongs to the move (user: "the yellow box takes the big red bar from the red box").
+        # YELLOW = the MOVE away from R: through short pass-through visits of rungs progressively farther from R on
+        # the same side, to the farthest rung's last touch (S = where the move ENDED, e.g. the LVN past a crossed
+        # POC); a real stall on the way ends it at that stall's first touch (the stall is a new sequence's red).
+        # BLUE = the retest: from the bar after the last touch of S to the last touch of R in the retest stay
+        # (blue whatever its length, never red; carries R). On the way back, short re-touches of S / short crossings
+        # of the move's corridor are allowed; a stall, or a rung outside the corridor, voids the sequence.
         out = []                                          # (x0, x1, ylo, yhi, kind, [rung])
         j1e = int(j1)
-        consumed = set()                                  # visit indices used up as a sequence's retest
+        blue_spans = []                                   # retest stays already used by an earlier sequence
 
         def _span(x0, x1):
             ylo = min(float(L[j]) for j in range(x0, x1 + 1) if float(L[j]) > 0)
             yhi = max(float(H[j]) for j in range(x0, x1 + 1))
             return ylo, yhi
+
+        def _seq_visits(b, live_at, gR, ignore_R_until):
+            """Stays after bar b, with the rungs live at j OR frozen at `live_at` (the sequence's rung set); R is
+            ignored up to `ignore_R_until` (the departing bars' wicks). Yields [group, first, last]."""
+            cur = None
+            for j in range(b + 1, j1e + 1):
+                h, l = float(H[j]), float(L[j])
+                if h <= 0 or l <= 0:
+                    continue
+                tg = sorted({grp[i] for i, lv in enumerate(levels)
+                             if (_live(lv, j) or _live(lv, live_at)) and l <= lv[1] and h >= lv[0]
+                             and not (grp[i] == gR and j <= ignore_R_until)})
+                if not tg:
+                    continue
+                if cur is not None and cur[0] in tg:
+                    cur[2] = j
+                    continue
+                if cur is not None:
+                    yield cur
+                    cp0 = _mid(cur[0])
+                    gsel = max(tg, key=lambda x: (levels[_newest(x, j, live_at)][3], abs(_mid(x) - cp0)))
+                else:
+                    gsel = max(tg, key=lambda x: (levels[_newest(x, j, live_at)][3], abs(_mid(x) - _mid(gR))))
+                cur = [gsel, j, j]
+            if cur is not None:
+                yield cur
         for iv, (g, a, b) in enumerate(vis):
-            if b - a + 1 < min_visit or iv in consumed:
+            if b - a + 1 < min_visit:
                 continue
-            ylo, yhi = _span(a, b)
-            out.append((a, b, ylo, yhi, "visit", [levels[_newest(g, b)]]))   # RED: exactly ONE rung = R
+            if any(a <= s1 and b >= s0 for s0, s1 in blue_spans):
+                continue                                  # this stay IS an earlier sequence's retest (its blue box)
+            pR = float(levels[_newest(g, b)][0])
+            bT = b                                        # trim the DEPARTING bar(s) off the red box's end
+            if C is not None:
+                while bT - a + 1 > min_visit:
+                    dl = abs(float(C[bT]) - pR)
+                    dm = max(abs(float(C[j]) - pR) for j in range(a, bT))
+                    if dl > 2.0 * dm and dm > 0:
+                        bT -= 1
+                    else:
+                        break
+            ylo, yhi = _span(a, bT)
+            out.append((a, bT, ylo, yhi, "visit", [levels[_newest(g, bT)]]))   # RED: exactly ONE rung = R
             cp = _mid(g)
-            # YELLOW = the MOVE away from R (user 2026-09-05: "the move went down to the LVN" past a POC it only
-            # crossed): follow the stays after the red box while each is a SHORT pass-through (< min_visit) of a
-            # rung progressively FARTHER from R on the same side; the move ends at the farthest rung's last touch,
-            # and THAT rung is S. A real stall on the way ends the yellow at its first touch (the stall is the next
-            # sequence's red box); a stay at a rung not farther than the last one is the turn back (retest begins).
-            path = []; far = 0.0; side = 0; stalled = None; k = iv + 1
-            while k < len(vis):
-                gk, ak, bk = vis[k]
+            it = _seq_visits(bT, bT, g, b)
+            path = []; far = 0.0; side = 0; stalled = None; turn = None
+            for v in it:
+                gk, ak, bk = v
                 if gk == g:
-                    break                                 # back at R
+                    turn = v; break                       # back at R
                 dk = _mid(gk) - cp; sd = 1 if dk > 0 else -1
                 if side and sd != side:
-                    break                                 # the other side of R: not this move
+                    turn = v; break                       # the other side of R: not this move
                 if abs(dk) <= far:
-                    break                                 # closer than the last rung reached -> the move has ended
+                    turn = v; break                       # closer than the last rung reached -> the move has ended
                 if bk - ak + 1 >= min_visit:
-                    stalled = k; break                    # a real stall there
-                path.append(k); far = abs(dk); side = sd; k += 1
-            x0 = b + 1                                    # NO OVERLAP: the yellow starts on the bar AFTER the red box
+                    stalled = v; break                    # a real stall there
+                path.append(v); far = abs(dk); side = sd
+            x0 = bT + 1                                   # NO OVERLAP: the yellow starts on the bar AFTER the red box
             if stalled is not None:                       # yellow -> the stall's first touch; S = the stalled rung
-                je = vis[stalled][1]
+                je = stalled[1]
                 if je >= x0:
                     ylo, yhi = _span(x0, je)
-                    out.append((x0, je, ylo, yhi, "break", [levels[_newest(vis[stalled][0], je)]]))
+                    out.append((x0, je, ylo, yhi, "break", [levels[_newest(stalled[0], je, bT)]]))
+                    if not any(o[4] == "visit" and o[0] <= stalled[2] and o[1] >= stalled[1] for o in out) and \
+                       not any(v2[1] <= stalled[2] and v2[2] >= stalled[1] and v2[2] - v2[1] + 1 >= min_visit
+                               for v2 in vis):
+                        # a stall at a FROZEN (superseded) rung the global scan cannot see: emit its red here
+                        sa = stalled[1] + 1
+                        if stalled[2] >= sa:
+                            ylo, yhi = _span(sa, stalled[2])
+                            out.append((sa, stalled[2], ylo, yhi, "visit", [levels[_newest(stalled[0], stalled[2], bT)]]))
                 continue                                  # the stall is a NEW sequence: no blue for this one
             if not path:
                 continue                                  # nothing reached yet (forming) / turned straight back
-            gS = vis[path[-1]][0]; je = vis[path[-1]][2]  # S = the farthest rung reached, to its LAST touch
+            gS = path[-1][0]; je = path[-1][2]            # S = the farthest rung reached, to its LAST touch
             if je < x0:
                 continue
             ylo, yhi = _span(x0, je)
-            out.append((x0, je, ylo, yhi, "break", [levels[_newest(gS, je)]]))   # YELLOW: its rung = S
-            # BLUE: from the bar after the last touch of S to the last touch of R in the retest stay. On the way
-            # back, short re-touches of S (start moves later) and short crossings of the rungs the move went
-            # through are allowed; a stall, or a rung outside that corridor, voids the sequence.
-            corridor = {vis[p][0] for p in path}
+            out.append((x0, je, ylo, yhi, "break", [levels[_newest(gS, je, bT)]]))   # YELLOW: its rung = S
+            corridor = {v[0] for v in path}
             s_end = je; blue = None
-            while k < len(vis):
-                gk, ak, bk = vis[k]
+            pend = [turn] if turn is not None else []
+
+            def _rest():                                  # lazily: stop walking the bars once the blue is settled
+                for v0 in pend:
+                    yield v0
+                for v0 in it:
+                    yield v0
+            for v in _rest():
+                gk, ak, bk = v
                 if gk == g:
-                    blue = (s_end + 1, bk); consumed.add(k); break
+                    blue = (s_end + 1, bk); break
                 if gk in corridor and bk - ak + 1 < min_visit:
                     if gk == gS:
                         s_end = bk                        # bounced off S again: the blue starts after it
-                    k += 1; continue
+                    continue
                 break
             if blue is not None and blue[1] >= blue[0]:
                 ylo, yhi = _span(blue[0], blue[1])
-                out.append((blue[0], blue[1], ylo, yhi, "retest", [levels[_newest(g, blue[1])]]))   # BLUE: rung = R
+                out.append((blue[0], blue[1], ylo, yhi, "retest", [levels[_newest(g, blue[1], bT)]]))   # BLUE: rung = R
+                blue_spans.append((blue[0], blue[1]))
         # NO OVERLAP at the other end either: when the reached rung is a real stall (its own red box), the yellow
-        # ends on the confirming touch and that red box starts on the NEXT bar (the stall's first touch stays with
-        # the yellow; the red keeps its rung and the rest of its bars).
+        # ends on the confirming touch and that red box starts on the NEXT bar. And the retest stay is the BLUE box:
+        # a red box (from the global scan) overlapping a blue or a yellow is dropped.
         yends = {o[1] for o in out if o[4] == "break"}
+        spans = [(o[0], o[1]) for o in out if o[4] in ("break", "retest")]
         adj = []
         for (a, b, ylo, yhi, kind, rg) in out:
-            if kind == "visit" and a in yends and b > a:
-                a += 1; ylo, yhi = _span(a, b)
+            if kind == "visit":
+                if a in yends and b > a:
+                    a += 1; ylo, yhi = _span(a, b)
+                if any(a <= s1 and b >= s0 for s0, s1 in spans):
+                    continue
             adj.append((a, b, ylo, yhi, kind, rg))
         out = adj
         out.sort(key=lambda o: (o[0], o[1]))
@@ -8044,11 +8100,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         for _p8, _kd8 in _mkx:
                             _lv9.append((float(_p8), float(_p8), _kd8, int(_acx), (int(_acx), int(_M - 1)), int(_M)))
                     if _lv9 and _M - 1 > _off:
-                        _H9 = [0.0] * _M; _L9 = [0.0] * _M
+                        _H9 = [0.0] * _M; _L9 = [0.0] * _M; _C9 = [0.0] * _M
                         for _j9 in range(_off, _M):
                             _H9[_j9] = float(_ana[_j9].get("high", 0.0) or 0.0)
                             _L9[_j9] = float(_ana[_j9].get("low", 0.0) or 0.0)
-                        _bx9 = self._ema_ladder_boxes(_lv9, _H9, _L9, _off, _M - 1)
+                            _C9[_j9] = float(_ana[_j9].get("close", _ana[_j9].get("close_price", 0.0)) or 0.0)
+                        _bx9 = self._ema_ladder_boxes(_lv9, _H9, _L9, _off, _M - 1, C=_C9)
                         try:                                  # DIAGNOSTIC dump (tiny, once per close): the rungs, the
                             import json as _js                # last 150 bars' ranges + touched rungs, and the boxes --
                             from . import config as _cfg      # data/ladder_last.json, so a "the algo missed X" report
