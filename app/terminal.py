@@ -6901,7 +6901,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _h["ln"].setVisible(False)
 
     @staticmethod
-    def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=3, same_tol=0.0015):
+    def _ema_ladder_boxes(levels, H, L, j0, j1, min_visit=5, same_tol=0.0015):
         """The level-to-level PATH of price over bars j0..j1 as the user's hand-drawn boxes (2026-09-05), built in
         the strict order RED > YELLOW > BLUE > GREEN.
         `levels` = [(lo, hi, kind, avail_from_bar[, seg])] -- rung LINES (lo == hi), each known from avail_from_bar.
@@ -6989,8 +6989,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     break
             if hit is not None:
                 j, g2 = hit
-                ylo, yhi = _span(b, j)
-                out.append((b, j, ylo, yhi, "break", [levels[_newest(g2, j)]]))
+                # the yellow runs to the LAST touch of the reached rung when the visit there is short (< min_visit,
+                # no red box of its own -- user's drawing 2026-09-05); a real stall there is its own red box, so
+                # the yellow stops at its first touch
+                v2 = next((v for v in vis if v[0] == g2 and v[1] == j), None)
+                je = v2[2] if (v2 is not None and v2[2] - v2[1] + 1 < min_visit) else j
+                ylo, yhi = _span(b, je)
+                out.append((b, je, ylo, yhi, "break", [levels[_newest(g2, je)]]))
         out.sort(key=lambda o: (o[0], o[1]))
         return out
 
@@ -7401,7 +7406,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                  or ((_pc_on or _pcp_on or _wmg_on) and self._ema_poc_cache is None)
                  or (_vp_on and self._ema_vp_cache is None)
                  or ((_pl_on or _plc_on or _lb_on) and (self._ema_pocl_cache is None or self._ema_pocl_cache[0] != _ssig))
-                 or (_plc_on and (self._ema_poclc_cache is None or self._ema_poclc_cache[0] != _ssig))
+                 or ((_plc_on or _lb_on) and (self._ema_poclc_cache is None or self._ema_poclc_cache[0] != _ssig))
                  or (_lb_on and (self._ema_lbox_cache is None or self._ema_lbox_cache[0] != _ssig)))
         _ana = ((list(_deep) + list(_warm[len(_warm) - _wn:]) + list(buckets[:m]))
                 if _off else buckets) if _need else buckets
@@ -7703,8 +7708,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # from its start (the forming cross when one exists, else the newest drawn vertical line) to the live edge --
         # with the POC zones = the latest candle body crossing each POC (updated every close; zones only once the
         # trend's vertical line is confirmed).
-        if not _plc_on:
-            self._hide_ema_poclc()
+        if not _plc_on and not _lb_on:                   # ('Ladder boxes' needs this cache too: its rungs over the
+            self._hide_ema_poclc()                        #  current trend are the current marks + the projected targets)
         else:
             if self._ema_poclc_cache is None or self._ema_poclc_cache[0] != _ssig:
                 _ac = None; _mkc = []; _acf = False; _ext = []; _tgt = []
@@ -7855,6 +7860,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _ac = None; _mkc = []; _ext = []; _tgt = []
                 self._ema_poclc_cache = (_ssig, _ac, _mkc, _acf, _ext, _tgt)
             _, _ac, _mkc, _acf, _ext, _tgt = self._ema_poclc_cache
+            if not _plc_on:                                   # computed for the ladder only -> draw nothing
+                _mkc = []; _ext = []; _tgt = []
             _STYC = {"poc": ((250, 180, 60, 235), 1.4), "poc_hi": ((250, 205, 120, 200), 1.1),
                      "poc_lo": ((250, 205, 120, 200), 1.1), "lvn": ((178, 70, 255, 225), 1.2),
                      "ext_hi": ((240, 70, 90, 235), 1.4), "ext_lo": ((40, 230, 120, 235), 1.4)}   # older extremes (targets)
@@ -7974,35 +7981,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     for _a9, _b9, _mk9 in (self._ema_pocl_cache[1] if self._ema_pocl_cache is not None else []):
                         for _m9 in _mk9:                          # lines only, a touch = the bar's range contains it
                             _lv9.append((float(_m9[0]), float(_m9[0]), _m9[1], int(_a9), (int(_a9), int(_b9)), int(_b9)))
-                    # + the CURRENT trend's marks (the dashed 'Current trend' lines = the side VP as of now): the most
-                    # recent rungs of all (user 2026-09-05: "in the screenshot it's the dashed line"). Taken from the
-                    # 'Current trend' cache when fresh, else computed here the same way (start = forming cross, else
-                    # the newest drawn line; span = last finished bull + bear among all flips, pin-aware).
+                    # + over the CURRENT trend: the dashed 'Current trend' marks (the side VP as of now) AND the
+                    # projected UNTOUCHED TARGETS (older POC / LVN / extreme lines drawn over the current trend once
+                    # price is beyond an extreme) -- user 2026-09-05 (ladder_last.json): the "LVN" price moved to
+                    # was a projected target, so targets are rungs too. Both come from the 'Current trend' cache,
+                    # which is computed whenever the ladder is on.
                     _acx = None; _mkx = []
-                    if (_plc_on and self._ema_poclc_cache is not None and self._ema_poclc_cache[0] == _ssig
+                    if (self._ema_poclc_cache is not None and self._ema_poclc_cache[0] == _ssig
                             and self._ema_poclc_cache[1] is not None):
-                        _acx = int(self._ema_poclc_cache[1]); _mkx = [(_m[0], _m[1]) for _m in self._ema_poclc_cache[2]]
-                    else:
-                        _flx = [int(_q) for _q in sorted(int(_i8) for _i8 in (_g + _r)) if int(_q) not in _hid2]
-                        _frx = getattr(self, "_ema_stk_forming", None)
-                        if _frx is not None and (not _flx or int(_frx[0]) > _flx[-1]):
-                            _acx = int(_frx[0])
-                        elif _flx:
-                            _acx = _flx[-1]
-                        _sqx = sorted([(int(_i8), "g") for _i8 in _g] + [(int(_i8), "r") for _i8 in _r])
-                        if self._ema_pin_t:
-                            _sqx = [_f8 for _f8 in _sqx if float(_ftimes.get(_f8[0], 0.0)) <= float(self._ema_pin_t)]
-                        _blx = _brx = None
-                        for _k8 in range(len(_sqx) - 1):
-                            (_s0, _c0), (_s1, _c1) = _sqx[_k8], _sqx[_k8 + 1]
-                            if _c0 == "g" and _c1 == "r":
-                                _blx = (_s0, _s1)
-                            elif _c0 == "r" and _c1 == "g":
-                                _brx = (_s0, _s1)
-                        _sgx = [_s for _s in (_blx, _brx) if _s is not None]
-                        if _acx is not None and _sgx and _M - 1 > _acx:
-                            _spx = (min(_s[0] for _s in _sgx), max(_s[1] for _s in _sgx))
-                            _mkx = list(self._ema_span_vp(_ana, _spx[0], _spx[1]))
+                        _acx = int(self._ema_poclc_cache[1])
+                        _mkx = [(_m[0], _m[1]) for _m in self._ema_poclc_cache[2]]
+                        _mkx += [(_t[0], _t[1]) for _t in (self._ema_poclc_cache[5] or [])]   # targets (p, kind, ..)
                     if _acx is not None:
                         for _p8, _kd8 in _mkx:
                             _lv9.append((float(_p8), float(_p8), _kd8, int(_acx), (int(_acx), int(_M - 1)), int(_M)))
