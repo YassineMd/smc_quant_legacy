@@ -295,6 +295,8 @@ DEPTH_HIST_URL = (
 )
 OI_POLL_SECS = 5                # main.py:629
 PULSE_BROADCAST_SECS = 0.4      # main.py:877 — DOM/OI pulse cadence
+TRADES_LIVE_SECS = 0.15         # live trade-batch push cadence (2026-09-07: was the 0.4 s pulse; the tape / DOM
+                                #   last price on every client now ticks like the chart's LIVE_EDGE_SECS edge)
 LIVE_EDGE_SECS = 0.15           # 19.3b — sub-second forming-bucket live-edge refresh (decoupled from trade rate)
 DOM_LEVELS = 200                # main.py:881 — sorted depth levels per side
 

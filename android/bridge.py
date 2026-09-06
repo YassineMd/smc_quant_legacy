@@ -197,7 +197,7 @@ class Bridge:
                     thr = list(self.worker.size_thr)
                 if thr:
                     self.broadcast(json.dumps({"t": "thr", "v": thr}) + "\n")
-            time.sleep(0.1)
+            time.sleep(0.05)                    # forward the 150 ms trade batches without adding a pump delay
 
     # ---- tablet side ----------------------------------------------------
     def broadcast(self, line: str) -> None:

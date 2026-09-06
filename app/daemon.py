@@ -321,7 +321,7 @@ class DaemonServer:
         Drains the in-RAM live buffer (O(n) ref-copy + clear) and packs ~tens of trades — cheap, like the
         depth live-column; never touches depth.db or the bucket/close path."""
         while True:
-            await asyncio.sleep(config.PULSE_BROADCAST_SECS)
+            await asyncio.sleep(getattr(config, "TRADES_LIVE_SECS", config.PULSE_BROADCAST_SECS))
             batch = self.core.drain_trades_live()   # ALWAYS drain (keeps the buffer bounded), send only if subs
             if not batch:
                 continue

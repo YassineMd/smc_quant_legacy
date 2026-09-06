@@ -82,6 +82,11 @@ public class TradeStore {
     }
 
     public void setBook(double[][] b, double[][] a, double px) {
+        if (LATLOG) {
+            long now = System.currentTimeMillis();
+            android.util.Log.i("LAT", "book gap=" + (lastBookMs == 0 ? 0 : now - lastBookMs));
+            lastBookMs = now;
+        }
         synchronized (this) {
             bids = b;
             asks = a;
@@ -91,7 +96,16 @@ public class TradeStore {
         poke();
     }
 
+    static final boolean LATLOG = false;           // dev: data-path latency to logcat (LAT)
+    private long lastTbMs, lastBookMs;
+
     public void ingestLive(FeedClient.Trades tr) {
+        if (LATLOG && tr.tsMs.length > 0) {
+            long now = System.currentTimeMillis();
+            android.util.Log.i("LAT", "tb n=" + tr.tsMs.length + " age=" + (now - tr.tsMs[tr.tsMs.length - 1])
+                    + " span=" + (tr.tsMs[tr.tsMs.length - 1] - tr.tsMs[0]) + " gap=" + (lastTbMs == 0 ? 0 : now - lastTbMs));
+            lastTbMs = now;
+        }
         synchronized (this) {
             int i0 = 0;
             if (liveT0Ms == 0) {
