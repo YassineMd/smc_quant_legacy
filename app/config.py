@@ -187,6 +187,9 @@ BIGPLAYER_MAX_LINES = 80
 # BIGPLAYER_SWEEP_MAX drawn (each = capsule + end-level line + label).
 BIGPLAYER_SWEEP_MIN_LEVELS = 2
 BIGPLAYER_SWEEP_MAX = 40
+# BURSTS (user 2026-09-06): same-side prints / sweeps that follow each other within this many ms are ONE player
+# working the book -> one diamond, totals summed (drawn like the atomic sweeps).
+BIGPLAYER_BURST_MS = 1000
 DOM_VP_BACKFILL_SECS = 21600    # DOM scanner mode: executed-trade history for the ladder's Volume Profile —
                                 # 6h covers every VP window choice (5M..6H filter locally, no re-requests).
                                 # ~60-80k trades ≈ 3MB b64 one-shot on entry (well under trade_tape's 72h)

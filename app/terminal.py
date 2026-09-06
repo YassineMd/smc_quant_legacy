@@ -10936,24 +10936,58 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         from .trades_tape import _fmt_usd
         ets = np.array([float(b.get("end_time", 0.0) or 0.0) for b in filtered])
-        rows = [r for r in self._bp_trades if r[2] >= thr and ets[0] > 0 and r[0] <= ets[-1] + 1e-6]
-        # REPLAY / deep history: bars older than the live tape store (6h backfill) come from the big-print
-        # ARCHIVE (study/bigprint_archive, Binance dumps). Archive rows strictly BEFORE the live store's
-        # oldest print, so the two sources never double-count the same whale.
+        t_hi = float(ets[-1]) + 1e-6
+        # EVENTS on the drawn bars: every retained print (>= the store floor) + every atomic SWEEP (same ms + side,
+        # >= 2 levels). Live store first; REPLAY / deep history: bars older than the live tape store (6h backfill)
+        # come from the big-print ARCHIVE (study/bigprint_archive), rows strictly BEFORE the live store's oldest
+        # print so the two sources never double-count the same whale.
         live_start = self._bp_trades[0][0] if self._bp_trades else float("inf")
+        prs = [r for r in self._bp_trades if ets[0] > 0 and r[0] <= t_hi]
+        sws = [s for s in self._bp_sweeps if ets[0] > 0 and s[0] <= t_hi] if _sw_on else []
         if ets[0] > 0 and ets[0] < live_start:
             from . import bigprint_store
-            arch = bigprint_store.load_prints(ets[0] - 1.0, min(float(ets[-1]), live_start) - 1e-6, thr)
-            rows = [r for r in arch if r[0] < live_start] + rows
-        # MERGE (user 2026-09-04): several big prints on the SAME bar at the SAME price, same side
-        # (a buyer and a seller at one level are opposite players) -> ONE level, amounts summed.
-        merged = {}                                             # (bar, price, side) -> summed usd
-        for (t, price, usd, side) in rows:
-            i = int(np.searchsorted(ets, t))                    # the bar whose end >= the print time
+            _t1 = min(float(ets[-1]), live_start) - 1e-6
+            prs = [r for r in bigprint_store.load_prints(ets[0] - 1.0, _t1, 0.0) if r[0] < live_start] + prs
+            if _sw_on:
+                sws = [s for s in bigprint_store.load_sweeps(ets[0] - 1.0, _t1, 0.0, int(config.BIGPLAYER_SWEEP_MIN_LEVELS))
+                       if s[0] < live_start] + sws
+        ev = []                                                 # (t, side, end price, usd, kind "pr" | "sw")
+        swkeys = {(int(round(s[0] * 1000.0)), int(s[4] > 0)) for s in sws}
+        for (t, price, usd, side) in prs:
+            if (int(round(t * 1000.0)), int(side > 0)) in swkeys:
+                continue                                        # a fill of an atomic sweep: counted in the sweep
+            ev.append((t, int(side > 0), price, usd, "pr"))
+        for (t, p0, p1, usd, side, nl) in sws:
+            ev.append((t, int(side > 0), p1, usd, "sw"))
+        ev.sort(key=lambda e: e[0])
+        # BURSTS (user 2026-09-06): same-side events that follow each other within BIGPLAYER_BURST_MS (1 s) are
+        # ONE player working the book -> one event, the totals summed, at the LAST event's price / bar. A cluster
+        # of several prints, or anything containing a sweep, is drawn as a DIAMOND; a lone print stays a bubble.
+        if _sw_on and ev:
+            win = float(config.BIGPLAYER_BURST_MS) / 1000.0
+            clusters = []; cur = None                           # cur = [t_last, side, price_last, usd, n, has_sweep]
+            for (t, side, price, usd, kind) in ev:
+                if cur is not None and cur[1] == side and t - cur[0] <= win:
+                    cur[0] = t; cur[2] = price; cur[3] += usd; cur[4] += 1; cur[5] = cur[5] or kind == "sw"
+                    continue
+                if cur is not None:
+                    clusters.append(cur)
+                cur = [t, side, price, usd, 1, kind == "sw"]
+            if cur is not None:
+                clusters.append(cur)
+            ev = [(c[0], c[1], c[2], c[3], "sw" if (c[4] > 1 or c[5]) else "pr") for c in clusters]
+        # ROUND bubbles = single prints; DIAMONDS = sweeps / bursts -- each >= the slider. Same bar + price + side
+        # merged, amounts summed (user 2026-09-04: a buyer and a seller at one level are opposite players).
+        merged = {}; smerged = {}                               # (bar, price, side) -> summed usd
+        for (t, side, price, usd, kind) in ev:
+            if usd < thr:
+                continue
+            i = int(np.searchsorted(ets, t))                    # the bar whose end >= the event time
             if i >= n:
                 continue
-            key = (i, round(price, 4), int(side > 0))
-            merged[key] = merged.get(key, 0.0) + usd
+            key = (i, round(price, 4), side)
+            _d = smerged if kind == "sw" else merged
+            _d[key] = _d.get(key, 0.0) + usd
         levels = sorted(merged.items())[-int(config.BIGPLAYER_MAX_LINES):]   # most recent bars last
         bx = []; by = []; bs = []; sx = []; sy = []; ss = []; labels = []
         for (i, price, side), usd in levels:
@@ -10974,10 +11008,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _l.setPos(x, price); _l.setVisible(True)
             else:
                 _l.setVisible(False)
-        # SWEEPS (user 2026-09-06): one taker order that ate through >= 2 levels (same ms + side), TOTAL >= the
-        # slider -> a DIAMOND bubble at its bar and end price (where the book absorbed the order), diameter
-        # growing with the total like the round bubbles, the total amount centred on it. Green buy / red sell.
-        # Round = one print, diamond = one order that walked the book. (The user rejected capsules + lines.)
+        # DIAMONDS (user 2026-09-06): sweeps / bursts at their bar and END price (where the book absorbed the
+        # player), diameter growing with the total like the round bubbles, the total centred on it. Green buy /
+        # red sell. Round = one print, diamond = one player working the book.
         if not _sw_on:
             self._clear_bp_sweeps()
             return
@@ -10988,19 +11021,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                                    brush=pg.mkBrush(240, 70, 90, 120))
             for _it in (self._bp_swp_buy, self._bp_swp_sell):
                 _it.setZValue(31); self.plot.addItem(_it, ignoreBounds=True)
-        srows = [s for s in self._bp_sweeps if s[3] >= thr and s[0] <= ets[-1] + 1e-6]
-        if ets[0] > 0 and ets[0] < live_start:
-            from . import bigprint_store
-            sarch = bigprint_store.load_sweeps(ets[0] - 1.0, min(float(ets[-1]), live_start) - 1e-6, thr,
-                                               int(config.BIGPLAYER_SWEEP_MIN_LEVELS))
-            srows = [s for s in sarch if s[0] < live_start] + srows
-        smerged = {}                                            # (bar, end price, side) -> summed total
-        for (t, p0, p1, usd, side, nl) in srows:
-            i = int(np.searchsorted(ets, t))
-            if i >= n:
-                continue
-            key = (i, round(p1, 4), int(side > 0))
-            smerged[key] = smerged.get(key, 0.0) + usd
         slevels = sorted(smerged.items())[-int(config.BIGPLAYER_SWEEP_MAX):]
         dbx = []; dby = []; dbs = []; dsx = []; dsy = []; dss = []; slabels = []
         for (i, price, buy), usd in slevels:

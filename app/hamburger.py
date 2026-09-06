@@ -847,13 +847,13 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         """'Sweeps' under Big Player Levels (user 2026-09-06): one taker order that ate through >= 2 book levels
         (aggTrade prints with the SAME millisecond + side) counts as a big player when its TOTAL passes the $
         slider -- drawn as a vertical capsule over the swept range + the end-level line. Default ON."""
-        cb = QtWidgets.QCheckBox("· Sweeps (one order, ≥2 levels)")
+        cb = QtWidgets.QCheckBox("· Sweeps / bursts (one player, ≤1 s)")
         cb.setChecked(True)
         cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")
-        cb.setToolTip("A single market order that eats through several book levels: its fills share the exact "
-                      "same millisecond and side. Summed and shown when the total passes the MIN PRINT slider. "
-                      "Capsule = the swept price range, its far end = where the book absorbed the order "
-                      "(a dashed level line runs from there).")
+        cb.setToolTip("One player working the book: a market order eating several levels (its fills share the "
+                      "exact same millisecond and side), or same-side prints that follow each other within 1 s. "
+                      "Summed and drawn as a DIAMOND with the total, at the price where it ended, when the total "
+                      "passes the MIN PRINT slider. Round bubble = one print, diamond = one player.")
         cb.toggled.connect(lambda on, k="m10_bigplayer_sweeps": self.layerToggled.emit(k, on))
         self.layer_checks["m10_bigplayer_sweeps"] = cb
         section.addWidget(cb)
