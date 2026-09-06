@@ -18,6 +18,7 @@ public class TapePanel extends LinearLayout implements TapeView.Host, SizeDistDi
 
     private final TradeStore store;
     private final TapeView canvas;
+    private final PressureStrip strip;             // 60 s pressure strip, repaints alone (rows repaint on change only)
     private final TextView valLbl, pill;
     private final SeekBar slider;
     private final SharedPreferences prefs;
@@ -81,6 +82,8 @@ public class TapePanel extends LinearLayout implements TapeView.Host, SizeDistDi
         pill.setOnClickListener(v -> resumeLive());
         bar.addView(pill);
 
+        strip = new PressureStrip(ctx, store);
+        addView(strip, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
         canvas = new TapeView(ctx, this);
         addView(canvas, new LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f));
 
@@ -119,13 +122,19 @@ public class TapePanel extends LinearLayout implements TapeView.Host, SizeDistDi
         pill.setTextColor(col);
     }
 
-    public void tick() {
+    public void tick(boolean heartbeat) {
         if (!p50Done && !userAdjusted && store.tradeCount() >= 500) {
             p50Done = true;                        // launch default: the 50%-of-volume size split
             setMin(store.volumeHalfUsd());
         }
-        canvas.invalidate();
+        long now = System.currentTimeMillis();
+        if (heartbeat && now - lastDrawMs < 900) return;   // data frames already repainted this second
+        lastDrawMs = now;
+        strip.invalidate();                        // 2 bars + 2 labels, every frame
+        canvas.maybeInvalidate();                  // ~130 text ops, only when the rows changed
     }
+
+    private long lastDrawMs;
 
     private void resumeLive() {
         scroll = 0;

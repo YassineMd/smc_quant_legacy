@@ -57,16 +57,11 @@ public final class Ui {
     }
 
     public static String fmtUsd(double a) {
-        if (a >= 1_000_000) return String.format(Locale.US, "$%.2fM", a / 1_000_000);
-        if (a >= 100_000) return String.format(Locale.US, "$%.0fK", a / 1_000);
-        if (a >= 1_000) return String.format(Locale.US, "$%.1fK", a / 1_000);
-        return String.format(Locale.US, "$%,.0f", a);
+        return Fmt.usd(a);                         // hand-rolled: String.format cost ~15 us + garbage per call
     }
 
     public static String kfmt(double v) {
-        if (v >= 1_000_000) return String.format(Locale.US, "%.2fM", v / 1_000_000);
-        if (v >= 1_000) return String.format(Locale.US, "%.1fK", v / 1_000);
-        return v >= 10 ? String.format(Locale.US, "%.0f", v) : String.format(Locale.US, "%.1f", v);
+        return Fmt.k(v);
     }
 
     /** Rounded chip styling shared by the toolbar buttons (the terminal's combo-pill look). */

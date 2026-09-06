@@ -31,6 +31,7 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
     private final TradeStore store;
     private final FeedClient feed;
     private DomView canvas;
+    private PriceChip chip;                        // live-price overlay above the ladder
     private TextView grpChip, vpChip, minLbl;
     private SeekBar slider;
     private final SharedPreferences prefs;
@@ -40,6 +41,8 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
     private double minUsd;
     private SizeDistDialog dist;
     private boolean p50Done;                       // launch default applied (MIN SIZE = tape P50)
+    private final DomAgg agg = new DomAgg();       // incremental window aggregate (the lag fix)
+    private long lastDrawMs;                       // heartbeat repaints only when no data frame drew recently
     private boolean userAdjusted;                  // the user moved the slider this session
     private long lastDeepReq;                      // custom-VP self-heal rate limit (path switches)
 
@@ -108,7 +111,13 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
         bar.addView(minLbl, ml);
 
         canvas = new DomView(ctx, this);
-        addView(canvas, new LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f));
+        // the ladder + the live-price chip overlay (PriceChip animates over the cached rows)
+        android.widget.FrameLayout stack = new android.widget.FrameLayout(ctx);
+        stack.addView(canvas, new android.widget.FrameLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+        chip = new PriceChip(ctx);
+        stack.addView(chip, new android.widget.FrameLayout.LayoutParams(1, 1));
+        addView(stack, new LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f));
 
         slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -208,7 +217,7 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
         minLbl.setText(minUsd <= 0 ? "ALL" : "≥ " + Ui.fmtUsd(minUsd));
     }
 
-    public void tick() {
+    public void tick(boolean heartbeat) {
         if (!p50Done && !userAdjusted && store.tradeCount() >= 500) {
             p50Done = true;                        // launch default: the 50%-of-volume size split
             setMin(store.volumeHalfUsd());
@@ -222,6 +231,9 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
             store.setCustomKeep(customT0Ms);
             feed.requestFetch(customT0Ms);
         }
+        long now = System.currentTimeMillis();
+        if (heartbeat && now - lastDrawMs < 900) return;   // data frames already repainted this second
+        lastDrawMs = now;
         canvas.invalidate();
     }
 
@@ -252,6 +264,17 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
     @Override
     public TradeStore store() {
         return store;
+    }
+
+    @Override
+    public PriceChip chip() {
+        return chip;
+    }
+
+    @Override
+    public DomAgg agg() {
+        agg.configure(GROUPS[grpIdx], minUsd);     // a group / filter change makes the next frame rebuild once
+        return agg;
     }
 
     // ── SizeDistDialog.Owner ────────────────────────────────────────────────────────────────

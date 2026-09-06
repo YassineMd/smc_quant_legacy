@@ -5,11 +5,17 @@ import java.util.HashMap;
 /**
  * Shared trade + book store, the Android port of the state both terminal panels keep:
  * trades at TICK resolution in parallel time-ordered arrays (dom_panel._chunks/_trades_cat)
- * plus the latest 0.4s pulse book. All access synchronized; the UI polls at ~2.5Hz.
+ * plus the latest 0.4s pulse book. All access synchronized.
  *
  * Dedupe mirrors the terminal exactly: the backfill window keeps only rows OLDER than the
  * first live trade; live batches drop anything at/before the store's end (no aggTrade ids
  * on the wire, so the boundary is cut by timestamp).
+ *
+ * 2026-09-06 (lag fix): the store carries a {@code version} (bumped on ANY data change: book, live
+ * batch, backfill) so the UI redraws only when something arrived, an {@code epoch} (bumped on every
+ * STRUCTURAL change: reset, backfill prepend, prune shift) so the incremental {@link DomAgg} knows its
+ * store indices went stale, a listener the feed thread pokes after each ingest (event-driven frames),
+ * and {@link #aggregate} — the O(delta) window update that replaced the per-frame full scans.
  */
 public class TradeStore {
 
@@ -31,76 +37,124 @@ public class TradeStore {
     private int lastSide = -1;                     // 1 taker buy / 0 taker sell / -1 unknown
     private boolean connected;
 
+    private long version = 0;                      // any data change
+    private long epoch = 0;                        // structural change (indices moved)
+    private volatile Runnable listener;            // poked (on the feed thread) after each ingest
+
+    // tapeRows memo: the same frame asked again (no new data, same filter / scroll / height) is free
+    private double[][] tapeMemo;
+    private long tapeMemoVer = -1;
+    private double tapeMemoMin;
+    private int tapeMemoSkip, tapeMemoMax;
+
+    // ── change tracking ─────────────────────────────────────────────────────────────────────
+    public void setListener(Runnable r) {
+        listener = r;
+    }
+
+    private void poke() {
+        Runnable r = listener;
+        if (r != null) {
+            try {
+                r.run();
+            } catch (Exception ignored) {
+                // a UI-side failure never touches the feed
+            }
+        }
+    }
+
+    public synchronized long version() {
+        return version;
+    }
+
+    public synchronized long epoch() {
+        return epoch;
+    }
+
     // ── ingestion (feed thread) ─────────────────────────────────────────────────────────────
     public synchronized void setConnected(boolean c) {
         connected = c;
+        version++;
     }
 
     public synchronized boolean isConnected() {
         return connected;
     }
 
-    public synchronized void setBook(double[][] b, double[][] a, double px) {
-        bids = b;
-        asks = a;
-        if (px > 0 && lastPx <= 0) lastPx = px;
+    public void setBook(double[][] b, double[][] a, double px) {
+        synchronized (this) {
+            bids = b;
+            asks = a;
+            if (px > 0 && lastPx <= 0) lastPx = px;
+            version++;
+        }
+        poke();
     }
 
-    public synchronized void ingestLive(FeedClient.Trades tr) {
-        int i0 = 0;
-        if (liveT0Ms == 0) {
-            if (n > 0) {
+    public void ingestLive(FeedClient.Trades tr) {
+        synchronized (this) {
+            int i0 = 0;
+            if (liveT0Ms == 0) {
+                if (n > 0) {
+                    long last = tsMs[n - 1];
+                    while (i0 < tr.tsMs.length && tr.tsMs[i0] <= last) i0++;
+                    if (i0 >= tr.tsMs.length) return;
+                }
+                liveT0Ms = tr.tsMs[i0];
+            } else if (n > 0) {
                 long last = tsMs[n - 1];
                 while (i0 < tr.tsMs.length && tr.tsMs[i0] <= last) i0++;
-                if (i0 >= tr.tsMs.length) return;
             }
-            liveT0Ms = tr.tsMs[i0];
-        } else if (n > 0) {
-            long last = tsMs[n - 1];
-            while (i0 < tr.tsMs.length && tr.tsMs[i0] <= last) i0++;
+            for (int i = i0; i < tr.tsMs.length; i++) append(tr.tsMs[i], tr.px[i], tr.qty[i], tr.side[i]);
+            if (tr.tsMs.length > 0) {
+                lastPx = tr.px[tr.tsMs.length - 1];
+                lastSide = tr.side[tr.tsMs.length - 1] > 0 ? 1 : 0;
+            }
+            prune();
+            version++;
         }
-        for (int i = i0; i < tr.tsMs.length; i++) append(tr.tsMs[i], tr.px[i], tr.qty[i], tr.side[i]);
-        if (tr.tsMs.length > 0) {
-            lastPx = tr.px[tr.tsMs.length - 1];
-            lastSide = tr.side[tr.tsMs.length - 1] > 0 ? 1 : 0;
-        }
-        prune();
+        poke();
     }
 
-    public synchronized void ingestWindow(FeedClient.Trades tr) {
-        // dedupe against BOTH the live edge and what's already stored: a deep fetch (custom VP)
-        // arrives after the 6h backfill, so anything at/after the store's oldest row is a repeat
-        long cut = liveT0Ms == 0 ? Long.MAX_VALUE : liveT0Ms;
-        if (n > 0) cut = Math.min(cut, tsMs[0]);
-        int keep = 0;
-        while (keep < tr.tsMs.length && tr.tsMs[keep] < cut) keep++;
-        if (keep == 0) return;
-        // prepend: rebuild with the window rows first, then the existing (live) rows
-        long[] nts = new long[Math.max(1 << 14, (keep + n) * 2)];
-        long[] ntk = new long[nts.length];
-        double[] nbq = new double[nts.length];
-        double[] nsq = new double[nts.length];
-        for (int i = 0; i < keep; i++) {
-            nts[i] = tr.tsMs[i];
-            ntk[i] = Math.round(tr.px[i] / TICK);
-            boolean buy = tr.side[i] > 0;
-            nbq[i] = buy ? tr.qty[i] : 0.0;
-            nsq[i] = buy ? 0.0 : tr.qty[i];
+    public void ingestWindow(FeedClient.Trades tr) {
+        synchronized (this) {
+            // dedupe against BOTH the live edge and what's already stored: a deep fetch (custom VP)
+            // arrives after the 6h backfill, so anything at/after the store's oldest row is a repeat
+            long cut = liveT0Ms == 0 ? Long.MAX_VALUE : liveT0Ms;
+            if (n > 0) cut = Math.min(cut, tsMs[0]);
+            int keep = 0;
+            while (keep < tr.tsMs.length && tr.tsMs[keep] < cut) keep++;
+            if (keep == 0) return;
+            // prepend: rebuild with the window rows first, then the existing (live) rows
+            long[] nts = new long[Math.max(1 << 14, (keep + n) * 2)];
+            long[] ntk = new long[nts.length];
+            double[] nbq = new double[nts.length];
+            double[] nsq = new double[nts.length];
+            for (int i = 0; i < keep; i++) {
+                nts[i] = tr.tsMs[i];
+                ntk[i] = Math.round(tr.px[i] / TICK);
+                boolean buy = tr.side[i] > 0;
+                nbq[i] = buy ? tr.qty[i] : 0.0;
+                nsq[i] = buy ? 0.0 : tr.qty[i];
+            }
+            System.arraycopy(tsMs, 0, nts, keep, n);
+            System.arraycopy(tick, 0, ntk, keep, n);
+            System.arraycopy(buyQ, 0, nbq, keep, n);
+            System.arraycopy(sellQ, 0, nsq, keep, n);
+            tsMs = nts;
+            tick = ntk;
+            buyQ = nbq;
+            sellQ = nsq;
+            n += keep;
+            if (lastPx <= 0 && n > 0) {
+                lastPx = tick[n - 1] * TICK;
+                lastSide = buyQ[n - 1] > 0 ? 1 : 0;
+            }
+            epoch++;                                // rows inserted in FRONT: every index moved
+            prune();
+            version++;
         }
-        System.arraycopy(tsMs, 0, nts, keep, n);
-        System.arraycopy(tick, 0, ntk, keep, n);
-        System.arraycopy(buyQ, 0, nbq, keep, n);
-        System.arraycopy(sellQ, 0, nsq, keep, n);
-        tsMs = nts;
-        tick = ntk;
-        buyQ = nbq;
-        sellQ = nsq;
-        n += keep;
-        if (lastPx <= 0 && n > 0) {
-            lastPx = tick[n - 1] * TICK;
-            lastSide = buyQ[n - 1] > 0 ? 1 : 0;
-        }
-        prune();
+        poke();
     }
 
     private void append(long ts, double px, double qty, byte side) {
@@ -137,6 +191,7 @@ public class TradeStore {
             System.arraycopy(buyQ, lo, buyQ, 0, n - lo);
             System.arraycopy(sellQ, lo, sellQ, 0, n - lo);
             n -= lo;
+            epoch++;                                // indices shifted
         }
     }
 
@@ -154,6 +209,8 @@ public class TradeStore {
     public synchronized void reset() {
         n = 0;
         liveT0Ms = 0;
+        epoch++;
+        version++;
     }
 
     public synchronized void setCustomKeep(long t0Ms) {
@@ -166,6 +223,34 @@ public class TradeStore {
 
     public synchronized long latestTs() {
         return n > 0 ? tsMs[n - 1] : 0;
+    }
+
+    // ── INCREMENTAL DOM aggregation (the lag fix) ───────────────────────────────────────────
+
+    /**
+     * Bring `agg` up to date with the window [cutoffMs, now] of THIS store: O(trades that entered or left
+     * the window since the last call). A stale epoch (reset / backfill / prune), a parameter change
+     * (agg.clear()) or the periodic drift guard triggers one full rebuild of the window.
+     */
+    public synchronized void aggregate(DomAgg agg, long cutoffMs, long nowMs) {
+        int newLo = lowerBound(cutoffMs);
+        if (agg.needsRebuild(epoch, nowMs)) {
+            agg.clear();
+            agg.epoch = epoch;
+            agg.lastRebuildMs = nowMs;
+            agg.lo = agg.hi = newLo;
+        }
+        if (newLo > agg.lo) {                      // trades that fell out of the trailing window
+            int end = Math.min(newLo, agg.hi);
+            for (int i = agg.lo; i < end; i++) agg.apply(tick[i], buyQ[i], sellQ[i], -1);
+            agg.lo = newLo;
+            if (agg.hi < agg.lo) agg.hi = agg.lo;
+        } else if (newLo < agg.lo) {               // the window start moved BACK (custom start): add them
+            for (int i = newLo; i < agg.lo; i++) agg.apply(tick[i], buyQ[i], sellQ[i], +1);
+            agg.lo = newLo;
+        }
+        for (int i = agg.hi; i < n; i++) agg.apply(tick[i], buyQ[i], sellQ[i], +1);   // newly arrived
+        agg.hi = n;
     }
 
     /** Per-trade (usd, isBuy) samples since cutoffMs (0 = everything) — the size-dist popup feed. */
@@ -248,8 +333,14 @@ public class TradeStore {
     /**
      * Tape iteration, newest-first with the MIN SIZE filter and scroll offset applied —
      * the exact row-selection loop of _TapeCanvas.paintEvent. Each row: [tsMs, price, usd, side].
+     * Memoized on (version, filter, scroll, height): a repaint without new data is free.
      */
     public synchronized double[][] tapeRows(double minUsd, int skip, int maxRows) {
+        if (tapeMemo != null && tapeMemoVer == version && tapeMemoMin == minUsd
+                && tapeMemoSkip == skip && tapeMemoMax == maxRows) {
+            return tapeMemo;
+        }
+        int skip0 = skip;
         double[][] out = new double[Math.max(0, maxRows)][];
         int got = 0;
         for (int i = n - 1; i >= 0 && got < maxRows; i--) {
@@ -266,8 +357,13 @@ public class TradeStore {
         if (got < out.length) {
             double[][] trimmed = new double[got][];
             System.arraycopy(out, 0, trimmed, 0, got);
-            return trimmed;
+            out = trimmed;
         }
+        tapeMemo = out;
+        tapeMemoVer = version;
+        tapeMemoMin = minUsd;
+        tapeMemoSkip = skip0;
+        tapeMemoMax = maxRows;
         return out;
     }
 
@@ -284,7 +380,8 @@ public class TradeStore {
         return new double[]{b, s};
     }
 
-    // ── DOM aggregations (ports of dom_panel's numpy methods) ───────────────────────────────
+    // ── DOM aggregations — the ORIGINAL full-scan ports (dom_panel's numpy methods). No longer used by
+    //    the ladder (DomAgg replaced them); kept as the reference the JVM test compares DomAgg against. ──
 
     /** {group-bin: [boughtQ, soldQ]} over [cutoffMs, now] for bins in [loBin, hiBin]. */
     public synchronized HashMap<Long, double[]> vpBins(double g, long loBin, long hiBin, long cutoffMs) {
@@ -331,12 +428,7 @@ public class TradeStore {
 
     /** nearest-rank quantile of the positive values (ascending sort done here). */
     private static double nearestRank(double[] vals, int cnt, double q) {
-        if (cnt == 0) return Double.POSITIVE_INFINITY;
-        double[] a = new double[cnt];
-        System.arraycopy(vals, 0, a, 0, cnt);
-        java.util.Arrays.sort(a);
-        int k = Math.min(cnt - 1, Math.max(0, (int) Math.ceil(q * cnt) - 1));
-        return a[k];
+        return DomAgg.nearestRank(vals, cnt, q);
     }
 
     /**
