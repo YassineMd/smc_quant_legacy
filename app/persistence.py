@@ -417,6 +417,9 @@ class HistoryStore:
         footprints_db = core.footprints_db
         now = int(time.time())
         payload: dict = {"per_tf": []}
+        # AGGTRADE resume point, captured in the SAME on-loop snapshot as the active buckets (no await between):
+        # after a restart the tape is replayed from agg_last_id+1 on top of exactly this state (daemon.serve).
+        payload["agg_last"] = (int(getattr(core, "_agg_last_id", 0) or 0), int(getattr(core, "_agg_last_ms", 0) or 0))
         new_cursors: Dict[str, Optional[QuantBucket]] = {}
 
         for tf, engine in engines.items():
@@ -503,6 +506,11 @@ class HistoryStore:
                     "INSERT INTO meta(key,value) VALUES('bucket_schema_version',?) "
                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     (str(BUCKET_SCHEMA_VERSION),))
+                agg = payload.get("agg_last")
+                if agg and int(agg[0]) > 0:                       # aggTrade resume point (same transaction as the state)
+                    for k, v in (("agg_last_id", int(agg[0])), ("agg_last_ms", int(agg[1]))):
+                        cur.execute("INSERT INTO meta(key,value) VALUES(?,?) "
+                                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, str(v)))
                 self._conn.commit()
                 return True
             except Exception as e:
@@ -512,6 +520,28 @@ class HistoryStore:
                     pass
                 print(f"HISTORY FLUSH ERROR: {e}")
                 return False
+
+    def read_agg_resume(self) -> Tuple[int, int]:
+        """(agg_last_id, agg_last_ms) persisted with the last engine snapshot; (0, 0) when absent."""
+        try:
+            with self._lock:
+                rows = dict(self._conn.execute(
+                    "SELECT key, value FROM meta WHERE key IN ('agg_last_id','agg_last_ms')").fetchall())
+            return int(rows.get("agg_last_id", 0) or 0), int(rows.get("agg_last_ms", 0) or 0)
+        except Exception:
+            return 0, 0
+
+    def flush_now(self, core) -> bool:
+        """Synchronous engine-state flush ON the calling thread (the stop-signal path): prepare + write, cursors
+        advanced on success. Bounded by one SQLite transaction (~a second), so it lands before any slow teardown."""
+        try:
+            payload, new_cursors = self.prepare(core)
+            if self._write(payload):
+                self._cursor.update(new_cursors)
+                return True
+        except Exception as e:
+            print(f"HISTORY FLUSH-NOW ERROR: {e}")
+        return False
 
     # -- background sync ----------------------------------------------------
     async def sync_loop(self, core) -> None:

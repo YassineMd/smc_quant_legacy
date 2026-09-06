@@ -21,6 +21,8 @@ Concurrency model (spec §1.3.1, §1.4.1)
 from __future__ import annotations
 
 import asyncio
+import signal
+import time
 import base64
 import json
 import struct
@@ -336,9 +338,49 @@ class DaemonServer:
                 self._enqueue(client, line)
 
     # ------------------------------------------------------------------
+    def _on_stop_signal(self, signum) -> None:
+        """SIGINT/SIGTERM (systemd stop): flush the engine state FIRST -- synchronously, on the loop, within ~1 s --
+        then cancel the main task so asyncio.run tears down. Whatever the teardown does afterwards (a slow clock-
+        candle dump, a hung executor thread, TimeoutStopSec's SIGKILL) can no longer cost the buckets: the persisted
+        snapshot + its aggTrade resume point make the restart seamless (boot replay)."""
+        if getattr(self, "_stopping", False):
+            return
+        self._stopping = True
+        t0 = time.monotonic()
+        ok = self.store.flush_now(self.core)
+        print("STOP SIGNAL %s: engine state %s in %.2f s (resume id %d) -- shutting down"
+              % (signum, "FLUSHED" if ok else "FLUSH FAILED", time.monotonic() - t0, self.core._agg_last_id))
+        t = getattr(self, "_main_task", None)
+        if t is not None and not t.done():
+            t.cancel()
+
     async def serve(self) -> None:
+        self._main_task = asyncio.current_task()
+        loop = asyncio.get_running_loop()
+        for _sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(_sig, self._on_stop_signal, _sig)
+            except (NotImplementedError, RuntimeError, ValueError):
+                pass                                  # Windows / non-main thread: KeyboardInterrupt path below
         self.store.rehydrate_engines(self.core.engines, self.footprints_db)
         self.core.seed_liq_sweeps()   # one-time: build the 15m Tier-A set from the rehydrated history
+        # AGGTRADE BOOT REPLAY (2026-09-06): resume the tape exactly where the persisted engine snapshot ends
+        # (meta agg_last_id, written in the same transaction as the active buckets) BEFORE listening, so no client
+        # ever sees the restart hole. Bounded by config.AGG_REPLAY_MAX_S; an absent point = first boot on this build.
+        try:
+            rid, rms = self.store.read_agg_resume()
+        except Exception:
+            rid, rms = 0, 0
+        if rid > 0:
+            self.core._agg_last_id = int(rid); self.core._agg_last_ms = int(rms)
+            print("AGGTRADE BOOT REPLAY: resume point id %d (%s, %.1f s ago) -- replaying the tape from REST"
+                  % (rid, time.strftime("%H:%M:%S", time.gmtime(rms / 1000.0)), time.time() - rms / 1000.0))
+            try:
+                await self.core._agg_fill_gap(int(rid) + 1, None, reason="boot")
+            except Exception as e:
+                print(f"AGGTRADE BOOT REPLAY ERROR: {e!r} -- engines resume from the live tape")
+        else:
+            print("AGGTRADE BOOT REPLAY: no persisted resume point (first boot on this build) -- engines resume from the live tape")
 
         server = await asyncio.start_server(
             self.handle_client, host=config.IPC_HOST, port=config.IPC_PORT
@@ -362,22 +404,28 @@ def main() -> None:
     server = DaemonServer()
     try:
         asyncio.run(server.serve())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         print("\nDAEMON SHUTDOWN")
     finally:
+        # ORDER (2026-09-06): the engine state FIRST (fast, the buckets + the aggTrade resume point), then the trade
+        # tape, then the slow clock-candle dump, then the pool -- the old order put the 20-140 s in-process clock
+        # save before the engine flush, so TimeoutStopSec=30 SIGKILLed the daemon every restart with the buckets
+        # since the last 10 s sync (and their resume point) never written.
+        t0 = time.monotonic()
+        server.store.close(server.core)
+        if server.depth_store is not None:
+            server.depth_store.close()
+        print("HISTORY DB FLUSHED + CLOSED (%.2f s)." % (time.monotonic() - t0))
+        try:
+            t0 = time.monotonic()
+            server.core._tc_save(force=True)   # final clock-candle flush -> a restart preserves clock history
+            print("CLOCK-CANDLES FLUSHED (%.1f s)." % (time.monotonic() - t0))
+        except Exception as e:
+            print(f"CLOCK-CANDLE FINAL SAVE ERROR: {e}")
         try:
             server.core.shutdown_ob_pool()   # tear the spawn pool down cleanly (no semaphore warnings); bounded
         except Exception as e:
             print(f"OB POOL SHUTDOWN ERROR: {e}")
-        try:
-            server.core._tc_save(force=True)   # final clock-candle flush -> a restart preserves clock history
-            print("CLOCK-CANDLES FLUSHED.")
-        except Exception as e:
-            print(f"CLOCK-CANDLE FINAL SAVE ERROR: {e}")
-        server.store.close(server.core)
-        if server.depth_store is not None:
-            server.depth_store.close()
-        print("HISTORY DB FLUSHED + CLOSED.")
 
 
 if __name__ == "__main__":

@@ -275,6 +275,20 @@ WS_KLINE = "wss://fstream.binance.com/market/stream?streams=solusdt@kline_{tf}"
 WS_DEPTH = "wss://fstream.binance.com/ws/solusdt@depth"
 WS_LIQUIDATIONS = "wss://fstream.binance.com/market/ws/!forceOrder@arr"
 WS_AGGTRADE = "wss://fstream.binance.com/market/ws/solusdt@aggTrade"   # Step 19.3 — order-by-order tape
+# AGGTRADE GAP FILL (2026-09-06, feeds.MarketDataCore._agg_fill_gap): the @aggTrade stream is the ONLY source of the
+# volume buckets, the clock engines and the trade tape. Every message it missed used to be a PERMANENT hole: a
+# slow-consumer disconnect during the 15:01 UTC flash-dip burst (13.8k trades/min) + the restart 60 s later erased
+# the 104.80 low from every bucket tf (5m bucket 15:01-15:06 carried 52k SOL vs 329k on the official candle).
+# aggTrade ids are contiguous per symbol, so a gap is DETECTABLE (a > last+1) and REST (fromId pagination, weight
+# 20, ~2-day horizon) refills it EXACTLY and IN ORDER before the next live trade is routed. The last routed id is
+# persisted with every engine snapshot (meta agg_last_id/agg_last_ms) -> a restart resumes the tape where the
+# persisted state ends (boot replay BEFORE listening). The websocket buffer is raised so a loop stall never pushes
+# back on Binance; a fill that fails is logged as a hole (never retried per trade, never silent).
+AGG_WS_MAX_QUEUE = 65536        # client-side message buffer (~5 min of burst tape) instead of TCP backpressure
+AGG_FILL_PACE_S = 0.6           # sleep between REST pages (~100 req/min = 2000 weight/min of the 2400 ceiling)
+AGG_FILL_MAX_REQ = 2400         # per fill, 1000 trades each (~10 h of tape); beyond -> logged hole
+AGG_REPLAY_MAX_S = 6 * 3600     # resume points older than this are not replayed (logged hole; REST horizon ~2 d)
+AGG_FILL_YIELD_EVERY = 2000     # replayed trades routed between event-loop yields (the live edge keeps flowing)
 DEPTH_HIST_URL = (
     "https://data.binance.vision/data/futures/um/daily/klines/"
     "SOLUSDT/{tf}/SOLUSDT-{tf}-{date}.zip"

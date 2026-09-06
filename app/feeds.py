@@ -54,6 +54,16 @@ def _make_session() -> requests.Session:
     return session
 
 
+def _fmt_ms(ms) -> str:
+    """epoch ms -> 'HH:MM:SS.mmm' UTC for the journal ('-' when unknown)."""
+    try:
+        if not ms:
+            return "-"
+        return time.strftime("%H:%M:%S", time.gmtime(int(ms) / 1000.0)) + ".%03d" % (int(ms) % 1000)
+    except Exception:
+        return "-"
+
+
 def _combined_kline_url() -> str:
     streams = "/".join(f"solusdt@kline_{tf}" for tf in config.TIMEFRAMES)
     return f"wss://fstream.binance.com/market/stream?streams={streams}"
@@ -136,6 +146,14 @@ class MarketDataCore:
         # once per OI poll; aggtrade_stream drives on_trade per trade + on_reconnect
         # on a stream gap.
         self.oi_attr = OiAttributor()
+        # AGGTRADE GAP FILL state (config.AGG_*): the last aggTrade id / time ROUTED through _process_aggtrade
+        # (live or replayed). Persisted with every engine snapshot (persistence.prepare -> meta agg_last_id/ms)
+        # so a restart resumes the tape exactly where the persisted state ends. _agg_fills = recent fill records.
+        self._agg_last_id: int = 0
+        self._agg_last_ms: int = 0
+        self._agg_fill_busy: bool = False
+        self._agg_fills: deque = deque(maxlen=50)
+        self._agg_reconnects: int = 0
         # 19.3b: last kline candle per tf, cached so live_edge_loop can re-emit the
         # forming edge at ~150ms (between the 1/s kline heartbeats) without trades.
         self.last_candle: Dict[str, dict] = {}
@@ -558,7 +576,7 @@ class MarketDataCore:
                             for tf, store in self._tc_store.items() if store}
                     p = self._tc_path(); tmp = p + f".tmp{os.getpid()}"
                     t0 = time.monotonic()
-                    with gzip.open(tmp, "wt", encoding="utf-8") as f:
+                    with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=1) as f:
                         json.dump(data, f)
                     os.replace(tmp, p)                             # atomic swap (never a torn file)
                     el = time.monotonic() - t0
@@ -574,8 +592,8 @@ class MarketDataCore:
             data = {tf: {str(k): v for k, v in dict(store).items()} for tf, store in list(self._tc_store.items()) if store}
             p = self._tc_path(); tmp = p + ".tmp"
             t0 = time.monotonic()
-            with gzip.open(tmp, "wt", encoding="utf-8") as f:
-                json.dump(data, f)
+            with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=1) as f:   # level 1: the shutdown save must
+                json.dump(data, f)                                                 # finish inside TimeoutStopSec
             os.replace(tmp, p)                                     # atomic swap (never a torn file)
             el = time.monotonic() - t0
             if el > 5.0:
@@ -806,23 +824,30 @@ class MarketDataCore:
         attributor to the current OI: the gap's trades are unreconstructable, so the
         gap's OI delta must not be dumped onto resumed trades (on_reconnect).
         """
+        # GAP FILL (2026-09-06): aggTrade ids are contiguous, so a message the stream missed (slow-consumer
+        # disconnect in a burst, a restart, a dropped frame) shows as a > last+1 on the next live trade -> the
+        # missing range is fetched over REST and routed IN ORDER before that trade (the websocket keeps buffering
+        # meanwhile: AGG_WS_MAX_QUEUE). A duplicate (a <= last) is skipped. Reconnects are LOGGED (the old bare
+        # `except: sleep(2)` hid every gap).
         connected_once = False
         while True:
             ws = None
             try:
-                ws = await websockets.connect(config.WS_AGGTRADE)
+                ws = await websockets.connect(config.WS_AGGTRADE,
+                                              max_queue=int(getattr(config, "AGG_WS_MAX_QUEUE", 65536)))
                 if connected_once:
-                    self.oi_attr.on_reconnect(self.pulse_state.get("oi", 0.0))
+                    self._agg_reconnects += 1
+                    print(f"AGGTRADE RECONNECTED (#{self._agg_reconnects}); last routed id {self._agg_last_id}")
                 connected_once = True
                 while True:
                     res = await asyncio.wait_for(ws.recv(), timeout=30.0)
                     d = json.loads(res)
                     d = d.get("data", d)   # tolerate combined-wrapper; /ws/ is raw
-                    if d.get("e") == "aggTrade":
-                        if config.DEPTH_CAPTURE_ENABLED:
-                            self._capture_trade(d)        # Phase 1 tape tee — AROUND, not inside, the bucket path
-                        self._process_aggtrade(d)
-            except Exception:
+                    if d.get("e") != "aggTrade":
+                        continue
+                    await self._route_live_trade(d)
+            except Exception as e:
+                print(f"AGGTRADE STREAM ERROR: {e!r} -- reconnecting in 2 s (last routed id {self._agg_last_id})")
                 await asyncio.sleep(2)
             finally:
                 if ws:
@@ -830,6 +855,116 @@ class MarketDataCore:
                         await ws.close()
                     except Exception:
                         pass
+
+    async def _route_live_trade(self, d: dict) -> None:
+        """One LIVE aggTrade: fill any id gap in front of it (REST, in order), skip a duplicate, route it."""
+        try:
+            a = int(d.get("a", 0))
+        except (TypeError, ValueError):
+            a = 0
+        if a > 0 and self._agg_last_id > 0:
+            if a <= self._agg_last_id:
+                return                                           # already routed (replayed / duplicate)
+            if a > self._agg_last_id + 1:
+                await self._agg_fill_gap(self._agg_last_id + 1, a - 1, reason="stream")
+        self._route_trade(d, live=True)
+
+    def _route_trade(self, d: dict, live: bool = True) -> None:
+        """Route one aggTrade (live or replayed) everywhere the live path does: trade-tape tee + engines + clock
+        engines + footprint levels; then advance the resume point (id/time)."""
+        if config.DEPTH_CAPTURE_ENABLED:
+            self._capture_trade(d, live=live)                    # Phase 1 tape tee — AROUND, not inside, the bucket path
+        self._process_aggtrade(d)
+        try:
+            self._agg_last_id = int(d.get("a", self._agg_last_id) or self._agg_last_id)
+            self._agg_last_ms = int(d.get("T", self._agg_last_ms) or self._agg_last_ms)
+        except (TypeError, ValueError):
+            pass
+
+    def _agg_http_get(self, params: dict):
+        """One aggTrades REST page (list) or None (network / rate limit -> the fill stops, logged as a hole)."""
+        try:
+            from . import aggtrade_backfill as _ab
+            p = dict(params); p["symbol"] = config.SYMBOL
+            r = self.session.get(_ab.AGG_URL, params=p, timeout=10)
+            if r.status_code in (418, 429):
+                print("AGGTRADE GAP FILL: rate-limited (%d), backing off 60 s" % r.status_code)
+                time.sleep(60.0)
+                return None
+            rows = r.json()
+            return rows if isinstance(rows, list) else None
+        except Exception as e:
+            print(f"AGGTRADE GAP FILL: request failed: {e!r}")
+            return None
+
+    async def _agg_fill_gap(self, id_from: int, id_to: "int | None", reason: str = "") -> tuple:
+        """Refill the aggTrade tape from REST: every trade with id in [id_from, id_to] (id_to=None -> up to the live
+        edge: stop at the first short page) is routed exactly like a live trade, in order, on the event loop
+        (yielding every AGG_FILL_YIELD_EVERY trades). Pages come from an executor thread, paced AGG_FILL_PACE_S.
+        Returns (routed, requests, complete). Incomplete (network / budget / horizon) -> the hole is LOGGED once,
+        the OI baseline resynced (the gap's OI delta must not land on resumed trades) and the caller moves on: the
+        next live trade advances the resume point, so a failed fill is never retried per trade."""
+        loop = asyncio.get_event_loop()
+        now_ms = int(time.time() * 1000)
+        pace = float(getattr(config, "AGG_FILL_PACE_S", 0.6))
+        max_req = int(getattr(config, "AGG_FILL_MAX_REQ", 2400))
+        yield_every = max(1, int(getattr(config, "AGG_FILL_YIELD_EVERY", 2000)))
+        horizon_ms = int(float(getattr(config, "AGG_REPLAY_MAX_S", 6 * 3600)) * 1000)
+        t0 = time.monotonic(); n = 0; req = 0; ok = True; first_ms = None; last_ms = None
+        if self._agg_last_ms > 0 and now_ms - self._agg_last_ms > horizon_ms:
+            print("AGGTRADE GAP UNFILLED (%s): resume point id %d is %.1f h old (> AGG_REPLAY_MAX_S) -- HOLE from %s; "
+                  "engines resume from the live tape" % (reason, self._agg_last_id,
+                                                          (now_ms - self._agg_last_ms) / 3.6e6, _fmt_ms(self._agg_last_ms)))
+            self.oi_attr.on_reconnect(self.pulse_state.get("oi", 0.0))
+            self._agg_fills.append({"reason": reason, "from": id_from, "to": id_to, "n": 0, "req": 0, "ok": False})
+            return 0, 0, False
+        self._agg_fill_busy = True
+        try:
+            nxt = int(id_from)
+            while True:
+                if req >= max_req:
+                    ok = False; break
+                if req:
+                    await asyncio.sleep(pace)
+                rows = await loop.run_in_executor(None, self._agg_http_get, {"fromId": nxt, "limit": 1000})
+                req += 1
+                if rows is None:
+                    ok = False; break
+                if not rows:
+                    break                                        # nothing at/after nxt -> caught up
+                for r in rows:
+                    a = int(r["a"])
+                    if id_to is not None and a > id_to:
+                        break
+                    if a <= self._agg_last_id:
+                        continue
+                    self._route_trade(r, live=False); n += 1
+                    if first_ms is None:
+                        first_ms = int(r["T"])
+                    last_ms = int(r["T"])
+                    if n % yield_every == 0:
+                        await asyncio.sleep(0)                   # keep the live edge / clients flowing
+                last_a = int(rows[-1]["a"])
+                if id_to is not None and last_a >= id_to:
+                    break
+                if len(rows) < 1000:
+                    break                                        # short page = the live edge
+                nxt = last_a + 1
+        finally:
+            self._agg_fill_busy = False
+        el = time.monotonic() - t0
+        span = (last_ms - first_ms) / 1000.0 if (first_ms is not None and last_ms is not None) else 0.0
+        if n or not ok:
+            print("AGGTRADE GAP %s (%s): %d trades, ids %d..%d, %s..%s (%.1f s of tape) in %d req / %.1f s"
+                  % ("FILLED" if ok else "PARTIAL", reason, n, id_from, self._agg_last_id,
+                     _fmt_ms(first_ms), _fmt_ms(last_ms), span, req, el))
+        if not ok:
+            print("AGGTRADE GAP UNFILLED (%s): HOLE after id %d (%s) -- OI baseline resynced; engines resume from the live tape"
+                  % (reason, self._agg_last_id, _fmt_ms(self._agg_last_ms)))
+            self.oi_attr.on_reconnect(self.pulse_state.get("oi", 0.0))
+        self._agg_fills.append({"reason": reason, "from": id_from, "to": id_to, "n": n, "req": req, "ok": ok,
+                                "first_ms": first_ms, "last_ms": last_ms, "secs": el})
+        return n, req, ok
 
     def _ensure_fp_node(self, tf_key: str, uTime: str) -> dict:
         """Return the footprint node for (tf, uTime), creating it if absent.
@@ -1074,13 +1209,16 @@ class MarketDataCore:
             b = dict(bids); a = dict(asks)
         self._depth_snap_buf.append((int(time.time() * 1000), self._last_depth_u, mid, b, a))
 
-    def _capture_trade(self, d: dict) -> None:
-        """Tee one aggTrade into the trade-tape buffer — called in aggtrade_stream AROUND (never inside)
-        _process_aggtrade. side: 1 = taker buy, 0 = taker sell (Binance 'm' = buyer-maker flag)."""
+    def _capture_trade(self, d: dict, live: bool = True) -> None:
+        """Tee one aggTrade into the trade-tape buffer — called by _route_trade AROUND (never inside)
+        _process_aggtrade. side: 1 = taker buy, 0 = taker sell (Binance 'm' = buyer-maker flag). A REPLAYED
+        (gap-filled) trade goes to the persistent tape only (INSERT OR REPLACE by id -> windows / backfills are
+        complete), not to the live bubble batch (which is a per-pulse 'just happened' stream)."""
         ts = int(d.get("T", 0)); price = float(d.get("p", 0.0))
         qty = float(d.get("q", 0.0)); side = 0 if d.get("m") else 1
         self._trade_buf.append((int(d.get("a", 0)), ts, price, qty, side))
-        self._trades_live_buf.append((ts, price, qty, side))   # Phase 3: live bubble batch (drained per pulse)
+        if live:
+            self._trades_live_buf.append((ts, price, qty, side))   # Phase 3: live bubble batch (drained per pulse)
 
     def drain_trades_live(self) -> list:
         """Drain the live-trades buffer ON the loop (O(n) ref-copy + clear; n ≈ trades/pulse, ~tens). Feeds the
