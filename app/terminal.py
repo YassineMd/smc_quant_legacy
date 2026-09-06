@@ -10928,7 +10928,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         last_t = self._bp_trades[-1][0] if self._bp_trades else 0.0
         _sw_on = bool(self.menu.layer_state("m10_bigplayer_sweeps"))
         _bw = self._simple_bw()
-        _txtc = (0, 0, 0) if _bw else (240, 244, 250)          # amount text: BLACK on the Simple BW chart (user 2026-09-06), white on dark
+        _txtc = (0, 0, 0) if _bw else (255, 255, 255)          # amount text (BOLD): BLACK on Simple BW, WHITE on dark (user 2026-09-06)
         try:
             _ypx = float(self.vb.viewPixelSize()[1])            # a y-zoom re-evaluates the diamonds' minimum height
         except Exception:
@@ -11024,6 +11024,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._bp_buy.setData(x=bx, y=by, size=bs); self._bp_sell.setData(x=sx, y=sy, size=ss)
         while len(self._bp_lbls) < len(labels):
             _t = pg.TextItem(anchor=(0.5, 0.5)); _t.setZValue(32); self.plot.addItem(_t, ignoreBounds=True)
+            _tf = _t.textItem.font(); _tf.setBold(True); _t.textItem.setFont(_tf)   # bold amount on the bubble
             self._bp_lbls.append(_t)
         for k, _l in enumerate(self._bp_lbls):
             if k < len(labels):
@@ -11047,6 +11048,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _pl = QtWidgets.QGraphicsPolygonItem(); _pl.setZValue(31)
                 self.vb.addItem(_pl, ignoreBounds=True)
                 _lb = pg.TextItem(anchor=(0.5, 0.5)); _lb.setZValue(32); self.plot.addItem(_lb, ignoreBounds=True)
+                _lf = _lb.textItem.font(); _lf.setBold(True); _lb.textItem.setFont(_lf)   # bold amount on the diamond
                 self._bp_swp_polys.append({"poly": _pl, "sig": None, "buy": None}); self._bp_swp_lbls.append(_lb)
             _d = self._bp_swp_polys[drawn]; _lb = self._bp_swp_lbls[drawn]; drawn += 1
             _mid = 0.5 * (lo + hi); _h = max(float(hi - lo), _hmin)
