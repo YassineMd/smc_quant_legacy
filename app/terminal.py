@@ -1697,6 +1697,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _lpf = QtGui.QFont("Consolas", 10); _lpf.setBold(True); self._live_plabel.textItem.setFont(_lpf)
         self._live_plabel.setZValue(60); self.plot.addItem(self._live_plabel, ignoreBounds=True); self._live_plabel.hide()
         self.vb.sigXRangeChanged.connect(self._reposition_live_price_label)
+        # SMOOTH LIVE CANDLE (user 2026-09-07): overlay body + wick for the FORMING candle, animated between ticks by
+        # a 30 fps timer (the candle picture skips the forming bar while the overlay is on). _lc = animation state.
+        self._lc_body = QtWidgets.QGraphicsRectItem(); self._lc_body.setZValue(7)
+        self._lc_wick = pg.PlotCurveItem(); self._lc_wick.setZValue(7)
+        self.plot.addItem(self._lc_body, ignoreBounds=True); self.plot.addItem(self._lc_wick, ignoreBounds=True)
+        self._lc_body.hide(); self._lc_wick.hide()
+        self._lc = None                                    # dict(x, o, h, l, c_from, c_to, cur, t0, brush, pen) or None
+        self._lc_timer = QtCore.QTimer(self); self._lc_timer.setInterval(33); self._lc_timer.timeout.connect(self._lc_tick)
+        self._lc_shown = False                             # the picture currently omits the forming bar
         # --- A2: cursor Y-axis price tag — a right-axis badge tracking the hline's Y,
         # shown in ALL modes. Reads the cursor price via mapSceneToView and formats with
         # config.PRICE_DECIMALS so it matches PriceAxis exactly. On a full cursor-leave it
@@ -2741,6 +2750,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._apply_chart_style(bool(on))
             except Exception:
                 pass
+        if key == "live_anim":                           # SMOOTH LIVE CANDLE off -> overlay gone, picture whole again
+            if not on:
+                self._live_candle_hide()
+            self._scanner_bucket_sig = self._last_scanner_sig = None
         if key == "ema":                                 # EMA MASTER (user 2026-09-06): gate the whole family at once --
             try:
                 self.menu._ema_master_changed(bool(on))  # grey the children (a session restore sets the box with
@@ -3913,11 +3926,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         self._last_hover_pos = pos           # park here for the live-breathe re-fire
         pt = self.vb.mapSceneToView(pos)
-        self.vline.setPos(pt.x()); self.hline.setPos(pt.y()); self.hline.show()
+        _ty = round(pt.y() / config.TICK_SIZE) * config.TICK_SIZE   # cursor moves PER TICK (user 2026-09-07)
+        self.vline.setPos(pt.x()); self.hline.setPos(_ty); self.hline.show()
         # A2: right-axis price tag tracks the cursor Y (all modes); PRICE_DECIMALS
         # matches PriceAxis so the badge value lines up with the axis ticks.
-        self.price_tag.setText(f"{pt.y():.{config.PRICE_DECIMALS}f}")
-        self.price_tag.setPos(self.vb.viewRange()[0][1], pt.y())
+        self.price_tag.setText(f"{_ty:.{config.PRICE_DECIMALS}f}")
+        self.price_tag.setPos(self.vb.viewRange()[0][1], _ty)
         self.price_tag.show()
         if getattr(self, "lower_vline", None) is not None:   # sync the SHARED vertical crosshair into the VPIN pane
             self.lower_vline.setPos(pt.x())
@@ -3997,9 +4011,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         pt = self.fp_panel.getViewBox().mapSceneToView(pos)
         self.fp_panel.set_crosshair(pt.x(), pt.y())
-        self.hline.setPos(pt.y()); self.hline.show()          # mirror the PRICE into the chart's horizontal crosshair
-        self.price_tag.setText(f"{pt.y():.{config.PRICE_DECIMALS}f}")
-        self.price_tag.setPos(self.vb.viewRange()[0][1], pt.y()); self.price_tag.show()
+        _ty = round(pt.y() / config.TICK_SIZE) * config.TICK_SIZE   # per-tick cursor (user 2026-09-07)
+        self.hline.setPos(_ty); self.hline.show()             # mirror the PRICE into the chart's horizontal crosshair
+        self.price_tag.setText(f"{_ty:.{config.PRICE_DECIMALS}f}")
+        self.price_tag.setPos(self.vb.viewRange()[0][1], _ty); self.price_tag.show()
 
     def _on_lower_mouse_move(self, evt) -> None:
         """Cursor over the VPIN pane: drive its OWN crosshair (x+y lines) + a right-axis VPIN value badge, and sync
@@ -17552,9 +17567,103 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._live_px is None:
             return
         try:
-            self._live_plabel.setPos(self.vb.viewRange()[0][1], self._live_px)
+            _y = self._lc["cur"] if (self._lc is not None and self._lc_timer.isActive()) else self._live_px
+            self._live_plabel.setPos(self.vb.viewRange()[0][1], _y)
         except Exception:
             pass
+
+    # ── SMOOTH LIVE CANDLE (user 2026-09-07) ─────────────────────────────────────────────────────────────
+    def _live_anim_on(self) -> bool:
+        try:
+            cb = self.menu.sub_checks.get("live_anim")
+            return cb is None or cb.isChecked()
+        except Exception:
+            return False
+
+    def _live_candle_wanted(self, buckets) -> bool:
+        """Overlay the forming candle only in the plain candle mode of a LIVE frame (never in replay, with candles
+        hidden, or in the footprint / whisker modes that draw the forming bar their own way)."""
+        return (self._live_anim_on() and bool(buckets) and bool(getattr(self, "_mmx_last_forming", False))
+                and self._candle_mode == 0 and not self._hide_candles and not self._replay_on)
+
+    def _live_candle_hide(self) -> None:
+        if self._lc_timer.isActive():
+            self._lc_timer.stop()
+        self._lc = None
+        self._lc_body.hide(); self._lc_wick.hide()
+
+    def _live_candle_frame(self, on: bool, buckets, x, arr, brushes, wick_pens) -> None:
+        """Per data frame: (re)target the overlay. A changed close on the SAME bar starts a 160 ms slide from the
+        current animated close; a new bar (or a first show) jumps. Open / high / low follow at once."""
+        if not on:
+            if self._lc is not None:
+                self._live_candle_hide()
+            return
+        try:
+            k = len(x) - 1
+            xi = float(x[k]); o = float(arr["opens"][k]); h = float(arr["highs"][k]); l = float(arr["lows"][k])
+            c = float(arr["closes"][k])
+        except Exception:
+            self._live_candle_hide(); return
+        if c <= 0:
+            self._live_candle_hide(); return
+        if self._simple_bw():
+            pen = pg.mkPen(0, 0, 0, width=1.0); pen.setCosmetic(True); brush = None       # brush by direction, per tick
+        else:
+            brush = brushes[k] if k < len(brushes) else pg.mkBrush(None)
+            pen = wick_pens[k] if k < len(wick_pens) else None
+        lc = self._lc
+        if lc is None or lc["x"] != xi:                          # first show / a new forming bar: no slide
+            self._lc = lc = {"x": xi, "o": o, "h": h, "l": l, "c_from": c, "c_to": c, "cur": c, "t0": 0.0,
+                             "brush": brush, "pen": pen}
+            self._lc_timer.stop()
+            self._lc_apply()
+            return
+        lc.update(o=o, h=h, l=l, brush=brush, pen=pen)
+        if abs(c - lc["c_to"]) > 1e-12:                          # a new tick on the same bar -> slide from where we are
+            lc["c_from"] = lc["cur"]; lc["c_to"] = c; lc["t0"] = time.perf_counter()
+            if not self._lc_timer.isActive():
+                self._lc_timer.start()
+        self._lc_apply()
+
+    def _lc_tick(self) -> None:
+        lc = self._lc
+        if lc is None:
+            self._lc_timer.stop(); return
+        t = (time.perf_counter() - lc["t0"]) / 0.16
+        if t >= 1.0:
+            lc["cur"] = lc["c_to"]; self._lc_timer.stop()
+        else:
+            e = 1.0 - (1.0 - t) * (1.0 - t)                      # decelerate
+            lc["cur"] = lc["c_from"] + (lc["c_to"] - lc["c_from"]) * e
+        self._lc_apply()
+
+    def _lc_apply(self) -> None:
+        """Draw the overlay at the CURRENT animated close: body open->cur, wick low..high, live line + pill at cur."""
+        lc = self._lc
+        if lc is None:
+            return
+        cur = lc["cur"]; o = lc["o"]; xi = lc["x"]
+        top, bot = max(o, cur), min(o, cur)
+        if top - bot < config.TICK_SIZE / 2.0:
+            top = bot + config.TICK_SIZE / 2.0                   # ranged doji: the same sliver the picture draws
+        if self._simple_bw():
+            self._lc_body.setBrush(pg.mkBrush(0, 0, 0, 255) if cur < o else pg.mkBrush(None))
+            self._lc_body.setPen(lc["pen"])
+        else:
+            self._lc_body.setBrush(lc["brush"] if lc["brush"] is not None else pg.mkBrush(None))
+            self._lc_body.setPen(lc["pen"] if lc["pen"] is not None else pg.mkPen(136, 136, 136))
+        self._lc_body.setRect(QtCore.QRectF(xi - 0.4, bot, 0.8, top - bot))
+        hi = max(lc["h"], top); lo = min(lc["l"], bot)
+        self._lc_wick.setPen(lc["pen"] if lc["pen"] is not None else pg.mkPen(136, 136, 136))
+        self._lc_wick.setData([xi, xi], [lo, hi])
+        self._lc_body.show(); self._lc_wick.show()
+        if self._live_px is not None:                           # the dashed live line + the right-edge pill slide too
+            self._live_pline.setPos(cur)
+            try:
+                self._live_plabel.setPos(self.vb.viewRange()[0][1], cur)
+            except Exception:
+                pass
 
     # Right-docked anchors: x≈1.0 pins the badge's right edge against the Y-axis;
     # the y-fraction stacks converging values (up above, down below, mid centered).
@@ -19073,7 +19182,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return o, h, l, c
 
     def _render_candle_glyphs(self, plot, handles, add_item, buckets, x, arr, brushes, wick_pens,
-                              vx0, vx1, px_per_x) -> None:
+                              vx0, vx1, px_per_x, skip_last: bool = False) -> None:
         """Draw the upper-pane candles + gray POC baseline onto `plot` in the CURRENT Candle Mode (0 normal / 1 whisker
         / 2 footprint / 3 delta / 4 force / 5 delta-force), storing the per-mode items in `handles` (created via
         add_item). SHARED by the main chart (self.plot / self._scan_handles / self._add_scanner_item) and the 1m-detail
@@ -19146,7 +19255,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         else:                                                              # NORMAL candles
             _wb.setVisible(False); _wb.update_data([], [], [], [], [], [], [], [])   # free the pictures
             _blank_fp()
-            handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
+            if skip_last and len(x) > 0:                                   # the forming bar is the animated overlay
+                _k = len(x) - 1
+                handles["bc_candles"].update_data(x[:_k], opens[:_k], highs[:_k], lows[:_k], closes[:_k],
+                                                  brushes[:_k], wick_pens[:_k], 0.8, vx0, vx1)
+            else:
+                handles["bc_candles"].update_data(x, opens, highs, lows, closes, brushes, wick_pens, 0.8, vx0, vx1)
         handles["bc_baseline"].setData(x, baseline_arr)                    # gray dashed POC-center baseline
         handles["bc_baseline"].setVisible(self.menu.layer_state("m10_poc_baseline")
                                           and not self._hide_candles)      # Indicator toggle (was always-on); Ctrl+H also hides
@@ -19333,8 +19447,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         px_per_y = self.vb.height() / max(1e-9, vy1 - vy0)
 
         # --- upper pane: candles + the gray baseline, in the current Candle Mode (shared with the 1m-detail popup) ---
+        _lc_on = self._live_candle_wanted(buckets)
         self._render_candle_glyphs(self.plot, self._scan_handles, self._add_scanner_item,
-                                   buckets, x, arr, brushes, wick_pens, vx0, vx1, px_per_x)
+                                   buckets, x, arr, brushes, wick_pens, vx0, vx1, px_per_x, skip_last=_lc_on)
+        self._live_candle_frame(_lc_on, buckets, x, arr, brushes, wick_pens)
         # liquidity-sweep labels (Ctrl+L) — cull-to-visible, density-floored, capped, bounded pool; timed as
         # its OWN profiler section ('liq') so this layer is measured directly, not inferred under draw_scanner.
         _ls = time.perf_counter()

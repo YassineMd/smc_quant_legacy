@@ -470,6 +470,17 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         _bw.toggled.connect(lambda on: self.subWidgetToggled.emit("simple_bw", on))
         self.sub_checks["simple_bw"] = _bw
         _chart.addWidget(_bw)
+        # SMOOTH LIVE CANDLE (user 2026-09-07): the forming candle's close + the live price line / pill slide to
+        # each new tick (160 ms) through a tiny overlay -- measured ~1 ms per animation frame vs ~11 ms for a data
+        # frame, so it cannot lag the chart; OFF = the old instant jump.
+        _la = QtWidgets.QCheckBox("Smooth live candle  (slide on each tick)")
+        _la.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        _la.setToolTip("Animate the forming candle's close and the live price line/pill to every new price over "
+                       "160 ms (30 fps, overlay only -- the chart is not repainted). Off = instant jump.")
+        _la.setChecked(True)
+        _la.toggled.connect(lambda on: self.subWidgetToggled.emit("live_anim", on))
+        self.sub_checks["live_anim"] = _la
+        _chart.addWidget(_la)
 
         # --- Window on Start (user 2026-09-01): ORDERED multi-select of the windows the terminal
         # opens on launch. The order you CHECK them in = the order they open in. Collapsed by
