@@ -72,7 +72,8 @@ def detect(buckets, walls=None, skip_last=True, sl_buf=0.003, tp_frac=0.005):
                 pen = (C[k] - rhi) / band if side == "S" else (rlo - C[k]) / band
                 out.append(dict(i=k, side=s, entry=C[k], sl_trade=sl_trade, tp_trade=tp_trade, sl=sl,
                                 tp1=tgt[0], tp2=tgt[1], tp3=tgt[2], targets=tgt, band=band, price=P,
-                                radar_lo=rlo, radar_hi=rhi, pen=pen, wall_side=side, p_resist=pr))
+                                radar_lo=rlo, radar_hi=rhi, pen=pen, wall_side=side, p_resist=pr,
+                                visit_a=a))                                   # first bar of the radar visit
                 break
     out.sort(key=lambda e: e["i"])
     return out
@@ -109,7 +110,7 @@ def detect_forming(forming, k, walls, sl_buf=0.003, tp_frac=0.005):
                 pen = (C - rhi) / band if side == "S" else (rlo - C) / band
                 return dict(i=k, side=s, entry=C, sl_trade=sl_trade, tp_trade=tp_trade, radar_lo=rlo, radar_hi=rhi,
                             pen=pen, wall_side=side, price=P, band=band,
-                            p_resist=float(r[2]) if len(r) > 2 else 50.0)
+                            p_resist=float(r[2]) if len(r) > 2 else 50.0, visit_a=a)
     return None
 
 
@@ -171,7 +172,7 @@ def detect_wick(buckets, walls=None, skip_last=True, wick_min=0.0, same_dir=Fals
                 s = 1 if side == "S" else -1
                 pen = (C[k] - rhi) / band if side == "S" else (rlo - C[k]) / band
                 out.append(dict(i=k, side=s, entry=C[k], band=band, price=P, radar_lo=rlo, radar_hi=rhi,
-                                pen=pen, wall_side=side, p_resist=pr, wick=wick, bull=bull))
+                                pen=pen, wall_side=side, p_resist=pr, wick=wick, bull=bull, visit_a=a))
                 break
     out.sort(key=lambda e: e["i"])
     return out

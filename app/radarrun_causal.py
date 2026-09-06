@@ -66,7 +66,8 @@ def causal_union(buckets, tf, k_from, k_to, warm=W_DEFAULT, tp_frac=None, seen=N
     At close k the detectors see buckets[max(0, k-warm) : k+1] — nothing after k. Every triangle (detect) and diamond
     (detect_wick, same geometry the terminal merges) whose bar end_time is not yet in `seen` is frozen and returned.
     `seen` = end_times already persisted (live fires) so nothing is duplicated; it is extended in place.
-    Returns [{i, et, side, entry, sl, tp, kind, hc, absorbed, k}] with i absolute in `buckets`."""
+    Returns [{i, et, side, entry, sl, tp, kind, hc, absorbed, k, rlo, rhi, wall, vt}] with i absolute in `buckets`
+    (rlo/rhi/wall/vt = the radar box the runner broke out of + the end_time of the visit's first bar)."""
     from . import config, radar_breakout_detect as RB, absorption_level_detect as AL
     tp = config.RR_TP_FRAC if tp_frac is None else tp_frac
     slb = sl_buf_for(tf)
@@ -110,6 +111,13 @@ def causal_union(buckets, tf, k_from, k_to, warm=W_DEFAULT, tp_frac=None, seen=N
                 tpv = float(e.get("tp_trade", 0.0) or 0.0); kind = "run"
             seen.add(et)
             rec = dict(i=i, et=et, side=side, entry=entry, sl=sl, tp=tpv, kind=kind, k=k)
+            # RADAR geometry the badge click draws (the box the runner broke out of): [radar_lo, radar_hi], the wall
+            # price and the END TIME of the visit's first bar (vt; 0 when that bar is outside the detect window).
+            rlo9 = float(e.get("radar_lo", 0.0) or 0.0); rhi9 = float(e.get("radar_hi", 0.0) or 0.0)
+            if rlo9 > 0 and rhi9 > 0:
+                va = lo + int(e.get("visit_a", -1)) if e.get("visit_a") is not None else -1
+                vt = float(buckets[va].get("end_time", 0.0) or 0.0) if (0 <= va < n and int(e.get("visit_a", -1)) >= 0) else 0.0
+                rec.update(rlo=rlo9, rhi=rhi9, wall=float(e.get("price", 0.0) or 0.0), vt=vt)
             if flags:
                 rec["hc"] = conviction(buckets, i, side)
                 rec["absorbed"] = absorbed(buckets, i)

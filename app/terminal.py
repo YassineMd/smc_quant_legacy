@@ -1507,6 +1507,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._rr_entries = []
         self._rr_ln_pool = []; self._rr_lnlbl_pool = []; self._rr_lines_user = {}
         self._rr_size_lbl = None                               # OPTIMAL position-size readout at the entry line (one active bracket)
+        self._rr_radar_rect = None; self._rr_radar_wall = None; self._rr_radar_lbl = None   # the clicked badge's RADAR box
         self._bp_trades = deque(maxlen=20000)                   # Big Player Levels: (ts_s, price, usd, side) prints >= store floor
         self._bp_live_t0 = 0.0                                  # first LIVE print ts (window rows dedupe against it)
         self._bp_sub_t = 0.0; self._bp_need_backfill = True     # tape subscription re-arm clock / backfill pending
@@ -11088,10 +11089,32 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _it.setVisible(False)
         if self._rr_size_lbl is not None:
             self._rr_size_lbl.setVisible(False)
+        self._rr_radar_hide()
         if getattr(self, "_rr_prov_sph", None) is not None:
             self._rr_prov_sph.setVisible(False)                  # forming-bar provisional preview rides the master layer
         self._rr_entries = []                                    # drop RR bracket entries so none linger when only the diamond is on
         self._rr_sig = None; self._rr_drawn = False
+
+    @staticmethod
+    def _rr_radar_geo(e, bset) -> dict:
+        """The RADAR a Radar Runner broke out of, frozen into its fired record so the badge click can draw it: rlo/rhi
+        = the radar box [wall - 3*band, wall + 3*band], wall = the defended level, vt = end_time of the visit's FIRST bar
+        (0 when that bar precedes the detect window). {} when the entry carries no radar (never blocks the fire)."""
+        try:
+            rlo = float(e.get("radar_lo", 0.0) or 0.0); rhi = float(e.get("radar_hi", 0.0) or 0.0)
+            if rlo <= 0 or rhi <= 0:
+                return {}
+            va = e.get("visit_a"); vt = 0.0
+            if va is not None and 0 <= int(va) < len(bset):
+                vt = float(bset[int(va)].get("end_time", 0.0) or 0.0)
+            return {"rlo": rlo, "rhi": rhi, "wall": float(e.get("price", 0.0) or 0.0), "vt": vt}
+        except Exception:
+            return {}
+
+    def _rr_radar_hide(self) -> None:
+        for _it in (self._rr_radar_rect, self._rr_radar_wall, self._rr_radar_lbl):
+            if _it is not None:
+                _it.setVisible(False)
 
     def _rr_conviction(self, buckets, i, side) -> bool:
         """HIGH-CONVICTION flag for a Radar Runner breakout (computed ONCE, at fire time): the breakout bar's STRENGTH
@@ -11383,6 +11406,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                "sl": float(r.get("sl", 0.0) or 0.0), "tp": float(r.get("tp", 0.0) or 0.0),
                                "hc": bool(r.get("hc")), "absorbed": bool(r.get("absorbed")),
                                "kind": r.get("kind", "run"), "bf": 1}      # bf = frozen by the causal backfill
+                if float(r.get("rlo", 0.0) or 0.0) > 0 and float(r.get("rhi", 0.0) or 0.0) > 0:   # radar box
+                    entries[et].update(rlo=float(r["rlo"]), rhi=float(r["rhi"]),
+                                       wall=float(r.get("wall", 0.0) or 0.0), vt=float(r.get("vt", 0.0) or 0.0))
             same = (job["key"] == self._rr_causal_key() and self._rr_fired_tf == job["tf"])
             if same:
                 for et, ev in entries.items():
@@ -11549,7 +11575,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _wlo = float(_wb.get("low", 0.0) or 0.0); _whi = float(_wb.get("high", 0.0) or 0.0)
                 _wsl = max(_wlo * (1 - _slbuf), _wrlo) if _ws > 0 else min(_whi * (1 + _slbuf), _wrhi)
                 entries.append(dict(i=_wi, side=_ws, entry=_went, sl_trade=_wsl, sl=_wsl,
-                                    tp_trade=_went * (1.0 + _ws * config.RR_TP_FRAC), wick=True))
+                                    tp_trade=_went * (1.0 + _ws * config.RR_TP_FRAC), wick=True,
+                                    radar_lo=_wrlo, radar_hi=_wrhi, price=_we.get("price", 0.0),
+                                    visit_a=_we.get("visit_a")))
         except Exception:
             self._clear_radarrun(); return
         # 'Filter EMA HL delta' (m10_radarrun_hld): keep only badges whose side agrees with the ema_ext
@@ -11650,14 +11678,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             i = int(e["i"]) - _off                                # detect ran over warm+filtered -> shift back to filtered space
             if 0 <= i < n:                                        # a confirmed breakout is NEVER removed when walls re-shape.
                 et = float(filtered[i].get("end_time", 0.0) or 0.0)
+                _rgeo = self._rr_radar_geo(e, _bset)              # {rlo, rhi, wall, vt}: the radar the runner broke out of
                 if et > 0 and et not in self._rr_fired:
                     self._rr_fired[et] = {"side": int(e["side"]), "entry": e.get("entry", 0.0),
                                           "sl": e.get("sl_trade", e.get("sl", 0.0)),   # tradeable candle-capped SL
                                           "tp": e.get("tp_trade", 0.0),                # fixed quick TP (0.5%)
                                           "hc": self._rr_conviction(filtered, i, int(e["side"])),   # frozen at fire
                                           "absorbed": self._rr_absorbed(filtered, i),
-                                          "kind": "wick" if e.get("wick") else "run"}   # ♦ wick-break vs ▲ regular
+                                          "kind": "wick" if e.get("wick") else "run",   # ♦ wick-break vs ▲ regular
+                                          **_rgeo}                                       # radar box (badge click draws it)
                     _any_new = True
+                elif et > 0 and _rgeo and "rlo" not in self._rr_fired[et]:   # SELF-HEAL: a record frozen before the
+                    self._rr_fired[et].update(_rgeo); _any_new = True         # radar box was persisted gets it now
                     if i == _edge_i:                              # fired on the just-closed live-edge bar (not a scroll-in)
                         _new_edge.append((int(e["side"]), self._rr_fired[et]))
         _fmax = int(getattr(config, "RR_FIRED_MAX", 20000))
@@ -11715,7 +11747,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 continue
             b = filtered[i]; hi = float(b.get("high", 0.0) or 0.0); lo = float(b.get("low", 0.0) or 0.0)
             y = (lo - pad) if side > 0 else (hi + pad)               # LONG ▲ BELOW the candle / SHORT ▼ ABOVE it
-            self._rr_entries.append(("rr%d" % i, i, side, ev["entry"], ev["sl"], ev["tp"], y))
+            self._rr_entries.append(("rr%d" % i, i, side, ev["entry"], ev["sl"], ev["tp"], y, ev))
             col = GRN if side > 0 else RED
             _fail = bool(_failed.get(i))
             _al9 = 70 if _fail else 255                          # a FAILED badge FADES back -- the live ones stay solid
@@ -11748,14 +11780,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         SCALE-OUT bracket: 50% off at TP1 (config.RR_TP1_FRAC, nets ~0.2%) + 50% at TP2 (RR_TP2_FRAC, nets ~0.4%), candle-
         capped SL, move stop -> BREAKEVEN after TP1 (study/radarrun_scaleout.py: best notional config). A SIZE readout at
         the entry line prints the risk-based position (risk 0.4% = $800, flexes with the stop) + the per-tranche $ targets.
-        Lines run from the breakout bar to the first TP2/SL touch."""
+        Lines run from the breakout bar to the first TP2/SL touch. The bracket sits ON TOP of every other layer
+        (z 38-40: above bubbles 31, badges 32-34, zones/boxes) and the RADAR the runner broke out of is drawn with it:
+        a translucent box [radar_lo, radar_hi] from the visit's first bar to the breakout bar, the defended wall
+        price dotted inside it, labelled with the box, the wall and the visit length (user 2026-09-06)."""
         buckets = self._trline_buckets; n = len(buckets)
         user = self._rr_lines_user; cpool = self._rr_ln_pool; lpool = self._rr_lnlbl_pool
         WHITE = (236, 238, 244); _fee = getattr(config, "RR_MAKER_RT", 0.0004)
-        ul = ut = 0; _size_shown = False
-        for key, x, side, entry, sl, _tp_frozen, yb in self._rr_entries:
+        ul = ut = 0; _size_shown = False; _radar_shown = False
+        for key, x, side, entry, sl, _tp_frozen, yb, _ev in self._rr_entries:
             if not user.get(key, False) or entry <= 0 or x < 0 or x >= n:
                 continue
+            _radar_shown = self._rr_draw_radar(_ev, x, side, buckets) or _radar_shown
             tp1 = entry * (1.0 + side * config.RR_TP1_FRAC)      # 50% off here (nets ~0.2%)
             tp2 = entry * (1.0 + side * config.RR_TP2_FRAC)      # 50% off here (nets ~0.4%); stop -> BE after TP1
             exit_x = n - 1
@@ -11771,13 +11807,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                      (tp2, (90, 235, 150), 1.7, "tp2"),
                                      (entry, WHITE, 1.9, "entry")):
                 if ul >= len(cpool):
-                    _ln = pg.PlotCurveItem(); _ln.setZValue(29)
+                    _ln = pg.PlotCurveItem(); _ln.setZValue(38)
                     self.plot.addItem(_ln, ignoreBounds=True); cpool.append(_ln)
                 _ln = cpool[ul]; ul += 1
                 _pen = pg.mkPen(*col, width=w, style=QtCore.Qt.DashLine); _pen.setCosmetic(True)
                 _ln.setPen(_pen); _ln.setData([x, rb], [lvl, lvl]); _ln.setVisible(True)
                 if ut >= len(lpool):
-                    _tl = pg.TextItem(anchor=(0.0, 0.5)); _tl.setZValue(36)
+                    _tl = pg.TextItem(anchor=(0.0, 0.5)); _tl.setZValue(39)
                     _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True); _tl.textItem.setFont(_tf)
                     self.plot.addItem(_tl, ignoreBounds=True); lpool.append(_tl)
                 _tl = lpool[ut]; ut += 1
@@ -11802,7 +11838,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _tp2usd = _notional * 0.5 * (config.RR_TP2_FRAC - _fee)     # 50% tranche, net
                 _mpct = 100.0 * _margin / config.RR_ACCOUNT_BALANCE if config.RR_ACCOUNT_BALANCE > 0 else 0.0
                 if self._rr_size_lbl is None:
-                    _szl = pg.TextItem(anchor=(0.0, 1.15)); _szl.setZValue(37)
+                    _szl = pg.TextItem(anchor=(0.0, 1.15)); _szl.setZValue(40)
                     _szf = QtGui.QFont("Consolas", 9); _szf.setBold(True); _szl.textItem.setFont(_szf)
                     self.plot.addItem(_szl, ignoreBounds=True); self._rr_size_lbl = _szl
                 self._rr_size_lbl.setText(
@@ -11817,6 +11853,50 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             lpool[j].setVisible(False)
         if self._rr_size_lbl is not None and not _size_shown:
             self._rr_size_lbl.setVisible(False)
+        if not _radar_shown:
+            self._rr_radar_hide()
+
+    def _rr_draw_radar(self, ev, x, side, buckets) -> bool:
+        """Draw the RADAR box of the clicked Radar Runner badge (record `ev`, breakout bar `x`): the translucent
+        side-coloured rect [rlo, rhi] from the visit's first bar (its end_time `vt`, clamped to the loaded window's
+        left edge; the bar before the breakout when unknown) through the breakout bar, the defended wall price dotted
+        inside it, and a label (box / wall / visit bars). False when the record carries no radar (pre-2026-09-06 fire
+        never re-seen by the detector)."""
+        try:
+            rlo = float(ev.get("rlo", 0.0) or 0.0); rhi = float(ev.get("rhi", 0.0) or 0.0)
+        except Exception:
+            return False
+        if rlo <= 0 or rhi <= rlo:
+            return False
+        vt = float(ev.get("vt", 0.0) or 0.0); wall = float(ev.get("wall", 0.0) or 0.0)
+        x0 = x - 1
+        if vt > 0:
+            import numpy as _np
+            _ets = _np.array([float(b.get("end_time", 0.0) or 0.0) for b in buckets[:x + 1]])
+            x0 = int(_np.searchsorted(_ets, vt - 1e-6))                  # the bar whose end_time == vt (0 when before the window)
+            x0 = max(0, min(x0, x - 1))
+        col = (40, 210, 90) if side > 0 else (255, 90, 90)
+        if self._rr_radar_rect is None:
+            self._rr_radar_rect = QtWidgets.QGraphicsRectItem(); self._rr_radar_rect.setZValue(37)
+            self.plot.addItem(self._rr_radar_rect, ignoreBounds=True)
+            self._rr_radar_wall = pg.PlotCurveItem(); self._rr_radar_wall.setZValue(37)
+            self.plot.addItem(self._rr_radar_wall, ignoreBounds=True)
+            self._rr_radar_lbl = pg.TextItem(anchor=(0.0, 1.1)); self._rr_radar_lbl.setZValue(39)
+            _rf = QtGui.QFont("Consolas", 9); _rf.setBold(True); self._rr_radar_lbl.textItem.setFont(_rf)
+            self.plot.addItem(self._rr_radar_lbl, ignoreBounds=True)
+        _pen = pg.mkPen(*col, 220, width=1.4, style=QtCore.Qt.DashLine); _pen.setCosmetic(True)
+        self._rr_radar_rect.setPen(_pen); self._rr_radar_rect.setBrush(pg.mkBrush(*col, 42))
+        self._rr_radar_rect.setRect(QtCore.QRectF(x0 - 0.5, rlo, (x - x0) + 1.0, rhi - rlo)); self._rr_radar_rect.setVisible(True)
+        if rlo < wall < rhi:
+            _wp = pg.mkPen(255, 200, 80, 230, width=1.2, style=QtCore.Qt.DotLine); _wp.setCosmetic(True)
+            self._rr_radar_wall.setPen(_wp); self._rr_radar_wall.setData([x0 - 0.5, x + 0.5], [wall, wall])
+            self._rr_radar_wall.setVisible(True)
+        else:
+            self._rr_radar_wall.setVisible(False)
+        _txt = "RADAR  %.2f - %.2f" % (rlo, rhi) + ("   wall %.2f" % wall if wall > 0 else "") + "   visit %d bars" % (x - x0)
+        self._rr_radar_lbl.setText(_txt); self._rr_radar_lbl.setColor(col)
+        self._rr_radar_lbl.setPos(x0 - 0.5, rhi); self._rr_radar_lbl.setVisible(True)
+        return True
 
     # WALL SURGE (m10_wallsurge, 1m/5m CLOCK only) — pane-STRONG |delta| (Volume pane 'Pct' definition: trailing-50
     # rank >= P80) AND Eff/Res retention >= 80% (the candle KEPT its delta-direction excursion) on a candle inside a
