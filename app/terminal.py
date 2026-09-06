@@ -1512,6 +1512,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._bp_sub_t = 0.0; self._bp_need_backfill = True     # tape subscription re-arm clock / backfill pending
         self._bp_conn_was = True
         self._bp_buy = None; self._bp_sell = None; self._bp_lbls = []   # plot items (lazy)
+        self._bp_sweeps = deque(maxlen=5000)                    # SWEEPS: (ts_s, p_first, p_last, usd, side, n_levels)
+        self._bp_swp_pend = None                                # the live tape's last same-ms group, still growing
+        self._bp_swp_items = []                                 # pooled {"cap", "lvl", "lbl"} per drawn sweep
         self._bp_sig = None
         self._c1m_ets = None; self._c1m_sides = None           # '1m confirm' sub-toggle: sorted 1m-clock fire times/sides
         self._c1m_mtime = 0.0; self._c1m_check = 0.0           # (from radarrun_fired.json, mtime-cached, ~3s re-stat)
@@ -2595,6 +2598,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._ez_sig = None; self._sel_sig = None    # 1h Easy 0.5% toggled -> re-run the overlay draw
             if not on:
                 self._clear_easy1h()                # off -> tear the triangles down now
+        elif key == "m10_bigplayer_sweeps":
+            self._bp_sig = None; self._sel_sig = None    # Sweeps sub-toggle -> redraw (rides the master layer)
+            if not on:
+                self._clear_bp_sweeps()
         elif key == "m10_bigplayer":
             self._bp_sig = None; self._sel_sig = None    # Big Player Levels toggled
             if on:
@@ -10822,6 +10829,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         conn = bool(self.worker.connected)
         if (conn and not self._bp_conn_was) or (conn and self._bp_need_backfill):
             self._bp_trades.clear(); self._bp_live_t0 = 0.0     # reconnect / first enable -> clean re-backfill
+            self._bp_sweeps.clear(); self._bp_swp_pend = None
             self._bp_subscribe(backfill=True)
             self._bp_need_backfill = False
         self._bp_conn_was = conn
@@ -10832,6 +10840,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         changed = False
         for tbp in tbatches:
             ts, pr, qt, sd = decode_trades(tbp.ts_b64, tbp.price_b64, tbp.qty_b64, tbp.side_b64)
+            # SWEEPS are grouped from the RAW batch (before the store floor: an order eating the book with many
+            # small fills must still sum up); a group continuing the last stored sweep (same ms + side, split
+            # across two pulses) extends it.
+            if len(ts):
+                self._bp_add_sweeps(ts, pr, qt, sd, floor, live=True)
             for i in range(len(ts)):
                 t = float(ts[i]) / 1000.0
                 if self._bp_live_t0 == 0.0:
@@ -10844,6 +10857,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for tw in (tws or ()):
             ts, pr, qt, sd = decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64)
             cut = self._bp_live_t0 or float("inf")
+            if len(ts):
+                self._bp_add_sweeps(ts, pr, qt, sd, floor, live=False, cut=cut)
             older = [(float(ts[i]) / 1000.0, float(pr[i]), float(pr[i]) * float(qt[i]), int(sd[i]))
                      for i in range(len(ts)) if float(ts[i]) / 1000.0 < cut and float(pr[i]) * float(qt[i]) >= floor]
             if older:
@@ -10853,6 +10868,45 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if changed:
             self._bp_sig = None                                 # new prints -> redraw on the next overlay pass
 
+    def _bp_add_sweeps(self, ts, pr, qt, sd, floor, live, cut=float("inf")) -> None:
+        """Group one decoded trade array (ms, price, qty, side) into SWEEPS and merge them into the store.
+        LIVE pulses: every same-ms+side group is tracked in a PENDING slot across pulses (a sweep's fills can be
+        split over two frames); the pending group is stored as soon as it qualifies (>= min levels, total >= the
+        store floor) and UPDATED in place while it keeps growing. BACKFILL windows: the qualifying sweeps older
+        than the live cut are inserted (same dedupe rule as the prints)."""
+        from . import bigprint_store, config as _cfg
+        min_lv = int(_cfg.BIGPLAYER_SWEEP_MIN_LEVELS)
+        rows = [(float(ts[i]) / 1000.0, float(pr[i]), float(pr[i]) * float(qt[i]), int(sd[i])) for i in range(len(ts))]
+        if not live:
+            older = [s for s in bigprint_store.group_sweeps(rows, min_lv, float(floor)) if s[0] < cut]
+            if older:
+                keep = [s for s in self._bp_sweeps if s[0] >= cut]
+                self._bp_sweeps.clear(); self._bp_sweeps.extend(older); self._bp_sweeps.extend(keep)
+                self._bp_sig = None
+            return
+        groups = bigprint_store.group_sweeps(rows, 1, 0.0)  # EVERY same-ms+side group, however small
+        pend = self._bp_swp_pend                            # [ms, side, ts_s, p0, p1, usd, n_levels, stored]
+        for (t_s, p0, p1, usd, side, nl) in groups:
+            ms = int(round(t_s * 1000.0))
+            if pend is not None and pend[0] == ms and pend[1] == side:
+                pend[4] = p1; pend[5] += usd; pend[6] += nl  # the same order continued in this pulse
+            else:
+                self._bp_swp_flush(pend, min_lv, float(floor))
+                pend = [ms, int(side), float(t_s), float(p0), float(p1), float(usd), int(nl), False]
+        self._bp_swp_flush(pend, min_lv, float(floor))      # store/update it now: it shows at once
+        self._bp_swp_pend = pend
+
+    def _bp_swp_flush(self, pend, min_lv, floor) -> None:
+        """Store (or update in place) a pending same-ms group once it qualifies as a sweep."""
+        if pend is None or pend[6] < min_lv or pend[5] < floor:
+            return
+        rec = (pend[2], pend[3], pend[4], pend[5], pend[1], pend[6])
+        if pend[7] and self._bp_sweeps and int(round(self._bp_sweeps[-1][0] * 1000.0)) == pend[0]                 and self._bp_sweeps[-1][4] == pend[1]:
+            self._bp_sweeps[-1] = rec                      # grown since it was stored -> update
+        elif not self._bp_sweeps or pend[2] >= self._bp_sweeps[-1][0]:
+            self._bp_sweeps.append(rec); pend[7] = True
+        self._bp_sig = None
+
     def _draw_bigplayer(self, filtered) -> None:
         if (not self.menu.layer_state("m10_bigplayer") or self.scanner_mode != "bucket_canvas"
                 or self._hide_candles):
@@ -10860,8 +10914,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         n = len(filtered)
         thr = float(self.menu.big_player_min_usd())
         last_t = self._bp_trades[-1][0] if self._bp_trades else 0.0
+        _sw_on = bool(self.menu.layer_state("m10_bigplayer_sweeps"))
         _sig = (n, len(self._bp_trades), last_t, thr, self._tf,
-                float(filtered[-1].get("end_time", 0.0) or 0.0) if n else 0.0)
+                float(filtered[-1].get("end_time", 0.0) or 0.0) if n else 0.0,
+                len(self._bp_sweeps), (self._bp_sweeps[-1][0], self._bp_sweeps[-1][3]) if self._bp_sweeps else None, _sw_on)
         if _sig == self._bp_sig:
             return
         self._bp_sig = _sig
@@ -10876,6 +10932,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._bp_buy.setData(x=[], y=[]); self._bp_sell.setData(x=[], y=[])
             for _l in self._bp_lbls:
                 _l.setVisible(False)
+            self._clear_bp_sweeps()
             return
         from .trades_tape import _fmt_usd
         ets = np.array([float(b.get("end_time", 0.0) or 0.0) for b in filtered])
@@ -10917,6 +10974,54 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _l.setPos(x, price); _l.setVisible(True)
             else:
                 _l.setVisible(False)
+        # SWEEPS (user 2026-09-06): one taker order that ate through >= 2 levels (same ms + side), total >= the
+        # slider -> a vertical CAPSULE from its first to its last fill price at its bar (green buy / red sell,
+        # width grows with the $ like the bubbles), the $ total + levels eaten at its far end, and a dashed
+        # level line from that end price (where the book absorbed the order) to the live edge.
+        if not _sw_on:
+            self._clear_bp_sweeps()
+            return
+        srows = [s for s in self._bp_sweeps if s[3] >= thr and s[0] <= ets[-1] + 1e-6]
+        if ets[0] > 0 and ets[0] < live_start:
+            from . import bigprint_store
+            sarch = bigprint_store.load_sweeps(ets[0] - 1.0, min(float(ets[-1]), live_start) - 1e-6, thr,
+                                               int(config.BIGPLAYER_SWEEP_MIN_LEVELS))
+            srows = [s for s in sarch if s[0] < live_start] + srows
+        drawn = []
+        for (t, p0, p1, usd, side, nl) in srows[-int(config.BIGPLAYER_SWEEP_MAX):]:
+            i = int(np.searchsorted(ets, t))
+            if i >= n or p0 == p1:
+                continue
+            drawn.append((i, p0, p1, usd, int(side > 0), nl))
+        _xr = float(n - 1) + 0.5
+        for k, (i, p0, p1, usd, buy, nl) in enumerate(drawn):
+            if k >= len(self._bp_swp_items):
+                _cap = pg.PlotCurveItem(); _cap.setZValue(30)
+                _lvl = pg.PlotCurveItem(); _lvl.setZValue(29)
+                _lb = pg.TextItem(anchor=(0.5, 1.0)); _lb.setZValue(32)
+                for _it in (_cap, _lvl):
+                    self.plot.addItem(_it, ignoreBounds=True)
+                self.plot.addItem(_lb, ignoreBounds=True)
+                self._bp_swp_items.append({"cap": _cap, "lvl": _lvl, "lbl": _lb, "sig": None})
+            _d = self._bp_swp_items[k]
+            _sg = (i, round(p0, 6), round(p1, 6), round(usd, 2), buy, nl, _xr, thr)
+            if _d["sig"] != _sg:
+                _rgb = (40, 230, 120) if buy else (240, 70, 90)
+                _w = max(6.0, 0.6 * self._bp_bubble_px(usd, thr))
+                _pc = pg.mkPen(_rgb[0], _rgb[1], _rgb[2], 150, width=_w); _pc.setCosmetic(True)
+                _pc.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+                _d["cap"].setPen(_pc); _d["cap"].setData([float(i), float(i)], [p0, p1])
+                _pl = pg.mkPen(_rgb[0], _rgb[1], _rgb[2], 170, width=1.2); _pl.setCosmetic(True)
+                _pl.setDashPattern([6.0, 4.0])
+                _d["lvl"].setPen(_pl); _d["lvl"].setData([float(i), _xr], [p1, p1])
+                _d["lbl"].setText("%s ⇑%d" % (_fmt_usd(usd), nl) if buy else "%s ⇓%d" % (_fmt_usd(usd), nl),
+                                  color=(240, 244, 250))
+                _d["lbl"].setAnchor((0.5, 1.0) if buy else (0.5, 0.0))   # above the top / below the bottom
+                _d["lbl"].setPos(float(i), p1)
+                _d["sig"] = _sg
+            _d["cap"].setVisible(True); _d["lvl"].setVisible(True); _d["lbl"].setVisible(True)
+        for _d in self._bp_swp_items[len(drawn):]:
+            _d["cap"].setVisible(False); _d["lvl"].setVisible(False); _d["lbl"].setVisible(False)
 
     @staticmethod
     def _bp_bubble_px(usd: float, thr: float) -> float:
@@ -10926,11 +11031,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         r = 12.0 + 22.0 * math.log10(max(usd, thr) / max(thr, 1.0))
         return max(10.0, min(46.0, r))
 
+    def _clear_bp_sweeps(self) -> None:
+        for _d in self._bp_swp_items:
+            _d["cap"].setVisible(False); _d["lvl"].setVisible(False); _d["lbl"].setVisible(False)
+
     def _clear_bigplayer(self) -> None:
         if self._bp_buy is not None:
             self._bp_buy.setData(x=[], y=[]); self._bp_sell.setData(x=[], y=[])
         for _l in self._bp_lbls:
             _l.setVisible(False)
+        self._clear_bp_sweeps()
         self._bp_sig = None
 
     def _clear_radarrun(self) -> None:

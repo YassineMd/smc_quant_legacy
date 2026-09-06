@@ -604,6 +604,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_bubble_min_slider(sec)       # MIN SIZE (USD) filter directly under Candle Bubbles
             if key == "m10_bigplayer":
                 self._build_bigplayer_slider(sec)        # single-print USD threshold under Big Player Levels
+                self._build_bigplayer_sweeps_subtoggle(sec)   # one order eating >= 2 levels (same ms + side)
             if key == "m10_absorblvl":
                 self._build_wallfloor_slider(sec)        # strength draw floor directly under the Walls toggle
                 self._build_wall_regime_subtoggle(sec)   # bottom-right Wall Regime table on/off
@@ -840,6 +841,21 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                       "New York 13:00 UTC; after 21:00 counts as extended NY). Earlier walls are hidden, not deleted.")
         cb.toggled.connect(lambda on, k="m10_absorblvl_sess": self.layerToggled.emit(k, on))
         self.layer_checks["m10_absorblvl_sess"] = cb
+        section.addWidget(cb)
+
+    def _build_bigplayer_sweeps_subtoggle(self, section) -> None:
+        """'Sweeps' under Big Player Levels (user 2026-09-06): one taker order that ate through >= 2 book levels
+        (aggTrade prints with the SAME millisecond + side) counts as a big player when its TOTAL passes the $
+        slider -- drawn as a vertical capsule over the swept range + the end-level line. Default ON."""
+        cb = QtWidgets.QCheckBox("· Sweeps (one order, ≥2 levels)")
+        cb.setChecked(True)
+        cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")
+        cb.setToolTip("A single market order that eats through several book levels: its fills share the exact "
+                      "same millisecond and side. Summed and shown when the total passes the MIN PRINT slider. "
+                      "Capsule = the swept price range, its far end = where the book absorbed the order "
+                      "(a dashed level line runs from there).")
+        cb.toggled.connect(lambda on, k="m10_bigplayer_sweeps": self.layerToggled.emit(k, on))
+        self.layer_checks["m10_bigplayer_sweeps"] = cb
         section.addWidget(cb)
 
     def _build_wall_regime_subtoggle(self, section) -> None:

@@ -181,6 +181,12 @@ TAPE_BACKFILL_SECS = 300        # Trades scanner mode: history window requested 
 BIGPLAYER_MIN_USD = 500_000.0
 BIGPLAYER_STORE_FLOOR_USD = 50_000.0
 BIGPLAYER_MAX_LINES = 80
+# SWEEPS (user 2026-09-06): one taker order eating through the book = aggTrade prints with the SAME millisecond +
+# side at >= BIGPLAYER_SWEEP_MIN_LEVELS distinct prices. Grouped before the store floor, summed; the group is kept
+# when its total >= BIGPLAYER_STORE_FLOOR_USD and shown when >= the Big Player $ slider. Most recent
+# BIGPLAYER_SWEEP_MAX drawn (each = capsule + end-level line + label).
+BIGPLAYER_SWEEP_MIN_LEVELS = 2
+BIGPLAYER_SWEEP_MAX = 40
 DOM_VP_BACKFILL_SECS = 21600    # DOM scanner mode: executed-trade history for the ladder's Volume Profile —
                                 # 6h covers every VP window choice (5M..6H filter locally, no re-requests).
                                 # ~60-80k trades ≈ 3MB b64 one-shot on entry (well under trade_tape's 72h)

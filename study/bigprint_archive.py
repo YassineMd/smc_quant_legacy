@@ -6,6 +6,9 @@ aggregated footprints, not prints. Output is tiny (a few thousand prints/month).
   monthly dumps for completed months; DAILY dumps for the current month (up to yesterday, UTC).
   Idempotent: an existing month file is skipped unless --force (the current month is always rebuilt).
   Rows: {"t": epoch_ms, "p": price, "q": qty, "u": usd, "s": 1 taker-buy / 0 taker-sell}, sorted by t.
+  SWEEPS (user 2026-09-06): prints with the SAME millisecond + side (one taker order eating >= 2 levels) are also
+  written as {"k": "sw", "t": ms, "p0": first px, "p1": last px, "u": total usd, "s": side, "n": levels} when the
+  TOTAL >= the floor (every fill is seen here, so the totals are exact -- unlike a reconstruction from prints).
 
 python study/bigprint_archive.py --start 2025-01 --end 2026-09
 """
@@ -27,6 +30,7 @@ SYMBOL = "SOLUSDT"
 BASE = "https://data.binance.vision/data/futures/um"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bigprint_archive")
 FLOOR = float(config.BIGPLAYER_STORE_FLOOR_USD)
+SWEEP_MIN_LEVELS = int(getattr(config, "BIGPLAYER_SWEEP_MIN_LEVELS", 2))
 
 
 def month_path(month: str) -> str:
@@ -51,6 +55,7 @@ def _dl(url: str, dest: str) -> bool:
 
 def scan_zip(path: str):
     """Stream the single-member Binance CSV; yield big prints only (never materialize the month)."""
+    cur = None                                           # [T, side, p_first, p_last, usd, {prices}]
     with zipfile.ZipFile(path) as z:
         name = z.namelist()[0]
         with z.open(name) as fh:
@@ -62,8 +67,18 @@ def scan_zip(path: str):
                 except (ValueError, IndexError):
                     continue                             # header / malformed line
                 u = p * q
+                s = 0 if f[6].strip() == "true" else 1
                 if u >= FLOOR:
-                    yield {"t": T, "p": p, "q": q, "u": round(u, 2), "s": 0 if f[6].strip() == "true" else 1}
+                    yield {"t": T, "p": p, "q": q, "u": round(u, 2), "s": s}
+                # SWEEP grouping: consecutive rows with the same transact_time + side = one taker order
+                if cur is not None and cur[0] == T and cur[1] == s:
+                    cur[3] = p; cur[4] += u; cur[5].add(p)
+                else:
+                    if cur is not None and len(cur[5]) >= SWEEP_MIN_LEVELS and cur[4] >= FLOOR:
+                        yield {"k": "sw", "t": cur[0], "p0": cur[2], "p1": cur[3], "u": round(cur[4], 2), "s": cur[1], "n": len(cur[5])}
+                    cur = [T, s, p, p, u, {p}]
+            if cur is not None and len(cur[5]) >= SWEEP_MIN_LEVELS and cur[4] >= FLOOR:
+                yield {"k": "sw", "t": cur[0], "p0": cur[2], "p1": cur[3], "u": round(cur[4], 2), "s": cur[1], "n": len(cur[5])}
 
 
 def _write(month: str, rows: list) -> None:
