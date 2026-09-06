@@ -13,14 +13,15 @@ import android.view.animation.DecelerateInterpolator;
  * The live-price chip of the DOM ladder as its OWN overlay view (2026-09-06): a rounded pill in the taker
  * side's colour with the last price in white bold, sitting over the price column of the last trade's row.
  * Being a separate view it moves as a hardware-animated property (translationY) — the ladder's cached rows
- * are never re-recorded for it — so a price tick SLIDES smoothly to its new level (120 ms, decelerating)
+ * are never re-recorded for it — so a price tick SLIDES smoothly to its new level (160 ms, decelerating)
  * instead of jumping. The ladder tells it where to be every frame; when the ladder itself scrolled the chip
  * jumps (animating there would lag the rows). Opaque fill = the old translucent chip blended over the price
  * column background, so the row's dim price text underneath never shows through.
  */
 public class PriceChip extends View {
 
-    private static final long SLIDE_MS = 120;
+    private static final long SLIDE_MS = 160;
+    private static final boolean LOG = false;        // dev: slide / snap / keep events to logcat (CHIP)
 
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -69,14 +70,22 @@ public class PriceChip extends View {
             animate = false;
             setVisibility(VISIBLE);
         }
-        if (animate && !Float.isNaN(targetY) && Math.abs(targetY - y) > 0.5f) {
+        boolean sameTarget = !Float.isNaN(targetY) && Math.abs(targetY - y) <= 0.5f;
+        if (sameTarget) {
+            // already there, or already sliding there: a book / heartbeat frame landing mid-slide must NOT
+            // cancel the animation (that is why the slide "sometimes" did not show)
+            if (LOG) android.util.Log.i("CHIP", "keep  y=" + y + (animate().getDuration() > 0 ? "" : ""));
+        } else if (animate && !Float.isNaN(targetY)) {
+            float from = getTranslationY();
             targetY = y;
             animate().cancel();
             animate().translationY(y).setDuration(SLIDE_MS).setInterpolator(new DecelerateInterpolator()).start();
+            if (LOG) android.util.Log.i("CHIP", "slide " + from + " -> " + y + " (" + price + ")");
         } else {
             animate().cancel();
             targetY = y;
             setTranslationY(y);
+            if (LOG) android.util.Log.i("CHIP", "snap  y=" + y + " (" + price + ")" + (animate ? " [first]" : " [ladder moved]"));
         }
         if (restyled || resized) invalidate();
     }
