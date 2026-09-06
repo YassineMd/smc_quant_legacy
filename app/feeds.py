@@ -243,7 +243,7 @@ class MarketDataCore:
             tf = config.DEFAULT_TF
         return [b.full_snapshot() for b in self.engines[tf].closed_buckets]
 
-    def catchup_time_candles(self, tf: str) -> list:
+    def catchup_time_candles(self, tf: str, limit=None) -> list:
         """FULL-FIDELITY CLOCK (time) candles for `tf` from the dedicated CLOCK ENGINE -> gap-filled complete
         BucketSnapshot dicts (open/high/low/close + opL/opS/clL/clS, buyer_er/seller_er, cvd wicks, up/dn ticks,
         per-price levels, POC) — every field the terminal renders for a VOLUME bucket, computed identically, only
@@ -294,7 +294,10 @@ class MarketDataCore:
             if len(store) > cap:                                   # keep the most-recent `cap` intervals
                 for k in sorted(store)[:len(store) - cap]:
                     del store[k]
-            keys = sorted(store)[-int(getattr(config, "TIME_SERVE_CAP", 2000)):]   # ship the NEWEST window only
+            _serve = int(getattr(config, "TIME_SERVE_CAP", 2000))
+            if limit is not None and int(limit) > 0:
+                _serve = min(_serve, int(limit))                   # bounded serve (the clock feed's periodic heal)
+            keys = sorted(store)[-_serve:]                         # ship the NEWEST window only
             for k in keys:                                         # RE-APPLY the kline override on EVERY serve (2026-08-24):
                 _ovr(store[k])                                     # the push path stores a candle ~150ms after close, BEFORE
             #                                                        Binance's final kline exists; build-once froze that stale

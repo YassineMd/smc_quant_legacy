@@ -169,8 +169,12 @@ class DaemonServer:
             client.heatmap = None   # leave the heatmap mode -> stop live-column pushes
         elif action == "get_time_candles":
             tf = cmd.get("tf")
+            try:                                   # optional `limit`: serve only the NEWEST n candles (the clock feed's
+                _lim = int(cmd.get("limit") or 0)  # 60s heal asks for a short tail instead of the whole TIME_SERVE_CAP)
+            except (TypeError, ValueError):
+                _lim = 0
             if tf in config.TIMEFRAMES:
-                asyncio.create_task(self._send_time_candles(client, tf))
+                asyncio.create_task(self._send_time_candles(client, tf, limit=_lim if _lim > 0 else None))
         elif action == "sub_time":
             # CLOCK-candle live stream: send the full set ONCE, then the live-edge loop PUSHES the forming candle +
             # new closes to this client -> real-time clock candles (no polling). time_tf is independent of bucket tf.
@@ -202,7 +206,12 @@ class DaemonServer:
             self._enqueue(client, self.core.catchup_start(tf, delta=(n_new is not None)).to_line())
             buckets = (self.core.catchup_delta_buckets(tf, n_new) if n_new is not None
                        else self.core.catchup_buckets(tf))
-            size = config.CATCHUP_CHUNK_SIZE
+            # SMALL ENCODE CHUNKS (2026-09-06): json.dumps holds the GIL for its whole call, so a 1000-bucket chunk
+            # (~140 ms here, several x on the VM) froze every client's ticks / DOM / tape for the whole dump, and
+            # moving it to a thread changes nothing (measured: a 10 ms ticker still gapped 152 ms). Encoding 100
+            # buckets per frame with a sleep(0) between them lets the 150 ms live edge run between chunks. Wire-
+            # compatible: the client just appends chunks in seq order.
+            size = int(getattr(config, "CATCHUP_ENCODE_CHUNK", 100) or config.CATCHUP_CHUNK_SIZE)
             for seq, i in enumerate(range(0, len(buckets), size)):
                 self._enqueue(client, CatchupChunkPacket(
                     tf=tf, seq=seq, closed_buckets=buckets[i:i + size]).to_line())
@@ -214,16 +223,20 @@ class DaemonServer:
         except Exception as e:
             print(f"CATCHUP SEND ERROR ({tf}): {e}")
 
-    async def _send_time_candles(self, client: _Client, tf: str) -> None:
+    async def _send_time_candles(self, client: _Client, tf: str, limit=None) -> None:
         """Ship the current gap-filled CLOCK candles for ``tf`` (Binance-exact OHLC + aggTrade footprint) as chunked
         TIME_CANDLES frames -- the answer to a ``get_time_candles`` request. ADDITIVE + read-only: never touches the
         volume-bucket catchup/stream path. ``asyncio.sleep(0)`` between chunks yields so live ticks keep flowing."""
         try:
-            candles = self.core.catchup_time_candles(tf)
+            candles = self.core.catchup_time_candles(tf, limit=limit)
             size = config.CATCHUP_CHUNK_SIZE
             if not candles:
                 self._enqueue(client, TimeCandlesPacket(tf=tf, seq=0, candles=[]).to_line())
                 return
+            # small encode chunks + sleep(0) (2026-09-06): the clock feed's 60 s resync pulled TIME_SERVE_CAP (2000)
+            # full candles through asdict+json ON the loop = an 8-12 s tick / DOM / tape freeze every minute per
+            # clock window (see _send_catchup for why a thread does not help)
+            size = int(getattr(config, "CATCHUP_ENCODE_CHUNK", 100) or config.CATCHUP_CHUNK_SIZE)
             for seq, i in enumerate(range(0, len(candles), size)):
                 self._enqueue(client, TimeCandlesPacket(tf=tf, seq=seq, candles=candles[i:i + size]).to_line())
                 await asyncio.sleep(0)

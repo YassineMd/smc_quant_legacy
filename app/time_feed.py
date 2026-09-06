@@ -38,7 +38,7 @@ _CONNECT_TIMEOUT = 3.0
 
 
 def fetch_time_candles(tf: str, host: Optional[str] = None, port: Optional[int] = None,
-                       window: float = _RECV_WINDOW) -> Optional[List[dict]]:
+                       window: float = _RECV_WINDOW, limit: Optional[int] = None) -> Optional[List[dict]]:
     """One request/response: return the daemon's gap-filled clock candles for ``tf`` (served open_price/close_price
     shape), or None on any socket error (so the caller can distinguish "no connection" from "connected, empty").
 
@@ -54,7 +54,10 @@ def fetch_time_candles(tf: str, host: Optional[str] = None, port: Optional[int] 
     except OSError:
         return None
     try:
-        s.sendall((protocol.json.dumps({"action": "get_time_candles", "tf": tf}) + "\n").encode())
+        _req = {"action": "get_time_candles", "tf": tf}
+        if limit is not None and int(limit) > 0:
+            _req["limit"] = int(limit)                     # newest n candles only (periodic heal); None = full serve
+        s.sendall((protocol.json.dumps(_req) + "\n").encode())
         buf = b""; out: List[dict] = []; deadline = time.monotonic() + window
         s.settimeout(_FIRST_BYTE_TIMEOUT)                 # generous wait for the daemon's first frame...
         while time.monotonic() < deadline:
@@ -121,6 +124,9 @@ _STALE_RECONNECT = 15.0    # no frame for this long while "connected" -> assume 
 #                            reconnect (fresh sub_time = full catch-up, which HEALS dropped/missing candles). ⚠ was 4.0,
 #                            which sat exactly AT the daemon's stalled ~4.5s burst cadence (pre-_KLN fix) -> reconnect
 #                            churn. 15s only fires on a genuinely dead stream; the live price rides the worker fold.
+_RESYNC_LIMIT = 120        # candles per periodic resync (2026-09-06): the heal targets RECENT silently-dropped
+#                              closes; pulling the full TIME_SERVE_CAP (2000 candles + levels) every minute cost the
+#                              daemon loop an 8-12 s stall per clock window (frozen price / DOM / tape in EVERY window).
 _RESYNC_SECS = 60.0        # belt-and-braces: even while frames flow, one-shot re-fetch + merge every this often — a
 #                            close frame silently dropped by the daemon's bounded queue is otherwise NEVER re-sent
 #                            (global advance-only cursor), leaving a stale partial candle (open != prev close) or a
@@ -293,7 +299,7 @@ class TimeCandleFeed(threading.Thread):
                 if now_m >= next_resync:        # periodic heal for silently-dropped close frames (never re-pushed)
                     next_resync = now_m + _RESYNC_SECS
                     try:
-                        served = fetch_time_candles(tf)
+                        served = fetch_time_candles(tf, limit=_RESYNC_LIMIT)   # a short TAIL, not the whole cap
                         if served:
                             self._merge(served); self._rebuild()
                     except Exception:

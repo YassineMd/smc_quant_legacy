@@ -518,7 +518,13 @@ class PipeClientWorker(threading.Thread):
                 c = pkt.candle
                 t = int(c["time"])
                 self.candles[t] = [c["open"], c["high"], c["low"], c["close"], c["volume"]]
-                self.latest_price = pkt.price
+                # ONE live price everywhere (2026-09-06): the engine's last aggTrade (active_bucket.close) -- what the
+                # bucket chart already draws -- also feeds latest_price (clock-candle fold + DOM marker). pkt.price is
+                # the 1m KLINE close, a separate ~250ms-1s stream: measured vs the exchange it was staler (p90 age
+                # 1.23 s vs 0.84 s) and disagreed with the engine close on ~half the ticks, so the 5m clock window
+                # and the 30m bucket window showed two different 'live' prices. Fallback: the kline close.
+                _ac = float((pkt.active_bucket or {}).get("close") or 0.0)
+                self.latest_price = _ac if _ac > 0 else pkt.price
                 self.forming_time = t
                 self.active_bucket = pkt.active_bucket   # live pulsing right edge
                 if pkt.footprint:

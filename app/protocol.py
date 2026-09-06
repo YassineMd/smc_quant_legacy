@@ -20,7 +20,7 @@ Design notes
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Dict, List, Optional, TypedDict
 
 # ---------------------------------------------------------------------------
@@ -42,6 +42,16 @@ TYPE_LIQSWEEP = "LIQ_SWEEP"           # live 15m Tier-A liquidity sweep (tf-agno
 TYPE_TIME_CANDLES = "TIME_CANDLES"    # answer to get_time_candles: gap-filled CLOCK candles (Binance OHLC + footprint)
 
 NEWLINE = "\n"
+
+
+def _to_line(pkt) -> str:
+    """Wire line for a packet dataclass: ONE json.dumps over a SHALLOW field dict. ``dataclasses.asdict`` deep-copied
+    every nested bucket / footprint / level dict in pure Python first (measured 2026-09-06 on a 1000-bucket catch-up
+    chunk: 593 ms of the 758 ms total; a 926-level forming footprint tick: 6.6 -> 1.2 ms) -- on the daemon's single
+    event loop that was the multi-second stall behind every client catch-up / clock resync (frozen price, DOM and
+    tape in every window, then a jump). No packet nests a dataclass (dicts / lists / scalars only), so the output is
+    byte-identical."""
+    return json.dumps({f.name: getattr(pkt, f.name) for f in fields(pkt)}, separators=(",", ":")) + NEWLINE
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +124,7 @@ class TickPacket:
     type: str = TYPE_TICK
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 @dataclass
@@ -139,7 +149,7 @@ class CatchupPacket:
     type: str = TYPE_CATCHUP
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 @dataclass
@@ -164,7 +174,7 @@ class CatchupStartPacket:
     type: str = TYPE_CATCHUP_START
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 @dataclass
@@ -180,7 +190,7 @@ class CatchupChunkPacket:
     type: str = TYPE_CATCHUP_CHUNK
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 @dataclass
@@ -196,7 +206,7 @@ class CatchupEndPacket:
     type: str = TYPE_CATCHUP_END
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 @dataclass
@@ -210,7 +220,7 @@ class TimeCandlesPacket:
     type: str = TYPE_TIME_CANDLES
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 @dataclass
@@ -232,7 +242,7 @@ class ObPacket:
     type: str = TYPE_OB
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 @dataclass
@@ -246,7 +256,7 @@ class LiquidationPacket:
     type: str = TYPE_LIQ
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 @dataclass
@@ -260,7 +270,7 @@ class PulsePacket:
     type: str = TYPE_PULSE
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 @dataclass
@@ -285,7 +295,7 @@ class DepthWindowPacket:
     type: str = TYPE_DEPTH_WINDOW
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 @dataclass
@@ -304,7 +314,7 @@ class DepthColumnPacket:
     type: str = TYPE_DEPTH_COL
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 @dataclass
@@ -324,7 +334,7 @@ class TradesWindowPacket:
     type: str = TYPE_TRADES_WINDOW
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 @dataclass
@@ -340,7 +350,7 @@ class TradeBatchPacket:
     type: str = TYPE_TRADE_BATCH
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 @dataclass
@@ -357,7 +367,7 @@ class LiqSweepPacket:
     type: str = TYPE_LIQSWEEP
 
     def to_line(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":")) + NEWLINE
+        return _to_line(self)
 
 
 # ---------------------------------------------------------------------------

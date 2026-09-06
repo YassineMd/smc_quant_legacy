@@ -256,7 +256,11 @@ RR_FIRED_MAX = 20000            # persisted fires kept per tf (was 5000; the bac
 REHYDRATE_LIMIT = 1440          # main.py:248 — last 24h of entries per tf (legacy replay)
 SAVE_INTERVAL_SECS = 15         # main.py:286 — periodic footprint flush (legacy JSON)
 SYNC_INTERVAL_SECS = 10         # async SQLite upsert cadence (replaces JSON flush)
-CATCHUP_CHUNK_SIZE = 1000       # closed buckets per CATCHUP_CHUNK frame
+CATCHUP_CHUNK_SIZE = 1000       # closed buckets per CATCHUP_CHUNK frame (legacy monolithic size; see ENCODE_CHUNK)
+CATCHUP_ENCODE_CHUNK = 100      # 2026-09-06: buckets / clock candles encoded per frame on the daemon loop, with a
+#                                 sleep(0) between frames -> the 150 ms live edge keeps flowing during a catch-up /
+#                                 clock resync (json.dumps holds the GIL for its whole call: 1000-bucket frames were
+#                                 multi-second freezes of price / DOM / tape in EVERY window)
 BUCKET_CACHE_SAVE_SECS = 120    # worker persists its tf's base window (bucket_cache) at most this often
 BASELINE_CANDLES = 100          # spec §9.1.3 — REST baseline pull
 TS_FORMAT = "%Y-%m-%d %H:%M:00"  # spec §10.2.2 — temporal slicing key
