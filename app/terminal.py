@@ -2600,11 +2600,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if not on:
                 self._clear_easy1h()                # off -> tear the triangles down now
         elif key == "m10_bigplayer_sweeps":
-            self._bp_sig = None; self._sel_sig = None    # Sweeps sub-toggle -> redraw (rides the master layer)
+            self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1; self._sel_sig = None    # Sweeps sub-toggle -> redraw (rides the master layer)
             if not on:
                 self._clear_bp_sweeps()
         elif key == "m10_bigplayer":
-            self._bp_sig = None; self._sel_sig = None    # Big Player Levels toggled
+            self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1; self._sel_sig = None    # Big Player Levels toggled
             if on:
                 self._bp_need_backfill = True            # (re)subscribe + 6h backfill on the next frame
             else:
@@ -10815,7 +10815,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # the live store read study/bigprint_archive (replay). Green = taker buy, red = taker sell.
     # ------------------------------------------------------------------------------------------
     def _on_bigplayer_min(self, _usd: float) -> None:
-        self._bp_sig = None; self._sel_sig = None                # threshold moved -> redraw from the retained prints
+        self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1; self._sel_sig = None                # threshold moved -> redraw from the retained prints
         self._save_ui_state()
 
     def _bp_subscribe(self, backfill: bool) -> None:
@@ -10867,7 +10867,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._bp_trades.clear(); self._bp_trades.extend(older); self._bp_trades.extend(live)
                 changed = True
         if changed:
-            self._bp_sig = None                                 # new prints -> redraw on the next overlay pass
+            self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1   # new prints -> redraw on the next overlay pass
 
     def _bp_add_sweeps(self, ts, pr, qt, sd, floor, live, cut=float("inf")) -> None:
         """Group one decoded trade array (ms, price, qty, side) into SWEEPS and merge them into the store.
@@ -10883,7 +10883,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if older:
                 keep = [s for s in self._bp_sweeps if s[0] >= cut]
                 self._bp_sweeps.clear(); self._bp_sweeps.extend(older); self._bp_sweeps.extend(keep)
-                self._bp_sig = None
+                self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1
             return
         groups = bigprint_store.group_sweeps(rows, 1, 0.0)  # EVERY same-ms+side group, however small
         pend = self._bp_swp_pend                            # [ms, side, ts_s, p0, p1, usd, n_levels, stored]
@@ -10906,7 +10906,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._bp_sweeps[-1] = rec                      # grown since it was stored -> update
         elif not self._bp_sweeps or pend[2] >= self._bp_sweeps[-1][0]:
             self._bp_sweeps.append(rec); pend[7] = True
-        self._bp_sig = None
+        self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1
 
     def _draw_bigplayer(self, filtered) -> None:
         if (not self.menu.layer_state("m10_bigplayer") or self.scanner_mode != "bucket_canvas"
@@ -11076,7 +11076,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _l in self._bp_lbls:
             _l.setVisible(False)
         self._clear_bp_sweeps()
-        self._bp_sig = None
+        self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1
 
     def _clear_radarrun(self) -> None:
         if self._rr_sph is not None:
@@ -14187,7 +14187,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                      bool(getattr(self, "_mmx_last_forming", True)), _last_closed_et,
                      tuple(cb.isChecked() for cb in self.menu.layer_checks.values()),
                      round(self.menu.swing_pct(), 4), round(getattr(self, "_wall_floor", 0.0), 4),
-                     round(getattr(self, "_reward_strength", 0.0), 2))
+                     round(getattr(self, "_reward_strength", 0.0), 2),
+                     getattr(self, "_bp_rev", 0))   # Big Player tape revision (user 2026-09-06: prints must show at
+            #                                         once -- this gate only moved on a NEW candle, so a whale print
+            #                                         landing mid-candle stayed invisible until the candle CLOSED)
             if _nsig == self._nosel_sig:
                 return
             self._nosel_sig = _nsig
