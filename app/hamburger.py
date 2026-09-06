@@ -276,6 +276,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     chartFilterChanged = QtCore.Signal(int)
     layerToggled = QtCore.Signal(str, bool)
     subWidgetToggled = QtCore.Signal(str, bool)
+    archiveChanged = QtCore.Signal()      # a toggle row was archived / unarchived (persist)
     scannerChanged = QtCore.Signal(str)
     scan_time_changed = QtCore.Signal()   # user moved the scanner "Zero Point"
     replayToggled = QtCore.Signal(bool)   # Replay Mode on/off (default OFF; chart replays from the Start Date)
@@ -302,6 +303,14 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.hide()
         self.layer_checks: dict[str, QtWidgets.QCheckBox] = {}
         self.sub_checks: dict[str, QtWidgets.QCheckBox] = {}
+        # ARCHIVE (user 2026-09-06): every top-level toggle row is registered (_row_register) with the layout
+        # entries that belong to it (its checkbox + the sliders / sub-toggles built right under it) so the whole
+        # row can move to the bottom Archive dropdown and back. _archived = {key: origin dropdown title}.
+        self._rows: dict = {}
+        self._row_order: dict = {}
+        self._archived: dict = {}
+        self._archive_subs: dict = {}
+        self._archive_restoring = False
         self.toggle_button: QtWidgets.QWidget | None = None   # set by the window: the [☰] that opens us
         self._scale_labels: dict[str, str] = {}   # last-rendered "N× (~vol)" per tf (flicker-free)
         self._build()
@@ -571,6 +580,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 _hdr2 = QtWidgets.QLabel("Extreme Lines Order Walls" if key == "ema_walls" else "POC")
                 _hdr2.setStyleSheet("color:#8b93a3; font-size:10px; padding-left:18px; padding-top:2px;")
                 self.sub_section.addWidget(_hdr2)
+            _i0 = self.sub_section.body_lay.count()          # ARCHIVE: this row starts here (after any group header)
             cb = QtWidgets.QCheckBox(("· " + label) if _ema_grp else label)
             if _ema_grp:
                 cb.setStyleSheet("QCheckBox{ padding-left:%dpx; color:#aeb4c0; font-size:10px; }"
@@ -581,6 +591,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             cb.toggled.connect(lambda on, k=key: self.subWidgetToggled.emit(k, on))
             self.sub_checks[key] = cb
             self.sub_section.addWidget(cb)
+            self._row_register(self.sub_section, "Sub-Widgets", key, cb, _i0)
         root.addWidget(self.sub_section)
 
         # --- m10_ toggle accordions (A4) — same layer_state framework across four grouped sections. setChecked
@@ -595,12 +606,22 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             root.addWidget(_sec)
 
         root.addStretch(1)
+        # --- ARCHIVE (user 2026-09-06): the VERY BOTTOM of the menu, nothing below it. Right-click a toggle in any
+        #     dropdown -> 'Archive' moves that row (checkbox + its sliders / sub-toggles) into Archive > <dropdown>;
+        #     right-click it there -> 'Unarchive' puts it back where it was. Persisted (terminal_ui.json 'archived'). ---
+        self.archive_section = CollapsibleSection("Archive", expanded=False)
+        self._archive_hint = QtWidgets.QLabel("(empty — right-click a toggle in any dropdown to archive it)")
+        self._archive_hint.setWordWrap(True)
+        self._archive_hint.setStyleSheet("color:#6b7280; font-size:10px; padding:0 2px;")
+        self.archive_section.addWidget(self._archive_hint)
+        root.addWidget(self.archive_section)
 
     def _build_layer_section(self, title: str, items, expanded: bool = True) -> "CollapsibleSection":
         """Build one m10_ toggle accordion from `items`. Checkboxes go into self.layer_checks (section-agnostic),
         the swing-sensitivity slider is placed under its own toggle in THIS section, and the bell gets a tooltip."""
         sec = CollapsibleSection(title, expanded=expanded)
         for key, label, default, enabled in items:
+            _i0 = sec.body_lay.count()                       # ARCHIVE: this row = everything added from here on
             cb = QtWidgets.QCheckBox(label)
             cb.setChecked(default)
             cb.setEnabled(enabled)                       # Phase-3 placeholders: visible but non-clickable
@@ -651,7 +672,125 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_radarrun_htf_subtoggles(sec)  # + 1h / 4h signals on lower tfs (colour-matched to the htf walls)
             if key == "m10_stats":
                 self._build_stats_substats(sec)          # per-stat on/off for the Mode-10 stats box
+            self._row_register(sec, title, key, cb, _i0)
         return sec
+
+    # ------------------------------------------------------------------ ARCHIVE (user 2026-09-06)
+    def _row_register(self, sec, title: str, key: str, cb, i0: int) -> None:
+        """Remember which layout entries (widgets / sub-layouts) of `sec` form the toggle row `key` (from index i0
+        to the current end) + arm the right-click menu on its checkbox."""
+        lay = sec.body_lay; ents = []
+        for j in range(i0, lay.count()):
+            it = lay.itemAt(j)
+            if it.widget() is not None:
+                ents.append(("w", it.widget()))
+            elif it.layout() is not None:
+                ents.append(("l", it.layout()))
+        self._rows[key] = {"sec": sec, "title": title, "ents": ents}
+        self._row_order.setdefault(title, []).append(key)
+        cb.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        cb.customContextMenuRequested.connect(lambda pos, k=key, w=cb: self._row_context_menu(k, w, pos))
+
+    def _row_menu(self, key: str, w) -> "QtWidgets.QMenu":
+        """The right-click menu of a toggle row: 'Archive' (row in its dropdown) or 'Unarchive' (row in the Archive)."""
+        menu = QtWidgets.QMenu(w)
+        if key in self._archived:
+            menu.addAction("Unarchive").triggered.connect(lambda _c=False, k=key: self.unarchive_row(k))
+        else:
+            menu.addAction("Archive").triggered.connect(lambda _c=False, k=key: self.archive_row(k))
+        return menu
+
+    def _row_context_menu(self, key: str, w, pos) -> None:
+        self._row_menu(key, w).exec(w.mapToGlobal(pos))
+
+    @staticmethod
+    def _index_of(lay, obj) -> int:
+        for j in range(lay.count()):
+            it = lay.itemAt(j)
+            if it.widget() is obj or it.layout() is obj:
+                return j
+        return -1
+
+    @classmethod
+    def _detach(cls, lay, ents) -> None:
+        for _kind, obj in ents:
+            j = cls._index_of(lay, obj)
+            if j >= 0:
+                lay.takeAt(j)
+
+    @staticmethod
+    def _attach(lay, ents, at=None) -> None:
+        for kind, obj in ents:
+            if at is None:
+                lay.addWidget(obj) if kind == "w" else lay.addLayout(obj)
+            else:
+                lay.insertWidget(at, obj) if kind == "w" else lay.insertLayout(at, obj)
+                at += 1
+            if kind == "w":
+                obj.setVisible(True)
+
+    def _archive_emit(self) -> None:
+        self._archive_hint.setVisible(not self._archived)
+        if not self._archive_restoring:
+            self.archiveChanged.emit()
+
+    def archive_row(self, key: str) -> None:
+        """Move the toggle row `key` (checkbox + its sliders / sub-toggles) into Archive > <its dropdown>. The
+        checkbox stays wired (layer_checks / sub_checks), so the toggle keeps working from the archive."""
+        row = self._rows.get(key)
+        if row is None or key in self._archived:
+            return
+        self._detach(row["sec"].body_lay, row["ents"])
+        sub = self._archive_subs.get(row["title"])
+        if sub is None:
+            sub = CollapsibleSection(row["title"], expanded=True)
+            self._archive_subs[row["title"]] = sub
+            self.archive_section.addWidget(sub)
+        self._attach(sub.body_lay, row["ents"])
+        sub.setVisible(True)
+        self._archived[key] = row["title"]
+        self._archive_emit()
+
+    def unarchive_row(self, key: str) -> None:
+        """Put an archived row back into its dropdown, at its original place: before the first LATER row of that
+        dropdown that is still there (else at the end)."""
+        row = self._rows.get(key)
+        if row is None or key not in self._archived:
+            return
+        title = self._archived.pop(key)
+        sub = self._archive_subs.get(title)
+        if sub is not None:
+            self._detach(sub.body_lay, row["ents"])
+            sub.setVisible(sub.body_lay.count() > 0)
+        order = self._row_order.get(title, []); lay = row["sec"].body_lay; at = None
+        later = order[order.index(key) + 1:] if key in order else []
+        for k2 in later:
+            if k2 in self._archived:
+                continue
+            r2 = self._rows.get(k2)
+            if r2 and r2["ents"]:
+                j = self._index_of(lay, r2["ents"][0][1])
+                if j >= 0:
+                    at = j; break
+        self._attach(lay, row["ents"], at)
+        self._archive_emit()
+
+    def archived_keys(self) -> list:
+        return list(self._archived)
+
+    def set_archived(self, keys) -> None:
+        """Session restore: archive exactly `keys` (unknown keys ignored) without emitting archiveChanged."""
+        self._archive_restoring = True
+        try:
+            for k in list(self._archived):
+                if k not in (keys or []):
+                    self.unarchive_row(k)
+            for k in (keys or []):
+                if k in self._rows and k not in self._archived:
+                    self.archive_row(k)
+        finally:
+            self._archive_restoring = False
+            self._archive_hint.setVisible(not self._archived)
 
     def _build_radarrun_subtoggle(self, section) -> None:
         """Radar Runner sub-toggle: show ONLY 'high-conviction' breakouts — the breakout bar's STRENGTH is forceful

@@ -1959,6 +1959,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # applied to the checkboxes once the menu is wired (_apply_saved_toggles). _loading_ui suppresses
         # save churn while restoring.
         self._saved_toggles: dict = {}
+        self._saved_archived: list = []              # hamburger ARCHIVE rows (menu keys), restored with the toggles
         self._loading_ui: bool = False
         # Timeframe: seed from the ctor arg HERE, before _load_ui_state, so a persisted "tf" can override it
         # (same convention as pivot_audio above). NOTE the arg was previously used ONLY for the window title
@@ -2209,6 +2210,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.chartFilterChanged.connect(lambda v: setattr(self.depthwall_item, "threshold", float(v)))
         self.menu.layerToggled.connect(self._toggle_layer)
         self.menu.subWidgetToggled.connect(self._toggle_subwidget)
+        self.menu.archiveChanged.connect(lambda: None if self._loading_ui else self._save_ui_state())   # ARCHIVE persists
         self.menu.helpRequested.connect(self._show_shortcuts)
         self._apply_saved_toggles()                # restore EVERY hamburger toggle from the saved state
         self.menu.scannerChanged.connect(self._set_scanner)
@@ -2911,6 +2913,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.dom_panel.set_min_usd(max(0.0, _dm))                                     # player MIN SIZE
             self.menu.set_start_windows(getattr(self, "_saved_start_windows", None)
                                         or list(_DEFAULT_START_WINDOWS))                  # Window on Start
+            self.menu.set_archived(getattr(self, "_saved_archived", None) or [])          # ARCHIVE dropdown rows
         finally:
             self._loading_ui = False
         # CHART SOURCE persists too (2026-08-24): it silently reset to Volume Buckets on every relaunch, so clock-
@@ -9744,6 +9747,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     **{k: cb.isChecked() for k, cb in _m.sub_checks.items()},
                     **{k: cb.isChecked() for k, cb in _m.layer_checks.items() if cb.isEnabled()},
                 }
+                state["archived"] = list(_m.archived_keys())              # rows moved to the bottom Archive dropdown
             with open(os.path.join(config.DATA_DIR, "terminal_ui.json"), "w") as f:
                 json.dump(state, f)
         except OSError:
@@ -9781,6 +9785,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._dom_saved = (0.01, 3600, 0.0)
         _sw = s.get("start_windows")
         self._saved_start_windows = [str(x) for x in _sw] if isinstance(_sw, list) else None
+        _ar = s.get("archived")
+        self._saved_archived = [str(x) for x in _ar] if isinstance(_ar, list) else []   # applied in _apply_saved_toggles
         _lm = s.get("ls_mode")
         if _lm is None:                                       # migrate the old boolean: True (both) -> 2, else 0
             _lm = 2 if s.get("largesmall") else 0
