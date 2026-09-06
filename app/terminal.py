@@ -1514,7 +1514,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._bp_buy = None; self._bp_sell = None; self._bp_lbls = []   # plot items (lazy)
         self._bp_sweeps = deque(maxlen=5000)                    # SWEEPS: (ts_s, p_first, p_last, usd, side, n_levels)
         self._bp_swp_pend = None                                # the live tape's last same-ms group, still growing
-        self._bp_swp_items = []                                 # pooled {"cap", "lvl", "lbl"} per drawn sweep
+        self._bp_swp_buy = None; self._bp_swp_sell = None; self._bp_swp_lbls = []   # sweep DIAMONDS + amounts (lazy)
         self._bp_sig = None
         self._c1m_ets = None; self._c1m_sides = None           # '1m confirm' sub-toggle: sorted 1m-clock fire times/sides
         self._c1m_mtime = 0.0; self._c1m_check = 0.0           # (from radarrun_fired.json, mtime-cached, ~3s re-stat)
@@ -10974,54 +10974,52 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _l.setPos(x, price); _l.setVisible(True)
             else:
                 _l.setVisible(False)
-        # SWEEPS (user 2026-09-06): one taker order that ate through >= 2 levels (same ms + side), total >= the
-        # slider -> a vertical CAPSULE from its first to its last fill price at its bar (green buy / red sell,
-        # width grows with the $ like the bubbles), the $ total + levels eaten at its far end, and a dashed
-        # level line from that end price (where the book absorbed the order) to the live edge.
+        # SWEEPS (user 2026-09-06): one taker order that ate through >= 2 levels (same ms + side), TOTAL >= the
+        # slider -> a DIAMOND bubble at its bar and end price (where the book absorbed the order), diameter
+        # growing with the total like the round bubbles, the total amount centred on it. Green buy / red sell.
+        # Round = one print, diamond = one order that walked the book. (The user rejected capsules + lines.)
         if not _sw_on:
             self._clear_bp_sweeps()
             return
+        if self._bp_swp_buy is None:
+            self._bp_swp_buy = pg.ScatterPlotItem(pxMode=True, symbol="d", pen=pg.mkPen((40, 230, 120, 235), width=1.5),
+                                                  brush=pg.mkBrush(40, 230, 120, 120))
+            self._bp_swp_sell = pg.ScatterPlotItem(pxMode=True, symbol="d", pen=pg.mkPen((240, 70, 90, 235), width=1.5),
+                                                   brush=pg.mkBrush(240, 70, 90, 120))
+            for _it in (self._bp_swp_buy, self._bp_swp_sell):
+                _it.setZValue(31); self.plot.addItem(_it, ignoreBounds=True)
         srows = [s for s in self._bp_sweeps if s[3] >= thr and s[0] <= ets[-1] + 1e-6]
         if ets[0] > 0 and ets[0] < live_start:
             from . import bigprint_store
             sarch = bigprint_store.load_sweeps(ets[0] - 1.0, min(float(ets[-1]), live_start) - 1e-6, thr,
                                                int(config.BIGPLAYER_SWEEP_MIN_LEVELS))
             srows = [s for s in sarch if s[0] < live_start] + srows
-        drawn = []
-        for (t, p0, p1, usd, side, nl) in srows[-int(config.BIGPLAYER_SWEEP_MAX):]:
+        smerged = {}                                            # (bar, end price, side) -> summed total
+        for (t, p0, p1, usd, side, nl) in srows:
             i = int(np.searchsorted(ets, t))
-            if i >= n or p0 == p1:
+            if i >= n:
                 continue
-            drawn.append((i, p0, p1, usd, int(side > 0), nl))
-        _xr = float(n - 1) + 0.5
-        for k, (i, p0, p1, usd, buy, nl) in enumerate(drawn):
-            if k >= len(self._bp_swp_items):
-                _cap = pg.PlotCurveItem(); _cap.setZValue(30)
-                _lvl = pg.PlotCurveItem(); _lvl.setZValue(29)
-                _lb = pg.TextItem(anchor=(0.5, 1.0)); _lb.setZValue(32)
-                for _it in (_cap, _lvl):
-                    self.plot.addItem(_it, ignoreBounds=True)
-                self.plot.addItem(_lb, ignoreBounds=True)
-                self._bp_swp_items.append({"cap": _cap, "lvl": _lvl, "lbl": _lb, "sig": None})
-            _d = self._bp_swp_items[k]
-            _sg = (i, round(p0, 6), round(p1, 6), round(usd, 2), buy, nl, _xr, thr)
-            if _d["sig"] != _sg:
-                _rgb = (40, 230, 120) if buy else (240, 70, 90)
-                _w = max(6.0, 0.6 * self._bp_bubble_px(usd, thr))
-                _pc = pg.mkPen(_rgb[0], _rgb[1], _rgb[2], 150, width=_w); _pc.setCosmetic(True)
-                _pc.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
-                _d["cap"].setPen(_pc); _d["cap"].setData([float(i), float(i)], [p0, p1])
-                _pl = pg.mkPen(_rgb[0], _rgb[1], _rgb[2], 170, width=1.2); _pl.setCosmetic(True)
-                _pl.setDashPattern([6.0, 4.0])
-                _d["lvl"].setPen(_pl); _d["lvl"].setData([float(i), _xr], [p1, p1])
-                _d["lbl"].setText("%s ⇑%d" % (_fmt_usd(usd), nl) if buy else "%s ⇓%d" % (_fmt_usd(usd), nl),
-                                  color=(240, 244, 250))
-                _d["lbl"].setAnchor((0.5, 1.0) if buy else (0.5, 0.0))   # above the top / below the bottom
-                _d["lbl"].setPos(float(i), p1)
-                _d["sig"] = _sg
-            _d["cap"].setVisible(True); _d["lvl"].setVisible(True); _d["lbl"].setVisible(True)
-        for _d in self._bp_swp_items[len(drawn):]:
-            _d["cap"].setVisible(False); _d["lvl"].setVisible(False); _d["lbl"].setVisible(False)
+            key = (i, round(p1, 4), int(side > 0))
+            smerged[key] = smerged.get(key, 0.0) + usd
+        slevels = sorted(smerged.items())[-int(config.BIGPLAYER_SWEEP_MAX):]
+        dbx = []; dby = []; dbs = []; dsx = []; dsy = []; dss = []; slabels = []
+        for (i, price, buy), usd in slevels:
+            px = self._bp_bubble_px(usd, thr) * 1.15            # a diamond's diagonal reads a touch smaller
+            if buy:
+                dbx.append(float(i)); dby.append(price); dbs.append(px)
+            else:
+                dsx.append(float(i)); dsy.append(price); dss.append(px)
+            slabels.append((float(i), price, _fmt_usd(usd)))
+        self._bp_swp_buy.setData(x=dbx, y=dby, size=dbs); self._bp_swp_sell.setData(x=dsx, y=dsy, size=dss)
+        while len(self._bp_swp_lbls) < len(slabels):
+            _t = pg.TextItem(anchor=(0.5, 0.5)); _t.setZValue(32); self.plot.addItem(_t, ignoreBounds=True)
+            self._bp_swp_lbls.append(_t)
+        for k, _l in enumerate(self._bp_swp_lbls):
+            if k < len(slabels):
+                x, price, txt = slabels[k]
+                _l.setText(txt, color=(240, 244, 250)); _l.setPos(x, price); _l.setVisible(True)
+            else:
+                _l.setVisible(False)
 
     @staticmethod
     def _bp_bubble_px(usd: float, thr: float) -> float:
@@ -11032,8 +11030,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return max(10.0, min(46.0, r))
 
     def _clear_bp_sweeps(self) -> None:
-        for _d in self._bp_swp_items:
-            _d["cap"].setVisible(False); _d["lvl"].setVisible(False); _d["lbl"].setVisible(False)
+        if self._bp_swp_buy is not None:
+            self._bp_swp_buy.setData(x=[], y=[]); self._bp_swp_sell.setData(x=[], y=[])
+        for _l in self._bp_swp_lbls:
+            _l.setVisible(False)
 
     def _clear_bigplayer(self) -> None:
         if self._bp_buy is not None:
