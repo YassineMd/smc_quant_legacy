@@ -587,10 +587,19 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                                 "ema_poc_line_cur", "ema_zone_mode", "ema_lvl_boxes")
             _ema_grp = _wall_grp or key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
                                             "ema_stack", "ema_trendlvl", "ema_trendvp")
-            if key == "ema20":                       # group header — the EMA entries render as indented sub-toggles
-                _hdr = QtWidgets.QLabel("EMA")
-                _hdr.setStyleSheet("color:#8b93a3; font-size:10px; padding-left:2px; padding-top:3px;")
-                self.sub_section.addWidget(_hdr)
+            if key == "ema20":                       # EMA MASTER (user 2026-09-06): the old 'EMA' header is a checkbox
+                _ema_i0 = self.sub_section.body_lay.count()   # that gates the whole family; master + children = ONE
+                _mcb = QtWidgets.QCheckBox("EMA")             # archivable row ('ema')
+                _mcb.setStyleSheet("QCheckBox{ color:#c9d0dc; font-size:10px; font-weight:bold; padding-left:2px;"
+                                   " padding-top:3px; }")
+                _mcb.setToolTip("Master switch for every EMA sub-widget below (lines, High/Low, Stack Flips, Trend "
+                                "Extremes, walls, POC, zones, ladder boxes, Trend VP). Off = all hidden at once; the "
+                                "sub-toggles keep their states and come back as they were.")
+                _mcb.setChecked(True)
+                _mcb.toggled.connect(self._ema_master_changed)
+                _mcb.toggled.connect(lambda on: self.subWidgetToggled.emit("ema", on))
+                self.sub_checks["ema"] = _mcb
+                self.sub_section.addWidget(_mcb)
             if key in ("ema_walls", "ema_poc"):      # nested sub-group headers inside EMA
                 _hdr2 = QtWidgets.QLabel("Extreme Lines Order Walls" if key == "ema_walls" else "POC")
                 _hdr2.setStyleSheet("color:#8b93a3; font-size:10px; padding-left:18px; padding-top:2px;")
@@ -606,7 +615,10 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             cb.toggled.connect(lambda on, k=key: self.subWidgetToggled.emit(k, on))
             self.sub_checks[key] = cb
             self.sub_section.addWidget(cb)
-            self._row_register(self.sub_section, "Sub-Widgets", key, cb, _i0)
+            if not _ema_grp:
+                self._row_register(self.sub_section, "Sub-Widgets", key, cb, _i0)
+            elif key == "ema_trendvp":               # the last EMA entry -> register the whole family as one row
+                self._row_register(self.sub_section, "Sub-Widgets", "ema", self.sub_checks["ema"], _ema_i0)
         root.addWidget(self.sub_section)
 
         # --- m10_ toggle accordions (A4) — same layer_state framework across four grouped sections. setChecked
@@ -689,6 +701,12 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_stats_substats(sec)          # per-stat on/off for the Mode-10 stats box
             self._row_register(sec, title, key, cb, _i0)
         return sec
+
+    def _ema_master_changed(self, on: bool) -> None:
+        """EMA master: grey the EMA sub-toggles out while it is off (their checked states are kept + persisted)."""
+        for k, c in self.sub_checks.items():
+            if k != "ema" and k.startswith("ema"):
+                c.setEnabled(bool(on))
 
     # ------------------------------------------------------------------ ARCHIVE (user 2026-09-06)
     def _row_register(self, sec, title: str, key: str, cb, i0: int) -> None:

@@ -2271,7 +2271,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         builders reach PAST the chart's days-to-show setting, which is exactly the requested override.
         Only active while the toggle is on; capped by the callers."""
         try:
-            _cb = self.menu.sub_checks.get("ema_trendlvl")
+            _cb = self._ema_cb("ema_trendlvl")            # gated by the EMA master too
             if _cb is None or not _cb.isChecked():
                 return None
         except Exception:
@@ -2741,6 +2741,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._apply_chart_style(bool(on))
             except Exception:
                 pass
+        if key == "ema":                                 # EMA MASTER (user 2026-09-06): gate the whole family at once --
+            try:
+                self.menu._ema_master_changed(bool(on))  # grey the children (a session restore sets the box with
+            except Exception:                            # signals blocked, so the menu's own slot does not fire)
+                pass
+            _prev = self._loading_ui                     # OFF hides every EMA item now (the draw path then reads every
+            self._loading_ui = True                      # child as unchecked via _ema_cb); ON re-applies each child's own
+            try:                                         # state (caches reset -> redrawn next frame). One save at the end.
+                for _k in self._EMA_KEYS:
+                    _c = self.menu.sub_checks.get(_k)
+                    try:
+                        self._toggle_subwidget(_k, bool(on and _c is not None and _c.isChecked()))
+                    except Exception:
+                        pass
+            finally:
+                self._loading_ui = _prev
         if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
                    "ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls", "ema_walls_prev",
                    "ema_walls_line", "ema_walls_merge",
@@ -7570,6 +7586,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_deep = (_key, _bars)
         return _bars
 
+    _EMA_KEYS = ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread", "ema_stack", "ema_trendlvl", "ema_walls",
+                 "ema_walls_prev", "ema_walls_line", "ema_walls_merge", "ema_poc", "ema_poc_prev", "ema_poc_line",
+                 "ema_poc_line_cur", "ema_zone_mode", "ema_lvl_boxes", "ema_trendvp")
+
+    class _EmaOff:
+        """Stand-in for every EMA sub-toggle while the 'EMA' master (Sub-Widgets) is OFF: always unchecked."""
+        @staticmethod
+        def isChecked() -> bool:
+            return False
+    _EMA_OFF = _EmaOff()
+
+    def _ema_cb(self, key: str):
+        """The EMA sub-toggle checkbox `key` -- or the always-unchecked stand-in while the EMA master is OFF, so every
+        EMA read in the draw path sees 'off' without the children losing their states (user 2026-09-06)."""
+        _m = self.menu.sub_checks.get("ema")
+        if _m is not None and not _m.isChecked():
+            return self._EMA_OFF
+        return self.menu.sub_checks.get(key)
+
     _EMAS = (("ema20", 20, (250, 180, 60)),                   # amber
              ("ema50", 50, (90, 170, 255)),                   # blue
              ("ema100", 100, (200, 120, 255)))                # purple
@@ -7582,12 +7617,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         n = len(buckets)
         _forming = bool(getattr(self, "_mmx_last_forming", True))
         m = (n - 1) if (_forming and n > 1) else n            # CLOSED bars
-        _extcb = self.menu.sub_checks.get("ema_ext")          # 'EMA High/Low Lines' sub-toggle (rides each EMA)
+        _extcb = self._ema_cb("ema_ext")          # 'EMA High/Low Lines' sub-toggle (rides each EMA)
         _ext_on = _extcb is not None and _extcb.isChecked()
-        _rdcb = self.menu.sub_checks.get("ema_hlread")        # readout text on/off (the LINES stay either way)
+        _rdcb = self._ema_cb("ema_hlread")        # readout text on/off (the LINES stay either way)
         _rd_on = _rdcb is None or _rdcb.isChecked()
         for key, p, rgb in self._EMAS:
-            cb = self.menu.sub_checks.get(key)
+            cb = self._ema_cb(key)                            # gated by the EMA master
             item = self._ema_items.get(key)
             if cb is None or not cb.isChecked() or m < p + 1:
                 if item is not None:
@@ -7702,31 +7737,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # (short) both NEGATIVE. If the deltas don't match at the cross itself, the line appears LATER, the
         # bar they first do (user report: cross first, deltas confirmed after -> line was missing). One line
         # per regime at most. Independent of the EMA line toggles; from bar 50 on (slowest-EMA warmup).
-        _scb = self.menu.sub_checks.get("ema_stack")
-        _lcb = self.menu.sub_checks.get("ema_trendlvl")
-        _vcb = self.menu.sub_checks.get("ema_trendvp")
+        _scb = self._ema_cb("ema_stack")
+        _lcb = self._ema_cb("ema_trendlvl")
+        _vcb = self._ema_cb("ema_trendvp")
         _stk_on = _scb is not None and _scb.isChecked()
         _lvl_on = _lcb is not None and _lcb.isChecked()       # 'Trend Extreme Lines' need the flips too
         _vp_on = _vcb is not None and _vcb.isChecked()        # ... and so does the Trend VP (span anchors)
-        _wcb = self.menu.sub_checks.get("ema_walls")
+        _wcb = self._ema_cb("ema_walls")
         _wl_on = _wcb is not None and _wcb.isChecked()        # ... and the per-zone order walls (current band)
-        _wpcb = self.menu.sub_checks.get("ema_walls_prev")
+        _wpcb = self._ema_cb("ema_walls_prev")
         _wlp_on = _wpcb is not None and _wpcb.isChecked()     # ... and the same for the PRECEDING band
-        _wlncb = self.menu.sub_checks.get("ema_walls_line")
+        _wlncb = self._ema_cb("ema_walls_line")
         _wln_on = _wlncb is not None and _wlncb.isChecked()   # 'To Lines': draw each wall as its MIDDLE line
-        _wmgcb = self.menu.sub_checks.get("ema_walls_merge")
+        _wmgcb = self._ema_cb("ema_walls_merge")
         _wmg_on = _wmgcb is not None and _wmgcb.isChecked()   # 'Merged Lines': one AREA per zone instead
-        _pccb = self.menu.sub_checks.get("ema_poc")
+        _pccb = self._ema_cb("ema_poc")
         _pc_on = _pccb is not None and _pccb.isChecked()      # ... and the per-zone POCs
-        _pcpcb = self.menu.sub_checks.get("ema_poc_prev")
+        _pcpcb = self._ema_cb("ema_poc_prev")
         _pcp_on = _pcpcb is not None and _pcpcb.isChecked()
-        _plcb = self.menu.sub_checks.get("ema_poc_line")
+        _plcb = self._ema_cb("ema_poc_line")
         _pl_on = _plcb is not None and _plcb.isChecked()      # 'POC per line': one POC hline per flip segment
-        _plccb = self.menu.sub_checks.get("ema_poc_line_cur")
+        _plccb = self._ema_cb("ema_poc_line_cur")
         _plc_on = _plccb is not None and _plccb.isChecked()   # 'Current trend': the marks of the CURRENT trend only
-        _lbcb = self.menu.sub_checks.get("ema_lvl_boxes")
+        _lbcb = self._ema_cb("ema_lvl_boxes")
         _lb_on = _lbcb is not None and _lbcb.isChecked()      # 'Ladder boxes': the level-to-level path boxes
-        _zmcb = self.menu.sub_checks.get("ema_zone_mode")
+        _zmcb = self._ema_cb("ema_zone_mode")
         _zm_on = _zmcb is None or _zmcb.isChecked()           # 'Zones' (user 2026-09-06): POC + extreme-line ZONE rects
         if ((not _stk_on and not _lvl_on and not _vp_on and not _wl_on and not _wlp_on
              and not _pc_on and not _pcp_on and not _wmg_on and not _wln_on and not _pl_on and not _plc_on
