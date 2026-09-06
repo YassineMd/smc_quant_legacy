@@ -435,6 +435,19 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         root.addWidget(self.scanner_combo)
         self._build_heatmap_section(root)                # 'Heatmap' dropdown (contrast + bubble vol) — Heatmap-mode only
 
+        # --- Chart Style (user 2026-09-06): "Simple BW" = white canvas + black candles (bearish = black fill,
+        #     bullish = hollow; black borders + wicks). OFF = the dark scanner theme + flow-coloured candles.
+        #     Lives in sub_checks so it persists with the other panel toggles (terminal_ui.json). ---
+        root.addWidget(self._header("Chart Style"))
+        _bw = QtWidgets.QCheckBox("Simple BW  (white canvas · black candles)")
+        _bw.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        _bw.setToolTip("Simple black & white chart: white background; bearish candle = black fill + black border/wicks; "
+                       "bullish candle = hollow (no fill) + black border/wicks. Off = the dark chart. Persists.")
+        _bw.setChecked(False)
+        _bw.toggled.connect(lambda on: self.subWidgetToggled.emit("simple_bw", on))
+        self.sub_checks["simple_bw"] = _bw
+        root.addWidget(_bw)
+
         # --- Window on Start (user 2026-09-01): ORDERED multi-select of the windows the terminal
         # opens on launch. The order you CHECK them in = the order they open in. Collapsed by
         # default; the summary line always shows the current sequence. Persisted in terminal_ui. ---
@@ -1091,6 +1104,11 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     def _on_bp_slider(self, _v: int) -> None:
         self.bp_lbl.setText("≥ " + self._bub_fmt_usd(self.big_player_min_usd()))
         self.bigPlayerMinUsdChanged.emit(self.big_player_min_usd())
+
+    def simple_bw(self) -> bool:
+        """Chart Style toggle: True = 'Simple BW' (white canvas, black candles)."""
+        cb = self.sub_checks.get("simple_bw")
+        return bool(cb is not None and cb.isChecked())
 
     def big_player_min_usd(self) -> float:
         t = self.bp_slider.value() / 1000.0

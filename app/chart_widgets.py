@@ -708,6 +708,12 @@ class BucketCandleItem(pg.GraphicsObject):
         self._width = 0.8
         self._vx0, self._vx1 = float("-inf"), float("inf")
 
+    def set_neutral(self, color) -> None:
+        """Wick/border colour used when a candle has no per-candle pen + the zero-range flat-line pen (Simple BW
+        chart style: black; the dark theme: #888888). Takes effect on the next update_data/set_view rebuild."""
+        self._pen = QtGui.QPen(QtGui.QColor(color)); self._pen.setCosmetic(True)
+        self._flat_pen = QtGui.QPen(QtGui.QColor(color)); self._flat_pen.setCosmetic(True); self._flat_pen.setWidth(2)
+
     def update_data(self, x: list, opens: list, highs: list, lows: list,
                     closes: list, brushes: list, pens: list, width: float = 0.8,
                     x0: float = None, x1: float = None) -> None:

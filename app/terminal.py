@@ -2335,7 +2335,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not is_canvas:
             self.drawer.cancel()   # drop any armed tool + hide its edit panel
         self._hide_price_overlays()
-        self._apply_scanner_theme(dark=True)     # enhancement §3
+        self._apply_chart_theme(self._simple_bw())   # enhancement §3 (+ Chart Style: a mode switch keeps Simple BW)
         self._scanner_needs_autofit = True       # one-shot fit for the new mode
         self._scanner_bucket_sig = None
         self._last_scanner_sig = None
@@ -2734,6 +2734,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None   # force _draw_scanner to re-run -> repaint
 
     def _toggle_subwidget(self, key: str, on: bool) -> None:
+        if key == "simple_bw":                           # CHART STYLE (user 2026-09-06): white canvas + black candles
+            try:
+                self._apply_chart_style(bool(on))
+            except Exception:
+                pass
         if key in ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread",
                    "ema_stack", "ema_trendlvl", "ema_trendvp", "ema_walls", "ema_walls_prev",
                    "ema_walls_line", "ema_walls_merge",
@@ -17383,6 +17388,49 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # Polish-pass shared helpers (theme, value trackers, formatting)
     # ------------------------------------------------------------------
+    def _simple_bw(self) -> bool:
+        """Chart Style 'Simple BW' on? (hamburger sub-toggle; False when the menu is not built yet)."""
+        try:
+            return bool(self.menu.simple_bw())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _simple_bw_palette(opens, closes):
+        """Simple BW candle palette (user 2026-09-06): bearish (close < open) = BLACK fill, bullish (close >= open) =
+        NO fill; every border + wick black, 1 px cosmetic. Returns (brushes, pens) aligned with the candles."""
+        blk = pg.mkPen(0, 0, 0, width=1.0); blk.setCosmetic(True)
+        fill = pg.mkBrush(0, 0, 0, 255); hollow = pg.mkBrush(None)
+        n = min(len(opens), len(closes))
+        brushes = [fill if float(closes[i]) < float(opens[i]) else hollow for i in range(n)]
+        return brushes, [blk] * n
+
+    def _apply_chart_theme(self, bw: bool) -> None:
+        """Canvas + axes (the existing dark/light morph), crosshair / live-price line pens and the neutral candle pen
+        for the Chart Style: Simple BW = white canvas, black axes/crosshair/pen; OFF = the dark scanner theme. No
+        redraw here -- the mode switch calls it mid-setup; _apply_chart_style adds the forced repaint."""
+        self._apply_scanner_theme(dark=not bw)
+        _c = (0, 0, 0, 150) if bw else (170, 170, 170, 150)
+        for _ln in (getattr(self, "vline", None), getattr(self, "hline", None), getattr(self, "_live_pline", None)):
+            if _ln is None:
+                continue
+            _p = pg.mkPen(color=_c, width=1); _p.setCosmetic(True); _p.setDashPattern([4.0, 8.0]); _ln.setPen(_p)
+        _h = getattr(self, "_scan_handles", None)
+        _bc = _h.get("bc_candles") if isinstance(_h, dict) else None
+        if _bc is not None:
+            _bc.set_neutral("#000000" if bw else "#888888")
+
+    def _apply_chart_style(self, bw: bool) -> None:
+        """Chart Style switch (the hamburger toggle): apply the theme, then a forced scanner repaint so the candles
+        re-render with the BW palette (the draw gate would otherwise keep the old picture)."""
+        self._apply_chart_theme(bw)
+        self._scanner_bucket_sig = self._last_scanner_sig = None
+        self._fp_sig = None
+        try:
+            self._draw_scanner()
+        except Exception:
+            pass
+
     def _apply_scanner_theme(self, dark: bool) -> None:
         """Morph the canvas between the dark scanner theme and light chart theme (§3)."""
         if dark:
@@ -18988,10 +19036,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         brushes/wick_pens are the FINAL (post abnormal-velocity) arrays from the caller."""
         opens, highs, lows, closes = arr["opens"], arr["highs"], arr["lows"], arr["closes"]
         baseline_arr = arr["baseline"]
+        _bw = plot is self.plot and self._simple_bw()                  # CHART STYLE 'Simple BW': main chart only
+        if _bw:
+            brushes, wick_pens = self._simple_bw_palette(opens, closes)   # bearish black fill / bullish hollow, black wicks
         if "bc_candles" not in handles:
             handles["bc_candles"] = add_item(BucketCandleItem())
             handles["bc_baseline"] = add_item(pg.PlotCurveItem(pen=pg.mkPen((180, 180, 180, 150), width=1.5,
                                                                             style=QtCore.Qt.DashLine)))
+        if plot is self.plot:
+            handles["bc_candles"].set_neutral("#000000" if _bw else "#888888")
         if "bc_whisker" not in handles:
             handles["bc_whisker"] = add_item(WhiskerBarItem())
         if "bc_fpcandle" not in handles:
