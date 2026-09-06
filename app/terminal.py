@@ -10921,6 +10921,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         thr = float(self.menu.big_player_min_usd())
         last_t = self._bp_trades[-1][0] if self._bp_trades else 0.0
         _sw_on = bool(self.menu.layer_state("m10_bigplayer_sweeps"))
+        _bw = self._simple_bw()
+        _txtc = (0, 0, 0) if _bw else (240, 244, 250)          # amount text: BLACK on the Simple BW chart (user 2026-09-06), white on dark
         try:
             _ypx = float(self.vb.viewPixelSize()[1])            # a y-zoom re-evaluates the diamonds' minimum height
         except Exception:
@@ -10928,7 +10930,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _sig = (n, len(self._bp_trades), last_t, thr, self._tf,
                 float(filtered[-1].get("end_time", 0.0) or 0.0) if n else 0.0,
                 len(self._bp_sweeps), (self._bp_sweeps[-1][0], self._bp_sweeps[-1][3]) if self._bp_sweeps else None, _sw_on,
-                round(_ypx, 9))
+                round(_ypx, 9), _bw)
         if _sig == self._bp_sig:
             return
         self._bp_sig = _sig
@@ -11020,7 +11022,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for k, _l in enumerate(self._bp_lbls):
             if k < len(labels):
                 x, price, txt = labels[k]
-                _l.setText(txt, color=(240, 244, 250))         # amount centred on the bubble
+                _l.setText(txt, color=_txtc)                   # amount centred on the bubble
                 _l.setPos(x, price); _l.setVisible(True)
             else:
                 _l.setVisible(False)
@@ -11044,7 +11046,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _mid = 0.5 * (lo + hi); _h = max(float(hi - lo), _hmin)
             _px = self._bp_bubble_px(usd, thr)                  # 10..46 px -> half-width 0.25..0.45 bar
             _hw = 0.25 + 0.20 * max(0.0, min(1.0, (_px - 10.0) / 36.0))
-            _sg = (i, round(lo, 6), round(hi, 6), round(_h, 9), round(_hw, 4), buy, round(usd, 2))
+            _sg = (i, round(lo, 6), round(hi, 6), round(_h, 9), round(_hw, 4), buy, round(usd, 2), _bw)   # _bw: text colour
             if _d["sig"] != _sg:
                 if _d["buy"] != buy:
                     _rgb = (40, 230, 120) if buy else (240, 70, 90)
@@ -11053,7 +11055,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _x = float(i)
                 _d["poly"].setPolygon(QtGui.QPolygonF([QtCore.QPointF(_x, _mid + 0.5 * _h), QtCore.QPointF(_x + _hw, _mid),
                                                        QtCore.QPointF(_x, _mid - 0.5 * _h), QtCore.QPointF(_x - _hw, _mid)]))
-                _lb.setText(_fmt_usd(usd), color=(240, 244, 250)); _lb.setPos(_x, _mid)
+                _lb.setText(_fmt_usd(usd), color=_txtc); _lb.setPos(_x, _mid)
                 _d["sig"] = _sg
             _d["poly"].setVisible(True); _lb.setVisible(True)
         for _d in self._bp_swp_polys[drawn:]:
