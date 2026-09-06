@@ -337,6 +337,16 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         outer.addWidget(scroll)
         content = QtWidgets.QWidget()
         scroll.setWidget(content)
+        # DYNAMIC WIDTH (user 2026-09-06): the content must never be wider than the panel. A QCheckBox's minimum
+        # width is its FULL label, so one long label made the content 500-740 px wide inside the 308 px panel; with
+        # the horizontal bar hidden that stayed invisible until something scrolled it (a right-click -> archive gave
+        # the checkbox focus -> ensureWidgetVisible) and the whole menu shifted left. Ignored horizontal policy =
+        # the scroll area sizes the content to the viewport regardless of the children's minimums (a long label
+        # clips at the panel edge instead of widening the menu) and the horizontal bar is pinned at 0.
+        content.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
+        self._scroll = scroll
+        _hb = scroll.horizontalScrollBar()
+        _hb.valueChanged.connect(lambda v: v and _hb.setValue(0))
 
         # top-right '?' — floats above the scroll; opens the keyboard-shortcuts cheatsheet
         self.help_btn = QtWidgets.QPushButton("?", self)
@@ -361,7 +371,11 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         # volume buckets. NO number here: the buckets drawn on the chart ARE the honest scale
         # display (a menu number would restate the chart, abstract the distribution, or risk
         # showing poisoned persisted state). The tf is the stable, honest INPUT (the flow window). ---
-        root.addWidget(self._header("Bucket Scale"))
+        # --- CHART dropdown (user 2026-09-06): every control that had no dropdown of its own (Bucket Scale, Chart
+        #     Source, Candle Mode, Volume Profile Mode, Scanner Mode, Heatmap, Chart Style, Window on Start, Scan Start
+        #     Time, Replay Mode, Min Multiplier, Depth Wall Min) lives inside 'Chart' at the top (expanded by default). ---
+        _chart = self.chart_section = CollapsibleSection("Chart", expanded=True)
+        _chart.addWidget(self._header("Bucket Scale"))
         self.tf_combo = QtWidgets.QComboBox()
         # Honest scale ladder: DISPLAY "N× (~vol)" (the volume multiple the sizing produces), but
         # keep the tf string as the item KEY (userData) and emit currentData() — so the daemon
@@ -385,14 +399,14 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                     self.tf_combo.blockSignals(_b)
                     return
         self.set_tf = _set_tf
-        root.addWidget(self.tf_combo)
+        _chart.addWidget(self.tf_combo)
 
         # --- CHART SOURCE: Volume Buckets <-> Time Candles. Same window, same footprint/bubbles/stats — only the
         # data source (clock vs volume) and the x-axis (clock time vs bucket index) differ. The Bucket Scale combo
         # above doubles as the tf selector for BOTH: on 5m it's the 5x volume scale in Bucket mode, and 5-minute
         # clock candles in Time mode. (Time candles: exact OHLC/footprint/bubbles/VPIN; engine-only overlays are
         # blank because the daemon computes them for volume buckets only.) ---
-        root.addWidget(self._header("Chart Source"))
+        _chart.addWidget(self._header("Chart Source"))
         self.source_combo = QtWidgets.QComboBox()
         self.source_combo.addItem("Volume Buckets", "bucket")
         self.source_combo.addItem("Time Candles", "time")
@@ -412,42 +426,42 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                     self.source_combo.blockSignals(_b)
                     return
         self.set_chart_source = _set_chart_source
-        root.addWidget(self.source_combo)
+        _chart.addWidget(self.source_combo)
 
         # --- candle render mode (mirrors the 'W' key cycle; either changes the other) ---
-        root.addWidget(self._header("Candle Mode"))
+        _chart.addWidget(self._header("Candle Mode"))
         self.candle_combo = QtWidgets.QComboBox()
         for i, lbl in enumerate(CANDLE_MODE_LABELS):
             self.candle_combo.addItem(lbl, i)
         self.candle_combo.setToolTip("How each bucket candle is drawn. Also cycled with the 'W' key.")
         self.candle_combo.currentIndexChanged.connect(
             lambda _i: self.candleModeChanged.emit(int(self.candle_combo.currentData())))
-        root.addWidget(self.candle_combo)
+        _chart.addWidget(self.candle_combo)
 
         # --- volume-profile render mode (drives BOTH the Mode-10 selection VP and the 4h 'V' overlay) ---
-        root.addWidget(self._header("Volume Profile Mode"))
+        _chart.addWidget(self._header("Volume Profile Mode"))
         self.vp_combo = QtWidgets.QComboBox()
         for m in VP_MODE_ORDER:
             self.vp_combo.addItem(VP_MODE_LABELS[m], m)          # userData = mode VALUE (display order != value)
         self.vp_combo.setToolTip("How volume profiles are drawn — applies to the Mode-10 selection VP and the 4h 'V' overlay.")
         self.vp_combo.currentIndexChanged.connect(
             lambda _i: self.vpModeChanged.emit(int(self.vp_combo.currentData())))
-        root.addWidget(self.vp_combo)
+        _chart.addWidget(self.vp_combo)
 
         # --- order-flow scanner mode (patch §12) ---
-        root.addWidget(self._header("Scanner Mode"))
+        _chart.addWidget(self._header("Scanner Mode"))
         self.scanner_combo = QtWidgets.QComboBox()
         for key in SCANNER_MODES:
             self.scanner_combo.addItem(SCANNER_LABELS[key], key)   # label shown, key = userData
         self.scanner_combo.currentIndexChanged.connect(
             lambda _i: self.scannerChanged.emit(self.scanner_combo.currentData()))
-        root.addWidget(self.scanner_combo)
-        self._build_heatmap_section(root)                # 'Heatmap' dropdown (contrast + bubble vol) — Heatmap-mode only
+        _chart.addWidget(self.scanner_combo)
+        self._build_heatmap_section(_chart)                # 'Heatmap' dropdown (contrast + bubble vol) — Heatmap-mode only
 
         # --- Chart Style (user 2026-09-06): "Simple BW" = white canvas + black candles (bearish = black fill,
         #     bullish = hollow; black borders + wicks). OFF = the dark scanner theme + flow-coloured candles.
         #     Lives in sub_checks so it persists with the other panel toggles (terminal_ui.json). ---
-        root.addWidget(self._header("Chart Style"))
+        _chart.addWidget(self._header("Chart Style"))
         _bw = QtWidgets.QCheckBox("Simple BW  (white canvas · black candles)")
         _bw.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         _bw.setToolTip("Simple black & white chart: white background; bearish candle = black fill + black border/wicks; "
@@ -455,12 +469,12 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         _bw.setChecked(False)
         _bw.toggled.connect(lambda on: self.subWidgetToggled.emit("simple_bw", on))
         self.sub_checks["simple_bw"] = _bw
-        root.addWidget(_bw)
+        _chart.addWidget(_bw)
 
         # --- Window on Start (user 2026-09-01): ORDERED multi-select of the windows the terminal
         # opens on launch. The order you CHECK them in = the order they open in. Collapsed by
         # default; the summary line always shows the current sequence. Persisted in terminal_ui. ---
-        root.addWidget(self._header("Window on Start"))
+        _chart.addWidget(self._header("Window on Start"))
         self._sw_order: list = []
         self._sw_checks: dict = {}
         self._sw_btn = QtWidgets.QPushButton("▸ choose windows…")
@@ -468,7 +482,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self._sw_btn.setStyleSheet("QPushButton { color:#aeb4c0; background:#161b24; border:1px solid"
                                    " #242c3a; border-radius:6px; padding:3px 10px; text-align:left;"
                                    " font-size:11px; }")
-        root.addWidget(self._sw_btn)
+        _chart.addWidget(self._sw_btn)
         self._sw_body = QtWidgets.QWidget()
         _swl = QtWidgets.QVBoxLayout(self._sw_body)
         _swl.setContentsMargins(6, 2, 0, 2)
@@ -480,22 +494,22 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             self._sw_checks[key] = cb
             _swl.addWidget(cb)
         self._sw_body.setVisible(False)
-        root.addWidget(self._sw_body)
+        _chart.addWidget(self._sw_body)
         self._sw_summary = QtWidgets.QLabel("")
         self._sw_summary.setWordWrap(True)
         self._sw_summary.setStyleSheet("color:#7a8496; font-size:10px; padding:0 2px;")
-        root.addWidget(self._sw_summary)
+        _chart.addWidget(self._sw_summary)
         self._sw_btn.clicked.connect(self._sw_toggle_body)
         self._sw_refresh()
 
         # --- scanner "Zero Point" anchor (Phase 1) ---
-        root.addWidget(self._header("Scan Start Time"))
+        _chart.addWidget(self._header("Scan Start Time"))
         # Flutter/Material-style date+time picker (drop-in: same dateTime()/setDateTime()/dateTimeChanged interface).
         self.scan_time_edit = DateTimeField()
         # default the anchor to exactly 24 hours before the host clock
         self.scan_time_edit.setDateTime(QtCore.QDateTime.currentDateTime().addSecs(-86400))
         self.scan_time_edit.dateTimeChanged.connect(lambda _dt: self.scan_time_changed.emit())
-        root.addWidget(self.scan_time_edit)
+        _chart.addWidget(self.scan_time_edit)
 
         # --- Replay Mode toggle (default OFF). ON => the chart replays FROM the Start Date, causal; Right arrow
         #     steps one candle instead of moving the selection. ---
@@ -508,30 +522,31 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             "QPushButton:hover{border-color:#3b82f6;}"
             "QPushButton:checked{background:#16324f; color:#7ec2ff; border-color:#3b82f6;}")
         self.replay_btn.toggled.connect(self._on_replay_btn)
-        root.addWidget(self.replay_btn)
+        _chart.addWidget(self.replay_btn)
         self.replay_hint = QtWidgets.QLabel("→ Right arrow steps one candle")
         self.replay_hint.setStyleSheet("color:#6b7280; font-family:Consolas; font-size:10px; padding:0 2px;")
         self.replay_hint.setVisible(False)
-        root.addWidget(self.replay_hint)
+        _chart.addWidget(self.replay_hint)
 
         # --- min multiplier filter (spec §7.2.3) ---
         self.mult_label = QtWidgets.QLabel("Min Multiplier: x0.0")
-        root.addWidget(self.mult_label)
+        _chart.addWidget(self.mult_label)
         self.mult_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.mult_slider.setRange(0, int(config.MULT_FILTER_MAX / config.MULT_FILTER_STEP))
         self.mult_slider.valueChanged.connect(self._emit_multiplier)
-        root.addWidget(self.mult_slider)
+        _chart.addWidget(self.mult_slider)
 
         # --- depth-map liquidity threshold (spec §7.3.3 / §8.2) ---
         self.chart_label = QtWidgets.QLabel("Depth Wall Min: 1000")
-        root.addWidget(self.chart_label)
+        _chart.addWidget(self.chart_label)
         self.chart_slider = _WheelSlider(QtCore.Qt.Horizontal, config.CHART_FILTER_STEP)
         self.chart_slider.setRange(config.CHART_FILTER_MIN, config.CHART_FILTER_MAX)
         self.chart_slider.setSingleStep(config.CHART_FILTER_STEP)
         self.chart_slider.setPageStep(config.CHART_FILTER_STEP)
         self.chart_slider.setValue(1000)
         self.chart_slider.valueChanged.connect(self._emit_chart_filter)
-        root.addWidget(self.chart_slider)
+        _chart.addWidget(self.chart_slider)
+        root.addWidget(self.chart_section)
 
         # (Keltner smooth-approx scale SLIDER removed — the Keltner channel is now a plain on/off toggle in the
         #  Indicator group. The scale is pinned to the persisted/default value; set_kc_scale() still stores a
