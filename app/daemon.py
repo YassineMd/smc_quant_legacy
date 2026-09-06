@@ -62,6 +62,17 @@ class DaemonServer:
         except asyncio.QueueFull:
             pass
 
+    async def _enqueue_wait(self, client: _Client, line: str, timeout: float = 60.0) -> bool:
+        """Catch-up / clock-serve frames must NEVER be dropped (a dropped chunk = a silent hole in the client's
+        history, a dropped END = a client stuck in catch-up): wait for queue room instead of the drop-on-full
+        _enqueue, bounded so a frozen client cannot pin the task. False = timed out -> the caller abandons the
+        serve (the client's staleness watchdog reconnects and re-requests). Live frames keep using _enqueue."""
+        try:
+            await asyncio.wait_for(client.queue.put(line), timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
     def broadcast_tf(self, tf: str, line: str) -> None:
         """Deliver a timeframe-tagged frame only to subscribers of ``tf``.
 
@@ -203,7 +214,8 @@ class DaemonServer:
         """
         try:
             n_new = self.core.catchup_delta(tf, since) if since is not None else None
-            self._enqueue(client, self.core.catchup_start(tf, delta=(n_new is not None)).to_line())
+            if not await self._enqueue_wait(client, self.core.catchup_start(tf, delta=(n_new is not None)).to_line()):
+                return
             buckets = (self.core.catchup_delta_buckets(tf, n_new) if n_new is not None
                        else self.core.catchup_buckets(tf))
             # SMALL ENCODE CHUNKS (2026-09-06): json.dumps holds the GIL for its whole call, so a 1000-bucket chunk
@@ -213,10 +225,12 @@ class DaemonServer:
             # compatible: the client just appends chunks in seq order.
             size = int(getattr(config, "CATCHUP_ENCODE_CHUNK", 100) or config.CATCHUP_CHUNK_SIZE)
             for seq, i in enumerate(range(0, len(buckets), size)):
-                self._enqueue(client, CatchupChunkPacket(
-                    tf=tf, seq=seq, closed_buckets=buckets[i:i + size]).to_line())
+                if not await self._enqueue_wait(client, CatchupChunkPacket(
+                        tf=tf, seq=seq, closed_buckets=buckets[i:i + size]).to_line()):
+                    return                                   # frozen client: abandon (never skip a chunk)
                 await asyncio.sleep(0)
-            self._enqueue(client, self.core.catchup_end(tf).to_line())
+            if not await self._enqueue_wait(client, self.core.catchup_end(tf).to_line()):
+                return
             # 15m sweeps are tf-agnostic — ship the current set so even a 1m client has them immediately.
             for line in self.core.liq_sweep_catchup_lines():
                 self._enqueue(client, line)
@@ -231,14 +245,15 @@ class DaemonServer:
             candles = self.core.catchup_time_candles(tf, limit=limit)
             size = config.CATCHUP_CHUNK_SIZE
             if not candles:
-                self._enqueue(client, TimeCandlesPacket(tf=tf, seq=0, candles=[]).to_line())
+                await self._enqueue_wait(client, TimeCandlesPacket(tf=tf, seq=0, candles=[]).to_line())
                 return
             # small encode chunks + sleep(0) (2026-09-06): the clock feed's 60 s resync pulled TIME_SERVE_CAP (2000)
             # full candles through asdict+json ON the loop = an 8-12 s tick / DOM / tape freeze every minute per
             # clock window (see _send_catchup for why a thread does not help)
             size = int(getattr(config, "CATCHUP_ENCODE_CHUNK", 100) or config.CATCHUP_CHUNK_SIZE)
             for seq, i in enumerate(range(0, len(candles), size)):
-                self._enqueue(client, TimeCandlesPacket(tf=tf, seq=seq, candles=candles[i:i + size]).to_line())
+                if not await self._enqueue_wait(client, TimeCandlesPacket(tf=tf, seq=seq, candles=candles[i:i + size]).to_line()):
+                    return                                   # frozen client: abandon rather than serve a holed set
                 await asyncio.sleep(0)
         except Exception as e:
             print(f"TIME-CANDLES SEND ERROR ({tf}): {e}")
