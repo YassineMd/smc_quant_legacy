@@ -414,7 +414,25 @@ class PositionBracket(QtCore.QObject):
         self._val_labels["TP"].setVisible(not done)
         self.tp2_btn.setVisible(not done)
 
+    @staticmethod
+    def _snap_tick(v: float) -> float:
+        """Price snapped to the instrument tick (config.TICK_SIZE), clean to PRICE_DECIMALS."""
+        tk = float(config.TICK_SIZE) or 0.01
+        return round(round(float(v) / tk) * tk, int(config.PRICE_DECIMALS))
+
     def _recalc(self) -> None:
+        # TICK SNAP (user 2026-09-06): Entry / SL / TP / TP2 move by whole ticks -- a dragged (or freshly placed)
+        # line is pulled onto the tick grid; setValue re-emits sigPositionChanged, which lands here again with
+        # every value already on the grid (no further move), so the guard only saves the redundant re-render.
+        if not getattr(self, "_snapping", False):
+            self._snapping = True
+            try:
+                for ln in (self.entry_line, self.stop_line, self.target_line, self.target2_line):
+                    v = float(ln.value()); sv = self._snap_tick(v)
+                    if abs(sv - v) > 1e-9:
+                        ln.setValue(sv)
+            finally:
+                self._snapping = False
         e = self.entry_line.value()
         s = self.stop_line.value()
         t = self.target_line.value()
