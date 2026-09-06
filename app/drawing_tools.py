@@ -350,13 +350,13 @@ class PositionBracket(QtCore.QObject):
         self._recalc()
 
     def _mk_edge(self, x: float) -> pg.InfiniteLine:
-        """Vertical span handle — subtle thin muted-gray dashed (§7.2)."""
-        pen = QtGui.QPen(QtGui.QColor(150, 150, 150, 130))
-        pen.setWidth(1); pen.setCosmetic(True); pen.setStyle(QtCore.Qt.DashLine)
-        hover = QtGui.QPen(QtGui.QColor(200, 200, 200)); hover.setWidth(2); hover.setCosmetic(True)
-        vln = pg.InfiniteLine(pos=x, angle=90, movable=True, pen=pen, hoverPen=hover)
+        """Vertical span marker — INVISIBLE and inert (user 2026-09-07: the two dashed full-height lines were
+        useless clutter). The item still exists so the bracket keeps its x-window (x0/x1 read from these) and the
+        show / hide / remove loops stay uniform; it has no pen, cannot be dragged and takes no hover."""
+        vln = pg.InfiniteLine(pos=x, angle=90, movable=False, pen=pg.mkPen(None), hoverPen=pg.mkPen(None))
         vln.setZValue(71)
-        vln.setCursor(QtCore.Qt.SizeHorCursor)
+        vln.setAcceptHoverEvents(False)
+        vln.setVisible(False)
         self.plot.addItem(vln, ignoreBounds=True)
         return vln
 
