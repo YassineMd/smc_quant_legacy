@@ -25,7 +25,7 @@ public class LevelTradesDialog extends Dialog implements TapeView.Host {
     private int scroll;
     // memo of the last row build (the walk covers the whole VP window: once per store change, not per paint)
     private long memoVer = -1;
-    private double memoMin = Double.NaN;
+    private double memoMin = Double.NaN, memoPl = Double.NaN;
     private int memoSkip = -1, memoFit = -1;
     private double[][] memo;
     private final Runnable refresh = new Runnable() {
@@ -60,7 +60,7 @@ public class LevelTradesDialog extends Dialog implements TapeView.Host {
         title.setTextSize(14);
         head.addView(title);
         double min = dom.minUsd();
-        TextView scope = Ui.caption(ctx, "LEVEL · " + dom.vpLabel() + (min > 0 ? " · ≥ " + Ui.fmtUsd(min) : ""));
+        TextView scope = Ui.caption(ctx, "LAUNCHED HERE · " + dom.vpLabel() + " · PLAYER ≥ " + Ui.fmtUsd(dom.minPlayer()) + (min > 0 ? " · trades ≥ " + Ui.fmtUsd(min) : ""));
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         sp.leftMargin = (int) Ui.dp(ctx, 14);
@@ -115,9 +115,10 @@ public class LevelTradesDialog extends Dialog implements TapeView.Host {
     @Override
     public double[][] rows(TradeStore st, double minUsd, int skip, int nFit) {
         long ver = st.version();
-        if (memo != null && ver == memoVer && minUsd == memoMin && skip == memoSkip && nFit == memoFit) return memo;
+        double minPl = dom.minPlayer();
+        if (memo != null && ver == memoVer && minUsd == memoMin && minPl == memoPl && skip == memoSkip && nFit == memoFit) return memo;
         long tpg = Math.max(1, Math.round(g / TradeStore.TICK));
-        double[][] all = st.levelRows(bin, tpg, dom.vpCutoffMs(), minUsd, skip + nFit);
+        double[][] all = st.levelRows(bin, tpg, dom.vpCutoffMs(), minUsd, dom.minPlayer(), skip + nFit);
         double[][] out;
         if (skip <= 0) out = all;
         else {
@@ -125,7 +126,7 @@ public class LevelTradesDialog extends Dialog implements TapeView.Host {
             out = new double[k][];
             System.arraycopy(all, skip, out, 0, k);
         }
-        memoVer = ver; memoMin = minUsd; memoSkip = skip; memoFit = nFit; memo = out;
+        memoVer = ver; memoMin = minUsd; memoPl = minPl; memoSkip = skip; memoFit = nFit; memo = out;
         return out;
     }
 

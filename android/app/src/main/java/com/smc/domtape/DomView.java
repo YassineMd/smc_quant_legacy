@@ -151,9 +151,10 @@ public class DomView extends View {
         return true;
     }
 
-    // Diamond code (Row.dia / rowDia): bits 0-1 kind (1 buy, 2 sell, 3 mixed), bits 2-4 size step 0..7 (log $ from the
-    // visible P90 up to the visible max), bit 5 dim (newest campaign older than 30 min), bits 6+ campaign count (<= 15)
+    // Diamond code (Row.dia / rowDia): bits 0-1 kind (1 buy, 2 sell, 3 mixed), bits 2-4 size step 0..7 (launch count
+    // above the minimum), bit 5 dim (newest launch older than 30 min), bits 6+ launch count (<= 99)
     private static final long DIA_DIM_MS = 30 * 60_000L;
+    private static final int DIA_MIN_LAUNCHES = 2;   // a level is REACTIVE once big players launched >= 2 campaigns there
 
     /** The intensity diamond: a filled rhombus (buy green / sell red / mixed white), radius by size step, dim by age. */
     private void diamond(Canvas c, float cx, float cy, int code) {
@@ -169,7 +170,7 @@ public class DomView extends View {
         int col = kind == 1 ? Ui.BUY : (kind == 2 ? Ui.SELL : Ui.TXT);
         fill.setColor((col & 0x00FFFFFF) | ((dim ? 120 : 255) << 24));
         c.drawPath(dia, fill);
-        if (cnt >= 2) {                                // fought there more than once: the count, left of the diamond
+        if (cnt >= 2) {                                // launches at this level: the count, left of the diamond
             textH.setColor((col & 0x00FFFFFF) | ((dim ? 120 : 220) << 24));
             textH.setTextAlign(Paint.Align.RIGHT);
             txt(c, Integer.toString(cnt), cx - r * 0.78f - dp3, cy - (textH.descent() + textH.ascent()) / 2f, textH);
@@ -485,11 +486,12 @@ public class DomView extends View {
         // the campaigns that STARTED there over the WHOLE window; only the levels in the top decile of ALL those levels
         // carry a diamond (the gold P90 rule, window-wide -> scroll-independent); its size follows the $ from that P90
         // up to the window max; the count = campaigns fought there; a level whose newest campaign is old draws dim.
-        // MIN PLAYER (the better way, 2026-09-07): the gate is an ABSOLUTE $ threshold (host.minPlayer(), a slider,
-        // default = the window's P90 once per launch), so a diamond changes only when its own level's campaigns do --
-        // never because of the scroll, the other levels or a shifting decile. Size: log $ from the threshold to 10x it.
-        TradeStore.Intensity inten = st.levelIntensity(tpg, cutoff, host.minUsd());
-        double diaThr = Math.max(1.0, host.minPlayer());
+        // REACTIVE LEVELS (2026-09-07, after "104.01 had a $4M diamond but $55K of volume" and "executed $ per level
+        // just mirrors the volume bars"): a diamond marks a level where >= DIA_MIN_LAUNCHES big-player campaigns were
+        // LAUNCHED (first fill); big player = campaign total >= host.minPlayer() (the PLAYER slider, default = the
+        // window's P90 of campaign totals once per session). Size + number = the launch count (reactivity), colour =
+        // the majority side by $, dim = the newest launch is old. Absolute -> never depends on the scroll / other levels.
+        TradeStore.Intensity inten = st.levelIntensity(tpg, cutoff, host.minPlayer());
         long nowMs = System.currentTimeMillis();
         double[] sideThr = agg.sideGoldThresholds();
         double thrB = sideThr[0], thrS = sideThr[1];
@@ -596,14 +598,13 @@ public class DomView extends View {
             r.priceTxt = priceStr(b, g);
             int dcode = 0;
             double[] acc = inten.byBin.get(b);
-            if (acc != null) {
+            if (acc != null && acc[2] >= DIA_MIN_LAUNCHES) {
                 double ctot = acc[0] + acc[1];
-                if (ctot >= diaThr) {
-                    int kind = acc[0] >= 0.67 * ctot ? 1 : (acc[1] >= 0.67 * ctot ? 2 : 3);
-                    int step = (int) Math.round(7.0 * Math.max(0.0, Math.min(1.0, Math.log10(ctot / diaThr))));
-                    boolean dim = nowMs - (long) acc[3] > DIA_DIM_MS;
-                    dcode = kind | (step << 2) | (dim ? 32 : 0) | (Math.min(15, (int) acc[2]) << 6);
-                }
+                int launches = (int) acc[2];
+                int kind = acc[0] >= 0.67 * ctot ? 1 : (acc[1] >= 0.67 * ctot ? 2 : 3);
+                int step = Math.min(7, launches - DIA_MIN_LAUNCHES);        // 2 launches = smallest, 9+ = biggest
+                boolean dim = nowMs - (long) acc[3] > DIA_DIM_MS;
+                dcode = kind | (step << 2) | (dim ? 32 : 0) | (Math.min(99, launches) << 6);
             }
             r.dia = dcode;
             rowDia[i] = dcode;

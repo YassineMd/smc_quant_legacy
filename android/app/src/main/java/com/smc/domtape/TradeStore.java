@@ -586,15 +586,16 @@ public class TradeStore {
     }
 
     /**
-     * The tape rows of ONE price bin (popup behind a DOM diamond): campaigns that STARTED in the bin + plain trades
-     * in it, inside [cutoffMs, now], newest first, MIN SIZE on the campaign total / the trade -- the tapeRows format.
+     * The tape rows of ONE price bin (popup behind a DOM diamond): campaigns LAUNCHED in the bin (first fill) with a
+     * total >= minCampaign (the PLAYER threshold) + plain trades in it >= minUsd (MIN SIZE), inside [cutoffMs, now],
+     * newest first -- the tapeRows format.
      */
-    public synchronized double[][] levelRows(long bin, long tpg, long cutoffMs, double minUsd, int maxRows) {
+    public synchronized double[][] levelRows(long bin, long tpg, long cutoffMs, double minUsd, double minCampaign, int maxRows) {
         final java.util.ArrayList<double[]> got = new java.util.ArrayList<>();
         walk(lowerBound(cutoffMs), new Sink() {
             @Override
             public boolean campaign(int fi, int li, long t0, long t1, double u, int side, int cnt, long lo, long hi) {
-                if (Math.floorDiv(tick[fi], tpg) == bin && u >= minUsd) got.add(campaignRow(t0, t1, tick[fi] * TICK, u, side, cnt, lo, hi));
+                if (Math.floorDiv(tick[fi], tpg) == bin && u >= minCampaign && t0 >= cutoffMs) got.add(campaignRow(t0, t1, tick[fi] * TICK, u, side, cnt, lo, hi));
                 return got.size() < maxRows;
             }
 
@@ -609,10 +610,11 @@ public class TradeStore {
     }
 
     /**
-     * Per-level campaign INTENSITY over the WHOLE window (user 2026-09-07: the diamonds are potential entries / stops /
+     * Per-level REACTIVITY over the WHOLE window (user 2026-09-07: the diamonds are potential entries / stops /
      * targets, so they must not depend on what is on screen): bin -> [buyUsd, sellUsd, count, lastMs] for every level
-     * where a campaign >= minUsd STARTED inside [cutoffMs, now], plus the P90 and the max of the per-level totals over
-     * ALL those levels. Memoized on (version, grouping, cutoff second, filter): a frame is a map lookup per row.
+     * where a campaign with total >= minUsd (the PLAYER threshold) was LAUNCHED (its first fill) inside [cutoffMs, now]:
+     * the launched campaigns' totals per side, how many, the newest one's end; plus the P90 and the max of the
+     * per-level totals. Memoized on (version, grouping, cutoff second, threshold): a frame is a map lookup per row.
      */
     public static final class Intensity {
         public final java.util.HashMap<Long, double[]> byBin;
@@ -653,6 +655,16 @@ public class TradeStore {
         intMemo = new Intensity(m, p90, max);
         intMemoVer = version; intMemoTpg = tpg; intMemoCut = cutS; intMemoMin = minUsd;
         return intMemo;
+    }
+
+    /** P90 of the campaign totals inside [cutoffMs, now] (the PLAYER slider's launch default: a big player = a top-decile campaign); 0 if fewer than 10. */
+    public synchronized double campaignP90(long cutoffMs) {
+        double[] u = new double[gCount];
+        int k = 0;
+        for (int g = 0; g < gCount; g++) if (gT0[g] >= cutoffMs) u[k++] = gUsd[g];
+        if (k < 10) return 0.0;
+        java.util.Arrays.sort(u, 0, k);
+        return u[Math.min(k - 1, (int) (k * 0.9))];
     }
 
     /** Merged campaigns currently tracked (tests / diagnostics). */

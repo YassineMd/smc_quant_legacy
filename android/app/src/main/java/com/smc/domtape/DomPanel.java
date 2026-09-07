@@ -56,7 +56,7 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
         grpIdx = clampIdx(prefs.getInt("dom_group_idx", 0), GROUPS.length);
         vpIdx = clampIdx(prefs.getInt("dom_vp_idx", 2), VP_SECS.length);
         minUsd = prefs.getFloat("dom_min_usd", 0f);
-        minPlayer = prefs.getFloat("dom_min_player", 0f);
+        minPlayer = prefs.getFloat("dom_min_player3", 0f);
         playerAdjusted = minPlayer > 0;           // a persisted value is the user's: no auto default
         setOrientation(VERTICAL);
         setBackgroundColor(Ui.BG);
@@ -136,7 +136,7 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
             public void onProgressChanged(SeekBar sb, int v, boolean fromUser) {
                 if (fromUser) playerAdjusted = true;
                 minPlayer = Ui.sliderToPlayer(v);
-                prefs.edit().putFloat("dom_min_player", (float) minPlayer).apply();
+                prefs.edit().putFloat("dom_min_player3", (float) minPlayer).apply();
                 applyLabels();
                 canvas.invalidate();
             }
@@ -273,13 +273,12 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
             feed.requestFetch(customT0Ms);
         }
         if (!playerDone && !playerAdjusted && store.tradeCount() >= 500) {
-            // launch default for MIN PLAYER: the window-wide P90 of the per-level campaign $ (the "top decile" the
-            // diamonds used before they became an absolute threshold); a manual move or a persisted value wins
-            long tpg = Math.max(1, Math.round(GROUPS[grpIdx] / TradeStore.TICK));
-            TradeStore.Intensity in = store.levelIntensity(tpg, vpCutoffMs(), minUsd);
-            if (in.byBin.size() >= 10 && in.p90 > 0 && in.p90 < Double.POSITIVE_INFINITY) {
+            // launch default for PLAYER: a big player = a top-decile campaign of the window (P90 of campaign totals);
+            // a manual move or a persisted value wins
+            double p90 = store.campaignP90(vpCutoffMs());
+            if (p90 > 0) {
                 playerDone = true;
-                pslider.setProgress(Ui.playerToSlider(in.p90));
+                pslider.setProgress(Ui.playerToSlider(p90));
             }
         }
         long now = System.currentTimeMillis();
