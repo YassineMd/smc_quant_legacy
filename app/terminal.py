@@ -9339,20 +9339,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         BarGraphItem, anchored at the RIGHT edge `vx1`: right-only modes (0/1/6/7/9/11) hug the edge growing LEFT
         (max width `mw`), split modes (2/3/4/5) split at vx1 - mw (buys grow right to the edge, sells grow left).
         Rows = the span's per-price force rows (_sel_vp_hist, the selection VP's own aggregate); mode 11 = the
-        big-player rows of the span's time range (_vp_rows_for). Cached per (span freeze key, mode, MIN PLAYER)."""
+        big-player rows of the span's time range at the span's OWN P50 threshold (_bp_p50_usd of its events).
+        Cached per (span freeze key, mode)."""
         mode = int(self._vp_mode)
         if mode in (8, 10):
             return None
-        bpthr = float(self.menu.bp_vp_min_usd()) if mode == 11 else 0.0
-        key = (frz, mode, bpthr)
+        key = (frz, mode, 0.0)                                # mode 11: the threshold comes from the span itself
         cache = getattr(self, "_ema_vp_rows_cache", None)
         if cache is None or cache[0] != key:
             rows = []
             try:
                 if mode == 11:
+                    # (user 2026-09-07) the threshold is the P50 of the big-player events INSIDE the span the EMA VP
+                    # looks at (the players at or above it carry half of that span's big-player $), not the slider
                     t0 = float(ana[sp0].get("start_time", 0.0) or 0.0)
                     t1 = float(ana[sp1].get("end_time", 0.0) or 0.0) or time.time()
-                    rows = self._vp_rows_for([], t0=t0, t1=t1)
+                    ev = self._bp_events(t0, t1, t1 + 1e-6, True)
+                    rows = self._bp_vp_rows(t0, t1, thr=self._bp_p50_usd(ev)) if ev else []
                 else:
                     agg = self._sel_vp_hist(ana[sp0:sp1 + 1])
                     rows = sorted((float(ps), a) for ps, a in agg.items())
@@ -11276,6 +11279,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return ev
 
     # ── BIG PLAYER GRAY VP (VP mode 11, user 2026-09-07) ──────────────────────────────────────────────────
+    @staticmethod
+    def _bp_p50_usd(events) -> float:
+        """The user's P50 of a set of big-player events: the player size at which the players at or above it carry
+        HALF of all their $ (the tablet's MIN SIZE rule) -- NOT the median player. 0 for no events."""
+        sizes = sorted((float(e[3]) for e in events), reverse=True)
+        if not sizes:
+            return 0.0
+        tot = sum(sizes); acc = 0.0
+        for u in sizes:
+            acc += u
+            if acc >= 0.5 * tot:
+                return u
+        return sizes[-1]
+
     def _bpvp_auto_default(self) -> bool:
         """Launch default of the Big Player Gray VP's MIN PLAYER (user 2026-09-07: "by default the Gray VP Big Player
         slider should default to P50"): the tablet's P50 rule -- the player size at which the players at or above it
@@ -11291,13 +11308,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             ev = []
         if len(ev) < 50:
             return False                                      # store still backfilling / no archive yet: try again later
-        sizes = sorted((float(e[3]) for e in ev), reverse=True)
-        tot = sum(sizes); acc = 0.0; thr = sizes[-1]
-        for u in sizes:
-            acc += u
-            if acc >= 0.5 * tot:
-                thr = u
-                break
+        thr = self._bp_p50_usd(ev)
         self._bpvp_auto_done = True
         self._bpvp_setting = True
         try:
@@ -11311,12 +11322,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pass
         return True
 
-    def _bp_vp_rows(self, t0: float, t1: float) -> list:
-        """VP rows [(price, [usd, 0, 0, 0])] over [t0, t1] from big-player EVENTS >= the MIN PLAYER slider: a single
-        print lands on its price; a sweep / burst (the diamond: one order that ate through the book) is spread
-        evenly over every tick from its low to its high. Memoized on (range, threshold, store state)."""
-        self._bpvp_auto_default()
-        thr = float(self.menu.bp_vp_min_usd())
+    def _bp_vp_rows(self, t0: float, t1: float, thr=None) -> list:
+        """VP rows [(price, [usd, 0, 0, 0])] over [t0, t1] from big-player EVENTS >= `thr` (default: the MIN PLAYER
+        slider; the EMA side VP passes its own span P50): a single print lands on its price; a sweep / burst (the
+        diamond: one order that ate through the book) is spread evenly over every tick from its low to its high.
+        Memoized on (range, threshold, store state)."""
+        if thr is None:
+            self._bpvp_auto_default()
+            thr = float(self.menu.bp_vp_min_usd())
+        thr = float(thr)
         key = (round(float(t0), 3), round(float(t1), 3), thr, len(self._bp_trades), len(self._bp_sweeps),
                (self._bp_trades[-1][0] if self._bp_trades else 0.0), (self._bp_sweeps[-1][0] if self._bp_sweeps else 0.0))
         c = getattr(self, "_bpvp_cache", None)
