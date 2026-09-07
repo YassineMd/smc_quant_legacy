@@ -4598,6 +4598,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Hamburger 'Volume Profile Mode' dropdown changed -> re-render the selection VP + the 4h 'V' overlay."""
         self._vp_mode = int(m) % 12      # 12 VP modes (0..11; 8 = VP Zones line-only, 10 = Gray VP, 11 = Big Player Gray VP)
         self._save_ui_state()
+        self._ema_vp_lastkey = None                  # the EMA right-side Trend VP follows the mode too (2026-09-07)
         self._sel_sig = None                         # force the Mode-10 selection VP to redraw
         if self._z4_last_buckets:                    # re-render the 4h V overlay immediately
             try:
@@ -9272,30 +9273,40 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _mw6 = 0.16 * (_vx1v - _vx0v)
                         _wid = _vols / _vmax * _mw6
                         if self._ema_vp_item is None:
-                            self._ema_vp_item = pg.BarGraphItem(x0=[0.0], x1=[1.0], y=[0.0], height=1.0,
+                            self._ema_vp_item = pg.BarGraphItem(x0=[0.0], width=[1.0], y=[0.0], height=1.0,
                                                                 pen=None, brush=(150, 158, 175, 70))
                             self._ema_vp_item.setZValue(-5)
                             self.plot.addItem(self._ema_vp_item, ignoreBounds=True)
-                        _vkey = (id(_vols), round(_vx1v, 6), round(_mw6, 6))
+                        # VOLUME PROFILE MODE (user 2026-09-07): the side profile follows the hamburger dropdown like
+                        # the selection VP does; None = the native 40-bin picture (Gray VP / VP Zones / nothing to show)
+                        _modo = self._ema_vp_mode_opts(_ana, _sp0c, _sp1c, _frz, _vx1v, _mw6, _hb * 0.92)
+                        _vmode = _modo[5] if _modo is not None else -1
+                        _vkey = (id(_vols), round(_vx1v, 6), round(_mw6, 6), _vmode,
+                                 id(self._ema_vp_rows_cache[1]) if _modo is not None else 0)
                         if getattr(self, "_ema_vp_lastkey", None) == _vkey:
                             _skip_vp = True                   # nothing moved -> leave the picture alone
                         else:
                             self._ema_vp_lastkey = _vkey; _skip_vp = False
-                        _poc = int(np.argmax(_vols))
-                        _lvset = set(_lvns or []); _opset = set(_pocs_out or [])
-                        _brs = [] if _skip_vp else [pg.mkBrush(250, 180, 60, 150) if _j5 == _poc
-                                else (pg.mkBrush(178, 70, 255, 160) if _j5 in _lvset   # in-VA LVN: electric purple
-                                      else (pg.mkBrush(250, 205, 120, 125) if _j5 in _opset   # outside POCs: light amber
-                                            else pg.mkBrush(150, 158, 175, 70)))
-                                for _j5 in range(len(_vols))]
                         if not _skip_vp:                  # setOpts rebuilds every brush + the QPicture
-                            self._ema_vp_item.setOpts(x0=_vx1v - _wid, x1=np.full(len(_vols), _vx1v),
-                                                      y=_cen, height=_hb * 0.92, pen=None, brushes=_brs)
+                            if _modo is None:
+                                _poc = int(np.argmax(_vols))
+                                _lvset = set(_lvns or []); _opset = set(_pocs_out or [])
+                                _brs = [pg.mkBrush(250, 180, 60, 150) if _j5 == _poc
+                                        else (pg.mkBrush(178, 70, 255, 160) if _j5 in _lvset   # in-VA LVN: electric purple
+                                              else (pg.mkBrush(250, 205, 120, 125) if _j5 in _opset   # outside POCs: light amber
+                                                    else pg.mkBrush(150, 158, 175, 70)))
+                                        for _j5 in range(len(_vols))]
+                                self._ema_vp_item.setOpts(x0=_vx1v - _wid, width=_wid,
+                                                          y=_cen, height=_hb * 0.92, pen=None, brushes=_brs)
+                            else:
+                                _x0s7, _ws7, _ys7, _hs7, _brs7, _ = _modo
+                                self._ema_vp_item.setOpts(x0=_x0s7, width=_ws7, y=_ys7, height=_hs7, pen=None, brushes=_brs7)
                         self._ema_vp_item.setVisible(True)
-                        # VAH / VAL: dashed lines ON the right-side profile band itself (user 2026-08-27)
+                        # VAH / VAL: dashed lines ON the right-side profile band itself (user 2026-08-27); the Big Player
+                        # Gray VP (11) draws its own dashes through _vp_segments, so its lines are not doubled here
                         for _k6, _pv6 in (("vah", _vahp), ("val", _valp)):
                             _it6 = self._ema_vp_va.get(_k6)
-                            if _pv6 is None:
+                            if _pv6 is None or _vmode == 11:
                                 if _it6 is not None:
                                     _it6.setVisible(False)
                                 continue
@@ -9308,6 +9319,52 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                 self._ema_vp_va[_k6] = _it6
                             _it6.setData([_vx1v - _mw6, _vx1v], [_pv6, _pv6])
                             _it6.setVisible(True)
+
+    def _ema_vp_mode_opts(self, ana, sp0, sp1, frz, vx1, mw, thick_native):
+        """The EMA right-side Trend VP in the hamburger's 'Volume Profile Mode' (user 2026-09-07: "make the EMA right
+        side volume profile sensitive to the chart > Volume profile mode"). Returns None when the NATIVE 40-bin
+        renderer must be used (mode 10 = Gray VP is exactly that design, mode 8 = VP Zones is line-only, or the span
+        holds nothing to profile in the chosen mode); else (x0s, widths, ys, heights, brushes, mode) ready for the
+        BarGraphItem, anchored at the RIGHT edge `vx1`: right-only modes (0/1/6/7/9/11) hug the edge growing LEFT
+        (max width `mw`), split modes (2/3/4/5) split at vx1 - mw (buys grow right to the edge, sells grow left).
+        Rows = the span's per-price force rows (_sel_vp_hist, the selection VP's own aggregate); mode 11 = the
+        big-player rows of the span's time range (_vp_rows_for). Cached per (span freeze key, mode, MIN PLAYER)."""
+        mode = int(self._vp_mode)
+        if mode in (8, 10):
+            return None
+        bpthr = float(self.menu.bp_vp_min_usd()) if mode == 11 else 0.0
+        key = (frz, mode, bpthr)
+        cache = getattr(self, "_ema_vp_rows_cache", None)
+        if cache is None or cache[0] != key:
+            rows = []
+            try:
+                if mode == 11:
+                    t0 = float(ana[sp0].get("start_time", 0.0) or 0.0)
+                    t1 = float(ana[sp1].get("end_time", 0.0) or 0.0) or time.time()
+                    rows = self._vp_rows_for([], t0=t0, t1=t1)
+                else:
+                    agg = self._sel_vp_hist(ana[sp0:sp1 + 1])
+                    rows = sorted((float(ps), a) for ps, a in agg.items())
+            except Exception:
+                rows = []
+            prs = [pr for pr, _ in rows]
+            if len(prs) >= 2:
+                gaps = sorted(prs[k + 1] - prs[k] for k in range(len(prs) - 1))
+                thick = gaps[len(gaps) // 2] * 0.9
+            else:
+                thick = thick_native
+            self._ema_vp_rows_cache = (key, rows, thick)
+        _, rows, thick = self._ema_vp_rows_cache
+        if len(rows) < 2 or max((sum(a) for _, a in rows), default=0.0) <= 0:
+            return None
+        x0s, ws, ys, hs, brs = self._vp_segments(rows, mode, 0.0, mw / 0.40, thick)
+        if not ws:
+            return None
+        if mode in (2, 3, 4, 5):
+            x0s = [vx1 - mw + x for x in x0s]
+        else:
+            x0s = [vx1 - x - w for x, w in zip(x0s, ws)]
+        return x0s, ws, ys, hs, brs, mode
 
     def _draw_reward(self, buckets, vx0, vy0) -> None:
         """REWARD / EFFORT read — BOTTOM-LEFT HUD (m10_reward). For each window (yesterday / today / last 30 candles /
