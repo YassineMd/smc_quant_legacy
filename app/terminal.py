@@ -1580,6 +1580,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_lvl_items = {}                                 # 'ema_trendlvl': 'hi' red / 'lo' green solid hlines
         self._ema_lvl_cache = None                               # (sig, lo_info, hi_info) — per bar close
         self._ema_vp_item = None                                 # 'ema_trendvp': right-side VP of the extreme-lines span
+        self._ema_vp_tlbl = None                                 # ... its 'start -> end' time stamp under the band (2026-09-07)
         self._ema_vp_cache = None                                # (sig, centers, vols, hbin, w0, VAL, VAH)
         self._ema_vp_va = {}                                     # 'vah'/'val' dashed 70%-value-area lines
         self._lwc_sph = None; self._lwc_sig = None               # LW FAILED PUSH gold ♦ (m10_longwick_combo, no walls)
@@ -7574,7 +7575,39 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if _d.get("ln") is not None:
                 _d["ln"].setVisible(False)
 
+    @staticmethod
+    def _ema_vline_pen(rgb, kind: str, bw: bool):
+        """Pen of an EMA VERTICAL trend line. kind: 'flip' (dashed), 'pin' (solid, the pinned one), 'forming' (dotted,
+        dim). Simple BW (user 2026-09-07: "I am unable to see them with the white background"): darker ink, wider,
+        LONGER dashes so they read on white; the dark theme keeps the thin light dashes."""
+        r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
+        if bw:
+            r, g, b = int(r * 0.6), int(g * 0.6), int(b * 0.6)      # dark green / dark red / dark gray on white
+            if kind == "pin":
+                pn = pg.mkPen(color=(r, g, b, 255), width=2.6)
+            elif kind == "forming":
+                pn = pg.mkPen(color=(r, g, b, 200), width=1.6); pn.setDashPattern([3.0, 4.0])
+            else:
+                pn = pg.mkPen(color=(r, g, b, 235), width=2.0); pn.setDashPattern([7.0, 5.0])
+        else:
+            if kind == "pin":
+                pn = pg.mkPen(color=(r, g, b, 235), width=1.8)
+            elif kind == "forming":
+                pn = pg.mkPen(color=(r, g, b, 120), width=1); pn.setDashPattern([1.0, 4.0])
+            else:
+                pn = pg.mkPen(color=(r, g, b, 170), width=1); pn.setDashPattern([2.0, 6.0])
+        pn.setCosmetic(True)
+        return pn
+
+    @staticmethod
+    def _ema_vp_span_text(t0: float, t1: float) -> str:
+        """'dd/mm HH:MM → dd/mm HH:MM' (local time) of the span the side VP profiles."""
+        f = "%d/%m %H:%M"
+        return "%s → %s" % (time.strftime(f, time.localtime(float(t0))), time.strftime(f, time.localtime(float(t1))))
+
     def _hide_ema_vp(self) -> None:
+        if getattr(self, "_ema_vp_tlbl", None) is not None:
+            self._ema_vp_tlbl.setVisible(False)
         if self._ema_vp_item is not None:
             self._ema_vp_item.setVisible(False)
         for _it in self._ema_vp_va.values():
@@ -7996,18 +8029,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._ema_flip_times = _ftimes
         _STK_GRAY = (150, 158, 175)                 # a leg that swept BOTH extremes is neither -> gray vline
 
+        _bw9 = self._simple_bw()
+
         def _stk_pen(_ln9, _rgb9, _pin9):
-            """The ONE place a flip line's pen is decided: colour (green / red / gray) x pinned (solid / dashed).
-            Keyed so an unchanged line is never re-penned -- this runs for every visible flip, every frame."""
-            _k9 = (tuple(_rgb9), bool(_pin9))
+            """The ONE place a flip line's pen is decided: colour (green / red / gray) x pinned (solid / dashed) x
+            chart style. Keyed so an unchanged line is never re-penned -- this runs for every visible flip, every frame."""
+            _k9 = (tuple(_rgb9), bool(_pin9), _bw9)
             if getattr(_ln9, "_ema_pen_key", None) == _k9:
                 return
-            _pn9 = pg.mkPen(color=(_rgb9[0], _rgb9[1], _rgb9[2], 235 if _pin9 else 170),
-                            width=1.8 if _pin9 else 1)
-            _pn9.setCosmetic(True)
-            if not _pin9:
-                _pn9.setDashPattern([2.0, 6.0])
-            _ln9.setPen(_pn9); _ln9._ema_pen_key = _k9
+            _ln9.setPen(self._ema_vline_pen(_rgb9, "pin" if _pin9 else "flip", _bw9)); _ln9._ema_pen_key = _k9
         # PINNED: everything the structure draws is bounded to the pinned segment -- it STARTS at the pinned
         # vline and ENDS at the next one, so the levels read as of that moment sit exactly over the trend
         # that followed (user 2026-08-28). Unpinned, each item keeps its own anchor and runs to the live edge.
@@ -8058,11 +8088,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # its real line or flips back.
         _frm = getattr(self, "_ema_stk_forming", None)
         if self._ema_stk_frm_ln is None:
-            _pnf = pg.mkPen(color=(150, 158, 175, 120), width=1); _pnf.setCosmetic(True)
-            _pnf.setDashPattern([1.0, 4.0])
-            self._ema_stk_frm_ln = pg.InfiniteLine(angle=90, movable=False, pen=_pnf)
+            self._ema_stk_frm_ln = pg.InfiniteLine(angle=90, movable=False, pen=self._ema_vline_pen((150, 158, 175), "forming", _bw9))
             self._ema_stk_frm_ln.setZValue(13)
             self.plot.addItem(self._ema_stk_frm_ln, ignoreBounds=True)
+        if getattr(self._ema_stk_frm_ln, "_ema_bw", None) != _bw9:      # chart style changed -> re-pen
+            self._ema_stk_frm_ln.setPen(self._ema_vline_pen((150, 158, 175), "forming", _bw9)); self._ema_stk_frm_ln._ema_bw = _bw9
         if (_stk_on or _pl_on or _plc_on) and _frm is not None and int(_frm[0]) >= _off:
             _rgbf = (40, 230, 120) if _frm[1] == "g" else (240, 70, 90)
             if getattr(self._ema_stk_frm_ln, "_ema_pen_key", None) != _rgbf:
@@ -8868,11 +8898,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         _vit.setVisible(False)
                     continue
                 if _vit is None:
-                    _vpn = pg.mkPen(color=(_vrgb[0], _vrgb[1], _vrgb[2], 170), width=1)
-                    _vpn.setCosmetic(True); _vpn.setDashPattern([2.0, 6.0])
-                    _vit = pg.InfiniteLine(angle=90, movable=False, pen=_vpn); _vit.setZValue(14)
+                    _vit = pg.InfiniteLine(angle=90, movable=False, pen=self._ema_vline_pen(_vrgb, "flip", _bw9)); _vit.setZValue(14)
                     self.plot.addItem(_vit, ignoreBounds=True)
                     self._ema_lvl_vl[_vk] = _vit
+                if getattr(_vit, "_ema_bw", None) != _bw9:                 # chart style changed -> re-pen
+                    _vit.setPen(self._ema_vline_pen(_vrgb, "flip", _bw9)); _vit._ema_bw = _bw9
                 _vit.setValue(float(max(0, min(n - 1, _vinfo[0] - _off))))
                 _vit.setVisible(True)
             # THIRDS (user 2026-08-28): split the CURRENT band (low extreme -> high extreme) into 3 equal
@@ -9325,6 +9355,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                 _x0s7, _ws7, _ys7, _hs7, _brs7, _ = _modo
                                 self._ema_vp_item.setOpts(x0=_x0s7, width=_ws7, y=_ys7, height=_hs7, pen=None, brushes=_brs7)
                         self._ema_vp_item.setVisible(True)
+                        # START -> END of the profiled span, white on black, hanging under the band's lowest bin, flush
+                        # with the right edge (user 2026-09-07)
+                        if self._ema_vp_tlbl is None:
+                            self._ema_vp_tlbl = pg.TextItem(anchor=(1, 0), color=(255, 255, 255), fill=pg.mkBrush(0, 0, 0, 235))
+                            self._ema_vp_tlbl.setFont(QtGui.QFont("Consolas", 8))
+                            self._ema_vp_tlbl.setZValue(16)
+                            self.plot.addItem(self._ema_vp_tlbl, ignoreBounds=True)
+                        _ts0 = float(_ana[_sp0c].get("start_time", 0.0) or 0.0)
+                        _ts1 = float(_ana[_sp1c].get("end_time", 0.0) or 0.0) or time.time()
+                        _tk7 = (int(_ts0), int(_ts1))
+                        if getattr(self, "_ema_vp_tlbl_key", None) != _tk7:
+                            self._ema_vp_tlbl.setText(self._ema_vp_span_text(_ts0, _ts1)); self._ema_vp_tlbl_key = _tk7
+                        self._ema_vp_tlbl.setPos(float(_vx1v), float(_cen[0] - _hb / 2.0))
+                        self._ema_vp_tlbl.setVisible(True)
                         # VAH / VAL: dashed lines ON the right-side profile band itself (user 2026-08-27); the Big Player
                         # Gray VP (11) draws its own dashes through _vp_segments, so its lines are not doubled here
                         for _k6, _pv6 in (("vah", _vahp), ("val", _valp)):
