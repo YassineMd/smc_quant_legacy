@@ -43,7 +43,7 @@ public class TradeStore {
 
     // MERGED PLAYERS (user 2026-09-07): the tape's burst rule tracked INCREMENTALLY so the DOM can mark, per frame,
     // the levels where a player STARTED without re-scanning trades. A group = consecutive same-side fills each
-    // within MERGE_MS (2 ms) of the previous; it is "merged" once it has >= 2 fills spanning >= 1 tick. Only merged groups
+    // within MERGE_MS (1 ms) of the previous; it is "merged" once it has >= 2 fills spanning >= 1 tick. Only merged groups
     // are kept (parallel arrays, time-ordered by their first fill): first/last ms, side, first tick, lo/hi tick, usd,
     // n. The last group can still grow; `cur*` = the open chain (merged or not yet).
     private long[] gT0 = new long[256], gT1 = new long[256], gTick0 = new long[256], gLo = new long[256], gHi = new long[256];
@@ -420,8 +420,8 @@ public class TradeStore {
         return n;
     }
 
-    public static final long MERGE_MS = 2;         // same-side fills chained within 2 ms = ONE player (the terminal's burst rule; user's
-                                                   // pick 2026-09-07 after the aggTrade study: 63% of level-eating $ lands <= 1 ms, 1 s glued orders)
+    public static final long MERGE_MS = 1;         // same-side fills chained within 1 ms = ONE player (the terminal's burst rule; user's
+                                                   // pick 2026-09-07 (2 ms first, then 1 ms) after the aggTrade study: 63% of level-eating $ lands <= 1 ms, 1 s glued orders)
 
     /**
      * Tape rows, newest-first, MIN SIZE filter + scroll offset applied. MERGED PLAYERS (user 2026-09-07, the tape's

@@ -4,7 +4,7 @@ over a second (the 1 s burst rule of the Big Player diamonds / the tablet's merg
 from Binance REST (public, newest N pages; cached next to this file as aggtrades_solusdt.npz). DESCRIPTIVE only.
 
 RESULT (400 pages = 400k trades, 35.1 h, 09-05 23:19 -> 09-07 10:27 UTC). The numbers point at 10 ms; the USER set
-BIGPLAYER_BURST_MS / tablet MERGE_MS = 2 (his call):
+BIGPLAYER_BURST_MS / tablet MERGE_MS = 1 (his call):
     SOLUSDT aggTrades: n=400000  span 35.1 h  (09-05 23:19 -> 09-07 10:27 UTC)
     
     1) level-eating same-side pairs: n=41170 (10.3% of trades)
