@@ -56,6 +56,17 @@ public final class Ui {
         return (int) Math.round(t * SLIDER_STEPS);
     }
 
+    // MIN PLAYER (the DOM diamonds' absolute threshold): log slider $50K .. $10M (the terminal's Big Player range)
+    private static final double PLR_LO = 50_000.0, PLR_HI = 10_000_000.0;
+    public static double sliderToPlayer(int v) {
+        double t = Math.max(0, Math.min(SLIDER_STEPS, v)) / (double) SLIDER_STEPS;
+        return Math.pow(10.0, Math.log10(PLR_LO) + t * (Math.log10(PLR_HI) - Math.log10(PLR_LO)));
+    }
+    public static int playerToSlider(double usd) {
+        double c = Math.max(PLR_LO, Math.min(PLR_HI, usd));
+        double t = (Math.log10(c) - Math.log10(PLR_LO)) / (Math.log10(PLR_HI) - Math.log10(PLR_LO));
+        return (int) Math.round(t * SLIDER_STEPS);
+    }
     public static String fmtUsd(double a) {
         return Fmt.usd(a);                         // hand-rolled: String.format cost ~15 us + garbage per call
     }

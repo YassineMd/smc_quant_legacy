@@ -608,6 +608,53 @@ public class TradeStore {
         return got.subList(0, Math.min(got.size(), maxRows)).toArray(new double[0][]);
     }
 
+    /**
+     * Per-level campaign INTENSITY over the WHOLE window (user 2026-09-07: the diamonds are potential entries / stops /
+     * targets, so they must not depend on what is on screen): bin -> [buyUsd, sellUsd, count, lastMs] for every level
+     * where a campaign >= minUsd STARTED inside [cutoffMs, now], plus the P90 and the max of the per-level totals over
+     * ALL those levels. Memoized on (version, grouping, cutoff second, filter): a frame is a map lookup per row.
+     */
+    public static final class Intensity {
+        public final java.util.HashMap<Long, double[]> byBin;
+        public final double p90, max;
+
+        Intensity(java.util.HashMap<Long, double[]> byBin, double p90, double max) {
+            this.byBin = byBin; this.p90 = p90; this.max = max;
+        }
+    }
+
+    private Intensity intMemo;
+    private long intMemoVer = -1, intMemoTpg = -1, intMemoCut = -1;
+    private double intMemoMin = Double.NaN;
+
+    public synchronized Intensity levelIntensity(long tpg, long cutoffMs, double minUsd) {
+        long cutS = cutoffMs / 1000L;
+        if (intMemo != null && intMemoVer == version && intMemoTpg == tpg && intMemoCut == cutS && intMemoMin == minUsd) return intMemo;
+        java.util.HashMap<Long, double[]> m = new java.util.HashMap<>();
+        for (int g = 0; g < gCount; g++) {
+            if (gT0[g] < cutoffMs) continue;
+            if (minUsd > 0 && gUsd[g] < minUsd) continue;
+            long bin = Math.floorDiv(gTick0[g], tpg);
+            double[] acc = m.get(bin);
+            if (acc == null) m.put(bin, acc = new double[4]);
+            acc[gSide[g] > 0 ? 0 : 1] += gUsd[g];
+            acc[2] += 1;
+            acc[3] = Math.max(acc[3], gT1[g]);
+        }
+        double p90 = Double.POSITIVE_INFINITY, max = 0;
+        if (!m.isEmpty()) {
+            double[] tot = new double[m.size()];
+            int k = 0;
+            for (double[] acc : m.values()) tot[k++] = acc[0] + acc[1];
+            java.util.Arrays.sort(tot);
+            p90 = tot[Math.min(tot.length - 1, (int) (tot.length * 0.9))];
+            max = tot[tot.length - 1];
+        }
+        intMemo = new Intensity(m, p90, max);
+        intMemoVer = version; intMemoTpg = tpg; intMemoCut = cutS; intMemoMin = minUsd;
+        return intMemo;
+    }
+
     /** Merged campaigns currently tracked (tests / diagnostics). */
     public synchronized int mergedCount() {
         return gCount;

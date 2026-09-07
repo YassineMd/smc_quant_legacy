@@ -32,13 +32,15 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
     private final FeedClient feed;
     private DomView canvas;
     private PriceChip chip;                        // live-price overlay above the ladder
-    private TextView grpChip, vpChip, minLbl;
-    private SeekBar slider;
+    private TextView grpChip, vpChip, minLbl, plrLbl;
+    private SeekBar slider, pslider;
     private final SharedPreferences prefs;
     private int grpIdx;
     private int vpIdx;                              // 1H default, like the terminal
     private long customT0Ms = 0;                    // custom VP start (epoch ms); 0 = preset window
     private double minUsd;
+    private double minPlayer;                      // DOM diamonds: campaign $ per level (0 = not set yet -> window P90 once)
+    private boolean playerAdjusted, playerDone;
     private SizeDistDialog dist;
     private boolean p50Done;                       // launch default applied (MIN SIZE = tape P50)
     private final DomAgg agg = new DomAgg();       // incremental window aggregate (the lag fix)
@@ -54,6 +56,8 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
         grpIdx = clampIdx(prefs.getInt("dom_group_idx", 0), GROUPS.length);
         vpIdx = clampIdx(prefs.getInt("dom_vp_idx", 2), VP_SECS.length);
         minUsd = prefs.getFloat("dom_min_usd", 0f);
+        minPlayer = prefs.getFloat("dom_min_player", 0f);
+        playerAdjusted = minPlayer > 0;           // a persisted value is the user's: no auto default
         setOrientation(VERTICAL);
         setBackgroundColor(Ui.BG);
 
@@ -109,6 +113,42 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
         LayoutParams ml = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
         ml.leftMargin = (int) Ui.dp(ctx, 8);
         bar.addView(minLbl, ml);
+
+        TextView plCap = Ui.caption(ctx, "PLAYER ◆");
+        LayoutParams pc = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
+        pc.leftMargin = (int) Ui.dp(ctx, 14);
+        bar.addView(plCap, pc);
+        pslider = new SeekBar(ctx);
+        pslider.setMax(Ui.SLIDER_STEPS);
+        pslider.setProgress(Ui.playerToSlider(minPlayer > 0 ? minPlayer : 500_000.0));
+        pslider.getProgressDrawable().setTint(Color.parseColor("#e6ecf4"));
+        pslider.getThumb().setTint(Color.parseColor("#e6ecf4"));
+        LayoutParams pl = new LayoutParams((int) Ui.dp(ctx, 130), LayoutParams.WRAP_CONTENT);
+        pl.leftMargin = (int) Ui.dp(ctx, 8);
+        bar.addView(pslider, pl);
+        plrLbl = new TextView(ctx);
+        plrLbl.setTextColor(Ui.TXT);
+        plrLbl.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        plrLbl.setTextSize(12);
+        bar.addView(plrLbl, ml);
+        pslider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar sb, int v, boolean fromUser) {
+                if (fromUser) playerAdjusted = true;
+                minPlayer = Ui.sliderToPlayer(v);
+                prefs.edit().putFloat("dom_min_player", (float) minPlayer).apply();
+                applyLabels();
+                canvas.invalidate();
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar sb) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar sb) {
+            }
+        });
 
         canvas = new DomView(ctx, this);
         // the ladder + the live-price chip overlay (PriceChip animates over the cached rows)
@@ -215,6 +255,7 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
         grpChip.setText(String.format(Locale.US, "%.2f ▾", GROUPS[grpIdx]));
         vpChip.setText(vpLabel() + " ▾");
         minLbl.setText(minUsd <= 0 ? "ALL" : "≥ " + Ui.fmtUsd(minUsd));
+        if (plrLbl != null) plrLbl.setText("≥ " + Ui.fmtUsd(minPlayer > 0 ? minPlayer : Ui.sliderToPlayer(pslider.getProgress())));
     }
 
     public void tick(boolean heartbeat) {
@@ -230,6 +271,16 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
             lastDeepReq = System.currentTimeMillis();
             store.setCustomKeep(customT0Ms);
             feed.requestFetch(customT0Ms);
+        }
+        if (!playerDone && !playerAdjusted && store.tradeCount() >= 500) {
+            // launch default for MIN PLAYER: the window-wide P90 of the per-level campaign $ (the "top decile" the
+            // diamonds used before they became an absolute threshold); a manual move or a persisted value wins
+            long tpg = Math.max(1, Math.round(GROUPS[grpIdx] / TradeStore.TICK));
+            TradeStore.Intensity in = store.levelIntensity(tpg, vpCutoffMs(), minUsd);
+            if (in.byBin.size() >= 10 && in.p90 > 0 && in.p90 < Double.POSITIVE_INFINITY) {
+                playerDone = true;
+                pslider.setProgress(Ui.playerToSlider(in.p90));
+            }
         }
         long now = System.currentTimeMillis();
         if (heartbeat && now - lastDrawMs < 900) return;   // data frames already repainted this second
@@ -259,6 +310,11 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
     @Override
     public double minUsd() {
         return minUsd;
+    }
+
+    @Override
+    public double minPlayer() {
+        return minPlayer > 0 ? minPlayer : Ui.sliderToPlayer(pslider.getProgress());
     }
 
     @Override

@@ -41,6 +41,8 @@ public class DomView extends View {
 
         double minUsd();
 
+        double minPlayer();                        // DOM diamonds: absolute campaign-$ threshold per level
+
         TradeStore store();
 
         DomAgg agg();
@@ -478,27 +480,16 @@ public class DomView extends View {
         // DOM DIAMONDS (user 2026-09-07): merged players (the tape's burst rule: same-side fills within 1 s that ate
         // through >= 1 tick) marked ONLY on the level where they STARTED. The store tracks them incrementally, so
         // this is one walk of the players inside the window -- never a trade scan; MIN SIZE applies to the total.
-        double[] diaB = new double[nRows], diaS = new double[nRows];
-        int[] diaN = new int[nRows];
-        long[] diaT = new long[nRows];
-        st.levelDiamonds(topBin, nRows, tpg, cutoff, host.minUsd(), diaB, diaS, diaN, diaT);
-        // INTENSITY (user 2026-09-07: "big players are everywhere, but strong / reactive at certain levels"): only the
-        // levels in the top decile of the VISIBLE ladder by campaign $ carry a diamond (the gold P90 rule); its size
-        // follows the $ from that P90 up to the visible max; the count = campaigns fought there; old ones draw dim.
-        double[] diaTot = new double[nRows];
-        double[] nzTot = new double[nRows];
-        int nzn = 0;
-        for (int i = 0; i < nRows; i++) {
-            diaTot[i] = diaB[i] + diaS[i];
-            if (diaTot[i] > 0) nzTot[nzn++] = diaTot[i];
-        }
-        double diaP90 = Double.POSITIVE_INFINITY, diaMax = 0;
-        if (nzn > 0) {
-            java.util.Arrays.sort(nzTot, 0, nzn);
-            diaP90 = nzTot[Math.min(nzn - 1, (int) (nzn * 0.9))];
-            diaMax = nzTot[nzn - 1];
-        }
-        double diaSpan = Math.log(Math.max(diaMax, diaP90 * 1.0001)) - Math.log(diaP90);
+        // INTENSITY (user 2026-09-07: "big players are everywhere, but strong / reactive at certain levels"; then: "I
+        // don't like that they hide/show as I scroll -- I'll use them as entries / stops / targets"): per level the $ of
+        // the campaigns that STARTED there over the WHOLE window; only the levels in the top decile of ALL those levels
+        // carry a diamond (the gold P90 rule, window-wide -> scroll-independent); its size follows the $ from that P90
+        // up to the window max; the count = campaigns fought there; a level whose newest campaign is old draws dim.
+        // MIN PLAYER (the better way, 2026-09-07): the gate is an ABSOLUTE $ threshold (host.minPlayer(), a slider,
+        // default = the window's P90 once per launch), so a diamond changes only when its own level's campaigns do --
+        // never because of the scroll, the other levels or a shifting decile. Size: log $ from the threshold to 10x it.
+        TradeStore.Intensity inten = st.levelIntensity(tpg, cutoff, host.minUsd());
+        double diaThr = Math.max(1.0, host.minPlayer());
         long nowMs = System.currentTimeMillis();
         double[] sideThr = agg.sideGoldThresholds();
         double thrB = sideThr[0], thrS = sideThr[1];
@@ -604,11 +595,15 @@ public class DomView extends View {
             }
             r.priceTxt = priceStr(b, g);
             int dcode = 0;
-            if (diaTot[i] > 0 && diaTot[i] >= diaP90) {
-                int kind = diaB[i] >= 0.67 * diaTot[i] ? 1 : (diaS[i] >= 0.67 * diaTot[i] ? 2 : 3);
-                int step = diaSpan <= 0 ? 7 : (int) Math.round(7.0 * Math.max(0.0, Math.min(1.0, (Math.log(diaTot[i]) - Math.log(diaP90)) / diaSpan)));
-                boolean dim = nowMs - diaT[i] > DIA_DIM_MS;
-                dcode = kind | (step << 2) | (dim ? 32 : 0) | (Math.min(15, diaN[i]) << 6);
+            double[] acc = inten.byBin.get(b);
+            if (acc != null) {
+                double ctot = acc[0] + acc[1];
+                if (ctot >= diaThr) {
+                    int kind = acc[0] >= 0.67 * ctot ? 1 : (acc[1] >= 0.67 * ctot ? 2 : 3);
+                    int step = (int) Math.round(7.0 * Math.max(0.0, Math.min(1.0, Math.log10(ctot / diaThr))));
+                    boolean dim = nowMs - (long) acc[3] > DIA_DIM_MS;
+                    dcode = kind | (step << 2) | (dim ? 32 : 0) | (Math.min(15, (int) acc[2]) << 6);
+                }
             }
             r.dia = dcode;
             rowDia[i] = dcode;
