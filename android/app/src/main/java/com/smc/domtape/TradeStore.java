@@ -561,8 +561,16 @@ public class TradeStore {
      */
     public synchronized int levelDiamonds(long topBin, int nRows, long tpg, long cutoffMs, double minUsd,
                                           double[] outBuy, double[] outSell) {
+        return levelDiamonds(topBin, nRows, tpg, cutoffMs, minUsd, outBuy, outSell, null, null);
+    }
+
+    /** As above, plus per row the number of campaigns that started there (outCnt) and the newest one's last ms (outLast). */
+    public synchronized int levelDiamonds(long topBin, int nRows, long tpg, long cutoffMs, double minUsd,
+                                          double[] outBuy, double[] outSell, int[] outCnt, long[] outLast) {
         java.util.Arrays.fill(outBuy, 0, nRows, 0.0);
         java.util.Arrays.fill(outSell, 0, nRows, 0.0);
+        if (outCnt != null) java.util.Arrays.fill(outCnt, 0, nRows, 0);
+        if (outLast != null) java.util.Arrays.fill(outLast, 0, nRows, 0L);
         int marked = 0;
         for (int g = 0; g < gCount; g++) {              // not time-sorted (two sides interleave): look at every one
             if (gT0[g] < cutoffMs) continue;             // must have STARTED inside the window
@@ -570,6 +578,8 @@ public class TradeStore {
             long i = topBin - Math.floorDiv(gTick0[g], tpg);
             if (i < 0 || i >= nRows) continue;
             if (gSide[g] > 0) outBuy[(int) i] += gUsd[g]; else outSell[(int) i] += gUsd[g];
+            if (outCnt != null) outCnt[(int) i]++;
+            if (outLast != null) outLast[(int) i] = Math.max(outLast[(int) i], gT1[g]);
             marked++;
         }
         return marked;

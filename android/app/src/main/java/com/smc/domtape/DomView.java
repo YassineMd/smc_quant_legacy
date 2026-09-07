@@ -80,7 +80,7 @@ public class DomView extends View {
     private float gVp0;                            // left edge of the VOLUME column (diamond tap target)
     private int gNRows;
     private long gTopBin;
-    private int[] rowDia = new int[0];             // per visible row: 0 none, 1 buy, 2 sell, 3 both (tap hit test)
+    private int[] rowDia = new int[0];             // per visible row: the packed diamond code (0 = none; tap hit test)
     private long lastTopBin = Long.MIN_VALUE;      // the chip animates only when the ladder itself did not move
     private long lastChipBin = Long.MIN_VALUE;
 
@@ -149,17 +149,29 @@ public class DomView extends View {
         return true;
     }
 
-    /** The tape's diamond: a filled rhombus (buy green / sell red / both white) centred on (cx, cy). */
-    private void diamond(Canvas c, float cx, float cy, int kind) {
-        float r = dp5;
+    // Diamond code (Row.dia / rowDia): bits 0-1 kind (1 buy, 2 sell, 3 mixed), bits 2-4 size step 0..7 (log $ from the
+    // visible P90 up to the visible max), bit 5 dim (newest campaign older than 30 min), bits 6+ campaign count (<= 15)
+    private static final long DIA_DIM_MS = 30 * 60_000L;
+
+    /** The intensity diamond: a filled rhombus (buy green / sell red / mixed white), radius by size step, dim by age. */
+    private void diamond(Canvas c, float cx, float cy, int code) {
+        int kind = code & 3, step = (code >> 2) & 7, cnt = code >> 6;
+        boolean dim = (code & 32) != 0;
+        float r = dp3 + dp6 * 0.75f * step / 7f;      // dp3 .. dp7.5 (row 17 dp)
         dia.rewind();
         dia.moveTo(cx, cy - r);
         dia.lineTo(cx + r * 0.78f, cy);
         dia.lineTo(cx, cy + r);
         dia.lineTo(cx - r * 0.78f, cy);
         dia.close();
-        fill.setColor(kind == 1 ? Ui.BUY : (kind == 2 ? Ui.SELL : Ui.TXT));
+        int col = kind == 1 ? Ui.BUY : (kind == 2 ? Ui.SELL : Ui.TXT);
+        fill.setColor((col & 0x00FFFFFF) | ((dim ? 120 : 255) << 24));
         c.drawPath(dia, fill);
+        if (cnt >= 2) {                                // fought there more than once: the count, left of the diamond
+            textH.setColor((col & 0x00FFFFFF) | ((dim ? 120 : 220) << 24));
+            textH.setTextAlign(Paint.Align.RIGHT);
+            txt(c, Integer.toString(cnt), cx - r * 0.78f - dp3, cy - (textH.descent() + textH.ascent()) / 2f, textH);
+        }
     }
 
     // ── level bands (the terminal's Ctrl+drag areas, touch edition) ─────────────────────────
@@ -288,7 +300,7 @@ public class DomView extends View {
         long bin;
         int bidPx, askPx, vpPx;                    // bar widths in whole px (quantized so tiny maxSz moves don't dirty)
         boolean bidHot, askHot, soldHot, boughtHot, gold, lvn;
-        int dia;                                   // merged player STARTED here: 0 none, 1 buy, 2 sell, 3 both
+        int dia;                                   // campaigns STARTED here: packed intensity code (0 = no diamond)
         String bidTxt, askTxt, soldTxt, boughtTxt, vpTxt, priceTxt;
     }
 
@@ -467,7 +479,27 @@ public class DomView extends View {
         // through >= 1 tick) marked ONLY on the level where they STARTED. The store tracks them incrementally, so
         // this is one walk of the players inside the window -- never a trade scan; MIN SIZE applies to the total.
         double[] diaB = new double[nRows], diaS = new double[nRows];
-        st.levelDiamonds(topBin, nRows, tpg, cutoff, host.minUsd(), diaB, diaS);
+        int[] diaN = new int[nRows];
+        long[] diaT = new long[nRows];
+        st.levelDiamonds(topBin, nRows, tpg, cutoff, host.minUsd(), diaB, diaS, diaN, diaT);
+        // INTENSITY (user 2026-09-07: "big players are everywhere, but strong / reactive at certain levels"): only the
+        // levels in the top decile of the VISIBLE ladder by campaign $ carry a diamond (the gold P90 rule); its size
+        // follows the $ from that P90 up to the visible max; the count = campaigns fought there; old ones draw dim.
+        double[] diaTot = new double[nRows];
+        double[] nzTot = new double[nRows];
+        int nzn = 0;
+        for (int i = 0; i < nRows; i++) {
+            diaTot[i] = diaB[i] + diaS[i];
+            if (diaTot[i] > 0) nzTot[nzn++] = diaTot[i];
+        }
+        double diaP90 = Double.POSITIVE_INFINITY, diaMax = 0;
+        if (nzn > 0) {
+            java.util.Arrays.sort(nzTot, 0, nzn);
+            diaP90 = nzTot[Math.min(nzn - 1, (int) (nzn * 0.9))];
+            diaMax = nzTot[nzn - 1];
+        }
+        double diaSpan = Math.log(Math.max(diaMax, diaP90 * 1.0001)) - Math.log(diaP90);
+        long nowMs = System.currentTimeMillis();
         double[] sideThr = agg.sideGoldThresholds();
         double thrB = sideThr[0], thrS = sideThr[1];
         double[] vpThr = agg.vpThresholds();
@@ -571,8 +603,15 @@ public class DomView extends View {
                 r.vpTxt = null;
             }
             r.priceTxt = priceStr(b, g);
-            r.dia = (diaB[i] > 0 ? 1 : 0) | (diaS[i] > 0 ? 2 : 0);
-            rowDia[i] = r.dia;
+            int dcode = 0;
+            if (diaTot[i] > 0 && diaTot[i] >= diaP90) {
+                int kind = diaB[i] >= 0.67 * diaTot[i] ? 1 : (diaS[i] >= 0.67 * diaTot[i] ? 2 : 3);
+                int step = diaSpan <= 0 ? 7 : (int) Math.round(7.0 * Math.max(0.0, Math.min(1.0, (Math.log(diaTot[i]) - Math.log(diaP90)) / diaSpan)));
+                boolean dim = nowMs - diaT[i] > DIA_DIM_MS;
+                dcode = kind | (step << 2) | (dim ? 32 : 0) | (Math.min(15, diaN[i]) << 6);
+            }
+            r.dia = dcode;
+            rowDia[i] = dcode;
             sig = mix(sig, r.bidPx); sig = mix(sig, r.askPx); sig = mix(sig, r.vpPx);
             sig = mix(sig, (r.bidHot ? 1 : 0) | (r.askHot ? 2 : 0) | (r.soldHot ? 4 : 0) | (r.boughtHot ? 8 : 0)
                     | (r.gold ? 16 : 0) | (r.lvn ? 32 : 0) | (r.dia << 6));
