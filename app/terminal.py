@@ -17656,7 +17656,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._lc_body.setRect(QtCore.QRectF(xi - 0.4, bot, 0.8, top - bot))
         hi = max(lc["h"], top); lo = min(lc["l"], bot)
         self._lc_wick.setPen(lc["pen"] if lc["pen"] is not None else pg.mkPen(136, 136, 136))
-        self._lc_wick.setData([xi, xi], [lo, hi])
+        # wicks ONLY outside the body (upper: body top -> high, lower: low -> body bottom), exactly like the candle
+        # picture -- one low->high line crossed the body and showed through the hollow / translucent fill
+        self._lc_wick.setData([xi, xi, xi, xi], [top, hi, lo, bot], connect="pairs")
         self._lc_body.show(); self._lc_wick.show()
         if self._live_px is not None:                           # the dashed live line + the right-edge pill slide too
             self._live_pline.setPos(cur)
