@@ -941,21 +941,21 @@ class BpLabelsItem(pg.GraphicsObject):
     def paint(self, p, *args):
         if not self._lbl:
             return
-        tr = self.deviceTransform()
-        if tr is None:
-            return
-        dev = p.device()
-        wdev = float(dev.width()) if dev is not None else 1e9
-        hdev = float(dev.height()) if dev is not None else 1e9
+        # item -> device transform taken from the PAINTER (pyqtgraph's deviceTransform() segfaults when called
+        # inside paint() on this PySide6 binding -- the terminal could not boot, 2026-09-07)
+        tr = QtGui.QTransform(p.transform())
+        vp = p.viewport()
+        wdev = float(vp.width()); hdev = float(vp.height())
         p.save()
         p.resetTransform()
         p.setFont(self._font)
         p.setPen(self._color)
+        flags = int(QtCore.Qt.AlignCenter)
         for x, y, t in self._lbl:
             pt = tr.map(QtCore.QPointF(x, y))
             if pt.x() < -80 or pt.x() > wdev + 80 or pt.y() < -20 or pt.y() > hdev + 20:
                 continue                                 # off the viewport
-            p.drawText(QtCore.QRectF(pt.x() - 70.0, pt.y() - 10.0, 140.0, 20.0), QtCore.Qt.AlignCenter, t)
+            p.drawText(QtCore.QRectF(pt.x() - 70.0, pt.y() - 10.0, 140.0, 20.0), flags, t)
         p.restore()
 
 
