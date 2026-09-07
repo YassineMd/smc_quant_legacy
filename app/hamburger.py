@@ -197,11 +197,12 @@ CANDLE_MODE_LABELS = ["Normal candles", "Whisker bars", "Footprint", "Delta", "F
 # VAH/VAL white solid, no histogram.
 VP_MODE_LABELS = ["Basic", "Force", "Split Basic", "Split Basic Delta", "Split Force", "Split Force Delta",
                   "Basic Bulls", "Basic Bears", "VP Zones", "Basic Delta",
-                  "Gray VP"]                                  # 10: exact replica of the ema_trendvp design (40 fat bins, amber POC / purple in-VA LVN / light-amber outside POCs / dashed VAH-VAL)
+                  "Gray VP",                                  # 10: exact replica of the ema_trendvp design (40 fat bins, amber POC / purple in-VA LVN / light-amber outside POCs / dashed VAH-VAL)
+                  "Big Player Gray VP"]                       # 11: the Gray VP over BIG-PLAYER events (prints + sweeps / bursts) >= the MIN PLAYER slider (user 2026-09-07)
 # Dropdown DISPLAY order (mode VALUES, not positions). "Basic Delta" (9) is a right-only net-delta histogram, so it is
 # shown with the other right-only delta modes (Bulls/Bears) instead of last. Appending 9 to the label list keeps every
 # existing index — and the persisted _vp_mode — stable; the combo carries the VALUE as userData, so order != value.
-VP_MODE_ORDER = [0, 1, 2, 3, 4, 5, 9, 6, 7, 8, 10]
+VP_MODE_ORDER = [0, 1, 2, 3, 4, 5, 9, 6, 7, 8, 10, 11]
 
 
 class _WheelSlider(QtWidgets.QSlider):
@@ -286,6 +287,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     bubbleVolChanged = QtCore.Signal(float)          # Heatmap trade-bubble min volume filter (SOL; 0 = show all)
     bubbleMinUsdChanged = QtCore.Signal(float)       # Candle-Bubbles MIN SIZE filter (USD/level; 0 = show all)
     bigPlayerMinUsdChanged = QtCore.Signal(float)    # Big Player Levels: single-print USD threshold
+    bpVpMinUsdChanged = QtCore.Signal(float)         # Big Player Gray VP: MIN PLAYER (USD per player) threshold
     keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
     candleModeChanged = QtCore.Signal(int)   # candle render mode 0..5 (also cycled by 'W')
     vpModeChanged = QtCore.Signal(int)       # volume-profile render mode 0..8 (selection VP + 4h 'V' + prev-day VP)
@@ -447,6 +449,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.vp_combo.currentIndexChanged.connect(
             lambda _i: self.vpModeChanged.emit(int(self.vp_combo.currentData())))
         _chart.addWidget(self.vp_combo)
+        self._build_bpvp_slider(_chart)                  # MIN PLAYER slider, shown only for 'Big Player Gray VP' (11)
+        self.vp_combo.currentIndexChanged.connect(lambda _i: self._sync_bpvp_slider())
 
         # --- order-flow scanner mode (patch §12) ---
         _chart.addWidget(self._header("Scanner Mode"))
@@ -1288,6 +1292,68 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.bp_lbl.setText("≥ " + self._bub_fmt_usd(self.big_player_min_usd()))
         self.bigPlayerMinUsdChanged.emit(self.big_player_min_usd())
 
+    # ── Big Player Gray VP (VP mode 11): MIN PLAYER slider (user 2026-09-07) ─────────────────────────────
+    def _build_bpvp_slider(self, section) -> None:
+        """Under the VP dropdown, visible only for 'Big Player Gray VP': the Gray VP is built from big-player EVENTS
+        whose size (USD per player: a single print, or a sweep / burst = one order that ate through the book) is >=
+        this. Same log $50K..$10M domain as the Big Player Levels slider; default $500K."""
+        from . import config
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QHBoxLayout(w)
+        lay.setContentsMargins(8, 1, 8, 5)
+        lay.setSpacing(8)
+        cap = QtWidgets.QLabel("MIN PLAYER")
+        cap.setStyleSheet("color:#7a8496; font-family:Consolas; font-size:9px; font-weight:bold;"
+                          "letter-spacing:1px; background:transparent;")
+        lay.addWidget(cap)
+        self.bpvp_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.bpvp_slider.setRange(0, 1000)
+        self.bpvp_slider.setFixedWidth(150)
+        self.bpvp_slider.setStyleSheet("""
+            QSlider { border:none; background:transparent; }
+            QSlider::groove:horizontal { height:4px; border-radius:2px; background:#1d2632; }
+            QSlider::sub-page:horizontal { height:4px; border-radius:2px;
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #9aa3b2, stop:1 #f0b90b); }
+            QSlider::handle:horizontal { width:14px; height:14px; margin:-5px 0; border-radius:8px;
+                background:#e6ecf4; border:2px solid #f0b90b; }
+        """)
+        lay.addWidget(self.bpvp_slider)
+        self.bpvp_lbl = QtWidgets.QLabel()
+        self.bpvp_lbl.setStyleSheet("color:#f0b90b; font-family:Consolas; font-size:10px;"
+                                    "font-weight:bold; background:transparent;")
+        lay.addWidget(self.bpvp_lbl)
+        lay.addStretch(1)
+        w.setToolTip("Big Player Gray VP: only players (single prints, sweeps, bursts) of at least this USD size "
+                     "build the profile. A sweep / burst is spread over every tick it ate through.")
+        section.addWidget(w)
+        self.bpvp_w = w
+        self.set_bp_vp_min_usd(config.BIGPLAYER_MIN_USD)
+        self.bpvp_slider.valueChanged.connect(self._on_bpvp_slider)
+        self._sync_bpvp_slider()
+
+    def _sync_bpvp_slider(self) -> None:
+        try:
+            self.bpvp_w.setVisible(int(self.vp_combo.currentData()) == 11)
+        except Exception:
+            pass
+
+    def _on_bpvp_slider(self, _v: int) -> None:
+        self.bpvp_lbl.setText("≥ " + self._bub_fmt_usd(self.bp_vp_min_usd()))
+        self.bpVpMinUsdChanged.emit(self.bp_vp_min_usd())
+
+    def bp_vp_min_usd(self) -> float:
+        t = self.bpvp_slider.value() / 1000.0
+        return 10.0 ** (math.log10(self._BP_USD_LO) + t * (math.log10(self._BP_USD_HI) - math.log10(self._BP_USD_LO)))
+
+    def set_bp_vp_min_usd(self, usd: float) -> None:
+        c = max(self._BP_USD_LO, min(self._BP_USD_HI, float(usd or self._BP_USD_LO)))
+        t = ((math.log10(c) - math.log10(self._BP_USD_LO))
+             / (math.log10(self._BP_USD_HI) - math.log10(self._BP_USD_LO)))
+        self.bpvp_slider.blockSignals(True)
+        self.bpvp_slider.setValue(int(round(t * 1000)))
+        self.bpvp_slider.blockSignals(False)
+        self.bpvp_lbl.setText("≥ " + self._bub_fmt_usd(self.bp_vp_min_usd()))
+
     def simple_bw(self) -> bool:
         """Chart Style toggle: True = 'Simple BW' (white canvas, black candles)."""
         cb = self.sub_checks.get("simple_bw")
@@ -1478,6 +1544,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         _i = self.vp_combo.findData(int(m))                      # select by mode VALUE (display order != value)
         self.vp_combo.setCurrentIndex(_i if _i >= 0 else 0)
         self.vp_combo.blockSignals(False)
+        self._sync_bpvp_slider()
 
     # ------------------------------------------------------------------
     def _emit_multiplier(self, raw: int) -> None:

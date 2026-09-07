@@ -1985,6 +1985,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.set_bubble_min_usd(getattr(self, "_bub_min_saved", 0.0))   # Candle-Bubbles MIN SIZE restore
         if getattr(self, "_bp_min_saved", 0.0) > 0:
             self.menu.set_big_player_min_usd(self._bp_min_saved)           # Big Player threshold restore
+        if getattr(self, "_bpvp_min_saved", 0.0) > 0:
+            self.menu.set_bp_vp_min_usd(self._bpvp_min_saved)              # Big Player Gray VP threshold restore
         self.menu.set_reward_strength(self._reward_strength)  # sync the reward-switch strength slider likewise
         self.menu.set_bubble_vol(self.hm_bubble_min)  # sync the heatmap bubble-volume slider to the restored/default value
         self.menu.set_kc_scale(self._kc_scale)     # sync the Keltner-scale slider to the restored/default value
@@ -2231,6 +2233,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.bubbleVolChanged.connect(self._on_bubble_vol)                  # Heatmap trade-bubble min-volume filter
         self.menu.bubbleMinUsdChanged.connect(lambda _v: self._save_ui_state())  # Candle-Bubbles MIN SIZE (repaint is per-frame)
         self.menu.bigPlayerMinUsdChanged.connect(self._on_bigplayer_min)          # Big Player threshold -> redraw + persist
+        self.menu.bpVpMinUsdChanged.connect(self._on_bpvp_min)                    # Big Player Gray VP threshold -> redraw + persist
         self.menu.hm_contrast.changed.connect(self._hm_contrast_changed)         # Heatmap Liquidity-Contrast cutoffs (hamburger-hosted)
         self.menu.hm_contrast.reset_clicked.connect(self._hm_contrast_reset)     # Heatmap 'Reset -> auto'
         self.menu.keltnerScaleChanged.connect(self._on_kc_scale)   # 1m-KC smooth-approx effective-TF scale slider
@@ -4593,7 +4596,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _on_vp_mode(self, m: int) -> None:
         """Hamburger 'Volume Profile Mode' dropdown changed -> re-render the selection VP + the 4h 'V' overlay."""
-        self._vp_mode = int(m) % 11      # 11 VP modes (0..10; 8 = VP Zones line-only, 10 = Trend Style)
+        self._vp_mode = int(m) % 12      # 12 VP modes (0..11; 8 = VP Zones line-only, 10 = Gray VP, 11 = Big Player Gray VP)
         self._save_ui_state()
         self._sel_sig = None                         # force the Mode-10 selection VP to redraw
         if self._z4_last_buckets:                    # re-render the 4h V overlay immediately
@@ -5755,6 +5758,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if len(self._pvp_day_cache) > 64:     # bound: keep it a small rolling cache
                     self._pvp_day_cache.pop(next(iter(self._pvp_day_cache)))
             rows = sorted(((float(ps), a) for ps, a in agg.items()), key=lambda t: t[0])
+            rows = self._vp_rows_for(rows, seg=seg)             # Big Player Gray VP -> big-player rows of that day
             if len(rows) >= 2 and max((sum(a) for _, a in rows), default=0.0) > 0:
                 prices = [p for p, _ in rows]
                 gaps = sorted(prices[k + 1] - prices[k] for k in range(len(prices) - 1))
@@ -9684,6 +9688,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 try:                                              # a VP-histogram failure must NOT hide the V/Z/B buttons + lines
                     _agg = self._z4_force_hist(buckets, starts, own_s, own_e)   # {price: [opL, opS, clL, clS]}
                     _rw = sorted(((float(_ps), _a) for _ps, _a in _agg.items()), key=lambda t: t[0])
+                    _rw = self._vp_rows_for(_rw, t0=float(own_s), t1=float(own_e))   # Big Player Gray VP
                     if len(_rw) >= 2 and max((sum(_a) for _, _a in _rw), default=0.0) > 0:
                         _prices = [p for p, _ in _rw]
                         _gaps = sorted(_prices[k + 1] - _prices[k] for k in range(len(_prices) - 1))
@@ -9788,6 +9793,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "bub_crazy_only": self._bub_crazy_only,                   # 'b' cycle stage-3: only the crazy bubbles
                 "bub_min_usd": float(self.menu.bubble_min_usd()),         # Candle-Bubbles MIN SIZE (USD/level)
                 "bigplayer_min_usd": float(self.menu.big_player_min_usd()),   # Big Player single-print threshold
+                "bpvp_min_usd": float(self.menu.bp_vp_min_usd()),             # Big Player Gray VP MIN PLAYER threshold
             }
             # EVERY hamburger toggle (Sub-Widgets + Mode 10 Overlays), keyed by its menu key, so a reopened
             # session restores the exact menu the user left (POC, footprint, alerts, … all sticky).
@@ -9855,7 +9861,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._candle_mode = int(_cm) % 6
         _vm = s.get("vp_mode")
         if isinstance(_vm, (int, float)):
-            self._vp_mode = int(_vm) % 11
+            self._vp_mode = int(_vm) % 12
         _sb = s.get("sel_bg")
         if isinstance(_sb, (int, float)):
             self.sel_bg_slider.setValue(max(0, min(100, int(_sb))))   # handler restores z-values + label
@@ -9895,6 +9901,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._bub_crazy_only = bool(s.get("bub_crazy_only", self._bub_crazy_only))   # 'b' cycle stage-3: only crazy
         self._bub_min_saved = float(s.get("bub_min_usd", 0.0) or 0.0)     # Candle-Bubbles MIN SIZE, applied post-menu
         self._bp_min_saved = float(s.get("bigplayer_min_usd", 0.0) or 0.0)   # Big Player threshold (0 = config default)
+        self._bpvp_min_saved = float(s.get("bpvp_min_usd", 0.0) or 0.0)       # Big Player Gray VP threshold
 
     def _set_ob_ice(self, on: bool) -> None:
         """Flip the Order Blocks + Absorption/Iceberg menu checkboxes together (emits layerToggled -> show/hide)."""
@@ -10102,6 +10109,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         x0s = []; ws = []; ys = []; hs = []; brs = []
         if mode == 8:
             return x0s, ws, ys, hs, brs
+        if mode == 11:                                         # BIG PLAYER GRAY VP: the Gray renderer over big-player rows
+            mode = 10                                          # (the callers swapped `rows` via _vp_rows_for)
 
         def _add(bx, bw, by, col):
             if bw > 0:
@@ -10211,8 +10220,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if len(agg) < 2:
             self._hide_selection_vp(); return
         rows = sorted((float(ps), a) for ps, a in agg.items())
+        rows = self._vp_rows_for(rows, seg=sel)                  # Big Player Gray VP -> big-player rows of the selection
         prices = [p for p, _ in rows]
-        if max((sum(a) for _, a in rows), default=0.0) <= 0:
+        if len(rows) < 2 or max((sum(a) for _, a in rows), default=0.0) <= 0:
             self._hide_selection_vp(); return
         gaps = sorted(prices[k + 1] - prices[k] for k in range(len(prices) - 1))
         thick = (gaps[len(gaps) // 2] if gaps else (prices[-1] - prices[0]) / max(1, len(prices))) * 0.9
@@ -10235,7 +10245,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             levels = [None, None, None, None, None]
         for _ln, _y in zip(self.bc_sel_vp_lines, levels):
-            if self._vp_mode == 10:                           # GRAY VP: NO extra level lines at all (its own
+            if self._vp_mode in (10, 11):                     # GRAY VP: NO extra level lines at all (its own
                 _ln.setVisible(False); continue               # dashes + coloured bins carry everything)
             if _y is not None and _y == _y:
                 _ln.setData([float(lo_i), float(hi_i)], [float(_y), float(_y)]); _ln.setVisible(True)
@@ -10969,6 +10979,103 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._bp_sweeps.append(rec); pend[7] = True
         self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1
 
+    def _bp_events(self, t_lo: float, t_last: float, t_hi: float, sw_on: bool) -> list:
+        """Big Player EVENTS between the first drawn bar (`t_lo` = its end_time) and `t_hi`: every retained print
+        (>= the store floor) + every atomic SWEEP (same ms + side, >= 2 levels), live store first; bars older than the
+        live tape store (6h backfill) come from the big-print ARCHIVE (study/bigprint_archive), rows strictly BEFORE
+        the live store's oldest print so the two sources never double-count the same whale. With `sw_on`, same-side
+        events within BIGPLAYER_BURST_MS (1 s) are folded into ONE player (BURST): total summed, range = everything
+        the player ate through. Returns [(t, side, end price, usd, kind 'pr' | 'sw', lo, hi)], time-sorted. Shared by
+        the Big Player Levels overlay (bubbles / diamonds) and the Big Player Gray VP."""
+        live_start = self._bp_trades[0][0] if self._bp_trades else float("inf")
+        prs = [r for r in self._bp_trades if t_lo > 0 and r[0] <= t_hi]
+        sws = [s for s in self._bp_sweeps if t_lo > 0 and s[0] <= t_hi] if sw_on else []
+        if t_lo > 0 and t_lo < live_start:
+            from . import bigprint_store
+            _t1 = min(float(t_last), live_start) - 1e-6
+            prs = [r for r in bigprint_store.load_prints(t_lo - 1.0, _t1, 0.0) if r[0] < live_start] + prs
+            if sw_on:
+                sws = [s for s in bigprint_store.load_sweeps(t_lo - 1.0, _t1, 0.0, int(config.BIGPLAYER_SWEEP_MIN_LEVELS))
+                       if s[0] < live_start] + sws
+        ev = []                                                 # (t, side, end price, usd, kind "pr" | "sw", lo, hi)
+        swkeys = {(int(round(s[0] * 1000.0)), int(s[4] > 0)) for s in sws}
+        for (t, price, usd, side) in prs:
+            if (int(round(t * 1000.0)), int(side > 0)) in swkeys:
+                continue                                        # a fill of an atomic sweep: counted in the sweep
+            ev.append((t, int(side > 0), price, usd, "pr", price, price))
+        for (t, p0, p1, usd, side, nl) in sws:
+            ev.append((t, int(side > 0), p1, usd, "sw", min(p0, p1), max(p0, p1)))
+        ev.sort(key=lambda e: e[0])
+        # BURSTS (user 2026-09-06): same-side events that follow each other within BIGPLAYER_BURST_MS (1 s) are
+        # ONE player working the book -> one event, the totals summed, at the LAST event's price / bar, its range
+        # = everything the player ate through. A cluster of several prints, or anything containing a sweep, is
+        # drawn as a DIAMOND; a lone print stays a bubble.
+        if sw_on and ev:
+            win = float(config.BIGPLAYER_BURST_MS) / 1000.0
+            clusters = []; cur = None                           # cur = [t_last, side, price_last, usd, n, has_sweep, lo, hi]
+            for (t, side, price, usd, kind, lo, hi) in ev:
+                if cur is not None and cur[1] == side and t - cur[0] <= win:
+                    cur[0] = t; cur[2] = price; cur[3] += usd; cur[4] += 1; cur[5] = cur[5] or kind == "sw"
+                    cur[6] = min(cur[6], lo); cur[7] = max(cur[7], hi)
+                    continue
+                if cur is not None:
+                    clusters.append(cur)
+                cur = [t, side, price, usd, 1, kind == "sw", lo, hi]
+            if cur is not None:
+                clusters.append(cur)
+            ev = [(c[0], c[1], c[2], c[3], "sw" if (c[4] > 1 or c[5]) else "pr", c[6], c[7]) for c in clusters]
+        return ev
+
+    # ── BIG PLAYER GRAY VP (VP mode 11, user 2026-09-07) ──────────────────────────────────────────────────
+    def _bp_vp_rows(self, t0: float, t1: float) -> list:
+        """VP rows [(price, [usd, 0, 0, 0])] over [t0, t1] from big-player EVENTS >= the MIN PLAYER slider: a single
+        print lands on its price; a sweep / burst (the diamond: one order that ate through the book) is spread
+        evenly over every tick from its low to its high. Memoized on (range, threshold, store state)."""
+        thr = float(self.menu.bp_vp_min_usd())
+        key = (round(float(t0), 3), round(float(t1), 3), thr, len(self._bp_trades), len(self._bp_sweeps),
+               (self._bp_trades[-1][0] if self._bp_trades else 0.0), (self._bp_sweeps[-1][0] if self._bp_sweeps else 0.0))
+        c = getattr(self, "_bpvp_cache", None)
+        if c is not None and c[0] == key:
+            return c[1]
+        tick = float(config.TICK_SIZE)
+        agg = {}
+        try:
+            events = self._bp_events(float(t0), float(t1), float(t1) + 1e-6, True)
+        except Exception:
+            events = []
+        for (t, side, price, usd, kind, lo, hi) in events:
+            if t < t0 or t > t1 or usd < thr:
+                continue
+            if kind == "pr" or hi - lo < tick / 2.0:
+                p = round(float(price), config.PRICE_DECIMALS); agg[p] = agg.get(p, 0.0) + usd
+            else:
+                n = int(round((hi - lo) / tick)) + 1; share = usd / n
+                for k in range(n):
+                    p = round(lo + k * tick, config.PRICE_DECIMALS); agg[p] = agg.get(p, 0.0) + share
+        rows = sorted((p, [v, 0.0, 0.0, 0.0]) for p, v in agg.items())
+        self._bpvp_cache = (key, rows)
+        return rows
+
+    def _vp_rows_for(self, rows, seg=None, t0=None, t1=None):
+        """Rows for _vp_segments: the caller's bucket-level rows, or -- in 'Big Player Gray VP' (11) -- the big-player
+        rows over the same time range (`seg` = the bucket slice, or explicit t0/t1 epoch seconds)."""
+        if self._vp_mode != 11:
+            return rows
+        if seg is not None:
+            if not seg:
+                return []
+            t0 = float(seg[0].get("start_time", 0.0) or 0.0)
+            t1 = float(seg[-1].get("end_time", 0.0) or 0.0) or time.time()
+        if t0 is None or t1 is None:
+            return rows
+        return self._bp_vp_rows(t0, t1)
+
+    def _on_bpvp_min(self, usd: float) -> None:
+        """MIN PLAYER slider moved -> rebuild every Big Player Gray VP (selection, 4h V, previous days) + persist."""
+        self._bpvp_cache = None
+        self._pvp_sig = None
+        self._on_vp_mode(self._vp_mode)
+
     def _draw_bigplayer(self, filtered) -> None:
         if (not self.menu.layer_state("m10_bigplayer") or self.scanner_mode != "bucket_canvas"
                 or self._hide_candles):
@@ -11010,43 +11117,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # >= 2 levels). Live store first; REPLAY / deep history: bars older than the live tape store (6h backfill)
         # come from the big-print ARCHIVE (study/bigprint_archive), rows strictly BEFORE the live store's oldest
         # print so the two sources never double-count the same whale.
-        live_start = self._bp_trades[0][0] if self._bp_trades else float("inf")
-        prs = [r for r in self._bp_trades if ets[0] > 0 and r[0] <= t_hi]
-        sws = [s for s in self._bp_sweeps if ets[0] > 0 and s[0] <= t_hi] if _sw_on else []
-        if ets[0] > 0 and ets[0] < live_start:
-            from . import bigprint_store
-            _t1 = min(float(ets[-1]), live_start) - 1e-6
-            prs = [r for r in bigprint_store.load_prints(ets[0] - 1.0, _t1, 0.0) if r[0] < live_start] + prs
-            if _sw_on:
-                sws = [s for s in bigprint_store.load_sweeps(ets[0] - 1.0, _t1, 0.0, int(config.BIGPLAYER_SWEEP_MIN_LEVELS))
-                       if s[0] < live_start] + sws
-        ev = []                                                 # (t, side, end price, usd, kind "pr" | "sw", lo, hi)
-        swkeys = {(int(round(s[0] * 1000.0)), int(s[4] > 0)) for s in sws}
-        for (t, price, usd, side) in prs:
-            if (int(round(t * 1000.0)), int(side > 0)) in swkeys:
-                continue                                        # a fill of an atomic sweep: counted in the sweep
-            ev.append((t, int(side > 0), price, usd, "pr", price, price))
-        for (t, p0, p1, usd, side, nl) in sws:
-            ev.append((t, int(side > 0), p1, usd, "sw", min(p0, p1), max(p0, p1)))
-        ev.sort(key=lambda e: e[0])
-        # BURSTS (user 2026-09-06): same-side events that follow each other within BIGPLAYER_BURST_MS (1 s) are
-        # ONE player working the book -> one event, the totals summed, at the LAST event's price / bar, its range
-        # = everything the player ate through. A cluster of several prints, or anything containing a sweep, is
-        # drawn as a DIAMOND; a lone print stays a bubble.
-        if _sw_on and ev:
-            win = float(config.BIGPLAYER_BURST_MS) / 1000.0
-            clusters = []; cur = None                           # cur = [t_last, side, price_last, usd, n, has_sweep, lo, hi]
-            for (t, side, price, usd, kind, lo, hi) in ev:
-                if cur is not None and cur[1] == side and t - cur[0] <= win:
-                    cur[0] = t; cur[2] = price; cur[3] += usd; cur[4] += 1; cur[5] = cur[5] or kind == "sw"
-                    cur[6] = min(cur[6], lo); cur[7] = max(cur[7], hi)
-                    continue
-                if cur is not None:
-                    clusters.append(cur)
-                cur = [t, side, price, usd, 1, kind == "sw", lo, hi]
-            if cur is not None:
-                clusters.append(cur)
-            ev = [(c[0], c[1], c[2], c[3], "sw" if (c[4] > 1 or c[5]) else "pr", c[6], c[7]) for c in clusters]
+        ev = self._bp_events(float(ets[0]), float(ets[-1]), t_hi, _sw_on)   # prints + sweeps + bursts on the drawn bars
         # ROUND bubbles = single prints; DIAMONDS = sweeps / bursts -- each >= the slider. Same bar + price + side
         # merged, amounts summed (user 2026-09-04: a buyer and a seller at one level are opposite players).
         merged = {}; smerged = {}                               # (bar, price, side) -> usd | [usd, lo, hi]
