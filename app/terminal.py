@@ -17457,10 +17457,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     @staticmethod
     def _simple_bw_palette(opens, closes):
-        """Simple BW candle palette (user 2026-09-06): bearish (close < open) = BLACK fill, bullish (close >= open) =
-        NO fill; every border + wick black, 1 px cosmetic. Returns (brushes, pens) aligned with the candles."""
+        """Simple BW candle palette (user 2026-09-06/07): bearish (close < open) = BLACK fill, bullish (close >= open) =
+        WHITE fill; every border + wick black, 1 px cosmetic. Returns (brushes, pens) aligned with the candles."""
         blk = pg.mkPen(0, 0, 0, width=1.0); blk.setCosmetic(True)
-        fill = pg.mkBrush(0, 0, 0, 255); hollow = pg.mkBrush(None)
+        fill = pg.mkBrush(0, 0, 0, 255); hollow = pg.mkBrush(255, 255, 255, 255)
         n = min(len(opens), len(closes))
         brushes = [fill if float(closes[i]) < float(opens[i]) else hollow for i in range(n)]
         return brushes, [blk] * n
@@ -17648,7 +17648,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if top - bot < config.TICK_SIZE / 2.0:
             top = bot + config.TICK_SIZE / 2.0                   # ranged doji: the same sliver the picture draws
         if self._simple_bw():
-            self._lc_body.setBrush(pg.mkBrush(0, 0, 0, 255) if cur < o else pg.mkBrush(None))
+            self._lc_body.setBrush(pg.mkBrush(0, 0, 0, 255) if cur < o else pg.mkBrush(255, 255, 255, 255))
             self._lc_body.setPen(lc["pen"])
         else:
             self._lc_body.setBrush(lc["brush"] if lc["brush"] is not None else pg.mkBrush(None))
