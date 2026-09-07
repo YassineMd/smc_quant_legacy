@@ -59,7 +59,8 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
         minPlayer = prefs.getFloat("dom_min_player5", 0f);
         customT0Ms = prefs.getLong("dom_custom_t0", 0L);     // the custom VP start survives a restart (the tape does too)
         if (customT0Ms > 0) store.setCustomKeep(customT0Ms);
-        playerAdjusted = minPlayer > 0;           // a persisted value is the user's: no auto default
+        playerAdjusted = false;                   // P50 follows the window (user 2026-09-07): the saved value is only the
+                                                  // slider's position until the window's P50 lands; a manual move holds until the next VP change
         setOrientation(VERTICAL);
         setBackgroundColor(Ui.BG);
 
@@ -194,6 +195,7 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
         menu.setOnMenuItemClickListener(item -> {
             grpIdx = item.getItemId();              // price-anchored ladder: a regroup never jumps
             prefs.edit().putInt("dom_group_idx", grpIdx).apply();
+            playerDone = false; playerAdjusted = false;   // new bins -> the window's P50 over them
             applyLabels();
             canvas.invalidate();
             return true;
@@ -211,6 +213,7 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
                 customT0Ms = 0;                     // a preset always clears the custom start
                 store.setCustomKeep(0);
                 prefs.edit().putInt("dom_vp_idx", vpIdx).putLong("dom_custom_t0", 0L).apply();
+                playerDone = false; playerAdjusted = false;   // a new window -> its own P50 (user 2026-09-07)
                 applyLabels();
                 canvas.invalidate();
             } else {
@@ -242,6 +245,7 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
         customT0Ms = Math.min(t0Ms, now - 60_000);  // a future start would be an empty window
         store.setCustomKeep(customT0Ms);
         prefs.edit().putLong("dom_custom_t0", customT0Ms).apply();
+        playerDone = false; playerAdjusted = false;   // a new window -> its own P50 (user 2026-09-07)
         long oldest = store.oldestTs();
         if (oldest > 0 && customT0Ms < oldest - 1000)
             feed.requestFetch(customT0Ms);          // bridge fetches older tape (clamped to 72h retention)
@@ -280,7 +284,7 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
             // above it carry HALF of all launched campaign $; a manual move or a persisted value wins
             long tpg = Math.max(1, Math.round(GROUPS[grpIdx] / TradeStore.TICK));
             TradeStore.Intensity in = store.levelIntensity(tpg, vpCutoffMs(), minUsd);
-            if (in.byBin.size() >= 10 && in.p50 > 0) {
+            if (!in.byBin.isEmpty() && in.p50 > 0) {  // any launch level at all: the half-$ rule is defined
                 playerDone = true;
                 pslider.setProgress(Ui.playerToSlider(in.p50));
             }
