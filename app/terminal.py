@@ -1998,6 +1998,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_big_player_min_usd(self._bp_min_saved)           # Big Player threshold restore
         if getattr(self, "_bpvp_min_saved", 0.0) > 0:
             self.menu.set_bp_vp_min_usd(self._bpvp_min_saved)              # Big Player Gray VP threshold restore
+        try:
+            self.menu.set_ema_vp_pct(getattr(self, "_ema_vp_pct_saved", 50))
+        except Exception:
+            pass
         self.menu.set_reward_strength(self._reward_strength)  # sync the reward-switch strength slider likewise
         self.menu.set_bubble_vol(self.hm_bubble_min)  # sync the heatmap bubble-volume slider to the restored/default value
         self.menu.set_kc_scale(self._kc_scale)     # sync the Keltner-scale slider to the restored/default value
@@ -2245,6 +2249,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.bubbleMinUsdChanged.connect(lambda _v: self._save_ui_state())  # Candle-Bubbles MIN SIZE (repaint is per-frame)
         self.menu.bigPlayerMinUsdChanged.connect(self._on_bigplayer_min)          # Big Player threshold -> redraw + persist
         self.menu.bpVpMinUsdChanged.connect(self._on_bpvp_min)                    # Big Player Gray VP threshold -> redraw + persist
+        self.menu.emaVpPctChanged.connect(self._on_ema_vp_pct)                    # EMA Trend VP PLAYER slider -> redraw + persist
         self.menu.hm_contrast.changed.connect(self._hm_contrast_changed)         # Heatmap Liquidity-Contrast cutoffs (hamburger-hosted)
         self.menu.hm_contrast.reset_clicked.connect(self._hm_contrast_reset)     # Heatmap 'Reset -> auto'
         self.menu.keltnerScaleChanged.connect(self._on_kc_scale)   # 1m-KC smooth-approx effective-TF scale slider
@@ -9343,8 +9348,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         Cached per (span freeze key, mode)."""
         mode = int(self._vp_mode)
         if mode in (8, 10):
+            self.menu.set_ema_vp_usd(None)
             return None
-        key = (frz, mode, 0.0)                                # mode 11: the threshold comes from the span itself
+        pct = int(self.menu.ema_vp_pct()) if mode == 11 else 0
+        key = (frz, mode, pct)                                # mode 11: the threshold comes from the span itself, at P
         cache = getattr(self, "_ema_vp_rows_cache", None)
         if cache is None or cache[0] != key:
             rows = []
@@ -9355,7 +9362,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     t0 = float(ana[sp0].get("start_time", 0.0) or 0.0)
                     t1 = float(ana[sp1].get("end_time", 0.0) or 0.0) or time.time()
                     ev = self._bp_events(t0, t1, t1 + 1e-6, True)
-                    rows = self._bp_vp_rows(t0, t1, thr=self._bp_p50_usd(ev)) if ev else []
+                    thr = self._bp_pct_usd(ev, pct / 100.0) if ev else 0.0
+                    rows = self._bp_vp_rows(t0, t1, thr=thr) if ev else []
+                    self._ema_vp_thr = thr
                 else:
                     agg = self._sel_vp_hist(ana[sp0:sp1 + 1])
                     rows = sorted((float(ps), a) for ps, a in agg.items())
@@ -9369,6 +9378,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 thick = thick_native
             self._ema_vp_rows_cache = (key, rows, thick)
         _, rows, thick = self._ema_vp_rows_cache
+        self.menu.set_ema_vp_usd(getattr(self, "_ema_vp_thr", None) if mode == 11 else None)
         if len(rows) < 2 or max((sum(a) for _, a in rows), default=0.0) <= 0:
             return None
         x0s, ws, ys, hs, brs = self._vp_segments(rows, mode, 0.0, mw / 0.40, thick)
@@ -9865,6 +9875,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "bub_min_usd": float(self.menu.bubble_min_usd()),         # Candle-Bubbles MIN SIZE (USD/level)
                 "bigplayer_min_usd": float(self.menu.big_player_min_usd()),   # Big Player single-print threshold
                 "bpvp_min_usd": float(self.menu.bp_vp_min_usd()),             # Big Player Gray VP MIN PLAYER threshold
+                "ema_vp_pct": int(self.menu.ema_vp_pct()),                    # EMA Trend VP PLAYER slider (P of its span)
             }
             # EVERY hamburger toggle (Sub-Widgets + Mode 10 Overlays), keyed by its menu key, so a reopened
             # session restores the exact menu the user left (POC, footprint, alerts, … all sticky).
@@ -9973,6 +9984,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._bub_min_saved = float(s.get("bub_min_usd", 0.0) or 0.0)     # Candle-Bubbles MIN SIZE, applied post-menu
         self._bp_min_saved = float(s.get("bigplayer_min_usd", 0.0) or 0.0)   # Big Player threshold (0 = config default)
         self._bpvp_min_saved = float(s.get("bpvp_min_usd", 0.0) or 0.0)       # Big Player Gray VP threshold
+        self._ema_vp_pct_saved = int(s.get("ema_vp_pct", 50) or 50)             # EMA Trend VP PLAYER slider
 
     def _set_ob_ice(self, on: bool) -> None:
         """Flip the Order Blocks + Absorption/Iceberg menu checkboxes together (emits layerToggled -> show/hide)."""
@@ -11280,18 +11292,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     # ── BIG PLAYER GRAY VP (VP mode 11, user 2026-09-07) ──────────────────────────────────────────────────
     @staticmethod
-    def _bp_p50_usd(events) -> float:
-        """The user's P50 of a set of big-player events: the player size at which the players at or above it carry
-        HALF of all their $ (the tablet's MIN SIZE rule) -- NOT the median player. 0 for no events."""
+    def _bp_pct_usd(events, frac: float) -> float:
+        """The user's 'P' of a set of big-player events: the player size at which the players at or above it carry
+        `frac` of all their $ (P50 = half, the tablet's MIN SIZE rule) -- NOT a percentile of the players. 0 for
+        no events."""
         sizes = sorted((float(e[3]) for e in events), reverse=True)
         if not sizes:
             return 0.0
         tot = sum(sizes); acc = 0.0
         for u in sizes:
             acc += u
-            if acc >= 0.5 * tot:
+            if acc >= frac * tot:
                 return u
         return sizes[-1]
+
+    def _bp_p50_usd(self, events) -> float:
+        return self._bp_pct_usd(events, 0.5)
 
     def _bpvp_auto_default(self) -> bool:
         """Launch default of the Big Player Gray VP's MIN PLAYER (user 2026-09-07: "by default the Gray VP Big Player
@@ -11368,6 +11384,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if t0 is None or t1 is None:
             return rows
         return self._bp_vp_rows(t0, t1)
+
+    def _on_ema_vp_pct(self, pct: int) -> None:
+        """EMA Trend VP PLAYER slider moved -> the side profile re-derives its span threshold at the new P + persist."""
+        self._ema_vp_rows_cache = None
+        self._ema_vp_lastkey = None
+        self._save_ui_state()
+        self._last_scanner_sig = None
+        self._draw_scanner()
 
     def _on_bpvp_min(self, usd: float) -> None:
         """MIN PLAYER slider moved -> rebuild every Big Player Gray VP (selection, 4h V, previous days) + persist."""

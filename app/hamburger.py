@@ -287,7 +287,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     bubbleVolChanged = QtCore.Signal(float)          # Heatmap trade-bubble min volume filter (SOL; 0 = show all)
     bubbleMinUsdChanged = QtCore.Signal(float)       # Candle-Bubbles MIN SIZE filter (USD/level; 0 = show all)
     bigPlayerMinUsdChanged = QtCore.Signal(float)    # Big Player Levels: single-print USD threshold
-    bpVpMinUsdChanged = QtCore.Signal(float)         # Big Player Gray VP: MIN PLAYER (USD per player) threshold
+    bpVpMinUsdChanged = QtCore.Signal(float)
+    emaVpPctChanged = QtCore.Signal(int)   # EMA Trend VP 'PLAYER' slider: P of the span's own threshold (2026-09-07)         # Big Player Gray VP: MIN PLAYER (USD per player) threshold
     keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
     candleModeChanged = QtCore.Signal(int)   # candle render mode 0..5 (also cycled by 'W')
     vpModeChanged = QtCore.Signal(int)       # volume-profile render mode 0..8 (selection VP + 4h 'V' + prev-day VP)
@@ -630,6 +631,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             cb.toggled.connect(lambda on, k=key: self.subWidgetToggled.emit(k, on))
             self.sub_checks[key] = cb
             self.sub_section.addWidget(cb)
+            if key == "ema_trendvp":                 # its PLAYER slider (user 2026-09-07) sits right under it
+                self._build_ema_vp_slider(self.sub_section)
             if not _ema_grp:
                 self._row_register(self.sub_section, "Sub-Widgets", key, cb, _i0)
             elif key == "ema_trendvp":               # the last EMA entry -> register the whole family as one row
@@ -722,6 +725,75 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         for k, c in self.sub_checks.items():
             if k != "ema" and k.startswith("ema"):
                 c.setEnabled(bool(on))
+        if getattr(self, "ema_vp_w", None) is not None:
+            self.ema_vp_w.setEnabled(bool(on))
+
+    # ── EMA Trend VP 'PLAYER' slider (user 2026-09-07) ───────────────────────────────────────────────────
+    def _build_ema_vp_slider(self, section) -> None:
+        """Under 'Trend Extremes VP (right)': in Big Player Gray mode the side profile keeps the players of the span
+        it looks at whose sizes, from the biggest down, carry P% of that span's big-player $ (P50 = half, the
+        tablet's rule). The label shows the P and the $ it resolves to for the span on screen."""
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QHBoxLayout(w)
+        lay.setContentsMargins(30, 0, 8, 3)
+        lay.setSpacing(8)
+        cap = QtWidgets.QLabel("PLAYER")
+        cap.setStyleSheet("color:#7a8496; font-family:Consolas; font-size:9px; font-weight:bold;"
+                          "letter-spacing:1px; background:transparent;")
+        lay.addWidget(cap)
+        self.ema_vp_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.ema_vp_slider.setRange(5, 95)
+        self.ema_vp_slider.setValue(50)
+        self.ema_vp_slider.setFixedWidth(110)
+        self.ema_vp_slider.setStyleSheet("""
+            QSlider { border:none; background:transparent; }
+            QSlider::groove:horizontal { height:4px; border-radius:2px; background:#1d2632; }
+            QSlider::sub-page:horizontal { height:4px; border-radius:2px;
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #9aa3b2, stop:1 #f0b90b); }
+            QSlider::handle:horizontal { width:14px; height:14px; margin:-5px 0; border-radius:8px;
+                background:#e6ecf4; border:2px solid #f0b90b; }
+        """)
+        lay.addWidget(self.ema_vp_slider)
+        self.ema_vp_lbl = QtWidgets.QLabel()
+        self.ema_vp_lbl.setStyleSheet("color:#f0b90b; font-family:Consolas; font-size:10px;"
+                                      "font-weight:bold; background:transparent;")
+        lay.addWidget(self.ema_vp_lbl)
+        lay.addStretch(1)
+        w.setToolTip("Trend Extremes VP in 'Big Player Gray VP' mode: the profile keeps the players of the span it "
+                     "looks at whose sizes, from the biggest down, carry this share of the span's big-player $ "
+                     "(P50 = the players that carry half). Lower = only the biggest players, higher = more of them. "
+                     "The $ is what that resolves to for the span on screen.")
+        section.addWidget(w)
+        self.ema_vp_w = w
+        self._ema_vp_usd = None
+        self.ema_vp_slider.valueChanged.connect(self._on_ema_vp_slider)
+        self._refresh_ema_vp_lbl()
+
+    def _refresh_ema_vp_lbl(self) -> None:
+        u = self._ema_vp_usd
+        txt = "P%d · ≥ %s" % (self.ema_vp_slider.value(), self._bub_fmt_usd(u) if u else "—")
+        if self.ema_vp_lbl.text() != txt:
+            self.ema_vp_lbl.setText(txt)
+
+    def _on_ema_vp_slider(self, v: int) -> None:
+        self._refresh_ema_vp_lbl()
+        self.emaVpPctChanged.emit(int(v))
+
+    def ema_vp_pct(self) -> int:
+        return int(self.ema_vp_slider.value())
+
+    def set_ema_vp_pct(self, pct: int) -> None:
+        self.ema_vp_slider.blockSignals(True)
+        self.ema_vp_slider.setValue(max(5, min(95, int(pct))))
+        self.ema_vp_slider.blockSignals(False)
+        self._refresh_ema_vp_lbl()
+
+    def set_ema_vp_usd(self, usd) -> None:
+        """The $ the P resolves to for the span on screen (None = not in Big Player Gray mode / no span)."""
+        u = float(usd) if usd else None
+        if u != self._ema_vp_usd:
+            self._ema_vp_usd = u
+            self._refresh_ema_vp_lbl()
 
     # ------------------------------------------------------------------ ARCHIVE (user 2026-09-06)
     def _row_register(self, sec, title: str, key: str, cb, i0: int) -> None:
