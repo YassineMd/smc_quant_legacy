@@ -1508,12 +1508,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._rr_ln_pool = []; self._rr_lnlbl_pool = []; self._rr_lines_user = {}
         self._rr_size_lbl = None                               # OPTIMAL position-size readout at the entry line (one active bracket)
         self._rr_radar_rect = None; self._rr_radar_wall = None; self._rr_radar_lbl = None   # the clicked badge's RADAR box
-        self._bp_trades = deque(maxlen=20000)                   # Big Player Levels: (ts_s, price, usd, side) prints >= store floor
+        self._bp_trades = deque(maxlen=250000)                  # Big Player Levels: (ts_s, price, usd, side) prints >= store floor (72 h)
+        self._bp_keys = set()                                   # (ms, price4, side) of every stored print: windows / live / journal MERGE by key
+        self._bp_sdict = {}                                     # (ms, side) -> sweep record (the same merge rule for sweeps)
+        self._bp_bf_queue = []                                  # pending trades_window chunks [(t0_ms, t1_ms)], newest first
+        self._bp_bf_inflight = None                             # (t0_ms, t1_ms, sent_at) of the chunk being served
+        self._bp_journal_loaded = False                         # data/bigprint_journal.jsonl read once per session
+        self._bp_jbuf = []; self._bp_jflush_t = 0.0             # journal write buffer (flushed every few seconds / on close)
+        self._bp_arch_check_t = 0.0                             # last archive-refresh check
         self._bp_live_t0 = 0.0                                  # first LIVE print ts (window rows dedupe against it)
         self._bp_sub_t = 0.0; self._bp_need_backfill = True     # tape subscription re-arm clock / backfill pending
         self._bp_conn_was = True
         self._bp_buy = None; self._bp_sell = None; self._bp_lbls = []   # plot items (lazy)
-        self._bp_sweeps = deque(maxlen=5000)                    # SWEEPS: (ts_s, p_first, p_last, usd, side, n_levels)
+        self._bp_sweeps = deque(maxlen=60000)                   # SWEEPS: (ts_s, p_first, p_last, usd, side, n_levels) (72 h)
         self._bp_swp_pend = None                                # the live tape's last same-ms group, still growing
         self._bp_swp_polys = []; self._bp_swp_lbls = []          # sweep / burst DIAMONDS (pooled polygons) + amounts
         self._bp_sig = None
@@ -10950,23 +10957,168 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         t1 = int(time.time() * 1000)
         self.worker.request_depth_window(t1 - 1000, t1, 1, 0.0, 1e9, 1)
         if backfill:
-            self.worker.request_trades_window(t1 - int(config.DOM_VP_BACKFILL_SECS) * 1000, t1, 0.0, 1e9)
+            self._bp_bf_plan(t1)
         self._bp_sub_t = time.time()
 
+    # ── CONTINUITY (user 2026-09-07): journal + gap-driven backfill + archive refresh ──────────────────────
+    def _bp_journal_path(self) -> str:
+        return os.path.join(config.DATA_DIR, "bigprint_journal.jsonl")
+
+    def _bp_journal_add(self, line: str) -> None:
+        self._bp_jbuf.append(line)
+
+    def _bp_journal_flush(self, force: bool = False) -> None:
+        """Append the buffered journal lines (every few seconds, or now when `force`)."""
+        if not self._bp_jbuf:
+            return
+        now = time.time()
+        if not force and len(self._bp_jbuf) < 500 and now - self._bp_jflush_t < 3.0:
+            return
+        try:
+            os.makedirs(config.DATA_DIR, exist_ok=True)
+            with open(self._bp_journal_path(), "a", encoding="utf-8") as f:
+                f.write("".join(self._bp_jbuf))
+        except Exception as ex:
+            print("BIGPLAYER JOURNAL WRITE ERROR: %s" % ex)
+        self._bp_jbuf = []; self._bp_jflush_t = now
+
+    def _bp_journal_load(self) -> int:
+        """Read the journal once per session: the last BIGPLAYER_JOURNAL_HOURS of prints + sweeps into the store
+        (deduped by key; a sweep's LAST record wins = the grown one), then rewrite the file with just those lines so
+        it stays bounded. Returns the number of prints loaded."""
+        self._bp_journal_loaded = True
+        path = self._bp_journal_path()
+        if not os.path.exists(path):
+            return 0
+        cut = (time.time() - float(config.BIGPLAYER_JOURNAL_HOURS) * 3600.0) * 1000.0
+        prints = []; sweeps = []; kept = []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for ln in f:
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    try:
+                        r = json.loads(ln)
+                        if float(r["t"]) < cut:
+                            continue
+                        if r.get("k") == "sw":
+                            sweeps.append((float(r["t"]) / 1000.0, float(r["p0"]), float(r["p1"]), float(r["u"]), int(r["s"]), int(r.get("n", 2))))
+                        else:
+                            prints.append((float(r["t"]) / 1000.0, float(r["p"]), float(r["u"]), int(r["s"])))
+                        kept.append(ln)
+                    except (KeyError, ValueError, TypeError):
+                        continue
+        except Exception as ex:
+            print("BIGPLAYER JOURNAL READ ERROR: %s" % ex)
+            return 0
+        n_add = self._bp_merge_prints(prints, journal=False)
+        self._bp_merge_sweeps(sweeps, journal=False)
+        try:                                                    # compact: only the lines still inside the horizon
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("".join(l + "\n" for l in kept))
+            os.replace(tmp, path)
+        except Exception as ex:
+            print("BIGPLAYER JOURNAL COMPACT ERROR: %s" % ex)
+        return n_add
+
+    def _bp_merge_prints(self, rows, journal: bool = True) -> int:
+        """Merge prints (ts_s, price, usd, side) >= the store floor into the store by key (ms, price, side) -- a live
+        batch, a backfill window or the journal alike: never a replace, never a duplicate. Re-sorts by time when
+        something older than the newest stored print came in. Returns the number of new prints."""
+        added = []
+        for r in rows:
+            key = (int(round(r[0] * 1000.0)), round(float(r[1]), 4), int(r[3]))
+            if key in self._bp_keys:
+                continue
+            self._bp_keys.add(key)
+            added.append((float(r[0]), float(r[1]), float(r[2]), int(r[3])))
+        if not added:
+            return 0
+        need_sort = bool(self._bp_trades) and min(a[0] for a in added) < self._bp_trades[-1][0]
+        self._bp_trades.extend(added)
+        if need_sort:
+            srt = sorted(self._bp_trades, key=lambda q: q[0])
+            self._bp_trades.clear(); self._bp_trades.extend(srt)
+        if journal:
+            for a in added:
+                self._bp_journal_add('{"t":%d,"p":%.4f,"u":%.2f,"s":%d}\n' % (int(round(a[0] * 1000.0)), a[1], a[2], a[3]))
+        self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1
+        return len(added)
+
+    def _bp_merge_sweeps(self, sws, journal: bool = True) -> int:
+        """Merge sweep records (ts_s, p_first, p_last, usd, side, n) by key (ms, side): a later record REPLACES an
+        earlier one (a grown sweep), the deque is rebuilt time-sorted. Returns the number of new / replaced sweeps."""
+        n = 0
+        for rec in sws:
+            key = (int(round(rec[0] * 1000.0)), int(rec[4]))
+            old = self._bp_sdict.get(key)
+            if old is not None and old[3] >= rec[3] and old[5] >= rec[5]:
+                continue                                        # nothing new
+            self._bp_sdict[key] = tuple(rec); n += 1
+            if journal:
+                self._bp_journal_add('{"k":"sw","t":%d,"p0":%.4f,"p1":%.4f,"u":%.2f,"s":%d,"n":%d}\n' % (
+                    key[0], rec[1], rec[2], rec[3], rec[4], rec[5]))
+        if n:
+            srt = sorted(self._bp_sdict.values(), key=lambda q: q[0])
+            self._bp_sweeps.clear(); self._bp_sweeps.extend(srt)
+            self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1
+        return n
+
+    def _bp_bf_plan(self, t1_ms: int) -> None:
+        """Queue the trades_window chunks that cover the GAP [newest stored print, now], bounded by the daemon's tape
+        retention, newest chunk first. Nothing is asked for what the journal already holds."""
+        horizon = t1_ms - int(float(config.BIGPLAYER_BACKFILL_HOURS) * 3600.0 * 1000.0)
+        have = int(round(self._bp_trades[-1][0] * 1000.0)) if self._bp_trades else 0
+        lo = max(horizon, have + 1)
+        self._bp_bf_queue = []
+        if t1_ms - lo < 60_000:
+            return
+        ch = int(config.BIGPLAYER_BACKFILL_CHUNK_SECS) * 1000
+        hi = t1_ms
+        while hi > lo:
+            self._bp_bf_queue.append((max(lo, hi - ch), hi))
+            hi -= ch
+
+    def _bp_bf_pump(self) -> None:
+        """Serve the backfill queue ONE chunk at a time (the worker's pending-window list is short); a chunk that
+        does not come back within 90 s is asked for again."""
+        now = time.time()
+        if self._bp_bf_inflight is not None:
+            if now - self._bp_bf_inflight[2] < 90.0:
+                return
+            self._bp_bf_queue.insert(0, self._bp_bf_inflight[:2]); self._bp_bf_inflight = None
+        if not self._bp_bf_queue or not self.worker.connected:
+            return
+        t0, t1 = self._bp_bf_queue.pop(0)
+        self.worker.request_trades_window(int(t0), int(t1), 0.0, 1e9)
+        self._bp_bf_inflight = (int(t0), int(t1), now)
+
     def _bp_feed(self) -> None:
-        """Per-frame: keep the tape subscription armed, drain the worker's trade buffers, keep big prints."""
+        """Per-frame: keep the tape subscription armed, drain the worker's trade buffers, keep big prints. The store
+        is CONTINUOUS: the journal is loaded once, the daemon fills the gap since its newest print (chunked, up to the
+        tape's 72 h retention), live batches append, and every kept print / sweep is journaled for the next start."""
+        from . import bigprint_store
         conn = bool(self.worker.connected)
+        if not self._bp_journal_loaded:
+            self._bp_journal_load()
         if (conn and not self._bp_conn_was) or (conn and self._bp_need_backfill):
-            self._bp_trades.clear(); self._bp_live_t0 = 0.0     # reconnect / first enable -> clean re-backfill
-            self._bp_sweeps.clear(); self._bp_swp_pend = None
+            self._bp_live_t0 = 0.0; self._bp_swp_pend = None       # reconnect / first enable -> fill the gap, keep what we have
             self._bp_subscribe(backfill=True)
             self._bp_need_backfill = False
         self._bp_conn_was = conn
         if conn and time.time() - self._bp_sub_t > 10.0:
             self._bp_subscribe(backfill=False)                  # subscription is per-connection: re-arm
+        if time.time() - self._bp_arch_check_t > 3600.0:        # the current month's archive keeps itself fresh
+            self._bp_arch_check_t = time.time()
+            try:
+                bigprint_store.refresh_current_month_async(float(config.BIGPLAYER_ARCHIVE_REFRESH_SECS),
+                                                           on_done=lambda n: setattr(self, "_bp_sig", None))
+            except Exception as ex:
+                print("BIGPLAYER ARCHIVE REFRESH: %s" % ex)
         _tv, tws, tbatches = self.worker.trades_state()
         floor = config.BIGPLAYER_STORE_FLOOR_USD
-        changed = False
         for tbp in tbatches:
             ts, pr, qt, sd = decode_trades(tbp.ts_b64, tbp.price_b64, tbp.qty_b64, tbp.side_b64)
             # SWEEPS are grouped from the RAW batch (before the store floor: an order eating the book with many
@@ -10974,28 +11126,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # across two pulses) extends it.
             if len(ts):
                 self._bp_add_sweeps(ts, pr, qt, sd, floor, live=True)
-            for i in range(len(ts)):
-                t = float(ts[i]) / 1000.0
                 if self._bp_live_t0 == 0.0:
-                    if self._bp_trades and t <= self._bp_trades[-1][0]:
-                        continue                                # <=1-pulse overlap with a window that landed first
-                    self._bp_live_t0 = t
-                usd = float(pr[i]) * float(qt[i])
-                if usd >= floor:
-                    self._bp_trades.append((t, float(pr[i]), usd, int(sd[i]))); changed = True
+                    self._bp_live_t0 = float(ts[0]) / 1000.0
+                rows = [(float(ts[i]) / 1000.0, float(pr[i]), float(pr[i]) * float(qt[i]), int(sd[i]))
+                        for i in range(len(ts)) if float(pr[i]) * float(qt[i]) >= floor]
+                if rows:
+                    self._bp_merge_prints(rows)
         for tw in (tws or ()):
+            if self._bp_bf_inflight is not None and (int(tw.t0), int(tw.t1)) == self._bp_bf_inflight[:2]:
+                self._bp_bf_inflight = None
             ts, pr, qt, sd = decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64)
-            cut = self._bp_live_t0 or float("inf")
             if len(ts):
-                self._bp_add_sweeps(ts, pr, qt, sd, floor, live=False, cut=cut)
-            older = [(float(ts[i]) / 1000.0, float(pr[i]), float(pr[i]) * float(qt[i]), int(sd[i]))
-                     for i in range(len(ts)) if float(ts[i]) / 1000.0 < cut and float(pr[i]) * float(qt[i]) >= floor]
-            if older:
-                live = [r for r in self._bp_trades if r[0] >= cut]
-                self._bp_trades.clear(); self._bp_trades.extend(older); self._bp_trades.extend(live)
-                changed = True
-        if changed:
-            self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1   # new prints -> redraw on the next overlay pass
+                self._bp_add_sweeps(ts, pr, qt, sd, floor, live=False)
+                rows = [(float(ts[i]) / 1000.0, float(pr[i]), float(pr[i]) * float(qt[i]), int(sd[i]))
+                        for i in range(len(ts)) if float(pr[i]) * float(qt[i]) >= floor]
+                if rows:
+                    self._bp_merge_prints(rows)
+        self._bp_bf_pump()
+        self._bp_journal_flush()
 
     def _bp_add_sweeps(self, ts, pr, qt, sd, floor, live, cut=float("inf")) -> None:
         """Group one decoded trade array (ms, price, qty, side) into SWEEPS and merge them into the store.
@@ -11007,11 +11155,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         min_lv = int(_cfg.BIGPLAYER_SWEEP_MIN_LEVELS)
         rows = [(float(ts[i]) / 1000.0, float(pr[i]), float(pr[i]) * float(qt[i]), int(sd[i])) for i in range(len(ts))]
         if not live:
-            older = [s for s in bigprint_store.group_sweeps(rows, min_lv, float(floor)) if s[0] < cut]
-            if older:
-                keep = [s for s in self._bp_sweeps if s[0] >= cut]
-                self._bp_sweeps.clear(); self._bp_sweeps.extend(older); self._bp_sweeps.extend(keep)
-                self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1
+            self._bp_merge_sweeps(bigprint_store.group_sweeps(rows, min_lv, float(floor)))   # union by (ms, side)
             return
         groups = bigprint_store.group_sweeps(rows, 1, 0.0)  # EVERY same-ms+side group, however small
         pend = self._bp_swp_pend                            # [ms, side, ts_s, p0, p1, usd, n_levels, stored]
@@ -11030,10 +11174,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if pend is None or pend[6] < min_lv or pend[5] < floor:
             return
         rec = (pend[2], pend[3], pend[4], pend[5], pend[1], pend[6])
-        if pend[7] and self._bp_sweeps and int(round(self._bp_sweeps[-1][0] * 1000.0)) == pend[0]                 and self._bp_sweeps[-1][4] == pend[1]:
+        key = (int(pend[0]), int(pend[1]))
+        if pend[7] and self._bp_sweeps and int(round(self._bp_sweeps[-1][0] * 1000.0)) == pend[0] \
+                and self._bp_sweeps[-1][4] == pend[1]:
             self._bp_sweeps[-1] = rec                      # grown since it was stored -> update
+            self._bp_sdict[key] = rec
+            self._bp_journal_add('{"k":"sw","t":%d,"p0":%.4f,"p1":%.4f,"u":%.2f,"s":%d,"n":%d}\n' % (
+                key[0], rec[1], rec[2], rec[3], rec[4], rec[5]))
         elif not self._bp_sweeps or pend[2] >= self._bp_sweeps[-1][0]:
+            if key in self._bp_sdict:                      # already known (journal / a window landed first)
+                pend[7] = True
+                return
             self._bp_sweeps.append(rec); pend[7] = True
+            self._bp_sdict[key] = rec
+            self._bp_journal_add('{"k":"sw","t":%d,"p0":%.4f,"p1":%.4f,"u":%.2f,"s":%d,"n":%d}\n' % (
+                key[0], rec[1], rec[2], rec[3], rec[4], rec[5]))
         self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1
 
     def _bp_events(self, t_lo: float, t_last: float, t_hi: float, sw_on: bool) -> list:
@@ -20194,6 +20349,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 pass
 
     def closeEvent(self, event) -> None:
+        try:
+            self._bp_journal_flush(force=True)             # Big Player journal: nothing kept only in RAM
+        except Exception:
+            pass
         try:                                   # final SYNCHRONOUS drawing save — covers a close/shutdown
             self.drawer._save_idx()            # landing inside the 400ms debounce window
             self.drawer._save()

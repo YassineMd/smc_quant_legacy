@@ -187,6 +187,13 @@ BIGPLAYER_MAX_LINES = 80
 # BIGPLAYER_SWEEP_MAX drawn (each = capsule + end-level line + label).
 BIGPLAYER_SWEEP_MIN_LEVELS = 2
 BIGPLAYER_SWEEP_MAX = 40
+# CONTINUITY (2026-09-07): the live store is JOURNALED (data/bigprint_journal.jsonl) and backfilled from the daemon's
+# tape for exactly the gap since the newest journaled print, in chunks, up to the tape's retention (72 h); the
+# current month's big-print archive refreshes itself from Binance's daily dumps every few hours.
+BIGPLAYER_BACKFILL_HOURS = 72         # == DEPTH_RETENTION_HOURS (the daemon's trade tape)
+BIGPLAYER_BACKFILL_CHUNK_SECS = 21600 # one trades_window request per 6 h of gap (~70k raw trades each)
+BIGPLAYER_JOURNAL_HOURS = 72          # what the journal keeps / reloads (older bars come from the archive)
+BIGPLAYER_ARCHIVE_REFRESH_SECS = 21600  # rebuild the current month from the daily dumps when its file is older than this
 # CAMPAIGNS (user 2026-09-06 as BURSTS, 2026-09-07 as CAMPAIGNS): same-side prints / sweeps within this many ms of the
 # previous same-side one are ONE player working the book -> one diamond, totals summed (drawn like the atomic sweeps).
 BIGPLAYER_CAMPAIGN_MS = 30      # CAMPAIGN window (2026-09-07, "the 12:01:08 fight"): same-side big-player events within

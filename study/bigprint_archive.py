@@ -105,19 +105,30 @@ def build_month(month: str, scratch: str) -> int:
 
 
 def build_current_month(month: str, scratch: str) -> int:
-    """DAILY dumps, day 1 .. yesterday (UTC), merged into the month file (rebuilt each run)."""
+    """DAILY dumps, day 1 .. yesterday (UTC), merged into the month file (rebuilt each run). Each day's scanned rows
+    are cached as scratch/day-YYYY-MM-DD.jsonl, so the terminal's automatic refresh downloads ONE new day."""
     y, m = int(month[:4]), int(month[5:7])
     today = datetime.now(timezone.utc).date()
     d = datetime(y, m, 1, tzinfo=timezone.utc).date()
     rows = []
     while d < today and d.month == m:
-        url = "%s/daily/aggTrades/%s/%s-aggTrades-%s.zip" % (BASE, SYMBOL, SYMBOL, d.isoformat())
-        zp = os.path.join(scratch, "agg-%s.zip" % d.isoformat())
-        if _dl(url, zp):
-            rows.extend(scan_zip(zp))
-            os.remove(zp)
+        dc = os.path.join(scratch, "day-%s.jsonl" % d.isoformat())
+        if os.path.exists(dc):
+            with open(dc, encoding="utf-8") as f:
+                rows.extend(json.loads(ln) for ln in f if ln.strip())
         else:
-            print("  (no daily dump for %s yet)" % d, flush=True)
+            url = "%s/daily/aggTrades/%s/%s-aggTrades-%s.zip" % (BASE, SYMBOL, SYMBOL, d.isoformat())
+            zp = os.path.join(scratch, "agg-%s.zip" % d.isoformat())
+            if _dl(url, zp):
+                day_rows = list(scan_zip(zp))
+                os.remove(zp)
+                with open(dc + ".tmp", "w", encoding="utf-8") as f:
+                    for r in day_rows:
+                        f.write(json.dumps(r) + "\n")
+                os.replace(dc + ".tmp", dc)
+                rows.extend(day_rows)
+            else:
+                print("  (no daily dump for %s yet)" % d, flush=True)
         d += timedelta(days=1)
     _write(month, rows)
     return len(rows)

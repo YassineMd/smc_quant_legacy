@@ -12,6 +12,8 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import threading
+import time
 from datetime import datetime, timezone
 
 ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "study", "bigprint_archive")
@@ -45,6 +47,75 @@ def group_sweeps(rows, min_levels: int = 2, min_usd: float = 0.0) -> list:
 
 def _month_of(ts_s: float) -> str:
     return datetime.fromtimestamp(ts_s, tz=timezone.utc).strftime("%Y-%m")
+
+
+def _prev_month(month: str) -> str:
+    y, m = int(month[:4]), int(month[5:7])
+    m -= 1
+    if m < 1:
+        m = 12; y -= 1
+    return "%04d-%02d" % (y, m)
+
+
+def latest_archived_ts() -> float:
+    """The archive's coverage end (s): the newest print of the current month file, else of the previous month; 0 if none."""
+    month = _month_of(time.time())
+    for _ in range(2):
+        rows = _load_month(month)
+        if rows:
+            return float(rows[-1][0])
+        month = _prev_month(month)
+    return 0.0
+
+
+_refresh_lock = threading.Lock()
+_refresh_busy = False
+
+
+def _default_builder(month: str, scratch: str) -> int:
+    import importlib.util
+    p = os.path.join(os.path.dirname(ROOT), "bigprint_archive.py")            # study/bigprint_archive.py
+    spec = importlib.util.spec_from_file_location("bigprint_archive", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return int(mod.build_current_month(month, scratch))
+
+
+def refresh_current_month_async(max_age_s: float, on_done=None, builder=None) -> bool:
+    """Rebuild the CURRENT month from Binance's daily dumps (day 1 .. yesterday UTC) in a background thread when the
+    month file is missing or older than max_age_s (a daily dump appears a few hours after UTC midnight, so a stale
+    file is retried at the next check). One run at a time; the reader's mtime cache picks the new file up by
+    itself. Returns True when a refresh was started."""
+    global _refresh_busy
+    month = _month_of(time.time())
+    path = os.path.join(ROOT, "%s-bigprints-%s.jsonl.gz" % (SYMBOL, month))
+    try:
+        age = time.time() - os.path.getmtime(path)
+    except OSError:
+        age = float("inf")
+    if age < max_age_s:
+        return False
+    with _refresh_lock:
+        if _refresh_busy:
+            return False
+        _refresh_busy = True
+    run = builder or _default_builder
+
+    def _work():
+        global _refresh_busy
+        try:
+            scratch = os.path.join(ROOT, "_raw")
+            os.makedirs(scratch, exist_ok=True)
+            n = run(month, scratch)
+            if on_done is not None:
+                on_done(n)
+        except Exception as ex:
+            print("BIGPRINT ARCHIVE REFRESH ERROR: %s" % ex)
+        finally:
+            with _refresh_lock:
+                _refresh_busy = False
+    threading.Thread(target=_work, name="bigprint-archive-refresh", daemon=True).start()
+    return True
 
 
 def _next_month(month: str) -> str:
