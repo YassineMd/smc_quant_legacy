@@ -60,7 +60,7 @@ public class LevelTradesDialog extends Dialog implements TapeView.Host {
         title.setTextSize(14);
         head.addView(title);
         double min = dom.minUsd();
-        TextView scope = Ui.caption(ctx, "LAUNCHED HERE · " + dom.vpLabel() + " · PLAYER ≥ " + Ui.fmtUsd(dom.minPlayer()) + (min > 0 ? " · trades ≥ " + Ui.fmtUsd(min) : ""));
+        TextView scope = Ui.caption(ctx, "LAUNCHED HERE · " + dom.vpLabel() + (min > 0 ? " · ≥ " + Ui.fmtUsd(min) : ""));
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         sp.leftMargin = (int) Ui.dp(ctx, 14);
@@ -118,7 +118,7 @@ public class LevelTradesDialog extends Dialog implements TapeView.Host {
         double minPl = dom.minPlayer();
         if (memo != null && ver == memoVer && minUsd == memoMin && minPl == memoPl && skip == memoSkip && nFit == memoFit) return memo;
         long tpg = Math.max(1, Math.round(g / TradeStore.TICK));
-        double[][] all = st.levelRows(bin, tpg, dom.vpCutoffMs(), minUsd, dom.minPlayer(), skip + nFit);
+        double[][] all = st.levelRows(bin, tpg, dom.vpCutoffMs(), minUsd, minUsd, skip + nFit);   // campaigns launched here >= MIN SIZE
         double[][] out;
         if (skip <= 0) out = all;
         else {
