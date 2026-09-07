@@ -41,6 +41,20 @@ public class TradeStore {
     private long epoch = 0;                        // structural change (indices moved)
     private volatile Runnable listener;            // poked (on the feed thread) after each ingest
 
+    // MERGED PLAYERS (user 2026-09-07): the tape's burst rule tracked INCREMENTALLY so the DOM can mark, per frame,
+    // the levels where a player STARTED without re-scanning trades. A group = consecutive same-side fills each
+    // within MERGE_MS (2 ms) of the previous; it is "merged" once it has >= 2 fills spanning >= 1 tick. Only merged groups
+    // are kept (parallel arrays, time-ordered by their first fill): first/last ms, side, first tick, lo/hi tick, usd,
+    // n. The last group can still grow; `cur*` = the open chain (merged or not yet).
+    private long[] gT0 = new long[256], gT1 = new long[256], gTick0 = new long[256], gLo = new long[256], gHi = new long[256];
+    private double[] gUsd = new double[256];
+    private int[] gN = new int[256];
+    private byte[] gSide = new byte[256];
+    private int gCount = 0;
+    private long curT0, curT1, curTick0, curLo, curHi;
+    private double curUsd;
+    private int curN, curSide = -1, curG = -1;       // curG = index in the merged arrays once merged, else -1
+
     // tapeRows memo: the same frame asked again (no new data, same filter / scroll / height) is free
     private double[][] tapeMemo;
     private long tapeMemoVer = -1;
@@ -165,6 +179,7 @@ public class TradeStore {
                 lastSide = buyQ[n - 1] > 0 ? 1 : 0;
             }
             epoch++;                                // rows inserted in FRONT: every index moved
+            gRebuild();                             // merged players over the whole (backfilled) tape, once
             prune();
             version++;
         }
@@ -193,6 +208,55 @@ public class TradeStore {
         buyQ[n] = buy ? qty : 0.0;
         sellQ[n] = buy ? 0.0 : qty;
         n++;
+        chain(ts, tick[n - 1], tick[n - 1] * TICK * qty, buy ? 1 : 0);
+    }
+
+    /** Feed one fill (time order) to the open chain; publishes / updates the merged group it belongs to. */
+    private void chain(long ts, long tk, double usd, int side) {
+        if (curN > 0 && side == curSide && ts - curT1 <= MERGE_MS) {
+            curT1 = ts;
+            curLo = Math.min(curLo, tk);
+            curHi = Math.max(curHi, tk);
+            curUsd += usd;
+            curN++;
+            if (curHi > curLo) {                          // ate through the book -> a merged player
+                if (curG < 0) {
+                    curG = gCount;
+                    gAdd(curT0, curT1, curTick0, curLo, curHi, curUsd, curN, side);
+                } else {
+                    gT1[curG] = curT1; gLo[curG] = curLo; gHi[curG] = curHi; gUsd[curG] = curUsd; gN[curG] = curN;
+                }
+            }
+        } else {
+            curT0 = curT1 = ts;
+            curTick0 = curLo = curHi = tk;
+            curUsd = usd;
+            curN = 1;
+            curSide = side;
+            curG = -1;
+        }
+    }
+
+    private void gAdd(long t0, long t1, long tk0, long lo, long hi, double usd, int cnt, int side) {
+        if (gCount == gT0.length) gGrow(gCount * 2);
+        gT0[gCount] = t0; gT1[gCount] = t1; gTick0[gCount] = tk0; gLo[gCount] = lo; gHi[gCount] = hi;
+        gUsd[gCount] = usd; gN[gCount] = cnt; gSide[gCount] = (byte) side;
+        gCount++;
+    }
+
+    private void gGrow(int cap) {
+        gT0 = java.util.Arrays.copyOf(gT0, cap); gT1 = java.util.Arrays.copyOf(gT1, cap);
+        gTick0 = java.util.Arrays.copyOf(gTick0, cap); gLo = java.util.Arrays.copyOf(gLo, cap); gHi = java.util.Arrays.copyOf(gHi, cap);
+        gUsd = java.util.Arrays.copyOf(gUsd, cap); gN = java.util.Arrays.copyOf(gN, cap); gSide = java.util.Arrays.copyOf(gSide, cap);
+    }
+
+    /** Rebuild the merged-group list from the store (backfill prepend): one pass over the trades. */
+    private void gRebuild() {
+        gCount = 0;
+        curN = 0; curSide = -1; curG = -1;
+        for (int i = 0; i < n; i++) {
+            chain(tsMs[i], tick[i], tick[i] * TICK * (buyQ[i] + sellQ[i]), buyQ[i] > 0 ? 1 : 0);
+        }
     }
 
     private void prune() {
@@ -206,6 +270,17 @@ public class TradeStore {
             System.arraycopy(sellQ, lo, sellQ, 0, n - lo);
             n -= lo;
             epoch++;                                // indices shifted
+            long cutT = n > 0 ? tsMs[0] : Long.MAX_VALUE;
+            int g0 = 0;
+            while (g0 < gCount && gT1[g0] < cutT) g0++;
+            if (g0 > 0) {
+                System.arraycopy(gT0, g0, gT0, 0, gCount - g0); System.arraycopy(gT1, g0, gT1, 0, gCount - g0);
+                System.arraycopy(gTick0, g0, gTick0, 0, gCount - g0); System.arraycopy(gLo, g0, gLo, 0, gCount - g0);
+                System.arraycopy(gHi, g0, gHi, 0, gCount - g0); System.arraycopy(gUsd, g0, gUsd, 0, gCount - g0);
+                System.arraycopy(gN, g0, gN, 0, gCount - g0); System.arraycopy(gSide, g0, gSide, 0, gCount - g0);
+                gCount -= g0;
+                if (curG >= 0) curG = curG - g0 < 0 ? -1 : curG - g0;
+            }
         }
     }
 
@@ -223,6 +298,7 @@ public class TradeStore {
     public synchronized void reset() {
         n = 0;
         liveT0Ms = 0;
+        gCount = 0; curN = 0; curSide = -1; curG = -1;
         epoch++;
         version++;
     }
@@ -344,7 +420,8 @@ public class TradeStore {
         return n;
     }
 
-    public static final long MERGE_MS = 1000;      // same-side fills chained within 1 s = ONE player (the terminal's burst rule)
+    public static final long MERGE_MS = 2;         // same-side fills chained within 2 ms = ONE player (the terminal's burst rule; user's
+                                                   // pick 2026-09-07 after the aggTrade study: 63% of level-eating $ lands <= 1 ms, 1 s glued orders)
 
     /**
      * Tape rows, newest-first, MIN SIZE filter + scroll offset applied. MERGED PLAYERS (user 2026-09-07, the tape's
@@ -402,6 +479,72 @@ public class TradeStore {
         tapeMemoSkip = skip0;
         tapeMemoMax = maxRows;
         return res;
+    }
+
+    /**
+     * DOM diamonds (user 2026-09-07): for every merged player that STARTED inside [cutoffMs, now] with total >= minUsd,
+     * add its usd to the bin of its FIRST fill (outBuy / outSell indexed by topBin - bin, the visible rows) -- only
+     * where it started, not the ticks it ate through. O(merged groups in the window): never a trade scan. Returns the
+     * number of players marked.
+     */
+    public synchronized int levelDiamonds(long topBin, int nRows, long tpg, long cutoffMs, double minUsd,
+                                          double[] outBuy, double[] outSell) {
+        java.util.Arrays.fill(outBuy, 0, nRows, 0.0);
+        java.util.Arrays.fill(outSell, 0, nRows, 0.0);
+        int marked = 0;
+        for (int g = gCount - 1; g >= 0 && gT1[g] >= cutoffMs; g--) {   // time-ordered: stop once fully before the window
+            if (gT0[g] < cutoffMs) continue;                                // must have STARTED inside the window
+            if (minUsd > 0 && gUsd[g] < minUsd) continue;
+            long i = topBin - Math.floorDiv(gTick0[g], tpg);
+            if (i < 0 || i >= nRows) continue;
+            if (gSide[g] > 0) outBuy[(int) i] += gUsd[g]; else outSell[(int) i] += gUsd[g];
+            marked++;
+        }
+        return marked;
+    }
+
+    /**
+     * The tape rows of ONE price bin (popup behind a DOM diamond): merged players that STARTED in the bin + plain
+     * trades in it, inside [cutoffMs, now], newest first, MIN SIZE on the merged total / the trade -- the exact
+     * tapeRows row format. One newest-first chain walk over the window (a click, not a frame).
+     */
+    public synchronized double[][] levelRows(long bin, long tpg, long cutoffMs, double minUsd, int maxRows) {
+        java.util.ArrayList<double[]> out = new java.util.ArrayList<>();
+        int stop = lowerBound(cutoffMs);
+        int i = n - 1;
+        while (i >= stop && out.size() < maxRows) {
+            int side = buyQ[i] > 0 ? 1 : 0;
+            int j = i;
+            long tmin = tick[i], tmax = tick[i];
+            double usd = tick[i] * TICK * (buyQ[i] + sellQ[i]);
+            while (j - 1 >= 0 && (buyQ[j - 1] > 0 ? 1 : 0) == side && tsMs[j] - tsMs[j - 1] <= MERGE_MS) {
+                j--;
+                tmin = Math.min(tmin, tick[j]);
+                tmax = Math.max(tmax, tick[j]);
+                usd += tick[j] * TICK * (buyQ[j] + sellQ[j]);
+            }
+            int cnt = i - j + 1;
+            if (cnt >= 2 && tmax > tmin) {
+                if (Math.floorDiv(tick[j], tpg) == bin && usd >= minUsd && tsMs[j] >= cutoffMs)
+                    out.add(new double[]{tsMs[j], tick[j] * TICK, usd, side, cnt,
+                            side > 0 ? (tmax - tmin) : -(tmax - tmin), (tsMs[i] - tsMs[j]) / 1000L, tsMs[i]});
+            } else {
+                for (int k = i; k >= j && out.size() < maxRows; k--) {
+                    if (Math.floorDiv(tick[k], tpg) != bin || tsMs[k] < cutoffMs) continue;
+                    double px = tick[k] * TICK;
+                    double u = px * (buyQ[k] + sellQ[k]);
+                    if (u < minUsd) continue;
+                    out.add(new double[]{tsMs[k], px, u, buyQ[k] > 0 ? 1 : 0, 1, 0, 0, tsMs[k]});
+                }
+            }
+            i = j - 1;
+        }
+        return out.toArray(new double[0][]);
+    }
+
+    /** Merged players currently tracked (tests / diagnostics). */
+    public synchronized int mergedCount() {
+        return gCount;
     }
 
     /** The fills of a merged row (same side, tsFirst..tsLast), newest first: [tsMs, price, usd]. */

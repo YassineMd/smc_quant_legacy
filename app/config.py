@@ -189,7 +189,9 @@ BIGPLAYER_SWEEP_MIN_LEVELS = 2
 BIGPLAYER_SWEEP_MAX = 40
 # BURSTS (user 2026-09-06): same-side prints / sweeps that follow each other within this many ms are ONE player
 # working the book -> one diamond, totals summed (drawn like the atomic sweeps).
-BIGPLAYER_BURST_MS = 1000
+BIGPLAYER_BURST_MS = 2          # 2026-09-07: was 1000; user's pick (the study pointed at 10 ms). Raw aggTrade study (35 h, 400k trades): same-side level-eating
+                                # follow-through is 63% (by $) within 1 ms, 82% within 10 ms, 95% within 100 ms; the 1 s
+                                # rule's >= $100K diamonds had a > 100 ms gap inside them 53% of the time (separate orders).
 DOM_VP_BACKFILL_SECS = 21600    # DOM scanner mode: executed-trade history for the ladder's Volume Profile —
                                 # 6h covers every VP window choice (5M..6H filter locally, no re-requests).
                                 # ~60-80k trades ≈ 3MB b64 one-shot on entry (well under trade_tape's 72h)

@@ -3,6 +3,7 @@ package com.smc.domtape;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RecordingCanvas;
 import android.graphics.RectF;
 import android.graphics.RenderNode;
@@ -45,6 +46,8 @@ public class DomView extends View {
         DomAgg agg();
 
         PriceChip chip();                          // the live-price overlay (may be null)
+
+        void openLevel(long bin);                  // a tap on a level's diamond -> that level's trades popup
     }
 
     private static final double TICK = TradeStore.TICK;
@@ -60,6 +63,7 @@ public class DomView extends View {
     private final float rowH, hdrH, stripH, pad;
     private final float dp2_5, dp3, dp3_5, dp5, dp6, dp9, dp10, dp13, dp14, dp19, dp40, dp44, dp54, dp84, dp108, dp110;
     private final RectF rf = new RectF();          // one reusable rect
+    private final Path dia = new Path();           // one reusable diamond
     private final GlyphCache glN, glB, glH;        // shaped-text caches per paint (text / bold / header)
     private final HashMap<Long, String> priceCache = new HashMap<>();   // bin -> "%,.2f" (levels rarely change)
     private double priceCacheG = -1;
@@ -73,8 +77,10 @@ public class DomView extends View {
     private float[] areaDrag = null;               // in-progress band [yPress, yNow] (long-press + drag)
     // geometry of the LAST drawn frame (interaction helpers share the paint math)
     private float gY0;
+    private float gVp0;                            // left edge of the VOLUME column (diamond tap target)
     private int gNRows;
     private long gTopBin;
+    private int[] rowDia = new int[0];             // per visible row: 0 none, 1 buy, 2 sell, 3 both (tap hit test)
     private long lastTopBin = Long.MIN_VALUE;      // the chip animates only when the ladder itself did not move
     private long lastChipBin = Long.MIN_VALUE;
 
@@ -115,6 +121,11 @@ public class DomView extends View {
             }
 
             @Override
+            public boolean onSingleTapConfirmed(MotionEvent e) {   // tap a diamond row's VOLUME cell = level popup
+                return tapDiamond(e.getX(), e.getY());
+            }
+
+            @Override
             public void onLongPress(MotionEvent e) {       // hold-then-drag = mark a band of levels
                 if (anchorPx == null) return;
                 areaDrag = new float[]{e.getY(), e.getY()};
@@ -127,6 +138,28 @@ public class DomView extends View {
 
     float rowHeight() {
         return rowH;
+    }
+
+    /** A tap in the VOLUME column of a row carrying a diamond opens that level's trades (user 2026-09-07). */
+    private boolean tapDiamond(float x, float y) {
+        if (gNRows <= 0 || x < gVp0 || y < gY0) return false;
+        int i = (int) ((y - gY0) / rowH);
+        if (i < 0 || i >= gNRows || i >= rowDia.length || rowDia[i] == 0) return false;
+        host.openLevel(gTopBin - i);
+        return true;
+    }
+
+    /** The tape's diamond: a filled rhombus (buy green / sell red / both white) centred on (cx, cy). */
+    private void diamond(Canvas c, float cx, float cy, int kind) {
+        float r = dp5;
+        dia.rewind();
+        dia.moveTo(cx, cy - r);
+        dia.lineTo(cx + r * 0.78f, cy);
+        dia.lineTo(cx, cy + r);
+        dia.lineTo(cx - r * 0.78f, cy);
+        dia.close();
+        fill.setColor(kind == 1 ? Ui.BUY : (kind == 2 ? Ui.SELL : Ui.TXT));
+        c.drawPath(dia, fill);
     }
 
     // ── level bands (the terminal's Ctrl+drag areas, touch edition) ─────────────────────────
@@ -255,6 +288,7 @@ public class DomView extends View {
         long bin;
         int bidPx, askPx, vpPx;                    // bar widths in whole px (quantized so tiny maxSz moves don't dirty)
         boolean bidHot, askHot, soldHot, boughtHot, gold, lvn;
+        int dia;                                   // merged player STARTED here: 0 none, 1 buy, 2 sell, 3 both
         String bidTxt, askTxt, soldTxt, boughtTxt, vpTxt, priceTxt;
     }
 
@@ -265,6 +299,7 @@ public class DomView extends View {
         for (RenderNode r : rows) if (r != null) r.discardDisplayList();
         rows = new RenderNode[n];
         rowSig = new long[n];
+        rowDia = new int[n];
         for (int i = 0; i < n; i++) {
             RenderNode r = new RenderNode("dom-row-" + i);
             r.setPosition(0, 0, w, hPx);
@@ -387,6 +422,7 @@ public class DomView extends View {
         long centerBin = Math.floorDiv(Math.round(anchorPx / TICK), tpg);
         long topBin = centerBin + nRows / 2;
         gY0 = y0;                                  // share the frame's geometry with the touch helpers
+        gVp0 = cVp0;
         gNRows = nRows;
         gTopBin = topBin;
 
@@ -427,6 +463,11 @@ public class DomView extends View {
             }
         }
         if (maxVp <= 0) maxVp = 1;
+        // DOM DIAMONDS (user 2026-09-07): merged players (the tape's burst rule: same-side fills within 1 s that ate
+        // through >= 1 tick) marked ONLY on the level where they STARTED. The store tracks them incrementally, so
+        // this is one walk of the players inside the window -- never a trade scan; MIN SIZE applies to the total.
+        double[] diaB = new double[nRows], diaS = new double[nRows];
+        st.levelDiamonds(topBin, nRows, tpg, cutoff, host.minUsd(), diaB, diaS);
         double[] sideThr = agg.sideGoldThresholds();
         double thrB = sideThr[0], thrS = sideThr[1];
         double[] vpThr = agg.vpThresholds();
@@ -530,9 +571,11 @@ public class DomView extends View {
                 r.vpTxt = null;
             }
             r.priceTxt = priceStr(b, g);
+            r.dia = (diaB[i] > 0 ? 1 : 0) | (diaS[i] > 0 ? 2 : 0);
+            rowDia[i] = r.dia;
             sig = mix(sig, r.bidPx); sig = mix(sig, r.askPx); sig = mix(sig, r.vpPx);
             sig = mix(sig, (r.bidHot ? 1 : 0) | (r.askHot ? 2 : 0) | (r.soldHot ? 4 : 0) | (r.boughtHot ? 8 : 0)
-                    | (r.gold ? 16 : 0) | (r.lvn ? 32 : 0));
+                    | (r.gold ? 16 : 0) | (r.lvn ? 32 : 0) | (r.dia << 6));
             sig = mix(sig, r.bidTxt); sig = mix(sig, r.askTxt); sig = mix(sig, r.soldTxt);
             sig = mix(sig, r.boughtTxt); sig = mix(sig, r.vpTxt); sig = mix(sig, r.priceTxt);
 
@@ -649,6 +692,10 @@ public class DomView extends View {
             tp.setColor(r.gold ? Ui.GOLD : (r.lvn ? Ui.LVN : Ui.DIM_TXT));
             tp.setTextAlign(Paint.Align.RIGHT);
             txt(c, r.vpTxt, w - pad - bx - dp9, centerY(ry, tp), tp);
+            if (r.dia != 0)                        // the player's start level: diamond just before the amount
+                diamond(c, w - pad - bx - dp9 - tp.measureText(r.vpTxt) - dp9, ry + rowH / 2f, r.dia);
+        } else if (r.dia != 0) {
+            diamond(c, w - pad - dp9, ry + rowH / 2f, r.dia);
         }
         // PRICE (dim; the live one is covered by the chip overlay)
         text.setColor(Ui.DIM_TXT);

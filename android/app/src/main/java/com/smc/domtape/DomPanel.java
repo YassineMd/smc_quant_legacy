@@ -272,6 +272,11 @@ public class DomPanel extends LinearLayout implements DomView.Host, SizeDistDial
     }
 
     @Override
+    public void openLevel(long bin) {              // a tap on a level's diamond (user 2026-09-07)
+        new LevelTradesDialog(getContext(), this, bin).show();
+    }
+
+    @Override
     public DomAgg agg() {
         agg.configure(GROUPS[grpIdx], minUsd);     // a group / filter change makes the next frame rebuild once
         return agg;

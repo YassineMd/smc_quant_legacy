@@ -10984,7 +10984,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (>= the store floor) + every atomic SWEEP (same ms + side, >= 2 levels), live store first; bars older than the
         live tape store (6h backfill) come from the big-print ARCHIVE (study/bigprint_archive), rows strictly BEFORE
         the live store's oldest print so the two sources never double-count the same whale. With `sw_on`, same-side
-        events within BIGPLAYER_BURST_MS (1 s) are folded into ONE player (BURST): total summed, range = everything
+        events within BIGPLAYER_BURST_MS (2 ms) are folded into ONE player (BURST): total summed, range = everything
         the player ate through. Returns [(t, side, end price, usd, kind 'pr' | 'sw', lo, hi)], time-sorted. Shared by
         the Big Player Levels overlay (bubbles / diamonds) and the Big Player Gray VP."""
         live_start = self._bp_trades[0][0] if self._bp_trades else float("inf")
@@ -11006,12 +11006,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for (t, p0, p1, usd, side, nl) in sws:
             ev.append((t, int(side > 0), p1, usd, "sw", min(p0, p1), max(p0, p1)))
         ev.sort(key=lambda e: e[0])
-        # BURSTS (user 2026-09-06): same-side events that follow each other within BIGPLAYER_BURST_MS (1 s) are
+        # BURSTS (user 2026-09-06, 2 ms since 2026-09-07): same-side events within BIGPLAYER_BURST_MS of each other are
         # ONE player working the book -> one event, the totals summed, at the LAST event's price / bar, its range
         # = everything the player ate through. A cluster of several prints, or anything containing a sweep, is
         # drawn as a DIAMOND; a lone print stays a bubble.
         if sw_on and ev:
-            win = float(config.BIGPLAYER_BURST_MS) / 1000.0
+            # +0.5 ms: timestamps are ms-quantized but held as float SECONDS (~2e-7 s resolution at 1.7e9), so two
+            # fills exactly BURST_MS apart can compute to BURST_MS + 1e-7 and miss a bare comparison (seen at 2 ms)
+            win = (float(config.BIGPLAYER_BURST_MS) + 0.5) / 1000.0
             clusters = []; cur = None                           # cur = [t_last, side, price_last, usd, n, has_sweep, lo, hi]
             for (t, side, price, usd, kind, lo, hi) in ev:
                 if cur is not None and cur[1] == side and t - cur[0] <= win:

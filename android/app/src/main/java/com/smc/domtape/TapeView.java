@@ -23,7 +23,7 @@ import java.util.Locale;
  * back (pauses); the panel's pill resumes. The 60 s pressure strip is {@link PressureStrip}, its own view.
  *
  * MERGED PLAYERS (user 2026-09-07): a row with n > 1 fills is ONE order that ate through the book (the
- * terminal's diamonds): "◆ hh:mm:ss (+Ns)" | "price (+N ticks)" | the summed amount. TAP the row to drop
+ * terminal's diamonds): "hh:mm:ss" | "price (±N)" | the summed amount. TAP the row to drop
  * down its fills (time to the ms, price, size), tap again to fold.
  *
  * RENDERING (2026-09-06): every row is recorded ONCE into a {@link RenderNode} keyed by its content and kept
@@ -40,6 +40,16 @@ public class TapeView extends View {
         void scrollBy(int rows);
 
         TradeStore store();
+
+        /** The rows to show (newest first, `skip` rows scrolled, at most `nFit`). Default: the live tape. */
+        default double[][] rows(TradeStore st, double minUsd, int skip, int nFit) {
+            return st.tapeRows(minUsd, skip, nFit);
+        }
+
+        /** Text for an empty list; null = the live tape's own messages. */
+        default String emptyText() {
+            return null;
+        }
     }
 
     // USD styling tiers (trades_tape.py)
@@ -118,7 +128,7 @@ public class TapeView extends View {
      */
     public void maybeInvalidate() {
         int nFit = Math.max(0, (int) ((getHeight() - hdrH) / rowH));
-        double[][] rows = host.store().tapeRows(host.minUsd(), host.scrollRows(), nFit);
+        double[][] rows = host.rows(host.store(), host.minUsd(), host.scrollRows(), nFit);
         if (rows != lastRows) invalidate();
     }
 
@@ -230,7 +240,7 @@ public class TapeView extends View {
 
         // ── rows: newest first, filtered, offset by the scroll position ────────────────────
         int nFit = Math.max(0, (int) ((h - y0) / rowH));
-        double[][] rows = st.tapeRows(host.minUsd(), host.scrollRows(), nFit);
+        double[][] rows = host.rows(st, host.minUsd(), host.scrollRows(), nFit);
         lastRows = rows;
         hit.clear();
         hitKeys.clear();
@@ -238,9 +248,11 @@ public class TapeView extends View {
         if (rows.length == 0) {
             text.setColor(Ui.WAIT_TXT);
             text.setTextAlign(Paint.Align.CENTER);
-            String msg = st.tradeCount() == 0
-                    ? (st.isConnected() ? "waiting for trades…" : "connecting to bridge…")
-                    : "no trades ≥ filter — lower MIN SIZE";
+            String msg = host.emptyText();
+            if (msg == null)
+                msg = st.tradeCount() == 0
+                        ? (st.isConnected() ? "waiting for trades…" : "connecting to bridge…")
+                        : "no trades ≥ filter — lower MIN SIZE";
             txt(c, msg, w / 2f, y0 + dp40, text);
             return;
         }
@@ -331,7 +343,7 @@ public class TapeView extends View {
         return y;
     }
 
-    /** Record ONE row (row-local y: 0..rowH): tier styling + TIME / PRICE / AMOUNT (merged: +Ns, ±N). */
+    /** Record ONE row (row-local y: 0..rowH): tier styling + TIME / PRICE / AMOUNT (merged: "price (±N)"). */
     private void recordRow(Canvas c, double[] r, int w, float cTime, float cPrice, float cAmtR) {
         float ry = 0;
         long ts = (long) r[0];
@@ -359,11 +371,7 @@ public class TapeView extends View {
         float ty = centerY(ry);
         text.setColor(Ui.TIME_TXT);
         text.setTextAlign(Paint.Align.LEFT);
-        String tstr = timeStr(ts);
-        if (mg) {
-            long span = (long) r[6];
-            tstr = tstr + (span > 0 ? " (+" + span + "s)" : "");
-        }
+        String tstr = timeStr(ts);                 // no "(+Ns)" span: a player is a few ms wide (user 2026-09-07)
         txt(c, tstr, cTime + (usd >= T3 ? 4 : 0), ty, text);
 
         Paint pp = usd >= T3 ? textB : text;
