@@ -41,19 +41,20 @@ public class TradeStore {
     private long epoch = 0;                        // structural change (indices moved)
     private volatile Runnable listener;            // poked (on the feed thread) after each ingest
 
-    // MERGED PLAYERS (user 2026-09-07): the tape's burst rule tracked INCREMENTALLY so the DOM can mark, per frame,
-    // the levels where a player STARTED without re-scanning trades. A group = consecutive same-side fills each
-    // within MERGE_MS (1 ms) of the previous; it is "merged" once it has >= 2 fills spanning >= 1 tick. Only merged groups
-    // are kept (parallel arrays, time-ordered by their first fill): first/last ms, side, first tick, lo/hi tick, usd,
-    // n. The last group can still grow; `cur*` = the open chain (merged or not yet).
+    // CAMPAIGNS (user 2026-09-07): the merge unit tracked INCREMENTALLY so the DOM can mark, per frame, the levels
+    // where a player STARTED without re-scanning trades. A campaign = same-side fills each within CAMPAIGN_MS of the
+    // previous SAME-SIDE fill (other-side fills in between do not break it, neither does a price reversal: a refill
+    // taken again is the fight); it is "merged" once it has >= 2 fills spanning >= 1 tick. Only merged campaigns are
+    // kept (parallel arrays, in the order they became merged -- NOT time-sorted: two sides interleave): first/last ms,
+    // side, first tick, lo/hi tick, usd, n. Open chains per side in c*[side]; cG[side] = merged index or -1.
     private long[] gT0 = new long[256], gT1 = new long[256], gTick0 = new long[256], gLo = new long[256], gHi = new long[256];
     private double[] gUsd = new double[256];
     private int[] gN = new int[256];
     private byte[] gSide = new byte[256];
     private int gCount = 0;
-    private long curT0, curT1, curTick0, curLo, curHi, curTk;   // curTk = the last fill's tick (monotonic rule)
-    private double curUsd;
-    private int curN, curSide = -1, curG = -1;       // curG = index in the merged arrays once merged, else -1
+    private final long[] cT0 = new long[2], cT1 = new long[2], cTk0 = new long[2], cLo = new long[2], cHi = new long[2];
+    private final double[] cUsd = new double[2];
+    private final int[] cN = new int[2], cG = {-1, -1};
 
     // tapeRows memo: the same frame asked again (no new data, same filter / scroll / height) is free
     private double[][] tapeMemo;
@@ -212,34 +213,32 @@ public class TradeStore {
     }
 
     /**
-     * Feed one fill (time order) to the open chain; publishes / updates the merged group it belongs to. A fill joins
-     * the chain only if it is the same side, within MERGE_MS of the previous fill AND continues in the order's own
-     * direction (a buy never fills below its previous fill, a sell never above -- user 2026-09-07): a fill that comes
-     * back is another order and starts a new chain.
+     * Feed one fill (time order) to its side's open chain; publishes / updates the merged campaign it belongs to. A
+     * fill joins when it is within CAMPAIGN_MS of the previous fill of the SAME side -- whatever the other side did in
+     * between and whichever way the price went (a refill taken again is the same player fighting for the level).
      */
-    private void chain(long ts, long tk, double usd, int side) {
-        if (curN > 0 && side == curSide && ts - curT1 <= MERGE_MS && (side > 0 ? tk >= curTk : tk <= curTk)) {
-            curT1 = ts;
-            curTk = tk;
-            curLo = Math.min(curLo, tk);
-            curHi = Math.max(curHi, tk);
-            curUsd += usd;
-            curN++;
-            if (curHi > curLo) {                          // ate through the book -> a merged player
-                if (curG < 0) {
-                    curG = gCount;
-                    gAdd(curT0, curT1, curTick0, curLo, curHi, curUsd, curN, side);
+    private void chain(long ts, long tk, double usd, int s) {
+        if (cN[s] > 0 && ts - cT1[s] <= CAMPAIGN_MS) {
+            cT1[s] = ts;
+            cLo[s] = Math.min(cLo[s], tk);
+            cHi[s] = Math.max(cHi[s], tk);
+            cUsd[s] += usd;
+            cN[s]++;
+            if (cHi[s] > cLo[s]) {                        // ate through the book -> a merged campaign
+                if (cG[s] < 0) {
+                    cG[s] = gCount;
+                    gAdd(cT0[s], cT1[s], cTk0[s], cLo[s], cHi[s], cUsd[s], cN[s], s);
                 } else {
-                    gT1[curG] = curT1; gLo[curG] = curLo; gHi[curG] = curHi; gUsd[curG] = curUsd; gN[curG] = curN;
+                    int g = cG[s];
+                    gT1[g] = cT1[s]; gLo[g] = cLo[s]; gHi[g] = cHi[s]; gUsd[g] = cUsd[s]; gN[g] = cN[s];
                 }
             }
         } else {
-            curT0 = curT1 = ts;
-            curTick0 = curLo = curHi = curTk = tk;
-            curUsd = usd;
-            curN = 1;
-            curSide = side;
-            curG = -1;
+            cT0[s] = cT1[s] = ts;
+            cTk0[s] = cLo[s] = cHi[s] = tk;
+            cUsd[s] = usd;
+            cN[s] = 1;
+            cG[s] = -1;
         }
     }
 
@@ -256,13 +255,36 @@ public class TradeStore {
         gUsd = java.util.Arrays.copyOf(gUsd, cap); gN = java.util.Arrays.copyOf(gN, cap); gSide = java.util.Arrays.copyOf(gSide, cap);
     }
 
-    /** Rebuild the merged-group list from the store (backfill prepend): one pass over the trades. */
-    private void gRebuild() {
+    private void gReset() {
         gCount = 0;
-        curN = 0; curSide = -1; curG = -1;
+        cN[0] = cN[1] = 0;
+        cG[0] = cG[1] = -1;
+    }
+
+    /** Rebuild the merged-campaign list from the store (backfill prepend): one pass over the trades. */
+    private void gRebuild() {
+        gReset();
         for (int i = 0; i < n; i++) {
             chain(tsMs[i], tick[i], tick[i] * TICK * (buyQ[i] + sellQ[i]), buyQ[i] > 0 ? 1 : 0);
         }
+    }
+
+    /** Drop the merged campaigns that ended before cutT (compaction: the list is not time-sorted). */
+    private void gPrune(long cutT) {
+        int w = 0;
+        int g0 = cG[0], g1 = cG[1];
+        cG[0] = cG[1] = -1;
+        for (int g = 0; g < gCount; g++) {
+            if (gT1[g] < cutT) continue;
+            if (g == g0) cG[0] = w;
+            if (g == g1) cG[1] = w;
+            if (w != g) {
+                gT0[w] = gT0[g]; gT1[w] = gT1[g]; gTick0[w] = gTick0[g]; gLo[w] = gLo[g]; gHi[w] = gHi[g];
+                gUsd[w] = gUsd[g]; gN[w] = gN[g]; gSide[w] = gSide[g];
+            }
+            w++;
+        }
+        gCount = w;
     }
 
     private void prune() {
@@ -276,17 +298,7 @@ public class TradeStore {
             System.arraycopy(sellQ, lo, sellQ, 0, n - lo);
             n -= lo;
             epoch++;                                // indices shifted
-            long cutT = n > 0 ? tsMs[0] : Long.MAX_VALUE;
-            int g0 = 0;
-            while (g0 < gCount && gT1[g0] < cutT) g0++;
-            if (g0 > 0) {
-                System.arraycopy(gT0, g0, gT0, 0, gCount - g0); System.arraycopy(gT1, g0, gT1, 0, gCount - g0);
-                System.arraycopy(gTick0, g0, gTick0, 0, gCount - g0); System.arraycopy(gLo, g0, gLo, 0, gCount - g0);
-                System.arraycopy(gHi, g0, gHi, 0, gCount - g0); System.arraycopy(gUsd, g0, gUsd, 0, gCount - g0);
-                System.arraycopy(gN, g0, gN, 0, gCount - g0); System.arraycopy(gSide, g0, gSide, 0, gCount - g0);
-                gCount -= g0;
-                if (curG >= 0) curG = curG - g0 < 0 ? -1 : curG - g0;
-            }
+            gPrune(n > 0 ? tsMs[0] : Long.MAX_VALUE);
         }
     }
 
@@ -304,7 +316,7 @@ public class TradeStore {
     public synchronized void reset() {
         n = 0;
         liveT0Ms = 0;
-        gCount = 0; curN = 0; curSide = -1; curG = -1;
+        gReset();
         epoch++;
         version++;
     }
@@ -426,80 +438,134 @@ public class TradeStore {
         return n;
     }
 
-    public static final long MERGE_MS = 1;         // same-side fills chained within 1 ms = ONE player (the terminal's burst rule; user's
-                                                   // pick 2026-09-07 (2 ms first, then 1 ms) after the aggTrade study: 63% of level-eating $ lands <= 1 ms, 1 s glued orders)
+    public static final long MERGE_MS = 1;         // ORDER: same-side fills <= 1 ms apart, monotonic = one atomic order
+    public static final long CAMPAIGN_MS = 30;     // CAMPAIGN: same-side orders whose gap (next first fill - previous last
+                                                   // fill) is <= 30 ms, refills / reversals allowed, other-side fills in
+                                                   // between allowed -- user 2026-09-07 ("the 12:01:08 fight"); the
+                                                   // aggTrade study: reaction band <= 10 ms, quiet trough to 100 ms,
+                                                   // the market's normal cadence from 100 ms (study/campaign_gap_study.py)
+
+    /** One closed unit of the backward two-sided walk: a campaign row, or plain fills. */
+    private interface Sink {
+        /** @return false to stop the walk */
+        boolean campaign(int firstIdx, int lastIdx, long tsFirst, long tsLast, double usd, int side, int cnt, long lo, long hi);
+
+        boolean plain(int k);
+    }
 
     /**
-     * Tape rows, newest-first, MIN SIZE filter + scroll offset applied. MERGED PLAYERS (user 2026-09-07, the tape's
-     * version of the terminal's diamonds): same-side fills that follow each other within MERGE_MS (an opposite-side
-     * trade in between breaks the chain) AND span at least one tick -- one order that ate through the book -- become
-     * ONE row: usd = the sum, time = the FIRST fill, price = the FIRST fill's price, ticks = the range eaten (signed:
-     * + buy up / - sell down), span = whole seconds first->last. The filter applies to the merged total. Same-price
-     * rapid fills are NOT merged (nothing was eaten). Row: [tsFirst, priceFirst, usd, side, n, ticks, spanSec, tsLast].
-     * Memoized on (version, filter, scroll, height): a repaint without new data is free.
+     * Walk the trades newest -> oldest down to index `stop` (inclusive), building each side's chain independently
+     * (a fill joins its side's open chain when it is within CAMPAIGN_MS of that chain's oldest fill); a chain closes
+     * when the next older same-side fill is further away or the walk ends. Closed chains with >= 2 fills spanning
+     * >= 1 tick are emitted as campaigns, the rest fill by fill. Emission lags the fills (a chain closes later than
+     * its first fill), so callers sort what they keep by tsFirst; a chain still open when the sink stops has an
+     * older first fill than everything emitted, so it is never one of the rows already asked for.
+     */
+    private void walk(int stop, Sink sink) {
+        long[] oT = new long[2], nT = new long[2], lo = new long[2], hi = new long[2];
+        int[] oI = new int[2], nI = new int[2], cnt = new int[2];
+        double[] usd = new double[2];
+        int[][] idx = new int[2][8];                     // the fills of a chain while it has NOT spanned a tick yet
+        boolean[] open = new boolean[2];
+        for (int k = n - 1; k >= stop - 1; k--) {
+            int s = -1;
+            if (k >= stop) s = buyQ[k] > 0 ? 1 : 0;
+            for (int side = 0; side < 2; side++) {
+                boolean joins = k >= stop && side == s && open[side] && oT[side] - tsMs[k] <= CAMPAIGN_MS;
+                if (joins) {
+                    oT[side] = tsMs[k]; oI[side] = k;
+                    lo[side] = Math.min(lo[side], tick[k]); hi[side] = Math.max(hi[side], tick[k]);
+                    usd[side] += tick[k] * TICK * (buyQ[k] + sellQ[k]);
+                    if (hi[side] == lo[side]) {
+                        if (cnt[side] == idx[side].length) idx[side] = java.util.Arrays.copyOf(idx[side], cnt[side] * 2);
+                        idx[side][cnt[side]] = k;
+                    }
+                    cnt[side]++;
+                    continue;
+                }
+                boolean closes = open[side] && (k < stop || side == s);
+                if (closes) {
+                    open[side] = false;
+                    if (cnt[side] >= 2 && hi[side] > lo[side]) {
+                        if (!sink.campaign(oI[side], nI[side], oT[side], nT[side], usd[side], side, cnt[side], lo[side], hi[side])) return;
+                    } else {
+                        for (int m = 0; m < cnt[side]; m++) if (!sink.plain(idx[side][m])) return;
+                    }
+                }
+                if (k >= stop && side == s) {            // start this side's new chain with fill k
+                    open[side] = true;
+                    oT[side] = nT[side] = tsMs[k]; oI[side] = nI[side] = k;
+                    lo[side] = hi[side] = tick[k];
+                    usd[side] = tick[k] * TICK * (buyQ[k] + sellQ[k]);
+                    idx[side][0] = k; cnt[side] = 1;
+                }
+            }
+        }
+    }
+
+    private static double[] campaignRow(long tsFirst, long tsLast, double px0, double usd, int side, int cnt, long lo, long hi) {
+        return new double[]{tsFirst, px0, usd, side, cnt, side > 0 ? (hi - lo) : -(hi - lo), (tsLast - tsFirst) / 1000L, tsLast};
+    }
+
+    private double[] plainRow(int k) {
+        double px = tick[k] * TICK;
+        return new double[]{tsMs[k], px, px * (buyQ[k] + sellQ[k]), buyQ[k] > 0 ? 1 : 0, 1, 0, 0, tsMs[k]};
+    }
+
+    private static final java.util.Comparator<double[]> NEWEST_FIRST = (a, b) -> {
+        int c = Double.compare(b[0], a[0]);              // tsFirst desc
+        return c != 0 ? c : Double.compare(b[7], a[7]);  // then tsLast desc
+    };
+
+    /**
+     * Tape rows, newest-first, MIN SIZE filter + scroll offset applied. A CAMPAIGN (user 2026-09-07) = same-side fills
+     * chained within CAMPAIGN_MS of the previous same-side fill (other-side fills in between and price reversals
+     * allowed -- the orders inside are shown by the drop-down) that span >= 1 tick: ONE row, usd = the sum, time and
+     * price = the FIRST fill, ticks = the net range (signed: + buy / - sell). The filter applies to the campaign
+     * total. Same-price rapid fills are NOT merged (nothing was eaten). Row: [tsFirst, priceFirst, usd, side, n,
+     * ticks, spanSec, tsLast]. Memoized on (version, filter, scroll, height).
      */
     public synchronized double[][] tapeRows(double minUsd, int skip, int maxRows) {
         if (tapeMemo != null && tapeMemoVer == version && tapeMemoMin == minUsd
                 && tapeMemoSkip == skip && tapeMemoMax == maxRows) {
             return tapeMemo;
         }
-        int skip0 = skip;
-        java.util.ArrayList<double[]> out = new java.util.ArrayList<>(Math.max(0, maxRows));
-        int i = n - 1;
-        while (i >= 0 && out.size() < maxRows) {
-            int side = buyQ[i] > 0 ? 1 : 0;
-            int j = i;
-            long tmin = tick[i], tmax = tick[i];
-            double usd = tick[i] * TICK * (buyQ[i] + sellQ[i]);
-            while (j - 1 >= 0 && chained(j)) {
-                j--;
-                tmin = Math.min(tmin, tick[j]);
-                tmax = Math.max(tmax, tick[j]);
-                usd += tick[j] * TICK * (buyQ[j] + sellQ[j]);
+        final int want = Math.max(0, skip) + Math.max(0, maxRows);
+        final java.util.ArrayList<double[]> got = new java.util.ArrayList<>(want + 8);
+        walk(0, new Sink() {
+            @Override
+            public boolean campaign(int fi, int li, long t0, long t1, double u, int side, int cnt, long lo, long hi) {
+                if (u >= minUsd) got.add(campaignRow(t0, t1, tick[fi] * TICK, u, side, cnt, lo, hi));
+                return got.size() < want;
             }
-            int cnt = i - j + 1;
-            if (cnt >= 2 && tmax > tmin) {                     // one player that ate through the book
-                if (usd >= minUsd) {
-                    if (skip > 0) skip--;
-                    else out.add(new double[]{tsMs[j], tick[j] * TICK, usd, side, cnt,
-                            side > 0 ? (tmax - tmin) : -(tmax - tmin), (tsMs[i] - tsMs[j]) / 1000L, tsMs[i]});
-                }
-            } else {                                            // plain trades, newest first
-                for (int k = i; k >= j && out.size() < maxRows; k--) {
-                    double px = tick[k] * TICK;
-                    double u = px * (buyQ[k] + sellQ[k]);
-                    if (u < minUsd) continue;
-                    if (skip > 0) {
-                        skip--;
-                        continue;
-                    }
-                    out.add(new double[]{tsMs[k], px, u, buyQ[k] > 0 ? 1 : 0, 1, 0, 0, tsMs[k]});
-                }
+
+            @Override
+            public boolean plain(int k) {
+                if (tick[k] * TICK * (buyQ[k] + sellQ[k]) >= minUsd) got.add(plainRow(k));
+                return got.size() < want;
             }
-            i = j - 1;
-        }
-        double[][] res = out.toArray(new double[0][]);
-        tapeMemo = res;
-        tapeMemoVer = version;
-        tapeMemoMin = minUsd;
-        tapeMemoSkip = skip0;
-        tapeMemoMax = maxRows;
-        return res;
+        });
+        got.sort(NEWEST_FIRST);
+        int from = Math.min(got.size(), Math.max(0, skip));
+        int to = Math.min(got.size(), from + Math.max(0, maxRows));
+        double[][] rows = got.subList(from, to).toArray(new double[0][]);
+        tapeMemo = rows; tapeMemoVer = version; tapeMemoMin = minUsd; tapeMemoSkip = skip; tapeMemoMax = maxRows;
+        return rows;
     }
 
     /**
-     * DOM diamonds (user 2026-09-07): for every merged player that STARTED inside [cutoffMs, now] with total >= minUsd,
+     * DOM diamonds (user 2026-09-07): for every merged campaign that STARTED inside [cutoffMs, now] with total >= minUsd,
      * add its usd to the bin of its FIRST fill (outBuy / outSell indexed by topBin - bin, the visible rows) -- only
-     * where it started, not the ticks it ate through. O(merged groups in the window): never a trade scan. Returns the
-     * number of players marked.
+     * where it started, not the ticks it ate through. O(merged campaigns in the store) -- never a trade scan. Returns
+     * the number of campaigns marked.
      */
     public synchronized int levelDiamonds(long topBin, int nRows, long tpg, long cutoffMs, double minUsd,
                                           double[] outBuy, double[] outSell) {
         java.util.Arrays.fill(outBuy, 0, nRows, 0.0);
         java.util.Arrays.fill(outSell, 0, nRows, 0.0);
         int marked = 0;
-        for (int g = gCount - 1; g >= 0 && gT1[g] >= cutoffMs; g--) {   // time-ordered: stop once fully before the window
-            if (gT0[g] < cutoffMs) continue;                                // must have STARTED inside the window
+        for (int g = 0; g < gCount; g++) {              // not time-sorted (two sides interleave): look at every one
+            if (gT0[g] < cutoffMs) continue;             // must have STARTED inside the window
             if (minUsd > 0 && gUsd[g] < minUsd) continue;
             long i = topBin - Math.floorDiv(gTick0[g], tpg);
             if (i < 0 || i >= nRows) continue;
@@ -510,76 +576,61 @@ public class TradeStore {
     }
 
     /**
-     * The tape rows of ONE price bin (popup behind a DOM diamond): merged players that STARTED in the bin + plain
-     * trades in it, inside [cutoffMs, now], newest first, MIN SIZE on the merged total / the trade -- the exact
-     * tapeRows row format. One newest-first chain walk over the window (a click, not a frame).
+     * The tape rows of ONE price bin (popup behind a DOM diamond): campaigns that STARTED in the bin + plain trades
+     * in it, inside [cutoffMs, now], newest first, MIN SIZE on the campaign total / the trade -- the tapeRows format.
      */
     public synchronized double[][] levelRows(long bin, long tpg, long cutoffMs, double minUsd, int maxRows) {
-        java.util.ArrayList<double[]> out = new java.util.ArrayList<>();
-        int stop = lowerBound(cutoffMs);
-        int i = n - 1;
-        while (i >= stop && out.size() < maxRows) {
-            int side = buyQ[i] > 0 ? 1 : 0;
-            int j = i;
-            long tmin = tick[i], tmax = tick[i];
-            double usd = tick[i] * TICK * (buyQ[i] + sellQ[i]);
-            while (j - 1 >= 0 && chained(j)) {
-                j--;
-                tmin = Math.min(tmin, tick[j]);
-                tmax = Math.max(tmax, tick[j]);
-                usd += tick[j] * TICK * (buyQ[j] + sellQ[j]);
+        final java.util.ArrayList<double[]> got = new java.util.ArrayList<>();
+        walk(lowerBound(cutoffMs), new Sink() {
+            @Override
+            public boolean campaign(int fi, int li, long t0, long t1, double u, int side, int cnt, long lo, long hi) {
+                if (Math.floorDiv(tick[fi], tpg) == bin && u >= minUsd) got.add(campaignRow(t0, t1, tick[fi] * TICK, u, side, cnt, lo, hi));
+                return got.size() < maxRows;
             }
-            int cnt = i - j + 1;
-            if (cnt >= 2 && tmax > tmin) {
-                if (Math.floorDiv(tick[j], tpg) == bin && usd >= minUsd && tsMs[j] >= cutoffMs)
-                    out.add(new double[]{tsMs[j], tick[j] * TICK, usd, side, cnt,
-                            side > 0 ? (tmax - tmin) : -(tmax - tmin), (tsMs[i] - tsMs[j]) / 1000L, tsMs[i]});
-            } else {
-                for (int k = i; k >= j && out.size() < maxRows; k--) {
-                    if (Math.floorDiv(tick[k], tpg) != bin || tsMs[k] < cutoffMs) continue;
-                    double px = tick[k] * TICK;
-                    double u = px * (buyQ[k] + sellQ[k]);
-                    if (u < minUsd) continue;
-                    out.add(new double[]{tsMs[k], px, u, buyQ[k] > 0 ? 1 : 0, 1, 0, 0, tsMs[k]});
-                }
+
+            @Override
+            public boolean plain(int k) {
+                if (Math.floorDiv(tick[k], tpg) == bin && tick[k] * TICK * (buyQ[k] + sellQ[k]) >= minUsd) got.add(plainRow(k));
+                return got.size() < maxRows;
             }
-            i = j - 1;
-        }
-        return out.toArray(new double[0][]);
+        });
+        got.sort(NEWEST_FIRST);
+        return got.subList(0, Math.min(got.size(), maxRows)).toArray(new double[0][]);
     }
 
-    /**
-     * Chain predicate between consecutive fills j-1 -> j (the same one chain() applies forward): same side, within
-     * MERGE_MS, and monotonic in the order's direction. Pairwise, so a backward walk recovers the same chains.
-     */
-    private boolean chained(int j) {
-        int side = buyQ[j] > 0 ? 1 : 0;
-        if ((buyQ[j - 1] > 0 ? 1 : 0) != side || tsMs[j] - tsMs[j - 1] > MERGE_MS) return false;
-        return side > 0 ? tick[j] >= tick[j - 1] : tick[j] <= tick[j - 1];
-    }
-
-    /** Merged players currently tracked (tests / diagnostics). */
+    /** Merged campaigns currently tracked (tests / diagnostics). */
     public synchronized int mergedCount() {
         return gCount;
     }
 
     /**
-     * The fills of a merged row, newest first: [tsMs, price, usd]. A chain is `count` CONSECUTIVE fills starting at
-     * its first one (same side + a time range is no longer enough: two chains can share a millisecond once a
-     * reversal splits them), located by (tsFirst, priceFirst, side) and confirmed by the row's total.
+     * The fills of a campaign row, newest first: [tsMs, price, usd, newOrder] -- newOrder = 1 when that fill STARTED
+     * an order inside the campaign (more than MERGE_MS after the previous same-side fill, or a price reversal: the
+     * drop-down draws a rule between orders). Located by (tsFirst, priceFirst, side), followed forward through the
+     * same side's fills within CAMPAIGN_MS (other-side fills skipped) for `count` fills, confirmed by the total.
      */
     public synchronized double[][] groupTrades(long tsFirst, double priceFirst, int side, int count, double usd) {
         long tk0 = Math.round(priceFirst / TICK);
         for (int k = lowerBound(tsFirst); k < n && tsMs[k] == tsFirst; k++) {
-            if ((buyQ[k] > 0 ? 1 : 0) != side || tick[k] != tk0 || k + count > n) continue;
+            if ((buyQ[k] > 0 ? 1 : 0) != side || tick[k] != tk0) continue;
+            int[] ks = new int[count];
+            int got = 0, last = -1;
+            for (int m = k; m < n && got < count; m++) {
+                if ((buyQ[m] > 0 ? 1 : 0) != side) continue;
+                if (last >= 0 && tsMs[m] - tsMs[last] > CAMPAIGN_MS) break;
+                ks[got++] = m; last = m;
+            }
+            if (got != count) continue;
             double sum = 0;
-            for (int m = k; m < k + count; m++) sum += tick[m] * TICK * (buyQ[m] + sellQ[m]);
+            for (int m = 0; m < count; m++) sum += tick[ks[m]] * TICK * (buyQ[ks[m]] + sellQ[ks[m]]);
             if (Math.abs(sum - usd) > 1e-6 * Math.max(1.0, usd)) continue;
             double[][] out = new double[count][];
             for (int m = 0; m < count; m++) {
-                int q = k + count - 1 - m;
+                int q = ks[m], prev = m > 0 ? ks[m - 1] : -1;
+                boolean newOrder = prev < 0 || tsMs[q] - tsMs[prev] > MERGE_MS
+                        || (side > 0 ? tick[q] < tick[prev] : tick[q] > tick[prev]);
                 double px = tick[q] * TICK;
-                out[m] = new double[]{tsMs[q], px, px * (buyQ[q] + sellQ[q])};
+                out[count - 1 - m] = new double[]{tsMs[q], px, px * (buyQ[q] + sellQ[q]), newOrder ? 1 : 0};
             }
             return out;
         }

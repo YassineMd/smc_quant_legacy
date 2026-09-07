@@ -187,11 +187,15 @@ BIGPLAYER_MAX_LINES = 80
 # BIGPLAYER_SWEEP_MAX drawn (each = capsule + end-level line + label).
 BIGPLAYER_SWEEP_MIN_LEVELS = 2
 BIGPLAYER_SWEEP_MAX = 40
-# BURSTS (user 2026-09-06): same-side prints / sweeps that follow each other within this many ms are ONE player
-# working the book -> one diamond, totals summed (drawn like the atomic sweeps).
-BIGPLAYER_BURST_MS = 1          # 2026-09-07: was 1000; user's pick (the study pointed at 10 ms). Raw aggTrade study (35 h, 400k trades): same-side level-eating
-                                # follow-through is 63% (by $) within 1 ms, 82% within 10 ms, 95% within 100 ms; the 1 s
-                                # rule's >= $100K diamonds had a > 100 ms gap inside them 53% of the time (separate orders).
+# CAMPAIGNS (user 2026-09-06 as BURSTS, 2026-09-07 as CAMPAIGNS): same-side prints / sweeps within this many ms of the
+# previous same-side one are ONE player working the book -> one diamond, totals summed (drawn like the atomic sweeps).
+BIGPLAYER_CAMPAIGN_MS = 30      # CAMPAIGN window (2026-09-07, "the 12:01:08 fight"): same-side big-player events within
+                                # 30 ms of the previous same-side event are ONE player, other side in between and price
+                                # reversals between orders allowed. Raw aggTrade study (study/campaign_gap_study.py, 35 h):
+                                # same-side inter-order gaps are 5x background at 2-3 ms, 1.6x at 6-10 ms, a quiet trough
+                                # (0.4-0.9x) at 11-100 ms, then the market's normal cadence from 100 ms. Replaces
+                                # BIGPLAYER_BURST_MS (1 s -> 10 -> 2 -> 1 ms the same day; the 1 ms + monotonic ORDER rule
+                                # lives on in bigprint_store.group_sweeps and the tablet's drop-down).
 DOM_VP_BACKFILL_SECS = 21600    # DOM scanner mode: executed-trade history for the ladder's Volume Profile —
                                 # 6h covers every VP window choice (5M..6H filter locally, no re-requests).
                                 # ~60-80k trades ≈ 3MB b64 one-shot on entry (well under trade_tape's 72h)

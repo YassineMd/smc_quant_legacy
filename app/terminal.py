@@ -10984,7 +10984,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (>= the store floor) + every atomic SWEEP (same ms + side, >= 2 levels), live store first; bars older than the
         live tape store (6h backfill) come from the big-print ARCHIVE (study/bigprint_archive), rows strictly BEFORE
         the live store's oldest print so the two sources never double-count the same whale. With `sw_on`, same-side
-        events within BIGPLAYER_BURST_MS (1 ms) are folded into ONE player (BURST): total summed, range = everything
+        events within BIGPLAYER_CAMPAIGN_MS of the previous SAME-side event are folded into ONE player (CAMPAIGN): total summed, range = everything
         the player ate through. Returns [(t, side, end price, usd, kind 'pr' | 'sw', lo, hi)], time-sorted. Shared by
         the Big Player Levels overlay (bubbles / diamonds) and the Big Player Gray VP."""
         live_start = self._bp_trades[0][0] if self._bp_trades else float("inf")
@@ -11006,29 +11006,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for (t, p0, p1, usd, side, nl) in sws:
             ev.append((t, int(side > 0), p1, usd, "sw", min(p0, p1), max(p0, p1)))
         ev.sort(key=lambda e: e[0])
-        # BURSTS (user 2026-09-06, 1 ms since 2026-09-07): same-side events within BIGPLAYER_BURST_MS of each other are
-        # ONE player working the book -> one event, the totals summed, at the LAST event's price / bar, its range
-        # = everything the player ate through. A cluster of several prints, or anything containing a sweep, is
-        # drawn as a DIAMOND; a lone print stays a bubble.
+        # CAMPAIGNS (user 2026-09-07 "the 12:01:08 fight"; BURSTS were 1 s -> 1 ms + monotonic before): same-side
+        # events within BIGPLAYER_CAMPAIGN_MS of the previous event of the SAME side are ONE player working the book --
+        # whatever the other side did in between and whichever way the price went between orders (a refill taken
+        # again is the fight). One open cluster per side. A cluster of >= 2 events, or anything containing a sweep,
+        # is drawn as a DIAMOND spanning everything the player ate; a lone print stays a bubble.
         if sw_on and ev:
             # +0.5 ms: timestamps are ms-quantized but held as float SECONDS (~2e-7 s resolution at 1.7e9), so two
-            # fills exactly BURST_MS apart can compute to BURST_MS + 1e-7 and miss a bare comparison (seen at 2 ms)
-            win = (float(config.BIGPLAYER_BURST_MS) + 0.5) / 1000.0
-            # MONOTONIC (user 2026-09-07): one order only walks the book in its own direction -- a buy never fills
-            # below its previous fill, a sell never above -- so a same-side event that comes back against the
-            # cluster's frontier (buy: its lowest price < the cluster's highest; sell: mirror) is ANOTHER order.
-            clusters = []; cur = None                           # cur = [t_last, side, price_last, usd, n, has_sweep, lo, hi]
+            # fills exactly the window apart can compute to window + 1e-7 and miss a bare comparison
+            win = (float(config.BIGPLAYER_CAMPAIGN_MS) + 0.5) / 1000.0
+            clusters = []; cur = [None, None]                   # per side: [t_last, side, price_last, usd, n, has_sweep, lo, hi]
             for (t, side, price, usd, kind, lo, hi) in ev:
-                if cur is not None and cur[1] == side and t - cur[0] <= win \
-                        and (lo >= cur[7] - 1e-9 if side else hi <= cur[6] + 1e-9):
-                    cur[0] = t; cur[2] = price; cur[3] += usd; cur[4] += 1; cur[5] = cur[5] or kind == "sw"
-                    cur[6] = min(cur[6], lo); cur[7] = max(cur[7], hi)
+                c = cur[side]
+                if c is not None and t - c[0] <= win:
+                    c[0] = t; c[2] = price; c[3] += usd; c[4] += 1; c[5] = c[5] or kind == "sw"
+                    c[6] = min(c[6], lo); c[7] = max(c[7], hi)
                     continue
-                if cur is not None:
-                    clusters.append(cur)
-                cur = [t, side, price, usd, 1, kind == "sw", lo, hi]
-            if cur is not None:
-                clusters.append(cur)
+                if c is not None:
+                    clusters.append(c)
+                cur[side] = [t, side, price, usd, 1, kind == "sw", lo, hi]
+            clusters.extend(c for c in cur if c is not None)
+            clusters.sort(key=lambda c: c[0])
             ev = [(c[0], c[1], c[2], c[3], "sw" if (c[4] > 1 or c[5]) else "pr", c[6], c[7]) for c in clusters]
         return ev
 

@@ -329,7 +329,7 @@ public class TapeView extends View {
         }
     }
 
-    /** The dropped-down fills of a merged row: "  ↳ hh:mm:ss.mmm   price   $size", newest first, dim. */
+    /** The dropped-down fills of a campaign row: "  ↳ hh:mm:ss.mmm   price   $size", newest first, dim; a side-coloured rule separates its ORDERS (1 ms + monotonic). */
     private float drawDetails(Canvas c, double[] r, long key, float y, int h, int w, float cTime, float cPrice, float cAmtR) {
         double[][] det = detailCache.get(key);
         if (det == null) {
@@ -341,7 +341,8 @@ public class TapeView extends View {
         fill.setColor((sideCol & 0x00FFFFFF) | (14 << 24));
         float y1 = Math.min(h, y + det.length * detH);
         c.drawRect(0, y, w, y1, fill);
-        for (double[] d : det) {
+        for (int di = 0; di < det.length; di++) {
+            double[] d = det[di];
             if (y + detH > h) break;
             float ty = y + detH / 2f - (textS.descent() + textS.ascent()) / 2f;
             textS.setColor(Ui.TIME_TXT);
@@ -354,6 +355,11 @@ public class TapeView extends View {
             textS.setTextAlign(Paint.Align.RIGHT);
             txt(c, Fmt.usd(d[2]), cAmtR, ty, textS);
             y += detH;
+            if (d.length > 3 && d[3] > 0 && di < det.length - 1) {      // this fill STARTED an order: rule below it
+                stroke.setColor((sideCol & 0x00FFFFFF) | (120 << 24));
+                stroke.setStrokeWidth(1);
+                c.drawLine(cTime + dp10, y - 0.5f, cAmtR, y - 0.5f, stroke);
+            }
         }
         stroke.setColor(Ui.RULE);
         stroke.setStrokeWidth(1);
