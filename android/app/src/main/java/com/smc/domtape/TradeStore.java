@@ -344,9 +344,15 @@ public class TradeStore {
         return n;
     }
 
+    public static final long MERGE_MS = 1000;      // same-side fills chained within 1 s = ONE player (the terminal's burst rule)
+
     /**
-     * Tape iteration, newest-first with the MIN SIZE filter and scroll offset applied —
-     * the exact row-selection loop of _TapeCanvas.paintEvent. Each row: [tsMs, price, usd, side].
+     * Tape rows, newest-first, MIN SIZE filter + scroll offset applied. MERGED PLAYERS (user 2026-09-07, the tape's
+     * version of the terminal's diamonds): same-side fills that follow each other within MERGE_MS (an opposite-side
+     * trade in between breaks the chain) AND span at least one tick -- one order that ate through the book -- become
+     * ONE row: usd = the sum, time = the FIRST fill, price = the FIRST fill's price, ticks = the range eaten (signed:
+     * + buy up / - sell down), span = whole seconds first->last. The filter applies to the merged total. Same-price
+     * rapid fills are NOT merged (nothing was eaten). Row: [tsFirst, priceFirst, usd, side, n, ticks, spanSec, tsLast].
      * Memoized on (version, filter, scroll, height): a repaint without new data is free.
      */
     public synchronized double[][] tapeRows(double minUsd, int skip, int maxRows) {
@@ -355,30 +361,59 @@ public class TradeStore {
             return tapeMemo;
         }
         int skip0 = skip;
-        double[][] out = new double[Math.max(0, maxRows)][];
-        int got = 0;
-        for (int i = n - 1; i >= 0 && got < maxRows; i--) {
-            double px = tick[i] * TICK;
-            double qty = buyQ[i] + sellQ[i];
-            double usd = px * qty;
-            if (usd < minUsd) continue;
-            if (skip > 0) {
-                skip--;
-                continue;
+        java.util.ArrayList<double[]> out = new java.util.ArrayList<>(Math.max(0, maxRows));
+        int i = n - 1;
+        while (i >= 0 && out.size() < maxRows) {
+            int side = buyQ[i] > 0 ? 1 : 0;
+            int j = i;
+            long tmin = tick[i], tmax = tick[i];
+            double usd = tick[i] * TICK * (buyQ[i] + sellQ[i]);
+            while (j - 1 >= 0 && (buyQ[j - 1] > 0 ? 1 : 0) == side && tsMs[j] - tsMs[j - 1] <= MERGE_MS) {
+                j--;
+                tmin = Math.min(tmin, tick[j]);
+                tmax = Math.max(tmax, tick[j]);
+                usd += tick[j] * TICK * (buyQ[j] + sellQ[j]);
             }
-            out[got++] = new double[]{tsMs[i], px, usd, buyQ[i] > 0 ? 1 : 0};
+            int cnt = i - j + 1;
+            if (cnt >= 2 && tmax > tmin) {                     // one player that ate through the book
+                if (usd >= minUsd) {
+                    if (skip > 0) skip--;
+                    else out.add(new double[]{tsMs[j], tick[j] * TICK, usd, side, cnt,
+                            side > 0 ? (tmax - tmin) : -(tmax - tmin), (tsMs[i] - tsMs[j]) / 1000L, tsMs[i]});
+                }
+            } else {                                            // plain trades, newest first
+                for (int k = i; k >= j && out.size() < maxRows; k--) {
+                    double px = tick[k] * TICK;
+                    double u = px * (buyQ[k] + sellQ[k]);
+                    if (u < minUsd) continue;
+                    if (skip > 0) {
+                        skip--;
+                        continue;
+                    }
+                    out.add(new double[]{tsMs[k], px, u, buyQ[k] > 0 ? 1 : 0, 1, 0, 0, tsMs[k]});
+                }
+            }
+            i = j - 1;
         }
-        if (got < out.length) {
-            double[][] trimmed = new double[got][];
-            System.arraycopy(out, 0, trimmed, 0, got);
-            out = trimmed;
-        }
-        tapeMemo = out;
+        double[][] res = out.toArray(new double[0][]);
+        tapeMemo = res;
         tapeMemoVer = version;
         tapeMemoMin = minUsd;
         tapeMemoSkip = skip0;
         tapeMemoMax = maxRows;
-        return out;
+        return res;
+    }
+
+    /** The fills of a merged row (same side, tsFirst..tsLast), newest first: [tsMs, price, usd]. */
+    public synchronized double[][] groupTrades(long tsFirst, long tsLast, int side) {
+        java.util.ArrayList<double[]> out = new java.util.ArrayList<>();
+        for (int k = lowerBound(tsFirst); k < n && tsMs[k] <= tsLast; k++) {
+            if ((buyQ[k] > 0 ? 1 : 0) != side) continue;
+            double px = tick[k] * TICK;
+            out.add(new double[]{tsMs[k], px, px * (buyQ[k] + sellQ[k])});
+        }
+        java.util.Collections.reverse(out);
+        return out.toArray(new double[0][]);
     }
 
     /** 60s pressure sums (raw, never filtered): [buyUsd, sellUsd]. */
