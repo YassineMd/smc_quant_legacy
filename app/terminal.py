@@ -907,6 +907,58 @@ class SubCandleWindow(QtWidgets.QDialog):
         self._update_price(candle)
 
 
+class BpLabelsItem(pg.GraphicsObject):
+    """Every Big Player amount label in ONE graphics item (2026-09-07): pixel-sized bold text centred on data points,
+    painted in a single pass with the device transform -- ~120 pg.TextItems each re-transformed + emitted on every
+    view change (~40 ms per zoom step); this paints them all in ~2 ms and never reacts to view changes itself."""
+
+    def __init__(self):
+        super().__init__()
+        self._lbl = []                                   # [(x, y, text)]
+        self._color = QtGui.QColor(255, 255, 255)
+        self._font = QtGui.QFont("Consolas", 9)
+        self._font.setBold(True)
+        self.setZValue(32)
+
+    def labels(self):
+        return list(self._lbl)
+
+    def color(self):
+        return self._color
+
+    def setLabels(self, lbl, rgb) -> None:
+        self._lbl = [(float(x), float(y), str(t)) for x, y, t in lbl]
+        self._color = QtGui.QColor(int(rgb[0]), int(rgb[1]), int(rgb[2]))
+        self.update()
+
+    def boundingRect(self):
+        vb = self.getViewBox()
+        try:
+            return QtCore.QRectF(vb.viewRect()) if vb is not None else QtCore.QRectF()
+        except Exception:
+            return QtCore.QRectF()
+
+    def paint(self, p, *args):
+        if not self._lbl:
+            return
+        tr = self.deviceTransform()
+        if tr is None:
+            return
+        dev = p.device()
+        wdev = float(dev.width()) if dev is not None else 1e9
+        hdev = float(dev.height()) if dev is not None else 1e9
+        p.save()
+        p.resetTransform()
+        p.setFont(self._font)
+        p.setPen(self._color)
+        for x, y, t in self._lbl:
+            pt = tr.map(QtCore.QPointF(x, y))
+            if pt.x() < -80 or pt.x() > wdev + 80 or pt.y() < -20 or pt.y() > hdev + 20:
+                continue                                 # off the viewport
+            p.drawText(QtCore.QRectF(pt.x() - 70.0, pt.y() - 10.0, 140.0, 20.0), QtCore.Qt.AlignCenter, t)
+        p.restore()
+
+
 class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def __init__(self, tf: str = config.DEFAULT_TF, lite_worker: bool = False):
         super().__init__()
@@ -1523,10 +1575,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._bp_live_t0 = 0.0                                  # first LIVE print ts (window rows dedupe against it)
         self._bp_sub_t = 0.0; self._bp_need_backfill = True     # tape subscription re-arm clock / backfill pending
         self._bp_conn_was = True
-        self._bp_buy = None; self._bp_sell = None; self._bp_lbls = []   # plot items (lazy)
+        self._bp_buy = None; self._bp_sell = None; self._bp_lbls = []   # plot items (lazy); _bp_lbls kept empty (amounts: _bp_labels)
         self._bp_sweeps = deque(maxlen=60000)                   # SWEEPS: (ts_s, p_first, p_last, usd, side, n_levels) (72 h)
         self._bp_swp_pend = None                                # the live tape's last same-ms group, still growing
-        self._bp_swp_polys = []; self._bp_swp_lbls = []          # sweep / burst DIAMONDS (pooled polygons) + amounts
+        self._bp_swp_polys = []; self._bp_swp_lbls = []          # sweep / burst DIAMONDS (pooled polygons); the amounts live in _bp_labels
+        self._bp_labels = None                                   # BpLabelsItem: every bubble / diamond amount, one paint
+        self._bp_lvl_memo = None                                 # (events id, thr, canvas) -> (levels, slevels) (2026-09-07)
         self._bp_sig = None
         self._c1m_ets = None; self._c1m_sides = None           # '1m confirm' sub-toggle: sorted 1m-clock fire times/sides
         self._c1m_mtime = 0.0; self._c1m_check = 0.0           # (from radarrun_fired.json, mtime-cached, ~3s re-stat)
@@ -11191,7 +11245,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._bp_arch_check_t = time.time()
             try:
                 bigprint_store.refresh_current_month_async(float(config.BIGPLAYER_ARCHIVE_REFRESH_SECS),
-                                                           on_done=lambda n: setattr(self, "_bp_sig", None))
+                                                           on_done=lambda n: (setattr(self, "_bp_sig", None),
+                                                                              setattr(self, "_bp_rev", getattr(self, "_bp_rev", 0) + 1),
+                                                                              setattr(self, "_bp_arch_rev", getattr(self, "_bp_arch_rev", 0) + 1)))
             except Exception as ex:
                 print("BIGPLAYER ARCHIVE REFRESH: %s" % ex)
         _tv, tws, tbatches = self.worker.trades_state()
@@ -11210,7 +11266,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 if rows:
                     self._bp_merge_prints(rows)
         for tw in (tws or ()):
-            if self._bp_bf_inflight is not None and (int(tw.t0), int(tw.t1)) == self._bp_bf_inflight[:2]:
+            if self._bp_bf_inflight is not None and (int(getattr(tw, "t0", -1)), int(getattr(tw, "t1", -1))) == self._bp_bf_inflight[:2]:
                 self._bp_bf_inflight = None
             # a 6 h window is ~70k raw trades: decoding + same-ms sweep grouping cost ~180 ms in pure Python, so it
             # runs on the pool thread and the RESULT (prints >= floor, sweeps) is merged here on a later frame
@@ -11289,15 +11345,32 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _bp_events(self, t_lo: float, t_last: float, t_hi: float, sw_on: bool) -> list:
         """Big Player EVENTS between the first drawn bar (`t_lo` = its end_time) and `t_hi`: every retained print
         (>= the store floor) + every atomic SWEEP (same ms + side, >= 2 levels), live store first; bars older than the
-        live tape store (6h backfill) come from the big-print ARCHIVE (study/bigprint_archive), rows strictly BEFORE
-        the live store's oldest print so the two sources never double-count the same whale. With `sw_on`, same-side
-        events within BIGPLAYER_CAMPAIGN_MS of the previous SAME-side event are folded into ONE player (CAMPAIGN): total summed, range = everything
-        the player ate through. Returns [(t, side, end price, usd, kind 'pr' | 'sw', lo, hi)], time-sorted. Shared by
-        the Big Player Levels overlay (bubbles / diamonds) and the Big Player Gray VP."""
+        live tape store come from the big-print ARCHIVE (study/bigprint_archive), rows strictly BEFORE the live
+        store's oldest print so the two sources never double-count the same whale. With `sw_on`, same-side events
+        within BIGPLAYER_CAMPAIGN_MS of the previous SAME-side event are folded into ONE player (CAMPAIGN): total
+        summed, range = everything the player ate through. Returns [(t, side, end price, usd, kind 'pr' | 'sw',
+        lo, hi)], time-sorted. Shared by the Big Player Levels overlay (bubbles / diamonds) and the Big Player Gray VP.
+        MEMOIZED on (range, toggle, store revision): a pan / zoom step that re-draws reuses the events (2026-09-07)."""
+        key = (round(float(t_lo), 3), round(float(t_last), 3), round(float(t_hi), 3), bool(sw_on),
+               getattr(self, "_bp_rev", 0), len(self._bp_trades), len(self._bp_sweeps))
+        memo = getattr(self, "_bp_ev_memo", None)
+        if not isinstance(memo, dict):                          # a few entries: the overlay (canvas range) and the Big
+            memo = self._bp_ev_memo = {}                        # Player Gray VP (its own window) must not evict each other
+        ev = memo.get(key)
+        if ev is not None:
+            return ev
+        ev = self._bp_events_build(float(t_lo), float(t_last), float(t_hi), bool(sw_on))
+        if len(memo) >= 4:
+            memo.pop(next(iter(memo)))
+        memo[key] = ev
+        return ev
+
+    def _bp_events_build(self, t_lo: float, t_last: float, t_hi: float, sw_on: bool) -> list:
+        """The numpy build behind _bp_events (2026-09-07: was a per-event Python loop, 187 ms on an 8-day canvas)."""
         live_start = self._bp_trades[0][0] if self._bp_trades else float("inf")
 
         def _since(dq, lo):                                     # newest -> oldest, stop below `lo` (the store is time-sorted):
-            out = []                                            # cost = the DRAWN range, not the 72 h store (2026-09-07)
+            out = []                                            # cost = the DRAWN range, not the 72 h store
             for r in reversed(dq):
                 if r[0] < lo:
                     break
@@ -11308,45 +11381,64 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _lo1 = t_lo - 1.0                                       # 1 s margin >> the 30 ms campaign window
         prs = _since(self._bp_trades, _lo1) if t_lo > 0 else []
         sws = _since(self._bp_sweeps, _lo1) if (sw_on and t_lo > 0) else []
-        if t_lo > 0 and t_lo < live_start:
-            from . import bigprint_store
+        P = np.array(prs, dtype=float).reshape(-1, 4)           # the LIVE part: t, price, usd, side (<= the 72 h store)
+        S = np.array(sws, dtype=float).reshape(-1, 6)           # t, p0, p1, usd, side, n_levels
+        if t_lo > 0 and t_lo < live_start:                      # the ARCHIVE part: immutable -> numpy month slices,
+            from . import bigprint_store                        # cached per (range, store start) so a rebuild pays the live part only
             _t1 = min(float(t_last), live_start) - 1e-6
-            prs = [r for r in bigprint_store.load_prints(t_lo - 1.0, _t1, 0.0) if r[0] < live_start] + prs
-            if sw_on:
-                sws = [s for s in bigprint_store.load_sweeps(t_lo - 1.0, _t1, 0.0, int(config.BIGPLAYER_SWEEP_MIN_LEVELS))
-                       if s[0] < live_start] + sws
-        ev = []                                                 # (t, side, end price, usd, kind "pr" | "sw", lo, hi)
-        swkeys = {(int(round(s[0] * 1000.0)), int(s[4] > 0)) for s in sws}
-        for (t, price, usd, side) in prs:
-            if (int(round(t * 1000.0)), int(side > 0)) in swkeys:
-                continue                                        # a fill of an atomic sweep: counted in the sweep
-            ev.append((t, int(side > 0), price, usd, "pr", price, price))
-        for (t, p0, p1, usd, side, nl) in sws:
-            ev.append((t, int(side > 0), p1, usd, "sw", min(p0, p1), max(p0, p1)))
-        ev.sort(key=lambda e: e[0])
-        # CAMPAIGNS (user 2026-09-07 "the 12:01:08 fight"; BURSTS were 1 s -> 1 ms + monotonic before): same-side
-        # events within BIGPLAYER_CAMPAIGN_MS of the previous event of the SAME side are ONE player working the book --
-        # whatever the other side did in between and whichever way the price went between orders (a refill taken
-        # again is the fight). One open cluster per side. A cluster of >= 2 events, or anything containing a sweep,
-        # is drawn as a DIAMOND spanning everything the player ate; a lone print stays a bubble.
-        if sw_on and ev:
-            # +0.5 ms: timestamps are ms-quantized but held as float SECONDS (~2e-7 s resolution at 1.7e9), so two
-            # fills exactly the window apart can compute to window + 1e-7 and miss a bare comparison
-            win = (float(config.BIGPLAYER_CAMPAIGN_MS) + 0.5) / 1000.0
-            clusters = []; cur = [None, None]                   # per side: [t_last, side, price_last, usd, n, has_sweep, lo, hi]
-            for (t, side, price, usd, kind, lo, hi) in ev:
-                c = cur[side]
-                if c is not None and t - c[0] <= win:
-                    c[0] = t; c[2] = price; c[3] += usd; c[4] += 1; c[5] = c[5] or kind == "sw"
-                    c[6] = min(c[6], lo); c[7] = max(c[7], hi)
-                    continue
-                if c is not None:
-                    clusters.append(c)
-                cur[side] = [t, side, price, usd, 1, kind == "sw", lo, hi]
-            clusters.extend(c for c in cur if c is not None)
-            clusters.sort(key=lambda c: c[0])
-            ev = [(c[0], c[1], c[2], c[3], "sw" if (c[4] > 1 or c[5]) else "pr", c[6], c[7]) for c in clusters]
-        return ev
+            akey = (round(t_lo, 3), round(_t1, 3), bool(sw_on), getattr(self, "_bp_arch_rev", 0))
+            ac = getattr(self, "_bp_arch_np", None)
+            if ac is None or ac[0] != akey:
+                AP = bigprint_store.load_prints_np(t_lo - 1.0, _t1)
+                AP = AP[AP[:, 0] < live_start]
+                AS = bigprint_store.load_sweeps_np(t_lo - 1.0, _t1, int(config.BIGPLAYER_SWEEP_MIN_LEVELS)) if sw_on else np.zeros((0, 6))
+                AS = AS[AS[:, 0] < live_start] if len(AS) else AS
+                ac = (akey, AP, AS); self._bp_arch_np = ac
+            if len(ac[1]):
+                P = np.concatenate([ac[1], P]) if len(P) else ac[1]
+            if sw_on and len(ac[2]):
+                S = np.concatenate([ac[2], S]) if len(S) else ac[2]
+        if not len(P) and not len(S):
+            return []
+        if len(P) and len(S):                                   # a fill OF an atomic sweep is counted in the sweep
+            pk = np.rint(P[:, 0] * 1000.0).astype(np.int64) * 2 + (P[:, 3] > 0)
+            sk = np.rint(S[:, 0] * 1000.0).astype(np.int64) * 2 + (S[:, 4] > 0)
+            P = P[~np.isin(pk, sk)]
+        t = np.concatenate([P[:, 0], S[:, 0]])
+        side = np.concatenate([(P[:, 3] > 0), (S[:, 4] > 0)]).astype(np.int64)
+        price = np.concatenate([P[:, 1], S[:, 2]])              # a sweep's END price
+        usd = np.concatenate([P[:, 2], S[:, 3]])
+        issw = np.concatenate([np.zeros(len(P), bool), np.ones(len(S), bool)])
+        lo = np.concatenate([P[:, 1], np.minimum(S[:, 1], S[:, 2])])
+        hi = np.concatenate([P[:, 1], np.maximum(S[:, 1], S[:, 2])])
+        order = np.argsort(t, kind="stable")                    # prints before sweeps at an equal t, like the old sort
+        t, side, price, usd, issw, lo, hi = t[order], side[order], price[order], usd[order], issw[order], lo[order], hi[order]
+        if not sw_on or len(t) == 0:
+            kinds = np.where(issw, "sw", "pr")
+            return list(zip(t.tolist(), side.tolist(), price.tolist(), usd.tolist(), kinds.tolist(), lo.tolist(), hi.tolist()))
+        # CAMPAIGNS: per side, consecutive events within the window are one player; +0.5 ms because the ms-quantized
+        # timestamps live in float seconds (two fills exactly the window apart can read as window + 1e-7)
+        win = (float(config.BIGPLAYER_CAMPAIGN_MS) + 0.5) / 1000.0
+        cl_t = []; cl_side = []; cl_price = []; cl_usd = []; cl_n = []; cl_sw = []; cl_lo = []; cl_hi = []
+        for s_ in (0, 1):
+            idx = np.nonzero(side == s_)[0]
+            if len(idx) == 0:
+                continue
+            ts_ = t[idx]
+            starts = np.nonzero(np.concatenate([[True], np.diff(ts_) > win]))[0]
+            ends = np.concatenate([starts[1:], [len(idx)]]) - 1
+            cl_t.append(ts_[ends]); cl_side.append(np.full(len(starts), s_))
+            cl_price.append(price[idx][ends])
+            cl_usd.append(np.add.reduceat(usd[idx], starts))
+            cl_n.append(ends - starts + 1)
+            cl_sw.append(np.maximum.reduceat(issw[idx].astype(np.int8), starts) > 0)
+            cl_lo.append(np.minimum.reduceat(lo[idx], starts)); cl_hi.append(np.maximum.reduceat(hi[idx], starts))
+        ct = np.concatenate(cl_t); cs = np.concatenate(cl_side); cp = np.concatenate(cl_price); cu = np.concatenate(cl_usd)
+        cn = np.concatenate(cl_n); csw = np.concatenate(cl_sw); clo = np.concatenate(cl_lo); chi = np.concatenate(cl_hi)
+        o2 = np.argsort(ct, kind="stable")
+        kinds = np.where((cn > 1) | csw, "sw", "pr")
+        return list(zip(ct[o2].tolist(), cs[o2].tolist(), cp[o2].tolist(), cu[o2].tolist(), kinds[o2].tolist(),
+                        clo[o2].tolist(), chi[o2].tolist()))
 
     # ── BIG PLAYER GRAY VP (VP mode 11, user 2026-09-07) ──────────────────────────────────────────────────
     @staticmethod
@@ -11489,8 +11581,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _it.setZValue(31); self.plot.addItem(_it, ignoreBounds=True)
         if not n:
             self._bp_buy.setData(x=[], y=[]); self._bp_sell.setData(x=[], y=[])
-            for _l in self._bp_lbls:
-                _l.setVisible(False)
+            if self._bp_labels is not None:
+                self._bp_labels.setLabels([], _txtc)
+            self._bp_bubble_lbls = []
             self._clear_bp_sweeps()
             return
         from .trades_tape import _fmt_usd
@@ -11503,20 +11596,32 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         ev = self._bp_events(float(ets[0]), float(ets[-1]), t_hi, _sw_on)   # prints + sweeps + bursts on the drawn bars
         # ROUND bubbles = single prints; DIAMONDS = sweeps / bursts -- each >= the slider. Same bar + price + side
         # merged, amounts summed (user 2026-09-04: a buyer and a seller at one level are opposite players).
-        merged = {}; smerged = {}                               # (bar, price, side) -> usd | [usd, lo, hi]
-        for (t, side, price, usd, kind, lo, hi) in ev:
-            if usd < thr:
-                continue
-            i = int(np.searchsorted(ets, t))                    # the bar whose end >= the event time
-            if i >= n:
-                continue
-            key = (i, round(price, 4), side)
-            if kind == "sw":
-                _m = smerged.get(key)
-                smerged[key] = [usd, lo, hi] if _m is None else [_m[0] + usd, min(_m[1], lo), max(_m[2], hi)]
-            else:
-                merged[key] = merged.get(key, 0.0) + usd
-        levels = sorted(merged.items())[-int(config.BIGPLAYER_MAX_LINES):]   # most recent bars last
+        # MEMO (2026-09-07): the events list is itself memoized, so a pan / zoom step with the same events, threshold
+        # and canvas reuses the mapped levels; the mapping maps every time with ONE searchsorted (was one per event).
+        _lk = (id(ev), thr, n, float(ets[0]), float(ets[-1]))
+        _lm = self._bp_lvl_memo
+        if _lm is not None and _lm[0] == _lk:
+            levels, slevels = _lm[1], _lm[2]
+        else:
+            merged = {}; smerged = {}                           # (bar, price, side) -> usd | [usd, lo, hi]
+            big = [e for e in ev if e[3] >= thr]
+            if big:
+                idx = np.searchsorted(ets, np.array([e[0] for e in big], dtype=float))   # the bar whose end >= the event
+                for e, i in zip(big, idx.tolist()):
+                    if i >= n:
+                        continue
+                    key = (i, round(e[2], 4), e[1])
+                    if e[4] == "sw":
+                        _m = smerged.get(key)
+                        smerged[key] = [e[3], e[5], e[6]] if _m is None else [_m[0] + e[3], min(_m[1], e[5]), max(_m[2], e[6])]
+                    else:
+                        merged[key] = merged.get(key, 0.0) + e[3]
+            levels = sorted(merged.items())[-int(config.BIGPLAYER_MAX_LINES):]   # most recent bars last
+            slevels = sorted(smerged.items())[-int(config.BIGPLAYER_SWEEP_MAX):]
+            self._bp_lvl_memo = (_lk, levels, slevels)
+        if self._bp_labels is None:
+            self._bp_labels = BpLabelsItem()
+            self.plot.addItem(self._bp_labels, ignoreBounds=True)
         bx = []; by = []; bs = []; sx = []; sy = []; ss = []; labels = []
         for (i, price, side), usd in levels:
             px = self._bp_bubble_px(usd, thr)                  # radius grows with the print's USD size
@@ -11525,36 +11630,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             else:
                 sx.append(float(i)); sy.append(price); ss.append(px)
             labels.append((float(i), price, _fmt_usd(usd)))
+        self._bp_bubble_lbls = list(labels)
         self._bp_buy.setData(x=bx, y=by, size=bs); self._bp_sell.setData(x=sx, y=sy, size=ss)
-        while len(self._bp_lbls) < len(labels):
-            _t = pg.TextItem(anchor=(0.5, 0.5)); _t.setZValue(32); self.plot.addItem(_t, ignoreBounds=True)
-            _tf = _t.textItem.font(); _tf.setBold(True); _t.textItem.setFont(_tf)   # bold amount on the bubble
-            self._bp_lbls.append(_t)
-        for k, _l in enumerate(self._bp_lbls):
-            if k < len(labels):
-                x, price, txt = labels[k]
-                _l.setText(txt, color=_txtc)                   # amount centred on the bubble
-                _l.setPos(x, price); _l.setVisible(True)
-            else:
-                _l.setVisible(False)
         # DIAMONDS (user 2026-09-06): sweeps / bursts at their bar, spanning the swept RANGE -- top / bottom =
         # the highest / lowest price the player ate through ("how much they ate through the book"), width a
         # fraction of a bar growing mildly with the total, a minimum on-screen height so a 2-tick sweep stays
         # visible; the total centred. Green buy / red sell. Round = one print, diamond = one player.
         if not _sw_on:
             self._clear_bp_sweeps()
+            self._bp_labels.setLabels(labels, _txtc)            # bubble amounts only
+            self._bp_labels.setVisible(True)
             return
-        slevels = sorted(smerged.items())[-int(config.BIGPLAYER_SWEEP_MAX):]
         _hmin = 12.0 * _ypx                                     # 12 px minimum height, in price units
         drawn = 0
         for (i, price, buy), (usd, lo, hi) in slevels:
             if drawn >= len(self._bp_swp_polys):
                 _pl = QtWidgets.QGraphicsPolygonItem(); _pl.setZValue(31)
                 self.vb.addItem(_pl, ignoreBounds=True)
-                _lb = pg.TextItem(anchor=(0.5, 0.5)); _lb.setZValue(32); self.plot.addItem(_lb, ignoreBounds=True)
-                _lf = _lb.textItem.font(); _lf.setBold(True); _lb.textItem.setFont(_lf)   # bold amount on the diamond
-                self._bp_swp_polys.append({"poly": _pl, "sig": None, "buy": None}); self._bp_swp_lbls.append(_lb)
-            _d = self._bp_swp_polys[drawn]; _lb = self._bp_swp_lbls[drawn]; drawn += 1
+                self._bp_swp_polys.append({"poly": _pl, "sig": None, "buy": None})
+            _d = self._bp_swp_polys[drawn]; drawn += 1
             _mid = 0.5 * (lo + hi); _h = max(float(hi - lo), _hmin)
             _px = self._bp_bubble_px(usd, thr)                  # 10..46 px -> half-width 0.25..0.45 bar
             _hw = 0.25 + 0.20 * max(0.0, min(1.0, (_px - 10.0) / 36.0))
@@ -11567,13 +11661,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _x = float(i)
                 _d["poly"].setPolygon(QtGui.QPolygonF([QtCore.QPointF(_x, _mid + 0.5 * _h), QtCore.QPointF(_x + _hw, _mid),
                                                        QtCore.QPointF(_x, _mid - 0.5 * _h), QtCore.QPointF(_x - _hw, _mid)]))
-                _lb.setText(_fmt_usd(usd), color=_txtc); _lb.setPos(_x, _mid)
                 _d["sig"] = _sg
-            _d["poly"].setVisible(True); _lb.setVisible(True)
+            _d["poly"].setVisible(True)
+            labels.append((float(i), _mid, _fmt_usd(usd)))      # the total centred on the diamond
         for _d in self._bp_swp_polys[drawn:]:
             _d["poly"].setVisible(False)
-        for _lb in self._bp_swp_lbls[drawn:]:
-            _lb.setVisible(False)
+        self._bp_labels.setLabels(labels, _txtc)                # every amount, one paint
+        self._bp_labels.setVisible(True)
 
     @staticmethod
     def _bp_bubble_px(usd: float, thr: float) -> float:
@@ -11586,14 +11680,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _clear_bp_sweeps(self) -> None:
         for _d in self._bp_swp_polys:
             _d["poly"].setVisible(False)
-        for _l in self._bp_swp_lbls:
-            _l.setVisible(False)
+        if self._bp_labels is not None:                  # drop the diamond amounts, keep the bubble ones
+            self._bp_labels.setLabels([l for l in self._bp_labels.labels() if l in getattr(self, "_bp_bubble_lbls", [])],
+                                      (self._bp_labels.color().red(), self._bp_labels.color().green(), self._bp_labels.color().blue()))
 
     def _clear_bigplayer(self) -> None:
         if self._bp_buy is not None:
             self._bp_buy.setData(x=[], y=[]); self._bp_sell.setData(x=[], y=[])
-        for _l in self._bp_lbls:
-            _l.setVisible(False)
+        if self._bp_labels is not None:
+            self._bp_labels.setLabels([], (255, 255, 255)); self._bp_labels.setVisible(False)
+        self._bp_bubble_lbls = []
         self._clear_bp_sweeps()
         self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1
 

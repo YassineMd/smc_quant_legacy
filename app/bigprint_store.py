@@ -12,6 +12,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import numpy as np
 import threading
 import time
 from datetime import datetime, timezone
@@ -21,6 +22,10 @@ SYMBOL = "SOLUSDT"
 CACHE_FLOOR_USD = 0.0                             # studies may raise this before loading (RAM: months cache only >= it)
 _cache: "dict[str, tuple[float, list]]" = {}      # month -> (mtime, [(ts_s, price, usd, side), ...])
 _scache: "dict[str, tuple[float, list, bool]]" = {}   # month -> (mtime, [sweep rows], explicit?)
+_tcache: "dict[str, np.ndarray]" = {}             # month -> the prints' ts_s array (bisect slices, 2026-09-07)
+_stcache: "dict[str, np.ndarray]" = {}            # month -> the sweeps' ts_s array
+_ncache: "dict[str, np.ndarray]" = {}             # month -> the prints as an (N, 4) float array [ts_s, price, usd, side]
+_nscache: "dict[str, np.ndarray]" = {}            # month -> the sweeps as an (N, 6) float array
 
 
 def group_sweeps(rows, min_levels: int = 2, min_usd: float = 0.0) -> list:
@@ -156,7 +161,49 @@ def _load_month(month: str) -> list:
     sweeps.sort(key=lambda r: r[0])
     _cache[month] = (mt, rows)
     _scache[month] = (mt, sweeps, explicit)
+    _tcache[month] = np.array([r[0] for r in rows], dtype=float)
+    _stcache[month] = np.array([r[0] for r in sweeps], dtype=float)
+    _ncache[month] = np.array(rows, dtype=float).reshape(-1, 4)
+    _nscache[month] = np.array(sweeps, dtype=float).reshape(-1, 6)
     return rows
+
+
+def load_prints_np(t0_s: float, t1_s: float) -> np.ndarray:
+    """Prints with t0_s <= ts <= t1_s as an (N, 4) float array [ts_s, price, usd, side] -- index slices of the month
+    arrays, no per-row conversion (the terminal's event builder, 2026-09-07)."""
+    parts = []
+    if t1_s >= t0_s:
+        month = _month_of(t0_s); last = _month_of(t1_s)
+        while True:
+            _load_month(month)
+            ts = _tcache.get(month); arr = _ncache.get(month)
+            if ts is not None and arr is not None and len(ts):
+                i = int(np.searchsorted(ts, t0_s, side="left")); j = int(np.searchsorted(ts, t1_s, side="right"))
+                if j > i:
+                    parts.append(arr[i:j])
+            if month == last:
+                break
+            month = _next_month(month)
+    return np.concatenate(parts) if parts else np.zeros((0, 4))
+
+
+def load_sweeps_np(t0_s: float, t1_s: float, min_levels: int = 2) -> np.ndarray:
+    """Sweeps with t0_s <= ts <= t1_s and >= min_levels levels as an (N, 6) float array [ts_s, p0, p1, usd, side, n]."""
+    parts = []
+    if t1_s >= t0_s:
+        month = _month_of(t0_s); last = _month_of(t1_s)
+        while True:
+            _load_month(month)
+            ts = _stcache.get(month); arr = _nscache.get(month)
+            if ts is not None and arr is not None and len(ts):
+                i = int(np.searchsorted(ts, t0_s, side="left")); j = int(np.searchsorted(ts, t1_s, side="right"))
+                if j > i:
+                    seg = arr[i:j]
+                    parts.append(seg[seg[:, 5] >= min_levels] if min_levels > 2 else seg)
+            if month == last:
+                break
+            month = _next_month(month)
+    return np.concatenate(parts) if parts else np.zeros((0, 6))
 
 
 def load_sweeps(t0_s: float, t1_s: float, min_usd: float = 0.0, min_levels: int = 2) -> list:
@@ -169,9 +216,15 @@ def load_sweeps(t0_s: float, t1_s: float, min_usd: float = 0.0, min_levels: int 
     last = _month_of(t1_s)
     while True:
         _load_month(month)
-        for row in (_scache.get(month) or (0.0, [], False))[1]:
-            if t0_s <= row[0] <= t1_s and row[3] >= min_usd and row[5] >= min_levels:
-                out.append(row)
+        sweeps = (_scache.get(month) or (0.0, [], False))[1]
+        ts = _stcache.get(month)
+        if sweeps and ts is not None and len(ts) == len(sweeps):
+            i = int(np.searchsorted(ts, t0_s, side="left")); j = int(np.searchsorted(ts, t1_s, side="right"))
+            seg = sweeps[i:j]                       # time-sorted -> the range is one slice (was: a whole-month scan)
+            if min_usd > 0 or min_levels > 2:
+                out.extend(r for r in seg if r[3] >= min_usd and r[5] >= min_levels)
+            else:
+                out.extend(r for r in seg if r[5] >= min_levels)
         if month == last:
             break
         month = _next_month(month)
@@ -186,9 +239,15 @@ def load_prints(t0_s: float, t1_s: float, min_usd: float = 0.0) -> list:
     month = _month_of(t0_s)
     last = _month_of(t1_s)
     while True:
-        for row in _load_month(month):
-            if t0_s <= row[0] <= t1_s and row[2] >= min_usd:
-                out.append(row)
+        rows = _load_month(month)
+        ts = _tcache.get(month)
+        if rows and ts is not None and len(ts) == len(rows):
+            i = int(np.searchsorted(ts, t0_s, side="left")); j = int(np.searchsorted(ts, t1_s, side="right"))
+            seg = rows[i:j]                         # time-sorted -> the range is one slice (was: a whole-month scan)
+            if min_usd > 0:
+                out.extend(r for r in seg if r[2] >= min_usd)
+            else:
+                out.extend(seg)
         if month == last:
             break
         month = _next_month(month)
