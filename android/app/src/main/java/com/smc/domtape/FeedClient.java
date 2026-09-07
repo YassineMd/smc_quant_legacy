@@ -59,18 +59,22 @@ public class FeedClient extends Thread {
                 out = s.getOutputStream();
                 InputStream raw = s.getInputStream();
                 Inflater inf = null;
-                if (vm) {                           // authenticate, then everything downstream is zlib
+                long since = store.latestTs();      // what the tablet already holds (disk + this session):
+                if (vm) {                           // the bridge answers with the GAP only (2026-09-07)
                     byte[] auth = ("{\"t\":\"auth\",\"k\":\"" + BuildConfig.FEED_TOKEN
-                            + "\",\"z\":1}\n").getBytes(StandardCharsets.UTF_8);
+                            + "\",\"z\":1,\"since\":" + since + "}\n").getBytes(StandardCharsets.UTF_8);
                     out.write(auth);
                     out.flush();
                     inf = new Inflater();
+                } else {
+                    out.write(("{\"t\":\"hi\",\"since\":" + since + "}\n").getBytes(StandardCharsets.UTF_8));
+                    out.flush();
                 }
-                store.reset();                      // reconnect heal: the fresh tw rebuilds the whole
-                store.setConnected(true);           // store (duplicate- and gap-free by construction)
+                store.setConnected(true);           // no reset: the store is continuous, the bridge fills the gap
                 readLines(raw, inf);
                 if (inf != null) inf.end();
             } catch (Exception ignored) {
+                endBulkIfOpen();
                 // fall through to the other path
             }
             out = null;
@@ -97,7 +101,7 @@ public class FeedClient extends Thread {
         int accLen = 0;
         while (!stopFlag) {
             int n = raw.read(net, 0, net.length);
-            if (n < 0) return;                      // EOF -> reconnect
+            if (n < 0) { endBulkIfOpen(); return; }  // EOF -> reconnect
             if (n == 0) continue;
             if (inf == null) {
                 accLen = scan(net, n, acc, accLen);
@@ -120,11 +124,12 @@ public class FeedClient extends Thread {
     }
 
     private byte[] grownAcc;
+    private boolean inBulk;                          // inside a chunked window (tw .. twend)
 
     /** Append `n` bytes of `src` to the pending buffer, dispatch every complete line; returns the new pending length. */
     private int scan(byte[] src, int n, byte[] acc, int accLen) {
         if (accLen + n > acc.length) {
-            if (accLen + n > (1 << 22)) return -1;  // a 4 MB line = garbage stream -> reconnect
+            if (accLen + n > (1 << 23)) return -1;  // an 8 MB line = garbage stream -> reconnect (chunks are ~1.3 MB)
             byte[] bigger = new byte[Math.max(acc.length * 2, accLen + n)];
             System.arraycopy(acc, 0, bigger, 0, accLen);
             acc = bigger;
@@ -144,6 +149,10 @@ public class FeedClient extends Thread {
         }
         grownAcc = acc;
         return accLen;
+    }
+
+    private void endBulkIfOpen() {
+        if (inBulk) { inBulk = false; store.endBulk(); }   // a window cut short by a drop still gets its rebuild
     }
 
     /** Custom-VP deep fetch: ask the bridge for tape history down to t0 (epoch ms). Best-effort. */
@@ -174,9 +183,12 @@ public class FeedClient extends Thread {
             } else if ("tb".equals(t)) {
                 Trades tr = parseTrades(m);
                 if (tr != null) store.ingestLive(tr);
-            } else if ("tw".equals(t)) {
+            } else if ("tw".equals(t)) {          // a window comes in chunks (<= 40k trades each) ending with twend:
+                if (!inBulk) { store.beginBulk(); inBulk = true; }   // one rebuild for the whole window
                 Trades tr = parseTrades(m);
                 if (tr != null) store.ingestWindow(tr);
+            } else if ("twend".equals(t)) {
+                if (inBulk) { inBulk = false; store.endBulk(); }
             }
             // "hello"/"thr" carry nothing the panels need yet (tick is a fixed 0.01)
         } catch (Exception ignored) {

@@ -23,6 +23,33 @@ public class MainActivity extends Activity {
     private static final long HEARTBEAT_MS = 1000;
 
     private FeedClient feed;
+    private TradeStore store;
+    private long lastSaveMs;
+    private volatile boolean tapeLoaded;           // never save before the disk tape has been loaded (it would be overwritten by an empty store)
+    private static final long SAVE_EVERY_MS = 10 * 60_000L;   // periodic snapshot (plus onPause / onDestroy)
+
+    private java.io.File tapeFile() {
+        return new java.io.File(getFilesDir(), "trades.bin");
+    }
+
+    /** Snapshot the tape to disk on a background thread (the store copies its arrays under its lock first). */
+    private void saveTape(String why) {
+        final TradeStore st = store;
+        if (st == null || !tapeLoaded) return;
+        lastSaveMs = System.currentTimeMillis();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    long t0 = System.currentTimeMillis();
+                    st.saveTo(tapeFile());
+                    android.util.Log.i("TAPE", "saved " + st.tradeCount() + " trades (" + why + ") in " + (System.currentTimeMillis() - t0) + " ms");
+                } catch (Exception ex) {
+                    android.util.Log.w("TAPE", "save failed: " + ex);
+                }
+            }
+        }, "tape-save").start();
+    }
     private DomPanel dom;
     private TapePanel tape;
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -43,6 +70,7 @@ public class MainActivity extends Activity {
         public void run() {
             dom.tick(true);
             tape.tick(true);
+            if (System.currentTimeMillis() - lastSaveMs > SAVE_EVERY_MS) saveTape("periodic");
             ui.postDelayed(this, HEARTBEAT_MS);
         }
     };
@@ -52,6 +80,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         TradeStore store = new TradeStore();
+        this.store = store;
         feed = new FeedClient(store);
         dom = new DomPanel(this, store, feed);
         tape = new TapePanel(this, store);
@@ -62,7 +91,23 @@ public class MainActivity extends Activity {
                 if (pending.compareAndSet(false, true)) ui.post(dataFrame);
             }
         });
-        feed.start();
+        // the tape lives on disk (2026-09-07): load it BEFORE connecting so the bridge is asked only for the gap;
+        // ~14 MB for 72 h loads in a few hundred ms on a background thread, then the feed starts
+        final FeedClient f = feed;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    int k = store.loadFrom(tapeFile());
+                    android.util.Log.i("TAPE", "loaded " + k + " trades from disk");
+                } catch (Exception ex) {
+                    android.util.Log.w("TAPE", "load failed: " + ex);
+                }
+                tapeLoaded = true;
+                lastSaveMs = System.currentTimeMillis();   // the first periodic snapshot comes 10 min after the load
+                f.start();
+            }
+        }, "tape-load").start();
     }
 
     @Override
@@ -77,11 +122,13 @@ public class MainActivity extends Activity {
         super.onPause();
         resumed = false;
         ui.removeCallbacks(heartbeat);
+        saveTape("pause");
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
         if (feed != null) feed.shutdown();
+        saveTape("destroy");
     }
 }

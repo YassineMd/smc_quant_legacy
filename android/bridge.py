@@ -17,7 +17,10 @@ Two deployments, one file:
 
 Wire (newline-delimited JSON, one object per line):
   -> {"t":"hello","sym":"SOLUSDT","tick":0.01,"now":<epoch_s>}
-  -> {"t":"tw","n":N,"ts":b64,"px":b64,"q":b64,"sd":b64}   backfill window (int64 LE ms / f64 / f64 / u8)
+  -> {"t":"tw","n":N,"ts":b64,"px":b64,"q":b64,"sd":b64}   backfill window CHUNK (<= 40k trades; int64 LE ms / f64 / f64 / u8)
+  -> {"t":"twend"}                                          closes a chunked window (the tablet rebuilds once)
+  <- {"t":"hi","since":ms}   (plain path; the VM path puts "since" in the auth line) what the tablet already holds:
+                             the backfill is only the trades AFTER it; a `since` older than this RAM store = a daemon deep fetch
   -> {"t":"tb","n":N,"ts":b64,"px":b64,"q":b64,"sd":b64}   live batch (same arrays)
   -> {"t":"book","px":<last>,"b":[[p,q]..],"a":[[p,q]..]}  ~0.4s, top-200 per side (floats)
   -> {"t":"thr","v":[p50,p90,p95,p99,p99.5]}               rolling trade-size percentiles (contracts)
@@ -98,12 +101,33 @@ class TradeStore:
             if i > 0:
                 self.ts = self.ts[i:]; self.px = self.px[i:]; self.q = self.q[i:]; self.sd = self.sd[i:]
 
-    def window_msg(self) -> str:
+    def window_msgs(self, since_ms: int = 0) -> list:
+        """The backfill for a (re)joining tablet: the trades AFTER `since_ms` (all of them when 0), as chunked tw
+        lines closed by twend -- never one giant line (2026-09-07)."""
         with self.lock:
-            n = len(self.ts)
-            return json.dumps({"t": "tw", "n": n, "ts": b64(self.ts.astype("<i8")),
-                               "px": b64(self.px.astype("<f8")), "q": b64(self.q.astype("<f8")),
-                               "sd": b64(self.sd.astype("u1"))}) + "\n"
+            i = int(np.searchsorted(self.ts, float(since_ms), side="right")) if since_ms > 0 else 0
+            ts, px, q, sd = self.ts[i:], self.px[i:], self.q[i:], self.sd[i:]
+        return chunk_msgs(ts, px, q, sd)
+
+    def oldest_ms(self):
+        with self.lock:
+            return int(self.ts[0]) if len(self.ts) else None
+
+
+CHUNK = 40_000                                    # trades per tw line (~1.3 MB of base64 JSON)
+
+
+def chunk_msgs(ts, px, q, sd) -> list:
+    """Split one window into tw chunk lines (oldest first) + the twend line."""
+    out = []
+    n = int(len(ts))
+    for a in range(0, n, CHUNK):
+        b = min(n, a + CHUNK)
+        out.append(json.dumps({"t": "tw", "n": b - a, "ts": b64(np.asarray(ts[a:b]).astype("<i8")),
+                               "px": b64(np.asarray(px[a:b]).astype("<f8")), "q": b64(np.asarray(q[a:b]).astype("<f8")),
+                               "sd": b64(np.asarray(sd[a:b]).astype("u1"))}) + "\n")
+    out.append(json.dumps({"t": "twend"}) + "\n")
+    return out
 
 
 class Client:
@@ -174,7 +198,10 @@ class Bridge:
                 ts, px, q, sd = decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64)
                 prepend = bool(len(ts)) and bool(len(self.store.ts)) and ts[0] < self.store.ts[0]
                 self.store.add(ts, px, q, sd, prepend=prepend)
-                self.broadcast(json.dumps({"t": "tw", "n": int(len(ts)), "ts": tw.ts_b64,
+                for _ln in chunk_msgs(ts, px, q, sd):
+                    self.broadcast(_ln)
+                if False:
+                    self.broadcast(json.dumps({"t": "tw", "n": int(len(ts)), "ts": tw.ts_b64,
                                            "px": tw.price_b64, "q": tw.qty_b64,
                                            "sd": tw.side_b64}) + "\n")
             for tb in batches:
@@ -232,6 +259,7 @@ class Bridge:
         """Per-connection: (auth handshake ->) hello + backfill -> register -> read control lines."""
         buf = b""
         compress = False
+        since = 0
         try:
             if self.auth:
                 sock.settimeout(6.0)               # unauthenticated sockets don't get to linger
@@ -246,15 +274,39 @@ class Bridge:
                     print("bridge: bad auth from %s" % addr[0], flush=True)
                     raise OSError("bad auth")
                 compress = self.compress and bool(m.get("z"))
+                since = int(m.get("since", 0) or 0)
+                sock.settimeout(None)
+            else:                                   # plain path: an optional {"t":"hi","since":ms} first line
+                sock.settimeout(1.5)
+                try:
+                    while b"\n" not in buf and len(buf) < 4096:
+                        d = sock.recv(4096)
+                        if not d:
+                            raise OSError("eof")
+                        buf += d
+                    if b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        m = json.loads(line)
+                        if m.get("t") == "hi":
+                            since = int(m.get("since", 0) or 0)
+                        else:
+                            buf = line + b"\n" + buf   # not a hi (an old client's control line): keep it
+                except (socket.timeout, ValueError, json.JSONDecodeError):
+                    pass                            # an old client sends nothing: full backfill
                 sock.settimeout(None)
             cl = Client(sock, compress)
             cl.send(json.dumps({"t": "hello", "sym": config.SYMBOL, "tick": config.TICK_SIZE,
                                 "now": time.time()}) + "\n")
-            cl.send(self.store.window_msg())        # instant full VP backfill from RAM
+            for _ln in self.store.window_msgs(since):   # the GAP since what the tablet holds (all when since = 0)
+                cl.send(_ln)
             with self.clients_lock:
                 self.clients.append(cl)
-            print("bridge: client %s connected (store %d trades%s)"
-                  % (addr[0], len(self.store.ts), ", zlib" if compress else ""), flush=True)
+            oldest = self.store.oldest_ms()
+            print("bridge: client %s connected (store %d trades%s, since %d)"
+                  % (addr[0], len(self.store.ts), ", zlib" if compress else "", since), flush=True)
+            if since > 0 and oldest is not None and since < oldest - 1000:
+                self.deep_fetch(since)              # the tablet holds older data than this RAM store: the daemon
+                                                    # fills [since, oldest) (its 72 h tape), chunked like any window
         except (OSError, ValueError, json.JSONDecodeError):
             try:
                 sock.close()

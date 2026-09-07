@@ -20,7 +20,8 @@ import java.util.HashMap;
 public class TradeStore {
 
     public static final double TICK = 0.01;
-    public static final long WINDOW_MS = (21_600 + 300) * 1000L;   // 6h VP + prune slack
+    public static final long WINDOW_MS = (72 * 3600 + 300) * 1000L;   // 72 h kept (the daemon's retention) + prune slack: the
+                                                                       // tape lives on disk now, a custom VP needs no fetch (2026-09-07)
 
     // parallel trade arrays, time-ordered ascending (ms / int tick / SOL split by aggressor)
     private long[] tsMs = new long[1 << 14];
@@ -52,6 +53,7 @@ public class TradeStore {
     private int[] gN = new int[256];
     private byte[] gSide = new byte[256];
     private int gCount = 0;
+    private int gEpoch = 0;                         // bumped when campaign indices shift (reset / rebuild / prune)
     private final long[] cT0 = new long[2], cT1 = new long[2], cTk0 = new long[2], cLo = new long[2], cHi = new long[2];
     private final double[] cUsd = new double[2];
     private final int[] cN = new int[2], cG = {-1, -1};
@@ -145,48 +147,6 @@ public class TradeStore {
         poke();
     }
 
-    public void ingestWindow(FeedClient.Trades tr) {
-        synchronized (this) {
-            // dedupe against BOTH the live edge and what's already stored: a deep fetch (custom VP)
-            // arrives after the 6h backfill, so anything at/after the store's oldest row is a repeat
-            long cut = liveT0Ms == 0 ? Long.MAX_VALUE : liveT0Ms;
-            if (n > 0) cut = Math.min(cut, tsMs[0]);
-            int keep = 0;
-            while (keep < tr.tsMs.length && tr.tsMs[keep] < cut) keep++;
-            if (keep == 0) return;
-            // prepend: rebuild with the window rows first, then the existing (live) rows
-            long[] nts = new long[Math.max(1 << 14, (keep + n) * 2)];
-            long[] ntk = new long[nts.length];
-            double[] nbq = new double[nts.length];
-            double[] nsq = new double[nts.length];
-            for (int i = 0; i < keep; i++) {
-                nts[i] = tr.tsMs[i];
-                ntk[i] = Math.round(tr.px[i] / TICK);
-                boolean buy = tr.side[i] > 0;
-                nbq[i] = buy ? tr.qty[i] : 0.0;
-                nsq[i] = buy ? 0.0 : tr.qty[i];
-            }
-            System.arraycopy(tsMs, 0, nts, keep, n);
-            System.arraycopy(tick, 0, ntk, keep, n);
-            System.arraycopy(buyQ, 0, nbq, keep, n);
-            System.arraycopy(sellQ, 0, nsq, keep, n);
-            tsMs = nts;
-            tick = ntk;
-            buyQ = nbq;
-            sellQ = nsq;
-            n += keep;
-            if (lastPx <= 0 && n > 0) {
-                lastPx = tick[n - 1] * TICK;
-                lastSide = buyQ[n - 1] > 0 ? 1 : 0;
-            }
-            epoch++;                                // rows inserted in FRONT: every index moved
-            gRebuild();                             // merged players over the whole (backfilled) tape, once
-            prune();
-            version++;
-        }
-        poke();
-    }
-
     private void append(long ts, double px, double qty, byte side) {
         if (n == tsMs.length) {
             int cap = n * 2;
@@ -210,6 +170,85 @@ public class TradeStore {
         sellQ[n] = buy ? 0.0 : qty;
         n++;
         chain(ts, tick[n - 1], tick[n - 1] * TICK * qty, buy ? 1 : 0);
+    }
+
+    private boolean bulk;                          // a chunked window: rebuild / prune once at endBulk()
+    private boolean bulkDirty;
+
+    /** A window arrives in chunks: hold the rebuilds until endBulk() (one gRebuild, one prune, one epoch bump). */
+    public synchronized void beginBulk() {
+        bulk = true;
+    }
+
+    public synchronized void endBulk() {
+        bulk = false;
+        if (bulkDirty) {
+            bulkDirty = false;
+            epoch++;
+            gRebuild();
+            prune();
+            version++;
+        }
+        poke();
+    }
+
+    /**
+     * A window of trades from the bridge (a backfill, a deep fetch, a reconnect gap): the part OLDER than the store
+     * is prepended, the part NEWER than the store is appended, the overlap is dropped -- so a window never duplicates
+     * and never replaces (2026-09-07: the gap since the tablet's own newest trade arrives this way).
+     */
+    public void ingestWindow(FeedClient.Trades tr) {
+        synchronized (this) {
+            int m = tr.tsMs.length;
+            if (m == 0) return;
+            long oldest = n > 0 ? tsMs[0] : Long.MAX_VALUE;
+            long newest = n > 0 ? tsMs[n - 1] : Long.MIN_VALUE;
+            int keepOld = 0;
+            while (keepOld < m && tr.tsMs[keepOld] < oldest) keepOld++;
+            int firstNew = m;
+            while (firstNew > 0 && tr.tsMs[firstNew - 1] > newest) firstNew--;
+            boolean changed = false;
+            if (keepOld > 0) {                              // prepend: rebuild with the window rows first
+                long[] nts = new long[Math.max(1 << 14, (keepOld + n) * 2)];
+                long[] ntk = new long[nts.length];
+                double[] nbq = new double[nts.length];
+                double[] nsq = new double[nts.length];
+                for (int i = 0; i < keepOld; i++) {
+                    nts[i] = tr.tsMs[i];
+                    ntk[i] = Math.round(tr.px[i] / TICK);
+                    boolean buy = tr.side[i] > 0;
+                    nbq[i] = buy ? tr.qty[i] : 0.0;
+                    nsq[i] = buy ? 0.0 : tr.qty[i];
+                }
+                System.arraycopy(tsMs, 0, nts, keepOld, n);
+                System.arraycopy(tick, 0, ntk, keepOld, n);
+                System.arraycopy(buyQ, 0, nbq, keepOld, n);
+                System.arraycopy(sellQ, 0, nsq, keepOld, n);
+                tsMs = nts; tick = ntk; buyQ = nbq; sellQ = nsq;
+                n += keepOld;
+                changed = true;
+            }
+            int a0 = Math.max(firstNew, keepOld);           // the newer part (a gap fill / catch-up): appended
+            if (a0 < m) {
+                for (int i = a0; i < m; i++) append(tr.tsMs[i], tr.px[i], tr.qty[i], tr.side[i]);
+                if (liveT0Ms == 0) liveT0Ms = tr.tsMs[a0];
+                changed = true;
+            }
+            if (!changed) return;
+            if (lastPx <= 0 && n > 0) {
+                lastPx = tick[n - 1] * TICK;
+                lastSide = buyQ[n - 1] > 0 ? 1 : 0;
+            }
+            if (bulk) {
+                bulkDirty = true;                           // one rebuild for the whole chunked window
+                return;
+            }
+            epoch++;                                        // rows inserted in FRONT: every index moved
+            gRebuild();                                     // merged players over the whole (backfilled) tape, once
+            prune();
+            version++;
+        }
+        poke();
     }
 
     /**
@@ -256,7 +295,7 @@ public class TradeStore {
     }
 
     private void gReset() {
-        gCount = 0;
+        gCount = 0; gEpoch++;
         cN[0] = cN[1] = 0;
         cG[0] = cG[1] = -1;
     }
@@ -284,7 +323,7 @@ public class TradeStore {
             }
             w++;
         }
-        gCount = w;
+        gCount = w; gEpoch++;
     }
 
     private void prune() {
@@ -299,6 +338,76 @@ public class TradeStore {
             n -= lo;
             epoch++;                                // indices shifted
             gPrune(n > 0 ? tsMs[0] : Long.MAX_VALUE);
+        }
+    }
+
+    // ── DISK (2026-09-07): the tape survives restarts, so a start shows 72 h at once and asks only for the gap ──
+    private static final int FILE_MAGIC = 0x534D4354;     // "SMCT"
+    private static final int FILE_VERSION = 1;
+
+    /** Write the whole store (time-ordered) to `f` atomically: 17 bytes per trade. */
+    public void saveTo(java.io.File f) throws java.io.IOException {
+        long[] ts; long[] tk; double[] bq; double[] sq; int cnt; long keep;
+        synchronized (this) {
+            cnt = n; keep = customKeepMs;
+            ts = java.util.Arrays.copyOf(tsMs, cnt); tk = java.util.Arrays.copyOf(tick, cnt);
+            bq = java.util.Arrays.copyOf(buyQ, cnt); sq = java.util.Arrays.copyOf(sellQ, cnt);
+        }
+        java.io.File tmp = new java.io.File(f.getPath() + ".tmp");
+        try (java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp);
+             java.nio.channels.FileChannel ch = fo.getChannel()) {
+            java.nio.ByteBuffer hb = java.nio.ByteBuffer.allocate(24).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            hb.putInt(FILE_MAGIC).putInt(FILE_VERSION).putInt(cnt).putInt(0).putLong(keep).flip();
+            ch.write(hb);
+            java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(17 * 8192).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            for (int i = 0; i < cnt; i++) {
+                bb.putLong(ts[i]).putInt((int) tk[i]).putFloat((float) (bq[i] + sq[i])).put((byte) (bq[i] > 0 ? 1 : 0));
+                if (bb.remaining() < 17) { bb.flip(); while (bb.hasRemaining()) ch.write(bb); bb.clear(); }
+            }
+            bb.flip(); while (bb.hasRemaining()) ch.write(bb);
+            ch.force(true);
+        }
+        if (!tmp.renameTo(f)) { f.delete(); if (!tmp.renameTo(f)) throw new java.io.IOException("rename"); }
+    }
+
+    /** Load a saved tape (replaces the store), dropping what is older than the retention. Returns the trade count. */
+    public int loadFrom(java.io.File f) throws java.io.IOException {
+        if (!f.exists()) return 0;
+        try (java.io.FileInputStream fi = new java.io.FileInputStream(f);
+             java.nio.channels.FileChannel ch = fi.getChannel()) {
+            java.nio.ByteBuffer hb = java.nio.ByteBuffer.allocate(24).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            while (hb.hasRemaining()) if (ch.read(hb) < 0) return 0;
+            hb.flip();
+            if (hb.getInt() != FILE_MAGIC || hb.getInt() != FILE_VERSION) return 0;
+            int cnt = hb.getInt(); hb.getInt(); long keep = hb.getLong();
+            if (cnt < 0 || cnt > 20_000_000) return 0;
+            long cutT = System.currentTimeMillis() - WINDOW_MS;
+            long[] ts = new long[cnt]; long[] tk = new long[cnt]; double[] bq = new double[cnt]; double[] sq = new double[cnt];
+            java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(17 * 8192).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            int got = 0, i = 0;
+            bb.limit(0);
+            while (i < cnt) {
+                if (bb.remaining() < 17) {
+                    bb.compact();
+                    int r = ch.read(bb);
+                    bb.flip();
+                    if (r < 0 && bb.remaining() < 17) break;
+                    if (bb.remaining() < 17) continue;
+                }
+                long t = bb.getLong(); int k = bb.getInt(); float q = bb.getFloat(); byte sd = bb.get();
+                i++;
+                if (t < cutT) continue;
+                ts[got] = t; tk[got] = k; bq[got] = sd > 0 ? q : 0.0; sq[got] = sd > 0 ? 0.0 : q; got++;
+            }
+            synchronized (this) {
+                int cap = Math.max(1 << 14, got * 2);
+                tsMs = java.util.Arrays.copyOf(ts, cap); tick = java.util.Arrays.copyOf(tk, cap);
+                buyQ = java.util.Arrays.copyOf(bq, cap); sellQ = java.util.Arrays.copyOf(sq, cap);
+                n = got; liveT0Ms = 0; customKeepMs = keep;
+                if (n > 0) { lastPx = tick[n - 1] * TICK; lastSide = buyQ[n - 1] > 0 ? 1 : 0; }
+                epoch++; gRebuild(); version++;
+            }
+            return got;
         }
     }
 
@@ -618,46 +727,101 @@ public class TradeStore {
      */
     public static final class Intensity {
         public final java.util.HashMap<Long, double[]> byBin;
-        public final double p90, max;
+        public final double p90, max, p50;
 
-        Intensity(java.util.HashMap<Long, double[]> byBin, double p90, double max) {
-            this.byBin = byBin; this.p90 = p90; this.max = max;
+        Intensity(java.util.HashMap<Long, double[]> byBin, double p90, double max, double p50) {
+            this.byBin = byBin; this.p90 = p90; this.max = max; this.p50 = p50;
         }
     }
 
+    // incremental state: the map is kept across calls; only NEW campaigns and the two OPEN ones (still growing)
+    // are touched per call; a change of grouping / cutoff second / threshold, or an index shift (gEpoch), rebuilds
+    private java.util.HashMap<Long, double[]> intMap;
+    private long intTpg = -1, intCut = -1, intVer = -1;
+    private double intMin = Double.NaN;
+    private int intProcessed, intEpoch = -1;
+    private final int[] intOpenG = {-1, -1};
+    private final double[] intOpenUsd = new double[2];
     private Intensity intMemo;
-    private long intMemoVer = -1, intMemoTpg = -1, intMemoCut = -1;
-    private double intMemoMin = Double.NaN;
 
+    private void intContribute(int g, long tpg, double delta, boolean isNew) {
+        long bin = Math.floorDiv(gTick0[g], tpg);
+        double[] acc = intMap.get(bin);
+        if (acc == null) intMap.put(bin, acc = new double[4]);
+        acc[gSide[g] > 0 ? 0 : 1] += delta;
+        if (isNew) acc[2] += 1;
+        acc[3] = Math.max(acc[3], gT1[g]);
+    }
+
+    /** first campaign index whose start could be >= t (the list is time-ordered up to a campaign's own duration; a 1 h margin) */
+    private int gFirstFrom(long t) {
+        long tm = t - 3600_000L;
+        int lo = 0, hi = gCount;
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            if (gT0[mid] < tm) lo = mid + 1; else hi = mid;
+        }
+        return lo;
+    }
+
+    /**
+     * Per-level REACTIVITY over the WHOLE window: bin -> [buyUsd, sellUsd, count, lastMs] for every level where a
+     * campaign with total >= minUsd (the PLAYER threshold) was LAUNCHED (its first fill) inside [cutoffMs, now]; plus
+     * the P90 / max of the per-level totals and the user's P50 (the level total at which the levels at or above it
+     * carry HALF of all launched $). INCREMENTAL (2026-09-07): a data frame only folds in the campaigns that
+     * appeared since the last call and the (at most two) still-growing ones; a rebuild happens on a new grouping /
+     * cutoff second / threshold or when the campaign indices shifted -- and only over the window's campaigns.
+     */
     public synchronized Intensity levelIntensity(long tpg, long cutoffMs, double minUsd) {
         long cutS = cutoffMs / 1000L;
-        if (intMemo != null && intMemoVer == version && intMemoTpg == tpg && intMemoCut == cutS && intMemoMin == minUsd) return intMemo;
-        java.util.HashMap<Long, double[]> m = new java.util.HashMap<>();
-        for (int g = 0; g < gCount; g++) {
-            if (gT0[g] < cutoffMs) continue;
-            if (minUsd > 0 && gUsd[g] < minUsd) continue;
-            long bin = Math.floorDiv(gTick0[g], tpg);
-            double[] acc = m.get(bin);
-            if (acc == null) m.put(bin, acc = new double[4]);
-            acc[gSide[g] > 0 ? 0 : 1] += gUsd[g];
-            acc[2] += 1;
-            acc[3] = Math.max(acc[3], gT1[g]);
+        boolean full = intMap == null || tpg != intTpg || cutS != intCut || minUsd != intMin || gEpoch != intEpoch;
+        if (!full && version == intVer && intMemo != null) return intMemo;
+        if (full) {
+            intMap = new java.util.HashMap<>();
+            intProcessed = gFirstFrom(cutoffMs);
+            intOpenG[0] = intOpenG[1] = -1;
+            intTpg = tpg; intCut = cutS; intMin = minUsd; intEpoch = gEpoch;
         }
-        double p90 = Double.POSITIVE_INFINITY, max = 0;
-        if (!m.isEmpty()) {
-            double[] tot = new double[m.size()];
+        for (int sIx = 0; sIx < 2; sIx++) {               // the open campaigns tracked last time: fold in their growth
+            int g = intOpenG[sIx];
+            if (g < 0 || g >= intProcessed) continue;
+            if (gT0[g] >= cutoffMs && gUsd[g] >= minUsd) {
+                boolean wasIn = intOpenUsd[sIx] > 0;
+                intContribute(g, tpg, gUsd[g] - intOpenUsd[sIx], !wasIn);
+                intOpenUsd[sIx] = gUsd[g];
+            }
+            if (cG[sIx] != g) intOpenG[sIx] = -1;         // it closed: nothing more can change
+        }
+        for (int g = intProcessed; g < gCount; g++) {      // campaigns that appeared since the last call
+            if (gT0[g] < cutoffMs || gUsd[g] < minUsd) continue;
+            intContribute(g, tpg, gUsd[g], true);
+        }
+        intProcessed = gCount;
+        for (int sIx = 0; sIx < 2; sIx++) {               // remember the open ones (and what they contributed)
+            int g = cG[sIx];
+            if (g >= 0) {
+                if (g != intOpenG[sIx]) intOpenUsd[sIx] = (gT0[g] >= cutoffMs && gUsd[g] >= minUsd) ? gUsd[g] : 0.0;
+                intOpenG[sIx] = g;
+            }
+        }
+        double p90 = Double.POSITIVE_INFINITY, max = 0, p50 = 0;
+        if (!intMap.isEmpty()) {
+            double[] tot = new double[intMap.size()];
             int k = 0;
-            for (double[] acc : m.values()) tot[k++] = acc[0] + acc[1];
+            for (double[] acc : intMap.values()) tot[k++] = acc[0] + acc[1];
             java.util.Arrays.sort(tot);
             p90 = tot[Math.min(tot.length - 1, (int) (tot.length * 0.9))];
             max = tot[tot.length - 1];
+            double sum = 0; for (double v : tot) sum += v;
+            double acc = 0; p50 = tot[0];
+            for (int j = tot.length - 1; j >= 0; j--) { acc += tot[j]; if (acc >= 0.5 * sum) { p50 = tot[j]; break; } }
         }
-        intMemo = new Intensity(m, p90, max);
-        intMemoVer = version; intMemoTpg = tpg; intMemoCut = cutS; intMemoMin = minUsd;
+        intMemo = new Intensity(intMap, p90, max, p50);
+        intVer = version;
         return intMemo;
     }
 
-    /** P90 of the campaign totals inside [cutoffMs, now] (the PLAYER slider's launch default: a big player = a top-decile campaign); 0 if fewer than 10. */
+    /** P90 of the campaign totals inside [cutoffMs, now] (diagnostics; 0 if fewer than 10). */
     public synchronized double campaignP90(long cutoffMs) {
         double[] u = new double[gCount];
         int k = 0;
