@@ -201,10 +201,9 @@ public class TapeView extends View {
         return k;
     }
 
-    private static String ticksStr(double ticks) {
+    private static String ticksStr(double ticks) {          // "+4" / "-9" -- the unit is obvious (user 2026-09-07)
         long t = Math.round(ticks);
-        String s = (t > 0 ? "+" : "") + t;
-        return s + (Math.abs(t) == 1 ? " tick" : " ticks");
+        return (t > 0 ? "+" : "") + t;
     }
 
     @Override
@@ -332,7 +331,7 @@ public class TapeView extends View {
         return y;
     }
 
-    /** Record ONE row (row-local y: 0..rowH): tier styling + TIME / PRICE / AMOUNT (merged: ◆, +Ns, ±N ticks). */
+    /** Record ONE row (row-local y: 0..rowH): tier styling + TIME / PRICE / AMOUNT (merged: +Ns, ±N). */
     private void recordRow(Canvas c, double[] r, int w, float cTime, float cPrice, float cAmtR) {
         float ry = 0;
         long ts = (long) r[0];
@@ -363,7 +362,7 @@ public class TapeView extends View {
         String tstr = timeStr(ts);
         if (mg) {
             long span = (long) r[6];
-            tstr = "◆ " + tstr + (span > 0 ? " (+" + span + "s)" : "");
+            tstr = tstr + (span > 0 ? " (+" + span + "s)" : "");
         }
         txt(c, tstr, cTime + (usd >= T3 ? 4 : 0), ty, text);
 
