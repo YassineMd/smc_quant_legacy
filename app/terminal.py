@@ -9277,10 +9277,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                 _mx6 = max(_vols[_j6] for _j6 in _nz6)
                                 return [_j6 for _j6 in _nz6 if _vols[_j6] == _mx6]
                             _pocs_out = _maxs6(range(_b5v + 1, _NB)) + _maxs6(range(0, _a5))
+                            # 2nd / 3rd strongest bins inside the VA (user 2026-09-07): amber at lesser opacity
+                            _rank23 = tuple(sorted((_j6 for _j6 in range(_a5, _b5v + 1) if _j6 != _p5 and _vols[_j6] > _pmin),
+                                                   key=lambda _j6: -_vols[_j6])[:2])
                         else:
-                            _lvns = []; _pocs_out = []
-                        self._ema_vp_cache = (_frz, _cen, _vols, _hb, _sp0, _sp1, _valp, _vahp, _lvns, _pocs_out)
-                    _, _cen, _vols, _hb, _sp0c, _sp1c, _valp, _vahp, _lvns, _pocs_out = self._ema_vp_cache
+                            _lvns = []; _pocs_out = []; _rank23 = ()
+                        self._ema_vp_cache = (_frz, _cen, _vols, _hb, _sp0, _sp1, _valp, _vahp, _lvns, _pocs_out, _rank23)
+                    _, _cen, _vols, _hb, _sp0c, _sp1c, _valp, _vahp, _lvns, _pocs_out, _rank23 = self._ema_vp_cache
                     _vmax = float(_vols.max()) if _cen is not None and len(_vols) else 0.0
                     if _cen is None or _vmax <= 0:
                         self._hide_ema_vp()
@@ -9307,10 +9310,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             if _modo is None:
                                 _poc = int(np.argmax(_vols))
                                 _lvset = set(_lvns or []); _opset = set(_pocs_out or [])
+                                _r2 = _rank23[0] if len(_rank23) > 0 else -1
+                                _r3 = _rank23[1] if len(_rank23) > 1 else -1
                                 _brs = [pg.mkBrush(250, 180, 60, 150) if _j5 == _poc
-                                        else (pg.mkBrush(178, 70, 255, 160) if _j5 in _lvset   # in-VA LVN: electric purple
-                                              else (pg.mkBrush(250, 205, 120, 125) if _j5 in _opset   # outside POCs: light amber
-                                                    else pg.mkBrush(150, 158, 175, 70)))
+                                        else (pg.mkBrush(250, 180, 60, 105) if _j5 == _r2     # 2nd strongest in the VA
+                                              else (pg.mkBrush(250, 180, 60, 65) if _j5 == _r3   # 3rd strongest in the VA
+                                                    else (pg.mkBrush(178, 70, 255, 160) if _j5 in _lvset   # in-VA LVN: electric purple
+                                                          else (pg.mkBrush(250, 205, 120, 125) if _j5 in _opset   # outside POCs: light amber
+                                                                else pg.mkBrush(150, 158, 175, 70)))))
                                         for _j5 in range(len(_vols))]
                                 self._ema_vp_item.setOpts(x0=_vx1v - _wid, width=_wid,
                                                           y=_cen, height=_hb * 0.92, pen=None, brushes=_brs)
@@ -10237,12 +10244,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 mx = max(vols[j] for j in nz)
                 return {j for j in nz if vols[j] == mx}
             poc_out = _maxs(range(b5 + 1, NB)) | _maxs(range(0, a5))
+            # 2nd / 3rd strongest bins INSIDE the value area (user 2026-09-07): the POC's amber at lesser opacities
+            # (POC 150 > 2nd 105 > 3rd 65) so the ranking reads at a glance; LVN bins never take a rank colour
+            va_rank = sorted((j for j in range(a5, b5 + 1) if j != p0 and vols[j] > vmin_in), key=lambda j: -vols[j])
+            poc2 = va_rank[0] if len(va_rank) > 0 else -1
+            poc3 = va_rank[1] if len(va_rank) > 1 else -1
             for j in range(NB):
                 if vols[j] <= 0:
                     continue
                 col = ((250, 180, 60, 150) if j == p0
-                       else ((178, 70, 255, 160) if j in lv_in
-                             else ((250, 205, 120, 125) if j in poc_out else (150, 158, 175, 70))))
+                       else ((250, 180, 60, 105) if j == poc2
+                             else ((250, 180, 60, 65) if j == poc3
+                                   else ((178, 70, 255, 160) if j in lv_in
+                                         else ((250, 205, 120, 125) if j in poc_out else (150, 158, 175, 70))))))
                 x0s.append(x0); ws.append(vols[j] * sc); ys.append(pmin + (j + 0.5) * hb)
                 hs.append(hb * 0.92); brs.append(pg.mkBrush(*col))
             dw = (0.40 * span) / 23.0                          # VAH/VAL: dashed lines emulated with 12 dash-bars
