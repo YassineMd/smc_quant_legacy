@@ -51,7 +51,7 @@ public class TradeStore {
     private int[] gN = new int[256];
     private byte[] gSide = new byte[256];
     private int gCount = 0;
-    private long curT0, curT1, curTick0, curLo, curHi;
+    private long curT0, curT1, curTick0, curLo, curHi, curTk;   // curTk = the last fill's tick (monotonic rule)
     private double curUsd;
     private int curN, curSide = -1, curG = -1;       // curG = index in the merged arrays once merged, else -1
 
@@ -211,10 +211,16 @@ public class TradeStore {
         chain(ts, tick[n - 1], tick[n - 1] * TICK * qty, buy ? 1 : 0);
     }
 
-    /** Feed one fill (time order) to the open chain; publishes / updates the merged group it belongs to. */
+    /**
+     * Feed one fill (time order) to the open chain; publishes / updates the merged group it belongs to. A fill joins
+     * the chain only if it is the same side, within MERGE_MS of the previous fill AND continues in the order's own
+     * direction (a buy never fills below its previous fill, a sell never above -- user 2026-09-07): a fill that comes
+     * back is another order and starts a new chain.
+     */
     private void chain(long ts, long tk, double usd, int side) {
-        if (curN > 0 && side == curSide && ts - curT1 <= MERGE_MS) {
+        if (curN > 0 && side == curSide && ts - curT1 <= MERGE_MS && (side > 0 ? tk >= curTk : tk <= curTk)) {
             curT1 = ts;
+            curTk = tk;
             curLo = Math.min(curLo, tk);
             curHi = Math.max(curHi, tk);
             curUsd += usd;
@@ -229,7 +235,7 @@ public class TradeStore {
             }
         } else {
             curT0 = curT1 = ts;
-            curTick0 = curLo = curHi = tk;
+            curTick0 = curLo = curHi = curTk = tk;
             curUsd = usd;
             curN = 1;
             curSide = side;
@@ -445,7 +451,7 @@ public class TradeStore {
             int j = i;
             long tmin = tick[i], tmax = tick[i];
             double usd = tick[i] * TICK * (buyQ[i] + sellQ[i]);
-            while (j - 1 >= 0 && (buyQ[j - 1] > 0 ? 1 : 0) == side && tsMs[j] - tsMs[j - 1] <= MERGE_MS) {
+            while (j - 1 >= 0 && chained(j)) {
                 j--;
                 tmin = Math.min(tmin, tick[j]);
                 tmax = Math.max(tmax, tick[j]);
@@ -517,7 +523,7 @@ public class TradeStore {
             int j = i;
             long tmin = tick[i], tmax = tick[i];
             double usd = tick[i] * TICK * (buyQ[i] + sellQ[i]);
-            while (j - 1 >= 0 && (buyQ[j - 1] > 0 ? 1 : 0) == side && tsMs[j] - tsMs[j - 1] <= MERGE_MS) {
+            while (j - 1 >= 0 && chained(j)) {
                 j--;
                 tmin = Math.min(tmin, tick[j]);
                 tmax = Math.max(tmax, tick[j]);
@@ -542,21 +548,42 @@ public class TradeStore {
         return out.toArray(new double[0][]);
     }
 
+    /**
+     * Chain predicate between consecutive fills j-1 -> j (the same one chain() applies forward): same side, within
+     * MERGE_MS, and monotonic in the order's direction. Pairwise, so a backward walk recovers the same chains.
+     */
+    private boolean chained(int j) {
+        int side = buyQ[j] > 0 ? 1 : 0;
+        if ((buyQ[j - 1] > 0 ? 1 : 0) != side || tsMs[j] - tsMs[j - 1] > MERGE_MS) return false;
+        return side > 0 ? tick[j] >= tick[j - 1] : tick[j] <= tick[j - 1];
+    }
+
     /** Merged players currently tracked (tests / diagnostics). */
     public synchronized int mergedCount() {
         return gCount;
     }
 
-    /** The fills of a merged row (same side, tsFirst..tsLast), newest first: [tsMs, price, usd]. */
-    public synchronized double[][] groupTrades(long tsFirst, long tsLast, int side) {
-        java.util.ArrayList<double[]> out = new java.util.ArrayList<>();
-        for (int k = lowerBound(tsFirst); k < n && tsMs[k] <= tsLast; k++) {
-            if ((buyQ[k] > 0 ? 1 : 0) != side) continue;
-            double px = tick[k] * TICK;
-            out.add(new double[]{tsMs[k], px, px * (buyQ[k] + sellQ[k])});
+    /**
+     * The fills of a merged row, newest first: [tsMs, price, usd]. A chain is `count` CONSECUTIVE fills starting at
+     * its first one (same side + a time range is no longer enough: two chains can share a millisecond once a
+     * reversal splits them), located by (tsFirst, priceFirst, side) and confirmed by the row's total.
+     */
+    public synchronized double[][] groupTrades(long tsFirst, double priceFirst, int side, int count, double usd) {
+        long tk0 = Math.round(priceFirst / TICK);
+        for (int k = lowerBound(tsFirst); k < n && tsMs[k] == tsFirst; k++) {
+            if ((buyQ[k] > 0 ? 1 : 0) != side || tick[k] != tk0 || k + count > n) continue;
+            double sum = 0;
+            for (int m = k; m < k + count; m++) sum += tick[m] * TICK * (buyQ[m] + sellQ[m]);
+            if (Math.abs(sum - usd) > 1e-6 * Math.max(1.0, usd)) continue;
+            double[][] out = new double[count][];
+            for (int m = 0; m < count; m++) {
+                int q = k + count - 1 - m;
+                double px = tick[q] * TICK;
+                out[m] = new double[]{tsMs[q], px, px * (buyQ[q] + sellQ[q])};
+            }
+            return out;
         }
-        java.util.Collections.reverse(out);
-        return out.toArray(new double[0][]);
+        return new double[0][];
     }
 
     /** 60s pressure sums (raw, never filtered): [buyUsd, sellUsd]. */

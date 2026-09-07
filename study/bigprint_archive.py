@@ -70,8 +70,10 @@ def scan_zip(path: str):
                 s = 0 if f[6].strip() == "true" else 1
                 if u >= FLOOR:
                     yield {"t": T, "p": p, "q": q, "u": round(u, 2), "s": s}
-                # SWEEP grouping: consecutive rows with the same transact_time + side = one taker order
-                if cur is not None and cur[0] == T and cur[1] == s:
+                # SWEEP grouping: consecutive rows with the same transact_time + side = one taker order -- as long
+                # as the price keeps walking in the order's direction (buy up / sell down): a fill that comes back
+                # inside the same ms is a second order (MONOTONIC rule 2026-09-07; months built before it need --force)
+                if cur is not None and cur[0] == T and cur[1] == s and (p >= cur[3] if s else p <= cur[3]):
                     cur[3] = p; cur[4] += u; cur[5].add(p)
                 else:
                     if cur is not None and len(cur[5]) >= SWEEP_MIN_LEVELS and cur[4] >= FLOOR:

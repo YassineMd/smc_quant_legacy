@@ -25,12 +25,14 @@ def group_sweeps(rows, min_levels: int = 2, min_usd: float = 0.0) -> list:
     """Group time-ordered prints (ts_s, price, usd, side) by IDENTICAL millisecond + side -> one taker order.
     Returns [(ts_s, p_first, p_last, usd_total, side, n_levels)] for groups that crossed >= min_levels distinct
     prices and total >= min_usd, time-ordered. p_first/p_last follow the fill order (p_last = where the book
-    finally absorbed the order)."""
+    finally absorbed the order). MONOTONIC (user 2026-09-07): one order only walks the book in its own direction,
+    so a same-ms same-side fill that comes back (buy below the previous fill / sell above) starts a NEW group."""
     out = []
     cur = None                                          # [ms, side, p_first, p_last, usd, {prices}, ts_s]
     for (ts_s, price, usd, side) in rows:
         ms = int(round(float(ts_s) * 1000.0)); side = int(side)
-        if cur is not None and cur[0] == ms and cur[1] == side:
+        if cur is not None and cur[0] == ms and cur[1] == side \
+                and (float(price) >= cur[3] - 1e-9 if side > 0 else float(price) <= cur[3] + 1e-9):
             cur[3] = float(price); cur[4] += float(usd); cur[5].add(round(float(price), 6))
             continue
         if cur is not None and len(cur[5]) >= min_levels and cur[4] >= min_usd:

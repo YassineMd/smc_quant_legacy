@@ -7,6 +7,7 @@ import android.graphics.RecordingCanvas;
 import android.graphics.RectF;
 import android.graphics.RenderNode;
 import android.graphics.Typeface;
+import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -69,6 +70,7 @@ public class TapeView extends View {
     private final RectF rf = new RectF();
     private final GlyphCache glN, glB, glH, glS;
     private final HashMap<Long, String> timeCache = new HashMap<>();
+    private final GestureDetector gestures;        // single tap = toggle a merged row's fills, double tap = back to the top
     private double[][] lastRows;                   // rows of the last paint (identity: tapeRows is memoized)
     private float dragY = -1, downX = -1, downY = -1;
     private float dragAccum = 0;
@@ -112,6 +114,22 @@ public class TapeView extends View {
         glB = new GlyphCache(textB);
         glH = new GlyphCache(textH);
         glS = new GlyphCache(textS);
+        gestures = new GestureDetector(ctx, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onSingleTapConfirmed(MotionEvent e) {   // a TAP on a merged row drops its fills down
+                toggleAt(e.getY());
+                return true;
+            }
+
+            @Override
+            public boolean onDoubleTap(MotionEvent e) {          // DOUBLE-TAP = jump to the most recent trade (user 2026-09-07)
+                if (host.scrollRows() > 0) {
+                    host.scrollBy(-host.scrollRows());
+                    invalidate();
+                }
+                return true;
+            }
+        });
     }
 
     private GlyphCache gl(Paint p) {
@@ -134,6 +152,7 @@ public class TapeView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
+        gestures.onTouchEvent(ev);                 // taps / double-taps; the drag below stays manual
         switch (ev.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 dragY = ev.getY();
@@ -156,7 +175,6 @@ public class TapeView extends View {
                 }
                 return true;
             case MotionEvent.ACTION_UP:
-                if (!dragged && downY >= 0) toggleAt(downY);   // a TAP on a merged row drops its fills down
                 dragY = -1;
                 downY = -1;
                 return true;
@@ -315,7 +333,7 @@ public class TapeView extends View {
     private float drawDetails(Canvas c, double[] r, long key, float y, int h, int w, float cTime, float cPrice, float cAmtR) {
         double[][] det = detailCache.get(key);
         if (det == null) {
-            det = host.store().groupTrades((long) r[0], (long) r[7], (int) r[3]);
+            det = host.store().groupTrades((long) r[0], r[1], (int) r[3], (int) r[4], r[2]);
             detailCache.put(key, det);
         }
         boolean buy = r[3] > 0;

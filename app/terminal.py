@@ -11014,9 +11014,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # +0.5 ms: timestamps are ms-quantized but held as float SECONDS (~2e-7 s resolution at 1.7e9), so two
             # fills exactly BURST_MS apart can compute to BURST_MS + 1e-7 and miss a bare comparison (seen at 2 ms)
             win = (float(config.BIGPLAYER_BURST_MS) + 0.5) / 1000.0
+            # MONOTONIC (user 2026-09-07): one order only walks the book in its own direction -- a buy never fills
+            # below its previous fill, a sell never above -- so a same-side event that comes back against the
+            # cluster's frontier (buy: its lowest price < the cluster's highest; sell: mirror) is ANOTHER order.
             clusters = []; cur = None                           # cur = [t_last, side, price_last, usd, n, has_sweep, lo, hi]
             for (t, side, price, usd, kind, lo, hi) in ev:
-                if cur is not None and cur[1] == side and t - cur[0] <= win:
+                if cur is not None and cur[1] == side and t - cur[0] <= win \
+                        and (lo >= cur[7] - 1e-9 if side else hi <= cur[6] + 1e-9):
                     cur[0] = t; cur[2] = price; cur[3] += usd; cur[4] += 1; cur[5] = cur[5] or kind == "sw"
                     cur[6] = min(cur[6], lo); cur[7] = max(cur[7], hi)
                     continue
