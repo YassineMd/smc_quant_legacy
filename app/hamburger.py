@@ -375,8 +375,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         # showing poisoned persisted state). The tf is the stable, honest INPUT (the flow window). ---
         # --- CHART dropdown (user 2026-09-06): every control that had no dropdown of its own (Bucket Scale, Chart
         #     Source, Candle Mode, Volume Profile Mode, Scanner Mode, Heatmap, Chart Style, Window on Start, Scan Start
-        #     Time, Replay Mode, Min Multiplier, Depth Wall Min) lives inside 'Chart' at the top (expanded by default). ---
-        _chart = self.chart_section = CollapsibleSection("Chart", expanded=True)
+        #     Time, Replay Mode, Min Multiplier, Depth Wall Min) lives inside 'Chart' at the top (collapsed by default). ---
+        _chart = self.chart_section = CollapsibleSection("Chart", expanded=False)   # collapsed like every other dropdown (user 2026-09-07)
         _chart.addWidget(self._header("Bucket Scale"))
         self.tf_combo = QtWidgets.QComboBox()
         # Honest scale ladder: DISPLAY "N× (~vol)" (the volume multiple the sizing produces), but
