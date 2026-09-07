@@ -1516,6 +1516,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._bp_journal_loaded = False                         # data/bigprint_journal.jsonl read once per session
         self._bp_jbuf = []; self._bp_jflush_t = 0.0             # journal write buffer (flushed every few seconds / on close)
         self._bp_arch_check_t = 0.0                             # last archive-refresh check
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        self._bp_win_pool = _TPE(max_workers=1, thread_name_prefix="bp-window")   # backfill windows decode OFF the UI thread
+        self._bp_win_futs = []
         self._bp_live_t0 = 0.0                                  # first LIVE print ts (window rows dedupe against it)
         self._bp_sub_t = 0.0; self._bp_need_backfill = True     # tape subscription re-arm clock / backfill pending
         self._bp_conn_was = True
@@ -11135,15 +11138,33 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for tw in (tws or ()):
             if self._bp_bf_inflight is not None and (int(tw.t0), int(tw.t1)) == self._bp_bf_inflight[:2]:
                 self._bp_bf_inflight = None
-            ts, pr, qt, sd = decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64)
-            if len(ts):
-                self._bp_add_sweeps(ts, pr, qt, sd, floor, live=False)
-                rows = [(float(ts[i]) / 1000.0, float(pr[i]), float(pr[i]) * float(qt[i]), int(sd[i]))
-                        for i in range(len(ts)) if float(pr[i]) * float(qt[i]) >= floor]
-                if rows:
-                    self._bp_merge_prints(rows)
+            # a 6 h window is ~70k raw trades: decoding + same-ms sweep grouping cost ~180 ms in pure Python, so it
+            # runs on the pool thread and the RESULT (prints >= floor, sweeps) is merged here on a later frame
+            self._bp_win_futs.append(self._bp_win_pool.submit(self._bp_window_work, tw, floor))
+        for fut in [f for f in self._bp_win_futs if f.done()]:
+            self._bp_win_futs.remove(fut)
+            try:
+                prs, sws = fut.result()
+            except Exception as ex:
+                print("BIGPLAYER WINDOW ERROR: %s" % ex)
+                continue
+            if sws:
+                self._bp_merge_sweeps(sws)
+            if prs:
+                self._bp_merge_prints(prs)
         self._bp_bf_pump()
         self._bp_journal_flush()
+
+    @staticmethod
+    def _bp_window_work(tw, floor):
+        """OFF the UI thread: decode one backfill window, group its same-ms sweeps (before the store floor: many
+        small fills of one order must still sum up), keep the prints >= floor. Pure -- no UI state touched."""
+        from . import bigprint_store, config as _cfg
+        ts, pr, qt, sd = decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64)
+        rows = [(float(ts[i]) / 1000.0, float(pr[i]), float(pr[i]) * float(qt[i]), int(sd[i])) for i in range(len(ts))]
+        sws = bigprint_store.group_sweeps(rows, int(_cfg.BIGPLAYER_SWEEP_MIN_LEVELS), float(floor))
+        prs = [r for r in rows if r[2] >= floor]
+        return prs, sws
 
     def _bp_add_sweeps(self, ts, pr, qt, sd, floor, live, cut=float("inf")) -> None:
         """Group one decoded trade array (ms, price, qty, side) into SWEEPS and merge them into the store.
@@ -11200,8 +11221,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         the player ate through. Returns [(t, side, end price, usd, kind 'pr' | 'sw', lo, hi)], time-sorted. Shared by
         the Big Player Levels overlay (bubbles / diamonds) and the Big Player Gray VP."""
         live_start = self._bp_trades[0][0] if self._bp_trades else float("inf")
-        prs = [r for r in self._bp_trades if t_lo > 0 and r[0] <= t_hi]
-        sws = [s for s in self._bp_sweeps if t_lo > 0 and s[0] <= t_hi] if sw_on else []
+
+        def _since(dq, lo):                                     # newest -> oldest, stop below `lo` (the store is time-sorted):
+            out = []                                            # cost = the DRAWN range, not the 72 h store (2026-09-07)
+            for r in reversed(dq):
+                if r[0] < lo:
+                    break
+                if r[0] <= t_hi:
+                    out.append(r)
+            out.reverse()
+            return out
+        _lo1 = t_lo - 1.0                                       # 1 s margin >> the 30 ms campaign window
+        prs = _since(self._bp_trades, _lo1) if t_lo > 0 else []
+        sws = _since(self._bp_sweeps, _lo1) if (sw_on and t_lo > 0) else []
         if t_lo > 0 and t_lo < live_start:
             from . import bigprint_store
             _t1 = min(float(t_last), live_start) - 1e-6
