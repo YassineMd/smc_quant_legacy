@@ -1516,6 +1516,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._bp_journal_loaded = False                         # data/bigprint_journal.jsonl read once per session
         self._bp_jbuf = []; self._bp_jflush_t = 0.0             # journal write buffer (flushed every few seconds / on close)
         self._bp_arch_check_t = 0.0                             # last archive-refresh check
+        self._bpvp_auto_done = False; self._bpvp_user_touched = False; self._bpvp_setting = False   # Gray VP MIN PLAYER P50 launch default
         from concurrent.futures import ThreadPoolExecutor as _TPE
         self._bp_win_pool = _TPE(max_workers=1, thread_name_prefix="bp-window")   # backfill windows decode OFF the UI thread
         self._bp_win_futs = []
@@ -11275,10 +11276,46 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return ev
 
     # ── BIG PLAYER GRAY VP (VP mode 11, user 2026-09-07) ──────────────────────────────────────────────────
+    def _bpvp_auto_default(self) -> bool:
+        """Launch default of the Big Player Gray VP's MIN PLAYER (user 2026-09-07: "by default the Gray VP Big Player
+        slider should default to P50"): the tablet's P50 rule -- the player size at which the players at or above it
+        carry HALF of all big-player $ -- over the last 24 h of events as drawn (archive + live store, campaigns).
+        Applied once per session as soon as >= 50 events are known, unless the user moved the slider first; the
+        persisted value is only the starting point until the data lands. Returns True when it was applied."""
+        if self._bpvp_auto_done or self._bpvp_user_touched:
+            return False
+        now = time.time()
+        try:
+            ev = self._bp_events(now - 86400.0, now, now + 1e-6, True)
+        except Exception:
+            ev = []
+        if len(ev) < 50:
+            return False                                      # store still backfilling / no archive yet: try again later
+        sizes = sorted((float(e[3]) for e in ev), reverse=True)
+        tot = sum(sizes); acc = 0.0; thr = sizes[-1]
+        for u in sizes:
+            acc += u
+            if acc >= 0.5 * tot:
+                thr = u
+                break
+        self._bpvp_auto_done = True
+        self._bpvp_setting = True
+        try:
+            self.menu.set_bp_vp_min_usd(thr)
+        finally:
+            self._bpvp_setting = False
+        self._bpvp_cache = None; self._pvp_sig = None
+        try:
+            self._save_ui_state()
+        except Exception:
+            pass
+        return True
+
     def _bp_vp_rows(self, t0: float, t1: float) -> list:
         """VP rows [(price, [usd, 0, 0, 0])] over [t0, t1] from big-player EVENTS >= the MIN PLAYER slider: a single
         print lands on its price; a sweep / burst (the diamond: one order that ate through the book) is spread
         evenly over every tick from its low to its high. Memoized on (range, threshold, store state)."""
+        self._bpvp_auto_default()
         thr = float(self.menu.bp_vp_min_usd())
         key = (round(float(t0), 3), round(float(t1), 3), thr, len(self._bp_trades), len(self._bp_sweeps),
                (self._bp_trades[-1][0] if self._bp_trades else 0.0), (self._bp_sweeps[-1][0] if self._bp_sweeps else 0.0))
@@ -11320,6 +11357,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _on_bpvp_min(self, usd: float) -> None:
         """MIN PLAYER slider moved -> rebuild every Big Player Gray VP (selection, 4h V, previous days) + persist."""
+        if not self._bpvp_setting:
+            self._bpvp_user_touched = True               # a manual move wins over the P50 launch default
         self._bpvp_cache = None
         self._pvp_sig = None
         self._on_vp_mode(self._vp_mode)
