@@ -960,8 +960,8 @@ class BpLabelsItem(pg.GraphicsObject):
 
 
 class BurstBadgesItem(pg.GraphicsObject):
-    """Every Volume-Burst badge in ONE graphics item (user 2026-09-08): a pixel-sized pill (green above the high /
-    red below the low) carrying the strongest one-sided multiple reached inside that candle. One paint pass, no
+    """Every Volume-Burst badge in ONE graphics item (user 2026-09-08): a pixel-sized pill carrying the strongest
+    one-sided multiple reached inside that candle -- RED (sell) above the high, GREEN (buy) below the low (2026-09-09). One paint pass, no
     per-badge scene items -- the same design as BpLabelsItem, for the same reason (a TextItem per mark cost ~40 ms
     per zoom step). The item -> device transform comes from the PAINTER: pyqtgraph's deviceTransform() segfaults
     when called inside paint() on this binding (it bricked the terminal on 2026-09-07)."""
@@ -1007,7 +1007,7 @@ class BurstBadgesItem(pg.GraphicsObject):
             if pt.x() < -40 or pt.x() > wdev + 40 or pt.y() < -60 or pt.y() > hdev + 60:
                 continue                                  # off the viewport
             rw = max(rh, float(fm.horizontalAdvance(txt)) + 9.0)
-            cy = (pt.y() - 9.0 - rh / 2.0) if is_buy else (pt.y() + 9.0 + rh / 2.0)
+            cy = (pt.y() + 9.0 + rh / 2.0) if is_buy else (pt.y() - 9.0 - rh / 2.0)
             rect = QtCore.QRectF(pt.x() - rw / 2.0, cy - rh / 2.0, rw, rh)
             rgb = self._BUY if is_buy else self._SELL
             p.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 205))
@@ -17566,7 +17566,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _draw_bursts(self, filtered) -> None:
         """VOLUME BURST badges (user 2026-09-08): inside each candle, the strongest one-sided taker burst on the
-        flow bins -- green pill above the high when buyers dominated, red below the low when sellers did, carrying
+        flow bins -- red pill above the high when sellers dominated, green below the low when buyers did, carrying
         the multiple reached ('x3.4'). Signature-gated, one reduceat over the drawn bars, one paint pass."""
         if (not self.menu.layer_state("m10_burst") or self.scanner_mode != "bucket_canvas"
                 or self._hide_candles):
@@ -17605,7 +17605,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             i = int(i)
             b = filtered[i]
             is_buy = bool(side[i])
-            y = float(b.get("high", 0.0) or 0.0) if is_buy else float(b.get("low", 0.0) or 0.0)
+            # user 2026-09-09: RED (sell) above the candle, GREEN (buy) below it
+            y = float(b.get("low", 0.0) or 0.0) if is_buy else float(b.get("high", 0.0) or 0.0)
             if y <= 0:
                 continue
             r = float(ratio[i])
