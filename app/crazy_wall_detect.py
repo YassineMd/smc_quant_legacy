@@ -102,25 +102,56 @@ BIG_K = 0.5         # BIG (middle) bubble tier = >= this many robust-sigma above
 #                     (recon 5m: ~85% normal / ~9% BIG / ~6% crazy — a proper middle band, more common than crazy)
 
 
+_t1_memo: dict = {}      # id(bucket) -> (end_time, top1)              closed buckets never change (perf 2026-09-08)
+_thr_memo: dict = {}     # id(bucket) -> (end_time, (big, crazy)|None)  the window before a closed bar is frozen too
+_MEMO_CAP = 60_000
+
+
 def bubble_thresholds(buckets):
     """Per-bucket (big_thr, crazy_thr) for the 3-TIER candle bubbles: normal < big_thr <= BIG < crazy_thr <= CRAZY.
     big = median + BIG_K*sigma / crazy = median + MAD_K*sigma (robust z-score over the last WIN candles' top bubbles).
-    None where there isn't enough history. Superset of crazy_thresholds() — the 2nd element is the SAME crazy level."""
+    None where there isn't enough history. Superset of crazy_thresholds() — the 2nd element is the SAME crazy level.
+    MEMOIZED per bucket object (id + end_time): the canvas calls this every frame on the whole window (70-100 ms on
+    500+ bars); only the LAST bar (forming) is recomputed each call, a closed bar's value is reused."""
     n = len(buckets)
     out = [None] * n
     if n < WIN + 1:
         return out
     try:
-        top1 = [_top1(b) for b in buckets]
+        if len(_t1_memo) > _MEMO_CAP or len(_thr_memo) > _MEMO_CAP:
+            _t1_memo.clear(); _thr_memo.clear()
+        top1 = [0.0] * n
+        last = n - 1
+        fps = [None] * n
+        for i, b in enumerate(buckets):
+            lv = b.get("levels")
+            fp = (b.get("start_time"), b.get("end_time"), id(lv), len(lv) if lv else 0, b.get("volume"))
+            fps[i] = fp                                  # id() alone is unsafe: a freed dict's id is reused at once
+            hit = _t1_memo.get(id(b))
+            if hit is not None and hit[0] == fp and i < last:
+                top1[i] = hit[1]
+            else:
+                v = _top1(b); top1[i] = v
+                if i < last:
+                    _t1_memo[id(b)] = (fp, v)
         for i in range(WIN, n):
+            b = buckets[i]
+            if i < last:
+                hit = _thr_memo.get(id(b))
+                if hit is not None and hit[0] == fps[i] and hit[1] == top1[i] and hit[2] == top1[i - 1]:
+                    out[i] = hit[3]
+                    continue
             base = [top1[j] for j in range(i - WIN, i) if top1[j] > 0]
-            if len(base) < MIN_N:
-                continue
-            med, sigma = _center_scale(base)
-            if sigma > 0:
-                out[i] = (med + BIG_K * sigma, med + MAD_K * sigma)
-            elif med > 0:
-                out[i] = (1.5 * med, 2.0 * med)
+            val = None
+            if len(base) >= MIN_N:
+                med, sigma = _center_scale(base)
+                if sigma > 0:
+                    val = (med + BIG_K * sigma, med + MAD_K * sigma)
+                elif med > 0:
+                    val = (1.5 * med, 2.0 * med)
+            out[i] = val
+            if i < last:
+                _thr_memo[id(b)] = (fps[i], top1[i], top1[i - 1], val)
         return out
     except Exception:
         return out

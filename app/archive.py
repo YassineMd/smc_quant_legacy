@@ -16,6 +16,7 @@ import glob
 import gzip
 import json
 import os
+import time
 
 from . import config
 from .persistence import _bucket_from_dict
@@ -33,6 +34,9 @@ _stamp: dict[str, tuple] = {}               # tf -> (newest-chunk mtime, overlay
 _OVERLAY_PATH = os.path.join(config.PROJECT_DIR, "study", "out", "price_h1_backfill.json")
 _overlay: "dict | None" = None
 _overlay_mtime: float = -1.0
+_overlay_checked: float = 0.0                        # last os.stat of the overlay (throttled to every 2 s)
+_done: dict = {}                                     # id(bucket) -> start_time resolved under the current overlay
+_done_mtime: float = -2.0
 
 
 def local_dir() -> str:
@@ -60,7 +64,11 @@ def _newest_mtime(tf: str) -> float:
 def _load_overlay() -> dict:
     """The delta_h1/price_h1 fill map ("tf|start" -> [delta_h1, price_h1]), reloaded when its file changes.
     {} when the file is absent/unreadable, so the archive path is a safe no-op without it."""
-    global _overlay, _overlay_mtime
+    global _overlay, _overlay_mtime, _overlay_checked
+    now = time.time()
+    if _overlay is not None and now - _overlay_checked < 2.0:
+        return _overlay                              # the stat itself cost ~0.25 ms per 20 Hz tick
+    _overlay_checked = now
     try:
         m = os.path.getmtime(_OVERLAY_PATH)
     except OSError:
@@ -85,11 +93,22 @@ def enrich_halves(buckets, tf: str) -> None:
     ov = _load_overlay()
     if not ov:
         return
+    global _done_mtime
+    if _done_mtime != _overlay_mtime:                 # a new overlay file -> every bucket is worth a fresh look
+        _done.clear(); _done_mtime = _overlay_mtime
+    elif len(_done) > 400_000:
+        _done.clear()
+    done = _done
     for b in buckets:
         if b.get("delta_h1") is not None and b.get("price_h1") is not None:
-            continue
-        pair = ov.get("%s|%.3f" % (tf, float(b.get("start_time", 0.0) or 0.0)))
+            continue                                 # complete: nothing to look up (the common case, 2 gets)
+        k = id(b)
+        st = b.get("start_time"); fp = (st, b.get("end_time"), len(b))
+        if done.get(k) == fp:                        # known to have NO reconstructable pair under this overlay
+            continue                                 # (perf 2026-09-08: this ran over the whole window per 20 Hz tick)
+        pair = ov.get("%s|%.3f" % (tf, float(st or 0.0)))
         if not pair:
+            done[k] = fp
             continue
         if b.get("delta_h1") is None and pair[0] is not None:
             b["delta_h1"] = pair[0]

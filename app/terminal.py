@@ -9500,7 +9500,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.set_ema_vp_usd(getattr(self, "_ema_vp_thr", None) if mode == 11 else None)
         if len(rows) < 2 or max((sum(a) for _, a in rows), default=0.0) <= 0:
             return None
-        x0s, ws, ys, hs, brs = self._vp_segments(rows, mode, 0.0, mw / 0.40, thick)
+        skey = (id(rows), mode, round(float(mw), 6), round(float(thick), 9))
+        smemo = getattr(self, "_ema_vp_seg_memo", None)
+        if smemo is not None and smemo[0] == skey:
+            x0s, ws, ys, hs, brs = smemo[1]                  # same rows + width -> same segments (was 8 ms per frame)
+        else:
+            x0s, ws, ys, hs, brs = self._vp_segments(rows, mode, 0.0, mw / 0.40, thick)
+            self._ema_vp_seg_memo = (skey, (x0s, ws, ys, hs, brs))
         if not ws:
             return None
         if mode in (2, 3, 4, 5):
