@@ -1,0 +1,92 @@
+//@version=6
+// EMA Stack-Flip trend vertical lines -- a port of the SMC terminal's "Stack-Flip" EMA sub-widget (app/terminal.py, _draw_emas).
+// A regime opens at an EMA20/EMA50 cross. It is CONFIRMED only when, at least `minAge` bars later and with the cross still
+// holding, BOTH high/low deltas agree with it: over the last 20 bars (HH - EMA20 at the HH bar)/EMA20 + (LL - EMA20 at the
+// LL bar)/EMA20 > 0 and the same with 50 bars / EMA50 (both < 0 for a short regime). The line is then drawn BACK at the
+// cross bar (green = long, red = short). Printed lines alternate colours: a same-colour repeat is confirmed but not drawn.
+// A cross that arrives before confirmation replaces the pending regime. The current unconfirmed cross shows as a dotted line.
+indicator("EMA Stack-Flip Trend Lines", "EMA Flip VLines", overlay = true, max_lines_count = 500)
+
+fastLen     = input.int(20, "Fast EMA / fast delta window", minval = 2)
+slowLen     = input.int(50, "Slow EMA / slow delta window", minval = 3)
+minAge      = input.int(20, "Min regime age (bars) before it can confirm", minval = 1)
+altOnly     = input.bool(true, "Alternate colours (suppress a same-colour repeat)")
+showForming = input.bool(true, "Dotted line at the current unconfirmed cross")
+showEma     = input.bool(true, "Plot the two EMAs")
+colUp       = input.color(#28e678, "Long line")
+colDn       = input.color(#f0465a, "Short line")
+
+e20 = ta.ema(close, fastLen)
+e50 = ta.ema(close, slowLen)
+plot(showEma ? e20 : na, "EMA fast", color = #fab43c)
+plot(showEma ? e50 : na, "EMA slow", color = #5aaaff)
+
+// (HH - EMA at the HH bar)/EMA + (LL - EMA at the LL bar)/EMA over the last p bars; ties -> the most recent bar
+hlDelta(int p, float emaSrc) =>
+    float hp = na
+    float lp = na
+    int hi = 0
+    int li = 0
+    for k = 0 to p - 1
+        h = high[k]
+        l = low[k]
+        if na(hp) or h > hp
+            hp := h
+            hi := k
+        if na(lp) or l < lp
+            lp := l
+            li := k
+    eh = emaSrc[hi]
+    el = emaSrc[li]
+    na(eh) or na(el) or eh <= 0 or el <= 0 ? na : (hp - eh) / eh + (lp - el) / el
+
+bull  = e20 > e50
+bear  = e50 > e20
+ready = not na(e20) and not na(e50)
+
+var string state   = na      // "g" long regime / "r" short regime
+var bool   pend    = false   // regime opened, not confirmed yet
+var int    reg0    = na      // bar index of the cross that opened the regime
+var string lastCol = na      // colour of the last PRINTED line
+var line   forming = na
+
+if ready and barstate.isconfirmed
+    if na(state)                                   // regime already running when the EMAs become valid
+        state := bull ? "g" : bear ? "r" : na
+        pend  := not na(state)
+        reg0  := bar_index
+    if bull and not bull[1]
+        state := "g"
+        pend  := true
+        reg0  := bar_index
+    else if bear and not bear[1]
+        state := "r"
+        pend  := true
+        reg0  := bar_index
+    if pend and bar_index - reg0 >= minAge - 1
+        d20 = hlDelta(fastLen, e20)
+        d50 = hlDelta(slowLen, e50)
+        ok  = not na(d20) and not na(d50)
+        if state == "g" and bull and ok and d20 > 0 and d50 > 0
+            if not altOnly or lastCol != "g"
+                line.new(reg0, low, reg0, high, xloc.bar_index, extend.both, colUp, line.style_solid, 1)
+                lastCol := "g"
+            pend := false
+        else if state == "r" and bear and ok and d20 < 0 and d50 < 0
+            if not altOnly or lastCol != "r"
+                line.new(reg0, low, reg0, high, xloc.bar_index, extend.both, colDn, line.style_solid, 1)
+                lastCol := "r"
+            pend := false
+
+// the newest cross whose regime is not confirmed yet: one dotted line, moved when a newer cross replaces it
+if showForming
+    if pend and not na(state)
+        col = state == "g" ? colUp : colDn
+        if na(forming) or line.get_x1(forming) != reg0
+            line.delete(forming)
+            forming := line.new(reg0, low, reg0, high, xloc.bar_index, extend.both, col, line.style_dotted, 1)
+        else
+            line.set_color(forming, col)
+    else if not na(forming)
+        line.delete(forming)
+        forming := na
