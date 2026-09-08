@@ -11430,7 +11430,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for fut in [f for f in self._bp_win_futs if f.done()]:
             self._bp_win_futs.remove(fut)
             try:
-                prs, sws = fut.result()
+                prs, sws, _raw = fut.result()
             except Exception as ex:
                 print("BIGPLAYER WINDOW ERROR: %s" % ex)
                 continue
@@ -11438,6 +11438,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._bp_merge_sweeps(sws)
             if prs:
                 self._bp_merge_prints(prs)
+            try:
+                self._flow.ingest(*_raw)     # the same window feeds the Volume Burst bins (history, not just live)
+            except Exception:
+                pass
         self._bp_bf_pump()
         self._bp_journal_flush()
 
@@ -11450,7 +11454,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         rows = [(float(ts[i]) / 1000.0, float(pr[i]), float(pr[i]) * float(qt[i]), int(sd[i])) for i in range(len(ts))]
         sws = bigprint_store.group_sweeps(rows, int(_cfg.BIGPLAYER_SWEEP_MIN_LEVELS), float(floor))
         prs = [r for r in rows if r[2] >= floor]
-        return prs, sws
+        return prs, sws, (ts, pr, qt, sd)   # raw arrays -> the Volume Burst flow bins (merged on the UI thread)
 
     def _bp_add_sweeps(self, ts, pr, qt, sd, floor, live, cut=float("inf")) -> None:
         """Group one decoded trade array (ms, price, qty, side) into SWEEPS and merge them into the store.
@@ -14959,7 +14963,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                      tuple(cb.isChecked() for cb in self.menu.layer_checks.values()),
                      round(self.menu.swing_pct(), 4), round(getattr(self, "_wall_floor", 0.0), 4),
                      round(getattr(self, "_reward_strength", 0.0), 2),
-                     getattr(self, "_bp_rev", 0))   # Big Player tape revision (user 2026-09-06: prints must show at
+                     getattr(self, "_bp_rev", 0),   # Big Player tape revision (user 2026-09-06: prints must show at
+                     # Volume Burst reads the TAPE, which moves between bar closes -- give the batch a 2 s tick so the
+                     # forming candle's badge keeps up. 2 s not 1 s: invisible for a per-candle badge and it halves
+                     # the added load (measured 7.6% -> 7.0% of the UI thread, p90 frame 10.1 -> 7.5 ms).
+                     int(time.time()) // 2 if self.menu.layer_state("m10_burst") else 0)
             #                                         once -- this gate only moved on a NEW candle, so a whale print
             #                                         landing mid-candle stayed invisible until the candle CLOSED)
             if _nsig == self._nosel_sig:
@@ -15003,6 +15011,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     or self.menu.layer_state("m10_sr") or self.menu.layer_state("m10_swinglvn")
                     or self.menu.layer_state("m10_wallstrat") or self.menu.layer_state("m10_radarrun")
                     or self.menu.layer_state("m10_kcovershoot") or self.menu.layer_state("m10_bigplayer")
+                    or self.menu.layer_state("m10_burst")
                     or self.menu.layer_state("m10_wallsurge") or self.menu.layer_state("m10_longwick")
                     or self.menu.layer_state("m10_longwick_combo") or self.menu.layer_state("m10_longwick_reclaim")):
                 _pf = _pf0                          # already built above; the top gate decided this frame needs a redraw
@@ -15030,6 +15039,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._draw_bigplayer(_pf or [])  # Big Player Levels (tape prints) — self-gated, fail-safe
                 except Exception:
                     self._clear_bigplayer()
+                try:
+                    self._draw_bursts(_pf or [])     # Volume Burst badges (flow bins) — self-gated, fail-safe
+                except Exception:
+                    self._clear_bursts()
                 try:
                     self._draw_radarrun_forming(_pf or [])  # forming-bar PROVISIONAL preview — self-gated, fail-safe
                 except Exception:
@@ -17517,6 +17530,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._last_scanner_sig = None
         self._draw_scanner()
 
+    def _flow_history_arm(self) -> None:
+        """Pull the burst history ONCE per connection, whichever feed is draining the tape. A request issued while
+        the socket is down is dropped by _flush_outgoing, so it has to ride the False->True edge."""
+        conn = bool(self.worker.connected)
+        if conn and not getattr(self, "_flow_conn_was2", False):
+            self._flow_subscribe(backfill=False)
+            self._flow_backfill(float(config.BURST_BACKFILL_SECS))
+        self._flow_conn_was2 = conn
+
     def _flow_backfill(self, secs: float) -> None:
         """Pull ONE history window of tape into the flow bins (the badges need a past, not just the live edge)."""
         t1 = int(time.time() * 1000)
@@ -17527,13 +17549,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Keep the flow bins fed on the CANDLE canvas when the Big Player feed -- the other drainer of the
         consume-once trade buffers -- is switched off. Only ever ONE of the two runs per frame."""
         now = time.time()
-        conn = bool(self.worker.connected)
-        if conn and not getattr(self, "_flow_conn_was2", False):
-            # the socket just came up (or came back). A request issued while it was down was dropped on the floor
-            # by _flush_outgoing, so re-arm AND re-pull the history here -- this is what actually delivers it.
-            self._flow_subscribe(backfill=False)
-            self._flow_backfill(float(config.BURST_BACKFILL_SECS))
-        self._flow_conn_was2 = conn
+        self._flow_history_arm()
         if now - getattr(self, "_flow_resub_t", 0.0) > 10.0:
             self._flow_subscribe(backfill=False)
         _tv, tws, tbatches = self.worker.trades_state()
@@ -17555,6 +17571,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if (not self.menu.layer_state("m10_burst") or self.scanner_mode != "bucket_canvas"
                 or self._hide_candles):
             self._clear_bursts(); return
+        self._flow_history_arm()        # works whether Big Player or _flow_pump is the one draining the tape
         n = len(filtered)
         if not n:
             self._clear_bursts(); return
