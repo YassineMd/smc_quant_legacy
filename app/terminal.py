@@ -17527,12 +17527,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._flow_ytop = top * 1.18
             self.vb.setYRange(0.0, self._flow_ytop, padding=0.0)
         b_now = float(buy[-1]); s_now = float(sell[-1]); tot = max(1e-9, b_now + s_now)
-        _u = self._flow_win
-        _wl = ("%ds" % _u) if _u < 60 else ("%dm" % (_u // 60))
+        # the badges carry the VALUE and its share only (user 2026-09-08: "keep only buyvol$ (x%) and sellvol$ (y%)");
+        # the colour already says which side, and the window is on the hamburger's 'Flow' dropdown.
         self._scanner_tracker("t_flow_b", b_now, "#26a69a",
-                              "Buy %s / %s<br>(%.0f%%)" % (self._fmt_usd_short(b_now), _wl, 100 * b_now / tot), float(t[-1]), "up")
+                              "%s (%.0f%%)" % (self._fmt_usd_short(b_now), 100 * b_now / tot), float(t[-1]), "up")
         self._scanner_tracker("t_flow_s", s_now, "#ef5350",
-                              "Sell %s / %s<br>(%.0f%%)" % (self._fmt_usd_short(s_now), _wl, 100 * s_now / tot), float(t[-1]), "down")
+                              "%s (%.0f%%)" % (self._fmt_usd_short(s_now), 100 * s_now / tot), float(t[-1]), "down")
 
     @staticmethod
     def _fmt_usd_short(v: float) -> str:
