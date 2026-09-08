@@ -36,7 +36,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .heatmap import (HeatmapCache, TradeBubbleCache, decode_col, decode_grid,
                       decode_trades, neon_diverging_lut, percentile_levels)
 
-from . import bucket_state, config, region_state, vpin_adaptive
+from . import bucket_state, config, flow_pane, region_state, vpin_adaptive
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
 from .paper_account import PaperAccount
@@ -1579,6 +1579,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._bp_sweeps = deque(maxlen=60000)                   # SWEEPS: (ts_s, p_first, p_last, usd, side, n_levels) (72 h)
         self._bp_swp_pend = None                                # the live tape's last same-ms group, still growing
         self._bp_swp_polys = []; self._bp_swp_lbls = []          # sweep / burst DIAMONDS (pooled polygons); the amounts live in _bp_labels
+        self._flow = flow_pane.FlowStore(float(config.FLOW_BIN_SECS), float(config.FLOW_RETAIN_SECS))
+        self._flow_win = int(config.FLOW_WINDOW_SECS)   # rolling window of the Buy/Sell Flow lines (hamburger 'Flow')
+        self._flow_curves = None       # (buy PlotCurveItem, sell PlotCurveItem) -- created on first draw
+        self._flow_sig = None          # (store rev, view range, window, width) -> skip the redraw when nothing moved
+        self._flow_follow = True       # right edge pinned to 'now' until the user pans away
+        self._flow_resub_t = 0.0
         self._bp_labels = None                                   # BpLabelsItem: every bubble / diamond amount, one paint
         self._bp_lvl_memo = None                                 # (events id, thr, canvas) -> (levels, slevels) (2026-09-07)
         self._bp_sig = None
@@ -2055,6 +2061,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_bp_vp_min_usd(self._bpvp_min_saved)              # Big Player Gray VP threshold restore
         try:
             self.menu.set_ema_vp_pct(getattr(self, "_ema_vp_pct_saved", 50))
+            self.menu.set_flow_window(int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)))
         except Exception:
             pass
         self.menu.set_reward_strength(self._reward_strength)  # sync the reward-switch strength slider likewise
@@ -2304,6 +2311,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.bubbleMinUsdChanged.connect(lambda _v: self._save_ui_state())  # Candle-Bubbles MIN SIZE (repaint is per-frame)
         self.menu.bigPlayerMinUsdChanged.connect(self._on_bigplayer_min)          # Big Player threshold -> redraw + persist
         self.menu.bpVpMinUsdChanged.connect(self._on_bpvp_min)                    # Big Player Gray VP threshold -> redraw + persist
+        self.menu.flowWindowChanged.connect(self._on_flow_window)                # Buy/Sell Flow rolling window
         self.menu.emaVpPctChanged.connect(self._on_ema_vp_pct)                    # EMA Trend VP PLAYER slider -> redraw + persist
         self.menu.hm_contrast.changed.connect(self._hm_contrast_changed)         # Heatmap Liquidity-Contrast cutoffs (hamburger-hosted)
         self.menu.hm_contrast.reset_clicked.connect(self._hm_contrast_reset)     # Heatmap 'Reset -> auto'
@@ -2396,6 +2404,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._tape_exit()         # trades tape: unsubscribe the live batches, swap the plot back in
         if prev_mode == "dom" and mode != "dom":
             self._dom_exit()          # DOM ladder: unsubscribe, swap the plot back in
+        if prev_mode == "flow" and mode != "flow":
+            self._flow_exit()         # Buy/Sell Flow: unsubscribe, restore the bucket-index axis
         if mode not in ("dom", "trades") and getattr(self.worker, "lite", False) and not initial:
             # a LITE scanner start-window switched to a bucket-consuming mode: subscribe everything
             # now (deltas via the shared per-tf caches — the boot skipped these on purpose)
@@ -2449,6 +2459,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 cob_cb.blockSignals(True); cob_cb.setChecked(True); cob_cb.blockSignals(False)
         if mode == "trades":
             self._tape_enter()   # swap the tape in + subscribe the live batches (after the generic setup)
+        if mode == "flow":
+            self._flow_enter()   # time axis + the two curves + a one-shot history window (after the generic setup)
         if mode == "dom":
             self._dom_enter()    # swap the DOM ladder in + subscribe (book rides the always-on pulses)
         self._update_fp_pane_visibility()   # live-footprint pane rides Mode 10 only
@@ -10000,6 +10012,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "bub_min_usd": float(self.menu.bubble_min_usd()),         # Candle-Bubbles MIN SIZE (USD/level)
                 "bigplayer_min_usd": float(self.menu.big_player_min_usd()),   # Big Player single-print threshold
                 "bpvp_min_usd": float(self.menu.bp_vp_min_usd()),             # Big Player Gray VP MIN PLAYER threshold
+                "flow_win": int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)),   # Buy/Sell Flow window
                 "ema_vp_pct": int(self.menu.ema_vp_pct()),                    # EMA Trend VP PLAYER slider (P of its span)
             }
             # EVERY hamburger toggle (Sub-Widgets + Mode 10 Overlays), keyed by its menu key, so a reopened
@@ -10109,6 +10122,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._bub_min_saved = float(s.get("bub_min_usd", 0.0) or 0.0)     # Candle-Bubbles MIN SIZE, applied post-menu
         self._bp_min_saved = float(s.get("bigplayer_min_usd", 0.0) or 0.0)   # Big Player threshold (0 = config default)
         self._bpvp_min_saved = float(s.get("bpvp_min_usd", 0.0) or 0.0)       # Big Player Gray VP threshold
+        _fw = int(s.get("flow_win", config.FLOW_WINDOW_SECS) or config.FLOW_WINDOW_SECS)
+        if _fw in tuple(config.FLOW_WINDOW_CHOICES):
+            self._flow_win = _fw          # the combo is synced in __init__ (the menu does not exist yet here)
         self._ema_vp_pct_saved = int(s.get("ema_vp_pct", 50) or 50)             # EMA Trend VP PLAYER slider
 
     def _set_ob_ice(self, on: bool) -> None:
@@ -11281,6 +11297,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._bp_add_sweeps(ts, pr, qt, sd, floor, live=True)
                 if self._bp_live_t0 == 0.0:
                     self._bp_live_t0 = float(ts[0]) / 1000.0
+                self._flow.ingest(ts, pr, qt, sd)        # Buy/Sell Flow bins accrue on every mode (vectorised, ~20 us)
                 rows = [(float(ts[i]) / 1000.0, float(pr[i]), float(pr[i]) * float(qt[i]), int(sd[i]))
                         for i in range(len(ts)) if float(pr[i]) * float(qt[i]) >= floor]
                 if rows:
@@ -17255,6 +17272,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self.scanner_mode == "dom":
             self._scan_dom()             # DOM ladder + VP, its own widget — bypass the bucket pipeline
             return
+        if self.scanner_mode == "flow":
+            self._scan_flow()            # Buy/Sell Flow lines: own time axis on the main plot, own tape drain
+            return
         if self.menu.layer_state("m10_bigplayer"):
             try:
                 self._bp_feed()          # Big Player Levels: keep the tape feed armed + drained every frame
@@ -17356,6 +17376,131 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # Scanner mode "trades" — live Market Trades tape (Binance-style)
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Scanner mode "flow" — the Trades gauge as a CHART (user 2026-09-08)
+    # ------------------------------------------------------------------
+    def _flow_enter(self) -> None:
+        """Enter Flow mode: chronological x-axis, reveal the 'Flow' dropdown, arm the live batches and pull ONE
+        history window so the lines open with context. The store keeps accumulating while other modes are up
+        (see _bp_feed), so re-entry is usually instant."""
+        self.drawer.cancel()
+        self.axis_bottom.set_scanner_active(False)        # x = unix seconds -> real clock labels
+        self.axis_bottom.clear_time_candle_map()
+        if getattr(self.menu, "flow_sec", None) is not None:
+            self.menu.flow_sec.setVisible(True)
+        self._flow_sig = None
+        self._flow_follow = True
+        self._flow_last_set = None
+        self._flow_ytop = 0.0
+        self._flow_conn_was = bool(self.worker.connected)
+        self._flow_subscribe(backfill=True)
+        now = time.time()
+        span = float(config.FLOW_BACKFILL_SECS)
+        self.vb.setXRange(now - span, now, padding=0.0)
+        self.vb.setYRange(0.0, 1.0, padding=0.0)
+
+    def _flow_exit(self) -> None:
+        """Leave Flow mode: stop the live push and drop the curve handles (clear_scanner_canvas removes the items).
+        The BINS are kept — they are the history, and they are cheap (6 h = 350 KB)."""
+        try:
+            self.worker.stop_depth_window()
+        except Exception:
+            pass
+        if getattr(self.menu, "flow_sec", None) is not None:
+            self.menu.flow_sec.setVisible(False)
+        self._flow_curves = None
+        self._flow_sig = None
+        self.axis_bottom.set_scanner_active(True)
+
+    def _flow_subscribe(self, backfill: bool) -> None:
+        """(Re-)arm the live trade batches (same degenerate depth_window the tape uses) and optionally pull the
+        history window. Re-sent every 10 s because the daemon's subscription is per-CONNECTION."""
+        t1 = int(time.time() * 1000)
+        self.worker.request_depth_window(t1 - 1000, t1, 1, 0.0, 1e9, 1)
+        if backfill:
+            self.worker.request_trades_window(t1 - int(config.FLOW_BACKFILL_SECS) * 1000, t1, 0.0, 1e9)
+        self._flow_resub_t = time.time()
+
+    def _on_flow_window(self, secs: int) -> None:
+        """Hamburger 'Flow' -> rolling window changed: re-key the picture and persist."""
+        self._flow_win = int(secs)
+        self._flow_sig = None
+        self._save_ui_state()
+
+    def _scan_flow(self) -> None:
+        """Per-frame: drain the tape into the bin store, then redraw ONLY when something moved.
+
+        Cost per idle frame is one signature comparison; a data frame is one rolling sum over the DRAWN range
+        (decimated to the pixel budget) plus two setData calls — no per-point items, no tape rescan."""
+        conn = bool(self.worker.connected)
+        if conn and not getattr(self, "_flow_conn_was", True):
+            self._flow_subscribe(backfill=True)            # reconnect: re-arm + refill the gap
+        self._flow_conn_was = conn
+        _tv, tws, tbatches = self.worker.trades_state()
+        for tbp in tbatches:
+            self._flow.ingest(*decode_trades(tbp.ts_b64, tbp.price_b64, tbp.qty_b64, tbp.side_b64))
+        for tw in (tws or ()):
+            self._flow.ingest(*decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64))
+        now = time.time()
+        if now - self._flow_resub_t > 10.0:
+            self._flow_subscribe(backfill=False)
+        self._flow_draw(now)
+
+    def _flow_draw(self, now: float) -> None:
+        """The two curves. Follows the live edge until the user pans away; y auto-fits from 0 with a dead-band so it
+        never wobbles frame to frame."""
+        (vx0, vx1), _ = self.vb.viewRange()
+        last_set = getattr(self, "_flow_last_set", None)
+        if last_set is not None and (abs(vx0 - last_set[0]) > 1e-6 or abs(vx1 - last_set[1]) > 1e-6):
+            self._flow_follow = (now - vx1) < 3.0          # the user moved the view; re-arm only at the live edge
+        if self._flow_follow:
+            span = max(30.0, vx1 - vx0)
+            vx0, vx1 = now - span, now
+        width = max(200, int(self.plot.width()) or 1000)
+        max_pts = int(min(config.FLOW_MAX_POINTS, 2 * width))
+        sig = (self._flow.rev, round(vx0, 2), round(vx1, 2), int(self._flow_win), max_pts)
+        if sig == self._flow_sig:
+            return                                          # nothing moved -> the cheapest possible frame
+        self._flow_sig = sig
+        if self._flow_follow:
+            self.vb.setXRange(vx0, vx1, padding=0.0)
+            self._flow_last_set = (vx0, vx1)
+        t, buy, sell = self._flow.series(vx0, vx1, float(self._flow_win), max_pts)
+        if self._flow_curves is None:
+            _bp = pg.mkPen("#26a69a", width=1.6); _bp.setCosmetic(True)
+            _sp = pg.mkPen("#ef5350", width=1.6); _sp.setCosmetic(True)
+            buy_c = self._add_scanner_item(pg.PlotCurveItem(pen=_bp, antialias=False))
+            sell_c = self._add_scanner_item(pg.PlotCurveItem(pen=_sp, antialias=False))
+            buy_c.setZValue(6); sell_c.setZValue(5)
+            self._flow_curves = (buy_c, sell_c)
+        buy_c, sell_c = self._flow_curves
+        buy_c.setData(t, buy); sell_c.setData(t, sell)
+        if len(t) == 0:
+            return
+        top = float(max(buy.max(), sell.max()))
+        cur = getattr(self, "_flow_ytop", 0.0)
+        if top > 0 and (top > cur * 0.98 or top < cur * 0.55):   # dead-band: only re-fit on a real change
+            self._flow_ytop = top * 1.18
+            self.vb.setYRange(0.0, self._flow_ytop, padding=0.0)
+        b_now = float(buy[-1]); s_now = float(sell[-1]); tot = max(1e-9, b_now + s_now)
+        _u = self._flow_win
+        _wl = ("%ds" % _u) if _u < 60 else ("%dm" % (_u // 60))
+        self._scanner_tracker("t_flow_b", b_now, "#26a69a",
+                              "Buy %s / %s<br>(%.0f%%)" % (self._fmt_usd_short(b_now), _wl, 100 * b_now / tot), float(t[-1]), "up")
+        self._scanner_tracker("t_flow_s", s_now, "#ef5350",
+                              "Sell %s / %s<br>(%.0f%%)" % (self._fmt_usd_short(s_now), _wl, 100 * s_now / tot), float(t[-1]), "down")
+
+    @staticmethod
+    def _fmt_usd_short(v: float) -> str:
+        v = float(v)
+        if v >= 1e9:
+            return "$%.2fB" % (v / 1e9)
+        if v >= 1e6:
+            return "$%.2fM" % (v / 1e6)
+        if v >= 1e3:
+            return "$%.0fK" % (v / 1e3)
+        return "$%.0f" % v
+
     def _tape_enter(self) -> None:
         """Enter trades mode: swap the tape widget in for the plot and arm the live feed. The live trade
         batches ride the daemon's existing heatmap subscription (client.heatmap), armed here with a

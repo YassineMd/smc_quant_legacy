@@ -163,6 +163,7 @@ SCANNER_MODES = [
     "bucket_canvas",   # Mode 10 — the only candle surface + default on open (A5)
     "depth_heatmap",   # Phase 2b — Bookmap-style resting-liquidity heatmap (own canvas, scanner-gated); 2nd in the list
     "trades",          # Binance-style live Market Trades tape (time/price/amount USD + MIN SIZE filter); own widget
+    "flow",            # the tape's buy/sell gauge as a CHART: two $-per-window lines on a time axis (2026-09-08)
     "dom",             # DeepChart-style DOM ladder + executed-volume profile (no trading sim); own widget
     "open_pos",
     "close_pos",
@@ -187,6 +188,7 @@ SCANNER_LABELS = {
     "bucket_canvas": "Bucket Candlestick Canvas",
     "depth_heatmap": "Heatmap",
     "trades": "Trades",
+    "flow": "Buy/Sell Flow ($)",
     "dom": "DOM",
 }
 
@@ -288,6 +290,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     bubbleMinUsdChanged = QtCore.Signal(float)       # Candle-Bubbles MIN SIZE filter (USD/level; 0 = show all)
     bigPlayerMinUsdChanged = QtCore.Signal(float)    # Big Player Levels: single-print USD threshold
     bpVpMinUsdChanged = QtCore.Signal(float)
+    flowWindowChanged = QtCore.Signal(int)   # Buy/Sell Flow: rolling window in seconds (2026-09-08)
     emaVpPctChanged = QtCore.Signal(int)   # EMA Trend VP 'PLAYER' slider: P of the span's own threshold (2026-09-07)         # Big Player Gray VP: MIN PLAYER (USD per player) threshold
     keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
     candleModeChanged = QtCore.Signal(int)   # candle render mode 0..5 (also cycled by 'W')
@@ -462,6 +465,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             lambda _i: self.scannerChanged.emit(self.scanner_combo.currentData()))
         _chart.addWidget(self.scanner_combo)
         self._build_heatmap_section(_chart)                # 'Heatmap' dropdown (contrast + bubble vol) — Heatmap-mode only
+        self._build_flow_section(_chart)                   # 'Flow' dropdown (rolling window) — Flow-mode only
 
         # --- Chart Style (user 2026-09-06): "Simple BW" = white canvas + black candles (bearish = black fill,
         #     bullish = hollow; black borders + wicks). OFF = the dark scanner theme + flow-coloured candles.
@@ -1512,6 +1516,38 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             cb.setChecked(k in valid)
             cb.blockSignals(False)
         self._sw_refresh()
+
+    def _build_flow_section(self, root) -> None:
+        """The 'Flow' dropdown: the rolling window of the Buy/Sell Flow lines (each point = the $ traded in the window
+        ENDING there; 60 s == the tablet's Trades gauge). Hidden unless the Flow scanner mode is active."""
+        self.flow_sec = CollapsibleSection("Flow", expanded=True)
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w); lay.setContentsMargins(2, 1, 8, 5); lay.setSpacing(2)
+        lab = QtWidgets.QLabel("Rolling window ($ per window)")
+        lab.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:10px;")
+        lay.addWidget(lab)
+        self.flow_combo = QtWidgets.QComboBox()
+        for sec in config.FLOW_WINDOW_CHOICES:
+            self.flow_combo.addItem(("%d s" % sec) if sec < 60 else ("%d min" % (sec // 60)) if sec % 60 == 0 else "%d s" % sec, int(sec))
+        self.flow_combo.setCurrentIndex(list(config.FLOW_WINDOW_CHOICES).index(int(config.FLOW_WINDOW_SECS)))
+        self.flow_combo.setToolTip("Each point on the two lines = the taker $ traded in the window ending there.\n"
+                                   "60 s reproduces the tablet's Trades gauge; a longer window is smoother/slower.")
+        self.flow_combo.currentIndexChanged.connect(lambda _i: self.flowWindowChanged.emit(int(self.flow_combo.currentData())))
+        lay.addWidget(self.flow_combo)
+        self.flow_sec.addWidget(w)
+        root.addWidget(self.flow_sec)
+        self.flow_sec.setVisible(False)                  # shown only in Flow mode (driven by the terminal)
+
+    def set_flow_window(self, secs: int) -> None:
+        """Session-restore of the window (no re-emit)."""
+        try:
+            i = list(config.FLOW_WINDOW_CHOICES).index(int(secs))
+        except ValueError:
+            return
+        self.flow_combo.blockSignals(True); self.flow_combo.setCurrentIndex(i); self.flow_combo.blockSignals(False)
+
+    def flow_window(self) -> int:
+        return int(self.flow_combo.currentData() or config.FLOW_WINDOW_SECS)
 
     def _build_heatmap_section(self, root) -> None:
         """The 'Heatmap' dropdown: a CollapsibleSection holding the Liquidity-Contrast cutoff sliders (moved off the

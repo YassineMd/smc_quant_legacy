@@ -171,6 +171,16 @@ DEPTH_RETENTION_HOURS = 72      # HARD time-based prune (governs depth_deltas + 
                                 # so the Pull detector has real forward depth+tape history to test against.
                                 # Disk: depth.db ~101MB@6h -> ~1.2GB@72h projected (linear); / has 5.1GB free.
 DEPTH_BUFFER_CAP = 200000       # max buffered records per stream (drop-oldest) so a stalled write can't grow RAM
+# --- 'flow' scanner mode (user 2026-09-08): the tablet's Trades gauge as a chart -- taker buy $ / sell $ over time.
+# Trades are accumulated ONCE into FLOW_BIN_SECS bins (app/flow_pane.FlowStore); every frame reads a rolling sum over
+# those bins, so the per-frame cost is bounded by the DRAWN range, never by the tape.
+FLOW_BIN_SECS = 1.0             # accumulation bin (the x resolution of the two lines)
+FLOW_RETAIN_SECS = 21600        # 6 h of bins kept in RAM (2 x 21600 float64 = 350 KB)
+FLOW_WINDOW_SECS = 60           # default rolling window = the tablet gauge's 60 s
+FLOW_WINDOW_CHOICES = (10, 30, 60, 300)
+FLOW_BACKFILL_SECS = 3600       # history requested on entry (one trades_window, same shape as the Trades tape's)
+FLOW_MAX_POINTS = 3000          # decimation ceiling per curve (a 1920-px chart can't resolve more)
+
 TAPE_BACKFILL_SECS = 300        # Trades scanner mode: history window requested on entry (raw aggTrades from
                                 # trade_tape; ~5 min fills the table instantly without a heavy tunnel transfer)
 # Big Player Levels overlay (m10_bigplayer, user 2026-09-04): a SINGLE executed print >= BIGPLAYER_MIN_USD draws a
