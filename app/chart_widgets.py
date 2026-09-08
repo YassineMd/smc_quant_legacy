@@ -214,12 +214,34 @@ class LocalTimeAxis(pg.AxisItem):
         return out
 
 
+def fmt_money_tick(v: float) -> str:
+    """Compact money tick: 100k / 200k / 1M / 1.5M / 1.2B (user 2026-09-08, Buy/Sell Flow y-axis)."""
+    a = abs(float(v))
+    if a < 1e-9:
+        return "0"
+    for div, suf in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
+        if a >= div:
+            q = float(v) / div
+            return ("%.2f" % q).rstrip("0").rstrip(".") + suf
+    return "%.0f" % float(v)
+
+
 class PriceAxis(pg.AxisItem):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setTickFont(_MONO)
+        self._money = False        # MONEY mode: ticks are $ magnitudes, not prices (Buy/Sell Flow)
+
+    def set_money(self, on: bool) -> None:
+        on = bool(on)
+        if self._money != on:
+            self._money = on
+            self.picture = None
+            self.update()
 
     def tickStrings(self, values, scale, spacing):
+        if self._money:
+            return [fmt_money_tick(v) for v in values]
         return [f"{v:.{config.PRICE_DECIMALS}f}" for v in values]
 
 

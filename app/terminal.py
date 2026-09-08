@@ -1585,6 +1585,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_sig = None          # (store rev, view range, window, width) -> skip the redraw when nothing moved
         self._flow_follow = True       # right edge pinned to 'now' until the user pans away
         self._flow_resub_t = 0.0
+        self._x_bars = None            # the bars behind the current x indices (crosshair TIME badge)
         self._bp_labels = None                                   # BpLabelsItem: every bubble / diamond amount, one paint
         self._bp_lvl_memo = None                                 # (events id, thr, canvas) -> (levels, slevels) (2026-09-07)
         self._bp_sig = None
@@ -1797,7 +1798,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # LocalTimeAxis). Anchored bottom-centre so it sits just above the time axis at the cursor's X.
         self.time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
         self.time_tag.textItem.setFont(_ptf)
-        self.time_tag.setZValue(16)
+        self.time_tag.setZValue(61)   # same layer as the price badge (user 2026-09-08: "same design")
         self.plot.addItem(self.time_tag, ignoreBounds=True)
         self.time_tag.hide()
         # Heatmap RESTING-liquidity readout: SHIFT+hover a heatmap cell -> its raw resting size, BLACK text on a
@@ -3986,6 +3987,39 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.chart_slider.setValue(target_default)
         self._depth_needs_calibration = False
 
+    _XTAG_FMT = "%a %d, %Y - %H:%M"      # user 2026-09-08: "Tue 25, 2026 - hh:mm"
+
+    def _x_time_label(self, x: float):
+        """The crosshair's X position as a clock label, or None when this mode has no time on X.
+
+        Flow / Heatmap draw on epoch seconds; every bucket mode draws on an INDEX, so x maps through the bars the
+        last frame drew (`_x_bars`) -- start_time of the hovered bar, clamped to the ends."""
+        mode = self.scanner_mode
+        if mode == "depth_heatmap":
+            try:
+                return datetime.fromtimestamp(float(x)).strftime("%H:%M:%S")   # seconds matter at heatmap zoom
+            except (ValueError, OSError, OverflowError):
+                return None
+        if mode == "flow":
+            try:
+                return datetime.fromtimestamp(float(x)).strftime(self._XTAG_FMT)
+            except (ValueError, OSError, OverflowError):
+                return None
+        bars = getattr(self, "_x_bars", None)
+        if not bars:
+            return None
+        i = int(round(float(x)))
+        if i < 0 or i >= len(bars):
+            return None                                  # off the drawn series -> no stale timestamp
+        b = bars[i]
+        t = float(b.get("start_time", 0.0) or 0.0)
+        if t <= 0:
+            return None
+        try:
+            return datetime.fromtimestamp(t).strftime(self._XTAG_FMT)
+        except (ValueError, OSError, OverflowError):
+            return None
+
     def _on_mouse_move(self, evt) -> None:
         pos = evt[0]
         if not self.plot.sceneBoundingRect().contains(pos):
@@ -4035,15 +4069,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._lbox_hover(pt)                              # ladder box edge -> highlight its POC / LVN line
         except Exception:
             pass
-        # X-axis time readout at the crosshair (heatmap mode only; x = epoch seconds)
-        if self.scanner_mode == "depth_heatmap":
-            try:
-                lbl = datetime.fromtimestamp(pt.x()).strftime("%H:%M:%S")
-            except (ValueError, OSError, OverflowError):
-                lbl = ""
-            self.time_tag.setText(lbl)
+        # X-axis TIME badge at the crosshair — same design as the right-axis price badge (user 2026-09-08).
+        # Heatmap/Flow read epoch seconds straight off X; the bucket modes map the index through the drawn bars.
+        _xlbl = self._x_time_label(pt.x())
+        if _xlbl:
+            self.time_tag.setText(_xlbl)
             self.time_tag.setPos(pt.x(), self.vb.viewRange()[1][0])   # bottom edge of the view, at cursor X
             self.time_tag.show()
+        else:
+            self.time_tag.hide()
+        if self.scanner_mode == "depth_heatmap":
             if self.cob.isVisible():
                 self.cob.mark_price(pt.y())     # mirror the crosshair price into the DOM ladder (size readout)
             # SHIFT+hover -> resting-liquidity readout at the hovered cell (a plain hover stays clean). Black
@@ -4062,7 +4097,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             else:
                 self.hm_vol_tip.hide()
         else:
-            self.time_tag.hide()
             self.hm_vol_tip.hide()
 
         # §7.4 — yellow follow-spot tracks the cursor only while a drawing tool is
@@ -17314,6 +17348,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not filtered:
             # nothing past the Zero Point yet — leave a clean empty canvas
             return
+        self._x_bars = filtered      # index -> bar, for the crosshair TIME badge (a reference; no per-frame cost)
         renderer = getattr(self, f"_scan_{self.scanner_mode}", None)
         if callable(renderer):
             renderer(filtered, x_indices)
@@ -17386,6 +17421,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.drawer.cancel()
         self.axis_bottom.set_scanner_active(False)        # x = unix seconds -> real clock labels
         self.axis_bottom.clear_time_candle_map()
+        _ax = self.plot.getAxis("right")                  # y ticks are DOLLARS here (100k / 1M), not prices
+        if hasattr(_ax, "set_money"):
+            _ax.set_money(True)
         if getattr(self.menu, "flow_sec", None) is not None:
             self.menu.flow_sec.setVisible(True)
         self._flow_sig = None
@@ -17410,6 +17448,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.flow_sec.setVisible(False)
         self._flow_curves = None
         self._flow_sig = None
+        _ax = self.plot.getAxis("right")
+        if hasattr(_ax, "set_money"):
+            _ax.set_money(False)                          # back to price ticks for every other mode
         self.axis_bottom.set_scanner_active(True)
 
     def _flow_subscribe(self, backfill: bool) -> None:
@@ -17452,7 +17493,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (vx0, vx1), _ = self.vb.viewRange()
         last_set = getattr(self, "_flow_last_set", None)
         if last_set is not None and (abs(vx0 - last_set[0]) > 1e-6 or abs(vx1 - last_set[1]) > 1e-6):
-            self._flow_follow = (now - vx1) < 3.0          # the user moved the view; re-arm only at the live edge
+            # the user moved the view. Re-arm follow ONLY when the right edge is back AT the live edge -- panning
+            # into the empty space to the RIGHT of the lines must STAY there (user 2026-09-08: "I should be able to
+            # pan all the way to the right"), and `now - vx1` is NEGATIVE there, which used to re-arm and snap back.
+            self._flow_follow = -1.0 <= (now - vx1) <= 3.0
         if self._flow_follow:
             span = max(30.0, vx1 - vx0)
             vx0, vx1 = now - span, now
