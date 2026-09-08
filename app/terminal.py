@@ -9366,8 +9366,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                                    key=lambda _j6: -_vols[_j6])[:2])
                         else:
                             _lvns = []; _pocs_out = []; _rank23 = ()
-                        self._ema_vp_cache = (_frz, _cen, _vols, _hb, _sp0, _sp1, _valp, _vahp, _lvns, _pocs_out, _rank23)
-                    _, _cen, _vols, _hb, _sp0c, _sp1c, _valp, _vahp, _lvns, _pocs_out, _rank23 = self._ema_vp_cache
+                        # the span's BARS and time stamps are frozen WITH the picture: _sp0/_sp1 are ANALYSIS-space
+                        # indices, valid only on this rebuild frame -- on a cheap frame `_ana` is the bare window,
+                        # and indexing it with them raised IndexError, which hid the whole EMA family (2026-09-08)
+                        _span_bars = list(_ana[_sp0:_sp1 + 1])
+                        _ts0v = float(_ana[_sp0].get("start_time", 0.0) or 0.0)
+                        _ts1v = float(_ana[_sp1].get("end_time", 0.0) or 0.0) or time.time()
+                        self._ema_vp_cache = (_frz, _cen, _vols, _hb, _sp0, _sp1, _valp, _vahp, _lvns, _pocs_out, _rank23,
+                                              _span_bars, _ts0v, _ts1v)
+                    (_, _cen, _vols, _hb, _sp0c, _sp1c, _valp, _vahp, _lvns, _pocs_out, _rank23,
+                     _span_bars, _ts0v, _ts1v) = self._ema_vp_cache
                     _vmax = float(_vols.max()) if _cen is not None and len(_vols) else 0.0
                     if _cen is None or _vmax <= 0:
                         self._hide_ema_vp()
@@ -9382,7 +9390,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             self.plot.addItem(self._ema_vp_item, ignoreBounds=True)
                         # VOLUME PROFILE MODE (user 2026-09-07): the side profile follows the hamburger dropdown like
                         # the selection VP does; None = the native 40-bin picture (Gray VP / VP Zones / nothing to show)
-                        _modo = self._ema_vp_mode_opts(_ana, _sp0c, _sp1c, _frz, _vx1v, _mw6, _hb * 0.92)
+                        _modo = self._ema_vp_mode_opts(_ana, _sp0c, _sp1c, _frz, _vx1v, _mw6, _hb * 0.92,
+                                                       span=_span_bars, ts=(_ts0v, _ts1v))
                         _vmode = _modo[5] if _modo is not None else -1
                         _vkey = (id(_vols), round(_vx1v, 6), round(_mw6, 6), _vmode,
                                  id(self._ema_vp_rows_cache[1]) if _modo is not None else 0)
@@ -9416,8 +9425,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             self._ema_vp_tlbl.setFont(QtGui.QFont("Consolas", 8))
                             self._ema_vp_tlbl.setZValue(16)
                             self.plot.addItem(self._ema_vp_tlbl, ignoreBounds=True)
-                        _ts0 = float(_ana[_sp0c].get("start_time", 0.0) or 0.0)
-                        _ts1 = float(_ana[_sp1c].get("end_time", 0.0) or 0.0) or time.time()
+                        _ts0 = _ts0v; _ts1 = _ts1v                 # from the cache (see the rebuild above)
                         _tk7 = (int(_ts0), int(_ts1))
                         if getattr(self, "_ema_vp_tlbl_key", None) != _tk7:
                             self._ema_vp_tlbl.setText(self._ema_vp_span_text(_ts0, _ts1)); self._ema_vp_tlbl_key = _tk7
@@ -9441,7 +9449,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             _it6.setData([_vx1v - _mw6, _vx1v], [_pv6, _pv6])
                             _it6.setVisible(True)
 
-    def _ema_vp_mode_opts(self, ana, sp0, sp1, frz, vx1, mw, thick_native):
+    def _ema_vp_mode_opts(self, ana, sp0, sp1, frz, vx1, mw, thick_native, span=None, ts=None):
         """The EMA right-side Trend VP in the hamburger's 'Volume Profile Mode' (user 2026-09-07: "make the EMA right
         side volume profile sensitive to the chart > Volume profile mode"). Returns None when the NATIVE 40-bin
         renderer must be used (mode 10 = Gray VP is exactly that design, mode 8 = VP Zones is line-only, or the span
@@ -9450,7 +9458,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (max width `mw`), split modes (2/3/4/5) split at vx1 - mw (buys grow right to the edge, sells grow left).
         Rows = the span's per-price force rows (_sel_vp_hist, the selection VP's own aggregate); mode 11 = the
         big-player rows of the span's time range at the span's OWN P50 threshold (_bp_p50_usd of its events).
-        Cached per (span freeze key, mode)."""
+        Cached per (span freeze key, mode). `span` / `ts` = the span's bars and (start, end) frozen in _ema_vp_cache:
+        sp0/sp1 are analysis-space indices and `ana` is the bare window on a cheap frame (2026-09-08), so when they
+        are given the per-frame list is never indexed."""
         mode = int(self._vp_mode)
         if mode in (8, 10):
             self.menu.set_ema_vp_usd(None)
@@ -9460,18 +9470,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         cache = getattr(self, "_ema_vp_rows_cache", None)
         if cache is None or cache[0] != key:
             rows = []
+            bars = list(span) if span is not None else list(ana[sp0:sp1 + 1])
             try:
                 if mode == 11:
                     # (user 2026-09-07) the threshold is the P50 of the big-player events INSIDE the span the EMA VP
                     # looks at (the players at or above it carry half of that span's big-player $), not the slider
-                    t0 = float(ana[sp0].get("start_time", 0.0) or 0.0)
-                    t1 = float(ana[sp1].get("end_time", 0.0) or 0.0) or time.time()
-                    ev = self._bp_events(t0, t1, t1 + 1e-6, True)
+                    if ts is not None:
+                        t0, t1 = float(ts[0]), float(ts[1])
+                    else:
+                        t0 = float(bars[0].get("start_time", 0.0) or 0.0) if bars else 0.0
+                        t1 = (float(bars[-1].get("end_time", 0.0) or 0.0) or time.time()) if bars else 0.0
+                    ev = self._bp_events(t0, t1, t1 + 1e-6, True) if t1 > t0 > 0 else []
                     thr = self._bp_pct_usd(ev, pct / 100.0) if ev else 0.0
                     rows = self._bp_vp_rows(t0, t1, thr=thr) if ev else []
                     self._ema_vp_thr = thr
                 else:
-                    agg = self._sel_vp_hist(ana[sp0:sp1 + 1])
+                    agg = self._sel_vp_hist(bars) if bars else {}
                     rows = sorted((float(ps), a) for ps, a in agg.items())
             except Exception:
                 rows = []
