@@ -28,6 +28,7 @@ class FlowStore:
         self._sell = np.zeros(0, dtype=np.float64)
         self.rev = 0                           # bumped on every mutation -> the read memo key
         self._memo = None
+        self._bmemo = None
 
     # ---------------------------------------------------------------- state
     def __len__(self) -> int:
@@ -92,6 +93,7 @@ class FlowStore:
         np.add.at(self._sell, loc[~isbuy], usd[~isbuy])
         self.rev += 1
         self._memo = None
+        self._bmemo = None
         return int(loc.size)
 
     def reset(self) -> None:
@@ -100,6 +102,65 @@ class FlowStore:
         self._sell = np.zeros(0, dtype=np.float64)
         self.rev += 1
         self._memo = None
+        self._bmemo = None
+
+    # --------------------------------------------------------------- bursts
+    def bar_bursts(self, starts, ends, win_secs: float, cap: float = 50.0, floor_pct: float = 90.0):
+        """Per BAR, the strongest ONE-SIDED taker burst inside it (user 2026-09-08's Volume Burst badges).
+
+        The drawn span is cut into NON-OVERLAPPING windows of `win_secs`. For each window: dominant $ / other $.
+        A window counts as a burst only if its TOTAL $ is above the `floor_pct` percentile of every window on
+        screen -- i.e. the market was genuinely busy there, not merely one-sided in a lull. Each window is credited
+        to the bar its END falls in, and a bar takes the largest ratio credited to it.
+
+        Overlapping rolling windows are deliberately NOT used: a candle holds hundreds of them, and the maximum of
+        hundreds of correlated samples is extreme by construction (the first version of this badged every bar).
+
+        Returns (ratio, side) float64 / int8 arrays, one per bar: ratio 0.0 where nothing qualified, side 1 = buy,
+        0 = sell. Fully vectorised and memoized on (rev, bars, window, floor)."""
+        starts = np.asarray(starts, dtype=np.float64)
+        ends = np.asarray(ends, dtype=np.float64)
+        nb = len(starts)
+        if nb == 0 or self.empty():
+            return (np.zeros(nb), np.zeros(nb, dtype=np.int8))
+        key = ("bursts", self.rev, round(float(starts[0]), 3), round(float(ends[-1]), 3), nb,
+               round(float(win_secs), 3), round(float(cap), 3), round(float(floor_pct), 3))
+        memo = getattr(self, "_bmemo", None)
+        if memo is not None and memo[0] == key:
+            return memo[1]
+        ratio = np.zeros(nb); side = np.zeros(nb, dtype=np.int8)
+        out = (ratio, side)
+        n = len(self._buy)
+        wb = max(1, int(round(float(win_secs) / self.bin)))
+        i0 = int(np.clip(np.floor(starts[0] / self.bin) - self._base, 0, n))
+        i1 = int(np.clip(np.ceil(ends[-1] / self.bin) - self._base, 0, n))
+        nwin = (i1 - i0) // wb
+        if nwin < 1:
+            self._bmemo = (key, out)
+            return out
+        m = nwin * wb
+        b = self._buy[i0:i0 + m].reshape(nwin, wb).sum(axis=1)
+        s_ = self._sell[i0:i0 + m].reshape(nwin, wb).sum(axis=1)
+        tot = b + s_
+        dom = np.maximum(b, s_); oth = np.minimum(b, s_)
+        floor = float(np.percentile(tot, float(floor_pct))) if nwin > 1 else 0.0
+        r = np.where(tot >= floor, np.minimum(dom / np.maximum(oth, 1.0), float(cap)), 0.0)
+        is_buy = b >= s_
+        wend = (self._base + i0 + (np.arange(nwin) + 1) * wb) * self.bin      # each window's END time
+        bar_ix = np.searchsorted(starts, wend, side="right") - 1              # the bar that window ended in
+        good = (bar_ix >= 0) & (bar_ix < nb) & (r > 0)
+        good &= wend <= ends[np.clip(bar_ix, 0, nb - 1)]
+        if good.any():
+            gi = bar_ix[good]; gr = r[good]; gb = is_buy[good]
+            mb = np.zeros(nb); ms = np.zeros(nb)
+            np.maximum.at(mb, gi[gb], gr[gb])
+            np.maximum.at(ms, gi[~gb], gr[~gb])
+            take_buy = mb >= ms
+            ratio[:] = np.where(take_buy, mb, ms)
+            side[:] = take_buy.astype(np.int8)
+            side[ratio <= 0] = 0
+        self._bmemo = (key, out)
+        return out
 
     # ----------------------------------------------------------------- read
     def series(self, t0: float, t1: float, win_secs: float, max_pts: int = 4000):

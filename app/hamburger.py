@@ -107,6 +107,7 @@ _M10_LAYERS = [
 # "Indicator" — structure / zones / separators.
 _M10_INDICATORS = [
     ("m10_bigplayer", "Big Player Levels (single print ≥ $500K)", False, True),   # tape prints, NOT bubbles: level line + $ at right end
+    ("m10_burst", "Volume Burst (one side ≥ x2)", False, True),   # taker-flow burst inside a candle -> green ● above / red ● below with the multiple
     ("m10_crazywall", "Wall Absorption", False, True),   # ALL tf: opposite-side volume bubble absorbed+rejected at a wall; Crazy(✪ outlier) + Big(★ non-crazy) sub-tiers, green(support)/red(resistance)
     ("m10_engulf1m", "Absorption Candle indicator", False, True),   # ALL tf: absorption-tiered losanges (cyan/magenta engulf |A|>=2, blue/orange same-side pair, green/red engulf |A|>=1)
     ("m10_sr", "Support & Resistance", False, True),      # neon-blue support / neon-red resistance (pivot fractals)
@@ -290,6 +291,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     bubbleMinUsdChanged = QtCore.Signal(float)       # Candle-Bubbles MIN SIZE filter (USD/level; 0 = show all)
     bigPlayerMinUsdChanged = QtCore.Signal(float)    # Big Player Levels: single-print USD threshold
     bpVpMinUsdChanged = QtCore.Signal(float)
+    burstOptsChanged = QtCore.Signal(float, int)   # Volume Burst: (x multiple, window seconds) — 2026-09-08
     flowWindowChanged = QtCore.Signal(int)   # Buy/Sell Flow: rolling window in seconds (2026-09-08)
     emaVpPctChanged = QtCore.Signal(int)   # EMA Trend VP 'PLAYER' slider: P of the span's own threshold (2026-09-07)         # Big Player Gray VP: MIN PLAYER (USD per player) threshold
     keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
@@ -697,6 +699,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_wall_30m_subtoggle(sec)      # overlay the 30m absorption walls (pink/teal), 1m/5m/15m only
                 self._build_wall_hidecur_subtoggle(sec)  # hide current-tf walls -> higher-timeframe-only view
                 self._build_wall_sess_subtoggle(sec)     # only walls BORN in the current session (Tokyo/London/NY)
+            if key == "m10_burst":
+                self._build_burst_controls(sec)          # x multiple + window, directly under the Volume Burst toggle
             if key == "m10_crazywall":
                 self._build_wallabs_subtoggles(sec)      # Wall Absorption sub-tiers: Crazy (✪) / Big (★)
             if key == "m10_sr":
@@ -1118,6 +1122,46 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         cb.toggled.connect(lambda on, k="m10_absorblvl_sess": self.layerToggled.emit(k, on))
         self.layer_checks["m10_absorblvl_sess"] = cb
         section.addWidget(cb)
+
+    def _build_burst_controls(self, section) -> None:
+        """Volume Burst: the x multiple one side must reach over the rolling window. Both persist."""
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QHBoxLayout(w); lay.setContentsMargins(18, 1, 8, 4); lay.setSpacing(6)
+        _lbl = QtWidgets.QLabel("≥")
+        _lbl.setStyleSheet("color:#aeb4c0; background:transparent; font-family:Consolas; font-size:10px;")
+        lay.addWidget(_lbl)
+        self.burst_x_combo = QtWidgets.QComboBox()
+        for xm in config.BURST_X_CHOICES:
+            self.burst_x_combo.addItem(("x%g" % xm), float(xm))
+        self.burst_x_combo.setCurrentIndex(list(config.BURST_X_CHOICES).index(float(config.BURST_X)))
+        self.burst_x_combo.setToolTip("How far one side must outweigh the other inside the candle for a badge to print.")
+        lay.addWidget(self.burst_x_combo)
+        _lbl2 = QtWidgets.QLabel("over")
+        _lbl2.setStyleSheet("color:#aeb4c0; background:transparent; font-family:Consolas; font-size:10px;")
+        lay.addWidget(_lbl2)
+        self.burst_w_combo = QtWidgets.QComboBox()
+        for sec_ in config.BURST_WINDOW_CHOICES:
+            self.burst_w_combo.addItem("%ds" % sec_, int(sec_))
+        self.burst_w_combo.setCurrentIndex(list(config.BURST_WINDOW_CHOICES).index(int(config.BURST_WINDOW_SECS)))
+        self.burst_w_combo.setToolTip("The rolling window the two sides are compared over (60 s = the tablet's Trades gauge).")
+        lay.addWidget(self.burst_w_combo)
+        lay.addStretch(1)
+        for cb in (self.burst_x_combo, self.burst_w_combo):
+            cb.currentIndexChanged.connect(lambda _i: self.burstOptsChanged.emit(self.burst_x(), self.burst_window()))
+        section.addWidget(w)
+
+    def burst_x(self) -> float:
+        return float(self.burst_x_combo.currentData() or config.BURST_X)
+
+    def burst_window(self) -> int:
+        return int(self.burst_w_combo.currentData() or config.BURST_WINDOW_SECS)
+
+    def set_burst_opts(self, xm: float, win: int) -> None:
+        """Session-restore (no re-emit)."""
+        for combo, choices, val in ((self.burst_x_combo, [float(v) for v in config.BURST_X_CHOICES], float(xm)),
+                                    (self.burst_w_combo, [int(v) for v in config.BURST_WINDOW_CHOICES], int(win))):
+            if val in choices:
+                combo.blockSignals(True); combo.setCurrentIndex(choices.index(val)); combo.blockSignals(False)
 
     def _build_bigplayer_sweeps_subtoggle(self, section) -> None:
         """'Sweeps' under Big Player Levels (user 2026-09-06): one taker order that ate through >= 2 book levels

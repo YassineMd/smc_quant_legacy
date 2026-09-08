@@ -175,11 +175,23 @@ DEPTH_BUFFER_CAP = 200000       # max buffered records per stream (drop-oldest) 
 # Trades are accumulated ONCE into FLOW_BIN_SECS bins (app/flow_pane.FlowStore); every frame reads a rolling sum over
 # those bins, so the per-frame cost is bounded by the DRAWN range, never by the tape.
 FLOW_BIN_SECS = 1.0             # accumulation bin (the x resolution of the two lines)
-FLOW_RETAIN_SECS = 21600        # 6 h of bins kept in RAM (2 x 21600 float64 = 350 KB)
+FLOW_RETAIN_SECS = 86400        # 24 h of bins kept in RAM (2 x 86400 float64 = 1.4 MB) -- the Volume Burst
+#                                 badges read the same bins on the candle canvas, so they want a day of history
 FLOW_WINDOW_SECS = 60           # default rolling window = the tablet gauge's 60 s
 FLOW_WINDOW_CHOICES = (10, 30, 60, 300)
 FLOW_BACKFILL_SECS = 3600       # history requested on entry (one trades_window, same shape as the Trades tape's)
 FLOW_MAX_POINTS = 3000          # decimation ceiling per curve (a 1920-px chart can't resolve more)
+
+# --- Volume Burst badges (m10_burst, user 2026-09-08): one side >= BURST_X the other over BURST_WINDOW_SECS,
+# read off the SAME flow bins; the badge shows the strongest multiple reached inside each candle.
+BURST_X = 2.0                   # default "at least x2"
+BURST_X_CHOICES = (1.5, 2.0, 3.0, 5.0)
+BURST_WINDOW_SECS = 60          # default rolling window (== the tablet gauge)
+BURST_WINDOW_CHOICES = (30, 60, 120)   # 10 s is degenerate on this instrument: one side is often literally $0
+BURST_FLOOR_PCT = 90.0          # a burst window must be busier than this percentile of the windows on screen
+#                                 (self-scaling: no absolute $ knob, and the badge marks the standouts, not every bar)
+BURST_CAP = 50.0                # displayed multiple ceiling (a near-empty other side would read as infinity)
+BURST_BACKFILL_SECS = 21600     # history pulled when the layer is switched ON (one window, == the BP chunk size)
 
 TAPE_BACKFILL_SECS = 300        # Trades scanner mode: history window requested on entry (raw aggTrades from
                                 # trade_tape; ~5 min fills the table instantly without a heavy tunnel transfer)

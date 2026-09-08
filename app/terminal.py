@@ -959,6 +959,65 @@ class BpLabelsItem(pg.GraphicsObject):
         p.restore()
 
 
+class BurstBadgesItem(pg.GraphicsObject):
+    """Every Volume-Burst badge in ONE graphics item (user 2026-09-08): a pixel-sized pill (green above the high /
+    red below the low) carrying the strongest one-sided multiple reached inside that candle. One paint pass, no
+    per-badge scene items -- the same design as BpLabelsItem, for the same reason (a TextItem per mark cost ~40 ms
+    per zoom step). The item -> device transform comes from the PAINTER: pyqtgraph's deviceTransform() segfaults
+    when called inside paint() on this binding (it bricked the terminal on 2026-09-07)."""
+
+    _BUY = (40, 230, 120)
+    _SELL = (240, 70, 90)
+
+    def __init__(self):
+        super().__init__()
+        self._items = []                 # [(x, y, text, is_buy)]
+        self._font = QtGui.QFont("Consolas", 8)
+        self._font.setBold(True)
+        self.setZValue(33)
+
+    def badges(self):
+        return list(self._items)
+
+    def setBadges(self, items) -> None:
+        self._items = [(float(x), float(y), str(t), bool(b)) for x, y, t, b in items]
+        self.update()
+
+    def boundingRect(self):
+        vb = self.getViewBox()
+        try:
+            return QtCore.QRectF(vb.viewRect()) if vb is not None else QtCore.QRectF()
+        except Exception:
+            return QtCore.QRectF()
+
+    def paint(self, p, *args):
+        if not self._items:
+            return
+        tr = QtGui.QTransform(p.transform())
+        vp = p.viewport()
+        wdev = float(vp.width()); hdev = float(vp.height())
+        p.save()
+        p.resetTransform()
+        p.setFont(self._font)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        fm = QtGui.QFontMetrics(self._font)
+        rh = 15.0
+        for x, y, txt, is_buy in self._items:
+            pt = tr.map(QtCore.QPointF(x, y))
+            if pt.x() < -40 or pt.x() > wdev + 40 or pt.y() < -60 or pt.y() > hdev + 60:
+                continue                                  # off the viewport
+            rw = max(rh, float(fm.horizontalAdvance(txt)) + 9.0)
+            cy = (pt.y() - 9.0 - rh / 2.0) if is_buy else (pt.y() + 9.0 + rh / 2.0)
+            rect = QtCore.QRectF(pt.x() - rw / 2.0, cy - rh / 2.0, rw, rh)
+            rgb = self._BUY if is_buy else self._SELL
+            p.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 205))
+            p.setPen(pg.mkPen(rgb[0], rgb[1], rgb[2], 255, width=1.4))
+            p.drawRoundedRect(rect, rh / 2.0, rh / 2.0)
+            p.setPen(pg.mkPen(12, 14, 18, 255))
+            p.drawText(rect, int(QtCore.Qt.AlignCenter), txt)
+        p.restore()
+
+
 class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def __init__(self, tf: str = config.DEFAULT_TF, lite_worker: bool = False):
         super().__init__()
@@ -1586,6 +1645,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_follow = True       # right edge pinned to 'now' until the user pans away
         self._flow_resub_t = 0.0
         self._x_bars = None            # the bars behind the current x indices (crosshair TIME badge)
+        self._burst_item = None        # BurstBadgesItem: every Volume-Burst badge, one paint pass
+        self._burst_sig = None
+        self._burst_rev = None
+        self._burst_t = 0.0
+        self._burst_x = float(config.BURST_X)
+        self._burst_win = int(config.BURST_WINDOW_SECS)
         self._bp_labels = None                                   # BpLabelsItem: every bubble / diamond amount, one paint
         self._bp_lvl_memo = None                                 # (events id, thr, canvas) -> (levels, slevels) (2026-09-07)
         self._bp_sig = None
@@ -2063,6 +2128,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             self.menu.set_ema_vp_pct(getattr(self, "_ema_vp_pct_saved", 50))
             self.menu.set_flow_window(int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)))
+            self.menu.set_burst_opts(float(getattr(self, "_burst_x", config.BURST_X)),
+                                     int(getattr(self, "_burst_win", config.BURST_WINDOW_SECS)))
         except Exception:
             pass
         self.menu.set_reward_strength(self._reward_strength)  # sync the reward-switch strength slider likewise
@@ -2312,6 +2379,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.bubbleMinUsdChanged.connect(lambda _v: self._save_ui_state())  # Candle-Bubbles MIN SIZE (repaint is per-frame)
         self.menu.bigPlayerMinUsdChanged.connect(self._on_bigplayer_min)          # Big Player threshold -> redraw + persist
         self.menu.bpVpMinUsdChanged.connect(self._on_bpvp_min)                    # Big Player Gray VP threshold -> redraw + persist
+        self.menu.burstOptsChanged.connect(self._on_burst_opts)                  # Volume Burst: x multiple / window
         self.menu.flowWindowChanged.connect(self._on_flow_window)                # Buy/Sell Flow rolling window
         self.menu.emaVpPctChanged.connect(self._on_ema_vp_pct)                    # EMA Trend VP PLAYER slider -> redraw + persist
         self.menu.hm_contrast.changed.connect(self._hm_contrast_changed)         # Heatmap Liquidity-Contrast cutoffs (hamburger-hosted)
@@ -2588,6 +2656,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # removed with the time chart, so every layer key is an m10_ key -> the overlay dispatch.
         if key.startswith("m10_"):
             self._set_scanner_overlay(key, on)
+            if key == "m10_burst" and on:
+                try:                     # one window of tape so the badges cover history, not just the live edge
+                    self._flow_conn_was2 = False   # ... and let _flow_pump re-issue it once the socket is really up
+                    if self.worker.connected:
+                        self._flow_subscribe(backfill=False)
+                        self._flow_backfill(float(config.BURST_BACKFILL_SECS))
+                    self._burst_sig = None
+                except Exception:
+                    pass
         elif key.startswith("st_"):
             # Unified stat-row toggle -> re-render BOTH readouts. The stats box refreshes via the parked-hover path;
             # the footprint side pane is sig-cached, so force a full scanner repaint (reset both sigs) to re-run
@@ -10047,6 +10124,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "bigplayer_min_usd": float(self.menu.big_player_min_usd()),   # Big Player single-print threshold
                 "bpvp_min_usd": float(self.menu.bp_vp_min_usd()),             # Big Player Gray VP MIN PLAYER threshold
                 "flow_win": int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)),   # Buy/Sell Flow window
+                "burst_x": float(getattr(self, "_burst_x", config.BURST_X)),            # Volume Burst multiple
+                "burst_win": int(getattr(self, "_burst_win", config.BURST_WINDOW_SECS)),
                 "ema_vp_pct": int(self.menu.ema_vp_pct()),                    # EMA Trend VP PLAYER slider (P of its span)
             }
             # EVERY hamburger toggle (Sub-Widgets + Mode 10 Overlays), keyed by its menu key, so a reopened
@@ -10159,6 +10238,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _fw = int(s.get("flow_win", config.FLOW_WINDOW_SECS) or config.FLOW_WINDOW_SECS)
         if _fw in tuple(config.FLOW_WINDOW_CHOICES):
             self._flow_win = _fw          # the combo is synced in __init__ (the menu does not exist yet here)
+        _bx = float(s.get("burst_x", config.BURST_X) or config.BURST_X)
+        _bw2 = int(s.get("burst_win", config.BURST_WINDOW_SECS) or config.BURST_WINDOW_SECS)
+        if _bx in tuple(float(v) for v in config.BURST_X_CHOICES):
+            self._burst_x = _bx
+        if _bw2 in tuple(int(v) for v in config.BURST_WINDOW_CHOICES):
+            self._burst_win = _bw2
         self._ema_vp_pct_saved = int(s.get("ema_vp_pct", 50) or 50)             # EMA Trend VP PLAYER slider
 
     def _set_ob_ice(self, on: bool) -> None:
@@ -15086,6 +15171,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except Exception:
                 self._clear_bigplayer()
             try:
+                self._draw_bursts(filtered)     # Volume Burst badges (flow bins) — self-gated, fail-safe
+            except Exception:
+                self._clear_bursts()
+            try:
                 self._draw_radarrun_forming(filtered)  # forming-bar PROVISIONAL preview — self-gated, fail-safe
             except Exception:
                 self._clear_radarrun_forming()
@@ -17314,6 +17403,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._bp_feed()          # Big Player Levels: keep the tape feed armed + drained every frame
             except Exception:
                 pass
+        elif self.menu.layer_state("m10_burst"):
+            try:
+                self._flow_pump()        # Volume Burst without Big Player: nothing else is filling the flow bins
+            except Exception:
+                pass
         snap = self._last_snap or self.worker.snapshot()
         closed = snap.get("closed_buckets", []) or []
         active = snap.get("active_bucket") or {}
@@ -17414,6 +17508,95 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # Scanner mode "flow" — the Trades gauge as a CHART (user 2026-09-08)
     # ------------------------------------------------------------------
+    def _on_burst_opts(self, xm: float, win: int) -> None:
+        """Hamburger 'Volume Burst' -> x multiple / window changed: re-key the badges and persist."""
+        self._burst_x = float(xm)
+        self._burst_win = int(win)
+        self._burst_sig = None
+        self._save_ui_state()
+        self._last_scanner_sig = None
+        self._draw_scanner()
+
+    def _flow_backfill(self, secs: float) -> None:
+        """Pull ONE history window of tape into the flow bins (the badges need a past, not just the live edge)."""
+        t1 = int(time.time() * 1000)
+        self.worker.request_trades_window(t1 - int(secs) * 1000, t1, 0.0, 1e9)
+        self._flow_bf_t = time.time()
+
+    def _flow_pump(self) -> None:
+        """Keep the flow bins fed on the CANDLE canvas when the Big Player feed -- the other drainer of the
+        consume-once trade buffers -- is switched off. Only ever ONE of the two runs per frame."""
+        now = time.time()
+        conn = bool(self.worker.connected)
+        if conn and not getattr(self, "_flow_conn_was2", False):
+            # the socket just came up (or came back). A request issued while it was down was dropped on the floor
+            # by _flush_outgoing, so re-arm AND re-pull the history here -- this is what actually delivers it.
+            self._flow_subscribe(backfill=False)
+            self._flow_backfill(float(config.BURST_BACKFILL_SECS))
+        self._flow_conn_was2 = conn
+        if now - getattr(self, "_flow_resub_t", 0.0) > 10.0:
+            self._flow_subscribe(backfill=False)
+        _tv, tws, tbatches = self.worker.trades_state()
+        for tbp in tbatches:
+            self._flow.ingest(*decode_trades(tbp.ts_b64, tbp.price_b64, tbp.qty_b64, tbp.side_b64))
+        for tw in (tws or ()):
+            self._flow.ingest(*decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64))
+
+    def _clear_bursts(self) -> None:
+        if self._burst_item is not None:
+            self._burst_item.setBadges([])
+            self._burst_item.setVisible(False)
+        self._burst_sig = None
+
+    def _draw_bursts(self, filtered) -> None:
+        """VOLUME BURST badges (user 2026-09-08): inside each candle, the strongest one-sided taker burst on the
+        flow bins -- green pill above the high when buyers dominated, red below the low when sellers did, carrying
+        the multiple reached ('x3.4'). Signature-gated, one reduceat over the drawn bars, one paint pass."""
+        if (not self.menu.layer_state("m10_burst") or self.scanner_mode != "bucket_canvas"
+                or self._hide_candles):
+            self._clear_bursts(); return
+        n = len(filtered)
+        if not n:
+            self._clear_bursts(); return
+        thr = float(self._burst_x); win = int(self._burst_win)
+        # The badges are a per-CANDLE statistic, so a bar set + threshold change must redraw AT ONCE (pan, zoom, a
+        # new bar, a knob), while a stream of new trades on the SAME bars only needs a refresh about once a second.
+        # That caps the recompute at ~1/s instead of ~2.5/s (one per live batch) with no visible difference.
+        _bars_key = (n, thr, win,
+                     float(filtered[0].get("start_time", 0.0) or 0.0),
+                     float(filtered[-1].get("start_time", 0.0) or 0.0))
+        _rev = self._flow.rev
+        _now = time.time()
+        if _bars_key == self._burst_sig:
+            if _rev == getattr(self, "_burst_rev", None):
+                return                                   # nothing changed at all
+            if _now - getattr(self, "_burst_t", 0.0) < 1.0:
+                return                                   # same bars, only new trades -> at most one refresh/s
+        self._burst_sig = _bars_key
+        self._burst_rev = _rev
+        self._burst_t = _now
+        starts = [float(b.get("start_time", 0.0) or 0.0) for b in filtered]
+        ends = [float(b.get("end_time", 0.0) or 0.0) for b in filtered]
+        ratio, side = self._flow.bar_bursts(starts, ends, float(win), float(config.BURST_CAP),
+                                           float(config.BURST_FLOOR_PCT))
+        hits = np.nonzero(ratio >= thr)[0]
+        if self._burst_item is None:
+            self._burst_item = BurstBadgesItem()
+            self._add_scanner_item(self._burst_item, ignore_bounds=True)
+        badges = []
+        for i in hits:
+            i = int(i)
+            b = filtered[i]
+            is_buy = bool(side[i])
+            y = float(b.get("high", 0.0) or 0.0) if is_buy else float(b.get("low", 0.0) or 0.0)
+            if y <= 0:
+                continue
+            r = float(ratio[i])
+            # user 2026-09-08: "x2.1" / "x4.3", and a whole multiple prints bare -> "x3"
+            badges.append((float(i), y, "x%g" % round(r, 1), is_buy))
+        self._burst_item.setBadges(badges)
+        self._burst_item.setVisible(True)
+
     def _flow_enter(self) -> None:
         """Enter Flow mode: chronological x-axis, reveal the 'Flow' dropdown, arm the live batches and pull ONE
         history window so the lines open with context. The store keeps accumulating while other modes are up
