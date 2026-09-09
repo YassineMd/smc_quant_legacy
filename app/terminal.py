@@ -48,7 +48,7 @@ from . import structure        # market-structure swing labels (HH/HL/LH/LL)
 from .chart_widgets import (
     WhiskerBarItem, FootprintCandleItem, DeltaCandleItem, ForceCandleItem, DeltaForceCandleItem,
     AbsorptionLayer, AbsorptionZoneLayer, BucketCandleItem, ExhaustionStripLayer, LocalTimeAxis, RoundedTextItem,
-    OrderBlockLayer, PanelSeparatorLayer, PriceAxis, _RGB_ABS_BEAR, _RGB_ABS_BULL, _RGB_EFF_BEAR,
+    OrderBlockLayer, PanelSeparatorLayer, PriceAxis, fmt_money_tick, _RGB_ABS_BEAR, _RGB_ABS_BULL, _RGB_EFF_BEAR,
     _RGB_EFF_BULL, _RGB_ER_BEAR, _RGB_ER_BULL, _RGB_EXH_BEAR, _RGB_EXH_BULL,
 )
 from .cob_panel import CobPanel
@@ -4125,11 +4125,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         self._last_hover_pos = pos           # park here for the live-breathe re-fire
         pt = self.vb.mapSceneToView(pos)
-        _ty = round(pt.y() / config.TICK_SIZE) * config.TICK_SIZE   # cursor moves PER TICK (user 2026-09-07)
+        # Buy/Sell Flow draws DOLLARS on y, not a price: no tick snapping there, and the badge is spelled like the
+        # money axis ticks it sits next to -- 102k / 2.1M (user 2026-09-09).
+        _money_y = (self.scanner_mode == "flow")
+        _ty = float(pt.y()) if _money_y else round(pt.y() / config.TICK_SIZE) * config.TICK_SIZE
         self.vline.setPos(pt.x()); self.hline.setPos(_ty); self.hline.show()
         # A2: right-axis price tag tracks the cursor Y (all modes); PRICE_DECIMALS
         # matches PriceAxis so the badge value lines up with the axis ticks.
-        self.price_tag.setText(f"{_ty:.{config.PRICE_DECIMALS}f}")
+        self.price_tag.setText(fmt_money_tick(_ty, compact=True) if _money_y
+                               else f"{_ty:.{config.PRICE_DECIMALS}f}")
         self.price_tag.setPos(self.vb.viewRange()[0][1], _ty)
         self.price_tag.show()
         if getattr(self, "lower_vline", None) is not None:   # sync the SHARED vertical crosshair into the VPIN pane
