@@ -1644,7 +1644,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_sig = None          # (store rev, view range, window, width) -> skip the redraw when nothing moved
         self._flow_follow = True       # right edge pinned to 'now' until the user pans away
         self._flow_resub_t = 0.0
-        self._flow_bf_queue = []       # chunked tape history for the flow bins (Volume Burst)
+        self._flow_bf_queue = []       # chunked tape history for the flow bins (Volume Burst / Flow window)
+        self._flow_bf_inflight = None  # (t0, t1, sent_at) of the chunk being served
         self._flow_bf_t = 0.0
         self._x_bars = None            # the bars behind the current x indices (crosshair TIME badge)
         self._burst_item = None        # BurstBadgesItem: every Volume-Burst badge, one paint pass
@@ -11446,6 +11447,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._bp_merge_prints(prs)
             try:
                 self._flow.ingest(*_raw)     # the same window feeds the Volume Burst bins (history, not just live)
+                self._flow_bf_inflight = None
             except Exception:
                 pass
         self._bp_bf_pump()
@@ -16371,6 +16373,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._replay_remember()           # persist the new replay position (debounced)
             self._rdbg("SCAN_TIME_CHANGED replay_on=1 scan_start=%d -> snapped cursor=%s"
                        % (int(self.menu.scan_start_unix()), int(self._replay_edge_t) if self._replay_edge_t else None))
+        if self.scanner_mode == "flow":
+            # Buy/Sell Flow has no buckets: the Zero Point is simply the chart's LEFT edge, and the history the
+            # bins need is re-planned from it (clamped to the daemon's tape retention). (user 2026-09-09)
+            _t0 = float(self.menu.scan_start_unix())
+            _floor = time.time() - float(config.DEPTH_RETENTION_HOURS) * 3600.0
+            _t0 = max(_t0, _floor)
+            _t1 = max(time.time(), _t0 + 60.0)
+            self.vb.setXRange(_t0, _t1, padding=0.0)
+            self._flow_last_set = (_t0, _t1)
+            self._flow_follow = True          # the right edge keeps tracking 'now'; the span is what the user chose
+            self._flow_sig = None
+            self._flow_conn_was2 = False      # force a re-plan of the chunked history for the new span
         self.clear_scanner_canvas()
         # The loaded set moved, so EVERYTHING derived from it must re-derive — same invalidation the replay step does.
         # Without this the Pivot D/E marks (sig-gated on offset/range) and the selection kept their last values, so a
@@ -17547,15 +17561,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         dropped by _flush_outgoing, so the plan is (re)made on the connection's False->True edge."""
         conn = bool(self.worker.connected)
         want = None
-        if self._replay_on:
+        if self.scanner_mode == "flow":
+            # FLOW: cover what is on screen, so a Scan-Start change (or a pan left) pulls the tape it needs. Re-planned
+            # only when the view reaches genuinely FURTHER BACK than the bins already hold -- otherwise every pan pixel
+            # would re-plan.
+            (vx0, vx1), _ = self.vb.viewRange()
+            # clamp to the tape the daemon still keeps FIRST: without it, a Scan Start older than the retention would
+            # never be "covered", so the plan would re-fire on every frame forever.
+            vx0 = max(float(vx0), time.time() - float(config.DEPTH_RETENTION_HOURS) * 3600.0)
+            sp = self._flow.span()
+            have0 = float(sp[0]) if sp else float(vx1)
+            if vx0 < have0 - 60.0:
+                want = (vx0, float(vx1))
+        elif self._replay_on:
             bars = getattr(self, "_x_bars", None) or []
             if bars:                                    # REPLAY: cover what is ON SCREEN, not the live edge
                 want = (float(bars[0].get("start_time", 0.0) or 0.0),
                         float(bars[-1].get("end_time", 0.0) or 0.0))
-        if conn and (not getattr(self, "_flow_conn_was2", False) or want != getattr(self, "_flow_bf_want", None)):
+        if conn and not getattr(self, "_flow_conn_was2", False):
             self._flow_subscribe(backfill=False)
             self._flow_bf_plan(*(want or (0.0, 0.0)))
-            self._flow_bf_want = want
+        elif conn and want is not None and not self._flow_bf_queue and self._flow_bf_inflight is None:
+            self._flow_bf_plan(*want)      # only re-plan when IDLE: a chunk in flight must be allowed to arrive
         self._flow_conn_was2 = conn
         if conn:
             self._flow_bf_pump()
@@ -17568,13 +17595,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         t1 = float(t_hi) if t_hi > 0 else time.time()
         horizon = float(t_lo) if t_lo > 0 else (t1 - float(config.FLOW_HISTORY_SECS))
         _floor = time.time() - float(config.DEPTH_RETENTION_HOURS) * 3600.0    # older than this the daemon has nothing
-        horizon = max(horizon, _floor)
+        # ... and never pull more than FLOW_HISTORY_SECS in one go: each chunk is a full SQLite scan + pack on a
+        # shared-core VM, so an "all of it" request would be dozens of heavy windows back to back (2026-09-09).
+        horizon = max(horizon, _floor, t1 - float(config.FLOW_HISTORY_SECS))
         if t1 <= horizon:
             self._flow_bf_queue = []
             return
         sp = self._flow.span()
         have0 = float(sp[0]) if sp else t1
-        ch = float(config.BURST_BACKFILL_SECS)
+        ch = float(getattr(config, "FLOW_BF_CHUNK_SECS", config.BURST_BACKFILL_SECS))
         q = []
         hi = t1
         while hi > horizon + 60.0:
@@ -17583,19 +17612,33 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 q.append((lo, min(hi, have0)))
             hi = lo
         self._flow_bf_queue = q
-        self._flow_bf_t = 0.0
+        # NOTE: _flow_bf_t is deliberately NOT reset here. The plan is re-made while the wanted span is still
+        # uncovered, and resetting the spacing clock on each re-plan would fire a request every frame.
 
     def _flow_bf_pump(self) -> None:
-        """One chunk at a time, spaced so a full 24 h fill never floods the tunnel."""
+        """ONE chunk in flight at a time. A 6 h window is ~300k trades and takes the daemon a while; without this the
+        pump re-asked for the same window every FLOW_BF_SPACING_SECS and nothing ever arrived (2026-09-09)."""
+        now = time.time()
+        infl = getattr(self, "_flow_bf_inflight", None)
+        if infl is not None:
+            if now - infl[2] < 90.0:
+                return                                   # still waiting for it
+            self._flow_bf_queue.insert(0, infl[:2])      # timed out -> ask again
+            self._flow_bf_inflight = None
         q = getattr(self, "_flow_bf_queue", None)
         if not q:
             return
-        now = time.time()
         if now - getattr(self, "_flow_bf_t", 0.0) < float(config.FLOW_BF_SPACING_SECS):
             return
         lo, hi = q.pop(0)
         self._flow_bf_t = now
+        self._flow_bf_inflight = (lo, hi, now)
         self.worker.request_trades_window(int(lo * 1000), int(hi * 1000), 0.0, 1e9)
+
+    def _flow_win_ingest(self, tw) -> None:
+        """One backfill window into the bins; clears the in-flight slot so the next chunk can go out."""
+        self._flow.ingest(*decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64))
+        self._flow_bf_inflight = None
 
 
     def _flow_pump(self) -> None:
@@ -17609,7 +17652,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for tbp in tbatches:
             self._flow.ingest(*decode_trades(tbp.ts_b64, tbp.price_b64, tbp.qty_b64, tbp.side_b64))
         for tw in (tws or ()):
-            self._flow.ingest(*decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64))
+            self._flow_win_ingest(tw)
 
     def _clear_bursts(self) -> None:
         if self._burst_item is not None:
@@ -17735,10 +17778,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for tbp in tbatches:
             self._flow.ingest(*decode_trades(tbp.ts_b64, tbp.price_b64, tbp.qty_b64, tbp.side_b64))
         for tw in (tws or ()):
-            self._flow.ingest(*decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64))
+            self._flow_win_ingest(tw)
         now = time.time()
         if now - self._flow_resub_t > 10.0:
             self._flow_subscribe(backfill=False)
+        self._flow_history_arm()        # pull whatever the drawn span still needs (Scan Start / pan left)
         self._flow_draw(now)
 
     def _flow_draw(self, now: float) -> None:
@@ -17765,8 +17809,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._flow_last_set = (vx0, vx1)
         t, buy, sell = self._flow.series(vx0, vx1, float(self._flow_win), max_pts)
         if self._flow_curves is None:
-            _bp = pg.mkPen("#26a69a", width=1.6); _bp.setCosmetic(True)
-            _sp = pg.mkPen("#ef5350", width=1.6); _sp.setCosmetic(True)
+            # SOLID lines (user 2026-09-09): an explicit SolidLine pen at width 2 with round caps/joins, so the
+            # stroke reads as one continuous line through every vertex. Cosmetic = constant width at any zoom.
+            # ANTIALIASING STAYS OFF: measured on a 2,400-point curve it costs 462 ms per zoom repaint vs 18 ms
+            # (a 25x regression) -- the round joins give the continuity without it.
+            _bp = pg.mkPen("#26a69a", width=2.0, style=QtCore.Qt.SolidLine); _bp.setCosmetic(True)
+            _sp = pg.mkPen("#ef5350", width=2.0, style=QtCore.Qt.SolidLine); _sp.setCosmetic(True)
+            for _pn in (_bp, _sp):
+                _pn.setCapStyle(QtCore.Qt.RoundCap); _pn.setJoinStyle(QtCore.Qt.RoundJoin)
             buy_c = self._add_scanner_item(pg.PlotCurveItem(pen=_bp, antialias=False))
             sell_c = self._add_scanner_item(pg.PlotCurveItem(pen=_sp, antialias=False))
             buy_c.setZValue(6); sell_c.setZValue(5)

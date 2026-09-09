@@ -193,7 +193,10 @@ BURST_FLOOR_PCT = 90.0          # a burst window must be busier than this percen
 BURST_CAP = 50.0                # displayed multiple ceiling (a near-empty other side would read as infinity)
 BURST_BACKFILL_SECS = 21600     # ONE chunk of history (== the BP chunk size); the layer walks back in chunks
 FLOW_HISTORY_SECS = 86400       # ... until the bins cover this much of the LIVE edge (replay targets its own range)
-FLOW_BF_SPACING_SECS = 6.0      # seconds between chunk requests, so a 24 h fill never floods the tunnel
+FLOW_BF_CHUNK_SECS = 7200      # 2 h per history chunk: the window fills PROGRESSIVELY instead of waiting on
+#                                one 6 h transfer (~300k trades) before anything shows
+FLOW_BF_SPACING_SECS = 4.0      # min seconds between chunk requests (only ONE is ever in flight anyway) -- the
+#                                 daemon serves each from SQLite on a shared core, so stay gentle
 
 TAPE_BACKFILL_SECS = 300        # Trades scanner mode: history window requested on entry (raw aggTrades from
                                 # trade_tape; ~5 min fills the table instantly without a heavy tunnel transfer)
