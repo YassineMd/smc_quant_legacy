@@ -175,7 +175,7 @@ DEPTH_BUFFER_CAP = 200000       # max buffered records per stream (drop-oldest) 
 # Trades are accumulated ONCE into FLOW_BIN_SECS bins (app/flow_pane.FlowStore); every frame reads a rolling sum over
 # those bins, so the per-frame cost is bounded by the DRAWN range, never by the tape.
 FLOW_BIN_SECS = 1.0             # accumulation bin (the x resolution of the two lines)
-FLOW_RETAIN_SECS = 86400        # 24 h of bins kept in RAM (2 x 86400 float64 = 1.4 MB) -- the Volume Burst
+FLOW_RETAIN_SECS = 259200       # 72 h of bins kept in RAM (2 x 259200 float64 = 4.1 MB) == the daemon's tape
 #                                 badges read the same bins on the candle canvas, so they want a day of history
 FLOW_WINDOW_SECS = 60           # default rolling window = the tablet gauge's 60 s
 FLOW_WINDOW_CHOICES = (10, 30, 60, 300)
@@ -191,7 +191,9 @@ BURST_WINDOW_CHOICES = (30, 60, 120)   # 10 s is degenerate on this instrument: 
 BURST_FLOOR_PCT = 90.0          # a burst window must be busier than this percentile of the windows on screen
 #                                 (self-scaling: no absolute $ knob, and the badge marks the standouts, not every bar)
 BURST_CAP = 50.0                # displayed multiple ceiling (a near-empty other side would read as infinity)
-BURST_BACKFILL_SECS = 21600     # history pulled when the layer is switched ON (one window, == the BP chunk size)
+BURST_BACKFILL_SECS = 21600     # ONE chunk of history (== the BP chunk size); the layer walks back in chunks
+FLOW_HISTORY_SECS = 86400       # ... until the bins cover this much of the LIVE edge (replay targets its own range)
+FLOW_BF_SPACING_SECS = 6.0      # seconds between chunk requests, so a 24 h fill never floods the tunnel
 
 TAPE_BACKFILL_SECS = 300        # Trades scanner mode: history window requested on entry (raw aggTrades from
                                 # trade_tape; ~5 min fills the table instantly without a heavy tunnel transfer)
@@ -202,13 +204,16 @@ TAPE_BACKFILL_SECS = 300        # Trades scanner mode: history window requested 
 # from study/bigprint_archive (replay). Most recent BIGPLAYER_MAX_LINES bubbles drawn.
 BIGPLAYER_MIN_USD = 500_000.0
 BIGPLAYER_STORE_FLOOR_USD = 50_000.0
-BIGPLAYER_MAX_LINES = 80
+BIGPLAYER_MAX_LINES = 400      # user 2026-09-09: bubbles/diamonds stopped part-way back; both caps raised
+#                                to cover a full screen of bars (they keep the MOST RECENT N, so a low cap truncates history)
 # SWEEPS (user 2026-09-06): one taker order eating through the book = aggTrade prints with the SAME millisecond +
 # side at >= BIGPLAYER_SWEEP_MIN_LEVELS distinct prices. Grouped before the store floor, summed; the group is kept
 # when its total >= BIGPLAYER_STORE_FLOOR_USD and shown when >= the Big Player $ slider. Most recent
 # BIGPLAYER_SWEEP_MAX drawn (each = capsule + end-level line + label).
 BIGPLAYER_SWEEP_MIN_LEVELS = 2
-BIGPLAYER_SWEEP_MAX = 40
+BIGPLAYER_SWEEP_MAX = 400
+BIGPLAYER_LABEL_MAX = 60       # only the newest N marks carry the $ text: every label is re-drawn on each
+#                                crosshair move, and 160+ amounts overlap into noise anyway (2026-09-09)      # was 40 = HALF the bubble cap, which is why diamonds ran out first
 # CONTINUITY (2026-09-07): the live store is JOURNALED (data/bigprint_journal.jsonl) and backfilled from the daemon's
 # tape for exactly the gap since the newest journaled print, in chunks, up to the tape's retention (72 h); the
 # current month's big-print archive refreshes itself from Binance's daily dumps every few hours.

@@ -1644,6 +1644,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_sig = None          # (store rev, view range, window, width) -> skip the redraw when nothing moved
         self._flow_follow = True       # right edge pinned to 'now' until the user pans away
         self._flow_resub_t = 0.0
+        self._flow_bf_queue = []       # chunked tape history for the flow bins (Volume Burst)
+        self._flow_bf_t = 0.0
         self._x_bars = None            # the bars behind the current x indices (crosshair TIME badge)
         self._burst_item = None        # BurstBadgesItem: every Volume-Burst badge, one paint pass
         self._burst_sig = None
@@ -2658,10 +2660,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._set_scanner_overlay(key, on)
             if key == "m10_burst" and on:
                 try:                     # one window of tape so the badges cover history, not just the live edge
-                    self._flow_conn_was2 = False   # ... and let _flow_pump re-issue it once the socket is really up
+                    self._flow_conn_was2 = False   # ... and let the draw re-plan once the socket is really up
                     if self.worker.connected:
                         self._flow_subscribe(backfill=False)
-                        self._flow_backfill(float(config.BURST_BACKFILL_SECS))
+                        self._flow_bf_plan()
                     self._burst_sig = None
                 except Exception:
                     pass
@@ -11826,6 +11828,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             labels.append((float(i), _mid, _fmt_usd(usd)))      # the total centred on the diamond
         for _d in self._bp_swp_polys[drawn:]:
             _d["poly"].setVisible(False)
+        _lmax = int(getattr(config, "BIGPLAYER_LABEL_MAX", 60))
+        if len(labels) > _lmax:
+            labels = sorted(labels, key=lambda q: q[0])[-_lmax:]   # keep the newest; the older marks stay unlabelled
         self._bp_labels.setLabels(labels, _txtc)                # every amount, one paint
         self._bp_labels.setVisible(True)
 
@@ -17531,19 +17536,63 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._draw_scanner()
 
     def _flow_history_arm(self) -> None:
-        """Pull the burst history ONCE per connection, whichever feed is draining the tape. A request issued while
-        the socket is down is dropped by _flush_outgoing, so it has to ride the False->True edge."""
-        conn = bool(self.worker.connected)
-        if conn and not getattr(self, "_flow_conn_was2", False):
-            self._flow_subscribe(backfill=False)
-            self._flow_backfill(float(config.BURST_BACKFILL_SECS))
-        self._flow_conn_was2 = conn
+        """Keep the flow bins covering FLOW_HISTORY_SECS of tape, whichever feed is draining it.
 
-    def _flow_backfill(self, secs: float) -> None:
-        """Pull ONE history window of tape into the flow bins (the badges need a past, not just the live edge)."""
-        t1 = int(time.time() * 1000)
-        self.worker.request_trades_window(t1 - int(secs) * 1000, t1, 0.0, 1e9)
-        self._flow_bf_t = time.time()
+        The daemon holds 72 h, but one 24 h window is ~1.3M trades, so the history is walked back in
+        BURST_BACKFILL_SECS chunks spaced FLOW_BF_SPACING_SECS apart. A request issued while the socket is down is
+        dropped by _flush_outgoing, so the plan is (re)made on the connection's False->True edge."""
+        conn = bool(self.worker.connected)
+        want = None
+        if self._replay_on:
+            bars = getattr(self, "_x_bars", None) or []
+            if bars:                                    # REPLAY: cover what is ON SCREEN, not the live edge
+                want = (float(bars[0].get("start_time", 0.0) or 0.0),
+                        float(bars[-1].get("end_time", 0.0) or 0.0))
+        if conn and (not getattr(self, "_flow_conn_was2", False) or want != getattr(self, "_flow_bf_want", None)):
+            self._flow_subscribe(backfill=False)
+            self._flow_bf_plan(*(want or (0.0, 0.0)))
+            self._flow_bf_want = want
+        self._flow_conn_was2 = conn
+        if conn:
+            self._flow_bf_pump()
+
+    def _flow_bf_plan(self, t_lo: float = 0.0, t_hi: float = 0.0) -> None:
+        """Queue the chunks needed to cover the wanted span, newest first, skipping what the bins already hold.
+
+        Default = the last FLOW_HISTORY_SECS of the live edge. REPLAY passes the DRAWN range instead, so the badges
+        work on a replayed session too -- as far back as the daemon still keeps the tape (DEPTH_RETENTION_HOURS)."""
+        t1 = float(t_hi) if t_hi > 0 else time.time()
+        horizon = float(t_lo) if t_lo > 0 else (t1 - float(config.FLOW_HISTORY_SECS))
+        _floor = time.time() - float(config.DEPTH_RETENTION_HOURS) * 3600.0    # older than this the daemon has nothing
+        horizon = max(horizon, _floor)
+        if t1 <= horizon:
+            self._flow_bf_queue = []
+            return
+        sp = self._flow.span()
+        have0 = float(sp[0]) if sp else t1
+        ch = float(config.BURST_BACKFILL_SECS)
+        q = []
+        hi = t1
+        while hi > horizon + 60.0:
+            lo = max(horizon, hi - ch)
+            if lo < have0 - 1.0:                     # anything already covered by the bins is not requested again
+                q.append((lo, min(hi, have0)))
+            hi = lo
+        self._flow_bf_queue = q
+        self._flow_bf_t = 0.0
+
+    def _flow_bf_pump(self) -> None:
+        """One chunk at a time, spaced so a full 24 h fill never floods the tunnel."""
+        q = getattr(self, "_flow_bf_queue", None)
+        if not q:
+            return
+        now = time.time()
+        if now - getattr(self, "_flow_bf_t", 0.0) < float(config.FLOW_BF_SPACING_SECS):
+            return
+        lo, hi = q.pop(0)
+        self._flow_bf_t = now
+        self.worker.request_trades_window(int(lo * 1000), int(hi * 1000), 0.0, 1e9)
+
 
     def _flow_pump(self) -> None:
         """Keep the flow bins fed on the CANDLE canvas when the Big Player feed -- the other drainer of the
