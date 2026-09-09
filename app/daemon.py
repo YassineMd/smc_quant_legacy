@@ -33,7 +33,8 @@ from . import config, persistence
 from .depth_store import DepthStore, bin_live_book
 from .feeds import MarketDataCore
 from .protocol import (CatchupChunkPacket, DepthColumnPacket, DepthWindowPacket,
-                       TimeCandlesPacket, TradeBatchPacket, TradesWindowPacket)
+                       TimeCandlesPacket, TradeBatchPacket, TradesWindowPacket,
+                       LiquidityWindowPacket)
 
 
 @dataclass
@@ -178,6 +179,13 @@ class DaemonServer:
             except (KeyError, ValueError, TypeError):
                 return
             asyncio.create_task(self._send_trades_window(client, params))
+        elif action == "liquidity_window" and self.depth_store is not None:
+            # Resting bid/ask $ within +-R ticks of mid, per column (snapshot anchors; read OFF-loop like the others)
+            try:
+                params = (int(cmd["t0"]), int(cmd["t1"]), int(cmd["cols"]))
+            except (KeyError, ValueError, TypeError):
+                return
+            asyncio.create_task(self._send_liquidity_window(client, params))
         elif action == "depth_window_stop":
             client.heatmap = None   # leave the heatmap mode -> stop live-column pushes
         elif action == "get_time_candles":
@@ -301,6 +309,26 @@ class DaemonServer:
     # ------------------------------------------------------------------
     # Phase 3: executed-trade bubbles — window (off-loop read) + live batch
     # ------------------------------------------------------------------
+    async def _send_liquidity_window(self, client: _Client, params: tuple) -> None:
+        """Build the resting-liquidity window in an executor (own mode=ro conn) and enqueue ONE frame. The payload
+        is tiny (11 x cols float32 ~ 60 KB at 1400 cols) -- the work is the snapshot reduction, not the wire."""
+        loop = asyncio.get_event_loop()
+        _t0 = time.monotonic()
+        try:
+            mids, bid, ask, radii = await loop.run_in_executor(None, self.depth_store.liquidity_window, *params)
+        except Exception as e:
+            print(f"LIQUIDITY WINDOW BUILD ERROR: {e}")
+            return
+        _el = time.monotonic() - _t0
+        if _el > 1.0:                       # so the journal shows queue+build time if this ever regresses
+            print(f"LIQUIDITY WINDOW {(params[1]-params[0])/3.6e6:.1f}h x {params[2]} cols served in {_el:.1f}s")
+        t0, t1, cols = params
+        self._enqueue(client, LiquidityWindowPacket(
+            t0=t0, t1=t1, cols=cols, radii=list(radii),
+            mids_b64=base64.b64encode(mids).decode("ascii"),
+            bid_b64=base64.b64encode(bid).decode("ascii"),
+            ask_b64=base64.b64encode(ask).decode("ascii")).to_line())
+
     async def _send_trades_window(self, client: _Client, params: tuple) -> None:
         """Read the executed-trade window in an executor (its own read-only mode=ro conn + the ts_ms index)
         so the event loop is NEVER blocked, then enqueue one frame. LOSSLESS (raw trades; terminal aggregates)."""

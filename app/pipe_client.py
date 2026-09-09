@@ -132,6 +132,7 @@ class PipeClientWorker(threading.Thread):
         self._hm_ver = 0                       # bumps on any heatmap frame -> lets the mode self-gate
         # Phase 3 bubbles delivery buffer (guarded by data_lock) — same isolation: the trade arrays live HERE,
         # handed to the heatmap mode only via trades_state(), NEVER on the 20Hz snapshot().
+        self._liq_pkt = None                       # newest resting-liquidity window (consume-once)
         self._tb_windows: deque = deque(maxlen=8)   # pending TradesWindowPackets — a LIST:
         #                                  the DOM's entry backfill + custom-start deep fetch can
         #                                  land in one drain interval; a single slot lost one
@@ -242,6 +243,20 @@ class PipeClientWorker(threading.Thread):
             self._outgoing.append(protocol.json.dumps({
                 "action": "trades_window", "t0": int(t0), "t1": int(t1),
                 "ylo": float(ylo), "yhi": float(yhi)}) + "\n")
+
+    def request_liquidity_window(self, t0: int, t1: int, cols: int) -> None:
+        """Queue a liquidity_window request: resting bid/ask $ within +-R ticks of mid, per time column, for the
+        daemon's ladder of radii (one response covers every radius, so a radius change needs no round trip)."""
+        with self._send_lock:
+            self._outgoing.append(protocol.json.dumps({
+                "action": "liquidity_window", "t0": int(t0), "t1": int(t1), "cols": int(cols)}) + chr(10))
+
+    def liquidity_state(self):
+        """Consume-once: the newest LiquidityWindowPacket received, or None."""
+        with self.data_lock:
+            p = self._liq_pkt
+            self._liq_pkt = None
+            return p
 
     def stop_depth_window(self) -> None:
         """Queue a depth_window_stop (heatmap mode-exit) so the daemon stops pushing live columns."""
@@ -586,6 +601,8 @@ class PipeClientWorker(threading.Thread):
             elif isinstance(pkt, protocol.DepthColumnPacket):
                 self._hm_cols.append(pkt)
                 self._hm_ver += 1
+            elif isinstance(pkt, protocol.LiquidityWindowPacket):
+                self._liq_pkt = pkt          # newest wins: the pane always draws the latest window it asked for
             elif isinstance(pkt, protocol.TradesWindowPacket):
                 self._tb_windows.append(pkt)   # raw trade arrays stay in the delivery buffer (NOT snapshot())
                 self._tb_ver += 1

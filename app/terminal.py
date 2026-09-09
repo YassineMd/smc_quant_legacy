@@ -16,6 +16,7 @@ rate (Section 11).
 
 from __future__ import annotations
 
+import base64
 import bisect
 import json
 import math
@@ -1644,6 +1645,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_sig = None          # (store rev, view range, window, width) -> skip the redraw when nothing moved
         self._flow_follow = True       # right edge pinned to 'now' until the user pans away
         self._flow_resub_t = 0.0
+        self._liq_plot = None          # resting-liquidity pane (Flow mode): its own PlotWidget under the lines
+        self._liq_curves = None
+        self._liq_data = None          # (t0, t1, cols, radii, mids, bid[nr][cols], ask[nr][cols]) from the daemon
+        self._liq_req = None           # (t0, t1, cols) currently in flight
+        self._liq_req_t = 0.0
+        self._liq_pend = None          # debounced (t0, t1) waiting to be asked for
+        self._liq_radius = int(config.LIQ_RADIUS_TICKS)
+        self._liq_smooth = int(config.LIQ_SMOOTH_SECS)
+        self._liq_sig = None
+        self._liq_live = None          # (ts, bid$, ask$) summed off the pulse book this frame
         self._flow_bf_queue = []       # chunked tape history for the flow bins (Volume Burst / Flow window)
         self._flow_bf_inflight = None  # (t0, t1, sent_at) of the chunk being served
         self._flow_bf_t = 0.0
@@ -2131,6 +2142,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             self.menu.set_ema_vp_pct(getattr(self, "_ema_vp_pct_saved", 50))
             self.menu.set_flow_window(int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)))
+            self.menu.set_liq_opts(int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
+                                   int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)))
             self.menu.set_burst_opts(float(getattr(self, "_burst_x", config.BURST_X)),
                                      int(getattr(self, "_burst_win", config.BURST_WINDOW_SECS)))
         except Exception:
@@ -2382,6 +2395,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.bubbleMinUsdChanged.connect(lambda _v: self._save_ui_state())  # Candle-Bubbles MIN SIZE (repaint is per-frame)
         self.menu.bigPlayerMinUsdChanged.connect(self._on_bigplayer_min)          # Big Player threshold -> redraw + persist
         self.menu.bpVpMinUsdChanged.connect(self._on_bpvp_min)                    # Big Player Gray VP threshold -> redraw + persist
+        self.menu.liqOptsChanged.connect(self._on_liq_opts)                      # resting-liquidity pane
         self.menu.burstOptsChanged.connect(self._on_burst_opts)                  # Volume Burst: x multiple / window
         self.menu.flowWindowChanged.connect(self._on_flow_window)                # Buy/Sell Flow rolling window
         self.menu.emaVpPctChanged.connect(self._on_ema_vp_pct)                    # EMA Trend VP PLAYER slider -> redraw + persist
@@ -10131,6 +10145,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "bigplayer_min_usd": float(self.menu.big_player_min_usd()),   # Big Player single-print threshold
                 "bpvp_min_usd": float(self.menu.bp_vp_min_usd()),             # Big Player Gray VP MIN PLAYER threshold
                 "flow_win": int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)),   # Buy/Sell Flow window
+                "liq_radius": int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
+                "liq_smooth": int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)),
                 "burst_x": float(getattr(self, "_burst_x", config.BURST_X)),            # Volume Burst multiple
                 "burst_win": int(getattr(self, "_burst_win", config.BURST_WINDOW_SECS)),
                 "ema_vp_pct": int(self.menu.ema_vp_pct()),                    # EMA Trend VP PLAYER slider (P of its span)
@@ -10245,6 +10261,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _fw = int(s.get("flow_win", config.FLOW_WINDOW_SECS) or config.FLOW_WINDOW_SECS)
         if _fw in tuple(config.FLOW_WINDOW_CHOICES):
             self._flow_win = _fw          # the combo is synced in __init__ (the menu does not exist yet here)
+        _lr = int(s.get("liq_radius", config.LIQ_RADIUS_TICKS) or config.LIQ_RADIUS_TICKS)
+        _ls = int(s.get("liq_smooth", config.LIQ_SMOOTH_SECS) if s.get("liq_smooth") is not None else config.LIQ_SMOOTH_SECS)
+        if _lr in tuple(int(v) for v in config.LIQ_RADIUS_CHOICES):
+            self._liq_radius = _lr
+        if _ls in tuple(int(v) for v in config.LIQ_SMOOTH_CHOICES):
+            self._liq_smooth = _ls
         _bx = float(s.get("burst_x", config.BURST_X) or config.BURST_X)
         _bw2 = int(s.get("burst_win", config.BURST_WINDOW_SECS) or config.BURST_WINDOW_SECS)
         if _bx in tuple(float(v) for v in config.BURST_X_CHOICES):
@@ -17711,6 +17733,196 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._burst_item.setBadges(badges)
         self._burst_item.setVisible(True)
 
+    # ------------------------------------------------------------------
+    # RESTING-LIQUIDITY pane (Flow mode) — limit-order $ within +-N ticks
+    # ------------------------------------------------------------------
+    def _on_liq_opts(self, radius: int, smooth: int) -> None:
+        """Hamburger -> radius / smoothing changed. Every radius is already in the last response, so this only
+        re-keys the drawing; no new request."""
+        self._liq_radius = int(radius)
+        self._liq_smooth = int(smooth)
+        self._liq_sig = None
+        self._save_ui_state()
+
+    def _liq_ensure_pane(self):
+        """Create the pane under the flow lines, x-linked to the main view. Mirrors the Volume/CVD sub-panes."""
+        if self._liq_plot is not None:
+            return self._liq_plot
+        try:
+            self._ensure_canvas_panes()
+        except Exception:
+            pass
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return None
+        ax = PriceAxis(orientation="right")
+        if hasattr(ax, "set_money"):
+            ax.set_money(True)                       # y is DOLLARS resting, not a price
+        pw = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"), "right": ax})
+        pw.setBackground("#141414")
+        pw.showAxis("right"); pw.hideAxis("left")
+        for _a in ("bottom", "right"):
+            pw.getAxis(_a).setPen(pg.mkPen("#dcdcdc", width=1))
+            pw.getAxis(_a).setTextPen(pg.mkPen("#dcdcdc"))
+        pw.showGrid(x=False, y=False)
+        pw.setMenuEnabled(False)
+        pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        pw.getAxis("bottom").set_scanner_active(False)          # clock labels, like the flow chart
+        vb = pw.getViewBox()
+        vb.setMouseEnabled(x=True, y=True)
+        vb.setXLink(self.vb)                                     # pan/zoom follows the flow lines exactly
+        _bp = pg.mkPen("#26a69a", width=2.0, style=QtCore.Qt.SolidLine); _bp.setCosmetic(True)
+        _sp = pg.mkPen("#ef5350", width=2.0, style=QtCore.Qt.SolidLine); _sp.setCosmetic(True)
+        for _pn in (_bp, _sp):
+            _pn.setCapStyle(QtCore.Qt.RoundCap); _pn.setJoinStyle(QtCore.Qt.RoundJoin)
+        cb = pg.PlotCurveItem(pen=_bp, antialias=False)          # antialias OFF: 25x cost on long polylines
+        ca = pg.PlotCurveItem(pen=_sp, antialias=False)
+        pw.addItem(cb); pw.addItem(ca)
+        self._liq_curves = (cb, ca)
+        self._liq_plot = pw
+        self._liq_vb = vb
+        sp.addWidget(pw)
+        pw.setMinimumHeight(70)                                  # a splitter child added with no size gets ZERO
+        try:                                                     # height -> the pane renders nothing at all
+            sizes = sp.sizes()
+            if sizes:
+                tot = sum(sizes) or sp.height() or 800
+                want = max(150, int(tot * 0.22))
+                if sizes[-1] < want:                             # take the space from the main chart on top
+                    sizes[0] = max(140, sizes[0] - (want - sizes[-1]))
+                    sizes[-1] = want
+                    sp.setSizes(sizes)
+        except Exception:
+            pass
+        return pw
+
+    def _liq_show(self, on: bool) -> None:
+        if on:
+            if self._liq_ensure_pane() is None:
+                return
+            self._liq_plot.setVisible(True)
+        elif self._liq_plot is not None:
+            self._liq_plot.setVisible(False)
+
+    def _liq_tick(self, now: float) -> None:
+        """Per frame in Flow mode: keep the live edge fresh, ask for a new window when the view settles, draw."""
+        if self._liq_plot is None or not self._liq_plot.isVisible():
+            return
+        # LIVE edge: sum the pulse book within the radius -- no request, no history, always current
+        try:
+            snap = self._last_snap or self.worker.snapshot()
+            d = snap.get("depth") or {}
+            bids = d.get("bids") or []; asks = d.get("asks") or []
+            if bids and asks:
+                mid = 0.5 * (float(bids[0][0]) + float(asks[0][0]))
+                tick = float(config.TICK_SIZE)
+                radii = tuple(int(r) for r in config.LIQ_RADIUS_CHOICES)      # ascending
+                nr = len(radii); rmax = radii[-1]
+                nb = [0.0] * nr; na = [0.0] * nr
+                for src, acc, sgn in ((bids, nb, 1.0), (asks, na, -1.0)):     # ONE pass, bucketed by distance
+                    for lvl in src:
+                        pr_ = float(lvl[0]); d = (mid - pr_) / tick * sgn
+                        if d < 0.0 or d > rmax:
+                            continue
+                        v = pr_ * float(lvl[1])
+                        for k in range(nr):
+                            if d <= radii[k]:
+                                acc[k] += v
+                                break
+                for acc in (nb, na):                                          # -> cumulative by radius
+                    for k in range(1, nr):
+                        acc[k] += acc[k - 1]
+                self._liq_live = (now, tuple(nb), tuple(na), radii)
+        except Exception:
+            pass
+        (vx0, vx1), _ = self.vb.viewRange()
+        # WHEN to ask for a new window. Keying on the exact view range does not work here: Flow FOLLOWS the live
+        # edge, so vx1 moves every frame and a debounce would never settle (it never fired at all). Key on DATA
+        # COVERAGE instead -- the live right edge is drawn from the pulse book anyway, so a window is only needed
+        # when the view reaches outside what the last response covers, plus a slow refresh to keep history current.
+        span = max(1.0, vx1 - vx0)
+        if self._liq_data is None:
+            need = True
+        else:
+            d0, d1 = self._liq_data[0], self._liq_data[1]
+            need = (vx0 < d0 - 0.02 * span) or (vx1 > d1 + 0.25 * span) or (now - self._liq_req_t > 120.0)
+        if self._liq_req is not None and now - self._liq_req_t > 60.0:
+            self._liq_req = None                                   # timed out -> allow another
+        if need and self._liq_req is None and now - self._liq_req_t > 1.0:
+            cols = int(min(int(config.LIQ_MAX_COLS), max(120, int(self._liq_plot.width()) or 600)))
+            t0ms = int(max(vx0, now - float(config.DEPTH_RETENTION_HOURS) * 3600.0) * 1000)
+            t1ms = int(min(vx1, now) * 1000)
+            if t1ms - t0ms > 60000:
+                self._liq_req = (t0ms, t1ms, cols)
+                self._liq_req_t = now
+                try:
+                    self.worker.request_liquidity_window(t0ms, t1ms, cols)
+                except Exception:
+                    self._liq_req = None
+        pkt = None
+        try:
+            pkt = self.worker.liquidity_state()
+        except Exception:
+            pkt = None
+        if pkt is not None:
+            try:
+                nr = max(1, len(pkt.radii))
+                mids = np.frombuffer(base64.b64decode(pkt.mids_b64), dtype="<f4")
+                bid = np.frombuffer(base64.b64decode(pkt.bid_b64), dtype="<f4").reshape(nr, -1)
+                ask = np.frombuffer(base64.b64decode(pkt.ask_b64), dtype="<f4").reshape(nr, -1)
+                self._liq_data = (float(pkt.t0) / 1000.0, float(pkt.t1) / 1000.0, int(pkt.cols),
+                                  [int(r) for r in pkt.radii], mids, bid, ask)
+                self._liq_sig = None
+            except Exception as ex:
+                print("LIQUIDITY WINDOW DECODE: %s" % ex)
+            self._liq_req = None
+        self._liq_draw(now)
+
+    def _liq_draw(self, now: float) -> None:
+        """Two curves for the selected radius, smoothed by a rolling MEAN, with the live point on the right."""
+        if self._liq_data is None or self._liq_curves is None:
+            return
+        t0, t1, cols, radii, mids, bid, ask = self._liq_data
+        try:
+            j = radii.index(int(self._liq_radius))
+        except ValueError:
+            j = min(range(len(radii)), key=lambda k: abs(radii[k] - self._liq_radius))
+        live = self._liq_live
+        lb = la = None
+        if live is not None:
+            try:
+                lj = list(live[3]).index(int(self._liq_radius))
+            except ValueError:
+                lj = min(range(len(live[3])), key=lambda k: abs(live[3][k] - self._liq_radius))
+            lb = float(live[1][lj]); la = float(live[2][lj])
+        sig = (id(mids), j, int(self._liq_smooth), round(live[0], 0) if live else 0, int(self._liq_radius))
+        if sig == self._liq_sig:
+            return                                               # nothing moved -> cheapest possible frame
+        self._liq_sig = sig
+        n = int(mids.size)
+        if n <= 0:
+            return
+        step = (t1 - t0) / float(n)
+        x = t0 + (np.arange(n) + 0.5) * step
+        b = bid[j].astype(np.float64); a = ask[j].astype(np.float64)
+        good = mids > 0
+        if good.any() and not good.all():                        # columns with no snapshot yet -> carry forward
+            idx = np.maximum.accumulate(np.where(good, np.arange(n), 0))
+            b = b[idx]; a = a[idx]
+        k = int(round(float(self._liq_smooth) / step)) if step > 0 and self._liq_smooth else 0
+        if k > 1:
+            ker = np.ones(min(k, n)) / float(min(k, n))
+            b = np.convolve(b, ker, mode="same"); a = np.convolve(a, ker, mode="same")
+        if lb is not None and live[0] >= t1 - step:              # append the real-time right edge (same radius)
+            x = np.append(x, live[0]); b = np.append(b, lb); a = np.append(a, la)
+        self._liq_curves[0].setData(x, b)
+        self._liq_curves[1].setData(x, a)
+        top = float(max(b.max() if b.size else 0.0, a.max() if a.size else 0.0))
+        cur = getattr(self, "_liq_ytop", 0.0)
+        if top > 0 and (top > cur * 0.98 or top < cur * 0.55):   # dead-band, same as the flow lines
+            self._liq_ytop = top * 1.15
+            self._liq_vb.setYRange(0.0, self._liq_ytop, padding=0.0)
+
     def _flow_enter(self) -> None:
         """Enter Flow mode: chronological x-axis, reveal the 'Flow' dropdown, arm the live batches and pull ONE
         history window so the lines open with context. The store keeps accumulating while other modes are up
@@ -17728,6 +17940,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_last_set = None
         self._flow_ytop = 0.0
         self._flow_conn_was = bool(self.worker.connected)
+        self._liq_show(True)                     # the resting-liquidity pane rides Flow mode
+        self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
         self._flow_subscribe(backfill=True)
         now = time.time()
         span = float(config.FLOW_BACKFILL_SECS)
@@ -17743,6 +17957,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pass
         if getattr(self.menu, "flow_sec", None) is not None:
             self.menu.flow_sec.setVisible(False)
+        self._liq_show(False)
         self._flow_curves = None
         self._flow_sig = None
         _ax = self.plot.getAxis("right")
@@ -17784,6 +17999,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._flow_subscribe(backfill=False)
         self._flow_history_arm()        # pull whatever the drawn span still needs (Scan Start / pan left)
         self._flow_draw(now)
+        try:
+            self._liq_tick(now)         # resting-liquidity pane — self-gated, fail-safe
+        except Exception:
+            pass
 
     def _flow_draw(self, now: float) -> None:
         """The two curves. Follows the live edge until the user pans away; y auto-fits from 0 with a dead-band so it

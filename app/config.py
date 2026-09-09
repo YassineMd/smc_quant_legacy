@@ -180,6 +180,14 @@ FLOW_RETAIN_SECS = 259200       # 72 h of bins kept in RAM (2 x 259200 float64 =
 FLOW_WINDOW_SECS = 60           # default rolling window = the tablet gauge's 60 s
 FLOW_WINDOW_CHOICES = (10, 30, 60, 300)
 FLOW_BACKFILL_SECS = 3600       # history requested on entry (one trades_window, same shape as the Trades tape's)
+# --- Resting-liquidity pane (Buy/Sell Flow mode, user 2026-09-09): limit-order $ within +-N ticks of mid.
+LIQ_RADIUS_TICKS = 100          # default half-width, in TICKS (0.01 -> +-$1.00)
+LIQ_RADIUS_CHOICES = (10, 25, 50, 100, 200)     # must be a SUBSET of depth_store.LIQ_RADII (one response, no refetch)
+LIQ_SMOOTH_SECS = 60            # rolling MEAN over the lines (the book is a level, not a flow); 0 = raw
+LIQ_SMOOTH_CHOICES = (0, 30, 60, 300)
+LIQ_MAX_COLS = 900              # columns requested per window (payload ~52 KB; the reduction is the real cost)
+LIQ_REQ_DEBOUNCE_SECS = 0.35    # settle time after a pan/zoom before asking for a new window
+
 FLOW_MAX_POINTS = 3000          # decimation ceiling per curve (a 1920-px chart can't resolve more)
 
 # --- Volume Burst badges (m10_burst, user 2026-09-08): one side >= BURST_X the other over BURST_WINDOW_SECS,

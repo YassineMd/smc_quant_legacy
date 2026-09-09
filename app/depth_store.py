@@ -62,6 +62,11 @@ CREATE INDEX IF NOT EXISTS idx_trade_tape_ts ON trade_tape(ts_ms);
 # ---------------------------------------------------------------------------
 # Packing  (int32 price-in-ticks, float32 qty); side implicit via sub-arrays
 # ---------------------------------------------------------------------------
+LIQ_RADII = (10, 25, 50, 100, 200)   # resting-liquidity ladder, in TICKS from mid (client picks one per draw)
+_LIQ_CACHE: dict = {}                # snapshot ts_ms -> (mid, bid[], ask[]) -- a snapshot NEVER changes, so the
+_LIQ_CACHE_CAP = 24000               # reduction is done once; overlapping windows (panning) then cost nothing
+
+
 def _pack_levels(d: Dict[float, float]) -> bytes:
     """Pack a {price: qty} dict as ``<I count`` then count×``<i f``."""
     flat: list = []
@@ -235,6 +240,78 @@ class DepthStore:
         return n, ts, pr, qt, sd
 
     # -- Phase 2a: heatmap window builder (read-only, off-loop) -------------
+    def liquidity_window(self, t0: int, t1: int, cols: int):
+        """RESTING liquidity per time column: bid $ and ask $ within +-R ticks of mid, for a LADDER of radii.
+
+        Reads the ~30 s ``depth_snapshots`` anchors ONLY -- no delta replay. Replaying deltas is exact but costs
+        9.7 s for 1 h and 572 s for 72 h (measured on the VM); the anchors give the same quantity at 30 s
+        resolution for 0.05 s / 4.2 s, and this is a slow-moving LEVEL that the client smooths anyway. Each
+        distinct snapshot is reduced ONCE (numpy masked sums over a zero-copy view of the packed blob) and shared
+        by every column that maps to it.
+
+        Returns ``(mids_b, bid_b, ask_b, radii)``: float32 LE, mids = cols, bid/ask = len(radii)*cols row-major
+        [radius][col], sums in DOLLARS (qty x price). READ-ONLY, own ``mode=ro`` connection -> runs in an executor.
+        """
+        import numpy as _np
+        radii = tuple(LIQ_RADII)
+        dt = _np.dtype([("t", "<i4"), ("q", "<f4")])
+        nr = len(radii)
+        c = sqlite3.connect("file:%s?mode=ro" % self.db_path, uri=True)
+        try:
+            cols = max(1, int(cols))
+            tss = [r[0] for r in c.execute(
+                "SELECT ts_ms FROM depth_snapshots WHERE ts_ms<=? AND ts_ms>=? ORDER BY ts_ms",
+                (int(t1), int(t0) - 300000)).fetchall()]
+            mids = _np.zeros(cols, dtype=_np.float32)
+            bid = _np.zeros((nr, cols), dtype=_np.float32)
+            ask = _np.zeros((nr, cols), dtype=_np.float32)
+            if not tss:
+                return mids.tobytes(), bid.tobytes(), ask.tobytes(), radii
+            step = (int(t1) - int(t0)) / float(cols)
+            want = []; i0 = 0
+            for ci in range(cols):
+                ce = t1 if ci == cols - 1 else t0 + (ci + 1) * step
+                while i0 + 1 < len(tss) and tss[i0 + 1] <= ce:
+                    i0 += 1
+                want.append(tss[i0] if tss[i0] <= ce else None)
+            uniq = sorted({w for w in want if w is not None})
+            lad = {}
+            miss = [u for u in uniq if u not in _LIQ_CACHE]
+            for u in uniq:                                          # reuse everything reduced by an earlier window
+                hit = _LIQ_CACHE.get(u)
+                if hit is not None:
+                    lad[u] = hit
+            for k in range(0, len(miss), 400):                      # IN(...) in chunks: only the needed bodies
+                part = miss[k:k + 400]
+                q = "SELECT ts_ms,bids,asks FROM depth_snapshots WHERE ts_ms IN (%s)" % ",".join("?" * len(part))
+                for ts_, bb_, ab_ in c.execute(q, part):
+                    b = _np.frombuffer(bb_, dtype=dt, offset=4)
+                    a = _np.frombuffer(ab_, dtype=dt, offset=4)
+                    if b.size == 0 or a.size == 0:
+                        continue
+                    bt = b["t"]; at = a["t"]
+                    mt = (int(bt.max()) + int(at.min())) // 2
+                    db = mt - bt.astype(_np.int64)                  # bids at/below mid, asks at/above
+                    da = at.astype(_np.int64) - mt
+                    vb = b["q"].astype(_np.float64) * bt.astype(_np.float64) * _TICK
+                    va = a["q"].astype(_np.float64) * at.astype(_np.float64) * _TICK
+                    ob = _np.empty(nr); oa = _np.empty(nr)
+                    for j, R in enumerate(radii):
+                        ob[j] = vb[(db >= 0) & (db <= R)].sum()
+                        oa[j] = va[(da >= 0) & (da <= R)].sum()
+                    lad[ts_] = _LIQ_CACHE[ts_] = (float(mt) * _TICK, ob, oa)
+            if len(_LIQ_CACHE) > _LIQ_CACHE_CAP:                    # a snapshot is immutable: plain FIFO trim
+                for _k in list(_LIQ_CACHE)[:len(_LIQ_CACHE) - _LIQ_CACHE_CAP]:
+                    _LIQ_CACHE.pop(_k, None)
+            for ci, w in enumerate(want):
+                hit = lad.get(w) if w is not None else None
+                if hit is None:
+                    continue
+                mids[ci] = hit[0]; bid[:, ci] = hit[1]; ask[:, ci] = hit[2]
+            return mids.tobytes(), bid.tobytes(), ask.tobytes(), radii
+        finally:
+            c.close()
+
     def build_window(self, t0: int, t1: int, cols: int, ylo: float, yhi: float, ybins: int):
         """Build a Bookmap heatmap window in ONE forward pass — O(deltas in [t0,t1]), not W reconstructs.
 

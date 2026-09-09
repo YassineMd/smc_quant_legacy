@@ -36,6 +36,7 @@ TYPE_LIQ = "LIQUIDATION"      # forced order event (main.py:661)
 TYPE_PULSE = "PULSE"          # DOM depth + open interest pulse (main.py:887)
 TYPE_DEPTH_WINDOW = "DEPTH_WINDOW"   # Phase 2a: heatmap window (W×H resting-size grid + per-col BBO)
 TYPE_DEPTH_COL = "DEPTH_COL"         # Phase 2a: one live heatmap column (right-edge update)
+TYPE_LIQUIDITY_WINDOW = "LIQUIDITY_WINDOW"   # resting bid/ask $ within +-R ticks of mid, per time column
 TYPE_TRADES_WINDOW = "TRADES_WINDOW"  # Phase 3: executed-trade bubbles window (raw trades in [t0,t1]×[ylo,yhi])
 TYPE_TRADE_BATCH = "TRADE_BATCH"      # Phase 3: live executed trades since the last batch (pulse cadence)
 TYPE_LIQSWEEP = "LIQ_SWEEP"           # live 15m Tier-A liquidity sweep (tf-agnostic, broadcast_all)
@@ -318,6 +319,26 @@ class DepthColumnPacket:
 
 
 @dataclass
+class LiquidityWindowPacket:
+    """RESTING limit-order liquidity in [t0,t1]: per time column, the bid $ and ask $ sitting within +-R ticks of
+    mid, for the ladder of radii in ``radii``. ``mids_b64`` = cols float32 LE; ``bid_b64`` / ``ask_b64`` =
+    len(radii)*cols float32 LE, row-major [radius][col]. Sourced from the ~30 s book snapshots (see
+    depth_store.liquidity_window), so the resolution is the snapshot cadence, not the diff stream."""
+
+    t0: int
+    t1: int
+    cols: int
+    radii: list
+    mids_b64: str = ""
+    bid_b64: str = ""
+    ask_b64: str = ""
+    type: str = TYPE_LIQUIDITY_WINDOW
+
+    def to_line(self) -> str:
+        return _to_line(self)
+
+
+@dataclass
 class TradesWindowPacket:
     """Phase 3: the RAW executed trades in [t0,t1]×[ylo,yhi] — answer to a ``trades_window`` request. Four
     base64 PARALLEL arrays of length n (the terminal aggregates per-cell for rendering; the wire is LOSSLESS
@@ -426,6 +447,10 @@ _PARSERS = {
         ts=d["ts"], ylo=d["ylo"], yhi=d["yhi"], ybins=d["ybins"],
         col_b64=d.get("col_b64", ""), bid=d.get("bid", 0.0), ask=d.get("ask", 0.0),
     ),
+    TYPE_LIQUIDITY_WINDOW: lambda d: LiquidityWindowPacket(
+        t0=int(d.get("t0", 0)), t1=int(d.get("t1", 0)), cols=int(d.get("cols", 0)),
+        radii=list(d.get("radii") or []), mids_b64=d.get("mids_b64", ""),
+        bid_b64=d.get("bid_b64", ""), ask_b64=d.get("ask_b64", "")),
     TYPE_TRADES_WINDOW: lambda d: TradesWindowPacket(
         t0=d["t0"], t1=d["t1"], n=d["n"], ts_b64=d.get("ts_b64", ""), price_b64=d.get("price_b64", ""),
         qty_b64=d.get("qty_b64", ""), side_b64=d.get("side_b64", ""),

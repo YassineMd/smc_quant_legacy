@@ -291,6 +291,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     bubbleMinUsdChanged = QtCore.Signal(float)       # Candle-Bubbles MIN SIZE filter (USD/level; 0 = show all)
     bigPlayerMinUsdChanged = QtCore.Signal(float)    # Big Player Levels: single-print USD threshold
     bpVpMinUsdChanged = QtCore.Signal(float)
+    liqOptsChanged = QtCore.Signal(int, int)      # resting-liquidity pane: (radius ticks, smoothing seconds)
     burstOptsChanged = QtCore.Signal(float, int)   # Volume Burst: (x multiple, window seconds) — 2026-09-08
     flowWindowChanged = QtCore.Signal(int)   # Buy/Sell Flow: rolling window in seconds (2026-09-08)
     emaVpPctChanged = QtCore.Signal(int)   # EMA Trend VP 'PLAYER' slider: P of the span's own threshold (2026-09-07)         # Big Player Gray VP: MIN PLAYER (USD per player) threshold
@@ -1579,8 +1580,46 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.flow_combo.currentIndexChanged.connect(lambda _i: self.flowWindowChanged.emit(int(self.flow_combo.currentData())))
         lay.addWidget(self.flow_combo)
         self.flow_sec.addWidget(w)
+        w2 = QtWidgets.QWidget()
+        l2 = QtWidgets.QVBoxLayout(w2); l2.setContentsMargins(2, 1, 8, 5); l2.setSpacing(2)
+        lab2 = QtWidgets.QLabel("Limit orders pane: +- ticks / smoothing")
+        lab2.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:10px;")
+        l2.addWidget(lab2)
+        row = QtWidgets.QHBoxLayout(); row.setSpacing(6)
+        self.liq_r_combo = QtWidgets.QComboBox()
+        for r in config.LIQ_RADIUS_CHOICES:
+            self.liq_r_combo.addItem("+-%d" % r, int(r))
+        self.liq_r_combo.setCurrentIndex(list(config.LIQ_RADIUS_CHOICES).index(int(config.LIQ_RADIUS_TICKS)))
+        self.liq_r_combo.setToolTip("How far from mid the resting bid/ask $ is summed, in ticks (0.01 each).\n"
+                                    "Every radius arrives in the SAME response, so switching is instant.")
+        row.addWidget(self.liq_r_combo)
+        self.liq_s_combo = QtWidgets.QComboBox()
+        for s_ in config.LIQ_SMOOTH_CHOICES:
+            self.liq_s_combo.addItem("raw" if s_ == 0 else ("%ds" % s_ if s_ < 60 else "%dm" % (s_ // 60)), int(s_))
+        self.liq_s_combo.setCurrentIndex(list(config.LIQ_SMOOTH_CHOICES).index(int(config.LIQ_SMOOTH_SECS)))
+        self.liq_s_combo.setToolTip("Rolling MEAN over the two lines. The book is a level, not a flow, so this "
+                                    "averages rather than sums.")
+        row.addWidget(self.liq_s_combo)
+        row.addStretch(1)
+        l2.addLayout(row)
+        for cb_ in (self.liq_r_combo, self.liq_s_combo):
+            cb_.currentIndexChanged.connect(lambda _i: self.liqOptsChanged.emit(self.liq_radius(), self.liq_smooth()))
+        self.flow_sec.addWidget(w2)
         root.addWidget(self.flow_sec)
         self.flow_sec.setVisible(False)                  # shown only in Flow mode (driven by the terminal)
+
+    def liq_radius(self) -> int:
+        return int(self.liq_r_combo.currentData() or config.LIQ_RADIUS_TICKS)
+
+    def liq_smooth(self) -> int:
+        return int(self.liq_s_combo.currentData() if self.liq_s_combo.currentData() is not None else config.LIQ_SMOOTH_SECS)
+
+    def set_liq_opts(self, radius: int, smooth: int) -> None:
+        """Session-restore (no re-emit)."""
+        for combo, choices, val in ((self.liq_r_combo, [int(v) for v in config.LIQ_RADIUS_CHOICES], int(radius)),
+                                    (self.liq_s_combo, [int(v) for v in config.LIQ_SMOOTH_CHOICES], int(smooth))):
+            if val in choices:
+                combo.blockSignals(True); combo.setCurrentIndex(choices.index(val)); combo.blockSignals(False)
 
     def set_flow_window(self, secs: int) -> None:
         """Session-restore of the window (no re-emit)."""
