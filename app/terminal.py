@@ -1651,10 +1651,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_req = None           # (t0, t1, cols) currently in flight
         self._liq_req_t = 0.0
         self._liq_pend = None          # debounced (t0, t1) waiting to be asked for
+        self._liq_pane_on = bool(config.LIQ_PANE_ON)
         self._liq_radius = int(config.LIQ_RADIUS_TICKS)
         self._liq_smooth = int(config.LIQ_SMOOTH_SECS)
         self._liq_sig = None
         self._liq_live = None          # (ts, bid$, ask$) summed off the pulse book this frame
+        self._liq_sized = False        # has the pane been given its slice yet (vs Qt's default share)
         self._flow_bf_queue = []       # chunked tape history for the flow bins (Volume Burst / Flow window)
         self._flow_bf_inflight = None  # (t0, t1, sent_at) of the chunk being served
         self._flow_bf_t = 0.0
@@ -2142,6 +2144,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             self.menu.set_ema_vp_pct(getattr(self, "_ema_vp_pct_saved", 50))
             self.menu.set_flow_window(int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)))
+            self.menu.set_liq_pane_on(bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)))
             self.menu.set_liq_opts(int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                                    int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)))
             self.menu.set_burst_opts(float(getattr(self, "_burst_x", config.BURST_X)),
@@ -2395,6 +2398,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.bubbleMinUsdChanged.connect(lambda _v: self._save_ui_state())  # Candle-Bubbles MIN SIZE (repaint is per-frame)
         self.menu.bigPlayerMinUsdChanged.connect(self._on_bigplayer_min)          # Big Player threshold -> redraw + persist
         self.menu.bpVpMinUsdChanged.connect(self._on_bpvp_min)                    # Big Player Gray VP threshold -> redraw + persist
+        self.menu.liqPaneToggled.connect(self._on_liq_pane_toggled)              # resting-liquidity pane on/off
         self.menu.liqOptsChanged.connect(self._on_liq_opts)                      # resting-liquidity pane
         self.menu.burstOptsChanged.connect(self._on_burst_opts)                  # Volume Burst: x multiple / window
         self.menu.flowWindowChanged.connect(self._on_flow_window)                # Buy/Sell Flow rolling window
@@ -10145,6 +10149,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "bigplayer_min_usd": float(self.menu.big_player_min_usd()),   # Big Player single-print threshold
                 "bpvp_min_usd": float(self.menu.bp_vp_min_usd()),             # Big Player Gray VP MIN PLAYER threshold
                 "flow_win": int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)),   # Buy/Sell Flow window
+                "liq_pane_on": bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)),
                 "liq_radius": int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                 "liq_smooth": int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)),
                 "burst_x": float(getattr(self, "_burst_x", config.BURST_X)),            # Volume Burst multiple
@@ -10261,6 +10266,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _fw = int(s.get("flow_win", config.FLOW_WINDOW_SECS) or config.FLOW_WINDOW_SECS)
         if _fw in tuple(config.FLOW_WINDOW_CHOICES):
             self._flow_win = _fw          # the combo is synced in __init__ (the menu does not exist yet here)
+        self._liq_pane_on = bool(s.get("liq_pane_on", config.LIQ_PANE_ON))
         _lr = int(s.get("liq_radius", config.LIQ_RADIUS_TICKS) or config.LIQ_RADIUS_TICKS)
         _ls = int(s.get("liq_smooth", config.LIQ_SMOOTH_SECS) if s.get("liq_smooth") is not None else config.LIQ_SMOOTH_SECS)
         if _lr in tuple(int(v) for v in config.LIQ_RADIUS_CHOICES):
@@ -17092,6 +17098,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # _ensure_canvas_panes recreates them when the pane is rebuilt.
             self.lower_vline = None; self.lower_hline = None; self.vpin_tag = None
             self.lower_vb = None; self._lower_proxy = None
+            # ... and the Flow-mode liquidity pane is a CHILD of that same splitter, so its refs are dangling too.
+            # Null them and _liq_ensure_pane rebuilds the pane on the next entry (_liq_data survives -- it is data).
+            self._liq_plot = None; self._liq_curves = None; self._liq_vb = None
+            self._liq_sig = None; self._liq_sized = False
             # the swing-line CVD-mirror items lived on the CVD pane (a child of the just-deleted splitter_v) — null
             # them too, so the next hover recreates them on the rebuilt pane instead of touching a deleted C++ object.
             self._svl_cvd_line = None; self._svl_cvd_dots = None
@@ -17744,6 +17754,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_sig = None
         self._save_ui_state()
 
+    def _on_liq_pane_toggled(self, on: bool) -> None:
+        """Hamburger 'Limit orders pane' -> show/hide it (Flow mode only) and persist."""
+        self._liq_pane_on = bool(on)
+        self._liq_show(bool(on) and self.scanner_mode == "flow")
+        self._save_ui_state()
+
     def _liq_ensure_pane(self):
         """Create the pane under the flow lines, x-linked to the main view. Mirrors the Volume/CVD sub-panes."""
         if self._liq_plot is not None:
@@ -17801,8 +17817,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self._liq_ensure_pane() is None:
                 return
             self._liq_plot.setVisible(True)
+            sp = self.splitter_v                     # a freshly-added / previously-collapsed child holds 0 px
+            try:
+                sz = sp.sizes()
+                if sz and (not self._liq_sized or sz[-1] < 40):
+                    self._liq_sized = True          # size it ONCE (Qt's own addWidget share was half the window);
+                                                    # after that only a collapse re-triggers, so drags stand
+                    # Called before the first layout, sizes() is all zeros -- Qt then rescales whatever RATIO we
+                    # hand it to fill the splitter, so give price the true remainder rather than a subtraction
+                    # from zero (that read as 140:176 and handed the pane half the window).
+                    tot = sum(sz) or sp.height() or 800
+                    want = max(150, int(tot * 0.22))
+                    sz[-1] = want
+                    sz[0] = max(140, tot - want - sum(sz[1:-1]))
+                    sp.setSizes(sz)
+            except Exception:
+                pass
         elif self._liq_plot is not None:
-            self._liq_plot.setVisible(False)
+            try:
+                self._liq_plot.setVisible(False)
+            except RuntimeError:                     # the splitter was torn down under us -> nothing to hide
+                self._liq_plot = None; self._liq_curves = None; self._liq_vb = None
 
     def _liq_tick(self, now: float) -> None:
         """Per frame in Flow mode: keep the live edge fresh, ask for a new window when the view settles, draw."""
@@ -17849,7 +17884,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._liq_req is not None and now - self._liq_req_t > 60.0:
             self._liq_req = None                                   # timed out -> allow another
         if need and self._liq_req is None and now - self._liq_req_t > 1.0:
-            cols = int(min(int(config.LIQ_MAX_COLS), max(120, int(self._liq_plot.width()) or 600)))
+            # Columns at ~2x the snapshot cadence, NOT one per pixel: past that every extra column repeats the
+            # snapshot next to it and the painter still rasterises it (profiled at +25 ms/frame, see LIQ_COL_SECS).
+            _span = max(60.0, float(vx1) - float(vx0))
+            cols = max(120, int(_span / float(config.LIQ_COL_SECS)))
+            cols = int(min(cols, int(config.LIQ_MAX_COLS), int(self._liq_plot.width()) or 900))
             t0ms = int(max(vx0, now - float(config.DEPTH_RETENTION_HOURS) * 3600.0) * 1000)
             t1ms = int(min(vx1, now) * 1000)
             if t1ms - t0ms > 60000:
@@ -17940,7 +17979,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_last_set = None
         self._flow_ytop = 0.0
         self._flow_conn_was = bool(self.worker.connected)
-        self._liq_show(True)                     # the resting-liquidity pane rides Flow mode
+        self._liq_show(bool(getattr(self, "_liq_pane_on", True)))   # the pane rides Flow mode, if enabled
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
         self._flow_subscribe(backfill=True)
         now = time.time()
@@ -18044,7 +18083,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         buy_c.setData(t, buy); sell_c.setData(t, sell)
         if len(t) == 0:
             return
-        top = float(max(buy.max(), sell.max()))
+        # fit to the 99th percentile, not the MAX: a single burst window (measured $18.0M against a $1.16M
+        # median) squashed the whole chart flat against the bottom. The live value always stays in frame.
+        _all = np.concatenate([buy, sell]) if buy.size and sell.size else (buy if buy.size else sell)
+        top = float(np.percentile(_all, 99.0)) if _all.size else 0.0
+        top = max(top, float(buy[-1]) if buy.size else 0.0, float(sell[-1]) if sell.size else 0.0)
         cur = getattr(self, "_flow_ytop", 0.0)
         if top > 0 and (top > cur * 0.98 or top < cur * 0.55):   # dead-band: only re-fit on a real change
             self._flow_ytop = top * 1.18
@@ -19567,7 +19610,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._syncing_split = True
         try:
             if self.sender() is self.cob_col:
-                self.splitter_v.setSizes(self.cob_col.sizes())
+                self._splitter_v_set(self.cob_col.sizes())
             else:
                 self.cob_col.setSizes(self.splitter_v.sizes())
         finally:
@@ -19797,7 +19840,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         linked vertical splitters (price/VPIN and COB/spacer) set together so their dividers stay aligned."""
         if self.splitter_v is None:
             return
-        self.splitter_v.setSizes([10_000, 0, 0, 0])          # [price, cvd, vol, vpin] — all lower panes collapsed
+        self._splitter_v_set([10_000, 0, 0, 0])              # [price, cvd, vol, vpin] — all lower panes collapsed
         if self.cob_col is not None:
             self.cob_col.setSizes([10_000, 0, 0, 0])
 
@@ -19874,6 +19917,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.cvd_tag.setPos(self.cvd_vb.viewRange()[0][1], pt.y())
         self.cvd_tag.show()
 
+    def _splitter_v_set(self, sz4) -> None:
+        """Set the [price, CVD, vol, VPIN] slices WITHOUT truncating anything below them.
+
+        QSplitter.setSizes gives 0 to every child the list does not cover, so the four-element lists this class has
+        always passed silently collapsed the Flow-mode liquidity pane (child 5) the moment any of them ran. Keep
+        whatever the trailing children hold; the COB column only ever mirrors the four shared dividers."""
+        sz = [max(0, int(v)) for v in list(sz4)[:4]]
+        tail = []
+        try:
+            cur = self.splitter_v.sizes()
+            tail = list(cur[4:])
+            if tail:
+                # These callers pass RATIOS for the four shared panes (10_000 means "price takes everything").
+                # Handed straight to Qt with a trailing pane appended, that ratio is resolved against the trailing
+                # pane too and it comes back with an arbitrary slice -- so resolve them here, against the height
+                # the trailing panes leave behind, and those keep exactly what they hold.
+                avail = max(0, (sum(cur) or self.splitter_v.height() or 800) - sum(tail))
+                tot4 = sum(sz) or 1
+                sz = [int(round(v * avail / float(tot4))) for v in sz]
+        except Exception:
+            tail = []
+        self.splitter_v.setSizes(sz + tail)
+
     def _on_pane_handle_clicked(self, idx: int) -> None:
         """Click the price|CVD divider -> snap those two panes to a 50/50 height split and re-fit BOTH, so
         effort (CVD) and result (price) are read on equal footing. The VPIN pane keeps whatever slice it has.
@@ -19888,7 +19954,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         half = avail // 2
         new = [half, avail - half, sz[2], sz[3]]            # keep the vol + vpin slices as-is
-        self.splitter_v.setSizes(new)
+        self._splitter_v_set(new)
         if self.cob_col is not None:
             self.cob_col.setSizes(new)          # keep the COB divider glued to the price-pane bottom
         # Re-frame BOTH panes into their new equal heights, each fit to its own data over the SAME visible X
@@ -19939,7 +20005,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         total = sum(sz) or 10_000
         want = max(120, int(total * 0.25))           # ~25% of the stack, floored so it is always usable
         sz = [max(0, sz[0] - want), want, sz[2], sz[3]]
-        self.splitter_v.setSizes(sz)
+        self._splitter_v_set(sz)
         if self.cob_col is not None:
             self.cob_col.setSizes(sz)
 
@@ -19954,7 +20020,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         total = sum(sz) or 10_000
         want = max(120, int(total * 0.25))
         sz = [max(0, sz[0] - want), sz[1], want, sz[3]]
-        self.splitter_v.setSizes(sz)
+        self._splitter_v_set(sz)
         if self.cob_col is not None:
             self.cob_col.setSizes(sz)
 

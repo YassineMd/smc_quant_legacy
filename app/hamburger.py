@@ -291,6 +291,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     bubbleMinUsdChanged = QtCore.Signal(float)       # Candle-Bubbles MIN SIZE filter (USD/level; 0 = show all)
     bigPlayerMinUsdChanged = QtCore.Signal(float)    # Big Player Levels: single-print USD threshold
     bpVpMinUsdChanged = QtCore.Signal(float)
+    liqPaneToggled = QtCore.Signal(bool)          # resting-liquidity pane on/off (Flow mode)
     liqOptsChanged = QtCore.Signal(int, int)      # resting-liquidity pane: (radius ticks, smoothing seconds)
     burstOptsChanged = QtCore.Signal(float, int)   # Volume Burst: (x multiple, window seconds) — 2026-09-08
     flowWindowChanged = QtCore.Signal(int)   # Buy/Sell Flow: rolling window in seconds (2026-09-08)
@@ -1582,7 +1583,14 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.flow_sec.addWidget(w)
         w2 = QtWidgets.QWidget()
         l2 = QtWidgets.QVBoxLayout(w2); l2.setContentsMargins(2, 1, 8, 5); l2.setSpacing(2)
-        lab2 = QtWidgets.QLabel("Limit orders pane: +- ticks / smoothing")
+        self.liq_on = QtWidgets.QCheckBox("Limit orders pane (resting bid / ask $)")
+        self.liq_on.setChecked(bool(config.LIQ_PANE_ON))
+        self.liq_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.liq_on.setToolTip("The second pane under the flow lines: limit-order $ resting within +- N ticks of "
+                               "mid. Shows only in Buy/Sell Flow mode.")
+        self.liq_on.toggled.connect(lambda on: self.liqPaneToggled.emit(bool(on)))
+        l2.addWidget(self.liq_on)
+        lab2 = QtWidgets.QLabel("        +- ticks / smoothing")
         lab2.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:10px;")
         l2.addWidget(lab2)
         row = QtWidgets.QHBoxLayout(); row.setSpacing(6)
@@ -1607,6 +1615,12 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.flow_sec.addWidget(w2)
         root.addWidget(self.flow_sec)
         self.flow_sec.setVisible(False)                  # shown only in Flow mode (driven by the terminal)
+
+    def liq_pane_on(self) -> bool:
+        return bool(self.liq_on.isChecked())
+
+    def set_liq_pane_on(self, on: bool) -> None:
+        self.liq_on.blockSignals(True); self.liq_on.setChecked(bool(on)); self.liq_on.blockSignals(False)
 
     def liq_radius(self) -> int:
         return int(self.liq_r_combo.currentData() or config.LIQ_RADIUS_TICKS)
