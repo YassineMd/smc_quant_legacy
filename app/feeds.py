@@ -23,6 +23,7 @@ import json
 import multiprocessing
 import os
 import statistics
+import threading
 import time
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor
@@ -555,38 +556,20 @@ class MarketDataCore:
             # (empty 1m candles) and the pulse book froze mid-save. Redis-style fix: fork() a child that
             # serializes its copy-on-write snapshot and hard-exits — the parent pays ~nothing. The in-process
             # path remains for shutdown (force=True must complete before exit) and fork-less platforms. ──
-            if not force and hasattr(os, "fork"):
-                prev = getattr(self, "_tc_save_pid", 0)
-                if prev:
-                    try:
-                        done, _st = os.waitpid(prev, os.WNOHANG)   # reap the previous BGSAVE child
-                        if done == 0:
-                            return                                 # still writing -> skip this round (no overlap)
-                    except ChildProcessError:
-                        pass
-                    self._tc_save_pid = 0
-                pid = os.fork()
-                if pid > 0:
-                    self._tc_save_pid = pid                        # parent: instant return, zero GIL spent
-                    return
-                # CHILD: frozen COW snapshot. No locks/prints/asyncio — raw os.write + hard _exit only
-                # (inherited locks may be held by threads that don't exist here; cleanup must not run).
-                try:
-                    data = {tf: {str(k): v for k, v in store.items()}
-                            for tf, store in self._tc_store.items() if store}
-                    p = self._tc_path(); tmp = p + f".tmp{os.getpid()}"
-                    t0 = time.monotonic()
-                    with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=1) as f:
-                        json.dump(data, f)
-                    os.replace(tmp, p)                             # atomic swap (never a torn file)
-                    el = time.monotonic() - t0
-                    if el > 5.0:
-                        os.write(1, (f"CLOCK-CANDLE BGSAVE took {el:.1f}s "
-                                     f"({sum(len(v) for v in data.values())} candles)\n").encode())
-                except BaseException:
-                    pass
-                finally:
-                    os._exit(0)
+            if not force:
+                # ── 2026-09-09: the fork() BGSAVE was replaced by an INCREMENTAL THREADED writer. Forking looked
+                # free (copy-on-write) but Python keeps refcounts in the object header, so serialising the store
+                # dirties nearly every page: the child grew to ~1.1 GB (the store alone is ~537 MB / 456k level
+                # rows) for 80-95 s every 10 min on a 2 GB VM -> ~68 MB free, load 3, websocket handshake timeouts
+                # and unserved trades_window requests. This writer holds ONE candle's JSON at a time and yields the
+                # GIL every _TC_SAVE_CHUNK candles, so the loop keeps running without a second copy of the store. ──
+                th = getattr(self, "_tc_save_thread", None)
+                if th is not None and th.is_alive():
+                    return                                         # still writing -> skip this round (no overlap)
+                th = threading.Thread(target=self._tc_save_stream, name="tc-bgsave", daemon=True)
+                self._tc_save_thread = th
+                th.start()
+                return
             # dict(store) is an atomic (GIL-held) snapshot -> safe to run off the event loop while catchup_time_candles
             # (on the loop) may be adding a newly-closed candle; no "dict changed size during iteration".
             data = {tf: {str(k): v for k, v in dict(store).items()} for tf, store in list(self._tc_store.items()) if store}
@@ -600,6 +583,55 @@ class MarketDataCore:
                 print(f"CLOCK-CANDLE SAVE took {el:.1f}s ({sum(len(v) for v in data.values())} candles)")
         except Exception as e:
             print(f"CLOCK-CANDLE SAVE ERROR: {e}")
+
+    _TC_SAVE_CHUNK = 256          # candles serialised between GIL yields
+
+    def _tc_save_stream(self) -> None:
+        """Write the clock-candle store to disk INCREMENTALLY (background thread, no fork).
+
+        Emits the same JSON object the loader expects ({tf: {start_ts: candle}}) but one candle at a time, so the
+        peak extra memory is a single candle's JSON rather than a copy of the whole store. Every candle is shallow-
+        copied (with its `levels` dict) before dumping: the forming candle is mutated by the event loop, and
+        json.dumps over a dict that changes SIZE mid-walk raises."""
+        p = self._tc_path()
+        tmp = p + ".tmp"
+        t0 = time.monotonic()
+        n = 0
+        try:
+            with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=1) as f:
+                f.write("{")
+                first_tf = True
+                for tf in list(self._tc_store.keys()):
+                    store = self._tc_store.get(tf) or {}
+                    items = list(store.items())                    # atomic (GIL) shallow snapshot of this tf
+                    if not items:
+                        continue
+                    f.write(("" if first_tf else ",") + json.dumps(str(tf)) + ":{")
+                    first_tf = False
+                    for i, (k, v) in enumerate(items):
+                        vv = dict(v) if isinstance(v, dict) else v
+                        if isinstance(vv, dict):
+                            lv = vv.get("levels")
+                            if isinstance(lv, dict):
+                                vv["levels"] = dict(lv)            # freeze the forming candle's footprint
+                        f.write(("" if i == 0 else ",") + json.dumps(str(k)) + ":" + json.dumps(vv))
+                        n += 1
+                        if (n % self._TC_SAVE_CHUNK) == 0:
+                            time.sleep(0.002)                      # hand the GIL to the loop (shared-core VM: a real
+                            #                                        sleep guarantees a slice; ~43 x 2 ms per save)
+                    f.write("}")
+                f.write("}")
+            os.replace(tmp, p)                                     # atomic swap (never a torn file)
+            el = time.monotonic() - t0
+            if el > 5.0:
+                print(f"CLOCK-CANDLE BGSAVE took {el:.1f}s ({n} candles, streamed)")
+        except Exception as e:
+            print(f"CLOCK-CANDLE BGSAVE ERROR: {e}")
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
 
     def _tc_store_cap(self, tf: str) -> int:
         caps = getattr(config, "TIME_STORE_CAP", None) or {}
