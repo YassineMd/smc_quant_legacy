@@ -570,17 +570,11 @@ class MarketDataCore:
                 self._tc_save_thread = th
                 th.start()
                 return
-            # dict(store) is an atomic (GIL-held) snapshot -> safe to run off the event loop while catchup_time_candles
-            # (on the loop) may be adding a newly-closed candle; no "dict changed size during iteration".
-            data = {tf: {str(k): v for k, v in dict(store).items()} for tf, store in list(self._tc_store.items()) if store}
-            p = self._tc_path(); tmp = p + ".tmp"
-            t0 = time.monotonic()
-            with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=1) as f:   # level 1: the shutdown save must
-                json.dump(data, f)                                                 # finish inside TimeoutStopSec
-            os.replace(tmp, p)                                     # atomic swap (never a torn file)
-            el = time.monotonic() - t0
-            if el > 5.0:
-                print(f"CLOCK-CANDLE SAVE took {el:.1f}s ({sum(len(v) for v in data.values())} candles)")
+            # SHUTDOWN (force=True): the SAME streaming writer, run synchronously. Building the whole {tf: {...}}
+            # dict first cost ~24 s on the VM against TimeoutStopSec=30 -- systemd was SIGKILLing the daemon mid-save
+            # ('State stop-sigterm timed out. Killing.'). Streaming is ~2.5x faster and allocates one candle at a
+            # time, so a clean stop now finishes well inside the timeout. (2026-09-09)
+            self._tc_save_stream()
         except Exception as e:
             print(f"CLOCK-CANDLE SAVE ERROR: {e}")
 
