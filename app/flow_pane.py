@@ -31,7 +31,6 @@ class FlowStore:
         self.rev = 0                                 # backfill batch cannot overwrite a newer price
         self._memo = None
         self._bmemo = None
-        self._vmemo = None
         self._cmemo = None
 
     # ---------------------------------------------------------------- state
@@ -116,7 +115,6 @@ class FlowStore:
         self.rev += 1
         self._memo = None
         self._bmemo = None
-        self._vmemo = None
         self._cmemo = None
         return int(loc.size)
 
@@ -129,7 +127,6 @@ class FlowStore:
         self.rev += 1
         self._memo = None
         self._bmemo = None
-        self._vmemo = None
         self._cmemo = None
 
     # --------------------------------------------------------------- bursts
@@ -234,7 +231,13 @@ class FlowStore:
         st = np.concatenate([[0], brk]).astype(np.int64)
         en = np.concatenate([brk - 1, [k - 1]]).astype(np.int64)
         dur = (en - st + 1).astype(np.float64) * self.bin
-        keep = dur >= float(min_secs)
+        # A cycle must hold at least `min_secs` of ACTUAL TRADING. Without this, an un-backfilled HOLE (where
+        # buy == sell == 0, so `rb >= ra` is trivially True) becomes one enormous "buy cycle" with a huge
+        # duration and no volume -- precisely the shape the size/duration reading keys on. Measured: it dropped
+        # the in-app calibration from R2 0.455 to 0.187 and broke the top quintile's monotonicity.
+        act = np.concatenate([[0], np.cumsum(((b + a) > 0).astype(np.int64))])
+        n_act = act[en + off + 1] - act[st + off]
+        keep = (dur >= float(min_secs)) & (n_act >= max(1, int(min_secs / self.bin)))
         st, en, dur = st[keep], en[keep], dur[keep]
         if st.size == 0:
             out = (z, z, np.zeros(0, dtype=bool), z, z, z)
@@ -258,78 +261,6 @@ class FlowStore:
         base_t = (self._base + i0) * self.bin
         out = (base_t + st * self.bin, base_t + (en + 1) * self.bin, is_buy, dom_usd, dur, adv)
         self._cmemo = (key, out)
-        return out
-
-    # -------------------------------------------------------- constant-$ bins
-    def volume_bins(self, t0: float, t1: float, bin_usd: float, tick: float, max_bins: int = 1200):
-        """Cut [t0, t1] into bins of `bin_usd` TAKER DOLLARS and report what each one did to price.
-
-        Returns (t_close, buy$, sell$, imbalance, advance_ticks) where
-            imbalance     = (buy - sell) / (buy + sell)  in [-1, 1]  -- how one-sided the bin was
-            advance_ticks = ticks the PUSHING side gained: +ve it got paid, -ve price went the other way
-        Price comes from the tape (last trade in the closing / preceding 1 s bin), which is what the study
-        measured; that carries about half a spread of bid-ask bounce, and the bins are ~37 s at $1M so it is a
-        small share of a typical 5-tick move.
-
-        Only the NEWEST `max_bins` are returned, so a 72 h store still draws in bounded time. Memoized on
-        (rev, range, bin_usd, max_bins) like every other read here."""
-        if self.empty() or bin_usd <= 0:
-            z = np.zeros(0)
-            return (z, z, z, z, z)
-        key = (self.rev, round(float(t0), 3), round(float(t1), 3), round(float(bin_usd), 2), int(max_bins))
-        if self._vmemo is not None and self._vmemo[0] == key:
-            return self._vmemo[1]
-        n = len(self._buy)
-        i0 = max(0, int(np.floor(t0 / self.bin)) - self._base)
-        i1 = min(n - 1, int(np.floor(t1 / self.bin)) - self._base)
-        if i1 <= i0:
-            z = np.zeros(0)
-            out = (z, z, z, z, z)
-            self._vmemo = (key, out)
-            return out
-        b = self._buy[i0:i1 + 1]; s_ = self._sell[i0:i1 + 1]
-        tot = b + s_
-        c = np.cumsum(tot)
-        if c[-1] < bin_usd:
-            z = np.zeros(0)
-            out = (z, z, z, z, z)
-            self._vmemo = (key, out)
-            return out
-        # a bin CLOSES at the first 1 s bin whose cumulative dollars cross the next multiple of bin_usd
-        edges = np.searchsorted(c, np.arange(bin_usd, c[-1], bin_usd), side="left")
-        edges = np.unique(np.clip(edges, 0, len(c) - 1))
-        if edges.size < 2:
-            z = np.zeros(0)
-            out = (z, z, z, z, z)
-            self._vmemo = (key, out)
-            return out
-        if edges.size > max_bins:
-            edges = edges[-(max_bins + 1):]                     # keep the NEWEST bins
-        lo = edges[:-1] + 1
-        hi = edges[1:]
-        cb = np.concatenate([[0.0], np.cumsum(b)])
-        cs = np.concatenate([[0.0], np.cumsum(s_)])
-        buy = cb[hi + 1] - cb[lo]
-        sell = cs[hi + 1] - cs[lo]
-        # price at each boundary: the last trade at or before it, carried forward over tradeless 1 s bins
-        px = self._px[i0:i1 + 1].copy()
-        have = px > 0
-        if not have.any():
-            z = np.zeros(0)
-            out = (z, z, z, z, z)
-            self._vmemo = (key, out)
-            return out
-        fill = np.maximum.accumulate(np.where(have, np.arange(px.size), 0))
-        px = px[fill]
-        p_open = px[edges[:-1]]
-        p_close = px[edges[1:]]
-        realized = (p_close - p_open) / float(tick)
-        totb = buy + sell
-        nf = np.where(totb > 0, (buy - sell) / np.maximum(totb, 1e-9), 0.0)
-        adv = np.sign(nf) * realized
-        t_close = (self._base + i0 + hi) * self.bin + self.bin
-        out = (t_close, buy, sell, nf, adv)
-        self._vmemo = (key, out)
         return out
 
     # ----------------------------------------------------------------- read

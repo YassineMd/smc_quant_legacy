@@ -1673,19 +1673,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cyc_win = float(config.CYCLE_WIN_SECS)
         self._cyc_vline = None; self._cyc_hline = None
         self._cyc_tag = None; self._cyc_time_tag = None; self._cyc_proxy = None
-        self._imp_plot = None          # Impact pane (Flow mode): ticks the pushing side gained per bin
-        self._imp_vb = None
-        self._imp_bars = None          # (actual line, expected line, over-shading, under-shading)
-        self._imp_log_t = 0.0          # last calibration-log write
-        self._imp_zero = None
-        self._imp_sized = False
-        self._imp_sig = None
-        self._imp_t = 0.0              # last recompute (the store re-keys on every live batch)
-        self._imp_data = None
-        self._imp_on = bool(config.IMPACT_PANE_ON)
-        self._imp_bin = float(config.IMPACT_BIN_USD)
-        self._imp_vline = None; self._imp_hline = None
-        self._imp_tag = None; self._imp_time_tag = None; self._imp_proxy = None
         self._liq_lvl = None           # right-edge markers: (bid rule, ask rule, bid badge, ask badge)
         self._liq_lvl_txt = ("", "")   # last badge strings -- setHtml is the expensive part, skip it when equal
         self._flow_bf_queue = []       # chunked tape history for the flow bins (Volume Burst / Flow window)
@@ -2177,8 +2164,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_flow_window(int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)))
             self.menu.set_cycle_opts(bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)),
                                      float(getattr(self, "_cyc_win", config.CYCLE_WIN_SECS)))
-            self.menu.set_impact_opts(bool(getattr(self, "_imp_on", config.IMPACT_PANE_ON)),
-                                      float(getattr(self, "_imp_bin", config.IMPACT_BIN_USD)))
             self.menu.set_liq_pane_on(bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)))
             self.menu.set_liq_opts(int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                                    int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)))
@@ -2435,8 +2420,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.bpVpMinUsdChanged.connect(self._on_bpvp_min)                    # Big Player Gray VP threshold -> redraw + persist
         self.menu.cyclePaneToggled.connect(self._on_cyc_pane_toggled)            # Cycle pane on/off
         self.menu.cycleWinChanged.connect(self._on_cyc_win)                      # cycle-defining window
-        self.menu.impactPaneToggled.connect(self._on_imp_pane_toggled)           # Impact pane on/off
-        self.menu.impactBinChanged.connect(self._on_imp_bin)                     # $ per constant-dollar bin
         self.menu.liqPaneToggled.connect(self._on_liq_pane_toggled)              # resting-liquidity pane on/off
         self.menu.liqOptsChanged.connect(self._on_liq_opts)                      # resting-liquidity pane
         self.menu.burstOptsChanged.connect(self._on_burst_opts)                  # Volume Burst: x multiple / window
@@ -4205,7 +4188,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.vol_hline.hide(); self.vol_tag.hide()
         self._liq_sync_vline(pt.x())                          # ... and into the Flow liquidity pane
         self._liq_hide_cursor()                               # cursor is over the chart -> no liquidity readout
-        self._imp_sync_vline(pt.x()); self._imp_hide_cursor()  # ... and the Impact pane
         self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()  # ... and the Cycle pane
         if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
             self.fp_panel.show_price_line(pt.y())
@@ -10194,8 +10176,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "flow_win": int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)),   # Buy/Sell Flow window
                 "cycle_on": bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)),
                 "cycle_win": float(getattr(self, "_cyc_win", config.CYCLE_WIN_SECS)),
-                "impact_on": bool(getattr(self, "_imp_on", config.IMPACT_PANE_ON)),
-                "impact_bin": float(getattr(self, "_imp_bin", config.IMPACT_BIN_USD)),
                 "liq_pane_on": bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)),
                 "liq_radius": int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                 "liq_smooth": int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)),
@@ -10317,10 +10297,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _cw = float(s.get("cycle_win", config.CYCLE_WIN_SECS) or config.CYCLE_WIN_SECS)
         if _cw in tuple(float(v) for v in config.CYCLE_WIN_CHOICES):
             self._cyc_win = _cw
-        self._imp_on = bool(s.get("impact_on", config.IMPACT_PANE_ON))
-        _ib = float(s.get("impact_bin", config.IMPACT_BIN_USD) or config.IMPACT_BIN_USD)
-        if _ib in tuple(float(v) for v in config.IMPACT_BIN_CHOICES):
-            self._imp_bin = _ib
         self._liq_pane_on = bool(s.get("liq_pane_on", config.LIQ_PANE_ON))
         _lr = int(s.get("liq_radius", config.LIQ_RADIUS_TICKS) or config.LIQ_RADIUS_TICKS)
         _ls = int(s.get("liq_smooth", config.LIQ_SMOOTH_SECS) if s.get("liq_smooth") is not None else config.LIQ_SMOOTH_SECS)
@@ -16469,6 +16445,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._flow_sig = None
             self._flow_conn_was2 = False      # force a re-plan of the chunked history for the new span
         self.clear_scanner_canvas()
+        if self.scanner_mode == "flow":
+            # clear_scanner_canvas() is written for the Mode-10 bucket canvas, but it also destroys splitter_v
+            # (taking the liquidity and cycle panes with it) and REMOVES the flow curves, which are registered
+            # scanner items. Nothing re-enters Flow mode on a Scan Start change, so without this the pane stack
+            # vanishes and _flow_draw keeps calling setData on orphaned curves -- drawing nothing at all.
+            self._flow_curves = None                      # force a rebuild; the old pair is off the plot
+            self._liq_show(bool(getattr(self, "_liq_pane_on", True)))
+            self._cyc_show(bool(getattr(self, "_cyc_on", True)))
+            self._liq_sig = None
+            self._cyc_sig = None; self._cyc_t = 0.0
         # The loaded set moved, so EVERYTHING derived from it must re-derive — same invalidation the replay step does.
         # Without this the Pivot D/E marks (sig-gated on offset/range) and the selection kept their last values, so a
         # Start-Date / replay-cursor change only visibly took effect on the next right-arrow step.
@@ -17163,9 +17149,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._cyc_plot = None; self._cyc_vb = None; self._cyc_items = None
             self._cyc_sig = None; self._cyc_sized = False; self._cyc_proxy = None
             self._cyc_vline = None; self._cyc_hline = None; self._cyc_tag = None; self._cyc_time_tag = None
-            self._imp_plot = None; self._imp_vb = None; self._imp_bars = None; self._imp_zero = None
-            self._imp_sig = None; self._imp_sized = False; self._imp_proxy = None
-            self._imp_vline = None; self._imp_hline = None; self._imp_tag = None; self._imp_time_tag = None
             self._liq_lvl_dock = None; self._liq_lvl_up = None
             # the swing-line CVD-mirror items lived on the CVD pane (a child of the just-deleted splitter_v) — null
             # them too, so the next hover recreates them on the rebuilt pane instead of touching a deleted C++ object.
@@ -18198,7 +18181,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.vline.setPos(pt.x())
         self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
         self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
-        self._imp_sync_vline(pt.x()); self._imp_hide_cursor()
         for _v, _h, _t in ((getattr(self, "cvd_vline", None), getattr(self, "cvd_hline", None),
                             getattr(self, "cvd_tag", None)),
                            (getattr(self, "vol_vline", None), getattr(self, "vol_hline", None),
@@ -18272,233 +18254,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._cyc_ytop = lim
             self._cyc_vb.setYRange(-lim, lim, padding=0.0)
 
-    # ------------------------------------------------------------------
-    # IMPACT pane (Flow mode) -- ticks the PUSHING side gained, per constant-dollar bin
-    # ------------------------------------------------------------------
-    def _on_imp_pane_toggled(self, on: bool) -> None:
-        self._imp_on = bool(on)
-        self._imp_show(bool(on) and self.scanner_mode == "flow")
-        self._save_ui_state()
-
-    def _on_imp_bin(self, bin_usd: float) -> None:
-        self._imp_bin = float(bin_usd)
-        self._imp_sig = None
-        self._imp_t = 0.0
-        self._save_ui_state()
-
-    def _imp_ensure_pane(self):
-        if self._imp_plot is not None:
-            return self._imp_plot
-        try:
-            self._ensure_canvas_panes()
-        except Exception:
-            pass
-        sp = getattr(self, "splitter_v", None)
-        if sp is None:
-            return None
-        ax = PriceAxis(orientation="right")
-        pw = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"), "right": ax})
-        pw.setBackground("#141414")
-        pw.showAxis("right"); pw.hideAxis("left")
-        for _a in ("bottom", "right"):
-            pw.getAxis(_a).setPen(pg.mkPen("#dcdcdc", width=1))
-            pw.getAxis(_a).setTextPen(pg.mkPen("#dcdcdc"))
-        pw.showGrid(x=False, y=False)
-        pw.setMenuEnabled(False)
-        pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
-        pw.getAxis("bottom").set_scanner_active(False)
-        ax.tickStrings = lambda vals, sc, sp_: ["%+.0ft" % v for v in vals]     # the y is TICKS, not a price
-        vb = pw.getViewBox()
-        vb.setMouseEnabled(x=True, y=True)
-        vb.setXLink(self.vb)
-        # Shading first (behind the lines): one vertical segment per bin from EXPECTED to ACTUAL, green where
-        # the push beat expectation, red where it fell short. Paired segments rather than a FillBetweenItem --
-        # the bins sit ~2 px apart so they read as a filled band, and re-keying two numpy arrays is far cheaper
-        # than rebuilding a polygon path on every live batch.
-        _shade = []
-        for _c in ("#26a69a", "#ef5350"):
-            _pn = pg.mkPen(_c, width=3.0); _pn.setCosmetic(True); _pn.setCapStyle(QtCore.Qt.FlatCap)
-            it = pg.PlotCurveItem(pen=_pn, antialias=False, connect="pairs")
-            it.setZValue(2); pw.addItem(it); _shade.append(it)
-        _ap = pg.mkPen("#e8ecf2", width=2.0); _ap.setCosmetic(True)
-        _ap.setCapStyle(QtCore.Qt.RoundCap); _ap.setJoinStyle(QtCore.Qt.RoundJoin)
-        _actual = pg.PlotCurveItem(pen=_ap, antialias=False)
-        _actual.setZValue(10); pw.addItem(_actual)
-        _ep = pg.mkPen("#9aa4b2", width=1.6, style=QtCore.Qt.DashLine); _ep.setCosmetic(True)
-        _expected = pg.PlotCurveItem(pen=_ep, antialias=False)
-        _expected.setZValue(9); pw.addItem(_expected)
-        self._imp_bars = (_actual, _expected, _shade[0], _shade[1])
-        self._imp_zero = pg.InfiniteLine(angle=0, pos=0.0, pen=pg.mkPen("#8a8a8a", width=1))
-        self._imp_zero.setZValue(5); pw.addItem(self._imp_zero, ignoreBounds=True)
-        for _lv in (float(config.IMPACT_MED_ADV), -float(config.IMPACT_MED_ADV)):
-            _r = pg.InfiniteLine(angle=0, pos=_lv,
-                                 pen=pg.mkPen("#4a5160", width=1, style=QtCore.Qt.DashLine))
-            _r.setZValue(4); pw.addItem(_r, ignoreBounds=True)
-        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
-        self._imp_vline = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
-        self._imp_hline = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
-        self._imp_vline.setZValue(15); self._imp_hline.setZValue(15)
-        pw.addItem(self._imp_vline, ignoreBounds=True); pw.addItem(self._imp_hline, ignoreBounds=True)
-        self._imp_hline.hide()
-        _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True)
-        self._imp_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
-        self._imp_tag.textItem.setFont(_tf); self._imp_tag.setZValue(16)
-        pw.addItem(self._imp_tag, ignoreBounds=True); self._imp_tag.hide()
-        self._imp_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
-        self._imp_time_tag.textItem.setFont(_tf); self._imp_time_tag.setZValue(61)
-        pw.addItem(self._imp_time_tag, ignoreBounds=True); self._imp_time_tag.hide()
-        self._imp_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_imp_mouse_move)
-        self._imp_plot = pw
-        self._imp_vb = vb
-        self._theme_sub_panes(not self._simple_bw())     # born into the CURRENT Chart Style, not always dark
-        sp.addWidget(pw)
-        pw.setMinimumHeight(60)
-        return pw
-
-    def _imp_show(self, on: bool) -> None:
-        if on:
-            if self._imp_ensure_pane() is None:
-                return
-            self._imp_plot.setVisible(True)
-            if self._sub_pane_grow(self._imp_plot, not self._imp_sized, share=0.20):
-                self._imp_sized = True
-        elif self._imp_plot is not None:
-            try:
-                self._imp_plot.setVisible(False)
-            except RuntimeError:
-                self._imp_plot = None; self._imp_bars = None; self._imp_vb = None
-
-    def _imp_hide_cursor(self) -> None:
-        for it in (self._imp_hline, self._imp_tag, self._imp_time_tag):
-            if it is not None:
-                it.hide()
-
-    def _imp_sync_vline(self, x: float) -> None:
-        if self._imp_vline is not None:
-            self._imp_vline.setPos(x)
-
-    def _on_imp_mouse_move(self, evt) -> None:
-        """Cursor over the Impact pane: its own crosshair, a right-axis badge in TICKS and the clock badge, with
-        the shared vertical pushed into every other pane. Mirrors _on_liq_mouse_move."""
-        if self._imp_vb is None or self._imp_plot is None or not self._imp_plot.isVisible():
-            return
-        pos = evt[0]
-        if not self._imp_plot.sceneBoundingRect().contains(pos):
-            self._imp_hide_cursor()
-            return
-        pt = self._imp_vb.mapSceneToView(pos)
-        self._imp_vline.setPos(pt.x())
-        self._imp_hline.setPos(pt.y()); self._imp_hline.show()
-        (vx0, vx1), (vy0, vy1) = self._imp_vb.viewRange()
-        self._imp_tag.setText("%+.1ft" % float(pt.y()))
-        self._imp_tag.setPos(vx1, pt.y()); self._imp_tag.show()
-        _xl = self._x_time_label(pt.x())
-        if _xl:
-            self._imp_time_tag.setText(_xl); self._imp_time_tag.setPos(pt.x(), vy0); self._imp_time_tag.show()
-        else:
-            self._imp_time_tag.hide()
-        self.vline.setPos(pt.x())
-        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
-        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
-        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
-        for _v, _h, _t in ((getattr(self, "cvd_vline", None), getattr(self, "cvd_hline", None),
-                            getattr(self, "cvd_tag", None)),
-                           (getattr(self, "vol_vline", None), getattr(self, "vol_hline", None),
-                            getattr(self, "vol_tag", None)),
-                           (getattr(self, "lower_vline", None), getattr(self, "lower_hline", None),
-                            getattr(self, "vpin_tag", None))):
-            if _v is not None:
-                _v.setPos(pt.x())
-                if _h is not None:
-                    _h.hide()
-                if _t is not None:
-                    _t.hide()
-
-    def _imp_tick(self, now: float) -> None:
-        """Per frame in Flow mode. The store re-keys on EVERY live batch, so the read is throttled: a full
-        rebuild over a 72 h store measured 9.6 ms, which is not something to pay at frame rate."""
-        if self._imp_plot is None or not self._imp_plot.isVisible():
-            return
-        if now - self._imp_t < float(config.IMPACT_RECALC_SECS):
-            return
-        self._imp_t = now
-        (vx0, vx1), _ = self.vb.viewRange()
-        try:
-            data = self._flow.volume_bins(vx0, vx1, float(self._imp_bin), float(config.TICK_SIZE),
-                                          int(config.IMPACT_MAX_BARS))
-        except Exception:
-            return
-        self._imp_data = data
-        self._imp_draw()
-
-    def _imp_expected(self, nf):
-        """What that much one-sidedness NORMALLY buys, in ticks -- interpolated over the MEASURED curve.
-
-        Deliberately a lookup, not a rolling fit: a fit re-calibrates the regime the pane exists to show, and
-        measured, its expected line moved ~0.1 ticks against a several-tick actual (corr(gap, actual) +0.92 to
-        +0.998, i.e. the gap was just the price move). Signed toward the pusher like `adv`, so this is >= 0."""
-        return np.interp(np.abs(nf), np.asarray(config.IMPACT_EXP_X, dtype=np.float64),
-                         np.asarray(config.IMPACT_EXP_Y, dtype=np.float64))
-
-    def _imp_draw(self) -> None:
-        """ACTUAL (solid) vs EXPECTED (dashed) ticks gained by the pusher, shaded between: green where the push
-        beat expectation (thin book), red where it fell short (absorbed). Below zero it was pushed the other way."""
-        if self._imp_data is None or self._imp_bars is None:
-            return
-        t, buy, sell, nf, adv = self._imp_data
-        act, exp, up, dn = self._imp_bars
-        if t.size == 0:
-            for it in (act, exp, up, dn):
-                it.setData(np.zeros(0), np.zeros(0))
-            return
-        sig = (int(t.size), round(float(t[-1]), 2), round(float(adv[-1]), 3), round(float(self._imp_bin), 1))
-        if sig == self._imp_sig:
-            return
-        self._imp_sig = sig
-        e = self._imp_expected(nf)
-        act.setData(t, adv)
-        exp.setData(t, e)
-        gap = adv - e
-        for it, m in ((up, gap > 0), (dn, gap < 0)):
-            if not m.any():
-                it.setData(np.zeros(0), np.zeros(0))
-                continue
-            xs = np.repeat(t[m], 2)
-            ys = np.empty(xs.size)
-            ys[0::2] = e[m]                          # each PAIR spans expected -> actual for that bin
-            ys[1::2] = adv[m]
-            it.setData(xs, ys)
-        lim = float(max(np.abs(adv).max(), e.max())) * 1.15 or 1.0
-        cur = getattr(self, "_imp_ytop", 0.0)
-        if lim > cur * 0.98 or lim < cur * 0.55:     # dead-band, same as the other panes
-            self._imp_ytop = lim
-            self._imp_vb.setYRange(-lim, lim, padding=0.0)
-        self._imp_log(t, nf, adv)
-
-    def _imp_log(self, t, nf, adv) -> None:
-        """Append the STORE'S OWN calibration next to the shipped lookup, so its drift is visible (user asked to
-        see how stable the constant is). Written at most every IMPACT_LOG_SECS and NEVER fed back into the
-        drawing -- a self-recalibrating baseline is exactly what makes the regime invisible."""
-        now = time.time()
-        if now - self._imp_log_t < float(config.IMPACT_LOG_SECS) or t.size < 200:
-            return
-        self._imp_log_t = now
-        try:
-            a = np.abs(nf)
-            q = np.percentile(a, [20, 40, 60, 80])
-            lab = np.digitize(a, q)
-            rec = {"ts": int(now), "bin_usd": float(self._imp_bin), "n": int(t.size),
-                   "won_pct": round(100.0 * float(np.mean(adv > 0)), 2),
-                   "bands": [{"imb": round(float(np.median(a[lab == k])), 3),
-                              "n": int((lab == k).sum()),
-                              "median_adv": round(float(np.median(adv[lab == k])), 2)}
-                             for k in range(5) if (lab == k).sum() > 5],
-                   "shipped": list(config.IMPACT_EXP_Y)}
-            with open(os.path.join(config.DATA_DIR, "impact_calibration.jsonl"), "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(rec) + chr(10))
-        except Exception:
-            pass
-
     def _liq_hide_cursor(self) -> None:
         """Cursor is not over the pane -> drop its readouts (the lines linger, like every other pane)."""
         if self._liq_hline is not None:
@@ -18539,7 +18294,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._liq_time_tag.hide()
         self.vline.setPos(pt.x())                        # shared vertical -> the flow chart above
         self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
-        self._imp_sync_vline(pt.x()); self._imp_hide_cursor()
         self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
         for _v, _h, _t in ((getattr(self, "cvd_vline", None), getattr(self, "cvd_hline", None),
                             getattr(self, "cvd_tag", None)),
@@ -18632,8 +18386,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_ytop = 0.0
         self._flow_conn_was = bool(self.worker.connected)
         self._liq_show(bool(getattr(self, "_liq_pane_on", True)))   # the pane rides Flow mode, if enabled
-        self._imp_show(bool(getattr(self, "_imp_on", True)))        # ... and the Impact pane
-        self._imp_sig = None; self._imp_t = 0.0
         self._cyc_show(bool(getattr(self, "_cyc_on", True)))        # ... and the Cycle pane
         self._cyc_sig = None; self._cyc_t = 0.0
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
@@ -18653,7 +18405,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self.menu, "flow_sec", None) is not None:
             self.menu.flow_sec.setVisible(False)
         self._liq_show(False)
-        self._imp_show(False)
         self._cyc_show(False)
         self._flow_curves = None
         self._flow_sig = None
@@ -18698,10 +18449,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_draw(now)
         try:
             self._liq_tick(now)         # resting-liquidity pane — self-gated, fail-safe
-        except Exception:
-            pass
-        try:
-            self._imp_tick(now)         # Impact pane -- self-gated, throttled, fail-safe
         except Exception:
             pass
         try:
@@ -19510,8 +19257,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         cross = (170, 170, 170, 150) if dark else (0, 0, 0, 150)
         for pw, items in ((getattr(self, "_liq_plot", None),
                            (getattr(self, "_liq_vline", None), getattr(self, "_liq_hline", None))),
-                          (getattr(self, "_imp_plot", None),
-                           (getattr(self, "_imp_vline", None), getattr(self, "_imp_hline", None))),
                           (getattr(self, "_cyc_plot", None),
                            (getattr(self, "_cyc_vline", None), getattr(self, "_cyc_hline", None)))):
             if pw is None:
@@ -19528,26 +19273,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     ln.setPen(p)
             except RuntimeError:
                 pass                                       # the splitter tore the pane down under us
-        # the impact pane's zero / reference rules need contrast on both grounds
-        for ln, col in ((getattr(self, "_imp_zero", None), "#8a8a8a" if dark else "#555555"),):
-            if ln is not None:
-                try:
-                    ln.setPen(pg.mkPen(col, width=1))
-                except RuntimeError:
-                    pass
-        # ... and the ACTUAL line is near-white on the dark ground, near-black on the light one
-        _b = getattr(self, "_imp_bars", None)
-        if _b:
-            try:
-                _ap = pg.mkPen("#e8ecf2" if dark else "#1b1b1b", width=2.0); _ap.setCosmetic(True)
-                _ap.setCapStyle(QtCore.Qt.RoundCap); _ap.setJoinStyle(QtCore.Qt.RoundJoin)
-                _b[0].setPen(_ap)
-                _ep = pg.mkPen("#9aa4b2" if dark else "#6b7280", width=1.6, style=QtCore.Qt.DashLine)
-                _ep.setCosmetic(True)
-                _b[1].setPen(_ep)
-            except RuntimeError:
-                pass
-
     @staticmethod
     def _fmt_k(v: float) -> str:
         """Compact thousands formatting for HUD/axis badges (e.g. 148K, -1.8K)."""
@@ -20629,7 +20354,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.vol_vline.setPos(pt.x())
             self.vol_hline.hide(); self.vol_tag.hide()
         self._liq_sync_vline(pt.x()); self._liq_hide_cursor()   # ... and the Flow liquidity pane
-        self._imp_sync_vline(pt.x()); self._imp_hide_cursor()
         self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
         self.cvd_tag.setText(f"{pt.y():,.0f}")   # CVD is a volume total -> thousands-separated, no decimals
         self.cvd_tag.setPos(self.cvd_vb.viewRange()[0][1], pt.y())

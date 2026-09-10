@@ -181,19 +181,6 @@ FLOW_WINDOW_SECS = 60           # default rolling window = the tablet gauge's 60
 FLOW_WINDOW_CHOICES = (10, 30, 60, 300)
 FLOW_BACKFILL_SECS = 3600       # history requested on entry (one trades_window, same shape as the Trades tape's)
 # --- Resting-liquidity pane (Buy/Sell Flow mode, user 2026-09-09): limit-order $ within +-N ticks of mid.
-# --- Impact pane (Buy/Sell Flow mode, user 2026-09-10): ticks the pushing side gained, per constant-$ bin.
-IMPACT_PANE_ON = True
-IMPACT_BIN_USD = 1_000_000.0    # taker $ per bin. The DENOMINATOR is fixed here, not divided out later --
-                                # time bins put flow under the ratio and quiet stretches read as huge impact.
-IMPACT_BIN_CHOICES = (250_000.0, 500_000.0, 1_000_000.0, 2_000_000.0, 5_000_000.0)
-IMPACT_MAX_BARS = 900           # bars drawn; the read keeps the NEWEST this many
-IMPACT_RECALC_SECS = 0.5        # the store re-keys on every live batch; recompute at most this often
-IMPACT_MED_ADV = 3.0            # 72 h median advance, drawn as the +/- reference rule
-# EXPECTED move: the MEASURED median advance by one-sidedness (study_impact_vb.py, 72 h, 4,729 $1M bins).
-# A lookup, deliberately NOT a rolling fit -- a rolling fit calibrates the very regime away that the pane is
-# meant to show, and measured, its expected line varied ~0.1 ticks against a several-tick actual.
-IMPACT_EXP_X = (0.00, 0.05, 0.18, 0.31, 0.47, 0.76, 1.00)     # |imbalance|
-IMPACT_EXP_Y = (0.0, 0.0, 2.0, 3.0, 5.0, 6.0, 6.5)            # ticks the pusher normally gains
 # --- Cycle pane (Buy/Sell Flow, user 2026-09-10). A cycle = a run where one side owns the smoothed flow.
 CYCLE_PANE_ON = True
 CYCLE_WIN_SECS = 300.0          # smoothing that DEFINES the boundary. 300 s measured best out-of-sample (0.416)
@@ -206,8 +193,6 @@ CYCLE_RECALC_SECS = 0.5         # the store re-keys on every live batch; a full 
 # What that much dominant volume NORMALLY buys, in ticks -- the MEASURED quintile curve, interpolated.
 CYCLE_EXP_X = (0.00, 0.05, 0.13, 0.38, 1.50, 4.00)     # dominant $M
 CYCLE_EXP_Y = (-0.1, 0.0, 0.1, 0.4, 4.8, 8.0)          # ticks
-
-IMPACT_LOG_SECS = 300.0         # how often the store's OWN calibration is logged (for drift; never drawn)
 
 LIQ_PANE_ON = True              # the pane itself (hamburger 'Flow' -> 'Limit orders pane'); persisted
 LIQ_RADIUS_TICKS = 100          # default half-width, in TICKS (0.01 -> +-$1.00)
@@ -231,7 +216,9 @@ BURST_FLOOR_PCT = 90.0          # a burst window must be busier than this percen
 #                                 (self-scaling: no absolute $ knob, and the badge marks the standouts, not every bar)
 BURST_CAP = 50.0                # displayed multiple ceiling (a near-empty other side would read as infinity)
 BURST_BACKFILL_SECS = 21600     # ONE chunk of history (== the BP chunk size); the layer walks back in chunks
-FLOW_HISTORY_SECS = 86400       # ... until the bins cover this much of the LIVE edge (replay targets its own range)
+FLOW_HISTORY_SECS = 259200   # 72 h -- the daemon's own tape retention. At 24 h a Scan Start
+                             # further back than a day left the view's left side permanently
+                             # empty (measured: -30 h filled 24.0 h = 80% of the view)       # ... until the bins cover this much of the LIVE edge (replay targets its own range)
 FLOW_BF_CHUNK_SECS = 7200      # 2 h per history chunk: the window fills PROGRESSIVELY instead of waiting on
 #                                one 6 h transfer (~300k trades) before anything shows
 FLOW_BF_SPACING_SECS = 4.0      # min seconds between chunk requests (only ONE is ever in flight anyway) -- the

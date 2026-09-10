@@ -293,8 +293,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     bpVpMinUsdChanged = QtCore.Signal(float)
     cyclePaneToggled = QtCore.Signal(bool)       # Cycle pane on/off (Flow mode)
     cycleWinChanged = QtCore.Signal(float)       # the smoothing that defines a cycle boundary
-    impactPaneToggled = QtCore.Signal(bool)      # Impact pane on/off (Flow mode)
-    impactBinChanged = QtCore.Signal(float)      # taker $ per constant-dollar bin
     liqPaneToggled = QtCore.Signal(bool)          # resting-liquidity pane on/off (Flow mode)
     liqOptsChanged = QtCore.Signal(int, int)      # resting-liquidity pane: (radius ticks, smoothing seconds)
     burstOptsChanged = QtCore.Signal(float, int)   # Volume Burst: (x multiple, window seconds) — 2026-09-08
@@ -1616,58 +1614,34 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         l2.addLayout(row)
         for cb_ in (self.liq_r_combo, self.liq_s_combo):
             cb_.currentIndexChanged.connect(lambda _i: self.liqOptsChanged.emit(self.liq_radius(), self.liq_smooth()))
-        w3 = QtWidgets.QWidget()
-        l3 = QtWidgets.QVBoxLayout(w3); l3.setContentsMargins(2, 1, 8, 5); l3.setSpacing(2)
-        self.impact_on = QtWidgets.QCheckBox("Impact pane (ticks the pusher gained)")
-        self.impact_on.setChecked(bool(config.IMPACT_PANE_ON))
-        self.impact_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
-        self.impact_on.setToolTip("One bar per constant-dollar bin: green = buyers pushed, red = sellers pushed,\n"
-                                  "height = the ticks that side gained. Below zero it pushed and price went the\n"
-                                  "OTHER way. COINCIDENT readout -- measured, not predictive.")
-        self.impact_on.toggled.connect(lambda on: self.impactPaneToggled.emit(bool(on)))
-        l3.addWidget(self.impact_on)
-        row3 = QtWidgets.QHBoxLayout(); row3.setSpacing(6)
-        lab3 = QtWidgets.QLabel("$ per bin")
-        lab3.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:10px;")
-        row3.addWidget(lab3)
-        self.impact_bin_combo = QtWidgets.QComboBox()
-        for v in config.IMPACT_BIN_CHOICES:
-            self.impact_bin_combo.addItem(("$%.0fk" % (v / 1e3)) if v < 1e6 else ("$%.1fM" % (v / 1e6)), float(v))
-        self.impact_bin_combo.setCurrentIndex(
-            list(config.IMPACT_BIN_CHOICES).index(float(config.IMPACT_BIN_USD)))
-        self.impact_bin_combo.setToolTip("Taker dollars per bin. Every bin holds the SAME money, so the bar height\n"
-                                         "is the price move that money bought -- nothing is divided by flow.")
-        self.impact_bin_combo.currentIndexChanged.connect(
-            lambda _i: self.impactBinChanged.emit(self.impact_bin()))
-        row3.addWidget(self.impact_bin_combo); row3.addStretch(1)
-        l3.addLayout(row3)
         w4 = QtWidgets.QWidget()
         l4 = QtWidgets.QVBoxLayout(w4); l4.setContentsMargins(2, 1, 8, 5); l4.setSpacing(2)
         self.cycle_on = QtWidgets.QCheckBox("Cycle pane (dominance runs)")
         self.cycle_on.setChecked(bool(config.CYCLE_PANE_ON))
         self.cycle_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
-        self.cycle_on.setToolTip("One block per run where the same side owns the flow.\n"
-                                 "Width = duration, height = ticks that side gained, hollow = a small cycle\n"
-                                 "(under $%.0fk the dominant side historically LOSES). COINCIDENT readout."
-                                 % (config.CYCLE_SMALL_USD / 1e3))
+        self.cycle_on.setToolTip(
+            "One block per run where the same side owns the flow. Width = duration, height = the ticks "
+            "that side gained. Hollow = a small cycle: under $%.0fk the dominant side historically LOSES. "
+            "COINCIDENT readout -- it describes the cycle that just ended, it does not predict the next."
+            % (config.CYCLE_SMALL_USD / 1e3))
         self.cycle_on.toggled.connect(lambda on: self.cyclePaneToggled.emit(bool(on)))
         l4.addWidget(self.cycle_on)
         row4 = QtWidgets.QHBoxLayout(); row4.setSpacing(6)
-        lab4 = QtWidgets.QLabel("cycle window")
+        lab4 = QtWidgets.QLabel("        cycle window")
         lab4.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:10px;")
         row4.addWidget(lab4)
         self.cycle_win_combo = QtWidgets.QComboBox()
         for v in config.CYCLE_WIN_CHOICES:
             self.cycle_win_combo.addItem(("%ds" % int(v)) if v < 60 else ("%dm" % int(v // 60)), float(v))
         self.cycle_win_combo.setCurrentIndex(list(config.CYCLE_WIN_CHOICES).index(float(config.CYCLE_WIN_SECS)))
-        self.cycle_win_combo.setToolTip("Smoothing that DEFINES a boundary. Measured across 15s..5m the result\n"
-                                        "holds (R2 0.35-0.42), so this is a readability knob, not a fitted one.")
+        self.cycle_win_combo.setToolTip(
+            "Smoothing that DEFINES a cycle boundary. Measured across 15s..5m the result holds "
+            "(R2 0.35-0.42), so this is a readability knob, not a fitted one.")
         self.cycle_win_combo.currentIndexChanged.connect(
             lambda _i: self.cycleWinChanged.emit(self.cycle_win()))
         row4.addWidget(self.cycle_win_combo); row4.addStretch(1)
         l4.addLayout(row4)
         self.flow_sec.addWidget(w4)
-        self.flow_sec.addWidget(w3)
         self.flow_sec.addWidget(w2)
         root.addWidget(self.flow_sec)
         self.flow_sec.setVisible(False)                  # shown only in Flow mode (driven by the terminal)
@@ -1689,18 +1663,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             self.cycle_win_combo.blockSignals(True)
             self.cycle_win_combo.setCurrentIndex(ch.index(float(win)))
             self.cycle_win_combo.blockSignals(False)
-
-    def impact_bin(self) -> float:
-        return float(self.impact_bin_combo.currentData() or config.IMPACT_BIN_USD)
-
-    def set_impact_opts(self, on: bool, bin_usd: float) -> None:
-        """Session-restore (no re-emit)."""
-        self.impact_on.blockSignals(True); self.impact_on.setChecked(bool(on)); self.impact_on.blockSignals(False)
-        ch = [float(v) for v in config.IMPACT_BIN_CHOICES]
-        if float(bin_usd) in ch:
-            self.impact_bin_combo.blockSignals(True)
-            self.impact_bin_combo.setCurrentIndex(ch.index(float(bin_usd)))
-            self.impact_bin_combo.blockSignals(False)
 
     def liq_radius(self) -> int:
         return int(self.liq_r_combo.currentData() or config.LIQ_RADIUS_TICKS)

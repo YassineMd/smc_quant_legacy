@@ -155,14 +155,40 @@ def oldest_bid(tf: str):
     return min(d) if d else None
 
 
+_earliest_cache: dict = {}
+
+
 def earliest_start(tf: str):
     """Unix ``start_time`` of the oldest archived bucket for ``tf`` (the earliest data the terminal can reach),
-    or ``None`` when the archive is empty. Used to bound the date picker so no-data days are disabled."""
-    d = _load(tf)
-    if not d:
+    or ``None`` when the archive is empty. Used to bound the date picker so no-data days are disabled.
+
+    Reads ONLY the first line of the FIRST chunk. Chunk files are id-sorted, so that line IS the oldest bucket --
+    `_load(tf)` returns the same number but decompresses the entire archive to do it: measured 5,375 ms against
+    0.36 ms here, which is exactly the freeze the user hit on the first calendar click (235 chunks, 3.6 MB in the
+    first one alone). Cached on (path, mtime)."""
+    ps = _chunk_paths(tf)
+    if not ps:
         return None
-    st = float(d[min(d)].get("start_time", 0.0))
-    return st or None
+    try:
+        key = (ps[0], os.path.getmtime(ps[0]))
+    except OSError:
+        key = (ps[0], 0.0)
+    hit = _earliest_cache.get(tf)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    st = None
+    try:
+        with gzip.open(ps[0], "rt", encoding="utf-8") as fh:
+            line = fh.readline()
+        if line:
+            st = float(json.loads(line).get("start_time", 0.0)) or None
+    except (OSError, ValueError, json.JSONDecodeError):
+        st = None
+    if st is None:                                   # malformed first line -> fall back to the full load
+        d = _load(tf)
+        st = float(d[min(d)].get("start_time", 0.0)) or None if d else None
+    _earliest_cache[tf] = (key, st)
+    return st
 
 
 def subbuckets(tf: str, start_unix: float, end_unix: float) -> "list[dict]":
