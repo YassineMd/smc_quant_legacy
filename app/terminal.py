@@ -1664,7 +1664,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_proxy = None
         self._imp_plot = None          # Impact pane (Flow mode): ticks the pushing side gained per bin
         self._imp_vb = None
-        self._imp_bars = None          # (buy-pushed segments, sell-pushed segments) as paired-line curves
+        self._imp_bars = None          # (actual line, expected line, over-shading, under-shading)
+        self._imp_log_t = 0.0          # last calibration-log write
         self._imp_zero = None
         self._imp_sized = False
         self._imp_sig = None
@@ -17836,6 +17837,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_curves = (cb, ca)
         self._liq_plot = pw
         self._liq_vb = vb
+        self._theme_sub_panes(not self._simple_bw())     # born into the CURRENT Chart Style, not always dark
         # Crosshair, same contract as the CVD/VPIN panes: the VERTICAL line is SHARED across the x-linked panes
         # so they line up, while the horizontal line and both badges are this pane's own. Lines linger on leave
         # (like the main crosshair); the badges hide.
@@ -18086,12 +18088,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         vb = pw.getViewBox()
         vb.setMouseEnabled(x=True, y=True)
         vb.setXLink(self.vb)
-        bars = []
+        # Shading first (behind the lines): one vertical segment per bin from EXPECTED to ACTUAL, green where
+        # the push beat expectation, red where it fell short. Paired segments rather than a FillBetweenItem --
+        # the bins sit ~2 px apart so they read as a filled band, and re-keying two numpy arrays is far cheaper
+        # than rebuilding a polygon path on every live batch.
+        _shade = []
         for _c in ("#26a69a", "#ef5350"):
             _pn = pg.mkPen(_c, width=3.0); _pn.setCosmetic(True); _pn.setCapStyle(QtCore.Qt.FlatCap)
-            it = pg.PlotCurveItem(pen=_pn, antialias=False, connect="pairs")   # one segment per bin = a bar
-            pw.addItem(it); bars.append(it)
-        self._imp_bars = (bars[0], bars[1])
+            it = pg.PlotCurveItem(pen=_pn, antialias=False, connect="pairs")
+            it.setZValue(2); pw.addItem(it); _shade.append(it)
+        _ap = pg.mkPen("#e8ecf2", width=2.0); _ap.setCosmetic(True)
+        _ap.setCapStyle(QtCore.Qt.RoundCap); _ap.setJoinStyle(QtCore.Qt.RoundJoin)
+        _actual = pg.PlotCurveItem(pen=_ap, antialias=False)
+        _actual.setZValue(10); pw.addItem(_actual)
+        _ep = pg.mkPen("#9aa4b2", width=1.6, style=QtCore.Qt.DashLine); _ep.setCosmetic(True)
+        _expected = pg.PlotCurveItem(pen=_ep, antialias=False)
+        _expected.setZValue(9); pw.addItem(_expected)
+        self._imp_bars = (_actual, _expected, _shade[0], _shade[1])
         self._imp_zero = pg.InfiniteLine(angle=0, pos=0.0, pen=pg.mkPen("#8a8a8a", width=1))
         self._imp_zero.setZValue(5); pw.addItem(self._imp_zero, ignoreBounds=True)
         for _lv in (float(config.IMPACT_MED_ADV), -float(config.IMPACT_MED_ADV)):
@@ -18114,6 +18127,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._imp_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_imp_mouse_move)
         self._imp_plot = pw
         self._imp_vb = vb
+        self._theme_sub_panes(not self._simple_bw())     # born into the CURRENT Chart Style, not always dark
         sp.addWidget(pw)
         pw.setMinimumHeight(60)
         return pw
@@ -18193,33 +18207,73 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._imp_data = data
         self._imp_draw()
 
+    def _imp_expected(self, nf):
+        """What that much one-sidedness NORMALLY buys, in ticks -- interpolated over the MEASURED curve.
+
+        Deliberately a lookup, not a rolling fit: a fit re-calibrates the regime the pane exists to show, and
+        measured, its expected line moved ~0.1 ticks against a several-tick actual (corr(gap, actual) +0.92 to
+        +0.998, i.e. the gap was just the price move). Signed toward the pusher like `adv`, so this is >= 0."""
+        return np.interp(np.abs(nf), np.asarray(config.IMPACT_EXP_X, dtype=np.float64),
+                         np.asarray(config.IMPACT_EXP_Y, dtype=np.float64))
+
     def _imp_draw(self) -> None:
-        """One segment per bin from zero to the pusher's advance; green = buyers pushed, red = sellers."""
+        """ACTUAL (solid) vs EXPECTED (dashed) ticks gained by the pusher, shaded between: green where the push
+        beat expectation (thin book), red where it fell short (absorbed). Below zero it was pushed the other way."""
         if self._imp_data is None or self._imp_bars is None:
             return
         t, buy, sell, nf, adv = self._imp_data
+        act, exp, up, dn = self._imp_bars
         if t.size == 0:
-            self._imp_bars[0].setData(np.zeros(0), np.zeros(0))
-            self._imp_bars[1].setData(np.zeros(0), np.zeros(0))
+            for it in (act, exp, up, dn):
+                it.setData(np.zeros(0), np.zeros(0))
             return
         sig = (int(t.size), round(float(t[-1]), 2), round(float(adv[-1]), 3), round(float(self._imp_bin), 1))
         if sig == self._imp_sig:
             return
         self._imp_sig = sig
-        is_buy = nf > 0
-        for k, m in ((0, is_buy), (1, ~is_buy)):
+        e = self._imp_expected(nf)
+        act.setData(t, adv)
+        exp.setData(t, e)
+        gap = adv - e
+        for it, m in ((up, gap > 0), (dn, gap < 0)):
             if not m.any():
-                self._imp_bars[k].setData(np.zeros(0), np.zeros(0))
+                it.setData(np.zeros(0), np.zeros(0))
                 continue
             xs = np.repeat(t[m], 2)
-            ys = np.zeros(xs.size)
-            ys[1::2] = adv[m]                        # each PAIR is one bar: (x,0) -> (x, advance)
-            self._imp_bars[k].setData(xs, ys)
-        lim = float(np.abs(adv).max()) * 1.15 or 1.0
+            ys = np.empty(xs.size)
+            ys[0::2] = e[m]                          # each PAIR spans expected -> actual for that bin
+            ys[1::2] = adv[m]
+            it.setData(xs, ys)
+        lim = float(max(np.abs(adv).max(), e.max())) * 1.15 or 1.0
         cur = getattr(self, "_imp_ytop", 0.0)
         if lim > cur * 0.98 or lim < cur * 0.55:     # dead-band, same as the other panes
             self._imp_ytop = lim
             self._imp_vb.setYRange(-lim, lim, padding=0.0)
+        self._imp_log(t, nf, adv)
+
+    def _imp_log(self, t, nf, adv) -> None:
+        """Append the STORE'S OWN calibration next to the shipped lookup, so its drift is visible (user asked to
+        see how stable the constant is). Written at most every IMPACT_LOG_SECS and NEVER fed back into the
+        drawing -- a self-recalibrating baseline is exactly what makes the regime invisible."""
+        now = time.time()
+        if now - self._imp_log_t < float(config.IMPACT_LOG_SECS) or t.size < 200:
+            return
+        self._imp_log_t = now
+        try:
+            a = np.abs(nf)
+            q = np.percentile(a, [20, 40, 60, 80])
+            lab = np.digitize(a, q)
+            rec = {"ts": int(now), "bin_usd": float(self._imp_bin), "n": int(t.size),
+                   "won_pct": round(100.0 * float(np.mean(adv > 0)), 2),
+                   "bands": [{"imb": round(float(np.median(a[lab == k])), 3),
+                              "n": int((lab == k).sum()),
+                              "median_adv": round(float(np.median(adv[lab == k])), 2)}
+                             for k in range(5) if (lab == k).sum() > 5],
+                   "shipped": list(config.IMPACT_EXP_Y)}
+            with open(os.path.join(config.DATA_DIR, "impact_calibration.jsonl"), "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec) + chr(10))
+        except Exception:
+            pass
 
     def _liq_hide_cursor(self) -> None:
         """Cursor is not over the pane -> drop its readouts (the lines linger, like every other pane)."""
@@ -19212,6 +19266,53 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             a.setTextPen(txt_pen)
         # faint grid: white-ish on dark, gray on light (alpha ~30/255)
         self.plot.showGrid(x=False, y=False)               # no background grid lines
+        self._theme_sub_panes(dark)                        # the Flow panes ride the Chart Style too
+
+    def _theme_sub_panes(self, dark: bool) -> None:
+        """Morph the Flow sub-panes (liquidity, impact) with the main canvas. Simple BW used to leave a white
+        chart sitting on two dark panes. Only the GROUND, the axes and the crosshair change -- the teal/red
+        line colours carry meaning and stay put."""
+        bg = "#141414" if dark else config.COLOR_CANVAS
+        fg = "#dcdcdc" if dark else config.COLOR_AXIS_TEXT
+        ax_pen = pg.mkPen(fg, width=1); txt_pen = pg.mkPen(fg)
+        cross = (170, 170, 170, 150) if dark else (0, 0, 0, 150)
+        for pw, items in ((getattr(self, "_liq_plot", None),
+                           (getattr(self, "_liq_vline", None), getattr(self, "_liq_hline", None))),
+                          (getattr(self, "_imp_plot", None),
+                           (getattr(self, "_imp_vline", None), getattr(self, "_imp_hline", None)))):
+            if pw is None:
+                continue
+            try:
+                pw.setBackground(bg)
+                for ax in ("bottom", "right", "left"):
+                    a = pw.getAxis(ax)
+                    a.setPen(ax_pen); a.setTextPen(txt_pen)
+                for ln in items:
+                    if ln is None:
+                        continue
+                    p = pg.mkPen(color=cross, width=1); p.setCosmetic(True); p.setDashPattern([4.0, 8.0])
+                    ln.setPen(p)
+            except RuntimeError:
+                pass                                       # the splitter tore the pane down under us
+        # the impact pane's zero / reference rules need contrast on both grounds
+        for ln, col in ((getattr(self, "_imp_zero", None), "#8a8a8a" if dark else "#555555"),):
+            if ln is not None:
+                try:
+                    ln.setPen(pg.mkPen(col, width=1))
+                except RuntimeError:
+                    pass
+        # ... and the ACTUAL line is near-white on the dark ground, near-black on the light one
+        _b = getattr(self, "_imp_bars", None)
+        if _b:
+            try:
+                _ap = pg.mkPen("#e8ecf2" if dark else "#1b1b1b", width=2.0); _ap.setCosmetic(True)
+                _ap.setCapStyle(QtCore.Qt.RoundCap); _ap.setJoinStyle(QtCore.Qt.RoundJoin)
+                _b[0].setPen(_ap)
+                _ep = pg.mkPen("#9aa4b2" if dark else "#6b7280", width=1.6, style=QtCore.Qt.DashLine)
+                _ep.setCosmetic(True)
+                _b[1].setPen(_ep)
+            except RuntimeError:
+                pass
 
     @staticmethod
     def _fmt_k(v: float) -> str:

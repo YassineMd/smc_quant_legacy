@@ -189,6 +189,12 @@ IMPACT_BIN_CHOICES = (250_000.0, 500_000.0, 1_000_000.0, 2_000_000.0, 5_000_000.
 IMPACT_MAX_BARS = 900           # bars drawn; the read keeps the NEWEST this many
 IMPACT_RECALC_SECS = 0.5        # the store re-keys on every live batch; recompute at most this often
 IMPACT_MED_ADV = 3.0            # 72 h median advance, drawn as the +/- reference rule
+# EXPECTED move: the MEASURED median advance by one-sidedness (study_impact_vb.py, 72 h, 4,729 $1M bins).
+# A lookup, deliberately NOT a rolling fit -- a rolling fit calibrates the very regime away that the pane is
+# meant to show, and measured, its expected line varied ~0.1 ticks against a several-tick actual.
+IMPACT_EXP_X = (0.00, 0.05, 0.18, 0.31, 0.47, 0.76, 1.00)     # |imbalance|
+IMPACT_EXP_Y = (0.0, 0.0, 2.0, 3.0, 5.0, 6.0, 6.5)            # ticks the pusher normally gains
+IMPACT_LOG_SECS = 300.0         # how often the store's OWN calibration is logged (for drift; never drawn)
 
 LIQ_PANE_ON = True              # the pane itself (hamburger 'Flow' -> 'Limit orders pane'); persisted
 LIQ_RADIUS_TICKS = 100          # default half-width, in TICKS (0.01 -> +-$1.00)
