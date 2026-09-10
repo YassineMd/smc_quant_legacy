@@ -199,7 +199,7 @@ class FlowStore:
                 tick: float = 0.01):
         """Where the two rolling-window flow lines CROSS, keeping only the crosses that opened a real cycle.
 
-        Returns (t_cross, is_buy, strong, move_ticks).
+        Returns (t_cross, is_buy, strong, move_ticks, buy_usd, sell_usd).
 
           is_buy  True where the BUY line took the top.
           strong  the cycle CONFIRMED: before the next cross the spread |buy-sell|/(buy+sell) reached
@@ -209,6 +209,8 @@ class FlowStore:
           move_ticks  how far PRICE travelled over that cycle -- from this cross to the NEXT one, or to the last
                   bin of tape for the one still forming. Its sign is the price's, not the side's: a buy cycle
                   that ends below where it started is negative. NaN where no trade priced either end.
+          buy_usd / sell_usd  taker dollars each side traded INSIDE that cycle, over the same span the move is
+                  measured across. The caller decides which one to hold the move against.
 
         A run shorter than `min_hold_secs` is not a cycle at all and never comes back -- and because it is
         dropped, the crosses on either side of it are the SAME colour. Two or more consecutive same-colour
@@ -227,7 +229,7 @@ class FlowStore:
         z = np.zeros(0)
         zb = np.zeros(0, dtype=bool)
         if self.empty() or win_secs <= 0 or tick <= 0:
-            return (z, zb, zb, z)
+            return (z, zb, zb, z, z, z)
         key = ("cross", self.rev, round(float(t0), 2), round(float(t1), 2), round(float(win_secs), 2),
                round(float(min_spread_pct), 3), round(float(min_hold_secs), 2), int(max_n),
                round(float(context_secs), 2), round(float(tick), 6))
@@ -245,7 +247,7 @@ class FlowStore:
         # measure the move over.
         i1 = min(n - 1, iv + ctx)
         if iv < i0:
-            out = (z, zb, zb, z)
+            out = (z, zb, zb, z, z, z)
             self._xmemo = (key, out)
             return out
         # series() only needs a w-1 prefix; the MERGE needs enough of the run before the view to know whether
@@ -255,7 +257,7 @@ class FlowStore:
         ca = np.concatenate([[0.0], np.cumsum(self._sell[p0:i1 + 1])])
         m = int(cb.size - 1)
         if m < 3:
-            out = (z, zb, zb, z)
+            out = (z, zb, zb, z, z, z)
             self._xmemo = (key, out)
             return out
         idx = np.arange(m)
@@ -268,13 +270,13 @@ class FlowStore:
         dn = ra > rb
         say = up | dn
         if not say.any():
-            out = (z, zb, zb, z)
+            out = (z, zb, zb, z, z, z)
             self._xmemo = (key, out)
             return out
         dom = up[np.maximum.accumulate(np.where(say, idx, 0))]
         flips = np.flatnonzero(dom[1:] != dom[:-1]) + 1                  # first bin of each new side
         if flips.size == 0:
-            out = (z, zb, zb, z)
+            out = (z, zb, zb, z, z, z)
             self._xmemo = (key, out)
             return out
         tot = rb + ra
@@ -321,15 +323,20 @@ class FlowStore:
         fin = np.concatenate([fl[1:], [m - 1]]) if fl.size else np.zeros(0, dtype=np.int64)
         if fl.size:
             mv = np.where(pv[fl] & pv[fin], (px[fin] - px[fl]) / float(tick), np.nan)
+            # the dollars each side traded INSIDE the cycle, over the same span the move is measured across
+            vb_ = cb[fin + 1] - cb[fl]
+            vs_ = ca[fin + 1] - ca[fl]
         else:
-            mv = np.zeros(0)
+            mv = np.zeros(0); vb_ = np.zeros(0); vs_ = np.zeros(0)
         vis = (fl >= (i0 - p0)) & (fl <= (iv - p0))                  # ... and only now clip to the view
         cs = fl[vis]
         sg = sg[vis]
         db = db[vis]
         mv = mv[vis]
+        vb_ = vb_[vis]
+        vs_ = vs_[vis]
         if cs.size == 0:
-            out = (z, zb, zb, z)
+            out = (z, zb, zb, z, z, z)
             self._xmemo = (key, out)
             return out
         if cs.size > max_n:
@@ -337,6 +344,8 @@ class FlowStore:
             sg = sg[-int(max_n):]
             db = db[-int(max_n):]
             mv = mv[-int(max_n):]
+            vb_ = vb_[-int(max_n):]
+            vs_ = vs_[-int(max_n):]
         # the EXACT cross: where buy-sell changes sign between bin cs-1 and bin cs, on the same straight segment
         # the curve draws between those two points.
         d0 = (rb - ra)[cs - 1]
@@ -344,7 +353,7 @@ class FlowStore:
         den = d1 - d0
         frac = np.where(np.abs(den) > 1e-12, np.clip(-d0 / np.where(den == 0, 1.0, den), 0.0, 1.0), 0.0)
         t_prev = (self._base + p0 + cs - 1) * self.bin + self.bin        # series() stamps each bin at its END
-        out = (t_prev + frac * self.bin, db.copy(), sg.copy(), mv.copy())
+        out = (t_prev + frac * self.bin, db.copy(), sg.copy(), mv.copy(), vb_.copy(), vs_.copy())
         self._xmemo = (key, out)
         return out
 

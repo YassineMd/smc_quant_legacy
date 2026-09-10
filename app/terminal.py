@@ -1020,11 +1020,16 @@ class BurstBadgesItem(pg.GraphicsObject):
 
 
 class CycleBadgesItem(pg.GraphicsObject):
-    """Every cycle's price move in ONE graphics item (user 2026-09-10): a pill UNDER the zero line at each cycle
-    start, carrying the ticks price travelled from that cross to the next one.
+    """Every cycle's result in ONE graphics item (user 2026-09-10): TWO stacked pills under the zero line at
+    each cycle start.
 
-    GREEN when price rose over the cycle, RED when it fell, gray at exactly zero -- the sign is the PRICE's, not
-    the side's, so a buy cycle that ends lower wears a red badge. White text, as asked.
+        top     the ticks price travelled from that cross to the next one
+        bottom  which side the line says to study, and the ticks it GAINED per $1M it traded in that cycle
+
+    COLOUR, one rule for both: a buy cycle is expected to end higher and a sell cycle lower. When it does the
+    badge takes the winning side's colour -- green for buyers, red for sellers -- and when it does not, price
+    having gone against the side that owned the cycle, it goes GRAY. For a well-behaved cycle "colour by move"
+    and "colour by side" agree, so this only recolours the contradictory ones. White text, as asked.
 
     Anchored at data y = 0 and drawn a fixed number of PIXELS below it, so the strip stays the same height at any
     zoom. One paint pass, no per-badge scene items (a TextItem each measured ~40 ms per zoom step on the Big
@@ -1037,7 +1042,7 @@ class CycleBadgesItem(pg.GraphicsObject):
 
     def __init__(self):
         super().__init__()
-        self._items = []                 # [(x, ticks)]
+        self._items = []                 # [(x, move_ticks, per_musd, is_buy, ok)]
         self._font = QtGui.QFont("Consolas", 8)
         self._font.setBold(True)
         self.setZValue(8)                # over the vlines and the flow curves; the badge is the readable thing
@@ -1046,8 +1051,16 @@ class CycleBadgesItem(pg.GraphicsObject):
         return list(self._items)
 
     def setBadges(self, items) -> None:
-        self._items = [(float(x), float(v)) for x, v in items]
+        self._items = [(float(x), float(v), float(r), bool(b), bool(o)) for x, v, r, b, o in items]
         self.update()
+
+    @staticmethod
+    def _rate_text(is_buy: bool, per_m: float) -> str:
+        """`S +25/M` -- the studied side and the ticks it gained per $1M it traded. One decimal only under 10,
+        because a small cycle's ratio runs large and the extra digit is noise there."""
+        v = float(per_m)
+        num = ("%+.0f" % v) if abs(v) >= 10.0 else ("%+.1f" % v)
+        return "%s %s/M" % ("B" if is_buy else "S", num)
 
     def boundingRect(self):
         """Only the STRIP at and below zero -- never the whole view rect.
@@ -1087,26 +1100,31 @@ class CycleBadgesItem(pg.GraphicsObject):
         p.setRenderHint(QtGui.QPainter.Antialiasing, True)
         fm = QtGui.QFontMetrics(self._font)
         rh = 14.0
-        cy = y0 + 2.0 + rh / 2.0                           # ... and the badges sit just UNDER it
-        if cy < -30 or cy > hdev + 30:
+        cy1 = y0 + 2.0 + rh / 2.0                          # the move pill sits just UNDER the zero line
+        cy2 = cy1 + rh + 2.0                               # ... and the side pill under that
+        if cy1 < -40 or cy1 > hdev + 40:
             p.restore()
             return
-        for x, v in self._items:
+        for x, v, per_m, is_buy, ok in self._items:
             px = tr.map(QtCore.QPointF(x, 0.0)).x()
-            if px < -60 or px > wdev + 60:
+            if px < -70 or px > wdev + 70:
                 continue                                   # off the viewport
+            # ONE colour for both pills: the winning side when the cycle went its way, gray when it did not
+            rgb = (self._UP if is_buy else self._DN) if ok else self._FLAT
             n = int(round(v))
-            txt = ("%+d" % n if n else "0") + "t"
-            rgb = self._UP if n > 0 else (self._DN if n < 0 else self._FLAT)
-            rw = max(rh, float(fm.horizontalAdvance(txt)) + 8.0)
-            rect = QtCore.QRectF(px - rw / 2.0, cy - rh / 2.0, rw, rh)
-            # OPAQUE: a translucent pill picks up whatever line or curve runs behind it, and the badge has to
-            # stay legible on the white Simple BW canvas as well as the dark one.
-            p.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 255))
-            p.setPen(pg.mkPen(rgb[0], rgb[1], rgb[2], 255, width=1.0))
-            p.drawRoundedRect(rect, 3.0, 3.0)
-            p.setPen(pg.mkPen(255, 255, 255, 255))
-            p.drawText(rect, int(QtCore.Qt.AlignCenter), txt)
+            rows = [("%+d" % n if n else "0") + "t"]
+            if np.isfinite(per_m):
+                rows.append(self._rate_text(is_buy, per_m))
+            for row, cy in zip(rows, (cy1, cy2)):
+                rw = max(rh, float(fm.horizontalAdvance(row)) + 8.0)
+                rect = QtCore.QRectF(px - rw / 2.0, cy - rh / 2.0, rw, rh)
+                # OPAQUE: a translucent pill picks up whatever line or curve runs behind it, and the badge has
+                # to stay legible on the white Simple BW canvas as well as the dark one.
+                p.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 255))
+                p.setPen(pg.mkPen(rgb[0], rgb[1], rgb[2], 255, width=1.0))
+                p.drawRoundedRect(rect, 3.0, 3.0)
+                p.setPen(pg.mkPen(255, 255, 255, 255))
+                p.drawText(rect, int(QtCore.Qt.AlignCenter), row)
         p.restore()
 
 
@@ -18633,9 +18651,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         crosses on either side of it the SAME colour, and consecutive same-colour lines are MERGED into the
         first, because that cycle never ended and may not be marked as starting twice (user 2026-09-10).
 
-        Under the zero line each cycle carries a badge: how far PRICE went from that cross to the next one, in
-        ticks, coloured by the sign of the MOVE and not by the side -- a buy cycle that ends lower wears a red
-        one. They are thinned harder than the lines (a pill is ~26 px wide) and painted by ONE item.
+        Under the zero line each cycle carries TWO pills: how far PRICE went from that cross to the next one in
+        ticks, and the side the line says to study with the ticks IT gained per $1M it traded. Both take the
+        winning side's colour, or GRAY when price went against the side that owned the cycle. They are thinned
+        harder than the lines (the pills are ~50 px wide) and painted by ONE item.
 
         The boundary is read off `self._flow_win`, the window THESE lines are drawn with. That is the whole
         point: the Cycle pane used its own (300 s) window, so its boundaries never matched a crossing the user
@@ -18657,12 +18676,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if sig == getattr(self, "_flow_xsig", None):
             return                                          # nothing moved -> the cheapest possible frame
         self._flow_xsig = sig
-        t, is_buy, strong, move = self._flow.crosses(vx0, vx1, float(self._flow_win),
-                                                    float(config.FLOW_CROSS_MIN_SPREAD_PCT),
-                                                    float(config.FLOW_CROSS_MIN_HOLD_SECS),
-                                                    int(config.FLOW_CROSS_MAX),
-                                                    float(config.FLOW_CROSS_CONTEXT_SECS),
-                                                    float(config.TICK_SIZE))
+        t, is_buy, strong, move, cbuy, csell = self._flow.crosses(
+            vx0, vx1, float(self._flow_win), float(config.FLOW_CROSS_MIN_SPREAD_PCT),
+            float(config.FLOW_CROSS_MIN_HOLD_SECS), int(config.FLOW_CROSS_MAX),
+            float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
         if getattr(self, "_flow_xln", None) is None:
             items = []
             for _c, _z in (("#1b9c8a", 3), ("#e03b3b", 3), (config.FLOW_CROSS_WEAK_COL, 2)):
@@ -18689,6 +18706,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _xpp, _ypp = self.vb.viewPixelSize()
         _keep = self._thin_by_pixel(t, strong, float(_xpp), float(config.FLOW_CROSS_MIN_PX))
         t = t[_keep]; is_buy = is_buy[_keep]; strong = strong[_keep]; move = move[_keep]
+        cbuy = cbuy[_keep]; csell = csell[_keep]
         if t.size == 0:
             for _it in self._flow_xln:
                 _it.setData(np.zeros(0), np.zeros(0))
@@ -18711,7 +18729,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # at a zoom where the lines are 7 px apart the pills would be unreadable mush.
         _bk = self._thin_badges(t, strong, float(_xpp), float(config.FLOW_CROSS_BADGE_MIN_PX))
         _bk &= np.isfinite(move)                        # a cycle whose ends were never priced has no number
-        self._flow_xbadge.setBadges(list(zip(t[_bk].tolist(), move[_bk].tolist())))
+        _side, _rate, _ok = self._cycle_impact(is_buy, strong, move, cbuy, csell)
+        self._flow_xbadge.setBadges(list(zip(t[_bk].tolist(), move[_bk].tolist(), _rate[_bk].tolist(),
+                                             _side[_bk].tolist(), _ok[_bk].tolist())))
 
     @staticmethod
     def _cross_dashes(y0: float, y1: float, y_per_px: float):
@@ -18749,6 +18769,35 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         keep = np.zeros(t.size, dtype=bool)
         keep[rev[first]] = True
         return keep
+
+    @staticmethod
+    def _cycle_impact(is_buy, strong, move, buy_usd, sell_usd):
+        """Which side the badge studies, what it got per $1M, and whether the cycle went that side's way.
+
+        The LINE COLOUR decides (user 2026-09-10): a green line studies BUYERS, a red one SELLERS, and a gray
+        (weak) one studies BOTH and keeps whichever came out with the larger impact either way.
+
+        "Gained" is signed toward the studied side -- buyers gain when price rises, sellers when it falls -- so
+        a negative number always means that side paid and was pushed the other way.
+
+        ⚠ The ratio has a size artifact and the user accepted it knowingly: price impact is concave in volume,
+        so ticks-per-dollar runs high for small cycles and low for big ones even on random tape (measured
+        11.84 -> 2.03 across flow deciles in this project). Compare cycles of SIMILAR size, not across sizes."""
+        z = np.zeros(int(np.size(move)))
+        if z.size == 0:
+            return (np.zeros(0, dtype=bool), z, np.zeros(0, dtype=bool))
+        _mv = np.nan_to_num(np.asarray(move, dtype=np.float64), nan=0.0)
+        vb = np.maximum(np.asarray(buy_usd, dtype=np.float64), 0.0)
+        vs = np.maximum(np.asarray(sell_usd, dtype=np.float64), 0.0)
+        FLOOR = 1_000.0                                   # under a $1k cycle the ratio is division noise
+        rate_b = np.where(vb >= FLOOR, _mv / np.maximum(vb, FLOOR) * 1e6, np.nan)
+        rate_s = np.where(vs >= FLOOR, -_mv / np.maximum(vs, FLOOR) * 1e6, np.nan)
+        # a weak (gray) line studies both sides and keeps the bigger impact, in magnitude
+        pick_b = np.where(strong, is_buy,
+                          np.nan_to_num(np.abs(rate_b), nan=-1.0) >= np.nan_to_num(np.abs(rate_s), nan=-1.0))
+        rate = np.where(pick_b, rate_b, rate_s)
+        ok = np.where(pick_b, _mv > 0, _mv < 0)           # did price go the studied side's way at all
+        return (pick_b, rate, ok)
 
     @staticmethod
     def _thin_badges(t, strong, x_per_px, min_px):

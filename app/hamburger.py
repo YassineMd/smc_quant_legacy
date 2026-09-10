@@ -1589,14 +1589,16 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.flow_cross_on.setToolTip(
             "A vertical line where a cycle STARTED -- the two lines crossed and the new side kept the top "
             "for at least %.0f s.\n"
-            "Green / red DASHED = CONFIRMED: that side also held a spread of %.0f%% or more for %.0f s "
-            "(green = buyers took the top, red = sellers).\n"
-            "Gray SOLID = it held the %.0f s but the two lines never got %.0f%% apart -- a cycle, but a "
-            "weak one.\n"
+            "Green / red DASHED = CONFIRMED: that side also held a spread of %.0f%% or more for %.0f s.\n"
+            "Gray SOLID = it held the %.0f s but the two lines never got %.0f%% apart.\n"
             "Two same-coloured lines in a row are ONE cycle and are merged into the first.\n"
-            "The badge under the zero line is how far PRICE went over that cycle, in ticks -- coloured by "
-            "the MOVE, not the side, so a buy cycle that ends lower wears a red one.\n"
-            "Every line is drawn back at the exact crossing, so it only ever appears after the fact."
+            "Under the zero line, per cycle: the ticks PRICE moved, and the side the line says to study "
+            "(green = buyers, red = sellers, gray = both, bigger impact wins) with the ticks IT gained per "
+            "$1M it traded.\n"
+            "Both pills take the winning side colour, or GRAY when price went AGAINST the side that owned "
+            "the cycle.\n"
+            "NOTE the per-$1M number runs high for small cycles and low for big ones on its own (impact is "
+            "concave in size) -- compare cycles of SIMILAR volume, not across sizes."
             % (config.FLOW_CROSS_MIN_HOLD_SECS, config.FLOW_CROSS_MIN_SPREAD_PCT,
                config.FLOW_CROSS_MIN_HOLD_SECS, config.FLOW_CROSS_MIN_HOLD_SECS,
                config.FLOW_CROSS_MIN_SPREAD_PCT))
