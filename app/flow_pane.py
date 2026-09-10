@@ -32,7 +32,6 @@ class FlowStore:
         self._memo = None
         self._bmemo = None
         self._xmemo = None
-        self._rmemo = None
 
     # ---------------------------------------------------------------- state
     def __len__(self) -> int:
@@ -117,7 +116,6 @@ class FlowStore:
         self._memo = None
         self._bmemo = None
         self._xmemo = None
-        self._rmemo = None
         return int(loc.size)
 
     def reset(self) -> None:
@@ -130,7 +128,6 @@ class FlowStore:
         self._memo = None
         self._bmemo = None
         self._xmemo = None
-        self._rmemo = None
 
     # --------------------------------------------------------------- bursts
     def bar_bursts(self, starts, ends, win_secs: float, cap: float = 50.0, floor_pct: float = 90.0):
@@ -196,7 +193,7 @@ class FlowStore:
                 tick: float = 0.01):
         """Where the two rolling-window flow lines CROSS, keeping only the crosses that opened a real cycle.
 
-        Returns (t_cross, is_buy, strong, move_ticks, buy_usd, sell_usd).
+        Returns (t_cross, is_buy, strong, move_ticks, buy_usd, sell_usd, t_end, done).
 
           is_buy  True where the BUY line took the top.
           strong  the cycle CONFIRMED: before the next cross the spread |buy-sell|/(buy+sell) reached
@@ -208,6 +205,10 @@ class FlowStore:
                   that ends below where it started is negative. NaN where no trade priced either end.
           buy_usd / sell_usd  taker dollars each side traded INSIDE that cycle, over the same span the move is
                   measured across. The caller decides which one to hold the move against.
+          t_end   where the cycle ENDED -- the NEXT cross's own interpolated crossing, so one cycle's right edge
+                  is the next one's left edge and both sit exactly on the vertical line drawn there.
+          done    False only for the cycle still open at the end of the read, i.e. the one still forming when
+                  following the live edge. Anything drawn per-cycle should wait for this.
 
         A run shorter than `min_hold_secs` is not a cycle at all and never comes back -- and because it is
         dropped, the crosses on either side of it are the SAME colour. Two or more consecutive same-colour
@@ -226,7 +227,7 @@ class FlowStore:
         z = np.zeros(0)
         zb = np.zeros(0, dtype=bool)
         if self.empty() or win_secs <= 0 or tick <= 0:
-            return (z, zb, zb, z, z, z)
+            return (z, zb, zb, z, z, z, z, zb)
         key = ("cross", self.rev, round(float(t0), 2), round(float(t1), 2), round(float(win_secs), 2),
                round(float(min_spread_pct), 3), round(float(min_hold_secs), 2), int(max_n),
                round(float(context_secs), 2), round(float(tick), 6))
@@ -244,7 +245,7 @@ class FlowStore:
         # measure the move over.
         i1 = min(n - 1, iv + ctx)
         if iv < i0:
-            out = (z, zb, zb, z, z, z)
+            out = (z, zb, zb, z, z, z, z, zb)
             self._xmemo = (key, out)
             return out
         # series() only needs a w-1 prefix; the MERGE needs enough of the run before the view to know whether
@@ -254,7 +255,7 @@ class FlowStore:
         ca = np.concatenate([[0.0], np.cumsum(self._sell[p0:i1 + 1])])
         m = int(cb.size - 1)
         if m < 3:
-            out = (z, zb, zb, z, z, z)
+            out = (z, zb, zb, z, z, z, z, zb)
             self._xmemo = (key, out)
             return out
         idx = np.arange(m)
@@ -267,13 +268,13 @@ class FlowStore:
         dn = ra > rb
         say = up | dn
         if not say.any():
-            out = (z, zb, zb, z, z, z)
+            out = (z, zb, zb, z, z, z, z, zb)
             self._xmemo = (key, out)
             return out
         dom = up[np.maximum.accumulate(np.where(say, idx, 0))]
         flips = np.flatnonzero(dom[1:] != dom[:-1]) + 1                  # first bin of each new side
         if flips.size == 0:
-            out = (z, zb, zb, z, z, z)
+            out = (z, zb, zb, z, z, z, z, zb)
             self._xmemo = (key, out)
             return out
         tot = rb + ra
@@ -325,6 +326,22 @@ class FlowStore:
             vs_ = ca[fin + 1] - ca[fl]
         else:
             mv = np.zeros(0); vb_ = np.zeros(0); vs_ = np.zeros(0)
+        # The exact crossing time of EVERY head, before the view clip: a bar's right edge is the NEXT head's
+        # crossing, and that one can sit outside the view -- taking it from the clipped set would make the
+        # rightmost bar stop at the screen edge whenever the user pans.
+        if fl.size:
+            _d0 = (rb - ra)[np.maximum(fl - 1, 0)]
+            _d1 = (rb - ra)[fl]
+            _dd = _d1 - _d0
+            _fr = np.where(np.abs(_dd) > 1e-12, np.clip(-_d0 / np.where(_dd == 0, 1.0, _dd), 0.0, 1.0), 0.0)
+            _fr = np.where(fl > 0, _fr, 0.0)
+            t_all = (self._base + p0 + fl - 1) * self.bin + self.bin + _fr * self.bin
+            # ... and the end: the next head's crossing, or where the tape runs out for the one still open
+            t_end_all = np.concatenate([t_all[1:], [(self._base + p0 + m - 1) * self.bin + self.bin]])
+            done_all = np.ones(fl.size, dtype=bool)
+            done_all[-1] = False                                     # nothing crossed back yet -> still forming
+        else:
+            t_all = z; t_end_all = z; done_all = zb
         vis = (fl >= (i0 - p0)) & (fl <= (iv - p0))                  # ... and only now clip to the view
         cs = fl[vis]
         sg = sg[vis]
@@ -332,8 +349,11 @@ class FlowStore:
         mv = mv[vis]
         vb_ = vb_[vis]
         vs_ = vs_[vis]
+        ta_ = t_all[vis]
+        te_ = t_end_all[vis]
+        dn_ = done_all[vis]
         if cs.size == 0:
-            out = (z, zb, zb, z, z, z)
+            out = (z, zb, zb, z, z, z, z, zb)
             self._xmemo = (key, out)
             return out
         if cs.size > max_n:
@@ -343,85 +363,12 @@ class FlowStore:
             mv = mv[-int(max_n):]
             vb_ = vb_[-int(max_n):]
             vs_ = vs_[-int(max_n):]
-        # the EXACT cross: where buy-sell changes sign between bin cs-1 and bin cs, on the same straight segment
-        # the curve draws between those two points.
-        d0 = (rb - ra)[cs - 1]
-        d1 = (rb - ra)[cs]
-        den = d1 - d0
-        frac = np.where(np.abs(den) > 1e-12, np.clip(-d0 / np.where(den == 0, 1.0, den), 0.0, 1.0), 0.0)
-        t_prev = (self._base + p0 + cs - 1) * self.bin + self.bin        # series() stamps each bin at its END
-        out = (t_prev + frac * self.bin, db.copy(), sg.copy(), mv.copy(), vb_.copy(), vs_.copy())
+            ta_ = ta_[-int(max_n):]
+            te_ = te_[-int(max_n):]
+            dn_ = dn_[-int(max_n):]
+        out = (ta_.copy(), db.copy(), sg.copy(), mv.copy(), vb_.copy(), vs_.copy(),
+               te_.copy(), dn_.copy())
         self._xmemo = (key, out)
-        return out
-
-    def cycle_rate_curve(self, t0: float, t1: float, win_secs: float, tick: float,
-                         unit_usd: float = 100_000.0, min_usd: float = 20_000.0,
-                         min_spread_pct: float = 10.0, min_hold_secs: float = 20.0,
-                         context_secs: float = 600.0, max_pts: int = 900):
-        """(t, buy_rate, sell_rate): ticks price has moved per `unit_usd` each side traded SO FAR this cycle.
-
-        The cycle boundaries are crosses() own -- this calls it rather than re-deriving them, so the pane and
-        the vertical lines on the chart can never disagree about where a cycle starts. That was the defect in
-        the pane this replaces: it segmented on its own 300 s window while the lines used the displayed one.
-
-        Both series share the numerator (the move since the cycle began), so they always agree in SIGN and
-        differ only by each side's running dollars. Read the gap between them as the imbalance and their level
-        as how dearly the move was bought; both flat near zero is a lot of money that moved nothing.
-
-        Each side stays NaN until it has traded `min_usd` inside the cycle -- one $200 print in the first second
-        would otherwise divide a whole tick by nearly nothing and spike the pane off its own scale."""
-        z = np.zeros(0)
-        if self.empty() or win_secs <= 0 or tick <= 0 or unit_usd <= 0:
-            return (z, z, z)
-        key = ("rate", self.rev, round(float(t0), 2), round(float(t1), 2), round(float(win_secs), 2),
-               round(float(unit_usd), 2), round(float(min_usd), 2), round(float(min_spread_pct), 3),
-               round(float(min_hold_secs), 2), round(float(context_secs), 2), int(max_pts))
-        memo = getattr(self, "_rmemo", None)
-        if memo is not None and memo[0] == key:
-            return memo[1]
-        # ask for the heads from BEFORE the view too, or the leftmost visible bins have no cycle to belong to
-        xt, _isb, _sg, _mv, _vb, _vs = self.crosses(t0 - max(0.0, float(context_secs)), t1, win_secs,
-                                                    min_spread_pct, min_hold_secs, 100_000,
-                                                    context_secs, tick)
-        n = len(self._buy)
-        i0 = max(0, int(np.floor(t0 / self.bin)) - self._base)
-        i1 = min(n - 1, int(np.floor(t1 / self.bin)) - self._base)
-        if i1 < i0 or xt.size == 0:
-            out = (z, z, z)
-            self._rmemo = (key, out)
-            return out
-        heads = np.floor(np.asarray(xt, dtype=np.float64) / self.bin).astype(np.int64) - self._base
-        heads = heads[heads <= i1]
-        if heads.size == 0:
-            out = (z, z, z)
-            self._rmemo = (key, out)
-            return out
-        p0 = int(max(0, min(int(heads[0]), i0)))
-        cb = np.concatenate([[0.0], np.cumsum(self._buy[p0:i1 + 1])])
-        ca = np.concatenate([[0.0], np.cumsum(self._sell[p0:i1 + 1])])
-        m = int(cb.size - 1)
-        px = self._px[p0:i1 + 1].copy()
-        pv = px > 0
-        if pv.any():                                       # carry the last trade price over tradeless seconds
-            src = np.maximum.accumulate(np.where(pv, np.arange(m), 0))
-            px = px[src]; pv = pv[src]
-        idx = np.arange(i0, i1 + 1) - p0                   # local bin indices of the drawn range
-        k = np.searchsorted(heads, idx + p0, side="right") - 1
-        live = k >= 0                                      # before the first cycle head there is nothing to say
-        st = heads[np.maximum(k, 0)] - p0
-        move = (px[idx] - px[st]) / float(tick)
-        run_b = cb[idx + 1] - cb[st]
-        run_s = ca[idx + 1] - ca[st]
-        ok = live & pv[idx] & pv[st]
-        u = float(unit_usd)
-        rb = np.where(ok & (run_b >= float(min_usd)), move / np.maximum(run_b, 1e-9) * u, np.nan)
-        rs = np.where(ok & (run_s >= float(min_usd)), move / np.maximum(run_s, 1e-9) * u, np.nan)
-        t = (self._base + i0 + np.arange(idx.size)) * self.bin + self.bin
-        step = max(1, int(np.ceil(t.size / float(max(16, max_pts)))))
-        if step > 1:
-            t = t[::step]; rb = rb[::step]; rs = rs[::step]
-        out = (t, rb, rs)
-        self._rmemo = (key, out)
         return out
 
     # ----------------------------------------------------------------- read

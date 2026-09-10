@@ -1797,9 +1797,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_tag = None           # right-axis readout, in MONEY (the pane plots resting $)
         self._liq_time_tag = None      # x-axis clock badge, same design as the price badge
         self._liq_proxy = None
-        self._cyc_plot = None          # Cycle pane (Flow mode): ticks per 100k, per side, per CROSS cycle
+        self._cyc_plot = None          # Cycle pane (Flow mode): the dominant side's ticks per 100k, per cycle
         self._cyc_vb = None
-        self._cyc_items = None         # (buy rate line, sell rate line)
+        self._cyc_items = None         # (green, red, orange, gray) BarGraphItems -- one bar per finished cycle
         self._cyc_sized = False
         self._cyc_sig = None
         self._cyc_t = 0.0
@@ -18232,16 +18232,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         vb = pw.getViewBox()
         vb.setMouseEnabled(x=True, y=True)
         vb.setXLink(self.vb)
-        # TWO lines, same colours as the flow chart above: buyers teal, sellers red. One cosmetic pen each,
-        # no per-point brush and no custom paint() (pyqtgraph's deviceTransform() inside paint() has segfaulted
-        # this terminal before). The pane's cost is the POINT COUNT, not the pen -- see CYCLE_RATE_MAX_PTS.
+        # FOUR BarGraphItems, each ONE solid brush -- no per-bar brush list, and no custom paint()
+        # (pyqtgraph's deviceTransform() inside paint() has segfaulted this terminal before). Grouping the bars
+        # by COLOUR is what keeps it to one brush apiece however many cycles are on screen.
         items = []
-        for _c, _z in (("#26a69a", 6), ("#ef5350", 5)):
-            _pn = pg.mkPen(_c, width=1.8, style=QtCore.Qt.SolidLine)
-            _pn.setCosmetic(True)
-            _pn.setCapStyle(QtCore.Qt.RoundCap); _pn.setJoinStyle(QtCore.Qt.RoundJoin)
-            it = pg.PlotCurveItem(pen=_pn, antialias=False)
-            it.setZValue(_z)
+        for _c in (CycleBadgesItem._UP, CycleBadgesItem._DN, CycleBadgesItem._CONTRA, CycleBadgesItem._FLAT):
+            _col = QtGui.QColor(int(_c[0]), int(_c[1]), int(_c[2]))
+            it = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
+                                 brush=pg.mkBrush(_col.red(), _col.green(), _col.blue(), 190),
+                                 pen=pg.mkPen(_col, width=1.0))
+            it.setZValue(5)
             pw.addItem(it); items.append(it)
         self._cyc_items = tuple(items)
         _z = pg.InfiniteLine(angle=0, pos=0.0, pen=pg.mkPen("#8a8a8a", width=1))
@@ -18326,8 +18326,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _t.hide()
 
     def _cyc_tick(self, now: float) -> None:
-        """Per frame in Flow mode, throttled: the store re-keys on every live batch and a full rebuild over a
-        wide view is milliseconds, which is not something to pay at frame rate."""
+        """Per frame in Flow mode, throttled: the store re-keys on every live batch, and while the read itself
+        is a memo hit the per-cycle arithmetic and four setOpts calls are not worth paying at frame rate."""
         if self._cyc_plot is None or not self._cyc_plot.isVisible():
             return
         if now - self._cyc_t < float(config.CYCLE_RECALC_SECS):
@@ -18335,52 +18335,62 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cyc_t = now
         (vx0, vx1), _ = self.vb.viewRange()
         try:
-            # `self._flow_win`, NOT a window of its own: the boundaries have to be the ones the vertical lines
-            # on the chart are drawn at, which is exactly what the pane this replaced got wrong.
-            self._cyc_data = self._flow.cycle_rate_curve(
-                vx0, vx1, float(self._flow_win), float(config.TICK_SIZE),
-                float(config.FLOW_CROSS_BADGE_UNIT_USD), float(config.CYCLE_RATE_MIN_USD),
-                float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
-                float(config.FLOW_CROSS_CONTEXT_SECS), int(config.CYCLE_RATE_MAX_PTS))
+            # the SAME crosses() call the vertical lines make, with the SAME arguments -- so it is a memo hit,
+            # and so the pane and the lines cannot possibly disagree about where a cycle is
+            self._cyc_data = self._flow.crosses(
+                vx0, vx1, float(self._flow_win), float(config.FLOW_CROSS_MIN_SPREAD_PCT),
+                float(config.FLOW_CROSS_MIN_HOLD_SECS), int(config.FLOW_CROSS_MAX),
+                float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
         except Exception:
             return
         self._cyc_draw(now)
 
     def _cyc_draw(self, now: float) -> None:
-        """TWO lines that BUILD as the cycle develops: the ticks price has moved per $100k each side has traded
-        SO FAR in the cycle in progress, resetting at every cross (user 2026-09-10).
+        """ONE BAR PER FINISHED CYCLE: the ticks price moved per $100k the DOMINANT side traded (user
+        2026-09-11).
 
-        Teal is the buyers' dollars, red the sellers'. Both share a numerator -- the move since the cycle began
-        -- so they always agree in SIGN; what separates them is each side's running volume. Read the GAP as the
-        imbalance and the LEVEL as how dearly the move was bought. Both pinned near zero is a lot of money that
-        moved nothing.
+        Which side is dominant is the line colour above -- green line, buyers; red line, sellers; a weak gray
+        line has no owner, so whichever of the two had the larger impact is shown. The bar spans the cycle,
+        cross to cross, so its edges sit exactly on the vertical lines.
 
-        A side stays blank until it has traded CYCLE_RATE_MIN_USD inside the cycle, so the first seconds after a
-        cross do not divide a whole tick by a couple of hundred dollars and throw the scale away."""
+        Colour is the badge's rule: the winning side's colour when the cycle went its way, ORANGE when price
+        went against the side that owned it, gray when it ended flat (a zero-height bar, so that one never
+        really shows). The bar's SIGN is the price's, like everything else in this family.
+
+        NOTHING is drawn for the cycle still forming -- `done` is False until the tape crosses back, so a bar
+        appearing is always news about the past, exactly like the line that opened it."""
         if self._cyc_data is None or self._cyc_items is None:
             return
-        t, rb, rs = self._cyc_data
-        buy_c, sell_c = self._cyc_items
+        t, is_buy, strong, move, cbuy, csell, t_end, done = self._cyc_data
         if t.size == 0:
-            for it in (buy_c, sell_c):
-                it.setData(np.zeros(0), np.zeros(0))
+            for it in self._cyc_items:
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            self._cyc_sig = ("empty",)
             return
-        sig = (int(t.size), round(float(t[-1]), 2), round(float(np.nan_to_num(rb[-1])), 3),
-               round(float(np.nan_to_num(rs[-1])), 3), int(self._flow_win))
+        _side, _rate, _state = self._cycle_impact(is_buy, strong, move, cbuy, csell)
+        _vol = np.where(_side, cbuy, csell)
+        keep = done & np.isfinite(_rate) & (_vol >= float(config.CYCLE_RATE_MIN_USD))
+        sig = (int(t.size), int(keep.sum()), round(float(t[-1]), 2),
+               round(float(np.nan_to_num(_rate[keep][-1] if keep.any() else 0.0)), 3), int(self._flow_win))
         if sig == self._cyc_sig:
             return
         self._cyc_sig = sig
-        # `connect="finite"` leaves the warm-up NaNs as real GAPS: a side with too little volume yet has no
-        # number, and drawing through it would invent one.
-        buy_c.setData(t, rb, connect="finite")
-        sell_c.setData(t, rs, connect="finite")
-        # fit to the 99th PERCENTILE, not the max -- the bin right after a warm-up threshold is crossed can be
-        # an order of magnitude above everything else, and one of those would flatten the whole pane
-        _all = np.concatenate([rb, rs])
-        _all = _all[np.isfinite(_all)]
-        if _all.size == 0:
+        if not keep.any():
+            for it in self._cyc_items:
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
             return
-        lim = float(np.percentile(np.abs(_all), 99.0)) * 1.15
+        x0 = t[keep]; x1 = t_end[keep]; val = _rate[keep]; st = _state[keep]; sd = _side[keep]
+        # group by COLOUR so each item keeps ONE brush: green = a buy cycle that went up, red = a sell cycle
+        # that went down, orange = either of them contradicted, gray = dead flat
+        groups = ((st == 1) & sd, (st == 1) & ~sd, st == 2, st == 0)
+        for it, m in zip(self._cyc_items, groups):
+            if not m.any():
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+                continue
+            it.setOpts(x0=x0[m], x1=x1[m], y0=np.minimum(0.0, val[m]), height=np.abs(val[m]))
+        # fit to the 99th PERCENTILE, not the max -- one thin cycle can be an order of magnitude above the rest
+        # and would flatten everything else against the zero line
+        lim = float(np.percentile(np.abs(val), 99.0)) * 1.15
         lim = max(lim, 0.1)
         cur = getattr(self, "_cyc_ytop", 0.0)
         if lim > cur * 0.98 or lim < cur * 0.55:
@@ -18707,7 +18717,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if sig == getattr(self, "_flow_xsig", None):
             return                                          # nothing moved -> the cheapest possible frame
         self._flow_xsig = sig
-        t, is_buy, strong, move, cbuy, csell = self._flow.crosses(
+        t, is_buy, strong, move, cbuy, csell, _t_end, _done = self._flow.crosses(
             vx0, vx1, float(self._flow_win), float(config.FLOW_CROSS_MIN_SPREAD_PCT),
             float(config.FLOW_CROSS_MIN_HOLD_SECS), int(config.FLOW_CROSS_MAX),
             float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))

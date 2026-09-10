@@ -207,9 +207,8 @@ FLOW_CROSS_BADGE_UNIT_TXT = "100k"
 FLOW_CROSS_BADGE_BAND_PX = 16       # one pill plus its gap, in pixels; the strip is bands x this
 # Cycle pane: ticks price moved per this many dollars each side has traded so far in the cycle. Same unit as
 # the badge, on the same cycles -- both come from FlowStore.crosses().
-CYCLE_RATE_MIN_USD = 20_000.0       # a side stays blank until it has traded this much INSIDE the cycle: one
-                                    # small print in the first second would divide a tick by nearly nothing
-CYCLE_RATE_MAX_PTS = 900            # drawn points per line
+CYCLE_RATE_MIN_USD = 20_000.0       # a cycle whose dominant side traded less than this gets no bar: dividing
+                                    # a tick by a few thousand dollars is a spike, not a reading
 FLOW_CROSS_DASH_PX = 9.0            # dash length / gap, in PIXELS. The dashes are emitted as segments rather
 FLOW_CROSS_GAP_PX = 7.0             # than left to a dashed pen: Qt's dasher measured ~100x more expensive.
 # A cross that held its side for MIN_HOLD_SECS but never reached MIN_SPREAD_PCT is still a cycle, just a weak
