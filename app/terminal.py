@@ -1773,7 +1773,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_win = int(config.FLOW_WINDOW_SECS)   # rolling window of the Buy/Sell Flow lines (hamburger 'Flow')
         self._flow_curves = None       # (buy PlotCurveItem, sell PlotCurveItem) -- created on first draw
         self._flow_x_on = bool(config.FLOW_CROSS_ON)   # cycle-start vlines at the confirmed line crossings
-        self._flow_xln = None          # (green, red, gray) pairs-curves -- ONE item per colour, not per line
+        self._flow_xln = None          # {pane key: (plot, (green, red, gray))} -- ONE item per colour PER PANE
         self._flow_xbadge = None       # CycleBadgesItem: every cycle's move + side rate, in ONE item
         self._flow_badge_pad = 2 * int(config.FLOW_CROSS_BADGE_BAND_PX)   # strip under zero, px (tier-driven)
         self._flow_xsig = None         # (rev, view x, window, view y) -> an idle frame is one tuple compare
@@ -16584,7 +16584,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # scanner items. Nothing re-enters Flow mode on a Scan Start change, so without this the pane stack
             # vanishes and _flow_draw keeps calling setData on orphaned curves -- drawing nothing at all.
             self._flow_curves = None                      # force a rebuild; the old pair is off the plot
-            self._flow_xln = None; self._flow_xsig = None  # ... and the cycle-start vlines with them
+            self._flow_xln = None; self._flow_xsig = None  # ... and the cycle-start vlines in EVERY pane
             self._flow_xbadge = None
             self._liq_show(bool(getattr(self, "_liq_pane_on", True)))
             self._cyc_show(bool(getattr(self, "_cyc_on", True)))
@@ -18682,19 +18682,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         point: the Cycle pane used its own (300 s) window, so its boundaries never matched a crossing the user
         could see on a 60 s chart.
 
-        Cost: one memoized store call plus three setData calls, and only when something moved. Each colour is
-        ONE pairs-connected curve carrying every line of that colour, so the whole family is three graphics
-        items -- not 400 InfiniteLines each invalidating its own bounding rect on every pan."""
+        The lines run through ALL THREE panes (user 2026-09-10). They are x-linked, so a cross is the same
+        pixel column everywhere; the SET is chosen once off the main view so the panes mark the same cycles and
+        line up, and only the y ladder is rebuilt per pane, since each has its own range and pixels-per-y.
+
+        Cost: one memoized store call plus three setData calls PER VISIBLE PANE, and only when something moved.
+        Each colour is ONE pairs-connected curve carrying every line of that colour, so the whole family is
+        three graphics items per pane -- not 400 InfiniteLines each invalidating its own bounding rect on every
+        pan. An idle frame is still one tuple compare; the signature just carries three y ranges now."""
         on = bool(getattr(self, "_flow_x_on", True)) and self.scanner_mode == "flow"
         if not on:
-            for _it in (getattr(self, "_flow_xln", None) or ()):
-                _it.setData(np.zeros(0), np.zeros(0))
-            if getattr(self, "_flow_xbadge", None) is not None:
-                self._flow_xbadge.setBadges([])       # the badges are a SEPARATE item -- clearing the curves
-            self._flow_xsig = ("off",)                # left them painted (caught by the paint probe)
+            # the badges are a SEPARATE item, so clearing the curves alone left them painted (caught by the
+            # paint probe) -- _cross_clear does both
+            self._cross_clear()
+            self._flow_xsig = ("off",)
             return
+        targets = self._cross_targets()
         (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
-        sig = (self._flow.rev, round(vx0, 2), round(vx1, 2), int(self._flow_win), round(vy0, 4), round(vy1, 4))
+        sig = [self._flow.rev, round(vx0, 2), round(vx1, 2), int(self._flow_win)]
+        for _k, _p, _v in targets:                          # every pane's y range: a y pan in ANY of them redraws
+            (_a, _b) = _v.viewRange()[1]
+            sig.append((_k, round(_a, 4), round(_b, 4)))
+        sig = tuple(sig)
         if sig == getattr(self, "_flow_xsig", None):
             return                                          # nothing moved -> the cheapest possible frame
         self._flow_xsig = sig
@@ -18702,26 +18711,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             vx0, vx1, float(self._flow_win), float(config.FLOW_CROSS_MIN_SPREAD_PCT),
             float(config.FLOW_CROSS_MIN_HOLD_SECS), int(config.FLOW_CROSS_MAX),
             float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
-        if getattr(self, "_flow_xln", None) is None:
-            items = []
-            for _c, _z in (("#1b9c8a", 3), ("#e03b3b", 3), (config.FLOW_CROSS_WEAK_COL, 2)):
-                # A wide pen (2.4 px) because on the Simple BW canvas a hairline vline is invisible, which is
-                # exactly what the user asked to avoid -- but NO setDashPattern(). Qt's dasher walks the pattern
-                # along the device-space length of every line: measured +455 ms per paint at 400 lines, against
-                # +4.5 ms for the identical picture with the dashes emitted as segments (see _cross_dashes).
-                _pn = pg.mkPen(_c, width=float(config.FLOW_CROSS_WIDTH))
-                _pn.setCosmetic(True)
-                _it = self._add_scanner_item(pg.PlotCurveItem(pen=_pn, antialias=False), ignore_bounds=True)
-                _it.setZValue(_z)                           # UNDER the flow lines: they stay the readable thing
-                items.append(_it)
-            self._flow_xln = (items[0], items[1], items[2])
+        for _k, _p, _v in targets:                          # create (or re-create) each pane's three curves
+            self._cross_items_for(_k, _p)
         if getattr(self, "_flow_xbadge", None) is None:
             self._flow_xbadge = self._add_scanner_item(CycleBadgesItem(), ignore_bounds=True)
-        g_it, r_it, w_it = self._flow_xln
         if t.size == 0:
-            for _it in self._flow_xln:
-                _it.setData(np.zeros(0), np.zeros(0))
-            self._flow_xbadge.setBadges([])
+            self._cross_clear()
             return
         # Thin to what the canvas can actually separate. Without this a 20 h view drew 400 lines onto 1600 px
         # -- one every 4 px -- which measured 140 ms per paint against a 15 ms baseline.
@@ -18730,23 +18725,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         t = t[_keep]; is_buy = is_buy[_keep]; strong = strong[_keep]; move = move[_keep]
         cbuy = cbuy[_keep]; csell = csell[_keep]
         if t.size == 0:
-            for _it in self._flow_xln:
-                _it.setData(np.zeros(0), np.zeros(0))
-            self._flow_xbadge.setBadges([])
+            self._cross_clear()
             return
-        # Span the visible height and barely more. The signature above carries the y range, so a y pan already
-        # redraws these -- the old 2x span bought nothing and doubled the length Qt has to stroke.
-        h = max(1e-9, float(vy1 - vy0))
-        _lo = float(vy0) - 0.02 * h
-        _hi = float(vy1) + 0.02 * h
-        _ys = self._cross_dashes(_lo, _hi, float(_ypp))
-        # the WEAK line is SOLID (user 2026-09-10) -- which also makes it the cheapest of the three to paint
-        for _it, _m, _lad in ((g_it, is_buy & strong, _ys), (r_it, (~is_buy) & strong, _ys),
-                              (w_it, ~strong, np.array([_lo, _hi]))):
-            if not _m.any():
-                _it.setData(np.zeros(0), np.zeros(0))
-                continue
-            _it.setData(np.repeat(t[_m], _lad.size), np.tile(_lad, int(_m.sum())), connect="pairs")
+        # The SET of lines was decided once, above, off the main view -- so every pane marks the same cycles
+        # and they line up vertically. Only the y ladder is per-pane: each has its own range and its own
+        # pixels-per-y, and a dash has to come out the same height in all three.
+        _masks = (is_buy & strong, (~is_buy) & strong, ~strong)
+        _n = tuple(int(_m.sum()) for _m in _masks)
+        for _k, _p, _v in targets:
+            _items = self._cross_items_for(_k, _p)
+            (_ay, _by) = _v.viewRange()[1]
+            _hh = max(1e-9, float(_by - _ay))
+            # Span the visible height and barely more. The signature carries every pane's y range, so a y pan
+            # already redraws these -- a 2x span would buy nothing and double the length Qt has to stroke.
+            _lo = float(_ay) - 0.02 * _hh
+            _hi = float(_by) + 0.02 * _hh
+            _yp = float(_v.viewPixelSize()[1])
+            _ys = self._cross_dashes(_lo, _hi, _yp)
+            _solid = np.array([_lo, _hi])
+            # the WEAK line is SOLID (user 2026-09-10) -- which also makes it the cheapest of the three to paint
+            for _it, _m, _cnt, _lad in zip(_items, _masks, _n, (_ys, _ys, _solid)):
+                if not _cnt:
+                    _it.setData(np.zeros(0), np.zeros(0))
+                    continue
+                _it.setData(np.repeat(t[_m], _lad.size), np.tile(_lad, _cnt), connect="pairs")
         # Badges need far more room than lines do, so they get their own, coarser thinning off the SAME set --
         # at a zoom where the lines are 7 px apart the pills would be unreadable mush.
         _fin = np.isfinite(move)
@@ -18767,6 +18769,59 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._flow_badge_pad = _pad
             self._flow_ytop = 0.0                       # force the dead-band to re-fit with the new strip
             self._flow_sig = None
+
+    def _cross_targets(self):
+        """(key, plot, viewbox) for every pane the cycle lines run through, main chart first.
+
+        The sub-panes are x-linked to the chart, so a cross is the same pixel column in all three; only the y
+        range and the pixels-per-y differ. A pane that is hidden or has not been built contributes nothing."""
+        out = [("main", self.plot, self.vb)]
+        for _k, _p, _v in (("liq", getattr(self, "_liq_plot", None), getattr(self, "_liq_vb", None)),
+                           ("cyc", getattr(self, "_cyc_plot", None), getattr(self, "_cyc_vb", None))):
+            if _p is not None and _v is not None and _p.isVisible():
+                out.append((_k, _p, _v))
+        return out
+
+    def _cross_items_for(self, key, plot):
+        """The three curves for one pane, created on first use and REBUILT if the splitter replaced the pane.
+
+        Keying on the pane OBJECT is what makes that safe: clear_scanner_canvas() throws the sub-panes away and
+        builds new ones, and setData into the old C++ object is exactly the kind of dangling call that has
+        blanked panes here before."""
+        store = getattr(self, "_flow_xln", None)
+        if not isinstance(store, dict):
+            store = {}
+            self._flow_xln = store
+        got = store.get(key)
+        if got is not None and got[0] is plot:
+            return got[1]
+        items = []
+        for _c, _z in (("#1b9c8a", 3), ("#e03b3b", 3), (config.FLOW_CROSS_WEAK_COL, 2)):
+            # A wide pen because on the Simple BW canvas a hairline vline is invisible, which is exactly what
+            # the user asked to avoid -- but NO setDashPattern(). Qt's dasher walks the pattern along the
+            # device-space length of every line: measured +455 ms per paint at 400 lines, against +4.5 ms for
+            # the identical picture with the dashes emitted as segments (see _cross_dashes).
+            _pn = pg.mkPen(_c, width=float(config.FLOW_CROSS_WIDTH))
+            _pn.setCosmetic(True)
+            _it = pg.PlotCurveItem(pen=_pn, antialias=False)
+            _it.setZValue(_z)                               # UNDER the data lines: they stay the readable thing
+            if key == "main":
+                self._add_scanner_item(_it, ignore_bounds=True)
+            else:
+                plot.addItem(_it, ignoreBounds=True)        # the sub-pane owns it and dies with it
+            items.append(_it)
+        store[key] = (plot, tuple(items))
+        return store[key][1]
+
+    def _cross_clear(self) -> None:
+        for _p, _items in (getattr(self, "_flow_xln", None) or {}).values():
+            for _it in _items:
+                try:
+                    _it.setData(np.zeros(0), np.zeros(0))
+                except Exception:
+                    pass
+        if getattr(self, "_flow_xbadge", None) is not None:
+            self._flow_xbadge.setBadges([])
 
     @staticmethod
     def _cross_dashes(y0: float, y1: float, y_per_px: float):
