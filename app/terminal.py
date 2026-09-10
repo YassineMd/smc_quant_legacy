@@ -18531,7 +18531,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         and ends when they swap back. It is CONFIRMED once the spread reaches 10% and HOLDS it for 20 s, and the
         line is then drawn back at the exact crossing -- so a line appearing is always news about the past.
         A cross whose side held the 20 s but never got 10% apart is still a cycle, a weak one, and gets a GRAY
-        line; a run shorter than the hold is not a cycle at all and is never drawn.
+        line; a run shorter than the hold is not a cycle at all and is never drawn -- which leaves the crosses on
+        either side of it the SAME colour, and consecutive same-colour lines are MERGED into the first, because
+        that cycle never ended and may not be marked as starting twice (user 2026-09-10).
 
         The boundary is read off `self._flow_win`, the window THESE lines are drawn with. That is the whole
         point: the Cycle pane used its own (300 s) window, so its boundaries never matched a crossing the user
@@ -18554,7 +18556,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         t, is_buy, strong = self._flow.crosses(vx0, vx1, float(self._flow_win),
                                                float(config.FLOW_CROSS_MIN_SPREAD_PCT),
                                                float(config.FLOW_CROSS_MIN_HOLD_SECS),
-                                               int(config.FLOW_CROSS_MAX))
+                                               int(config.FLOW_CROSS_MAX),
+                                               float(config.FLOW_CROSS_MERGE_LOOKBACK_SECS))
         if getattr(self, "_flow_xln", None) is None:
             items = []
             for _c, _z in (("#1b9c8a", 3), ("#e03b3b", 3), (config.FLOW_CROSS_WEAK_COL, 2)):

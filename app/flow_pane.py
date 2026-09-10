@@ -195,7 +195,7 @@ class FlowStore:
 
     # ------------------------------------------------------- confirmed crosses
     def crosses(self, t0: float, t1: float, win_secs: float, min_spread_pct: float = 10.0,
-                min_hold_secs: float = 20.0, max_n: int = 400):
+                min_hold_secs: float = 20.0, max_n: int = 400, merge_lookback_secs: float = 600.0):
         """Where the two rolling-window flow lines CROSS, keeping only the crosses that opened a real cycle.
 
         Returns (t_cross, is_buy, strong).
@@ -206,9 +206,15 @@ class FlowStore:
           not strong  the side held for `min_hold_secs` but never got that far apart -- a real cycle, a weak one
                   (user 2026-09-10 asked for these back, drawn in gray rather than dropped).
 
-        A run shorter than `min_hold_secs` is not a cycle at all and never comes back. The time returned is the
-        cross itself, not the confirmation, LINEARLY INTERPOLATED between the two bins that straddle it so it
-        lands on the actual intersection.
+        A run shorter than `min_hold_secs` is not a cycle at all and never comes back -- and because it is
+        dropped, the crosses on either side of it are the SAME colour. Two or more consecutive same-colour
+        crosses are MERGED into the first (user 2026-09-10): that cycle never really ended, so it may not be
+        marked as starting twice. Consecutive weak (gray) crosses collapse the same way, into one marker at the
+        head of the indecisive stretch. `merge_lookback_secs` is how far back the run is traced, so the leftmost
+        VISIBLE cross knows whether it continues one that starts off-screen.
+
+        The time returned is the cross itself, not the confirmation, LINEARLY INTERPOLATED between the two bins
+        that straddle it so it lands on the actual intersection.
 
         `win_secs` must be the window the visible lines use, or the crosses will not sit on the crossings the
         user can see -- everything below mirrors series() bin for bin. Vectorised and memoized."""
@@ -217,7 +223,8 @@ class FlowStore:
         if self.empty() or win_secs <= 0:
             return (z, zb, zb)
         key = ("cross", self.rev, round(float(t0), 2), round(float(t1), 2), round(float(win_secs), 2),
-               round(float(min_spread_pct), 3), round(float(min_hold_secs), 2), int(max_n))
+               round(float(min_spread_pct), 3), round(float(min_hold_secs), 2), int(max_n),
+               round(float(merge_lookback_secs), 2))
         memo = getattr(self, "_xmemo", None)
         if memo is not None and memo[0] == key:
             return memo[1]
@@ -233,7 +240,10 @@ class FlowStore:
             out = (z, zb, zb)
             self._xmemo = (key, out)
             return out
-        p0 = max(0, i0 - w + 1)                                          # same prefix series() takes
+        # series() only needs a w-1 prefix; the MERGE needs enough of the run before the view to know whether
+        # the leftmost visible cross is its own head or a repeat of the colour before it.
+        look = max(w - 1, int(round(max(0.0, float(merge_lookback_secs)) / self.bin)))
+        p0 = max(0, i0 - look)
         cb = np.concatenate([[0.0], np.cumsum(self._buy[p0:i1 + 1])])
         ca = np.concatenate([[0.0], np.cumsum(self._sell[p0:i1 + 1])])
         m = int(cb.size - 1)
@@ -279,9 +289,24 @@ class FlowStore:
         # lines never got min_spread_pct apart. Anything shorter than the hold is not a cycle and is dropped.
         ends = np.concatenate([flips[1:], [m]])
         strong = cnt[1:] > 0
-        keep = (strong | ((ends - flips) >= hold)) & (flips >= (i0 - p0)) & (flips <= (iv - p0))
-        cs = flips[keep]
-        sg = strong[keep]
+        cyc = strong | ((ends - flips) >= hold)
+        fl = flips[cyc]
+        sg = strong[cyc]
+        db = dom[fl]
+        # MERGE runs of the same colour into their FIRST line. Dropping a sub-hold run leaves the crosses on
+        # either side of it on the SAME side, and that cycle never ended -- so it must not be marked as starting
+        # twice. Weak crosses are all one colour, so a chop of them collapses to one marker too. This runs over
+        # the WHOLE read, view and lookback alike, so the answer does not depend on where the view starts.
+        if fl.size:
+            colr = np.where(sg, np.where(db, 1, 2), 0)               # 0 = gray, 1 = green (buy), 2 = red (sell)
+            head = np.empty(colr.size, dtype=bool)
+            head[0] = True
+            head[1:] = colr[1:] != colr[:-1]
+            fl = fl[head]; sg = sg[head]; db = db[head]
+        vis = (fl >= (i0 - p0)) & (fl <= (iv - p0))                  # ... and only now clip to the view
+        cs = fl[vis]
+        sg = sg[vis]
+        db = db[vis]
         if cs.size == 0:
             out = (z, zb, zb)
             self._xmemo = (key, out)
@@ -289,6 +314,7 @@ class FlowStore:
         if cs.size > max_n:
             cs = cs[-int(max_n):]
             sg = sg[-int(max_n):]
+            db = db[-int(max_n):]
         # the EXACT cross: where buy-sell changes sign between bin cs-1 and bin cs, on the same straight segment
         # the curve draws between those two points.
         d0 = (rb - ra)[cs - 1]
@@ -296,7 +322,7 @@ class FlowStore:
         den = d1 - d0
         frac = np.where(np.abs(den) > 1e-12, np.clip(-d0 / np.where(den == 0, 1.0, den), 0.0, 1.0), 0.0)
         t_prev = (self._base + p0 + cs - 1) * self.bin + self.bin        # series() stamps each bin at its END
-        out = (t_prev + frac * self.bin, dom[cs].copy(), sg.copy())
+        out = (t_prev + frac * self.bin, db.copy(), sg.copy())
         self._xmemo = (key, out)
         return out
 
