@@ -33,6 +33,7 @@ class FlowStore:
         self._bmemo = None
         self._cmemo = None
         self._ccmemo = None
+        self._xmemo = None
 
     # ---------------------------------------------------------------- state
     def __len__(self) -> int:
@@ -118,6 +119,7 @@ class FlowStore:
         self._bmemo = None
         self._cmemo = None
         self._ccmemo = None
+        self._xmemo = None
         return int(loc.size)
 
     def reset(self) -> None:
@@ -131,6 +133,7 @@ class FlowStore:
         self._bmemo = None
         self._cmemo = None
         self._ccmemo = None
+        self._xmemo = None
 
     # --------------------------------------------------------------- bursts
     def bar_bursts(self, starts, ends, win_secs: float, cap: float = 50.0, floor_pct: float = 90.0):
@@ -188,6 +191,113 @@ class FlowStore:
             side[:] = take_buy.astype(np.int8)
             side[ratio <= 0] = 0
         self._bmemo = (key, out)
+        return out
+
+    # ------------------------------------------------------- confirmed crosses
+    def crosses(self, t0: float, t1: float, win_secs: float, min_spread_pct: float = 10.0,
+                min_hold_secs: float = 20.0, max_n: int = 400):
+        """Where the two rolling-window flow lines CROSS, keeping only the crosses that opened a real cycle.
+
+        Returns (t_cross, is_buy, strong).
+
+          is_buy  True where the BUY line took the top.
+          strong  the cycle CONFIRMED: before the next cross the spread |buy-sell|/(buy+sell) reached
+                  `min_spread_pct` and stayed there for `min_hold_secs` consecutive seconds.
+          not strong  the side held for `min_hold_secs` but never got that far apart -- a real cycle, a weak one
+                  (user 2026-09-10 asked for these back, drawn in gray rather than dropped).
+
+        A run shorter than `min_hold_secs` is not a cycle at all and never comes back. The time returned is the
+        cross itself, not the confirmation, LINEARLY INTERPOLATED between the two bins that straddle it so it
+        lands on the actual intersection.
+
+        `win_secs` must be the window the visible lines use, or the crosses will not sit on the crossings the
+        user can see -- everything below mirrors series() bin for bin. Vectorised and memoized."""
+        z = np.zeros(0)
+        zb = np.zeros(0, dtype=bool)
+        if self.empty() or win_secs <= 0:
+            return (z, zb, zb)
+        key = ("cross", self.rev, round(float(t0), 2), round(float(t1), 2), round(float(win_secs), 2),
+               round(float(min_spread_pct), 3), round(float(min_hold_secs), 2), int(max_n))
+        memo = getattr(self, "_xmemo", None)
+        if memo is not None and memo[0] == key:
+            return memo[1]
+        n = len(self._buy)
+        w = max(1, int(round(float(win_secs) / self.bin)))
+        hold = max(1, int(round(float(min_hold_secs) / self.bin)))
+        i0 = max(0, int(np.floor(t0 / self.bin)) - self._base)
+        iv = min(n - 1, int(np.floor(t1 / self.bin)) - self._base)      # the view's last bin
+        # read PAST the view by the hold window: a cross just left of the right edge is confirmed by bins the
+        # view does not cover, and it must not wink out just because the user panned.
+        i1 = min(n - 1, iv + hold + 1)
+        if iv < i0:
+            out = (z, zb, zb)
+            self._xmemo = (key, out)
+            return out
+        p0 = max(0, i0 - w + 1)                                          # same prefix series() takes
+        cb = np.concatenate([[0.0], np.cumsum(self._buy[p0:i1 + 1])])
+        ca = np.concatenate([[0.0], np.cumsum(self._sell[p0:i1 + 1])])
+        m = int(cb.size - 1)
+        if m < 3:
+            out = (z, zb, zb)
+            self._xmemo = (key, out)
+            return out
+        idx = np.arange(m)
+        lo = np.maximum(0, idx + 1 - w)
+        rb = cb[idx + 1] - cb[lo]
+        ra = ca[idx + 1] - ca[lo]
+        # Dominance is CARRIED FORWARD through bins that cannot express one (a hole with no trades at all, or an
+        # exact tie). Without this a gap in a partially backfilled store reads as buy>=sell and invents a cross.
+        up = rb > ra
+        dn = ra > rb
+        say = up | dn
+        if not say.any():
+            out = (z, zb, zb)
+            self._xmemo = (key, out)
+            return out
+        dom = up[np.maximum.accumulate(np.where(say, idx, 0))]
+        flips = np.flatnonzero(dom[1:] != dom[:-1]) + 1                  # first bin of each new side
+        if flips.size == 0:
+            out = (z, zb, zb)
+            self._xmemo = (key, out)
+            return out
+        tot = rb + ra
+        spread = np.where(tot > 0, 100.0 * np.abs(rb - ra) / np.maximum(tot, 1e-9), 0.0)
+        okc = spread >= float(min_spread_pct)
+        # Consecutive seconds of `okc` ending at each bin. The streak is FORCED to restart at every cross: a
+        # single huge print can carry the spread across a crossing without ever dipping under the threshold, and
+        # then the previous cycle's hold would confirm this one.
+        brk = ~okc
+        brk[flips] = True
+        streak = np.where(okc, idx + 1 - np.maximum.accumulate(np.where(brk, idx + 1, 0)), 0)
+        qual = streak >= hold
+        seg = np.zeros(m, dtype=np.int64)
+        seg[flips] = 1
+        seg = np.cumsum(seg)                                             # 0 = before the first cross
+        cnt = np.bincount(seg[qual], minlength=flips.size + 1) if qual.any() else np.zeros(flips.size + 1,
+                                                                                           dtype=np.int64)
+        # STRONG = the spread gate was met inside the run. WEAK = the side held for min_hold_secs but the two
+        # lines never got min_spread_pct apart. Anything shorter than the hold is not a cycle and is dropped.
+        ends = np.concatenate([flips[1:], [m]])
+        strong = cnt[1:] > 0
+        keep = (strong | ((ends - flips) >= hold)) & (flips >= (i0 - p0)) & (flips <= (iv - p0))
+        cs = flips[keep]
+        sg = strong[keep]
+        if cs.size == 0:
+            out = (z, zb, zb)
+            self._xmemo = (key, out)
+            return out
+        if cs.size > max_n:
+            cs = cs[-int(max_n):]
+            sg = sg[-int(max_n):]
+        # the EXACT cross: where buy-sell changes sign between bin cs-1 and bin cs, on the same straight segment
+        # the curve draws between those two points.
+        d0 = (rb - ra)[cs - 1]
+        d1 = (rb - ra)[cs]
+        den = d1 - d0
+        frac = np.where(np.abs(den) > 1e-12, np.clip(-d0 / np.where(den == 0, 1.0, den), 0.0, 1.0), 0.0)
+        t_prev = (self._base + p0 + cs - 1) * self.bin + self.bin        # series() stamps each bin at its END
+        out = (t_prev + frac * self.bin, dom[cs].copy(), sg.copy())
+        self._xmemo = (key, out)
         return out
 
     # ------------------------------------------------------------- cycles

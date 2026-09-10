@@ -1642,6 +1642,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow = flow_pane.FlowStore(float(config.FLOW_BIN_SECS), float(config.FLOW_RETAIN_SECS))
         self._flow_win = int(config.FLOW_WINDOW_SECS)   # rolling window of the Buy/Sell Flow lines (hamburger 'Flow')
         self._flow_curves = None       # (buy PlotCurveItem, sell PlotCurveItem) -- created on first draw
+        self._flow_x_on = bool(config.FLOW_CROSS_ON)   # cycle-start vlines at the confirmed line crossings
+        self._flow_xln = None          # (green, red, gray) pairs-curves -- ONE item per colour, not per line
+        self._flow_xsig = None         # (rev, view x, window, view y) -> an idle frame is one tuple compare
         self._flow_sig = None          # (store rev, view range, window, width) -> skip the redraw when nothing moved
         self._flow_follow = True       # right edge pinned to 'now' until the user pans away
         self._flow_resub_t = 0.0
@@ -2162,6 +2165,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             self.menu.set_ema_vp_pct(getattr(self, "_ema_vp_pct_saved", 50))
             self.menu.set_flow_window(int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)))
+            self.menu.set_flow_cross_on(bool(getattr(self, "_flow_x_on", config.FLOW_CROSS_ON)))
             self.menu.set_cycle_opts(bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)),
                                      float(getattr(self, "_cyc_win", config.CYCLE_WIN_SECS)))
             self.menu.set_liq_pane_on(bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)))
@@ -2424,6 +2428,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.liqOptsChanged.connect(self._on_liq_opts)                      # resting-liquidity pane
         self.menu.burstOptsChanged.connect(self._on_burst_opts)                  # Volume Burst: x multiple / window
         self.menu.flowWindowChanged.connect(self._on_flow_window)                # Buy/Sell Flow rolling window
+        self.menu.flowCrossToggled.connect(self._on_flow_cross_toggled)          # cycle-start vlines on/off
         self.menu.emaVpPctChanged.connect(self._on_ema_vp_pct)                    # EMA Trend VP PLAYER slider -> redraw + persist
         self.menu.hm_contrast.changed.connect(self._hm_contrast_changed)         # Heatmap Liquidity-Contrast cutoffs (hamburger-hosted)
         self.menu.hm_contrast.reset_clicked.connect(self._hm_contrast_reset)     # Heatmap 'Reset -> auto'
@@ -10174,6 +10179,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "bigplayer_min_usd": float(self.menu.big_player_min_usd()),   # Big Player single-print threshold
                 "bpvp_min_usd": float(self.menu.bp_vp_min_usd()),             # Big Player Gray VP MIN PLAYER threshold
                 "flow_win": int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)),   # Buy/Sell Flow window
+                "flow_cross_on": bool(getattr(self, "_flow_x_on", config.FLOW_CROSS_ON)),  # cycle-start vlines
                 "cycle_on": bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)),
                 "cycle_win": float(getattr(self, "_cyc_win", config.CYCLE_WIN_SECS)),
                 "liq_pane_on": bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)),
@@ -10293,6 +10299,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _fw = int(s.get("flow_win", config.FLOW_WINDOW_SECS) or config.FLOW_WINDOW_SECS)
         if _fw in tuple(config.FLOW_WINDOW_CHOICES):
             self._flow_win = _fw          # the combo is synced in __init__ (the menu does not exist yet here)
+        self._flow_x_on = bool(s.get("flow_cross_on", config.FLOW_CROSS_ON))
         self._cyc_on = bool(s.get("cycle_on", config.CYCLE_PANE_ON))
         _cw = float(s.get("cycle_win", config.CYCLE_WIN_SECS) or config.CYCLE_WIN_SECS)
         if _cw in tuple(float(v) for v in config.CYCLE_WIN_CHOICES):
@@ -16451,6 +16458,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # scanner items. Nothing re-enters Flow mode on a Scan Start change, so without this the pane stack
             # vanishes and _flow_draw keeps calling setData on orphaned curves -- drawing nothing at all.
             self._flow_curves = None                      # force a rebuild; the old pair is off the plot
+            self._flow_xln = None; self._flow_xsig = None  # ... and the cycle-start vlines with them
             self._liq_show(bool(getattr(self, "_liq_pane_on", True)))
             self._cyc_show(bool(getattr(self, "_cyc_on", True)))
             self._liq_sig = None
@@ -18405,6 +18413,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cyc_show(False)
         self._flow_curves = None
         self._flow_sig = None
+        self._flow_xln = None; self._flow_xsig = None
         _ax = self.plot.getAxis("right")
         if hasattr(_ax, "set_money"):
             _ax.set_money(False)                          # back to price ticks for every other mode
@@ -18423,6 +18432,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Hamburger 'Flow' -> rolling window changed: re-key the picture and persist."""
         self._flow_win = int(secs)
         self._flow_sig = None
+        self._flow_xsig = None      # the crossings ARE the crossings of these lines -- a new window moves them
         self._save_ui_state()
 
     def _scan_flow(self) -> None:
@@ -18444,6 +18454,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._flow_subscribe(backfill=False)
         self._flow_history_arm()        # pull whatever the drawn span still needs (Scan Start / pan left)
         self._flow_draw(now)
+        try:
+            self._flow_cross_draw()     # cycle-start vlines -- self-gated, fail-safe
+        except Exception:
+            pass
         try:
             self._liq_tick(now)         # resting-liquidity pane — self-gated, fail-safe
         except Exception:
@@ -18509,6 +18523,122 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                               "%s (%.0f%%)" % (self._fmt_usd_short(b_now), 100 * b_now / tot), float(t[-1]), "up")
         self._scanner_tracker("t_flow_s", s_now, "#ef5350",
                               "%s (%.0f%%)" % (self._fmt_usd_short(s_now), 100 * s_now / tot), float(t[-1]), "down")
+
+    def _flow_cross_draw(self) -> None:
+        """Vertical dashed lines where a CYCLE started: the two flow lines crossed and the cross was confirmed.
+
+        The user's definition (2026-09-10): a cycle begins where green takes the top of red (or red of green)
+        and ends when they swap back. It is CONFIRMED once the spread reaches 10% and HOLDS it for 20 s, and the
+        line is then drawn back at the exact crossing -- so a line appearing is always news about the past.
+        A cross whose side held the 20 s but never got 10% apart is still a cycle, a weak one, and gets a GRAY
+        line; a run shorter than the hold is not a cycle at all and is never drawn.
+
+        The boundary is read off `self._flow_win`, the window THESE lines are drawn with. That is the whole
+        point: the Cycle pane used its own (300 s) window, so its boundaries never matched a crossing the user
+        could see on a 60 s chart.
+
+        Cost: one memoized store call plus three setData calls, and only when something moved. Each colour is
+        ONE pairs-connected curve carrying every line of that colour, so the whole family is three graphics
+        items -- not 400 InfiniteLines each invalidating its own bounding rect on every pan."""
+        on = bool(getattr(self, "_flow_x_on", True)) and self.scanner_mode == "flow"
+        if not on:
+            for _it in (getattr(self, "_flow_xln", None) or ()):
+                _it.setData(np.zeros(0), np.zeros(0))
+            self._flow_xsig = ("off",)
+            return
+        (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
+        sig = (self._flow.rev, round(vx0, 2), round(vx1, 2), int(self._flow_win), round(vy0, 4), round(vy1, 4))
+        if sig == getattr(self, "_flow_xsig", None):
+            return                                          # nothing moved -> the cheapest possible frame
+        self._flow_xsig = sig
+        t, is_buy, strong = self._flow.crosses(vx0, vx1, float(self._flow_win),
+                                               float(config.FLOW_CROSS_MIN_SPREAD_PCT),
+                                               float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                                               int(config.FLOW_CROSS_MAX))
+        if getattr(self, "_flow_xln", None) is None:
+            items = []
+            for _c, _z in (("#1b9c8a", 3), ("#e03b3b", 3), (config.FLOW_CROSS_WEAK_COL, 2)):
+                # A wide pen (2.4 px) because on the Simple BW canvas a hairline vline is invisible, which is
+                # exactly what the user asked to avoid -- but NO setDashPattern(). Qt's dasher walks the pattern
+                # along the device-space length of every line: measured +455 ms per paint at 400 lines, against
+                # +4.5 ms for the identical picture with the dashes emitted as segments (see _cross_dashes).
+                _pn = pg.mkPen(_c, width=float(config.FLOW_CROSS_WIDTH))
+                _pn.setCosmetic(True)
+                _it = self._add_scanner_item(pg.PlotCurveItem(pen=_pn, antialias=False), ignore_bounds=True)
+                _it.setZValue(_z)                           # UNDER the flow lines: they stay the readable thing
+                items.append(_it)
+            self._flow_xln = (items[0], items[1], items[2])
+        g_it, r_it, w_it = self._flow_xln
+        if t.size == 0:
+            for _it in self._flow_xln:
+                _it.setData(np.zeros(0), np.zeros(0))
+            return
+        # Thin to what the canvas can actually separate. Without this a 20 h view drew 400 lines onto 1600 px
+        # -- one every 4 px -- which measured 140 ms per paint against a 15 ms baseline.
+        _xpp, _ypp = self.vb.viewPixelSize()
+        _keep = self._thin_by_pixel(t, strong, float(_xpp), float(config.FLOW_CROSS_MIN_PX))
+        t = t[_keep]; is_buy = is_buy[_keep]; strong = strong[_keep]
+        if t.size == 0:
+            for _it in self._flow_xln:
+                _it.setData(np.zeros(0), np.zeros(0))
+            return
+        # Span the visible height and barely more. The signature above carries the y range, so a y pan already
+        # redraws these -- the old 2x span bought nothing and doubled the length Qt has to stroke.
+        h = max(1e-9, float(vy1 - vy0))
+        _ys = self._cross_dashes(float(vy0) - 0.02 * h, float(vy1) + 0.02 * h, float(_ypp))
+        _nd = _ys.size
+        for _it, _m in ((g_it, is_buy & strong), (r_it, (~is_buy) & strong), (w_it, ~strong)):
+            if not _m.any():
+                _it.setData(np.zeros(0), np.zeros(0))
+                continue
+            _it.setData(np.repeat(t[_m], _nd), np.tile(_ys, int(_m.sum())), connect="pairs")
+
+    @staticmethod
+    def _cross_dashes(y0: float, y1: float, y_per_px: float):
+        """The y ladder of one dashed line, as segment ENDPOINT pairs, sized in pixels.
+
+        Every line spans the same y range, so this is computed once and tiled -- n_lines x 2 x n_dashes points
+        for the whole family, in one setData."""
+        per_px = max(2.0, float(config.FLOW_CROSS_DASH_PX) + float(config.FLOW_CROSS_GAP_PX))
+        per = per_px * max(1e-12, float(y_per_px))
+        n = int(np.ceil(max(1e-9, float(y1 - y0)) / per))
+        n = int(np.clip(n, 1, 400))                     # a degenerate y range must not explode the point count
+        on = float(config.FLOW_CROSS_DASH_PX) * max(1e-12, float(y_per_px))
+        starts = float(y0) + np.arange(n, dtype=np.float64) * per
+        ys = np.empty(2 * n, dtype=np.float64)
+        ys[0::2] = starts
+        ys[1::2] = np.minimum(starts + on, float(y1))   # the last dash stops at the top, never past it
+        return ys
+
+    @staticmethod
+    def _thin_by_pixel(t, strong, x_per_px, min_px):
+        """At most one line per `min_px` of screen, CONFIRMED beating weak inside the same slot.
+
+        Zoomed far out the crossings are closer together than the pixels that could separate them; drawing all
+        of them is both unreadable and where the paint cost lives.
+
+        The buckets are anchored to ABSOLUTE time, never to the view's left edge -- with a moving anchor, every
+        pan shifts the bucket walls and lines blink on and off as they change slot. This way only a ZOOM can
+        change which line represents a slot."""
+        if t.size <= 1 or min_px <= 0 or x_per_px <= 0:
+            return np.ones(t.size, dtype=bool)
+        col = np.floor(t / (float(min_px) * float(x_per_px))).astype(np.int64)
+        order = np.lexsort((t, strong))              # weak first, then confirmed; ascending time inside each
+        rev = order[::-1]                            # so the FIRST hit per column is the best candidate
+        _u, first = np.unique(col[rev], return_index=True)
+        keep = np.zeros(t.size, dtype=bool)
+        keep[rev[first]] = True
+        return keep
+
+    def _on_flow_cross_toggled(self, on: bool) -> None:
+        """Hamburger 'Flow' -> cycle-start lines on/off."""
+        self._flow_x_on = bool(on)
+        self._flow_xsig = None
+        try:
+            self._flow_cross_draw()
+        except Exception:
+            pass
+        self._save_ui_state()
 
     @staticmethod
     def _fmt_usd_short(v: float) -> str:

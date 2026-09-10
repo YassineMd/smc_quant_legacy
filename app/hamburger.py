@@ -297,6 +297,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     liqOptsChanged = QtCore.Signal(int, int)      # resting-liquidity pane: (radius ticks, smoothing seconds)
     burstOptsChanged = QtCore.Signal(float, int)   # Volume Burst: (x multiple, window seconds) — 2026-09-08
     flowWindowChanged = QtCore.Signal(int)   # Buy/Sell Flow: rolling window in seconds (2026-09-08)
+    flowCrossToggled = QtCore.Signal(bool)   # Buy/Sell Flow: cycle-start vlines on/off (2026-09-10)
     emaVpPctChanged = QtCore.Signal(int)   # EMA Trend VP 'PLAYER' slider: P of the span's own threshold (2026-09-07)         # Big Player Gray VP: MIN PLAYER (USD per player) threshold
     keltnerScaleChanged = QtCore.Signal(float)   # 1m-KC smooth-approx effective-TF scale (1.0 = native 1m)
     candleModeChanged = QtCore.Signal(int)   # candle render mode 0..5 (also cycled by 'W')
@@ -1582,6 +1583,22 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                                    "60 s reproduces the tablet's Trades gauge; a longer window is smoother/slower.")
         self.flow_combo.currentIndexChanged.connect(lambda _i: self.flowWindowChanged.emit(int(self.flow_combo.currentData())))
         lay.addWidget(self.flow_combo)
+        self.flow_cross_on = QtWidgets.QCheckBox("Cycle start lines (line crossings)")
+        self.flow_cross_on.setChecked(bool(config.FLOW_CROSS_ON))
+        self.flow_cross_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.flow_cross_on.setToolTip(
+            "A dashed vertical line where a cycle STARTED -- the two lines crossed and the new side kept "
+            "the top for at least %.0f s.\n"
+            "Green / red = CONFIRMED: that side also held a spread of %.0f%% or more for %.0f s "
+            "(green = buyers took the top, red = sellers).\n"
+            "Gray = it held the %.0f s but the two lines never got %.0f%% apart -- a cycle, but a weak "
+            "one.\n"
+            "The line is drawn back at the exact crossing, so it only ever appears after the fact."
+            % (config.FLOW_CROSS_MIN_HOLD_SECS, config.FLOW_CROSS_MIN_SPREAD_PCT,
+               config.FLOW_CROSS_MIN_HOLD_SECS, config.FLOW_CROSS_MIN_HOLD_SECS,
+               config.FLOW_CROSS_MIN_SPREAD_PCT))
+        self.flow_cross_on.toggled.connect(lambda on: self.flowCrossToggled.emit(bool(on)))
+        lay.addWidget(self.flow_cross_on)
         self.flow_sec.addWidget(w)
         w2 = QtWidgets.QWidget()
         l2 = QtWidgets.QVBoxLayout(w2); l2.setContentsMargins(2, 1, 8, 5); l2.setSpacing(2)
@@ -1645,6 +1662,12 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.flow_sec.addWidget(w2)
         root.addWidget(self.flow_sec)
         self.flow_sec.setVisible(False)                  # shown only in Flow mode (driven by the terminal)
+
+    def set_flow_cross_on(self, on: bool) -> None:
+        """Session-restore (no re-emit)."""
+        self.flow_cross_on.blockSignals(True)
+        self.flow_cross_on.setChecked(bool(on))
+        self.flow_cross_on.blockSignals(False)
 
     def liq_pane_on(self) -> bool:
         return bool(self.liq_on.isChecked())

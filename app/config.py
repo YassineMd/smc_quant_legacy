@@ -183,6 +183,22 @@ FLOW_RETAIN_SECS = 259200       # 72 h of bins kept in RAM (2 x 259200 float64 =
 FLOW_WINDOW_SECS = 60           # default rolling window = the tablet gauge's 60 s
 FLOW_WINDOW_CHOICES = (10, 30, 60, 300)
 FLOW_BACKFILL_SECS = 3600       # history requested on entry (one trades_window, same shape as the Trades tape's)
+# --- Cycle-start lines ON the flow chart (user 2026-09-10). The two lines CROSSING is the cycle boundary --
+# read off the window above, the one the lines are actually drawn with. The cross only counts once the spread
+# has REACHED MIN_SPREAD_PCT and HELD it for MIN_HOLD_SECS; the line is then drawn back at the exact cross.
+FLOW_CROSS_ON = True
+FLOW_CROSS_MIN_SPREAD_PCT = 10.0    # |buy-sell| / (buy+sell) of the SAME rolling window the lines are drawn with
+FLOW_CROSS_MIN_HOLD_SECS = 20.0     # consecutive seconds it must stay there, after the cross
+FLOW_CROSS_MAX = 400                # newest N kept on screen (a hard ceiling; see FLOW_CROSS_MIN_PX)
+FLOW_CROSS_MIN_PX = 7               # ... and no two DRAWN lines closer than this many pixels. Zoomed out to
+                                    # 20 h the cap alone put a line every 4 px -- unreadable, and 140 ms/paint.
+FLOW_CROSS_WIDTH = 2.4              # pen width, px
+FLOW_CROSS_DASH_PX = 9.0            # dash length / gap, in PIXELS. The dashes are emitted as segments rather
+FLOW_CROSS_GAP_PX = 7.0             # than left to a dashed pen: Qt's dasher measured ~100x more expensive.
+# A cross that held its side for MIN_HOLD_SECS but never reached MIN_SPREAD_PCT is still a cycle, just a weak
+# one -- it gets a GRAY line instead of a coloured one (user 2026-09-10) rather than being dropped.
+FLOW_CROSS_WEAK_COL = "#8a919c"
+
 # --- Resting-liquidity pane (Buy/Sell Flow mode, user 2026-09-09): limit-order $ within +-N ticks of mid.
 # --- Cycle pane (Buy/Sell Flow, user 2026-09-10). A cycle = a run where one side owns the smoothed flow.
 CYCLE_PANE_ON = True
