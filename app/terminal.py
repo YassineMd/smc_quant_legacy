@@ -1657,6 +1657,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_sig = None
         self._liq_live = None          # (ts, bid$, ask$) summed off the pulse book this frame
         self._liq_sized = False        # has the pane been given its slice yet (vs Qt's default share)
+        self._liq_vline = None         # the pane's crosshair: shared vertical, own horizontal, own two badges
+        self._liq_hline = None
+        self._liq_tag = None           # right-axis readout, in MONEY (the pane plots resting $)
+        self._liq_time_tag = None      # x-axis clock badge, same design as the price badge
+        self._liq_proxy = None
+        self._liq_lvl = None           # right-edge markers: (bid rule, ask rule, bid badge, ask badge)
+        self._liq_lvl_txt = ("", "")   # last badge strings -- setHtml is the expensive part, skip it when equal
         self._flow_bf_queue = []       # chunked tape history for the flow bins (Volume Burst / Flow window)
         self._flow_bf_inflight = None  # (t0, t1, sent_at) of the chunk being served
         self._flow_bf_t = 0.0
@@ -4164,6 +4171,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self, "vol_vline", None) is not None:      # ... and into the Volume pane
             self.vol_vline.setPos(pt.x())
             self.vol_hline.hide(); self.vol_tag.hide()
+        self._liq_sync_vline(pt.x())                          # ... and into the Flow liquidity pane
+        self._liq_hide_cursor()                               # cursor is over the chart -> no liquidity readout
         if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
             self.fp_panel.show_price_line(pt.y())
         self._radar_hover(pt)                                 # Order-Flow Walls radar -> P(resist) odds on hover
@@ -17102,6 +17111,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # Null them and _liq_ensure_pane rebuilds the pane on the next entry (_liq_data survives -- it is data).
             self._liq_plot = None; self._liq_curves = None; self._liq_vb = None
             self._liq_sig = None; self._liq_sized = False
+            self._liq_vline = None; self._liq_hline = None      # crosshair items were children of that splitter
+            self._liq_tag = None; self._liq_time_tag = None; self._liq_proxy = None
+            self._liq_lvl = None; self._liq_lvl_txt = ("", ""); self._liq_lvl_v = None
+            self._liq_lvl_dock = None; self._liq_lvl_up = None
             # the swing-line CVD-mirror items lived on the CVD pane (a child of the just-deleted splitter_v) — null
             # them too, so the next hover recreates them on the rebuilt pane instead of touching a deleted C++ object.
             self._svl_cvd_line = None; self._svl_cvd_dots = None
@@ -17797,6 +17810,38 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_curves = (cb, ca)
         self._liq_plot = pw
         self._liq_vb = vb
+        # Crosshair, same contract as the CVD/VPIN panes: the VERTICAL line is SHARED across the x-linked panes
+        # so they line up, while the horizontal line and both badges are this pane's own. Lines linger on leave
+        # (like the main crosshair); the badges hide.
+        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
+        self._liq_vline = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
+        self._liq_hline = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
+        self._liq_vline.setZValue(15); self._liq_hline.setZValue(15)
+        pw.addItem(self._liq_vline, ignoreBounds=True); pw.addItem(self._liq_hline, ignoreBounds=True)
+        self._liq_hline.hide()
+        _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True)
+        self._liq_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._liq_tag.textItem.setFont(_tf); self._liq_tag.setZValue(16)
+        pw.addItem(self._liq_tag, ignoreBounds=True); self._liq_tag.hide()
+        self._liq_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._liq_time_tag.textItem.setFont(_tf); self._liq_time_tag.setZValue(61)   # same layer as the main pair
+        pw.addItem(self._liq_time_tag, ignoreBounds=True); self._liq_time_tag.hide()
+        self._liq_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_liq_mouse_move)
+        # Right-edge level markers, same idea as the taker flow's: a dashed rule from the last point out to the
+        # axis plus a colour-matched "$740K (66%)" badge. Two points per rule -- redocking is free.
+        _rl = []
+        for _c in ("#26a69a", "#ef5350"):
+            _pn = pg.mkPen(_c, width=1.6, style=QtCore.Qt.DashLine); _pn.setCosmetic(True)
+            _r = pg.PlotCurveItem(x=[0, 0], y=[0, 0], pen=_pn, antialias=False)
+            _r.setZValue(55); pw.addItem(_r); _r.hide()
+            _rl.append(_r)
+        _tg = []
+        for _c, _anc in (("#26a69a", (1.02, 0.0)), ("#ef5350", (1.02, 1.0))):
+            _t = pg.TextItem(anchor=_anc)
+            _t.setZValue(60); pw.addItem(_t, ignoreBounds=True); _t.hide()
+            _tg.append(_t)
+        self._liq_lvl = (_rl[0], _rl[1], _tg[0], _tg[1])
+        self._liq_lvl_txt = ("", "")
         sp.addWidget(pw)
         pw.setMinimumHeight(70)                                  # a splitter child added with no size gets ZERO
         try:                                                     # height -> the pane renders nothing at all
@@ -17916,6 +17961,106 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 print("LIQUIDITY WINDOW DECODE: %s" % ex)
             self._liq_req = None
         self._liq_draw(now)
+        self._liq_levels()          # keep the rules/badges docked to the axis as the view scrolls
+
+    def _liq_levels(self, x=None, b=None, a=None) -> None:
+        """Right-edge markers: a dashed rule from the last point out to the axis plus a "$740K (66%)" badge per
+        side, in the line's colour -- the same readout the taker flow carries (user 2026-09-10).
+
+        Called with arrays when the curves change, and with none from the per-frame tick to REDOCK them as the view
+        scrolls. Redocking is two setData points and two setPos; the badge HTML is rebuilt only when the text
+        actually changes, because setHtml is the expensive part of a TextItem."""
+        if self._liq_lvl is None or self._liq_vb is None:
+            return
+        rb, ra, tb, ta = self._liq_lvl
+        if b is not None and a is not None and b.size and a.size:
+            self._liq_lvl_v = (float(x[-1]), float(b[-1]), float(a[-1]))
+        v = getattr(self, "_liq_lvl_v", None)
+        if v is None:
+            return
+        x_last, bv, av = v
+        (_rx0, x_right) = self._liq_vb.viewRange()[0]
+        x_right = float(x_right)
+        # SUB-PIXEL SKIP: following the live edge advances x by ~0.1 s per frame while one pixel is ~2.4 s, so
+        # 24 of every 25 redocks would redraw the identical picture. Bail unless something moved half a pixel.
+        _eps = 0.5 * (x_right - float(_rx0)) / max(1.0, float(self._liq_plot.width() or 600))
+        _dock = getattr(self, "_liq_lvl_dock", None)
+        if (_dock is not None and abs(_dock[0] - x_right) < _eps and _dock[1] == x_last
+                and _dock[2] == bv and _dock[3] == av):
+            return
+        self._liq_lvl_dock = (x_right, x_last, bv, av)
+        rb.setData(x=[x_last, x_right], y=[bv, bv]); rb.show()
+        ra.setData(x=[x_last, x_right], y=[av, av]); ra.show()
+        tot = bv + av
+        s_b = "%s (%.0f%%)" % (self._fmt_usd_short(bv), 100.0 * bv / tot) if tot > 0 else self._fmt_usd_short(bv)
+        s_a = "%s (%.0f%%)" % (self._fmt_usd_short(av), 100.0 * av / tot) if tot > 0 else self._fmt_usd_short(av)
+        if (s_b, s_a) != self._liq_lvl_txt:
+            self._liq_lvl_txt = (s_b, s_a)
+            for tag, txt, col in ((tb, s_b, "#26a69a"), (ta, s_a, "#ef5350")):
+                tag.setHtml("<div style='color:%s; font-family:Consolas; font-size:13px; font-weight:bold; "
+                            "white-space:nowrap'>%s</div>" % (col, txt))
+        # the badges sit clear of each other: whichever side is higher floats ABOVE its rule, the other below.
+        # setAnchor re-lays the text item out, so only touch it when the ordering actually flips.
+        _up = bool(bv >= av)
+        if _up != getattr(self, "_liq_lvl_up", None):
+            self._liq_lvl_up = _up
+            tb.setAnchor((1.02, 1.0) if _up else (1.02, 0.0))
+            ta.setAnchor((1.02, 0.0) if _up else (1.02, 1.0))
+        tb.setPos(x_right, bv); tb.show()
+        ta.setPos(x_right, av); ta.show()
+
+    def _liq_hide_cursor(self) -> None:
+        """Cursor is not over the pane -> drop its readouts (the lines linger, like every other pane)."""
+        if self._liq_hline is not None:
+            self._liq_hline.hide()
+        if self._liq_tag is not None:
+            self._liq_tag.hide()
+        if self._liq_time_tag is not None:
+            self._liq_time_tag.hide()
+
+    def _liq_sync_vline(self, x: float) -> None:
+        """Push the SHARED vertical crosshair into the pane so it lines up with the chart above."""
+        if self._liq_vline is not None:
+            self._liq_vline.setPos(x)
+
+    def _on_liq_mouse_move(self, evt) -> None:
+        """Cursor over the liquidity pane: its own crosshair + a right-axis badge in MONEY (resting $, spelled
+        like the axis ticks) + the x-axis clock badge, and the shared vertical pushed up into the flow chart.
+        The chart's own horizontal line and badges hide -- the cursor is not over it. Mirrors _on_cvd_mouse_move."""
+        if self._liq_vb is None or self._liq_plot is None or not self._liq_plot.isVisible():
+            return
+        pos = evt[0]
+        if not self._liq_plot.sceneBoundingRect().contains(pos):
+            self._liq_hide_cursor()
+            return
+        pt = self._liq_vb.mapSceneToView(pos)
+        self._liq_vline.setPos(pt.x())
+        self._liq_hline.setPos(pt.y()); self._liq_hline.show()
+        (vx0, vx1), (vy0, vy1) = self._liq_vb.viewRange()
+        self._liq_tag.setText(fmt_money_tick(float(pt.y()), compact=True))   # dollars, not a price
+        self._liq_tag.setPos(vx1, pt.y())
+        self._liq_tag.show()
+        _xlbl = self._x_time_label(pt.x())
+        if _xlbl:
+            self._liq_time_tag.setText(_xlbl)
+            self._liq_time_tag.setPos(pt.x(), vy0)      # bottom edge of the pane's view, at the cursor X
+            self._liq_time_tag.show()
+        else:
+            self._liq_time_tag.hide()
+        self.vline.setPos(pt.x())                        # shared vertical -> the flow chart above
+        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
+        for _v, _h, _t in ((getattr(self, "cvd_vline", None), getattr(self, "cvd_hline", None),
+                            getattr(self, "cvd_tag", None)),
+                           (getattr(self, "vol_vline", None), getattr(self, "vol_hline", None),
+                            getattr(self, "vol_tag", None)),
+                           (getattr(self, "lower_vline", None), getattr(self, "lower_hline", None),
+                            getattr(self, "vpin_tag", None))):
+            if _v is not None:
+                _v.setPos(pt.x())
+                if _h is not None:
+                    _h.hide()
+                if _t is not None:
+                    _t.hide()
 
     def _liq_draw(self, now: float) -> None:
         """Two curves for the selected radius, smoothed by a rolling MEAN, with the live point on the right."""
@@ -17948,14 +18093,29 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if good.any() and not good.all():                        # columns with no snapshot yet -> carry forward
             idx = np.maximum.accumulate(np.where(good, np.arange(n), 0))
             b = b[idx]; a = a[idx]
+        if lb is not None and live[0] >= t1 - step:              # the real-time right edge joins the RAW series,
+            x = np.append(x, live[0])                            # BEFORE smoothing -- appending it after left the
+            b = np.append(b, lb); a = np.append(a, la)           # smoothed tail jumping vertically to meet it
+        m = int(b.size)
         k = int(round(float(self._liq_smooth) / step)) if step > 0 and self._liq_smooth else 0
-        if k > 1:
-            ker = np.ones(min(k, n)) / float(min(k, n))
-            b = np.convolve(b, ker, mode="same"); a = np.convolve(a, ker, mode="same")
-        if lb is not None and live[0] >= t1 - step:              # append the real-time right edge (same radius)
-            x = np.append(x, live[0]); b = np.append(b, lb); a = np.append(a, la)
+        if k > 1 and m > 1:
+            # Edge-normalised rolling MEAN. np.convolve(mode="same") pads with ZEROS, which dragged a flat
+            # $14.50M level down to $7.25M at the first sample and $10.88M at the last (measured) -- the ramp-in
+            # and the end-of-line plunge the user saw. Dividing by the samples that actually landed in the window
+            # keeps the ends honest. cumsum is O(n) and both sides share the index maths.
+            k = min(k, m)
+            half = k // 2
+            _i = np.arange(m)
+            lo = np.maximum(0, _i - half)
+            hi = np.minimum(m, _i + k - half)
+            den = (hi - lo).astype(np.float64)
+            _cb = np.concatenate(([0.0], np.cumsum(b)))
+            _ca = np.concatenate(([0.0], np.cumsum(a)))
+            b = (_cb[hi] - _cb[lo]) / den
+            a = (_ca[hi] - _ca[lo]) / den
         self._liq_curves[0].setData(x, b)
         self._liq_curves[1].setData(x, a)
+        self._liq_levels(x, b, a)
         top = float(max(b.max() if b.size else 0.0, a.max() if a.size else 0.0))
         cur = getattr(self, "_liq_ytop", 0.0)
         if top > 0 and (top > cur * 0.98 or top < cur * 0.55):   # dead-band, same as the flow lines
@@ -19913,6 +20073,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self, "vol_vline", None) is not None:        # ... and the Volume pane
             self.vol_vline.setPos(pt.x())
             self.vol_hline.hide(); self.vol_tag.hide()
+        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()   # ... and the Flow liquidity pane
         self.cvd_tag.setText(f"{pt.y():,.0f}")   # CVD is a volume total -> thousands-separated, no decimals
         self.cvd_tag.setPos(self.cvd_vb.viewRange()[0][1], pt.y())
         self.cvd_tag.show()
