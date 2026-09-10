@@ -291,6 +291,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     bubbleMinUsdChanged = QtCore.Signal(float)       # Candle-Bubbles MIN SIZE filter (USD/level; 0 = show all)
     bigPlayerMinUsdChanged = QtCore.Signal(float)    # Big Player Levels: single-print USD threshold
     bpVpMinUsdChanged = QtCore.Signal(float)
+    cyclePaneToggled = QtCore.Signal(bool)       # Cycle pane on/off (Flow mode)
+    cycleWinChanged = QtCore.Signal(float)       # the smoothing that defines a cycle boundary
     impactPaneToggled = QtCore.Signal(bool)      # Impact pane on/off (Flow mode)
     impactBinChanged = QtCore.Signal(float)      # taker $ per constant-dollar bin
     liqPaneToggled = QtCore.Signal(bool)          # resting-liquidity pane on/off (Flow mode)
@@ -1639,6 +1641,32 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             lambda _i: self.impactBinChanged.emit(self.impact_bin()))
         row3.addWidget(self.impact_bin_combo); row3.addStretch(1)
         l3.addLayout(row3)
+        w4 = QtWidgets.QWidget()
+        l4 = QtWidgets.QVBoxLayout(w4); l4.setContentsMargins(2, 1, 8, 5); l4.setSpacing(2)
+        self.cycle_on = QtWidgets.QCheckBox("Cycle pane (dominance runs)")
+        self.cycle_on.setChecked(bool(config.CYCLE_PANE_ON))
+        self.cycle_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.cycle_on.setToolTip("One block per run where the same side owns the flow.\n"
+                                 "Width = duration, height = ticks that side gained, hollow = a small cycle\n"
+                                 "(under $%.0fk the dominant side historically LOSES). COINCIDENT readout."
+                                 % (config.CYCLE_SMALL_USD / 1e3))
+        self.cycle_on.toggled.connect(lambda on: self.cyclePaneToggled.emit(bool(on)))
+        l4.addWidget(self.cycle_on)
+        row4 = QtWidgets.QHBoxLayout(); row4.setSpacing(6)
+        lab4 = QtWidgets.QLabel("cycle window")
+        lab4.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:10px;")
+        row4.addWidget(lab4)
+        self.cycle_win_combo = QtWidgets.QComboBox()
+        for v in config.CYCLE_WIN_CHOICES:
+            self.cycle_win_combo.addItem(("%ds" % int(v)) if v < 60 else ("%dm" % int(v // 60)), float(v))
+        self.cycle_win_combo.setCurrentIndex(list(config.CYCLE_WIN_CHOICES).index(float(config.CYCLE_WIN_SECS)))
+        self.cycle_win_combo.setToolTip("Smoothing that DEFINES a boundary. Measured across 15s..5m the result\n"
+                                        "holds (R2 0.35-0.42), so this is a readability knob, not a fitted one.")
+        self.cycle_win_combo.currentIndexChanged.connect(
+            lambda _i: self.cycleWinChanged.emit(self.cycle_win()))
+        row4.addWidget(self.cycle_win_combo); row4.addStretch(1)
+        l4.addLayout(row4)
+        self.flow_sec.addWidget(w4)
         self.flow_sec.addWidget(w3)
         self.flow_sec.addWidget(w2)
         root.addWidget(self.flow_sec)
@@ -1649,6 +1677,18 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def set_liq_pane_on(self, on: bool) -> None:
         self.liq_on.blockSignals(True); self.liq_on.setChecked(bool(on)); self.liq_on.blockSignals(False)
+
+    def cycle_win(self) -> float:
+        return float(self.cycle_win_combo.currentData() or config.CYCLE_WIN_SECS)
+
+    def set_cycle_opts(self, on: bool, win: float) -> None:
+        """Session-restore (no re-emit)."""
+        self.cycle_on.blockSignals(True); self.cycle_on.setChecked(bool(on)); self.cycle_on.blockSignals(False)
+        ch = [float(v) for v in config.CYCLE_WIN_CHOICES]
+        if float(win) in ch:
+            self.cycle_win_combo.blockSignals(True)
+            self.cycle_win_combo.setCurrentIndex(ch.index(float(win)))
+            self.cycle_win_combo.blockSignals(False)
 
     def impact_bin(self) -> float:
         return float(self.impact_bin_combo.currentData() or config.IMPACT_BIN_USD)

@@ -194,6 +194,19 @@ IMPACT_MED_ADV = 3.0            # 72 h median advance, drawn as the +/- referenc
 # meant to show, and measured, its expected line varied ~0.1 ticks against a several-tick actual.
 IMPACT_EXP_X = (0.00, 0.05, 0.18, 0.31, 0.47, 0.76, 1.00)     # |imbalance|
 IMPACT_EXP_Y = (0.0, 0.0, 2.0, 3.0, 5.0, 6.0, 6.5)            # ticks the pusher normally gains
+# --- Cycle pane (Buy/Sell Flow, user 2026-09-10). A cycle = a run where one side owns the smoothed flow.
+CYCLE_PANE_ON = True
+CYCLE_WIN_SECS = 300.0          # smoothing that DEFINES the boundary. 300 s measured best out-of-sample (0.416)
+CYCLE_WIN_CHOICES = (15.0, 30.0, 60.0, 120.0, 300.0)   # R2 is 0.35-0.42 across all of these -- not a fitted knob
+CYCLE_MIN_SECS = 3.0            # shorter runs are chatter, not cycles
+CYCLE_SMALL_USD = 130_000.0     # below this the DOMINANT side historically loses (33% at the bottom quintile),
+                                # so those blocks are drawn HOLLOW and can never read as strong
+CYCLE_MAX = 600                 # blocks drawn; the read keeps the NEWEST this many
+CYCLE_RECALC_SECS = 0.5         # the store re-keys on every live batch; a full 72 h rebuild is ~17 ms
+# What that much dominant volume NORMALLY buys, in ticks -- the MEASURED quintile curve, interpolated.
+CYCLE_EXP_X = (0.00, 0.05, 0.13, 0.38, 1.50, 4.00)     # dominant $M
+CYCLE_EXP_Y = (-0.1, 0.0, 0.1, 0.4, 4.8, 8.0)          # ticks
+
 IMPACT_LOG_SECS = 300.0         # how often the store's OWN calibration is logged (for drift; never drawn)
 
 LIQ_PANE_ON = True              # the pane itself (hamburger 'Flow' -> 'Limit orders pane'); persisted

@@ -1662,6 +1662,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_tag = None           # right-axis readout, in MONEY (the pane plots resting $)
         self._liq_time_tag = None      # x-axis clock badge, same design as the price badge
         self._liq_proxy = None
+        self._cyc_plot = None          # Cycle pane (Flow mode): one block per dominance run
+        self._cyc_vb = None
+        self._cyc_items = None         # (big-buy, big-sell, small-buy, small-sell, expected ticks, live outline)
+        self._cyc_sized = False
+        self._cyc_sig = None
+        self._cyc_t = 0.0
+        self._cyc_data = None
+        self._cyc_on = bool(config.CYCLE_PANE_ON)
+        self._cyc_win = float(config.CYCLE_WIN_SECS)
+        self._cyc_vline = None; self._cyc_hline = None
+        self._cyc_tag = None; self._cyc_time_tag = None; self._cyc_proxy = None
         self._imp_plot = None          # Impact pane (Flow mode): ticks the pushing side gained per bin
         self._imp_vb = None
         self._imp_bars = None          # (actual line, expected line, over-shading, under-shading)
@@ -2164,6 +2175,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             self.menu.set_ema_vp_pct(getattr(self, "_ema_vp_pct_saved", 50))
             self.menu.set_flow_window(int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)))
+            self.menu.set_cycle_opts(bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)),
+                                     float(getattr(self, "_cyc_win", config.CYCLE_WIN_SECS)))
             self.menu.set_impact_opts(bool(getattr(self, "_imp_on", config.IMPACT_PANE_ON)),
                                       float(getattr(self, "_imp_bin", config.IMPACT_BIN_USD)))
             self.menu.set_liq_pane_on(bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)))
@@ -2420,6 +2433,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.bubbleMinUsdChanged.connect(lambda _v: self._save_ui_state())  # Candle-Bubbles MIN SIZE (repaint is per-frame)
         self.menu.bigPlayerMinUsdChanged.connect(self._on_bigplayer_min)          # Big Player threshold -> redraw + persist
         self.menu.bpVpMinUsdChanged.connect(self._on_bpvp_min)                    # Big Player Gray VP threshold -> redraw + persist
+        self.menu.cyclePaneToggled.connect(self._on_cyc_pane_toggled)            # Cycle pane on/off
+        self.menu.cycleWinChanged.connect(self._on_cyc_win)                      # cycle-defining window
         self.menu.impactPaneToggled.connect(self._on_imp_pane_toggled)           # Impact pane on/off
         self.menu.impactBinChanged.connect(self._on_imp_bin)                     # $ per constant-dollar bin
         self.menu.liqPaneToggled.connect(self._on_liq_pane_toggled)              # resting-liquidity pane on/off
@@ -4191,6 +4206,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_sync_vline(pt.x())                          # ... and into the Flow liquidity pane
         self._liq_hide_cursor()                               # cursor is over the chart -> no liquidity readout
         self._imp_sync_vline(pt.x()); self._imp_hide_cursor()  # ... and the Impact pane
+        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()  # ... and the Cycle pane
         if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
             self.fp_panel.show_price_line(pt.y())
         self._radar_hover(pt)                                 # Order-Flow Walls radar -> P(resist) odds on hover
@@ -10176,6 +10192,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "bigplayer_min_usd": float(self.menu.big_player_min_usd()),   # Big Player single-print threshold
                 "bpvp_min_usd": float(self.menu.bp_vp_min_usd()),             # Big Player Gray VP MIN PLAYER threshold
                 "flow_win": int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)),   # Buy/Sell Flow window
+                "cycle_on": bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)),
+                "cycle_win": float(getattr(self, "_cyc_win", config.CYCLE_WIN_SECS)),
                 "impact_on": bool(getattr(self, "_imp_on", config.IMPACT_PANE_ON)),
                 "impact_bin": float(getattr(self, "_imp_bin", config.IMPACT_BIN_USD)),
                 "liq_pane_on": bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)),
@@ -10295,6 +10313,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _fw = int(s.get("flow_win", config.FLOW_WINDOW_SECS) or config.FLOW_WINDOW_SECS)
         if _fw in tuple(config.FLOW_WINDOW_CHOICES):
             self._flow_win = _fw          # the combo is synced in __init__ (the menu does not exist yet here)
+        self._cyc_on = bool(s.get("cycle_on", config.CYCLE_PANE_ON))
+        _cw = float(s.get("cycle_win", config.CYCLE_WIN_SECS) or config.CYCLE_WIN_SECS)
+        if _cw in tuple(float(v) for v in config.CYCLE_WIN_CHOICES):
+            self._cyc_win = _cw
         self._imp_on = bool(s.get("impact_on", config.IMPACT_PANE_ON))
         _ib = float(s.get("impact_bin", config.IMPACT_BIN_USD) or config.IMPACT_BIN_USD)
         if _ib in tuple(float(v) for v in config.IMPACT_BIN_CHOICES):
@@ -17138,6 +17160,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._liq_vline = None; self._liq_hline = None      # crosshair items were children of that splitter
             self._liq_tag = None; self._liq_time_tag = None; self._liq_proxy = None
             self._liq_lvl = None; self._liq_lvl_txt = ("", ""); self._liq_lvl_v = None
+            self._cyc_plot = None; self._cyc_vb = None; self._cyc_items = None
+            self._cyc_sig = None; self._cyc_sized = False; self._cyc_proxy = None
+            self._cyc_vline = None; self._cyc_hline = None; self._cyc_tag = None; self._cyc_time_tag = None
             self._imp_plot = None; self._imp_vb = None; self._imp_bars = None; self._imp_zero = None
             self._imp_sig = None; self._imp_sized = False; self._imp_proxy = None
             self._imp_vline = None; self._imp_hline = None; self._imp_tag = None; self._imp_time_tag = None
@@ -18050,6 +18075,204 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         ta.setPos(x_right, av); ta.show()
 
     # ------------------------------------------------------------------
+    # CYCLE pane (Flow mode) -- one block per run where the same side owns the flow
+    # ------------------------------------------------------------------
+    def _on_cyc_pane_toggled(self, on: bool) -> None:
+        self._cyc_on = bool(on)
+        self._cyc_show(bool(on) and self.scanner_mode == "flow")
+        self._save_ui_state()
+
+    def _on_cyc_win(self, win: float) -> None:
+        self._cyc_win = float(win)
+        self._cyc_sig = None
+        self._cyc_t = 0.0
+        self._save_ui_state()
+
+    def _cyc_ensure_pane(self):
+        if self._cyc_plot is not None:
+            return self._cyc_plot
+        try:
+            self._ensure_canvas_panes()
+        except Exception:
+            pass
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return None
+        ax = PriceAxis(orientation="right")
+        pw = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"), "right": ax})
+        pw.setBackground("#141414")
+        pw.showAxis("right"); pw.hideAxis("left")
+        for _a in ("bottom", "right"):
+            pw.getAxis(_a).setPen(pg.mkPen("#dcdcdc", width=1))
+            pw.getAxis(_a).setTextPen(pg.mkPen("#dcdcdc"))
+        pw.showGrid(x=False, y=False)
+        pw.setMenuEnabled(False)
+        pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        pw.getAxis("bottom").set_scanner_active(False)
+        ax.tickStrings = lambda vals, sc, sp_: ["%+.0ft" % v for v in vals]
+        vb = pw.getViewBox()
+        vb.setMouseEnabled(x=True, y=True)
+        vb.setXLink(self.vb)
+        # FOUR BarGraphItems, each ONE solid brush -- no per-bar brush list, and no custom paint() (pyqtgraph's
+        # deviceTransform() inside paint() has segfaulted this terminal before).
+        items = []
+        for _c, _fill in (("#26a69a", True), ("#ef5350", True), ("#26a69a", False), ("#ef5350", False)):
+            col = QtGui.QColor(_c)
+            it = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
+                                 brush=pg.mkBrush(col.red(), col.green(), col.blue(), 150 if _fill else 0),
+                                 pen=pg.mkPen(col, width=1.2))
+            it.setZValue(5 if _fill else 4)
+            pw.addItem(it); items.append(it)
+        _ep = pg.mkPen("#9aa4b2", width=1.4, style=QtCore.Qt.DashLine); _ep.setCosmetic(True)
+        exp_it = pg.PlotCurveItem(pen=_ep, antialias=False, connect="pairs")   # one dash per cycle
+        exp_it.setZValue(20); pw.addItem(exp_it); items.append(exp_it)
+        _lp = pg.mkPen("#dcdcdc", width=1.2, style=QtCore.Qt.DotLine); _lp.setCosmetic(True)
+        live_it = pg.PlotCurveItem(pen=_lp, antialias=False)                   # the still-forming cycle: outline
+        live_it.setZValue(21); pw.addItem(live_it); items.append(live_it)
+        self._cyc_items = tuple(items)
+        _z = pg.InfiniteLine(angle=0, pos=0.0, pen=pg.mkPen("#8a8a8a", width=1))
+        _z.setZValue(3); pw.addItem(_z, ignoreBounds=True)
+        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
+        self._cyc_vline = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
+        self._cyc_hline = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
+        self._cyc_vline.setZValue(15); self._cyc_hline.setZValue(15)
+        pw.addItem(self._cyc_vline, ignoreBounds=True); pw.addItem(self._cyc_hline, ignoreBounds=True)
+        self._cyc_hline.hide()
+        _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True)
+        self._cyc_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._cyc_tag.textItem.setFont(_tf); self._cyc_tag.setZValue(16)
+        pw.addItem(self._cyc_tag, ignoreBounds=True); self._cyc_tag.hide()
+        self._cyc_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._cyc_time_tag.textItem.setFont(_tf); self._cyc_time_tag.setZValue(61)
+        pw.addItem(self._cyc_time_tag, ignoreBounds=True); self._cyc_time_tag.hide()
+        self._cyc_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_cyc_mouse_move)
+        self._cyc_plot = pw
+        self._cyc_vb = vb
+        self._theme_sub_panes(not self._simple_bw())
+        sp.addWidget(pw)
+        pw.setMinimumHeight(60)
+        return pw
+
+    def _cyc_show(self, on: bool) -> None:
+        if on:
+            if self._cyc_ensure_pane() is None:
+                return
+            self._cyc_plot.setVisible(True)
+            if self._sub_pane_grow(self._cyc_plot, not self._cyc_sized, share=0.20):
+                self._cyc_sized = True
+        elif self._cyc_plot is not None:
+            try:
+                self._cyc_plot.setVisible(False)
+            except RuntimeError:
+                self._cyc_plot = None; self._cyc_items = None; self._cyc_vb = None
+
+    def _cyc_hide_cursor(self) -> None:
+        for it in (self._cyc_hline, self._cyc_tag, self._cyc_time_tag):
+            if it is not None:
+                it.hide()
+
+    def _cyc_sync_vline(self, x: float) -> None:
+        if self._cyc_vline is not None:
+            self._cyc_vline.setPos(x)
+
+    def _on_cyc_mouse_move(self, evt) -> None:
+        """Cursor over the Cycle pane: its own crosshair, a TICKS badge and the clock badge, with the shared
+        vertical pushed into every other pane."""
+        if self._cyc_vb is None or self._cyc_plot is None or not self._cyc_plot.isVisible():
+            return
+        pos = evt[0]
+        if not self._cyc_plot.sceneBoundingRect().contains(pos):
+            self._cyc_hide_cursor()
+            return
+        pt = self._cyc_vb.mapSceneToView(pos)
+        self._cyc_vline.setPos(pt.x())
+        self._cyc_hline.setPos(pt.y()); self._cyc_hline.show()
+        (vx0, vx1), (vy0, vy1) = self._cyc_vb.viewRange()
+        self._cyc_tag.setText("%+.1ft" % float(pt.y()))
+        self._cyc_tag.setPos(vx1, pt.y()); self._cyc_tag.show()
+        _xl = self._x_time_label(pt.x())
+        if _xl:
+            self._cyc_time_tag.setText(_xl); self._cyc_time_tag.setPos(pt.x(), vy0); self._cyc_time_tag.show()
+        else:
+            self._cyc_time_tag.hide()
+        self.vline.setPos(pt.x())
+        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
+        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
+        self._imp_sync_vline(pt.x()); self._imp_hide_cursor()
+        for _v, _h, _t in ((getattr(self, "cvd_vline", None), getattr(self, "cvd_hline", None),
+                            getattr(self, "cvd_tag", None)),
+                           (getattr(self, "vol_vline", None), getattr(self, "vol_hline", None),
+                            getattr(self, "vol_tag", None)),
+                           (getattr(self, "lower_vline", None), getattr(self, "lower_hline", None),
+                            getattr(self, "vpin_tag", None))):
+            if _v is not None:
+                _v.setPos(pt.x())
+                if _h is not None:
+                    _h.hide()
+                if _t is not None:
+                    _t.hide()
+
+    def _cyc_tick(self, now: float) -> None:
+        """Per frame in Flow mode, throttled: the store re-keys on every live batch and a full 72 h cycle rebuild
+        measured ~17 ms, which is not something to pay at frame rate."""
+        if self._cyc_plot is None or not self._cyc_plot.isVisible():
+            return
+        if now - self._cyc_t < float(config.CYCLE_RECALC_SECS):
+            return
+        self._cyc_t = now
+        (vx0, vx1), _ = self.vb.viewRange()
+        try:
+            self._cyc_data = self._flow.cycles(vx0, vx1, float(self._cyc_win), float(config.TICK_SIZE),
+                                               float(config.CYCLE_MIN_SECS), int(config.CYCLE_MAX))
+        except Exception:
+            return
+        self._cyc_draw(now)
+
+    def _cyc_draw(self, now: float) -> None:
+        """A block per cycle: width = duration, height = the dominant side's advance. HOLLOW under
+        CYCLE_SMALL_USD, where that side historically LOSES -- a small cycle must never read as a strong one.
+        The last cycle is still forming (its totals do not exist yet), so it is drawn as an outline."""
+        if self._cyc_data is None or self._cyc_items is None:
+            return
+        st, en, isb, domv, dur, adv = self._cyc_data
+        bb, bs, sb, ss, expit, liveit = self._cyc_items
+        if st.size == 0:
+            for it in (bb, bs, sb, ss):
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            expit.setData(np.zeros(0), np.zeros(0)); liveit.setData(np.zeros(0), np.zeros(0))
+            return
+        sig = (int(st.size), round(float(st[-1]), 2), round(float(adv[-1]), 3), round(float(self._cyc_win), 1))
+        if sig == self._cyc_sig:
+            return
+        self._cyc_sig = sig
+        big = domv >= float(config.CYCLE_SMALL_USD)
+        # the newest cycle is still forming -- exclude it from the solid blocks, outline it instead
+        forming = np.zeros(st.size, dtype=bool)
+        if st.size and (now - float(en[-1])) < float(self._cyc_win):
+            forming[-1] = True
+        for it, m in ((bb, big & isb & ~forming), (bs, big & ~isb & ~forming),
+                      (sb, ~big & isb & ~forming), (ss, ~big & ~isb & ~forming)):
+            if not m.any():
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+                continue
+            it.setOpts(x0=st[m], x1=en[m], y0=np.minimum(0.0, adv[m]), height=np.abs(adv[m]))
+        e = np.interp(domv / 1e6, np.asarray(config.CYCLE_EXP_X, dtype=np.float64),
+                      np.asarray(config.CYCLE_EXP_Y, dtype=np.float64))
+        xs = np.empty(st.size * 2); xs[0::2] = st; xs[1::2] = en
+        ys = np.repeat(e, 2)
+        expit.setData(xs, ys)
+        if forming.any():
+            a, b, y = float(st[-1]), float(en[-1]), float(adv[-1])
+            liveit.setData(np.array([a, b, b, a, a]), np.array([0.0, 0.0, y, y, 0.0]))
+        else:
+            liveit.setData(np.zeros(0), np.zeros(0))
+        lim = float(max(np.abs(adv).max(), np.abs(e).max())) * 1.15 or 1.0
+        cur = getattr(self, "_cyc_ytop", 0.0)
+        if lim > cur * 0.98 or lim < cur * 0.55:
+            self._cyc_ytop = lim
+            self._cyc_vb.setYRange(-lim, lim, padding=0.0)
+
+    # ------------------------------------------------------------------
     # IMPACT pane (Flow mode) -- ticks the PUSHING side gained, per constant-dollar bin
     # ------------------------------------------------------------------
     def _on_imp_pane_toggled(self, on: bool) -> None:
@@ -18177,6 +18400,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.vline.setPos(pt.x())
         self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
         self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
+        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
         for _v, _h, _t in ((getattr(self, "cvd_vline", None), getattr(self, "cvd_hline", None),
                             getattr(self, "cvd_tag", None)),
                            (getattr(self, "vol_vline", None), getattr(self, "vol_hline", None),
@@ -18316,6 +18540,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.vline.setPos(pt.x())                        # shared vertical -> the flow chart above
         self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
         self._imp_sync_vline(pt.x()); self._imp_hide_cursor()
+        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
         for _v, _h, _t in ((getattr(self, "cvd_vline", None), getattr(self, "cvd_hline", None),
                             getattr(self, "cvd_tag", None)),
                            (getattr(self, "vol_vline", None), getattr(self, "vol_hline", None),
@@ -18409,6 +18634,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_show(bool(getattr(self, "_liq_pane_on", True)))   # the pane rides Flow mode, if enabled
         self._imp_show(bool(getattr(self, "_imp_on", True)))        # ... and the Impact pane
         self._imp_sig = None; self._imp_t = 0.0
+        self._cyc_show(bool(getattr(self, "_cyc_on", True)))        # ... and the Cycle pane
+        self._cyc_sig = None; self._cyc_t = 0.0
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
         self._flow_subscribe(backfill=True)
         now = time.time()
@@ -18427,6 +18654,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.flow_sec.setVisible(False)
         self._liq_show(False)
         self._imp_show(False)
+        self._cyc_show(False)
         self._flow_curves = None
         self._flow_sig = None
         _ax = self.plot.getAxis("right")
@@ -18474,6 +18702,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pass
         try:
             self._imp_tick(now)         # Impact pane -- self-gated, throttled, fail-safe
+        except Exception:
+            pass
+        try:
+            self._cyc_tick(now)         # Cycle pane -- self-gated, throttled, fail-safe
         except Exception:
             pass
 
@@ -19279,7 +19511,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for pw, items in ((getattr(self, "_liq_plot", None),
                            (getattr(self, "_liq_vline", None), getattr(self, "_liq_hline", None))),
                           (getattr(self, "_imp_plot", None),
-                           (getattr(self, "_imp_vline", None), getattr(self, "_imp_hline", None)))):
+                           (getattr(self, "_imp_vline", None), getattr(self, "_imp_hline", None))),
+                          (getattr(self, "_cyc_plot", None),
+                           (getattr(self, "_cyc_vline", None), getattr(self, "_cyc_hline", None)))):
             if pw is None:
                 continue
             try:
@@ -20396,6 +20630,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.vol_hline.hide(); self.vol_tag.hide()
         self._liq_sync_vline(pt.x()); self._liq_hide_cursor()   # ... and the Flow liquidity pane
         self._imp_sync_vline(pt.x()); self._imp_hide_cursor()
+        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
         self.cvd_tag.setText(f"{pt.y():,.0f}")   # CVD is a volume total -> thousands-separated, no decimals
         self.cvd_tag.setPos(self.cvd_vb.viewRange()[0][1], pt.y())
         self.cvd_tag.show()
