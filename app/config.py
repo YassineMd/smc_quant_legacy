@@ -166,6 +166,9 @@ DEPTH_CAPTURE_ENABLED = True    # master off-switch for the whole depth/trade ca
 DEPTH_BAND_PCT = 0.0            # capture band as ±% of mid; <=0 = WHOLE BOOK (no truncation, real fidelity)
 DEPTH_SNAPSHOT_SECS = 30        # full-book anchor cadence (+ one on every diff-stream reconnect)
 DEPTH_SYNC_SECS = 10            # off-loop executor write cadence (drain buffers -> depth.db)
+DEPTH_VACUUM_SECS = 300.0       # how often the pruned pages are handed back (see DEPTH_VACUUM_PAGES)
+DEPTH_VACUUM_PAGES = 2000       # pages per pass (~8 MB). Reclaiming the whole freelist in one call is a
+                                # multi-second stall -- the very thing this exists to prevent.
 DEPTH_RETENTION_HOURS = 72      # HARD time-based prune (governs depth_deltas + trade_tape + snapshots alike).
                                 # 2026-07-05: 6 -> 72 after the mem PLATEAU gate (725.6MB @84.5h < 734.7 @23.5h),
                                 # so the Pull detector has real forward depth+tape history to test against.

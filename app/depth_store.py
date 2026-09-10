@@ -129,8 +129,15 @@ class DepthStore:
         self.db_path = db_path or config.DEPTH_DB
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        # auto_vacuum MUST be set before anything materialises the database header -- journal_mode=WAL writes
+        # page 1, and after that the pragma is silently ignored (it reported 0 on a fresh file until this was
+        # reordered). INCREMENTAL lets the prune's freed pages be handed back; on an EXISTING database only a
+        # VACUUM can change the mode, which is why the deploy compacts depth.db once with `VACUUM INTO`.
+        # Without it the file only ever grows: measured 587 MB (42% of 1,410 MB) dead.
+        self._conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._vac_t = 0.0
         with self._lock:
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
@@ -170,6 +177,32 @@ class DepthStore:
                     "DELETE FROM depth_snapshots WHERE ts_ms < "
                     "(SELECT MAX(ts_ms) FROM depth_snapshots WHERE ts_ms <= ?)", (cutoff,))
                 self._conn.commit()
+                # Hand the pruned pages back, BOUNDED and THROTTLED. Outside the transaction (incremental_vacuum
+                # cannot run inside one), capped to DEPTH_VACUUM_PAGES so a pass costs milliseconds instead of
+                # the multi-second stall a full reclaim would cost on this disk.
+                now = time.time()
+                if now - getattr(self, "_vac_t", 0.0) >= float(config.DEPTH_VACUUM_SECS):
+                    self._vac_t = now
+                    try:
+                        free = self._conn.execute("PRAGMA freelist_count").fetchone()[0]
+                        if free > 0:
+                            t0 = time.perf_counter()
+                            # .fetchall() is LOAD-BEARING: incremental_vacuum is step-wise, and execute()
+                            # steps it exactly ONCE -- measured, `incremental_vacuum(2000)` without a fetch
+                            # frees a single page. Driven properly it frees all 2000 in ~91 ms.
+                            self._conn.execute("PRAGMA incremental_vacuum(%d)"
+                                               % int(config.DEPTH_VACUUM_PAGES)).fetchall()
+                            self._conn.commit()
+                            # In WAL the reclaimed pages sit in the log until a checkpoint, so the FILE does not
+                            # shrink without one. PASSIVE, never TRUNCATE: TRUNCATE blocks writers, and this
+                            # runs on the daemon's write path.
+                            self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchall()
+                            el = (time.perf_counter() - t0) * 1000.0
+                            if el > 500.0:
+                                print("DEPTH VACUUM: %d free pages, reclaimed up to %d in %.0f ms"
+                                      % (free, int(config.DEPTH_VACUUM_PAGES), el))
+                    except Exception as e:
+                        print(f"DEPTH VACUUM SKIPPED: {e}")
                 return True
             except Exception as e:
                 try:
