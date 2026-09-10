@@ -191,7 +191,11 @@ CYCLE_WIN_CHOICES = (15.0, 30.0, 60.0, 120.0, 300.0)   # R2 is 0.35-0.42 across 
 CYCLE_MIN_SECS = 3.0            # shorter runs are chatter, not cycles
 CYCLE_SMALL_USD = 130_000.0     # below this the DOMINANT side historically loses (33% at the bottom quintile),
                                 # so those blocks are drawn HOLLOW and can never read as strong
-CYCLE_MAX = 600                 # blocks drawn; the read keeps the NEWEST this many
+CYCLE_MAX = 600
+CYCLE_MAX_PTS = 600             # samples on the continuous curve. Measured cost is a ~4.3 ms fixed floor
+                                # plus ~0.003 ms/point: 3000 pts = 13.0 ms/paint (32% of a core), 900 = 7.4,
+                                # 600 = 6.0, 400 = 5.4. At ~1500 px this is a point per 2.5 px -- still a
+                                # smooth line, and 3000 was 2 points PER PIXEL, i.e. invisible detail.
 CYCLE_RECALC_SECS = 0.5         # the store re-keys on every live batch; a full 72 h rebuild is ~17 ms
 # What that much dominant volume NORMALLY buys, in ticks -- the MEASURED quintile curve, interpolated.
 CYCLE_EXP_X = (0.00, 0.05, 0.13, 0.38, 1.50, 4.00)     # dominant $M
