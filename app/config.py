@@ -190,12 +190,15 @@ FLOW_CROSS_ON = True
 FLOW_CROSS_MIN_SPREAD_PCT = 10.0    # |buy-sell| / (buy+sell) of the SAME rolling window the lines are drawn with
 FLOW_CROSS_MIN_HOLD_SECS = 20.0     # consecutive seconds it must stay there, after the cross
 FLOW_CROSS_MAX = 400                # newest N kept on screen (a hard ceiling; see FLOW_CROSS_MIN_PX)
-FLOW_CROSS_MERGE_LOOKBACK_SECS = 600.0   # how far back the merge looks for the run a visible line belongs to. Two
-                                    # consecutive same-colour lines are ONE cycle, so the leftmost line on screen
-                                    # has to know about the one before it or a pan alone would make it appear.
+FLOW_CROSS_CONTEXT_SECS = 600.0     # tape read on EITHER side of the view. Backwards: two consecutive
+                                    # same-colour lines are ONE cycle, so the leftmost line on screen has to know
+                                    # about the one before it or a pan alone would make it appear. Forwards: the
+                                    # last visible cycle needs its real END to measure its price move over.
 FLOW_CROSS_MIN_PX = 7               # ... and no two DRAWN lines closer than this many pixels. Zoomed out to
                                     # 20 h the cap alone put a line every 4 px -- unreadable, and 140 ms/paint.
-FLOW_CROSS_WIDTH = 2.4              # pen width, px
+FLOW_CROSS_WIDTH = 1.2              # pen width, px (user 2026-09-10: 2.4 read as "tooo thick")
+FLOW_CROSS_BADGE_MIN_PX = 38        # badges need far more room than lines: below this they overlap into mush
+FLOW_CROSS_BADGE_PAD_PX = 21        # strip opened BELOW y=0 for them, in pixels
 FLOW_CROSS_DASH_PX = 9.0            # dash length / gap, in PIXELS. The dashes are emitted as segments rather
 FLOW_CROSS_GAP_PX = 7.0             # than left to a dashed pen: Qt's dasher measured ~100x more expensive.
 # A cross that held its side for MIN_HOLD_SECS but never reached MIN_SPREAD_PCT is still a cycle, just a weak

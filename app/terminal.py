@@ -1019,6 +1019,97 @@ class BurstBadgesItem(pg.GraphicsObject):
         p.restore()
 
 
+class CycleBadgesItem(pg.GraphicsObject):
+    """Every cycle's price move in ONE graphics item (user 2026-09-10): a pill UNDER the zero line at each cycle
+    start, carrying the ticks price travelled from that cross to the next one.
+
+    GREEN when price rose over the cycle, RED when it fell, gray at exactly zero -- the sign is the PRICE's, not
+    the side's, so a buy cycle that ends lower wears a red badge. White text, as asked.
+
+    Anchored at data y = 0 and drawn a fixed number of PIXELS below it, so the strip stays the same height at any
+    zoom. One paint pass, no per-badge scene items (a TextItem each measured ~40 ms per zoom step on the Big
+    Player labels). The item -> device transform comes from the PAINTER: pyqtgraph's deviceTransform() segfaults
+    when called inside paint() on this binding -- it bricked the terminal on 2026-09-07."""
+
+    _UP = (26, 154, 96)
+    _DN = (208, 48, 48)
+    _FLAT = (122, 130, 140)
+
+    def __init__(self):
+        super().__init__()
+        self._items = []                 # [(x, ticks)]
+        self._font = QtGui.QFont("Consolas", 8)
+        self._font.setBold(True)
+        self.setZValue(8)                # over the vlines and the flow curves; the badge is the readable thing
+
+    def badges(self):
+        return list(self._items)
+
+    def setBadges(self, items) -> None:
+        self._items = [(float(x), float(v)) for x, v in items]
+        self.update()
+
+    def boundingRect(self):
+        """Only the STRIP at and below zero -- never the whole view rect.
+
+        The plot runs BoundingRectViewportUpdate, so an item claiming the full view makes every frame invalidate
+        the whole canvas. Measured on the real flow view against a full-view rect, interleaved and repeated:
+        worth ~0.5 ms per paint at a 20 h span and nothing measurable at 30 min. Kept because an item should
+        declare only what it paints and it is never worse -- not because it is a large win.
+
+        It reaches a little above zero and well below the view floor, so it still covers the pills when the y fit
+        has not yet opened the strip under zero."""
+        vb = self.getViewBox()
+        try:
+            vr = QtCore.QRectF(vb.viewRect()) if vb is not None else None
+        except Exception:
+            vr = None
+        if vr is None:
+            return QtCore.QRectF()
+        ylo = min(vr.top(), vr.bottom())
+        yhi = max(vr.top(), vr.bottom())
+        h = max(1e-9, yhi - ylo)
+        lo = ylo - 0.06 * h
+        hi = min(yhi, 0.02 * h)
+        wpad = 0.01 * max(1e-9, vr.width())
+        return QtCore.QRectF(vr.left() - wpad, lo, vr.width() + 2.0 * wpad, max(1e-9, hi - lo))
+
+    def paint(self, p, *args):
+        if not self._items:
+            return
+        tr = QtGui.QTransform(p.transform())
+        vp = p.viewport()
+        wdev = float(vp.width()); hdev = float(vp.height())
+        y0 = tr.map(QtCore.QPointF(0.0, 0.0)).y()          # the zero LINE, wherever the y fit put it
+        p.save()
+        p.resetTransform()
+        p.setFont(self._font)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        fm = QtGui.QFontMetrics(self._font)
+        rh = 14.0
+        cy = y0 + 2.0 + rh / 2.0                           # ... and the badges sit just UNDER it
+        if cy < -30 or cy > hdev + 30:
+            p.restore()
+            return
+        for x, v in self._items:
+            px = tr.map(QtCore.QPointF(x, 0.0)).x()
+            if px < -60 or px > wdev + 60:
+                continue                                   # off the viewport
+            n = int(round(v))
+            txt = ("%+d" % n if n else "0") + "t"
+            rgb = self._UP if n > 0 else (self._DN if n < 0 else self._FLAT)
+            rw = max(rh, float(fm.horizontalAdvance(txt)) + 8.0)
+            rect = QtCore.QRectF(px - rw / 2.0, cy - rh / 2.0, rw, rh)
+            # OPAQUE: a translucent pill picks up whatever line or curve runs behind it, and the badge has to
+            # stay legible on the white Simple BW canvas as well as the dark one.
+            p.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 255))
+            p.setPen(pg.mkPen(rgb[0], rgb[1], rgb[2], 255, width=1.0))
+            p.drawRoundedRect(rect, 3.0, 3.0)
+            p.setPen(pg.mkPen(255, 255, 255, 255))
+            p.drawText(rect, int(QtCore.Qt.AlignCenter), txt)
+        p.restore()
+
+
 class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def __init__(self, tf: str = config.DEFAULT_TF, lite_worker: bool = False):
         super().__init__()
@@ -1644,6 +1735,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_curves = None       # (buy PlotCurveItem, sell PlotCurveItem) -- created on first draw
         self._flow_x_on = bool(config.FLOW_CROSS_ON)   # cycle-start vlines at the confirmed line crossings
         self._flow_xln = None          # (green, red, gray) pairs-curves -- ONE item per colour, not per line
+        self._flow_xbadge = None       # CycleBadgesItem: every cycle's tick move, in ONE item
         self._flow_xsig = None         # (rev, view x, window, view y) -> an idle frame is one tuple compare
         self._flow_sig = None          # (store rev, view range, window, width) -> skip the redraw when nothing moved
         self._flow_follow = True       # right edge pinned to 'now' until the user pans away
@@ -16459,6 +16551,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # vanishes and _flow_draw keeps calling setData on orphaned curves -- drawing nothing at all.
             self._flow_curves = None                      # force a rebuild; the old pair is off the plot
             self._flow_xln = None; self._flow_xsig = None  # ... and the cycle-start vlines with them
+            self._flow_xbadge = None
             self._liq_show(bool(getattr(self, "_liq_pane_on", True)))
             self._cyc_show(bool(getattr(self, "_cyc_on", True)))
             self._liq_sig = None
@@ -18413,7 +18506,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cyc_show(False)
         self._flow_curves = None
         self._flow_sig = None
-        self._flow_xln = None; self._flow_xsig = None
+        self._flow_xln = None; self._flow_xsig = None; self._flow_xbadge = None
         _ax = self.plot.getAxis("right")
         if hasattr(_ax, "set_money"):
             _ax.set_money(False)                          # back to price ticks for every other mode
@@ -18515,7 +18608,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         cur = getattr(self, "_flow_ytop", 0.0)
         if top > 0 and (top > cur * 0.98 or top < cur * 0.55):   # dead-band: only re-fit on a real change
             self._flow_ytop = top * 1.18
-            self.vb.setYRange(0.0, self._flow_ytop, padding=0.0)
+            # open a fixed-PIXEL strip under zero for the cycle badges. Solving for it rather than taking a
+            # fraction of the range keeps the strip the same height whatever the dollar scale does.
+            _bpx = float(config.FLOW_CROSS_BADGE_PAD_PX) if getattr(self, "_flow_x_on", True) else 0.0
+            _hpx = float(self.vb.height() or self.plot.height() or 400)
+            _room = self._flow_ytop * _bpx / max(1.0, _hpx - _bpx) if _bpx > 0 else 0.0
+            self.vb.setYRange(-_room, self._flow_ytop, padding=0.0)
         b_now = float(buy[-1]); s_now = float(sell[-1]); tot = max(1e-9, b_now + s_now)
         # the badges carry the VALUE and its share only (user 2026-09-08: "keep only buyvol$ (x%) and sellvol$ (y%)");
         # the colour already says which side, and the window is on the hamburger's 'Flow' dropdown.
@@ -18530,10 +18628,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         The user's definition (2026-09-10): a cycle begins where green takes the top of red (or red of green)
         and ends when they swap back. It is CONFIRMED once the spread reaches 10% and HOLDS it for 20 s, and the
         line is then drawn back at the exact crossing -- so a line appearing is always news about the past.
-        A cross whose side held the 20 s but never got 10% apart is still a cycle, a weak one, and gets a GRAY
-        line; a run shorter than the hold is not a cycle at all and is never drawn -- which leaves the crosses on
-        either side of it the SAME colour, and consecutive same-colour lines are MERGED into the first, because
-        that cycle never ended and may not be marked as starting twice (user 2026-09-10).
+        A cross whose side held the 20 s but never got 10% apart is still a cycle, a weak one, and gets a SOLID
+        GRAY line; a run shorter than the hold is not a cycle at all and is never drawn -- which leaves the
+        crosses on either side of it the SAME colour, and consecutive same-colour lines are MERGED into the
+        first, because that cycle never ended and may not be marked as starting twice (user 2026-09-10).
+
+        Under the zero line each cycle carries a badge: how far PRICE went from that cross to the next one, in
+        ticks, coloured by the sign of the MOVE and not by the side -- a buy cycle that ends lower wears a red
+        one. They are thinned harder than the lines (a pill is ~26 px wide) and painted by ONE item.
 
         The boundary is read off `self._flow_win`, the window THESE lines are drawn with. That is the whole
         point: the Cycle pane used its own (300 s) window, so its boundaries never matched a crossing the user
@@ -18546,18 +18648,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if not on:
             for _it in (getattr(self, "_flow_xln", None) or ()):
                 _it.setData(np.zeros(0), np.zeros(0))
-            self._flow_xsig = ("off",)
+            if getattr(self, "_flow_xbadge", None) is not None:
+                self._flow_xbadge.setBadges([])       # the badges are a SEPARATE item -- clearing the curves
+            self._flow_xsig = ("off",)                # left them painted (caught by the paint probe)
             return
         (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
         sig = (self._flow.rev, round(vx0, 2), round(vx1, 2), int(self._flow_win), round(vy0, 4), round(vy1, 4))
         if sig == getattr(self, "_flow_xsig", None):
             return                                          # nothing moved -> the cheapest possible frame
         self._flow_xsig = sig
-        t, is_buy, strong = self._flow.crosses(vx0, vx1, float(self._flow_win),
-                                               float(config.FLOW_CROSS_MIN_SPREAD_PCT),
-                                               float(config.FLOW_CROSS_MIN_HOLD_SECS),
-                                               int(config.FLOW_CROSS_MAX),
-                                               float(config.FLOW_CROSS_MERGE_LOOKBACK_SECS))
+        t, is_buy, strong, move = self._flow.crosses(vx0, vx1, float(self._flow_win),
+                                                    float(config.FLOW_CROSS_MIN_SPREAD_PCT),
+                                                    float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                                                    int(config.FLOW_CROSS_MAX),
+                                                    float(config.FLOW_CROSS_CONTEXT_SECS),
+                                                    float(config.TICK_SIZE))
         if getattr(self, "_flow_xln", None) is None:
             items = []
             for _c, _z in (("#1b9c8a", 3), ("#e03b3b", 3), (config.FLOW_CROSS_WEAK_COL, 2)):
@@ -18571,30 +18676,42 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _it.setZValue(_z)                           # UNDER the flow lines: they stay the readable thing
                 items.append(_it)
             self._flow_xln = (items[0], items[1], items[2])
+        if getattr(self, "_flow_xbadge", None) is None:
+            self._flow_xbadge = self._add_scanner_item(CycleBadgesItem(), ignore_bounds=True)
         g_it, r_it, w_it = self._flow_xln
         if t.size == 0:
             for _it in self._flow_xln:
                 _it.setData(np.zeros(0), np.zeros(0))
+            self._flow_xbadge.setBadges([])
             return
         # Thin to what the canvas can actually separate. Without this a 20 h view drew 400 lines onto 1600 px
         # -- one every 4 px -- which measured 140 ms per paint against a 15 ms baseline.
         _xpp, _ypp = self.vb.viewPixelSize()
         _keep = self._thin_by_pixel(t, strong, float(_xpp), float(config.FLOW_CROSS_MIN_PX))
-        t = t[_keep]; is_buy = is_buy[_keep]; strong = strong[_keep]
+        t = t[_keep]; is_buy = is_buy[_keep]; strong = strong[_keep]; move = move[_keep]
         if t.size == 0:
             for _it in self._flow_xln:
                 _it.setData(np.zeros(0), np.zeros(0))
+            self._flow_xbadge.setBadges([])
             return
         # Span the visible height and barely more. The signature above carries the y range, so a y pan already
         # redraws these -- the old 2x span bought nothing and doubled the length Qt has to stroke.
         h = max(1e-9, float(vy1 - vy0))
-        _ys = self._cross_dashes(float(vy0) - 0.02 * h, float(vy1) + 0.02 * h, float(_ypp))
-        _nd = _ys.size
-        for _it, _m in ((g_it, is_buy & strong), (r_it, (~is_buy) & strong), (w_it, ~strong)):
+        _lo = float(vy0) - 0.02 * h
+        _hi = float(vy1) + 0.02 * h
+        _ys = self._cross_dashes(_lo, _hi, float(_ypp))
+        # the WEAK line is SOLID (user 2026-09-10) -- which also makes it the cheapest of the three to paint
+        for _it, _m, _lad in ((g_it, is_buy & strong, _ys), (r_it, (~is_buy) & strong, _ys),
+                              (w_it, ~strong, np.array([_lo, _hi]))):
             if not _m.any():
                 _it.setData(np.zeros(0), np.zeros(0))
                 continue
-            _it.setData(np.repeat(t[_m], _nd), np.tile(_ys, int(_m.sum())), connect="pairs")
+            _it.setData(np.repeat(t[_m], _lad.size), np.tile(_lad, int(_m.sum())), connect="pairs")
+        # Badges need far more room than lines do, so they get their own, coarser thinning off the SAME set --
+        # at a zoom where the lines are 7 px apart the pills would be unreadable mush.
+        _bk = self._thin_badges(t, strong, float(_xpp), float(config.FLOW_CROSS_BADGE_MIN_PX))
+        _bk &= np.isfinite(move)                        # a cycle whose ends were never priced has no number
+        self._flow_xbadge.setBadges(list(zip(t[_bk].tolist(), move[_bk].tolist())))
 
     @staticmethod
     def _cross_dashes(y0: float, y1: float, y_per_px: float):
@@ -18633,10 +18750,38 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         keep[rev[first]] = True
         return keep
 
+    @staticmethod
+    def _thin_badges(t, strong, x_per_px, min_px):
+        """Badges need a true MINIMUM GAP, not just a bounded density.
+
+        _thin_by_pixel buckets by absolute time, which caps how many lines land per slot but still lets two
+        neighbours in adjacent buckets sit a few pixels apart. A hairline vline survives that; a ~26 px wide
+        pill does not -- measured 10 px apart on an 11 h view, i.e. overlapping into mush.
+
+        So: bucket first (cheap, and it cuts the list to a few dozen), then a greedy left-to-right sweep over the
+        survivors that enforces the real gap. The sweep costs a Python loop over ~view_width/min_px items, which
+        is tens, not hundreds. It does mean the kept SET can reshuffle as the left edge pans -- acceptable, and
+        confined to zoomed-out views: at a normal span the badges are already further apart than the floor and
+        nothing is dropped at all."""
+        keep = MinimalTerminalWindow._thin_by_pixel(t, strong, x_per_px, min_px)
+        idx = np.flatnonzero(keep)
+        if idx.size < 2:
+            return keep
+        gap = float(min_px) * float(x_per_px)
+        out = np.zeros(t.size, dtype=bool)
+        last = -1e300
+        for i in idx:
+            if float(t[i]) - last >= gap:
+                out[i] = True
+                last = float(t[i])
+        return out
+
     def _on_flow_cross_toggled(self, on: bool) -> None:
         """Hamburger 'Flow' -> cycle-start lines on/off."""
         self._flow_x_on = bool(on)
         self._flow_xsig = None
+        self._flow_sig = None                         # the y fit opens/closes the badge strip under zero,
+        self._flow_ytop = 0.0                         # and the dead-band would otherwise hold the old range
         try:
             self._flow_cross_draw()
         except Exception:

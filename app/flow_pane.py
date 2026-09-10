@@ -195,23 +195,29 @@ class FlowStore:
 
     # ------------------------------------------------------- confirmed crosses
     def crosses(self, t0: float, t1: float, win_secs: float, min_spread_pct: float = 10.0,
-                min_hold_secs: float = 20.0, max_n: int = 400, merge_lookback_secs: float = 600.0):
+                min_hold_secs: float = 20.0, max_n: int = 400, context_secs: float = 600.0,
+                tick: float = 0.01):
         """Where the two rolling-window flow lines CROSS, keeping only the crosses that opened a real cycle.
 
-        Returns (t_cross, is_buy, strong).
+        Returns (t_cross, is_buy, strong, move_ticks).
 
           is_buy  True where the BUY line took the top.
           strong  the cycle CONFIRMED: before the next cross the spread |buy-sell|/(buy+sell) reached
                   `min_spread_pct` and stayed there for `min_hold_secs` consecutive seconds.
           not strong  the side held for `min_hold_secs` but never got that far apart -- a real cycle, a weak one
                   (user 2026-09-10 asked for these back, drawn in gray rather than dropped).
+          move_ticks  how far PRICE travelled over that cycle -- from this cross to the NEXT one, or to the last
+                  bin of tape for the one still forming. Its sign is the price's, not the side's: a buy cycle
+                  that ends below where it started is negative. NaN where no trade priced either end.
 
         A run shorter than `min_hold_secs` is not a cycle at all and never comes back -- and because it is
         dropped, the crosses on either side of it are the SAME colour. Two or more consecutive same-colour
         crosses are MERGED into the first (user 2026-09-10): that cycle never really ended, so it may not be
         marked as starting twice. Consecutive weak (gray) crosses collapse the same way, into one marker at the
-        head of the indecisive stretch. `merge_lookback_secs` is how far back the run is traced, so the leftmost
-        VISIBLE cross knows whether it continues one that starts off-screen.
+        head of the indecisive stretch. `context_secs` is how much tape is read on EITHER side of the view:
+        backwards so the leftmost visible cross knows whether it continues a run that starts off-screen,
+        forwards so the last visible cycle can find its real END to measure the move over (and so a cross near
+        the right edge can still be confirmed).
 
         The time returned is the cross itself, not the confirmation, LINEARLY INTERPOLATED between the two bins
         that straddle it so it lands on the actual intersection.
@@ -220,11 +226,11 @@ class FlowStore:
         user can see -- everything below mirrors series() bin for bin. Vectorised and memoized."""
         z = np.zeros(0)
         zb = np.zeros(0, dtype=bool)
-        if self.empty() or win_secs <= 0:
-            return (z, zb, zb)
+        if self.empty() or win_secs <= 0 or tick <= 0:
+            return (z, zb, zb, z)
         key = ("cross", self.rev, round(float(t0), 2), round(float(t1), 2), round(float(win_secs), 2),
                round(float(min_spread_pct), 3), round(float(min_hold_secs), 2), int(max_n),
-               round(float(merge_lookback_secs), 2))
+               round(float(context_secs), 2), round(float(tick), 6))
         memo = getattr(self, "_xmemo", None)
         if memo is not None and memo[0] == key:
             return memo[1]
@@ -233,22 +239,23 @@ class FlowStore:
         hold = max(1, int(round(float(min_hold_secs) / self.bin)))
         i0 = max(0, int(np.floor(t0 / self.bin)) - self._base)
         iv = min(n - 1, int(np.floor(t1 / self.bin)) - self._base)      # the view's last bin
-        # read PAST the view by the hold window: a cross just left of the right edge is confirmed by bins the
-        # view does not cover, and it must not wink out just because the user panned.
-        i1 = min(n - 1, iv + hold + 1)
+        ctx = max(hold + 1, int(round(max(0.0, float(context_secs)) / self.bin)))
+        # read PAST the view: a cross just left of the right edge is confirmed by bins the view does not cover
+        # (and must not wink out because the user panned), and the last visible cycle needs its real END to
+        # measure the move over.
+        i1 = min(n - 1, iv + ctx)
         if iv < i0:
-            out = (z, zb, zb)
+            out = (z, zb, zb, z)
             self._xmemo = (key, out)
             return out
         # series() only needs a w-1 prefix; the MERGE needs enough of the run before the view to know whether
         # the leftmost visible cross is its own head or a repeat of the colour before it.
-        look = max(w - 1, int(round(max(0.0, float(merge_lookback_secs)) / self.bin)))
-        p0 = max(0, i0 - look)
+        p0 = max(0, i0 - max(w - 1, ctx))
         cb = np.concatenate([[0.0], np.cumsum(self._buy[p0:i1 + 1])])
         ca = np.concatenate([[0.0], np.cumsum(self._sell[p0:i1 + 1])])
         m = int(cb.size - 1)
         if m < 3:
-            out = (z, zb, zb)
+            out = (z, zb, zb, z)
             self._xmemo = (key, out)
             return out
         idx = np.arange(m)
@@ -261,13 +268,13 @@ class FlowStore:
         dn = ra > rb
         say = up | dn
         if not say.any():
-            out = (z, zb, zb)
+            out = (z, zb, zb, z)
             self._xmemo = (key, out)
             return out
         dom = up[np.maximum.accumulate(np.where(say, idx, 0))]
         flips = np.flatnonzero(dom[1:] != dom[:-1]) + 1                  # first bin of each new side
         if flips.size == 0:
-            out = (z, zb, zb)
+            out = (z, zb, zb, z)
             self._xmemo = (key, out)
             return out
         tot = rb + ra
@@ -303,18 +310,33 @@ class FlowStore:
             head[0] = True
             head[1:] = colr[1:] != colr[:-1]
             fl = fl[head]; sg = sg[head]; db = db[head]
+        # How far price travelled over each cycle: this head -> the NEXT head, or the last bin of tape for the
+        # one still forming. The price is carried over tradeless seconds, and a cycle whose ends were never
+        # priced at all reports NaN rather than a fake 0.
+        px = self._px[p0:i1 + 1].copy()
+        pv = px > 0
+        if pv.any():
+            px = px[np.maximum.accumulate(np.where(pv, np.arange(m), 0))]
+            pv = pv[np.maximum.accumulate(np.where(pv, np.arange(m), 0))]
+        fin = np.concatenate([fl[1:], [m - 1]]) if fl.size else np.zeros(0, dtype=np.int64)
+        if fl.size:
+            mv = np.where(pv[fl] & pv[fin], (px[fin] - px[fl]) / float(tick), np.nan)
+        else:
+            mv = np.zeros(0)
         vis = (fl >= (i0 - p0)) & (fl <= (iv - p0))                  # ... and only now clip to the view
         cs = fl[vis]
         sg = sg[vis]
         db = db[vis]
+        mv = mv[vis]
         if cs.size == 0:
-            out = (z, zb, zb)
+            out = (z, zb, zb, z)
             self._xmemo = (key, out)
             return out
         if cs.size > max_n:
             cs = cs[-int(max_n):]
             sg = sg[-int(max_n):]
             db = db[-int(max_n):]
+            mv = mv[-int(max_n):]
         # the EXACT cross: where buy-sell changes sign between bin cs-1 and bin cs, on the same straight segment
         # the curve draws between those two points.
         d0 = (rb - ra)[cs - 1]
@@ -322,7 +344,7 @@ class FlowStore:
         den = d1 - d0
         frac = np.where(np.abs(den) > 1e-12, np.clip(-d0 / np.where(den == 0, 1.0, den), 0.0, 1.0), 0.0)
         t_prev = (self._base + p0 + cs - 1) * self.bin + self.bin        # series() stamps each bin at its END
-        out = (t_prev + frac * self.bin, db.copy(), sg.copy())
+        out = (t_prev + frac * self.bin, db.copy(), sg.copy(), mv.copy())
         self._xmemo = (key, out)
         return out
 
