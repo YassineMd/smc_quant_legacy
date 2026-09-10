@@ -197,8 +197,14 @@ FLOW_CROSS_CONTEXT_SECS = 600.0     # tape read on EITHER side of the view. Back
 FLOW_CROSS_MIN_PX = 7               # ... and no two DRAWN lines closer than this many pixels. Zoomed out to
                                     # 20 h the cap alone put a line every 4 px -- unreadable, and 140 ms/paint.
 FLOW_CROSS_WIDTH = 1.2              # pen width, px (user 2026-09-10: 2.4 read as "tooo thick")
-FLOW_CROSS_BADGE_MIN_PX = 58        # badges need far more room than lines: below this they overlap into mush
-FLOW_CROSS_BADGE_PAD_PX = 36        # strip opened BELOW y=0 for the two stacked pills, in pixels
+# Badge tiers: (minimum px between badges, pills per badge, rows to stagger over). The first tier that loses
+# NO badge wins, so they degrade instead of vanishing when the user zooms out. Rows x pills = bands of strip.
+FLOW_CROSS_BADGE_TIERS = ((72.0, 2, 1), (38.0, 2, 2), (18.0, 1, 2))
+# The badge rate is ticks of PRICE movement per this many dollars the studied side traded. 100k, not 1M: a
+# per-million rate on a cycle that traded $164k printed "+55/M" next to a +9t move and read as nonsense.
+FLOW_CROSS_BADGE_UNIT_USD = 100_000.0
+FLOW_CROSS_BADGE_UNIT_TXT = "100k"
+FLOW_CROSS_BADGE_BAND_PX = 16       # one pill plus its gap, in pixels; the strip is bands x this
 FLOW_CROSS_DASH_PX = 9.0            # dash length / gap, in PIXELS. The dashes are emitted as segments rather
 FLOW_CROSS_GAP_PX = 7.0             # than left to a dashed pen: Qt's dasher measured ~100x more expensive.
 # A cross that held its side for MIN_HOLD_SECS but never reached MIN_SPREAD_PCT is still a cycle, just a weak

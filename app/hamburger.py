@@ -1591,17 +1591,18 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             "for at least %.0f s.\n"
             "Green / red DASHED = CONFIRMED: that side also held a spread of %.0f%% or more for %.0f s.\n"
             "Gray SOLID = it held the %.0f s but the two lines never got %.0f%% apart.\n"
-            "Two same-coloured lines in a row are ONE cycle and are merged into the first.\n"
+            "Two same-coloured lines in a row are ONE cycle and are merged into the first.\n\n"
             "Under the zero line, per cycle: the ticks PRICE moved, and the side the line says to study "
-            "(green = buyers, red = sellers, gray = both, bigger impact wins) with the ticks IT gained per "
-            "$1M it traded.\n"
-            "Both pills take the winning side colour, or GRAY when price went AGAINST the side that owned "
-            "the cycle.\n"
-            "NOTE the per-$1M number runs high for small cycles and low for big ones on its own (impact is "
+            "(green = buyers, red = sellers, gray = both, bigger impact wins) with the ticks price moved "
+            "per %s that side traded. Both numbers are the PRICE's, so they never disagree in sign.\n"
+            "Colour: the winning side when the cycle went its way, ORANGE when price went AGAINST the side "
+            "that owned it, gray when it ended flat.\n\n"
+            "NOTE the per-%s number runs high for small cycles and low for big ones on its own (impact is "
             "concave in size) -- compare cycles of SIMILAR volume, not across sizes."
             % (config.FLOW_CROSS_MIN_HOLD_SECS, config.FLOW_CROSS_MIN_SPREAD_PCT,
                config.FLOW_CROSS_MIN_HOLD_SECS, config.FLOW_CROSS_MIN_HOLD_SECS,
-               config.FLOW_CROSS_MIN_SPREAD_PCT))
+               config.FLOW_CROSS_MIN_SPREAD_PCT, config.FLOW_CROSS_BADGE_UNIT_TXT,
+               config.FLOW_CROSS_BADGE_UNIT_TXT))
         self.flow_cross_on.toggled.connect(lambda on: self.flowCrossToggled.emit(bool(on)))
         lay.addWidget(self.flow_cross_on)
         self.flow_sec.addWidget(w)
