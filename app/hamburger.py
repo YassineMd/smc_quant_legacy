@@ -1643,27 +1643,12 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.cycle_on.setChecked(bool(config.CYCLE_PANE_ON))
         self.cycle_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.cycle_on.setToolTip(
-            "One block per run where the same side owns the flow. Width = duration, height = the ticks "
-            "that side gained. Hollow = a small cycle: under $%.0fk the dominant side historically LOSES. "
-            "COINCIDENT readout -- it describes the cycle that just ended, it does not predict the next."
-            % (config.CYCLE_SMALL_USD / 1e3))
+            "The pane under the flow lines: for the cycle in progress, the ticks price has moved per %s "
+            "each side has traded so far -- teal for the buyers' dollars, red for the sellers'. It resets "
+            "at every cycle-start line above, because it is drawn on those same crossings."
+            % config.FLOW_CROSS_BADGE_UNIT_TXT)
         self.cycle_on.toggled.connect(lambda on: self.cyclePaneToggled.emit(bool(on)))
         l4.addWidget(self.cycle_on)
-        row4 = QtWidgets.QHBoxLayout(); row4.setSpacing(6)
-        lab4 = QtWidgets.QLabel("        cycle window")
-        lab4.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:10px;")
-        row4.addWidget(lab4)
-        self.cycle_win_combo = QtWidgets.QComboBox()
-        for v in config.CYCLE_WIN_CHOICES:
-            self.cycle_win_combo.addItem(("%ds" % int(v)) if v < 60 else ("%dm" % int(v // 60)), float(v))
-        self.cycle_win_combo.setCurrentIndex(list(config.CYCLE_WIN_CHOICES).index(float(config.CYCLE_WIN_SECS)))
-        self.cycle_win_combo.setToolTip(
-            "Smoothing that DEFINES a cycle boundary. Measured across 15s..5m the result holds "
-            "(R2 0.35-0.42), so this is a readability knob, not a fitted one.")
-        self.cycle_win_combo.currentIndexChanged.connect(
-            lambda _i: self.cycleWinChanged.emit(self.cycle_win()))
-        row4.addWidget(self.cycle_win_combo); row4.addStretch(1)
-        l4.addLayout(row4)
         self.flow_sec.addWidget(w4)
         self.flow_sec.addWidget(w2)
         root.addWidget(self.flow_sec)
@@ -1681,17 +1666,9 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     def set_liq_pane_on(self, on: bool) -> None:
         self.liq_on.blockSignals(True); self.liq_on.setChecked(bool(on)); self.liq_on.blockSignals(False)
 
-    def cycle_win(self) -> float:
-        return float(self.cycle_win_combo.currentData() or config.CYCLE_WIN_SECS)
-
-    def set_cycle_opts(self, on: bool, win: float) -> None:
-        """Session-restore (no re-emit)."""
+    def set_cycle_opts(self, on: bool, win: float = 0.0) -> None:
+        """Session-restore (no re-emit). `win` is ignored -- the pane follows the Flow window now."""
         self.cycle_on.blockSignals(True); self.cycle_on.setChecked(bool(on)); self.cycle_on.blockSignals(False)
-        ch = [float(v) for v in config.CYCLE_WIN_CHOICES]
-        if float(win) in ch:
-            self.cycle_win_combo.blockSignals(True)
-            self.cycle_win_combo.setCurrentIndex(ch.index(float(win)))
-            self.cycle_win_combo.blockSignals(False)
 
     def liq_radius(self) -> int:
         return int(self.liq_r_combo.currentData() or config.LIQ_RADIUS_TICKS)

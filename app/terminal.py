@@ -1797,15 +1797,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_tag = None           # right-axis readout, in MONEY (the pane plots resting $)
         self._liq_time_tag = None      # x-axis clock badge, same design as the price badge
         self._liq_proxy = None
-        self._cyc_plot = None          # Cycle pane (Flow mode): one block per dominance run
+        self._cyc_plot = None          # Cycle pane (Flow mode): ticks per 100k, per side, per CROSS cycle
         self._cyc_vb = None
-        self._cyc_items = None         # (big-buy, big-sell, small-buy, small-sell, expected ticks, live outline)
+        self._cyc_items = None         # (buy rate line, sell rate line)
         self._cyc_sized = False
         self._cyc_sig = None
         self._cyc_t = 0.0
         self._cyc_data = None
         self._cyc_on = bool(config.CYCLE_PANE_ON)
-        self._cyc_win = float(config.CYCLE_WIN_SECS)
         self._cyc_vline = None; self._cyc_hline = None
         self._cyc_tag = None; self._cyc_time_tag = None; self._cyc_proxy = None
         self._liq_lvl = None           # right-edge markers: (bid rule, ask rule, bid badge, ask badge)
@@ -2298,8 +2297,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_ema_vp_pct(getattr(self, "_ema_vp_pct_saved", 50))
             self.menu.set_flow_window(int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)))
             self.menu.set_flow_cross_on(bool(getattr(self, "_flow_x_on", config.FLOW_CROSS_ON)))
-            self.menu.set_cycle_opts(bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)),
-                                     float(getattr(self, "_cyc_win", config.CYCLE_WIN_SECS)))
+            self.menu.set_cycle_opts(bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)))
             self.menu.set_liq_pane_on(bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)))
             self.menu.set_liq_opts(int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                                    int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)))
@@ -10313,7 +10311,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "flow_win": int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)),   # Buy/Sell Flow window
                 "flow_cross_on": bool(getattr(self, "_flow_x_on", config.FLOW_CROSS_ON)),  # cycle-start vlines
                 "cycle_on": bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)),
-                "cycle_win": float(getattr(self, "_cyc_win", config.CYCLE_WIN_SECS)),
                 "liq_pane_on": bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)),
                 "liq_radius": int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                 "liq_smooth": int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)),
@@ -10433,9 +10430,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._flow_win = _fw          # the combo is synced in __init__ (the menu does not exist yet here)
         self._flow_x_on = bool(s.get("flow_cross_on", config.FLOW_CROSS_ON))
         self._cyc_on = bool(s.get("cycle_on", config.CYCLE_PANE_ON))
-        _cw = float(s.get("cycle_win", config.CYCLE_WIN_SECS) or config.CYCLE_WIN_SECS)
-        if _cw in tuple(float(v) for v in config.CYCLE_WIN_CHOICES):
-            self._cyc_win = _cw
         self._liq_pane_on = bool(s.get("liq_pane_on", config.LIQ_PANE_ON))
         _lr = int(s.get("liq_radius", config.LIQ_RADIUS_TICKS) or config.LIQ_RADIUS_TICKS)
         _ls = int(s.get("liq_smooth", config.LIQ_SMOOTH_SECS) if s.get("liq_smooth") is not None else config.LIQ_SMOOTH_SECS)
@@ -18207,7 +18201,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._save_ui_state()
 
     def _on_cyc_win(self, win: float) -> None:
-        self._cyc_win = float(win)
+        """Kept only so an older session file or a stray signal cannot crash: the pane follows the FLOW window
+        now (that is the whole point of the replacement), so there is nothing to set."""
         self._cyc_sig = None
         self._cyc_t = 0.0
         self._save_ui_state()
@@ -18233,29 +18228,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         pw.setMenuEnabled(False)
         pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
         pw.getAxis("bottom").set_scanner_active(False)
-        ax.tickStrings = lambda vals, sc, sp_: ["%+.0ft" % v for v in vals]
+        ax.tickStrings = lambda vals, sc, sp_: ["%+.1f" % v for v in vals]   # ticks per CYCLE_RATE unit
         vb = pw.getViewBox()
         vb.setMouseEnabled(x=True, y=True)
         vb.setXLink(self.vb)
-        # FOUR BarGraphItems, each ONE solid brush -- no per-bar brush list, and no custom paint() (pyqtgraph's
-        # deviceTransform() inside paint() has segfaulted this terminal before).
+        # TWO lines, same colours as the flow chart above: buyers teal, sellers red. One cosmetic pen each,
+        # no per-point brush and no custom paint() (pyqtgraph's deviceTransform() inside paint() has segfaulted
+        # this terminal before). The pane's cost is the POINT COUNT, not the pen -- see CYCLE_RATE_MAX_PTS.
         items = []
-        for _c, _big in (("#26a69a", True), ("#ef5350", True), ("#26a69a", False), ("#ef5350", False)):
-            _pn = pg.mkPen(_c, width=2.0 if _big else 1.0,
-                           style=QtCore.Qt.SolidLine if _big else QtCore.Qt.DotLine)
+        for _c, _z in (("#26a69a", 6), ("#ef5350", 5)):
+            _pn = pg.mkPen(_c, width=1.8, style=QtCore.Qt.SolidLine)
             _pn.setCosmetic(True)
             _pn.setCapStyle(QtCore.Qt.RoundCap); _pn.setJoinStyle(QtCore.Qt.RoundJoin)
             it = pg.PlotCurveItem(pen=_pn, antialias=False)
-            it.setZValue(6 if _big else 5)
+            it.setZValue(_z)
             pw.addItem(it); items.append(it)
-        # Dashed, to separate it from the two data lines. Measured: dashed vs solid is 7.34 vs 7.39 ms/paint,
-        # i.e. free -- the pane's cost is the POINT COUNT (see CYCLE_MAX_PTS), not the pen style.
-        _ep = pg.mkPen("#9aa4b2", width=1.4, style=QtCore.Qt.DashLine); _ep.setCosmetic(True)
-        exp_it = pg.PlotCurveItem(pen=_ep, antialias=False)
-        exp_it.setZValue(20); pw.addItem(exp_it); items.append(exp_it)
-        _lp = pg.mkPen("#dcdcdc", width=1.2, style=QtCore.Qt.DotLine); _lp.setCosmetic(True)
-        live_it = pg.PlotCurveItem(pen=_lp, antialias=False)                   # the still-forming cycle: outline
-        live_it.setZValue(21); pw.addItem(live_it); items.append(live_it)
         self._cyc_items = tuple(items)
         _z = pg.InfiniteLine(angle=0, pos=0.0, pen=pg.mkPen("#8a8a8a", width=1))
         _z.setZValue(3); pw.addItem(_z, ignoreBounds=True)
@@ -18303,8 +18290,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._cyc_vline.setPos(x)
 
     def _on_cyc_mouse_move(self, evt) -> None:
-        """Cursor over the Cycle pane: its own crosshair, a TICKS badge and the clock badge, with the shared
-        vertical pushed into every other pane."""
+        """Cursor over the Cycle pane: its own crosshair, a ticks-per-unit badge and the clock badge, with the
+        shared vertical pushed into every other pane."""
         if self._cyc_vb is None or self._cyc_plot is None or not self._cyc_plot.isVisible():
             return
         pos = evt[0]
@@ -18315,7 +18302,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cyc_vline.setPos(pt.x())
         self._cyc_hline.setPos(pt.y()); self._cyc_hline.show()
         (vx0, vx1), (vy0, vy1) = self._cyc_vb.viewRange()
-        self._cyc_tag.setText("%+.1ft" % float(pt.y()))
+        self._cyc_tag.setText("%+.1f/%s" % (float(pt.y()), config.FLOW_CROSS_BADGE_UNIT_TXT))
         self._cyc_tag.setPos(vx1, pt.y()); self._cyc_tag.show()
         _xl = self._x_time_label(pt.x())
         if _xl:
@@ -18339,8 +18326,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _t.hide()
 
     def _cyc_tick(self, now: float) -> None:
-        """Per frame in Flow mode, throttled: the store re-keys on every live batch and a full 72 h cycle rebuild
-        measured ~17 ms, which is not something to pay at frame rate."""
+        """Per frame in Flow mode, throttled: the store re-keys on every live batch and a full rebuild over a
+        wide view is milliseconds, which is not something to pay at frame rate."""
         if self._cyc_plot is None or not self._cyc_plot.isVisible():
             return
         if now - self._cyc_t < float(config.CYCLE_RECALC_SECS):
@@ -18348,45 +18335,53 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cyc_t = now
         (vx0, vx1), _ = self.vb.viewRange()
         try:
-            self._cyc_data = self._flow.cycle_curve(vx0, vx1, float(self._cyc_win), float(config.TICK_SIZE),
-                                                    int(config.CYCLE_MAX_PTS))
+            # `self._flow_win`, NOT a window of its own: the boundaries have to be the ones the vertical lines
+            # on the chart are drawn at, which is exactly what the pane this replaced got wrong.
+            self._cyc_data = self._flow.cycle_rate_curve(
+                vx0, vx1, float(self._flow_win), float(config.TICK_SIZE),
+                float(config.FLOW_CROSS_BADGE_UNIT_USD), float(config.CYCLE_RATE_MIN_USD),
+                float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                float(config.FLOW_CROSS_CONTEXT_SECS), int(config.CYCLE_RATE_MAX_PTS))
         except Exception:
             return
         self._cyc_draw(now)
 
     def _cyc_draw(self, now: float) -> None:
-        """CONTINUOUS lines that BUILD as the cycle develops (user 2026-09-10: "continuous to see them building
-        up as the cycle is developing").
+        """TWO lines that BUILD as the cycle develops: the ticks price has moved per $100k each side has traded
+        SO FAR in the cycle in progress, resetting at every cross (user 2026-09-10).
 
-        At every instant the line shows how far price has moved since the CURRENT cycle began, signed toward the
-        side winning it so far, resetting to zero at each boundary. Teal while buyers own it, red while sellers
-        do, each NaN otherwise so the two never cross-connect. The dashed line is what that much dominant volume
-        NORMALLY buys, built from the RUNNING volume -- so you watch actual pull ahead of, or fall behind, the
-        measured norm while the cycle is still open."""
+        Teal is the buyers' dollars, red the sellers'. Both share a numerator -- the move since the cycle began
+        -- so they always agree in SIGN; what separates them is each side's running volume. Read the GAP as the
+        imbalance and the LEVEL as how dearly the move was bought. Both pinned near zero is a lot of money that
+        moved nothing.
+
+        A side stays blank until it has traded CYCLE_RATE_MIN_USD inside the cycle, so the first seconds after a
+        cross do not divide a whole tick by a couple of hundred dollars and throw the scale away."""
         if self._cyc_data is None or self._cyc_items is None:
             return
-        t, val, isb, domv = self._cyc_data
-        buy_c, sell_c, small_c, _unused, expit, liveit = self._cyc_items
+        t, rb, rs = self._cyc_data
+        buy_c, sell_c = self._cyc_items
         if t.size == 0:
-            for it in (buy_c, sell_c, small_c, expit, liveit):
+            for it in (buy_c, sell_c):
                 it.setData(np.zeros(0), np.zeros(0))
             return
-        sig = (int(t.size), round(float(t[-1]), 2), round(float(val[-1]), 3), round(float(self._cyc_win), 1))
+        sig = (int(t.size), round(float(t[-1]), 2), round(float(np.nan_to_num(rb[-1])), 3),
+               round(float(np.nan_to_num(rs[-1])), 3), int(self._flow_win))
         if sig == self._cyc_sig:
             return
         self._cyc_sig = sig
-        # ONE CONTINUOUS LINE PER SIDE. Each BUILDS while its side owns the cycle and HOLDS its last value
-        # while the other side has the tape -- forward-filled rather than left as a gap, so both read as
-        # continuous lines like the flow pane above instead of blinking in and out.
-        i = np.arange(t.size)
-        buy_c.setData(t, val[np.maximum.accumulate(np.where(isb, i, 0))])
-        sell_c.setData(t, val[np.maximum.accumulate(np.where(~isb, i, 0))])
-        small_c.setData(np.zeros(0), np.zeros(0))          # the size cue now lives on the expected line
-        e = np.interp(domv / 1e6, np.asarray(config.CYCLE_EXP_X, dtype=np.float64),
-                      np.asarray(config.CYCLE_EXP_Y, dtype=np.float64))
-        expit.setData(t, np.where(isb, e, -e))
-        liveit.setData(np.zeros(0), np.zeros(0))
-        lim = float(max(np.nanmax(np.abs(val)), float(np.abs(e).max()))) * 1.15 or 1.0
+        # `connect="finite"` leaves the warm-up NaNs as real GAPS: a side with too little volume yet has no
+        # number, and drawing through it would invent one.
+        buy_c.setData(t, rb, connect="finite")
+        sell_c.setData(t, rs, connect="finite")
+        # fit to the 99th PERCENTILE, not the max -- the bin right after a warm-up threshold is crossed can be
+        # an order of magnitude above everything else, and one of those would flatten the whole pane
+        _all = np.concatenate([rb, rs])
+        _all = _all[np.isfinite(_all)]
+        if _all.size == 0:
+            return
+        lim = float(np.percentile(np.abs(_all), 99.0)) * 1.15
+        lim = max(lim, 0.1)
         cur = getattr(self, "_cyc_ytop", 0.0)
         if lim > cur * 0.98 or lim < cur * 0.55:
             self._cyc_ytop = lim
@@ -18566,6 +18561,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_win = int(secs)
         self._flow_sig = None
         self._flow_xsig = None      # the crossings ARE the crossings of these lines -- a new window moves them
+        self._cyc_sig = None        # ... and the Cycle pane is drawn on those same crossings
+        self._cyc_t = 0.0
         self._save_ui_state()
 
     def _scan_flow(self) -> None:

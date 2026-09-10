@@ -31,9 +31,8 @@ class FlowStore:
         self.rev = 0                                 # backfill batch cannot overwrite a newer price
         self._memo = None
         self._bmemo = None
-        self._cmemo = None
-        self._ccmemo = None
         self._xmemo = None
+        self._rmemo = None
 
     # ---------------------------------------------------------------- state
     def __len__(self) -> int:
@@ -117,9 +116,8 @@ class FlowStore:
         self.rev += 1
         self._memo = None
         self._bmemo = None
-        self._cmemo = None
-        self._ccmemo = None
         self._xmemo = None
+        self._rmemo = None
         return int(loc.size)
 
     def reset(self) -> None:
@@ -131,9 +129,8 @@ class FlowStore:
         self.rev += 1
         self._memo = None
         self._bmemo = None
-        self._cmemo = None
-        self._ccmemo = None
         self._xmemo = None
+        self._rmemo = None
 
     # --------------------------------------------------------------- bursts
     def bar_bursts(self, starts, ends, win_secs: float, cap: float = 50.0, floor_pct: float = 90.0):
@@ -357,141 +354,74 @@ class FlowStore:
         self._xmemo = (key, out)
         return out
 
-    # ------------------------------------------------------------- cycles
-    def cycle_curve(self, t0: float, t1: float, win_secs: float, tick: float, max_pts: int = 3000):
-        """The RUNNING advance of the cycle in progress, sampled continuously.
+    def cycle_rate_curve(self, t0: float, t1: float, win_secs: float, tick: float,
+                         unit_usd: float = 100_000.0, min_usd: float = 20_000.0,
+                         min_spread_pct: float = 10.0, min_hold_secs: float = 20.0,
+                         context_secs: float = 600.0, max_pts: int = 900):
+        """(t, buy_rate, sell_rate): ticks price has moved per `unit_usd` each side traded SO FAR this cycle.
 
-        Returns (t, val, is_buy, dom_usd) where `val` is the ticks price has moved since the CURRENT cycle
-        began, signed
-        toward the side winning that cycle so far, and `is_buy` says which side that is. The series resets to 0
-        at every boundary, so a cycle BUILDS on screen instead of appearing whole once it has ended -- and the
-        forming one is live, not provisional.
+        The cycle boundaries are crosses() own -- this calls it rather than re-deriving them, so the pane and
+        the vertical lines on the chart can never disagree about where a cycle starts. That was the defect in
+        the pane this replaces: it segmented on its own 300 s window while the lines used the displayed one.
 
-        The side is the run's OWN totals UP TO each point (causal: it uses only what has traded so far), which
-        is the same definition cycles() applies to the finished run. Vectorised over the 1 s bins; decimated to
-        `max_pts`. `dom_usd` is the winning side's RUNNING dollars in the cycle so far, so the caller can draw
-        the "what that size normally buys" line building alongside."""
+        Both series share the numerator (the move since the cycle began), so they always agree in SIGN and
+        differ only by each side's running dollars. Read the gap between them as the imbalance and their level
+        as how dearly the move was bought; both flat near zero is a lot of money that moved nothing.
+
+        Each side stays NaN until it has traded `min_usd` inside the cycle -- one $200 print in the first second
+        would otherwise divide a whole tick by nearly nothing and spike the pane off its own scale."""
         z = np.zeros(0)
-        if self.empty() or win_secs <= 0:
-            return (z, z, np.zeros(0, dtype=bool), z)
-        key = ("curve", self.rev, round(float(t0), 2), round(float(t1), 2), round(float(win_secs), 2),
-               int(max_pts))
-        memo = getattr(self, "_ccmemo", None)
+        if self.empty() or win_secs <= 0 or tick <= 0 or unit_usd <= 0:
+            return (z, z, z)
+        key = ("rate", self.rev, round(float(t0), 2), round(float(t1), 2), round(float(win_secs), 2),
+               round(float(unit_usd), 2), round(float(min_usd), 2), round(float(min_spread_pct), 3),
+               round(float(min_hold_secs), 2), round(float(context_secs), 2), int(max_pts))
+        memo = getattr(self, "_rmemo", None)
         if memo is not None and memo[0] == key:
             return memo[1]
+        # ask for the heads from BEFORE the view too, or the leftmost visible bins have no cycle to belong to
+        xt, _isb, _sg, _mv, _vb, _vs = self.crosses(t0 - max(0.0, float(context_secs)), t1, win_secs,
+                                                    min_spread_pct, min_hold_secs, 100_000,
+                                                    context_secs, tick)
         n = len(self._buy)
         i0 = max(0, int(np.floor(t0 / self.bin)) - self._base)
         i1 = min(n - 1, int(np.floor(t1 / self.bin)) - self._base)
-        w = max(1, int(round(float(win_secs) / self.bin)))
-        p0 = max(0, i0 - w)
-        b = self._buy[p0:i1 + 1]; a = self._sell[p0:i1 + 1]
-        m = b.size
-        if m < 3:
-            out = (z, z, np.zeros(0, dtype=bool), z)
-            self._ccmemo = (key, out)
+        if i1 < i0 or xt.size == 0:
+            out = (z, z, z)
+            self._rmemo = (key, out)
             return out
-        cb = np.concatenate([[0.0], np.cumsum(b)]); ca = np.concatenate([[0.0], np.cumsum(a)])
-        idx = np.arange(m)
-        lo = np.maximum(0, idx + 1 - w)
-        dom = (cb[idx + 1] - cb[lo]) >= (ca[idx + 1] - ca[lo])       # the rolling flag sets the BOUNDARY
-        flip = np.empty(m, dtype=bool); flip[0] = True; flip[1:] = dom[1:] != dom[:-1]
-        start = np.maximum.accumulate(np.where(flip, idx, 0))        # index where the current run began
+        heads = np.floor(np.asarray(xt, dtype=np.float64) / self.bin).astype(np.int64) - self._base
+        heads = heads[heads <= i1]
+        if heads.size == 0:
+            out = (z, z, z)
+            self._rmemo = (key, out)
+            return out
+        p0 = int(max(0, min(int(heads[0]), i0)))
+        cb = np.concatenate([[0.0], np.cumsum(self._buy[p0:i1 + 1])])
+        ca = np.concatenate([[0.0], np.cumsum(self._sell[p0:i1 + 1])])
+        m = int(cb.size - 1)
         px = self._px[p0:i1 + 1].copy()
-        have = px > 0
-        if not have.any():
-            out = (z, z, np.zeros(0, dtype=bool), z)
-            self._ccmemo = (key, out)
-            return out
-        px = px[np.maximum.accumulate(np.where(have, np.arange(m), 0))]
-        move = (px - px[start]) / float(tick)                        # ticks since the cycle began
-        run_b = cb[idx + 1] - cb[start]                              # the run's OWN totals so far -> the side
-        run_a = ca[idx + 1] - ca[start]
-        is_buy = run_b >= run_a
-        val = np.where(is_buy, move, -move)                          # signed toward the side winning it
-        off = i0 - p0                                                # drop the window's warm-up prefix
-        dom_usd = np.where(is_buy, run_b, run_a)
-        val = val[off:]; is_buy = is_buy[off:]; dom_usd = dom_usd[off:]
-        t = (self._base + i0 + np.arange(val.size)) * self.bin + self.bin
-        step = max(1, int(np.ceil(val.size / float(max(16, max_pts)))))
+        pv = px > 0
+        if pv.any():                                       # carry the last trade price over tradeless seconds
+            src = np.maximum.accumulate(np.where(pv, np.arange(m), 0))
+            px = px[src]; pv = pv[src]
+        idx = np.arange(i0, i1 + 1) - p0                   # local bin indices of the drawn range
+        k = np.searchsorted(heads, idx + p0, side="right") - 1
+        live = k >= 0                                      # before the first cycle head there is nothing to say
+        st = heads[np.maximum(k, 0)] - p0
+        move = (px[idx] - px[st]) / float(tick)
+        run_b = cb[idx + 1] - cb[st]
+        run_s = ca[idx + 1] - ca[st]
+        ok = live & pv[idx] & pv[st]
+        u = float(unit_usd)
+        rb = np.where(ok & (run_b >= float(min_usd)), move / np.maximum(run_b, 1e-9) * u, np.nan)
+        rs = np.where(ok & (run_s >= float(min_usd)), move / np.maximum(run_s, 1e-9) * u, np.nan)
+        t = (self._base + i0 + np.arange(idx.size)) * self.bin + self.bin
+        step = max(1, int(np.ceil(t.size / float(max(16, max_pts)))))
         if step > 1:
-            t = t[::step]; val = val[::step]; is_buy = is_buy[::step]; dom_usd = dom_usd[::step]
-        out = (t, val, is_buy, dom_usd)
-        self._ccmemo = (key, out)
-        return out
-
-    def cycles(self, t0: float, t1: float, win_secs: float, tick: float,
-               min_secs: float = 3.0, max_cycles: int = 600):
-        """Runs where the same side owns the `win_secs` rolling flow.
-
-        Returns (start_t, end_t, is_buy, dom_usd, dur_s, advance_ticks) — advance is signed toward the DOMINANT
-        side, so positive means that side got its way. Only the NEWEST `max_cycles` are returned.
-
-        The BOUNDARY is the part that carries information: measured over 72 h, advance ~ dom$ + duration scores
-        R2 0.377 against 0.205 for a random cut of the same lengths. Note a cycle's totals only exist once it has
-        ENDED, so the last (still-forming) run is returned too and the caller draws it as provisional."""
-        z = np.zeros(0)
-        if self.empty() or win_secs <= 0:
-            return (z, z, np.zeros(0, dtype=bool), z, z, z)
-        key = (self.rev, round(float(t0), 2), round(float(t1), 2), round(float(win_secs), 2),
-               round(float(min_secs), 2), int(max_cycles))
-        if self._cmemo is not None and self._cmemo[0] == key:
-            return self._cmemo[1]
-        n = len(self._buy)
-        i0 = max(0, int(np.floor(t0 / self.bin)) - self._base)
-        i1 = min(n - 1, int(np.floor(t1 / self.bin)) - self._base)
-        w = max(1, int(round(float(win_secs) / self.bin)))
-        p0 = max(0, i0 - w)                      # the window needs its own prefix to be correct at the left edge
-        b = self._buy[p0:i1 + 1]; a = self._sell[p0:i1 + 1]
-        m = b.size
-        if m < 3:
-            out = (z, z, np.zeros(0, dtype=bool), z, z, z)
-            self._cmemo = (key, out)
-            return out
-        cb = np.concatenate([[0.0], np.cumsum(b)]); ca = np.concatenate([[0.0], np.cumsum(a)])
-        idx = np.arange(m)
-        lo = np.maximum(0, idx + 1 - w)
-        dom = (cb[idx + 1] - cb[lo]) >= (ca[idx + 1] - ca[lo])
-        off = i0 - p0                            # drop the prefix: it exists only to warm the rolling sums
-        dom = dom[off:]
-        k = dom.size
-        if k < 3:
-            out = (z, z, np.zeros(0, dtype=bool), z, z, z)
-            self._cmemo = (key, out)
-            return out
-        brk = np.flatnonzero(np.diff(dom)) + 1
-        st = np.concatenate([[0], brk]).astype(np.int64)
-        en = np.concatenate([brk - 1, [k - 1]]).astype(np.int64)
-        dur = (en - st + 1).astype(np.float64) * self.bin
-        # A cycle must hold at least `min_secs` of ACTUAL TRADING. Without this, an un-backfilled HOLE (where
-        # buy == sell == 0, so `rb >= ra` is trivially True) becomes one enormous "buy cycle" with a huge
-        # duration and no volume -- precisely the shape the size/duration reading keys on. Measured: it dropped
-        # the in-app calibration from R2 0.455 to 0.187 and broke the top quintile's monotonicity.
-        act = np.concatenate([[0], np.cumsum(((b + a) > 0).astype(np.int64))])
-        n_act = act[en + off + 1] - act[st + off]
-        keep = (dur >= float(min_secs)) & (n_act >= max(1, int(min_secs / self.bin)))
-        st, en, dur = st[keep], en[keep], dur[keep]
-        if st.size == 0:
-            out = (z, z, np.zeros(0, dtype=bool), z, z, z)
-            self._cmemo = (key, out)
-            return out
-        if st.size > max_cycles:
-            st, en, dur = st[-max_cycles:], en[-max_cycles:], dur[-max_cycles:]
-        gs = st + off; ge = en + off             # back into the prefixed slice
-        vb = cb[ge + 1] - cb[gs]; va = ca[ge + 1] - ca[gs]
-        is_buy = vb >= va
-        dom_usd = np.where(is_buy, vb, va)
-        px = self._px[p0:i1 + 1].copy()          # price at the boundaries, carried over tradeless seconds
-        have = px > 0
-        if not have.any():
-            out = (z, z, np.zeros(0, dtype=bool), z, z, z)
-            self._cmemo = (key, out)
-            return out
-        px = px[np.maximum.accumulate(np.where(have, np.arange(px.size), 0))]
-        move = (px[ge] - px[gs]) / float(tick)
-        adv = np.where(is_buy, move, -move)
-        base_t = (self._base + i0) * self.bin
-        out = (base_t + st * self.bin, base_t + (en + 1) * self.bin, is_buy, dom_usd, dur, adv)
-        self._cmemo = (key, out)
+            t = t[::step]; rb = rb[::step]; rs = rs[::step]
+        out = (t, rb, rs)
+        self._rmemo = (key, out)
         return out
 
     # ----------------------------------------------------------------- read

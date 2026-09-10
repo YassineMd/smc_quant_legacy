@@ -205,6 +205,11 @@ FLOW_CROSS_BADGE_TIERS = ((72.0, 2, 1), (38.0, 2, 2), (18.0, 1, 2))
 FLOW_CROSS_BADGE_UNIT_USD = 100_000.0
 FLOW_CROSS_BADGE_UNIT_TXT = "100k"
 FLOW_CROSS_BADGE_BAND_PX = 16       # one pill plus its gap, in pixels; the strip is bands x this
+# Cycle pane: ticks price moved per this many dollars each side has traded so far in the cycle. Same unit as
+# the badge, on the same cycles -- both come from FlowStore.crosses().
+CYCLE_RATE_MIN_USD = 20_000.0       # a side stays blank until it has traded this much INSIDE the cycle: one
+                                    # small print in the first second would divide a tick by nearly nothing
+CYCLE_RATE_MAX_PTS = 900            # drawn points per line
 FLOW_CROSS_DASH_PX = 9.0            # dash length / gap, in PIXELS. The dashes are emitted as segments rather
 FLOW_CROSS_GAP_PX = 7.0             # than left to a dashed pen: Qt's dasher measured ~100x more expensive.
 # A cross that held its side for MIN_HOLD_SECS but never reached MIN_SPREAD_PCT is still a cycle, just a weak
@@ -214,20 +219,12 @@ FLOW_CROSS_WEAK_COL = "#8a919c"
 # --- Resting-liquidity pane (Buy/Sell Flow mode, user 2026-09-09): limit-order $ within +-N ticks of mid.
 # --- Cycle pane (Buy/Sell Flow, user 2026-09-10). A cycle = a run where one side owns the smoothed flow.
 CYCLE_PANE_ON = True
-CYCLE_WIN_SECS = 300.0          # smoothing that DEFINES the boundary. 300 s measured best out-of-sample (0.416)
-CYCLE_WIN_CHOICES = (15.0, 30.0, 60.0, 120.0, 300.0)   # R2 is 0.35-0.42 across all of these -- not a fitted knob
-CYCLE_MIN_SECS = 3.0            # shorter runs are chatter, not cycles
-CYCLE_SMALL_USD = 130_000.0     # below this the DOMINANT side historically loses (33% at the bottom quintile),
                                 # so those blocks are drawn HOLLOW and can never read as strong
-CYCLE_MAX = 600
-CYCLE_MAX_PTS = 600             # samples on the continuous curve. Measured cost is a ~4.3 ms fixed floor
                                 # plus ~0.003 ms/point: 3000 pts = 13.0 ms/paint (32% of a core), 900 = 7.4,
                                 # 600 = 6.0, 400 = 5.4. At ~1500 px this is a point per 2.5 px -- still a
                                 # smooth line, and 3000 was 2 points PER PIXEL, i.e. invisible detail.
 CYCLE_RECALC_SECS = 0.5         # the store re-keys on every live batch; a full 72 h rebuild is ~17 ms
 # What that much dominant volume NORMALLY buys, in ticks -- the MEASURED quintile curve, interpolated.
-CYCLE_EXP_X = (0.00, 0.05, 0.13, 0.38, 1.50, 4.00)     # dominant $M
-CYCLE_EXP_Y = (-0.1, 0.0, 0.1, 0.4, 4.8, 8.0)          # ticks
 
 LIQ_PANE_ON = True              # the pane itself (hamburger 'Flow' -> 'Limit orders pane'); persisted
 LIQ_RADIUS_TICKS = 100          # default half-width, in TICKS (0.01 -> +-$1.00)
