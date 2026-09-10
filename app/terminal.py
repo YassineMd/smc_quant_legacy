@@ -1662,6 +1662,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_tag = None           # right-axis readout, in MONEY (the pane plots resting $)
         self._liq_time_tag = None      # x-axis clock badge, same design as the price badge
         self._liq_proxy = None
+        self._imp_plot = None          # Impact pane (Flow mode): ticks the pushing side gained per bin
+        self._imp_vb = None
+        self._imp_bars = None          # (buy-pushed segments, sell-pushed segments) as paired-line curves
+        self._imp_zero = None
+        self._imp_sized = False
+        self._imp_sig = None
+        self._imp_t = 0.0              # last recompute (the store re-keys on every live batch)
+        self._imp_data = None
+        self._imp_on = bool(config.IMPACT_PANE_ON)
+        self._imp_bin = float(config.IMPACT_BIN_USD)
+        self._imp_vline = None; self._imp_hline = None
+        self._imp_tag = None; self._imp_time_tag = None; self._imp_proxy = None
         self._liq_lvl = None           # right-edge markers: (bid rule, ask rule, bid badge, ask badge)
         self._liq_lvl_txt = ("", "")   # last badge strings -- setHtml is the expensive part, skip it when equal
         self._flow_bf_queue = []       # chunked tape history for the flow bins (Volume Burst / Flow window)
@@ -2151,6 +2163,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             self.menu.set_ema_vp_pct(getattr(self, "_ema_vp_pct_saved", 50))
             self.menu.set_flow_window(int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)))
+            self.menu.set_impact_opts(bool(getattr(self, "_imp_on", config.IMPACT_PANE_ON)),
+                                      float(getattr(self, "_imp_bin", config.IMPACT_BIN_USD)))
             self.menu.set_liq_pane_on(bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)))
             self.menu.set_liq_opts(int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                                    int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)))
@@ -2405,6 +2419,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.bubbleMinUsdChanged.connect(lambda _v: self._save_ui_state())  # Candle-Bubbles MIN SIZE (repaint is per-frame)
         self.menu.bigPlayerMinUsdChanged.connect(self._on_bigplayer_min)          # Big Player threshold -> redraw + persist
         self.menu.bpVpMinUsdChanged.connect(self._on_bpvp_min)                    # Big Player Gray VP threshold -> redraw + persist
+        self.menu.impactPaneToggled.connect(self._on_imp_pane_toggled)           # Impact pane on/off
+        self.menu.impactBinChanged.connect(self._on_imp_bin)                     # $ per constant-dollar bin
         self.menu.liqPaneToggled.connect(self._on_liq_pane_toggled)              # resting-liquidity pane on/off
         self.menu.liqOptsChanged.connect(self._on_liq_opts)                      # resting-liquidity pane
         self.menu.burstOptsChanged.connect(self._on_burst_opts)                  # Volume Burst: x multiple / window
@@ -4173,6 +4189,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.vol_hline.hide(); self.vol_tag.hide()
         self._liq_sync_vline(pt.x())                          # ... and into the Flow liquidity pane
         self._liq_hide_cursor()                               # cursor is over the chart -> no liquidity readout
+        self._imp_sync_vline(pt.x()); self._imp_hide_cursor()  # ... and the Impact pane
         if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
             self.fp_panel.show_price_line(pt.y())
         self._radar_hover(pt)                                 # Order-Flow Walls radar -> P(resist) odds on hover
@@ -10158,6 +10175,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "bigplayer_min_usd": float(self.menu.big_player_min_usd()),   # Big Player single-print threshold
                 "bpvp_min_usd": float(self.menu.bp_vp_min_usd()),             # Big Player Gray VP MIN PLAYER threshold
                 "flow_win": int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)),   # Buy/Sell Flow window
+                "impact_on": bool(getattr(self, "_imp_on", config.IMPACT_PANE_ON)),
+                "impact_bin": float(getattr(self, "_imp_bin", config.IMPACT_BIN_USD)),
                 "liq_pane_on": bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)),
                 "liq_radius": int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                 "liq_smooth": int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)),
@@ -10275,6 +10294,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _fw = int(s.get("flow_win", config.FLOW_WINDOW_SECS) or config.FLOW_WINDOW_SECS)
         if _fw in tuple(config.FLOW_WINDOW_CHOICES):
             self._flow_win = _fw          # the combo is synced in __init__ (the menu does not exist yet here)
+        self._imp_on = bool(s.get("impact_on", config.IMPACT_PANE_ON))
+        _ib = float(s.get("impact_bin", config.IMPACT_BIN_USD) or config.IMPACT_BIN_USD)
+        if _ib in tuple(float(v) for v in config.IMPACT_BIN_CHOICES):
+            self._imp_bin = _ib
         self._liq_pane_on = bool(s.get("liq_pane_on", config.LIQ_PANE_ON))
         _lr = int(s.get("liq_radius", config.LIQ_RADIUS_TICKS) or config.LIQ_RADIUS_TICKS)
         _ls = int(s.get("liq_smooth", config.LIQ_SMOOTH_SECS) if s.get("liq_smooth") is not None else config.LIQ_SMOOTH_SECS)
@@ -17114,6 +17137,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._liq_vline = None; self._liq_hline = None      # crosshair items were children of that splitter
             self._liq_tag = None; self._liq_time_tag = None; self._liq_proxy = None
             self._liq_lvl = None; self._liq_lvl_txt = ("", ""); self._liq_lvl_v = None
+            self._imp_plot = None; self._imp_vb = None; self._imp_bars = None; self._imp_zero = None
+            self._imp_sig = None; self._imp_sized = False; self._imp_proxy = None
+            self._imp_vline = None; self._imp_hline = None; self._imp_tag = None; self._imp_time_tag = None
             self._liq_lvl_dock = None; self._liq_lvl_up = None
             # the swing-line CVD-mirror items lived on the CVD pane (a child of the just-deleted splitter_v) — null
             # them too, so the next hover recreates them on the rebuilt pane instead of touching a deleted C++ object.
@@ -17857,27 +17883,39 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pass
         return pw
 
+    def _sub_pane_grow(self, plot, force: bool = False, share: float = 0.22) -> bool:
+        """Give a trailing sub-pane a usable slice of splitter_v. Returns True if it sized it.
+
+        There are now several trailing panes, so the caller's own index is used rather than sz[-1]. Called before
+        the first layout, sizes() is all zeros and Qt rescales whatever RATIO it is handed to fill the splitter --
+        so price gets the true remainder rather than a subtraction from zero (that read as 140:176 once and gave
+        a pane half the window). Sizes ONCE unless the pane is collapsed, so a manual drag stands."""
+        sp = getattr(self, "splitter_v", None)
+        if sp is None or plot is None:
+            return False
+        try:
+            i = sp.indexOf(plot)
+            sz = sp.sizes()
+            if i <= 0 or not sz or i >= len(sz):
+                return False
+            if not force and sz[i] >= 40:
+                return False
+            tot = sum(sz) or sp.height() or 800
+            want = max(120, int(tot * share))
+            sz[i] = want
+            sz[0] = max(140, tot - sum(sz[1:]))
+            sp.setSizes(sz)
+            return True
+        except Exception:
+            return False
+
     def _liq_show(self, on: bool) -> None:
         if on:
             if self._liq_ensure_pane() is None:
                 return
             self._liq_plot.setVisible(True)
-            sp = self.splitter_v                     # a freshly-added / previously-collapsed child holds 0 px
-            try:
-                sz = sp.sizes()
-                if sz and (not self._liq_sized or sz[-1] < 40):
-                    self._liq_sized = True          # size it ONCE (Qt's own addWidget share was half the window);
-                                                    # after that only a collapse re-triggers, so drags stand
-                    # Called before the first layout, sizes() is all zeros -- Qt then rescales whatever RATIO we
-                    # hand it to fill the splitter, so give price the true remainder rather than a subtraction
-                    # from zero (that read as 140:176 and handed the pane half the window).
-                    tot = sum(sz) or sp.height() or 800
-                    want = max(150, int(tot * 0.22))
-                    sz[-1] = want
-                    sz[0] = max(140, tot - want - sum(sz[1:-1]))
-                    sp.setSizes(sz)
-            except Exception:
-                pass
+            if self._sub_pane_grow(self._liq_plot, not self._liq_sized):
+                self._liq_sized = True
         elif self._liq_plot is not None:
             try:
                 self._liq_plot.setVisible(False)
@@ -18009,6 +18047,180 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         tb.setPos(x_right, bv); tb.show()
         ta.setPos(x_right, av); ta.show()
 
+    # ------------------------------------------------------------------
+    # IMPACT pane (Flow mode) -- ticks the PUSHING side gained, per constant-dollar bin
+    # ------------------------------------------------------------------
+    def _on_imp_pane_toggled(self, on: bool) -> None:
+        self._imp_on = bool(on)
+        self._imp_show(bool(on) and self.scanner_mode == "flow")
+        self._save_ui_state()
+
+    def _on_imp_bin(self, bin_usd: float) -> None:
+        self._imp_bin = float(bin_usd)
+        self._imp_sig = None
+        self._imp_t = 0.0
+        self._save_ui_state()
+
+    def _imp_ensure_pane(self):
+        if self._imp_plot is not None:
+            return self._imp_plot
+        try:
+            self._ensure_canvas_panes()
+        except Exception:
+            pass
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return None
+        ax = PriceAxis(orientation="right")
+        pw = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"), "right": ax})
+        pw.setBackground("#141414")
+        pw.showAxis("right"); pw.hideAxis("left")
+        for _a in ("bottom", "right"):
+            pw.getAxis(_a).setPen(pg.mkPen("#dcdcdc", width=1))
+            pw.getAxis(_a).setTextPen(pg.mkPen("#dcdcdc"))
+        pw.showGrid(x=False, y=False)
+        pw.setMenuEnabled(False)
+        pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        pw.getAxis("bottom").set_scanner_active(False)
+        ax.tickStrings = lambda vals, sc, sp_: ["%+.0ft" % v for v in vals]     # the y is TICKS, not a price
+        vb = pw.getViewBox()
+        vb.setMouseEnabled(x=True, y=True)
+        vb.setXLink(self.vb)
+        bars = []
+        for _c in ("#26a69a", "#ef5350"):
+            _pn = pg.mkPen(_c, width=3.0); _pn.setCosmetic(True); _pn.setCapStyle(QtCore.Qt.FlatCap)
+            it = pg.PlotCurveItem(pen=_pn, antialias=False, connect="pairs")   # one segment per bin = a bar
+            pw.addItem(it); bars.append(it)
+        self._imp_bars = (bars[0], bars[1])
+        self._imp_zero = pg.InfiniteLine(angle=0, pos=0.0, pen=pg.mkPen("#8a8a8a", width=1))
+        self._imp_zero.setZValue(5); pw.addItem(self._imp_zero, ignoreBounds=True)
+        for _lv in (float(config.IMPACT_MED_ADV), -float(config.IMPACT_MED_ADV)):
+            _r = pg.InfiniteLine(angle=0, pos=_lv,
+                                 pen=pg.mkPen("#4a5160", width=1, style=QtCore.Qt.DashLine))
+            _r.setZValue(4); pw.addItem(_r, ignoreBounds=True)
+        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
+        self._imp_vline = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
+        self._imp_hline = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
+        self._imp_vline.setZValue(15); self._imp_hline.setZValue(15)
+        pw.addItem(self._imp_vline, ignoreBounds=True); pw.addItem(self._imp_hline, ignoreBounds=True)
+        self._imp_hline.hide()
+        _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True)
+        self._imp_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._imp_tag.textItem.setFont(_tf); self._imp_tag.setZValue(16)
+        pw.addItem(self._imp_tag, ignoreBounds=True); self._imp_tag.hide()
+        self._imp_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._imp_time_tag.textItem.setFont(_tf); self._imp_time_tag.setZValue(61)
+        pw.addItem(self._imp_time_tag, ignoreBounds=True); self._imp_time_tag.hide()
+        self._imp_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_imp_mouse_move)
+        self._imp_plot = pw
+        self._imp_vb = vb
+        sp.addWidget(pw)
+        pw.setMinimumHeight(60)
+        return pw
+
+    def _imp_show(self, on: bool) -> None:
+        if on:
+            if self._imp_ensure_pane() is None:
+                return
+            self._imp_plot.setVisible(True)
+            if self._sub_pane_grow(self._imp_plot, not self._imp_sized, share=0.20):
+                self._imp_sized = True
+        elif self._imp_plot is not None:
+            try:
+                self._imp_plot.setVisible(False)
+            except RuntimeError:
+                self._imp_plot = None; self._imp_bars = None; self._imp_vb = None
+
+    def _imp_hide_cursor(self) -> None:
+        for it in (self._imp_hline, self._imp_tag, self._imp_time_tag):
+            if it is not None:
+                it.hide()
+
+    def _imp_sync_vline(self, x: float) -> None:
+        if self._imp_vline is not None:
+            self._imp_vline.setPos(x)
+
+    def _on_imp_mouse_move(self, evt) -> None:
+        """Cursor over the Impact pane: its own crosshair, a right-axis badge in TICKS and the clock badge, with
+        the shared vertical pushed into every other pane. Mirrors _on_liq_mouse_move."""
+        if self._imp_vb is None or self._imp_plot is None or not self._imp_plot.isVisible():
+            return
+        pos = evt[0]
+        if not self._imp_plot.sceneBoundingRect().contains(pos):
+            self._imp_hide_cursor()
+            return
+        pt = self._imp_vb.mapSceneToView(pos)
+        self._imp_vline.setPos(pt.x())
+        self._imp_hline.setPos(pt.y()); self._imp_hline.show()
+        (vx0, vx1), (vy0, vy1) = self._imp_vb.viewRange()
+        self._imp_tag.setText("%+.1ft" % float(pt.y()))
+        self._imp_tag.setPos(vx1, pt.y()); self._imp_tag.show()
+        _xl = self._x_time_label(pt.x())
+        if _xl:
+            self._imp_time_tag.setText(_xl); self._imp_time_tag.setPos(pt.x(), vy0); self._imp_time_tag.show()
+        else:
+            self._imp_time_tag.hide()
+        self.vline.setPos(pt.x())
+        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
+        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
+        for _v, _h, _t in ((getattr(self, "cvd_vline", None), getattr(self, "cvd_hline", None),
+                            getattr(self, "cvd_tag", None)),
+                           (getattr(self, "vol_vline", None), getattr(self, "vol_hline", None),
+                            getattr(self, "vol_tag", None)),
+                           (getattr(self, "lower_vline", None), getattr(self, "lower_hline", None),
+                            getattr(self, "vpin_tag", None))):
+            if _v is not None:
+                _v.setPos(pt.x())
+                if _h is not None:
+                    _h.hide()
+                if _t is not None:
+                    _t.hide()
+
+    def _imp_tick(self, now: float) -> None:
+        """Per frame in Flow mode. The store re-keys on EVERY live batch, so the read is throttled: a full
+        rebuild over a 72 h store measured 9.6 ms, which is not something to pay at frame rate."""
+        if self._imp_plot is None or not self._imp_plot.isVisible():
+            return
+        if now - self._imp_t < float(config.IMPACT_RECALC_SECS):
+            return
+        self._imp_t = now
+        (vx0, vx1), _ = self.vb.viewRange()
+        try:
+            data = self._flow.volume_bins(vx0, vx1, float(self._imp_bin), float(config.TICK_SIZE),
+                                          int(config.IMPACT_MAX_BARS))
+        except Exception:
+            return
+        self._imp_data = data
+        self._imp_draw()
+
+    def _imp_draw(self) -> None:
+        """One segment per bin from zero to the pusher's advance; green = buyers pushed, red = sellers."""
+        if self._imp_data is None or self._imp_bars is None:
+            return
+        t, buy, sell, nf, adv = self._imp_data
+        if t.size == 0:
+            self._imp_bars[0].setData(np.zeros(0), np.zeros(0))
+            self._imp_bars[1].setData(np.zeros(0), np.zeros(0))
+            return
+        sig = (int(t.size), round(float(t[-1]), 2), round(float(adv[-1]), 3), round(float(self._imp_bin), 1))
+        if sig == self._imp_sig:
+            return
+        self._imp_sig = sig
+        is_buy = nf > 0
+        for k, m in ((0, is_buy), (1, ~is_buy)):
+            if not m.any():
+                self._imp_bars[k].setData(np.zeros(0), np.zeros(0))
+                continue
+            xs = np.repeat(t[m], 2)
+            ys = np.zeros(xs.size)
+            ys[1::2] = adv[m]                        # each PAIR is one bar: (x,0) -> (x, advance)
+            self._imp_bars[k].setData(xs, ys)
+        lim = float(np.abs(adv).max()) * 1.15 or 1.0
+        cur = getattr(self, "_imp_ytop", 0.0)
+        if lim > cur * 0.98 or lim < cur * 0.55:     # dead-band, same as the other panes
+            self._imp_ytop = lim
+            self._imp_vb.setYRange(-lim, lim, padding=0.0)
+
     def _liq_hide_cursor(self) -> None:
         """Cursor is not over the pane -> drop its readouts (the lines linger, like every other pane)."""
         if self._liq_hline is not None:
@@ -18049,6 +18261,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._liq_time_tag.hide()
         self.vline.setPos(pt.x())                        # shared vertical -> the flow chart above
         self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
+        self._imp_sync_vline(pt.x()); self._imp_hide_cursor()
         for _v, _h, _t in ((getattr(self, "cvd_vline", None), getattr(self, "cvd_hline", None),
                             getattr(self, "cvd_tag", None)),
                            (getattr(self, "vol_vline", None), getattr(self, "vol_hline", None),
@@ -18140,6 +18353,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_ytop = 0.0
         self._flow_conn_was = bool(self.worker.connected)
         self._liq_show(bool(getattr(self, "_liq_pane_on", True)))   # the pane rides Flow mode, if enabled
+        self._imp_show(bool(getattr(self, "_imp_on", True)))        # ... and the Impact pane
+        self._imp_sig = None; self._imp_t = 0.0
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
         self._flow_subscribe(backfill=True)
         now = time.time()
@@ -18157,6 +18372,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self.menu, "flow_sec", None) is not None:
             self.menu.flow_sec.setVisible(False)
         self._liq_show(False)
+        self._imp_show(False)
         self._flow_curves = None
         self._flow_sig = None
         _ax = self.plot.getAxis("right")
@@ -18200,6 +18416,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_draw(now)
         try:
             self._liq_tick(now)         # resting-liquidity pane — self-gated, fail-safe
+        except Exception:
+            pass
+        try:
+            self._imp_tick(now)         # Impact pane -- self-gated, throttled, fail-safe
         except Exception:
             pass
 
@@ -20074,6 +20294,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.vol_vline.setPos(pt.x())
             self.vol_hline.hide(); self.vol_tag.hide()
         self._liq_sync_vline(pt.x()); self._liq_hide_cursor()   # ... and the Flow liquidity pane
+        self._imp_sync_vline(pt.x()); self._imp_hide_cursor()
         self.cvd_tag.setText(f"{pt.y():,.0f}")   # CVD is a volume total -> thousands-separated, no decimals
         self.cvd_tag.setPos(self.cvd_vb.viewRange()[0][1], pt.y())
         self.cvd_tag.show()

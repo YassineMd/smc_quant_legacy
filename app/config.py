@@ -181,6 +181,15 @@ FLOW_WINDOW_SECS = 60           # default rolling window = the tablet gauge's 60
 FLOW_WINDOW_CHOICES = (10, 30, 60, 300)
 FLOW_BACKFILL_SECS = 3600       # history requested on entry (one trades_window, same shape as the Trades tape's)
 # --- Resting-liquidity pane (Buy/Sell Flow mode, user 2026-09-09): limit-order $ within +-N ticks of mid.
+# --- Impact pane (Buy/Sell Flow mode, user 2026-09-10): ticks the pushing side gained, per constant-$ bin.
+IMPACT_PANE_ON = True
+IMPACT_BIN_USD = 1_000_000.0    # taker $ per bin. The DENOMINATOR is fixed here, not divided out later --
+                                # time bins put flow under the ratio and quiet stretches read as huge impact.
+IMPACT_BIN_CHOICES = (250_000.0, 500_000.0, 1_000_000.0, 2_000_000.0, 5_000_000.0)
+IMPACT_MAX_BARS = 900           # bars drawn; the read keeps the NEWEST this many
+IMPACT_RECALC_SECS = 0.5        # the store re-keys on every live batch; recompute at most this often
+IMPACT_MED_ADV = 3.0            # 72 h median advance, drawn as the +/- reference rule
+
 LIQ_PANE_ON = True              # the pane itself (hamburger 'Flow' -> 'Limit orders pane'); persisted
 LIQ_RADIUS_TICKS = 100          # default half-width, in TICKS (0.01 -> +-$1.00)
 LIQ_RADIUS_CHOICES = (10, 25, 50, 100, 200)     # must be a SUBSET of depth_store.LIQ_RADII (one response, no refetch)

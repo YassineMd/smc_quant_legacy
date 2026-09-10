@@ -291,6 +291,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     bubbleMinUsdChanged = QtCore.Signal(float)       # Candle-Bubbles MIN SIZE filter (USD/level; 0 = show all)
     bigPlayerMinUsdChanged = QtCore.Signal(float)    # Big Player Levels: single-print USD threshold
     bpVpMinUsdChanged = QtCore.Signal(float)
+    impactPaneToggled = QtCore.Signal(bool)      # Impact pane on/off (Flow mode)
+    impactBinChanged = QtCore.Signal(float)      # taker $ per constant-dollar bin
     liqPaneToggled = QtCore.Signal(bool)          # resting-liquidity pane on/off (Flow mode)
     liqOptsChanged = QtCore.Signal(int, int)      # resting-liquidity pane: (radius ticks, smoothing seconds)
     burstOptsChanged = QtCore.Signal(float, int)   # Volume Burst: (x multiple, window seconds) — 2026-09-08
@@ -1612,6 +1614,32 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         l2.addLayout(row)
         for cb_ in (self.liq_r_combo, self.liq_s_combo):
             cb_.currentIndexChanged.connect(lambda _i: self.liqOptsChanged.emit(self.liq_radius(), self.liq_smooth()))
+        w3 = QtWidgets.QWidget()
+        l3 = QtWidgets.QVBoxLayout(w3); l3.setContentsMargins(2, 1, 8, 5); l3.setSpacing(2)
+        self.impact_on = QtWidgets.QCheckBox("Impact pane (ticks the pusher gained)")
+        self.impact_on.setChecked(bool(config.IMPACT_PANE_ON))
+        self.impact_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.impact_on.setToolTip("One bar per constant-dollar bin: green = buyers pushed, red = sellers pushed,\n"
+                                  "height = the ticks that side gained. Below zero it pushed and price went the\n"
+                                  "OTHER way. COINCIDENT readout -- measured, not predictive.")
+        self.impact_on.toggled.connect(lambda on: self.impactPaneToggled.emit(bool(on)))
+        l3.addWidget(self.impact_on)
+        row3 = QtWidgets.QHBoxLayout(); row3.setSpacing(6)
+        lab3 = QtWidgets.QLabel("$ per bin")
+        lab3.setStyleSheet("color:#c8cdd6; background:transparent; font-family:Consolas; font-size:10px;")
+        row3.addWidget(lab3)
+        self.impact_bin_combo = QtWidgets.QComboBox()
+        for v in config.IMPACT_BIN_CHOICES:
+            self.impact_bin_combo.addItem(("$%.0fk" % (v / 1e3)) if v < 1e6 else ("$%.1fM" % (v / 1e6)), float(v))
+        self.impact_bin_combo.setCurrentIndex(
+            list(config.IMPACT_BIN_CHOICES).index(float(config.IMPACT_BIN_USD)))
+        self.impact_bin_combo.setToolTip("Taker dollars per bin. Every bin holds the SAME money, so the bar height\n"
+                                         "is the price move that money bought -- nothing is divided by flow.")
+        self.impact_bin_combo.currentIndexChanged.connect(
+            lambda _i: self.impactBinChanged.emit(self.impact_bin()))
+        row3.addWidget(self.impact_bin_combo); row3.addStretch(1)
+        l3.addLayout(row3)
+        self.flow_sec.addWidget(w3)
         self.flow_sec.addWidget(w2)
         root.addWidget(self.flow_sec)
         self.flow_sec.setVisible(False)                  # shown only in Flow mode (driven by the terminal)
@@ -1621,6 +1649,18 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def set_liq_pane_on(self, on: bool) -> None:
         self.liq_on.blockSignals(True); self.liq_on.setChecked(bool(on)); self.liq_on.blockSignals(False)
+
+    def impact_bin(self) -> float:
+        return float(self.impact_bin_combo.currentData() or config.IMPACT_BIN_USD)
+
+    def set_impact_opts(self, on: bool, bin_usd: float) -> None:
+        """Session-restore (no re-emit)."""
+        self.impact_on.blockSignals(True); self.impact_on.setChecked(bool(on)); self.impact_on.blockSignals(False)
+        ch = [float(v) for v in config.IMPACT_BIN_CHOICES]
+        if float(bin_usd) in ch:
+            self.impact_bin_combo.blockSignals(True)
+            self.impact_bin_combo.setCurrentIndex(ch.index(float(bin_usd)))
+            self.impact_bin_combo.blockSignals(False)
 
     def liq_radius(self) -> int:
         return int(self.liq_r_combo.currentData() or config.LIQ_RADIUS_TICKS)
