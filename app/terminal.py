@@ -1797,6 +1797,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_tag = None           # right-axis readout, in MONEY (the pane plots resting $)
         self._liq_time_tag = None      # x-axis clock badge, same design as the price badge
         self._liq_proxy = None
+        self._cvol_plot = None         # Volume pane (Flow mode): the dominant side's volume vs its own last N
+        self._cvol_vb = None
+        self._cvol_items = None        # (low, normal, high) BarGraphItems + the two band guides
+        self._cvol_guides = None
+        self._cvol_sig = None
+        self._cvol_t = 0.0
+        self._cvol_data = None
+        self._cvol_on = bool(config.CVOL_PANE_ON)
+        self._cvol_vline = None; self._cvol_hline = None
+        self._cvol_tag = None; self._cvol_time_tag = None; self._cvol_proxy = None
         self._cyc_plot = None          # Cycle pane (Flow mode): the dominant side's ticks per 100k, per cycle
         self._cyc_vb = None
         self._cyc_items = None         # (green, red, orange, gray) BarGraphItems -- one bar per finished cycle
@@ -2298,6 +2308,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_flow_window(int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)))
             self.menu.set_flow_cross_on(bool(getattr(self, "_flow_x_on", config.FLOW_CROSS_ON)))
             self.menu.set_cycle_opts(bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)))
+            self.menu.set_cvol_pane_on(bool(getattr(self, "_cvol_on", config.CVOL_PANE_ON)))
             self.menu.set_liq_pane_on(bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)))
             self.menu.set_liq_opts(int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                                    int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)))
@@ -2553,6 +2564,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.bigPlayerMinUsdChanged.connect(self._on_bigplayer_min)          # Big Player threshold -> redraw + persist
         self.menu.bpVpMinUsdChanged.connect(self._on_bpvp_min)                    # Big Player Gray VP threshold -> redraw + persist
         self.menu.cyclePaneToggled.connect(self._on_cyc_pane_toggled)            # Cycle pane on/off
+        self.menu.cvolPaneToggled.connect(self._on_cvol_pane_toggled)            # Volume pane on/off
         self.menu.cycleWinChanged.connect(self._on_cyc_win)                      # cycle-defining window
         self.menu.liqPaneToggled.connect(self._on_liq_pane_toggled)              # resting-liquidity pane on/off
         self.menu.liqOptsChanged.connect(self._on_liq_opts)                      # resting-liquidity pane
@@ -4324,6 +4336,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_sync_vline(pt.x())                          # ... and into the Flow liquidity pane
         self._liq_hide_cursor()                               # cursor is over the chart -> no liquidity readout
         self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()  # ... and the Cycle pane
+        self._cvol_sync_vline(pt.x()); self._cvol_hide_cursor()   # ... and the Volume pane
         if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
             self.fp_panel.show_price_line(pt.y())
         self._radar_hover(pt)                                 # Order-Flow Walls radar -> P(resist) odds on hover
@@ -10311,6 +10324,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "flow_win": int(getattr(self, "_flow_win", config.FLOW_WINDOW_SECS)),   # Buy/Sell Flow window
                 "flow_cross_on": bool(getattr(self, "_flow_x_on", config.FLOW_CROSS_ON)),  # cycle-start vlines
                 "cycle_on": bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)),
+                "cvol_on": bool(getattr(self, "_cvol_on", config.CVOL_PANE_ON)),
                 "liq_pane_on": bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)),
                 "liq_radius": int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                 "liq_smooth": int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)),
@@ -10430,6 +10444,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._flow_win = _fw          # the combo is synced in __init__ (the menu does not exist yet here)
         self._flow_x_on = bool(s.get("flow_cross_on", config.FLOW_CROSS_ON))
         self._cyc_on = bool(s.get("cycle_on", config.CYCLE_PANE_ON))
+        self._cvol_on = bool(s.get("cvol_on", config.CVOL_PANE_ON))
         self._liq_pane_on = bool(s.get("liq_pane_on", config.LIQ_PANE_ON))
         _lr = int(s.get("liq_radius", config.LIQ_RADIUS_TICKS) or config.LIQ_RADIUS_TICKS)
         _ls = int(s.get("liq_smooth", config.LIQ_SMOOTH_SECS) if s.get("liq_smooth") is not None else config.LIQ_SMOOTH_SECS)
@@ -16590,6 +16605,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._cyc_show(bool(getattr(self, "_cyc_on", True)))
             self._liq_sig = None
             self._cyc_sig = None; self._cyc_t = 0.0
+            self._cvol_show(bool(getattr(self, "_cvol_on", True)))
+            self._cvol_sig = None; self._cvol_t = 0.0
         # The loaded set moved, so EVERYTHING derived from it must re-derive — same invalidation the replay step does.
         # Without this the Pivot D/E marks (sig-gated on offset/range) and the selection kept their last values, so a
         # Start-Date / replay-cursor change only visibly took effect on the next right-arrow step.
@@ -17284,6 +17301,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._cyc_plot = None; self._cyc_vb = None; self._cyc_items = None
             self._cyc_sig = None; self._cyc_sized = False; self._cyc_proxy = None
             self._cyc_vline = None; self._cyc_hline = None; self._cyc_tag = None; self._cyc_time_tag = None
+            self._cvol_plot = None; self._cvol_vb = None; self._cvol_items = None; self._cvol_guides = None
+            self._cvol_sig = None; self._cvol_sized = False; self._cvol_proxy = None
+            self._cvol_vline = None; self._cvol_hline = None
+            self._cvol_tag = None; self._cvol_time_tag = None
             self._liq_lvl_dock = None; self._liq_lvl_up = None
             # the swing-line CVD-mirror items lived on the CVD pane (a child of the just-deleted splitter_v) — null
             # them too, so the next hover recreates them on the rebuilt pane instead of touching a deleted C++ object.
@@ -18195,6 +18216,200 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # CYCLE pane (Flow mode) -- one block per run where the same side owns the flow
     # ------------------------------------------------------------------
+    def _on_cvol_pane_toggled(self, on: bool) -> None:
+        self._cvol_on = bool(on)
+        self._cvol_show(bool(on) and self.scanner_mode == "flow")
+        self._save_ui_state()
+
+    def _cvol_ensure_pane(self):
+        if self._cvol_plot is not None:
+            return self._cvol_plot
+        try:
+            self._ensure_canvas_panes()
+        except Exception:
+            pass
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return None
+        ax = PriceAxis(orientation="right")
+        pw = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"), "right": ax})
+        pw.setBackground("#141414")
+        pw.showAxis("right"); pw.hideAxis("left")
+        for _a in ("bottom", "right"):
+            pw.getAxis(_a).setPen(pg.mkPen("#dcdcdc", width=1))
+            pw.getAxis(_a).setTextPen(pg.mkPen("#dcdcdc"))
+        pw.showGrid(x=False, y=False)
+        pw.setMenuEnabled(False)
+        pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        pw.getAxis("bottom").set_scanner_active(False)
+        # the axis is a MULTIPLE, because the bar is a log2 ratio: 0 -> 1.0x, +1 -> 2.0x, -1 -> 0.5x
+        ax.tickStrings = lambda vals, sc, sp_: ["%.2gx" % (2.0 ** v) for v in vals]
+        vb = pw.getViewBox()
+        vb.setMouseEnabled(x=True, y=True)
+        vb.setXLink(self.vb)
+        # THREE BarGraphItems, one solid brush each -- grouping by BAND is what keeps it to one brush apiece
+        # however many cycles are on screen, and no custom paint() (deviceTransform() inside paint() has
+        # segfaulted this terminal before).
+        items = []
+        for _c in (config.CVOL_LOW_COL, config.CVOL_MID_COL, config.CVOL_HIGH_COL):
+            _col = QtGui.QColor(_c)
+            it = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
+                                 brush=pg.mkBrush(_col.red(), _col.green(), _col.blue(), 190),
+                                 pen=pg.mkPen(_col, width=1.0))
+            it.setZValue(5)
+            pw.addItem(it); items.append(it)
+        self._cvol_items = tuple(items)
+        # the band itself, drawn rather than asserted: inside these two guides is NORMAL
+        guides = []
+        for _v in (float(np.log2(max(1e-9, config.CVOL_LOW))), float(np.log2(max(1e-9, config.CVOL_HIGH)))):
+            _p = pg.mkPen("#9aa4b2", width=1.0, style=QtCore.Qt.DashLine); _p.setCosmetic(True)
+            ln = pg.InfiniteLine(angle=0, pos=_v, pen=_p)
+            ln.setZValue(3); pw.addItem(ln, ignoreBounds=True); guides.append(ln)
+        self._cvol_guides = tuple(guides)
+        _z = pg.InfiniteLine(angle=0, pos=0.0, pen=pg.mkPen("#8a8a8a", width=1))
+        _z.setZValue(2); pw.addItem(_z, ignoreBounds=True)
+        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
+        self._cvol_vline = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
+        self._cvol_hline = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
+        self._cvol_vline.setZValue(15); self._cvol_hline.setZValue(15)
+        pw.addItem(self._cvol_vline, ignoreBounds=True); pw.addItem(self._cvol_hline, ignoreBounds=True)
+        self._cvol_hline.hide()
+        _tf = QtGui.QFont("Consolas", 8)
+        self._cvol_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._cvol_tag.textItem.setFont(_tf); self._cvol_tag.setZValue(16)
+        pw.addItem(self._cvol_tag, ignoreBounds=True); self._cvol_tag.hide()
+        self._cvol_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._cvol_time_tag.textItem.setFont(_tf); self._cvol_time_tag.setZValue(61)
+        pw.addItem(self._cvol_time_tag, ignoreBounds=True); self._cvol_time_tag.hide()
+        self._cvol_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_cvol_mouse_move)
+        self._cvol_plot = pw
+        self._cvol_vb = vb
+        self._theme_sub_panes(not self._simple_bw())     # born into the CURRENT Chart Style, not always dark
+        sp.addWidget(pw)
+        pw.setMinimumHeight(60)
+        return pw
+
+    def _cvol_show(self, on: bool) -> None:
+        if on:
+            if self._cvol_ensure_pane() is None:
+                return
+            self._cvol_plot.setVisible(True)
+            if self._sub_pane_grow(self._cvol_plot, not getattr(self, "_cvol_sized", False), share=0.16):
+                self._cvol_sized = True
+        elif self._cvol_plot is not None:
+            try:
+                self._cvol_plot.setVisible(False)
+            except RuntimeError:
+                self._cvol_plot = None; self._cvol_items = None; self._cvol_vb = None
+
+    def _cvol_hide_cursor(self) -> None:
+        for _it in (self._cvol_hline, self._cvol_tag, self._cvol_time_tag):
+            if _it is not None:
+                _it.hide()
+
+    def _cvol_sync_vline(self, x: float) -> None:
+        if self._cvol_vline is not None:
+            self._cvol_vline.setPos(x)
+
+    def _on_cvol_mouse_move(self, evt) -> None:
+        """Cursor over the Volume pane: its own crosshair, a MULTIPLE badge and the clock badge, with the
+        shared vertical pushed into every other pane."""
+        if self._cvol_vb is None or self._cvol_plot is None or not self._cvol_plot.isVisible():
+            return
+        pos = evt[0]
+        if not self._cvol_plot.sceneBoundingRect().contains(pos):
+            self._cvol_hide_cursor()
+            return
+        pt = self._cvol_vb.mapSceneToView(pos)
+        self._cvol_vline.setPos(pt.x())
+        self._cvol_hline.setPos(pt.y()); self._cvol_hline.show()
+        (vx0, vx1), (vy0, vy1) = self._cvol_vb.viewRange()
+        self._cvol_tag.setText("%.2gx" % (2.0 ** float(pt.y())))
+        self._cvol_tag.setPos(vx1, pt.y()); self._cvol_tag.show()
+        _xl = self._x_time_label(pt.x())
+        if _xl:
+            self._cvol_time_tag.setText(_xl); self._cvol_time_tag.setPos(pt.x(), vy0)
+            self._cvol_time_tag.show()
+        else:
+            self._cvol_time_tag.hide()
+        self.vline.setPos(pt.x())
+        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
+        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
+        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
+
+    def _cvol_tick(self, now: float) -> None:
+        """Per frame in Flow mode, throttled. The read is WIDER than the view on purpose: the baseline is the
+        same side's previous N cycles, which reach back further than the drawn range -- read only the view and
+        the leftmost bars would change every time the user panned."""
+        if self._cvol_plot is None or not self._cvol_plot.isVisible():
+            return
+        if now - self._cvol_t < float(config.CYCLE_RECALC_SECS):
+            return
+        self._cvol_t = now
+        (vx0, vx1), _ = self.vb.viewRange()
+        try:
+            self._cvol_data = (vx0, self._flow.crosses(
+                vx0 - float(config.CVOL_LOOKBACK_SECS), vx1, float(self._flow_win),
+                float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE)))
+        except Exception:
+            return
+        self._cvol_draw(now)
+
+    def _cvol_draw(self, now: float) -> None:
+        """ONE BAR PER FINISHED CYCLE: how big that cycle's DOMINANT-side volume was against the MEDIAN of the
+        same side's previous CVOL_BASE_N cycles (user 2026-09-11).
+
+        The height is log2 of the ratio -- 0 is normal, +1 is twice, -1 is half. Measured on 20 h of live tape
+        the raw ratio runs p10 0.15 to p90 5.77, so a linear axis would flatten every ordinary cycle against a
+        few giants. The axis is labelled in multiples.
+
+        Blue below CVOL_LOW, gray inside, amber above CVOL_HIGH -- and the two guides draw the band, so the
+        classification is visible rather than asserted. Those cuts are the measured TERCILES, which is what
+        makes each label a real third of cycles rather than a guess.
+
+        Nothing is drawn for the cycle still forming, or for one without enough same-side history yet."""
+        if self._cvol_data is None or self._cvol_items is None:
+            return
+        vx0, (t, is_buy, strong, move, cbuy, csell, t_end, done) = self._cvol_data
+        if t.size == 0:
+            for it in self._cvol_items:
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            self._cvol_sig = ("empty",)
+            return
+        side, _rate, _state = self._cycle_impact(is_buy, strong, move, cbuy, csell)
+        ratio = self._flow.volume_ratio(side, cbuy, csell, done, np.maximum(t_end - t, 1e-9),
+                                        int(config.CVOL_BASE_N), int(config.CVOL_MIN_N),
+                                        bool(config.CVOL_PER_SECOND), float(config.CVOL_MIN_USD))
+        keep = np.isfinite(ratio) & (t >= vx0)             # the lookback exists for the BASELINE, not to draw
+        sig = (int(t.size), int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win),
+               round(float(np.nan_to_num(ratio[keep][-1] if keep.any() else 0.0)), 4))
+        if sig == self._cvol_sig:
+            return
+        self._cvol_sig = sig
+        if not keep.any():
+            for it in self._cvol_items:
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            return
+        x0 = t[keep]; x1 = t_end[keep]
+        val = np.log2(np.maximum(ratio[keep], 1e-9))
+        lo_c = float(config.CVOL_LOW); hi_c = float(config.CVOL_HIGH)
+        r = ratio[keep]
+        groups = (r < lo_c, (r >= lo_c) & (r <= hi_c), r > hi_c)
+        for it, m in zip(self._cvol_items, groups):
+            if not m.any():
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+                continue
+            it.setOpts(x0=x0[m], x1=x1[m], y0=np.minimum(0.0, val[m]), height=np.abs(val[m]))
+        # the 99th percentile, not the max: one thin cycle against a quiet baseline can be 20x and would flatten
+        # everything else. The band guides must stay in frame either way.
+        lim = float(np.percentile(np.abs(val), 99.0)) * 1.15
+        lim = max(lim, abs(float(np.log2(max(1e-9, hi_c)))) * 1.4, 1.0)
+        cur = getattr(self, "_cvol_ytop", 0.0)
+        if lim > cur * 0.98 or lim < cur * 0.55:
+            self._cvol_ytop = lim
+            self._cvol_vb.setYRange(-lim, lim, padding=0.0)
+
     def _on_cyc_pane_toggled(self, on: bool) -> None:
         self._cyc_on = bool(on)
         self._cyc_show(bool(on) and self.scanner_mode == "flow")
@@ -18531,6 +18746,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_show(bool(getattr(self, "_liq_pane_on", True)))   # the pane rides Flow mode, if enabled
         self._cyc_show(bool(getattr(self, "_cyc_on", True)))        # ... and the Cycle pane
         self._cyc_sig = None; self._cyc_t = 0.0
+        self._cvol_show(bool(getattr(self, "_cvol_on", True)))      # ... and the Volume pane
+        self._cvol_sig = None; self._cvol_t = 0.0
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
         self._flow_subscribe(backfill=True)
         now = time.time()
@@ -18549,6 +18766,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.flow_sec.setVisible(False)
         self._liq_show(False)
         self._cyc_show(False)
+        self._cvol_show(False)
         self._flow_curves = None
         self._flow_sig = None
         self._flow_xln = None; self._flow_xsig = None; self._flow_xbadge = None
@@ -18604,6 +18822,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pass
         try:
             self._cyc_tick(now)         # Cycle pane -- self-gated, throttled, fail-safe
+        except Exception:
+            pass
+        try:
+            self._cvol_tick(now)        # Volume pane -- same
         except Exception:
             pass
 
@@ -18787,7 +19009,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         range and the pixels-per-y differ. A pane that is hidden or has not been built contributes nothing."""
         out = [("main", self.plot, self.vb)]
         for _k, _p, _v in (("liq", getattr(self, "_liq_plot", None), getattr(self, "_liq_vb", None)),
-                           ("cyc", getattr(self, "_cyc_plot", None), getattr(self, "_cyc_vb", None))):
+                           ("cyc", getattr(self, "_cyc_plot", None), getattr(self, "_cyc_vb", None)),
+                           ("cvol", getattr(self, "_cvol_plot", None), getattr(self, "_cvol_vb", None))):
             if _p is not None and _v is not None and _p.isVisible():
                 out.append((_k, _p, _v))
         return out
@@ -19704,7 +19927,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._theme_sub_panes(dark)                        # the Flow panes ride the Chart Style too
 
     def _theme_sub_panes(self, dark: bool) -> None:
-        """Morph the Flow sub-panes (liquidity, impact) with the main canvas. Simple BW used to leave a white
+        """Morph the Flow sub-panes (liquidity, cycle, volume) with the main canvas. Simple BW used to leave a white
         chart sitting on two dark panes. Only the GROUND, the axes and the crosshair change -- the teal/red
         line colours carry meaning and stay put."""
         bg = "#141414" if dark else config.COLOR_CANVAS
@@ -19714,7 +19937,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for pw, items in ((getattr(self, "_liq_plot", None),
                            (getattr(self, "_liq_vline", None), getattr(self, "_liq_hline", None))),
                           (getattr(self, "_cyc_plot", None),
-                           (getattr(self, "_cyc_vline", None), getattr(self, "_cyc_hline", None)))):
+                           (getattr(self, "_cyc_vline", None), getattr(self, "_cyc_hline", None))),
+                          (getattr(self, "_cvol_plot", None),
+                           (getattr(self, "_cvol_vline", None), getattr(self, "_cvol_hline", None)))):
             if pw is None:
                 continue
             try:

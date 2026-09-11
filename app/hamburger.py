@@ -292,6 +292,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     bigPlayerMinUsdChanged = QtCore.Signal(float)    # Big Player Levels: single-print USD threshold
     bpVpMinUsdChanged = QtCore.Signal(float)
     cyclePaneToggled = QtCore.Signal(bool)       # Cycle pane on/off (Flow mode)
+    cvolPaneToggled = QtCore.Signal(bool)        # Volume pane on/off (Flow mode)
     cycleWinChanged = QtCore.Signal(float)       # the smoothing that defines a cycle boundary
     liqPaneToggled = QtCore.Signal(bool)          # resting-liquidity pane on/off (Flow mode)
     liqOptsChanged = QtCore.Signal(int, int)      # resting-liquidity pane: (radius ticks, smoothing seconds)
@@ -1649,6 +1650,18 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % config.FLOW_CROSS_BADGE_UNIT_TXT)
         self.cycle_on.toggled.connect(lambda on: self.cyclePaneToggled.emit(bool(on)))
         l4.addWidget(self.cycle_on)
+        self.cvol_on = QtWidgets.QCheckBox("Volume pane (cycle size vs its own last %d)" % config.CVOL_BASE_N)
+        self.cvol_on.setChecked(bool(config.CVOL_PANE_ON))
+        self.cvol_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.cvol_on.setToolTip(
+            "One bar per finished cycle: how big that cycle's DOMINANT-side volume was against the median of "
+            "the same side's previous %d cycles. 1.0x is normal; blue under %.2fx, amber over %.2fx, and the "
+            "two dashed guides draw the band. Those cuts are the measured TERCILES over 20 h of tape, so each "
+            "label really is a third of cycles. NOTE about half this number's variance is just how LONG the "
+            "cycle ran, which is already the bar's width."
+            % (config.CVOL_BASE_N, config.CVOL_LOW, config.CVOL_HIGH))
+        self.cvol_on.toggled.connect(lambda on: self.cvolPaneToggled.emit(bool(on)))
+        l4.addWidget(self.cvol_on)
         self.flow_sec.addWidget(w4)
         self.flow_sec.addWidget(w2)
         root.addWidget(self.flow_sec)
@@ -1665,6 +1678,9 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def set_liq_pane_on(self, on: bool) -> None:
         self.liq_on.blockSignals(True); self.liq_on.setChecked(bool(on)); self.liq_on.blockSignals(False)
+
+    def set_cvol_pane_on(self, on: bool) -> None:
+        self.cvol_on.blockSignals(True); self.cvol_on.setChecked(bool(on)); self.cvol_on.blockSignals(False)
 
     def set_cycle_opts(self, on: bool, win: float = 0.0) -> None:
         """Session-restore (no re-emit). `win` is ignored -- the pane follows the Flow window now."""

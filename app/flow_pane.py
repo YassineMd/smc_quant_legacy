@@ -231,9 +231,16 @@ class FlowStore:
         key = ("cross", self.rev, round(float(t0), 2), round(float(t1), 2), round(float(win_secs), 2),
                round(float(min_spread_pct), 3), round(float(min_hold_secs), 2), int(max_n),
                round(float(context_secs), 2), round(float(tick), 6))
+        # a SMALL LRU, not one slot: the vertical lines read the view while the Volume pane reads an hour
+        # further back for its baseline, and with a single slot those two keys would evict each other every
+        # frame, so every call would be a cold one.
         memo = getattr(self, "_xmemo", None)
-        if memo is not None and memo[0] == key:
-            return memo[1]
+        if not isinstance(memo, dict):
+            memo = {}
+            self._xmemo = memo
+        hit = memo.get(key)
+        if hit is not None:
+            return hit
         n = len(self._buy)
         w = max(1, int(round(float(win_secs) / self.bin)))
         hold = max(1, int(round(float(min_hold_secs) / self.bin)))
@@ -246,7 +253,7 @@ class FlowStore:
         i1 = min(n - 1, iv + ctx)
         if iv < i0:
             out = (z, zb, zb, z, z, z, z, zb)
-            self._xmemo = (key, out)
+            self._memo_put(memo, key, out)
             return out
         # series() only needs a w-1 prefix; the MERGE needs enough of the run before the view to know whether
         # the leftmost visible cross is its own head or a repeat of the colour before it.
@@ -256,7 +263,7 @@ class FlowStore:
         m = int(cb.size - 1)
         if m < 3:
             out = (z, zb, zb, z, z, z, z, zb)
-            self._xmemo = (key, out)
+            self._memo_put(memo, key, out)
             return out
         idx = np.arange(m)
         lo = np.maximum(0, idx + 1 - w)
@@ -269,13 +276,13 @@ class FlowStore:
         say = up | dn
         if not say.any():
             out = (z, zb, zb, z, z, z, z, zb)
-            self._xmemo = (key, out)
+            self._memo_put(memo, key, out)
             return out
         dom = up[np.maximum.accumulate(np.where(say, idx, 0))]
         flips = np.flatnonzero(dom[1:] != dom[:-1]) + 1                  # first bin of each new side
         if flips.size == 0:
             out = (z, zb, zb, z, z, z, z, zb)
-            self._xmemo = (key, out)
+            self._memo_put(memo, key, out)
             return out
         tot = rb + ra
         spread = np.where(tot > 0, 100.0 * np.abs(rb - ra) / np.maximum(tot, 1e-9), 0.0)
@@ -354,7 +361,7 @@ class FlowStore:
         dn_ = done_all[vis]
         if cs.size == 0:
             out = (z, zb, zb, z, z, z, z, zb)
-            self._xmemo = (key, out)
+            self._memo_put(memo, key, out)
             return out
         if cs.size > max_n:
             cs = cs[-int(max_n):]
@@ -368,7 +375,57 @@ class FlowStore:
             dn_ = dn_[-int(max_n):]
         out = (ta_.copy(), db.copy(), sg.copy(), mv.copy(), vb_.copy(), vs_.copy(),
                te_.copy(), dn_.copy())
-        self._xmemo = (key, out)
+        self._memo_put(memo, key, out)
+        return out
+
+    @staticmethod
+    def _memo_put(memo, key, out, cap=4):
+        """Keep the last few crosses() answers -- enough for the two ranges the terminal asks for, at both the
+        current flow window and one the user just switched away from."""
+        memo[key] = out
+        while len(memo) > cap:
+            memo.pop(next(iter(memo)))
+        return out
+
+    @staticmethod
+    def volume_ratio(is_dom_buy, buy_usd, sell_usd, done, dur_secs, n_base=5, min_n=3,
+                     per_second=False, min_usd=20_000.0):
+        """Each finished cycle's dominant-side volume over the MEDIAN of that side's previous `n_base` cycles.
+
+        NaN where the history is too short or the cycle traded nothing worth rating. Median, not mean, because
+        at n_base=5 a single outsized cycle would drag a mean around completely.
+
+        Pure arithmetic on what crosses() already returned, so the caller can hand it the PRE-CLIP arrays and
+        get a baseline that does not change when the view moves -- the previous five cycles of one side reach
+        much further back than the drawn range.
+
+        ⚠ Measured on 20 h of live tape: 52% of this ratio's variance is shared with how long the cycle ran.
+        `per_second` divides by duration to remove that, which asks a different question (how INTENSE was the
+        flow, not how much of it there was)."""
+        n = int(np.size(done))
+        out = np.full(n, np.nan)
+        if n == 0:
+            return out
+        vol = np.where(np.asarray(is_dom_buy, dtype=bool),
+                       np.asarray(buy_usd, dtype=np.float64), np.asarray(sell_usd, dtype=np.float64))
+        if per_second:
+            vol = vol / np.maximum(np.asarray(dur_secs, dtype=np.float64), 1e-9)
+        dn = np.asarray(done, dtype=bool)
+        db = np.asarray(is_dom_buy, dtype=bool)
+        ok = dn & np.isfinite(vol) & (vol > 0)
+        floor = float(min_usd) / (np.maximum(np.asarray(dur_secs, dtype=np.float64), 1e-9) if per_second else 1.0)
+        hist = {True: [], False: []}
+        nb = max(1, int(n_base))
+        mn = max(1, int(min_n))
+        for k in range(n):
+            if not ok[k]:
+                continue
+            h = hist[bool(db[k])]
+            if len(h) >= mn and vol[k] >= (floor[k] if per_second else floor):
+                base = float(np.median(h[-nb:]))
+                if base > 0:
+                    out[k] = float(vol[k]) / base
+            h.append(float(vol[k]))
         return out
 
     # ----------------------------------------------------------------- read

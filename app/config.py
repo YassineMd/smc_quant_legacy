@@ -209,6 +209,24 @@ FLOW_CROSS_BADGE_BAND_PX = 16       # one pill plus its gap, in pixels; the stri
 # the badge, on the same cycles -- both come from FlowStore.crosses().
 CYCLE_RATE_MIN_USD = 20_000.0       # a cycle whose dominant side traded less than this gets no bar: dividing
                                     # a tick by a few thousand dollars is a spike, not a reading
+
+# --- Cycle VOLUME pane: is this cycle's dominant-side volume low / normal / high for that side? ---------------
+CVOL_PANE_ON = True
+CVOL_BASE_N = 5                     # compared against the MEDIAN of that side's previous N cycles. Median, not
+CVOL_MIN_N = 3                      # mean: at N=5 one outsized cycle would drag a mean around completely.
+# Cuts measured on 20 h of live tape (n=676) -- the TERCILES of the ratio, so each band really is a third of
+# cycles. A "sensible" 0.70-1.40 band would have called only 17.6% of them normal.
+CVOL_LOW = 0.55
+CVOL_HIGH = 1.90
+CVOL_PER_SECOND = False             # ⚠ 52% of the ratio's variance is shared with how LONG the cycle ran, and
+                                    # that is already the bar's WIDTH. True divides by duration ($/s) to take
+                                    # it back out -- a different question, so it is the user's call.
+CVOL_MIN_USD = 20_000.0             # below this the cycle has nothing to rate
+CVOL_LOOKBACK_SECS = 3600.0         # how far BEFORE the view the baseline reaches: five same-side cycles is
+                                    # further back than the drawn range, and a bar must not change on a pan
+CVOL_LOW_COL = "#4d84c4"            # quiet / normal / heavy. Deliberately NOT green-red: this pane is about
+CVOL_MID_COL = "#7a828e"            # how MUCH traded, and green/red already mean buy/sell everywhere else.
+CVOL_HIGH_COL = "#d9a520"
 FLOW_CROSS_DASH_PX = 9.0            # dash length / gap, in PIXELS. The dashes are emitted as segments rather
 FLOW_CROSS_GAP_PX = 7.0             # than left to a dashed pen: Qt's dasher measured ~100x more expensive.
 # A cross that held its side for MIN_HOLD_SECS but never reached MIN_SPREAD_PCT is still a cycle, just a weak
