@@ -18240,6 +18240,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             p.setDark(not self._simple_bw())
             self._interp_sig = None; self._interp_t = 0.0
 
+    def _engine_live_px(self):
+        """The ONE live price the rest of the terminal uses: the engine's forming-bucket close.
+
+        _live_px itself is only maintained by the Mode-10 draw, so in Flow mode it is None -- this reads the
+        same snapshot field that sets it (_on_timer refreshes _last_snap in every mode). Returns None rather
+        than guessing when there is no snapshot yet."""
+        try:
+            snap = self._last_snap
+            if not snap:
+                return None
+            act = snap.get("active_bucket") or {}
+            px = act.get("close", act.get("close_price"))
+            if not px:
+                cl = snap.get("closed_buckets") or []
+                px = cl[-1].get("close", cl[-1].get("close_price")) if cl else None
+            return float(px) if px else None
+        except Exception:
+            return None
+
     def _interp_fit_width(self) -> bool:
         """Give the feed its configured width ONCE, then never again so a manual drag stands.
 
@@ -18329,13 +18348,39 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # the tape itself has gone stale, which is worth not lying about.
         live = bool(vx1 >= now - float(config.INTERP_STALE_SECS))
         _form = float(now - t[-1]) if (live and t.size and not bool(done[-1])) else 0.0
+        # the live price is IN the signature: without it the forming row would keep printing the price it had
+        # when the cycle opened, which is the whole bug this fixes
+        _lp = self._engine_live_px()
         sig = (nvis, round(float(t[-1]), 2), int(self._flow_win), int(_form // 2), live,
+               round(float(_lp), 6) if _lp is not None else None,
                int(len(getattr(self, "_lob_cache", {}) or {})) // 8)
         if sig == self._interp_sig:
             return
         self._interp_sig = sig
         side, _rate, _st = self._cycle_impact(is_buy, strong, move, cbuy, csell)
         mv = np.nan_to_num(move, nan=0.0)
+        # the two prices the move is the difference of. SAME crosses() arguments, so this reads the memo entry
+        # that call already built rather than making a second pass over the store.
+        try:
+            px0, px1 = self._flow.crosses_px(
+                vx0, vx1, float(self._flow_win),
+                float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
+        except Exception:
+            px0 = px1 = np.full(int(t.size), np.nan)
+        if px0.size != t.size or px1.size != t.size:
+            px0 = px1 = np.full(int(t.size), np.nan)
+        else:
+            px0 = px0.copy(); px1 = px1.copy()
+        # ⚠ THE FORMING ROW ENDS AT THE LIVE PRICE, not at the store's last binned trade. Measured: the two are
+        # the same source and agree exactly once the tape has caught up, but the flow store's edge trails --
+        # ~490 s on entering Flow mode, still 1-5 s in steady state, because a bin only exists for a second
+        # that traded. The move is recomputed against it so the printed prices and ticks cannot disagree.
+        _lpx = self._engine_live_px()
+        if live and t.size and not bool(done[-1]) and _lpx is not None and np.isfinite(px0[-1]):
+            px1[-1] = float(_lpx)
+            mv = mv.copy()
+            mv[-1] = (float(_lpx) - float(px0[-1])) / float(config.TICK_SIZE)
         t_end_c = np.array(t_end, dtype=np.float64, copy=True)
         if t.size and not bool(done[-1]):
             # the open cycle's t_end is the READ's right edge, and the user can pan RIGHT past the live edge --
@@ -18361,23 +18406,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                              self._lb_n(), self._lb_min_n(), include_open=True)
         sell_r = _interp_prev(np.maximum(csell, 0.0) / dur, done,
                               self._lb_n(), self._lb_min_n(), include_open=True)
-        # the two prices the move is the difference of. SAME crosses() arguments, so this reads the memo entry
-        # that call already built rather than making a second pass over the store.
-        try:
-            px0, px1 = self._flow.crosses_px(
-                vx0, vx1, float(self._flow_win),
-                float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
-                int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
-        except Exception:
-            px0 = px1 = np.full(int(t.size), np.nan)
         _dec = max(0, min(8, int(round(-np.log10(max(float(config.TICK_SIZE), 1e-9))))))
         k = np.flatnonzero(vis)
         rows = _interp_build_rows(t[k], t_end_c[k], done[k], mv[k], side[k],
                                   vol_ratio[k], spd_ratio[k], rb[k], ra[k], buy_r[k], sell_r[k],
                                   float(config.SPEED_FLAT_TICKS), float(config.INTERP_WEAK_BELOW),
                                   int(config.INTERP_MAX_ROWS), now=now, live=live,
-                                  px_start=(px0[k] if px0.size == t.size else None),
-                                  px_end=(px1[k] if px1.size == t.size else None), px_dec=_dec)
+                                  px_start=px0[k], px_end=px1[k], px_dec=_dec)
         p.setRows(rows)
 
     def _stack_axis_sync(self) -> None:
