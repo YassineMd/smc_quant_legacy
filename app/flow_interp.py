@@ -84,29 +84,92 @@ def _ratio_text(r: float) -> str:
     return ("%.2f" % r) if r < 10 else ("%.0f" % r)
 
 
-def prev_ratio(vals, done, n_base: int, min_n: int):
-    """Each finished cycle's value over the MEDIAN of the PREVIOUS n_base cycles.
+def prev_ratio(vals, done, n_base: int, min_n: int, include_open: bool = False):
+    """Each cycle's value over the MEDIAN of the PREVIOUS n_base cycles.
 
     Not same-side: total aggressive flow and the book both exist in every cycle, so the natural baseline is
-    simply what came before -- the Book pane's rule. (The SPEED ratio is same-side, and it comes in already
-    computed by the Speed pane, so the two panes cannot disagree.)"""
+    simply what came before -- the Book pane's rule.
+
+    `include_open` rates the cycle STILL FORMING against that same baseline, from what has accumulated so
+    far, so the feed can name a state while it is happening (user 2026-09-11). An unfinished cycle is never
+    APPENDED to the history whichever way the flag is set: a partial cycle is not a normal, and letting one
+    in would drag every later reading toward a half-formed value."""
     n = int(np.size(vals))
     out = np.full(n, np.nan)
     if n == 0:
         return out
     v = np.asarray(vals, dtype=np.float64)
     dn = np.asarray(done, dtype=bool)
-    hist: list[float] = []
+    hist = []
     nb = max(1, int(n_base)); mn = max(1, int(min_n))
     for k in range(n):
-        if not (dn[k] and np.isfinite(v[k]) and v[k] > 0):
+        if not (bool(dn[k]) or include_open):
+            continue
+        if not (np.isfinite(v[k]) and v[k] > 0):
             continue
         if len(hist) >= mn:
             base = float(np.median(hist[-nb:]))
             if base > 0:
                 out[k] = v[k] / base
-        hist.append(float(v[k]))
+        if dn[k]:
+            hist.append(float(v[k]))
     return out
+
+
+def same_side_ratio(vals, is_dom_buy, done, n_base: int, min_n: int, include_open: bool = False):
+    """The Speed pane's rule -- each cycle against the SAME side's previous n_base -- with the open cycle
+    optionally rated too.
+
+    Identical to the terminal's own _same_side_ratio on FINISHED cycles, and a test gate holds the two to
+    each other. That includes its `v >= 0` guard: zero is a legitimate speed, and requiring v > 0 silently
+    dropped exactly the cycles the FLAT class exists to show. The open cycle enters no side's history."""
+    n = int(np.size(done))
+    out = np.full(n, np.nan)
+    if n == 0:
+        return out
+    v = np.asarray(vals, dtype=np.float64)
+    dn = np.asarray(done, dtype=bool)
+    db = np.asarray(is_dom_buy, dtype=bool)
+    hist = {True: [], False: []}
+    nb = max(1, int(n_base)); mn = max(1, int(min_n))
+    for k in range(n):
+        if not (bool(dn[k]) or include_open):
+            continue
+        if not (np.isfinite(v[k]) and v[k] >= 0):
+            continue
+        h = hist[bool(db[k])]
+        if len(h) >= mn:
+            base = float(np.median(h[-nb:]))
+            if base > 0:
+                out[k] = v[k] / base
+        if dn[k]:
+            h.append(float(v[k]))
+    return out
+
+
+def _quadrant(heavy, big, up, dom_buy):
+    """The user's quadrant map. Breakout and vacuum name the direction PRICE went; absorption names the side
+    doing the AGGRESSING -- the one being absorbed -- which is the cycle's own dominance flag, i.e. exactly
+    what the vertical line's colour already shows."""
+    if heavy and big:
+        return ST_BREAK, ("buy" if up else "sell")
+    if heavy:
+        return ST_ABSORB, ("buy" if dom_buy else "sell")
+    if big:
+        return ST_VACUUM, ("buy" if up else "sell")
+    return ST_QUIET, ""
+
+
+def _line1(vr_k, buy_ratio, sell_ratio, k):
+    return "flow %sx   buy %s  sell %s" % (_ratio_text(vr_k), _ratio_text(_at(buy_ratio, k)),
+                                           _ratio_text(_at(sell_ratio, k)))
+
+
+def _line2(bid_ratio, ask_ratio, k, mv_k, flat_k, big_k):
+    """The user's five columns finish here: bid book, ask book, then the move and how fast it got there."""
+    spd = "flat" if flat_k else ("fast" if big_k else "slow")
+    return "bid %s  ask %s%s%+dt %s" % (_ratio_text(_at(bid_ratio, k)), _ratio_text(_at(ask_ratio, k)),
+                                        " " * 4, int(round(mv_k)), spd)
 
 
 def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
@@ -130,7 +193,8 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
     heavy = vr > 1.0
     big = (sr > 1.0) & ~flat
     up = mv > 0
-    ok = np.isfinite(vr) & np.isfinite(sr) & dn
+    rateable = np.isfinite(vr) & np.isfinite(sr)
+    ok = rateable & dn
     # distance from the crosshair, in log2 units, on whichever axis is the WEAKER of the two -- a cycle only
     # earns a confident label if BOTH axes are clear of their baseline
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -149,36 +213,32 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
             # actually contains the live edge is the open cycle real.
             if not live:
                 continue
-            # still forming: elapsed time only, and NO state -- it has not finished, so nothing to classify
-            el = max(0.0, (float(now) if now is not None else time.time()) - t0)
-            rows.append((t0, t0 + el, "%s - ... - %s" % (_clock(t0), dur_text(el)),
-                         "forming", "", "", ST_FORMING, False))
+            # The RUNNING interpretation (user 2026-09-11): rate what has accumulated SO FAR against the same
+            # baselines the finished cycles use, and name the state while it is happening. It is tagged
+            # "forming" and never counts as settled -- a cycle that is heavy-and-fast at 30 s can still end
+            # heavy-and-flat. t_end arrives clamped to now, so the elapsed here is the real one.
+            el = max(0.0, t1 - t0) if t1 > t0 else max(
+                0.0, (float(now) if now is not None else time.time()) - t0)
+            head = "%s - ... - %s" % (_clock(t0), dur_text(el))
+            if not rateable[k]:
+                rows.append((t0, t0 + el, head, "forming", "", "", ST_FORMING, False, False))
+                continue
+            st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
+            rows.append((t0, t0 + el, head, STATE_NAME[st] + ((" " + side) if side else ""),
+                         _line1(vr[k], buy_ratio, sell_ratio, k),
+                         _line2(bid_ratio, ask_ratio, k, mv[k], flat[k], big[k]),
+                         st, bool(conf[k] >= float(weak_below)), True))
             continue
         if not ok[k]:
             rows.append((t0, t1, "%s - %s - %s" % (_clock(t0), _clock(t1), dur_text(t1 - t0)),
-                         "-", "not enough history yet", "", ST_QUIET, False))
+                         "-", "not enough history yet", "", ST_QUIET, False, False))
             continue
-        if heavy[k] and big[k]:
-            st = ST_BREAK; side = "buy" if up[k] else "sell"
-        elif heavy[k]:
-            # absorption names the side doing the AGGRESSING -- the one being absorbed. That is the cycle's own
-            # dominance flag, which is what the vertical line's colour already shows.
-            st = ST_ABSORB; side = "buy" if sd[k] else "sell"
-        elif big[k]:
-            st = ST_VACUUM; side = "buy" if up[k] else "sell"
-        else:
-            st = ST_QUIET; side = ""
-        strong = bool(conf[k] >= float(weak_below))
-        name = STATE_NAME[st] + ((" " + side) if side else "")
-        spd = "flat" if flat[k] else ("fast" if big[k] else "slow")
-        # the user's five columns, in their own order: buy vol, sell vol, bid book, ask book, price -- with the
-        # TOTAL flow rate in front, because that total is what actually chose the state
-        d1 = "flow %sx   buy %s  sell %s" % (_ratio_text(vr[k]),
-                                             _ratio_text(_at(buy_ratio, k)), _ratio_text(_at(sell_ratio, k)))
-        d2 = "bid %s  ask %s%s%+dt %s" % (_ratio_text(_at(bid_ratio, k)), _ratio_text(_at(ask_ratio, k)),
-                                          " " * 4, int(round(mv[k])), spd)
+        st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
         rows.append((t0, t1, "%s - %s - %s" % (_clock(t0), _clock(t1), dur_text(t1 - t0)),
-                     name, d1, d2, st, strong))
+                     STATE_NAME[st] + ((" " + side) if side else ""),
+                     _line1(vr[k], buy_ratio, sell_ratio, k),
+                     _line2(bid_ratio, ask_ratio, k, mv[k], flat[k], big[k]),
+                     st, bool(conf[k] >= float(weak_below)), False))
     return rows
 
 
@@ -295,7 +355,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         last = min(len(self._rows), first + h // self.ROW_H + 2)
         x = self.PAD
         for i in range(int(first), int(last)):
-            t0, t1, head, name, d1, d2, st, strong = self._rows[i]
+            t0, t1, head, name, d1, d2, st, strong, forming = self._rows[i]
             y = y_top + i * self.ROW_H
             if y > h or y + self.ROW_H < 20:
                 continue
@@ -306,7 +366,15 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             bar = QtGui.QColor(STATE_COL[st])
             if not strong:
                 bar.setAlpha(105)
-            p.fillRect(x, y + 3, 4 if strong else 2, self.ROW_H - 12, bar)
+            if forming:
+                # dashes, not a solid rule: the cycle is still open and this reading is not final
+                _w = 4 if strong else 2
+                _y = y + 3
+                while _y < y + self.ROW_H - 12:
+                    p.fillRect(x, _y, _w, 5, bar)
+                    _y += 9
+            else:
+                p.fillRect(x, y + 3, 4 if strong else 2, self.ROW_H - 12, bar)
             p.setFont(self._f_head); p.setPen(dim)
             p.drawText(x + 12, y + 14, head)
             tc = QtGui.QColor(STATE_TXT[st])
@@ -314,10 +382,14 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
                 tc.setAlpha(150)
             p.setFont(self._f_name); p.setPen(tc)
             p.drawText(x + 12, y + 30, name)
-            if not strong and st != ST_FORMING and name != "-":
+            # a running read is tagged "forming" -- it is the live state of an unfinished cycle and can
+            # still change -- and a settled one near its own baseline is tagged "weak"
+            _tag = "forming" if forming else ("" if (strong or st == ST_FORMING or name == "-") else "weak")
+            if _tag:
                 fm = QtGui.QFontMetrics(self._f_name)
-                p.setFont(self._f_head); p.setPen(dim)
-                p.drawText(x + 18 + fm.horizontalAdvance(name), y + 30, "weak")
+                p.setFont(self._f_head)
+                p.setPen(QtGui.QColor(STATE_TXT[st]) if forming else dim)
+                p.drawText(x + 18 + fm.horizontalAdvance(name), y + 30, _tag)
             if d1:
                 p.setFont(self._f_det); p.setPen(det)
                 p.drawText(x + 12, y + 44, d1)

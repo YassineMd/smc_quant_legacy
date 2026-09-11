@@ -38,7 +38,8 @@ from .heatmap import (HeatmapCache, TradeBubbleCache, decode_col, decode_grid,
                       decode_trades, neon_diverging_lut, percentile_levels)
 
 from . import bucket_state, config, flow_pane, region_state, vpin_adaptive
-from .flow_interp import FlowInterpPanel, build_rows as _interp_build_rows, prev_ratio as _interp_prev
+from .flow_interp import (FlowInterpPanel, build_rows as _interp_build_rows, prev_ratio as _interp_prev,
+                          same_side_ratio as _interp_side_ratio)
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
 from .paper_account import PaperAccount
@@ -17716,6 +17717,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         curr_vol is unchanged, the sig matches, and we skip the entire render loop
         — idle CPU overhead drops to zero while depth/OI pulses keep flowing.
         """
+        try:
+            # Re-checked per frame, and in EVERY mode: at show() time the splitter has usually not laid the
+            # new child out yet -- sizes() reads 0 -- so the owner would be picked from a layout that does not
+            # exist and the memo would freeze that choice. Early-returns unless the owner actually changed.
+            self._stack_axis_sync()
+        except Exception:
+            pass
         if self.scanner_mode == "depth_heatmap":
             self._scan_depth_heatmap()   # time-driven, its own canvas — bypass the bucket pipeline entirely
             return
@@ -18239,52 +18247,64 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # the view must actually REACH the live edge for the open cycle to be a real forming cycle
         live = bool(vx1 >= now - float(config.CYCLE_RECALC_SECS) - 2.0)
         _form = float(now - t[-1]) if (live and t.size and not bool(done[-1])) else 0.0
-        sig = (nvis, round(float(t[-1]), 2), int(self._flow_win), int(_form // 5), live,
+        sig = (nvis, round(float(t[-1]), 2), int(self._flow_win), int(_form // 2), live,
                int(len(getattr(self, "_lob_cache", {}) or {})) // 8)
         if sig == self._interp_sig:
             return
         self._interp_sig = sig
         side, _rate, _st = self._cycle_impact(is_buy, strong, move, cbuy, csell)
-        dur = np.maximum(t_end - t, 1e-9)
         mv = np.nan_to_num(move, nan=0.0)
-        # $ PER SECOND, never total $: the total shares ~50% of its variance with the cycle's LENGTH
+        t_end_c = np.array(t_end, dtype=np.float64, copy=True)
+        if t.size and not bool(done[-1]):
+            # the open cycle's t_end is the READ's right edge, and the user can pan RIGHT past the live edge --
+            # which would stretch its duration into the future and understate every rate. Clamp it to now.
+            t_end_c[-1] = max(float(t[-1]), min(float(now), float(t_end_c[-1])))
+        dur = np.maximum(t_end_c - t, 1e-9)
+        # $ PER SECOND, never total $: the total shares ~50% of its variance with the cycle's LENGTH.
+        # include_open rates the cycle still FORMING from what it has so far, without ever letting a
+        # half-formed cycle into anyone's baseline.
         vol_ratio = _interp_prev((np.maximum(cbuy, 0.0) + np.maximum(csell, 0.0)) / dur, done,
-                                 int(config.INTERP_BASE_N), int(config.INTERP_MIN_N))
-        spd_ratio = self._same_side_ratio(np.abs(mv) / dur, side, done,
-                                          int(config.SPEED_BASE_N), int(config.SPEED_MIN_N))
+                                 int(config.INTERP_BASE_N), int(config.INTERP_MIN_N), include_open=True)
+        spd_ratio = _interp_side_ratio(np.abs(mv) / dur, side, done,
+                                       int(config.SPEED_BASE_N), int(config.SPEED_MIN_N), include_open=True)
         try:
-            bm, am = self._lob_cycle_means(t, t_end)
-            rb = self._lob_ratio(bm, done, int(config.LOB_BASE_N), int(config.LOB_MIN_N))
-            ra = self._lob_ratio(am, done, int(config.LOB_BASE_N), int(config.LOB_MIN_N))
+            bm, am = self._lob_cycle_means(t, t_end_c)
+            rb = self._lob_ratio(bm, done, int(config.LOB_BASE_N), int(config.LOB_MIN_N),
+                                 include_open=True)
+            ra = self._lob_ratio(am, done, int(config.LOB_BASE_N), int(config.LOB_MIN_N),
+                                 include_open=True)
         except Exception:
             rb = ra = np.full(int(t.size), np.nan)
         # the per-side rates are EVIDENCE beside the state, not inputs to it: measured, they pick the same side
         # as the cycle's own dominance flag only 60% of the time, so they say something the flag does not
         buy_r = _interp_prev(np.maximum(cbuy, 0.0) / dur, done,
-                             int(config.INTERP_BASE_N), int(config.INTERP_MIN_N))
+                             int(config.INTERP_BASE_N), int(config.INTERP_MIN_N), include_open=True)
         sell_r = _interp_prev(np.maximum(csell, 0.0) / dur, done,
-                              int(config.INTERP_BASE_N), int(config.INTERP_MIN_N))
+                              int(config.INTERP_BASE_N), int(config.INTERP_MIN_N), include_open=True)
         k = np.flatnonzero(vis)
-        rows = _interp_build_rows(t[k], t_end[k], done[k], mv[k], side[k],
+        rows = _interp_build_rows(t[k], t_end_c[k], done[k], mv[k], side[k],
                                   vol_ratio[k], spd_ratio[k], rb[k], ra[k], buy_r[k], sell_r[k],
                                   float(config.SPEED_FLAT_TICKS), float(config.INTERP_WEAK_BELOW),
                                   int(config.INTERP_MAX_ROWS), now=now, live=live)
         p.setRows(rows)
 
-    def _flow_axis_sync(self) -> None:
+    def _stack_axis_sync(self) -> None:
         """ONE clock axis for the whole stack, on the BOTTOM-MOST visible pane (user 2026-09-11).
 
-        Every Flow pane is x-linked to the same view, so N copies of the axis spend N x ~22 px of chart height
-        restating one number. Walk splitter_v in VISUAL order, give the axis to the last pane that is both
-        visible AND has real pixels, and hide it on everyone above. A pane collapsed to a sliver is skipped on
-        purpose: handing the one clock to a 0 px child would leave the stack with no clock at all.
+        EVERY child of splitter_v shares one X by construction -- the Flow panes via setXLink, the Mode-10
+        panes (CVD, Volume, VPIN) via the per-frame mirror in _scan_bucket_canvas -- and all of them are built
+        with the same LocalTimeAxis. So N panes meant N copies of one number, each costing ~22 px of chart
+        height. The rule therefore belongs to the SPLITTER, not to a mode: the first cut gated it to Flow and
+        left the Mode-10 stack repeating its clock exactly as before.
 
-        Cheap by construction -- it early-returns unless the OWNER changed, so the per-drag calls cost a
-        sizes() read and nothing else. show/hideAxis triggers a relayout, which is exactly why this must not
-        fire on every splitterMoved pixel.
+        Walk splitter_v in VISUAL order, give the axis to the last pane that is both visible AND has real
+        pixels, and hide it on everyone above. A pane collapsed to a sliver is skipped on purpose: handing the
+        one clock to a 0 px child would leave the stack with no clock at all. With every sub-pane collapsed --
+        the Mode-10 default -- the owner is the main chart, so nothing changes for anyone who never opens one.
 
-        Outside Flow mode every pane gets its own axis back: the Mode-10 panes are not x-linked to one clock,
-        so there each axis means something different."""
+        Cheap by construction: it early-returns unless the OWNER changed, so the per-frame and per-drag calls
+        cost a sizes() read and nothing else. show/hideAxis triggers a relayout, which is exactly why it must
+        not fire on every frame or every splitterMoved pixel."""
         sp = getattr(self, "splitter_v", None)
         if sp is None:
             return
@@ -18308,14 +18328,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     owner, oi = wdg, i
         if owner is None:
             return
-        flow = (getattr(self, "scanner_mode", "") == "flow")
-        key = (flow, oi, len(rows))
+        key = (oi, len(rows))
         if key == getattr(self, "_flow_axis_key", None):
             return
         self._flow_axis_key = key
         for _i, wdg, _live in rows:
             try:
-                if (not flow) or (wdg is owner):
+                if wdg is owner:
                     wdg.showAxis("bottom")
                 else:
                     wdg.hideAxis("bottom")
@@ -18334,7 +18353,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._liq_plot.setVisible(False)
             except RuntimeError:                     # the splitter was torn down under us -> nothing to hide
                 self._liq_plot = None; self._liq_curves = None; self._liq_vb = None
-        self._flow_axis_sync()
+        self._stack_axis_sync()
 
     def _liq_tick(self, now: float) -> None:
         """Per frame in Flow mode: keep the live edge fresh, ask for a new window when the view settles, draw."""
@@ -18549,7 +18568,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._spd_plot.setVisible(False)
             except RuntimeError:
                 self._spd_plot = None; self._spd_items = None; self._spd_vb = None
-        self._flow_axis_sync()
+        self._stack_axis_sync()
 
     def _spd_hide_cursor(self) -> None:
         for _it in (self._spd_hline, self._spd_tag, self._spd_time_tag):
@@ -18787,7 +18806,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._lob_plot.setVisible(False)
             except RuntimeError:
                 self._lob_plot = None; self._lob_items = None; self._lob_vb = None
-        self._flow_axis_sync()
+        self._stack_axis_sync()
 
     def _lob_hide_cursor(self) -> None:
         for _it in (self._lob_hline, self._lob_tag, self._lob_time_tag):
@@ -18860,21 +18879,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return bm, am
 
     @staticmethod
-    def _lob_ratio(vals, done, n_base, min_n):
+    def _lob_ratio(vals, done, n_base, min_n, include_open=False):
         """Each cycle's book level over the MEDIAN of the previous `n_base` cycles' -- BOTH sides are present in
         every cycle, so unlike the taker-volume pane the baseline is simply the previous cycles, not the
-        previous ones of the same side."""
+        previous ones of the same side.
+
+        `include_open` rates the cycle still FORMING so the Interpretation feed can show its book alongside a
+        running state; the Book pane keeps the default and is unchanged. An unfinished cycle is never appended
+        to the baseline either way."""
         out = np.full(int(np.size(vals)), np.nan)
         hist = []
         for k in range(out.size):
             v = float(vals[k])
-            if not (bool(done[k]) and np.isfinite(v) and v > 0):
+            if not (bool(done[k]) or include_open):
+                continue
+            if not (np.isfinite(v) and v > 0):
                 continue
             if len(hist) >= int(min_n):
                 base = float(np.median(hist[-int(n_base):]))
                 if base > 0:
                     out[k] = v / base
-            hist.append(v)
+            if bool(done[k]):
+                hist.append(v)
         return out
 
     def _lob_tick(self, now: float) -> None:
@@ -19056,7 +19082,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._cvol_plot.setVisible(False)
             except RuntimeError:
                 self._cvol_plot = None; self._cvol_items = None; self._cvol_vb = None
-        self._flow_axis_sync()
+        self._stack_axis_sync()
 
     def _cvol_hide_cursor(self) -> None:
         for _it in (self._cvol_hline, self._cvol_tag, self._cvol_time_tag):
@@ -19263,7 +19289,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._cyc_plot.setVisible(False)
             except RuntimeError:
                 self._cyc_plot = None; self._cyc_items = None; self._cyc_vb = None
-        self._flow_axis_sync()
+        self._stack_axis_sync()
 
     def _cyc_hide_cursor(self) -> None:
         for it in (self._cyc_hline, self._cyc_tag, self._cyc_time_tag):
@@ -19618,6 +19644,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._interp_tick(now)      # Interpretation feed -- same crosses() read, so a memo hit
         except Exception:
             pass
+
 
     def _flow_draw(self, now: float) -> None:
         """The two curves. Follows the live edge until the user pans away; y auto-fits from 0 with a dead-band so it
@@ -21859,7 +21886,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # other in lock-step, so the COB bottom always coincides with the price-pane bottom.
         self.splitter_v.splitterMoved.connect(self._sync_pane_split)
         # collapsing the bottom pane must hand the one clock axis back up the stack (no-op unless it changed)
-        self.splitter_v.splitterMoved.connect(lambda *_a: self._flow_axis_sync())
+        self.splitter_v.splitterMoved.connect(lambda *_a: self._stack_axis_sync())
         self.cob_col.splitterMoved.connect(self._sync_pane_split)
         # VPIN sub-pane COLLAPSED by default (divider dragged all the way down) — the price pane gets the full
         # height; drag the handle up to reveal the toxicity heatmap. Deferred so the splitter is laid out
@@ -22054,6 +22081,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._splitter_v_set(sz)
         if self.cob_col is not None:
             self.cob_col.setSizes(sz)
+        self._stack_axis_sync()
 
     def _show_vol_pane(self) -> None:
         """Give the Volume pane a usable slice when toggled ON (it sits collapsed at 0 until then). Grows ONLY the
@@ -22069,6 +22097,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._splitter_v_set(sz)
         if self.cob_col is not None:
             self.cob_col.setSizes(sz)
+        self._stack_axis_sync()
 
     def _on_vol_manual_range(self, *args) -> None:
         """User zoomed/panned the Volume pane by hand -> stop auto-fitting its Y (they own it). Double-click re-arms."""
