@@ -284,6 +284,21 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
     return rows
 
 
+class _LookbackEdit(QtWidgets.QLineEdit):
+    """The inline number editor. Escape is handled HERE rather than through an event filter on the panel:
+    instrumented inside the running terminal, that filter only ever received ShortcutOverride, never the
+    KeyPress, so Escape silently did nothing."""
+
+    escaped = QtCore.Signal()
+
+    def keyPressEvent(self, ev):
+        if ev.key() == QtCore.Qt.Key_Escape:
+            ev.accept()
+            self.escaped.emit()
+            return
+        super().keyPressEvent(ev)
+
+
 class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
     """A vertical feed of cycle interpretations, newest at the top.
 
@@ -320,7 +335,8 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         self._f_lb = QtGui.QFont(); self._f_lb.setPointSize(8); self._f_lb.setBold(True)
         self._f_lbv = QtGui.QFont(); self._f_lbv.setPointSize(11); self._f_lbv.setBold(True)
         self._lb = 5                    # the cycle lookback, drawn in the footer band
-        self._lb_hover = 0              # -1 over the left chevron, +1 over the right, 0 neither
+        self._lb_hover = 0              # -1 over the left chevron, +1 over the right, +2 over the number
+        self._lb_edit = None            # the inline editor, built the first time the number is clicked
         self.title = "INTERPRETATION"      # the terminal replaces this with config.PANE_TITLE_INTERP, the
         #                                    same string its hamburger toggle carries
 
@@ -352,11 +368,60 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         w = self.viewport().width(); h = self.viewport().height()
         band = QtCore.QRect(0, h - self.FOOT_H, w, self.FOOT_H)
         r = 22                                          # chevron hit box, comfortably clickable
-        vx = w - self.PAD - r - 34
+        vw = 46                                         # the number: wide enough for three digits
+        vx = w - self.PAD - r - vw
         return (band,
                 QtCore.QRect(vx - r, band.y() + 2, r, self.FOOT_H - 4),
-                QtCore.QRect(vx, band.y() + 2, 34, self.FOOT_H - 4),
-                QtCore.QRect(vx + 34, band.y() + 2, r, self.FOOT_H - 4))
+                QtCore.QRect(vx, band.y() + 2, vw, self.FOOT_H - 4),
+                QtCore.QRect(vx + vw, band.y() + 2, r, self.FOOT_H - 4))
+
+    # ---- typing the number ------------------------------------------------------------------------------
+    def _begin_edit(self) -> None:
+        """Click the number and type one. The chevrons nudge; this is for jumping straight to a value."""
+        _b, _l, vrect, _r = self._foot_rects()
+        if self._lb_edit is None:
+            e = _LookbackEdit(self.viewport())
+            e.setFont(self._f_lbv)
+            e.setAlignment(QtCore.Qt.AlignCenter)
+            e.setFrame(False)
+            e.setValidator(QtGui.QIntValidator(self.LB_MIN, self.LB_MAX, e))
+            e.returnPressed.connect(self._commit_edit)
+            e.editingFinished.connect(self._commit_edit)
+            e.escaped.connect(self._abandon_edit)   # Escape abandons rather than commits
+            self._lb_edit = e
+        e = self._lb_edit
+        e.setStyleSheet(
+            "QLineEdit { color: %s; background: %s; border: 1px solid %s; selection-background-color: %s; }"
+            % ("#e6ebf0" if self._dark else "#1a1a1a", "#1b2026" if self._dark else "#eef1f4",
+               "#3a434c" if self._dark else "#c9d0d6", "#3a6ea5"))
+        e.setGeometry(vrect)
+        e.setText(str(self._lb))
+        e.show(); e.raise_(); e.setFocus(QtCore.Qt.MouseFocusReason); e.selectAll()
+
+    def _commit_edit(self) -> None:
+        e = self._lb_edit
+        if e is None or not e.isVisible():
+            return
+        txt = e.text().strip()
+        e.hide()
+        self.viewport().update()
+        if not txt:
+            return
+        try:
+            v = int(txt)
+        except ValueError:
+            return
+        v = max(self.LB_MIN, min(self.LB_MAX, v))
+        if v != self._lb:
+            self._lb = v
+            self.viewport().update()
+            self.lookbackChanged.emit(v)
+
+    def _abandon_edit(self) -> None:
+        """Escape: close the editor and leave the value exactly as it was."""
+        if self._lb_edit is not None:
+            self._lb_edit.hide()
+            self.viewport().update()
 
     def _draw_footer(self, p, w, h):
         band, lrect, vrect, rrect = self._foot_rects()
@@ -375,16 +440,46 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             col = ("#d7dde3" if self._dark else "#333333") if live else ("#3d444b" if self._dark else "#cccccc")
             p.setFont(self._f_lbv); p.setPen(QtGui.QColor(col))
             p.drawText(rect, QtCore.Qt.AlignCenter, ch)
-        p.setFont(self._f_lbv)
-        p.setPen(QtGui.QColor("#e6ebf0" if self._dark else "#1a1a1a"))
-        p.drawText(vrect, QtCore.Qt.AlignCenter, str(self._lb))
+        if self._lb_edit is None or not self._lb_edit.isVisible():
+            if self._lb_hover == 2:
+                # a hairline under the number: the only hint it can be typed into
+                p.fillRect(vrect, QtGui.QColor(255, 255, 255, 16) if self._dark
+                           else QtGui.QColor(0, 0, 0, 12))
+                p.setPen(QtGui.QColor("#6f7a82" if self._dark else "#9a9a9a"))
+                p.drawLine(vrect.x() + 6, vrect.bottom() - 2, vrect.right() - 6, vrect.bottom() - 2)
+            p.setFont(self._f_lbv)
+            p.setPen(QtGui.QColor("#e6ebf0" if self._dark else "#1a1a1a"))
+            p.drawText(vrect, QtCore.Qt.AlignCenter, str(self._lb))
+
+    LB_TIP = ("<b>Cycle lookback</b><br>How many previous cycles every rating is measured against."
+              "<br><br>One knob for the whole family: <b>CYCLE VOLUME</b>, <b>CYCLE BOOK</b>, "
+              "<b>CYCLE SPEED</b> and the states in this feed. Volume and Speed use the last N of the "
+              "<i>same side</i>, so they reach about twice as far back in time."
+              "<br><br>Click the number to type one, or use the chevrons."
+              "<br><br>Smaller reacts faster and is noisier; larger is steadier. Measured over 20 h, the mix "
+              "shifts with it: BREAKOUT is 27% of cycles at 5 and 40% at 100, because a longer baseline is "
+              "smoother and 'heavier than usual' and 'faster than usual' then coincide more often. The band "
+              "cuts for the other panes were measured at 5.")
+
+    def event(self, ev):
+        """A tooltip over the footer only -- the rows below it have their own meaning and want no tooltip."""
+        if ev.type() == QtCore.QEvent.ToolTip:
+            pos = ev.pos()
+            if pos.y() >= self.viewport().height() - self.FOOT_H:
+                QtWidgets.QToolTip.showText(ev.globalPos(), self.LB_TIP, self)
+            else:
+                QtWidgets.QToolTip.hideText()
+            return True
+        return super().event(ev)
 
     def _foot_hit(self, pos) -> int:
-        _b, l, _v, r = self._foot_rects()
+        _b, l, v, r = self._foot_rects()
         if l.contains(pos):
             return -1
         if r.contains(pos):
             return 1
+        if v.contains(pos):
+            return 2                                 # the number itself: click to type
         return 0
 
     # ---- data -------------------------------------------------------------------------------------------
@@ -423,6 +518,8 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self._update_scroll()
+        if self._lb_edit is not None and self._lb_edit.isVisible():
+            self._lb_edit.setGeometry(self._foot_rects()[2])
 
     # ---- interaction ------------------------------------------------------------------------------------
     def _row_at(self, y: int) -> int:
@@ -445,6 +542,9 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
     def mousePressEvent(self, ev):
         pos = ev.position().toPoint()
         hv = self._foot_hit(pos)
+        if hv == 2:
+            self._begin_edit()
+            return
         if hv:
             self._bump(hv)
             return

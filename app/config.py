@@ -312,7 +312,18 @@ INTERP_WEAK_BELOW = 0.35        # log2 distance from the crosshair, on the WEAKE
 # So the cuts keep their meaning across the range; BOOK degrades the most and is the one to watch.
 CYCLE_BASE_N = 5
 CYCLE_BASE_N_MIN = 2
-CYCLE_BASE_N_MAX = 20
+CYCLE_BASE_N_MAX = 200          # NOT a measurement artifact this time. The cold crosses() read is driven by
+                                # the WINDOW, not by N -- measured on 20 h of live tape: 1 h 0.39 ms, 4 h
+                                # 0.87, 10 h 2.35, 20 h 6.30. Scaling the window as N/5 made the cost track N,
+                                # which was the only thing a cap was ever protecting. The window is bounded
+                                # below instead, so the cost is flat in N and N can be whatever is useful.
+                                # ⚠ The mix DOES shift with N, and that is real rather than a bug: over the
+                                # same 20 h the feed reads BREAKOUT 27.5% at N=5, 29.5% at 20, 33.8% at 50 and
+                                # 40.5% at 100. A longer baseline is smoother, so "heavier than usual" and
+                                # "faster than usual" coincide more often. It is a different question, not a
+                                # better answer.
+CYCLE_LOOKBACK_MAX_SECS = 12 * 3600.0   # 2.35 ms cold, so ~0.9% of a core at two reads per 0.5 s tick.
+                                # Past this the baseline uses however many cycles the window holds.
 
 
 def pane_titles(n=None):

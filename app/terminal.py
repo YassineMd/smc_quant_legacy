@@ -1192,6 +1192,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.interp_panel = FlowInterpPanel()    # Flow mode — right-side vertical feed, one row per cycle
         self.interp_panel._hint_w = int(config.INTERP_WIDTH)   # draggable: the widget bounds it 250..520 px
         self.interp_panel.title = config.pane_titles()["interp"]   # same words as its hamburger toggle
+        self.interp_panel.LB_MIN = int(config.CYCLE_BASE_N_MIN)     # one source for the range
+        self.interp_panel.LB_MAX = int(config.CYCLE_BASE_N_MAX)
         self.interp_panel.lookbackChanged.connect(self._on_lookback_changed)
         self.interp_panel.cycleClicked.connect(self._on_interp_cycle)
         self.splitter.addWidget(self.interp_panel)
@@ -18169,7 +18171,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         every other cycle and the 95th-percentile cycle is 287 s -- there N=10 already needs 5700 s, past the
         fixed hour this used to be. Every pane in the family calls THIS, so they all pass crosses() identical
         arguments and share one memo entry instead of forcing a second cold read each."""
-        return float(config.CVOL_LOOKBACK_SECS) * max(1.0, self._lb_n() / float(config.CYCLE_BASE_N))
+        return min(float(config.CYCLE_LOOKBACK_MAX_SECS),
+                   float(config.CVOL_LOOKBACK_SECS) * max(1.0, self._lb_n() / float(config.CYCLE_BASE_N)))
 
     def _on_lookback_changed(self, n: int) -> None:
         """The feed's bottom-right control. Every rating in the family is relative to the last N, so all four
