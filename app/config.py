@@ -279,11 +279,13 @@ SPEED_BADGE_TIERS = ((48.0, 1), (26.0, 2))      # "+fast" / "-slow" / "flat"
 # The BOOK and the per-side volumes are shown as EVIDENCE only: the table's full 5-cell signature scored
 # 1.00/4 against ~1.33/4 for chance, so it is not used to classify.
 INTERP_PANE_ON = True
-INTERP_WIDTH = 404              # measured: the price-move line needs 352 px at 8 pt. On the SAME line as
+INTERP_WIDTH = 440              # measured: the price-move line needs 352 px at 8 pt. On the SAME line as
                                 # the state name it needed 555, past the panel's own 520 maximum, so it gets
                                 # its own line and the panel gets the width that line actually needs.
                                 # 404 not 380: 'SELLER ABSORBED' + 'drifting down' on the state line
                                 # needs 376, and a 4 px margin is not a margin.
+                                # 440 not 404: 'Limit Buyers +30%' / 'Limit Sellers -12%' needs 423.
+                                # Dropping the second 'Limit' would fit 404 -- the user's wording won.
 INTERP_MAX_ROWS = 240           # the feed is capped, not the history: older cycles still feed every baseline
 INTERP_SPAN_SECS = 6 * 3600.0   # The feed is anchored at the LIVE EDGE and spans this, INDEPENDENT of the
                                 # chart's view: zooming or panning must not empty it (user 2026-09-11). That

@@ -238,10 +238,29 @@ def _line1(vr_k, buy_ratio, sell_ratio, k):
                                            _ratio_text(_at(sell_ratio, k)))
 
 
+def _pct_text(r) -> str:
+    """A ratio as a DEVIATION from its own baseline: 1.00 -> "0%", 1.02 -> "+2%", 0.94 -> "-6%".
+
+    Easier to read than a multiplier for something that hovers near 1: the book's whole range at the default
+    radius is roughly 0.90 to 1.11, which as multipliers all look alike. Exactly 0 prints bare, without a
+    "+", because "+0%" claims a direction it does not have."""
+    if not np.isfinite(r):
+        return "-"
+    p = (float(r) - 1.0) * 100.0
+    n = int(round(p))
+    return "0%" if n == 0 else "%+d%%" % n
+
+
 def _line2(bid_ratio, ask_ratio, k):
-    """The user's five columns finish here: bid book and ask book. The price move moved up beside the state
-    name, so it is not repeated down here."""
-    return "bid %s  ask %s" % (_ratio_text(_at(bid_ratio, k)), _ratio_text(_at(ask_ratio, k)))
+    """The user's last two columns, named for what they ARE (user 2026-09-12): resting bids are limit BUYERS
+    waiting to be hit, resting asks are limit SELLERS. "bid"/"ask" invited confusion with the aggressive
+    buy/sell figures on the line above, which are a different thing entirely.
+
+    Returned as TWO pieces, drawn at opposite ends of the line. Joined by a dash they need 462 px against a
+    404 px panel, and the dash collides with the "-" that means no reading:
+    `Limit Buyers -  -  Limit Sellers -`."""
+    return ("Limit Buyers %s" % _pct_text(_at(bid_ratio, k)),
+            "Limit Sellers %s" % _pct_text(_at(ask_ratio, k)))
 
 
 def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
@@ -294,7 +313,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                 0.0, (float(now) if now is not None else time.time()) - t0)
             head = "%s - ... - %s" % (_clock(t0), dur_text(el))
             if not rateable[k]:
-                rows.append((t0, t0 + el, head, "forming", "", "", ST_FORMING, False, False, C_FORMING, "", 0, ""))
+                rows.append((t0, t0 + el, head, "forming", "", ("", ""), ST_FORMING, False, False, C_FORMING, "", 0, ""))
                 continue
             st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
             _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
@@ -307,7 +326,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
             continue
         if not ok[k]:
             rows.append((t0, t1, "%s - %s - %s" % (_clock(t0), _clock(t1), dur_text(t1 - t0)),
-                         "-", "not enough history yet", "", ST_QUIET, False, False, C_QUIET, "", 0, ""))
+                         "-", "not enough history yet", ("", ""), ST_QUIET, False, False, C_QUIET, "", 0, ""))
             continue
         st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
         _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
@@ -674,9 +693,13 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             if d1:
                 p.setFont(self._f_det); p.setPen(det)
                 p.drawText(x + 12, y + 60, d1)
-            if d2:
+            if d2 and d2[0]:
+                # buyers left, sellers RIGHT-aligned -- see _line2 for why they are not one string
                 p.setFont(self._f_det); p.setPen(dim)
-                p.drawText(x + 12, y + 72, d2)
+                p.drawText(x + 12, y + 72, d2[0])
+                if d2[1]:
+                    p.drawText(w - self.PAD - QtGui.QFontMetrics(self._f_det).horizontalAdvance(d2[1]),
+                               y + 72, d2[1])
             # a hairline under each row: at four lines apiece the eye needs the grouping
             p.setPen(QtGui.QColor("#20262b" if self._dark else "#eeeeee"))
             p.drawLine(x, y + self.ROW_H - 5, w - self.PAD, y + self.ROW_H - 5)
