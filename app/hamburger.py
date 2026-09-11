@@ -294,6 +294,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     cyclePaneToggled = QtCore.Signal(bool)       # Cycle pane on/off (Flow mode)
     cvolPaneToggled = QtCore.Signal(bool)        # Volume pane on/off (Flow mode)
     lobPaneToggled = QtCore.Signal(bool)         # Book pane on/off (Flow mode)
+    spdPaneToggled = QtCore.Signal(bool)         # Speed pane on/off (Flow mode)
     cycleWinChanged = QtCore.Signal(float)       # the smoothing that defines a cycle boundary
     liqPaneToggled = QtCore.Signal(bool)          # resting-liquidity pane on/off (Flow mode)
     liqOptsChanged = QtCore.Signal(int, int)      # resting-liquidity pane: (radius ticks, smoothing seconds)
@@ -1677,6 +1678,18 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % config.LOB_BASE_N)
         self.lob_on.toggled.connect(lambda on: self.lobPaneToggled.emit(bool(on)))
         l4.addWidget(self.lob_on)
+        self.spd_on = QtWidgets.QCheckBox("Speed pane (how fast price moved vs its last %d)"
+                                          % config.SPEED_BASE_N)
+        self.spd_on.setChecked(bool(config.SPEED_PANE_ON))
+        self.spd_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.spd_on.setToolTip(
+            "One bar per finished cycle: how FAST price moved -- ticks per SECOND over the cycle -- against the "
+            "median of the same side's previous %d. The bar points the way price actually went; blue is slower "
+            "than usual for that side (a drift), grey normal, amber faster, and a dim bar is FLAT (under %.0f "
+            "tick, where the direction means nothing). Cuts are the measured terciles over 20 h."
+            % (config.SPEED_BASE_N, config.SPEED_FLAT_TICKS))
+        self.spd_on.toggled.connect(lambda on: self.spdPaneToggled.emit(bool(on)))
+        l4.addWidget(self.spd_on)
         self.flow_sec.addWidget(w4)
         self.flow_sec.addWidget(w2)
         root.addWidget(self.flow_sec)
@@ -1693,6 +1706,9 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def set_liq_pane_on(self, on: bool) -> None:
         self.liq_on.blockSignals(True); self.liq_on.setChecked(bool(on)); self.liq_on.blockSignals(False)
+
+    def set_spd_pane_on(self, on: bool) -> None:
+        self.spd_on.blockSignals(True); self.spd_on.setChecked(bool(on)); self.spd_on.blockSignals(False)
 
     def set_lob_pane_on(self, on: bool) -> None:
         self.lob_on.blockSignals(True); self.lob_on.setChecked(bool(on)); self.lob_on.blockSignals(False)

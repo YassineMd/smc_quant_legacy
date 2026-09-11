@@ -1790,6 +1790,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_tag = None           # right-axis readout, in MONEY (the pane plots resting $)
         self._liq_time_tag = None      # x-axis clock badge, same design as the price badge
         self._liq_proxy = None
+        self._spd_plot = None          # Speed pane (Flow mode): ticks/s this cycle vs the same side's last N
+        self._spd_vb = None
+        self._spd_items = None         # (slow, normal, fast, flat) BarGraphItems
+        self._spd_sig = None
+        self._spd_t = 0.0
+        self._spd_data = None
+        self._spd_on = bool(config.SPEED_PANE_ON)
+        self._spd_vline = None; self._spd_hline = None
+        self._spd_tag = None; self._spd_time_tag = None; self._spd_proxy = None
+        self._spd_title = None; self._spd_badge = None
         self._lob_plot = None          # Book pane (Flow mode): resting book per side vs the last N cycles
         self._lob_vb = None
         self._lob_items = None         # (low, normal, high) x (bid filled, ask hollow) BarGraphItems
@@ -2313,6 +2323,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_cycle_opts(bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)))
             self.menu.set_cvol_pane_on(bool(getattr(self, "_cvol_on", config.CVOL_PANE_ON)))
             self.menu.set_lob_pane_on(bool(getattr(self, "_lob_on", config.LOB_PANE_ON)))
+            self.menu.set_spd_pane_on(bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)))
             self.menu.set_liq_pane_on(bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)))
             self.menu.set_liq_opts(int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                                    int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)))
@@ -2570,6 +2581,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.cyclePaneToggled.connect(self._on_cyc_pane_toggled)            # Cycle pane on/off
         self.menu.cvolPaneToggled.connect(self._on_cvol_pane_toggled)            # Volume pane on/off
         self.menu.lobPaneToggled.connect(self._on_lob_pane_toggled)              # Book pane on/off
+        self.menu.spdPaneToggled.connect(self._on_spd_pane_toggled)              # Speed pane on/off
         self.menu.cycleWinChanged.connect(self._on_cyc_win)                      # cycle-defining window
         self.menu.liqPaneToggled.connect(self._on_liq_pane_toggled)              # resting-liquidity pane on/off
         self.menu.liqOptsChanged.connect(self._on_liq_opts)                      # resting-liquidity pane
@@ -4343,6 +4355,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()  # ... and the Cycle pane
         self._cvol_sync_vline(pt.x()); self._cvol_hide_cursor()   # ... and the Volume pane
         self._lob_sync_vline(pt.x()); self._lob_hide_cursor()     # ... and the Book pane
+        self._spd_sync_vline(pt.x()); self._spd_hide_cursor()     # ... and the Speed pane
         if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
             self.fp_panel.show_price_line(pt.y())
         self._radar_hover(pt)                                 # Order-Flow Walls radar -> P(resist) odds on hover
@@ -10332,6 +10345,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "cycle_on": bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)),
                 "cvol_on": bool(getattr(self, "_cvol_on", config.CVOL_PANE_ON)),
                 "lob_on": bool(getattr(self, "_lob_on", config.LOB_PANE_ON)),
+                "spd_on": bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)),
                 "liq_pane_on": bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)),
                 "liq_radius": int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                 "liq_smooth": int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)),
@@ -10453,6 +10467,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cyc_on = bool(s.get("cycle_on", config.CYCLE_PANE_ON))
         self._cvol_on = bool(s.get("cvol_on", config.CVOL_PANE_ON))
         self._lob_on = bool(s.get("lob_on", config.LOB_PANE_ON))
+        self._spd_on = bool(s.get("spd_on", config.SPEED_PANE_ON))
         self._liq_pane_on = bool(s.get("liq_pane_on", config.LIQ_PANE_ON))
         _lr = int(s.get("liq_radius", config.LIQ_RADIUS_TICKS) or config.LIQ_RADIUS_TICKS)
         _ls = int(s.get("liq_smooth", config.LIQ_SMOOTH_SECS) if s.get("liq_smooth") is not None else config.LIQ_SMOOTH_SECS)
@@ -16617,6 +16632,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._cvol_sig = None; self._cvol_t = 0.0
             self._lob_show(bool(getattr(self, "_lob_on", True)))
             self._lob_sig = None; self._lob_t = 0.0
+            self._spd_show(bool(getattr(self, "_spd_on", True)))
+            self._spd_sig = None; self._spd_t = 0.0
         # The loaded set moved, so EVERYTHING derived from it must re-derive — same invalidation the replay step does.
         # Without this the Pivot D/E marks (sig-gated on offset/range) and the selection kept their last values, so a
         # Start-Date / replay-cursor change only visibly took effect on the next right-arrow step.
@@ -17320,6 +17337,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._lob_vline = None; self._lob_hline = None
             self._lob_tag = None; self._lob_time_tag = None
             self._lob_title = None; self._lob_badge = None
+            self._spd_plot = None; self._spd_vb = None; self._spd_items = None
+            self._spd_sig = None; self._spd_sized = False; self._spd_proxy = None
+            self._spd_vline = None; self._spd_hline = None
+            self._spd_tag = None; self._spd_time_tag = None
+            self._spd_title = None; self._spd_badge = None
             self._cvol_title = None; self._cvol_badge = None
             self._cyc_title = None; self._cyc_badge = None
             self._liq_title = None
@@ -18235,6 +18257,242 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # CYCLE pane (Flow mode) -- one block per run where the same side owns the flow
     # ------------------------------------------------------------------
+    def _on_spd_pane_toggled(self, on: bool) -> None:
+        self._spd_on = bool(on)
+        self._spd_show(bool(on) and self.scanner_mode == "flow")
+        self._save_ui_state()
+
+    def _spd_ensure_pane(self):
+        if self._spd_plot is not None:
+            return self._spd_plot
+        try:
+            self._ensure_canvas_panes()
+        except Exception:
+            pass
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return None
+        ax = PriceAxis(orientation="right")
+        pw = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"), "right": ax})
+        pw.setBackground("#141414")
+        pw.showAxis("right"); pw.hideAxis("left")
+        for _a in ("bottom", "right"):
+            pw.getAxis(_a).setPen(pg.mkPen("#dcdcdc", width=1))
+            pw.getAxis(_a).setTextPen(pg.mkPen("#dcdcdc"))
+        pw.showGrid(x=False, y=False)
+        pw.setMenuEnabled(False)
+        pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        pw.getAxis("bottom").set_scanner_active(False)
+        ax.tickStrings = lambda vals, sc, sp_: ["%.2gx" % (2.0 ** v) for v in vals]
+        vb = pw.getViewBox()
+        vb.setMouseEnabled(x=True, y=True)
+        vb.setXLink(self.vb)
+        # FOUR BarGraphItems: slow / normal / fast / flat, one solid brush each. Grouping by CLASS is what keeps
+        # it to one brush apiece however many cycles are on screen, and there is no custom paint() (pyqtgraph's
+        # deviceTransform() inside paint() has segfaulted this terminal before).
+        items = []
+        for _c in (config.CVOL_LOW_COL, config.CVOL_MID_COL, config.CVOL_HIGH_COL, config.SPEED_FLAT_COL):
+            _col = QtGui.QColor(_c)
+            it = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
+                                 brush=pg.mkBrush(_col.red(), _col.green(), _col.blue(), 190),
+                                 pen=pg.mkPen(_col, width=1.0))
+            it.setZValue(5)
+            pw.addItem(it); items.append(it)
+        self._spd_items = tuple(items)
+        for _v in (float(np.log2(max(1e-9, config.SPEED_SLOW))), float(np.log2(max(1e-9, config.SPEED_FAST)))):
+            for _s in (_v, -_v):                     # the band is mirrored: the bar's SIGN is the direction
+                _p = pg.mkPen("#9aa4b2", width=1.0, style=QtCore.Qt.DashLine); _p.setCosmetic(True)
+                ln = pg.InfiniteLine(angle=0, pos=_s, pen=_p)
+                ln.setZValue(3); pw.addItem(ln, ignoreBounds=True)
+        _z = pg.InfiniteLine(angle=0, pos=0.0, pen=pg.mkPen("#8a8a8a", width=1))
+        _z.setZValue(2); pw.addItem(_z, ignoreBounds=True)
+        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
+        self._spd_vline = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
+        self._spd_hline = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
+        self._spd_vline.setZValue(15); self._spd_hline.setZValue(15)
+        pw.addItem(self._spd_vline, ignoreBounds=True); pw.addItem(self._spd_hline, ignoreBounds=True)
+        self._spd_hline.hide()
+        _tf = QtGui.QFont("Consolas", 8)
+        self._spd_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._spd_tag.textItem.setFont(_tf); self._spd_tag.setZValue(16)
+        pw.addItem(self._spd_tag, ignoreBounds=True); self._spd_tag.hide()
+        self._spd_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._spd_time_tag.textItem.setFont(_tf); self._spd_time_tag.setZValue(61)
+        pw.addItem(self._spd_time_tag, ignoreBounds=True); self._spd_time_tag.hide()
+        self._spd_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_spd_mouse_move)
+        self._spd_title = self._pane_title(pw, vb, "CYCLE SPEED  ·  ticks/s vs last %d" % config.SPEED_BASE_N)
+        self._spd_badge = CycleBadgesItem("top")
+        pw.addItem(self._spd_badge, ignoreBounds=True)
+        self._spd_plot = pw
+        self._spd_vb = vb
+        self._theme_sub_panes(not self._simple_bw())
+        sp.addWidget(pw)
+        pw.setMinimumHeight(60)
+        return pw
+
+    def _spd_show(self, on: bool) -> None:
+        if on:
+            if self._spd_ensure_pane() is None:
+                return
+            self._spd_plot.setVisible(True)
+            if self._sub_pane_grow(self._spd_plot, not getattr(self, "_spd_sized", False), share=0.13):
+                self._spd_sized = True
+        elif self._spd_plot is not None:
+            try:
+                self._spd_plot.setVisible(False)
+            except RuntimeError:
+                self._spd_plot = None; self._spd_items = None; self._spd_vb = None
+
+    def _spd_hide_cursor(self) -> None:
+        for _it in (self._spd_hline, self._spd_tag, self._spd_time_tag):
+            if _it is not None:
+                _it.hide()
+
+    def _spd_sync_vline(self, x: float) -> None:
+        if self._spd_vline is not None:
+            self._spd_vline.setPos(x)
+
+    def _on_spd_mouse_move(self, evt) -> None:
+        if self._spd_vb is None or self._spd_plot is None or not self._spd_plot.isVisible():
+            return
+        pos = evt[0]
+        if not self._spd_plot.sceneBoundingRect().contains(pos):
+            self._spd_hide_cursor()
+            return
+        pt = self._spd_vb.mapSceneToView(pos)
+        self._spd_vline.setPos(pt.x())
+        self._spd_hline.setPos(pt.y()); self._spd_hline.show()
+        (vx0, vx1), (vy0, vy1) = self._spd_vb.viewRange()
+        self._spd_tag.setText("%.2gx" % (2.0 ** abs(float(pt.y()))))
+        self._spd_tag.setPos(vx1, pt.y()); self._spd_tag.show()
+        _xl = self._x_time_label(pt.x())
+        if _xl:
+            self._spd_time_tag.setText(_xl); self._spd_time_tag.setPos(pt.x(), vy0); self._spd_time_tag.show()
+        else:
+            self._spd_time_tag.hide()
+        self.vline.setPos(pt.x())
+        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
+        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
+        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
+        self._cvol_sync_vline(pt.x()); self._cvol_hide_cursor()
+        self._lob_sync_vline(pt.x()); self._lob_hide_cursor()
+
+    @staticmethod
+    def _same_side_ratio(vals, is_dom_buy, done, n_base, min_n):
+        """Each finished cycle's value over the MEDIAN of the SAME side's previous `n_base`.
+
+        "the last 5 green cycles" is the user's own framing: a buy cycle is rated against buy cycles. Median,
+        not mean, because at n_base=5 one outlier would drag a mean around completely. Fed the PRE-CLIP arrays,
+        so the baseline does not change when the view moves."""
+        n = int(np.size(done))
+        out = np.full(n, np.nan)
+        if n == 0:
+            return out
+        v = np.asarray(vals, dtype=np.float64)
+        dn = np.asarray(done, dtype=bool)
+        db = np.asarray(is_dom_buy, dtype=bool)
+        hist = {True: [], False: []}
+        nb = max(1, int(n_base)); mn = max(1, int(min_n))
+        for k in range(n):
+            # ZERO is a legitimate value here, unlike a volume: a cycle that went nowhere HAS a speed, and it
+            # is 0. Requiring v > 0 silently dropped exactly the cycles the FLAT class exists to show.
+            if not (dn[k] and np.isfinite(v[k]) and v[k] >= 0):
+                continue
+            h = hist[bool(db[k])]
+            if len(h) >= mn:
+                base = float(np.median(h[-nb:]))
+                if base > 0:
+                    out[k] = v[k] / base
+            h.append(float(v[k]))
+        return out
+
+    def _spd_tick(self, now: float) -> None:
+        if self._spd_plot is None or not self._spd_plot.isVisible():
+            return
+        if now - self._spd_t < float(config.CYCLE_RECALC_SECS):
+            return
+        self._spd_t = now
+        (vx0, vx1), _ = self.vb.viewRange()
+        try:
+            # the SAME arguments the Volume pane reads with, so this is a memo hit rather than a second pass
+            self._spd_data = (vx0, self._flow.crosses(
+                vx0 - float(config.CVOL_LOOKBACK_SECS), vx1, float(self._flow_win),
+                float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE)))
+        except Exception:
+            return
+        self._spd_draw(now)
+
+    def _spd_draw(self, now: float) -> None:
+        """ONE BAR PER FINISHED CYCLE: how FAST price moved, against the same side's last N (user 2026-09-11).
+
+        The quantity is |ticks per second| over the cycle, because "drifting up" and "going up fast" differ by
+        speed, not distance -- 10 ticks over 300 s is a drift and 10 ticks over 30 s is not. The bar's SIGN is
+        the direction price actually went; its HEIGHT is log2 of the speed ratio; its COLOUR is the class.
+
+            blue   slower than usual for that side  (a drift)
+            gray   normal
+            amber  faster than usual
+            dim    FLAT -- under SPEED_FLAT_TICKS the direction is meaningless, so it is its own class
+
+        A green cycle is expected to end higher and a red one lower; a bar pointing the other way is a cycle
+        that went against its side, which the Cycle pane already colours orange.
+
+        The cuts are the measured terciles over 20 h (n=598), and only 8% of the ratio is shared with cycle
+        duration -- so unlike the Volume pane this is not the bar's WIDTH restated."""
+        if self._spd_data is None or self._spd_items is None:
+            return
+        vx0, (t, is_buy, strong, move, cbuy, csell, t_end, done) = self._spd_data
+        if t.size == 0:
+            for it in self._spd_items:
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            self._spd_sig = ("empty",)
+            return
+        side, _rate, _state = self._cycle_impact(is_buy, strong, move, cbuy, csell)
+        dur = np.maximum(t_end - t, 1e-9)
+        mv = np.nan_to_num(move, nan=0.0)
+        speed = np.abs(mv) / dur
+        ratio = self._same_side_ratio(speed, side, done, config.SPEED_BASE_N, config.SPEED_MIN_N)
+        flat = np.abs(mv) < float(config.SPEED_FLAT_TICKS)
+        keep = (t >= vx0) & np.isfinite(ratio)
+        sig = (int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win),
+               round(float(np.nan_to_num(ratio[keep][-1] if keep.any() else 0.0)), 5))
+        if sig == self._spd_sig:
+            return
+        self._spd_sig = sig
+        if not keep.any():
+            for it in self._spd_items:
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            return
+        x0 = t[keep]; x1 = t_end[keep]
+        r = ratio[keep]
+        up = mv[keep] > 0
+        # the bar points the way PRICE went; its size is how fast, against that side's own recent cycles
+        val = np.log2(np.maximum(r, 1e-9)) * np.where(up, 1.0, -1.0)
+        lo_c = float(config.SPEED_SLOW); hi_c = float(config.SPEED_FAST)
+        fl = flat[keep]
+        groups = (~fl & (r < lo_c), ~fl & (r >= lo_c) & (r <= hi_c), ~fl & (r > hi_c), fl)
+        for it, m in zip(self._spd_items, groups):
+            if not m.any():
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+                continue
+            it.setOpts(x0=x0[m], x1=x1[m], y0=np.minimum(0.0, val[m]), height=np.abs(val[m]))
+        _cols = (_hex_rgb(config.CVOL_LOW_COL), _hex_rgb(config.CVOL_MID_COL),
+                 _hex_rgb(config.CVOL_HIGH_COL), _hex_rgb(config.SPEED_FLAT_COL))
+        _bi = np.where(fl, 3, np.where(r < lo_c, 0, np.where(r > hi_c, 2, 1)))
+        _names = ("slow", "norm", "fast", "flat")
+        self._pane_badge_set(getattr(self, "_spd_badge", None), x0,
+                             float(self.vb.viewPixelSize()[0]), config.SPEED_BADGE_TIERS,
+                             lambda k: ("flat" if _bi[k] == 3
+                                        else ("+" if up[k] else "-") + _names[int(_bi[k])]),
+                             lambda k: _cols[int(_bi[k])])
+        lim = float(np.percentile(np.abs(val), 99.0)) * 1.15
+        lim = max(lim, abs(float(np.log2(max(1e-9, hi_c)))) * 1.4, 1.0)
+        cur = getattr(self, "_spd_ytop", 0.0)
+        if lim > cur * 0.98 or lim < cur * 0.55:
+            self._spd_ytop = lim
+            self._spd_vb.setYRange(-lim, lim + self._pane_badge_headroom(self._spd_vb, lim, 1), padding=0.0)
+
     def _on_lob_pane_toggled(self, on: bool) -> None:
         self._lob_on = bool(on)
         self._lob_show(bool(on) and self.scanner_mode == "flow")
@@ -19051,6 +19309,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cvol_sig = None; self._cvol_t = 0.0
         self._lob_show(bool(getattr(self, "_lob_on", True)))        # ... and the Book pane
         self._lob_sig = None; self._lob_t = 0.0
+        self._spd_show(bool(getattr(self, "_spd_on", True)))        # ... and the Speed pane
+        self._spd_sig = None; self._spd_t = 0.0
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
         self._flow_subscribe(backfill=True)
         now = time.time()
@@ -19071,6 +19331,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cyc_show(False)
         self._cvol_show(False)
         self._lob_show(False)
+        self._spd_show(False)
         self._flow_curves = None
         self._flow_sig = None
         self._flow_xln = None; self._flow_xsig = None; self._flow_xbadge = None
@@ -19134,6 +19395,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pass
         try:
             self._lob_tick(now)         # Book pane -- same
+        except Exception:
+            pass
+        try:
+            self._spd_tick(now)         # Speed pane -- same
         except Exception:
             pass
 
@@ -19426,7 +19691,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _k, _p, _v in (("liq", getattr(self, "_liq_plot", None), getattr(self, "_liq_vb", None)),
                            ("cyc", getattr(self, "_cyc_plot", None), getattr(self, "_cyc_vb", None)),
                            ("cvol", getattr(self, "_cvol_plot", None), getattr(self, "_cvol_vb", None)),
-                           ("lob", getattr(self, "_lob_plot", None), getattr(self, "_lob_vb", None))):
+                           ("lob", getattr(self, "_lob_plot", None), getattr(self, "_lob_vb", None)),
+                           ("spd", getattr(self, "_spd_plot", None), getattr(self, "_spd_vb", None))):
             if _p is not None and _v is not None and _p.isVisible():
                 out.append((_k, _p, _v))
         return out
@@ -19474,7 +19740,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 except Exception:
                     pass
         for _b in (getattr(self, "_flow_xbadge", None), getattr(self, "_cyc_badge", None),
-                   getattr(self, "_cvol_badge", None), getattr(self, "_lob_badge", None)):
+                   getattr(self, "_cvol_badge", None), getattr(self, "_lob_badge", None),
+                   getattr(self, "_spd_badge", None)):
             if _b is not None:
                 _b.setBadges([])
 
@@ -20365,7 +20632,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                           (getattr(self, "_cvol_plot", None),
                            (getattr(self, "_cvol_vline", None), getattr(self, "_cvol_hline", None))),
                           (getattr(self, "_lob_plot", None),
-                           (getattr(self, "_lob_vline", None), getattr(self, "_lob_hline", None)))):
+                           (getattr(self, "_lob_vline", None), getattr(self, "_lob_hline", None))),
+                          (getattr(self, "_spd_plot", None),
+                           (getattr(self, "_spd_vline", None), getattr(self, "_spd_hline", None)))):
             if pw is None:
                 continue
             try:

@@ -252,6 +252,22 @@ LOB_MIN_SPAN = 0.3219           # log2(1.25): the y range never shrinks below +-
                                 # auto-fitted into looking like a signal.
 LOB_CACHE_MAX = 4000            # per-cycle book means kept across windows, so the baseline survives a pan
 
+# --- Speed pane: is price flat, drifting, normal or fast this cycle, for its own side? ------------------------
+# |ticks per SECOND| over the cycle vs the MEDIAN of the same side's previous N. Measured on 20 h (n=598):
+#   p10 0.27  p33 0.65  median 1.03  p67 1.50  p90 3.15  p99 7.27
+# The cuts are those TERCILES, so each label is a real third; they move by <0.06 over N=3..8.
+# Controls: only 8% shared with cycle DURATION (so this is not the bar's width restated, unlike the Volume
+# pane's 45-52%), 42% with the |move| ratio, which is expected since speed has move in its numerator.
+SPEED_PANE_ON = True
+SPEED_BASE_N = 5
+SPEED_MIN_N = 3
+SPEED_SLOW = 0.65
+SPEED_FAST = 1.50
+SPEED_FLAT_TICKS = 1.0          # under a tick the DIRECTION is meaningless, so FLAT is its own class, not a
+                                # slow one. 15% of finished cycles land there.
+SPEED_FLAT_COL = "#5a616d"      # dimmer than the "normal" grey, so flat and normal do not read alike
+SPEED_BADGE_TIERS = ((48.0, 1), (26.0, 2))      # "+fast" / "-slow" / "flat"
+
 # Pane names, top-left. Muted on purpose -- they label the pane, they are not part of the reading.
 PANE_TITLE_COL = "#7d8492"
 PANE_TITLE_PT = 8
