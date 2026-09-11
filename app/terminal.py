@@ -1019,74 +1019,63 @@ class BurstBadgesItem(pg.GraphicsObject):
         p.restore()
 
 
+def _hex_rgb(h):
+    """'#4d84c4' -> (77, 132, 196). The pane colours live in config as hex; the badge item wants a triple."""
+    h = str(h).lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _hex_rgb(h):
+    """'#4d84c4' -> (77, 132, 196). The pane colours live in config as hex; the badge item wants a triple."""
+    h = str(h).lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
 class CycleBadgesItem(pg.GraphicsObject):
-    """Every cycle's result in ONE graphics item (user 2026-09-10): TWO stacked pills under the zero line at
-    each cycle start.
+    """Every per-cycle pill of ONE pane, in ONE graphics item.
 
-        top     the ticks price travelled from that cross to the next one
-        bottom  which side the line says to study, and the ticks PRICE moved per $100k that side traded
+    The CALLER formats the text and picks the colour -- (x, text, rgb, row) -- because each pane badges a
+    different number and teaching one class all of them was how this ended up with two hard-coded rows. Each
+    pane now carries the badge that describes it (user 2026-09-11).
 
-    BOTH ARE IN THE PRICE'S FRAME, so their signs can never disagree -- signing the rate toward the studied
-    side put "+4t" over "S -0.3/M" on one badge. And the unit is $100k, not $1M, because a per-million rate on
-    a cycle that traded $164k printed "+55/M" beside a +9t move (user 2026-09-10, both complaints). Per 100k
-    that same cycle reads +5.5, which sits sensibly next to the row above it.
+        anchor "zero"  the pills hang under the flow chart's zero line
+        anchor "top"   a row pinned along the pane's top edge, where its NAME also sits -- `left_guard_px`
+                       keeps the pills clear of it instead of letting them overlap
 
-    COLOUR, one rule for both pills: a buy cycle is expected to end higher and a sell cycle lower.
-        went its way   the winning side's colour -- GREEN for buyers, RED for sellers
-        contradicted   ORANGE (not gray: gray already means a WEAK line, and the two are different things)
-        exactly flat   gray
-    So the colour, not the sign, is what says whether the side that owned the cycle got what it paid for.
-    White text, as asked.
-
-    Anchored at data y = 0 and drawn a fixed number of PIXELS below it, so the strip stays the same height at any
-    zoom. One paint pass, no per-badge scene items (a TextItem each measured ~40 ms per zoom step on the Big
-    Player labels). The item -> device transform comes from the PAINTER: pyqtgraph's deviceTransform() segfaults
-    when called inside paint() on this binding -- it bricked the terminal on 2026-09-07."""
+    One paint pass, no per-badge scene items: a TextItem each measured ~40 ms per zoom step on the Big Player
+    labels. The item -> device transform comes from the PAINTER; pyqtgraph's deviceTransform() segfaults when
+    called inside paint() on this binding and bricked the terminal on 2026-09-07."""
 
     _UP = (26, 154, 96)
     _DN = (208, 48, 48)
     _CONTRA = (222, 130, 0)          # the cycle went AGAINST the side that owned it
     _FLAT = (122, 130, 140)          # ... and it ended exactly flat
 
-    def __init__(self):
+    def __init__(self, anchor: str = "zero"):
         super().__init__()
-        self._items = []                 # [(x, move_ticks, rate, is_buy, state, row)] -- state 0/1/2 below
-        self._pills = 2                  # pills per badge, and how many rows they are staggered over: the
-        self._rows = 1                   # draw picks the tier so badges degrade instead of disappearing
+        self._items = []             # [(x, text, (r, g, b), row)]
+        self._anchor = "top" if anchor == "top" else "zero"
         self._font = QtGui.QFont("Consolas", 8)
         self._font.setBold(True)
-        self.setZValue(8)                # over the vlines and the flow curves; the badge is the readable thing
+        self.setZValue(8)            # over the vlines and the curves; the badge is the readable thing
+        self._rows = 1
+        self._guard = 0.0
 
     def badges(self):
         return list(self._items)
 
-    def setBadges(self, items, pills: int = 2, rows: int = 1) -> None:
-        self._items = [(float(x), float(v), float(r), bool(b), int(st), int(rw))
-                       for x, v, r, b, st, rw in items]
-        self._pills = max(1, int(pills))
+    def setBadges(self, items, rows: int = 1, left_guard_px: float = 0.0) -> None:
+        self._items = [(float(x), str(t), (int(c[0]), int(c[1]), int(c[2])), int(rw))
+                       for x, t, c, rw in items]
         self._rows = max(1, int(rows))
+        self._guard = max(0.0, float(left_guard_px))
         self.update()
 
-    @staticmethod
-    def _rate_text(is_buy: bool, rate: float) -> str:
-        """`S -2.5/100k` -- the studied side, and the ticks PRICE moved per unit of dollars that side traded.
-
-        The unit is spelled out on every badge on purpose: the number only makes sense against it, and the
-        previous cut left it implicit at $1M, where a $164k cycle printed +55 beside a +9t move."""
-        v = float(rate)
-        num = ("%+.0f" % v) if abs(v) >= 100.0 else ("%+.1f" % v)
-        return "%s %s/%s" % ("B" if is_buy else "S", num, config.FLOW_CROSS_BADGE_UNIT_TXT)
-
     def boundingRect(self):
-        """Only the STRIP at and below zero -- never the whole view rect.
+        """Only the STRIP the pills occupy -- never the whole view rect.
 
-        The plot runs BoundingRectViewportUpdate, so an item claiming the full view makes every frame invalidate
-        the whole canvas. Measured on the real flow view against a full-view rect, interleaved and repeated:
-        worth ~0.5 ms per paint at a 20 h span and nothing measurable at 30 min. Kept because an item should
-        declare only what it paints and it is never worse -- not because it is a large win.
-
-        It reaches a little above zero and well below the view floor, so it still covers the pills when the y fit
-        has not yet opened the strip under zero."""
+        The plot runs BoundingRectViewportUpdate, so an item claiming the full view makes every frame
+        invalidate the whole canvas."""
         vb = self.getViewBox()
         try:
             vr = QtCore.QRectF(vb.viewRect()) if vb is not None else None
@@ -1097,8 +1086,12 @@ class CycleBadgesItem(pg.GraphicsObject):
         ylo = min(vr.top(), vr.bottom())
         yhi = max(vr.top(), vr.bottom())
         h = max(1e-9, yhi - ylo)
-        lo = ylo - 0.06 * h
-        hi = min(yhi, 0.02 * h)
+        if self._anchor == "top":
+            lo = yhi - 0.30 * h
+            hi = yhi + 0.02 * h
+        else:
+            lo = ylo - 0.06 * h
+            hi = min(yhi, 0.02 * h)
         wpad = 0.01 * max(1e-9, vr.width())
         return QtCore.QRectF(vr.left() - wpad, lo, vr.width() + 2.0 * wpad, max(1e-9, hi - lo))
 
@@ -1108,7 +1101,6 @@ class CycleBadgesItem(pg.GraphicsObject):
         tr = QtGui.QTransform(p.transform())
         vp = p.viewport()
         wdev = float(vp.width()); hdev = float(vp.height())
-        y0 = tr.map(QtCore.QPointF(0.0, 0.0)).y()          # the zero LINE, wherever the y fit put it
         p.save()
         p.resetTransform()
         p.setFont(self._font)
@@ -1116,36 +1108,36 @@ class CycleBadgesItem(pg.GraphicsObject):
         fm = QtGui.QFontMetrics(self._font)
         rh = 14.0
         step = float(config.FLOW_CROSS_BADGE_BAND_PX)
-        top = y0 + 2.0                                     # the strip starts just UNDER the zero line
+        if self._anchor == "top":
+            vb = self.getViewBox()
+            try:
+                _yt = float(vb.viewRange()[1][1])
+            except Exception:
+                p.restore()
+                return
+            top = tr.map(QtCore.QPointF(0.0, _yt)).y() + 2.0
+        else:
+            top = tr.map(QtCore.QPointF(0.0, 0.0)).y() + 2.0
         if top < -60 or top > hdev + 60:
             p.restore()
             return
-        for x, v, rate, is_buy, state, brow in self._items:
+        for x, txt, rgb, brow in self._items:
             px = tr.map(QtCore.QPointF(x, 0.0)).x()
             if px < -70 or px > wdev + 70:
                 continue                                   # off the viewport
-            # ONE colour for both pills -- and it is keyed on the DISPLAYED tick count, so the badge can never
-            # read "+0t" in a colour that claims a direction.
-            rgb = (self._UP if is_buy else self._DN) if state == 1 else (
-                self._CONTRA if state == 2 else self._FLAT)
-            n = int(round(v))
-            texts = [("%+d" % n if n else "0") + "t"]
-            if self._pills > 1 and np.isfinite(rate):
-                texts.append(self._rate_text(is_buy, rate))
-            # a staggered badge owns its OWN band of the strip, so a neighbour on the other row cannot collide
-            # with it however close they are horizontally
-            base = top + (brow % max(1, self._rows)) * self._pills * step
-            for i, txt in enumerate(texts):
-                cy = base + i * step + rh / 2.0
-                rw = max(rh, float(fm.horizontalAdvance(txt)) + 8.0)
-                rect = QtCore.QRectF(px - rw / 2.0, cy - rh / 2.0, rw, rh)
-                # OPAQUE: a translucent pill picks up whatever line or curve runs behind it, and the badge has
-                # to stay legible on the white Simple BW canvas as well as the dark one.
-                p.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 255))
-                p.setPen(pg.mkPen(rgb[0], rgb[1], rgb[2], 255, width=1.0))
-                p.drawRoundedRect(rect, 3.0, 3.0)
-                p.setPen(pg.mkPen(255, 255, 255, 255))
-                p.drawText(rect, int(QtCore.Qt.AlignCenter), txt)
+            rw = max(rh, float(fm.horizontalAdvance(txt)) + 8.0)
+            if px - rw / 2.0 < self._guard:
+                continue                                   # would sit under the pane's name
+            # a staggered badge owns its OWN band, so a neighbour on the other row cannot collide with it
+            cy = top + (brow % max(1, self._rows)) * step + rh / 2.0
+            rect = QtCore.QRectF(px - rw / 2.0, cy - rh / 2.0, rw, rh)
+            # OPAQUE: a translucent pill picks up whatever line or bar runs behind it, and it has to stay
+            # legible on the white Simple BW canvas as well as the dark one.
+            p.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 255))
+            p.setPen(pg.mkPen(rgb[0], rgb[1], rgb[2], 255, width=1.0))
+            p.drawRoundedRect(rect, 3.0, 3.0)
+            p.setPen(pg.mkPen(255, 255, 255, 255))
+            p.drawText(rect, int(QtCore.Qt.AlignCenter), txt)
         p.restore()
 
 
@@ -17327,6 +17319,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._lob_sig = None; self._lob_sized = False; self._lob_proxy = None
             self._lob_vline = None; self._lob_hline = None
             self._lob_tag = None; self._lob_time_tag = None
+            self._lob_title = None; self._lob_badge = None
+            self._cvol_title = None; self._cvol_badge = None
+            self._cyc_title = None; self._cyc_badge = None
+            self._liq_title = None
             self._liq_lvl_dock = None; self._liq_lvl_up = None
             # the swing-line CVD-mirror items lived on the CVD pane (a child of the just-deleted splitter_v) — null
             # them too, so the next hover recreates them on the rebuilt pane instead of touching a deleted C++ object.
@@ -18040,6 +18036,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
         self._liq_time_tag.textItem.setFont(_tf); self._liq_time_tag.setZValue(61)   # same layer as the main pair
         pw.addItem(self._liq_time_tag, ignoreBounds=True); self._liq_time_tag.hide()
+        self._liq_title = self._pane_title(pw, vb, "LIMIT ORDERS  ·  resting bid / ask $")
         self._liq_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_liq_mouse_move)
         # Right-edge level markers, same idea as the taker flow's: a dashed rule from the last point out to the
         # axis plus a colour-matched "$740K (66%)" badge. Two points per rule -- redocking is free.
@@ -18302,6 +18299,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._lob_time_tag.textItem.setFont(_tf); self._lob_time_tag.setZValue(61)
         pw.addItem(self._lob_time_tag, ignoreBounds=True); self._lob_time_tag.hide()
         self._lob_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_lob_mouse_move)
+        self._lob_title = self._pane_title(pw, vb, "CYCLE BOOK  ·  bid / ask vs last %d" % config.LOB_BASE_N)
+        self._lob_badge = CycleBadgesItem("top")
+        pw.addItem(self._lob_badge, ignoreBounds=True)
         self._lob_plot = pw
         self._lob_vb = vb
         self._theme_sub_panes(not self._simple_bw())
@@ -18474,6 +18474,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     it.setOpts(x0=[], x1=[], y0=[], height=[])
                     continue
                 it.setOpts(x0=x0[m], x1=x1[m], y0=np.minimum(0.0, v[m]), height=np.abs(v[m]))
+        # ONE badge carrying both sides, coloured by whichever deviates further: two pills per cycle in a 130 px
+        # pane would be unreadable, and the pair is the reading anyway
+        _kk = np.flatnonzero(vis & np.isfinite(rb) & np.isfinite(ra))
+        if _kk.size:
+            _cols = (_hex_rgb(config.CVOL_LOW_COL), _hex_rgb(config.CVOL_MID_COL),
+                     _hex_rgb(config.CVOL_HIGH_COL))
+            _pick = np.where(np.abs(np.log(np.maximum(rb, 1e-9))) >= np.abs(np.log(np.maximum(ra, 1e-9))),
+                             rb, ra)
+            _bi = np.where(_pick < lo_c, 0, np.where(_pick > hi_c, 2, 1))
+            self._pane_badge_set(getattr(self, "_lob_badge", None), t[_kk],
+                                 float(self.vb.viewPixelSize()[0]), config.LOB_BADGE_TIERS,
+                                 lambda k: "%.3g/%.3g" % (rb[_kk[k]], ra[_kk[k]]),
+                                 lambda k: _cols[int(_bi[_kk[k]])])
+        elif getattr(self, "_lob_badge", None) is not None:
+            self._lob_badge.setBadges([])
         _a = np.concatenate(allv) if allv else np.zeros(0)
         if _a.size == 0:
             return
@@ -18483,7 +18498,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         cur = getattr(self, "_lob_ytop", 0.0)
         if lim > cur * 0.98 or lim < cur * 0.55:
             self._lob_ytop = lim
-            self._lob_vb.setYRange(-lim, lim, padding=0.0)
+            self._lob_vb.setYRange(-lim, lim + self._pane_badge_headroom(self._lob_vb, lim, 1), padding=0.0)
 
     def _on_cvol_pane_toggled(self, on: bool) -> None:
         self._cvol_on = bool(on)
@@ -18551,6 +18566,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cvol_time_tag.textItem.setFont(_tf); self._cvol_time_tag.setZValue(61)
         pw.addItem(self._cvol_time_tag, ignoreBounds=True); self._cvol_time_tag.hide()
         self._cvol_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_cvol_mouse_move)
+        self._cvol_title = self._pane_title(pw, vb, "CYCLE VOLUME  ·  dominant side vs last %d"
+                                            % config.CVOL_BASE_N)
+        self._cvol_badge = CycleBadgesItem("top")
+        pw.addItem(self._cvol_badge, ignoreBounds=True)
         self._cvol_plot = pw
         self._cvol_vb = vb
         self._theme_sub_panes(not self._simple_bw())     # born into the CURRENT Chart Style, not always dark
@@ -18670,6 +18689,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 it.setOpts(x0=[], x1=[], y0=[], height=[])
                 continue
             it.setOpts(x0=x0[m], x1=x1[m], y0=np.minimum(0.0, val[m]), height=np.abs(val[m]))
+        # the pane's OWN badge: the multiple itself, in its band's colour
+        _cols = (_hex_rgb(config.CVOL_LOW_COL), _hex_rgb(config.CVOL_MID_COL),
+                 _hex_rgb(config.CVOL_HIGH_COL))
+        _bi = np.where(r < lo_c, 0, np.where(r > hi_c, 2, 1))
+        self._pane_badge_set(getattr(self, "_cvol_badge", None), x0,
+                             float(self.vb.viewPixelSize()[0]), config.CVOL_BADGE_TIERS,
+                             lambda k: "%.2gx" % r[k], lambda k: _cols[int(_bi[k])])
         # the 99th percentile, not the max: one thin cycle against a quiet baseline can be 20x and would flatten
         # everything else. The band guides must stay in frame either way.
         lim = float(np.percentile(np.abs(val), 99.0)) * 1.15
@@ -18677,7 +18703,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         cur = getattr(self, "_cvol_ytop", 0.0)
         if lim > cur * 0.98 or lim < cur * 0.55:
             self._cvol_ytop = lim
-            self._cvol_vb.setYRange(-lim, lim, padding=0.0)
+            self._cvol_vb.setYRange(-lim, lim + self._pane_badge_headroom(self._cvol_vb, lim, 1),
+                                    padding=0.0)
 
     def _on_cyc_pane_toggled(self, on: bool) -> None:
         self._cyc_on = bool(on)
@@ -18744,6 +18771,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cyc_time_tag.textItem.setFont(_tf); self._cyc_time_tag.setZValue(61)
         pw.addItem(self._cyc_time_tag, ignoreBounds=True); self._cyc_time_tag.hide()
         self._cyc_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_cyc_mouse_move)
+        self._cyc_title = self._pane_title(pw, vb, "CYCLE IMPACT  ·  ticks per %s"
+                                           % config.FLOW_CROSS_BADGE_UNIT_TXT)
+        # the `B/S x/100k` pill moved here from the flow chart: it belongs beside the bars it describes
+        self._cyc_badge = CycleBadgesItem("top")
+        pw.addItem(self._cyc_badge, ignoreBounds=True)
         self._cyc_plot = pw
         self._cyc_vb = vb
         self._theme_sub_panes(not self._simple_bw())
@@ -18879,7 +18911,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         cur = getattr(self, "_cyc_ytop", 0.0)
         if lim > cur * 0.98 or lim < cur * 0.55:
             self._cyc_ytop = lim
-            self._cyc_vb.setYRange(-lim, lim, padding=0.0)
+            self._cyc_vb.setYRange(-lim, lim + self._pane_badge_headroom(self._cyc_vb, lim, 1), padding=0.0)
 
     def _liq_hide_cursor(self) -> None:
         """Cursor is not over the pane -> drop its readouts (the lines linger, like every other pane)."""
@@ -19276,23 +19308,114 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Badges need far more room than lines do, so they get their own, coarser thinning off the SAME set --
         # at a zoom where the lines are 7 px apart the pills would be unreadable mush.
         _fin = np.isfinite(move)
-        _min_px, _pills, _rows = self._badge_tier(t[_fin], float(_xpp))
+        _min_px, _rows = self._badge_tier(t[_fin], float(_xpp), config.FLOW_TICK_BADGE_TIERS)
         _bk = self._thin_badges(t, strong, float(_xpp), _min_px / float(max(1, _rows)))
         _bk &= _fin                                     # a cycle whose ends were never priced has no number
         _side, _rate, _state = self._cycle_impact(is_buy, strong, move, cbuy, csell)
+
+        def _bcol(k):
+            return ((CycleBadgesItem._UP if _side[k] else CycleBadgesItem._DN) if _state[k] == 1
+                    else (CycleBadgesItem._CONTRA if _state[k] == 2 else CycleBadgesItem._FLAT))
+
         # the row a badge sits on is keyed to ABSOLUTE time, never to its index in the kept list -- otherwise a
         # pan changes the parity and every badge hops between rows
-        _row = (np.floor(t / (_min_px * max(1e-12, float(_xpp)))).astype(np.int64) % max(1, _rows))
-        self._flow_xbadge.setBadges(list(zip(t[_bk].tolist(), move[_bk].tolist(), _rate[_bk].tolist(),
-                                             _side[_bk].tolist(), _state[_bk].tolist(), _row[_bk].tolist())),
-                                    _pills, _rows)
+        _bi = np.flatnonzero(_bk)
+        _row = (np.floor(t[_bi] / (_min_px * max(1e-12, float(_xpp)))).astype(np.int64) % max(1, _rows))
+        _mv = np.round(np.nan_to_num(move)).astype(np.int64)
+        self._flow_xbadge.setBadges(
+            [(float(t[k]), ("%+d" % _mv[k] if _mv[k] else "0") + "t", _bcol(int(k)), int(_row[j]))
+             for j, k in enumerate(_bi)], _rows)
+        # The `B/S x/100k` pill now lives in the CYCLE pane, beside the bars it describes (user 2026-09-11).
+        _cb = getattr(self, "_cyc_badge", None)
+        if _cb is not None and getattr(self, "_cyc_plot", None) is not None and self._cyc_plot.isVisible():
+            _rk = np.flatnonzero(_fin & np.isfinite(_rate))
+            self._pane_badge_set(_cb, t[_rk], float(_xpp), config.CYCLE_RATE_BADGE_TIERS,
+                                 lambda k: self._rate_text(bool(_side[_rk[k]]), float(_rate[_rk[k]])),
+                                 lambda k: _bcol(int(_rk[k])), strong=strong[_rk])
         # the strip has to be as deep as the tier needs. It is the NEXT frame's y fit that applies it, so ask
         # for one whenever the tier changes -- a zoom is already re-keying everything, so the step is invisible.
-        _pad = int(_pills * _rows * int(config.FLOW_CROSS_BADGE_BAND_PX))
+        _pad = int(_rows * int(config.FLOW_CROSS_BADGE_BAND_PX))
         if _pad != int(getattr(self, "_flow_badge_pad", 0)):
             self._flow_badge_pad = _pad
             self._flow_ytop = 0.0                       # force the dead-band to re-fit with the new strip
             self._flow_sig = None
+
+    @staticmethod
+    def _rate_text(is_buy: bool, rate: float) -> str:
+        """`S -2.5/100k` -- the studied side, and the ticks PRICE moved per unit of dollars it traded.
+
+        The unit is spelled out on every badge on purpose: the number only makes sense against it, and an
+        earlier cut left it implicit at $1M, where a $164k cycle printed +55 beside a +9t move."""
+        v = float(rate)
+        num = ("%+.0f" % v) if abs(v) >= 100.0 else ("%+.1f" % v)
+        return "%s %s/%s" % ("B" if is_buy else "S", num, config.FLOW_CROSS_BADGE_UNIT_TXT)
+
+    def _pane_badge_plan(self, t, x_per_px, tiers, strong=None):
+        """(kept indices, row per badge, rows) for a badge row -- the MASK only, no text.
+
+        Formatting is the expensive half and the thinning throws most of it away, so the caller builds text and
+        colour over these indices alone. Doing it for every cross instead measured 0.87 -> 1.55 ms on a forced
+        five-pane redraw and 0.7 -> 3.3 ms at an 11 h view.
+
+        The row is keyed to ABSOLUTE time, never to a badge's index in the kept list -- with an index-based
+        parity a pan flips it and every badge hops between rows."""
+        if t.size == 0:
+            return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64), 1
+        min_px, rows = self._badge_tier(t, float(x_per_px), tiers)
+        keep = self._thin_badges(t, strong if strong is not None else np.ones(t.size, dtype=bool),
+                                 float(x_per_px), min_px / float(max(1, rows)))
+        idx = np.flatnonzero(keep)
+        row = (np.floor(t[idx] / (min_px * max(1e-12, float(x_per_px)))).astype(np.int64) % max(1, rows))
+        return idx, row, rows
+
+    def _pane_badge_set(self, item, t, x_per_px, tiers, fmt, colour, strong=None):
+        """Thin a pane's badges, then format ONLY the survivors. `fmt`/`colour` are called per kept index."""
+        if item is None:
+            return 0
+        idx, row, rows = self._pane_badge_plan(t, x_per_px, tiers, strong)
+        if idx.size == 0:
+            item.setBadges([])
+            return 0
+        item.setBadges([(float(t[k]), fmt(int(k)), colour(int(k)), int(row[j]))
+                        for j, k in enumerate(idx)],
+                       rows, float(config.PANE_TITLE_GUARD_PX))
+        return int(idx.size)
+
+    @staticmethod
+    def _pane_badge_headroom(vb, lim, rows):
+        """Extend a symmetric +-lim range upward by `rows` badge bands, in PIXELS.
+
+        Solved against the pane height rather than taken as a fraction, so the strip is the same depth whatever
+        the pane is measuring."""
+        b = float(rows) * float(config.FLOW_CROSS_BADGE_BAND_PX) + 4.0
+        h = float(vb.height() or 160.0)
+        return 2.0 * float(lim) * b / max(1.0, h - b)
+
+    def _pane_title(self, pw, vb, text):
+        """The pane's name, top-left, minimal (user 2026-09-11).
+
+        Anchored at the view's top-left corner in DATA coordinates and re-placed from the viewbox's own range
+        signal, so it follows a pan or a y refit without any per-frame work and without needing that pane's
+        draw to run. Muted grey reads on the dark ground and on the Simple BW white one alike."""
+        it = pg.TextItem(anchor=(0, 0), color=config.PANE_TITLE_COL)
+        _f = QtGui.QFont("Consolas", int(config.PANE_TITLE_PT))
+        _f.setBold(True)
+        it.textItem.setFont(_f)
+        it.setText(str(text))
+        it.setZValue(40)
+        pw.addItem(it, ignoreBounds=True)
+
+        def _place(*_a):
+            try:
+                (ax, _bx), (_ay, by) = vb.viewRange()
+                it.setPos(ax, by)
+            except Exception:
+                pass
+
+        vb.sigRangeChanged.connect(_place)
+        it._place = _place                                  # keep the slot alive with the item
+        _place()
+        return it
 
     def _cross_targets(self):
         """(key, plot, viewbox) for every pane the cycle lines run through, main chart first.
@@ -19350,8 +19473,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _it.setData(np.zeros(0), np.zeros(0))
                 except Exception:
                     pass
-        if getattr(self, "_flow_xbadge", None) is not None:
-            self._flow_xbadge.setBadges([])
+        for _b in (getattr(self, "_flow_xbadge", None), getattr(self, "_cyc_badge", None),
+                   getattr(self, "_cvol_badge", None), getattr(self, "_lob_badge", None)):
+            if _b is not None:
+                _b.setBadges([])
 
     @staticmethod
     def _cross_dashes(y0: float, y1: float, y_per_px: float):
@@ -19433,21 +19558,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         return (pick_b, rate, state)
 
     @staticmethod
-    def _badge_tier(t, x_per_px):
-        """(min_px, pills, rows) -- the least-degraded tier that would lose NO badge at this zoom.
+    def _badge_tier(t, x_per_px, tiers=None):
+        """(min_px, rows) -- the least-degraded tier that would lose NO badge at this zoom.
 
-        The badges used to simply vanish once cycles came closer together than a pill is wide (user 2026-09-10:
-        "when I zoom out badge disapeer, its not good they should stay"). Instead they now stagger onto a
-        second row, and then drop to the ticks pill alone, which together buy about 4x the density before
-        anything has to be dropped. Past the last tier they still thin: 400 pills cannot be drawn legibly
-        across 1500 px however they are arranged."""
-        tiers = tuple(config.FLOW_CROSS_BADGE_TIERS)
+        Badges used to simply vanish once cycles came closer together than a pill is wide (user 2026-09-10:
+        "when I zoom out badge disapeer, its not good they should stay"). Instead a row staggers onto a second
+        line, which buys about twice the density before anything is dropped. Past the last tier they still
+        thin: 400 pills cannot be drawn legibly across 1500 px however they are arranged.
+
+        `tiers` is the ladder for THIS row -- each pane's pill holds different text and so crowds at a
+        different width."""
+        tiers = tuple(tiers if tiers is not None else config.FLOW_TICK_BADGE_TIERS)
         if t.size < 2 or x_per_px <= 0:
             return tiers[0]
         gap = float(np.min(np.diff(np.sort(np.asarray(t, dtype=np.float64))))) / float(x_per_px)
         for tier in tiers:
             # `rows` badges can share a slot, one per band, so each needs that much less horizontal room
-            if gap >= float(tier[0]) / float(max(1, tier[2])):
+            if gap >= float(tier[0]) / float(max(1, tier[1])):
                 return tier
         return tiers[-1]
 

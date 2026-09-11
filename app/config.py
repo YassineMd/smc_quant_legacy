@@ -199,7 +199,13 @@ FLOW_CROSS_MIN_PX = 7               # ... and no two DRAWN lines closer than thi
 FLOW_CROSS_WIDTH = 1.2              # pen width, px (user 2026-09-10: 2.4 read as "tooo thick")
 # Badge tiers: (minimum px between badges, pills per badge, rows to stagger over). The first tier that loses
 # NO badge wins, so they degrade instead of vanishing when the user zooms out. Rows x pills = bands of strip.
-FLOW_CROSS_BADGE_TIERS = ((72.0, 2, 1), (38.0, 2, 2), (18.0, 1, 2))
+# (minimum px between badges, rows to stagger over). The first tier that loses NO badge wins, so a badge row
+# degrades instead of vanishing when the user zooms out; rows = bands of strip it needs.
+# One ladder PER ROW, because each pane's pill holds different text and so crowds at a different width.
+FLOW_TICK_BADGE_TIERS = ((30.0, 1), (16.0, 2))          # "+9t",         on the flow chart under zero
+CYCLE_RATE_BADGE_TIERS = ((74.0, 1), (38.0, 2))         # "S -2.5/100k", on the Cycle pane
+CVOL_BADGE_TIERS = ((40.0, 1), (22.0, 2))               # "1.7x",        on the Volume pane
+LOB_BADGE_TIERS = ((64.0, 1), (34.0, 2))                # "1.02/0.97",   on the Book pane
 # The badge rate is ticks of PRICE movement per this many dollars the studied side traded. 100k, not 1M: a
 # per-million rate on a cycle that traded $164k printed "+55/M" next to a +9t move and read as nonsense.
 FLOW_CROSS_BADGE_UNIT_USD = 100_000.0
@@ -245,6 +251,11 @@ LOB_MIN_COLS = 2                # the depth snapshots are ~30 s apart and a medi
 LOB_MIN_SPAN = 0.3219           # log2(1.25): the y range never shrinks below +-25%, so a 3% wiggle cannot be
                                 # auto-fitted into looking like a signal.
 LOB_CACHE_MAX = 4000            # per-cycle book means kept across windows, so the baseline survives a pan
+
+# Pane names, top-left. Muted on purpose -- they label the pane, they are not part of the reading.
+PANE_TITLE_COL = "#7d8492"
+PANE_TITLE_PT = 8
+PANE_TITLE_GUARD_PX = 130       # a top-anchored badge row starts after the name instead of under it
 FLOW_CROSS_DASH_PX = 9.0            # dash length / gap, in PIXELS. The dashes are emitted as segments rather
 FLOW_CROSS_GAP_PX = 7.0             # than left to a dashed pen: Qt's dasher measured ~100x more expensive.
 # A cross that held its side for MIN_HOLD_SECS but never reached MIN_SPREAD_PCT is still a cycle, just a weak
