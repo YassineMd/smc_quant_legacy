@@ -191,9 +191,27 @@ class FlowStore:
     def crosses(self, t0: float, t1: float, win_secs: float, min_spread_pct: float = 10.0,
                 min_hold_secs: float = 20.0, max_n: int = 400, context_secs: float = 600.0,
                 tick: float = 0.01):
+        """Where the two rolling-window flow lines CROSS -- the 8 arrays every pane reads. See _crosses_full."""
+        return self._crosses_full(t0, t1, win_secs, min_spread_pct, min_hold_secs, max_n,
+                                  context_secs, tick)[:8]
+
+    def crosses_px(self, t0: float, t1: float, win_secs: float, min_spread_pct: float = 10.0,
+                   min_hold_secs: float = 20.0, max_n: int = 400, context_secs: float = 600.0,
+                   tick: float = 0.01):
+        """(price at each cycle's START, price at its END) -- the two numbers move_ticks is the difference of.
+
+        Called with the SAME arguments as crosses(), so it lands on that call's memo entry and costs a dict
+        lookup rather than a second pass. NaN where that end of the cycle was never priced, exactly where
+        move_ticks is NaN."""
+        return self._crosses_full(t0, t1, win_secs, min_spread_pct, min_hold_secs, max_n,
+                                  context_secs, tick)[8:]
+
+    def _crosses_full(self, t0: float, t1: float, win_secs: float, min_spread_pct: float = 10.0,
+                      min_hold_secs: float = 20.0, max_n: int = 400, context_secs: float = 600.0,
+                      tick: float = 0.01):
         """Where the two rolling-window flow lines CROSS, keeping only the crosses that opened a real cycle.
 
-        Returns (t_cross, is_buy, strong, move_ticks, buy_usd, sell_usd, t_end, done).
+        Returns (t_cross, is_buy, strong, move_ticks, buy_usd, sell_usd, t_end, done, px_start, px_end).
 
           is_buy  True where the BUY line took the top.
           strong  the cycle CONFIRMED: before the next cross the spread |buy-sell|/(buy+sell) reached
@@ -227,7 +245,7 @@ class FlowStore:
         z = np.zeros(0)
         zb = np.zeros(0, dtype=bool)
         if self.empty() or win_secs <= 0 or tick <= 0:
-            return (z, zb, zb, z, z, z, z, zb)
+            return (z, zb, zb, z, z, z, z, zb, z, z)
         key = ("cross", self.rev, round(float(t0), 2), round(float(t1), 2), round(float(win_secs), 2),
                round(float(min_spread_pct), 3), round(float(min_hold_secs), 2), int(max_n),
                round(float(context_secs), 2), round(float(tick), 6))
@@ -252,7 +270,7 @@ class FlowStore:
         # measure the move over.
         i1 = min(n - 1, iv + ctx)
         if iv < i0:
-            out = (z, zb, zb, z, z, z, z, zb)
+            out = (z, zb, zb, z, z, z, z, zb, z, z)
             self._memo_put(memo, key, out)
             return out
         # series() only needs a w-1 prefix; the MERGE needs enough of the run before the view to know whether
@@ -262,7 +280,7 @@ class FlowStore:
         ca = np.concatenate([[0.0], np.cumsum(self._sell[p0:i1 + 1])])
         m = int(cb.size - 1)
         if m < 3:
-            out = (z, zb, zb, z, z, z, z, zb)
+            out = (z, zb, zb, z, z, z, z, zb, z, z)
             self._memo_put(memo, key, out)
             return out
         idx = np.arange(m)
@@ -275,13 +293,13 @@ class FlowStore:
         dn = ra > rb
         say = up | dn
         if not say.any():
-            out = (z, zb, zb, z, z, z, z, zb)
+            out = (z, zb, zb, z, z, z, z, zb, z, z)
             self._memo_put(memo, key, out)
             return out
         dom = up[np.maximum.accumulate(np.where(say, idx, 0))]
         flips = np.flatnonzero(dom[1:] != dom[:-1]) + 1                  # first bin of each new side
         if flips.size == 0:
-            out = (z, zb, zb, z, z, z, z, zb)
+            out = (z, zb, zb, z, z, z, z, zb, z, z)
             self._memo_put(memo, key, out)
             return out
         tot = rb + ra
@@ -327,12 +345,18 @@ class FlowStore:
             pv = pv[np.maximum.accumulate(np.where(pv, np.arange(m), 0))]
         fin = np.concatenate([fl[1:], [m - 1]]) if fl.size else np.zeros(0, dtype=np.int64)
         if fl.size:
-            mv = np.where(pv[fl] & pv[fin], (px[fin] - px[fl]) / float(tick), np.nan)
+            _ok = pv[fl] & pv[fin]
+            mv = np.where(_ok, (px[fin] - px[fl]) / float(tick), np.nan)
+            # the two prices the move is the difference of, kept rather than discarded: the feed prints the
+            # cycle as "100.01 -> 97.30". NaN exactly where move_ticks is NaN, so they can never disagree.
+            px0_ = np.where(_ok, px[fl], np.nan)
+            px1_ = np.where(_ok, px[fin], np.nan)
             # the dollars each side traded INSIDE the cycle, over the same span the move is measured across
             vb_ = cb[fin + 1] - cb[fl]
             vs_ = ca[fin + 1] - ca[fl]
         else:
             mv = np.zeros(0); vb_ = np.zeros(0); vs_ = np.zeros(0)
+            px0_ = np.zeros(0); px1_ = np.zeros(0)
         # The exact crossing time of EVERY head, before the view clip: a bar's right edge is the NEXT head's
         # crossing, and that one can sit outside the view -- taking it from the clipped set would make the
         # rightmost bar stop at the screen edge whenever the user pans.
@@ -354,13 +378,15 @@ class FlowStore:
         sg = sg[vis]
         db = db[vis]
         mv = mv[vis]
+        px0_ = px0_[vis]
+        px1_ = px1_[vis]
         vb_ = vb_[vis]
         vs_ = vs_[vis]
         ta_ = t_all[vis]
         te_ = t_end_all[vis]
         dn_ = done_all[vis]
         if cs.size == 0:
-            out = (z, zb, zb, z, z, z, z, zb)
+            out = (z, zb, zb, z, z, z, z, zb, z, z)
             self._memo_put(memo, key, out)
             return out
         if cs.size > max_n:
@@ -368,13 +394,15 @@ class FlowStore:
             sg = sg[-int(max_n):]
             db = db[-int(max_n):]
             mv = mv[-int(max_n):]
+            px0_ = px0_[-int(max_n):]
+            px1_ = px1_[-int(max_n):]
             vb_ = vb_[-int(max_n):]
             vs_ = vs_[-int(max_n):]
             ta_ = ta_[-int(max_n):]
             te_ = te_[-int(max_n):]
             dn_ = dn_[-int(max_n):]
         out = (ta_.copy(), db.copy(), sg.copy(), mv.copy(), vb_.copy(), vs_.copy(),
-               te_.copy(), dn_.copy())
+               te_.copy(), dn_.copy(), px0_.copy(), px1_.copy())
         self._memo_put(memo, key, out)
         return out
 

@@ -18282,11 +18282,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                              int(config.INTERP_BASE_N), int(config.INTERP_MIN_N), include_open=True)
         sell_r = _interp_prev(np.maximum(csell, 0.0) / dur, done,
                               int(config.INTERP_BASE_N), int(config.INTERP_MIN_N), include_open=True)
+        # the two prices the move is the difference of. SAME crosses() arguments, so this reads the memo entry
+        # that call already built rather than making a second pass over the store.
+        try:
+            px0, px1 = self._flow.crosses_px(
+                vx0 - float(config.CVOL_LOOKBACK_SECS), vx1, float(self._flow_win),
+                float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
+        except Exception:
+            px0 = px1 = np.full(int(t.size), np.nan)
+        _dec = max(0, min(8, int(round(-np.log10(max(float(config.TICK_SIZE), 1e-9))))))
         k = np.flatnonzero(vis)
         rows = _interp_build_rows(t[k], t_end_c[k], done[k], mv[k], side[k],
                                   vol_ratio[k], spd_ratio[k], rb[k], ra[k], buy_r[k], sell_r[k],
                                   float(config.SPEED_FLAT_TICKS), float(config.INTERP_WEAK_BELOW),
-                                  int(config.INTERP_MAX_ROWS), now=now, live=live)
+                                  int(config.INTERP_MAX_ROWS), now=now, live=live,
+                                  px_start=(px0[k] if px0.size == t.size else None),
+                                  px_end=(px1[k] if px1.size == t.size else None), px_dec=_dec)
         p.setRows(rows)
 
     def _stack_axis_sync(self) -> None:

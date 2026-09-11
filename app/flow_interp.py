@@ -45,9 +45,48 @@ from PySide6 import QtCore, QtGui, QtWidgets
 # The four states carry the user's own palette from the state-space picture: green absorption, amber breakout,
 # red vacuum, grey quiet.
 ST_ABSORB, ST_BREAK, ST_VACUUM, ST_QUIET, ST_FORMING = 0, 1, 2, 3, 4
-STATE_COL = ("#1FB183", "#E0A030", "#E2574C", "#6B7A82", "#4E5C64")
-STATE_TXT = ("#3FD3A2", "#EDBB6B", "#F0857C", "#9AAAB2", "#6B7A82")
 STATE_NAME = ("ABSORPTION", "BREAKOUT", "VACUUM", "QUIET", "forming")
+
+# COLOUR is keyed on state AND side, because BREAKOUT is the aggressive state and the user wants that legible
+# at a glance (2026-09-11): buy vivid green, sell vivid red, instead of the state-space picture's single
+# amber. Absorption keeps its calmer teal and vacuum its coral, so all four stay separable by SATURATION as
+# well as by the name written beside them.
+C_ABSORB, C_BREAK_BUY, C_BREAK_SELL, C_VACUUM, C_QUIET, C_FORMING = 0, 1, 2, 3, 4, 5
+BAR_COL = ("#1FB183", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64")
+# ... and TEXT is per THEME. It was not: on the white Simple BW ground every name drew in a pale dark-theme
+# colour and was barely readable.
+TXT_DARK = ("#3FD3A2", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82")
+TXT_LIGHT = ("#0E7A57", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82")
+
+# the price move, coloured by the move itself: green up, red down, grey when it ended where it started
+MOVE_DARK = ("#FF5A5A", "#7A828C", "#2BE86B")
+MOVE_LIGHT = ("#C40D0D", "#77808A", "#00822F")
+
+# kept for anything still importing the old names
+STATE_COL = (BAR_COL[C_ABSORB], BAR_COL[C_BREAK_BUY], BAR_COL[C_VACUUM], BAR_COL[C_QUIET], BAR_COL[C_FORMING])
+STATE_TXT = (TXT_DARK[C_ABSORB], TXT_DARK[C_BREAK_BUY], TXT_DARK[C_VACUUM], TXT_DARK[C_QUIET],
+             TXT_DARK[C_FORMING])
+
+
+def colour_of(st, side):
+    """Which colour a row draws in. Only BREAKOUT splits by side."""
+    if st == ST_BREAK:
+        return C_BREAK_BUY if side == "buy" else C_BREAK_SELL
+    return (C_ABSORB, None, C_VACUUM, C_QUIET, C_FORMING)[st]
+
+
+def move_text(px0, px1, mv, flat, big, dec):
+    """`100.01 -> 97.30  (-271t fast)` and which way it went: -1 down, 0 nowhere, +1 up.
+
+    The sign is taken from the ROUNDED tick count -- the same number printed in the brackets -- so a row can
+    never show "+0t" in a colour that claims a direction. That is the rule the cycle badges already follow."""
+    t = int(round(float(mv))) if np.isfinite(mv) else 0
+    sign = 0 if t == 0 else (1 if t > 0 else -1)
+    spd = "flat" if flat else ("fast" if big else "slow")
+    if not (np.isfinite(px0) and np.isfinite(px1)):
+        return "(%+dt %s)" % (t, spd), sign
+    f = "%%.%df" % int(dec)
+    return (f + " -> " + f + "  (%+dt %s)") % (px0, px1, t, spd), sign
 
 
 def dur_text(secs: float) -> str:
@@ -165,16 +204,15 @@ def _line1(vr_k, buy_ratio, sell_ratio, k):
                                            _ratio_text(_at(sell_ratio, k)))
 
 
-def _line2(bid_ratio, ask_ratio, k, mv_k, flat_k, big_k):
-    """The user's five columns finish here: bid book, ask book, then the move and how fast it got there."""
-    spd = "flat" if flat_k else ("fast" if big_k else "slow")
-    return "bid %s  ask %s%s%+dt %s" % (_ratio_text(_at(bid_ratio, k)), _ratio_text(_at(ask_ratio, k)),
-                                        " " * 4, int(round(mv_k)), spd)
+def _line2(bid_ratio, ask_ratio, k):
+    """The user's five columns finish here: bid book and ask book. The price move moved up beside the state
+    name, so it is not repeated down here."""
+    return "bid %s  ask %s" % (_ratio_text(_at(bid_ratio, k)), _ratio_text(_at(ask_ratio, k)))
 
 
 def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                bid_ratio, ask_ratio, buy_ratio, sell_ratio, flat_ticks, weak_below, max_rows,
-               now=None, live=True):
+               now=None, live=True, px_start=None, px_end=None, px_dec=2):
     """One display row per cycle, NEWEST FIRST. Pure function of arrays -- no Qt, so it is directly testable.
 
     Every string is built here, once per rebuild, so paintEvent only ever draws pre-made text."""
@@ -221,24 +259,28 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                 0.0, (float(now) if now is not None else time.time()) - t0)
             head = "%s - ... - %s" % (_clock(t0), dur_text(el))
             if not rateable[k]:
-                rows.append((t0, t0 + el, head, "forming", "", "", ST_FORMING, False, False))
+                rows.append((t0, t0 + el, head, "forming", "", "", ST_FORMING, False, False, C_FORMING, "", 0))
                 continue
             st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
+            _mt, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], big[k], px_dec)
             rows.append((t0, t0 + el, head, STATE_NAME[st] + ((" " + side) if side else ""),
                          _line1(vr[k], buy_ratio, sell_ratio, k),
-                         _line2(bid_ratio, ask_ratio, k, mv[k], flat[k], big[k]),
-                         st, bool(conf[k] >= float(weak_below)), True))
+                         _line2(bid_ratio, ask_ratio, k),
+                         st, bool(conf[k] >= float(weak_below)), True,
+                         colour_of(st, side), _mt, _ms))
             continue
         if not ok[k]:
             rows.append((t0, t1, "%s - %s - %s" % (_clock(t0), _clock(t1), dur_text(t1 - t0)),
-                         "-", "not enough history yet", "", ST_QUIET, False, False))
+                         "-", "not enough history yet", "", ST_QUIET, False, False, C_QUIET, "", 0))
             continue
         st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
+        _mt, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], big[k], px_dec)
         rows.append((t0, t1, "%s - %s - %s" % (_clock(t0), _clock(t1), dur_text(t1 - t0)),
                      STATE_NAME[st] + ((" " + side) if side else ""),
                      _line1(vr[k], buy_ratio, sell_ratio, k),
-                     _line2(bid_ratio, ask_ratio, k, mv[k], flat[k], big[k]),
-                     st, bool(conf[k] >= float(weak_below)), False))
+                     _line2(bid_ratio, ask_ratio, k),
+                     st, bool(conf[k] >= float(weak_below)), False,
+                     colour_of(st, side), _mt, _ms))
     return rows
 
 
@@ -251,7 +293,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
 
     cycleClicked = QtCore.Signal(float, float)      # (t_start, t_end) of the clicked row
 
-    ROW_H = 64
+    ROW_H = 78
     PAD = 10
 
     def __init__(self, parent=None):
@@ -264,12 +306,14 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.viewport().setAttribute(QtCore.Qt.WA_OpaquePaintEvent, True)
         self.viewport().setMouseTracking(True)
-        self.setMinimumWidth(250)
-        self.setMaximumWidth(520)
+        self.setMinimumWidth(300)      # under this the price-move line starts to clip
+        self.setMaximumWidth(620)
         self._hint_w = 330
         self._f_head = QtGui.QFont(); self._f_head.setPointSize(8)
         self._f_name = QtGui.QFont(); self._f_name.setPointSize(10); self._f_name.setBold(True)
         self._f_det = QtGui.QFont(); self._f_det.setPointSize(8)
+        # the move reads as part of the interpretation, so it is bolder than the evidence lines below it
+        self._f_move = QtGui.QFont(); self._f_move.setPointSize(8); self._f_move.setBold(True)
         self._f_title = QtGui.QFont(); self._f_title.setPointSize(8); self._f_title.setBold(True)
         self.title = "INTERPRETATION"      # the terminal replaces this with config.PANE_TITLE_INTERP, the
         #                                    same string its hamburger toggle carries
@@ -356,8 +400,12 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         first = max(0, (off - self.PAD - 22) // self.ROW_H)
         last = min(len(self._rows), first + h // self.ROW_H + 2)
         x = self.PAD
+        txt_pal = TXT_DARK if self._dark else TXT_LIGHT
+        mv_pal = MOVE_DARK if self._dark else MOVE_LIGHT
+        fm_name = QtGui.QFontMetrics(self._f_name)
+        fm_head = QtGui.QFontMetrics(self._f_head)
         for i in range(int(first), int(last)):
-            t0, t1, head, name, d1, d2, st, strong, forming = self._rows[i]
+            t0, t1, head, name, d1, d2, st, strong, forming, col, mv_txt, mv_sign = self._rows[i]
             y = y_top + i * self.ROW_H
             if y > h or y + self.ROW_H < 20:
                 continue
@@ -365,7 +413,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
                 p.fillRect(0, y, w, self.ROW_H - 4, hl)
             # the state's colour bar: full width and opacity for a confident cycle, thin and faded for one
             # sitting near its own baseline, which is most of the point of the confidence measurement
-            bar = QtGui.QColor(STATE_COL[st])
+            bar = QtGui.QColor(BAR_COL[col])
             if not strong:
                 bar.setAlpha(105)
             if forming:
@@ -379,25 +427,30 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
                 p.fillRect(x, y + 3, 4 if strong else 2, self.ROW_H - 12, bar)
             p.setFont(self._f_head); p.setPen(dim)
             p.drawText(x + 12, y + 14, head)
-            tc = QtGui.QColor(STATE_TXT[st])
-            if not strong:
-                tc.setAlpha(150)
-            p.setFont(self._f_name); p.setPen(tc)
-            p.drawText(x + 12, y + 30, name)
-            # a running read is tagged "forming" -- it is the live state of an unfinished cycle and can
-            # still change -- and a settled one near its own baseline is tagged "weak"
+            # a running read is tagged "forming" -- the live state of an unfinished cycle, which can still
+            # change -- and a settled one near its own baseline is tagged "weak". Both sit at the RIGHT end of
+            # the header line, because the name line now carries the price move.
             _tag = "forming" if forming else ("" if (strong or st == ST_FORMING or name == "-") else "weak")
             if _tag:
-                fm = QtGui.QFontMetrics(self._f_name)
-                p.setFont(self._f_head)
-                p.setPen(QtGui.QColor(STATE_TXT[st]) if forming else dim)
-                p.drawText(x + 18 + fm.horizontalAdvance(name), y + 30, _tag)
+                p.setPen(QtGui.QColor(txt_pal[col]) if forming else dim)
+                p.drawText(w - self.PAD - fm_head.horizontalAdvance(_tag), y + 14, _tag)
+            tc = QtGui.QColor(txt_pal[col])
+            if not strong:
+                tc.setAlpha(165)
+            p.setFont(self._f_name); p.setPen(tc)
+            p.drawText(x + 12, y + 30, name)
+            # the price move sits NEXT TO the state (user 2026-09-11), coloured by the move and not by the
+            # state: green up, red down, grey when it ended where it started
+            if mv_txt:
+                p.setFont(self._f_move)
+                p.setPen(QtGui.QColor(mv_pal[int(mv_sign) + 1]))
+                p.drawText(x + 12, y + 46, mv_txt)
             if d1:
                 p.setFont(self._f_det); p.setPen(det)
-                p.drawText(x + 12, y + 44, d1)
+                p.drawText(x + 12, y + 60, d1)
             if d2:
                 p.setFont(self._f_det); p.setPen(dim)
-                p.drawText(x + 12, y + 56, d2)
+                p.drawText(x + 12, y + 72, d2)
         if not self._rows:
             p.setFont(self._f_det); p.setPen(dim)
             p.drawText(self.PAD, 44, "no finished cycles in view")

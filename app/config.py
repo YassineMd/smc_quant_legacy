@@ -279,7 +279,9 @@ SPEED_BADGE_TIERS = ((48.0, 1), (26.0, 2))      # "+fast" / "-slow" / "flat"
 # The BOOK and the per-side volumes are shown as EVIDENCE only: the table's full 5-cell signature scored
 # 1.00/4 against ~1.33/4 for chance, so it is not used to classify.
 INTERP_PANE_ON = True
-INTERP_WIDTH = 330
+INTERP_WIDTH = 380              # measured: the price-move line needs 352 px at 8 pt. On the SAME line as
+                                # the state name it needed 555, past the panel's own 520 maximum, so it gets
+                                # its own line and the panel gets the width that line actually needs.
 INTERP_MAX_ROWS = 240           # the feed is capped, not the history: older cycles still feed every baseline
 INTERP_BASE_N = 5
 INTERP_MIN_N = 3
