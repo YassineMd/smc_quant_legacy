@@ -18412,7 +18412,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                   vol_ratio[k], spd_ratio[k], rb[k], ra[k], buy_r[k], sell_r[k],
                                   float(config.SPEED_FLAT_TICKS), float(config.INTERP_WEAK_BELOW),
                                   int(config.INTERP_MAX_ROWS), now=now, live=live,
-                                  px_start=px0[k], px_end=px1[k], px_dec=_dec)
+                                  px_start=px0[k], px_end=px1[k], px_dec=_dec,
+                                  slow_c=float(config.SPEED_SLOW), fast_c=float(config.SPEED_FAST))
         p.setRows(rows)
 
     def _stack_axis_sync(self) -> None:

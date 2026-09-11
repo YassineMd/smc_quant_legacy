@@ -75,18 +75,42 @@ def colour_of(st, side):
     return (C_ABSORB, None, C_VACUUM, C_QUIET, C_FORMING)[st]
 
 
-def move_text(px0, px1, mv, flat, big, dec):
-    """`100.01 -> 97.30  (-271t fast)` and which way it went: -1 down, 0 nowhere, +1 up.
+def speed_word(mv, flat, sr, slow_c, fast_c):
+    """How price moved, in the user's own words, on the SPEED PANE's measured cuts.
 
-    The sign is taken from the ROUNDED tick count -- the same number printed in the brackets -- so a row can
-    never show "+0t" in a colour that claims a direction. That is the rule the cycle badges already follow."""
+        flat                 under the flat-tick floor -- the direction means nothing
+        drifting up / down   slower than SPEED_SLOW x its own baseline
+        up / down            normal
+        fast up / down       faster than SPEED_FAST x
+
+    Same thresholds the CYCLE SPEED pane draws its four classes with, so the two can never disagree about one
+    cycle. With no baseline yet, it states the direction and claims nothing about the speed."""
+    if flat:
+        return "flat"
+    d = "up" if float(mv) > 0 else "down"
+    if not np.isfinite(sr):
+        return d
+    if sr < float(slow_c):
+        return "drifting " + d
+    if sr > float(fast_c):
+        return "fast " + d
+    return d
+
+
+def move_text(px0, px1, mv, flat, sr, slow_c, fast_c, dec):
+    """(`100.01 -> 97.30   -271t`, `fast down`, sign).
+
+    Returned as TWO pieces because they are drawn at opposite ends of the line: concatenated, the worst
+    realistic case needs 451 px against a 380 px panel and would clip. The sign is taken from the ROUNDED tick
+    count -- the same number printed -- so a row can never show "+0t" in a colour that claims a direction.
+    That is the rule the cycle badges already follow."""
     t = int(round(float(mv))) if np.isfinite(mv) else 0
     sign = 0 if t == 0 else (1 if t > 0 else -1)
-    spd = "flat" if flat else ("fast" if big else "slow")
+    spd = speed_word(mv, flat, sr, slow_c, fast_c)
     if not (np.isfinite(px0) and np.isfinite(px1)):
-        return "(%+dt %s)" % (t, spd), sign
+        return "%+dt" % t, spd, sign
     f = "%%.%df" % int(dec)
-    return (f + " -> " + f + "  (%+dt %s)") % (px0, px1, t, spd), sign
+    return (f + " -> " + f + "   %+dt") % (px0, px1, t), spd, sign
 
 
 def dur_text(secs: float) -> str:
@@ -212,7 +236,8 @@ def _line2(bid_ratio, ask_ratio, k):
 
 def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                bid_ratio, ask_ratio, buy_ratio, sell_ratio, flat_ticks, weak_below, max_rows,
-               now=None, live=True, px_start=None, px_end=None, px_dec=2):
+               now=None, live=True, px_start=None, px_end=None, px_dec=2,
+               slow_c=0.65, fast_c=1.50):
     """One display row per cycle, NEWEST FIRST. Pure function of arrays -- no Qt, so it is directly testable.
 
     Every string is built here, once per rebuild, so paintEvent only ever draws pre-made text."""
@@ -259,28 +284,30 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                 0.0, (float(now) if now is not None else time.time()) - t0)
             head = "%s - ... - %s" % (_clock(t0), dur_text(el))
             if not rateable[k]:
-                rows.append((t0, t0 + el, head, "forming", "", "", ST_FORMING, False, False, C_FORMING, "", 0))
+                rows.append((t0, t0 + el, head, "forming", "", "", ST_FORMING, False, False, C_FORMING, "", 0, ""))
                 continue
             st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
-            _mt, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], big[k], px_dec)
+            _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
+                                      slow_c, fast_c, px_dec)
             rows.append((t0, t0 + el, head, STATE_NAME[st] + ((" " + side) if side else ""),
                          _line1(vr[k], buy_ratio, sell_ratio, k),
                          _line2(bid_ratio, ask_ratio, k),
                          st, bool(conf[k] >= float(weak_below)), True,
-                         colour_of(st, side), _mt, _ms))
+                         colour_of(st, side), _mt, _ms, _mw))
             continue
         if not ok[k]:
             rows.append((t0, t1, "%s - %s - %s" % (_clock(t0), _clock(t1), dur_text(t1 - t0)),
-                         "-", "not enough history yet", "", ST_QUIET, False, False, C_QUIET, "", 0))
+                         "-", "not enough history yet", "", ST_QUIET, False, False, C_QUIET, "", 0, ""))
             continue
         st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
-        _mt, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], big[k], px_dec)
+        _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
+                                  slow_c, fast_c, px_dec)
         rows.append((t0, t1, "%s - %s - %s" % (_clock(t0), _clock(t1), dur_text(t1 - t0)),
                      STATE_NAME[st] + ((" " + side) if side else ""),
                      _line1(vr[k], buy_ratio, sell_ratio, k),
                      _line2(bid_ratio, ask_ratio, k),
                      st, bool(conf[k] >= float(weak_below)), False,
-                     colour_of(st, side), _mt, _ms))
+                     colour_of(st, side), _mt, _ms, _mw))
     return rows
 
 
@@ -585,7 +612,8 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         fm_name = QtGui.QFontMetrics(self._f_name)
         fm_head = QtGui.QFontMetrics(self._f_head)
         for i in range(int(first), int(last)):
-            t0, t1, head, name, d1, d2, st, strong, forming, col, mv_txt, mv_sign = self._rows[i]
+            (t0, t1, head, name, d1, d2, st, strong, forming, col,
+             mv_txt, mv_sign, mv_word) = self._rows[i]
             y = y_top + i * self.ROW_H
             if y > h or y + self.ROW_H < 20:
                 continue
@@ -619,12 +647,20 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
                 tc.setAlpha(165)
             p.setFont(self._f_name); p.setPen(tc)
             p.drawText(x + 12, y + 30, name)
+            if mv_word:
+                # HOW price moved, right-aligned on the STATE line. It belongs beside the state, and the price
+                # line below is already ~185 px -- appending "drifting down" there needed 445 px on a 380 panel.
+                p.setFont(self._f_move)
+                p.setPen(QtGui.QColor(mv_pal[int(mv_sign) + 1]))
+                p.drawText(w - self.PAD - QtGui.QFontMetrics(self._f_move).horizontalAdvance(mv_word),
+                           y + 30, mv_word)
             # the price move sits NEXT TO the state (user 2026-09-11), coloured by the move and not by the
             # state: green up, red down, grey when it ended where it started
             if mv_txt:
                 p.setFont(self._f_move)
                 p.setPen(QtGui.QColor(mv_pal[int(mv_sign) + 1]))
                 p.drawText(x + 12, y + 46, mv_txt)
+
             if d1:
                 p.setFont(self._f_det); p.setPen(det)
                 p.drawText(x + 12, y + 60, d1)
