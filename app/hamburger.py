@@ -1612,7 +1612,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.flow_sec.addWidget(w)
         w2 = QtWidgets.QWidget()
         l2 = QtWidgets.QVBoxLayout(w2); l2.setContentsMargins(2, 1, 8, 5); l2.setSpacing(2)
-        self.liq_on = QtWidgets.QCheckBox("Limit orders pane (resting bid / ask $)")
+        self.liq_on = QtWidgets.QCheckBox(config.PANE_TITLE_LIQ)
         self.liq_on.setChecked(bool(config.LIQ_PANE_ON))
         self.liq_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.liq_on.setToolTip("The second pane under the flow lines: limit-order $ resting within +- N ticks of "
@@ -1643,7 +1643,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             cb_.currentIndexChanged.connect(lambda _i: self.liqOptsChanged.emit(self.liq_radius(), self.liq_smooth()))
         w4 = QtWidgets.QWidget()
         l4 = QtWidgets.QVBoxLayout(w4); l4.setContentsMargins(2, 1, 8, 5); l4.setSpacing(2)
-        self.cycle_on = QtWidgets.QCheckBox("Cycle pane (dominance runs)")
+        self.cycle_on = QtWidgets.QCheckBox(config.PANE_TITLE_CYC)
         self.cycle_on.setChecked(bool(config.CYCLE_PANE_ON))
         self.cycle_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.cycle_on.setToolTip(
@@ -1653,7 +1653,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % config.FLOW_CROSS_BADGE_UNIT_TXT)
         self.cycle_on.toggled.connect(lambda on: self.cyclePaneToggled.emit(bool(on)))
         l4.addWidget(self.cycle_on)
-        self.cvol_on = QtWidgets.QCheckBox("Volume pane (cycle size vs its own last %d)" % config.CVOL_BASE_N)
+        self.cvol_on = QtWidgets.QCheckBox(config.PANE_TITLE_CVOL)
         self.cvol_on.setChecked(bool(config.CVOL_PANE_ON))
         self.cvol_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.cvol_on.setToolTip(
@@ -1665,7 +1665,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % (config.CVOL_BASE_N, config.CVOL_LOW, config.CVOL_HIGH))
         self.cvol_on.toggled.connect(lambda on: self.cvolPaneToggled.emit(bool(on)))
         l4.addWidget(self.cvol_on)
-        self.lob_on = QtWidgets.QCheckBox("Book pane (resting book per side vs its last %d)" % config.LOB_BASE_N)
+        self.lob_on = QtWidgets.QCheckBox(config.PANE_TITLE_LOB)
         self.lob_on.setChecked(bool(config.LOB_PANE_ON))
         self.lob_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.lob_on.setToolTip(
@@ -1679,8 +1679,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % config.LOB_BASE_N)
         self.lob_on.toggled.connect(lambda on: self.lobPaneToggled.emit(bool(on)))
         l4.addWidget(self.lob_on)
-        self.spd_on = QtWidgets.QCheckBox("Speed pane (how fast price moved vs its last %d)"
-                                          % config.SPEED_BASE_N)
+        self.spd_on = QtWidgets.QCheckBox(config.PANE_TITLE_SPD)
         self.spd_on.setChecked(bool(config.SPEED_PANE_ON))
         self.spd_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.spd_on.setToolTip(
@@ -1691,7 +1690,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % (config.SPEED_BASE_N, config.SPEED_FLAT_TICKS))
         self.spd_on.toggled.connect(lambda on: self.spdPaneToggled.emit(bool(on)))
         l4.addWidget(self.spd_on)
-        self.interp_on = QtWidgets.QCheckBox("Interpretation feed (right side, one row per cycle)")
+        self.interp_on = QtWidgets.QCheckBox(config.PANE_TITLE_INTERP)
         self.interp_on.setChecked(bool(config.INTERP_PANE_ON))
         self.interp_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.interp_on.setToolTip(

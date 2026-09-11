@@ -285,6 +285,17 @@ INTERP_BASE_N = 5
 INTERP_MIN_N = 3
 INTERP_WEAK_BELOW = 0.35        # log2 distance from the crosshair, on the WEAKER of the two axes
 
+# --- Pane NAMES: one source of truth ---------------------------------------------------------------------
+# The pane paints this top-left AND its hamburger toggle carries the same words (user 2026-09-11), so a
+# toggle can never drift from the pane it opens. They had: the toggle for "CYCLE IMPACT" read "Cycle pane
+# (dominance runs)". Defined here, after the N's they quote, so the numbers can never disagree either.
+PANE_TITLE_LIQ = "LIMIT ORDERS" + "  ·  " + "resting bid / ask $"
+PANE_TITLE_CYC = "CYCLE IMPACT" + "  ·  " + "ticks per %s" % FLOW_CROSS_BADGE_UNIT_TXT
+PANE_TITLE_CVOL = "CYCLE VOLUME" + "  ·  " + "dominant side vs last %d" % CVOL_BASE_N
+PANE_TITLE_LOB = "CYCLE BOOK" + "  ·  " + "bid / ask vs last %d" % LOB_BASE_N
+PANE_TITLE_SPD = "CYCLE SPEED" + "  ·  " + "ticks/s vs last %d" % SPEED_BASE_N
+PANE_TITLE_INTERP = "INTERPRETATION" + "  ·  " + "one row per cycle"
+
 # Pane names, top-left. Muted on purpose -- they label the pane, they are not part of the reading.
 PANE_TITLE_COL = "#7d8492"
 PANE_TITLE_PT = 8

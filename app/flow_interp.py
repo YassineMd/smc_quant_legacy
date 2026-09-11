@@ -271,6 +271,8 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         self._f_name = QtGui.QFont(); self._f_name.setPointSize(10); self._f_name.setBold(True)
         self._f_det = QtGui.QFont(); self._f_det.setPointSize(8)
         self._f_title = QtGui.QFont(); self._f_title.setPointSize(8); self._f_title.setBold(True)
+        self.title = "INTERPRETATION"      # the terminal replaces this with config.PANE_TITLE_INTERP, the
+        #                                    same string its hamburger toggle carries
 
     def sizeHint(self):
         return QtCore.QSize(int(self._hint_w), 600)
@@ -345,7 +347,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
 
         p.setFont(self._f_title)
         p.setPen(QtGui.QColor("#7d8492"))
-        p.drawText(self.PAD, 15, "INTERPRETATION")
+        p.drawText(self.PAD, 15, self.title)
         p.setPen(QtGui.QColor("#2a3138" if self._dark else "#dddddd"))
         p.drawLine(self.PAD, 20, w - self.PAD, 20)
 

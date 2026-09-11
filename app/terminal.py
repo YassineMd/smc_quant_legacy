@@ -1191,6 +1191,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.splitter.addWidget(self.trades_panel)
         self.interp_panel = FlowInterpPanel()    # Flow mode — right-side vertical feed, one row per cycle
         self.interp_panel._hint_w = int(config.INTERP_WIDTH)   # draggable: the widget bounds it 250..520 px
+        self.interp_panel.title = config.PANE_TITLE_INTERP     # same words as its hamburger toggle
         self.interp_panel.cycleClicked.connect(self._on_interp_cycle)
         self.splitter.addWidget(self.interp_panel)
         self.interp_panel.hide()
@@ -18084,7 +18085,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
         self._liq_time_tag.textItem.setFont(_tf); self._liq_time_tag.setZValue(61)   # same layer as the main pair
         pw.addItem(self._liq_time_tag, ignoreBounds=True); self._liq_time_tag.hide()
-        self._liq_title = self._pane_title(pw, vb, "LIMIT ORDERS  ·  resting bid / ask $")
+        self._liq_title = self._pane_title(pw, vb, config.PANE_TITLE_LIQ)
         self._liq_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_liq_mouse_move)
         # Right-edge level markers, same idea as the taker flow's: a dashed rule from the last point out to the
         # axis plus a colour-matched "$740K (66%)" badge. Two points per rule -- redocking is free.
@@ -18546,7 +18547,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._spd_time_tag.textItem.setFont(_tf); self._spd_time_tag.setZValue(61)
         pw.addItem(self._spd_time_tag, ignoreBounds=True); self._spd_time_tag.hide()
         self._spd_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_spd_mouse_move)
-        self._spd_title = self._pane_title(pw, vb, "CYCLE SPEED  ·  ticks/s vs last %d" % config.SPEED_BASE_N)
+        self._spd_title = self._pane_title(pw, vb, config.PANE_TITLE_SPD)
         self._spd_badge = CycleBadgesItem("top")
         pw.addItem(self._spd_badge, ignoreBounds=True)
         self._spd_plot = pw
@@ -18784,7 +18785,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._lob_time_tag.textItem.setFont(_tf); self._lob_time_tag.setZValue(61)
         pw.addItem(self._lob_time_tag, ignoreBounds=True); self._lob_time_tag.hide()
         self._lob_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_lob_mouse_move)
-        self._lob_title = self._pane_title(pw, vb, "CYCLE BOOK  ·  bid / ask vs last %d" % config.LOB_BASE_N)
+        self._lob_title = self._pane_title(pw, vb, config.PANE_TITLE_LOB)
         self._lob_badge = CycleBadgesItem("top")
         pw.addItem(self._lob_badge, ignoreBounds=True)
         self._lob_plot = pw
@@ -19059,8 +19060,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cvol_time_tag.textItem.setFont(_tf); self._cvol_time_tag.setZValue(61)
         pw.addItem(self._cvol_time_tag, ignoreBounds=True); self._cvol_time_tag.hide()
         self._cvol_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_cvol_mouse_move)
-        self._cvol_title = self._pane_title(pw, vb, "CYCLE VOLUME  ·  dominant side vs last %d"
-                                            % config.CVOL_BASE_N)
+        self._cvol_title = self._pane_title(pw, vb, config.PANE_TITLE_CVOL)
         self._cvol_badge = CycleBadgesItem("top")
         pw.addItem(self._cvol_badge, ignoreBounds=True)
         self._cvol_plot = pw
@@ -19265,8 +19265,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cyc_time_tag.textItem.setFont(_tf); self._cyc_time_tag.setZValue(61)
         pw.addItem(self._cyc_time_tag, ignoreBounds=True); self._cyc_time_tag.hide()
         self._cyc_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_cyc_mouse_move)
-        self._cyc_title = self._pane_title(pw, vb, "CYCLE IMPACT  ·  ticks per %s"
-                                           % config.FLOW_CROSS_BADGE_UNIT_TXT)
+        self._cyc_title = self._pane_title(pw, vb, config.PANE_TITLE_CYC)
         # the `B/S x/100k` pill moved here from the flow chart: it belongs beside the bars it describes
         self._cyc_badge = CycleBadgesItem("top")
         pw.addItem(self._cyc_badge, ignoreBounds=True)
