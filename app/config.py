@@ -227,6 +227,24 @@ CVOL_LOOKBACK_SECS = 3600.0         # how far BEFORE the view the baseline reach
 CVOL_LOW_COL = "#4d84c4"            # quiet / normal / heavy. Deliberately NOT green-red: this pane is about
 CVOL_MID_COL = "#7a828e"            # how MUCH traded, and green/red already mean buy/sell everywhere else.
 CVOL_HIGH_COL = "#d9a520"
+
+# --- Book pane: is the RESTING book thick or thin this cycle, per side, vs the last N cycles? -----------------
+# Measured on 8 h of live tape (n=237) at the +-100 radius before any cut was chosen:
+#   bid p10 0.93  p33 0.98  median 1.00  p67 1.03  p90 1.08  p99 1.17   (ask within 0.01 of that)
+# ⚠⚠ a 0.80-1.25 band calls 100% of cycles NORMAL and 0.90-1.11 calls 91%: the book at +-100 ticks barely moves
+# over 80 seconds. The cuts below are the measured TERCILES, so "high" really does mean about +3%.
+# ⚠ they are RADIUS-DEPENDENT: terciles are 0.95/1.06 at +-10 ticks and 0.99/1.01 at +-200. The pane follows the
+# liquidity pane's radius, so pick +-10 there if you want this pane to have range.
+LOB_PANE_ON = True
+LOB_BASE_N = 5
+LOB_MIN_N = 3
+LOB_LOW = 0.98
+LOB_HIGH = 1.03
+LOB_MIN_COLS = 2                # the depth snapshots are ~30 s apart and a median cycle is ~82 s, so a cycle
+                                # averages ~3 of them. Under this it is a SAMPLE, not an average -- no bar.
+LOB_MIN_SPAN = 0.3219           # log2(1.25): the y range never shrinks below +-25%, so a 3% wiggle cannot be
+                                # auto-fitted into looking like a signal.
+LOB_CACHE_MAX = 4000            # per-cycle book means kept across windows, so the baseline survives a pan
 FLOW_CROSS_DASH_PX = 9.0            # dash length / gap, in PIXELS. The dashes are emitted as segments rather
 FLOW_CROSS_GAP_PX = 7.0             # than left to a dashed pen: Qt's dasher measured ~100x more expensive.
 # A cross that held its side for MIN_HOLD_SECS but never reached MIN_SPREAD_PCT is still a cycle, just a weak

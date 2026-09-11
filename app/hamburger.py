@@ -293,6 +293,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     bpVpMinUsdChanged = QtCore.Signal(float)
     cyclePaneToggled = QtCore.Signal(bool)       # Cycle pane on/off (Flow mode)
     cvolPaneToggled = QtCore.Signal(bool)        # Volume pane on/off (Flow mode)
+    lobPaneToggled = QtCore.Signal(bool)         # Book pane on/off (Flow mode)
     cycleWinChanged = QtCore.Signal(float)       # the smoothing that defines a cycle boundary
     liqPaneToggled = QtCore.Signal(bool)          # resting-liquidity pane on/off (Flow mode)
     liqOptsChanged = QtCore.Signal(int, int)      # resting-liquidity pane: (radius ticks, smoothing seconds)
@@ -1662,6 +1663,20 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % (config.CVOL_BASE_N, config.CVOL_LOW, config.CVOL_HIGH))
         self.cvol_on.toggled.connect(lambda on: self.cvolPaneToggled.emit(bool(on)))
         l4.addWidget(self.cvol_on)
+        self.lob_on = QtWidgets.QCheckBox("Book pane (resting book per side vs its last %d)" % config.LOB_BASE_N)
+        self.lob_on.setChecked(bool(config.LOB_PANE_ON))
+        self.lob_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.lob_on.setToolTip(
+            "Two bars per finished cycle: the MEAN resting BID (filled) and ASK (hollow) over that cycle, "
+            "each against the median of the previous %d cycles. Same blue/gray/amber bands, at the radius "
+            "the limit-orders pane is set to.\n"
+            "MEASURED WARNING: at +-100 ticks the ratio only runs 0.93 to 1.08 over 8 h, so 'high' means "
+            "about +3%% -- the book is a deep, slow level sampled every ~30 s against ~80 s cycles. "
+            "Terciles keep the labels meaningful and the y range is floored so a 3%% spread cannot look "
+            "dramatic. Pick a TIGHTER radius (+-10) on the limit-orders pane if you want range here."
+            % config.LOB_BASE_N)
+        self.lob_on.toggled.connect(lambda on: self.lobPaneToggled.emit(bool(on)))
+        l4.addWidget(self.lob_on)
         self.flow_sec.addWidget(w4)
         self.flow_sec.addWidget(w2)
         root.addWidget(self.flow_sec)
@@ -1678,6 +1693,9 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def set_liq_pane_on(self, on: bool) -> None:
         self.liq_on.blockSignals(True); self.liq_on.setChecked(bool(on)); self.liq_on.blockSignals(False)
+
+    def set_lob_pane_on(self, on: bool) -> None:
+        self.lob_on.blockSignals(True); self.lob_on.setChecked(bool(on)); self.lob_on.blockSignals(False)
 
     def set_cvol_pane_on(self, on: bool) -> None:
         self.cvol_on.blockSignals(True); self.cvol_on.setChecked(bool(on)); self.cvol_on.blockSignals(False)

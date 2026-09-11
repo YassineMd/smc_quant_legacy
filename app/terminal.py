@@ -1777,6 +1777,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_xbadge = None       # CycleBadgesItem: every cycle's move + side rate, in ONE item
         self._flow_badge_pad = 2 * int(config.FLOW_CROSS_BADGE_BAND_PX)   # strip under zero, px (tier-driven)
         self._flow_xsig = None         # (rev, view x, window, view y) -> an idle frame is one tuple compare
+        self._flow_xpsig = None        # per-pane slice of it, so one pane's y refit redraws only that pane
         self._flow_sig = None          # (store rev, view range, window, width) -> skip the redraw when nothing moved
         self._flow_follow = True       # right edge pinned to 'now' until the user pans away
         self._flow_resub_t = 0.0
@@ -1797,6 +1798,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_tag = None           # right-axis readout, in MONEY (the pane plots resting $)
         self._liq_time_tag = None      # x-axis clock badge, same design as the price badge
         self._liq_proxy = None
+        self._lob_plot = None          # Book pane (Flow mode): resting book per side vs the last N cycles
+        self._lob_vb = None
+        self._lob_items = None         # (low, normal, high) x (bid filled, ask hollow) BarGraphItems
+        self._lob_sig = None
+        self._lob_t = 0.0
+        self._lob_data = None
+        self._lob_cache = {}           # {cycle start: (bid mean, ask mean)} -- kept ACROSS windows so the
+        self._lob_on = bool(config.LOB_PANE_ON)      # baseline survives a pan out of the fetched range
+        self._lob_vline = None; self._lob_hline = None
+        self._lob_tag = None; self._lob_time_tag = None; self._lob_proxy = None
         self._cvol_plot = None         # Volume pane (Flow mode): the dominant side's volume vs its own last N
         self._cvol_vb = None
         self._cvol_items = None        # (low, normal, high) BarGraphItems + the two band guides
@@ -2309,6 +2320,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_flow_cross_on(bool(getattr(self, "_flow_x_on", config.FLOW_CROSS_ON)))
             self.menu.set_cycle_opts(bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)))
             self.menu.set_cvol_pane_on(bool(getattr(self, "_cvol_on", config.CVOL_PANE_ON)))
+            self.menu.set_lob_pane_on(bool(getattr(self, "_lob_on", config.LOB_PANE_ON)))
             self.menu.set_liq_pane_on(bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)))
             self.menu.set_liq_opts(int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                                    int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)))
@@ -2565,6 +2577,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.bpVpMinUsdChanged.connect(self._on_bpvp_min)                    # Big Player Gray VP threshold -> redraw + persist
         self.menu.cyclePaneToggled.connect(self._on_cyc_pane_toggled)            # Cycle pane on/off
         self.menu.cvolPaneToggled.connect(self._on_cvol_pane_toggled)            # Volume pane on/off
+        self.menu.lobPaneToggled.connect(self._on_lob_pane_toggled)              # Book pane on/off
         self.menu.cycleWinChanged.connect(self._on_cyc_win)                      # cycle-defining window
         self.menu.liqPaneToggled.connect(self._on_liq_pane_toggled)              # resting-liquidity pane on/off
         self.menu.liqOptsChanged.connect(self._on_liq_opts)                      # resting-liquidity pane
@@ -4337,6 +4350,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_hide_cursor()                               # cursor is over the chart -> no liquidity readout
         self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()  # ... and the Cycle pane
         self._cvol_sync_vline(pt.x()); self._cvol_hide_cursor()   # ... and the Volume pane
+        self._lob_sync_vline(pt.x()); self._lob_hide_cursor()     # ... and the Book pane
         if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
             self.fp_panel.show_price_line(pt.y())
         self._radar_hover(pt)                                 # Order-Flow Walls radar -> P(resist) odds on hover
@@ -10325,6 +10339,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "flow_cross_on": bool(getattr(self, "_flow_x_on", config.FLOW_CROSS_ON)),  # cycle-start vlines
                 "cycle_on": bool(getattr(self, "_cyc_on", config.CYCLE_PANE_ON)),
                 "cvol_on": bool(getattr(self, "_cvol_on", config.CVOL_PANE_ON)),
+                "lob_on": bool(getattr(self, "_lob_on", config.LOB_PANE_ON)),
                 "liq_pane_on": bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)),
                 "liq_radius": int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                 "liq_smooth": int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)),
@@ -10445,6 +10460,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_x_on = bool(s.get("flow_cross_on", config.FLOW_CROSS_ON))
         self._cyc_on = bool(s.get("cycle_on", config.CYCLE_PANE_ON))
         self._cvol_on = bool(s.get("cvol_on", config.CVOL_PANE_ON))
+        self._lob_on = bool(s.get("lob_on", config.LOB_PANE_ON))
         self._liq_pane_on = bool(s.get("liq_pane_on", config.LIQ_PANE_ON))
         _lr = int(s.get("liq_radius", config.LIQ_RADIUS_TICKS) or config.LIQ_RADIUS_TICKS)
         _ls = int(s.get("liq_smooth", config.LIQ_SMOOTH_SECS) if s.get("liq_smooth") is not None else config.LIQ_SMOOTH_SECS)
@@ -16607,6 +16623,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._cyc_sig = None; self._cyc_t = 0.0
             self._cvol_show(bool(getattr(self, "_cvol_on", True)))
             self._cvol_sig = None; self._cvol_t = 0.0
+            self._lob_show(bool(getattr(self, "_lob_on", True)))
+            self._lob_sig = None; self._lob_t = 0.0
         # The loaded set moved, so EVERYTHING derived from it must re-derive — same invalidation the replay step does.
         # Without this the Pivot D/E marks (sig-gated on offset/range) and the selection kept their last values, so a
         # Start-Date / replay-cursor change only visibly took effect on the next right-arrow step.
@@ -17305,6 +17323,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._cvol_sig = None; self._cvol_sized = False; self._cvol_proxy = None
             self._cvol_vline = None; self._cvol_hline = None
             self._cvol_tag = None; self._cvol_time_tag = None
+            self._lob_plot = None; self._lob_vb = None; self._lob_items = None
+            self._lob_sig = None; self._lob_sized = False; self._lob_proxy = None
+            self._lob_vline = None; self._lob_hline = None
+            self._lob_tag = None; self._lob_time_tag = None
             self._liq_lvl_dock = None; self._liq_lvl_up = None
             # the swing-line CVD-mirror items lived on the CVD pane (a child of the just-deleted splitter_v) — null
             # them too, so the next hover recreates them on the rebuilt pane instead of touching a deleted C++ object.
@@ -18216,6 +18238,253 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # CYCLE pane (Flow mode) -- one block per run where the same side owns the flow
     # ------------------------------------------------------------------
+    def _on_lob_pane_toggled(self, on: bool) -> None:
+        self._lob_on = bool(on)
+        self._lob_show(bool(on) and self.scanner_mode == "flow")
+        self._save_ui_state()
+
+    def _lob_ensure_pane(self):
+        if self._lob_plot is not None:
+            return self._lob_plot
+        try:
+            self._ensure_canvas_panes()
+        except Exception:
+            pass
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return None
+        ax = PriceAxis(orientation="right")
+        pw = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"), "right": ax})
+        pw.setBackground("#141414")
+        pw.showAxis("right"); pw.hideAxis("left")
+        for _a in ("bottom", "right"):
+            pw.getAxis(_a).setPen(pg.mkPen("#dcdcdc", width=1))
+            pw.getAxis(_a).setTextPen(pg.mkPen("#dcdcdc"))
+        pw.showGrid(x=False, y=False)
+        pw.setMenuEnabled(False)
+        pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        pw.getAxis("bottom").set_scanner_active(False)
+        ax.tickStrings = lambda vals, sc, sp_: ["%.2gx" % (2.0 ** v) for v in vals]
+        vb = pw.getViewBox()
+        vb.setMouseEnabled(x=True, y=True)
+        vb.setXLink(self.vb)
+        # SIX BarGraphItems: three bands x {bid FILLED, ask HOLLOW}. Filled/hollow is what tells the two sides
+        # apart at a glance -- colour is spent on the band, and position alone would need counting. One brush
+        # and one pen each, so the count never grows with the number of cycles.
+        items = []
+        for _c in (config.CVOL_LOW_COL, config.CVOL_MID_COL, config.CVOL_HIGH_COL):
+            _col = QtGui.QColor(_c)
+            for _filled in (True, False):
+                it = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
+                                     brush=pg.mkBrush(_col.red(), _col.green(), _col.blue(),
+                                                      190 if _filled else 0),
+                                     pen=pg.mkPen(_col, width=1.0))
+                it.setZValue(5)
+                pw.addItem(it); items.append(it)
+        self._lob_items = tuple(items)
+        for _v in (float(np.log2(max(1e-9, config.LOB_LOW))), float(np.log2(max(1e-9, config.LOB_HIGH)))):
+            _p = pg.mkPen("#9aa4b2", width=1.0, style=QtCore.Qt.DashLine); _p.setCosmetic(True)
+            ln = pg.InfiniteLine(angle=0, pos=_v, pen=_p)
+            ln.setZValue(3); pw.addItem(ln, ignoreBounds=True)
+        _z = pg.InfiniteLine(angle=0, pos=0.0, pen=pg.mkPen("#8a8a8a", width=1))
+        _z.setZValue(2); pw.addItem(_z, ignoreBounds=True)
+        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
+        self._lob_vline = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
+        self._lob_hline = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
+        self._lob_vline.setZValue(15); self._lob_hline.setZValue(15)
+        pw.addItem(self._lob_vline, ignoreBounds=True); pw.addItem(self._lob_hline, ignoreBounds=True)
+        self._lob_hline.hide()
+        _tf = QtGui.QFont("Consolas", 8)
+        self._lob_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._lob_tag.textItem.setFont(_tf); self._lob_tag.setZValue(16)
+        pw.addItem(self._lob_tag, ignoreBounds=True); self._lob_tag.hide()
+        self._lob_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._lob_time_tag.textItem.setFont(_tf); self._lob_time_tag.setZValue(61)
+        pw.addItem(self._lob_time_tag, ignoreBounds=True); self._lob_time_tag.hide()
+        self._lob_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_lob_mouse_move)
+        self._lob_plot = pw
+        self._lob_vb = vb
+        self._theme_sub_panes(not self._simple_bw())
+        sp.addWidget(pw)
+        pw.setMinimumHeight(60)
+        return pw
+
+    def _lob_show(self, on: bool) -> None:
+        if on:
+            if self._lob_ensure_pane() is None:
+                return
+            self._lob_plot.setVisible(True)
+            if self._sub_pane_grow(self._lob_plot, not getattr(self, "_lob_sized", False), share=0.14):
+                self._lob_sized = True
+        elif self._lob_plot is not None:
+            try:
+                self._lob_plot.setVisible(False)
+            except RuntimeError:
+                self._lob_plot = None; self._lob_items = None; self._lob_vb = None
+
+    def _lob_hide_cursor(self) -> None:
+        for _it in (self._lob_hline, self._lob_tag, self._lob_time_tag):
+            if _it is not None:
+                _it.hide()
+
+    def _lob_sync_vline(self, x: float) -> None:
+        if self._lob_vline is not None:
+            self._lob_vline.setPos(x)
+
+    def _on_lob_mouse_move(self, evt) -> None:
+        if self._lob_vb is None or self._lob_plot is None or not self._lob_plot.isVisible():
+            return
+        pos = evt[0]
+        if not self._lob_plot.sceneBoundingRect().contains(pos):
+            self._lob_hide_cursor()
+            return
+        pt = self._lob_vb.mapSceneToView(pos)
+        self._lob_vline.setPos(pt.x())
+        self._lob_hline.setPos(pt.y()); self._lob_hline.show()
+        (vx0, vx1), (vy0, vy1) = self._lob_vb.viewRange()
+        self._lob_tag.setText("%.3gx" % (2.0 ** float(pt.y())))
+        self._lob_tag.setPos(vx1, pt.y()); self._lob_tag.show()
+        _xl = self._x_time_label(pt.x())
+        if _xl:
+            self._lob_time_tag.setText(_xl); self._lob_time_tag.setPos(pt.x(), vy0); self._lob_time_tag.show()
+        else:
+            self._lob_time_tag.hide()
+        self.vline.setPos(pt.x())
+        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
+        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
+        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
+        self._cvol_sync_vline(pt.x()); self._cvol_hide_cursor()
+
+    def _lob_cycle_means(self, t, t_end):
+        """(bid mean, ask mean, n columns) per cycle from the liquidity window, and cache them.
+
+        The book is a LEVEL, so a cycle's reading is the MEAN of its columns -- summing would just re-measure
+        the cycle's length. Cached by cycle START across windows, because the fetched liquidity range follows
+        the VIEW while the baseline needs the previous N cycles, which are often behind its left edge."""
+        d = getattr(self, "_liq_data", None)
+        cache = self._lob_cache
+        if d is not None:
+            lt0, lt1, cols, radii, mids, bidg, askg = d
+            n = int(mids.size)
+            if n > 0:
+                try:
+                    j = list(radii).index(int(self._liq_radius))
+                except ValueError:
+                    j = min(range(len(radii)), key=lambda k: abs(radii[k] - self._liq_radius))
+                step = (lt1 - lt0) / float(n)
+                xcol = lt0 + (np.arange(n) + 0.5) * step
+                good = mids > 0
+                src = (np.maximum.accumulate(np.where(good, np.arange(n), 0))
+                       if (good.any() and not good.all()) else np.arange(n))
+                b = bidg[j].astype(np.float64)[src]
+                a = askg[j].astype(np.float64)[src]
+                lo = np.searchsorted(xcol, t, side="left")
+                hi = np.searchsorted(xcol, t_end, side="right")
+                need = int(config.LOB_MIN_COLS)
+                for k in range(int(t.size)):
+                    if hi[k] - lo[k] >= need:
+                        cache[round(float(t[k]), 2)] = (float(b[lo[k]:hi[k]].mean()),
+                                                        float(a[lo[k]:hi[k]].mean()))
+                if len(cache) > int(config.LOB_CACHE_MAX):
+                    for _k in sorted(cache)[:len(cache) - int(config.LOB_CACHE_MAX)]:
+                        cache.pop(_k, None)
+        bm = np.array([cache.get(round(float(x), 2), (np.nan, np.nan))[0] for x in t])
+        am = np.array([cache.get(round(float(x), 2), (np.nan, np.nan))[1] for x in t])
+        return bm, am
+
+    @staticmethod
+    def _lob_ratio(vals, done, n_base, min_n):
+        """Each cycle's book level over the MEDIAN of the previous `n_base` cycles' -- BOTH sides are present in
+        every cycle, so unlike the taker-volume pane the baseline is simply the previous cycles, not the
+        previous ones of the same side."""
+        out = np.full(int(np.size(vals)), np.nan)
+        hist = []
+        for k in range(out.size):
+            v = float(vals[k])
+            if not (bool(done[k]) and np.isfinite(v) and v > 0):
+                continue
+            if len(hist) >= int(min_n):
+                base = float(np.median(hist[-int(n_base):]))
+                if base > 0:
+                    out[k] = v / base
+            hist.append(v)
+        return out
+
+    def _lob_tick(self, now: float) -> None:
+        if self._lob_plot is None or not self._lob_plot.isVisible():
+            return
+        if now - self._lob_t < float(config.CYCLE_RECALC_SECS):
+            return
+        self._lob_t = now
+        (vx0, vx1), _ = self.vb.viewRange()
+        try:
+            self._lob_data = (vx0, self._flow.crosses(
+                vx0 - float(config.CVOL_LOOKBACK_SECS), vx1, float(self._flow_win),
+                float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE)))
+        except Exception:
+            return
+        self._lob_draw(now)
+
+    def _lob_draw(self, now: float) -> None:
+        """TWO BARS PER FINISHED CYCLE -- the resting BID and ASK book over that cycle, each against the MEDIAN
+        of the previous LOB_BASE_N cycles (user 2026-09-11). Bid is the FILLED half, ask the HOLLOW half.
+
+        ⚠ Measured before this was built: at the default +-100 tick radius the ratio runs p10 0.93 to p90 1.08,
+        so "high" means about +3%. The book is a deep, slow LEVEL and the depth snapshots are ~30 s apart
+        against an ~82 s median cycle. The cuts are the measured terciles so the labels still mean thirds, the
+        y range has a FLOOR so a 3% spread cannot be auto-fitted into looking dramatic, and a cycle with fewer
+        than LOB_MIN_COLS snapshots gets no bar at all rather than a one-sample "average".
+
+        The radius is the real lever: terciles are 0.95/1.06 at +-10 ticks against 0.99/1.01 at +-200, and this
+        pane follows whatever the liquidity pane is set to."""
+        if self._lob_data is None or self._lob_items is None:
+            return
+        vx0, (t, is_buy, strong, move, cbuy, csell, t_end, done) = self._lob_data
+        if t.size == 0:
+            for it in self._lob_items:
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            self._lob_sig = ("empty",)
+            return
+        bm, am = self._lob_cycle_means(t, t_end)
+        rb = self._lob_ratio(bm, done, config.LOB_BASE_N, config.LOB_MIN_N)
+        ra = self._lob_ratio(am, done, config.LOB_BASE_N, config.LOB_MIN_N)
+        vis = t >= vx0
+        kb = vis & np.isfinite(rb)
+        ka = vis & np.isfinite(ra)
+        sig = (int(kb.sum()), int(ka.sum()), round(float(t[-1]), 2), int(self._flow_win),
+               int(self._liq_radius), round(float(np.nan_to_num(rb[kb][-1] if kb.any() else 0.0)), 5))
+        if sig == self._lob_sig:
+            return
+        self._lob_sig = sig
+        lo_c = float(config.LOB_LOW); hi_c = float(config.LOB_HIGH)
+        mid = 0.5 * (t + t_end)
+        allv = []
+        for i, (r, keep, filled) in enumerate(((rb, kb, True), (ra, ka, False))):
+            # the cycle's span is split in two: bid takes the left half, ask the right, so the pair sits inside
+            # the same cycle and never overlaps the neighbouring one
+            x0 = t[keep] if filled else mid[keep]
+            x1 = mid[keep] if filled else t_end[keep]
+            v = np.log2(np.maximum(r[keep], 1e-9))
+            rr = r[keep]
+            allv.append(v)
+            for bi, m in enumerate((rr < lo_c, (rr >= lo_c) & (rr <= hi_c), rr > hi_c)):
+                it = self._lob_items[bi * 2 + (0 if filled else 1)]
+                if not m.any():
+                    it.setOpts(x0=[], x1=[], y0=[], height=[])
+                    continue
+                it.setOpts(x0=x0[m], x1=x1[m], y0=np.minimum(0.0, v[m]), height=np.abs(v[m]))
+        _a = np.concatenate(allv) if allv else np.zeros(0)
+        if _a.size == 0:
+            return
+        # FLOOR the range. Auto-fitting a +-3% spread to the pane height would magnify noise into something that
+        # reads as signal, which is the one failure mode this measurement warned about.
+        lim = max(float(np.percentile(np.abs(_a), 99.0)) * 1.15, float(config.LOB_MIN_SPAN))
+        cur = getattr(self, "_lob_ytop", 0.0)
+        if lim > cur * 0.98 or lim < cur * 0.55:
+            self._lob_ytop = lim
+            self._lob_vb.setYRange(-lim, lim, padding=0.0)
+
     def _on_cvol_pane_toggled(self, on: bool) -> None:
         self._cvol_on = bool(on)
         self._cvol_show(bool(on) and self.scanner_mode == "flow")
@@ -18748,6 +19017,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cyc_sig = None; self._cyc_t = 0.0
         self._cvol_show(bool(getattr(self, "_cvol_on", True)))      # ... and the Volume pane
         self._cvol_sig = None; self._cvol_t = 0.0
+        self._lob_show(bool(getattr(self, "_lob_on", True)))        # ... and the Book pane
+        self._lob_sig = None; self._lob_t = 0.0
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
         self._flow_subscribe(backfill=True)
         now = time.time()
@@ -18767,6 +19038,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_show(False)
         self._cyc_show(False)
         self._cvol_show(False)
+        self._lob_show(False)
         self._flow_curves = None
         self._flow_sig = None
         self._flow_xln = None; self._flow_xsig = None; self._flow_xbadge = None
@@ -18826,6 +19098,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pass
         try:
             self._cvol_tick(now)        # Volume pane -- same
+        except Exception:
+            pass
+        try:
+            self._lob_tick(now)         # Book pane -- same
         except Exception:
             pass
 
@@ -18928,17 +19204,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # paint probe) -- _cross_clear does both
             self._cross_clear()
             self._flow_xsig = ("off",)
+            self._flow_xpsig = None                   # ... so turning it back on redraws every pane
             return
         targets = self._cross_targets()
         (vx0, vx1), (vy0, vy1) = self.vb.viewRange()
-        sig = [self._flow.rev, round(vx0, 2), round(vx1, 2), int(self._flow_win)]
-        for _k, _p, _v in targets:                          # every pane's y range: a y pan in ANY of them redraws
+        # TWO levels of signature. The SHARED one is what the crosses themselves depend on; a pane's own is that
+        # plus its y range. A y refit in one pane then redraws ONE pane instead of all five -- the work was
+        # growing linearly with the pane count (0.87 ms at three, 2.17 ms at five) and most of it was panes
+        # whose geometry had not moved at all.
+        shared = (self._flow.rev, round(vx0, 2), round(vx1, 2), int(self._flow_win))
+        psig = {}
+        for _k, _p, _v in targets:
             (_a, _b) = _v.viewRange()[1]
-            sig.append((_k, round(_a, 4), round(_b, 4)))
-        sig = tuple(sig)
-        if sig == getattr(self, "_flow_xsig", None):
+            psig[_k] = (shared, round(_a, 4), round(_b, 4))
+        sig = (shared, tuple(sorted(psig.items())))
+        _had = getattr(self, "_flow_xsig", None)
+        if sig == _had:
             return                                          # nothing moved -> the cheapest possible frame
+        # `_flow_xsig = None` is how the rest of the class FORCES a redraw (a toggle, a mode re-entry). The
+        # per-pane signatures would still match and every pane would be skipped, so a forced redraw would draw
+        # nothing at all -- treat the whole set as stale whenever the shared signature was cleared.
+        _prev = (getattr(self, "_flow_xpsig", None) or {}) if _had is not None else {}
+        _stale = {_k for _k, _v in psig.items() if _prev.get(_k) != _v}
         self._flow_xsig = sig
+        self._flow_xpsig = psig
+        self._flow_xstale = set(_stale)                     # which panes this pass actually rebuilt (gated)
         t, is_buy, strong, move, cbuy, csell, _t_end, _done = self._flow.crosses(
             vx0, vx1, float(self._flow_win), float(config.FLOW_CROSS_MIN_SPREAD_PCT),
             float(config.FLOW_CROSS_MIN_HOLD_SECS), int(config.FLOW_CROSS_MAX),
@@ -18966,6 +19256,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _n = tuple(int(_m.sum()) for _m in _masks)
         for _k, _p, _v in targets:
             _items = self._cross_items_for(_k, _p)
+            if _k not in _stale:
+                continue                                    # this pane's geometry and the crosses are unchanged
             (_ay, _by) = _v.viewRange()[1]
             _hh = max(1e-9, float(_by - _ay))
             # Span the visible height and barely more. The signature carries every pane's y range, so a y pan
@@ -19010,7 +19302,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         out = [("main", self.plot, self.vb)]
         for _k, _p, _v in (("liq", getattr(self, "_liq_plot", None), getattr(self, "_liq_vb", None)),
                            ("cyc", getattr(self, "_cyc_plot", None), getattr(self, "_cyc_vb", None)),
-                           ("cvol", getattr(self, "_cvol_plot", None), getattr(self, "_cvol_vb", None))):
+                           ("cvol", getattr(self, "_cvol_plot", None), getattr(self, "_cvol_vb", None)),
+                           ("lob", getattr(self, "_lob_plot", None), getattr(self, "_lob_vb", None))):
             if _p is not None and _v is not None and _p.isVisible():
                 out.append((_k, _p, _v))
         return out
@@ -19028,6 +19321,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         got = store.get(key)
         if got is not None and got[0] is plot:
             return got[1]
+        # a pane whose items are being (re)built must redraw even if its y range has not moved
+        _ps = getattr(self, "_flow_xpsig", None)
+        if isinstance(_ps, dict):
+            _ps.pop(key, None)
         items = []
         for _c, _z in (("#1b9c8a", 3), ("#e03b3b", 3), (config.FLOW_CROSS_WEAK_COL, 2)):
             # A wide pen because on the Simple BW canvas a hairline vline is invisible, which is exactly what
@@ -19939,7 +20236,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                           (getattr(self, "_cyc_plot", None),
                            (getattr(self, "_cyc_vline", None), getattr(self, "_cyc_hline", None))),
                           (getattr(self, "_cvol_plot", None),
-                           (getattr(self, "_cvol_vline", None), getattr(self, "_cvol_hline", None)))):
+                           (getattr(self, "_cvol_vline", None), getattr(self, "_cvol_hline", None))),
+                          (getattr(self, "_lob_plot", None),
+                           (getattr(self, "_lob_vline", None), getattr(self, "_lob_hline", None)))):
             if pw is None:
                 continue
             try:
