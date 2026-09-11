@@ -84,6 +84,32 @@ def _load_overlay() -> dict:
     return _overlay
 
 
+_call_fp: dict = {}          # tf -> the last bucket list this ran over, so an unchanged list is free
+
+
+def _call_fingerprint(buckets, tf: str):
+    """Identify a bucket list cheaply: its length, its two endpoints, and whether those endpoints are FILLED.
+
+    ⚠ Deliberately not id()-based -- ids are reused after a collection, and an id()-keyed memo has bitten this
+    project before. These are stable DATA values.
+
+    ⚠ The two `delta_h1 is None` flags are what make it safe against freshly deserialised dicts: the times
+    would match but the fills would be gone, so without them the guard would skip re-filling. They only work
+    because the fingerprint is STORED AFTER the walk, when the endpoints reflect the filled state."""
+    try:
+        n = len(buckets)
+    except TypeError:
+        return None                                   # a generator (archive._load): no guard, walk it
+    if n <= 0:
+        return None
+    try:
+        b0 = buckets[0]; bz = buckets[-1]
+        return (tf, n, b0.get("start_time"), bz.get("end_time"), _overlay_mtime,
+                b0.get("delta_h1") is None, bz.get("delta_h1") is None)
+    except (TypeError, AttributeError, IndexError, KeyError):
+        return None                                   # not indexable -> walk it
+
+
 def enrich_halves(buckets, tf: str) -> None:
     """Fill missing delta_h1/price_h1 on each bucket IN PLACE from the reconstruction overlay, so the terminal's
     Δ-accel / ΔP / R-h1-h2 render on old buckets. Used for BOTH archive-extend buckets (here) and the daemon's
@@ -98,6 +124,16 @@ def enrich_halves(buckets, tf: str) -> None:
         _done.clear(); _done_mtime = _overlay_mtime
     elif len(_done) > 400_000:
         _done.clear()
+    # WHOLE-CALL GUARD (perf 2026-09-11). The per-bucket memo below already works -- measured 914 hits and 0
+    # lookups per call -- but the LOOP itself ran over 3,234 buckets on every 20 Hz tick just to conclude that
+    # nothing had changed: 5.4 ms per tick, the largest single per-tick cost in the terminal and most of
+    # _on_timer's 6 ms median. The list is append-only and time-ordered, so its length plus its two endpoints
+    # plus the overlay's mtime identify it: four dict reads instead of ~3,200 iterations.
+    # ⚠ Deliberately NOT id()-based -- ids are reused after a collection, and this project has been bitten by
+    # an id()-keyed memo before. These are stable DATA values.
+    fp = _call_fingerprint(buckets, tf)
+    if fp is not None and _call_fp.get(tf) == fp:
+        return
     done = _done
     for b in buckets:
         if b.get("delta_h1") is not None and b.get("price_h1") is not None:
@@ -114,6 +150,10 @@ def enrich_halves(buckets, tf: str) -> None:
             b["delta_h1"] = pair[0]
         if b.get("price_h1") is None and pair[1] is not None:
             b["price_h1"] = pair[1]
+    # recomputed AFTER the walk so it carries the FILLED state of the endpoints -- see _call_fingerprint
+    fp2 = _call_fingerprint(buckets, tf)
+    if fp2 is not None:
+        _call_fp[tf] = fp2
 
 
 def _load(tf: str) -> dict[int, dict]:
