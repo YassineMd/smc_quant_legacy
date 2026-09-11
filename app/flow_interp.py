@@ -317,70 +317,75 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         # the move reads as part of the interpretation, so it is bolder than the evidence lines below it
         self._f_move = QtGui.QFont(); self._f_move.setPointSize(8); self._f_move.setBold(True)
         self._f_title = QtGui.QFont(); self._f_title.setPointSize(8); self._f_title.setBold(True)
-        self._build_footer()
+        self._f_lb = QtGui.QFont(); self._f_lb.setPointSize(8); self._f_lb.setBold(True)
+        self._f_lbv = QtGui.QFont(); self._f_lbv.setPointSize(11); self._f_lbv.setBold(True)
+        self._lb = 5                    # the cycle lookback, drawn in the footer band
+        self._lb_hover = 0              # -1 over the left chevron, +1 over the right, 0 neither
         self.title = "INTERPRETATION"      # the terminal replaces this with config.PANE_TITLE_INTERP, the
         #                                    same string its hamburger toggle carries
 
     def sizeHint(self):
         return QtCore.QSize(int(self._hint_w), 600)
 
-    # ---- the lookback control ---------------------------------------------------------------------------
-    def _build_footer(self) -> None:
-        """`lookback [5] cycles`, bottom-right. A child of the PANEL, not the viewport, so it stays put while
-        the feed scrolls underneath it; _update_scroll reserves FOOT_H so the last row can still clear it."""
-        self._foot = QtWidgets.QWidget(self)
-        lay = QtWidgets.QHBoxLayout(self._foot)
-        lay.setContentsMargins(6, 2, 6, 2); lay.setSpacing(6)
-        self._foot_lbl = QtWidgets.QLabel("lookback")
-        f = QtGui.QFont(); f.setPointSize(8)
-        self._foot_lbl.setFont(f)
-        self._spin = QtWidgets.QSpinBox()
-        self._spin.setFont(f)
-        self._spin.setRange(2, 20)
-        self._spin.setValue(5)
-        self._spin.setFixedWidth(52)
-        self._spin.setAlignment(QtCore.Qt.AlignRight)
-        self._spin.setToolTip(
-            "How many previous cycles every rating is measured against.\n\n"
-            "One knob for the whole family: CYCLE VOLUME, CYCLE BOOK, CYCLE SPEED and the states in this feed "
-            "all compare a cycle to its last N. Volume and Speed use the last N of the SAME side, so they "
-            "reach about twice as far back in time.\n\n"
-            "Smaller reacts faster and is noisier; larger is steadier and slower to notice a change. The band "
-            "cuts were measured at 5.")
-        self._foot_sfx = QtWidgets.QLabel("cycles")
-        self._foot_sfx.setFont(f)
-        lay.addWidget(self._foot_lbl); lay.addWidget(self._spin); lay.addWidget(self._foot_sfx)
-        self._foot.resize(self._foot.sizeHint())
-        # the wheel must scroll the FEED, never nudge the number under the cursor by accident
-        self._spin.wheelEvent = lambda ev: ev.ignore()
-        self._spin.valueChanged.connect(lambda v: self.lookbackChanged.emit(int(v)))
-        self._style_footer()
-
-    def _style_footer(self) -> None:
-        dark = self._dark
-        fg = "#8a939c" if dark else "#666666"
-        bg = "#1b1b1b" if dark else "#f2f2f2"
-        bd = "#2f363d" if dark else "#d8d8d8"
-        self._foot.setStyleSheet(
-            "QWidget { background: %s; }"
-            "QLabel { color: %s; background: transparent; }"
-            "QSpinBox { color: %s; background: %s; border: 1px solid %s; padding: 0px 2px; }"
-            % (bg, fg, "#dfe4ea" if dark else "#222222", bg, bd))
+    # ---- the lookback control, drawn in the footer band ---------------------------------------------------
+    LB_MIN, LB_MAX = 2, 20
 
     def lookback(self) -> int:
-        return int(self._spin.value())
+        return int(self._lb)
 
     def setLookback(self, n: int) -> None:
-        self._spin.blockSignals(True)
-        self._spin.setValue(max(self._spin.minimum(), min(self._spin.maximum(), int(n))))
-        self._spin.blockSignals(False)
+        """Set it without emitting -- the terminal calls this to restore a saved value."""
+        v = max(self.LB_MIN, min(self.LB_MAX, int(n)))
+        if v != self._lb:
+            self._lb = v
+            self.viewport().update()
 
-    def _place_footer(self) -> None:
+    def _bump(self, d: int) -> None:
+        v = max(self.LB_MIN, min(self.LB_MAX, self._lb + int(d)))
+        if v != self._lb:
+            self._lb = v
+            self.viewport().update()
+            self.lookbackChanged.emit(v)
+
+    def _foot_rects(self):
+        """(band, left chevron, value, right chevron) in viewport coordinates."""
         w = self.viewport().width(); h = self.viewport().height()
-        sz = self._foot.sizeHint()
-        self._foot.resize(sz)
-        self._foot.move(max(0, w - sz.width() - 2), max(0, h - sz.height() - 2))
-        self._foot.raise_()
+        band = QtCore.QRect(0, h - self.FOOT_H, w, self.FOOT_H)
+        r = 22                                          # chevron hit box, comfortably clickable
+        vx = w - self.PAD - r - 34
+        return (band,
+                QtCore.QRect(vx - r, band.y() + 2, r, self.FOOT_H - 4),
+                QtCore.QRect(vx, band.y() + 2, 34, self.FOOT_H - 4),
+                QtCore.QRect(vx + 34, band.y() + 2, r, self.FOOT_H - 4))
+
+    def _draw_footer(self, p, w, h):
+        band, lrect, vrect, rrect = self._foot_rects()
+        p.fillRect(band, QtGui.QColor("#141414" if self._dark else "#ffffff"))
+        p.setPen(QtGui.QColor("#2a3138" if self._dark else "#e2e2e2"))
+        p.drawLine(self.PAD, band.y(), w - self.PAD, band.y())
+        p.setFont(self._f_lb)
+        p.setPen(QtGui.QColor("#6f7a82" if self._dark else "#9a9a9a"))
+        p.drawText(self.PAD, band.y() + self.FOOT_H - 8, "LOOKBACK")
+        for rect, d, ch in ((lrect, -1, "\u2039"), (rrect, +1, "\u203a")):
+            on = (self._lb_hover == d)
+            live = (self._lb > self.LB_MIN) if d < 0 else (self._lb < self.LB_MAX)
+            if on and live:
+                p.fillRect(rect, QtGui.QColor(255, 255, 255, 20) if self._dark
+                           else QtGui.QColor(0, 0, 0, 16))
+            col = ("#d7dde3" if self._dark else "#333333") if live else ("#3d444b" if self._dark else "#cccccc")
+            p.setFont(self._f_lbv); p.setPen(QtGui.QColor(col))
+            p.drawText(rect, QtCore.Qt.AlignCenter, ch)
+        p.setFont(self._f_lbv)
+        p.setPen(QtGui.QColor("#e6ebf0" if self._dark else "#1a1a1a"))
+        p.drawText(vrect, QtCore.Qt.AlignCenter, str(self._lb))
+
+    def _foot_hit(self, pos) -> int:
+        _b, l, _v, r = self._foot_rects()
+        if l.contains(pos):
+            return -1
+        if r.contains(pos):
+            return 1
+        return 0
 
     # ---- data -------------------------------------------------------------------------------------------
     def setRows(self, rows) -> None:
@@ -405,7 +410,6 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
     def setDark(self, dark: bool) -> None:
         if bool(dark) != self._dark:
             self._dark = bool(dark)
-            self._style_footer()
             self.viewport().update()
 
     def _update_scroll(self) -> None:
@@ -419,7 +423,6 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self._update_scroll()
-        self._place_footer()
 
     # ---- interaction ------------------------------------------------------------------------------------
     def _row_at(self, y: int) -> int:
@@ -427,20 +430,27 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         return int(i) if 0 <= i < len(self._rows) else -1
 
     def mouseMoveEvent(self, ev):
-        i = self._row_at(int(ev.position().y()))
-        if i != self._hover:
-            self._hover = i
+        pos = ev.position().toPoint()
+        hv = self._foot_hit(pos)
+        i = -1 if (hv or pos.y() >= self.viewport().height() - self.FOOT_H) else self._row_at(pos.y())
+        if i != self._hover or hv != self._lb_hover:
+            self._hover = i; self._lb_hover = hv
             self.viewport().update()
 
     def leaveEvent(self, ev):
-        if self._hover != -1:
-            self._hover = -1
+        if self._hover != -1 or self._lb_hover:
+            self._hover = -1; self._lb_hover = 0
             self.viewport().update()
 
     def mousePressEvent(self, ev):
-        if self._foot.geometry().contains(ev.position().toPoint()):
-            return                                  # the control sits ON TOP of the feed; let it have the click
-        i = self._row_at(int(ev.position().y()))
+        pos = ev.position().toPoint()
+        hv = self._foot_hit(pos)
+        if hv:
+            self._bump(hv)
+            return
+        if pos.y() >= self.viewport().height() - self.FOOT_H:
+            return                                  # the footer band belongs to the control, not to a row
+        i = self._row_at(pos.y())
         if i >= 0:
             r = self._rows[i]
             self.cycleClicked.emit(float(r[0]), float(r[1]))
@@ -461,6 +471,10 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         p.setPen(QtGui.QColor("#2a3138" if self._dark else "#dddddd"))
         p.drawLine(self.PAD, 20, w - self.PAD, 20)
 
+        # the rows own the band BETWEEN the title and the control, and are clipped to it: before this they
+        # scrolled up under the title
+        p.save()
+        p.setClipRect(0, 21, w, max(0, h - 21 - self.FOOT_H))
         off = self.verticalScrollBar().value()
         y_top = self.PAD + 22 - off
         first = max(0, (off - self.PAD - 22) // self.ROW_H)
@@ -517,7 +531,12 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             if d2:
                 p.setFont(self._f_det); p.setPen(dim)
                 p.drawText(x + 12, y + 72, d2)
+            # a hairline under each row: at four lines apiece the eye needs the grouping
+            p.setPen(QtGui.QColor("#20262b" if self._dark else "#eeeeee"))
+            p.drawLine(x, y + self.ROW_H - 5, w - self.PAD, y + self.ROW_H - 5)
+        p.restore()
         if not self._rows:
             p.setFont(self._f_det); p.setPen(dim)
-            p.drawText(self.PAD, 44, "no finished cycles in view")
+            p.drawText(self.PAD, 44, "waiting for the first cycles")
+        self._draw_footer(p, w, h)
         p.end()

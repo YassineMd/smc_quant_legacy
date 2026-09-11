@@ -283,6 +283,15 @@ INTERP_WIDTH = 380              # measured: the price-move line needs 352 px at 
                                 # the state name it needed 555, past the panel's own 520 maximum, so it gets
                                 # its own line and the panel gets the width that line actually needs.
 INTERP_MAX_ROWS = 240           # the feed is capped, not the history: older cycles still feed every baseline
+INTERP_SPAN_SECS = 6 * 3600.0   # The feed is anchored at the LIVE EDGE and spans this, INDEPENDENT of the
+                                # chart's view: zooming or panning must not empty it (user 2026-09-11). That
+                                # costs a second crosses() entry -- measured 0.88 ms cold at 4 h, 1.19 at 6 h,
+                                # so 2 reads per 0.5 s tick instead of 1: +0.24% of one core.
+INTERP_STALE_SECS = 600.0       # The feed's read ENDS at the store's own live edge, so "is the last cycle
+                                # still forming?" is really "is the tape fresh?". A quiet market can go
+                                # minutes without a print -- measured 189 s behind wall-clock on live tape --
+                                # so a tight gate silently dropped the forming row. Past this the tape is
+                                # stale (a dropped feed) and nothing is claimed to be forming.
 INTERP_BASE_N = 5
 INTERP_MIN_N = 3
 INTERP_WEAK_BELOW = 0.35        # log2 distance from the crosshair, on the WEAKER of the two axes

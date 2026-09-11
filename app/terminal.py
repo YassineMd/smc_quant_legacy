@@ -18282,10 +18282,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if now - self._interp_t < float(config.CYCLE_RECALC_SECS):
             return
         self._interp_t = now
-        (vx0, vx1), _ = self.vb.viewRange()
+        # ⚠ ANCHORED AT THE LIVE EDGE, never at the view. Reading the view meant zooming in emptied the feed
+        # and panning rewrote it (user 2026-09-11) -- the rows are a log of what happened, not a projection of
+        # what is on screen. This is the one pane that does NOT share the others' memo entry; measured at
+        # 0.88 ms cold for 4 h, so two reads per throttled tick instead of one.
+        sp = self._flow.span()
+        if not sp:
+            return
+        _edge = float(sp[1])
+        _a = max(float(sp[0]), _edge - float(config.INTERP_SPAN_SECS))
         try:
-            self._interp_data = (vx0, vx1, self._flow.crosses(
-                vx0 - self._lb_secs(), vx1, float(self._flow_win),
+            self._interp_data = (_a, _edge, self._flow.crosses(
+                _a, _edge, float(self._flow_win),
                 float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
                 int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE)))
         except Exception:
@@ -18309,11 +18317,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self._interp_sig != ("empty",):
                 self._interp_sig = ("empty",); p.setRows([])
             return
-        vis = t >= vx0
-        nvis = int(vis.sum())
-        # the forming cycle's elapsed time is bucketed, so a live cycle does not rebuild the feed every frame
-        # the view must actually REACH the live edge for the open cycle to be a real forming cycle
-        live = bool(vx1 >= now - float(config.CYCLE_RECALC_SECS) - 2.0)
+        # every cycle in the read is shown: the read IS the feed's window now, so there is nothing to clip
+        # against and a pan cannot take rows away
+        vis = np.ones(int(t.size), dtype=bool)
+        nvis = int(t.size)
+        # the forming cycle's elapsed time is bucketed, so a live cycle does not rebuild the feed every frame.
+        # The read ends at the store's own live edge, so the open cycle is genuinely the forming one -- unless
+        # the tape itself has gone stale, which is worth not lying about.
+        live = bool(vx1 >= now - float(config.INTERP_STALE_SECS))
         _form = float(now - t[-1]) if (live and t.size and not bool(done[-1])) else 0.0
         sig = (nvis, round(float(t[-1]), 2), int(self._flow_win), int(_form // 2), live,
                int(len(getattr(self, "_lob_cache", {}) or {})) // 8)
@@ -18351,7 +18362,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # that call already built rather than making a second pass over the store.
         try:
             px0, px1 = self._flow.crosses_px(
-                vx0 - self._lb_secs(), vx1, float(self._flow_win),
+                vx0, vx1, float(self._flow_win),
                 float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
                 int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
         except Exception:
