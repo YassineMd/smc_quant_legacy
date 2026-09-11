@@ -1191,7 +1191,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.splitter.addWidget(self.trades_panel)
         self.interp_panel = FlowInterpPanel()    # Flow mode — right-side vertical feed, one row per cycle
         self.interp_panel._hint_w = int(config.INTERP_WIDTH)   # draggable: the widget bounds it 250..520 px
-        self.interp_panel.title = config.PANE_TITLE_INTERP     # same words as its hamburger toggle
+        self.interp_panel.title = config.pane_titles()["interp"]   # same words as its hamburger toggle
+        self.interp_panel.lookbackChanged.connect(self._on_lookback_changed)
         self.interp_panel.cycleClicked.connect(self._on_interp_cycle)
         self.splitter.addWidget(self.interp_panel)
         self.interp_panel.hide()
@@ -1798,6 +1799,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_tag = None           # right-axis readout, in MONEY (the pane plots resting $)
         self._liq_time_tag = None      # x-axis clock badge, same design as the price badge
         self._liq_proxy = None
+        self._cycle_lb = int(config.CYCLE_BASE_N)   # ONE lookback for the whole cycle family (the feed's
+        #                                             bottom-right control drives Volume, Book, Speed and it)
         self._interp_sig = None        # Interpretation pane (Flow mode): right-side per-cycle state feed
         self._interp_t = 0.0
         self._interp_data = None
@@ -2337,6 +2340,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_lob_pane_on(bool(getattr(self, "_lob_on", config.LOB_PANE_ON)))
             self.menu.set_spd_pane_on(bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)))
             self.menu.set_interp_pane_on(bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)))
+            if getattr(self, "interp_panel", None) is not None:
+                self.interp_panel.setLookback(self._lb_n())   # silent: must not echo back as a change
+            self._apply_pane_names()                          # names quote the restored lookback
             self.menu.set_liq_pane_on(bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)))
             self.menu.set_liq_opts(int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                                    int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)))
@@ -10361,6 +10367,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "lob_on": bool(getattr(self, "_lob_on", config.LOB_PANE_ON)),
                 "spd_on": bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)),
                 "interp_on": bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)),
+                "cycle_lb": int(getattr(self, "_cycle_lb", config.CYCLE_BASE_N)),
                 "liq_pane_on": bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)),
                 "liq_radius": int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                 "liq_smooth": int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)),
@@ -10484,6 +10491,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._lob_on = bool(s.get("lob_on", config.LOB_PANE_ON))
         self._spd_on = bool(s.get("spd_on", config.SPEED_PANE_ON))
         self._interp_on = bool(s.get("interp_on", config.INTERP_PANE_ON))
+        self._cycle_lb = max(int(config.CYCLE_BASE_N_MIN),
+                             min(int(config.CYCLE_BASE_N_MAX),
+                                 int(s.get("cycle_lb", config.CYCLE_BASE_N))))
         self._liq_pane_on = bool(s.get("liq_pane_on", config.LIQ_PANE_ON))
         _lr = int(s.get("liq_radius", config.LIQ_RADIUS_TICKS) or config.LIQ_RADIUS_TICKS)
         _ls = int(s.get("liq_smooth", config.LIQ_SMOOTH_SECS) if s.get("liq_smooth") is not None else config.LIQ_SMOOTH_SECS)
@@ -18085,7 +18095,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
         self._liq_time_tag.textItem.setFont(_tf); self._liq_time_tag.setZValue(61)   # same layer as the main pair
         pw.addItem(self._liq_time_tag, ignoreBounds=True); self._liq_time_tag.hide()
-        self._liq_title = self._pane_title(pw, vb, config.PANE_TITLE_LIQ)
+        self._liq_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["liq"])
         self._liq_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_liq_mouse_move)
         # Right-edge level markers, same idea as the taker flow's: a dashed rule from the last point out to the
         # axis plus a colour-matched "$740K (66%)" badge. Two points per rule -- redocking is free.
@@ -18142,6 +18152,63 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return True
         except Exception:
             return False
+
+    def _lb_n(self) -> int:
+        """How many previous cycles every rating in the family compares against."""
+        return max(int(config.CYCLE_BASE_N_MIN),
+                   min(int(config.CYCLE_BASE_N_MAX), int(getattr(self, "_cycle_lb", config.CYCLE_BASE_N))))
+
+    def _lb_min_n(self) -> int:
+        """Below this many prior cycles a rating is withheld rather than built on one or two samples."""
+        return max(1, min(3, self._lb_n()))
+
+    def _lb_secs(self) -> float:
+        """How far BEFORE the view to read, so the baseline does not change when the user pans.
+
+        Scales with N: at the median 77 s cycle even N=20 reaches only ~3100 s, but a same-side baseline skips
+        every other cycle and the 95th-percentile cycle is 287 s -- there N=10 already needs 5700 s, past the
+        fixed hour this used to be. Every pane in the family calls THIS, so they all pass crosses() identical
+        arguments and share one memo entry instead of forcing a second cold read each."""
+        return float(config.CVOL_LOOKBACK_SECS) * max(1.0, self._lb_n() / float(config.CYCLE_BASE_N))
+
+    def _on_lookback_changed(self, n: int) -> None:
+        """The feed's bottom-right control. Every rating in the family is relative to the last N, so all four
+        panes are invalidated and their names rewritten -- the names quote the number."""
+        n = max(int(config.CYCLE_BASE_N_MIN), min(int(config.CYCLE_BASE_N_MAX), int(n)))
+        if n == int(getattr(self, "_cycle_lb", config.CYCLE_BASE_N)):
+            return
+        self._cycle_lb = n
+        for _a in ("_cvol", "_lob", "_spd", "_interp"):
+            setattr(self, _a + "_sig", None)
+            setattr(self, _a + "_t", 0.0)
+        self._apply_pane_names()
+        self._save_ui_state()
+
+    def _apply_pane_names(self) -> None:
+        """Pane title and hamburger toggle, from the one constant, at the CURRENT lookback."""
+        names = config.pane_titles(self._lb_n())
+        for _k, _it in (("liq", getattr(self, "_liq_title", None)),
+                        ("cyc", getattr(self, "_cyc_title", None)),
+                        ("cvol", getattr(self, "_cvol_title", None)),
+                        ("lob", getattr(self, "_lob_title", None)),
+                        ("spd", getattr(self, "_spd_title", None))):
+            if _it is not None:
+                try:
+                    _it.setText(names[_k])
+                except RuntimeError:
+                    pass
+        _p = getattr(self, "interp_panel", None)
+        if _p is not None:
+            try:
+                _p.title = names["interp"]
+                _p.viewport().update()
+            except RuntimeError:
+                pass
+        if getattr(self, "menu", None) is not None:
+            try:
+                self.menu.set_pane_names(names)
+            except Exception:
+                pass
 
     def _on_interp_pane_toggled(self, on: bool) -> None:
         self._interp_on = bool(on)
@@ -18218,7 +18285,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (vx0, vx1), _ = self.vb.viewRange()
         try:
             self._interp_data = (vx0, vx1, self._flow.crosses(
-                vx0 - float(config.CVOL_LOOKBACK_SECS), vx1, float(self._flow_win),
+                vx0 - self._lb_secs(), vx1, float(self._flow_win),
                 float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
                 int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE)))
         except Exception:
@@ -18265,28 +18332,26 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # include_open rates the cycle still FORMING from what it has so far, without ever letting a
         # half-formed cycle into anyone's baseline.
         vol_ratio = _interp_prev((np.maximum(cbuy, 0.0) + np.maximum(csell, 0.0)) / dur, done,
-                                 int(config.INTERP_BASE_N), int(config.INTERP_MIN_N), include_open=True)
+                                 self._lb_n(), self._lb_min_n(), include_open=True)
         spd_ratio = _interp_side_ratio(np.abs(mv) / dur, side, done,
-                                       int(config.SPEED_BASE_N), int(config.SPEED_MIN_N), include_open=True)
+                                       self._lb_n(), self._lb_min_n(), include_open=True)
         try:
             bm, am = self._lob_cycle_means(t, t_end_c)
-            rb = self._lob_ratio(bm, done, int(config.LOB_BASE_N), int(config.LOB_MIN_N),
-                                 include_open=True)
-            ra = self._lob_ratio(am, done, int(config.LOB_BASE_N), int(config.LOB_MIN_N),
-                                 include_open=True)
+            rb = self._lob_ratio(bm, done, self._lb_n(), self._lb_min_n(), include_open=True)
+            ra = self._lob_ratio(am, done, self._lb_n(), self._lb_min_n(), include_open=True)
         except Exception:
             rb = ra = np.full(int(t.size), np.nan)
         # the per-side rates are EVIDENCE beside the state, not inputs to it: measured, they pick the same side
         # as the cycle's own dominance flag only 60% of the time, so they say something the flag does not
         buy_r = _interp_prev(np.maximum(cbuy, 0.0) / dur, done,
-                             int(config.INTERP_BASE_N), int(config.INTERP_MIN_N), include_open=True)
+                             self._lb_n(), self._lb_min_n(), include_open=True)
         sell_r = _interp_prev(np.maximum(csell, 0.0) / dur, done,
-                              int(config.INTERP_BASE_N), int(config.INTERP_MIN_N), include_open=True)
+                              self._lb_n(), self._lb_min_n(), include_open=True)
         # the two prices the move is the difference of. SAME crosses() arguments, so this reads the memo entry
         # that call already built rather than making a second pass over the store.
         try:
             px0, px1 = self._flow.crosses_px(
-                vx0 - float(config.CVOL_LOOKBACK_SECS), vx1, float(self._flow_win),
+                vx0 - self._lb_secs(), vx1, float(self._flow_win),
                 float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
                 int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
         except Exception:
@@ -18559,7 +18624,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._spd_time_tag.textItem.setFont(_tf); self._spd_time_tag.setZValue(61)
         pw.addItem(self._spd_time_tag, ignoreBounds=True); self._spd_time_tag.hide()
         self._spd_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_spd_mouse_move)
-        self._spd_title = self._pane_title(pw, vb, config.PANE_TITLE_SPD)
+        self._spd_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["spd"])
         self._spd_badge = CycleBadgesItem("top")
         pw.addItem(self._spd_badge, ignoreBounds=True)
         self._spd_plot = pw
@@ -18656,7 +18721,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             # the SAME arguments the Volume pane reads with, so this is a memo hit rather than a second pass
             self._spd_data = (vx0, self._flow.crosses(
-                vx0 - float(config.CVOL_LOOKBACK_SECS), vx1, float(self._flow_win),
+                vx0 - self._lb_secs(), vx1, float(self._flow_win),
                 float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
                 int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE)))
         except Exception:
@@ -18692,7 +18757,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         dur = np.maximum(t_end - t, 1e-9)
         mv = np.nan_to_num(move, nan=0.0)
         speed = np.abs(mv) / dur
-        ratio = self._same_side_ratio(speed, side, done, config.SPEED_BASE_N, config.SPEED_MIN_N)
+        ratio = self._same_side_ratio(speed, side, done, self._lb_n(), self._lb_min_n())
         flat = np.abs(mv) < float(config.SPEED_FLAT_TICKS)
         keep = (t >= vx0) & np.isfinite(ratio)
         sig = (int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win),
@@ -18797,7 +18862,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._lob_time_tag.textItem.setFont(_tf); self._lob_time_tag.setZValue(61)
         pw.addItem(self._lob_time_tag, ignoreBounds=True); self._lob_time_tag.hide()
         self._lob_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_lob_mouse_move)
-        self._lob_title = self._pane_title(pw, vb, config.PANE_TITLE_LOB)
+        self._lob_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["lob"])
         self._lob_badge = CycleBadgesItem("top")
         pw.addItem(self._lob_badge, ignoreBounds=True)
         self._lob_plot = pw
@@ -18925,7 +18990,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (vx0, vx1), _ = self.vb.viewRange()
         try:
             self._lob_data = (vx0, self._flow.crosses(
-                vx0 - float(config.CVOL_LOOKBACK_SECS), vx1, float(self._flow_win),
+                vx0 - self._lb_secs(), vx1, float(self._flow_win),
                 float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
                 int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE)))
         except Exception:
@@ -18953,8 +19018,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._lob_sig = ("empty",)
             return
         bm, am = self._lob_cycle_means(t, t_end)
-        rb = self._lob_ratio(bm, done, config.LOB_BASE_N, config.LOB_MIN_N)
-        ra = self._lob_ratio(am, done, config.LOB_BASE_N, config.LOB_MIN_N)
+        rb = self._lob_ratio(bm, done, self._lb_n(), self._lb_min_n())
+        ra = self._lob_ratio(am, done, self._lb_n(), self._lb_min_n())
         vis = t >= vx0
         kb = vis & np.isfinite(rb)
         ka = vis & np.isfinite(ra)
@@ -19072,7 +19137,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cvol_time_tag.textItem.setFont(_tf); self._cvol_time_tag.setZValue(61)
         pw.addItem(self._cvol_time_tag, ignoreBounds=True); self._cvol_time_tag.hide()
         self._cvol_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_cvol_mouse_move)
-        self._cvol_title = self._pane_title(pw, vb, config.PANE_TITLE_CVOL)
+        self._cvol_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["cvol"])
         self._cvol_badge = CycleBadgesItem("top")
         pw.addItem(self._cvol_badge, ignoreBounds=True)
         self._cvol_plot = pw
@@ -19143,7 +19208,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         (vx0, vx1), _ = self.vb.viewRange()
         try:
             self._cvol_data = (vx0, self._flow.crosses(
-                vx0 - float(config.CVOL_LOOKBACK_SECS), vx1, float(self._flow_win),
+                vx0 - self._lb_secs(), vx1, float(self._flow_win),
                 float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
                 int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE)))
         except Exception:
@@ -19173,7 +19238,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         side, _rate, _state = self._cycle_impact(is_buy, strong, move, cbuy, csell)
         ratio = self._flow.volume_ratio(side, cbuy, csell, done, np.maximum(t_end - t, 1e-9),
-                                        int(config.CVOL_BASE_N), int(config.CVOL_MIN_N),
+                                        self._lb_n(), self._lb_min_n(),
                                         bool(config.CVOL_PER_SECOND), float(config.CVOL_MIN_USD))
         keep = np.isfinite(ratio) & (t >= vx0)             # the lookback exists for the BASELINE, not to draw
         sig = (int(t.size), int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win),
@@ -19277,7 +19342,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cyc_time_tag.textItem.setFont(_tf); self._cyc_time_tag.setZValue(61)
         pw.addItem(self._cyc_time_tag, ignoreBounds=True); self._cyc_time_tag.hide()
         self._cyc_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_cyc_mouse_move)
-        self._cyc_title = self._pane_title(pw, vb, config.PANE_TITLE_CYC)
+        self._cyc_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["cyc"])
         # the `B/S x/100k` pill moved here from the flow chart: it belongs beside the bars it describes
         self._cyc_badge = CycleBadgesItem("top")
         pw.addItem(self._cyc_badge, ignoreBounds=True)

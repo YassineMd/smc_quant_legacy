@@ -292,9 +292,11 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
     per-frame cost."""
 
     cycleClicked = QtCore.Signal(float, float)      # (t_start, t_end) of the clicked row
+    lookbackChanged = QtCore.Signal(int)           # the cycle lookback N, bottom-right
 
     ROW_H = 78
     PAD = 10
+    FOOT_H = 26
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -315,11 +317,70 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         # the move reads as part of the interpretation, so it is bolder than the evidence lines below it
         self._f_move = QtGui.QFont(); self._f_move.setPointSize(8); self._f_move.setBold(True)
         self._f_title = QtGui.QFont(); self._f_title.setPointSize(8); self._f_title.setBold(True)
+        self._build_footer()
         self.title = "INTERPRETATION"      # the terminal replaces this with config.PANE_TITLE_INTERP, the
         #                                    same string its hamburger toggle carries
 
     def sizeHint(self):
         return QtCore.QSize(int(self._hint_w), 600)
+
+    # ---- the lookback control ---------------------------------------------------------------------------
+    def _build_footer(self) -> None:
+        """`lookback [5] cycles`, bottom-right. A child of the PANEL, not the viewport, so it stays put while
+        the feed scrolls underneath it; _update_scroll reserves FOOT_H so the last row can still clear it."""
+        self._foot = QtWidgets.QWidget(self)
+        lay = QtWidgets.QHBoxLayout(self._foot)
+        lay.setContentsMargins(6, 2, 6, 2); lay.setSpacing(6)
+        self._foot_lbl = QtWidgets.QLabel("lookback")
+        f = QtGui.QFont(); f.setPointSize(8)
+        self._foot_lbl.setFont(f)
+        self._spin = QtWidgets.QSpinBox()
+        self._spin.setFont(f)
+        self._spin.setRange(2, 20)
+        self._spin.setValue(5)
+        self._spin.setFixedWidth(52)
+        self._spin.setAlignment(QtCore.Qt.AlignRight)
+        self._spin.setToolTip(
+            "How many previous cycles every rating is measured against.\n\n"
+            "One knob for the whole family: CYCLE VOLUME, CYCLE BOOK, CYCLE SPEED and the states in this feed "
+            "all compare a cycle to its last N. Volume and Speed use the last N of the SAME side, so they "
+            "reach about twice as far back in time.\n\n"
+            "Smaller reacts faster and is noisier; larger is steadier and slower to notice a change. The band "
+            "cuts were measured at 5.")
+        self._foot_sfx = QtWidgets.QLabel("cycles")
+        self._foot_sfx.setFont(f)
+        lay.addWidget(self._foot_lbl); lay.addWidget(self._spin); lay.addWidget(self._foot_sfx)
+        self._foot.resize(self._foot.sizeHint())
+        # the wheel must scroll the FEED, never nudge the number under the cursor by accident
+        self._spin.wheelEvent = lambda ev: ev.ignore()
+        self._spin.valueChanged.connect(lambda v: self.lookbackChanged.emit(int(v)))
+        self._style_footer()
+
+    def _style_footer(self) -> None:
+        dark = self._dark
+        fg = "#8a939c" if dark else "#666666"
+        bg = "#1b1b1b" if dark else "#f2f2f2"
+        bd = "#2f363d" if dark else "#d8d8d8"
+        self._foot.setStyleSheet(
+            "QWidget { background: %s; }"
+            "QLabel { color: %s; background: transparent; }"
+            "QSpinBox { color: %s; background: %s; border: 1px solid %s; padding: 0px 2px; }"
+            % (bg, fg, "#dfe4ea" if dark else "#222222", bg, bd))
+
+    def lookback(self) -> int:
+        return int(self._spin.value())
+
+    def setLookback(self, n: int) -> None:
+        self._spin.blockSignals(True)
+        self._spin.setValue(max(self._spin.minimum(), min(self._spin.maximum(), int(n))))
+        self._spin.blockSignals(False)
+
+    def _place_footer(self) -> None:
+        w = self.viewport().width(); h = self.viewport().height()
+        sz = self._foot.sizeHint()
+        self._foot.resize(sz)
+        self._foot.move(max(0, w - sz.width() - 2), max(0, h - sz.height() - 2))
+        self._foot.raise_()
 
     # ---- data -------------------------------------------------------------------------------------------
     def setRows(self, rows) -> None:
@@ -344,11 +405,13 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
     def setDark(self, dark: bool) -> None:
         if bool(dark) != self._dark:
             self._dark = bool(dark)
+            self._style_footer()
             self.viewport().update()
 
     def _update_scroll(self) -> None:
         sb = self.verticalScrollBar()
-        total = len(self._rows) * self.ROW_H + self.PAD * 2 + 22
+        # + FOOT_H so the last row can scroll clear of the lookback control rather than sitting under it
+        total = len(self._rows) * self.ROW_H + self.PAD * 2 + 22 + self.FOOT_H
         sb.setRange(0, max(0, total - self.viewport().height()))
         sb.setPageStep(self.viewport().height())
         sb.setSingleStep(self.ROW_H)
@@ -356,6 +419,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self._update_scroll()
+        self._place_footer()
 
     # ---- interaction ------------------------------------------------------------------------------------
     def _row_at(self, y: int) -> int:
@@ -374,6 +438,8 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             self.viewport().update()
 
     def mousePressEvent(self, ev):
+        if self._foot.geometry().contains(ev.position().toPoint()):
+            return                                  # the control sits ON TOP of the feed; let it have the click
         i = self._row_at(int(ev.position().y()))
         if i >= 0:
             r = self._rows[i]

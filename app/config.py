@@ -291,6 +291,35 @@ INTERP_WEAK_BELOW = 0.35        # log2 distance from the crosshair, on the WEAKE
 # The pane paints this top-left AND its hamburger toggle carries the same words (user 2026-09-11), so a
 # toggle can never drift from the pane it opens. They had: the toggle for "CYCLE IMPACT" read "Cycle pane
 # (dominance runs)". Defined here, after the N's they quote, so the numbers can never disagree either.
+# The CYCLE LOOKBACK: how many previous cycles every rating in the family is measured against. One knob for
+# CYCLE VOLUME, CYCLE BOOK, CYCLE SPEED and the Interpretation feed, changed from the feed's bottom-right
+# corner (user 2026-09-11), so they can never drift apart.
+#
+# MEASURED across N=2..20 on 20 h / n=678 before the control was built, at the SHIPPED band cuts:
+#   VOLUME  low/normal/high  32/33/35% at N=5, still 30/36/35% at N=10, 26/38/35% at N=20
+#   SPEED   slow/normal/fast 37/27/36% at N=5, essentially flat to N=20 (34/29/37%)
+#   BOOK    37/26/36% at N=5 -> 44/22/34% at N=20; its middle band was never a true third at this radius
+#   FEED    breakout 27% at N=5 -> 31% at N=20 (its own split is at ratio > 1.0, so it self-normalises)
+# So the cuts keep their meaning across the range; BOOK degrades the most and is the one to watch.
+CYCLE_BASE_N = 5
+CYCLE_BASE_N_MIN = 2
+CYCLE_BASE_N_MAX = 20
+
+
+def pane_titles(n=None):
+    """Every pane's name at lookback `n`. The pane paints it and its hamburger toggle carries the same words."""
+    n = int(CYCLE_BASE_N if n is None else n)
+    d = "  ·  "
+    return {
+        "liq": "LIMIT ORDERS" + d + "resting bid / ask $",
+        "cyc": "CYCLE IMPACT" + d + "ticks per %s" % FLOW_CROSS_BADGE_UNIT_TXT,
+        "cvol": "CYCLE VOLUME" + d + "dominant side vs last %d" % n,
+        "lob": "CYCLE BOOK" + d + "bid / ask vs last %d" % n,
+        "spd": "CYCLE SPEED" + d + "ticks/s vs last %d" % n,
+        "interp": "INTERPRETATION" + d + "one row per cycle",
+    }
+
+
 PANE_TITLE_LIQ = "LIMIT ORDERS" + "  ·  " + "resting bid / ask $"
 PANE_TITLE_CYC = "CYCLE IMPACT" + "  ·  " + "ticks per %s" % FLOW_CROSS_BADGE_UNIT_TXT
 PANE_TITLE_CVOL = "CYCLE VOLUME" + "  ·  " + "dominant side vs last %d" % CVOL_BASE_N

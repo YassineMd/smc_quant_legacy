@@ -1612,7 +1612,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.flow_sec.addWidget(w)
         w2 = QtWidgets.QWidget()
         l2 = QtWidgets.QVBoxLayout(w2); l2.setContentsMargins(2, 1, 8, 5); l2.setSpacing(2)
-        self.liq_on = QtWidgets.QCheckBox(config.PANE_TITLE_LIQ)
+        self.liq_on = QtWidgets.QCheckBox(config.pane_titles()["liq"])
         self.liq_on.setChecked(bool(config.LIQ_PANE_ON))
         self.liq_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.liq_on.setToolTip("The second pane under the flow lines: limit-order $ resting within +- N ticks of "
@@ -1643,7 +1643,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             cb_.currentIndexChanged.connect(lambda _i: self.liqOptsChanged.emit(self.liq_radius(), self.liq_smooth()))
         w4 = QtWidgets.QWidget()
         l4 = QtWidgets.QVBoxLayout(w4); l4.setContentsMargins(2, 1, 8, 5); l4.setSpacing(2)
-        self.cycle_on = QtWidgets.QCheckBox(config.PANE_TITLE_CYC)
+        self.cycle_on = QtWidgets.QCheckBox(config.pane_titles()["cyc"])
         self.cycle_on.setChecked(bool(config.CYCLE_PANE_ON))
         self.cycle_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.cycle_on.setToolTip(
@@ -1653,7 +1653,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % config.FLOW_CROSS_BADGE_UNIT_TXT)
         self.cycle_on.toggled.connect(lambda on: self.cyclePaneToggled.emit(bool(on)))
         l4.addWidget(self.cycle_on)
-        self.cvol_on = QtWidgets.QCheckBox(config.PANE_TITLE_CVOL)
+        self.cvol_on = QtWidgets.QCheckBox(config.pane_titles()["cvol"])
         self.cvol_on.setChecked(bool(config.CVOL_PANE_ON))
         self.cvol_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.cvol_on.setToolTip(
@@ -1665,7 +1665,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % (config.CVOL_BASE_N, config.CVOL_LOW, config.CVOL_HIGH))
         self.cvol_on.toggled.connect(lambda on: self.cvolPaneToggled.emit(bool(on)))
         l4.addWidget(self.cvol_on)
-        self.lob_on = QtWidgets.QCheckBox(config.PANE_TITLE_LOB)
+        self.lob_on = QtWidgets.QCheckBox(config.pane_titles()["lob"])
         self.lob_on.setChecked(bool(config.LOB_PANE_ON))
         self.lob_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.lob_on.setToolTip(
@@ -1679,7 +1679,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % config.LOB_BASE_N)
         self.lob_on.toggled.connect(lambda on: self.lobPaneToggled.emit(bool(on)))
         l4.addWidget(self.lob_on)
-        self.spd_on = QtWidgets.QCheckBox(config.PANE_TITLE_SPD)
+        self.spd_on = QtWidgets.QCheckBox(config.pane_titles()["spd"])
         self.spd_on.setChecked(bool(config.SPEED_PANE_ON))
         self.spd_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.spd_on.setToolTip(
@@ -1690,7 +1690,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % (config.SPEED_BASE_N, config.SPEED_FLAT_TICKS))
         self.spd_on.toggled.connect(lambda on: self.spdPaneToggled.emit(bool(on)))
         l4.addWidget(self.spd_on)
-        self.interp_on = QtWidgets.QCheckBox(config.PANE_TITLE_INTERP)
+        self.interp_on = QtWidgets.QCheckBox(config.pane_titles()["interp"])
         self.interp_on.setChecked(bool(config.INTERP_PANE_ON))
         self.interp_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.interp_on.setToolTip(
@@ -1719,6 +1719,13 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def set_liq_pane_on(self, on: bool) -> None:
         self.liq_on.blockSignals(True); self.liq_on.setChecked(bool(on)); self.liq_on.blockSignals(False)
+
+    def set_pane_names(self, names: dict) -> None:
+        """Re-label the pane toggles when the cycle lookback changes -- the names quote the number."""
+        for _k, _cb in (("liq", self.liq_on), ("cyc", self.cycle_on), ("cvol", self.cvol_on),
+                        ("lob", self.lob_on), ("spd", self.spd_on), ("interp", self.interp_on)):
+            if _k in names:
+                _cb.setText(names[_k])
 
     def set_interp_pane_on(self, on: bool) -> None:
         self.interp_on.blockSignals(True); self.interp_on.setChecked(bool(on)); self.interp_on.blockSignals(False)
