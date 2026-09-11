@@ -47,16 +47,26 @@ from PySide6 import QtCore, QtGui, QtWidgets
 ST_ABSORB, ST_BREAK, ST_VACUUM, ST_QUIET, ST_FORMING = 0, 1, 2, 3, 4
 STATE_NAME = ("ABSORPTION", "BREAKOUT", "VACUUM", "QUIET", "forming")
 
+
+def state_label(st, side):
+    """What the row says. ABSORPTION is phrased as BUYER/SELLER ABSORBED (user 2026-09-11) because that is
+    what it always meant: the side is the one that was AGGRESSING and got absorbed, so "ABSORPTION buy" read
+    as if buyers were doing the absorbing. The other states name the direction price went, so they keep the
+    NAME + side form."""
+    if st == ST_ABSORB:
+        return ("BUYER ABSORBED" if side == "buy" else "SELLER ABSORBED")
+    return STATE_NAME[st] + ((" " + side) if side else "")
+
 # COLOUR is keyed on state AND side, because BREAKOUT is the aggressive state and the user wants that legible
 # at a glance (2026-09-11): buy vivid green, sell vivid red, instead of the state-space picture's single
 # amber. Absorption keeps its calmer teal and vacuum its coral, so all four stay separable by SATURATION as
 # well as by the name written beside them.
 C_ABSORB, C_BREAK_BUY, C_BREAK_SELL, C_VACUUM, C_QUIET, C_FORMING = 0, 1, 2, 3, 4, 5
-BAR_COL = ("#1FB183", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64")
+BAR_COL = ("#FF9500", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64")
 # ... and TEXT is per THEME. It was not: on the white Simple BW ground every name drew in a pale dark-theme
 # colour and was barely readable.
-TXT_DARK = ("#3FD3A2", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82")
-TXT_LIGHT = ("#0E7A57", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82")
+TXT_DARK = ("#FFB84D", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82")
+TXT_LIGHT = ("#A85C00", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82")
 
 # the price move, coloured by the move itself: green up, red down, grey when it ended where it started
 MOVE_DARK = ("#FF5A5A", "#7A828C", "#2BE86B")
@@ -289,7 +299,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
             st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
             _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
                                       slow_c, fast_c, px_dec)
-            rows.append((t0, t0 + el, head, STATE_NAME[st] + ((" " + side) if side else ""),
+            rows.append((t0, t0 + el, head, state_label(st, side),
                          _line1(vr[k], buy_ratio, sell_ratio, k),
                          _line2(bid_ratio, ask_ratio, k),
                          st, bool(conf[k] >= float(weak_below)), True,
@@ -303,7 +313,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
         _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
                                   slow_c, fast_c, px_dec)
         rows.append((t0, t1, "%s - %s - %s" % (_clock(t0), _clock(t1), dur_text(t1 - t0)),
-                     STATE_NAME[st] + ((" " + side) if side else ""),
+                     state_label(st, side),
                      _line1(vr[k], buy_ratio, sell_ratio, k),
                      _line2(bid_ratio, ask_ratio, k),
                      st, bool(conf[k] >= float(weak_below)), False,
