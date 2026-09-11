@@ -268,6 +268,23 @@ SPEED_FLAT_TICKS = 1.0          # under a tick the DIRECTION is meaningless, so 
 SPEED_FLAT_COL = "#5a616d"      # dimmer than the "normal" grey, so flat and normal do not read alike
 SPEED_BADGE_TIERS = ((48.0, 1), (26.0, 2))      # "+fast" / "-slow" / "flat"
 
+# --- Interpretation pane: name what happened in each cycle -----------------------------------------------
+# The user's seven-state table, classified by the QUADRANT MAP at the top of that same picture: aggressive
+# volume x price displacement. Measured on 20 h / n=670 before it was built:
+#   * volume must be $ PER SECOND. Total $ against the previous cycles shares 49-53% of its variance with
+#     cycle DURATION -- long cycles would read "heavy" on both sides at once. The rate shares 2-3%.
+#   * splitting each axis at its own baseline (ratio > 1.0) fills the quadrants 28/22/21/29% and the seven
+#     named states 9.5-14.4% each. Nothing degenerate, nothing forced.
+#   * the median cycle sits 0.49 log2 units from the crosshair; 36% sit inside 0.35 and are drawn DIM.
+# The BOOK and the per-side volumes are shown as EVIDENCE only: the table's full 5-cell signature scored
+# 1.00/4 against ~1.33/4 for chance, so it is not used to classify.
+INTERP_PANE_ON = True
+INTERP_WIDTH = 330
+INTERP_MAX_ROWS = 240           # the feed is capped, not the history: older cycles still feed every baseline
+INTERP_BASE_N = 5
+INTERP_MIN_N = 3
+INTERP_WEAK_BELOW = 0.35        # log2 distance from the crosshair, on the WEAKER of the two axes
+
 # Pane names, top-left. Muted on purpose -- they label the pane, they are not part of the reading.
 PANE_TITLE_COL = "#7d8492"
 PANE_TITLE_PT = 8

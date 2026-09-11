@@ -38,6 +38,7 @@ from .heatmap import (HeatmapCache, TradeBubbleCache, decode_col, decode_grid,
                       decode_trades, neon_diverging_lut, percentile_levels)
 
 from . import bucket_state, config, flow_pane, region_state, vpin_adaptive
+from .flow_interp import FlowInterpPanel, build_rows as _interp_build_rows, prev_ratio as _interp_prev
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
 from .paper_account import PaperAccount
@@ -1187,6 +1188,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.splitter.addWidget(self.cob)
         self.splitter.addWidget(self.fp_panel)   # rightmost; rides the Mode-10 reparenting, gated by _fp_want + mode
         self.splitter.addWidget(self.trades_panel)
+        self.interp_panel = FlowInterpPanel()    # Flow mode — right-side vertical feed, one row per cycle
+        self.interp_panel._hint_w = int(config.INTERP_WIDTH)   # draggable: the widget bounds it 250..520 px
+        self.interp_panel.cycleClicked.connect(self._on_interp_cycle)
+        self.splitter.addWidget(self.interp_panel)
+        self.interp_panel.hide()
         self.dom_panel = DomPanel()              # scanner mode "dom" — DOM ladder + VP (replaces the plot)
         self.dom_panel.settingsChanged.connect(
             lambda: None if self._loading_ui else self._save_ui_state())   # GROUP + VP window stick
@@ -1790,6 +1796,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_tag = None           # right-axis readout, in MONEY (the pane plots resting $)
         self._liq_time_tag = None      # x-axis clock badge, same design as the price badge
         self._liq_proxy = None
+        self._interp_sig = None        # Interpretation pane (Flow mode): right-side per-cycle state feed
+        self._interp_t = 0.0
+        self._interp_data = None
+        self._interp_on = bool(config.INTERP_PANE_ON)
         self._spd_plot = None          # Speed pane (Flow mode): ticks/s this cycle vs the same side's last N
         self._spd_vb = None
         self._spd_items = None         # (slow, normal, fast, flat) BarGraphItems
@@ -2324,6 +2334,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_cvol_pane_on(bool(getattr(self, "_cvol_on", config.CVOL_PANE_ON)))
             self.menu.set_lob_pane_on(bool(getattr(self, "_lob_on", config.LOB_PANE_ON)))
             self.menu.set_spd_pane_on(bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)))
+            self.menu.set_interp_pane_on(bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)))
             self.menu.set_liq_pane_on(bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)))
             self.menu.set_liq_opts(int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                                    int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)))
@@ -2582,6 +2593,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.cvolPaneToggled.connect(self._on_cvol_pane_toggled)            # Volume pane on/off
         self.menu.lobPaneToggled.connect(self._on_lob_pane_toggled)              # Book pane on/off
         self.menu.spdPaneToggled.connect(self._on_spd_pane_toggled)              # Speed pane on/off
+        self.menu.interpPaneToggled.connect(self._on_interp_pane_toggled)        # Interpretation feed on/off
         self.menu.cycleWinChanged.connect(self._on_cyc_win)                      # cycle-defining window
         self.menu.liqPaneToggled.connect(self._on_liq_pane_toggled)              # resting-liquidity pane on/off
         self.menu.liqOptsChanged.connect(self._on_liq_opts)                      # resting-liquidity pane
@@ -10346,6 +10358,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "cvol_on": bool(getattr(self, "_cvol_on", config.CVOL_PANE_ON)),
                 "lob_on": bool(getattr(self, "_lob_on", config.LOB_PANE_ON)),
                 "spd_on": bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)),
+                "interp_on": bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)),
                 "liq_pane_on": bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)),
                 "liq_radius": int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                 "liq_smooth": int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)),
@@ -10468,6 +10481,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cvol_on = bool(s.get("cvol_on", config.CVOL_PANE_ON))
         self._lob_on = bool(s.get("lob_on", config.LOB_PANE_ON))
         self._spd_on = bool(s.get("spd_on", config.SPEED_PANE_ON))
+        self._interp_on = bool(s.get("interp_on", config.INTERP_PANE_ON))
         self._liq_pane_on = bool(s.get("liq_pane_on", config.LIQ_PANE_ON))
         _lr = int(s.get("liq_radius", config.LIQ_RADIUS_TICKS) or config.LIQ_RADIUS_TICKS)
         _ls = int(s.get("liq_smooth", config.LIQ_SMOOTH_SECS) if s.get("liq_smooth") is not None else config.LIQ_SMOOTH_SECS)
@@ -16634,6 +16648,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._lob_sig = None; self._lob_t = 0.0
             self._spd_show(bool(getattr(self, "_spd_on", True)))
             self._spd_sig = None; self._spd_t = 0.0
+            self._interp_show(bool(getattr(self, "_interp_on", True)))
         # The loaded set moved, so EVERYTHING derived from it must re-derive — same invalidation the replay step does.
         # Without this the Pivot D/E marks (sig-gated on offset/range) and the selection kept their last values, so a
         # Start-Date / replay-cursor change only visibly took effect on the next right-arrow step.
@@ -17312,6 +17327,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 pass
             self.lower_plot = None
             self.splitter_v = None
+            self._flow_axis_key = None       # the panes that key refers to are gone; never match against it
+            self._interp_sized = False       # ... and the horizontal split is re-laid out from scratch
+            self._interp_fit_tries = 0
             self.cob_col = None
             # the VPIN-pane crosshair/badge items were CHILDREN of the just-deleted lower_plot — null the Python refs
             # so _on_mouse_move / _on_lower_mouse_move skip them (else 'C++ object already deleted' on the next hover).
@@ -18116,6 +18134,194 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             return False
 
+    def _on_interp_pane_toggled(self, on: bool) -> None:
+        self._interp_on = bool(on)
+        self._interp_show(bool(on) and self.scanner_mode == "flow")
+        self._save_ui_state()
+
+    def _on_interp_cycle(self, t0: float, t1: float) -> None:
+        """Click a row -> put that cycle in the middle of the chart, with a cycle's width of context either
+        side. Stops following the live edge, exactly like dragging the chart does."""
+        try:
+            span = max(60.0, float(t1) - float(t0))
+            self._flow_follow = False
+            lo, hi = float(t0) - span, float(t1) + span
+            self._flow_last_set = (lo, hi)
+            self.vb.setXRange(lo, hi, padding=0.0)
+        except Exception:
+            pass
+
+    def _interp_show(self, on: bool) -> None:
+        p = getattr(self, "interp_panel", None)
+        if p is None:
+            return
+        p.setVisible(bool(on))
+        if on:
+            self._interp_fit_width()
+            p.setDark(not self._simple_bw())
+            self._interp_sig = None; self._interp_t = 0.0
+
+    def _interp_fit_width(self) -> bool:
+        """Give the feed its configured width ONCE, then never again so a manual drag stands.
+
+        Retried from the tick because the first call lands before the splitter has been laid out at all --
+        sizes() is all zeros there and setting a width against a zero total does nothing. The FULL sizes list
+        is handed back: a QSplitter zeroes any child the list does not cover."""
+        if getattr(self, "_interp_sized", False):
+            return True
+        p = getattr(self, "interp_panel", None)
+        if p is None or not p.isVisible():
+            return False
+        want = int(config.INTERP_WIDTH)
+        # check what the previous attempt ACTUALLY achieved rather than assuming setSizes was obeyed: the
+        # first attempt lands before the horizontal splitter has settled and comes out ~40 px short.
+        if abs(p.width() - want) <= 12:
+            self._interp_sized = True
+            return True
+        tries = int(getattr(self, "_interp_fit_tries", 0))
+        if tries >= 5:
+            self._interp_sized = True      # stop fighting the layout -- and never fight a user's drag
+            return True
+        try:
+            sz = self.splitter.sizes()
+            i = self.splitter.indexOf(p)
+            if i <= 0 or len(sz) <= i or sum(sz) <= 0:
+                return False
+            sz[i] = want
+            sz[0] = max(240, sum(sz) - sum(sz[1:]))
+            self.splitter.setSizes(sz)
+            self._interp_fit_tries = tries + 1
+            return False
+        except Exception:
+            return False
+
+    def _interp_tick(self, now: float) -> None:
+        """Same crosses() arguments as the Volume / Speed / Book panes, so this is a MEMO HIT rather than a
+        second pass over the store -- the pane costs a dictionary lookup, not a rebuild."""
+        p = getattr(self, "interp_panel", None)
+        if p is None or not p.isVisible():
+            return
+        if not getattr(self, "_interp_sized", False):
+            self._interp_fit_width()
+        if now - self._interp_t < float(config.CYCLE_RECALC_SECS):
+            return
+        self._interp_t = now
+        (vx0, vx1), _ = self.vb.viewRange()
+        try:
+            self._interp_data = (vx0, vx1, self._flow.crosses(
+                vx0 - float(config.CVOL_LOOKBACK_SECS), vx1, float(self._flow_win),
+                float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE)))
+        except Exception:
+            return
+        self._interp_draw(now)
+
+    def _interp_draw(self, now: float) -> None:
+        """One row per cycle, newest first: the state name, and the readings behind it.
+
+        The classifier is the user's own quadrant map -- aggressive $/SECOND against this cycle's recent
+        baseline, crossed with the Speed pane's own ticks/s ratio. Both were measured before anything was
+        drawn (see app/flow_interp.py for the numbers and for what did NOT reproduce).
+
+        The book columns are EVIDENCE beside the state, never an input to it, and a cycle with too few depth
+        columns prints "-" rather than a fabricated reading."""
+        p = getattr(self, "interp_panel", None)
+        if p is None or self._interp_data is None:
+            return
+        vx0, vx1, (t, is_buy, strong, move, cbuy, csell, t_end, done) = self._interp_data
+        if t.size == 0:
+            if self._interp_sig != ("empty",):
+                self._interp_sig = ("empty",); p.setRows([])
+            return
+        vis = t >= vx0
+        nvis = int(vis.sum())
+        # the forming cycle's elapsed time is bucketed, so a live cycle does not rebuild the feed every frame
+        # the view must actually REACH the live edge for the open cycle to be a real forming cycle
+        live = bool(vx1 >= now - float(config.CYCLE_RECALC_SECS) - 2.0)
+        _form = float(now - t[-1]) if (live and t.size and not bool(done[-1])) else 0.0
+        sig = (nvis, round(float(t[-1]), 2), int(self._flow_win), int(_form // 5), live,
+               int(len(getattr(self, "_lob_cache", {}) or {})) // 8)
+        if sig == self._interp_sig:
+            return
+        self._interp_sig = sig
+        side, _rate, _st = self._cycle_impact(is_buy, strong, move, cbuy, csell)
+        dur = np.maximum(t_end - t, 1e-9)
+        mv = np.nan_to_num(move, nan=0.0)
+        # $ PER SECOND, never total $: the total shares ~50% of its variance with the cycle's LENGTH
+        vol_ratio = _interp_prev((np.maximum(cbuy, 0.0) + np.maximum(csell, 0.0)) / dur, done,
+                                 int(config.INTERP_BASE_N), int(config.INTERP_MIN_N))
+        spd_ratio = self._same_side_ratio(np.abs(mv) / dur, side, done,
+                                          int(config.SPEED_BASE_N), int(config.SPEED_MIN_N))
+        try:
+            bm, am = self._lob_cycle_means(t, t_end)
+            rb = self._lob_ratio(bm, done, int(config.LOB_BASE_N), int(config.LOB_MIN_N))
+            ra = self._lob_ratio(am, done, int(config.LOB_BASE_N), int(config.LOB_MIN_N))
+        except Exception:
+            rb = ra = np.full(int(t.size), np.nan)
+        # the per-side rates are EVIDENCE beside the state, not inputs to it: measured, they pick the same side
+        # as the cycle's own dominance flag only 60% of the time, so they say something the flag does not
+        buy_r = _interp_prev(np.maximum(cbuy, 0.0) / dur, done,
+                             int(config.INTERP_BASE_N), int(config.INTERP_MIN_N))
+        sell_r = _interp_prev(np.maximum(csell, 0.0) / dur, done,
+                              int(config.INTERP_BASE_N), int(config.INTERP_MIN_N))
+        k = np.flatnonzero(vis)
+        rows = _interp_build_rows(t[k], t_end[k], done[k], mv[k], side[k],
+                                  vol_ratio[k], spd_ratio[k], rb[k], ra[k], buy_r[k], sell_r[k],
+                                  float(config.SPEED_FLAT_TICKS), float(config.INTERP_WEAK_BELOW),
+                                  int(config.INTERP_MAX_ROWS), now=now, live=live)
+        p.setRows(rows)
+
+    def _flow_axis_sync(self) -> None:
+        """ONE clock axis for the whole stack, on the BOTTOM-MOST visible pane (user 2026-09-11).
+
+        Every Flow pane is x-linked to the same view, so N copies of the axis spend N x ~22 px of chart height
+        restating one number. Walk splitter_v in VISUAL order, give the axis to the last pane that is both
+        visible AND has real pixels, and hide it on everyone above. A pane collapsed to a sliver is skipped on
+        purpose: handing the one clock to a 0 px child would leave the stack with no clock at all.
+
+        Cheap by construction -- it early-returns unless the OWNER changed, so the per-drag calls cost a
+        sizes() read and nothing else. show/hideAxis triggers a relayout, which is exactly why this must not
+        fire on every splitterMoved pixel.
+
+        Outside Flow mode every pane gets its own axis back: the Mode-10 panes are not x-linked to one clock,
+        so there each axis means something different."""
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return
+        try:
+            sizes = sp.sizes()
+            rows = []
+            for i in range(sp.count()):
+                wdg = sp.widget(i)
+                if wdg is None or not hasattr(wdg, "getAxis"):
+                    continue
+                rows.append((i, wdg, bool(wdg.isVisible()) and i < len(sizes) and sizes[i] >= 24))
+        except RuntimeError:                      # splitter torn down under us
+            return
+        owner = oi = None
+        for i, wdg, live in rows:
+            if live:
+                owner, oi = wdg, i
+        if owner is None:                         # called before the first layout: sizes() is all zeros, so
+            for i, wdg, _l in rows:               # fall back to the last merely-VISIBLE pane rather than
+                if wdg.isVisible():               # hiding every axis in the stack
+                    owner, oi = wdg, i
+        if owner is None:
+            return
+        flow = (getattr(self, "scanner_mode", "") == "flow")
+        key = (flow, oi, len(rows))
+        if key == getattr(self, "_flow_axis_key", None):
+            return
+        self._flow_axis_key = key
+        for _i, wdg, _live in rows:
+            try:
+                if (not flow) or (wdg is owner):
+                    wdg.showAxis("bottom")
+                else:
+                    wdg.hideAxis("bottom")
+            except Exception:
+                pass
+
     def _liq_show(self, on: bool) -> None:
         if on:
             if self._liq_ensure_pane() is None:
@@ -18128,6 +18334,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._liq_plot.setVisible(False)
             except RuntimeError:                     # the splitter was torn down under us -> nothing to hide
                 self._liq_plot = None; self._liq_curves = None; self._liq_vb = None
+        self._flow_axis_sync()
 
     def _liq_tick(self, now: float) -> None:
         """Per frame in Flow mode: keep the live edge fresh, ask for a new window when the view settles, draw."""
@@ -18342,6 +18549,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._spd_plot.setVisible(False)
             except RuntimeError:
                 self._spd_plot = None; self._spd_items = None; self._spd_vb = None
+        self._flow_axis_sync()
 
     def _spd_hide_cursor(self) -> None:
         for _it in (self._spd_hline, self._spd_tag, self._spd_time_tag):
@@ -18579,6 +18787,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._lob_plot.setVisible(False)
             except RuntimeError:
                 self._lob_plot = None; self._lob_items = None; self._lob_vb = None
+        self._flow_axis_sync()
 
     def _lob_hide_cursor(self) -> None:
         for _it in (self._lob_hline, self._lob_tag, self._lob_time_tag):
@@ -18847,6 +19056,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._cvol_plot.setVisible(False)
             except RuntimeError:
                 self._cvol_plot = None; self._cvol_items = None; self._cvol_vb = None
+        self._flow_axis_sync()
 
     def _cvol_hide_cursor(self) -> None:
         for _it in (self._cvol_hline, self._cvol_tag, self._cvol_time_tag):
@@ -19053,6 +19263,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._cyc_plot.setVisible(False)
             except RuntimeError:
                 self._cyc_plot = None; self._cyc_items = None; self._cyc_vb = None
+        self._flow_axis_sync()
 
     def _cyc_hide_cursor(self) -> None:
         for it in (self._cyc_hline, self._cyc_tag, self._cyc_time_tag):
@@ -19311,6 +19522,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._lob_sig = None; self._lob_t = 0.0
         self._spd_show(bool(getattr(self, "_spd_on", True)))        # ... and the Speed pane
         self._spd_sig = None; self._spd_t = 0.0
+        self._interp_show(bool(getattr(self, "_interp_on", True)))  # ... and the Interpretation feed
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
         self._flow_subscribe(backfill=True)
         now = time.time()
@@ -19332,6 +19544,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cvol_show(False)
         self._lob_show(False)
         self._spd_show(False)
+        self._interp_show(False)
         self._flow_curves = None
         self._flow_sig = None
         self._flow_xln = None; self._flow_xsig = None; self._flow_xbadge = None
@@ -19399,6 +19612,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pass
         try:
             self._spd_tick(now)         # Speed pane -- same
+        except Exception:
+            pass
+        try:
+            self._interp_tick(now)      # Interpretation feed -- same crosses() read, so a memo hit
         except Exception:
             pass
 
@@ -20649,6 +20866,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     ln.setPen(p)
             except RuntimeError:
                 pass                                       # the splitter tore the pane down under us
+        self._theme_interp(dark)                           # the right-side feed follows the same Chart Style
+    def _theme_interp(self, dark: bool) -> None:
+        p = getattr(self, "interp_panel", None)
+        if p is not None:
+            try:
+                p.setDark(bool(dark))
+            except RuntimeError:
+                pass
+
     @staticmethod
     def _fmt_k(v: float) -> str:
         """Compact thousands formatting for HUD/axis badges (e.g. 148K, -1.8K)."""
@@ -21632,6 +21858,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # Linked dividers: dragging either the price/VPIN handle or the COB/spacer handle moves the
         # other in lock-step, so the COB bottom always coincides with the price-pane bottom.
         self.splitter_v.splitterMoved.connect(self._sync_pane_split)
+        # collapsing the bottom pane must hand the one clock axis back up the stack (no-op unless it changed)
+        self.splitter_v.splitterMoved.connect(lambda *_a: self._flow_axis_sync())
         self.cob_col.splitterMoved.connect(self._sync_pane_split)
         # VPIN sub-pane COLLAPSED by default (divider dragged all the way down) — the price pane gets the full
         # height; drag the handle up to reveal the toxicity heatmap. Deferred so the splitter is laid out

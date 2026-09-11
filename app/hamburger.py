@@ -295,6 +295,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     cvolPaneToggled = QtCore.Signal(bool)        # Volume pane on/off (Flow mode)
     lobPaneToggled = QtCore.Signal(bool)         # Book pane on/off (Flow mode)
     spdPaneToggled = QtCore.Signal(bool)         # Speed pane on/off (Flow mode)
+    interpPaneToggled = QtCore.Signal(bool)     # Interpretation feed on/off (Flow mode, right side)
     cycleWinChanged = QtCore.Signal(float)       # the smoothing that defines a cycle boundary
     liqPaneToggled = QtCore.Signal(bool)          # resting-liquidity pane on/off (Flow mode)
     liqOptsChanged = QtCore.Signal(int, int)      # resting-liquidity pane: (radius ticks, smoothing seconds)
@@ -1690,6 +1691,19 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % (config.SPEED_BASE_N, config.SPEED_FLAT_TICKS))
         self.spd_on.toggled.connect(lambda on: self.spdPaneToggled.emit(bool(on)))
         l4.addWidget(self.spd_on)
+        self.interp_on = QtWidgets.QCheckBox("Interpretation feed (right side, one row per cycle)")
+        self.interp_on.setChecked(bool(config.INTERP_PANE_ON))
+        self.interp_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.interp_on.setToolTip(
+            "A vertical feed down the right-hand side, newest cycle first: start -> end -> duration, then what "
+            "the cycle WAS. Aggressive $ per second against this cycle's recent baseline, crossed with how "
+            "fast price moved, gives the four states from the state-space map -- BREAKOUT (heavy flow, price "
+            "reprices), ABSORPTION (heavy flow, price holds), VACUUM (little flow, price gaps anyway) and "
+            "QUIET -- plus the side. A cycle sitting near its own baseline on either axis is drawn DIM and "
+            "marked weak. The bid/ask book figures beside each state are EVIDENCE, not part of the "
+            "classification. Click a row to centre the chart on that cycle.")
+        self.interp_on.toggled.connect(lambda on: self.interpPaneToggled.emit(bool(on)))
+        l4.addWidget(self.interp_on)
         self.flow_sec.addWidget(w4)
         self.flow_sec.addWidget(w2)
         root.addWidget(self.flow_sec)
@@ -1706,6 +1720,9 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def set_liq_pane_on(self, on: bool) -> None:
         self.liq_on.blockSignals(True); self.liq_on.setChecked(bool(on)); self.liq_on.blockSignals(False)
+
+    def set_interp_pane_on(self, on: bool) -> None:
+        self.interp_on.blockSignals(True); self.interp_on.setChecked(bool(on)); self.interp_on.blockSignals(False)
 
     def set_spd_pane_on(self, on: bool) -> None:
         self.spd_on.blockSignals(True); self.spd_on.setChecked(bool(on)); self.spd_on.blockSignals(False)
