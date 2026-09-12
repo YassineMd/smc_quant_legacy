@@ -18566,21 +18566,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         yet, and the states the user did not name, fall back to the Chart Style's own bearish-fill /
         bullish-hollow pair rather than being given a state they do not have.
 
-        ⚠⚠ AN ABSORBED CANDLE THAT CLOSED AGAINST THE ABSORBED SIDE highlights its REJECTION WICK instead of
-        its body (user 2026-09-12): buyers absorbed and price still closed DOWN means the UPPER wick is the
-        whole story -- exactly how far they pushed before being given it back -- so it is drawn in orange and
-        thicker while the body stays on the Chart Style fill. Colouring the body there would say price went
-        their way. Sellers absorbed closing UP mirrors it on the lower wick, in blue."""
+        ⚠⚠ THE FULL BODY MEANS THE ABSORPTION HELD; A HIGHLIGHTED WICK MEANS IT DID NOT (user 2026-09-12).
+        BUYER ABSORBED closing DOWN is the absorbing side winning -- buyers aggressed, were absorbed, price
+        finished against them -- and that candle is orange throughout. Closing UP, they pushed and kept some
+        of it, so the body stays on the Chart Style fill and the UPPER wick is drawn orange and thicker: that
+        wick is how far they reached beyond the close. SELLER ABSORBED mirrors it -- blue body when it closed
+        UP, blue LOWER wick when it closed down."""
         n = int(np.size(cols))
         _cache = {}
         br = []
         pn = []
         hp = []
         lp = []
-        # ⚠ AN ABSORBED CANDLE IS ONLY COLOURED WHEN PRICE CLOSED THE ABSORBED SIDE'S WAY (user 2026-09-12):
-        # BUYER ABSORBED needs close > open, SELLER ABSORBED needs close < open. Those are the cycles where
-        # the aggressor got absorbed and price STILL finished in their direction; the ordinary case (absorbed
-        # and price went nowhere, or against them) is left on the Chart Style fill so it does not compete.
+        # ⚠ AN ABSORBED CANDLE IS ONLY FULLY COLOURED WHEN THE ABSORPTION HELD (user 2026-09-12): BUYER
+        # ABSORBED needs close < open -- buyers aggressed, were absorbed, and price finished DOWN anyway --
+        # and SELLER ABSORBED needs close > open. Those are the cycles where the absorbing side won.
+        # Otherwise the aggressor pushed and it did NOT hold, so the body stays on the Chart Style fill and
+        # the REJECTION WICK carries the reading instead (see the docstring below).
         # The direction is read off the DRAWN open/close, so the forming candle uses its live close.
         _blk = pg.mkPen(0, 0, 0, width=1.0); _blk.setCosmetic(True)
         _gry = pg.mkPen("#9aa4ae", width=1.0); _gry.setCosmetic(True)
@@ -18592,14 +18594,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             ci = int(cols[i])
             _hi_pen = None
             _lo_pen = None
-            if ci == _C_AB_BUY and not (float(closes[i]) > float(opens[i])):
+            if ci == _C_AB_BUY and not (float(closes[i]) < float(opens[i])):
                 ci = -1
                 _hi_pen = _wcache.get(_C_AB_BUY)       # the rejection wick carries the reading instead
                 if _hi_pen is None:
                     _hi_pen = pg.mkPen(_STATE_BAR_COL[_C_AB_BUY], width=_hw)
                     _hi_pen.setCosmetic(True); _hi_pen.setCapStyle(QtCore.Qt.FlatCap)
                     _wcache[_C_AB_BUY] = _hi_pen
-            elif ci == _C_AB_SELL and not (float(closes[i]) < float(opens[i])):
+            elif ci == _C_AB_SELL and not (float(closes[i]) > float(opens[i])):
                 ci = -1
                 _lo_pen = _wcache.get(_C_AB_SELL)
                 if _lo_pen is None:
