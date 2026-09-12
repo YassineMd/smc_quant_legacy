@@ -1809,6 +1809,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._px_yauto = True          # y auto-fit armed? a manual Y zoom disarms it, a double-click re-arms
         self._px_setting_y = False     # guard: distinguishes OUR setYRange from the user's
         self._px_orig_wheel = None     # the ViewBox's own wheelEvent, wrapped for Shift/Alt
+        self._px_bp_buy = None         # Big Player bubbles (buy / sell) on the cycle candles
+        self._px_bp_sell = None
+        self._px_bp_polys = []         # sweep / campaign diamonds, pooled
+        self._px_bp_labels = None      # BpLabelsItem: every amount in one paint
+        self._px_bp_sig = None
+        self._px_bp_shown = False      # is anything actually ON the pane? (a signature cannot answer that)
         self._px_vline = None; self._px_hline = None
         self._px_tag = None; self._px_time_tag = None; self._px_proxy = None
         self._px_title = None
@@ -17390,6 +17396,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None; self._px_data = None
             self._px_pline = None; self._px_plabel = None; self._px_live_y = None
             self._px_orig_wheel = None; self._px_yauto = True; self._px_setting_y = False
+            self._px_bp_buy = None; self._px_bp_sell = None; self._px_bp_labels = None
+            self._px_bp_polys = []; self._px_bp_sig = None; self._px_bp_shown = False
             self._px_lc = None; self._px_lc_body = None; self._px_lc_wick = None
             self._px_lc_wick2 = None
             self._px_sig = None; self._px_t = 0.0; self._px_data = None
@@ -18196,6 +18204,127 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._theme_sub_panes(not self._simple_bw())              # born into the CURRENT Chart Style
         return pw
 
+    def _px_bp_clear(self) -> None:
+        """Drop every Big Player mark from the pane (toggle off, pane hidden, or nothing in range)."""
+        try:
+            if self._px_bp_buy is not None:
+                self._px_bp_buy.setData(x=[], y=[]); self._px_bp_sell.setData(x=[], y=[])
+            for _d in self._px_bp_polys:
+                _d["poly"].setVisible(False)
+            if self._px_bp_labels is not None:
+                self._px_bp_labels.setLabels([], (255, 255, 255))
+        except RuntimeError:
+            pass
+
+    def _px_bp_draw(self, dx0: float, dx1: float) -> None:
+        """Big Player bubbles + sweep/campaign diamonds on the cycle candles.
+
+        The SAME _bp_events() the bucket canvas uses -- every retained print above the MIN PLAYER slider plus
+        every atomic sweep, folded into CAMPAIGNS when that toggle is on -- so the two charts can never
+        disagree about who the big players were. Round = one print, diamond = one player, green buy / red
+        sell, the amount written on it.
+
+        ⚠ x is the event's own TIMESTAMP, not a bar index: on a clock axis the mark belongs exactly where the
+        print happened, so there is no searchsorted into bar ends. Marks merge by SECOND (this pane's own
+        resolution), and a diamond's half-width is a fixed PIXEL count through viewPixelSize rather than a
+        fraction of a bar, so it keeps its shape at any zoom."""
+        if self._px_plot is None or not self._px_plot.isVisible():
+            return
+        if not self.menu.layer_state("m10_bigplayer"):
+            # ⚠ gated on a DEDICATED flag, not on the signature: a signature answers "did the input change",
+            # never "is anything on screen". Reading it here meant that if the signature happened to be None
+            # when the layer went off -- which any forced redraw makes it -- the marks were left on the pane.
+            if self._px_bp_shown:
+                self._px_bp_shown = False
+                self._px_bp_sig = None
+                self._px_bp_clear()
+            return
+        thr = float(self.menu.big_player_min_usd())
+        _sw_on = bool(self.menu.layer_state("m10_bigplayer_sweeps"))
+        _bw = bool(self._simple_bw())
+        _txtc = (0, 0, 0) if _bw else (255, 255, 255)
+        try:
+            _xpx, _ypx = (float(v) for v in self._px_vb.viewPixelSize())
+        except Exception:
+            _xpx = _ypx = 0.0
+        sig = (round(dx0, 2), round(dx1, 2), thr, _sw_on, _bw, getattr(self, "_bp_rev", 0),
+               len(self._bp_trades), len(self._bp_sweeps), round(_xpx, 9), round(_ypx, 9))
+        if sig == self._px_bp_sig:
+            return                                      # nothing moved -> not even an events lookup
+        self._px_bp_sig = sig
+        if self._px_bp_buy is None:
+            self._px_bp_buy = pg.ScatterPlotItem(pxMode=True, symbol="o",
+                                                 pen=pg.mkPen((40, 230, 120, 235), width=1.5),
+                                                 brush=pg.mkBrush(40, 230, 120, 120))
+            self._px_bp_sell = pg.ScatterPlotItem(pxMode=True, symbol="o",
+                                                  pen=pg.mkPen((240, 70, 90, 235), width=1.5),
+                                                  brush=pg.mkBrush(240, 70, 90, 120))
+            for _it in (self._px_bp_buy, self._px_bp_sell):
+                _it.setZValue(31); self._px_plot.addItem(_it, ignoreBounds=True)
+        if self._px_bp_labels is None:
+            self._px_bp_labels = BpLabelsItem()
+            self._px_plot.addItem(self._px_bp_labels, ignoreBounds=True)
+        try:
+            ev = self._bp_events(float(dx0), float(dx1), float(dx1) + 1e-6, _sw_on)
+        except Exception:
+            self._px_bp_clear(); return
+        from .trades_tape import _fmt_usd
+        merged = {}
+        smerged = {}
+        for e in ev:
+            if e[3] < thr or not (dx0 <= e[0] <= dx1):
+                continue
+            key = (round(float(e[0])), round(float(e[2]), 4), e[1])     # one SECOND, one price, one side
+            if e[4] == "sw":
+                _m = smerged.get(key)
+                smerged[key] = ([e[3], e[5], e[6]] if _m is None
+                                else [_m[0] + e[3], min(_m[1], e[5]), max(_m[2], e[6])])
+            else:
+                merged[key] = merged.get(key, 0.0) + e[3]
+        levels = sorted(merged.items())[-int(config.BIGPLAYER_MAX_LINES):]
+        slevels = sorted(smerged.items())[-int(config.BIGPLAYER_SWEEP_MAX):]
+        bx = []; by = []; bs = []; sx = []; sy = []; ss = []; labels = []
+        for (t_, price, side), usd in levels:
+            _px = self._bp_bubble_px(usd, thr)             # the SAME radius curve the bucket canvas uses
+            if side > 0:
+                bx.append(float(t_)); by.append(price); bs.append(_px)
+            else:
+                sx.append(float(t_)); sy.append(price); ss.append(_px)
+            labels.append((float(t_), price, _fmt_usd(usd)))
+        self._px_bp_buy.setData(x=bx, y=by, size=bs)
+        self._px_bp_sell.setData(x=sx, y=sy, size=ss)
+        drawn = 0
+        if _sw_on:
+            _hmin = 12.0 * _ypx                            # 12 px minimum height, in price units
+            for (t_, price, buy), (usd, lo, hi) in slevels:
+                if drawn >= len(self._px_bp_polys):
+                    _pl = QtWidgets.QGraphicsPolygonItem(); _pl.setZValue(31)
+                    self._px_vb.addItem(_pl, ignoreBounds=True)
+                    self._px_bp_polys.append({"poly": _pl, "buy": None})
+                _d = self._px_bp_polys[drawn]; drawn += 1
+                _mid = 0.5 * (lo + hi); _h = max(float(hi - lo), _hmin)
+                _pxr = self._bp_bubble_px(usd, thr)        # 10..46 px -> 5..9 px of half-width, in SECONDS
+                _hw = (5.0 + 4.0 * max(0.0, min(1.0, (_pxr - 10.0) / 36.0))) * max(_xpx, 1e-9)
+                if _d["buy"] != buy:
+                    _rgb = (40, 230, 120) if buy else (240, 70, 90)
+                    _d["poly"].setPen(pg.mkPen(_rgb[0], _rgb[1], _rgb[2], 235, width=1.5))
+                    _d["poly"].setBrush(pg.mkBrush(_rgb[0], _rgb[1], _rgb[2], 120))
+                    _d["buy"] = buy
+                _x = float(t_)
+                _d["poly"].setPolygon(QtGui.QPolygonF([
+                    QtCore.QPointF(_x, _mid + 0.5 * _h), QtCore.QPointF(_x + _hw, _mid),
+                    QtCore.QPointF(_x, _mid - 0.5 * _h), QtCore.QPointF(_x - _hw, _mid)]))
+                _d["poly"].setVisible(True)
+                labels.append((float(_x), _mid, _fmt_usd(usd)))
+        for _d in self._px_bp_polys[drawn:]:
+            _d["poly"].setVisible(False)
+        _lmax = int(getattr(config, "BIGPLAYER_LABEL_MAX", 60))
+        if len(labels) > _lmax:
+            labels = sorted(labels, key=lambda q: q[0])[-_lmax:]   # keep the newest; older marks stay unlabelled
+        self._px_bp_labels.setLabels(labels, _txtc)
+        self._px_bp_labels.setVisible(True)
+        self._px_bp_shown = True
+
     def _px_wheel(self, ev, axis=None):
         """Modifier wheel over the PRICE pane, matching the bucket candle chart: Shift -> zoom X only,
         Alt -> zoom Y only, plain wheel -> both. Wrapped so a fault can never break the pane's zoom."""
@@ -18538,6 +18667,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._px_data = None
                 self._px_pline = None; self._px_plabel = None; self._px_live_y = None
                 self._px_orig_wheel = None; self._px_yauto = True; self._px_setting_y = False
+                self._px_bp_buy = None; self._px_bp_sell = None; self._px_bp_labels = None
+                self._px_bp_polys = []; self._px_bp_sig = None; self._px_bp_shown = False
                 self._px_lc = None; self._px_lc_body = None; self._px_lc_wick = None
                 self._px_lc_wick2 = None
             else:
@@ -18680,6 +18811,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             lo_y, hi_y = float(np.min(_l)), float(np.max(_h))
         if not (np.isfinite(lo_y) and np.isfinite(hi_y)):
             return
+        try:
+            self._px_bp_draw(dx0, dx1)      # Big Player marks -- self-gated, signature-throttled, fail-safe
+        except Exception:
+            pass
         pad = max(float(config.TICK_SIZE), (hi_y - lo_y) * float(config.PX_PAD_FRAC))
         want = (lo_y - pad, hi_y + pad)
         cur = self._px_yfit
@@ -20448,11 +20583,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if conn and not getattr(self, "_flow_conn_was", True):
             self._flow_subscribe(backfill=True)            # reconnect: re-arm + refill the gap
         self._flow_conn_was = conn
-        _tv, tws, tbatches = self.worker.trades_state()
-        for tbp in tbatches:
-            self._flow.ingest(*decode_trades(tbp.ts_b64, tbp.price_b64, tbp.qty_b64, tbp.side_b64))
-        for tw in (tws or ()):
-            self._flow_win_ingest(tw)
+        # ⚠⚠ ONE drainer per frame. trades_state() is consume-once, and _bp_feed is the other drainer --
+        # but it already ingests every live batch AND every completed backfill window into _flow (that is how
+        # the candle canvas keeps these same bins fed), so with Big Player on it REPLACES this drain instead
+        # of racing it. Without this the Big Player store is never filled in Flow mode and the marks on the
+        # PRICE pane would be permanently empty.
+        if self.menu.layer_state("m10_bigplayer"):
+            try:
+                self._bp_feed()
+            except Exception:
+                pass
+        else:
+            _tv, tws, tbatches = self.worker.trades_state()
+            for tbp in tbatches:
+                self._flow.ingest(*decode_trades(tbp.ts_b64, tbp.price_b64, tbp.qty_b64, tbp.side_b64))
+            for tw in (tws or ()):
+                self._flow_win_ingest(tw)
         now = time.time()
         if now - self._flow_resub_t > 10.0:
             self._flow_subscribe(backfill=False)
