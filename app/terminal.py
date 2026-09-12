@@ -1806,6 +1806,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._px_data = None           # (vx0, vx1, t, t_end, done, px0, px1, pxh, pxl) from ONE crosses() read
         self._px_sized = False
         self._px_yfit = None           # (lo, hi) currently set, so the axis is not re-set every tick
+        self._px_yauto = True          # y auto-fit armed? a manual Y zoom disarms it, a double-click re-arms
+        self._px_setting_y = False     # guard: distinguishes OUR setYRange from the user's
+        self._px_orig_wheel = None     # the ViewBox's own wheelEvent, wrapped for Shift/Alt
         self._px_vline = None; self._px_hline = None
         self._px_tag = None; self._px_time_tag = None; self._px_proxy = None
         self._px_title = None
@@ -17386,6 +17389,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # ... and the PRICE pane sat ABOVE the chart inside that same splitter
             self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None; self._px_data = None
             self._px_pline = None; self._px_plabel = None; self._px_live_y = None
+            self._px_orig_wheel = None; self._px_yauto = True; self._px_setting_y = False
             self._px_lc = None; self._px_lc_body = None; self._px_lc_wick = None
             self._px_lc_wick2 = None
             self._px_sig = None; self._px_t = 0.0; self._px_data = None
@@ -18112,6 +18116,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         vb = pw.getViewBox()
         vb.setMouseEnabled(x=True, y=True)
         vb.setXLink(self.vb)                                     # pan/zoom follows the flow lines exactly
+        # SHIFT+wheel = X only, ALT+wheel = Y only, exactly as on the bucket candle chart (see _vb_wheel).
+        # X is linked to the main view, so an X zoom here moves the whole stack -- which is the point of one
+        # shared clock.
+        self._px_orig_wheel = vb.wheelEvent
+        vb.wheelEvent = self._px_wheel
+        # ... and watch for a Y range the PANE did not set, so a manual zoom is not undone by the auto-fit
+        vb.sigYRangeChanged.connect(self._on_px_y_changed)
         # ANTIALIASING STAYS OFF: measured elsewhere in this file at 25x the cost on a long polyline.
         _pn = pg.mkPen(config.COLOR_PRICE_LINE_DARK, width=1.6, style=QtCore.Qt.SolidLine)
         _pn.setCosmetic(True); _pn.setCapStyle(QtCore.Qt.RoundCap); _pn.setJoinStyle(QtCore.Qt.RoundJoin)
@@ -18184,6 +18195,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         pw.setMinimumHeight(110)
         self._theme_sub_panes(not self._simple_bw())              # born into the CURRENT Chart Style
         return pw
+
+    def _px_wheel(self, ev, axis=None):
+        """Modifier wheel over the PRICE pane, matching the bucket candle chart: Shift -> zoom X only,
+        Alt -> zoom Y only, plain wheel -> both. Wrapped so a fault can never break the pane's zoom."""
+        try:
+            mods = ev.modifiers()
+            if mods & QtCore.Qt.ShiftModifier:
+                return self._px_orig_wheel(ev, axis=0)       # X-axis-only zoom
+            if mods & QtCore.Qt.AltModifier:
+                return self._px_orig_wheel(ev, axis=1)       # Y-axis-only zoom
+        except Exception:
+            pass
+        return self._px_orig_wheel(ev, axis)
+
+    def _on_px_y_changed(self, *args) -> None:
+        """A Y range the pane did not set itself means the user zoomed or panned Y -- stop auto-fitting.
+
+        ⚠ without this the feature would LOOK broken rather than missing: _px_draw refits Y past a dead-band
+        on every redraw, so an Alt+wheel zoom would be wiped within a frame. Double-click re-arms it."""
+        if not self._px_setting_y:
+            self._px_yauto = False
+
+    def _px_refit_y(self) -> None:
+        """Re-arm the Y auto-fit and refit on the next draw -- the reset for a manual zoom (double-click)."""
+        self._px_yauto = True
+        self._px_yfit = None
+        self._px_sig = None
+        self._px_t = 0.0
 
     def _px_reposition_pill(self, *args) -> None:
         """Keep the pill pinned to the pane's right edge (re-fired on every x-range change, so a pan or the
@@ -18319,6 +18358,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 return
             pos = ev.scenePos()
             if not self._px_plot.sceneBoundingRect().contains(pos):
+                return
+            if bool(getattr(ev, "double", lambda: False)()):
+                # DOUBLE-click: re-arm the Y auto-fit, the reset for an Alt+wheel zoom. (The first click of
+                # the pair has already scrolled the feed, which is harmless.)
+                self._px_refit_y()
+                ev.accept()
                 return
             d = getattr(self, "_px_data", None)
             p = getattr(self, "interp_panel", None)
@@ -18492,6 +18537,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None
                 self._px_data = None
                 self._px_pline = None; self._px_plabel = None; self._px_live_y = None
+                self._px_orig_wheel = None; self._px_yauto = True; self._px_setting_y = False
                 self._px_lc = None; self._px_lc_body = None; self._px_lc_wick = None
                 self._px_lc_wick2 = None
             else:
@@ -18637,10 +18683,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         pad = max(float(config.TICK_SIZE), (hi_y - lo_y) * float(config.PX_PAD_FRAC))
         want = (lo_y - pad, hi_y + pad)
         cur = self._px_yfit
-        if cur is None or abs(want[0] - cur[0]) + abs(want[1] - cur[1]) > \
-                float(config.PX_REFIT_FRAC) * max(1e-9, cur[1] - cur[0]):
+        if self._px_yauto and (cur is None or abs(want[0] - cur[0]) + abs(want[1] - cur[1]) >
+                               float(config.PX_REFIT_FRAC) * max(1e-9, cur[1] - cur[0])):
             self._px_yfit = want
-            vb.setYRange(want[0], want[1], padding=0.0)
+            self._px_setting_y = True            # so _on_px_y_changed knows this one is OURS
+            try:
+                vb.setYRange(want[0], want[1], padding=0.0)
+            finally:
+                self._px_setting_y = False
 
     def _px_hide_cursor(self) -> None:
         """Badges off, lines linger -- the same contract as the other panes' cursors."""
