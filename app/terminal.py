@@ -19544,37 +19544,76 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 self._liq_plot = None; self._liq_curves = None; self._liq_vb = None
         self._stack_axis_sync()
 
+    def _liq_wanted(self) -> bool:
+        """Does ANYTHING need the resting-book window -- not just the pane that draws it?
+
+        ⚠⚠ THE BUG THIS EXISTS FOR (user 2026-09-12): "when the Limit Order panel is toggled OFF, the Limit
+        Buyer and Limit Seller on the interpretation show no percentages -- that means the interpretation is
+        not taking that into consideration, which is dangerous." Exactly right, and it was worse than the
+        symptom: `_liq_data` is the ONE piece of cross-pane data in this file (audited -- every other pane's
+        `_*_data` is read only by its own draw), and `_lob_cycle_means` builds `_lob_cache` from it for BOTH
+        the CYCLE BOOK pane and the Interpretation feed. Gating its acquisition on its own pane's visibility
+        silently starved two other readers. MEASURED before the fix: pane on -> 37 of 222 feed rows carried a
+        limit-order reading; pane off -> 0 of 221, and the Book pane fell to 0 bars.
+
+        So READING is driven by demand and DRAWING by visibility. If nothing wants it, nothing is fetched --
+        that is what keeps a toggled-off pane free rather than merely cheap."""
+        for _w in (getattr(self, "_liq_plot", None), getattr(self, "_lob_plot", None),
+                   getattr(self, "interp_panel", None)):
+            if _w is not None:
+                try:
+                    if _w.isVisible():
+                        return True
+                except RuntimeError:                 # torn down under us -- it wants nothing
+                    continue
+        return False
+
     def _liq_tick(self, now: float) -> None:
-        """Per frame in Flow mode: keep the live edge fresh, ask for a new window when the view settles, draw."""
-        if self._liq_plot is None or not self._liq_plot.isVisible():
+        """Per frame in Flow mode: keep the live edge fresh, ask for a new window when the view settles, draw.
+
+        ⚠ Three separate gates, because they answer different questions: whether anyone needs the DATA
+        (_liq_wanted), whether this pane is on screen to DRAW it, and whether the live pulse-book edge is
+        worth summing at all -- see below."""
+        _shown = False
+        if self._liq_plot is not None:
+            try:
+                _shown = bool(self._liq_plot.isVisible())
+            except RuntimeError:                     # the splitter was torn down -> treat as hidden
+                self._liq_plot = None
+        if not (_shown or self._liq_wanted()):
             return
-        # LIVE edge: sum the pulse book within the radius -- no request, no history, always current
-        try:
-            snap = self._last_snap or self.worker.snapshot()
-            d = snap.get("depth") or {}
-            bids = d.get("bids") or []; asks = d.get("asks") or []
-            if bids and asks:
-                mid = 0.5 * (float(bids[0][0]) + float(asks[0][0]))
-                tick = float(config.TICK_SIZE)
-                radii = tuple(int(r) for r in config.LIQ_RADIUS_CHOICES)      # ascending
-                nr = len(radii); rmax = radii[-1]
-                nb = [0.0] * nr; na = [0.0] * nr
-                for src, acc, sgn in ((bids, nb, 1.0), (asks, na, -1.0)):     # ONE pass, bucketed by distance
-                    for lvl in src:
-                        pr_ = float(lvl[0]); d = (mid - pr_) / tick * sgn
-                        if d < 0.0 or d > rmax:
-                            continue
-                        v = pr_ * float(lvl[1])
-                        for k in range(nr):
-                            if d <= radii[k]:
-                                acc[k] += v
-                                break
-                for acc in (nb, na):                                          # -> cumulative by radius
-                    for k in range(1, nr):
-                        acc[k] += acc[k - 1]
-                self._liq_live = (now, tuple(nb), tuple(na), radii)
-        except Exception:
-            pass
+        # LIVE edge: sum the pulse book within the radius -- no request, no history, always current.
+        # ⚠ ONLY when this pane is on screen. `_liq_live` is read by _liq_draw and by nothing else (the feed
+        # and the Book pane want the historical WINDOW, not the live column), and this is a Python loop over
+        # every depth level x every radius on every frame -- the one genuinely costly thing in this method.
+        # Running it for a hidden pane would have made the fix above a per-frame tax instead of free.
+        if _shown:
+            try:
+                snap = self._last_snap or self.worker.snapshot()
+                d = snap.get("depth") or {}
+                bids = d.get("bids") or []; asks = d.get("asks") or []
+                if bids and asks:
+                    mid = 0.5 * (float(bids[0][0]) + float(asks[0][0]))
+                    tick = float(config.TICK_SIZE)
+                    radii = tuple(int(r) for r in config.LIQ_RADIUS_CHOICES)      # ascending
+                    nr = len(radii); rmax = radii[-1]
+                    nb = [0.0] * nr; na = [0.0] * nr
+                    for src, acc, sgn in ((bids, nb, 1.0), (asks, na, -1.0)):     # ONE pass, by distance
+                        for lvl in src:
+                            pr_ = float(lvl[0]); d = (mid - pr_) / tick * sgn
+                            if d < 0.0 or d > rmax:
+                                continue
+                            v = pr_ * float(lvl[1])
+                            for k in range(nr):
+                                if d <= radii[k]:
+                                    acc[k] += v
+                                    break
+                    for acc in (nb, na):                                          # -> cumulative by radius
+                        for k in range(1, nr):
+                            acc[k] += acc[k - 1]
+                    self._liq_live = (now, tuple(nb), tuple(na), radii)
+            except Exception:
+                pass
         (vx0, vx1), _ = self.vb.viewRange()
         # WHEN to ask for a new window. Keying on the exact view range does not work here: Flow FOLLOWS the live
         # edge, so vx1 moves every frame and a debounce would never settle (it never fired at all). Key on DATA
@@ -19593,7 +19632,18 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             # snapshot next to it and the painter still rasterises it (profiled at +25 ms/frame, see LIQ_COL_SECS).
             _span = max(60.0, float(vx1) - float(vx0))
             cols = max(120, int(_span / float(config.LIQ_COL_SECS)))
-            cols = int(min(cols, int(config.LIQ_MAX_COLS), int(self._liq_plot.width()) or 900))
+            # ⚠ the pane may be hidden or never built, so its width is not available to cap the columns.
+            # The cap is about not asking for more columns than can be DRAWN; with no pane to draw them the
+            # readers want the same columns per second, so fall back to a full-width budget rather than 0 --
+            # `int(None or 900)` would have thrown, and `width() or 900` on a hidden widget returns its real
+            # width anyway.
+            _wpx = 0
+            if self._liq_plot is not None:
+                try:
+                    _wpx = int(self._liq_plot.width()) or 0
+                except RuntimeError:
+                    _wpx = 0
+            cols = int(min(cols, int(config.LIQ_MAX_COLS), _wpx or 900))
             t0ms = int(max(vx0, now - float(config.DEPTH_RETENTION_HOURS) * 3600.0) * 1000)
             t1ms = int(min(vx1, now) * 1000)
             if t1ms - t0ms > 60000:
@@ -19620,6 +19670,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             except Exception as ex:
                 print("LIQUIDITY WINDOW DECODE: %s" % ex)
             self._liq_req = None
+        if not _shown:
+            return                  # the data is in hand for the feed and the Book pane; nothing to paint
         self._liq_draw(now)
         self._liq_levels()          # keep the rules/badges docked to the axis as the view scrolls
 
