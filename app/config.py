@@ -359,8 +359,19 @@ def pane_titles(n=None):
         "lob": "CYCLE BOOK" + d + "bid / ask vs last %d" % n,
         "spd": "CYCLE SPEED" + d + "ticks/s vs last %d" % n,
         "interp": "INTERPRETATION" + d + "one row per cycle",
+        "px": "PRICE" + d + "traded price per second",
     }
 
+
+# --- PRICE pane, ABOVE the flow lines (user 2026-09-12) ---------------------------------------------------
+PX_PANE_ON = True               # the price track over the same clock as the flow lines
+PX_MAX_POINTS = 2400            # points after decimation. MIN/MAX per bucket, so this is 2 per pixel column
+                                # at a 1200 px pane -- the envelope survives, which plain striding would eat.
+COLOR_PRICE_LINE_DARK = "#e8eaed"   # the price line carries no side, so unlike the teal/red flow lines
+COLOR_PRICE_LINE_BW = "#000000"     # it has to follow the ground: light on the dark canvas, black on Simple BW
+PX_PAD_FRAC = 0.06              # y padding above and below the visible high/low
+PX_REFIT_FRAC = 0.18            # dead-band: re-fit y only when the visible high/low moves by this much of the
+                                # current range, so the axis does not wobble on every 20 Hz tick
 
 PANE_TITLE_LIQ = "LIMIT ORDERS" + "  ·  " + "resting bid / ask $"
 PANE_TITLE_CYC = "CYCLE IMPACT" + "  ·  " + "ticks per %s" % FLOW_CROSS_BADGE_UNIT_TXT

@@ -32,6 +32,7 @@ class FlowStore:
         self._memo = None
         self._bmemo = None
         self._xmemo = None
+        self._pxmemo = None
 
     # ---------------------------------------------------------------- state
     def __len__(self) -> int:
@@ -116,6 +117,7 @@ class FlowStore:
         self._memo = None
         self._bmemo = None
         self._xmemo = None
+        self._pxmemo = None
         return int(loc.size)
 
     def reset(self) -> None:
@@ -128,6 +130,7 @@ class FlowStore:
         self._memo = None
         self._bmemo = None
         self._xmemo = None
+        self._pxmemo = None
 
     # --------------------------------------------------------------- bursts
     def bar_bursts(self, starts, ends, win_secs: float, cap: float = 50.0, floor_pct: float = 90.0):
@@ -484,6 +487,69 @@ class FlowStore:
         return out
 
     # ----------------------------------------------------------------- read
+    def price_series(self, t0: float, t1: float, max_pts: int = 2400):
+        """(t, price) for the bins inside [t0, t1] -- the LAST trade price in each one.
+
+        Bins with no trade hold 0 and are FORWARD-FILLED: a price persists until the next print, so a quiet
+        stretch is flat, not a cliff to zero. The fill is seeded from the last print BEFORE the window (bounded
+        to an hour of look-back, so this never walks the whole 72 h array); bins before the first print anywhere
+        are dropped rather than drawn at zero.
+
+        Decimated MIN/MAX per bucket, NOT by striding. `series()` can afford to stride because its rolling sums
+        are already smoothed, but striding a price line deletes precisely the highs and lows a reader is looking
+        for. Two points per bucket, emitted in their true time order, keep the envelope exact.
+
+        MEMOIZED in its OWN slot -- sharing series()' slot would make the two evict each other every frame."""
+        if self.empty():
+            return (np.zeros(0), np.zeros(0))
+        key = (self.rev, round(float(t0), 3), round(float(t1), 3), int(max_pts))
+        if self._pxmemo is not None and self._pxmemo[0] == key:
+            return self._pxmemo[1]
+        n = len(self._px)
+        i0 = max(0, int(np.floor(t0 / self.bin)) - self._base)
+        i1 = min(n - 1, int(np.floor(t1 / self.bin)) - self._base)
+        _empty = (np.zeros(0), np.zeros(0))
+        if i1 < i0:
+            self._pxmemo = (key, _empty)
+            return _empty
+        px = self._px[i0:i1 + 1]
+        # forward fill: the index of the most recent PRICED bin at or before each bin
+        idx = np.where(px > 0, np.arange(px.size), -1)
+        np.maximum.accumulate(idx, out=idx)
+        seed = 0.0
+        if idx[0] < 0:                       # the window opens on unpriced bins -> seed from just before it
+            _lo = max(0, i0 - 3600)
+            _prev = np.flatnonzero(self._px[_lo:i0])
+            if _prev.size:
+                seed = float(self._px[_lo + _prev[-1]])
+        out_px = np.where(idx >= 0, px[np.maximum(idx, 0)], seed)
+        t = (self._base + np.arange(i0, i1 + 1)) * self.bin + self.bin
+        keep = out_px > 0                    # nothing has ever traded here: draw nothing, do not draw a zero
+        if not keep.all():
+            t = t[keep]; out_px = out_px[keep]
+        if t.size == 0:
+            self._pxmemo = (key, _empty)
+            return _empty
+        step = int(np.ceil(t.size / float(max(8.0, max_pts / 2.0))))
+        if step > 1 and t.size > 4:
+            nb = t.size // step
+            if nb >= 1:
+                B = out_px[:nb * step].reshape(nb, step)
+                T = t[:nb * step].reshape(nb, step)
+                r = np.arange(nb)
+                amin = B.argmin(1); amax = B.argmax(1)
+                a = np.minimum(amin, amax); b = np.maximum(amin, amax)   # true time order inside the bucket
+                xs = np.empty(nb * 2); ys = np.empty(nb * 2)
+                xs[0::2] = T[r, a]; xs[1::2] = T[r, b]
+                ys[0::2] = B[r, a]; ys[1::2] = B[r, b]
+                if nb * step < t.size:                                   # the ragged tail, undecimated
+                    xs = np.concatenate([xs, t[nb * step:]])
+                    ys = np.concatenate([ys, out_px[nb * step:]])
+                t, out_px = xs, ys
+        out = (t, out_px)
+        self._pxmemo = (key, out)
+        return out
+
     def series(self, t0: float, t1: float, win_secs: float, max_pts: int = 4000):
         """(t, buy$, sell$) for the bins inside [t0, t1]: each point = the $ traded in the `win_secs` ENDING at it.
         Decimated to <= max_pts points (the rolling values are already smoothed, so plain striding is faithful).

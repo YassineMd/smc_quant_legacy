@@ -298,6 +298,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     interpPaneToggled = QtCore.Signal(bool)     # Interpretation feed on/off (Flow mode, right side)
     cycleWinChanged = QtCore.Signal(float)       # the smoothing that defines a cycle boundary
     liqPaneToggled = QtCore.Signal(bool)          # resting-liquidity pane on/off (Flow mode)
+    pxPaneToggled = QtCore.Signal(bool)           # PRICE pane on/off (Flow mode) -- the one ABOVE the lines
     liqOptsChanged = QtCore.Signal(int, int)      # resting-liquidity pane: (radius ticks, smoothing seconds)
     burstOptsChanged = QtCore.Signal(float, int)   # Volume Burst: (x multiple, window seconds) — 2026-09-08
     flowWindowChanged = QtCore.Signal(int)   # Buy/Sell Flow: rolling window in seconds (2026-09-08)
@@ -1610,6 +1611,16 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.flow_cross_on.toggled.connect(lambda on: self.flowCrossToggled.emit(bool(on)))
         lay.addWidget(self.flow_cross_on)
         self.flow_sec.addWidget(w)
+        wpx = QtWidgets.QWidget()
+        lpx = QtWidgets.QVBoxLayout(wpx); lpx.setContentsMargins(2, 1, 8, 5); lpx.setSpacing(2)
+        self.px_on = QtWidgets.QCheckBox(config.pane_titles()["px"])
+        self.px_on.setChecked(bool(config.PX_PANE_ON))
+        self.px_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.px_on.setToolTip("The pane ABOVE the flow lines: the traded price on the same clock, so a move can "
+                              "be read against the flow that paid for it. Shows only in Buy/Sell Flow mode.")
+        self.px_on.toggled.connect(lambda on: self.pxPaneToggled.emit(bool(on)))
+        lpx.addWidget(self.px_on)
+        self.flow_sec.addWidget(wpx)
         w2 = QtWidgets.QWidget()
         l2 = QtWidgets.QVBoxLayout(w2); l2.setContentsMargins(2, 1, 8, 5); l2.setSpacing(2)
         self.liq_on = QtWidgets.QCheckBox(config.pane_titles()["liq"])
@@ -1714,6 +1725,12 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.flow_cross_on.setChecked(bool(on))
         self.flow_cross_on.blockSignals(False)
 
+    def px_pane_on(self) -> bool:
+        return bool(self.px_on.isChecked())
+
+    def set_px_pane_on(self, on: bool) -> None:
+        self.px_on.blockSignals(True); self.px_on.setChecked(bool(on)); self.px_on.blockSignals(False)
+
     def liq_pane_on(self) -> bool:
         return bool(self.liq_on.isChecked())
 
@@ -1722,7 +1739,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def set_pane_names(self, names: dict) -> None:
         """Re-label the pane toggles when the cycle lookback changes -- the names quote the number."""
-        for _k, _cb in (("liq", self.liq_on), ("cyc", self.cycle_on), ("cvol", self.cvol_on),
+        for _k, _cb in (("px", self.px_on), ("liq", self.liq_on), ("cyc", self.cycle_on),
+                        ("cvol", self.cvol_on),
                         ("lob", self.lob_on), ("spd", self.spd_on), ("interp", self.interp_on)):
             if _k in names:
                 _cb.setText(names[_k])

@@ -1784,6 +1784,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_sig = None          # (store rev, view range, window, width) -> skip the redraw when nothing moved
         self._flow_follow = True       # right edge pinned to 'now' until the user pans away
         self._flow_resub_t = 0.0
+        self._px_plot = None           # PRICE pane (Flow mode): the one pane ABOVE the main chart
+        self._px_curve = None
+        self._px_vb = None
+        self._px_pane_on = bool(config.PX_PANE_ON)
+        self._px_sig = None            # (rev, x0, x1, width) -- an idle frame is this compare and nothing else
+        self._px_sized = False
+        self._px_yfit = None           # (lo, hi) currently set, so the axis is not re-set every tick
+        self._px_vline = None; self._px_hline = None
+        self._px_tag = None; self._px_time_tag = None; self._px_proxy = None
+        self._px_title = None
         self._liq_plot = None          # resting-liquidity pane (Flow mode): its own PlotWidget under the lines
         self._liq_curves = None
         self._liq_data = None          # (t0, t1, cols, radii, mids, bid[nr][cols], ask[nr][cols]) from the daemon
@@ -2345,6 +2355,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if getattr(self, "interp_panel", None) is not None:
                 self.interp_panel.setLookback(self._lb_n())   # silent: must not echo back as a change
             self._apply_pane_names()                          # names quote the restored lookback
+            self.menu.set_px_pane_on(bool(getattr(self, "_px_pane_on", config.PX_PANE_ON)))
             self.menu.set_liq_pane_on(bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)))
             self.menu.set_liq_opts(int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                                    int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)))
@@ -2605,6 +2616,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.spdPaneToggled.connect(self._on_spd_pane_toggled)              # Speed pane on/off
         self.menu.interpPaneToggled.connect(self._on_interp_pane_toggled)        # Interpretation feed on/off
         self.menu.cycleWinChanged.connect(self._on_cyc_win)                      # cycle-defining window
+        self.menu.pxPaneToggled.connect(self._on_px_pane_toggled)                # PRICE pane (above) on/off
         self.menu.liqPaneToggled.connect(self._on_liq_pane_toggled)              # resting-liquidity pane on/off
         self.menu.liqOptsChanged.connect(self._on_liq_opts)                      # resting-liquidity pane
         self.menu.burstOptsChanged.connect(self._on_burst_opts)                  # Volume Burst: x multiple / window
@@ -10370,6 +10382,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "spd_on": bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)),
                 "interp_on": bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)),
                 "cycle_lb": int(getattr(self, "_cycle_lb", config.CYCLE_BASE_N)),
+                "px_pane_on": bool(getattr(self, "_px_pane_on", config.PX_PANE_ON)),
                 "liq_pane_on": bool(getattr(self, "_liq_pane_on", config.LIQ_PANE_ON)),
                 "liq_radius": int(getattr(self, "_liq_radius", config.LIQ_RADIUS_TICKS)),
                 "liq_smooth": int(getattr(self, "_liq_smooth", config.LIQ_SMOOTH_SECS)),
@@ -10496,6 +10509,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cycle_lb = max(int(config.CYCLE_BASE_N_MIN),
                              min(int(config.CYCLE_BASE_N_MAX),
                                  int(s.get("cycle_lb", config.CYCLE_BASE_N))))
+        self._px_pane_on = bool(s.get("px_pane_on", config.PX_PANE_ON))
         self._liq_pane_on = bool(s.get("liq_pane_on", config.LIQ_PANE_ON))
         _lr = int(s.get("liq_radius", config.LIQ_RADIUS_TICKS) or config.LIQ_RADIUS_TICKS)
         _ls = int(s.get("liq_smooth", config.LIQ_SMOOTH_SECS) if s.get("liq_smooth") is not None else config.LIQ_SMOOTH_SECS)
@@ -16652,6 +16666,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._flow_curves = None                      # force a rebuild; the old pair is off the plot
             self._flow_xln = None; self._flow_xsig = None  # ... and the cycle-start vlines in EVERY pane
             self._flow_xbadge = None
+            self._px_show(bool(getattr(self, "_px_pane_on", True)))
+            self._px_sig = None
             self._liq_show(bool(getattr(self, "_liq_pane_on", True)))
             self._cyc_show(bool(getattr(self, "_cyc_on", True)))
             self._liq_sig = None
@@ -17352,6 +17368,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.lower_vb = None; self._lower_proxy = None
             # ... and the Flow-mode liquidity pane is a CHILD of that same splitter, so its refs are dangling too.
             # Null them and _liq_ensure_pane rebuilds the pane on the next entry (_liq_data survives -- it is data).
+            # ... and the PRICE pane sat ABOVE the chart inside that same splitter
+            self._px_plot = None; self._px_curve = None; self._px_vb = None
+            self._px_sig = None; self._px_sized = False; self._px_yfit = None
+            self._px_vline = None; self._px_hline = None
+            self._px_tag = None; self._px_time_tag = None; self._px_proxy = None; self._px_title = None
             self._liq_plot = None; self._liq_curves = None; self._liq_vb = None
             self._liq_sig = None; self._liq_sized = False
             self._liq_vline = None; self._liq_hline = None      # crosshair items were children of that splitter
@@ -18037,6 +18058,200 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._liq_sig = None
         self._save_ui_state()
 
+    def _on_px_pane_toggled(self, on: bool) -> None:
+        """Hamburger 'PRICE' -> show/hide the pane above the flow lines (Flow mode only) and persist."""
+        self._px_pane_on = bool(on)
+        self._px_show(bool(on) and self.scanner_mode == "flow")
+        self._save_ui_state()
+
+    def _px_ensure_pane(self):
+        """Create the PRICE pane ABOVE the flow lines, x-linked to the main view.
+
+        The only pane in the stack inserted at index 0 rather than appended -- see _sv_base for what that
+        costs. Its bottom axis is built like everyone else's and _stack_axis_sync immediately hides it: the
+        one clock lives on the bottom-most pane, and this one is the top."""
+        if self._px_plot is not None:
+            return self._px_plot
+        try:
+            self._ensure_canvas_panes()
+        except Exception:
+            pass
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return None
+        pw = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"),
+                                      "right": PriceAxis(orientation="right")})
+        pw.setBackground("#141414")
+        pw.showAxis("right"); pw.hideAxis("left")
+        for _a in ("bottom", "right"):
+            pw.getAxis(_a).setPen(pg.mkPen("#dcdcdc", width=1))
+            pw.getAxis(_a).setTextPen(pg.mkPen("#dcdcdc"))
+        pw.showGrid(x=False, y=False)
+        pw.setMenuEnabled(False)
+        pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        pw.getAxis("bottom").set_scanner_active(False)          # clock labels, like the flow chart
+        vb = pw.getViewBox()
+        vb.setMouseEnabled(x=True, y=True)
+        vb.setXLink(self.vb)                                     # pan/zoom follows the flow lines exactly
+        # ANTIALIASING STAYS OFF: measured elsewhere in this file at 25x the cost on a long polyline.
+        _pn = pg.mkPen(config.COLOR_PRICE_LINE_DARK, width=1.6, style=QtCore.Qt.SolidLine)
+        _pn.setCosmetic(True); _pn.setCapStyle(QtCore.Qt.RoundCap); _pn.setJoinStyle(QtCore.Qt.RoundJoin)
+        cv = pg.PlotCurveItem(pen=_pn, antialias=False)
+        cv.setZValue(6)
+        pw.addItem(cv)
+        self._px_curve = cv
+        self._px_plot = pw
+        self._px_vb = vb
+        # Crosshair, the same contract as every other sub-pane: the VERTICAL line is shared across the x-linked
+        # panes so the columns line up, the horizontal line and both badges are this pane's own.
+        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
+        self._px_vline = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
+        self._px_hline = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
+        self._px_vline.setZValue(15); self._px_hline.setZValue(15)
+        pw.addItem(self._px_vline, ignoreBounds=True); pw.addItem(self._px_hline, ignoreBounds=True)
+        self._px_hline.hide()
+        _tf = QtGui.QFont("Consolas", 9); _tf.setBold(True)
+        self._px_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._px_tag.textItem.setFont(_tf); self._px_tag.setZValue(16)
+        pw.addItem(self._px_tag, ignoreBounds=True); self._px_tag.hide()
+        self._px_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._px_time_tag.textItem.setFont(_tf); self._px_time_tag.setZValue(61)
+        pw.addItem(self._px_time_tag, ignoreBounds=True); self._px_time_tag.hide()
+        self._px_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["px"])
+        self._px_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_px_mouse_move)
+        sp.insertWidget(0, pw)                                   # ABOVE the main chart -- the one pane that is
+        # 110, not the 70 the panes below use: a splitter child added with no size gets ZERO, and on a crowded
+        # 950 px stack the share arithmetic leaves this one on its minimum, so the minimum has to be readable.
+        # ⚠⚠ Claiming it DECLARATIVELY is deliberate. Re-asserting a share after the five panes below have
+        # grown over-subscribes the splitter, and Qt resolves that by scaling every child down: measured, it
+        # put the flow CHART itself at 68 px. Qt honours a minimum out of the residual with nothing to fight.
+        pw.setMinimumHeight(110)
+        self._theme_sub_panes(not self._simple_bw())              # born into the CURRENT Chart Style
+        return pw
+
+    def _px_grow(self, force: bool = False, share: float = 0.20) -> bool:
+        """Give the PRICE pane its slice, taken from the main chart.
+
+        _sub_pane_grow cannot do this one: it is written for a pane BELOW the chart and refuses index <= base.
+
+        0.20 rather than the 0.22 the panes below use: this one comes out of the flow chart's own height, and
+        on a 950 px window the chart is already down to 393 px with five sub-panes open."""
+        sp = getattr(self, "splitter_v", None)
+        if sp is None or self._px_plot is None:
+            return False
+        try:
+            i = sp.indexOf(self._px_plot)
+            base = self._sv_base()
+            sz = sp.sizes()
+            if i < 0 or i >= base or not sz or base >= len(sz):
+                return False
+            if not force and sz[i] >= 40:
+                return False
+            tot = sum(sz) or sp.height() or 800
+            sz[i] = max(120, int(tot * share))
+            sz[base] = max(140, tot - sum(sz[:base]) - sum(sz[base + 1:]))
+            sp.setSizes(sz)
+            return True
+        except Exception:
+            return False
+
+    def _px_show(self, on: bool) -> None:
+        if on:
+            if self._px_ensure_pane() is None:
+                return
+            self._px_plot.setVisible(True)
+            if self._px_grow(not self._px_sized):
+                self._px_sized = True
+            self._px_sig = None                      # force one draw into the new geometry
+        elif self._px_plot is not None:
+            try:
+                self._px_plot.setVisible(False)
+            except RuntimeError:                     # the splitter was torn down under us -> nothing to hide
+                self._px_plot = None; self._px_curve = None; self._px_vb = None
+        self._stack_axis_sync()
+
+    def _px_tick(self, now: float) -> None:
+        """Per frame in Flow mode. An idle frame is ONE signature compare -- see _px_draw."""
+        if self._px_plot is None or not self._px_plot.isVisible():
+            return
+        self._px_draw(now)
+
+    def _px_draw(self, now: float) -> None:
+        """The price track over the same clock as the flow lines.
+
+        Cost: the store memoizes price_series on (rev, range, max_pts) and this returns before touching it
+        unless the signature moved, so a frame where nothing changed is a tuple compare. y re-fits only past a
+        dead-band -- setYRange every tick would relayout the axis 20 times a second for sub-pixel changes."""
+        vb = self._px_vb
+        if vb is None:
+            return
+        (vx0, vx1), _ = self.vb.viewRange()          # the MAIN view: this pane is x-linked to it
+        width = max(200, int(self._px_plot.width()) or 1000)
+        max_pts = int(min(config.PX_MAX_POINTS, 2 * width))
+        sig = (self._flow.rev, round(vx0, 2), round(vx1, 2), max_pts)
+        if sig == self._px_sig:
+            return                                   # the cheapest possible frame
+        self._px_sig = sig
+        t, px = self._flow.price_series(vx0, vx1, max_pts)
+        self._px_curve.setData(t, px)
+        if px.size == 0:
+            return
+        lo = float(px.min()); hi = float(px.max())
+        if not (np.isfinite(lo) and np.isfinite(hi)):
+            return
+        pad = max(float(config.TICK_SIZE), (hi - lo) * float(config.PX_PAD_FRAC))
+        want = (lo - pad, hi + pad)
+        cur = self._px_yfit
+        if cur is None or abs(want[0] - cur[0]) + abs(want[1] - cur[1]) > \
+                float(config.PX_REFIT_FRAC) * max(1e-9, cur[1] - cur[0]):
+            self._px_yfit = want
+            vb.setYRange(want[0], want[1], padding=0.0)
+
+    def _px_hide_cursor(self) -> None:
+        """Badges off, lines linger -- the same contract as the other panes' cursors."""
+        for _it in (getattr(self, "_px_tag", None), getattr(self, "_px_time_tag", None),
+                    getattr(self, "_px_hline", None)):
+            if _it is not None:
+                try:
+                    _it.hide()
+                except RuntimeError:
+                    pass
+
+    def _on_px_mouse_move(self, evt) -> None:
+        """Cursor over the PRICE pane: its own crosshair + a right-axis badge in PRICE (this axis is a price,
+        not money, unlike the liquidity pane's) + the x-axis clock badge, and the shared vertical pushed DOWN
+        into the flow chart and every other pane. Mirrors _on_liq_mouse_move."""
+        if self._px_vb is None or self._px_plot is None or not self._px_plot.isVisible():
+            return
+        try:
+            pos = evt[0]
+            if not self._px_plot.sceneBoundingRect().contains(pos):
+                self._px_hide_cursor()
+                return
+            pt = self._px_vb.mapSceneToView(pos)
+            self._px_vline.setPos(pt.x())
+            self._px_hline.setPos(pt.y()); self._px_hline.show()
+            (_vx0, _vx1), (_vy0, _vy1) = self._px_vb.viewRange()
+            self._px_tag.setText(f"{float(pt.y()):.{config.PRICE_DECIMALS}f}")
+            self._px_tag.setPos(_vx1, pt.y()); self._px_tag.show()
+            _xlbl = self._x_time_label(pt.x())
+            if _xlbl:
+                self._px_time_tag.setText(_xlbl)
+                self._px_time_tag.setPos(pt.x(), _vy0)
+                self._px_time_tag.show()
+            else:
+                self._px_time_tag.hide()
+            self.vline.setPos(pt.x())                    # shared vertical -> the flow chart below
+            self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
+            self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
+            self._liq_hide_cursor()
+            for _v in (getattr(self, "_liq_vline", None), getattr(self, "cvd_vline", None),
+                       getattr(self, "vol_vline", None), getattr(self, "lower_vline", None)):
+                if _v is not None:
+                    _v.setPos(pt.x())
+        except Exception:
+            pass
+
     def _on_liq_pane_toggled(self, on: bool) -> None:
         """Hamburger 'Limit orders pane' -> show/hide it (Flow mode only) and persist."""
         self._liq_pane_on = bool(on)
@@ -18141,15 +18356,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return False
         try:
             i = sp.indexOf(plot)
+            base = self._sv_base()
             sz = sp.sizes()
-            if i <= 0 or not sz or i >= len(sz):
+            if i <= base or not sz or i >= len(sz):
                 return False
             if not force and sz[i] >= 40:
                 return False
             tot = sum(sz) or sp.height() or 800
             want = max(120, int(tot * share))
             sz[i] = want
-            sz[0] = max(140, tot - sum(sz[1:]))
+            sz[base] = max(140, tot - sum(sz[:base]) - sum(sz[base + 1:]))
             sp.setSizes(sz)
             return True
         except Exception:
@@ -18190,7 +18406,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _apply_pane_names(self) -> None:
         """Pane title and hamburger toggle, from the one constant, at the CURRENT lookback."""
         names = config.pane_titles(self._lb_n())
-        for _k, _it in (("liq", getattr(self, "_liq_title", None)),
+        for _k, _it in (("px", getattr(self, "_px_title", None)),
+                        ("liq", getattr(self, "_liq_title", None)),
                         ("cyc", getattr(self, "_cyc_title", None)),
                         ("cvol", getattr(self, "_cvol_title", None)),
                         ("lob", getattr(self, "_lob_title", None)),
@@ -19677,6 +19894,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_last_set = None
         self._flow_ytop = 0.0
         self._flow_conn_was = bool(self.worker.connected)
+        self._px_show(bool(getattr(self, "_px_pane_on", True)))     # the PRICE pane rides Flow mode too
+        self._px_sig = None
         self._liq_show(bool(getattr(self, "_liq_pane_on", True)))   # the pane rides Flow mode, if enabled
         self._cyc_show(bool(getattr(self, "_cyc_on", True)))        # ... and the Cycle pane
         self._cyc_sig = None; self._cyc_t = 0.0
@@ -19756,6 +19975,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_draw(now)
         try:
             self._flow_cross_draw()     # cycle-start vlines -- self-gated, fail-safe
+        except Exception:
+            pass
+        try:
+            self._px_tick(now)          # PRICE pane (above the lines) -- self-gated, fail-safe
         except Exception:
             pass
         try:
@@ -20070,7 +20293,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         The sub-panes are x-linked to the chart, so a cross is the same pixel column in all three; only the y
         range and the pixels-per-y differ. A pane that is hidden or has not been built contributes nothing."""
         out = [("main", self.plot, self.vb)]
-        for _k, _p, _v in (("liq", getattr(self, "_liq_plot", None), getattr(self, "_liq_vb", None)),
+        for _k, _p, _v in (("px", getattr(self, "_px_plot", None), getattr(self, "_px_vb", None)),
+                           ("liq", getattr(self, "_liq_plot", None), getattr(self, "_liq_vb", None)),
                            ("cyc", getattr(self, "_cyc_plot", None), getattr(self, "_cyc_vb", None)),
                            ("cvol", getattr(self, "_cvol_plot", None), getattr(self, "_cvol_vb", None)),
                            ("lob", getattr(self, "_lob_plot", None), getattr(self, "_lob_vb", None)),
@@ -21007,7 +21231,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         fg = "#dcdcdc" if dark else config.COLOR_AXIS_TEXT
         ax_pen = pg.mkPen(fg, width=1); txt_pen = pg.mkPen(fg)
         cross = (170, 170, 170, 150) if dark else (0, 0, 0, 150)
-        for pw, items in ((getattr(self, "_liq_plot", None),
+        for pw, items in ((getattr(self, "_px_plot", None),
+                           (getattr(self, "_px_vline", None), getattr(self, "_px_hline", None))),
+                          (getattr(self, "_liq_plot", None),
                            (getattr(self, "_liq_vline", None), getattr(self, "_liq_hline", None))),
                           (getattr(self, "_cyc_plot", None),
                            (getattr(self, "_cyc_vline", None), getattr(self, "_cyc_hline", None))),
@@ -21031,6 +21257,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     ln.setPen(p)
             except RuntimeError:
                 pass                                       # the splitter tore the pane down under us
+        # the price line itself carries no side, so unlike the teal/red flow lines it MUST follow the ground
+        _pc = getattr(self, "_px_curve", None)
+        if _pc is not None:
+            try:
+                _p = pg.mkPen(config.COLOR_PRICE_LINE_DARK if dark else config.COLOR_PRICE_LINE_BW, width=1.6,
+                              style=QtCore.Qt.SolidLine)
+                _p.setCosmetic(True); _p.setCapStyle(QtCore.Qt.RoundCap); _p.setJoinStyle(QtCore.Qt.RoundJoin)
+                _pc.setPen(_p)
+            except RuntimeError:
+                pass
         self._theme_interp(dark)                           # the right-side feed follows the same Chart Style
     def _theme_interp(self, dark: bool) -> None:
         p = getattr(self, "interp_panel", None)
@@ -21819,7 +22055,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self.sender() is self.cob_col:
                 self._splitter_v_set(self.cob_col.sizes())
             else:
-                self.cob_col.setSizes(self.splitter_v.sizes())
+                # ⚠⚠ setSizes RESOLVES the list against the target's own height, and cob_col has FOUR
+                # sections against splitter_v's ten. Handing it sizes() therefore fed it [px, chart, 0, 0] --
+                # summing to a fraction of the column -- which Qt scaled up to fill, putting the COB's bottom
+                # ~750 px below the chart's. (That was already wrong before the PRICE pane: the trailing
+                # sub-panes broke it the same way, unnoticed because the COB is a Mode-10 feature.)
+                # So: fold everything ABOVE the chart into the first section and everything BELOW the four
+                # into the last, then convert to cob_col's own pixel budget. The invariant this method exists
+                # for -- the COB's BOTTOM coincides with the chart pane's bottom, which is what sync_y needs --
+                # then holds exactly, in Flow mode and Mode 10 alike.
+                # ⚠ with the PRICE pane on, the COB's TOP extends over it. Cosmetic; a fifth section would
+                # break the 4-section mirror Mode 10 depends on.
+                _b = self._sv_base()
+                _sz = list(self.splitter_v.sizes())
+                _four = [sum(_sz[:_b]) + _sz[_b]] + _sz[_b + 1:_b + 3] + [sum(_sz[_b + 3:])]
+                _tot = float(sum(_four)) or 1.0
+                _avail = float(sum(self.cob_col.sizes())) or _tot      # the column's own content height
+                self.cob_col.setSizes([int(round(v * _avail / _tot)) for v in _four])
         finally:
             self._syncing_split = False
 
@@ -22128,43 +22380,63 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.cvd_tag.setPos(self.cvd_vb.viewRange()[0][1], pt.y())
         self.cvd_tag.show()
 
+    def _sv_base(self) -> int:
+        """Index of the MAIN chart inside splitter_v.
+
+        Every size list in this class is written as [price, CVD, volume, VPIN] + trailing sub-panes, which was
+        true only while the main chart was child 0. The Flow-mode PRICE pane is inserted ABOVE it, so the
+        offset is LOOKED UP rather than assumed -- setSizes zeroes every child a list does not cover, and
+        getting this wrong collapses panes silently."""
+        sp = getattr(self, "splitter_v", None)
+        if sp is None or self.plot is None:
+            return 0
+        try:
+            return max(0, int(sp.indexOf(self.plot)))
+        except Exception:
+            return 0
+
     def _splitter_v_set(self, sz4) -> None:
-        """Set the [price, CVD, vol, VPIN] slices WITHOUT truncating anything below them.
+        """Set the [price, CVD, vol, VPIN] slices WITHOUT truncating anything above OR below them.
 
         QSplitter.setSizes gives 0 to every child the list does not cover, so the four-element lists this class has
         always passed silently collapsed the Flow-mode liquidity pane (child 5) the moment any of them ran. Keep
-        whatever the trailing children hold; the COB column only ever mirrors the four shared dividers."""
+        whatever the children outside the four hold -- the PRICE pane above them as well as the trailing
+        sub-panes; the COB column only ever mirrors the four shared dividers."""
         sz = [max(0, int(v)) for v in list(sz4)[:4]]
+        head = []
         tail = []
         try:
+            base = self._sv_base()
             cur = self.splitter_v.sizes()
-            tail = list(cur[4:])
-            if tail:
+            head = list(cur[:base])
+            tail = list(cur[base + 4:])
+            if head or tail:
                 # These callers pass RATIOS for the four shared panes (10_000 means "price takes everything").
-                # Handed straight to Qt with a trailing pane appended, that ratio is resolved against the trailing
-                # pane too and it comes back with an arbitrary slice -- so resolve them here, against the height
-                # the trailing panes leave behind, and those keep exactly what they hold.
-                avail = max(0, (sum(cur) or self.splitter_v.height() or 800) - sum(tail))
+                # Handed straight to Qt with other children present, that ratio is resolved against them too and
+                # they come back with an arbitrary slice -- so resolve it here, against the height the other
+                # panes leave behind, and those keep exactly what they hold.
+                avail = max(0, (sum(cur) or self.splitter_v.height() or 800) - sum(head) - sum(tail))
                 tot4 = sum(sz) or 1
                 sz = [int(round(v * avail / float(tot4))) for v in sz]
         except Exception:
-            tail = []
-        self.splitter_v.setSizes(sz + tail)
+            head = []; tail = []
+        self.splitter_v.setSizes(head + sz + tail)
 
     def _on_pane_handle_clicked(self, idx: int) -> None:
         """Click the price|CVD divider -> snap those two panes to a 50/50 height split and re-fit BOTH, so
         effort (CVD) and result (price) are read on equal footing. The VPIN pane keeps whatever slice it has.
         Dragging the divider still works normally — only a click (no movement) triggers this."""
-        if idx != 1 or self.splitter_v is None or self.cvd_plot is None or not self.cvd_plot.isVisible():
+        base = self._sv_base()
+        if idx != base + 1 or self.splitter_v is None or self.cvd_plot is None or not self.cvd_plot.isVisible():
             return
         sz = self.splitter_v.sizes()
-        if len(sz) < 4:
+        if len(sz) < base + 4:
             return
-        avail = sz[0] + sz[1]
+        avail = sz[base] + sz[base + 1]
         if avail <= 0:
             return
         half = avail // 2
-        new = [half, avail - half, sz[2], sz[3]]            # keep the vol + vpin slices as-is
+        new = [half, avail - half, sz[base + 2], sz[base + 3]]   # keep the vol + vpin slices as-is
         self._splitter_v_set(new)
         if self.cob_col is not None:
             self.cob_col.setSizes(new)          # keep the COB divider glued to the price-pane bottom
