@@ -39,7 +39,10 @@ from .heatmap import (HeatmapCache, TradeBubbleCache, decode_col, decode_grid,
 
 from . import bucket_state, config, flow_pane, region_state, vpin_adaptive
 from .flow_interp import (FlowInterpPanel, build_rows as _interp_build_rows, prev_ratio as _interp_prev,
-                          same_side_ratio as _interp_side_ratio)
+                          same_side_ratio as _interp_side_ratio, BAR_COL as _STATE_BAR_COL,
+                          C_ABSORB_BUY as _C_AB_BUY, C_ABSORB_SELL as _C_AB_SELL,
+                          C_BREAK_BUY as _C_BRK_BUY, C_BREAK_SELL as _C_BRK_SELL,
+                          C_VACUUM as _C_VAC, C_QUIET as _C_QUIET)
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
 from .paper_account import PaperAccount
@@ -18140,6 +18143,80 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._theme_sub_panes(not self._simple_bw())              # born into the CURRENT Chart Style
         return pw
 
+    def _px_state_cols(self, t, t_end, done, move, is_buy, strong, cbuy, csell):
+        """A colour index per cycle, from the SAME quadrant map the Interpretation feed classifies with.
+
+        ⚠ the ratios need history from BEFORE the drawn window -- which is exactly why _px_tick reads back
+        _lb_secs() like the other cycle panes. Classify on the WHOLE read, then filter to what is visible;
+        classifying only the visible cycles would give the leftmost ones no baseline and recolour them on
+        every pan.
+
+        A cycle the ratios cannot rate yet (too little history) comes back as -1 and is drawn neutral --
+        never guessed at."""
+        n = int(np.size(t))
+        out = np.full(n, -1, dtype=np.int64)
+        if n == 0:
+            return out
+        side, _rate, _st = self._cycle_impact(is_buy, strong, move, cbuy, csell)
+        te = np.array(t_end, dtype=np.float64, copy=True)
+        if n and not bool(done[-1]):
+            te[-1] = max(float(t[-1]), min(time.time(), float(te[-1])))
+        dur = np.maximum(te - np.asarray(t, dtype=np.float64), 1e-9)
+        mv = np.nan_to_num(np.asarray(move, dtype=np.float64), nan=0.0)
+        usd = np.maximum(np.asarray(cbuy, dtype=np.float64), 0.0) + \
+            np.maximum(np.asarray(csell, dtype=np.float64), 0.0)
+        try:
+            vr = _interp_prev(usd / dur, done, self._lb_n(), self._lb_min_n(), include_open=True)
+            sr = _interp_side_ratio(np.abs(mv) / dur, side, done, self._lb_n(), self._lb_min_n(),
+                                    include_open=True)
+        except Exception:
+            return out
+        ok = np.isfinite(vr) & np.isfinite(sr)
+        flat = np.abs(mv) < float(config.SPEED_FLAT_TICKS)
+        heavy = vr > 1.0
+        big = (sr > 1.0) & ~flat
+        up = mv > 0
+        col = np.where(heavy & big, np.where(up, _C_BRK_BUY, _C_BRK_SELL),
+              np.where(heavy, np.where(side, _C_AB_BUY, _C_AB_SELL),
+              np.where(big, _C_VAC, _C_QUIET)))
+        return np.where(ok, col, -1).astype(np.int64)
+
+    @staticmethod
+    def _px_brushes(cols, opens, closes, bw):
+        """(brushes, pens) for the cycle candles: the state's colour, solid.
+
+        ⚠ the fill carries the STATE, not the direction. For BREAKOUT and VACUUM that is the same thing --
+        both name the way price went -- but an absorbed candle's colour says WHO WAS ABSORBED, so its
+        direction is read off the body's position on the wick instead. Cycles the ratios cannot rate yet fall
+        back to the Chart Style's own bearish-fill / bullish-hollow pair rather than being given a state they
+        do not have."""
+        n = int(np.size(cols))
+        _cache = {}
+        br = []
+        pn = []
+        _blk = pg.mkPen(0, 0, 0, width=1.0); _blk.setCosmetic(True)
+        _gry = pg.mkPen("#9aa4ae", width=1.0); _gry.setCosmetic(True)
+        _fill = pg.mkBrush(0, 0, 0, 255); _hollow = pg.mkBrush(255, 255, 255, 255)
+        _up = pg.mkBrush(38, 166, 154, 255); _dn = pg.mkBrush(239, 83, 80, 255)
+        for i in range(n):
+            ci = int(cols[i])
+            if ci < 0:
+                if bw:
+                    br.append(_fill if float(closes[i]) < float(opens[i]) else _hollow)
+                    pn.append(_blk)
+                else:
+                    br.append(_dn if float(closes[i]) < float(opens[i]) else _up)
+                    pn.append(_gry)
+                continue
+            e = _cache.get(ci)
+            if e is None:
+                _c = _STATE_BAR_COL[ci]
+                _p = pg.mkPen(_c, width=1.0); _p.setCosmetic(True)
+                e = (pg.mkBrush(QtGui.QColor(_c)), _p)
+                _cache[ci] = e
+            br.append(e[0]); pn.append(e[1])
+        return br, pn
+
     def _px_grow(self, force: bool = False, share: float = 0.20) -> bool:
         """Give the PRICE pane its slice, taken from the main chart.
 
@@ -18204,7 +18281,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         if not (t.size == px0.size == pxh.size):
             return
-        self._px_data = (vx0, vx1, t, t_end, done, px0, px1, pxh, pxl)
+        _cols = self._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell)
+        self._px_data = (vx0, vx1, t, t_end, done, px0, px1, pxh, pxl, _cols)
         self._px_draw(now)
 
     def _px_draw(self, now: float) -> None:
@@ -18227,7 +18305,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         d = getattr(self, "_px_data", None)
         if vb is None or d is None:
             return
-        vx0, vx1, t, t_end, done, px0, px1, pxh, pxl = d
+        vx0, vx1, t, t_end, done, px0, px1, pxh, pxl, cols = d
         if t.size == 0:
             if self._px_sig != ("empty",):
                 self._px_sig = ("empty",)
@@ -18238,7 +18316,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _lp = self._engine_live_px()
         (dx0, dx1), _ = self.vb.viewRange()      # the DRAWN window; the read reaches further back than this
         sig = (int(t.size), round(float(t[-1]), 2), round(float(t[0]), 2), round(dx0, 2), round(dx1, 2),
-               round(float(_lp), 6) if _lp is not None else None, _bw, bool(done[-1]))
+               round(float(_lp), 6) if _lp is not None else None, _bw, bool(done[-1]), int(self._lb_n()))
         if sig == self._px_sig:
             return                               # the cheapest possible frame
         self._px_sig = sig
@@ -18276,14 +18354,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             dur = np.maximum(_te - _t, 1e-9)
             x = _t + dur * 0.5                              # the cycle's MIDPOINT, so the body sits on it
             wid = dur * float(config.PX_CANDLE_FILL)        # no pixel floor -- see config, it made them overlap
-            if _bw:
-                _br, _pn = self._simple_bw_palette(_o, _c)
-            else:
-                _up = pg.mkBrush(38, 166, 154, 255); _dn = pg.mkBrush(239, 83, 80, 255)
-                _bear = (_c < _o).tolist()                  # one vector compare, not n of them
-                _br = [_dn if b else _up for b in _bear]
-                _pk = pg.mkPen("#9aa4ae", width=1.0); _pk.setCosmetic(True)
-                _pn = [_pk] * n
+            # EACH CANDLE CARRIES ITS CYCLE'S STATE (user 2026-09-12), from the same palette and the same
+            # classifier the Interpretation feed uses -- so the two panes cannot disagree about a colour.
+            _ci = cols[keep]
+            _br, _pn = self._px_brushes(_ci, _o, _c, _bw)
             self._px_candles.set_neutral("#000000" if _bw else "#888888")
             self._px_candles.update_data(x.tolist(), _o.tolist(), _h.tolist(), _l.tolist(), _c.tolist(),
                                          _br, _pn, x0=dx0, x1=dx1, widths=wid.tolist())

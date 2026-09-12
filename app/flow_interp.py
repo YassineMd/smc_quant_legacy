@@ -59,14 +59,19 @@ def state_label(st, side):
 
 # COLOUR is keyed on state AND side, because BREAKOUT is the aggressive state and the user wants that legible
 # at a glance (2026-09-11): buy vivid green, sell vivid red, instead of the state-space picture's single
-# amber. Absorption keeps its calmer teal and vacuum its coral, so all four stay separable by SATURATION as
-# well as by the name written beside them.
-C_ABSORB, C_BREAK_BUY, C_BREAK_SELL, C_VACUUM, C_QUIET, C_FORMING = 0, 1, 2, 3, 4, 5
-BAR_COL = ("#FF9500", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64")
+# amber. ABSORPTION splits by side too (user 2026-09-12): BUYER ABSORBED orange, SELLER ABSORBED blue -- the
+# two are opposite readings of the tape and sharing one colour made them one thing at a glance.
+#   ⚠ C_ABSORB_SELL is APPENDED, not inserted: these are indices into three parallel tuples and into rows
+#   already built, so inserting in the middle would silently recolour every other state.
+#   BLUE MEASURED, not picked: #2979FF's nearest neighbour in this palette is 192 channel-units away (from
+#   quiet/gray), where the closest EXISTING pair -- quiet vs forming -- is only 89 apart.
+C_ABSORB_BUY, C_BREAK_BUY, C_BREAK_SELL, C_VACUUM, C_QUIET, C_FORMING, C_ABSORB_SELL = 0, 1, 2, 3, 4, 5, 6
+C_ABSORB = C_ABSORB_BUY                     # kept for anything still importing the old name
+BAR_COL = ("#FF9500", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64", "#2979FF")
 # ... and TEXT is per THEME. It was not: on the white Simple BW ground every name drew in a pale dark-theme
 # colour and was barely readable.
-TXT_DARK = ("#FFB84D", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82")
-TXT_LIGHT = ("#A85C00", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82")
+TXT_DARK = ("#FFB84D", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82", "#7FB2FF")
+TXT_LIGHT = ("#A85C00", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82", "#0B4FA8")
 
 # the price move, coloured by the move itself: green up, red down, grey when it ended where it started
 MOVE_DARK = ("#FF5A5A", "#7A828C", "#2BE86B")
@@ -79,10 +84,15 @@ STATE_TXT = (TXT_DARK[C_ABSORB], TXT_DARK[C_BREAK_BUY], TXT_DARK[C_VACUUM], TXT_
 
 
 def colour_of(st, side):
-    """Which colour a row draws in. Only BREAKOUT splits by side."""
+    """Which colour a row draws in. BREAKOUT and ABSORPTION both split by side.
+
+    This is the ONE place either pane asks, which is why the cycle candles above the flow lines and the rows
+    in this feed cannot disagree about what a colour means."""
     if st == ST_BREAK:
         return C_BREAK_BUY if side == "buy" else C_BREAK_SELL
-    return (C_ABSORB, None, C_VACUUM, C_QUIET, C_FORMING)[st]
+    if st == ST_ABSORB:
+        return C_ABSORB_BUY if side == "buy" else C_ABSORB_SELL
+    return (None, None, C_VACUUM, C_QUIET, C_FORMING)[st]
 
 
 def speed_word(mv, flat, sr, slow_c, fast_c):
