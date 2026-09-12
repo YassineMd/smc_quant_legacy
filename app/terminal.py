@@ -39,7 +39,8 @@ from .heatmap import (HeatmapCache, TradeBubbleCache, decode_col, decode_grid,
 
 from . import bucket_state, config, flow_pane, region_state, vpin_adaptive
 from .flow_interp import (FlowInterpPanel, build_rows as _interp_build_rows, prev_ratio as _interp_prev,
-                          same_side_ratio as _interp_side_ratio, BAR_COL as _STATE_BAR_COL,
+                          same_side_ratio as _interp_side_ratio, dur_text as _interp_dur_text,
+                          BAR_COL as _STATE_BAR_COL,
                           C_ABSORB_BUY as _C_AB_BUY, C_ABSORB_SELL as _C_AB_SELL,
                           C_BREAK_BUY as _C_BRK_BUY, C_BREAK_SELL as _C_BRK_SELL,
                           C_VACUUM as _C_VAC, C_QUIET as _C_QUIET)
@@ -1790,6 +1791,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._px_plot = None           # PRICE pane (Flow mode): the one pane ABOVE the main chart
         self._px_curve = None          # the price LINE: kept for the degenerate case of <2 candles
         self._px_candles = None        # BucketCandleItem -- the main chart's own candle item, reused
+        self._px_pline = None          # live-price dashed rule + right-edge pill (the bucket canvas's design)
+        self._px_plabel = None
+        self._px_live_y = None         # the price the pill currently sits at
+        self._px_lc = None             # forming-candle animation state, or None -- see _px_lc_frame
+        self._px_lc_body = None
+        self._px_lc_wick = None
+        self._px_lc_timer = None
         self._px_vb = None
         self._px_pane_on = bool(config.PX_PANE_ON)
         self._px_sig = None            # an idle frame is this compare and nothing else
@@ -17376,6 +17384,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # Null them and _liq_ensure_pane rebuilds the pane on the next entry (_liq_data survives -- it is data).
             # ... and the PRICE pane sat ABOVE the chart inside that same splitter
             self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None; self._px_data = None
+            self._px_pline = None; self._px_plabel = None; self._px_live_y = None
+            self._px_lc = None; self._px_lc_body = None; self._px_lc_wick = None
             self._px_sig = None; self._px_t = 0.0; self._px_data = None
             self._px_sized = False; self._px_yfit = None
             self._px_vline = None; self._px_hline = None
@@ -18131,6 +18141,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._px_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
         self._px_time_tag.textItem.setFont(_tf); self._px_time_tag.setZValue(61)
         pw.addItem(self._px_time_tag, ignoreBounds=True); self._px_time_tag.hide()
+        # LIVE PRICE: a dashed rule at the forming candle's close plus a right-edge pill, the same design the
+        # bucket canvas uses (RoundedTextItem, green when that candle is bullish / red when bearish).
+        _lpp = pg.mkPen(color=(170, 170, 170, 150), width=1); _lpp.setCosmetic(True)
+        _lpp.setDashPattern([4.0, 8.0])
+        self._px_pline = pg.InfiniteLine(angle=0, movable=False, pen=_lpp)
+        self._px_pline.setZValue(55)
+        pw.addItem(self._px_pline, ignoreBounds=True); self._px_pline.hide()
+        self._px_plabel = RoundedTextItem(anchor=(1.0, 0.5), pad=5.0, radius=7.0,
+                                          fill=pg.mkBrush(18, 22, 30, 236),
+                                          border=pg.mkPen(96, 106, 126, 210))
+        _lpf = QtGui.QFont("Consolas", 9); _lpf.setBold(True)
+        self._px_plabel.textItem.setFont(_lpf)
+        self._px_plabel.setZValue(60)
+        pw.addItem(self._px_plabel, ignoreBounds=True); self._px_plabel.hide()
+        vb.sigXRangeChanged.connect(self._px_reposition_pill)
+        # SMOOTH FORMING CANDLE: an overlay body + wick animated by a 30 fps timer while the candle PICTURE
+        # omits the forming cycle -- the same contract as the bucket canvas's Smooth Live Candle, and governed
+        # by that same hamburger toggle.
+        self._px_lc_body = QtWidgets.QGraphicsRectItem(); self._px_lc_body.setZValue(8)
+        self._px_lc_wick = pg.PlotCurveItem(); self._px_lc_wick.setZValue(8)
+        pw.addItem(self._px_lc_body, ignoreBounds=True); pw.addItem(self._px_lc_wick, ignoreBounds=True)
+        self._px_lc_body.hide(); self._px_lc_wick.hide()
+        if self._px_lc_timer is None:
+            self._px_lc_timer = QtCore.QTimer(self)
+            self._px_lc_timer.setInterval(33)
+            self._px_lc_timer.timeout.connect(self._px_lc_tick)
+        # CLICK A CANDLE -> the feed scrolls to that cycle's interpretation (user 2026-09-12)
+        pw.scene().sigMouseClicked.connect(self._on_px_clicked)
         self._px_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["px"])
         self._px_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_px_mouse_move)
         sp.insertWidget(0, pw)                                   # ABOVE the main chart -- the one pane that is
@@ -18142,6 +18180,147 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         pw.setMinimumHeight(110)
         self._theme_sub_panes(not self._simple_bw())              # born into the CURRENT Chart Style
         return pw
+
+    def _px_reposition_pill(self, *args) -> None:
+        """Keep the pill pinned to the pane's right edge (re-fired on every x-range change, so a pan or the
+        live-edge follow never leaves it floating over the candles)."""
+        if self._px_plabel is None or self._px_live_y is None:
+            return
+        try:
+            self._px_plabel.setPos(self._px_vb.viewRange()[0][1], float(self._px_live_y))
+        except Exception:
+            pass
+
+    def _px_pill(self, y, o, t0, t1) -> None:
+        """The live-price pill: the price, and under it the forming cycle's ELAPSED time.
+
+        ⚠ not a countdown and not a fill%: a CYCLE closes when the two flow lines cross, so it has no clock
+        and no volume target to count toward. Printing either would invent a close condition."""
+        if self._px_plabel is None:
+            return
+        self._px_live_y = float(y)
+        _col = "#28e65a" if float(y) >= float(o) else "#ef4444"
+        self._px_plabel.setHtml(
+            "<div style='font-family:Consolas;text-align:center;line-height:1.06'>"
+            "<span style='font-size:12px;font-weight:800;color:#eef2f8'>%.*f</span><br>"
+            "<span style='font-size:10px;font-weight:800;color:%s'>%s</span></div>"
+            % (config.PRICE_DECIMALS, float(y), _col, _interp_dur_text(max(0.0, float(t1) - float(t0)))))
+        self._px_plabel.border = pg.mkPen(_col, width=1.3)
+        self._px_pline.setPos(float(y)); self._px_pline.show()
+        self._px_plabel.show()
+        self._px_reposition_pill()
+        self._px_plabel.update()
+
+    def _px_pill_hide(self) -> None:
+        self._px_live_y = None
+        for _it in (getattr(self, "_px_pline", None), getattr(self, "_px_plabel", None)):
+            if _it is not None:
+                try:
+                    _it.hide()
+                except RuntimeError:
+                    pass
+
+    def _px_lc_hide(self) -> None:
+        if self._px_lc_timer is not None and self._px_lc_timer.isActive():
+            self._px_lc_timer.stop()
+        self._px_lc = None
+        for _it in (getattr(self, "_px_lc_body", None), getattr(self, "_px_lc_wick", None)):
+            if _it is not None:
+                try:
+                    _it.hide()
+                except RuntimeError:
+                    pass
+
+    def _px_lc_frame(self, x, o, h, l, c, wid, brush, pen) -> None:
+        """(Re)target the forming candle's overlay. A changed close on the SAME cycle slides for 160 ms from
+        where the animation currently is; a NEW cycle jumps, because the two are different candles and easing
+        between them would draw a body that never existed."""
+        lc = self._px_lc
+        if lc is None or abs(lc["t0"] - float(x[0])) > 1e-6:
+            self._px_lc = {"t0": float(x[0]), "x": float(x[1]), "w": float(wid), "o": float(o),
+                           "h": float(h), "l": float(l), "c_from": float(c), "c_to": float(c),
+                           "cur": float(c), "ts": 0.0, "brush": brush, "pen": pen}
+            if self._px_lc_timer is not None:
+                self._px_lc_timer.stop()
+            self._px_lc_apply()
+            return
+        lc.update(x=float(x[1]), w=float(wid), o=float(o), h=float(h), l=float(l), brush=brush, pen=pen)
+        if abs(float(c) - lc["c_to"]) > 1e-12:
+            lc["c_from"] = lc["cur"]; lc["c_to"] = float(c); lc["ts"] = time.perf_counter()
+            if self._px_lc_timer is not None and not self._px_lc_timer.isActive():
+                self._px_lc_timer.start()
+        self._px_lc_apply()
+
+    def _px_lc_tick(self) -> None:
+        lc = self._px_lc
+        if lc is None:
+            if self._px_lc_timer is not None:
+                self._px_lc_timer.stop()
+            return
+        t = (time.perf_counter() - lc["ts"]) / 0.16
+        if t >= 1.0:
+            lc["cur"] = lc["c_to"]
+            self._px_lc_timer.stop()
+        else:
+            lc["cur"] = lc["c_from"] + (lc["c_to"] - lc["c_from"]) * (1.0 - (1.0 - t) * (1.0 - t))
+        self._px_lc_apply()
+
+    def _px_lc_apply(self) -> None:
+        """Draw the overlay at the CURRENT animated close, and slide the rule and pill with it."""
+        lc = self._px_lc
+        if lc is None or self._px_lc_body is None:
+            return
+        cur = lc["cur"]; o = lc["o"]; xi = lc["x"]; half = lc["w"] * 0.5
+        top, bot = max(o, cur), min(o, cur)
+        if top - bot < float(config.TICK_SIZE) / 2.0:
+            top = bot + float(config.TICK_SIZE) / 2.0      # the same doji sliver the picture draws
+        self._px_lc_body.setBrush(lc["brush"])
+        self._px_lc_body.setPen(lc["pen"])
+        self._px_lc_body.setRect(QtCore.QRectF(xi - half, bot, lc["w"], top - bot))
+        hi = max(lc["h"], top); lo = min(lc["l"], bot)
+        self._px_lc_wick.setPen(lc["pen"])
+        # wicks ONLY outside the body, exactly like the picture: one low->high line shows through a hollow fill
+        self._px_lc_wick.setData([xi, xi, xi, xi], [top, hi, lo, bot], connect="pairs")
+        self._px_lc_body.show(); self._px_lc_wick.show()
+        if self._px_live_y is not None:
+            self._px_live_y = cur
+            self._px_pline.setPos(cur)
+            self._px_reposition_pill()
+
+    def _on_px_clicked(self, ev) -> None:
+        """Click a candle -> scroll the Interpretation feed to that cycle's row and mark it (user 2026-09-12).
+
+        Hit-tested against the cycle's own [start, end] span, not against the body's drawn width: the body is
+        72% of the cycle, so the gaps between bodies would otherwise be dead zones that silently do nothing."""
+        try:
+            if self._px_plot is None or not self._px_plot.isVisible():
+                return
+            if ev.button() != QtCore.Qt.LeftButton:
+                return
+            pos = ev.scenePos()
+            if not self._px_plot.sceneBoundingRect().contains(pos):
+                return
+            d = getattr(self, "_px_data", None)
+            p = getattr(self, "interp_panel", None)
+            if d is None or p is None or not p.isVisible():
+                return
+            t, te, done_ = d[2], d[3], d[4]
+            if np.size(t) == 0:
+                return
+            x = float(self._px_vb.mapSceneToView(pos).x())
+            tt = np.asarray(t, dtype=np.float64)
+            ee = np.asarray(te, dtype=np.float64, ).copy()
+            if not bool(done_[-1]):
+                ee[-1] = max(float(tt[-1]), min(time.time(), float(ee[-1])))
+            hit = np.flatnonzero((tt <= x) & (ee >= x))
+            if hit.size == 0:                              # between cycles (or past the edge): take the nearest
+                hit = np.array([int(np.argmin(np.abs((tt + ee) * 0.5 - x)))])
+            t0 = float(tt[int(hit[0])])
+            i = p.scrollToCycle(t0)
+            if i >= 0:
+                ev.accept()
+        except Exception:
+            pass
 
     def _px_state_cols(self, t, t_end, done, move, is_buy, strong, cbuy, csell):
         """A colour index per cycle, from the SAME quadrant map the Interpretation feed classifies with.
@@ -18255,7 +18434,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             try:
                 self._px_plot.setVisible(False)
             except RuntimeError:                     # the splitter was torn down under us -> nothing to hide
-                self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None; self._px_data = None
+                self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None
+                self._px_data = None
+                self._px_pline = None; self._px_plabel = None; self._px_live_y = None
+                self._px_lc = None; self._px_lc_body = None; self._px_lc_wick = None
+            else:
+                # ⚠ HIDING is not TEARING DOWN. Nulling the item refs here (one indent level out, which is
+                # where they landed) meant every hide dropped the pill and overlay handles while the items
+                # stayed on the plot -- and _px_ensure_pane returns early on a live _px_plot, so they were
+                # never rebuilt. Toggling the pane off and on once killed the live price for the session.
+                self._px_lc_hide(); self._px_pill_hide()
         self._stack_axis_sync()
 
     def _px_tick(self, now: float) -> None:
@@ -18310,6 +18498,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if self._px_sig != ("empty",):
                 self._px_sig = ("empty",)
                 self._px_candles.setVisible(False)
+                self._px_lc_hide(); self._px_pill_hide()
                 self._px_curve.setData(np.zeros(0), np.zeros(0))
             return
         _bw = bool(self._simple_bw())
@@ -18340,6 +18529,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # fewer than two cycles on screen is not a chart; fall back to the price track so the pane still
             # says something rather than showing one lonely body
             self._px_candles.setVisible(False)
+            self._px_lc_hide(); self._px_pill_hide()
             _w = max(200, int(self._px_plot.width()) or 1000)
             _t, _p = self._flow.price_series(dx0, dx1, int(min(config.PX_MAX_POINTS, 2 * _w)))
             self._px_curve.setData(_t, _p)
@@ -18359,8 +18549,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _ci = cols[keep]
             _br, _pn = self._px_brushes(_ci, _o, _c, _bw)
             self._px_candles.set_neutral("#000000" if _bw else "#888888")
-            self._px_candles.update_data(x.tolist(), _o.tolist(), _h.tolist(), _l.tolist(), _c.tolist(),
-                                         _br, _pn, x0=dx0, x1=dx1, widths=wid.tolist())
+            # ⚠ while the overlay animates the forming cycle, the PICTURE must omit it -- otherwise the static
+            # body shows through underneath every slide. Same skip_last contract as the bucket canvas.
+            _anim = bool(keep[-1] and not bool(done[-1]) and _live and self._live_anim_on()
+                         and self._px_lc_body is not None)
+            _n_pic = n - 1 if _anim else n
+            if _n_pic >= 1:
+                self._px_candles.setVisible(True)
+                self._px_candles.update_data(x.tolist()[:_n_pic], _o.tolist()[:_n_pic], _h.tolist()[:_n_pic],
+                                             _l.tolist()[:_n_pic], _c.tolist()[:_n_pic],
+                                             _br[:_n_pic], _pn[:_n_pic], x0=dx0, x1=dx1,
+                                             widths=wid.tolist()[:_n_pic])
+            else:
+                self._px_candles.setVisible(False)
+            if _anim:
+                self._px_lc_frame((float(_t[-1]), float(x[-1])), _o[-1], _h[-1], _l[-1], _c[-1], wid[-1],
+                                  _br[-1], _pn[-1])
+            else:
+                self._px_lc_hide()
+            # the live-price pill rides the forming cycle; there is nothing live to show without one
+            if keep[-1] and not bool(done[-1]) and _live and np.isfinite(_c[-1]):
+                self._px_pill(float(_c[-1]), float(_o[-1]), float(_t[-1]), float(_te[-1]))
+                if _anim:
+                    self._px_lc_apply()            # re-pin the rule and pill to the ANIMATED close
+            else:
+                self._px_pill_hide()
             lo_y, hi_y = float(np.min(_l)), float(np.max(_h))
         if not (np.isfinite(lo_y) and np.isfinite(hi_y)):
             return

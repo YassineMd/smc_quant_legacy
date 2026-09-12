@@ -459,6 +459,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         self._dark = True
         self._top_t = None
         self._hover = -1
+        self._sel = -1                  # the row a PRICE-pane candle click pointed at, or -1
         self.setFrameShape(QtWidgets.QFrame.NoFrame)
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.viewport().setAttribute(QtCore.Qt.WA_OpaquePaintEvent, True)
@@ -628,6 +629,8 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         moves by however many rows were prepended, so the cycle they were reading stays under the cursor."""
         sb = self.verticalScrollBar()
         old_top, val = self._top_t, sb.value()
+        _sel_t = (float(self._rows[self._sel][0])
+                  if (self._sel != -1 and 0 <= self._sel < len(self._rows)) else None)
         self._rows = rows or []
         if val > 0 and old_top is not None:
             added = 0
@@ -637,10 +640,47 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
                 added += 1
             if added:
                 val += added * self.ROW_H
+        # the selection follows its CYCLE, not its index: rows are prepended as cycles form, so holding the
+        # index would slide the highlight onto a different cycle every time the feed grew
+        if self._sel != -1 and _sel_t is not None:
+            self._sel = next((i for i, r in enumerate(self._rows)
+                              if abs(float(r[0]) - _sel_t) < 1e-6), -1)
         self._top_t = self._rows[0][0] if self._rows else None
         self._update_scroll()
         sb.setValue(min(val, sb.maximum()))
         self.viewport().update()
+
+    def scrollToCycle(self, t0: float, centre: bool = True) -> int:
+        """Bring the row for cycle `t0` into view and mark it. Returns its index, or -1 if it is not in the feed.
+
+        The reverse of cycleClicked: clicking a candle in the PRICE pane above the chart asks the feed to show
+        that cycle's interpretation. Matching is NEAREST-start rather than exact because the candle's own x is
+        the cycle's midpoint and the caller rounds; a tolerance of half the shortest cycle would still be
+        fragile, so the nearest row wins and the caller decides whether that is close enough."""
+        if not self._rows:
+            return -1
+        best, bd = -1, None
+        for i, r in enumerate(self._rows):
+            d = abs(float(r[0]) - float(t0))
+            if bd is None or d < bd:
+                best, bd = i, d
+        if best < 0:
+            return -1
+        self._sel = best
+        sb = self.verticalScrollBar()
+        top = self.PAD + 22 + best * self.ROW_H
+        if centre:
+            want = int(top - max(0, (self.viewport().height() - self.FOOT_H - self.ROW_H) // 2))
+        else:
+            want = top
+        sb.setValue(max(0, min(want, sb.maximum())))
+        self.viewport().update()
+        return best
+
+    def clearSelection(self) -> None:
+        if self._sel != -1:
+            self._sel = -1
+            self.viewport().update()
 
     def setDark(self, dark: bool) -> None:
         if bool(dark) != self._dark:
@@ -704,6 +744,8 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         dim = QtGui.QColor("#6f7a82" if self._dark else "#8a8a8a")
         det = QtGui.QColor("#8FA0A8" if self._dark else "#666666")
         hl = QtGui.QColor(255, 255, 255, 14) if self._dark else QtGui.QColor(0, 0, 0, 12)
+        sel_bg = QtGui.QColor(255, 255, 255, 30) if self._dark else QtGui.QColor(0, 0, 0, 26)
+        sel_edge = QtGui.QColor("#7FB2FF" if self._dark else "#0B4FA8")
 
         p.setFont(self._f_title)
         p.setPen(QtGui.QColor("#7d8492"))
@@ -732,6 +774,12 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
                 continue
             if i == self._hover:
                 p.fillRect(0, y, w, self.ROW_H - 4, hl)
+            if i == self._sel:
+                # the row a PRICE-pane candle click pointed at. A tinted band plus a rule down the RIGHT edge:
+                # the band alone is nearly the hover tint, and scrolling to a row you cannot pick out of six
+                # others is not an answer to "show me this candle's interpretation".
+                p.fillRect(0, y, w, self.ROW_H - 4, sel_bg)
+                p.fillRect(w - 3, y, 3, self.ROW_H - 4, sel_edge)
             # the state's colour bar: full width and opacity for a confident cycle, thin and faded for one
             # sitting near its own baseline, which is most of the point of the confidence measurement
             bar = QtGui.QColor(BAR_COL[col])
