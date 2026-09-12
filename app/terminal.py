@@ -43,7 +43,7 @@ from .flow_interp import (FlowInterpPanel, build_rows as _interp_build_rows, pre
                           BAR_COL as _STATE_BAR_COL,
                           C_ABSORB_BUY as _C_AB_BUY, C_ABSORB_SELL as _C_AB_SELL,
                           C_BREAK_BUY as _C_BRK_BUY, C_BREAK_SELL as _C_BRK_SELL,
-                          C_VACUUM as _C_VAC, C_QUIET as _C_QUIET)
+                          )
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
 from .paper_account import PaperAccount
@@ -18355,9 +18355,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         heavy = vr > 1.0
         big = (sr > 1.0) & ~flat
         up = mv > 0
+        # ⚠ ONLY the four states the user asked for carry a colour: BREAKOUT buy/sell and BUYER/SELLER
+        # ABSORBED. VACUUM and QUIET deliberately come back as -1 and are drawn on the Chart Style's own
+        # bearish-fill / bullish-hollow pair -- colouring all six (which I did first) makes the two that
+        # matter compete with four that do not, which is the opposite of what a colour code is for.
         col = np.where(heavy & big, np.where(up, _C_BRK_BUY, _C_BRK_SELL),
-              np.where(heavy, np.where(side, _C_AB_BUY, _C_AB_SELL),
-              np.where(big, _C_VAC, _C_QUIET)))
+              np.where(heavy, np.where(side, _C_AB_BUY, _C_AB_SELL), -1))
         return np.where(ok, col, -1).astype(np.int64)
 
     @staticmethod
