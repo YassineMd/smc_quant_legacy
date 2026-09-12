@@ -310,11 +310,17 @@ INTERP_WEAK_BELOW = 0.35        # log2 distance from the crosshair, on the WEAKE
 #   cycles gave back the WHOLE push (a full reversal past the open).
 #   ⭐ And it is new information: shared variance with the flow ratio 0%, speed 4%, |open-close| 1%,
 #   duration 3%. Unlike the book columns, this is not something the pane already knew.
-#   ⚠ n=40 -- the tick-resolution tape only reaches 6 h while the flow store holds 60 h. The direction is
-#   clear; treat the exact cuts as provisional.
-ABSORB_PUSH_MIN_TICKS = 4.0     # the MEASURED p10 push. At 2.0 a 2-tick push against a 31-tick giveback
-                                # printed "1533% given back", which is arithmetic, not absorption: if they
-                                # only achieved 2 ticks the question barely applies. Drops ~10% of cycles.
+#   RE-MEASURED after the per-bin TRUE extremes landed (n=458 absorbed over 66 h, was n=40 over 6 h): the
+#   giveback fraction is essentially unchanged -- terciles 0.71 / 1.00 against the old 0.68 / 1.00, and 38%
+#   still hand back the whole push -- so ABSORB_REJECT_WEAK below needs no re-basing. The PUSH distribution
+#   did move (p50 6 t, p90 19, max 141), which is what re-based the floor's rationale.
+ABSORB_PUSH_MIN_TICKS = 4.0     # under this push the ratio manufactures a percentage rather than reporting
+                                # one: at 2.0 a 2-tick push against a 31-tick giveback printed "1533% given
+                                # back". RE-MEASURED on the TRUE per-bin extremes (n=458 absorbed / 66 h):
+                                # fractions with |frac| > 3 are 3% in the 4-5 tick bucket and 0% above it, so
+                                # the value stands -- but it is NOT the p10 any more (that is now 2 ticks) and
+                                # it withholds the percentage from 32% of absorbed cycles, not ~10%. Withheld,
+                                # never guessed: those rows print no "% given back" at all.
 ABSORB_REJECT_WEAK = 0.68       # the measured LOWER tercile: gave back less than this and the absorption
                                 # claim is thin however heavy the flow was
 

@@ -27,6 +27,12 @@ class FlowStore:
         self._buy = np.zeros(0, dtype=np.float64)
         self._sell = np.zeros(0, dtype=np.float64)
         self._px = np.zeros(0, dtype=np.float64)     # LAST trade price in the bin (0 = no trade yet)
+        # TRUE high / low per bin, from EVERY trade (user 2026-09-12). The wicks used to be reduced from the
+        # per-second CLOSE, which is blind to anything that recovers inside a second: re-measured against the
+        # DOM's tick tape over 6.04 h, that understated the cycle high on 30.2% of cycles, by up to 77 TICKS,
+        # and 22 of 46 Big Player sweeps reached outside the candle they sat on. 0 = no trade in the bin yet.
+        self._pxh = np.zeros(0, dtype=np.float64)
+        self._pxl = np.zeros(0, dtype=np.float64)
         self._pts = np.zeros(0, dtype=np.float64)    # ms of the trade that set _px, so an out-of-order
         self.rev = 0                                 # backfill batch cannot overwrite a newer price
         self._memo = None
@@ -60,6 +66,8 @@ class FlowStore:
             self._buy = np.zeros(n, dtype=np.float64)
             self._sell = np.zeros(n, dtype=np.float64)
             self._px = np.zeros(n, dtype=np.float64)
+            self._pxh = np.zeros(n, dtype=np.float64)
+            self._pxl = np.zeros(n, dtype=np.float64)
             self._pts = np.zeros(n, dtype=np.float64)
             return
         if lo_i < self._base:                                  # older data (a backfill window) -> prepend
@@ -67,6 +75,8 @@ class FlowStore:
             self._buy = np.concatenate([np.zeros(pad), self._buy])
             self._sell = np.concatenate([np.zeros(pad), self._sell])
             self._px = np.concatenate([np.zeros(pad), self._px])
+            self._pxh = np.concatenate([np.zeros(pad), self._pxh])
+            self._pxl = np.concatenate([np.zeros(pad), self._pxl])
             self._pts = np.concatenate([np.zeros(pad), self._pts])
             self._base = int(lo_i)
         end = self._base + len(self._buy) - 1
@@ -75,12 +85,16 @@ class FlowStore:
             self._buy = np.concatenate([self._buy, np.zeros(pad)])
             self._sell = np.concatenate([self._sell, np.zeros(pad)])
             self._px = np.concatenate([self._px, np.zeros(pad)])
+            self._pxh = np.concatenate([self._pxh, np.zeros(pad)])
+            self._pxl = np.concatenate([self._pxl, np.zeros(pad)])
             self._pts = np.concatenate([self._pts, np.zeros(pad)])
         if len(self._buy) > self.cap:                          # keep the NEWEST cap bins
             drop = len(self._buy) - self.cap
             self._buy = self._buy[drop:]
             self._sell = self._sell[drop:]
             self._px = self._px[drop:]
+            self._pxh = self._pxh[drop:]
+            self._pxl = self._pxl[drop:]
             self._pts = self._pts[drop:]
             self._base += drop
 
@@ -113,6 +127,15 @@ class FlowStore:
         if newer.any():
             self._px[li[newer]] = lp[newer]
             self._pts[li[newer]] = lt[newer]
+        # TRUE HIGH / LOW per bin, over every trade in the batch. Order-independent, so a backfill window
+        # arriving after live batches can only widen a bin, never replace it -- which is what the _pts guard
+        # above has to do for the CLOSE. An empty bin holds 0, so the low needs the first trade to seed it
+        # rather than min(0, price); _pxh can take maximum.at directly.
+        np.maximum.at(self._pxh, loc, kpr)
+        _fresh = self._pxl[loc] <= 0.0
+        if _fresh.any():
+            self._pxl[loc[_fresh]] = kpr[_fresh]
+        np.minimum.at(self._pxl, loc, kpr)
         self.rev += 1
         self._memo = None
         self._bmemo = None
@@ -125,6 +148,8 @@ class FlowStore:
         self._buy = np.zeros(0, dtype=np.float64)
         self._sell = np.zeros(0, dtype=np.float64)
         self._px = np.zeros(0, dtype=np.float64)
+        self._pxh = np.zeros(0, dtype=np.float64)
+        self._pxl = np.zeros(0, dtype=np.float64)
         self._pts = np.zeros(0, dtype=np.float64)
         self.rev += 1
         self._memo = None
@@ -206,9 +231,18 @@ class FlowStore:
         What absorption is actually about: buyers pushing price to the HIGH and then handing it back to the
         close. Called with the SAME arguments as crosses(), so it lands on that call's memo entry.
 
-        ⚠ Resolution: these come from the per-bin LAST price, so a spike that fully recovers inside one second
-        is invisible. Measured against the DOM's tick tape -- exact on 91% of cycles, never more than ONE tick
-        low, 0% of the cycle range at the median. Good enough that per-bin hi/lo arrays are not worth 4 MB."""
+        Reduced from the store's per-bin TRUE high / low, which are accumulated over every trade at ingest.
+
+        ⚠⚠ These used to come from the per-bin LAST price, on the strength of a measurement I got wrong:
+        "exact on 91% of cycles, never more than ONE tick low". Re-measured against the DOM's tick tape over
+        6.04 h / 212 cycles, that approach understated the high on 30.2% of cycles, by >=5 ticks on 4.2% and
+        by as much as 77 TICKS -- and 22 of 46 Big Player sweeps reached outside the candle they sat on, which
+        is how the user found it. On the real extremes the same comparison is exact on 99.5% of cycles, with
+        the high never below the tape (the residual 0.5% is one cycle at the window edge).
+
+        ⚠ A cycle owns its whole boundary SECOND: fin is the next cycle's start bin and is included here. Any
+        reference that slices a tick tape at the exact cycle timestamps instead will disagree on ~15% of
+        cycles for that reason alone -- it cuts the boundary second in half."""
         return self._crosses_full(t0, t1, win_secs, min_spread_pct, min_hold_secs, max_n,
                                   context_secs, tick)[10:]
 
@@ -369,13 +403,23 @@ class FlowStore:
             # cycle as "100.01 -> 97.30". NaN exactly where move_ticks is NaN, so they can never disagree.
             px0_ = np.where(_ok, px[fl], np.nan)
             px1_ = np.where(_ok, px[fin], np.nan)
-            # the cycle's HIGH and LOW. The heads are contiguous (fin[k] == fl[k+1]), so one reduceat covers
-            # every cycle in O(n) -- but reduceat's segment is HALF-OPEN, so the closing bin belongs to the
-            # next segment and has to be folded back in by hand.
-            _hi = np.maximum.reduceat(px, fl)
-            _lo = np.minimum.reduceat(px, fl)
-            pxh_ = np.where(_ok, np.maximum(_hi, px[fin]), np.nan)
-            pxl_ = np.where(_ok, np.minimum(_lo, px[fin]), np.nan)
+            # the cycle's HIGH and LOW, from the per-bin TRUE extremes -- NOT from the closes. The heads are
+            # contiguous (fin[k] == fl[k+1]), so one reduceat covers every cycle in O(n) -- but reduceat's
+            # segment is HALF-OPEN, so the closing bin belongs to the next segment and is folded back by hand.
+            # ⚠ an untraded bin holds 0 in both arrays, which would drag every low to 0: mask those to the
+            # bin's own close (itself 0 there, so the fill in _filled/price_series still governs what is
+            # DRAWN) by taking the max against _pxl's positive entries only.
+            # ⚠ p0, NOT i0: `px` above is sliced from p0 (it needs the rolling window's prefix) and fl / fin
+            # index into THAT array. Slicing the extremes from i0 instead shifts every wick by (i0 - p0) bins.
+            _hh = self._pxh[p0:i1 + 1]
+            _ll = self._pxl[p0:i1 + 1]
+            _ll = np.where(_ll > 0, _ll, np.inf)               # untraded bins must not pull the low to zero
+            _hi = np.maximum.reduceat(_hh, fl)
+            _lo = np.minimum.reduceat(_ll, fl)
+            pxh_ = np.where(_ok, np.maximum(_hi, _hh[fin]), np.nan)
+            _lo_end = np.where(_ll[fin] > 0, _ll[fin], np.inf)
+            pxl_ = np.minimum(_lo, _lo_end)
+            pxl_ = np.where(_ok & np.isfinite(pxl_), pxl_, np.nan)
             # the dollars each side traded INSIDE the cycle, over the same span the move is measured across
             vb_ = cb[fin + 1] - cb[fl]
             vs_ = ca[fin + 1] - ca[fl]
