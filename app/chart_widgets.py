@@ -744,7 +744,7 @@ class BucketCandleItem(pg.GraphicsObject):
     def update_data(self, x: list, opens: list, highs: list, lows: list,
                     closes: list, brushes: list, pens: list, width: float = 0.8,
                     x0: float = None, x1: float = None, flat_span: float = None,
-                    widths: list = None) -> None:
+                    widths: list = None, hi_pens: list = None, lo_pens: list = None) -> None:
         # Cache the series so set_view() can re-cull on pan/zoom without a recompute.
         self._x, self._o, self._h, self._l, self._c = x, opens, highs, lows, closes
         self._brushes, self._pens, self._width = brushes, pens, width
@@ -755,6 +755,11 @@ class BucketCandleItem(pg.GraphicsObject):
         # PER-CANDLE widths, for an x axis where the bodies are not evenly spaced -- the Flow-mode PRICE pane
         # draws one candle per CYCLE and a cycle's duration is its own. None keeps the single `width`.
         self._ws = list(widths) if widths is not None else None
+        # PER-WICK pens. One pen per candle used to serve the border and BOTH wicks; the Flow-mode PRICE pane
+        # highlights a single rejection wick (thicker, in the state's colour) while leaving the body alone,
+        # which needs the upper and lower strokes addressed separately. None on either -> the candle's own pen.
+        self._hp = list(hi_pens) if hi_pens is not None else None
+        self._lp = list(lo_pens) if lo_pens is not None else None
         if not x:
             self.picture = QtGui.QPicture(); self._rect = QtCore.QRectF()
             self.prepareGeometryChange(); self.update(); return
@@ -788,6 +793,8 @@ class BucketCandleItem(pg.GraphicsObject):
         x, o, h, l, c = self._x, self._o, self._h, self._l, self._c
         brushes, width = self._brushes, self._width
         ws = getattr(self, "_ws", None)
+        hps = getattr(self, "_hp", None)
+        lps = getattr(self, "_lp", None)
         half = width / 2.0
         margin = max(ws) if ws else width
         x0, x1 = self._vx0, self._vx1
@@ -818,15 +825,20 @@ class BucketCandleItem(pg.GraphicsObject):
             top, bot = max(oo, cc), min(oo, cc)
             if top == bot:
                 top += config.TICK_SIZE / 2.0   # ranged doji (open==close): sliver shows the level
-            p.setPen(self._pens[i] if i < len(self._pens) else self._pen)   # flow-colored wick + border
+            _base = self._pens[i] if i < len(self._pens) else self._pen
             # wicks ONLY outside the body — upper (body top -> high) + lower (low -> body bottom).
             # The old single low->high wick crossed the body and showed through the semi-transparent
             # fill as an ugly center midline; splitting it keeps the wicks but clears the body.
+            # Each wick takes its OWN pen when one was supplied, so a single rejection wick can be
+            # highlighted without touching the body or the other wick.
             if hh > top:
+                p.setPen((hps[i] if (hps and i < len(hps) and hps[i] is not None) else _base))
                 p.drawLine(QtCore.QPointF(xi, top), QtCore.QPointF(xi, hh))
             if bot > ll:
+                p.setPen((lps[i] if (lps and i < len(lps) and lps[i] is not None) else _base))
                 p.drawLine(QtCore.QPointF(xi, ll), QtCore.QPointF(xi, bot))
             # body (per-candle dominance brush, neutral border)
+            p.setPen(_base)
             p.setBrush(brushes[i] if i < len(brushes) else QtCore.Qt.NoBrush)
             p.drawRect(QtCore.QRectF(xi - half, bot, width, top - bot))
         p.end()

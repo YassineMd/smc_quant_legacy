@@ -379,6 +379,9 @@ PX_RECALC_SECS = 0.25   # live-tape rebuild cap. A candle QPicture over ~80 bodi
                         # price line's 0.03 ms, and at the 20 Hz tick rate that would be 1.5% of a core to
                         # redraw bodies that have not moved. A VIEW change (zoom, pan) bypasses this entirely,
                         # so interaction stays instant; only the live edge is paced.
+PX_WICK_HILITE_W = 2.8          # stroke width for the highlighted REJECTION wick of an absorbed candle
+                                # that closed against the absorbed side -- the wick IS the reading there, so it
+                                # is drawn heavier than the 1.0 px the ordinary wicks use
 PX_PAD_FRAC = 0.06              # y padding above and below the visible high/low
 PX_REFIT_FRAC = 0.18            # dead-band: re-fit y only when the visible high/low moves by this much of the
                                 # current range, so the axis does not wobble on every 20 Hz tick

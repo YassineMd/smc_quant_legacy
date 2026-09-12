@@ -1797,6 +1797,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._px_lc = None             # forming-candle animation state, or None -- see _px_lc_frame
         self._px_lc_body = None
         self._px_lc_wick = None
+        self._px_lc_wick2 = None       # the highlighted rejection wick, drawn over the ordinary pair
         self._px_lc_timer = None
         self._px_vb = None
         self._px_pane_on = bool(config.PX_PANE_ON)
@@ -17386,6 +17387,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None; self._px_data = None
             self._px_pline = None; self._px_plabel = None; self._px_live_y = None
             self._px_lc = None; self._px_lc_body = None; self._px_lc_wick = None
+            self._px_lc_wick2 = None
             self._px_sig = None; self._px_t = 0.0; self._px_data = None
             self._px_sized = False; self._px_yfit = None
             self._px_vline = None; self._px_hline = None
@@ -18161,8 +18163,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # by that same hamburger toggle.
         self._px_lc_body = QtWidgets.QGraphicsRectItem(); self._px_lc_body.setZValue(8)
         self._px_lc_wick = pg.PlotCurveItem(); self._px_lc_wick.setZValue(8)
+        self._px_lc_wick2 = pg.PlotCurveItem(); self._px_lc_wick2.setZValue(9)
         pw.addItem(self._px_lc_body, ignoreBounds=True); pw.addItem(self._px_lc_wick, ignoreBounds=True)
-        self._px_lc_body.hide(); self._px_lc_wick.hide()
+        pw.addItem(self._px_lc_wick2, ignoreBounds=True)
+        self._px_lc_body.hide(); self._px_lc_wick.hide(); self._px_lc_wick2.hide()
         if self._px_lc_timer is None:
             self._px_lc_timer = QtCore.QTimer(self)
             self._px_lc_timer.setInterval(33)
@@ -18224,14 +18228,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._px_lc_timer is not None and self._px_lc_timer.isActive():
             self._px_lc_timer.stop()
         self._px_lc = None
-        for _it in (getattr(self, "_px_lc_body", None), getattr(self, "_px_lc_wick", None)):
+        for _it in (getattr(self, "_px_lc_body", None), getattr(self, "_px_lc_wick", None),
+                    getattr(self, "_px_lc_wick2", None)):
             if _it is not None:
                 try:
                     _it.hide()
                 except RuntimeError:
                     pass
 
-    def _px_lc_frame(self, x, o, h, l, c, wid, brush, pen) -> None:
+    def _px_lc_frame(self, x, o, h, l, c, wid, brush, pen, hi_pen=None, lo_pen=None) -> None:
         """(Re)target the forming candle's overlay. A changed close on the SAME cycle slides for 160 ms from
         where the animation currently is; a NEW cycle jumps, because the two are different candles and easing
         between them would draw a body that never existed."""
@@ -18239,12 +18244,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if lc is None or abs(lc["t0"] - float(x[0])) > 1e-6:
             self._px_lc = {"t0": float(x[0]), "x": float(x[1]), "w": float(wid), "o": float(o),
                            "h": float(h), "l": float(l), "c_from": float(c), "c_to": float(c),
-                           "cur": float(c), "ts": 0.0, "brush": brush, "pen": pen}
+                           "cur": float(c), "ts": 0.0, "brush": brush, "pen": pen,
+                           "hi_pen": hi_pen, "lo_pen": lo_pen}
             if self._px_lc_timer is not None:
                 self._px_lc_timer.stop()
             self._px_lc_apply()
             return
-        lc.update(x=float(x[1]), w=float(wid), o=float(o), h=float(h), l=float(l), brush=brush, pen=pen)
+        lc.update(x=float(x[1]), w=float(wid), o=float(o), h=float(h), l=float(l), brush=brush, pen=pen,
+                  hi_pen=hi_pen, lo_pen=lo_pen)
         if abs(float(c) - lc["c_to"]) > 1e-12:
             lc["c_from"] = lc["cur"]; lc["c_to"] = float(c); lc["ts"] = time.perf_counter()
             if self._px_lc_timer is not None and not self._px_lc_timer.isActive():
@@ -18282,6 +18289,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # wicks ONLY outside the body, exactly like the picture: one low->high line shows through a hollow fill
         self._px_lc_wick.setData([xi, xi, xi, xi], [top, hi, lo, bot], connect="pairs")
         self._px_lc_body.show(); self._px_lc_wick.show()
+        # ... and the REJECTION wick, if this cycle has one, redrawn thicker on top in the state's colour
+        _hp2, _lp2 = lc.get("hi_pen"), lc.get("lo_pen")
+        if self._px_lc_wick2 is not None:
+            if _hp2 is not None and hi > top:
+                self._px_lc_wick2.setPen(_hp2)
+                self._px_lc_wick2.setData([xi, xi], [top, hi])
+                self._px_lc_wick2.show()
+            elif _lp2 is not None and bot > lo:
+                self._px_lc_wick2.setPen(_lp2)
+                self._px_lc_wick2.setData([xi, xi], [lo, bot])
+                self._px_lc_wick2.show()
+            else:
+                self._px_lc_wick2.hide()
         if self._px_live_y is not None:
             self._px_live_y = cur
             self._px_pline.setPos(cur)
@@ -18365,23 +18385,55 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     @staticmethod
     def _px_brushes(cols, opens, closes, bw):
-        """(brushes, pens) for the cycle candles: the state's colour, solid.
+        """(brushes, pens, hi_pens, lo_pens) for the cycle candles.
 
-        ⚠ the fill carries the STATE, not the direction. For BREAKOUT and VACUUM that is the same thing --
-        both name the way price went -- but an absorbed candle's colour says WHO WAS ABSORBED, so its
-        direction is read off the body's position on the wick instead. Cycles the ratios cannot rate yet fall
-        back to the Chart Style's own bearish-fill / bullish-hollow pair rather than being given a state they
-        do not have."""
+        ⚠ the fill carries the STATE, not the direction. For BREAKOUT that is the same thing -- it names the
+        way price went -- but an absorbed candle's colour says WHO WAS ABSORBED. Cycles the ratios cannot rate
+        yet, and the states the user did not name, fall back to the Chart Style's own bearish-fill /
+        bullish-hollow pair rather than being given a state they do not have.
+
+        ⚠⚠ AN ABSORBED CANDLE THAT CLOSED AGAINST THE ABSORBED SIDE highlights its REJECTION WICK instead of
+        its body (user 2026-09-12): buyers absorbed and price still closed DOWN means the UPPER wick is the
+        whole story -- exactly how far they pushed before being given it back -- so it is drawn in orange and
+        thicker while the body stays on the Chart Style fill. Colouring the body there would say price went
+        their way. Sellers absorbed closing UP mirrors it on the lower wick, in blue."""
         n = int(np.size(cols))
         _cache = {}
         br = []
         pn = []
+        hp = []
+        lp = []
+        # ⚠ AN ABSORBED CANDLE IS ONLY COLOURED WHEN PRICE CLOSED THE ABSORBED SIDE'S WAY (user 2026-09-12):
+        # BUYER ABSORBED needs close > open, SELLER ABSORBED needs close < open. Those are the cycles where
+        # the aggressor got absorbed and price STILL finished in their direction; the ordinary case (absorbed
+        # and price went nowhere, or against them) is left on the Chart Style fill so it does not compete.
+        # The direction is read off the DRAWN open/close, so the forming candle uses its live close.
         _blk = pg.mkPen(0, 0, 0, width=1.0); _blk.setCosmetic(True)
         _gry = pg.mkPen("#9aa4ae", width=1.0); _gry.setCosmetic(True)
         _fill = pg.mkBrush(0, 0, 0, 255); _hollow = pg.mkBrush(255, 255, 255, 255)
         _up = pg.mkBrush(38, 166, 154, 255); _dn = pg.mkBrush(239, 83, 80, 255)
+        _hw = float(config.PX_WICK_HILITE_W)
+        _wcache = {}
         for i in range(n):
             ci = int(cols[i])
+            _hi_pen = None
+            _lo_pen = None
+            if ci == _C_AB_BUY and not (float(closes[i]) > float(opens[i])):
+                ci = -1
+                _hi_pen = _wcache.get(_C_AB_BUY)       # the rejection wick carries the reading instead
+                if _hi_pen is None:
+                    _hi_pen = pg.mkPen(_STATE_BAR_COL[_C_AB_BUY], width=_hw)
+                    _hi_pen.setCosmetic(True); _hi_pen.setCapStyle(QtCore.Qt.FlatCap)
+                    _wcache[_C_AB_BUY] = _hi_pen
+            elif ci == _C_AB_SELL and not (float(closes[i]) < float(opens[i])):
+                ci = -1
+                _lo_pen = _wcache.get(_C_AB_SELL)
+                if _lo_pen is None:
+                    _lo_pen = pg.mkPen(_STATE_BAR_COL[_C_AB_SELL], width=_hw)
+                    _lo_pen.setCosmetic(True); _lo_pen.setCapStyle(QtCore.Qt.FlatCap)
+                    _wcache[_C_AB_SELL] = _lo_pen
+            hp.append(_hi_pen)
+            lp.append(_lo_pen)
             if ci < 0:
                 if bw:
                     br.append(_fill if float(closes[i]) < float(opens[i]) else _hollow)
@@ -18397,7 +18449,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 e = (pg.mkBrush(QtGui.QColor(_c)), _p)
                 _cache[ci] = e
             br.append(e[0]); pn.append(e[1])
-        return br, pn
+        return br, pn, hp, lp
 
     def _px_grow(self, force: bool = False, share: float = 0.20) -> bool:
         """Give the PRICE pane its slice, taken from the main chart.
@@ -18441,6 +18493,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._px_data = None
                 self._px_pline = None; self._px_plabel = None; self._px_live_y = None
                 self._px_lc = None; self._px_lc_body = None; self._px_lc_wick = None
+                self._px_lc_wick2 = None
             else:
                 # ⚠ HIDING is not TEARING DOWN. Nulling the item refs here (one indent level out, which is
                 # where they landed) meant every hide dropped the pill and overlay handles while the items
@@ -18550,7 +18603,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # EACH CANDLE CARRIES ITS CYCLE'S STATE (user 2026-09-12), from the same palette and the same
             # classifier the Interpretation feed uses -- so the two panes cannot disagree about a colour.
             _ci = cols[keep]
-            _br, _pn = self._px_brushes(_ci, _o, _c, _bw)
+            _br, _pn, _hp, _lp = self._px_brushes(_ci, _o, _c, _bw)
             self._px_candles.set_neutral("#000000" if _bw else "#888888")
             # ⚠ while the overlay animates the forming cycle, the PICTURE must omit it -- otherwise the static
             # body shows through underneath every slide. Same skip_last contract as the bucket canvas.
@@ -18562,12 +18615,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._px_candles.update_data(x.tolist()[:_n_pic], _o.tolist()[:_n_pic], _h.tolist()[:_n_pic],
                                              _l.tolist()[:_n_pic], _c.tolist()[:_n_pic],
                                              _br[:_n_pic], _pn[:_n_pic], x0=dx0, x1=dx1,
-                                             widths=wid.tolist()[:_n_pic])
+                                             widths=wid.tolist()[:_n_pic],
+                                             hi_pens=_hp[:_n_pic], lo_pens=_lp[:_n_pic])
             else:
                 self._px_candles.setVisible(False)
             if _anim:
                 self._px_lc_frame((float(_t[-1]), float(x[-1])), _o[-1], _h[-1], _l[-1], _c[-1], wid[-1],
-                                  _br[-1], _pn[-1])
+                                  _br[-1], _pn[-1], _hp[-1], _lp[-1])
             else:
                 self._px_lc_hide()
             # the live-price pill rides the forming cycle; there is nothing live to show without one
