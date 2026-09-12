@@ -743,7 +743,8 @@ class BucketCandleItem(pg.GraphicsObject):
 
     def update_data(self, x: list, opens: list, highs: list, lows: list,
                     closes: list, brushes: list, pens: list, width: float = 0.8,
-                    x0: float = None, x1: float = None, flat_span: float = None) -> None:
+                    x0: float = None, x1: float = None, flat_span: float = None,
+                    widths: list = None) -> None:
         # Cache the series so set_view() can re-cull on pan/zoom without a recompute.
         self._x, self._o, self._h, self._l, self._c = x, opens, highs, lows, closes
         self._brushes, self._pens, self._width = brushes, pens, width
@@ -751,16 +752,20 @@ class BucketCandleItem(pg.GraphicsObject):
         # canvas but half a SECOND on a clock axis -- a 1 m candle's flat line would be 1 s wide and read as a
         # gap. Callers on a clock axis pass their interval; every existing caller keeps the historical 0.5.
         self._flat_half = 0.5 if flat_span is None else float(flat_span) / 2.0
+        # PER-CANDLE widths, for an x axis where the bodies are not evenly spaced -- the Flow-mode PRICE pane
+        # draws one candle per CYCLE and a cycle's duration is its own. None keeps the single `width`.
+        self._ws = list(widths) if widths is not None else None
         if not x:
             self.picture = QtGui.QPicture(); self._rect = QtCore.QRectF()
             self.prepareGeometryChange(); self.update(); return
         # Bounds = FULL data extent (UNCHANGED behavior): Y-fit / autorange / follow see
         # every bucket exactly as before — ONLY the painted picture is culled (in _build_picture).
-        half = width / 2.0
+        w_first = (self._ws[0] if self._ws else width)
+        w_last = (self._ws[-1] if self._ws else width)
         lo_all, hi_all = min(lows), max(highs)
         span = (hi_all - lo_all) if hi_all > lo_all else 1.0
-        self._rect = QtCore.QRectF(float(x[0]) - half, lo_all,
-                                   float(x[-1]) - float(x[0]) + width, span)
+        self._rect = QtCore.QRectF(float(x[0]) - w_first / 2.0, lo_all,
+                                   float(x[-1]) - float(x[0]) + (w_first + w_last) / 2.0, span)
         self._vx0 = float("-inf") if x0 is None else float(x0)
         self._vx1 = float("inf")  if x1 is None else float(x1)
         self._build_picture()
@@ -782,14 +787,19 @@ class BucketCandleItem(pg.GraphicsObject):
     def _build_picture(self) -> None:
         x, o, h, l, c = self._x, self._o, self._h, self._l, self._c
         brushes, width = self._brushes, self._width
+        ws = getattr(self, "_ws", None)
         half = width / 2.0
+        margin = max(ws) if ws else width
         x0, x1 = self._vx0, self._vx1
         self.picture = QtGui.QPicture()
         p = QtGui.QPainter(self.picture)
         for i in range(len(x)):
             xi = float(x[i])
-            if xi < x0 - width or xi > x1 + width:   # CULL to the visible X viewport (+1 width margin)
+            if xi < x0 - margin or xi > x1 + margin:  # CULL to the visible X viewport (+1 width margin)
                 continue
+            if ws:
+                width = ws[i] if i < len(ws) else self._width
+                half = width / 2.0
             oo, hh, ll, cc = o[i], h[i], l[i], c[i]
             # Zero-range bucket (high==low -> O=H=L=C): ALL volume traded at one tick. The
             # honest mark is a flat NEUTRAL line at that price — the forced TICK/2 body would
@@ -801,7 +811,7 @@ class BucketCandleItem(pg.GraphicsObject):
                 # Span the FULL interval (not just the body width) so a run of no-trade (flat) candles — common on 1m
                 # clock candles in a quiet stretch — connects into a CONTINUOUS carry-forward line instead of
                 # disconnected ticks that read as "gaps".
-                _fh = getattr(self, "_flat_half", 0.5)
+                _fh = (half if ws else getattr(self, "_flat_half", 0.5))
                 p.drawLine(QtCore.QPointF(xi - _fh, ll), QtCore.QPointF(xi + _fh, ll))
                 continue
             # body bounds first, so the wicks stop AT the body (no line through the fill).

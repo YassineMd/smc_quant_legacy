@@ -1787,12 +1787,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._px_plot = None           # PRICE pane (Flow mode): the one pane ABOVE the main chart
         self._px_curve = None          # the price LINE: kept for the degenerate case of <2 candles
         self._px_candles = None        # BucketCandleItem -- the main chart's own candle item, reused
-        self._px_iv = None             # the interval currently drawn, in seconds (follows the zoom)
         self._px_vb = None
         self._px_pane_on = bool(config.PX_PANE_ON)
-        self._px_sig = None            # (rev, view...) -- an idle frame is this compare and nothing else
-        self._px_vsig = None           # the VIEW half of it: a user change redraws now, tape is paced
+        self._px_sig = None            # an idle frame is this compare and nothing else
         self._px_t = 0.0
+        self._px_data = None           # (vx0, vx1, t, t_end, done, px0, px1, pxh, pxl) from ONE crosses() read
         self._px_sized = False
         self._px_yfit = None           # (lo, hi) currently set, so the axis is not re-set every tick
         self._px_vline = None; self._px_hline = None
@@ -17373,8 +17372,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # ... and the Flow-mode liquidity pane is a CHILD of that same splitter, so its refs are dangling too.
             # Null them and _liq_ensure_pane rebuilds the pane on the next entry (_liq_data survives -- it is data).
             # ... and the PRICE pane sat ABOVE the chart inside that same splitter
-            self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None; self._px_iv = None
-            self._px_sig = None; self._px_vsig = None; self._px_t = 0.0
+            self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None; self._px_data = None
+            self._px_sig = None; self._px_t = 0.0; self._px_data = None
             self._px_sized = False; self._px_yfit = None
             self._px_vline = None; self._px_hline = None
             self._px_tag = None; self._px_time_tag = None; self._px_proxy = None; self._px_title = None
@@ -18141,21 +18140,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._theme_sub_panes(not self._simple_bw())              # born into the CURRENT Chart Style
         return pw
 
-    @staticmethod
-    def _px_interval(span_secs: float) -> float:
-        """The candle interval for a visible span: the smallest rung that keeps the count at or under target.
-
-        The interval FOLLOWS THE ZOOM rather than the chart's timeframe, because this pane's x is the flow
-        CLOCK and the user zooms it freely -- a fixed 5 m would draw four candles at one zoom and ten thousand
-        at another. The pane title names whichever rung is live, so the reading is never ambiguous."""
-        span = max(1.0, float(span_secs))
-        ivs = tuple(config.PX_CANDLE_IVS)
-        target = max(8, int(config.PX_CANDLE_TARGET))
-        for iv in ivs:
-            if span / float(iv) <= target:
-                return float(iv)
-        return float(ivs[-1])
-
     def _px_grow(self, force: bool = False, share: float = 0.20) -> bool:
         """Give the PRICE pane its slice, taken from the main chart.
 
@@ -18194,81 +18178,120 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             try:
                 self._px_plot.setVisible(False)
             except RuntimeError:                     # the splitter was torn down under us -> nothing to hide
-                self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None; self._px_iv = None
+                self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None; self._px_data = None
         self._stack_axis_sync()
 
     def _px_tick(self, now: float) -> None:
-        """Per frame in Flow mode. An idle frame is ONE signature compare -- see _px_draw."""
+        """Per frame in Flow mode, throttled exactly like the other cycle panes.
+
+        ⚠⚠ The crosses() arguments are IDENTICAL to the Volume / Book / Speed panes', _lb_secs() read-back
+        included even though this pane needs no baseline, because the four share ONE memo entry -- a gate
+        asserts len(store._xmemo) == 1. Pass anything different and this pane forces its own cold read."""
         if self._px_plot is None or not self._px_plot.isVisible():
             return
+        if now - getattr(self, "_px_t", 0.0) < float(config.CYCLE_RECALC_SECS):
+            return
+        self._px_t = now
+        (vx0, vx1), _ = self.vb.viewRange()
+        _args = (vx0 - self._lb_secs(), vx1, float(self._flow_win),
+                 float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                 int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
+        try:
+            t, is_buy, strong, move, cbuy, csell, t_end, done = self._flow.crosses(*_args)
+            px0, px1 = self._flow.crosses_px(*_args)      # same args -> the memo entry above, not a re-read
+            pxh, pxl = self._flow.crosses_hl(*_args)
+        except Exception:
+            return
+        if not (t.size == px0.size == pxh.size):
+            return
+        self._px_data = (vx0, vx1, t, t_end, done, px0, px1, pxh, pxl)
         self._px_draw(now)
 
     def _px_draw(self, now: float) -> None:
-        """The price track over the same clock as the flow lines.
+        """ONE CANDLE PER CYCLE (user 2026-09-12): open = the price the cycle started at, close = where it
+        ended, wicks = the highest and lowest it reached in between.
 
-        Cost: the store memoizes price_series on (rev, range, max_pts) and this returns before touching it
-        unless the signature moved, so a frame where nothing changed is a tuple compare. y re-fits only past a
-        dead-band -- setYRange every tick would relayout the axis 20 times a second for sub-pixel changes."""
+        A cycle already IS a candle, so nothing here is derived -- all four prices come off the SAME crosses()
+        memo entry the Volume / Book / Speed panes built. Bodies are as wide as their own cycle, which is why
+        BucketCandleItem now takes per-candle widths.
+
+        ⚠ THE FORMING CYCLE closes at the ENGINE's live price, not the store's last binned trade: the store's
+        edge trails by 1-5 s in steady state (189 s measured on a quiet tape). Its high and low are extended
+        to include that price, so a body can never stick out through its own wick, and its t_end is clamped to
+        now -- panning right past the live edge would otherwise stretch the last body into the future.
+
+        Cost: the signature deliberately does NOT carry the store's rev, which changes 20 times a second. It
+        carries the cycle count, the newest cycle's start, the view and the live price -- so the only things
+        that can force a repaint are a cycle appearing, the view moving, or the price actually changing."""
         vb = self._px_vb
-        if vb is None:
+        d = getattr(self, "_px_data", None)
+        if vb is None or d is None:
             return
-        (vx0, vx1), _ = self.vb.viewRange()          # the MAIN view: this pane is x-linked to it
-        width = max(200, int(self._px_plot.width()) or 1000)
-        max_pts = int(min(config.PX_MAX_POINTS, 2 * width))
-        iv = self._px_interval(vx1 - vx0)
-        _bw0 = bool(self._simple_bw())
-        # Split the signature: what the USER changed vs what the TAPE changed. A view or style change redraws
-        # immediately -- interaction must never wait -- while a new tape batch is paced by PX_RECALC_SECS,
-        # because a candle QPicture over ~80 bodies costs ~0.8 ms and the tick rate is 20 Hz.
-        view_sig = (round(vx0, 2), round(vx1, 2), max_pts, iv, _bw0)
-        sig = (self._flow.rev,) + view_sig
+        vx0, vx1, t, t_end, done, px0, px1, pxh, pxl = d
+        if t.size == 0:
+            if self._px_sig != ("empty",):
+                self._px_sig = ("empty",)
+                self._px_candles.setVisible(False)
+                self._px_curve.setData(np.zeros(0), np.zeros(0))
+            return
+        _bw = bool(self._simple_bw())
+        _lp = self._engine_live_px()
+        (dx0, dx1), _ = self.vb.viewRange()      # the DRAWN window; the read reaches further back than this
+        sig = (int(t.size), round(float(t[-1]), 2), round(float(t[0]), 2), round(dx0, 2), round(dx1, 2),
+               round(float(_lp), 6) if _lp is not None else None, _bw, bool(done[-1]))
         if sig == self._px_sig:
-            return                                   # the cheapest possible frame
-        if view_sig == getattr(self, "_px_vsig", None) and                 (now - getattr(self, "_px_t", 0.0)) < float(config.PX_RECALC_SECS):
-            return                                   # only the tape moved, and it moved a moment ago
+            return                               # the cheapest possible frame
         self._px_sig = sig
-        self._px_vsig = view_sig
-        self._px_t = now
-        x, o, h, l, c = self._flow.candles(vx0, vx1, iv)
-        if iv != self._px_iv:
-            self._px_iv = iv
-            if self._px_title is not None:
-                try:
-                    self._px_title.setText(config.px_title(iv))
-                except RuntimeError:
-                    pass
-        # ⚠ a line UNDER two candles only: at every real zoom the candles are the drawing, but a window
-        # holding one interval or less would otherwise render as a single body with no context at all.
-        if x.size >= 2:
-            self._px_curve.setData(np.zeros(0), np.zeros(0))
-            self._px_candles.setVisible(True)
-            _bw = bool(self._simple_bw())
-            if _bw:
-                _br, _pn = self._simple_bw_palette(o, c)
-            else:
-                _up = pg.mkBrush(38, 166, 154, 255); _dn = pg.mkBrush(239, 83, 80, 255)
-                _bear = (np.asarray(c) < np.asarray(o)).tolist()      # one vector compare, not x.size of them
-                _br = [_dn if b else _up for b in _bear]
-                _pk = pg.mkPen("#9aa4ae", width=1.0); _pk.setCosmetic(True)
-                _pn = [_pk] * x.size
-            self._px_candles.set_neutral("#000000" if _bw else "#888888")
-            self._px_candles.update_data(x.tolist(), o.tolist(), h.tolist(), l.tolist(), c.tolist(), _br, _pn,
-                                         width=iv * float(config.PX_CANDLE_FILL),
-                                         x0=vx0, x1=vx1, flat_span=iv)
-        else:
+        te = np.array(t_end, dtype=np.float64, copy=True)
+        o = np.array(px0, dtype=np.float64, copy=True)
+        c = np.array(px1, dtype=np.float64, copy=True)
+        h = np.array(pxh, dtype=np.float64, copy=True)
+        l = np.array(pxl, dtype=np.float64, copy=True)
+        # ⚠ crosses() marks the last row of ANY read unfinished, whether or not that read reached the live
+        # edge. Only when the view actually holds the live edge is that cycle genuinely forming.
+        _live = bool(dx1 >= now - float(config.INTERP_STALE_SECS))
+        if not bool(done[-1]):
+            te[-1] = max(float(t[-1]), min(float(now), float(te[-1])))
+            if _live and _lp is not None and np.isfinite(o[-1]):
+                c[-1] = float(_lp)
+                h[-1] = max(float(h[-1]), float(_lp)) if np.isfinite(h[-1]) else float(_lp)
+                l[-1] = min(float(l[-1]), float(_lp)) if np.isfinite(l[-1]) else float(_lp)
+        keep = (te >= dx0) & (t <= dx1) & np.isfinite(o) & np.isfinite(c) & np.isfinite(h) & np.isfinite(l)
+        n = int(keep.sum())
+        if n < 2:
+            # fewer than two cycles on screen is not a chart; fall back to the price track so the pane still
+            # says something rather than showing one lonely body
             self._px_candles.setVisible(False)
-            _t, _p = self._flow.price_series(vx0, vx1, max_pts)
+            _w = max(200, int(self._px_plot.width()) or 1000)
+            _t, _p = self._flow.price_series(dx0, dx1, int(min(config.PX_MAX_POINTS, 2 * _w)))
             self._px_curve.setData(_t, _p)
             if _p.size == 0:
                 return
-            h = _p; l = _p
-        if h.size == 0:
+            lo_y, hi_y = float(_p.min()), float(_p.max())
+        else:
+            self._px_curve.setData(np.zeros(0), np.zeros(0))
+            self._px_candles.setVisible(True)
+            _t, _te = t[keep], te[keep]
+            _o, _h, _l, _c = o[keep], h[keep], l[keep], c[keep]
+            dur = np.maximum(_te - _t, 1e-9)
+            x = _t + dur * 0.5                              # the cycle's MIDPOINT, so the body sits on it
+            wid = dur * float(config.PX_CANDLE_FILL)        # no pixel floor -- see config, it made them overlap
+            if _bw:
+                _br, _pn = self._simple_bw_palette(_o, _c)
+            else:
+                _up = pg.mkBrush(38, 166, 154, 255); _dn = pg.mkBrush(239, 83, 80, 255)
+                _bear = (_c < _o).tolist()                  # one vector compare, not n of them
+                _br = [_dn if b else _up for b in _bear]
+                _pk = pg.mkPen("#9aa4ae", width=1.0); _pk.setCosmetic(True)
+                _pn = [_pk] * n
+            self._px_candles.set_neutral("#000000" if _bw else "#888888")
+            self._px_candles.update_data(x.tolist(), _o.tolist(), _h.tolist(), _l.tolist(), _c.tolist(),
+                                         _br, _pn, x0=dx0, x1=dx1, widths=wid.tolist())
+            lo_y, hi_y = float(np.min(_l)), float(np.max(_h))
+        if not (np.isfinite(lo_y) and np.isfinite(hi_y)):
             return
-        lo = float(np.min(l)); hi = float(np.max(h))
-        if not (np.isfinite(lo) and np.isfinite(hi)):
-            return
-        pad = max(float(config.TICK_SIZE), (hi - lo) * float(config.PX_PAD_FRAC))
-        want = (lo - pad, hi + pad)
+        pad = max(float(config.TICK_SIZE), (hi_y - lo_y) * float(config.PX_PAD_FRAC))
+        want = (lo_y - pad, hi_y + pad)
         cur = self._px_yfit
         if cur is None or abs(want[0] - cur[0]) + abs(want[1] - cur[1]) > \
                 float(config.PX_REFIT_FRAC) * max(1e-9, cur[1] - cur[0]):
@@ -18474,14 +18497,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _apply_pane_names(self) -> None:
         """Pane title and hamburger toggle, from the one constant, at the CURRENT lookback."""
         names = config.pane_titles(self._lb_n())
-        # the PRICE pane's title names the INTERVAL it is drawing, which pane_titles() cannot know
-        _pt = getattr(self, "_px_title", None)
-        if _pt is not None:
-            try:
-                _pt.setText(config.px_title(getattr(self, "_px_iv", None)))
-            except RuntimeError:
-                pass
-        for _k, _it in (("liq", getattr(self, "_liq_title", None)),
+        for _k, _it in (("px", getattr(self, "_px_title", None)),
+                        ("liq", getattr(self, "_liq_title", None)),
                         ("cyc", getattr(self, "_cyc_title", None)),
                         ("cvol", getattr(self, "_cvol_title", None)),
                         ("lob", getattr(self, "_lob_title", None)),
