@@ -287,15 +287,33 @@ INTERP_WIDTH = 440              # measured: the price-move line needs 352 px at 
                                 # 440 not 404: 'Limit Buyers +30%' / 'Limit Sellers -12%' needs 423.
                                 # Dropping the second 'Limit' would fit 404 -- the user's wording won.
 INTERP_MAX_ROWS = 240           # the feed is capped, not the history: older cycles still feed every baseline
-# ONE live-edge window, shared by the Interpretation feed AND the cycle candles (user 2026-09-12: "by
-# default I should see the last 8h ... no need to recompute as long as I did not update the lookback").
-# Sharing it means ONE crosses() memo entry serves both instead of two cold reads, and the two panes cover
-# exactly the same period -- so clicking any candle always finds its OWN row in the feed.
-#   MEASURED cold read by window: 30 min 0.71 ms | 6 h 2.11 ms | 24 h 9.59 ms. 24 h also comes back with
-#   exactly FLOW_CROSS_MAX (400) cycles, i.e. already truncated, so 8 h is both cheaper and more complete.
-CYCLE_LIVE_SPAN_SECS = 8 * 3600.0
-INTERP_SPAN_SECS = CYCLE_LIVE_SPAN_SECS   # kept as the feed's own name; the value is shared on purpose
-_INTERP_SPAN_SECS_DOC = 0        # The feed is anchored at the LIVE EDGE and spans this, INDEPENDENT of the
+# The cycle candles ACCUMULATE rather than covering a fixed span (user 2026-09-12: "forget the 8h idea ...
+# as I pan/zoom the candles get generated, as it was set, but keep them on chart even if I zoom on 1 candle").
+# The pane reads the VIEW like the other cycle panes -- so the four share one crosses() memo entry -- and
+# keeps every cycle it has ever read, so zooming in discards nothing and zooming back out re-displays the rest
+# without re-deriving it. MEASURED: a zoom down to a single candle and back out = 0 picture rebuilds.
+#
+# ⚠⚠ BOTH CAPS EXIST FOR THE FRAME, not for memory (a cached cycle is seven floats). MEASURED with a real
+# grab(), candles on screen -> ms of paint EVERY FRAME: 300 -> 3.4 | 400 -> 5.8 | 800 -> 9.6 | 1200 -> 15.2 |
+# 2400 -> 12-21, and one picture BUILD at 400 -> 6.3 ms, at 1200 -> 44.8, at 2400 -> 46.
+PX_CACHE_MAX = 400              # cycles retained, EVICTING WHAT IS FURTHEST FROM THE VIEW -- not the oldest,
+                                # which would throw away the very candles a LEFT pan has just generated (see
+                                # _px_cache_merge). The cap is FLOW_CROSS_MAX, the most cycles one crosses()
+                                # read can return: the user can zoom out until the WHOLE cache is on screen,
+                                # where every candle in it is legitimately visible and must be drawn, so
+                                # holding more would let this feature make the worst frame worse than the one
+                                # that already shipped. Cycles beyond it are not lost -- panning back to them
+                                # regenerates them, which is the behaviour the user asked to keep. Raising it
+                                # costs roughly 12 us of paint per extra candle, on every frame.
+PX_DRAW_MAX = 400               # candles in ONE picture: the picture is a WINDOW on the cache, padded either
+                                # side by whatever is left of this cap, so an ordinary pan or zoom lands
+                                # inside an already-drawn set and rebuilds nothing. Padded in CANDLES rather
+                                # than seconds because that is the unit the cost is in. ⚠ when the VIEW alone
+                                # holds more than this, the pad goes to zero and every visible candle is
+                                # still drawn: the cap bounds the MARGIN, it never hides data. At PX_CACHE_MAX
+                                # == this, the window is always the whole cache -- the window logic is what
+                                # keeps the cost bounded if the cache cap is ever raised.
+INTERP_SPAN_SECS = 6 * 3600.0   # The feed is anchored at the LIVE EDGE and spans this, INDEPENDENT of the
                                 # chart's view: zooming or panning must not empty it (user 2026-09-11). That
                                 # costs a second crosses() entry -- measured 0.88 ms cold at 4 h, 1.19 at 6 h,
                                 # so 2 reads per 0.5 s tick instead of 1: +0.24% of one core.

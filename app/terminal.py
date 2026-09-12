@@ -1803,8 +1803,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._px_pane_on = bool(config.PX_PANE_ON)
         self._px_sig = None            # an idle frame is this compare and nothing else
         self._px_t = 0.0
-        self._px_data = None           # (a, edge, t, t_end, done, px0, px1, pxh, pxl, cols) -- ONE read
-        self._px_dsig = None           # the CYCLE SET + lookback: the arrays are re-derived only on a change
+        self._px_data = None           # the LIVE read: (a, vx1, t, t_end, done, px0, px1, pxh, pxl, fcol)
+        self._px_cache = {}            # EVERY cycle ever read: start -> (t, t_end, o, h, l, c, colour index)
+        self._px_cache_lb = None       # (lookback, flow window) the cache was built at; either clears it
+        self._px_rated_a = None        # the earliest read start already rated: unrated entries retry only
+        self._px_arr = None            # on a DEEPER read. The cache as sorted arrays, rebuilt only on a gain
+        self._px_pic_win = None        # (i0, i1) into _px_arr: which cached candles the PICTURE covers. The
+                                       # view sits inside it with a candle margin, so an ordinary pan or zoom
+                                       # neither rebuilds nor loses anything
+        self._px_fsig = None           # the forming cycle's own numbers, so its rating is re-read when they
+        self._px_fcol = -1             # move and not on every frame of a pan
         self._px_vrange = None         # the last drawn view, so a pan re-fits y and rebuilds nothing
         self._px_livesig = None        # the live price, kept OUT of the picture's signature
         self._px_sized = False
@@ -17404,7 +17412,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._px_lc = None; self._px_lc_body = None; self._px_lc_wick = None
             self._px_lc_wick2 = None
             self._px_sig = None; self._px_t = 0.0; self._px_data = None
-            self._px_dsig = None; self._px_vrange = None; self._px_livesig = None
+            self._px_vrange = None; self._px_livesig = None; self._px_fsig = None
+            self._px_pic_win = None    # the items are gone, so no picture covers anything any more
+            # the CACHE survives a pane teardown -- it is data, and re-reading it would be exactly the
+            # recomputation the accumulating cache exists to avoid. Only its ARRAYS are re-derived.
             self._px_sized = False; self._px_yfit = None
             self._px_vline = None; self._px_hline = None
             self._px_tag = None; self._px_time_tag = None; self._px_proxy = None; self._px_title = None
@@ -18702,23 +18713,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         ⚠⚠ The crosses() arguments are IDENTICAL to the Volume / Book / Speed panes', _lb_secs() read-back
         included even though this pane needs no baseline, because the four share ONE memo entry -- a gate
-        asserts len(store._xmemo) == 1. Pass anything different and this pane forces its own cold read."""
+        asserts it. Pass anything different and this pane forces its own cold read.
+
+        The read follows the VIEW; what keeps a zoom from losing candles is the CACHE, not the window."""
         if self._px_plot is None or not self._px_plot.isVisible():
             return
         if now - getattr(self, "_px_t", 0.0) < float(config.CYCLE_RECALC_SECS):
             return
         self._px_t = now
-        # ⚠⚠ ANCHORED AT THE STORE'S LIVE EDGE over a FIXED span, never at the view. Reading the view meant a
-        # tight zoom held fewer than two cycles and the pane fell back to the price LINE -- measured, a
-        # 5-minute view holds 2 cycles and anything tighter fewer, which is the user's "candles only show
-        # when zoomed out" -- and every pan re-read the store. Same window and the SAME arguments as the
-        # Interpretation feed, so the two share ONE memo entry instead of adding a third cold read.
-        sp = self._flow.span()
-        if not sp:
-            return
-        _edge = float(sp[1])
-        _a = max(float(sp[0]), _edge - float(config.CYCLE_LIVE_SPAN_SECS))
-        _args = (_a, _edge, float(self._flow_win),
+        # GENERATION FOLLOWS THE VIEW, but nothing already generated is thrown away (user 2026-09-12: "as I
+        # pan/zoom the candles get generated, as it was set, but keep them on chart even if I zoom on 1
+        # candle"). Every cycle this read yields goes into _px_cache and stays there, so zooming into a
+        # handful of candles discards none of the rest, and zooming back out re-displays them without
+        # re-deriving anything: MEASURED, a zoom down to a single candle and back out costs 0 picture
+        # rebuilds. Reading the view is also what puts this pane back on the OTHER cycle panes' memo entry
+        # instead of opening a second window of its own.
+        (vx0, vx1), _ = self.vb.viewRange()
+        _a = vx0 - self._lb_secs()
+        _args = (_a, vx1, float(self._flow_win),
                  float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
                  int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
         try:
@@ -18729,157 +18741,290 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         if not (t.size == px0.size == pxh.size):
             return
-        # the CYCLE SET, not the view: the arrays are re-derived only when a cycle appears or the lookback
-        # moves. A pan, a zoom or a new live price leaves all of this untouched.
-        _dsig = (int(t.size), round(float(t[0]), 3) if t.size else 0.0,
-                 round(float(t[-1]), 3) if t.size else 0.0, int(self._lb_n()))
-        if _dsig == getattr(self, "_px_dsig", None) and self._px_data is not None:
-            self._px_draw(now)                    # the forming candle and the pill still follow the price
-            return
-        self._px_dsig = _dsig
-        _cols = self._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell)
-        self._px_data = (_a, _edge, t, t_end, done, px0, px1, pxh, pxl, _cols)
-        self._px_sig = None                       # a new cycle set -> rebuild the picture once
+        # ⚠⚠ THE RATINGS ARE LAZY. _px_state_cols goes through prev_ratio / same_side_ratio, which are PYTHON
+        # loops with an np.median per cycle -- MEASURED 1.345 ms over a 23-cycle read, and it scales with the
+        # read, so at FLOW_CROSS_MAX it is the most expensive thing in this pane by an order of magnitude.
+        # Paying it on every frame of a pan is exactly the waste the user was complaining about. It is
+        # computed AT MOST ONCE per tick, and only when something actually needs a colour: a cycle the cache
+        # has never rated, or a forming candle whose own numbers have moved.
+        _memo = []
+
+        def _cols():
+            if not _memo:
+                _memo.append(self._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell))
+            return _memo[0]
+
+        if self._px_cache_merge(_a, vx1, t, t_end, done, px0, px1, pxh, pxl, _cols):
+            self._px_sig = None                   # the cache GAINED cycles -> rebuild the picture ONCE
+        # THE FORMING CANDLE's rating legitimately moves as the cycle accumulates, so it is re-read whenever
+        # its volume, its move or its end changes -- and not at all when the view is off the live edge, where
+        # there is no forming candle to draw.
+        _fcol = -1
+        if t.size and bool(vx1 >= now - float(config.INTERP_STALE_SECS)):
+            _fsig = (round(float(t[-1]), 3), round(float(cbuy[-1]) + float(csell[-1]), 2),
+                     round(float(move[-1]), 4), bool(done[-1]))
+            if _fsig == getattr(self, "_px_fsig", None):
+                _fcol = int(getattr(self, "_px_fcol", -1))
+            else:
+                self._px_fsig = _fsig
+                _fcol = int(_cols()[-1])
+            self._px_fcol = _fcol
+        self._px_data = (_a, vx1, t, t_end, done, px0, px1, pxh, pxl, _fcol)
         self._px_draw(now)
+
+    def _px_cache_merge(self, a, b, t, t_end, done, px0, px1, pxh, pxl, cols_fn) -> int:
+        """Fold one read's cycles into the pane's CACHE. Returns how many entries it gained or upgraded.
+
+        The cache is what makes a zoom free (user 2026-09-12: "keep them on chart even if I zoom on 1
+        candle"): every cycle this pane has ever read stays in it, keyed by its start time, so zooming into a
+        handful of candles discards none of the rest, and zooming back out re-displays them without
+        re-deriving anything. Bounded by PX_CACHE_MAX, evicting whatever is FURTHEST FROM THE VIEW.
+
+        ⚠⚠ THE LAST ROW OF A READ IS NEVER CACHED. crosses() marks it done=False whether or not the read
+        reached the live edge, and its volume is truncated at that edge -- so it is either the cycle still
+        forming (which the overlay draws, closing on the ENGINE's live price) or one whose numbers are not
+        final. A later read that does not end on it caches it then.
+
+        ⚠ A row can come back UNRATED (-1) when it sits too close to the left edge of a read for the
+        volume/speed ratios to have a baseline. A read that reaches FURTHER BACK can rate it, so a rated
+        colour may UPGRADE an unrated cached entry -- never the reverse, or panning would grey out candles
+        that were coloured. ⚠⚠ That upgrade is retried only when the read actually starts EARLIER than any
+        read already tried (_px_rated_a): the oldest cycles in the STORE can never be rated, and without
+        that guard they would ask for the full ratings pass on every single frame forever.
+
+        `cols_fn` is a callable, not an array, and is invoked at most once -- only if a row needs a colour.
+        See _px_tick: the ratings cost 1.345 ms over 23 cycles and scale with the read.
+
+        ⭐ KEYING BY START TIME survives ZOOM: a narrow read returns the same cycle boundaries a wide one
+        does, because every read starts _lb_secs() (4 h) before the view -- far more prefix than crosses()'s
+        same-side MERGE needs. MEASURED, since it is the one thing that could corrupt this cache: 546 narrow
+        cycles on the gate tape and 1,120 on the real store, five zoom levels each, every start matching the
+        wide read exactly.
+
+        ⚠⚠ It does NOT survive TIME on its own, which a frozen store cannot show and a real boot did: as
+        live tape arrives, the run a cached cycle heads can swallow the next one, so the SAME start comes
+        back with a later end. That is why an extension replaces the entry outright and the overlap guard
+        below then drops the neighbour now inside it -- without that, the cache kept 5 stale short candles
+        while the store had already merged them."""
+        n = int(np.size(t))
+        if n < 2:
+            return 0
+        # ⚠⚠ WHAT MAKES THE WHOLE CACHE STALE. The lookback re-rates every ratio, so every cached colour is
+        # wrong. The FLOW WINDOW is worse than that: it is part of the crosses() key, so it redraws where the
+        # two lines cross -- every cycle BOUNDARY moves, and a cache keyed by start time would then hold the
+        # old window's candles alongside the new window's, overlapping. Both clear it outright.
+        _key = (int(self._lb_n()), round(float(self._flow_win), 3))
+        if _key != getattr(self, "_px_cache_lb", None):
+            self._px_cache = {}
+            self._px_cache_lb = _key
+            self._px_arr = None
+            self._px_rated_a = None
+            self._px_pic_win = None
+        cache = self._px_cache
+        # PASS 1 -- which rows does the cache actually want? No colours are computed to answer this.
+        _tried = getattr(self, "_px_rated_a", None)
+        _deeper = _tried is None or float(a) < float(_tried) - 1.0
+        _want = []
+        for k in range(n - 1):                    # never the last row -- see the docstring
+            if not bool(done[k]):
+                continue                          # provisional: its end and its volume can still move
+            key = round(float(t[k]), 3)
+            old = cache.get(key)
+            if old is not None and not (float(t_end[k]) > float(old[1]) + 0.5
+                                        or (old[6] < 0 and _deeper)):
+                continue                          # unchanged, rated, and no deeper history to re-rate with
+            if not (np.isfinite(px0[k]) and np.isfinite(px1[k])
+                    and np.isfinite(pxh[k]) and np.isfinite(pxl[k])):
+                continue
+            _want.append((k, key, old))
+        self._px_rated_a = float(a) if _tried is None else min(float(a), float(_tried))
+        if not _want:
+            return 0
+        # PASS 2 -- now, and only now, the ratings are worth their 1.3 ms
+        cols = cols_fn()
+        gained = 0
+        for k, key, old in _want:
+            ci = int(cols[k])
+            if old is not None and not (float(t_end[k]) > float(old[1]) + 0.5):
+                if ci < 0:
+                    continue                      # never regress a cached entry to unrated
+                cache[key] = old[:6] + (ci,)      # a colour UPGRADE only: the cycle itself is unchanged
+            else:
+                # ⚠⚠ a cycle ALREADY CACHED can legitimately grow: crosses() MERGES consecutive same-side
+                # cycles, so as live tape arrives the run this cycle heads can swallow the next one -- same
+                # start, later end, new close and new extremes. FOUND on a real boot, where the cache quietly
+                # kept 5 stale short candles while the store had merged them (a frozen store cannot show
+                # this). The whole entry is replaced; its old neighbour, now inside it, overlaps and is
+                # dropped by the guard below. A rating it already had survives a read that cannot rate it.
+                cache[key] = (float(t[k]), float(t_end[k]), float(px0[k]), float(pxh[k]), float(pxl[k]),
+                              float(px1[k]), ci if (ci >= 0 or old is None) else int(old[6]))
+            gained += 1
+        if not gained:
+            return 0
+        _cap = int(config.PX_CACHE_MAX)
+        if len(cache) > _cap:
+            # ⚠ EVICT BY DISTANCE FROM THE READ, not by age. "Keep the newest" is exactly backwards for a
+            # LEFT pan: the cycles the user has just panned to are the oldest in the cache, so a full cache
+            # would throw away the very candles being looked at and regenerate them on the next frame.
+            _kk = np.array(sorted(cache), dtype=np.float64)
+            _d = np.maximum(np.maximum(float(a) - _kk, _kk - float(b)), 0.0)
+            for _k in _kk[np.argsort(_d, kind="stable")[_cap:]]:
+                cache.pop(round(float(_k), 3), None)
+        _ks = sorted(cache)
+        _m = np.array([cache[_k] for _k in _ks], dtype=np.float64)
+        # THE OVERLAP GUARD: two cached candles can never cover the same seconds. Its real job is the
+        # live MERGE above -- when a cycle grows to swallow its neighbour, that neighbour is still cached and
+        # now sits inside it, and this is what removes it. It also backstops the zoom case the docstring
+        # measured at zero. Vectorised, and only on a gain.
+        if _m.shape[0] > 1:
+            _bad = _m[:, 0] < np.concatenate(([-np.inf], np.maximum.accumulate(_m[:-1, 1]))) - 0.5
+            if _bad.any():
+                for _k in np.asarray(_ks, dtype=np.float64)[_bad]:
+                    cache.pop(round(float(_k), 3), None)
+                _m = _m[~_bad]
+                _ks = [_k for _k, _b in zip(_ks, _bad) if not _b]
+        self._px_arr = (_m[:, 0], _m[:, 1], _m[:, 2], _m[:, 3], _m[:, 4], _m[:, 5],
+                        _m[:, 6].astype(np.int64))
+        return gained
 
     def _px_draw(self, now: float) -> None:
         """ONE CANDLE PER CYCLE (user 2026-09-12): open = the price the cycle started at, close = where it
-        ended, wicks = the highest and lowest it reached in between.
+        ended, wicks = the highest and lowest it reached in between. A cycle already IS a candle, so nothing
+        here is derived -- all four prices come off the SAME crosses() memo entry the other cycle panes built.
+        Bodies are as wide as their own cycle, which is why BucketCandleItem takes per-candle widths.
 
-        A cycle already IS a candle, so nothing here is derived -- all four prices come off the SAME crosses()
-        memo entry the Volume / Book / Speed panes built. Bodies are as wide as their own cycle, which is why
-        BucketCandleItem now takes per-candle widths.
+WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _px_cache_merge) -- and
+        not merely the cycles in the current read. That is what lets the user zoom into a handful of candles
+        and back out with the rest still there, neither recomputed nor regenerated. The picture covers a
+        WINDOW on that cache, padded either side by enough candles to swallow an ordinary pan or zoom, and is
+        rebuilt only when the cache gains a cycle, the view leaves that window, or the Chart Style or the
+        lookback changes. A rebuild is a repaint of data already in hand: no store read, no ratings.
 
-        ⚠ THE FORMING CYCLE closes at the ENGINE's live price, not the store's last binned trade: the store's
-        edge trails by 1-5 s in steady state (189 s measured on a quiet tape). Its high and low are extended
-        to include that price, so a body can never stick out through its own wick, and its t_end is clamped to
-        now -- panning right past the live edge would otherwise stretch the last body into the future.
+        ⚠ THE FORMING CYCLE is the exception, and is drawn by the OVERLAY off the live read:
+          * it closes at the ENGINE's live price, not the store's last binned trade -- the store's edge trails
+            1-5 s in steady state, 189 s measured on a quiet tape;
+          * its high and low are stretched to include that price, so a body cannot stick out of its own wick;
+          * its t_end is clamped to now, or panning right past the live edge stretches it into the future.
+        Keeping it OUT of the picture is what stops a 20 Hz price tick from rebuilding every body.
 
-        Cost: the signature deliberately does NOT carry the store's rev, which changes 20 times a second. It
-        carries the cycle count, the newest cycle's start, the view and the live price -- so the only things
-        that can force a repaint are a cycle appearing, the view moving, or the price actually changing."""
+        A pan or a zoom therefore costs: one signature compare, a numpy mask for the y fit, and the Big Player
+        pass's own signature compare. No store read, no rebuild, and nothing on screen is lost."""
         vb = self._px_vb
+        if vb is None or self._px_candles is None:
+            return
+        arr = getattr(self, "_px_arr", None)
         d = getattr(self, "_px_data", None)
-        if vb is None or d is None:
-            return
-        vx0, vx1, t, t_end, done, px0, px1, pxh, pxl, cols = d
-        if t.size == 0:
-            if self._px_sig != ("empty",):
-                self._px_sig = ("empty",)
-                self._px_candles.setVisible(False)
-                self._px_lc_hide(); self._px_pill_hide()
-                self._px_curve.setData(np.zeros(0), np.zeros(0))
-            return
         _bw = bool(self._simple_bw())
         _lp = self._engine_live_px()
-        (dx0, dx1), _ = self.vb.viewRange()      # the DRAWN window; the read reaches further back than this
-        # ⚠ the VIEW is deliberately NOT in this signature. The picture covers the whole anchored window, so
-        # a pan or a zoom needs no rebuild -- Qt clips it. What belongs here: the cycle set, the Chart Style,
-        # and the live price (the forming candle closes on it).
-        # ⚠ the live price is NOT in the picture's signature -- the forming candle is drawn by the overlay,
-        # so a price tick moves that and nothing else. _px_live is what carries it, below.
-        sig = (int(t.size), round(float(t[-1]), 2), round(float(t[0]), 2),
-               _bw, bool(done[-1]), int(self._lb_n()))
+        (dx0, dx1), _ = self.vb.viewRange()      # the DRAWN window; the cache reaches well beyond it
+        if arr is None or np.size(arr[0]) < 2:
+            # a cold pane, or a view whose reads have not yet produced two FINISHED cycles: the price track
+            # says something rather than one lonely body
+            _esig = ("empty", round(dx0, 2), round(dx1, 2))
+            if _esig != self._px_sig:
+                self._px_sig = _esig
+                self._px_candles.setVisible(False)
+                self._px_lc_hide(); self._px_pill_hide()
+                _w = max(200, int(self._px_plot.width()) or 1000)
+                _t, _p = self._flow.price_series(dx0, dx1, int(min(config.PX_MAX_POINTS, 2 * _w)))
+                self._px_curve.setData(_t, _p)
+            return
+        ct, cte, co, ch, cl, cc, ccol = arr
+        # ⚠ the VIEW is deliberately NOT in this signature, and neither is the live price: the picture covers
+        # a WINDOW on the cache that is padded well past the view, so an ordinary pan or zoom falls inside
+        # what is already drawn; and the forming candle is the overlay, so a price tick moves that alone.
+        # What belongs here: the cache's own size and ends, the Chart Style, and the lookback (which re-rates
+        # every colour, and is what clears the cache).
+        sig = (int(np.size(ct)), round(float(ct[0]), 2), round(float(ct[-1]), 2), _bw, int(self._lb_n()))
         _live_sig = round(float(_lp), 6) if _lp is not None else None
         _vr = (round(dx0, 2), round(dx1, 2))
         _moved = _vr != getattr(self, "_px_vrange", None)
         self._px_vrange = _vr
-        if sig == self._px_sig and not _moved and _live_sig == getattr(self, "_px_livesig", None):
+        # WHICH cached candles are on screen -- two searchsorteds on sorted arrays, microseconds
+        _i0 = int(np.searchsorted(cte, dx0, side="left"))
+        _i1 = int(np.searchsorted(ct, dx1, side="right"))
+        _win = getattr(self, "_px_pic_win", None)
+        _escaped = _win is None or _i0 < _win[0] or _i1 > _win[1]
+        if (sig == self._px_sig and not _escaped
+                and _live_sig == getattr(self, "_px_livesig", None) and not _moved):
             return                               # the cheapest possible frame
-        _same_data = (sig == self._px_sig)        # a pan, a zoom or a price tick: rebuild nothing
+        _rebuild = (sig != self._px_sig) or _escaped
         self._px_livesig = _live_sig
         self._px_sig = sig
-        te = np.array(t_end, dtype=np.float64, copy=True)
-        o = np.array(px0, dtype=np.float64, copy=True)
-        c = np.array(px1, dtype=np.float64, copy=True)
-        h = np.array(pxh, dtype=np.float64, copy=True)
-        l = np.array(pxl, dtype=np.float64, copy=True)
+        if _rebuild:
+            self._px_curve.setData(np.zeros(0), np.zeros(0))
+            # ⚠⚠ THE PICTURE IS A WINDOW ON THE CACHE, PADDED IN CANDLES. Building it over the whole cache
+            # instead was measured with a real grab(): 2400 cached candles cost 12-21 ms to PAINT on every
+            # single frame and 46 ms to build, which is a 20 Hz frame budget spent on one pane. The padding
+            # is counted in candles rather than seconds because that is the unit the cost is in: the view
+            # sits in the middle of at most PX_DRAW_MAX bodies, so zooming and panning stay inside an
+            # already-drawn set (rebuilding nothing, losing nothing) while one rebuild stays at ~6 ms.
+            # ⚠ when the VIEW alone holds more than PX_DRAW_MAX cycles the pad goes to zero and every
+            # visible candle is still drawn -- the cap bounds the MARGIN, it never hides data.
+            _pad = max(0, (int(config.PX_DRAW_MAX) - (_i1 - _i0)) // 2)
+            _w0, _w1 = max(0, _i0 - _pad), min(int(np.size(ct)), _i1 + _pad)
+            self._px_pic_win = (_w0, _w1)
+            _s = slice(_w0, _w1)
+            _t0, _te0, _o0, _h0, _l0, _c0 = ct[_s], cte[_s], co[_s], ch[_s], cl[_s], cc[_s]
+            dur = np.maximum(_te0 - _t0, 1e-9)
+            x = _t0 + dur * 0.5                         # the cycle's MIDPOINT, so the body sits on it
+            wid = dur * float(config.PX_CANDLE_FILL)    # no pixel floor -- see config, it made them overlap
+            # EACH CANDLE CARRIES ITS CYCLE'S STATE, from the same palette and the same classifier the
+            # Interpretation feed uses -- so the two panes cannot disagree about a colour.
+            _br, _pn, _hp, _lpn = self._px_brushes(ccol[_s], _o0, _c0, _bw)
+            self._px_candles.set_neutral("#000000" if _bw else "#888888")
+            # ⚠ no x0 / x1 either: within this window culling costs what rebuilding does (measured 0.299 ms
+            # vs 0.298 ms over 400 candles), so Qt clips the window and nothing re-derives on a pan.
+            self._px_candles.update_data(x.tolist(), _o0.tolist(), _h0.tolist(), _l0.tolist(), _c0.tolist(),
+                                         _br, _pn, widths=wid.tolist(), hi_pens=_hp, lo_pens=_lpn)
+            self._px_candles.setVisible(True)
+        # ---- the FORMING cycle, off the live read, on the overlay ----------------------------------------
         # ⚠ crosses() marks the last row of ANY read unfinished, whether or not that read reached the live
         # edge. Only when the view actually holds the live edge is that cycle genuinely forming.
-        _live = bool(dx1 >= now - float(config.INTERP_STALE_SECS))
-        if not bool(done[-1]):
-            te[-1] = max(float(t[-1]), min(float(now), float(te[-1])))
-            if _live and _lp is not None and np.isfinite(o[-1]):
-                c[-1] = float(_lp)
-                h[-1] = max(float(h[-1]), float(_lp)) if np.isfinite(h[-1]) else float(_lp)
-                l[-1] = min(float(l[-1]), float(_lp)) if np.isfinite(l[-1]) else float(_lp)
-        # every FINITE cycle in the anchored window is drawn, not just the visible subset -- that is what
-        # makes a pan cost nothing. The visible subset is still needed for the y fit, below.
-        keep = np.isfinite(o) & np.isfinite(c) & np.isfinite(h) & np.isfinite(l)
-        n = int(keep.sum())
-        if n < 2:
-            # fewer than two cycles on screen is not a chart; fall back to the price track so the pane still
-            # says something rather than showing one lonely body
-            self._px_candles.setVisible(False)
+        _shown = False
+        if (d is not None and np.size(d[2]) and self._px_lc_body is not None
+                and bool(dx1 >= now - float(config.INTERP_STALE_SECS))):
+            # ⚠ read-scoped names: _o0.._l0 above are the sliced CACHE arrays, and rebinding them here to
+            # the read's would be a trap for anything added below (the _lp / _lpn lesson, one block up).
+            _rt, _rte, _rdn = d[2], d[3], d[4]
+            _rpo, _rpc, _rph, _rpl = d[5], d[6], d[7], d[8]
+            if not bool(_rdn[-1]) and np.isfinite(_rpo[-1]):
+                _fo = float(_rpo[-1])
+                _ft0 = float(_rt[-1])
+                _fte = max(_ft0, min(float(now), float(_rte[-1])))
+                _fc = float(_lp) if _lp is not None else (float(_rpc[-1]) if np.isfinite(_rpc[-1]) else _fo)
+                _fh = max(float(_rph[-1]) if np.isfinite(_rph[-1]) else _fo, _fc, _fo)
+                _fl = min(float(_rpl[-1]) if np.isfinite(_rpl[-1]) else _fo, _fc, _fo)
+                _fdur = max(_fte - _ft0, 1e-9)
+                _fbr, _fpn, _fhp, _flp = self._px_brushes(np.array([int(d[9])], dtype=np.int64),
+                                                          np.array([_fo]), np.array([_fc]), _bw)
+                self._px_lc_frame((_ft0, _ft0 + _fdur * 0.5), _fo, _fh, _fl, _fc,
+                                  _fdur * float(config.PX_CANDLE_FILL),
+                                  _fbr[0], _fpn[0], _fhp[0], _flp[0])
+                self._px_pill(_fc, _fo, _ft0, _fte)
+                self._px_lc_apply()               # re-pin the rule and the pill to the ANIMATED close
+                _shown = True
+        if not _shown:
             self._px_lc_hide(); self._px_pill_hide()
-            _w = max(200, int(self._px_plot.width()) or 1000)
-            _t, _p = self._flow.price_series(dx0, dx1, int(min(config.PX_MAX_POINTS, 2 * _w)))
-            self._px_curve.setData(_t, _p)
-            if _p.size == 0:
-                return
-            lo_y, hi_y = float(_p.min()), float(_p.max())
+        # ---- y, fitted to what is ON SCREEN --------------------------------------------------------------
+        # the one thing a pan legitimately changes, and a numpy mask over the cache is microseconds. ⚠ with
+        # NOTHING visible the y range is LEFT ALONE rather than fitted to the whole cache: the cache can span
+        # days, and fitting to it would throw the axis somewhere the user never asked to look.
+        _vis = (cte >= dx0) & (ct <= dx1)
+        if _vis.any():
+            lo_y, hi_y = float(np.min(cl[_vis])), float(np.max(ch[_vis]))
         else:
-            self._px_curve.setData(np.zeros(0), np.zeros(0))
-            self._px_candles.setVisible(True)
-            _t, _te = t[keep], te[keep]
-            _o, _h, _l, _c = o[keep], h[keep], l[keep], c[keep]
-            dur = np.maximum(_te - _t, 1e-9)
-            x = _t + dur * 0.5                              # the cycle's MIDPOINT, so the body sits on it
-            wid = dur * float(config.PX_CANDLE_FILL)        # no pixel floor -- see config, it made them overlap
-            # EACH CANDLE CARRIES ITS CYCLE'S STATE (user 2026-09-12), from the same palette and the same
-            # classifier the Interpretation feed uses -- so the two panes cannot disagree about a colour.
-            _ci = cols[keep]
-            # ⚠ _lpn, not _lp: _lp is the LIVE PRICE a few lines above and rebinding it here to a pen list
-            # is a trap for anything added below (it happens to be read only before this today).
-            _br, _pn, _hp, _lpn = self._px_brushes(_ci, _o, _c, _bw)
-            self._px_candles.set_neutral("#000000" if _bw else "#888888")
-            # ⚠ while the overlay animates the forming cycle, the PICTURE must omit it -- otherwise the static
-            # body shows through underneath every slide. Same skip_last contract as the bucket canvas.
-            # ⚠⚠ the forming candle is ALWAYS the overlay, regardless of the Smooth Live Candle toggle --
-            # that toggle now only decides whether its close EASES or JUMPS (see _px_lc_frame). With the
-            # forming candle in the PICTURE instead, every live price tick changed the picture's data and
-            # rebuilt all ~400 candles: 0.3 ms x 20 Hz of pure waste, and exactly the "reprinting" the user
-            # was seeing. Keeping it out means the picture only changes when a CYCLE does.
-            _anim = bool(keep[-1] and not bool(done[-1]) and _live and self._px_lc_body is not None)
-            _n_pic = n - 1 if _anim else n
-            if _n_pic >= 1:
-                self._px_candles.setVisible(True)
-                # ⚠ NO x0 / x1, and skipped on a pure pan. Culling costs the SAME as rebuilding (measured
-                # 0.299 ms vs 0.298 ms over 400 candles), so the picture is built once over the whole window
-                # and Qt clips it -- which is what makes a pan or a zoom free.
-                if not _same_data:
-                    self._px_candles.update_data(x.tolist()[:_n_pic], _o.tolist()[:_n_pic],
-                                                 _h.tolist()[:_n_pic], _l.tolist()[:_n_pic],
-                                                 _c.tolist()[:_n_pic], _br[:_n_pic], _pn[:_n_pic],
-                                                 widths=wid.tolist()[:_n_pic],
-                                                 hi_pens=_hp[:_n_pic], lo_pens=_lpn[:_n_pic])
-            else:
-                self._px_candles.setVisible(False)
-            if _anim:
-                self._px_lc_frame((float(_t[-1]), float(x[-1])), _o[-1], _h[-1], _l[-1], _c[-1], wid[-1],
-                                  _br[-1], _pn[-1], _hp[-1], _lpn[-1])
-            else:
-                self._px_lc_hide()
-            # the live-price pill rides the forming cycle; there is nothing live to show without one
-            if keep[-1] and not bool(done[-1]) and _live and np.isfinite(_c[-1]):
-                self._px_pill(float(_c[-1]), float(_o[-1]), float(_t[-1]), float(_te[-1]))
-                if _anim:
-                    self._px_lc_apply()            # re-pin the rule and pill to the ANIMATED close
-            else:
-                self._px_pill_hide()
-            # the y fit is the one thing a pan must re-evaluate: fit to what is ON SCREEN, from the arrays
-            # already derived (a numpy mask over <=400 cycles -- microseconds, no re-read, no rebuild)
-            _vis = (_te >= dx0) & (_t <= dx1)
-            if _vis.any():
-                lo_y, hi_y = float(np.min(_l[_vis])), float(np.max(_h[_vis]))
-            else:
-                lo_y, hi_y = float(np.min(_l)), float(np.max(_h))
-        if not (np.isfinite(lo_y) and np.isfinite(hi_y)):
-            return
+            lo_y, hi_y = np.inf, -np.inf
+        if _shown and self._px_lc is not None:    # the forming candle counts while it is on screen
+            if float(self._px_lc["t0"]) <= dx1 and float(self._px_lc["x"]) >= dx0:
+                lo_y = min(lo_y, float(self._px_lc["l"]))
+                hi_y = max(hi_y, float(self._px_lc["h"]))
         try:
             self._px_bp_draw(dx0, dx1)      # Big Player marks -- self-gated, signature-throttled, fail-safe
         except Exception:
             pass
+        if not (np.isfinite(lo_y) and np.isfinite(hi_y) and hi_y >= lo_y):
+            return
         pad = max(float(config.TICK_SIZE), (hi_y - lo_y) * float(config.PX_PAD_FRAC))
         want = (lo_y - pad, hi_y + pad)
         cur = self._px_yfit
@@ -19082,7 +19227,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if n == int(getattr(self, "_cycle_lb", config.CYCLE_BASE_N)):
             return
         self._cycle_lb = n
-        for _a in ("_cvol", "_lob", "_spd", "_interp"):
+        # ⚠ the PRICE pane is in this list for PROMPTNESS only -- its cache carries its own (lookback, flow
+        # window) key and would clear itself on the next tick regardless. Same at _on_flow_window.
+        for _a in ("_px", "_cvol", "_lob", "_spd", "_interp"):
             setattr(self, _a + "_sig", None)
             setattr(self, _a + "_t", 0.0)
         self._apply_pane_names()
@@ -20637,6 +20784,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_xsig = None      # the crossings ARE the crossings of these lines -- a new window moves them
         self._cyc_sig = None        # ... and the Cycle pane is drawn on those same crossings
         self._cyc_t = 0.0
+        # ⚠⚠ and the cycle CANDLES are cached by cycle START, so a new window -- which moves every boundary
+        # -- would otherwise leave two windows' candles in one cache, overlapping. _px_cache_merge clears on
+        # its (lookback, flow window) key; this just makes it happen on this frame instead of the next.
+        self._px_sig = None
+        self._px_t = 0.0
         self._save_ui_state()
 
     def _scan_flow(self) -> None:
