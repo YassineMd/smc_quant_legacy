@@ -367,6 +367,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
 
     ROW_H = 78
     PAD = 10
+    GAP = 16          # between a label and the value that belongs beside it
     FOOT_H = 26
 
     def __init__(self, parent=None):
@@ -677,12 +678,12 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             p.setFont(self._f_name); p.setPen(tc)
             p.drawText(x + 12, y + 30, name)
             if mv_word:
-                # HOW price moved, right-aligned on the STATE line. It belongs beside the state, and the price
-                # line below is already ~185 px -- appending "drifting down" there needed 445 px on a 380 panel.
+                # HOW price moved, immediately BESIDE the state (user 2026-09-12) -- it qualifies the state, so
+                # stranding it at the right edge made the two read as unrelated. Splitting them saved no width:
+                # name + gap + word is the same total wherever the gap sits.
                 p.setFont(self._f_move)
                 p.setPen(QtGui.QColor(mv_pal[int(mv_sign) + 1]))
-                p.drawText(w - self.PAD - QtGui.QFontMetrics(self._f_move).horizontalAdvance(mv_word),
-                           y + 30, mv_word)
+                p.drawText(x + 12 + fm_name.horizontalAdvance(name) + self.GAP, y + 30, mv_word)
             # the price move sits NEXT TO the state (user 2026-09-11), coloured by the move and not by the
             # state: green up, red down, grey when it ended where it started
             if mv_txt:
@@ -694,12 +695,13 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
                 p.setFont(self._f_det); p.setPen(det)
                 p.drawText(x + 12, y + 60, d1)
             if d2 and d2[0]:
-                # buyers left, sellers RIGHT-aligned -- see _line2 for why they are not one string
+                # the two halves of one reading, side by side (user 2026-09-12): right-aligning the sellers put
+                # a panel's width between two numbers that are meant to be compared with each other
                 p.setFont(self._f_det); p.setPen(dim)
                 p.drawText(x + 12, y + 72, d2[0])
                 if d2[1]:
-                    p.drawText(w - self.PAD - QtGui.QFontMetrics(self._f_det).horizontalAdvance(d2[1]),
-                               y + 72, d2[1])
+                    _fd2 = QtGui.QFontMetrics(self._f_det)
+                    p.drawText(x + 12 + _fd2.horizontalAdvance(d2[0]) + self.GAP, y + 72, d2[1])
             # a hairline under each row: at four lines apiece the eye needs the grouping
             p.setPen(QtGui.QColor("#20262b" if self._dark else "#eeeeee"))
             p.drawLine(x, y + self.ROW_H - 5, w - self.PAD, y + self.ROW_H - 5)
