@@ -18406,6 +18406,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                              self._lb_n(), self._lb_min_n(), include_open=True)
         sell_r = _interp_prev(np.maximum(csell, 0.0) / dur, done,
                               self._lb_n(), self._lb_min_n(), include_open=True)
+        try:
+            pxh, pxl = self._flow.crosses_hl(
+                vx0, vx1, float(self._flow_win),
+                float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
+        except Exception:
+            pxh = pxl = np.full(int(t.size), np.nan)
+        if pxh.size != t.size or pxl.size != t.size:
+            pxh = pxl = np.full(int(t.size), np.nan)
         _dec = max(0, min(8, int(round(-np.log10(max(float(config.TICK_SIZE), 1e-9))))))
         k = np.flatnonzero(vis)
         rows = _interp_build_rows(t[k], t_end_c[k], done[k], mv[k], side[k],
@@ -18413,7 +18422,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                   float(config.SPEED_FLAT_TICKS), float(config.INTERP_WEAK_BELOW),
                                   int(config.INTERP_MAX_ROWS), now=now, live=live,
                                   px_start=px0[k], px_end=px1[k], px_dec=_dec,
-                                  slow_c=float(config.SPEED_SLOW), fast_c=float(config.SPEED_FAST))
+                                  slow_c=float(config.SPEED_SLOW), fast_c=float(config.SPEED_FAST),
+                                  px_hi=pxh[k], px_lo=pxl[k], tick=float(config.TICK_SIZE),
+                                  push_min=float(config.ABSORB_PUSH_MIN_TICKS),
+                                  reject_weak=float(config.ABSORB_REJECT_WEAK))
         p.setRows(rows)
 
     def _stack_axis_sync(self) -> None:

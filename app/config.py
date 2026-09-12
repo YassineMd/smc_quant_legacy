@@ -300,6 +300,24 @@ INTERP_BASE_N = 5
 INTERP_MIN_N = 3
 INTERP_WEAK_BELOW = 0.35        # log2 distance from the crosshair, on the WEAKER of the two axes
 
+# --- ABSORPTION as a REJECTION, not an open-to-close move (user 2026-09-12) -------------------------------
+# Buyers can drive price 20 ticks up and hand every one back; open-to-close then reports ~0 -- the strongest
+# possible absorption, invisible. So a BUYER ABSORBED cycle is measured from its HIGH to its close, and a
+# SELLER ABSORBED one from its LOW.
+#   MEASURED on live tape, absorbed cycles: giveback median 7 ticks, p90 19, max 41, while open-to-close
+#   against the aggressing side had a median of MINUS 1 -- the two differ by a median of 8 ticks.
+#   As a FRACTION of the push it runs p10 0.39, p50 0.84, p90 1.50, terciles 0.68 / 1.00; 38% of absorbed
+#   cycles gave back the WHOLE push (a full reversal past the open).
+#   ⭐ And it is new information: shared variance with the flow ratio 0%, speed 4%, |open-close| 1%,
+#   duration 3%. Unlike the book columns, this is not something the pane already knew.
+#   ⚠ n=40 -- the tick-resolution tape only reaches 6 h while the flow store holds 60 h. The direction is
+#   clear; treat the exact cuts as provisional.
+ABSORB_PUSH_MIN_TICKS = 4.0     # the MEASURED p10 push. At 2.0 a 2-tick push against a 31-tick giveback
+                                # printed "1533% given back", which is arithmetic, not absorption: if they
+                                # only achieved 2 ticks the question barely applies. Drops ~10% of cycles.
+ABSORB_REJECT_WEAK = 0.68       # the measured LOWER tercile: gave back less than this and the absorption
+                                # claim is thin however heavy the flow was
+
 # --- Pane NAMES: one source of truth ---------------------------------------------------------------------
 # The pane paints this top-left AND its hamburger toggle carries the same words (user 2026-09-11), so a
 # toggle can never drift from the pane it opens. They had: the toggle for "CYCLE IMPACT" read "Cycle pane

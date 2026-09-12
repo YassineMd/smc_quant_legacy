@@ -107,6 +107,34 @@ def speed_word(mv, flat, sr, slow_c, fast_c):
     return d
 
 
+def absorb_move_text(side_buy, px_open, px_close, px_hi, px_lo, tick, push_min, dec):
+    """An absorbed row's price line: `hi 102.45 -> 102.37   -8t   (84% given back)`.
+
+    Returns (line, word, fraction). Deliberately PREFIXED with hi/lo: without it the line looks identical to
+    every other row's open-to-close line while meaning something different, which is the kind of thing a
+    reader never notices until it has misled them once."""
+    push, give, frac = rejection(side_buy, px_open, px_close, px_hi, px_lo, tick, push_min)
+    if not np.isfinite(give):
+        return "", "", float("nan")
+    f = "%%.%df" % int(dec)
+    anchor = float(px_hi) if side_buy else float(px_lo)
+    t = int(round(give))
+    txt = ("hi " if side_buy else "lo ") + (f + " -> " + f + "   %+dt") % (
+        anchor, float(px_close), -t if side_buy else t)
+    # the percentage goes in the WORD slot beside the state, not onto this line: joined it needs 517 px
+    # against a 440 px panel. For an absorbed cycle it is also the better thing to have there -- the movement
+    # word is near-redundant, since absorbed REQUIRES a speed at or below baseline.
+    # ⚠ above 100% they handed back the whole push AND price closed past the open -- a REVERSAL. Saying so
+    # beats printing "167% given back", and it is a real category: 38% of absorbed cycles land there.
+    if not np.isfinite(frac):
+        word = ""
+    elif frac >= 1.0:
+        word = "fully reversed"
+    else:
+        word = "%.0f%% given back" % (frac * 100.0)
+    return txt, word, frac
+
+
 def move_text(px0, px1, mv, flat, sr, slow_c, fast_c, dec):
     """(`100.01 -> 97.30   -271t`, `fast down`, sign).
 
@@ -233,6 +261,29 @@ def _quadrant(heavy, big, up, dom_buy):
     return ST_QUIET, ""
 
 
+def rejection(side_buy, px_open, px_close, px_hi, px_lo, tick, push_min):
+    """(push, giveback, fraction) for an absorbed cycle, all in ticks -- the shape of the rejection.
+
+    BUYER ABSORBED: buyers drove price up to the HIGH, so the push is high-open and what they handed back is
+    high-close. SELLER ABSORBED mirrors it off the LOW. Both are >= 0 by construction.
+
+    The FRACTION is the strength: 0.5 means half the push was handed back, 1.0 the whole of it, and above 1.0
+    price closed PAST where the cycle opened -- a reversal, not merely an absorption. It is scale-free, so
+    unlike everything else in this pane it needs no baseline. NaN under a `push_min` push: there is nothing
+    to reject, and dividing by it would manufacture a number."""
+    if not all(np.isfinite(v) for v in (px_open, px_close, px_hi, px_lo)):
+        return float("nan"), float("nan"), float("nan")
+    if side_buy:
+        push = (float(px_hi) - float(px_open)) / tick
+        give = (float(px_hi) - float(px_close)) / tick
+    else:
+        push = (float(px_open) - float(px_lo)) / tick
+        give = (float(px_close) - float(px_lo)) / tick
+    push = max(push, 0.0); give = max(give, 0.0)
+    frac = give / push if push >= float(push_min) else float("nan")
+    return push, give, frac
+
+
 def _line1(vr_k, buy_ratio, sell_ratio, k):
     return "flow %sx   buy %s  sell %s" % (_ratio_text(vr_k), _ratio_text(_at(buy_ratio, k)),
                                            _ratio_text(_at(sell_ratio, k)))
@@ -266,7 +317,8 @@ def _line2(bid_ratio, ask_ratio, k):
 def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                bid_ratio, ask_ratio, buy_ratio, sell_ratio, flat_ticks, weak_below, max_rows,
                now=None, live=True, px_start=None, px_end=None, px_dec=2,
-               slow_c=0.65, fast_c=1.50):
+               slow_c=0.65, fast_c=1.50, px_hi=None, px_lo=None,
+               tick=0.01, push_min=2.0, reject_weak=0.68):
     """One display row per cycle, NEWEST FIRST. Pure function of arrays -- no Qt, so it is directly testable.
 
     Every string is built here, once per rebuild, so paintEvent only ever draws pre-made text."""
@@ -318,6 +370,13 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
             st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
             _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
                                       slow_c, fast_c, px_dec)
+            if st == ST_ABSORB:
+                _at_, _aw, _fr = absorb_move_text(side == "buy", _at(px_start, k), _at(px_end, k),
+                                                  _at(px_hi, k), _at(px_lo, k), tick, push_min, px_dec)
+                if _at_:
+                    _mt = _at_
+                    if _aw:
+                        _mw = _aw
             rows.append((t0, t0 + el, head, state_label(st, side),
                          _line1(vr[k], buy_ratio, sell_ratio, k),
                          _line2(bid_ratio, ask_ratio, k),
@@ -331,11 +390,25 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
         st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
         _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
                                   slow_c, fast_c, px_dec)
+        _strong = bool(conf[k] >= float(weak_below))
+        if st == ST_ABSORB:
+            # an absorbed row is measured off its HIGH (buy) or LOW (sell), not open-to-close
+            _at_, _aw, _fr = absorb_move_text(side == "buy", _at(px_start, k), _at(px_end, k),
+                                              _at(px_hi, k), _at(px_lo, k), tick, push_min, px_dec)
+            if _at_:
+                _mt = _at_
+                if _aw:
+                    _mw = _aw
+                # ⚠ a third gate on the STRENGTH, and only for this state: however heavy the flow was, a
+                # cycle that handed back less than the measured lower tercile of its push was not really
+                # absorbed. NaN (no push worth measuring) does NOT downgrade -- absence is not evidence.
+                if np.isfinite(_fr) and _fr < float(reject_weak):
+                    _strong = False
         rows.append((t0, t1, "%s - %s - %s" % (_clock(t0), _clock(t1), dur_text(t1 - t0)),
                      state_label(st, side),
                      _line1(vr[k], buy_ratio, sell_ratio, k),
                      _line2(bid_ratio, ask_ratio, k),
-                     st, bool(conf[k] >= float(weak_below)), False,
+                     st, _strong, False,
                      colour_of(st, side), _mt, _ms, _mw))
     return rows
 
