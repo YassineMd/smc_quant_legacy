@@ -743,10 +743,14 @@ class BucketCandleItem(pg.GraphicsObject):
 
     def update_data(self, x: list, opens: list, highs: list, lows: list,
                     closes: list, brushes: list, pens: list, width: float = 0.8,
-                    x0: float = None, x1: float = None) -> None:
+                    x0: float = None, x1: float = None, flat_span: float = None) -> None:
         # Cache the series so set_view() can re-cull on pan/zoom without a recompute.
         self._x, self._o, self._h, self._l, self._c = x, opens, highs, lows, closes
         self._brushes, self._pens, self._width = brushes, pens, width
+        # ⚠ the zero-range carry-forward line below spans +-0.5 in X, which is half a BAR on the bucket
+        # canvas but half a SECOND on a clock axis -- a 1 m candle's flat line would be 1 s wide and read as a
+        # gap. Callers on a clock axis pass their interval; every existing caller keeps the historical 0.5.
+        self._flat_half = 0.5 if flat_span is None else float(flat_span) / 2.0
         if not x:
             self.picture = QtGui.QPicture(); self._rect = QtCore.QRectF()
             self.prepareGeometryChange(); self.update(); return
@@ -797,7 +801,8 @@ class BucketCandleItem(pg.GraphicsObject):
                 # Span the FULL interval (not just the body width) so a run of no-trade (flat) candles — common on 1m
                 # clock candles in a quiet stretch — connects into a CONTINUOUS carry-forward line instead of
                 # disconnected ticks that read as "gaps".
-                p.drawLine(QtCore.QPointF(xi - 0.5, ll), QtCore.QPointF(xi + 0.5, ll))
+                _fh = getattr(self, "_flat_half", 0.5)
+                p.drawLine(QtCore.QPointF(xi - _fh, ll), QtCore.QPointF(xi + _fh, ll))
                 continue
             # body bounds first, so the wicks stop AT the body (no line through the fill).
             top, bot = max(oo, cc), min(oo, cc)

@@ -359,7 +359,7 @@ def pane_titles(n=None):
         "lob": "CYCLE BOOK" + d + "bid / ask vs last %d" % n,
         "spd": "CYCLE SPEED" + d + "ticks/s vs last %d" % n,
         "interp": "INTERPRETATION" + d + "one row per cycle",
-        "px": "PRICE" + d + "traded price per second",
+        "px": "PRICE" + d + "candles",
     }
 
 
@@ -369,9 +369,36 @@ PX_MAX_POINTS = 2400            # points after decimation. MIN/MAX per bucket, s
                                 # at a 1200 px pane -- the envelope survives, which plain striding would eat.
 COLOR_PRICE_LINE_DARK = "#e8eaed"   # the price line carries no side, so unlike the teal/red flow lines
 COLOR_PRICE_LINE_BW = "#000000"     # it has to follow the ground: light on the dark canvas, black on Simple BW
+# The candle interval FOLLOWS THE ZOOM: the smallest rung that keeps the visible count at or under
+# PX_CANDLE_TARGET. Starts at 5 s, not 1 s -- the store keeps the last price per SECOND, so a 1 s candle
+# would be a degenerate O=H=L=C line every time.
+PX_CANDLE_IVS = (5, 10, 15, 30, 60, 120, 300, 900, 1800, 3600, 14400)
+PX_CANDLE_TARGET = 120          # candles on screen; the rung chosen is the first that fits
+PX_CANDLE_FILL = 0.72           # body width as a fraction of the interval (the rest is the gap between bodies)
+PX_RECALC_SECS = 0.25   # live-tape rebuild cap. A candle QPicture over ~80 bodies costs ~0.8 ms against the
+                        # price line's 0.03 ms, and at the 20 Hz tick rate that would be 1.5% of a core to
+                        # redraw bodies that have not moved. A VIEW change (zoom, pan) bypasses this entirely,
+                        # so interaction stays instant; only the live edge is paced.
 PX_PAD_FRAC = 0.06              # y padding above and below the visible high/low
 PX_REFIT_FRAC = 0.18            # dead-band: re-fit y only when the visible high/low moves by this much of the
                                 # current range, so the axis does not wobble on every 20 Hz tick
+
+def iv_label(secs):
+    """'5s' / '30s' / '1m' / '15m' / '1h' / '4h' -- the interval as a trader writes it."""
+    s = int(round(float(secs)))
+    if s < 60:
+        return "%ds" % s
+    if s < 3600:
+        return "%dm" % (s // 60)
+    return "%dh" % (s // 3600)
+
+
+def px_title(secs=None):
+    """The PRICE pane's own title, naming the interval it is actually drawing."""
+    if secs is None:
+        return pane_titles()["px"]
+    return "PRICE" + "  ·  " + "%s candles" % iv_label(secs)
+
 
 PANE_TITLE_LIQ = "LIMIT ORDERS" + "  ·  " + "resting bid / ask $"
 PANE_TITLE_CYC = "CYCLE IMPACT" + "  ·  " + "ticks per %s" % FLOW_CROSS_BADGE_UNIT_TXT
