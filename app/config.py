@@ -287,7 +287,15 @@ INTERP_WIDTH = 440              # measured: the price-move line needs 352 px at 
                                 # 440 not 404: 'Limit Buyers +30%' / 'Limit Sellers -12%' needs 423.
                                 # Dropping the second 'Limit' would fit 404 -- the user's wording won.
 INTERP_MAX_ROWS = 240           # the feed is capped, not the history: older cycles still feed every baseline
-INTERP_SPAN_SECS = 6 * 3600.0   # The feed is anchored at the LIVE EDGE and spans this, INDEPENDENT of the
+# ONE live-edge window, shared by the Interpretation feed AND the cycle candles (user 2026-09-12: "by
+# default I should see the last 8h ... no need to recompute as long as I did not update the lookback").
+# Sharing it means ONE crosses() memo entry serves both instead of two cold reads, and the two panes cover
+# exactly the same period -- so clicking any candle always finds its OWN row in the feed.
+#   MEASURED cold read by window: 30 min 0.71 ms | 6 h 2.11 ms | 24 h 9.59 ms. 24 h also comes back with
+#   exactly FLOW_CROSS_MAX (400) cycles, i.e. already truncated, so 8 h is both cheaper and more complete.
+CYCLE_LIVE_SPAN_SECS = 8 * 3600.0
+INTERP_SPAN_SECS = CYCLE_LIVE_SPAN_SECS   # kept as the feed's own name; the value is shared on purpose
+_INTERP_SPAN_SECS_DOC = 0        # The feed is anchored at the LIVE EDGE and spans this, INDEPENDENT of the
                                 # chart's view: zooming or panning must not empty it (user 2026-09-11). That
                                 # costs a second crosses() entry -- measured 0.88 ms cold at 4 h, 1.19 at 6 h,
                                 # so 2 reads per 0.5 s tick instead of 1: +0.24% of one core.

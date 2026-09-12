@@ -1803,7 +1803,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._px_pane_on = bool(config.PX_PANE_ON)
         self._px_sig = None            # an idle frame is this compare and nothing else
         self._px_t = 0.0
-        self._px_data = None           # (vx0, vx1, t, t_end, done, px0, px1, pxh, pxl) from ONE crosses() read
+        self._px_data = None           # (a, edge, t, t_end, done, px0, px1, pxh, pxl, cols) -- ONE read
+        self._px_dsig = None           # the CYCLE SET + lookback: the arrays are re-derived only on a change
+        self._px_vrange = None         # the last drawn view, so a pan re-fits y and rebuilds nothing
+        self._px_livesig = None        # the live price, kept OUT of the picture's signature
         self._px_sized = False
         self._px_yfit = None           # (lo, hi) currently set, so the axis is not re-set every tick
         self._px_yauto = True          # y auto-fit armed? a manual Y zoom disarms it, a double-click re-arms
@@ -17401,6 +17404,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._px_lc = None; self._px_lc_body = None; self._px_lc_wick = None
             self._px_lc_wick2 = None
             self._px_sig = None; self._px_t = 0.0; self._px_data = None
+            self._px_dsig = None; self._px_vrange = None; self._px_livesig = None
             self._px_sized = False; self._px_yfit = None
             self._px_vline = None; self._px_hline = None
             self._px_tag = None; self._px_time_tag = None; self._px_proxy = None; self._px_title = None
@@ -18127,6 +18131,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # SHIFT+wheel = X only, ALT+wheel = Y only, exactly as on the bucket candle chart (see _vb_wheel).
         # X is linked to the main view, so an X zoom here moves the whole stack -- which is the point of one
         # shared clock.
+        # ⚠⚠ the pane owns its Y (the auto-fit below) and its X is LINKED, so pyqtgraph's own auto-range has
+        # nothing left to decide -- and while it was still enabled, the bounds change from a wider update_data
+        # made the ViewBox re-range Y on its own. That arrives as "a Y change the pane did not make", which
+        # DISARMS the auto-fit: the fit would silently stop following price after a data change.
+        vb.disableAutoRange()
         self._px_orig_wheel = vb.wheelEvent
         vb.wheelEvent = self._px_wheel
         # ... and watch for a Y range the PANE did not set, so a manual zoom is not undone by the auto-fit
@@ -18421,9 +18430,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         lc.update(x=float(x[1]), w=float(wid), o=float(o), h=float(h), l=float(l), brush=brush, pen=pen,
                   hi_pen=hi_pen, lo_pen=lo_pen)
         if abs(float(c) - lc["c_to"]) > 1e-12:
-            lc["c_from"] = lc["cur"]; lc["c_to"] = float(c); lc["ts"] = time.perf_counter()
-            if self._px_lc_timer is not None and not self._px_lc_timer.isActive():
-                self._px_lc_timer.start()
+            if not self._live_anim_on():
+                # Smooth Live Candle OFF: the overlay still draws the forming candle (the picture never
+                # holds it), it simply JUMPS to each new close instead of easing over 160 ms.
+                lc["c_from"] = lc["c_to"] = lc["cur"] = float(c)
+                if self._px_lc_timer is not None and self._px_lc_timer.isActive():
+                    self._px_lc_timer.stop()
+            else:
+                lc["c_from"] = lc["cur"]; lc["c_to"] = float(c); lc["ts"] = time.perf_counter()
+                if self._px_lc_timer is not None and not self._px_lc_timer.isActive():
+                    self._px_lc_timer.start()
         self._px_lc_apply()
 
     def _px_lc_tick(self) -> None:
@@ -18692,8 +18708,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if now - getattr(self, "_px_t", 0.0) < float(config.CYCLE_RECALC_SECS):
             return
         self._px_t = now
-        (vx0, vx1), _ = self.vb.viewRange()
-        _args = (vx0 - self._lb_secs(), vx1, float(self._flow_win),
+        # ⚠⚠ ANCHORED AT THE STORE'S LIVE EDGE over a FIXED span, never at the view. Reading the view meant a
+        # tight zoom held fewer than two cycles and the pane fell back to the price LINE -- measured, a
+        # 5-minute view holds 2 cycles and anything tighter fewer, which is the user's "candles only show
+        # when zoomed out" -- and every pan re-read the store. Same window and the SAME arguments as the
+        # Interpretation feed, so the two share ONE memo entry instead of adding a third cold read.
+        sp = self._flow.span()
+        if not sp:
+            return
+        _edge = float(sp[1])
+        _a = max(float(sp[0]), _edge - float(config.CYCLE_LIVE_SPAN_SECS))
+        _args = (_a, _edge, float(self._flow_win),
                  float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
                  int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
         try:
@@ -18704,8 +18729,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         if not (t.size == px0.size == pxh.size):
             return
+        # the CYCLE SET, not the view: the arrays are re-derived only when a cycle appears or the lookback
+        # moves. A pan, a zoom or a new live price leaves all of this untouched.
+        _dsig = (int(t.size), round(float(t[0]), 3) if t.size else 0.0,
+                 round(float(t[-1]), 3) if t.size else 0.0, int(self._lb_n()))
+        if _dsig == getattr(self, "_px_dsig", None) and self._px_data is not None:
+            self._px_draw(now)                    # the forming candle and the pill still follow the price
+            return
+        self._px_dsig = _dsig
         _cols = self._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell)
-        self._px_data = (vx0, vx1, t, t_end, done, px0, px1, pxh, pxl, _cols)
+        self._px_data = (_a, _edge, t, t_end, done, px0, px1, pxh, pxl, _cols)
+        self._px_sig = None                       # a new cycle set -> rebuild the picture once
         self._px_draw(now)
 
     def _px_draw(self, now: float) -> None:
@@ -18739,10 +18773,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _bw = bool(self._simple_bw())
         _lp = self._engine_live_px()
         (dx0, dx1), _ = self.vb.viewRange()      # the DRAWN window; the read reaches further back than this
-        sig = (int(t.size), round(float(t[-1]), 2), round(float(t[0]), 2), round(dx0, 2), round(dx1, 2),
-               round(float(_lp), 6) if _lp is not None else None, _bw, bool(done[-1]), int(self._lb_n()))
-        if sig == self._px_sig:
+        # ⚠ the VIEW is deliberately NOT in this signature. The picture covers the whole anchored window, so
+        # a pan or a zoom needs no rebuild -- Qt clips it. What belongs here: the cycle set, the Chart Style,
+        # and the live price (the forming candle closes on it).
+        # ⚠ the live price is NOT in the picture's signature -- the forming candle is drawn by the overlay,
+        # so a price tick moves that and nothing else. _px_live is what carries it, below.
+        sig = (int(t.size), round(float(t[-1]), 2), round(float(t[0]), 2),
+               _bw, bool(done[-1]), int(self._lb_n()))
+        _live_sig = round(float(_lp), 6) if _lp is not None else None
+        _vr = (round(dx0, 2), round(dx1, 2))
+        _moved = _vr != getattr(self, "_px_vrange", None)
+        self._px_vrange = _vr
+        if sig == self._px_sig and not _moved and _live_sig == getattr(self, "_px_livesig", None):
             return                               # the cheapest possible frame
+        _same_data = (sig == self._px_sig)        # a pan, a zoom or a price tick: rebuild nothing
+        self._px_livesig = _live_sig
         self._px_sig = sig
         te = np.array(t_end, dtype=np.float64, copy=True)
         o = np.array(px0, dtype=np.float64, copy=True)
@@ -18758,7 +18803,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 c[-1] = float(_lp)
                 h[-1] = max(float(h[-1]), float(_lp)) if np.isfinite(h[-1]) else float(_lp)
                 l[-1] = min(float(l[-1]), float(_lp)) if np.isfinite(l[-1]) else float(_lp)
-        keep = (te >= dx0) & (t <= dx1) & np.isfinite(o) & np.isfinite(c) & np.isfinite(h) & np.isfinite(l)
+        # every FINITE cycle in the anchored window is drawn, not just the visible subset -- that is what
+        # makes a pan cost nothing. The visible subset is still needed for the y fit, below.
+        keep = np.isfinite(o) & np.isfinite(c) & np.isfinite(h) & np.isfinite(l)
         n = int(keep.sum())
         if n < 2:
             # fewer than two cycles on screen is not a chart; fall back to the price track so the pane still
@@ -18782,25 +18829,35 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # EACH CANDLE CARRIES ITS CYCLE'S STATE (user 2026-09-12), from the same palette and the same
             # classifier the Interpretation feed uses -- so the two panes cannot disagree about a colour.
             _ci = cols[keep]
-            _br, _pn, _hp, _lp = self._px_brushes(_ci, _o, _c, _bw)
+            # ⚠ _lpn, not _lp: _lp is the LIVE PRICE a few lines above and rebinding it here to a pen list
+            # is a trap for anything added below (it happens to be read only before this today).
+            _br, _pn, _hp, _lpn = self._px_brushes(_ci, _o, _c, _bw)
             self._px_candles.set_neutral("#000000" if _bw else "#888888")
             # ⚠ while the overlay animates the forming cycle, the PICTURE must omit it -- otherwise the static
             # body shows through underneath every slide. Same skip_last contract as the bucket canvas.
-            _anim = bool(keep[-1] and not bool(done[-1]) and _live and self._live_anim_on()
-                         and self._px_lc_body is not None)
+            # ⚠⚠ the forming candle is ALWAYS the overlay, regardless of the Smooth Live Candle toggle --
+            # that toggle now only decides whether its close EASES or JUMPS (see _px_lc_frame). With the
+            # forming candle in the PICTURE instead, every live price tick changed the picture's data and
+            # rebuilt all ~400 candles: 0.3 ms x 20 Hz of pure waste, and exactly the "reprinting" the user
+            # was seeing. Keeping it out means the picture only changes when a CYCLE does.
+            _anim = bool(keep[-1] and not bool(done[-1]) and _live and self._px_lc_body is not None)
             _n_pic = n - 1 if _anim else n
             if _n_pic >= 1:
                 self._px_candles.setVisible(True)
-                self._px_candles.update_data(x.tolist()[:_n_pic], _o.tolist()[:_n_pic], _h.tolist()[:_n_pic],
-                                             _l.tolist()[:_n_pic], _c.tolist()[:_n_pic],
-                                             _br[:_n_pic], _pn[:_n_pic], x0=dx0, x1=dx1,
-                                             widths=wid.tolist()[:_n_pic],
-                                             hi_pens=_hp[:_n_pic], lo_pens=_lp[:_n_pic])
+                # ⚠ NO x0 / x1, and skipped on a pure pan. Culling costs the SAME as rebuilding (measured
+                # 0.299 ms vs 0.298 ms over 400 candles), so the picture is built once over the whole window
+                # and Qt clips it -- which is what makes a pan or a zoom free.
+                if not _same_data:
+                    self._px_candles.update_data(x.tolist()[:_n_pic], _o.tolist()[:_n_pic],
+                                                 _h.tolist()[:_n_pic], _l.tolist()[:_n_pic],
+                                                 _c.tolist()[:_n_pic], _br[:_n_pic], _pn[:_n_pic],
+                                                 widths=wid.tolist()[:_n_pic],
+                                                 hi_pens=_hp[:_n_pic], lo_pens=_lpn[:_n_pic])
             else:
                 self._px_candles.setVisible(False)
             if _anim:
                 self._px_lc_frame((float(_t[-1]), float(x[-1])), _o[-1], _h[-1], _l[-1], _c[-1], wid[-1],
-                                  _br[-1], _pn[-1], _hp[-1], _lp[-1])
+                                  _br[-1], _pn[-1], _hp[-1], _lpn[-1])
             else:
                 self._px_lc_hide()
             # the live-price pill rides the forming cycle; there is nothing live to show without one
@@ -18810,7 +18867,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._px_lc_apply()            # re-pin the rule and pill to the ANIMATED close
             else:
                 self._px_pill_hide()
-            lo_y, hi_y = float(np.min(_l)), float(np.max(_h))
+            # the y fit is the one thing a pan must re-evaluate: fit to what is ON SCREEN, from the arrays
+            # already derived (a numpy mask over <=400 cycles -- microseconds, no re-read, no rebuild)
+            _vis = (_te >= dx0) & (_t <= dx1)
+            if _vis.any():
+                lo_y, hi_y = float(np.min(_l[_vis])), float(np.max(_h[_vis]))
+            else:
+                lo_y, hi_y = float(np.min(_l)), float(np.max(_h))
         if not (np.isfinite(lo_y) and np.isfinite(hi_y)):
             return
         try:
