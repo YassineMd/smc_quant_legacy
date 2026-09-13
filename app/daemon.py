@@ -224,21 +224,37 @@ class DaemonServer:
         """
         try:
             n_new = self.core.catchup_delta(tf, since) if since is not None else None
-            if not await self._enqueue_wait(client, self.core.catchup_start(tf, delta=(n_new is not None)).to_line()):
-                return
-            buckets = (self.core.catchup_delta_buckets(tf, n_new) if n_new is not None
-                       else self.core.catchup_buckets(tf))
-            # SMALL ENCODE CHUNKS (2026-09-06): json.dumps holds the GIL for its whole call, so a 1000-bucket chunk
-            # (~140 ms here, several x on the VM) froze every client's ticks / DOM / tape for the whole dump, and
-            # moving it to a thread changes nothing (measured: a 10 ms ticker still gapped 152 ms). Encoding 100
-            # buckets per frame with a sleep(0) between them lets the 150 ms live edge run between chunks. Wire-
-            # compatible: the client just appends chunks in seq order.
-            size = int(getattr(config, "CATCHUP_ENCODE_CHUNK", 100) or config.CATCHUP_CHUNK_SIZE)
-            for seq, i in enumerate(range(0, len(buckets), size)):
-                if not await self._enqueue_wait(client, CatchupChunkPacket(
-                        tf=tf, seq=seq, closed_buckets=buckets[i:i + size]).to_line()):
-                    return                                   # frozen client: abandon (never skip a chunk)
-                await asyncio.sleep(0)
+            if n_new is None:
+                # FULL catch-up: the plan is frozen right after START (no await between), and each chunk's
+                # encoded fragment comes from the per-tf cache -- see feeds.catchup_chunk_line. Encoding
+                # still happens per chunk between awaits (the 2026-09-06 small-chunk rule below stands), so
+                # a cold cache costs what it always did and a warm one costs a string join per chunk.
+                # MEASURED before: 5m, 5,421 buckets, 6.7 s of which ~5.5 s was this loop re-serialising
+                # buckets that cannot change.
+                _tf, _cb, _id0, _tc, _size = self.core.catchup_plan(tf)
+                if not await self._enqueue_wait(client, self.core.catchup_start(tf, delta=False).to_line()):
+                    return
+                _keys = self.core.catchup_chunk_keys(_id0, _tc, _size)
+                for seq, _key in enumerate(_keys):
+                    if not await self._enqueue_wait(client, self.core.catchup_chunk_line(_tf, seq, _key, _cb, _id0)):
+                        return                               # frozen client: abandon (never skip a chunk)
+                    await asyncio.sleep(0)
+                self.core.catchup_cache_trim(_tf, _keys)
+            else:
+                if not await self._enqueue_wait(client, self.core.catchup_start(tf, delta=True).to_line()):
+                    return
+                buckets = self.core.catchup_delta_buckets(tf, n_new)
+                # SMALL ENCODE CHUNKS (2026-09-06): json.dumps holds the GIL for its whole call, so a 1000-bucket chunk
+                # (~140 ms here, several x on the VM) froze every client's ticks / DOM / tape for the whole dump, and
+                # moving it to a thread changes nothing (measured: a 10 ms ticker still gapped 152 ms). Encoding 100
+                # buckets per frame with a sleep(0) between them lets the 150 ms live edge run between chunks. Wire-
+                # compatible: the client just appends chunks in seq order.
+                size = int(getattr(config, "CATCHUP_ENCODE_CHUNK", 100) or config.CATCHUP_CHUNK_SIZE)
+                for seq, i in enumerate(range(0, len(buckets), size)):
+                    if not await self._enqueue_wait(client, CatchupChunkPacket(
+                            tf=tf, seq=seq, closed_buckets=buckets[i:i + size]).to_line()):
+                        return                               # frozen client: abandon (never skip a chunk)
+                    await asyncio.sleep(0)
             if not await self._enqueue_wait(client, self.core.catchup_end(tf).to_line()):
                 return
             # 15m sweeps are tf-agnostic — ship the current set so even a 1m client has them immediately.

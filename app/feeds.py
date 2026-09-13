@@ -688,6 +688,65 @@ class MarketDataCore:
             except Exception as e:
                 print(f"CLOCK-CANDLE SAVE-KICK ERROR: {e}")
 
+    # ------------------------------------------------------------------ cached catch-up chunks
+    # ⚠⚠ A timeframe switch, and every window at every launch after a daemon restart, re-ran full_snapshot()
+    # on every closed bucket and json.dumps on every chunk, on the loop: 5m = 5,421 buckets = ~5.5 s of the
+    # 6.7 s the client waited (measured 2026-09-13). Closed buckets are immutable and the retained window is
+    # popped only at the FRONT, so each chunk's ENCODED fragment is cached by the absolute ids it covers.
+    # Chunk boundaries are aligned to ids (chunk c = ids [c*size, (c+1)*size-1]), not to the list index, so
+    # a front prune invalidates only the first chunk and a bucket close only the last.
+    _CU_FRAG_MAX_TFS = 8
+
+    def catchup_plan(self, tf: str):
+        """Freeze what one full catch-up will ship: (closed-bucket list, id of its first bucket, total_closed,
+        chunk size). Read with no await between the reads, like catchup_delta, so the START packet's
+        total_closed and the chunks agree exactly."""
+        if tf not in self.engines:
+            tf = config.DEFAULT_TF
+        eng = self.engines[tf]
+        cb = list(eng.closed_buckets)            # shallow: the bucket objects are shared, the list is ours
+        tc = int(eng.total_closed)
+        size = int(getattr(config, "CATCHUP_ENCODE_CHUNK", 100) or config.CATCHUP_CHUNK_SIZE)
+        return tf, cb, tc - len(cb) + 1, tc, max(1, size)
+
+    def catchup_chunk_keys(self, id0: int, tc: int, size: int) -> list:
+        """The (chunk index, first id, last id) of every chunk a full catch-up ships, in order."""
+        out = []
+        if tc < id0:
+            return out
+        for c in range(id0 // size, tc // size + 1):
+            lo, hi = max(id0, c * size), min(tc, (c + 1) * size - 1)
+            if hi >= lo:
+                out.append((c, lo, hi))
+        return out
+
+    def catchup_chunk_line(self, tf: str, seq: int, key, cb: list, id0: int) -> str:
+        """ONE wire line for chunk `key`, `seq` spliced fresh around the cached fragment. Building the
+        fragment (full_snapshot + json.dumps over <= size buckets) happens only on a miss."""
+        import json as _json
+        cache = getattr(self, "_cu_frag", None)
+        if cache is None:
+            cache = self._cu_frag = {}
+        per = cache.setdefault(tf, {})
+        frag = per.get(key)
+        if frag is None:
+            _c, lo, hi = key
+            frag = _json.dumps([cb[i - id0].full_snapshot() for i in range(lo, hi + 1)],
+                               separators=(",", ":"))
+            per[key] = frag
+        return '{"tf":%s,"seq":%d,"closed_buckets":%s,"type":"CATCHUP_CHUNK"}\n' % (
+            _json.dumps(tf), int(seq), frag)
+
+    def catchup_cache_trim(self, tf: str, keys) -> None:
+        """Drop the fragments a full catch-up no longer ships (a pruned front, a re-cut edge chunk)."""
+        cache = getattr(self, "_cu_frag", None)
+        if not cache or tf not in cache:
+            return
+        keep = set(keys)
+        per = cache[tf]
+        for k in [k for k in per if k not in keep]:
+            per.pop(k, None)
+
     def catchup_delta(self, tf: str, since):
         """How many buckets to ship as a DELTA to a client whose cached last-bucket DB-id is ``since``.
 
