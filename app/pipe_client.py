@@ -203,7 +203,7 @@ class PipeClientWorker(threading.Thread):
             self._pending_since = since
             self._cb_ver += 1                 # invalidate COW caches on the reseed/clear
             self._ob_ver += 1
-        frame = {"action": "set_tf", "tf": tf}
+        frame = {"action": "set_tf", "tf": tf, "z": 1}     # z:1 -> compressed catch-up frames (protocol.parse_zframe)
         if since is not None and since > 0:
             frame["since"] = since
         with self._send_lock:
@@ -380,16 +380,7 @@ class PipeClientWorker(threading.Thread):
                     buffer += data
                     if self._cu_active:
                         self._cu_bytes += len(data)
-                    while b"\n" in buffer:
-                        line, buffer = buffer.split(b"\n", 1)
-                        if self._cu_active:
-                            _p = time.perf_counter()
-                            pkt = protocol.parse_line(line.decode("utf-8", "ignore"))
-                            self._cu_parse += time.perf_counter() - _p
-                        else:
-                            pkt = protocol.parse_line(line.decode("utf-8", "ignore"))
-                        if pkt is not None:
-                            self._apply(pkt)
+                    buffer = self._drain_buffer(buffer)
             except (ConnectionError, OSError):
                 pass
             finally:
@@ -404,6 +395,37 @@ class PipeClientWorker(threading.Thread):
             # Reconnect immediately on a manual refresh; otherwise back off.
             if not self._stop.is_set() and not self._force_reconnect.is_set():
                 time.sleep(config.RECONNECT_SECS)
+
+    def _drain_buffer(self, buffer: bytes) -> bytes:
+        """Apply every complete packet at the front of `buffer`; return what is left (a partial line/frame).
+
+        Two framings share the stream (see protocol.ZFRAME_MAGIC): a plain JSON line starts with "{" and ends
+        at the newline; a compressed catch-up frame starts with NUL and carries its own length. Dispatch is
+        on the first byte, so a partial frame that happens to contain a newline byte is never split as a
+        line. Factored out of run() so the mixed stream is testable without a socket."""
+        while buffer:
+            if buffer[0] == 0:
+                _p = time.perf_counter()
+                pkt, used = protocol.parse_zframe(buffer)
+                if used == 0:
+                    break                                    # incomplete frame: wait for more bytes
+                if self._cu_active:
+                    self._cu_parse += time.perf_counter() - _p
+                buffer = buffer[used:]
+            else:
+                nl = buffer.find(b"\n")
+                if nl < 0:
+                    break                                    # incomplete line
+                line, buffer = buffer[:nl], buffer[nl + 1:]
+                if self._cu_active:
+                    _p = time.perf_counter()
+                    pkt = protocol.parse_line(line.decode("utf-8", "ignore"))
+                    self._cu_parse += time.perf_counter() - _p
+                else:
+                    pkt = protocol.parse_line(line.decode("utf-8", "ignore"))
+            if pkt is not None:
+                self._apply(pkt)
+        return buffer
 
     def _flush_outgoing(self, sock: socket.socket) -> None:
         with self._send_lock:
@@ -518,7 +540,7 @@ class PipeClientWorker(threading.Thread):
                     self._total_closed = 0
                     self._cb_ver += 1
                 with self._send_lock:
-                    self._outgoing.append(protocol.json.dumps({"action": "set_tf", "tf": self.tf}) + "\n")
+                    self._outgoing.append(protocol.json.dumps({"action": "set_tf", "tf": self.tf, "z": 1}) + "\n")
             if _cu:                                    # write OUTSIDE the lock (no I/O under lock)
                 self._write_startup_perf(self.tf, _wall, _parse, _bytes, _nb, _nl)
             return

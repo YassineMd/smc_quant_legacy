@@ -42,6 +42,7 @@ class _Client:
     queue: asyncio.Queue
     writer: asyncio.StreamWriter
     tf: Optional[str] = None   # no subscription until the client sends set_tf
+    z: bool = False            # negotiated with set_tf {"z":1}: this client takes compressed catch-up frames
     heatmap: Optional[tuple] = None   # Phase 2a: (ylo, yhi, ybins) while the heatmap mode is open, else None
     time_tf: Optional[str] = None   # CLOCK-candle push subscription (sub_time) — independent of the bucket `tf`
 
@@ -113,7 +114,7 @@ class DaemonServer:
         try:
             while True:
                 line = await queue.get()
-                writer.write(line.encode("utf-8"))
+                writer.write(line if isinstance(line, (bytes, bytearray)) else line.encode("utf-8"))
                 await writer.drain()
         except (ConnectionError, asyncio.CancelledError):
             pass
@@ -158,6 +159,7 @@ class DaemonServer:
             tf = cmd.get("tf")
             if tf in config.TIMEFRAMES:
                 client.tf = tf
+                client.z = bool(cmd.get("z"))   # opt-in wire compression (protocol.build_zframe); old clients: plain
                 since = cmd.get("since")   # optional cached cursor -> DELTA catch-up (see app.bucket_cache)
                 # Stream a fresh chunked CATCHUP for the newly subscribed timeframe
                 asyncio.create_task(self._send_catchup(client, tf, since))
@@ -235,8 +237,9 @@ class DaemonServer:
                 if not await self._enqueue_wait(client, self.core.catchup_start(tf, delta=False).to_line()):
                     return
                 _keys = self.core.catchup_chunk_keys(_id0, _tc, _size)
+                _mk = self.core.catchup_chunk_frame if client.z else self.core.catchup_chunk_line
                 for seq, _key in enumerate(_keys):
-                    if not await self._enqueue_wait(client, self.core.catchup_chunk_line(_tf, seq, _key, _cb, _id0)):
+                    if not await self._enqueue_wait(client, _mk(_tf, seq, _key, _cb, _id0)):
                         return                               # frozen client: abandon (never skip a chunk)
                     await asyncio.sleep(0)
                 self.core.catchup_cache_trim(_tf, _keys)

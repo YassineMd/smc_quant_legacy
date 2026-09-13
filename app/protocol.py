@@ -20,6 +20,8 @@ Design notes
 from __future__ import annotations
 
 import json
+import struct
+import zlib
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Dict, List, Optional, TypedDict
 
@@ -43,6 +45,50 @@ TYPE_LIQSWEEP = "LIQ_SWEEP"           # live 15m Tier-A liquidity sweep (tf-agno
 TYPE_TIME_CANDLES = "TIME_CANDLES"    # answer to get_time_candles: gap-filled CLOCK candles (Binance OHLC + footprint)
 
 NEWLINE = "\n"
+
+
+# --------------------------------------------------------------------------- compressed catch-up frames
+# ⚠ A plain wire line is JSON and starts with "{" (0x7B); a Z-FRAME starts with NUL, so a reader can dispatch
+# on the first byte of its buffer and the newline framing of every other packet is untouched. Layout:
+#   b"\x00Z" | uint32 payload length | uint16 tf length | uint32 seq | tf (utf-8) | zlib(JSON array of buckets)
+# tf and seq are plaintext on purpose: the compressed payload is then EXACTLY the daemon's cached fragment
+# (see feeds.catchup_chunk_frame), so a warm serve never compresses anything.
+ZFRAME_MAGIC = b"\x00Z"
+_ZFRAME_HDR = struct.Struct(">IHI")
+ZFRAME_LEVEL = 3                       # measured on a real 15m catch-up: 3.0x at 5 ms/chunk (6 = 3.3x at 12.5 ms)
+
+
+def zframe_payload(fragment_json: str) -> bytes:
+    """The compressed body of one chunk: zlib over the JSON array text of its buckets."""
+    return zlib.compress(fragment_json.encode("utf-8"), ZFRAME_LEVEL)
+
+
+def build_zframe(tf: str, seq: int, zpayload: bytes) -> bytes:
+    tfb = str(tf).encode("utf-8")
+    return ZFRAME_MAGIC + _ZFRAME_HDR.pack(len(zpayload), len(tfb), int(seq)) + tfb + zpayload
+
+
+def parse_zframe(buf: bytes):
+    """(packet, bytes consumed) for the Z-frame at the start of `buf`.
+
+    (None, 0) when the frame is not complete yet -- the caller waits for more bytes. A complete frame that
+    does not decode (corrupt payload) returns (None, consumed) so the stream resynchronises past it; the
+    client's catch-up watchdog handles the hole the way it handles any dropped chunk."""
+    hs = len(ZFRAME_MAGIC) + _ZFRAME_HDR.size
+    if len(buf) < hs:
+        return None, 0
+    n, tl, seq = _ZFRAME_HDR.unpack_from(buf, len(ZFRAME_MAGIC))
+    total = hs + tl + n
+    if len(buf) < total:
+        return None, 0
+    try:
+        tf = bytes(buf[hs:hs + tl]).decode("utf-8", "ignore")
+        buckets = json.loads(zlib.decompress(bytes(buf[hs + tl:total])).decode("utf-8"))
+        if not isinstance(buckets, list):
+            return None, total
+        return CatchupChunkPacket(tf=tf, seq=int(seq), closed_buckets=buckets), total
+    except Exception:
+        return None, total
 
 
 def _to_line(pkt) -> str:

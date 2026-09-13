@@ -720,20 +720,35 @@ class MarketDataCore:
                 out.append((c, lo, hi))
         return out
 
-    def catchup_chunk_line(self, tf: str, seq: int, key, cb: list, id0: int) -> str:
-        """ONE wire line for chunk `key`, `seq` spliced fresh around the cached fragment. Building the
-        fragment (full_snapshot + json.dumps over <= size buckets) happens only on a miss."""
+    def _catchup_fragment_z(self, tf: str, key, cb: list, id0: int) -> bytes:
+        """The COMPRESSED JSON array of chunk `key`'s buckets, from the per-tf cache; built on a miss only
+        (full_snapshot + json.dumps + zlib over <= size buckets). Compressed is the cached form: 3x smaller
+        in memory than the text was, and a z client's warm serve is then a header plus these bytes."""
         import json as _json
+        from . import protocol as _proto
         cache = getattr(self, "_cu_frag", None)
         if cache is None:
             cache = self._cu_frag = {}
         per = cache.setdefault(tf, {})
-        frag = per.get(key)
-        if frag is None:
+        z = per.get(key)
+        if z is None:
             _c, lo, hi = key
-            frag = _json.dumps([cb[i - id0].full_snapshot() for i in range(lo, hi + 1)],
-                               separators=(",", ":"))
-            per[key] = frag
+            z = _proto.zframe_payload(_json.dumps([cb[i - id0].full_snapshot() for i in range(lo, hi + 1)],
+                                                  separators=(",", ":")))
+            per[key] = z
+        return z
+
+    def catchup_chunk_frame(self, tf: str, seq: int, key, cb: list, id0: int) -> bytes:
+        """ONE compressed wire frame for chunk `key` (a client that negotiated z:1)."""
+        from . import protocol as _proto
+        return _proto.build_zframe(tf, seq, self._catchup_fragment_z(tf, key, cb, id0))
+
+    def catchup_chunk_line(self, tf: str, seq: int, key, cb: list, id0: int) -> str:
+        """ONE plain wire line for chunk `key` (a client that did not negotiate z) -- the same cached
+        fragment, decompressed (~1 ms) and spliced with a fresh `seq`. Byte-identical to the old path."""
+        import json as _json
+        import zlib as _zlib
+        frag = _zlib.decompress(self._catchup_fragment_z(tf, key, cb, id0)).decode("utf-8")
         return '{"tf":%s,"seq":%d,"closed_buckets":%s,"type":"CATCHUP_CHUNK"}\n' % (
             _json.dumps(tf), int(seq), frag)
 
