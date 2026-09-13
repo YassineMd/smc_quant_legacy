@@ -590,6 +590,15 @@ class PipeClientWorker(threading.Thread):
                     self.liquidations = self.liquidations[-500:]
             elif isinstance(pkt, protocol.PulsePacket):
                 self.depth = {"bids": pkt.bids, "asks": pkt.asks}
+                # ⚠ the book is [[price, qty], ...] as STRINGS off the wire. Parsed to float ONCE here, on the
+                # worker thread, per packet -- the liquidity pane was parsing ~800 of them on every GUI frame
+                # (3.8% of the GUI thread, py-spy 2026-09-13). None when a book cannot be cast; readers fall
+                # back to the string lists.
+                try:
+                    self._depth_np = (np.asarray(pkt.bids, dtype=np.float64).reshape(-1, 2)[:, :2] if pkt.bids else np.zeros((0, 2)),
+                                      np.asarray(pkt.asks, dtype=np.float64).reshape(-1, 2)[:, :2] if pkt.asks else np.zeros((0, 2)))
+                except Exception:
+                    self._depth_np = None
                 self.oi = pkt.oi
                 self.size_thr = pkt.size_thr
             elif isinstance(pkt, protocol.LiqSweepPacket):   # tf-agnostic: keep regardless of subscribed tf
@@ -659,6 +668,7 @@ class PipeClientWorker(threading.Thread):
                 "absorptions": list(self.absorptions),
                 "liquidations": list(self.liquidations),
                 "depth": {"bids": list(self.depth["bids"]), "asks": list(self.depth["asks"])},
+                "depth_np": getattr(self, "_depth_np", None),      # the same book, parsed once (see _apply)
                 "oi": self.oi,
                 "size_thr": list(self.size_thr),
                 "vpin": self.vpin,

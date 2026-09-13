@@ -16,10 +16,11 @@ the time chart — Mode 10 is the only candle surface now.)
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from time import perf_counter as _perf_counter
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6 import QtCore, QtGui
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import config
 from .quant_engine import parse_ts
@@ -28,6 +29,61 @@ from .quant_engine import parse_ts
 pg.setConfigOption("background", config.COLOR_CANVAS)
 pg.setConfigOption("foreground", config.COLOR_AXIS_TEXT)
 pg.setConfigOptions(antialias=True)
+
+# --------------------------------------------------------------------------------------- paint accounting
+# ⚠⚠ session_perf timed _on_timer and nothing else, and py-spy on the user's live terminal (2026-09-13)
+# showed the GUI thread spending 78% of its time in paintEvent -- the profiler was blind to four fifths of
+# the cost. GraphicsView.paintEvent is a Python method in pyqtgraph, so it is wrapped ONCE here, class-wide;
+# each view reports to its top-level window through `_perf_note_paint(view, ms)` if the window has one.
+# Cost: two perf_counter() calls and a window() lookup per paint.
+_GV = pg.widgets.GraphicsView.GraphicsView
+_orig_gv_paint = _GV.paintEvent
+
+
+def _timed_paint_event(self, ev):
+    _t0 = _perf_counter()
+    try:
+        return _orig_gv_paint(self, ev)
+    finally:
+        try:
+            _cb = getattr(self.window(), "_perf_note_paint", None)
+            if _cb is not None:
+                _cb(self, (_perf_counter() - _t0) * 1000.0)
+        except Exception:
+            pass
+
+
+_GV.paintEvent = _timed_paint_event
+
+# --------------------------------------------------------------------------------- setData only on change
+# ⚠⚠ pyqtgraph's PlotCurveItem.setData does NOT check whether the data changed: every call invalidates the
+# bounds, announces a geometry change and schedules a repaint of the curve's whole bounding rect. Several
+# draw passes here call it every frame with the SAME arrays (the EMA lines with their full 4,000-point
+# history, antialiased), so the curve re-rasterised ~16 times a second for nothing. Compared here on the
+# plain (x, y) call only; any other call shape (kwargs, pens, connect) goes straight through. The copy is
+# what makes the compare safe -- callers reuse their buffers. Cost per call: two array_equals, microseconds.
+_PCI = pg.PlotCurveItem
+_orig_pci_setData = _PCI.setData
+
+
+def _setData_if_changed(self, *args, **kargs):
+    if len(args) == 2 and not kargs:
+        try:
+            _x = np.asarray(args[0]); _y = np.asarray(args[1])
+            _last = getattr(self, "_sc_last", None)
+            if (_last is not None and _x.shape == _last[0].shape and _y.shape == _last[1].shape
+                    and np.array_equal(_x, _last[0], equal_nan=True)
+                    and np.array_equal(_y, _last[1], equal_nan=True)):
+                return
+            self._sc_last = (np.array(_x, copy=True), np.array(_y, copy=True))
+        except Exception:
+            self._sc_last = None
+    else:
+        self._sc_last = None
+    return _orig_pci_setData(self, *args, **kargs)
+
+
+_PCI.setData = _setData_if_changed
 
 _MONO = QtGui.QFont("Consolas", 9)
 _MONO.setBold(True)
@@ -722,8 +778,20 @@ class PanelSeparatorLayer(pg.GraphicsObject):
 class BucketCandleItem(pg.GraphicsObject):
     def __init__(self):
         super().__init__()
+        self._x = None; self._o = None; self._h = None; self._l = None; self._c = None
+        self._brushes = None; self._pens = None; self._width = None; self._fp_cull = None
+        self._ws = None; self._hp = None; self._lp = None
         self.picture = QtGui.QPicture()
         self._rect = QtCore.QRectF()
+        # ⚠⚠ STRIPS. One QPicture of every visible candle is replayed in full on every paint of the window,
+        # however small the exposed rect -- and the forming-candle animation exposes a sliver at the live
+        # edge ~10x a second (py-spy 2026-09-13: this paint was 10% of the GUI thread). The picture is now
+        # built as x-strips and paint() replays only the strips the exposed rect touches: a live-edge
+        # animation frame replays one strip out of eight instead of all the candles on screen.
+        self._strips = []                # [(x_lo, x_hi, QPicture)] over the culled x-range, left to right
+        self._strip_margin = 0.0         # the widest body: a candle centred just outside a strip still reaches in
+        self._replayed = 0               # strips replayed by the LAST paint (telemetry + gates)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
         self._pen = QtGui.QPen(QtGui.QColor("#888888"))   # uniform neutral wick/border
         self._pen.setCosmetic(True)
         self._flat_pen = QtGui.QPen(QtGui.QColor("#888888"))  # zero-range doji -> flat neutral line
@@ -745,6 +813,28 @@ class BucketCandleItem(pg.GraphicsObject):
                     closes: list, brushes: list, pens: list, width: float = 0.8,
                     x0: float = None, x1: float = None, flat_span: float = None,
                     widths: list = None, hi_pens: list = None, lo_pens: list = None) -> None:
+        # ⚠⚠ IDENTICAL DATA -> NOTHING TO DO. The 1m clock window called this on every frame with the same
+        # closed candles (the forming one is skipped, so nothing in the picture had moved), and every call
+        # rebuilt the QPicture and repainted the whole canvas: py-spy on the live terminal (2026-09-13) had
+        # _build_picture + the candle paint at ~7% of the GUI thread. The compare is EXACT -- every array,
+        # every brush and pen, the cull range, the widths -- so a healed candle, a Chart Style change or a
+        # pan still rebuilds; only a frame that would have drawn the same picture is skipped. Cost: list
+        # equality over the arrays plus Qt's own QBrush/QPen ==, ~1 ms for 4,000 candles, against a rebuild
+        # and repaint several times a second.
+        try:
+            if (self._x is not None and len(self._x) == len(x) and self._width == width
+                    and self._fp_cull == (x0, x1, flat_span)
+                    and list(x) == list(self._x) and list(closes) == list(self._c)
+                    and list(highs) == list(self._h) and list(lows) == list(self._l)
+                    and list(opens) == list(self._o)
+                    and list(brushes) == list(self._brushes) and list(pens) == list(self._pens)
+                    and (self._ws if self._ws is not None else None) == (list(widths) if widths is not None else None)
+                    and (self._hp if self._hp is not None else None) == (list(hi_pens) if hi_pens is not None else None)
+                    and (self._lp if self._lp is not None else None) == (list(lo_pens) if lo_pens is not None else None)):
+                return
+        except Exception:
+            pass
+        self._fp_cull = (x0, x1, flat_span)
         # Cache the series so set_view() can re-cull on pan/zoom without a recompute.
         self._x, self._o, self._h, self._l, self._c = x, opens, highs, lows, closes
         self._brushes, self._pens, self._width = brushes, pens, width
@@ -789,6 +879,8 @@ class BucketCandleItem(pg.GraphicsObject):
         self._build_picture()
         self.update()
 
+    _N_STRIPS = 8
+
     def _build_picture(self) -> None:
         x, o, h, l, c = self._x, self._o, self._h, self._l, self._c
         brushes, width = self._brushes, self._width
@@ -798,39 +890,41 @@ class BucketCandleItem(pg.GraphicsObject):
         half = width / 2.0
         margin = max(ws) if ws else width
         x0, x1 = self._vx0, self._vx1
-        self.picture = QtGui.QPicture()
-        p = QtGui.QPainter(self.picture)
+        # the strips split the CULLED x-range evenly; a candle goes to the strip its centre falls in, and
+        # the replay in paint() widens the exposed rect by the widest body so a candle straddling a strip
+        # edge is still replayed for a rect that only touches its other half
+        _n = int(self._N_STRIPS)
+        # ⚠ the cull range can be UNBOUNDED (the Flow-mode PRICE pane passes no x0/x1: +-inf), and inf-inf
+        # is NaN -- the strips are laid over the DATA extent in that case, which is what is drawn anyway
+        _xf = [float(v) for v in x]
+        _dlo, _dhi = min(_xf) - margin, max(_xf) + margin
+        _lo = float(x0 - margin) if np.isfinite(x0) else _dlo
+        _hi = float(x1 + margin) if np.isfinite(x1) else _dhi
+        _lo, _hi = max(_lo, _dlo), min(_hi, _dhi)
+        if not (_hi > _lo):
+            _lo, _hi = _dlo, _dhi
+        _w = max(1e-9, (_hi - _lo) / float(_n))
+        _pics = [QtGui.QPicture() for _ in range(_n)]
+        _ps = [QtGui.QPainter(_pic) for _pic in _pics]
+        self._strip_margin = float(margin)
         for i in range(len(x)):
             xi = float(x[i])
             if xi < x0 - margin or xi > x1 + margin:  # CULL to the visible X viewport (+1 width margin)
                 continue
+            p = _ps[min(_n - 1, max(0, int((xi - _lo) / _w)))]
             if ws:
                 width = ws[i] if i < len(ws) else self._width
                 half = width / 2.0
             oo, hh, ll, cc = o[i], h[i], l[i], c[i]
-            # Zero-range bucket (high==low -> O=H=L=C): ALL volume traded at one tick. The
-            # honest mark is a flat NEUTRAL line at that price — the forced TICK/2 body would
-            # imply a range that never existed (the §0.6 degenerate sibling of the zero-vector
-            # churn lie). Vector/flow reads from the stats box + footprint; the POC dot
-            # (separate, z6) sits at center. DIVERGES FROM the ranged doji below.
             if abs(hh - ll) < config.TICK_SIZE / 2.0:
                 p.setPen(self._flat_pen)
-                # Span the FULL interval (not just the body width) so a run of no-trade (flat) candles — common on 1m
-                # clock candles in a quiet stretch — connects into a CONTINUOUS carry-forward line instead of
-                # disconnected ticks that read as "gaps".
                 _fh = (half if ws else getattr(self, "_flat_half", 0.5))
                 p.drawLine(QtCore.QPointF(xi - _fh, ll), QtCore.QPointF(xi + _fh, ll))
                 continue
-            # body bounds first, so the wicks stop AT the body (no line through the fill).
             top, bot = max(oo, cc), min(oo, cc)
             if top == bot:
                 top += config.TICK_SIZE / 2.0   # ranged doji (open==close): sliver shows the level
             _base = self._pens[i] if i < len(self._pens) else self._pen
-            # wicks ONLY outside the body — upper (body top -> high) + lower (low -> body bottom).
-            # The old single low->high wick crossed the body and showed through the semi-transparent
-            # fill as an ugly center midline; splitting it keeps the wicks but clears the body.
-            # Each wick takes its OWN pen when one was supplied, so a single rejection wick can be
-            # highlighted without touching the body or the other wick.
             if hh > top:
                 p.setPen((hps[i] if (hps and i < len(hps) and hps[i] is not None) else _base))
                 p.drawLine(QtCore.QPointF(xi, top), QtCore.QPointF(xi, hh))
@@ -841,10 +935,31 @@ class BucketCandleItem(pg.GraphicsObject):
             p.setPen(_base)
             p.setBrush(brushes[i] if i < len(brushes) else QtCore.Qt.NoBrush)
             p.drawRect(QtCore.QRectF(xi - half, bot, width, top - bot))
-        p.end()
+        for p in _ps:
+            p.end()
+        self._strips = [(_lo + k * _w, _lo + (k + 1) * _w, _pics[k]) for k in range(_n)]
+        self.picture = _pics[0]          # kept for any reader of .picture; the strips are what paint() uses
 
     def paint(self, p, *args):
-        p.drawPicture(0, 0, self.picture)
+        _ex = None
+        try:
+            _opt = args[0] if args else None
+            _er = _opt.exposedRect if _opt is not None else None
+            if _er is not None and _er.isValid():
+                _ex = _er
+        except Exception:
+            _ex = None
+        _n = 0
+        if _ex is None:
+            for _lo, _hi, _pic in self._strips:
+                p.drawPicture(0, 0, _pic); _n += 1
+        else:
+            _m = self._strip_margin
+            _l, _r = float(_ex.left()) - _m, float(_ex.right()) + _m
+            for _lo, _hi, _pic in self._strips:
+                if _hi >= _l and _lo <= _r:
+                    p.drawPicture(0, 0, _pic); _n += 1
+        self._replayed = _n
 
     def boundingRect(self):
         return self._rect

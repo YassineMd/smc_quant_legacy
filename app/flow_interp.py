@@ -737,6 +737,18 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
 
     # ---- paint ------------------------------------------------------------------------------------------
     def paintEvent(self, ev):
+        _t0 = time.perf_counter()
+        try:
+            self._paint_event(ev)
+        finally:
+            try:
+                _cb = getattr(self.window(), "_perf_note_paint", None)
+                if _cb is not None:
+                    _cb(self, (time.perf_counter() - _t0) * 1000.0)
+            except Exception:
+                pass
+
+    def _paint_event(self, ev):
         p = QtGui.QPainter(self.viewport())
         w = self.viewport().width(); h = self.viewport().height()
         bg = QtGui.QColor("#141414" if self._dark else "#ffffff")

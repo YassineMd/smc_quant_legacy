@@ -926,6 +926,8 @@ class BpLabelsItem(pg.GraphicsObject):
         self._font = QtGui.QFont("Consolas", 9)
         self._font.setBold(True)
         self.setZValue(32)
+        self._painted = 0                # labels drawn by the LAST paint (telemetry + gates)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
 
     def labels(self):
         return list(self._lbl)
@@ -947,25 +949,39 @@ class BpLabelsItem(pg.GraphicsObject):
 
     def paint(self, p, *args):
         if not self._lbl:
+            self._painted = 0
             return
-        # item -> device transform taken from the PAINTER (pyqtgraph's deviceTransform() segfaults when called
-        # inside paint() on this PySide6 binding -- the terminal could not boot, 2026-09-07)
         tr = QtGui.QTransform(p.transform())
         vp = p.viewport()
         wdev = float(vp.width()); hdev = float(vp.height())
+        # cull by the EXPOSED rect too (see BurstBadgesItem.paint): the whole-view boundingRect means this
+        # item is painted on every sliver the live edge dirties, and the labels elsewhere are not in it
+        _ex = None
+        try:
+            _opt = args[0] if args else None
+            _er = _opt.exposedRect if _opt is not None else None
+            if _er is not None and _er.isValid():
+                _ex = tr.mapRect(_er)
+        except Exception:
+            _ex = None
         p.save()
         p.resetTransform()
         p.setFont(self._font)
         p.setPen(self._color)
         flags = int(QtCore.Qt.AlignCenter)
+        _n = 0
         for x, y, t in self._lbl:
             pt = tr.map(QtCore.QPointF(x, y))
-            if pt.x() < -80 or pt.x() > wdev + 80 or pt.y() < -20 or pt.y() > hdev + 20:
+            px_, py_ = pt.x(), pt.y()
+            if px_ < -80 or px_ > wdev + 80 or py_ < -20 or py_ > hdev + 20:
                 continue                                 # off the viewport
-            p.drawText(QtCore.QRectF(pt.x() - 70.0, pt.y() - 10.0, 140.0, 20.0), flags, t)
+            if _ex is not None and (px_ < _ex.left() - 80 or px_ > _ex.right() + 80
+                                    or py_ < _ex.top() - 20 or py_ > _ex.bottom() + 20):
+                continue                                 # off the EXPOSED region
+            p.drawText(QtCore.QRectF(px_ - 70.0, py_ - 10.0, 140.0, 20.0), flags, t)
+            _n += 1
+        self._painted = _n
         p.restore()
-
-
 class BurstBadgesItem(pg.GraphicsObject):
     """Every Volume-Burst badge in ONE graphics item (user 2026-09-08): a pixel-sized pill carrying the strongest
     one-sided multiple reached inside that candle -- RED (sell) above the high, GREEN (buy) below the low (2026-09-09). One paint pass, no
@@ -982,6 +998,21 @@ class BurstBadgesItem(pg.GraphicsObject):
         self._font = QtGui.QFont("Consolas", 8)
         self._font.setBold(True)
         self.setZValue(33)
+        # ⚠⚠ EVERYTHING paint() needs, built ONCE. It used to build a brush and two pens PER BADGE PER PAINT
+        # (pg.mkPen -> mkColor is pure Python) and a QFontMetrics per paint: with the whole view as this
+        # item's boundingRect it painted on every exposed sliver of the window, and py-spy on the live
+        # terminal (2026-09-13) had it at ~21% of the GUI thread -- the single hottest leaf.
+        self._brush_buy = pg.mkBrush(self._BUY[0], self._BUY[1], self._BUY[2], 205)
+        self._brush_sell = pg.mkBrush(self._SELL[0], self._SELL[1], self._SELL[2], 205)
+        self._pen_buy = pg.mkPen(self._BUY[0], self._BUY[1], self._BUY[2], 255, width=1.4)
+        self._pen_sell = pg.mkPen(self._SELL[0], self._SELL[1], self._SELL[2], 255, width=1.4)
+        self._pen_txt = pg.mkPen(12, 14, 18, 255)
+        self._fm = QtGui.QFontMetrics(self._font)
+        self._adv = {}                   # text -> pixel advance; the badge texts repeat ("x2.3", "x3.0")
+        self._painted = 0                # badges drawn by the LAST paint (telemetry + gates)
+        # the painter's exposedRect is only meaningful with this flag; without it Qt hands us the bounding
+        # rect, i.e. the whole view, and every paint would draw every badge
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
 
     def badges(self):
         return list(self._items)
@@ -999,32 +1030,49 @@ class BurstBadgesItem(pg.GraphicsObject):
 
     def paint(self, p, *args):
         if not self._items:
+            self._painted = 0
             return
         tr = QtGui.QTransform(p.transform())
         vp = p.viewport()
         wdev = float(vp.width()); hdev = float(vp.height())
+        # ⚠ CULL BY THE EXPOSED RECT, in device space. The forming-candle animation dirties a sliver at the
+        # live edge ~10x a second; badges elsewhere have nothing to do with it and are skipped outright.
+        _ex = None
+        try:
+            _opt = args[0] if args else None
+            _er = _opt.exposedRect if _opt is not None else None
+            if _er is not None and _er.isValid():
+                _ex = tr.mapRect(_er)
+        except Exception:
+            _ex = None
         p.save()
         p.resetTransform()
         p.setFont(self._font)
         p.setRenderHint(QtGui.QPainter.Antialiasing, True)
-        fm = QtGui.QFontMetrics(self._font)
         rh = 15.0
+        _adv = self._adv; _fm = self._fm
+        _n = 0
         for x, y, txt, is_buy in self._items:
             pt = tr.map(QtCore.QPointF(x, y))
-            if pt.x() < -40 or pt.x() > wdev + 40 or pt.y() < -60 or pt.y() > hdev + 60:
+            px_, py_ = pt.x(), pt.y()
+            if px_ < -40 or px_ > wdev + 40 or py_ < -60 or py_ > hdev + 60:
                 continue                                  # off the viewport
-            rw = max(rh, float(fm.horizontalAdvance(txt)) + 9.0)
-            cy = (pt.y() + 9.0 + rh / 2.0) if is_buy else (pt.y() - 9.0 - rh / 2.0)
-            rect = QtCore.QRectF(pt.x() - rw / 2.0, cy - rh / 2.0, rw, rh)
-            rgb = self._BUY if is_buy else self._SELL
-            p.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 205))
-            p.setPen(pg.mkPen(rgb[0], rgb[1], rgb[2], 255, width=1.4))
+            if _ex is not None and (px_ < _ex.left() - 40 or px_ > _ex.right() + 40
+                                    or py_ < _ex.top() - 40 or py_ > _ex.bottom() + 40):
+                continue                                  # off the EXPOSED region
+            rw = _adv.get(txt)
+            if rw is None:
+                rw = _adv[txt] = max(rh, float(_fm.horizontalAdvance(txt)) + 9.0)
+            cy = (py_ + 9.0 + rh / 2.0) if is_buy else (py_ - 9.0 - rh / 2.0)
+            rect = QtCore.QRectF(px_ - rw / 2.0, cy - rh / 2.0, rw, rh)
+            p.setBrush(self._brush_buy if is_buy else self._brush_sell)
+            p.setPen(self._pen_buy if is_buy else self._pen_sell)
             p.drawRoundedRect(rect, rh / 2.0, rh / 2.0)
-            p.setPen(pg.mkPen(12, 14, 18, 255))
+            p.setPen(self._pen_txt)
             p.drawText(rect, int(QtCore.Qt.AlignCenter), txt)
+            _n += 1
+        self._painted = _n
         p.restore()
-
-
 def _hex_rgb(h):
     """'#4d84c4' -> (77, 132, 196). The pane colours live in config as hex; the badge item wants a triple."""
     h = str(h).lstrip("#")
@@ -2096,6 +2144,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._lc_body.hide(); self._lc_wick.hide()
         self._lc = None                                    # dict(x, o, h, l, c_from, c_to, cur, t0, brush, pen) or None
         self._lc_timer = QtCore.QTimer(self); self._lc_timer.setInterval(33); self._lc_timer.timeout.connect(self._lc_tick)
+        self._lc_timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)   # see self.timer: coarse = 47 ms, not 33
         self._lc_shown = False                             # the picture currently omits the forming bar
         # --- A2: cursor Y-axis price tag — a right-axis badge tracking the hline's Y,
         # shown in ALL modes. Reads the cursor price via mapSceneToView and formats with
@@ -2591,6 +2640,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # --- 20Hz master loop ---
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self._on_timer)
+        # ⚠⚠ PRECISE, not coarse. Qt's default CoarseTimer rounds to the Windows system tick (15.6 ms), so
+        # GUI_TIMER_MS=50 fired every 62.5 ms: 157-160 frames per 10 s instead of 200 in EVERY session
+        # logged -- a fifth of the frame rate lost before any work was done. Same for the two 33 ms
+        # animation timers below (they ran at ~21 Hz, not 30).
+        self.timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
         self.timer.start(config.GUI_TIMER_MS)
 
         # --- session profiler (default-on, client-side lag hunt; negligible overhead, read-only) ---
@@ -2598,6 +2652,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(config, "SESSION_PERF", False):
             try:
                 self._perf = SessionProfiler(os.path.join(config.DATA_DIR, "session_perf.log"))
+                self._paint_acc = {"n": 0, "ms": 0.0, "main": 0.0, "px": 0.0, "liq": 0.0, "interp": 0.0,
+                                   "other": 0.0}
             except Exception:
                 self._perf = None
         # --- tracemalloc leak hunt (DIAGNOSTIC; env SMC_MEMTRACE=0 disables) -> data/session_memtrace.log ---
@@ -2631,7 +2687,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.multiplierChanged.connect(lambda v: setattr(self.bc_obs, "visible_filter", v))
         self.menu.chartFilterChanged.connect(lambda v: setattr(self.depthwall_item, "threshold", float(v)))
         self.menu.layerToggled.connect(self._toggle_layer)
+        self.menu.layerToggled.connect(self._bump_layer_rev)   # invalidates _layer_tuple's cache
         self.menu.subWidgetToggled.connect(self._toggle_subwidget)
+        self.menu.subWidgetToggled.connect(self._bump_sw_rev)        # the EMA pass's 5 Hz cap keys on it
         self.menu.archiveChanged.connect(lambda: None if self._loading_ui else self._save_ui_state())   # ARCHIVE persists
         self.menu.helpRequested.connect(self._show_shortcuts)
         self._apply_saved_toggles()                # restore EVERY hamburger toggle from the saved state
@@ -5623,6 +5681,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _clear_panel0(self) -> None:
         """Panel-0 tear-down: wipe + hide all lines/refs + the grey tail + the three badges (setData -> no leak)."""
+        # ⚠ called on EVERY frame the panel is off, and PlotDataItem.setData([], []) is not free even when the
+        # item is already empty (py-spy: 1.8% of the GUI thread). Once cleared, stay cleared until it is drawn.
+        if getattr(self, "_p0_cleared", False):
+            return
+        self._p0_cleared = True
         for _it in self._bc_p0_items:
             _it.setData([], []); _it.setVisible(False)
         self.bc_p0_sum_tail.setData([], []); self.bc_p0_sum_tail.setVisible(False)
@@ -15261,6 +15324,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """Live Magic-Selection readout: aggregate the buckets inside the box + show the stats box.
         Runs each frame, so a selection reaching the live edge updates as buckets form."""
         rect = self.drawer.selection_rect()
+        if self.scanner_mode == "bucket_canvas":
+            self._nosel_done_mode = None
+        elif rect is None:
+            # ⚠ outside the bucket canvas (Flow mode) nothing this branch maintains exists -- no selection
+            # box, no Mode-10 overlays -- yet its no-op SIGNATURE (a scanner-bucket build plus every knob)
+            # was computed on every frame: ~0.45 ms x 20 Hz in the flow window (py-spy 2026-09-13). The
+            # teardown runs ONCE on entering the mode and then the branch is free.
+            if getattr(self, "_nosel_done_mode", None) == self.scanner_mode:
+                return
+            self._nosel_done_mode = self.scanner_mode
+            self._nosel_sig = None
         if rect is None or self.scanner_mode != "bucket_canvas":
             # FULL no-op when nothing changed: with no selection, the hide-UI + overlay batch only need to run on a
             # bar-close / toggle / knob change — not every 20Hz tick. This is the mostly-idle common case. (Entering a
@@ -15278,7 +15352,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _last_closed_et = float((_lb or {}).get("end_time", 0.0) or 0.0)
             _nsig = ("nosel", len(_pf0), float(_pf0[-1].get("start_time", 0.0)) if _pf0 else 0.0,
                      bool(getattr(self, "_mmx_last_forming", True)), _last_closed_et,
-                     tuple(cb.isChecked() for cb in self.menu.layer_checks.values()),
+                     self._layer_tuple(),
                      round(self.menu.swing_pct(), 4), round(getattr(self, "_wall_floor", 0.0), 4),
                      round(getattr(self, "_reward_strength", 0.0), 2),
                      getattr(self, "_bp_rev", 0),   # Big Player tape revision (user 2026-09-06: prints must show at
@@ -16055,6 +16129,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _ix0 = np.maximum(np.arange(len(bull_line)) - _lk0, 0)            # each bucket's locked index (clamped)
                     bull0 = (bull_line + bull_line[_ix0]) / 2.0
                     bear0 = (bear_line + bear_line[_ix0]) / 2.0
+                    self._p0_cleared = False        # drawn again -> the next teardown must really clear
                     self._draw_lean_lines(bull0, bear0, self._bc_p0_items,
                                           ("PANEL0_BULL", "PANEL0_BEAR", "PANEL0_SUM"),
                                           lo, hi, p0_top, p0_bot, "P0", _badge_x, _sumx,
@@ -16381,7 +16456,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # catches it up within a frame. The active window is always full-rate. Fail-safe (any error -> render normally).
         try:
             _skipn = max(1, int(getattr(config, "GUI_BG_FRAME_SKIP", 1)))
-            if _skipn > 1 and not self.isActiveWindow():
+            # ⚠⚠ "not the focused window" was the wrong test (user 2026-09-13: "the terminal is laggy"). The
+            # launcher opens the 1m clock and the flow chart in ONE process, so at most one of them is ever
+            # focused and the other always ran at a third of the rate -- and both did whenever the user worked
+            # in another app while WATCHING the charts, which is the normal case. session_perf: 52 frames per
+            # 10 s against 157 for the focused window, in every session logged. A chart that is on screen
+            # runs at full rate; the throttle keeps its purpose for a window that is minimised or hidden.
+            if _skipn > 1 and (self.isMinimized() or not self.isVisible()):
                 self._bg_skip = (getattr(self, "_bg_skip", 0) + 1) % _skipn
                 if self._bg_skip != 0:
                     return
@@ -16458,6 +16539,53 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._perf.note_frame((_pc() - _t0) * 1000.0)
 
     # -- session profiler helpers (client-side lag hunt; all guarded, never crash the UI) ----------
+    def _bump_layer_rev(self, *_a) -> None:
+        self._layer_rev = getattr(self, "_layer_rev", 0) + 1
+
+    def _bump_sw_rev(self, *_a) -> None:
+        self._sw_rev = getattr(self, "_sw_rev", 0) + 1
+
+    def _layer_tuple(self) -> tuple:
+        """Every hamburger layer checkbox's state, as one tuple -- CACHED.
+
+        ⚠ This tuple sits inside the no-selection signature that _refresh_selection_stats builds on EVERY
+        frame, and it was rebuilt each time: ~110 isChecked() calls per frame, 2.3% of the GUI thread on
+        py-spy (2026-09-13). The hamburger emits layerToggled for every one of these boxes, so the cache is
+        invalidated exactly when a box changes and never scanned otherwise. The dict's length is in the key
+        in case a box is ever added after boot."""
+        _rev = (getattr(self, "_layer_rev", 0), len(self.menu.layer_checks))
+        _c = getattr(self, "_layer_tuple_c", None)
+        if _c is None or _c[0] != _rev:
+            _c = (_rev, tuple(cb.isChecked() for cb in self.menu.layer_checks.values()))
+            self._layer_tuple_c = _c
+        return _c[1]
+
+    def _perf_note_paint(self, view, ms: float) -> None:
+        """Every paintEvent of every view this window owns, from the class-wide hook in chart_widgets.
+
+        Split by pane so the log says WHICH surface is expensive, not just that painting is. Reported as a
+        profiler section (so it competes in top3 on equal terms with _on_timer's sections) and folded into
+        the row's `extra` field, reset every flush."""
+        p = self._perf
+        if p is None:
+            return
+        try:
+            p.note_section("paint", ms)
+            acc = self._paint_acc
+            acc["n"] += 1; acc["ms"] += ms
+            if view is getattr(self, "plot", None):
+                acc["main"] += ms
+            elif view is getattr(self, "_px_plot", None):
+                acc["px"] += ms
+            elif view is getattr(self, "_liq_plot", None):
+                acc["liq"] += ms
+            elif view is getattr(self, "interp_panel", None):
+                acc["interp"] += ms
+            else:
+                acc["other"] += ms
+        except Exception:
+            pass
+
     def _perf_note(self, name: str, start: float) -> None:
         p = self._perf
         if p is not None:
@@ -16503,10 +16631,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         try:
-            s["extra"] = "handles=%d trackers=%d hovers=%d" % (
+            _pa = self._paint_acc
+            s["extra"] = "handles=%d trackers=%d hovers=%d paint=%.0fms/%dc main=%.0f px=%.0f liq=%.0f interp=%.0f other=%.0f" % (
                 len(getattr(self, "_scan_handles", {}) or {}),
                 len(getattr(self, "_scan_trackers", {}) or {}),
-                len(getattr(self, "_panel_hovers", []) or []))
+                len(getattr(self, "_panel_hovers", []) or []),
+                _pa["ms"], _pa["n"], _pa["main"], _pa["px"], _pa["liq"], _pa["interp"], _pa["other"])
+            for _k in _pa:
+                _pa[_k] = 0
         except Exception:
             pass
         return s
@@ -18209,6 +18341,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if self._px_lc_timer is None:
             self._px_lc_timer = QtCore.QTimer(self)
             self._px_lc_timer.setInterval(33)
+            self._px_lc_timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
             self._px_lc_timer.timeout.connect(self._px_lc_tick)
         # CLICK A CANDLE -> the feed scrolls to that cycle's interpretation (user 2026-09-12)
         pw.scene().sigMouseClicked.connect(self._on_px_clicked)
@@ -19593,25 +19726,54 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 d = snap.get("depth") or {}
                 bids = d.get("bids") or []; asks = d.get("asks") or []
                 if bids and asks:
-                    mid = 0.5 * (float(bids[0][0]) + float(asks[0][0]))
+                    # the mid from the PARSED book when the worker has one -- the string lists are only a
+                    # fallback here too, so the pane never pays for a string parse on a frame
+                    _dnp = snap.get("depth_np")
+                    if _dnp is not None and len(_dnp[0]) and len(_dnp[1]):
+                        mid = 0.5 * (float(_dnp[0][0, 0]) + float(_dnp[1][0, 0]))
+                    else:
+                        mid = 0.5 * (float(bids[0][0]) + float(asks[0][0]))
                     tick = float(config.TICK_SIZE)
                     radii = tuple(int(r) for r in config.LIQ_RADIUS_CHOICES)      # ascending
                     nr = len(radii); rmax = radii[-1]
-                    nb = [0.0] * nr; na = [0.0] * nr
-                    for src, acc, sgn in ((bids, nb, 1.0), (asks, na, -1.0)):     # ONE pass, by distance
-                        for lvl in src:
-                            pr_ = float(lvl[0]); d = (mid - pr_) / tick * sgn
-                            if d < 0.0 or d > rmax:
-                                continue
-                            v = pr_ * float(lvl[1])
-                            for k in range(nr):
-                                if d <= radii[k]:
-                                    acc[k] += v
-                                    break
-                    for acc in (nb, na):                                          # -> cumulative by radius
-                        for k in range(1, nr):
-                            acc[k] += acc[k - 1]
-                    self._liq_live = (now, tuple(nb), tuple(na), radii)
+                    nb = na = None
+                    # ⚠ VECTORISED. The per-level Python loop below it was 4.7% of the GUI thread on py-spy
+                    # (2026-09-13): every depth level x every radius, every frame the pane is visible. Same
+                    # arithmetic -- a level's $ goes to the FIRST radius >= its distance (searchsorted, side
+                    # left), then cumulative by radius -- so the numbers are identical. The loop stays as the
+                    # fallback for any book the array cast cannot take.
+                    try:
+                        _ra = np.asarray(radii, dtype=np.float64)
+                        _out = []
+                        # the worker parses the book to float ONCE per packet ("depth_np"); the string lists
+                        # are the fallback, and parsing them here was the whole cost of this block
+                        for src, _pre, sgn in ((bids, _dnp[0] if _dnp is not None else None, 1.0),
+                                               (asks, _dnp[1] if _dnp is not None else None, -1.0)):
+                            _lv = _pre if (_pre is not None and len(_pre) == len(src)) \
+                                else np.asarray(src, dtype=np.float64)
+                            _pr = _lv[:, 0]; _d = (mid - _pr) / tick * sgn
+                            _ok = (_d >= 0.0) & (_d <= rmax)
+                            _idx = np.searchsorted(_ra, _d[_ok], side="left")
+                            _acc = np.bincount(_idx, weights=_pr[_ok] * _lv[_ok, 1], minlength=nr)
+                            _out.append(tuple(float(x) for x in np.cumsum(_acc)))
+                        nb, na = _out
+                    except Exception:
+                        nb = [0.0] * nr; na = [0.0] * nr
+                        for src, acc, sgn in ((bids, nb, 1.0), (asks, na, -1.0)):     # ONE pass, by distance
+                            for lvl in src:
+                                pr_ = float(lvl[0]); d = (mid - pr_) / tick * sgn
+                                if d < 0.0 or d > rmax:
+                                    continue
+                                v = pr_ * float(lvl[1])
+                                for k in range(nr):
+                                    if d <= radii[k]:
+                                        acc[k] += v
+                                        break
+                        for acc in (nb, na):                                          # -> cumulative by radius
+                            for k in range(1, nr):
+                                acc[k] += acc[k - 1]
+                        nb, na = tuple(nb), tuple(na)
+                    self._liq_live = (now, nb, na, radii)
             except Exception:
                 pass
         (vx0, vx1), _ = self.vb.viewRange()
@@ -20917,16 +21079,31 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             # into the empty space to the RIGHT of the lines must STAY there (user 2026-09-08: "I should be able to
             # pan all the way to the right"), and `now - vx1` is NEGATIVE there, which used to re-arm and snap back.
             self._flow_follow = -1.0 <= (now - vx1) <= 3.0
+        width = max(200, int(self.plot.width()) or 1000)
         if self._flow_follow:
             span = max(30.0, vx1 - vx0)
-            vx0, vx1 = now - span, now
-        width = max(200, int(self.plot.width()) or 1000)
+            # ⚠⚠ SUB-PIXEL SKIP. Following the live edge moved the view by ~50 ms of tape every frame -- at a
+            # 4 h view that is 0.004 of a pixel -- and every such setXRange invalidated the transform of EVERY
+            # linked pane and repainted the whole stack. py-spy on the live terminal: paintEvent was 78% of
+            # the GUI thread, ~16 repaints a second. The view now moves only once the edge has advanced half
+            # a pixel; what the eye sees is identical, because a smaller shift is not drawable.
+            _ls = getattr(self, "_flow_last_set", None)
+            _px = span / float(width)
+            if _ls is not None and abs((_ls[1] - _ls[0]) - span) < 1e-6 and (now - _ls[1]) < 0.5 * _px:
+                vx0, vx1 = _ls
+            else:
+                vx0, vx1 = now - span, now
         max_pts = int(min(config.FLOW_MAX_POINTS, 2 * width))
-        sig = (self._flow.rev, round(vx0, 2), round(vx1, 2), int(self._flow_win), max_pts)
+        # ⚠⚠ 5 Hz CAP, the same reasoning as the EMA pass: the store's rev moves on every tape batch and
+        # each redraw of the two lines repaints this whole pane plus everything linked to it. The last point
+        # stepping every 200 ms instead of every batch is a sub-pixel change at any zoom these lines are
+        # drawn at (they are decimated to two points per pixel); the live price pill and the forming cycle
+        # candle are overlays with their own timers and keep their latency.
+        sig = (int(now * 5), round(vx0, 2), round(vx1, 2), int(self._flow_win), max_pts)
         if sig == self._flow_sig:
             return                                          # nothing moved -> the cheapest possible frame
         self._flow_sig = sig
-        if self._flow_follow:
+        if self._flow_follow and (vx0, vx1) != getattr(self, "_flow_last_set", None):
             self.vb.setXRange(vx0, vx1, padding=0.0)
             self._flow_last_set = (vx0, vx1)
         t, buy, sell = self._flow.series(vx0, vx1, float(self._flow_win), max_pts)
@@ -21023,6 +21200,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _had = getattr(self, "_flow_xsig", None)
         if sig == _had:
             return                                          # nothing moved -> the cheapest possible frame
+        self._cross_cleared = False                         # about to draw lines: the next OFF must clear them
         # `_flow_xsig = None` is how the rest of the class FORCES a redraw (a toggle, a mode re-entry). The
         # per-pane signatures would still match and every pane would be skipped, so a forced redraw would draw
         # nothing at all -- treat the whole set as stale whenever the shared signature was cleared.
@@ -21239,6 +21417,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         return store[key][1]
 
     def _cross_clear(self) -> None:
+        # ⚠ _flow_cross_draw calls this on every frame the cycle-line layer is OFF -- the user's default -- and
+        # it re-set empty data on every line item and every badge strip each time (py-spy: 1.5%). Once.
+        if getattr(self, "_cross_cleared", False):
+            return
+        self._cross_cleared = True
         for _p, _items in (getattr(self, "_flow_xln", None) or {}).values():
             for _it in _items:
                 try:
@@ -22400,6 +22583,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             tag = pg.TextItem(anchor=anchor, fill=pg.mkBrush(fill_bg)) if fill_bg \
                 else pg.TextItem(anchor=anchor)
             tag.setHtml(html)
+            tag._last_html = html
             tag.setZValue(60)
             if target_vb is not None:
                 target_vb.addItem(tag)
@@ -22415,7 +22599,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 else:
                     rule.setData(x=[x_data, x_max], y=[value, value])
                     rule.setPen(_rule_pen())
-            self._scan_handles[tag_key].setHtml(html)
+            # ⚠ setHtml is a QTextDocument relayout plus a repaint of the badge, and this ran EVERY frame with
+            # the same string (py-spy: 2.3% of the GUI thread). Only when the text actually changes.
+            _tg = self._scan_handles[tag_key]
+            if getattr(_tg, "_last_html", None) != html:
+                _tg.setHtml(html)
+                _tg._last_html = html
         # dock the badge hard against the right Y-axis edge
         self._scan_handles[tag_key].setPos(x_max, value)
 
@@ -24237,7 +24426,16 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         except Exception:
             self._hide_nyanchor()
         try:
-            self._draw_emas(buckets, x)                            # EMA lines (Sub-Widgets 'ema20'/'ema50'/'ema100')
+            # ⚠⚠ 5 Hz CAP on the EMA pass. Its only per-frame change is the live point of each line, which on
+            # a full-width curve dirties the whole canvas: every tape batch (~11/s) repainted every candle, VP
+            # and line in this window (py-spy 2026-09-13, paint = 55% of the GUI thread). A 200 ms step of
+            # that point is a sub-pixel move at any zoom the lines are drawn at; a bucket CLOSE, any toggle,
+            # and any pan or zoom are in the key, so those still apply on the very next frame.
+            _ek = (len(buckets), int(time.time() * 5), getattr(self, "_layer_rev", 0),
+                   getattr(self, "_sw_rev", 0), round(float(vx0), 3), round(float(vx1), 3))
+            if _ek != getattr(self, "_ema_call_key", None):
+                self._ema_call_key = _ek
+                self._draw_emas(buckets, x)                        # EMA lines (Sub-Widgets 'ema20'/'ema50'/'ema100')
         except Exception:
             for _it in self._ema_items.values():
                 _it.setVisible(False)
