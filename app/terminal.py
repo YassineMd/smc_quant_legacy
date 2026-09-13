@@ -2843,7 +2843,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _anchor_secs = self._default_scan_secs(self.worker.tf) if is_canvas else -3600
         target_dt = QtCore.QDateTime.currentDateTime().addSecs(_anchor_secs)
         if is_canvas and not initial:                   # auto-extend the window back to cover saved drawings
-            floor = self._drawing_scan_floor(self.worker.tf)
+            floor = self._scan_floor_all(self.worker.tf)
             if floor is not None:
                 floor_dt = QtCore.QDateTime.fromSecsSinceEpoch(int(floor))
                 if floor_dt < target_dt:
@@ -2905,7 +2905,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # Re-anchor to THIS tf's default window (7d on 1h/4h/30m, 5d 15m, 24h 5m, 12h 1m) so switching timeframe
             # honours the per-tf default instead of carrying the old tf's window (e.g. 1h's 7d onto 1m).
             target_dt = QtCore.QDateTime.currentDateTime().addSecs(self._default_scan_secs(tf))
-            floor = self._drawing_scan_floor(tf)                     # then pull back to keep saved drawings in view
+            floor = self._scan_floor_all(tf)                     # then pull back to keep saved drawings in view
             if floor is not None:
                 floor_dt = QtCore.QDateTime.fromSecsSinceEpoch(int(floor))
                 if floor_dt < target_dt:                            # only ever pull back, never forward
@@ -3112,6 +3112,20 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1; self._sel_sig = None    # Sweeps sub-toggle -> redraw (rides the master layer)
             if not on:
                 self._clear_bp_sweeps()
+        elif key in ("m10_hlh", "m10_hlh_week", "m10_hlh_bloconly"):
+            self._hlh_out = None; self._hlh_px_out = None     # each canvas sets its content again on its next draw
+            self._hlh_tog = None                              # re-read the toggles (this runs before the rev bump)
+            self._last_scanner_sig = None                     # ... and the candle canvas redraws on the next tick
+            _st = getattr(self, "_hlh", None)
+            if key == "m10_hlh" and not on:
+                self._hide_hlh(); self._hlh_px_hide()
+                if _st is not None:
+                    _st.stop()                                # the klines threads go with the layer
+            else:
+                self._hlh_floor_done = None                   # (re)apply the 2-day floor on the next draw
+                if _st is not None:
+                    _st.forget_canvas("canvas"); _st.forget_canvas("px")
+                    _st._feeds_k = None                       # ... and re-plan the feeds now, not next second
         elif key == "m10_bigplayer":
             self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1; self._sel_sig = None    # Big Player Levels toggled
             if on:
@@ -6202,6 +6216,166 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _c.setVisible(False)
         for _s in self._pvp_sep_pool:
             _s.setVisible(False)
+
+    # ------------------------------------------------------------------
+    # HLH VOLUME PROFILE (m10_hlh) -- the user's TradingView indicator on both canvases. Engine: app/hlh_profile;
+    # geometry, items, feeds and caches: app/hlh_draw (HlhOverlay). The terminal only: gates on the toggles,
+    # builds the time->x mapping of the canvas it is drawing on, hands the two items their content when the
+    # overlay says it changed (identity check, no per-frame work), and pulls the Zero Point back so two full
+    # days are on the chart ("when this indicator is used it should automatically load 2 days of data").
+    def _hlh_on(self) -> bool:
+        return self._hlh_toggles()[0]
+
+    def _hlh_toggles(self):
+        """(on, week, bloc_only, dark) read from the menu ONCE per layer / sub-widget revision. ⚠ every
+        attribute read in this block is `self.__dict__.get`: on a PySide QObject a getattr() with a default
+        costs ~16 us when the attribute is MISSING (the lookup falls through to the Qt meta-object first), and
+        the disabled-layer path ran five of them per frame (74 us measured)."""
+        _rev = (self.__dict__.get("_layer_rev", 0), self.__dict__.get("_sw_rev", 0))
+        _c = self.__dict__.get("_hlh_tog", None)
+        if _c is not None and _c[0] == _rev:
+            return _c[1]
+        try:
+            _m = self.menu
+            v = (bool(_m.layer_state("m10_hlh")), bool(_m.layer_state("m10_hlh_week")),
+                 bool(_m.layer_state("m10_hlh_bloconly")), not self._simple_bw())
+        except Exception:
+            v = (False, False, False, True)
+        self._hlh_tog = (_rev, v)
+        return v
+
+    def _hlh_state(self):
+        st = self.__dict__.get("_hlh", None)
+        if st is None:
+            from .hlh_draw import HlhOverlay
+            st = self._hlh = HlhOverlay()
+        return st
+
+    def _hlh_scan_floor(self):
+        """Earliest bar time the HLH profile needs ON SCREEN -- 00:00 (HLH_TZ) of the oldest of HLH_DAYS day
+        periods, or this week's Monday when the Week profile is on -- or None while the layer is off."""
+        if not self._hlh_on():
+            return None
+        try:
+            return float(self._hlh_state().floor(bool(self.menu.layer_state("m10_hlh_week")), time.time()))
+        except Exception:
+            return None
+
+    def _scan_floor_all(self, tf: str):
+        """The Zero Point's auto-extend floor: the earlier of the saved-drawings floor and the HLH floor."""
+        fl = [f for f in (self._drawing_scan_floor(tf), self._hlh_scan_floor()) if f is not None]
+        return min(fl) if fl else None
+
+    def _hlh_apply_floor(self) -> None:
+        """Pull the Zero Point back to the HLH floor when it is later (never forward). Goes through the normal
+        scan-time signal so each canvas re-plans exactly as a manual change would: the candle canvas rebuilds
+        from the new anchor, Flow mode re-plans its tape history for the wider span."""
+        fl = self._hlh_scan_floor()
+        if fl is None:
+            return
+        try:
+            if float(self.menu.scan_start_unix()) > fl + 1.0:
+                self.menu.scan_time_edit.setDateTime(QtCore.QDateTime.fromSecsSinceEpoch(int(fl)))
+        except Exception:
+            pass
+
+    def _hlh_floor_once(self) -> None:
+        """Apply the floor ONCE per floor value (a day roll moves it; a re-toggle resets it) -- deferred to the
+        event loop, because this is called from inside a draw and the scan-time handler tears the canvas down."""
+        _now = time.time()
+        if self.__dict__.get("_hlh_floor_done", None) is not None and _now - self.__dict__.get("_hlh_floor_t", 0.0) < 60.0:
+            return                                        # applied; the floor moves once a day -> re-check per minute
+        self._hlh_floor_t = _now
+        fl = self._hlh_scan_floor()
+        if fl is None:
+            return
+        if self.__dict__.get("_hlh_floor_done", None) == int(fl):
+            return
+        self._hlh_floor_done = int(fl)
+        try:
+            if float(self.menu.scan_start_unix()) > fl + 1.0:
+                QtCore.QTimer.singleShot(0, self._hlh_apply_floor)
+        except Exception:
+            pass
+
+    def _draw_hlh(self, buckets, x) -> None:
+        """The HLH profile on the candle canvas (x = bar index; both chart sources draw x = range(n))."""
+        if not self._hlh_on() or not buckets or self.__dict__.get("_hide_candles", False):
+            self._hide_hlh()
+            return
+        from .hlh_draw import BarXMap, HlhPicsItem, HlhLabelsItem
+        st = self._hlh_state()
+        now = time.time()
+        _on, week_on, _bloc, _dark = self._hlh_toggles()
+        st.ensure_feeds(week_on, now)
+        self._hlh_floor_once()
+        _t0 = float(buckets[0].get("start_time", 0.0) or 0.0)
+        _k = (len(buckets), _t0, float(buckets[-1].get("start_time", 0.0) or 0.0))
+        xm = self.__dict__.get("_hlh_xmap", None)
+        if xm is None or xm.key[1:] != _k:               # the bar set changed: one mapping per new bar
+            xm = BarXMap(np.fromiter((float(b.get("start_time", 0.0) or 0.0) for b in buckets),
+                                     dtype=np.float64, count=len(buckets)),
+                         float(config.TF_SECONDS.get(self._tf, 60)))
+            self._hlh_xmap = xm
+        out = st.build("canvas", xm, _bloc, _dark, week_on, now, skip_before=_t0)
+        if self.__dict__.get("_hlh_pics", None) is None:
+            self._hlh_pics = HlhPicsItem(); self._hlh_pics.setZValue(3)
+            self.plot.addItem(self._hlh_pics, ignoreBounds=True)
+            self._hlh_lbls = HlhLabelsItem(); self._hlh_lbls.setZValue(33)
+            self.plot.addItem(self._hlh_lbls, ignoreBounds=True)
+            self._hlh_out = None
+        if out is not self.__dict__.get("_hlh_out", None):   # the overlay returns the SAME tuple while nothing changed
+            self._hlh_out = out
+            self._hlh_pics.set_pics(out[0])
+            self._hlh_lbls.set_labels(out[1], out[2])
+        if not self._hlh_pics.isVisible():
+            self._hlh_pics.setVisible(True); self._hlh_lbls.setVisible(True)
+
+    def _hide_hlh(self) -> None:
+        for _it in (self.__dict__.get("_hlh_pics", None), self.__dict__.get("_hlh_lbls", None)):
+            if _it is not None:
+                try:
+                    _it.setVisible(False)
+                except RuntimeError:
+                    pass
+        self._hlh_out = None                              # a re-show must set content again
+
+    def _hlh_px_tick(self, now: float) -> None:
+        """The HLH profile on the Flow-mode PRICE pane (x = epoch seconds, so the mapping is the identity)."""
+        pw = self.__dict__.get("_px_plot", None)
+        if pw is None or not self._hlh_on() or not bool(self.__dict__.get("_px_pane_on", True)):
+            self._hlh_px_hide()
+            return
+        from .hlh_draw import IdentityXMap, HlhPicsItem, HlhLabelsItem
+        st = self._hlh_state()
+        _on, week_on, _bloc, _dark = self._hlh_toggles()
+        st.ensure_feeds(week_on, now)
+        self._hlh_floor_once()
+        xm = self.__dict__.get("_hlh_ident", None)
+        if xm is None:
+            xm = self._hlh_ident = IdentityXMap()
+        out = st.build("px", xm, _bloc, _dark, week_on, now)
+        if self.__dict__.get("_hlh_px_pics", None) is None:
+            self._hlh_px_pics = HlhPicsItem(); self._hlh_px_pics.setZValue(3)
+            pw.addItem(self._hlh_px_pics, ignoreBounds=True)
+            self._hlh_px_lbls = HlhLabelsItem(); self._hlh_px_lbls.setZValue(33)
+            pw.addItem(self._hlh_px_lbls, ignoreBounds=True)
+            self._hlh_px_out = None
+        if out is not self.__dict__.get("_hlh_px_out", None):
+            self._hlh_px_out = out
+            self._hlh_px_pics.set_pics(out[0])
+            self._hlh_px_lbls.set_labels(out[1], out[2])
+        if not self._hlh_px_pics.isVisible():
+            self._hlh_px_pics.setVisible(True); self._hlh_px_lbls.setVisible(True)
+
+    def _hlh_px_hide(self) -> None:
+        for _it in (self.__dict__.get("_hlh_px_pics", None), self.__dict__.get("_hlh_px_lbls", None)):
+            if _it is not None:
+                try:
+                    _it.setVisible(False)
+                except RuntimeError:
+                    pass
+        self._hlh_px_out = None
 
     # DAY SEPARATORS (m10_daysep, default ON) — a dashed vertical line at every UTC-midnight day boundary on the bucket
     # canvas, ALL tf. SAME style as the Prev-Day-VP separators (gray-blue, dashed [2,6], z=13). Cached per frame.
@@ -16958,7 +17132,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # — the whole archive. Mirror _change_tf: per-tf default, pulled back only to keep saved drawings in view.
             _tf = self.worker.tf
             reset_dt = QtCore.QDateTime.currentDateTime().addSecs(self._default_scan_secs(_tf))
-            floor = self._drawing_scan_floor(_tf)
+            floor = self._scan_floor_all(_tf)
             if floor is not None:
                 floor_dt = QtCore.QDateTime.fromSecsSinceEpoch(int(floor))
                 if floor_dt < reset_dt:                          # only ever pull back, never forward
@@ -17450,6 +17624,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._clear_choch()        # hide CHoCH dashed lines when leaving Mode 10
         self._hide_4h_zone()       # hide the 4h buy/sell wick bands when leaving Mode 10
         self._hide_prevday_vp()    # hide the per-previous-day Volume Profiles when leaving Mode 10
+        self._hide_hlh()           # hide the HLH Volume Profile too (pool-managed on self.plot)
         self._hide_session()       # hide the per-session boxes when leaving Mode 10
         self._hide_erange()        # hide the per-session Expected-Range envelopes too
         self._hide_eff_cycles(); self._hide_abs_cycles()   # hide the P2 + P1 HM sub-panels when leaving Mode 10
@@ -17546,6 +17721,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._px_sig = None; self._px_t = 0.0; self._px_data = None
             self._px_vrange = None; self._px_livesig = None; self._px_fsig = None
             self._px_pic_win = None    # the items are gone, so no picture covers anything any more
+            self._hlh_px_pics = None; self._hlh_px_lbls = None; self._hlh_px_out = None   # HLH items were children too
             # the CACHE survives a pane teardown -- it is data, and re-reading it would be exactly the
             # recomputation the accumulating cache exists to avoid. Only its ARRAYS are re-derived.
             self._px_sized = False; self._px_yfit = None
@@ -18833,6 +19009,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._px_bp_polys = []; self._px_bp_sig = None; self._px_bp_shown = False
                 self._px_lc = None; self._px_lc_body = None; self._px_lc_wick = None
                 self._px_lc_wick2 = None
+                self._hlh_px_pics = None; self._hlh_px_lbls = None; self._hlh_px_out = None
             else:
                 # ⚠ HIDING is not TEARING DOWN. Nulling the item refs here (one indent level out, which is
                 # where they landed) meant every hide dropped the pill and overlay handles while the items
@@ -21041,6 +21218,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             pass
         try:
             self._px_tick(now)          # PRICE pane (above the lines) -- self-gated, fail-safe
+        except Exception:
+            pass
+        try:
+            self._hlh_px_tick(now)      # HLH Volume Profile on the PRICE pane -- self-gated, fail-safe
         except Exception:
             pass
         try:
@@ -24402,6 +24583,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         except Exception:
             self._hide_prevday_vp()
         try:
+            self._draw_hlh(buckets, x)                             # HLH Volume Profile (m10_hlh)
+        except Exception:
+            self._hide_hlh()
+        try:
             self._draw_day_separators(buckets)                     # dashed UTC-midnight day separators (m10_daysep, default ON)
         except Exception:
             self._hide_day_separators()
@@ -25023,6 +25208,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self.timer.stop()
         self._conn_timer.stop()
         self.worker.stop()
+        try:
+            if getattr(self, "_hlh", None) is not None:
+                self._hlh.stop()                   # HLH klines threads (daemon threads, but stop them cleanly)
+        except Exception:
+            pass
         if len(_OPEN_WINDOWS) <= 1:            # the shared 4h/1m helpers live until the LAST window closes
             for _hw in list(_SHARED_HELPERS.values()):
                 try:

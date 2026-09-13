@@ -1,0 +1,1002 @@
+//@version=6
+indicator("Volume Profile — HLH / LHL / POC / D1, D2, D3 ... (Day + Week)", "HLH", overlay = true,
+     max_polylines_count = 100, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+
+// ── Periods
+showDay   = input.bool(true, "Day profile (00:00 → 23:59)", group = "Periods")
+histDays  = input.int(10, "Days to draw", minval = 1, maxval = 60, group = "Periods")
+ltfD      = input.timeframe("1", "Day: intrabar timeframe", group = "Periods")
+tpBinD    = input.int(30, "Day: time-profile bin (minutes)", options = [5, 10, 15, 30, 60, 120], group = "Periods")
+showWeek  = input.bool(false, "Week profile (Monday 00:00 → Sunday 23:59)", group = "Periods")
+histWeeks = input.int(6, "Weeks to draw", minval = 1, maxval = 30, group = "Periods")
+ltfW      = input.timeframe("5", "Week: intrabar timeframe",
+             tooltip = "A week of 1-minute candles is 10,080 candles: heavy, and TradingView keeps little 1-minute history. 5 minutes by default.",
+             group = "Periods")
+tpBinW    = input.int(240, "Week: time-profile bin (minutes)", options = [15, 30, 60, 120, 240, 360, 720, 1440], group = "Periods")
+blocOnly  = input.bool(false, "Block Lines Only",
+             tooltip = "Keeps ONLY the bloc VAH / VAL lines (drawn 2 px) and their bloc labels on the chart and hides everything else (profile, rows, D lines, levels, time profile, other labels). Everything is still computed the same way.",
+             group = "Periods")
+
+// ── Session
+tz = input.string("UTC", "Session timezone",
+     tooltip = "IANA name or GMT offset: UTC, Africa/Casablanca, GMT+1. Days and weeks are cut in this timezone.", group = "Session")
+
+// ── Profile
+rows       = input.int(60, "Price rows", minval = 20, maxval = 200, group = "Profile")
+widthPct   = input.int(28, "Profile width (% of the period)", minval = 5, maxval = 100, group = "Profile")
+
+// ── Filters
+lowMaxPct  = input.float(50, "LOW must be < % of POC", minval = 1, maxval = 100, step = 5, group = "Filters")
+highMinPct = input.float(50, "HIGH must be > % of POC", minval = 1, maxval = 100, step = 5, group = "Filters")
+
+// ── D lines
+numLows = input.bool(true, "Number the lows each leg walks through",
+           tooltip = "1 = closest low to the apex, 2 = the next lower low, ... The leg ends at the last number.",
+           group = "D lines")
+dWidth  = input.int(2, "D line width", minval = 1, maxval = 5, group = "D lines")
+dimTr   = input.int(80, "Transparency of LOWs/HIGHs used up by a D", minval = 0, maxval = 95,
+           tooltip = "LOWs and HIGHs strictly inside a D (between its two end points) are kept but faded: they are no longer used for the next Ds. The end LOWs and every D's apex stay at full strength.",
+           group = "D lines")
+sharedPct = input.float(66, "Shared LOW: red if width > % of an apex", minval = 1, maxval = 100, step = 1,
+             tooltip = "A LOW where 2 Ds end turns red when its width is above this % of at least one of those Ds' apex (the POC for D1, the HIGH for the others).",
+             group = "D lines")
+cShared   = input.color(color.new(#f23645, 25), "Shared LOW colour", group = "D lines")
+doMerge   = input.bool(true, "Merge the 2 Ds of a red LOW",
+             tooltip = "After all Ds are built: the D with the bigger apex keeps its apex and takes the other D's far end LOW. The smaller apex and the red LOW end up inside it (faded). Repeats until no red LOW is left to merge.",
+             group = "D lines")
+
+// ── D levels
+showLvl  = input.bool(true, "Draw each D's end levels to the period end",
+            tooltip = "For every final D: a horizontal line at the UPPER extreme of its upper end LOW and at the LOWER extreme of its lower end LOW (or of the lowest point when a leg has no LOW), from the start of the period to its end (23:59, or Sunday 23:59), in the D's colour.",
+            group = "D levels")
+lvlWidth = input.int(3, "Level line width", minval = 1, maxval = 6, group = "D levels")
+
+// ── Time profile
+showTP = input.bool(true, "Time profile inside each D area",
+          tooltip = "Each final D's area (between its two level lines) gets its own time profile over the period: one column per time bin, height = minutes price spent in THAT area during the bin, scaled to that D's busiest bin. Each D is measured on its own.",
+          group = "Time profile")
+tpTr   = input.int(75, "Fill transparency", minval = 0, maxval = 95, group = "Time profile")
+tpBlocs = input.bool(true, "Label each bloc (time + volume)",
+           tooltip = "A candle is in a D only if it CLOSES inside the D (measured on the intrabar candles). A bloc = consecutive time bins with such candles. Time = minutes of those candles; volume = their volume.",
+           group = "Time profile")
+tpTotal = input.bool(true, "Label the D area total (time + volume + blocs)", group = "Time profile")
+tpPeak  = input.bool(false, "Label the busiest bin", group = "Time profile")
+tpDimTr = input.int(90, "Transparency of the other blocs", minval = 0, maxval = 100,
+           tooltip = "All blocs of the period are compared, whatever their D. Two stay at normal opacity: the bloc with the MOST time AND the most volume, and the bloc with the LEAST time AND the least volume. Every other bloc is faded.",
+           group = "Time profile")
+tpBoth  = input.string("Keep both", "If most time and most volume are 2 different blocs", options = ["Keep both", "Keep neither"],
+           tooltip = "Same rule for the least time / least volume pair.",
+           group = "Time profile")
+showVA   = input.bool(true, "VAH / VAL of each bloc (Block Lines)",
+            tooltip = "Every bloc gets its own value area: a volume profile of only that bloc's candles (the ones closing inside the D during the bloc), on the D's rows. Start at its busiest row, add the bigger neighbouring row until the value-area % is reached. Solid lines in the D's colour, from the bloc's start to its end.",
+            group = "Time profile")
+vaPct    = input.float(70, "Value area %", minval = 10, maxval = 100, step = 5, group = "Time profile")
+vaWidth  = input.int(1, "VAH / VAL line width", minval = 1, maxval = 6, group = "Time profile")
+
+// ── Uncovered areas
+doUncov = input.bool(true, "Check uncovered areas",
+           tooltip = "Areas of the profile no D covers: their LOWs are not coloured, and the widest Low-High-Low bar of each area is coloured. A D is drawn from it to the first existing LOW on each side (or the lowest point if there is none).",
+           group = "Uncovered areas")
+cUncov  = input.color(color.new(#9c27b0, 25), "Top HIGH of an uncovered area + its D", group = "Uncovered areas")
+
+// ── D1 (POC)
+showD  = input.bool(true, "Draw D1", group = "D1 (POC)")
+cD     = input.color(#e91e63, "D1 line", group = "D1 (POC)")
+
+// ── Next Ds
+showDn = input.bool(true, "Draw D2, D3, D4 ...",
+          tooltip = "One D at a time: apex = the highest HIGH not used by a previous D, same leg rules as D1, then its LOWs/HIGHs are used up. Repeats until no HIGH is left.",
+          group = "Next Ds")
+maxDs  = input.int(0, "Max Ds including D1 (0 = until no HIGH left)", minval = 0, maxval = 50, group = "Next Ds")
+cD2    = input.color(#00bcd4, "D2 line", group = "Next Ds", inline = "c1")
+cD3    = input.color(#9c27b0, "D3", group = "Next Ds", inline = "c1")
+cD4    = input.color(#4caf50, "D4", group = "Next Ds", inline = "c2")
+cD5    = input.color(#ff9800, "D5 (then repeats)", group = "Next Ds", inline = "c2")
+
+// ── Style
+cHist = input.color(color.new(#9598a1, 55), "Histogram", group = "Style")
+cLow  = input.color(color.new(#f0b26b, 25), "LOW row (High-Low-High)", group = "Style")
+cHigh = input.color(color.new(#6b9bd1, 25), "HIGH row (Low-High-Low)", group = "Style")
+cPOC  = input.color(color.new(#ffd54f, 15), "POC row", group = "Style")
+
+// ── Resolution
+useLTF = input.bool(true, "Use intrabar resolution", group = "Resolution")
+
+// One D: D1 (apex = POC), D2, D3, ... (apex = a HIGH) or U1, U2 ... (apex = a purple HIGH)
+type DShape
+    int    num    // 1, 2, 3 ... (build order; sets the colour), 0 = purple HIGH
+    string name   // "D2", or "D2+D4" after a merge
+    int    a      // apex first row
+    int    b      // apex last row
+    float  apexV  // apex width (volume)
+    int[]  up     // connected LOW ids, upper leg (closest first)
+    int[]  dn     // connected LOW ids, lower leg
+    int    fbUp   // lowest-point row when the upper leg has no LOW (-1 = none)
+    int    fbDn
+    bool   alive  // false once merged into another D
+
+// One D area's time profile (per time bin: minutes in the area, volume traded in the area)
+type TPArea
+    string  name
+    color   col
+    float   yBot
+    float   yTop
+    float[] m
+    float[] vo
+    float   pLo    // price of row 0 of the period's profile
+    float   pStep  // row height
+    int     r0     // the area's lowest profile row
+    int     r1     // the area's highest profile row
+
+// One bloc = consecutive non-empty time bins of one D area
+type Bloc
+    int    area   // index in the period's TPArea list
+    int    num    // 1, 2, 3 ... inside its area
+    int    bs     // first bin
+    int    be     // one past the last bin
+    float  mins   // minutes in the area
+    float  vol    // volume traded in the area
+    bool   keep   // stays at normal opacity
+    string tag    // "MAX" / "MIN" ...
+
+// Everything one period (Day or Week) needs: its candles, its drawings, where it started.
+// The Day and the Week each own one, so they run fully independently.
+type Per
+    bool       isWeek
+    float[]    srcH
+    float[]    srcL
+    float[]    srcV
+    float[]    srcC
+    int[]      srcT      // candle open time
+    float[]    srcM      // candle length in minutes
+    polyline[] pPolys    // finished periods (p*)
+    int[]      pPolyDay
+    box[]      pBoxes
+    int[]      pBoxDay
+    line[]     pLines
+    int[]      pLineDay
+    label[]    pLabs
+    int[]      pLabDay
+    polyline[] dPolys    // the forming period (d*)
+    box[]      dBoxes
+    line[]     dLines
+    label[]    dLabs
+    int        dayId
+    int        startIdx
+    int        startTime
+    int        key
+
+newPer(bool w) =>
+    Per.new(w, array.new<float>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<int>(), array.new<float>(),
+         array.new<polyline>(), array.new<int>(), array.new<box>(), array.new<int>(),
+         array.new<line>(), array.new<int>(), array.new<label>(), array.new<int>(),
+         array.new<polyline>(), array.new<box>(), array.new<line>(), array.new<label>(), 0, 0, 0, -1)
+
+var Per perD = newPer(false)
+var Per perW = newPer(true)
+
+// Keep a drawing. With "Block Lines Only" every drawing except the bloc lines is deleted
+// at once instead of kept.
+keepPoly(Per P, polyline o, bool dev) =>
+    if blocOnly
+        polyline.delete(o)
+    else if dev
+        array.push(P.dPolys, o)
+    else
+        array.push(P.pPolys, o)
+        array.push(P.pPolyDay, P.dayId)
+
+keepBox(Per P, box o, bool dev) =>
+    if blocOnly
+        box.delete(o)
+    else if dev
+        array.push(P.dBoxes, o)
+    else
+        array.push(P.pBoxes, o)
+        array.push(P.pBoxDay, P.dayId)
+
+keepLabel(Per P, label o, bool dev) =>
+    if blocOnly
+        label.delete(o)
+    else if dev
+        array.push(P.dLabs, o)
+    else
+        array.push(P.pLabs, o)
+        array.push(P.pLabDay, P.dayId)
+
+keepLine(Per P, line o, bool dev) =>
+    if blocOnly
+        line.delete(o)
+    else if dev
+        array.push(P.dLines, o)
+    else
+        array.push(P.pLines, o)
+        array.push(P.pLineDay, P.dayId)
+
+// the bloc labels: always kept (they belong with the Block Lines)
+keepBlocLabel(Per P, label o, bool dev) =>
+    if dev
+        array.push(P.dLabs, o)
+    else
+        array.push(P.pLabs, o)
+        array.push(P.pLabDay, P.dayId)
+
+// the bloc VAH / VAL lines: always kept
+keepBlocLine(Per P, line o, bool dev) =>
+    if dev
+        array.push(P.dLines, o)
+    else
+        array.push(P.pLines, o)
+        array.push(P.pLineDay, P.dayId)
+
+clearDev(Per P) =>
+    while array.size(P.dPolys) > 0
+        polyline.delete(array.pop(P.dPolys))
+    while array.size(P.dBoxes) > 0
+        box.delete(array.pop(P.dBoxes))
+    while array.size(P.dLines) > 0
+        line.delete(array.pop(P.dLines))
+    while array.size(P.dLabs) > 0
+        label.delete(array.pop(P.dLabs))
+
+// delete every drawing of the finished periods up to `dayNo`
+dropDaysUpTo(Per P, int dayNo) =>
+    while array.size(P.pPolys) > 0 and array.get(P.pPolyDay, 0) <= dayNo
+        polyline.delete(array.shift(P.pPolys))
+        array.shift(P.pPolyDay)
+    while array.size(P.pBoxes) > 0 and array.get(P.pBoxDay, 0) <= dayNo
+        box.delete(array.shift(P.pBoxes))
+        array.shift(P.pBoxDay)
+    while array.size(P.pLines) > 0 and array.get(P.pLineDay, 0) <= dayNo
+        line.delete(array.shift(P.pLines))
+        array.shift(P.pLineDay)
+    while array.size(P.pLabs) > 0 and array.get(P.pLabDay, 0) <= dayNo
+        label.delete(array.shift(P.pLabs))
+        array.shift(P.pLabDay)
+
+// Keep at most `hist` finished periods and stay under this period's share of TradingView's
+// drawing caps. Always removes WHOLE periods, oldest first.
+pruneOld(Per P, int hist, int capPoly, int capOther) =>
+    dropDaysUpTo(P, P.dayId - hist)
+    while array.size(P.pPolys) > capPoly or array.size(P.pBoxes) > capOther or array.size(P.pLines) > capOther or array.size(P.pLabs) > capOther
+        oldest = P.dayId
+        if array.size(P.pPolyDay) > 0
+            oldest := math.min(oldest, array.get(P.pPolyDay, 0))
+        if array.size(P.pBoxDay) > 0
+            oldest := math.min(oldest, array.get(P.pBoxDay, 0))
+        if array.size(P.pLineDay) > 0
+            oldest := math.min(oldest, array.get(P.pLineDay, 0))
+        if array.size(P.pLabDay) > 0
+            oldest := math.min(oldest, array.get(P.pLabDay, 0))
+        dropDaysUpTo(P, oldest)
+
+rowW(float rv, float maxVol, int maxW) =>
+    rv > 0 ? math.max(1, int(maxW * rv / maxVol)) : 1
+
+dColor(int num) =>
+    m = (num - 2) % 4
+    num == 1 ? cD : m == 0 ? cD2 : m == 1 ? cD3 : m == 2 ? cD4 : cD5
+
+// One leg of a D, walking from row `start` in direction `dir` (+1 up, -1 down):
+//   - the closest LOW is ALWAYS connected first, even past a HIGH
+//   - keep extending while the next LOW is LOWER than the last connected one
+//   - stop at the first LOW that is not lower (it interrupts)
+//   - once the first LOW is connected, a HIGH interrupts too
+//   - never enter a row already used by a previous D
+// Returns the ids of the connected LOWs, closest first. The leg ends at the last one.
+walkLeg(float[] vp, int[] lowS, int[] lowE, int[] lowId, bool[] isHi, bool[] used, int start, int dir) =>
+    seq = array.new<int>()
+    k = start
+    while k >= 0 and k <= rows - 1
+        if array.get(used, k)
+            break
+        if array.get(isHi, k) and array.size(seq) > 0
+            break
+        id = array.get(lowId, k)
+        if id >= 0
+            if array.size(seq) > 0 and array.get(vp, array.get(lowS, id)) >= array.get(vp, array.get(lowS, array.last(seq)))
+                break
+            array.push(seq, id)
+            k := dir > 0 ? array.get(lowE, id) + 1 : array.get(lowS, id) - 1
+        else
+            k += dir
+    seq
+
+// No LOW on a side: the lowest point on that side = the thinnest row between the
+// apex and the edge (or the first row used by a previous D). Tie = farthest. -1 = none.
+lowestRow(float[] vp, bool[] used, int start, int dir) =>
+    best = -1
+    k = start
+    while k >= 0 and k <= rows - 1
+        if array.get(used, k)
+            break
+        if best < 0 or array.get(vp, k) <= array.get(vp, best)
+            best := k
+        k += dir
+    best
+
+// the LOW a leg ends at (-1 = the leg has no LOW)
+endLow(int[] seq) =>
+    array.size(seq) > 0 ? array.last(seq) : -1
+
+// For every LOW: how many live Ds end there, and the thinnest apex among them.
+computeEnds(DShape[] ds, int nLows) =>
+    cnt = array.new<int>(nLows, 0)
+    ap  = array.new<float>(nLows, 0.0)
+    for d in ds
+        if d.alive
+            for side = 0 to 1
+                id = endLow(side == 0 ? d.up : d.dn)
+                if id >= 0
+                    array.set(ap, id, array.get(cnt, id) == 0 ? d.apexV : math.min(array.get(ap, id), d.apexV))
+                    array.set(cnt, id, array.get(cnt, id) + 1)
+    [cnt, ap]
+
+// Merge the 2 Ds of a red LOW. Red LOW = end LOW of 2 live Ds, width > sharedPct % of at
+// least one of their apexes. It is the LOWER end of the D above it (X) and the UPPER end of
+// the D below (Y). The bigger apex wins and keeps its apex; the merged D runs from X's upper
+// end to Y's lower end. The smaller apex and the red LOW end up inside it (faded).
+// Repeats until no red LOW is left to merge.
+mergeRedLows(DShape[] ds, bool[] used, bool[] isApex, float[] vp, int[] lowS, int[] lowE) =>
+    merging = array.size(ds) > 1
+    while merging
+        [mCnt, mAp] = computeEnds(ds, array.size(lowS))
+        found = false
+        if array.size(lowS) > 0
+            for i = 0 to array.size(lowS) - 1
+                if not found and array.get(mCnt, i) >= 2 and array.get(vp, array.get(lowS, i)) > array.get(mAp, i) * sharedPct / 100.0
+                    xi = -1
+                    yi = -1
+                    for j = 0 to array.size(ds) - 1
+                        dj = array.get(ds, j)
+                        if dj.alive
+                            if endLow(dj.dn) == i
+                                xi := j
+                            if endLow(dj.up) == i
+                                yi := j
+                    if xi >= 0 and yi >= 0 and xi != yi
+                        found := true
+                        X = array.get(ds, xi)
+                        Y = array.get(ds, yi)
+                        if X.apexV >= Y.apexV
+                            X.dn   := Y.dn
+                            X.fbDn := Y.fbDn
+                            X.name := X.name + "+" + Y.name
+                            Y.alive := false
+                            if Y.num > 1
+                                array.set(isApex, Y.a, false)
+                        else
+                            Y.up   := X.up
+                            Y.fbUp := X.fbUp
+                            Y.name := Y.name + "+" + X.name
+                            X.alive := false
+                            if X.num > 1
+                                array.set(isApex, X.a, false)
+                        for kk = array.get(lowS, i) to array.get(lowE, i)
+                            array.set(used, kk, true)
+        merging := found
+    array.size(ds)
+
+// One leg of a purple-HIGH D: walk through uncovered rows from `start` in direction `dir`.
+// Returns [LOW id of the first covered row if it is a LOW (-1 otherwise),
+//          lowest uncovered row on the way (-1 = none)].
+uncLeg(float[] vp, int[] lowId, bool[] covered, int start, int dir) =>
+    lowHit = -1
+    best   = -1
+    k = start
+    going = true
+    while going and k >= 0 and k <= rows - 1
+        if array.get(covered, k)
+            lowHit := array.get(lowId, k)
+            going := false
+        else
+            if best < 0 or array.get(vp, k) <= array.get(vp, best)
+                best := k
+            k += dir
+    [lowHit, best]
+
+// Draw one leg: to the last connected LOW (numbering each LOW on the way), or to the
+// lowest point when the leg connected no LOW.
+drawLeg(Per P, int apexX, float apexY, int[] seq, int fb, int sIdx, float lo, float step, float[] vp,
+     int[] lowS, int[] lowE, float maxVol, int maxW, color col, bool dev) =>
+    if array.size(seq) > 0
+        for j = 0 to array.size(seq) - 1
+            id = array.get(seq, j)
+            a  = array.get(lowS, id)
+            lx = sIdx + rowW(array.get(vp, a), maxVol, maxW)
+            ly = lo + (a + array.get(lowE, id) + 1) / 2.0 * step
+            if numLows
+                keepLabel(P, label.new(lx, ly, str.tostring(j + 1), style = label.style_label_left,
+                     color = color.new(col, 100), textcolor = col, size = size.tiny), dev)
+            if j == array.size(seq) - 1
+                keepLine(P, line.new(apexX, apexY, lx, ly, color = col, width = dWidth), dev)
+    else if fb >= 0
+        fx = sIdx + rowW(array.get(vp, fb), maxVol, maxW)
+        keepLine(P, line.new(apexX, apexY, fx, lo + (fb + 0.5) * step, color = col, width = dWidth), dev)
+
+// Value area of the profile rows r0..r1 (inclusive) only. Start at the busiest row, then add
+// the bigger neighbouring row (above or below) until vaPct % of those rows' volume is inside.
+// Returns [lowest row, highest row] of the value area (-1, -1 if the rows hold no volume).
+valueArea(float[] vp, int r0, int r1) =>
+    tot = 0.0
+    pk  = r0
+    for k = r0 to r1
+        tot += array.get(vp, k)
+        if array.get(vp, k) > array.get(vp, pk)
+            pk := k
+    vaLo = -1
+    vaHi = -1
+    if tot > 0
+        vaLo := pk
+        vaHi := pk
+        acc = array.get(vp, pk)
+        target = tot * vaPct / 100.0
+        while acc < target and (vaLo > r0 or vaHi < r1)
+            up = -1.0
+            dn = -1.0
+            if vaHi < r1
+                up := array.get(vp, vaHi + 1)
+            if vaLo > r0
+                dn := array.get(vp, vaLo - 1)
+            if up >= dn
+                vaHi += 1
+                acc += up
+            else
+                vaLo -= 1
+                acc += dn
+    [vaLo, vaHi]
+
+// Value area of ONE bloc: a volume profile built only from the candles of that bloc (candle
+// open time in [tA, tB) and close inside the D area), on the period's rows but limited to the
+// area's rows. Each candle's volume is spread evenly over the area rows its range touches.
+// Returns [lowest row, highest row] (profile row indexes), -1 if no volume.
+blocVA(Per P, TPArea ar, int tA, int tB) =>
+    nR = ar.r1 - ar.r0 + 1
+    bv = array.new<float>(nR, 0.0)
+    if array.size(P.srcT) > 0
+        for i = 0 to array.size(P.srcT) - 1
+            t = array.get(P.srcT, i)
+            c = array.get(P.srcC, i)
+            if t >= tA and t < tB and c >= ar.yBot and c <= ar.yTop
+                iT = math.min(ar.r1, int((array.get(P.srcH, i) - ar.pLo) / ar.pStep))
+                iB = math.max(ar.r0, int((array.get(P.srcL, i) - ar.pLo) / ar.pStep))
+                if iT >= iB
+                    sh = array.get(P.srcV, i) / (iT - iB + 1)
+                    for rr = iB to iT
+                        array.set(bv, rr - ar.r0, array.get(bv, rr - ar.r0) + sh)
+    [vLo, vHi] = valueArea(bv, 0, nR - 1)
+    outLo = vLo >= 0 ? vLo + ar.r0 : -1
+    outHi = vHi >= 0 ? vHi + ar.r0 : -1
+    [outLo, outHi]
+
+// 58 -> "58min", 94 -> "1h34m", 1590 -> "1d2h30m"
+fmtDur(float mins) =>
+    t  = int(math.round(mins))
+    dd = int(t / 1440)
+    hh = int((t % 1440) / 60)
+    mm = t % 60
+    t < 60 ? str.tostring(t) + "min" :
+         (dd > 0 ? str.tostring(dd) + "d" : "") + str.tostring(hh) + "h" + (mm < 10 ? "0" : "") + str.tostring(mm) + "m"
+
+// Time profile of ONE D area [yBot, yTop], bins of binMs starting at t0. Only this period's
+// candles, only this area. A candle is IN the D only if it CLOSES inside the D; its time
+// and its whole volume then count. Returns [minutes in the area per bin, volume per bin].
+tpBins(Per P, float yBot, float yTop, int t0, int binMs, int nBins) =>
+    m  = array.new<float>(nBins, 0.0)
+    vo = array.new<float>(nBins, 0.0)
+    if array.size(P.srcT) > 0
+        for i = 0 to array.size(P.srcT) - 1
+            c = array.get(P.srcC, i)
+            b = int((array.get(P.srcT, i) - t0) / binMs)
+            if c >= yBot and c <= yTop and b >= 0 and b < nBins
+                array.set(m, b, array.get(m, b) + array.get(P.srcM, i))
+                array.set(vo, b, array.get(vo, b) + array.get(P.srcV, i))
+    [m, vo]
+
+// Every bloc of every D area of the period. A bloc = run of consecutive non-empty bins.
+findBlocs(TPArea[] areas) =>
+    bl = array.new<Bloc>()
+    if array.size(areas) > 0
+        for ai = 0 to array.size(areas) - 1
+            ar = array.get(areas, ai)
+            nb = 0
+            bs = -1
+            bM = 0.0
+            bV = 0.0
+            for b = 0 to array.size(ar.m)
+                val = 0.0
+                if b < array.size(ar.m)
+                    val := array.get(ar.m, b)
+                if val > 0
+                    if bs < 0
+                        bs := b
+                        bM := 0.0
+                        bV := 0.0
+                    bM += val
+                    bV += array.get(ar.vo, b)
+                else if bs >= 0
+                    nb += 1
+                    array.push(bl, Bloc.new(ai, nb, bs, b, bM, bV, false, ""))
+                    bs := -1
+    bl
+
+// Keep the bloc(s) of one extreme at normal opacity. iT = extreme by time, iV = by volume.
+keepExtreme(Bloc[] bl, int iT, int iV, string tag) =>
+    if iT == iV
+        bb = array.get(bl, iT)
+        bb.keep := true
+        bb.tag  := bb.tag == "" ? tag : bb.tag + " + " + tag
+    else if tpBoth == "Keep both"
+        b1 = array.get(bl, iT)
+        b1.keep := true
+        b1.tag  := b1.tag == "" ? tag + " time" : b1.tag + " + " + tag + " time"
+        b2 = array.get(bl, iV)
+        b2.keep := true
+        b2.tag  := b2.tag == "" ? tag + " vol" : b2.tag + " + " + tag + " vol"
+    array.size(bl)
+
+// Compare ALL blocs of the period, whatever their D:
+//   MAX = most time AND most volume, MIN = least time AND least volume.
+markExtremes(Bloc[] bl) =>
+    if array.size(bl) > 0
+        iTmax = 0
+        iVmax = 0
+        iTmin = 0
+        iVmin = 0
+        if array.size(bl) > 1
+            for i = 1 to array.size(bl) - 1
+                bb = array.get(bl, i)
+                if bb.mins > array.get(bl, iTmax).mins
+                    iTmax := i
+                if bb.vol > array.get(bl, iVmax).vol
+                    iVmax := i
+                if bb.mins < array.get(bl, iTmin).mins
+                    iTmin := i
+                if bb.vol < array.get(bl, iVmin).vol
+                    iVmin := i
+        keepExtreme(bl, iTmax, iVmax, "MAX")
+        keepExtreme(bl, iTmin, iVmin, "MIN")
+    array.size(bl)
+
+// Draw every D area's time profile. Columns stand on the area's bottom line, the busiest bin
+// reaching its top line. Kept blocs at normal opacity, every other bloc faded. Each bloc gets
+// its VAH / VAL (the Block Lines) and a label, each area a total label.
+drawAreas(Per P, TPArea[] areas, Bloc[] bl, int t0, int binMs, bool dev) =>
+    pfx = P.isWeek ? "W " : ""
+    if array.size(areas) > 0
+        for ai = 0 to array.size(areas) - 1
+            ar = array.get(areas, ai)
+            nBin = array.size(ar.m)
+            mx = array.max(ar.m)
+            if mx > 0
+                kept = array.new<bool>(nBin, false)
+                for bb in bl
+                    if bb.area == ai and bb.keep
+                        for k = bb.bs to bb.be - 1
+                            array.set(kept, k, true)
+
+                // faded columns (kept blocs left out)
+                pts = array.new<chart.point>()
+                array.push(pts, chart.point.from_time(t0, ar.yBot))
+                for b = 0 to nBin - 1
+                    yy = array.get(kept, b) ? ar.yBot : ar.yBot + (ar.yTop - ar.yBot) * array.get(ar.m, b) / mx
+                    array.push(pts, chart.point.from_time(t0 + b * binMs, yy))
+                    array.push(pts, chart.point.from_time(t0 + (b + 1) * binMs, yy))
+                array.push(pts, chart.point.from_time(t0 + nBin * binMs, ar.yBot))
+                keepPoly(P, polyline.new(pts, closed = true, xloc = xloc.bar_time,
+                     line_color = color.new(ar.col, math.max(40, tpDimTr)), fill_color = color.new(ar.col, tpDimTr), line_width = 1), dev)
+
+                totM = 0.0
+                totV = 0.0
+                nb   = 0
+                for bb in bl
+                    if bb.area == ai
+                        nb   += 1
+                        totM += bb.mins
+                        totV += bb.vol
+                        // kept bloc columns at normal opacity
+                        if bb.keep
+                            kp = array.new<chart.point>()
+                            array.push(kp, chart.point.from_time(t0 + bb.bs * binMs, ar.yBot))
+                            for b = bb.bs to bb.be - 1
+                                yy = ar.yBot + (ar.yTop - ar.yBot) * array.get(ar.m, b) / mx
+                                array.push(kp, chart.point.from_time(t0 + b * binMs, yy))
+                                array.push(kp, chart.point.from_time(t0 + (b + 1) * binMs, yy))
+                            array.push(kp, chart.point.from_time(t0 + bb.be * binMs, ar.yBot))
+                            keepPoly(P, polyline.new(kp, closed = true, xloc = xloc.bar_time,
+                                 line_color = color.new(ar.col, 40), fill_color = color.new(ar.col, tpTr), line_width = 1), dev)
+                        // Block Lines: VAH / VAL of THIS bloc, from its start to its end
+                        if showVA and ar.r1 >= ar.r0
+                            tA = t0 + bb.bs * binMs
+                            tB = t0 + bb.be * binMs
+                            [vLo, vHi] = blocVA(P, ar, tA, tB)
+                            if vLo >= 0
+                                lc  = bb.keep ? ar.col : color.new(ar.col, 60)
+                                yVh = ar.pLo + (vHi + 1) * ar.pStep
+                                yVl = ar.pLo + vLo * ar.pStep
+                                lw  = blocOnly ? 2 : vaWidth
+                                keepBlocLine(P, line.new(tA, yVh, tB, yVh, xloc = xloc.bar_time, color = lc, width = lw, style = line.style_solid), dev)
+                                keepBlocLine(P, line.new(tA, yVl, tB, yVl, xloc = xloc.bar_time, color = lc, width = lw, style = line.style_solid), dev)
+                        if tpBlocs
+                            txt = (bb.tag != "" ? bb.tag + "\n" : "") + "B" + str.tostring(bb.num) + "\n" + fmtDur(bb.mins) + "\n" + str.tostring(bb.vol, format.volume)
+                            keepBlocLabel(P, label.new(t0 + int((bb.bs + bb.be) * binMs / 2), ar.yBot, txt,
+                                 xloc = xloc.bar_time, style = label.style_label_up,
+                                 color = color.new(ar.col, bb.keep ? 80 : 95),
+                                 textcolor = bb.keep ? color.black : color.new(color.black, 65), size = size.small), dev)
+
+                if tpPeak
+                    fmt = P.isWeek ? "EEE HH:mm" : "HH:mm"
+                    pk = array.indexof(ar.m, mx)
+                    ptxt = str.format_time(t0 + pk * binMs, fmt, tz) + "-" + str.format_time(t0 + (pk + 1) * binMs, fmt, tz) +
+                         "  " + str.tostring(math.round(mx)) + " min"
+                    keepLabel(P, label.new(t0 + pk * binMs + int(binMs / 2), ar.yTop, ptxt, xloc = xloc.bar_time, style = label.style_label_down,
+                         color = color.new(ar.col, 85), textcolor = ar.col, size = size.tiny), dev)
+
+                if tpTotal
+                    keepLabel(P, label.new(t0, ar.yTop,
+                         pfx + ar.name + " area: " + fmtDur(totM) + " | vol " + str.tostring(totV, format.volume) + " | " + str.tostring(nb) + (nb == 1 ? " bloc" : " blocs"),
+                         xloc = xloc.bar_time, style = label.style_label_lower_left,
+                         color = color.new(ar.col, 70), textcolor = color.black, size = size.small), dev)
+    array.size(areas)
+
+// Build and draw ONE period (a day or a week) from its candles.
+renderPer(Per P, int eIdx, bool dev) =>
+    n = array.size(P.srcH)
+    sIdx = P.startIdx
+    if n > 0 and eIdx > sIdx
+        hi = array.max(P.srcH)
+        lo = array.min(P.srcL)
+        if hi > lo
+            step = (hi - lo) / rows
+            vp = array.new<float>(rows, 0.0)
+            for i = 0 to n - 1
+                iT = math.min(rows - 1, int((array.get(P.srcH, i) - lo) / step))
+                iB = math.max(0, int((array.get(P.srcL, i) - lo) / step))
+                sh = array.get(P.srcV, i) / (iT - iB + 1)
+                for r = iB to iT
+                    array.set(vp, r, array.get(vp, r) + sh)
+
+            maxVol = array.max(vp)
+            maxW   = math.max(1, int((eIdx - sIdx) * widthPct / 100.0))
+
+            if maxVol > 0
+                // ── POC (a run of equal max rows counts as one POC)
+                pS = array.indexof(vp, maxVol)
+                pE = pS
+                while pE < rows - 1 and array.get(vp, pE + 1) == maxVol
+                    pE += 1
+
+                // ═══ STEP 1 : mark LOWs and HIGHs ═══
+                // LOW  = High-Low-High : both neighbours are bigger.
+                // HIGH = Low-High-Low  : both neighbours are smaller.
+                // A run of equal rows is treated as ONE bar.
+                // ═══ STEP 2 : filter ═══
+                // LOW < lowMaxPct % of POC, HIGH > highMinPct % of POC.
+                // Only the filtered LOWs and HIGHs exist from here on.
+                lowLim  = maxVol * lowMaxPct / 100.0
+                highLim = maxVol * highMinPct / 100.0
+
+                lowS  = array.new<int>()
+                lowE  = array.new<int>()
+                lowId = array.new<int>(rows, -1)
+                highS = array.new<int>()
+                highE = array.new<int>()
+                isHi  = array.new<bool>(rows, false)
+
+                r = 1
+                while r < rows - 1
+                    e = r
+                    while e < rows - 1 and array.get(vp, e + 1) == array.get(vp, r)
+                        e += 1
+                    if e + 1 <= rows - 1
+                        v     = array.get(vp, r)
+                        below = array.get(vp, r - 1)
+                        above = array.get(vp, e + 1)
+                        if below > v and above > v and v < lowLim
+                            id = array.size(lowS)
+                            array.push(lowS, r)
+                            array.push(lowE, e)
+                            for kk = r to e
+                                array.set(lowId, kk, id)
+                        if below < v and above < v and v > highLim
+                            array.push(highS, r)
+                            array.push(highE, e)
+                            for kk = r to e
+                                array.set(isHi, kk, true)
+                    r := e + 1
+
+                ds     = array.new<DShape>()
+                used   = array.new<bool>(rows, false)
+                isApex = array.new<bool>(rows, false)
+
+                // ═══ STEP 3 + 4 : D1 from the POC, then what it has used up ═══
+                // Every row strictly between D1's two end points is used (its end LOWs are
+                // NOT inside). LOWs and HIGHs there are faded and no longer considered.
+                if showD
+                    noneUsed = array.new<bool>(rows, false)
+                    up1 = walkLeg(vp, lowS, lowE, lowId, isHi, noneUsed, pE + 1, 1)
+                    dn1 = walkLeg(vp, lowS, lowE, lowId, isHi, noneUsed, pS - 1, -1)
+                    fu1 = array.size(up1) == 0 ? lowestRow(vp, noneUsed, pE + 1, 1) : -1
+                    fd1 = array.size(dn1) == 0 ? lowestRow(vp, noneUsed, pS - 1, -1) : -1
+                    array.push(ds, DShape.new(1, "D1", pS, pE, maxVol, up1, dn1, fu1, fd1, true))
+                    d1Top = array.size(up1) > 0 ? array.get(lowS, array.last(up1)) - 1 : fu1 >= 0 ? fu1 - 1 : rows - 1
+                    d1Bot = array.size(dn1) > 0 ? array.get(lowE, array.last(dn1)) + 1 : fd1 >= 0 ? fd1 + 1 : 0
+                    if d1Top >= d1Bot
+                        for kk = d1Bot to d1Top
+                            array.set(used, kk, true)
+
+                // ═══ STEP 5+ : D2, D3, D4 ... one at a time ═══
+                // Build ONE D from the highest HIGH not used yet (same leg rules as D1,
+                // legs never enter a used row), then mark its rows used, then look again.
+                // Stops when no HIGH is left (or at the Max Ds cap).
+                searching = showD and showDn and array.size(highS) > 0
+                while searching
+                    if maxDs > 0 and array.size(ds) >= maxDs
+                        searching := false
+                    else
+                        a2 = -1
+                        b2 = -1
+                        for i = 0 to array.size(highS) - 1
+                            hs = array.get(highS, i)
+                            if not array.get(used, hs) and (hs < pS or hs > pE)
+                                if a2 < 0 or array.get(vp, hs) > array.get(vp, a2)
+                                    a2 := hs
+                                    b2 := array.get(highE, i)
+                        if a2 < 0
+                            searching := false
+                        else
+                            up2 = walkLeg(vp, lowS, lowE, lowId, isHi, used, b2 + 1, 1)
+                            dn2 = walkLeg(vp, lowS, lowE, lowId, isHi, used, a2 - 1, -1)
+                            fu  = array.size(up2) == 0 ? lowestRow(vp, used, b2 + 1, 1) : -1
+                            fd  = array.size(dn2) == 0 ? lowestRow(vp, used, a2 - 1, -1) : -1
+                            num = array.size(ds) + 1
+                            array.push(ds, DShape.new(num, "D" + str.tostring(num), a2, b2, array.get(vp, a2), up2, dn2, fu, fd, true))
+                            array.set(isApex, a2, true)
+
+                            // what this D has used up (its end LOWs are NOT inside)
+                            dTop = array.size(up2) > 0 ? array.get(lowS, array.last(up2)) - 1 : fu >= 0 ? fu - 1 : b2
+                            dBot = array.size(dn2) > 0 ? array.get(lowE, array.last(dn2)) + 1 : fd >= 0 ? fd + 1 : a2
+                            for kk = math.min(dBot, a2) to math.max(dTop, b2)
+                                array.set(used, kk, true)
+
+                // ═══ STEP 6 : merge the 2 Ds of a red LOW ═══
+                if doMerge
+                    mergeRedLows(ds, used, isApex, vp, lowS, lowE)
+
+                // ═══ STEP 7 : uncovered areas ═══
+                // Covered = every row a D spans, from its lower end to its upper end (end LOWs,
+                // apex and used rows included). Each run of rows NOT covered is an uncovered area:
+                //   1. its LOWs are not coloured
+                //   2. its widest Low-High-Low bar (any width, not only filtered HIGHs) is coloured
+                covered = array.copy(used)
+                for d in ds
+                    if d.alive
+                        upL = endLow(d.up)
+                        dnL = endLow(d.dn)
+                        dTop = upL >= 0 ? array.get(lowE, upL) : d.fbUp >= 0 ? d.fbUp : d.b
+                        dBot = dnL >= 0 ? array.get(lowS, dnL) : d.fbDn >= 0 ? d.fbDn : d.a
+                        for kk = dBot to dTop
+                            array.set(covered, kk, true)
+
+                uncS = array.new<int>()
+                uncE = array.new<int>()
+                if doUncov
+                    k = 0
+                    while k < rows
+                        if array.get(covered, k)
+                            k += 1
+                        else
+                            s = k
+                            while k < rows and not array.get(covered, k)
+                                k += 1
+                            e = k - 1
+                            best  = -1
+                            bestE = -1
+                            rr = math.max(1, s)
+                            while rr <= e
+                                pe = rr
+                                while pe < e and array.get(vp, pe + 1) == array.get(vp, rr)
+                                    pe += 1
+                                if pe + 1 <= rows - 1 and array.get(vp, rr - 1) < array.get(vp, rr) and array.get(vp, pe + 1) < array.get(vp, rr)
+                                    if best < 0 or array.get(vp, rr) > array.get(vp, best)
+                                        best  := rr
+                                        bestE := pe
+                                rr := pe + 1
+                            if best >= 0
+                                array.push(uncS, best)
+                                array.push(uncE, bestE)
+
+                // ═══ STEP 8 : a D from each purple HIGH ═══
+                // The LOWs of the uncovered area were removed, so each leg walks through the
+                // uncovered rows and attaches to the first EXISTING LOW it reaches (the end LOW
+                // of the neighbouring D). If it reaches the profile edge, or a covered row that
+                // is not a LOW, it goes to the lowest point of the uncovered rows on that side.
+                pds = array.new<DShape>()
+                if array.size(uncS) > 0
+                    for i = 0 to array.size(uncS) - 1
+                        ua = array.get(uncS, i)
+                        ub = array.get(uncE, i)
+                        [uLow, uFb] = uncLeg(vp, lowId, covered, ub + 1, 1)
+                        [dLow, dFb] = uncLeg(vp, lowId, covered, ua - 1, -1)
+                        upS = array.new<int>()
+                        if uLow >= 0
+                            array.push(upS, uLow)
+                        dnS = array.new<int>()
+                        if dLow >= 0
+                            array.push(dnS, dLow)
+                        array.push(pds, DShape.new(0, "U" + str.tostring(i + 1), ua, ub, array.get(vp, ua), upS, dnS,
+                             uLow >= 0 ? -1 : uFb, dLow >= 0 ? -1 : dFb, true))
+
+                // ═══ STEP 9 : merge again, now with the purple Ds ═══
+                allDs = array.copy(ds)
+                for pd in pds
+                    array.push(allDs, pd)
+                if doMerge
+                    mergeRedLows(allDs, used, isApex, vp, lowS, lowE)
+
+                // red LOWs still shared by 2 live Ds after the merges
+                [endCnt, endApex] = computeEnds(allDs, array.size(lowS))
+
+                // ═══ DRAW ═══
+                pts = array.new<chart.point>()
+                array.push(pts, chart.point.from_index(sIdx, lo))
+                for rr = 0 to rows - 1
+                    rv = array.get(vp, rr)
+                    w  = rv > 0 ? math.max(1, int(maxW * rv / maxVol)) : 0
+                    array.push(pts, chart.point.from_index(sIdx + w, lo + rr * step))
+                    array.push(pts, chart.point.from_index(sIdx + w, lo + (rr + 1) * step))
+                array.push(pts, chart.point.from_index(sIdx, lo + rows * step))
+                keepPoly(P, polyline.new(pts, closed = true, xloc = xloc.bar_index,
+                     line_color = color.new(cHist, 40), fill_color = cHist, line_width = 1), dev)
+
+                if array.size(lowS) > 0
+                    for i = 0 to array.size(lowS) - 1
+                        a = array.get(lowS, i)
+                        if not (doUncov and not array.get(covered, a))
+                            red = array.get(endCnt, i) >= 2 and array.get(vp, a) > array.get(endApex, i) * sharedPct / 100.0
+                            bg = red ? cShared : array.get(used, a) ? color.new(cLow, dimTr) : cLow
+                            keepBox(P, box.new(sIdx, lo + (array.get(lowE, i) + 1) * step,
+                                 sIdx + rowW(array.get(vp, a), maxVol, maxW), lo + a * step,
+                                 border_width = 0, bgcolor = bg), dev)
+
+                if array.size(highS) > 0
+                    for i = 0 to array.size(highS) - 1
+                        a = array.get(highS, i)
+                        keepBox(P, box.new(sIdx, lo + (array.get(highE, i) + 1) * step,
+                             sIdx + rowW(array.get(vp, a), maxVol, maxW), lo + a * step,
+                             border_width = 0, bgcolor = array.get(used, a) and not array.get(isApex, a) ? color.new(cHigh, dimTr) : cHigh), dev)
+
+                if array.size(uncS) > 0
+                    for i = 0 to array.size(uncS) - 1
+                        a = array.get(uncS, i)
+                        keepBox(P, box.new(sIdx, lo + (array.get(uncE, i) + 1) * step,
+                             sIdx + rowW(array.get(vp, a), maxVol, maxW), lo + a * step,
+                             border_width = 0, bgcolor = array.get(pds, i).alive ? cUncov : color.new(cUncov, dimTr)), dev)
+
+                keepBox(P, box.new(sIdx, lo + (pE + 1) * step, sIdx + maxW, lo + pS * step,
+                     border_width = 0, bgcolor = cPOC), dev)
+
+                // ═══ period window ═══
+                // Day : 00:00 → 23:59 of the start date.  Week : Monday 00:00 → Sunday 23:59.
+                // Monday is found from noon so a daylight-saving hour never lands on the wrong date.
+                tS     = P.startTime
+                wkBack = (dayofweek(tS, tz) + 5) % 7
+                wkNoon = timestamp(tz, year(tS, tz), month(tS, tz), dayofmonth(tS, tz), 12, 0) - wkBack * 86400000
+                wkMid  = timestamp(tz, year(wkNoon, tz), month(wkNoon, tz), dayofmonth(wkNoon, tz), 0, 0)
+                perMid = P.isWeek ? wkMid : timestamp(tz, year(tS, tz), month(tS, tz), dayofmonth(tS, tz), 0, 0)
+                perEnd = P.isWeek ? wkMid + 7 * 86400000 - 60000 : timestamp(tz, year(tS, tz), month(tS, tz), dayofmonth(tS, tz), 23, 59)
+                binMs  = (P.isWeek ? tpBinW : tpBinD) * 60000
+                nBins  = int(math.ceil((P.isWeek ? 10080.0 : 1440.0) / (P.isWeek ? tpBinW : tpBinD)))
+                pfx    = P.isWeek ? "W " : ""
+                tpAreas = array.new<TPArea>()
+
+                // ═══ D levels : end LOW lines from the period start to its end ═══
+                // Upper end (the LOW above the apex) -> its UPPER extreme.
+                // Lower end (the LOW below the apex) -> its LOWER extreme.
+                for d in allDs
+                    if d.alive
+                        col = d.num == 0 ? color.new(cUncov, 0) : dColor(d.num)
+                        axX = sIdx + rowW(d.apexV, maxVol, maxW)
+                        axY = lo + (d.a + d.b + 1) / 2.0 * step
+                        drawLeg(P, axX, axY, d.up, d.fbUp, sIdx, lo, step, vp, lowS, lowE, maxVol, maxW, col, dev)
+                        drawLeg(P, axX, axY, d.dn, d.fbDn, sIdx, lo, step, vp, lowS, lowE, maxVol, maxW, col, dev)
+                        keepLabel(P, label.new(axX, axY, pfx + d.name, style = label.style_label_left,
+                             color = color.new(col, 85), textcolor = col, size = size.tiny), dev)
+
+                        upL = endLow(d.up)
+                        dnL = endLow(d.dn)
+                        topRow = upL >= 0 ? array.get(lowE, upL) : d.fbUp
+                        botRow = dnL >= 0 ? array.get(lowS, dnL) : d.fbDn
+                        if showLvl
+                            if topRow >= 0
+                                yUp = lo + (topRow + 1) * step
+                                keepLine(P, line.new(tS, yUp, perEnd, yUp, xloc = xloc.bar_time,
+                                     color = col, width = lvlWidth), dev)
+                            if botRow >= 0
+                                yDn = lo + botRow * step
+                                keepLine(P, line.new(tS, yDn, perEnd, yDn, xloc = xloc.bar_time,
+                                     color = col, width = lvlWidth), dev)
+
+                        // ═══ time profile of THIS D area only ═══
+                        // area = between its level lines (the apex edge if a side has no end point)
+                        if showTP
+                            aTop = topRow >= 0 ? lo + (topRow + 1) * step : lo + (d.b + 1) * step
+                            aBot = botRow >= 0 ? lo + botRow * step : lo + d.a * step
+                            [tpM, tpV] = tpBins(P, aBot, aTop, perMid, binMs, nBins)
+                            aR0 = botRow >= 0 ? botRow : d.a
+                            aR1 = topRow >= 0 ? topRow : d.b
+                            array.push(tpAreas, TPArea.new(d.name, col, aBot, aTop, tpM, tpV, lo, step, aR0, aR1))
+
+                // ═══ compare every bloc of the period, whatever its D, then draw ═══
+                if showTP and array.size(tpAreas) > 0
+                    blocs = findBlocs(tpAreas)
+                    markExtremes(blocs)
+                    drawAreas(P, tpAreas, blocs, perMid, binMs, dev)
+    n
+
+// Feed one bar into a period. When the period key changes, the finished period is drawn
+// ONCE and never touched again (the script does not read the visible chart range, so
+// panning / zooming does not re-run it).
+feedPer(Per P, int key, float[] aH, float[] aL, float[] aV, float[] aC, int[] aT, float ltfMin, float chartMin,
+     int hist, int capPoly, int capOther) =>
+    if P.key != key
+        if array.size(P.srcH) > 0 and bar_index > 0
+            renderPer(P, bar_index - 1, false)
+            pruneOld(P, hist, capPoly, capOther)
+            P.dayId := P.dayId + 1
+        array.clear(P.srcH)
+        array.clear(P.srcL)
+        array.clear(P.srcV)
+        array.clear(P.srcC)
+        array.clear(P.srcT)
+        array.clear(P.srcM)
+        P.startIdx  := bar_index
+        P.startTime := time
+        P.key       := key
+    if useLTF and array.size(aV) > 0
+        for i = 0 to array.size(aV) - 1
+            v = array.get(aV, i)
+            if not na(v) and v > 0
+                array.push(P.srcH, array.get(aH, i))
+                array.push(P.srcL, array.get(aL, i))
+                array.push(P.srcV, v)
+                array.push(P.srcC, array.get(aC, i))
+                array.push(P.srcT, array.get(aT, i))
+                array.push(P.srcM, ltfMin)
+    else
+        array.push(P.srcH, high)
+        array.push(P.srcL, low)
+        array.push(P.srcV, nz(volume))
+        array.push(P.srcC, close)
+        array.push(P.srcT, time)
+        array.push(P.srcM, chartMin)
+    P.key
+
+// ── Data
+[dH, dL, dV, dC, dT] = request.security_lower_tf(syminfo.tickerid, ltfD, [high, low, volume, close, time])
+[wH, wL, wV, wC, wT] = request.security_lower_tf(syminfo.tickerid, ltfW, [high, low, volume, close, time])
+chartMin = timeframe.in_seconds() / 60.0
+
+// Day key = yyyymmdd. Week key = the yyyymmdd of this bar's Monday (found from noon).
+dayKey  = year(time, tz) * 10000 + month(time, tz) * 100 + dayofmonth(time, tz)
+wkBackB = (dayofweek(time, tz) + 5) % 7
+wkNoonB = timestamp(tz, year(time, tz), month(time, tz), dayofmonth(time, tz), 12, 0) - wkBackB * 86400000
+weekKey = year(wkNoonB, tz) * 10000 + month(wkNoonB, tz) * 100 + dayofmonth(wkNoonB, tz)
+
+// With both periods on, each gets half of TradingView's drawing caps.
+share    = showDay and showWeek ? 0.5 : 1.0
+capPoly  = int(80 * share)
+capOther = int(400 * share)
+
+if showDay
+    feedPer(perD, dayKey, dH, dL, dV, dC, dT, timeframe.in_seconds(ltfD) / 60.0, chartMin, histDays, capPoly, capOther)
+if showWeek
+    feedPer(perW, weekKey, wH, wL, wV, wC, wT, timeframe.in_seconds(ltfW) / 60.0, chartMin, histWeeks, capPoly, capOther)
+
+if barstate.islast
+    if showDay
+        clearDev(perD)
+        renderPer(perD, bar_index, true)
+    if showWeek
+        clearDev(perW)
+        renderPer(perW, bar_index, true)

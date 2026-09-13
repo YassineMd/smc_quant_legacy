@@ -125,6 +125,7 @@ _M10_INDICATORS = [
     ("m10_structure", "Market Structure — scalp ZigZag", False, True),   # fine ZigZag (ZIGZAG_PCT, app/structure.py)
     ("m10_structure_swing", "Market Structure — swing ZigZag", False, True),   # coarse ZigZag (+ its sensitivity slider)
     ("m10_prevday_vp", "Prev. Day VP", False, True),            # per-previous-UTC-day Volume Profile (style = 'Volume Profile Mode' dropdown)
+    ("m10_hlh", "HLH Volume Profile (D1, D2 … · blocs · Block Lines)", False, True),   # the user's TradingView indicator (study/pine/hlh_volume_profile.pine): per-DAY profile, LOW/HIGH rows, D shapes from the POC + each HIGH, D levels, time profile per D area, blocs + their VAH/VAL. Loads 2 days of 1m klines; also drawn on the Flow-mode PRICE pane. Sub-toggles: Week profile / Block Lines Only. app/hlh_profile + app/hlh_draw
     ("m10_session", "Session Filter", False, True),            # per-UTC-day Tokyo/London/New-York boxes: range + avg (VWAP) + high/low
     ("m10_erange", "Expected Range", False, True),             # per-session dashed range envelope from YESTERDAY's same-session range (NY/Tokyo/London/Whole Day sub-toggles)
     ("m10_nyanchor", "★ NY Anchor (far-side hold · 15:00→21:00 UTC)", False, True),   # from 15:00Z ONE amber line at the NY-session extreme FARTHER from price — holds to the close ~67-73% (+12-17pp over the shuffle null, recent eras; study/session_side_fix_15m). 18:30Z→ both extremes (range typically complete). DESCRIPTIVE level persistence, NOT an entry signal; side can flip if price crosses the session midpoint
@@ -711,6 +712,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                 self._build_wall_sess_subtoggle(sec)     # only walls BORN in the current session (Tokyo/London/NY)
             if key == "m10_burst":
                 self._build_burst_controls(sec)          # x multiple + window, directly under the Volume Burst toggle
+            if key == "m10_hlh":
+                self._build_hlh_subtoggles(sec)          # Week profile / Block Lines Only, under the HLH toggle
             if key == "m10_crazywall":
                 self._build_wallabs_subtoggles(sec)      # Wall Absorption sub-tiers: Crazy (✪) / Big (★)
             if key == "m10_sr":
@@ -1172,6 +1175,25 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                                     (self.burst_w_combo, [int(v) for v in config.BURST_WINDOW_CHOICES], int(win))):
             if val in choices:
                 combo.blockSignals(True); combo.setCurrentIndex(choices.index(val)); combo.blockSignals(False)
+
+    def _build_hlh_subtoggles(self, section) -> None:
+        """Under 'HLH Volume Profile': the Pine's two other switches. 'Week profile' adds Monday 00:00 -> Sunday
+        23:59 periods on 5-minute candles (labels prefixed 'W '); 'Block Lines Only' keeps just the blocs'
+        VAH / VAL lines (2 px) and their labels. Both default OFF like the Pine."""
+        for key, text, tip in (
+                ("m10_hlh_week", "· Week profile (Monday 00:00 → Sunday 23:59)",
+                 "A second, independent profile per WEEK on 5-minute candles, drawn beside the day profiles "
+                 "with 'W ' labels. Pulls the Zero Point back to this week's Monday."),
+                ("m10_hlh_bloconly", "· Block Lines Only",
+                 "Keep ONLY the bloc VAH / VAL lines (2 px) and the bloc labels; hide the profile, the rows, "
+                 "the D lines, the levels and the time profile. Everything is still computed the same way.")):
+            cb = QtWidgets.QCheckBox(text)
+            cb.setChecked(False)
+            cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")
+            cb.setToolTip(tip)
+            cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
+            self.layer_checks[key] = cb
+            section.addWidget(cb)
 
     def _build_bigplayer_sweeps_subtoggle(self, section) -> None:
         """'Sweeps' under Big Player Levels (user 2026-09-06): one taker order that ate through >= 2 book levels

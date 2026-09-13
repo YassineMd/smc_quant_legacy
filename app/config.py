@@ -475,6 +475,44 @@ FLOW_BF_CHUNK_SECS = 7200      # 2 h per history chunk: the window fills PROGRES
 FLOW_BF_SPACING_SECS = 4.0      # min seconds between chunk requests (only ONE is ever in flight anyway) -- the
 #                                 daemon serves each from SQLite on a shared core, so stay gentle
 
+# ---------------------------------------------------------------------------- HLH Volume Profile (m10_hlh)
+# The user's TradingView indicator ported to both canvases (study/pine/hlh_volume_profile.pine, spec in
+# study/pine/HLH_VOLUME_PROFILE_SPEC.md). The engine is app/hlh_profile.py; the drawing is app/hlh_draw.py; the
+# 1-minute (day) / 5-minute (week) candles come from Binance REST klines (app/hlh_feed.py) -- the same source
+# TradingView charts for this symbol, so the volume is CONTRACTS and the profile matches what the user validated.
+HLH_DAYS = 2                    # complete DAY periods on the chart when the layer is on (yesterday + today): the
+                                # Zero Point is pulled back to 00:00 of the oldest one ("automatically load 2 days")
+HLH_TZ = "UTC"                  # days and weeks are cut in this zone (the Pine default; IANA name)
+HLH_DAY_TF = "1m"               # intrabar resolution of the day profile
+HLH_WEEK_TF = "5m"              # ... and of the week profile (a week of 1m is 10,080 candles)
+HLH_ROWS = 60                   # price rows of a profile
+HLH_WIDTH_PCT = 28              # profile width, % of the period's x span
+HLH_LOW_MAX_PCT = 50.0          # LOW must be < this % of the POC
+HLH_HIGH_MIN_PCT = 50.0         # HIGH must be > this % of the POC
+HLH_SHARED_PCT = 66.0           # a LOW shared by 2 Ds turns red above this % of an apex (then merges)
+HLH_MERGE = True                # merge the 2 Ds of a red LOW
+HLH_UNCOVERED = True            # purple HIGH + U-D in every area no D covers
+HLH_MAX_DS = 0                  # 0 = until no HIGH is left
+HLH_VA_PCT = 70.0               # value area % of each bloc
+HLH_TP_BIN_DAY_MIN = 30         # time-profile bin, day
+HLH_TP_BIN_WEEK_MIN = 240       # ... week
+HLH_TP_BOTH = "Keep both"       # MAX-time != MAX-volume: "Keep both" or "Keep neither"
+HLH_NUM_LOWS = True             # number the LOWs each leg walks through
+HLH_SHOW_LVL = True             # each D's end levels to the period end
+HLH_SHOW_TP = True              # time profile inside each D area
+HLH_TP_BLOCS = True             # label each bloc (time + volume)
+HLH_TP_TOTAL = True             # label the D area total
+HLH_TP_PEAK = False             # label the busiest bin
+HLH_SHOW_VA = True              # VAH / VAL of each bloc (the Block Lines)
+HLH_D_WIDTH = 2                 # D line width (px)
+HLH_LVL_WIDTH = 3               # level line width (px)
+HLH_VA_WIDTH = 1                # block line width (px; 2 in Block Lines Only)
+HLH_DIM_TR = 80                 # transparency of the LOWs / HIGHs a D used up
+HLH_TP_TR = 75                  # time-profile fill transparency (kept blocs)
+HLH_TP_DIM_TR = 90              # ... of the other blocs
+HLH_POLL_SECS = 10.0            # REST poll of the forming candles (limit 5 rows = weight 1)
+HLH_RECALC_SECS = 1.0           # the forming period is recomputed at most this often (and only on new data)
+
 TAPE_BACKFILL_SECS = 300        # Trades scanner mode: history window requested on entry (raw aggTrades from
                                 # trade_tape; ~5 min fills the table instantly without a heavy tunnel transfer)
 # Big Player Levels overlay (m10_bigplayer, user 2026-09-04): a SINGLE executed print >= BIGPLAYER_MIN_USD draws a
