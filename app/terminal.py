@@ -1825,6 +1825,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._bp_swp_pend = None                                # the live tape's last same-ms group, still growing
         self._bp_swp_polys = []; self._bp_swp_lbls = []          # sweep / burst DIAMONDS (pooled polygons); the amounts live in _bp_labels
         self._flow = flow_pane.FlowStore(float(config.FLOW_BIN_SECS), float(config.FLOW_RETAIN_SECS))
+        # the bins PERSIST (2026-09-14): load the last session's tape so Flow mode opens with history and the
+        # backfill only fills the gap since it was saved (see _flow_bf_plan, _flow_bins_save_maybe)
+        self._flow_bins_path = os.path.join(config.DATA_DIR, config.FLOW_BINS_FILE)
+        self._flow_save_t = time.time(); self._flow_save_rev = 0; self._flow_save_thread = None
+        try:
+            if self._flow.load(self._flow_bins_path, max_age_secs=float(config.FLOW_BINS_MAX_AGE_SECS)):
+                self._flow_save_rev = int(self._flow.rev)
+        except Exception:
+            pass
         self._flow_win = int(config.FLOW_WINDOW_SECS)   # rolling window of the Buy/Sell Flow lines (hamburger 'Flow')
         self._flow_curves = None       # (buy PlotCurveItem, sell PlotCurveItem) -- created on first draw
         self._flow_x_on = bool(config.FLOW_CROSS_ON)   # cycle-start vlines at the confirmed line crossings
@@ -18276,6 +18285,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_conn_was2 = conn
         if conn:
             self._flow_bf_pump()
+        try:
+            self._flow_bins_save_maybe(time.time())
+        except Exception:
+            pass
 
     def _flow_bf_plan(self, t_lo: float = 0.0, t_hi: float = 0.0) -> None:
         """Queue the chunks needed to cover the wanted span, newest first, skipping what the bins already hold.
@@ -18295,6 +18308,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         have0 = float(sp[0]) if sp else t1
         ch = float(getattr(config, "FLOW_BF_CHUNK_SECS", config.BURST_BACKFILL_SECS))
         q = []
+        # the RIGHT gap first: bins LOADED from disk end where the last session saved them and the live
+        # subscription starts now -- the span between is requested newest-first, before the older history
+        have1 = float(sp[1]) if sp else t1
+        if sp and t1 - have1 > 180.0:
+            hi = t1
+            while hi > have1 + 60.0:
+                lo = max(have1 - 60.0, hi - ch)
+                q.append((lo, hi))
+                hi = lo
         hi = t1
         while hi > horizon + 60.0:
             lo = max(horizon, hi - ch)
@@ -18318,7 +18340,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         q = getattr(self, "_flow_bf_queue", None)
         if not q:
             return
-        if now - getattr(self, "_flow_bf_t", 0.0) < float(config.FLOW_BF_SPACING_SECS):
+        # spacing = the daemon's LAST round trip, floored and capped: a chunk it answers in 0.8 s is followed
+        # 0.8 s later (the box spends at most half its time on us), never sooner than the floor, never later
+        # than the old fixed 4 s -- 24 chunks took 100+ s before, most of it waiting
+        _sp = min(float(config.FLOW_BF_SPACING_SECS),
+                  max(float(config.FLOW_BF_SPACING_MIN_SECS), float(self.__dict__.get("_flow_bf_rtt", config.FLOW_BF_SPACING_SECS))))
+        if now - getattr(self, "_flow_bf_t", 0.0) < _sp:
             return
         lo, hi = q.pop(0)
         self._flow_bf_t = now
@@ -18327,8 +18354,39 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
     def _flow_win_ingest(self, tw) -> None:
         """One backfill window into the bins; clears the in-flight slot so the next chunk can go out."""
+        _infl = self.__dict__.get("_flow_bf_inflight")
+        if _infl is not None:
+            self._flow_bf_rtt = max(0.05, time.time() - float(_infl[2]))    # what the pump paces itself by
         self._flow.ingest(*decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64))
         self._flow_bf_inflight = None
+
+    def _flow_bins_save_maybe(self, now: float, force: bool = False) -> bool:
+        """Save the flow bins every FLOW_SAVE_SECS while they changed: a ~3 ms snapshot on this thread, the
+        12 MB write on a worker (one at a time). `force` writes synchronously (closeEvent)."""
+        st = self.__dict__.get("_flow")
+        path = self.__dict__.get("_flow_bins_path")
+        if st is None or not path or st.empty():
+            return False
+        if not force:
+            if now - float(self.__dict__.get("_flow_save_t", 0.0)) < float(config.FLOW_SAVE_SECS):
+                return False
+            if int(st.rev) == int(self.__dict__.get("_flow_save_rev", -1)):
+                return False                           # nothing changed since the last save
+            th = self.__dict__.get("_flow_save_thread")
+            if th is not None and th.is_alive():
+                return False
+        snap = st.snapshot_arrays()
+        self._flow_save_t = now
+        self._flow_save_rev = int(st.rev)
+        if snap is None:
+            return False
+        if force:
+            return bool(flow_pane.FlowStore.save_snapshot(snap, path))
+        import threading as _thr
+        th = _thr.Thread(target=flow_pane.FlowStore.save_snapshot, args=(snap, path), name="flow-bins-save", daemon=True)
+        self._flow_save_thread = th
+        th.start()
+        return True
 
 
     def _flow_pump(self) -> None:
@@ -19064,8 +19122,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _memo.append(self._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell))
             return _memo[0]
 
-        if self._px_cache_merge(_a, vx1, t, t_end, done, px0, px1, pxh, pxl, _cols):
+        if self._px_cache_merge(_a, vx1, t, t_end, done, px0, px1, pxh, pxl, _cols, view=(vx0, vx1)):
             self._px_sig = None                   # the cache GAINED cycles -> rebuild the picture ONCE
+        try:
+            if self._px_fill(vx0, vx1, now):      # the rest of a wide view, one read per tick (see _px_fill)
+                self._px_sig = None
+        except Exception:
+            pass
         # THE FORMING CANDLE's rating legitimately moves as the cycle accumulates, so it is re-read whenever
         # its volume, its move or its end changes -- and not at all when the view is off the live edge, where
         # there is no forming candle to draw.
@@ -19082,7 +19145,47 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._px_data = (_a, vx1, t, t_end, done, px0, px1, pxh, pxl, _fcol)
         self._px_draw(now)
 
-    def _px_cache_merge(self, a, b, t, t_end, done, px0, px1, pxh, pxl, cols_fn) -> int:
+    def _px_fill(self, vx0: float, vx1: float, now: float) -> int:
+        """ONE extra crosses() read per tick while the cache does not reach the view's left edge and the
+        store holds tape before the oldest cached cycle. The shared read (the same args as every cycle pane)
+        returns only the NEWEST FLOW_CROSS_MAX cycles -- ~8 h -- so on a wide view this is what fills the
+        rest: its own memo entry, <= FLOW_CROSS_MAX cycles per read, walking back PX_FILL_SPAN_SECS at a time
+        (a 48 h view in ~6 ticks). The window ends FLOW_CROSS_CONTEXT_SECS inside the cached range so no hole
+        is left at the seam; the overlap guard in the merge drops any boundary cycle the two reads cut
+        differently. Returns the cycles gained."""
+        arr = self.__dict__.get("_px_arr")
+        if arr is None or np.size(arr[0]) == 0:
+            return 0
+        sp = self._flow.span()
+        if sp is None:
+            return 0
+        oldest = float(arr[0][0])
+        if oldest <= float(vx0) + 60.0 or float(sp[0]) >= oldest - 120.0:
+            return 0                                      # covered, or no tape before the oldest cycle
+        f1 = oldest + float(config.FLOW_CROSS_CONTEXT_SECS)
+        f0 = max(float(sp[0]), oldest - float(config.PX_FILL_SPAN_SECS))
+        _a = f0 - self._lb_secs()
+        _args = (_a, f1, float(self._flow_win),
+                 float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                 int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
+        t, is_buy, strong, move, cbuy, csell, t_end, done = self._flow.crosses(*_args)
+        px0, px1 = self._flow.crosses_px(*_args)
+        pxh, pxl = self._flow.crosses_hl(*_args)
+        if not (t.size == px0.size == pxh.size) or t.size < 2:
+            self._px_fill_stop = oldest                   # nothing older to find: stop asking
+            return 0
+        _memo = []
+
+        def _cols():
+            if not _memo:
+                _memo.append(self._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell))
+            return _memo[0]
+
+        gained = self._px_cache_merge(_a, f1, t, t_end, done, px0, px1, pxh, pxl, _cols, view=(vx0, vx1))
+        self._px_fills = self.__dict__.get("_px_fills", 0) + 1
+        return gained
+
+    def _px_cache_merge(self, a, b, t, t_end, done, px0, px1, pxh, pxl, cols_fn, view=None) -> int:
         """Fold one read's cycles into the pane's CACHE. Returns how many entries it gained or upgraded.
 
         The cache is what makes a zoom free (user 2026-09-12: "keep them on chart even if I zoom on 1
@@ -19177,8 +19280,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # LEFT pan: the cycles the user has just panned to are the oldest in the cache, so a full cache
             # would throw away the very candles being looked at and regenerate them on the next frame.
             _kk = np.array(sorted(cache), dtype=np.float64)
-            _d = np.maximum(np.maximum(float(a) - _kk, _kk - float(b)), 0.0)
-            for _k in _kk[np.argsort(_d, kind="stable")[_cap:]]:
+            _va, _vb = (float(view[0]), float(view[1])) if view is not None else (float(a), float(b))
+            _d = np.maximum(np.maximum(_va - _kk, _kk - _vb), 0.0)
+            # ⚠⚠ farthest first, and among EQUAL distances the OLDEST first. The stable argsort that was here
+            # ranked every in-view cycle (distance 0) by start time ASCENDING and evicted from the END --
+            # the NEWEST closed cycles, over and over: a hole left of the forming candle that GREW with time
+            # (reproduced offline: 4.8 -> 42 min behind the edge in 40 min). Distance is measured from the
+            # VIEW when the caller gives it (a fill read's own range would put the live edge 'far').
+            _order = np.lexsort((_kk, -_d))
+            for _k in _kk[_order[:max(0, len(_kk) - _cap)]]:
                 cache.pop(round(float(_k), 3), None)
         _ks = sorted(cache)
         _m = np.array([cache[_k] for _k in _ks], dtype=np.float64)
@@ -25211,6 +25321,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         try:
             if getattr(self, "_hlh", None) is not None:
                 self._hlh.stop()                   # HLH klines threads (daemon threads, but stop them cleanly)
+        except Exception:
+            pass
+        try:
+            self._flow_bins_save_maybe(time.time(), force=True)   # the flow bins, so the next launch has them
         except Exception:
             pass
         if len(_OPEN_WINDOWS) <= 1:            # the shared 4h/1m helpers live until the LAST window closes

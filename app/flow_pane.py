@@ -13,6 +13,8 @@ those bins, so nothing re-scans the tape per frame.
 Both are memoized on a revision counter, so a pan / zoom that changes nothing returns the previous arrays untouched
 (the terminal's standing perf rule: any per-redraw pass must be bounded by the drawn range and memoized).
 """
+import os
+
 import numpy as np
 
 
@@ -24,6 +26,7 @@ class FlowStore:
         self.bin = float(bin_secs)
         self.cap = max(64, int(retain_secs / self.bin))
         self._base = None                      # bin index of _buy[0]
+        self._bufs = None; self._start = 0     # the over-allocated buffers the six arrays are views into (_fit)
         self._buy = np.zeros(0, dtype=np.float64)
         self._sell = np.zeros(0, dtype=np.float64)
         self._px = np.zeros(0, dtype=np.float64)     # LAST trade price in the bin (0 = no trade yet)
@@ -58,44 +61,55 @@ class FlowStore:
         return (float(self._buy.sum()), float(self._sell.sum()))
 
     # --------------------------------------------------------------- ingest
+    _GROW_BINS = 8192            # reserve appended per reallocation (~2.3 h of seconds)
+    _KEYS = ("buy", "sell", "px", "pxh", "pxl", "pts")
+
+    def _views(self, start: int, n: int) -> None:
+        """Point the six public arrays at bins [start, start + n) of the buffers."""
+        self._start = int(start)
+        for k in self._KEYS:
+            setattr(self, "_" + k, self._bufs[k][start:start + n])
+
     def _fit(self, lo_i: int, hi_i: int) -> None:
-        """Grow the arrays so bin indices lo_i..hi_i exist (zeros elsewhere), then prune to cap."""
+        """Grow the arrays so bin indices lo_i..hi_i exist (zeros elsewhere), then prune to cap.
+
+        ⚠ the arrays are VIEWS into over-allocated buffers (2026-09-14): the old six np.concatenate calls
+        copied the whole 72 h store on EVERY new second of tape (12 MB per second). An append into the
+        reserve is a re-slice; a prune advances the view's start; a copy happens on a prepend (a backfill
+        chunk) or once the reserve is used up (~2.3 h)."""
         if self._base is None:
             self._base = int(lo_i)
             n = int(hi_i - lo_i + 1)
-            self._buy = np.zeros(n, dtype=np.float64)
-            self._sell = np.zeros(n, dtype=np.float64)
-            self._px = np.zeros(n, dtype=np.float64)
-            self._pxh = np.zeros(n, dtype=np.float64)
-            self._pxl = np.zeros(n, dtype=np.float64)
-            self._pts = np.zeros(n, dtype=np.float64)
+            self._bufs = {k: np.zeros(n + self._GROW_BINS, dtype=np.float64) for k in self._KEYS}
+            self._views(0, n)
             return
+        n = int(len(self._buy))
         if lo_i < self._base:                                  # older data (a backfill window) -> prepend
             pad = int(self._base - lo_i)
-            self._buy = np.concatenate([np.zeros(pad), self._buy])
-            self._sell = np.concatenate([np.zeros(pad), self._sell])
-            self._px = np.concatenate([np.zeros(pad), self._px])
-            self._pxh = np.concatenate([np.zeros(pad), self._pxh])
-            self._pxl = np.concatenate([np.zeros(pad), self._pxl])
-            self._pts = np.concatenate([np.zeros(pad), self._pts])
+            new = {}
+            for k in self._KEYS:
+                bb = np.zeros(pad + n + self._GROW_BINS, dtype=np.float64)
+                bb[pad:pad + n] = getattr(self, "_" + k)
+                new[k] = bb
+            self._bufs = new
+            self._views(0, pad + n)
             self._base = int(lo_i)
-        end = self._base + len(self._buy) - 1
+            n = pad + n
+        end = self._base + n - 1
         if hi_i > end:                                         # newer data -> append
             pad = int(hi_i - end)
-            self._buy = np.concatenate([self._buy, np.zeros(pad)])
-            self._sell = np.concatenate([self._sell, np.zeros(pad)])
-            self._px = np.concatenate([self._px, np.zeros(pad)])
-            self._pxh = np.concatenate([self._pxh, np.zeros(pad)])
-            self._pxl = np.concatenate([self._pxl, np.zeros(pad)])
-            self._pts = np.concatenate([self._pts, np.zeros(pad)])
-        if len(self._buy) > self.cap:                          # keep the NEWEST cap bins
-            drop = len(self._buy) - self.cap
-            self._buy = self._buy[drop:]
-            self._sell = self._sell[drop:]
-            self._px = self._px[drop:]
-            self._pxh = self._pxh[drop:]
-            self._pxl = self._pxl[drop:]
-            self._pts = self._pts[drop:]
+            if self._start + n + pad <= int(self._bufs["buy"].shape[0]):
+                self._views(self._start, n + pad)              # inside the reserve: no copy at all
+            else:
+                for k in self._KEYS:
+                    bb = np.zeros(n + pad + self._GROW_BINS, dtype=np.float64)
+                    bb[:n] = getattr(self, "_" + k)
+                    self._bufs[k] = bb
+                self._views(0, n + pad)
+            n = n + pad
+        if n > self.cap:                                       # keep the NEWEST cap bins
+            drop = n - self.cap
+            self._views(self._start + drop, n - drop)
             self._base += drop
 
     def ingest(self, ts_ms, price, qty, side) -> int:
@@ -143,8 +157,71 @@ class FlowStore:
         self._pxmemo = None
         return int(loc.size)
 
+    # ------------------------------------------------------------------ persistence
+    _SAVE_KEYS = ("buy", "sell", "px", "pxh", "pxl", "pts")
+
+    def save(self, path: str) -> bool:
+        """Write the bins to `path` (npz, atomic via a temp file). ~15 MB for 72 h; the caller runs it on a
+        thread off a SNAPSHOT (see snapshot_arrays), never on the frame loop."""
+        snap = self.snapshot_arrays()
+        return self.save_snapshot(snap, path)
+
+    def snapshot_arrays(self):
+        """(base, rev, {name: array copy}) -- a consistent copy taken on the GUI thread (~5 ms at 72 h)."""
+        if self.empty():
+            return None
+        return (int(self._base), int(self.rev), {k: np.array(getattr(self, "_" + k), copy=True) for k in self._SAVE_KEYS})
+
+    @staticmethod
+    def save_snapshot(snap, path: str) -> bool:
+        if snap is None:
+            return False
+        base, rev, arrs = snap
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "wb") as fh:
+                np.savez(fh, base=np.int64(base), rev=np.int64(rev), bin=np.float64(1.0), **arrs)
+            os.replace(tmp, path)
+            return True
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return False
+
+    def load(self, path: str, max_age_secs: float = 0.0) -> bool:
+        """Replace the bins with a saved set. Rejects a file whose bin width differs or whose newest bin is older
+        than `max_age_secs` (0 = any age); the cap prune applies as usual. Bumps rev so every memo re-keys."""
+        try:
+            with np.load(path) as z:
+                if abs(float(z["bin"]) - self.bin) > 1e-9:
+                    return False
+                base = int(z["base"])
+                arrs = {k: np.array(z[k], dtype=np.float64) for k in self._SAVE_KEYS}
+        except Exception:
+            return False
+        n = int(arrs["buy"].shape[0])
+        if n == 0 or any(a.shape[0] != n for a in arrs.values()):
+            return False
+        if max_age_secs > 0:
+            import time as _time
+            if (base + n) * self.bin < _time.time() - float(max_age_secs):
+                return False
+        self._base = base
+        self._bufs = {k: arrs[k] for k in self._KEYS}
+        self._views(0, n)
+        if n > self.cap:                                         # keep the NEWEST cap bins
+            drop = n - self.cap
+            self._views(drop, n - drop)
+            self._base += drop
+        self.rev += 1
+        self._memo = None; self._bmemo = None; self._xmemo = None; self._pxmemo = None
+        return True
+
     def reset(self) -> None:
         self._base = None
+        self._bufs = None; self._start = 0
         self._buy = np.zeros(0, dtype=np.float64)
         self._sell = np.zeros(0, dtype=np.float64)
         self._px = np.zeros(0, dtype=np.float64)
@@ -257,84 +334,18 @@ class FlowStore:
         return self._crosses_full(t0, t1, win_secs, min_spread_pct, min_hold_secs, max_n,
                                   context_secs, tick)[8:10]
 
-    def _crosses_full(self, t0: float, t1: float, win_secs: float, min_spread_pct: float = 10.0,
-                      min_hold_secs: float = 20.0, max_n: int = 400, context_secs: float = 600.0,
-                      tick: float = 0.01):
-        """Where the two rolling-window flow lines CROSS, keeping only the crosses that opened a real cycle.
-
-        Returns (t_cross, is_buy, strong, move_ticks, buy_usd, sell_usd, t_end, done, px_start, px_end,
-        px_high, px_low).
-
-          is_buy  True where the BUY line took the top.
-          strong  the cycle CONFIRMED: before the next cross the spread |buy-sell|/(buy+sell) reached
-                  `min_spread_pct` and stayed there for `min_hold_secs` consecutive seconds.
-          not strong  the side held for `min_hold_secs` but never got that far apart -- a real cycle, a weak one
-                  (user 2026-09-10 asked for these back, drawn in gray rather than dropped).
-          move_ticks  how far PRICE travelled over that cycle -- from this cross to the NEXT one, or to the last
-                  bin of tape for the one still forming. Its sign is the price's, not the side's: a buy cycle
-                  that ends below where it started is negative. NaN where no trade priced either end.
-          buy_usd / sell_usd  taker dollars each side traded INSIDE that cycle, over the same span the move is
-                  measured across. The caller decides which one to hold the move against.
-          t_end   where the cycle ENDED -- the NEXT cross's own interpolated crossing, so one cycle's right edge
-                  is the next one's left edge and both sit exactly on the vertical line drawn there.
-          done    False only for the cycle still open at the end of the read, i.e. the one still forming when
-                  following the live edge. Anything drawn per-cycle should wait for this.
-
-        A run shorter than `min_hold_secs` is not a cycle at all and never comes back -- and because it is
-        dropped, the crosses on either side of it are the SAME colour. Two or more consecutive same-colour
-        crosses are MERGED into the first (user 2026-09-10): that cycle never really ended, so it may not be
-        marked as starting twice. Consecutive weak (gray) crosses collapse the same way, into one marker at the
-        head of the indecisive stretch. `context_secs` is how much tape is read on EITHER side of the view:
-        backwards so the leftmost visible cross knows whether it continues a run that starts off-screen,
-        forwards so the last visible cycle can find its real END to measure the move over (and so a cross near
-        the right edge can still be confirmed).
-
-        The time returned is the cross itself, not the confirmation, LINEARLY INTERPOLATED between the two bins
-        that straddle it so it lands on the actual intersection.
-
-        `win_secs` must be the window the visible lines use, or the crosses will not sit on the crossings the
-        user can see -- everything below mirrors series() bin for bin. Vectorised and memoized."""
+    def _cross_scan(self, i0: int, iv: int, i1: int, w: int, hold: int, ctx: int, min_spread_pct: float,
+                    tick: float):
+        """The scan behind _crosses_full over bins [i0 - max(w-1, ctx), i1], clipped to the view [i0, iv]:
+        (cs, sg, db, mv, px0, px1, pxh, pxl, vb, vs, ta, te, dn) or None when there is no cycle."""
         z = np.zeros(0)
         zb = np.zeros(0, dtype=bool)
-        if self.empty() or win_secs <= 0 or tick <= 0:
-            return (z, zb, zb, z, z, z, z, zb, z, z, z, z)
-        key = ("cross", self.rev, round(float(t0), 2), round(float(t1), 2), round(float(win_secs), 2),
-               round(float(min_spread_pct), 3), round(float(min_hold_secs), 2), int(max_n),
-               round(float(context_secs), 2), round(float(tick), 6))
-        # a SMALL LRU, not one slot: the vertical lines read the view while the Volume pane reads an hour
-        # further back for its baseline, and with a single slot those two keys would evict each other every
-        # frame, so every call would be a cold one.
-        memo = getattr(self, "_xmemo", None)
-        if not isinstance(memo, dict):
-            memo = {}
-            self._xmemo = memo
-        hit = memo.get(key)
-        if hit is not None:
-            return hit
-        n = len(self._buy)
-        w = max(1, int(round(float(win_secs) / self.bin)))
-        hold = max(1, int(round(float(min_hold_secs) / self.bin)))
-        i0 = max(0, int(np.floor(t0 / self.bin)) - self._base)
-        iv = min(n - 1, int(np.floor(t1 / self.bin)) - self._base)      # the view's last bin
-        ctx = max(hold + 1, int(round(max(0.0, float(context_secs)) / self.bin)))
-        # read PAST the view: a cross just left of the right edge is confirmed by bins the view does not cover
-        # (and must not wink out because the user panned), and the last visible cycle needs its real END to
-        # measure the move over.
-        i1 = min(n - 1, iv + ctx)
-        if iv < i0:
-            out = (z, zb, zb, z, z, z, z, zb, z, z, z, z)
-            self._memo_put(memo, key, out)
-            return out
-        # series() only needs a w-1 prefix; the MERGE needs enough of the run before the view to know whether
-        # the leftmost visible cross is its own head or a repeat of the colour before it.
         p0 = max(0, i0 - max(w - 1, ctx))
         cb = np.concatenate([[0.0], np.cumsum(self._buy[p0:i1 + 1])])
         ca = np.concatenate([[0.0], np.cumsum(self._sell[p0:i1 + 1])])
         m = int(cb.size - 1)
         if m < 3:
-            out = (z, zb, zb, z, z, z, z, zb, z, z, z, z)
-            self._memo_put(memo, key, out)
-            return out
+            return None
         idx = np.arange(m)
         lo = np.maximum(0, idx + 1 - w)
         rb = cb[idx + 1] - cb[lo]
@@ -345,15 +356,11 @@ class FlowStore:
         dn = ra > rb
         say = up | dn
         if not say.any():
-            out = (z, zb, zb, z, z, z, z, zb, z, z, z, z)
-            self._memo_put(memo, key, out)
-            return out
+            return None
         dom = up[np.maximum.accumulate(np.where(say, idx, 0))]
         flips = np.flatnonzero(dom[1:] != dom[:-1]) + 1                  # first bin of each new side
         if flips.size == 0:
-            out = (z, zb, zb, z, z, z, z, zb, z, z, z, z)
-            self._memo_put(memo, key, out)
-            return out
+            return None
         tot = rb + ra
         spread = np.where(tot > 0, 100.0 * np.abs(rb - ra) / np.maximum(tot, 1e-9), 0.0)
         okc = spread >= float(min_spread_pct)
@@ -457,6 +464,114 @@ class FlowStore:
         ta_ = t_all[vis]
         te_ = t_end_all[vis]
         dn_ = done_all[vis]
+        return (cs, sg, db, mv, px0_, px1_, pxh_, pxl_, vb_, vs_, ta_, te_, dn_)
+
+    def _crosses_full(self, t0: float, t1: float, win_secs: float, min_spread_pct: float = 10.0,
+                      min_hold_secs: float = 20.0, max_n: int = 400, context_secs: float = 600.0,
+                      tick: float = 0.01):
+        """Where the two rolling-window flow lines CROSS, keeping only the crosses that opened a real cycle.
+
+        Returns (t_cross, is_buy, strong, move_ticks, buy_usd, sell_usd, t_end, done, px_start, px_end,
+        px_high, px_low).
+
+          is_buy  True where the BUY line took the top.
+          strong  the cycle CONFIRMED: before the next cross the spread |buy-sell|/(buy+sell) reached
+                  `min_spread_pct` and stayed there for `min_hold_secs` consecutive seconds.
+          not strong  the side held for `min_hold_secs` but never got that far apart -- a real cycle, a weak one
+                  (user 2026-09-10 asked for these back, drawn in gray rather than dropped).
+          move_ticks  how far PRICE travelled over that cycle -- from this cross to the NEXT one, or to the last
+                  bin of tape for the one still forming. Its sign is the price's, not the side's: a buy cycle
+                  that ends below where it started is negative. NaN where no trade priced either end.
+          buy_usd / sell_usd  taker dollars each side traded INSIDE that cycle, over the same span the move is
+                  measured across. The caller decides which one to hold the move against.
+          t_end   where the cycle ENDED -- the NEXT cross's own interpolated crossing, so one cycle's right edge
+                  is the next one's left edge and both sit exactly on the vertical line drawn there.
+          done    False only for the cycle still open at the end of the read, i.e. the one still forming when
+                  following the live edge. Anything drawn per-cycle should wait for this.
+
+        A run shorter than `min_hold_secs` is not a cycle at all and never comes back -- and because it is
+        dropped, the crosses on either side of it are the SAME colour. Two or more consecutive same-colour
+        crosses are MERGED into the first (user 2026-09-10): that cycle never really ended, so it may not be
+        marked as starting twice. Consecutive weak (gray) crosses collapse the same way, into one marker at the
+        head of the indecisive stretch. `context_secs` is how much tape is read on EITHER side of the view:
+        backwards so the leftmost visible cross knows whether it continues a run that starts off-screen,
+        forwards so the last visible cycle can find its real END to measure the move over (and so a cross near
+        the right edge can still be confirmed).
+
+        The time returned is the cross itself, not the confirmation, LINEARLY INTERPOLATED between the two bins
+        that straddle it so it lands on the actual intersection.
+
+        `win_secs` must be the window the visible lines use, or the crosses will not sit on the crossings the
+        user can see -- everything below mirrors series() bin for bin. Vectorised and memoized."""
+        z = np.zeros(0)
+        zb = np.zeros(0, dtype=bool)
+        if self.empty() or win_secs <= 0 or tick <= 0:
+            return (z, zb, zb, z, z, z, z, zb, z, z, z, z)
+        key = ("cross", self.rev, round(float(t0), 2), round(float(t1), 2), round(float(win_secs), 2),
+               round(float(min_spread_pct), 3), round(float(min_hold_secs), 2), int(max_n),
+               round(float(context_secs), 2), round(float(tick), 6))
+        # a SMALL LRU, not one slot: the vertical lines read the view while the Volume pane reads an hour
+        # further back for its baseline, and with a single slot those two keys would evict each other every
+        # frame, so every call would be a cold one.
+        memo = getattr(self, "_xmemo", None)
+        if not isinstance(memo, dict):
+            memo = {}
+            self._xmemo = memo
+        hit = memo.get(key)
+        if hit is not None:
+            return hit
+        n = len(self._buy)
+        w = max(1, int(round(float(win_secs) / self.bin)))
+        hold = max(1, int(round(float(min_hold_secs) / self.bin)))
+        i0 = max(0, int(np.floor(t0 / self.bin)) - self._base)
+        iv = min(n - 1, int(np.floor(t1 / self.bin)) - self._base)      # the view's last bin
+        ctx = max(hold + 1, int(round(max(0.0, float(context_secs)) / self.bin)))
+        # read PAST the view: a cross just left of the right edge is confirmed by bins the view does not cover
+        # (and must not wink out because the user panned), and the last visible cycle needs its real END to
+        # measure the move over.
+        i1 = min(n - 1, iv + ctx)
+        if iv < i0:
+            out = (z, zb, zb, z, z, z, z, zb, z, z, z, z)
+            self._memo_put(memo, key, out)
+            return out
+        # series() only needs a w-1 prefix; the MERGE needs enough of the run before the view to know whether
+        # the leftmost visible cross is its own head or a repeat of the colour before it.
+        # ⚠ BOUNDED SCAN (2026-09-14). A capped read returns the NEWEST max_n cycles of its view, yet the scan
+        # ran over the whole view + lookback + context: 177k bins on a two-day view, ~30 ms cold, and three
+        # distinct reader keys re-scanned on every live batch. Cross detection is local beyond the rolling
+        # window + context, so a window holding >= max_n + 16 cycles gives the newest max_n EXACTLY (only its
+        # first cycles can differ, and a gate holds every array equal to the full scan): try the last 8 h,
+        # then 24 h, then the whole range. An uncapped read (max_n >= 1e6) always scans everything.
+        res = None
+        if 0 < int(max_n) < 10 ** 6:
+            # the first window is a HINT learnt from the last capped read of this size (the tape's cycle
+            # density changes with the session): what sufficed last time, shrunk when it held twice what was
+            # needed; then 2.5x that; then the whole range
+            _need = int(max_n) + 16
+            _hints = getattr(self, "_scan_hint", None)
+            if not isinstance(_hints, dict):
+                _hints = {}
+                self._scan_hint = _hints
+            _h0 = float(_hints.get(int(max_n), 10.0 * 3600.0))
+            for _secs in (_h0, _h0 * 2.5):
+                _cut = int(iv - _secs / self.bin)
+                if _cut <= i0 + 2 * ctx + w:
+                    break                                   # the narrow window is nearly the whole read
+                _r = self._cross_scan(_cut, iv, i1, w, hold, ctx, min_spread_pct, tick)
+                _k = 0 if _r is None else int(_r[0].size)
+                if _k >= _need:
+                    res = _r
+                    _hints[int(max_n)] = _secs * 0.6 if _k >= 2 * _need else _secs
+                    break
+                if _k >= 8:                                 # too few: size the next try from the density seen
+                    _h0 = max(_secs * 2.5, _secs * (_need / float(_k)) * 1.3)
+        if res is None:
+            res = self._cross_scan(i0, iv, i1, w, hold, ctx, min_spread_pct, tick)
+        if res is None:
+            out = (z, zb, zb, z, z, z, z, zb, z, z, z, z)
+            self._memo_put(memo, key, out)
+            return out
+        cs, sg, db, mv, px0_, px1_, pxh_, pxl_, vb_, vs_, ta_, te_, dn_ = res
         if cs.size == 0:
             out = (z, zb, zb, z, z, z, z, zb, z, z, z, z)
             self._memo_put(memo, key, out)
@@ -481,9 +596,11 @@ class FlowStore:
         return out
 
     @staticmethod
-    def _memo_put(memo, key, out, cap=4):
-        """Keep the last few crosses() answers -- enough for the two ranges the terminal asks for, at both the
-        current flow window and one the user just switched away from."""
+    def _memo_put(memo, key, out, cap=8):
+        """Keep the last few crosses() answers -- the ranges the terminal asks for (the four view-following
+        panes share one, the feed and the cross lines have their own) at both the current flow window and one
+        the user just switched away from, PLUS the PRICE pane's fill reads (one new key per tick while a wide
+        view fills; 4 slots let those evict the shared entry and force a cold read every tick)."""
         memo[key] = out
         while len(memo) > cap:
             memo.pop(next(iter(memo)))

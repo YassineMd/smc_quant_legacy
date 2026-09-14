@@ -140,6 +140,28 @@ def _load_month(month: str) -> list:
     hit = _cache.get(month)
     if hit is not None and hit[0] == mt:
         return hit[1]
+    # ⚠ an .npz SIDECAR of the parsed month, keyed by the archive's mtime: the json.loads pass over ~140k
+    # lines took 1.2 s ON THE GUI THREAD the first time a wide view drew the Big Player marks (profiled on
+    # the Flow-mode PRICE pane, 2026-09-14). np.load of the sidecar is ~10 ms; it is rebuilt whenever the
+    # archive refreshes (its mtime moves).
+    side = path + ".npz"
+    try:
+        with np.load(side) as z:
+            if float(z["mt"]) == float(mt):
+                rows_np = np.array(z["rows"], dtype=float).reshape(-1, 4)
+                sw_np = np.array(z["sweeps"], dtype=float).reshape(-1, 6)
+                explicit = bool(z["explicit"])
+                rows = [tuple(r) for r in rows_np.tolist()]
+                sweeps = [tuple(r) for r in sw_np.tolist()]
+                _cache[month] = (mt, rows)
+                _scache[month] = (mt, sweeps, explicit)
+                _tcache[month] = rows_np[:, 0].copy()
+                _stcache[month] = sw_np[:, 0].copy()
+                _ncache[month] = rows_np
+                _nscache[month] = sw_np
+                return rows
+    except Exception:
+        pass
     rows = []; sweeps = []; explicit = False
     try:
         with gzip.open(path, "rt", encoding="utf-8") as g:
@@ -165,6 +187,16 @@ def _load_month(month: str) -> list:
     _stcache[month] = np.array([r[0] for r in sweeps], dtype=float)
     _ncache[month] = np.array(rows, dtype=float).reshape(-1, 4)
     _nscache[month] = np.array(sweeps, dtype=float).reshape(-1, 6)
+    try:                                                   # write the sidecar (atomic); a failure just costs the next parse
+        tmp = side + ".tmp"
+        with open(tmp, "wb") as fh:
+            np.savez(fh, mt=np.float64(mt), rows=_ncache[month], sweeps=_nscache[month], explicit=np.bool_(explicit))
+        os.replace(tmp, side)
+    except Exception:
+        try:
+            os.remove(side + ".tmp")
+        except OSError:
+            pass
     return rows
 
 

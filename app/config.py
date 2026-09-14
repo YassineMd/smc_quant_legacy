@@ -296,7 +296,7 @@ INTERP_MAX_ROWS = 240           # the feed is capped, not the history: older cyc
 # ⚠⚠ BOTH CAPS EXIST FOR THE FRAME, not for memory (a cached cycle is seven floats). MEASURED with a real
 # grab(), candles on screen -> ms of paint EVERY FRAME: 300 -> 3.4 | 400 -> 5.8 | 800 -> 9.6 | 1200 -> 15.2 |
 # 2400 -> 12-21, and one picture BUILD at 400 -> 6.3 ms, at 1200 -> 44.8, at 2400 -> 46.
-PX_CACHE_MAX = 400              # cycles retained, EVICTING WHAT IS FURTHEST FROM THE VIEW -- not the oldest,
+PX_CACHE_MAX = 3600             # cycles retained, EVICTING WHAT IS FURTHEST FROM THE VIEW -- not the oldest,
                                 # which would throw away the very candles a LEFT pan has just generated (see
                                 # _px_cache_merge). The cap is FLOW_CROSS_MAX, the most cycles one crosses()
                                 # read can return: the user can zoom out until the WHOLE cache is on screen,
@@ -305,7 +305,7 @@ PX_CACHE_MAX = 400              # cycles retained, EVICTING WHAT IS FURTHEST FRO
                                 # that already shipped. Cycles beyond it are not lost -- panning back to them
                                 # regenerates them, which is the behaviour the user asked to keep. Raising it
                                 # costs roughly 12 us of paint per extra candle, on every frame.
-PX_DRAW_MAX = 400               # candles in ONE picture: the picture is a WINDOW on the cache, padded either
+PX_DRAW_MAX = 3600               # candles in ONE picture: the picture is a WINDOW on the cache, padded either
                                 # side by whatever is left of this cap, so an ordinary pan or zoom lands
                                 # inside an already-drawn set and rebuilds nothing. Padded in CANDLES rather
                                 # than seconds because that is the unit the cost is in. ⚠ when the VIEW alone
@@ -474,6 +474,23 @@ FLOW_BF_CHUNK_SECS = 7200      # 2 h per history chunk: the window fills PROGRES
 #                                one 6 h transfer (~300k trades) before anything shows
 FLOW_BF_SPACING_SECS = 4.0      # min seconds between chunk requests (only ONE is ever in flight anyway) -- the
 #                                 daemon serves each from SQLite on a shared core, so stay gentle
+
+# --- The PRICE pane covers the WHOLE view (2026-09-14). The shared crosses() read returns the NEWEST
+# FLOW_CROSS_MAX cycles only (the last ~8 h at the 77 s median), so a two-day view stopped there; the cache
+# now grows to PX_CACHE_MAX (3,600 cycles ~ the daemon's 72 h of tape at the 77 s median) through FILL READS -- one extra read per tick over the
+# next PX_FILL_SPAN_SECS left of the oldest cached cycle until the view is covered (~6 ticks for 48 h) --
+# and the picture holds the whole cache in ~96-candle strips (a tail rebuild per closed cycle, ~1-3 ms).
+# MEASURED on the pane: 1,222 candles paint in 4.2 ms full / 0.16 ms live-edge sliver; a 48 h cold cross
+# read is ~30 ms (9 ms with the bounded scan), its memo hit 12 us. Worst full repaint = the whole cache on
+# screen (a 72 h view): ~15 ms, paid once per pan step at that zoom, never per live tick.
+PX_FILL_SPAN_SECS = 6 * 3600.0
+# --- The flow bins PERSIST: data/flow_bins.npz (~12 MB at 72 h; save 21 ms on a thread, load 23 ms), so a
+# relaunch opens with the whole tape instead of walking 24+ chunks back through the daemon, and the backfill
+# only fills the gap since the last save. The chunk spacing adapts to the daemon's measured round trip.
+FLOW_BINS_FILE = "flow_bins.npz"
+FLOW_SAVE_SECS = 120.0
+FLOW_BINS_MAX_AGE_SECS = 72 * 3600.0     # older than the daemon's own tape -> ignored
+FLOW_BF_SPACING_MIN_SECS = 0.5           # the pump waits max(this, the last chunk's round trip), capped by FLOW_BF_SPACING_SECS
 
 # ---------------------------------------------------------------------------- HLH Volume Profile (m10_hlh)
 # The user's TradingView indicator ported to both canvases (study/pine/hlh_volume_profile.pine, spec in

@@ -834,10 +834,22 @@ class BucketCandleItem(pg.GraphicsObject):
                 return
         except Exception:
             pass
+        # TAIL-ONLY rebuild (2026-09-14): with the same cull, width and flat span, and the first k0 candles
+        # identical (every array + brush/pen VALUES), only the strips holding candles k0.. are rebuilt -- see
+        # _build_tail. k0 is None when anything else changed or there was no picture yet -> the full build.
+        _k0 = None
+        try:
+            if (self._x and self._fp_cull == (x0, x1, flat_span) and self._width == width
+                    and getattr(self, "_strips", None) and len(x) >= 2):
+                _k0 = self._common_prefix(x, opens, highs, lows, closes, brushes, pens, widths, hi_pens, lo_pens)
+        except Exception:
+            _k0 = None
         self._fp_cull = (x0, x1, flat_span)
-        # Cache the series so set_view() can re-cull on pan/zoom without a recompute.
-        self._x, self._o, self._h, self._l, self._c = x, opens, highs, lows, closes
-        self._brushes, self._pens, self._width = brushes, pens, width
+        # Cache the series so set_view() can re-cull on pan/zoom without a recompute. COPIES: a caller that
+        # hands the same list objects back after mutating them in place would otherwise make the exact-compare
+        # above and the tail prefix below compare an array with itself.
+        self._x, self._o, self._h, self._l, self._c = list(x), list(opens), list(highs), list(lows), list(closes)
+        self._brushes, self._pens, self._width = list(brushes), list(pens), width
         # ⚠ the zero-range carry-forward line below spans +-0.5 in X, which is half a BAR on the bucket
         # canvas but half a SECOND on a clock axis -- a 1 m candle's flat line would be 1 s wide and read as a
         # gap. Callers on a clock axis pass their interval; every existing caller keeps the historical 0.5.
@@ -851,7 +863,7 @@ class BucketCandleItem(pg.GraphicsObject):
         self._hp = list(hi_pens) if hi_pens is not None else None
         self._lp = list(lo_pens) if lo_pens is not None else None
         if not x:
-            self.picture = QtGui.QPicture(); self._rect = QtCore.QRectF()
+            self.picture = QtGui.QPicture(); self._rect = QtCore.QRectF(); self._strips = []
             self.prepareGeometryChange(); self.update(); return
         # Bounds = FULL data extent (UNCHANGED behavior): Y-fit / autorange / follow see
         # every bucket exactly as before — ONLY the painted picture is culled (in _build_picture).
@@ -863,7 +875,11 @@ class BucketCandleItem(pg.GraphicsObject):
                                    float(x[-1]) - float(x[0]) + (w_first + w_last) / 2.0, span)
         self._vx0 = float("-inf") if x0 is None else float(x0)
         self._vx1 = float("inf")  if x1 is None else float(x1)
-        self._build_picture()
+        if _k0 is not None and _k0 > 0 and self._build_tail(_k0):
+            self._tail_builds = getattr(self, "_tail_builds", 0) + 1
+        else:
+            self._build_picture()
+            self._full_builds = getattr(self, "_full_builds", 0) + 1
         self.prepareGeometryChange()
         self.informViewBoundsChanged()
         self.update()
@@ -878,6 +894,122 @@ class BucketCandleItem(pg.GraphicsObject):
         self._vx0, self._vx1 = float(x0), float(x1)
         self._build_picture()
         self.update()
+
+    def _common_prefix(self, x, o, h, l, c, brushes, pens, widths, hi_pens, lo_pens):
+        """How many leading candles are identical to the current ones (every array, and the brush / pen
+        VALUES up to there), or None when none are. Numeric arrays vectorised; pens and brushes by Qt value
+        equality only up to the first numeric difference."""
+        m = min(len(self._x), len(x))
+        if m == 0:
+            return None
+        k = m
+        for a_new, a_old in ((x, self._x), (o, self._o), (h, self._h), (l, self._l), (c, self._c)):
+            d = np.flatnonzero(np.asarray(a_new[:m], dtype=np.float64) != np.asarray(a_old[:m], dtype=np.float64))
+            if d.size:
+                k = min(k, int(d[0]))
+        ws_new = list(widths) if widths is not None else None
+        if (ws_new is None) != (self._ws is None):
+            return None
+        if ws_new is not None:
+            d = np.flatnonzero(np.asarray(ws_new[:m], dtype=np.float64) != np.asarray(self._ws[:m], dtype=np.float64))
+            if d.size:
+                k = min(k, int(d[0]))
+        for new_l, old_l in ((brushes, self._brushes), (pens, self._pens), (hi_pens, self._hp), (lo_pens, self._lp)):
+            if (new_l is None) != (old_l is None):
+                return None
+            if new_l is None:
+                continue
+            for i in range(min(k, len(new_l), len(old_l))):
+                a, b = new_l[i], old_l[i]
+                if a is b:
+                    continue
+                if (a is None) != (b is None) or (a is not None and a != b):
+                    k = i
+                    break
+        return k if k > 0 else None
+
+    _STRIP_CANDLES = 96          # target candles per strip: the unit a tail rebuild and a sliver paint pay for
+
+    def _strip_index(self, xi: float) -> int:
+        return int((xi - self._strip_lo) / self._strip_w)
+
+    def _draw_candle(self, p, i, xi, width, half, o, h, l, c, brushes, hps, lps):
+        oo, hh, ll, cc = o[i], h[i], l[i], c[i]
+        if abs(hh - ll) < config.TICK_SIZE / 2.0:
+            p.setPen(self._flat_pen)
+            _fh = (half if self._ws else getattr(self, "_flat_half", 0.5))
+            p.drawLine(QtCore.QPointF(xi - _fh, ll), QtCore.QPointF(xi + _fh, ll))
+            return
+        top, bot = max(oo, cc), min(oo, cc)
+        if top == bot:
+            top += config.TICK_SIZE / 2.0   # ranged doji (open==close): sliver shows the level
+        _base = self._pens[i] if i < len(self._pens) else self._pen
+        if hh > top:
+            p.setPen((hps[i] if (hps and i < len(hps) and hps[i] is not None) else _base))
+            p.drawLine(QtCore.QPointF(xi, top), QtCore.QPointF(xi, hh))
+        if bot > ll:
+            p.setPen((lps[i] if (lps and i < len(lps) and lps[i] is not None) else _base))
+            p.drawLine(QtCore.QPointF(xi, ll), QtCore.QPointF(xi, bot))
+        p.setPen(_base)
+        p.setBrush(brushes[i] if i < len(brushes) else QtCore.Qt.NoBrush)
+        p.drawRect(QtCore.QRectF(xi - half, bot, width, top - bot))
+
+    def _build_tail(self, k0: int) -> bool:
+        """Rebuild only the strips that hold candles k0.. on the SAME strip grid (new strips are appended
+        to the right as the data extends). False -> the caller does the full build."""
+        x = self._x
+        if not getattr(self, "_strips", None) or not hasattr(self, "_strip_lo"):
+            return False
+        xs_new = [float(v) for v in x[k0:]]
+        if not xs_new:
+            return True                                   # nothing after the prefix: the pictures are right
+        margin_new = max(self._ws[k0:]) if self._ws else self._width
+        if margin_new > self._strip_margin * 1.5 + 1e-12:
+            return False                                  # a much wider candle: the replay margin would be wrong
+        lo_new = min(xs_new)
+        if lo_new < self._strip_lo - 1e-9:
+            return False                                  # a tail candle LEFT of the grid is not a tail
+        hi_new = max(xs_new)
+        w = self._strip_w
+        strips = list(self._strips)
+        while hi_new >= self._strip_lo + len(strips) * w:  # extend the grid to the right
+            k = len(strips)
+            strips.append((self._strip_lo + k * w, self._strip_lo + (k + 1) * w, QtGui.QPicture()))
+        s0 = max(0, min(len(strips) - 1, self._strip_index(lo_new)))
+        s1 = max(0, min(len(strips) - 1, self._strip_index(hi_new)))
+        old_xf = getattr(self, "_xf", None)
+        if old_xf is not None and len(old_xf) >= k0:
+            self._xf = list(old_xf[:k0]) + xs_new
+        else:
+            self._xf = [float(v) for v in x]
+        import bisect
+        i_start = max(0, bisect.bisect_left(self._xf, strips[s0][0]) - 1)
+        pics = {si: QtGui.QPicture() for si in range(s0, s1 + 1)}
+        ps = {si: QtGui.QPainter(pic) for si, pic in pics.items()}
+        o, h, l, c, brushes, width = self._o, self._h, self._l, self._c, self._brushes, self._width
+        hps, lps, ws = self._hp, self._lp, self._ws
+        half = width / 2.0
+        n = len(x)
+        for i in range(i_start, n):                       # every candle in strips s0..s1, changed or not
+            xi = self._xf[i]
+            si = self._strip_index(xi)
+            if si < s0:
+                continue
+            if si > s1:
+                break
+            if ws:
+                width = ws[i] if i < len(ws) else self._width
+                half = width / 2.0
+            self._draw_candle(ps[si], i, xi, width, half, o, h, l, c, brushes, hps, lps)
+        for p in ps.values():
+            p.end()
+        for si, pic in pics.items():
+            lo_, hi_, _ = strips[si]
+            strips[si] = (lo_, hi_, pic)
+        self._strips = strips
+        self._strip_margin = max(self._strip_margin, float(margin_new))
+        self.picture = strips[0][2]
+        return True
 
     _N_STRIPS = 8
 
@@ -894,6 +1026,8 @@ class BucketCandleItem(pg.GraphicsObject):
         # the replay in paint() widens the exposed rect by the widest body so a candle straddling a strip
         # edge is still replayed for a rect that only touches its other half
         _n = int(self._N_STRIPS)
+        if not (np.isfinite(x0) or np.isfinite(x1)):     # the whole series is drawn (no view cull, e.g. the PRICE
+            _n = max(_n, int(np.ceil(len(x) / float(self._STRIP_CANDLES))))   # pane): bound each strip's candle count
         # ⚠ the cull range can be UNBOUNDED (the Flow-mode PRICE pane passes no x0/x1: +-inf), and inf-inf
         # is NaN -- the strips are laid over the DATA extent in that case, which is what is drawn anyway
         _xf = [float(v) for v in x]
@@ -938,6 +1072,8 @@ class BucketCandleItem(pg.GraphicsObject):
         for p in _ps:
             p.end()
         self._strips = [(_lo + k * _w, _lo + (k + 1) * _w, _pics[k]) for k in range(_n)]
+        self._strip_lo = float(_lo); self._strip_w = float(_w)        # the grid a tail rebuild reuses
+        self._xf = _xf
         self.picture = _pics[0]          # kept for any reader of .picture; the strips are what paint() uses
 
     def paint(self, p, *args):

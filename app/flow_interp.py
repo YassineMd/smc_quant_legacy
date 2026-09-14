@@ -195,16 +195,64 @@ def _ratio_text(r: float) -> str:
     return ("%.2f" % r) if r < 10 else ("%.0f" % r)
 
 
+def _median_prev_windows(hv: np.ndarray, nb: int, mn: int) -> np.ndarray:
+    """base[j] = median of hv[max(0, j - nb):j] for j = 0..len(hv) (the history BEFORE the j-th append),
+    NaN while fewer than mn values exist. Vectorised over the full windows; the ramp (mn <= j < nb) is at
+    most nb - mn tiny medians."""
+    m = int(hv.shape[0])
+    base = np.full(m + 1, np.nan)
+    if m < mn:
+        return base
+    if m >= nb:
+        win = np.lib.stride_tricks.sliding_window_view(hv, nb)          # windows ending at j = nb .. m
+        base[nb:m + 1] = np.median(win, axis=1)
+    for j in range(mn, min(nb, m + 1)):
+        base[j] = np.median(hv[:j])
+    return base
+
+
+def _ratio_vec(v, ok, dn, groups, nb: int, mn: int, include_open: bool) -> np.ndarray:
+    """Shared body: per group (one for prev_ratio, one per side for same_side_ratio) the appended history is
+    the finished + valid values in order; each rated cycle divides by the median of the previous nb of them."""
+    n = int(v.shape[0])
+    out = np.full(n, np.nan)
+    app = ok & dn
+    rated = ok & (dn | bool(include_open))
+    for g in np.unique(groups):
+        mg = groups == g
+        a = app & mg
+        hv = v[a]
+        base = _median_prev_windows(hv, nb, mn)
+        j = np.cumsum(a) - a                                              # appended BEFORE k, exclusive of k
+        r = rated & mg
+        b = base[j[r]]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            q = np.where(b > 0, v[r] / b, np.nan)
+        out[r] = q
+    return out
+
+
 def prev_ratio(vals, done, n_base: int, min_n: int, include_open: bool = False):
     """Each cycle's value over the MEDIAN of the PREVIOUS n_base cycles.
-
     Not same-side: total aggressive flow and the book both exist in every cycle, so the natural baseline is
     simply what came before -- the Book pane's rule.
-
     `include_open` rates the cycle STILL FORMING against that same baseline, from what has accumulated so
     far, so the feed can name a state while it is happening (user 2026-09-11). An unfinished cycle is never
     APPENDED to the history whichever way the flag is set: a partial cycle is not a normal, and letting one
-    in would drag every later reading toward a half-formed value."""
+    in would drag every later reading toward a half-formed value.
+    Vectorised 2026-09-14 (was a Python loop with an np.median per cycle: 28 ms per 400 cycles); the loop
+    stays as prev_ratio_loop and a gate holds the two equal."""
+    n = int(np.size(vals))
+    if n == 0:
+        return np.full(0, np.nan)
+    v = np.asarray(vals, dtype=np.float64)
+    dn = np.asarray(done, dtype=bool)
+    ok = np.isfinite(v) & (v > 0)
+    return _ratio_vec(v, ok, dn, np.zeros(n, dtype=np.int64), max(1, int(n_base)), max(1, int(min_n)), include_open)
+
+
+def prev_ratio_loop(vals, done, n_base: int, min_n: int, include_open: bool = False):
+    """The reference loop (kept for the equality gate)."""
     n = int(np.size(vals))
     out = np.full(n, np.nan)
     if n == 0:
@@ -230,10 +278,22 @@ def prev_ratio(vals, done, n_base: int, min_n: int, include_open: bool = False):
 def same_side_ratio(vals, is_dom_buy, done, n_base: int, min_n: int, include_open: bool = False):
     """The Speed pane's rule -- each cycle against the SAME side's previous n_base -- with the open cycle
     optionally rated too.
-
     Identical to the terminal's own _same_side_ratio on FINISHED cycles, and a test gate holds the two to
     each other. That includes its `v >= 0` guard: zero is a legitimate speed, and requiring v > 0 silently
-    dropped exactly the cycles the FLAT class exists to show. The open cycle enters no side's history."""
+    dropped exactly the cycles the FLAT class exists to show. The open cycle enters no side's history.
+    Vectorised 2026-09-14; the loop stays as same_side_ratio_loop and a gate holds the two equal."""
+    n = int(np.size(done))
+    if n == 0:
+        return np.full(0, np.nan)
+    v = np.asarray(vals, dtype=np.float64)
+    dn = np.asarray(done, dtype=bool)
+    db = np.asarray(is_dom_buy, dtype=bool).astype(np.int64)
+    ok = np.isfinite(v) & (v >= 0)
+    return _ratio_vec(v, ok, dn, db, max(1, int(n_base)), max(1, int(min_n)), include_open)
+
+
+def same_side_ratio_loop(vals, is_dom_buy, done, n_base: int, min_n: int, include_open: bool = False):
+    """The reference loop (kept for the equality gate)."""
     n = int(np.size(done))
     out = np.full(n, np.nan)
     if n == 0:
