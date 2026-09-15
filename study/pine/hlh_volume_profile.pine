@@ -16,9 +16,69 @@ tpBinW    = input.int(240, "Week: time-profile bin (minutes)", options = [15, 30
 blocOnly  = input.bool(false, "Block Lines Only",
              tooltip = "Keeps ONLY the bloc VAH / VAL lines (drawn 2 px) and their bloc labels on the chart and hides everything else (profile, rows, D lines, levels, time profile, other labels). Everything is still computed the same way.",
              group = "Periods")
+tpBlocs   = input.bool(true, "Bloc badges",
+             tooltip = "Shows a badge on every bloc (name, time, volume), attached to the left end of its VAL line, in the colour of its VAH / VAL lines. Off = no bloc badges, with or without Block Lines Only. A bloc = consecutive time bins of candles that CLOSE inside the D.",
+             group = "Periods")
+
+// ── Tables: DISPLAY ONLY. Turning a table off never changes the blocs, the merges or the colours.
+showTable = input.bool(true, "Table 1: all blocs by volume",
+             tooltip = "Display only: turning it off changes nothing on the chart. Under the day's low, its left edge at midnight: every final bloc of the period (all Ds, after all merges), sorted by volume from the LOWEST to the HIGHEST. Columns: bloc, real time span, time in the area, volume, high-low, MAX/MIN tag, how much of the bloc's high-low range lies inside each other bloc whose time span overlaps it, and what was merged into it. Needs the time profile on.",
+             group = "Tables")
+showDTab  = input.bool(true, "Table 2: blocs per D",
+             tooltip = "Display only: turning it off changes nothing on the chart. Right under table 1, same alignment: for every D (D1, D2 ...) its final blocs sorted by volume from the LOWEST to the highest. Columns: bloc, real time span, time in the area, volume, VAH-VAL, and how much of this bloc's VAH-VAL range lies inside each other bloc's VAH-VAL range of the SAME D. Needs the time profile on.",
+             group = "Tables")
+showDayTab = input.bool(true, "Table 3: day N vs day N-1 (finished days only)",
+             tooltip = "Display only: turning it off changes nothing on the chart. Only under FINISHED days: every final bloc of that day (day N) and its VAH-VAL relation, in price, with every final bloc of the previous day (day N-1). 'inside at X%' = the day N bloc is fully inside the day N-1 bloc, X = its range / the day N-1 bloc's range. 'contains at X%' = the day N-1 bloc is fully inside the day N bloc, X = its range / the day N bloc's range. 'overlapping at X%' = partial overlap, X = the shared band / the smaller of the two ranges. Same for weeks.",
+             group = "Tables")
+
+// ── Merges: the rules that build the final blocs. Every rule is run again and again, round after
+// round, until nothing is left to merge. These change the blocs on the chart AND in the tables.
+mergeBl   = input.bool(true, "Merge 1: time-overlapping blocs (high-low inside)",
+             tooltip = "Blocs taken from the LOWEST volume. A bloc whose high-low range is at least the % below inside the high-low range of another bloc whose time span overlaps it is merged with it (the partner with the HIGHEST volume if several): the lower-volume bloc becomes part of the higher-volume one (volume and time add up, high-low and From-To widen); the merged bloc's VAH / VAL is rebuilt from ALL its candles. On the chart the absorbed bloc disappears. MAX / MIN are picked after the merge. The same % is used by table 1's 'Inside time-overlapping blocs' column.",
+             group = "Merges")
+insidePct = input.float(50, "Merge 1: high-low inside from %", minval = 0, maxval = 100, step = 5, group = "Merges")
+dMerge    = input.bool(true, "Merge 2: same D, VAH-VAL inside",
+             tooltip = "Inside each D, taken from the LOWEST volume: a bloc whose VAH-VAL range is at least the % below inside another bloc's VAH-VAL range of the same D is merged with it (the partner with the HIGHEST % if several). The collage: time and volume add up, and the new VAH / VAL come from a volume profile of ONLY their candles, as if they were one continuous chart (the blocs of other Ds in between are ignored). On the chart the merged bloc gets its own VAH / VAL (3 px) and the blocs inside it lose theirs.",
+             group = "Merges")
+dMergePct = input.float(50, "Merge 2: VAH-VAL inside from %", minval = 0, maxval = 100, step = 5, group = "Merges")
+dayMerge  = input.bool(true, "Merge 3: day N + day N-1, OVERLAPPING",
+             tooltip = "Finished days only. Day N blocs taken from the LOWEST volume: a day N bloc 'overlapping at X%' a day N-1 bloc (partial overlap; X = the shared band / the SMALLER of the two VAH-VAL ranges, so it is the same seen from either bloc) with X >= the % below is merged with it (the highest % if several). The collage: ONLY the candles of both blocs, as one continuous chart, give the new VAH / VAL; time and volume add up. Both blocs lose their VAH / VAL lines and badges, the new bloc (Dy-mBx, in the day N bloc's D) gets its own, from the earlier bloc's start to the later bloc's end. The next day is compared with this day's blocs AFTER these merges.",
+             group = "Merges")
+dayMergePct = input.float(50, "Merge 3: overlapping from %", minval = 0, maxval = 100, step = 5, group = "Merges")
+insMerge  = input.bool(true, "Merge 3: day N + day N-1, INSIDE",
+             tooltip = "Finished days only, together with the overlapping rule. When one bloc's VAH-VAL range is fully inside the other's, either way ('inside at X%' = the day N bloc inside the day N-1 bloc, 'contains at X%' = the day N-1 bloc inside the day N bloc; X = the smaller range / the bigger range), the two are merged when X >= the % below: the same collage. If a bloc qualifies with several day N-1 blocs, overlapping or inside, the highest % is used.",
+             group = "Merges")
+insMergePct = input.float(50, "Merge 3: inside from %", minval = 0, maxval = 100, step = 5, group = "Merges")
+edgeMerge = input.bool(true, "Merge 4: VAL = VAH, blocs sharing a day",
+             tooltip = "Finished days only. Two blocs that have at least one day in common (a bloc of day N, or a merged bloc that holds day N) and where the VAL of one is within the ticks below of the VAH of the other are merged with a collage: ONLY their candles, as one continuous chart, give the new VAH / VAL; time and volume add up. Blocs taken from the LOWEST volume; the partner with the smallest gap (then the highest volume) is used. Both lose their lines and badges, the new bloc gets its own.",
+             group = "Merges")
+edgeTicks = input.int(1, "Merge 4: VAL = VAH within ± ticks", minval = 0, maxval = 50, group = "Merges")
+mergeSpan = input.string("36h", "A merged bloc spans at most",
+             options = ["No merge (day N alone)", "12h", "24h", "36h", "48h", "72h", "96h", "1 week"],
+             tooltip = "The longest a merged bloc may be, from its first candle to the close of its last one (x 7 for the week profile). A pair that qualifies for a merge but would exceed it stays apart; table 3 marks it '(not merged: max N h)'. 'No merge (day N alone)': the blocs of a day only merge among themselves (merges 1, 2 and 4 inside the day); nothing from the previous days takes part, and table 3 only reports the overlaps.",
+             group = "Merges")
+dayAlone  = mergeSpan == "No merge (day N alone)"
+mergeMaxH = switch mergeSpan
+    "12h"    => 12.0
+    "24h"    => 24.0
+    "36h"    => 36.0
+    "48h"    => 48.0
+    "72h"    => 72.0
+    "96h"    => 96.0
+    "1 week" => 168.0
+    => 1.0e9
+
+// ── Bloc colours (VAH / VAL lines of the final blocs)
+volLook = input.int(20, "Compare each bloc with the previous N blocs", minval = 1, maxval = 200,
+           tooltip = "Every final bloc (after all merges) is compared with the N blocs before it, in time order, whatever their D or day. Rank = % of those blocs with a LOWER volume. Rank above the orange % -> VAH / VAL orange, 4 px. Rank above the dark gray % up to the orange % -> coloured, 3 px: its D colour, but never orange, never a gray and never the same colour as the last coloured bloc (then another colour of the palette). Rank at or below the dark gray % -> dark gray, 2 px. At the start of the chart, fewer than N blocs are used.",
+           group = "Bloc colours")
+goldPct = input.float(69, "Orange when volume is above % of them", minval = 0, maxval = 100, step = 1, group = "Bloc colours")
+grayPct = input.float(29, "Dark gray when volume is at most % of them", minval = 0, maxval = 100, step = 1, group = "Bloc colours")
+cGold   = input.color(#FF9800, "Orange (4 px)", group = "Bloc colours", inline = "bc")
+cGray   = input.color(#505050, "Dark gray (2 px)", group = "Bloc colours", inline = "bc")
 
 // ── Session
-tz = input.string("UTC", "Session timezone",
+tz =input.string("UTC", "Session timezone",
      tooltip = "IANA name or GMT offset: UTC, Africa/Casablanca, GMT+1. Days and weeks are cut in this timezone.", group = "Session")
 
 // ── Profile
@@ -56,9 +116,6 @@ showTP = input.bool(true, "Time profile inside each D area",
           tooltip = "Each final D's area (between its two level lines) gets its own time profile over the period: one column per time bin, height = minutes price spent in THAT area during the bin, scaled to that D's busiest bin. Each D is measured on its own.",
           group = "Time profile")
 tpTr   = input.int(75, "Fill transparency", minval = 0, maxval = 95, group = "Time profile")
-tpBlocs = input.bool(true, "Label each bloc (time + volume)",
-           tooltip = "A candle is in a D only if it CLOSES inside the D (measured on the intrabar candles). A bloc = consecutive time bins with such candles. Time = minutes of those candles; volume = their volume.",
-           group = "Time profile")
 tpTotal = input.bool(true, "Label the D area total (time + volume + blocs)", group = "Time profile")
 tpPeak  = input.bool(false, "Label the busiest bin", group = "Time profile")
 tpDimTr = input.int(90, "Transparency of the other blocs", minval = 0, maxval = 100,
@@ -71,6 +128,11 @@ showVA   = input.bool(true, "VAH / VAL of each bloc (Block Lines)",
             tooltip = "Every bloc gets its own value area: a volume profile of only that bloc's candles (the ones closing inside the D during the bloc), on the D's rows. Start at its busiest row, add the bigger neighbouring row until the value-area % is reached. Solid lines in the D's colour, from the bloc's start to its end.",
             group = "Time profile")
 vaPct    = input.float(70, "Value area %", minval = 10, maxval = 100, step = 5, group = "Time profile")
+showVA2  = input.bool(true, "Outer value area lines (dashed 1 px)",
+            tooltip = "A second, wider value area of the same bloc (same candles, same rows, the % below): dashed 1 px lines in the colour of the bloc's VAH / VAL, over the same span. It grows from the bloc's busiest row towards the side with more volume, so when almost nothing traded below the VAL (or above the VAH) that dashed line sits on the solid one and is hidden by it.",
+            group = "Time profile")
+va2Pct   = input.float(90, "Outer value area %", minval = 10, maxval = 100, step = 5,
+            tooltip = "90 = 10% of the bloc's volume left outside the dashed lines.", group = "Time profile")
 vaWidth  = input.int(1, "VAH / VAL line width", minval = 1, maxval = 6, group = "Time profile")
 
 // ── Uncovered areas
@@ -127,6 +189,7 @@ type TPArea
     float   pStep  // row height
     int     r0     // the area's lowest profile row
     int     r1     // the area's highest profile row
+    int     mCount = 0  // merged blocs named so far in this D (Dy-mB1, Dy-mB2 ...)
 
 // One bloc = consecutive non-empty time bins of one D area
 type Bloc
@@ -138,6 +201,81 @@ type Bloc
     float  vol    // volume traded in the area
     bool   keep   // stays at normal opacity
     string tag    // "MAX" / "MIN" ...
+    float  bHi = na  // highest high of the bloc's candles
+    float  bLo = na  // lowest low of the bloc's candles
+    int    tA  = na  // first candle open
+    int    tB  = na  // last candle close
+    bool   gone    = false  // merged into another bloc: not drawn, not listed
+    bool   dGone   = false  // part of a merge of the same D: its own VAH / VAL and badge are not drawn
+    string ref     = ""     // "D1-B3", or "D1-mB2" once it is a merged bloc
+    string members = ""     // names of the blocs merged into this one
+    int[]  ids     = na     // indexes of the blocs merged into this one
+    float  vah     = na     // VAH price of the bloc (+ the blocs merged into it)
+    float  val     = na     // VAL price
+    int    vaA     = na     // VAH / VAL line start
+    int    vaB     = na     // VAH / VAL line end
+    line   lnH     = na     // its VAH line (deleted if it becomes part of a merged bloc)
+    line   lnL     = na     // its VAL line
+    float  vah2    = na     // outer value area (va2Pct %): top / bottom, dashed 1 px lines
+    float  val2    = na
+    line   ln2H    = na
+    line   ln2L    = na
+    label  lb      = na     // its badge
+
+// One row of the per-D table: a bloc, or several blocs of the same D merged together.
+// grp = every original bloc whose candles it holds (a bloc + the blocs merged into it).
+type MB
+    int    area
+    string name
+    string members
+    int[]  grp
+    float  mins
+    float  vol
+    int    tA
+    int    tB
+    float  vah
+    float  val
+    int    vaA    = na     // VAH / VAL line start (first bin of the group)
+    int    vaB    = na     // VAH / VAL line end (last bin of the group)
+    bool   merged = false  // built by a merge (same D, or day N + day N-1): the collage
+    color  col    = na     // D colour
+    float  yLo    = na     // price band of the D areas it covers (the collage's rows)
+    float  yHi    = na
+    float[] cH    = na     // its candles: high, low, volume (kept for the next period's collage)
+    float[] cL    = na
+    float[] cV    = na
+    line   lnH    = na     // its drawings (deleted when it becomes part of a merged bloc)
+    line   lnL    = na
+    float  vah2   = na     // outer value area (va2Pct %): top / bottom, dashed 1 px lines
+    float  val2   = na
+    line   ln2H   = na
+    line   ln2L   = na
+    label  lb     = na
+    string mergedFrom = "" // what a table 3 merge joined: "D1-B2 (N-1) + D2-B1"
+    float  pStep  = na     // row height of its period's profile
+    int    dFirst = na     // first period (P.dayId) its candles come from
+    int    dLast  = na     // last period its candles come from
+    string dName  = ""     // "D1" (the D it belongs to)
+    float  bHi    = na     // highest high of its candles
+    float  bLo    = na     // lowest low of its candles
+    string tag    = ""     // MAX / MIN among the final blocs (table 1)
+    bool   todo   = false  // to be coloured by colorRows
+    int    cls    = na     // 2 = GOLD, 1 = coloured, 0 = light gray
+    color  lnColor = na    // the colour its VAH / VAL got
+
+// One finished period's tables: where they hang and what they were built with, so they can be
+// rebuilt from the CURRENT blocs whenever a later merge changes that period's blocs.
+type PerRec
+    int     day          // its P.dayId
+    int     t0           // its start time (midnight)
+    float   lo           // its low (where its tables hang)
+    label[] labs         // its tables' labels
+    int     nH           // its time + high-low merge count (merge 1)
+    int     nD           // its same-D merge count
+    int     nX           // its day N + day N-1 overlap / inside merge count
+    int     nE           // its VAL = VAH merge count
+    int     pDay = na    // the period before it (its table 3 compares with that one)
+    int     pT0  = na
 
 // Everything one period (Day or Week) needs: its candles, its drawings, where it started.
 // The Day and the Week each own one, so they run fully independently.
@@ -165,6 +303,10 @@ type Per
     int        startIdx
     int        startTime
     int        key
+    MB[]       prevRows = na  // the last FINISHED period's final blocs (for table 3)
+    int        prevT0   = na  // its start time
+    PerRec[]   recs     = na  // the finished periods' tables (rebuilt when their blocs change)
+    MB[]       histOld  = na  // final blocs of older finished periods (for the GOLD / gray comparison)
 
 newPer(bool w) =>
     Per.new(w, array.new<float>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<int>(), array.new<float>(),
@@ -417,7 +559,7 @@ drawLeg(Per P, int apexX, float apexY, int[] seq, int fb, int sIdx, float lo, fl
 // Value area of the profile rows r0..r1 (inclusive) only. Start at the busiest row, then add
 // the bigger neighbouring row (above or below) until vaPct % of those rows' volume is inside.
 // Returns [lowest row, highest row] of the value area (-1, -1 if the rows hold no volume).
-valueArea(float[] vp, int r0, int r1) =>
+valueAreaP(float[] vp, int r0, int r1, float pct) =>
     tot = 0.0
     pk  = r0
     for k = r0 to r1
@@ -430,7 +572,7 @@ valueArea(float[] vp, int r0, int r1) =>
         vaLo := pk
         vaHi := pk
         acc = array.get(vp, pk)
-        target = tot * vaPct / 100.0
+        target = tot * pct / 100.0
         while acc < target and (vaLo > r0 or vaHi < r1)
             up = -1.0
             dn = -1.0
@@ -446,37 +588,115 @@ valueArea(float[] vp, int r0, int r1) =>
                 acc += dn
     [vaLo, vaHi]
 
-// Value area of ONE bloc: a volume profile built only from the candles of that bloc (candle
-// open time in [tA, tB) and close inside the D area), on the period's rows but limited to the
-// area's rows. Each candle's volume is spread evenly over the area rows its range touches.
-// Returns [lowest row, highest row] (profile row indexes), -1 if no volume.
-blocVA(Per P, TPArea ar, int tA, int tB) =>
-    nR = ar.r1 - ar.r0 + 1
-    bv = array.new<float>(nR, 0.0)
-    if array.size(P.srcT) > 0
-        for i = 0 to array.size(P.srcT) - 1
-            t = array.get(P.srcT, i)
-            c = array.get(P.srcC, i)
-            if t >= tA and t < tB and c >= ar.yBot and c <= ar.yTop
-                iT = math.min(ar.r1, int((array.get(P.srcH, i) - ar.pLo) / ar.pStep))
-                iB = math.max(ar.r0, int((array.get(P.srcL, i) - ar.pLo) / ar.pStep))
-                if iT >= iB
-                    sh = array.get(P.srcV, i) / (iT - iB + 1)
-                    for rr = iB to iT
-                        array.set(bv, rr - ar.r0, array.get(bv, rr - ar.r0) + sh)
-    [vLo, vHi] = valueArea(bv, 0, nR - 1)
-    outLo = vLo >= 0 ? vLo + ar.r0 : -1
-    outHi = vHi >= 0 ? vHi + ar.r0 : -1
-    [outLo, outHi]
+valueArea(float[] vp, int r0, int r1) =>
+    valueAreaP(vp, r0, r1, vaPct)
 
-// 58 -> "58min", 94 -> "1h34m", 1590 -> "1d2h30m"
+// a bloc + the blocs merged into it (indexes)
+grpOf(Bloc[] bl, int bi) =>
+    me  = array.get(bl, bi)
+    grp = array.from(bi)
+    if not na(me.ids)
+        for x in me.ids
+            array.push(grp, x)
+    grp
+
+// Value area of a GROUP of blocs, ISOLATED: only the candles of those blocs, as if they were one
+// continuous chart (candles of other blocs in between are ignored). A candle belongs to the group
+// if, for at least one of its blocs, its open time is inside that bloc's bins AND its close is
+// inside that bloc's D area (counted once). Rows = from the lowest to the highest row of the
+// group's D areas (a single bloc = its own area's rows). Each candle's volume is spread evenly
+// over those rows its range touches.
+// Returns [lowest row, highest row, span start, span end]; rows are -1 if no volume.
+groupVA(Per P, TPArea[] areas, Bloc[] bl, int[] grp, int t0, int binMs) =>
+    me  = array.get(bl, array.get(grp, 0))
+    ar0 = array.get(areas, me.area)
+    r0 = ar0.r0
+    r1 = ar0.r1
+    tS = t0 + me.bs * binMs
+    tE = t0 + me.be * binMs
+    for g in grp
+        gb = array.get(bl, g)
+        ga = array.get(areas, gb.area)
+        r0 := math.min(r0, ga.r0)
+        r1 := math.max(r1, ga.r1)
+        tS := math.min(tS, t0 + gb.bs * binMs)
+        tE := math.max(tE, t0 + gb.be * binMs)
+    outLo = -1
+    outHi = -1
+    outLo2 = -1
+    outHi2 = -1
+    if r1 >= r0
+        nR = r1 - r0 + 1
+        bv = array.new<float>(nR, 0.0)
+        if array.size(P.srcT) > 0
+            for i = 0 to array.size(P.srcT) - 1
+                t = array.get(P.srcT, i)
+                c = array.get(P.srcC, i)
+                inGrp = false
+                for g in grp
+                    mb = array.get(bl, g)
+                    ma = array.get(areas, mb.area)
+                    if t >= t0 + mb.bs * binMs and t < t0 + mb.be * binMs and c >= ma.yBot and c <= ma.yTop
+                        inGrp := true
+                if inGrp
+                    iT = math.min(r1, int((array.get(P.srcH, i) - ar0.pLo) / ar0.pStep))
+                    iB = math.max(r0, int((array.get(P.srcL, i) - ar0.pLo) / ar0.pStep))
+                    if iT >= iB
+                        sh = array.get(P.srcV, i) / (iT - iB + 1)
+                        for rr = iB to iT
+                            array.set(bv, rr - r0, array.get(bv, rr - r0) + sh)
+        [vLo, vHi] = valueArea(bv, 0, nR - 1)
+        if vLo >= 0
+            outLo := vLo + r0
+            outHi := vHi + r0
+        [vLo2, vHi2] = valueAreaP(bv, 0, nR - 1, va2Pct)
+        if vLo2 >= 0
+            outLo2 := vLo2 + r0
+            outHi2 := vHi2 + r0
+    [outLo, outHi, outLo2, outHi2, tS, tE]
+
+// Value area of ONE bloc (bl[bi]) together with every bloc merged into it.
+blocVA(Per P, TPArea[] areas, Bloc[] bl, int bi, int t0, int binMs) =>
+    groupVA(P, areas, bl, grpOf(bl, bi), t0, binMs)
+
+// VAH / VAL of every live bloc (with the blocs merged into it), stored on the bloc:
+// used by the Block Lines and by the per-D table.
+fillBlocVA(Per P, TPArea[] areas, Bloc[] bl, int t0, int binMs) =>
+    if array.size(bl) > 0
+        for bi = 0 to array.size(bl) - 1
+            bb = array.get(bl, bi)
+            if not bb.gone
+                [vLo, vHi, vLo2, vHi2, tS, tE] = blocVA(P, areas, bl, bi, t0, binMs)
+                ar = array.get(areas, bb.area)
+                bb.vaA := tS
+                bb.vaB := tE
+                if vLo >= 0
+                    bb.vah := ar.pLo + (vHi + 1) * ar.pStep
+                    bb.val := ar.pLo + vLo * ar.pStep
+                if vLo2 >= 0
+                    bb.vah2 := ar.pLo + (vHi2 + 1) * ar.pStep
+                    bb.val2 := ar.pLo + vLo2 * ar.pStep
+    array.size(bl)
+
+// 58 -> "58min", 94 -> "1h34m", 1832 -> "30h32m" (always hours, never days)
 fmtDur(float mins) =>
     t  = int(math.round(mins))
-    dd = int(t / 1440)
-    hh = int((t % 1440) / 60)
+    hh = int(t / 60)
     mm = t % 60
-    t < 60 ? str.tostring(t) + "min" :
-         (dd > 0 ? str.tostring(dd) + "d" : "") + str.tostring(hh) + "h" + (mm < 10 ? "0" : "") + str.tostring(mm) + "m"
+    t < 60 ? str.tostring(t) + "min" : str.tostring(hh) + "h" + (mm < 10 ? "0" : "") + str.tostring(mm) + "m"
+
+// a bloc's duration: fmtDur, plus " over N days" when its span (first candle -> last candle close)
+// covers more than one calendar day. "30h32m over 2 days"
+fmtBloc(float mins, int tA, int tB) =>
+    out = fmtDur(mins)
+    if not na(tA) and not na(tB)
+        d0 = timestamp(tz, year(tA, tz), month(tA, tz), dayofmonth(tA, tz), 0, 0)
+        tL = math.max(tA, tB - 1)
+        d1 = timestamp(tz, year(tL, tz), month(tL, tz), dayofmonth(tL, tz), 0, 0)
+        nDays = int(math.round((d1 - d0) / 86400000.0)) + 1
+        if nDays > 1
+            out := out + " over " + str.tostring(nDays) + " days"
+    out
 
 // Time profile of ONE D area [yBot, yTop], bins of binMs starting at t0. Only this period's
 // candles, only this area. A candle is IN the D only if it CLOSES inside the D; its time
@@ -516,7 +736,7 @@ findBlocs(TPArea[] areas) =>
                     bV += array.get(ar.vo, b)
                 else if bs >= 0
                     nb += 1
-                    array.push(bl, Bloc.new(ai, nb, bs, b, bM, bV, false, ""))
+                    array.push(bl, Bloc.new(ai, nb, bs, b, bM, bV, false, "", ref = ar.name + "-B" + str.tostring(nb)))
                     bs := -1
     bl
 
@@ -535,25 +755,26 @@ keepExtreme(Bloc[] bl, int iT, int iV, string tag) =>
         b2.tag  := b2.tag == "" ? tag + " vol" : b2.tag + " + " + tag + " vol"
     array.size(bl)
 
-// Compare ALL blocs of the period, whatever their D:
+// Compare ALL live blocs of the period (merged ones left out), whatever their D:
 //   MAX = most time AND most volume, MIN = least time AND least volume.
 markExtremes(Bloc[] bl) =>
+    iTmax = -1
+    iVmax = -1
+    iTmin = -1
+    iVmin = -1
     if array.size(bl) > 0
-        iTmax = 0
-        iVmax = 0
-        iTmin = 0
-        iVmin = 0
-        if array.size(bl) > 1
-            for i = 1 to array.size(bl) - 1
-                bb = array.get(bl, i)
-                if bb.mins > array.get(bl, iTmax).mins
+        for i = 0 to array.size(bl) - 1
+            bb = array.get(bl, i)
+            if not bb.gone
+                if iTmax < 0 or bb.mins > array.get(bl, iTmax).mins
                     iTmax := i
-                if bb.vol > array.get(bl, iVmax).vol
+                if iVmax < 0 or bb.vol > array.get(bl, iVmax).vol
                     iVmax := i
-                if bb.mins < array.get(bl, iTmin).mins
+                if iTmin < 0 or bb.mins < array.get(bl, iTmin).mins
                     iTmin := i
-                if bb.vol < array.get(bl, iVmin).vol
+                if iVmin < 0 or bb.vol < array.get(bl, iVmin).vol
                     iVmin := i
+    if iTmax >= 0
         keepExtreme(bl, iTmax, iVmax, "MAX")
         keepExtreme(bl, iTmin, iVmin, "MIN")
     array.size(bl)
@@ -561,25 +782,27 @@ markExtremes(Bloc[] bl) =>
 // Draw every D area's time profile. Columns stand on the area's bottom line, the busiest bin
 // reaching its top line. Kept blocs at normal opacity, every other bloc faded. Each bloc gets
 // its VAH / VAL (the Block Lines) and a label, each area a total label.
+// A bloc merged into another one is not drawn at all (no columns, no lines, no label, not in
+// the area total): the bloc it went into is the only reference.
 drawAreas(Per P, TPArea[] areas, Bloc[] bl, int t0, int binMs, bool dev) =>
     pfx = P.isWeek ? "W " : ""
-    if array.size(areas) > 0
+    if array.size(areas) > 0 and array.size(bl) > 0
         for ai = 0 to array.size(areas) - 1
             ar = array.get(areas, ai)
             nBin = array.size(ar.m)
             mx = array.max(ar.m)
             if mx > 0
-                kept = array.new<bool>(nBin, false)
+                skip = array.new<bool>(nBin, false)
                 for bb in bl
-                    if bb.area == ai and bb.keep
+                    if bb.area == ai and (bb.keep or bb.gone)
                         for k = bb.bs to bb.be - 1
-                            array.set(kept, k, true)
+                            array.set(skip, k, true)
 
-                // faded columns (kept blocs left out)
+                // faded columns (kept and merged-away blocs left out)
                 pts = array.new<chart.point>()
                 array.push(pts, chart.point.from_time(t0, ar.yBot))
                 for b = 0 to nBin - 1
-                    yy = array.get(kept, b) ? ar.yBot : ar.yBot + (ar.yTop - ar.yBot) * array.get(ar.m, b) / mx
+                    yy = array.get(skip, b) ? ar.yBot : ar.yBot + (ar.yTop - ar.yBot) * array.get(ar.m, b) / mx
                     array.push(pts, chart.point.from_time(t0 + b * binMs, yy))
                     array.push(pts, chart.point.from_time(t0 + (b + 1) * binMs, yy))
                 array.push(pts, chart.point.from_time(t0 + nBin * binMs, ar.yBot))
@@ -589,8 +812,9 @@ drawAreas(Per P, TPArea[] areas, Bloc[] bl, int t0, int binMs, bool dev) =>
                 totM = 0.0
                 totV = 0.0
                 nb   = 0
-                for bb in bl
-                    if bb.area == ai
+                for bi = 0 to array.size(bl) - 1
+                    bb = array.get(bl, bi)
+                    if bb.area == ai and not bb.gone
                         nb   += 1
                         totM += bb.mins
                         totV += bb.vol
@@ -605,24 +829,33 @@ drawAreas(Per P, TPArea[] areas, Bloc[] bl, int t0, int binMs, bool dev) =>
                             array.push(kp, chart.point.from_time(t0 + bb.be * binMs, ar.yBot))
                             keepPoly(P, polyline.new(kp, closed = true, xloc = xloc.bar_time,
                                  line_color = color.new(ar.col, 40), fill_color = color.new(ar.col, tpTr), line_width = 1), dev)
-                        // Block Lines: VAH / VAL of THIS bloc, from its start to its end
-                        if showVA and ar.r1 >= ar.r0
-                            tA = t0 + bb.bs * binMs
-                            tB = t0 + bb.be * binMs
-                            [vLo, vHi] = blocVA(P, ar, tA, tB)
-                            if vLo >= 0
-                                lc  = bb.keep ? ar.col : color.new(ar.col, 60)
-                                yVh = ar.pLo + (vHi + 1) * ar.pStep
-                                yVl = ar.pLo + vLo * ar.pStep
-                                lw  = blocOnly ? 2 : vaWidth
-                                keepBlocLine(P, line.new(tA, yVh, tB, yVh, xloc = xloc.bar_time, color = lc, width = lw, style = line.style_solid), dev)
-                                keepBlocLine(P, line.new(tA, yVl, tB, yVl, xloc = xloc.bar_time, color = lc, width = lw, style = line.style_solid), dev)
-                        if tpBlocs
-                            txt = (bb.tag != "" ? bb.tag + "\n" : "") + "B" + str.tostring(bb.num) + "\n" + fmtDur(bb.mins) + "\n" + str.tostring(bb.vol, format.volume)
-                            keepBlocLabel(P, label.new(t0 + int((bb.bs + bb.be) * binMs / 2), ar.yBot, txt,
-                                 xloc = xloc.bar_time, style = label.style_label_up,
-                                 color = color.new(ar.col, bb.keep ? 80 : 95),
-                                 textcolor = bb.keep ? color.black : color.new(color.black, 65), size = size.small), dev)
+                        // Block Lines: VAH / VAL of THIS bloc (+ the blocs merged into it),
+                        // from its start to its end
+                        if showVA and not na(bb.vah) and not bb.dGone
+                            lc = bb.keep ? ar.col : color.new(ar.col, 60)
+                            lw = blocOnly ? 2 : vaWidth
+                            bb.lnH := line.new(bb.vaA, bb.vah, bb.vaB, bb.vah, xloc = xloc.bar_time, color = lc, width = lw, style = line.style_solid)
+                            bb.lnL := line.new(bb.vaA, bb.val, bb.vaB, bb.val, xloc = xloc.bar_time, color = lc, width = lw, style = line.style_solid)
+                            keepBlocLine(P, bb.lnH, dev)
+                            keepBlocLine(P, bb.lnL, dev)
+                            // the outer value area: dashed 1 px, same colour, same span
+                            if showVA2 and not na(bb.vah2)
+                                bb.ln2H := line.new(bb.vaA, bb.vah2, bb.vaB, bb.vah2, xloc = xloc.bar_time, color = lc, width = 1, style = line.style_dashed)
+                                bb.ln2L := line.new(bb.vaA, bb.val2, bb.vaB, bb.val2, xloc = xloc.bar_time, color = lc, width = 1, style = line.style_dashed)
+                                keepBlocLine(P, bb.ln2H, dev)
+                                keepBlocLine(P, bb.ln2L, dev)
+                        // badge: reference, time, volume (a bloc inside a same-D merge has none:
+                        // the merged bloc carries the badge)
+                        if tpBlocs and not bb.dGone
+                            txt = bb.ref + "\n" + fmtBloc(bb.mins, bb.tA, bb.tB) + "\n" + str.tostring(bb.vol, format.volume)
+                            // attached to the LEFT end of its VAL line (bottom of the D if it has no VAL)
+                            bdgX = na(bb.vaA) or na(bb.val) ? t0 + int((bb.bs + bb.be) * binMs / 2) : bb.vaA
+                            bdgY = na(bb.val) ? ar.yBot : bb.val
+                            bb.lb := label.new(bdgX, bdgY, txt,
+                                 xloc = xloc.bar_time, style = label.style_label_upper_left, textalign = text.align_left,
+                                 color = color.new(ar.col, 80),
+                                 textcolor = color.black, size = size.small)
+                            keepBlocLabel(P, bb.lb, dev)
 
                 if tpPeak
                     fmt = P.isWeek ? "EEE HH:mm" : "HH:mm"
@@ -638,6 +871,1021 @@ drawAreas(Per P, TPArea[] areas, Bloc[] bl, int t0, int binMs, bool dev) =>
                          xloc = xloc.bar_time, style = label.style_label_lower_left,
                          color = color.new(ar.col, 70), textcolor = color.black, size = size.small), dev)
     array.size(areas)
+
+// pad a string with spaces on the right up to n characters (for the monospace table)
+padR(string s, int n) =>
+    out = s
+    while str.length(out) < n
+        out := out + " "
+    out
+
+// For every bloc: its real candles (open time inside the bloc's bins AND close inside the D area)
+// give its price range (highest high / lowest low) and its real time span (first open / last close).
+fillBlocStats(Per P, TPArea[] areas, Bloc[] bl, int t0, int binMs) =>
+    for bb in bl
+        ar  = array.get(areas, bb.area)
+        tS0 = t0 + bb.bs * binMs
+        tE0 = t0 + bb.be * binMs
+        float hiV = na
+        float loV = na
+        int   fst = na
+        int   lst = na
+        if array.size(P.srcT) > 0
+            for i = 0 to array.size(P.srcT) - 1
+                t = array.get(P.srcT, i)
+                c = array.get(P.srcC, i)
+                if t >= tS0 and t < tE0 and c >= ar.yBot and c <= ar.yTop
+                    h  = array.get(P.srcH, i)
+                    l  = array.get(P.srcL, i)
+                    tc = t + int(array.get(P.srcM, i) * 60000)
+                    hiV := na(hiV) ? h : math.max(hiV, h)
+                    loV := na(loV) ? l : math.min(loV, l)
+                    fst := na(fst) ? t : math.min(fst, t)
+                    lst := na(lst) ? tc : math.max(lst, tc)
+        bb.bHi := hiV
+        bb.bLo := loV
+        bb.tA  := fst
+        bb.tB  := lst
+    array.size(bl)
+
+blocName(TPArea[] areas, Bloc b) =>
+    b.ref
+
+// two blocs' real time spans overlap
+timeOverlap(Bloc a, Bloc o) =>
+    not na(a.tA) and not na(o.tA) and a.tA < o.tB and o.tA < a.tB
+
+// how much of bloc a's high-low range lies inside bloc o's high-low range, in %
+insideOf(Bloc a, Bloc o) =>
+    ov  = math.max(0.0, math.min(a.bHi, o.bHi) - math.max(a.bLo, o.bLo))
+    rng = a.bHi - a.bLo
+    rng > 0 ? ov / rng * 100.0 : (a.bLo >= o.bLo and a.bHi <= o.bHi ? 100.0 : 0.0)
+
+// Merge the overlapping blocs, in the table order (lowest volume first).
+// For bloc A: among the other live blocs whose time overlaps A and that A is at least insidePct %
+// inside, take the one with the highest volume (B). The lower-volume of A and B becomes part of
+// the higher-volume one: volume and time add up, high-low and the time span widen, and the
+// absorbed bloc disappears. The next bloc in the order is then checked against the updated blocs.
+mergeBlocs(TPArea[] areas, Bloc[] bl) =>
+    if array.size(bl) > 1
+        vols = array.new<float>()
+        for bb in bl
+            array.push(vols, bb.vol)
+        ord = array.sort_indices(vols, order.ascending)
+        for j = 0 to array.size(ord) - 1
+            ai = array.get(ord, j)
+            a  = array.get(bl, ai)
+            if not a.gone and not na(a.tA)
+                best = -1
+                for k = 0 to array.size(bl) - 1
+                    if k != ai
+                        o = array.get(bl, k)
+                        if not o.gone and timeOverlap(a, o) and insideOf(a, o) >= insidePct
+                            if best < 0 or o.vol > array.get(bl, best).vol
+                                best := k
+                if best >= 0
+                    b   = array.get(bl, best)
+                    wi  = a.vol >= b.vol ? ai : best
+                    li  = a.vol >= b.vol ? best : ai
+                    win = array.get(bl, wi)
+                    los = array.get(bl, li)
+                    if na(win.ids)
+                        win.ids := array.new<int>()
+                    array.push(win.ids, li)
+                    if not na(los.ids)
+                        for x in los.ids
+                            array.push(win.ids, x)
+                    win.vol  := win.vol + los.vol
+                    win.mins := win.mins + los.mins
+                    win.bHi  := math.max(win.bHi, los.bHi)
+                    win.bLo  := math.min(win.bLo, los.bLo)
+                    win.tA   := math.min(win.tA, los.tA)
+                    win.tB   := math.max(win.tB, los.tB)
+                    win.members := win.members + (win.members == "" ? "" : ", ") + blocName(areas, los) + (los.members == "" ? "" : ", " + los.members)
+                    los.gone := true
+        // every bloc that absorbed others is now a merged bloc: Dy-mBx (numbered per D, in time order)
+        for bb in bl
+            if not bb.gone and bb.members != ""
+                ar = array.get(areas, bb.area)
+                ar.mCount := ar.mCount + 1
+                bb.ref := ar.name + "-mB" + str.tostring(ar.mCount)
+    array.size(bl)
+
+// Table 1 (text): every live bloc of the period (all Ds), sorted by volume from the lowest to the
+// highest. "Inside" = for every OTHER live bloc whose time span overlaps this one: how much of THIS
+// bloc's high-low range lies inside that bloc's high-low range (overlap / this bloc's range).
+// Only overlaps of at least insidePct % are listed. "Merged" = the blocs merged into this one.
+blocTableText(Per P, TPArea[] areas, Bloc[] bl) =>
+    txt = ""
+    if array.size(bl) > 0
+        fmt   = P.isWeek ? "EEE HH:mm" : "HH:mm"
+        spanW = P.isWeek ? 23 : 13
+        nameW = 6
+        hlW   = 10
+        tagW  = 5
+        vols  = array.new<float>()
+        live  = array.new<int>()
+        for i = 0 to array.size(bl) - 1
+            bb = array.get(bl, i)
+            if not bb.gone
+                array.push(live, i)
+                array.push(vols, bb.vol)
+                nameW := math.max(nameW, str.length(blocName(areas, bb)) + 2)
+                hlW   := math.max(hlW, str.length(str.tostring(bb.bHi, format.mintick) + "-" + str.tostring(bb.bLo, format.mintick)) + 2)
+                tagW  := math.max(tagW, str.length(bb.tag) + 2)
+        idx = array.sort_indices(vols, order.ascending)
+        txt := (P.isWeek ? "W " : "") + "BLOCS BY VOLUME (lowest -> highest)" + (mergeBl ? " - overlapping blocs merged" : "") + "\n"
+        txt := txt + padR("#", 4) + padR("Bloc", nameW) + padR("From-To", spanW) + padR("Time", 20) + padR("Volume", 10) +
+             padR("High-Low", hlW) + padR("Tag", tagW) + padR("Inside time-overlapping blocs", 32) + "Merged"
+        for j = 0 to array.size(idx) - 1
+            me   = array.get(live, array.get(idx, j))
+            bb   = array.get(bl, me)
+            span = na(bb.tA) ? "-" : str.format_time(bb.tA, fmt, tz) + "-" + str.format_time(bb.tB, fmt, tz)
+            hl   = str.tostring(bb.bHi, format.mintick) + "-" + str.tostring(bb.bLo, format.mintick)
+            ins  = ""
+            for k = 0 to array.size(bl) - 1
+                if k != me
+                    o = array.get(bl, k)
+                    if not o.gone and timeOverlap(bb, o)
+                        pct = insideOf(bb, o)
+                        if pct >= insidePct
+                            ins := ins + (ins == "" ? "" : ", ") + blocName(areas, o) + " " + str.tostring(math.round(pct)) + "%"
+            txt := txt + "\n" + padR(str.tostring(j + 1), 4) + padR(blocName(areas, bb), nameW) + padR(span, spanW) +
+                 padR(fmtDur(bb.mins), 10) + padR(str.tostring(bb.vol, format.volume), 10) + padR(hl, hlW) + padR(bb.tag, tagW) +
+                 padR(ins == "" ? "-" : ins, 32) + (bb.members == "" ? "-" : bb.members)
+    txt
+
+// "D1-B3", or "D1-mB2" for a merged bloc
+mbName(MB m) =>
+    m.name
+
+mbVaText(MB m) =>
+    na(m.vah) ? "-" : str.tostring(m.vah, format.mintick) + "-" + str.tostring(m.val, format.mintick)
+
+// how much of a's VAH-VAL range lies inside o's VAH-VAL range, in %
+mbInside(MB a, MB o) =>
+    ov  = math.max(0.0, math.min(a.vah, o.vah) - math.max(a.val, o.val))
+    rng = a.vah - a.val
+    rng > 0 ? ov / rng * 100.0 : (a.val >= o.val and a.vah <= o.vah ? 100.0 : 0.0)
+
+// Table 2 (text): for every D (D1, D2 ...) its blocs sorted by volume from the LOWEST to the
+// highest, with their real time span, time in the area, volume, VAH-VAL range, and for every
+// OTHER bloc of the same D: how much of THIS bloc's VAH-VAL range lies inside that bloc's
+// VAH-VAL range (overlap / this bloc's range). Merged-away blocs (table 1 merge) are not listed.
+//
+// Merge of the same D (dMerge): take the blocs from the LOWEST volume. The first one whose VAH-VAL
+// is at least dMergePct % inside another bloc of the same D is merged with that bloc (the highest
+// % if several). The new bloc = both blocs ISOLATED: time and volume add up, and its VAH / VAL
+// come from a volume profile of ONLY their candles, as one continuous chart. Both blocs leave the
+// table, the new one enters it, and the check starts again from the lowest volume. Stops when no
+// bloc qualifies.
+// Returns [the rows after the merges, number of merges]. Every bloc that went into a merge is
+// marked dGone (its own VAH / VAL is no longer drawn: the merged bloc is the reference).
+mergeSameD(Per P, TPArea[] areas, Bloc[] bl, int t0, int binMs) =>
+    all     = array.new<MB>()
+    nMerges = 0
+    if array.size(bl) > 0 and array.size(areas) > 0
+        // the rows: one per live bloc
+        for bi = 0 to array.size(bl) - 1
+            bb = array.get(bl, bi)
+            if not bb.gone
+                array.push(all, MB.new(bb.area, bb.ref, bb.members, grpOf(bl, bi),
+                     bb.mins, bb.vol, bb.tA, bb.tB, bb.vah, bb.val, bb.vaA, bb.vaB, false, col = array.get(areas, bb.area).col,
+                     dName = array.get(areas, bb.area).name, bHi = bb.bHi, bLo = bb.bLo, vah2 = bb.vah2, val2 = bb.val2))
+
+        // merge inside each D, one merge at a time
+        merging = dMerge and array.size(all) > 1
+        while merging
+            merging := false
+            vols = array.new<float>()
+            for m in all
+                array.push(vols, m.vol)
+            ord = array.sort_indices(vols, order.ascending)
+            for j = 0 to array.size(ord) - 1
+                if not merging
+                    ia = array.get(ord, j)
+                    a  = array.get(all, ia)
+                    if not na(a.vah)
+                        best  = -1
+                        bestP = -1.0
+                        for k = 0 to array.size(all) - 1
+                            cand = array.get(all, k)
+                            if k != ia and cand.area == a.area and not na(cand.vah)
+                                p = mbInside(a, cand)
+                                if p >= dMergePct and p > bestP
+                                    best  := k
+                                    bestP := p
+                        if best >= 0
+                            ob  = array.get(all, best)
+                            grp = array.copy(a.grp)
+                            array.concat(grp, ob.grp)
+                            [vLo, vHi, vLo2, vHi2, gS, gE] = groupVA(P, areas, bl, grp, t0, binMs)
+                            ar     = array.get(areas, a.area)
+                            ar.mCount := ar.mCount + 1
+                            nmName = ar.name + "-mB" + str.tostring(ar.mCount)
+                            nmMem  = a.members == "" ? ob.members : ob.members == "" ? a.members : a.members + ", " + ob.members
+                            nmTA   = na(a.tA) ? ob.tA : na(ob.tA) ? a.tA : math.min(a.tA, ob.tA)
+                            nmTB   = na(a.tB) ? ob.tB : na(ob.tB) ? a.tB : math.max(a.tB, ob.tB)
+                            float nmVah = na
+                            float nmVal = na
+                            if vLo >= 0
+                                nmVah := ar.pLo + (vHi + 1) * ar.pStep
+                                nmVal := ar.pLo + vLo * ar.pStep
+                            float nmVah2 = na
+                            float nmVal2 = na
+                            if vLo2 >= 0
+                                nmVah2 := ar.pLo + (vHi2 + 1) * ar.pStep
+                                nmVal2 := ar.pLo + vLo2 * ar.pStep
+                            nm = MB.new(a.area, nmName, nmMem, grp, a.mins + ob.mins, a.vol + ob.vol, nmTA, nmTB, nmVah, nmVal, gS, gE, true, col = ar.col,
+                                 dName = ar.name, bHi = math.max(a.bHi, ob.bHi), bLo = math.min(a.bLo, ob.bLo), mergedFrom = a.name + " + " + ob.name + " [VAH-VAL]", vah2 = nmVah2, val2 = nmVal2)
+                            array.remove(all, math.max(ia, best))
+                            array.remove(all, math.min(ia, best))
+                            array.push(all, nm)
+                            nMerges += 1
+                            merging := true
+
+        // the blocs inside a merged bloc lose their own VAH / VAL
+        for m in all
+            if m.merged
+                for g in m.grp
+                    inner = array.get(bl, g)
+                    inner.dGone := true
+    [all, nMerges]
+
+// Every bloc built by a same-D merge: its VAH / VAL from its collage (D colour, 3 px, from the
+// first to the last bin of the blocs it holds) and its badge (reference, time, volume) at the
+// middle of that span, on the D's bottom line.
+drawMergedVA(Per P, TPArea[] areas, MB[] all, bool dev) =>
+    for m in all
+        if m.merged
+            ar = array.get(areas, m.area)
+            if showVA and not na(m.vah)
+                m.lnH := line.new(m.vaA, m.vah, m.vaB, m.vah, xloc = xloc.bar_time, color = ar.col, width = 3, style = line.style_solid)
+                m.lnL := line.new(m.vaA, m.val, m.vaB, m.val, xloc = xloc.bar_time, color = ar.col, width = 3, style = line.style_solid)
+                keepBlocLine(P, m.lnH, dev)
+                keepBlocLine(P, m.lnL, dev)
+                if showVA2 and not na(m.vah2)
+                    m.ln2H := line.new(m.vaA, m.vah2, m.vaB, m.vah2, xloc = xloc.bar_time, color = ar.col, width = 1, style = line.style_dashed)
+                    m.ln2L := line.new(m.vaA, m.val2, m.vaB, m.val2, xloc = xloc.bar_time, color = ar.col, width = 1, style = line.style_dashed)
+                    keepBlocLine(P, m.ln2H, dev)
+                    keepBlocLine(P, m.ln2L, dev)
+            if tpBlocs and not na(m.vaA)
+                m.lb := label.new(m.vaA, na(m.val) ? ar.yBot : m.val, m.name + "\n" + fmtBloc(m.mins, m.tA, m.tB) + "\n" + str.tostring(m.vol, format.volume),
+                     xloc = xloc.bar_time, style = label.style_label_upper_left, textalign = text.align_left,
+                     color = color.new(ar.col, 80), textcolor = color.black, size = size.small)
+                keepBlocLabel(P, m.lb, dev)
+    array.size(all)
+
+// ── Table helpers. Every table is built from the FINAL blocs (after all merges), so a merged bloc
+// shows up with its own data (name, span, time, volume, high-low, VAH-VAL) in every table.
+mbHL(MB m) =>
+    na(m.bHi) ? "-" : str.tostring(m.bHi, format.mintick) + "-" + str.tostring(m.bLo, format.mintick)
+
+mbTimeOverlap(MB a, MB o) =>
+    not na(a.tA) and not na(o.tA) and a.tA < o.tB and o.tA < a.tB
+
+// how much of a's high-low range lies inside o's high-low range, in %
+mbHLInside(MB a, MB o) =>
+    out = 0.0
+    if not na(a.bHi) and not na(o.bHi)
+        ov  = math.max(0.0, math.min(a.bHi, o.bHi) - math.max(a.bLo, o.bLo))
+        rng = a.bHi - a.bLo
+        out := rng > 0 ? ov / rng * 100.0 : (a.bLo >= o.bLo and a.bHi <= o.bHi ? 100.0 : 0.0)
+    out
+
+// what went into a bloc: the table 1 merge members, then any later merge
+mbMergedText(MB m) =>
+    s = m.members
+    if m.mergedFrom != ""
+        s := s == "" ? m.mergedFrom : s + ", " + m.mergedFrom
+    s == "" ? "-" : s
+
+// true when a bloc's span covers more than one period (its From-To then shows the weekday)
+mbMulti(Per P, MB[] rows) =>
+    multi = P.isWeek
+    for m in rows
+        if not na(m.dFirst) and m.dFirst != m.dLast
+            multi := true
+    multi
+
+mbTag(MB[] rows, int iT, int iV, string tag) =>
+    if iT == iV
+        m = array.get(rows, iT)
+        m.tag := m.tag == "" ? tag : m.tag + " + " + tag
+    else if tpBoth == "Keep both"
+        m1 = array.get(rows, iT)
+        m1.tag := m1.tag == "" ? tag + " time" : m1.tag + " + " + tag + " time"
+        m2 = array.get(rows, iV)
+        m2.tag := m2.tag == "" ? tag + " vol" : m2.tag + " + " + tag + " vol"
+    true
+
+// MAX / MIN among the final blocs: most time AND most volume / least time AND least volume
+mbTags(MB[] rows) =>
+    n = array.size(rows)
+    if n > 0
+        for m in rows
+            m.tag := ""
+        iTmax = 0
+        iVmax = 0
+        iTmin = 0
+        iVmin = 0
+        for i = 0 to n - 1
+            m = array.get(rows, i)
+            if m.mins > array.get(rows, iTmax).mins
+                iTmax := i
+            if m.vol > array.get(rows, iVmax).vol
+                iVmax := i
+            if m.mins < array.get(rows, iTmin).mins
+                iTmin := i
+            if m.vol < array.get(rows, iVmin).vol
+                iVmin := i
+        mbTag(rows, iTmax, iVmax, "MAX")
+        mbTag(rows, iTmin, iVmin, "MIN")
+    n
+
+// the Ds present in the rows, in D order (D1, D2, D3 ...)
+dOrder(MB[] rows) =>
+    names = array.new<string>()
+    nums  = array.new<float>()
+    for m in rows
+        if not array.includes(names, m.dName)
+            array.push(names, m.dName)
+            nv = str.tonumber(str.replace_all(m.dName, "D", ""))
+            array.push(nums, na(nv) ? 999.0 : nv)
+    out = array.new<string>()
+    if array.size(names) > 0
+        idx = array.sort_indices(nums, order.ascending)
+        for i in idx
+            array.push(out, array.get(names, i))
+    out
+
+// Table 1 (text): every FINAL bloc of the period (all Ds, after all merges), sorted by volume from
+// the lowest to the highest. "Inside" = for every OTHER bloc whose time span overlaps this one: how
+// much of THIS bloc's high-low range lies inside that bloc's high-low range (>= insidePct % only).
+// "Merged" = what went into it.
+rowsTable1(Per P, MB[] rows, int nH) =>
+    txt = ""
+    if array.size(rows) > 0
+        mbTags(rows)
+        multi = mbMulti(P, rows)
+        fmt   = multi ? "EEE HH:mm" : "HH:mm"
+        spanW = multi ? 23 : 13
+        nameW = 6
+        hlW   = 10
+        tagW  = 5
+        vols  = array.new<float>()
+        for m in rows
+            array.push(vols, m.vol)
+            nameW := math.max(nameW, str.length(m.name) + 2)
+            hlW   := math.max(hlW, str.length(mbHL(m)) + 2)
+            tagW  := math.max(tagW, str.length(m.tag) + 2)
+        idx = array.sort_indices(vols, order.ascending)
+        txt := (P.isWeek ? "W " : "") + "BLOCS BY VOLUME (lowest -> highest) - after all merges, every merge checked again until nothing is left to merge"
+        if mergeBl
+            txt := txt + "\ntime-overlapping blocs merged when high-low >= " + str.tostring(insidePct) + "% inside: " + str.tostring(nH) + (nH == 1 ? " merge" : " merges")
+        txt := txt + "\n" + padR("#", 4) + padR("Bloc", nameW) + padR("From-To", spanW) + padR("Time", 20) + padR("Volume", 10) +
+             padR("High-Low", hlW) + padR("Tag", tagW) + padR("Inside time-overlapping blocs", 32) + "Merged"
+        for j = 0 to array.size(idx) - 1
+            me   = array.get(idx, j)
+            rb   = array.get(rows, me)
+            span = na(rb.tA) ? "-" : str.format_time(rb.tA, fmt, tz) + "-" + str.format_time(rb.tB, fmt, tz)
+            ins  = ""
+            for k = 0 to array.size(rows) - 1
+                if k != me
+                    o = array.get(rows, k)
+                    if mbTimeOverlap(rb, o)
+                        pct = mbHLInside(rb, o)
+                        if pct >= insidePct
+                            ins := ins + (ins == "" ? "" : ", ") + o.name + " " + str.tostring(math.round(pct)) + "%"
+            txt := txt + "\n" + padR(str.tostring(j + 1), 4) + padR(rb.name, nameW) + padR(span, spanW) +
+                 padR(fmtBloc(rb.mins, rb.tA, rb.tB), 20) + padR(str.tostring(rb.vol, format.volume), 10) + padR(mbHL(rb), hlW) + padR(rb.tag, tagW) +
+                 padR(ins == "" ? "-" : ins, 32) + mbMergedText(rb)
+    txt
+
+// Table 2 (text): for every D its FINAL blocs (after all merges), grouped by D name.
+dTableText(Per P, MB[] all, int nMerges) =>
+    txt = ""
+    if array.size(all) > 0
+        multi = mbMulti(P, all)
+        fmt   = multi ? "EEE HH:mm" : "HH:mm"
+        spanW = multi ? 23 : 13
+        nameW = 6
+        vaW   = 9
+        for m in all
+            nameW := math.max(nameW, str.length(mbName(m)) + 2)
+            vaW   := math.max(vaW, str.length(mbVaText(m)) + 2)
+        txt := (P.isWeek ? "W " : "") + "BLOCS PER D (lowest -> highest volume) - VAH-VAL overlap with the other blocs of the same D"
+        if dMerge
+            txt := txt + "\nblocs of the same D merged when VAH-VAL >= " + str.tostring(dMergePct) + "% inside: " + str.tostring(nMerges) + (nMerges == 1 ? " merge" : " merges")
+        for dn in dOrder(all)
+            vols = array.new<float>()
+            live = array.new<int>()
+            for i = 0 to array.size(all) - 1
+                cm = array.get(all, i)
+                if cm.dName == dn
+                    array.push(live, i)
+                    array.push(vols, cm.vol)
+            if array.size(live) > 0
+                nL   = array.size(live)
+                totM = 0.0
+                totV = 0.0
+                for i in live
+                    totM += array.get(all, i).mins
+                    totV += array.get(all, i).vol
+                txt := txt + "\n \n" + dn + "  -  " + fmtDur(totM) + " | vol " + str.tostring(totV, format.volume) + " | " + str.tostring(nL) + (nL == 1 ? " bloc" : " blocs")
+                txt := txt + "\n" + padR("#", 4) + padR("Bloc", nameW) + padR("From-To", spanW) + padR("Time", 20) + padR("Volume", 10) +
+                     padR("VAH-VAL", vaW) + "VAH-VAL inside the other blocs"
+                idx = array.sort_indices(vols, order.ascending)
+                for j = 0 to nL - 1
+                    me   = array.get(live, array.get(idx, j))
+                    rb   = array.get(all, me)
+                    span = na(rb.tA) ? "-" : str.format_time(rb.tA, fmt, tz) + "-" + str.format_time(rb.tB, fmt, tz)
+                    ovs  = ""
+                    for k in live
+                        if k != me
+                            o = array.get(all, k)
+                            if not na(rb.vah) and not na(o.vah)
+                                ovs := ovs + (ovs == "" ? "" : ", ") + o.name + " " + str.tostring(math.round(mbInside(rb, o))) + "%"
+                    txt := txt + "\n" + padR(str.tostring(j + 1), 4) + padR(mbName(rb), nameW) + padR(span, spanW) +
+                         padR(fmtBloc(rb.mins, rb.tA, rb.tB), 20) + padR(str.tostring(rb.vol, format.volume), 10) + padR(mbVaText(rb), vaW) +
+                         (ovs == "" ? "-" : ovs)
+    txt
+
+// VAH-VAL relation of a day N bloc (a) with a day N-1 bloc (o), in price. "" = no overlap.
+//   a fully inside o   -> "inside at X%"      X = a's range / o's range
+//   o fully inside a   -> "contains at X%"    X = o's range / a's range
+//   otherwise          -> "overlapping at X%" X = overlap / a's range
+dayRelation(MB a, MB o) =>
+    out = ""
+    if not na(a.vah) and not na(o.vah)
+        ov = math.min(a.vah, o.vah) - math.max(a.val, o.val)
+        rA = a.vah - a.val
+        rO = o.vah - o.val
+        if ov > 0 and rA > 0 and rO > 0
+            if a.val >= o.val and a.vah <= o.vah
+                out := "inside at " + str.tostring(math.round(rA / rO * 100)) + "%"
+            else if o.val >= a.val and o.vah <= a.vah
+                out := "contains at " + str.tostring(math.round(rO / rA * 100)) + "%"
+            else
+                out := "overlapping at " + str.tostring(math.round(ov / math.min(rA, rO) * 100)) + "%"
+    out
+
+// copy the drawing refs (VAH / VAL lines, badge) of each plain bloc onto its row, so a later merge
+// can delete them
+linkRefs(Bloc[] bl, MB[] rows) =>
+    for m in rows
+        if not m.merged and not na(m.grp) and array.size(m.grp) > 0
+            b = array.get(bl, array.get(m.grp, 0))
+            m.lnH := b.lnH
+            m.lnL := b.lnL
+            m.lb  := b.lb
+            m.ln2H := b.ln2H
+            m.ln2L := b.ln2L
+    array.size(rows)
+
+// delete a row's VAH / VAL lines and badge (it became part of a merged bloc)
+delRefs(MB m) =>
+    if not na(m.lnH)
+        line.delete(m.lnH)
+    if not na(m.lnL)
+        line.delete(m.lnL)
+    if not na(m.ln2H)
+        line.delete(m.ln2H)
+    if not na(m.ln2L)
+        line.delete(m.ln2L)
+    if not na(m.lb)
+        label.delete(m.lb)
+    true
+
+// For every row: keep its candles (high, low, volume) and its price band (the D areas it covers),
+// so the NEXT period can still build a collage with it once this period's candles are gone.
+fillRowCandles(Per P, TPArea[] areas, Bloc[] bl, MB[] rows, int t0, int binMs) =>
+    for m in rows
+        if not na(m.grp) and array.size(m.grp) > 0
+            h = array.new<float>()
+            l = array.new<float>()
+            v = array.new<float>()
+            float yLo = na
+            float yHi = na
+            for g in m.grp
+                ga = array.get(areas, array.get(bl, g).area)
+                yLo := na(yLo) ? ga.yBot : math.min(yLo, ga.yBot)
+                yHi := na(yHi) ? ga.yTop : math.max(yHi, ga.yTop)
+            if array.size(P.srcT) > 0
+                for i = 0 to array.size(P.srcT) - 1
+                    t = array.get(P.srcT, i)
+                    c = array.get(P.srcC, i)
+                    inGrp = false
+                    for g in m.grp
+                        mb = array.get(bl, g)
+                        ma = array.get(areas, mb.area)
+                        if t >= t0 + mb.bs * binMs and t < t0 + mb.be * binMs and c >= ma.yBot and c <= ma.yTop
+                            inGrp := true
+                    if inGrp
+                        array.push(h, array.get(P.srcH, i))
+                        array.push(l, array.get(P.srcL, i))
+                        array.push(v, array.get(P.srcV, i))
+            m.cH     := h
+            m.cL     := l
+            m.cV     := v
+            m.yLo    := yLo
+            m.yHi    := yHi
+            m.pStep  := array.get(areas, array.get(bl, array.get(m.grp, 0)).area).pStep
+            m.dFirst := P.dayId
+            m.dLast  := P.dayId
+    array.size(rows)
+
+// how many hours a merge of a and b would span: the first candle of either -> the last close of either
+spanH(MB a, MB b) =>
+    na(a.tA) or na(b.tA) or na(a.tB) or na(b.tB) ? 0.0 : (math.max(a.tB, b.tB) - math.min(a.tA, b.tA)) / 3600000.0
+
+// the span cap of a period type: mergeMaxH hours for days, x 7 for weeks
+capH(Per P) =>
+    mergeMaxH * (P.isWeek ? 7.0 : 1.0)
+
+capText(Per P) =>
+    dayAlone ? (P.isWeek ? "week N alone" : "day N alone") : "max " + str.tostring(capH(P), "#.#") + "h"
+
+// % of the SMALLER VAH-VAL range that the two ranges share, for a PARTIAL overlap only (so it reads
+// the same from either bloc). -1 = no overlap, or one range fully inside the other.
+partialPct(MB a, MB o) =>
+    out = -1.0
+    if not na(a.vah) and not na(o.vah)
+        ov = math.min(a.vah, o.vah) - math.max(a.val, o.val)
+        rA = a.vah - a.val
+        rO = o.vah - o.val
+        if ov > 0 and rA > 0 and rO > 0
+            aIn = a.val >= o.val and a.vah <= o.vah
+            oIn = o.val >= a.val and o.vah <= a.vah
+            if not aIn and not oIn
+                out := ov / math.min(rA, rO) * 100.0
+    out
+
+// "inside at X%": a's VAH-VAL range fully inside o's, X = a's range / o's range. -1 = not inside.
+insideRatio(MB a, MB o) =>
+    out = -1.0
+    if not na(a.vah) and not na(o.vah)
+        rA = a.vah - a.val
+        rO = o.vah - o.val
+        if rA > 0 and rO > 0 and a.val >= o.val and a.vah <= o.vah
+            out := rA / rO * 100.0
+    out
+
+// The collage of two blocs (a = the base, o = the other): ONLY their candles, as one continuous
+// chart, on rows of a's row height spanning both blocs' price bands. Start at the busiest row, add
+// the bigger neighbour until vaPct % is inside. Time and volume add up. The new bloc keeps a's area
+// and colour and takes the name nmName.
+collage(MB a, MB o, string nmName, string from) =>
+    h  = array.copy(a.cH)
+    l  = array.copy(a.cL)
+    v  = array.copy(a.cV)
+    array.concat(h, o.cH)
+    array.concat(l, o.cL)
+    array.concat(v, o.cV)
+    yLo = math.min(a.yLo, o.yLo)
+    yHi = math.max(a.yHi, o.yHi)
+    float nVah = na
+    float nVal = na
+    float nVah2 = na
+    float nVal2 = na
+    if yHi > yLo and array.size(h) > 0
+        nR  = math.max(1, math.min(400, int(math.ceil((yHi - yLo) / a.pStep - 0.000001))))
+        stp = (yHi - yLo) / nR
+        bv  = array.new<float>(nR, 0.0)
+        for i = 0 to array.size(h) - 1
+            iT = math.min(nR - 1, int(math.floor((array.get(h, i) - yLo) / stp)))
+            iB = math.max(0, int(math.floor((array.get(l, i) - yLo) / stp)))
+            if iT >= iB
+                sh = array.get(v, i) / (iT - iB + 1)
+                for rr = iB to iT
+                    array.set(bv, rr, array.get(bv, rr) + sh)
+        [vLo, vHi] = valueArea(bv, 0, nR - 1)
+        if vLo >= 0
+            nVah := yLo + (vHi + 1) * stp
+            nVal := yLo + vLo * stp
+        [vLo2, vHi2] = valueAreaP(bv, 0, nR - 1, va2Pct)
+        if vLo2 >= 0
+            nVah2 := yLo + (vHi2 + 1) * stp
+            nVal2 := yLo + vLo2 * stp
+    nTA  = na(o.tA) ? a.tA : na(a.tA) ? o.tA : math.min(a.tA, o.tA)
+    nTB  = na(o.tB) ? a.tB : na(a.tB) ? o.tB : math.max(a.tB, o.tB)
+    nVaA = na(o.vaA) ? a.vaA : na(a.vaA) ? o.vaA : math.min(a.vaA, o.vaA)
+    nVaB = na(o.vaB) ? a.vaB : na(a.vaB) ? o.vaB : math.max(a.vaB, o.vaB)
+    nD0  = na(o.dFirst) ? a.dFirst : na(a.dFirst) ? o.dFirst : math.min(a.dFirst, o.dFirst)
+    nD1  = na(o.dLast) ? a.dLast : na(a.dLast) ? o.dLast : math.max(a.dLast, o.dLast)
+    mem  = a.members == "" ? o.members : o.members == "" ? a.members : a.members + ", " + o.members
+    MB.new(a.area, nmName, mem, array.new<int>(), a.mins + o.mins, a.vol + o.vol, nTA, nTB, nVah, nVal,
+         nVaA, nVaB, true, col = a.col, yLo = yLo, yHi = yHi, cH = h, cL = l, cV = v, mergedFrom = from,
+         pStep = a.pStep, dFirst = nD0, dLast = nD1, dName = a.dName, bHi = math.max(a.bHi, o.bHi), bLo = math.min(a.bLo, o.bLo),
+         vah2 = nVah2, val2 = nVal2)
+
+// Draw a merged bloc: VAH / VAL (its D colour, 3 px, over its whole span) and its badge.
+drawRowVA(Per P, MB nm, bool dev) =>
+    if showVA and not na(nm.vah)
+        nm.lnH := line.new(nm.vaA, nm.vah, nm.vaB, nm.vah, xloc = xloc.bar_time, color = nm.col, width = 3, style = line.style_solid)
+        nm.lnL := line.new(nm.vaA, nm.val, nm.vaB, nm.val, xloc = xloc.bar_time, color = nm.col, width = 3, style = line.style_solid)
+        keepBlocLine(P, nm.lnH, dev)
+        keepBlocLine(P, nm.lnL, dev)
+        if showVA2 and not na(nm.vah2)
+            nm.ln2H := line.new(nm.vaA, nm.vah2, nm.vaB, nm.vah2, xloc = xloc.bar_time, color = nm.col, width = 1, style = line.style_dashed)
+            nm.ln2L := line.new(nm.vaA, nm.val2, nm.vaB, nm.val2, xloc = xloc.bar_time, color = nm.col, width = 1, style = line.style_dashed)
+            keepBlocLine(P, nm.ln2H, dev)
+            keepBlocLine(P, nm.ln2L, dev)
+    if tpBlocs and not na(nm.vaA)
+        nm.lb := label.new(nm.vaA, na(nm.val) ? nm.yLo : nm.val, nm.name + "\n" + fmtBloc(nm.mins, nm.tA, nm.tB) + "\n" + str.tostring(nm.vol, format.volume),
+             xloc = xloc.bar_time, style = label.style_label_upper_left, textalign = text.align_left,
+             color = color.new(nm.col, 80), textcolor = color.black, size = size.small)
+        keepBlocLabel(P, nm.lb, dev)
+    true
+
+// the gap (in price) between a's VAL and b's VAH or b's VAL and a's VAH, when the two blocs share at
+// least one period AND that gap is within edgeTicks ticks. -1 = does not qualify.
+edgeGap(MB a, MB b) =>
+    out = -1.0
+    if not na(a.vah) and not na(b.vah) and not na(a.cH) and not na(b.cH) and not na(a.dFirst) and not na(b.dFirst)
+        if a.dFirst <= b.dLast and b.dFirst <= a.dLast
+            tk = syminfo.mintick
+            g1 = math.abs(math.round_to_mintick(a.val) - math.round_to_mintick(b.vah))
+            g2 = math.abs(math.round_to_mintick(b.val) - math.round_to_mintick(a.vah))
+            g  = math.min(g1, g2)
+            if g <= edgeTicks * tk + tk * 0.01
+                out := g
+    out
+
+// what a row is made of, for the "Merged" column: its name, or its own merge chain in brackets;
+// a row of an earlier period is marked with the day it starts on (the date for weeks)
+chainOf(Per P, MB m, int s) =>
+    (m.mergedFrom == "" ? m.name : "(" + m.mergedFrom + ")") +
+         (s == 0 or na(m.tA) ? "" : " (" + str.format_time(m.tA, P.isWeek ? "dd MMM" : "EEE", tz) + ")")
+
+// ── The merge rules, on rows. Score of the pair (a, b) under rule r: < 0 = does not qualify; the
+// highest score = the best partner (then the highest volume). aS / bS = where the row is: 0 = this
+// period, 1 = the previous period, 2 = an older finished period. At least one row of the pair is of
+// this period (every other pair was settled when its own period finished).
+//   1  time-overlapping rows, a's high-low >= insidePct % inside b's                  -> b's volume
+//   2  same D of this period, a's VAH-VAL >= dMergePct % inside b's                   -> that %
+//   3  a of this period, b of the previous period, or of an older one that ends the day
+//      before a's first day (a merged bloc that grew backwards meets the day before it):
+//      VAH-VAL overlapping >= dayMergePct % of the smaller range, or one inside the other
+//      with the smaller range >= insMergePct % of the bigger                            -> that %
+//   4  a and b sharing a period, one's VAL = the other's VAH +- edgeTicks              -> the smaller gap
+// The tables use exactly these measures, so after the merges no table entry qualifies any more.
+pairScore(int r, MB a, MB b, int aS, int bS, float maxH) =>
+    s = -1.0
+    if (aS == 0 or bS == 0) and not na(a.cH) and not na(b.cH) and spanH(a, b) <= maxH
+        if r == 1
+            if mbTimeOverlap(a, b) and mbHLInside(a, b) >= insidePct
+                s := b.vol
+        else if r == 2
+            if aS == 0 and bS == 0 and a.dName == b.dName and not na(a.vah) and not na(b.vah)
+                p = mbInside(a, b)
+                if p >= dMergePct
+                    s := p
+        else if r == 3
+            if aS == 0 and bS != 0 and (bS == 1 or (not na(a.dFirst) and not na(b.dLast) and b.dLast >= a.dFirst - 1))
+                pO = dayMerge ? partialPct(a, b) : -1.0
+                // inside either way: the later bloc inside the earlier one, or the reverse
+                // ('contains'); X = the smaller range / the bigger range in both cases
+                pI = insMerge ? math.max(insideRatio(a, b), insideRatio(b, a)) : -1.0
+                s := math.max(pO >= dayMergePct ? pO : -1.0, pI >= insMergePct ? pI : -1.0)
+        else if r == 4
+            g = edgeGap(a, b)
+            if g >= 0
+                s := (edgeTicks + 1) * syminfo.mintick - g
+    s
+
+// One merge rule (r) on the rows of this period (curL), of the previous one (prvL) and of the older
+// finished periods (oldL), again and again until no pair qualifies. Rows taken from the LOWEST
+// volume, each merged with its best partner. The base (keeps its D and colour, names the new bloc
+// Dy-mBx) = the row of this period if only one of them is, else the higher volume. Both lose their
+// VAH / VAL lines and badges; the new bloc = the collage of ONLY their candles, with its own lines
+// and badge. It goes to curL (a row of this period is always part of the pair); the rows it
+// replaces leave their lists. Returns the number of merges.
+mergePass(Per P, TPArea[] areas, MB[] curL, MB[] prvL, MB[] oldL, int r, bool dev) =>
+    nM = 0
+    merging = true
+    while merging
+        merging := false
+        all  = array.new<MB>()
+        side = array.new<int>()   // 0 = curL, 1 = prvL, 2 = oldL
+        pos  = array.new<int>()   // index in its list
+        if array.size(curL) > 0
+            for i = 0 to array.size(curL) - 1
+                array.push(all, array.get(curL, i))
+                array.push(side, 0)
+                array.push(pos, i)
+        if array.size(prvL) > 0
+            for i = 0 to array.size(prvL) - 1
+                array.push(all, array.get(prvL, i))
+                array.push(side, 1)
+                array.push(pos, i)
+        if array.size(oldL) > 0
+            for i = 0 to array.size(oldL) - 1
+                array.push(all, array.get(oldL, i))
+                array.push(side, 2)
+                array.push(pos, i)
+        n = array.size(all)
+        if n > 1
+            vols = array.new<float>()
+            for m in all
+                array.push(vols, m.vol)
+            ord = array.sort_indices(vols, order.ascending)
+            for j = 0 to n - 1
+                if not merging
+                    ia = array.get(ord, j)
+                    a  = array.get(all, ia)
+                    aS = array.get(side, ia)
+                    best  = -1
+                    bestS = -1.0
+                    for k = 0 to n - 1
+                        if k != ia
+                            b = array.get(all, k)
+                            s = pairScore(r, a, b, aS, array.get(side, k), capH(P))
+                            if s >= 0 and (best < 0 or s > bestS or (s == bestS and b.vol > array.get(all, best).vol))
+                                best  := k
+                                bestS := s
+                    if best >= 0
+                        b     = array.get(all, best)
+                        bS    = array.get(side, best)
+                        aBase = (aS == 0) == (bS == 0) ? a.vol >= b.vol : aS == 0
+                        base  = aBase ? a : b
+                        oth   = aBase ? b : a
+                        nmName = base.name
+                        if (aBase ? aS == 0 : bS == 0) and base.area < array.size(areas)
+                            ar = array.get(areas, base.area)
+                            ar.mCount := ar.mCount + 1
+                            nmName := ar.name + "-mB" + str.tostring(ar.mCount)
+                        tag = r == 1 ? " [high-low]" : r == 2 ? " [VAH-VAL]" : r == 4 ? " [VAL=VAH]" : ""
+                        nm = collage(base, oth, nmName, chainOf(P, a, aS) + " + " + chainOf(P, b, bS) + tag)
+                        delRefs(a)
+                        delRefs(b)
+                        drawRowVA(P, nm, dev)
+                        // remove both from their lists (higher index first inside the same list)
+                        pA = array.get(pos, ia)
+                        pB = array.get(pos, best)
+                        lA = aS == 0 ? curL : aS == 1 ? prvL : oldL
+                        lB = bS == 0 ? curL : bS == 1 ? prvL : oldL
+                        if aS == bS
+                            array.remove(lA, math.max(pA, pB))
+                            array.remove(lA, math.min(pA, pB))
+                        else
+                            array.remove(lA, pA)
+                            array.remove(lB, pB)
+                        array.push(curL, nm)
+                        nM += 1
+                        merging := true
+    nM
+
+// Every merge rule, round after round, until a full round merges nothing: a merged bloc is a new
+// bloc, and it can qualify for a merge it was never checked for (or that could not exist before it
+// was built). Rules 3 and 4 (this period + the earlier ones) only on finished periods.
+// Returns [rule 1 merges, rule 2 merges, rule 3 merges, rule 4 merges].
+mergeLoop(Per P, TPArea[] areas, MB[] curL, MB[] prvL, MB[] oldL, bool finished, bool dev) =>
+    n1 = 0
+    n2 = 0
+    n3 = 0
+    n4 = 0
+    again = true
+    guard = 0
+    while again and guard < 100
+        guard += 1
+        k1 = 0
+        k2 = 0
+        k3 = 0
+        k4 = 0
+        if mergeBl
+            k1 := mergePass(P, areas, curL, prvL, oldL, 1, dev)
+        if dMerge
+            k2 := mergePass(P, areas, curL, prvL, oldL, 2, dev)
+        if finished and (dayMerge or insMerge)
+            k3 := mergePass(P, areas, curL, prvL, oldL, 3, dev)
+        if finished and edgeMerge
+            k4 := mergePass(P, areas, curL, prvL, oldL, 4, dev)
+        n1 += k1
+        n2 += k2
+        n3 += k3
+        n4 += k4
+        again := k1 + k2 + k3 + k4 > 0
+    [n1, n2, n3, n4]
+
+// Table 3 (text), FINISHED periods only: every final bloc of day N (this period, after all merges,
+// including the day N + day N-1 merges) and its VAH-VAL relation with every day N-1 bloc left.
+// Rows grouped by D, then volume from the lowest to the highest.
+dayTableText(Per P, MB[] cur, MB[] prev, int nX, int nE, int t0, int pt0) =>
+    txt = ""
+    if array.size(cur) > 0
+        unit  = P.isWeek ? "WEEK" : "DAY"
+        fmtD  = P.isWeek ? "dd MMM yyyy" : "EEE dd MMM"
+        nameW = 8
+        vaW   = 9
+        for m in cur
+            nameW := math.max(nameW, str.length(m.name) + 2)
+            vaW   := math.max(vaW, str.length(mbVaText(m)) + 2)
+        txt := unit + " N (" + str.format_time(t0, fmtD, tz) + ") vs " + unit + " N-1 (" + (na(pt0) ? "-" : str.format_time(pt0, fmtD, tz)) +
+             ") - VAH-VAL overlap in price"
+        if dayMerge or insMerge
+            txt := txt + "\nday N and day N-1 blocs " + (dayMerge ? "OVERLAPPING >= " + str.tostring(dayMergePct) + "% of the smaller VAH-VAL range" : "") +
+                 (dayMerge and insMerge ? " or " : "") +
+                 (insMerge ? "one INSIDE the other with the smaller range >= " + str.tostring(insMergePct) + "% of the bigger" : "") + " merged with a collage: " +
+                 str.tostring(nX) + (nX == 1 ? " merge" : " merges") +
+                 (dayAlone ? " (no merge with the previous " + (P.isWeek ? "week" : "day") + ": " + capText(P) + ")" : " (a merged bloc spans at most " + str.tostring(capH(P), "#.#") + "h)")
+        if edgeMerge
+            txt := txt + "\nblocs sharing a day with VAL = VAH +-" + str.tostring(edgeTicks) + (edgeTicks == 1 ? " tick" : " ticks") +
+                 " merged with a collage: " + str.tostring(nE) + (nE == 1 ? " merge" : " merges")
+        txt := txt + "\n" + padR("Bloc", nameW) + padR("VAH-VAL", vaW) + unit + " N-1 blocs"
+        for dn in dOrder(cur)
+            vols = array.new<float>()
+            live = array.new<int>()
+            for i = 0 to array.size(cur) - 1
+                cm = array.get(cur, i)
+                if cm.dName == dn
+                    array.push(live, i)
+                    array.push(vols, cm.vol)
+            if array.size(live) > 0
+                idx = array.sort_indices(vols, order.ascending)
+                for j = 0 to array.size(idx) - 1
+                    rb  = array.get(cur, array.get(live, array.get(idx, j)))
+                    rel = ""
+                    for o in prev
+                        r = dayRelation(rb, o)
+                        if r != ""
+                            // a pair that qualifies for merge 3 but was kept apart by the day cap
+                            pO = dayMerge ? partialPct(rb, o) : -1.0
+                            pI = insMerge ? math.max(insideRatio(rb, o), insideRatio(o, rb)) : -1.0
+                            if (pO >= dayMergePct or pI >= insMergePct) and (dayAlone or spanH(rb, o) > capH(P))
+                                r := r + " (not merged: " + capText(P) + ")"
+                            rel := rel + (rel == "" ? "" : ", ") + o.name + " " + r
+                    txt := txt + "\n" + padR(rb.name, nameW) + padR(mbVaText(rb), vaW) +
+                         (rb.mergedFrom != "" ? "[merged " + rb.mergedFrom + "] " : "") + (rel == "" ? "-" : rel)
+    txt
+
+// a colour a "coloured" bloc may not use: the orange, or any gray (red, green and blue close together)
+badBlocCol(color c) =>
+    rr = color.r(c)
+    gg = color.g(c)
+    bb = color.b(c)
+    c == cGold or c == cGray or (math.abs(rr - gg) < 20 and math.abs(gg - bb) < 20 and math.abs(rr - bb) < 20) or
+         (rr > 200 and gg > 100 and gg < 200 and bb < 60)
+
+// ── Orange / coloured / dark gray VAH-VAL. known = every bloc to compare with (older blocs + rows),
+// rows = the blocs to colour now. In time order, each row is compared with the volLook blocs before
+// it: rank = % of them with a LOWER volume.
+//   rank > goldPct             -> orange, 4 px
+//   grayPct < rank <= goldPct  -> coloured, 3 px: its D colour, never orange / gray, never the same
+//                                 colour as the last coloured bloc
+//   rank <= grayPct            -> dark gray, 2 px
+// The colour and width are applied to its existing VAH / VAL lines.
+colorRows(MB[] known, MB[] rows) =>
+    for m in rows
+        m.todo := true
+    n = array.size(known)
+    if n > 0
+        ts = array.new<float>()
+        for m in known
+            array.push(ts, na(m.tA) ? 0.0 : float(m.tA))
+        idx = array.sort_indices(ts, order.ascending)
+        pal = array.from(cD, cD2, cD3, cD4, cD5, color.new(cUncov, 0), #2962FF, #CDDC39, #F23645)
+        color lastCol = na
+        for j = 0 to n - 1
+            m = array.get(known, array.get(idx, j))
+            if m.todo
+                nPrev = math.min(volLook, j)
+                below = 0
+                if nPrev > 0
+                    for k = j - nPrev to j - 1
+                        if array.get(known, array.get(idx, k)).vol < m.vol
+                            below += 1
+                rank = nPrev > 0 ? below * 100.0 / nPrev : 50.0
+                cls  = rank > goldPct ? 2 : rank > grayPct ? 1 : 0
+                color c = m.col
+                w = 3
+                if cls == 2
+                    c := cGold
+                    w := 4
+                else if cls == 0
+                    c := cGray
+                    w := 2
+                else
+                    // its D colour, unless it is orange / gray or the last coloured bloc's colour
+                    for pc in pal
+                        if (na(c) or badBlocCol(c) or (not na(lastCol) and c == lastCol)) and not badBlocCol(pc) and (na(lastCol) or pc != lastCol)
+                            c := pc
+                m.cls     := cls
+                m.lnColor := c
+                m.todo    := false
+                if not na(m.lnH)
+                    line.set_color(m.lnH, c)
+                    line.set_width(m.lnH, w)
+                if not na(m.lnL)
+                    line.set_color(m.lnL, c)
+                    line.set_width(m.lnL, w)
+                // the outer value area lines: same colour, dashed 1 px
+                if not na(m.ln2H)
+                    line.set_color(m.ln2H, c)
+                if not na(m.ln2L)
+                    line.set_color(m.ln2L, c)
+                // badge: the colour of its VAH / VAL lines, pinned to the LEFT end of its VAL line
+                if not na(m.lb)
+                    label.set_color(m.lb, color.new(c, 80))
+                    label.set_style(m.lb, label.style_label_upper_left)
+                    label.set_textalign(m.lb, text.align_left)
+                    if not na(m.lnL)
+                        label.set_xy(m.lb, math.min(line.get_x1(m.lnL), line.get_x2(m.lnL)), line.get_y1(m.lnL))
+            if m.cls == 1
+                lastCol := m.lnColor
+    n
+
+// The texts of every table that is on, all built from the same FINAL blocs (rows).
+// finished = a finished period (table 3 only there); cmp = the previous period's blocs left.
+tableTexts(Per P, MB[] rows, int nH, int nD, bool finished, MB[] cmp, int nX, int nE, int t0, int pt0) =>
+    tabs = array.new<string>()
+    if showTable
+        t1 = rowsTable1(P, rows, nH)
+        if t1 != ""
+            array.push(tabs, t1)
+    if showDTab
+        t2 = dTableText(P, rows, nD)
+        if t2 != ""
+            array.push(tabs, t2)
+    if finished and showDayTab and not na(cmp) and not na(pt0)
+        t3 = dayTableText(P, rows, cmp, nX, nE, t0, pt0)
+        if t3 != ""
+            array.push(tabs, t3)
+    tabs
+
+// Stack the tables UNDER the period: table 1 hangs from the period's low, each next table right
+// under the previous one, all with their LEFT edge exactly at the period start (midnight /
+// Monday 00:00, where the Block Lines Only separator is).
+// All tables go into ONE label (one box, one left edge, no drift between tables), separated by a
+// divider line. TradingView caps a label at 4,096 characters: if the next table would not fit,
+// the label is closed and a new one starts right under it (pushed down by as many lines as the
+// labels above hold, created first so the labels above stay on top of its blank part).
+// Returns the labels it created (so a period's tables can be redrawn later).
+placeTables(Per P, string[] texts, int tStart, float lo, bool dev) =>
+    n    = array.size(texts)
+    labs = array.new<label>()
+    if n > 0
+        // pack the tables into as few labels as possible
+        chunks = array.new<string>()
+        cur    = ""
+        for t in texts
+            joined = cur == "" ? t : cur + "\n \n" + t
+            if str.length(joined) <= 4000 or cur == ""
+                cur := joined
+            else
+                array.push(chunks, cur)
+                cur := t
+        array.push(chunks, cur)
+        nC = array.size(chunks)
+        above = array.new<int>(nC, 0)
+        acc = 0
+        for i = 0 to nC - 1
+            array.set(above, i, acc)
+            acc += array.size(str.split(array.get(chunks, i), "\n")) + 1
+        for j = 0 to nC - 1
+            i   = nC - 1 - j
+            pad = ""
+            if array.get(above, i) > 0
+                for kk = 1 to array.get(above, i)
+                    pad := pad + " \n"
+            tl = label.new(tStart, lo, pad + array.get(chunks, i), xloc = xloc.bar_time, style = label.style_label_upper_left,
+                 textalign = text.align_left, text_font_family = font.family_monospace,
+                 color = color.new(#ffffff, 5), textcolor = color.black, size = size.small)
+            keepBlocLabel(P, tl, dev)
+            array.push(labs, tl)
+    labs
+
+// the CURRENT blocs holding candles of period d (a merged bloc shows in every period it covers)
+rowsOfDay(MB[] live, int d) =>
+    out = array.new<MB>()
+    for m in live
+        if not na(m.dFirst) and m.dFirst <= d and m.dLast >= d
+            array.push(out, m)
+    out
+
+// the CURRENT blocs of period pd that are not also in period d (what d's table 3 compares with)
+cmpOfDay(MB[] live, int pd, int d) =>
+    out = array.new<MB>()
+    if not na(pd)
+        for m in live
+            if not na(m.dFirst) and m.dFirst <= pd and m.dLast >= pd and not (m.dFirst <= d and m.dLast >= d)
+                array.push(out, m)
+    out
+
+// Rebuild the tables of every recorded finished period from fromDay on, from the CURRENT blocs
+// (live = every final bloc still alive: history + the previous period's blocs left + this period's).
+rebuildTables(Per P, MB[] live, int fromDay) =>
+    nR = 0
+    if not na(P.recs)
+        for r in P.recs
+            if r.day >= fromDay
+                for oldLab in r.labs
+                    label.delete(oldLab)
+                rows = rowsOfDay(live, r.day)
+                cmp  = cmpOfDay(live, r.pDay, r.day)
+                r.labs := placeTables(P, tableTexts(P, rows, r.nH, r.nD, true, cmp, r.nX, r.nE, r.t0, r.pT0), r.t0, r.lo, false)
+                nR += 1
+    nR
 
 // Build and draw ONE period (a day or a week) from its candles.
 renderPer(Per P, int eIdx, bool dev) =>
@@ -837,6 +2085,17 @@ renderPer(Per P, int eIdx, bool dev) =>
                 // red LOWs still shared by 2 live Ds after the merges
                 [endCnt, endApex] = computeEnds(allDs, array.size(lowS))
 
+                // ═══ simple names: the final Ds are D1, D2, D3 ... in build order ═══
+                // (no more "D2+D4" or "U1"). D1 stays the POC D. The colour follows the new
+                // number; a D built from a purple HIGH keeps its purple colour.
+                nameNo = 0
+                for d in allDs
+                    if d.alive
+                        nameNo += 1
+                        d.name := "D" + str.tostring(nameNo)
+                        if d.num > 0
+                            d.num := nameNo
+
                 // ═══ DRAW ═══
                 pts = array.new<chart.point>()
                 array.push(pts, chart.point.from_index(sIdx, lo))
@@ -890,6 +2149,12 @@ renderPer(Per P, int eIdx, bool dev) =>
                 pfx    = P.isWeek ? "W " : ""
                 tpAreas = array.new<TPArea>()
 
+                // Block Lines Only: a vertical separator at the period start (00:00 / Monday 00:00),
+                // from the period's low to its high
+                if blocOnly
+                    keepBlocLine(P, line.new(perMid, lo, perMid, hi, xloc = xloc.bar_time,
+                         color = color.new(color.gray, 30), width = P.isWeek ? 2 : 1, style = line.style_solid), dev)
+
                 // ═══ D levels : end LOW lines from the period start to its end ═══
                 // Upper end (the LOW above the apex) -> its UPPER extreme.
                 // Lower end (the LOW below the apex) -> its LOWER extreme.
@@ -930,8 +2195,85 @@ renderPer(Per P, int eIdx, bool dev) =>
                 // ═══ compare every bloc of the period, whatever its D, then draw ═══
                 if showTP and array.size(tpAreas) > 0
                     blocs = findBlocs(tpAreas)
+                    fillBlocStats(P, tpAreas, blocs, perMid, binMs)
+                    if mergeBl
+                        mergeBlocs(tpAreas, blocs)
                     markExtremes(blocs)
+                    if showVA or showDTab or dMerge or showDayTab
+                        fillBlocVA(P, tpAreas, blocs, perMid, binMs)
+                    [dRows, dN] = mergeSameD(P, tpAreas, blocs, perMid, binMs)
                     drawAreas(P, tpAreas, blocs, perMid, binMs, dev)
+                    drawMergedVA(P, tpAreas, dRows, dev)
+                    linkRefs(blocs, dRows)
+                    fillRowCandles(P, tpAreas, blocs, dRows, perMid, binMs)
+                    m1 = 0
+                    for bb in blocs
+                        if bb.gone
+                            m1 += 1
+
+                    // every merge rule, round after round, until nothing is left to merge
+                    // (the day N + day N-1 rules only on finished periods)
+                    rowsN = array.copy(dRows)
+                    leftP = not dev and not na(P.prevRows) ? array.copy(P.prevRows) : array.new<MB>()
+                    // the older finished periods' blocs take part too (finished periods only): a
+                    // merged bloc that grows backwards is compared with the day before its first day
+                    if na(P.histOld)
+                        P.histOld := array.new<MB>()
+                    // 'No merge (day N alone)': nothing from the earlier periods takes part in the
+                    // merges (leftP is still what table 3 compares with)
+                    oldL = dev or dayAlone ? array.new<MB>() : P.histOld
+                    mergePrv = dayAlone ? array.new<MB>() : leftP
+                    [n1, n2, xN, xE] = mergeLoop(P, tpAreas, rowsN, mergePrv, oldL, not dev, dev)
+                    nH  = m1 + n1
+                    nDD = dN + n2
+                    if not dev
+                        // every earlier finished period touched by a merge gets its tables rebuilt
+                        // from the CURRENT blocs (a merged bloc can reach back several days)
+                        fromDay = P.dayId
+                        for m in rowsN
+                            if not na(m.dFirst)
+                                fromDay := math.min(fromDay, m.dFirst)
+                        // (or the previous period simply lost blocs to a merge)
+                        if not na(P.prevRows) and array.size(leftP) < array.size(P.prevRows)
+                            fromDay := math.min(fromDay, P.dayId - 1)
+                        if fromDay < P.dayId
+                            live = array.new<MB>()
+                            if not na(P.histOld)
+                                array.concat(live, P.histOld)
+                            array.concat(live, leftP)
+                            array.concat(live, rowsN)
+                            rebuildTables(P, live, fromDay)
+
+                    // GOLD / coloured / gray VAH-VAL: each final bloc against the volLook blocs before it
+                    known = array.new<MB>()
+                    if not na(P.histOld)
+                        array.concat(known, P.histOld)
+                    if dev
+                        if not na(P.prevRows)
+                            array.concat(known, P.prevRows)
+                    else
+                        array.concat(known, leftP)
+                    array.concat(known, rowsN)
+                    colorRows(known, rowsN)
+                    if not dev
+                        // the previous period's blocs left are final now: they join the history
+                        if na(P.histOld)
+                            P.histOld := array.new<MB>()
+                        array.concat(P.histOld, leftP)
+                        while array.size(P.histOld) > 200
+                            array.shift(P.histOld)
+
+                    // this period's tables, all from the final blocs, under its low at midnight
+                    labs = placeTables(P, tableTexts(P, rowsN, nH, nDD, not dev, leftP, xN, xE, perMid, P.prevT0), perMid, lo, dev)
+                    if not dev
+                        if na(P.recs)
+                            P.recs := array.new<PerRec>()
+                        pDay = array.size(P.recs) > 0 ? array.get(P.recs, array.size(P.recs) - 1).day : na
+                        array.push(P.recs, PerRec.new(P.dayId, perMid, lo, labs, nH, nDD, xN, xE, pDay, P.prevT0))
+                        while array.size(P.recs) > 30
+                            array.shift(P.recs)
+                        P.prevRows  := rowsN
+                        P.prevT0    := perMid
     n
 
 // Feed one bar into a period. When the period key changes, the finished period is drawn
@@ -940,9 +2282,20 @@ renderPer(Per P, int eIdx, bool dev) =>
 feedPer(Per P, int key, float[] aH, float[] aL, float[] aV, float[] aC, int[] aT, float ltfMin, float chartMin,
      int hist, int capPoly, int capOther) =>
     if P.key != key
-        if array.size(P.srcH) > 0 and bar_index > 0
+        // only the last `hist` periods before the chart's last bar are built (the ones that can be
+        // drawn). The merges chain from period to period and the colours look back over the previous
+        // blocs, so this keeps the result the same however much history the chart has loaded:
+        // earlier periods are skipped whole instead of being built and then hidden.
+        cutoff = last_bar_time - (hist + 1) * (P.isWeek ? 7 : 1) * 86400000
+        if array.size(P.srcH) > 0 and bar_index > 0 and P.startTime >= cutoff
             renderPer(P, bar_index - 1, false)
             pruneOld(P, hist, capPoly, capOther)
+            // periods whose drawings were removed: their tables are never rebuilt again
+            if not na(P.recs)
+                while array.size(P.recs) > 0 and array.get(P.recs, 0).day <= P.dayId - hist
+                    for oldLab in array.get(P.recs, 0).labs
+                        label.delete(oldLab)
+                    array.shift(P.recs)
             P.dayId := P.dayId + 1
         array.clear(P.srcH)
         array.clear(P.srcL)

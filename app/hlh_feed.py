@@ -45,6 +45,10 @@ class HlhFeed:
         self.last_ok = 0.0
         self.requests = 0
         self._snap: Tuple[int, Optional[Candles]] = (-1, None)
+        self._keys: Optional[np.ndarray] = None       # the dict as sorted arrays (start, [o h l c v]) ...
+        self._rows: Optional[np.ndarray] = None
+        self._full = True                             # ... rebuilt from the dict when a key was added / removed,
+        self._upd: Dict[int, Tuple[float, float, float, float, float]] = {}   # else patched in place from these
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -73,6 +77,7 @@ class HlhFeed:
                 for k in drop:
                     del self._cands[k]
                 if drop:
+                    self._full = True
                     self.rev += 1
         if moved_back:
             self.loaded = False
@@ -85,18 +90,34 @@ class HlhFeed:
     # ------------------------------------------------------------------ reads (GUI thread)
     def snapshot(self) -> Optional[Candles]:
         """The retained candles as sorted arrays (t, h, l, c, v, m). Rebuilt only when rev moved; the forming
-        candle is included (the Pine's forming period includes the forming bar)."""
+        candle is included (the Pine's forming period includes the forming bar). A poll that only changed
+        candles (the usual case: the forming one and a late correction) patches the arrays in place; a NEW candle
+        (once per timeframe step) or a pruned floor rebuilds them from the dict -- 7,200 candles sorted into
+        arrays is ~4 ms of Python, the in-place patch ~0.1 ms."""
         if self._snap[0] == self.rev:
             return self._snap[1]
         with self._lock:
             rev = self.rev
             if not self._cands:
                 self._snap = (rev, None)
+                self._keys = self._rows = None
+                self._full = True
+                self._upd = {}
                 return None
-            keys = sorted(self._cands)
-            rows = [self._cands[k] for k in keys]
-        t = np.asarray(keys, dtype=np.float64)
-        arr = np.asarray(rows, dtype=np.float64)
+            if self._full or self._keys is None or self._rows is None:
+                keys = sorted(self._cands)
+                self._keys = np.asarray(keys, dtype=np.float64)
+                self._rows = np.asarray([self._cands[k] for k in keys], dtype=np.float64)
+                self._full = False
+            elif self._upd:
+                ks = self._keys
+                for st, row in self._upd.items():
+                    i = int(np.searchsorted(ks, float(st)))
+                    if i < ks.shape[0] and ks[i] == float(st):
+                        self._rows[i] = row
+            self._upd = {}
+            t = self._keys.copy()
+            arr = self._rows.copy()
         # (the open is not part of Candles -- the profile spreads over high..low and tests the close)
         cd = Candles(t, arr[:, 1], arr[:, 2], arr[:, 3], arr[:, 4], np.full(t.shape[0], self.tf_secs / 60.0))
         self._snap = (rev, cd)
@@ -136,6 +157,10 @@ class HlhFeed:
                 new = (o, h, l, c, v)
                 if cur != new:
                     self._cands[st] = new
+                    if cur is None:
+                        self._full = True             # a new candle: the arrays are rebuilt
+                    else:
+                        self._upd[st] = new           # a changed one: patched in place
                     n += 1
             if n:
                 self.rev += 1

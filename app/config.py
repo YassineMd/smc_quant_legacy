@@ -529,6 +529,39 @@ HLH_TP_TR = 75                  # time-profile fill transparency (kept blocs)
 HLH_TP_DIM_TR = 90              # ... of the other blocs
 HLH_POLL_SECS = 10.0            # REST poll of the forming candles (limit 5 rows = weight 1)
 HLH_RECALC_SECS = 1.0           # the forming period is recomputed at most this often (and only on new data)
+# -- the chain: merges 3 / 4 compare a finished day with the day before it (and older days a merged bloc reaches),
+# and the bloc colours rank each bloc against the HLH_VOL_LOOK blocs before it, whatever their day. So the feed
+# loads HLH_HIST_DAYS day periods (the Pine's "Days to draw", 10 there) and the engine folds them oldest -> newest
+# exactly as the Pine feeds them; only the last HLH_DAYS are DRAWN. 5 days of 1m = 7,200 rows = 5 REST pages.
+HLH_HIST_DAYS = 5               # day periods computed (>= HLH_DAYS)
+HLH_HIST_WEEKS = 3              # week periods computed (this week + 2 finished ones); only this week is drawn
+# -- Merges (the Pine's "Merges" group): the rules that build the FINAL blocs, run again and again until nothing
+# is left to merge. They change the blocs on the chart AND in the tables.
+HLH_MERGE_BLOCS = True          # merge 1: time-overlapping blocs, high-low >= HLH_INSIDE_PCT % inside -> the lower volume joins the higher
+HLH_INSIDE_PCT = 50.0
+HLH_D_MERGE = True              # merge 2: same D, VAH-VAL >= HLH_D_MERGE_PCT % inside -> collage of ONLY their candles
+HLH_D_MERGE_PCT = 50.0
+HLH_DAY_MERGE = True            # merge 3 (finished days only): day N + day N-1 blocs OVERLAPPING >= HLH_DAY_MERGE_PCT % of the smaller VAH-VAL range
+HLH_DAY_MERGE_PCT = 50.0
+HLH_INS_MERGE = True            # merge 3: ... or one INSIDE the other, the smaller range >= HLH_INS_MERGE_PCT % of the bigger
+HLH_INS_MERGE_PCT = 50.0
+HLH_EDGE_MERGE = True           # merge 4 (finished days only): blocs sharing a day, one's VAL within HLH_EDGE_TICKS ticks of the other's VAH
+HLH_EDGE_TICKS = 1
+HLH_MERGE_SPAN = "36h"          # a merged bloc spans at most this (first candle -> last close; x 7 for weeks): "12h", "24h",
+                                # "36h", "48h", "72h", "96h", "1 week", or "No merge (day N alone)" = nothing from earlier days
+# -- Bloc colours (VAH / VAL of the final blocs): rank = % of the previous HLH_VOL_LOOK blocs with a LOWER volume
+HLH_VOL_LOOK = 20
+HLH_GOLD_PCT = 69.0             # rank above -> orange, 4 px
+HLH_GRAY_PCT = 29.0             # rank at or below -> dark gray, 2 px; between -> its D colour (never orange / gray / the last coloured bloc's), 3 px
+HLH_C_GOLD = "#FF9800"
+HLH_C_GRAY = "#505050"
+# -- the outer value area: a second, wider VA of the same bloc, dashed 1 px in the bloc's line colour
+HLH_SHOW_VA2 = True
+HLH_VA2_PCT = 90.0
+# -- Tables (display only; the terminal's sub-toggle "Tables" gates all three): under the day's low, left edge at midnight
+HLH_TABLE1 = True               # every final bloc by volume (lowest -> highest)
+HLH_TABLE2 = True               # blocs per D
+HLH_TABLE3 = True               # day N vs day N-1 (finished days only)
 
 TAPE_BACKFILL_SECS = 300        # Trades scanner mode: history window requested on entry (raw aggTrades from
                                 # trade_tape; ~5 min fills the table instantly without a heavy tunnel transfer)
