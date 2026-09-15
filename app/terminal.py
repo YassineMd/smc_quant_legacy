@@ -20677,8 +20677,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             " QComboBox QAbstractItemView{ background:#20242c; color:#dcdcdc; selection-background-color:#3a4150; }")
         cb.setToolTip("What this pane draws. None: both sides -- buy on each cycle's left half, sell on its right "
                       "half. Buyer Ratio / Seller Ratio: that side alone, over the whole cycle. Delta Ratio: the "
-                      "buyer ratio divided by the seller ratio -- teal above 1.0x when the buyers ran hotter against "
-                      "their own last N cycles than the sellers against theirs, red below.")
+                      "size of the cycle's net aggressive $/s (buy minus sell) over the median size of the last N "
+                      "cycles' net -- teal when buyers were the net aggressors, red when sellers were; above 1.0x "
+                      "the imbalance was bigger than usual, below it smaller.")
         cb.setCursor(QtCore.Qt.PointingHandCursor)
         cb.currentIndexChanged.connect(self._on_fratio_mode_changed)
         cb.raise_(); cb.show()
@@ -20751,10 +20752,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         except RuntimeError:
             pass
 
-    def _fratio_badges(self, buy_r, sell_r) -> None:
+    def _fratio_badges(self, buy_r, sell_r, delta_r=None, net=None) -> None:
         """The live value on the right axis, as the feed prints it ("0.49x"), for what the dropdown shows: both
-        sides (None), one side, or the delta -- buyer ratio / seller ratio, on the teal badge at or above 1.0x and
-        the red one below."""
+        sides (None), one side, or the delta ratio -- on the teal badge when buyers were that cycle's net aggressors
+        and on the red one when sellers were, wherever the value sits against 1.0x."""
         bdg = self.__dict__.get("_fratio_bdg")
         if not bdg or self._fratio_vb is None:
             return
@@ -20763,21 +20764,26 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         sell_r = np.asarray(sell_r, dtype=np.float64)
         vals = [None, None]
         if mode == "Delta Ratio":
-            ok = np.flatnonzero(np.isfinite(buy_r) & (buy_r > 0) & np.isfinite(sell_r) & (sell_r > 0))
-            if ok.size:
-                d = float(buy_r[ok[-1]] / sell_r[ok[-1]])
-                vals[0 if d >= 1.0 else 1] = d
+            if delta_r is not None and net is not None:
+                delta_r = np.asarray(delta_r, dtype=np.float64)
+                net = np.asarray(net, dtype=np.float64)
+                ok = np.flatnonzero(np.isfinite(delta_r) & (delta_r > 0))
+                if ok.size:
+                    vals[0 if float(net[ok[-1]]) > 0.0 else 1] = float(delta_r[ok[-1]])
         else:
             for i, (r, skip) in enumerate(((buy_r, mode == "Seller Ratio"), (sell_r, mode == "Buyer Ratio"))):
                 fin = np.flatnonzero(np.isfinite(r) & (r > 0))
                 if fin.size and not skip:
                     vals[i] = float(r[fin[-1]])
         vx1 = float(self._fratio_vb.viewRange()[0][1])
+        _cap = float(np.log2(max(float(config.FRATIO_DELTA_CLIP), 1.0)))
         for _b, v in zip(bdg, vals):
             if v is None:
                 _b._y = None; _b.hide()
                 continue
             _b._y = float(np.log2(max(v, 1e-9)))
+            if mode == "Delta Ratio":                        # sits on its clipped bar; the text keeps the true value
+                _b._y = max(-_cap, min(_cap, _b._y))
             _b.setHtml("<div style='color:%s; font-family:Consolas; font-size:11px; font-weight:bold; "
                        "white-space:nowrap'>%sx</div>" % (_b._col, _interp_ratio_text(v)))
             _b.setPos(vx1, _b._y); _b.show()
@@ -20845,13 +20851,27 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         sell = _interp_prev(sl / dur, done, self._lb_n(), self._lb_min_n(), include_open=True)
         return t_end_c, flow, buy, sell
 
+    def _fratio_delta(self, t, t_end_c, done, cbuy, csell):
+        """Delta Ratio per cycle -> (ratio, net). `net` = the cycle's NET aggressive $ per second, buy minus sell;
+        `ratio` = its SIZE over the median size of the previous N cycles' net, by the same helper, lookback and
+        include_open as the buy / sell ratios (the forming cycle is rated from what it has so far and never enters
+        a baseline). The sign is kept apart from the size on purpose: the bar's colour says who the net aggressor
+        was, its height whether that imbalance was bigger (above 1.0x) or smaller (below) than usual, so either
+        colour can sit on either side of the guide. (User 2026-09-15: the first cut coloured buyer ratio / seller
+        ratio by its own side of 1.0x, which put buyers always above and sellers always below.)"""
+        dur = np.maximum(np.asarray(t_end_c, dtype=np.float64) - np.asarray(t, dtype=np.float64), 1e-9)
+        net = (np.maximum(cbuy, 0.0) - np.maximum(csell, 0.0)) / dur
+        ratio = _interp_prev(np.abs(net), done, self._lb_n(), self._lb_min_n(), include_open=True)
+        return ratio, net
+
     def _fratio_draw(self, now: float) -> None:
         """A HISTOGRAM from the 1.0x guide, in the mode the top-right dropdown picks:
              None          two bars per cycle, BUY on its left half and SELL on its right half
              Buyer Ratio   the buy bar alone, over the whole cycle
              Seller Ratio  the sell bar alone, over the whole cycle
-             Delta Ratio   buyer ratio / seller ratio over the whole cycle: teal above 1.0x (the buyers ran hotter
-                           against their own last N than the sellers against theirs), red below
+             Delta Ratio   the size of the cycle's net $/s against its usual size (_fratio_delta), over the whole
+                           cycle: teal when buyers were the net aggressors, red when sellers were -- the colour is
+                           the SIDE and the height the SIZE, so either colour can sit above or below the guide
         Every bar runs to log2 of its value, so 0.5x and 2x sit the same distance below and above the guide. The
         forming cycle is rated from what it has so far and drawn lighter, on items of its own: while it forms only
         those bars are re-laid, the finished ones only when a cycle finishes, the view drops one, or the mode, the
@@ -20892,12 +20912,18 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         fin_m = ~forming
         x0 = t[keep]; x1 = t_end_c[keep]
         mid = 0.5 * (x0 + x1)
+        _d = _n = None
         with np.errstate(divide="ignore", invalid="ignore"):
             _b = buy[keep]; _s = sell[keep]
             vb_ = np.where(np.isfinite(_b) & (_b > 0), np.log2(np.maximum(_b, 1e-9)), np.nan)
             vs_ = np.where(np.isfinite(_s) & (_s > 0), np.log2(np.maximum(_s, 1e-9)), np.nan)
-            vd_ = vb_ - vs_                                  # log2(buyer ratio / seller ratio)
-            up_ = vd_ >= 0.0
+            if mode == "Delta Ratio":                        # computed only while it is shown
+                _dr, _nt = self._fratio_delta(t, t_end_c, done, cbuy, csell)
+                _d = _dr[keep]; _n = _nt[keep]
+                vd_ = np.where(np.isfinite(_d) & (_d > 0), np.log2(np.maximum(_d, 1e-9)), np.nan)
+                _cap = float(np.log2(max(float(config.FRATIO_DELTA_CLIP), 1.0)))
+                vd_ = np.clip(vd_, -_cap, _cap)              # drawn within 1/16x .. 16x; NaN stays NaN
+                up_ = _n > 0.0                               # the colour is the NET side, never the side of 1.0x
         _none = (None, None, None, None)
         if mode == "Buyer Ratio":
             groups = ((0, vb_, x0, x1, fin_m), (1,) + _none, (2, vb_, x0, x1, forming), (3,) + _none)
@@ -20915,7 +20941,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             shown = (vb_, vs_)
         fsig = (mode, int(fin_m.sum()), round(float(x0[0]), 2),
                 round(float(x1[fin_m][-1]), 2) if fin_m.any() else 0.0, int(self._flow_win), self._lb_n(),
-                round(float(np.nansum(vb_[fin_m])), 6), round(float(np.nansum(vs_[fin_m])), 6))
+                round(float(np.nansum(vb_[fin_m])), 6), round(float(np.nansum(vs_[fin_m])), 6),
+                round(float(np.nansum(vd_[fin_m])), 6) if _d is not None else None)
         same_fin = fsig == self.__dict__.get("_fratio_fsig")
         for idx, v, lo_, hi_, sel in groups:
             if idx < 2 and same_fin:
@@ -20927,7 +20954,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             else:
                 it.setOpts(x0=lo_[m], x1=hi_[m], y0=np.minimum(0.0, v[m]), height=np.abs(v[m]))
         self._fratio_fsig = fsig
-        self._fratio_badges(_b, _s)
+        self._fratio_badges(_b, _s, _d, _n)
         fin = np.concatenate(shown)
         fin = fin[np.isfinite(fin)]
         if fin.size:

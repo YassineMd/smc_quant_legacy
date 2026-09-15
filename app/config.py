@@ -408,10 +408,17 @@ FRATIO_PANE_ON = True
 FRATIO_BUY_COL = "#26a69a"      # buy -- the same teal as the buy $ line
 FRATIO_SELL_COL = "#ef5350"     # sell -- the same red as the sell $ line
 # the pane's top-right dropdown (user 2026-09-15). "None" = both sides, as the pane has always drawn them; otherwise
-# ONE series over the whole cycle: Buyer Ratio, Seller Ratio, or Delta Ratio = Buyer Ratio / Seller Ratio (on the
-# log2 axis: the buy bar minus the sell bar) -- above 1.0x the buyers ran hotter against their own last N cycles
-# than the sellers against theirs, below it the sellers did. Persisted as fratio_mode.
+# ONE series over the whole cycle: Buyer Ratio, Seller Ratio, or Delta Ratio = the SIZE of the cycle's net
+# aggressive $/s (buy minus sell) over the median size of the previous N cycles' net (prev_ratio, include_open, the
+# same rule as the other two), coloured by its SIGN: teal = buyers were the net aggressors, red = sellers. Either
+# colour can sit above 1.0x (a bigger imbalance than usual) or below it (a smaller one).
+# ⚠ The first cut drew buyer ratio / seller ratio coloured by that quotient's own side of 1.0x, so teal was ALWAYS
+# above and red ALWAYS below -- the user flagged it as "not normal" the same day. Persisted as fratio_mode.
 FRATIO_MODES = ("None", "Buyer Ratio", "Seller Ratio", "Delta Ratio")
+# Delta Ratio is DRAWN within 1/FRATIO_DELTA_CLIP .. FRATIO_DELTA_CLIP (the badge still prints the true value): a
+# nearly balanced cycle has a net close to zero, so its ratio runs toward 0 -- the 2026-09-15 probe on real tape
+# printed 0.00x (log2 about -9) -- and the axis fit stretched to reach it, flattening every other bar
+FRATIO_DELTA_CLIP = 16.0
 FRATIO_MODE = "None"
 # --- the Buy/Sell Flow ($) PANE itself gets a toggle (user 2026-09-15: "we dont have it", then "I want the
 # whole chart to hide not just the lines"): in Flow mode the main chart IS that pane, so OFF hides the main
