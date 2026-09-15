@@ -1923,8 +1923,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._spd_title = None; self._spd_badge = None
         self._fratio_plot = None       # Flow ratios pane (Flow mode): the feed's flow / buy / sell vs last N as lines
         self._fratio_vb = None
-        self._fratio_items = None      # (flow, buy, sell) PlotCurveItems
+        self._fratio_items = None      # (buy, sell, buy forming, sell forming) BarGraphItems -- the histogram
         self._fratio_sig = None
+        self._fratio_fsig = None       # the FINISHED bars' own signature: only the forming pair moves between cycles
         self._fratio_t = 0.0
         self._fratio_data = None
         self._fratio_on = bool(config.FRATIO_PANE_ON)
@@ -17790,7 +17791,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._spd_tag = None; self._spd_time_tag = None
             self._spd_title = None; self._spd_badge = None
             self._fratio_plot = None; self._fratio_vb = None; self._fratio_items = None
-            self._fratio_sig = None; self._fratio_sized = False; self._fratio_proxy = None
+            self._fratio_sig = None; self._fratio_fsig = None; self._fratio_sized = False; self._fratio_proxy = None
             self._fratio_vline = None; self._fratio_hline = None
             self._fratio_tag = None; self._fratio_time_tag = None; self._fratio_title = None
             self._fratio_bdg = None
@@ -20605,18 +20606,24 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         vb = pw.getViewBox()
         vb.setMouseEnabled(x=True, y=True)
         vb.setXLink(self.vb)
-        # TWO step lines, one PlotCurveItem each (buy / sell): a value per cycle held over the cycle's span,
-        # NaN where a cycle has no baseline yet so the line breaks instead of joining across it. Solid cosmetic
-        # pens, round joins, antialias OFF (the flow lines measured a 25x repaint cost with it on). The feed's
-        # "flow" (both sides) is computed but not drawn (user 2026-09-15: "remove the blue line").
+        # A HISTOGRAM (user 2026-09-15: "histogram instead of lines"), in the Book pane's layout: two bars per
+        # cycle, BUY on the cycle's left half and SELL on its right half, each rising from the 1.0x guide to log2
+        # of its ratio -- above the guide that side traded faster than usual, below it slower. FOUR BarGraphItems,
+        # one brush each: buy, sell, and the FORMING cycle's pair drawn lighter (it is rated from what it has so
+        # far and still moves). Grouping by class keeps the item count flat however many cycles are on screen, and
+        # there is no custom paint() (pyqtgraph's deviceTransform() inside paint() has segfaulted this terminal).
+        # The feed's "flow" (both sides) is computed but not drawn (user 2026-09-15: "remove the blue line").
         items = []
-        for _c in (config.FRATIO_BUY_COL, config.FRATIO_SELL_COL):
-            _pn = pg.mkPen(_c, width=1.8, style=QtCore.Qt.SolidLine); _pn.setCosmetic(True)
-            _pn.setCapStyle(QtCore.Qt.RoundCap); _pn.setJoinStyle(QtCore.Qt.RoundJoin)
-            it = pg.PlotCurveItem(pen=_pn, antialias=False, connect="finite")
+        for _c, _a_fill, _a_pen in ((config.FRATIO_BUY_COL, 190, 255), (config.FRATIO_SELL_COL, 190, 255),
+                                    (config.FRATIO_BUY_COL, 70, 150), (config.FRATIO_SELL_COL, 70, 150)):
+            _col = QtGui.QColor(_c)
+            it = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
+                                 brush=pg.mkBrush(_col.red(), _col.green(), _col.blue(), _a_fill),
+                                 pen=pg.mkPen(QtGui.QColor(_col.red(), _col.green(), _col.blue(), _a_pen), width=1.0))
             it.setZValue(5)
             pw.addItem(it); items.append(it)
         self._fratio_items = tuple(items)
+        self._fratio_sig = None; self._fratio_fsig = None       # new items are empty: the next draw fills all four
         _g = pg.mkPen("#9aa4b2", width=1.0, style=QtCore.Qt.DashLine); _g.setCosmetic(True)
         _z = pg.InfiniteLine(angle=0, pos=0.0, pen=_g)      # 1.0x: "as usual"
         _z.setZValue(3); pw.addItem(_z, ignoreBounds=True)
@@ -20759,17 +20766,21 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         return t_end_c, flow, buy, sell
 
     def _fratio_draw(self, now: float) -> None:
-        """Two step lines: each cycle's buy / sell ratio held from its start to its end, in log2 so 0.5x and
-        2x sit the same distance from the 1.0x guide. The forming cycle is rated from what it has so far and
-        drawn to the live edge (its value moves as the cycle fills -- the feed's row does the same)."""
+        """A HISTOGRAM: two bars per cycle, BUY on the cycle's left half and SELL on its right half, each from the
+        1.0x guide to log2 of its ratio, so 0.5x and 2x sit the same distance below and above it. The forming cycle
+        is rated from what it has so far (its value moves as the cycle fills -- the feed's row does the same) and
+        its pair is drawn lighter, on items of its own: while a cycle forms only those two bars are re-laid, and the
+        finished ones only when a cycle finishes, the view drops one, or the lookback / flow window changes."""
         if self._fratio_data is None or self._fratio_items is None:
             return
+        if self._fratio_sig is None:
+            self._fratio_fsig = None                         # a forced redraw re-lays the finished bars too
         vx0, vx1, (t, is_buy, strong, move, cbuy, csell, t_end, done) = self._fratio_data
         if t.size == 0:
             for it in self._fratio_items:
-                it.setData(np.zeros(0), np.zeros(0))
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
             self._fratio_badges(np.zeros(0), np.zeros(0))
-            self._fratio_sig = ("empty",)
+            self._fratio_sig = ("empty",); self._fratio_fsig = None
             return
         live = bool(vx1 >= now - float(config.INTERP_STALE_SECS))
         t_end_c, flow, buy, sell = self._fratio_ratios(t, t_end, done, cbuy, csell, now, live)
@@ -20782,21 +20793,39 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._fratio_sig = sig
         if not keep.any():
             for it in self._fratio_items:
-                it.setData(np.zeros(0), np.zeros(0))
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
             self._fratio_badges(np.zeros(0), np.zeros(0))
+            self._fratio_fsig = None
             return
+        # ⚠ only the LIVE read's last row is forming: crosses() marks the last row of ANY read unfinished
+        form_all = np.zeros(int(t.size), dtype=bool)
+        if live and not bool(done[-1]):
+            form_all[-1] = True
+        forming = form_all[keep]
+        fin_m = ~forming
         x0 = t[keep]; x1 = t_end_c[keep]
-        xs = np.empty(2 * x0.size, dtype=np.float64)
-        xs[0::2] = x0; xs[1::2] = x1
-        vals = []
-        for r in (buy[keep], sell[keep]):
-            with np.errstate(divide="ignore", invalid="ignore"):
-                v = np.where(np.isfinite(r) & (r > 0), np.log2(np.maximum(r, 1e-9)), np.nan)
-            vals.append(np.repeat(v, 2))
-        for it, y in zip(self._fratio_items, vals):
-            it.setData(xs, y, connect="finite")
-        self._fratio_badges(buy[keep], sell[keep])
-        fin = np.concatenate(vals)
+        mid = 0.5 * (x0 + x1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            _b = buy[keep]; _s = sell[keep]
+            vb_ = np.where(np.isfinite(_b) & (_b > 0), np.log2(np.maximum(_b, 1e-9)), np.nan)
+            vs_ = np.where(np.isfinite(_s) & (_s > 0), np.log2(np.maximum(_s, 1e-9)), np.nan)
+        fsig = (int(fin_m.sum()), round(float(x0[0]), 2),
+                round(float(x1[fin_m][-1]), 2) if fin_m.any() else 0.0, int(self._flow_win), self._lb_n(),
+                round(float(np.nansum(vb_[fin_m])), 6), round(float(np.nansum(vs_[fin_m])), 6))
+        same_fin = fsig == self.__dict__.get("_fratio_fsig")
+        for idx, v, lo_, hi_, sel in ((0, vb_, x0, mid, fin_m), (1, vs_, mid, x1, fin_m),
+                                      (2, vb_, x0, mid, forming), (3, vs_, mid, x1, forming)):
+            if idx < 2 and same_fin:
+                continue                                     # the finished bars did not change
+            it = self._fratio_items[idx]
+            m = sel & np.isfinite(v)
+            if not m.any():
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            else:
+                it.setOpts(x0=lo_[m], x1=hi_[m], y0=np.minimum(0.0, v[m]), height=np.abs(v[m]))
+        self._fratio_fsig = fsig
+        self._fratio_badges(_b, _s)
+        fin = np.concatenate((vb_, vs_))
         fin = fin[np.isfinite(fin)]
         if fin.size:
             lim = float(np.percentile(np.abs(fin), 99.0)) * 1.15

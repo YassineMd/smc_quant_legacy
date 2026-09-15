@@ -1788,11 +1788,12 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.fratio_on.setChecked(bool(config.FRATIO_PANE_ON))
         self.fratio_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.fratio_on.setToolTip(
-            "The interpretation feed's buy / sell numbers as lines, one value per cycle held over the cycle: "
+            "The interpretation feed's buy / sell numbers as a histogram, two bars per cycle (buy on its left "
+            "half, sell on its right half): "
             "BUY (teal) and SELL (red) = each side's own aggressive $ per second over the median of that "
             "side's rate in the previous %d cycles. 1.0x is 'as usual'; the axis is log2 so 0.5x and 2x sit "
-            "the same distance from it. The forming cycle is rated from what it has so far and is drawn to "
-            "the live edge." % config.CYCLE_BASE_N)
+            "the same distance from it: a bar above the line is a side trading faster than usual, below it "
+            "slower. The forming cycle's pair is drawn lighter, rated from what it has so far." % config.CYCLE_BASE_N)
         self.fratio_on.toggled.connect(lambda on: self.fratioPaneToggled.emit(bool(on)))
         l4.addWidget(self.fratio_on)
         self.interp_on = QtWidgets.QCheckBox(config.pane_titles()["interp"])
