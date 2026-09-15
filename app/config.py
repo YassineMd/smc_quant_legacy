@@ -394,6 +394,7 @@ def pane_titles(n=None):
         "px": "PRICE" + d + "one candle per cycle",
         "lines": "BUY / SELL FLOW" + d + "taker $ per window (the pane)",
         "fratio": "FLOW RATIOS" + d + "$/s vs last %d" % n + d + "buy / sell",
+        "iimp": "INTEREST × IMPACT" + d + "who leads vs last %d" % n,
     }
 
 
@@ -420,6 +421,47 @@ FRATIO_MODES = ("None", "Buyer Ratio", "Seller Ratio", "Delta Ratio")
 # printed 0.00x (log2 about -9) -- and the axis fit stretched to reach it, flattening every other bar
 FRATIO_DELTA_CLIP = 16.0
 FRATIO_MODE = "None"
+
+# --- INTEREST x IMPACT pane (user 2026-09-16: "its really hard to look at different panes at the same time ...
+# one pane that does this for me"). ONE bar per FINISHED cycle, folding what needed four panes to read:
+#   HEIGHT  log2 of the aggressive interest imbalance -- the buyers' taker $/s over the median of their previous N
+#           cycles, divided by the sellers' same ratio. Above 1.0x the buyers are hotter than usual relative to
+#           the sellers, below it the sellers are.
+#   COLOUR  the side that leads (teal buyers, red sellers).
+#   FILL    SOLID when the cycle's push REACHED at least what that side's own previous N cycles reached for that
+#           effort and that time (IIMP_COEF_*), HOLLOW when it did not -- interest that did not convert.
+#   DOT     the FAR side's resting $ at the cycle's open against the previous N cycles: filled above
+#           IIMP_WALL_HIGH (pushed into a wall), hollow below IIMP_WALL_LOW (open road), nothing in between.
+# The cuts are the measured TERCILES over 48 h / 1250 rated cycles (2026-09-16), the Volume and Speed panes' rule.
+# ⚠⚠ The resting book is NOT blended into the height, though the user asked for both kinds of interest in one
+# number: measured, giving the book real weight (x2) raised its share of the number to 15% but dropped the
+# height's agreement with the cycle's own dominant side from 77% to 68%, and with the direction price actually
+# took from 65% to 58%. The book's swing is far narrower than the tape's (p10..p90 0.73 vs 2.33 in log2), so any
+# blend either ignores it or amplifies its noise. It carries its own mark instead.
+# ⚠ IIMP_COEF_* are log-log slopes of reach on (own $ up to the extreme, seconds to the extreme, resting wall at
+# the open), fitted per side on the same 48 h (buy R2 0.744 / sell 0.726). No intercept is needed: the score is a
+# residual against the median of the previous N same-side cycles, which cancels it.
+IIMP_PANE_ON = True
+IIMP_LOW = 0.76                 # imbalance terciles: below = sellers lead, above IIMP_HIGH = buyers lead
+IIMP_HIGH = 1.37
+IIMP_WALL_RADIUS = 25           # the wall is read within +-this many ticks of mid (a radius on the daemon's ladder)
+IIMP_WALL_LOW = 0.94            # far-side resting orders vs the previous N cycles -- terciles again
+IIMP_WALL_HIGH = 1.06
+IIMP_COEF_BUY = (0.090, 0.275, -0.235)
+IIMP_COEF_SELL = (0.089, 0.233, -0.231)
+IIMP_BUY_COL = "#26a69a"        # the same teal / red every other pane uses for the two sides
+IIMP_SELL_COL = "#ef5350"
+IIMP_WALL_COL = "#c9a227"
+IIMP_BADGE_TIERS = ((70.0, 1), (36.0, 2))       # "1.6x" per cycle, on the pane's own strip. Wider than the other
+                                # panes' tiers because its first live render packed ~90 cycles into one screen and
+                                # the badges ran into each other and over the title.
+IIMP_BADGE_GUARD_PX = 250       # this pane's title is longer than PANE_TITLE_GUARD_PX (130), so its strip needs a
+                                # wider clear zone or the first badges sit on the name
+# The bar is DRAWN within 1/IIMP_CLIP .. IIMP_CLIP and the axis follows the 95th percentile: measured over 48 h the
+# |imbalance| runs p50 1.6x / p90 3.1x / p95 4.0x / p99 7.6x with a max of 95x, so 5.1% of cycles pass 4x and 0.9%
+# pass 8x -- fitting to the max (or to p99) let one cycle flatten every other bar in the first live render. The
+# badge and the right-edge readout keep printing the TRUE multiple.
+IIMP_CLIP = 8.0
 # --- the Buy/Sell Flow ($) PANE itself gets a toggle (user 2026-09-15: "we dont have it", then "I want the
 # whole chart to hide not just the lines"): in Flow mode the main chart IS that pane, so OFF hides the main
 # chart widget and the stack closes up around it. Display only -- the bins, the crossings, every cycle pane

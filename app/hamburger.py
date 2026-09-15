@@ -297,6 +297,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     lobPaneToggled = QtCore.Signal(bool)         # Book pane on/off (Flow mode)
     spdPaneToggled = QtCore.Signal(bool)         # Speed pane on/off (Flow mode)
     fratioPaneToggled = QtCore.Signal(bool)      # Flow ratios pane on/off (Flow mode): flow / buy / sell vs last N
+    iimpPaneToggled = QtCore.Signal(bool)        # Interest x Impact pane on/off (Flow mode)
     flowLinesToggled = QtCore.Signal(bool)       # the Buy/Sell Flow $ PANE (the main chart in Flow mode) on/off
     hlhSpanChanged = QtCore.Signal(str)          # HLH: "A merged bloc spans at most" (the Pine's mergeSpan input)
     interpPaneToggled = QtCore.Signal(bool)     # Interpretation feed on/off (Flow mode, right side)
@@ -1799,6 +1800,20 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             "the net aggressors and red when sellers were)." % config.CYCLE_BASE_N)
         self.fratio_on.toggled.connect(lambda on: self.fratioPaneToggled.emit(bool(on)))
         l4.addWidget(self.fratio_on)
+        self.iimp_on = QtWidgets.QCheckBox(config.pane_titles()["iimp"])
+        self.iimp_on.setChecked(bool(config.IIMP_PANE_ON))
+        self.iimp_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.iimp_on.setToolTip(
+            "One bar per finished cycle, reading four things at once so you do not have to watch four panes. "
+            "HEIGHT: which side was more interested than usual -- the buyers' aggressive $ per second against "
+            "their own previous %d cycles, divided by the sellers' same number. Above 1.0x the buyers lead, "
+            "below it the sellers. COLOUR: that side. FILL: solid when the push reached at least what that "
+            "side's own last %d cycles reached for that effort and time, hollow when the interest did not "
+            "convert. DOT: the far side's RESTING orders at the cycle's open against the previous %d -- filled "
+            "means it pushed into a wall, hollow means the road was open. Cuts are the measured terciles over "
+            "48 h." % (config.CYCLE_BASE_N, config.CYCLE_BASE_N, config.CYCLE_BASE_N))
+        self.iimp_on.toggled.connect(lambda on: self.iimpPaneToggled.emit(bool(on)))
+        l4.addWidget(self.iimp_on)
         self.interp_on = QtWidgets.QCheckBox(config.pane_titles()["interp"])
         self.interp_on.setChecked(bool(config.INTERP_PANE_ON))
         self.interp_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
@@ -1839,7 +1854,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         """Re-label the pane toggles when the cycle lookback changes -- the names quote the number."""
         for _k, _cb in (("px", self.px_on), ("liq", self.liq_on), ("cyc", self.cycle_on),
                         ("cvol", self.cvol_on), ("lines", self.lines_on), ("fratio", self.fratio_on),
-                        ("lob", self.lob_on), ("spd", self.spd_on), ("interp", self.interp_on)):
+                        ("lob", self.lob_on), ("spd", self.spd_on), ("interp", self.interp_on),
+                        ("iimp", self.iimp_on)):
             if _k in names:
                 _cb.setText(names[_k])
 
@@ -1848,6 +1864,9 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def set_spd_pane_on(self, on: bool) -> None:
         self.spd_on.blockSignals(True); self.spd_on.setChecked(bool(on)); self.spd_on.blockSignals(False)
+
+    def set_iimp_pane_on(self, on: bool) -> None:
+        self.iimp_on.blockSignals(True); self.iimp_on.setChecked(bool(on)); self.iimp_on.blockSignals(False)
 
     def set_fratio_pane_on(self, on: bool) -> None:
         self.fratio_on.blockSignals(True); self.fratio_on.setChecked(bool(on)); self.fratio_on.blockSignals(False)

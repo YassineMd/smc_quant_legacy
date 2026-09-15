@@ -1934,6 +1934,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._fratio_vline = None; self._fratio_hline = None
         self._fratio_tag = None; self._fratio_time_tag = None; self._fratio_proxy = None
         self._fratio_title = None
+        self._iimp_plot = None         # INTEREST x IMPACT pane (Flow mode): one bar per cycle, who leads + did it convert
+        self._iimp_vb = None
+        self._iimp_items = None        # (buy solid, buy hollow, sell solid, sell hollow) BarGraphItems
+        self._iimp_dots = None         # (wall, open road) ScatterPlotItems
+        self._iimp_guides = None
+        self._iimp_sig = None; self._iimp_t = 0.0; self._iimp_data = None; self._iimp_sized = False
+        self._iimp_on = bool(config.IIMP_PANE_ON)
+        self._iimp_vline = None; self._iimp_hline = None
+        self._iimp_tag = None; self._iimp_time_tag = None; self._iimp_proxy = None
+        self._iimp_title = None; self._iimp_badge = None; self._iimp_read = None
+        self._iimp_wall_cache = {}     # {cycle start: (ask $, bid $) at the open} -- kept ACROSS liquidity windows
         self._flow_pane_on = bool(config.FLOW_PANE_ON)     # the Buy/Sell Flow pane (the main chart in Flow mode)
         self._hlh_merge_span = str(config.HLH_MERGE_SPAN)   # HLH "A merged bloc spans at most" (persisted)
         self._lob_plot = None          # Book pane (Flow mode): resting book per side vs the last N cycles
@@ -2462,6 +2473,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_lob_pane_on(bool(getattr(self, "_lob_on", config.LOB_PANE_ON)))
             self.menu.set_spd_pane_on(bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)))
             self.menu.set_fratio_pane_on(bool(getattr(self, "_fratio_on", config.FRATIO_PANE_ON)))
+            self.menu.set_iimp_pane_on(bool(getattr(self, "_iimp_on", config.IIMP_PANE_ON)))
             self.menu.set_flow_lines_on(bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)))
             self.menu.set_hlh_span(str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)))
             self.menu.set_interp_pane_on(bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)))
@@ -2737,6 +2749,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.lobPaneToggled.connect(self._on_lob_pane_toggled)              # Book pane on/off
         self.menu.spdPaneToggled.connect(self._on_spd_pane_toggled)              # Speed pane on/off
         self.menu.fratioPaneToggled.connect(self._on_fratio_pane_toggled)        # Flow ratios pane on/off
+        self.menu.iimpPaneToggled.connect(self._on_iimp_pane_toggled)            # Interest x Impact pane on/off
         self.menu.flowLinesToggled.connect(self._on_flow_pane_toggled)           # the Buy/Sell Flow pane on/off
         self.menu.hlhSpanChanged.connect(self._on_hlh_span_changed)              # HLH merged-bloc span cap
         self.menu.interpPaneToggled.connect(self._on_interp_pane_toggled)        # Interpretation feed on/off
@@ -10686,6 +10699,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "spd_on": bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)),
                 "fratio_on": bool(getattr(self, "_fratio_on", config.FRATIO_PANE_ON)),
                 "fratio_mode": str(getattr(self, "_fratio_mode", config.FRATIO_MODE)),   # its top-right dropdown
+                "iimp_on": bool(getattr(self, "_iimp_on", config.IIMP_PANE_ON)),
                 "flow_pane_on": bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)),
                 "hlh_merge_span": str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)),
                 "interp_on": bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)),
@@ -10824,6 +10838,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _fcb.blockSignals(False)
             except RuntimeError:
                 self._fratio_combo = None
+        self._iimp_on = bool(s.get("iimp_on", config.IIMP_PANE_ON))
         self._flow_pane_on = bool(s.get("flow_pane_on", s.get("flow_lines_on", config.FLOW_PANE_ON)))
         _sp = str(s.get("hlh_merge_span", config.HLH_MERGE_SPAN) or config.HLH_MERGE_SPAN)
         self._hlh_merge_span = _sp if _sp in tuple(str(v) for v in config.HLH_MERGE_SPAN_CHOICES) else str(config.HLH_MERGE_SPAN)
@@ -17071,6 +17086,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._spd_sig = None; self._spd_t = 0.0
             self._fratio_show(bool(getattr(self, "_fratio_on", True)))
             self._fratio_sig = None; self._fratio_t = 0.0
+            self._iimp_show(bool(getattr(self, "_iimp_on", True)))
+            self._iimp_sig = None; self._iimp_t = 0.0
             self._interp_show(bool(getattr(self, "_interp_on", True)))
             self._flow_pane_apply()           # the rebuilt stack: collapse the flow pane again if it is off
         # The loaded set moved, so EVERYTHING derived from it must re-derive — same invalidation the replay step does.
@@ -17809,6 +17826,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._fratio_vline = None; self._fratio_hline = None
             self._fratio_tag = None; self._fratio_time_tag = None; self._fratio_title = None
             self._fratio_bdg = None
+            self._iimp_plot = None; self._iimp_vb = None; self._iimp_items = None; self._iimp_dots = None
+            self._iimp_guides = None; self._iimp_sig = None; self._iimp_sized = False; self._iimp_proxy = None
+            self._iimp_vline = None; self._iimp_hline = None
+            self._iimp_tag = None; self._iimp_time_tag = None
+            self._iimp_title = None; self._iimp_badge = None; self._iimp_read = None
             self._cvol_title = None; self._cvol_badge = None
             self._cyc_title = None; self._cyc_badge = None
             self._liq_title = None
@@ -19758,7 +19780,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                         ("cvol", getattr(self, "_cvol_title", None)),
                         ("lob", getattr(self, "_lob_title", None)),
                         ("spd", getattr(self, "_spd_title", None)),
-                        ("fratio", getattr(self, "_fratio_title", None))):
+                        ("fratio", getattr(self, "_fratio_title", None)),
+                        ("iimp", getattr(self, "_iimp_title", None))):
             if _it is not None:
                 try:
                     _it.setText(names[_k])
@@ -20063,7 +20086,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             hl, tg = d.get(hlk), d.get(tgk)
             out.append((k, pw, vb, vl,
                         (lambda hl=hl, tg=tg: (hl is not None and hl.hide(), tg is not None and tg.hide())), d.get(ttk)))
-        for k in ("px", "liq", "cyc", "cvol", "lob", "spd", "fratio"):
+        for k in ("px", "liq", "cyc", "cvol", "lob", "spd", "fratio", "iimp"):
             pw = d.get("_%s_plot" % k); vb = d.get("_%s_vb" % k)
             if pw is None or vb is None:
                 continue
@@ -20154,7 +20177,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         So READING is driven by demand and DRAWING by visibility. If nothing wants it, nothing is fetched --
         that is what keeps a toggled-off pane free rather than merely cheap."""
         for _w in (getattr(self, "_liq_plot", None), getattr(self, "_lob_plot", None),
-                   getattr(self, "interp_panel", None)):
+                   getattr(self, "interp_panel", None), getattr(self, "_iimp_plot", None)):
             if _w is not None:
                 try:
                     if _w.isVisible():
@@ -20964,6 +20987,327 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             if lim > cur * 0.98 or lim < cur * 0.55:
                 self._fratio_ytop = lim
                 self._fratio_vb.setYRange(-lim, lim, padding=0.0)
+
+    # ------------------------------------------------------------------
+    # INTEREST x IMPACT pane (Flow mode) -- one bar per cycle: who leads, whether it converted, what wall it met
+    # ------------------------------------------------------------------
+    def _on_iimp_pane_toggled(self, on: bool) -> None:
+        self._iimp_on = bool(on)
+        if not on:
+            self._flow_pane_lift()          # BEFORE a pane hides: it may be the collapsed chart's last neighbour
+        self._iimp_show(bool(on) and self.scanner_mode == "flow")
+        self._flow_pane_apply()
+        self._save_ui_state()
+
+    def _iimp_ensure_pane(self):
+        if self._iimp_plot is not None:
+            return self._iimp_plot
+        try:
+            self._ensure_canvas_panes()
+        except Exception:
+            pass
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return None
+        ax = PriceAxis(orientation="right")
+        pw = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"), "right": ax})
+        pw.setBackground("#141414")
+        pw.showAxis("right"); pw.hideAxis("left")
+        for _a in ("bottom", "right"):
+            pw.getAxis(_a).setPen(pg.mkPen("#dcdcdc", width=1))
+            pw.getAxis(_a).setTextPen(pg.mkPen("#dcdcdc"))
+        pw.showGrid(x=False, y=False)
+        pw.setMenuEnabled(False)
+        pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        pw.getAxis("bottom").set_scanner_active(False)
+        ax.tickStrings = lambda vals, sc, sp_: ["%.2gx" % (2.0 ** v) for v in vals]
+        vb = pw.getViewBox()
+        vb.setMouseEnabled(x=True, y=True)
+        vb.setXLink(self.vb)
+        # FOUR BarGraphItems, one brush each: the two sides x converted / did not. Grouping by class is what keeps
+        # the item count flat however many cycles are on screen, and there is no custom paint().
+        items = []
+        for _c, _solid in ((config.IIMP_BUY_COL, True), (config.IIMP_BUY_COL, False),
+                           (config.IIMP_SELL_COL, True), (config.IIMP_SELL_COL, False)):
+            _col = QtGui.QColor(_c)
+            it = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
+                                 brush=pg.mkBrush(_col.red(), _col.green(), _col.blue(), 190 if _solid else 0),
+                                 pen=pg.mkPen(_col, width=1.0 if _solid else 1.4))
+            it.setZValue(5)
+            pw.addItem(it); items.append(it)
+        self._iimp_items = tuple(items)
+        _wc = QtGui.QColor(config.IIMP_WALL_COL)
+        dots = []
+        for _fill in (True, False):
+            sc = pg.ScatterPlotItem(size=6, symbol="o", pen=pg.mkPen(_wc, width=1.2),
+                                    brush=pg.mkBrush(_wc) if _fill else pg.mkBrush(None))
+            sc.setZValue(7); pw.addItem(sc); dots.append(sc)
+        self._iimp_dots = tuple(dots)
+        guides = []
+        for _v in (float(np.log2(max(1e-9, config.IIMP_LOW))), float(np.log2(max(1e-9, config.IIMP_HIGH)))):
+            _p = pg.mkPen("#9aa4b2", width=1.0, style=QtCore.Qt.DashLine); _p.setCosmetic(True)
+            ln = pg.InfiniteLine(angle=0, pos=_v, pen=_p)
+            ln.setZValue(3); pw.addItem(ln, ignoreBounds=True); guides.append(ln)
+        self._iimp_guides = tuple(guides)
+        _z = pg.InfiniteLine(angle=0, pos=0.0, pen=pg.mkPen("#8a8a8a", width=1))
+        _z.setZValue(2); pw.addItem(_z, ignoreBounds=True)
+        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
+        self._iimp_vline = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
+        self._iimp_hline = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
+        self._iimp_vline.setZValue(15); self._iimp_hline.setZValue(15)
+        pw.addItem(self._iimp_vline, ignoreBounds=True); pw.addItem(self._iimp_hline, ignoreBounds=True)
+        self._iimp_hline.hide()
+        _tf = QtGui.QFont("Consolas", 8)
+        self._iimp_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._iimp_tag.textItem.setFont(_tf); self._iimp_tag.setZValue(16)
+        pw.addItem(self._iimp_tag, ignoreBounds=True); self._iimp_tag.hide()
+        self._iimp_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._iimp_time_tag.textItem.setFont(_tf); self._iimp_time_tag.setZValue(61)
+        pw.addItem(self._iimp_time_tag, ignoreBounds=True); self._iimp_time_tag.hide()
+        self._iimp_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_iimp_mouse_move)
+        # the last finished cycle spelled out, top right: "BUY 1.6x · impact 1.3x · wall 0.9x"
+        self._iimp_read = pg.TextItem(anchor=(1.0, 1.0), color=config.PANE_TITLE_COL)   # BOTTOM right: the top
+        self._iimp_read.textItem.setFont(QtGui.QFont("Consolas", int(config.PANE_TITLE_PT)))
+        self._iimp_read.setZValue(41)
+        pw.addItem(self._iimp_read, ignoreBounds=True)
+        self._iimp_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["iimp"])
+        self._iimp_badge = CycleBadgesItem("top")
+        pw.addItem(self._iimp_badge, ignoreBounds=True)
+        self._iimp_plot = pw
+        self._iimp_vb = vb
+        self._theme_sub_panes(not self._simple_bw())
+        sp.addWidget(pw)
+        pw.setMinimumHeight(60)
+        return pw
+
+    def _iimp_show(self, on: bool) -> None:
+        if on:
+            if self._iimp_ensure_pane() is None:
+                return
+            self._iimp_plot.setVisible(True)
+            if self._sub_pane_grow(self._iimp_plot, not getattr(self, "_iimp_sized", False), share=0.13):
+                self._iimp_sized = True
+        elif self._iimp_plot is not None:
+            try:
+                self._iimp_plot.setVisible(False)
+            except RuntimeError:
+                self._iimp_plot = None; self._iimp_items = None; self._iimp_vb = None; self._iimp_dots = None
+        self._stack_axis_sync()
+
+    def _iimp_hide_cursor(self) -> None:
+        for _it in (self._iimp_hline, self._iimp_tag, self._iimp_time_tag):
+            if _it is not None:
+                _it.hide()
+
+    def _iimp_sync_vline(self, x: float) -> None:
+        if self._iimp_vline is not None:
+            self._iimp_vline.setPos(x)
+
+    def _on_iimp_mouse_move(self, evt) -> None:
+        if self._iimp_vb is None or self._iimp_plot is None or not self._iimp_plot.isVisible():
+            return
+        pos = evt[0]
+        if not self._iimp_plot.sceneBoundingRect().contains(pos):
+            self._iimp_hide_cursor(); self._stack_time_hide()
+            return
+        pt = self._iimp_vb.mapSceneToView(pos)
+        self._iimp_vline.setPos(pt.x())
+        self._iimp_hline.setPos(pt.y()); self._iimp_hline.show()
+        (vx0, vx1), (vy0, vy1) = self._iimp_vb.viewRange()
+        self._iimp_tag.setText("%.2fx" % (2.0 ** float(pt.y())))
+        self._iimp_tag.setPos(vx1, pt.y()); self._iimp_tag.show()
+        _xl = self._x_time_label(pt.x())
+        if _xl:
+            self._iimp_time_tag.setText(_xl); self._iimp_time_tag.setPos(pt.x(), vy0); self._iimp_time_tag.show()
+        else:
+            self._iimp_time_tag.hide()
+        self._stack_cursor_sync("iimp", pt.x())
+
+    def _iimp_wall(self, t, is_buy):
+        """The FAR side's resting $ at each cycle's OPEN: asks for a buy cycle, bids for a sell one, from the last
+        book column that ENDS at or before the open, within IIMP_WALL_RADIUS ticks of mid.
+
+        Cached by cycle start across liquidity windows, exactly like the Book pane's means: the fetched range
+        follows the VIEW while the baseline needs the previous N cycles, which sit behind its left edge."""
+        cache = self._iimp_wall_cache
+        d = getattr(self, "_liq_data", None)
+        if d is not None:
+            lt0, lt1, cols, radii, mids, bidg, askg = d
+            ncol = int(np.size(mids))
+            if ncol > 0 and lt1 > lt0 and len(radii):
+                try:
+                    j = list(radii).index(int(config.IIMP_WALL_RADIUS))
+                except ValueError:
+                    j = min(range(len(radii)), key=lambda q: abs(int(radii[q]) - int(config.IIMP_WALL_RADIUS)))
+                step = (lt1 - lt0) / float(ncol)
+                for k in range(int(np.size(t))):
+                    c = int(np.floor((float(t[k]) - lt0) / step)) - 1      # the column that ENDS at or before the open
+                    if 0 <= c < ncol and float(mids[c]) > 0:
+                        cache[round(float(t[k]), 2)] = (float(askg[j][c]), float(bidg[j][c]))
+                if len(cache) > int(config.LOB_CACHE_MAX):
+                    for _k in sorted(cache)[:len(cache) - int(config.LOB_CACHE_MAX)]:
+                        cache.pop(_k, None)
+        out = np.full(int(np.size(t)), np.nan)
+        for k in range(int(np.size(t))):
+            v = cache.get(round(float(t[k]), 2))
+            if v is not None:
+                out[k] = v[0] if bool(is_buy[k]) else v[1]
+        return out
+
+    def _iimp_climb(self, t, t_end, is_buy):
+        """Per cycle: the side's own aggressive $ up to the cycle's EXTREME, and the seconds it took to get there.
+
+        Read off the store's own 1 s bins -- a cycle owns [floor(start), floor(end)] and its extreme is the first
+        bin holding the cycle's high (buy) or low (sell). Checked against the cycle's own high / low from
+        crosses_hl on 100% of 1539 cycles when this was measured. Only the cycles in the read are walked, and that
+        is bounded by FLOW_CROSS_MAX."""
+        st = self._flow
+        base = getattr(st, "_base", None)
+        n = int(len(st._buy)) if base is not None else 0
+        own = np.full(int(np.size(t)), np.nan); secs = np.full(int(np.size(t)), np.nan)
+        if not n:
+            return own, secs
+        base = int(base)
+        for k in range(int(np.size(t))):
+            a = int(np.floor(float(t[k]))) - base; z = int(np.floor(float(t_end[k]))) - base
+            if a < 0 or z >= n or z < a:
+                continue
+            if bool(is_buy[k]):
+                seg = st._pxh[a:z + 1]
+                h = a + int(np.argmax(np.where(seg > 0, seg, -np.inf))); src = st._buy
+            else:
+                seg = st._pxl[a:z + 1]
+                h = a + int(np.argmin(np.where(seg > 0, seg, np.inf))); src = st._sell
+            own[k] = float(np.sum(src[a:h + 1])); secs[k] = float(h - a + 1)
+        return own, secs
+
+    def _iimp_tick(self, now: float) -> None:
+        if self._iimp_plot is None or not self._iimp_plot.isVisible():
+            return
+        if now - self._iimp_t < float(config.CYCLE_RECALC_SECS):
+            return
+        self._iimp_t = now
+        (vx0, vx1), _ = self.vb.viewRange()
+        _args = (vx0 - self._lb_secs(), vx1, float(self._flow_win),
+                 float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                 int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
+        try:
+            # the SAME arguments the other cycle panes read with, so all three land on ONE memo entry; the price
+            # and high/low arrays are slices of that same entry rather than a second pass
+            self._iimp_data = (vx0, self._flow.crosses(*_args), self._flow.crosses_px(*_args),
+                               self._flow.crosses_hl(*_args))
+        except Exception:
+            return
+        self._iimp_draw(now)
+
+    def _iimp_draw(self, now: float) -> None:
+        """ONE BAR PER FINISHED CYCLE (user 2026-09-16), folding four panes into one row:
+
+        HEIGHT is log2 of the aggressive interest imbalance -- the buyers' taker $/s over the median of their own
+        previous N cycles, divided by the sellers' same ratio, so 1.0x means both sides are equally hot for their
+        own recent standards. COLOUR is the side that leads. The bar is SOLID when the push reached at least what
+        that side's own previous N cycles reached for that effort and time, and HOLLOW when it did not -- the
+        clash the user described, interest that did not convert. The DOT above the bar is the far side's resting
+        orders at the open against the previous N: filled for a wall, hollow for an open road, nothing in between.
+
+        Cuts are the measured terciles (see config). Nothing is drawn for the cycle still forming: its reach and
+        its extreme do not exist until it ends."""
+        if self._iimp_data is None or self._iimp_items is None:
+            return
+        vx0, (t, is_buy, strong, move, cbuy, csell, t_end, done), (px0, px1), (pxh, pxl) = self._iimp_data
+        if t.size == 0:
+            for it in self._iimp_items:
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            for sc in self._iimp_dots:
+                sc.setData([], [])
+            self._iimp_sig = ("empty",)
+            return
+        n_lb = self._lb_n(); n_mn = self._lb_min_n()
+        dur = np.maximum(t_end - t, 1e-9)
+        ar_b = _interp_prev(np.maximum(cbuy, 0.0) / dur, done, n_lb, n_mn)
+        ar_s = _interp_prev(np.maximum(csell, 0.0) / dur, done, n_lb, n_mn)
+        wall_raw = self._iimp_wall(t, is_buy)
+        wall = self._lob_ratio(wall_raw, done, n_lb, n_mn)
+        own_b, secs_b = self._iimp_climb(t, t_end, is_buy)
+        reach = np.where(is_buy, pxh - px0, px0 - pxl) / float(config.TICK_SIZE)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            imb = np.where((ar_b > 0) & (ar_s > 0) & np.isfinite(ar_b) & np.isfinite(ar_s),
+                           np.log2(np.maximum(ar_b, 1e-12) / np.maximum(ar_s, 1e-12)), np.nan)
+            y_r = np.log1p(np.maximum(reach, 0.0))
+            cb_, cd_, cw_ = config.IIMP_COEF_BUY
+            sb_, sd_, sw_ = config.IIMP_COEF_SELL
+            pred = np.where(is_buy,
+                            cb_ * np.log(np.maximum(own_b, 1.0)) + cd_ * np.log(np.maximum(secs_b, 1.0))
+                            + cw_ * np.log1p(np.maximum(wall_raw, 0.0)),
+                            sb_ * np.log(np.maximum(own_b, 1.0)) + sd_ * np.log(np.maximum(secs_b, 1.0))
+                            + sw_ * np.log1p(np.maximum(wall_raw, 0.0)))
+            resid = y_r - pred
+        # the score: this cycle's residual against the median of the previous N cycles OF THE SAME SIDE, so a
+        # buy cycle is judged against buy cycles (the Volume and Speed panes' rule)
+        score = np.full(int(t.size), np.nan)
+        hist = {True: [], False: []}
+        for k in range(int(t.size)):
+            sdk = bool(is_buy[k])
+            if np.isfinite(resid[k]):
+                h = hist[sdk]
+                if len(h) >= int(n_mn):
+                    score[k] = float(resid[k] - np.median(h[-int(n_lb):]))
+                if bool(done[k]):
+                    h.append(float(resid[k]))
+        keep = done & np.isfinite(imb) & np.isfinite(score) & (t >= vx0)
+        sig = (int(t.size), int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win), n_lb,
+               round(float(np.nan_to_num(imb[keep][-1] if keep.any() else 0.0)), 4),
+               round(float(np.nan_to_num(score[keep][-1] if keep.any() else 0.0)), 4))
+        if sig == self._iimp_sig:
+            return
+        self._iimp_sig = sig
+        if not keep.any():
+            for it in self._iimp_items:
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            for sc in self._iimp_dots:
+                sc.setData([], [])
+            return
+        x0 = t[keep]; x1 = t_end[keep]; v_raw = imb[keep]; good = score[keep] >= 0.0
+        _clip = float(np.log2(max(float(config.IIMP_CLIP), 1.0)))
+        v = np.clip(v_raw, -_clip, _clip)      # DRAWN within 1/8x .. 8x; the badge still prints the true multiple
+        up = v >= 0.0
+        groups = (up & good, up & ~good, ~up & good, ~up & ~good)
+        for it, m in zip(self._iimp_items, groups):
+            if not m.any():
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+                continue
+            it.setOpts(x0=x0[m], x1=x1[m], y0=np.minimum(0.0, v[m]), height=np.abs(v[m]))
+        # the wall / open-road dots, just past the bar's end so they never sit inside it
+        wk = wall[keep]
+        _pad = 0.06 * max(float(np.percentile(np.abs(v), 99.0)), 1.0)
+        for sc, m in zip(self._iimp_dots, (np.isfinite(wk) & (wk >= float(config.IIMP_WALL_HIGH)),
+                                           np.isfinite(wk) & (wk <= float(config.IIMP_WALL_LOW)))):
+            if not m.any():
+                sc.setData([], [])
+                continue
+            sc.setData(0.5 * (x0[m] + x1[m]), np.where(v[m] >= 0, v[m] + _pad, v[m] - _pad))
+        _cols = (_hex_rgb(config.IIMP_BUY_COL), _hex_rgb(config.IIMP_SELL_COL))
+        _mult = 2.0 ** v_raw                   # the TRUE multiple, even where the bar itself is clipped
+        self._pane_badge_set(getattr(self, "_iimp_badge", None), x0,
+                             float(self.vb.viewPixelSize()[0]), config.IIMP_BADGE_TIERS,
+                             lambda k: "%.2gx" % _mult[k], lambda k: _cols[0 if up[k] else 1],
+                             guard=float(config.IIMP_BADGE_GUARD_PX))
+        if self._iimp_read is not None:
+            _k = int(v.size) - 1
+            _w = wk[_k]
+            self._iimp_read.setText("%s %.2gx  ·  impact %.2gx  ·  wall %s" % (
+                "BUY" if up[_k] else "SELL", _mult[_k], 2.0 ** float(score[keep][_k]),
+                "-" if not np.isfinite(_w) else "%.2gx" % _w))
+            self._iimp_read.setColor(config.IIMP_BUY_COL if up[_k] else config.IIMP_SELL_COL)
+        lim = float(np.percentile(np.abs(v), 95.0)) * 1.15
+        lim = min(max(lim, abs(float(np.log2(max(1e-9, config.IIMP_HIGH)))) * 1.4, 1.0), _clip * 1.15)
+        cur = getattr(self, "_iimp_ytop", 0.0)
+        if lim > cur * 0.98 or lim < cur * 0.55:
+            self._iimp_ytop = lim
+            self._iimp_vb.setYRange(-lim, lim + self._pane_badge_headroom(self._iimp_vb, lim, 1), padding=0.0)
+        if self._iimp_read is not None:
+            (_rx0, _rx1), (_ry0, _ry1) = self._iimp_vb.viewRange()
+            self._iimp_read.setPos(_rx1, _ry0)      # the badge strip owns the top of the pane
 
     # ------------------------------------------------------------------
     # the Buy/Sell Flow PANE toggle (display only): in Flow mode the main chart IS that pane
@@ -21896,6 +22240,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._spd_sig = None; self._spd_t = 0.0
         self._fratio_show(bool(getattr(self, "_fratio_on", True)))  # ... and the Flow ratios pane
         self._fratio_sig = None; self._fratio_t = 0.0
+        self._iimp_show(bool(getattr(self, "_iimp_on", True)))      # ... and the Interest x Impact pane
+        self._iimp_sig = None; self._iimp_t = 0.0
         self._interp_show(bool(getattr(self, "_interp_on", True)))  # ... and the Interpretation feed
         self._flow_pane_apply()                                     # the pane itself may be toggled off
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
@@ -21920,6 +22266,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._lob_show(False)
         self._spd_show(False)
         self._fratio_show(False)
+        self._iimp_show(False)
         self._interp_show(False)
         self._flow_pane_lift()                                # every other mode draws on the main chart (idempotent)
         self._flow_curves = None
@@ -22017,6 +22364,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             pass
         try:
             self._fratio_tick(now)      # Flow ratios pane -- same read, so a memo hit
+        except Exception:
+            pass
+        try:
+            self._iimp_tick(now)        # Interest x Impact pane -- same read again
         except Exception:
             pass
         try:
@@ -22272,8 +22623,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         row = (np.floor(t[idx] / (min_px * max(1e-12, float(x_per_px)))).astype(np.int64) % max(1, rows))
         return idx, row, rows
 
-    def _pane_badge_set(self, item, t, x_per_px, tiers, fmt, colour, strong=None):
-        """Thin a pane's badges, then format ONLY the survivors. `fmt`/`colour` are called per kept index."""
+    def _pane_badge_set(self, item, t, x_per_px, tiers, fmt, colour, strong=None, guard=None):
+        """Thin a pane's badges, then format ONLY the survivors. `fmt`/`colour` are called per kept index.
+
+        `guard` is how much room at the left the strip leaves for the pane's NAME, in pixels; a pane whose title
+        is longer than the shared PANE_TITLE_GUARD_PX passes its own."""
         if item is None:
             return 0
         idx, row, rows = self._pane_badge_plan(t, x_per_px, tiers, strong)
@@ -22282,7 +22636,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             return 0
         item.setBadges([(float(t[k]), fmt(int(k)), colour(int(k)), int(row[j]))
                         for j, k in enumerate(idx)],
-                       rows, float(config.PANE_TITLE_GUARD_PX))
+                       rows, float(config.PANE_TITLE_GUARD_PX if guard is None else guard))
         return int(idx.size)
 
     @staticmethod
@@ -22333,7 +22687,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                            ("cvol", getattr(self, "_cvol_plot", None), getattr(self, "_cvol_vb", None)),
                            ("lob", getattr(self, "_lob_plot", None), getattr(self, "_lob_vb", None)),
                            ("spd", getattr(self, "_spd_plot", None), getattr(self, "_spd_vb", None)),
-                           ("fratio", getattr(self, "_fratio_plot", None), getattr(self, "_fratio_vb", None))):
+                           ("fratio", getattr(self, "_fratio_plot", None), getattr(self, "_fratio_vb", None)),
+                           ("iimp", getattr(self, "_iimp_plot", None), getattr(self, "_iimp_vb", None))):
             if _p is not None and _v is not None and _p.isVisible():
                 out.append((_k, _p, _v))
         return out
@@ -23284,7 +23639,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                           (getattr(self, "_spd_plot", None),
                            (getattr(self, "_spd_vline", None), getattr(self, "_spd_hline", None))),
                           (getattr(self, "_fratio_plot", None),
-                           (getattr(self, "_fratio_vline", None), getattr(self, "_fratio_hline", None)))):
+                           (getattr(self, "_fratio_vline", None), getattr(self, "_fratio_hline", None))),
+                          (getattr(self, "_iimp_plot", None),
+                           (getattr(self, "_iimp_vline", None), getattr(self, "_iimp_hline", None)))):
             if pw is None:
                 continue
             try:
