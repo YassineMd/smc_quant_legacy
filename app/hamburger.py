@@ -297,7 +297,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     lobPaneToggled = QtCore.Signal(bool)         # Book pane on/off (Flow mode)
     spdPaneToggled = QtCore.Signal(bool)         # Speed pane on/off (Flow mode)
     fratioPaneToggled = QtCore.Signal(bool)      # Flow ratios pane on/off (Flow mode): flow / buy / sell vs last N
-    flowLinesToggled = QtCore.Signal(bool)       # the Buy/Sell Flow $ LINES on the main Flow pane on/off
+    flowLinesToggled = QtCore.Signal(bool)       # the Buy/Sell Flow $ PANE (the main chart in Flow mode) on/off
+    hlhSpanChanged = QtCore.Signal(str)          # HLH: "A merged bloc spans at most" (the Pine's mergeSpan input)
     interpPaneToggled = QtCore.Signal(bool)     # Interpretation feed on/off (Flow mode, right side)
     cycleWinChanged = QtCore.Signal(float)       # the smoothing that defines a cycle boundary
     liqPaneToggled = QtCore.Signal(bool)          # resting-liquidity pane on/off (Flow mode)
@@ -1192,9 +1193,10 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                  "Keep ONLY the final blocs' VAH / VAL lines, their badges and the tables (+ a gray separator at "
                  "each day's midnight, from the day's low to its high); hide the profile, the rows, the D lines, "
                  "the levels and the time profile. Everything is still computed the same way.", False),
-                ("m10_hlh_badges", "· Bloc badges (name · time · volume)",
-                 "Display only. A badge on every final bloc (name, time, volume), hanging from the LEFT end of "
-                 "its VAL line, in the colour of its VAH / VAL lines.", True),
+                ("m10_hlh_badges", "· Bloc badges (name · time · $ volume)",
+                 "Display only. A badge on every final bloc (name, time, $ traded -- the bloc's contracts x "
+                 "price, in the big-player format), hanging from the LEFT end of its VAL line, in the colour "
+                 "of its VAH / VAL lines.", True),
                 ("m10_hlh_tables", "· Tables (1: blocs by volume · 2: per D · 3: day N vs N-1)",
                  "Display only: turning the tables off changes nothing else on the chart. Under each day's low, "
                  "left edge at midnight: every final bloc by volume (lowest -> highest) with its span, time, "
@@ -1207,6 +1209,43 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             cb.toggled.connect(lambda on, k=key: self.layerToggled.emit(k, on))
             self.layer_checks[key] = cb
             section.addWidget(cb)
+        # the Pine's "A merged bloc spans at most" (Merges group): the longest a merged bloc may be, first candle
+        # to last close (x 7 for the week profile). A pair that qualifies but would exceed it stays apart; table 3
+        # marks it "(not merged: max N h)". "No merge (day N alone)": a day's blocs only merge among themselves.
+        _row = QtWidgets.QWidget()
+        _lay = QtWidgets.QHBoxLayout(_row); _lay.setContentsMargins(18, 0, 8, 2); _lay.setSpacing(6)
+        _lab = QtWidgets.QLabel("· A merged bloc spans at most")
+        _lab.setStyleSheet("color:#aeb4c0; background:transparent; font-size:10px;")
+        _lay.addWidget(_lab)
+        self.hlh_span_combo = QtWidgets.QComboBox()
+        for _s in config.HLH_MERGE_SPAN_CHOICES:
+            self.hlh_span_combo.addItem(str(_s), str(_s))
+        try:
+            self.hlh_span_combo.setCurrentIndex(list(config.HLH_MERGE_SPAN_CHOICES).index(str(config.HLH_MERGE_SPAN)))
+        except ValueError:
+            pass
+        self.hlh_span_combo.setToolTip(
+            "The longest a merged bloc may be, from its first candle to the close of its last one (x 7 for the "
+            "week profile). A pair that qualifies for a merge but would exceed it stays apart; table 3 marks it "
+            "'(not merged: max N h)'. 'No merge (day N alone)': the blocs of a day only merge among themselves "
+            "(merges 1, 2 and 4 inside the day); nothing from the previous days takes part, and table 3 only "
+            "reports the overlaps. Changing it recomputes every day's merges.")
+        self.hlh_span_combo.currentIndexChanged.connect(
+            lambda _i: self.hlhSpanChanged.emit(str(self.hlh_span_combo.currentData() or config.HLH_MERGE_SPAN)))
+        _lay.addWidget(self.hlh_span_combo)
+        _lay.addStretch(1)
+        section.addWidget(_row)
+
+    def hlh_span(self) -> str:
+        return str(self.hlh_span_combo.currentData() or config.HLH_MERGE_SPAN)
+
+    def set_hlh_span(self, span: str) -> None:
+        """Session-restore (no re-emit)."""
+        choices = [str(v) for v in config.HLH_MERGE_SPAN_CHOICES]
+        if str(span) in choices:
+            self.hlh_span_combo.blockSignals(True)
+            self.hlh_span_combo.setCurrentIndex(choices.index(str(span)))
+            self.hlh_span_combo.blockSignals(False)
 
     def _build_bigplayer_sweeps_subtoggle(self, section) -> None:
         """'Sweeps' under Big Player Levels (user 2026-09-06): one taker order that ate through >= 2 book levels
@@ -1656,12 +1695,12 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.px_on.toggled.connect(lambda on: self.pxPaneToggled.emit(bool(on)))
         lpx.addWidget(self.px_on)
         self.lines_on = QtWidgets.QCheckBox(config.pane_titles()["lines"])
-        self.lines_on.setChecked(bool(config.FLOW_LINES_ON))
+        self.lines_on.setChecked(bool(config.FLOW_PANE_ON))
         self.lines_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
-        self.lines_on.setToolTip("The two lines of the Buy/Sell Flow pane itself -- taker buy $ (teal) and taker "
-                                 "sell $ (red) over the rolling window -- and their live badges. Display only: "
-                                 "the cycle lines, every cycle pane and the interpretation keep reading the "
-                                 "same tape with the lines hidden.")
+        self.lines_on.setToolTip("The Buy/Sell Flow pane itself -- the chart of taker buy $ (teal) and taker sell "
+                                 "$ (red) over the rolling window, with its live badges. OFF hides the whole pane "
+                                 "and the other panes take its room. Display only: the cycle lines, every cycle "
+                                 "pane and the interpretation keep reading the same tape.")
         self.lines_on.toggled.connect(lambda on: self.flowLinesToggled.emit(bool(on)))
         lpx.addWidget(self.lines_on)
         self.flow_sec.addWidget(wpx)
@@ -1749,12 +1788,11 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.fratio_on.setChecked(bool(config.FRATIO_PANE_ON))
         self.fratio_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
         self.fratio_on.setToolTip(
-            "The interpretation feed's three numbers as lines, one value per cycle held over the cycle: "
-            "FLOW (blue) = the cycle's aggressive $ per second, both sides, over the median of the previous "
-            "%d cycles; BUY (teal) and SELL (red) = each side's own $ per second over the median of that side's "
-            "previous %d. 1.0x is 'as usual'; the axis is log2 so 0.5x and 2x sit the same distance from it. "
-            "The forming cycle is rated from what it has so far and is drawn to the live edge."
-            % (config.CYCLE_BASE_N, config.CYCLE_BASE_N))
+            "The interpretation feed's buy / sell numbers as lines, one value per cycle held over the cycle: "
+            "BUY (teal) and SELL (red) = each side's own aggressive $ per second over the median of that "
+            "side's rate in the previous %d cycles. 1.0x is 'as usual'; the axis is log2 so 0.5x and 2x sit "
+            "the same distance from it. The forming cycle is rated from what it has so far and is drawn to "
+            "the live edge." % config.CYCLE_BASE_N)
         self.fratio_on.toggled.connect(lambda on: self.fratioPaneToggled.emit(bool(on)))
         l4.addWidget(self.fratio_on)
         self.interp_on = QtWidgets.QCheckBox(config.pane_titles()["interp"])

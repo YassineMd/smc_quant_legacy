@@ -392,25 +392,26 @@ def pane_titles(n=None):
         "spd": "CYCLE SPEED" + d + "ticks/s vs last %d" % n,
         "interp": "INTERPRETATION" + d + "one row per cycle",
         "px": "PRICE" + d + "one candle per cycle",
-        "lines": "BUY / SELL FLOW" + d + "taker $ per window (the lines)",
-        "fratio": "FLOW RATIOS" + d + "$/s vs last %d" % n + d + "flow / buy / sell",
+        "lines": "BUY / SELL FLOW" + d + "taker $ per window (the pane)",
+        "fratio": "FLOW RATIOS" + d + "$/s vs last %d" % n + d + "buy / sell",
     }
 
 
-# --- Flow ratios pane (user 2026-09-15): the interpretation feed's "flow 0.79x  buy 1.06  sell 0.35", as
-# three step lines on the cycle clock -- one value per cycle held over the cycle's span. EXACTLY the feed's
-# numbers: aggressive $ PER SECOND (both sides for flow, one side for buy / sell) over the MEDIAN of the
-# previous N cycles' same rate (prev_ratio, include_open, so the forming cycle is rated from what it has so
-# far and a half-formed cycle never enters a baseline). Same crosses() arguments as the other cycle panes, so
-# the read is a memo hit. Plotted in log2 (0.5x / 1x / 2x are equidistant); the dashed guide is 1.0x.
+# --- Flow ratios pane (user 2026-09-15): the interpretation feed's "buy 1.06  sell 0.35", as two step lines
+# on the cycle clock -- one value per cycle held over the cycle's span. EXACTLY the feed's numbers: each
+# side's aggressive $ PER SECOND over the MEDIAN of that side's rate in the previous N cycles (prev_ratio,
+# include_open, so the forming cycle is rated from what it has so far and a half-formed cycle never enters a
+# baseline). The feed's "flow" (both sides) is NOT drawn (user 2026-09-15: "remove the blue line"). Same
+# crosses() arguments as the other cycle panes, so the read is a memo hit. Plotted in log2 (0.5x / 1x / 2x
+# are equidistant); the dashed guide is 1.0x.
 FRATIO_PANE_ON = True
-FRATIO_FLOW_COL = "#4d84c4"     # flow (both sides) -- the pane family's blue, never green/red (those mean a side)
 FRATIO_BUY_COL = "#26a69a"      # buy -- the same teal as the buy $ line
 FRATIO_SELL_COL = "#ef5350"     # sell -- the same red as the sell $ line
-# --- the Buy/Sell Flow ($) LINES themselves get a toggle (user 2026-09-15: "we dont have it"): the two taker
-# $-per-window curves and their live badges on the main Flow pane. Display only -- the bins, the crossings,
-# every cycle pane and the feed keep reading the same store.
-FLOW_LINES_ON = True
+# --- the Buy/Sell Flow ($) PANE itself gets a toggle (user 2026-09-15: "we dont have it", then "I want the
+# whole chart to hide not just the lines"): in Flow mode the main chart IS that pane, so OFF hides the main
+# chart widget and the stack closes up around it. Display only -- the bins, the crossings, every cycle pane
+# and the feed keep reading the same store; leaving Flow mode always shows the chart again.
+FLOW_PANE_ON = True
 
 
 # --- PRICE pane, ABOVE the flow lines (user 2026-09-12) ---------------------------------------------------
@@ -567,6 +568,8 @@ HLH_EDGE_MERGE = True           # merge 4 (finished days only): blocs sharing a 
 HLH_EDGE_TICKS = 1
 HLH_MERGE_SPAN = "36h"          # a merged bloc spans at most this (first candle -> last close; x 7 for weeks): "12h", "24h",
                                 # "36h", "48h", "72h", "96h", "1 week", or "No merge (day N alone)" = nothing from earlier days
+HLH_MERGE_SPAN_CHOICES = ("No merge (day N alone)", "12h", "24h", "36h", "48h", "72h", "96h", "1 week")
+                                # ... the hamburger dropdown under the HLH layer (the Pine's input, persisted hlh_merge_span)
 # -- Bloc colours (VAH / VAL of the final blocs): rank = % of the previous HLH_VOL_LOOK blocs with a LOWER volume
 HLH_VOL_LOOK = 20
 HLH_GOLD_PCT = 69.0             # rank above -> orange, 4 px

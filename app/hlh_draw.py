@@ -309,7 +309,7 @@ def build_period(res: H.PeriodResult, rows: List[H.MB], tabs: List[str], xmap, c
                     dashes.append(Dash(xa, xbb, m.val2, lc))
             if badges:
                 by = m.val if m.val is not None else (m.yLo if m.yLo is not None else lo)
-                txt = "%s\n%s\n%s" % (m.name, H.fmt_bloc(m.mins, m.tA, m.tB, p.tz), H.fmt_vol(m.vol))
+                txt = "%s\n%s\n%s" % (m.name, H.fmt_bloc(m.mins, m.tA, m.tB, p.tz), H.fmt_usd(m.usd))
                 labels.append(Label(xa, by, txt, "upper_left", qcol(chex, 80), txt_dark, "small"))
 
         # -- the tables, under the period's low with their left edge at midnight
@@ -562,6 +562,19 @@ class HlhOverlay:
         self._periods_cache: List[tuple] = []
         self._periods_sig = None
         self._params: Optional[H.Params] = None
+        self.merge_span: Optional[str] = None            # the hamburger's "A merged bloc spans at most" (None = config)
+
+    def set_merge_span(self, span: Optional[str]) -> None:
+        """The Pine's mergeSpan input at runtime. Only the CHAIN reads it (merges 3 / 4 and the span cap), so
+        the per-period results stay cached and the chain is refolded once on the next tick."""
+        span = str(span) if span else None
+        if span == self.merge_span:
+            return
+        self.merge_span = span
+        self._chain.clear()
+        self._periods_sig = None
+        self._t_periods = 0.0
+        self._out.clear()
 
     # -------------------------------------------------------------- params / floors
     @staticmethod
@@ -680,7 +693,7 @@ class HlhOverlay:
         chain folded once, the forming one recomputed (and re-run over the chain) when its candles changed; the
         whole thing gated by the feeds' revs. ver = (the period's own version, the chain's fold id): a finished
         period's rows can change when a LATER period merges them, so a fold re-keys every period."""
-        sig = tuple((tf, f.rev) for tf, f in sorted(self.feeds.items())) + (bool(week_on),)
+        sig = tuple((tf, f.rev) for tf, f in sorted(self.feeds.items())) + (bool(week_on), self.merge_span)
         if not force and sig == self._periods_sig:
             return self._periods_cache            # no feed moved -> nothing to recompute (revs move per poll)
         if not force and now - self._t_periods < float(config.HLH_RECALC_SECS) and self._periods_sig is not None:
@@ -688,6 +701,8 @@ class HlhOverlay:
         self._periods_sig = sig
         self._t_periods = now
         p = self._params = self.params()
+        if self.merge_span:
+            p.merge_span = str(self.merge_span)
         out = []
         kinds = [(False, config.HLH_DAY_TF)] + ([(True, config.HLH_WEEK_TF)] if week_on else [])
         live = set()

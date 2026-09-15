@@ -1929,7 +1929,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._fratio_vline = None; self._fratio_hline = None
         self._fratio_tag = None; self._fratio_time_tag = None; self._fratio_proxy = None
         self._fratio_title = None
-        self._flow_lines_on = bool(config.FLOW_LINES_ON)   # the Buy/Sell Flow $ lines + their badges (display only)
+        self._flow_pane_on = bool(config.FLOW_PANE_ON)     # the Buy/Sell Flow pane (the main chart in Flow mode)
+        self._hlh_merge_span = str(config.HLH_MERGE_SPAN)   # HLH "A merged bloc spans at most" (persisted)
         self._lob_plot = None          # Book pane (Flow mode): resting book per side vs the last N cycles
         self._lob_vb = None
         self._lob_items = None         # (low, normal, high) x (bid filled, ask hollow) BarGraphItems
@@ -2456,7 +2457,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_lob_pane_on(bool(getattr(self, "_lob_on", config.LOB_PANE_ON)))
             self.menu.set_spd_pane_on(bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)))
             self.menu.set_fratio_pane_on(bool(getattr(self, "_fratio_on", config.FRATIO_PANE_ON)))
-            self.menu.set_flow_lines_on(bool(getattr(self, "_flow_lines_on", config.FLOW_LINES_ON)))
+            self.menu.set_flow_lines_on(bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)))
+            self.menu.set_hlh_span(str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)))
             self.menu.set_interp_pane_on(bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)))
             if getattr(self, "interp_panel", None) is not None:
                 self.interp_panel.setLookback(self._lb_n())   # silent: must not echo back as a change
@@ -2730,7 +2732,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.lobPaneToggled.connect(self._on_lob_pane_toggled)              # Book pane on/off
         self.menu.spdPaneToggled.connect(self._on_spd_pane_toggled)              # Speed pane on/off
         self.menu.fratioPaneToggled.connect(self._on_fratio_pane_toggled)        # Flow ratios pane on/off
-        self.menu.flowLinesToggled.connect(self._on_flow_lines_toggled)          # the Buy/Sell Flow $ lines on/off
+        self.menu.flowLinesToggled.connect(self._on_flow_pane_toggled)           # the Buy/Sell Flow pane on/off
+        self.menu.hlhSpanChanged.connect(self._on_hlh_span_changed)              # HLH merged-bloc span cap
         self.menu.interpPaneToggled.connect(self._on_interp_pane_toggled)        # Interpretation feed on/off
         self.menu.cycleWinChanged.connect(self._on_cyc_win)                      # cycle-defining window
         self.menu.pxPaneToggled.connect(self._on_px_pane_toggled)                # PRICE pane (above) on/off
@@ -2824,6 +2827,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """
         prev_mode = self.scanner_mode
         self.scanner_mode = mode
+        if prev_mode == "flow" and mode != "flow":
+            self._flow_pane_uncap()   # BEFORE the teardown re-parents the chart: torn down while capped at 1 px,
+                                      # the rebuilt stack came up 68 px tall and stayed so until a window resize
         self.clear_scanner_canvas()   # teardown first
         if prev_mode == "depth_heatmap":
             self._hm_exit()           # Phase 2b: tear down the heatmap (unsubscribe live push, free grid)
@@ -6275,7 +6281,22 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if st is None:
             from .hlh_draw import HlhOverlay
             st = self._hlh = HlhOverlay()
+            st.set_merge_span(str(self.__dict__.get("_hlh_merge_span", config.HLH_MERGE_SPAN)))
         return st
+
+    def _on_hlh_span_changed(self, span: str) -> None:
+        """Hamburger 'A merged bloc spans at most' -> the chain is refolded with the new cap on the next draw;
+        the per-period results (profile, Ds, blocs, merges 1-2) stay cached, only merges 3 / 4 re-run."""
+        span = str(span)
+        if span not in tuple(str(v) for v in config.HLH_MERGE_SPAN_CHOICES):
+            return
+        self._hlh_merge_span = span
+        st = self.__dict__.get("_hlh", None)
+        if st is not None:
+            st.set_merge_span(span)
+        self._hlh_out = None; self._hlh_px_out = None
+        self._last_scanner_sig = None
+        self._save_ui_state()
 
     def _hlh_scan_floor(self):
         """Earliest bar time the HLH profile needs ON SCREEN -- 00:00 (HLH_TZ) of the oldest of HLH_DAYS day
@@ -10679,7 +10700,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "lob_on": bool(getattr(self, "_lob_on", config.LOB_PANE_ON)),
                 "spd_on": bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)),
                 "fratio_on": bool(getattr(self, "_fratio_on", config.FRATIO_PANE_ON)),
-                "flow_lines_on": bool(getattr(self, "_flow_lines_on", config.FLOW_LINES_ON)),
+                "flow_pane_on": bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)),
+                "hlh_merge_span": str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)),
                 "interp_on": bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)),
                 "cycle_lb": int(getattr(self, "_cycle_lb", config.CYCLE_BASE_N)),
                 "px_pane_on": bool(getattr(self, "_px_pane_on", config.PX_PANE_ON)),
@@ -10806,7 +10828,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._lob_on = bool(s.get("lob_on", config.LOB_PANE_ON))
         self._spd_on = bool(s.get("spd_on", config.SPEED_PANE_ON))
         self._fratio_on = bool(s.get("fratio_on", config.FRATIO_PANE_ON))
-        self._flow_lines_on = bool(s.get("flow_lines_on", config.FLOW_LINES_ON))
+        self._flow_pane_on = bool(s.get("flow_pane_on", s.get("flow_lines_on", config.FLOW_PANE_ON)))
+        _sp = str(s.get("hlh_merge_span", config.HLH_MERGE_SPAN) or config.HLH_MERGE_SPAN)
+        self._hlh_merge_span = _sp if _sp in tuple(str(v) for v in config.HLH_MERGE_SPAN_CHOICES) else str(config.HLH_MERGE_SPAN)
         self._interp_on = bool(s.get("interp_on", config.INTERP_PANE_ON))
         self._cycle_lb = max(int(config.CYCLE_BASE_N_MIN),
                              min(int(config.CYCLE_BASE_N_MAX),
@@ -18661,11 +18685,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _xpx, _ypx = (float(v) for v in self._px_vb.viewPixelSize())
         except Exception:
             _xpx = _ypx = 0.0
+        # the marks sit on the MIDDLE of the cycle candle they fall in (user 2026-09-15, aesthetic only): the
+        # candle boundaries come from the pane's own cache plus the forming cycle. The forming candle's middle
+        # moves with the clock, so its end enters the signature at a 5 s grain.
+        _cs, _ce = self._px_cycle_bounds(time.time())
         sig = (round(dx0, 2), round(dx1, 2), thr, _sw_on, _bw, getattr(self, "_bp_rev", 0),
-               len(self._bp_trades), len(self._bp_sweeps), round(_xpx, 9), round(_ypx, 9))
+               len(self._bp_trades), len(self._bp_sweeps), round(_xpx, 9), round(_ypx, 9),
+               int(np.size(_cs)), int(float(_ce[-1]) // 5.0) if np.size(_ce) else 0)
         if sig == self._px_bp_sig:
             return                                      # nothing moved -> not even an events lookup
         self._px_bp_sig = sig
+
+        def _snap(ts_):
+            """(x, key) for a print at ts_: the middle of its cycle candle and that candle's start, or -- with no
+            candle around it -- its own time and second."""
+            if np.size(_cs):
+                k = int(np.searchsorted(_cs, float(ts_), side="right")) - 1
+                if k >= 0 and float(ts_) <= float(_ce[k]) + 1.0:
+                    return 0.5 * (float(_cs[k]) + float(_ce[k])), round(float(_cs[k]), 3)
+            return float(ts_), round(float(ts_))
         if self._px_bp_buy is None:
             self._px_bp_buy = pg.ScatterPlotItem(pxMode=True, symbol="o",
                                                  pen=pg.mkPen((40, 230, 120, 235), width=1.5),
@@ -18685,10 +18723,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         from .trades_tape import _fmt_usd
         merged = {}
         smerged = {}
+        _xat = {}
         for e in ev:
             if e[3] < thr or not (dx0 <= e[0] <= dx1):
                 continue
-            key = (round(float(e[0])), round(float(e[2]), 4), e[1])     # one SECOND, one price, one side
+            _x, _kt = _snap(e[0])
+            key = (_kt, round(float(e[2]), 4), e[1])     # one CANDLE (or second), one price, one side
+            _xat[_kt] = _x
             if e[4] == "sw":
                 _m = smerged.get(key)
                 smerged[key] = ([e[3], e[5], e[6]] if _m is None
@@ -18700,11 +18741,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         bx = []; by = []; bs = []; sx = []; sy = []; ss = []; labels = []
         for (t_, price, side), usd in levels:
             _px = self._bp_bubble_px(usd, thr)             # the SAME radius curve the bucket canvas uses
+            _x = float(_xat.get(t_, t_))
             if side > 0:
-                bx.append(float(t_)); by.append(price); bs.append(_px)
+                bx.append(_x); by.append(price); bs.append(_px)
             else:
-                sx.append(float(t_)); sy.append(price); ss.append(_px)
-            labels.append((float(t_), price, _fmt_usd(usd)))
+                sx.append(_x); sy.append(price); ss.append(_px)
+            labels.append((_x, price, _fmt_usd(usd)))
         self._px_bp_buy.setData(x=bx, y=by, size=bs)
         self._px_bp_sell.setData(x=sx, y=sy, size=ss)
         drawn = 0
@@ -18724,7 +18766,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _d["poly"].setPen(pg.mkPen(_rgb[0], _rgb[1], _rgb[2], 235, width=1.5))
                     _d["poly"].setBrush(pg.mkBrush(_rgb[0], _rgb[1], _rgb[2], 120))
                     _d["buy"] = buy
-                _x = float(t_)
+                _x = float(_xat.get(t_, t_))
                 _d["poly"].setPolygon(QtGui.QPolygonF([
                     QtCore.QPointF(_x, _mid + 0.5 * _h), QtCore.QPointF(_x + _hw, _mid),
                     QtCore.QPointF(_x, _mid - 0.5 * _h), QtCore.QPointF(_x - _hw, _mid)]))
@@ -18738,6 +18780,27 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._px_bp_labels.setLabels(labels, _txtc)
         self._px_bp_labels.setVisible(True)
         self._px_bp_shown = True
+
+    def _px_cycle_bounds(self, now: float):
+        """(starts, ends) of the cycle candles this pane knows, sorted by start: the cached finished cycles
+        plus the forming one (its end clamped to now, like the candle the overlay draws). Empty arrays on a
+        cold pane."""
+        arr = getattr(self, "_px_arr", None)
+        d = getattr(self, "_px_data", None)
+        cs = [np.asarray(arr[0], dtype=np.float64)] if (arr is not None and np.size(arr[0])) else []
+        ce = [np.asarray(arr[1], dtype=np.float64)] if (arr is not None and np.size(arr[1])) else []
+        try:
+            if d is not None and np.size(d[2]) and not bool(d[4][-1]):
+                _t0 = float(d[2][-1])
+                _t1 = max(_t0 + 1e-3, min(float(now), float(d[3][-1])))
+                cs.append(np.array([_t0])); ce.append(np.array([_t1]))
+        except Exception:
+            pass
+        if not cs:
+            return np.zeros(0), np.zeros(0)
+        s_ = np.concatenate(cs); e_ = np.concatenate(ce)
+        o = np.argsort(s_, kind="stable")
+        return s_[o], e_[o]
 
     def _px_wheel(self, ev, axis=None):
         """Modifier wheel over the PRICE pane, matching the bucket candle chart: Shift -> zoom X only,
@@ -20472,17 +20535,17 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         vb = pw.getViewBox()
         vb.setMouseEnabled(x=True, y=True)
         vb.setXLink(self.vb)
-        # THREE step lines, one PlotCurveItem each (flow / buy / sell): a value per cycle held over the cycle's
-        # span, NaN where a cycle has no baseline yet so the line breaks instead of joining across it. Solid
-        # cosmetic pens, round joins, antialias OFF (the flow lines measured a 25x repaint cost with it on).
+        # TWO step lines, one PlotCurveItem each (buy / sell): a value per cycle held over the cycle's span,
+        # NaN where a cycle has no baseline yet so the line breaks instead of joining across it. Solid cosmetic
+        # pens, round joins, antialias OFF (the flow lines measured a 25x repaint cost with it on). The feed's
+        # "flow" (both sides) is computed but not drawn (user 2026-09-15: "remove the blue line").
         items = []
-        for _c, _w in ((config.FRATIO_FLOW_COL, 2.0), (config.FRATIO_BUY_COL, 1.5), (config.FRATIO_SELL_COL, 1.5)):
-            _pn = pg.mkPen(_c, width=_w, style=QtCore.Qt.SolidLine); _pn.setCosmetic(True)
+        for _c in (config.FRATIO_BUY_COL, config.FRATIO_SELL_COL):
+            _pn = pg.mkPen(_c, width=1.8, style=QtCore.Qt.SolidLine); _pn.setCosmetic(True)
             _pn.setCapStyle(QtCore.Qt.RoundCap); _pn.setJoinStyle(QtCore.Qt.RoundJoin)
             it = pg.PlotCurveItem(pen=_pn, antialias=False, connect="finite")
             it.setZValue(5)
             pw.addItem(it); items.append(it)
-        items[0].setZValue(6)                        # flow on top of the two sides
         self._fratio_items = tuple(items)
         _g = pg.mkPen("#9aa4b2", width=1.0, style=QtCore.Qt.DashLine); _g.setCosmetic(True)
         _z = pg.InfiniteLine(angle=0, pos=0.0, pen=_g)      # 1.0x: "as usual"
@@ -20593,9 +20656,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         return t_end_c, flow, buy, sell
 
     def _fratio_draw(self, now: float) -> None:
-        """Three step lines: each cycle's flow / buy / sell ratio held from its start to its end, in log2 so
-        0.5x and 2x sit the same distance from the 1.0x guide. The forming cycle is rated from what it has so
-        far and drawn to the live edge (its value moves as the cycle fills -- the feed's row does the same)."""
+        """Two step lines: each cycle's buy / sell ratio held from its start to its end, in log2 so 0.5x and
+        2x sit the same distance from the 1.0x guide. The forming cycle is rated from what it has so far and
+        drawn to the live edge (its value moves as the cycle fills -- the feed's row does the same)."""
         if self._fratio_data is None or self._fratio_items is None:
             return
         vx0, vx1, (t, is_buy, strong, move, cbuy, csell, t_end, done) = self._fratio_data
@@ -20609,8 +20672,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         keep = t_end_c >= vx0
         _form = float(now - t[-1]) if (live and not bool(done[-1])) else 0.0
         sig = (int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win), int(_form // 2), self._lb_n(),
-               round(float(np.nan_to_num(flow[-1])), 5), round(float(np.nan_to_num(buy[-1])), 5),
-               round(float(np.nan_to_num(sell[-1])), 5))
+               round(float(np.nan_to_num(buy[-1])), 5), round(float(np.nan_to_num(sell[-1])), 5))
         if sig == self._fratio_sig:
             return
         self._fratio_sig = sig
@@ -20622,7 +20684,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         xs = np.empty(2 * x0.size, dtype=np.float64)
         xs[0::2] = x0; xs[1::2] = x1
         vals = []
-        for r in (flow[keep], buy[keep], sell[keep]):
+        for r in (buy[keep], sell[keep]):
             with np.errstate(divide="ignore", invalid="ignore"):
                 v = np.where(np.isfinite(r) & (r > 0), np.log2(np.maximum(r, 1e-9)), np.nan)
             vals.append(np.repeat(v, 2))
@@ -20639,35 +20701,73 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 self._fratio_vb.setYRange(-lim, lim, padding=0.0)
 
     # ------------------------------------------------------------------
-    # the Buy/Sell Flow $ LINES toggle (display only)
+    # the Buy/Sell Flow PANE toggle (display only): in Flow mode the main chart IS that pane
     # ------------------------------------------------------------------
-    def _on_flow_lines_toggled(self, on: bool) -> None:
-        self._flow_lines_on = bool(on)
-        self._flow_lines_apply()
+    def _on_flow_pane_toggled(self, on: bool) -> None:
+        self._flow_pane_on = bool(on)
+        self._flow_pane_apply()
         self._save_ui_state()
 
-    def _flow_lines_apply(self) -> None:
-        """Show / hide the two taker-$ curves and their live badges. Nothing else changes: the bins keep
-        filling, the crossings, every cycle pane and the feed read the same store, and the y range is left as
-        it was so the cycle badges under zero keep their strip."""
-        on = bool(getattr(self, "_flow_lines_on", True))
-        cv = getattr(self, "_flow_curves", None)
-        if cv is not None:
-            for _c in cv:
-                try:
-                    _c.setVisible(on)
-                except RuntimeError:
-                    pass
-        for _k in ("t_flow_b", "t_flow_s"):
-            rec = (getattr(self, "_scan_trackers", {}) or {}).get(_k)
-            if not rec:
-                continue
-            for _it in (rec.get("line"), rec.get("text")):
-                if _it is not None:
-                    try:
-                        _it.setVisible(on)
-                    except RuntimeError:
-                        pass
+    _PANE_MAX_H = 16777215                                 # QWIDGETSIZE_MAX: no height cap
+
+    def _flow_pane_apply(self) -> None:
+        """Show / hide the Buy/Sell Flow pane -- the main chart widget, while Flow mode is up.
+
+        NOT setVisible(False). The main chart's viewbox is the x-link MASTER of every pane, and pyqtgraph lines
+        a linked view up with its master by SCREEN GEOMETRY (linkedViewChanged: same x-per-pixel, pixel columns
+        aligned) -- a hidden master keeps a stale geometry and the sub-panes were handed a wrong left edge
+        (measured 211 s off on the gate tape). So the pane is COLLAPSED instead: a 1 px maximum height keeps it
+        visible to the link with its true width and column, gives it no room, and the one clock axis moves to the
+        bottom-most pane with real pixels (_stack_axis_sync skips anything under 24 px). Leaving Flow mode always
+        lifts the cap (every other mode draws on this chart). Coming back it gets a real slice of the stack."""
+        if self.scanner_mode != "flow" or self.plot is None:
+            return
+        on = bool(getattr(self, "_flow_pane_on", True))
+        try:
+            if on:
+                if self.plot.maximumHeight() < self._PANE_MAX_H:
+                    self.plot.setMaximumHeight(self._PANE_MAX_H)
+                self._flow_pane_grow()
+            elif self.plot.maximumHeight() != 1:
+                self.plot.setMaximumHeight(1)
+        except RuntimeError:
+            pass
+        self._flow_axis_key = None                         # the owner of the one clock axis may have changed
+        self._stack_axis_sync()
+
+    def _flow_pane_uncap(self) -> None:
+        """Lift the 1 px cap of a collapsed flow pane (idempotent) and hand the chart its height back."""
+        try:
+            if self.plot is not None and self.plot.maximumHeight() < self._PANE_MAX_H:
+                self.plot.setMaximumHeight(self._PANE_MAX_H)
+                self._flow_axis_key = None
+                self._flow_pane_grow()
+        except RuntimeError:
+            pass
+
+    def _flow_pane_grow(self) -> None:
+        """Give the main chart ~35% of the stack when it comes back with (almost) no height, taking from the
+        visible panes in proportion. Hidden panes keep their 0."""
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return
+        try:
+            base = self._sv_base()
+            sz = sp.sizes()
+            if not sz or base >= len(sz) or sz[base] >= 140:
+                return
+            tot = sum(sz) or sp.height() or 800
+            want = max(200, int(tot * 0.35))
+            others = [i for i in range(len(sz)) if i != base and sz[i] > 0]
+            rest = sum(sz[i] for i in others)
+            if rest > 0:
+                scale = max(0.0, tot - want) / float(rest)
+                for i in others:
+                    sz[i] = max(24, int(sz[i] * scale))
+            sz[base] = want
+            sp.setSizes(sz)
+        except Exception:
+            pass
 
     def _on_lob_pane_toggled(self, on: bool) -> None:
         self._lob_on = bool(on)
@@ -21500,6 +21600,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._fratio_show(bool(getattr(self, "_fratio_on", True)))  # ... and the Flow ratios pane
         self._fratio_sig = None; self._fratio_t = 0.0
         self._interp_show(bool(getattr(self, "_interp_on", True)))  # ... and the Interpretation feed
+        self._flow_pane_apply()                                     # the pane itself may be toggled off
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
         self._flow_subscribe(backfill=True)
         now = time.time()
@@ -21523,6 +21624,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._spd_show(False)
         self._fratio_show(False)
         self._interp_show(False)
+        self._flow_pane_uncap()                               # every other mode draws on the main chart
         self._flow_curves = None
         self._flow_sig = None
         self._flow_xln = None; self._flow_xsig = None; self._flow_xbadge = None
@@ -21677,7 +21779,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             sell_c = self._add_scanner_item(pg.PlotCurveItem(pen=_sp, antialias=False))
             buy_c.setZValue(6); sell_c.setZValue(5)
             self._flow_curves = (buy_c, sell_c)
-            self._flow_lines_apply()                    # honour the lines toggle on a fresh pair
         buy_c, sell_c = self._flow_curves
         buy_c.setData(t, buy); sell_c.setData(t, sell)
         if len(t) == 0:
@@ -21704,8 +21805,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                               "%s (%.0f%%)" % (self._fmt_usd_short(b_now), 100 * b_now / tot), float(t[-1]), "up")
         self._scanner_tracker("t_flow_s", s_now, "#ef5350",
                               "%s (%.0f%%)" % (self._fmt_usd_short(s_now), 100 * s_now / tot), float(t[-1]), "down")
-        if not getattr(self, "_flow_lines_on", True):
-            self._flow_lines_apply()                    # the trackers are (re)created visible: hide them again
 
     def _flow_cross_draw(self) -> None:
         """Vertical dashed lines where a CYCLE started: the two flow lines crossed and the cross was confirmed.

@@ -168,6 +168,7 @@ class Bloc:
     vaB: Optional[float] = None
     vah2: Optional[float] = None  # outer value area (va2_pct %)
     val2: Optional[float] = None
+    usd: float = 0.0            # $ traded by the bloc's candles (contracts x close), the badge's third line
 
 
 @dataclass
@@ -207,6 +208,7 @@ class MB:
     cls: Optional[int] = None     # 2 = orange, 1 = coloured, 0 = dark gray
     lnColor: Optional[str] = None   # the colour its VAH / VAL got (hex)
     width: int = 3                # ... and the width (px)
+    usd: float = 0.0              # $ traded (adds up through every merge, like vol)
 
 
 @dataclass
@@ -627,6 +629,21 @@ def fmt_price(x: Optional[float], decimals: int) -> str:
     return "-" if x is None else ("%%.%df" % int(decimals)) % float(x)
 
 
+def fmt_usd(a: float) -> str:
+    """The big-player bubbles' format (app/trades_tape._fmt_usd): $1.00M, $996K, $1.5K, $312 -- plus a billions
+    tier a day's bloc can reach and a single print never does (the terminal's _fmt_usd_short has it too)."""
+    a = float(a)
+    if a >= 1_000_000_000:
+        return "$%.2fB" % (a / 1_000_000_000)
+    if a >= 1_000_000:
+        return "$%.2fM" % (a / 1_000_000)
+    if a >= 100_000:
+        return "$%.0fK" % (a / 1_000)
+    if a >= 1_000:
+        return "$%.1fK" % (a / 1_000)
+    return "$%s" % format(int(round(a)), ",")
+
+
 def fmt_vol(v: float) -> str:
     """Pine format.volume: 312K, 1.42M, 2.1B."""
     a = abs(float(v))
@@ -908,8 +925,10 @@ def fill_bloc_stats(cand: Candles, areas: List[TPArea], bl: List[Bloc], t0: floa
             bb.bLo = float(cand.l[sel].min())
             bb.tA = float(cand.t[sel].min())
             bb.tB = float((cand.t[sel] + cand.m[sel] * 60.0).max())
+            bb.usd = float((cand.v[sel] * cand.c[sel]).sum())    # contracts x close: the $ the badge shows
         else:
             bb.bHi = bb.bLo = bb.tA = bb.tB = None
+            bb.usd = 0.0
 
 
 def time_overlap(a, o) -> bool:
@@ -950,6 +969,7 @@ def merge_blocs(areas: List[TPArea], bl: List[Bloc], inside_pct: float) -> None:
             win, los = bl[wi], bl[li]
             win.ids = list(win.ids) + [li] + list(los.ids)
             win.vol += los.vol
+            win.usd += los.usd
             win.mins += los.mins
             win.bHi = _nmax(win.bHi, los.bHi)
             win.bLo = _nmin(win.bLo, los.bLo)
@@ -1047,7 +1067,7 @@ def merge_same_d(cand: Candles, areas: List[TPArea], bl: List[Bloc], lo: float, 
             ar = areas[bb.area]
             rows.append(MB(bb.area, bb.ref, bb.members, [bi] + list(bb.ids), bb.mins, bb.vol, bb.tA, bb.tB, bb.vah, bb.val,
                            bb.vaA, bb.vaB, False, col=d_colour_hex(ar.num), dName=ar.name, bHi=bb.bHi, bLo=bb.bLo,
-                           vah2=bb.vah2, val2=bb.val2))
+                           vah2=bb.vah2, val2=bb.val2, usd=bb.usd))
     n = 0
     merging = p.d_merge and len(rows) > 1
     while merging:
@@ -1073,7 +1093,8 @@ def merge_same_d(cand: Candles, areas: List[TPArea], bl: List[Bloc], lo: float, 
                         lo + (vHi + 1) * step if vLo >= 0 else None, lo + vLo * step if vLo >= 0 else None,
                         gS, gE, True, col=d_colour_hex(ar.num), dName=ar.name, bHi=_nmax(a.bHi, ob.bHi),
                         bLo=_nmin(a.bLo, ob.bLo), mergedFrom=a.name + " + " + ob.name + " [VAH-VAL]",
-                        vah2=lo + (vHi2 + 1) * step if vLo2 >= 0 else None, val2=lo + vLo2 * step if vLo2 >= 0 else None)
+                        vah2=lo + (vHi2 + 1) * step if vLo2 >= 0 else None, val2=lo + vLo2 * step if vLo2 >= 0 else None,
+                        usd=a.usd + ob.usd)
                 for idx in sorted((ia, best), reverse=True):
                     del rows[idx]
                 rows.append(nm)
@@ -1212,7 +1233,7 @@ def collage(a: MB, o: MB, name: str, from_: str, p: Params) -> MB:
               _nmin(a.tA, o.tA), _nmax(a.tB, o.tB), nVah, nVal, _nmin(a.vaA, o.vaA), _nmax(a.vaB, o.vaB), True,
               col=a.col, yLo=yLo, yHi=yHi, cH=h, cL=l, cV=v, mergedFrom=from_, pStep=a.pStep,
               dFirst=_nmin(a.dFirst, o.dFirst), dLast=_nmax(a.dLast, o.dLast), dName=a.dName,
-              bHi=_nmax(a.bHi, o.bHi), bLo=_nmin(a.bLo, o.bLo), vah2=nVah2, val2=nVal2)
+              bHi=_nmax(a.bHi, o.bHi), bLo=_nmin(a.bLo, o.bLo), vah2=nVah2, val2=nVal2, usd=a.usd + o.usd)
 
 
 def pair_score(r: int, a: MB, b: MB, aS: int, bS: int, maxH: float, p: Params) -> float:
