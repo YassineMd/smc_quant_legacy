@@ -1926,6 +1926,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._fratio_items = None      # (buy, sell, buy forming, sell forming) BarGraphItems -- the histogram
         self._fratio_sig = None
         self._fratio_fsig = None       # the FINISHED bars' own signature: only the forming pair moves between cycles
+        self._fratio_mode = str(config.FRATIO_MODE)   # the top-right dropdown: None | Buyer Ratio | Seller Ratio | Delta Ratio
+        self._fratio_combo = None
         self._fratio_t = 0.0
         self._fratio_data = None
         self._fratio_on = bool(config.FRATIO_PANE_ON)
@@ -10683,6 +10685,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "lob_on": bool(getattr(self, "_lob_on", config.LOB_PANE_ON)),
                 "spd_on": bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)),
                 "fratio_on": bool(getattr(self, "_fratio_on", config.FRATIO_PANE_ON)),
+                "fratio_mode": str(getattr(self, "_fratio_mode", config.FRATIO_MODE)),   # its top-right dropdown
                 "flow_pane_on": bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)),
                 "hlh_merge_span": str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)),
                 "interp_on": bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)),
@@ -10811,6 +10814,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._lob_on = bool(s.get("lob_on", config.LOB_PANE_ON))
         self._spd_on = bool(s.get("spd_on", config.SPEED_PANE_ON))
         self._fratio_on = bool(s.get("fratio_on", config.FRATIO_PANE_ON))
+        _fm = str(s.get("fratio_mode", config.FRATIO_MODE) or config.FRATIO_MODE)
+        self._fratio_mode = _fm if _fm in tuple(config.FRATIO_MODES) else str(config.FRATIO_MODE)
+        _fcb = self.__dict__.get("_fratio_combo")
+        if _fcb is not None:                                 # a pane already built: its dropdown follows, silently
+            try:
+                _fcb.blockSignals(True)
+                _fcb.setCurrentIndex(tuple(config.FRATIO_MODES).index(self._fratio_mode))
+                _fcb.blockSignals(False)
+            except RuntimeError:
+                self._fratio_combo = None
         self._flow_pane_on = bool(s.get("flow_pane_on", s.get("flow_lines_on", config.FLOW_PANE_ON)))
         _sp = str(s.get("hlh_merge_span", config.HLH_MERGE_SPAN) or config.HLH_MERGE_SPAN)
         self._hlh_merge_span = _sp if _sp in tuple(str(v) for v in config.HLH_MERGE_SPAN_CHOICES) else str(config.HLH_MERGE_SPAN)
@@ -17792,6 +17805,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._spd_title = None; self._spd_badge = None
             self._fratio_plot = None; self._fratio_vb = None; self._fratio_items = None
             self._fratio_sig = None; self._fratio_fsig = None; self._fratio_sized = False; self._fratio_proxy = None
+            self._fratio_combo = None
             self._fratio_vline = None; self._fratio_hline = None
             self._fratio_tag = None; self._fratio_time_tag = None; self._fratio_title = None
             self._fratio_bdg = None
@@ -20650,12 +20664,33 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._fratio_bdg.append(_b)
         self._fratio_bdg = tuple(self._fratio_bdg)
         vb.sigXRangeChanged.connect(self._fratio_redock)
+        # the MODE dropdown, top right (user 2026-09-15): the Volume pane's widget and style, parented to the pane so
+        # it floats over the plot, re-parked on every resize of the view. Its index is set BEFORE the signal is
+        # connected, so building the pane never counts as a user change.
+        _modes = tuple(config.FRATIO_MODES)
+        cb = QtWidgets.QComboBox(pw)
+        cb.addItems(list(_modes))
+        cb.setCurrentIndex(_modes.index(self._fratio_mode) if self._fratio_mode in _modes else 0)
+        cb.setStyleSheet(
+            "QComboBox{ background:#20242c; color:#dcdcdc; border:1px solid #3a4150; border-radius:3px;"
+            " padding:1px 6px; font:bold 10px 'Consolas'; } QComboBox::drop-down{ border:0; width:14px; }"
+            " QComboBox QAbstractItemView{ background:#20242c; color:#dcdcdc; selection-background-color:#3a4150; }")
+        cb.setToolTip("What this pane draws. None: both sides -- buy on each cycle's left half, sell on its right "
+                      "half. Buyer Ratio / Seller Ratio: that side alone, over the whole cycle. Delta Ratio: the "
+                      "buyer ratio divided by the seller ratio -- teal above 1.0x when the buyers ran hotter against "
+                      "their own last N cycles than the sellers against theirs, red below.")
+        cb.setCursor(QtCore.Qt.PointingHandCursor)
+        cb.currentIndexChanged.connect(self._on_fratio_mode_changed)
+        cb.raise_(); cb.show()
+        self._fratio_combo = cb
+        vb.sigResized.connect(self._fratio_position_combo)
         self._fratio_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["fratio"])
         self._fratio_plot = pw
         self._fratio_vb = vb
         self._theme_sub_panes(not self._simple_bw())
         sp.addWidget(pw)
         pw.setMinimumHeight(60)
+        self._fratio_position_combo()
         return pw
 
     def _fratio_show(self, on: bool) -> None:
@@ -20670,6 +20705,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 self._fratio_plot.setVisible(False)
             except RuntimeError:
                 self._fratio_plot = None; self._fratio_items = None; self._fratio_vb = None; self._fratio_bdg = None
+                self._fratio_combo = None
         self._stack_axis_sync()
 
     def _fratio_hide_cursor(self) -> None:
@@ -20716,21 +20752,65 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             pass
 
     def _fratio_badges(self, buy_r, sell_r) -> None:
-        """The last rated value of each line, as the feed prints it ("0.49x"), on the right axis."""
-        bdg = getattr(self, "_fratio_bdg", None)
+        """The live value on the right axis, as the feed prints it ("0.49x"), for what the dropdown shows: both
+        sides (None), one side, or the delta -- buyer ratio / seller ratio, on the teal badge at or above 1.0x and
+        the red one below."""
+        bdg = self.__dict__.get("_fratio_bdg")
         if not bdg or self._fratio_vb is None:
             return
+        mode = str(self.__dict__.get("_fratio_mode", "None"))
+        buy_r = np.asarray(buy_r, dtype=np.float64)
+        sell_r = np.asarray(sell_r, dtype=np.float64)
+        vals = [None, None]
+        if mode == "Delta Ratio":
+            ok = np.flatnonzero(np.isfinite(buy_r) & (buy_r > 0) & np.isfinite(sell_r) & (sell_r > 0))
+            if ok.size:
+                d = float(buy_r[ok[-1]] / sell_r[ok[-1]])
+                vals[0 if d >= 1.0 else 1] = d
+        else:
+            for i, (r, skip) in enumerate(((buy_r, mode == "Seller Ratio"), (sell_r, mode == "Buyer Ratio"))):
+                fin = np.flatnonzero(np.isfinite(r) & (r > 0))
+                if fin.size and not skip:
+                    vals[i] = float(r[fin[-1]])
         vx1 = float(self._fratio_vb.viewRange()[0][1])
-        for _b, r in zip(bdg, (buy_r, sell_r)):
-            fin = np.flatnonzero(np.isfinite(r) & (r > 0))
-            if fin.size == 0:
+        for _b, v in zip(bdg, vals):
+            if v is None:
                 _b._y = None; _b.hide()
                 continue
-            v = float(r[fin[-1]])
             _b._y = float(np.log2(max(v, 1e-9)))
             _b.setHtml("<div style='color:%s; font-family:Consolas; font-size:11px; font-weight:bold; "
                        "white-space:nowrap'>%sx</div>" % (_b._col, _interp_ratio_text(v)))
             _b.setPos(vx1, _b._y); _b.show()
+
+    def _fratio_position_combo(self, *args) -> None:
+        """Park the mode dropdown in the pane's TOP-RIGHT corner, 6 px left of the plot's right edge (the Volume
+        pane's spacing). Runs on every resize of the view and reads the edge from the VIEW's own geometry, which is
+        current when its resize signal fires; before the first layout it falls back to the widget width minus the
+        right axis."""
+        cb = self.__dict__.get("_fratio_combo")
+        pw = self._fratio_plot
+        vb = self._fratio_vb
+        if cb is None or pw is None or vb is None:
+            return
+        try:
+            cb.adjustSize()
+            right = int(pw.mapFromScene(vb.sceneBoundingRect().topRight()).x())
+            if right <= cb.width():
+                right = int(pw.width() - pw.getAxis("right").width())
+            cb.move(max(0, right - cb.width() - 6), 4)
+            cb.raise_()
+        except RuntimeError:
+            self._fratio_combo = None
+
+    def _on_fratio_mode_changed(self, idx: int) -> None:
+        """Dropdown changed -> re-lay every bar from the read already in hand (no store read), refit Y, persist."""
+        _modes = tuple(config.FRATIO_MODES)
+        self._fratio_mode = _modes[idx] if 0 <= idx < len(_modes) else _modes[0]
+        self._fratio_sig = None; self._fratio_fsig = None
+        self._fratio_ytop = 0.0                              # a different series has a different scale
+        self._fratio_draw(time.time())
+        if not self._loading_ui:
+            self._save_ui_state()
 
     def _fratio_tick(self, now: float) -> None:
         if self._fratio_plot is None or not self._fratio_plot.isVisible():
@@ -20766,27 +20846,34 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         return t_end_c, flow, buy, sell
 
     def _fratio_draw(self, now: float) -> None:
-        """A HISTOGRAM: two bars per cycle, BUY on the cycle's left half and SELL on its right half, each from the
-        1.0x guide to log2 of its ratio, so 0.5x and 2x sit the same distance below and above it. The forming cycle
-        is rated from what it has so far (its value moves as the cycle fills -- the feed's row does the same) and
-        its pair is drawn lighter, on items of its own: while a cycle forms only those two bars are re-laid, and the
-        finished ones only when a cycle finishes, the view drops one, or the lookback / flow window changes."""
+        """A HISTOGRAM from the 1.0x guide, in the mode the top-right dropdown picks:
+             None          two bars per cycle, BUY on its left half and SELL on its right half
+             Buyer Ratio   the buy bar alone, over the whole cycle
+             Seller Ratio  the sell bar alone, over the whole cycle
+             Delta Ratio   buyer ratio / seller ratio over the whole cycle: teal above 1.0x (the buyers ran hotter
+                           against their own last N than the sellers against theirs), red below
+        Every bar runs to log2 of its value, so 0.5x and 2x sit the same distance below and above the guide. The
+        forming cycle is rated from what it has so far and drawn lighter, on items of its own: while it forms only
+        those bars are re-laid, the finished ones only when a cycle finishes, the view drops one, or the mode, the
+        lookback or the flow window changes. The four items are reused by every mode -- teal / red, finished /
+        forming -- so a mode switch adds no item."""
         if self._fratio_data is None or self._fratio_items is None:
             return
         if self._fratio_sig is None:
             self._fratio_fsig = None                         # a forced redraw re-lays the finished bars too
+        mode = str(self.__dict__.get("_fratio_mode", "None"))
         vx0, vx1, (t, is_buy, strong, move, cbuy, csell, t_end, done) = self._fratio_data
         if t.size == 0:
             for it in self._fratio_items:
                 it.setOpts(x0=[], x1=[], y0=[], height=[])
             self._fratio_badges(np.zeros(0), np.zeros(0))
-            self._fratio_sig = ("empty",); self._fratio_fsig = None
+            self._fratio_sig = ("empty", mode); self._fratio_fsig = None
             return
         live = bool(vx1 >= now - float(config.INTERP_STALE_SECS))
         t_end_c, flow, buy, sell = self._fratio_ratios(t, t_end, done, cbuy, csell, now, live)
         keep = t_end_c >= vx0
         _form = float(now - t[-1]) if (live and not bool(done[-1])) else 0.0
-        sig = (int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win), int(_form // 2), self._lb_n(),
+        sig = (int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win), int(_form // 2), self._lb_n(), mode,
                round(float(np.nan_to_num(buy[-1])), 5), round(float(np.nan_to_num(sell[-1])), 5))
         if sig == self._fratio_sig:
             return
@@ -20809,23 +20896,39 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             _b = buy[keep]; _s = sell[keep]
             vb_ = np.where(np.isfinite(_b) & (_b > 0), np.log2(np.maximum(_b, 1e-9)), np.nan)
             vs_ = np.where(np.isfinite(_s) & (_s > 0), np.log2(np.maximum(_s, 1e-9)), np.nan)
-        fsig = (int(fin_m.sum()), round(float(x0[0]), 2),
+            vd_ = vb_ - vs_                                  # log2(buyer ratio / seller ratio)
+            up_ = vd_ >= 0.0
+        _none = (None, None, None, None)
+        if mode == "Buyer Ratio":
+            groups = ((0, vb_, x0, x1, fin_m), (1,) + _none, (2, vb_, x0, x1, forming), (3,) + _none)
+            shown = (vb_,)
+        elif mode == "Seller Ratio":
+            groups = ((0,) + _none, (1, vs_, x0, x1, fin_m), (2,) + _none, (3, vs_, x0, x1, forming))
+            shown = (vs_,)
+        elif mode == "Delta Ratio":
+            groups = ((0, vd_, x0, x1, fin_m & up_), (1, vd_, x0, x1, fin_m & ~up_),
+                      (2, vd_, x0, x1, forming & up_), (3, vd_, x0, x1, forming & ~up_))
+            shown = (vd_,)
+        else:
+            groups = ((0, vb_, x0, mid, fin_m), (1, vs_, mid, x1, fin_m),
+                      (2, vb_, x0, mid, forming), (3, vs_, mid, x1, forming))
+            shown = (vb_, vs_)
+        fsig = (mode, int(fin_m.sum()), round(float(x0[0]), 2),
                 round(float(x1[fin_m][-1]), 2) if fin_m.any() else 0.0, int(self._flow_win), self._lb_n(),
                 round(float(np.nansum(vb_[fin_m])), 6), round(float(np.nansum(vs_[fin_m])), 6))
         same_fin = fsig == self.__dict__.get("_fratio_fsig")
-        for idx, v, lo_, hi_, sel in ((0, vb_, x0, mid, fin_m), (1, vs_, mid, x1, fin_m),
-                                      (2, vb_, x0, mid, forming), (3, vs_, mid, x1, forming)):
+        for idx, v, lo_, hi_, sel in groups:
             if idx < 2 and same_fin:
                 continue                                     # the finished bars did not change
             it = self._fratio_items[idx]
-            m = sel & np.isfinite(v)
-            if not m.any():
+            m = None if v is None else (sel & np.isfinite(v))
+            if m is None or not m.any():
                 it.setOpts(x0=[], x1=[], y0=[], height=[])
             else:
                 it.setOpts(x0=lo_[m], x1=hi_[m], y0=np.minimum(0.0, v[m]), height=np.abs(v[m]))
         self._fratio_fsig = fsig
         self._fratio_badges(_b, _s)
-        fin = np.concatenate((vb_, vs_))
+        fin = np.concatenate(shown)
         fin = fin[np.isfinite(fin)]
         if fin.size:
             lim = float(np.percentile(np.abs(fin), 99.0)) * 1.15

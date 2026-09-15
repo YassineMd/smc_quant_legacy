@@ -1793,7 +1793,9 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             "BUY (teal) and SELL (red) = each side's own aggressive $ per second over the median of that "
             "side's rate in the previous %d cycles. 1.0x is 'as usual'; the axis is log2 so 0.5x and 2x sit "
             "the same distance from it: a bar above the line is a side trading faster than usual, below it "
-            "slower. The forming cycle's pair is drawn lighter, rated from what it has so far." % config.CYCLE_BASE_N)
+            "slower. The forming cycle's pair is drawn lighter, rated from what it has so far. The dropdown at "
+            "the pane's top right shows one series instead: Buyer Ratio, Seller Ratio, or Delta Ratio (the buyer "
+            "ratio divided by the seller ratio)." % config.CYCLE_BASE_N)
         self.fratio_on.toggled.connect(lambda on: self.fratioPaneToggled.emit(bool(on)))
         l4.addWidget(self.fratio_on)
         self.interp_on = QtWidgets.QCheckBox(config.pane_titles()["interp"])

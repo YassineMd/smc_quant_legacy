@@ -407,6 +407,12 @@ def pane_titles(n=None):
 FRATIO_PANE_ON = True
 FRATIO_BUY_COL = "#26a69a"      # buy -- the same teal as the buy $ line
 FRATIO_SELL_COL = "#ef5350"     # sell -- the same red as the sell $ line
+# the pane's top-right dropdown (user 2026-09-15). "None" = both sides, as the pane has always drawn them; otherwise
+# ONE series over the whole cycle: Buyer Ratio, Seller Ratio, or Delta Ratio = Buyer Ratio / Seller Ratio (on the
+# log2 axis: the buy bar minus the sell bar) -- above 1.0x the buyers ran hotter against their own last N cycles
+# than the sellers against theirs, below it the sellers did. Persisted as fratio_mode.
+FRATIO_MODES = ("None", "Buyer Ratio", "Seller Ratio", "Delta Ratio")
+FRATIO_MODE = "None"
 # --- the Buy/Sell Flow ($) PANE itself gets a toggle (user 2026-09-15: "we dont have it", then "I want the
 # whole chart to hide not just the lines"): in Flow mode the main chart IS that pane, so OFF hides the main
 # chart widget and the stack closes up around it. Display only -- the bins, the crossings, every cycle pane
