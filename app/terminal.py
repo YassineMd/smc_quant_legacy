@@ -39,6 +39,7 @@ from .heatmap import (HeatmapCache, TradeBubbleCache, decode_col, decode_grid,
 
 from . import bucket_state, config, flow_pane, region_state, vpin_adaptive
 from .flow_interp import (FlowInterpPanel, build_rows as _interp_build_rows, prev_ratio as _interp_prev,
+                          _ratio_text as _interp_ratio_text,
                           same_side_ratio as _interp_side_ratio, dur_text as _interp_dur_text,
                           BAR_COL as _STATE_BAR_COL,
                           C_ABSORB_BUY as _C_AB_BUY, C_ABSORB_SELL as _C_AB_SELL,
@@ -1385,6 +1386,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._vol_vals_off = 0         # global bar index of _vol_vals[0] (the render culls to the visible window)
         self._vol_last = None          # newest bar's plotted value (pan-to-bar when the user owns the Y)
         self.vol_vline = None; self.vol_hline = None; self.vol_tag = None; self.vol_vb = None; self._vol_proxy = None
+        self.lower_time_tag = None; self.cvd_time_tag = None; self.vol_time_tag = None   # shared TIME badge per lower pane
         self.splitter_v = None         # Mode 10 vertical splitter (upper/lower panes)
         self.cob_col = None            # Mode 10 COB column (cob + spacer), height-matched to the price pane
         self._cob_want = False         # user's COB-toggle intent (drives cob_col visibility in Mode 10)
@@ -2827,10 +2829,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """
         prev_mode = self.scanner_mode
         self.scanner_mode = mode
-        if prev_mode == "flow" and mode != "flow":
-            self._flow_pane_uncap()   # BEFORE the teardown re-parents the chart: torn down while capped at 1 px,
-                                      # the rebuilt stack came up 68 px tall and stayed so until a window resize
-        self.clear_scanner_canvas()   # teardown first
+        self.clear_scanner_canvas()   # teardown first (it lifts a collapsed flow pane's cap before re-parenting)
         if prev_mode == "depth_heatmap":
             self._hm_exit()           # Phase 2b: tear down the heatmap (unsubscribe live push, free grid)
         if prev_mode == "trades" and mode != "trades":
@@ -4479,7 +4478,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         pos = evt[0]
         if not self.plot.sceneBoundingRect().contains(pos):
             self.price_tag.hide()
-            self.time_tag.hide()
+            self._stack_time_hide()            # the shared time badge, wherever it is drawn
             self.hm_vol_tip.hide()
             self.dom_tooltip.hide()
             self.panel_tooltip.hide()
@@ -4521,13 +4520,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if getattr(self, "vol_vline", None) is not None:      # ... and into the Volume pane
             self.vol_vline.setPos(pt.x())
             self.vol_hline.hide(); self.vol_tag.hide()
-        self._liq_sync_vline(pt.x())                          # ... and into the Flow liquidity pane
-        self._liq_hide_cursor()                               # cursor is over the chart -> no liquidity readout
-        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()  # ... and the Cycle pane
-        self._cvol_sync_vline(pt.x()); self._cvol_hide_cursor()   # ... and the Volume pane
-        self._lob_sync_vline(pt.x()); self._lob_hide_cursor()     # ... and the Book pane
-        self._spd_sync_vline(pt.x()); self._spd_hide_cursor()     # ... and the Speed pane
-        self._fratio_sync_vline(pt.x()); self._fratio_hide_cursor()   # ... and the Flow ratios pane
         if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
             self.fp_panel.show_price_line(pt.y())
         self._radar_hover(pt)                                 # Order-Flow Walls radar -> P(resist) odds on hover
@@ -4537,13 +4529,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pass
         # X-axis TIME badge at the crosshair — same design as the right-axis price badge (user 2026-09-08).
         # Heatmap/Flow read epoch seconds straight off X; the bucket modes map the index through the drawn bars.
-        _xlbl = self._x_time_label(pt.x())
-        if _xlbl:
-            self.time_tag.setText(_xlbl)
-            self.time_tag.setPos(pt.x(), self.vb.viewRange()[1][0])   # bottom edge of the view, at cursor X
-            self.time_tag.show()
-        else:
-            self.time_tag.hide()
+        # ... drawn on the pane that OWNS the clock axis (the main chart itself outside a stack), and the Flow
+        # sub-panes' verticals follow -- one helper for every pane, so the crosshair is shared everywhere
+        self._stack_cursor_sync("main", pt.x())
         if self.scanner_mode == "depth_heatmap":
             if self.cob.isVisible():
                 self.cob.mark_price(pt.y())     # mirror the crosshair price into the DOM ladder (size readout)
@@ -4611,17 +4599,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         pos = evt[0]
         if not self.lower_plot.sceneBoundingRect().contains(pos):
             self.vpin_tag.hide()               # left the VPIN pane -> drop its badge (the lines linger, like the main)
+            self._stack_time_hide()
             return
         pt = self.lower_vb.mapSceneToView(pos)
-        self.lower_vline.setPos(pt.x()); self.lower_hline.setPos(pt.y()); self.lower_hline.show()
-        self.vline.setPos(pt.x())              # shared vertical crosshair -> mirror the X into the price pane
-        self.hline.hide(); self.price_tag.hide()   # cursor isn't over the price pane -> no price-y readout there
-        if getattr(self, "cvd_vline", None) is not None:   # ... and into the CVD pane (all share the X line)
-            self.cvd_vline.setPos(pt.x())
-            self.cvd_hline.hide(); self.cvd_tag.hide()
-        if getattr(self, "vol_vline", None) is not None:   # ... and into the Volume pane
-            self.vol_vline.setPos(pt.x())
-            self.vol_hline.hide(); self.vol_tag.hide()
+        self.lower_hline.setPos(pt.y()); self.lower_hline.show()
+        self._stack_cursor_sync("lower", pt.x())   # the shared vertical in EVERY pane + the time badge on the bottom pane
         self.vpin_tag.setText(f"{pt.y():.3f}")     # VPIN is 0..1 -> 3 decimals; sits on the pane's right axis
         self.vpin_tag.setPos(self.lower_vb.viewRange()[0][1], pt.y())
         self.vpin_tag.show()
@@ -17076,6 +17058,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._fratio_show(bool(getattr(self, "_fratio_on", True)))
             self._fratio_sig = None; self._fratio_t = 0.0
             self._interp_show(bool(getattr(self, "_interp_on", True)))
+            self._flow_pane_apply()           # the rebuilt stack: collapse the flow pane again if it is off
         # The loaded set moved, so EVERYTHING derived from it must re-derive — same invalidation the replay step does.
         # Without this the Pivot D/E marks (sig-gated on offset/range) and the selection kept their last values, so a
         # Start-Date / replay-cursor change only visibly took effect on the next right-arrow step.
@@ -17668,6 +17651,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         Safe to call in any state. Steps: (1) sweep tracked items; (2) Mode 4
         secondary ViewBox teardown; (3) Mode 10 lower-pane + COB-column teardown.
         """
+        self._flow_pane_lift()  # ⚠⚠ FIRST: a collapsed flow pane's 1 px cap must be gone before the chart is re-parented
         self.price_tag.hide()   # A2: drop the cursor price tag on any mode switch (no orphan)
         if getattr(self, "_live_pline", None) is not None:   # drop the live-price badge when leaving the candle canvas
             self._live_px = None; self._live_pline.hide(); self._live_plabel.hide()
@@ -17762,7 +17746,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # the VPIN-pane crosshair/badge items were CHILDREN of the just-deleted lower_plot — null the Python refs
             # so _on_mouse_move / _on_lower_mouse_move skip them (else 'C++ object already deleted' on the next hover).
             # _ensure_canvas_panes recreates them when the pane is rebuilt.
-            self.lower_vline = None; self.lower_hline = None; self.vpin_tag = None
+            self.lower_vline = None; self.lower_hline = None; self.vpin_tag = None; self.lower_time_tag = None
             self.lower_vb = None; self._lower_proxy = None
             # ... and the Flow-mode liquidity pane is a CHILD of that same splitter, so its refs are dangling too.
             # Null them and _liq_ensure_pane rebuilds the pane on the next entry (_liq_data survives -- it is data).
@@ -17809,6 +17793,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._fratio_sig = None; self._fratio_sized = False; self._fratio_proxy = None
             self._fratio_vline = None; self._fratio_hline = None
             self._fratio_tag = None; self._fratio_time_tag = None; self._fratio_title = None
+            self._fratio_bdg = None
             self._cvol_title = None; self._cvol_badge = None
             self._cyc_title = None; self._cyc_badge = None
             self._liq_title = None
@@ -17820,11 +17805,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # gone C++-side too — null every Python ref (else _on_mouse_move / _on_cvd_mouse_move hit 'C++ object
             # already deleted' on the next hover after leaving Mode 10). _ensure_canvas_panes rebuilds them all.
             self.cvd_plot = None; self.cvd_vb = None; self._cvd_proxy = None
-            self.cvd_vline = None; self.cvd_hline = None; self.cvd_tag = None
+            self.cvd_vline = None; self.cvd_hline = None; self.cvd_tag = None; self.cvd_time_tag = None
             # the Volume pane + its bar item + dropdown were CHILDREN of the just-deleted splitter_v -> null every ref
             # (the combo's C++ side goes with the pane); _ensure_canvas_panes rebuilds them all on the next Mode-10 entry.
             self.vol_plot = None; self.vol_vb = None; self._vol_proxy = None; self._vol_bar = None; self._vol_bar2 = None
-            self.vol_vline = None; self.vol_hline = None; self.vol_tag = None
+            self.vol_vline = None; self.vol_hline = None; self.vol_tag = None; self.vol_time_tag = None
             self._vol_combo = None; self._vol_combo_sig = None; self._vol_vals = None
             self._vol_p80 = None; self._vol_p20 = None; self._vol_pct_cb = None   # threshold lines + 'Pct' toggle died with the pane
             self._vol_last = None; self._vol_vals_off = 0
@@ -18524,7 +18509,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
     def _on_px_pane_toggled(self, on: bool) -> None:
         """Hamburger 'PRICE' -> show/hide the pane above the flow lines (Flow mode only) and persist."""
         self._px_pane_on = bool(on)
+        if not on:
+            self._flow_pane_lift()          # BEFORE a pane hides: it may be the collapsed chart's last neighbour
         self._px_show(bool(on) and self.scanner_mode == "flow")
+        self._flow_pane_apply()             # ... then collapse the flow pane again if it is off and may be
         self._save_ui_state()
 
     def _px_ensure_pane(self):
@@ -19567,6 +19555,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             pos = evt[0]
             if not self._px_plot.sceneBoundingRect().contains(pos):
                 self._px_hide_cursor()
+                self._stack_time_hide()
                 return
             pt = self._px_vb.mapSceneToView(pos)
             self._px_vline.setPos(pt.x())
@@ -19581,10 +19570,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 self._px_time_tag.show()
             else:
                 self._px_time_tag.hide()
-            self.vline.setPos(pt.x())                    # shared vertical -> the flow chart below
-            self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
-            self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
-            self._liq_hide_cursor()
+            self._stack_cursor_sync("px", pt.x())
             for _v in (getattr(self, "_liq_vline", None), getattr(self, "cvd_vline", None),
                        getattr(self, "vol_vline", None), getattr(self, "lower_vline", None)):
                 if _v is not None:
@@ -19595,7 +19581,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
     def _on_liq_pane_toggled(self, on: bool) -> None:
         """Hamburger 'Limit orders pane' -> show/hide it (Flow mode only) and persist."""
         self._liq_pane_on = bool(on)
+        if not on:
+            self._flow_pane_lift()          # BEFORE a pane hides: it may be the collapsed chart's last neighbour
         self._liq_show(bool(on) and self.scanner_mode == "flow")
+        self._flow_pane_apply()             # ... then collapse the flow pane again if it is off and may be
         self._save_ui_state()
 
     def _liq_ensure_pane(self):
@@ -20029,6 +20018,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if owner is None:
             return
         key = (oi, len(rows))
+        self._flow_axis_owner = owner                # the pane the shared TIME badge hangs from (see _stack_cursor_sync)
         if key == getattr(self, "_flow_axis_key", None):
             return
         self._flow_axis_key = key
@@ -20040,6 +20030,85 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                     wdg.hideAxis("bottom")
             except Exception:
                 pass
+
+    def _stack_panes(self):
+        """(key, plot, vb, vline, hide-y-readout, time_tag) for the main chart and every pane of the stack that exists:
+        the candle canvas's VPIN / CVD / Volume panes and the Flow sub-panes. Read through __dict__ -- this runs on
+        every mouse move, and a getattr() default on a PySide object costs ~16 us when the attribute is missing."""
+        d = self.__dict__
+        out = [("main", self.plot, self.vb, self.vline,
+                lambda: (self.hline.hide(), self.price_tag.hide()), self.time_tag)]
+        for k, pk, vbk, vlk, hlk, tgk, ttk in (
+                ("lower", "lower_plot", "lower_vb", "lower_vline", "lower_hline", "vpin_tag", "lower_time_tag"),
+                ("cvd", "cvd_plot", "cvd_vb", "cvd_vline", "cvd_hline", "cvd_tag", "cvd_time_tag"),
+                ("vol", "vol_plot", "vol_vb", "vol_vline", "vol_hline", "vol_tag", "vol_time_tag")):
+            pw, vb, vl = d.get(pk), d.get(vbk), d.get(vlk)
+            if pw is None or vb is None or vl is None:
+                continue
+            hl, tg = d.get(hlk), d.get(tgk)
+            out.append((k, pw, vb, vl,
+                        (lambda hl=hl, tg=tg: (hl is not None and hl.hide(), tg is not None and tg.hide())), d.get(ttk)))
+        for k in ("px", "liq", "cyc", "cvol", "lob", "spd", "fratio"):
+            pw = d.get("_%s_plot" % k); vb = d.get("_%s_vb" % k)
+            if pw is None or vb is None:
+                continue
+            out.append((k, pw, vb, d.get("_%s_vline" % k), getattr(self, "_%s_hide_cursor" % k, None),
+                        d.get("_%s_time_tag" % k)))
+        return out
+
+    def _stack_time_hide(self) -> None:
+        """The mouse left a pane of the stack: the shared TIME badge goes wherever it is drawn (lines linger)."""
+        for _k, _pw, _vb, _vl, _h, tt in self._stack_panes():
+            if tt is not None:
+                try:
+                    tt.hide()
+                except RuntimeError:
+                    pass
+
+    def _mk_time_tag(self, pw):
+        """A clock badge for a pane, in the main chart's own design, hidden until the pane owns the clock axis."""
+        tt = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        try:
+            tt.textItem.setFont(QtGui.QFont(self.time_tag.textItem.font()))
+        except Exception:
+            pass
+        tt.setZValue(61)
+        pw.addItem(tt, ignoreBounds=True)
+        tt.hide()
+        return tt
+
+    def _stack_cursor_sync(self, key: str, x: float) -> None:
+        """The SHARED crosshair, from whichever pane the mouse is over (user 2026-09-15: "the crosshair is not
+        shared unlike the other panes" -- each pane's handler synced only the panes that existed when it was
+        written). Every pane's vertical goes to x; every pane's y readout hides except the hovered one's; and the
+        TIME badge is drawn on the ONE pane that owns the clock axis -- the bottom-most with real pixels, per
+        _stack_axis_sync -- never on the hovered pane ("it should show at the very bottom at the x axis because
+        it's shared"). Outside a stack with a known owner (Mode-10 with a lower pane open, the heatmap ...) the
+        main chart's badge is used as before."""
+        xl = self._x_time_label(x)
+        owner = getattr(self, "_flow_axis_owner", None)
+        panes = self._stack_panes()
+        try:
+            if owner is None or not any(pw is owner and tt is not None and pw.isVisible() for _k, pw, _vb, _vl, _h, tt in panes):
+                owner = self.plot
+        except RuntimeError:
+            owner = self.plot
+        for k, pw, vb, vl, hide, tt in panes:
+            try:
+                if vl is not None:
+                    vl.setPos(x)
+                if k != key and hide is not None:
+                    hide()
+                if tt is None:
+                    continue
+                if pw is owner and xl and pw.isVisible():
+                    tt.setText(xl)
+                    tt.setPos(x, vb.viewRange()[1][0])       # the bottom edge of the OWNER's view, at the cursor x
+                    tt.show()
+                else:
+                    tt.hide()
+            except RuntimeError:
+                pass                                          # a pane torn down under us
 
     def _liq_show(self, on: bool) -> None:
         if on:
@@ -20266,7 +20335,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
     # ------------------------------------------------------------------
     def _on_spd_pane_toggled(self, on: bool) -> None:
         self._spd_on = bool(on)
+        if not on:
+            self._flow_pane_lift()          # BEFORE a pane hides: it may be the collapsed chart's last neighbour
         self._spd_show(bool(on) and self.scanner_mode == "flow")
+        self._flow_pane_apply()             # ... then collapse the flow pane again if it is off and may be
         self._save_ui_state()
 
     def _spd_ensure_pane(self):
@@ -20366,6 +20438,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         pos = evt[0]
         if not self._spd_plot.sceneBoundingRect().contains(pos):
             self._spd_hide_cursor()
+            self._stack_time_hide()
             return
         pt = self._spd_vb.mapSceneToView(pos)
         self._spd_vline.setPos(pt.x())
@@ -20378,13 +20451,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._spd_time_tag.setText(_xl); self._spd_time_tag.setPos(pt.x(), vy0); self._spd_time_tag.show()
         else:
             self._spd_time_tag.hide()
-        self.vline.setPos(pt.x())
-        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
-        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
-        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
-        self._cvol_sync_vline(pt.x()); self._cvol_hide_cursor()
-        self._lob_sync_vline(pt.x()); self._lob_hide_cursor()
-        self._fratio_sync_vline(pt.x()); self._fratio_hide_cursor()
+        self._stack_cursor_sync("spd", pt.x())
 
     @staticmethod
     def _same_side_ratio(vals, is_dom_buy, done, n_base, min_n):
@@ -20507,7 +20574,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
     # ------------------------------------------------------------------
     def _on_fratio_pane_toggled(self, on: bool) -> None:
         self._fratio_on = bool(on)
+        if not on:
+            self._flow_pane_lift()          # BEFORE a pane hides: it may be the collapsed chart's last neighbour
         self._fratio_show(bool(on) and self.scanner_mode == "flow")
+        self._flow_pane_apply()             # ... then collapse the flow pane again if it is off and may be
         self._save_ui_state()
 
     def _fratio_ensure_pane(self):
@@ -20564,6 +20634,15 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._fratio_time_tag.textItem.setFont(_tf); self._fratio_time_tag.setZValue(61)
         pw.addItem(self._fratio_time_tag, ignoreBounds=True); self._fratio_time_tag.hide()
         self._fratio_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_fratio_mouse_move)
+        # the LIVE value of each line as a right-axis badge (user 2026-09-15), the flow $ lines' own design: bold
+        # coloured text pinned to the right edge, buy anchored above its point and sell below so they never overlap
+        self._fratio_bdg = []
+        for _c, _anc in ((config.FRATIO_BUY_COL, (1.0, 1.0)), (config.FRATIO_SELL_COL, (1.0, 0.0))):
+            _b = pg.TextItem(anchor=_anc); _b.setZValue(60); _b._col = _c; _b._y = None
+            pw.addItem(_b, ignoreBounds=True); _b.hide()
+            self._fratio_bdg.append(_b)
+        self._fratio_bdg = tuple(self._fratio_bdg)
+        vb.sigXRangeChanged.connect(self._fratio_redock)
         self._fratio_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["fratio"])
         self._fratio_plot = pw
         self._fratio_vb = vb
@@ -20583,7 +20662,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             try:
                 self._fratio_plot.setVisible(False)
             except RuntimeError:
-                self._fratio_plot = None; self._fratio_items = None; self._fratio_vb = None
+                self._fratio_plot = None; self._fratio_items = None; self._fratio_vb = None; self._fratio_bdg = None
         self._stack_axis_sync()
 
     def _fratio_hide_cursor(self) -> None:
@@ -20601,6 +20680,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         pos = evt[0]
         if not self._fratio_plot.sceneBoundingRect().contains(pos):
             self._fratio_hide_cursor()
+            self._stack_time_hide()
             return
         pt = self._fratio_vb.mapSceneToView(pos)
         self._fratio_vline.setPos(pt.x())
@@ -20613,14 +20693,37 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._fratio_time_tag.setText(_xl); self._fratio_time_tag.setPos(pt.x(), vy0); self._fratio_time_tag.show()
         else:
             self._fratio_time_tag.hide()
-        self.vline.setPos(pt.x())
-        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
-        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
-        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
-        self._cvol_sync_vline(pt.x()); self._cvol_hide_cursor()
-        self._lob_sync_vline(pt.x()); self._lob_hide_cursor()
-        self._spd_sync_vline(pt.x()); self._spd_hide_cursor()
-        self._fratio_sync_vline(pt.x()); self._fratio_hide_cursor()
+        self._stack_cursor_sync("fratio", pt.x())
+
+    def _fratio_redock(self, *args) -> None:
+        """Keep the two badges on the pane's right edge through a pan / zoom / the live-edge follow."""
+        vb = self._fratio_vb
+        if vb is None or not getattr(self, "_fratio_bdg", None):
+            return
+        try:
+            vx1 = float(vb.viewRange()[0][1])
+            for _b in self._fratio_bdg:
+                if _b._y is not None:
+                    _b.setPos(vx1, _b._y)
+        except RuntimeError:
+            pass
+
+    def _fratio_badges(self, buy_r, sell_r) -> None:
+        """The last rated value of each line, as the feed prints it ("0.49x"), on the right axis."""
+        bdg = getattr(self, "_fratio_bdg", None)
+        if not bdg or self._fratio_vb is None:
+            return
+        vx1 = float(self._fratio_vb.viewRange()[0][1])
+        for _b, r in zip(bdg, (buy_r, sell_r)):
+            fin = np.flatnonzero(np.isfinite(r) & (r > 0))
+            if fin.size == 0:
+                _b._y = None; _b.hide()
+                continue
+            v = float(r[fin[-1]])
+            _b._y = float(np.log2(max(v, 1e-9)))
+            _b.setHtml("<div style='color:%s; font-family:Consolas; font-size:11px; font-weight:bold; "
+                       "white-space:nowrap'>%sx</div>" % (_b._col, _interp_ratio_text(v)))
+            _b.setPos(vx1, _b._y); _b.show()
 
     def _fratio_tick(self, now: float) -> None:
         if self._fratio_plot is None or not self._fratio_plot.isVisible():
@@ -20665,6 +20768,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if t.size == 0:
             for it in self._fratio_items:
                 it.setData(np.zeros(0), np.zeros(0))
+            self._fratio_badges(np.zeros(0), np.zeros(0))
             self._fratio_sig = ("empty",)
             return
         live = bool(vx1 >= now - float(config.INTERP_STALE_SECS))
@@ -20679,6 +20783,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if not keep.any():
             for it in self._fratio_items:
                 it.setData(np.zeros(0), np.zeros(0))
+            self._fratio_badges(np.zeros(0), np.zeros(0))
             return
         x0 = t[keep]; x1 = t_end_c[keep]
         xs = np.empty(2 * x0.size, dtype=np.float64)
@@ -20690,6 +20795,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             vals.append(np.repeat(v, 2))
         for it, y in zip(self._fratio_items, vals):
             it.setData(xs, y, connect="finite")
+        self._fratio_badges(buy[keep], sell[keep])
         fin = np.concatenate(vals)
         fin = fin[np.isfinite(fin)]
         if fin.size:
@@ -20710,39 +20816,70 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
 
     _PANE_MAX_H = 16777215                                 # QWIDGETSIZE_MAX: no height cap
 
-    def _flow_pane_apply(self) -> None:
-        """Show / hide the Buy/Sell Flow pane -- the main chart widget, while Flow mode is up.
+    def _flow_pane_apply(self, _retry: int = 0) -> None:
+        """Show / collapse the Buy/Sell Flow pane -- the main chart widget, while Flow mode is up.
 
-        NOT setVisible(False). The main chart's viewbox is the x-link MASTER of every pane, and pyqtgraph lines
-        a linked view up with its master by SCREEN GEOMETRY (linkedViewChanged: same x-per-pixel, pixel columns
-        aligned) -- a hidden master keeps a stale geometry and the sub-panes were handed a wrong left edge
-        (measured 211 s off on the gate tape). So the pane is COLLAPSED instead: a 1 px maximum height keeps it
-        visible to the link with its true width and column, gives it no room, and the one clock axis moves to the
-        bottom-most pane with real pixels (_stack_axis_sync skips anything under 24 px). Leaving Flow mode always
-        lifts the cap (every other mode draws on this chart). Coming back it gets a real slice of the stack."""
+        COLLAPSED, not hidden: a 1 px maximum height. The main chart's viewbox is the x-link MASTER of every pane and
+        pyqtgraph lines linked views up by SCREEN GEOMETRY, so the master must stay laid out (a hidden one keeps a
+        stale width through a window resize). Collapsed, it keeps its true width and column, takes no room, and the
+        one clock axis moves to the bottom-most pane with real pixels (_stack_axis_sync skips anything under 24 px).
+
+        ⚠⚠ THE CAP MUST NEVER LEAK. QSplitter.recalc() sets a splitter's OWN maximum height from its visible
+        children (the sum along the stack, the minimum across it), so the cap is only applied while the chart is a
+        child of splitter_v AND another pane of the stack is visible, and _flow_pane_lift() runs before the chart
+        changes parent (clear_scanner_canvas) and before any pane of the stack hides. Leaked once (2026-09-15, HLH's
+        Zero-Point pull-back rebuilt the stack with the chart still capped), it sized the window's central splitter
+        down to 68 px -- and nothing in QMainWindow re-grows that short of a window resize (measured: a layout
+        invalidate + activate does not). With no other pane visible the flow pane simply stays shown.
+
+        The cap also waits for a laid-out stack (a freshly built splitter_v reports ~0 px); the newest call wins."""
+        if _retry == 0:
+            self._flow_pane_gen = int(self.__dict__.get("_flow_pane_gen", 0)) + 1
         if self.scanner_mode != "flow" or self.plot is None:
             return
         on = bool(getattr(self, "_flow_pane_on", True))
+        sp = getattr(self, "splitter_v", None)
         try:
-            if on:
-                if self.plot.maximumHeight() < self._PANE_MAX_H:
-                    self.plot.setMaximumHeight(self._PANE_MAX_H)
-                self._flow_pane_grow()
-            elif self.plot.maximumHeight() != 1:
+            capped = self.plot.maximumHeight() < self._PANE_MAX_H
+            if on or sp is None or self.plot.parentWidget() is not sp or not self._flow_stack_has_other(sp):
+                if capped:
+                    self._flow_pane_lift()
+                if on or capped:
+                    self._flow_pane_grow()                 # a real slice of the stack, not the sliver it had
+            elif not capped:
+                if sp.height() < 200 or sum(sp.sizes() or [0]) < 200:
+                    if _retry < 300:
+                        _g = self._flow_pane_gen
+                        QtCore.QTimer.singleShot(50, lambda g=_g, r=_retry + 1: self._flow_pane_retry(g, r))
+                    return
                 self.plot.setMaximumHeight(1)
         except RuntimeError:
             pass
         self._flow_axis_key = None                         # the owner of the one clock axis may have changed
         self._stack_axis_sync()
 
-    def _flow_pane_uncap(self) -> None:
-        """Lift the 1 px cap of a collapsed flow pane (idempotent) and hand the chart its height back."""
+    def _flow_pane_retry(self, gen: int, r: int) -> None:
+        if gen == self.__dict__.get("_flow_pane_gen"):     # a newer apply supersedes this wait
+            self._flow_pane_apply(r)
+
+    def _flow_stack_has_other(self, sp) -> bool:
+        """True when splitter_v holds a pane besides the main chart that is not hidden."""
+        try:
+            for i in range(sp.count()):
+                wdg = sp.widget(i)
+                if wdg is not None and wdg is not self.plot and not wdg.isHidden():
+                    return True
+        except RuntimeError:
+            return False
+        return False
+
+    def _flow_pane_lift(self) -> None:
+        """Lift the 1 px cap and nothing else (idempotent, safe in any mode or state)."""
         try:
             if self.plot is not None and self.plot.maximumHeight() < self._PANE_MAX_H:
                 self.plot.setMaximumHeight(self._PANE_MAX_H)
                 self._flow_axis_key = None
-                self._flow_pane_grow()
-        except RuntimeError:
+        except (RuntimeError, AttributeError):
             pass
 
     def _flow_pane_grow(self) -> None:
@@ -20771,7 +20908,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
 
     def _on_lob_pane_toggled(self, on: bool) -> None:
         self._lob_on = bool(on)
+        if not on:
+            self._flow_pane_lift()          # BEFORE a pane hides: it may be the collapsed chart's last neighbour
         self._lob_show(bool(on) and self.scanner_mode == "flow")
+        self._flow_pane_apply()             # ... then collapse the flow pane again if it is off and may be
         self._save_ui_state()
 
     def _lob_ensure_pane(self):
@@ -20872,6 +21012,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         pos = evt[0]
         if not self._lob_plot.sceneBoundingRect().contains(pos):
             self._lob_hide_cursor()
+            self._stack_time_hide()
             return
         pt = self._lob_vb.mapSceneToView(pos)
         self._lob_vline.setPos(pt.x())
@@ -20884,11 +21025,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._lob_time_tag.setText(_xl); self._lob_time_tag.setPos(pt.x(), vy0); self._lob_time_tag.show()
         else:
             self._lob_time_tag.hide()
-        self.vline.setPos(pt.x())
-        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
-        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
-        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
-        self._cvol_sync_vline(pt.x()); self._cvol_hide_cursor()
+        self._stack_cursor_sync("lob", pt.x())
 
     def _lob_cycle_means(self, t, t_end):
         """(bid mean, ask mean, n columns) per cycle from the liquidity window, and cache them.
@@ -21044,7 +21181,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
 
     def _on_cvol_pane_toggled(self, on: bool) -> None:
         self._cvol_on = bool(on)
+        if not on:
+            self._flow_pane_lift()          # BEFORE a pane hides: it may be the collapsed chart's last neighbour
         self._cvol_show(bool(on) and self.scanner_mode == "flow")
+        self._flow_pane_apply()             # ... then collapse the flow pane again if it is off and may be
         self._save_ui_state()
 
     def _cvol_ensure_pane(self):
@@ -21149,6 +21289,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         pos = evt[0]
         if not self._cvol_plot.sceneBoundingRect().contains(pos):
             self._cvol_hide_cursor()
+            self._stack_time_hide()
             return
         pt = self._cvol_vb.mapSceneToView(pos)
         self._cvol_vline.setPos(pt.x())
@@ -21162,10 +21303,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._cvol_time_tag.show()
         else:
             self._cvol_time_tag.hide()
-        self.vline.setPos(pt.x())
-        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
-        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
-        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
+        self._stack_cursor_sync("cvol", pt.x())
 
     def _cvol_tick(self, now: float) -> None:
         """Per frame in Flow mode, throttled. The read is WIDER than the view on purpose: the baseline is the
@@ -21250,7 +21388,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
 
     def _on_cyc_pane_toggled(self, on: bool) -> None:
         self._cyc_on = bool(on)
+        if not on:
+            self._flow_pane_lift()          # BEFORE a pane hides: it may be the collapsed chart's last neighbour
         self._cyc_show(bool(on) and self.scanner_mode == "flow")
+        self._flow_pane_apply()             # ... then collapse the flow pane again if it is off and may be
         self._save_ui_state()
 
     def _on_cyc_win(self, win: float) -> None:
@@ -21355,6 +21496,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         pos = evt[0]
         if not self._cyc_plot.sceneBoundingRect().contains(pos):
             self._cyc_hide_cursor()
+            self._stack_time_hide()
             return
         pt = self._cyc_vb.mapSceneToView(pos)
         self._cyc_vline.setPos(pt.x())
@@ -21367,9 +21509,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._cyc_time_tag.setText(_xl); self._cyc_time_tag.setPos(pt.x(), vy0); self._cyc_time_tag.show()
         else:
             self._cyc_time_tag.hide()
-        self.vline.setPos(pt.x())
-        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
-        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
+        self._stack_cursor_sync("cyc", pt.x())
         for _v, _h, _t in ((getattr(self, "cvd_vline", None), getattr(self, "cvd_hline", None),
                             getattr(self, "cvd_tag", None)),
                            (getattr(self, "vol_vline", None), getattr(self, "vol_hline", None),
@@ -21477,7 +21617,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             return
         pos = evt[0]
         if not self._liq_plot.sceneBoundingRect().contains(pos):
-            self._liq_hide_cursor()
+            self._liq_hide_cursor(); self._stack_time_hide()
             return
         pt = self._liq_vb.mapSceneToView(pos)
         self._liq_vline.setPos(pt.x())
@@ -21493,9 +21633,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._liq_time_tag.show()
         else:
             self._liq_time_tag.hide()
-        self.vline.setPos(pt.x())                        # shared vertical -> the flow chart above
-        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
-        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
+        self._stack_cursor_sync("liq", pt.x())
         for _v, _h, _t in ((getattr(self, "cvd_vline", None), getattr(self, "cvd_hline", None),
                             getattr(self, "cvd_tag", None)),
                            (getattr(self, "vol_vline", None), getattr(self, "vol_hline", None),
@@ -21624,7 +21762,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._spd_show(False)
         self._fratio_show(False)
         self._interp_show(False)
-        self._flow_pane_uncap()                               # every other mode draws on the main chart
+        self._flow_pane_lift()                                # every other mode draws on the main chart (idempotent)
         self._flow_curves = None
         self._flow_sig = None
         self._flow_xln = None; self._flow_xsig = None; self._flow_xbadge = None
@@ -23835,6 +23973,36 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._syncing_split = False
 
     def _ensure_canvas_panes(self) -> None:
+        """Build the stacked workspace (_ensure_canvas_panes_impl) with the side panels' width caps lifted across it.
+
+        ⚠⚠ QSplitter.recalc() sets the window's central splitter's OWN maximum width to the sum of its VISIBLE
+        children's maximum widths, and the build starts by moving the chart out of that splitter. Whatever side panel
+        is showing at that instant is then all that is left -- the Interpretation feed (max 620 px) on a Zero Point
+        change in Flow mode, which HLH's automatic pull-back also triggers; the COB column or the footprint pane in
+        Mode 10 -- so the central splitter was clamped to that cap and QMainWindow never re-grew it: measured
+        1600 -> 620 px, the chart squeezed to 217 px until a window resize. With the caps lifted the sum stays
+        unbounded; they are restored the moment the stack is in place."""
+        if self.lower_plot is not None:
+            return
+        _caps = []
+        try:
+            for _i in range(self.splitter.count()):
+                _c = self.splitter.widget(_i)
+                if _c is not None and _c is not self.plot and not _c.isHidden() and _c.maximumWidth() < 16777215:
+                    _caps.append((_c, int(_c.maximumWidth())))
+                    _c.setMaximumWidth(16777215)
+        except RuntimeError:
+            pass
+        try:
+            self._ensure_canvas_panes_impl()
+        finally:
+            for _c, _mw in _caps:
+                try:
+                    _c.setMaximumWidth(_mw)
+                except RuntimeError:
+                    pass
+
+    def _ensure_canvas_panes_impl(self) -> None:
         """Build the stacked dual-pane workspace: reparent the main plot into a
         vertical splitter and add the lower VPIN sub-pane, X-linked to the chart."""
         if self.lower_plot is not None:
@@ -23876,6 +24044,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _vtf = QtGui.QFont("Consolas", 9); _vtf.setBold(True)
         self.vpin_tag.textItem.setFont(_vtf); self.vpin_tag.setZValue(16)
         self.lower_plot.addItem(self.vpin_tag, ignoreBounds=True); self.vpin_tag.hide()
+        self.lower_time_tag = self._mk_time_tag(self.lower_plot)   # the shared clock badge when this pane is the bottom
         self.lower_vb = self.lower_plot.getViewBox()
         self._lower_proxy = pg.SignalProxy(self.lower_plot.scene().sigMouseMoved,
                                            rateLimit=60, slot=self._on_lower_mouse_move)
@@ -23920,6 +24089,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _ctf = QtGui.QFont("Consolas", 9); _ctf.setBold(True)
         self.cvd_tag.textItem.setFont(_ctf); self.cvd_tag.setZValue(16)
         self.cvd_plot.addItem(self.cvd_tag, ignoreBounds=True); self.cvd_tag.hide()
+        self.cvd_time_tag = self._mk_time_tag(self.cvd_plot)
         self.cvd_vb = self.cvd_plot.getViewBox()
         self._cvd_proxy = pg.SignalProxy(self.cvd_plot.scene().sigMouseMoved,
                                          rateLimit=60, slot=self._on_cvd_mouse_move)
@@ -23960,6 +24130,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _vtf2 = QtGui.QFont("Consolas", 9); _vtf2.setBold(True)
         self.vol_tag.textItem.setFont(_vtf2); self.vol_tag.setZValue(16)
         self.vol_plot.addItem(self.vol_tag, ignoreBounds=True); self.vol_tag.hide()
+        self.vol_time_tag = self._mk_time_tag(self.vol_plot)
         self.vol_vb = _vvb
         self._vol_proxy = pg.SignalProxy(self.vol_plot.scene().sigMouseMoved, rateLimit=60, slot=self._on_vol_mouse_move)
         self.vol_plot.setMinimumHeight(0)
@@ -24122,19 +24293,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         pos = evt[0]
         if not self.cvd_plot.sceneBoundingRect().contains(pos):
             self.cvd_tag.hide()                # left the pane -> drop the badge (lines linger, like the main)
+            self._stack_time_hide()
             return
         pt = self.cvd_vb.mapSceneToView(pos)
-        self.cvd_vline.setPos(pt.x()); self.cvd_hline.setPos(pt.y()); self.cvd_hline.show()
-        self.vline.setPos(pt.x())              # shared vertical crosshair -> price pane
-        self.hline.hide(); self.price_tag.hide()
-        if getattr(self, "lower_vline", None) is not None:      # ... and the VPIN pane
-            self.lower_vline.setPos(pt.x())
-            self.lower_hline.hide(); self.vpin_tag.hide()
-        if getattr(self, "vol_vline", None) is not None:        # ... and the Volume pane
-            self.vol_vline.setPos(pt.x())
-            self.vol_hline.hide(); self.vol_tag.hide()
-        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()   # ... and the Flow liquidity pane
-        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
+        self.cvd_hline.setPos(pt.y()); self.cvd_hline.show()
+        self._stack_cursor_sync("cvd", pt.x())     # the shared vertical in EVERY pane + the time badge on the bottom pane
         self.cvd_tag.setText(f"{pt.y():,.0f}")   # CVD is a volume total -> thousands-separated, no decimals
         self.cvd_tag.setPos(self.cvd_vb.viewRange()[0][1], pt.y())
         self.cvd_tag.show()
@@ -24388,14 +24551,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         pos = evt[0]
         if not self.vol_plot.sceneBoundingRect().contains(pos):
             self.vol_tag.hide()
+            self._stack_time_hide()
             return
         pt = self.vol_vb.mapSceneToView(pos)
-        self.vol_vline.setPos(pt.x()); self.vol_hline.setPos(pt.y()); self.vol_hline.show()
-        self.vline.setPos(pt.x()); self.hline.hide(); self.price_tag.hide()
-        if getattr(self, "cvd_vline", None) is not None:
-            self.cvd_vline.setPos(pt.x()); self.cvd_hline.hide(); self.cvd_tag.hide()
-        if getattr(self, "lower_vline", None) is not None:
-            self.lower_vline.setPos(pt.x()); self.lower_hline.hide(); self.vpin_tag.hide()
+        self.vol_hline.setPos(pt.y()); self.vol_hline.show()
+        self._stack_cursor_sync("vol", pt.x())     # the shared vertical in EVERY pane + the time badge on the bottom pane
         self.vol_tag.setText(f"{pt.y():,.0f}")
         self.vol_tag.setPos(self.vol_vb.viewRange()[0][1], pt.y())
         self.vol_tag.show()
