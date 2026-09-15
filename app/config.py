@@ -392,7 +392,25 @@ def pane_titles(n=None):
         "spd": "CYCLE SPEED" + d + "ticks/s vs last %d" % n,
         "interp": "INTERPRETATION" + d + "one row per cycle",
         "px": "PRICE" + d + "one candle per cycle",
+        "lines": "BUY / SELL FLOW" + d + "taker $ per window (the lines)",
+        "fratio": "FLOW RATIOS" + d + "$/s vs last %d" % n + d + "flow / buy / sell",
     }
+
+
+# --- Flow ratios pane (user 2026-09-15): the interpretation feed's "flow 0.79x  buy 1.06  sell 0.35", as
+# three step lines on the cycle clock -- one value per cycle held over the cycle's span. EXACTLY the feed's
+# numbers: aggressive $ PER SECOND (both sides for flow, one side for buy / sell) over the MEDIAN of the
+# previous N cycles' same rate (prev_ratio, include_open, so the forming cycle is rated from what it has so
+# far and a half-formed cycle never enters a baseline). Same crosses() arguments as the other cycle panes, so
+# the read is a memo hit. Plotted in log2 (0.5x / 1x / 2x are equidistant); the dashed guide is 1.0x.
+FRATIO_PANE_ON = True
+FRATIO_FLOW_COL = "#4d84c4"     # flow (both sides) -- the pane family's blue, never green/red (those mean a side)
+FRATIO_BUY_COL = "#26a69a"      # buy -- the same teal as the buy $ line
+FRATIO_SELL_COL = "#ef5350"     # sell -- the same red as the sell $ line
+# --- the Buy/Sell Flow ($) LINES themselves get a toggle (user 2026-09-15: "we dont have it"): the two taker
+# $-per-window curves and their live badges on the main Flow pane. Display only -- the bins, the crossings,
+# every cycle pane and the feed keep reading the same store.
+FLOW_LINES_ON = True
 
 
 # --- PRICE pane, ABOVE the flow lines (user 2026-09-12) ---------------------------------------------------

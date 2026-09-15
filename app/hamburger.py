@@ -296,6 +296,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     cvolPaneToggled = QtCore.Signal(bool)        # Volume pane on/off (Flow mode)
     lobPaneToggled = QtCore.Signal(bool)         # Book pane on/off (Flow mode)
     spdPaneToggled = QtCore.Signal(bool)         # Speed pane on/off (Flow mode)
+    fratioPaneToggled = QtCore.Signal(bool)      # Flow ratios pane on/off (Flow mode): flow / buy / sell vs last N
+    flowLinesToggled = QtCore.Signal(bool)       # the Buy/Sell Flow $ LINES on the main Flow pane on/off
     interpPaneToggled = QtCore.Signal(bool)     # Interpretation feed on/off (Flow mode, right side)
     cycleWinChanged = QtCore.Signal(float)       # the smoothing that defines a cycle boundary
     liqPaneToggled = QtCore.Signal(bool)          # resting-liquidity pane on/off (Flow mode)
@@ -1653,6 +1655,15 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                               "be read against the flow that paid for it. Shows only in Buy/Sell Flow mode.")
         self.px_on.toggled.connect(lambda on: self.pxPaneToggled.emit(bool(on)))
         lpx.addWidget(self.px_on)
+        self.lines_on = QtWidgets.QCheckBox(config.pane_titles()["lines"])
+        self.lines_on.setChecked(bool(config.FLOW_LINES_ON))
+        self.lines_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.lines_on.setToolTip("The two lines of the Buy/Sell Flow pane itself -- taker buy $ (teal) and taker "
+                                 "sell $ (red) over the rolling window -- and their live badges. Display only: "
+                                 "the cycle lines, every cycle pane and the interpretation keep reading the "
+                                 "same tape with the lines hidden.")
+        self.lines_on.toggled.connect(lambda on: self.flowLinesToggled.emit(bool(on)))
+        lpx.addWidget(self.lines_on)
         self.flow_sec.addWidget(wpx)
         w2 = QtWidgets.QWidget()
         l2 = QtWidgets.QVBoxLayout(w2); l2.setContentsMargins(2, 1, 8, 5); l2.setSpacing(2)
@@ -1734,6 +1745,18 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % (config.SPEED_BASE_N, config.SPEED_FLAT_TICKS))
         self.spd_on.toggled.connect(lambda on: self.spdPaneToggled.emit(bool(on)))
         l4.addWidget(self.spd_on)
+        self.fratio_on = QtWidgets.QCheckBox(config.pane_titles()["fratio"])
+        self.fratio_on.setChecked(bool(config.FRATIO_PANE_ON))
+        self.fratio_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.fratio_on.setToolTip(
+            "The interpretation feed's three numbers as lines, one value per cycle held over the cycle: "
+            "FLOW (blue) = the cycle's aggressive $ per second, both sides, over the median of the previous "
+            "%d cycles; BUY (teal) and SELL (red) = each side's own $ per second over the median of that side's "
+            "previous %d. 1.0x is 'as usual'; the axis is log2 so 0.5x and 2x sit the same distance from it. "
+            "The forming cycle is rated from what it has so far and is drawn to the live edge."
+            % (config.CYCLE_BASE_N, config.CYCLE_BASE_N))
+        self.fratio_on.toggled.connect(lambda on: self.fratioPaneToggled.emit(bool(on)))
+        l4.addWidget(self.fratio_on)
         self.interp_on = QtWidgets.QCheckBox(config.pane_titles()["interp"])
         self.interp_on.setChecked(bool(config.INTERP_PANE_ON))
         self.interp_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
@@ -1773,7 +1796,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     def set_pane_names(self, names: dict) -> None:
         """Re-label the pane toggles when the cycle lookback changes -- the names quote the number."""
         for _k, _cb in (("px", self.px_on), ("liq", self.liq_on), ("cyc", self.cycle_on),
-                        ("cvol", self.cvol_on),
+                        ("cvol", self.cvol_on), ("lines", self.lines_on), ("fratio", self.fratio_on),
                         ("lob", self.lob_on), ("spd", self.spd_on), ("interp", self.interp_on)):
             if _k in names:
                 _cb.setText(names[_k])
@@ -1783,6 +1806,15 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def set_spd_pane_on(self, on: bool) -> None:
         self.spd_on.blockSignals(True); self.spd_on.setChecked(bool(on)); self.spd_on.blockSignals(False)
+
+    def set_fratio_pane_on(self, on: bool) -> None:
+        self.fratio_on.blockSignals(True); self.fratio_on.setChecked(bool(on)); self.fratio_on.blockSignals(False)
+
+    def flow_lines_on(self) -> bool:
+        return bool(self.lines_on.isChecked())
+
+    def set_flow_lines_on(self, on: bool) -> None:
+        self.lines_on.blockSignals(True); self.lines_on.setChecked(bool(on)); self.lines_on.blockSignals(False)
 
     def set_lob_pane_on(self, on: bool) -> None:
         self.lob_on.blockSignals(True); self.lob_on.setChecked(bool(on)); self.lob_on.blockSignals(False)

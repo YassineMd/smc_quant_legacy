@@ -1919,6 +1919,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._spd_vline = None; self._spd_hline = None
         self._spd_tag = None; self._spd_time_tag = None; self._spd_proxy = None
         self._spd_title = None; self._spd_badge = None
+        self._fratio_plot = None       # Flow ratios pane (Flow mode): the feed's flow / buy / sell vs last N as lines
+        self._fratio_vb = None
+        self._fratio_items = None      # (flow, buy, sell) PlotCurveItems
+        self._fratio_sig = None
+        self._fratio_t = 0.0
+        self._fratio_data = None
+        self._fratio_on = bool(config.FRATIO_PANE_ON)
+        self._fratio_vline = None; self._fratio_hline = None
+        self._fratio_tag = None; self._fratio_time_tag = None; self._fratio_proxy = None
+        self._fratio_title = None
+        self._flow_lines_on = bool(config.FLOW_LINES_ON)   # the Buy/Sell Flow $ lines + their badges (display only)
         self._lob_plot = None          # Book pane (Flow mode): resting book per side vs the last N cycles
         self._lob_vb = None
         self._lob_items = None         # (low, normal, high) x (bid filled, ask hollow) BarGraphItems
@@ -2444,6 +2455,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_cvol_pane_on(bool(getattr(self, "_cvol_on", config.CVOL_PANE_ON)))
             self.menu.set_lob_pane_on(bool(getattr(self, "_lob_on", config.LOB_PANE_ON)))
             self.menu.set_spd_pane_on(bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)))
+            self.menu.set_fratio_pane_on(bool(getattr(self, "_fratio_on", config.FRATIO_PANE_ON)))
+            self.menu.set_flow_lines_on(bool(getattr(self, "_flow_lines_on", config.FLOW_LINES_ON)))
             self.menu.set_interp_pane_on(bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)))
             if getattr(self, "interp_panel", None) is not None:
                 self.interp_panel.setLookback(self._lb_n())   # silent: must not echo back as a change
@@ -2716,6 +2729,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.cvolPaneToggled.connect(self._on_cvol_pane_toggled)            # Volume pane on/off
         self.menu.lobPaneToggled.connect(self._on_lob_pane_toggled)              # Book pane on/off
         self.menu.spdPaneToggled.connect(self._on_spd_pane_toggled)              # Speed pane on/off
+        self.menu.fratioPaneToggled.connect(self._on_fratio_pane_toggled)        # Flow ratios pane on/off
+        self.menu.flowLinesToggled.connect(self._on_flow_lines_toggled)          # the Buy/Sell Flow $ lines on/off
         self.menu.interpPaneToggled.connect(self._on_interp_pane_toggled)        # Interpretation feed on/off
         self.menu.cycleWinChanged.connect(self._on_cyc_win)                      # cycle-defining window
         self.menu.pxPaneToggled.connect(self._on_px_pane_toggled)                # PRICE pane (above) on/off
@@ -4506,6 +4521,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cvol_sync_vline(pt.x()); self._cvol_hide_cursor()   # ... and the Volume pane
         self._lob_sync_vline(pt.x()); self._lob_hide_cursor()     # ... and the Book pane
         self._spd_sync_vline(pt.x()); self._spd_hide_cursor()     # ... and the Speed pane
+        self._fratio_sync_vline(pt.x()); self._fratio_hide_cursor()   # ... and the Flow ratios pane
         if self._fp_want and self.fp_panel.isVisible():       # mirror the cursor PRICE into the footprint pane
             self.fp_panel.show_price_line(pt.y())
         self._radar_hover(pt)                                 # Order-Flow Walls radar -> P(resist) odds on hover
@@ -10662,6 +10678,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "cvol_on": bool(getattr(self, "_cvol_on", config.CVOL_PANE_ON)),
                 "lob_on": bool(getattr(self, "_lob_on", config.LOB_PANE_ON)),
                 "spd_on": bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)),
+                "fratio_on": bool(getattr(self, "_fratio_on", config.FRATIO_PANE_ON)),
+                "flow_lines_on": bool(getattr(self, "_flow_lines_on", config.FLOW_LINES_ON)),
                 "interp_on": bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)),
                 "cycle_lb": int(getattr(self, "_cycle_lb", config.CYCLE_BASE_N)),
                 "px_pane_on": bool(getattr(self, "_px_pane_on", config.PX_PANE_ON)),
@@ -10787,6 +10805,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._cvol_on = bool(s.get("cvol_on", config.CVOL_PANE_ON))
         self._lob_on = bool(s.get("lob_on", config.LOB_PANE_ON))
         self._spd_on = bool(s.get("spd_on", config.SPEED_PANE_ON))
+        self._fratio_on = bool(s.get("fratio_on", config.FRATIO_PANE_ON))
+        self._flow_lines_on = bool(s.get("flow_lines_on", config.FLOW_LINES_ON))
         self._interp_on = bool(s.get("interp_on", config.INTERP_PANE_ON))
         self._cycle_lb = max(int(config.CYCLE_BASE_N_MIN),
                              min(int(config.CYCLE_BASE_N_MAX),
@@ -17029,6 +17049,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._lob_sig = None; self._lob_t = 0.0
             self._spd_show(bool(getattr(self, "_spd_on", True)))
             self._spd_sig = None; self._spd_t = 0.0
+            self._fratio_show(bool(getattr(self, "_fratio_on", True)))
+            self._fratio_sig = None; self._fratio_t = 0.0
             self._interp_show(bool(getattr(self, "_interp_on", True)))
         # The loaded set moved, so EVERYTHING derived from it must re-derive — same invalidation the replay step does.
         # Without this the Pivot D/E marks (sig-gated on offset/range) and the selection kept their last values, so a
@@ -17759,6 +17781,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._spd_vline = None; self._spd_hline = None
             self._spd_tag = None; self._spd_time_tag = None
             self._spd_title = None; self._spd_badge = None
+            self._fratio_plot = None; self._fratio_vb = None; self._fratio_items = None
+            self._fratio_sig = None; self._fratio_sized = False; self._fratio_proxy = None
+            self._fratio_vline = None; self._fratio_hline = None
+            self._fratio_tag = None; self._fratio_time_tag = None; self._fratio_title = None
             self._cvol_title = None; self._cvol_badge = None
             self._cyc_title = None; self._cyc_badge = None
             self._liq_title = None
@@ -19664,7 +19690,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                         ("cyc", getattr(self, "_cyc_title", None)),
                         ("cvol", getattr(self, "_cvol_title", None)),
                         ("lob", getattr(self, "_lob_title", None)),
-                        ("spd", getattr(self, "_spd_title", None))):
+                        ("spd", getattr(self, "_spd_title", None)),
+                        ("fratio", getattr(self, "_fratio_title", None))):
             if _it is not None:
                 try:
                     _it.setText(names[_k])
@@ -20294,6 +20321,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
         self._cvol_sync_vline(pt.x()); self._cvol_hide_cursor()
         self._lob_sync_vline(pt.x()); self._lob_hide_cursor()
+        self._fratio_sync_vline(pt.x()); self._fratio_hide_cursor()
 
     @staticmethod
     def _same_side_ratio(vals, is_dom_buy, done, n_base, min_n):
@@ -20410,6 +20438,236 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if lim > cur * 0.98 or lim < cur * 0.55:
             self._spd_ytop = lim
             self._spd_vb.setYRange(-lim, lim + self._pane_badge_headroom(self._spd_vb, lim, 1), padding=0.0)
+
+    # ------------------------------------------------------------------
+    # FLOW RATIOS pane (Flow mode) -- the interpretation feed's "flow 0.79x  buy 1.06  sell 0.35" as lines
+    # ------------------------------------------------------------------
+    def _on_fratio_pane_toggled(self, on: bool) -> None:
+        self._fratio_on = bool(on)
+        self._fratio_show(bool(on) and self.scanner_mode == "flow")
+        self._save_ui_state()
+
+    def _fratio_ensure_pane(self):
+        if self._fratio_plot is not None:
+            return self._fratio_plot
+        try:
+            self._ensure_canvas_panes()
+        except Exception:
+            pass
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return None
+        ax = PriceAxis(orientation="right")
+        pw = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"), "right": ax})
+        pw.setBackground("#141414")
+        pw.showAxis("right"); pw.hideAxis("left")
+        for _a in ("bottom", "right"):
+            pw.getAxis(_a).setPen(pg.mkPen("#dcdcdc", width=1))
+            pw.getAxis(_a).setTextPen(pg.mkPen("#dcdcdc"))
+        pw.showGrid(x=False, y=False)
+        pw.setMenuEnabled(False)
+        pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        pw.getAxis("bottom").set_scanner_active(False)
+        ax.tickStrings = lambda vals, sc, sp_: ["%.2gx" % (2.0 ** v) for v in vals]
+        vb = pw.getViewBox()
+        vb.setMouseEnabled(x=True, y=True)
+        vb.setXLink(self.vb)
+        # THREE step lines, one PlotCurveItem each (flow / buy / sell): a value per cycle held over the cycle's
+        # span, NaN where a cycle has no baseline yet so the line breaks instead of joining across it. Solid
+        # cosmetic pens, round joins, antialias OFF (the flow lines measured a 25x repaint cost with it on).
+        items = []
+        for _c, _w in ((config.FRATIO_FLOW_COL, 2.0), (config.FRATIO_BUY_COL, 1.5), (config.FRATIO_SELL_COL, 1.5)):
+            _pn = pg.mkPen(_c, width=_w, style=QtCore.Qt.SolidLine); _pn.setCosmetic(True)
+            _pn.setCapStyle(QtCore.Qt.RoundCap); _pn.setJoinStyle(QtCore.Qt.RoundJoin)
+            it = pg.PlotCurveItem(pen=_pn, antialias=False, connect="finite")
+            it.setZValue(5)
+            pw.addItem(it); items.append(it)
+        items[0].setZValue(6)                        # flow on top of the two sides
+        self._fratio_items = tuple(items)
+        _g = pg.mkPen("#9aa4b2", width=1.0, style=QtCore.Qt.DashLine); _g.setCosmetic(True)
+        _z = pg.InfiniteLine(angle=0, pos=0.0, pen=_g)      # 1.0x: "as usual"
+        _z.setZValue(3); pw.addItem(_z, ignoreBounds=True)
+        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
+        self._fratio_vline = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
+        self._fratio_hline = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
+        self._fratio_vline.setZValue(15); self._fratio_hline.setZValue(15)
+        pw.addItem(self._fratio_vline, ignoreBounds=True); pw.addItem(self._fratio_hline, ignoreBounds=True)
+        self._fratio_hline.hide()
+        _tf = QtGui.QFont("Consolas", 8)
+        self._fratio_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._fratio_tag.textItem.setFont(_tf); self._fratio_tag.setZValue(16)
+        pw.addItem(self._fratio_tag, ignoreBounds=True); self._fratio_tag.hide()
+        self._fratio_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._fratio_time_tag.textItem.setFont(_tf); self._fratio_time_tag.setZValue(61)
+        pw.addItem(self._fratio_time_tag, ignoreBounds=True); self._fratio_time_tag.hide()
+        self._fratio_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_fratio_mouse_move)
+        self._fratio_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["fratio"])
+        self._fratio_plot = pw
+        self._fratio_vb = vb
+        self._theme_sub_panes(not self._simple_bw())
+        sp.addWidget(pw)
+        pw.setMinimumHeight(60)
+        return pw
+
+    def _fratio_show(self, on: bool) -> None:
+        if on:
+            if self._fratio_ensure_pane() is None:
+                return
+            self._fratio_plot.setVisible(True)
+            if self._sub_pane_grow(self._fratio_plot, not getattr(self, "_fratio_sized", False), share=0.13):
+                self._fratio_sized = True
+        elif self._fratio_plot is not None:
+            try:
+                self._fratio_plot.setVisible(False)
+            except RuntimeError:
+                self._fratio_plot = None; self._fratio_items = None; self._fratio_vb = None
+        self._stack_axis_sync()
+
+    def _fratio_hide_cursor(self) -> None:
+        for _it in (self._fratio_hline, self._fratio_tag, self._fratio_time_tag):
+            if _it is not None:
+                _it.hide()
+
+    def _fratio_sync_vline(self, x: float) -> None:
+        if self._fratio_vline is not None:
+            self._fratio_vline.setPos(x)
+
+    def _on_fratio_mouse_move(self, evt) -> None:
+        if self._fratio_vb is None or self._fratio_plot is None or not self._fratio_plot.isVisible():
+            return
+        pos = evt[0]
+        if not self._fratio_plot.sceneBoundingRect().contains(pos):
+            self._fratio_hide_cursor()
+            return
+        pt = self._fratio_vb.mapSceneToView(pos)
+        self._fratio_vline.setPos(pt.x())
+        self._fratio_hline.setPos(pt.y()); self._fratio_hline.show()
+        (vx0, vx1), (vy0, vy1) = self._fratio_vb.viewRange()
+        self._fratio_tag.setText("%.2fx" % (2.0 ** float(pt.y())))
+        self._fratio_tag.setPos(vx1, pt.y()); self._fratio_tag.show()
+        _xl = self._x_time_label(pt.x())
+        if _xl:
+            self._fratio_time_tag.setText(_xl); self._fratio_time_tag.setPos(pt.x(), vy0); self._fratio_time_tag.show()
+        else:
+            self._fratio_time_tag.hide()
+        self.vline.setPos(pt.x())
+        self.hline.hide(); self.price_tag.hide(); self.time_tag.hide()
+        self._liq_sync_vline(pt.x()); self._liq_hide_cursor()
+        self._cyc_sync_vline(pt.x()); self._cyc_hide_cursor()
+        self._cvol_sync_vline(pt.x()); self._cvol_hide_cursor()
+        self._lob_sync_vline(pt.x()); self._lob_hide_cursor()
+        self._spd_sync_vline(pt.x()); self._spd_hide_cursor()
+        self._fratio_sync_vline(pt.x()); self._fratio_hide_cursor()
+
+    def _fratio_tick(self, now: float) -> None:
+        if self._fratio_plot is None or not self._fratio_plot.isVisible():
+            return
+        if now - self._fratio_t < float(config.CYCLE_RECALC_SECS):
+            return
+        self._fratio_t = now
+        (vx0, vx1), _ = self.vb.viewRange()
+        try:
+            # the SAME arguments the Volume / Speed panes read with, so this is a memo hit, not a second pass
+            self._fratio_data = (vx0, vx1, self._flow.crosses(
+                vx0 - self._lb_secs(), vx1, float(self._flow_win),
+                float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE)))
+        except Exception:
+            return
+        self._fratio_draw(now)
+
+    def _fratio_ratios(self, t, t_end, done, cbuy, csell, now, live):
+        """The feed's three numbers, per cycle: flow = both sides' $ PER SECOND over the median of the previous
+        N cycles, buy / sell = each side's own rate over the median of that side's previous N. Same helper, same
+        lookback, same include_open as the Interpretation feed (app/flow_interp.prev_ratio), so a cycle reads
+        the same here and in its feed row. The forming cycle's end is clamped to now -- the read's right edge
+        can sit in the FUTURE when the user pans right of the live edge, which would understate every rate."""
+        t_end_c = np.array(t_end, dtype=np.float64, copy=True)
+        if t.size and not bool(done[-1]):
+            t_end_c[-1] = max(float(t[-1]), min(float(now), float(t_end_c[-1]))) if live else float(t_end_c[-1])
+        dur = np.maximum(t_end_c - t, 1e-9)
+        b = np.maximum(cbuy, 0.0); sl = np.maximum(csell, 0.0)
+        flow = _interp_prev((b + sl) / dur, done, self._lb_n(), self._lb_min_n(), include_open=True)
+        buy = _interp_prev(b / dur, done, self._lb_n(), self._lb_min_n(), include_open=True)
+        sell = _interp_prev(sl / dur, done, self._lb_n(), self._lb_min_n(), include_open=True)
+        return t_end_c, flow, buy, sell
+
+    def _fratio_draw(self, now: float) -> None:
+        """Three step lines: each cycle's flow / buy / sell ratio held from its start to its end, in log2 so
+        0.5x and 2x sit the same distance from the 1.0x guide. The forming cycle is rated from what it has so
+        far and drawn to the live edge (its value moves as the cycle fills -- the feed's row does the same)."""
+        if self._fratio_data is None or self._fratio_items is None:
+            return
+        vx0, vx1, (t, is_buy, strong, move, cbuy, csell, t_end, done) = self._fratio_data
+        if t.size == 0:
+            for it in self._fratio_items:
+                it.setData(np.zeros(0), np.zeros(0))
+            self._fratio_sig = ("empty",)
+            return
+        live = bool(vx1 >= now - float(config.INTERP_STALE_SECS))
+        t_end_c, flow, buy, sell = self._fratio_ratios(t, t_end, done, cbuy, csell, now, live)
+        keep = t_end_c >= vx0
+        _form = float(now - t[-1]) if (live and not bool(done[-1])) else 0.0
+        sig = (int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win), int(_form // 2), self._lb_n(),
+               round(float(np.nan_to_num(flow[-1])), 5), round(float(np.nan_to_num(buy[-1])), 5),
+               round(float(np.nan_to_num(sell[-1])), 5))
+        if sig == self._fratio_sig:
+            return
+        self._fratio_sig = sig
+        if not keep.any():
+            for it in self._fratio_items:
+                it.setData(np.zeros(0), np.zeros(0))
+            return
+        x0 = t[keep]; x1 = t_end_c[keep]
+        xs = np.empty(2 * x0.size, dtype=np.float64)
+        xs[0::2] = x0; xs[1::2] = x1
+        vals = []
+        for r in (flow[keep], buy[keep], sell[keep]):
+            with np.errstate(divide="ignore", invalid="ignore"):
+                v = np.where(np.isfinite(r) & (r > 0), np.log2(np.maximum(r, 1e-9)), np.nan)
+            vals.append(np.repeat(v, 2))
+        for it, y in zip(self._fratio_items, vals):
+            it.setData(xs, y, connect="finite")
+        fin = np.concatenate(vals)
+        fin = fin[np.isfinite(fin)]
+        if fin.size:
+            lim = float(np.percentile(np.abs(fin), 99.0)) * 1.15
+            lim = max(lim, 1.0)                              # never tighter than 0.5x .. 2x
+            cur = getattr(self, "_fratio_ytop", 0.0)
+            if lim > cur * 0.98 or lim < cur * 0.55:
+                self._fratio_ytop = lim
+                self._fratio_vb.setYRange(-lim, lim, padding=0.0)
+
+    # ------------------------------------------------------------------
+    # the Buy/Sell Flow $ LINES toggle (display only)
+    # ------------------------------------------------------------------
+    def _on_flow_lines_toggled(self, on: bool) -> None:
+        self._flow_lines_on = bool(on)
+        self._flow_lines_apply()
+        self._save_ui_state()
+
+    def _flow_lines_apply(self) -> None:
+        """Show / hide the two taker-$ curves and their live badges. Nothing else changes: the bins keep
+        filling, the crossings, every cycle pane and the feed read the same store, and the y range is left as
+        it was so the cycle badges under zero keep their strip."""
+        on = bool(getattr(self, "_flow_lines_on", True))
+        cv = getattr(self, "_flow_curves", None)
+        if cv is not None:
+            for _c in cv:
+                try:
+                    _c.setVisible(on)
+                except RuntimeError:
+                    pass
+        for _k in ("t_flow_b", "t_flow_s"):
+            rec = (getattr(self, "_scan_trackers", {}) or {}).get(_k)
+            if not rec:
+                continue
+            for _it in (rec.get("line"), rec.get("text")):
+                if _it is not None:
+                    try:
+                        _it.setVisible(on)
+                    except RuntimeError:
+                        pass
 
     def _on_lob_pane_toggled(self, on: bool) -> None:
         self._lob_on = bool(on)
@@ -21239,6 +21497,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._lob_sig = None; self._lob_t = 0.0
         self._spd_show(bool(getattr(self, "_spd_on", True)))        # ... and the Speed pane
         self._spd_sig = None; self._spd_t = 0.0
+        self._fratio_show(bool(getattr(self, "_fratio_on", True)))  # ... and the Flow ratios pane
+        self._fratio_sig = None; self._fratio_t = 0.0
         self._interp_show(bool(getattr(self, "_interp_on", True)))  # ... and the Interpretation feed
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
         self._flow_subscribe(backfill=True)
@@ -21261,6 +21521,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._cvol_show(False)
         self._lob_show(False)
         self._spd_show(False)
+        self._fratio_show(False)
         self._interp_show(False)
         self._flow_curves = None
         self._flow_sig = None
@@ -21356,6 +21617,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         except Exception:
             pass
         try:
+            self._fratio_tick(now)      # Flow ratios pane -- same read, so a memo hit
+        except Exception:
+            pass
+        try:
             self._interp_tick(now)      # Interpretation feed -- same crosses() read, so a memo hit
         except Exception:
             pass
@@ -21412,6 +21677,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             sell_c = self._add_scanner_item(pg.PlotCurveItem(pen=_sp, antialias=False))
             buy_c.setZValue(6); sell_c.setZValue(5)
             self._flow_curves = (buy_c, sell_c)
+            self._flow_lines_apply()                    # honour the lines toggle on a fresh pair
         buy_c, sell_c = self._flow_curves
         buy_c.setData(t, buy); sell_c.setData(t, sell)
         if len(t) == 0:
@@ -21438,6 +21704,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                               "%s (%.0f%%)" % (self._fmt_usd_short(b_now), 100 * b_now / tot), float(t[-1]), "up")
         self._scanner_tracker("t_flow_s", s_now, "#ef5350",
                               "%s (%.0f%%)" % (self._fmt_usd_short(s_now), 100 * s_now / tot), float(t[-1]), "down")
+        if not getattr(self, "_flow_lines_on", True):
+            self._flow_lines_apply()                    # the trackers are (re)created visible: hide them again
 
     def _flow_cross_draw(self) -> None:
         """Vertical dashed lines where a CYCLE started: the two flow lines crossed and the cross was confirmed.
@@ -21668,7 +21936,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                            ("cyc", getattr(self, "_cyc_plot", None), getattr(self, "_cyc_vb", None)),
                            ("cvol", getattr(self, "_cvol_plot", None), getattr(self, "_cvol_vb", None)),
                            ("lob", getattr(self, "_lob_plot", None), getattr(self, "_lob_vb", None)),
-                           ("spd", getattr(self, "_spd_plot", None), getattr(self, "_spd_vb", None))):
+                           ("spd", getattr(self, "_spd_plot", None), getattr(self, "_spd_vb", None)),
+                           ("fratio", getattr(self, "_fratio_plot", None), getattr(self, "_fratio_vb", None))):
             if _p is not None and _v is not None and _p.isVisible():
                 out.append((_k, _p, _v))
         return out
@@ -22617,7 +22886,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                           (getattr(self, "_lob_plot", None),
                            (getattr(self, "_lob_vline", None), getattr(self, "_lob_hline", None))),
                           (getattr(self, "_spd_plot", None),
-                           (getattr(self, "_spd_vline", None), getattr(self, "_spd_hline", None)))):
+                           (getattr(self, "_spd_vline", None), getattr(self, "_spd_hline", None))),
+                          (getattr(self, "_fratio_plot", None),
+                           (getattr(self, "_fratio_vline", None), getattr(self, "_fratio_hline", None)))):
             if pw is None:
                 continue
             try:
