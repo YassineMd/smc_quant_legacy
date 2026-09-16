@@ -21057,17 +21057,19 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         vb = pw.getViewBox()
         vb.setMouseEnabled(x=True, y=False)      # y is a fixed 0..100: zooming it would only mislead
         vb.setXLink(self.vb)
-        # FOUR BarGraphItems: buy / sell x finished / forming, the FLOW RATIOS layout -- BUY on each cycle's left
-        # half and SELL on its right, so the two sides of one cycle sit side by side and can be read against
-        # each other without arithmetic. Grouping by class keeps the item count flat at any zoom.
+        # TWO LINES (user 2026-09-16: "i prefer two lines red green instead of histogram"): one STEP line per
+        # side, each cycle's score held flat across that cycle's own span, so the two sides read as two tracks you
+        # can follow rather than 200 bars to scan. Four curve items = the two lines x finished / forming, the
+        # forming tail lighter (this pane's convention everywhere else); the item count stays flat at any zoom.
+        # ⚠ connect="finite": a side with no score is NaN and MUST break the line, never be interpolated across.
         items = []
-        for _c, _fa, _pa in ((config.SCR_BUY_COL, 190, 255), (config.SCR_SELL_COL, 190, 255),
-                             (config.SCR_BUY_COL, int(config.SCR_FORM_FILL_A), int(config.SCR_FORM_PEN_A)),
-                             (config.SCR_SELL_COL, int(config.SCR_FORM_FILL_A), int(config.SCR_FORM_PEN_A))):
+        for _c, _pa, _wd in ((config.SCR_BUY_COL, 255, 2.0), (config.SCR_SELL_COL, 255, 2.0),
+                             (config.SCR_BUY_COL, int(config.SCR_FORM_PEN_A), 2.0),
+                             (config.SCR_SELL_COL, int(config.SCR_FORM_PEN_A), 2.0)):
             _col = QtGui.QColor(_c)
-            it = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
-                                 brush=pg.mkBrush(_col.red(), _col.green(), _col.blue(), _fa),
-                                 pen=pg.mkPen(QtGui.QColor(_col.red(), _col.green(), _col.blue(), _pa), width=1.0))
+            _pen = pg.mkPen(QtGui.QColor(_col.red(), _col.green(), _col.blue(), _pa), width=_wd)
+            _pen.setCosmetic(True)
+            it = pg.PlotCurveItem(x=[], y=[], pen=_pen, connect="finite", antialias=True)
             it.setZValue(5)
             pw.addItem(it); items.append(it)
         self._scr_items = tuple(items)
@@ -21204,17 +21206,29 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             return
         sc, scn = self._score_parts(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, dur, keep, n_lb, n_mn)
         x0 = t[keep]; x1 = t_end_c[keep]
-        mid = 0.5 * (x0 + x1)
         form = form_all[keep]
         fin = ~form
-        for it, (v, lo_, hi_, sel) in zip(self._scr_items,
-                                          ((sc["buy"], x0, mid, fin), (sc["sell"], mid, x1, fin),
-                                           (sc["buy"], x0, mid, form), (sc["sell"], mid, x1, form))):
-            m = sel & np.isfinite(v)
-            if not m.any():
-                it.setOpts(x0=[], x1=[], y0=[], height=[])
+        # the FINISHED line runs to the forming cycle's start, so the lighter tail continues it without a gap
+
+        def _steps(v, sel):
+            """Each cycle as two points at its own span's ends -> a step line. A NaN score stays NaN in y, and
+            connect="finite" breaks the line there rather than drawing a score that was never computed."""
+            if not sel.any():
+                return np.zeros(0), np.zeros(0)
+            _a = x0[sel]; _b = x1[sel]; _v = v[sel]
+            xs = np.empty(2 * int(_a.size)); ys = np.empty(2 * int(_a.size))
+            xs[0::2] = _a; xs[1::2] = _b
+            ys[0::2] = _v; ys[1::2] = _v
+            return xs, ys
+
+        for it, (v, sel) in zip(self._scr_items,
+                                ((sc["buy"], fin), (sc["sell"], fin),
+                                 (sc["buy"], form), (sc["sell"], form))):
+            xs, ys = _steps(v, sel)
+            if xs.size == 0:
+                it.setData(x=np.zeros(0), y=np.zeros(0))
                 continue
-            it.setOpts(x0=lo_[m], x1=hi_[m], y0=np.zeros(int(m.sum())), height=v[m])
+            it.setData(x=xs, y=ys, connect="finite")
         # ⚠ the two sides resolve INDEPENDENTLY: a side under SCORE_MIN_PARTS gets no score and no bar, so one
         # cycle can legitimately show only one of its two bars. Absence must never invent a score.
         self._scr_last = {"x0": x0, "x1": x1, "buy": sc["buy"], "sell": sc["sell"],

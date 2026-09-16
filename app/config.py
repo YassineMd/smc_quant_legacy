@@ -537,10 +537,12 @@ SCORE_SIZE_EXP = 0.55           # swept: rho(agg, $) +0.645 -> -0.018 buy, +0.64
 SCORE_LOW = 42.0                # measured terciles of the score itself
 SCORE_HIGH = 57.0
 SCORE_MIN_PARTS = 2             # fewer than this and no score is claimed at all
-# The score gets a PANE of its own (user 2026-09-16: "now make it its own pane with two bars per
-# cycle"): BUY on each cycle's left half, SELL on its right, both rising from 0 to that side's score,
-# with the measured terciles as guides. The forming cycle is drawn lighter on items of its own, the
-# FLOW RATIOS convention. The bars and the INTEREST x IMPACT panel share ONE memoised computation.
+# The score gets a PANE of its own: TWO STEP LINES, teal buyers and red sellers, each cycle's score held
+# flat across that cycle's span, on a fixed 0..100 with the measured terciles as guides (user
+# 2026-09-16: first "two bars per cycle", then "i prefer two lines red green instead of histogram").
+# The forming cycle's tail is lighter, this pane's convention. ⚠ A side with no score is NaN and the
+# line BREAKS there (connect="finite") -- never interpolate a score that was not computed.
+# The pane and the INTEREST x IMPACT panel share ONE memoised computation.
 SCR_PANE_ON = True
 SCR_BUY_COL = IIMP_BUY_COL      # the same teal / red as every other pane's two sides
 SCR_SELL_COL = IIMP_SELL_COL
