@@ -21406,9 +21406,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if self._iimp_read is not None:
             _k = int(v.size) - 1
             _w = wk[_k]
-            self._iimp_read.setText("%s %.2gx  ·  impact %.2gx  ·  wall %s%s%s" % (
+            _kp = kept[_k]          # "-" where the push was too short to read, exactly like the wall
+            self._iimp_read.setText("%s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s%s%s" % (
                 "BUY" if up[_k] else "SELL", _mult[_k], 2.0 ** float(score[keep][_k]),
                 "-" if not np.isfinite(_w) else "%.2gx" % _w,
+                "-" if not np.isfinite(_kp) else "%d%%" % int(round(100.0 * float(_kp))),
                 "  ·  still forming" if bool(form[_k]) else "",
                 "  ·  price went the other way" if contra[_k] else ""))
             self._iimp_read.setColor(config.IIMP_CONTRA_COL if contra[_k]
@@ -21643,9 +21645,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if forming:
             rows.append("<div style='color:#ffd479'>⚠ This cycle has NOT closed. Every number above is only what "
                         "it has so far and all of them still move -- the leading side itself can flip.</div>")
-        rows.append("<div style='color:%s'><b>%s %.2gx &nbsp;·&nbsp; impact %.2gx &nbsp;·&nbsp; wall %s</b></div>"
+        # the summary carries RETENTION too: impact is built on reach alone and never sees the close, so the
+        # two numbers answer different questions and the line was only ever telling half the story
+        rows.append("<div style='color:%s'><b>%s %.2gx &nbsp;·&nbsp; impact %.2gx &nbsp;·&nbsp; wall %s"
+                    " &nbsp;·&nbsp; kept %s</b></div>"
                     % (col, "BUY" if up else "SELL", mult, imp,
-                       "-" if not np.isfinite(wall) else "%.2gx" % wall))
+                       "-" if not np.isfinite(wall) else "%.2gx" % wall,
+                       "-" if not np.isfinite(kept) else "%d%%" % int(round(100.0 * kept))))
         rows.append("<div style='color:#7d8492'>click this panel to close it</div>")
         return "<div style='line-height:150%'>" + "<br>".join(rows) + "</div>"
 
