@@ -203,6 +203,7 @@ class MB:
     dName: str = ""               # "D1" (the D it belongs to)
     bHi: Optional[float] = None   # highest high / lowest low of its candles
     bLo: Optional[float] = None
+    poc: Optional[float] = None   # the bloc's OWN point of control, filled lazily by bloc_poc() and cached
     tag: str = ""                 # MAX / MIN among the final blocs (table 1)
     todo: bool = False            # to be coloured by color_rows
     cls: Optional[int] = None     # 2 = orange, 1 = coloured, 0 = dark gray
@@ -662,6 +663,45 @@ def _empty(is_week, key, n, t_first, t_last, per_mid, per_end, bin_secs, n_bins,
                         (hi - lo) / rows if hi > lo else 0.0, vp, float(vp.max()) if vp.size else 0.0, 0, 0,
                         [], [], [-1] * rows, [], [], [False] * rows, [False] * rows, [False] * rows,
                         [False] * rows, [], [], [], [], [], [], [], [], [], degenerate=True)
+
+
+def bloc_poc(m: "MB") -> Optional[float]:
+    """The POC of ONE bloc: the price of the row holding the most volume, from the bloc's OWN candles.
+
+    Built with the PERIOD's own rule so the two cannot disagree -- rows of `pStep` height, each candle's volume
+    spread evenly over every row its range touches (`_spread`), and a run of equal maximum rows counted as ONE
+    POC, reported at the middle of that run. `pStep` is the row height of the period the bloc came from, so a
+    bloc's rows line up with its period's profile instead of being re-binned to its own range.
+
+    Cached on the MB: `build_period` runs per redraw and a bloc's candles never change once merged."""
+    if m.poc is not None:
+        return m.poc
+    if m.cH is None or m.cL is None or m.cV is None:
+        return None
+    h = np.asarray(m.cH, dtype=np.float64)
+    l = np.asarray(m.cL, dtype=np.float64)
+    v = np.asarray(m.cV, dtype=np.float64)
+    if h.size == 0 or v.size != h.size or l.size != h.size:
+        return None
+    lo = float(np.min(l)); hi = float(np.max(h))
+    if not hi > lo:
+        return None
+    step = float(m.pStep) if (m.pStep is not None and m.pStep > 0) else (hi - lo) / 24.0
+    if not step > 0:
+        return None
+    rows = int(max(1, min(4096, np.ceil((hi - lo) / step))))
+    iT = np.minimum(rows - 1, np.maximum(0, np.floor((h - lo) / step).astype(np.int64)))
+    iB = np.minimum(rows - 1, np.maximum(0, np.floor((l - lo) / step).astype(np.int64)))
+    iB = np.minimum(iB, iT)                      # a candle whose low rounds above its high would break _spread
+    vp = _spread(v, iB, iT, rows)
+    mx = float(vp.max()) if vp.size else 0.0
+    if not mx > 0:
+        return None
+    pS = int(np.argmax(vp)); pE = pS
+    while pE < rows - 1 and vp[pE + 1] == mx:
+        pE += 1
+    m.poc = lo + (pS + pE + 1) * 0.5 * step      # the MIDDLE of the POC run, the period's convention
+    return m.poc
 
 
 def compute_period(cand: Candles, is_week: bool, p: Params, key: Optional[int] = None) -> Optional[PeriodResult]:

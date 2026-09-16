@@ -675,8 +675,9 @@ HLH_TP_BLOCS = True             # label each bloc (time + volume)
 HLH_TP_TOTAL = True             # label the D area total
 HLH_TP_PEAK = False             # label the busiest bin
 HLH_SHOW_VA = True              # VAH / VAL of each bloc (the Block Lines)
-HLH_SHOW_MID = True             # the bloc's MIDLINE: (bHi + bLo) / 2, dashed, thin, theme-coloured
-#                                 (black on the light canvas). The bloc's OWN high/low, not its value area.
+HLH_SHOW_BLOC_POC = True        # the bloc's POC: the row holding most of its OWN volume, drawn in the bloc's
+#                                 colour, thin and SOLID. Built with the period's own spreading rule so the two
+#                                 cannot disagree. (Replaced a high/low MIDLINE, 2026-09-16.)
 HLH_D_WIDTH = 2                 # D line width (px)
 HLH_LVL_WIDTH = 3               # level line width (px)
 HLH_VA_WIDTH = 1                # block line width (px; 2 in Block Lines Only)
