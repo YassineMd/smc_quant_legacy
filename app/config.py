@@ -475,6 +475,15 @@ IIMP_WALL_COL = "#dcdcdc"       # the wall dots are NEUTRAL: amber would read as
 # pass 8x -- fitting to the max (or to p99) let one cycle flatten every other bar in the first live render. The
 # right-edge readout and the click panel keep printing the TRUE multiple.
 IIMP_CLIP = 8.0
+# The cycle STILL FORMING is drawn too (user 2026-09-16: "also add the live current forming one, the panel and the
+# histogram should update live"), rated from what it has so far against the same baseline, on one lighter item of
+# its own -- the ratios pane's convention, and its alphas. ⚠ Its numbers MOVE: every quantity is partial until the
+# cycle closes, which is why it is drawn lighter and says so in the click panel. ⚠ It never enters any baseline
+# (flow_interp._ratio_vec appends only finished cycles), so nothing it does can drag a later reading. ⚠ Only a LIVE
+# read's last row is forming: crosses() marks the last row of ANY read unfinished, so a view panned back into
+# history must not claim one -- the guard is INTERP_STALE_SECS against the view's right edge.
+IIMP_FORM_FILL_A = 70           # forming bar: brush alpha when it has converted, pen alpha always
+IIMP_FORM_PEN_A = 150
 # --- the Buy/Sell Flow ($) PANE itself gets a toggle (user 2026-09-15: "we dont have it", then "I want the
 # whole chart to hide not just the lines"): in Flow mode the main chart IS that pane, so OFF hides the main
 # chart widget and the stack closes up around it. Display only -- the bins, the crossings, every cycle pane

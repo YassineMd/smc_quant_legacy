@@ -1936,8 +1936,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._fratio_title = None
         self._iimp_plot = None         # INTEREST x IMPACT pane (Flow mode): one bar per cycle, who leads + did it convert
         self._iimp_vb = None
-        self._iimp_items = None        # (buy solid, buy hollow, sell solid, sell hollow) BarGraphItems
+        self._iimp_items = None        # six BarGraphItems: (buy, sell, contradicted) x (converted, did not)
         self._iimp_dots = None         # (wall, open road) ScatterPlotItems
+        self._iimp_form = None         # the FORMING cycle's own bar: ONE item, brush and pen set per draw
         self._iimp_guides = None
         self._iimp_sig = None; self._iimp_t = 0.0; self._iimp_data = None; self._iimp_sized = False
         self._iimp_on = bool(config.IIMP_PANE_ON)
@@ -17831,6 +17832,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._fratio_tag = None; self._fratio_time_tag = None; self._fratio_title = None
             self._fratio_bdg = None
             self._iimp_plot = None; self._iimp_vb = None; self._iimp_items = None; self._iimp_dots = None
+            self._iimp_form = None
             self._iimp_guides = None; self._iimp_sig = None; self._iimp_sized = False; self._iimp_proxy = None
             self._iimp_vline = None; self._iimp_hline = None
             self._iimp_tag = None; self._iimp_time_tag = None
@@ -21050,6 +21052,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                     brush=pg.mkBrush(_wc) if _fill else pg.mkBrush(None))
             sc.setZValue(7); pw.addItem(sc); dots.append(sc)
         self._iimp_dots = tuple(dots)
+        # The FORMING cycle rides ONE item of its own, drawn lighter (the ratios pane's convention) with its brush
+        # and pen set per draw: it is a single bar whose side AND fill both still move, so a class item per
+        # combination would be five empty ones. Above the finished bars so a narrow live cycle is never hidden.
+        self._iimp_form = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[])
+        self._iimp_form.setZValue(6)
+        pw.addItem(self._iimp_form)
+        self._iimp_sig = None                      # new items are empty: the next draw fills them
         guides = []
         for _v in (float(np.log2(max(1e-9, config.IIMP_LOW))), float(np.log2(max(1e-9, config.IIMP_HIGH)))):
             _p = pg.mkPen("#9aa4b2", width=1.0, style=QtCore.Qt.DashLine); _p.setCosmetic(True)
@@ -21108,6 +21117,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 self._iimp_plot.setVisible(False)
             except RuntimeError:
                 self._iimp_plot = None; self._iimp_items = None; self._iimp_vb = None; self._iimp_dots = None
+                self._iimp_form = None
         self._stack_axis_sync()
 
     def _iimp_hide_cursor(self) -> None:
@@ -21186,7 +21196,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         base = int(base)
         for k in range(int(np.size(t))):
             a = int(np.floor(float(t[k]))) - base; z = int(np.floor(float(t_end[k]))) - base
-            if a < 0 or z >= n or z < a:
+            z = min(z, n - 1)   # the FORMING cycle's end can sit past the store's last bin (a quiet tape, or a
+            if a < 0 or z < a:  # read whose right edge leads the ticks): measure it over the bins that exist
                 continue
             if bool(is_buy[k]):
                 seg = st._pxh[a:z + 1]
@@ -21210,14 +21221,16 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         try:
             # the SAME arguments the other cycle panes read with, so all three land on ONE memo entry; the price
             # and high/low arrays are slices of that same entry rather than a second pass
-            self._iimp_data = (vx0, self._flow.crosses(*_args), self._flow.crosses_px(*_args),
+            # vx1 travels with the read: "is the last row really FORMING?" is answered by whether the view still
+            # reaches the live edge, because crosses() marks the last row of ANY read unfinished
+            self._iimp_data = (vx0, vx1, self._flow.crosses(*_args), self._flow.crosses_px(*_args),
                                self._flow.crosses_hl(*_args))
         except Exception:
             return
         self._iimp_draw(now)
 
     def _iimp_draw(self, now: float) -> None:
-        """ONE BAR PER FINISHED CYCLE (user 2026-09-16), folding four panes into one row:
+        """ONE BAR PER CYCLE (user 2026-09-16), folding four panes into one row:
 
         HEIGHT is log2 of the aggressive interest imbalance -- the buyers' taker $/s over the median of their own
         previous N cycles, divided by the sellers' same ratio, so 1.0x means both sides are equally hot for their
@@ -21226,22 +21239,37 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         clash the user described, interest that did not convert. The DOT above the bar is the far side's resting
         orders at the open against the previous N: filled for a wall, hollow for an open road, nothing in between.
 
-        Cuts are the measured terciles (see config). Nothing is drawn for the cycle still forming: its reach and
-        its extreme do not exist until it ends."""
-        if self._iimp_data is None or self._iimp_items is None:
+        The cycle STILL FORMING is drawn too (user 2026-09-16: "also add the live current forming one"), on one
+        lighter item of its own, rated from what it has SO FAR with its end clamped to now -- a view panned right
+        of the live edge would otherwise divide by a duration reaching into the future and understate every rate.
+        ⚠ Every number on that bar MOVES until the cycle closes. It enters no baseline (flow_interp appends only
+        finished cycles), so a half-formed value can never drag a later reading.
+        ⚠ Only a LIVE read's last row is forming: crosses() marks the last row of ANY read unfinished, so a view
+        panned back into history would otherwise invent one.
+
+        Cuts are the measured terciles (see config)."""
+        if self._iimp_data is None or self._iimp_items is None or self._iimp_form is None:
             return
-        vx0, (t, is_buy, strong, move, cbuy, csell, t_end, done), (px0, px1), (pxh, pxl) = self._iimp_data
+        vx0, vx1, (t, is_buy, strong, move, cbuy, csell, t_end, done), (px0, px1), (pxh, pxl) = self._iimp_data
         if t.size == 0:
             for it in self._iimp_items:
                 it.setOpts(x0=[], x1=[], y0=[], height=[])
             for sc in self._iimp_dots:
                 sc.setData([], [])
+            self._iimp_form.setOpts(x0=[], x1=[], y0=[], height=[])
             self._iimp_sig = ("empty",)
             return
         n_lb = self._lb_n(); n_mn = self._lb_min_n()
-        dur = np.maximum(t_end - t, 1e-9)
-        ar_b = _interp_prev(np.maximum(cbuy, 0.0) / dur, done, n_lb, n_mn)
-        ar_s = _interp_prev(np.maximum(csell, 0.0) / dur, done, n_lb, n_mn)
+        # the FORMING cycle, on the ratios pane's rule: only a live read has one, and its end is clamped to now
+        live = bool(vx1 >= now - float(config.INTERP_STALE_SECS))
+        form_all = np.zeros(int(t.size), dtype=bool)
+        t_end_c = np.array(t_end, dtype=np.float64, copy=True)
+        if live and not bool(done[-1]):
+            form_all[-1] = True
+            t_end_c[-1] = max(float(t[-1]), min(float(now), float(t_end_c[-1])))
+        dur = np.maximum(t_end_c - t, 1e-9)
+        ar_b = _interp_prev(np.maximum(cbuy, 0.0) / dur, done, n_lb, n_mn, include_open=True)
+        ar_s = _interp_prev(np.maximum(csell, 0.0) / dur, done, n_lb, n_mn, include_open=True)
         with np.errstate(divide="ignore", invalid="ignore"):
             imb = np.where((ar_b > 0) & (ar_s > 0) & np.isfinite(ar_b) & np.isfinite(ar_s),
                            np.log2(np.maximum(ar_b, 1e-12) / np.maximum(ar_s, 1e-12)), np.nan)
@@ -21250,8 +21278,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # once, and they differ on about one cycle in four (user 2026-09-16).
         lead_buy = np.isfinite(imb) & (imb >= 0.0)
         wall_raw = self._iimp_wall(t, lead_buy)
-        wall = self._lob_ratio(wall_raw, done, n_lb, n_mn)
-        own_b, secs_b = self._iimp_climb(t, t_end, lead_buy)
+        wall = self._lob_ratio(wall_raw, done, n_lb, n_mn, include_open=True)
+        own_b, secs_b = self._iimp_climb(t, t_end_c, lead_buy)
         reach = np.where(lead_buy, pxh - px0, px0 - pxl) / float(config.TICK_SIZE)
         with np.errstate(divide="ignore", invalid="ignore"):
             y_r = np.log1p(np.maximum(reach, 0.0))
@@ -21275,8 +21303,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                     score[k] = float(resid[k] - np.median(h[-int(n_lb):]))
                 if bool(done[k]):
                     h.append(float(resid[k]))
-        keep = done & np.isfinite(imb) & np.isfinite(score) & (t >= vx0)
-        sig = (int(t.size), int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win), n_lb,
+        keep = (done | form_all) & np.isfinite(imb) & np.isfinite(score) & (t >= vx0)
+        # the forming row's AGE is in the signature: a second with no prints still stretches its duration, and
+        # without it a quiet stretch would freeze the live bar until the next trade
+        _age = int(now - float(t[-1])) if bool(form_all[-1]) else 0
+        sig = (int(t.size), int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win), n_lb, _age,
                round(float(np.nan_to_num(imb[keep][-1] if keep.any() else 0.0)), 4),
                round(float(np.nan_to_num(score[keep][-1] if keep.any() else 0.0)), 4))
         if sig == self._iimp_sig:
@@ -21287,8 +21318,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 it.setOpts(x0=[], x1=[], y0=[], height=[])
             for sc in self._iimp_dots:
                 sc.setData([], [])
+            self._iimp_form.setOpts(x0=[], x1=[], y0=[], height=[])
             return
-        x0 = t[keep]; x1 = t_end[keep]; v_raw = imb[keep]; good = score[keep] >= 0.0
+        x0 = t[keep]; x1 = t_end_c[keep]; v_raw = imb[keep]; good = score[keep] >= 0.0
         _clip = float(np.log2(max(float(config.IIMP_CLIP), 1.0)))
         v = np.clip(v_raw, -_clip, _clip)      # DRAWN within 1/8x .. 8x; the badge still prints the true multiple
         _mvt = (px1 - px0)[keep] / float(config.TICK_SIZE)      # where price actually ended, in the price's frame
@@ -21296,13 +21328,31 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # ORANGE when the leading side is not the way price went -- real on a third of cycles, and it read as a
         # contradiction while it wore the leader's own colour
         contra = np.isfinite(_mvt) & ((up & (_mvt < 0)) | (~up & (_mvt > 0)))
-        groups = (up & good & ~contra, up & ~good & ~contra, ~up & good & ~contra, ~up & ~good & ~contra,
-                  contra & good, contra & ~good)
+        form = form_all[keep]
+        # the forming cycle is EXCLUDED from the class items and drawn on its own: in both it would be painted
+        # twice, at two different weights, and the lighter pass would be invisible under the solid one
+        _fin = ~form
+        groups = (up & good & ~contra & _fin, up & ~good & ~contra & _fin,
+                  ~up & good & ~contra & _fin, ~up & ~good & ~contra & _fin,
+                  contra & good & _fin, contra & ~good & _fin)
         for it, m in zip(self._iimp_items, groups):
             if not m.any():
                 it.setOpts(x0=[], x1=[], y0=[], height=[])
                 continue
             it.setOpts(x0=x0[m], x1=x1[m], y0=np.minimum(0.0, v[m]), height=np.abs(v[m]))
+        if form.any():
+            # same side, same fill rule, one item -- its brush and pen are set here because both still move
+            _k = int(np.flatnonzero(form)[-1])
+            _fc = QtGui.QColor(config.IIMP_CONTRA_COL if bool(contra[_k])
+                               else (config.IIMP_BUY_COL if bool(up[_k]) else config.IIMP_SELL_COL))
+            self._iimp_form.setOpts(
+                x0=[float(x0[_k])], x1=[float(x1[_k])], y0=[min(0.0, float(v[_k]))], height=[abs(float(v[_k]))],
+                brushes=[pg.mkBrush(_fc.red(), _fc.green(), _fc.blue(),
+                                    int(config.IIMP_FORM_FILL_A) if bool(good[_k]) else 0)],
+                pens=[pg.mkPen(QtGui.QColor(_fc.red(), _fc.green(), _fc.blue(), int(config.IIMP_FORM_PEN_A)),
+                               width=1.4)])
+        else:
+            self._iimp_form.setOpts(x0=[], x1=[], y0=[], height=[])
         # the wall / open-road dots, just past the bar's end so they never sit inside it
         wk = wall[keep]
         _pad = 0.06 * max(float(np.percentile(np.abs(v), 99.0)), 1.0)
@@ -21318,13 +21368,15 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # everything a CLICK needs to explain one bar, so the handler never re-reads the store
         self._iimp_last = {"x0": x0, "x1": x1, "v": v, "mult": _mult, "up": up, "contra": contra, "good": good,
                            "score": score[keep], "wall": wk, "reach": reach[keep], "mv": _mvt,
-                           "arb": ar_b[keep], "ars": ar_s[keep]}
+                           "arb": ar_b[keep], "ars": ar_s[keep], "form": form}
         if self._iimp_read is not None:
             _k = int(v.size) - 1
             _w = wk[_k]
-            self._iimp_read.setText("%s %.2gx  ·  impact %.2gx  ·  wall %s%s" % (
+            self._iimp_read.setText("%s %.2gx  ·  impact %.2gx  ·  wall %s%s%s" % (
                 "BUY" if up[_k] else "SELL", _mult[_k], 2.0 ** float(score[keep][_k]),
-                "-" if not np.isfinite(_w) else "%.2gx" % _w, "  ·  price went the other way" if contra[_k] else ""))
+                "-" if not np.isfinite(_w) else "%.2gx" % _w,
+                "  ·  still forming" if bool(form[_k]) else "",
+                "  ·  price went the other way" if contra[_k] else ""))
             self._iimp_read.setColor(config.IIMP_CONTRA_COL if contra[_k]
                                      else (config.IIMP_BUY_COL if up[_k] else config.IIMP_SELL_COL))
         lim = float(np.percentile(np.abs(v), 95.0)) * 1.15
@@ -21337,6 +21389,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             (_rx0, _rx1), (_ry0, _ry1) = self._iimp_vb.viewRange()
             self._iimp_read.setPos(_rx1, _ry0)      # bottom right, clear of the pane's own name
         self._iimp_mark(self.__dict__.get("_iimp_sel_t"))   # a redraw must not drop the clicked bar's outline
+        self._iimp_repanel()               # ... and an open panel on the FORMING bar must not go stale
 
     # ------------------------------------------------------------------
     # INTEREST x IMPACT -- click a bar, get it in words (user 2026-09-16)
@@ -21362,6 +21415,30 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             hl.setOpts(x0=[float(d["x0"][k])], x1=[float(d["x1"][k])], y0=[min(0.0, v)], height=[abs(v)])
             sp.setRegion((float(d["x0"][k]), float(d["x1"][k])))
             hl.show(); sp.show()
+        except (RuntimeError, ValueError, KeyError):
+            pass
+
+    def _iimp_repanel(self) -> None:
+        """Re-word an OPEN panel from the draw that just happened (user 2026-09-16: "the panel and the histogram
+        should update live"). The cycle it describes may be the forming one, whose every number moves.
+
+        Keyed by the cycle's START like the outline, never by index: a redraw can add or drop cycles at either end.
+        Silent when the panel is closed, so an ordinary redraw costs one dict lookup."""
+        pop = self.__dict__.get("_iimp_pop")
+        t0 = self.__dict__.get("_iimp_sel_t")
+        if pop is None or t0 is None:
+            return
+        try:
+            if not pop.isVisible():
+                return
+            d = self.__dict__.get("_iimp_last")
+            if not d or np.size(d["x0"]) == 0:
+                return
+            k = int(np.argmin(np.abs(d["x0"] - float(t0))))
+            if abs(float(d["x0"][k]) - float(t0)) > 1.0:      # that cycle is no longer on screen
+                return
+            pop._lab.setText(self._iimp_explain(k))
+            pop.adjustSize()
         except (RuntimeError, ValueError, KeyError):
             pass
 
@@ -21458,6 +21535,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         mult = float(d["mult"][k]); imp = 2.0 ** float(d["score"][k])
         wall = float(d["wall"][k]); reach = float(d["reach"][k]); mv = float(d["mv"][k])
         arb = float(d["arb"][k]); ars = float(d["ars"][k])
+        forming = bool(np.asarray(d.get("form", np.zeros(np.size(d["x0"]), dtype=bool)))[k])
         lead_r, oth_r = (arb, ars) if up else (ars, arb)   # the LEADER's own-history ratio is quoted first
         n = self._lb_n()
         side = "Buyers" if up else "Sellers"
@@ -21465,9 +21543,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         other = "sellers" if up else "buyers"
         other_ord = "sell" if up else "buy"          # the BOOK side the push faces: "resting sell orders"
         col = config.IIMP_CONTRA_COL if contra else (config.IIMP_BUY_COL if up else config.IIMP_SELL_COL)
-        head = "%s - %s  ·  %s" % (time.strftime("%a %H:%M:%S", time.localtime(float(d["x0"][k]))),
-                                  time.strftime("%H:%M:%S", time.localtime(float(d["x1"][k]))),
-                                  _interp_dur_text(float(d["x1"][k]) - float(d["x0"][k])))
+        head = "%s - %s  ·  %s%s" % (time.strftime("%a %H:%M:%S", time.localtime(float(d["x0"][k]))),
+                                     time.strftime("%H:%M:%S", time.localtime(float(d["x1"][k]))),
+                                     _interp_dur_text(float(d["x1"][k]) - float(d["x0"][k])),
+                                     "  ·  STILL FORMING" if forming else "")
         # the four LABELS carry their own weight, size and shade: they were <b> and so were the numbers beside
         # them, so the label did not separate from its own description (user 2026-09-16)
         _L = "<span style='color:#ffffff;font-size:13px'><b>%s</b></span>"
@@ -21508,6 +21587,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         rows.append("%s: %s" % (_L % "Why", self._iimp_why(
             up=up, contra=contra, good=good, mv=mv, reach=reach, imp=imp, wall_hi=wall_hi, wall_lo=wall_lo,
             wall_txt=wall_txt, side=side, low=low, other=other, other_ord=other_ord)))
+        if forming:
+            rows.append("<div style='color:#ffd479'>⚠ This cycle has NOT closed. Every number above is only what "
+                        "it has so far and all of them still move -- the leading side itself can flip.</div>")
         rows.append("<div style='color:%s'><b>%s %.2gx &nbsp;·&nbsp; impact %.2gx &nbsp;·&nbsp; wall %s</b></div>"
                     % (col, "BUY" if up else "SELL", mult, imp,
                        "-" if not np.isfinite(wall) else "%.2gx" % wall))
