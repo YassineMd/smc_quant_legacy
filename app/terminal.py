@@ -1954,7 +1954,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._iimp_book_cache = {}     # {cycle start: (bid mean, ask mean) OVER the cycle} -- the passive component
         self._scr_plot = None          # BUYER / SELLER SCORE pane (Flow mode): two bars per cycle, 0..100
         self._scr_vb = None
-        self._scr_items = None         # (buy, sell, buy forming, sell forming) BarGraphItems
+        self._scr_items = None         # (buy line, sell line) PlotCurveItems -- one point per cycle
         self._scr_guides = None
         self._scr_sig = None; self._scr_t = 0.0; self._scr_data = None; self._scr_sized = False
         self._scr_on = bool(config.SCR_PANE_ON)
@@ -21057,17 +21057,16 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         vb = pw.getViewBox()
         vb.setMouseEnabled(x=True, y=False)      # y is a fixed 0..100: zooming it would only mislead
         vb.setXLink(self.vb)
-        # TWO LINES (user 2026-09-16: "i prefer two lines red green instead of histogram"): one STEP line per
-        # side, each cycle's score held flat across that cycle's own span, so the two sides read as two tracks you
-        # can follow rather than 200 bars to scan. Four curve items = the two lines x finished / forming, the
-        # forming tail lighter (this pane's convention everywhere else); the item count stays flat at any zoom.
+        # EXACTLY TWO LINES (user: "i prefer two lines red green instead of histogram"), drawn as a MIDPOINT
+        # polyline -- one point per cycle at its own middle. A step line's vertical risers were most of the
+        # jaggedness, and dropping them changes nothing about what is plotted (user: "is it possible to smoothen
+        # the lines"). The forming cycle is the last point of each line; the readout is what says it is forming,
+        # because a one-point lighter tail on a line is invisible anyway.
         # ⚠ connect="finite": a side with no score is NaN and MUST break the line, never be interpolated across.
         items = []
-        for _c, _pa, _wd in ((config.SCR_BUY_COL, 255, 2.0), (config.SCR_SELL_COL, 255, 2.0),
-                             (config.SCR_BUY_COL, int(config.SCR_FORM_PEN_A), 2.0),
-                             (config.SCR_SELL_COL, int(config.SCR_FORM_PEN_A), 2.0)):
+        for _c in (config.SCR_BUY_COL, config.SCR_SELL_COL):
             _col = QtGui.QColor(_c)
-            _pen = pg.mkPen(QtGui.QColor(_col.red(), _col.green(), _col.blue(), _pa), width=_wd)
+            _pen = pg.mkPen(_col, width=2.0)
             _pen.setCosmetic(True)
             it = pg.PlotCurveItem(x=[], y=[], pen=_pen, connect="finite", antialias=True)
             it.setZValue(5)
@@ -21100,7 +21099,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._scr_read.textItem.setFont(QtGui.QFont("Consolas", int(config.PANE_TITLE_PT)))
         self._scr_read.setZValue(41)
         pw.addItem(self._scr_read, ignoreBounds=True)
-        self._scr_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["scr"])
+        _ttl = config.pane_titles(self._lb_n())["scr"]
+        if int(config.SCR_SMOOTH_N) > 1:      # the line must SAY it is a blend, or it disagrees with the panel
+            _ttl += "  ·  smoothed %d" % int(config.SCR_SMOOTH_N)
+        self._scr_title = self._pane_title(pw, vb, _ttl)
         vb.setYRange(0.0, 100.0, padding=0.0)
         self._scr_plot = pw
         self._scr_vb = vb
@@ -21207,28 +21209,30 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         sc, scn = self._score_parts(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, dur, keep, n_lb, n_mn)
         x0 = t[keep]; x1 = t_end_c[keep]
         form = form_all[keep]
-        fin = ~form
-        # the FINISHED line runs to the forming cycle's start, so the lighter tail continues it without a gap
+        mid = 0.5 * (x0 + x1)
+        _nsm = max(1, int(config.SCR_SMOOTH_N))
 
-        def _steps(v, sel):
-            """Each cycle as two points at its own span's ends -> a step line. A NaN score stays NaN in y, and
-            connect="finite" breaks the line there rather than drawing a score that was never computed."""
-            if not sel.any():
-                return np.zeros(0), np.zeros(0)
-            _a = x0[sel]; _b = x1[sel]; _v = v[sel]
-            xs = np.empty(2 * int(_a.size)); ys = np.empty(2 * int(_a.size))
-            xs[0::2] = _a; xs[1::2] = _b
-            ys[0::2] = _v; ys[1::2] = _v
-            return xs, ys
+        def _smooth(v):
+            """CAUSAL mean of the last _nsm SCORED values -- only cycles at or before this one. A centred window
+            would be look-ahead. NaN cycles are skipped rather than poisoning the window, and stay NaN so the
+            line still breaks there."""
+            if _nsm <= 1:
+                return v
+            out = np.full(int(v.size), np.nan)
+            buf = []
+            for k in range(int(v.size)):
+                if np.isfinite(v[k]):
+                    buf.append(float(v[k]))
+                    out[k] = float(np.mean(buf[-_nsm:]))
+            return out
 
-        for it, (v, sel) in zip(self._scr_items,
-                                ((sc["buy"], fin), (sc["sell"], fin),
-                                 (sc["buy"], form), (sc["sell"], form))):
-            xs, ys = _steps(v, sel)
-            if xs.size == 0:
+        drawn = {s: _smooth(sc[s]) for s in ("buy", "sell")}
+        for it, s in zip(self._scr_items, ("buy", "sell")):
+            _y = drawn[s]
+            if not np.any(np.isfinite(_y)):
                 it.setData(x=np.zeros(0), y=np.zeros(0))
                 continue
-            it.setData(x=xs, y=ys, connect="finite")
+            it.setData(x=mid, y=_y, connect="finite")
         # ⚠ the two sides resolve INDEPENDENTLY: a side under SCORE_MIN_PARTS gets no score and no bar, so one
         # cycle can legitimately show only one of its two bars. Absence must never invent a score.
         self._scr_last = {"x0": x0, "x1": x1, "buy": sc["buy"], "sell": sc["sell"],
@@ -21236,7 +21240,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if self._scr_read is not None:
             _k = int(np.size(x0)) - 1
             _b, _s = sc["buy"][_k], sc["sell"][_k]
-            self._scr_read.setText("buyers %s  ·  sellers %s%s" % (
+            # the readout stays the RAW current cycle and says so: the LINE may be a blend, and two numbers
+            # that look alike but mean different things is the bug this pane has already shipped twice
+            self._scr_read.setText("buyers %s  ·  sellers %s  ·  this cycle%s" % (
                 "-" if not np.isfinite(_b) else "%d" % int(round(_b)),
                 "-" if not np.isfinite(_s) else "%d" % int(round(_s)),
                 "  ·  still forming" if bool(form[_k]) else ""))
