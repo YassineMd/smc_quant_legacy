@@ -424,7 +424,12 @@ FRATIO_MODE = "None"
 
 # --- INTEREST x IMPACT pane (user 2026-09-16: "its really hard to look at different panes at the same time ...
 # one pane that does this for me"). ONE bar per FINISHED cycle, folding what needed four panes to read:
-#   CLICK   a left click explains ONE bar in plain language (height, colour, fill, dot) and outlines it.
+#   CLICK   a left click explains ONE bar in plain language and outlines it. The four labels (Height, Colour,
+#           Fill, Dot) are a size and a shade above their own descriptions -- they used to be <b> like the numbers
+#           beside them and did not separate. A WHY line closes the panel with the MECHANISM: the height only ever
+#           sees the aggressive end of a trade, so when price disagrees with the aggressor the passive end is what
+#           moved it (absorbed into standing size, or quotes pulled). ⚠ that passive read is worded as the
+#           INFERENCE it is -- the pane sees the book at a cycle's OPEN, never the passive fills through it.
 #   HEIGHT  log2 of the aggressive interest imbalance -- the buyers' taker $/s over the median of their previous N
 #           cycles, divided by the sellers' same ratio. Above 1.0x the buyers are hotter than usual relative to
 #           the sellers, below it the sellers are. Every multiple SHOWN is the LEADING side's, always >= 1.0x (it

@@ -21399,6 +21399,58 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._iimp_pop = pop
         return pop
 
+    def _iimp_why(self, up, contra, good, mv, reach, imp, wall_hi, wall_lo, wall_txt,
+                  side, low, other, other_ord) -> str:
+        """WHY the move happened, read off the four facts above (user 2026-09-16: "I want you to add Why, which
+        basically explains why this move happened ... its an absorption mainly driven by passive orders").
+
+        Every trade has an aggressor on one end and a resting order on the other, and this pane's HEIGHT only ever
+        sees the aggressive end. So when price disagrees with the aggressor, the PASSIVE end is what moved it --
+        absorbed into standing size, or quotes pulled out of the way.
+
+        ⚠ The facts quoted here are measured: who aggressed, where price finished, how far it reached, and the far
+        side's resting $ at the cycle's OPEN. The passive reading is named as the INFERENCE it is -- this pane
+        never sees the passive fills THROUGH a cycle, only the book standing at its open."""
+        mvi = int(round(float(mv))); rch = int(round(float(reach)))
+        aggw = "buying" if up else "selling"
+        if contra:
+            head = ("%s did the aggressing and still lost the cycle -- price finished <b>%+d ticks</b> against "
+                    "them. " % (side, mvi))
+            if wall_hi:
+                return head + ("The resting %s orders stood at %s their usual size when it opened, so that %s was "
+                               "ABSORBED: passive %s took the other end of every one of those trades and did not "
+                               "move. Passive interest beat aggressive interest here."
+                               % (other_ord, wall_txt, aggw, other))
+            return head + ("No unusual wall was standing at the open (resting %s orders: %s), so the other end was "
+                           "built DURING the cycle -- passive %s stepping in, and the %s' own resting orders "
+                           "pulled out of the way. Neither of those ever prints on the tape, which is exactly why "
+                           "this bar and the price disagree." % (other_ord, wall_txt, other, low))
+        if good and wall_hi:
+            why = ("%s led the aggression, price went their way, and they got <b>%.2gx</b> the ticks their own "
+                   "recent cycles get for this much effort -- through resting %s orders %s the usual. The size was "
+                   "in the way and it gave." % (side, imp, other_ord, wall_txt))
+        elif good and wall_lo:
+            why = ("%s led the aggression and travelled <b>%.2gx</b> what their own recent cycles do for this much "
+                   "effort -- but the resting %s orders were only %s the usual, so part of that distance was a "
+                   "thin book rather than extra strength." % (side, imp, other_ord, wall_txt))
+        elif good:
+            why = ("%s led the aggression and converted it: the same effort bought <b>%.2gx</b> the ticks their "
+                   "own recent cycles get, against an ordinary book." % (side, imp))
+        elif wall_hi:
+            why = ("%s led the aggression and it did NOT convert -- it went into resting %s orders %s the usual. "
+                   "The effort was spent filling someone else's limit orders instead of buying distance."
+                   % (side, other_ord, wall_txt))
+        else:
+            why = ("%s led the aggression and it still did not convert, with nothing unusual standing in the way "
+                   "(resting %s orders: %s). The book is not the explanation here -- either the interest was "
+                   "thinner than its size suggests, or the other side met it quietly."
+                   % (side, other_ord, wall_txt))
+        give = max(0.0, float(reach) - abs(float(mv)))
+        if give >= 3.0 and give >= 0.4 * max(float(reach), 1.0):
+            why += (" It reached <b>%d ticks</b> and handed <b>%d</b> of them back before the close, so whatever "
+                    "met it did so at the extreme, not at the open." % (rch, int(round(give))))
+        return why
+
     def _iimp_explain(self, k: int) -> str:
         """One bar in plain language: what the height, the colour, the fill and the dot are saying, and why."""
         d = self._iimp_last
@@ -21416,33 +21468,46 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         head = "%s - %s  ·  %s" % (time.strftime("%a %H:%M:%S", time.localtime(float(d["x0"][k]))),
                                   time.strftime("%H:%M:%S", time.localtime(float(d["x1"][k]))),
                                   _interp_dur_text(float(d["x1"][k]) - float(d["x0"][k])))
+        # the four LABELS carry their own weight, size and shade: they were <b> and so were the numbers beside
+        # them, so the label did not separate from its own description (user 2026-09-16)
+        _L = "<span style='color:#ffffff;font-size:13px'><b>%s</b></span>"
+        wall_ok = bool(np.isfinite(wall))
+        wall_hi = wall_ok and wall >= float(config.IIMP_WALL_HIGH)
+        wall_lo = wall_ok and wall <= float(config.IIMP_WALL_LOW)
+        wall_txt = ("<b>%.2gx</b>" % wall) if wall_ok else "not read"
         rows = ["<div style='color:#7d8492'>%s</div>" % head,
-                "<b>Height</b>: %s were <b>%.2gx</b> more interested than the %s. Their aggressive $ per second ran "
-                "%.2gx their own last %d cycles, the %s' %.2gx theirs." % (side, mult, other, lead_r, n, other, oth_r)]
+                "%s: %s were <b>%.2gx</b> more interested than the %s. Their aggressive $ per second ran "
+                "%.2gx their own last %d cycles, the %s' %.2gx theirs."
+                % (_L % "Height", side, mult, other, lead_r, n, other, oth_r)]
         if contra:
-            rows.append("<b>Colour</b>: <span style='color:%s'>orange</span>, because price went the OTHER way -- it "
-                        "finished %+d ticks while the %s led the interest." % (col, int(round(mv)), low))
+            rows.append("%s: <span style='color:%s'>orange</span>, because price went the OTHER way -- it "
+                        "finished %+d ticks while the %s led the interest."
+                        % (_L % "Colour", col, int(round(mv)), low))
         else:
-            rows.append("<b>Colour</b>: <span style='color:%s'>%s</span>, because the %s led and price went their "
-                        "way (%+d ticks)." % (col, "teal" if up else "red", low, int(round(mv))))
+            rows.append("%s: <span style='color:%s'>%s</span>, because the %s led and price went their "
+                        "way (%+d ticks)." % (_L % "Colour", col, "teal" if up else "red", low, int(round(mv))))
         if good:
-            rows.append("<b>Fill</b>: solid, because they reached <b>%d ticks</b>, <b>%.2gx</b> what that side "
-                        "usually reaches for this much effort in this much time." % (int(round(reach)), imp))
+            rows.append("%s: solid, because they reached <b>%d ticks</b>, <b>%.2gx</b> what that side "
+                        "usually reaches for this much effort in this much time."
+                        % (_L % "Fill", int(round(reach)), imp))
         else:
-            rows.append("<b>Fill</b>: hollow, because they reached only <b>%d ticks</b>, <b>%.2gx</b> of what that "
+            rows.append("%s: hollow, because they reached only <b>%d ticks</b>, <b>%.2gx</b> of what that "
                         "side usually reaches for this much effort in this much time -- the interest did not "
-                        "convert." % (int(round(reach)), imp))
-        if not np.isfinite(wall):
-            rows.append("<b>Dot</b>: none, because there was no order-book reading at this cycle's open.")
-        elif wall >= float(config.IIMP_WALL_HIGH):
-            rows.append("<b>Dot</b>: filled, because the resting %s orders at the open were <b>%.2gx</b> the "
-                        "previous %d cycles -- it pushed into a wall." % (other_ord, wall, n))
-        elif wall <= float(config.IIMP_WALL_LOW):
-            rows.append("<b>Dot</b>: hollow, because the resting %s orders at the open were <b>%.2gx</b> the "
-                        "previous %d cycles -- the road was open." % (other_ord, wall, n))
+                        "convert." % (_L % "Fill", int(round(reach)), imp))
+        if not wall_ok:
+            rows.append("%s: none, because there was no order-book reading at this cycle's open." % (_L % "Dot"))
+        elif wall_hi:
+            rows.append("%s: filled, because the resting %s orders at the open were <b>%.2gx</b> the "
+                        "previous %d cycles -- it pushed into a wall." % (_L % "Dot", other_ord, wall, n))
+        elif wall_lo:
+            rows.append("%s: hollow, because the resting %s orders at the open were <b>%.2gx</b> the "
+                        "previous %d cycles -- the road was open." % (_L % "Dot", other_ord, wall, n))
         else:
-            rows.append("<b>Dot</b>: none, because the resting %s orders at the open were ordinary (%.2gx the "
-                        "previous %d)." % (other_ord, wall, n))
+            rows.append("%s: none, because the resting %s orders at the open were ordinary (%.2gx the "
+                        "previous %d)." % (_L % "Dot", other_ord, wall, n))
+        rows.append("%s: %s" % (_L % "Why", self._iimp_why(
+            up=up, contra=contra, good=good, mv=mv, reach=reach, imp=imp, wall_hi=wall_hi, wall_lo=wall_lo,
+            wall_txt=wall_txt, side=side, low=low, other=other, other_ord=other_ord)))
         rows.append("<div style='color:%s'><b>%s %.2gx &nbsp;·&nbsp; impact %.2gx &nbsp;·&nbsp; wall %s</b></div>"
                     % (col, "BUY" if up else "SELL", mult, imp,
                        "-" if not np.isfinite(wall) else "%.2gx" % wall))
