@@ -21406,6 +21406,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         mult = float(d["mult"][k]); imp = 2.0 ** float(d["score"][k])
         wall = float(d["wall"][k]); reach = float(d["reach"][k]); mv = float(d["mv"][k])
         arb = float(d["arb"][k]); ars = float(d["ars"][k])
+        lead_r, oth_r = (arb, ars) if up else (ars, arb)   # the LEADER's own-history ratio is quoted first
         n = self._lb_n()
         side = "Buyers" if up else "Sellers"
         low = "buyers" if up else "sellers"
@@ -21417,7 +21418,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                   _interp_dur_text(float(d["x1"][k]) - float(d["x0"][k])))
         rows = ["<div style='color:#7d8492'>%s</div>" % head,
                 "<b>Height</b>: %s were <b>%.2gx</b> more interested than the %s. Their aggressive $ per second ran "
-                "%.2gx their own last %d cycles, the %s' %.2gx theirs." % (side, mult, other, arb, n, other, ars)]
+                "%.2gx their own last %d cycles, the %s' %.2gx theirs." % (side, mult, other, lead_r, n, other, oth_r)]
         if contra:
             rows.append("<b>Colour</b>: <span style='color:%s'>orange</span>, because price went the OTHER way -- it "
                         "finished %+d ticks while the %s led the interest." % (col, int(round(mv)), low))
