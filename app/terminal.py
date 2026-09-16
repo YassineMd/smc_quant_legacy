@@ -1943,7 +1943,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._iimp_on = bool(config.IIMP_PANE_ON)
         self._iimp_vline = None; self._iimp_hline = None
         self._iimp_tag = None; self._iimp_time_tag = None; self._iimp_proxy = None
-        self._iimp_title = None; self._iimp_badge = None; self._iimp_read = None
+        self._iimp_title = None; self._iimp_read = None
+        self._iimp_hl = None; self._iimp_hl_span = None    # the clicked bar: outline + tinted span
+        self._iimp_pop = None          # the small panel that explains that bar in words
+        self._iimp_last = None         # the drawn cycles, so a click can explain one without re-reading the store
+        self._iimp_sel_t = None        # the SELECTED cycle's start: the mark survives a redraw by time, not index
         self._iimp_wall_cache = {}     # {cycle start: (ask $, bid $) at the open} -- kept ACROSS liquidity windows
         self._flow_pane_on = bool(config.FLOW_PANE_ON)     # the Buy/Sell Flow pane (the main chart in Flow mode)
         self._hlh_merge_span = str(config.HLH_MERGE_SPAN)   # HLH "A merged bloc spans at most" (persisted)
@@ -17830,7 +17834,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._iimp_guides = None; self._iimp_sig = None; self._iimp_sized = False; self._iimp_proxy = None
             self._iimp_vline = None; self._iimp_hline = None
             self._iimp_tag = None; self._iimp_time_tag = None
-            self._iimp_title = None; self._iimp_badge = None; self._iimp_read = None
+            self._iimp_title = None; self._iimp_read = None
+            self._iimp_hl = None; self._iimp_hl_span = None; self._iimp_last = None
+            self._iimp_hide_popup()
             self._cvol_title = None; self._cvol_badge = None
             self._cyc_title = None; self._cyc_badge = None
             self._liq_title = None
@@ -21072,8 +21078,17 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._iimp_read.setZValue(41)
         pw.addItem(self._iimp_read, ignoreBounds=True)
         self._iimp_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["iimp"])
-        self._iimp_badge = CycleBadgesItem("top")
-        pw.addItem(self._iimp_badge, ignoreBounds=True)
+        # the CLICKED bar: a white outline over it and a tinted span behind it, so the panel always has an anchor
+        self._iimp_hl = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[], brush=pg.mkBrush(None),
+                                        pen=pg.mkPen("#ffffff", width=2.0))
+        self._iimp_hl.setZValue(9)
+        pw.addItem(self._iimp_hl)
+        self._iimp_hl_span = pg.LinearRegionItem(values=(0.0, 0.0), movable=False,
+                                                 brush=pg.mkBrush(255, 255, 255, 26), pen=pg.mkPen(None))
+        self._iimp_hl_span.setZValue(1)
+        pw.addItem(self._iimp_hl_span, ignoreBounds=True)
+        self._iimp_hl.hide(); self._iimp_hl_span.hide()
+        pw.scene().sigMouseClicked.connect(self._on_iimp_clicked)
         self._iimp_plot = pw
         self._iimp_vb = vb
         self._theme_sub_panes(not self._simple_bw())
@@ -21297,15 +21312,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 sc.setData([], [])
                 continue
             sc.setData(0.5 * (x0[m] + x1[m]), np.where(v[m] >= 0, v[m] + _pad, v[m] - _pad))
-        _cols = (_hex_rgb(config.IIMP_BUY_COL), _hex_rgb(config.IIMP_SELL_COL), _hex_rgb(config.IIMP_CONTRA_COL))
         # the LEADING side's multiple, always >= 1.0x: printing buy / sell meant a red bar showed the reciprocal
         # and had to be inverted by eye (user 2026-09-16). The colour says whose multiple it is.
         _mult = 2.0 ** np.abs(v_raw)           # the TRUE multiple, even where the bar itself is clipped
-        self._pane_badge_set(getattr(self, "_iimp_badge", None), x0,
-                             float(self.vb.viewPixelSize()[0]), config.IIMP_BADGE_TIERS,
-                             lambda k: "%.2gx" % _mult[k],
-                             lambda k: _cols[2] if contra[k] else _cols[0 if up[k] else 1],
-                             guard=float(config.IIMP_BADGE_GUARD_PX))
+        # everything a CLICK needs to explain one bar, so the handler never re-reads the store
+        self._iimp_last = {"x0": x0, "x1": x1, "v": v, "mult": _mult, "up": up, "contra": contra, "good": good,
+                           "score": score[keep], "wall": wk, "reach": reach[keep], "mv": _mvt,
+                           "arb": ar_b[keep], "ars": ar_s[keep]}
         if self._iimp_read is not None:
             _k = int(v.size) - 1
             _w = wk[_k]
@@ -21319,10 +21332,170 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         cur = getattr(self, "_iimp_ytop", 0.0)
         if lim > cur * 0.98 or lim < cur * 0.55:
             self._iimp_ytop = lim
-            self._iimp_vb.setYRange(-lim, lim + self._pane_badge_headroom(self._iimp_vb, lim, 1), padding=0.0)
+            self._iimp_vb.setYRange(-lim, lim, padding=0.0)      # no badge strip to leave room for any more
         if self._iimp_read is not None:
             (_rx0, _rx1), (_ry0, _ry1) = self._iimp_vb.viewRange()
-            self._iimp_read.setPos(_rx1, _ry0)      # the badge strip owns the top of the pane
+            self._iimp_read.setPos(_rx1, _ry0)      # bottom right, clear of the pane's own name
+        self._iimp_mark(self.__dict__.get("_iimp_sel_t"))   # a redraw must not drop the clicked bar's outline
+
+    # ------------------------------------------------------------------
+    # INTEREST x IMPACT -- click a bar, get it in words (user 2026-09-16)
+    # ------------------------------------------------------------------
+    def _iimp_mark(self, t0) -> None:
+        """Outline the cycle whose start is `t0` and tint its span; None clears the mark.
+
+        Keyed by the cycle's START, never by its index in the drawn set: a redraw can add or drop cycles at either
+        end, and an index would silently jump the mark onto a different bar."""
+        hl = self.__dict__.get("_iimp_hl"); sp = self.__dict__.get("_iimp_hl_span")
+        d = self.__dict__.get("_iimp_last")
+        if hl is None or sp is None:
+            return
+        try:
+            if t0 is None or not d:
+                hl.setOpts(x0=[], x1=[], y0=[], height=[]); hl.hide(); sp.hide()
+                return
+            k = int(np.argmin(np.abs(d["x0"] - float(t0))))
+            if abs(float(d["x0"][k]) - float(t0)) > 1.0:        # that cycle is no longer on screen
+                hl.setOpts(x0=[], x1=[], y0=[], height=[]); hl.hide(); sp.hide()
+                return
+            v = float(d["v"][k])
+            hl.setOpts(x0=[float(d["x0"][k])], x1=[float(d["x1"][k])], y0=[min(0.0, v)], height=[abs(v)])
+            sp.setRegion((float(d["x0"][k]), float(d["x1"][k])))
+            hl.show(); sp.show()
+        except (RuntimeError, ValueError, KeyError):
+            pass
+
+    def _iimp_hide_popup(self) -> None:
+        pop = self.__dict__.get("_iimp_pop")
+        if pop is not None:
+            try:
+                pop.hide()
+            except RuntimeError:
+                self._iimp_pop = None
+        self._iimp_sel_t = None
+        self._iimp_mark(None)
+
+    def _iimp_popup(self):
+        """The little panel itself, built once. A click anywhere on it closes it."""
+        pop = self.__dict__.get("_iimp_pop")
+        if pop is not None:
+            try:
+                pop.isVisible()
+                return pop
+            except RuntimeError:
+                pop = None
+        pop = QtWidgets.QFrame(self)
+        pop.setStyleSheet("QFrame{ background:#20242c; border:1px solid #3a4150; border-radius:4px; }"
+                          " QLabel{ background:transparent; border:0; color:#dcdcdc; font:11px 'Consolas'; }")
+        lay = QtWidgets.QVBoxLayout(pop)
+        lay.setContentsMargins(10, 8, 10, 8); lay.setSpacing(0)
+        lab = QtWidgets.QLabel(pop)
+        lab.setTextFormat(QtCore.Qt.RichText)
+        lab.setWordWrap(True)
+        lab.setMinimumWidth(360); lab.setMaximumWidth(520)
+        lay.addWidget(lab)
+        pop._lab = lab
+        pop.mousePressEvent = lambda ev: self._iimp_hide_popup()
+        self._iimp_pop = pop
+        return pop
+
+    def _iimp_explain(self, k: int) -> str:
+        """One bar in plain language: what the height, the colour, the fill and the dot are saying, and why."""
+        d = self._iimp_last
+        up = bool(d["up"][k]); contra = bool(d["contra"][k]); good = bool(d["good"][k])
+        mult = float(d["mult"][k]); imp = 2.0 ** float(d["score"][k])
+        wall = float(d["wall"][k]); reach = float(d["reach"][k]); mv = float(d["mv"][k])
+        arb = float(d["arb"][k]); ars = float(d["ars"][k])
+        n = self._lb_n()
+        side = "Buyers" if up else "Sellers"
+        low = "buyers" if up else "sellers"
+        other = "sellers" if up else "buyers"
+        other_ord = "sell" if up else "buy"          # the BOOK side the push faces: "resting sell orders"
+        col = config.IIMP_CONTRA_COL if contra else (config.IIMP_BUY_COL if up else config.IIMP_SELL_COL)
+        head = "%s - %s  ·  %s" % (time.strftime("%a %H:%M:%S", time.localtime(float(d["x0"][k]))),
+                                  time.strftime("%H:%M:%S", time.localtime(float(d["x1"][k]))),
+                                  _interp_dur_text(float(d["x1"][k]) - float(d["x0"][k])))
+        rows = ["<div style='color:#7d8492'>%s</div>" % head,
+                "<b>Height</b>: %s were <b>%.2gx</b> more interested than the %s. Their aggressive $ per second ran "
+                "%.2gx their own last %d cycles, the %s' %.2gx theirs." % (side, mult, other, arb, n, other, ars)]
+        if contra:
+            rows.append("<b>Colour</b>: <span style='color:%s'>orange</span>, because price went the OTHER way -- it "
+                        "finished %+d ticks while the %s led the interest." % (col, int(round(mv)), low))
+        else:
+            rows.append("<b>Colour</b>: <span style='color:%s'>%s</span>, because the %s led and price went their "
+                        "way (%+d ticks)." % (col, "teal" if up else "red", low, int(round(mv))))
+        if good:
+            rows.append("<b>Fill</b>: solid, because they reached <b>%d ticks</b>, <b>%.2gx</b> what that side "
+                        "usually reaches for this much effort in this much time." % (int(round(reach)), imp))
+        else:
+            rows.append("<b>Fill</b>: hollow, because they reached only <b>%d ticks</b>, <b>%.2gx</b> of what that "
+                        "side usually reaches for this much effort in this much time -- the interest did not "
+                        "convert." % (int(round(reach)), imp))
+        if not np.isfinite(wall):
+            rows.append("<b>Dot</b>: none, because there was no order-book reading at this cycle's open.")
+        elif wall >= float(config.IIMP_WALL_HIGH):
+            rows.append("<b>Dot</b>: filled, because the resting %s orders at the open were <b>%.2gx</b> the "
+                        "previous %d cycles -- it pushed into a wall." % (other_ord, wall, n))
+        elif wall <= float(config.IIMP_WALL_LOW):
+            rows.append("<b>Dot</b>: hollow, because the resting %s orders at the open were <b>%.2gx</b> the "
+                        "previous %d cycles -- the road was open." % (other_ord, wall, n))
+        else:
+            rows.append("<b>Dot</b>: none, because the resting %s orders at the open were ordinary (%.2gx the "
+                        "previous %d)." % (other_ord, wall, n))
+        rows.append("<div style='color:%s'><b>%s %.2gx &nbsp;·&nbsp; impact %.2gx &nbsp;·&nbsp; wall %s</b></div>"
+                    % (col, "BUY" if up else "SELL", mult, imp,
+                       "-" if not np.isfinite(wall) else "%.2gx" % wall))
+        rows.append("<div style='color:#7d8492'>click this panel to close it</div>")
+        return "<div style='line-height:150%'>" + "<br>".join(rows) + "</div>"
+
+    def _on_iimp_clicked(self, ev) -> None:
+        """Left click -> explain the cycle under the cursor and outline it. Clicking it again, or away from any
+        cycle, closes the panel. Hit-tested on the cycle's own [start, end] span (the PRICE pane's rule), with the
+        nearest cycle as a fallback so a click in the gap between two thin bars still lands somewhere."""
+        try:
+            if self._iimp_plot is None or not self._iimp_plot.isVisible():
+                return
+            if ev.button() != QtCore.Qt.LeftButton:
+                return
+            pos = ev.scenePos()
+            if not self._iimp_plot.sceneBoundingRect().contains(pos):
+                return
+            d = self.__dict__.get("_iimp_last")
+            if not d or np.size(d["x0"]) == 0:
+                return
+            x = float(self._iimp_vb.mapSceneToView(pos).x())
+            x0 = np.asarray(d["x0"], dtype=np.float64); x1 = np.asarray(d["x1"], dtype=np.float64)
+            hit = np.flatnonzero((x0 <= x) & (x1 >= x))
+            if hit.size == 0:
+                near = int(np.argmin(np.abs(0.5 * (x0 + x1) - x)))
+                span = float(x1[near] - x0[near])
+                if abs(0.5 * (x0[near] + x1[near]) - x) > max(2.0 * span, 30.0):
+                    self._iimp_hide_popup()          # nowhere near a bar: put the panel away
+                    ev.accept()
+                    return
+                hit = np.array([near])
+            k = int(hit[0])
+            pop = self._iimp_popup()
+            if pop.isVisible() and self.__dict__.get("_iimp_sel_t") is not None \
+                    and abs(float(self._iimp_sel_t) - float(x0[k])) < 1.0:
+                self._iimp_hide_popup()              # the same bar again closes it
+                ev.accept()
+                return
+            self._iimp_sel_t = float(x0[k])
+            self._iimp_mark(self._iimp_sel_t)
+            pop._lab.setText(self._iimp_explain(k))
+            pop.adjustSize()
+            gp = self._iimp_plot.mapToGlobal(self._iimp_plot.mapFromScene(pos))
+            p = self.mapFromGlobal(gp)
+            px = int(min(max(8, p.x() - pop.width() // 2), max(8, self.width() - pop.width() - 8)))
+            py = int(p.y() - pop.height() - 12)
+            if py < 8:                                # no room above the click: drop it below
+                py = int(min(p.y() + 14, max(8, self.height() - pop.height() - 8)))
+            pop.move(px, py)
+            pop.show(); pop.raise_()
+            ev.accept()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # the Buy/Sell Flow PANE toggle (display only): in Flow mode the main chart IS that pane

@@ -1811,7 +1811,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             "side's own last %d cycles reached for that effort and time, hollow when the interest did not "
             "convert -- and it is THAT side's reach, the one the height names. ORANGE: price went the other way "
             "from the side that led (real on about a third of cycles, since price can rise on passive buying and "
-            "withdrawn offers). The badge prints the leading side's multiple, always at or above 1.0x. DOT: the "
+            "withdrawn offers). CLICK a bar and a small panel explains that one in plain words, with the bar "
+            "outlined; every multiple shown is the leading side's, at or above 1.0x. DOT: the "
             "far side's RESTING orders at the cycle's open against the previous %d -- filled means it pushed into "
             "a wall, hollow means the road was open. Cuts are the measured terciles over 48 h."
             % (config.CYCLE_BASE_N, config.CYCLE_BASE_N, config.CYCLE_BASE_N))

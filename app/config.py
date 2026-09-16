@@ -424,10 +424,11 @@ FRATIO_MODE = "None"
 
 # --- INTEREST x IMPACT pane (user 2026-09-16: "its really hard to look at different panes at the same time ...
 # one pane that does this for me"). ONE bar per FINISHED cycle, folding what needed four panes to read:
+#   CLICK   a left click explains ONE bar in plain language (height, colour, fill, dot) and outlines it.
 #   HEIGHT  log2 of the aggressive interest imbalance -- the buyers' taker $/s over the median of their previous N
 #           cycles, divided by the sellers' same ratio. Above 1.0x the buyers are hotter than usual relative to
-#           the sellers, below it the sellers are. The BADGE prints the LEADING side's multiple, always >= 1.0x
-#           (it printed buy / sell, so a red bar showed the reciprocal and had to be inverted by eye).
+#           the sellers, below it the sellers are. Every multiple SHOWN is the LEADING side's, always >= 1.0x (it
+#           printed buy / sell, so a red bar showed the reciprocal and had to be inverted by eye).
 #   COLOUR  the side that leads (teal buyers, red sellers), ORANGE when price went the OTHER way.
 #   FILL    SOLID when THAT SIDE's push REACHED at least what its own previous N cycles reached for that effort and
 #           that time (IIMP_COEF_*), HOLLOW when it did not -- interest that did not convert. ⚠ the fill follows
@@ -461,15 +462,13 @@ IIMP_SELL_COL = "#ef5350"
 # bar below 1"). Price can rise on passive buying and withdrawn offers, which the tape never shows.
 IIMP_CONTRA_COL = "#ff9f43"
 IIMP_WALL_COL = "#dcdcdc"       # the wall dots are NEUTRAL: amber would read as the contradicted colour
-IIMP_BADGE_TIERS = ((70.0, 1), (36.0, 2))       # "1.6x" per cycle, on the pane's own strip. Wider than the other
-                                # panes' tiers because its first live render packed ~90 cycles into one screen and
-                                # the badges ran into each other and over the title.
-IIMP_BADGE_GUARD_PX = 250       # this pane's title is longer than PANE_TITLE_GUARD_PX (130), so its strip needs a
-                                # wider clear zone or the first badges sit on the name
+# ⚠ there is NO per-cycle badge strip here (user 2026-09-16: "remove the 1.4x 0.38x badge ... a window should pop
+# up when I click on the histogram bar"). One bar at a time is explained in words instead, on a LEFT CLICK, and the
+# clicked bar is outlined. The strip was also what crowded the pane's own title at a dense zoom.
 # The bar is DRAWN within 1/IIMP_CLIP .. IIMP_CLIP and the axis follows the 95th percentile: measured over 48 h the
 # |imbalance| runs p50 1.6x / p90 3.1x / p95 4.0x / p99 7.6x with a max of 95x, so 5.1% of cycles pass 4x and 0.9%
 # pass 8x -- fitting to the max (or to p99) let one cycle flatten every other bar in the first live render. The
-# badge and the right-edge readout keep printing the TRUE multiple.
+# right-edge readout and the click panel keep printing the TRUE multiple.
 IIMP_CLIP = 8.0
 # --- the Buy/Sell Flow ($) PANE itself gets a toggle (user 2026-09-15: "we dont have it", then "I want the
 # whole chart to hide not just the lines"): in Flow mode the main chart IS that pane, so OFF hides the main
