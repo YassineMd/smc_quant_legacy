@@ -118,8 +118,10 @@ class HlhFeed:
             self._upd = {}
             t = self._keys.copy()
             arr = self._rows.copy()
-        # (the open is not part of Candles -- the profile spreads over high..low and tests the close)
-        cd = Candles(t, arr[:, 1], arr[:, 2], arr[:, 3], arr[:, 4], np.full(t.shape[0], self.tf_secs / 60.0))
+        # The profile still spreads over high..low and tests the close; the OPEN rides along because the
+        # POC-run highlight needs open AND close on one side of the bloc's POC (2026-09-16).
+        cd = Candles(t, arr[:, 1], arr[:, 2], arr[:, 3], arr[:, 4], np.full(t.shape[0], self.tf_secs / 60.0),
+                     o=arr[:, 0])
         self._snap = (rev, cd)
         return cd
 

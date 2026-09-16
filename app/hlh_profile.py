@@ -99,16 +99,21 @@ class Candles:
     c: np.ndarray
     v: np.ndarray
     m: np.ndarray
+    o: Optional[np.ndarray] = None   # the OPEN. Optional and LAST so every positional Candles(...) still builds;
+    #                                  the profile itself still spreads over high..low and tests the close. It is
+    #                                  here for the POC-run highlight, which needs open AND close.
 
     def __len__(self):
         return int(self.t.shape[0])
 
     @staticmethod
-    def from_lists(t, h, l, c, v, m) -> "Candles":
-        return Candles(*(np.asarray(a, dtype=np.float64) for a in (t, h, l, c, v, m)))
+    def from_lists(t, h, l, c, v, m, o=None) -> "Candles":
+        a = [np.asarray(q, dtype=np.float64) for q in (t, h, l, c, v, m)]
+        return Candles(*a, o=None if o is None else np.asarray(o, dtype=np.float64))
 
     def keep(self, mask: np.ndarray) -> "Candles":
-        return Candles(self.t[mask], self.h[mask], self.l[mask], self.c[mask], self.v[mask], self.m[mask])
+        return Candles(self.t[mask], self.h[mask], self.l[mask], self.c[mask], self.v[mask], self.m[mask],
+                       o=None if self.o is None else self.o[mask])
 
 
 @dataclass
@@ -204,6 +209,9 @@ class MB:
     bHi: Optional[float] = None   # highest high / lowest low of its candles
     bLo: Optional[float] = None
     poc: Optional[float] = None   # the bloc's OWN point of control, filled lazily by bloc_poc() and cached
+    cO: Optional[np.ndarray] = None   # its candles' open / close / open-time, for the POC runs. A MERGE
+    cC: Optional[np.ndarray] = None   # concatenates these WITHOUT sorting, so anything needing them in
+    cT: Optional[np.ndarray] = None   # time order must sort by cT first -- see bloc_poc_runs()
     tag: str = ""                 # MAX / MIN among the final blocs (table 1)
     todo: bool = False            # to be coloured by color_rows
     cls: Optional[int] = None     # 2 = orange, 1 = coloured, 0 = dark gray
@@ -339,7 +347,8 @@ def split_periods(cand: Candles, is_week: bool, tz: str = "UTC") -> List[Tuple[i
     ends = np.concatenate((cuts, [len(c)]))
     out = []
     for s, e in zip(starts, ends):
-        out.append((int(keys[s]), Candles(c.t[s:e], c.h[s:e], c.l[s:e], c.c[s:e], c.v[s:e], c.m[s:e])))
+        out.append((int(keys[s]), Candles(c.t[s:e], c.h[s:e], c.l[s:e], c.c[s:e], c.v[s:e], c.m[s:e],
+                                          o=None if c.o is None else c.o[s:e])))
     return out
 
 
@@ -702,6 +711,54 @@ def bloc_poc(m: "MB") -> Optional[float]:
         pE += 1
     m.poc = lo + (pS + pE + 1) * 0.5 * step      # the MIDDLE of the POC run, the period's convention
     return m.poc
+
+
+def bloc_poc_runs(m: "MB", min_n: int, step_secs: Optional[float] = None) -> List[Tuple[float, float, int, float]]:
+    """Runs of >= min_n CONSECUTIVE candles that OPENED and CLOSED on the same side of the bloc's own POC.
+
+    -> [(tA, tB, side, ext), ...]; side +1 above / -1 below, and `ext` is how far the run got on that side (its
+    highest high above, its lowest low below), so a caller can shade from the POC out to where price reached.
+
+    Three things worth knowing:
+      - SORTED BY cT first. A merged bloc concatenates its members' candle arrays without re-ordering them,
+        and "consecutive" is a statement about time, not about position in an array.
+      - ADJACENT IN TIME, too. A bloc does not hold every candle of its window: _bloc_mask also demands the
+        close sit inside the area's price band, so a bloc's candle list has HOLES where price left the band.
+        Counting neighbours in that filtered list would call five candles either side of a three-hour gap a
+        "run" and shade the whole gap. A run breaks wherever the step between candles exceeds `step_secs`
+        (the timeframe; inferred from the smallest gap present when it is not given).
+      - It needs the OPEN. Without one (a feed that does not carry it) this returns nothing rather than
+        quietly testing the close twice, which would be a different rule wearing this one's name."""
+    poc = bloc_poc(m)
+    if poc is None or m.cO is None or m.cC is None or m.cT is None or m.cH is None or m.cL is None:
+        return []
+    n = int(np.size(m.cT))
+    if n < int(min_n) or int(np.size(m.cO)) != n or int(np.size(m.cC)) != n or int(np.size(m.cH)) != n:
+        return []
+    k = np.argsort(np.asarray(m.cT, dtype=np.float64), kind="stable")
+    t = np.asarray(m.cT, dtype=np.float64)[k]
+    o = np.asarray(m.cO, dtype=np.float64)[k]
+    c = np.asarray(m.cC, dtype=np.float64)[k]
+    hi = np.asarray(m.cH, dtype=np.float64)[k]
+    lo = np.asarray(m.cL, dtype=np.float64)[k]
+    side = np.where((o > poc) & (c > poc), 1, np.where((o < poc) & (c < poc), -1, 0)).astype(np.int64)
+    step = float(step_secs) if (step_secs is not None and step_secs > 0) else 0.0
+    if not step > 0:
+        d = np.diff(t)
+        d = d[d > 0]
+        step = float(np.min(d)) if d.size else 0.0
+    gap = (step * 1.5) if step > 0 else float("inf")     # 1.5 x: one step apart is adjacent, two is a hole
+    out: List[Tuple[float, float, int, float]] = []
+    i = 0
+    while i < n:
+        s = int(side[i]); j = i
+        while j + 1 < n and int(side[j + 1]) == s and (t[j + 1] - t[j]) <= gap:
+            j += 1
+        if s != 0 and (j - i + 1) >= int(min_n):
+            ext = float(np.max(hi[i:j + 1])) if s > 0 else float(np.min(lo[i:j + 1]))
+            out.append((float(t[i]), float(t[j]), s, ext))
+        i = j + 1
+    return out
 
 
 def compute_period(cand: Candles, is_week: bool, p: Params, key: Optional[int] = None) -> Optional[PeriodResult]:
@@ -1166,6 +1223,9 @@ def fill_row_candles(cand: Candles, areas: List[TPArea], bl: List[Bloc], rows: L
         m.cH = cand.h[sel].copy()
         m.cL = cand.l[sel].copy()
         m.cV = cand.v[sel].copy()
+        m.cC = cand.c[sel].copy()
+        m.cT = cand.t[sel].copy()
+        m.cO = None if cand.o is None else cand.o[sel].copy()
         m.yLo, m.yHi = yLo, yHi
         m.pStep = step
 
@@ -1251,6 +1311,10 @@ def collage(a: MB, o: MB, name: str, from_: str, p: Params) -> MB:
     h = np.concatenate((a.cH, o.cH))
     l = np.concatenate((a.cL, o.cL))
     v = np.concatenate((a.cV, o.cV))
+    # concatenated, NOT sorted -- bloc_poc_runs sorts by cT, because "consecutive candles" is a claim about time
+    def _cat(x, y):
+        return None if (x is None or y is None) else np.concatenate((x, y))
+    _cc, _ct, _co = _cat(a.cC, o.cC), _cat(a.cT, o.cT), _cat(a.cO, o.cO)
     yLo = _nmin(a.yLo, o.yLo)
     yHi = _nmax(a.yHi, o.yHi)
     nVah = nVal = nVah2 = nVal2 = None
@@ -1271,7 +1335,8 @@ def collage(a: MB, o: MB, name: str, from_: str, p: Params) -> MB:
             nVal2 = yLo + vLo2 * stp
     return MB(a.area, name, _join_members(a.members, o.members), [], a.mins + o.mins, a.vol + o.vol,
               _nmin(a.tA, o.tA), _nmax(a.tB, o.tB), nVah, nVal, _nmin(a.vaA, o.vaA), _nmax(a.vaB, o.vaB), True,
-              col=a.col, yLo=yLo, yHi=yHi, cH=h, cL=l, cV=v, mergedFrom=from_, pStep=a.pStep,
+              col=a.col, yLo=yLo, yHi=yHi, cH=h, cL=l, cV=v, cC=_cc, cT=_ct, cO=_co,
+              mergedFrom=from_, pStep=a.pStep,
               dFirst=_nmin(a.dFirst, o.dFirst), dLast=_nmax(a.dLast, o.dLast), dName=a.dName,
               bHi=_nmax(a.bHi, o.bHi), bLo=_nmin(a.bLo, o.bLo), vah2=nVah2, val2=nVal2, usd=a.usd + o.usd)
 

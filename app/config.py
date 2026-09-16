@@ -675,6 +675,11 @@ HLH_TP_BLOCS = True             # label each bloc (time + volume)
 HLH_TP_TOTAL = True             # label the D area total
 HLH_TP_PEAK = False             # label the busiest bin
 HLH_SHOW_VA = True              # VAH / VAL of each bloc (the Block Lines)
+HLH_SHOW_POC_RUNS = True        # shade a run of >= HLH_POC_RUN_MIN candles whose OPEN and CLOSE are BOTH
+#                                 above (or both below) a bloc's POC -- acceptance on one side of it. The area
+#                                 spans the run's time and runs from the POC out to the run's furthest price.
+HLH_POC_RUN_MIN = 5             # how many candles in a row make a group (the user's number)
+HLH_POC_RUN_TR = 88             # its fill transparency (0 = opaque, 100 = invisible): a wash, not a block
 HLH_SHOW_BLOC_POC = True        # the bloc's POC: the row holding most of its OWN volume, drawn in the bloc's
 #                                 colour, thin and SOLID. Built with the period's own spreading rule so the two
 #                                 cannot disagree. (Replaced a high/low MIDLINE, 2026-09-16.)
