@@ -1952,6 +1952,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._iimp_sel_t = None        # the SELECTED cycle's start: the mark survives a redraw by time, not index
         self._iimp_wall_cache = {}     # {cycle start: (ask $, bid $) at the open} -- kept ACROSS liquidity windows
         self._iimp_book_cache = {}     # {cycle start: (bid mean, ask mean) OVER the cycle} -- the passive component
+        self._scr_plot = None          # BUYER / SELLER SCORE pane (Flow mode): two bars per cycle, 0..100
+        self._scr_vb = None
+        self._scr_items = None         # (buy, sell, buy forming, sell forming) BarGraphItems
+        self._scr_guides = None
+        self._scr_sig = None; self._scr_t = 0.0; self._scr_data = None; self._scr_sized = False
+        self._scr_on = bool(config.SCR_PANE_ON)
+        self._scr_vline = None; self._scr_hline = None
+        self._scr_tag = None; self._scr_time_tag = None; self._scr_proxy = None
+        self._scr_title = None; self._scr_read = None
+        self._scr_last = None          # the drawn scores, so a harness can hold the bars against them
+        self._score_memo = None        # (key, ({side: score}, {side: parts})) shared with the iimp panel
         self._flow_pane_on = bool(config.FLOW_PANE_ON)     # the Buy/Sell Flow pane (the main chart in Flow mode)
         self._hlh_merge_span = str(config.HLH_MERGE_SPAN)   # HLH "A merged bloc spans at most" (persisted)
         self._lob_plot = None          # Book pane (Flow mode): resting book per side vs the last N cycles
@@ -2481,6 +2492,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_spd_pane_on(bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)))
             self.menu.set_fratio_pane_on(bool(getattr(self, "_fratio_on", config.FRATIO_PANE_ON)))
             self.menu.set_iimp_pane_on(bool(getattr(self, "_iimp_on", config.IIMP_PANE_ON)))
+            self.menu.set_scr_pane_on(bool(getattr(self, "_scr_on", config.SCR_PANE_ON)))
             self.menu.set_flow_lines_on(bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)))
             self.menu.set_hlh_span(str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)))
             self.menu.set_interp_pane_on(bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)))
@@ -2757,6 +2769,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.spdPaneToggled.connect(self._on_spd_pane_toggled)              # Speed pane on/off
         self.menu.fratioPaneToggled.connect(self._on_fratio_pane_toggled)        # Flow ratios pane on/off
         self.menu.iimpPaneToggled.connect(self._on_iimp_pane_toggled)            # Interest x Impact pane on/off
+        self.menu.scrPaneToggled.connect(self._on_scr_pane_toggled)              # Buyer / Seller score pane
         self.menu.flowLinesToggled.connect(self._on_flow_pane_toggled)           # the Buy/Sell Flow pane on/off
         self.menu.hlhSpanChanged.connect(self._on_hlh_span_changed)              # HLH merged-bloc span cap
         self.menu.interpPaneToggled.connect(self._on_interp_pane_toggled)        # Interpretation feed on/off
@@ -10707,6 +10720,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "fratio_on": bool(getattr(self, "_fratio_on", config.FRATIO_PANE_ON)),
                 "fratio_mode": str(getattr(self, "_fratio_mode", config.FRATIO_MODE)),   # its top-right dropdown
                 "iimp_on": bool(getattr(self, "_iimp_on", config.IIMP_PANE_ON)),
+                "scr_on": bool(getattr(self, "_scr_on", config.SCR_PANE_ON)),
                 "flow_pane_on": bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)),
                 "hlh_merge_span": str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)),
                 "interp_on": bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)),
@@ -10846,6 +10860,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except RuntimeError:
                 self._fratio_combo = None
         self._iimp_on = bool(s.get("iimp_on", config.IIMP_PANE_ON))
+        self._scr_on = bool(s.get("scr_on", config.SCR_PANE_ON))
         self._flow_pane_on = bool(s.get("flow_pane_on", s.get("flow_lines_on", config.FLOW_PANE_ON)))
         _sp = str(s.get("hlh_merge_span", config.HLH_MERGE_SPAN) or config.HLH_MERGE_SPAN)
         self._hlh_merge_span = _sp if _sp in tuple(str(v) for v in config.HLH_MERGE_SPAN_CHOICES) else str(config.HLH_MERGE_SPAN)
@@ -17094,6 +17109,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._fratio_show(bool(getattr(self, "_fratio_on", True)))
             self._fratio_sig = None; self._fratio_t = 0.0
             self._iimp_show(bool(getattr(self, "_iimp_on", True)))
+            self._scr_show(bool(getattr(self, "_scr_on", True)))
             self._iimp_sig = None; self._iimp_t = 0.0
             self._interp_show(bool(getattr(self, "_interp_on", True)))
             self._flow_pane_apply()           # the rebuilt stack: collapse the flow pane again if it is off
@@ -17835,6 +17851,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._fratio_bdg = None
             self._iimp_plot = None; self._iimp_vb = None; self._iimp_items = None; self._iimp_dots = None
             self._iimp_form = None; self._iimp_keep = None
+            self._scr_plot = None; self._scr_vb = None; self._scr_items = None; self._scr_guides = None
+            self._scr_sig = None; self._scr_sized = False; self._scr_proxy = None
+            self._scr_vline = None; self._scr_hline = None
+            self._scr_tag = None; self._scr_time_tag = None; self._scr_title = None; self._scr_read = None
             self._iimp_guides = None; self._iimp_sig = None; self._iimp_sized = False; self._iimp_proxy = None
             self._iimp_vline = None; self._iimp_hline = None
             self._iimp_tag = None; self._iimp_time_tag = None
@@ -20096,7 +20116,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             hl, tg = d.get(hlk), d.get(tgk)
             out.append((k, pw, vb, vl,
                         (lambda hl=hl, tg=tg: (hl is not None and hl.hide(), tg is not None and tg.hide())), d.get(ttk)))
-        for k in ("px", "liq", "cyc", "cvol", "lob", "spd", "fratio", "iimp"):
+        for k in ("px", "liq", "cyc", "cvol", "lob", "spd", "fratio", "iimp", "scr"):
             pw = d.get("_%s_plot" % k); vb = d.get("_%s_vb" % k)
             if pw is None or vb is None:
                 continue
@@ -21001,6 +21021,216 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
     # ------------------------------------------------------------------
     # INTEREST x IMPACT pane (Flow mode) -- one bar per cycle: who leads, whether it converted, what wall it met
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # BUYER / SELLER SCORE pane (Flow mode) -- two bars per cycle, one per side, 0..100
+    # ------------------------------------------------------------------
+    def _on_scr_pane_toggled(self, on: bool) -> None:
+        self._scr_on = bool(on)
+        if not on:
+            self._flow_pane_lift()          # BEFORE a pane hides: it may be the collapsed chart's last neighbour
+        self._scr_show(bool(on) and self.scanner_mode == "flow")
+        self._flow_pane_apply()
+        self._save_ui_state()
+
+    def _scr_ensure_pane(self):
+        if self._scr_plot is not None:
+            return self._scr_plot
+        try:
+            self._ensure_canvas_panes()
+        except Exception:
+            pass
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return None
+        ax = PriceAxis(orientation="right")
+        pw = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"), "right": ax})
+        pw.setBackground("#141414")
+        pw.showAxis("right"); pw.hideAxis("left")
+        for _a in ("bottom", "right"):
+            pw.getAxis(_a).setPen(pg.mkPen("#dcdcdc", width=1))
+            pw.getAxis(_a).setTextPen(pg.mkPen("#dcdcdc"))
+        pw.showGrid(x=False, y=False)
+        pw.setMenuEnabled(False)
+        pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        pw.getAxis("bottom").set_scanner_active(False)
+        ax.tickStrings = lambda vals, sc, sp_: ["%d" % round(v) for v in vals]   # a SCORE, not a multiple
+        vb = pw.getViewBox()
+        vb.setMouseEnabled(x=True, y=False)      # y is a fixed 0..100: zooming it would only mislead
+        vb.setXLink(self.vb)
+        # FOUR BarGraphItems: buy / sell x finished / forming, the FLOW RATIOS layout -- BUY on each cycle's left
+        # half and SELL on its right, so the two sides of one cycle sit side by side and can be read against
+        # each other without arithmetic. Grouping by class keeps the item count flat at any zoom.
+        items = []
+        for _c, _fa, _pa in ((config.SCR_BUY_COL, 190, 255), (config.SCR_SELL_COL, 190, 255),
+                             (config.SCR_BUY_COL, int(config.SCR_FORM_FILL_A), int(config.SCR_FORM_PEN_A)),
+                             (config.SCR_SELL_COL, int(config.SCR_FORM_FILL_A), int(config.SCR_FORM_PEN_A))):
+            _col = QtGui.QColor(_c)
+            it = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
+                                 brush=pg.mkBrush(_col.red(), _col.green(), _col.blue(), _fa),
+                                 pen=pg.mkPen(QtGui.QColor(_col.red(), _col.green(), _col.blue(), _pa), width=1.0))
+            it.setZValue(5)
+            pw.addItem(it); items.append(it)
+        self._scr_items = tuple(items)
+        self._scr_sig = None
+        guides = []
+        for _v in (float(config.SCORE_LOW), float(config.SCORE_HIGH)):
+            _p = pg.mkPen("#9aa4b2", width=1.0, style=QtCore.Qt.DashLine); _p.setCosmetic(True)
+            ln = pg.InfiniteLine(angle=0, pos=_v, pen=_p)
+            ln.setZValue(3); pw.addItem(ln, ignoreBounds=True); guides.append(ln)
+        self._scr_guides = tuple(guides)
+        _mid = pg.InfiniteLine(angle=0, pos=50.0, pen=pg.mkPen("#8a8a8a", width=1))
+        _mid.setZValue(2); pw.addItem(_mid, ignoreBounds=True)
+        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
+        self._scr_vline = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
+        self._scr_hline = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
+        self._scr_vline.setZValue(15); self._scr_hline.setZValue(15)
+        pw.addItem(self._scr_vline, ignoreBounds=True); pw.addItem(self._scr_hline, ignoreBounds=True)
+        self._scr_hline.hide()
+        _tf = QtGui.QFont("Consolas", 8)
+        self._scr_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._scr_tag.textItem.setFont(_tf); self._scr_tag.setZValue(16)
+        pw.addItem(self._scr_tag, ignoreBounds=True); self._scr_tag.hide()
+        self._scr_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._scr_time_tag.textItem.setFont(_tf); self._scr_time_tag.setZValue(61)
+        pw.addItem(self._scr_time_tag, ignoreBounds=True); self._scr_time_tag.hide()
+        self._scr_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_scr_mouse_move)
+        self._scr_read = pg.TextItem(anchor=(1.0, 1.0), color=config.PANE_TITLE_COL)
+        self._scr_read.textItem.setFont(QtGui.QFont("Consolas", int(config.PANE_TITLE_PT)))
+        self._scr_read.setZValue(41)
+        pw.addItem(self._scr_read, ignoreBounds=True)
+        self._scr_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["scr"])
+        vb.setYRange(0.0, 100.0, padding=0.0)
+        self._scr_plot = pw
+        self._scr_vb = vb
+        self._theme_sub_panes(not self._simple_bw())
+        sp.addWidget(pw)
+        pw.setMinimumHeight(60)
+        return pw
+
+    def _scr_show(self, on: bool) -> None:
+        if on:
+            if self._scr_ensure_pane() is None:
+                return
+            self._scr_plot.setVisible(True)
+            if self._sub_pane_grow(self._scr_plot, not getattr(self, "_scr_sized", False), share=0.13):
+                self._scr_sized = True
+        elif self._scr_plot is not None:
+            try:
+                self._scr_plot.setVisible(False)
+            except RuntimeError:
+                self._scr_plot = None; self._scr_items = None; self._scr_vb = None; self._scr_guides = None
+        self._stack_axis_sync()
+
+    def _scr_hide_cursor(self) -> None:
+        for _it in (self._scr_hline, self._scr_tag, self._scr_time_tag):
+            if _it is not None:
+                _it.hide()
+
+    def _scr_sync_vline(self, x: float) -> None:
+        if self._scr_vline is not None:
+            self._scr_vline.setPos(x)
+
+    def _on_scr_mouse_move(self, evt) -> None:
+        if self._scr_vb is None or self._scr_plot is None or not self._scr_plot.isVisible():
+            return
+        pos = evt[0]
+        if not self._scr_plot.sceneBoundingRect().contains(pos):
+            self._scr_hide_cursor(); self._stack_time_hide()
+            return
+        pt = self._scr_vb.mapSceneToView(pos)
+        self._scr_vline.setPos(pt.x())
+        self._scr_hline.setPos(pt.y()); self._scr_hline.show()
+        (vx0, vx1), (vy0, vy1) = self._scr_vb.viewRange()
+        self._scr_tag.setText("%d" % int(round(float(pt.y()))))
+        self._scr_tag.setPos(vx1, pt.y()); self._scr_tag.show()
+        _xl = self._x_time_label(pt.x())
+        if _xl:
+            self._scr_time_tag.setText(_xl); self._scr_time_tag.setPos(pt.x(), vy0); self._scr_time_tag.show()
+        else:
+            self._scr_time_tag.hide()
+        self._stack_cursor_sync("scr", pt.x())
+
+    def _scr_tick(self, now: float) -> None:
+        if self._scr_plot is None or not self._scr_plot.isVisible():
+            return
+        if now - self._scr_t < float(config.CYCLE_RECALC_SECS):
+            return
+        self._scr_t = now
+        (vx0, vx1), _ = self.vb.viewRange()
+        _args = (vx0 - self._lb_secs(), vx1, float(self._flow_win),
+                 float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                 int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
+        try:
+            # the SAME arguments every other cycle pane reads with, so this lands on ONE memo entry
+            self._scr_data = (vx0, vx1, self._flow.crosses(*_args), self._flow.crosses_px(*_args),
+                              self._flow.crosses_hl(*_args))
+        except Exception:
+            return
+        self._scr_draw(now)
+
+    def _scr_draw(self, now: float) -> None:
+        """TWO BARS PER CYCLE (user 2026-09-16: "now make it its own pane with two bars per cycle"): the buyer
+        score on the cycle's left half, the seller score on its right, each 0..100 against that side's OWN last N
+        cycles. Guides at the measured terciles; the forming cycle lighter, on items of its own.
+
+        ⚠ DESCRIPTIVE. `kept` is one of the four parts and equals move / reach, so a score contains this cycle's
+        move by construction. It rates a cycle that has happened; it forecasts nothing."""
+        if self._scr_data is None or self._scr_items is None:
+            return
+        vx0, vx1, (t, is_buy, strong, move, cbuy, csell, t_end, done), (px0, px1), (pxh, pxl) = self._scr_data
+        if t.size == 0:
+            for it in self._scr_items:
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            self._scr_sig = ("empty",)
+            return
+        n_lb = self._lb_n(); n_mn = self._lb_min_n()
+        live = bool(vx1 >= now - float(config.INTERP_STALE_SECS))
+        form_all = np.zeros(int(t.size), dtype=bool)
+        t_end_c = np.array(t_end, dtype=np.float64, copy=True)
+        if live and not bool(done[-1]):
+            form_all[-1] = True
+            t_end_c[-1] = max(float(t[-1]), min(float(now), float(t_end_c[-1])))
+        dur = np.maximum(t_end_c - t, 1e-9)
+        keep = (done | form_all) & (t >= vx0)
+        _age = int(now - float(t[-1])) if bool(form_all[-1]) else 0
+        sig = (int(t.size), int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win), n_lb, _age,
+               round(float(np.nansum(cbuy)), 1), round(float(np.nansum(csell)), 1))
+        if sig == self._scr_sig:
+            return
+        self._scr_sig = sig
+        if not keep.any():
+            for it in self._scr_items:
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            return
+        sc, scn = self._score_parts(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, dur, keep, n_lb, n_mn)
+        x0 = t[keep]; x1 = t_end_c[keep]
+        mid = 0.5 * (x0 + x1)
+        form = form_all[keep]
+        fin = ~form
+        for it, (v, lo_, hi_, sel) in zip(self._scr_items,
+                                          ((sc["buy"], x0, mid, fin), (sc["sell"], mid, x1, fin),
+                                           (sc["buy"], x0, mid, form), (sc["sell"], mid, x1, form))):
+            m = sel & np.isfinite(v)
+            if not m.any():
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+                continue
+            it.setOpts(x0=lo_[m], x1=hi_[m], y0=np.zeros(int(m.sum())), height=v[m])
+        # ⚠ the two sides resolve INDEPENDENTLY: a side under SCORE_MIN_PARTS gets no score and no bar, so one
+        # cycle can legitimately show only one of its two bars. Absence must never invent a score.
+        self._scr_last = {"x0": x0, "x1": x1, "buy": sc["buy"], "sell": sc["sell"],
+                          "nbuy": scn["buy"], "nsell": scn["sell"], "form": form}
+        if self._scr_read is not None:
+            _k = int(np.size(x0)) - 1
+            _b, _s = sc["buy"][_k], sc["sell"][_k]
+            self._scr_read.setText("buyers %s  ·  sellers %s%s" % (
+                "-" if not np.isfinite(_b) else "%d" % int(round(_b)),
+                "-" if not np.isfinite(_s) else "%d" % int(round(_s)),
+                "  ·  still forming" if bool(form[_k]) else ""))
+            self._scr_read.setColor(config.SCR_BUY_COL if (np.isfinite(_b) and np.isfinite(_s) and _b >= _s)
+                                    else config.SCR_SELL_COL)
+            (_rx0, _rx1), (_ry0, _ry1) = self._scr_vb.viewRange()
+            self._scr_read.setPos(_rx1, _ry0)
+
     def _on_iimp_pane_toggled(self, on: bool) -> None:
         self._iimp_on = bool(on)
         if not on:
@@ -21191,6 +21421,60 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             v = cache.get(round(float(t[k]), 2))
             if v is not None:
                 out[k] = v[0] if bool(is_buy[k]) else v[1]
+        return out
+
+    def _score_parts(self, t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, dur, want, n_lb, n_mn):
+        """The BUYER / SELLER score, per side, for the cycles `want` selects -> ({side: score}, {side: n parts}).
+
+        FOUR components of each side's OWN behaviour -- its size-corrected taker $/s, its own resting $ over the
+        cycle, its reach against the climb model, and how much of that reach it held -- each a causal PERCENTILE
+        within that side's previous n_lb cycles of the same component, then averaged and put on 0..100. Computed
+        over the WHOLE read so the history exists; the percentile itself is only evaluated where `want` asks.
+
+        MEMOISED: the pane that draws these bars and the INTEREST x IMPACT panel both want the same numbers, and
+        this walks the store's bins and the book's columns. The key carries the read, the view selection and the
+        live edge, so a forming cycle still recomputes every time its dollars move.
+
+        ⚠ See config SCORE_*: equal weights, no fitting, and DESCRIPTIVE only -- `kept` contains this cycle's move
+        by construction, so the score can never be validated against it."""
+        key = (round(float(t[0]), 2), round(float(t[-1]), 2), int(t.size), int(want.sum()),
+               int(np.flatnonzero(want)[0]) if want.any() else -1, int(n_lb), int(n_mn),
+               round(float(np.nansum(cbuy)), 1), round(float(np.nansum(csell)), 1),
+               round(float(px1[-1]), 4), round(float(pxh[-1]), 4), round(float(pxl[-1]), 4))
+        memo = self.__dict__.get("_score_memo")
+        if memo is not None and memo[0] == key:
+            return memo[1]
+        _bex = float(config.SCORE_SIZE_EXP)
+        _tick = float(config.TICK_SIZE)
+        _obu, _sbu, _ose, _sse = self._iimp_climb2(t, t_end_c)
+        _bmean, _amean = self._iimp_book_mean(t, t_end_c)
+        _ones = np.ones(int(t.size), dtype=bool)
+        _side = {
+            "buy": (np.maximum(cbuy, 0.0), _bmean, (_obu, _sbu), self._iimp_wall(t, _ones),
+                    (pxh - px0) / _tick, (px1 - px0) / _tick, config.IIMP_COEF_BUY),
+            "sell": (np.maximum(csell, 0.0), _amean, (_ose, _sse), self._iimp_wall(t, ~_ones),
+                     (px0 - pxl) / _tick, (px0 - px1) / _tick, config.IIMP_COEF_SELL)}
+        _sc, _scn = {}, {}
+        for _s, (_sz, _bkm, (_o, _sec), _wr, _rc, _mvs, _cf) in _side.items():
+            with np.errstate(divide="ignore", invalid="ignore"):
+                _agg = _interp_prev(np.power(np.maximum(_sz, 1.0), 1.0 - _bex) / dur,
+                                    done, n_lb, n_mn, include_open=True)
+                _pas = self._lob_ratio(_bkm, done, n_lb, n_mn, include_open=True)
+                _c1, _c2, _c3 = _cf
+                _cv = (np.log1p(np.maximum(_rc, 0.0))
+                       - (_c1 * np.log(np.maximum(_o, 1.0)) + _c2 * np.log(np.maximum(_sec, 1.0))
+                          + _c3 * np.log1p(np.maximum(_wr, 0.0))))
+                _kp = np.where(_rc >= float(config.IIMP_KEEP_MIN_TICKS),
+                               _mvs / np.maximum(_rc, 1e-9), np.nan)
+            _PP = np.vstack([self._iimp_pct_prev(q, want, n_lb, n_mn) for q in (_agg, _pas, _cv, _kp)])
+            _nf = np.sum(np.isfinite(_PP), axis=0)
+            # sum/count rather than nanmean: a cycle with NO readable component is an all-NaN column, and nanmean
+            # warns "Mean of empty slice" on it every draw -- np.errstate does not cover a warnings-module warning
+            _avg = 100.0 * np.where(_nf > 0, np.nansum(_PP, axis=0) / np.maximum(_nf, 1), np.nan)
+            _sc[_s] = np.where(_nf >= int(config.SCORE_MIN_PARTS), _avg, np.nan)[want]
+            _scn[_s] = _nf[want]
+        out = (_sc, _scn)
+        self._score_memo = (key, out)
         return out
 
     def _iimp_climb2(self, t, t_end):
@@ -21418,39 +21702,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._iimp_keep.setData([], [])
             return
         x0 = t[keep]; x1 = t_end_c[keep]; v_raw = imb[keep]; good = score[keep] >= 0.0
-        # --- BUYER / SELLER SCORE: four components of each side's OWN behaviour, each a causal PERCENTILE within
-        # that side's previous N cycles, averaged. Computed over the WHOLE read so the history exists, but the
-        # percentile itself is only evaluated where `keep` asks for it -- the drawn cycles.
-        _bex = float(config.SCORE_SIZE_EXP)
-        _tick = float(config.TICK_SIZE)
-        _obu, _sbu, _ose, _sse = self._iimp_climb2(t, t_end_c)
-        _bmean, _amean = self._iimp_book_mean(t, t_end_c)
-        _ones = np.ones(int(t.size), dtype=bool)
-        _side = {
-            "buy": (np.maximum(cbuy, 0.0), _bmean, (_obu, _sbu), self._iimp_wall(t, _ones),
-                    (pxh - px0) / _tick, (px1 - px0) / _tick, config.IIMP_COEF_BUY),
-            "sell": (np.maximum(csell, 0.0), _amean, (_ose, _sse), self._iimp_wall(t, ~_ones),
-                     (px0 - pxl) / _tick, (px0 - px1) / _tick, config.IIMP_COEF_SELL)}
-        _sc, _scn = {}, {}
-        for _s, (_sz, _bkm, (_o, _sec), _wr, _rc, _mvs, _cf) in _side.items():
-            with np.errstate(divide="ignore", invalid="ignore"):
-                _agg = _interp_prev(np.power(np.maximum(_sz, 1.0), 1.0 - _bex) / dur,
-                                    done, n_lb, n_mn, include_open=True)
-                _pas = self._lob_ratio(_bkm, done, n_lb, n_mn, include_open=True)
-                _c1, _c2, _c3 = _cf
-                _cv = (np.log1p(np.maximum(_rc, 0.0))
-                       - (_c1 * np.log(np.maximum(_o, 1.0)) + _c2 * np.log(np.maximum(_sec, 1.0))
-                          + _c3 * np.log1p(np.maximum(_wr, 0.0))))
-                _kp = np.where(_rc >= float(config.IIMP_KEEP_MIN_TICKS),
-                               _mvs / np.maximum(_rc, 1e-9), np.nan)
-            _PP = np.vstack([self._iimp_pct_prev(q, keep, n_lb, n_mn) for q in (_agg, _pas, _cv, _kp)])
-            _nf = np.sum(np.isfinite(_PP), axis=0)
-            # sum/count rather than nanmean: a cycle with NO readable component is an all-NaN column, and
-            # nanmean warns "Mean of empty slice" on it every draw. np.errstate does not cover that -- it is
-            # a warnings-module warning, not a floating-point one.
-            _avg = 100.0 * np.where(_nf > 0, np.nansum(_PP, axis=0) / np.maximum(_nf, 1), np.nan)
-            _sc[_s] = np.where(_nf >= int(config.SCORE_MIN_PARTS), _avg, np.nan)[keep]
-            _scn[_s] = _nf[keep]
+        _sc, _scn = self._score_parts(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl,
+                                      dur, keep, n_lb, n_mn)
         _clip = float(np.log2(max(float(config.IIMP_CLIP), 1.0)))
         v = np.clip(v_raw, -_clip, _clip)      # DRAWN within 1/8x .. 8x; the badge still prints the true multiple
         _mvt = (px1 - px0)[keep] / float(config.TICK_SIZE)      # where price actually ended, in the price's frame
@@ -22777,6 +23030,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._fratio_show(bool(getattr(self, "_fratio_on", True)))  # ... and the Flow ratios pane
         self._fratio_sig = None; self._fratio_t = 0.0
         self._iimp_show(bool(getattr(self, "_iimp_on", True)))      # ... and the Interest x Impact pane
+        self._scr_show(bool(getattr(self, "_scr_on", True)))        # ... and the Buyer / Seller score pane
         self._iimp_sig = None; self._iimp_t = 0.0
         self._interp_show(bool(getattr(self, "_interp_on", True)))  # ... and the Interpretation feed
         self._flow_pane_apply()                                     # the pane itself may be toggled off
@@ -22803,6 +23057,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._spd_show(False)
         self._fratio_show(False)
         self._iimp_show(False)
+        self._scr_show(False)
         self._interp_show(False)
         self._flow_pane_lift()                                # every other mode draws on the main chart (idempotent)
         self._flow_curves = None
@@ -22904,6 +23159,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             pass
         try:
             self._iimp_tick(now)        # Interest x Impact pane -- same read again
+        except Exception:
+            pass
+        try:
+            self._scr_tick(now)         # Buyer / Seller score pane -- same read, shared score memo
         except Exception:
             pass
         try:
@@ -24177,7 +24436,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                           (getattr(self, "_fratio_plot", None),
                            (getattr(self, "_fratio_vline", None), getattr(self, "_fratio_hline", None))),
                           (getattr(self, "_iimp_plot", None),
-                           (getattr(self, "_iimp_vline", None), getattr(self, "_iimp_hline", None)))):
+                           (getattr(self, "_iimp_vline", None), getattr(self, "_iimp_hline", None))),
+                          # ⚠ a pane MISSING from this tuple keeps its creation-time #141414 background while
+                          # every other pane is repainted -- the score pane rendered dark on a white stack
+                          # until it was added here (2026-09-16)
+                          (getattr(self, "_scr_plot", None),
+                           (getattr(self, "_scr_vline", None), getattr(self, "_scr_hline", None)))):
             if pw is None:
                 continue
             try:

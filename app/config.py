@@ -395,6 +395,7 @@ def pane_titles(n=None):
         "lines": "BUY / SELL FLOW" + d + "taker $ per window (the pane)",
         "fratio": "FLOW RATIOS" + d + "$/s vs last %d" % n + d + "buy / sell",
         "iimp": "INTEREST × IMPACT" + d + "who leads vs last %d" % n,
+        "scr": "BUYER / SELLER SCORE" + d + "0..100 vs last %d" % n + d + "buy / sell",
     }
 
 
@@ -535,7 +536,16 @@ IIMP_KEEP_COL = "#3a4150"
 SCORE_SIZE_EXP = 0.55           # swept: rho(agg, $) +0.645 -> -0.018 buy, +0.646 -> +0.014 sell
 SCORE_LOW = 42.0                # measured terciles of the score itself
 SCORE_HIGH = 57.0
-SCORE_MIN_PARTS = 2             # fewer than this and no score is claimed at all       # only the CREATION default -- the cap then follows the theme foreground,
+SCORE_MIN_PARTS = 2             # fewer than this and no score is claimed at all
+# The score gets a PANE of its own (user 2026-09-16: "now make it its own pane with two bars per
+# cycle"): BUY on each cycle's left half, SELL on its right, both rising from 0 to that side's score,
+# with the measured terciles as guides. The forming cycle is drawn lighter on items of its own, the
+# FLOW RATIOS convention. The bars and the INTEREST x IMPACT panel share ONE memoised computation.
+SCR_PANE_ON = True
+SCR_BUY_COL = IIMP_BUY_COL      # the same teal / red as every other pane's two sides
+SCR_SELL_COL = IIMP_SELL_COL
+SCR_FORM_FILL_A = IIMP_FORM_FILL_A
+SCR_FORM_PEN_A = IIMP_FORM_PEN_A       # only the CREATION default -- the cap then follows the theme foreground,
 #                                 because a fixed light grey was invisible on the light canvas (#ffffff):
 #                                 measured contrast 39 of 765, i.e. drawn but unseeable (2026-09-16)
 # --- the Buy/Sell Flow ($) PANE itself gets a toggle (user 2026-09-15: "we dont have it", then "I want the
