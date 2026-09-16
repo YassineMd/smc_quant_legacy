@@ -21408,7 +21408,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             _w = wk[_k]
             _kp = kept[_k]          # "-" where the push was too short to read, exactly like the wall
             self._iimp_read.setText("%s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s%s%s" % (
-                "BUY" if up[_k] else "SELL", _mult[_k], 2.0 ** float(score[keep][_k]),
+                "BUY" if up[_k] else "SELL", _mult[_k], float(np.exp(score[keep][_k])),
                 "-" if not np.isfinite(_w) else "%.2gx" % _w,
                 "-" if not np.isfinite(_kp) else "%d%%" % int(round(100.0 * float(_kp))),
                 "  ·  still forming" if bool(form[_k]) else "",
@@ -21570,7 +21570,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         """One bar in plain language: what the height, the colour, the fill and the dot are saying, and why."""
         d = self._iimp_last
         up = bool(d["up"][k]); contra = bool(d["contra"][k]); good = bool(d["good"][k])
-        mult = float(d["mult"][k]); imp = 2.0 ** float(d["score"][k])
+        # ⚠ e**, not 2**: the residual is built in NATURAL log (log1p(reach) minus a sum of np.log terms), so
+        # the multiple of expected reach is e**resid. 2**resid compressed every reading toward 1.0x -- a real
+        # 3.54x printed as "2.4x" and a real 0.51x as "0.63x" (found 2026-09-16 while unit-checking the score).
+        # The FILL is unaffected: score >= 0 means the same in any base, so no bar changes colour or fill.
+        mult = float(d["mult"][k]); imp = float(np.exp(d["score"][k]))
         wall = float(d["wall"][k]); reach = float(d["reach"][k]); mv = float(d["mv"][k])
         arb = float(d["arb"][k]); ars = float(d["ars"][k])
         forming = bool(np.asarray(d.get("form", np.zeros(np.size(d["x0"]), dtype=bool)))[k])

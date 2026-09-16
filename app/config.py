@@ -450,6 +450,9 @@ FRATIO_MODE = "None"
 # height's agreement with the cycle's own dominant side from 77% to 68%, and with the direction price actually
 # took from 65% to 58%. The book's swing is far narrower than the tape's (p10..p90 0.73 vs 2.33 in log2), so any
 # blend either ignores it or amplifies its noise. It carries its own mark instead.
+# ⚠⚠ IIMP_COEF_* are NATURAL-log slopes and the residual they produce is in natural-log units, so the multiple
+# of expected reach is e**resid. Displaying 2**resid squashed every reading toward 1.0x (a true 3.54x printed
+# as 2.4x). Terciles and the fill are untouched by the base -- only the printed multiple was wrong.
 # ⚠ IIMP_COEF_* are log-log slopes of reach on (own $ up to the extreme, seconds to the extreme, resting wall at
 # the open), fitted per side on the same 48 h (buy R2 0.744 / sell 0.726). No intercept is needed: the score is a
 # residual against the median of the previous N same-side cycles, which cancels it.
