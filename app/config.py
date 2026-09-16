@@ -395,7 +395,6 @@ def pane_titles(n=None):
         "lines": "BUY / SELL FLOW" + d + "taker $ per window (the pane)",
         "fratio": "FLOW RATIOS" + d + "$/s vs last %d" % n + d + "buy / sell",
         "iimp": "INTEREST × IMPACT" + d + "who leads vs last %d" % n,
-        "scr": "BUYER / SELLER SCORE" + d + "aggression 0..100 vs last %d" % n + d + "buy / sell",
     }
 
 
@@ -538,32 +537,9 @@ SCORE_SIZE_EXP = 0.55           # swept: takes rho(aggression, cycle $) from +0.
 SCORE_LOW = 32.0                # measured terciles of the ONE-component score (a percentile, so near 33 / 67)
 SCORE_HIGH = 70.0
 SCORE_MIN_PARTS = 1             # one component: a side either has a reading or it has none
-# The score gets a PANE of its own: TWO STEP LINES, teal buyers and red sellers, each cycle's score held
-# flat across that cycle's span, on a fixed 0..100 with the measured terciles as guides (user
-# 2026-09-16: first "two bars per cycle", then "i prefer two lines red green instead of histogram").
-# The forming cycle's tail is lighter, this pane's convention. ⚠ A side with no score is NaN and the
-# line BREAKS there (connect="finite") -- never interpolate a score that was not computed.
-# The pane and the INTEREST x IMPACT panel share ONE memoised computation.
-SCR_PANE_ON = True
-SCR_BUY_COL = IIMP_BUY_COL      # the same teal / red as every other pane's two sides
-SCR_SELL_COL = IIMP_SELL_COL
-SCR_FORM_FILL_A = IIMP_FORM_FILL_A
-SCR_FORM_PEN_A = IIMP_FORM_PEN_A
-# SMOOTHING (user 2026-09-16: "is it possible to smoothen the lines"). TWO separate things, and only the second
-# changes the data:
-#   1. the line is a MIDPOINT POLYLINE, not a step -- one point per cycle at its own middle. The step's vertical
-#      risers were most of the jaggedness, and removing them changes nothing about what is plotted.
-#   2. SCR_SMOOTH_N > 1 averages each side's score over the last N SCORED cycles, CAUSALLY (only cycles at or
-#      before the one being drawn -- never a centred window, which would be look-ahead).
-# ⚠ Smoothing changes what the LINE MEANS: at N > 1 it is no longer this cycle's score but a blend of the last N,
-#   and it lags. So the pane TITLE states the span, and the readout stays the RAW current cycle and says so --
-#   otherwise the line and the INTEREST x IMPACT panel's per-cycle Score would silently disagree, which is exactly
-#   the class of bug this pane has already produced twice (the badge vs the axis, then the impact log base).
-# ⚠ The smoothing window is taken over the DRAWN cycles, so the leftmost N-1 of them are averaged over fewer
-#   values. At N = 3 that is two cycles at the left edge; it is an edge artifact, not a baseline error.
-# Set to 1 for the raw per-cycle score.
-SCR_SMOOTH_N = 3               # the DEFAULT span; the pane's own top-right dropdown overrides it
-SCR_SMOOTH_CHOICES = (1, 2, 3, 5, 8, 12)   # what that dropdown offers; 1 = raw, per-cycle       # only the CREATION default -- the cap then follows the theme foreground,
+# ⚠ The score had a PANE of its own; it was DROPPED 2026-09-16 at the user's request ("I have a better
+# idea"). What is left is the per-cycle Score line in the INTEREST x IMPACT click panel, which is the only
+# consumer of _score_parts. If nothing ever needs it again, that line and _score_parts go together.
 #                                 because a fixed light grey was invisible on the light canvas (#ffffff):
 #                                 measured contrast 39 of 765, i.e. drawn but unseeable (2026-09-16)
 # --- the Buy/Sell Flow ($) PANE itself gets a toggle (user 2026-09-15: "we dont have it", then "I want the
@@ -699,6 +675,8 @@ HLH_TP_BLOCS = True             # label each bloc (time + volume)
 HLH_TP_TOTAL = True             # label the D area total
 HLH_TP_PEAK = False             # label the busiest bin
 HLH_SHOW_VA = True              # VAH / VAL of each bloc (the Block Lines)
+HLH_SHOW_MID = True             # the bloc's MIDLINE: (bHi + bLo) / 2, dashed, thin, theme-coloured
+#                                 (black on the light canvas). The bloc's OWN high/low, not its value area.
 HLH_D_WIDTH = 2                 # D line width (px)
 HLH_LVL_WIDTH = 3               # level line width (px)
 HLH_VA_WIDTH = 1                # block line width (px; 2 in Block Lines Only)

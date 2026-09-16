@@ -307,6 +307,15 @@ def build_period(res: H.PeriodResult, rows: List[H.MB], tabs: List[str], xmap, c
                 if cfg.HLH_SHOW_VA2 and m.vah2 is not None:
                     dashes.append(Dash(xa, xbb, m.vah2, lc))
                     dashes.append(Dash(xa, xbb, m.val2, lc))
+            # the bloc's MIDLINE: halfway between its OWN high and low -- the bloc's equilibrium, not its value
+            # area's (user 2026-09-16: "you take the high and low of the bloc and you draw a midline"). bHi/bLo
+            # are the highest high / lowest low of the bloc's candles and survive every merge via _nmax/_nmin.
+            # Emitted as a Dash so it rides the SEGMENT painter at width 1.0 -- a Qt dashed PEN is the cost in
+            # this file, which is why the outer value areas already go that way.
+            # txt_dark, not a literal black: it is black on the light canvas and white if the theme flips, so the
+            # line cannot go invisible the way a hard-coded colour did on another pane.
+            if cfg.HLH_SHOW_MID and m.bHi is not None and m.bLo is not None:
+                dashes.append(Dash(xa, xbb, 0.5 * (float(m.bHi) + float(m.bLo)), QtGui.QColor(txt_dark)))
             if badges:
                 by = m.val if m.val is not None else (m.yLo if m.yLo is not None else lo)
                 txt = "%s\n%s\n%s" % (m.name, H.fmt_bloc(m.mins, m.tA, m.tB, p.tz), H.fmt_usd(m.usd))

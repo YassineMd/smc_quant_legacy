@@ -298,7 +298,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     spdPaneToggled = QtCore.Signal(bool)         # Speed pane on/off (Flow mode)
     fratioPaneToggled = QtCore.Signal(bool)      # Flow ratios pane on/off (Flow mode): flow / buy / sell vs last N
     iimpPaneToggled = QtCore.Signal(bool)        # Interest x Impact pane on/off (Flow mode)
-    scrPaneToggled = QtCore.Signal(bool)         # Buyer / Seller score pane on/off (Flow mode)
     flowLinesToggled = QtCore.Signal(bool)       # the Buy/Sell Flow $ PANE (the main chart in Flow mode) on/off
     hlhSpanChanged = QtCore.Signal(str)          # HLH: "A merged bloc spans at most" (the Pine's mergeSpan input)
     interpPaneToggled = QtCore.Signal(bool)     # Interpretation feed on/off (Flow mode, right side)
@@ -1819,17 +1818,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % (config.CYCLE_BASE_N, config.CYCLE_BASE_N, config.CYCLE_BASE_N))
         self.iimp_on.toggled.connect(lambda on: self.iimpPaneToggled.emit(bool(on)))
         l4.addWidget(self.iimp_on)
-        self.scr_on = QtWidgets.QCheckBox(config.pane_titles()["scr"])
-        self.scr_on.setChecked(bool(config.SCR_PANE_ON))
-        self.scr_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
-        self.scr_on.setToolTip(
-            "One bar per side per cycle, 0..100: how that side stands against its OWN last N cycles on four\n"
-            "things it did -- its aggressive $/s (size-corrected), its own resting orders, how far it reached\n"
-            "for that effort, and how much of that reach it still held at the close.\n"
-            "The four were measured to be near-independent, so the score is not one of them in disguise.\n"
-            "DESCRIPTIVE: it scores a cycle that has happened. It is not a forecast.")
-        self.scr_on.toggled.connect(lambda on: self.scrPaneToggled.emit(bool(on)))
-        l4.addWidget(self.scr_on)
         self.interp_on = QtWidgets.QCheckBox(config.pane_titles()["interp"])
         self.interp_on.setChecked(bool(config.INTERP_PANE_ON))
         self.interp_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
@@ -1871,7 +1859,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         for _k, _cb in (("px", self.px_on), ("liq", self.liq_on), ("cyc", self.cycle_on),
                         ("cvol", self.cvol_on), ("lines", self.lines_on), ("fratio", self.fratio_on),
                         ("lob", self.lob_on), ("spd", self.spd_on), ("interp", self.interp_on),
-                        ("iimp", self.iimp_on), ("scr", self.scr_on)):
+                        ("iimp", self.iimp_on)):
             if _k in names:
                 _cb.setText(names[_k])
 
@@ -1880,9 +1868,6 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def set_spd_pane_on(self, on: bool) -> None:
         self.spd_on.blockSignals(True); self.spd_on.setChecked(bool(on)); self.spd_on.blockSignals(False)
-
-    def set_scr_pane_on(self, on: bool) -> None:
-        self.scr_on.blockSignals(True); self.scr_on.setChecked(bool(on)); self.scr_on.blockSignals(False)
 
     def set_iimp_pane_on(self, on: bool) -> None:
         self.iimp_on.blockSignals(True); self.iimp_on.setChecked(bool(on)); self.iimp_on.blockSignals(False)
