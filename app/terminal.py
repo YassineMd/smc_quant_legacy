@@ -3165,7 +3165,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._bp_sig = None; self._bp_rev = getattr(self, "_bp_rev", 0) + 1; self._sel_sig = None    # Sweeps sub-toggle -> redraw (rides the master layer)
             if not on:
                 self._clear_bp_sweeps()
-        elif key in ("m10_hlh", "m10_hlh_week", "m10_hlh_bloconly", "m10_hlh_badges", "m10_hlh_tables"):
+        elif key in ("m10_hlh", "m10_hlh_week", "m10_hlh_bloconly", "m10_hlh_badges", "m10_hlh_tables",
+                     "m10_hlh_pocruns"):
             self._hlh_out = None; self._hlh_px_out = None     # each canvas sets its content again on its next draw
             self._hlh_tog = None                              # re-read the toggles (this runs before the rev bump)
             self._last_scanner_sig = None                     # ... and the candle canvas redraws on the next tick
@@ -6276,9 +6277,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _m = self.menu
             v = (bool(_m.layer_state("m10_hlh")), bool(_m.layer_state("m10_hlh_week")),
                  bool(_m.layer_state("m10_hlh_bloconly")), not self._simple_bw(),
-                 bool(_m.layer_state("m10_hlh_badges")), bool(_m.layer_state("m10_hlh_tables")))
+                 bool(_m.layer_state("m10_hlh_badges")), bool(_m.layer_state("m10_hlh_tables")),
+                 bool(_m.layer_state("m10_hlh_pocruns")))
         except Exception:
-            v = (False, False, False, True, True, True)
+            v = (False, False, False, True, True, True, bool(config.HLH_SHOW_POC_RUNS))
         self._hlh_tog = (_rev, v)
         return v
 
@@ -6359,7 +6361,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         from .hlh_draw import BarXMap, HlhPicsItem, HlhLabelsItem
         st = self._hlh_state()
         now = time.time()
-        _on, week_on, _bloc, _dark, _bdg, _tab = self._hlh_toggles()
+        _on, week_on, _bloc, _dark, _bdg, _tab, _pcr = self._hlh_toggles()
         st.ensure_feeds(week_on, now)
         self._hlh_floor_once()
         _t0 = float(buckets[0].get("start_time", 0.0) or 0.0)
@@ -6370,7 +6372,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                      dtype=np.float64, count=len(buckets)),
                          float(config.TF_SECONDS.get(self._tf, 60)))
             self._hlh_xmap = xm
-        out = st.build("canvas", xm, _bloc, _dark, week_on, now, skip_before=_t0, badges=_bdg, tables=_tab)
+        out = st.build("canvas", xm, _bloc, _dark, week_on, now, skip_before=_t0, badges=_bdg, tables=_tab,
+                       poc_runs=_pcr)
         if self.__dict__.get("_hlh_pics", None) is None:
             self._hlh_pics = HlhPicsItem(); self._hlh_pics.setZValue(3)
             self.plot.addItem(self._hlh_pics, ignoreBounds=True)
@@ -6401,13 +6404,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return
         from .hlh_draw import IdentityXMap, HlhPicsItem, HlhLabelsItem
         st = self._hlh_state()
-        _on, week_on, _bloc, _dark, _bdg, _tab = self._hlh_toggles()
+        _on, week_on, _bloc, _dark, _bdg, _tab, _pcr = self._hlh_toggles()
         st.ensure_feeds(week_on, now)
         self._hlh_floor_once()
         xm = self.__dict__.get("_hlh_ident", None)
         if xm is None:
             xm = self._hlh_ident = IdentityXMap()
-        out = st.build("px", xm, _bloc, _dark, week_on, now, badges=_bdg, tables=_tab)
+        out = st.build("px", xm, _bloc, _dark, week_on, now, badges=_bdg, tables=_tab, poc_runs=_pcr)
         if self.__dict__.get("_hlh_px_pics", None) is None:
             self._hlh_px_pics = HlhPicsItem(); self._hlh_px_pics.setZValue(3)
             pw.addItem(self._hlh_px_pics, ignoreBounds=True)

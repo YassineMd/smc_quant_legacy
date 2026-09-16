@@ -122,7 +122,8 @@ class Dash:
 
 
 def build_period(res: H.PeriodResult, rows: List[H.MB], tabs: List[str], xmap, cand_secs: float, bloc_only: bool,
-                 dark: bool, badges: bool, tables: bool, p: H.Params) -> Tuple[list, List[Label], List[Dash]]:
+                 dark: bool, badges: bool, tables: bool, p: H.Params,
+                 poc_runs: bool = True) -> Tuple[list, List[Label], List[Dash]]:
     """The Pine's DRAW section for one period, from its FINAL state: ([(x_lo, x_hi, QPicture), ...], labels,
     dashes), pictures in plot coordinates. TWO pictures: the PROFILE (histogram, rows, POC, legs) spans only the
     period's first width_pct, the SPAN (levels, time profile, block lines) the whole period -- a live-edge
@@ -312,7 +313,7 @@ def build_period(res: H.PeriodResult, rows: List[H.MB], tabs: List[str], xmap, c
             # pair, which carry the bloc's rank width -- the POC is where the volume sat, not a boundary.
             # H.bloc_poc caches on the MB, so this costs one lookup per redraw after the first.
             _poc = H.bloc_poc(m)
-            if _poc is not None and cfg.HLH_SHOW_POC_RUNS:
+            if _poc is not None and poc_runs:
                 # groups of >= N candles that OPENED and CLOSED on one side of this POC -- acceptance there
                 # (user 2026-09-16). Shaded from the POC out to how far the run got, rather than boxing the
                 # candles' own high..low: only the open and the close are held to the rule, so a run can WICK
@@ -771,13 +772,13 @@ class HlhOverlay:
 
     # -------------------------------------------------------------- geometry
     def build(self, canvas: str, xmap, bloc_only: bool, dark: bool, week_on: bool, now: float,
-              skip_before: float = -np.inf, badges: bool = True, tables: bool = True):
+              skip_before: float = -np.inf, badges: bool = True, tables: bool = True, poc_runs: bool = True):
         """(pics, labels, note, dashes) for one canvas. Returns the SAME tuple object while nothing changed, so a
         caller can gate set_pics/set_labels on identity. Periods before the DRAW floor (the chain-only ones) and
         before `skip_before` (the canvas's first bar) are computed but not drawn."""
         pers = self.periods(week_on, now)
         xkey = tuple(xmap.key)
-        opts = (bool(bloc_only), bool(dark), bool(badges), bool(tables))
+        opts = (bool(bloc_only), bool(dark), bool(badges), bool(tables), bool(poc_runs))
         dfl = self.day_floor(now)
         wfl = self.week_floor(now) if week_on else dfl
         sig = (tuple((pk[0], pk[1], pk[2]) for pk in pers), xkey, opts, self.note(week_on), float(skip_before),
@@ -797,7 +798,8 @@ class HlhOverlay:
             keep.add(gk)
             g = self._geom.get(gk)
             if g is None or g[0] != ver or g[1] != xkey or g[2] != opts:
-                pl, lbl, dsh = build_period(res, rows, tabs, xmap, cand_secs, opts[0], opts[1], opts[2], opts[3], p)
+                pl, lbl, dsh = build_period(res, rows, tabs, xmap, cand_secs, opts[0], opts[1], opts[2],
+                                            opts[3], p, poc_runs=opts[4])
                 g = (ver, xkey, opts, pl, lbl, dsh)
                 self._geom[gk] = g
             pics.extend(g[3])

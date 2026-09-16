@@ -125,7 +125,7 @@ _M10_INDICATORS = [
     ("m10_structure", "Market Structure — scalp ZigZag", False, True),   # fine ZigZag (ZIGZAG_PCT, app/structure.py)
     ("m10_structure_swing", "Market Structure — swing ZigZag", False, True),   # coarse ZigZag (+ its sensitivity slider)
     ("m10_prevday_vp", "Prev. Day VP", False, True),            # per-previous-UTC-day Volume Profile (style = 'Volume Profile Mode' dropdown)
-    ("m10_hlh", "HLH Volume Profile (D1, D2 … · blocs · Block Lines)", False, True),   # the user's TradingView indicator (study/pine/hlh_volume_profile.pine): per-DAY profile, LOW/HIGH rows, D shapes from the POC + each HIGH, D levels, time profile per D area, blocs (Dy-Bx) + merges 1-4 -> final blocs with VAH/VAL coloured by volume rank (orange / D colour / dark gray), outer 90% value area dashed, badges, tables 1-3 under the day's low. Draws 2 days (computes HLH_HIST_DAYS for the merge chain) from 1m klines; also drawn on the Flow-mode PRICE pane. Sub-toggles: Week profile / Block Lines Only / Bloc badges / Tables. app/hlh_profile + app/hlh_draw
+    ("m10_hlh", "HLH Volume Profile (D1, D2 … · blocs · Block Lines)", False, True),   # the user's TradingView indicator (study/pine/hlh_volume_profile.pine): per-DAY profile, LOW/HIGH rows, D shapes from the POC + each HIGH, D levels, time profile per D area, blocs (Dy-Bx) + merges 1-4 -> final blocs with VAH/VAL coloured by volume rank (orange / D colour / dark gray), outer 90% value area dashed, badges, tables 1-3 under the day's low. Draws 2 days (computes HLH_HIST_DAYS for the merge chain) from 1m klines; also drawn on the Flow-mode PRICE pane. Sub-toggles: Week profile / Block Lines Only / Bloc badges / Tables / POC acceptance areas. app/hlh_profile + app/hlh_draw
     ("m10_session", "Session Filter", False, True),            # per-UTC-day Tokyo/London/New-York boxes: range + avg (VWAP) + high/low
     ("m10_erange", "Expected Range", False, True),             # per-session dashed range envelope from YESTERDAY's same-session range (NY/Tokyo/London/Whole Day sub-toggles)
     ("m10_nyanchor", "★ NY Anchor (far-side hold · 15:00→21:00 UTC)", False, True),   # from 15:00Z ONE amber line at the NY-session extreme FARTHER from price — holds to the close ~67-73% (+12-17pp over the shuffle null, recent eras; study/session_side_fix_15m). 18:30Z→ both extremes (range typically complete). DESCRIPTIVE level persistence, NOT an entry signal; side can flip if price crosses the session midpoint
@@ -1184,8 +1184,10 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         """Under 'HLH Volume Profile': the Pine's display switches. 'Week profile' adds Monday 00:00 -> Sunday
         23:59 periods on 5-minute candles (labels prefixed 'W '); 'Block Lines Only' keeps just the final blocs'
         VAH / VAL lines, badges and tables (+ a midnight separator); 'Bloc badges' and 'Tables' are DISPLAY ONLY
-        (the Pine's rule: turning a table off never changes the blocs, the merges or the colours). Defaults as
-        the Pine: week / bloc-only OFF, badges / tables ON."""
+        (the Pine's rule: turning a table off never changes the blocs, the merges or the colours), and so is
+        'POC acceptance areas', which is ours rather than the Pine's. Defaults as the Pine: week / bloc-only
+        OFF, badges / tables ON; the acceptance areas follow config.HLH_SHOW_POC_RUNS so the default lives in
+        one place instead of being written out twice."""
         for key, text, tip, dflt in (
                 ("m10_hlh_week", "· Week profile (Monday 00:00 → Sunday 23:59)",
                  "A second, independent profile per WEEK on 5-minute candles, drawn beside the day profiles "
@@ -1202,7 +1204,14 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                  "Display only: turning the tables off changes nothing else on the chart. Under each day's low, "
                  "left edge at midnight: every final bloc by volume (lowest -> highest) with its span, time, "
                  "volume, high-low, MAX/MIN tag, overlaps and merges; the blocs per D with their VAH-VAL; and, "
-                 "under finished days, day N vs day N-1 (VAH-VAL relations and the day merges).", True)):
+                 "under finished days, day N vs day N-1 (VAH-VAL relations and the day merges).", True),
+                ("m10_hlh_pocruns", "· POC acceptance areas (\u2265 5 candles one side)",
+                 "Display only. Inside each bloc, shade every run of at least %d CONSECUTIVE candles that "
+                 "OPENED and CLOSED on the same side of that bloc's own POC -- price accepting one side of it. "
+                 "Each area spans the run's time and reaches from the POC out to the run's furthest price, so "
+                 "it shows how far the side got. Broad by nature: on 1m candles price holds one side of any "
+                 "single line for long stretches." % int(config.HLH_POC_RUN_MIN),
+                 bool(config.HLH_SHOW_POC_RUNS))):
             cb = QtWidgets.QCheckBox(text)
             cb.setChecked(bool(dflt))
             cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")
