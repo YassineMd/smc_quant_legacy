@@ -21507,55 +21507,31 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         return out
 
     def _score_parts(self, t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, dur, want, n_lb, n_mn):
-        """The BUYER / SELLER score, per side, for the cycles `want` selects -> ({side: score}, {side: n parts}).
+        """The BUYER / SELLER score for the cycles `want` selects -> ({side: 0..100}, {side: 1 if read else 0}).
 
-        FOUR components of each side's OWN behaviour -- its size-corrected taker $/s, its own resting $ over the
-        cycle, its reach against the climb model, and how much of that reach it held -- each a causal PERCENTILE
-        within that side's previous n_lb cycles of the same component, then averaged and put on 0..100. Computed
-        over the WHOLE read so the history exists; the percentile itself is only evaluated where `want` asks.
+        ONE component: that side's size-corrected aggressive $ per second, as a causal percentile within the last
+        n_lb cycles of BOTH sides. It was four; three were cut after measurement (see config SCORE_*) -- the
+        four-part version scored BELOW this single part and below a one-line rule.
 
-        MEMOISED: the pane that draws these bars and the INTEREST x IMPACT panel both want the same numbers, and
-        this walks the store's bins and the book's columns. The key carries the read, the view selection and the
-        live edge, so a forming cycle still recomputes every time its dollars move.
+        MEMOISED: the pane that draws the lines and the INTEREST x IMPACT panel want the same numbers. The key
+        carries the read, the view selection and the live edge, so a forming cycle recomputes as its $ move.
 
-        ⚠ See config SCORE_*: equal weights, no fitting, and DESCRIPTIVE only -- `kept` contains this cycle's move
-        by construction, so the score can never be validated against it."""
+        ⚠ DESCRIPTIVE and COINCIDENT. It rates a cycle that has closed and forecasts nothing -- the divergence
+        hypothesis was tested and is null (51.0%, p=0.747)."""
         key = (round(float(t[0]), 2), round(float(t[-1]), 2), int(t.size), int(want.sum()),
                int(np.flatnonzero(want)[0]) if want.any() else -1, int(n_lb), int(n_mn),
-               round(float(np.nansum(cbuy)), 1), round(float(np.nansum(csell)), 1),
-               round(float(px1[-1]), 4), round(float(pxh[-1]), 4), round(float(pxl[-1]), 4))
+               round(float(np.nansum(cbuy)), 1), round(float(np.nansum(csell)), 1))
         memo = self.__dict__.get("_score_memo")
         if memo is not None and memo[0] == key:
             return memo[1]
         _bex = float(config.SCORE_SIZE_EXP)
-        _tick = float(config.TICK_SIZE)
-        _obu, _sbu, _ose, _sse = self._iimp_climb2(t, t_end_c)
-        _bmean, _amean = self._iimp_book_mean(t, t_end_c)
-        _ones = np.ones(int(t.size), dtype=bool)
-        _side = {
-            "buy": (np.maximum(cbuy, 0.0), _bmean, (_obu, _sbu), self._iimp_wall(t, _ones),
-                    (pxh - px0) / _tick, (px1 - px0) / _tick, config.IIMP_COEF_BUY),
-            "sell": (np.maximum(csell, 0.0), _amean, (_ose, _sse), self._iimp_wall(t, ~_ones),
-                     (px0 - pxl) / _tick, (px0 - px1) / _tick, config.IIMP_COEF_SELL)}
-        _sc, _scn = {}, {}
-        for _s, (_sz, _bkm, (_o, _sec), _wr, _rc, _mvs, _cf) in _side.items():
-            with np.errstate(divide="ignore", invalid="ignore"):
-                _agg = _interp_prev(np.power(np.maximum(_sz, 1.0), 1.0 - _bex) / dur,
-                                    done, n_lb, n_mn, include_open=True)
-                _pas = self._lob_ratio(_bkm, done, n_lb, n_mn, include_open=True)
-                _c1, _c2, _c3 = _cf
-                _cv = (np.log1p(np.maximum(_rc, 0.0))
-                       - (_c1 * np.log(np.maximum(_o, 1.0)) + _c2 * np.log(np.maximum(_sec, 1.0))
-                          + _c3 * np.log1p(np.maximum(_wr, 0.0))))
-                _kp = np.where(_rc >= float(config.IIMP_KEEP_MIN_TICKS),
-                               _mvs / np.maximum(_rc, 1e-9), np.nan)
-            _PP = np.vstack([self._iimp_pct_prev(q, want, n_lb, n_mn) for q in (_agg, _pas, _cv, _kp)])
-            _nf = np.sum(np.isfinite(_PP), axis=0)
-            # sum/count rather than nanmean: a cycle with NO readable component is an all-NaN column, and nanmean
-            # warns "Mean of empty slice" on it every draw -- np.errstate does not cover a warnings-module warning
-            _avg = 100.0 * np.where(_nf > 0, np.nansum(_PP, axis=0) / np.maximum(_nf, 1), np.nan)
-            _sc[_s] = np.where(_nf >= int(config.SCORE_MIN_PARTS), _avg, np.nan)[want]
-            _scn[_s] = _nf[want]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            _rb = np.power(np.maximum(np.maximum(cbuy, 0.0), 1.0), 1.0 - _bex) / dur
+            _rs = np.power(np.maximum(np.maximum(csell, 0.0), 1.0), 1.0 - _bex) / dur
+        _pb, _ps = self._score_pct_pool(_rb, _rs, want, n_lb, n_mn)
+        _sc = {"buy": (100.0 * _pb)[want], "sell": (100.0 * _ps)[want]}
+        _scn = {"buy": np.isfinite(_pb[want]).astype(np.int64),
+                "sell": np.isfinite(_ps[want]).astype(np.int64)}
         out = (_sc, _scn)
         self._score_memo = (key, out)
         return out
@@ -21619,6 +21595,32 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             if v is not None:
                 bm[k], am[k] = v
         return bm, am
+
+    @staticmethod
+    def _score_pct_pool(vb, vs, want, n_base, min_n):
+        """Causal percentile of EACH side's value within the previous n_base cycles of BOTH sides POOLED.
+
+        Pooled rather than each side against its own history: a self baseline answers "unusual for that side
+        lately", which in a trend flatters the losing side -- the winner's bar is already high. The pooled one
+        answers the question actually asked, "how much compared to the other side".
+
+        History is walked for every cycle; the percentile is only evaluated where `want` asks for it."""
+        vb = np.asarray(vb, dtype=np.float64); vs = np.asarray(vs, dtype=np.float64)
+        ob = np.full(int(vb.size), np.nan); os_ = np.full(int(vb.size), np.nan)
+        hist = []
+        nb, mn = 2 * int(n_base), 2 * int(min_n)
+        for k in range(int(vb.size)):
+            if bool(want[k]) and len(hist) >= mn:
+                h = hist[-nb:]
+                m = float(len(h))
+                for _v, _out in ((vb[k], ob), (vs[k], os_)):
+                    if np.isfinite(_v):
+                        _out[k] = (sum(1 for q in h if q < _v) + 0.5 * sum(1 for q in h if q == _v)) / m
+            if np.isfinite(vb[k]):
+                hist.append(float(vb[k]))
+            if np.isfinite(vs[k]):
+                hist.append(float(vs[k]))
+        return ob, os_
 
     @staticmethod
     def _iimp_pct_prev(v, want, n_base, min_n):
@@ -22104,18 +22106,16 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         else:
             rows.append("%s: none, because the resting %s orders at the open were ordinary (%.2gx the "
                         "previous %d)." % (_L % "Dot", other_ord, wall, n))
-        # SCORE: the two sides side by side, each out of 100, with how many of the four parts fed it.
-        # ⚠ it is a STANDING score for this cycle, not a forecast: `kept` contains the move by construction.
+        # SCORE: the two sides side by side. ONE component -- see config SCORE_*: the other three were cut
+        # after measurement, and what is left is the flow ratio on a bounded scale, not a composite.
         if np.isfinite(s_buy) or np.isfinite(s_sell):
             _sf = lambda q: "-" if not np.isfinite(q) else "<b>%d</b>" % int(round(q))
             _band = lambda q: ("" if not np.isfinite(q) else
                                " (top third)" if q >= float(config.SCORE_HIGH) else
                                " (bottom third)" if q <= float(config.SCORE_LOW) else "")
-            rows.append("%s: buyers %s%s, sellers %s%s -- each side against its OWN last %d cycles on its "
-                        "aggression, its resting orders, its reach and what it held%s."
-                        % (_L % "Score", _sf(s_buy), _band(s_buy), _sf(s_sell), _band(s_sell), n,
-                           "" if min(n_buy, n_sell) >= 4 else
-                           " (from %d and %d of the 4 parts -- the rest were unreadable here)" % (n_buy, n_sell)))
+            rows.append("%s: buyers %s%s, sellers %s%s -- each side's aggressive $ per second, size-corrected, "
+                        "ranked against BOTH sides over the last %d cycles."
+                        % (_L % "Score", _sf(s_buy), _band(s_buy), _sf(s_sell), _band(s_sell), n))
         rows.append("%s: %s" % (_L % "Why", self._iimp_why(
             up=up, contra=contra, good=good, mv=mv, reach=reach, imp=imp, wall_hi=wall_hi, wall_lo=wall_lo,
             wall_txt=wall_txt, side=side, low=low, other=other, other_ord=other_ord, kept=kept)))

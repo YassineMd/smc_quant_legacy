@@ -395,7 +395,7 @@ def pane_titles(n=None):
         "lines": "BUY / SELL FLOW" + d + "taker $ per window (the pane)",
         "fratio": "FLOW RATIOS" + d + "$/s vs last %d" % n + d + "buy / sell",
         "iimp": "INTEREST × IMPACT" + d + "who leads vs last %d" % n,
-        "scr": "BUYER / SELLER SCORE" + d + "0..100 vs last %d" % n + d + "buy / sell",
+        "scr": "BUYER / SELLER SCORE" + d + "aggression 0..100 vs last %d" % n + d + "buy / sell",
     }
 
 
@@ -511,32 +511,33 @@ IIMP_KEEP_LOW = 0.375           # measured terciles of kept/reached over 48 h
 IIMP_KEEP_HIGH = 0.750
 IIMP_KEEP_MARK_ON = True        # the cap on bottom-tercile bars; False leaves the reading in the panel only
 IIMP_KEEP_COL = "#3a4150"
-# --- BUYER / SELLER SCORE (user 2026-09-16: "at the end I want to be able to establish a buyer and seller score
-# for each bar"). ONE number per side, 0..100, from FOUR components of that side's OWN behaviour, each a causal
-# PERCENTILE within that side's previous N cycles of the same component, then averaged:
-#     agg   its taker $/s, SIZE-CORRECTED     pas   its own resting $ over the cycle
-#     conv  its reach vs the climb model      kept  how much of its reach survived to the close
-# The opposing wall is deliberately NOT a fifth component: it IS the other side's passive presence, which the
-# other side's score already carries -- counting it twice is what this family keeps dying of.
-# MEASURED over 36 h / 1157 cycles before anything was drawn:
-#   the four are mutually near-INDEPENDENT (every off-diagonal rank corr <= 0.31, both sides), so the score is
-#   not one input wearing a hat -- the failure mode of [[impact-as-strength]] (58-84% the speed ratio);
-#   each contributes rho 0.35-0.61 to the total, i.e. no component dominates;
-#   median 50, terciles 42 / 57; coverage 99.5% of cycles (44% all four, 43% three, 12% two).
-# ⚠ SIZE: raw agg was rho +0.65 with the cycle's own $. Dividing the rate by $**SCORE_SIZE_EXP takes the FINAL
-#   score to +0.07. The exponent was swept on the data and came out 0.55 on BOTH sides independently (an earlier
-#   study reached 0.50 by another route). Do not hand-tune it; re-sweep it.
-# ⚠ EQUAL WEIGHTS, no fitting. SCORE v1 fitted 82 features per side: in-sample rose with complexity, holdout
-#   fell, and every configuration lost to a fixed baseline. Fitting is the failure, not the feature count.
-# ⚠⚠ DESCRIPTIVE, COINCIDENT. `kept` = move / reach, so the score CONTAINS this cycle's move by construction and
-#   can NEVER be validated against it -- that is the exact circularity that produced a z=+7.6 mirage here. No
-#   forward claim is made or implied, and none may be added without the 9 honest-test gates.
-# ⚠ RANK-based on purpose: `kept` goes negative, and a previous study's Pearson read +0.06 while its own quintile
-#   table fell 2.02 -> 0.34 because log(max(x, 1e-9)) mapped legitimate zeros to -20.7.
-SCORE_SIZE_EXP = 0.55           # swept: rho(agg, $) +0.645 -> -0.018 buy, +0.646 -> +0.014 sell
-SCORE_LOW = 42.0                # measured terciles of the score itself
-SCORE_HIGH = 57.0
-SCORE_MIN_PARTS = 2             # fewer than this and no score is claimed at all
+# --- BUYER / SELLER SCORE (user 2026-09-16: "establish a buyer and seller score for each bar"). ONE number
+# per side, 0..100 = that side's size-corrected aggressive $ per second, as a causal PERCENTILE within the last
+# N cycles of BOTH SIDES pooled. Pooled, not each side against itself: the user's question is "how much they are
+# interested COMPARED TO THE OTHER SIDE", and a self baseline answers the opposite one -- in a trend the winner's
+# bar is already high so winning again ranks ~50, while the loser's small uptick ranks high. That is exactly the
+# complaint that started the cut ("the price is going up and apparently sellers are behaving unusually strongly").
+#
+# ⚠⚠ IT USED TO HAVE FOUR COMPONENTS. Measured against the direction price took, over 44-48 h and replicated on
+# four samples of 1080-1567 cycles, the four-part version scored 65-66% -- BELOW its own best part and below a
+# one-line rule. Each part, alone:
+#     agg  (aggression)  68.1-69.3%   the only clean carrier -- and identical to raw $ (68.1%)
+#     conv (reach model) 62.2-63.0%   partly directional by construction; the iimp pane's FILL already shows it
+#     pas  (resting $)   36.0-38.5%   INVERTED: the heavier book is the side price moves AGAINST
+#     kept (retention)   100.0%       across sides it IS the sign of the move. Zero information.
+#   So `kept` and `conv` went, and `pas` failed a held-out test: flipped it is a real effect (60.0% / 66.9% in
+#   two independent halves, p 5e-06 and 1e-14) but ADDING it to aggression scored -4.8 pts on one half and
+#   +1.7 on the other -- equal-weighting a 63% signal with a 68% one only dilutes. The book stays OUT of the
+#   score; the inversion is kept as knowledge (see [[buyer-seller-score]] in memory).
+# ⚠ What remains is therefore NOT a composite. It is the flow ratio on a bounded 0..100 scale -- easier to read
+#   at a glance than the FLOW RATIOS pane's log axis, but the same information. Do not describe it as more.
+# ⚠⚠ DESCRIPTIVE AND COINCIDENT. "The disagreements are informative" was tested and is NULL: after a divergence
+#   the next cycle goes the flow's way 51.0% of the time (177/347, p=0.747), split-half 49.2% / 53.0%, and the
+#   divergence adds -0.012 over simply knowing the cycle's own direction. No forward claim, here or anywhere.
+SCORE_SIZE_EXP = 0.55           # swept: takes rho(aggression, cycle $) from +0.65 to -0.02 / +0.01
+SCORE_LOW = 32.0                # measured terciles of the ONE-component score (a percentile, so near 33 / 67)
+SCORE_HIGH = 70.0
+SCORE_MIN_PARTS = 1             # one component: a side either has a reading or it has none
 # The score gets a PANE of its own: TWO STEP LINES, teal buyers and red sellers, each cycle's score held
 # flat across that cycle's span, on a fixed 0..100 with the measured terciles as guides (user
 # 2026-09-16: first "two bars per cycle", then "i prefer two lines red green instead of histogram").
