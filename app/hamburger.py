@@ -1809,9 +1809,12 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             "their own previous %d cycles, divided by the sellers' same number. Above 1.0x the buyers lead, "
             "below it the sellers. COLOUR: that side. FILL: solid when the push reached at least what that "
             "side's own last %d cycles reached for that effort and time, hollow when the interest did not "
-            "convert. DOT: the far side's RESTING orders at the cycle's open against the previous %d -- filled "
-            "means it pushed into a wall, hollow means the road was open. Cuts are the measured terciles over "
-            "48 h." % (config.CYCLE_BASE_N, config.CYCLE_BASE_N, config.CYCLE_BASE_N))
+            "convert -- and it is THAT side's reach, the one the height names. ORANGE: price went the other way "
+            "from the side that led (real on about a third of cycles, since price can rise on passive buying and "
+            "withdrawn offers). The badge prints the leading side's multiple, always at or above 1.0x. DOT: the "
+            "far side's RESTING orders at the cycle's open against the previous %d -- filled means it pushed into "
+            "a wall, hollow means the road was open. Cuts are the measured terciles over 48 h."
+            % (config.CYCLE_BASE_N, config.CYCLE_BASE_N, config.CYCLE_BASE_N))
         self.iimp_on.toggled.connect(lambda on: self.iimpPaneToggled.emit(bool(on)))
         l4.addWidget(self.iimp_on)
         self.interp_on = QtWidgets.QCheckBox(config.pane_titles()["interp"])

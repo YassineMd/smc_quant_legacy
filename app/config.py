@@ -426,10 +426,13 @@ FRATIO_MODE = "None"
 # one pane that does this for me"). ONE bar per FINISHED cycle, folding what needed four panes to read:
 #   HEIGHT  log2 of the aggressive interest imbalance -- the buyers' taker $/s over the median of their previous N
 #           cycles, divided by the sellers' same ratio. Above 1.0x the buyers are hotter than usual relative to
-#           the sellers, below it the sellers are.
-#   COLOUR  the side that leads (teal buyers, red sellers).
-#   FILL    SOLID when the cycle's push REACHED at least what that side's own previous N cycles reached for that
-#           effort and that time (IIMP_COEF_*), HOLLOW when it did not -- interest that did not convert.
+#           the sellers, below it the sellers are. The BADGE prints the LEADING side's multiple, always >= 1.0x
+#           (it printed buy / sell, so a red bar showed the reciprocal and had to be inverted by eye).
+#   COLOUR  the side that leads (teal buyers, red sellers), ORANGE when price went the OTHER way.
+#   FILL    SOLID when THAT SIDE's push REACHED at least what its own previous N cycles reached for that effort and
+#           that time (IIMP_COEF_*), HOLLOW when it did not -- interest that did not convert. ⚠ the fill follows
+#           the side the HEIGHT names, not the side that owns the cycle by the crossing: those differ on about one
+#           cycle in four, and a bar that mixed them was describing two different sides at once.
 #   DOT     the FAR side's resting $ at the cycle's open against the previous N cycles: filled above
 #           IIMP_WALL_HIGH (pushed into a wall), hollow below IIMP_WALL_LOW (open road), nothing in between.
 # The cuts are the measured TERCILES over 48 h / 1250 rated cycles (2026-09-16), the Volume and Speed panes' rule.
@@ -451,7 +454,13 @@ IIMP_COEF_BUY = (0.090, 0.275, -0.235)
 IIMP_COEF_SELL = (0.089, 0.233, -0.231)
 IIMP_BUY_COL = "#26a69a"        # the same teal / red every other pane uses for the two sides
 IIMP_SELL_COL = "#ef5350"
-IIMP_WALL_COL = "#c9a227"
+# ORANGE = the leading side is not the way price went, the cycle badges' own "contradicted" colour. Measured on
+# 48 h: the aggressive tape leans against the cycle's price direction on 32% of cycles, and on 8% of the biggest
+# up cycles the sellers were the heavier aggressors while price rose -- real, and it read as a contradiction until
+# it had its own colour (user 2026-09-16: "we have a huge breakout bullish bar and the interestximpact shows a red
+# bar below 1"). Price can rise on passive buying and withdrawn offers, which the tape never shows.
+IIMP_CONTRA_COL = "#ff9f43"
+IIMP_WALL_COL = "#dcdcdc"       # the wall dots are NEUTRAL: amber would read as the contradicted colour
 IIMP_BADGE_TIERS = ((70.0, 1), (36.0, 2))       # "1.6x" per cycle, on the pane's own strip. Wider than the other
                                 # panes' tiers because its first live render packed ~90 cycles into one screen and
                                 # the badges ran into each other and over the title.

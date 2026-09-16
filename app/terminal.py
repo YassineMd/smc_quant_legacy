@@ -21028,7 +21028,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # the item count flat however many cycles are on screen, and there is no custom paint().
         items = []
         for _c, _solid in ((config.IIMP_BUY_COL, True), (config.IIMP_BUY_COL, False),
-                           (config.IIMP_SELL_COL, True), (config.IIMP_SELL_COL, False)):
+                           (config.IIMP_SELL_COL, True), (config.IIMP_SELL_COL, False),
+                           (config.IIMP_CONTRA_COL, True), (config.IIMP_CONTRA_COL, False)):
             _col = QtGui.QColor(_c)
             it = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
                                  brush=pg.mkBrush(_col.red(), _col.green(), _col.blue(), 190 if _solid else 0),
@@ -21226,17 +21227,22 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         dur = np.maximum(t_end - t, 1e-9)
         ar_b = _interp_prev(np.maximum(cbuy, 0.0) / dur, done, n_lb, n_mn)
         ar_s = _interp_prev(np.maximum(csell, 0.0) / dur, done, n_lb, n_mn)
-        wall_raw = self._iimp_wall(t, is_buy)
-        wall = self._lob_ratio(wall_raw, done, n_lb, n_mn)
-        own_b, secs_b = self._iimp_climb(t, t_end, is_buy)
-        reach = np.where(is_buy, pxh - px0, px0 - pxl) / float(config.TICK_SIZE)
         with np.errstate(divide="ignore", invalid="ignore"):
             imb = np.where((ar_b > 0) & (ar_s > 0) & np.isfinite(ar_b) & np.isfinite(ar_s),
                            np.log2(np.maximum(ar_b, 1e-12) / np.maximum(ar_s, 1e-12)), np.nan)
+        # ⚠ THE BAR IS ONE SIDE'S STORY: the side the HEIGHT names owns the reach, the effort, the wall and the
+        # baseline. Using the cycle's own crossing side for the fill made a bar describe two different sides at
+        # once, and they differ on about one cycle in four (user 2026-09-16).
+        lead_buy = np.isfinite(imb) & (imb >= 0.0)
+        wall_raw = self._iimp_wall(t, lead_buy)
+        wall = self._lob_ratio(wall_raw, done, n_lb, n_mn)
+        own_b, secs_b = self._iimp_climb(t, t_end, lead_buy)
+        reach = np.where(lead_buy, pxh - px0, px0 - pxl) / float(config.TICK_SIZE)
+        with np.errstate(divide="ignore", invalid="ignore"):
             y_r = np.log1p(np.maximum(reach, 0.0))
             cb_, cd_, cw_ = config.IIMP_COEF_BUY
             sb_, sd_, sw_ = config.IIMP_COEF_SELL
-            pred = np.where(is_buy,
+            pred = np.where(lead_buy,
                             cb_ * np.log(np.maximum(own_b, 1.0)) + cd_ * np.log(np.maximum(secs_b, 1.0))
                             + cw_ * np.log1p(np.maximum(wall_raw, 0.0)),
                             sb_ * np.log(np.maximum(own_b, 1.0)) + sd_ * np.log(np.maximum(secs_b, 1.0))
@@ -21247,7 +21253,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         score = np.full(int(t.size), np.nan)
         hist = {True: [], False: []}
         for k in range(int(t.size)):
-            sdk = bool(is_buy[k])
+            sdk = bool(lead_buy[k])
             if np.isfinite(resid[k]):
                 h = hist[sdk]
                 if len(h) >= int(n_mn):
@@ -21270,8 +21276,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         x0 = t[keep]; x1 = t_end[keep]; v_raw = imb[keep]; good = score[keep] >= 0.0
         _clip = float(np.log2(max(float(config.IIMP_CLIP), 1.0)))
         v = np.clip(v_raw, -_clip, _clip)      # DRAWN within 1/8x .. 8x; the badge still prints the true multiple
+        _mvt = (px1 - px0)[keep] / float(config.TICK_SIZE)      # where price actually ended, in the price's frame
         up = v >= 0.0
-        groups = (up & good, up & ~good, ~up & good, ~up & ~good)
+        # ORANGE when the leading side is not the way price went -- real on a third of cycles, and it read as a
+        # contradiction while it wore the leader's own colour
+        contra = np.isfinite(_mvt) & ((up & (_mvt < 0)) | (~up & (_mvt > 0)))
+        groups = (up & good & ~contra, up & ~good & ~contra, ~up & good & ~contra, ~up & ~good & ~contra,
+                  contra & good, contra & ~good)
         for it, m in zip(self._iimp_items, groups):
             if not m.any():
                 it.setOpts(x0=[], x1=[], y0=[], height=[])
@@ -21286,19 +21297,23 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 sc.setData([], [])
                 continue
             sc.setData(0.5 * (x0[m] + x1[m]), np.where(v[m] >= 0, v[m] + _pad, v[m] - _pad))
-        _cols = (_hex_rgb(config.IIMP_BUY_COL), _hex_rgb(config.IIMP_SELL_COL))
-        _mult = 2.0 ** v_raw                   # the TRUE multiple, even where the bar itself is clipped
+        _cols = (_hex_rgb(config.IIMP_BUY_COL), _hex_rgb(config.IIMP_SELL_COL), _hex_rgb(config.IIMP_CONTRA_COL))
+        # the LEADING side's multiple, always >= 1.0x: printing buy / sell meant a red bar showed the reciprocal
+        # and had to be inverted by eye (user 2026-09-16). The colour says whose multiple it is.
+        _mult = 2.0 ** np.abs(v_raw)           # the TRUE multiple, even where the bar itself is clipped
         self._pane_badge_set(getattr(self, "_iimp_badge", None), x0,
                              float(self.vb.viewPixelSize()[0]), config.IIMP_BADGE_TIERS,
-                             lambda k: "%.2gx" % _mult[k], lambda k: _cols[0 if up[k] else 1],
+                             lambda k: "%.2gx" % _mult[k],
+                             lambda k: _cols[2] if contra[k] else _cols[0 if up[k] else 1],
                              guard=float(config.IIMP_BADGE_GUARD_PX))
         if self._iimp_read is not None:
             _k = int(v.size) - 1
             _w = wk[_k]
-            self._iimp_read.setText("%s %.2gx  ·  impact %.2gx  ·  wall %s" % (
+            self._iimp_read.setText("%s %.2gx  ·  impact %.2gx  ·  wall %s%s" % (
                 "BUY" if up[_k] else "SELL", _mult[_k], 2.0 ** float(score[keep][_k]),
-                "-" if not np.isfinite(_w) else "%.2gx" % _w))
-            self._iimp_read.setColor(config.IIMP_BUY_COL if up[_k] else config.IIMP_SELL_COL)
+                "-" if not np.isfinite(_w) else "%.2gx" % _w, "  ·  price went the other way" if contra[_k] else ""))
+            self._iimp_read.setColor(config.IIMP_CONTRA_COL if contra[_k]
+                                     else (config.IIMP_BUY_COL if up[_k] else config.IIMP_SELL_COL))
         lim = float(np.percentile(np.abs(v), 95.0)) * 1.15
         lim = min(max(lim, abs(float(np.log2(max(1e-9, config.IIMP_HIGH)))) * 1.4, 1.0), _clip * 1.15)
         cur = getattr(self, "_iimp_ytop", 0.0)
