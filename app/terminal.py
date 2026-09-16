@@ -1961,6 +1961,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._scr_vline = None; self._scr_hline = None
         self._scr_tag = None; self._scr_time_tag = None; self._scr_proxy = None
         self._scr_title = None; self._scr_read = None
+        self._scr_combo = None         # the smoothing dropdown, top right
+        self._scr_smooth = int(config.SCR_SMOOTH_N)   # cycles each line is averaged over (1 = raw)
         self._scr_last = None          # the drawn scores, so a harness can hold the bars against them
         self._score_memo = None        # (key, ({side: score}, {side: parts})) shared with the iimp panel
         self._flow_pane_on = bool(config.FLOW_PANE_ON)     # the Buy/Sell Flow pane (the main chart in Flow mode)
@@ -10721,6 +10723,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "fratio_mode": str(getattr(self, "_fratio_mode", config.FRATIO_MODE)),   # its top-right dropdown
                 "iimp_on": bool(getattr(self, "_iimp_on", config.IIMP_PANE_ON)),
                 "scr_on": bool(getattr(self, "_scr_on", config.SCR_PANE_ON)),
+                "scr_smooth": int(getattr(self, "_scr_smooth", config.SCR_SMOOTH_N)),
                 "flow_pane_on": bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)),
                 "hlh_merge_span": str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)),
                 "interp_on": bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)),
@@ -10861,6 +10864,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._fratio_combo = None
         self._iimp_on = bool(s.get("iimp_on", config.IIMP_PANE_ON))
         self._scr_on = bool(s.get("scr_on", config.SCR_PANE_ON))
+        _scm = tuple(int(q) for q in config.SCR_SMOOTH_CHOICES)
+        _ss = int(s.get("scr_smooth", config.SCR_SMOOTH_N) or config.SCR_SMOOTH_N)
+        self._scr_smooth = _ss if _ss in _scm else int(config.SCR_SMOOTH_N)
+        _scb = self.__dict__.get("_scr_combo")
+        if _scb is not None:
+            try:
+                _scb.blockSignals(True)
+                _scb.setCurrentIndex(_scm.index(self._scr_smooth))
+                _scb.blockSignals(False)
+            except (RuntimeError, ValueError):
+                self._scr_combo = None
         self._flow_pane_on = bool(s.get("flow_pane_on", s.get("flow_lines_on", config.FLOW_PANE_ON)))
         _sp = str(s.get("hlh_merge_span", config.HLH_MERGE_SPAN) or config.HLH_MERGE_SPAN)
         self._hlh_merge_span = _sp if _sp in tuple(str(v) for v in config.HLH_MERGE_SPAN_CHOICES) else str(config.HLH_MERGE_SPAN)
@@ -17855,6 +17869,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._scr_sig = None; self._scr_sized = False; self._scr_proxy = None
             self._scr_vline = None; self._scr_hline = None
             self._scr_tag = None; self._scr_time_tag = None; self._scr_title = None; self._scr_read = None
+            self._scr_combo = None
             self._iimp_guides = None; self._iimp_sig = None; self._iimp_sized = False; self._iimp_proxy = None
             self._iimp_vline = None; self._iimp_hline = None
             self._iimp_tag = None; self._iimp_time_tag = None
@@ -21099,10 +21114,29 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._scr_read.textItem.setFont(QtGui.QFont("Consolas", int(config.PANE_TITLE_PT)))
         self._scr_read.setZValue(41)
         pw.addItem(self._scr_read, ignoreBounds=True)
-        _ttl = config.pane_titles(self._lb_n())["scr"]
-        if int(config.SCR_SMOOTH_N) > 1:      # the line must SAY it is a blend, or it disagrees with the panel
-            _ttl += "  ·  smoothed %d" % int(config.SCR_SMOOTH_N)
-        self._scr_title = self._pane_title(pw, vb, _ttl)
+        # The smoothing span used to be spelled into the title. It is the DROPDOWN's job now, so the label and
+        # what is drawn can never drift apart (user 2026-09-16: "I would like to be able to change the smoothness,
+        # make this a dropdown"). The requirement it was serving still holds: the line must SAY it is a blend.
+        _sm = tuple(int(q) for q in config.SCR_SMOOTH_CHOICES)
+        _cur = int(getattr(self, "_scr_smooth", config.SCR_SMOOTH_N))
+        cb = QtWidgets.QComboBox(pw)
+        cb.addItems(["raw" if q <= 1 else "smooth %d" % q for q in _sm])
+        cb.setCurrentIndex(_sm.index(_cur) if _cur in _sm else 0)   # set BEFORE connecting: building is not a change
+        cb.setStyleSheet(
+            "QComboBox{ background:#20242c; color:#dcdcdc; border:1px solid #3a4150; border-radius:3px;"
+            " padding:1px 6px; font:bold 10px 'Consolas'; } QComboBox::drop-down{ border:0; width:14px; }"
+            " QComboBox QAbstractItemView{ background:#20242c; color:#dcdcdc; selection-background-color:#3a4150; }")
+        cb.setToolTip("How many cycles each side's line is averaged over, CAUSALLY -- only cycles at or before the "
+                      "one being drawn, never a centred window.\n"
+                      "'raw' is that cycle's own score and matches the INTEREST × IMPACT panel exactly.\n"
+                      "Anything above trades lag for a steadier line; the readout stays the raw current cycle and "
+                      "says 'this cycle', so the two can never silently disagree.")
+        cb.setCursor(QtCore.Qt.PointingHandCursor)
+        cb.currentIndexChanged.connect(self._on_scr_smooth_changed)
+        cb.raise_(); cb.show()
+        self._scr_combo = cb
+        vb.sigResized.connect(self._scr_position_combo)
+        self._scr_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["scr"])
         vb.setYRange(0.0, 100.0, padding=0.0)
         self._scr_plot = pw
         self._scr_vb = vb
@@ -21124,6 +21158,35 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             except RuntimeError:
                 self._scr_plot = None; self._scr_items = None; self._scr_vb = None; self._scr_guides = None
         self._stack_axis_sync()
+
+    def _scr_position_combo(self, *args) -> None:
+        """Park the smoothing dropdown in the pane's TOP-RIGHT corner, 6 px left of the plot's right edge -- the
+        ratios pane's own spacing. Reads the edge from the VIEW's geometry, which is current when its resize
+        signal fires, and falls back to the widget width minus the right axis before the first layout."""
+        cb = self.__dict__.get("_scr_combo")
+        pw = self._scr_plot
+        vb = self._scr_vb
+        if cb is None or pw is None or vb is None:
+            return
+        try:
+            cb.adjustSize()
+            right = int(pw.mapFromScene(vb.sceneBoundingRect().topRight()).x())
+            if right <= cb.width():
+                right = int(pw.width() - pw.getAxis("right").width())
+            cb.move(max(0, right - cb.width() - 6), 4)
+            cb.raise_()
+        except RuntimeError:
+            self._scr_combo = None
+
+    def _on_scr_smooth_changed(self, idx: int) -> None:
+        """Dropdown changed -> re-lay both lines from the read already in hand. No store read and no re-score:
+        the smoothing is applied at DRAW time over scores that are already computed, so this is pure redraw."""
+        _sm = tuple(int(q) for q in config.SCR_SMOOTH_CHOICES)
+        self._scr_smooth = _sm[idx] if 0 <= idx < len(_sm) else _sm[0]
+        self._scr_sig = None
+        self._scr_draw(time.time())
+        if not self._loading_ui:
+            self._save_ui_state()
 
     def _scr_hide_cursor(self) -> None:
         for _it in (self._scr_hline, self._scr_tag, self._scr_time_tag):
@@ -21210,7 +21273,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         x0 = t[keep]; x1 = t_end_c[keep]
         form = form_all[keep]
         mid = 0.5 * (x0 + x1)
-        _nsm = max(1, int(config.SCR_SMOOTH_N))
+        _nsm = max(1, int(getattr(self, "_scr_smooth", config.SCR_SMOOTH_N)))
 
         def _smooth(v):
             """CAUSAL mean of the last _nsm SCORED values -- only cycles at or before this one. A centred window

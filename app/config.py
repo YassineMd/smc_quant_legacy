@@ -561,7 +561,8 @@ SCR_FORM_PEN_A = IIMP_FORM_PEN_A
 # ⚠ The smoothing window is taken over the DRAWN cycles, so the leftmost N-1 of them are averaged over fewer
 #   values. At N = 3 that is two cycles at the left edge; it is an edge artifact, not a baseline error.
 # Set to 1 for the raw per-cycle score.
-SCR_SMOOTH_N = 3       # only the CREATION default -- the cap then follows the theme foreground,
+SCR_SMOOTH_N = 3               # the DEFAULT span; the pane's own top-right dropdown overrides it
+SCR_SMOOTH_CHOICES = (1, 2, 3, 5, 8, 12)   # what that dropdown offers; 1 = raw, per-cycle       # only the CREATION default -- the cap then follows the theme foreground,
 #                                 because a fixed light grey was invisible on the light canvas (#ffffff):
 #                                 measured contrast 39 of 765, i.e. drawn but unseeable (2026-09-16)
 # --- the Buy/Sell Flow ($) PANE itself gets a toggle (user 2026-09-15: "we dont have it", then "I want the
