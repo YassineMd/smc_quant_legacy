@@ -487,6 +487,28 @@ IIMP_CLIP = 8.0
 # history must not claim one -- the guard is INTERP_STALE_SECS against the view's right edge.
 IIMP_FORM_FILL_A = 70           # forming bar: brush alpha when it has converted, pen alpha always
 IIMP_FORM_PEN_A = 150
+# --- RETENTION: what the push actually KEPT (user 2026-09-16: "we had a good impact 2.4x but it handed 17 tick out
+# of the 27 initially traveled ... add a variable like efficiency"). The impact score is built on REACH alone, so a
+# push that travels 27 ticks and hands back 17 scores the same as one that travels 27 and holds them.
+#   kept = (the move in the LEADER's own direction) / reach, read only when reach >= IIMP_KEEP_MIN_TICKS.
+# MEASURED over 48 h / 334 rated cycles (181 cleared the gate): terciles 0.375 / 0.750, median 0.571; 17.7% handed
+# back EVERYTHING, 11.6% held nearly all. It is NOT the impact restated -- Spearman(kept, impact) +0.149, 2.2%
+# shared variance (the earlier absorption work measured the same independence: 0% with flow, 4% with speed).
+# The user's case is 10.8% of ALL rated cycles: impact >= 1.0x AND retention in the bottom third.
+# ⚠ 46% of cycles never clear the 4-tick gate. Absence of a reading must NEVER downgrade a bar -- the panel says
+#   "not read" and the cap is simply absent. (A 2-tick push once printed "1533% given back"; that is arithmetic,
+#   not absorption -- the same reason ABSORB_PUSH_MIN_TICKS exists.)
+# ⚠ Retention does NOT feed the fill or the score, on purpose. giveback = push - move, so scoring on both and then
+#   validating against the move is CIRCULAR -- this project already produced one z=+7.6 result that way and
+#   correctly never shipped it. Reach and hold stay two separate channels so you can see WHICH one failed.
+# ⚠ DESCRIPTIVE only. As an entry filter retention tested null here (AUC 0.52-0.57, consistent in 2 of 6 setups).
+IIMP_KEEP_MIN_TICKS = 4.0       # below this the fraction is arithmetic, not information
+IIMP_KEEP_LOW = 0.375           # measured terciles of kept/reached over 48 h
+IIMP_KEEP_HIGH = 0.750
+IIMP_KEEP_MARK_ON = True        # the cap on bottom-tercile bars; False leaves the reading in the panel only
+IIMP_KEEP_COL = "#3a4150"       # only the CREATION default -- the cap then follows the theme foreground,
+#                                 because a fixed light grey was invisible on the light canvas (#ffffff):
+#                                 measured contrast 39 of 765, i.e. drawn but unseeable (2026-09-16)
 # --- the Buy/Sell Flow ($) PANE itself gets a toggle (user 2026-09-15: "we dont have it", then "I want the
 # whole chart to hide not just the lines"): in Flow mode the main chart IS that pane, so OFF hides the main
 # chart widget and the stack closes up around it. Display only -- the bins, the crossings, every cycle pane

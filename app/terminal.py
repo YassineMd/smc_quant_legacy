@@ -1939,6 +1939,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._iimp_items = None        # six BarGraphItems: (buy, sell, contradicted) x (converted, did not)
         self._iimp_dots = None         # (wall, open road) ScatterPlotItems
         self._iimp_form = None         # the FORMING cycle's own bar: ONE item, brush and pen set per draw
+        self._iimp_keep = None         # "handed it back" caps: ONE segment item over bottom-tercile bars
         self._iimp_guides = None
         self._iimp_sig = None; self._iimp_t = 0.0; self._iimp_data = None; self._iimp_sized = False
         self._iimp_on = bool(config.IIMP_PANE_ON)
@@ -17832,7 +17833,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._fratio_tag = None; self._fratio_time_tag = None; self._fratio_title = None
             self._fratio_bdg = None
             self._iimp_plot = None; self._iimp_vb = None; self._iimp_items = None; self._iimp_dots = None
-            self._iimp_form = None
+            self._iimp_form = None; self._iimp_keep = None
             self._iimp_guides = None; self._iimp_sig = None; self._iimp_sized = False; self._iimp_proxy = None
             self._iimp_vline = None; self._iimp_hline = None
             self._iimp_tag = None; self._iimp_time_tag = None
@@ -21062,6 +21063,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._iimp_form = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[])
         self._iimp_form.setZValue(6)
         pw.addItem(self._iimp_form)
+        # the "handed it back" CAP: one segment item (dashes as segments is this file's rule), drawn
+        # across the tip of every bottom-tercile bar. A FLAG, never a gauge -- the height axis already
+        # means the imbalance, and putting a second meaning on it is the mistake this pane keeps making.
+        self._iimp_keep = pg.PlotCurveItem(x=[], y=[], connect="pairs",
+                                          pen=pg.mkPen(config.IIMP_KEEP_COL, width=2.5))
+        self._iimp_keep.setZValue(8)
+        pw.addItem(self._iimp_keep)
         self._iimp_sig = None                      # new items are empty: the next draw fills them
         guides = []
         for _v in (float(np.log2(max(1e-9, config.IIMP_LOW))), float(np.log2(max(1e-9, config.IIMP_HIGH)))):
@@ -21121,7 +21129,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 self._iimp_plot.setVisible(False)
             except RuntimeError:
                 self._iimp_plot = None; self._iimp_items = None; self._iimp_vb = None; self._iimp_dots = None
-                self._iimp_form = None
+                self._iimp_form = None; self._iimp_keep = None
         self._stack_axis_sync()
 
     def _iimp_hide_cursor(self) -> None:
@@ -21252,7 +21260,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         panned back into history would otherwise invent one.
 
         Cuts are the measured terciles (see config)."""
-        if self._iimp_data is None or self._iimp_items is None or self._iimp_form is None:
+        if self._iimp_data is None or self._iimp_items is None or self._iimp_form is None \
+                or self._iimp_keep is None:
             return
         vx0, vx1, (t, is_buy, strong, move, cbuy, csell, t_end, done), (px0, px1), (pxh, pxl) = self._iimp_data
         if t.size == 0:
@@ -21261,6 +21270,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             for sc in self._iimp_dots:
                 sc.setData([], [])
             self._iimp_form.setOpts(x0=[], x1=[], y0=[], height=[])
+            self._iimp_keep.setData([], [])
             self._iimp_sig = ("empty",)
             return
         n_lb = self._lb_n(); n_mn = self._lb_min_n()
@@ -21323,6 +21333,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             for sc in self._iimp_dots:
                 sc.setData([], [])
             self._iimp_form.setOpts(x0=[], x1=[], y0=[], height=[])
+            self._iimp_keep.setData([], [])
             return
         x0 = t[keep]; x1 = t_end_c[keep]; v_raw = imb[keep]; good = score[keep] >= 0.0
         _clip = float(np.log2(max(float(config.IIMP_CLIP), 1.0)))
@@ -21357,6 +21368,25 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                width=1.4)])
         else:
             self._iimp_form.setOpts(x0=[], x1=[], y0=[], height=[])
+        # RETENTION: what the leader's push actually held on to, kept/reached. Not folded into the score
+        # or the fill -- reach and hold are two questions, and giveback = push - move makes any combined
+        # score circular to validate. Unread below IIMP_KEEP_MIN_TICKS, and unread must cost nothing.
+        _rch = reach[keep]
+        _lead_mv = np.where(up, _mvt, -_mvt)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            kept = np.where(np.isfinite(_rch) & np.isfinite(_lead_mv)
+                            & (_rch >= float(config.IIMP_KEEP_MIN_TICKS)),
+                            _lead_mv / np.maximum(_rch, 1e-9), np.nan)
+        _cap = ((np.isfinite(kept) & (kept <= float(config.IIMP_KEEP_LOW)))
+                if bool(config.IIMP_KEEP_MARK_ON) else np.zeros(int(kept.size), dtype=bool))
+        if _cap.any():
+            _n2 = int(_cap.sum())
+            _cx = np.empty(2 * _n2); _cy = np.empty(2 * _n2)
+            _cx[0::2] = x0[_cap]; _cx[1::2] = x1[_cap]
+            _cy[0::2] = v[_cap]; _cy[1::2] = v[_cap]
+            self._iimp_keep.setData(_cx, _cy, connect="pairs")
+        else:
+            self._iimp_keep.setData([], [])
         # the wall / open-road dots, just past the bar's end so they never sit inside it
         wk = wall[keep]
         _pad = 0.06 * max(float(np.percentile(np.abs(v), 99.0)), 1.0)
@@ -21372,7 +21402,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # everything a CLICK needs to explain one bar, so the handler never re-reads the store
         self._iimp_last = {"x0": x0, "x1": x1, "v": v, "mult": _mult, "up": up, "contra": contra, "good": good,
                            "score": score[keep], "wall": wk, "reach": reach[keep], "mv": _mvt,
-                           "arb": ar_b[keep], "ars": ar_s[keep], "form": form}
+                           "arb": ar_b[keep], "ars": ar_s[keep], "form": form, "kept": kept}
         if self._iimp_read is not None:
             _k = int(v.size) - 1
             _w = wk[_k]
@@ -21481,7 +21511,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         return pop
 
     def _iimp_why(self, up, contra, good, mv, reach, imp, wall_hi, wall_lo, wall_txt,
-                  side, low, other, other_ord) -> str:
+                  side, low, other, other_ord, kept=float("nan")) -> str:
         """WHY the move happened, read off the four facts above (user 2026-09-16: "I want you to add Why, which
         basically explains why this move happened ... its an absorption mainly driven by passive orders").
 
@@ -21526,8 +21556,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                    "(resting %s orders: %s). The book is not the explanation here -- either the interest was "
                    "thinner than its size suggests, or the other side met it quietly."
                    % (side, other_ord, wall_txt))
-        give = max(0.0, float(reach) - abs(float(mv)))
-        if give >= 3.0 and give >= 0.4 * max(float(reach), 1.0):
+        # ONE rule for the give-back, the measured bottom tercile -- so this sentence can never contradict
+        # the Kept line above it
+        give = max(0.0, float(reach) - max(0.0, float(mv) if up else -float(mv)))
+        if np.isfinite(kept) and kept <= float(config.IIMP_KEEP_LOW):
             why += (" It reached <b>%d ticks</b> and handed <b>%d</b> of them back before the close, so whatever "
                     "met it did so at the extreme, not at the open." % (rch, int(round(give))))
         return why
@@ -21540,6 +21572,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         wall = float(d["wall"][k]); reach = float(d["reach"][k]); mv = float(d["mv"][k])
         arb = float(d["arb"][k]); ars = float(d["ars"][k])
         forming = bool(np.asarray(d.get("form", np.zeros(np.size(d["x0"]), dtype=bool)))[k])
+        kept = float(np.asarray(d.get("kept", np.full(np.size(d["x0"]), np.nan)))[k])
+        held = float(mv) if up else -float(mv)          # the move in the LEADER's own direction
         lead_r, oth_r = (arb, ars) if up else (ars, arb)   # the LEADER's own-history ratio is quoted first
         n = self._lb_n()
         side = "Buyers" if up else "Sellers"
@@ -21577,6 +21611,21 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             rows.append("%s: hollow, because they reached only <b>%d ticks</b>, <b>%.2gx</b> of what that "
                         "side usually reaches for this much effort in this much time -- the interest did not "
                         "convert." % (_L % "Fill", int(round(reach)), imp))
+        # KEPT: reach says how far it got, this says how much of that survived to the close
+        if not np.isfinite(kept):
+            rows.append("%s: not read -- it only reached <b>%d ticks</b>, too few to judge what was handed "
+                        "back. That costs the bar nothing." % (_L % "Kept", int(round(reach))))
+        elif kept <= 0.0:
+            rows.append("%s: it handed back <b>everything</b> it reached and closed the other side of its "
+                        "open." % (_L % "Kept",))
+        else:
+            _band = ("the bottom third of cycles -- most of it was handed back (that is the cap drawn "
+                     "across the bar)" if kept <= float(config.IIMP_KEEP_LOW) else
+                     "the top third -- it held nearly all of it" if kept >= float(config.IIMP_KEEP_HIGH)
+                     else "about the usual share")
+            rows.append("%s: it reached <b>%d ticks</b> and held <b>%d</b> of them (<b>%d%%</b>) -- %s."
+                        % (_L % "Kept", int(round(reach)), int(round(held)),
+                           int(round(100.0 * kept)), _band))
         if not wall_ok:
             rows.append("%s: none, because there was no order-book reading at this cycle's open." % (_L % "Dot"))
         elif wall_hi:
@@ -21590,7 +21639,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                         "previous %d)." % (_L % "Dot", other_ord, wall, n))
         rows.append("%s: %s" % (_L % "Why", self._iimp_why(
             up=up, contra=contra, good=good, mv=mv, reach=reach, imp=imp, wall_hi=wall_hi, wall_lo=wall_lo,
-            wall_txt=wall_txt, side=side, low=low, other=other, other_ord=other_ord)))
+            wall_txt=wall_txt, side=side, low=low, other=other, other_ord=other_ord, kept=kept)))
         if forming:
             rows.append("<div style='color:#ffd479'>⚠ This cycle has NOT closed. Every number above is only what "
                         "it has so far and all of them still move -- the leading side itself can flip.</div>")
@@ -23996,6 +24045,14 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                     ln.setPen(p)
             except RuntimeError:
                 pass                                       # the splitter tore the pane down under us
+        # the "handed it back" cap is NEUTRAL furniture, not a side, so it follows the axis foreground: a
+        # fixed light grey measured 39/765 contrast on the light canvas -- drawn every frame and invisible
+        _kp = getattr(self, "_iimp_keep", None)
+        if _kp is not None:
+            try:
+                _kp.setPen(pg.mkPen(fg, width=2.5))
+            except RuntimeError:
+                pass
         # the candles follow the Chart Style exactly as the main chart's do -- force one redraw so the
         # brushes are rebuilt (the signature carries the style, so this is a no-op if nothing else moved)
         if getattr(self, "_px_candles", None) is not None:
