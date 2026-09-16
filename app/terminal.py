@@ -1951,6 +1951,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._iimp_last = None         # the drawn cycles, so a click can explain one without re-reading the store
         self._iimp_sel_t = None        # the SELECTED cycle's start: the mark survives a redraw by time, not index
         self._iimp_wall_cache = {}     # {cycle start: (ask $, bid $) at the open} -- kept ACROSS liquidity windows
+        self._iimp_book_cache = {}     # {cycle start: (bid mean, ask mean) OVER the cycle} -- the passive component
         self._flow_pane_on = bool(config.FLOW_PANE_ON)     # the Buy/Sell Flow pane (the main chart in Flow mode)
         self._hlh_merge_span = str(config.HLH_MERGE_SPAN)   # HLH "A merged bloc spans at most" (persisted)
         self._lob_plot = None          # Book pane (Flow mode): resting book per side vs the last N cycles
@@ -21192,6 +21193,87 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 out[k] = v[0] if bool(is_buy[k]) else v[1]
         return out
 
+    def _iimp_climb2(self, t, t_end):
+        """BOTH sides' own aggressive $ up to THEIR OWN extreme, and the seconds to it, in ONE walk.
+
+        The per-side score needs buyers' climb to the HIGH and sellers' climb to the LOW on every cycle, not just
+        the leader's -- and walking the bins twice would double the only Python loop in this pane."""
+        st = self._flow
+        base = getattr(st, "_base", None)
+        n = int(len(st._buy)) if base is not None else 0
+        z4 = [np.full(int(np.size(t)), np.nan) for _ in range(4)]
+        if not n:
+            return tuple(z4)
+        ob, sb, os_, ss = z4
+        base = int(base)
+        for k in range(int(np.size(t))):
+            a = int(np.floor(float(t[k]))) - base
+            z = min(int(np.floor(float(t_end[k]))) - base, n - 1)
+            if a < 0 or z < a:
+                continue
+            segh = st._pxh[a:z + 1]; segl = st._pxl[a:z + 1]
+            hb = a + int(np.argmax(np.where(segh > 0, segh, -np.inf)))
+            hs = a + int(np.argmin(np.where(segl > 0, segl, np.inf)))
+            ob[k] = float(np.sum(st._buy[a:hb + 1])); sb[k] = float(hb - a + 1)
+            os_[k] = float(np.sum(st._sell[a:hs + 1])); ss[k] = float(hs - a + 1)
+        return ob, sb, os_, ss
+
+    def _iimp_book_mean(self, t, t_end):
+        """(bid mean, ask mean) resting $ over each cycle -- that side's own PASSIVE presence, the Book pane's
+        rule. Cached by cycle start across liquidity windows, exactly like _iimp_wall."""
+        cache = self._iimp_book_cache
+        d = getattr(self, "_liq_data", None)
+        if d is not None:
+            lt0, lt1, cols, radii, mids, bidg, askg = d
+            ncol = int(np.size(mids))
+            if ncol > 0 and lt1 > lt0 and len(radii):
+                try:
+                    j = list(radii).index(int(config.IIMP_WALL_RADIUS))
+                except ValueError:
+                    j = min(range(len(radii)), key=lambda q: abs(int(radii[q]) - int(config.IIMP_WALL_RADIUS)))
+                xcol = lt0 + (np.arange(ncol) + 0.5) * ((lt1 - lt0) / float(ncol))
+                lo = np.searchsorted(xcol, np.asarray(t, dtype=np.float64), side="left")
+                hi = np.searchsorted(xcol, np.asarray(t_end, dtype=np.float64), side="right")
+                for k in range(int(np.size(t))):
+                    a, z = int(lo[k]), int(hi[k])
+                    if z - a < int(config.LOB_MIN_COLS):
+                        continue
+                    g = mids[a:z] > 0
+                    if int(g.sum()) < int(config.LOB_MIN_COLS):
+                        continue
+                    cache[round(float(t[k]), 2)] = (float(bidg[j][a:z][g].mean()),
+                                                    float(askg[j][a:z][g].mean()))
+                if len(cache) > int(config.LOB_CACHE_MAX):
+                    for _k in sorted(cache)[:len(cache) - int(config.LOB_CACHE_MAX)]:
+                        cache.pop(_k, None)
+        bm = np.full(int(np.size(t)), np.nan); am = np.full(int(np.size(t)), np.nan)
+        for k in range(int(np.size(t))):
+            v = cache.get(round(float(t[k]), 2))
+            if v is not None:
+                bm[k], am[k] = v
+        return bm, am
+
+    @staticmethod
+    def _iimp_pct_prev(v, want, n_base, min_n):
+        """Causal percentile of each value within the PREVIOUS n_base values of the same series.
+
+        History is walked for every cycle, but the percentile is only COMPUTED where `want` asks for it -- the
+        drawn cycles. Rank-based so a negative `kept` needs no shifting, clipping or log base."""
+        v = np.asarray(v, dtype=np.float64)
+        out = np.full(int(v.size), np.nan)
+        hist = []
+        nb, mn = int(n_base), int(min_n)
+        for k in range(int(v.size)):
+            x = v[k]
+            if not np.isfinite(x):
+                continue
+            if bool(want[k]) and len(hist) >= mn:
+                h = hist[-nb:]
+                lo = sum(1 for q in h if q < x); eq = sum(1 for q in h if q == x)
+                out[k] = (lo + 0.5 * eq) / float(len(h))
+            hist.append(float(x))
+        return out
+
     def _iimp_climb(self, t, t_end, is_buy):
         """Per cycle: the side's own aggressive $ up to the cycle's EXTREME, and the seconds it took to get there.
 
@@ -21204,7 +21286,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         n = int(len(st._buy)) if base is not None else 0
         own = np.full(int(np.size(t)), np.nan); secs = np.full(int(np.size(t)), np.nan)
         if not n:
-            return own, secs
+            return own, secs   # (kept: the leader-only form the panel and the harnesses already use)
         base = int(base)
         for k in range(int(np.size(t))):
             a = int(np.floor(float(t[k]))) - base; z = int(np.floor(float(t_end[k]))) - base
@@ -21336,6 +21418,39 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._iimp_keep.setData([], [])
             return
         x0 = t[keep]; x1 = t_end_c[keep]; v_raw = imb[keep]; good = score[keep] >= 0.0
+        # --- BUYER / SELLER SCORE: four components of each side's OWN behaviour, each a causal PERCENTILE within
+        # that side's previous N cycles, averaged. Computed over the WHOLE read so the history exists, but the
+        # percentile itself is only evaluated where `keep` asks for it -- the drawn cycles.
+        _bex = float(config.SCORE_SIZE_EXP)
+        _tick = float(config.TICK_SIZE)
+        _obu, _sbu, _ose, _sse = self._iimp_climb2(t, t_end_c)
+        _bmean, _amean = self._iimp_book_mean(t, t_end_c)
+        _ones = np.ones(int(t.size), dtype=bool)
+        _side = {
+            "buy": (np.maximum(cbuy, 0.0), _bmean, (_obu, _sbu), self._iimp_wall(t, _ones),
+                    (pxh - px0) / _tick, (px1 - px0) / _tick, config.IIMP_COEF_BUY),
+            "sell": (np.maximum(csell, 0.0), _amean, (_ose, _sse), self._iimp_wall(t, ~_ones),
+                     (px0 - pxl) / _tick, (px0 - px1) / _tick, config.IIMP_COEF_SELL)}
+        _sc, _scn = {}, {}
+        for _s, (_sz, _bkm, (_o, _sec), _wr, _rc, _mvs, _cf) in _side.items():
+            with np.errstate(divide="ignore", invalid="ignore"):
+                _agg = _interp_prev(np.power(np.maximum(_sz, 1.0), 1.0 - _bex) / dur,
+                                    done, n_lb, n_mn, include_open=True)
+                _pas = self._lob_ratio(_bkm, done, n_lb, n_mn, include_open=True)
+                _c1, _c2, _c3 = _cf
+                _cv = (np.log1p(np.maximum(_rc, 0.0))
+                       - (_c1 * np.log(np.maximum(_o, 1.0)) + _c2 * np.log(np.maximum(_sec, 1.0))
+                          + _c3 * np.log1p(np.maximum(_wr, 0.0))))
+                _kp = np.where(_rc >= float(config.IIMP_KEEP_MIN_TICKS),
+                               _mvs / np.maximum(_rc, 1e-9), np.nan)
+            _PP = np.vstack([self._iimp_pct_prev(q, keep, n_lb, n_mn) for q in (_agg, _pas, _cv, _kp)])
+            _nf = np.sum(np.isfinite(_PP), axis=0)
+            # sum/count rather than nanmean: a cycle with NO readable component is an all-NaN column, and
+            # nanmean warns "Mean of empty slice" on it every draw. np.errstate does not cover that -- it is
+            # a warnings-module warning, not a floating-point one.
+            _avg = 100.0 * np.where(_nf > 0, np.nansum(_PP, axis=0) / np.maximum(_nf, 1), np.nan)
+            _sc[_s] = np.where(_nf >= int(config.SCORE_MIN_PARTS), _avg, np.nan)[keep]
+            _scn[_s] = _nf[keep]
         _clip = float(np.log2(max(float(config.IIMP_CLIP), 1.0)))
         v = np.clip(v_raw, -_clip, _clip)      # DRAWN within 1/8x .. 8x; the badge still prints the true multiple
         _mvt = (px1 - px0)[keep] / float(config.TICK_SIZE)      # where price actually ended, in the price's frame
@@ -21402,12 +21517,17 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # everything a CLICK needs to explain one bar, so the handler never re-reads the store
         self._iimp_last = {"x0": x0, "x1": x1, "v": v, "mult": _mult, "up": up, "contra": contra, "good": good,
                            "score": score[keep], "wall": wk, "reach": reach[keep], "mv": _mvt,
-                           "arb": ar_b[keep], "ars": ar_s[keep], "form": form, "kept": kept}
+                           "arb": ar_b[keep], "ars": ar_s[keep], "form": form, "kept": kept,
+                           "sbuy": _sc["buy"], "ssell": _sc["sell"],
+                           "nbuy": _scn["buy"], "nsell": _scn["sell"]}
         if self._iimp_read is not None:
             _k = int(v.size) - 1
             _w = wk[_k]
             _kp = kept[_k]          # "-" where the push was too short to read, exactly like the wall
-            self._iimp_read.setText("%s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s%s%s" % (
+            _sbv, _ssv = _sc["buy"][_k], _sc["sell"][_k]
+            self._iimp_read.setText("B %s / S %s  ·  %s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s%s%s" % (
+                "-" if not np.isfinite(_sbv) else "%d" % int(round(_sbv)),
+                "-" if not np.isfinite(_ssv) else "%d" % int(round(_ssv)),
                 "BUY" if up[_k] else "SELL", _mult[_k], float(np.exp(score[keep][_k])),
                 "-" if not np.isfinite(_w) else "%.2gx" % _w,
                 "-" if not np.isfinite(_kp) else "%d%%" % int(round(100.0 * float(_kp))),
@@ -21579,6 +21699,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         arb = float(d["arb"][k]); ars = float(d["ars"][k])
         forming = bool(np.asarray(d.get("form", np.zeros(np.size(d["x0"]), dtype=bool)))[k])
         kept = float(np.asarray(d.get("kept", np.full(np.size(d["x0"]), np.nan)))[k])
+        _nan = np.full(np.size(d["x0"]), np.nan)
+        s_buy = float(np.asarray(d.get("sbuy", _nan))[k])
+        s_sell = float(np.asarray(d.get("ssell", _nan))[k])
+        n_buy = int(np.asarray(d.get("nbuy", np.zeros(np.size(d["x0"]))))[k])
+        n_sell = int(np.asarray(d.get("nsell", np.zeros(np.size(d["x0"]))))[k])
         held = float(mv) if up else -float(mv)          # the move in the LEADER's own direction
         lead_r, oth_r = (arb, ars) if up else (ars, arb)   # the LEADER's own-history ratio is quoted first
         n = self._lb_n()
@@ -21643,6 +21768,18 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         else:
             rows.append("%s: none, because the resting %s orders at the open were ordinary (%.2gx the "
                         "previous %d)." % (_L % "Dot", other_ord, wall, n))
+        # SCORE: the two sides side by side, each out of 100, with how many of the four parts fed it.
+        # ⚠ it is a STANDING score for this cycle, not a forecast: `kept` contains the move by construction.
+        if np.isfinite(s_buy) or np.isfinite(s_sell):
+            _sf = lambda q: "-" if not np.isfinite(q) else "<b>%d</b>" % int(round(q))
+            _band = lambda q: ("" if not np.isfinite(q) else
+                               " (top third)" if q >= float(config.SCORE_HIGH) else
+                               " (bottom third)" if q <= float(config.SCORE_LOW) else "")
+            rows.append("%s: buyers %s%s, sellers %s%s -- each side against its OWN last %d cycles on its "
+                        "aggression, its resting orders, its reach and what it held%s."
+                        % (_L % "Score", _sf(s_buy), _band(s_buy), _sf(s_sell), _band(s_sell), n,
+                           "" if min(n_buy, n_sell) >= 4 else
+                           " (from %d and %d of the 4 parts -- the rest were unreadable here)" % (n_buy, n_sell)))
         rows.append("%s: %s" % (_L % "Why", self._iimp_why(
             up=up, contra=contra, good=good, mv=mv, reach=reach, imp=imp, wall_hi=wall_hi, wall_lo=wall_lo,
             wall_txt=wall_txt, side=side, low=low, other=other, other_ord=other_ord, kept=kept)))
