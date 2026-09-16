@@ -21028,7 +21028,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         pw.setMenuEnabled(False)
         pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
         pw.getAxis("bottom").set_scanner_active(False)
-        ax.tickStrings = lambda vals, sc, sp_: ["%.2gx" % (2.0 ** v) for v in vals]
+        # MIRRORED on purpose: BOTH halves read the LEADING side's multiple, always >= 1.0x, exactly like
+        # the readout and the click panel. Plain 2**v made a sell-led bar point down to the BUYERS'
+        # reciprocal -- the panel said "SELL 2.3x" while the axis under that same bar read 0.44x (user
+        # 2026-09-16). The SIDE is the bar's direction and colour; the axis only says BY HOW MUCH.
+        ax.tickStrings = lambda vals, sc, sp_: ["%.2gx" % (2.0 ** abs(v)) for v in vals]
         vb = pw.getViewBox()
         vb.setMouseEnabled(x=True, y=True)
         vb.setXLink(self.vb)
@@ -21140,7 +21144,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._iimp_vline.setPos(pt.x())
         self._iimp_hline.setPos(pt.y()); self._iimp_hline.show()
         (vx0, vx1), (vy0, vy1) = self._iimp_vb.viewRange()
-        self._iimp_tag.setText("%.2fx" % (2.0 ** float(pt.y())))
+        self._iimp_tag.setText("%.2fx" % (2.0 ** abs(float(pt.y()))))   # mirrored, like the axis
         self._iimp_tag.setPos(vx1, pt.y()); self._iimp_tag.show()
         _xl = self._x_time_label(pt.x())
         if _xl:

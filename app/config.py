@@ -433,7 +433,10 @@ FRATIO_MODE = "None"
 #   HEIGHT  log2 of the aggressive interest imbalance -- the buyers' taker $/s over the median of their previous N
 #           cycles, divided by the sellers' same ratio. Above 1.0x the buyers are hotter than usual relative to
 #           the sellers, below it the sellers are. Every multiple SHOWN is the LEADING side's, always >= 1.0x (it
-#           printed buy / sell, so a red bar showed the reciprocal and had to be inverted by eye).
+#           printed buy / sell, so a red bar showed the reciprocal and had to be inverted by eye). The AXIS
+#           is MIRRORED for that same reason: both halves read the leader's multiple, so a bar pointing DOWN
+#           to 2.3x means the SELLERS led by 2.3x. Unmirrored it read 0.44x under a bar the panel called
+#           2.3x -- the same reciprocal, one layer lower (user 2026-09-16: "is that normal??").
 #   COLOUR  the side that leads (teal buyers, red sellers), ORANGE when price went the OTHER way.
 #   FILL    SOLID when THAT SIDE's push REACHED at least what its own previous N cycles reached for that effort and
 #           that time (IIMP_COEF_*), HOLLOW when it did not -- interest that did not convert. ⚠ the fill follows
