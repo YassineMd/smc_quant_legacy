@@ -211,6 +211,50 @@ def _median_prev_windows(hv: np.ndarray, nb: int, mn: int) -> np.ndarray:
     return base
 
 
+def history_depth(ok, dn, groups) -> np.ndarray:
+    """How much history each row's ratio stands on: the number of finished + valid values of ITS OWN group
+    appended before it -- the very `j` _ratio_vec indexes its median windows with, so it is the one
+    definition of the thing and cannot drift from the ratios.
+
+    A ratio built on k values and one built on k + 1 are different numbers until k reaches n_base; past
+    that the window is exactly the last n_base and no deeper tape can change it. The PRICE pane's candle
+    cache keeps this beside every colour to know whether a later read can still improve the rating
+    (2026-09-20: at boot the store backfills newest-first in 2 h chunks while the pane already ticks, so
+    the first ratings stood on minutes of tape and, once cached, were never revisited)."""
+    ok = np.asarray(ok, dtype=bool)
+    dn = np.asarray(dn, dtype=bool)
+    groups = np.asarray(groups)
+    app = ok & dn
+    out = np.zeros(app.shape[0], dtype=np.int64)
+    for g in np.unique(groups):
+        mg = groups == g
+        a = app & mg
+        out[mg] = (np.cumsum(a) - a)[mg]                                  # appended BEFORE k, exclusive of k
+    return out
+
+
+def _ok_prev(v):
+    """prev_ratio's validity: a positive, finite rate."""
+    return np.isfinite(v) & (v > 0)
+
+
+def _ok_side(v):
+    """same_side_ratio's validity: finite and >= 0 -- zero is a legitimate speed (the FLAT class)."""
+    return np.isfinite(v) & (v >= 0)
+
+
+def prev_depth(vals, done) -> np.ndarray:
+    """history_depth under prev_ratio's own inputs and validity rule (one group)."""
+    v = np.asarray(vals, dtype=np.float64)
+    return history_depth(_ok_prev(v), done, np.zeros(v.shape[0], dtype=np.int64))
+
+
+def same_side_depth(vals, is_dom_buy, done) -> np.ndarray:
+    """history_depth under same_side_ratio's own inputs and validity rule (one group per side)."""
+    v = np.asarray(vals, dtype=np.float64)
+    return history_depth(_ok_side(v), done, np.asarray(is_dom_buy, dtype=bool).astype(np.int64))
+
+
 def _ratio_vec(v, ok, dn, groups, nb: int, mn: int, include_open: bool) -> np.ndarray:
     """Shared body: per group (one for prev_ratio, one per side for same_side_ratio) the appended history is
     the finished + valid values in order; each rated cycle divides by the median of the previous nb of them."""
@@ -218,12 +262,11 @@ def _ratio_vec(v, ok, dn, groups, nb: int, mn: int, include_open: bool) -> np.nd
     out = np.full(n, np.nan)
     app = ok & dn
     rated = ok & (dn | bool(include_open))
+    j = history_depth(ok, dn, groups)                                     # the one definition of "how much history"
     for g in np.unique(groups):
         mg = groups == g
-        a = app & mg
-        hv = v[a]
+        hv = v[app & mg]
         base = _median_prev_windows(hv, nb, mn)
-        j = np.cumsum(a) - a                                              # appended BEFORE k, exclusive of k
         r = rated & mg
         b = base[j[r]]
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -247,7 +290,7 @@ def prev_ratio(vals, done, n_base: int, min_n: int, include_open: bool = False):
         return np.full(0, np.nan)
     v = np.asarray(vals, dtype=np.float64)
     dn = np.asarray(done, dtype=bool)
-    ok = np.isfinite(v) & (v > 0)
+    ok = _ok_prev(v)
     return _ratio_vec(v, ok, dn, np.zeros(n, dtype=np.int64), max(1, int(n_base)), max(1, int(min_n)), include_open)
 
 
@@ -288,7 +331,7 @@ def same_side_ratio(vals, is_dom_buy, done, n_base: int, min_n: int, include_ope
     v = np.asarray(vals, dtype=np.float64)
     dn = np.asarray(done, dtype=bool)
     db = np.asarray(is_dom_buy, dtype=bool).astype(np.int64)
-    ok = np.isfinite(v) & (v >= 0)
+    ok = _ok_side(v)
     return _ratio_vec(v, ok, dn, db, max(1, int(n_base)), max(1, int(min_n)), include_open)
 
 

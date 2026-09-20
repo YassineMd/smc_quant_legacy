@@ -39,6 +39,7 @@ from .heatmap import (HeatmapCache, TradeBubbleCache, decode_col, decode_grid,
 
 from . import bucket_state, config, flow_pane, region_state, vpin_adaptive
 from .flow_interp import (FlowInterpPanel, build_rows as _interp_build_rows, prev_ratio as _interp_prev,
+                          prev_depth as _interp_prev_depth, same_side_depth as _interp_side_depth,
                           _ratio_text as _interp_ratio_text,
                           same_side_ratio as _interp_side_ratio, dur_text as _interp_dur_text,
                           BAR_COL as _STATE_BAR_COL,
@@ -1863,10 +1864,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._px_sig = None            # an idle frame is this compare and nothing else
         self._px_t = 0.0
         self._px_data = None           # the LIVE read: (a, vx1, t, t_end, done, px0, px1, pxh, pxl, fcol)
-        self._px_cache = {}            # EVERY cycle ever read: start -> (t, t_end, o, h, l, c, colour index)
+        self._px_cache = {}            # EVERY cycle ever read: start -> (t, t_end, o, h, l, c, colour, depth, S, a)
         self._px_cache_lb = None       # (lookback, flow window) the cache was built at; either clears it
-        self._px_rated_a = None        # the earliest read start already rated: unrated entries retry only
-        self._px_arr = None            # on a DEEPER read. The cache as sorted arrays, rebuilt only on a gain
+        #                                `depth` = how much history the colour stands on (_px_rating_depth),
+        #                                `S` = the store's first timestamp when it was rated, `a` = the start
+        #                                of the read that rated it. A read starting EARLIER and standing on
+        #                                more history, or taken after OLDER tape landed, re-rates it; at depth
+        #                                N with nothing older since, it is final
+        self._px_arr = None            # the cache as sorted arrays, rebuilt only on a gain
         self._px_pic_win = None        # (i0, i1) into _px_arr: which cached candles the PICTURE covers. The
                                        # view sits inside it with a candle margin, so an ordinary pan or zoom
                                        # neither rebuilds nor loses anything
@@ -19080,6 +19085,34 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
               np.where(heavy, np.where(side, _C_AB_BUY, _C_AB_SELL), -1))
         return np.where(ok, col, -1).astype(np.int64)
 
+    def _px_rating_depth(self, t, t_end, done, move, is_buy, strong, cbuy, csell):
+        """How much history each cycle's colour stands on, capped at the lookback N: the smaller of the two
+        ratios' history_depth over the SAME inputs _px_state_cols rates with (the per-side speed ratio is the
+        thinner of the two -- a side's history skips every other cycle).
+
+        Cheap by construction, a few cumsums and no medians, so _px_cache_merge can ask it every tick to
+        decide whether a read can IMPROVE a cached colour and pay for the medians only when one can. At N a
+        rating is FINAL: its median window is exactly its last N values and no deeper tape changes it.
+
+        Why it exists (measured 2026-09-20): the store backfills newest-first in 2 h chunks over ~55 s while
+        this pane already ticks every 0.5 s, so the first ratings after boot stood on minutes of tape --
+        17 of 17 stale candles, the user's "BREAKOUT drawn black" among them -- and the cache never
+        revisited a rated entry. Two boots gave the same cycle two different wrong colours."""
+        n = int(np.size(t))
+        if n == 0:
+            return np.zeros(0, dtype=np.int64)
+        side, _rate, _st = self._cycle_impact(is_buy, strong, move, cbuy, csell)
+        te = np.array(t_end, dtype=np.float64, copy=True)
+        if n and not bool(done[-1]):
+            te[-1] = max(float(t[-1]), min(time.time(), float(te[-1])))
+        dur = np.maximum(te - np.asarray(t, dtype=np.float64), 1e-9)
+        mv = np.nan_to_num(np.asarray(move, dtype=np.float64), nan=0.0)
+        usd = np.maximum(np.asarray(cbuy, dtype=np.float64), 0.0) + \
+            np.maximum(np.asarray(csell, dtype=np.float64), 0.0)
+        dv = _interp_prev_depth(usd / dur, done)
+        ds = _interp_side_depth(np.abs(mv) / dur, side, done)
+        return np.minimum(np.minimum(dv, ds), int(self._lb_n())).astype(np.int64)
+
     @staticmethod
     def _px_brushes(cols, opens, closes, bw):
         """(brushes, pens, hi_pens, lo_pens) for the cycle candles.
@@ -19245,13 +19278,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # computed AT MOST ONCE per tick, and only when something actually needs a colour: a cycle the cache
         # has never rated, or a forming candle whose own numbers have moved.
         _memo = []
+        _dmemo = []
 
         def _cols():
             if not _memo:
                 _memo.append(self._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell))
             return _memo[0]
 
-        if self._px_cache_merge(_a, vx1, t, t_end, done, px0, px1, pxh, pxl, _cols, view=(vx0, vx1)):
+        def _depth():                              # cheap; asked on most ticks, so memoised like _cols
+            if not _dmemo:
+                _dmemo.append(self._px_rating_depth(t, t_end, done, move, is_buy, strong, cbuy, csell))
+            return _dmemo[0]
+
+        if self._px_cache_merge(_a, vx1, t, t_end, done, px0, px1, pxh, pxl, _cols, _depth, view=(vx0, vx1)):
             self._px_sig = None                   # the cache GAINED cycles -> rebuild the picture ONCE
         try:
             if self._px_fill(vx0, vx1, now):      # the rest of a wide view, one read per tick (see _px_fill)
@@ -19304,17 +19343,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._px_fill_stop = oldest                   # nothing older to find: stop asking
             return 0
         _memo = []
+        _dmemo = []
 
         def _cols():
             if not _memo:
                 _memo.append(self._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell))
             return _memo[0]
 
-        gained = self._px_cache_merge(_a, f1, t, t_end, done, px0, px1, pxh, pxl, _cols, view=(vx0, vx1))
+        def _depth():                              # cheap; asked on most ticks, so memoised like _cols
+            if not _dmemo:
+                _dmemo.append(self._px_rating_depth(t, t_end, done, move, is_buy, strong, cbuy, csell))
+            return _dmemo[0]
+
+        gained = self._px_cache_merge(_a, f1, t, t_end, done, px0, px1, pxh, pxl, _cols, _depth, view=(vx0, vx1))
         self._px_fills = self.__dict__.get("_px_fills", 0) + 1
         return gained
 
-    def _px_cache_merge(self, a, b, t, t_end, done, px0, px1, pxh, pxl, cols_fn, view=None) -> int:
+    def _px_cache_merge(self, a, b, t, t_end, done, px0, px1, pxh, pxl, cols_fn, depth_fn, view=None) -> int:
         """Fold one read's cycles into the pane's CACHE. Returns how many entries it gained or upgraded.
 
         The cache is what makes a zoom free (user 2026-09-12: "keep them on chart even if I zoom on 1
@@ -19327,15 +19372,36 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         forming (which the overlay draws, closing on the ENGINE's live price) or one whose numbers are not
         final. A later read that does not end on it caches it then.
 
-        ⚠ A row can come back UNRATED (-1) when it sits too close to the left edge of a read for the
-        volume/speed ratios to have a baseline. A read that reaches FURTHER BACK can rate it, so a rated
-        colour may UPGRADE an unrated cached entry -- never the reverse, or panning would grey out candles
-        that were coloured. ⚠⚠ That upgrade is retried only when the read actually starts EARLIER than any
-        read already tried (_px_rated_a): the oldest cycles in the STORE can never be rated, and without
-        that guard they would ask for the full ratings pass on every single frame forever.
+        ⚠⚠ A COLOUR IS ONLY AS GOOD AS THE HISTORY IT WAS RATED ON, and the cache records that history
+        (`depth`, from _px_rating_depth: finished cycles before the row in the read, capped at the lookback
+        N). A row rated near the left edge of a read, or -- the case that was actually measured -- rated
+        while the store was still BACKFILLING at boot, stands on a few cycles or none (-1). A later read
+        that stands on MORE history for that same row re-rates it, colour and depth; a read standing on the
+        same or less never touches it, so panning cannot downgrade a candle; and at N the entry is FINAL,
+        because the median window is then exactly its last N values and nothing deeper can change it.
+        ⚠⚠ DEPTH ALONE IS NOT ENOUGH WHILE OLDER TAPE IS STILL ARRIVING -- measured after the depth rule
+        went in: a read that starts AT the store's edge has no context there, so crosses() hands back a few
+        huge merged cycles for the first ~80 min of every chunk that lands (7 cycle starts between the edge
+        and a cycle at rating time, 43 once the tape behind them was in). A rating whose N predecessors fell
+        in that region stood on values that later changed, and with 31 predecessors it was "final" under
+        depth and wrong. So each entry also records S, the store's first timestamp when it was rated, and is
+        final only when nothing OLDER has landed since (S_now >= S_stored); older tape arriving re-rates
+        every non-final entry in the read exactly once. A cycle whose END moved in EITHER direction is
+        replaced outright -- a phantom from the edge SHRINKS to its real extent when the tape behind it
+        arrives, and the overlap guard must then keep the real successors, not drop them under the phantom.
+        That is what keeps the steady state free: once the store has settled every entry in view is final
+        and this loop finds nothing to do. (Before 2026-09-20 an unrated entry retried only when a read
+        started EARLIER than any before it -- which the store growing underneath a fixed view never is --
+        and a RATED entry never retried at all: 17 of 17 stale candles came from the first three ticks.)
 
-        `cols_fn` is a callable, not an array, and is invoked at most once -- only if a row needs a colour.
-        See _px_tick: the ratings cost 1.345 ms over 23 cycles and scale with the read.
+        `cols_fn` and `depth_fn` are callables, not arrays, and each is invoked at most once. Depth is a
+        few cumsums, but even those are not free at the 400-row cap (254 us measured), and a read's first
+        rows are non-final FOREVER -- no more history exists at its left edge -- so asking for depth
+        whenever a non-final entry is present cost 854 us per steady-state merge. A read can only offer a
+        row more history if it STARTS EARLIER than the read that rated it, so each entry records that start
+        (`a`) and a read starting no earlier is skipped without computing anything: the steady state is
+        dict lookups. The colours (1.345 ms over 23 cycles, scaling with the read -- see _px_tick) are
+        computed only when some row can actually be improved.
 
         ⭐ KEYING BY START TIME survives ZOOM: a narrow read returns the same cycle boundaries a wide one
         does, because every read starts _lb_secs() (4 h) before the view -- far more prefix than crosses()'s
@@ -19360,46 +19426,60 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._px_cache = {}
             self._px_cache_lb = _key
             self._px_arr = None
-            self._px_rated_a = None
             self._px_pic_win = None
         cache = self._px_cache
-        # PASS 1 -- which rows does the cache actually want? No colours are computed to answer this.
-        _tried = getattr(self, "_px_rated_a", None)
-        _deeper = _tried is None or float(a) < float(_tried) - 1.0
+        _N = int(self._lb_n())
+        _sp = self._flow.span()
+        _S = float(_sp[0]) if _sp is not None else float("-inf")      # how far back the store reaches NOW
+        # PASS 1 -- which rows does the cache actually want? No colours are computed to answer this, and
+        # the depth only when a cached entry is not final yet.
+        _dep = None
         _want = []
         for k in range(n - 1):                    # never the last row -- see the docstring
             if not bool(done[k]):
                 continue                          # provisional: its end and its volume can still move
             key = round(float(t[k]), 3)
             old = cache.get(key)
-            if old is not None and not (float(t_end[k]) > float(old[1]) + 0.5
-                                        or (old[6] < 0 and _deeper)):
-                continue                          # unchanged, rated, and no deeper history to re-rate with
+            if old is not None and abs(float(t_end[k]) - float(old[1])) <= 0.5:
+                _older = _S < float(old[8]) - 1.0                # tape OLDER than at rating time has landed
+                if int(old[7]) >= _N and not _older:
+                    continue                      # FINAL: the full window, and nothing behind it has changed
+                if not _older:
+                    if float(a) >= float(old[9]) - 1.0:
+                        continue                  # starts no earlier than the read that rated it: it cannot
+                    #                               stand on more history, so the depth is what it was
+                    if _dep is None:
+                        _dep = depth_fn()
+                    if int(_dep[k]) <= int(old[7]):
+                        continue                  # this read stands on no more history than that rating did
             if not (np.isfinite(px0[k]) and np.isfinite(px1[k])
                     and np.isfinite(pxh[k]) and np.isfinite(pxl[k])):
                 continue
             _want.append((k, key, old))
-        self._px_rated_a = float(a) if _tried is None else min(float(a), float(_tried))
         if not _want:
             return 0
         # PASS 2 -- now, and only now, the ratings are worth their 1.3 ms
         cols = cols_fn()
+        if _dep is None:
+            _dep = depth_fn()
         gained = 0
         for k, key, old in _want:
-            ci = int(cols[k])
-            if old is not None and not (float(t_end[k]) > float(old[1]) + 0.5):
-                if ci < 0:
-                    continue                      # never regress a cached entry to unrated
-                cache[key] = old[:6] + (ci,)      # a colour UPGRADE only: the cycle itself is unchanged
+            ci = int(cols[k]); dk = int(_dep[k])
+            if old is not None and abs(float(t_end[k]) - float(old[1])) <= 0.5:
+                cache[key] = old[:6] + (ci, dk, _S, float(a))   # the same cycle, re-rated: colour, depth, when, from where
             else:
-                # ⚠⚠ a cycle ALREADY CACHED can legitimately grow: crosses() MERGES consecutive same-side
+                # ⚠⚠ a cycle ALREADY CACHED can legitimately GROW: crosses() MERGES consecutive same-side
                 # cycles, so as live tape arrives the run this cycle heads can swallow the next one -- same
                 # start, later end, new close and new extremes. FOUND on a real boot, where the cache quietly
                 # kept 5 stale short candles while the store had merged them (a frozen store cannot show
                 # this). The whole entry is replaced; its old neighbour, now inside it, overlaps and is
-                # dropped by the guard below. A rating it already had survives a read that cannot rate it.
+                # dropped by the guard below.
+                # ... or SHRINK: a phantom merged at the store's edge splits into its real cycles once the
+                # tape behind it lands, and the same start comes back with an EARLIER end. Either way the
+                # whole entry is replaced, with THIS read's colour, depth and S; a shallow rating is picked
+                # up by the next read that stands on more, which is exactly what those slots are for.
                 cache[key] = (float(t[k]), float(t_end[k]), float(px0[k]), float(pxh[k]), float(pxl[k]),
-                              float(px1[k]), ci if (ci >= 0 or old is None) else int(old[6]))
+                              float(px1[k]), ci, dk, _S, float(a))
             gained += 1
         if not gained:
             return 0
