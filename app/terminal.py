@@ -1864,13 +1864,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._px_sig = None            # an idle frame is this compare and nothing else
         self._px_t = 0.0
         self._px_data = None           # the LIVE read: (a, vx1, t, t_end, done, px0, px1, pxh, pxl, fcol)
-        self._px_cache = {}            # EVERY cycle ever read: start -> (t, t_end, o, h, l, c, colour, depth, S, a)
+        self._px_cache = {}            # EVERY cycle ever read: start -> (t, t_end, o, h, l, c, colour, depth, R, a)
         self._px_cache_lb = None       # (lookback, flow window) the cache was built at; either clears it
         #                                `depth` = how much history the colour stands on (_px_rating_depth),
-        #                                `S` = the store's first timestamp when it was rated, `a` = the start
-        #                                of the read that rated it. A read starting EARLIER and standing on
-        #                                more history, or taken after OLDER tape landed, re-rates it; at depth
-        #                                N with nothing older since, it is final
+        #                                `R` = the store's rev_hist when it was rated (bumps on any OUT-OF-
+        #                                ORDER write: a backfill chunk, a gap fill, a late batch), `a` = the
+        #                                start of the read that rated it. A read starting EARLIER and standing
+        #                                on more history, or taken after the tape behind it changed, re-rates
+        #                                it; at depth N with R unchanged, it is final
         self._px_arr = None            # the cache as sorted arrays, rebuilt only on a gain
         self._px_pic_win = None        # (i0, i1) into _px_arr: which cached candles the PICTURE covers. The
                                        # view sits inside it with a candle margin, so an ordinary pan or zoom
@@ -19379,16 +19380,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         that stands on MORE history for that same row re-rates it, colour and depth; a read standing on the
         same or less never touches it, so panning cannot downgrade a candle; and at N the entry is FINAL,
         because the median window is then exactly its last N values and nothing deeper can change it.
-        ⚠⚠ DEPTH ALONE IS NOT ENOUGH WHILE OLDER TAPE IS STILL ARRIVING -- measured after the depth rule
-        went in: a read that starts AT the store's edge has no context there, so crosses() hands back a few
-        huge merged cycles for the first ~80 min of every chunk that lands (7 cycle starts between the edge
-        and a cycle at rating time, 43 once the tape behind them was in). A rating whose N predecessors fell
-        in that region stood on values that later changed, and with 31 predecessors it was "final" under
-        depth and wrong. So each entry also records S, the store's first timestamp when it was rated, and is
-        final only when nothing OLDER has landed since (S_now >= S_stored); older tape arriving re-rates
-        every non-final entry in the read exactly once. A cycle whose END moved in EITHER direction is
-        replaced outright -- a phantom from the edge SHRINKS to its real extent when the tape behind it
-        arrives, and the overlap guard must then keep the real successors, not drop them under the phantom.
+        ⚠⚠ DEPTH ALONE IS NOT ENOUGH WHILE THE TAPE BEHIND A RATING CAN STILL CHANGE -- measured twice.
+        First: a read that starts AT the store's edge has no context there, so crosses() hands back a few
+        huge merged cycles for the first ~80 min of every backfill chunk (7 cycle starts between the edge
+        and a cycle at rating time, 43 once the tape behind them was in); a rating whose N predecessors fell
+        there stood on values that later changed, and with 31 predecessors it was "final" under depth and
+        wrong. Second, after keying on the store's FIRST timestamp: 2 of 39 cycles changed rating minutes
+        after being cached with that timestamp unchanged -- tape landing INSIDE bins the store already
+        covered (a gap fill, a late batch), which no edge can see. So each entry records R, the store's
+        rev_hist when it was rated: FlowStore bumps it at the end of any ingest that wrote bins older than
+        the live edge it found, and never for a contiguous live stream. R changed re-rates every non-final
+        entry in the read exactly once; at depth N with R unchanged an entry is final. A cycle whose END
+        moved in EITHER direction is replaced outright -- a phantom from the edge SHRINKS to its real extent
+        when the tape behind it arrives, and the overlap guard must then keep the real successors.
         That is what keeps the steady state free: once the store has settled every entry in view is final
         and this loop finds nothing to do. (Before 2026-09-20 an unrated entry retried only when a read
         started EARLIER than any before it -- which the store growing underneath a fixed view never is --
@@ -19429,8 +19433,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._px_pic_win = None
         cache = self._px_cache
         _N = int(self._lb_n())
-        _sp = self._flow.span()
-        _S = float(_sp[0]) if _sp is not None else float("-inf")      # how far back the store reaches NOW
+        _R = int(getattr(self._flow, "rev_hist", 0))                  # the tape-behind-you revision NOW
         # PASS 1 -- which rows does the cache actually want? No colours are computed to answer this, and
         # the depth only when a cached entry is not final yet.
         _dep = None
@@ -19441,7 +19444,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             key = round(float(t[k]), 3)
             old = cache.get(key)
             if old is not None and abs(float(t_end[k]) - float(old[1])) <= 0.5:
-                _older = _S < float(old[8]) - 1.0                # tape OLDER than at rating time has landed
+                _older = int(old[8]) != _R                       # the tape behind that rating has changed
                 if int(old[7]) >= _N and not _older:
                     continue                      # FINAL: the full window, and nothing behind it has changed
                 if not _older:
@@ -19456,8 +19459,30 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     and np.isfinite(pxh[k]) and np.isfinite(pxl[k])):
                 continue
             _want.append((k, key, old))
+        # THE FORMING ROW CAN SWALLOW A CACHED CANDLE (user 2026-09-20: "the live bar overlapping the previous
+        # one"). crosses() folds consecutive same-colour cycles into the first, so as the forming run develops
+        # it can absorb the short DONE cycle just before it: the read's last row now starts where that cycle
+        # did, the overlay draws the forming candle from there, and the cache still holds the short one
+        # because the last row is never merged in. On a LIVE read -- its right edge at the live edge, the
+        # same gate the draw uses for the overlay -- every cached entry starting at or after the forming
+        # row's start lies inside the forming cycle and goes. A fill read's last row is only cut by that
+        # read's right edge, and its full version, cached from the main read, must stay.
+        _dropped = 0
+        if not bool(done[-1]) and float(b) >= time.time() - float(config.INTERP_STALE_SECS):
+            _f0 = float(t[-1]) - 0.5
+            for _k in [k_ for k_ in cache if k_ >= _f0]:
+                del cache[_k]
+                _dropped += 1
         if not _want:
-            return 0
+            if _dropped:
+                _ks = sorted(cache)
+                if _ks:
+                    _m = np.array([cache[_k] for _k in _ks], dtype=np.float64)
+                    self._px_arr = (_m[:, 0], _m[:, 1], _m[:, 2], _m[:, 3], _m[:, 4], _m[:, 5],
+                                    _m[:, 6].astype(np.int64))
+                else:
+                    self._px_arr = None
+            return _dropped                       # a drop is a change the picture must be rebuilt for
         # PASS 2 -- now, and only now, the ratings are worth their 1.3 ms
         cols = cols_fn()
         if _dep is None:
@@ -19466,7 +19491,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for k, key, old in _want:
             ci = int(cols[k]); dk = int(_dep[k])
             if old is not None and abs(float(t_end[k]) - float(old[1])) <= 0.5:
-                cache[key] = old[:6] + (ci, dk, _S, float(a))   # the same cycle, re-rated: colour, depth, when, from where
+                cache[key] = old[:6] + (ci, dk, float(_R), float(a))   # the same cycle, re-rated: colour, depth, R, from where
             else:
                 # ⚠⚠ a cycle ALREADY CACHED can legitimately GROW: crosses() MERGES consecutive same-side
                 # cycles, so as live tape arrives the run this cycle heads can swallow the next one -- same
@@ -19476,11 +19501,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 # dropped by the guard below.
                 # ... or SHRINK: a phantom merged at the store's edge splits into its real cycles once the
                 # tape behind it lands, and the same start comes back with an EARLIER end. Either way the
-                # whole entry is replaced, with THIS read's colour, depth and S; a shallow rating is picked
+                # whole entry is replaced, with THIS read's colour, depth and R; a shallow rating is picked
                 # up by the next read that stands on more, which is exactly what those slots are for.
                 cache[key] = (float(t[k]), float(t_end[k]), float(px0[k]), float(pxh[k]), float(pxl[k]),
-                              float(px1[k]), ci, dk, _S, float(a))
+                              float(px1[k]), ci, dk, float(_R), float(a))
             gained += 1
+        gained += _dropped
         if not gained:
             return 0
         _cap = int(config.PX_CACHE_MAX)

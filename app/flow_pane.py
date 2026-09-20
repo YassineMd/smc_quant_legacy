@@ -38,6 +38,12 @@ class FlowStore:
         self._pxl = np.zeros(0, dtype=np.float64)
         self._pts = np.zeros(0, dtype=np.float64)    # ms of the trade that set _px, so an out-of-order
         self.rev = 0                                 # backfill batch cannot overwrite a newer price
+        self.rev_hist = 0                            # bumps only when a batch wrote bins OLDER than the live
+        #                                              edge it found (a backfill chunk, a gap fill, a late
+        #                                              batch): "the tape behind you changed". A lagging but
+        #                                              contiguous live stream never bumps it. Bumped at the
+        #                                              END of ingest, so a reader that saw span() move while
+        #                                              the bins were still being written is told to re-read.
         self._memo = None
         self._bmemo = None
         self._xmemo = None
@@ -62,6 +68,7 @@ class FlowStore:
 
     # --------------------------------------------------------------- ingest
     _GROW_BINS = 8192            # reserve appended per reallocation (~2.3 h of seconds)
+    _HIST_MARGIN_BINS = 5        # a batch this far behind the previous edge is OUT OF ORDER (rev_hist)
     _KEYS = ("buy", "sell", "px", "pxh", "pxl", "pts")
 
     def _views(self, start: int, n: int) -> None:
@@ -122,6 +129,7 @@ class FlowStore:
         sd = np.asarray(side)
         usd = pr * qt
         idx = np.floor(ts / 1000.0 / self.bin).astype(np.int64)
+        _prev_last = None if self._base is None else int(self._base) + int(len(self._buy)) - 1
         self._fit(int(idx.min()), int(idx.max()))
         loc = idx - self._base
         keep = (loc >= 0) & (loc < len(self._buy))             # a pruned-away old bin can't be revived
@@ -150,6 +158,10 @@ class FlowStore:
         if _fresh.any():
             self._pxl[loc[_fresh]] = kpr[_fresh]
         np.minimum.at(self._pxl, loc, kpr)
+        # out of order = this batch reached further back than a contiguous stream would: the previous edge
+        # minus a few seconds of legitimate overlap between consecutive live batches
+        if _prev_last is not None and int(loc.min()) + int(self._base) < _prev_last - self._HIST_MARGIN_BINS:
+            self.rev_hist += 1
         self.rev += 1
         self._memo = None
         self._bmemo = None
@@ -217,9 +229,11 @@ class FlowStore:
             self._base += drop
         self.rev += 1
         self._memo = None; self._bmemo = None; self._xmemo = None; self._pxmemo = None
+        self.rev_hist += 1
         return True
 
     def reset(self) -> None:
+        self.rev_hist += 1                           # everything a reader rated is behind a tape that is gone
         self._base = None
         self._bufs = None; self._start = 0
         self._buy = np.zeros(0, dtype=np.float64)
