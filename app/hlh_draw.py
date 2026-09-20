@@ -314,14 +314,16 @@ def build_period(res: H.PeriodResult, rows: List[H.MB], tabs: List[str], xmap, c
             # H.bloc_poc caches on the MB, so this costs one lookup per redraw after the first.
             _poc = H.bloc_poc(m)
             if _poc is not None and poc_runs:
-                # groups of >= N candles that OPENED and CLOSED on one side of this POC -- acceptance there
-                # (user 2026-09-16). Shaded from the POC out to how far the run got, rather than boxing the
-                # candles' own high..low: only the open and the close are held to the rule, so a run can WICK
-                # THROUGH the very line that defines it, and a highlight straddling that line reads as the
-                # opposite of what it means. Drawn BEFORE the POC line so the line stays legible over the wash.
+                # groups of >= N klines that CLOSED on one side of this POC -- acceptance there (user
+                # 2026-09-16; close-only and every kline of the span since 2026-09-20, with a kline that closed
+                # across the POC as it was AT THE TIME also dividing). Shaded from the POC out to how far the
+                # run got, rather than boxing the candles' own high..low: only the close is held to the rule,
+                # so a run can WICK THROUGH the very line that defines it, and a highlight straddling that
+                # line reads as the opposite of what it means. Drawn BEFORE the POC line so it stays legible.
                 ps.setPen(QtCore.Qt.PenStyle.NoPen)
                 ps.setBrush(qcol(chex, float(cfg.HLH_POC_RUN_TR)))
-                for _rA, _rB, _sd, _ext in H.bloc_poc_runs(m, int(cfg.HLH_POC_RUN_MIN), cand_secs):
+                for _rA, _rB, _sd, _ext in H.bloc_poc_runs(m, int(cfg.HLH_POC_RUN_MIN), cand_secs,
+                                                           bool(cfg.HLH_POC_RUN_CAUSAL)):
                     _rx0 = float(xmap(_rA)); _rx1 = float(xmap(_rB + cand_secs))
                     _ry0, _ry1 = min(_poc, _ext), max(_poc, _ext)
                     ps.drawRect(QtCore.QRectF(_rx0, _ry0, _rx1 - _rx0, _ry1 - _ry0))

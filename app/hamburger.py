@@ -1207,7 +1207,9 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                  "under finished days, day N vs day N-1 (VAH-VAL relations and the day merges).", True),
                 ("m10_hlh_pocruns", "· POC acceptance areas (\u2265 5 candles one side)",
                  "Display only. Inside each bloc, shade every run of at least %d CONSECUTIVE candles that "
-                 "OPENED and CLOSED on the same side of that bloc's own POC -- price accepting one side of it. "
+                 "CLOSED on the same side of that bloc's own POC -- price accepting one side of it. Only a "
+                 "close on the other side (of the POC as drawn, or as it was when that candle formed) ends a "
+                 "run; the open plays no part. "
                  "Each area spans the run's time and reaches from the POC out to the run's furthest price, so "
                  "it shows how far the side got. Broad by nature: on 1m candles price holds one side of any "
                  "single line for long stretches." % int(config.HLH_POC_RUN_MIN),

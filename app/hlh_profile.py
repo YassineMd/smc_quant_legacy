@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from collections import OrderedDict
 from typing import List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -209,9 +210,16 @@ class MB:
     bHi: Optional[float] = None   # highest high / lowest low of its candles
     bLo: Optional[float] = None
     poc: Optional[float] = None   # the bloc's OWN point of control, filled lazily by bloc_poc() and cached
-    cO: Optional[np.ndarray] = None   # its candles' open / close / open-time, for the POC runs. A MERGE
-    cC: Optional[np.ndarray] = None   # concatenates these WITHOUT sorting, so anything needing them in
-    cT: Optional[np.ndarray] = None   # time order must sort by cT first -- see bloc_poc_runs()
+    cO: Optional[np.ndarray] = None   # its candles' open / close / open-time. A MERGE concatenates these
+    cC: Optional[np.ndarray] = None   # WITHOUT sorting, so anything needing them in time order must sort
+    cT: Optional[np.ndarray] = None   # by cT first -- see bloc_poc_runs()
+    spans: Optional[list] = None      # [(tS, tE), ...] the time span of every original bloc in it
+    aT: Optional[np.ndarray] = None   # EVERY kline of those spans (not only the in-band ones the profile
+    aO: Optional[np.ndarray] = None   # is built from): open-time, open, close, high, low. The POC runs
+    aC: Optional[np.ndarray] = None   # classify each of these by its CLOSE against the POC, so a kline that
+    aH: Optional[np.ndarray] = None   # left the bloc's price band downward still continues a below-run
+    aL: Optional[np.ndarray] = None
+    poc_hist: Optional[tuple] = None  # (times, pocs): the POC as it was after each own candle -- bloc_poc_hist()
     tag: str = ""                 # MAX / MIN among the final blocs (table 1)
     todo: bool = False            # to be coloured by color_rows
     cls: Optional[int] = None     # 2 = orange, 1 = coloured, 0 = dark gray
@@ -713,35 +721,119 @@ def bloc_poc(m: "MB") -> Optional[float]:
     return m.poc
 
 
-def bloc_poc_runs(m: "MB", min_n: int, step_secs: Optional[float] = None) -> List[Tuple[float, float, int, float]]:
-    """Runs of >= min_n CONSECUTIVE candles that OPENED and CLOSED on the same side of the bloc's own POC.
+def _poc_grid(m: "MB"):
+    """(lo, step, rows, iB, iT) of the bloc's own candles on bloc_poc()'s grid, or None. Shared by bloc_poc_hist
+    so the history and the final POC can never sit on different rows."""
+    if m.cH is None or m.cL is None or m.cV is None:
+        return None
+    h = np.asarray(m.cH, dtype=np.float64)
+    l = np.asarray(m.cL, dtype=np.float64)
+    if h.size == 0 or l.size != h.size:
+        return None
+    lo = float(np.min(l)); hi = float(np.max(h))
+    if not hi > lo:
+        return None
+    step = float(m.pStep) if (m.pStep is not None and m.pStep > 0) else (hi - lo) / 24.0
+    if not step > 0:
+        return None
+    rows = int(max(1, min(4096, np.ceil((hi - lo) / step))))
+    iT = np.minimum(rows - 1, np.maximum(0, np.floor((h - lo) / step).astype(np.int64)))
+    iB = np.minimum(rows - 1, np.maximum(0, np.floor((l - lo) / step).astype(np.int64)))
+    iB = np.minimum(iB, iT)
+    return lo, step, rows, iB, iT
+
+
+_POC_HIST_MEMO: "OrderedDict[tuple, tuple]" = OrderedDict()   # candle-set key -> (times, pocs); see bloc_poc_hist
+_POC_HIST_MEMO_MAX = 64                                          # a few days of blocs, every one of them small
+
+
+def bloc_poc_hist(m: "MB") -> Optional[tuple]:
+    """(times, pocs): the bloc's POC AS IT WAS after each of its own candles, in time order -- the POC a trader
+    saw while the bloc was still growing (user 2026-09-20: a candle that closed above the POC "at the time the
+    candle formed" is a real division even if the POC has since moved past its close).
+
+    Same grid, same spreading and same tie rule as bloc_poc(), built incrementally: one slice add and one
+    argmax per candle, so the last entry IS bloc_poc(). NaN while the bloc has no volume yet. Cached on the MB."""
+    if m.poc_hist is not None:
+        return m.poc_hist
+    g = _poc_grid(m)
+    if g is None or m.cT is None or int(np.size(m.cT)) != int(np.size(m.cH)):
+        return None
+    lo, step, rows, iB, iT = g
+    v = np.asarray(m.cV, dtype=np.float64)
+    t = np.asarray(m.cT, dtype=np.float64)
+    # ⚠ the FORMING period's rows are rebuilt on every poll (every 10 s) and their candles change once a
+    # minute, so the MB's own cache dies with it: 5 ms per poll on a day-long bloc, measured. The history
+    # is a function of the candle set and the grid, so it is memoised on those -- the same set is free,
+    # a new kline recomputes once.
+    key = (int(t.size), float(t.min()), float(t.max()), float(v.sum()), float(lo), float(step), int(rows))
+    hit = _POC_HIST_MEMO.get(key)
+    if hit is not None:
+        _POC_HIST_MEMO.move_to_end(key)
+        m.poc_hist = hit
+        return hit
+    order = np.argsort(t, kind="stable")
+    vp = np.zeros(rows, dtype=np.float64)
+    pocs = np.full(t.shape[0], np.nan)
+    for n_, i in enumerate(order):
+        a, b = int(iB[i]), int(iT[i])
+        vp[a:b + 1] += float(v[i]) / float(b - a + 1)
+        mx = float(vp.max())
+        if mx > 0:
+            pS = int(np.argmax(vp)); pE = pS
+            while pE < rows - 1 and vp[pE + 1] == mx:
+                pE += 1
+            pocs[n_] = lo + (pS + pE + 1) * 0.5 * step      # the MIDDLE of the POC run, bloc_poc()'s rule
+    m.poc_hist = (t[order], pocs)
+    _POC_HIST_MEMO[key] = m.poc_hist
+    while len(_POC_HIST_MEMO) > _POC_HIST_MEMO_MAX:
+        _POC_HIST_MEMO.popitem(last=False)
+    return m.poc_hist
+
+
+def bloc_poc_runs(m: "MB", min_n: int, step_secs: Optional[float] = None,
+                  causal: bool = True) -> List[Tuple[float, float, int, float]]:
+    """Runs of >= min_n CONSECUTIVE klines that CLOSED on the same side of the bloc's own POC.
 
     -> [(tA, tB, side, ext), ...]; side +1 above / -1 below, and `ext` is how far the run got on that side (its
     highest high above, its lowest low below), so a caller can shade from the POC out to where price reached.
 
-    Three things worth knowing:
-      - SORTED BY cT first. A merged bloc concatenates its members' candle arrays without re-ordering them,
-        and "consecutive" is a statement about time, not about position in an array.
-      - ADJACENT IN TIME, too. A bloc does not hold every candle of its window: _bloc_mask also demands the
-        close sit inside the area's price band, so a bloc's candle list has HOLES where price left the band.
-        Counting neighbours in that filtered list would call five candles either side of a three-hour gap a
-        "run" and shade the whole gap. A run breaks wherever the step between candles exceeds `step_secs`
-        (the timeframe; inferred from the smallest gap present when it is not given).
-      - It needs the OPEN. Without one (a feed that does not carry it) this returns nothing rather than
-        quietly testing the close twice, which would be a different rule wearing this one's name."""
+    The rule (user 2026-09-20): a below-run ends ONLY at a kline that CLOSED above the POC, an above-run only
+    at one that closed below. The open plays no part. And every kline of the bloc's time span counts, not only
+    the ones inside its price band -- a kline that closed below the band's floor is still below the POC and
+    continues a below-run, where the old rule saw a hole and broke it. The one exception the user named: a
+    kline that closed on the other side of the POC AS IT WAS WHEN THE KLINE FORMED (bloc_poc_hist) divides
+    too, because that division was real when it happened, even if the POC has since moved past its close.
+    So a kline joins a run only when its close is on that side by BOTH measures; any other kline divides.
+
+    Still sorted by time and still broken across a gap larger than one step: a merged bloc's members can be
+    hours apart, and a "run" across that gap would shade time that belongs to neither."""
     poc = bloc_poc(m)
-    if poc is None or m.cO is None or m.cC is None or m.cT is None or m.cH is None or m.cL is None:
+    if poc is None:
         return []
-    n = int(np.size(m.cT))
-    if n < int(min_n) or int(np.size(m.cO)) != n or int(np.size(m.cC)) != n or int(np.size(m.cH)) != n:
+    if m.aT is not None and m.aC is not None and m.aH is not None and m.aL is not None:
+        T, C, H, L = m.aT, m.aC, m.aH, m.aL                     # every kline of the span(s)
+    elif m.cT is not None and m.cC is not None and m.cH is not None and m.cL is not None:
+        T, C, H, L = m.cT, m.cC, m.cH, m.cL                     # an older MB: the in-band candles only
+    else:
         return []
-    k = np.argsort(np.asarray(m.cT, dtype=np.float64), kind="stable")
-    t = np.asarray(m.cT, dtype=np.float64)[k]
-    o = np.asarray(m.cO, dtype=np.float64)[k]
-    c = np.asarray(m.cC, dtype=np.float64)[k]
-    hi = np.asarray(m.cH, dtype=np.float64)[k]
-    lo = np.asarray(m.cL, dtype=np.float64)[k]
-    side = np.where((o > poc) & (c > poc), 1, np.where((o < poc) & (c < poc), -1, 0)).astype(np.int64)
+    n = int(np.size(T))
+    if n < int(min_n) or int(np.size(C)) != n or int(np.size(H)) != n or int(np.size(L)) != n:
+        return []
+    k = np.argsort(np.asarray(T, dtype=np.float64), kind="stable")
+    t = np.asarray(T, dtype=np.float64)[k]
+    c = np.asarray(C, dtype=np.float64)[k]
+    hi = np.asarray(H, dtype=np.float64)[k]
+    lo = np.asarray(L, dtype=np.float64)[k]
+    side = np.sign(c - poc).astype(np.int64)                    # by the POC as DRAWN
+    if causal:
+        hist = bloc_poc_hist(m)
+        if hist is not None and hist[0].size:
+            ht, hp = hist
+            j = np.searchsorted(ht, t, side="right") - 1          # the last own candle at or before this kline
+            then = np.where(j >= 0, hp[np.maximum(j, 0)], np.nan)
+            side_then = np.where(np.isfinite(then), np.sign(c - then), side).astype(np.int64)
+            side = np.where(side_then == side, side, 0)           # on that side by BOTH measures, or a divider
     step = float(step_secs) if (step_secs is not None and step_secs > 0) else 0.0
     if not step > 0:
         d = np.diff(t)
@@ -1214,18 +1306,31 @@ def fill_row_candles(cand: Candles, areas: List[TPArea], bl: List[Bloc], rows: L
             continue
         sel = np.zeros(len(cand), dtype=bool)
         yLo = yHi = None
+        sel_all = np.zeros(cand.t.shape[0], dtype=bool)
+        spans = []
         for g in m.grp:
             gb = bl[g]
             ga = areas[gb.area]
             yLo = ga.yBot if yLo is None else min(yLo, ga.yBot)
             yHi = ga.yTop if yHi is None else max(yHi, ga.yTop)
-            sel |= _bloc_mask(cand, ga, t0 + gb.bs * bin_secs, t0 + gb.be * bin_secs)
+            tS, tE = t0 + gb.bs * bin_secs, t0 + gb.be * bin_secs
+            sel |= _bloc_mask(cand, ga, tS, tE)
+            sel_all |= (cand.t >= tS) & (cand.t < tE)
+            spans.append((float(tS), float(tE)))
         m.cH = cand.h[sel].copy()
         m.cL = cand.l[sel].copy()
         m.cV = cand.v[sel].copy()
         m.cC = cand.c[sel].copy()
         m.cT = cand.t[sel].copy()
         m.cO = None if cand.o is None else cand.o[sel].copy()
+        # every kline of the bloc's span(s), for the POC runs: a kline that closed OUTSIDE the band is not one
+        # of the bloc's candles, but it is still a candle that closed on one side of the POC
+        m.spans = spans
+        m.aT = cand.t[sel_all].copy()
+        m.aC = cand.c[sel_all].copy()
+        m.aH = cand.h[sel_all].copy()
+        m.aL = cand.l[sel_all].copy()
+        m.aO = None if cand.o is None else cand.o[sel_all].copy()
         m.yLo, m.yHi = yLo, yHi
         m.pStep = step
 
@@ -1315,6 +1420,9 @@ def collage(a: MB, o: MB, name: str, from_: str, p: Params) -> MB:
     def _cat(x, y):
         return None if (x is None or y is None) else np.concatenate((x, y))
     _cc, _ct, _co = _cat(a.cC, o.cC), _cat(a.cT, o.cT), _cat(a.cO, o.cO)
+    _at, _ac, _ah, _al, _ao = (_cat(a.aT, o.aT), _cat(a.aC, o.aC), _cat(a.aH, o.aH), _cat(a.aL, o.aL),
+                               _cat(a.aO, o.aO))
+    _spans = (list(a.spans) if a.spans else []) + (list(o.spans) if o.spans else [])
     yLo = _nmin(a.yLo, o.yLo)
     yHi = _nmax(a.yHi, o.yHi)
     nVah = nVal = nVah2 = nVal2 = None
@@ -1336,6 +1444,7 @@ def collage(a: MB, o: MB, name: str, from_: str, p: Params) -> MB:
     return MB(a.area, name, _join_members(a.members, o.members), [], a.mins + o.mins, a.vol + o.vol,
               _nmin(a.tA, o.tA), _nmax(a.tB, o.tB), nVah, nVal, _nmin(a.vaA, o.vaA), _nmax(a.vaB, o.vaB), True,
               col=a.col, yLo=yLo, yHi=yHi, cH=h, cL=l, cV=v, cC=_cc, cT=_ct, cO=_co,
+              aT=_at, aC=_ac, aH=_ah, aL=_al, aO=_ao, spans=_spans or None,
               mergedFrom=from_, pStep=a.pStep,
               dFirst=_nmin(a.dFirst, o.dFirst), dLast=_nmax(a.dLast, o.dLast), dName=a.dName,
               bHi=_nmax(a.bHi, o.bHi), bLo=_nmin(a.bLo, o.bLo), vah2=nVah2, val2=nVal2, usd=a.usd + o.usd)

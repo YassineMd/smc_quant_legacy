@@ -675,9 +675,14 @@ HLH_TP_BLOCS = True             # label each bloc (time + volume)
 HLH_TP_TOTAL = True             # label the D area total
 HLH_TP_PEAK = False             # label the busiest bin
 HLH_SHOW_VA = True              # VAH / VAL of each bloc (the Block Lines)
-HLH_SHOW_POC_RUNS = True        # shade a run of >= HLH_POC_RUN_MIN candles whose OPEN and CLOSE are BOTH
-#                                 above (or both below) a bloc's POC -- acceptance on one side of it. The area
-#                                 spans the run's time and runs from the POC out to the run's furthest price.
+HLH_SHOW_POC_RUNS = True        # shade a run of >= HLH_POC_RUN_MIN klines that CLOSED above (or all below)
+#                                 a bloc's POC -- acceptance on one side of it. Only a CLOSE on the other side
+#                                 divides a run (user 2026-09-20: the open plays no part, and a kline outside
+#                                 the bloc's price band still counts by its close). The area spans the run's
+#                                 time and runs from the POC out to the run's furthest price.
+HLH_POC_RUN_CAUSAL = True       # the user's exception: a kline that closed across the POC AS IT WAS when the
+#                                 kline formed (the bloc's POC from its candles up to then) divides too, even
+#                                 if the POC has since moved past its close -- that division was real then.
 #                                 This is the DEFAULT of the hamburger sub-toggle 'm10_hlh_pocruns', which is
 #                                 what actually gates the drawing; it persists with the rest of the menu.
 HLH_POC_RUN_MIN = 5             # how many candles in a row make a group (the user's number)
