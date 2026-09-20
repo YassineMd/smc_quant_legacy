@@ -19538,11 +19538,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _dmemo.append(self._px_rating_depth(t, t_end, done, move, is_buy, strong, cbuy, csell))
             return _dmemo[0]
 
-        gained = self._px_cache_merge(_a, f1, t, t_end, done, px0, px1, pxh, pxl, _cols, _depth, view=(vx0, vx1))
+        gained = self._px_cache_merge(_a, f1, t, t_end, done, px0, px1, pxh, pxl, _cols, _depth, view=(vx0, vx1),
+                                      authority=False)     # a FILL read adds; only the pane's main read retires
         self._px_fills = self.__dict__.get("_px_fills", 0) + 1
         return gained
 
-    def _px_cache_merge(self, a, b, t, t_end, done, px0, px1, pxh, pxl, cols_fn, depth_fn, view=None) -> int:
+    def _px_cache_merge(self, a, b, t, t_end, done, px0, px1, pxh, pxl, cols_fn, depth_fn, view=None,
+                        authority: bool = True) -> int:
         """Fold one read's cycles into the pane's CACHE. Returns how many entries it gained or upgraded.
 
         The cache is what makes a zoom free (user 2026-09-12: "keep them on chart even if I zoom on 1
@@ -19599,7 +19601,31 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         live tape arrives, the run a cached cycle heads can swallow the next one, so the SAME start comes
         back with a later end. That is why an extension replaces the entry outright and the overlap guard
         below then drops the neighbour now inside it -- without that, the cache kept 5 stale short candles
-        while the store had already merged them."""
+        while the store had already merged them.
+
+        ⚠⚠⚠ NOR DOES IT SURVIVE TAPE THAT LANDS LATE (user 2026-09-20, the SECOND "the live candle is printing
+        in front of the previous candle"). A cycle's start is the INTERPOLATED crossing of the two rolling
+        sums, so a gap fill anywhere in the 60 s behind a cross moves that start by a fraction of a second --
+        and an exact-start key then reads the SAME cycle as a NEW one. The old entry was never replaced, and
+        the overlap guard keeps whichever candle starts EARLIER: the stale one. Every fresh row inside it was
+        rejected, tick after tick, and at the live edge the stale candle sat under the forming one.
+        REPRODUCED on real tape with a hole punched and then filled (scratch probe_px_gapfill_overlap.py):
+        51% of fills moved a boundary the cache had learnt, 8 of 600 left the cache wrong -- a finished cycle
+        missing behind a stale neighbour ending ~1 s late, or a candle reaching into the forming cycle for
+        up to 16 ticks. A replay of FINAL tape (12 h, 21,601 steps) shows none of it: its boundaries never
+        move. Two rules close it:
+          * a row is the cycle the cache already holds when their starts agree within _TOL_S (1 s: two real
+            cycle starts are at least the 20 s hold apart). It keeps its key while nothing about it changed,
+            and is re-keyed when it is replaced or re-rated;
+          * THE PANE'S MAIN READ IS AUTHORITATIVE OVER THE SPAN IT TILES. Its rows are contiguous, so a
+            cached candle that reaches into that span and starts where no finished row does is a boundary
+            the tape no longer has, and it goes -- before the overlap guard can prefer it. The first row is
+            left out (its head may repeat a colour whose own head lies beyond the read's context), a read
+            panned off the live edge keeps whatever starts at or after its last row (that row is cut by the
+            read's edge, not by the tape), and a FILL read is not authoritative at all: it shares a seam
+            with the main read and the two would retire each other's candles every tick.
+        The live-edge swallow below is now a special case of the second rule and is kept as its own
+        statement of intent."""
         n = int(np.size(t))
         if n < 2:
             return 0
@@ -19610,21 +19636,48 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _key = (int(self._lb_n()), round(float(self._flow_win), 3))
         if _key != getattr(self, "_px_cache_lb", None):
             self._px_cache = {}
+            self._px_cache_rev = int(self.__dict__.get("_px_cache_rev", 0)) + 1
             self._px_cache_lb = _key
             self._px_arr = None
             self._px_pic_win = None
         cache = self._px_cache
         _N = int(self._lb_n())
         _R = int(getattr(self._flow, "rev_hist", 0))                  # the tape-behind-you revision NOW
+        _TOL_S = 1.0                              # two starts this close are ONE cycle (see the docstring)
+        _srt = []                                 # the cache as sorted (starts, ends), built on first need
+
+        def _sorted():
+            if not _srt:
+                _pa = self.__dict__.get("_px_arr")
+                if _pa is not None and int(np.size(_pa[0])) == len(cache):
+                    _srt.append((np.asarray(_pa[0], dtype=np.float64), np.asarray(_pa[1], dtype=np.float64)))
+                else:
+                    _q = sorted(cache)
+                    _srt.append((np.array([cache[_z][0] for _z in _q], dtype=np.float64),
+                                 np.array([cache[_z][1] for _z in _q], dtype=np.float64)))
+            return _srt[0]
+
         # PASS 1 -- which rows does the cache actually want? No colours are computed to answer this, and
         # the depth only when a cached entry is not final yet.
         _dep = None
         _want = []
+        _gone = set()                             # keys to retire: re-keyed, untrustworthy, or stale (below)
         for k in range(n - 1):                    # never the last row -- see the docstring
             if not bool(done[k]):
                 continue                          # provisional: its end and its volume can still move
             key = round(float(t[k]), 3)
             old = cache.get(key)
+            okey = key
+            if old is None and cache:
+                # the SAME cycle under a start that moved a fraction of a second (late tape behind the cross)
+                _cs, _ce = _sorted()
+                _j = int(np.searchsorted(_cs, float(t[k])))
+                for _q in (_j - 1, _j):
+                    if 0 <= _q < _cs.size and abs(float(_cs[_q]) - float(t[k])) <= _TOL_S:
+                        _nk = round(float(_cs[_q]), 3)
+                        if _nk in cache:
+                            old = cache[_nk]; okey = _nk
+                            break
             if old is not None and abs(float(t_end[k]) - float(old[1])) <= 0.5:
                 _older = int(old[8]) != _R                       # the tape behind that rating has changed
                 if int(old[7]) >= _N and not _older:
@@ -19639,7 +19692,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                         continue                  # this read stands on no more history than that rating did
             if not (np.isfinite(px0[k]) and np.isfinite(px1[k])
                     and np.isfinite(pxh[k]) and np.isfinite(pxl[k])):
+                if old is not None:
+                    _gone.add(okey)               # its end moved and the row that replaces it cannot be priced
                 continue
+            if okey != key:
+                _gone.add(okey)                   # re-keyed: the entry moves to the start the tape has now
             _want.append((k, key, old))
         # THE FORMING ROW CAN SWALLOW A CACHED CANDLE (user 2026-09-20: "the live bar overlapping the previous
         # one"). crosses() folds consecutive same-colour cycles into the first, so as the forming run develops
@@ -19650,13 +19707,63 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # row's start lies inside the forming cycle and goes. A fill read's last row is only cut by that
         # read's right edge, and its full version, cached from the main read, must stay.
         _dropped = 0
-        if not bool(done[-1]) and float(b) >= time.time() - float(config.INTERP_STALE_SECS):
+        _live = (not bool(done[-1])) and float(b) >= time.time() - float(config.INTERP_STALE_SECS)
+        if _live:
             _f0 = float(t[-1]) - 0.5
             for _k in [k_ for k_ in cache if k_ >= _f0]:
                 del cache[_k]
                 _dropped += 1
+                _gone.discard(_k)
+        # THE MAIN READ IS AUTHORITATIVE OVER THE SPAN IT TILES (see the docstring): a cached candle that
+        # reaches past the second row's start and begins where no finished row does is a boundary the tape no
+        # longer has. Vectorised over the cache: two masks and one searchsorted, ~40 us at the 400-row cap.
+        # ⚠ SKIPPED while nothing it depends on has changed since it last ran -- the rows' starts and done
+        # flags, the live gate, and the cache itself (_px_cache_rev, bumped on every change below). It cost
+        # +86 us on an idle tick (191 -> 277 us on a 141-row read, A/B against HEAD on identical reads);
+        # the two hashes are ~5 us, and the steady state is dict lookups again.
+        _asig = None
+        if authority and n >= 3 and cache:
+            _asig = (hash(np.ascontiguousarray(t, dtype=np.float64).tobytes()),
+                     hash(np.ascontiguousarray(done, dtype=bool).tobytes()), bool(_live),
+                     int(self.__dict__.get("_px_cache_rev", 0)))
+        if _asig is not None and (_dropped or _gone or _asig != self.__dict__.get("_px_auth_sig")):
+            self._px_auth_sig = _asig
+            if _dropped:
+                _srt.clear()                      # the arrays above predate the drop
+            _cs, _ce = _sorted()
+            _m = _ce > float(t[1]) + 0.5
+            if not _live:
+                _m &= _cs < float(t[-1]) - _TOL_S  # at or after a CUT last row: not this read's to judge
+            if _m.any():
+                _dn = np.asarray(done[:n - 1], dtype=bool)
+                _valid = np.asarray(t[:n - 1], dtype=np.float64)[_dn]
+                if not _live:
+                    _valid = np.append(_valid, float(t[-1]))
+                _ix = np.flatnonzero(_m)
+                if _valid.size:
+                    _p = np.searchsorted(_valid, _cs[_ix])
+                    _pl = np.clip(_p - 1, 0, _valid.size - 1); _pr = np.clip(_p, 0, _valid.size - 1)
+                    _dl = np.abs(_cs[_ix] - _valid[_pl]); _dr = np.abs(_cs[_ix] - _valid[_pr])
+                    _dm = np.minimum(_dl, _dr)
+                    _row = np.where(_dl <= _dr, _pl, _pr)
+                    _ok = _dm <= _TOL_S
+                    # two cached candles claiming the SAME row (one keyed before the start moved, one after):
+                    # the nearer is the row, the other is its ghost
+                    _rk = _row[_ok]
+                    if _rk.size > 1 and np.unique(_rk).size < _rk.size:
+                        _oi = np.flatnonzero(_ok)
+                        for _r in np.unique(_rk[np.flatnonzero(np.bincount(_rk)[_rk] > 1)]):
+                            _g = _oi[_rk == _r]
+                            _ok[_g[np.argsort(_dm[_g], kind="stable")[1:]]] = False
+                    _ix = _ix[~_ok]
+                for _q in _ix:
+                    _gone.add(round(float(_cs[_q]), 3))
+        for _k in _gone:
+            if cache.pop(_k, None) is not None:
+                _dropped += 1
         if not _want:
             if _dropped:
+                self._px_cache_rev = int(self.__dict__.get("_px_cache_rev", 0)) + 1
                 _ks = sorted(cache)
                 if _ks:
                     _m = np.array([cache[_k] for _k in _ks], dtype=np.float64)
@@ -19672,7 +19779,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         gained = 0
         for k, key, old in _want:
             ci = int(cols[k]); dk = int(_dep[k])
-            if old is not None and abs(float(t_end[k]) - float(old[1])) <= 0.5:
+            if (old is not None and abs(float(t_end[k]) - float(old[1])) <= 0.5
+                    and round(float(old[0]), 3) == key):
                 cache[key] = old[:6] + (ci, dk, float(_R), float(a))   # the same cycle, re-rated: colour, depth, R, from where
             else:
                 # ⚠⚠ a cycle ALREADY CACHED can legitimately GROW: crosses() MERGES consecutive same-side
@@ -19691,6 +19799,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         gained += _dropped
         if not gained:
             return 0
+        self._px_cache_rev = int(self.__dict__.get("_px_cache_rev", 0)) + 1
         _cap = int(config.PX_CACHE_MAX)
         if len(cache) > _cap:
             # ⚠ EVICT BY DISTANCE FROM THE READ, not by age. "Keep the newest" is exactly backwards for a
