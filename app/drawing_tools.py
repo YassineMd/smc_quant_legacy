@@ -945,11 +945,22 @@ class ShapeHandles(QtCore.QObject):
 class DrawingController(QtCore.QObject):
     selectionChanged = QtCore.Signal()   # Magic-Selection rect created / resized / cleared
 
-    def __init__(self, plot: pg.PlotWidget, persist: bool = True):
+    def __init__(self, plot: pg.PlotWidget, persist: bool = True, store: Optional[str] = None,
+                 shape_z: Optional[float] = None):
         super().__init__()
         self.plot = plot
         self.vb = plot.getViewBox()
         self._persist = persist        # False -> in-memory only (no load/save); e.g. the 1m-detail popup's own drawings
+        # A NAMED time-space store (2026-09-20, the Flow-mode PRICE pane's controller): its shapes and brackets
+        # persist under payload[store][SYMBOL] instead of payload[SYMBOL], so a second controller on a CLOCK
+        # axis (x = unix seconds) can never read or overwrite the main chart's drawings. Saves merge with the
+        # disk BY ID like the Idx layer (another window's drawings survive ours), deletions are tombstoned,
+        # and undo / redo cover this layer. `shape_z` lifts its shapes above a pane's own candles.
+        self._store = store
+        self._shape_z = shape_z
+        self._ts_deleted: set = set()  # ids erased THIS session in the named store (merge tombstones)
+        self._loading = False          # _load builds through the same paths a user does: they must not save
+        self._disposed = False
         self.active_tool: Optional[str] = None
         self.locked: bool = False      # True while a NON-canvas scanner mode owns the view
         self.index_mode: bool = False  # True on Mode 10 (bucket_canvas): session-only drawings
@@ -1089,6 +1100,8 @@ class DrawingController(QtCore.QObject):
                 store.remove(br); br.remove(); removed = True
                 if store is self._idx_brackets and uid:
                     self._idx_deleted.add(uid)
+                elif self._store and uid:
+                    self._ts_deleted.add(uid)
         if removed:
             self._save(); self._schedule_idx_save()
 
@@ -1258,6 +1271,8 @@ class DrawingController(QtCore.QObject):
         else:  # hline / vline
             self._live = DrawnShape(tool, [[x, y]])
         self.plot.addItem(self._live)
+        if self._shape_z is not None:
+            self._live.setZValue(self._shape_z)
 
     def _update_draw(self, x: float, y: float) -> None:
         if self._live is None or self._drag_start is None:
@@ -1346,7 +1361,8 @@ class DrawingController(QtCore.QObject):
         self.selectionChanged.emit()
 
     # ------------------------------------------------------------------
-    def _make_bracket(self, kind, a, b, entry=None, stop=None, target=None, target2=None, tp2_on=False) -> PositionBracket:
+    def _make_bracket(self, kind, a, b, entry=None, stop=None, target=None, target2=None, tp2_on=False,
+                      uid=None) -> PositionBracket:
         x0, x1 = sorted((a[0], b[0]))
         if entry is None:
             entry = a[1]
@@ -1356,6 +1372,10 @@ class DrawingController(QtCore.QObject):
             else:
                 stop, target = entry + risk, entry * 0.994      # default TP = -0.6% from entry
         bracket = PositionBracket(self.plot, kind, x0, x1, entry, stop, target, target2=target2, tp2_on=tp2_on)
+        if uid:
+            bracket.uid = uid                    # a reload keeps its identity (the sim state is keyed by it)
+        elif self._store and not self.index_mode:
+            bracket.uid = uuid.uuid4().hex       # identity for the named store's merge-by-id saves
         if self.index_mode:
             if not hasattr(bracket, "uid"):
                 bracket.uid = uuid.uuid4().hex
@@ -1385,6 +1405,8 @@ class DrawingController(QtCore.QObject):
 
     def _commit_shape(self, shape: DrawnShape) -> None:
         self.plot.addItem(shape)
+        if self._shape_z is not None:
+            shape.setZValue(self._shape_z)
         if self.index_mode:
             if not hasattr(shape, "uid"):
                 shape.uid = uuid.uuid4().hex     # identity for multi-window merge-by-id saves
@@ -1393,6 +1415,8 @@ class DrawingController(QtCore.QObject):
             self._idx_shapes.append(shape)       # Mode 10 index space (Idx-anchored, persisted)
             self._schedule_idx_save()
         else:
+            if self._store and not hasattr(shape, "uid"):
+                shape.uid = uuid.uuid4().hex     # identity for the named store's merge-by-id saves
             self.shapes.append(shape)
             self._save()
 
@@ -1428,6 +1452,8 @@ class DrawingController(QtCore.QObject):
                     self.plot.removeItem(s); store.remove(s)
                     if store is self._idx_shapes and hasattr(s, "uid"):
                         self._idx_deleted.add(s.uid)
+                    elif self._store and hasattr(s, "uid"):
+                        self._ts_deleted.add(s.uid)           # named store: don't resurrect from disk
             self._picked = None
             self.edit_panel.hide(); self.handles.clear()
             self._save(); self._schedule_idx_save()
@@ -1449,12 +1475,16 @@ class DrawingController(QtCore.QObject):
                     self.plot.removeItem(s); store.remove(s)
                     if store is self._idx_shapes and hasattr(s, "uid"):
                         self._idx_deleted.add(s.uid)          # tombstone: don't resurrect from disk
+                    elif self._store and hasattr(s, "uid"):
+                        self._ts_deleted.add(s.uid)
         for store in (self.brackets, self._idx_brackets):
             for br in list(store):
                 if br.near(x, y, tol_x, tol_y):
                     br.remove(); store.remove(br)
                     if store is self._idx_brackets and hasattr(br, "uid"):
                         self._idx_deleted.add(br.uid)
+                    elif self._store and hasattr(br, "uid"):
+                        self._ts_deleted.add(br.uid)
         self.handles.clear()   # a selected shape may have been erased -> drop its handles
         self._save()
         self._schedule_idx_save()
@@ -1469,6 +1499,8 @@ class DrawingController(QtCore.QObject):
                 self._idx_deleted.add(br.uid)
         self._idx_deleted.update(d.get("id") for d in self._idx_pending if d.get("id"))
         self._idx_pending = []
+        if self._store:
+            self._ts_deleted.update(o.uid for o in self.shapes + self.brackets if hasattr(o, "uid"))
         for s in self.shapes + self._idx_shapes:
             self.plot.removeItem(s)
         for br in self.brackets + self._idx_brackets:
@@ -1573,6 +1605,11 @@ class DrawingController(QtCore.QObject):
 
     def _snapshot(self) -> Optional[dict]:
         """The full Idx drawing set in GLOBAL coords + the delete-tombstones, or None when unavailable."""
+        if self._store and not self.index_mode:
+            # the NAMED time-space store: plain (x, y) dicts -- there is no Idx frame to translate through.
+            # Brackets stay out of it for the same reason as below: they are live paper trades.
+            return {"ts": [dict(s.to_dict(), id=getattr(s, "uid", None)) for s in self.shapes],
+                    "deleted": set(self._ts_deleted)}
         if not self.index_mode or self._idx_off is None:
             return None
         off = self._idx_off
@@ -1595,6 +1632,22 @@ class DrawingController(QtCore.QObject):
     def _restore(self, st: dict) -> None:
         """Rebuild the Idx set from a snapshot: drop the rendered items, swap in the snapshot as the
         pending set, and let _render_idx_pending re-materialise whatever is inside the window."""
+        if "ts" in st:
+            before = {getattr(s, "uid", None) for s in self.shapes}
+            for s in list(self.shapes):
+                self.plot.removeItem(s)
+            self.shapes.clear()
+            self.handles.clear(); self._picked = None
+            self.edit_panel.hide()
+            keep = {d.get("id") for d in st["ts"]}
+            # what was on the pane a moment ago and is absent from the snapshot must be TOMBSTONED: the merge
+            # in _save would otherwise read it back off the disk as another window's drawing, and the undo
+            # would not survive a reload
+            self._ts_deleted = set(st["deleted"]) | {u for u in before if u and u not in keep}
+            for d in st["ts"]:
+                self._add_ts_shape(d)
+            self._save()
+            return
         self._idx_busy = True          # a rebuild must not re-enter set_idx_frame via selectionChanged
         try:
             for s in list(self._idx_shapes):
@@ -1902,7 +1955,7 @@ class DrawingController(QtCore.QObject):
     # Persistence (replaces browser localStorage, spec §8.3)
     # ------------------------------------------------------------------
     def _save(self) -> None:
-        if not self._persist:
+        if not self._persist or self._loading or self._disposed:
             return
         try:
             config.ensure_data_dir()
@@ -1913,14 +1966,96 @@ class DrawingController(QtCore.QObject):
                         payload = json.load(f)
                 except (OSError, json.JSONDecodeError):
                     payload = {}
-            payload[config.SYMBOL] = {
-                "shapes": [s.to_dict() for s in self.shapes],
-                "brackets": [b.to_dict() for b in self.brackets],
-            }
+            if self._store:
+                sec = payload.get(self._store)
+                if not isinstance(sec, dict):
+                    sec = payload[self._store] = {}
+                sec[config.SYMBOL] = self._store_entry(sec.get(config.SYMBOL))
+            else:
+                payload[config.SYMBOL] = {
+                    "shapes": [s.to_dict() for s in self.shapes],
+                    "brackets": [b.to_dict() for b in self.brackets],
+                }
             with open(_DRAW_FILE, "w") as f:
                 json.dump(payload, f)
         except OSError:
             pass
+
+    def _store_entry(self, disk) -> dict:
+        """The named store's entry: this controller's drawings, then whatever the disk holds that we neither
+        own nor deleted here -- another window's -- exactly as the Idx layer merges."""
+        disk = disk if isinstance(disk, dict) else {}
+        for o in self.shapes + self.brackets:
+            if not hasattr(o, "uid"):
+                o.uid = uuid.uuid4().hex
+        mine_s = [dict(o.to_dict(), id=o.uid) for o in self.shapes]
+        mine_b = [dict(o.to_dict(), id=o.uid) for o in self.brackets]
+        ids = {d["id"] for d in mine_s} | {d["id"] for d in mine_b}
+
+        def _foreign(items):
+            return [d for d in (items or []) if isinstance(d, dict) and d.get("id")
+                    and d["id"] not in ids and d["id"] not in self._ts_deleted]
+        return {"shapes": mine_s + _foreign(disk.get("shapes")),
+                "brackets": mine_b + _foreign(disk.get("brackets"))}
+
+    def _add_ts_shape(self, d: dict) -> "DrawnShape":
+        """Materialise one saved time-space shape on the plot (a load, or an undo / redo of the named store)."""
+        shape = DrawnShape(d["kind"], d["pts"], d.get("color", "#ffffff"), d.get("width", 2),
+                           d.get("fill_color", "#3498db"), d.get("fill_opacity", 0.0))
+        if self._store:
+            shape.uid = d.get("id") or uuid.uuid4().hex
+        self.shapes.append(shape)
+        self.plot.addItem(shape)
+        if self._shape_z is not None:
+            shape.setZValue(self._shape_z)
+        return shape
+
+    def hit(self, x: float, y: float) -> bool:
+        """Is a drawing under this view point, at the select tool's own tolerance? No side effects: a host pane
+        asks before it treats a click as its own (the PRICE pane's click-a-candle)."""
+        try:
+            (x0, x1), (y0, y1) = self.vb.viewRange()
+            tol_x = (x1 - x0) * 0.015
+            tol_y = (y1 - y0) * 0.015
+            return (any(s.near(x, y, tol_x, tol_y) for s in self.shapes + self._idx_shapes)
+                    or any(b.near(x, y, tol_x, tol_y) for b in self.brackets + self._idx_brackets))
+        except Exception:
+            return False
+
+    def dispose(self) -> None:
+        """Detach from a plot that is going away (a pane torn down with its splitter). Nothing is saved here --
+        every edit already was -- and every Qt call is guarded: the C++ side may be gone before we are told.
+        A running position's sim state is stashed by id first, so the next controller on the rebuilt pane
+        resumes it instead of re-arming it PENDING."""
+        for br in self.brackets:
+            try:
+                self._save_sim(br)
+            except Exception:
+                pass
+        self._disposed = True
+        try:
+            self.plot.scene().sigMouseClicked.disconnect(self._on_click)
+        except Exception:
+            pass
+        try:
+            self.vb.mouseDragEvent = self._orig_drag
+        except Exception:
+            pass
+        try:
+            self._idx_save.stop()
+        except Exception:
+            pass
+        for fn in (self.handles.clear, self.sel_handles.clear):
+            try:
+                fn()
+            except Exception:
+                pass
+        try:
+            self.edit_panel.hide(); self.edit_panel.setParent(None); self.edit_panel.deleteLater()
+        except Exception:
+            pass
+        self.shapes = []; self.brackets = []; self._live = None; self._picked = None
+        self.active_tool = None; self.toolbar = None
 
     def _load(self) -> None:
         if not os.path.exists(_DRAW_FILE):
@@ -1930,14 +2065,19 @@ class DrawingController(QtCore.QObject):
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
             return
-        entry = data.get(config.SYMBOL, {})
+        if self._store:
+            entry = (data.get(self._store) or {}).get(config.SYMBOL) or {}
+        else:
+            entry = data.get(config.SYMBOL, {})
         shapes = entry.get("shapes", entry) if isinstance(entry, dict) else entry  # back-compat
-        for d in (shapes or []):
-            shape = DrawnShape(d["kind"], d["pts"], d.get("color", "#ffffff"), d.get("width", 2),
-                               d.get("fill_color", "#3498db"), d.get("fill_opacity", 0.0))
-            self.shapes.append(shape)
-            self.plot.addItem(shape)
-        for d in (entry.get("brackets", []) if isinstance(entry, dict) else []):
-            self._make_bracket(d["kind"], [d["x0"], d["entry"]], [d["x1"], d["stop"]],
-                               entry=d["entry"], stop=d["stop"], target=d["target"],
-                               target2=d.get("target2"), tp2_on=d.get("tp2_on", False))
+        self._loading = True           # _make_bracket saves as it builds: mid-load that would write half a set
+        try:
+            for d in (shapes or []):
+                self._add_ts_shape(d)
+            for d in (entry.get("brackets", []) if isinstance(entry, dict) else []):
+                self._make_bracket(d["kind"], [d["x0"], d["entry"]], [d["x1"], d["stop"]],
+                                   entry=d["entry"], stop=d["stop"], target=d["target"],
+                                   target2=d.get("target2"), tp2_on=d.get("tp2_on", False),
+                                   uid=d.get("id"))
+        finally:
+            self._loading = False

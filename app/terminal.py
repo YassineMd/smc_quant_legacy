@@ -1850,6 +1850,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_follow = True       # right edge pinned to 'now' until the user pans away
         self._flow_resub_t = 0.0
         self._px_plot = None           # PRICE pane (Flow mode): the one pane ABOVE the main chart
+        self._px_drawer = None         # ... and its OWN drawing controller: Flow mode draws there and nowhere else
+        self._px_sim_state = {}        # its positions' paper-sim snapshots by id, kept across a pane rebuild
         self._px_curve = None          # the price LINE: kept for the degenerate case of <2 candles
         self._px_candles = None        # BucketCandleItem -- the main chart's own candle item, reused
         self._px_pline = None          # live-price dashed rule + right-edge pill (the bucket canvas's design)
@@ -2561,7 +2563,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # --- drawing controller ---
         self.drawer = DrawingController(self.plot)
         self.drawer.toolbar = self.drawbar         # §7.3 — enables auto-revert
-        self.drawbar.toolSelected.connect(self.drawer.set_tool)
+        self.drawbar.toolSelected.connect(self._on_draw_tool)   # the main chart's, or the Flow PRICE pane's
         self.drawbar.show()    # toolbar ON by default — the menu's 'drawing' checkbox is checked, but its
                                # toggled signal isn't wired yet at build, so show it explicitly (resizeEvent
                                # positions it top-centre once the window lays out).
@@ -2599,7 +2601,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             pass
         self.alerts.set_mode("LIVE"); self.alerts.set_balance(self.paper_live.balance)
         self.alerts.clearRequested.connect(self._on_clear_paper)
-        QtGui.QShortcut(QtGui.QKeySequence("Escape"), self, activated=self.drawer.cancel)
+        QtGui.QShortcut(QtGui.QKeySequence("Escape"), self, activated=self._draw_cancel)
         # Both arrows move the Magic Selection's RIGHT edge only: Right = +1 bucket (extend), Left = -1
         # (pull back). Left edge stays; clamped to >= 1 bucket of width. No-op without a selection.
         QtGui.QShortcut(QtGui.QKeySequence("Right"), self, activated=self._on_sel_right)   # +1 bucket / replay: next candle
@@ -2660,8 +2662,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("0"), self, activated=self._toggle_panel0)    # panel 0: smoothed P9
         QtGui.QShortcut(QtGui.QKeySequence("W"), self, activated=self._toggle_whisker)   # volume-quantile whisker bars
         QtGui.QShortcut(QtGui.QKeySequence("Z"), self, activated=self._z4_deactivate_all)   # turn OFF all 4h V/Z overlays
-        QtGui.QShortcut(QtGui.QKeySequence("Delete"), self, activated=lambda: self.drawer.delete_selected())
-        QtGui.QShortcut(QtGui.QKeySequence("Backspace"), self, activated=lambda: self.drawer.delete_selected())
+        QtGui.QShortcut(QtGui.QKeySequence("Delete"), self, activated=lambda: self._draw_delete_selected())
+        QtGui.QShortcut(QtGui.QKeySequence("Backspace"), self, activated=lambda: self._draw_delete_selected())
         QtGui.QShortcut(QtGui.QKeySequence("T"), self, activated=self._toggle_phase_table)  # phase table (no panel needed)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=spawn_window)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), self, activated=self._save_drawings_now)  # force-flush drawings + confirm
@@ -2894,6 +2896,18 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.drawer.index_mode = is_canvas
         if not is_canvas:
             self.drawer.cancel()   # drop any armed tool + hide its edit panel
+        # In FLOW mode the drawing bar drives the PRICE pane's own controller and nothing else (user 2026-09-20:
+        # "ONLY on the price chart") -- see _on_draw_tool. Magic Selection aggregates Mode-10 buckets, and a
+        # clock axis has none, so its button greys out there.
+        try:
+            self.drawbar.buttons["magic_select"].setEnabled(mode != "flow")
+        except Exception:
+            pass
+        _pdc = self.__dict__.get("_px_drawer")
+        if _pdc is not None:
+            _pdc.locked = mode != "flow"
+            if mode != "flow":
+                _pdc.cancel()
         self._hide_price_overlays()
         self._apply_chart_theme(self._simple_bw())   # enhancement §3 (+ Chart Style: a mode switch keeps Simple BW)
         self._scanner_needs_autofit = True       # one-shot fit for the new mode
@@ -3017,6 +3031,65 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             return None
         return ts - max(2 * config.TF_SECONDS.get(tf, 60), 300)
 
+    # ------------------------------------------------------------------
+    # The drawing bar has TWO possible targets (2026-09-20): the main chart's controller, and -- in Flow mode,
+    # where the user asked for drawings "ONLY on the price chart" -- the PRICE pane's own.
+    # ------------------------------------------------------------------
+    def _draw_target(self):
+        """The controller the drawing bar drives right now. In Flow mode that is the PRICE pane's own (None while
+        that pane is off: there is then nowhere to draw); everywhere else it is the main chart's."""
+        if self.scanner_mode == "flow":
+            _dc = self.__dict__.get("_px_drawer")
+            _pw = self.__dict__.get("_px_plot")
+            try:
+                return _dc if (_dc is not None and _pw is not None and _pw.isVisible()) else None
+            except RuntimeError:
+                return None
+        return self.drawer
+
+    def _on_draw_tool(self, tool: str) -> None:
+        """A drawing-bar button: hand the tool to whichever controller owns the view."""
+        d = self._draw_target()
+        if d is None:
+            self.drawbar.select_tool("select")
+            QtWidgets.QToolTip.showText(QtGui.QCursor.pos(),
+                                        "In Flow mode drawings live on the PRICE pane -- turn it on in the menu", self)
+            return
+        if d is not self.drawer:
+            if tool == "magic_select":          # a Mode-10 bucket statistic: nothing to aggregate on a clock axis
+                self.drawbar.select_tool("select"); tool = "select"
+        elif d.locked and tool in ("delete_all", "undo", "redo"):
+            return                              # a locked chart's drawings are off screen: never act on them blind
+        d.set_tool(tool)
+
+    def _draw_cancel(self) -> None:
+        """Escape / the 'drawing' toggle going off: disarm both controllers (only one can be armed, but a stale
+        tool on the hidden one would come back with its view)."""
+        self.drawer.cancel()
+        _pdc = self.__dict__.get("_px_drawer")
+        if _pdc is not None:
+            try:
+                _pdc.cancel()
+            except Exception:
+                pass
+
+    def _draw_delete_selected(self) -> None:
+        """Delete / Backspace: the picked shape of the controller that owns the view."""
+        d = self._draw_target()
+        if d is not None:
+            d.delete_selected()
+
+    def _px_drawer_drop(self) -> None:
+        """The PRICE pane is gone (its splitter was torn down) or is being rebuilt: detach the controller that
+        lived on it. Its drawings are on disk and come back with the next pane."""
+        _dc = self.__dict__.get("_px_drawer")
+        self._px_drawer = None
+        if _dc is not None:
+            try:
+                _dc.dispose()
+            except Exception:
+                pass
+
     def _save_drawings_now(self) -> None:
         """Ctrl+S — force an immediate flush of all drawings (idx-anchored + time-space) past the
         400ms debounce, with a brief on-screen confirmation. Drawings already auto-save on every
@@ -3025,6 +3098,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         try:
             self.drawer._save_idx()
             self.drawer._save()
+            _pdc = self.__dict__.get("_px_drawer")
+            if _pdc is not None:
+                _pdc._save()                 # the Flow PRICE pane's own store
         except Exception:
             ok = False
         QtWidgets.QToolTip.showText(QtGui.QCursor.pos(),
@@ -3419,7 +3495,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif key == "drawing":
             self.drawbar.setVisible(on)
             if not on:
-                self.drawer.cancel()
+                self._draw_cancel()
         elif key == "cob":
             # Remember the intent; in Mode 10 toggle the whole COB column so OFF reclaims its width
             # (the spacer goes too).
@@ -16801,6 +16877,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self.drawer.on_price(snap.get("latest_price") or 0.0, time.time())
             _vx1 = self.vb.viewRange()[0][1]; _px = self.vb.viewPixelSize()[0]
             self.drawer.update_view(_vx1 - 55.0 * _px, _vx1 - 37.0 * _px)   # badges + the × button, left of the price tag
+            _pdc = self.__dict__.get("_px_drawer")
+            if _pdc is not None and _pdc.brackets and not self._replay_on:
+                # a position drawn on the Flow PRICE pane: the LIVE account, the same tick, its own view edge
+                _pdc.on_price(snap.get("latest_price") or 0.0, time.time())
+                _pvx1 = self._px_vb.viewRange()[0][1]; _ppx = self._px_vb.viewPixelSize()[0]
+                _pdc.update_view(_pvx1 - 55.0 * _ppx, _pvx1 - 37.0 * _ppx)
         except Exception:
             pass
         try:
@@ -17864,6 +17946,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # Null them and _liq_ensure_pane rebuilds the pane on the next entry (_liq_data survives -- it is data).
             # ... and the PRICE pane sat ABOVE the chart inside that same splitter
             self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None; self._px_data = None
+            self._px_drawer_drop()           # its drawing controller lived on that plot (the drawings are on disk)
             self._px_pline = None; self._px_plabel = None; self._px_live_y = None
             self._px_orig_wheel = None; self._px_yauto = True; self._px_setting_y = False
             self._px_bp_buy = None; self._px_bp_sell = None; self._px_bp_labels = None
@@ -18749,6 +18832,25 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # grown over-subscribes the splitter, and Qt resolves that by scaling every child down: measured, it
         # put the flow CHART itself at 68 px. Qt honours a minimum out of the residual with nothing to fight.
         pw.setMinimumHeight(110)
+        # DRAWINGS (user 2026-09-20): "use the drawing bar in the buy/sell flow $ chart ... ONLY on the price
+        # chart". This pane gets a DrawingController of its OWN: the window's drawing bar is routed to it while
+        # Flow mode is up (_on_draw_tool) and the main chart's stays locked, so nothing can be drawn on the $
+        # lines or on the panes under them. The axis here is a CLOCK, so a shape is plain (unix seconds, price):
+        # no bucket anchoring and no scan-window gate, and it persists in its own named store in drawings.json
+        # where it cannot collide with the candle canvas's Idx-space drawings.
+        # ⚠ Built AFTER the insert above: the edit panel parents to pw.window(), and until the pane sits in
+        # the splitter that is the pane itself.
+        self._px_drawer_drop()
+        try:
+            _dc = DrawingController(pw, persist=True, store="flow", shape_z=12.0)   # over the candles (7-9),
+            _dc.toolbar = self.drawbar                                               # under the crosshair (15)
+            _dc._sim_state = self._px_sim_state        # a running position survives the pane being rebuilt
+            _dc.set_paper_account(self.paper_live, self.alerts.record_trade)
+            _dc.locked = self.scanner_mode != "flow"
+            _dc.edit_panel.move(8, 8 + self.drawbar.height() + 4)
+            self._px_drawer = _dc
+        except Exception:
+            self._px_drawer = None
         self._theme_sub_panes(not self._simple_bw())              # born into the CURRENT Chart Style
         return pw
 
@@ -19088,6 +19190,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._px_refit_y()
                 ev.accept()
                 return
+            # the drawing bar comes first (2026-09-20): while a draw tool or the eraser is armed the click is
+            # the tool's, and with the cursor tool a click that lands ON a drawing picks it -- neither should
+            # also scroll the feed. A plain click on a candle still does.
+            _dc = self.__dict__.get("_px_drawer")
+            if _dc is not None and not _dc.locked:
+                if _dc.active_tool not in (None, "select"):
+                    return
+                if _dc.active_tool == "select":
+                    _v = self._px_vb.mapSceneToView(pos)
+                    if _dc.hit(float(_v.x()), float(_v.y())):
+                        return
             d = getattr(self, "_px_data", None)
             p = getattr(self, "interp_panel", None)
             if d is None or p is None or not p.isVisible():
@@ -19288,6 +19401,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._px_plot.setVisible(False)
             except RuntimeError:                     # the splitter was torn down under us -> nothing to hide
                 self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None
+                self._px_drawer_drop()
                 self._px_data = None
                 self._px_pline = None; self._px_plabel = None; self._px_live_y = None
                 self._px_orig_wheel = None; self._px_yauto = True; self._px_setting_y = False
@@ -19302,6 +19416,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 # stayed on the plot -- and _px_ensure_pane returns early on a live _px_plot, so they were
                 # never rebuilt. Toggling the pane off and on once killed the live price for the session.
                 self._px_lc_hide(); self._px_pill_hide()
+                _pdc = self.__dict__.get("_px_drawer")
+                if _pdc is not None:
+                    _pdc.cancel()                    # a tool armed on a pane nobody can see would come back with it
         self._stack_axis_sync()
 
     def _px_tick(self, now: float) -> None:
@@ -27303,6 +27420,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                 40, self.alerts.width(), min(420, self.height() - 80))
         # edit panel (shape color/thickness) sits just under the drawing toolbar, left-aligned with it
         self.drawer.edit_panel.move(8, 8 + self.drawbar.height() + 4)
+        _pdc = self.__dict__.get("_px_drawer")
+        if _pdc is not None:
+            try:
+                _pdc.edit_panel.move(8, 8 + self.drawbar.height() + 4)
+            except RuntimeError:
+                pass
 
     def _conn_watchdog(self) -> None:
         """1s tick: surface a lost connection ON THE CHART and auto-heal it. Cheap (one bool read when
