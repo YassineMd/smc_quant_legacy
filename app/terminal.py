@@ -1942,6 +1942,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._fratio_title = None
         self._iimp_plot = None         # INTEREST x IMPACT pane (Flow mode): one bar per cycle, who leads + did it convert
         self._iimp_vb = None
+        self._iimp_mode = str(config.IIMP_MODE)   # the top-right dropdown: None | Buyer | Seller | Delta
+        self._iimp_combo = None
         self._iimp_items = None        # six BarGraphItems: (buy, sell, contradicted) x (converted, did not)
         self._iimp_dots = None         # (wall, open road) ScatterPlotItems
         self._iimp_form = None         # the FORMING cycle's own bar: ONE item, brush and pen set per draw
@@ -6416,7 +6418,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         xm = self.__dict__.get("_hlh_ident", None)
         if xm is None:
             xm = self._hlh_ident = IdentityXMap()
-        out = st.build("px", xm, _bloc, _dark, week_on, now, badges=_bdg, tables=_tab, poc_runs=_pcr)
+        # the pane's OWN bars are cycles: the POC acceptance areas are counted in them here (user 2026-09-20)
+        _pxa = self.__dict__.get("_px_arr", None)
+        _bars = None if (_pxa is None or np.size(_pxa[0]) == 0) else (_pxa[0], _pxa[1], _pxa[2], _pxa[3], _pxa[4], _pxa[5])
+        out = st.build("px", xm, _bloc, _dark, week_on, now, badges=_bdg, tables=_tab, poc_runs=_pcr, bars=_bars)
         if self.__dict__.get("_hlh_px_pics", None) is None:
             self._hlh_px_pics = HlhPicsItem(); self._hlh_px_pics.setZValue(3)
             pw.addItem(self._hlh_px_pics, ignoreBounds=True)
@@ -10717,6 +10722,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "fratio_on": bool(getattr(self, "_fratio_on", config.FRATIO_PANE_ON)),
                 "fratio_mode": str(getattr(self, "_fratio_mode", config.FRATIO_MODE)),   # its top-right dropdown
                 "iimp_on": bool(getattr(self, "_iimp_on", config.IIMP_PANE_ON)),
+                "iimp_mode": str(getattr(self, "_iimp_mode", config.IIMP_MODE)),   # its top-right dropdown
                 "flow_pane_on": bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)),
                 "hlh_merge_span": str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)),
                 "interp_on": bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)),
@@ -10856,6 +10862,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except RuntimeError:
                 self._fratio_combo = None
         self._iimp_on = bool(s.get("iimp_on", config.IIMP_PANE_ON))
+        _imd = str(s.get("iimp_mode", config.IIMP_MODE) or config.IIMP_MODE)
+        self._iimp_mode = _imd if _imd in tuple(config.IIMP_MODES) else str(config.IIMP_MODE)
+        _icb = self.__dict__.get("_iimp_combo")
+        if _icb is not None:
+            try:
+                _icb.blockSignals(True)
+                _icb.setCurrentIndex(tuple(config.IIMP_MODES).index(self._iimp_mode))
+                _icb.blockSignals(False)
+            except (RuntimeError, ValueError):
+                self._iimp_combo = None
         self._flow_pane_on = bool(s.get("flow_pane_on", s.get("flow_lines_on", config.FLOW_PANE_ON)))
         _sp = str(s.get("hlh_merge_span", config.HLH_MERGE_SPAN) or config.HLH_MERGE_SPAN)
         self._hlh_merge_span = _sp if _sp in tuple(str(v) for v in config.HLH_MERGE_SPAN_CHOICES) else str(config.HLH_MERGE_SPAN)
@@ -17844,6 +17860,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._fratio_tag = None; self._fratio_time_tag = None; self._fratio_title = None
             self._fratio_bdg = None
             self._iimp_plot = None; self._iimp_vb = None; self._iimp_items = None; self._iimp_dots = None
+            self._iimp_combo = None
             self._iimp_form = None; self._iimp_keep = None
             self._iimp_guides = None; self._iimp_sig = None; self._iimp_sized = False; self._iimp_proxy = None
             self._iimp_vline = None; self._iimp_hline = None
@@ -21144,7 +21161,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # the readout and the click panel. Plain 2**v made a sell-led bar point down to the BUYERS'
         # reciprocal -- the panel said "SELL 2.3x" while the axis under that same bar read 0.44x (user
         # 2026-09-16). The SIDE is the bar's direction and colour; the axis only says BY HOW MUCH.
-        ax.tickStrings = lambda vals, sc, sp_: ["%.2gx" % (2.0 ** abs(v)) for v in vals]
+        # ... in None and Delta. In Buyer and Seller the halves are above / below that side's OWN baseline, so
+        # the labels are SIGNED there (0.5x reads 0.5x) -- _iimp_tick_text reads the mode at call time.
+        ax.tickStrings = lambda vals, sc, sp_: [self._iimp_tick_text(v) for v in vals]
         vb = pw.getViewBox()
         vb.setMouseEnabled(x=True, y=True)
         vb.setXLink(self.vb)
@@ -21220,13 +21239,72 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._iimp_hl_span.setZValue(1)
         pw.addItem(self._iimp_hl_span, ignoreBounds=True)
         self._iimp_hl.hide(); self._iimp_hl_span.hide()
+        # THE MODE DROPDOWN, top right (user 2026-09-20): the ratios pane's widget and style, parented to the
+        # pane so it floats over the plot, re-parked on every resize of the view. Its index is set BEFORE the
+        # signal is connected, so building the pane never counts as a user change.
+        _modes = tuple(config.IIMP_MODES)
+        cb = QtWidgets.QComboBox(pw)
+        cb.addItems(list(_modes))
+        cb.setCurrentIndex(_modes.index(self._iimp_mode) if self._iimp_mode in _modes else 0)
+        cb.setStyleSheet(
+            "QComboBox{ background:#20242c; color:#dcdcdc; border:1px solid #3a4150; border-radius:3px;"
+            " padding:1px 6px; font:bold 10px 'Consolas'; } QComboBox::drop-down{ border:0; width:14px; }"
+            " QComboBox QAbstractItemView{ background:#20242c; color:#dcdcdc; selection-background-color:#3a4150; }")
+        cb.setToolTip("What the bar's HEIGHT is. None: the leading side's interest over the other side's, on the "
+                      "leader's half. Buyer / Seller: that side's INTEREST x IMPACT -- its aggressive $ per second "
+                      "against its own last N cycles, times its impact on the cycles it led -- above the midline "
+                      "when above its own baseline, below when under it. Delta: the buyers' over the sellers', teal "
+                      "above the midline when the buyers hold more, red below when the sellers do. All of it in log "
+                      "space, so 0.5x sits as far below the midline as 2x sits above it.")
+        cb.setCursor(QtCore.Qt.PointingHandCursor)
+        cb.currentIndexChanged.connect(self._on_iimp_mode_changed)
+        cb.raise_(); cb.show()
+        self._iimp_combo = cb
         pw.scene().sigMouseClicked.connect(self._on_iimp_clicked)
         self._iimp_plot = pw
         self._iimp_vb = vb
+        vb.sigResized.connect(self._iimp_position_combo)
         self._theme_sub_panes(not self._simple_bw())
         sp.addWidget(pw)
         pw.setMinimumHeight(60)
         return pw
+
+    def _iimp_tick_text(self, v, fmt="%.2g") -> str:
+        """The axis / tag text for a bar height `v` (log2). MIRRORED in None and Delta -- both halves read a
+        multiple >= 1x and the half IS the side (user 2026-09-16) -- and SIGNED in Buyer and Seller, where the
+        halves mean above / below that side's own baseline, so 0.5x has to read 0.5x."""
+        mode = str(self.__dict__.get("_iimp_mode", "None"))
+        x = 2.0 ** float(v) if mode in ("Buyer", "Seller") else 2.0 ** abs(float(v))
+        return (fmt % x) + "x"
+
+    def _iimp_position_combo(self, *args) -> None:
+        """Park the mode dropdown in the pane's TOP-RIGHT corner, 6 px left of the plot's right edge -- the ratios
+        pane's spacing. Reads the edge from the VIEW's geometry, current when its resize signal fires, and falls
+        back to the widget width minus the right axis before the first layout."""
+        cb = self.__dict__.get("_iimp_combo")
+        pw = self.__dict__.get("_iimp_plot")
+        vb = self.__dict__.get("_iimp_vb")
+        if cb is None or pw is None or vb is None:
+            return
+        try:
+            cb.adjustSize()
+            right = int(pw.mapFromScene(vb.sceneBoundingRect().topRight()).x())
+            if right <= cb.width():
+                right = int(pw.width() - pw.getAxis("right").width())
+            cb.move(max(0, right - cb.width() - 6), 4)
+            cb.raise_()
+        except RuntimeError:
+            self._iimp_combo = None
+
+    def _on_iimp_mode_changed(self, idx: int) -> None:
+        """Dropdown changed -> re-lay every bar from the read already in hand (no store read), refit Y, persist."""
+        _modes = tuple(config.IIMP_MODES)
+        self._iimp_mode = _modes[idx] if 0 <= idx < len(_modes) else _modes[0]
+        self._iimp_sig = None
+        self._iimp_ytop = 0.0                                # a different series has a different scale
+        self._iimp_draw(time.time())
+        if not self._loading_ui:
+            self._save_ui_state()
 
     def _iimp_show(self, on: bool) -> None:
         if on:
@@ -21263,7 +21341,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._iimp_vline.setPos(pt.x())
         self._iimp_hline.setPos(pt.y()); self._iimp_hline.show()
         (vx0, vx1), (vy0, vy1) = self._iimp_vb.viewRange()
-        self._iimp_tag.setText("%.2fx" % (2.0 ** abs(float(pt.y()))))   # mirrored, like the axis
+        self._iimp_tag.setText(self._iimp_tick_text(float(pt.y()), "%.2f"))   # mirrored or signed, like the axis
         self._iimp_tag.setPos(vx1, pt.y()); self._iimp_tag.show()
         _xl = self._x_time_label(pt.x())
         if _xl:
@@ -21570,6 +21648,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # without it a quiet stretch would freeze the live bar until the next trade
         _age = int(now - float(t[-1])) if bool(form_all[-1]) else 0
         sig = (int(t.size), int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win), n_lb, _age,
+               str(self.__dict__.get("_iimp_mode", "None")),
                round(float(np.nan_to_num(imb[keep][-1] if keep.any() else 0.0)), 4),
                round(float(np.nan_to_num(score[keep][-1] if keep.any() else 0.0)), 4))
         if sig == self._iimp_sig:
@@ -21587,37 +21666,101 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _sc, _scn = self._score_parts(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl,
                                       dur, keep, n_lb, n_mn)
         _clip = float(np.log2(max(float(config.IIMP_CLIP), 1.0)))
-        v = np.clip(v_raw, -_clip, _clip)      # DRAWN within 1/8x .. 8x; the badge still prints the true multiple
+        v = np.clip(v_raw, -_clip, _clip)      # the LEADER's multiple, clipped: what None draws and what names the side
         _mvt = (px1 - px0)[keep] / float(config.TICK_SIZE)      # where price actually ended, in the price's frame
         up = v >= 0.0
         # ORANGE when the leading side is not the way price went -- real on a third of cycles, and it read as a
         # contradiction while it wore the leader's own colour
         contra = np.isfinite(_mvt) & ((up & (_mvt < 0)) | (~up & (_mvt > 0)))
         form = form_all[keep]
+        # THE MODE (the top-right dropdown, user 2026-09-20) decides the bar's HEIGHT and nothing else: up, contra,
+        # good and the multiple stay the leader's story. Each side's INTEREST x IMPACT is its interest (ar_b / ar_s,
+        # its aggressive $/s against its own last N) times its impact on the cycles it LED -- the other side moved
+        # nothing, so its impact is 1x -- and Delta is the buyers' over the sellers'. All of it in log2, where 0.5x
+        # sits as far below the midline as 2x sits above it: the user's first delta lived on a linear axis and
+        # squeezed every losing cycle into 0..1 while the winning ones ran to 4-6x.
+        _ln2 = float(np.log(2.0))
+        _scl = np.where(np.isfinite(score[keep]), score[keep], 0.0) / _ln2      # the leader's impact, in log2
+        _lb = np.log2(np.maximum(ar_b[keep], 1e-12)) + np.where(up, _scl, 0.0)
+        _ls = np.log2(np.maximum(ar_s[keep], 1e-12)) + np.where(~up, _scl, 0.0)
+        _mode = str(self.__dict__.get("_iimp_mode", "None"))
+        if _mode == "Buyer":
+            vd = np.clip(_lb, -_clip, _clip)
+        elif _mode == "Seller":
+            vd = np.clip(_ls, -_clip, _clip)
+        elif _mode == "Delta":
+            vd = np.clip(_lb - _ls, -_clip, _clip)
+        else:
+            vd = v
         # the forming cycle is EXCLUDED from the class items and drawn on its own: in both it would be painted
         # twice, at two different weights, and the lighter pass would be invisible under the solid one
         _fin = ~form
-        groups = (up & good & ~contra & _fin, up & ~good & ~contra & _fin,
-                  ~up & good & ~contra & _fin, ~up & ~good & ~contra & _fin,
-                  contra & good & _fin, contra & ~good & _fin)
-        for it, m in zip(self._iimp_items, groups):
-            if not m.any():
+        if _mode == "None":
+            groups = (up & good & ~contra & _fin, up & ~good & ~contra & _fin,
+                      ~up & good & ~contra & _fin, ~up & ~good & ~contra & _fin,
+                      contra & good & _fin, contra & ~good & _fin)
+            self._iimp_items[0].setOpts(brushes=None, pens=None)     # the other modes leave per-bar lists behind
+            for it, m in zip(self._iimp_items, groups):
+                if not m.any():
+                    it.setOpts(x0=[], x1=[], y0=[], height=[])
+                    continue
+                it.setOpts(x0=x0[m], x1=x1[m], y0=np.minimum(0.0, vd[m]), height=np.abs(vd[m]))
+        else:
+            # one item, per-bar brushes and pens: the side's colour (Delta: the sign's, orange where price went
+            # against the leader), SOLID where that side led and converted, HOLLOW where it led and did not,
+            # and a DIM fill where it did not lead at all -- interest with no impact to speak of
+            _bc, _pc = {}, {}
+
+            def _brush(hx, a):
+                if (hx, a) not in _bc:
+                    q = QtGui.QColor(hx); _bc[(hx, a)] = pg.mkBrush(q.red(), q.green(), q.blue(), a)
+                return _bc[(hx, a)]
+
+            def _pen(hx, a):
+                if (hx, a) not in _pc:
+                    q = QtGui.QColor(hx); _pc[(hx, a)] = pg.mkPen(QtGui.QColor(q.red(), q.green(), q.blue(), a), width=1.0)
+                return _pc[(hx, a)]
+
+            _idx = np.flatnonzero(_fin)
+            _brs, _pns = [], []
+            for i in _idx:
+                if _mode == "Delta":
+                    hx = config.IIMP_CONTRA_COL if bool(contra[i]) else (config.IIMP_BUY_COL if vd[i] >= 0 else config.IIMP_SELL_COL)
+                    _brs.append(_brush(hx, 190 if bool(good[i]) else 0)); _pns.append(_pen(hx, 255))
+                else:
+                    hx = config.IIMP_BUY_COL if _mode == "Buyer" else config.IIMP_SELL_COL
+                    led = bool(up[i]) if _mode == "Buyer" else (not bool(up[i]))
+                    _brs.append(_brush(hx, (190 if bool(good[i]) else 0) if led else 70)); _pns.append(_pen(hx, 255 if led else 130))
+            it0 = self._iimp_items[0]
+            if _idx.size:
+                it0.setOpts(x0=x0[_idx], x1=x1[_idx], y0=np.minimum(0.0, vd[_idx]), height=np.abs(vd[_idx]),
+                            brushes=_brs, pens=_pns)
+            else:
+                it0.setOpts(x0=[], x1=[], y0=[], height=[], brushes=None, pens=None)
+            for it in self._iimp_items[1:]:
                 it.setOpts(x0=[], x1=[], y0=[], height=[])
-                continue
-            it.setOpts(x0=x0[m], x1=x1[m], y0=np.minimum(0.0, v[m]), height=np.abs(v[m]))
         if form.any():
             # same side, same fill rule, one item -- its brush and pen are set here because both still move
             _k = int(np.flatnonzero(form)[-1])
-            _fc = QtGui.QColor(config.IIMP_CONTRA_COL if bool(contra[_k])
-                               else (config.IIMP_BUY_COL if bool(up[_k]) else config.IIMP_SELL_COL))
+            if _mode == "Buyer":
+                _fc = QtGui.QColor(config.IIMP_BUY_COL)
+            elif _mode == "Seller":
+                _fc = QtGui.QColor(config.IIMP_SELL_COL)
+            elif _mode == "Delta":
+                _fc = QtGui.QColor(config.IIMP_CONTRA_COL if bool(contra[_k])
+                                   else (config.IIMP_BUY_COL if vd[_k] >= 0 else config.IIMP_SELL_COL))
+            else:
+                _fc = QtGui.QColor(config.IIMP_CONTRA_COL if bool(contra[_k])
+                                   else (config.IIMP_BUY_COL if bool(up[_k]) else config.IIMP_SELL_COL))
             self._iimp_form.setOpts(
-                x0=[float(x0[_k])], x1=[float(x1[_k])], y0=[min(0.0, float(v[_k]))], height=[abs(float(v[_k]))],
+                x0=[float(x0[_k])], x1=[float(x1[_k])], y0=[min(0.0, float(vd[_k]))], height=[abs(float(vd[_k]))],
                 brushes=[pg.mkBrush(_fc.red(), _fc.green(), _fc.blue(),
                                     int(config.IIMP_FORM_FILL_A) if bool(good[_k]) else 0)],
                 pens=[pg.mkPen(QtGui.QColor(_fc.red(), _fc.green(), _fc.blue(), int(config.IIMP_FORM_PEN_A)),
                                width=1.4)])
         else:
             self._iimp_form.setOpts(x0=[], x1=[], y0=[], height=[])
+        v = vd                                 # from here on `v` is what is DRAWN: the mark, the y fit, the dict
         # RETENTION: what the leader's push actually held on to, kept/reached. Not folded into the score
         # or the fill -- reach and hold are two questions, and giveback = push - move makes any combined
         # score circular to validate. Unread below IIMP_KEEP_MIN_TICKS, and unread must cost nothing.
@@ -21654,20 +21797,30 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                            "score": score[keep], "wall": wk, "reach": reach[keep], "mv": _mvt,
                            "arb": ar_b[keep], "ars": ar_s[keep], "form": form, "kept": kept,
                            "sbuy": _sc["buy"], "ssell": _sc["sell"],
-                           "nbuy": _scn["buy"], "nsell": _scn["sell"]}
+                           "nbuy": _scn["buy"], "nsell": _scn["sell"],
+                           "liib": _lb, "liis": _ls, "mode": _mode}
         if self._iimp_read is not None:
             _k = int(v.size) - 1
             _w = wk[_k]
             _kp = kept[_k]          # "-" where the push was too short to read, exactly like the wall
             _sbv, _ssv = _sc["buy"][_k], _sc["sell"][_k]
-            self._iimp_read.setText("B %s / S %s  ·  %s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s%s%s" % (
+            _mode_txt = ""
+            if _mode == "Buyer":
+                _mode_txt = "  ·  buyers I×I %.2gx" % (2.0 ** float(_lb[_k]))
+            elif _mode == "Seller":
+                _mode_txt = "  ·  sellers I×I %.2gx" % (2.0 ** float(_ls[_k]))
+            elif _mode == "Delta":
+                _dl = float(_lb[_k] - _ls[_k])
+                _mode_txt = "  ·  delta %s %.2gx" % ("B" if _dl >= 0 else "S", 2.0 ** abs(_dl))
+            self._iimp_read.setText("B %s / S %s  ·  %s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s%s%s%s" % (
                 "-" if not np.isfinite(_sbv) else "%d" % int(round(_sbv)),
                 "-" if not np.isfinite(_ssv) else "%d" % int(round(_ssv)),
                 "BUY" if up[_k] else "SELL", _mult[_k], float(np.exp(score[keep][_k])),
                 "-" if not np.isfinite(_w) else "%.2gx" % _w,
                 "-" if not np.isfinite(_kp) else "%d%%" % int(round(100.0 * float(_kp))),
                 "  ·  still forming" if bool(form[_k]) else "",
-                "  ·  price went the other way" if contra[_k] else ""))
+                "  ·  price went the other way" if contra[_k] else "",
+                _mode_txt))
             self._iimp_read.setColor(config.IIMP_CONTRA_COL if contra[_k]
                                      else (config.IIMP_BUY_COL if up[_k] else config.IIMP_SELL_COL))
         lim = float(np.percentile(np.abs(v), 95.0)) * 1.15
@@ -21862,6 +22015,16 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 "%s: %s were <b>%.2gx</b> more interested than the %s. Their aggressive $ per second ran "
                 "%.2gx their own last %d cycles, the %s' %.2gx theirs."
                 % (_L % "Height", side, mult, other, lead_r, n, other, oth_r)]
+        # the SIDES row: each side's interest x impact and their delta, whatever the dropdown shows, so the panel
+        # explains the Buyer / Seller / Delta bars with the same numbers they are drawn from
+        _lbk = d.get("liib"); _lsk = d.get("liis")
+        if _lbk is not None and _lsk is not None and k < len(_lbk):
+            _b2, _s2, _dl = float(2.0 ** _lbk[k]), float(2.0 ** _lsk[k]), float(_lbk[k] - _lsk[k])
+            rows.append("%s: the buyers' interest × impact was <b>%.2gx</b>%s, the sellers' <b>%.2gx</b>%s -- delta "
+                        "<b>%s %.2gx</b>. Each side's aggressive $ per second against its own last %d cycles, "
+                        "times its impact on the cycles it led."
+                        % (_L % "Sides", _b2, " (they led)" if up else "", _s2, "" if up else " (they led)",
+                           "B" if _dl >= 0 else "S", 2.0 ** abs(_dl), n))
         if contra:
             rows.append("%s: <span style='color:%s'>orange</span>, because price went the OTHER way -- it "
                         "finished %+d ticks while the %s led the interest."

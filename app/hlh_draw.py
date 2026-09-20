@@ -123,7 +123,7 @@ class Dash:
 
 def build_period(res: H.PeriodResult, rows: List[H.MB], tabs: List[str], xmap, cand_secs: float, bloc_only: bool,
                  dark: bool, badges: bool, tables: bool, p: H.Params,
-                 poc_runs: bool = True) -> Tuple[list, List[Label], List[Dash]]:
+                 poc_runs: bool = True, bars=None) -> Tuple[list, List[Label], List[Dash]]:
     """The Pine's DRAW section for one period, from its FINAL state: ([(x_lo, x_hi, QPicture), ...], labels,
     dashes), pictures in plot coordinates. TWO pictures: the PROFILE (histogram, rows, POC, legs) spans only the
     period's first width_pct, the SPAN (levels, time profile, block lines) the whole period -- a live-edge
@@ -322,9 +322,9 @@ def build_period(res: H.PeriodResult, rows: List[H.MB], tabs: List[str], xmap, c
                 # line reads as the opposite of what it means. Drawn BEFORE the POC line so it stays legible.
                 ps.setPen(QtCore.Qt.PenStyle.NoPen)
                 ps.setBrush(qcol(chex, float(cfg.HLH_POC_RUN_TR)))
-                for _rA, _rB, _sd, _ext in H.bloc_poc_runs(m, int(cfg.HLH_POC_RUN_MIN), cand_secs,
-                                                           bool(cfg.HLH_POC_RUN_CAUSAL)):
-                    _rx0 = float(xmap(_rA)); _rx1 = float(xmap(_rB + cand_secs))
+                for _rA, _rE, _sd, _ext in H.bloc_poc_runs(m, int(cfg.HLH_POC_RUN_MIN), cand_secs,
+                                                           bool(cfg.HLH_POC_RUN_CAUSAL), bars):
+                    _rx0 = float(xmap(_rA)); _rx1 = float(xmap(_rE))          # the run's own END
                     _ry0, _ry1 = min(_poc, _ext), max(_poc, _ext)
                     ps.drawRect(QtCore.QRectF(_rx0, _ry0, _rx1 - _rx0, _ry1 - _ry0))
                 ps.setBrush(QtCore.Qt.BrushStyle.NoBrush)
@@ -774,13 +774,19 @@ class HlhOverlay:
 
     # -------------------------------------------------------------- geometry
     def build(self, canvas: str, xmap, bloc_only: bool, dark: bool, week_on: bool, now: float,
-              skip_before: float = -np.inf, badges: bool = True, tables: bool = True, poc_runs: bool = True):
+              skip_before: float = -np.inf, badges: bool = True, tables: bool = True, poc_runs: bool = True,
+              bars=None):
         """(pics, labels, note, dashes) for one canvas. Returns the SAME tuple object while nothing changed, so a
         caller can gate set_pics/set_labels on identity. Periods before the DRAW floor (the chain-only ones) and
         before `skip_before` (the canvas's first bar) are computed but not drawn."""
         pers = self.periods(week_on, now)
         xkey = tuple(xmap.key)
-        opts = (bool(bloc_only), bool(dark), bool(badges), bool(tables), bool(poc_runs))
+        # `bars` = the canvas's own candles when they are not the klines (the PRICE pane's cycles): the POC
+        # runs are counted in them, so their shape is part of the geometry key and the areas follow the cache
+        _bsig = None
+        if bars is not None and np.size(bars[0]):
+            _bsig = (int(np.size(bars[0])), round(float(bars[0][0]), 1), round(float(bars[1][-1]), 1))
+        opts = (bool(bloc_only), bool(dark), bool(badges), bool(tables), bool(poc_runs), _bsig)
         dfl = self.day_floor(now)
         wfl = self.week_floor(now) if week_on else dfl
         sig = (tuple((pk[0], pk[1], pk[2]) for pk in pers), xkey, opts, self.note(week_on), float(skip_before),
@@ -801,7 +807,7 @@ class HlhOverlay:
             g = self._geom.get(gk)
             if g is None or g[0] != ver or g[1] != xkey or g[2] != opts:
                 pl, lbl, dsh = build_period(res, rows, tabs, xmap, cand_secs, opts[0], opts[1], opts[2],
-                                            opts[3], p, poc_runs=opts[4])
+                                            opts[3], p, poc_runs=opts[4], bars=bars)
                 g = (ver, xkey, opts, pl, lbl, dsh)
                 self._geom[gk] = g
             pics.extend(g[3])

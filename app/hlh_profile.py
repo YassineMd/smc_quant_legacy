@@ -792,11 +792,18 @@ def bloc_poc_hist(m: "MB") -> Optional[tuple]:
 
 
 def bloc_poc_runs(m: "MB", min_n: int, step_secs: Optional[float] = None,
-                  causal: bool = True) -> List[Tuple[float, float, int, float]]:
-    """Runs of >= min_n CONSECUTIVE klines that CLOSED on the same side of the bloc's own POC.
+                  causal: bool = True, bars=None) -> List[Tuple[float, float, int, float]]:
+    """Runs of >= min_n CONSECUTIVE bars that CLOSED on the same side of the bloc's own POC.
 
-    -> [(tA, tB, side, ext), ...]; side +1 above / -1 below, and `ext` is how far the run got on that side (its
-    highest high above, its lowest low below), so a caller can shade from the POC out to where price reached.
+    -> [(tA, tE, side, ext), ...]; tA the first bar's start, tE the LAST BAR'S END; side +1 above / -1 below;
+    `ext` how far the run got on that side (its highest high above, its lowest low below), so a caller can
+    shade from the POC out to where price reached.
+
+    THE BARS ARE THE CANVAS'S OWN (user 2026-09-20: "at least 5 bars above/below POC"). On the candle canvas
+    they are the bloc's klines. On the PRICE pane they are CYCLES, handed in as `bars` = (t, t_end, o, h, l,
+    c) arrays of the pane's candle cache: the cycles that START inside the bloc's span(s) are the run's bars,
+    their closes are what is held to the POC, their highs / lows give the extent, and "five" means five
+    cycles -- a single wide cycle carrying five kline closes on one side is one bar, not a run.
 
     The rule (user 2026-09-20): a below-run ends ONLY at a kline that CLOSED above the POC, an above-run only
     at one that closed below. The open plays no part. And every kline of the bloc's time span counts, not only
@@ -811,7 +818,18 @@ def bloc_poc_runs(m: "MB", min_n: int, step_secs: Optional[float] = None,
     poc = bloc_poc(m)
     if poc is None:
         return []
-    if m.aT is not None and m.aC is not None and m.aH is not None and m.aL is not None:
+    TE = None
+    if bars is not None:
+        # the PRICE pane's cycles: those that START inside the bloc's span(s)
+        bt, bte, _bo, bh, bl, bc = (np.asarray(x, dtype=np.float64) for x in bars)
+        spans = m.spans if m.spans else ([(float(m.tA), float(m.tB))] if (m.tA is not None and m.tB is not None) else [])
+        if not spans or bt.size == 0:
+            return []
+        sel = np.zeros(bt.shape[0], dtype=bool)
+        for tS, tE_ in spans:
+            sel |= (bt >= float(tS)) & (bt < float(tE_))
+        T, TE, C, H, L = bt[sel], bte[sel], bc[sel], bh[sel], bl[sel]
+    elif m.aT is not None and m.aC is not None and m.aH is not None and m.aL is not None:
         T, C, H, L = m.aT, m.aC, m.aH, m.aL                     # every kline of the span(s)
     elif m.cT is not None and m.cC is not None and m.cH is not None and m.cL is not None:
         T, C, H, L = m.cT, m.cC, m.cH, m.cL                     # an older MB: the in-band candles only
@@ -825,30 +843,33 @@ def bloc_poc_runs(m: "MB", min_n: int, step_secs: Optional[float] = None,
     c = np.asarray(C, dtype=np.float64)[k]
     hi = np.asarray(H, dtype=np.float64)[k]
     lo = np.asarray(L, dtype=np.float64)[k]
-    side = np.sign(c - poc).astype(np.int64)                    # by the POC as DRAWN
-    if causal:
-        hist = bloc_poc_hist(m)
-        if hist is not None and hist[0].size:
-            ht, hp = hist
-            j = np.searchsorted(ht, t, side="right") - 1          # the last own candle at or before this kline
-            then = np.where(j >= 0, hp[np.maximum(j, 0)], np.nan)
-            side_then = np.where(np.isfinite(then), np.sign(c - then), side).astype(np.int64)
-            side = np.where(side_then == side, side, 0)           # on that side by BOTH measures, or a divider
     step = float(step_secs) if (step_secs is not None and step_secs > 0) else 0.0
     if not step > 0:
         d = np.diff(t)
         d = d[d > 0]
         step = float(np.min(d)) if d.size else 0.0
-    gap = (step * 1.5) if step > 0 else float("inf")     # 1.5 x: one step apart is adjacent, two is a hole
+    # each bar's END: a cycle carries its own, a kline ends one step after it opens
+    te = np.asarray(TE, dtype=np.float64)[k] if TE is not None else (t + step if step > 0 else t)
+    side = np.sign(c - poc).astype(np.int64)                    # by the POC as DRAWN
+    if causal:
+        hist = bloc_poc_hist(m)
+        if hist is not None and hist[0].size:
+            ht, hp = hist
+            j = np.searchsorted(ht, te, side="left") - 1          # the own candles before this bar CLOSED
+            then = np.where(j >= 0, hp[np.maximum(j, 0)], np.nan)
+            side_then = np.where(np.isfinite(then), np.sign(c - then), side).astype(np.int64)
+            side = np.where(side_then == side, side, 0)           # on that side by BOTH measures, or a divider
+    # adjacent = the next bar starts where this one ends (cycles tile time; klines are one step apart)
+    tol = (step * 0.5) if step > 0 else 1.0
     out: List[Tuple[float, float, int, float]] = []
     i = 0
     while i < n:
         s = int(side[i]); j = i
-        while j + 1 < n and int(side[j + 1]) == s and (t[j + 1] - t[j]) <= gap:
+        while j + 1 < n and int(side[j + 1]) == s and (t[j + 1] - te[j]) <= tol:
             j += 1
         if s != 0 and (j - i + 1) >= int(min_n):
             ext = float(np.max(hi[i:j + 1])) if s > 0 else float(np.min(lo[i:j + 1]))
-            out.append((float(t[i]), float(t[j]), s, ext))
+            out.append((float(t[i]), float(te[j]), s, ext))
         i = j + 1
     return out
 
