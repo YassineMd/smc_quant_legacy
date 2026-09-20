@@ -39,6 +39,7 @@ from .heatmap import (HeatmapCache, TradeBubbleCache, decode_col, decode_grid,
 
 from . import bucket_state, config, flow_pane, region_state, vpin_adaptive
 from .flow_interp import (FlowInterpPanel, build_rows as _interp_build_rows, prev_ratio as _interp_prev,
+                          same_side_diff as _interp_side_diff,
                           prev_depth as _interp_prev_depth, same_side_depth as _interp_side_depth,
                           _ratio_text as _interp_ratio_text,
                           same_side_ratio as _interp_side_ratio, dur_text as _interp_dur_text,
@@ -8392,35 +8393,82 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if want <= 0 or not first_t:
             return []
         _key = (self._tf, self._chart_source, float(first_t), int(want))
-        _hit = getattr(self, "_ema_deep", None)
-        if _hit is not None and _hit[0] == _key:
-            return _hit[1]
-        _sec = float(config.TF_SECONDS.get(self._tf, 60) or 60)
+        _res = self.__dict__.get("_ema_deep_res")         # finished pulls by key: a few, the bars are shared refs
+        if _res is None:
+            from collections import OrderedDict as _OD
+            _res = self._ema_deep_res = _OD()
+        _hit = _res.get(_key)
+        if _hit is not None:
+            _res.move_to_end(_key)
+            return _hit
+        # ⚠⚠ OFF THE GUI THREAD (2026-09-20). This pull scans the replay chunk files / the cold archive, and a
+        # stack sampler put it at 5.3 s of the 7.0 s the GUI thread was blocked in the first 88 s after the
+        # window appeared -- the terminal froze, unconnected, before any pane could show anything (the comment
+        # below budgeted ~600 ms; it is not). Same pattern as the Big Player windows: the scan runs on a
+        # single worker, the frame draws with the warm prefix and the frame it has, and the finished pull is
+        # picked up here on a later frame -- `_off` then changes, the analysis signature with it, and the EMA
+        # family rebuilds on its own. A pull for a stale key is simply never applied.
+        # Pending pulls and their results are kept PER KEY: a second caller asking for another key while one is
+        # pulling (the walk's `want` growing, a test beside the frame's own call) queues its own scan, and a
+        # finished pull waits in the result cache for whoever asked -- one job slot made two keys evict each
+        # other and neither ever landed.
+        _jobs = self.__dict__.get("_ema_deep_jobs")
+        if _jobs is None:
+            _jobs = self._ema_deep_jobs = {}
+        for _k in [_k for _k, _f in _jobs.items() if _f.done()]:     # harvest every finished pull
+            _f = _jobs.pop(_k)
+            try:
+                _res[_k] = _f.result()
+            except Exception:
+                _res[_k] = []
+            _res.move_to_end(_k)
+        while len(_res) > 3:
+            _res.popitem(last=False)
+        if _key in _res:
+            return _res[_key]
+        if _key in _jobs:
+            return []                                     # still pulling: this frame draws without the deep prefix
+        if len(_jobs) >= 4:
+            return []                                     # a burst of keys: let the worker drain before queuing more
+        _pool = self.__dict__.get("_ema_deep_pool")
+        if _pool is None:
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            _pool = self._ema_deep_pool = _TPE(max_workers=1, thread_name_prefix="ema-deep")
+        _jobs[_key] = _pool.submit(self._ema_deep_pull, self._tf, self._chart_source, float(first_t), int(want))
+        return []
+
+    @staticmethod
+    def _ema_deep_pull(tf: str, source: str, first_t: float, want: int) -> list:
+        """The scan itself, on the worker: bars strictly before `first_t` from the replay chunks / the cold
+        archive. Takes everything it needs as arguments so it never reads window state from a thread, and
+        never raises -- an empty list is the honest answer when nothing is there."""
+        _sec = float(config.TF_SECONDS.get(tf, 60) or 60)
         _lo = first_t - max(want * 4, 200) * _sec          # generous span (volume buckets are irregular in time)
         _bars = []
         try:
-            if self._chart_source == "time":
+            if source == "time":
                 from app import clock_replay as _crp
-                _e0 = _crp.earliest_start(self._tf) if _crp.available(self._tf) else None
+                _e0 = _crp.earliest_start(tf) if _crp.available(tf) else None
                 if _e0 is not None and first_t > _e0:      # cheap extent check: scanning chunk files for a
-                    _bars = _crp.window_by_time(self._tf, _lo, first_t) or []   # range with no data costs ~2s
+                    _bars = _crp.window_by_time(tf, _lo, first_t) or []       # range with no data costs ~2s
             else:
                 from app import recon_replay as _rrp
-                if first_t < _rrp.CUTOFF and _rrp.available(self._tf):
-                    _e0 = _rrp.earliest_start(self._tf)
+                if first_t < _rrp.CUTOFF and _rrp.available(tf):
+                    _e0 = _rrp.earliest_start(tf)
                     if _e0 is not None and first_t > _e0:
-                        _bars = _rrp.window_by_time(self._tf, _lo, first_t) or []
-                if not _bars and archive.available(self._tf):
-                    _e1 = archive.earliest_start(self._tf)   # _load is module-cached, but skip the scan when
+                        _bars = _rrp.window_by_time(tf, _lo, first_t) or []
+                if not _bars and archive.available(tf):
+                    _e1 = archive.earliest_start(tf)         # _load is module-cached, but skip the scan when
                     if _e1 is None or first_t > _e1:         # the archive starts after what we are asking for
-                        _d = archive._load(self._tf)
+                        _d = archive._load(tf)
                         _bars = [_d[_k] for _k in sorted(_d)]
         except Exception:
             _bars = []
-        _bars = [_b for _b in _bars
-                 if 0.0 < float(_b.get("start_time", 0.0) or 0.0) < first_t][-want:]
-        self._ema_deep = (_key, _bars)
-        return _bars
+        try:
+            return [_b for _b in _bars
+                    if 0.0 < float(_b.get("start_time", 0.0) or 0.0) < first_t][-want:]
+        except Exception:
+            return []
 
     _EMA_KEYS = ("ema20", "ema50", "ema100", "ema_ext", "ema_hlread", "ema_stack", "ema_trendlvl", "ema_walls",
                  "ema_walls_prev", "ema_walls_line", "ema_walls_merge", "ema_poc", "ema_poc_prev", "ema_poc_line",
@@ -21358,27 +21406,40 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         follows the VIEW while the baseline needs the previous N cycles, which sit behind its left edge."""
         cache = self._iimp_wall_cache
         d = getattr(self, "_liq_data", None)
+        n_rows = int(np.size(t))
+        _tr = np.round(np.asarray(t, dtype=np.float64), 2)
         if d is not None:
             lt0, lt1, cols, radii, mids, bidg, askg = d
             ncol = int(np.size(mids))
             if ncol > 0 and lt1 > lt0 and len(radii):
-                try:
-                    j = list(radii).index(int(config.IIMP_WALL_RADIUS))
-                except ValueError:
-                    j = min(range(len(radii)), key=lambda q: abs(int(radii[q]) - int(config.IIMP_WALL_RADIUS)))
-                step = (lt1 - lt0) / float(ncol)
-                for k in range(int(np.size(t))):
-                    c = int(np.floor((float(t[k]) - lt0) / step)) - 1      # the column that ENDS at or before the open
-                    if 0 <= c < ncol and float(mids[c]) > 0:
-                        cache[round(float(t[k]), 2)] = (float(askg[j][c]), float(bidg[j][c]))
-                if len(cache) > int(config.LOB_CACHE_MAX):
-                    for _k in sorted(cache)[:len(cache) - int(config.LOB_CACHE_MAX)]:
-                        cache.pop(_k, None)
-        out = np.full(int(np.size(t)), np.nan)
-        for k in range(int(np.size(t))):
-            v = cache.get(round(float(t[k]), 2))
+                # the FILL runs only when the book window or the row set changed (2026-09-20): it ran on every
+                # frame, a Python loop over every row, and was 5% of a live session's GUI thread. The latest
+                # window still wins for every row it covers, exactly as before.
+                _fk = (id(d), float(lt0), float(lt1), ncol, n_rows,
+                       float(_tr[0]) if n_rows else 0.0, float(_tr[-1]) if n_rows else 0.0)
+                if self.__dict__.get("_iimp_wall_fill") != _fk:
+                    self._iimp_wall_fill = _fk
+                    try:
+                        j = list(radii).index(int(config.IIMP_WALL_RADIUS))
+                    except ValueError:
+                        j = min(range(len(radii)), key=lambda q: abs(int(radii[q]) - int(config.IIMP_WALL_RADIUS)))
+                    step = (lt1 - lt0) / float(ncol)
+                    # the column that ENDS at or before the open
+                    c = (np.floor((np.asarray(t, dtype=np.float64) - lt0) / step) - 1).astype(np.int64)
+                    okc = (c >= 0) & (c < ncol)
+                    okc[okc] = np.asarray(mids, dtype=np.float64)[c[okc]] > 0
+                    _ask = np.asarray(askg[j], dtype=np.float64); _bid = np.asarray(bidg[j], dtype=np.float64)
+                    for _key, _c in zip(_tr[okc].tolist(), c[okc].tolist()):
+                        cache[_key] = (float(_ask[_c]), float(_bid[_c]))
+                    if len(cache) > int(config.LOB_CACHE_MAX):
+                        for _k in sorted(cache)[:len(cache) - int(config.LOB_CACHE_MAX)]:
+                            cache.pop(_k, None)
+        out = np.full(n_rows, np.nan)
+        _b = np.asarray(is_buy, dtype=bool).tolist()
+        for k, _key in enumerate(_tr.tolist()):
+            v = cache.get(_key)
             if v is not None:
-                out[k] = v[0] if bool(is_buy[k]) else v[1]
+                out[k] = v[0] if _b[k] else v[1]
         return out
 
     def _score_parts(self, t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, dur, want, n_lb, n_mn):
@@ -21479,7 +21540,45 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         lately", which in a trend flatters the losing side -- the winner's bar is already high. The pooled one
         answers the question actually asked, "how much compared to the other side".
 
-        History is walked for every cycle; the percentile is only evaluated where `want` asks for it."""
+        History is walked for every cycle; the percentile is only evaluated where `want` asks for it.
+
+        Vectorised 2026-09-20: the pooled history is laid out once in append order, every rated row takes its
+        window of the previous nb entries (NaN-padded where the history is shorter) and the rank is one
+        comparison against the whole window -- the same count-below plus half the ties, over the same window
+        length, so the numbers are bit-identical to the double loop this replaced (kept as _score_pct_pool_loop
+        for the gate). That loop re-ran for every drawn row on every forced redraw: ~8 ms of a 50 ms frame."""
+        vb = np.asarray(vb, dtype=np.float64); vs = np.asarray(vs, dtype=np.float64)
+        n = int(vb.size)
+        ob = np.full(n, np.nan); os_ = np.full(n, np.nan)
+        if n == 0:
+            return ob, os_
+        nb, mn = 2 * int(n_base), 2 * int(min_n)
+        want = np.asarray(want, dtype=bool)
+        fb = np.isfinite(vb); fs = np.isfinite(vs)
+        pool = np.empty(2 * n); pool[0::2] = vb; pool[1::2] = vs          # row k appends vb[k] then vs[k]
+        keep = np.empty(2 * n, dtype=bool); keep[0::2] = fb; keep[1::2] = fs
+        hist = pool[keep]
+        cnt = np.cumsum(fb.astype(np.int64) + fs.astype(np.int64)) - fb - fs     # appended BEFORE row k
+        rows = np.flatnonzero(want & (cnt >= mn))
+        if rows.size == 0:
+            return ob, os_
+        nbw = max(1, nb)
+        pad = np.concatenate([np.full(nbw, np.nan), hist])
+        win = np.lib.stride_tricks.sliding_window_view(pad, nbw)      # win[c] = hist[c - nbw : c], NaN-padded
+        w = win[cnt[rows]]
+        m_ = np.sum(np.isfinite(w), axis=1).astype(np.float64)        # len(h) = min(c, nb)
+        for x, out in ((vb, ob), (vs, os_)):
+            xr = x[rows]
+            okx = np.isfinite(xr)
+            with np.errstate(invalid="ignore"):
+                lo = np.sum(w < xr[:, None], axis=1); eqc = np.sum(w == xr[:, None], axis=1)
+            val = (lo + 0.5 * eqc) / m_
+            out[rows[okx]] = val[okx]
+        return ob, os_
+
+    @staticmethod
+    def _score_pct_pool_loop(vb, vs, want, n_base, min_n):
+        """The reference double loop _score_pct_pool replaced (kept for the gate)."""
         vb = np.asarray(vb, dtype=np.float64); vs = np.asarray(vs, dtype=np.float64)
         ob = np.full(int(vb.size), np.nan); os_ = np.full(int(vb.size), np.nan)
         hist = []
@@ -21518,6 +21617,29 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             hist.append(float(x))
         return out
 
+    @staticmethod
+    def _iimp_score(resid, lead_buy, done, n_lb, n_mn):
+        """The score: each cycle's residual minus the median of the previous n_lb residuals OF THE SAME SIDE
+        (NaN below n_mn; the forming row rated, never appended). Vectorised 2026-09-20 through
+        flow_interp.same_side_diff -- as a loop with an np.median per cycle it was 17% of a live session's GUI
+        thread; _iimp_score_loop is the reference the gate holds it to."""
+        return _interp_side_diff(resid, lead_buy, done, n_lb, n_mn)
+
+    @staticmethod
+    def _iimp_score_loop(resid, lead_buy, done, n_lb, n_mn):
+        """The reference loop _iimp_score replaced (kept for the gate)."""
+        score = np.full(int(np.size(resid)), np.nan)
+        hist = {True: [], False: []}
+        for k in range(int(np.size(resid))):
+            sdk = bool(lead_buy[k])
+            if np.isfinite(resid[k]):
+                h = hist[sdk]
+                if len(h) >= int(n_mn):
+                    score[k] = float(resid[k] - np.median(h[-int(n_lb):]))
+                if bool(done[k]):
+                    h.append(float(resid[k]))
+        return score
+
     def _iimp_climb(self, t, t_end, is_buy):
         """Per cycle: the side's own aggressive $ up to the cycle's EXTREME, and the seconds it took to get there.
 
@@ -21532,18 +21654,41 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if not n:
             return own, secs   # (kept: the leader-only form the panel and the harnesses already use)
         base = int(base)
-        for k in range(int(np.size(t))):
-            a = int(np.floor(float(t[k]))) - base; z = int(np.floor(float(t_end[k]))) - base
-            z = min(z, n - 1)   # the FORMING cycle's end can sit past the store's last bin (a quiet tape, or a
-            if a < 0 or z < a:  # read whose right edge leads the ticks): measure it over the bins that exist
+        # MEMO per SETTLED cycle (2026-09-20): a finished cycle's bins do not move, so its climb is walked once
+        # and kept under (first bin, last bin, side) for as long as the store's history revision and base hold
+        # (a backfill that rewrites older bins bumps rev_hist; a reset or load moves both). Bins within the
+        # store's un-revisioned margin of the live edge can still be rewritten by a late batch, so rows ending
+        # there -- the forming cycle, and the last finished one for a few seconds -- are always walked afresh.
+        # The walk was 14% of a live session's GUI thread, every row on every frame.
+        _mk = (int(getattr(st, "rev_hist", 0)), base)
+        _memo = self.__dict__.get("_iimp_climb_memo")
+        if _memo is None or _memo[0] != _mk:
+            _memo = self._iimp_climb_memo = (_mk, {})
+        _d = _memo[1]
+        _settled = n - 1 - int(getattr(st, "_HIST_MARGIN_BINS", 5))    # a row ending before this bin cannot change
+        _A = (np.floor(np.asarray(t, dtype=np.float64)) - base).astype(np.int64).tolist()
+        _Z = np.minimum(np.floor(np.asarray(t_end, dtype=np.float64)) - base, n - 1).astype(np.int64).tolist()
+        _B = np.asarray(is_buy, dtype=bool).tolist()      # plain ints and bools: the per-row numpy scalar
+        for k in range(len(_A)):                          # conversions were most of the warm walk's cost
+            a = _A[k]; z = _Z[k]    # z: the FORMING cycle's end can sit past the store's last bin (a quiet tape,
+            if a < 0 or z < a:      # or a read whose right edge leads the ticks): measure it over the bins that exist
                 continue
-            if bool(is_buy[k]):
+            _kb = _B[k]
+            _hit = _d.get((a, z, _kb))
+            if _hit is not None:
+                own[k], secs[k] = _hit
+                continue
+            if _kb:
                 seg = st._pxh[a:z + 1]
                 h = a + int(np.argmax(np.where(seg > 0, seg, -np.inf))); src = st._buy
             else:
                 seg = st._pxl[a:z + 1]
                 h = a + int(np.argmin(np.where(seg > 0, seg, np.inf))); src = st._sell
             own[k] = float(np.sum(src[a:h + 1])); secs[k] = float(h - a + 1)
+            if z < _settled:
+                _d[(a, z, _kb)] = (own[k], secs[k])
+        if len(_d) > 8192:
+            _d.clear()
         return own, secs
 
     def _iimp_tick(self, now: float) -> None:
@@ -21633,16 +21778,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             resid = y_r - pred
         # the score: this cycle's residual against the median of the previous N cycles OF THE SAME SIDE, so a
         # buy cycle is judged against buy cycles (the Volume and Speed panes' rule)
-        score = np.full(int(t.size), np.nan)
-        hist = {True: [], False: []}
-        for k in range(int(t.size)):
-            sdk = bool(lead_buy[k])
-            if np.isfinite(resid[k]):
-                h = hist[sdk]
-                if len(h) >= int(n_mn):
-                    score[k] = float(resid[k] - np.median(h[-int(n_lb):]))
-                if bool(done[k]):
-                    h.append(float(resid[k]))
+        score = self._iimp_score(resid, lead_buy, done, n_lb, n_mn)
         keep = (done | form_all) & np.isfinite(imb) & np.isfinite(score) & (t >= vx0)
         # the forming row's AGE is in the signature: a second with no prints still stretches its duration, and
         # without it a quiet stretch would freeze the live bar until the next trade
@@ -22407,7 +22543,17 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
 
         `include_open` rates the cycle still FORMING so the Interpretation feed can show its book alongside a
         running state; the Book pane keeps the default and is unchanged. An unfinished cycle is never appended
-        to the baseline either way."""
+        to the baseline either way.
+
+        Vectorised 2026-09-20: this IS prev_ratio's rule (a finite, positive value rates; finished rows append;
+        the open row is rated only when asked) and delegates to it. A py-spy sample of a live session put the
+        loop below -- an np.median per cycle, on every frame -- at 21% of the GUI thread through the Interest x
+        Impact pane alone. It stays as _lob_ratio_loop for the gate that holds the two equal."""
+        return _interp_prev(vals, done, n_base, min_n, include_open=include_open)
+
+    @staticmethod
+    def _lob_ratio_loop(vals, done, n_base, min_n, include_open=False):
+        """The reference loop _lob_ratio replaced (kept for the gate)."""
         out = np.full(int(np.size(vals)), np.nan)
         hist = []
         for k in range(out.size):

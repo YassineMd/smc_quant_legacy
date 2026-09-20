@@ -37,6 +37,7 @@ nearly all do. A missing reading prints "-", never a fabricated one.
 """
 from __future__ import annotations
 
+import bisect
 import time
 
 import numpy as np
@@ -197,17 +198,29 @@ def _ratio_text(r: float) -> str:
 
 def _median_prev_windows(hv: np.ndarray, nb: int, mn: int) -> np.ndarray:
     """base[j] = median of hv[max(0, j - nb):j] for j = 0..len(hv) (the history BEFORE the j-th append),
-    NaN while fewer than mn values exist. Vectorised over the full windows; the ramp (mn <= j < nb) is at
-    most nb - mn tiny medians."""
+    NaN while fewer than mn values exist.
+
+    ONE SORTED WALK (2026-09-20): each value is inserted with bisect.insort and the one that leaves the window
+    removed the same way -- both C-level moves -- and every median is a middle pick with np.median's own
+    arithmetic (the mean of the two middles when the count is even), so the numbers are bit-identical to the
+    medians this replaced (the gates hold it to the loops). The earlier form vectorised the full windows but
+    paid one np.median per ramp step, nb of them on every call: 12 ms at a 200-cycle lookback, per side, per
+    frame, on the GUI thread."""
     m = int(hv.shape[0])
     base = np.full(m + 1, np.nan)
     if m < mn:
         return base
-    if m >= nb:
-        win = np.lib.stride_tricks.sliding_window_view(hv, nb)          # windows ending at j = nb .. m
-        base[nb:m + 1] = np.median(win, axis=1)
-    for j in range(mn, min(nb, m + 1)):
-        base[j] = np.median(hv[:j])
+    vals = np.asarray(hv, dtype=np.float64).tolist()
+    srt: list = []
+    ins, left = bisect.insort, bisect.bisect_left
+    for j in range(m + 1):
+        if j >= mn:
+            cnt = len(srt); h = cnt >> 1
+            base[j] = srt[h] if (cnt & 1) else 0.5 * (srt[h - 1] + srt[h])
+        if j < m:
+            ins(srt, vals[j])
+            if j >= nb:
+                del srt[left(srt, vals[j - nb])]
     return base
 
 
@@ -357,6 +370,48 @@ def same_side_ratio_loop(vals, is_dom_buy, done, n_base: int, min_n: int, includ
             if base > 0:
                 out[k] = v[k] / base
         if dn[k]:
+            h.append(float(v[k]))
+    return out
+
+
+def same_side_diff(vals, is_dom_buy, done, n_base: int, min_n: int) -> np.ndarray:
+    """Each cycle's value MINUS the median of the SAME side's previous n_base finished values -- the Interest x
+    Impact score's rule (a residual judged against its own side's recent residuals). Every finite row is rated,
+    the forming one included; only FINISHED rows enter a side's history; NaN below min_n.
+    Vectorised 2026-09-20: as a Python loop with an np.median per cycle it ran on every frame of a live session
+    and a py-spy sample put it at 17% of the GUI thread. The loop stays as same_side_diff_loop and a gate holds
+    the two equal."""
+    n = int(np.size(done))
+    if n == 0:
+        return np.full(0, np.nan)
+    v = np.asarray(vals, dtype=np.float64)
+    dn = np.asarray(done, dtype=bool)
+    groups = np.asarray(is_dom_buy, dtype=bool).astype(np.int64)
+    ok = np.isfinite(v)
+    nb, mn = max(1, int(n_base)), max(1, int(min_n))
+    out = np.full(n, np.nan)
+    app = ok & dn
+    j = history_depth(ok, dn, groups)
+    for g in np.unique(groups):
+        mg = groups == g
+        base = _median_prev_windows(v[app & mg], nb, mn)
+        r = ok & mg
+        out[r] = v[r] - base[j[r]]
+    return out
+
+
+def same_side_diff_loop(vals, is_dom_buy, done, n_base: int, min_n: int) -> np.ndarray:
+    """The reference loop same_side_diff replaced (kept for the gate)."""
+    v = np.asarray(vals, dtype=np.float64)
+    out = np.full(int(v.size), np.nan)
+    hist = {True: [], False: []}
+    for k in range(int(v.size)):
+        if not np.isfinite(v[k]):
+            continue
+        h = hist[bool(is_dom_buy[k])]
+        if len(h) >= int(min_n):
+            out[k] = float(v[k] - np.median(h[-int(n_base):]))
+        if bool(done[k]):
             h.append(float(v[k]))
     return out
 
