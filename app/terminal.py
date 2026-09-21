@@ -20310,7 +20310,20 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if not sp:
             return
         _edge = float(sp[1])
-        _a = max(float(sp[0]), _edge - float(config.INTERP_SPAN_SECS))
+        # ⚠⚠ THE READ STARTS _lb_secs() BEFORE THE WINDOW IT SHOWS (user 2026-09-21: "for some it shows, for
+        # others it doesn't"). Every rating is relative to the previous N cycles IN THE READ, and the read used
+        # to start exactly where the feed does -- so the feed's oldest rows had nothing behind them and said
+        # "not enough history yet", staggered row by row because the speed baseline is SAME-SIDE (MEASURED on a
+        # quiet morning: 201 cycles in the 6 h window, under the 240-row cap, so every one was displayed; 6
+        # unrated at ranks 0,1,2,3,5,7 from the oldest; all 6 rateable by a read starting 4 h earlier, with
+        # 66 h of tape sitting in the store). On a busy day the cap hid them: the rows shown were the newest
+        # 240 of a longer read. The rows a little above them were worse in a quieter way -- rated, but on 3-19
+        # cycles instead of N, so the feed could name a state the PRICE pane's candle (which has always read
+        # _lb_secs() before its view) did not wear. The cycles before the window are read to BE the baseline
+        # and are never shown: _interp_show0 is where the feed starts.
+        _show0 = _edge - float(config.INTERP_SPAN_SECS)
+        self._interp_show0 = _show0
+        _a = max(float(sp[0]), _show0 - self._lb_secs())
         try:
             self._interp_data = (_a, _edge, self._flow.crosses(
                 _a, _edge, float(self._flow_win),
@@ -20337,10 +20350,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             if self._interp_sig != ("empty",):
                 self._interp_sig = ("empty",); p.setRows([])
             return
-        # every cycle in the read is shown: the read IS the feed's window now, so there is nothing to clip
-        # against and a pan cannot take rows away
-        vis = np.ones(int(t.size), dtype=bool)
-        nvis = int(t.size)
+        # the feed's own window is shown; the cycles the read holds BEFORE it are everyone's baseline and nothing
+        # else (see _interp_tick). Anchored at the live edge, so a pan still cannot take rows away.
+        vis = np.asarray(t, dtype=np.float64) >= float(self.__dict__.get("_interp_show0", vx0)) - 1e-6
+        if not vis.any():
+            vis[-1] = True                        # a single cycle older than the whole window: still show it
+        nvis = int(vis.sum())
         # the forming cycle's elapsed time is bucketed, so a live cycle does not rebuild the feed every frame.
         # The read ends at the store's own live edge, so the open cycle is genuinely the forming one -- unless
         # the tape itself has gone stale, which is worth not lying about.
@@ -20351,7 +20366,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _lp = self._engine_live_px()
         sig = (nvis, round(float(t[-1]), 2), int(self._flow_win), int(_form // 2), live,
                round(float(_lp), 6) if _lp is not None else None,
-               int(len(getattr(self, "_lob_cache", {}) or {})) // 8)
+               int(len(getattr(self, "_lob_cache", {}) or {})) // 8,
+               int(t.size), int(getattr(self._flow, "rev_hist", 0)))   # the baseline behind the window moved
         if sig == self._interp_sig:
             return
         self._interp_sig = sig
