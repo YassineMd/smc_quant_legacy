@@ -482,7 +482,16 @@ IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretc
 # ⚠ It exists only where the I x I pane has numbers: the newest FLOW_CROSS_MAX cycles of the view, rated ones only.
 # ⚠ Reading by demand: while the PRICE pane shows, the I x I tick runs even with that pane toggled off.
 # ⚠ DESCRIPTIVE: it names a cycle that has closed (or is closing); nothing here was tested as a signal.
+# "TAKEOVER" is its name in the menu (Indicator > Cycle Chart): one side takes the tape over while the other lets go.
+# PX_IIB_ON is only the toggle's DEFAULT -- the checkbox (persisted with every other layer, key "cyc_takeover") is
+# what switches it, and with it off nothing is computed and nothing keeps the I x I tick alive.
 PX_IIB_ON = True
+# VACUUM candles too (user, the same day: "apply this also for vaccum buy/sell not just breakout buy/sell"). A vacuum
+# is the quadrant map's LIGHT flow + BIG move, and like a breakout it names the way price went: buy = up, sell = down.
+# ⚠ The PRICE pane draws vacuum candles NEUTRAL (only breakout and absorbed carry a colour), so their state is not in
+# the candle cache: it is classified on the I x I pane's own read with the very quadrant rule the candles' colours and
+# the Interpretation feed use (_px_quadrants), and only a candle the cache left neutral can be badged as a vacuum.
+PX_IIB_VACUUM = True
 # THE GAIN FILTER (user, the same day: "for breakout buy signal we wanna see buyer gaining interestximpact and sellers
 # loosing it, and for breakout sell signal we wanna see sellers gaining interestximpact and buyers loosing it"): on top
 # of the 1x rule a breakout BUY needs the buyers' I x I ABOVE the previous bar's and the sellers' BELOW OR EQUAL TO the

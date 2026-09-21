@@ -665,6 +665,24 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         # checkbox lands in self.layer_checks regardless of section, so persistence + layer_state stay uniform.
         self.m10_section = self._build_layer_section("Mode 10 Overlays", _M10_LAYERS, expanded=False)
         self.indicator_section = self._build_layer_section("Indicator", _M10_INDICATORS, expanded=False)
+        # Indicator > CYCLE CHART (user 2026-09-21): what is drawn on the Flow-mode PRICE pane -- the chart of one candle
+        # per cycle -- rather than on the bucket canvas. A nested accordion, so the group reads as a place. Its
+        # checkboxes live in layer_checks like every other layer: persisted and restored by the same generic loop.
+        self.cycle_chart_section = CollapsibleSection("Cycle Chart", expanded=True)
+        _tk = QtWidgets.QCheckBox("Takeover \u25b2\u25bc  (breakout / vacuum one side owns)")
+        _tk.setChecked(bool(config.PX_IIB_ON))
+        _tk.setToolTip(
+            "A triangle on the cycle candles where ONE SIDE TAKES THE TAPE OVER. On a BREAKOUT or VACUUM BUY candle, a "
+            "green \u25b2 under its low when: the buyers' interest x impact is above 1x and the sellers' below 1x; the "
+            "buyers' is above the previous bar's and the sellers' lower or equal to the previous bar's; and the two "
+            "lines stand at least %.2gx apart (the buyers' multiple minus the sellers'). On a BREAKOUT or VACUUM SELL "
+            "candle, a red \u25bc over its high on the mirror. The numbers are the INTEREST x IMPACT pane's 'Lines "
+            "Buyer/Seller' lines; the forming candle's mark is lighter. It works with that pane hidden. Descriptive "
+            "only." % float(config.PX_IIB_MIN_SPREAD))
+        _tk.toggled.connect(lambda on, k="cyc_takeover": self.layerToggled.emit(k, on))
+        self.layer_checks["cyc_takeover"] = _tk
+        self.cycle_chart_section.addWidget(_tk)
+        self.indicator_section.addWidget(self.cycle_chart_section)
         self.candles_section = self._build_layer_section("Candles", _M10_CANDLES, expanded=False)
         self.strat_section = self._build_layer_section("Strategies", _M10_STRATEGIES, expanded=False)
         # Strategies dropdown FIRST, then Indicator, then the base overlays / candles.

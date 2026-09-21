@@ -19351,6 +19351,28 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         out = np.full(n, -1, dtype=np.int64)
         if n == 0:
             return out
+        q = self._px_quadrants(t, t_end, done, move, is_buy, strong, cbuy, csell)
+        if q is None:
+            return out
+        ok, heavy, big, up, side = q
+        # ⚠ ONLY the four states the user asked for carry a colour: BREAKOUT buy/sell and BUYER/SELLER
+        # ABSORBED. VACUUM and QUIET deliberately come back as -1 and are drawn on the Chart Style's own
+        # bearish-fill / bullish-hollow pair -- colouring all six (which I did first) makes the two that
+        # matter compete with four that do not, which is the opposite of what a colour code is for.
+        col = np.where(heavy & big, np.where(up, _C_BRK_BUY, _C_BRK_SELL),
+              np.where(heavy, np.where(side, _C_AB_BUY, _C_AB_SELL), -1))
+        return np.where(ok, col, -1).astype(np.int64)
+
+    def _px_quadrants(self, t, t_end, done, move, is_buy, strong, cbuy, csell):
+        """(ok, heavy, big, up, side) per cycle -- the quadrant map's two axes, or None when they cannot be rated.
+
+        heavy = aggressive $ per second above its own baseline, big = |ticks| per second above the same side's
+        baseline and not flat, up = the way price went. BREAKOUT = heavy & big, ABSORBED = heavy & ~big, VACUUM =
+        ~heavy & big, QUIET = neither. Split out of _px_state_cols (2026-09-21) so the candles' colours and the
+        Takeover badge's VACUUM read are one rule and cannot drift apart."""
+        n = int(np.size(t))
+        if n == 0:
+            return None
         side, _rate, _st = self._cycle_impact(is_buy, strong, move, cbuy, csell)
         te = np.array(t_end, dtype=np.float64, copy=True)
         if n and not bool(done[-1]):
@@ -19364,19 +19386,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             sr = _interp_side_ratio(np.abs(mv) / dur, side, done, self._lb_n(), self._lb_min_n(),
                                     include_open=True)
         except Exception:
-            return out
+            return None
         ok = np.isfinite(vr) & np.isfinite(sr)
         flat = np.abs(mv) < float(config.SPEED_FLAT_TICKS)
         heavy = vr > 1.0
         big = (sr > 1.0) & ~flat
         up = mv > 0
-        # ⚠ ONLY the four states the user asked for carry a colour: BREAKOUT buy/sell and BUYER/SELLER
-        # ABSORBED. VACUUM and QUIET deliberately come back as -1 and are drawn on the Chart Style's own
-        # bearish-fill / bullish-hollow pair -- colouring all six (which I did first) makes the two that
-        # matter compete with four that do not, which is the opposite of what a colour code is for.
-        col = np.where(heavy & big, np.where(up, _C_BRK_BUY, _C_BRK_SELL),
-              np.where(heavy, np.where(side, _C_AB_BUY, _C_AB_SELL), -1))
-        return np.where(ok, col, -1).astype(np.int64)
+        return ok, heavy, big, up, side
 
     def _px_rating_depth(self, t, t_end, done, move, is_buy, strong, cbuy, csell):
         """How much history each cycle's colour stands on, capped at the lookback N: the smaller of the two
@@ -22220,6 +22236,17 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if int(t.size) > 1:
             _plb[1:] = np.where(_rated_all[:-1], _lb_all[:-1], np.nan)
             _pls[1:] = np.where(_rated_all[:-1], _ls_all[:-1], np.nan)
+        # VACUUM, for the PRICE pane's Takeover badge: +1 a vacuum BUY (light flow, big move, price up), -1 a vacuum
+        # SELL, 0 anything else. Classified HERE, on the read these rows come from, because the candle cache cannot
+        # say it (vacuum candles are drawn neutral). Two ratio passes, so only while the badge asks for it.
+        _vac = np.zeros(int(t.size), dtype=np.int8)
+        _vac_on = bool(config.PX_IIB_VACUUM) and self._px_iib_wanted()
+        if _vac_on:
+            _q = self._px_quadrants(t, t_end_c, done, move, is_buy, strong, cbuy, csell)
+            if _q is not None:
+                _qok, _qheavy, _qbig, _qup, _qside = _q
+                _vm = _qok & ~_qheavy & _qbig
+                _vac = np.where(_vm, np.where(_qup, 1, -1), 0).astype(np.int8)
         _mode = str(self.__dict__.get("_iimp_mode", "None"))
         _lines = _mode == str(config.IIMP_LINES_MODE)
         if not _lines and self.__dict__.get("_iimp_lines_has") and self._iimp_lines is not None:
@@ -22385,7 +22412,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                            "sbuy": _sc["buy"], "ssell": _sc["sell"],
                            "nbuy": _scn["buy"], "nsell": _scn["sell"],
                            "liib": _lb, "liis": _ls, "mode": _mode,
-                           "pliib": _plb[keep], "pliis": _pls[keep]}      # the previous bar's, NaN across a break
+                           "pliib": _plb[keep], "pliis": _pls[keep],      # the previous bar's, NaN across a break
+                           "vac": _vac[keep], "vac_on": _vac_on}          # +1 / -1 a VACUUM buy / sell (see above)
         if self._iimp_read is not None:
             _k = int(v.size) - 1
             _w = wk[_k]
@@ -22431,7 +22459,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
     # ------------------------------------------------------------------
     def _px_iib_wanted(self) -> bool:
         """Are the breakout badges on screen? While they are, the INTEREST x IMPACT tick runs for them."""
-        if not bool(config.PX_IIB_ON) or self.scanner_mode != "flow":
+        if self.scanner_mode != "flow" or not self._px_iib_layer_on():
             return False
         pw = self.__dict__.get("_px_plot")
         if pw is None:
@@ -22440,6 +22468,20 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             return bool(pw.isVisible())
         except RuntimeError:
             return False
+
+    def _px_iib_layer_on(self) -> bool:
+        """Indicator > Cycle Chart > Takeover, read ONCE per layer revision (a menu lookup per frame is not free)."""
+        _rev = self.__dict__.get("_layer_rev", 0)
+        c = self.__dict__.get("_px_iib_tog")
+        if c is not None and c[0] == _rev:
+            return c[1]
+        try:
+            cb = self.menu.layer_checks.get("cyc_takeover")
+            v = bool(cb.isChecked()) if cb is not None else bool(config.PX_IIB_ON)
+        except Exception:
+            v = bool(config.PX_IIB_ON)
+        self._px_iib_tog = (_rev, v)
+        return v
 
     def _px_iib_clear(self) -> None:
         its = self.__dict__.get("_px_iib")
@@ -22476,16 +22518,28 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         lc = self.__dict__.get("_px_lc")                      # the forming candle's overlay state, or None
         d = self.__dict__.get("_px_data")
         _fcol = int(d[9]) if (d is not None and len(d) > 9) else -1
+        _src0 = self._px_iib_src
+        if _src0 is not None and _src0[0] is L:
+            _fvac = int(self.__dict__.get("_px_iib_fvac", 0))          # a property of the DICT: read once per dict
+        else:
+            if L is not None and bool(config.PX_IIB_VACUUM) and not bool(L.get("vac_on", False)):
+                # the dict in hand was built while the badge was off, so it carries no vacuum read: ask for a fresh one
+                self._iimp_sig = None; self._iimp_t = 0.0
+            _fvac = 0
+            if L is not None and bool(config.PX_IIB_VACUUM) and int(np.size(L["x0"])) \
+                    and bool(np.asarray(L["form"], dtype=bool)[-1]):
+                _fvac = int(np.asarray(L.get("vac", [0]))[-1])
+            self._px_iib_fvac = _fvac
         # ⚠ the forming candle's middle moves with the CLOCK, so its geometry belongs in the signature only while it
         # could carry a badge at all -- a BREAKOUT in the making. Always in, it re-laid every badge ~5 times a second
         # for nothing (measured on the first live boot: median 25 us per frame against 7 us idle).
         _fl = None
-        if lc and _fcol in (1, 2):                            # flow_interp.C_BREAK_BUY / C_BREAK_SELL
+        if lc and (_fcol in (1, 2) or (_fcol < 0 and _fvac != 0)):    # a BREAKOUT (C_BREAK_BUY / _SELL) or a VACUUM forming
             try:
                 _fl = (round(float(lc["l"]), 6), round(float(lc["h"]), 6), round(float(lc["x"]), 1))
             except (KeyError, TypeError, ValueError):
                 _fl = None
-        sig = (round(float(vy0), 6), round(float(vy1), 6), int(vb.height()), _fcol, _fl)
+        sig = (round(float(vy0), 6), round(float(vy1), 6), int(vb.height()), _fcol, _fvac, _fl)
         src = self._px_iib_src
         if src is not None and src[0] is L and src[1] is arr and sig == self._px_iib_sig:
             return
@@ -22532,6 +22586,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 agree_s &= (_ms - _mb) >= _msp
         bx, by, sx, sy = [], [], [], []
         keys_b, keys_s = [], []
+        vac = np.asarray(L["vac"], dtype=np.int64) if (bool(config.PX_IIB_VACUUM) and "vac" in L) else None
         if arr is not None and int(np.size(arr[0])):
             ct, cte, _co, ch, cl, _cc, ccol = arr
             fin = np.flatnonzero(~form)
@@ -22540,22 +22595,27 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 jm = np.maximum(j - 1, 0)
                 j = np.where(np.abs(ct[jm] - x0[fin]) < np.abs(ct[j] - x0[fin]), jm, j)      # the NEAREST cached start
                 ok = np.abs(ct[j] - x0[fin]) <= 1.0
-                mb = ok & agree_b[fin] & (ccol[j] == int(C_BREAK_BUY))
-                ms = ok & agree_s[fin] & (ccol[j] == int(C_BREAK_SELL))
+                # the candle's STATE: a breakout by its own cached colour; a vacuum by the dict's read, and only where
+                # the cache left the candle NEUTRAL -- a badge must never contradict the colour it sits on
+                _vf = vac[fin] if vac is not None else np.zeros(int(fin.size), dtype=np.int64)
+                _neutral = ccol[j] < 0
+                mb = ok & agree_b[fin] & ((ccol[j] == int(C_BREAK_BUY)) | (_neutral & (_vf > 0)))
+                ms = ok & agree_s[fin] & ((ccol[j] == int(C_BREAK_SELL)) | (_neutral & (_vf < 0)))
                 xm = 0.5 * (ct[j] + cte[j])
                 bx = xm[mb]; by = np.clip(cl[j][mb] - _off, _lo_y, _hi_y); keys_b = ct[j][mb]
                 sx = xm[ms]; sy = np.clip(ch[j][ms] + _off, _lo_y, _hi_y); keys_s = ct[j][ms]
         self._px_iib[0].setData(x=bx, y=by); self._px_iib[1].setData(x=sx, y=sy)
         # the FORMING candle: the overlay's own geometry, the live read's state, the dict's forming row
         fdraw = None
-        if lc and _fl is not None and form.any() and _fcol in (int(C_BREAK_BUY), int(C_BREAK_SELL)):
+        _fside = 1 if _fcol == int(C_BREAK_BUY) else (-1 if _fcol == int(C_BREAK_SELL) else (_fvac if _fcol < 0 else 0))
+        if lc and _fl is not None and form.any() and _fside != 0:
             k = int(np.flatnonzero(form)[-1])
             try:
                 _same = abs(float(lc["t0"]) - float(x0[k])) <= 1.0
             except (KeyError, TypeError, ValueError):
                 _same = False
-            if _same and ((_fcol == int(C_BREAK_BUY) and bool(agree_b[k])) or (_fcol == int(C_BREAK_SELL) and bool(agree_s[k]))):
-                _buy = _fcol == int(C_BREAK_BUY)
+            if _same and ((_fside > 0 and bool(agree_b[k])) or (_fside < 0 and bool(agree_s[k]))):
+                _buy = _fside > 0
                 _q = QtGui.QColor(config.PX_IIB_BUY_COL if _buy else config.PX_IIB_SELL_COL); _a = int(config.PX_IIB_FORM_A)
                 _y = (float(lc["l"]) - _off) if _buy else (float(lc["h"]) + _off)
                 fdraw = (float(lc["x"]), float(min(max(_y, _lo_y), _hi_y)), bool(_buy))
