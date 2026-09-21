@@ -669,16 +669,19 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         # per cycle -- rather than on the bucket canvas. A nested accordion, so the group reads as a place. Its
         # checkboxes live in layer_checks like every other layer: persisted and restored by the same generic loop.
         self.cycle_chart_section = CollapsibleSection("Cycle Chart", expanded=True)
-        _tk = QtWidgets.QCheckBox("Takeover \u25b2\u25bc  (breakout / vacuum one side owns)")
+        _tk = QtWidgets.QCheckBox("Takeover \u25b2\u25bc  (one side owns the cycle)")
         _tk.setChecked(bool(config.PX_IIB_ON))
         _tk.setToolTip(
-            "A triangle on the cycle candles where ONE SIDE TAKES THE TAPE OVER. On a BREAKOUT or VACUUM BUY candle, a "
-            "green \u25b2 under its low when: the buyers' interest x impact is above 1x and the sellers' below 1x; the "
-            "buyers' is above the previous bar's and the sellers' lower or equal to the previous bar's; and the two "
-            "lines stand at least %.2gx apart (the buyers' multiple minus the sellers'). On a BREAKOUT or VACUUM SELL "
-            "candle, a red \u25bc over its high on the mirror. The numbers are the INTEREST x IMPACT pane's 'Lines "
-            "Buyer/Seller' lines; the forming candle's mark is lighter. It works with that pane hidden. Descriptive "
-            "only." % float(config.PX_IIB_MIN_SPREAD))
+            "A triangle on the cycle candles where ONE SIDE TAKES THE TAPE OVER. On a BREAKOUT, VACUUM or QUIET candle "
+            "that went UP, a green \u25b2 under its low when: the buyers' interest x impact is above 1x and the "
+            "sellers' below 1x; the buyers' is above the previous bar's and the sellers' lower or equal to the previous "
+            "bar's; and the two lines stand at least %.2gx apart (the buyers' multiple minus the sellers'). On a candle "
+            "that went DOWN, a red \u25bc over its high on the mirror. A VACUUM or QUIET candle must also have KEPT at "
+            "least %d%% of its push (close to open over extreme to open, read once the push is %d ticks long). The "
+            "numbers are the INTEREST x IMPACT pane's 'Lines Buyer/Seller' lines; the forming candle's mark is lighter. "
+            "It works with that pane hidden. Descriptive only."
+            % (float(config.PX_IIB_MIN_SPREAD), int(round(100.0 * float(config.PX_IIB_KEPT_MIN))),
+               int(config.IIMP_KEEP_MIN_TICKS)))
         _tk.toggled.connect(lambda on, k="cyc_takeover": self.layerToggled.emit(k, on))
         self.layer_checks["cyc_takeover"] = _tk
         self.cycle_chart_section.addWidget(_tk)

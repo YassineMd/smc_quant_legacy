@@ -22240,13 +22240,17 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # SELL, 0 anything else. Classified HERE, on the read these rows come from, because the candle cache cannot
         # say it (vacuum candles are drawn neutral). Two ratio passes, so only while the badge asks for it.
         _vac = np.zeros(int(t.size), dtype=np.int8)
-        _vac_on = bool(config.PX_IIB_VACUUM) and self._px_iib_wanted()
+        _qui = np.zeros(int(t.size), dtype=np.int8)      # ... and QUIET (light flow, small move), by the way price went
+        _vac_on = (bool(config.PX_IIB_VACUUM) or bool(config.PX_IIB_QUIET)) and self._px_iib_wanted()
         if _vac_on:
             _q = self._px_quadrants(t, t_end_c, done, move, is_buy, strong, cbuy, csell)
             if _q is not None:
                 _qok, _qheavy, _qbig, _qup, _qside = _q
                 _vm = _qok & ~_qheavy & _qbig
                 _vac = np.where(_vm, np.where(_qup, 1, -1), 0).astype(np.int8)
+                _mvq = np.nan_to_num(np.asarray(move, dtype=np.float64), nan=0.0)
+                _qm = _qok & ~_qheavy & ~_qbig                 # a quiet cycle that closed where it opened has no side
+                _qui = np.where(_qm & (_mvq > 0), 1, np.where(_qm & (_mvq < 0), -1, 0)).astype(np.int8)
         _mode = str(self.__dict__.get("_iimp_mode", "None"))
         _lines = _mode == str(config.IIMP_LINES_MODE)
         if not _lines and self.__dict__.get("_iimp_lines_has") and self._iimp_lines is not None:
@@ -22413,7 +22417,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                            "nbuy": _scn["buy"], "nsell": _scn["sell"],
                            "liib": _lb, "liis": _ls, "mode": _mode,
                            "pliib": _plb[keep], "pliis": _pls[keep],      # the previous bar's, NaN across a break
-                           "vac": _vac[keep], "vac_on": _vac_on}          # +1 / -1 a VACUUM buy / sell (see above)
+                           "vac": _vac[keep], "vac_on": _vac_on,          # +1 / -1 a VACUUM buy / sell (see above)
+                           "quiet": _qui[keep]}                           # +1 / -1 a QUIET cycle that went up / down
         if self._iimp_read is not None:
             _k = int(v.size) - 1
             _w = wk[_k]
@@ -22522,21 +22527,26 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if _src0 is not None and _src0[0] is L:
             _fvac = int(self.__dict__.get("_px_iib_fvac", 0))          # a property of the DICT: read once per dict
         else:
-            if L is not None and bool(config.PX_IIB_VACUUM) and not bool(L.get("vac_on", False)):
-                # the dict in hand was built while the badge was off, so it carries no vacuum read: ask for a fresh one
+            _lt_on = bool(config.PX_IIB_VACUUM) or bool(config.PX_IIB_QUIET)
+            if L is not None and _lt_on and not bool(L.get("vac_on", False)):
+                # the dict in hand was built while the badge was off, so it carries no vacuum / quiet read: ask for one
                 self._iimp_sig = None; self._iimp_t = 0.0
-            _fvac = 0
-            if L is not None and bool(config.PX_IIB_VACUUM) and int(np.size(L["x0"])) \
-                    and bool(np.asarray(L["form"], dtype=bool)[-1]):
-                _fvac = int(np.asarray(L.get("vac", [0]))[-1])
+            _fvac = 0                                   # the forming row's LIGHT-flow side: vacuum or quiet, +1 / -1
+            if L is not None and _lt_on and int(np.size(L["x0"])) and bool(np.asarray(L["form"], dtype=bool)[-1]):
+                if bool(config.PX_IIB_VACUUM):
+                    _fvac = int(np.asarray(L.get("vac", [0]))[-1])
+                if _fvac == 0 and bool(config.PX_IIB_QUIET):
+                    _fvac = int(np.asarray(L.get("quiet", [0]))[-1])
             self._px_iib_fvac = _fvac
         # ⚠ the forming candle's middle moves with the CLOCK, so its geometry belongs in the signature only while it
         # could carry a badge at all -- a BREAKOUT in the making. Always in, it re-laid every badge ~5 times a second
         # for nothing (measured on the first live boot: median 25 us per frame against 7 us idle).
         _fl = None
-        if lc and (_fcol in (1, 2) or (_fcol < 0 and _fvac != 0)):    # a BREAKOUT (C_BREAK_BUY / _SELL) or a VACUUM forming
+        if lc and (_fcol in (1, 2) or (_fcol < 0 and _fvac != 0)):    # a BREAKOUT (C_BREAK_BUY / _SELL), a VACUUM or a QUIET forming
             try:
-                _fl = (round(float(lc["l"]), 6), round(float(lc["h"]), 6), round(float(lc["x"]), 1))
+                # ... the close too when it is a light-flow candle: its "kept" moves with every print
+                _fl = (round(float(lc["l"]), 6), round(float(lc["h"]), 6), round(float(lc["x"]), 1),
+                       round(float(lc["c_to"]), 6) if _fcol < 0 else None)
             except (KeyError, TypeError, ValueError):
                 _fl = None
         sig = (round(float(vy0), 6), round(float(vy1), 6), int(vb.height()), _fcol, _fvac, _fl)
@@ -22586,9 +22596,24 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 agree_s &= (_ms - _mb) >= _msp
         bx, by, sx, sy = [], [], [], []
         keys_b, keys_s = [], []
-        vac = np.asarray(L["vac"], dtype=np.int64) if (bool(config.PX_IIB_VACUUM) and "vac" in L) else None
+        # the LIGHT-flow states, vacuum and quiet, as one signed array: the side such a candle names, 0 where neither
+        vac = np.zeros(int(x0.size), dtype=np.int64)
+        if bool(config.PX_IIB_VACUUM) and "vac" in L:
+            vac = np.asarray(L["vac"], dtype=np.int64).copy()
+        if bool(config.PX_IIB_QUIET) and "quiet" in L:
+            vac = np.where(vac != 0, vac, np.asarray(L["quiet"], dtype=np.int64))
+        _kmin = float(config.PX_IIB_KEPT_MIN); _ktk = float(config.IIMP_KEEP_MIN_TICKS); _tk = float(config.TICK_SIZE)
+
+        def _kept_ok(_o, _ext, _c, _sgn):
+            """Did a light-flow candle HOLD its move? kept = move / reach in its own direction, read only once the
+            reach is IIMP_KEEP_MIN_TICKS long -- the I x I pane's own "kept"; an unread push has held nothing."""
+            if _kmin <= 0.0:
+                return np.ones(np.shape(_o), dtype=bool)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                _rch = _sgn * (_ext - _o) / _tk; _mv = _sgn * (_c - _o) / _tk
+                return (_rch >= _ktk - 1e-9) & ((_mv / np.maximum(_rch, 1e-9)) >= _kmin - 1e-12)
         if arr is not None and int(np.size(arr[0])):
-            ct, cte, _co, ch, cl, _cc, ccol = arr
+            ct, cte, co, ch, cl, cc, ccol = arr
             fin = np.flatnonzero(~form)
             if fin.size:
                 j = np.clip(np.searchsorted(ct, x0[fin], side="left"), 0, int(ct.size) - 1)
@@ -22597,10 +22622,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 ok = np.abs(ct[j] - x0[fin]) <= 1.0
                 # the candle's STATE: a breakout by its own cached colour; a vacuum by the dict's read, and only where
                 # the cache left the candle NEUTRAL -- a badge must never contradict the colour it sits on
-                _vf = vac[fin] if vac is not None else np.zeros(int(fin.size), dtype=np.int64)
+                _vf = vac[fin]
                 _neutral = ccol[j] < 0
-                mb = ok & agree_b[fin] & ((ccol[j] == int(C_BREAK_BUY)) | (_neutral & (_vf > 0)))
-                ms = ok & agree_s[fin] & ((ccol[j] == int(C_BREAK_SELL)) | (_neutral & (_vf < 0)))
+                _kb = _kept_ok(co[j], ch[j], cc[j], 1.0); _ks = _kept_ok(co[j], cl[j], cc[j], -1.0)
+                mb = ok & agree_b[fin] & ((ccol[j] == int(C_BREAK_BUY)) | (_neutral & (_vf > 0) & _kb))
+                ms = ok & agree_s[fin] & ((ccol[j] == int(C_BREAK_SELL)) | (_neutral & (_vf < 0) & _ks))
                 xm = 0.5 * (ct[j] + cte[j])
                 bx = xm[mb]; by = np.clip(cl[j][mb] - _off, _lo_y, _hi_y); keys_b = ct[j][mb]
                 sx = xm[ms]; sy = np.clip(ch[j][ms] + _off, _lo_y, _hi_y); keys_s = ct[j][ms]
@@ -22614,7 +22640,15 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 _same = abs(float(lc["t0"]) - float(x0[k])) <= 1.0
             except (KeyError, TypeError, ValueError):
                 _same = False
-            if _same and ((_fside > 0 and bool(agree_b[k])) or (_fside < 0 and bool(agree_s[k]))):
+            _fkept = True
+            if _same and _fcol < 0:                      # a light-flow candle in the making must be HOLDING its move
+                try:
+                    _fo = np.array([float(lc["o"])]); _fc_ = np.array([float(lc["c_to"])])
+                    _fe = np.array([float(lc["h"]) if _fside > 0 else float(lc["l"])])
+                    _fkept = bool(_kept_ok(_fo, _fe, _fc_, 1.0 if _fside > 0 else -1.0)[0])
+                except (KeyError, TypeError, ValueError):
+                    _fkept = False
+            if _same and _fkept and ((_fside > 0 and bool(agree_b[k])) or (_fside < 0 and bool(agree_s[k]))):
                 _buy = _fside > 0
                 _q = QtGui.QColor(config.PX_IIB_BUY_COL if _buy else config.PX_IIB_SELL_COL); _a = int(config.PX_IIB_FORM_A)
                 _y = (float(lc["l"]) - _off) if _buy else (float(lc["h"]) + _off)

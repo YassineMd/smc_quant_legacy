@@ -492,6 +492,16 @@ PX_IIB_ON = True
 # the candle cache: it is classified on the I x I pane's own read with the very quadrant rule the candles' colours and
 # the Interpretation feed use (_px_quadrants), and only a candle the cache left neutral can be badged as a vacuum.
 PX_IIB_VACUUM = True
+# QUIET candles too (user, the same day: "lets apply it also for the Quiet"): the quadrant map's LIGHT flow + SMALL
+# move. The feed gives a quiet cycle no side, so here it takes the way price went, like the other two: up = buy,
+# down = sell, and a cycle that closed where it opened has no side and no badge.
+PX_IIB_QUIET = True
+# ... and the two LIGHT-flow states must have HELD their move (user: "regarding the vaccum and quiet they should have
+# kept >= 70%"): kept = the candle's move in its own direction over how far it reached that way -- (close - open) /
+# (high - open) for a buy -- the I x I pane's own "kept", read under the same rule: only once the push is at least
+# IIMP_KEEP_MIN_TICKS long. A push too short to read has not shown it kept anything, so it gets no badge. Breakouts
+# are NOT held to it. 0 switches it off.
+PX_IIB_KEPT_MIN = 0.70
 # THE GAIN FILTER (user, the same day: "for breakout buy signal we wanna see buyer gaining interestximpact and sellers
 # loosing it, and for breakout sell signal we wanna see sellers gaining interestximpact and buyers loosing it"): on top
 # of the 1x rule a breakout BUY needs the buyers' I x I ABOVE the previous bar's and the sellers' BELOW OR EQUAL TO the
