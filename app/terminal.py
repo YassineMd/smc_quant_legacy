@@ -1967,6 +1967,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._iimp_last = None         # the drawn cycles, so a click can explain one without re-reading the store
         self._iimp_sel_t = None        # the SELECTED cycle's start: the mark survives a redraw by time, not index
         self._iimp_wall_cache = {}     # {cycle start: (ask $, bid $) at the open} -- kept ACROSS liquidity windows
+        self._iisp_plot = None         # I x I SPREAD pane (Flow mode): the gap between the two Lines Buyer/Seller lines
+        self._iisp_vb = None
+        self._iisp_items = None        # (up, down, up forming, down forming) BarGraphItems -- one bar per cycle
+        self._iisp_src = None          # the _iimp_last dict the bars were laid from: its IDENTITY is the freshness
+        self._iisp_fsig = None         # the FINISHED bars' own signature: only the forming one moves between cycles
+        self._iisp_last = None         # what is drawn (a gate reads it)
+        self._iisp_on = bool(config.IISP_PANE_ON)
+        self._iisp_sized = False; self._iisp_ytop = 0.0
+        self._iisp_vline = None; self._iisp_hline = None
+        self._iisp_tag = None; self._iisp_time_tag = None; self._iisp_proxy = None
+        self._iisp_title = None; self._iisp_read = None
         self._iimp_book_cache = {}     # {cycle start: (bid mean, ask mean) OVER the cycle} -- the passive component
         self._score_memo = None        # (key, ({side: score}, {side: parts})) shared with the iimp panel
         self._flow_pane_on = bool(config.FLOW_PANE_ON)     # the Buy/Sell Flow pane (the main chart in Flow mode)
@@ -2498,6 +2509,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_spd_pane_on(bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)))
             self.menu.set_fratio_pane_on(bool(getattr(self, "_fratio_on", config.FRATIO_PANE_ON)))
             self.menu.set_iimp_pane_on(bool(getattr(self, "_iimp_on", config.IIMP_PANE_ON)))
+            self.menu.set_iisp_pane_on(bool(getattr(self, "_iisp_on", config.IISP_PANE_ON)))
             self.menu.set_flow_lines_on(bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)))
             self.menu.set_hlh_span(str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)))
             self.menu.set_interp_pane_on(bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)))
@@ -2774,6 +2786,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.spdPaneToggled.connect(self._on_spd_pane_toggled)              # Speed pane on/off
         self.menu.fratioPaneToggled.connect(self._on_fratio_pane_toggled)        # Flow ratios pane on/off
         self.menu.iimpPaneToggled.connect(self._on_iimp_pane_toggled)            # Interest x Impact pane on/off
+        self.menu.iispPaneToggled.connect(self._on_iisp_pane_toggled)            # I x I Spread pane on/off
         self.menu.flowLinesToggled.connect(self._on_flow_pane_toggled)           # the Buy/Sell Flow pane on/off
         self.menu.hlhSpanChanged.connect(self._on_hlh_span_changed)              # HLH merged-bloc span cap
         self.menu.interpPaneToggled.connect(self._on_interp_pane_toggled)        # Interpretation feed on/off
@@ -10945,6 +10958,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "fratio_mode": str(getattr(self, "_fratio_mode", config.FRATIO_MODE)),   # its top-right dropdown
                 "iimp_on": bool(getattr(self, "_iimp_on", config.IIMP_PANE_ON)),
                 "iimp_mode": str(getattr(self, "_iimp_mode", config.IIMP_MODE)),   # its top-right dropdown
+                "iisp_on": bool(getattr(self, "_iisp_on", config.IISP_PANE_ON)),
                 "flow_pane_on": bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)),
                 "hlh_merge_span": str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)),
                 "interp_on": bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)),
@@ -11084,6 +11098,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except RuntimeError:
                 self._fratio_combo = None
         self._iimp_on = bool(s.get("iimp_on", config.IIMP_PANE_ON))
+        self._iisp_on = bool(s.get("iisp_on", config.IISP_PANE_ON))
         _imd = str(s.get("iimp_mode", config.IIMP_MODE) or config.IIMP_MODE)
         self._iimp_mode = _imd if _imd in tuple(config.IIMP_MODES) else str(config.IIMP_MODE)
         _icb = self.__dict__.get("_iimp_combo")
@@ -17349,6 +17364,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._fratio_sig = None; self._fratio_t = 0.0
             self._iimp_show(bool(getattr(self, "_iimp_on", True)))
             self._iimp_sig = None; self._iimp_t = 0.0
+            self._iisp_show(bool(getattr(self, "_iisp_on", True)))
+            self._iisp_src = None; self._iisp_fsig = None
             self._interp_show(bool(getattr(self, "_interp_on", True)))
             self._flow_pane_apply()           # the rebuilt stack: collapse the flow pane again if it is off
         # The loaded set moved, so EVERYTHING derived from it must re-derive — same invalidation the replay step does.
@@ -18099,6 +18116,12 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._iimp_title = None; self._iimp_read = None
             self._iimp_hl = None; self._iimp_hl_span = None; self._iimp_last = None
             self._iimp_hide_popup()
+            self._iisp_plot = None; self._iisp_vb = None; self._iisp_items = None
+            self._iisp_src = None; self._iisp_fsig = None; self._iisp_last = None
+            self._iisp_sized = False; self._iisp_proxy = None
+            self._iisp_vline = None; self._iisp_hline = None
+            self._iisp_tag = None; self._iisp_time_tag = None
+            self._iisp_title = None; self._iisp_read = None
             self._cvol_title = None; self._cvol_badge = None
             self._cyc_title = None; self._cyc_badge = None
             self._liq_title = None
@@ -20303,7 +20326,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                         ("lob", getattr(self, "_lob_title", None)),
                         ("spd", getattr(self, "_spd_title", None)),
                         ("fratio", getattr(self, "_fratio_title", None)),
-                        ("iimp", getattr(self, "_iimp_title", None))):
+                        ("iimp", getattr(self, "_iimp_title", None)),
+                        ("iisp", getattr(self, "_iisp_title", None))):
             if _it is not None:
                 try:
                     _it.setText(names[_k])
@@ -20624,7 +20648,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             hl, tg = d.get(hlk), d.get(tgk)
             out.append((k, pw, vb, vl,
                         (lambda hl=hl, tg=tg: (hl is not None and hl.hide(), tg is not None and tg.hide())), d.get(ttk)))
-        for k in ("px", "liq", "cyc", "cvol", "lob", "spd", "fratio", "iimp"):
+        for k in ("px", "liq", "cyc", "cvol", "lob", "spd", "fratio", "iimp", "iisp"):
             pw = d.get("_%s_plot" % k); vb = d.get("_%s_vb" % k)
             if pw is None or vb is None:
                 continue
@@ -20715,7 +20739,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         So READING is driven by demand and DRAWING by visibility. If nothing wants it, nothing is fetched --
         that is what keeps a toggled-off pane free rather than merely cheap."""
         for _w in (getattr(self, "_liq_plot", None), getattr(self, "_lob_plot", None),
-                   getattr(self, "interp_panel", None), getattr(self, "_iimp_plot", None)):
+                   getattr(self, "interp_panel", None), getattr(self, "_iimp_plot", None),
+                   getattr(self, "_iisp_plot", None)):      # the Spread pane reads the I x I numbers, walls included
             if _w is not None:
                 try:
                     if _w.isVisible():
@@ -21199,6 +21224,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             pw.addItem(it); items.append(it)
         self._fratio_items = tuple(items)
         self._fratio_sig = None; self._fratio_fsig = None       # new items are empty: the next draw fills all four
+        self._fratio_ytop = 0.0                    # a NEW view has no fitted range yet (see _iisp_ensure_pane)
         _g = pg.mkPen("#9aa4b2", width=1.0, style=QtCore.Qt.DashLine); _g.setCosmetic(True)
         _z = pg.InfiniteLine(angle=0, pos=0.0, pen=_g)      # 1.0x: "as usual"
         _z.setZValue(3); pw.addItem(_z, ignoreBounds=True)
@@ -21615,6 +21641,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 width=float(config.IIMP_LINES_W)))
             _cf.setZValue(6); pw.addItem(_cf); _lf.append(_cf)
         self._iimp_lines = tuple(_ln); self._iimp_lines_form = tuple(_lf); self._iimp_lines_has = False
+        self._iimp_ytop = 0.0                      # a NEW view has no fitted range yet (see _iisp_ensure_pane)
         self._iimp_sig = None                      # new items are empty: the next draw fills them
         guides = []
         for _v in (float(np.log2(max(1e-9, config.IIMP_LOW))), float(np.log2(max(1e-9, config.IIMP_HIGH)))):
@@ -22065,7 +22092,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         return own, secs
 
     def _iimp_tick(self, now: float) -> None:
-        if self._iimp_plot is None or not self._iimp_plot.isVisible():
+        # READING by demand, DRAWING by visibility (the _liq_wanted lesson): the Spread pane lays out THIS pane's
+        # per-cycle numbers, so while it is on screen the tick runs even with this pane's own widget hidden -- its
+        # items are updated unseen, which costs no paint
+        if self._iimp_plot is None or not (self._iimp_plot.isVisible() or self._iisp_wanted()):
             return
         if now - self._iimp_t < float(config.CYCLE_RECALC_SECS):
             return
@@ -22118,6 +22148,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             for _it in tuple(self._iimp_lines or ()) + tuple(self._iimp_lines_form or ()):
                 _it.setData([], [])
             self._iimp_lines_has = False
+            self._iimp_last = None                 # nothing is drawn: nothing to click, nothing for the Spread pane
             self._iimp_sig = ("empty",)
             return
         n_lb = self._lb_n(); n_mn = self._lb_min_n()
@@ -22176,6 +22207,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             for _it in tuple(self._iimp_lines or ()) + tuple(self._iimp_lines_form or ()):
                 _it.setData([], [])
             self._iimp_lines_has = False
+            self._iimp_last = None                 # nothing is drawn: nothing to click, nothing for the Spread pane
             return
         x0 = t[keep]; x1 = t_end_c[keep]; v_raw = imb[keep]; good = score[keep] >= 0.0
         _sc, _scn = self._score_parts(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl,
@@ -22402,6 +22434,210 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._iimp_read.setPos(_rx1, _ry0)      # bottom right, clear of the pane's own name
         self._iimp_mark(self.__dict__.get("_iimp_sel_t"))   # a redraw must not drop the clicked bar's outline
         self._iimp_repanel()               # ... and an open panel on the FORMING bar must not go stale
+
+    # ------------------------------------------------------------------
+    # I x I SPREAD pane (Flow mode) -- the gap between the two "Lines Buyer/Seller" lines, one bar per cycle
+    # ------------------------------------------------------------------
+    def _on_iisp_pane_toggled(self, on: bool) -> None:
+        self._iisp_on = bool(on)
+        if not on:
+            self._flow_pane_lift()          # BEFORE a pane hides: it may be the collapsed chart's last neighbour
+        self._iisp_show(bool(on) and self.scanner_mode == "flow")
+        self._flow_pane_apply()
+        self._save_ui_state()
+
+    def _iisp_wanted(self) -> bool:
+        """Is the Spread pane on screen? While it is, the INTEREST x IMPACT tick runs for it (see _iimp_tick)."""
+        pw = self.__dict__.get("_iisp_plot")
+        if pw is None:
+            return False
+        try:
+            return bool(pw.isVisible())
+        except RuntimeError:
+            return False
+
+    def _iisp_ensure_pane(self):
+        if self._iisp_plot is not None:
+            return self._iisp_plot
+        try:
+            self._ensure_canvas_panes()
+        except Exception:
+            pass
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return None
+        ax = PriceAxis(orientation="right")
+        pw = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"), "right": ax})
+        pw.setBackground("#141414")
+        pw.showAxis("right"); pw.hideAxis("left")
+        for _a in ("bottom", "right"):
+            pw.getAxis(_a).setPen(pg.mkPen("#dcdcdc", width=1))
+            pw.getAxis(_a).setTextPen(pg.mkPen("#dcdcdc"))
+        pw.showGrid(x=False, y=False)
+        pw.setMenuEnabled(False)
+        pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        pw.getAxis("bottom").set_scanner_active(False)
+        # MIRRORED, Delta's convention: both halves read a multiple >= 1x and the half (and the colour) IS the side
+        ax.tickStrings = lambda vals, sc, sp_: ["%.2gx" % (2.0 ** abs(float(v))) for v in vals]
+        vb = pw.getViewBox()
+        vb.setMouseEnabled(x=True, y=True)
+        vb.setXLink(self.vb)
+        # FOUR BarGraphItems, one brush each (the pane family's rule: the item count stays flat however many cycles
+        # are on screen, and there is no custom paint()): buyers' line higher, sellers' line higher, and the FORMING
+        # cycle's pair drawn lighter -- it is rated from what it has so far and still moves
+        items = []
+        for _c, _a_fill, _a_pen in ((config.IIMP_BUY_COL, int(config.IISP_FILL_A), 255),
+                                    (config.IIMP_SELL_COL, int(config.IISP_FILL_A), 255),
+                                    (config.IIMP_BUY_COL, int(config.IISP_FORM_FILL_A), int(config.IISP_FORM_PEN_A)),
+                                    (config.IIMP_SELL_COL, int(config.IISP_FORM_FILL_A), int(config.IISP_FORM_PEN_A))):
+            _col = QtGui.QColor(_c)
+            it = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
+                                 brush=pg.mkBrush(_col.red(), _col.green(), _col.blue(), _a_fill),
+                                 pen=pg.mkPen(QtGui.QColor(_col.red(), _col.green(), _col.blue(), _a_pen), width=1.0))
+            it.setZValue(5)
+            pw.addItem(it); items.append(it)
+        self._iisp_items = tuple(items)
+        self._iisp_src = None; self._iisp_fsig = None      # new items are empty: the next tick fills all four
+        # ⚠ ... and a NEW view has no fitted range: keeping the old limit made the hysteresis skip setYRange, so a
+        # rebuilt pane (Zero Point change, candle canvas and back) sat on pyqtgraph's auto-range -- lopsided, the 1x
+        # line pushed to an edge -- until the limit happened to move by half (seen in the first live boot)
+        self._iisp_ytop = 0.0
+        _z = pg.InfiniteLine(angle=0, pos=0.0, pen=pg.mkPen("#8a8a8a", width=1))      # 1x: the two lines touch
+        _z.setZValue(2); pw.addItem(_z, ignoreBounds=True)
+        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
+        self._iisp_vline = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
+        self._iisp_hline = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
+        self._iisp_vline.setZValue(15); self._iisp_hline.setZValue(15)
+        pw.addItem(self._iisp_vline, ignoreBounds=True); pw.addItem(self._iisp_hline, ignoreBounds=True)
+        self._iisp_hline.hide()
+        _tf = QtGui.QFont("Consolas", 8)
+        self._iisp_tag = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._iisp_tag.textItem.setFont(_tf); self._iisp_tag.setZValue(16)
+        pw.addItem(self._iisp_tag, ignoreBounds=True); self._iisp_tag.hide()
+        self._iisp_time_tag = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        self._iisp_time_tag.textItem.setFont(_tf); self._iisp_time_tag.setZValue(61)
+        pw.addItem(self._iisp_time_tag, ignoreBounds=True); self._iisp_time_tag.hide()
+        self._iisp_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_iisp_mouse_move)
+        # the newest cycle spelled out, bottom right (the I x I pane's own place for it)
+        self._iisp_read = pg.TextItem(anchor=(1.0, 1.0), color=config.PANE_TITLE_COL)
+        self._iisp_read.textItem.setFont(QtGui.QFont("Consolas", int(config.PANE_TITLE_PT)))
+        self._iisp_read.setZValue(41)
+        pw.addItem(self._iisp_read, ignoreBounds=True)
+        self._iisp_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["iisp"])
+        self._iisp_plot = pw
+        self._iisp_vb = vb
+        self._theme_sub_panes(not self._simple_bw())
+        sp.addWidget(pw)
+        pw.setMinimumHeight(60)
+        return pw
+
+    def _iisp_show(self, on: bool) -> None:
+        if on:
+            # its numbers are the INTEREST x IMPACT pane's own, so that pane must EXIST -- hidden when its own toggle
+            # is off -- and it is built FIRST, so it sits above this one in the stack when it is shown
+            if self._iimp_plot is None and self._iimp_ensure_pane() is not None \
+                    and not (bool(getattr(self, "_iimp_on", True)) and self.scanner_mode == "flow"):
+                self._iimp_show(False)
+            if self._iisp_ensure_pane() is None:
+                return
+            self._iisp_plot.setVisible(True)
+            if self._sub_pane_grow(self._iisp_plot, not getattr(self, "_iisp_sized", False), share=0.11):
+                self._iisp_sized = True
+            self._iisp_src = None; self._iisp_fsig = None
+        elif self._iisp_plot is not None:
+            try:
+                self._iisp_plot.setVisible(False)
+            except RuntimeError:
+                self._iisp_plot = None; self._iisp_items = None; self._iisp_vb = None
+        self._stack_axis_sync()
+
+    def _iisp_hide_cursor(self) -> None:
+        for _it in (self._iisp_hline, self._iisp_tag, self._iisp_time_tag):
+            if _it is not None:
+                _it.hide()
+
+    def _on_iisp_mouse_move(self, evt) -> None:
+        if self._iisp_vb is None or self._iisp_plot is None or not self._iisp_plot.isVisible():
+            return
+        pos = evt[0]
+        if not self._iisp_plot.sceneBoundingRect().contains(pos):
+            self._iisp_hide_cursor(); self._stack_time_hide()
+            return
+        pt = self._iisp_vb.mapSceneToView(pos)
+        self._iisp_vline.setPos(pt.x())
+        self._iisp_hline.setPos(pt.y()); self._iisp_hline.show()
+        (vx0, vx1), (vy0, vy1) = self._iisp_vb.viewRange()
+        self._iisp_tag.setText("%.2fx" % (2.0 ** abs(float(pt.y()))))       # mirrored, like the axis
+        self._iisp_tag.setPos(vx1, pt.y()); self._iisp_tag.show()
+        _xl = self._x_time_label(pt.x())
+        if _xl:
+            self._iisp_time_tag.setText(_xl); self._iisp_time_tag.setPos(pt.x(), vy0); self._iisp_time_tag.show()
+        else:
+            self._iisp_time_tag.hide()
+        self._stack_cursor_sync("iisp", pt.x())
+
+    def _iisp_tick(self, now: float) -> None:
+        """Per frame, and nearly free: the pane READS NOTHING. The INTEREST x IMPACT draw builds a new dict of
+        per-cycle numbers whenever anything it shows has moved, so that dict's IDENTITY is the whole signature."""
+        if self._iisp_plot is None or self._iisp_items is None or not self._iisp_plot.isVisible():
+            return
+        d = self.__dict__.get("_iimp_last")
+        if d is self._iisp_src and (d is not None or self._iisp_last is None):
+            return
+        self._iisp_src = d
+        self._iisp_draw(d)
+
+    def _iisp_draw(self, d) -> None:
+        """ONE BAR PER CYCLE = the gap between the two lines of "Lines Buyer/Seller" as that option draws them:
+        clip(buyers' I x I) - clip(sellers' I x I), in log2. TEAL and up when the buyers' line is the higher one, RED
+        and down when the sellers' is; the forming cycle lighter, on items of its own, and only those are re-laid
+        while it forms. A cycle the I x I pane cannot rate has no point on either line, so it has no bar here."""
+        items = self._iisp_items
+        if d is None or int(np.size(d["x0"])) == 0:
+            for it in items:
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            self._iisp_fsig = None; self._iisp_last = None
+            if self._iisp_read is not None:
+                self._iisp_read.setText("")
+            return
+        _clip = float(np.log2(max(float(config.IIMP_CLIP), 1.0)))
+        x0 = np.asarray(d["x0"], dtype=np.float64); x1 = np.asarray(d["x1"], dtype=np.float64)
+        lb = np.clip(np.asarray(d["liib"], dtype=np.float64), -_clip, _clip)
+        ls = np.clip(np.asarray(d["liis"], dtype=np.float64), -_clip, _clip)
+        s = lb - ls
+        form = np.asarray(d["form"], dtype=bool); fin = ~form
+        ok = np.isfinite(s)
+        up = s >= 0.0
+        fsig = (int(fin.sum()), round(float(x0[0]), 2), round(float(x1[fin][-1]), 2) if fin.any() else 0.0,
+                round(float(np.nansum(s[fin])), 6))
+        same_fin = fsig == self._iisp_fsig
+        for idx, m in ((0, fin & up & ok), (1, fin & ~up & ok), (2, form & up & ok), (3, form & ~up & ok)):
+            if idx < 2 and same_fin:
+                continue                                     # the finished bars did not change
+            if not m.any():
+                items[idx].setOpts(x0=[], x1=[], y0=[], height=[])
+            else:
+                items[idx].setOpts(x0=x0[m], x1=x1[m], y0=np.minimum(0.0, s[m]), height=np.abs(s[m]))
+        self._iisp_fsig = fsig
+        self._iisp_last = {"x0": x0, "x1": x1, "s": s, "lb": lb, "ls": ls, "form": form}
+        if self._iisp_read is not None:
+            _k = int(s.size) - 1
+            # the gap alone: each side's own number is the I x I pane's readout, and that one prints the TRUE multiple
+            # where a line is clipped -- two panes quoting two different "buyers I x I" would read as a bug
+            self._iisp_read.setText("spread %s %.2gx%s" % (
+                "BUY" if s[_k] >= 0 else "SELL", 2.0 ** abs(float(s[_k])),
+                "  ·  still forming" if bool(form[_k]) else ""))
+            self._iisp_read.setColor(config.IIMP_BUY_COL if s[_k] >= 0 else config.IIMP_SELL_COL)
+        fit = np.abs(s[ok])
+        if fit.size:
+            lim = min(max(float(np.percentile(fit, 95.0)) * 1.15, 1.0), 2.0 * _clip * 1.08)   # never tighter than 2x
+            cur = getattr(self, "_iisp_ytop", 0.0)
+            if lim > cur * 0.98 or lim < cur * 0.55:
+                self._iisp_ytop = lim
+                self._iisp_vb.setYRange(-lim, lim, padding=0.0)
+        if self._iisp_read is not None:
+            (_rx0, _rx1), (_ry0, _ry1) = self._iisp_vb.viewRange()
+            self._iisp_read.setPos(_rx1, _ry0)
 
     # ------------------------------------------------------------------
     # INTEREST x IMPACT -- click a bar, get it in words (user 2026-09-16)
@@ -23652,6 +23888,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._fratio_sig = None; self._fratio_t = 0.0
         self._iimp_show(bool(getattr(self, "_iimp_on", True)))      # ... and the Interest x Impact pane
         self._iimp_sig = None; self._iimp_t = 0.0
+        self._iisp_show(bool(getattr(self, "_iisp_on", True)))      # ... and its Spread pane, right under it
+        self._iisp_src = None; self._iisp_fsig = None
         self._interp_show(bool(getattr(self, "_interp_on", True)))  # ... and the Interpretation feed
         self._flow_pane_apply()                                     # the pane itself may be toggled off
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
@@ -23677,6 +23915,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._spd_show(False)
         self._fratio_show(False)
         self._iimp_show(False)
+        self._iisp_show(False)
         self._interp_show(False)
         self._flow_pane_lift()                                # every other mode draws on the main chart (idempotent)
         self._flow_curves = None
@@ -23778,6 +24017,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             pass
         try:
             self._iimp_tick(now)        # Interest x Impact pane -- same read again
+        except Exception:
+            pass
+        try:
+            self._iisp_tick(now)        # its Spread pane -- AFTER it: no read at all, it lays out that pane's own numbers
         except Exception:
             pass
         try:
@@ -24098,7 +24341,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                            ("lob", getattr(self, "_lob_plot", None), getattr(self, "_lob_vb", None)),
                            ("spd", getattr(self, "_spd_plot", None), getattr(self, "_spd_vb", None)),
                            ("fratio", getattr(self, "_fratio_plot", None), getattr(self, "_fratio_vb", None)),
-                           ("iimp", getattr(self, "_iimp_plot", None), getattr(self, "_iimp_vb", None))):
+                           ("iimp", getattr(self, "_iimp_plot", None), getattr(self, "_iimp_vb", None)),
+                           ("iisp", getattr(self, "_iisp_plot", None), getattr(self, "_iisp_vb", None))):
             if _p is not None and _v is not None and _p.isVisible():
                 out.append((_k, _p, _v))
         return out
@@ -25051,7 +25295,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                           (getattr(self, "_fratio_plot", None),
                            (getattr(self, "_fratio_vline", None), getattr(self, "_fratio_hline", None))),
                           (getattr(self, "_iimp_plot", None),
-                           (getattr(self, "_iimp_vline", None), getattr(self, "_iimp_hline", None)))):
+                           (getattr(self, "_iimp_vline", None), getattr(self, "_iimp_hline", None))),
+                          (getattr(self, "_iisp_plot", None),
+                           (getattr(self, "_iisp_vline", None), getattr(self, "_iisp_hline", None)))):
                           # ⚠ ANY new pane must be added to the tuple above: one missing from it keeps its
                           # creation-time #141414 background while every other pane is repainted white, and
                           # no suite catches it -- it is only visible in a render (2026-09-16)

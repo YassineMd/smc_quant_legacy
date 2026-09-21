@@ -395,6 +395,7 @@ def pane_titles(n=None):
         "lines": "BUY / SELL FLOW" + d + "taker $ per window (the pane)",
         "fratio": "FLOW RATIOS" + d + "$/s vs last %d" % n + d + "buy / sell",
         "iimp": "INTEREST × IMPACT" + d + "who leads vs last %d" % n,
+        "iisp": "I×I SPREAD" + d + "buyer line over seller line",
     }
 
 
@@ -468,6 +469,20 @@ IIMP_MODES = ("None", "Buyer", "Seller", "Delta", "Lines Buyer/Seller")   # the 
 IIMP_MODE = "None"
 IIMP_LINES_MODE = "Lines Buyer/Seller"
 IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretch is drawn at IIMP_FORM_PEN_A)
+# --- I x I SPREAD pane (user 2026-09-21: "a new pane which basically is a histogram chart that is based on Line
+# Buyer Seller and it shows basically the spread between the 2 lines"). One bar per cycle = the GAP between the two
+# lines of the "Lines Buyer/Seller" option exactly as they are drawn: clip(buyers I x I) - clip(sellers I x I) in
+# log2, so the bar is as tall as the two lines stand apart on that pane's own axis. TEAL and UP when the buyers'
+# line is the higher one, RED and DOWN when the sellers' is; the forming cycle is drawn lighter. The axis is
+# MIRRORED like Delta's -- both halves read a multiple >= 1x and the half IS the side: buyers at 2x with sellers at
+# 0.5x is a teal bar at 4x. ⚠ It is NOT the Delta option: Delta clips the difference, this is the difference of the
+# two CLIPPED lines -- the same thing until a line hits IIMP_CLIP, and then only this one still equals the gap on
+# screen. ⚠ It computes nothing: it reads the INTEREST x IMPACT pane's own per-cycle numbers, and while it is on
+# screen that pane's tick keeps running even with its own widget hidden (reading by demand, drawing by visibility).
+IISP_PANE_ON = True
+IISP_FILL_A = 190               # finished bars: brush alpha (the pane family's), and the forming bar's pair below
+IISP_FORM_FILL_A = 70
+IISP_FORM_PEN_A = 150
 IIMP_LOW = 0.76                 # imbalance terciles: below = sellers lead, above IIMP_HIGH = buyers lead
 IIMP_HIGH = 1.37
 IIMP_WALL_RADIUS = 25           # the wall is read within +-this many ticks of mid (a radius on the daemon's ladder)

@@ -298,6 +298,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     spdPaneToggled = QtCore.Signal(bool)         # Speed pane on/off (Flow mode)
     fratioPaneToggled = QtCore.Signal(bool)      # Flow ratios pane on/off (Flow mode): flow / buy / sell vs last N
     iimpPaneToggled = QtCore.Signal(bool)        # Interest x Impact pane on/off (Flow mode)
+    iispPaneToggled = QtCore.Signal(bool)        # I x I Spread pane on/off (Flow mode): buyer line over seller line
     flowLinesToggled = QtCore.Signal(bool)       # the Buy/Sell Flow $ PANE (the main chart in Flow mode) on/off
     hlhSpanChanged = QtCore.Signal(str)          # HLH: "A merged bloc spans at most" (the Pine's mergeSpan input)
     interpPaneToggled = QtCore.Signal(bool)     # Interpretation feed on/off (Flow mode, right side)
@@ -1829,6 +1830,17 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             % (config.CYCLE_BASE_N, config.CYCLE_BASE_N, config.CYCLE_BASE_N))
         self.iimp_on.toggled.connect(lambda on: self.iimpPaneToggled.emit(bool(on)))
         l4.addWidget(self.iimp_on)
+        self.iisp_on = QtWidgets.QCheckBox(config.pane_titles()["iisp"])
+        self.iisp_on.setChecked(bool(config.IISP_PANE_ON))
+        self.iisp_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.iisp_on.setToolTip(
+            "A histogram of the SPREAD between the two lines of the Interest x Impact pane's 'Lines Buyer/Seller' "
+            "option: one bar per cycle, as tall as the buyers' line and the sellers' line stand apart. TEAL and up "
+            "when the buyers' line is the higher one, RED and down when the sellers' is; both halves of the axis "
+            "read a multiple at or above 1x, so buyers at 2x with sellers at 0.5x is a teal bar at 4x. The forming "
+            "cycle is drawn lighter. It works whether or not the Interest x Impact pane itself is shown.")
+        self.iisp_on.toggled.connect(lambda on: self.iispPaneToggled.emit(bool(on)))
+        l4.addWidget(self.iisp_on)
         self.interp_on = QtWidgets.QCheckBox(config.pane_titles()["interp"])
         self.interp_on.setChecked(bool(config.INTERP_PANE_ON))
         self.interp_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
@@ -1870,7 +1882,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         for _k, _cb in (("px", self.px_on), ("liq", self.liq_on), ("cyc", self.cycle_on),
                         ("cvol", self.cvol_on), ("lines", self.lines_on), ("fratio", self.fratio_on),
                         ("lob", self.lob_on), ("spd", self.spd_on), ("interp", self.interp_on),
-                        ("iimp", self.iimp_on)):
+                        ("iimp", self.iimp_on), ("iisp", self.iisp_on)):
             if _k in names:
                 _cb.setText(names[_k])
 
@@ -1882,6 +1894,9 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def set_iimp_pane_on(self, on: bool) -> None:
         self.iimp_on.blockSignals(True); self.iimp_on.setChecked(bool(on)); self.iimp_on.blockSignals(False)
+
+    def set_iisp_pane_on(self, on: bool) -> None:
+        self.iisp_on.blockSignals(True); self.iisp_on.setChecked(bool(on)); self.iisp_on.blockSignals(False)
 
     def set_fratio_pane_on(self, on: bool) -> None:
         self.fratio_on.blockSignals(True); self.fratio_on.setChecked(bool(on)); self.fratio_on.blockSignals(False)
