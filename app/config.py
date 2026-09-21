@@ -457,37 +457,10 @@ FRATIO_MODE = "None"
 # the open), fitted per side on the same 48 h (buy R2 0.744 / sell 0.726). No intercept is needed: the score is a
 # residual against the median of the previous N same-side cycles, which cancels it.
 IIMP_PANE_ON = True
-IIMP_MODES = ("None", "Buyer", "Seller", "Delta", "POC Totals")   # the pane's top-right dropdown
+IIMP_MODES = ("None", "Buyer", "Seller", "Delta")   # the pane's top-right dropdown: what the bar's HEIGHT is
 #                                 None = the leader's multiple; Buyer / Seller = that side's interest x impact
 #                                 vs its own baseline; Delta = buyer over seller. All in log2 (user 2026-09-20).
-#                                 POC Totals = no bars: three RUNNING TOTALS per POC area (see IIMP_TOT_* below).
 IIMP_MODE = "None"
-# --- POC TOTALS (user 2026-09-21: "implement the three running totals lines ... as a dropdown option"). Inside every
-# below / above POC area -- the SAME areas the PRICE pane shades: same blocs, same HLH_POC_RUN_* rule, counted on this
-# pane's own finished cycles -- three lines restart from zero:
-#   BUYERS  (teal)  the running sum of the buyers' interest x impact per cycle, log2 against their own last N
-#   SELLERS (red)   the sellers' same
-#   BALANCE (the axis colour)  buyers minus sellers -- the GAP between the two lines, the Delta mode's sign
-# A line CLIMBS while that side runs above its own normal, goes flat at normal, FALLS below it, so the SLOPE is the
-# message and a bend is a change of regime. Buyers and sellers rise and fall TOGETHER with market activity (r = +0.61
-# per cycle, measured 2026-09-21 on 72 h), which is why the handover is read on the balance: in an ABOVE-POC area
-# (teal wash) it is where the balance peaks and turns down, in a BELOW-POC area (red wash) where it bottoms and
-# turns up. ⚠ DESCRIPTIVE ONLY: over a complete area a real shift of the balance shows in about 1 area in 5 (1 in 10
-# by chance), datable to +-3 bars; read live, bar by bar, it could not be told from chance on that sample.
-# ⚠ The totals start at the END of the area's entry bar: that bar is the close that crossed the POC, a spike by
-# construction (owner 2.1-2.2x on it), and it would set the level of every line for the whole area.
-# ⚠ An area only EXISTS once HLH_POC_RUN_MIN cycles have closed on one side, so its lines appear at the fifth close
-# and reach back to the second -- exactly when, and how, the PRICE pane's own wash appears.
-# ⚠ Two blocs' areas can overlap in time (neighbouring blocs share a boundary bin: 8 of 99 areas on 72 h). The pane
-# draws ONE set of lines at a time: a later area takes the pen where it starts, one wholly inside another gets none.
-IIMP_TOT_MODE = "POC Totals"
-IIMP_TOT_SKIP_ENTRY = True      # start the totals AFTER the area's entry bar (see above)
-IIMP_TOT_BAL_OWNER = False      # False: balance = buyers - sellers everywhere (the gap between the two lines drawn).
-#                                 True: the area's side minus the other side, so a handover is always a PEAK.
-IIMP_TOT_W_SIDE = 1.8           # line widths, px: the two sides, and the balance a touch heavier
-IIMP_TOT_W_BAL = 2.4
-IIMP_TOT_FORM_A = 120           # alpha of the stretch that belongs to the cycle STILL FORMING (it moves until it closes)
-IIMP_TOT_TINT_A = 22            # alpha of the wash that says whose area it is: teal above the POC, red below
 IIMP_LOW = 0.76                 # imbalance terciles: below = sellers lead, above IIMP_HIGH = buyers lead
 IIMP_HIGH = 1.37
 IIMP_WALL_RADIUS = 25           # the wall is read within +-this many ticks of mid (a radius on the daemon's ladder)

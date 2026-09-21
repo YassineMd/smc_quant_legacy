@@ -1953,13 +1953,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._iimp_dots = None         # (wall, open road) ScatterPlotItems
         self._iimp_form = None         # the FORMING cycle's own bar: ONE item, brush and pen set per draw
         self._iimp_keep = None         # "handed it back" caps: ONE segment item over bottom-tercile bars
-        self._iimp_tot = None          # POC Totals mode: (buyers, sellers, balance) curves, one item per series
-        self._iimp_tot_form = None     # ... their stretch over the cycle STILL FORMING, lighter, one item each
-        self._iimp_tot_tint = None     # ... and the (above-POC, below-POC) washes that say whose area it is
-        self._iimp_tot_memo = None     # (key, version, areas): the POC areas of the read in hand
-        self._iimp_tot_last = None     # what is drawn: a gate and the y fit read it, never the store
-        self._iimp_tot_shown = None    # which family of items is on screen (None = not decided yet)
-        self._iimp_tot_yr = None       # the fitted (lo, hi) of the totals
         self._iimp_guides = None
         self._iimp_sig = None; self._iimp_t = 0.0; self._iimp_data = None; self._iimp_sized = False
         self._iimp_on = bool(config.IIMP_PANE_ON)
@@ -18096,8 +18089,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._iimp_plot = None; self._iimp_vb = None; self._iimp_items = None; self._iimp_dots = None
             self._iimp_combo = None
             self._iimp_form = None; self._iimp_keep = None
-            self._iimp_tot = None; self._iimp_tot_form = None; self._iimp_tot_tint = None
-            self._iimp_tot_last = None; self._iimp_tot_shown = None; self._iimp_tot_yr = None
             self._iimp_guides = None; self._iimp_sig = None; self._iimp_sized = False; self._iimp_proxy = None
             self._iimp_vline = None; self._iimp_hline = None
             self._iimp_tag = None; self._iimp_time_tag = None
@@ -21606,30 +21597,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                           pen=pg.mkPen(config.IIMP_KEEP_COL, width=2.5))
         self._iimp_keep.setZValue(8)
         pw.addItem(self._iimp_keep)
-        # POC TOTALS mode (user 2026-09-21): three running totals per POC area. ONE curve per series however many
-        # areas are on screen -- the areas are separated by the connect array, never by an item each -- plus one
-        # short lighter curve per series for the cycle still forming, and two washes that say whose area it is.
-        # Stock pyqtgraph items, no custom paint(). The balance carries no side, so it wears the axis colour and
-        # _theme_sub_panes re-pens it with the Chart Style.
-        _tot, _tform = [], []
-        for _c, _wd, _zv in ((config.IIMP_BUY_COL, float(config.IIMP_TOT_W_SIDE), 6),
-                             (config.IIMP_SELL_COL, float(config.IIMP_TOT_W_SIDE), 6),
-                             ("#dcdcdc", float(config.IIMP_TOT_W_BAL), 7)):
-            _q = QtGui.QColor(_c)
-            _cv = pg.PlotCurveItem(x=[], y=[], pen=pg.mkPen(_q, width=_wd))
-            _cv.setZValue(_zv); pw.addItem(_cv, ignoreBounds=True); _cv.hide(); _tot.append(_cv)
-            _cf = pg.PlotCurveItem(x=[], y=[], pen=pg.mkPen(
-                QtGui.QColor(_q.red(), _q.green(), _q.blue(), int(config.IIMP_TOT_FORM_A)), width=_wd))
-            _cf.setZValue(_zv); pw.addItem(_cf, ignoreBounds=True); _cf.hide(); _tform.append(_cf)
-        self._iimp_tot = tuple(_tot); self._iimp_tot_form = tuple(_tform)
-        _tints = []
-        for _c in (config.IIMP_BUY_COL, config.IIMP_SELL_COL):
-            _q = QtGui.QColor(_c)
-            _tb = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[], pen=pg.mkPen(None),
-                                  brush=pg.mkBrush(_q.red(), _q.green(), _q.blue(), int(config.IIMP_TOT_TINT_A)))
-            _tb.setZValue(1); pw.addItem(_tb, ignoreBounds=True); _tb.hide(); _tints.append(_tb)
-        self._iimp_tot_tint = tuple(_tints)
-        self._iimp_tot_shown = None; self._iimp_tot_last = None; self._iimp_tot_yr = None
         self._iimp_sig = None                      # new items are empty: the next draw fills them
         guides = []
         for _v in (float(np.log2(max(1e-9, config.IIMP_LOW))), float(np.log2(max(1e-9, config.IIMP_HIGH)))):
@@ -21685,15 +21652,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                       "against its own last N cycles, times its impact on the cycles it led -- above the midline "
                       "when above its own baseline, below when under it. Delta: the buyers' over the sellers', teal "
                       "above the midline when the buyers hold more, red below when the sellers do. All of it in log "
-                      "space, so 0.5x sits as far below the midline as 2x sits above it.\n\n"
-                      "POC Totals: no bars. Inside every below / above POC area (the ones the PRICE pane shades) "
-                      "three RUNNING TOTALS restart from zero after the area's entry bar: the buyers' interest x "
-                      "impact (teal), the sellers' (red), and the BALANCE, buyers minus sellers, in the axis colour. "
-                      "A line climbs while that side runs above its own normal, goes flat at normal, falls below "
-                      "it -- the SLOPE is the message. Both sides rise and fall together with activity, so the "
-                      "handover is read on the balance: in an above-POC area (teal wash) where it peaks and turns "
-                      "down, in a below-POC area (red wash) where it bottoms and turns up. The lighter last "
-                      "stretch is the cycle still forming. Descriptive only.")
+                      "space, so 0.5x sits as far below the midline as 2x sits above it.")
         cb.setCursor(QtCore.Qt.PointingHandCursor)
         cb.currentIndexChanged.connect(self._on_iimp_mode_changed)
         cb.raise_(); cb.show()
@@ -21710,13 +21669,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
     def _iimp_tick_text(self, v, fmt="%.2g") -> str:
         """The axis / tag text for a bar height `v` (log2). MIRRORED in None and Delta -- both halves read a
         multiple >= 1x and the half IS the side (user 2026-09-16) -- and SIGNED in Buyer and Seller, where the
-        halves mean above / below that side's own baseline, so 0.5x has to read 0.5x.
-        POC Totals: a running SUM of log2 readings is not a multiple of anything, so it is printed as the plain
-        signed number it is -- +1 is one cycle at 2x its own normal, or two at 1.4x."""
+        halves mean above / below that side's own baseline, so 0.5x has to read 0.5x."""
         mode = str(self.__dict__.get("_iimp_mode", "None"))
-        if mode == str(config.IIMP_TOT_MODE):
-            f = float(v)
-            return "0" if abs(f) < 5e-3 else ("%+.2f" % f if "f" in fmt else "%+.3g" % f)
         x = 2.0 ** float(v) if mode in ("Buyer", "Seller") else 2.0 ** abs(float(v))
         return (fmt % x) + "x"
 
@@ -21745,9 +21699,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._iimp_mode = _modes[idx] if 0 <= idx < len(_modes) else _modes[0]
         self._iimp_sig = None
         self._iimp_ytop = 0.0                                # a different series has a different scale
-        self._iimp_tot_yr = None
-        if self._iimp_mode == str(config.IIMP_TOT_MODE):
-            self._iimp_hide_popup()                          # the bar a panel explained is no longer on screen
         self._iimp_draw(time.time())
         if not self._loading_ui:
             self._save_ui_state()
@@ -21765,8 +21716,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             except RuntimeError:
                 self._iimp_plot = None; self._iimp_items = None; self._iimp_vb = None; self._iimp_dots = None
                 self._iimp_form = None; self._iimp_keep = None
-                self._iimp_tot = None; self._iimp_tot_form = None; self._iimp_tot_tint = None
-                self._iimp_tot_shown = None
         self._stack_axis_sync()
 
     def _iimp_hide_cursor(self) -> None:
@@ -22142,7 +22091,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 sc.setData([], [])
             self._iimp_form.setOpts(x0=[], x1=[], y0=[], height=[])
             self._iimp_keep.setData([], [])
-            self._iimp_tot_clear()
             self._iimp_sig = ("empty",)
             return
         n_lb = self._lb_n(); n_mn = self._lb_min_n()
@@ -22180,12 +22128,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # the score: this cycle's residual against the median of the previous N cycles OF THE SAME SIDE, so a
         # buy cycle is judged against buy cycles (the Volume and Speed panes' rule)
         score = self._iimp_score(resid, lead_buy, done, n_lb, n_mn)
-        if str(self.__dict__.get("_iimp_mode", "None")) == str(config.IIMP_TOT_MODE):
-            # POC TOTALS: no bars at all -- the same per-cycle readings, summed along each POC area
-            self._iimp_draw_totals(now, vx0, vx1, t, t_end_c, done, form_all, imb, score, ar_b, ar_s, lead_buy,
-                                   px0, px1, pxh, pxl)
-            return
-        self._iimp_tot_show(False)
         keep = (done | form_all) & np.isfinite(imb) & np.isfinite(score) & (t >= vx0)
         # the forming row's AGE is in the signature: a second with no prints still stretches its duration, and
         # without it a quiet stretch would freeze the live bar until the next trade
@@ -22377,245 +22319,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._iimp_read.setPos(_rx1, _ry0)      # bottom right, clear of the pane's own name
         self._iimp_mark(self.__dict__.get("_iimp_sel_t"))   # a redraw must not drop the clicked bar's outline
         self._iimp_repanel()               # ... and an open panel on the FORMING bar must not go stale
-
-    # ------------------------------------------------------------------
-    # INTEREST x IMPACT -- POC TOTALS: three running totals per POC area (user 2026-09-21)
-    # ------------------------------------------------------------------
-    def _iimp_tot_show(self, on: bool) -> None:
-        """Swap the pane between its two families of items -- the bars (with their dots, caps and tercile guides)
-        and the POC-totals lines -- once per change of mode, not once per draw."""
-        on = bool(on)
-        if self.__dict__.get("_iimp_tot_shown") is on:
-            return
-        self._iimp_tot_shown = on
-        try:
-            for _it in (self._iimp_tot or ()) + (self._iimp_tot_form or ()) + (self._iimp_tot_tint or ()):
-                _it.setVisible(on)
-            for _it in (self._iimp_items or ()) + (self._iimp_dots or ()) + (self._iimp_guides or ()) \
-                    + tuple(i for i in (self._iimp_form, self._iimp_keep) if i is not None):
-                _it.setVisible(not on)
-        except RuntimeError:
-            self._iimp_tot_shown = None
-        if not on:
-            self._iimp_tot_clear()
-
-    def _iimp_tot_clear(self) -> None:
-        try:
-            for _it in (self._iimp_tot or ()) + (self._iimp_tot_form or ()):
-                _it.setData([], [])
-            for _it in (self._iimp_tot_tint or ()):
-                _it.setOpts(x0=[], x1=[], y0=[], height=[])
-        except RuntimeError:
-            pass
-        self._iimp_tot_last = None
-
-    def _iimp_poc_areas(self, now, t, t_end, done, px0, pxh, pxl, px1):
-        """(version, [(tA, tE, side, poc, draw_end), ...]) -- the below / above POC areas of the read in hand.
-
-        THE SAME AREAS THE PRICE PANE SHADES: the day blocs the HLH overlay holds, their own POC, and
-        hlh_profile.bloc_poc_runs under the same HLH_POC_RUN_* rule, counted on CYCLES -- here the read's own
-        finished cycles, which are the PRICE pane's bars over the span this pane can rate (its main read shares
-        this one's memo entry), so an area and the readings summed along it are the same rows of one read.
-
-        ⚠ READING is driven by demand, DRAWING by visibility (the _liq_wanted lesson): this mode needs the blocs
-        whether or not the HLH layer is DRAWN, so it keeps the klines feeds alive itself. ensure_feeds is gated to
-        once a second inside, and periods() to the feeds' revisions -- called with the layer's own week flag,
-        because a second flag would re-key its one-slot cache on every call.
-
-        ⚠ ONE SET OF LINES AT A TIME. Neighbouring blocs share a boundary bin, so two blocs' areas can overlap
-        in time (8 of 99 on 72 h). Sorted by start: an area that begins while another is still running takes
-        the pen from there (`draw_end` of the earlier one), unless it also ENDS inside it -- then it gets no
-        lines of its own. The per-cycle readings are the same under either area; only the zero they are summed
-        from differs, so nothing about the slopes is lost.
-
-        Memoised on the blocs' versions and the shape of the bar set: it recomputes when a cycle closes or the
-        forming day's candles change -- about once a minute -- and costs a dict compare otherwise."""
-        memo = self.__dict__.get("_iimp_tot_memo")
-        _v0 = int(memo[1]) if memo is not None else 0
-        try:
-            from . import hlh_profile as H
-            st = self._hlh_state()
-            week_on = bool(self._hlh_toggles()[1])
-            st.ensure_feeds(week_on, now)
-            pers = st.periods(week_on, now)
-            dn = np.asarray(done, dtype=bool)
-            _min = int(config.HLH_POC_RUN_MIN)
-            if int(dn.sum()) < _min:
-                return _v0, []
-            bars = (np.asarray(t, dtype=np.float64)[dn], np.asarray(t_end, dtype=np.float64)[dn],
-                    np.asarray(px0, dtype=np.float64)[dn], np.asarray(pxh, dtype=np.float64)[dn],
-                    np.asarray(pxl, dtype=np.float64)[dn], np.asarray(px1, dtype=np.float64)[dn])
-            _causal = bool(config.HLH_POC_RUN_CAUSAL)
-            key = (tuple((pk[0], pk[1], pk[2]) for pk in pers), int(bars[0].size), round(float(bars[0][0]), 2),
-                   round(float(bars[1][-1]), 2), round(float(np.nansum(bars[5])), 4), _min, _causal)
-            if memo is not None and memo[0] == key:
-                return memo[1], memo[2]
-            dfl = float(st.day_floor(now))                # the PRICE pane draws no older period, so no area there
-            raw = []
-            for is_week, _pk, _ver, res, cand_secs, rows, _tabs in pers:
-                if is_week or float(res.per_end) < dfl:
-                    continue
-                for m in rows:
-                    poc = H.bloc_poc(m)
-                    if poc is None:
-                        continue
-                    for tA, tE, side, _ext in H.bloc_poc_runs(m, _min, cand_secs, _causal, bars):
-                        raw.append((float(tA), float(tE), int(side), float(poc)))
-            raw.sort(key=lambda a: (a[0], -a[1]))
-            own = []
-            for tA, tE, side, poc in raw:
-                if own and own[-1][4] > tA + 0.5:         # the one before it is still running
-                    if tE <= own[-1][4] + 0.5:
-                        continue                          # wholly inside it: no lines of its own
-                    own[-1][4] = tA                       # the later bloc's area takes the pen from here
-                own.append([tA, tE, side, poc, tE])
-            areas = [tuple(a) for a in own]
-            self._iimp_tot_memo = (key, _v0 + 1, areas)
-            return _v0 + 1, areas
-        except Exception:
-            return _v0, []
-
-    def _iimp_draw_totals(self, now, vx0, vx1, t, t_end_c, done, form_all, imb, score, ar_b, ar_s, lead_buy,
-                          px0, px1, pxh, pxl) -> None:
-        """POC TOTALS (user 2026-09-21): inside every below / above POC area, three running totals from zero --
-        the buyers' interest x impact per cycle, the sellers', and the balance between them.
-
-        The per-cycle readings are the Buyer / Seller modes' own, to the digit: each side's interest (its
-        aggressive $/s against its own last N) times its impact on the cycles it LED, in log2 and clipped at
-        IIMP_CLIP; a cycle the pane cannot rate adds nothing and the line runs flat across it. They are summed
-        from the END of the area's entry bar (see config), one point per cycle CLOSE, so a line's slope over any
-        stretch is that side's mean reading there: climbing = above its own normal, flat = at it, falling = below.
-
-        ⚠ Unlike the bars these reach LEFT of the view, as far as the read does (_lb_secs): an area cut by the
-        view's left edge must not restart its totals from wherever the edge happens to sit, or every line would
-        slide as the user pans. An area that began before the read itself is summed from the read's first cycle
-        and says so in the readout.
-
-        The cycle STILL FORMING extends the live area's lines on three lighter items of their own (the pane's
-        convention): its reading moves until it closes, and it is never part of the solid line.
-
-        Descriptive only -- see config IIMP_TOT_*."""
-        if self._iimp_tot is None or self._iimp_tot_form is None or self._iimp_tot_tint is None:
-            return
-        self._iimp_tot_show(True)
-        n_lb = self._lb_n()
-        _clip = float(np.log2(max(float(config.IIMP_CLIP), 1.0)))
-        rated = (done | form_all) & np.isfinite(imb) & np.isfinite(score)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            _scl = np.where(np.isfinite(score), score, 0.0) / float(np.log(2.0))
-            lb = np.clip(np.log2(np.maximum(ar_b, 1e-12)) + np.where(lead_buy, _scl, 0.0), -_clip, _clip)
-            ls = np.clip(np.log2(np.maximum(ar_s, 1e-12)) + np.where(~lead_buy, _scl, 0.0), -_clip, _clip)
-        lb = np.where(rated, lb, 0.0); ls = np.where(rated, ls, 0.0)
-        ver, areas = self._iimp_poc_areas(now, t, t_end_c, done, px0, pxh, pxl, px1)
-        _age = int(now - float(t[-1])) if bool(form_all[-1]) else 0
-        sig = ("tot", int(ver), int(t.size), round(float(t[-1]), 2), int(self._flow_win), n_lb, _age,
-               int(rated.sum()), round(float(lb.sum()), 3), round(float(ls.sum()), 3), bool(form_all[-1]),
-               bool(config.IIMP_TOT_BAL_OWNER), bool(config.IIMP_TOT_SKIP_ENTRY))
-        if sig != self._iimp_sig:
-            self._iimp_sig = sig
-            _skip = 1 if bool(config.IIMP_TOT_SKIP_ENTRY) else 0
-            _own = bool(config.IIMP_TOT_BAL_OWNER)
-            X, YB, YS, YL, CN = [], [], [], [], []
-            spans = []                                   # (x0, x1, side) of every area that owns lines
-            fx, fb, fs, fl = [], [], [], []
-            _info = None
-            for tA, tE, side, poc, dend in areas:
-                i0 = int(np.searchsorted(t, tA - 1e-3, side="left"))
-                i1 = int(np.searchsorted(t, min(tE, dend) - 1e-3, side="left"))     # its bars START before there
-                k0 = i0 + _skip
-                if i1 - k0 < 1:
-                    continue
-                idx = np.arange(k0, i1)
-                x = np.concatenate(([float(t[k0])], t_end_c[idx]))
-                yb = np.concatenate(([0.0], np.cumsum(lb[idx])))
-                ys = np.concatenate(([0.0], np.cumsum(ls[idx])))
-                yl = (yb - ys) * (float(side) if _own else 1.0)
-                cn = np.ones(int(x.size), dtype=np.int32); cn[-1] = 0          # never joined to the next area
-                X.append(x); YB.append(yb); YS.append(ys); YL.append(yl); CN.append(cn)
-                spans.append((float(tA), float(min(tE, dend)), int(side)))
-                _cut = bool(i0 == 0)                     # it opens on the read's very first cycle: it began earlier
-                _live = False
-                if bool(form_all[-1]) and dend >= tE - 0.5 and abs(float(tE) - float(t[-1])) < 1.0:
-                    # the area's last bar ends where the forming cycle starts: the live stretch, lighter
-                    _live = True
-                    _xe = float(t_end_c[-1])
-                    fx = [float(x[-1]), _xe]
-                    fb = [float(yb[-1]), float(yb[-1] + lb[-1])]
-                    fs = [float(ys[-1]), float(ys[-1] + ls[-1])]
-                    fl = [float(yl[-1]), float(yl[-1] + (lb[-1] - ls[-1]) * (float(side) if _own else 1.0))]
-                _info = {"side": int(side), "bars": int(i1 - i0), "poc": float(poc), "cut": _cut, "live": _live,
-                         "b": float(fb[-1] if _live else yb[-1]), "s": float(fs[-1] if _live else ys[-1]),
-                         "l": float(fl[-1] if _live else yl[-1]), "tA": float(tA)}
-            if X:
-                _x = np.concatenate(X); _cn = np.concatenate(CN)
-                _yb = np.concatenate(YB); _ys = np.concatenate(YS); _yl = np.concatenate(YL)
-                for _it, _y in zip(self._iimp_tot, (_yb, _ys, _yl)):
-                    _it.setData(_x, _y, connect=_cn)
-            else:
-                _x = np.zeros(0); _yb = _ys = _yl = np.zeros(0)
-                for _it in self._iimp_tot:
-                    _it.setData([], [])
-            for _it, _y in zip(self._iimp_tot_form, (fb, fs, fl)):
-                _it.setData(fx, _y) if fx else _it.setData([], [])
-            self._iimp_tot_last = {"x": _x, "b": _yb, "s": _ys, "bal": _yl, "spans": spans, "areas": list(areas),
-                                   "form": (list(fx), list(fb), list(fs), list(fl)), "info": _info,
-                                   "lb": lb, "ls": ls, "rated": rated, "t": t, "t_end": t_end_c,
-                                   "mode": str(config.IIMP_TOT_MODE), "ext": None}
-            if self._iimp_read is not None:
-                if _info is None:
-                    _note = None
-                    try:
-                        _note = self._hlh_state().note(bool(self._hlh_toggles()[1]))
-                    except Exception:
-                        _note = None
-                    self._iimp_read.setText("POC totals  ·  %s" % (_note or "no POC area in this read"))
-                    self._iimp_read.setColor(config.PANE_TITLE_COL)
-                else:
-                    self._iimp_read.setText(
-                        "%s POC area  ·  %d bars  ·  buyers %+.1f  ·  sellers %+.1f  ·  balance %+.1f%s%s" % (
-                            "ABOVE" if _info["side"] > 0 else "BELOW", _info["bars"], _info["b"], _info["s"],
-                            _info["l"], "  ·  still forming" if _info["live"] else "",
-                            "  ·  began before this read" if _info["cut"] else ""))
-                    self._iimp_read.setColor(config.IIMP_BUY_COL if _info["side"] > 0 else config.IIMP_SELL_COL)
-        # THE Y FIT follows what is ON SCREEN, on every call: one long busy area runs to +-30 while a short one
-        # stays within +-3, so a fit to the whole read would flatten whatever the user is actually looking at.
-        d = self._iimp_tot_last
-        if d is None:
-            return
-        _x = d["x"]
-        _lo = _hi = 0.0
-        if _x.size:
-            _m = (_x >= vx0) & (_x <= vx1)
-            if _m.any():
-                _lo = min(float(d["b"][_m].min()), float(d["s"][_m].min()), float(d["bal"][_m].min()), 0.0)
-                _hi = max(float(d["b"][_m].max()), float(d["s"][_m].max()), float(d["bal"][_m].max()), 0.0)
-        _f = d["form"]
-        if _f[0] and _f[0][-1] >= vx0 and _f[0][0] <= vx1:
-            _lo = min(_lo, _f[1][-1], _f[2][-1], _f[3][-1]); _hi = max(_hi, _f[1][-1], _f[2][-1], _f[3][-1])
-        _pad = 0.10 * max(_hi - _lo, 2.0)
-        _lo_t = min(_lo - _pad, -1.0); _hi_t = max(_hi + _pad, 1.0)
-        cur = self.__dict__.get("_iimp_tot_yr")
-        if cur is None or _lo_t < cur[0] or _hi_t > cur[1] or (cur[1] - cur[0]) > 1.8 * (_hi_t - _lo_t):
-            self._iimp_tot_yr = (_lo_t, _hi_t)
-            self._iimp_vb.setYRange(_lo_t, _hi_t, padding=0.0)
-            d["ext"] = None
-        # the washes reach well past the fitted range (a rect, so it needs a height) and follow it when it moves
-        _yr = self._iimp_tot_yr
-        _ext = (round(float(_yr[0]), 3), round(float(_yr[1]), 3), len(d["spans"]),
-                round(float(d["spans"][-1][1]), 2) if d["spans"] else 0.0, int(self._iimp_sig[1]))
-        if d.get("ext") != _ext:
-            d["ext"] = _ext
-            _h = 8.0 * max(abs(_yr[0]), abs(_yr[1]), 1.0)
-            for _it, _sd in zip(self._iimp_tot_tint, (1, -1)):
-                _sp = [s for s in d["spans"] if s[2] == _sd]
-                if _sp:
-                    _it.setOpts(x0=[s[0] for s in _sp], x1=[s[1] for s in _sp],
-                                y0=[-_h] * len(_sp), height=[2.0 * _h] * len(_sp))
-                else:
-                    _it.setOpts(x0=[], x1=[], y0=[], height=[])
-        if self._iimp_read is not None:
-            (_rx0, _rx1), (_ry0, _ry1) = self._iimp_vb.viewRange()
-            self._iimp_read.setPos(_rx1, _ry0)
 
     # ------------------------------------------------------------------
     # INTEREST x IMPACT -- click a bar, get it in words (user 2026-09-16)
@@ -22886,8 +22589,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             pos = ev.scenePos()
             if not self._iimp_plot.sceneBoundingRect().contains(pos):
                 return
-            if str(self.__dict__.get("_iimp_mode", "None")) == str(config.IIMP_TOT_MODE):
-                return                               # POC Totals draws no bars: there is none to explain
             d = self.__dict__.get("_iimp_last")
             if not d or np.size(d["x0"]) == 0:
                 return
@@ -25291,16 +24992,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if _kp is not None:
             try:
                 _kp.setPen(pg.mkPen(fg, width=2.5))
-            except RuntimeError:
-                pass
-        # ... and so does the POC-totals BALANCE line: it is the gap between the two sides, not a side
-        _tt = self.__dict__.get("_iimp_tot"); _tf = self.__dict__.get("_iimp_tot_form")
-        if _tt is not None and _tf is not None:
-            try:
-                _q = QtGui.QColor(fg)
-                _tt[2].setPen(pg.mkPen(_q, width=float(config.IIMP_TOT_W_BAL)))
-                _tf[2].setPen(pg.mkPen(QtGui.QColor(_q.red(), _q.green(), _q.blue(), int(config.IIMP_TOT_FORM_A)),
-                                       width=float(config.IIMP_TOT_W_BAL)))
             except RuntimeError:
                 pass
         # the candles follow the Chart Style exactly as the main chart's do -- force one redraw so the
