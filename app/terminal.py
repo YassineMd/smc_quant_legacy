@@ -1891,6 +1891,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._px_setting_y = False     # guard: distinguishes OUR setYRange from the user's
         self._px_orig_wheel = None     # the ViewBox's own wheelEvent, wrapped for Shift/Alt
         self._px_bp_buy = None         # Big Player bubbles (buy / sell) on the cycle candles
+        self._px_iib = None            # BREAKOUT + I x I badges: (buy, sell, forming) ScatterPlotItems
+        self._px_iib_src = None        # (the I x I dict, the candle arrays) they were laid from -- identity = freshness
+        self._px_iib_sig = None        # ... plus what moves them on screen (y range, pane height, the forming candle)
+        self._px_iib_last = None       # what is drawn (a gate reads it)
         self._px_bp_sell = None
         self._px_bp_polys = []         # sweep / campaign diamonds, pooled
         self._px_bp_labels = None      # BpLabelsItem: every amount in one paint
@@ -18048,6 +18052,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._px_mkt_bar = None; self._px_mkt_buy = None; self._px_mkt_sell = None   # children of that plot
             self._px_pline = None; self._px_plabel = None; self._px_live_y = None
             self._px_orig_wheel = None; self._px_yauto = True; self._px_setting_y = False
+            self._px_iib = None; self._px_iib_src = None; self._px_iib_sig = None; self._px_iib_last = None
             self._px_bp_buy = None; self._px_bp_sell = None; self._px_bp_labels = None
             self._px_bp_polys = []; self._px_bp_sig = None; self._px_bp_shown = False
             self._px_lc = None; self._px_lc_body = None; self._px_lc_wick = None
@@ -19515,6 +19520,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._px_data = None
                 self._px_pline = None; self._px_plabel = None; self._px_live_y = None
                 self._px_orig_wheel = None; self._px_yauto = True; self._px_setting_y = False
+                self._px_iib = None; self._px_iib_src = None; self._px_iib_sig = None; self._px_iib_last = None
                 self._px_bp_buy = None; self._px_bp_sell = None; self._px_bp_labels = None
                 self._px_bp_polys = []; self._px_bp_sig = None; self._px_bp_shown = False
                 self._px_lc = None; self._px_lc_body = None; self._px_lc_wick = None
@@ -20722,7 +20728,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                         return True
                 except RuntimeError:                 # torn down under us -- it wants nothing
                     continue
-        return False
+        return self._px_iib_wanted()                 # the breakout badges read the I x I numbers, walls included
 
     def _liq_tick(self, now: float) -> None:
         """Per frame in Flow mode: keep the live edge fresh, ask for a new window when the view settles, draw.
@@ -22065,7 +22071,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         return own, secs
 
     def _iimp_tick(self, now: float) -> None:
-        if self._iimp_plot is None or not self._iimp_plot.isVisible():
+        # READING by demand, DRAWING by visibility (the _liq_wanted lesson): the PRICE pane's breakout badges join
+        # THIS pane's per-cycle numbers, so while they are wanted the tick runs even with this pane's own widget
+        # hidden -- its items are updated unseen, which costs no paint
+        if self._iimp_plot is None or not (self._iimp_plot.isVisible() or self._px_iib_wanted()):
             return
         if now - self._iimp_t < float(config.CYCLE_RECALC_SECS):
             return
@@ -22402,6 +22411,133 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._iimp_read.setPos(_rx1, _ry0)      # bottom right, clear of the pane's own name
         self._iimp_mark(self.__dict__.get("_iimp_sel_t"))   # a redraw must not drop the clicked bar's outline
         self._iimp_repanel()               # ... and an open panel on the FORMING bar must not go stale
+
+    # ------------------------------------------------------------------
+    # PRICE pane -- a badge on the BREAKOUT candles the I x I lines agree with (user 2026-09-21)
+    # ------------------------------------------------------------------
+    def _px_iib_wanted(self) -> bool:
+        """Are the breakout badges on screen? While they are, the INTEREST x IMPACT tick runs for them."""
+        if not bool(config.PX_IIB_ON) or self.scanner_mode != "flow":
+            return False
+        pw = self.__dict__.get("_px_plot")
+        if pw is None:
+            return False
+        try:
+            return bool(pw.isVisible())
+        except RuntimeError:
+            return False
+
+    def _px_iib_clear(self) -> None:
+        its = self.__dict__.get("_px_iib")
+        if its is not None and self._px_iib_last is not None:
+            try:
+                for _it in its:
+                    _it.setData(x=[], y=[])
+            except RuntimeError:
+                self._px_iib = None
+        self._px_iib_last = None
+
+    def _px_iib_tick(self, now: float) -> None:
+        """A BREAKOUT BUY candle whose buyers' I x I is above 1x while the sellers' is below 1x gets a GREEN
+        triangle pointing UP under its low; a BREAKOUT SELL candle on the mirror a RED one pointing DOWN over its
+        high (see config PX_IIB_*).
+
+        A JOIN of two things already computed: the candle's state colour from the pane's own cache, and the two
+        "Lines Buyer/Seller" numbers from the I x I pane's dict, matched by the cycle's START within a second (the
+        cache's own rule -- late tape can re-key a start by a fraction of one). Nothing is read from the store.
+        Per frame it costs two identity checks; it re-lays when either source is replaced, when the PRICE view's y
+        scale moves (the offset is in PIXELS) or when the forming candle's wick does."""
+        if not self._px_iib_wanted():
+            self._px_iib_clear(); self._px_iib_src = None
+            return
+        if self._iimp_plot is None:
+            # the numbers are the I x I pane's own: it must EXIST -- hidden when its own toggle is off
+            if self._iimp_ensure_pane() is not None and not bool(getattr(self, "_iimp_on", True)):
+                self._iimp_show(False)
+        L = self.__dict__.get("_iimp_last"); arr = self.__dict__.get("_px_arr")
+        vb = self._px_vb
+        if vb is None:
+            return
+        (_vx0, _vx1), (vy0, vy1) = vb.viewRange()
+        lc = self.__dict__.get("_px_lc")                      # the forming candle's overlay state, or None
+        d = self.__dict__.get("_px_data")
+        _fcol = int(d[9]) if (d is not None and len(d) > 9) else -1
+        # ⚠ the forming candle's middle moves with the CLOCK, so its geometry belongs in the signature only while it
+        # could carry a badge at all -- a BREAKOUT in the making. Always in, it re-laid every badge ~5 times a second
+        # for nothing (measured on the first live boot: median 25 us per frame against 7 us idle).
+        _fl = None
+        if lc and _fcol in (1, 2):                            # flow_interp.C_BREAK_BUY / C_BREAK_SELL
+            try:
+                _fl = (round(float(lc["l"]), 6), round(float(lc["h"]), 6), round(float(lc["x"]), 1))
+            except (KeyError, TypeError, ValueError):
+                _fl = None
+        sig = (round(float(vy0), 6), round(float(vy1), 6), int(vb.height()), _fcol, _fl)
+        src = self._px_iib_src
+        if src is not None and src[0] is L and src[1] is arr and sig == self._px_iib_sig:
+            return
+        self._px_iib_src = (L, arr); self._px_iib_sig = sig
+        if L is None or int(np.size(L["x0"])) == 0:
+            self._px_iib_clear()
+            return
+        if self._px_iib is None:
+            its = []
+            # pyqtgraph: "t1" points UP, "t" points DOWN
+            for _c, _a, _sym in ((config.PX_IIB_BUY_COL, 255, "t1"), (config.PX_IIB_SELL_COL, 255, "t"),
+                                 (config.PX_IIB_BUY_COL, int(config.PX_IIB_FORM_A), "t1")):
+                _q = QtGui.QColor(_c)
+                _it = pg.ScatterPlotItem(pxMode=True, symbol=_sym, size=int(config.PX_IIB_SIZE),
+                                         pen=pg.mkPen(QtGui.QColor(_q.darker(150).red(), _q.darker(150).green(), _q.darker(150).blue(), _a), width=1.2),
+                                         brush=pg.mkBrush(_q.red(), _q.green(), _q.blue(), _a))
+                _it.setZValue(32); self._px_plot.addItem(_it, ignoreBounds=True); its.append(_it)
+            self._px_iib = tuple(its)
+        from .flow_interp import C_BREAK_BUY, C_BREAK_SELL
+        _ypx = (float(vy1) - float(vy0)) / max(1.0, float(vb.height()))
+        _off = float(config.PX_IIB_OFFSET_PX) * _ypx
+        _r = 0.5 * float(config.PX_IIB_SIZE) * _ypx
+        _lo_y, _hi_y = float(vy0) + _r, float(vy1) - _r                 # a badge past the pane's edge is pulled onto it
+        x0 = np.asarray(L["x0"], dtype=np.float64)
+        lb = np.asarray(L["liib"], dtype=np.float64); ls = np.asarray(L["liis"], dtype=np.float64)
+        form = np.asarray(L["form"], dtype=bool)
+        agree_b = np.isfinite(lb) & np.isfinite(ls) & (lb > 0.0) & (ls < 0.0)      # buyers above 1x, sellers below
+        agree_s = np.isfinite(lb) & np.isfinite(ls) & (ls > 0.0) & (lb < 0.0)      # ... and the mirror
+        bx, by, sx, sy = [], [], [], []
+        keys_b, keys_s = [], []
+        if arr is not None and int(np.size(arr[0])):
+            ct, cte, _co, ch, cl, _cc, ccol = arr
+            fin = np.flatnonzero(~form)
+            if fin.size:
+                j = np.clip(np.searchsorted(ct, x0[fin], side="left"), 0, int(ct.size) - 1)
+                jm = np.maximum(j - 1, 0)
+                j = np.where(np.abs(ct[jm] - x0[fin]) < np.abs(ct[j] - x0[fin]), jm, j)      # the NEAREST cached start
+                ok = np.abs(ct[j] - x0[fin]) <= 1.0
+                mb = ok & agree_b[fin] & (ccol[j] == int(C_BREAK_BUY))
+                ms = ok & agree_s[fin] & (ccol[j] == int(C_BREAK_SELL))
+                xm = 0.5 * (ct[j] + cte[j])
+                bx = xm[mb]; by = np.clip(cl[j][mb] - _off, _lo_y, _hi_y); keys_b = ct[j][mb]
+                sx = xm[ms]; sy = np.clip(ch[j][ms] + _off, _lo_y, _hi_y); keys_s = ct[j][ms]
+        self._px_iib[0].setData(x=bx, y=by); self._px_iib[1].setData(x=sx, y=sy)
+        # the FORMING candle: the overlay's own geometry, the live read's state, the dict's forming row
+        fdraw = None
+        if lc and _fl is not None and form.any() and _fcol in (int(C_BREAK_BUY), int(C_BREAK_SELL)):
+            k = int(np.flatnonzero(form)[-1])
+            try:
+                _same = abs(float(lc["t0"]) - float(x0[k])) <= 1.0
+            except (KeyError, TypeError, ValueError):
+                _same = False
+            if _same and ((_fcol == int(C_BREAK_BUY) and bool(agree_b[k])) or (_fcol == int(C_BREAK_SELL) and bool(agree_s[k]))):
+                _buy = _fcol == int(C_BREAK_BUY)
+                _q = QtGui.QColor(config.PX_IIB_BUY_COL if _buy else config.PX_IIB_SELL_COL); _a = int(config.PX_IIB_FORM_A)
+                _y = (float(lc["l"]) - _off) if _buy else (float(lc["h"]) + _off)
+                fdraw = (float(lc["x"]), float(min(max(_y, _lo_y), _hi_y)), bool(_buy))
+                self._px_iib[2].setData(x=[fdraw[0]], y=[fdraw[1]], symbol="t1" if _buy else "t",
+                                        brush=pg.mkBrush(_q.red(), _q.green(), _q.blue(), _a),
+                                        pen=pg.mkPen(QtGui.QColor(_q.darker(150).red(), _q.darker(150).green(), _q.darker(150).blue(), _a), width=1.2))
+        if fdraw is None:
+            self._px_iib[2].setData(x=[], y=[])
+        self._px_iib_last = {"buy": np.asarray(keys_b, dtype=np.float64), "sell": np.asarray(keys_s, dtype=np.float64),
+                             "bx": np.asarray(bx, dtype=np.float64), "by": np.asarray(by, dtype=np.float64),
+                             "sx": np.asarray(sx, dtype=np.float64), "sy": np.asarray(sy, dtype=np.float64),
+                             "form": fdraw, "off": _off}
 
     # ------------------------------------------------------------------
     # INTEREST x IMPACT -- click a bar, get it in words (user 2026-09-16)
@@ -23778,6 +23914,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             pass
         try:
             self._iimp_tick(now)        # Interest x Impact pane -- same read again
+        except Exception:
+            pass
+        try:
+            self._px_iib_tick(now)      # the PRICE pane's breakout badges -- AFTER it: they join that pane's numbers
         except Exception:
             pass
         try:

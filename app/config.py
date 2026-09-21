@@ -468,6 +468,26 @@ IIMP_MODES = ("None", "Buyer", "Seller", "Delta", "Lines Buyer/Seller")   # the 
 IIMP_MODE = "None"
 IIMP_LINES_MODE = "Lines Buyer/Seller"
 IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretch is drawn at IIMP_FORM_PEN_A)
+# --- BREAKOUT BADGE on the PRICE pane (user 2026-09-21: "add a badge on the breakout candles where the candle side is
+# above x1 interestximpact and its opposite is below x1 -- for example we have a breakout buy candle and the
+# interestximpact line buy is above x1 and interestximpact line sell is below x1"). A BREAKOUT BUY candle gets a GREEN
+# badge when the buyers' I x I is above 1x AND the sellers' is below 1x; a BREAKOUT SELL candle a RED one on the
+# mirror. The two numbers are the "Lines Buyer/Seller" lines themselves, and "breakout" is the candle's own state
+# colour (the Interpretation feed's classifier), so the badge is a join of two things already on screen.
+# THE BADGE IS A TRIANGLE (user, the same day: "add red/green triangle instead above/below, for above reverse the
+# triangle"): GREEN and pointing UP under a breakout-buy candle's low, RED and pointing DOWN over a breakout-sell
+# candle's high -- the Volume Burst badges' placement, the user's own choice of 2026-09-09. It cannot be taken for a
+# Big Player bubble (a circle, at a print's price). The forming candle's badge is lighter -- its state and both
+# lines still move until the cycle closes.
+# ⚠ It exists only where the I x I pane has numbers: the newest FLOW_CROSS_MAX cycles of the view, rated ones only.
+# ⚠ Reading by demand: while the PRICE pane shows, the I x I tick runs even with that pane toggled off.
+# ⚠ DESCRIPTIVE: it names a cycle that has closed (or is closing); nothing here was tested as a signal.
+PX_IIB_ON = True
+PX_IIB_BUY_COL = "#00C853"      # the breakout-buy candle's own green ...
+PX_IIB_SELL_COL = "#FF1F1F"     # ... and the breakout-sell candle's own red
+PX_IIB_SIZE = 10                # the triangle, px
+PX_IIB_OFFSET_PX = 9            # its centre sits this far beyond the wick's end
+PX_IIB_FORM_A = 110             # alpha of the forming candle's badge (finished ones are opaque)
 IIMP_LOW = 0.76                 # imbalance terciles: below = sellers lead, above IIMP_HIGH = buyers lead
 IIMP_HIGH = 1.37
 IIMP_WALL_RADIUS = 25           # the wall is read within +-this many ticks of mid (a radius on the daemon's ladder)
