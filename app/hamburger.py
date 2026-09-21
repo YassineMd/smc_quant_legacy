@@ -1825,7 +1825,10 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             "withdrawn offers). CLICK a bar and a small panel explains that one in plain words, with the bar "
             "outlined; every multiple shown is the leading side's, at or above 1.0x. DOT: the "
             "far side's RESTING orders at the cycle's open against the previous %d -- filled means it pushed into "
-            "a wall, hollow means the road was open. Cuts are the measured terciles over 48 h."
+            "a wall, hollow means the road was open. Cuts are the measured terciles over 48 h. The pane's own "
+            "top-right dropdown changes what is drawn: Buyer / Seller / Delta re-read the bar's height, and "
+            "POC Totals replaces the bars with three running totals (buyers, sellers, their balance) inside "
+            "every below / above POC area."
             % (config.CYCLE_BASE_N, config.CYCLE_BASE_N, config.CYCLE_BASE_N))
         self.iimp_on.toggled.connect(lambda on: self.iimpPaneToggled.emit(bool(on)))
         l4.addWidget(self.iimp_on)
