@@ -22521,8 +22521,15 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             ps = np.asarray(L.get("pliis", np.full(_n, np.nan)), dtype=np.float64)
             with np.errstate(invalid="ignore"):
                 _known = np.isfinite(pb) & np.isfinite(ps)
-                agree_b &= _known & (lb > pb) & (ls < ps)
-                agree_s &= _known & (ls > ps) & (lb < pb)
+                agree_b &= _known & (lb > pb) & (ls <= ps)     # the other side lower OR EQUAL: standing still is enough
+                agree_s &= _known & (ls > ps) & (lb <= pb)
+        _msp = float(config.PX_IIB_MIN_SPREAD)
+        if _msp > 0.0:
+            # ... and the SPREAD: the candle side's multiple minus the other side's, in the chart's own "x" (see config)
+            with np.errstate(over="ignore", invalid="ignore"):
+                _mb = np.power(2.0, lb); _ms = np.power(2.0, ls)
+                agree_b &= (_mb - _ms) >= _msp
+                agree_s &= (_ms - _mb) >= _msp
         bx, by, sx, sy = [], [], [], []
         keys_b, keys_s = [], []
         if arr is not None and int(np.size(arr[0])):

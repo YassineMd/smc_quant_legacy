@@ -485,11 +485,18 @@ IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretc
 PX_IIB_ON = True
 # THE GAIN FILTER (user, the same day: "for breakout buy signal we wanna see buyer gaining interestximpact and sellers
 # loosing it, and for breakout sell signal we wanna see sellers gaining interestximpact and buyers loosing it"): on top
-# of the 1x rule a breakout BUY needs the buyers' I x I ABOVE the previous bar's and the sellers' BELOW the previous
-# bar's; a breakout SELL the mirror. "The previous bar" is the cycle right before it, and it must be one the I x I pane
+# of the 1x rule a breakout BUY needs the buyers' I x I ABOVE the previous bar's and the sellers' BELOW OR EQUAL TO the
+# previous bar's (the user relaxed "below" to "lower or equal" the same day: the other side standing still is enough);
+# a breakout SELL the mirror. "The previous bar" is the cycle right before it, and it must be one the I x I pane
 # could rate: across a break in the lines there is nothing to have gained on, so there is no badge. The TRUE values
 # are compared, not the 8x-clipped ones the lines are drawn with.
 PX_IIB_REQUIRE_GAIN = True
+# THE SPREAD (user, the same day: "lets add the spread, it should be at least 1x"): the gap between the two lines in
+# the chart's own units -- the candle side's multiple MINUS the other side's -- must reach this much. Buyers at 1.8x
+# with sellers at 0.7x is a spread of 1.1x and passes; buyers at 1.4x with sellers at 0.9x is 0.5x and does not.
+# ⚠ A DIFFERENCE of multiples, not their ratio: under the 1x rule the ratio is above 1x by construction, so "at least
+# 1x" could only ever have meant the difference. 0 switches it off.
+PX_IIB_MIN_SPREAD = 1.0
 PX_IIB_BUY_COL = "#00C853"      # the breakout-buy candle's own green ...
 PX_IIB_SELL_COL = "#FF1F1F"     # ... and the breakout-sell candle's own red
 PX_IIB_SIZE = 10                # the triangle, px
