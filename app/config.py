@@ -559,6 +559,10 @@ PX_MAX_POINTS = 2400            # points after decimation. MIN/MAX per bucket, s
                                 # at a 1200 px pane -- the envelope survives, which plain striding would eat.
 COLOR_PRICE_LINE_DARK = "#e8eaed"   # the price line carries no side, so unlike the teal/red flow lines
 COLOR_PRICE_LINE_BW = "#000000"     # it has to follow the ground: light on the dark canvas, black on Simple BW
+PX_MKT_BTN_W = 78               # the PRICE pane's BUY / SELL pair (Flow mode): button width x height in px, its
+PX_MKT_BTN_H = 26               # font and the gap between the two. Smaller than the candle chart's 122 x 42 /
+PX_MKT_FONT_PX = 11             # 14 px (user 2026-09-21: "make the buy/sell buttons smaller on the price chart")
+PX_MKT_GAP = 8                  # -- that pane is a fraction of the chart's height and the pair sat on its candles.
 PX_CANDLE_FILL = 0.72           # body width as a fraction of the CYCLE's own duration (the rest is the gap,
                                 # so back-to-back cycles still read as separate candles)
 # ⚠ there is deliberately NO pixel floor on the body width. One was tried: at a 20 h view it made every

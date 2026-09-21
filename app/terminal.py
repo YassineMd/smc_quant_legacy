@@ -3553,18 +3553,24 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         """A BUY / SELL pair on `parent`, identical to the candle chart's (its stylesheet is reused, so the two
         cannot drift apart)."""
         bar = QtWidgets.QWidget(parent)
-        lay = QtWidgets.QHBoxLayout(bar); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(12)
-        buy = QtWidgets.QPushButton("▲  BUY"); buy.setObjectName("mktBuy")
-        sell = QtWidgets.QPushButton("▼  SELL"); sell.setObjectName("mktSell")
+        lay = QtWidgets.QHBoxLayout(bar); lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(int(config.PX_MKT_GAP))
+        buy = QtWidgets.QPushButton("▲ BUY"); buy.setObjectName("mktBuy")
+        sell = QtWidgets.QPushButton("▼ SELL"); sell.setObjectName("mktSell")
         for _b in (buy, sell):
-            _b.setCursor(QtCore.Qt.PointingHandCursor); _b.setFixedSize(122, 42)
+            _b.setCursor(QtCore.Qt.PointingHandCursor)
+            _b.setFixedSize(int(config.PX_MKT_BTN_W), int(config.PX_MKT_BTN_H))
             try:
-                _sh = QtWidgets.QGraphicsDropShadowEffect(bar); _sh.setBlurRadius(20)
-                _sh.setColor(QtGui.QColor(0, 0, 0, 170)); _sh.setOffset(0, 3); _b.setGraphicsEffect(_sh)
+                _sh = QtWidgets.QGraphicsDropShadowEffect(bar); _sh.setBlurRadius(10)
+                _sh.setColor(QtGui.QColor(0, 0, 0, 150)); _sh.setOffset(0, 2); _b.setGraphicsEffect(_sh)
             except Exception:
                 pass
             lay.addWidget(_b)
-        bar.setStyleSheet(self._mkt_bar.styleSheet())
+        # the candle chart's own colours and gradients, then this pane's SIZE on top (user 2026-09-21: smaller
+        # here -- the pane is a fraction of the chart's height). A later rule of equal specificity wins in QSS.
+        bar.setStyleSheet(self._mkt_bar.styleSheet()
+                          + "QPushButton{font-size:%dpx;border-radius:6px;letter-spacing:0.3px;}"
+                          % int(config.PX_MKT_FONT_PX))
         buy.clicked.connect(lambda: self._place_market("long"))
         sell.clicked.connect(lambda: self._place_market("short"))
         bar.hide()
