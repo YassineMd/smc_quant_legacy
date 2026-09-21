@@ -22207,6 +22207,19 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _scl = np.where(np.isfinite(score[keep]), score[keep], 0.0) / _ln2      # the leader's impact, in log2
         _lb = np.log2(np.maximum(ar_b[keep], 1e-12)) + np.where(up, _scl, 0.0)
         _ls = np.log2(np.maximum(ar_s[keep], 1e-12)) + np.where(~up, _scl, 0.0)
+        # THE PREVIOUS BAR's two numbers, for every row (the PRICE pane's breakout badges hold a cycle against the one
+        # right before it). Taken over the WHOLE read, not the kept rows: the leftmost cycle on screen has its previous
+        # bar left of the view, and a badge that came and went as that bar crossed the pane's edge would read as a
+        # repaint. NaN where the cycle before it could not be rated -- a break in the lines has nothing to gain on.
+        _rated_all = (done | form_all) & np.isfinite(imb) & np.isfinite(score)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            _scl_all = np.where(np.isfinite(score), score, 0.0) / _ln2
+            _lb_all = np.log2(np.maximum(ar_b, 1e-12)) + np.where(lead_buy, _scl_all, 0.0)
+            _ls_all = np.log2(np.maximum(ar_s, 1e-12)) + np.where(~lead_buy, _scl_all, 0.0)
+        _plb = np.full(int(t.size), np.nan); _pls = np.full(int(t.size), np.nan)
+        if int(t.size) > 1:
+            _plb[1:] = np.where(_rated_all[:-1], _lb_all[:-1], np.nan)
+            _pls[1:] = np.where(_rated_all[:-1], _ls_all[:-1], np.nan)
         _mode = str(self.__dict__.get("_iimp_mode", "None"))
         _lines = _mode == str(config.IIMP_LINES_MODE)
         if not _lines and self.__dict__.get("_iimp_lines_has") and self._iimp_lines is not None:
@@ -22371,7 +22384,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                            "arb": ar_b[keep], "ars": ar_s[keep], "form": form, "kept": kept,
                            "sbuy": _sc["buy"], "ssell": _sc["sell"],
                            "nbuy": _scn["buy"], "nsell": _scn["sell"],
-                           "liib": _lb, "liis": _ls, "mode": _mode}
+                           "liib": _lb, "liis": _ls, "mode": _mode,
+                           "pliib": _plb[keep], "pliis": _pls[keep]}      # the previous bar's, NaN across a break
         if self._iimp_read is not None:
             _k = int(v.size) - 1
             _w = wk[_k]
@@ -22500,6 +22514,15 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         form = np.asarray(L["form"], dtype=bool)
         agree_b = np.isfinite(lb) & np.isfinite(ls) & (lb > 0.0) & (ls < 0.0)      # buyers above 1x, sellers below
         agree_s = np.isfinite(lb) & np.isfinite(ls) & (ls > 0.0) & (lb < 0.0)      # ... and the mirror
+        if bool(config.PX_IIB_REQUIRE_GAIN):
+            # ... and the candle's side GAINING on the previous bar while the other side LOSES (see config)
+            _n = int(lb.size)
+            pb = np.asarray(L.get("pliib", np.full(_n, np.nan)), dtype=np.float64)
+            ps = np.asarray(L.get("pliis", np.full(_n, np.nan)), dtype=np.float64)
+            with np.errstate(invalid="ignore"):
+                _known = np.isfinite(pb) & np.isfinite(ps)
+                agree_b &= _known & (lb > pb) & (ls < ps)
+                agree_s &= _known & (ls > ps) & (lb < pb)
         bx, by, sx, sy = [], [], [], []
         keys_b, keys_s = [], []
         if arr is not None and int(np.size(arr[0])):

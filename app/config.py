@@ -483,6 +483,13 @@ IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretc
 # ⚠ Reading by demand: while the PRICE pane shows, the I x I tick runs even with that pane toggled off.
 # ⚠ DESCRIPTIVE: it names a cycle that has closed (or is closing); nothing here was tested as a signal.
 PX_IIB_ON = True
+# THE GAIN FILTER (user, the same day: "for breakout buy signal we wanna see buyer gaining interestximpact and sellers
+# loosing it, and for breakout sell signal we wanna see sellers gaining interestximpact and buyers loosing it"): on top
+# of the 1x rule a breakout BUY needs the buyers' I x I ABOVE the previous bar's and the sellers' BELOW the previous
+# bar's; a breakout SELL the mirror. "The previous bar" is the cycle right before it, and it must be one the I x I pane
+# could rate: across a break in the lines there is nothing to have gained on, so there is no badge. The TRUE values
+# are compared, not the 8x-clipped ones the lines are drawn with.
+PX_IIB_REQUIRE_GAIN = True
 PX_IIB_BUY_COL = "#00C853"      # the breakout-buy candle's own green ...
 PX_IIB_SELL_COL = "#FF1F1F"     # ... and the breakout-sell candle's own red
 PX_IIB_SIZE = 10                # the triangle, px
