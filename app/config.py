@@ -457,10 +457,17 @@ FRATIO_MODE = "None"
 # the open), fitted per side on the same 48 h (buy R2 0.744 / sell 0.726). No intercept is needed: the score is a
 # residual against the median of the previous N same-side cycles, which cancels it.
 IIMP_PANE_ON = True
-IIMP_MODES = ("None", "Buyer", "Seller", "Delta")   # the pane's top-right dropdown: what the bar's HEIGHT is
+IIMP_MODES = ("None", "Buyer", "Seller", "Delta", "Lines Buyer/Seller")   # the pane's top-right dropdown
 #                                 None = the leader's multiple; Buyer / Seller = that side's interest x impact
 #                                 vs its own baseline; Delta = buyer over seller. All in log2 (user 2026-09-20).
+#                                 Lines Buyer/Seller (user 2026-09-21) = the Buyer option and the Seller option
+#                                 TOGETHER, as two lines instead of bars: the same numbers to the digit, one point
+#                                 per cycle at its middle, both against the same 1x midline and INDEPENDENT of each
+#                                 other -- each side against its OWN baseline, unlike None and Delta, which set one
+#                                 side against the other.
 IIMP_MODE = "None"
+IIMP_LINES_MODE = "Lines Buyer/Seller"
+IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretch is drawn at IIMP_FORM_PEN_A)
 IIMP_LOW = 0.76                 # imbalance terciles: below = sellers lead, above IIMP_HIGH = buyers lead
 IIMP_HIGH = 1.37
 IIMP_WALL_RADIUS = 25           # the wall is read within +-this many ticks of mid (a radius on the daemon's ladder)

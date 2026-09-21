@@ -1953,6 +1953,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._iimp_dots = None         # (wall, open road) ScatterPlotItems
         self._iimp_form = None         # the FORMING cycle's own bar: ONE item, brush and pen set per draw
         self._iimp_keep = None         # "handed it back" caps: ONE segment item over bottom-tercile bars
+        self._iimp_lines = None        # Lines Buyer/Seller mode: (buyers, sellers) curves through the finished cycles
+        self._iimp_lines_form = None   # ... and their lighter stretch out to the cycle still forming
+        self._iimp_lines_has = False   # do those items hold data (so a bar mode empties them once, not per draw)
         self._iimp_guides = None
         self._iimp_sig = None; self._iimp_t = 0.0; self._iimp_data = None; self._iimp_sized = False
         self._iimp_on = bool(config.IIMP_PANE_ON)
@@ -18089,6 +18092,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._iimp_plot = None; self._iimp_vb = None; self._iimp_items = None; self._iimp_dots = None
             self._iimp_combo = None
             self._iimp_form = None; self._iimp_keep = None
+            self._iimp_lines = None; self._iimp_lines_form = None; self._iimp_lines_has = False
             self._iimp_guides = None; self._iimp_sig = None; self._iimp_sized = False; self._iimp_proxy = None
             self._iimp_vline = None; self._iimp_hline = None
             self._iimp_tag = None; self._iimp_time_tag = None
@@ -21597,6 +21601,20 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                           pen=pg.mkPen(config.IIMP_KEEP_COL, width=2.5))
         self._iimp_keep.setZValue(8)
         pw.addItem(self._iimp_keep)
+        # LINES BUYER/SELLER mode (user 2026-09-21): the Buyer option and the Seller option together, as two
+        # lines. ONE curve per side through the finished cycles (a break where the pane rates nothing is the
+        # connect array, never an item each) and one lighter two-point curve per side out to the cycle still
+        # forming -- the pane's convention for anything that still moves. Empty in every other mode.
+        _ln, _lf = [], []
+        for _c in (config.IIMP_BUY_COL, config.IIMP_SELL_COL):
+            _q = QtGui.QColor(_c)
+            _cv = pg.PlotCurveItem(x=[], y=[], pen=pg.mkPen(_q, width=float(config.IIMP_LINES_W)))
+            _cv.setZValue(6); pw.addItem(_cv); _ln.append(_cv)
+            _cf = pg.PlotCurveItem(x=[], y=[], pen=pg.mkPen(
+                QtGui.QColor(_q.red(), _q.green(), _q.blue(), int(config.IIMP_FORM_PEN_A)),
+                width=float(config.IIMP_LINES_W)))
+            _cf.setZValue(6); pw.addItem(_cf); _lf.append(_cf)
+        self._iimp_lines = tuple(_ln); self._iimp_lines_form = tuple(_lf); self._iimp_lines_has = False
         self._iimp_sig = None                      # new items are empty: the next draw fills them
         guides = []
         for _v in (float(np.log2(max(1e-9, config.IIMP_LOW))), float(np.log2(max(1e-9, config.IIMP_HIGH)))):
@@ -21652,7 +21670,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                       "against its own last N cycles, times its impact on the cycles it led -- above the midline "
                       "when above its own baseline, below when under it. Delta: the buyers' over the sellers', teal "
                       "above the midline when the buyers hold more, red below when the sellers do. All of it in log "
-                      "space, so 0.5x sits as far below the midline as 2x sits above it.")
+                      "space, so 0.5x sits as far below the midline as 2x sits above it. Lines Buyer/Seller: the "
+                      "Buyer option and the Seller option together, as two lines instead of bars -- the same "
+                      "numbers, one point per cycle at its middle, teal for the buyers and red for the sellers, "
+                      "both against the same 1x midline and independent of each other: each side is measured "
+                      "against its OWN baseline. The lighter last stretch is the cycle still forming.")
         cb.setCursor(QtCore.Qt.PointingHandCursor)
         cb.currentIndexChanged.connect(self._on_iimp_mode_changed)
         cb.raise_(); cb.show()
@@ -21668,10 +21690,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
 
     def _iimp_tick_text(self, v, fmt="%.2g") -> str:
         """The axis / tag text for a bar height `v` (log2). MIRRORED in None and Delta -- both halves read a
-        multiple >= 1x and the half IS the side (user 2026-09-16) -- and SIGNED in Buyer and Seller, where the
-        halves mean above / below that side's own baseline, so 0.5x has to read 0.5x."""
+        multiple >= 1x and the half IS the side (user 2026-09-16) -- and SIGNED in Buyer, Seller and the lines
+        mode that draws both, where the halves mean above / below that side's own baseline, so 0.5x has to
+        read 0.5x."""
         mode = str(self.__dict__.get("_iimp_mode", "None"))
-        x = 2.0 ** float(v) if mode in ("Buyer", "Seller") else 2.0 ** abs(float(v))
+        x = 2.0 ** float(v) if mode in ("Buyer", "Seller", str(config.IIMP_LINES_MODE)) else 2.0 ** abs(float(v))
         return (fmt % x) + "x"
 
     def _iimp_position_combo(self, *args) -> None:
@@ -21716,6 +21739,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             except RuntimeError:
                 self._iimp_plot = None; self._iimp_items = None; self._iimp_vb = None; self._iimp_dots = None
                 self._iimp_form = None; self._iimp_keep = None
+                self._iimp_lines = None; self._iimp_lines_form = None; self._iimp_lines_has = False
         self._stack_axis_sync()
 
     def _iimp_hide_cursor(self) -> None:
@@ -22091,6 +22115,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 sc.setData([], [])
             self._iimp_form.setOpts(x0=[], x1=[], y0=[], height=[])
             self._iimp_keep.setData([], [])
+            for _it in tuple(self._iimp_lines or ()) + tuple(self._iimp_lines_form or ()):
+                _it.setData([], [])
+            self._iimp_lines_has = False
             self._iimp_sig = ("empty",)
             return
         n_lb = self._lb_n(); n_mn = self._lb_min_n()
@@ -22146,6 +22173,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 sc.setData([], [])
             self._iimp_form.setOpts(x0=[], x1=[], y0=[], height=[])
             self._iimp_keep.setData([], [])
+            for _it in tuple(self._iimp_lines or ()) + tuple(self._iimp_lines_form or ()):
+                _it.setData([], [])
+            self._iimp_lines_has = False
             return
         x0 = t[keep]; x1 = t_end_c[keep]; v_raw = imb[keep]; good = score[keep] >= 0.0
         _sc, _scn = self._score_parts(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl,
@@ -22169,18 +22199,65 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _lb = np.log2(np.maximum(ar_b[keep], 1e-12)) + np.where(up, _scl, 0.0)
         _ls = np.log2(np.maximum(ar_s[keep], 1e-12)) + np.where(~up, _scl, 0.0)
         _mode = str(self.__dict__.get("_iimp_mode", "None"))
+        _lines = _mode == str(config.IIMP_LINES_MODE)
+        if not _lines and self.__dict__.get("_iimp_lines_has") and self._iimp_lines is not None:
+            for _it in tuple(self._iimp_lines) + tuple(self._iimp_lines_form or ()):
+                _it.setData([], [])                           # a bar mode again: the lines go, once
+            self._iimp_lines_has = False
         if _mode == "Buyer":
             vd = np.clip(_lb, -_clip, _clip)
         elif _mode == "Seller":
             vd = np.clip(_ls, -_clip, _clip)
         elif _mode == "Delta":
             vd = np.clip(_lb - _ls, -_clip, _clip)
+        elif _lines:
+            # no bar is drawn; `vd` is the LEADING side's own reading (the point on its line), so the click mark and
+            # the dict below stay one side's story, as they are in every other mode
+            vd = np.where(up, np.clip(_lb, -_clip, _clip), np.clip(_ls, -_clip, _clip))
         else:
             vd = v
         # the forming cycle is EXCLUDED from the class items and drawn on its own: in both it would be painted
         # twice, at two different weights, and the lighter pass would be invisible under the solid one
         _fin = ~form
-        if _mode == "None":
+        if _lines:
+            # LINES BUYER/SELLER (user 2026-09-21): the Buyer option and the Seller option together, to the digit
+            # -- clip(_lb) and clip(_ls) are exactly what those two modes draw as bar heights -- as two lines with
+            # one point per cycle at its MIDDLE, where the bar it replaces is centred. Each side stands against its
+            # OWN baseline, so the two lines are independent and share only the 1x midline. A cycle the pane could
+            # not rate is a BREAK in both lines, never a straight stroke over it: a bar mode shows a hole there.
+            self._iimp_items[0].setOpts(x0=[], x1=[], y0=[], height=[], brushes=None, pens=None)
+            for it in self._iimp_items[1:]:
+                it.setOpts(x0=[], x1=[], y0=[], height=[])
+            _kidx = np.flatnonzero(keep)                        # rows of the READ: a jump in them is an unrated cycle
+            _mid = 0.5 * (x0 + x1)
+            _yb = np.clip(_lb, -_clip, _clip); _ys = np.clip(_ls, -_clip, _clip)
+            _f = np.flatnonzero(_fin)
+            if _f.size:
+                _cn = np.zeros(int(_f.size), dtype=np.int32)
+                _cn[:-1] = (np.diff(_kidx[_f]) == 1)
+                for _it, _y in zip(self._iimp_lines, (_yb, _ys)):
+                    _it.setData(_mid[_f], _y[_f], connect=_cn)
+            else:
+                for _it in self._iimp_lines:
+                    _it.setData([], [])
+            if form.any():
+                # the cycle STILL FORMING: a lighter stretch from the last finished point out to its own, which moves
+                # until the cycle closes. With no rated neighbour to start from it is a short flat dash over its span.
+                _k = int(np.flatnonzero(form)[-1])
+                _j = int(_f[-1]) if _f.size else -1
+                if _j >= 0 and int(_kidx[_k]) - int(_kidx[_j]) == 1:
+                    _fx = [float(_mid[_j]), float(_mid[_k])]
+                    _fy = ([float(_yb[_j]), float(_yb[_k])], [float(_ys[_j]), float(_ys[_k])])
+                else:
+                    _fx = [float(x0[_k]), float(x1[_k])]
+                    _fy = ([float(_yb[_k])] * 2, [float(_ys[_k])] * 2)
+                for _it, _y in zip(self._iimp_lines_form, _fy):
+                    _it.setData(_fx, _y)
+            else:
+                for _it in self._iimp_lines_form:
+                    _it.setData([], [])
+            self._iimp_lines_has = True
+        elif _mode == "None":
             groups = (up & good & ~contra & _fin, up & ~good & ~contra & _fin,
                       ~up & good & ~contra & _fin, ~up & ~good & ~contra & _fin,
                       contra & good & _fin, contra & ~good & _fin)
@@ -22224,7 +22301,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 it0.setOpts(x0=[], x1=[], y0=[], height=[], brushes=None, pens=None)
             for it in self._iimp_items[1:]:
                 it.setOpts(x0=[], x1=[], y0=[], height=[])
-        if form.any():
+        if form.any() and not _lines:
             # same side, same fill rule, one item -- its brush and pen are set here because both still move
             _k = int(np.flatnonzero(form)[-1])
             if _mode == "Buyer":
@@ -22257,7 +22334,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                             _lead_mv / np.maximum(_rch, 1e-9), np.nan)
         _cap = ((np.isfinite(kept) & (kept <= float(config.IIMP_KEEP_LOW)))
                 if bool(config.IIMP_KEEP_MARK_ON) else np.zeros(int(kept.size), dtype=bool))
-        if _cap.any():
+        # ... the cap sits across a bar's TIP and the wall dot just past it: with two lines and no bar there is no
+        # tip to put them on, so the lines mode draws neither. Both readings stay in the click panel and the readout.
+        if _cap.any() and not _lines:
             _n2 = int(_cap.sum())
             _cx = np.empty(2 * _n2); _cy = np.empty(2 * _n2)
             _cx[0::2] = x0[_cap]; _cx[1::2] = x1[_cap]
@@ -22270,7 +22349,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _pad = 0.06 * max(float(np.percentile(np.abs(v), 99.0)), 1.0)
         for sc, m in zip(self._iimp_dots, (np.isfinite(wk) & (wk >= float(config.IIMP_WALL_HIGH)),
                                            np.isfinite(wk) & (wk <= float(config.IIMP_WALL_LOW)))):
-            if not m.any():
+            if _lines or not m.any():
                 sc.setData([], [])
                 continue
             sc.setData(0.5 * (x0[m] + x1[m]), np.where(v[m] >= 0, v[m] + _pad, v[m] - _pad))
@@ -22297,6 +22376,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             elif _mode == "Delta":
                 _dl = float(_lb[_k] - _ls[_k])
                 _mode_txt = "  ·  delta %s %.2gx" % ("B" if _dl >= 0 else "S", 2.0 ** abs(_dl))
+            elif _lines:
+                _mode_txt = "  ·  buyers I×I %.2gx  ·  sellers I×I %.2gx" % (2.0 ** float(_lb[_k]), 2.0 ** float(_ls[_k]))
             self._iimp_read.setText("B %s / S %s  ·  %s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s%s%s%s" % (
                 "-" if not np.isfinite(_sbv) else "%d" % int(round(_sbv)),
                 "-" if not np.isfinite(_ssv) else "%d" % int(round(_ssv)),
@@ -22308,7 +22389,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 _mode_txt))
             self._iimp_read.setColor(config.IIMP_CONTRA_COL if contra[_k]
                                      else (config.IIMP_BUY_COL if up[_k] else config.IIMP_SELL_COL))
-        lim = float(np.percentile(np.abs(v), 95.0)) * 1.15
+        # the lines mode fits BOTH series it draws; every other mode the one it draws
+        _fit = np.abs(np.concatenate([np.clip(_lb, -_clip, _clip), np.clip(_ls, -_clip, _clip)])) if _lines else np.abs(v)
+        lim = float(np.percentile(_fit, 95.0)) * 1.15
         lim = min(max(lim, abs(float(np.log2(max(1e-9, config.IIMP_HIGH)))) * 1.4, 1.0), _clip * 1.15)
         cur = getattr(self, "_iimp_ytop", 0.0)
         if lim > cur * 0.98 or lim < cur * 0.55:
