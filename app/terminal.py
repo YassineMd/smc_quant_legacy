@@ -1851,6 +1851,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._flow_resub_t = 0.0
         self._px_plot = None           # PRICE pane (Flow mode): the one pane ABOVE the main chart
         self._px_drawer = None         # ... and its OWN drawing controller: Flow mode draws there and nowhere else
+        self._px_mkt_bar = None        # ... and its OWN Market Position BUY / SELL pair (a child of that pane)
+        self._px_mkt_buy = None; self._px_mkt_sell = None
         self._px_sim_state = {}        # its positions' paper-sim snapshots by id, kept across a pane rebuild
         self._px_curve = None          # the price LINE: kept for the degenerate case of <2 candles
         self._px_candles = None        # BucketCandleItem -- the main chart's own candle item, reused
@@ -2908,6 +2910,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             _pdc.locked = mode != "flow"
             if mode != "flow":
                 _pdc.cancel()
+        self._mkt_bars_sync()               # the BUY / SELL pair follows the price chart of the mode
         self._hide_price_overlays()
         self._apply_chart_theme(self._simple_bw())   # enhancement §3 (+ Chart Style: a mode switch keeps Simple BW)
         self._scanner_needs_autofit = True       # one-shot fit for the new mode
@@ -3526,9 +3529,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         elif key == "audio":
             self.alerts.audio.set_armed(on)
         elif key == "market_pos":
-            self._mkt_bar.setVisible(on)
-            if on:
-                self._mkt_bar.raise_(); self._reposition_mkt_bar()
+            self._mkt_bars_sync()           # the candle chart's pair, or -- in Flow mode -- the PRICE pane's
         if not self._loading_ui:
             self._save_ui_state()               # persist the sub-widget toggle across sessions
 
@@ -3541,8 +3542,96 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         pw = self.plot.width(); ph = self.plot.height()
         bar.move(max(0, int((pw - bar.width()) / 2)), max(0, int(ph - bar.height() - 44)))
 
+    def _mkt_wanted(self) -> bool:
+        """The hamburger's 'Market Position' sub-widget toggle (one toggle for both pairs)."""
+        try:
+            return bool(self.menu.sub_checks["market_pos"].isChecked())
+        except Exception:
+            return False
+
+    def _mkt_bar_build(self, parent):
+        """A BUY / SELL pair on `parent`, identical to the candle chart's (its stylesheet is reused, so the two
+        cannot drift apart)."""
+        bar = QtWidgets.QWidget(parent)
+        lay = QtWidgets.QHBoxLayout(bar); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(12)
+        buy = QtWidgets.QPushButton("▲  BUY"); buy.setObjectName("mktBuy")
+        sell = QtWidgets.QPushButton("▼  SELL"); sell.setObjectName("mktSell")
+        for _b in (buy, sell):
+            _b.setCursor(QtCore.Qt.PointingHandCursor); _b.setFixedSize(122, 42)
+            try:
+                _sh = QtWidgets.QGraphicsDropShadowEffect(bar); _sh.setBlurRadius(20)
+                _sh.setColor(QtGui.QColor(0, 0, 0, 170)); _sh.setOffset(0, 3); _b.setGraphicsEffect(_sh)
+            except Exception:
+                pass
+            lay.addWidget(_b)
+        bar.setStyleSheet(self._mkt_bar.styleSheet())
+        buy.clicked.connect(lambda: self._place_market("long"))
+        sell.clicked.connect(lambda: self._place_market("short"))
+        bar.hide()
+        return bar, buy, sell
+
+    def _mkt_bars_sync(self, *args) -> None:
+        """Which BUY / SELL pair is up, and where. In FLOW mode the position belongs on the PRICE chart and
+        nowhere else (user 2026-09-21: "implement the Market Position in the price chart only"): the candle
+        chart's pair -- a child of the main plot, which in Flow mode is the $ flow chart -- is hidden, and the
+        PRICE pane's own pair shows, bottom-centre of that pane. Every other mode is as it was."""
+        on = self._mkt_wanted()
+        flow = self.scanner_mode == "flow"
+        try:
+            self._mkt_bar.setVisible(bool(on and not flow))
+            if on and not flow:
+                self._mkt_bar.raise_(); self._reposition_mkt_bar()
+        except Exception:
+            pass
+        pb = self.__dict__.get("_px_mkt_bar")
+        pw = self.__dict__.get("_px_plot")
+        if pb is None or pw is None:
+            return
+        try:
+            pb.setVisible(bool(on and flow))        # a child of the pane: hidden with it whatever this says
+            if on and flow:
+                pb.adjustSize()
+                pb.move(max(0, int((pw.width() - pb.width()) / 2)), max(0, int(pw.height() - pb.height() - 10)))
+                pb.raise_()
+        except RuntimeError:                         # the pane was torn down under us
+            self._px_mkt_bar = None; self._px_mkt_buy = None; self._px_mkt_sell = None
+
     def _place_market(self, kind: str) -> None:
         """Buy/Sell click -> a DEFAULT simulated market position (entry = live price, SL 0.5%, TP 0.5%)."""
+        if self.scanner_mode == "flow":
+            # the PRICE pane's own controller, on its CLOCK axis: the position opens at `now` and its x-window is
+            # seconds wide (it only matters for picking / erasing -- the lines and badges span the view). With
+            # that pane off there is no price chart to put it on, and the $ flow chart is never one.
+            try:
+                d = self._draw_target()
+                if d is None or d is self.drawer:
+                    return
+                p = self._engine_live_px() or getattr(d, "_cur_px", None)
+                # ⚠ THE ENGINE'S PRICE CAN BE STALE FOR THE FIRST SECONDS OF A BOOT: the snapshot then still carries
+                # a catch-up bucket (MEASURED 2026-09-21: 75.61 at 7 s into a boot against a 115.76 market). A
+                # short "entered" there is crossed by the very next tick and stopped out at once -- a fake loss
+                # in the ledger. The tape is never that old, so a price that disagrees with its last print by
+                # more than 1% yields to it.
+                _tape = None
+                try:
+                    _sp = self._flow.span()
+                    if _sp:
+                        _tt, _tp = self._flow.price_series(float(_sp[1]) - 120.0, float(_sp[1]), 50)
+                        _tp = np.asarray(_tp, dtype=np.float64); _tp = _tp[_tp > 0]
+                        _tape = float(_tp[-1]) if _tp.size else None
+                except Exception:
+                    _tape = None
+                if _tape and (not p or abs(float(p) - _tape) / _tape > 0.01):
+                    p = _tape
+                if not p or float(p) <= 0.0:
+                    return
+                (_vx0, _vx1), _ = self._px_vb.viewRange()
+                d.seed_price(float(p))
+                d.place_market(kind, float(p), time.time(),
+                               width=min(3600.0, max(300.0, 0.12 * float(_vx1 - _vx0))))
+            except Exception:
+                pass
+            return
         try:
             p = self._live_px or getattr(self.drawer, "_cur_px", None)
             if not p or float(p) <= 0.0:
@@ -17947,6 +18036,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             # ... and the PRICE pane sat ABOVE the chart inside that same splitter
             self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None; self._px_data = None
             self._px_drawer_drop()           # its drawing controller lived on that plot (the drawings are on disk)
+            self._px_mkt_bar = None; self._px_mkt_buy = None; self._px_mkt_sell = None   # children of that plot
             self._px_pline = None; self._px_plabel = None; self._px_live_y = None
             self._px_orig_wheel = None; self._px_yauto = True; self._px_setting_y = False
             self._px_bp_buy = None; self._px_bp_sell = None; self._px_bp_labels = None
@@ -18851,6 +18941,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._px_drawer = _dc
         except Exception:
             self._px_drawer = None
+        # MARKET POSITION on the price chart (user 2026-09-21): this pane's own BUY / SELL pair, a CHILD of the
+        # pane so it lives and dies with it; _mkt_bars_sync shows it in Flow mode while the hamburger's Market
+        # Position toggle is on, and _place_market sends its clicks to the controller above.
+        self._px_mkt_bar = None; self._px_mkt_buy = None; self._px_mkt_sell = None
+        try:
+            self._px_mkt_bar, self._px_mkt_buy, self._px_mkt_sell = self._mkt_bar_build(pw)
+            vb.sigResized.connect(self._mkt_bars_sync)
+        except Exception:
+            self._px_mkt_bar = None; self._px_mkt_buy = None; self._px_mkt_sell = None
         self._theme_sub_panes(not self._simple_bw())              # born into the CURRENT Chart Style
         return pw
 
@@ -19402,6 +19501,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except RuntimeError:                     # the splitter was torn down under us -> nothing to hide
                 self._px_plot = None; self._px_curve = None; self._px_vb = None; self._px_candles = None
                 self._px_drawer_drop()
+                self._px_mkt_bar = None; self._px_mkt_buy = None; self._px_mkt_sell = None
                 self._px_data = None
                 self._px_pline = None; self._px_plabel = None; self._px_live_y = None
                 self._px_orig_wheel = None; self._px_yauto = True; self._px_setting_y = False
@@ -19419,6 +19519,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _pdc = self.__dict__.get("_px_drawer")
                 if _pdc is not None:
                     _pdc.cancel()                    # a tool armed on a pane nobody can see would come back with it
+        self._mkt_bars_sync()
         self._stack_axis_sync()
 
     def _px_tick(self, now: float) -> None:

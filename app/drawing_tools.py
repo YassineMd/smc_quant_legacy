@@ -1388,7 +1388,7 @@ class DrawingController(QtCore.QObject):
             self._save()
         return bracket   # the sim is armed LAZILY in on_price (after the caller finalises bracket.uid)
 
-    def place_market(self, kind, price, x, risk_pct=0.005):
+    def place_market(self, kind, price, x, risk_pct=0.005, width=8.0):
         """Programmatic MAKER-LIMIT entry (Buy/Sell buttons): the entry sits 1 TICK off the live price — a BUY 1
         tick BELOW market, a SELL 1 tick ABOVE — so it fills as a maker (the sim's PENDING state waits for price to
         cross the line, i.e. the market comes to the order). Default stop `risk_pct` off the entry, TP = the
@@ -1399,7 +1399,9 @@ class DrawingController(QtCore.QObject):
                 return None
             entry = (p - config.TICK_SIZE) if kind == "long" else (p + config.TICK_SIZE)   # maker limit, 1 tick off
             stop_p = entry * (1.0 - risk_pct) if kind == "long" else entry * (1.0 + risk_pct)
-            return self._make_bracket(kind, [float(x), entry], [float(x) + 8.0, stop_p])
+            # `width` is in the AXIS's own units: 8 bars on the candle canvas's index axis (the default), seconds
+            # on the Flow PRICE pane's clock axis
+            return self._make_bracket(kind, [float(x), entry], [float(x) + float(width), stop_p])
         except Exception:
             return None
 
