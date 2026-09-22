@@ -458,7 +458,7 @@ FRATIO_MODE = "None"
 # residual against the median of the previous N same-side cycles, which cancels it.
 IIMP_PANE_ON = True
 IIMP_MODES = ("None", "Buyer", "Seller", "Delta", "Lines Buyer/Seller",
-              "Lines Interest")                                          # the pane's top-right dropdown
+              "Lines Interest", "Lines Impact")                          # the pane's top-right dropdown
 #                                 None = the leader's multiple; Buyer / Seller = that side's interest x impact
 #                                 vs its own baseline; Delta = buyer over seller. All in log2 (user 2026-09-20).
 #                                 Lines Buyer/Seller (user 2026-09-21) = the Buyer option and the Seller option
@@ -477,6 +477,13 @@ IIMP_INT_SMOOTH_N = 20          # the trailing mean's window, in CYCLES, and its
                                 # would move the smoothing every time the user changed the baseline, which are two
                                 # different questions. Averaged in LOG space (a geometric mean), so 0.5x and 2x
                                 # pull on it equally -- an arithmetic mean of ratios is biased upward.
+IIMP_IMP_MODE = "Lines Impact"      # the IMPACT half alone, both sides, smoothed (user 2026-09-22)
+IIMP_IMP_SMOOTH_N = 20          # same window as the interest lines, its own knob for the same reason.
+                                # ⚠ COUNTED IN LED CYCLES, not in cycles: impact only exists for the side
+                                # that LED, so each side's mean runs over the last N cycles THAT SIDE led and
+                                # HOLDS its value across the ones it did not. The user was asked and chose this
+                                # over counting a non-led cycle as 1x -- that shape (one side pinned to 1x every
+                                # cycle, a sawtooth) is the one they rejected on 2026-09-22.
 IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretch is drawn at IIMP_FORM_PEN_A)
 # --- BREAKOUT BADGE on the PRICE pane (user 2026-09-21: "add a badge on the breakout candles where the candle side is
 # above x1 interestximpact and its opposite is below x1 -- for example we have a breakout buy candle and the

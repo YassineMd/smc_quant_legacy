@@ -21713,7 +21713,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                       "$ per second against the median of its own previous N cycles -- put through a trailing "
                       "mean of the last %d cycles, so it answers how hot each side is against its own recent "
                       "normal without the per-cycle noise. Averaged in log space, so a quiet stretch sits below "
-                      "1x rather than being dragged above it." % int(config.IIMP_INT_SMOOTH_N))
+                      "1x rather than being dragged above it. Lines Impact: the other half, the same way -- "
+                      "how far each side's push reached against what that side usually reaches for the same "
+                      "effort in the same time. Impact only exists for the side that LED a cycle, so each line "
+                      "is the mean of its OWN last %d cycles as the leader and holds flat across the cycles it "
+                      "did not lead." % (int(config.IIMP_INT_SMOOTH_N), int(config.IIMP_IMP_SMOOTH_N)))
         cb.setCursor(QtCore.Qt.PointingHandCursor)
         cb.currentIndexChanged.connect(self._on_iimp_mode_changed)
         cb.raise_(); cb.show()
@@ -21735,7 +21739,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         read 0.5x."""
         mode = str(self.__dict__.get("_iimp_mode", "None"))
         x = (2.0 ** float(v) if mode in ("Buyer", "Seller", str(config.IIMP_LINES_MODE),
-                                         str(config.IIMP_INT_MODE)) else 2.0 ** abs(float(v)))
+                                         str(config.IIMP_INT_MODE), str(config.IIMP_IMP_MODE))
+             else 2.0 ** abs(float(v)))
         return (fmt % x) + "x"
 
     def _iimp_position_combo(self, *args) -> None:
@@ -22082,6 +22087,21 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         out[idx[enough]] = ((cs[k] - cs[lo]) / cnt)[enough]
         return out
 
+    @staticmethod
+    def _iimp_hold(vals):
+        """Carry each value FORWARD over the rows that have none; NaN before the first one.
+
+        What "skip the cycles this side did not lead" has to look like once it is drawn: the side's mean did
+        not change there, so its line is flat across them rather than a hole every other cycle. Without this a
+        two-line impact chart is two dotted half-series that never overlap."""
+        v = np.asarray(vals, dtype=np.float64)
+        ok = np.isfinite(v)
+        if not ok.any():
+            return v.copy()
+        idx = np.where(ok, np.arange(int(v.size)), 0)
+        np.maximum.accumulate(idx, out=idx)
+        return v[idx]                      # before the first sample idx is 0, and v[0] is NaN there by definition
+
     def _iimp_climb(self, t, t_end, is_buy):
         """Per cycle: the side's own aggressive $ up to the cycle's EXTREME, and the seconds it took to get there.
 
@@ -22306,7 +22326,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # trailing mean of IIMP_INT_SMOOTH_N cycles. Built over the WHOLE read so a pan cannot move a point, and
         # only when the mode asks for it: two cumsums are cheap, but not free on every frame of every other mode.
         _int = _mode == str(config.IIMP_INT_MODE)
-        _any_lines = _lines or _int
+        # LINES IMPACT (user 2026-09-22). The other half, on the same treatment. ⚠ IMPACT ONLY EXISTS FOR THE
+        # SIDE THAT LED -- the other side moved nothing that cycle -- so each side's mean runs over the last N
+        # cycles THAT SIDE LED and is HELD across the ones it did not, rather than counting those as 1x. Asked
+        # and answered: counting them as 1x is the sawtooth the user rejected hours earlier, and it blends "how
+        # often did I lead" into a number that is supposed to say "when I led, did it convert".
+        _imp = _mode == str(config.IIMP_IMP_MODE)
+        _any_lines = _lines or _int or _imp
         _sm_b = _sm_s = None
         if _int:
             with np.errstate(divide="ignore", invalid="ignore"):
@@ -22315,6 +22341,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             _sm_n = int(config.IIMP_INT_SMOOTH_N)
             _sm_b = self._iimp_smooth(_ib, _rated_all, _sm_n, n_mn)
             _sm_s = self._iimp_smooth(_is, _rated_all, _sm_n, n_mn)
+        elif _imp:
+            _sm_n = int(config.IIMP_IMP_SMOOTH_N)
+            _sm_b = self._iimp_hold(self._iimp_smooth(_scl_all, _rated_all & lead_buy, _sm_n, n_mn))
+            _sm_s = self._iimp_hold(self._iimp_smooth(_scl_all, _rated_all & ~lead_buy, _sm_n, n_mn))
         if not _any_lines and self.__dict__.get("_iimp_lines_has") and self._iimp_lines is not None:
             for _it in tuple(self._iimp_lines) + tuple(self._iimp_lines_form or ()):
                 _it.setData([], [])                           # a bar mode again: the lines go, once
@@ -22329,7 +22359,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             # no bar is drawn; `vd` is the LEADING side's own reading (the point on its line), so the click mark and
             # the dict below stay one side's story, as they are in every other mode
             vd = np.where(up, np.clip(_lb, -_clip, _clip), np.clip(_ls, -_clip, _clip))
-        elif _int:
+        elif _sm_b is not None:
             vd = np.where(up, np.clip(_sm_b[keep], -_clip, _clip), np.clip(_sm_s[keep], -_clip, _clip))
         else:
             vd = v
@@ -22347,9 +22377,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 it.setOpts(x0=[], x1=[], y0=[], height=[])
             _kidx = np.flatnonzero(keep)                        # rows of the READ: a jump in them is an unrated cycle
             _mid = 0.5 * (x0 + x1)
-            if _int:
-                # the INTEREST alone, smoothed. The break pattern stays the pane's own `keep`, so the point a
-                # click explains is always the point drawn -- the property every mode in here holds.
+            if _sm_b is not None:
+                # INTEREST or IMPACT alone, smoothed. The break pattern stays the pane's own `keep`, so the
+                # point a click explains is always the point drawn -- the property every mode in here holds.
                 _yb = np.clip(_sm_b[keep], -_clip, _clip); _ys = np.clip(_sm_s[keep], -_clip, _clip)
             else:
                 _yb = np.clip(_lb, -_clip, _clip); _ys = np.clip(_ls, -_clip, _clip)
@@ -22505,10 +22535,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 _mode_txt = "  ·  delta %s %.2gx" % ("B" if _dl >= 0 else "S", 2.0 ** abs(_dl))
             elif _lines:
                 _mode_txt = "  ·  buyers I×I %.2gx  ·  sellers I×I %.2gx" % (2.0 ** float(_lb[_k]), 2.0 ** float(_ls[_k]))
-            elif _int:
+            elif _sm_b is not None:
                 _smb, _sms = _sm_b[keep][_k], _sm_s[keep][_k]
-                _mode_txt = "  ·  interest, %d-cycle mean  ·  buyers %s  ·  sellers %s" % (
-                    int(config.IIMP_INT_SMOOTH_N),
+                _mode_txt = "  ·  %s  ·  buyers %s  ·  sellers %s" % (
+                    ("interest, %d-cycle mean" % int(config.IIMP_INT_SMOOTH_N)) if _int
+                    else ("impact, mean of each side's last %d LED cycles" % int(config.IIMP_IMP_SMOOTH_N)),
                     "-" if not np.isfinite(_smb) else "%.2gx" % (2.0 ** float(_smb)),
                     "-" if not np.isfinite(_sms) else "%.2gx" % (2.0 ** float(_sms)))
             self._iimp_read.setText("B %s / S %s  ·  %s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s%s%s%s" % (
@@ -22523,7 +22554,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._iimp_read.setColor(config.IIMP_CONTRA_COL if contra[_k]
                                      else (config.IIMP_BUY_COL if up[_k] else config.IIMP_SELL_COL))
         # the lines mode fits BOTH series it draws; every other mode the one it draws
-        if _int:
+        if _sm_b is not None:
             _fit = np.abs(np.concatenate([np.clip(_sm_b[keep], -_clip, _clip), np.clip(_sm_s[keep], -_clip, _clip)]))
         elif _lines:
             _fit = np.abs(np.concatenate([np.clip(_lb, -_clip, _clip), np.clip(_ls, -_clip, _clip)]))
@@ -22945,10 +22976,17 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _imb, _ims = d.get("ismb"), d.get("isms")
         if _imb is not None and _ims is not None and k < len(_imb):
             _f = lambda q: "-" if not np.isfinite(q) else "<b>%.2gx</b>" % (2.0 ** float(q))
-            rows.append("%s: the two lines are the INTEREST alone, averaged over the last %d cycles -- buyers "
-                        "%s, sellers %s. No impact in either one: this is how hot each side has been against "
-                        "its own recent normal, not what it did to price."
-                        % (_L % "Lines", int(config.IIMP_INT_SMOOTH_N), _f(_imb[k]), _f(_ims[k])))
+            if str(d.get("mode")) == str(config.IIMP_IMP_MODE):
+                rows.append("%s: the two lines are the IMPACT alone -- buyers %s, sellers %s. Each side is "
+                            "averaged over its OWN last %d cycles AS THE LEADER and holds that value across the "
+                            "cycles it did not lead, because a side that led nothing moved nothing. This is how "
+                            "well each side has been CONVERTING its pushes, not how hard it has been pushing."
+                            % (_L % "Lines", _f(_imb[k]), _f(_ims[k]), int(config.IIMP_IMP_SMOOTH_N)))
+            else:
+                rows.append("%s: the two lines are the INTEREST alone, averaged over the last %d cycles -- buyers "
+                            "%s, sellers %s. No impact in either one: this is how hot each side has been against "
+                            "its own recent normal, not what it did to price."
+                            % (_L % "Lines", int(config.IIMP_INT_SMOOTH_N), _f(_imb[k]), _f(_ims[k])))
         if contra:
             rows.append("%s: <span style='color:%s'>orange</span>, because price went the OTHER way -- it "
                         "finished %+d ticks while the %s led the interest."
