@@ -98,19 +98,24 @@ public final class ChartView extends View {
     /** The stylus hovering IS the terminal's mouse: it moves the crosshair without touching anything. */
     @Override public boolean onHoverEvent(MotionEvent e) {
         int a = e.getActionMasked();
-        if (a == MotionEvent.ACTION_HOVER_EXIT) {
-            crossBadges = false;                       // "Badges off, lines linger" (_px_hide_cursor)
-            invalidate();
-            return true;
-        }
+        if (a == MotionEvent.ACTION_HOVER_EXIT) { clearCross(); return true; }
         float x = e.getX(), y = e.getY();
-        if (x >= plotR || y >= timeY) { crossBadges = false; invalidate(); return true; }
+        if (x >= plotR || y >= timeY) { clearCross(); return true; }
         int p = paneAt(x, y);
-        if (p < 0) { crossBadges = false; invalidate(); return true; }
+        if (p < 0) { clearCross(); return true; }
         crossOn = true; crossBadges = true; crossPane = p; crossY = y;
         crossX = vx0 + (x / Math.max(1f, plotR)) * (vx1 - vx0);
         invalidate();
         return true;
+    }
+
+    /** No pen in range, no crosshair (user 2026-09-22). The terminal's mouse never LEAVES the window, so it could
+     *  afford to linger ("Badges off, lines linger", _px_hide_cursor); a pen lifts out of range constantly and a
+     *  lingering line would just be a stale mark on the chart with nothing pointing at it. */
+    private void clearCross() {
+        if (!crossOn && !crossBadges) return;
+        crossOn = false; crossBadges = false; crossPane = -1; crossX = Double.NaN;
+        invalidate();
     }
     private double lcFrom = Double.NaN, lcTo = Double.NaN, lcCur = Double.NaN, lcCycle = Double.NaN; private long lcT0 = 0;
 
@@ -155,7 +160,9 @@ public final class ChartView extends View {
                 double mid = 0.5 * (axLo0 + axHi0), half = 0.5 * (axHi0 - axLo0) * Math.exp((y - axY0) / (150 * d));   // down = out
                 yLo[axPane] = mid - half; yHi[axPane] = mid + half;
             } else {
-                double span = Math.max(30.0, Math.min(72 * 3600.0, axSpan0 * Math.exp(-(x - axX0) / (200 * d))));  // right = in
+                // INVERTED 2026-09-22 at the user's word: dragging RIGHT along the clock now zooms OUT. The
+                // drag pulls the time axis the way a scrollbar moves, so right = more time on screen.
+                double span = Math.max(30.0, Math.min(72 * 3600.0, axSpan0 * Math.exp((x - axX0) / (200 * d))));   // right = out
                 if (follow) { vx1 = M.nowEngine(); vx0 = vx1 - span; }
                 else { double mid = 0.5 * (vx0 + vx1); vx0 = mid - span / 2; vx1 = mid + span / 2; }
                 long t = System.currentTimeMillis();
@@ -330,23 +337,11 @@ public final class ChartView extends View {
     }
 
     @Override public boolean onTouchEvent(MotionEvent ev) {
-        // ⚠ THE STYLUS IS THE POINTER. A pen that hovers drives the crosshair through onHoverEvent with no
-        // conflict at all; one that does not (a passive pen) only ever produces touches, so a stylus DRAG moves
-        // the crosshair here instead of panning -- finger drags still pan and pinch, and stylus TAPS still fall
-        // through to the gesture detector so buttons, candle selection and the I x I panel keep working. A drag
-        // with a drawing tool armed belongs to the tool, not the crosshair.
-        if (ev.getActionMasked() == MotionEvent.ACTION_MOVE && ev.getPointerCount() == 1
-                && ev.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
-                && (tools == null || tools.tool == null) && axPane < 0 && !axX && rsUpper < 0) {
-            float x = ev.getX(), y = ev.getY();
-            int p = paneAt(x, y);
-            if (p >= 0 && x < plotR && y < timeY) {
-                crossOn = true; crossBadges = true; crossPane = p; crossY = y;
-                crossX = vx0 + (x / Math.max(1f, plotR)) * (vx1 - vx0);
-                invalidate();
-                return true;
-            }
-        }
+        // ⚠ THE STYLUS IS A POINTER WHILE IT HOVERS AND A FINGER WHILE IT TOUCHES (user 2026-09-22). The pen
+        // once took over a DRAG to move the crosshair, which cost it panning -- the one thing the user reaches for
+        // most. Hover already drives the crosshair with no conflict, so every touch, pen or finger, now falls
+        // straight through to the same pan / pinch / tap path. A pen that cannot hover simply has no crosshair.
+        if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) clearCross();   // touching is not hovering
         if (axisTouch(ev)) { gest.onTouchEvent(ev); return true; }   // the axes: zoom drags, and the double tap
         if (resizeTouch(ev)) return true;                         // a pane boundary under the finger: the splitter
         if (tools != null && paneOn[PANE_PRICE] && tools.onTouch(ev)) { invalidate(); return true; }
