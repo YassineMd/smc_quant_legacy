@@ -35,6 +35,22 @@ public final class InterpView extends View {
 
     public void setDark(boolean dark) { this.dark = dark; setBackgroundColor(Color.parseColor(dark ? "#141414" : "#ffffff")); invalidate(); }
     public String title = "INTERPRETATION  ·  one row per cycle";
+    public interface Listener { void onRowTap(FlowModel.Row r); }
+    private Listener listener;
+    public void setListener(Listener l) { listener = l; }
+    public double selT0 = Double.NaN;                 // the marked row: the cycle tapped here or on the chart
+
+    /** Bring the row of the cycle starting at t0 into view and mark it (its candle was tapped). */
+    public void select(double t0) {
+        selT0 = t0;
+        List<FlowModel.Row> rs = rows; float d = getResources().getDisplayMetrics().density;
+        for (int i = 0; i < rs.size(); i++) if (Math.abs(rs.get(i).t0 - t0) < 1.0) {
+            float target = i * ROW_H - Math.max(0f, getHeight() / 2f - ROW_H);
+            scroll = Math.max(0f, Math.min(target, Math.max(0f, rs.size() * ROW_H - getHeight() + 40 * d)));
+            break;
+        }
+        invalidate();
+    }
 
     public InterpView(Context ctx, FlowModel model) {
         super(ctx);
@@ -50,6 +66,17 @@ public final class InterpView extends View {
                 invalidate(); return true;
             }
             @Override public boolean onDoubleTap(MotionEvent e) { scroll = 0f; invalidate(); return true; }
+            @Override public boolean onSingleTapUp(MotionEvent e) {
+                float dd = getResources().getDisplayMetrics().density;
+                List<FlowModel.Row> rs = rows;
+                int i = (int) Math.floor((e.getY() - (PAD + 40 * dd - scroll)) / ROW_H);
+                if (e.getY() > 21 * dd && i >= 0 && i < rs.size()) {
+                    selT0 = rs.get(i).t0;
+                    if (listener != null) listener.onRowTap(rs.get(i));
+                    invalidate();
+                }
+                return true;
+            }
         });
     }
 
@@ -83,6 +110,12 @@ public final class InterpView extends View {
             FlowModel.Row r = rs.get(i);
             float y = yTop + i * ROW_H;
             if (y > h || y + ROW_H < 20 * d) continue;
+            if (!Double.isNaN(selT0) && Math.abs(r.t0 - selT0) < 1.0) {      // the marked row (the terminal's sel_bg / sel_edge)
+                pFill.setColor(dark ? Color.argb(30, 255, 255, 255) : Color.argb(26, 0, 0, 0));
+                c.drawRect(x, y, w - PAD, y + ROW_H - 4 * d, pFill);
+                pFill.setColor(Color.parseColor(dark ? "#7FB2FF" : "#0B4FA8"));
+                c.drawRect(w - PAD - 2 * d, y, w - PAD, y + ROW_H - 4 * d, pFill);
+            }
             int col = Math.max(0, Math.min(BAR_COL.length - 1, r.col));
             int bar = Color.parseColor(BAR_COL[col]);
             if (!r.strong) bar = (bar & 0x00ffffff) | (105 << 24);

@@ -204,8 +204,8 @@ public final class PriceTools {
     /** Buttons first: the toolbar and the BUY / SELL pair. True when the tap was one of them. */
     public boolean tapButton(float x, float y) {
         if (showBar) {
-            if (barBtn[0].contains(x, y)) { tool = "trend".equals(tool) ? null : "trend"; selected = -1; return true; }
-            if (barBtn[1].contains(x, y)) { tool = "select".equals(tool) ? null : "select"; return true; }
+            if (barBtn[0].contains(x, y)) { tool = "select".equals(tool) ? null : "select"; return true; }
+            if (barBtn[1].contains(x, y)) { tool = "trend".equals(tool) ? null : "trend"; selected = -1; return true; }
             if (barBtn[2].contains(x, y)) { ev.toast(trends.isEmpty() ? "no drawings" : "long-press Delete All to confirm"); return true; }
         }
         if (showMarket) {
@@ -236,9 +236,10 @@ public final class PriceTools {
     }
 
     /** A tap on the pane with the select tool: pick the nearest trend line, or drop the selection. */
-    public void tapPane(float x, float y) {
-        if (!"select".equals(tool)) return;
+    public boolean tapPane(float x, float y) {
+        if (!"select".equals(tool)) return false;
         selected = hitTrend(x, y, 16 * d);
+        return selected >= 0;
     }
 
     private int hitTrend(float x, float y, float tol) {
@@ -376,26 +377,27 @@ public final class PriceTools {
         RectF r = m.pane();
         pt.setTextSize(11 * d); pt.setFakeBoldText(true);
         if (showBar) {
-            String[] lab = {"╱ Trend", "↖ Select", "✕ All"};
-            float x = r.left + 6 * d, y = r.top + 20 * d;
+            String[] lab = {"\u2196", "\u2571", "\u2715"};                 // select, trend, delete all -- icons only
+            float x = r.left + 6 * d, y = r.top + 20 * d, w = 30 * d;
+            pt.setTextSize(14 * d);
             for (int i = 0; i < 3; i++) {
-                float w = pt.measureText(lab[i]) + 16 * d;
-                barBtn[i].set(x, y, x + w, y + 26 * d);
-                boolean on = (i == 0 && "trend".equals(tool)) || (i == 1 && "select".equals(tool));
-                pf.setColor(on ? Color.parseColor("#2962ff") : Color.parseColor("#20242c")); c.drawRoundRect(barBtn[i], 4 * d, 4 * d, pf);
-                pl.setColor(Color.parseColor("#3a4150")); pl.setStrokeWidth(1 * d); c.drawRoundRect(barBtn[i], 4 * d, 4 * d, pl);
-                pt.setColor(Color.parseColor("#dcdcdc")); c.drawText(lab[i], x + 8 * d, y + 18 * d, pt);
+                barBtn[i].set(x, y, x + w, y + w);
+                boolean on = (i == 0 && "select".equals(tool)) || (i == 1 && "trend".equals(tool));
+                pf.setColor(on ? Color.parseColor("#2962ff") : Color.parseColor("#20242c")); c.drawRoundRect(barBtn[i], 5 * d, 5 * d, pf);
+                pl.setColor(Color.parseColor("#3a4150")); pl.setStrokeWidth(1 * d); c.drawRoundRect(barBtn[i], 5 * d, 5 * d, pl);
+                pt.setColor(Color.parseColor("#dcdcdc")); c.drawText(lab[i], x + (w - pt.measureText(lab[i])) / 2, y + 20 * d, pt);
                 x += w + 6 * d;
             }
+            pt.setTextSize(11 * d);
         } else for (RectF b : barBtn) b.setEmpty();
         if (showMarket) {
-            float w = 70 * d, h = 28 * d, y = r.bottom - h - 6 * d, xr = m.viewRight() - 6 * d;
-            sellBtn.set(xr - w, y, xr, y + h); buyBtn.set(xr - 2 * w - 6 * d, y, xr - w - 6 * d, y + h);
+            float w = 54 * d, h = 22 * d, y = r.bottom - h - 6 * d, xr = m.viewRight() - 6 * d;
+            sellBtn.set(xr - w, y, xr, y + h); buyBtn.set(xr - 2 * w - 5 * d, y, xr - w - 5 * d, y + h);
             pf.setColor(Color.parseColor("#1e8f5a")); c.drawRoundRect(buyBtn, 4 * d, 4 * d, pf);
             pf.setColor(Color.parseColor("#b63a3a")); c.drawRoundRect(sellBtn, 4 * d, 4 * d, pf);
-            pt.setColor(Color.WHITE); pt.setTextSize(12 * d);
-            c.drawText("▲ BUY", buyBtn.left + (w - pt.measureText("▲ BUY")) / 2, y + 19 * d, pt);
-            c.drawText("▼ SELL", sellBtn.left + (w - pt.measureText("▼ SELL")) / 2, y + 19 * d, pt);
+            pt.setColor(Color.WHITE); pt.setTextSize(10 * d);
+            c.drawText("\u25b2 BUY", buyBtn.left + (w - pt.measureText("\u25b2 BUY")) / 2, y + 15 * d, pt);
+            c.drawText("\u25bc SELL", sellBtn.left + (w - pt.measureText("\u25bc SELL")) / 2, y + 15 * d, pt);
         } else { buyBtn.setEmpty(); sellBtn.setEmpty(); }
         pt.setFakeBoldText(false);
     }

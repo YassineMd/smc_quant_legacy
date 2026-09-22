@@ -32,6 +32,23 @@ public final class MainActivity extends Activity implements EngineClient.Listene
     private double pendingExplain = Double.NaN;
     private AlertDialog explainDlg;
     private Button paperBtn;                  // the Paper LIVE ledger, next to the hamburger, only with Market Position on
+    private Grip divider;                     // between the chart and the feed: drag it to resize the feed
+    private float splitX0, splitW0;
+
+    /** The divider before the feed: a hairline with a grip, draggable. */
+    private static final class Grip extends View {
+        boolean dark = true;
+        private final android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        Grip(android.content.Context c) { super(c); }
+        @Override protected void onDraw(android.graphics.Canvas c) {
+            float d = getResources().getDisplayMetrics().density, w = getWidth(), h = getHeight();
+            c.drawColor(Color.parseColor(dark ? "#141414" : "#ffffff"));
+            p.setColor(Color.parseColor(dark ? "#2a2f36" : "#d0d0d0"));
+            c.drawRect(w / 2 - 0.5f * d, 0, w / 2 + 0.5f * d, h, p);
+            p.setColor(Color.parseColor(dark ? "#5a6470" : "#9aa0a6"));
+            for (int i = -1; i <= 1; i++) c.drawCircle(w / 2, h / 2 + i * 8 * d, 2 * d, p);
+        }
+    }
     private FrameLayout root;
     private boolean bw = true;
     private View popupAnchor;                 // a 1x1 view moved under the I x I dropdown button so the menu drops from it
@@ -62,8 +79,26 @@ public final class MainActivity extends Activity implements EngineClient.Listene
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.addView(chart, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.74f));
-        row.addView(interp, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.26f));
+        float split = prefs.getFloat("split", 0.74f);
+        row.addView(chart, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, split));
+        divider = new Grip(this);
+        row.addView(divider, new LinearLayout.LayoutParams((int) Ui.dp(this, 12), ViewGroup.LayoutParams.MATCH_PARENT));
+        row.addView(interp, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f - split));
+        divider.setVisibility(interp.getVisibility());
+        divider.setOnTouchListener((v, ev) -> {
+            LinearLayout.LayoutParams cp = (LinearLayout.LayoutParams) chart.getLayoutParams(), ip = (LinearLayout.LayoutParams) interp.getLayoutParams();
+            switch (ev.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN: splitX0 = ev.getRawX(); splitW0 = cp.weight; return true;
+                case android.view.MotionEvent.ACTION_MOVE: {
+                    float avail = Math.max(1f, row.getWidth() - divider.getWidth());
+                    float f = Math.max(0.4f, Math.min(0.92f, splitW0 + (ev.getRawX() - splitX0) / avail));
+                    cp.weight = f; ip.weight = 1f - f; row.requestLayout(); return true; }
+                case android.view.MotionEvent.ACTION_UP: case android.view.MotionEvent.ACTION_CANCEL:
+                    prefs.edit().putFloat("split", cp.weight).apply(); return true;
+            }
+            return false;
+        });
+        interp.setListener(r -> chart.focusCycle(r.t0, r.t1));
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#141414"));
         root.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -107,6 +142,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
     /** Chart Style + which top-right buttons show: Simple BW themes every pane, the feed and the ground. */
     private void applyStyle() {
         chart.bw = bw; interp.setDark(!bw);
+        if (divider != null) { divider.dark = !bw; divider.invalidate(); }
         root.setBackgroundColor(Color.parseColor(bw ? "#ffffff" : "#141414"));
         paperBtn.setVisibility(chart.tools.showMarket ? View.VISIBLE : View.GONE);
         chart.dataChanged();
@@ -203,23 +239,40 @@ public final class MainActivity extends Activity implements EngineClient.Listene
 
     @Override public void onFullscreen(boolean on) {
         interp.setVisibility(on || !prefs.getBoolean("interp", true) ? View.GONE : View.VISIBLE);
+        divider.setVisibility(interp.getVisibility());
     }
 
+    @Override public void onCycleTap(double t0) { interp.select(t0); }
+
+    /** The I x I explain panel: the terminal's words on a white card; a tap anywhere on it closes it. */
     private void showExplain(String html) {
         if (explainDlg != null && explainDlg.isShowing()) explainDlg.dismiss();
+        String body = html.replaceAll("(?i)click this panel to close it", "").replaceAll("(?i)(<br\\s*/?>\\s*)+$", "");
         TextView tv = new TextView(this);
-        tv.setText(Html.fromHtml(html, Html.FROM_HTML_MODE_COMPACT));
-        tv.setTextColor(Color.parseColor("#dcdcdc"));
-        tv.setTextSize(13);
-        tv.setPadding((int) Ui.dp(this, 16), (int) Ui.dp(this, 12), (int) Ui.dp(this, 16), (int) Ui.dp(this, 12));
-        tv.setMovementMethod(LinkMovementMethod.getInstance());
-        ScrollView sv = new ScrollView(this);
-        sv.addView(tv);
-        sv.setBackgroundColor(Color.parseColor("#20242c"));
-        explainDlg = new AlertDialog.Builder(this).setView(sv).create();
+        tv.setText(Html.fromHtml(body, Html.FROM_HTML_MODE_COMPACT));
+        tv.setTextColor(Color.parseColor("#1f2933"));
+        tv.setTextSize(14.5f); tv.setLineSpacing(0, 1.25f);
+        int p = (int) Ui.dp(this, 22);
+        tv.setPadding(p, (int) Ui.dp(this, 18), p, (int) Ui.dp(this, 6));
+        TextView foot = new TextView(this);
+        foot.setText("tap to close"); foot.setTextColor(Color.parseColor("#8a94a6")); foot.setTextSize(12); foot.setGravity(Gravity.CENTER);
+        foot.setPadding(p, (int) Ui.dp(this, 4), p, (int) Ui.dp(this, 14));
+        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        bg.setColor(Color.WHITE); bg.setCornerRadius(Ui.dp(this, 14));
+        col.setBackground(bg);
+        ScrollView sv = new ScrollView(this); sv.addView(tv);
+        col.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        col.addView(foot);
+        explainDlg = new AlertDialog.Builder(this).setView(col).create();
+        View.OnClickListener close = v -> explainDlg.dismiss();
+        tv.setOnClickListener(close); foot.setOnClickListener(close); col.setOnClickListener(close); sv.setOnClickListener(close);
         explainDlg.setOnDismissListener(dlg -> chart.clearSelection());
         explainDlg.show();
-        if (explainDlg.getWindow() != null) explainDlg.getWindow().setLayout((int) Ui.dp(this, 560), ViewGroup.LayoutParams.WRAP_CONTENT);
+        if (explainDlg.getWindow() != null) {
+            explainDlg.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+            explainDlg.getWindow().setLayout((int) Ui.dp(this, 640), ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
     }
 
     private void showMenu() {
@@ -233,7 +286,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         toggle(col, "Buy/Sell Flow", "flow", chart.showFlow, v -> chart.showFlow = v);
         toggle(col, "Limit orders", "liq", chart.showLiq, v -> chart.showLiq = v);
         toggle(col, "Interest × Impact", "iimp", chart.showIimp, v -> chart.showIimp = v);
-        toggle(col, "Interpretation", "interp", interp.getVisibility() == View.VISIBLE, v -> interp.setVisibility(v && chart.getFullscreen() < 0 ? View.VISIBLE : View.GONE));
+        toggle(col, "Interpretation", "interp", interp.getVisibility() == View.VISIBLE, v -> { interp.setVisibility(v && chart.getFullscreen() < 0 ? View.VISIBLE : View.GONE); divider.setVisibility(interp.getVisibility()); });
         section(col, "Sub-widgets");
         toggle(col, "Market Position  (BUY / SELL)", "market", chart.tools.showMarket, v -> { chart.tools.showMarket = v; applyStyle(); });
         toggle(col, "Drawing toolbar", "drawbar", chart.tools.showBar, v -> { chart.tools.showBar = v; if (!v) chart.tools.tool = null; });

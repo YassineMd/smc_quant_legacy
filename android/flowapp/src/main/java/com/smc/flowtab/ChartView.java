@@ -35,6 +35,7 @@ public final class ChartView extends View {
         void onExplain(double k);
         void onModeMenu(float x, float y);
         void onFullscreen(boolean on);
+        void onCycleTap(double t0);
     }
 
     public static final int PANE_PRICE = 0, PANE_FLOW = 1, PANE_LIQ = 2, PANE_IIMP = 3;
@@ -68,6 +69,32 @@ public final class ChartView extends View {
     private final float[] paneWt = {0.30f, 0.34f, 0.14f, 0.22f};   // the panes' shares of the height (the splitter)
     private int rsUpper = -1, rsLower = -1; private float rsY0; private float rsW0, rsW1, rsTot, rsAvail;
     private final float[] yZoom = {1f, 1f, 1f, 1f};              // a drag on a pane's axis scales its fitted y range
+    private double selCycle = Double.NaN;                           // the candle marked by a tap here or in the feed
+    private double lcFrom = Double.NaN, lcTo = Double.NaN, lcCur = Double.NaN, lcCycle = Double.NaN; private long lcT0 = 0;
+
+    /** The feed's row was tapped: centre its cycle and mark the candle. */
+    public void focusCycle(double t0, double t1) {
+        selCycle = t0;
+        double now = M.nowEngine(), span = vx1 - vx0, te = Math.min(t1, now);
+        if (t0 >= vx0 && te <= vx1) { invalidate(); return; }         // already on screen: just mark it
+        double mid = 0.5 * (t0 + te);
+        vx0 = mid - span / 2; vx1 = vx0 + span;
+        follow = (now - vx1) >= -1.0 && (now - vx1) <= 3.0;
+        sendView(true); invalidate();
+    }
+
+    /** A tap on the PRICE pane away from the tools: the candle under it is marked and the feed is told. */
+    private void cycleTap(float x) {
+        double t = vx0 + (x / Math.max(1f, plotR)) * (vx1 - vx0);
+        double[] cT, cTe; int n; synchronized (M.lock) { cT = M.cT; cTe = M.cTe; n = M.nCyc; }
+        int i = upperBound(cT, t) - 1;
+        if (i < 0 || i >= n) return;
+        if (i < n - 1 && t > Math.max(cTe[i], cT[i] + 1) + 1.0) { selCycle = Double.NaN; invalidate(); return; }
+        if (!Double.isNaN(selCycle) && Math.abs(selCycle - cT[i]) < 1.0) { selCycle = Double.NaN; invalidate(); return; }
+        selCycle = cT[i];
+        if (host != null) host.onCycleTap(cT[i]);
+        invalidate();
+    }
     private int axPane = -1; private boolean axX = false; private float axY0, axX0, axZoom0; private double axSpan0;
 
     /** A touch that starts on an axis strip: a vertical drag on a pane's axis zooms its y, a horizontal drag on the
@@ -274,8 +301,9 @@ public final class ChartView extends View {
     private void tap(float x, float y) {
         if (tools != null && paneOn[PANE_PRICE]) {
             if (tools.tapButton(x, y)) { invalidate(); return; }
-            if (pane[PANE_PRICE].contains(x, y) && x < plotR) { tools.tapPane(x, y); invalidate(); }
+            if (pane[PANE_PRICE].contains(x, y) && x < plotR && (tools.tapPane(x, y) || "trend".equals(tools.tool))) { invalidate(); return; }
         }
+        if (paneOn[PANE_PRICE] && pane[PANE_PRICE].contains(x, y) && x < plotR) { cycleTap(x); return; }
         if (paneOn[PANE_IIMP] && x >= ddX0 && x <= ddX1 && y >= ddY0 && y <= ddY1) {
             if (host != null) host.onModeMenu(ddX0, ddY1);
             return;
@@ -360,6 +388,19 @@ public final class ChartView extends View {
             s.series = new float[3][];
             if (paneOn[PANE_FLOW] && s.buy.length > 0) M.series(vx0 - 1, vx1 + 1, (int) (2 * plotR), s.series);
         }
+        // the forming candle's close, the live line and the pill SLIDE to a new tick over 160 ms with the terminal's
+        // decelerating ease (_lc_tick); a NEW forming bar shows at once, no slide
+        if (!Double.isNaN(s.livePx) && s.n > 0) {
+            double cyc = s.cT[s.n - 1];
+            if (Double.isNaN(lcTo) || cyc != lcCycle) { lcCycle = cyc; lcFrom = lcTo = lcCur = s.livePx; lcT0 = 0; }
+            else if (s.livePx != lcTo) { lcFrom = Double.isNaN(lcCur) ? s.livePx : lcCur; lcTo = s.livePx; lcT0 = System.nanoTime(); }
+            if (lcT0 != 0) {
+                double tt = (System.nanoTime() - lcT0) / 1.6e8;
+                if (tt >= 1.0) { lcCur = lcTo; lcT0 = 0; }
+                else { double e = 1.0 - (1.0 - tt) * (1.0 - tt); lcCur = lcFrom + (lcTo - lcFrom) * e; postInvalidateOnAnimation(); }
+            } else lcCur = lcTo;
+            s.liveAnim = lcCur;
+        } else s.liveAnim = s.livePx;
         if (tools != null && !Double.isNaN(s.livePx)) tools.onPrice(s.livePx, now);
         if (paneOn[PANE_PRICE]) drawPrice(c, s, now);
         if (paneOn[PANE_FLOW]) drawFlow(c, s, now);
@@ -384,6 +425,7 @@ public final class ChartView extends View {
         boolean connected;
         boolean hlhOn; String hlhNote; List<FlowModel.HlhPic> hlhPics; List<FlowModel.HlhLabel> hlhLabels; List<FlowModel.HlhDash> hlhDashes;
         boolean bpOn; double[][] bpBub, bpDia; int bpLmax;
+        double liveAnim;
     }
 
     private void title(Canvas c, RectF r, String txt) {
@@ -429,7 +471,7 @@ public final class ChartView extends View {
         i0 = Math.max(0, i0 - 1); i1 = Math.min(s.n, i1 + 1);
         int last = s.n - 1;
         boolean forming = s.cDone[last] == 0 && vx1 >= now - 600;
-        double fo = s.cO[last], fc = Double.isNaN(s.livePx) ? s.cC[last] : s.livePx;
+        double fo = s.cO[last], fc = Double.isNaN(s.livePx) ? s.cC[last] : s.liveAnim;
         double fh = Math.max(Math.max(s.cH[last], fc), fo), fl = Math.min(Math.min(s.cL[last], fc), fo);
         double fte = Math.max(s.cT[last] + 1e-3, Math.min(now, s.cTe[last]));
         // y fit to what is on screen, with the terminal's dead-band
@@ -462,6 +504,16 @@ public final class ChartView extends View {
             int col = isForm ? s.formCol : s.cCol[i];
             drawCandle(c, xm, hw, o, hh, ll, cl, col, top, hgt, yl, yh);
         }
+        // the marked candle: a tap here or on its feed row
+        if (!Double.isNaN(selCycle)) {
+            int k = nearest(s.cT, selCycle);
+            if (k >= 0 && Math.abs(s.cT[k] - selCycle) < 1.0) {
+                double te = (k == last && forming) ? fte : s.cTe[k];
+                float sx0 = xPx(s.cT[k]), sx1 = xPx(te);
+                pf.setColor(bw ? Color.argb(22, 0, 0, 0) : Color.argb(26, 255, 255, 255)); c.drawRect(sx0, top, sx1, r.bottom, pf);
+                pl.setColor(Color.parseColor(bw ? "#0B4FA8" : "#7FB2FF")); pl.setStrokeWidth(1.5f * d); c.drawRect(sx0, top, sx1, r.bottom, pl);
+            }
+        }
         // takeover marks
         if (showTakeover) {
             drawTriangles(c, s, s.tkBuy, true, top, hgt, yl, yh);
@@ -477,7 +529,7 @@ public final class ChartView extends View {
         c.save(); c.clipRect(r.left, r.top, r.right, r.bottom);
         // the live price line + pill
         if (!Double.isNaN(s.livePx)) {
-            float y = (float) (top + (yh - s.livePx) / (yh - yl) * hgt);
+            float y = (float) (top + (yh - s.liveAnim) / (yh - yl) * hgt);
             pl.setColor(bw ? Color.BLACK : Color.parseColor("#e8eaed")); pl.setStrokeWidth(1.2f * d); pl.setPathEffect(new DashPathEffect(new float[]{4 * d, 4 * d}, 0));
             c.drawLine(r.left, y, plotR, y, pl); pl.setPathEffect(null);
             c.restore();
