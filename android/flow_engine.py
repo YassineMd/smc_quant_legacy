@@ -175,13 +175,15 @@ class Client:
         threading.Thread(target=self._writer, daemon=True).start()
 
     def _reader(self):
+        # ⚠ PARSE WHAT WE ALREADY HOLD BEFORE BLOCKING ON recv. The auth handshake consumes one packet and hands
+        # the remainder here as _initial; if the client's next lines ("hi", the first "view") rode that SAME
+        # segment, the old loop blocked in recv() with a complete "hi" sitting unparsed and the engine answered
+        # NOTHING, forever. It only ever looked fine because a client that writes its lines separately (the
+        # tablet does -- auth from run(), the rest from the writer thread) usually gets them into separate
+        # segments; a coalescing link or a client that batches its handshake hit a silent dead socket.
         buf = self._initial
         try:
             while self.alive:
-                chunk = self.sock.recv(65536)
-                if not chunk:
-                    break
-                buf += chunk
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
                     line = line.strip()
@@ -190,6 +192,10 @@ class Client:
                             CMDS.put(json.loads(line.decode("utf-8")))
                         except Exception:
                             pass
+                chunk = self.sock.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
         except Exception:
             pass
         self.close()
@@ -293,6 +299,11 @@ w.resize(1600, 1000)
 # / TextItem.setHtml, ~15% of all samples, on a box whose readout was stalling ~900 ms at the p90.
 w.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontShowOnScreen, True)
 w.show()
+# ⚠⚠ WA_DontShowOnScreen ALONE DOES NOT STOP THE PAINTING under the offscreen QPA -- measured with a
+# standalone probe in exactly this setup: 184 PlotCurveItem.paint calls in 184 frames, 1.80 s of process
+# CPU over a 3 s loop. setUpdatesEnabled(False) takes that to ZERO paints and 0.19 s while the widgets
+# stay isVisible() with real geometry, which is all the data-building code checks.
+w.setUpdatesEnabled(False)
 
 
 def spin(sec):
@@ -315,6 +326,22 @@ for _nm in ("px_on", "iimp_on", "liq_on", "interp_on", "lines_on"):
 if not w.menu.flow_cross_on.isChecked():
     w.menu.flow_cross_on.setChecked(True)
 spin(2.0)
+# ---- work the offscreen terminal does that the tablet never sees. Each of these was checked against every
+# attribute the tick_* readouts consume; they write only Qt item state or caches nothing here reads.
+#   _flow_cross_draw : the cycle vlines + badges. The tablet draws its own from the `cyc` message, and this is
+#                      an UNCAPPED crosses() scan at the window's 20 Hz with its own memo key, so it never even
+#                      hits the memo the panes fill.
+#   _hlh_px_tick     : a SECOND HlhOverlay.build for canvas "px". The engine builds canvas "tab" itself
+#                      (tick_hlh) from the same overlay and bars; _geom/_out are keyed per canvas, so this ran
+#                      every build_period twice and kept two full sets of pictures in RAM.
+#   _scanner_tracker / _redock_trackers : right-axis badges (py-spy caught the GUI thread in TextItem.setHtml
+#                      under the first one).
+#   _px_bp_draw      : the Big Player bubbles ON the offscreen pane. The `bp` message is built by tick_bp from
+#                      _bp_events, which the TAPE fills, not this.
+#   _liq_levels      : the LIMIT ORDERS badges. `liq` ships _liq_curves and _liq_live, written by _liq_tick.
+for _noop in ("_flow_cross_draw", "_hlh_px_tick", "_scanner_tracker", "_redock_trackers", "_px_bp_draw", "_liq_levels"):
+    if hasattr(w, _noop):
+        setattr(w, _noop, (lambda *a, **k: None))
 log("flow mode up | lookback N = %d | flow window %d s" % (w._lb_n(), int(w._flow_win)))
 threading.Thread(target=serve, daemon=True).start()
 
@@ -386,8 +413,16 @@ def tick_bins(force=False):
         # 72 h (the first cut did exactly that, 95 MB a minute). Align the two snapshots by ABSOLUTE bin index: the
         # bins outside the previous span are new, the common span is compared, and one range covers all of it.
         pbase, pn = int(prev[0]), int(prev[1].size)
-        if base > pbase or base + n < pbase + pn:
-            full = True                                       # bins were DROPPED (a prune, a reset): start over
+        # ⚠⚠ A LEFT-EDGE PRUNE IS NOT A REASON TO RESEND ANYTHING. The store is capped at FLOW_RETAIN_SECS, so
+        # once it is full it drops its oldest bin EVERY SECOND and `base` advances every second. Treating that
+        # as "bins were dropped -> start over" resent all 259,200 bins x 5 arrays about twice a second:
+        # MEASURED against the live VM before this fix, 366 MB of `bins` in 60 s (5,958 KB/s decompressed,
+        # 2,155 KB/s on the wire = $686/month of egress), with a ~4 MB message sitting in front of every price
+        # update. The client keeps the pruned bins it already holds -- they are history it can still draw --
+        # and the common span below is compared by ABSOLUTE bin index, which already handles a moved base.
+        # Only a store that shrank on the RIGHT (a reset) invalidates what the client holds.
+        if base + n < pbase + pn:
+            full = True
     if full:
         lo, hi = 0, n
     else:
