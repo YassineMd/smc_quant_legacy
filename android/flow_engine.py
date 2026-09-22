@@ -168,7 +168,7 @@ class Client:
         self.sock = sock; self.addr = addr
         self.comp = comp                  # a zlib stream once the client opted in (see serve())
         self._initial = initial           # what arrived in the same packet as the auth line (the tablet's "hi")
-        self.out = queue.Queue(maxsize=400)
+        self.out = queue.Queue(maxsize=4000)   # ~3 min of ticks: a slow 4G downlink must not drop the client
         self.alive = True
         self.ready = False                                    # said "hi"
         threading.Thread(target=self._reader, daemon=True).start()
@@ -310,6 +310,19 @@ if not w.menu.flow_cross_on.isChecked():
 spin(2.0)
 log("flow mode up | lookback N = %d | flow window %d s" % (w._lb_n(), int(w._flow_win)))
 threading.Thread(target=serve, daemon=True).start()
+
+
+def keepalive():
+    """A ping every 10 s from a thread of its own: the GUI thread can stall for tens of seconds while a 6 h
+    backfill chunk lands on a shared-core VM, and the tablet's read timeout must not take that for a dead link."""
+    while True:
+        time.sleep(10.0)
+        cl = CLIENT[0]
+        if cl is not None and cl.alive and cl.ready and cl.out.empty():
+            cl.send({"t": "ping", "now": time.time()})
+
+
+threading.Thread(target=keepalive, daemon=True).start()
 
 CFG = {
     "iimp_modes": list(config.IIMP_MODES), "iimp_low": float(config.IIMP_LOW), "iimp_high": float(config.IIMP_HIGH),

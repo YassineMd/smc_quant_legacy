@@ -67,6 +67,10 @@ if the reserved address is ever released): `flow.vmhost` in `local.properties`, 
 
 ## Known limits
 
+- The engine pings the client every 10 s from a thread of its own, because its GUI thread can stall for tens of
+  seconds while a 6 h backfill chunk lands on the shared vCPU (the app's read timeout is 30 s), and its outbound
+  queue holds ~3 min of ticks so a slow 4G downlink is not dropped. RSS moves between ~470 MB and ~920 MB while
+  the 72 h backfill lands, then settles near 470 MB.
 - One client at a time: a second connection (a probe from the PC, a second tablet) kicks the first.
 - `BIGPRINT ARCHIVE REFRESH ERROR ... study/bigprint_archive.py` in the journal is expected: the VM has no
   big-print archive (it would download Binance monthly files); the Big Player marks come from the live tape.
