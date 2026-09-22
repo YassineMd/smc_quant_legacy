@@ -82,6 +82,36 @@ public final class ChartView extends View {
 
     private void takeManual(int p) { if (yAuto[p]) { yAuto[p] = false; yLo[p] = lastLo[p]; yHi[p] = lastHi[p]; } }
     private double selCycle = Double.NaN;                           // the candle marked by a tap here or in the feed
+    // the crosshair (stylus hover). Each pane records the y mapping it drew with, so the cursor can be turned
+    // back into that pane's own units -- price, dollars or a multiple.
+    private final float[] paneTop = new float[4], paneHgt = new float[4];
+    private final double[] paneLo = new double[4], paneHi = new double[4];
+    private boolean crossOn = false, crossBadges = false;
+    private double crossX = Double.NaN;
+    private int crossPane = -1;
+    private float crossY = 0;
+
+    private void notePane(int p, float top, float hgt, double lo, double hi) {
+        paneTop[p] = top; paneHgt[p] = hgt; paneLo[p] = lo; paneHi[p] = hi;
+    }
+
+    /** The stylus hovering IS the terminal's mouse: it moves the crosshair without touching anything. */
+    @Override public boolean onHoverEvent(MotionEvent e) {
+        int a = e.getActionMasked();
+        if (a == MotionEvent.ACTION_HOVER_EXIT) {
+            crossBadges = false;                       // "Badges off, lines linger" (_px_hide_cursor)
+            invalidate();
+            return true;
+        }
+        float x = e.getX(), y = e.getY();
+        if (x >= plotR || y >= timeY) { crossBadges = false; invalidate(); return true; }
+        int p = paneAt(x, y);
+        if (p < 0) { crossBadges = false; invalidate(); return true; }
+        crossOn = true; crossBadges = true; crossPane = p; crossY = y;
+        crossX = vx0 + (x / Math.max(1f, plotR)) * (vx1 - vx0);
+        invalidate();
+        return true;
+    }
     private double lcFrom = Double.NaN, lcTo = Double.NaN, lcCur = Double.NaN, lcCycle = Double.NaN; private long lcT0 = 0;
 
     /** The feed's row was tapped: centre its cycle and mark the candle. */
@@ -300,6 +330,23 @@ public final class ChartView extends View {
     }
 
     @Override public boolean onTouchEvent(MotionEvent ev) {
+        // ⚠ THE STYLUS IS THE POINTER. A pen that hovers drives the crosshair through onHoverEvent with no
+        // conflict at all; one that does not (a passive pen) only ever produces touches, so a stylus DRAG moves
+        // the crosshair here instead of panning -- finger drags still pan and pinch, and stylus TAPS still fall
+        // through to the gesture detector so buttons, candle selection and the I x I panel keep working. A drag
+        // with a drawing tool armed belongs to the tool, not the crosshair.
+        if (ev.getActionMasked() == MotionEvent.ACTION_MOVE && ev.getPointerCount() == 1
+                && ev.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
+                && (tools == null || tools.tool == null) && axPane < 0 && !axX && rsUpper < 0) {
+            float x = ev.getX(), y = ev.getY();
+            int p = paneAt(x, y);
+            if (p >= 0 && x < plotR && y < timeY) {
+                crossOn = true; crossBadges = true; crossPane = p; crossY = y;
+                crossX = vx0 + (x / Math.max(1f, plotR)) * (vx1 - vx0);
+                invalidate();
+                return true;
+            }
+        }
         if (axisTouch(ev)) { gest.onTouchEvent(ev); return true; }   // the axes: zoom drags, and the double tap
         if (resizeTouch(ev)) return true;                         // a pane boundary under the finger: the splitter
         if (tools != null && paneOn[PANE_PRICE] && tools.onTouch(ev)) { invalidate(); return true; }
@@ -433,6 +480,7 @@ public final class ChartView extends View {
         if (paneOn[PANE_IIMP]) drawIimp(c, s, now);
         if (showLines) drawCycleLines(c, s);
         drawSelection(c, s, now);
+        drawCrosshair(c, s);
         drawTimeAxis(c);
         drawGrips(c);
         if (!s.connected) {
@@ -523,6 +571,7 @@ public final class ChartView extends View {
         double yl = prg[0], yh = prg[1];
         float top = r.top + TITLE_H, hgt = r.bottom - top;
         pxTop = top; pxHgt = hgt; pxYl = yl; pxYh = yh;
+        notePane(PANE_PRICE, top, hgt, yl, yh);
         c.save(); c.clipRect(r.left, r.top, r.right, r.bottom);
         if (s.hlhOn) drawHlh(c, s, r, top, hgt, yl, yh);
         for (int i = i0; i < i1; i++) {
@@ -768,6 +817,7 @@ public final class ChartView extends View {
         double room = yt * badgePx / Math.max(1f, hgt - badgePx);
         double[] frg = yRange(PANE_FLOW, -room, yt);
         double ylo = frg[0], yhi = frg[1]; double range = yhi - ylo;
+        notePane(PANE_FLOW, top, hgt, ylo, yhi);
         float zeroY = (float) (top + (yhi - 0) / range * hgt);
         c.save(); c.clipRect(r.left, top, r.right, r.bottom);
         pl.setColor(cSep); pl.setStrokeWidth(1 * d); c.drawLine(r.left, zeroY, plotR, zeroY, pl);
@@ -840,6 +890,7 @@ public final class ChartView extends View {
         if (mx > 0 && (mx > liqTop * 0.98 || mx < liqTop * 0.55)) liqTop = mx * 1.15;
         double[] lrg = yRange(PANE_LIQ, 0.0, Math.max(1.0, liqTop));
         double ylo = lrg[0], yhi = lrg[1], lrange = Math.max(1e-9, yhi - ylo);
+        notePane(PANE_LIQ, top, hgt, ylo, yhi);
         c.save(); c.clipRect(r.left, top, r.right, r.bottom);
         for (int side = 0; side < 2; side++) {
             float[] v = side == 0 ? s.lqB : s.lqA;
@@ -894,6 +945,7 @@ public final class ChartView extends View {
         lim = Math.max(1.0, iimpTop);
         double[] irg = yRange(PANE_IIMP, -lim, lim);
         double yhi = irg[1], ylo = irg[0], range = yhi - ylo;
+        notePane(PANE_IIMP, top, hgt, ylo, yhi);
         float zeroY = (float) (top + (yhi) / range * hgt);
         c.save(); c.clipRect(r.left, top, r.right, r.bottom);
         // guides: the imbalance terciles, dashed; the midline solid
@@ -1080,6 +1132,74 @@ public final class ChartView extends View {
             pl.setColor(Color.parseColor(bw ? "#0B4FA8" : "#7FB2FF")); pl.setStrokeWidth(1.5f * d); c.drawRect(sx0, y0, sx1, y1, pl);
         }
         c.restore();
+    }
+
+    /** The crosshair: the terminal's, pane for pane. */
+    private void drawCrosshair(Canvas c, Snap s) {
+        if (!crossOn || Double.isNaN(crossX) || fullscreen >= 0 && !paneOn[fullscreen]) return;
+        float cx = xPx(crossX);
+        int ink = bw ? Color.argb(150, 0, 0, 0) : Color.argb(150, 170, 170, 170);
+        float on = 4 * d, off = 8 * d;
+        // the VERTICAL through every visible pane -- dashes as segments, this file's rule
+        if (cx >= 0 && cx <= plotR) {
+            pl.setColor(ink); pl.setStrokeWidth(1 * d);
+            for (int p = 0; p < 4; p++) {
+                if (!paneOn[p]) continue;
+                float y0 = pane[p].top + TITLE_H, y1 = pane[p].bottom;
+                int per = (int) Math.ceil((y1 - y0) / (on + off)) + 1;
+                float[] seg = new float[per * 4]; int j = 0;
+                for (float y = y0; y < y1 && j + 4 <= seg.length; y += on + off) {
+                    seg[j++] = cx; seg[j++] = y; seg[j++] = cx; seg[j++] = Math.min(y1, y + on);
+                }
+                c.drawLines(seg, 0, j, pl);
+            }
+        }
+        if (crossPane < 0 || !paneOn[crossPane]) return;
+        RectF r = pane[crossPane];
+        // the HORIZONTAL in the hovered pane only
+        if (crossY > r.top + TITLE_H && crossY < r.bottom) {
+            pl.setColor(ink); pl.setStrokeWidth(1 * d);
+            int per = (int) Math.ceil(plotR / (on + off)) + 1;
+            float[] seg = new float[per * 4]; int j = 0;
+            for (float x = 0; x < plotR && j + 4 <= seg.length; x += on + off) {
+                seg[j++] = x; seg[j++] = crossY; seg[j++] = Math.min(plotR, x + on); seg[j++] = crossY;
+            }
+            c.drawLines(seg, 0, j, pl);
+        }
+        if (!crossBadges) return;
+        // the RIGHT-AXIS value badge, in the hovered pane's own units
+        double hgt = Math.max(1f, paneHgt[crossPane]);
+        double v = paneHi[crossPane] - (crossY - paneTop[crossPane]) / hgt * (paneHi[crossPane] - paneLo[crossPane]);
+        String vt;
+        if (crossPane == PANE_PRICE) vt = String.format(Locale.US, "%." + s.dec + "f", v);
+        else if (crossPane == PANE_IIMP) {
+            boolean signed = "Buyer".equals(s.mode) || "Seller".equals(s.mode) || "Lines Buyer/Seller".equals(s.mode);
+            vt = fmtMult(Math.pow(2, signed ? v : Math.abs(v)));
+        } else vt = (v < 0 ? "-" : "") + usdShort(Math.abs(v));
+        tagBadge(c, plotR, crossY, vt, 1.0f, 0.5f);
+        // the CLOCK badge at the bottom of the hovered pane
+        int tz; synchronized (M.lock) { tz = M.tzOff; }
+        java.util.Calendar cal = tz == Integer.MIN_VALUE ? java.util.Calendar.getInstance()
+                : java.util.Calendar.getInstance(new java.util.SimpleTimeZone(tz * 1000, "PC"));
+        cal.setTimeInMillis((long) (crossX * 1000));
+        String xt = String.format(Locale.US, "%s %02d, %d - %02d:%02d",
+                new String[]{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}[cal.get(java.util.Calendar.DAY_OF_WEEK) - 1],
+                cal.get(java.util.Calendar.DAY_OF_MONTH), cal.get(java.util.Calendar.YEAR),
+                cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE));
+        if (cx >= 0 && cx <= plotR) tagBadge(c, cx, r.bottom, xt, 0.5f, 1.0f);
+    }
+
+    /** The terminal's TextItem badge: #141414 on #dcdcdc, anchored by (ax, ay) as pyqtgraph anchors are. */
+    private void tagBadge(Canvas c, float x, float y, String txt, float ax, float ay) {
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10.5f * d); pt.setFakeBoldText(false);
+        float w = pt.measureText(txt) + 8 * d, h = 16 * d;
+        float rx = x - ax * w, ry = y - ay * h;
+        rx = Math.max(0, Math.min(getWidth() - w, rx));
+        ry = Math.max(0, Math.min(getHeight() - h, ry));
+        pf.setColor(Color.parseColor("#dcdcdc"));
+        c.drawRect(rx, ry, rx + w, ry + h, pf);
+        pt.setColor(Color.parseColor("#141414"));
+        c.drawText(txt, rx + 4 * d, ry + h - 4.5f * d, pt);
     }
 
     /** A small grip on each boundary between two panes: where a drag resizes them. */
