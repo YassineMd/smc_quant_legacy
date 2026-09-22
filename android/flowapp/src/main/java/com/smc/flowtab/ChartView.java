@@ -407,6 +407,7 @@ public final class ChartView extends View {
         if (paneOn[PANE_LIQ]) drawLiq(c, s);
         if (paneOn[PANE_IIMP]) drawIimp(c, s, now);
         if (showLines) drawCycleLines(c, s);
+        drawSelection(c, s, now);
         drawTimeAxis(c);
         drawGrips(c);
         if (!s.connected) {
@@ -1013,6 +1014,24 @@ public final class ChartView extends View {
                 }
             }
         }
+    }
+
+    /** The marked cycle (a tap on its candle or its feed row): one band through EVERY visible pane. */
+    private void drawSelection(Canvas c, Snap s, double now) {
+        if (Double.isNaN(selCycle) || s.n == 0) return;
+        int k = nearest(s.cT, selCycle);
+        if (k < 0 || Math.abs(s.cT[k] - selCycle) >= 1.0) return;
+        double te = s.cDone[k] == 0 ? Math.max(s.cT[k] + 1e-3, Math.min(now, s.cTe[k])) : s.cTe[k];
+        float sx0 = xPx(s.cT[k]), sx1 = xPx(te);
+        if (sx1 < 0 || sx0 > plotR) return;
+        c.save(); c.clipRect(0, 0, plotR, timeY);
+        for (int p = 0; p < 4; p++) {
+            if (!paneOn[p]) continue;
+            float y0 = pane[p].top + TITLE_H, y1 = pane[p].bottom;
+            pf.setColor(bw ? Color.argb(22, 0, 0, 0) : Color.argb(26, 255, 255, 255)); c.drawRect(sx0, y0, sx1, y1, pf);
+            pl.setColor(Color.parseColor(bw ? "#0B4FA8" : "#7FB2FF")); pl.setStrokeWidth(1.5f * d); c.drawRect(sx0, y0, sx1, y1, pl);
+        }
+        c.restore();
     }
 
     /** A small grip on each boundary between two panes: where a drag resizes them. */

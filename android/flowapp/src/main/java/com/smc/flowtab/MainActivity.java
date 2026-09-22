@@ -244,34 +244,17 @@ public final class MainActivity extends Activity implements EngineClient.Listene
 
     @Override public void onCycleTap(double t0) { interp.select(t0); }
 
-    /** The I x I explain panel: the terminal's words on a white card; a tap anywhere on it closes it. */
+    /** The I x I explain panel: the terminal's words re-set as a card (ExplainCard); any tap on it closes it. */
     private void showExplain(String html) {
         if (explainDlg != null && explainDlg.isShowing()) explainDlg.dismiss();
-        String body = html.replaceAll("(?i)click this panel to close it", "").replaceAll("(?i)(<br\\s*/?>\\s*)+$", "");
-        TextView tv = new TextView(this);
-        tv.setText(Html.fromHtml(body, Html.FROM_HTML_MODE_COMPACT));
-        tv.setTextColor(Color.parseColor("#1f2933"));
-        tv.setTextSize(14.5f); tv.setLineSpacing(0, 1.25f);
-        int p = (int) Ui.dp(this, 22);
-        tv.setPadding(p, (int) Ui.dp(this, 18), p, (int) Ui.dp(this, 6));
-        TextView foot = new TextView(this);
-        foot.setText("tap to close"); foot.setTextColor(Color.parseColor("#8a94a6")); foot.setTextSize(12); foot.setGravity(Gravity.CENTER);
-        foot.setPadding(p, (int) Ui.dp(this, 4), p, (int) Ui.dp(this, 14));
-        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
-        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-        bg.setColor(Color.WHITE); bg.setCornerRadius(Ui.dp(this, 14));
-        col.setBackground(bg);
-        ScrollView sv = new ScrollView(this); sv.addView(tv);
-        col.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        col.addView(foot);
-        explainDlg = new AlertDialog.Builder(this).setView(col).create();
-        View.OnClickListener close = v -> explainDlg.dismiss();
-        tv.setOnClickListener(close); foot.setOnClickListener(close); col.setOnClickListener(close); sv.setOnClickListener(close);
+        explainDlg = new AlertDialog.Builder(this).create();
+        View card = ExplainCard.build(this, html, v -> explainDlg.dismiss());
+        explainDlg.setView(card);
         explainDlg.setOnDismissListener(dlg -> chart.clearSelection());
         explainDlg.show();
         if (explainDlg.getWindow() != null) {
             explainDlg.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
-            explainDlg.getWindow().setLayout((int) Ui.dp(this, 640), ViewGroup.LayoutParams.WRAP_CONTENT);
+            explainDlg.getWindow().setLayout((int) Ui.dp(this, 700), ViewGroup.LayoutParams.WRAP_CONTENT);
         }
     }
 
