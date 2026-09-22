@@ -113,7 +113,7 @@ Expect `SQLITE REHYDRATE COMPLETE — N closed buckets armed (no tick replay)`
 
 `OrderFlowTerminal` opens the SSH tunnel itself on boot — `SSHTunnelManager` in
 `terminal.py`'s `main()` checks whether `127.0.0.1:9999` is already live and, if not,
-launches `gcloud compute ssh ... -N -L 9999:127.0.0.1:9999` invisibly in the
+launches `gcloud compute ssh ... -N -C -L 9999:127.0.0.1:9999` invisibly in the
 background, then kills that whole process tree when you close the window. Daily use is
 just:
 
@@ -128,8 +128,13 @@ the tunnel section in `terminal.py` (currently `yassine.mdouari@smc-quant-eu`).
 **Manual fallback** — if gcloud isn't on PATH, or to watch tunnel errors directly:
 
 ```bash
-gcloud compute ssh <user>@smc-quant-eu --project=yass-chart --zone=europe-west9-b -- -N -L 9999:127.0.0.1:9999
+gcloud compute ssh <user>@smc-quant-eu --project=yass-chart --zone=europe-west9-b -- -N -C -L 9999:127.0.0.1:9999
 ```
+
+⚠ Keep the **-C**. The VM pays GCP egress on every byte this tunnel carries and the daemon's live
+stream is JSON: measured end to end 2026-09-22, 3.07 MB of feed crossed the wire as 209 KB (13.5x) for
+well under 1% of a core. A tunnel opened without it costs roughly $40/month more.
+
 
 ---
 

@@ -28187,6 +28187,23 @@ _TUNNEL_GCLOUD_ARGS = [
     "compute", "ssh", _TUNNEL_SSH_TARGET,
     "--project=yass-chart", "--zone=europe-west9-b",
     "--ssh-flag=-N",
+    # ⚠ -C (zlib on the SSH transport) is a BILLING fix, not a nicety: the VM pays GCP egress on every byte
+    # this tunnel carries, and the daemon's live stream is JSON. MEASURED 2026-09-22 on a client subscribed
+    # exactly as Flow mode subscribes (set_tf + the degenerate depth_window), after CATCHUP_END so the
+    # one-time catch-up is excluded: 29.4 KB/s per client, of which TICK 66% and PULSE 29%; the raw stream
+    # compressed in wire-sized chunks is 10.25x at zlib 6 (6.2x at level 1, 10.6x at 9) for 0.08% of one
+    # core. END TO END through a real -C tunnel, with the VM's own per-connection bytes_sent as the wire
+    # truth: 3,074,366 application bytes arrived as 209,288 on the wire = 13.5x (SSH keeps one deflate
+    # window for the whole session, so it beats a per-chunk estimate). The catch-up chunks are ALREADY
+    # compressed (set_tf {"z":1} -> protocol.build_zframe) and measure 0.98x, so they neither gain nor lose.
+    # ⚠ It has to be the TRANSPORT, not the protocol: per-FRAME zlib on this stream measures only 3.6x
+    # against 15.9x for a continuous one, and 14 different programs in this repo dial port 9999 (both
+    # pipe_client modes, both time_feed sockets, android/bridge.py, android/flow_engine.py, the study
+    # harnesses) -- every one of them rides this tunnel and gets the win with no code of its own, and
+    # nothing sees anything but the same plaintext bytes (so _cu_bytes / startup_perf.log still measure
+    # the real payload). sshd on the VM has `compression yes`; PuTTY (what gcloud drives on Windows) and
+    # OpenSSH both take -C, and a server that refused it would simply fall back to no compression.
+    "--ssh-flag=-C",
     f"--ssh-flag=-L {config.IPC_PORT}:127.0.0.1:{config.IPC_PORT}",
 ]
 # gcloud needs ~10-15s (cold: key check + SSH handshake + PuTTY) to bring the forwarded port up, while the
