@@ -55,6 +55,13 @@ public final class EngineClient extends Thread {
         } catch (Exception ignored) { }
     }
 
+    /** A smoothing slider moved: "iimp" (Lines Buyer/Seller), "cint" or "cimp". */
+    public void sendSmooth(String kind, int n) {
+        try {
+            send(new JSONObject().put("t", "smooth").put("k", kind).put("n", n));
+        } catch (Exception ignored) { }
+    }
+
     public void sendMode(String v) {
         try { JSONObject o = new JSONObject(); o.put("t", "mode"); o.put("v", v); send(o); } catch (Exception ignored) { }
     }
@@ -168,6 +175,8 @@ public final class EngineClient extends Thread {
                 case "cyc": model.onCycles(m); break;
                 case "live": model.onLive(m); break;
                 case "iimp": model.onIimp(m); break;
+                case "cint": model.onLines("cint", m); break;
+                case "cimp": model.onLines("cimp", m); break;
                 case "interp": model.onInterp(m); break;
                 case "liq": model.onLiq(m); break;
                 case "tko": model.onTko(m); break;

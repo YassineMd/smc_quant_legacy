@@ -36,9 +36,12 @@ public final class ChartView extends View {
         void onModeMenu(float x, float y);
         void onFullscreen(boolean on);
         void onCycleTap(double t0);
+        void onSmooth(String kind, int n);
     }
 
-    public static final int PANE_PRICE = 0, PANE_FLOW = 1, PANE_LIQ = 2, PANE_IIMP = 3;
+    public static final int PANE_PRICE = 0, PANE_FLOW = 1, PANE_LIQ = 2, PANE_IIMP = 3,
+            PANE_CINT = 4, PANE_CIMP = 5;
+    public static final int PANE_N = 6;
     private final FlowModel M;
     private Host host;
     private final float d;
@@ -64,14 +67,18 @@ public final class ChartView extends View {
     private long lastViewSent = 0;
     // y fits with dead-bands, per pane
     private double pxLo = Double.NaN, pxHi = Double.NaN, flowTop = 0, liqTop = 0, iimpTop = 0;
-    private final RectF[] pane = {new RectF(), new RectF(), new RectF(), new RectF()};
-    private final boolean[] paneOn = new boolean[4];
-    private final float[] paneWt = {0.30f, 0.34f, 0.14f, 0.22f};   // the panes' shares of the height (the splitter)
+    private final RectF[] pane = {new RectF(), new RectF(), new RectF(), new RectF(), new RectF(), new RectF()};
+    private final boolean[] paneOn = new boolean[PANE_N];
+    // the panes' shares of the height (the splitter). The two LINES panes start small: they are off by
+    // default, so these only matter once the user turns one on.
+    private final float[] paneWt = {0.28f, 0.30f, 0.12f, 0.18f, 0.06f, 0.06f};
     private int rsUpper = -1, rsLower = -1; private float rsY0; private float rsW0, rsW1, rsTot, rsAvail;
     // each pane fits its own y until the user pans or zooms it (then it is theirs, like the terminal's
     // _px_yauto); a double tap on an axis hands every pane back to its fit
-    private final boolean[] yAuto = {true, true, true, true};
-    private final double[] yLo = new double[4], yHi = new double[4], lastLo = new double[4], lastHi = new double[4];
+    private final boolean[] yAuto = {true, true, true, true, true, true};
+    private final double[] yLo = new double[PANE_N], yHi = new double[PANE_N],
+            lastLo = new double[PANE_N], lastHi = new double[PANE_N];
+    private final double[] lineTop = new double[PANE_N];       // each line pane's own y dead-band
     private int panPane = -1; private float panAccY = 0;
 
     /** The pane's y range this frame: its fit, or the range the user panned / zoomed it to. */
@@ -84,8 +91,8 @@ public final class ChartView extends View {
     private double selCycle = Double.NaN;                           // the candle marked by a tap here or in the feed
     // the crosshair (stylus hover). Each pane records the y mapping it drew with, so the cursor can be turned
     // back into that pane's own units -- price, dollars or a multiple.
-    private final float[] paneTop = new float[4], paneHgt = new float[4];
-    private final double[] paneLo = new double[4], paneHi = new double[4];
+    private final float[] paneTop = new float[PANE_N], paneHgt = new float[PANE_N];
+    private final double[] paneLo = new double[PANE_N], paneHi = new double[PANE_N];
     private boolean crossOn = false, crossBadges = false;
     private double crossX = Double.NaN;
     private int crossPane = -1;
@@ -179,19 +186,24 @@ public final class ChartView extends View {
         if (prefs == null) return;
         try {
             String[] p = prefs.getString("pane_wt", "").split(",");
-            if (p.length == 4) for (int i = 0; i < 4; i++) paneWt[i] = Math.max(0.06f, Float.parseFloat(p[i]));
+            // a file written before the two LINES panes existed has FOUR entries: keep them and leave the new
+            // two at their defaults, rather than throwing the user's layout away
+            for (int i = 0; i < Math.min(p.length, PANE_N); i++) paneWt[i] = Math.max(0.06f, Float.parseFloat(p[i]));
         } catch (Exception ignored) { }
     }
 
     private void saveWeights() {
-        if (prefs != null) prefs.edit().putString("pane_wt", paneWt[0] + "," + paneWt[1] + "," + paneWt[2] + "," + paneWt[3]).apply();
+        if (prefs == null) return;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < PANE_N; i++) sb.append(i == 0 ? "" : ",").append(paneWt[i]);
+        prefs.edit().putString("pane_wt", sb.toString()).apply();
     }
 
     /** The boundary under (x, y) between two visible panes: {upper, lower}, or null. */
     private int[] boundaryAt(float x, float y) {
         if (fullscreen >= 0 || x >= plotR) return null;
         int prev = -1;
-        for (int p = 0; p < 4; p++) {
+        for (int p = 0; p < PANE_N; p++) {
             if (!paneOn[p]) continue;
             if (prev >= 0 && Math.abs(pane[prev].bottom - y) < 14 * d) return new int[]{prev, p};
             prev = p;
@@ -205,7 +217,7 @@ public final class ChartView extends View {
             int[] b = boundaryAt(ev.getX(), ev.getY());
             if (b == null) return false;
             rsUpper = b[0]; rsLower = b[1]; rsY0 = ev.getY(); rsW0 = paneWt[rsUpper]; rsW1 = paneWt[rsLower];
-            rsTot = 0; for (int p = 0; p < 4; p++) if (paneOn[p]) rsTot += paneWt[p];
+            rsTot = 0; for (int p = 0; p < PANE_N; p++) if (paneOn[p]) rsTot += paneWt[p];
             rsAvail = Math.max(1f, timeY);
             return true;
         }
@@ -225,6 +237,11 @@ public final class ChartView extends View {
     // selection on the I x I pane
     private double selT = Double.NaN;
     private float ddX0, ddX1, ddY0, ddY1;         // the dropdown button
+    // one smoothing slider per LINE pane (I x I in its lines mode, plus the two split panes)
+    private final float[] slX0 = new float[PANE_N], slX1 = new float[PANE_N],
+            slY0 = new float[PANE_N], slY1 = new float[PANE_N];
+    private int slDrag = -1;
+    public boolean showCint = false, showCimp = false;
     // paints
     private final Paint pl = new Paint(Paint.ANTI_ALIAS_FLAG), pf = new Paint(Paint.ANTI_ALIAS_FLAG), pt = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path(), path2 = new Path();
@@ -342,6 +359,7 @@ public final class ChartView extends View {
         // most. Hover already drives the crosshair with no conflict, so every touch, pen or finger, now falls
         // straight through to the same pan / pinch / tap path. A pen that cannot hover simply has no crosshair.
         if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) clearCross();   // touching is not hovering
+        if (smoothTouch(ev)) return true;      // a slider owns its own drag, before pan / pinch see it
         if (axisTouch(ev)) { gest.onTouchEvent(ev); return true; }   // the axes: zoom drags, and the double tap
         if (resizeTouch(ev)) return true;                         // a pane boundary under the finger: the splitter
         if (tools != null && paneOn[PANE_PRICE] && tools.onTouch(ev)) { invalidate(); return true; }
@@ -353,7 +371,7 @@ public final class ChartView extends View {
 
     // ------------------------------------------------------------------ taps
     private int paneAt(float x, float y) {
-        for (int p = 0; p < 4; p++) if (paneOn[p] && pane[p].contains(x, y)) return p;
+        for (int p = 0; p < PANE_N; p++) if (paneOn[p] && pane[p].contains(x, y)) return p;
         return -1;
     }
 
@@ -402,12 +420,12 @@ public final class ChartView extends View {
     private void layoutPanes() {
         int W = getWidth(), H = getHeight();
         plotR = W - AXIS_W; timeY = H - TAXIS_H;
-        boolean[] on = {showPrice, showFlow, showLiq, showIimp};
+        boolean[] on = {showPrice, showFlow, showLiq, showIimp, showCint, showCimp};
         float[] wt = paneWt;
-        if (fullscreen >= 0 && on[fullscreen]) { for (int p = 0; p < 4; p++) on[p] = p == fullscreen; }
-        float tot = 0; for (int p = 0; p < 4; p++) if (on[p]) tot += wt[p];
+        if (fullscreen >= 0 && on[fullscreen]) { for (int p = 0; p < PANE_N; p++) on[p] = p == fullscreen; }
+        float tot = 0; for (int p = 0; p < PANE_N; p++) if (on[p]) tot += wt[p];
         float y = 0; float avail = timeY;
-        for (int p = 0; p < 4; p++) {
+        for (int p = 0; p < PANE_N; p++) {
             paneOn[p] = on[p];
             if (!on[p]) { pane[p].set(0, 0, 0, 0); continue; }
             float hgt = tot > 0 ? avail * wt[p] / tot : 0;
@@ -450,6 +468,7 @@ public final class ChartView extends View {
             s.mode = M.iimpMode; s.iN = M.iN; s.iX0 = M.iX0; s.iX1 = M.iX1; s.iV = M.iV; s.iMult = M.iMult; s.iScore = M.iScore; s.iWall = M.iWall; s.iKept = M.iKept;
             s.iSbuy = M.iSbuy; s.iSsell = M.iSsell; s.iLiib = M.iLiib; s.iLiis = M.iLiis; s.iUp = M.iUp; s.iContra = M.iContra; s.iGood = M.iGood; s.iForm = M.iForm;
             s.connected = M.connected;
+            s.cint = M.cint; s.cimp = M.cimp;
             s.hlhOn = M.hlhOn && showHlh; s.hlhNote = M.hlhNote; s.hlhPics = M.hlhPics; s.hlhLabels = M.hlhLabels; s.hlhDashes = M.hlhDashes;
             s.bpOn = M.bpOn && showBp; s.bpBub = M.bpBub; s.bpDia = M.bpDia; s.bpLmax = M.bpLmax;
             s.series = new float[3][];
@@ -473,6 +492,8 @@ public final class ChartView extends View {
         if (paneOn[PANE_FLOW]) drawFlow(c, s, now);
         if (paneOn[PANE_LIQ]) drawLiq(c, s);
         if (paneOn[PANE_IIMP]) drawIimp(c, s, now);
+        if (paneOn[PANE_CINT]) drawLinesPane(c, s, PANE_CINT);
+        if (paneOn[PANE_CIMP]) drawLinesPane(c, s, PANE_CIMP);
         if (showLines) drawCycleLines(c, s);
         drawSelection(c, s, now);
         drawCrosshair(c, s);
@@ -492,6 +513,7 @@ public final class ChartView extends View {
         double[] tkBuy, tkSell, tkForm;
         String mode; int iN; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis; byte[] iUp, iContra, iGood, iForm;
         boolean connected;
+        FlowModel.Lines cint, cimp;
         boolean hlhOn; String hlhNote; List<FlowModel.HlhPic> hlhPics; List<FlowModel.HlhLabel> hlhLabels; List<FlowModel.HlhDash> hlhDashes;
         boolean bpOn; double[][] bpBub, bpDia; int bpLmax;
         double liveAnim;
@@ -1039,6 +1061,10 @@ public final class ChartView extends View {
         pf.setColor(Color.parseColor("#20242c")); c.drawRoundRect(new RectF(ddX0, ddY0, ddX1, ddY1), 4 * d, 4 * d, pf);
         pl.setColor(Color.parseColor("#3a4150")); pl.setStrokeWidth(1 * d); c.drawRoundRect(new RectF(ddX0, ddY0, ddX1, ddY1), 4 * d, 4 * d, pl);
         pt.setColor(FG); c.drawText(lab, ddX0 + 7 * d, ddY1 - 6 * d, pt); pt.setFakeBoldText(false);
+        // the smoothing slider serves Lines Buyer/Seller ONLY, and sits LEFT of the dropdown -- drawing it
+        // first put it UNDER the button, which is what the device showed on the first run
+        if (lines) drawSmoothSlider(c, PANE_IIMP, r, M.smIimp, ddX0 - 26 * d);
+        else { slX0[PANE_IIMP] = slX1[PANE_IIMP] = 0; }
     }
 
     private static String fmtMult(double x) {
@@ -1091,7 +1117,7 @@ public final class ChartView extends View {
             for (float[] k : kept) if ((int) k[1] == kind) cnt++;
             if (cnt == 0) continue;
             pl.setColor(kind == 1 ? TEAL : (kind == 2 ? RED : WEAK));
-            for (int p = 0; p < 4; p++) {
+            for (int p = 0; p < PANE_N; p++) {
                 if (!paneOn[p]) continue;
                 float y0 = pane[p].top + TITLE_H, y1 = pane[p].bottom;
                 if (kind == 0) {
@@ -1120,7 +1146,7 @@ public final class ChartView extends View {
         float sx0 = xPx(s.cT[k]), sx1 = xPx(te);
         if (sx1 < 0 || sx0 > plotR) return;
         c.save(); c.clipRect(0, 0, plotR, timeY);
-        for (int p = 0; p < 4; p++) {
+        for (int p = 0; p < PANE_N; p++) {
             if (!paneOn[p]) continue;
             float y0 = pane[p].top + TITLE_H, y1 = pane[p].bottom;
             pf.setColor(bw ? Color.argb(22, 0, 0, 0) : Color.argb(26, 255, 255, 255)); c.drawRect(sx0, y0, sx1, y1, pf);
@@ -1138,7 +1164,7 @@ public final class ChartView extends View {
         // the VERTICAL through every visible pane -- dashes as segments, this file's rule
         if (cx >= 0 && cx <= plotR) {
             pl.setColor(ink); pl.setStrokeWidth(1 * d);
-            for (int p = 0; p < 4; p++) {
+            for (int p = 0; p < PANE_N; p++) {
                 if (!paneOn[p]) continue;
                 float y0 = pane[p].top + TITLE_H, y1 = pane[p].bottom;
                 int per = (int) Math.ceil((y1 - y0) / (on + off)) + 1;
@@ -1197,11 +1223,179 @@ public final class ChartView extends View {
         c.drawText(txt, rx + 4 * d, ry + h - 4.5f * d, pt);
     }
 
+
+    // ------------------------------------------------------------------------------------------------
+    // LINES INTEREST / LINES IMPACT -- one line per side, teal buyers and red sellers, on the same log2
+    // axis and 1x midline the I x I pane uses. LINES IMPACT also carries the DOMINANCE bands: a tinted
+    // full-height block wherever one side stands at least `spread` above the other, BRIGHT where that
+    // side won the gap by climbing rather than by the other falling away under it.
+    // ------------------------------------------------------------------------------------------------
+    private void drawLinesPane(Canvas c, Snap s, int p) {
+        boolean imp = (p == PANE_CIMP);
+        FlowModel.Lines L = imp ? s.cimp : s.cint;
+        RectF r = pane[p];
+        title(c, r, (imp ? "LINES IMPACT  ·  each side's reach vs its own last "
+                         : "LINES INTEREST  ·  each side's aggressive $/s vs its own last ") + M.lb
+                + (imp ? " LED" : ""));
+        float top = r.top + TITLE_H, hgt = r.bottom - top;
+        double clip = Math.log(8.0) / LN2;
+        double lim;
+        if (L.n > 0) {
+            float[] fit = new float[2 * L.n];
+            for (int i = 0; i < L.n; i++) {
+                fit[i] = (float) Math.abs(Math.max(-clip, Math.min(clip, L.b[i])));
+                fit[L.n + i] = (float) Math.abs(Math.max(-clip, Math.min(clip, L.s[i])));
+            }
+            java.util.Arrays.sort(fit);
+            double p95 = fit[Math.min(fit.length - 1, (int) (0.95 * (fit.length - 1)))] * 1.15;
+            double want = Math.min(Math.max(Math.max(p95, Math.log(1.37) / LN2 * 1.4), 1.0), clip * 1.15);
+            if (want > lineTop[p] * 0.98 || want < lineTop[p] * 0.55) lineTop[p] = want;
+        }
+        lim = Math.max(1.0, lineTop[p]);
+        double[] rg = yRange(p, -lim, lim);
+        double yhi = rg[1], ylo = rg[0], range = Math.max(1e-9, yhi - ylo);
+        notePane(p, top, hgt, ylo, yhi);
+        c.save(); c.clipRect(r.left, top, r.right, r.bottom);
+        // the bands go down FIRST, under the guides and the lines
+        if (imp && L.dside != null && L.n > 0) {
+            for (int i = 0; i < L.n && i < L.dside.length; i++) {
+                int sd = L.dside[i];
+                if (sd == 0) continue;
+                boolean bright = L.dgain != null && i < L.dgain.length && L.dgain[i] > -900f
+                        && L.dgain[i] >= (float) L.gain;
+                int col = sd > 0 ? TEAL : RED;
+                pf.setColor(Color.argb(bright ? 95 : 38, Color.red(col), Color.green(col), Color.blue(col)));
+                float bx0 = xPx(L.x0[i]), bx1 = xPx(L.x1[i]);
+                if (bx1 < r.left || bx0 > plotR) continue;
+                c.drawRect(Math.max(r.left, bx0), top, Math.min(plotR, bx1), r.bottom, pf);
+            }
+        }
+        pl.setColor(cGuide); pl.setStrokeWidth(1 * d);
+        pl.setPathEffect(new DashPathEffect(new float[]{5 * d, 5 * d}, 0));
+        for (double g : new double[]{Math.log(0.76) / LN2, Math.log(1.37) / LN2}) {
+            float y = (float) (top + (yhi - g) / range * hgt);
+            c.drawLine(r.left, y, plotR, y, pl);
+        }
+        pl.setPathEffect(null);
+        pl.setColor(cMid); c.drawLine(r.left, (float) (top + yhi / range * hgt), plotR, (float) (top + yhi / range * hgt), pl);
+        // the two lines: one point per cycle at its MIDDLE, broken where a cycle could not be rated
+        // (the engine sends -999 there) and lighter over the cycle still forming
+        for (int side = 0; side < 2; side++) {
+            float[] y = side == 0 ? L.b : L.s;
+            pl.setColor(side == 0 ? TEAL : RED); pl.setStrokeWidth(1.8f * d);
+            path.reset();
+            boolean open = false;
+            for (int i = 0; i < L.n && i < y.length; i++) {
+                boolean formi = L.form != null && i < L.form.length && L.form[i] != 0;
+                if (formi || y[i] < -900f) { open = false; continue; }
+                float px = xPx(0.5 * (L.x0[i] + L.x1[i]));
+                float py = (float) (top + (yhi - Math.max(-clip, Math.min(clip, y[i]))) / range * hgt);
+                if (!open) { path.moveTo(px, py); open = true; } else path.lineTo(px, py);
+            }
+            c.drawPath(path, pl);
+            // the forming stretch, lighter, from the last finished point out to its own
+            int k = -1;
+            for (int i = L.n - 1; i >= 0; i--) if (L.form != null && i < L.form.length && L.form[i] != 0) { k = i; break; }
+            if (k > 0 && y.length > k && y[k] > -900f && y[k - 1] > -900f) {
+                int col = side == 0 ? TEAL : RED;
+                pl.setColor(Color.argb(150, Color.red(col), Color.green(col), Color.blue(col)));
+                float x1p = xPx(0.5 * (L.x0[k - 1] + L.x1[k - 1])), x2p = xPx(0.5 * (L.x0[k] + L.x1[k]));
+                float y1p = (float) (top + (yhi - Math.max(-clip, Math.min(clip, y[k - 1]))) / range * hgt);
+                float y2p = (float) (top + (yhi - Math.max(-clip, Math.min(clip, y[k]))) / range * hgt);
+                c.drawLine(x1p, y1p, x2p, y2p, pl);
+            }
+        }
+        c.restore();
+        axisMult(c, r, top, hgt, ylo, yhi);
+        drawSmoothSlider(c, p, r, imp ? M.smCimp : M.smCint);
+        // the bottom-right readout, the terminal's line
+        if (L.n > 0) {
+            int k = L.n - 1;
+            String txt = String.format(java.util.Locale.US, "buyers %s  ·  sellers %s  ·  %d-cycle mean",
+                    fmtMult(Math.pow(2, L.b[k])), fmtMult(Math.pow(2, L.s[k])), imp ? M.smCimp : M.smCint);
+            pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setFakeBoldText(false);
+            pt.setColor(L.b[k] >= L.s[k] ? TEAL : RED);
+            c.drawText(txt, plotR - pt.measureText(txt) - 6 * d, r.bottom - 5 * d, pt);
+        }
+    }
+
+    /** The right axis as a MULTIPLE (log2), the way every pane in this family labels it. */
+    private void axisMult(Canvas c, RectF r, float top, float hgt, double ylo, double yhi) {
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(9 * d); pt.setColor(cTitle); pt.setFakeBoldText(false);
+        pl.setColor(cSep); pl.setStrokeWidth(1 * d);
+        c.drawLine(plotR, top, plotR, r.bottom, pl);
+        double range = Math.max(1e-9, yhi - ylo);
+        int steps = Math.max(2, Math.min(6, (int) (hgt / (28 * d))));
+        for (int i = 0; i <= steps; i++) {
+            double v = ylo + range * i / steps;
+            float y = (float) (top + (yhi - v) / range * hgt);
+            if (y < top || y > r.bottom) continue;
+            c.drawLine(plotR, y, plotR + 4 * d, y, pl);
+            c.drawText(fmtMult(Math.pow(2, v)), plotR + 7 * d, y + 3 * d, pt);
+        }
+    }
+
+    /** One in-canvas smoothing slider per LINE pane: a track, a handle and the number. */
+    private void drawSmoothSlider(Canvas c, int p, RectF r, int val) {
+        drawSmoothSlider(c, p, r, val, plotR - 34 * d);
+    }
+
+    private void drawSmoothSlider(Canvas c, int p, RectF r, int val, float xRight) {
+        float w = 78 * d, h = 14 * d;
+        float x1 = xRight, x0 = x1 - w;
+        float y0 = r.top + 4 * d, y1 = y0 + h;
+        slX0[p] = x0 - 8 * d; slX1[p] = x1 + 8 * d; slY0[p] = y0 - 6 * d; slY1[p] = y1 + 6 * d;
+        float cy = (y0 + y1) / 2;
+        pl.setColor(Color.parseColor("#3a4150")); pl.setStrokeWidth(3 * d);
+        c.drawLine(x0, cy, x1, cy, pl);
+        int lo = Math.max(1, M.smoothMin), hi = Math.max(lo + 1, M.smoothMax);
+        float fr = (Math.max(lo, Math.min(hi, val)) - lo) / (float) (hi - lo);
+        pl.setColor(Color.parseColor("#7a828e")); c.drawLine(x0, cy, x0 + fr * w, cy, pl);
+        pf.setColor(FG); c.drawCircle(x0 + fr * w, cy, 4.5f * d, pf);
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setColor(FG); pt.setFakeBoldText(true);
+        c.drawText(String.valueOf(val), x1 + 6 * d, cy + 4 * d, pt);
+        pt.setFakeBoldText(false);
+    }
+
+    /** A touch on a pane's smoothing slider: set it, tell the engine, keep the gesture. */
+    private boolean smoothTouch(MotionEvent ev) {
+        int a = ev.getActionMasked();
+        float x = ev.getX(), y = ev.getY();
+        if (a == MotionEvent.ACTION_DOWN) {
+            slDrag = -1;
+            for (int p = 0; p < PANE_N; p++) {
+                if (!paneOn[p] || slX1[p] <= slX0[p]) continue;
+                if (p == PANE_IIMP && !"Lines Buyer/Seller".equals(M.iimpMode)) continue;
+                if (p != PANE_IIMP && p != PANE_CINT && p != PANE_CIMP) continue;
+                if (x >= slX0[p] && x <= slX1[p] && y >= slY0[p] && y <= slY1[p]) { slDrag = p; break; }
+            }
+            if (slDrag < 0) return false;
+        }
+        if (slDrag < 0) return false;
+        if (a == MotionEvent.ACTION_MOVE || a == MotionEvent.ACTION_DOWN) {
+            float x0 = slX0[slDrag] + 8 * d, x1 = slX1[slDrag] - 8 * d;
+            int lo = Math.max(1, M.smoothMin), hi = Math.max(lo + 1, M.smoothMax);
+            int v = lo + Math.round((hi - lo) * Math.max(0f, Math.min(1f, (x - x0) / Math.max(1f, x1 - x0))));
+            String k = slDrag == PANE_IIMP ? "iimp" : (slDrag == PANE_CINT ? "cint" : "cimp");
+            int cur = slDrag == PANE_IIMP ? M.smIimp : (slDrag == PANE_CINT ? M.smCint : M.smCimp);
+            if (v != cur) {
+                synchronized (M.lock) {
+                    if (slDrag == PANE_IIMP) M.smIimp = v; else if (slDrag == PANE_CINT) M.smCint = v; else M.smCimp = v;
+                }
+                if (host != null) host.onSmooth(k, v);
+                invalidate();
+            }
+            return true;
+        }
+        if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) { slDrag = -1; return true; }
+        return true;
+    }
+
     /** A small grip on each boundary between two panes: where a drag resizes them. */
     private void drawGrips(Canvas c) {
         if (fullscreen >= 0) return;
         int prev = -1;
-        for (int p = 0; p < 4; p++) {
+        for (int p = 0; p < PANE_N; p++) {
             if (!paneOn[p]) continue;
             if (prev >= 0) {
                 float y = pane[prev].bottom, xm = plotR / 2;

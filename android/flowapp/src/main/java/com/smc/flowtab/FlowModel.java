@@ -56,6 +56,21 @@ public final class FlowModel {
     public byte[] iUp, iContra, iGood, iForm, iVac, iQuiet;
     public long iimpVersion = 0;
 
+    // ---- LINES INTEREST / LINES IMPACT (the two halves of the I x I reading, panes of their own)
+    public static final class Lines {
+        public int n = 0;
+        public double[] x0 = new double[0], x1 = new double[0];
+        public float[] b = new float[0], s = new float[0];
+        public byte[] form = new byte[0];
+        public byte[] dside = null;                 // LINES IMPACT only: +1 buyers band, -1 sellers, 0 none
+        public float[] dgain = null, dgap = null;
+        public double spread = 0.3, gain = 0.3;
+        public int smooth = 20;
+    }
+    public final Lines cint = new Lines(), cimp = new Lines();
+    public int smoothMin = 1, smoothMax = 30;
+    public int smIimp = 1, smCint = 20, smCimp = 20;   // the three windows, as the engine last reported them
+
     // ---- interpretation rows
     public static final class Row {
         public double t0, t1; public String head, name, d1, d2a, d2b, mvTxt, mvWord; public int st, col, mvSign; public boolean strong, forming;
@@ -136,6 +151,13 @@ public final class FlowModel {
             if (m.has("tz")) tzOff = m.optInt("tz");
             if (cfg == null) cfg = new JSONObject();
             clockOffset = m.optDouble("now", 0.0) - System.currentTimeMillis() / 1000.0;
+            // the three smoothing windows and their bounds, as the ENGINE has them -- the tablet's sliders
+            // start where the terminal's are rather than at a guess of their own
+            smoothMin = m.optInt("smooth_min", smoothMin); smoothMax = m.optInt("smooth_max", smoothMax);
+            JSONObject sm = m.optJSONObject("smooth");
+            if (sm != null) {
+                smIimp = sm.optInt("iimp", smIimp); smCint = sm.optInt("cint", smCint); smCimp = sm.optInt("cimp", smCimp);
+            }
             connected = true; version++;
         }
     }
@@ -214,6 +236,27 @@ public final class FlowModel {
             iLiib = liib; iLiis = liis; iPliib = pliib; iPliis = pliis;
             iUp = up; iContra = contra; iGood = good; iForm = form; iVac = vac; iQuiet = quiet;
             iimpVersion++; version++;
+        }
+    }
+
+    /** LINES INTEREST / LINES IMPACT. Sent whole, one point per drawn cycle. */
+    public void onLines(String kind, JSONObject m) {
+        Lines L = "cimp".equals(kind) ? cimp : cint;
+        int n = m.optInt("n");
+        double[] x0 = f64(m.optString("x0")), x1 = f64(m.optString("x1"));
+        float[] b = f32(m.optString("b")), s2 = f32(m.optString("s"));
+        byte[] fm = i8(m.optString("form"));
+        byte[] ds = m.has("dside") ? i8(m.optString("dside")) : null;
+        float[] dg = m.has("dgain") ? f32(m.optString("dgain")) : null;
+        float[] gp = m.has("dgap") ? f32(m.optString("dgap")) : null;
+        synchronized (lock) {
+            L.n = n; L.x0 = x0; L.x1 = x1; L.b = b; L.s = s2; L.form = fm;
+            L.dside = ds; L.dgain = dg; L.dgap = gp;
+            if (m.has("spread")) L.spread = m.optDouble("spread", 0.3);
+            if (m.has("gain")) L.gain = m.optDouble("gain", 0.3);
+            L.smooth = m.optInt("smooth", L.smooth);
+            if ("cimp".equals(kind)) smCimp = L.smooth; else smCint = L.smooth;
+            version++;
         }
     }
 

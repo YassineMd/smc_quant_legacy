@@ -65,6 +65,8 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         chart.showFlow = prefs.getBoolean("flow", true);
         chart.showLiq = prefs.getBoolean("liq", true);
         chart.showIimp = prefs.getBoolean("iimp", true);
+        chart.showCint = prefs.getBoolean("cint", false);   // new panes, off until the user asks
+        chart.showCimp = prefs.getBoolean("cimp", false);
         chart.showTakeover = prefs.getBoolean("takeover", true);
         chart.showHlh = prefs.getBoolean("hlh", false);
         chart.showBp = prefs.getBoolean("bigplayer", false);
@@ -244,6 +246,8 @@ public final class MainActivity extends Activity implements EngineClient.Listene
 
     @Override public void onCycleTap(double t0) { interp.select(t0); }
 
+    @Override public void onSmooth(String kind, int n) { feed.sendSmooth(kind, n); }
+
     /** The I x I explain panel: the terminal's words re-set as a card (ExplainCard); any tap on it closes it. */
     private void showExplain(String html) {
         if (explainDlg != null && explainDlg.isShowing()) explainDlg.dismiss();
@@ -269,6 +273,8 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         toggle(col, "Buy/Sell Flow", "flow", chart.showFlow, v -> chart.showFlow = v);
         toggle(col, "Limit orders", "liq", chart.showLiq, v -> chart.showLiq = v);
         toggle(col, "Interest × Impact", "iimp", chart.showIimp, v -> chart.showIimp = v);
+        toggle(col, "Lines Interest", "cint", chart.showCint, v -> chart.showCint = v);
+        toggle(col, "Lines Impact", "cimp", chart.showCimp, v -> chart.showCimp = v);
         toggle(col, "Interpretation", "interp", interp.getVisibility() == View.VISIBLE, v -> { interp.setVisibility(v && chart.getFullscreen() < 0 ? View.VISIBLE : View.GONE); divider.setVisibility(interp.getVisibility()); });
         section(col, "Sub-widgets");
         toggle(col, "Market Position  (BUY / SELL)", "market", chart.tools.showMarket, v -> { chart.tools.showMarket = v; applyStyle(); });

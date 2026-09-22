@@ -350,7 +350,16 @@ spin(2.0)
 for _noop in ("_flow_cross_draw", "_hlh_px_tick", "_scanner_tracker", "_redock_trackers", "_px_bp_draw", "_liq_levels"):
     if hasattr(w, _noop):
         setattr(w, _noop, (lambda *a, **k: None))
-log("flow mode up | lookback N = %d | flow window %d s" % (w._lb_n(), int(w._flow_win)))
+# ⚠ LINES INTEREST / LINES IMPACT default OFF in the terminal (they are new panes, 8853c1c). The engine
+# has to turn them ON or _lines_tick never runs and the tablet's two panes stay empty for ever -- the tablet
+# decides what it DRAWS, but only what the engine computed can be drawn.
+for _nm in ("cint_on", "cimp_on"):
+    _cb = getattr(w.menu, _nm, None)
+    if _cb is not None and not _cb.isChecked():
+        _cb.setChecked(True)
+spin(1.0)
+log("flow mode up | lookback N = %d | flow window %d s | lines %d/%d"
+    % (w._lb_n(), int(w._flow_win), w._lines_smooth_n("cint"), w._lines_smooth_n("cimp")))
 threading.Thread(target=serve, daemon=True).start()
 
 
@@ -385,6 +394,7 @@ class State:
     cyc_key = None; cyc_t = 0.0; cyc_full_needed = True; cyc_last_total = 0
     rev_hist = -1
     iimp_id = None; interp_id = None; liq_sig = None; tko_id = None
+    lines_sig = {"cint": None, "cimp": None}   # the two split panes, each keyed on what it last sent
     hlh_out = None; hlh_t = 0.0; hlh_xm = None; hlh_pics = {}
     bw = True                 # the tablet's Chart Style: the HLH labels are built for a white or a dark ground
     bp_sig = None
@@ -404,6 +414,9 @@ def send(obj):
 def hello():
     send({"t": "hello", "sym": config.SYMBOL, "tick": float(config.TICK_SIZE), "dec": int(config.PRICE_DECIMALS),
           "win": float(w._flow_win), "lb": int(w._lb_n()), "now": time.time(), "cfg": CFG,
+          "smooth": {"iimp": int(w._iimp_smooth_n()), "cint": int(w._lines_smooth_n("cint")),
+                     "cimp": int(w._lines_smooth_n("cimp"))},
+          "smooth_min": int(config.LINES_SMOOTH_MIN), "smooth_max": int(config.LINES_SMOOTH_MAX),
           # the PC's clock offset: the tablet labels its clock axis in the terminal's local time, whatever its own zone
           "tz": int(-time.timezone if not time.localtime().tm_isdst else -time.altzone)})
 
@@ -514,6 +527,34 @@ def tick_iimp():
         m[k] = b64(np.asarray(L[k], dtype=bool), "u1")
     for k in ("vac", "quiet"):
         m[k] = b64(np.asarray(L.get(k, np.zeros(n)), dtype=np.int8), "i1")
+    send(m)
+
+
+def tick_lines(kind):
+    """LINES INTEREST / LINES IMPACT: the two smoothed series, plus the band arrays for impact.
+
+    Sent whole rather than diffed -- one point per cycle over the view is a few hundred floats, and the
+    pane's own signature already stops it being rebuilt when nothing moved."""
+    st = w._lp_(kind)
+    L = st.get("last")
+    if L is None:
+        return
+    sig = st.get("sig")
+    if sig == S.lines_sig.get(kind):
+        return
+    S.lines_sig[kind] = sig
+    n = int(np.size(L["x0"]))
+    m = {"t": kind, "n": n, "smooth": int(w._lines_smooth_n(kind))}
+    for k in ("x0", "x1"):
+        m[k] = b64(np.asarray(L[k], dtype=np.float64), "<f8")
+    for k in ("b", "s"):
+        m[k] = b64(np.nan_to_num(np.asarray(L[k], dtype=np.float64), nan=-999.0))
+    m["form"] = b64(np.asarray(L["form"], dtype=bool), "u1")
+    if kind == "cimp" and L.get("dside") is not None:
+        m["dside"] = b64(np.asarray(L["dside"], dtype=np.int8), "i1")
+        m["dgain"] = b64(np.nan_to_num(np.asarray(L["dgain"], dtype=np.float64), nan=-999.0))
+        m["dgap"] = b64(np.nan_to_num(np.asarray(L["dgap"], dtype=np.float64), nan=-999.0))
+        m["spread"] = float(config.LIMP_DOM_SPREAD); m["gain"] = float(config.LIMP_DOM_GAIN)
     send(m)
 
 
@@ -687,6 +728,7 @@ def on_cmd(c):
         if cl is not None:
             cl.ready = True
         S.bins_sent = None; S.cyc_full_needed = True; S.iimp_id = None; S.interp_id = None; S.liq_sig = None; S.tko_id = None
+        S.lines_sig = {"cint": None, "cimp": None}
         S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None
         hello()
         log("hi from the tablet -- sending everything")
@@ -701,6 +743,23 @@ def on_cmd(c):
         v = str(c.get("v", "None")); modes = tuple(config.IIMP_MODES)
         if v in modes and w._iimp_combo is not None:
             w._iimp_combo.setCurrentIndex(modes.index(v))
+    elif k == "smooth":
+        # the three sliders: "iimp" is the I x I pane's Lines Buyer/Seller window, "cint" / "cimp" the two
+        # split panes' own. Driven through the widgets so the terminal's own clamp and redraw run.
+        key = str(c.get("k", "")); n = int(c.get("n", config.LINES_SMOOTH_N))
+        n = max(int(config.LINES_SMOOTH_MIN), min(int(config.LINES_SMOOTH_MAX), n))
+        if key == "iimp":
+            if w._iimp_slider is not None:
+                w._iimp_slider.setValue(n)
+            else:
+                w._iimp_smn = n; w._iimp_sig = None
+        elif key in ("cint", "cimp"):
+            _sl = w._lp_(key).get("slider")
+            if _sl is not None:
+                _sl.setValue(n)
+            else:
+                w._lp_(key)["smn"] = n; w._lp_(key)["sig"] = None
+            S.lines_sig[key] = None
     elif k == "tog":
         key = str(c.get("k", "")); v = bool(c.get("v", True))
         if key == "lines":
@@ -771,7 +830,10 @@ def engine_tick():
             S.rev_hist = rh; S.cyc_full_needed = True
         tick_bins()
         tick_cycles(now, force=S.cyc_full_needed)
-        tick_iimp(); tick_interp(); tick_liq(); tick_tko()
+        tick_iimp()
+        w._lines_tick(now)                      # the same crosses() read, so a memo hit
+        tick_lines("cint"); tick_lines("cimp")
+        tick_interp(); tick_liq(); tick_tko()
         tick_hlh(now); tick_bp(now)
     except Exception:
         traceback.print_exc()
