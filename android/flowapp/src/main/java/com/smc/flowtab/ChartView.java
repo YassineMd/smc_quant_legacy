@@ -68,7 +68,19 @@ public final class ChartView extends View {
     private final boolean[] paneOn = new boolean[4];
     private final float[] paneWt = {0.30f, 0.34f, 0.14f, 0.22f};   // the panes' shares of the height (the splitter)
     private int rsUpper = -1, rsLower = -1; private float rsY0; private float rsW0, rsW1, rsTot, rsAvail;
-    private final float[] yZoom = {1f, 1f, 1f, 1f};              // a drag on a pane's axis scales its fitted y range
+    // each pane fits its own y until the user pans or zooms it (then it is theirs, like the terminal's
+    // _px_yauto); a double tap on an axis hands every pane back to its fit
+    private final boolean[] yAuto = {true, true, true, true};
+    private final double[] yLo = new double[4], yHi = new double[4], lastLo = new double[4], lastHi = new double[4];
+    private int panPane = -1; private float panAccY = 0;
+
+    /** The pane's y range this frame: its fit, or the range the user panned / zoomed it to. */
+    private double[] yRange(int p, double lo, double hi) {
+        lastLo[p] = lo; lastHi[p] = hi;
+        return yAuto[p] ? new double[]{lo, hi} : new double[]{yLo[p], yHi[p]};
+    }
+
+    private void takeManual(int p) { if (yAuto[p]) { yAuto[p] = false; yLo[p] = lastLo[p]; yHi[p] = lastHi[p]; } }
     private double selCycle = Double.NaN;                           // the candle marked by a tap here or in the feed
     private double lcFrom = Double.NaN, lcTo = Double.NaN, lcCur = Double.NaN, lcCycle = Double.NaN; private long lcT0 = 0;
 
@@ -95,7 +107,7 @@ public final class ChartView extends View {
         if (host != null) host.onCycleTap(cT[i]);
         invalidate();
     }
-    private int axPane = -1; private boolean axX = false; private float axY0, axX0, axZoom0; private double axSpan0;
+    private int axPane = -1; private boolean axX = false; private float axY0, axX0; private double axSpan0, axLo0, axHi0;
 
     /** A touch that starts on an axis strip: a vertical drag on a pane's axis zooms its y, a horizontal drag on the
      * clock strip zooms the x span. The gesture detector still sees it (for the double tap), pan and pinch do not. */
@@ -104,13 +116,14 @@ public final class ChartView extends View {
         if (a == MotionEvent.ACTION_DOWN) {
             axPane = -1; axX = false;
             if (y >= timeY) { axX = true; axX0 = x; axSpan0 = vx1 - vx0; return true; }
-            if (x >= plotR) { int p = paneAt(plotR - 1, y); if (p < 0) return false; axPane = p; axY0 = y; axZoom0 = yZoom[p]; return true; }
+            if (x >= plotR) { int p = paneAt(plotR - 1, y); if (p < 0) return false; axPane = p; axY0 = y; takeManual(p); axLo0 = yLo[p]; axHi0 = yHi[p]; return true; }
             return false;
         }
         if (axPane < 0 && !axX) return false;
         if (a == MotionEvent.ACTION_MOVE) {
             if (axPane >= 0) {
-                yZoom[axPane] = Math.max(0.2f, Math.min(8f, axZoom0 * (float) Math.exp((y - axY0) / (150 * d))));   // down = out
+                double mid = 0.5 * (axLo0 + axHi0), half = 0.5 * (axHi0 - axLo0) * Math.exp((y - axY0) / (150 * d));   // down = out
+                yLo[axPane] = mid - half; yHi[axPane] = mid + half;
             } else {
                 double span = Math.max(30.0, Math.min(72 * 3600.0, axSpan0 * Math.exp(-(x - axX0) / (200 * d))));  // right = in
                 if (follow) { vx1 = M.nowEngine(); vx0 = vx1 - span; }
@@ -200,11 +213,18 @@ public final class ChartView extends View {
         vx1 = now; vx0 = now - 3600.0;
         pl.setStyle(Paint.Style.STROKE); pf.setStyle(Paint.Style.FILL); pt.setTypeface(Typeface.MONOSPACE);
         gest = new GestureDetector(ctx, new GestureDetector.SimpleOnGestureListener() {
-            @Override public boolean onDown(MotionEvent e) { return true; }
+            @Override public boolean onDown(MotionEvent e) { panPane = paneAt(e.getX(), e.getY()); panAccY = 0; return true; }
             @Override public boolean onScroll(MotionEvent e1, MotionEvent e2, float dx, float dy) {
                 if (scale.isInProgress() || axPane >= 0 || axX) return true;
                 double span = vx1 - vx0; double dt = dx / Math.max(1f, plotR) * span;
                 vx0 += dt; vx1 += dt;
+                panAccY += Math.abs(dy);
+                if (panPane >= 0 && paneOn[panPane] && panAccY > 6 * d) {
+                    takeManual(panPane);
+                    float hgt = pane[panPane].bottom - (pane[panPane].top + TITLE_H);
+                    double upp = (yHi[panPane] - yLo[panPane]) / Math.max(1f, hgt);
+                    yLo[panPane] -= dy * upp; yHi[panPane] -= dy * upp;       // the content follows the finger
+                }
                 afterPan(); return true;
             }
             @Override public boolean onSingleTapConfirmed(MotionEvent e) { tap(e.getX(), e.getY()); return true; }
@@ -213,11 +233,23 @@ public final class ChartView extends View {
         });
         scale = new ScaleGestureDetector(ctx, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override public boolean onScale(ScaleGestureDetector sd) {
-                double span = vx1 - vx0; double f = 1.0 / Math.max(0.2f, Math.min(5f, sd.getScaleFactor()));
-                double ns = Math.max(30.0, Math.min(72 * 3600.0, span * f));
-                double focal = vx0 + (sd.getFocusX() / Math.max(1f, plotR)) * span;
-                double frac = (focal - vx0) / span;
-                vx0 = focal - frac * ns; vx1 = vx0 + ns;
+                float minSpan = 40 * d;
+                double fx = (sd.getPreviousSpanX() > minSpan && sd.getCurrentSpanX() > minSpan) ? Math.max(0.2, Math.min(5.0, sd.getPreviousSpanX() / sd.getCurrentSpanX())) : 1.0;
+                double fy = (sd.getPreviousSpanY() > minSpan && sd.getCurrentSpanY() > minSpan) ? Math.max(0.2, Math.min(5.0, sd.getPreviousSpanY() / sd.getCurrentSpanY())) : 1.0;
+                if (fx != 1.0) {
+                    double span = vx1 - vx0;
+                    double ns = Math.max(30.0, Math.min(72 * 3600.0, span * fx));
+                    double focal = vx0 + (sd.getFocusX() / Math.max(1f, plotR)) * span;
+                    double frac = (focal - vx0) / span;
+                    vx0 = focal - frac * ns; vx1 = vx0 + ns;
+                }
+                int p = paneAt(Math.min(sd.getFocusX(), plotR - 1), sd.getFocusY());
+                if (fy != 1.0 && p >= 0) {
+                    takeManual(p);
+                    float top = pane[p].top + TITLE_H, hgt = Math.max(1f, pane[p].bottom - top);
+                    double yv = yHi[p] - (sd.getFocusY() - top) / hgt * (yHi[p] - yLo[p]);
+                    yLo[p] = yv - (yv - yLo[p]) * fy; yHi[p] = yv + (yHi[p] - yv) * fy;
+                }
                 afterPan(); return true;
             }
         });
@@ -253,7 +285,7 @@ public final class ChartView extends View {
         postOnAnimation(() -> { framePending = false; invalidate(); });
     }
 
-    public void recentre() { follow = true; pxLo = pxHi = Double.NaN; java.util.Arrays.fill(yZoom, 1f); sendView(true); invalidate(); }
+    public void recentre() { follow = true; pxLo = pxHi = Double.NaN; java.util.Arrays.fill(yAuto, true); sendView(true); invalidate(); }
 
     public void setFullscreen(int p) { fullscreen = p; if (host != null) host.onFullscreen(p >= 0); invalidate(); }
 
@@ -443,15 +475,20 @@ public final class ChartView extends View {
         return String.format(Locale.US, "$%.0f", v);
     }
 
+    private void axisLine(Canvas c, RectF r) { pf.setColor(cSep); c.drawRect(plotR, r.top, plotR + 1 * d, r.bottom, pf); }
+
+    private void tick(Canvas c, float y) { pf.setColor(cFg); c.drawRect(plotR, y - 0.5f * d, plotR + 4 * d, y + 0.5f * d, pf); }
+
     private void yAxisMoney(Canvas c, RectF r, double lo, double hi) {
         double range = hi - lo; if (range <= 0) return;
-        double px = range / r.height();
-        double step = niceStep(px * 42 * d);
+        double step = niceStep(range / Math.max(2.0, r.height() / (28 * d)));
+        axisLine(c, r);
         pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setColor(cFg);
         for (double v = Math.ceil(lo / step) * step; v <= hi; v += step) {
             float y = (float) (r.bottom - (v - lo) / range * r.height());
             if (y < r.top + 6 * d || y > r.bottom - 2 * d) continue;
-            c.drawText(v == 0 ? "0" : usdShort(v), plotR + 4 * d, y + 4 * d, pt);
+            tick(c, y);
+            c.drawText(Math.abs(v) < 1e-9 ? "0" : (v < 0 ? "-" + usdShort(-v) : usdShort(v)), plotR + 6 * d, y + 4 * d, pt);
         }
     }
 
@@ -489,8 +526,8 @@ public final class ChartView extends View {
             if (Double.isNaN(pxLo) || Math.abs(wl - pxLo) + Math.abs(wh - pxHi) > 0.18 * Math.max(1e-9, pxHi - pxLo)) { pxLo = wl; pxHi = wh; }
         }
         if (Double.isNaN(pxLo)) return;
-        double ymid = 0.5 * (pxLo + pxHi), yhalf = 0.5 * (pxHi - pxLo) * yZoom[PANE_PRICE];
-        double yl = ymid - yhalf, yh = ymid + yhalf;
+        double[] prg = yRange(PANE_PRICE, pxLo, pxHi);
+        double yl = prg[0], yh = prg[1];
         float top = r.top + TITLE_H, hgt = r.bottom - top;
         pxTop = top; pxHgt = hgt; pxYl = yl; pxYh = yh;
         c.save(); c.clipRect(r.left, r.top, r.right, r.bottom);
@@ -540,6 +577,7 @@ public final class ChartView extends View {
             String p2 = forming ? durText(Math.max(0, fte - s.cT[last])) : "";
             pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(11 * d);
             float w = Math.max(pt.measureText(p1), pt.measureText(p2)) + 10 * d;
+            y = Math.max(top + 14 * d, Math.min(r.bottom - (forming ? 14 : 2) * d, y));   // the pill stays on its pane
             RectF pill = new RectF(plotR + 2 * d, y - 14 * d, plotR + 2 * d + w, y + (forming ? 14 : 2) * d);
             pf.setColor(Color.parseColor("#1c2128")); c.drawRoundRect(pill, 5 * d, 5 * d, pf);
             pl.setColor(pc); pl.setStrokeWidth(1.3f * d); c.drawRoundRect(pill, 5 * d, 5 * d, pl);
@@ -550,13 +588,15 @@ public final class ChartView extends View {
             c.restore();
         }
         // price axis
-        double range = yh - yl; double step = niceStep(range / hgt * 34 * d);
+        double range = yh - yl; double step = niceStep(range / Math.max(2.0, hgt / (28 * d)));
+        axisLine(c, r);
         pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setColor(cFg);
         for (double v = Math.ceil(yl / step) * step; v <= yh; v += step) {
             float y = (float) (top + (yh - v) / range * hgt);
             if (!Double.isNaN(s.livePx) && Math.abs(y - (float) (top + (yh - s.livePx) / range * hgt)) < 16 * d) continue;
             if (y < top + 4 * d || y > r.bottom - 2 * d) continue;
-            c.drawText(String.format(Locale.US, "%." + s.dec + "f", v), plotR + 4 * d, y + 4 * d, pt);
+            tick(c, y);
+            c.drawText(String.format(Locale.US, "%." + s.dec + "f", v), plotR + 6 * d, y + 4 * d, pt);
         }
         if (tools != null) tools.drawButtons(c);
     }
@@ -731,9 +771,10 @@ public final class ChartView extends View {
         double p99 = all[Math.min(all.length - 1, (int) (0.99 * (all.length - 1)))];
         double tp = Math.max(p99, Math.max(b[b.length - 1], sl[sl.length - 1]));
         if (tp > 0 && (tp > flowTop * 0.98 || tp < flowTop * 0.55)) flowTop = tp * 1.18;
-        double yt = Math.max(1.0, flowTop) * yZoom[PANE_FLOW];
+        double yt = Math.max(1.0, flowTop);
         double room = yt * badgePx / Math.max(1f, hgt - badgePx);
-        double ylo = -room, yhi = yt; double range = yhi - ylo;
+        double[] frg = yRange(PANE_FLOW, -room, yt);
+        double ylo = frg[0], yhi = frg[1]; double range = yhi - ylo;
         float zeroY = (float) (top + (yhi - 0) / range * hgt);
         c.save(); c.clipRect(r.left, top, r.right, r.bottom);
         pl.setColor(cSep); pl.setStrokeWidth(1 * d); c.drawLine(r.left, zeroY, plotR, zeroY, pl);
@@ -770,6 +811,7 @@ public final class ChartView extends View {
         }
         c.restore();
         // right-edge badges: the last value of each line and its share
+        badgePane = r;
         double bn = b[b.length - 1], sn = sl[sl.length - 1], tot = Math.max(1e-9, bn + sn);
         String sb = String.format(Locale.US, "%s (%.0f%%)", usdShort(bn), 100 * bn / tot), ss = String.format(Locale.US, "%s (%.0f%%)", usdShort(sn), 100 * sn / tot);
         float yb = (float) (top + (yhi - bn) / range * hgt), ys = (float) (top + (yhi - sn) / range * hgt);
@@ -778,9 +820,12 @@ public final class ChartView extends View {
         yAxisMoney(c, new RectF(r.left, top, r.right, r.bottom), ylo, yhi);
     }
 
+    private RectF badgePane;                       // the pane a badge must stay inside (set by the pane drawing it)
+
     private void badge(Canvas c, float xr, float y, String txt, int col, boolean above) {
         pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(11 * d); pt.setFakeBoldText(true);
         float w = pt.measureText(txt) + 10 * d, hh = 16 * d;
+        if (badgePane != null) y = Math.max(badgePane.top + TITLE_H + (above ? hh + 2 * d : 0), Math.min(badgePane.bottom - (above ? 0 : hh + 2 * d), y));
         RectF pill = above ? new RectF(xr - w, y - hh - 2 * d, xr, y - 2 * d) : new RectF(xr - w, y + 2 * d, xr, y + hh + 2 * d);
         if (!bw) { pf.setColor(Color.parseColor("#1c2128")); c.drawRoundRect(pill, 4 * d, 4 * d, pf); }
         pt.setColor(col); c.drawText(txt, pill.left + 5 * d, pill.bottom - 4 * d, pt);
@@ -795,33 +840,35 @@ public final class ChartView extends View {
         if (s.lqX == null || s.lqX.length == 0) return;
         double mx = 0; for (float v : s.lqB) mx = Math.max(mx, v); for (float v : s.lqA) mx = Math.max(mx, v);
         if (mx > 0 && (mx > liqTop * 0.98 || mx < liqTop * 0.55)) liqTop = mx * 1.15;
-        double yhi = Math.max(1.0, liqTop) * yZoom[PANE_LIQ];
+        double[] lrg = yRange(PANE_LIQ, 0.0, Math.max(1.0, liqTop));
+        double ylo = lrg[0], yhi = lrg[1], lrange = Math.max(1e-9, yhi - ylo);
         c.save(); c.clipRect(r.left, top, r.right, r.bottom);
         for (int side = 0; side < 2; side++) {
             float[] v = side == 0 ? s.lqB : s.lqA;
             path.reset(); int n = Math.min(v.length, s.lqX.length);
             for (int i = 0; i < n; i++) {
-                float x = xPx(s.lqX[i]); float y = (float) (top + (yhi - v[i]) / yhi * hgt);
+                float x = xPx(s.lqX[i]); float y = (float) (top + (yhi - v[i]) / lrange * hgt);
                 if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
             }
             pl.setColor(side == 0 ? TEAL : RED); pl.setStrokeWidth(2 * d); c.drawPath(path, pl);
             // the dashed rule from the last point to the right edge
             if (n > 0) {
-                float xl = xPx(s.lqX[n - 1]); float y = (float) (top + (yhi - v[n - 1]) / yhi * hgt);
+                float xl = xPx(s.lqX[n - 1]); float y = (float) (top + (yhi - v[n - 1]) / lrange * hgt);
                 pl.setStrokeWidth(1 * d); pl.setPathEffect(new DashPathEffect(new float[]{4 * d, 6 * d}, 0));
                 c.drawLine(xl, y, plotR, y, pl); pl.setPathEffect(null);
             }
         }
         c.restore();
+        badgePane = r;
         int n = Math.min(s.lqB.length, s.lqA.length);
         if (n > 0) {
             double bv = s.lqB[n - 1], av = s.lqA[n - 1], tot = bv + av;
             String sb = tot > 0 ? String.format(Locale.US, "%s (%.0f%%)", usdShort(bv), 100 * bv / tot) : usdShort(bv);
             String sa = tot > 0 ? String.format(Locale.US, "%s (%.0f%%)", usdShort(av), 100 * av / tot) : usdShort(av);
-            badge(c, plotR - 4 * d, (float) (top + (yhi - bv) / yhi * hgt), sb, TEAL, bv >= av);
-            badge(c, plotR - 4 * d, (float) (top + (yhi - av) / yhi * hgt), sa, RED, av > bv);
+            badge(c, plotR - 4 * d, (float) (top + (yhi - bv) / lrange * hgt), sb, TEAL, bv >= av);
+            badge(c, plotR - 4 * d, (float) (top + (yhi - av) / lrange * hgt), sa, RED, av > bv);
         }
-        yAxisMoney(c, new RectF(r.left, top, r.right, r.bottom), 0, yhi);
+        yAxisMoney(c, new RectF(r.left, top, r.right, r.bottom), ylo, yhi);
     }
 
     // ------------------------------------------------------------------ INTEREST x IMPACT
@@ -846,8 +893,9 @@ public final class ChartView extends View {
                 if (lim > iimpTop * 0.98 || lim < iimpTop * 0.55) iimpTop = lim;
             }
         }
-        lim = Math.max(1.0, iimpTop) * yZoom[PANE_IIMP];
-        double yhi = lim, ylo = -lim, range = yhi - ylo;
+        lim = Math.max(1.0, iimpTop);
+        double[] irg = yRange(PANE_IIMP, -lim, lim);
+        double yhi = irg[1], ylo = irg[0], range = yhi - ylo;
         float zeroY = (float) (top + (yhi) / range * hgt);
         c.save(); c.clipRect(r.left, top, r.right, r.bottom);
         // guides: the imbalance terciles, dashed; the midline solid
@@ -929,12 +977,14 @@ public final class ChartView extends View {
         c.restore();
         // the axis: mirrored multiples in None / Delta, signed in Buyer / Seller / Lines
         pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setColor(cFg);
-        double stp = lim <= 1.5 ? 0.5 : (lim <= 3 ? 1 : 2);
-        for (double v = -Math.floor(lim / stp) * stp; v <= lim + 1e-9; v += stp) {
+        double stp = 0.25; while (stp / range * hgt < 26 * d) stp *= 2;
+        axisLine(c, r);
+        for (double v = Math.ceil(ylo / stp) * stp; v <= yhi + 1e-9; v += stp) {
             float y = (float) (top + (yhi - v) / range * hgt);
             if (y < top + 6 * d || y > r.bottom - 14 * d) continue;
             double x = signed ? Math.pow(2, v) : Math.pow(2, Math.abs(v));
-            c.drawText(fmtMult(x), plotR + 4 * d, y + 4 * d, pt);
+            tick(c, y);
+            c.drawText(fmtMult(x), plotR + 6 * d, y + 4 * d, pt);
         }
         // the dropdown button, top right of the pane
         String lab = s.mode + " ▾";
