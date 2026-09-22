@@ -297,6 +297,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
     lobPaneToggled = QtCore.Signal(bool)         # Book pane on/off (Flow mode)
     spdPaneToggled = QtCore.Signal(bool)         # Speed pane on/off (Flow mode)
     fratioPaneToggled = QtCore.Signal(bool)      # Flow ratios pane on/off (Flow mode): flow / buy / sell vs last N
+    cintPaneToggled = QtCore.Signal(bool)        # LINES INTEREST pane on/off (Flow mode)
+    cimpPaneToggled = QtCore.Signal(bool)        # LINES IMPACT pane on/off (Flow mode)
     iimpPaneToggled = QtCore.Signal(bool)        # Interest x Impact pane on/off (Flow mode)
     flowLinesToggled = QtCore.Signal(bool)       # the Buy/Sell Flow $ PANE (the main chart in Flow mode) on/off
     hlhSpanChanged = QtCore.Signal(str)          # HLH: "A merged bloc spans at most" (the Pine's mergeSpan input)
@@ -1832,6 +1834,33 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             "the net aggressors and red when sellers were)." % config.CYCLE_BASE_N)
         self.fratio_on.toggled.connect(lambda on: self.fratioPaneToggled.emit(bool(on)))
         l4.addWidget(self.fratio_on)
+        # LINES INTEREST / LINES IMPACT -- two halves of the I x I reading, each on its own pane (user
+        # 2026-09-22). They were options in that pane's dropdown for a few hours and are panes now.
+        self.cint_on = QtWidgets.QCheckBox(config.pane_titles()["cint"])
+        self.cint_on.setChecked(bool(config.CINT_PANE_ON))
+        self.cint_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.cint_on.setToolTip(
+            "ONE LINE PER SIDE -- teal buyers, red sellers -- of the INTEREST half alone, with no impact in it "
+            "anywhere: each side's aggressive $ per second over the median of its own previous %d cycles. It "
+            "answers how HARD each side has been pushing against its own recent normal, not what that push did "
+            "to price. Smoothed by the slider at the pane's top right, a trailing mean over up to %d cycles "
+            "taken in log space, so a quiet stretch sits below 1x instead of being dragged above it. At 1 "
+            "there is no smoothing at all." % (config.CYCLE_BASE_N, config.LINES_SMOOTH_MAX))
+        self.cint_on.toggled.connect(lambda on: self.cintPaneToggled.emit(bool(on)))
+        l4.addWidget(self.cint_on)
+        self.cimp_on = QtWidgets.QCheckBox(config.pane_titles()["cimp"])
+        self.cimp_on.setChecked(bool(config.CIMP_PANE_ON))
+        self.cimp_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
+        self.cimp_on.setToolTip(
+            "ONE LINE PER SIDE of the IMPACT half alone: how far that side's push reached against what it "
+            "usually reaches for the same effort in the same time. Impact exists only for the side that LED a "
+            "cycle, so each line is the mean of its OWN last N cycles AS THE LEADER and holds flat across the "
+            "cycles it did not lead -- a flat stretch means that side has not led anything since its last step. "
+            "The background is banded where one side stands at least %.2gx above the other, green for the "
+            "buyers and red for the sellers, and BRIGHT where that side won the gap by CLIMBING rather than by "
+            "the other side falling away under it." % config.LIMP_DOM_SPREAD)
+        self.cimp_on.toggled.connect(lambda on: self.cimpPaneToggled.emit(bool(on)))
+        l4.addWidget(self.cimp_on)
         self.iimp_on = QtWidgets.QCheckBox(config.pane_titles()["iimp"])
         self.iimp_on.setChecked(bool(config.IIMP_PANE_ON))
         self.iimp_on.setStyleSheet("QCheckBox { color:#cfd3da; font-size:11px; }")
@@ -1891,7 +1920,7 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         for _k, _cb in (("px", self.px_on), ("liq", self.liq_on), ("cyc", self.cycle_on),
                         ("cvol", self.cvol_on), ("lines", self.lines_on), ("fratio", self.fratio_on),
                         ("lob", self.lob_on), ("spd", self.spd_on), ("interp", self.interp_on),
-                        ("iimp", self.iimp_on)):
+                        ("iimp", self.iimp_on), ("cint", self.cint_on), ("cimp", self.cimp_on)):
             if _k in names:
                 _cb.setText(names[_k])
 
@@ -1906,6 +1935,12 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
 
     def set_fratio_pane_on(self, on: bool) -> None:
         self.fratio_on.blockSignals(True); self.fratio_on.setChecked(bool(on)); self.fratio_on.blockSignals(False)
+
+    def set_cint_pane_on(self, on: bool) -> None:
+        self.cint_on.blockSignals(True); self.cint_on.setChecked(bool(on)); self.cint_on.blockSignals(False)
+
+    def set_cimp_pane_on(self, on: bool) -> None:
+        self.cimp_on.blockSignals(True); self.cimp_on.setChecked(bool(on)); self.cimp_on.blockSignals(False)
 
     def flow_lines_on(self) -> bool:
         return bool(self.lines_on.isChecked())

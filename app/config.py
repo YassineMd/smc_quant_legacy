@@ -395,6 +395,8 @@ def pane_titles(n=None):
         "lines": "BUY / SELL FLOW" + d + "taker $ per window (the pane)",
         "fratio": "FLOW RATIOS" + d + "$/s vs last %d" % n + d + "buy / sell",
         "iimp": "INTEREST × IMPACT" + d + "who leads vs last %d" % n,
+        "cint": "LINES INTEREST" + d + "each side's aggressive $/s vs its own last %d" % n,
+        "cimp": "LINES IMPACT" + d + "each side's reach vs its own last %d LED" % n,
     }
 
 
@@ -457,8 +459,7 @@ FRATIO_MODE = "None"
 # the open), fitted per side on the same 48 h (buy R2 0.744 / sell 0.726). No intercept is needed: the score is a
 # residual against the median of the previous N same-side cycles, which cancels it.
 IIMP_PANE_ON = True
-IIMP_MODES = ("None", "Buyer", "Seller", "Delta", "Lines Buyer/Seller",
-              "Lines Interest", "Lines Impact")                          # the pane's top-right dropdown
+IIMP_MODES = ("None", "Buyer", "Seller", "Delta", "Lines Buyer/Seller")   # the pane's top-right dropdown
 #                                 None = the leader's multiple; Buyer / Seller = that side's interest x impact
 #                                 vs its own baseline; Delta = buyer over seller. All in log2 (user 2026-09-20).
 #                                 Lines Buyer/Seller (user 2026-09-21) = the Buyer option and the Seller option
@@ -468,45 +469,62 @@ IIMP_MODES = ("None", "Buyer", "Seller", "Delta", "Lines Buyer/Seller",
 #                                 side against the other.
 IIMP_MODE = "None"
 IIMP_LINES_MODE = "Lines Buyer/Seller"
-IIMP_INT_MODE = "Lines Interest"    # the INTEREST half ALONE, both sides, SMOOTHED (user 2026-09-22). The pane's
-                                # other modes all carry impact in them somewhere; this one answers only "how hot
-                                # is each side against its own recent normal", with the per-cycle noise taken out.
-IIMP_SMOOTH_N = 20              # DEFAULT trailing-mean window for both line modes, in CYCLES, and its OWN knob
-                                # -- deliberately not the cycle lookback. The lookback picks the BASELINE each
-                                # cycle's reading is divided by; this picks how many of those are averaged for
-                                # display. Tying them would move the smoothing every time the user changed the
-                                # baseline, which are two different questions. Averaged in LOG space (a geometric
-                                # mean), so 0.5x and 2x pull on it equally -- an arithmetic mean of ratios is
-                                # biased upward. LIVE value: the slider left of the pane's dropdown (user
-                                # 2026-09-22), persisted as "iimp_smooth"; this is only where it starts.
-IIMP_SMOOTH_MIN = 1             # 1 = no smoothing at all, the raw per-cycle reading. ⚠ _iimp_smooth() clamps its
-IIMP_SMOOTH_MAX = 30            # min_n to the window for exactly this: a window of 1 can never hold 3 samples,
-                                # and without the clamp the whole series comes back NaN and the pane goes blank.
-IIMP_IMP_MODE = "Lines Impact"      # the IMPACT half alone, both sides, smoothed (user 2026-09-22)
-# ⚠ In Lines Impact the same window is COUNTED IN LED CYCLES, not in cycles: impact only exists for the side
-# that LED, so each side's mean runs over the last N cycles THAT SIDE led and HOLDS its value across the ones it
-# did not. The user was asked and chose this over counting a non-led cycle as 1x -- that shape (one side pinned
-# to 1x every cycle, a sawtooth) is the one they rejected on 2026-09-22.
+# (Lines Interest and Lines Impact were options here for a few hours on 2026-09-22 and are now panes of their
+# own -- see the LINES INTEREST / LINES IMPACT block below. Do not put them back in this dropdown.)
+# THE SMOOTHING SLIDER on THIS pane drives its Lines Buyer/Seller option and nothing else (user 2026-09-22:
+# "also on the interestximpact add the slider on Lines Buyer/seller dropdown option"). Same trailing geometric
+# mean the two split panes use, over LINES_SMOOTH_MIN..MAX cycles, persisted as "iimp_smooth".
+# ⚠ DEFAULTS TO 1, not 20: 1 is no smoothing at all, which is exactly the chart Lines Buyer/Seller has been
+# drawing since e312e2c. Starting it at 20 would silently redraw a shipped view nobody asked to change.
+IIMP_SMOOTH_N = 1
 IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretch is drawn at IIMP_FORM_PEN_A)
-# --- Lines Impact: the DOMINANCE bands (user 2026-09-22: "mark the areas in red/green where one side impact
-# grew x1 times more than the other"). A tinted full-height band over every cycle where one side's smoothed
-# impact stands at least this far above the other's.
-# ⚠ A DIFFERENCE OF MULTIPLES, not a ratio -- the same reading PX_IIB_MIN_SPREAD already carries for this
-# pane, from this user, on this exact wording ("it should be at least 1x"). Buyers 1.8x vs sellers 0.7x is a
-# spread of 1.1x and is marked; buyers 1.4x vs sellers 0.9x is 0.5x and is not.
-# ⚠ Compared on the TRUE multiples, never the 8x-clipped values the lines are DRAWN with -- the Takeover
+
+# ---------------------------------------------------------------------------------------------------------
+# LINES INTEREST and LINES IMPACT -- two panes of their own (user 2026-09-22: "we gonna seperate them from
+# interestximpact panel, so they wont be included in the dropdown anymore, instead each will have its own pane
+# and toggle"). Both draw ONE LINE PER SIDE, teal buyers / red sellers, on a log2 axis against a 1x midline.
+#
+#   LINES INTEREST  each side's aggressive $ per second over the median of its own previous CYCLE_BASE_N
+#                   cycles -- how HARD that side has been pushing against its own recent normal.
+#   LINES IMPACT    each side's reach against what that side usually reaches for the same effort in the same
+#                   time. ⚠ Impact exists only for the side that LED a cycle, so each line is the mean of its
+#                   OWN last N cycles AS THE LEADER and HOLDS flat across the cycles it did not lead. The user
+#                   was asked and chose that over counting a non-led cycle as 1x, which draws a sawtooth.
+# ---------------------------------------------------------------------------------------------------------
+CINT_PANE_ON = False            # both default OFF: a split that silently adds two panes to the stack would be
+CIMP_PANE_ON = False            # a surprise, and the toggle is the point of the split
+LINES_SMOOTH_N = 20             # DEFAULT trailing-mean window, in CYCLES, and its OWN knob -- deliberately not
+                                # the cycle lookback. The lookback picks the BASELINE each cycle's reading is
+                                # divided by; this picks how many of those are averaged for display. Tying them
+                                # would move the smoothing every time the user changed the baseline, which are
+                                # two different questions. Averaged in LOG space (a geometric mean), so 0.5x and
+                                # 2x pull on it equally -- an arithmetic mean of ratios is biased upward.
+                                # LIVE value: each pane's own slider, persisted as "cint_smooth"/"cimp_smooth".
+                                # The two panes carry SEPARATE windows: once they are separate panes there is no
+                                # reason a slow interest read and a fast impact read should not sit side by side.
+LINES_SMOOTH_MIN = 1            # 1 = no smoothing at all, the raw per-cycle reading. ⚠ _lines_smooth() clamps
+LINES_SMOOTH_MAX = 30           # its min_n to the window for exactly this: a window of 1 can never hold 3
+                                # samples, and without the clamp the series comes back NaN and the pane blank.
+LINES_W = 1.8                   # width of the two lines, px; the forming stretch uses IIMP_FORM_PEN_A's alpha
+# --- LINES IMPACT: the DOMINANCE bands (user 2026-09-22: "mark the areas in red/green where one side impact
+# grew x1 times more than the other", corrected to "not 1x rather 0.3x"). A tinted full-height band over every
+# cycle where one side's smoothed impact stands at least this far above the other's.
+# ⚠ A DIFFERENCE OF MULTIPLES, not a ratio -- the reading PX_IIB_MIN_SPREAD already carries for this family,
+# from this user, on this exact wording. Buyers 1.8x vs sellers 0.7x is a spread of 1.1x and is marked; buyers
+# 1.4x vs sellers 0.9x is 0.5x and is not, though its RATIO is 1.56x.
+# ⚠ Compared on the TRUE multiples, never the clipped values the lines are DRAWN with -- the Takeover
 # badge's rule, for the same reason: a clip is a drawing limit, not a reading.
-IIMP_DOM_SPREAD = 0.3           # 0 switches the bands off entirely
-# THE SECOND SHADE (user, correcting the first cut: "for area that gained 0.3x use a brighter green/red").
-# A gap of 0.3x can open two ways and they are not the same event: the leading side CLIMBED, or the other side
-# fell away under it. The bright shade is the first. Measured SINCE THE BAND STARTED -- the reference the user
-# picked when asked -- read from the cycle JUST BEFORE it opened, so the move that creates the band counts.
+LIMP_DOM_SPREAD = 0.3           # 0 switches the bands off entirely
+# THE SECOND SHADE (user: "for area that gained 0.3x use a brighter green/red"). A gap that wide can open two
+# ways and they are not the same event: the leading side CLIMBED, or the other side fell away under it. The
+# bright shade is the first. Measured SINCE THE BAND STARTED -- the reference the user picked when asked --
+# read from the cycle JUST BEFORE it opened, so the move that creates the band counts.
 # ⚠ Reading from the band's own first cycle instead looked right and was wrong: a leader jumping 1.0x ->
 # 1.4x, the clearest climb there is, measured a gain of zero and drew dim. Their own example is the dim case:
 # both lines at 1x, green falls to 0.65x, red never moved, so the area is red and stays dim.
-IIMP_DOM_GAIN = 0.3             # how far the LEADING side must have climbed inside the band to brighten it
-IIMP_DOM_ALPHA = 38             # the tint, out of 255. Low on purpose: it sits UNDER the two lines and the
-IIMP_DOM_ALPHA_HI = 95          # guides, and the pane's job is still the lines. HI is the gained-into band.
+LIMP_DOM_GAIN = 0.3             # how far the LEADING side must have climbed inside the band to brighten it
+LIMP_DOM_ALPHA = 38             # the tint, out of 255. Low on purpose: it sits UNDER the two lines and the
+LIMP_DOM_ALPHA_HI = 95          # guides, and the pane's job is still the lines. HI is the gained-into band.
 # --- BREAKOUT BADGE on the PRICE pane (user 2026-09-21: "add a badge on the breakout candles where the candle side is
 # above x1 interestximpact and its opposite is below x1 -- for example we have a breakout buy candle and the
 # interestximpact line buy is above x1 and interestximpact line sell is below x1"). A BREAKOUT BUY candle gets a GREEN

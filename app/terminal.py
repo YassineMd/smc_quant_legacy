@@ -1949,10 +1949,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._fratio_vline = None; self._fratio_hline = None
         self._fratio_tag = None; self._fratio_time_tag = None; self._fratio_proxy = None
         self._fratio_title = None
+        # LINES INTEREST / LINES IMPACT -- the two halves of the I x I reading on panes of their own
+        # (user 2026-09-22). Per-pane state lives in self._lp[kind]; the widgets the STACK machinery looks up
+        # by NAME (_stack_panes, _cross_panes, _theme_sub_panes, _apply_pane_names) are flat attributes too.
+        self._lp = {}
+        self._lines_t = 0.0; self._lines_data = None
+        self._cint_on = bool(config.CINT_PANE_ON); self._cimp_on = bool(config.CIMP_PANE_ON)
+        for _k in ("cint", "cimp"):
+            for _s in ("plot", "vb", "vline", "hline", "tag", "time_tag", "title"):
+                setattr(self, "_%s_%s" % (_k, _s), None)
+        # ⚠ _stack_panes() resolves the y-readout hider with getattr(self, "_<key>_hide_cursor") -- it has to
+        # BE an attribute of that exact name, so the two are bound here rather than written out twice
+        self._cint_hide_cursor = lambda: self._lines_hide_cursor("cint")
+        self._cimp_hide_cursor = lambda: self._lines_hide_cursor("cimp")
         self._iimp_plot = None         # INTEREST x IMPACT pane (Flow mode): one bar per cycle, who leads + did it convert
         self._iimp_vb = None
         self._iimp_mode = str(config.IIMP_MODE)   # the top-right dropdown: None | Buyer | Seller | Delta
-        self._iimp_smn = int(config.IIMP_SMOOTH_N)   # the smoothing slider beside it (the two LINE modes only)
+        self._iimp_smn = int(config.IIMP_SMOOTH_N)   # its smoothing slider (Lines Buyer/Seller only)
         self._iimp_slider = None
         self._iimp_smlab = None
         self._iimp_combo = None
@@ -1960,7 +1973,6 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._iimp_dots = None         # (wall, open road) ScatterPlotItems
         self._iimp_form = None         # the FORMING cycle's own bar: ONE item, brush and pen set per draw
         self._iimp_keep = None         # "handed it back" caps: ONE segment item over bottom-tercile bars
-        self._iimp_dom = None          # Lines Impact: the red / green dominance bands
         self._iimp_lines = None        # Lines Buyer/Seller mode: (buyers, sellers) curves through the finished cycles
         self._iimp_lines_form = None   # ... and their lighter stretch out to the cycle still forming
         self._iimp_lines_has = False   # do those items hold data (so a bar mode empties them once, not per draw)
@@ -2506,6 +2518,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self.menu.set_spd_pane_on(bool(getattr(self, "_spd_on", config.SPEED_PANE_ON)))
             self.menu.set_fratio_pane_on(bool(getattr(self, "_fratio_on", config.FRATIO_PANE_ON)))
             self.menu.set_iimp_pane_on(bool(getattr(self, "_iimp_on", config.IIMP_PANE_ON)))
+            self.menu.set_cint_pane_on(self._lines_on("cint"))
+            self.menu.set_cimp_pane_on(self._lines_on("cimp"))
             self.menu.set_flow_lines_on(bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)))
             self.menu.set_hlh_span(str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)))
             self.menu.set_interp_pane_on(bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)))
@@ -2782,6 +2796,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self.menu.spdPaneToggled.connect(self._on_spd_pane_toggled)              # Speed pane on/off
         self.menu.fratioPaneToggled.connect(self._on_fratio_pane_toggled)        # Flow ratios pane on/off
         self.menu.iimpPaneToggled.connect(self._on_iimp_pane_toggled)            # Interest x Impact pane on/off
+        self.menu.cintPaneToggled.connect(lambda on: self._on_lines_pane_toggled("cint", on))
+        self.menu.cimpPaneToggled.connect(lambda on: self._on_lines_pane_toggled("cimp", on))
         self.menu.flowLinesToggled.connect(self._on_flow_pane_toggled)           # the Buy/Sell Flow pane on/off
         self.menu.hlhSpanChanged.connect(self._on_hlh_span_changed)              # HLH merged-bloc span cap
         self.menu.interpPaneToggled.connect(self._on_interp_pane_toggled)        # Interpretation feed on/off
@@ -10954,6 +10970,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "iimp_on": bool(getattr(self, "_iimp_on", config.IIMP_PANE_ON)),
                 "iimp_mode": str(getattr(self, "_iimp_mode", config.IIMP_MODE)),   # its top-right dropdown
                 "iimp_smooth": int(self._iimp_smooth_n()),                         # ... and the slider beside it
+                "cint_on": self._lines_on("cint"), "cimp_on": self._lines_on("cimp"),
+                "cint_smooth": int(self._lines_smooth_n("cint")),                  # each split pane's own window
+                "cimp_smooth": int(self._lines_smooth_n("cimp")),
                 "flow_pane_on": bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)),
                 "hlh_merge_span": str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)),
                 "interp_on": bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)),
@@ -11104,8 +11123,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             except (RuntimeError, ValueError):
                 self._iimp_combo = None
         # the smoothing SLIDER: clamped on the way in, so an old or hand-edited file cannot blank the pane
-        self._iimp_smn = max(int(config.IIMP_SMOOTH_MIN),
-                             min(int(config.IIMP_SMOOTH_MAX),
+        self._iimp_smn = max(int(config.LINES_SMOOTH_MIN),
+                             min(int(config.LINES_SMOOTH_MAX),
                                  int(s.get("iimp_smooth", config.IIMP_SMOOTH_N) or config.IIMP_SMOOTH_N)))
         _isl = self.__dict__.get("_iimp_slider")
         if _isl is not None:
@@ -11118,6 +11137,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     self._iimp_smlab.adjustSize()
             except RuntimeError:
                 self._iimp_slider = None; self._iimp_smlab = None
+        # the two split panes and their sliders, clamped on the way in so a hand-edited file cannot blank one
+        for _k, _d in (("cint", config.CINT_PANE_ON), ("cimp", config.CIMP_PANE_ON)):
+            setattr(self, "_%s_on" % _k, bool(s.get("%s_on" % _k, _d)))
+            _st = self._lp_(_k)
+            _st["smn"] = max(int(config.LINES_SMOOTH_MIN),
+                             min(int(config.LINES_SMOOTH_MAX),
+                                 int(s.get("%s_smooth" % _k, config.LINES_SMOOTH_N) or config.LINES_SMOOTH_N)))
+            _sl = _st.get("slider")
+            if _sl is not None:
+                try:
+                    _sl.blockSignals(True); _sl.setValue(self._lines_smooth_n(_k)); _sl.blockSignals(False)
+                    if _st.get("smlab") is not None:
+                        _st["smlab"].setText("%d" % self._lines_smooth_n(_k)); _st["smlab"].adjustSize()
+                except RuntimeError:
+                    _st["slider"] = None; _st["smlab"] = None
         self._flow_pane_on = bool(s.get("flow_pane_on", s.get("flow_lines_on", config.FLOW_PANE_ON)))
         _sp = str(s.get("hlh_merge_span", config.HLH_MERGE_SPAN) or config.HLH_MERGE_SPAN)
         self._hlh_merge_span = _sp if _sp in tuple(str(v) for v in config.HLH_MERGE_SPAN_CHOICES) else str(config.HLH_MERGE_SPAN)
@@ -17379,6 +17413,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._fratio_sig = None; self._fratio_t = 0.0
             self._iimp_show(bool(getattr(self, "_iimp_on", True)))
             self._iimp_sig = None; self._iimp_t = 0.0
+            for _k in self._LINES_KINDS:
+                self._lines_show(_k, self._lines_on(_k))
+                self._lp_(_k)["sig"] = None
+            self._lines_t = 0.0
             self._interp_show(bool(getattr(self, "_interp_on", True)))
             self._flow_pane_apply()           # the rebuilt stack: collapse the flow pane again if it is off
         # The loaded set moved, so EVERYTHING derived from it must re-derive — same invalidation the replay step does.
@@ -18124,13 +18162,16 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._iimp_combo = None; self._iimp_slider = None; self._iimp_smlab = None
             self._iimp_form = None; self._iimp_keep = None
             self._iimp_lines = None; self._iimp_lines_form = None; self._iimp_lines_has = False
-            self._iimp_dom = None
             self._iimp_guides = None; self._iimp_sig = None; self._iimp_sized = False; self._iimp_proxy = None
             self._iimp_vline = None; self._iimp_hline = None
             self._iimp_tag = None; self._iimp_time_tag = None
             self._iimp_title = None; self._iimp_read = None
             self._iimp_hl = None; self._iimp_hl_span = None; self._iimp_last = None
             self._iimp_hide_popup()
+            self._lp = {}; self._lines_data = None; self._lines_t = 0.0
+            for _k in ("cint", "cimp"):
+                for _s in ("plot", "vb", "vline", "hline", "tag", "time_tag", "title"):
+                    setattr(self, "_%s_%s" % (_k, _s), None)
             self._cvol_title = None; self._cvol_badge = None
             self._cyc_title = None; self._cyc_badge = None
             self._liq_title = None
@@ -20343,6 +20384,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         for _a in ("_px", "_cvol", "_lob", "_spd", "_interp"):
             setattr(self, _a + "_sig", None)
             setattr(self, _a + "_t", 0.0)
+        for _k in self._LINES_KINDS:            # both split panes are rated against the lookback as well
+            self._lp_(_k)["sig"] = None
+        self._lines_t = 0.0
         self._apply_pane_names()
         self._save_ui_state()
 
@@ -20356,7 +20400,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                         ("lob", getattr(self, "_lob_title", None)),
                         ("spd", getattr(self, "_spd_title", None)),
                         ("fratio", getattr(self, "_fratio_title", None)),
-                        ("iimp", getattr(self, "_iimp_title", None))):
+                        ("iimp", getattr(self, "_iimp_title", None)),
+                        ("cint", getattr(self, "_cint_title", None)),
+                        ("cimp", getattr(self, "_cimp_title", None))):
             if _it is not None:
                 try:
                     _it.setText(names[_k])
@@ -20677,7 +20723,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             hl, tg = d.get(hlk), d.get(tgk)
             out.append((k, pw, vb, vl,
                         (lambda hl=hl, tg=tg: (hl is not None and hl.hide(), tg is not None and tg.hide())), d.get(ttk)))
-        for k in ("px", "liq", "cyc", "cvol", "lob", "spd", "fratio", "iimp"):
+        for k in ("px", "liq", "cyc", "cvol", "lob", "spd", "fratio", "iimp", "cint", "cimp"):
             pw = d.get("_%s_plot" % k); vb = d.get("_%s_vb" % k)
             if pw is None or vb is None:
                 continue
@@ -20767,8 +20813,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
 
         So READING is driven by demand and DRAWING by visibility. If nothing wants it, nothing is fetched --
         that is what keeps a toggled-off pane free rather than merely cheap."""
+        # ⚠ LINES IMPACT is in this list because its score reads _iimp_wall: without a book window every
+        # cycle's `pred` is NaN and the pane silently draws NOTHING. That is the _liq_wanted lesson exactly.
         for _w in (getattr(self, "_liq_plot", None), getattr(self, "_lob_plot", None),
-                   getattr(self, "interp_panel", None), getattr(self, "_iimp_plot", None)):
+                   getattr(self, "interp_panel", None), getattr(self, "_iimp_plot", None),
+                   getattr(self, "_cimp_plot", None)):
             if _w is not None:
                 try:
                     if _w.isVisible():
@@ -21670,21 +21719,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 width=float(config.IIMP_LINES_W)))
             _cf.setZValue(6); pw.addItem(_cf); _lf.append(_cf)
         self._iimp_lines = tuple(_ln); self._iimp_lines_form = tuple(_lf); self._iimp_lines_has = False
-        # the DOMINANCE bands (Lines Impact only): one BarGraphItem per side, a full-height bar over each
-        # qualifying cycle. Adjacent cycles share an edge -- one cycle's x1 IS the next one's x0 -- so a run
-        # of them reads as one block with no seam, and needs no run-splitting bookkeeping at all.
-        _dom = []
-        for _c in (config.IIMP_BUY_COL, config.IIMP_SELL_COL):
-            _q = QtGui.QColor(_c)
-            for _a in (int(config.IIMP_DOM_ALPHA), int(config.IIMP_DOM_ALPHA_HI)):
-                _bi = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
-                                      brush=pg.mkBrush(_q.red(), _q.green(), _q.blue(), _a),
-                                      pen=pg.mkPen(None))
-                _bi.setZValue(1)          # UNDER the zero line (2), the guides (3) and the lines (6)
-                pw.addItem(_bi); _dom.append(_bi)
-        # (buy dim, buy bright, sell dim, sell bright) -- four items rather than one with a per-bar brush
-        # list, which the profiler has already punished this pane for once
-        self._iimp_dom = tuple(_dom)
         self._iimp_sig = None                      # new items are empty: the next draw fills them
         guides = []
         for _v in (float(np.log2(max(1e-9, config.IIMP_LOW))), float(np.log2(max(1e-9, config.IIMP_HIGH)))):
@@ -21744,18 +21778,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                       "Buyer option and the Seller option together, as two lines instead of bars -- the same "
                       "numbers, one point per cycle at its middle, teal for the buyers and red for the sellers, "
                       "both against the same 1x midline and independent of each other: each side is measured "
-                      "against its OWN baseline. The lighter last stretch is the cycle still forming. Lines "
-                      "Interest: the INTEREST half alone, with no impact in it at all -- each side's aggressive "
-                      "$ per second against the median of its own previous N cycles -- put through a trailing "
-                      "mean of the last %d cycles, so it answers how hot each side is against its own recent "
-                      "normal without the per-cycle noise. Averaged in log space, so a quiet stretch sits below "
-                      "1x rather than being dragged above it. Lines Impact: the other half, the same way -- "
-                      "how far each side's push reached against what that side usually reaches for the same "
-                      "effort in the same time. Impact only exists for the side that LED a cycle, so each line "
-                      "is the mean of its OWN last %d cycles as the leader and holds flat across the cycles it "
-                      "did not lead. The SLIDER to the left sets that window for both, %d-%d cycles."
-                      % (int(config.IIMP_SMOOTH_N), int(config.IIMP_SMOOTH_N),
-                         int(config.IIMP_SMOOTH_MIN), int(config.IIMP_SMOOTH_MAX)))
+                      "against its OWN baseline. The lighter last stretch is the cycle still forming, and the "
+                      "SLIDER to its left smooths the pair -- a trailing mean over %d-%d cycles, taken in log "
+                      "space. At %d there is no smoothing at all, which is where it starts. (The interest and "
+                      "impact halves on their own are panes of their own now, in the menu.)"
+                      % (int(config.LINES_SMOOTH_MIN), int(config.LINES_SMOOTH_MAX),
+                         int(config.LINES_SMOOTH_MIN)))
         cb.setCursor(QtCore.Qt.PointingHandCursor)
         cb.currentIndexChanged.connect(self._on_iimp_mode_changed)
         cb.raise_(); cb.show()
@@ -21763,7 +21791,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # THE SMOOTHING SLIDER (user 2026-09-22), LEFT of the dropdown and shown only in the two line modes --
         # it means nothing to a bar mode, and a dead control beside a live one is worse than no control.
         sl = QtWidgets.QSlider(QtCore.Qt.Horizontal, pw)
-        sl.setMinimum(int(config.IIMP_SMOOTH_MIN)); sl.setMaximum(int(config.IIMP_SMOOTH_MAX))
+        sl.setMinimum(int(config.LINES_SMOOTH_MIN)); sl.setMaximum(int(config.LINES_SMOOTH_MAX))
         sl.setValue(self._iimp_smooth_n())
         sl.setFixedWidth(96); sl.setFixedHeight(16)
         sl.setStyleSheet(
@@ -21772,7 +21800,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             " QSlider::sub-page:horizontal{ background:#7a828e; border-radius:2px; }")
         sl.setToolTip("How many cycles the two lines are averaged over (%d-%d). At %d there is no smoothing at "
                       "all -- the raw per-cycle reading. In Lines Impact it counts each side's own LED cycles."
-                      % (int(config.IIMP_SMOOTH_MIN), int(config.IIMP_SMOOTH_MAX), int(config.IIMP_SMOOTH_MIN)))
+                      % (int(config.LINES_SMOOTH_MIN), int(config.LINES_SMOOTH_MAX),
+                         int(config.LINES_SMOOTH_MIN)))
         sl.setCursor(QtCore.Qt.PointingHandCursor)
         sl.valueChanged.connect(self._on_iimp_smooth_changed)
         sl.sliderReleased.connect(self._on_iimp_smooth_released)
@@ -21795,18 +21824,17 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         return pw
 
     def _iimp_smooth_n(self) -> int:
-        """The trailing-mean window the two line modes use right now -- the slider's value, clamped."""
-        return max(int(config.IIMP_SMOOTH_MIN),
-                   min(int(config.IIMP_SMOOTH_MAX), int(getattr(self, "_iimp_smn", config.IIMP_SMOOTH_N))))
+        """The trailing-mean window Lines Buyer/Seller uses right now -- the slider's value, clamped."""
+        return max(int(config.LINES_SMOOTH_MIN),
+                   min(int(config.LINES_SMOOTH_MAX), int(getattr(self, "_iimp_smn", config.IIMP_SMOOTH_N))))
 
     def _iimp_smooth_wanted(self) -> bool:
-        """Is a mode up that the slider means anything to?"""
-        return str(self.__dict__.get("_iimp_mode", "None")) in (str(config.IIMP_INT_MODE),
-                                                                str(config.IIMP_IMP_MODE))
+        """Is a mode up that the slider means anything to? Only the one that draws lines."""
+        return str(self.__dict__.get("_iimp_mode", "None")) == str(config.IIMP_LINES_MODE)
 
     def _on_iimp_smooth_changed(self, v: int) -> None:
         """The slider moved: re-lay from the read already in hand, no store read, and persist it."""
-        v = max(int(config.IIMP_SMOOTH_MIN), min(int(config.IIMP_SMOOTH_MAX), int(v)))
+        v = max(int(config.LINES_SMOOTH_MIN), min(int(config.LINES_SMOOTH_MAX), int(v)))
         if v == int(getattr(self, "_iimp_smn", config.IIMP_SMOOTH_N)):
             return
         self._iimp_smn = v
@@ -21835,11 +21863,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if not self._loading_ui:
             self._save_ui_state()
 
-    def _iimp_dom_bands(self, sm_b, sm_s, keep):
+    def _lines_dom_bands(self, sm_b, sm_s, keep):
         """Per drawn cycle: (side, gap, gain) -- which side owns the band, how wide it is, how far the leader
         has climbed INSIDE it.
 
-        side  +1 the buyers stand at least IIMP_DOM_SPREAD above the sellers, -1 the reverse, 0 no band.
+        side  +1 the buyers stand at least LIMP_DOM_SPREAD above the sellers, -1 the reverse, 0 no band.
         gap   the buyers' multiple MINUS the sellers'. A DIFFERENCE, not a ratio, in the chart's own units --
               PX_IIB_MIN_SPREAD's reading of "at least Nx", from this user on this wording -- so the log2
               values are raised first. On the TRUE values, never the clipped ones the lines are DRAWN with:
@@ -21852,7 +21880,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         A cycle either side could not rate has side 0: an unknown gap is not a small one."""
         n = int(np.size(np.asarray(sm_b)[keep])) if sm_b is not None else 0
         z = np.zeros(n, dtype=np.int8), np.full(n, np.nan), np.full(n, np.nan)
-        if not n or float(config.IIMP_DOM_SPREAD) <= 0.0:
+        if not n or float(config.LIMP_DOM_SPREAD) <= 0.0:
             return z
         b = np.asarray(sm_b, dtype=np.float64)[keep]
         s = np.asarray(sm_s, dtype=np.float64)[keep]
@@ -21861,7 +21889,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             bm = np.where(ok, np.exp2(b), np.nan)
             sm = np.where(ok, np.exp2(s), np.nan)
         gap = bm - sm
-        thr = float(config.IIMP_DOM_SPREAD)
+        thr = float(config.LIMP_DOM_SPREAD)
         fin = ok & np.isfinite(gap)
         side = np.where(fin & (gap >= thr), 1, np.where(fin & (gap <= -thr), -1, 0)).astype(np.int8)
         # RUNS of one colour: a run starts wherever the side changes, so a band broken by an unbanded cycle
@@ -21888,37 +21916,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         gain = np.where((side != 0) & np.isfinite(lead) & np.isfinite(ref), lead - ref, np.nan)
         return side, gap, gain
 
-    def _iimp_dom_draw(self, on, x0, x1, side, gain, clip):
-        """Lay the four bands, or empty them in every other mode. Full height: the bar spans well past the
-        view, which is explicitly y-ranged, so it can never drag the fit."""
-        if self.__dict__.get("_iimp_dom") is None:
-            return
-        try:
-            if not on or side is None or not int(np.size(side)):
-                for _it in self._iimp_dom:
-                    _it.setOpts(x0=[], x1=[], y0=[], height=[])
-                return
-            _hi = np.isfinite(gain) & (gain >= float(config.IIMP_DOM_GAIN))
-            _masks = ((side > 0) & ~_hi, (side > 0) & _hi, (side < 0) & ~_hi, (side < 0) & _hi)
-            _y0, _h = -3.0 * float(clip), 6.0 * float(clip)
-            for _it, _m in zip(self._iimp_dom, _masks):
-                if not _m.any():
-                    _it.setOpts(x0=[], x1=[], y0=[], height=[])
-                    continue
-                _it.setOpts(x0=x0[_m], x1=x1[_m],
-                            y0=np.full(int(_m.sum()), _y0), height=np.full(int(_m.sum()), _h))
-        except RuntimeError:
-            self._iimp_dom = None
-
     def _iimp_tick_text(self, v, fmt="%.2g") -> str:
         """The axis / tag text for a bar height `v` (log2). MIRRORED in None and Delta -- both halves read a
         multiple >= 1x and the half IS the side (user 2026-09-16) -- and SIGNED in Buyer, Seller and the lines
         mode that draws both, where the halves mean above / below that side's own baseline, so 0.5x has to
         read 0.5x."""
         mode = str(self.__dict__.get("_iimp_mode", "None"))
-        x = (2.0 ** float(v) if mode in ("Buyer", "Seller", str(config.IIMP_LINES_MODE),
-                                         str(config.IIMP_INT_MODE), str(config.IIMP_IMP_MODE))
-             else 2.0 ** abs(float(v)))
+        x = 2.0 ** float(v) if mode in ("Buyer", "Seller", str(config.IIMP_LINES_MODE)) else 2.0 ** abs(float(v))
         return (fmt % x) + "x"
 
     def _iimp_position_combo(self, *args) -> None:
@@ -22254,7 +22258,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         return score
 
     @staticmethod
-    def _iimp_smooth(vals, rated, n_win, min_n):
+    def _lines_smooth(vals, rated, n_win, min_n):
         """Trailing MEAN over the last `n_win` RATED values, this one included. NaN below `min_n` of them.
 
         Causal by construction -- a point never sees a cycle to its right -- and taken over the WHOLE read rather
@@ -22284,7 +22288,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         return out
 
     @staticmethod
-    def _iimp_hold(vals):
+    def _lines_hold(vals):
         """Carry each value FORWARD over the rows that have none; NaN before the first one.
 
         What "skip the cycles this side did not lead" has to look like once it is drawn: the side's mean did
@@ -22516,32 +22520,16 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 _qui = np.where(_qm & (_mvq > 0), 1, np.where(_qm & (_mvq < 0), -1, 0)).astype(np.int8)
         _mode = str(self.__dict__.get("_iimp_mode", "None"))
         _lines = _mode == str(config.IIMP_LINES_MODE)
-        # LINES INTEREST (user 2026-09-22: "two lines that show the interest alone, smooth it over the last 20
-        # bars"). The INTEREST half on its own: each side's aggressive $ per second over the median of its own
-        # previous N cycles, which is `ar_b` / `ar_s` BEFORE the impact term that `_lb` / `_ls` add -- through a
-        # trailing mean of the SLIDER's cycles. Built over the WHOLE read so a pan cannot move a point, and
-        # only when the mode asks for it: two cumsums are cheap, but not free on every frame of every other mode.
-        _int = _mode == str(config.IIMP_INT_MODE)
-        # LINES IMPACT (user 2026-09-22). The other half, on the same treatment. ⚠ IMPACT ONLY EXISTS FOR THE
-        # SIDE THAT LED -- the other side moved nothing that cycle -- so each side's mean runs over the last N
-        # cycles THAT SIDE LED and is HELD across the ones it did not, rather than counting those as 1x. Asked
-        # and answered: counting them as 1x is the sawtooth the user rejected hours earlier, and it blends "how
-        # often did I lead" into a number that is supposed to say "when I led, did it convert".
-        _imp = _mode == str(config.IIMP_IMP_MODE)
-        _any_lines = _lines or _int or _imp
+        # THE SLIDER now drives THIS pane's own lines (user 2026-09-22: "also on the interestximpact add the
+        # slider on Lines Buyer/seller dropdown option"). Same trailing geometric mean the two split panes use,
+        # over the WHOLE read so a pan cannot move a point. At 1 it is the identity, which is the chart this
+        # mode has drawn since e312e2c -- and 1 is where the setting starts, so nothing moved on its own.
+        _sm_n = self._iimp_smooth_n()
         _sm_b = _sm_s = None
-        if _int:
-            with np.errstate(divide="ignore", invalid="ignore"):
-                _ib = np.where(_rated_all, np.log2(np.maximum(ar_b, 1e-12)), np.nan)
-                _is = np.where(_rated_all, np.log2(np.maximum(ar_s, 1e-12)), np.nan)
-            _sm_n = self._iimp_smooth_n()
-            _sm_b = self._iimp_smooth(_ib, _rated_all, _sm_n, n_mn)
-            _sm_s = self._iimp_smooth(_is, _rated_all, _sm_n, n_mn)
-        elif _imp:
-            _sm_n = self._iimp_smooth_n()
-            _sm_b = self._iimp_hold(self._iimp_smooth(_scl_all, _rated_all & lead_buy, _sm_n, n_mn))
-            _sm_s = self._iimp_hold(self._iimp_smooth(_scl_all, _rated_all & ~lead_buy, _sm_n, n_mn))
-        if not _any_lines and self.__dict__.get("_iimp_lines_has") and self._iimp_lines is not None:
+        if _lines and _sm_n > 1:
+            _sm_b = self._lines_smooth(np.where(_rated_all, _lb_all, np.nan), _rated_all, _sm_n, n_mn)
+            _sm_s = self._lines_smooth(np.where(_rated_all, _ls_all, np.nan), _rated_all, _sm_n, n_mn)
+        if not _lines and self.__dict__.get("_iimp_lines_has") and self._iimp_lines is not None:
             for _it in tuple(self._iimp_lines) + tuple(self._iimp_lines_form or ()):
                 _it.setData([], [])                           # a bar mode again: the lines go, once
             self._iimp_lines_has = False
@@ -22555,14 +22543,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             # no bar is drawn; `vd` is the LEADING side's own reading (the point on its line), so the click mark and
             # the dict below stay one side's story, as they are in every other mode
             vd = np.where(up, np.clip(_lb, -_clip, _clip), np.clip(_ls, -_clip, _clip))
-        elif _sm_b is not None:
-            vd = np.where(up, np.clip(_sm_b[keep], -_clip, _clip), np.clip(_sm_s[keep], -_clip, _clip))
+
         else:
             vd = v
         # the forming cycle is EXCLUDED from the class items and drawn on its own: in both it would be painted
         # twice, at two different weights, and the lighter pass would be invisible under the solid one
         _fin = ~form
-        if _any_lines:
+        if _lines:
             # LINES BUYER/SELLER (user 2026-09-21): the Buyer option and the Seller option together, to the digit
             # -- clip(_lb) and clip(_ls) are exactly what those two modes draw as bar heights -- as two lines with
             # one point per cycle at its MIDDLE, where the bar it replaces is centred. Each side stands against its
@@ -22574,12 +22561,15 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             _kidx = np.flatnonzero(keep)                        # rows of the READ: a jump in them is an unrated cycle
             _mid = 0.5 * (x0 + x1)
             if _sm_b is not None:
-                # INTEREST or IMPACT alone, smoothed. The break pattern stays the pane's own `keep`, so the
-                # point a click explains is always the point drawn -- the property every mode in here holds.
                 _yb = np.clip(_sm_b[keep], -_clip, _clip); _ys = np.clip(_sm_s[keep], -_clip, _clip)
             else:
                 _yb = np.clip(_lb, -_clip, _clip); _ys = np.clip(_ls, -_clip, _clip)
-            _f = np.flatnonzero(_fin)
+            # ⚠ A SMOOTHED POINT CAN BE NaN where the window has not filled yet, and `keep` does not know
+            # that -- it gates on the imbalance and the score, which are finite there. Drawing the NaN puts a
+            # hole of undefined shape in a curve item; dropping the row lets the _kidx jump break the line
+            # cleanly instead, which is this pane's rule for a cycle it cannot rate.
+            _fl = _fin & np.isfinite(_yb) & np.isfinite(_ys)
+            _f = np.flatnonzero(_fl)
             if _f.size:
                 _cn = np.zeros(int(_f.size), dtype=np.int32)
                 _cn[:-1] = (np.diff(_kidx[_f]) == 1)
@@ -22588,7 +22578,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             else:
                 for _it in self._iimp_lines:
                     _it.setData([], [])
-            if form.any():
+            if form.any() and np.isfinite(_yb[np.flatnonzero(form)[-1]])                     and np.isfinite(_ys[np.flatnonzero(form)[-1]]):
                 # the cycle STILL FORMING: a lighter stretch from the last finished point out to its own, which moves
                 # until the cycle closes. With no rated neighbour to start from it is a short flat dash over its span.
                 _k = int(np.flatnonzero(form)[-1])
@@ -22605,12 +22595,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 for _it in self._iimp_lines_form:
                     _it.setData([], [])
             self._iimp_lines_has = True
-        # the DOMINANCE bands: Lines Impact only, and emptied by the same call in every other mode
-        _dside, _dgap, _dgain = (self._iimp_dom_bands(_sm_b, _sm_s, keep) if _imp
-                                 else (None, None, None))
-        self._iimp_dom_draw(_imp, x0, x1, _dside, _dgain, _clip)
-        if _any_lines:
-            pass                       # every line mode has already laid its curves above
+        if _lines:
+            pass                       # the lines mode has already laid its curves above
         elif _mode == "None":
             groups = (up & good & ~contra & _fin, up & ~good & ~contra & _fin,
                       ~up & good & ~contra & _fin, ~up & ~good & ~contra & _fin,
@@ -22655,7 +22641,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 it0.setOpts(x0=[], x1=[], y0=[], height=[], brushes=None, pens=None)
             for it in self._iimp_items[1:]:
                 it.setOpts(x0=[], x1=[], y0=[], height=[])
-        if form.any() and not _any_lines:
+        if form.any() and not _lines:
             # same side, same fill rule, one item -- its brush and pen are set here because both still move
             _k = int(np.flatnonzero(form)[-1])
             if _mode == "Buyer":
@@ -22690,7 +22676,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 if bool(config.IIMP_KEEP_MARK_ON) else np.zeros(int(kept.size), dtype=bool))
         # ... the cap sits across a bar's TIP and the wall dot just past it: with two lines and no bar there is no
         # tip to put them on, so the lines mode draws neither. Both readings stay in the click panel and the readout.
-        if _cap.any() and not _any_lines:
+        if _cap.any() and not _lines:
             _n2 = int(_cap.sum())
             _cx = np.empty(2 * _n2); _cy = np.empty(2 * _n2)
             _cx[0::2] = x0[_cap]; _cx[1::2] = x1[_cap]
@@ -22703,7 +22689,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _pad = 0.06 * max(float(np.percentile(np.abs(v), 99.0)), 1.0)
         for sc, m in zip(self._iimp_dots, (np.isfinite(wk) & (wk >= float(config.IIMP_WALL_HIGH)),
                                            np.isfinite(wk) & (wk <= float(config.IIMP_WALL_LOW)))):
-            if _any_lines or not m.any():
+            if _lines or not m.any():
                 sc.setData([], [])
                 continue
             sc.setData(0.5 * (x0[m] + x1[m]), np.where(v[m] >= 0, v[m] + _pad, v[m] - _pad))
@@ -22717,9 +22703,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                            "sbuy": _sc["buy"], "ssell": _sc["sell"],
                            "nbuy": _scn["buy"], "nsell": _scn["sell"],
                            "liib": _lb, "liis": _ls, "mode": _mode,
-                           "ismb": None if _sm_b is None else _sm_b[keep],   # the SMOOTHED interest, log2
-                           "isms": None if _sm_s is None else _sm_s[keep],
-                           "dside": _dside, "dgap": _dgap, "dgain": _dgain,   # the band, exactly as drawn
                            "pliib": _plb[keep], "pliis": _pls[keep],      # the previous bar's, NaN across a break
                            "vac": _vac[keep], "vac_on": _vac_on,          # +1 / -1 a VACUUM buy / sell (see above)
                            "quiet": _qui[keep]}                           # +1 / -1 a QUIET cycle that went up / down
@@ -22737,14 +22720,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 _dl = float(_lb[_k] - _ls[_k])
                 _mode_txt = "  ·  delta %s %.2gx" % ("B" if _dl >= 0 else "S", 2.0 ** abs(_dl))
             elif _lines:
-                _mode_txt = "  ·  buyers I×I %.2gx  ·  sellers I×I %.2gx" % (2.0 ** float(_lb[_k]), 2.0 ** float(_ls[_k]))
-            elif _sm_b is not None:
-                _smb, _sms = _sm_b[keep][_k], _sm_s[keep][_k]
-                _mode_txt = "  ·  %s  ·  buyers %s  ·  sellers %s" % (
-                    ("interest, %d-cycle mean" % _sm_n) if _int
-                    else ("impact, mean of each side's last %d LED cycles" % _sm_n),
-                    "-" if not np.isfinite(_smb) else "%.2gx" % (2.0 ** float(_smb)),
-                    "-" if not np.isfinite(_sms) else "%.2gx" % (2.0 ** float(_sms)))
+                _by, _sy = (_sm_b[keep], _sm_s[keep]) if _sm_b is not None else (_lb, _ls)
+                _mode_txt = "  ·  buyers I×I %.2gx  ·  sellers I×I %.2gx%s" % (
+                    2.0 ** float(_by[_k]), 2.0 ** float(_sy[_k]),
+                    ("  ·  %d-cycle mean" % _sm_n) if _sm_n > 1 else "")
+
             self._iimp_read.setText("B %s / S %s  ·  %s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s%s%s%s" % (
                 "-" if not np.isfinite(_sbv) else "%d" % int(round(_sbv)),
                 "-" if not np.isfinite(_ssv) else "%d" % int(round(_ssv)),
@@ -22757,7 +22737,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._iimp_read.setColor(config.IIMP_CONTRA_COL if contra[_k]
                                      else (config.IIMP_BUY_COL if up[_k] else config.IIMP_SELL_COL))
         # the lines mode fits BOTH series it draws; every other mode the one it draws
-        if _sm_b is not None:
+        if _lines and _sm_b is not None:
             _fit = np.abs(np.concatenate([np.clip(_sm_b[keep], -_clip, _clip), np.clip(_sm_s[keep], -_clip, _clip)]))
         elif _lines:
             _fit = np.abs(np.concatenate([np.clip(_lb, -_clip, _clip), np.clip(_ls, -_clip, _clip)]))
@@ -22780,6 +22760,441 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._iimp_mark(self.__dict__.get("_iimp_sel_t"))   # a redraw must not drop the clicked bar's outline
         self._iimp_repanel()               # ... and an open panel on the FORMING bar must not go stale
 
+    # ------------------------------------------------------------------
+    # LINES INTEREST and LINES IMPACT -- the two halves of the I x I reading, each on a pane of its own
+    # (user 2026-09-22: "we gonna seperate them from interestximpact panel, so they wont be included in the
+    # dropdown anymore, instead each will have its own pane and toggle").
+    #
+    # ONE implementation, two instances. Everything that differs between them is in _LINES_KINDS, and the
+    # per-pane widgets live in self._lp[kind] rather than in two parallel sets of attributes -- the teardown,
+    # the save and the scanner switch then iterate instead of repeating themselves, which is where a
+    # copy-pasted second pane goes wrong.
+    # ------------------------------------------------------------------
+    _LINES_KINDS = ("cint", "cimp")
+
+    def _lp_(self, kind):
+        """This pane's state bag, created on demand."""
+        return self.__dict__.setdefault("_lp", {}).setdefault(kind, {})
+
+    def _lines_smooth_n(self, kind) -> int:
+        """The trailing-mean window this pane uses right now -- its own slider's value, clamped.
+
+        The two panes carry SEPARATE windows on purpose: once they are separate panes there is no reason a
+        slow interest read and a fast impact read should not sit one above the other."""
+        return max(int(config.LINES_SMOOTH_MIN),
+                   min(int(config.LINES_SMOOTH_MAX),
+                       int(self._lp_(kind).get("smn", config.LINES_SMOOTH_N))))
+
+    def _lines_on(self, kind) -> bool:
+        return bool(self.__dict__.get("_%s_on" % kind,
+                                      config.CINT_PANE_ON if kind == "cint" else config.CIMP_PANE_ON))
+
+    def _on_lines_pane_toggled(self, kind, on: bool) -> None:
+        setattr(self, "_%s_on" % kind, bool(on))
+        if not on:
+            self._flow_pane_lift()          # BEFORE a pane hides: it may be the collapsed chart's last neighbour
+        self._lines_show(kind, bool(on) and self.scanner_mode == "flow")
+        self._flow_pane_apply()
+        self._save_ui_state()
+
+    def _lines_ensure_pane(self, kind):
+        st = self._lp_(kind)
+        if st.get("plot") is not None:
+            return st["plot"]
+        try:
+            self._ensure_canvas_panes()
+        except Exception:
+            pass
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return None
+        _imp = (kind == "cimp")
+        ax = PriceAxis(orientation="right")
+        pw = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"), "right": ax})
+        pw.setBackground("#141414")
+        pw.showAxis("right"); pw.hideAxis("left")
+        for _a in ("bottom", "right"):
+            pw.getAxis(_a).setPen(pg.mkPen("#dcdcdc", width=1))
+            pw.getAxis(_a).setTextPen(pg.mkPen("#dcdcdc"))
+        pw.showGrid(x=False, y=False)
+        pw.setMenuEnabled(False)
+        pw.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        pw.getAxis("bottom").set_scanner_active(False)
+        # SIGNED, like the Buyer / Seller options: both halves mean above / below that side's own baseline,
+        # so 0.5x has to read 0.5x rather than being mirrored into a multiple >= 1x
+        ax.tickStrings = lambda vals, sc, sp_: ["%.2gx" % (2.0 ** v) for v in vals]
+        vb = pw.getViewBox()
+        vb.setMouseEnabled(x=True, y=True)
+        vb.setXLink(self.vb)
+        if _imp:
+            # the DOMINANCE bands, UNDER everything: one BarGraphItem per (side, shade), a full-height bar over
+            # each qualifying cycle. Adjacent cycles share an edge -- one cycle's x1 IS the next one's x0 -- so
+            # a run reads as one block with no seam and needs no run-splitting bookkeeping at all. Four items
+            # rather than one with a per-bar brush list, which the profiler has punished this family for once.
+            _dom = []
+            for _c in (config.IIMP_BUY_COL, config.IIMP_SELL_COL):
+                _q = QtGui.QColor(_c)
+                for _a in (int(config.LIMP_DOM_ALPHA), int(config.LIMP_DOM_ALPHA_HI)):
+                    _bi = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
+                                          brush=pg.mkBrush(_q.red(), _q.green(), _q.blue(), _a),
+                                          pen=pg.mkPen(None))
+                    _bi.setZValue(1)
+                    pw.addItem(_bi); _dom.append(_bi)
+            st["dom"] = tuple(_dom)         # (buy dim, buy bright, sell dim, sell bright)
+        else:
+            st["dom"] = None
+        # ONE curve per side through the finished cycles, plus a lighter two-point curve out to the cycle still
+        # forming -- this family's convention for anything that still moves. A cycle the pane cannot rate is a
+        # BREAK in the line (an int `connect` array), never a straight stroke over it.
+        _ln, _lf = [], []
+        for _c in (config.IIMP_BUY_COL, config.IIMP_SELL_COL):
+            _q = QtGui.QColor(_c)
+            _cv = pg.PlotCurveItem(x=[], y=[], pen=pg.mkPen(_q, width=float(config.LINES_W)))
+            _cv.setZValue(6); pw.addItem(_cv); _ln.append(_cv)
+            _cf = pg.PlotCurveItem(x=[], y=[], pen=pg.mkPen(
+                QtGui.QColor(_q.red(), _q.green(), _q.blue(), int(config.IIMP_FORM_PEN_A)),
+                width=float(config.LINES_W)))
+            _cf.setZValue(6); pw.addItem(_cf); _lf.append(_cf)
+        st["lines"] = tuple(_ln); st["form"] = tuple(_lf)
+        _g = pg.mkPen("#9aa4b2", width=1.0, style=QtCore.Qt.DashLine); _g.setCosmetic(True)
+        for _v in (float(np.log2(max(1e-9, config.IIMP_LOW))), float(np.log2(max(1e-9, config.IIMP_HIGH)))):
+            _gl = pg.InfiniteLine(angle=0, pos=_v, pen=_g)
+            _gl.setZValue(3); pw.addItem(_gl, ignoreBounds=True)
+        _z = pg.InfiniteLine(angle=0, pos=0.0, pen=pg.mkPen("#8a8a8a", width=1))   # 1.0x
+        _z.setZValue(2); pw.addItem(_z, ignoreBounds=True)
+        _xc = pg.mkPen(color=(170, 170, 170, 150), width=1); _xc.setCosmetic(True); _xc.setDashPattern([4.0, 8.0])
+        _vl = pg.InfiniteLine(angle=90, movable=False, pen=_xc)
+        _hl = pg.InfiniteLine(angle=0, movable=False, pen=_xc)
+        _vl.setZValue(15); _hl.setZValue(15)
+        pw.addItem(_vl, ignoreBounds=True); pw.addItem(_hl, ignoreBounds=True)
+        _hl.hide()
+        setattr(self, "_%s_vline" % kind, _vl); setattr(self, "_%s_hline" % kind, _hl)
+        _tf = QtGui.QFont("Consolas", 8)
+        _tg = pg.TextItem(anchor=(1, 0.5), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        _tg.textItem.setFont(_tf); _tg.setZValue(16)
+        pw.addItem(_tg, ignoreBounds=True); _tg.hide()
+        _tt = pg.TextItem(anchor=(0.5, 1.0), color="#141414", fill=pg.mkBrush("#dcdcdc"))
+        _tt.textItem.setFont(_tf); _tt.setZValue(61)
+        pw.addItem(_tt, ignoreBounds=True); _tt.hide()
+        setattr(self, "_%s_tag" % kind, _tg); setattr(self, "_%s_time_tag" % kind, _tt)
+        st["proxy"] = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60,
+                                     slot=(lambda e, k=kind: self._on_lines_mouse_move(k, e)))
+        st["read"] = pg.TextItem(anchor=(1.0, 1.0), color=config.PANE_TITLE_COL)
+        st["read"].textItem.setFont(QtGui.QFont("Consolas", int(config.PANE_TITLE_PT)))
+        st["read"].setZValue(41)
+        pw.addItem(st["read"], ignoreBounds=True)
+        # THE SMOOTHING SLIDER, top right, this pane's own (user 2026-09-22: "dont forget to keep the smoothing
+        # slider"). Always shown here -- unlike the I x I pane there is no mode it means nothing to.
+        sl = QtWidgets.QSlider(QtCore.Qt.Horizontal, pw)
+        sl.setMinimum(int(config.LINES_SMOOTH_MIN)); sl.setMaximum(int(config.LINES_SMOOTH_MAX))
+        sl.setValue(self._lines_smooth_n(kind))
+        sl.setFixedWidth(96); sl.setFixedHeight(16)
+        sl.setStyleSheet(
+            "QSlider::groove:horizontal{ height:3px; background:#3a4150; border-radius:2px; }"
+            " QSlider::handle:horizontal{ width:9px; margin:-4px 0; background:#dcdcdc; border-radius:2px; }"
+            " QSlider::sub-page:horizontal{ background:#7a828e; border-radius:2px; }")
+        sl.setToolTip("How many cycles the two lines are averaged over (%d-%d). At %d there is no smoothing at "
+                      "all -- the raw per-cycle reading.%s"
+                      % (int(config.LINES_SMOOTH_MIN), int(config.LINES_SMOOTH_MAX),
+                         int(config.LINES_SMOOTH_MIN),
+                         " Here it counts each side's own LED cycles." if _imp else ""))
+        sl.setCursor(QtCore.Qt.PointingHandCursor)
+        sl.valueChanged.connect(lambda v, k=kind: self._on_lines_smooth_changed(k, v))
+        sl.sliderReleased.connect(lambda k=kind: self._on_lines_smooth_released(k))
+        lb = QtWidgets.QLabel("%d" % self._lines_smooth_n(kind), pw)
+        lb.setStyleSheet("QLabel{ color:#dcdcdc; background:transparent; font:bold 10px 'Consolas'; }")
+        lb.adjustSize()
+        st["slider"] = sl; st["smlab"] = lb
+        sl.raise_(); lb.raise_(); sl.show(); lb.show()
+        vb.sigResized.connect(lambda *a, k=kind: self._lines_position_widgets(k))
+        setattr(self, "_%s_title" % kind, self._pane_title(pw, vb, config.pane_titles(self._lb_n())[kind]))
+        st["plot"] = pw; st["vb"] = vb; st["sig"] = None; st["ytop"] = 0.0
+        setattr(self, "_%s_plot" % kind, pw); setattr(self, "_%s_vb" % kind, vb)
+        self._theme_sub_panes(not self._simple_bw())
+        sp.addWidget(pw)
+        self._pane_zoom_arm(pw)                                  # double-click -> fullscreen
+        pw.setMinimumHeight(60)
+        self._lines_position_widgets(kind)
+        return pw
+
+    def _lines_position_widgets(self, kind) -> None:
+        """Park this pane's slider and its number in the top-right corner, the I x I pane's spacing."""
+        st = self._lp_(kind)
+        pw, vb, sl, lb = st.get("plot"), st.get("vb"), st.get("slider"), st.get("smlab")
+        if pw is None or vb is None or sl is None or lb is None:
+            return
+        try:
+            right = int(pw.mapFromScene(vb.sceneBoundingRect().topRight()).x())
+            if right <= sl.width():
+                right = int(pw.width() - pw.getAxis("right").width())
+            lb.adjustSize()
+            _lx = max(0, right - lb.width() - 8)
+            lb.move(_lx, 6)
+            sl.move(max(0, _lx - sl.width() - 6), 6)
+            sl.raise_(); lb.raise_()
+        except RuntimeError:
+            st["slider"] = None; st["smlab"] = None
+
+    def _on_lines_smooth_changed(self, kind, v: int) -> None:
+        st = self._lp_(kind)
+        v = max(int(config.LINES_SMOOTH_MIN), min(int(config.LINES_SMOOTH_MAX), int(v)))
+        if v == int(st.get("smn", config.LINES_SMOOTH_N)):
+            return
+        st["smn"] = v
+        if st.get("smlab") is not None:
+            try:
+                st["smlab"].setText("%d" % v); st["smlab"].adjustSize()
+            except RuntimeError:
+                st["smlab"] = None
+        st["sig"] = None
+        st["ytop"] = 0.0                     # a longer mean is a flatter series: let the y range refit
+        self._lines_position_widgets(kind)
+        self._lines_draw(kind, time.time())
+        # the redraw wants every step of the drag; the settings FILE does not
+        if not self._loading_ui:
+            try:
+                _down = st.get("slider") is not None and st["slider"].isSliderDown()
+            except RuntimeError:
+                _down = False
+            if not _down:
+                self._save_ui_state()
+
+    def _on_lines_smooth_released(self, kind) -> None:
+        if not self._loading_ui:
+            self._save_ui_state()
+
+    def _lines_show(self, kind, on: bool) -> None:
+        st = self._lp_(kind)
+        if on:
+            if self._lines_ensure_pane(kind) is None:
+                return
+            st["plot"].setVisible(True)
+            if self._sub_pane_grow(st["plot"], not st.get("sized", False), share=0.13):
+                st["sized"] = True
+        elif st.get("plot") is not None:
+            try:
+                st["plot"].setVisible(False)
+            except RuntimeError:
+                self._lp_(kind).clear()
+        self._stack_axis_sync()
+
+    def _lines_wanted(self, kind) -> bool:
+        st = self._lp_(kind)
+        pw = st.get("plot")
+        if pw is None:
+            return False
+        try:
+            return bool(pw.isVisible())
+        except RuntimeError:
+            return False
+
+    def _lines_tick(self, now: float) -> None:
+        """ONE read for both panes. The arguments are the family's, so this lands on the memo entry the cycle
+        panes have already filled rather than forcing a second crosses() pass."""
+        kinds = [k for k in self._LINES_KINDS if self._lines_wanted(k)]
+        if not kinds:
+            return
+        if now - float(self.__dict__.get("_lines_t", 0.0)) < float(config.CYCLE_RECALC_SECS):
+            return
+        self._lines_t = now
+        (vx0, vx1), _ = self.vb.viewRange()
+        _args = (vx0 - self._lb_secs(), vx1, float(self._flow_win),
+                 float(config.FLOW_CROSS_MIN_SPREAD_PCT), float(config.FLOW_CROSS_MIN_HOLD_SECS),
+                 int(config.FLOW_CROSS_MAX), float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
+        try:
+            self._lines_data = (vx0, vx1, self._flow.crosses(*_args), self._flow.crosses_px(*_args),
+                                self._flow.crosses_hl(*_args))
+        except Exception:
+            return
+        for k in kinds:
+            self._lines_draw(k, now)
+
+    def _lines_series(self, kind, now: float):
+        """(x0, x1, form, sm_b, sm_s, keep_idx) for this pane, or None.
+
+        The arithmetic is the I x I pane's, to the digit, because it IS the I x I pane's -- these two panes
+        are its two halves pulled apart, not a second opinion. INTEREST is `ar_b` / `ar_s`, each side's
+        aggressive $/s over the median of its own previous N cycles. IMPACT is the same residual score the
+        solid / hollow fill is built on, kept per LEADING side and held flat across the cycles that side did
+        not lead.
+        """
+        d = self.__dict__.get("_lines_data")
+        if d is None:
+            return None
+        vx0, vx1, (t, is_buy, strong, move, cbuy, csell, t_end, done), (px0, px1), (pxh, pxl) = d
+        if int(np.size(t)) == 0:
+            return None
+        n_lb = self._lb_n(); n_mn = self._lb_min_n()
+        live = bool(vx1 >= now - float(config.INTERP_STALE_SECS))
+        form_all = np.zeros(int(t.size), dtype=bool)
+        t_end_c = np.array(t_end, dtype=np.float64, copy=True)
+        if live and not bool(done[-1]):
+            form_all[-1] = True
+            t_end_c[-1] = max(float(t[-1]), min(float(now), float(t_end_c[-1])))
+        dur = np.maximum(t_end_c - t, 1e-9)
+        ar_b = _interp_prev(np.maximum(cbuy, 0.0) / dur, done, n_lb, n_mn, include_open=True)
+        ar_s = _interp_prev(np.maximum(csell, 0.0) / dur, done, n_lb, n_mn, include_open=True)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            imb = np.where((ar_b > 0) & (ar_s > 0) & np.isfinite(ar_b) & np.isfinite(ar_s),
+                           np.log2(np.maximum(ar_b, 1e-12) / np.maximum(ar_s, 1e-12)), np.nan)
+        lead_buy = np.isfinite(imb) & (imb >= 0.0)
+        sm_n = self._lines_smooth_n(kind)
+        if kind == "cint":
+            rated = (done | form_all) & np.isfinite(imb)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                _ib = np.where(rated, np.log2(np.maximum(ar_b, 1e-12)), np.nan)
+                _is = np.where(rated, np.log2(np.maximum(ar_s, 1e-12)), np.nan)
+            sm_b = self._lines_smooth(_ib, rated, sm_n, n_mn)
+            sm_s = self._lines_smooth(_is, rated, sm_n, n_mn)
+        else:
+            wall_raw = self._iimp_wall(t, lead_buy)
+            own_b, secs_b = self._iimp_climb(t, t_end_c, lead_buy)
+            reach = np.where(lead_buy, pxh - px0, px0 - pxl) / float(config.TICK_SIZE)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                y_r = np.log1p(np.maximum(reach, 0.0))
+                cb_, cd_, cw_ = config.IIMP_COEF_BUY
+                sb_, sd_, sw_ = config.IIMP_COEF_SELL
+                pred = np.where(lead_buy,
+                                cb_ * np.log(np.maximum(own_b, 1.0)) + cd_ * np.log(np.maximum(secs_b, 1.0))
+                                + cw_ * np.log1p(np.maximum(wall_raw, 0.0)),
+                                sb_ * np.log(np.maximum(own_b, 1.0)) + sd_ * np.log(np.maximum(secs_b, 1.0))
+                                + sw_ * np.log1p(np.maximum(wall_raw, 0.0)))
+                resid = y_r - pred
+            score = self._iimp_score(resid, lead_buy, done, n_lb, n_mn)
+            rated = (done | form_all) & np.isfinite(imb) & np.isfinite(score)
+            _scl = np.where(np.isfinite(score), score, 0.0) / float(np.log(2.0))
+            sm_b = self._lines_hold(self._lines_smooth(_scl, rated & lead_buy, sm_n, n_mn))
+            sm_s = self._lines_hold(self._lines_smooth(_scl, rated & ~lead_buy, sm_n, n_mn))
+        keep = rated & np.isfinite(sm_b) & np.isfinite(sm_s) & (t >= vx0)
+        if not keep.any():
+            return None
+        return (t[keep], t_end_c[keep], form_all[keep], sm_b[keep], sm_s[keep],
+                np.flatnonzero(keep), sm_n, int(np.size(t)))
+
+    def _lines_draw(self, kind, now: float) -> None:
+        st = self._lp_(kind)
+        if st.get("plot") is None or st.get("lines") is None:
+            return
+        out = self._lines_series(kind, now)
+        if out is None:
+            for _it in tuple(st["lines"]) + tuple(st.get("form") or ()):
+                _it.setData([], [])
+            for _it in tuple(st.get("dom") or ()):
+                _it.setOpts(x0=[], x1=[], y0=[], height=[])
+            st["sig"] = ("empty",)
+            return
+        x0, x1, form, sm_b, sm_s, kidx, sm_n, n_all = out
+        _age = int(now - float(x0[-1])) if bool(form[-1]) else 0
+        sig = (int(n_all), int(x0.size), round(float(x0[-1]), 2), int(self._flow_win), self._lb_n(), _age,
+               sm_n, round(float(np.nan_to_num(sm_b[-1])), 5), round(float(np.nan_to_num(sm_s[-1])), 5))
+        if sig == st.get("sig"):
+            return
+        st["sig"] = sig
+        _clip = float(np.log2(max(float(config.IIMP_CLIP), 1.0)))
+        yb = np.clip(sm_b, -_clip, _clip); ys = np.clip(sm_s, -_clip, _clip)
+        mid = 0.5 * (x0 + x1)
+        fin = ~form
+        _f = np.flatnonzero(fin)
+        if _f.size:
+            _cn = np.zeros(int(_f.size), dtype=np.int32)
+            _cn[:-1] = (np.diff(kidx[_f]) == 1)
+            for _it, _y in zip(st["lines"], (yb, ys)):
+                _it.setData(mid[_f], _y[_f], connect=_cn)
+        else:
+            for _it in st["lines"]:
+                _it.setData([], [])
+        if form.any():
+            _k = int(np.flatnonzero(form)[-1])
+            _j = int(_f[-1]) if _f.size else -1
+            if _j >= 0 and int(kidx[_k]) - int(kidx[_j]) == 1:
+                _fx = [float(mid[_j]), float(mid[_k])]
+                _fy = ([float(yb[_j]), float(yb[_k])], [float(ys[_j]), float(ys[_k])])
+            else:
+                _fx = [float(x0[_k]), float(x1[_k])]
+                _fy = ([float(yb[_k])] * 2, [float(ys[_k])] * 2)
+            for _it, _y in zip(st["form"], _fy):
+                _it.setData(_fx, _y)
+        else:
+            for _it in st["form"]:
+                _it.setData([], [])
+        # the DOMINANCE bands (LINES IMPACT only)
+        dside = dgain = dgap = None
+        if st.get("dom") is not None:
+            _all = np.ones(int(x0.size), dtype=bool)
+            dside, dgap, dgain = self._lines_dom_bands(sm_b, sm_s, _all)
+            _hi = np.isfinite(dgain) & (dgain >= float(config.LIMP_DOM_GAIN))
+            _masks = ((dside > 0) & ~_hi, (dside > 0) & _hi, (dside < 0) & ~_hi, (dside < 0) & _hi)
+            _y0, _h = -3.0 * _clip, 6.0 * _clip
+            for _it, _m in zip(st["dom"], _masks):
+                if not _m.any():
+                    _it.setOpts(x0=[], x1=[], y0=[], height=[])
+                    continue
+                _it.setOpts(x0=x0[_m], x1=x1[_m],
+                            y0=np.full(int(_m.sum()), _y0), height=np.full(int(_m.sum()), _h))
+        st["last"] = {"x0": x0, "x1": x1, "b": sm_b, "s": sm_s, "form": form,
+                      "dside": dside, "dgap": dgap, "dgain": dgain}
+        # the bottom-right readout, this family's line
+        if st.get("read") is not None:
+            _k = int(x0.size) - 1
+            _txt = "buyers %.2gx  ·  sellers %.2gx  ·  %d-cycle mean%s" % (
+                2.0 ** float(sm_b[_k]), 2.0 ** float(sm_s[_k]), sm_n,
+                "  ·  still forming" if bool(form[_k]) else "")
+            if dside is not None and int(dside[_k]) != 0:
+                _bright = np.isfinite(dgain[_k]) and float(dgain[_k]) >= float(config.LIMP_DOM_GAIN)
+                _txt += "  ·  %s%s lead %.2gx" % ("" if not _bright else "strong ",
+                                                       "buyers" if dside[_k] > 0 else "sellers",
+                                                       abs(float(dgap[_k])))
+            st["read"].setText(_txt)
+            st["read"].setColor(config.IIMP_BUY_COL if sm_b[_k] >= sm_s[_k] else config.IIMP_SELL_COL)
+        _fit = np.abs(np.concatenate([yb, ys]))
+        _fit = _fit[np.isfinite(_fit)]
+        if _fit.size == 0:
+            _fit = np.zeros(1)
+        lim = float(np.percentile(_fit, 95.0)) * 1.15
+        lim = min(max(lim, abs(float(np.log2(max(1e-9, config.IIMP_HIGH)))) * 1.4, 1.0), _clip * 1.15)
+        cur = float(st.get("ytop", 0.0))
+        if lim > cur * 0.98 or lim < cur * 0.55:
+            st["ytop"] = lim
+            st["vb"].setYRange(-lim, lim, padding=0.0)
+        if st.get("read") is not None:
+            (_rx0, _rx1), (_ry0, _ry1) = st["vb"].viewRange()
+            st["read"].setPos(_rx1, _ry0)
+
+    def _lines_hide_cursor(self, kind) -> None:
+        """Badges off, lines linger -- the family's rule. Bound as _cint_hide_cursor / _cimp_hide_cursor in
+        __init__ because _stack_panes() looks that name up with getattr()."""
+        for _n in ("tag", "hline"):
+            _it = getattr(self, "_%s_%s" % (kind, _n), None)
+            if _it is not None:
+                try:
+                    _it.hide()
+                except RuntimeError:
+                    pass
+
+    def _on_lines_mouse_move(self, kind, evt) -> None:
+        """This pane's own y readout, and the SHARED vertical pushed into every other pane."""
+        pw = self.__dict__.get("_%s_plot" % kind); vb = self.__dict__.get("_%s_vb" % kind)
+        if pw is None or vb is None:
+            return
+        try:
+            if not pw.isVisible():
+                return
+            pos = evt[0]
+            if not pw.sceneBoundingRect().contains(pos):
+                self._lines_hide_cursor(kind); self._stack_time_hide()
+                return
+            pt = vb.mapSceneToView(pos)
+            _tg = getattr(self, "_%s_tag" % kind, None)
+            _hl = getattr(self, "_%s_hline" % kind, None)
+            if _hl is not None:
+                _hl.setPos(pt.y()); _hl.show()
+            (vx0, vx1), (vy0, vy1) = vb.viewRange()
+            if _tg is not None:
+                _tg.setText("%.2fx" % (2.0 ** float(pt.y())))
+                _tg.setPos(vx1, pt.y()); _tg.show()
+            self._stack_cursor_sync(kind, pt.x())
+        except (RuntimeError, AttributeError, ValueError):
+            pass
     # ------------------------------------------------------------------
     # PRICE pane -- a badge on the BREAKOUT candles the I x I lines agree with (user 2026-09-21)
     # ------------------------------------------------------------------
@@ -23174,41 +23589,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                         "times its impact on the cycles it led."
                         % (_L % "Sides", _b2, " (they led)" if up else "", _s2, "" if up else " (they led)",
                            "B" if _dl >= 0 else "S", 2.0 ** abs(_dl), n))
-        # LINES INTEREST: the panel must name the number actually DRAWN, not only this cycle's raw pair --
-        # a smoothed point and its own cycle's reading routinely disagree, and that IS the point of smoothing
-        _imb, _ims = d.get("ismb"), d.get("isms")
-        if _imb is not None and _ims is not None and k < len(_imb):
-            _f = lambda q: "-" if not np.isfinite(q) else "<b>%.2gx</b>" % (2.0 ** float(q))
-            if str(d.get("mode")) == str(config.IIMP_IMP_MODE):
-                rows.append("%s: the two lines are the IMPACT alone -- buyers %s, sellers %s. Each side is "
-                            "averaged over its OWN last %d cycles AS THE LEADER and holds that value across the "
-                            "cycles it did not lead, because a side that led nothing moved nothing. This is how "
-                            "well each side has been CONVERTING its pushes, not how hard it has been pushing."
-                            % (_L % "Lines", _f(_imb[k]), _f(_ims[k]), self._iimp_smooth_n()))
-                _ds, _dg, _dn = d.get("dside"), d.get("dgap"), d.get("dgain")
-                if _ds is not None and k < len(_ds) and int(_ds[k]) != 0:
-                    _buy = int(_ds[k]) > 0
-                    _bright = np.isfinite(_dn[k]) and float(_dn[k]) >= float(config.IIMP_DOM_GAIN)
-                    rows.append("%s: <span style='color:%s'>%s%s</span>, because the %s stand <b>%.2gx</b> "
-                                "above the other side -- at or past the <b>%.2gx</b> mark. %s"
-                                % (_L % "Band", config.IIMP_BUY_COL if _buy else config.IIMP_SELL_COL,
-                                   "bright " if _bright else "", "green" if _buy else "red",
-                                   "buyers" if _buy else "sellers", abs(float(_dg[k])),
-                                   float(config.IIMP_DOM_SPREAD),
-                                   ("BRIGHT because they have climbed <b>%.2gx</b> since this band began -- "
-                                    "they won it by pushing up." % float(_dn[k])) if _bright else
-                                   ("Not bright: they have moved %s since this band began, so the gap opened "
-                                    "because the OTHER side fell away, not because these climbed."
-                                    % (("%+.2gx" % float(_dn[k])) if np.isfinite(_dn[k]) else "nothing"))))
-                elif _dg is not None and k < len(_dg) and np.isfinite(_dg[k]):
-                    rows.append("%s: none -- the gap between the two is <b>%.2gx</b>, short of the <b>%.2gx</b> "
-                                "a band needs." % (_L % "Band", abs(float(_dg[k])),
-                                                   float(config.IIMP_DOM_SPREAD)))
-            else:
-                rows.append("%s: the two lines are the INTEREST alone, averaged over the last %d cycles -- buyers "
-                            "%s, sellers %s. No impact in either one: this is how hot each side has been against "
-                            "its own recent normal, not what it did to price."
-                            % (_L % "Lines", self._iimp_smooth_n(), _f(_imb[k]), _f(_ims[k])))
         if contra:
             rows.append("%s: <span style='color:%s'>orange</span>, because price went the OTHER way -- it "
                         "finished %+d ticks while the %s led the interest."
@@ -24475,6 +24855,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             pass
         try:
             self._iimp_tick(now)        # Interest x Impact pane -- same read again
+            self._lines_tick(now)       # LINES INTEREST / LINES IMPACT -- the same read once more
         except Exception:
             pass
         try:
@@ -24799,7 +25180,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                            ("lob", getattr(self, "_lob_plot", None), getattr(self, "_lob_vb", None)),
                            ("spd", getattr(self, "_spd_plot", None), getattr(self, "_spd_vb", None)),
                            ("fratio", getattr(self, "_fratio_plot", None), getattr(self, "_fratio_vb", None)),
-                           ("iimp", getattr(self, "_iimp_plot", None), getattr(self, "_iimp_vb", None))):
+                           ("iimp", getattr(self, "_iimp_plot", None), getattr(self, "_iimp_vb", None)),
+                           ("cint", getattr(self, "_cint_plot", None), getattr(self, "_cint_vb", None)),
+                           ("cimp", getattr(self, "_cimp_plot", None), getattr(self, "_cimp_vb", None))):
             if _p is not None and _v is not None and _p.isVisible():
                 out.append((_k, _p, _v))
         return out
@@ -25752,7 +26135,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                           (getattr(self, "_fratio_plot", None),
                            (getattr(self, "_fratio_vline", None), getattr(self, "_fratio_hline", None))),
                           (getattr(self, "_iimp_plot", None),
-                           (getattr(self, "_iimp_vline", None), getattr(self, "_iimp_hline", None)))):
+                           (getattr(self, "_iimp_vline", None), getattr(self, "_iimp_hline", None))),
+                          (getattr(self, "_cint_plot", None),
+                           (getattr(self, "_cint_vline", None), getattr(self, "_cint_hline", None))),
+                          (getattr(self, "_cimp_plot", None),
+                           (getattr(self, "_cimp_vline", None), getattr(self, "_cimp_hline", None)))):
                           # ⚠ ANY new pane must be added to the tuple above: one missing from it keeps its
                           # creation-time #141414 background while every other pane is repainted white, and
                           # no suite catches it -- it is only visible in a render (2026-09-16)
