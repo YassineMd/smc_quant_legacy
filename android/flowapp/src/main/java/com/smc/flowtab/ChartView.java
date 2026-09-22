@@ -48,7 +48,9 @@ public final class ChartView extends View {
     private int cBg, cFg, cTitle, cGuide, cSep, cMid, cInk;
 
     private void theme() {
-        if (bw) { cBg = Color.WHITE; cFg = Color.BLACK; cTitle = Color.parseColor("#303030"); cGuide = Color.BLACK; cSep = Color.parseColor("#d0d0d0"); cMid = Color.BLACK; cInk = Color.BLACK; }
+        // the I x I guides, zero line, wall dots and kept caps keep the terminal's own colours in BOTH styles
+        // (its _theme_sub_panes morphs only the ground, the axes and the crosshair)
+        if (bw) { cBg = Color.WHITE; cFg = Color.BLACK; cTitle = Color.parseColor("#303030"); cGuide = GUIDE; cSep = Color.parseColor("#d0d0d0"); cMid = Color.parseColor("#8a8a8a"); cInk = Color.BLACK; }
         else { cBg = BG; cFg = FG; cTitle = TITLE; cGuide = GUIDE; cSep = Color.parseColor("#2a2f36"); cMid = Color.parseColor("#8a8a8a"); cInk = FG; }
     }
     public PriceTools tools;                        // the drawing toolbar + Market Position on the PRICE pane
@@ -63,6 +65,84 @@ public final class ChartView extends View {
     private double pxLo = Double.NaN, pxHi = Double.NaN, flowTop = 0, liqTop = 0, iimpTop = 0;
     private final RectF[] pane = {new RectF(), new RectF(), new RectF(), new RectF()};
     private final boolean[] paneOn = new boolean[4];
+    private final float[] paneWt = {0.30f, 0.34f, 0.14f, 0.22f};   // the panes' shares of the height (the splitter)
+    private int rsUpper = -1, rsLower = -1; private float rsY0; private float rsW0, rsW1, rsTot, rsAvail;
+    private final float[] yZoom = {1f, 1f, 1f, 1f};              // a drag on a pane's axis scales its fitted y range
+    private int axPane = -1; private boolean axX = false; private float axY0, axX0, axZoom0; private double axSpan0;
+
+    /** A touch that starts on an axis strip: a vertical drag on a pane's axis zooms its y, a horizontal drag on the
+     * clock strip zooms the x span. The gesture detector still sees it (for the double tap), pan and pinch do not. */
+    private boolean axisTouch(MotionEvent ev) {
+        int a = ev.getActionMasked(); float x = ev.getX(), y = ev.getY();
+        if (a == MotionEvent.ACTION_DOWN) {
+            axPane = -1; axX = false;
+            if (y >= timeY) { axX = true; axX0 = x; axSpan0 = vx1 - vx0; return true; }
+            if (x >= plotR) { int p = paneAt(plotR - 1, y); if (p < 0) return false; axPane = p; axY0 = y; axZoom0 = yZoom[p]; return true; }
+            return false;
+        }
+        if (axPane < 0 && !axX) return false;
+        if (a == MotionEvent.ACTION_MOVE) {
+            if (axPane >= 0) {
+                yZoom[axPane] = Math.max(0.2f, Math.min(8f, axZoom0 * (float) Math.exp((y - axY0) / (150 * d))));   // down = out
+            } else {
+                double span = Math.max(30.0, Math.min(72 * 3600.0, axSpan0 * Math.exp(-(x - axX0) / (200 * d))));  // right = in
+                if (follow) { vx1 = M.nowEngine(); vx0 = vx1 - span; }
+                else { double mid = 0.5 * (vx0 + vx1); vx0 = mid - span / 2; vx1 = mid + span / 2; }
+                long t = System.currentTimeMillis();
+                if (t - lastViewSent > 150) sendView(false);
+            }
+            invalidate(); return true;
+        }
+        if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) { if (axX) sendView(true); axPane = -1; axX = false; invalidate(); return true; }
+        return true;
+    }
+    private android.content.SharedPreferences prefs;
+
+    private void loadWeights() {
+        if (prefs == null) return;
+        try {
+            String[] p = prefs.getString("pane_wt", "").split(",");
+            if (p.length == 4) for (int i = 0; i < 4; i++) paneWt[i] = Math.max(0.06f, Float.parseFloat(p[i]));
+        } catch (Exception ignored) { }
+    }
+
+    private void saveWeights() {
+        if (prefs != null) prefs.edit().putString("pane_wt", paneWt[0] + "," + paneWt[1] + "," + paneWt[2] + "," + paneWt[3]).apply();
+    }
+
+    /** The boundary under (x, y) between two visible panes: {upper, lower}, or null. */
+    private int[] boundaryAt(float x, float y) {
+        if (fullscreen >= 0 || x >= plotR) return null;
+        int prev = -1;
+        for (int p = 0; p < 4; p++) {
+            if (!paneOn[p]) continue;
+            if (prev >= 0 && Math.abs(pane[prev].bottom - y) < 14 * d) return new int[]{prev, p};
+            prev = p;
+        }
+        return null;
+    }
+
+    private boolean resizeTouch(MotionEvent ev) {
+        int a = ev.getActionMasked();
+        if (a == MotionEvent.ACTION_DOWN) {
+            int[] b = boundaryAt(ev.getX(), ev.getY());
+            if (b == null) return false;
+            rsUpper = b[0]; rsLower = b[1]; rsY0 = ev.getY(); rsW0 = paneWt[rsUpper]; rsW1 = paneWt[rsLower];
+            rsTot = 0; for (int p = 0; p < 4; p++) if (paneOn[p]) rsTot += paneWt[p];
+            rsAvail = Math.max(1f, timeY);
+            return true;
+        }
+        if (rsUpper < 0) return false;
+        if (a == MotionEvent.ACTION_MOVE) {
+            float dw = (ev.getY() - rsY0) / rsAvail * rsTot;          // px moved -> weight moved between the two
+            float min = 0.06f * rsTot;
+            dw = Math.max(min - rsW0, Math.min(rsW1 - min, dw));
+            paneWt[rsUpper] = rsW0 + dw; paneWt[rsLower] = rsW1 - dw;
+            invalidate(); return true;
+        }
+        if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) { rsUpper = rsLower = -1; saveWeights(); invalidate(); return true; }
+        return true;
+    }
     private float plotR, timeY;
     private final float AXIS_W, TAXIS_H, TITLE_H;
     // selection on the I x I pane
@@ -76,6 +156,7 @@ public final class ChartView extends View {
     private boolean framePending = false;
     private final Runnable heartbeat = new Runnable() { @Override public void run() { if (follow) invalidate(); h.postDelayed(this, 250); } };
     private static final int TEAL = Color.parseColor("#26a69a"), RED = Color.parseColor("#ef5350"), ORANGE = Color.parseColor("#ff9f43");
+    private static final int WALL_COL = Color.parseColor("#dcdcdc"), KEEP_COL = Color.parseColor("#3a4150");   // IIMP_WALL_COL / IIMP_KEEP_COL
     private static final int BG = Color.parseColor("#141414"), FG = Color.parseColor("#dcdcdc"), TITLE = Color.parseColor("#7d8492");
     private static final int WEAK = Color.parseColor("#8a919c"), GUIDE = Color.parseColor("#9aa4b2");
     private static final int B_UP = Color.rgb(26, 154, 96), B_DN = Color.rgb(208, 48, 48), B_CONTRA = Color.rgb(222, 130, 0), B_FLAT = Color.rgb(122, 130, 140);
@@ -94,7 +175,7 @@ public final class ChartView extends View {
         gest = new GestureDetector(ctx, new GestureDetector.SimpleOnGestureListener() {
             @Override public boolean onDown(MotionEvent e) { return true; }
             @Override public boolean onScroll(MotionEvent e1, MotionEvent e2, float dx, float dy) {
-                if (scale.isInProgress()) return true;
+                if (scale.isInProgress() || axPane >= 0 || axX) return true;
                 double span = vx1 - vx0; double dt = dx / Math.max(1f, plotR) * span;
                 vx0 += dt; vx1 += dt;
                 afterPan(); return true;
@@ -120,6 +201,7 @@ public final class ChartView extends View {
 
     /** The tools live on the PRICE pane: they map through its current axes. */
     public void initTools(android.content.SharedPreferences prefs, PriceTools.Events events) {
+        this.prefs = prefs; loadWeights();
         tools = new PriceTools(d, prefs, new PriceTools.Map() {
             @Override public float xPx(double t) { return ChartView.this.xPx(t); }
             @Override public float yPx(double p) { return (float) (pxTop + (pxYh - p) / Math.max(1e-12, pxYh - pxYl) * pxHgt); }
@@ -144,7 +226,7 @@ public final class ChartView extends View {
         postOnAnimation(() -> { framePending = false; invalidate(); });
     }
 
-    public void recentre() { follow = true; pxLo = pxHi = Double.NaN; sendView(true); invalidate(); }
+    public void recentre() { follow = true; pxLo = pxHi = Double.NaN; java.util.Arrays.fill(yZoom, 1f); sendView(true); invalidate(); }
 
     public void setFullscreen(int p) { fullscreen = p; if (host != null) host.onFullscreen(p >= 0); invalidate(); }
 
@@ -166,6 +248,8 @@ public final class ChartView extends View {
     }
 
     @Override public boolean onTouchEvent(MotionEvent ev) {
+        if (axisTouch(ev)) { gest.onTouchEvent(ev); return true; }   // the axes: zoom drags, and the double tap
+        if (resizeTouch(ev)) return true;                         // a pane boundary under the finger: the splitter
         if (tools != null && paneOn[PANE_PRICE] && tools.onTouch(ev)) { invalidate(); return true; }
         scale.onTouchEvent(ev);
         gest.onTouchEvent(ev);
@@ -224,7 +308,7 @@ public final class ChartView extends View {
         int W = getWidth(), H = getHeight();
         plotR = W - AXIS_W; timeY = H - TAXIS_H;
         boolean[] on = {showPrice, showFlow, showLiq, showIimp};
-        float[] wt = {0.30f, 0.34f, 0.14f, 0.22f};
+        float[] wt = paneWt;
         if (fullscreen >= 0 && on[fullscreen]) { for (int p = 0; p < 4; p++) on[p] = p == fullscreen; }
         float tot = 0; for (int p = 0; p < 4; p++) if (on[p]) tot += wt[p];
         float y = 0; float avail = timeY;
@@ -283,6 +367,7 @@ public final class ChartView extends View {
         if (paneOn[PANE_IIMP]) drawIimp(c, s, now);
         if (showLines) drawCycleLines(c, s);
         drawTimeAxis(c);
+        drawGrips(c);
         if (!s.connected) {
             pt.setTextSize(13 * d); pt.setColor(cTitle); pt.setTypeface(Typeface.MONOSPACE);
             c.drawText("connecting to the engine (adb reverse tcp:8766)...", 12 * d, getHeight() - TAXIS_H - 8 * d, pt);
@@ -361,7 +446,8 @@ public final class ChartView extends View {
             if (Double.isNaN(pxLo) || Math.abs(wl - pxLo) + Math.abs(wh - pxHi) > 0.18 * Math.max(1e-9, pxHi - pxLo)) { pxLo = wl; pxHi = wh; }
         }
         if (Double.isNaN(pxLo)) return;
-        double yl = pxLo, yh = pxHi;
+        double ymid = 0.5 * (pxLo + pxHi), yhalf = 0.5 * (pxHi - pxLo) * yZoom[PANE_PRICE];
+        double yl = ymid - yhalf, yh = ymid + yhalf;
         float top = r.top + TITLE_H, hgt = r.bottom - top;
         pxTop = top; pxHgt = hgt; pxYl = yl; pxYh = yh;
         c.save(); c.clipRect(r.left, r.top, r.right, r.bottom);
@@ -592,7 +678,7 @@ public final class ChartView extends View {
         double p99 = all[Math.min(all.length - 1, (int) (0.99 * (all.length - 1)))];
         double tp = Math.max(p99, Math.max(b[b.length - 1], sl[sl.length - 1]));
         if (tp > 0 && (tp > flowTop * 0.98 || tp < flowTop * 0.55)) flowTop = tp * 1.18;
-        double yt = Math.max(1.0, flowTop);
+        double yt = Math.max(1.0, flowTop) * yZoom[PANE_FLOW];
         double room = yt * badgePx / Math.max(1f, hgt - badgePx);
         double ylo = -room, yhi = yt; double range = yhi - ylo;
         float zeroY = (float) (top + (yhi - 0) / range * hgt);
@@ -656,7 +742,7 @@ public final class ChartView extends View {
         if (s.lqX == null || s.lqX.length == 0) return;
         double mx = 0; for (float v : s.lqB) mx = Math.max(mx, v); for (float v : s.lqA) mx = Math.max(mx, v);
         if (mx > 0 && (mx > liqTop * 0.98 || mx < liqTop * 0.55)) liqTop = mx * 1.15;
-        double yhi = Math.max(1.0, liqTop);
+        double yhi = Math.max(1.0, liqTop) * yZoom[PANE_LIQ];
         c.save(); c.clipRect(r.left, top, r.right, r.bottom);
         for (int side = 0; side < 2; side++) {
             float[] v = side == 0 ? s.lqB : s.lqA;
@@ -707,7 +793,7 @@ public final class ChartView extends View {
                 if (lim > iimpTop * 0.98 || lim < iimpTop * 0.55) iimpTop = lim;
             }
         }
-        lim = Math.max(1.0, iimpTop);
+        lim = Math.max(1.0, iimpTop) * yZoom[PANE_IIMP];
         double yhi = lim, ylo = -lim, range = yhi - ylo;
         float zeroY = (float) (top + (yhi) / range * hgt);
         c.save(); c.clipRect(r.left, top, r.right, r.bottom);
@@ -756,16 +842,15 @@ public final class ChartView extends View {
                     float y0 = (float) (top + (yhi - Math.max(0, v)) / range * hgt), y1 = (float) (top + (yhi - Math.min(0, v)) / range * hgt);
                     if (y1 - y0 < 1) y1 = y0 + 1;
                     if (fillA > 0) { pf.setColor((hx & 0x00ffffff) | (fillA << 24)); c.drawRect(x0, y0, x1, y1, pf); }
-                    int penCol = (bw && fillA == 0) ? Color.BLACK : hx;                 // a hollow bar on white reads in ink
-                    pl.setColor((penCol & 0x00ffffff) | (penA << 24)); pl.setStrokeWidth((good ? 1.0f : 1.4f) * d); c.drawRect(x0, y0, x1, y1, pl);
+                    pl.setColor((hx & 0x00ffffff) | (penA << 24)); pl.setStrokeWidth((good ? 1.0f : 1.4f) * d); c.drawRect(x0, y0, x1, y1, pl);
                     // the wall dot past the tip, the "handed it back" cap across it
                     float xm = 0.5f * (x0 + x1); float tipY = v >= 0 ? y0 : y1;
                     if (!form && s.iWall[i] > -900) {
                         float dy = (float) (pad / range * hgt);
-                        if (s.iWall[i] >= 1.06) { pf.setColor(cInk); c.drawCircle(xm, v >= 0 ? tipY - dy : tipY + dy, 3 * d, pf); }
-                        else if (s.iWall[i] <= 0.94 && s.iWall[i] > 0) { pl.setColor(cInk); pl.setStrokeWidth(1.2f * d); c.drawCircle(xm, v >= 0 ? tipY - dy : tipY + dy, 3 * d, pl); }
+                        if (s.iWall[i] >= 1.06) { pf.setColor(WALL_COL); c.drawCircle(xm, v >= 0 ? tipY - dy : tipY + dy, 3 * d, pf); pl.setColor(WALL_COL); pl.setStrokeWidth(1.2f * d); c.drawCircle(xm, v >= 0 ? tipY - dy : tipY + dy, 3 * d, pl); }
+                        else if (s.iWall[i] <= 0.94 && s.iWall[i] > 0) { pl.setColor(WALL_COL); pl.setStrokeWidth(1.2f * d); c.drawCircle(xm, v >= 0 ? tipY - dy : tipY + dy, 3 * d, pl); }
                     }
-                    if (!form && s.iKept[i] > -900 && s.iKept[i] <= 0.375) { pl.setColor(cInk); pl.setStrokeWidth(2.5f * d); c.drawLine(x0, tipY, x1, tipY, pl); }
+                    if (!form && s.iKept[i] > -900 && s.iKept[i] <= 0.375) { pl.setColor(KEEP_COL); pl.setStrokeWidth(2.5f * d); c.drawLine(x0, tipY, x1, tipY, pl); }
                 }
             }
             // the selected bar
@@ -773,10 +858,10 @@ public final class ChartView extends View {
                 int k = nearest(s.iX0, selT);
                 if (k >= 0 && Math.abs(s.iX0[k] - selT) < 1.0) {
                     float x0 = xPx(s.iX0[k]), x1 = xPx(s.iX1[k]);
-                    pf.setColor(bw ? Color.argb(26, 0, 0, 0) : Color.argb(26, 255, 255, 255)); c.drawRect(x0, top, x1, r.bottom, pf);
+                    pf.setColor(Color.argb(26, 255, 255, 255)); c.drawRect(x0, top, x1, r.bottom, pf);
                     double v = s.iV[k];
                     float y0 = (float) (top + (yhi - Math.max(0, v)) / range * hgt), y1 = (float) (top + (yhi - Math.min(0, v)) / range * hgt);
-                    pl.setColor(cInk); pl.setStrokeWidth(2 * d); c.drawRect(x0, y0, x1, Math.max(y1, y0 + 1), pl);
+                    pl.setColor(Color.WHITE); pl.setStrokeWidth(2 * d); c.drawRect(x0, y0, x1, Math.max(y1, y0 + 1), pl);
                 }
             }
             // the readout, bottom right
@@ -875,6 +960,22 @@ public final class ChartView extends View {
                     c.drawLines(seg, 0, j, pl);
                 }
             }
+        }
+    }
+
+    /** A small grip on each boundary between two panes: where a drag resizes them. */
+    private void drawGrips(Canvas c) {
+        if (fullscreen >= 0) return;
+        int prev = -1;
+        for (int p = 0; p < 4; p++) {
+            if (!paneOn[p]) continue;
+            if (prev >= 0) {
+                float y = pane[prev].bottom, xm = plotR / 2;
+                boolean hot = rsUpper == prev;
+                pf.setColor(hot ? Color.parseColor("#3a6ea5") : cSep);
+                c.drawRoundRect(new RectF(xm - 22 * d, y - 2.5f * d, xm + 22 * d, y + 2.5f * d), 2.5f * d, 2.5f * d, pf);
+            }
+            prev = p;
         }
     }
 
