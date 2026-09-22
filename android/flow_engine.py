@@ -290,6 +290,14 @@ if not _term._ipc_port_open():
     _tw = time.time()
     while not _term._ipc_port_open() and time.time() - _tw < (600.0 if ARGS.no_tunnel else 60.0):
         time.sleep(1.0)
+# ⚠ THIS PROCESS MUST BE ONE DAEMON CLIENT, NOT THREE. A terminal window opens shared HELPER feeds (the
+# "4h zones" and "1m detail" workers, app/terminal.py _shared_helper): each is its own TCP client that
+# calls request_timeframe, so the daemon then SERIALIZES a full TickPacket per timeframe per connection --
+# and a Tick carries the whole forming bucket plus its footprint ladder (measured 1m 2.7 KB, 1h 11.2 KB,
+# 4h 21.9 KB). py-spy on the live daemon: JSON encoding is its single largest CPU consumer (iterencode
+# 8.7% + _to_line 4.1%), and this process was 3 of its 5 clients, subscribed to 1m/1h/4h -- timeframes the
+# tablet never displays. Lite workers connect but never subscribe (app/pipe_client.py:343-344).
+_term._HELPERS_DEFER["on"] = True
 w = MinimalTerminalWindow("5m"); w._rr_persist_save = lambda tf: None
 w.resize(1600, 1000)
 # ⚠⚠ WA_DontShowOnScreen: the widgets stay VISIBLE to the code (isVisible() is True, geometry and
