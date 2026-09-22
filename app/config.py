@@ -488,6 +488,17 @@ IIMP_IMP_MODE = "Lines Impact"      # the IMPACT half alone, both sides, smoothe
 # did not. The user was asked and chose this over counting a non-led cycle as 1x -- that shape (one side pinned
 # to 1x every cycle, a sawtooth) is the one they rejected on 2026-09-22.
 IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretch is drawn at IIMP_FORM_PEN_A)
+# --- Lines Impact: the DOMINANCE bands (user 2026-09-22: "mark the areas in red/green where one side impact
+# grew x1 times more than the other"). A tinted full-height band over every cycle where one side's smoothed
+# impact stands at least this far above the other's.
+# ⚠ A DIFFERENCE OF MULTIPLES, not a ratio -- the same reading PX_IIB_MIN_SPREAD already carries for this
+# pane, from this user, on this exact wording ("it should be at least 1x"). Buyers 1.8x vs sellers 0.7x is a
+# spread of 1.1x and is marked; buyers 1.4x vs sellers 0.9x is 0.5x and is not.
+# ⚠ Compared on the TRUE multiples, never the 8x-clipped values the lines are DRAWN with -- the Takeover
+# badge's rule, for the same reason: a clip is a drawing limit, not a reading.
+IIMP_DOM_SPREAD = 1.0           # 0 switches the bands off entirely
+IIMP_DOM_ALPHA = 38             # the tint, out of 255. Low on purpose: it sits UNDER the two lines and the
+                                # guides, and the pane's job is still the lines.
 # --- BREAKOUT BADGE on the PRICE pane (user 2026-09-21: "add a badge on the breakout candles where the candle side is
 # above x1 interestximpact and its opposite is below x1 -- for example we have a breakout buy candle and the
 # interestximpact line buy is above x1 and interestximpact line sell is below x1"). A BREAKOUT BUY candle gets a GREEN

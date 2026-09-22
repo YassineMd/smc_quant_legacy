@@ -1960,6 +1960,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._iimp_dots = None         # (wall, open road) ScatterPlotItems
         self._iimp_form = None         # the FORMING cycle's own bar: ONE item, brush and pen set per draw
         self._iimp_keep = None         # "handed it back" caps: ONE segment item over bottom-tercile bars
+        self._iimp_dom = None          # Lines Impact: the red / green dominance bands
         self._iimp_lines = None        # Lines Buyer/Seller mode: (buyers, sellers) curves through the finished cycles
         self._iimp_lines_form = None   # ... and their lighter stretch out to the cycle still forming
         self._iimp_lines_has = False   # do those items hold data (so a bar mode empties them once, not per draw)
@@ -18123,6 +18124,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._iimp_combo = None; self._iimp_slider = None; self._iimp_smlab = None
             self._iimp_form = None; self._iimp_keep = None
             self._iimp_lines = None; self._iimp_lines_form = None; self._iimp_lines_has = False
+            self._iimp_dom = None
             self._iimp_guides = None; self._iimp_sig = None; self._iimp_sized = False; self._iimp_proxy = None
             self._iimp_vline = None; self._iimp_hline = None
             self._iimp_tag = None; self._iimp_time_tag = None
@@ -21668,6 +21670,18 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 width=float(config.IIMP_LINES_W)))
             _cf.setZValue(6); pw.addItem(_cf); _lf.append(_cf)
         self._iimp_lines = tuple(_ln); self._iimp_lines_form = tuple(_lf); self._iimp_lines_has = False
+        # the DOMINANCE bands (Lines Impact only): one BarGraphItem per side, a full-height bar over each
+        # qualifying cycle. Adjacent cycles share an edge -- one cycle's x1 IS the next one's x0 -- so a run
+        # of them reads as one block with no seam, and needs no run-splitting bookkeeping at all.
+        _dom = []
+        for _c in (config.IIMP_BUY_COL, config.IIMP_SELL_COL):
+            _q = QtGui.QColor(_c)
+            _bi = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
+                                  brush=pg.mkBrush(_q.red(), _q.green(), _q.blue(), int(config.IIMP_DOM_ALPHA)),
+                                  pen=pg.mkPen(None))
+            _bi.setZValue(1)              # UNDER the zero line (2), the guides (3) and the lines (6)
+            pw.addItem(_bi); _dom.append(_bi)
+        self._iimp_dom = tuple(_dom)
         self._iimp_sig = None                      # new items are empty: the next draw fills them
         guides = []
         for _v in (float(np.log2(max(1e-9, config.IIMP_LOW))), float(np.log2(max(1e-9, config.IIMP_HIGH)))):
@@ -21817,6 +21831,47 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         """The handle came up after a drag: persist the value the redraws have already been using."""
         if not self._loading_ui:
             self._save_ui_state()
+
+    def _iimp_dom_bands(self, sm_b, sm_s, keep):
+        """Which drawn cycles have ONE SIDE at least IIMP_DOM_SPREAD above the other, and which side.
+
+        Returns (buy_mask, sell_mask) over the DRAWN rows. The comparison is a DIFFERENCE OF MULTIPLES, in the
+        chart's own units -- PX_IIB_MIN_SPREAD's reading of "at least 1x", from this user on this wording -- so
+        the log2 values are raised first. On the TRUE values, never the clipped ones the lines are drawn with:
+        a clip is a drawing limit, not a reading (the Takeover badge's rule).
+
+        A cycle either side could not rate is in NEITHER mask: an unknown gap is not a small one."""
+        n = int(np.size(sm_b[keep])) if sm_b is not None else 0
+        if not n or float(config.IIMP_DOM_SPREAD) <= 0.0:
+            return np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
+        b = np.asarray(sm_b, dtype=np.float64)[keep]
+        s = np.asarray(sm_s, dtype=np.float64)[keep]
+        ok = np.isfinite(b) & np.isfinite(s)
+        with np.errstate(over="ignore", invalid="ignore"):
+            gap = np.where(ok, np.exp2(b) - np.exp2(s), np.nan)
+        thr = float(config.IIMP_DOM_SPREAD)
+        return (ok & np.isfinite(gap) & (gap >= thr)), (ok & np.isfinite(gap) & (gap <= -thr))
+
+    def _iimp_dom_draw(self, on, x0, x1, sm_b, sm_s, keep, clip):
+        """Lay the bands, or empty them in every other mode. Full height: the bar spans well past the view,
+        which is explicitly y-ranged, so it can never drag the fit."""
+        if self.__dict__.get("_iimp_dom") is None:
+            return
+        try:
+            if not on:
+                for _it in self._iimp_dom:
+                    _it.setOpts(x0=[], x1=[], y0=[], height=[])
+                return
+            _bm, _sm = self._iimp_dom_bands(sm_b, sm_s, keep)
+            _y0, _h = -3.0 * float(clip), 6.0 * float(clip)
+            for _it, _m in zip(self._iimp_dom, (_bm, _sm)):
+                if not _m.any():
+                    _it.setOpts(x0=[], x1=[], y0=[], height=[])
+                    continue
+                _it.setOpts(x0=x0[_m], x1=x1[_m],
+                            y0=np.full(int(_m.sum()), _y0), height=np.full(int(_m.sum()), _h))
+        except RuntimeError:
+            self._iimp_dom = None
 
     def _iimp_tick_text(self, v, fmt="%.2g") -> str:
         """The axis / tag text for a bar height `v` (log2). MIRRORED in None and Delta -- both halves read a
@@ -22513,6 +22568,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 for _it in self._iimp_lines_form:
                     _it.setData([], [])
             self._iimp_lines_has = True
+        # the DOMINANCE bands: Lines Impact only, and emptied by the same call in every other mode
+        self._iimp_dom_draw(_imp, x0, x1, _sm_b, _sm_s, keep, _clip)
+        if _any_lines:
+            pass                       # every line mode has already laid its curves above
         elif _mode == "None":
             groups = (up & good & ~contra & _fin, up & ~good & ~contra & _fin,
                       ~up & good & ~contra & _fin, ~up & ~good & ~contra & _fin,
@@ -23086,6 +23145,17 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                             "cycles it did not lead, because a side that led nothing moved nothing. This is how "
                             "well each side has been CONVERTING its pushes, not how hard it has been pushing."
                             % (_L % "Lines", _f(_imb[k]), _f(_ims[k]), self._iimp_smooth_n()))
+                _gap = float(2.0 ** float(_imb[k]) - 2.0 ** float(_ims[k])) \
+                    if (np.isfinite(_imb[k]) and np.isfinite(_ims[k])) else float("nan")
+                if np.isfinite(_gap) and abs(_gap) >= float(config.IIMP_DOM_SPREAD) > 0:
+                    rows.append("%s: <span style='color:%s'>%s</span>, because the %s stand <b>%.2gx</b> above "
+                                "the other side here -- at or past the <b>%.2gx</b> mark."
+                                % (_L % "Band", config.IIMP_BUY_COL if _gap > 0 else config.IIMP_SELL_COL,
+                                   "green" if _gap > 0 else "red", "buyers" if _gap > 0 else "sellers",
+                                   abs(_gap), float(config.IIMP_DOM_SPREAD)))
+                elif np.isfinite(_gap):
+                    rows.append("%s: none -- the gap between the two is <b>%.2gx</b>, short of the <b>%.2gx</b> "
+                                "a band needs." % (_L % "Band", abs(_gap), float(config.IIMP_DOM_SPREAD)))
             else:
                 rows.append("%s: the two lines are the INTEREST alone, averaged over the last %d cycles -- buyers "
                             "%s, sellers %s. No impact in either one: this is how hot each side has been against "
