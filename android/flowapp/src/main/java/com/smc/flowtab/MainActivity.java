@@ -17,6 +17,7 @@ import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 /**
  * SMC Flow -- the Buy/Sell Flow $ scanner mode on the tablet. The panes (ChartView) on the left, the INTERPRETATION
@@ -45,6 +46,14 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         chart.showLiq = prefs.getBoolean("liq", true);
         chart.showIimp = prefs.getBoolean("iimp", true);
         chart.showTakeover = prefs.getBoolean("takeover", true);
+        chart.showHlh = prefs.getBoolean("hlh", false);
+        chart.showBp = prefs.getBoolean("bigplayer", false);
+        chart.initTools(prefs, new PriceTools.Events() {
+            @Override public void toast(String msg) { Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show(); }
+            @Override public void changed() { chart.dataChanged(); }
+        });
+        chart.tools.showMarket = prefs.getBoolean("market", true);
+        chart.tools.showBar = prefs.getBoolean("drawbar", true);
         interp.setVisibility(prefs.getBoolean("interp", true) ? View.VISIBLE : View.GONE);
 
         LinearLayout row = new LinearLayout(this);
@@ -70,9 +79,15 @@ public final class MainActivity extends Activity implements EngineClient.Listene
 
         feed = new EngineClient(model, this);
         feed.start();
-        // the engine learns the tablet's toggles that concern it
+        sendToggles();
+    }
+
+    /** The engine learns the tablet's toggles that concern it (its offscreen terminal runs those layers). */
+    private void sendToggles() {
         feed.sendToggle("lines", chart.showLines);
         feed.sendToggle("takeover", chart.showTakeover);
+        feed.sendToggle("hlh", chart.showHlh);
+        feed.sendToggle("bigplayer", chart.showBp);
     }
 
     @Override protected void onDestroy() {
@@ -97,10 +112,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
     @Override public void onState(boolean connected) {
         runOnUiThread(() -> {
             chart.dataChanged(); interp.refresh();
-            if (connected) {
-                feed.sendToggle("lines", chart.showLines);
-                feed.sendToggle("takeover", chart.showTakeover);
-            }
+            if (connected) sendToggles();
         });
     }
 
@@ -157,6 +169,12 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         toggle(col, "Limit orders", "liq", chart.showLiq, v -> chart.showLiq = v);
         toggle(col, "Interest × Impact", "iimp", chart.showIimp, v -> chart.showIimp = v);
         toggle(col, "Interpretation", "interp", interp.getVisibility() == View.VISIBLE, v -> interp.setVisibility(v && chart.getFullscreen() < 0 ? View.VISIBLE : View.GONE));
+        section(col, "Sub-widgets");
+        toggle(col, "Market Position  (BUY / SELL)", "market", chart.tools.showMarket, v -> chart.tools.showMarket = v);
+        toggle(col, "Drawing toolbar", "drawbar", chart.tools.showBar, v -> { chart.tools.showBar = v; if (!v) chart.tools.tool = null; });
+        section(col, "Indicator");
+        toggle(col, "Big Player", "bigplayer", chart.showBp, v -> { chart.showBp = v; feed.sendToggle("bigplayer", v); });
+        toggle(col, "HLH Volume Profile", "hlh", chart.showHlh, v -> { chart.showHlh = v; feed.sendToggle("hlh", v); });
         section(col, "Indicator  ›  Cycle Chart");
         toggle(col, "Takeover ▲▼  (one side owns the cycle)", "takeover", chart.showTakeover, v -> { chart.showTakeover = v; feed.sendToggle("takeover", v); });
         ScrollView sv = new ScrollView(this);

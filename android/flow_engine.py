@@ -26,13 +26,16 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   -> liq     {x (f64), b, a, live_t, live_b, live_a, radius}               the LIMIT ORDERS curves as drawn
   -> tko     {buy (f64 keys), sell, form: [x, y, buy] | null}              the Takeover marks as drawn
   -> explain {k, html}                                                      the I x I click panel for cycle k
+  -> hlh     {on, note, pics: [{k, x0, x1, ops?}], labels, dashes}         the HLH Volume Profile geometry (a pic's
+             ops are sent once per pic identity; the tablet keeps them by k) -- see RecPainter
+  -> bp      {on, sw, bub: [[x, price, usd, side, px]], dia: [[x, lo, hi, usd, buy, px]], lmax}  Big Player marks
   <- hi      {}                                                             first line from the tablet
   <- view    {x0, x1, follow}                                               the tablet's x range (epoch seconds)
   <- mode    {v}                                                            the I x I dropdown
   <- tog     {k, v}                                                         k: lines | hlh | bigplayer | takeover
   <- explain {k}                                                            k = the cycle's start (x0)
 Exit codes: 2 = no daemon."""
-import os, sys, time, json, shutil, tempfile, socket, threading, queue, base64, argparse, traceback
+import os, sys, time, json, shutil, tempfile, socket, threading, queue, base64, argparse, traceback, math
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QT_QPA_FONTDIR", "C:/Windows/Fonts")
@@ -57,6 +60,85 @@ qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 from app import terminal as _term                             # noqa: E402
 from app.terminal import MinimalTerminalWindow                # noqa: E402
 from app import flow_interp as FI                             # noqa: E402
+from app import hlh_draw as _hlh                              # noqa: E402
+from PySide6 import QtGui as _QtGui                           # noqa: E402
+
+
+# ------------------------------------------------------------------ the HLH recorder
+class RecPainter:
+    """Stands in for QPainter on a QPicture inside hlh_draw.build_period and RECORDS the calls as plain geometry
+    (a QPicture cannot be read back, and the tablet draws its own pixels). Any other device gets a real QPainter,
+    so the label images still render. Ops: ["P", pen_argb, pen_w, brush_argb, [x, y, ...]] polygon,
+    ["R", pen_argb, pen_w, brush_argb, x, y, w, h] rect, ["L", pen_argb, pen_w, x0, y0, x1, y1] line; pen widths
+    are the terminal's cosmetic pixel widths, argb 0 = none."""
+    RenderHint = _QtGui.QPainter.RenderHint
+    _warned = set()
+
+    def __new__(cls, dev=None):
+        if isinstance(dev, _QtGui.QPicture):
+            return object.__new__(cls)
+        return _QtGui.QPainter(dev) if dev is not None else _QtGui.QPainter()
+
+    def __init__(self, dev):
+        self.ops = []; dev._rec_ops = self.ops
+        self.pen = (0, 0.0); self.brush = 0
+
+    @staticmethod
+    def _argb(c):
+        return int(c.rgba()) if c is not None else 0
+
+    def setRenderHint(self, *a, **k):
+        pass
+
+    def setPen(self, p):
+        if isinstance(p, _QtGui.QPen):
+            self.pen = (0, 0.0) if p.style() == QtCore.Qt.PenStyle.NoPen else (self._argb(p.color()), float(p.widthF()))
+        elif isinstance(p, _QtGui.QColor):
+            self.pen = (self._argb(p), 1.0)
+        else:
+            self.pen = (0, 0.0)
+
+    def setBrush(self, b):
+        if isinstance(b, _QtGui.QColor):
+            self.brush = self._argb(b)
+        elif isinstance(b, _QtGui.QBrush):
+            self.brush = 0 if b.style() == QtCore.Qt.BrushStyle.NoBrush else self._argb(b.color())
+        else:
+            self.brush = 0
+
+    def drawPolygon(self, poly):
+        pts = []
+        for q in poly:
+            pts.append(round(q.x(), 3)); pts.append(round(q.y(), 5))
+        self.ops.append(["P", self.pen[0], self.pen[1], self.brush, pts])
+
+    def fillRect(self, r, col):
+        self.ops.append(["R", 0, 0.0, self._argb(col), round(r.x(), 3), round(r.y(), 5), round(r.width(), 3), round(r.height(), 5)])
+
+    def drawRect(self, r):
+        self.ops.append(["R", self.pen[0], self.pen[1], self.brush, round(r.x(), 3), round(r.y(), 5), round(r.width(), 3), round(r.height(), 5)])
+
+    def drawLine(self, a, b):
+        self.ops.append(["L", self.pen[0], self.pen[1], round(a.x(), 3), round(a.y(), 5), round(b.x(), 3), round(b.y(), 5)])
+
+    def end(self):
+        pass
+
+    def __getattr__(self, name):
+        def _noop(*a, **k):
+            if name not in RecPainter._warned:
+                RecPainter._warned.add(name); log("RecPainter: %s ignored" % name)
+        return _noop
+
+
+class _GuiProxy:
+    QPainter = RecPainter
+
+    def __getattr__(self, n):
+        return getattr(_QtGui, n)
+
+
+_hlh.QtGui = _GuiProxy()                                       # only hlh_draw's QPainter is the recorder
 
 T0 = time.time()
 
@@ -204,6 +286,8 @@ class State:
     cyc_key = None; cyc_t = 0.0; cyc_full_needed = True; cyc_last_total = 0
     rev_hist = -1
     iimp_id = None; interp_id = None; liq_sig = None; tko_id = None
+    hlh_out = None; hlh_t = 0.0; hlh_xm = None; hlh_pics = {}
+    bp_sig = None
     view = None; follow = True
     last_live = 0.0
 
@@ -368,9 +452,118 @@ def tick_tko():
 
 def tick_live(now):
     lp = w._engine_live_px()
+    # the engine's price can be STALE for the first seconds of a boot (a catch-up bucket): more than 1% off the
+    # tape's last print of the last two minutes, it yields to the tape -- the terminal's own rule for market entries
+    try:
+        tail = np.asarray(w._flow._px[-120:], dtype=np.float64)
+        ok = np.nonzero(np.isfinite(tail) & (tail > 0))[0]
+        tape = float(tail[ok[-1]]) if ok.size else None
+    except Exception:
+        tape = None
+    if tape is not None and (lp is None or abs(float(lp) - tape) / tape > 0.01):
+        lp = tape
     d = w.__dict__.get("_px_data")
     fcol = int(d[9]) if (d is not None and len(d) > 9) else -1
     send({"t": "live", "now": now, "px": float(lp) if lp is not None else None, "fcol": fcol})
+
+
+def tick_hlh(now):
+    """The HLH Volume Profile as the terminal's overlay builds it for the PRICE pane (canvas "tab", identity x map,
+    the pane's cycles as the bars for the POC runs), serialized when the overlay returns a new tuple."""
+    try:
+        on = bool(w._hlh_on())
+    except Exception:
+        on = False
+    if not on:
+        if S.hlh_out is not False:
+            S.hlh_out = False; S.hlh_pics = {}
+            send({"t": "hlh", "on": False})
+        return
+    if now - S.hlh_t < 1.0:
+        return
+    S.hlh_t = now
+    st = w._hlh_state()
+    _on, week_on, bloc, _dark, bdg, tab, pcr = w._hlh_toggles()
+    st.ensure_feeds(week_on, now)
+    w._hlh_floor_once()
+    if S.hlh_xm is None:
+        S.hlh_xm = _hlh.IdentityXMap()
+    pxa = w.__dict__.get("_px_arr")
+    bars = None if (pxa is None or np.size(pxa[0]) == 0) else (pxa[0], pxa[1], pxa[2], pxa[3], pxa[4], pxa[5])
+    out = st.build("tab", S.hlh_xm, bloc, True, week_on, now, badges=bdg, tables=tab, poc_runs=pcr, bars=bars)
+    if out is S.hlh_out:
+        return
+    S.hlh_out = out
+    pics = []; keep = {}
+    for xlo, xhi, pic in out[0]:
+        k = str(id(pic))
+        rec = {"k": k, "x0": float(xlo), "x1": float(xhi)}
+        if S.hlh_pics.get(k) is not pic:                      # a pic the tablet has not seen: its geometry goes along
+            rec["ops"] = getattr(pic, "_rec_ops", None) or []
+        keep[k] = pic
+        pics.append(rec)
+    S.hlh_pics = keep
+    labels = [[round(lb.x, 3), round(lb.y, 5), lb.text, lb.anchor, int(lb.bg.rgba()) if lb.bg is not None else 0,
+               int(lb.fg.rgba()), lb.font] for lb in out[1]]
+    dashes = [[round(d.xa, 3), round(d.xb, 3), round(d.y, 5), int(d.col.rgba())] for d in out[3]]
+    send({"t": "hlh", "on": True, "note": out[2], "pics": pics, "labels": labels, "dashes": dashes})
+
+
+def tick_bp(now):
+    """Big Player marks for the tablet's view (+ half a span each side, on a minute grid so a pan rarely rebuilds):
+    the SAME _bp_events + merge rules as the terminal's PRICE pane, marks snapped to the middle of their cycle
+    candle. Sent when the signature moves."""
+    try:
+        on = bool(w.menu.layer_state("m10_bigplayer"))
+    except Exception:
+        on = False
+    if not on:
+        if S.bp_sig is not False:
+            S.bp_sig = False
+            send({"t": "bp", "on": False})
+        return
+    if S.view is None:
+        return
+    x0, x1 = S.view; span = max(60.0, x1 - x0)
+    dx0 = math.floor((x0 - 0.5 * span) / 60.0) * 60.0; dx1 = math.ceil((x1 + 0.5 * span) / 60.0) * 60.0
+    thr = float(w.menu.big_player_min_usd()); sw_on = bool(w.menu.layer_state("m10_bigplayer_sweeps"))
+    try:
+        cs, ce = w._px_cycle_bounds(now)
+    except Exception:
+        cs = ce = np.zeros(0)
+    sig = (dx0, dx1, thr, sw_on, getattr(w, "_bp_rev", 0), len(getattr(w, "_bp_trades", ())),
+           len(getattr(w, "_bp_sweeps", ())), int(np.size(cs)), int(float(ce[-1]) // 5.0) if np.size(ce) else 0)
+    if sig == S.bp_sig:
+        return
+    S.bp_sig = sig
+    try:
+        ev = w._bp_events(dx0, dx1, dx1 + 1e-6, sw_on)
+    except Exception:
+        ev = []
+
+    def snap(ts):
+        if np.size(cs):
+            k = int(np.searchsorted(cs, float(ts), side="right")) - 1
+            if k >= 0 and float(ts) <= float(ce[k]) + 1.0:
+                return 0.5 * (float(cs[k]) + float(ce[k])), round(float(cs[k]), 3)
+        return float(ts), round(float(ts))
+    merged = {}; smerged = {}; xat = {}
+    for e in ev:
+        if e[3] < thr or not (dx0 <= e[0] <= dx1):
+            continue
+        x, kt = snap(e[0]); key = (kt, round(float(e[2]), 4), e[1]); xat[kt] = x
+        if e[4] == "sw":
+            m = smerged.get(key)
+            smerged[key] = [e[3], e[5], e[6]] if m is None else [m[0] + e[3], min(m[1], e[5]), max(m[2], e[6])]
+        else:
+            merged[key] = merged.get(key, 0.0) + e[3]
+    levels = sorted(merged.items())[-int(config.BIGPLAYER_MAX_LINES):]
+    slevels = sorted(smerged.items())[-int(config.BIGPLAYER_SWEEP_MAX):]
+    bub = [[float(xat.get(t_, t_)), float(price), float(usd), 1 if side > 0 else -1, float(w._bp_bubble_px(usd, thr))]
+           for (t_, price, side), usd in levels]
+    dia = ([[float(xat.get(t_, t_)), float(lo), float(hi), float(usd), bool(buy > 0), float(w._bp_bubble_px(usd, thr))]
+            for (t_, price, buy), (usd, lo, hi) in slevels] if sw_on else [])
+    send({"t": "bp", "on": True, "sw": sw_on, "bub": bub, "dia": dia, "lmax": int(getattr(config, "BIGPLAYER_LABEL_MAX", 60))})
 
 
 def on_cmd(c):
@@ -380,6 +573,7 @@ def on_cmd(c):
         if cl is not None:
             cl.ready = True
         S.bins_sent = None; S.cyc_full_needed = True; S.iimp_id = None; S.interp_id = None; S.liq_sig = None; S.tko_id = None
+        S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None
         hello()
         log("hi from the tablet -- sending everything")
     elif k == "view":
@@ -433,6 +627,7 @@ def engine_tick():
         tick_bins()
         tick_cycles(now, force=S.cyc_full_needed)
         tick_iimp(); tick_interp(); tick_liq(); tick_tko()
+        tick_hlh(now); tick_bp(now)
         tick_live(now)
     except Exception:
         traceback.print_exc()

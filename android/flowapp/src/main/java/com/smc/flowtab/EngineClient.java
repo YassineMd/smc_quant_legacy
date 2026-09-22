@@ -115,6 +115,8 @@ public final class EngineClient extends Thread {
                     case "liq": model.onLiq(m); break;
                     case "tko": model.onTko(m); break;
                     case "explain": model.onExplain(m); break;
+                    case "hlh": model.onHlh(m); break;
+                    case "bp": model.onBp(m); break;
                     default: continue;
                 }
                 listener.onData();

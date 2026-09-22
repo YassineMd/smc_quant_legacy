@@ -71,6 +71,17 @@ public final class FlowModel {
     public double[] tkBuy = new double[0], tkSell = new double[0];
     public double[] tkForm = null;          // [x, y, isBuy]
 
+    // ---- HLH Volume Profile geometry (the terminal's build_period, recorded) and Big Player marks
+    public static final class HlhOp { public char t; public int pen, brush; public float w; public double[] v; }
+    public static final class HlhPic { public String k; public double x0, x1; public List<HlhOp> ops; }
+    public static final class HlhLabel { public double x, y; public String text, anchor, font; public int bg, fg; }
+    public static final class HlhDash { public double xa, xb, y; public int col; }
+    public boolean hlhOn = false; public String hlhNote = null;
+    public List<HlhPic> hlhPics = new ArrayList<>(); public List<HlhLabel> hlhLabels = new ArrayList<>(); public List<HlhDash> hlhDashes = new ArrayList<>();
+    private final java.util.HashMap<String, List<HlhOp>> hlhCache = new java.util.HashMap<>();
+    public boolean bpOn = false, bpSw = false; public int bpLmax = 60;
+    public double[][] bpBub = new double[0][], bpDia = new double[0][];
+
     // ---- explain replies (k -> html), consumed by the UI
     public double explainK = Double.NaN;
     public String explainHtml = null;
@@ -235,6 +246,71 @@ public final class FlowModel {
         double[] form = null;
         if (f != null && f.length() >= 3) form = new double[]{f.optDouble(0), f.optDouble(1), f.optBoolean(2) ? 1.0 : 0.0};
         synchronized (lock) { tkBuy = b; tkSell = s; tkForm = form; version++; }
+    }
+
+    public void onHlh(JSONObject m) {
+        boolean on = m.optBoolean("on", false);
+        List<HlhPic> pics = new ArrayList<>(); List<HlhLabel> labels = new ArrayList<>(); List<HlhDash> dashes = new ArrayList<>();
+        java.util.HashMap<String, List<HlhOp>> cache = new java.util.HashMap<>();
+        if (on) {
+            JSONArray pa = m.optJSONArray("pics");
+            if (pa != null) for (int i = 0; i < pa.length(); i++) {
+                JSONObject po = pa.optJSONObject(i); if (po == null) continue;
+                HlhPic pic = new HlhPic(); pic.k = po.optString("k"); pic.x0 = po.optDouble("x0"); pic.x1 = po.optDouble("x1");
+                JSONArray oa = po.optJSONArray("ops");
+                if (oa != null) {
+                    List<HlhOp> ops = new ArrayList<>(oa.length());
+                    for (int j = 0; j < oa.length(); j++) {
+                        JSONArray a = oa.optJSONArray(j); if (a == null || a.length() < 4) continue;
+                        HlhOp op = new HlhOp(); op.t = a.optString(0, "L").charAt(0); op.pen = (int) a.optLong(1); op.w = (float) a.optDouble(2, 1.0);
+                        if (op.t == 'P') { op.brush = (int) a.optLong(3); JSONArray pts = a.optJSONArray(4); int n = pts == null ? 0 : pts.length(); op.v = new double[n]; for (int q = 0; q < n; q++) op.v[q] = pts.optDouble(q); }
+                        else if (op.t == 'R') { op.brush = (int) a.optLong(3); op.v = new double[]{a.optDouble(4), a.optDouble(5), a.optDouble(6), a.optDouble(7)}; }
+                        else { op.v = new double[]{a.optDouble(3), a.optDouble(4), a.optDouble(5), a.optDouble(6)}; }
+                        ops.add(op);
+                    }
+                    pic.ops = ops;
+                } else {
+                    synchronized (lock) { pic.ops = hlhCache.get(pic.k); }
+                    if (pic.ops == null) pic.ops = new ArrayList<>();
+                }
+                cache.put(pic.k, pic.ops); pics.add(pic);
+            }
+            JSONArray la = m.optJSONArray("labels");
+            if (la != null) for (int i = 0; i < la.length(); i++) {
+                JSONArray a = la.optJSONArray(i); if (a == null || a.length() < 7) continue;
+                HlhLabel l = new HlhLabel(); l.x = a.optDouble(0); l.y = a.optDouble(1); l.text = a.optString(2); l.anchor = a.optString(3); l.bg = (int) a.optLong(4); l.fg = (int) a.optLong(5); l.font = a.optString(6);
+                labels.add(l);
+            }
+            JSONArray da = m.optJSONArray("dashes");
+            if (da != null) for (int i = 0; i < da.length(); i++) {
+                JSONArray a = da.optJSONArray(i); if (a == null || a.length() < 4) continue;
+                HlhDash dd = new HlhDash(); dd.xa = a.optDouble(0); dd.xb = a.optDouble(1); dd.y = a.optDouble(2); dd.col = (int) a.optLong(3);
+                dashes.add(dd);
+            }
+        }
+        synchronized (lock) {
+            hlhOn = on; hlhNote = m.isNull("note") ? null : m.optString("note", null);
+            hlhPics = pics; hlhLabels = labels; hlhDashes = dashes;
+            hlhCache.clear(); hlhCache.putAll(cache);
+            version++;
+        }
+    }
+
+    private static double[][] rows(JSONArray a) {
+        if (a == null) return new double[0][];
+        double[][] out = new double[a.length()][];
+        for (int i = 0; i < a.length(); i++) {
+            JSONArray r = a.optJSONArray(i); int n = r == null ? 0 : r.length();
+            out[i] = new double[n];
+            for (int j = 0; j < n; j++) { Object o = r.opt(j); out[i][j] = o instanceof Boolean ? ((Boolean) o ? 1 : 0) : r.optDouble(j); }
+        }
+        return out;
+    }
+
+    public void onBp(JSONObject m) {
+        boolean on = m.optBoolean("on", false);
+        double[][] bub = on ? rows(m.optJSONArray("bub")) : new double[0][], dia = on ? rows(m.optJSONArray("dia")) : new double[0][];
+        synchronized (lock) { bpOn = on; bpSw = m.optBoolean("sw", false); bpLmax = m.optInt("lmax", 60); bpBub = bub; bpDia = dia; version++; }
     }
 
     public void onExplain(JSONObject m) {

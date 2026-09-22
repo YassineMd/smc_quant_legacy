@@ -43,6 +43,11 @@ public final class ChartView extends View {
     private final float d;
     // toggles (the hamburger's)
     public boolean showPrice = true, showFlow = true, showLiq = true, showIimp = true, showLines = true, showTakeover = true;
+    public boolean showHlh = false, showBp = false;
+    public PriceTools tools;                        // the drawing toolbar + Market Position on the PRICE pane
+    private float pxTop, pxHgt;                     // the PRICE pane's plot rect (for the tools' map)
+    private double pxYl, pxYh;
+    private static final float PCPX = 0.85f;        // one of the terminal's pixels, on this screen (x density)
     // the view
     private double vx0, vx1; private boolean follow = true;
     private int fullscreen = -1;
@@ -88,6 +93,7 @@ public final class ChartView extends View {
                 afterPan(); return true;
             }
             @Override public boolean onSingleTapConfirmed(MotionEvent e) { tap(e.getX(), e.getY()); return true; }
+            @Override public void onLongPress(MotionEvent e) { if (tools != null && paneOn[PANE_PRICE] && tools.longPress(e.getX(), e.getY())) invalidate(); }
             @Override public boolean onDoubleTap(MotionEvent e) { doubleTap(e.getX(), e.getY()); return true; }
         });
         scale = new ScaleGestureDetector(ctx, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -104,6 +110,22 @@ public final class ChartView extends View {
     }
 
     public void setHost(Host host) { this.host = host; }
+
+    /** The tools live on the PRICE pane: they map through its current axes. */
+    public void initTools(android.content.SharedPreferences prefs, PriceTools.Events events) {
+        tools = new PriceTools(d, prefs, new PriceTools.Map() {
+            @Override public float xPx(double t) { return ChartView.this.xPx(t); }
+            @Override public float yPx(double p) { return (float) (pxTop + (pxYh - p) / Math.max(1e-12, pxYh - pxYl) * pxHgt); }
+            @Override public double xVal(float px) { return vx0 + (px / Math.max(1f, plotR)) * (vx1 - vx0); }
+            @Override public double yVal(float py) { return pxYh - (py - pxTop) / Math.max(1f, pxHgt) * (pxYh - pxYl); }
+            @Override public RectF pane() { return pane[PANE_PRICE]; }
+            @Override public float plotRight() { return plotR; }
+            @Override public double tick() { synchronized (M.lock) { return M.tick; } }
+            @Override public int dec() { synchronized (M.lock) { return M.dec; } }
+            @Override public double now() { return M.nowEngine(); }
+            @Override public double live() { synchronized (M.lock) { return M.livePx; } }
+        }, events);
+    }
 
     /** A data frame: coalesced onto the next vsync. */
     public void dataChanged() {
@@ -134,6 +156,7 @@ public final class ChartView extends View {
     }
 
     @Override public boolean onTouchEvent(MotionEvent ev) {
+        if (tools != null && paneOn[PANE_PRICE] && tools.onTouch(ev)) { invalidate(); return true; }
         scale.onTouchEvent(ev);
         gest.onTouchEvent(ev);
         if (ev.getActionMasked() == MotionEvent.ACTION_UP || ev.getActionMasked() == MotionEvent.ACTION_CANCEL) sendView(true);
@@ -155,6 +178,10 @@ public final class ChartView extends View {
     }
 
     private void tap(float x, float y) {
+        if (tools != null && paneOn[PANE_PRICE]) {
+            if (tools.tapButton(x, y)) { invalidate(); return; }
+            if (pane[PANE_PRICE].contains(x, y) && x < plotR) { tools.tapPane(x, y); invalidate(); }
+        }
         if (paneOn[PANE_IIMP] && x >= ddX0 && x <= ddX1 && y >= ddY0 && y <= ddY1) {
             if (host != null) host.onModeMenu(ddX0, ddY1);
             return;
@@ -233,9 +260,12 @@ public final class ChartView extends View {
             s.mode = M.iimpMode; s.iN = M.iN; s.iX0 = M.iX0; s.iX1 = M.iX1; s.iV = M.iV; s.iMult = M.iMult; s.iScore = M.iScore; s.iWall = M.iWall; s.iKept = M.iKept;
             s.iSbuy = M.iSbuy; s.iSsell = M.iSsell; s.iLiib = M.iLiib; s.iLiis = M.iLiis; s.iUp = M.iUp; s.iContra = M.iContra; s.iGood = M.iGood; s.iForm = M.iForm;
             s.connected = M.connected;
+            s.hlhOn = M.hlhOn && showHlh; s.hlhNote = M.hlhNote; s.hlhPics = M.hlhPics; s.hlhLabels = M.hlhLabels; s.hlhDashes = M.hlhDashes;
+            s.bpOn = M.bpOn && showBp; s.bpBub = M.bpBub; s.bpDia = M.bpDia; s.bpLmax = M.bpLmax;
             s.series = new float[3][];
             if (paneOn[PANE_FLOW] && s.buy.length > 0) M.series(vx0 - 1, vx1 + 1, (int) (2 * plotR), s.series);
         }
+        if (tools != null && !Double.isNaN(s.livePx)) tools.onPrice(s.livePx, now);
         if (paneOn[PANE_PRICE]) drawPrice(c, s, now);
         if (paneOn[PANE_FLOW]) drawFlow(c, s, now);
         if (paneOn[PANE_LIQ]) drawLiq(c, s);
@@ -256,6 +286,8 @@ public final class ChartView extends View {
         double[] tkBuy, tkSell, tkForm;
         String mode; int iN; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis; byte[] iUp, iContra, iGood, iForm;
         boolean connected;
+        boolean hlhOn; String hlhNote; List<FlowModel.HlhPic> hlhPics; List<FlowModel.HlhLabel> hlhLabels; List<FlowModel.HlhDash> hlhDashes;
+        boolean bpOn; double[][] bpBub, bpDia; int bpLmax;
     }
 
     private void title(Canvas c, RectF r, String txt) {
@@ -320,7 +352,9 @@ public final class ChartView extends View {
         if (Double.isNaN(pxLo)) return;
         double yl = pxLo, yh = pxHi;
         float top = r.top + TITLE_H, hgt = r.bottom - top;
+        pxTop = top; pxHgt = hgt; pxYl = yl; pxYh = yh;
         c.save(); c.clipRect(r.left, r.top, r.right, r.bottom);
+        if (s.hlhOn) drawHlh(c, s, r, top, hgt, yl, yh);
         for (int i = i0; i < i1; i++) {
             boolean isForm = i == last && forming;
             double o = s.cO[i], cl = isForm ? fc : s.cC[i], hh = isForm ? fh : s.cH[i], ll = isForm ? fl : s.cL[i];
@@ -340,6 +374,10 @@ public final class ChartView extends View {
                 triangle(c, x, y, s.tkForm[2] > 0.5, 110);
             }
         }
+        if (s.bpOn) drawBp(c, s, top, hgt, yl, yh);
+        c.restore();
+        if (tools != null) tools.drawShapes(c, s.livePx);
+        c.save(); c.clipRect(r.left, r.top, r.right, r.bottom);
         // the live price line + pill
         if (!Double.isNaN(s.livePx)) {
             float y = (float) (top + (yh - s.livePx) / (yh - yl) * hgt);
@@ -370,6 +408,115 @@ public final class ChartView extends View {
             if (y < top + 4 * d || y > r.bottom - 2 * d) continue;
             c.drawText(String.format(Locale.US, "%." + s.dec + "f", v), plotR + 4 * d, y + 4 * d, pt);
         }
+        if (tools != null) tools.drawButtons(c);
+    }
+
+    // ------------------------------------------------------------------ HLH Volume Profile (the terminal's geometry)
+    private static String fmtUsdBp(double a) {
+        if (a >= 1e6) return String.format(Locale.US, "$%.2fM", a / 1e6);
+        if (a >= 1e5) return String.format(Locale.US, "$%.0fK", a / 1e3);
+        if (a >= 1e3) return String.format(Locale.US, "$%.1fK", a / 1e3);
+        return String.format(Locale.US, "$%,.0f", a);
+    }
+
+    private void drawHlh(Canvas c, Snap s, RectF r, float top, float hgt, double yl, double yh) {
+        double ky = hgt / Math.max(1e-12, yh - yl);
+        for (FlowModel.HlhPic pic : s.hlhPics) {
+            if (pic.x1 < vx0 || pic.x0 > vx1 || pic.ops == null) continue;
+            for (FlowModel.HlhOp op : pic.ops) {
+                if (op.t == 'P') {
+                    int n = op.v.length / 2; if (n < 2) continue;
+                    path.reset();
+                    for (int i = 0; i < n; i++) { float x = xPx(op.v[2 * i]), y = (float) (top + (yh - op.v[2 * i + 1]) * ky); if (i == 0) path.moveTo(x, y); else path.lineTo(x, y); }
+                    path.close();
+                    if (op.brush != 0) { pf.setColor(op.brush); c.drawPath(path, pf); }
+                    if (op.pen != 0) { pl.setColor(op.pen); pl.setStrokeWidth(Math.max(1f, op.w * d * PCPX)); c.drawPath(path, pl); }
+                } else if (op.t == 'R') {
+                    float x0 = xPx(op.v[0]), x1 = xPx(op.v[0] + op.v[2]);
+                    float yb = (float) (top + (yh - op.v[1]) * ky), yt = (float) (top + (yh - (op.v[1] + op.v[3])) * ky);
+                    if (x1 < r.left || x0 > plotR) continue;
+                    float t0 = Math.min(yt, yb), t1 = Math.max(yt, yb); if (t1 - t0 < 0.5f) t1 = t0 + 0.5f;
+                    if (op.brush != 0) { pf.setColor(op.brush); c.drawRect(x0, t0, x1, t1, pf); }
+                    if (op.pen != 0) { pl.setColor(op.pen); pl.setStrokeWidth(Math.max(1f, op.w * d * PCPX)); c.drawRect(x0, t0, x1, t1, pl); }
+                } else {
+                    if (op.pen == 0) continue;
+                    pl.setColor(op.pen); pl.setStrokeWidth(Math.max(1f, op.w * d * PCPX));
+                    c.drawLine(xPx(op.v[0]), (float) (top + (yh - op.v[1]) * ky), xPx(op.v[2]), (float) (top + (yh - op.v[3]) * ky), pl);
+                }
+            }
+        }
+        // the outer value areas: dash segments in device space, phase-anchored at each line's own start
+        float on = 5 * d * PCPX, off = 4 * d * PCPX;
+        for (FlowModel.HlhDash dd : s.hlhDashes) {
+            float y = (float) (top + (yh - dd.y) * ky); if (y < top || y > r.bottom) continue;
+            float x0 = xPx(Math.min(dd.xa, dd.xb)), x1 = xPx(Math.max(dd.xa, dd.xb));
+            if (x1 < r.left || x0 > plotR) continue;
+            float xs = Math.max(x0, r.left - 2), xe = Math.min(x1, plotR);
+            int k0 = (int) Math.floor((xs - x0) / (on + off));
+            int cnt = (int) ((xe - x0) / (on + off)) - k0 + 2; if (cnt <= 0) continue;
+            float[] seg = new float[cnt * 4]; int j = 0;
+            for (int k = k0; k * (on + off) + x0 < xe; k++) { float xa = x0 + k * (on + off); seg[j++] = xa; seg[j++] = y; seg[j++] = Math.min(xa + on, x1); seg[j++] = y; if (j >= seg.length) break; }
+            pl.setColor(dd.col); pl.setStrokeWidth(1 * d); c.drawLines(seg, 0, j, pl);
+        }
+        // labels: pixel-sized boxes at plot points, the terminal's anchors
+        for (FlowModel.HlhLabel lb : s.hlhLabels) {
+            float px = xPx(lb.x), py = (float) (top + (yh - lb.y) * ky);
+            boolean small = "small".equals(lb.font); boolean mono = "mono".equals(lb.font);
+            pt.setTypeface(small ? Typeface.create(Typeface.MONOSPACE, Typeface.BOLD) : Typeface.MONOSPACE);
+            pt.setTextSize((small ? 10.5f : 9.5f) * d);
+            String[] lines = lb.text.split("\n"); float lh = pt.getTextSize() * 1.25f;
+            float w = 0; for (String ln : lines) w = Math.max(w, pt.measureText(ln)); w += 6 * d;
+            float h = lines.length * lh + 4 * d;
+            float rx, ry;
+            switch (lb.anchor) {
+                case "left": rx = px + 4 * d; ry = py - h / 2; break;
+                case "up": rx = px - w / 2; ry = py + 3 * d; break;
+                case "down": rx = px - w / 2; ry = py - h - 3 * d; break;
+                case "upper_left": rx = px; ry = py; break;
+                default: rx = px + 2 * d; ry = py - h - 2 * d; break;
+            }
+            if (rx > plotR || rx + w < r.left || ry > r.bottom || ry + h < top) continue;
+            if ((lb.bg >>> 24) > 0) { pf.setColor(lb.bg); c.drawRoundRect(new RectF(rx, ry, rx + w, ry + h), 3 * d, 3 * d, pf); }
+            pt.setColor(lb.fg);
+            float ty = ry + 2 * d - pt.ascent();
+            for (String ln : lines) { c.drawText(ln, rx + 3 * d, ty, pt); ty += lh; }
+            if (mono) pt.setTypeface(Typeface.MONOSPACE);
+        }
+        pt.setTypeface(Typeface.MONOSPACE);
+        if (s.hlhNote != null && !s.hlhNote.isEmpty()) {
+            pt.setTextSize(10.5f * d); float w = pt.measureText(s.hlhNote) + 12 * d;
+            pf.setColor(Color.argb(140, 0, 0, 0)); c.drawRoundRect(new RectF(r.left + 8 * d, top + 6 * d, r.left + 8 * d + w, top + 24 * d), 3 * d, 3 * d, pf);
+            pt.setColor(Color.rgb(255, 200, 80)); c.drawText(s.hlhNote, r.left + 14 * d, top + 19 * d, pt);
+        }
+    }
+
+    // ------------------------------------------------------------------ Big Player marks (bubbles, diamonds, amounts)
+    private void drawBp(Canvas c, Snap s, float top, float hgt, double yl, double yh) {
+        double ky = hgt / Math.max(1e-12, yh - yl);
+        List<float[]> labels = new ArrayList<>();
+        for (double[] b : s.bpBub) {
+            if (b.length < 5 || b[0] < vx0 || b[0] > vx1) continue;
+            float x = xPx(b[0]), y = (float) (top + (yh - b[1]) * ky), rad = (float) (b[4] * d * PCPX / 2);
+            boolean buy = b[3] > 0;
+            pf.setColor(buy ? Color.argb(120, 40, 230, 120) : Color.argb(120, 240, 70, 90)); c.drawCircle(x, y, rad, pf);
+            pl.setColor(buy ? Color.argb(235, 40, 230, 120) : Color.argb(235, 240, 70, 90)); pl.setStrokeWidth(1.5f * d * PCPX); c.drawCircle(x, y, rad, pl);
+            labels.add(new float[]{x, y, (float) b[2]});
+        }
+        for (double[] q : s.bpDia) {
+            if (q.length < 6 || q[0] < vx0 || q[0] > vx1) continue;
+            float x = xPx(q[0]); float ylo = (float) (top + (yh - q[1]) * ky), yhi = (float) (top + (yh - q[2]) * ky);
+            float mid = 0.5f * (ylo + yhi), hh = Math.max(Math.abs(ylo - yhi), 12 * d * PCPX);
+            float hw = (float) ((5.0 + 4.0 * Math.max(0, Math.min(1, (q[5] - 10.0) / 36.0))) * d * PCPX);
+            boolean buy = q[4] > 0;
+            path.reset(); path.moveTo(x, mid + 0.5f * hh); path.lineTo(x + hw, mid); path.lineTo(x, mid - 0.5f * hh); path.lineTo(x - hw, mid); path.close();
+            pf.setColor(buy ? Color.argb(120, 40, 230, 120) : Color.argb(120, 240, 70, 90)); c.drawPath(path, pf);
+            pl.setColor(buy ? Color.argb(235, 40, 230, 120) : Color.argb(235, 240, 70, 90)); pl.setStrokeWidth(1.5f * d * PCPX); c.drawPath(path, pl);
+            labels.add(new float[]{x, mid, (float) q[3]});
+        }
+        if (labels.size() > s.bpLmax) labels = labels.subList(labels.size() - s.bpLmax, labels.size());
+        pt.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)); pt.setTextSize(10.5f * d); pt.setColor(Color.WHITE);
+        for (float[] l : labels) { String t = fmtUsdBp(l[2]); c.drawText(t, l[0] - pt.measureText(t) / 2, l[1] + 4 * d, pt); }
+        pt.setTypeface(Typeface.MONOSPACE);
     }
 
     private void drawCandle(Canvas c, float xm, float hw, double o, double hh, double ll, double cl, int col, float top, float hgt, double yl, double yh) {
