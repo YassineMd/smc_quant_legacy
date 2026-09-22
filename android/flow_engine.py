@@ -46,7 +46,7 @@ sys.path.insert(0, REPO)
 ap = argparse.ArgumentParser()
 ap.add_argument("--listen", default="127.0.0.1")
 ap.add_argument("--port", type=int, default=8766)
-ap.add_argument("--tick-ms", type=int, default=250, help="how often the panes are read out")
+ap.add_argument("--tick-ms", type=int, default=100, help="how often the panes are read out")
 ap.add_argument("--auth", default=None, help="require this token in the client's first line ({t:auth, k, z})")
 ap.add_argument("--compress", action="store_true", help="offer a zlib downstream (the client opts in with z=1)")
 ap.add_argument("--debug", action="store_true", help="enable the shot / series / refetch / bfstate commands")
@@ -285,7 +285,14 @@ if not _term._ipc_port_open():
     while not _term._ipc_port_open() and time.time() - _tw < (600.0 if ARGS.no_tunnel else 60.0):
         time.sleep(1.0)
 w = MinimalTerminalWindow("5m"); w._rr_persist_save = lambda tf: None
-w.resize(1600, 1000); w.show()
+w.resize(1600, 1000)
+# ⚠⚠ WA_DontShowOnScreen: the widgets stay VISIBLE to the code (isVisible() is True, geometry and
+# viewPixelSize are real, so every pane still builds its data) but Qt never delivers a paint event.
+# The tablet draws its own pixels from the messages, so every paint here was pure waste on the weakest
+# CPU in the chain -- py-spy caught the GUI thread inside PlotCurveItem.paint / GraphicsView.paintEvent
+# / TextItem.setHtml, ~15% of all samples, on a box whose readout was stalling ~900 ms at the p90.
+w.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+w.show()
 
 
 def spin(sec):
@@ -705,6 +712,14 @@ def engine_tick():
     cl = CLIENT[0]
     if cl is None or not cl.alive or not cl.ready:
         return
+    # ⚠ THE PRICE GOES FIRST, stamped at the moment it is sent. It used to be stamped at the top of the tick
+    # and sent at the BOTTOM, after tick_hlh / tick_bp, so the tablet both received it late and was told it was
+    # older than it was -- measured 2026-09-22 as 217 ms of apparent "transit", most of which was this tick's
+    # own heavy work happening between the stamp and the send.
+    try:
+        tick_live(time.time())
+    except Exception:
+        traceback.print_exc()
     now = time.time()
     try:
         st = w._flow
@@ -715,7 +730,6 @@ def engine_tick():
         tick_cycles(now, force=S.cyc_full_needed)
         tick_iimp(); tick_interp(); tick_liq(); tick_tko()
         tick_hlh(now); tick_bp(now)
-        tick_live(now)
     except Exception:
         traceback.print_exc()
 
