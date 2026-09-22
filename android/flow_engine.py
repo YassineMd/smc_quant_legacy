@@ -610,6 +610,15 @@ def on_cmd(c):
             send({"t": "series", "x": b64(t_, "<f8"), "buy": b64(b_), "sell": b64(s_), "bin": float(w._flow.bin)})
         except Exception as ex:
             send({"t": "series", "err": str(ex)})
+    elif k == "refetch":                                       # debug: ask the daemon for a window again (idempotence)
+        w._flow_bf_queue.insert(0, (float(c["x0"]), float(c["x1"])))
+        w._flow_bf_t = 0.0
+        send({"t": "refetch", "ok": True})
+    elif k == "bfstate":                                       # debug: the backfill pump's queue / in-flight chunk
+        _q = [[float(a), float(b)] for a, b in (w._flow_bf_queue or [])]
+        _i = w.__dict__.get("_flow_bf_inflight")
+        send({"t": "bfstate", "queue": _q, "inflight": [float(_i[0]), float(_i[1])] if _i else None,
+              "rev_hist": int(getattr(w._flow, "rev_hist", -1)), "span": list(w._flow.span() or [])})
     elif k == "explain":
         L = w.__dict__.get("_iimp_last")
         kx = float(c.get("k", 0))

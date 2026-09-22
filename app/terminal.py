@@ -12301,7 +12301,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 self._bp_bf_inflight = None
             # a 6 h window is ~70k raw trades: decoding + same-ms sweep grouping cost ~180 ms in pure Python, so it
             # runs on the pool thread and the RESULT (prints >= floor, sweeps) is merged here on a later frame
-            self._bp_win_futs.append(self._bp_win_pool.submit(self._bp_window_work, tw, floor))
+            _fut = self._bp_win_pool.submit(self._bp_window_work, tw, floor)
+            _fut._tw_span = (int(tw.t0), int(tw.t1))     # the flow bins REPLACE this span when the result lands
+            self._bp_win_futs.append(_fut)
         for fut in [f for f in self._bp_win_futs if f.done()]:
             self._bp_win_futs.remove(fut)
             try:
@@ -12314,7 +12316,11 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if prs:
                 self._bp_merge_prints(prs)
             try:
-                self._flow.ingest(*_raw)     # the same window feeds the Volume Burst bins (history, not just live)
+                _sp = getattr(fut, "_tw_span", None)
+                if _sp is not None:
+                    self._flow.ingest_window(_sp[0], _sp[1], *_raw)   # the same window feeds the flow bins: REPLACED, not added
+                else:
+                    self._flow.ingest(*_raw)
                 self._flow_bf_inflight = None
             except Exception:
                 pass
@@ -18703,7 +18709,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         _infl = self.__dict__.get("_flow_bf_inflight")
         if _infl is not None:
             self._flow_bf_rtt = max(0.05, time.time() - float(_infl[2]))    # what the pump paces itself by
-        self._flow.ingest(*decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64))
+        # REPLACE the window's span (FlowStore.ingest_window), never add: the same window can arrive twice
+        # (the pump's 90 s re-ask), overlap the live batches (a chunk up to "now") or the bins loaded from disk
+        self._flow.ingest_window(int(tw.t0), int(tw.t1), *decode_trades(tw.ts_b64, tw.price_b64, tw.qty_b64, tw.side_b64))
         self._flow_bf_inflight = None
 
     def _flow_bins_save_maybe(self, now: float, force: bool = False) -> bool:

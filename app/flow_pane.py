@@ -169,8 +169,33 @@ class FlowStore:
         self._pxmemo = None
         return int(loc.size)
 
+    def ingest_window(self, t0_ms, t1_ms, ts_ms, price, qty, side) -> int:
+        """A backfill WINDOW is the daemon's authoritative tape for [t0, t1]: the bins it covers are REPLACED,
+        never added to.
+
+        ⚠⚠ ingest() ADDS, and every window used to be added on top of whatever the bins already held: the live
+        batches of the same seconds (a boot chunk runs up to "now"), a chunk delivered twice after the pump's 90 s
+        re-ask, the 60 s the right-gap plan reaches back over the bins loaded from disk. Measured 2026-09-22
+        against a fresh engine on the same daemon: the terminal's bins were EXACT 2x / 4x / 1.5x / 0.5x multiples
+        of the engine's over chunk-sized spans -- hours at a time -- and every cycle rating, I x I bar and
+        interpretation line built on them. Bins past the window's last trade are left alone: a window's end is
+        often "now", and the live stream owns those seconds."""
+        ts = np.asarray(ts_ms, dtype=np.float64)
+        if ts.size == 0:
+            return 0
+        lo_i = int(np.floor(float(t0_ms) / 1000.0 / self.bin))
+        hi_i = min(int(np.floor(float(t1_ms) / 1000.0 / self.bin)), int(np.floor(float(ts.max()) / 1000.0 / self.bin)))
+        if hi_i >= lo_i:
+            self._fit(lo_i, hi_i)
+            a = max(0, lo_i - int(self._base)); b = min(int(len(self._buy)), hi_i - int(self._base) + 1)
+            if b > a:
+                for k in self._KEYS:
+                    getattr(self, "_" + k)[a:b] = 0.0
+        return self.ingest(ts, price, qty, side)
+
     # ------------------------------------------------------------------ persistence
     _SAVE_KEYS = ("buy", "sell", "px", "pxh", "pxl", "pts")
+    _SAVE_VER = 2                # 2 = bins built with ingest_window (a file without it holds double-counted spans)
 
     def save(self, path: str) -> bool:
         """Write the bins to `path` (npz, atomic via a temp file). ~15 MB for 72 h; the caller runs it on a
@@ -192,7 +217,7 @@ class FlowStore:
         tmp = path + ".tmp"
         try:
             with open(tmp, "wb") as fh:
-                np.savez(fh, base=np.int64(base), rev=np.int64(rev), bin=np.float64(1.0), **arrs)
+                np.savez(fh, base=np.int64(base), rev=np.int64(rev), bin=np.float64(1.0), ver=np.int64(FlowStore._SAVE_VER), **arrs)
             os.replace(tmp, path)
             return True
         except Exception:
@@ -209,6 +234,8 @@ class FlowStore:
             with np.load(path) as z:
                 if abs(float(z["bin"]) - self.bin) > 1e-9:
                     return False
+                if "ver" not in z.files or int(z["ver"]) < self._SAVE_VER:
+                    return False                             # pre-fix bins: double-counted spans -> rebuild from the daemon
                 base = int(z["base"])
                 arrs = {k: np.array(z[k], dtype=np.float64) for k in self._SAVE_KEYS}
         except Exception:
