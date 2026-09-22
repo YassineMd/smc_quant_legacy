@@ -21676,11 +21676,14 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _dom = []
         for _c in (config.IIMP_BUY_COL, config.IIMP_SELL_COL):
             _q = QtGui.QColor(_c)
-            _bi = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
-                                  brush=pg.mkBrush(_q.red(), _q.green(), _q.blue(), int(config.IIMP_DOM_ALPHA)),
-                                  pen=pg.mkPen(None))
-            _bi.setZValue(1)              # UNDER the zero line (2), the guides (3) and the lines (6)
-            pw.addItem(_bi); _dom.append(_bi)
+            for _a in (int(config.IIMP_DOM_ALPHA), int(config.IIMP_DOM_ALPHA_HI)):
+                _bi = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
+                                      brush=pg.mkBrush(_q.red(), _q.green(), _q.blue(), _a),
+                                      pen=pg.mkPen(None))
+                _bi.setZValue(1)          # UNDER the zero line (2), the guides (3) and the lines (6)
+                pw.addItem(_bi); _dom.append(_bi)
+        # (buy dim, buy bright, sell dim, sell bright) -- four items rather than one with a per-bar brush
+        # list, which the profiler has already punished this pane for once
         self._iimp_dom = tuple(_dom)
         self._iimp_sig = None                      # new items are empty: the next draw fills them
         guides = []
@@ -21833,38 +21836,72 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._save_ui_state()
 
     def _iimp_dom_bands(self, sm_b, sm_s, keep):
-        """Which drawn cycles have ONE SIDE at least IIMP_DOM_SPREAD above the other, and which side.
+        """Per drawn cycle: (side, gap, gain) -- which side owns the band, how wide it is, how far the leader
+        has climbed INSIDE it.
 
-        Returns (buy_mask, sell_mask) over the DRAWN rows. The comparison is a DIFFERENCE OF MULTIPLES, in the
-        chart's own units -- PX_IIB_MIN_SPREAD's reading of "at least 1x", from this user on this wording -- so
-        the log2 values are raised first. On the TRUE values, never the clipped ones the lines are drawn with:
-        a clip is a drawing limit, not a reading (the Takeover badge's rule).
+        side  +1 the buyers stand at least IIMP_DOM_SPREAD above the sellers, -1 the reverse, 0 no band.
+        gap   the buyers' multiple MINUS the sellers'. A DIFFERENCE, not a ratio, in the chart's own units --
+              PX_IIB_MIN_SPREAD's reading of "at least Nx", from this user on this wording -- so the log2
+              values are raised first. On the TRUE values, never the clipped ones the lines are DRAWN with:
+              a clip is a drawing limit, not a reading (the Takeover badge's rule).
+        gain  the LEADING side's own multiple now, minus its multiple on the band's FIRST cycle. This is what
+              separates "the leader climbed" from "the other side fell away underneath it" -- the user's own
+              example (both at 1x, green falls to 0.65x, red never moves) has a gap of 0.35x and a gain of 0,
+              so it is a red band and it is NOT bright. NaN outside a band.
 
-        A cycle either side could not rate is in NEITHER mask: an unknown gap is not a small one."""
-        n = int(np.size(sm_b[keep])) if sm_b is not None else 0
+        A cycle either side could not rate has side 0: an unknown gap is not a small one."""
+        n = int(np.size(np.asarray(sm_b)[keep])) if sm_b is not None else 0
+        z = np.zeros(n, dtype=np.int8), np.full(n, np.nan), np.full(n, np.nan)
         if not n or float(config.IIMP_DOM_SPREAD) <= 0.0:
-            return np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
+            return z
         b = np.asarray(sm_b, dtype=np.float64)[keep]
         s = np.asarray(sm_s, dtype=np.float64)[keep]
         ok = np.isfinite(b) & np.isfinite(s)
         with np.errstate(over="ignore", invalid="ignore"):
-            gap = np.where(ok, np.exp2(b) - np.exp2(s), np.nan)
+            bm = np.where(ok, np.exp2(b), np.nan)
+            sm = np.where(ok, np.exp2(s), np.nan)
+        gap = bm - sm
         thr = float(config.IIMP_DOM_SPREAD)
-        return (ok & np.isfinite(gap) & (gap >= thr)), (ok & np.isfinite(gap) & (gap <= -thr))
+        fin = ok & np.isfinite(gap)
+        side = np.where(fin & (gap >= thr), 1, np.where(fin & (gap <= -thr), -1, 0)).astype(np.int8)
+        # RUNS of one colour: a run starts wherever the side changes, so a band broken by an unbanded cycle
+        # (or by the other colour) restarts its reference. The leader within a run never changes by
+        # construction -- the run IS the stretch where one side owns the band.
+        lead = np.where(side > 0, bm, np.where(side < 0, sm, np.nan))
+        chg = np.empty(n, dtype=bool)
+        chg[0] = True
+        chg[1:] = side[1:] != side[:-1]
+        run_first = np.flatnonzero(chg)
+        run_side = side[run_first]
+        # ⚠ THE REFERENCE IS THE CYCLE JUST BEFORE THE BAND OPENED, not its first cycle. Taking the first
+        # cycle looked right and was wrong: the move that CREATES a band happens on that very cycle, so a
+        # leader jumping 1.0x -> 1.4x -- the clearest "they climbed into it" there is -- measured a gain of
+        # zero and drew dim. Caught on a hand-built mirror of the user's own example. Reading from one cycle
+        # earlier makes both cases come out right: that jump is a 0.4x gain and brightens, while the user's
+        # case (red still at 1x, green falling away to 0.65x) is a 0 gain and stays dim. At the very left of
+        # the read there is no earlier cycle, so the run's own first value stands in.
+        _prev = np.maximum(run_first - 1, 0)
+        _own_prev = np.where(run_side > 0, bm[_prev], sm[_prev])
+        _own_first = np.where(run_side > 0, bm[run_first], sm[run_first])
+        ref_run = np.where((run_first > 0) & np.isfinite(_own_prev), _own_prev, _own_first)
+        ref = ref_run[np.cumsum(chg) - 1]
+        gain = np.where((side != 0) & np.isfinite(lead) & np.isfinite(ref), lead - ref, np.nan)
+        return side, gap, gain
 
-    def _iimp_dom_draw(self, on, x0, x1, sm_b, sm_s, keep, clip):
-        """Lay the bands, or empty them in every other mode. Full height: the bar spans well past the view,
-        which is explicitly y-ranged, so it can never drag the fit."""
+    def _iimp_dom_draw(self, on, x0, x1, side, gain, clip):
+        """Lay the four bands, or empty them in every other mode. Full height: the bar spans well past the
+        view, which is explicitly y-ranged, so it can never drag the fit."""
         if self.__dict__.get("_iimp_dom") is None:
             return
         try:
-            if not on:
+            if not on or side is None or not int(np.size(side)):
                 for _it in self._iimp_dom:
                     _it.setOpts(x0=[], x1=[], y0=[], height=[])
                 return
-            _bm, _sm = self._iimp_dom_bands(sm_b, sm_s, keep)
+            _hi = np.isfinite(gain) & (gain >= float(config.IIMP_DOM_GAIN))
+            _masks = ((side > 0) & ~_hi, (side > 0) & _hi, (side < 0) & ~_hi, (side < 0) & _hi)
             _y0, _h = -3.0 * float(clip), 6.0 * float(clip)
-            for _it, _m in zip(self._iimp_dom, (_bm, _sm)):
+            for _it, _m in zip(self._iimp_dom, _masks):
                 if not _m.any():
                     _it.setOpts(x0=[], x1=[], y0=[], height=[])
                     continue
@@ -22569,7 +22606,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                     _it.setData([], [])
             self._iimp_lines_has = True
         # the DOMINANCE bands: Lines Impact only, and emptied by the same call in every other mode
-        self._iimp_dom_draw(_imp, x0, x1, _sm_b, _sm_s, keep, _clip)
+        _dside, _dgap, _dgain = (self._iimp_dom_bands(_sm_b, _sm_s, keep) if _imp
+                                 else (None, None, None))
+        self._iimp_dom_draw(_imp, x0, x1, _dside, _dgain, _clip)
         if _any_lines:
             pass                       # every line mode has already laid its curves above
         elif _mode == "None":
@@ -22680,6 +22719,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                            "liib": _lb, "liis": _ls, "mode": _mode,
                            "ismb": None if _sm_b is None else _sm_b[keep],   # the SMOOTHED interest, log2
                            "isms": None if _sm_s is None else _sm_s[keep],
+                           "dside": _dside, "dgap": _dgap, "dgain": _dgain,   # the band, exactly as drawn
                            "pliib": _plb[keep], "pliis": _pls[keep],      # the previous bar's, NaN across a break
                            "vac": _vac[keep], "vac_on": _vac_on,          # +1 / -1 a VACUUM buy / sell (see above)
                            "quiet": _qui[keep]}                           # +1 / -1 a QUIET cycle that went up / down
@@ -23145,17 +23185,25 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                             "cycles it did not lead, because a side that led nothing moved nothing. This is how "
                             "well each side has been CONVERTING its pushes, not how hard it has been pushing."
                             % (_L % "Lines", _f(_imb[k]), _f(_ims[k]), self._iimp_smooth_n()))
-                _gap = float(2.0 ** float(_imb[k]) - 2.0 ** float(_ims[k])) \
-                    if (np.isfinite(_imb[k]) and np.isfinite(_ims[k])) else float("nan")
-                if np.isfinite(_gap) and abs(_gap) >= float(config.IIMP_DOM_SPREAD) > 0:
-                    rows.append("%s: <span style='color:%s'>%s</span>, because the %s stand <b>%.2gx</b> above "
-                                "the other side here -- at or past the <b>%.2gx</b> mark."
-                                % (_L % "Band", config.IIMP_BUY_COL if _gap > 0 else config.IIMP_SELL_COL,
-                                   "green" if _gap > 0 else "red", "buyers" if _gap > 0 else "sellers",
-                                   abs(_gap), float(config.IIMP_DOM_SPREAD)))
-                elif np.isfinite(_gap):
+                _ds, _dg, _dn = d.get("dside"), d.get("dgap"), d.get("dgain")
+                if _ds is not None and k < len(_ds) and int(_ds[k]) != 0:
+                    _buy = int(_ds[k]) > 0
+                    _bright = np.isfinite(_dn[k]) and float(_dn[k]) >= float(config.IIMP_DOM_GAIN)
+                    rows.append("%s: <span style='color:%s'>%s%s</span>, because the %s stand <b>%.2gx</b> "
+                                "above the other side -- at or past the <b>%.2gx</b> mark. %s"
+                                % (_L % "Band", config.IIMP_BUY_COL if _buy else config.IIMP_SELL_COL,
+                                   "bright " if _bright else "", "green" if _buy else "red",
+                                   "buyers" if _buy else "sellers", abs(float(_dg[k])),
+                                   float(config.IIMP_DOM_SPREAD),
+                                   ("BRIGHT because they have climbed <b>%.2gx</b> since this band began -- "
+                                    "they won it by pushing up." % float(_dn[k])) if _bright else
+                                   ("Not bright: they have moved %s since this band began, so the gap opened "
+                                    "because the OTHER side fell away, not because these climbed."
+                                    % (("%+.2gx" % float(_dn[k])) if np.isfinite(_dn[k]) else "nothing"))))
+                elif _dg is not None and k < len(_dg) and np.isfinite(_dg[k]):
                     rows.append("%s: none -- the gap between the two is <b>%.2gx</b>, short of the <b>%.2gx</b> "
-                                "a band needs." % (_L % "Band", abs(_gap), float(config.IIMP_DOM_SPREAD)))
+                                "a band needs." % (_L % "Band", abs(float(_dg[k])),
+                                                   float(config.IIMP_DOM_SPREAD)))
             else:
                 rows.append("%s: the two lines are the INTEREST alone, averaged over the last %d cycles -- buyers "
                             "%s, sellers %s. No impact in either one: this is how hot each side has been against "

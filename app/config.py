@@ -496,9 +496,17 @@ IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretc
 # spread of 1.1x and is marked; buyers 1.4x vs sellers 0.9x is 0.5x and is not.
 # ⚠ Compared on the TRUE multiples, never the 8x-clipped values the lines are DRAWN with -- the Takeover
 # badge's rule, for the same reason: a clip is a drawing limit, not a reading.
-IIMP_DOM_SPREAD = 1.0           # 0 switches the bands off entirely
+IIMP_DOM_SPREAD = 0.3           # 0 switches the bands off entirely
+# THE SECOND SHADE (user, correcting the first cut: "for area that gained 0.3x use a brighter green/red").
+# A gap of 0.3x can open two ways and they are not the same event: the leading side CLIMBED, or the other side
+# fell away under it. The bright shade is the first. Measured SINCE THE BAND STARTED -- the reference the user
+# picked when asked -- read from the cycle JUST BEFORE it opened, so the move that creates the band counts.
+# ⚠ Reading from the band's own first cycle instead looked right and was wrong: a leader jumping 1.0x ->
+# 1.4x, the clearest climb there is, measured a gain of zero and drew dim. Their own example is the dim case:
+# both lines at 1x, green falls to 0.65x, red never moved, so the area is red and stays dim.
+IIMP_DOM_GAIN = 0.3             # how far the LEADING side must have climbed inside the band to brighten it
 IIMP_DOM_ALPHA = 38             # the tint, out of 255. Low on purpose: it sits UNDER the two lines and the
-                                # guides, and the pane's job is still the lines.
+IIMP_DOM_ALPHA_HI = 95          # guides, and the pane's job is still the lines. HI is the gained-into band.
 # --- BREAKOUT BADGE on the PRICE pane (user 2026-09-21: "add a badge on the breakout candles where the candle side is
 # above x1 interestximpact and its opposite is below x1 -- for example we have a breakout buy candle and the
 # interestximpact line buy is above x1 and interestximpact line sell is below x1"). A BREAKOUT BUY candle gets a GREEN
