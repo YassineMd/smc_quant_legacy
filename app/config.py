@@ -457,7 +457,8 @@ FRATIO_MODE = "None"
 # the open), fitted per side on the same 48 h (buy R2 0.744 / sell 0.726). No intercept is needed: the score is a
 # residual against the median of the previous N same-side cycles, which cancels it.
 IIMP_PANE_ON = True
-IIMP_MODES = ("None", "Buyer", "Seller", "Delta", "Lines Buyer/Seller")   # the pane's top-right dropdown
+IIMP_MODES = ("None", "Buyer", "Seller", "Delta", "Lines Buyer/Seller",
+              "Lines Interest")                                          # the pane's top-right dropdown
 #                                 None = the leader's multiple; Buyer / Seller = that side's interest x impact
 #                                 vs its own baseline; Delta = buyer over seller. All in log2 (user 2026-09-20).
 #                                 Lines Buyer/Seller (user 2026-09-21) = the Buyer option and the Seller option
@@ -467,6 +468,15 @@ IIMP_MODES = ("None", "Buyer", "Seller", "Delta", "Lines Buyer/Seller")   # the 
 #                                 side against the other.
 IIMP_MODE = "None"
 IIMP_LINES_MODE = "Lines Buyer/Seller"
+IIMP_INT_MODE = "Lines Interest"    # the INTEREST half ALONE, both sides, SMOOTHED (user 2026-09-22). The pane's
+                                # other modes all carry impact in them somewhere; this one answers only "how hot
+                                # is each side against its own recent normal", with the per-cycle noise taken out.
+IIMP_INT_SMOOTH_N = 20          # the trailing mean's window, in CYCLES, and its OWN knob -- deliberately not the
+                                # cycle lookback. The lookback picks the BASELINE each cycle's interest is divided
+                                # by; this picks how many of those ratios are averaged for display. Tying them
+                                # would move the smoothing every time the user changed the baseline, which are two
+                                # different questions. Averaged in LOG space (a geometric mean), so 0.5x and 2x
+                                # pull on it equally -- an arithmetic mean of ratios is biased upward.
 IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretch is drawn at IIMP_FORM_PEN_A)
 # --- BREAKOUT BADGE on the PRICE pane (user 2026-09-21: "add a badge on the breakout candles where the candle side is
 # above x1 interestximpact and its opposite is below x1 -- for example we have a breakout buy candle and the

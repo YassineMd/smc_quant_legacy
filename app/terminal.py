@@ -18938,6 +18938,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         pw.scene().sigMouseClicked.connect(self._on_px_clicked)
         self._px_title = self._pane_title(pw, vb, config.pane_titles(self._lb_n())["px"])
         self._px_proxy = pg.SignalProxy(pw.scene().sigMouseMoved, rateLimit=60, slot=self._on_px_mouse_move)
+        self._pane_zoom_arm(pw)                                  # double-click -> fullscreen
         sp.insertWidget(0, pw)                                   # ABOVE the main chart -- the one pane that is
         # 110, not the 70 the panes below use: a splitter child added with no size gets ZERO, and on a crowded
         # 950 px stack the share arithmetic leaves this one on its minimum, so the minimum has to be readable.
@@ -20247,6 +20248,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             _tg.append(_t)
         self._liq_lvl = (_rl[0], _rl[1], _tg[0], _tg[1])
         self._liq_lvl_txt = ("", "")
+        self._pane_zoom_arm(pw)                                  # double-click -> fullscreen
         sp.addWidget(pw)
         pw.setMinimumHeight(70)                                  # a splitter child added with no size gets ZERO
         try:                                                     # height -> the pane renders nothing at all
@@ -21011,6 +21013,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._spd_plot = pw
         self._spd_vb = vb
         self._theme_sub_panes(not self._simple_bw())
+        self._pane_zoom_arm(pw)                                  # double-click -> fullscreen
         sp.addWidget(pw)
         pw.setMinimumHeight(60)
         return pw
@@ -21280,6 +21283,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._fratio_plot = pw
         self._fratio_vb = vb
         self._theme_sub_panes(not self._simple_bw())
+        self._pane_zoom_arm(pw)                                  # double-click -> fullscreen
         sp.addWidget(pw)
         pw.setMinimumHeight(60)
         self._fratio_position_combo()
@@ -21704,7 +21708,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                       "Buyer option and the Seller option together, as two lines instead of bars -- the same "
                       "numbers, one point per cycle at its middle, teal for the buyers and red for the sellers, "
                       "both against the same 1x midline and independent of each other: each side is measured "
-                      "against its OWN baseline. The lighter last stretch is the cycle still forming.")
+                      "against its OWN baseline. The lighter last stretch is the cycle still forming. Lines "
+                      "Interest: the INTEREST half alone, with no impact in it at all -- each side's aggressive "
+                      "$ per second against the median of its own previous N cycles -- put through a trailing "
+                      "mean of the last %d cycles, so it answers how hot each side is against its own recent "
+                      "normal without the per-cycle noise. Averaged in log space, so a quiet stretch sits below "
+                      "1x rather than being dragged above it." % int(config.IIMP_INT_SMOOTH_N))
         cb.setCursor(QtCore.Qt.PointingHandCursor)
         cb.currentIndexChanged.connect(self._on_iimp_mode_changed)
         cb.raise_(); cb.show()
@@ -21714,6 +21723,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._iimp_vb = vb
         vb.sigResized.connect(self._iimp_position_combo)
         self._theme_sub_panes(not self._simple_bw())
+        self._pane_zoom_arm(pw)                                  # double-click -> fullscreen
         sp.addWidget(pw)
         pw.setMinimumHeight(60)
         return pw
@@ -21724,7 +21734,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         mode that draws both, where the halves mean above / below that side's own baseline, so 0.5x has to
         read 0.5x."""
         mode = str(self.__dict__.get("_iimp_mode", "None"))
-        x = 2.0 ** float(v) if mode in ("Buyer", "Seller", str(config.IIMP_LINES_MODE)) else 2.0 ** abs(float(v))
+        x = (2.0 ** float(v) if mode in ("Buyer", "Seller", str(config.IIMP_LINES_MODE),
+                                         str(config.IIMP_INT_MODE)) else 2.0 ** abs(float(v)))
         return (fmt % x) + "x"
 
     def _iimp_position_combo(self, *args) -> None:
@@ -22043,6 +22054,34 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                     h.append(float(resid[k]))
         return score
 
+    @staticmethod
+    def _iimp_smooth(vals, rated, n_win, min_n):
+        """Trailing MEAN over the last `n_win` RATED values, this one included. NaN below `min_n` of them.
+
+        Causal by construction -- a point never sees a cycle to its right -- and taken over the WHOLE read rather
+        than the drawn rows, so the leftmost visible point does not change as the user pans. That is the rule
+        `_plb` / `_pls` already follow.
+
+        The values handed in are LOG2 ratios, so this is a geometric mean of the ratios themselves and 0.5x pulls
+        on it exactly as hard as 2x. An arithmetic mean of raw multiples is biased upward and would float the
+        quiet line above 1x for no reason at all.
+
+        O(n) on a cumulative sum rather than a window per cycle: an np.median inside a per-cycle loop is what put
+        an earlier version of this pane at 17-21% of a live GUI thread (see _iimp_score, _lob_ratio)."""
+        v = np.asarray(vals, dtype=np.float64)
+        out = np.full(int(v.size), np.nan)
+        ok = np.asarray(rated, dtype=bool) & np.isfinite(v)
+        idx = np.flatnonzero(ok)
+        if idx.size == 0:
+            return out
+        cs = np.concatenate(([0.0], np.cumsum(v[idx])))
+        k = np.arange(1, int(idx.size) + 1)
+        lo = np.maximum(0, k - max(1, int(n_win)))
+        cnt = (k - lo).astype(np.float64)
+        enough = cnt >= float(max(1, int(min_n)))
+        out[idx[enough]] = ((cs[k] - cs[lo]) / cnt)[enough]
+        return out
+
     def _iimp_climb(self, t, t_end, is_buy):
         """Per cycle: the side's own aggressive $ up to the cycle's EXTREME, and the seconds it took to get there.
 
@@ -22261,7 +22300,22 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 _qui = np.where(_qm & (_mvq > 0), 1, np.where(_qm & (_mvq < 0), -1, 0)).astype(np.int8)
         _mode = str(self.__dict__.get("_iimp_mode", "None"))
         _lines = _mode == str(config.IIMP_LINES_MODE)
-        if not _lines and self.__dict__.get("_iimp_lines_has") and self._iimp_lines is not None:
+        # LINES INTEREST (user 2026-09-22: "two lines that show the interest alone, smooth it over the last 20
+        # bars"). The INTEREST half on its own: each side's aggressive $ per second over the median of its own
+        # previous N cycles, which is `ar_b` / `ar_s` BEFORE the impact term that `_lb` / `_ls` add -- through a
+        # trailing mean of IIMP_INT_SMOOTH_N cycles. Built over the WHOLE read so a pan cannot move a point, and
+        # only when the mode asks for it: two cumsums are cheap, but not free on every frame of every other mode.
+        _int = _mode == str(config.IIMP_INT_MODE)
+        _any_lines = _lines or _int
+        _sm_b = _sm_s = None
+        if _int:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                _ib = np.where(_rated_all, np.log2(np.maximum(ar_b, 1e-12)), np.nan)
+                _is = np.where(_rated_all, np.log2(np.maximum(ar_s, 1e-12)), np.nan)
+            _sm_n = int(config.IIMP_INT_SMOOTH_N)
+            _sm_b = self._iimp_smooth(_ib, _rated_all, _sm_n, n_mn)
+            _sm_s = self._iimp_smooth(_is, _rated_all, _sm_n, n_mn)
+        if not _any_lines and self.__dict__.get("_iimp_lines_has") and self._iimp_lines is not None:
             for _it in tuple(self._iimp_lines) + tuple(self._iimp_lines_form or ()):
                 _it.setData([], [])                           # a bar mode again: the lines go, once
             self._iimp_lines_has = False
@@ -22275,12 +22329,14 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             # no bar is drawn; `vd` is the LEADING side's own reading (the point on its line), so the click mark and
             # the dict below stay one side's story, as they are in every other mode
             vd = np.where(up, np.clip(_lb, -_clip, _clip), np.clip(_ls, -_clip, _clip))
+        elif _int:
+            vd = np.where(up, np.clip(_sm_b[keep], -_clip, _clip), np.clip(_sm_s[keep], -_clip, _clip))
         else:
             vd = v
         # the forming cycle is EXCLUDED from the class items and drawn on its own: in both it would be painted
         # twice, at two different weights, and the lighter pass would be invisible under the solid one
         _fin = ~form
-        if _lines:
+        if _any_lines:
             # LINES BUYER/SELLER (user 2026-09-21): the Buyer option and the Seller option together, to the digit
             # -- clip(_lb) and clip(_ls) are exactly what those two modes draw as bar heights -- as two lines with
             # one point per cycle at its MIDDLE, where the bar it replaces is centred. Each side stands against its
@@ -22291,7 +22347,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 it.setOpts(x0=[], x1=[], y0=[], height=[])
             _kidx = np.flatnonzero(keep)                        # rows of the READ: a jump in them is an unrated cycle
             _mid = 0.5 * (x0 + x1)
-            _yb = np.clip(_lb, -_clip, _clip); _ys = np.clip(_ls, -_clip, _clip)
+            if _int:
+                # the INTEREST alone, smoothed. The break pattern stays the pane's own `keep`, so the point a
+                # click explains is always the point drawn -- the property every mode in here holds.
+                _yb = np.clip(_sm_b[keep], -_clip, _clip); _ys = np.clip(_sm_s[keep], -_clip, _clip)
+            else:
+                _yb = np.clip(_lb, -_clip, _clip); _ys = np.clip(_ls, -_clip, _clip)
             _f = np.flatnonzero(_fin)
             if _f.size:
                 _cn = np.zeros(int(_f.size), dtype=np.int32)
@@ -22362,7 +22423,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 it0.setOpts(x0=[], x1=[], y0=[], height=[], brushes=None, pens=None)
             for it in self._iimp_items[1:]:
                 it.setOpts(x0=[], x1=[], y0=[], height=[])
-        if form.any() and not _lines:
+        if form.any() and not _any_lines:
             # same side, same fill rule, one item -- its brush and pen are set here because both still move
             _k = int(np.flatnonzero(form)[-1])
             if _mode == "Buyer":
@@ -22397,7 +22458,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 if bool(config.IIMP_KEEP_MARK_ON) else np.zeros(int(kept.size), dtype=bool))
         # ... the cap sits across a bar's TIP and the wall dot just past it: with two lines and no bar there is no
         # tip to put them on, so the lines mode draws neither. Both readings stay in the click panel and the readout.
-        if _cap.any() and not _lines:
+        if _cap.any() and not _any_lines:
             _n2 = int(_cap.sum())
             _cx = np.empty(2 * _n2); _cy = np.empty(2 * _n2)
             _cx[0::2] = x0[_cap]; _cx[1::2] = x1[_cap]
@@ -22410,7 +22471,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _pad = 0.06 * max(float(np.percentile(np.abs(v), 99.0)), 1.0)
         for sc, m in zip(self._iimp_dots, (np.isfinite(wk) & (wk >= float(config.IIMP_WALL_HIGH)),
                                            np.isfinite(wk) & (wk <= float(config.IIMP_WALL_LOW)))):
-            if _lines or not m.any():
+            if _any_lines or not m.any():
                 sc.setData([], [])
                 continue
             sc.setData(0.5 * (x0[m] + x1[m]), np.where(v[m] >= 0, v[m] + _pad, v[m] - _pad))
@@ -22424,6 +22485,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                            "sbuy": _sc["buy"], "ssell": _sc["sell"],
                            "nbuy": _scn["buy"], "nsell": _scn["sell"],
                            "liib": _lb, "liis": _ls, "mode": _mode,
+                           "ismb": None if _sm_b is None else _sm_b[keep],   # the SMOOTHED interest, log2
+                           "isms": None if _sm_s is None else _sm_s[keep],
                            "pliib": _plb[keep], "pliis": _pls[keep],      # the previous bar's, NaN across a break
                            "vac": _vac[keep], "vac_on": _vac_on,          # +1 / -1 a VACUUM buy / sell (see above)
                            "quiet": _qui[keep]}                           # +1 / -1 a QUIET cycle that went up / down
@@ -22442,6 +22505,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 _mode_txt = "  ·  delta %s %.2gx" % ("B" if _dl >= 0 else "S", 2.0 ** abs(_dl))
             elif _lines:
                 _mode_txt = "  ·  buyers I×I %.2gx  ·  sellers I×I %.2gx" % (2.0 ** float(_lb[_k]), 2.0 ** float(_ls[_k]))
+            elif _int:
+                _smb, _sms = _sm_b[keep][_k], _sm_s[keep][_k]
+                _mode_txt = "  ·  interest, %d-cycle mean  ·  buyers %s  ·  sellers %s" % (
+                    int(config.IIMP_INT_SMOOTH_N),
+                    "-" if not np.isfinite(_smb) else "%.2gx" % (2.0 ** float(_smb)),
+                    "-" if not np.isfinite(_sms) else "%.2gx" % (2.0 ** float(_sms)))
             self._iimp_read.setText("B %s / S %s  ·  %s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s%s%s%s" % (
                 "-" if not np.isfinite(_sbv) else "%d" % int(round(_sbv)),
                 "-" if not np.isfinite(_ssv) else "%d" % int(round(_ssv)),
@@ -22454,7 +22523,17 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._iimp_read.setColor(config.IIMP_CONTRA_COL if contra[_k]
                                      else (config.IIMP_BUY_COL if up[_k] else config.IIMP_SELL_COL))
         # the lines mode fits BOTH series it draws; every other mode the one it draws
-        _fit = np.abs(np.concatenate([np.clip(_lb, -_clip, _clip), np.clip(_ls, -_clip, _clip)])) if _lines else np.abs(v)
+        if _int:
+            _fit = np.abs(np.concatenate([np.clip(_sm_b[keep], -_clip, _clip), np.clip(_sm_s[keep], -_clip, _clip)]))
+        elif _lines:
+            _fit = np.abs(np.concatenate([np.clip(_lb, -_clip, _clip), np.clip(_ls, -_clip, _clip)]))
+        else:
+            _fit = np.abs(v)
+        # the smoothed series is NaN until min_n cycles have accrued, and np.percentile of an all-NaN slice is
+        # both a warning and a NaN range -- the pane would come back blank on a short read
+        _fit = _fit[np.isfinite(_fit)]
+        if _fit.size == 0:
+            _fit = np.zeros(1)
         lim = float(np.percentile(_fit, 95.0)) * 1.15
         lim = min(max(lim, abs(float(np.log2(max(1e-9, config.IIMP_HIGH)))) * 1.4, 1.0), _clip * 1.15)
         cur = getattr(self, "_iimp_ytop", 0.0)
@@ -22861,6 +22940,15 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                         "times its impact on the cycles it led."
                         % (_L % "Sides", _b2, " (they led)" if up else "", _s2, "" if up else " (they led)",
                            "B" if _dl >= 0 else "S", 2.0 ** abs(_dl), n))
+        # LINES INTEREST: the panel must name the number actually DRAWN, not only this cycle's raw pair --
+        # a smoothed point and its own cycle's reading routinely disagree, and that IS the point of smoothing
+        _imb, _ims = d.get("ismb"), d.get("isms")
+        if _imb is not None and _ims is not None and k < len(_imb):
+            _f = lambda q: "-" if not np.isfinite(q) else "<b>%.2gx</b>" % (2.0 ** float(q))
+            rows.append("%s: the two lines are the INTEREST alone, averaged over the last %d cycles -- buyers "
+                        "%s, sellers %s. No impact in either one: this is how hot each side has been against "
+                        "its own recent normal, not what it did to price."
+                        % (_L % "Lines", int(config.IIMP_INT_SMOOTH_N), _f(_imb[k]), _f(_ims[k])))
         if contra:
             rows.append("%s: <span style='color:%s'>orange</span>, because price went the OTHER way -- it "
                         "finished %+d ticks while the %s led the interest."
@@ -22984,6 +23072,84 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._flow_pane_on = bool(on)
         self._flow_pane_apply()
         self._save_ui_state()
+
+    # ------------------------------------------------------------------
+    # DOUBLE-CLICK A PANE -> FULLSCREEN (user 2026-09-22: "just like the tablet")
+    # ------------------------------------------------------------------
+    def _pane_zoom_arm(self, pw) -> None:
+        """Watch one pane's scene for a double click. Connected ONCE per widget -- every _ensure_pane runs again
+        after a rebuild, and a second connection would toggle the zoom twice and land back where it started."""
+        if pw is None:
+            return
+        try:
+            armed = self.__dict__.setdefault("_pane_zoom_armed", set())
+            if id(pw) in armed:
+                return
+            pw.scene().sigMouseClicked.connect(lambda ev, w=pw: self._on_pane_dblclick(ev, w))
+            armed.add(id(pw))
+        except (RuntimeError, AttributeError):
+            pass
+
+    def _on_pane_dblclick(self, ev, pw) -> None:
+        """A double click anywhere in a pane zooms it. A single click is left entirely alone -- every pane that
+        wants one (the I x I bar panel, the candle selection) already has its own handler on the same signal."""
+        try:
+            if not ev.double():
+                return
+        except Exception:
+            return
+        # an ARMED drawing tool owns its own clicks: double-clicking to finish a shape must not also zoom
+        try:
+            _d = self._draw_target()
+            if _d is not None and getattr(_d, "active_tool", None) not in (None, "select"):
+                return
+        except Exception:
+            pass
+        self._pane_zoom_toggle(pw)
+        try:
+            ev.accept()
+        except Exception:
+            pass
+
+    def _pane_zoom_toggle(self, pw) -> None:
+        """Give this pane the whole stack, or hand every other pane its height back.
+
+        ⚠ SIZES, not visibility and not a height cap. Hiding a pane stops its tick (the toggle that starved the
+        liquidity pane's data, 2026-09-14) and a maximumHeight on a splitter child leaks into the window's own
+        maximum through QSplitter.recalc() (2026-09-15, which sized the central splitter to 68 px for good). A
+        zero SIZE leaves the widget shown, laid out and ticking, and the x-link master keeps its real width.
+
+        The saved sizes are dropped whenever the stack's SHAPE changes under the zoom -- a pane toggled on or off
+        while one is fullscreen -- because a stale list would hand the wrong heights to the wrong panes."""
+        sp = getattr(self, "splitter_v", None)
+        if sp is None:
+            return
+        try:
+            w = pw
+            while w is not None and w.parentWidget() is not sp:
+                w = w.parentWidget()
+            if w is None:
+                return
+            idx = sp.indexOf(w)
+            if idx < 0:
+                return
+            sizes = sp.sizes()
+            cur = self.__dict__.get("_pane_zoom")          # (index, the sizes before it was zoomed) or None
+            if cur is not None and len(cur[1]) != len(sizes):
+                cur = None                                  # the stack was rebuilt under us
+            if cur is not None and int(cur[0]) == idx:
+                self._pane_zoom = None
+                sp.setSizes(list(cur[1]))                   # back to where the user had it
+            else:
+                self._pane_zoom = (idx, list(cur[1]) if cur is not None else list(sizes))
+                tot = int(sum(sizes)) or int(sp.height()) or 800
+                new = [0] * len(sizes)
+                new[idx] = tot
+                sp.setSizes(new)
+            self._flow_axis_key = None                      # the bottom-most pane with real pixels just changed
+            self._stack_axis_sync()
+        except RuntimeError:
+            pass
 
     _PANE_MAX_H = 16777215                                 # QWIDGETSIZE_MAX: no height cap
 
@@ -23150,6 +23316,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._lob_plot = pw
         self._lob_vb = vb
         self._theme_sub_panes(not self._simple_bw())
+        self._pane_zoom_arm(pw)                                  # double-click -> fullscreen
         sp.addWidget(pw)
         pw.setMinimumHeight(60)
         return pw
@@ -23435,6 +23602,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._cvol_plot = pw
         self._cvol_vb = vb
         self._theme_sub_panes(not self._simple_bw())     # born into the CURRENT Chart Style, not always dark
+        self._pane_zoom_arm(pw)                                  # double-click -> fullscreen
         sp.addWidget(pw)
         pw.setMinimumHeight(60)
         return pw
@@ -23642,6 +23810,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._cyc_plot = pw
         self._cyc_vb = vb
         self._theme_sub_panes(not self._simple_bw())
+        self._pane_zoom_arm(pw)                                  # double-click -> fullscreen
         sp.addWidget(pw)
         pw.setMinimumHeight(60)
         return pw
@@ -26218,8 +26387,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             return
         self.splitter_v = _ClickSplitter(QtCore.Qt.Vertical)
         self.splitter_v.handleClicked.connect(self._on_pane_handle_clicked)   # click a divider -> 50/50 snap
+        self.__dict__["_pane_zoom"] = None                # a new stack is never born zoomed
+        self.__dict__["_pane_zoom_armed"] = set()         # ... and the old scenes are gone with it
         # reparent the primary chart out of the horizontal splitter into the upper track
         self.splitter_v.addWidget(self.plot)
+        self._pane_zoom_arm(self.plot)
 
         self.lower_plot = pg.PlotWidget(axisItems={"bottom": LocalTimeAxis(orientation="bottom"),
                                                    "right": PriceAxis(orientation="right")})
